@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v2.0.2 — Supabase Edge Function
+// Trading-booooo Market Scanner v2.1.0 — Supabase Edge Function
 // KRW universe scan -> multi-period analysis -> orderbook/trade validation.
 // Read-only public market data. No account lookup, order creation, cancellation, or API keys.
 
@@ -24,13 +24,19 @@ import {
 } from "./engine.ts";
 
 const UPBIT = "https://api.upbit.com";
+const UPBIT_WEBSOCKET = "wss://api.upbit.com/websocket/v1";
 const DEFAULT_DEEP_SCAN_LIMIT = 30;
 const FINALIST_LIMIT = 8;
 const BOOK_SAMPLE_COUNT = 4;
 const BOOK_SAMPLE_INTERVAL_MS = 600;
+const DEFAULT_DYNAMIC_OBSERVATION_MS = 18_000;
+const MIN_DYNAMIC_OBSERVATION_MS = 12_000;
+const MAX_DYNAMIC_OBSERVATION_MS = 30_000;
+const MAX_DYNAMIC_BOOK_EVENTS = 1_200;
+const MAX_DYNAMIC_TRADE_EVENTS = 2_500;
 const CANDLE_BATCH_SIZE = 7;
 const CANDLE_BATCH_INTERVAL_MS = 1050;
-const RESPONSE_CACHE_MS = 20_000;
+const RESPONSE_CACHE_MS = 5_000;
 const REQUEST_COOLDOWN_MS = 12_000;
 
 let activeScan = false;
@@ -64,7 +70,7 @@ async function fetchJson(
   url: string,
   timeoutMs = 10_000,
   attempts = 3,
-): Promise<any> {
+): Promise<unknown> {
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt++) {
     const controller = new AbortController();
@@ -75,15 +81,23 @@ async function fetchJson(
         headers: { Accept: "application/json" },
       });
       const text = await response.text();
-      let data: any = null;
+      let data: unknown = null;
       try {
         data = text ? JSON.parse(text) : null;
       } catch {
         data = text;
       }
       if (response.ok) return data;
-      const message = data?.error?.message || data?.message ||
-        `${response.status} ${response.statusText}`;
+      const record = data && typeof data === "object"
+        ? data as Record<string, unknown>
+        : null;
+      const nestedError = record?.error && typeof record.error === "object"
+        ? record.error as Record<string, unknown>
+        : null;
+      const message = String(
+        nestedError?.message || record?.message ||
+          `${response.status} ${response.statusText}`,
+      );
       if (response.status === 429 && attempt < attempts - 1) {
         await sleep(1100 + attempt * 500);
         continue;
@@ -162,7 +176,7 @@ function tokenAllowed(request: Request): boolean {
     constantTimeEqual(expected, provided);
 }
 
-function parseRisk(body: any): RiskConfig {
+function parseRisk(body: Record<string, unknown>): RiskConfig {
   return {
     capitalKrw: clamp(
       finite(body.capital_krw, 500_000),
@@ -306,7 +320,127 @@ type MicroBundle = {
   snapshots: Map<string, OrderbookSnapshot[]>;
   trades: Map<string, TradeRow[]>;
   ticks: Map<string, number>;
+  websocketMarkets: number;
+  observationMs: number;
 };
+
+type DynamicStreamBundle = {
+  snapshots: Map<string, OrderbookSnapshot[]>;
+  trades: Map<string, TradeRow[]>;
+};
+
+function dynamicObservationMs(): number {
+  return Math.round(
+    clamp(
+      finite(
+        Deno.env.get("MICRO_OBSERVATION_MS"),
+        DEFAULT_DYNAMIC_OBSERVATION_MS,
+      ),
+      MIN_DYNAMIC_OBSERVATION_MS,
+      MAX_DYNAMIC_OBSERVATION_MS,
+    ),
+  );
+}
+
+function normalizeStreamMarket(value: unknown): string {
+  return String(value || "").toUpperCase().replace(/\.(1|5|15|30)$/, "");
+}
+
+async function websocketText(data: unknown): Promise<string> {
+  if (typeof data === "string") return data;
+  if (data instanceof ArrayBuffer) return new TextDecoder().decode(data);
+  if (ArrayBuffer.isView(data)) {
+    return new TextDecoder().decode(
+      new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+    );
+  }
+  if (data instanceof Blob) return await data.text();
+  return "";
+}
+
+function collectDynamicStream(
+  markets: string[],
+  observationMs: number,
+): Promise<DynamicStreamBundle> {
+  const snapshots = new Map(
+    markets.map((market) => [market, [] as OrderbookSnapshot[]]),
+  );
+  const trades = new Map(markets.map((market) => [market, [] as TradeRow[]]));
+  if (!markets.length) return Promise.resolve({ snapshots, trades });
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(UPBIT_WEBSOCKET);
+    socket.binaryType = "arraybuffer";
+    let opened = false;
+    let settled = false;
+    let observationTimer: ReturnType<typeof setTimeout> | undefined;
+    const connectionTimer = setTimeout(() => {
+      if (!opened) finish(new Error("Upbit WebSocket connection timeout"));
+    }, 8_000);
+
+    function finish(error?: Error) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(connectionTimer);
+      if (observationTimer != null) clearTimeout(observationTimer);
+      try {
+        if (
+          socket.readyState === WebSocket.OPEN ||
+          socket.readyState === WebSocket.CONNECTING
+        ) socket.close(1000, "observation complete");
+      } catch {
+        // 연결 정리 실패는 이미 수집된 공개 시세 분석을 무효화하지 않는다.
+      }
+      if (error) reject(error);
+      else resolve({ snapshots, trades });
+    }
+
+    socket.onopen = () => {
+      opened = true;
+      clearTimeout(connectionTimer);
+      socket.send(JSON.stringify([
+        { ticket: crypto.randomUUID() },
+        { type: "orderbook", codes: markets.map((market) => `${market}.15`) },
+        { type: "trade", codes: markets },
+        { format: "DEFAULT" },
+      ]));
+      observationTimer = setTimeout(() => finish(), observationMs);
+    };
+    socket.onmessage = async (event) => {
+      try {
+        const text = await websocketText(event.data);
+        if (!text) return;
+        const parsed = JSON.parse(text);
+        const rows = Array.isArray(parsed) ? parsed : [parsed];
+        for (const row of rows) {
+          const market = normalizeStreamMarket(row.code || row.market);
+          if (!snapshots.has(market)) continue;
+          if (row.type === "orderbook" && Array.isArray(row.orderbook_units)) {
+            const bucket = snapshots.get(market)!;
+            if (bucket.length < MAX_DYNAMIC_BOOK_EVENTS) {
+              bucket.push({ ...row, market } as OrderbookSnapshot);
+            }
+          } else if (row.type === "trade") {
+            const bucket = trades.get(market)!;
+            if (bucket.length < MAX_DYNAMIC_TRADE_EVENTS) {
+              bucket.push({ ...row, market } as TradeRow);
+            }
+          }
+        }
+      } catch {
+        // 개별 손상 프레임은 건너뛰고 관찰창 전체를 계속 수집한다.
+      }
+    };
+    socket.onerror = () => {
+      if (!opened) finish(new Error("Upbit WebSocket connection failed"));
+    };
+    socket.onclose = () => {
+      if (!settled) {
+        if (opened) finish();
+        else finish(new Error("Upbit WebSocket closed before opening"));
+      }
+    };
+  });
+}
 
 function fallbackTick(snapshots: OrderbookSnapshot[], price: number): number {
   const gaps: number[] = [];
@@ -338,6 +472,10 @@ async function loadMicrostructure(
   );
   const trades = new Map<string, TradeRow[]>();
   const ticks = new Map<string, number>();
+  const observationMs = dynamicObservationMs();
+  const dynamicPromise = optional(
+    collectDynamicStream(markets, observationMs),
+  );
 
   const tradePromise = Promise.all(
     markets.map(async (market) => {
@@ -384,6 +522,24 @@ async function loadMicrostructure(
     }
   }
   await tradePromise;
+  const dynamic = await dynamicPromise;
+  let websocketMarkets = 0;
+  if (dynamic) {
+    for (const market of markets) {
+      const streamedBooks = dynamic.snapshots.get(market) || [];
+      const streamedTrades = dynamic.trades.get(market) || [];
+      if (streamedBooks.length >= 2) {
+        snapshots.set(market, streamedBooks);
+        websocketMarkets++;
+      }
+      if (streamedTrades.length) {
+        trades.set(market, [
+          ...(trades.get(market) || []),
+          ...streamedTrades,
+        ]);
+      }
+    }
+  }
 
   for (const finalist of finalists) {
     const market = finalist.universe.market;
@@ -397,7 +553,7 @@ async function loadMicrostructure(
       );
     }
   }
-  return { snapshots, trades, ticks };
+  return { snapshots, trades, ticks, websocketMarkets, observationMs };
 }
 
 function summarizeExclusions(
@@ -481,6 +637,7 @@ async function runScan(risk: RiskConfig) {
         microBundle.snapshots.get(market) || [],
         microBundle.trades.get(market) || [],
         generatedAt,
+        microBundle.ticks.get(market)!,
       );
       return finalizeCandidate(
         period,
@@ -525,6 +682,16 @@ async function runScan(risk: RiskConfig) {
         [...baseline15.values()].filter((rows) => rows.length >= 60).length,
       deep_period_analyzed: periods.length,
       microstructure_finalists: finalCandidates.length,
+      dynamic_orderflow: {
+        requested_observation_seconds: Number(
+          (microBundle.observationMs / 1000).toFixed(1),
+        ),
+        websocket_markets: microBundle.websocketMarkets,
+        sufficient_markets:
+          finalCandidates.filter((candidate) =>
+            candidate.microstructure.dynamic.sufficient
+          ).length,
+      },
       excluded_summary: summarizeExclusions(universe),
       periods: {
         "5m": "최근 6시간(72봉)",
@@ -540,6 +707,11 @@ async function runScan(risk: RiskConfig) {
       risk_per_trade_pct: risk.riskPct,
       min_net_rr: risk.minNetRR,
       max_net_stop_pct: risk.maxStopPct,
+      dynamic_observation_seconds: Number(
+        (microBundle.observationMs / 1000).toFixed(1),
+      ),
+      dynamic_orderflow_note:
+        "공개 호가에는 주문자·개별 주문 ID·숨은 잔량이 없어 스푸핑·아이스버그를 확정하지 않고 의심 패턴으로만 판정합니다.",
       automatic_order: false,
       model_note:
         "목표가·손절가·보유기간은 현재까지의 공개 시세 패턴에 근거한 조건부 추정이며 미래 가격을 보장하지 않습니다.",
@@ -548,7 +720,7 @@ async function runScan(risk: RiskConfig) {
       engine_version: ENGINE_VERSION,
       generated_at: new Date(generatedAt).toISOString(),
       elapsed_seconds: Number(((Date.now() - started) / 1000).toFixed(2)),
-      data_source: "UPBIT_PUBLIC_QUOTATION_API",
+      data_source: "UPBIT_PUBLIC_QUOTATION_API_AND_WEBSOCKET",
       auth_mode: "PRIVATE_FRAGMENT_TOKEN",
       auto_order: false,
     },
@@ -580,7 +752,11 @@ Deno.serve(async (request: Request) => {
     return json(request, { error: "개인 접속 URL이 올바르지 않습니다." }, 401);
   }
 
-  const body = await request.json().catch(() => ({}));
+  const rawBody: unknown = await request.json().catch(() => ({}));
+  const body: Record<string, unknown> = rawBody &&
+      typeof rawBody === "object" && !Array.isArray(rawBody)
+    ? rawBody as Record<string, unknown>
+    : {};
   if (String(body.action || "scan") !== "scan") {
     return json(request, { error: "지원하지 않는 action입니다." }, 400);
   }

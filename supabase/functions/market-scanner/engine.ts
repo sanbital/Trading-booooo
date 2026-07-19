@@ -1,7 +1,7 @@
-// Trading-booooo Market Scanner v2.0.2
+// Trading-booooo Market Scanner v2.1.0
 // Pure analysis engine. Public market data only; no order or account operations.
 
-export const ENGINE_VERSION = "2.0.2";
+export const ENGINE_VERSION = "2.1.0";
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
 
@@ -50,15 +50,26 @@ export type OrderbookUnit = {
 
 export type OrderbookSnapshot = {
   market?: string;
+  code?: string;
   timestamp?: number | string;
+  stream_type?: string;
   orderbook_units: OrderbookUnit[];
 };
 
 export type TradeRow = {
+  market?: string;
+  code?: string;
   timestamp?: number | string;
+  trade_timestamp?: number | string;
   trade_price: number | string;
   trade_volume: number | string;
   ask_bid: string;
+  sequential_id?: number | string;
+  stream_type?: string;
+  best_ask_price?: number | string;
+  best_ask_size?: number | string;
+  best_bid_price?: number | string;
+  best_bid_size?: number | string;
 };
 
 export type UniverseRow = {
@@ -132,6 +143,34 @@ export type Microstructure = {
   buy_notional: number;
   sell_notional: number;
   micro_score: number;
+  dynamic: DynamicOrderflow;
+};
+
+export type DynamicOrderflowStatus =
+  | "BREAKOUT_CONFIRMED"
+  | "NEUTRAL"
+  | "SPOOF_LIKE_RISK"
+  | "ASK_ABSORPTION_RISK"
+  | "SUPPORT_BREAKDOWN_RISK"
+  | "INSUFFICIENT";
+
+export type DynamicOrderflow = {
+  status: DynamicOrderflowStatus;
+  label: string;
+  sufficient: boolean;
+  observation_ms: number;
+  distinct_book_updates: number;
+  aligned_trade_count: number;
+  data_quality: number;
+  spoof_like_score: number;
+  ask_absorption_score: number;
+  breakout_score: number;
+  persistent_bid_wall_price: number | null;
+  persistent_ask_wall_price: number | null;
+  confirmed_support_price: number | null;
+  target_cap_price: number | null;
+  evidence: string[];
+  warnings: string[];
 };
 
 export type RiskConfig = {
@@ -696,30 +735,546 @@ export function analyzePeriod(
   };
 }
 
+type BookFrame = {
+  timestamp: number;
+  units: Array<{
+    bidPrice: number;
+    bidSize: number;
+    askPrice: number;
+    askSize: number;
+  }>;
+  bids: Map<number, number>;
+  asks: Map<number, number>;
+  bestBid: number;
+  bestAsk: number;
+};
+
+type WallStat = {
+  price: number;
+  maxSize: number;
+  maxNotional: number;
+  nearCount: number;
+  minRank: number;
+  firstIndex: number;
+  lastIndex: number;
+};
+
+const DYNAMIC_MIN_OBSERVATION_MS = 10_000;
+const DYNAMIC_MIN_BOOK_UPDATES = 8;
+const DYNAMIC_MIN_TRADES = 8;
+const WALL_LEVELS = 3;
+const TRACKED_LEVELS = 15;
+
+function bookSignature(snapshot: OrderbookSnapshot): string {
+  return (snapshot.orderbook_units || []).slice(0, TRACKED_LEVELS).map((unit) =>
+    [
+      number(unit.bid_price),
+      number(unit.bid_size),
+      number(unit.ask_price),
+      number(unit.ask_size),
+    ].join(":")
+  ).join("|");
+}
+
+function distinctBookFrames(snapshots: OrderbookSnapshot[]): BookFrame[] {
+  const ordered = (snapshots || []).map((snapshot, index) => ({
+    snapshot,
+    index,
+    timestamp: number(snapshot.timestamp),
+  })).filter((item) => item.timestamp > 0).sort((left, right) =>
+    left.timestamp - right.timestamp || left.index - right.index
+  );
+  const frames: BookFrame[] = [];
+  let previousSignature = "";
+  for (const item of ordered) {
+    const signature = bookSignature(item.snapshot);
+    if (!signature || signature === previousSignature) continue;
+    previousSignature = signature;
+    const units = (item.snapshot.orderbook_units || []).slice(0, TRACKED_LEVELS)
+      .map((unit) => ({
+        bidPrice: number(unit.bid_price),
+        bidSize: number(unit.bid_size),
+        askPrice: number(unit.ask_price),
+        askSize: number(unit.ask_size),
+      })).filter((unit) =>
+        unit.bidPrice > 0 && unit.askPrice > 0 && unit.bidSize >= 0 &&
+        unit.askSize >= 0
+      );
+    if (!units.length) continue;
+    frames.push({
+      timestamp: item.timestamp,
+      units,
+      bids: new Map(units.map((unit) => [unit.bidPrice, unit.bidSize])),
+      asks: new Map(units.map((unit) => [unit.askPrice, unit.askSize])),
+      bestBid: units[0].bidPrice,
+      bestAsk: units[0].askPrice,
+    });
+  }
+  return frames;
+}
+
+function tradeTimestamp(trade: TradeRow): number {
+  return number(trade.trade_timestamp || trade.timestamp);
+}
+
+function distinctTrades(trades: TradeRow[]): TradeRow[] {
+  const seen = new Set<string>();
+  return (trades || []).filter((trade) => {
+    const timestamp = tradeTimestamp(trade);
+    const price = number(trade.trade_price);
+    const volume = number(trade.trade_volume);
+    if (!(timestamp > 0 && price > 0 && volume > 0)) return false;
+    const id = String(
+      trade.sequential_id ||
+        `${timestamp}:${price}:${volume}:${
+          String(trade.ask_bid).toUpperCase()
+        }`,
+    );
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  }).sort((left, right) => tradeTimestamp(left) - tradeTimestamp(right));
+}
+
+type IndexedTrade = { timestamp: number; volume: number };
+
+function priceTradeKey(
+  side: "BID" | "ASK",
+  price: number,
+  tick: number,
+): string {
+  return `${side}:${roundToTick(price, tick, "nearest")}`;
+}
+
+function indexTradesByPrice(
+  trades: TradeRow[],
+  tick: number,
+): Map<string, IndexedTrade[]> {
+  const index = new Map<string, IndexedTrade[]>();
+  for (const trade of trades) {
+    const side = String(trade.ask_bid).toUpperCase();
+    if (side !== "BID" && side !== "ASK") continue;
+    const key = priceTradeKey(
+      side,
+      number(trade.trade_price),
+      tick,
+    );
+    const bucket = index.get(key) || [];
+    bucket.push({
+      timestamp: tradeTimestamp(trade),
+      volume: number(trade.trade_volume),
+    });
+    index.set(key, bucket);
+  }
+  return index;
+}
+
+function volumeAtPrice(
+  tradeIndex: Map<string, IndexedTrade[]>,
+  side: "BID" | "ASK",
+  price: number,
+  from: number,
+  to: number,
+  tick: number,
+): number {
+  let volume = 0;
+  const bucket = tradeIndex.get(priceTradeKey(side, price, tick)) || [];
+  for (const trade of bucket) {
+    if (trade.timestamp <= from || trade.timestamp > to) continue;
+    volume += trade.volume;
+  }
+  return volume;
+}
+
+function wallStats(
+  frames: BookFrame[],
+  side: "bid" | "ask",
+): { stats: WallStat[]; baselineNotional: number } {
+  const stats = new Map<number, WallStat>();
+  const notionals: number[] = [];
+  frames.forEach((frame, frameIndex) => {
+    frame.units.slice(0, 5).forEach((unit, rank) => {
+      const price = side === "bid" ? unit.bidPrice : unit.askPrice;
+      const size = side === "bid" ? unit.bidSize : unit.askSize;
+      const notional = price * size;
+      if (!(price > 0 && size >= 0 && notional >= 0)) return;
+      notionals.push(notional);
+      const current = stats.get(price) || {
+        price,
+        maxSize: 0,
+        maxNotional: 0,
+        nearCount: 0,
+        minRank: rank,
+        firstIndex: frameIndex,
+        lastIndex: frameIndex,
+      };
+      current.maxSize = Math.max(current.maxSize, size);
+      current.maxNotional = Math.max(current.maxNotional, notional);
+      current.nearCount++;
+      current.minRank = Math.min(current.minRank, rank);
+      current.lastIndex = frameIndex;
+      stats.set(price, current);
+    });
+  });
+  return {
+    stats: [...stats.values()],
+    baselineNotional: Math.max(median(notionals), Number.EPSILON),
+  };
+}
+
+function wallPersistence(stat: WallStat): number {
+  return safeDiv(stat.nearCount, stat.lastIndex - stat.firstIndex + 1);
+}
+
+function wallDuration(stat: WallStat, frames: BookFrame[]): number {
+  return Math.max(
+    0,
+    frames[stat.lastIndex].timestamp - frames[stat.firstIndex].timestamp,
+  );
+}
+
+function dynamicLabel(status: DynamicOrderflowStatus): string {
+  if (status === "BREAKOUT_CONFIRMED") return "돌파 후 지지 전환 확인";
+  if (status === "SPOOF_LIKE_RISK") return "가짜 매수벽 취소 의심";
+  if (status === "ASK_ABSORPTION_RISK") return "매도 흡수·재보충 위험";
+  if (status === "SUPPORT_BREAKDOWN_RISK") return "매수 지지 붕괴 위험";
+  if (status === "NEUTRAL") return "동적 특이 위험 없음";
+  return "동적 표본 부족";
+}
+
+function displayPrice(value: number): string {
+  return value.toLocaleString("ko-KR", { maximumFractionDigits: 8 });
+}
+
+export function computeDynamicOrderflow(
+  snapshots: OrderbookSnapshot[],
+  trades: TradeRow[],
+  tickSize: number,
+): DynamicOrderflow {
+  const frames = distinctBookFrames(snapshots);
+  const observedGaps: number[] = [];
+  const firstUnits = frames[0]?.units || [];
+  for (let index = 1; index < firstUnits.length; index++) {
+    const bidGap = Math.abs(
+      firstUnits[index - 1].bidPrice - firstUnits[index].bidPrice,
+    );
+    const askGap = Math.abs(
+      firstUnits[index].askPrice - firstUnits[index - 1].askPrice,
+    );
+    if (bidGap > 0) observedGaps.push(bidGap);
+    if (askGap > 0) observedGaps.push(askGap);
+  }
+  const tick = tickSize > Number.EPSILON
+    ? tickSize
+    : observedGaps.length
+    ? Math.min(...observedGaps)
+    : Number.EPSILON;
+  const observationMs = frames.length >= 2
+    ? frames.at(-1)!.timestamp - frames[0].timestamp
+    : 0;
+  const start = frames[0]?.timestamp || 0;
+  const end = frames.at(-1)?.timestamp || 0;
+  const alignedTrades = distinctTrades(trades).filter((trade) => {
+    const streamType = String(trade.stream_type || "").toUpperCase();
+    const timestamp = tradeTimestamp(trade);
+    return streamType !== "SNAPSHOT" && timestamp >= start - 250 &&
+      timestamp <= end + 250;
+  });
+  const tradeIndex = indexTradesByPrice(alignedTrades, tick);
+  const dataQuality = clamp(
+    Math.min(1, observationMs / 15_000) * 0.35 +
+      Math.min(1, frames.length / 20) * 0.35 +
+      Math.min(1, alignedTrades.length / 20) * 0.3,
+    0,
+    1,
+  );
+  const sufficient = observationMs >= DYNAMIC_MIN_OBSERVATION_MS &&
+    frames.length >= DYNAMIC_MIN_BOOK_UPDATES &&
+    alignedTrades.length >= DYNAMIC_MIN_TRADES;
+  const empty: DynamicOrderflow = {
+    status: "INSUFFICIENT",
+    label: dynamicLabel("INSUFFICIENT"),
+    sufficient: false,
+    observation_ms: observationMs,
+    distinct_book_updates: frames.length,
+    aligned_trade_count: alignedTrades.length,
+    data_quality: dataQuality,
+    spoof_like_score: 0,
+    ask_absorption_score: 0,
+    breakout_score: 0,
+    persistent_bid_wall_price: null,
+    persistent_ask_wall_price: null,
+    confirmed_support_price: null,
+    target_cap_price: null,
+    evidence: [],
+    warnings: [
+      `실시간 호가 ${DYNAMIC_MIN_BOOK_UPDATES}회·동시간대 체결 ${DYNAMIC_MIN_TRADES}건·관찰 ${
+        DYNAMIC_MIN_OBSERVATION_MS / 1000
+      }초가 필요합니다.`,
+    ],
+  };
+  if (frames.length < 2) return empty;
+
+  const bidWalls = wallStats(frames, "bid");
+  const askWalls = wallStats(frames, "ask");
+  const bidCandidates = bidWalls.stats.filter((stat) =>
+    stat.minRank < WALL_LEVELS &&
+    stat.maxNotional >= bidWalls.baselineNotional * 2.8
+  );
+  const askCandidates = askWalls.stats.filter((stat) =>
+    stat.minRank < WALL_LEVELS &&
+    stat.maxNotional >= askWalls.baselineNotional * 2.8
+  );
+
+  let spoofScore = 0;
+  let absorptionMax = 0;
+  let absorptionEvents = 0;
+  let breakdownScore = 0;
+
+  for (let index = 0; index < frames.length - 1; index++) {
+    const previous = frames[index];
+    const current = frames[index + 1];
+    const previousBidNotionals = previous.units.slice(0, WALL_LEVELS).map(
+      (unit) => unit.bidPrice * unit.bidSize,
+    );
+    const previousAskNotionals = previous.units.slice(0, WALL_LEVELS).map(
+      (unit) => unit.askPrice * unit.askSize,
+    );
+    const localBidBaseline = Math.max(
+      median(
+        previous.units.slice(0, 8).map((unit) => unit.bidPrice * unit.bidSize),
+      ),
+      Number.EPSILON,
+    );
+    const localAskBaseline = Math.max(
+      median(
+        previous.units.slice(0, 8).map((unit) => unit.askPrice * unit.askSize),
+      ),
+      Number.EPSILON,
+    );
+
+    previous.units.slice(0, WALL_LEVELS).forEach((unit, rank) => {
+      const bidIsWall = previousBidNotionals[rank] >= localBidBaseline * 2.8;
+      if (bidIsWall && unit.bidSize > 0) {
+        const currentSize = current.bids.get(unit.bidPrice) || 0;
+        const worstVisibleBid = Math.min(...current.bids.keys());
+        const pushedOutside = currentSize === 0 &&
+          Number.isFinite(worstVisibleBid) && worstVisibleBid > unit.bidPrice;
+        if (!pushedOutside) {
+          const activeSell = volumeAtPrice(
+            tradeIndex,
+            "ASK",
+            unit.bidPrice,
+            previous.timestamp,
+            current.timestamp,
+            tick,
+          );
+          const reduction = Math.max(0, unit.bidSize - currentSize);
+          const unexplained = Math.max(0, reduction - activeSell);
+          const unexplainedRatio = safeDiv(unexplained, unit.bidSize);
+          const executionRatio = safeDiv(activeSell, unit.bidSize);
+          if (unexplainedRatio >= 0.55 && executionRatio <= 0.2) {
+            spoofScore = Math.max(
+              spoofScore,
+              clamp(unexplainedRatio * 0.8 + (1 - executionRatio) * 0.2, 0, 1),
+            );
+          }
+          if (
+            current.bestAsk <= unit.bidPrice && executionRatio >= 0.35 &&
+            currentSize === 0
+          ) {
+            breakdownScore = Math.max(
+              breakdownScore,
+              clamp(executionRatio * 0.65 + 0.35, 0, 1),
+            );
+          }
+        }
+      }
+
+      const askIsWall = previousAskNotionals[rank] >= localAskBaseline * 2.8;
+      if (askIsWall && unit.askSize > 0) {
+        const activeBuy = volumeAtPrice(
+          tradeIndex,
+          "BID",
+          unit.askPrice,
+          previous.timestamp,
+          current.timestamp,
+          tick,
+        );
+        if (activeBuy > 0) {
+          const currentSize = current.asks.get(unit.askPrice) || 0;
+          const expectedRemaining = Math.max(0, unit.askSize - activeBuy);
+          const replenished = Math.max(0, currentSize - expectedRemaining);
+          const buyRatio = safeDiv(activeBuy, unit.askSize);
+          const refillRatio = safeDiv(replenished, activeBuy);
+          if (buyRatio >= 0.12 && refillRatio >= 0.45) {
+            absorptionEvents++;
+            absorptionMax = Math.max(
+              absorptionMax,
+              clamp(buyRatio * 0.45 + refillRatio * 0.55, 0, 1),
+            );
+          }
+        }
+      }
+    });
+  }
+
+  const absorptionScore = clamp(
+    absorptionMax * 0.7 + Math.min(1, absorptionEvents / 3) * 0.3,
+    0,
+    1,
+  );
+  let breakoutScore = 0;
+  let confirmedSupport: number | null = null;
+  for (const wall of askCandidates) {
+    const crossedIndex = frames.findIndex((frame, index) =>
+      index > wall.firstIndex && frame.bestBid >= wall.price &&
+      !frame.asks.has(wall.price)
+    );
+    if (crossedIndex < 0) continue;
+    const activeBuy = volumeAtPrice(
+      tradeIndex,
+      "BID",
+      wall.price,
+      frames[wall.firstIndex].timestamp - 1,
+      frames[crossedIndex].timestamp + 250,
+      tick,
+    );
+    const postFrames = frames.slice(crossedIndex);
+    const bidSupportFrames = postFrames.filter((frame) =>
+      frame.bids.has(wall.price)
+    );
+    const supportRatio = safeDiv(bidSupportFrames.length, postFrames.length);
+    const postSell = volumeAtPrice(
+      tradeIndex,
+      "ASK",
+      wall.price,
+      frames[crossedIndex].timestamp - 1,
+      end + 250,
+      tick,
+    );
+    const executionCoverage = safeDiv(activeBuy, wall.maxSize);
+    const score = clamp(
+      Math.min(1, executionCoverage) * 0.5 + supportRatio * 0.35 +
+        (postSell > 0 ? 0.15 : 0),
+      0,
+      1,
+    );
+    if (supportRatio >= 0.3 && score > breakoutScore) {
+      breakoutScore = score;
+      confirmedSupport = wall.price;
+    }
+  }
+
+  const lastMid = (frames.at(-1)!.bestBid + frames.at(-1)!.bestAsk) / 2;
+  const persistentBid =
+    bidCandidates.filter((stat) =>
+      stat.price < lastMid && wallPersistence(stat) >= 0.45 &&
+      wallDuration(stat, frames) >= 3_000
+    ).sort((left, right) => right.price - left.price)[0] || null;
+  const persistentAsk =
+    askCandidates.filter((stat) =>
+      stat.price > lastMid && wallPersistence(stat) >= 0.45 &&
+      wallDuration(stat, frames) >= 3_000
+    ).sort((left, right) => left.price - right.price)[0] || null;
+
+  let status: DynamicOrderflowStatus = "NEUTRAL";
+  if (!sufficient) status = "INSUFFICIENT";
+  else if (breakdownScore >= 0.65) status = "SUPPORT_BREAKDOWN_RISK";
+  else if (spoofScore >= 0.65) status = "SPOOF_LIKE_RISK";
+  else if (absorptionScore >= 0.65) status = "ASK_ABSORPTION_RISK";
+  else if (breakoutScore >= 0.65) status = "BREAKOUT_CONFIRMED";
+
+  const evidence = [
+    `실시간 ${
+      (observationMs / 1000).toFixed(1)
+    }초 동안 서로 다른 호가 ${frames.length}회와 동시간대 체결 ${alignedTrades.length}건을 교차검증했습니다.`,
+  ];
+  const warnings: string[] = [];
+  if (persistentBid) {
+    evidence.push(
+      `${
+        displayPrice(persistentBid.price)
+      }원 인접 매수벽이 관찰창에서 반복 유지됐습니다.`,
+    );
+  }
+  if (persistentAsk) {
+    evidence.push(
+      `${
+        displayPrice(persistentAsk.price)
+      }원 인접 매도벽이 관찰창에서 반복 유지됐습니다.`,
+    );
+  }
+  if (status === "BREAKOUT_CONFIRMED" && confirmedSupport) {
+    evidence.push(
+      `${
+        displayPrice(confirmedSupport)
+      }원 매도벽의 실체결 소진과 이후 매수 지지 전환을 확인했습니다.`,
+    );
+  }
+  if (spoofScore >= 0.65) {
+    warnings.push(
+      "대형 매수벽 감소분이 같은 가격의 매도 체결량으로 충분히 설명되지 않아 비체결성 취소가 의심됩니다.",
+    );
+  }
+  if (absorptionScore >= 0.65) {
+    warnings.push(
+      "대형 매도벽에 매수 체결이 유입됐지만 잔량이 반복 보충돼 상단 매도 흡수 위험이 있습니다.",
+    );
+  }
+  if (breakdownScore >= 0.65) {
+    warnings.push(
+      "대형 매수벽이 매도 체결로 소진된 뒤 가격이 해당 지지 아래로 전환됐습니다.",
+    );
+  }
+  if (!sufficient) warnings.push(...empty.warnings);
+
+  return {
+    status,
+    label: dynamicLabel(status),
+    sufficient,
+    observation_ms: observationMs,
+    distinct_book_updates: frames.length,
+    aligned_trade_count: alignedTrades.length,
+    data_quality: dataQuality,
+    spoof_like_score: spoofScore,
+    ask_absorption_score: absorptionScore,
+    breakout_score: breakoutScore,
+    persistent_bid_wall_price: persistentBid?.price || null,
+    persistent_ask_wall_price: persistentAsk?.price || null,
+    confirmed_support_price: confirmedSupport,
+    target_cap_price: persistentAsk?.price || null,
+    evidence: [...new Set(evidence)],
+    warnings: [...new Set(warnings)],
+  };
+}
+
 export function computeMicrostructure(
   snapshots: OrderbookSnapshot[],
   trades: TradeRow[],
   currentMs = Date.now(),
+  tickSize = Number.EPSILON,
 ): Microstructure {
+  const frames = distinctBookFrames(snapshots);
   const imbalances: number[] = [];
   const spreads: number[] = [];
   let bestBid: number | null = null;
   let bestAsk: number | null = null;
 
-  for (const snapshot of snapshots || []) {
-    const units = (snapshot.orderbook_units || []).slice(0, 15);
+  for (const frame of frames) {
+    const units = frame.units;
     if (!units.length) continue;
     let bid = 0;
     let ask = 0;
     units.forEach((unit, index) => {
       const weight = 1 / Math.pow(index + 1, 0.72);
-      bid += number(unit.bid_price) * number(unit.bid_size) * weight;
-      ask += number(unit.ask_price) * number(unit.ask_size) * weight;
+      bid += unit.bidPrice * unit.bidSize * weight;
+      ask += unit.askPrice * unit.askSize * weight;
     });
     imbalances.push(safeDiv(bid - ask, bid + ask));
     const first = units[0];
-    const bidPrice = number(first.bid_price);
-    const askPrice = number(first.ask_price);
+    const bidPrice = first.bidPrice;
+    const askPrice = first.askPrice;
     if (bidPrice > 0 && askPrice >= bidPrice) {
       bestBid = bidPrice;
       bestAsk = askPrice;
@@ -732,8 +1287,13 @@ export function computeMicrostructure(
   let buyNotional = 0;
   let sellNotional = 0;
   let tradeCount = 0;
-  for (const trade of trades || []) {
-    const timestamp = number(trade.timestamp, currentMs);
+  const recentTrades = distinctTrades(trades).filter((trade) => {
+    const timestamp = tradeTimestamp(trade);
+    return currentMs - timestamp <= 10 * 60 * 1000 &&
+      timestamp <= currentMs + 60_000;
+  });
+  for (const trade of recentTrades) {
+    const timestamp = tradeTimestamp(trade) || currentMs;
     if (
       currentMs - timestamp > 10 * 60 * 1000 || timestamp > currentMs + 60_000
     ) continue;
@@ -756,15 +1316,26 @@ export function computeMicrostructure(
   const spreadPenalty = spreadBps == null
     ? 12
     : Math.max(0, spreadBps - 8) * 0.7;
+  const dynamic = computeDynamicOrderflow(snapshots, trades, tickSize);
+  const dynamicAdjustment = dynamic.status === "BREAKOUT_CONFIRMED"
+    ? 16
+    : dynamic.status === "SPOOF_LIKE_RISK" ||
+        dynamic.status === "ASK_ABSORPTION_RISK"
+    ? -24
+    : dynamic.status === "SUPPORT_BREAKDOWN_RISK"
+    ? -32
+    : dynamic.status === "INSUFFICIENT"
+    ? -12
+    : 0;
   const microScore = clamp(
-    50 + bookImbalance * 23 + pressure * 24 + (stability - 0.5) * 6 -
+    50 + pressure * 18 + (stability - 0.5) * 2 + dynamicAdjustment -
       spreadPenalty,
     0,
     100,
   );
 
   return {
-    samples: imbalances.length,
+    samples: frames.length,
     best_bid: bestBid,
     best_ask: bestAsk,
     spread_bps: spreadBps,
@@ -775,6 +1346,7 @@ export function computeMicrostructure(
     buy_notional: buyNotional,
     sell_notional: sellNotional,
     micro_score: microScore,
+    dynamic,
   };
 }
 
@@ -831,7 +1403,11 @@ export function buildTradePlan(
   const entryExecution = Math.max(entryHigh, bestAsk) +
     tick * risk.entrySlippageTicks;
 
-  const supports = [period.timeframes.m15.support, period.timeframes.h4.support]
+  const supports = [
+    period.timeframes.m15.support,
+    period.timeframes.h4.support,
+    micro.dynamic.confirmed_support_price,
+  ]
     .filter((value): value is number =>
       value != null && value > 0 && value < entryExecution
     );
@@ -851,6 +1427,7 @@ export function buildTradePlan(
   const shortResistances = [
     period.timeframes.m15.resistance,
     period.timeframes.h4.resistance,
+    micro.dynamic.target_cap_price,
   ]
     .filter((value): value is number =>
       value != null && value > entryExecution
@@ -952,7 +1529,7 @@ function unavailableWatchEntry(note: string): WatchEntryPlan {
 
 export function buildWatchEntryPlan(
   period: PeriodAnalysis,
-  micro: Microstructure,
+  _micro: Microstructure,
   tradePlan: TradePlan,
   tickSize: number,
   risk: RiskConfig,
@@ -1073,7 +1650,8 @@ export function buildWatchEntryPlan(
     conditions: [
       `가격 도달 후 15분봉 종가가 ${ema21Text} 위로 회복·유지`,
       "최근 체결 압력이 -0.45 초과로 개선",
-      "호가 불균형이 -0.50 초과를 유지",
+      "재스캔의 동적 호가 판정이 '특이 위험 없음' 또는 '돌파 후 지지 전환 확인'",
+      "정적 호가 불균형이 -0.50 초과를 유지",
       `재스캔에서 목표가 구조와 비용 포함 손익비 ${risk.minNetRR} 이상 통과`,
       `${
         tradePlan.stop_price.toLocaleString("ko-KR")
@@ -1210,9 +1788,11 @@ export function finalizeCandidate(
     ),
     gate(
       "micro_data",
-      "호가·체결 표본",
-      micro.samples >= 3 && micro.trade_count >= 8,
-      "호가 3회와 최근 체결 8건 이상이 필요합니다.",
+      "동적 호가·체결 표본",
+      micro.dynamic.sufficient,
+      `실시간 관찰 10초·서로 다른 호가 8회·동시간대 체결 8건이 필요합니다. 현재 ${
+        (micro.dynamic.observation_ms / 1000).toFixed(1)
+      }초·${micro.dynamic.distinct_book_updates}회·${micro.dynamic.aligned_trade_count}건입니다.`,
     ),
     gate(
       "spread",
@@ -1225,6 +1805,15 @@ export function finalizeCandidate(
       "초단기 수급",
       micro.trade_pressure > -0.45 && micro.book_imbalance > -0.5,
       "최근 매도 체결 또는 매도호가가 허용 기준을 넘으면 제외합니다.",
+    ),
+    gate(
+      "dynamic_safety",
+      "동적 호가 안전성",
+      !micro.dynamic.sufficient || [
+        "NEUTRAL",
+        "BREAKOUT_CONFIRMED",
+      ].includes(micro.dynamic.status),
+      `스푸핑성 취소·매도 재보충/흡수·지지 붕괴 패턴이 없어야 합니다. 현재: ${micro.dynamic.label}`,
     ),
     gate(
       "stop",
@@ -1273,18 +1862,28 @@ export function finalizeCandidate(
   const positives = [...period.positives];
   const negatives = [...period.negatives];
   const warnings = [...period.warnings];
-  if (micro.book_imbalance > 0.12) {
-    positives.push("현재가 인접 매수호가 잔량이 상대적으로 우세합니다.");
-  }
   if (micro.book_imbalance < -0.12) {
-    negatives.push("현재가 인접 매도호가 잔량이 상대적으로 우세합니다.");
+    negatives.push(
+      "정적 호가 기준으로 현재가 인접 매도 잔량이 상대적으로 우세합니다.",
+    );
   }
-  if (micro.trade_pressure > 0.12) {
+  if (micro.dynamic.sufficient && micro.trade_pressure > 0.12) {
     positives.push("최근 체결대금은 매수 주도가 우세합니다.");
   }
   if (micro.trade_pressure < -0.12) {
     negatives.push("최근 체결대금은 매도 주도가 우세합니다.");
   }
+  if (micro.dynamic.status === "BREAKOUT_CONFIRMED") {
+    positives.push(
+      ...micro.dynamic.evidence.filter((item) => item.includes("지지 전환")),
+    );
+  } else if (micro.dynamic.status === "NEUTRAL") {
+    positives.push(
+      "실시간 체결-호가 교차검증에서 스푸핑성 취소·매도 재보충·지지 붕괴 신호가 검출되지 않았습니다.",
+    );
+  }
+  negatives.push(...micro.dynamic.warnings);
+  warnings.push(...micro.dynamic.warnings);
   for (const failedGate of failed) {
     warnings.push(`${failedGate.label}: ${failedGate.detail}`);
   }
@@ -1296,7 +1895,8 @@ export function finalizeCandidate(
 
   const confidence = clamp(
     38 + Math.abs(score - 50) * 0.55 + period.data_completeness * 12 +
-      micro.imbalance_stability * 6 - failed.length * 3,
+      micro.dynamic.data_quality * 8 + micro.imbalance_stability * 2 -
+      failed.length * 3,
     25,
     84,
   );

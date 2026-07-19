@@ -1,4 +1,4 @@
-# Trading-booooo v2.0.2 — GitHub 웹 전용 배포 가이드
+# Trading-booooo v2.1.0 — GitHub 웹 전용 배포 가이드
 
 이 가이드는 **VS Code, PowerShell, Git, Supabase CLI를 전혀 사용하지 않습니다.** Windows 파일 탐색기, GitHub 웹사이트, Supabase 대시보드만 사용합니다.
 
@@ -119,7 +119,7 @@ GitHub의 `Trading-booooo` 저장소에서 다음 순서로 이동합니다.
 3. Windows에서 압축을 푼 `Trading-booooo` 폴더를 엽니다.
 4. **바깥쪽 `Trading-booooo` 폴더가 아니라 그 안의 모든 항목**을 업로드 영역으로 끌어놓습니다.
 5. 목록에 `.github`, `docs`, `supabase`, `README.md`가 보이는지 확인합니다.
-6. Commit message에 `Deploy Trading-booooo v2.0.2`를 입력합니다.
+6. Commit message에 `Deploy Trading-booooo v2.1.0`를 입력합니다.
 7. `Commit changes`를 누릅니다.
 
 정상 저장소 루트는 다음과 같아야 합니다.

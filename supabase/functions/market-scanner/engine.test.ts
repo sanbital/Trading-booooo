@@ -4,6 +4,7 @@ import {
   buildTradePlan,
   buildUniverse,
   type CandleRow,
+  computeDynamicOrderflow,
   computeMicrostructure,
   ema,
   estimateHorizon,
@@ -237,14 +238,16 @@ Deno.test("period analysis scores aligned uptrend above downtrend", () => {
 });
 
 function bookSnapshots(bullish = true): OrderbookSnapshot[] {
-  return Array.from({ length: 4 }, (_, sample) => ({
+  const now = 1_800_000_000_000;
+  return Array.from({ length: 16 }, (_, sample) => ({
     market: "KRW-TEST",
-    timestamp: 1_800_000_000_000 + sample * 500,
+    timestamp: now - 15_000 + sample * 1_000,
+    stream_type: "REALTIME",
     orderbook_units: Array.from({ length: 10 }, (_, i) => ({
       bid_price: 119.9 - i * 0.1,
       ask_price: 120.1 + i * 0.1,
-      bid_size: bullish ? 100 - i : 10,
-      ask_size: bullish ? 10 : 100 - i,
+      bid_size: (bullish ? 100 - i : 10) + sample * 0.01,
+      ask_size: (bullish ? 10 : 100 - i) + sample * 0.008,
     })),
   }));
 }
@@ -252,9 +255,11 @@ function bookSnapshots(bullish = true): OrderbookSnapshot[] {
 function trades(bullish = true): TradeRow[] {
   const now = 1_800_000_000_000;
   return Array.from({ length: 40 }, (_, i) => ({
-    timestamp: now - i * 1000,
+    timestamp: now - i * 350,
     trade_price: 120,
-    trade_volume: bullish ? (i % 4 === 0 ? 1 : 3) : (i % 4 === 0 ? 3 : 1),
+    trade_volume: i % 4 === 0 ? 1 : 3,
+    sequential_id: 9_000_000 + i,
+    stream_type: "REALTIME",
     ask_bid: bullish
       ? (i % 4 === 0 ? "ASK" : "BID")
       : (i % 4 === 0 ? "BID" : "ASK"),
@@ -269,6 +274,130 @@ Deno.test("microstructure score reflects book and trade pressure", () => {
   assert(bull.trade_pressure > 0);
   assert(bull.micro_score > bear.micro_score + 20);
   assert(bull.spread_bps != null && bull.spread_bps > 0);
+  assert(bull.dynamic.sufficient);
+  assert(bull.dynamic.status === "NEUTRAL", bull.dynamic.status);
+});
+
+function dynamicFrames(
+  mode: "spoof" | "absorption" | "breakout",
+): OrderbookSnapshot[] {
+  const start = 1_800_100_000_000;
+  return Array.from({ length: 16 }, (_, sample) => {
+    const crossed = mode === "breakout" && sample >= 5;
+    return {
+      market: "KRW-TEST",
+      timestamp: start + sample * 1_000,
+      stream_type: "REALTIME",
+      orderbook_units: Array.from({ length: 10 }, (_, index) => {
+        const bidPrice = crossed ? 100.1 - index * 0.1 : 99.9 - index * 0.1;
+        const askPrice = crossed ? 100.2 + index * 0.1 : 100.1 + index * 0.1;
+        let bidSize = 10 + index * 0.05 + sample * 0.01;
+        let askSize = 10 + index * 0.04 + sample * 0.008;
+        if (mode === "spoof" && index === 0) {
+          bidSize = sample < 6 ? 100 + sample * 0.01 : 5 + sample * 0.01;
+        }
+        if (mode === "absorption" && index === 0) {
+          askSize = 100 + sample * 0.01;
+        }
+        if (mode === "breakout") {
+          if (!crossed && index === 0) askSize = 100 - sample * 20;
+          if (crossed && index === 0) bidSize = 80 + sample * 0.01;
+        }
+        return {
+          bid_price: bidPrice,
+          ask_price: askPrice,
+          bid_size: bidSize,
+          ask_size: askSize,
+        };
+      }),
+    };
+  });
+}
+
+function dynamicTrades(
+  mode: "spoof" | "absorption" | "breakout",
+): TradeRow[] {
+  const start = 1_800_100_000_000;
+  if (mode === "breakout") {
+    return [
+      ...Array.from({ length: 5 }, (_, index) => ({
+        timestamp: start + index * 1_000 + 500,
+        trade_timestamp: start + index * 1_000 + 500,
+        trade_price: 100.1,
+        trade_volume: 20,
+        ask_bid: "BID",
+        sequential_id: 10_000 + index,
+        stream_type: "REALTIME",
+      })),
+      ...Array.from({ length: 4 }, (_, index) => ({
+        timestamp: start + 6_000 + index * 1_000,
+        trade_timestamp: start + 6_000 + index * 1_000,
+        trade_price: 100.1,
+        trade_volume: 2,
+        ask_bid: "ASK",
+        sequential_id: 11_000 + index,
+        stream_type: "REALTIME",
+      })),
+    ];
+  }
+  return Array.from({ length: 12 }, (_, index) => ({
+    timestamp: start + index * 1_000 + 500,
+    trade_timestamp: start + index * 1_000 + 500,
+    trade_price: 100.1,
+    trade_volume: mode === "absorption" ? 20 : 1,
+    ask_bid: "BID",
+    sequential_id: 12_000 + index,
+    stream_type: "REALTIME",
+  }));
+}
+
+Deno.test("repeated REST-like snapshots do not satisfy dynamic data gate", () => {
+  const snapshot = dynamicFrames("spoof")[0];
+  const repeated = Array.from({ length: 16 }, (_, index) => ({
+    ...snapshot,
+    timestamp: Number(snapshot.timestamp) + index * 1_000,
+  }));
+  const result = computeDynamicOrderflow(repeated, dynamicTrades("spoof"), 0.1);
+  assert(!result.sufficient);
+  assert(result.distinct_book_updates === 1);
+  assert(result.status === "INSUFFICIENT");
+});
+
+Deno.test("unexplained large bid-wall deletion is spoof-like risk", () => {
+  const result = computeDynamicOrderflow(
+    dynamicFrames("spoof"),
+    dynamicTrades("spoof"),
+    0.1,
+  );
+  assert(result.sufficient);
+  assert(result.spoof_like_score >= 0.65, String(result.spoof_like_score));
+  assert(result.status === "SPOOF_LIKE_RISK", result.status);
+});
+
+Deno.test("repeated ask refill against active buys is absorption risk", () => {
+  const result = computeDynamicOrderflow(
+    dynamicFrames("absorption"),
+    dynamicTrades("absorption"),
+    0.1,
+  );
+  assert(result.sufficient);
+  assert(
+    result.ask_absorption_score >= 0.65,
+    String(result.ask_absorption_score),
+  );
+  assert(result.status === "ASK_ABSORPTION_RISK", result.status);
+});
+
+Deno.test("executed ask wall that flips to defended bid confirms breakout", () => {
+  const result = computeDynamicOrderflow(
+    dynamicFrames("breakout"),
+    dynamicTrades("breakout"),
+    0.1,
+  );
+  assert(result.sufficient);
+  assert(result.breakout_score >= 0.65, String(result.breakout_score));
+  assert(result.status === "BREAKOUT_CONFIRMED", result.status);
+  close(Number(result.confirmed_support_price), 100.1);
 });
 
 Deno.test("trade plan keeps stop below entry and targets above entry", () => {
@@ -369,6 +498,31 @@ Deno.test("market alert is a hard gate even with bullish candles", () => {
   const final = finalizeCandidate(period, micro, 0.1, risk);
   assert(final.failed_gates.includes("market_event"));
   assert(final.decision !== "BUY");
+  assert(!final.watch_entry_plan.available);
+});
+
+Deno.test("dynamic spoof-like risk blocks BUY and watch-entry price", () => {
+  const data = dataset(0.0012);
+  const price = timeframeMetrics(data.m5).close;
+  const period = analyzePeriod(universeRow(price), data);
+  period.timeframes.m15.resistance = null;
+  period.timeframes.h4.resistance = null;
+  period.timeframes.day.resistance = null;
+  period.timeframes.day.recent_high = price * 2;
+  period.timeframes.m15.rsi14 = 66;
+  const micro = computeMicrostructure(
+    dynamicFrames("spoof"),
+    dynamicTrades("spoof"),
+    1_800_100_015_000,
+    0.1,
+  );
+  micro.best_bid = price - 0.1;
+  micro.best_ask = price + 0.1;
+  micro.spread_bps = 2;
+  const final = finalizeCandidate(period, micro, 0.1, risk);
+  assert(final.failed_gates.includes("dynamic_safety"));
+  assert(final.decision !== "BUY");
+  assert(!final.trade_plan.actionable);
   assert(!final.watch_entry_plan.available);
 });
 

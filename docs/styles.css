@@ -291,6 +291,16 @@ button { color: inherit; }
 .watch-plan > span { border-color: rgba(255, 190, 74, 0.18); background: rgba(255, 190, 74, 0.025); }
 .watch-plan > span:first-child b, .watch-plan > span:nth-child(2) b { color: var(--amber); }
 .watch-note { margin: 8px 2px 0; color: var(--amber); font-size: 9px; line-height: 1.5; }
+.dynamic-strip { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; margin-top: 10px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 9px; background: rgba(4, 12, 18, 0.45); }
+.dynamic-strip span { color: var(--faint); font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; }
+.dynamic-strip b { min-width: 0; overflow: hidden; color: var(--text); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.dynamic-strip small { color: var(--muted); font-family: var(--mono); font-size: 8px; white-space: nowrap; }
+.dynamic-strip.pass { border-color: rgba(50, 227, 155, 0.28); background: var(--green-soft); }
+.dynamic-strip.pass b { color: var(--green); }
+.dynamic-strip.risk { border-color: rgba(255, 102, 127, 0.34); background: var(--red-soft); }
+.dynamic-strip.risk b { color: #ff9dae; }
+.dynamic-strip.muted { border-style: dashed; opacity: 0.82; }
+.dynamic-strip.neutral b { color: #b9c9d7; }
 .failed-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 12px; }
 .failed-list li { padding: 4px 7px; border-radius: 6px; background: var(--red-soft); color: #ff9dae; font-size: 9px; }
 .failed-list .passed { background: var(--green-soft); color: var(--green); }
@@ -351,6 +361,8 @@ footer { display: flex; justify-content: space-between; gap: 20px; width: min(12
   .score-block p { display: none; }
   .score-ring { width: 62px; height: 62px; padding-top: 16px; }
   .candidate-plan, .muted-plan { grid-template-columns: 1fr; }
+  .dynamic-strip { grid-template-columns: auto 1fr; }
+  .dynamic-strip small { grid-column: 1 / -1; }
   .warning-panel { grid-column: auto; }
   footer { flex-direction: column; }
 }

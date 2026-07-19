@@ -181,7 +181,17 @@
     const actionable = candidate.decision === "BUY" && candidate.trade_plan?.actionable;
     const plan = candidate.trade_plan || {};
     const watch = candidate.watch_entry_plan || {};
+    const dynamic = candidate.microstructure?.dynamic || {};
     const tone = candidate.decision.toLowerCase();
+    const dynamicRisk = ["SPOOF_LIKE_RISK", "ASK_ABSORPTION_RISK", "SUPPORT_BREAKDOWN_RISK"].includes(dynamic.status);
+    const dynamicTone = dynamicRisk
+      ? "risk"
+      : dynamic.status === "BREAKOUT_CONFIRMED"
+      ? "pass"
+      : dynamic.status === "INSUFFICIENT" || !dynamic.status
+      ? "muted"
+      : "neutral";
+    const blockingLabels = (candidate.gates || []).filter(gate => !gate.passed).map(gate => gate.label).slice(0, 2);
     const planRows = actionable
       ? `<div class="candidate-plan">
           <span><small>매수 구간</small><b>${escapeHtml(price(plan.entry_low))} ~ ${escapeHtml(price(plan.entry_high))}</b></span>
@@ -196,7 +206,7 @@
           <span><small>무효화 가격</small><b class="negative-text">${escapeHtml(price(watch.invalidation_price))}</b></span>
           <span><small>상태</small><b>${escapeHtml(watch.label)}</b></span>
         </div><p class="watch-note">가격 도달 시 자동매수 금지 · 15분봉 마감 후 재스캔</p>`
-      : `<div class="candidate-plan muted-plan"><span><small>대기 매수가</small><b>미제시 · 안전조건 미충족</b></span><span><small>관찰 분류</small><b>${escapeHtml(candidate.horizon.label)}</b></span></div>`;
+      : `<div class="candidate-plan muted-plan"><span><small>대기 매수가</small><b>미제시 · ${escapeHtml(blockingLabels.join("·") || "안전조건 미충족")}</b></span><span><small>관찰 분류</small><b>${escapeHtml(candidate.horizon.label)}</b></span></div>`;
     const failed = (candidate.gates || []).filter(gate => !gate.passed).slice(0, 3);
     return `<article class="candidate-card panel ${tone}">
       <div class="candidate-head">
@@ -206,6 +216,10 @@
       <div class="candidate-score"><strong>${Number(candidate.score).toFixed(1)}</strong><span>점</span><i></i><small>신뢰도 ${percent(candidate.confidence, 1)}</small></div>
       <div class="candidate-market"><span>현재가 <b>${escapeHtml(price(candidate.current_price))}</b></span><span class="${candidate.change_24h_pct >= 0 ? "positive-text" : "negative-text"}">${percent(candidate.change_24h_pct, 2, true)}</span></div>
       ${planRows}
+      <div class="dynamic-strip ${dynamicTone}">
+        <span>동적 호가</span><b>${escapeHtml(dynamic.label || "이전 결과·재스캔 필요")}</b>
+        <small>${Number(dynamic.observation_ms || 0) / 1000}s · 호가 ${Number(dynamic.distinct_book_updates || 0)} · 동시간 체결 ${Number(dynamic.aligned_trade_count || 0)}</small>
+      </div>
       <ul class="failed-list">${failed.length ? failed.map(item => `<li>${escapeHtml(item.label)}</li>`).join("") : "<li class=\"passed\">모든 강제조건 통과</li>"}</ul>
       <button class="card-copy" type="button" data-copy-market="${escapeHtml(candidate.market)}">이 후보 리포트 복사</button>
     </article>`;
@@ -315,8 +329,13 @@
       "",
       "### 최신 호가·체결",
       `- 평균 스프레드: ${candidate.microstructure?.spread_bps == null ? "N/A" : Number(candidate.microstructure.spread_bps).toFixed(2) + "bp"}`,
-      `- 호가 불균형: ${Number(candidate.microstructure?.book_imbalance || 0).toFixed(3)}`,
+      `- 정적 호가 불균형(단독 긍정점수 미사용): ${Number(candidate.microstructure?.book_imbalance || 0).toFixed(3)}`,
       `- 최근 체결 압력: ${Number(candidate.microstructure?.trade_pressure || 0).toFixed(3)} / 체결 표본 ${candidate.microstructure?.trade_count || 0}건`,
+      `- 동적 판정: ${candidate.microstructure?.dynamic?.label || "데이터 없음"}`,
+      `- 동적 표본: 관찰 ${Number(candidate.microstructure?.dynamic?.observation_ms || 0) / 1000}초 / 서로 다른 호가 ${candidate.microstructure?.dynamic?.distinct_book_updates || 0}회 / 동시간대 체결 ${candidate.microstructure?.dynamic?.aligned_trade_count || 0}건 / 품질 ${percent(Number(candidate.microstructure?.dynamic?.data_quality || 0) * 100, 1)}`,
+      `- 의심 점수: 가짜 매수벽 ${Number(candidate.microstructure?.dynamic?.spoof_like_score || 0).toFixed(3)} / 매도 재보충·흡수 ${Number(candidate.microstructure?.dynamic?.ask_absorption_score || 0).toFixed(3)} / 돌파·지지전환 ${Number(candidate.microstructure?.dynamic?.breakout_score || 0).toFixed(3)}`,
+      ...(candidate.microstructure?.dynamic?.evidence || []).map(item => `- 동적 근거: ${item}`),
+      ...(candidate.microstructure?.dynamic?.warnings || []).map(item => `- 동적 경고: ${item}`),
       "",
       "### 긍정 근거",
       ...(candidate.positives?.length ? candidate.positives.map(item => `- ${item}`) : ["- 뚜렷한 추가 근거 없음"]),
@@ -349,6 +368,7 @@
       `- 안전필터 통과 종목 15분봉 기간점검: ${result.coverage?.period_screened_complete}/${result.coverage?.period_screened_markets}개`,
       `- 기간 정밀분석 ${result.coverage?.deep_period_analyzed}개`,
       `- 최신 호가·체결 검증 ${result.coverage?.microstructure_finalists}개`,
+      `- 동적 WebSocket 관찰 ${result.coverage?.dynamic_orderflow?.websocket_markets || 0}개 / 충분한 동적 표본 ${result.coverage?.dynamic_orderflow?.sufficient_markets || 0}개 / 요청 관찰창 ${result.coverage?.dynamic_orderflow?.requested_observation_seconds || 0}초`,
       "- 조회창: 5분봉 약 6시간 / 15분봉 약 24시간 / 4시간봉 약 15일 / 일봉 약 60일",
       "",
       "## 최종 매수 결론",
@@ -368,10 +388,11 @@
       "2. 단기·중기 목표가와 손절가격의 구조적 근거 및 수수료·슬리피지 반영 손익비 재계산",
       "3. 추세 유지기간 분류가 과도하지 않은지, 더 보수적인 보유기간과 무효화 조건 제시",
       "4. 조건부 대기 매수구간이 지지선 위에 있고 가격 도달 후에도 목표가·순손익비가 유효한지 재검증",
-      "5. 시장경보·저유동·추격매수·데이터 부족·뉴스 미반영 위험 점검",
-      "6. 추천 근거가 약하면 억지 대안을 만들지 말고 '매수 보류'로 결론",
+      "5. 동적 호가 로그에서 비체결성 대형벽 취소·매도벽 재보충/흡수·지지 붕괴가 실제 체결량과 정합적인지 재검증",
+      "6. 시장경보·저유동·추격매수·데이터 부족·뉴스 미반영 위험 점검",
+      "7. 추천 근거가 약하면 억지 대안을 만들지 말고 '매수 보류'로 결론",
       "",
-      "> 주의: 본 리포트는 공개 시세 기반 조건부 분석이며 미래 가격이나 수익을 보장하지 않습니다."
+      "> 주의: 본 리포트는 공개 시세 기반 조건부 분석이며 미래 가격이나 수익을 보장하지 않습니다. 동적 호가 판정은 개별 주문 ID와 숨은 잔량을 볼 수 없어 스푸핑·아이스버그의 확정 판정이 아닙니다."
     ];
     return report.join("\n");
   }
@@ -395,11 +416,12 @@
     progressTimers.forEach(clearTimeout);
     progressTimers = [];
     const steps = [
-      [0, "1/4 · 업비트 원화마켓 전체 현재가·경보·거래대금을 점검 중입니다."],
-      [4500, "2/4 · 안전필터 통과 전 종목의 15분봉 24시간 구간을 점검 중입니다."],
-      [20000, "3/4 · 상위 30종목의 5분·4시간·일봉을 추가 분석 중입니다."],
-      [39000, "4/4 · 최종 후보의 최신 호가·체결과 손익비를 검증 중입니다."],
-      [60000, "API 응답이 평소보다 느립니다. 중단하지 말고 조금만 기다려 주세요."]
+      [0, "1/5 · 업비트 원화마켓 전체 현재가·경보·거래대금을 점검 중입니다."],
+      [4500, "2/5 · 안전필터 통과 전 종목의 15분봉 24시간 구간을 점검 중입니다."],
+      [20000, "3/5 · 상위 30종목의 5분·4시간·일봉을 추가 분석 중입니다."],
+      [39000, "4/5 · 최종 후보의 실시간 호가·체결을 동시 관찰 중입니다."],
+      [52000, "5/5 · 가짜 벽 취소·매도 재보충·돌파 지지전환과 손익비를 교차검증 중입니다."],
+      [75000, "API 응답이 평소보다 느립니다. 중단하지 말고 조금만 기다려 주세요."]
     ];
     for (const [delay, message] of steps) progressTimers.push(setTimeout(() => elements.scanStatus.textContent = message, delay));
   }
@@ -427,7 +449,7 @@
           "Content-Type": "application/json",
           "apikey": config.supabasePublishableKey,
           "x-scan-token": accessToken(),
-          "x-client-info": "trading-booooo-web/2.0"
+          "x-client-info": "trading-booooo-web/2.1"
         },
         body: JSON.stringify({
           action: "scan",
