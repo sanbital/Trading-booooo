@@ -271,7 +271,7 @@
       ${planRows}
       <div class="dynamic-strip ${dynamicTone}">
         <span>동적 호가</span><b>${escapeHtml(dynamic.label || "이전 결과·재스캔 필요")}</b>
-        <small>${Number(dynamic.observation_ms || 0) / 1000}s · 호가 ${Number(dynamic.distinct_book_updates || 0)} · 동시간 체결 ${Number(dynamic.aligned_trade_count || 0)}</small>
+        <small>${Number(dynamic.observation_ms || 0) / 1000}s · 호가 ${Number(dynamic.distinct_book_updates || 0)} · 체결 ${Number(dynamic.aligned_trade_count || 0)} · 구간 ${Number(dynamic.covered_phases || 0)}/3</small>
       </div>
       <ul class="failed-list">${failed.length ? failed.map(item => `<li>${escapeHtml(item.label)}</li>`).join("") : "<li class=\"passed\">모든 강제조건 통과</li>"}</ul>
       <button class="card-copy" type="button" data-copy-market="${escapeHtml(candidate.market)}">이 후보 리포트 복사</button>
@@ -393,6 +393,7 @@
       `- 최근 체결 압력: ${Number(candidate.microstructure?.trade_pressure || 0).toFixed(3)} / 체결 표본 ${candidate.microstructure?.trade_count || 0}건`,
       `- 동적 판정: ${candidate.microstructure?.dynamic?.label || "데이터 없음"}`,
       `- 동적 표본: 관찰 ${Number(candidate.microstructure?.dynamic?.observation_ms || 0) / 1000}초 / 서로 다른 호가 ${candidate.microstructure?.dynamic?.distinct_book_updates || 0}회 / 동시간대 체결 ${candidate.microstructure?.dynamic?.aligned_trade_count || 0}건 / 품질 ${percent(Number(candidate.microstructure?.dynamic?.data_quality || 0) * 100, 1)}`,
+      `- 구간 분산: 초반·중반·확인 ${candidate.microstructure?.dynamic?.covered_phases || 0}/3개 유효 / 호가 ${(candidate.microstructure?.dynamic?.phase_book_updates || []).join("/") || "—"}회 / 체결 ${(candidate.microstructure?.dynamic?.phase_trade_counts || []).join("/") || "—"}건`,
       `- 의심 점수: 가짜 매수벽 ${Number(candidate.microstructure?.dynamic?.spoof_like_score || 0).toFixed(3)} / 매도 재보충·흡수 ${Number(candidate.microstructure?.dynamic?.ask_absorption_score || 0).toFixed(3)} / 돌파·지지전환 ${Number(candidate.microstructure?.dynamic?.breakout_score || 0).toFixed(3)}`,
       ...(candidate.microstructure?.dynamic?.evidence || []).map(item => `- 동적 근거: ${item}`),
       ...(candidate.microstructure?.dynamic?.warnings || []).map(item => `- 동적 경고: ${item}`),
@@ -490,7 +491,7 @@
     elements.dataSourceLabel.textContent = `${settings.label} 공개시세`;
     elements.scanButtonLabel.textContent = latestResults[exchange] ? settings.button.replace("스캔", "재스캔") : settings.button;
     elements.scanStatus.classList.remove("error-text");
-    elements.scanStatus.textContent = `버튼을 누르면 ${settings.label} ${settings.quote} 전체를 분석합니다. 약 30~90초가 걸릴 수 있습니다.`;
+    elements.scanStatus.textContent = `버튼을 누르면 ${settings.label} ${settings.quote} 전체를 분석합니다. 약 70~180초가 걸릴 수 있습니다.`;
     if (renderStored && latestResults[exchange]) {
       renderResult(latestResults[exchange], false);
     } else if (renderStored) {
@@ -507,9 +508,10 @@
       [0, `1/5 · ${marketName} 전체 현재가·거래대금을 점검 중입니다.`],
       [4500, "2/5 · 안전필터 통과 전 종목의 15분봉 24시간 구간을 점검 중입니다."],
       [20000, "3/5 · 상위 30종목의 5분·4시간·일봉을 추가 분석 중입니다."],
-      [39000, "4/5 · 최종 후보의 실시간 호가·체결을 동시 관찰 중입니다."],
-      [52000, "5/5 · 가짜 벽 취소·매도 재보충·돌파 지지전환과 손익비를 교차검증 중입니다."],
-      [75000, "API 응답이 평소보다 느립니다. 중단하지 말고 조금만 기다려 주세요."]
+      [39000, "4/5 · 최종 후보의 실시간 호가·체결을 60~90초 동안 동시 관찰 중입니다."],
+      [70000, "4/5 · 중반 구간에서 벽 취소·재보충·실체결 소진의 반복 여부를 확인 중입니다."],
+      [100000, "5/5 · 마지막 확인 구간의 지지 전환과 비용 포함 손익비를 교차검증 중입니다."],
+      [145000, "저유동 후보의 연장 관찰 또는 API 응답이 진행 중입니다. 조금만 기다려 주세요."]
     ];
     for (const [delay, message] of steps) progressTimers.push(setTimeout(() => elements.scanStatus.textContent = message, delay));
   }
@@ -529,7 +531,7 @@
     elements.copyStatus.textContent = "";
     beginProgress();
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), Number(config.requestTimeoutMs || 140000));
+    const timeout = setTimeout(() => controller.abort(), Math.max(220000, Number(config.requestTimeoutMs || 0)));
     try {
       const endpoint = `${String(config.supabaseUrl).replace(/\/$/, "")}/functions/v1/${config.functionName || "market-scanner"}`;
       const response = await fetch(endpoint, {
@@ -539,7 +541,7 @@
           "Content-Type": "application/json",
           "apikey": config.supabasePublishableKey,
           "x-scan-token": accessToken(),
-          "x-client-info": "trading-booooo-web/2.2"
+          "x-client-info": "trading-booooo-web/2.3"
         },
         body: JSON.stringify({
           action: "scan",

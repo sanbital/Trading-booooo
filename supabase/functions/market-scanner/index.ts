@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v2.2.0 — Supabase Edge Function
+// Trading-booooo Market Scanner v2.3.0 — Supabase Edge Function
 // Upbit KRW / Binance USDT universe scan -> multi-period analysis -> orderflow validation.
 // Read-only public market data. No account lookup, order creation, cancellation, or API keys.
 
@@ -33,9 +33,10 @@ const DEFAULT_DEEP_SCAN_LIMIT = 30;
 const FINALIST_LIMIT = 8;
 const BOOK_SAMPLE_COUNT = 4;
 const BOOK_SAMPLE_INTERVAL_MS = 600;
-const DEFAULT_DYNAMIC_OBSERVATION_MS = 18_000;
-const MIN_DYNAMIC_OBSERVATION_MS = 12_000;
-const MAX_DYNAMIC_OBSERVATION_MS = 30_000;
+const DEFAULT_DYNAMIC_OBSERVATION_MS = 60_000;
+const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 90_000;
+const MIN_DYNAMIC_OBSERVATION_MS = 45_000;
+const MAX_DYNAMIC_OBSERVATION_MS = 90_000;
 const MAX_DYNAMIC_BOOK_EVENTS = 1_200;
 const MAX_DYNAMIC_TRADE_EVENTS = 2_500;
 const CANDLE_BATCH_SIZE = 7;
@@ -534,12 +535,20 @@ type DynamicStreamBundle = {
   trades: Map<string, TradeRow[]>;
 };
 
-function dynamicObservationMs(): number {
+function dynamicObservationMs(finalists: PeriodAnalysis[]): number {
+  const configured = Deno.env.get("MICRO_OBSERVATION_MS");
+  const hasLowLiquidityCandidate = finalists.some((item) => {
+    const turnover = item.universe.turnover_24h_quote;
+    const actionable = item.universe.min_actionable_turnover_24h;
+    return turnover >= actionable && turnover < actionable * 2;
+  });
   return Math.round(
     clamp(
       finite(
-        Deno.env.get("MICRO_OBSERVATION_MS"),
-        DEFAULT_DYNAMIC_OBSERVATION_MS,
+        configured,
+        hasLowLiquidityCandidate
+          ? LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS
+          : DEFAULT_DYNAMIC_OBSERVATION_MS,
       ),
       MIN_DYNAMIC_OBSERVATION_MS,
       MAX_DYNAMIC_OBSERVATION_MS,
@@ -813,7 +822,7 @@ async function loadMicrostructure(
   );
   const trades = new Map<string, TradeRow[]>();
   const ticks = new Map<string, number>();
-  const observationMs = dynamicObservationMs();
+  const observationMs = dynamicObservationMs(finalists);
   const dynamicPromise = optional(
     collectDynamicStream(markets, observationMs),
   );
@@ -907,7 +916,7 @@ async function loadBinanceMicrostructure(
   );
   const trades = new Map<string, TradeRow[]>();
   const ticks = new Map(instrumentTicks);
-  const observationMs = dynamicObservationMs();
+  const observationMs = dynamicObservationMs(finalists);
   const dynamicPromise = optional(
     collectBinanceDynamicStream(markets, observationMs),
   );

@@ -1,7 +1,7 @@
-// Trading-booooo Market Scanner v2.2.0
+// Trading-booooo Market Scanner v2.3.0
 // Pure analysis engine. Public market data only; no order or account operations.
 
-export const ENGINE_VERSION = "2.2.0";
+export const ENGINE_VERSION = "2.3.0";
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
 
@@ -164,6 +164,10 @@ export type DynamicOrderflow = {
   observation_ms: number;
   distinct_book_updates: number;
   aligned_trade_count: number;
+  covered_phases: number;
+  phase_book_updates: number[];
+  phase_trade_counts: number[];
+  phase_consistent: boolean;
   data_quality: number;
   spoof_like_score: number;
   ask_absorption_score: number;
@@ -795,9 +799,10 @@ type WallStat = {
   lastIndex: number;
 };
 
-const DYNAMIC_MIN_OBSERVATION_MS = 10_000;
-const DYNAMIC_MIN_BOOK_UPDATES = 8;
-const DYNAMIC_MIN_TRADES = 8;
+const DYNAMIC_MIN_OBSERVATION_MS = 45_000;
+const DYNAMIC_MIN_BOOK_UPDATES = 25;
+const DYNAMIC_MIN_TRADES = 20;
+const DYNAMIC_PHASE_COUNT = 3;
 const WALL_LEVELS = 3;
 const TRACKED_LEVELS = 15;
 
@@ -1016,17 +1021,35 @@ export function computeDynamicOrderflow(
     return streamType !== "SNAPSHOT" && timestamp >= start - 250 &&
       timestamp <= end + 250;
   });
+  const phaseBookUpdates = Array.from({ length: DYNAMIC_PHASE_COUNT }, () => 0);
+  const phaseTradeCounts = Array.from({ length: DYNAMIC_PHASE_COUNT }, () => 0);
+  const phaseWidth = Math.max(1, observationMs / DYNAMIC_PHASE_COUNT);
+  const phaseIndex = (timestamp: number) =>
+    Math.min(
+      DYNAMIC_PHASE_COUNT - 1,
+      Math.max(0, Math.floor((timestamp - start) / phaseWidth)),
+    );
+  for (const frame of frames) phaseBookUpdates[phaseIndex(frame.timestamp)]++;
+  for (const trade of alignedTrades) {
+    phaseTradeCounts[phaseIndex(tradeTimestamp(trade))]++;
+  }
+  const coveredPhases =
+    phaseBookUpdates.filter((books, index) =>
+      books >= 3 && phaseTradeCounts[index] >= 2
+    ).length;
+  const phaseConsistent = coveredPhases === DYNAMIC_PHASE_COUNT;
   const tradeIndex = indexTradesByPrice(alignedTrades, tick);
   const dataQuality = clamp(
-    Math.min(1, observationMs / 15_000) * 0.35 +
-      Math.min(1, frames.length / 20) * 0.35 +
-      Math.min(1, alignedTrades.length / 20) * 0.3,
+    Math.min(1, observationMs / 60_000) * 0.3 +
+      Math.min(1, frames.length / 40) * 0.28 +
+      Math.min(1, alignedTrades.length / 40) * 0.27 +
+      (coveredPhases / DYNAMIC_PHASE_COUNT) * 0.15,
     0,
     1,
   );
   const sufficient = observationMs >= DYNAMIC_MIN_OBSERVATION_MS &&
     frames.length >= DYNAMIC_MIN_BOOK_UPDATES &&
-    alignedTrades.length >= DYNAMIC_MIN_TRADES;
+    alignedTrades.length >= DYNAMIC_MIN_TRADES && phaseConsistent;
   const empty: DynamicOrderflow = {
     status: "INSUFFICIENT",
     label: dynamicLabel("INSUFFICIENT"),
@@ -1034,6 +1057,10 @@ export function computeDynamicOrderflow(
     observation_ms: observationMs,
     distinct_book_updates: frames.length,
     aligned_trade_count: alignedTrades.length,
+    covered_phases: coveredPhases,
+    phase_book_updates: phaseBookUpdates,
+    phase_trade_counts: phaseTradeCounts,
+    phase_consistent: phaseConsistent,
     data_quality: dataQuality,
     spoof_like_score: 0,
     ask_absorption_score: 0,
@@ -1046,7 +1073,7 @@ export function computeDynamicOrderflow(
     warnings: [
       `실시간 호가 ${DYNAMIC_MIN_BOOK_UPDATES}회·동시간대 체결 ${DYNAMIC_MIN_TRADES}건·관찰 ${
         DYNAMIC_MIN_OBSERVATION_MS / 1000
-      }초가 필요합니다.`,
+      }초와 초반·중반·확인 3개 구간의 분산 표본이 필요합니다.`,
     ],
   };
   if (frames.length < 2) return empty;
@@ -1225,6 +1252,9 @@ export function computeDynamicOrderflow(
     `실시간 ${
       (observationMs / 1000).toFixed(1)
     }초 동안 서로 다른 호가 ${frames.length}회와 동시간대 체결 ${alignedTrades.length}건을 교차검증했습니다.`,
+    `초반·중반·확인 구간 표본은 호가 ${phaseBookUpdates.join("/")}회, 체결 ${
+      phaseTradeCounts.join("/")
+    }건이며 ${coveredPhases}/3개 구간이 유효했습니다.`,
   ];
   const warnings: string[] = [];
   if (persistentBid) {
@@ -1272,6 +1302,10 @@ export function computeDynamicOrderflow(
     observation_ms: observationMs,
     distinct_book_updates: frames.length,
     aligned_trade_count: alignedTrades.length,
+    covered_phases: coveredPhases,
+    phase_book_updates: phaseBookUpdates,
+    phase_trade_counts: phaseTradeCounts,
+    phase_consistent: phaseConsistent,
     data_quality: dataQuality,
     spoof_like_score: spoofScore,
     ask_absorption_score: absorptionScore,
@@ -1886,9 +1920,9 @@ export function finalizeCandidate(
       "micro_data",
       "동적 호가·체결 표본",
       micro.dynamic.sufficient,
-      `실시간 관찰 10초·서로 다른 호가 8회·동시간대 체결 8건이 필요합니다. 현재 ${
+      `실시간 관찰 45초·서로 다른 호가 25회·동시간대 체결 20건과 3개 구간의 분산 표본이 필요합니다. 현재 ${
         (micro.dynamic.observation_ms / 1000).toFixed(1)
-      }초·${micro.dynamic.distinct_book_updates}회·${micro.dynamic.aligned_trade_count}건입니다.`,
+      }초·${micro.dynamic.distinct_book_updates}회·${micro.dynamic.aligned_trade_count}건·${micro.dynamic.covered_phases}/3구간입니다.`,
     ),
     gate(
       "spread",

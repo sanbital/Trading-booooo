@@ -272,9 +272,9 @@ Deno.test("period analysis scores aligned uptrend above downtrend", () => {
 
 function bookSnapshots(bullish = true): OrderbookSnapshot[] {
   const now = 1_800_000_000_000;
-  return Array.from({ length: 16 }, (_, sample) => ({
+  return Array.from({ length: 31 }, (_, sample) => ({
     market: "KRW-TEST",
-    timestamp: now - 15_000 + sample * 1_000,
+    timestamp: now - 60_000 + sample * 2_000,
     stream_type: "REALTIME",
     orderbook_units: Array.from({ length: 10 }, (_, i) => ({
       bid_price: 119.9 - i * 0.1,
@@ -287,8 +287,8 @@ function bookSnapshots(bullish = true): OrderbookSnapshot[] {
 
 function trades(bullish = true): TradeRow[] {
   const now = 1_800_000_000_000;
-  return Array.from({ length: 40 }, (_, i) => ({
-    timestamp: now - i * 350,
+  return Array.from({ length: 41 }, (_, i) => ({
+    timestamp: now - i * 1_500,
     trade_price: 120,
     trade_volume: i % 4 === 0 ? 1 : 3,
     sequential_id: 9_000_000 + i,
@@ -315,11 +315,11 @@ function dynamicFrames(
   mode: "spoof" | "absorption" | "breakout",
 ): OrderbookSnapshot[] {
   const start = 1_800_100_000_000;
-  return Array.from({ length: 16 }, (_, sample) => {
-    const crossed = mode === "breakout" && sample >= 5;
+  return Array.from({ length: 31 }, (_, sample) => {
+    const crossed = mode === "breakout" && sample >= 10;
     return {
       market: "KRW-TEST",
-      timestamp: start + sample * 1_000,
+      timestamp: start + sample * 2_000,
       stream_type: "REALTIME",
       orderbook_units: Array.from({ length: 10 }, (_, index) => {
         const bidPrice = crossed ? 100.1 - index * 0.1 : 99.9 - index * 0.1;
@@ -333,7 +333,7 @@ function dynamicFrames(
           askSize = 100 + sample * 0.01;
         }
         if (mode === "breakout") {
-          if (!crossed && index === 0) askSize = 100 - sample * 20;
+          if (!crossed && index === 0) askSize = 100 - sample * 10;
           if (crossed && index === 0) bidSize = 80 + sample * 0.01;
         }
         return {
@@ -353,18 +353,18 @@ function dynamicTrades(
   const start = 1_800_100_000_000;
   if (mode === "breakout") {
     return [
-      ...Array.from({ length: 5 }, (_, index) => ({
-        timestamp: start + index * 1_000 + 500,
-        trade_timestamp: start + index * 1_000 + 500,
+      ...Array.from({ length: 10 }, (_, index) => ({
+        timestamp: start + index * 2_000 + 500,
+        trade_timestamp: start + index * 2_000 + 500,
         trade_price: 100.1,
-        trade_volume: 20,
+        trade_volume: 10,
         ask_bid: "BID",
         sequential_id: 10_000 + index,
         stream_type: "REALTIME",
       })),
-      ...Array.from({ length: 4 }, (_, index) => ({
-        timestamp: start + 6_000 + index * 1_000,
-        trade_timestamp: start + 6_000 + index * 1_000,
+      ...Array.from({ length: 21 }, (_, index) => ({
+        timestamp: start + 20_000 + index * 2_000,
+        trade_timestamp: start + 20_000 + index * 2_000,
         trade_price: 100.1,
         trade_volume: 2,
         ask_bid: "ASK",
@@ -373,9 +373,9 @@ function dynamicTrades(
       })),
     ];
   }
-  return Array.from({ length: 12 }, (_, index) => ({
-    timestamp: start + index * 1_000 + 500,
-    trade_timestamp: start + index * 1_000 + 500,
+  return Array.from({ length: 31 }, (_, index) => ({
+    timestamp: start + index * 2_000,
+    trade_timestamp: start + index * 2_000,
     trade_price: 100.1,
     trade_volume: mode === "absorption" ? 20 : 1,
     ask_bid: "BID",
@@ -394,6 +394,33 @@ Deno.test("repeated REST-like snapshots do not satisfy dynamic data gate", () =>
   assert(!result.sufficient);
   assert(result.distinct_book_updates === 1);
   assert(result.status === "INSUFFICIENT");
+});
+
+Deno.test("trades clustered in one phase fail the three-phase data gate", () => {
+  const start = 1_800_100_000_000;
+  const clusteredTrades: TradeRow[] = Array.from(
+    { length: 25 },
+    (_, index) => ({
+      timestamp: start + index * 500,
+      trade_timestamp: start + index * 500,
+      trade_price: 100.1,
+      trade_volume: 1,
+      ask_bid: "BID",
+      sequential_id: 50_000 + index,
+      stream_type: "REALTIME",
+    }),
+  );
+  const result = computeDynamicOrderflow(
+    dynamicFrames("absorption"),
+    clusteredTrades,
+    0.1,
+  );
+  assert(result.observation_ms >= 45_000);
+  assert(result.distinct_book_updates >= 25);
+  assert(result.aligned_trade_count >= 20);
+  assert(result.covered_phases < 3);
+  assert(!result.phase_consistent);
+  assert(!result.sufficient);
 });
 
 Deno.test("unexplained large bid-wall deletion is spoof-like risk", () => {
