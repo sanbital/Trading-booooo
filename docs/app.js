@@ -4,10 +4,46 @@
   const $ = id => document.getElementById(id);
   const config = window.TRADING_SCANNER_CONFIG || {};
   let latestResult = null;
+  const latestResults = { upbit: null, binance: null };
+  let activeExchange = "upbit";
+  let scanning = false;
   let progressTimers = [];
+
+  const exchangeSettings = {
+    upbit: {
+      label: "업비트 현물",
+      quote: "KRW",
+      capital: Number(config.defaultCapitalKrw || 500000),
+      min: 10000,
+      step: 10000,
+      unit: "원",
+      fee: Number(config.defaultFeePerSidePct || 0.05),
+      button: "원화마켓 전체 스캔",
+      title: "업비트 원화마켓을 전수 점검하고<br>현재의 매수 후보만 추립니다.",
+      description: "전체 상장 종목의 현재가·거래대금을 1차 점검하고, 안전필터 통과 종목 전부의 15분봉을 확인한 뒤 상위 후보의 5분·4시간·일봉과 최신 호가·체결을 교차검증합니다. 조건 미달이면 추천하지 않습니다."
+    },
+    binance: {
+      label: "바이낸스 현물",
+      quote: "USDT",
+      capital: Number(config.defaultCapitalUsdt || 500),
+      min: 10,
+      step: 10,
+      unit: "USDT",
+      fee: Number(config.defaultBinanceFeePerSidePct || 0.1),
+      button: "USDT 현물 전체 스캔",
+      title: "바이낸스 USDT 현물을 전수 점검하고<br>현재의 매수 후보만 추립니다.",
+      description: "바이낸스에서 거래 가능한 USDT 현물 전체를 기간 분석하고, 최종 후보의 실시간 호가와 체결을 교차검증합니다. 업비트 결과와 점수·자금·거래대금은 서로 섞지 않습니다."
+    }
+  };
 
   const elements = {
     configError: $("config-error"),
+    exchangeTabs: [...document.querySelectorAll("[data-exchange]")],
+    brandSubtitle: $("brand-subtitle"),
+    heroTitle: $("hero-title"),
+    heroDescription: $("hero-description"),
+    capitalLabel: $("capital-label"),
+    capitalUnit: $("capital-unit"),
     accessError: $("access-error"),
     scanButton: $("scan-button"),
     scanButtonLabel: $("scan-button-label"),
@@ -22,6 +58,8 @@
     eligibleMarkets: $("eligible-markets"),
     deepMarkets: $("deep-markets"),
     elapsed: $("elapsed"),
+    listedMarketLabel: $("listed-market-label"),
+    dataSourceLabel: $("data-source-label"),
     noBuyBanner: $("no-buy-banner"),
     primarySection: $("primary-section"),
     primaryName: $("primary-name"),
@@ -96,16 +134,25 @@
     return valid;
   }
 
-  function price(value) {
+  function activeQuote() {
+    return latestResult?.meta?.quote_currency || exchangeSettings[activeExchange].quote;
+  }
+
+  function price(value, quote = activeQuote()) {
     const number = Number(value);
     if (!Number.isFinite(number)) return "—";
-    const digits = number >= 1000 ? 0 : number >= 100 ? 1 : number >= 1 ? 3 : number >= 0.01 ? 5 : 8;
-    return `${number.toLocaleString("ko-KR", { maximumFractionDigits: digits })}원`;
+    const digits = quote === "KRW"
+      ? number >= 1000 ? 0 : number >= 100 ? 1 : number >= 1 ? 3 : number >= 0.01 ? 5 : 8
+      : number >= 1000 ? 2 : number >= 1 ? 4 : number >= 0.01 ? 6 : 8;
+    return `${number.toLocaleString("ko-KR", { maximumFractionDigits: digits })}${quote === "KRW" ? "원" : " USDT"}`;
   }
 
   function krw(value) {
     const number = Number(value);
-    return Number.isFinite(number) ? `${Math.round(number).toLocaleString("ko-KR")}원` : "—";
+    if (!Number.isFinite(number)) return "—";
+    return activeQuote() === "KRW"
+      ? `${Math.round(number).toLocaleString("ko-KR")}원`
+      : `${number.toLocaleString("ko-KR", { maximumFractionDigits: 2 })} USDT`;
   }
 
   function percent(value, digits = 2, signed = false) {
@@ -117,6 +164,12 @@
   function turnover(value) {
     const number = Number(value);
     if (!Number.isFinite(number)) return "—";
+    if (activeQuote() === "USDT") {
+      if (number >= 1_000_000_000) return `${(number / 1_000_000_000).toFixed(2)}B USDT`;
+      if (number >= 1_000_000) return `${(number / 1_000_000).toFixed(1)}M USDT`;
+      if (number >= 1_000) return `${(number / 1_000).toFixed(1)}K USDT`;
+      return `${number.toFixed(0)} USDT`;
+    }
     if (number >= 1_000_000_000_000) return `${(number / 1_000_000_000_000).toFixed(2)}조`;
     if (number >= 100_000_000) return `${(number / 100_000_000).toFixed(1)}억`;
     return `${Math.round(number / 10_000).toLocaleString("ko-KR")}만`;
@@ -158,8 +211,8 @@
     elements.primaryChange.textContent = `24시간 ${percent(candidate.change_24h_pct, 2, true)}`;
     elements.primaryChange.className = candidate.change_24h_pct >= 0 ? "positive-text" : "negative-text";
     elements.primaryEntry.textContent = `${price(plan.entry_low)} ~ ${price(plan.entry_high)}`;
-    elements.primaryShortTarget.textContent = price(plan.short_target);
-    elements.primaryShortReturn.textContent = `비용 반영 ${percent(plan.short_net_return_pct, 2, true)}`;
+    elements.primaryShortTarget.textContent = price(plan.expected_exit_price ?? plan.short_target);
+    elements.primaryShortReturn.textContent = `수수료·슬리피지 반영 ${percent(plan.expected_exit_net_return_pct ?? plan.short_net_return_pct, 2, true)}`;
     elements.primaryMediumTarget.textContent = price(plan.medium_target);
     elements.primaryMediumReturn.textContent = `비용 반영 ${percent(plan.medium_net_return_pct, 2, true)}`;
     elements.primaryStop.textContent = price(plan.stop_price);
@@ -195,17 +248,17 @@
     const planRows = actionable
       ? `<div class="candidate-plan">
           <span><small>매수 구간</small><b>${escapeHtml(price(plan.entry_low))} ~ ${escapeHtml(price(plan.entry_high))}</b></span>
-          <span><small>단기 / 중기 목표</small><b>${escapeHtml(price(plan.short_target))} / ${escapeHtml(price(plan.medium_target))}</b></span>
+          <span><small>진입 시 예상 매도가</small><b class="positive-text">${escapeHtml(price(plan.expected_exit_price ?? plan.short_target))}</b></span>
           <span><small>손절가격</small><b class="negative-text">${escapeHtml(price(plan.stop_price))}</b></span>
-          <span><small>예상 보유</small><b>${escapeHtml(candidate.horizon.expected_window)}</b></span>
+          <span><small>중기 목표 / 예상 보유</small><b>${escapeHtml(price(plan.medium_target))} · ${escapeHtml(candidate.horizon.expected_window)}</b></span>
         </div>`
       : watch.available
       ? `<div class="candidate-plan watch-plan">
           <span><small>조건부 대기 매수가</small><b>${escapeHtml(price(watch.zone_low))} ~ ${escapeHtml(price(watch.zone_high))}</b></span>
-          <span><small>최대 허용 매수가</small><b>${escapeHtml(price(watch.max_price))}</b></span>
+          <span><small>진입 시 예상 매도가</small><b class="positive-text">${escapeHtml(price(watch.expected_exit_price ?? watch.reference_target))}</b></span>
           <span><small>무효화 가격</small><b class="negative-text">${escapeHtml(price(watch.invalidation_price))}</b></span>
-          <span><small>상태</small><b>${escapeHtml(watch.label)}</b></span>
-        </div><p class="watch-note">가격 도달 시 자동매수 금지 · 15분봉 마감 후 재스캔</p>`
+          <span><small>예상 순수익 / 손익비</small><b>${escapeHtml(percent(watch.expected_net_return_pct, 2, true))} · ${Number(watch.estimated_net_rr).toFixed(2)}</b></span>
+        </div><p class="watch-scenario"><b>진입</b> ${escapeHtml(watch.entry_trigger)}<br><b>매도</b> ${escapeHtml(watch.exit_trigger)}<br><b>예상 보유</b> ${escapeHtml(candidate.horizon.expected_window)} · 추세 무효화 시 목표가 전이라도 종료</p><p class="watch-note">가격 도달 시 자동매수 금지 · 15분봉 마감 후 재스캔</p>`
       : `<div class="candidate-plan muted-plan"><span><small>대기 매수가</small><b>미제시 · ${escapeHtml(blockingLabels.join("·") || "안전조건 미충족")}</b></span><span><small>관찰 분류</small><b>${escapeHtml(candidate.horizon.label)}</b></span></div>`;
     const failed = (candidate.gates || []).filter(gate => !gate.passed).slice(0, 3);
     return `<article class="candidate-card panel ${tone}">
@@ -251,17 +304,19 @@
       return `<tr>
         <td><b>${row.rank}</b></td><td><strong>${escapeHtml(row.korean_name)}</strong><small>${escapeHtml(row.market)}</small></td>
         <td>${escapeHtml(price(row.current_price))}</td><td class="${row.change_24h_pct >= 0 ? "positive-text" : "negative-text"}">${percent(row.change_24h_pct, 2, true)}</td>
-        <td>${turnover(row.turnover_24h_krw)}</td><td><b>${Number(row.period_score).toFixed(1)}</b></td>${cells}
+        <td>${turnover(row.turnover_24h_quote ?? row.turnover_24h_krw)}</td><td><b>${Number(row.period_score).toFixed(1)}</b></td>${cells}
       </tr>`;
     }).join("");
   }
 
-  function renderResult(result) {
+  function renderResult(result, scroll = true) {
     latestResult = result;
+    const exchange = result.meta?.exchange || activeExchange;
+    latestResults[exchange] = result;
     setHidden(elements.results, false);
     elements.headline.textContent = result.headline || "분석 완료";
     elements.resultSubline.textContent = `${kst(result.meta?.generated_at)} · 엔진 ${result.meta?.engine_version || "—"} · ${result.cached ? "최근 결과 재사용" : "신규 조회"}`;
-    elements.totalMarkets.textContent = Number(result.coverage?.listed_krw_markets || 0).toLocaleString("ko-KR");
+    elements.totalMarkets.textContent = Number(result.coverage?.listed_markets ?? result.coverage?.listed_krw_markets ?? 0).toLocaleString("ko-KR");
     elements.eligibleMarkets.textContent = Number(result.coverage?.eligible_after_safety_filter || 0).toLocaleString("ko-KR");
     elements.deepMarkets.textContent = Number(result.coverage?.deep_period_analyzed || 0).toLocaleString("ko-KR");
     elements.elapsed.textContent = `${Number(result.meta?.elapsed_seconds || 0).toFixed(1)}초`;
@@ -273,8 +328,8 @@
       ? result.coverage.excluded_summary.map(item => `<li><span>${escapeHtml(item.reason)}</span><b>${item.count}개</b></li>`).join("")
       : "<li><span>1차 제외 없음</span><b>0개</b></li>";
     elements.footerMeta.textContent = `엔진 ${result.meta?.engine_version || "—"} · ${kst(result.meta?.generated_at)}`;
-    try { localStorage.setItem("trading-booooo-last-scan", JSON.stringify(result)); } catch (_) {}
-    window.setTimeout(() => elements.results.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+    try { localStorage.setItem(`trading-booooo-last-scan-${exchange}`, JSON.stringify(result)); } catch (_) {}
+    if (scroll) window.setTimeout(() => elements.results.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
   }
 
   function timeframeLine(label, metric) {
@@ -291,10 +346,10 @@
       ? [
           `- 조건부 대기 매수구간: ${price(watch.zone_low)} ~ ${price(watch.zone_high)}`,
           `- 최대 허용 매수가: ${price(watch.max_price)} / 현재가 대비 ${percent(-Number(watch.discount_from_current_pct || 0), 2, true)}`,
+          `- 진입 시 예상 매도가: ${price(watch.expected_exit_price ?? watch.reference_target)} / 예상 순수익 ${percent(watch.expected_net_return_pct, 2, true)} / R:R ${Number(watch.estimated_net_rr).toFixed(2)}`,
           `- 대기 계획 무효화: ${price(watch.invalidation_price)} 이탈`,
-          watch.reference_target
-            ? `- 현재 데이터 기준 참고 목표가: ${price(watch.reference_target)}${watch.estimated_net_rr == null ? " / 손익비 재산정 필요" : ` / 예상 순손익비 ${Number(watch.estimated_net_rr).toFixed(2)}`}`
-            : "- 현재 데이터 기준 참고 목표가: 미제시(가격 도달 후 재산정)",
+          `- 진입 조건: ${watch.entry_trigger}`,
+          `- 매도 조건: ${watch.exit_trigger}`,
           `- 예약매수 상태: ${watch.label}`,
           `- 주의: ${watch.note}`,
         ]
@@ -304,10 +359,11 @@
       `- 판정: ${candidate.decision_label}`,
       `- 현재가: ${price(candidate.current_price)} / 24시간: ${percent(candidate.change_24h_pct, 2, true)}`,
       `- 종합점수: ${Number(candidate.score).toFixed(2)} / 신뢰도: ${percent(candidate.confidence, 1)}`,
-      `- 24시간 거래대금: ${turnover(candidate.turnover_24h_krw)}원`,
+      `- 24시간 거래대금: ${turnover(candidate.turnover_24h_quote ?? candidate.turnover_24h_krw)}`,
       actionable ? `- 매수 검토 구간: ${price(plan.entry_low)} ~ ${price(plan.entry_high)}` : "- 현재가 매수 검토 구간: 미제시(강제조건 미통과)",
       ...watchLines,
-      actionable ? `- 단기 목표가: ${price(plan.short_target)} (비용 반영 ${percent(plan.short_net_return_pct, 2, true)})` : "- 단기 목표가: 미제시",
+      actionable ? `- 진입 시 예상 매도가: ${price(plan.expected_exit_price ?? plan.short_target)} (수수료·슬리피지 반영 ${percent(plan.expected_exit_net_return_pct ?? plan.short_net_return_pct, 2, true)})` : watchAvailable ? "- 현재가 진입 예상 매도가: 해당 없음(눌림 시나리오 참조)" : "- 진입 시 예상 매도가: 미제시",
+      actionable ? `- 단기 목표가: ${price(plan.short_target)}` : "- 현재가 기준 단기 목표가: 미제시",
       actionable ? `- 중기 목표가: ${price(plan.medium_target)} (비용 반영 ${percent(plan.medium_net_return_pct, 2, true)})` : "- 중기 목표가: 미제시",
       actionable ? `- 손절가격: ${price(plan.stop_price)} (비용 반영 예상손실 ${percent(plan.net_stop_pct)})` : "- 손절가격: 미제시",
       actionable ? `- 추천 투입금: ${krw(plan.recommended_investment_krw)} / 위험예산 ${krw(plan.risk_budget_krw)} / R:R ${Number(plan.net_rr).toFixed(2)}` : "- 투입금·손익비: 미제시",
@@ -315,6 +371,10 @@
       `- 추정 설명: ${candidate.horizon.estimate}`,
       ...(watchAvailable
         ? [
+            "",
+            "### 관찰·눌림대기 실행 시나리오",
+            `- 예상 보유 범위: ${candidate.horizon.expected_window} (추세 무효화 시 목표가 전 조기 종료)`,
+            ...(watch.scenario || []).map(item => `- ${item}`),
             "",
             "### 조건부 대기 매수 전 확인",
             ...(watch.conditions || []).map(item => `- ${item}`),
@@ -353,8 +413,10 @@
 
   function buildFullReport(result) {
     const recommendations = result.recommendations || [];
+    const exchangeLabel = result.coverage?.exchange_label || (result.meta?.exchange === "binance" ? "바이낸스 현물" : "업비트 현물");
+    const quote = result.meta?.quote_currency || "KRW";
     const report = [
-      "# 업비트 KRW 전 종목 자동 스캔 리포트",
+      `# ${exchangeLabel} ${quote} 전 종목 자동 스캔 리포트`,
       "",
       `- 분석시각: ${kst(result.meta?.generated_at)}`,
       `- 엔진: ${result.meta?.engine_version}`,
@@ -363,7 +425,7 @@
       `- 자동 주문: 없음`,
       "",
       "## 데이터 범위",
-      `- 업비트 KRW 상장 ${result.coverage?.listed_krw_markets}개 전수 1차 점검`,
+      `- ${exchangeLabel} ${quote} 거래 가능 ${result.coverage?.listed_markets ?? result.coverage?.listed_krw_markets}개 전수 1차 점검`,
       `- 안전필터 통과 ${result.coverage?.eligible_after_safety_filter}개`,
       `- 안전필터 통과 종목 15분봉 기간점검: ${result.coverage?.period_screened_complete}/${result.coverage?.period_screened_markets}개`,
       `- 기간 정밀분석 ${result.coverage?.deep_period_analyzed}개`,
@@ -380,14 +442,14 @@
       "## 기간분석 상위 순위",
       "|순위|종목|현재가|24H|거래대금|기간점수|5분|15분|4시간|일봉|",
       "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|",
-      ...(result.ranking || []).map(row => `|${row.rank}|${row.korean_name} (${row.market})|${price(row.current_price)}|${percent(row.change_24h_pct, 2, true)}|${turnover(row.turnover_24h_krw)}|${Number(row.period_score).toFixed(1)}|${Number(row.trend?.m5).toFixed(2)}|${Number(row.trend?.m15).toFixed(2)}|${Number(row.trend?.h4).toFixed(2)}|${Number(row.trend?.day).toFixed(2)}|`),
+      ...(result.ranking || []).map(row => `|${row.rank}|${row.korean_name} (${row.market})|${price(row.current_price)}|${percent(row.change_24h_pct, 2, true)}|${turnover(row.turnover_24h_quote ?? row.turnover_24h_krw)}|${Number(row.period_score).toFixed(1)}|${Number(row.trend?.m5).toFixed(2)}|${Number(row.trend?.m15).toFixed(2)}|${Number(row.trend?.h4).toFixed(2)}|${Number(row.trend?.day).toFixed(2)}|`),
       "",
       "## GPT/Claude 심층분석 요청",
       "위 리포트의 생성시각 이후 데이터는 임의로 가정하지 말고, 제공된 수치만 근거로 다음을 검증해 주세요.",
       "1. 현재 매수 후보가 실제로 단기·중기 추세 정렬과 호가·체결 조건을 동시에 충족하는지 반론 중심으로 검토",
       "2. 단기·중기 목표가와 손절가격의 구조적 근거 및 수수료·슬리피지 반영 손익비 재계산",
       "3. 추세 유지기간 분류가 과도하지 않은지, 더 보수적인 보유기간과 무효화 조건 제시",
-      "4. 조건부 대기 매수구간이 지지선 위에 있고 가격 도달 후에도 목표가·순손익비가 유효한지 재검증",
+      "4. 조건부 대기 매수구간·예상 매도가·손절가로 구성된 눌림 시나리오가 실제 지지선과 비용 포함 손익비를 충족하는지 재검증",
       "5. 동적 호가 로그에서 비체결성 대형벽 취소·매도벽 재보충/흡수·지지 붕괴가 실제 체결량과 정합적인지 재검증",
       "6. 시장경보·저유동·추격매수·데이터 부족·뉴스 미반영 위험 점검",
       "7. 추천 근거가 약하면 억지 대안을 만들지 말고 '매수 보류'로 결론",
@@ -412,11 +474,37 @@
     }
   }
 
+  function applyExchangeUI(exchange, renderStored = true) {
+    if (scanning || !exchangeSettings[exchange]) return;
+    exchangeSettings[activeExchange].capital = Number(elements.capitalInput.value || exchangeSettings[activeExchange].capital);
+    activeExchange = exchange;
+    const settings = exchangeSettings[exchange];
+    elements.exchangeTabs.forEach(button => button.classList.toggle("active", button.dataset.exchange === exchange));
+    elements.heroTitle.innerHTML = settings.title;
+    elements.heroDescription.textContent = settings.description;
+    elements.capitalInput.value = settings.capital;
+    elements.capitalInput.min = settings.min;
+    elements.capitalInput.step = settings.step;
+    elements.capitalUnit.textContent = settings.unit;
+    elements.listedMarketLabel.textContent = `${settings.quote} 상장 종목`;
+    elements.dataSourceLabel.textContent = `${settings.label} 공개시세`;
+    elements.scanButtonLabel.textContent = latestResults[exchange] ? settings.button.replace("스캔", "재스캔") : settings.button;
+    elements.scanStatus.classList.remove("error-text");
+    elements.scanStatus.textContent = `버튼을 누르면 ${settings.label} ${settings.quote} 전체를 분석합니다. 약 30~90초가 걸릴 수 있습니다.`;
+    if (renderStored && latestResults[exchange]) {
+      renderResult(latestResults[exchange], false);
+    } else if (renderStored) {
+      latestResult = null;
+      setHidden(elements.results, true);
+    }
+  }
+
   function beginProgress() {
     progressTimers.forEach(clearTimeout);
     progressTimers = [];
+    const marketName = activeExchange === "binance" ? "바이낸스 USDT 현물" : "업비트 원화마켓";
     const steps = [
-      [0, "1/5 · 업비트 원화마켓 전체 현재가·경보·거래대금을 점검 중입니다."],
+      [0, `1/5 · ${marketName} 전체 현재가·거래대금을 점검 중입니다.`],
       [4500, "2/5 · 안전필터 통과 전 종목의 15분봉 24시간 구간을 점검 중입니다."],
       [20000, "3/5 · 상위 30종목의 5분·4시간·일봉을 추가 분석 중입니다."],
       [39000, "4/5 · 최종 후보의 실시간 호가·체결을 동시 관찰 중입니다."],
@@ -433,7 +521,9 @@
 
   async function scan() {
     if (!validateConfiguration()) return;
+    scanning = true;
     elements.scanButton.disabled = true;
+    elements.exchangeTabs.forEach(button => button.disabled = true);
     elements.scanButtonLabel.textContent = "전체 시장 분석 중";
     setHidden(elements.scanSpinner, false);
     elements.copyStatus.textContent = "";
@@ -449,13 +539,15 @@
           "Content-Type": "application/json",
           "apikey": config.supabasePublishableKey,
           "x-scan-token": accessToken(),
-          "x-client-info": "trading-booooo-web/2.1"
+          "x-client-info": "trading-booooo-web/2.2"
         },
         body: JSON.stringify({
           action: "scan",
-          capital_krw: Number(elements.capitalInput.value || config.defaultCapitalKrw || 500000),
+          exchange: activeExchange,
+          capital_krw: activeExchange === "upbit" ? Number(elements.capitalInput.value || exchangeSettings.upbit.capital) : undefined,
+          capital_usdt: activeExchange === "binance" ? Number(elements.capitalInput.value || exchangeSettings.binance.capital) : undefined,
           risk_pct: Number(elements.riskInput.value || config.defaultRiskPct || 1),
-          fee_per_side_pct: Number(config.defaultFeePerSidePct || 0.05),
+          fee_per_side_pct: exchangeSettings[activeExchange].fee,
           min_net_rr: Number(config.defaultMinNetRR || 1.5),
           max_stop_pct: Number(config.defaultMaxStopPct || 5)
         })
@@ -475,16 +567,25 @@
     } finally {
       clearTimeout(timeout);
       endProgress();
+      scanning = false;
       elements.scanButton.disabled = false;
-      elements.scanButtonLabel.textContent = "원화마켓 전체 재스캔";
+      elements.exchangeTabs.forEach(button => button.disabled = false);
+      elements.scanButtonLabel.textContent = exchangeSettings[activeExchange].button.replace("스캔", "재스캔");
       setHidden(elements.scanSpinner, true);
     }
   }
 
   function boot() {
-    elements.capitalInput.value = config.defaultCapitalKrw || 500000;
     elements.riskInput.value = config.defaultRiskPct || 1;
+    for (const exchange of ["upbit", "binance"]) {
+      try {
+        const stored = localStorage.getItem(`trading-booooo-last-scan-${exchange}`);
+        if (stored) latestResults[exchange] = JSON.parse(stored);
+      } catch (_) {}
+    }
+    applyExchangeUI("upbit", true);
     validateConfiguration();
+    elements.exchangeTabs.forEach(button => button.addEventListener("click", () => applyExchangeUI(button.dataset.exchange, true)));
     elements.scanButton.addEventListener("click", scan);
     elements.copyReportBtn.addEventListener("click", async () => {
       if (!latestResult) return;
@@ -492,10 +593,6 @@
       elements.copyStatus.textContent = "클립보드에 복사했습니다.";
       setTimeout(() => elements.copyStatus.textContent = "", 2200);
     });
-    try {
-      const stored = localStorage.getItem("trading-booooo-last-scan");
-      if (stored) renderResult(JSON.parse(stored));
-    } catch (_) {}
   }
 
   boot();

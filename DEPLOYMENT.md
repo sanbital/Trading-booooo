@@ -1,4 +1,4 @@
-# Trading-booooo v2.1.0 — GitHub 웹 전용 배포 가이드
+# Trading-booooo v2.2.0 — GitHub 웹 전용 배포 가이드
 
 이 가이드는 **VS Code, PowerShell, Git, Supabase CLI를 전혀 사용하지 않습니다.** Windows 파일 탐색기, GitHub 웹사이트, Supabase 대시보드만 사용합니다.
 
@@ -119,7 +119,7 @@ GitHub의 `Trading-booooo` 저장소에서 다음 순서로 이동합니다.
 3. Windows에서 압축을 푼 `Trading-booooo` 폴더를 엽니다.
 4. **바깥쪽 `Trading-booooo` 폴더가 아니라 그 안의 모든 항목**을 업로드 영역으로 끌어놓습니다.
 5. 목록에 `.github`, `docs`, `supabase`, `README.md`가 보이는지 확인합니다.
-6. Commit message에 `Deploy Trading-booooo v2.1.0`를 입력합니다.
+6. Commit message에 `Deploy Trading-booooo v2.2.0`를 입력합니다.
 7. `Commit changes`를 누릅니다.
 
 정상 저장소 루트는 다음과 같아야 합니다.
@@ -199,15 +199,18 @@ https://GITHUB_USERNAME.github.io/Trading-booooo/#access=MY_SCAN_TOKEN
 ## 10. 최종 확인
 
 1. 개인 URL로 접속합니다.
-2. `원화마켓 전체 스캔`을 누릅니다.
+2. `업비트 현물` 탭에서 `원화마켓 전체 스캔`을 누릅니다.
 3. 최대 140초 기다립니다.
 4. 다음을 확인합니다.
    - 업비트 KRW 상장 종목 전체 개수
    - 안전필터를 통과한 전 종목의 15분 기간점검 결과
    - 5분·4시간·일봉 정밀분석 결과
    - 현재 매수 후보 또는 `현재 매수 추천 없음`
-   - 단기·중기 목표가, 손절가, 예상 보유기간
+   - 진입 시 예상 매도가, 중기 목표가, 손절가, 예상 보유기간
+   - `관찰·눌림 대기` 후보의 조건부 매수가·예상 매도가·진입/매도 시나리오
    - `심층분석용 리포트 복사` 버튼
+5. `바이낸스 현물` 탭으로 이동해 USDT 기준 자본을 확인한 뒤 전체 스캔을 누릅니다.
+6. Binance USDT 종목 수·기간 순위·동적 호가 표본이 업비트 결과와 별도로 표시되는지 확인합니다.
 
 추천 없음은 오류가 아닙니다. 강제 조건을 통과한 종목이 없으면 매수를 억지로 추천하지 않도록 설계되어 있습니다.
 

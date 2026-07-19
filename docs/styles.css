@@ -109,6 +109,36 @@ button { color: inherit; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 14px var(--green); }
 
 .shell { width: min(1240px, calc(100% - 40px)); margin: 34px auto 80px; }
+.exchange-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(7, 12, 17, 0.72);
+}
+.exchange-tab {
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.exchange-tab strong { font-size: 13px; }
+.exchange-tab small { color: var(--faint); font-family: var(--mono); font-size: 9px; }
+.exchange-tab.active {
+  border-color: rgba(50, 227, 155, 0.34);
+  background: var(--green-soft);
+  color: var(--green);
+}
+.exchange-tab.active small { color: #9dddc4; }
 .panel {
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -291,6 +321,16 @@ button { color: inherit; }
 .watch-plan > span { border-color: rgba(255, 190, 74, 0.18); background: rgba(255, 190, 74, 0.025); }
 .watch-plan > span:first-child b, .watch-plan > span:nth-child(2) b { color: var(--amber); }
 .watch-note { margin: 8px 2px 0; color: var(--amber); font-size: 9px; line-height: 1.5; }
+.watch-scenario {
+  margin: 8px 0 0;
+  padding: 10px 11px;
+  border-left: 2px solid rgba(245, 197, 107, 0.55);
+  border-radius: 0 8px 8px 0;
+  background: rgba(245, 197, 107, 0.045);
+  color: #d9c28f;
+  font-size: 9px;
+  line-height: 1.65;
+}
 .dynamic-strip { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; margin-top: 10px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 9px; background: rgba(4, 12, 18, 0.45); }
 .dynamic-strip span { color: var(--faint); font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; }
 .dynamic-strip b { min-width: 0; overflow: hidden; color: var(--text); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
@@ -348,6 +388,7 @@ footer { display: flex; justify-content: space-between; gap: 20px; width: min(12
   .brand small, .status-chip { display: none; }
   .shell { width: min(100% - 24px, 1240px); margin-top: 18px; }
   .hero { padding: 22px; }
+  .exchange-tab { align-items: flex-start; flex-direction: column; gap: 0; padding: 9px 12px; }
   .hero h1 { font-size: 30px; }
   .setting-row, .stats-grid, .price-grid, .evidence-grid, .candidate-grid, .method-grid { grid-template-columns: 1fr; }
   .result-header, .section-heading { align-items: flex-start; flex-direction: column; }

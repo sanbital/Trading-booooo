@@ -1,5 +1,5 @@
-// Trading-booooo Market Scanner v2.1.0 — Supabase Edge Function
-// KRW universe scan -> multi-period analysis -> orderbook/trade validation.
+// Trading-booooo Market Scanner v2.2.0 — Supabase Edge Function
+// Upbit KRW / Binance USDT universe scan -> multi-period analysis -> orderflow validation.
 // Read-only public market data. No account lookup, order creation, cancellation, or API keys.
 
 import {
@@ -25,6 +25,10 @@ import {
 
 const UPBIT = "https://api.upbit.com";
 const UPBIT_WEBSOCKET = "wss://api.upbit.com/websocket/v1";
+const BINANCE = "https://api.binance.com";
+const BINANCE_WEBSOCKET = "wss://stream.binance.com:9443/stream";
+const MIN_BINANCE_TURNOVER_24H = 500_000;
+const MIN_BINANCE_ACTIONABLE_TURNOVER_24H = 1_000_000;
 const DEFAULT_DEEP_SCAN_LIMIT = 30;
 const FINALIST_LIMIT = 8;
 const BOOK_SAMPLE_COUNT = 4;
@@ -36,6 +40,8 @@ const MAX_DYNAMIC_BOOK_EVENTS = 1_200;
 const MAX_DYNAMIC_TRADE_EVENTS = 2_500;
 const CANDLE_BATCH_SIZE = 7;
 const CANDLE_BATCH_INTERVAL_MS = 1050;
+const BINANCE_CANDLE_BATCH_SIZE = 20;
+const BINANCE_CANDLE_BATCH_INTERVAL_MS = 250;
 const RESPONSE_CACHE_MS = 5_000;
 const REQUEST_COOLDOWN_MS = 12_000;
 
@@ -44,6 +50,13 @@ let lastScanStartedAt = 0;
 let cachedResult: { expires: number; key: string; value: unknown } | null =
   null;
 let marketCache: { expires: number; markets: MarketRow[] } | null = null;
+let binanceMarketCache: {
+  expires: number;
+  markets: MarketRow[];
+  ticks: Map<string, number>;
+} | null = null;
+
+type Exchange = "upbit" | "binance";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -60,6 +73,17 @@ function query(
   params: Record<string, string | number | boolean>,
 ): string {
   const url = new URL(path, UPBIT);
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, String(value));
+  }
+  return url.toString();
+}
+
+function binanceQuery(
+  path: string,
+  params: Record<string, string | number | boolean> = {},
+): string {
+  const url = new URL(path, BINANCE);
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, String(value));
   }
@@ -95,7 +119,7 @@ async function fetchJson(
         ? record.error as Record<string, unknown>
         : null;
       const message = String(
-        nestedError?.message || record?.message ||
+        nestedError?.message || record?.message || record?.msg ||
           `${response.status} ${response.statusText}`,
       );
       if (response.status === 429 && attempt < attempts - 1) {
@@ -176,15 +200,27 @@ function tokenAllowed(request: Request): boolean {
     constantTimeEqual(expected, provided);
 }
 
-function parseRisk(body: Record<string, unknown>): RiskConfig {
+function parseRisk(
+  body: Record<string, unknown>,
+  exchange: Exchange,
+): RiskConfig {
+  const binance = exchange === "binance";
   return {
     capitalKrw: clamp(
-      finite(body.capital_krw, 500_000),
-      10_000,
-      10_000_000_000,
+      finite(
+        binance ? body.capital_usdt ?? body.capital_quote : body.capital_krw,
+        binance ? 500 : 500_000,
+      ),
+      binance ? 10 : 10_000,
+      binance ? 10_000_000 : 10_000_000_000,
     ),
+    quoteCurrency: binance ? "USDT" : "KRW",
     riskPct: clamp(finite(body.risk_pct, 1), 0.1, 2),
-    feePerSidePct: clamp(finite(body.fee_per_side_pct, 0.05), 0, 0.5),
+    feePerSidePct: clamp(
+      finite(body.fee_per_side_pct, binance ? 0.1 : 0.05),
+      0,
+      0.5,
+    ),
     minNetRR: clamp(finite(body.min_net_rr, 1.5), 1, 5),
     maxStopPct: clamp(finite(body.max_stop_pct, 5), 0.5, 12),
     entrySlippageTicks: clamp(finite(body.entry_slippage_ticks, 0.5), 0, 5),
@@ -202,6 +238,85 @@ async function getMarkets(): Promise<MarketRow[]> {
   );
   marketCache = { expires: Date.now() + 15 * 60_000, markets };
   return markets;
+}
+
+async function getBinanceMarkets(): Promise<{
+  markets: MarketRow[];
+  ticks: Map<string, number>;
+}> {
+  if (binanceMarketCache && binanceMarketCache.expires > Date.now()) {
+    return {
+      markets: binanceMarketCache.markets,
+      ticks: new Map(binanceMarketCache.ticks),
+    };
+  }
+  const raw = await fetchJson(binanceQuery("/api/v3/exchangeInfo"));
+  const symbols = raw && typeof raw === "object" &&
+      Array.isArray((raw as Record<string, unknown>).symbols)
+    ? (raw as { symbols: Array<Record<string, unknown>> }).symbols
+    : [];
+  const ticks = new Map<string, number>();
+  const markets: MarketRow[] = [];
+  for (const row of symbols) {
+    const symbol = String(row.symbol || "").toUpperCase();
+    if (
+      !symbol || row.status !== "TRADING" || row.quoteAsset !== "USDT" ||
+      row.isSpotTradingAllowed === false
+    ) continue;
+    const filters = Array.isArray(row.filters)
+      ? row.filters as Array<Record<string, unknown>>
+      : [];
+    const priceFilter = filters.find((filter) =>
+      filter.filterType === "PRICE_FILTER"
+    );
+    const tick = Number(priceFilter?.tickSize);
+    if (Number.isFinite(tick) && tick > 0) ticks.set(symbol, tick);
+    const base = String(row.baseAsset || symbol.replace(/USDT$/, ""));
+    markets.push({
+      market: symbol,
+      korean_name: base,
+      english_name: base,
+      market_event: { warning: false, caution: {} },
+    });
+  }
+  binanceMarketCache = {
+    expires: Date.now() + 15 * 60_000,
+    markets,
+    ticks: new Map(ticks),
+  };
+  return { markets, ticks };
+}
+
+function normalizeBinanceTickers(raw: unknown): TickerRow[] {
+  return (Array.isArray(raw) ? raw : []).map((value) => {
+    const row = value as Record<string, unknown>;
+    return {
+      market: String(row.symbol || ""),
+      trade_price: Number(row.lastPrice),
+      opening_price: Number(row.openPrice),
+      high_price: Number(row.highPrice),
+      low_price: Number(row.lowPrice),
+      signed_change_rate: Number(row.priceChangePercent) / 100,
+      acc_trade_price_24h: Number(row.quoteVolume),
+      trade_timestamp: Number(row.closeTime),
+    };
+  });
+}
+
+function normalizeBinanceCandles(raw: unknown): CandleRow[] {
+  return (Array.isArray(raw) ? raw : []).flatMap((value) => {
+    if (!Array.isArray(value) || value.length < 11) return [];
+    return [{
+      timestamp: Number(value[0]),
+      candle_date_time_utc: new Date(Number(value[0])).toISOString(),
+      opening_price: Number(value[1]),
+      high_price: Number(value[2]),
+      low_price: Number(value[3]),
+      trade_price: Number(value[4]),
+      candle_acc_trade_volume: Number(value[5]),
+      candle_acc_trade_price: Number(value[7]),
+    }];
+  });
 }
 
 type CandleTask = {
@@ -293,6 +408,96 @@ async function loadBaseline15(
     }
   }
   return output;
+}
+
+async function loadBinanceBaseline15(
+  universe: UniverseRow[],
+): Promise<Map<string, CandleRow[]>> {
+  const output = new Map<string, CandleRow[]>();
+  for (
+    let offset = 0;
+    offset < universe.length;
+    offset += BINANCE_CANDLE_BATCH_SIZE
+  ) {
+    const batch = universe.slice(offset, offset + BINANCE_CANDLE_BATCH_SIZE);
+    const settled = await Promise.allSettled(
+      batch.map((row) =>
+        fetchJson(
+          binanceQuery("/api/v3/klines", {
+            symbol: row.market,
+            interval: "15m",
+            limit: 96,
+          }),
+          10_000,
+          2,
+        )
+      ),
+    );
+    settled.forEach((result, index) => {
+      output.set(
+        batch[index].market,
+        result.status === "fulfilled"
+          ? normalizeBinanceCandles(result.value)
+          : [],
+      );
+    });
+    if (offset + BINANCE_CANDLE_BATCH_SIZE < universe.length) {
+      await sleep(BINANCE_CANDLE_BATCH_INTERVAL_MS);
+    }
+  }
+  return output;
+}
+
+async function loadBinancePeriodDatasets(
+  shortlist: UniverseRow[],
+  baseline15: Map<string, CandleRow[]>,
+): Promise<Map<string, PeriodDataset>> {
+  const datasets = new Map<string, PeriodDataset>();
+  shortlist.forEach((row) =>
+    datasets.set(row.market, {
+      m5: [],
+      m15: baseline15.get(row.market) || [],
+      h4: [],
+      day: [],
+    })
+  );
+  const tasks = shortlist.flatMap((row) => [
+    { market: row.market, key: "m5" as const, interval: "5m", limit: 72 },
+    { market: row.market, key: "h4" as const, interval: "4h", limit: 90 },
+    { market: row.market, key: "day" as const, interval: "1d", limit: 60 },
+  ]);
+  for (
+    let offset = 0;
+    offset < tasks.length;
+    offset += BINANCE_CANDLE_BATCH_SIZE
+  ) {
+    const batch = tasks.slice(offset, offset + BINANCE_CANDLE_BATCH_SIZE);
+    const settled = await Promise.allSettled(
+      batch.map((task) =>
+        fetchJson(
+          binanceQuery("/api/v3/klines", {
+            symbol: task.market,
+            interval: task.interval,
+            limit: task.limit,
+          }),
+          10_000,
+          2,
+        )
+      ),
+    );
+    settled.forEach((result, index) => {
+      const task = batch[index];
+      if (result.status === "fulfilled") {
+        datasets.get(task.market)![task.key] = normalizeBinanceCandles(
+          result.value,
+        );
+      }
+    });
+    if (offset + BINANCE_CANDLE_BATCH_SIZE < tasks.length) {
+      await sleep(BINANCE_CANDLE_BATCH_INTERVAL_MS);
+    }
+  }
+  return datasets;
 }
 
 function prioritizeWithBaseline(
@@ -442,6 +647,142 @@ function collectDynamicStream(
   });
 }
 
+function binanceOrderbookSnapshot(
+  market: string,
+  row: Record<string, unknown>,
+  receivedAt = Date.now(),
+): OrderbookSnapshot | null {
+  const bids = Array.isArray(row.bids) ? row.bids : [];
+  const asks = Array.isArray(row.asks) ? row.asks : [];
+  const length = Math.min(15, Math.max(bids.length, asks.length));
+  if (!length) return null;
+  const units = Array.from({ length }, (_, index) => {
+    const bid = Array.isArray(bids[index]) ? bids[index] as unknown[] : [];
+    const ask = Array.isArray(asks[index]) ? asks[index] as unknown[] : [];
+    return {
+      bid_price: Number(bid[0] || 0),
+      bid_size: Number(bid[1] || 0),
+      ask_price: Number(ask[0] || 0),
+      ask_size: Number(ask[1] || 0),
+    };
+  }).filter((unit) => unit.bid_price > 0 && unit.ask_price > 0);
+  return units.length
+    ? {
+      market,
+      code: market,
+      timestamp: Number(row.E || receivedAt),
+      orderbook_units: units,
+    }
+    : null;
+}
+
+function binanceTradeRow(
+  market: string,
+  row: Record<string, unknown>,
+): TradeRow | null {
+  const price = Number(row.p);
+  const volume = Number(row.q);
+  if (!(price > 0) || !(volume > 0)) return null;
+  return {
+    market,
+    code: market,
+    timestamp: Number(row.T || row.E || Date.now()),
+    trade_timestamp: Number(row.T || row.E || Date.now()),
+    trade_price: price,
+    trade_volume: volume,
+    // buyer-maker=true means the aggressive side was a seller.
+    ask_bid: row.m === true ? "ASK" : "BID",
+    sequential_id: Number(row.t || 0),
+  };
+}
+
+function collectBinanceDynamicStream(
+  markets: string[],
+  observationMs: number,
+): Promise<DynamicStreamBundle> {
+  const snapshots = new Map(
+    markets.map((market) => [market, [] as OrderbookSnapshot[]]),
+  );
+  const trades = new Map(markets.map((market) => [market, [] as TradeRow[]]));
+  if (!markets.length) return Promise.resolve({ snapshots, trades });
+  const streams = markets.flatMap((market) => [
+    `${market.toLowerCase()}@depth20@100ms`,
+    `${market.toLowerCase()}@trade`,
+  ]).join("/");
+  const url = `${BINANCE_WEBSOCKET}?streams=${streams}`;
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(url);
+    socket.binaryType = "arraybuffer";
+    let opened = false;
+    let settled = false;
+    let observationTimer: ReturnType<typeof setTimeout> | undefined;
+    const connectionTimer = setTimeout(() => {
+      if (!opened) finish(new Error("Binance WebSocket connection timeout"));
+    }, 8_000);
+
+    function finish(error?: Error) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(connectionTimer);
+      if (observationTimer != null) clearTimeout(observationTimer);
+      try {
+        if (
+          socket.readyState === WebSocket.OPEN ||
+          socket.readyState === WebSocket.CONNECTING
+        ) socket.close(1000, "observation complete");
+      } catch {
+        // 수집 종료 중 연결 정리 실패는 이미 받은 공개 데이터에 영향이 없다.
+      }
+      if (error) reject(error);
+      else resolve({ snapshots, trades });
+    }
+
+    socket.onopen = () => {
+      opened = true;
+      clearTimeout(connectionTimer);
+      observationTimer = setTimeout(() => finish(), observationMs);
+    };
+    socket.onmessage = async (event) => {
+      try {
+        const text = await websocketText(event.data);
+        if (!text) return;
+        const wrapper = JSON.parse(text) as Record<string, unknown>;
+        const row = wrapper.data && typeof wrapper.data === "object"
+          ? wrapper.data as Record<string, unknown>
+          : wrapper;
+        const stream = String(wrapper.stream || "");
+        const symbol = String(row.s || stream.split("@")[0] || "")
+          .toUpperCase();
+        if (!snapshots.has(symbol)) return;
+        if (stream.includes("@depth") || Array.isArray(row.bids)) {
+          const snapshot = binanceOrderbookSnapshot(symbol, row);
+          const bucket = snapshots.get(symbol)!;
+          if (snapshot && bucket.length < MAX_DYNAMIC_BOOK_EVENTS) {
+            bucket.push(snapshot);
+          }
+        } else if (stream.includes("@trade") || row.e === "trade") {
+          const trade = binanceTradeRow(symbol, row);
+          const bucket = trades.get(symbol)!;
+          if (trade && bucket.length < MAX_DYNAMIC_TRADE_EVENTS) {
+            bucket.push(trade);
+          }
+        }
+      } catch {
+        // 개별 손상 프레임만 건너뛴다.
+      }
+    };
+    socket.onerror = () => {
+      if (!opened) finish(new Error("Binance WebSocket connection failed"));
+    };
+    socket.onclose = () => {
+      if (!settled) {
+        if (opened) finish();
+        else finish(new Error("Binance WebSocket closed before opening"));
+      }
+    };
+  });
+}
+
 function fallbackTick(snapshots: OrderbookSnapshot[], price: number): number {
   const gaps: number[] = [];
   for (const snapshot of snapshots) {
@@ -556,6 +897,98 @@ async function loadMicrostructure(
   return { snapshots, trades, ticks, websocketMarkets, observationMs };
 }
 
+async function loadBinanceMicrostructure(
+  finalists: PeriodAnalysis[],
+  instrumentTicks: Map<string, number>,
+): Promise<MicroBundle> {
+  const markets = finalists.map((item) => item.universe.market);
+  const snapshots = new Map(
+    markets.map((market) => [market, [] as OrderbookSnapshot[]]),
+  );
+  const trades = new Map<string, TradeRow[]>();
+  const ticks = new Map(instrumentTicks);
+  const observationMs = dynamicObservationMs();
+  const dynamicPromise = optional(
+    collectBinanceDynamicStream(markets, observationMs),
+  );
+
+  await Promise.all(markets.map(async (market) => {
+    const raw = await optional(
+      fetchJson(
+        binanceQuery("/api/v3/trades", { symbol: market, limit: 500 }),
+        10_000,
+        2,
+      ),
+    );
+    const rows = (Array.isArray(raw) ? raw : []).flatMap((value) => {
+      const source = value as Record<string, unknown>;
+      return binanceTradeRow(market, {
+        p: source.price,
+        q: source.qty,
+        T: source.time,
+        t: source.id,
+        m: source.isBuyerMaker,
+      }) || [];
+    });
+    trades.set(market, rows);
+  }));
+
+  for (let sample = 0; sample < BOOK_SAMPLE_COUNT; sample++) {
+    const settled = await Promise.allSettled(markets.map((market) =>
+      fetchJson(
+        binanceQuery("/api/v3/depth", { symbol: market, limit: 20 }),
+        10_000,
+        2,
+      )
+    ));
+    settled.forEach((result, index) => {
+      if (
+        result.status !== "fulfilled" || !result.value ||
+        typeof result.value !== "object"
+      ) return;
+      const snapshot = binanceOrderbookSnapshot(
+        markets[index],
+        result.value as Record<string, unknown>,
+      );
+      if (snapshot) snapshots.get(markets[index])!.push(snapshot);
+    });
+    if (sample < BOOK_SAMPLE_COUNT - 1) await sleep(BOOK_SAMPLE_INTERVAL_MS);
+  }
+
+  const dynamic = await dynamicPromise;
+  let websocketMarkets = 0;
+  if (dynamic) {
+    for (const market of markets) {
+      const streamedBooks = dynamic.snapshots.get(market) || [];
+      const streamedTrades = dynamic.trades.get(market) || [];
+      if (streamedBooks.length >= 2) {
+        snapshots.set(market, streamedBooks);
+        websocketMarkets++;
+      }
+      if (streamedTrades.length) {
+        trades.set(market, [
+          ...(trades.get(market) || []),
+          ...streamedTrades,
+        ]);
+      }
+    }
+  }
+
+  for (const finalist of finalists) {
+    const market = finalist.universe.market;
+    if (!ticks.has(market)) {
+      ticks.set(
+        market,
+        fallbackTick(
+          snapshots.get(market) || [],
+          finalist.universe.current_price,
+        ),
+      );
+    }
+  }
+  return { snapshots, trades, ticks, websocketMarkets, observationMs };
+}
+
 function summarizeExclusions(
   universe: UniverseRow[],
 ): Array<{ reason: string; count: number }> {
@@ -576,6 +1009,7 @@ function periodRanking(item: PeriodAnalysis, rank: number) {
     current_price: item.universe.current_price,
     change_24h_pct: item.universe.change_24h_pct,
     turnover_24h_krw: item.universe.turnover_24h_krw,
+    turnover_24h_quote: item.universe.turnover_24h_quote,
     period_score: Number(item.period_score.toFixed(2)),
     preliminary_status: item.preliminary_status,
     trend: {
@@ -587,16 +1021,41 @@ function periodRanking(item: PeriodAnalysis, rank: number) {
   };
 }
 
-async function runScan(risk: RiskConfig) {
+async function runScan(risk: RiskConfig, exchange: Exchange) {
   const started = Date.now();
-  const [markets, tickerRows] = await Promise.all([
-    getMarkets(),
-    fetchJson(query("/v1/ticker/all", { quote_currencies: "KRW" })),
-  ]);
+  const binance = exchange === "binance";
+  let markets: MarketRow[];
+  let tickerRows: TickerRow[];
+  let instrumentTicks = new Map<string, number>();
+  if (binance) {
+    const [marketBundle, rawTickers] = await Promise.all([
+      getBinanceMarkets(),
+      fetchJson(binanceQuery("/api/v3/ticker/24hr")),
+    ]);
+    markets = marketBundle.markets;
+    instrumentTicks = marketBundle.ticks;
+    tickerRows = normalizeBinanceTickers(rawTickers);
+  } else {
+    const values = await Promise.all([
+      getMarkets(),
+      fetchJson(query("/v1/ticker/all", { quote_currencies: "KRW" })),
+    ]);
+    markets = values[0] as MarketRow[];
+    tickerRows = Array.isArray(values[1]) ? values[1] as TickerRow[] : [];
+  }
   const universe = buildUniverse(
     markets,
-    Array.isArray(tickerRows) ? tickerRows as TickerRow[] : [],
+    tickerRows,
     Date.now(),
+    binance
+      ? {
+        quoteCurrency: "USDT",
+        marketMatches: (market) => market.endsWith("USDT"),
+        minTurnover24h: MIN_BINANCE_TURNOVER_24H,
+        minActionableTurnover24h: MIN_BINANCE_ACTIONABLE_TURNOVER_24H,
+        liquidityLogFloor: 5.7,
+      }
+      : {},
   );
   const deepLimit = Math.round(
     clamp(
@@ -606,10 +1065,14 @@ async function runScan(risk: RiskConfig) {
     ),
   );
   const eligible = universe.filter((item) => item.eligible);
-  const baseline15 = await loadBaseline15(eligible);
+  const baseline15 = binance
+    ? await loadBinanceBaseline15(eligible)
+    : await loadBaseline15(eligible);
   const prioritized = prioritizeWithBaseline(eligible, baseline15);
   const shortlist = selectShortlist(prioritized, deepLimit);
-  const datasets = await loadPeriodDatasets(shortlist, baseline15);
+  const datasets = binance
+    ? await loadBinancePeriodDatasets(shortlist, baseline15)
+    : await loadPeriodDatasets(shortlist, baseline15);
   const periods = shortlist
     .map((row) =>
       analyzePeriod(
@@ -628,7 +1091,9 @@ async function runScan(risk: RiskConfig) {
       .values(),
   ]
     .slice(0, FINALIST_LIMIT);
-  const microBundle = await loadMicrostructure(finalists);
+  const microBundle = binance
+    ? await loadBinanceMicrostructure(finalists, instrumentTicks)
+    : await loadMicrostructure(finalists);
   const generatedAt = Date.now();
   const finalCandidates: FinalCandidate[] = finalists
     .map((period) => {
@@ -663,8 +1128,12 @@ async function runScan(risk: RiskConfig) {
     scan_id: crypto.randomUUID(),
     status,
     headline: recommendations.length
-      ? `현재 매수 강제조건을 통과한 후보 ${recommendations.length}개가 탐지됐습니다.`
-      : "현재 모든 강제조건을 통과한 매수 후보가 없습니다.",
+      ? `${
+        binance ? "바이낸스 USDT" : "업비트 KRW"
+      } 현물에서 현재 매수 강제조건을 통과한 후보 ${recommendations.length}개가 탐지됐습니다.`
+      : `${
+        binance ? "바이낸스 USDT" : "업비트 KRW"
+      } 현물에서 현재 모든 강제조건을 통과한 매수 후보가 없습니다.`,
     primary: recommendations[0] || null,
     recommendations,
     watchlist,
@@ -673,6 +1142,10 @@ async function runScan(risk: RiskConfig) {
       periodRanking(item, index + 1)
     ),
     coverage: {
+      exchange,
+      exchange_label: binance ? "바이낸스 현물" : "업비트 현물",
+      quote_currency: binance ? "USDT" : "KRW",
+      listed_markets: universe.length,
       listed_krw_markets: universe.length,
       eligible_after_safety_filter: eligible.length,
       excluded_at_universe_stage:
@@ -701,9 +1174,11 @@ async function runScan(risk: RiskConfig) {
       },
     },
     assumptions: {
-      quote_market: "KRW",
+      exchange,
+      quote_market: binance ? "USDT" : "KRW",
       fee_per_side_pct: risk.feePerSidePct,
-      capital_krw: risk.capitalKrw,
+      capital_quote: risk.capitalKrw,
+      capital_currency: binance ? "USDT" : "KRW",
       risk_per_trade_pct: risk.riskPct,
       min_net_rr: risk.minNetRR,
       max_net_stop_pct: risk.maxStopPct,
@@ -720,7 +1195,11 @@ async function runScan(risk: RiskConfig) {
       engine_version: ENGINE_VERSION,
       generated_at: new Date(generatedAt).toISOString(),
       elapsed_seconds: Number(((Date.now() - started) / 1000).toFixed(2)),
-      data_source: "UPBIT_PUBLIC_QUOTATION_API_AND_WEBSOCKET",
+      exchange,
+      quote_currency: binance ? "USDT" : "KRW",
+      data_source: binance
+        ? "BINANCE_PUBLIC_SPOT_REST_API_AND_WEBSOCKET"
+        : "UPBIT_PUBLIC_QUOTATION_API_AND_WEBSOCKET",
       auth_mode: "PRIVATE_FRAGMENT_TOKEN",
       auto_order: false,
     },
@@ -760,8 +1239,12 @@ Deno.serve(async (request: Request) => {
   if (String(body.action || "scan") !== "scan") {
     return json(request, { error: "지원하지 않는 action입니다." }, 400);
   }
-  const risk = parseRisk(body);
-  const cacheKey = JSON.stringify(risk);
+  const exchange: Exchange = String(body.exchange || "upbit").toLowerCase() ===
+      "binance"
+    ? "binance"
+    : "upbit";
+  const risk = parseRisk(body, exchange);
+  const cacheKey = JSON.stringify({ exchange, risk });
   const now = Date.now();
   if (
     cachedResult && cachedResult.expires > now && cachedResult.key === cacheKey
@@ -785,7 +1268,7 @@ Deno.serve(async (request: Request) => {
   activeScan = true;
   lastScanStartedAt = now;
   try {
-    const result = await runScan(risk);
+    const result = await runScan(risk, exchange);
     cachedResult = {
       expires: Date.now() + RESPONSE_CACHE_MS,
       key: cacheKey,

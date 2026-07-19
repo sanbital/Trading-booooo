@@ -1,7 +1,7 @@
-// Trading-booooo Market Scanner v2.1.0
+// Trading-booooo Market Scanner v2.2.0
 // Pure analysis engine. Public market data only; no order or account operations.
 
-export const ENGINE_VERSION = "2.1.0";
+export const ENGINE_VERSION = "2.2.0";
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
 
@@ -79,6 +79,9 @@ export type UniverseRow = {
   current_price: number;
   change_24h_pct: number;
   turnover_24h_krw: number;
+  turnover_24h_quote: number;
+  quote_currency: "KRW" | "USDT";
+  min_actionable_turnover_24h: number;
   day_range_pct: number;
   day_position: number;
   freshness_seconds: number;
@@ -175,6 +178,7 @@ export type DynamicOrderflow = {
 
 export type RiskConfig = {
   capitalKrw: number;
+  quoteCurrency?: "KRW" | "USDT";
   riskPct: number;
   feePerSidePct: number;
   minNetRR: number;
@@ -189,6 +193,8 @@ export type TradePlan = {
   entry_execution_estimate: number;
   short_target: number;
   short_target_execution_estimate: number;
+  expected_exit_price: number;
+  expected_exit_net_return_pct: number;
   medium_target: number;
   stop_price: number;
   stop_execution_estimate: number;
@@ -197,6 +203,7 @@ export type TradePlan = {
   net_stop_pct: number;
   net_rr: number;
   recommended_investment_krw: number;
+  recommended_investment_quote: number;
   risk_budget_krw: number;
   estimated_loss_krw: number;
   tick_size: number;
@@ -211,9 +218,15 @@ export type WatchEntryPlan = {
   max_price: number | null;
   invalidation_price: number | null;
   reference_target: number | null;
+  expected_exit_price: number | null;
+  expected_net_return_pct: number | null;
+  stop_price: number | null;
   estimated_net_rr: number | null;
   discount_from_current_pct: number | null;
   label: string;
+  entry_trigger: string;
+  exit_trigger: string;
+  scenario: string[];
   conditions: string[];
   note: string;
 };
@@ -242,6 +255,8 @@ export type FinalCandidate = {
   current_price: number;
   change_24h_pct: number;
   turnover_24h_krw: number;
+  turnover_24h_quote: number;
+  quote_currency: "KRW" | "USDT";
   score: number;
   confidence: number;
   decision: "BUY" | "WAIT" | "AVOID";
@@ -256,6 +271,14 @@ export type FinalCandidate = {
   warnings: string[];
   timeframes: PeriodAnalysis["timeframes"];
   microstructure: Microstructure;
+};
+
+export type UniverseConfig = {
+  quoteCurrency?: "KRW" | "USDT";
+  marketMatches?: (market: string) => boolean;
+  minTurnover24h?: number;
+  minActionableTurnover24h?: number;
+  liquidityLogFloor?: number;
 };
 
 export function clamp(value: number, low: number, high: number): number {
@@ -395,14 +418,22 @@ export function buildUniverse(
   markets: MarketRow[],
   tickers: TickerRow[],
   nowMs = Date.now(),
+  config: UniverseConfig = {},
 ): UniverseRow[] {
+  const quoteCurrency = config.quoteCurrency || "KRW";
+  const marketMatches = config.marketMatches ||
+    ((market: string) => market.startsWith("KRW-"));
+  const minTurnover = config.minTurnover24h ?? MIN_KRW_TURNOVER_24H;
+  const minActionableTurnover = config.minActionableTurnover24h ??
+    MIN_ACTIONABLE_TURNOVER_24H;
+  const liquidityLogFloor = config.liquidityLogFloor ?? 8.7;
   const tickerByMarket = new Map(
     tickers.map((row) => [String(row.market), row]),
   );
   const rows: UniverseRow[] = [];
 
   for (const market of markets) {
-    if (!String(market.market).startsWith("KRW-")) continue;
+    if (!marketMatches(String(market.market))) continue;
     const ticker = tickerByMarket.get(market.market);
     if (!ticker) continue;
 
@@ -427,7 +458,7 @@ export function buildUniverse(
     }
 
     const liquidityScore = clamp(
-      ((Math.log10(Math.max(turnover, 1)) - 8.7) / 3.3) * 100,
+      ((Math.log10(Math.max(turnover, 1)) - liquidityLogFloor) / 3.3) * 100,
       0,
       100,
     );
@@ -453,8 +484,10 @@ export function buildUniverse(
     if (cautions.length) excludedReason = `시장경보(${cautions.join(", ")})`;
     else if (!(current > 0)) excludedReason = "유효한 현재가 없음";
     else if (freshness > 15 * 60) excludedReason = "최근 체결이 15분 이상 없음";
-    else if (turnover < MIN_KRW_TURNOVER_24H) {
-      excludedReason = "24시간 거래대금 5억원 미만";
+    else if (turnover < minTurnover) {
+      excludedReason = quoteCurrency === "KRW"
+        ? "24시간 거래대금 5억원 미만"
+        : `24시간 거래대금 ${minTurnover.toLocaleString("en-US")} USDT 미만`;
     }
 
     rows.push({
@@ -464,6 +497,9 @@ export function buildUniverse(
       current_price: current,
       change_24h_pct: change,
       turnover_24h_krw: turnover,
+      turnover_24h_quote: turnover,
+      quote_currency: quoteCurrency,
+      min_actionable_turnover_24h: minActionableTurnover,
       day_range_pct: rangePct,
       day_position: position,
       freshness_seconds: freshness,
@@ -1379,6 +1415,19 @@ function netLossPct(entry: number, exit: number, feePct: number): number {
   return Math.max(0, -netGainPct(entry, exit, feePct));
 }
 
+function quotePriceText(value: number, quote: "KRW" | "USDT"): string {
+  const digits = quote === "KRW"
+    ? value >= 1000 ? 0 : value >= 1 ? 3 : 8
+    : value >= 1000
+    ? 2
+    : value >= 1
+    ? 4
+    : 8;
+  return `${value.toLocaleString("ko-KR", { maximumFractionDigits: digits })}${
+    quote === "KRW" ? "원" : " USDT"
+  }`;
+}
+
 export function buildTradePlan(
   period: PeriodAnalysis,
   micro: Microstructure,
@@ -1487,7 +1536,15 @@ export function buildTradePlan(
   const investment = stopLoss > 0
     ? Math.min(risk.capitalKrw, riskBudget / (stopLoss / 100))
     : 0;
-  const roundedInvestment = Math.max(0, Math.floor(investment / 1000) * 1000);
+  const roundedInvestment = risk.quoteCurrency === "USDT"
+    ? Math.max(0, Math.floor(investment * 100) / 100)
+    : Math.max(0, Math.floor(investment / 1000) * 1000);
+  const roundedRiskBudget = risk.quoteCurrency === "USDT"
+    ? Number(riskBudget.toFixed(2))
+    : Math.round(riskBudget);
+  const estimatedLoss = risk.quoteCurrency === "USDT"
+    ? Number((roundedInvestment * stopLoss / 100).toFixed(2))
+    : Math.round(roundedInvestment * stopLoss / 100);
 
   return {
     entry_low: entryLow,
@@ -1495,6 +1552,8 @@ export function buildTradePlan(
     entry_execution_estimate: entryExecution,
     short_target: shortTarget,
     short_target_execution_estimate: shortExecution,
+    expected_exit_price: shortExecution,
+    expected_exit_net_return_pct: shortGain,
     medium_target: mediumTarget,
     stop_price: stopPrice,
     stop_execution_estimate: stopExecution,
@@ -1503,8 +1562,9 @@ export function buildTradePlan(
     net_stop_pct: stopLoss,
     net_rr: rr,
     recommended_investment_krw: roundedInvestment,
-    risk_budget_krw: Math.round(riskBudget),
-    estimated_loss_krw: Math.round(roundedInvestment * stopLoss / 100),
+    recommended_investment_quote: roundedInvestment,
+    risk_budget_krw: roundedRiskBudget,
+    estimated_loss_krw: estimatedLoss,
     tick_size: tick,
     actionable: false,
   };
@@ -1519,9 +1579,15 @@ function unavailableWatchEntry(note: string): WatchEntryPlan {
     max_price: null,
     invalidation_price: null,
     reference_target: null,
+    expected_exit_price: null,
+    expected_net_return_pct: null,
+    stop_price: null,
     estimated_net_rr: null,
     discount_from_current_pct: null,
     label: "대기 매수가 미제시",
+    entry_trigger: "안전조건이 회복된 뒤 다시 계산해야 합니다.",
+    exit_trigger: "진입 시나리오가 없어 예상 매도 시점도 제시하지 않습니다.",
+    scenario: [],
     conditions: [],
     note,
   };
@@ -1629,33 +1695,57 @@ export function buildWatchEntryPlan(
   const referenceTarget = targetExecution > hypotheticalEntry
     ? tradePlan.short_target
     : null;
+  if (!rrReady || referenceTarget == null) {
+    return unavailableWatchEntry(
+      `눌림 가격을 적용해도 현재 구조의 비용 포함 예상 손익비가 ${risk.minNetRR}에 미달하거나 안전한 매도 목표가가 없습니다. 가격 도달 후 재스캔이 필요합니다.`,
+    );
+  }
+  const quote = risk.quoteCurrency || period.universe.quote_currency || "KRW";
   const ema21Text = tf.m15.ema21
-    ? `${roundToTick(tf.m15.ema21, tick, "nearest").toLocaleString("ko-KR")}원`
+    ? quotePriceText(roundToTick(tf.m15.ema21, tick, "nearest"), quote)
     : "15분 EMA21";
+  const entryZoneText = `${quotePriceText(zoneLow, quote)}~${
+    quotePriceText(zoneHigh, quote)
+  }`;
+  const exitText = quotePriceText(targetExecution, quote);
+  const stopText = quotePriceText(tradePlan.stop_price, quote);
+  const entryTrigger =
+    `${entryZoneText} 도달 후 15분봉이 EMA21 위로 회복하고 동적 호가 위험이 없을 때만 진입 검토`;
+  const exitTrigger =
+    `진입 후 ${exitText} 부근 지정가 분할매도, 도달 전 ${stopText} 이탈 또는 15분 추세 하락 전환 시 조기 종료`;
 
   return {
     available: true,
-    status: rrReady ? "CONDITIONAL" : "RECHECK_REQUIRED",
+    status: "CONDITIONAL",
     zone_low: zoneLow,
     zone_high: zoneHigh,
     max_price: zoneHigh,
     invalidation_price: tradePlan.stop_price,
     reference_target: referenceTarget,
+    expected_exit_price: targetExecution,
+    expected_net_return_pct: gain,
+    stop_price: tradePlan.stop_price,
     estimated_net_rr: estimatedRR,
     discount_from_current_pct: Math.max(
       0,
       ((current - zoneHigh) / current) * 100,
     ),
-    label: rrReady ? "조건 충족 시 매수 검토" : "가격 도달 후 재산정 필요",
+    label: "눌림 도달 후 조건부 진입",
+    entry_trigger: entryTrigger,
+    exit_trigger: exitTrigger,
+    scenario: [
+      `대기: 현재가에서 추격하지 않고 ${entryZoneText}까지 눌림을 기다립니다.`,
+      `진입: ${entryTrigger}.`,
+      `매도: ${exitTrigger}.`,
+      `무효화: 진입 전후 ${stopText} 이탈 시 이 시나리오를 폐기합니다.`,
+    ],
     conditions: [
       `가격 도달 후 15분봉 종가가 ${ema21Text} 위로 회복·유지`,
       "최근 체결 압력이 -0.45 초과로 개선",
       "재스캔의 동적 호가 판정이 '특이 위험 없음' 또는 '돌파 후 지지 전환 확인'",
       "정적 호가 불균형이 -0.50 초과를 유지",
       `재스캔에서 목표가 구조와 비용 포함 손익비 ${risk.minNetRR} 이상 통과`,
-      `${
-        tradePlan.stop_price.toLocaleString("ko-KR")
-      }원 이탈 시 대기 계획 취소`,
+      `${stopText} 이탈 시 대기 계획 취소`,
     ],
     note:
       "이 가격대는 자동 주문 지시가 아니라 재점검 구간입니다. 가격에 닿은 뒤 15분봉 마감과 최신 호가·체결을 다시 확인해야 합니다.",
@@ -1666,6 +1756,7 @@ export function estimateHorizon(
   period: PeriodAnalysis,
   stopPrice: number,
 ): TrendHorizon {
+  const quote = period.universe.quote_currency || "KRW";
   const tf = period.timeframes;
   let code: TrendHorizon["code"] = "INTRADAY";
   let label = "장중 단기 보유 후보";
@@ -1703,11 +1794,11 @@ export function estimateHorizon(
   const estimate =
     `${label}로 분류되며, 현재 정렬이 유지된다는 조건에서 ${window} 범위를 우선 관찰합니다. 시간 예측은 확정값이 아니라 EMA·거래대금·변동성 기반 조건부 추정입니다.`;
   const invalidation = [
-    `${stopPrice.toLocaleString("ko-KR")}원 이탈`,
+    `${quotePriceText(stopPrice, quote)} 이탈`,
     tf.m15.ema21
       ? `15분봉 종가가 EMA21(${
-        tf.m15.ema21.toLocaleString("ko-KR", { maximumFractionDigits: 8 })
-      }원) 아래에서 연속 마감`
+        quotePriceText(tf.m15.ema21, quote)
+      }) 아래에서 연속 마감`
       : "15분 추세가 하락 정렬로 전환",
     "거래대금 감소와 함께 4시간 EMA9가 EMA21 아래로 전환",
   ];
@@ -1759,8 +1850,13 @@ export function finalizeCandidate(
     gate(
       "liquidity",
       "거래대금",
-      period.universe.turnover_24h_krw >= MIN_ACTIONABLE_TURNOVER_24H,
-      "24시간 거래대금 10억원 이상이어야 합니다.",
+      period.universe.turnover_24h_quote >=
+        period.universe.min_actionable_turnover_24h,
+      period.universe.quote_currency === "KRW"
+        ? "24시간 거래대금 10억원 이상이어야 합니다."
+        : `24시간 거래대금 ${
+          period.universe.min_actionable_turnover_24h.toLocaleString("en-US")
+        } USDT 이상이어야 합니다.`,
     ),
     gate(
       "freshness",
@@ -1908,13 +2004,17 @@ export function finalizeCandidate(
     current_price: period.universe.current_price,
     change_24h_pct: period.universe.change_24h_pct,
     turnover_24h_krw: period.universe.turnover_24h_krw,
+    turnover_24h_quote: period.universe.turnover_24h_quote,
+    quote_currency: period.universe.quote_currency,
     score,
     confidence,
     decision,
     decision_label: decision === "BUY"
       ? "현재 매수 후보"
-      : decision === "WAIT"
+      : decision === "WAIT" && watchEntryPlan.available
       ? "관찰·눌림 대기"
+      : decision === "WAIT"
+      ? "관찰·조건 회복 대기"
       : "매수 제외",
     trade_plan: plan,
     watch_entry_plan: watchEntryPlan,

@@ -96,6 +96,9 @@ function universeRow(currentPrice = 120): UniverseRow {
     current_price: currentPrice,
     change_24h_pct: 5,
     turnover_24h_krw: 50_000_000_000,
+    turnover_24h_quote: 50_000_000_000,
+    quote_currency: "KRW",
+    min_actionable_turnover_24h: 1_000_000_000,
     day_range_pct: 8,
     day_position: 0.7,
     freshness_seconds: 2,
@@ -198,6 +201,36 @@ Deno.test("universe rejects stale and illiquid pairs", () => {
   assert(rows.every((row) => !row.eligible));
   assert(rows.some((row) => row.excluded_reason?.includes("5억원")));
   assert(rows.some((row) => row.excluded_reason?.includes("15분")));
+});
+
+Deno.test("universe supports a separate Binance USDT liquidity profile", () => {
+  const now = 1_800_000_000_000;
+  const rows = buildUniverse(
+    [{ market: "BTCUSDT", korean_name: "BTC", english_name: "BTC" }],
+    [{
+      market: "BTCUSDT",
+      trade_price: 60_000,
+      opening_price: 59_000,
+      high_price: 61_000,
+      low_price: 58_000,
+      signed_change_rate: 0.0169,
+      acc_trade_price_24h: 950_000,
+      trade_timestamp: now,
+    }],
+    now,
+    {
+      quoteCurrency: "USDT",
+      marketMatches: (market) => market.endsWith("USDT"),
+      minTurnover24h: 500_000,
+      minActionableTurnover24h: 1_000_000,
+      liquidityLogFloor: 5.7,
+    },
+  );
+  assert(rows.length === 1);
+  assert(rows[0].eligible);
+  assert(rows[0].quote_currency === "USDT");
+  assert(rows[0].turnover_24h_quote === 950_000);
+  assert(rows[0].min_actionable_turnover_24h === 1_000_000);
 });
 
 Deno.test("shortlist contains only eligible markets and respects the limit", () => {
@@ -418,6 +451,8 @@ Deno.test("trade plan keeps stop below entry and targets above entry", () => {
   const plan = buildTradePlan(period, micro, 0.1, risk);
   assert(plan.stop_price < plan.entry_execution_estimate);
   assert(plan.short_target > plan.entry_execution_estimate);
+  assert(plan.expected_exit_price === plan.short_target_execution_estimate);
+  assert(plan.expected_exit_net_return_pct === plan.short_net_return_pct);
   assert(plan.medium_target > plan.short_target);
   assert(plan.net_stop_pct > 0);
   assert(plan.recommended_investment_krw <= risk.capitalKrw);
@@ -480,6 +515,15 @@ Deno.test("a strong WAIT setup receives a conditional watch-entry zone", () => {
     final.watch_entry_plan.max_price === final.watch_entry_plan.zone_high,
   );
   assert(final.watch_entry_plan.conditions.length >= 4);
+  assert(final.decision_label === "관찰·눌림 대기");
+  assert(
+    final.watch_entry_plan.expected_exit_price! >
+      final.watch_entry_plan.zone_high!,
+  );
+  assert(final.watch_entry_plan.expected_net_return_pct! > 0);
+  assert(final.watch_entry_plan.scenario.length === 4);
+  assert(final.watch_entry_plan.entry_trigger.includes("15분봉"));
+  assert(final.watch_entry_plan.exit_trigger.includes("분할매도"));
 });
 
 Deno.test("market alert is a hard gate even with bullish candles", () => {

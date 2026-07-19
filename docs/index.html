@@ -6,9 +6,9 @@
   <meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
   <meta name="referrer" content="no-referrer">
   <title>Trading-booooo Market Scanner</title>
-  <link rel="stylesheet" href="./styles.css?v=2.1.0">
-  <script src="./config.js?v=2.1.0"></script>
-  <script src="./app.js?v=2.1.0" defer></script>
+  <link rel="stylesheet" href="./styles.css?v=2.2.0">
+  <script src="./config.js?v=2.2.0"></script>
+  <script src="./app.js?v=2.2.0" defer></script>
 </head>
 <body>
   <div class="ambient ambient-a"></div>
@@ -19,18 +19,23 @@
       <span class="brand-mark">TB</span>
       <span>
         <strong>TRADING-BOOOOO</strong>
-        <small>UPBIT KRW MARKET SCANNER · v2.1.0</small>
+        <small id="brand-subtitle">UPBIT KRW + BINANCE USDT SPOT · v2.2.0</small>
       </span>
     </a>
     <div class="status-chip"><span class="status-dot"></span> READ ONLY · 자동 주문 없음</div>
   </header>
 
   <main class="shell">
+    <nav class="exchange-tabs" aria-label="거래소 선택">
+      <button class="exchange-tab active" type="button" data-exchange="upbit"><strong>업비트 현물</strong><small>KRW 전체 종목</small></button>
+      <button class="exchange-tab" type="button" data-exchange="binance"><strong>바이낸스 현물</strong><small>USDT 전체 종목</small></button>
+    </nav>
+
     <section class="hero panel">
       <div class="hero-copy">
         <p class="eyebrow">ALL-MARKET CONDITIONAL SCAN</p>
-        <h1>업비트 원화마켓을 전수 점검하고<br>현재의 매수 후보만 추립니다.</h1>
-        <p class="hero-description">
+        <h1 id="hero-title">업비트 원화마켓을 전수 점검하고<br>현재의 매수 후보만 추립니다.</h1>
+        <p id="hero-description" class="hero-description">
           전체 상장 종목의 현재가·거래대금을 1차 점검하고, 안전필터 통과 종목 전부의 15분봉을 확인한 뒤
           상위 후보의 5분·4시간·일봉과 최신 호가·체결을 교차검증합니다. 조건 미달이면 추천하지 않습니다.
         </p>
@@ -39,8 +44,8 @@
       <div class="scan-control">
         <div class="setting-row">
           <label>
-            <span>기준 자본</span>
-            <div class="input-wrap"><input id="capital-input" type="number" min="10000" step="10000" value="500000"><em>원</em></div>
+            <span id="capital-label">기준 자본</span>
+            <div class="input-wrap"><input id="capital-input" type="number" min="10000" step="10000" value="500000"><em id="capital-unit">원</em></div>
           </label>
           <label>
             <span>1회 허용 위험</span>
@@ -72,10 +77,10 @@
       </section>
 
       <section class="stats-grid" aria-label="스캔 범위">
-        <article class="stat panel"><span>KRW 상장 종목</span><strong id="total-markets">—</strong><small>전수 1차 점검</small></article>
+        <article class="stat panel"><span id="listed-market-label">KRW 상장 종목</span><strong id="total-markets">—</strong><small>전수 1차 점검</small></article>
         <article class="stat panel"><span>안전 필터 통과</span><strong id="eligible-markets">—</strong><small>전부 15분봉 기간검증</small></article>
         <article class="stat panel"><span>기간 정밀분석</span><strong id="deep-markets">—</strong><small>4개 시간축</small></article>
-        <article class="stat panel"><span>총 분석시간</span><strong id="elapsed">—</strong><small>업비트 공개시세</small></article>
+        <article class="stat panel"><span>총 분석시간</span><strong id="elapsed">—</strong><small id="data-source-label">업비트 공개시세</small></article>
       </section>
 
       <section id="no-buy-banner" class="no-buy panel hidden">
@@ -99,7 +104,7 @@
         <div class="price-grid">
           <article><span>현재가</span><strong id="primary-price">—</strong><small id="primary-change">—</small></article>
           <article><span>매수 검토 구간</span><strong id="primary-entry">—</strong><small>체결 슬리피지 별도 반영</small></article>
-          <article class="target"><span>단기 목표가</span><strong id="primary-short-target">—</strong><small id="primary-short-return">—</small></article>
+          <article class="target"><span>진입 시 예상 매도가</span><strong id="primary-short-target">—</strong><small id="primary-short-return">수수료·슬리피지 반영</small></article>
           <article class="target"><span>중기 목표가</span><strong id="primary-medium-target">—</strong><small id="primary-medium-return">—</small></article>
           <article class="danger"><span>손절가격</span><strong id="primary-stop">—</strong><small id="primary-stop-loss">—</small></article>
           <article><span>추천 투입금</span><strong id="primary-investment">—</strong><small id="primary-risk-budget">—</small></article>
