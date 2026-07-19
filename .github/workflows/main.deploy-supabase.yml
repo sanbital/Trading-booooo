@@ -1,0 +1,79 @@
+name: Deploy Supabase Market Scanner
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "supabase/functions/market-scanner/**"
+      - "supabase/config.toml"
+      - ".github/workflows/deploy-supabase.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-market-scanner
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy market-scanner
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: latest
+
+      - name: Validate repository secrets
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SCAN_ACCESS_TOKEN: ${{ secrets.SCAN_ACCESS_TOKEN }}
+        run: |
+          for name in SUPABASE_ACCESS_TOKEN SUPABASE_PROJECT_REF SCAN_ACCESS_TOKEN; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::GitHub repository secret ${name} is missing."
+              exit 1
+            fi
+          done
+
+          if [ "${#SCAN_ACCESS_TOKEN}" -lt 32 ]; then
+            echo "::error::SCAN_ACCESS_TOKEN must be at least 32 characters."
+            exit 1
+          fi
+
+      - name: Set Edge Function secrets
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SCAN_ACCESS_TOKEN: ${{ secrets.SCAN_ACCESS_TOKEN }}
+        run: |
+          allowed_origin="https://${GITHUB_REPOSITORY_OWNER,,}.github.io"
+          supabase secrets set \
+            "SCAN_ACCESS_TOKEN=${SCAN_ACCESS_TOKEN}" \
+            "ALLOWED_ORIGINS=${allowed_origin}" \
+            "DEEP_SCAN_LIMIT=30" \
+            --project-ref "${SUPABASE_PROJECT_REF}"
+
+      - name: Deploy Edge Function
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          supabase functions deploy market-scanner \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
