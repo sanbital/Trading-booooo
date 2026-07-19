@@ -20,6 +20,8 @@
 7. `Actions` → `Deploy Supabase Market Scanner`에서 새 실행이 초록색이 될 때까지 기다립니다.
 8. GitHub Pages 배포가 끝난 뒤 개인 토큰 URL을 새로고침하고 다시 스캔합니다.
 
+`index.html`에는 JavaScript·CSS 버전값이 포함되어 있어 이전 GitHub Pages 캐시를 사용하지 않습니다.
+
 ## 유지되는 설정
 
 업데이트 ZIP에는 `docs/config.js`와 `.github`가 들어 있지 않습니다. 따라서 기존 Supabase URL·Publishable Key와 GitHub Secrets는 바뀌지 않습니다.

@@ -1,4 +1,4 @@
-# Trading-booooo v2.3.2 — GitHub 웹 전용 배포 가이드
+# Trading-booooo v2.4.0 — GitHub 웹 전용 배포 가이드
 
 이 가이드는 **VS Code, PowerShell, Git, Supabase CLI를 전혀 사용하지 않습니다.** Windows 파일 탐색기, GitHub 웹사이트, Supabase 대시보드만 사용합니다.
 
@@ -119,7 +119,7 @@ GitHub의 `Trading-booooo` 저장소에서 다음 순서로 이동합니다.
 3. Windows에서 압축을 푼 `Trading-booooo` 폴더를 엽니다.
 4. **바깥쪽 `Trading-booooo` 폴더가 아니라 그 안의 모든 항목**을 업로드 영역으로 끌어놓습니다.
 5. 목록에 `.github`, `docs`, `supabase`, `README.md`가 보이는지 확인합니다.
-6. Commit message에 `Deploy Trading-booooo v2.3.2`를 입력합니다.
+6. Commit message에 `Deploy Trading-booooo v2.4.0`을 입력합니다.
 7. `Commit changes`를 누릅니다.
 
 정상 저장소 루트는 다음과 같아야 합니다.
@@ -199,19 +199,20 @@ https://GITHUB_USERNAME.github.io/Trading-booooo/#access=MY_SCAN_TOKEN
 ## 10. 최종 확인
 
 1. 개인 URL로 접속합니다.
-2. `업비트 현물` 탭에서 `원화마켓 전체 스캔`을 누릅니다.
-3. 기본 60초·저유동 경계 후보 90초의 동적 관찰을 포함하므로 최대 220초 기다립니다.
+2. 기본으로 선택된 `통합 Top 4` 탭에서 업비트 원화 자본과 바이낸스 USDT 자본을 확인합니다.
+3. `두 거래소 동시 스캔`을 누릅니다. 양 거래소가 병렬로 진행되며 기본 60초·경계 후보 90초의 동적 관찰을 포함하므로 최대 약 260초 기다립니다.
 4. 다음을 확인합니다.
-   - 업비트 KRW 상장 종목 전체 개수
+   - 업비트 KRW와 바이낸스 USDT 상장 종목의 합산 점검 개수
    - 안전필터를 통과한 전 종목의 15분 기간점검 결과
    - 5분·4시간·일봉 정밀분석 결과
-   - 현재 매수 후보 또는 `현재 매수 추천 없음`
+   - 중복 코인이 제거된 통합 Top 4 또는 `현재 매수 추천 없음`
+   - 각 후보의 대표 거래소와 양 거래소 교차검증 판정
    - 진입 시 예상 매도가, 중기 목표가, 손절가, 예상 보유기간
    - `관찰·눌림 대기` 후보의 조건부 매수가·예상 매도가·진입/매도 시나리오
    - 동적 호가 관찰 45초 이상·호가 25회 이상·체결 20건 이상·구간 3/3
    - `심층분석용 리포트 복사` 버튼
-5. `바이낸스 현물` 탭으로 이동해 USDT 기준 자본을 확인한 뒤 전체 스캔을 누릅니다.
-6. Binance USDT 종목 수·기간 순위·동적 호가 표본이 업비트 결과와 별도로 표시되는지 확인합니다.
+5. `업비트 현물` 또는 `바이낸스 현물` 탭으로 이동하면 각 거래소 결과만 별도로 확인하거나 다시 스캔할 수 있습니다.
+6. 한 거래소가 일시적으로 실패하면 통합 화면에 해당 오류가 표시되고, 성공한 거래소의 안전 후보만으로 최대 4개를 구성하는지 확인합니다.
 
 추천 없음은 오류가 아닙니다. 강제 조건을 통과한 종목이 없으면 매수를 억지로 추천하지 않도록 설계되어 있습니다.
 
@@ -223,7 +224,7 @@ https://GITHUB_USERNAME.github.io/Trading-booooo/#access=MY_SCAN_TOKEN
 
 ## GitHub에서 백테스트 실행
 
-v2.3.2에는 배포와 별개인 `Backtest Market Scanner` Action이 추가됩니다.
+v2.4.0에도 배포와 별개인 `Backtest Market Scanner` Action이 포함됩니다.
 
 1. 저장소 `Actions`를 누릅니다.
 2. 왼쪽 `Backtest Market Scanner`를 선택합니다.

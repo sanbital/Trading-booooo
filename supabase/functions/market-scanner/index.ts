@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v2.3.2 — Supabase Edge Function
+// Trading-booooo Market Scanner v2.4.0 — Supabase Edge Function
 // Upbit KRW / Binance USDT universe scan -> multi-period analysis -> orderflow validation.
 // Read-only public market data. No account lookup, order creation, cancellation, or API keys.
 
@@ -22,6 +22,7 @@ import {
   type TradeRow,
   type UniverseRow,
 } from "./engine.ts";
+import { baseAsset, combineCandidates } from "./combined.ts";
 
 const UPBIT = "https://api.upbit.com";
 const UPBIT_WEBSOCKET = "wss://api.upbit.com/websocket/v1";
@@ -58,6 +59,7 @@ let binanceMarketCache: {
 } | null = null;
 
 type Exchange = "upbit" | "binance";
+type ScanMode = Exchange | "combined";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -218,7 +220,12 @@ function parseRisk(
     quoteCurrency: binance ? "USDT" : "KRW",
     riskPct: clamp(finite(body.risk_pct, 1), 0.1, 2),
     feePerSidePct: clamp(
-      finite(body.fee_per_side_pct, binance ? 0.1 : 0.05),
+      finite(
+        binance
+          ? body.binance_fee_per_side_pct ?? body.fee_per_side_pct
+          : body.upbit_fee_per_side_pct ?? body.fee_per_side_pct,
+        binance ? 0.1 : 0.05,
+      ),
       0,
       0.5,
     ),
@@ -1215,6 +1222,178 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
   };
 }
 
+type SingleScanResult = Awaited<ReturnType<typeof runScan>>;
+
+function combinedRanking(
+  upbit: SingleScanResult | null,
+  binance: SingleScanResult | null,
+) {
+  return [
+    ...(upbit?.ranking || []).map((row) => ({
+      ...row,
+      exchange: "upbit" as const,
+      exchange_label: "업비트",
+      quote_currency: "KRW" as const,
+      base_asset: baseAsset(row.market, "upbit"),
+    })),
+    ...(binance?.ranking || []).map((row) => ({
+      ...row,
+      exchange: "binance" as const,
+      exchange_label: "바이낸스",
+      quote_currency: "USDT" as const,
+      base_asset: baseAsset(row.market, "binance"),
+    })),
+  ].sort((left, right) => right.period_score - left.period_score)
+    .slice(0, 20)
+    .map((row, index) => ({ ...row, rank: index + 1 }));
+}
+
+async function runCombinedScan(
+  upbitRisk: RiskConfig,
+  binanceRisk: RiskConfig,
+) {
+  const started = Date.now();
+  const [upbitSettled, binanceSettled] = await Promise.allSettled([
+    runScan(upbitRisk, "upbit"),
+    runScan(binanceRisk, "binance"),
+  ]);
+  const upbit = upbitSettled.status === "fulfilled" ? upbitSettled.value : null;
+  const binance = binanceSettled.status === "fulfilled"
+    ? binanceSettled.value
+    : null;
+  if (!upbit && !binance) {
+    const left = upbitSettled.status === "rejected"
+      ? String(upbitSettled.reason)
+      : "unknown";
+    const right = binanceSettled.status === "rejected"
+      ? String(binanceSettled.reason)
+      : "unknown";
+    throw new Error(
+      `두 거래소 스캔이 모두 실패했습니다. Upbit: ${left} / Binance: ${right}`,
+    );
+  }
+
+  const finalists = combineCandidates(
+    upbit?.finalists || [],
+    binance?.finalists || [],
+    4,
+  );
+  const recommendations = finalists.filter((candidate) =>
+    candidate.decision === "BUY" && candidate.trade_plan.actionable &&
+    !candidate.cross_exchange.conflict
+  );
+  const watchlist = finalists.filter((candidate) =>
+    candidate.decision !== "BUY"
+  );
+  const generatedAt = Date.now();
+  const scanErrors = [
+    upbitSettled.status === "rejected"
+      ? { exchange: "upbit", message: String(upbitSettled.reason) }
+      : null,
+    binanceSettled.status === "rejected"
+      ? { exchange: "binance", message: String(binanceSettled.reason) }
+      : null,
+  ].filter(Boolean);
+  const status = recommendations.length ? "BUY_CANDIDATES" : "NO_BUY";
+  const listed = (upbit?.coverage.listed_markets || 0) +
+    (binance?.coverage.listed_markets || 0);
+  const eligible = (upbit?.coverage.eligible_after_safety_filter || 0) +
+    (binance?.coverage.eligible_after_safety_filter || 0);
+  const deep = (upbit?.coverage.deep_period_analyzed || 0) +
+    (binance?.coverage.deep_period_analyzed || 0);
+  const micro = (upbit?.coverage.microstructure_finalists || 0) +
+    (binance?.coverage.microstructure_finalists || 0);
+  const dynamicUpbit = upbit?.coverage.dynamic_orderflow;
+  const dynamicBinance = binance?.coverage.dynamic_orderflow;
+
+  return {
+    scan_id: crypto.randomUUID(),
+    status,
+    headline: recommendations.length
+      ? `업비트·바이낸스 동시 점검 결과, 현재 매수 강제조건을 통과한 통합 Top 4 내 후보 ${recommendations.length}개가 탐지됐습니다.`
+      : finalists.length
+      ? `업비트·바이낸스 동시 점검 결과, 현재가 매수 후보는 없으며 조건부 관찰 Top ${finalists.length}개를 제시합니다.`
+      : "업비트·바이낸스 동시 점검 결과, 안전하게 제시할 통합 후보가 없습니다.",
+    primary: recommendations[0] || null,
+    recommendations,
+    watchlist,
+    finalists,
+    ranking: combinedRanking(upbit, binance),
+    coverage: {
+      exchange: "combined",
+      exchange_label: "업비트 + 바이낸스 통합",
+      quote_currency: "MIXED",
+      listed_markets: listed,
+      listed_krw_markets: listed,
+      eligible_after_safety_filter: eligible,
+      excluded_at_universe_stage:
+        (upbit?.coverage.excluded_at_universe_stage || 0) +
+        (binance?.coverage.excluded_at_universe_stage || 0),
+      period_screened_markets: (upbit?.coverage.period_screened_markets || 0) +
+        (binance?.coverage.period_screened_markets || 0),
+      period_screened_complete:
+        (upbit?.coverage.period_screened_complete || 0) +
+        (binance?.coverage.period_screened_complete || 0),
+      deep_period_analyzed: deep,
+      microstructure_finalists: micro,
+      combined_finalists: finalists.length,
+      dynamic_orderflow: {
+        requested_observation_seconds: Math.max(
+          dynamicUpbit?.requested_observation_seconds || 0,
+          dynamicBinance?.requested_observation_seconds || 0,
+        ),
+        websocket_markets: (dynamicUpbit?.websocket_markets || 0) +
+          (dynamicBinance?.websocket_markets || 0),
+        sufficient_markets: (dynamicUpbit?.sufficient_markets || 0) +
+          (dynamicBinance?.sufficient_markets || 0),
+      },
+      excluded_summary: [
+        ...(upbit?.coverage.excluded_summary || []).map((item) => ({
+          reason: `[업비트] ${item.reason}`,
+          count: item.count,
+        })),
+        ...(binance?.coverage.excluded_summary || []).map((item) => ({
+          reason: `[바이낸스] ${item.reason}`,
+          count: item.count,
+        })),
+      ],
+      exchanges: {
+        upbit: upbit?.coverage || null,
+        binance: binance?.coverage || null,
+      },
+      periods: {
+        "5m": "최근 6시간(72봉)",
+        "15m": "최근 24시간(96봉)",
+        "4h": "최근 15일(90봉)",
+        "1d": "최근 60일(60봉)",
+      },
+    },
+    assumptions: {
+      exchange: "combined",
+      upbit: upbit?.assumptions || null,
+      binance: binance?.assumptions || null,
+      risk_per_trade_pct: upbitRisk.riskPct,
+      automatic_order: false,
+      cross_exchange_rule:
+        "동일 기초자산은 한 자리만 사용하며, 다른 거래소에서 AVOID 또는 동적 호가 위험이 나오면 BUY를 WAIT로 강등합니다.",
+      model_note:
+        "통합 순위는 거래소별 엔진 점수와 교차거래소 방향 일치를 이용하지만, 서로 다른 통화의 가격·거래대금은 직접 합산하지 않습니다.",
+    },
+    exchange_errors: scanErrors,
+    exchanges: { upbit, binance },
+    meta: {
+      engine_version: ENGINE_VERSION,
+      generated_at: new Date(generatedAt).toISOString(),
+      elapsed_seconds: Number(((Date.now() - started) / 1000).toFixed(2)),
+      exchange: "combined",
+      quote_currency: "MIXED",
+      data_source: "UPBIT_AND_BINANCE_PUBLIC_SPOT_REST_API_AND_WEBSOCKET",
+      auth_mode: "PRIVATE_FRAGMENT_TOKEN",
+      auto_order: false,
+    },
+  };
+}
+
 Deno.serve(async (request: Request) => {
   if (request.method === "OPTIONS") {
     if (!originAllowed(request)) {
@@ -1248,12 +1427,15 @@ Deno.serve(async (request: Request) => {
   if (String(body.action || "scan") !== "scan") {
     return json(request, { error: "지원하지 않는 action입니다." }, 400);
   }
-  const exchange: Exchange = String(body.exchange || "upbit").toLowerCase() ===
-      "binance"
+  const requestedMode = String(body.exchange || "combined").toLowerCase();
+  const scanMode: ScanMode = requestedMode === "binance"
     ? "binance"
+    : ["combined", "both", "all"].includes(requestedMode)
+    ? "combined"
     : "upbit";
-  const risk = parseRisk(body, exchange);
-  const cacheKey = JSON.stringify({ exchange, risk });
+  const upbitRisk = parseRisk(body, "upbit");
+  const binanceRisk = parseRisk(body, "binance");
+  const cacheKey = JSON.stringify({ scanMode, upbitRisk, binanceRisk });
   const now = Date.now();
   if (
     cachedResult && cachedResult.expires > now && cachedResult.key === cacheKey
@@ -1277,7 +1459,12 @@ Deno.serve(async (request: Request) => {
   activeScan = true;
   lastScanStartedAt = now;
   try {
-    const result = await runScan(risk, exchange);
+    const result = scanMode === "combined"
+      ? await runCombinedScan(upbitRisk, binanceRisk)
+      : await runScan(
+        scanMode === "upbit" ? upbitRisk : binanceRisk,
+        scanMode,
+      );
     cachedResult = {
       expires: Date.now() + RESPONSE_CACHE_MS,
       key: cacheKey,

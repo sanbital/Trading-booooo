@@ -1,4 +1,4 @@
-# v2.3.2 백테스트 — 캔들 신호 측정 도구
+# v2.4.0 백테스트 — 캔들 신호 측정 도구
 
 배포 엔진의 `analyzePeriod`, `finalizeCandidate`, `buildTradePlan`을 그대로
 호출해 과거 **마감 캔들**로 BUY와 조건부 WAIT 진입을 별도로 평가합니다.

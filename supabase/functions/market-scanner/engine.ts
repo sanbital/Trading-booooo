@@ -1,7 +1,7 @@
-// Trading-booooo Market Scanner v2.3.2
+// Trading-booooo Market Scanner v2.4.0
 // Pure analysis engine. Public market data only; no order or account operations.
 
-export const ENGINE_VERSION = "2.3.2";
+export const ENGINE_VERSION = "2.4.0";
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
 

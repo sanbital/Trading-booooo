@@ -1,4 +1,4 @@
-// Trading-booooo v2.3.2 — backtest CLI.
+// Trading-booooo v2.4.0 — backtest CLI.
 // Default: aligned full-period report. --sweep: 60/20/20 train/validation/test.
 
 import {
@@ -165,7 +165,7 @@ if (import.meta.main) {
     Deno.exit(1);
   }
   console.log(
-    `Trading-booooo v2.3.2 백테스트 · 종목 ${histories.length}개 · ` +
+    `Trading-booooo v2.4.0 백테스트 · 종목 ${histories.length}개 · ` +
       `15분봉 ${histories.reduce((sum, h) => sum + h.m15.length, 0)}개`,
   );
   console.log("동적 호가·체결은 중립 가정이며 별도 전진 페이퍼 평가가 필요합니다.");

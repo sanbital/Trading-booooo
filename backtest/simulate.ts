@@ -1,4 +1,4 @@
-// Trading-booooo v2.3.2 — candle-layer walk-forward simulator.
+// Trading-booooo v2.4.0 — candle-layer walk-forward simulator.
 //
 // This deliberately does not pretend that historical candles contain orderbook
 // history. Dynamic orderflow is injected as neutral and must be evaluated by
