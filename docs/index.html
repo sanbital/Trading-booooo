@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+  <meta name="referrer" content="no-referrer">
+  <title>Trading-booooo Market Scanner</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./config.js"></script>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <div class="ambient ambient-a"></div>
+  <div class="ambient ambient-b"></div>
+
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="Trading-booooo 홈">
+      <span class="brand-mark">TB</span>
+      <span>
+        <strong>TRADING-BOOOOO</strong>
+        <small>UPBIT KRW MARKET SCANNER · v2.0.1</small>
+      </span>
+    </a>
+    <div class="status-chip"><span class="status-dot"></span> READ ONLY · 자동 주문 없음</div>
+  </header>
+
+  <main class="shell">
+    <section class="hero panel">
+      <div class="hero-copy">
+        <p class="eyebrow">ALL-MARKET CONDITIONAL SCAN</p>
+        <h1>업비트 원화마켓을 전수 점검하고<br>현재의 매수 후보만 추립니다.</h1>
+        <p class="hero-description">
+          전체 상장 종목의 현재가·거래대금을 1차 점검하고, 안전필터 통과 종목 전부의 15분봉을 확인한 뒤
+          상위 후보의 5분·4시간·일봉과 최신 호가·체결을 교차검증합니다. 조건 미달이면 추천하지 않습니다.
+        </p>
+      </div>
+
+      <div class="scan-control">
+        <div class="setting-row">
+          <label>
+            <span>기준 자본</span>
+            <div class="input-wrap"><input id="capital-input" type="number" min="10000" step="10000" value="500000"><em>원</em></div>
+          </label>
+          <label>
+            <span>1회 허용 위험</span>
+            <div class="input-wrap"><input id="risk-input" type="number" min="0.1" max="2" step="0.1" value="1"><em>%</em></div>
+          </label>
+        </div>
+        <button id="scan-button" class="scan-button" type="button">
+          <span id="scan-spinner" class="spinner hidden" aria-hidden="true"></span>
+          <span id="scan-button-label">원화마켓 전체 스캔</span>
+        </button>
+        <p id="scan-status" class="scan-status" aria-live="polite">버튼을 누르면 약 30~70초 동안 최신 데이터를 조회합니다.</p>
+      </div>
+    </section>
+
+    <div id="config-error" class="alert alert-error hidden"></div>
+    <div id="access-error" class="alert alert-error hidden"></div>
+
+    <section id="results" class="results hidden">
+      <section class="result-header panel">
+        <div>
+          <p class="eyebrow">SCAN VERDICT</p>
+          <h2 id="headline">분석 결과</h2>
+          <p id="result-subline" class="muted"></p>
+        </div>
+        <div class="result-actions">
+          <button id="copy-report-btn" class="button-secondary" type="button">심층분석용 리포트 복사</button>
+          <span id="copy-status" class="copy-status"></span>
+        </div>
+      </section>
+
+      <section class="stats-grid" aria-label="스캔 범위">
+        <article class="stat panel"><span>KRW 상장 종목</span><strong id="total-markets">—</strong><small>전수 1차 점검</small></article>
+        <article class="stat panel"><span>안전 필터 통과</span><strong id="eligible-markets">—</strong><small>전부 15분봉 기간검증</small></article>
+        <article class="stat panel"><span>기간 정밀분석</span><strong id="deep-markets">—</strong><small>4개 시간축</small></article>
+        <article class="stat panel"><span>총 분석시간</span><strong id="elapsed">—</strong><small>업비트 공개시세</small></article>
+      </section>
+
+      <section id="no-buy-banner" class="no-buy panel hidden">
+        <span class="no-buy-icon">—</span>
+        <div><strong>현재 매수 추천 없음</strong><p>강제조건을 모두 통과한 종목이 없습니다. 아래 관심 후보는 진입 추천이 아니라 재점검 대상입니다.</p></div>
+      </section>
+
+      <section id="primary-section" class="primary panel hidden">
+        <div class="primary-top">
+          <div>
+            <p class="eyebrow">PRIMARY PICK</p>
+            <div class="asset-title"><h2 id="primary-name">—</h2><span id="primary-market">—</span></div>
+            <p id="primary-decision" class="decision-badge">현재 매수 후보</p>
+          </div>
+          <div class="score-block">
+            <div class="score-ring"><strong id="primary-score">—</strong><span>점</span></div>
+            <p>신뢰도 <b id="primary-confidence">—</b></p>
+          </div>
+        </div>
+
+        <div class="price-grid">
+          <article><span>현재가</span><strong id="primary-price">—</strong><small id="primary-change">—</small></article>
+          <article><span>매수 검토 구간</span><strong id="primary-entry">—</strong><small>체결 슬리피지 별도 반영</small></article>
+          <article class="target"><span>단기 목표가</span><strong id="primary-short-target">—</strong><small id="primary-short-return">—</small></article>
+          <article class="target"><span>중기 목표가</span><strong id="primary-medium-target">—</strong><small id="primary-medium-return">—</small></article>
+          <article class="danger"><span>손절가격</span><strong id="primary-stop">—</strong><small id="primary-stop-loss">—</small></article>
+          <article><span>추천 투입금</span><strong id="primary-investment">—</strong><small id="primary-risk-budget">—</small></article>
+        </div>
+
+        <div class="horizon-card">
+          <div><span>추세 유지 추정</span><strong id="primary-horizon">—</strong></div>
+          <div class="persistence"><span>지속성 점수</span><div class="meter"><i id="persistence-meter"></i></div><b id="persistence-score">—</b></div>
+          <p id="primary-horizon-note">—</p>
+        </div>
+
+        <div class="evidence-grid">
+          <article><h3>매수 근거</h3><ul id="primary-positives"></ul></article>
+          <article><h3>주의·무효화 조건</h3><ul id="primary-warnings"></ul></article>
+        </div>
+      </section>
+
+      <section class="section-block">
+        <div class="section-heading">
+          <div><p class="eyebrow">FINALISTS</p><h2>최종 정밀분석 후보</h2></div>
+          <p>기간분석 상위 종목에 최신 호가·체결 검증을 추가한 결과입니다.</p>
+        </div>
+        <div id="recommendations-grid" class="candidate-grid"></div>
+      </section>
+
+      <section class="section-block">
+        <div class="section-heading">
+          <div><p class="eyebrow">PERIOD RANKING</p><h2>기간분석 상위 20종목</h2></div>
+          <p>이 표의 점수만으로 매수하지 마세요. BUY 표시는 최종 호가·체결 게이트까지 통과한 경우에만 부여됩니다.</p>
+        </div>
+        <div class="table-wrap panel">
+          <table>
+            <thead><tr><th>순위</th><th>종목</th><th>현재가</th><th>24H</th><th>거래대금</th><th>기간점수</th><th>5분</th><th>15분</th><th>4시간</th><th>일봉</th></tr></thead>
+            <tbody id="ranking-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="method-grid">
+        <article class="panel">
+          <p class="eyebrow">COVERAGE</p><h3>제외 사유</h3><ul id="coverage-exclusions" class="compact-list"></ul>
+        </article>
+        <article class="panel">
+          <p class="eyebrow">DATA WINDOW</p><h3>조회 기간</h3>
+          <ul class="compact-list"><li>5분봉 72개 · 최근 약 6시간</li><li>15분봉 96개 · 최근 약 24시간</li><li>4시간봉 90개 · 최근 약 15일</li><li>일봉 60개 · 최근 약 60일</li></ul>
+        </article>
+        <article class="panel warning-panel">
+          <p class="eyebrow">RISK NOTICE</p><h3>판정의 한계</h3>
+          <p>목표가·손절가·보유기간은 현재 시점의 공개시세에 근거한 조건부 추정입니다. 급격한 뉴스·상장폐지·시장 공백·슬리피지를 예측하지 못하며 수익을 보장하지 않습니다.</p>
+        </article>
+      </section>
+    </section>
+  </main>
+
+  <footer>
+    <span>TRADING-BOOOOO · READ-ONLY ANALYSIS</span>
+    <span id="footer-meta">엔진 준비 중</span>
+  </footer>
+</body>
+</html>

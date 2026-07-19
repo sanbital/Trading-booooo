@@ -1,0 +1,627 @@
+// Trading-booooo Market Scanner v2.0.1 — Supabase Edge Function
+// KRW universe scan -> multi-period analysis -> orderbook/trade validation.
+// Read-only public market data. No account lookup, order creation, cancellation, or API keys.
+
+import {
+  analyzePeriod,
+  buildUniverse,
+  type CandleRow,
+  clamp,
+  computeMicrostructure,
+  ENGINE_VERSION,
+  type FinalCandidate,
+  finalizeCandidate,
+  type MarketRow,
+  type OrderbookSnapshot,
+  type PeriodAnalysis,
+  type PeriodDataset,
+  type RiskConfig,
+  selectShortlist,
+  type TickerRow,
+  timeframeMetrics,
+  type TradeRow,
+  type UniverseRow,
+} from "./engine.ts";
+
+const UPBIT = "https://api.upbit.com";
+const DEFAULT_DEEP_SCAN_LIMIT = 30;
+const FINALIST_LIMIT = 8;
+const BOOK_SAMPLE_COUNT = 4;
+const BOOK_SAMPLE_INTERVAL_MS = 600;
+const CANDLE_BATCH_SIZE = 7;
+const CANDLE_BATCH_INTERVAL_MS = 1050;
+const RESPONSE_CACHE_MS = 20_000;
+const REQUEST_COOLDOWN_MS = 12_000;
+
+let activeScan = false;
+let lastScanStartedAt = 0;
+let cachedResult: { expires: number; key: string; value: unknown } | null =
+  null;
+let marketCache: { expires: number; markets: MarketRow[] } | null = null;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function finite(value: unknown, fallback: number): number {
+  if (value == null || value === "") return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function query(
+  path: string,
+  params: Record<string, string | number | boolean>,
+): string {
+  const url = new URL(path, UPBIT);
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, String(value));
+  }
+  return url.toString();
+}
+
+async function fetchJson(
+  url: string,
+  timeoutMs = 10_000,
+  attempts = 3,
+): Promise<any> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+      });
+      const text = await response.text();
+      let data: any = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = text;
+      }
+      if (response.ok) return data;
+      const message = data?.error?.message || data?.message ||
+        `${response.status} ${response.statusText}`;
+      if (response.status === 429 && attempt < attempts - 1) {
+        await sleep(1100 + attempt * 500);
+        continue;
+      }
+      throw new Error(message);
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts - 1) await sleep(350 * (attempt + 1));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+async function optional<T>(promise: Promise<T>): Promise<T | null> {
+  try {
+    return await promise;
+  } catch {
+    return null;
+  }
+}
+
+function allowedOrigins(): string[] {
+  return (Deno.env.get("ALLOWED_ORIGINS") || "")
+    .split(",")
+    .map((value) => value.trim().replace(/\/$/, ""))
+    .filter(Boolean);
+}
+
+function requestOrigin(request: Request): string {
+  return (request.headers.get("origin") || "").trim().replace(/\/$/, "");
+}
+
+function originAllowed(request: Request): boolean {
+  const origin = requestOrigin(request);
+  return origin.length > 0 && allowedOrigins().includes(origin);
+}
+
+function corsHeaders(request: Request): HeadersInit {
+  return {
+    "Access-Control-Allow-Origin": originAllowed(request)
+      ? requestOrigin(request)
+      : "null",
+    "Access-Control-Allow-Headers":
+      "apikey, authorization, content-type, x-client-info, x-scan-token",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Max-Age": "86400",
+    "Cache-Control": "no-store",
+    "Content-Type": "application/json; charset=utf-8",
+    Vary: "Origin",
+  };
+}
+
+function json(request: Request, body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: corsHeaders(request),
+  });
+}
+
+function constantTimeEqual(left: string, right: string): boolean {
+  const encoder = new TextEncoder();
+  const a = encoder.encode(left);
+  const b = encoder.encode(right);
+  const length = Math.max(a.length, b.length);
+  let difference = a.length ^ b.length;
+  for (let i = 0; i < length; i++) difference |= (a[i] || 0) ^ (b[i] || 0);
+  return difference === 0;
+}
+
+function tokenAllowed(request: Request): boolean {
+  const expected = (Deno.env.get("SCAN_ACCESS_TOKEN") || "").trim();
+  const provided = (request.headers.get("x-scan-token") || "").trim();
+  return expected.length >= 24 && provided.length > 0 &&
+    constantTimeEqual(expected, provided);
+}
+
+function parseRisk(body: any): RiskConfig {
+  return {
+    capitalKrw: clamp(
+      finite(body.capital_krw, 500_000),
+      10_000,
+      10_000_000_000,
+    ),
+    riskPct: clamp(finite(body.risk_pct, 1), 0.1, 2),
+    feePerSidePct: clamp(finite(body.fee_per_side_pct, 0.05), 0, 0.5),
+    minNetRR: clamp(finite(body.min_net_rr, 1.5), 1, 5),
+    maxStopPct: clamp(finite(body.max_stop_pct, 5), 0.5, 12),
+    entrySlippageTicks: clamp(finite(body.entry_slippage_ticks, 0.5), 0, 5),
+    exitSlippageTicks: clamp(finite(body.exit_slippage_ticks, 1), 0, 10),
+  };
+}
+
+async function getMarkets(): Promise<MarketRow[]> {
+  if (marketCache && marketCache.expires > Date.now()) {
+    return marketCache.markets;
+  }
+  const rows = await fetchJson(query("/v1/market/all", { is_details: true }));
+  const markets = (Array.isArray(rows) ? rows : []).filter((row: MarketRow) =>
+    String(row.market).startsWith("KRW-")
+  );
+  marketCache = { expires: Date.now() + 15 * 60_000, markets };
+  return markets;
+}
+
+type CandleTask = {
+  market: string;
+  key: keyof PeriodDataset;
+  path: string;
+  count: number;
+};
+
+async function loadPeriodDatasets(
+  shortlist: UniverseRow[],
+  baseline15: Map<string, CandleRow[]>,
+): Promise<Map<string, PeriodDataset>> {
+  const datasets = new Map<string, PeriodDataset>();
+  shortlist.forEach((row) =>
+    datasets.set(row.market, {
+      m5: [],
+      m15: baseline15.get(row.market) || [],
+      h4: [],
+      day: [],
+    })
+  );
+  const tasks: CandleTask[] = [];
+  for (const row of shortlist) {
+    tasks.push(
+      {
+        market: row.market,
+        key: "m5",
+        path: "/v1/candles/minutes/5",
+        count: 72,
+      },
+      {
+        market: row.market,
+        key: "h4",
+        path: "/v1/candles/minutes/240",
+        count: 90,
+      },
+      { market: row.market, key: "day", path: "/v1/candles/days", count: 60 },
+    );
+  }
+
+  for (let offset = 0; offset < tasks.length; offset += CANDLE_BATCH_SIZE) {
+    const batch = tasks.slice(offset, offset + CANDLE_BATCH_SIZE);
+    const settled = await Promise.allSettled(
+      batch.map((task) =>
+        fetchJson(
+          query(task.path, { market: task.market, count: task.count }),
+          10_000,
+          2,
+        )
+      ),
+    );
+    settled.forEach((result, index) => {
+      const task = batch[index];
+      if (result.status === "fulfilled" && Array.isArray(result.value)) {
+        datasets.get(task.market)![task.key] = result.value as CandleRow[];
+      }
+    });
+    if (offset + CANDLE_BATCH_SIZE < tasks.length) {
+      await sleep(CANDLE_BATCH_INTERVAL_MS);
+    }
+  }
+  return datasets;
+}
+
+async function loadBaseline15(
+  universe: UniverseRow[],
+): Promise<Map<string, CandleRow[]>> {
+  const output = new Map<string, CandleRow[]>();
+  const tasks = universe.map((row) => ({
+    market: row.market,
+    url: query("/v1/candles/minutes/15", { market: row.market, count: 96 }),
+  }));
+  for (let offset = 0; offset < tasks.length; offset += CANDLE_BATCH_SIZE) {
+    const batch = tasks.slice(offset, offset + CANDLE_BATCH_SIZE);
+    const settled = await Promise.allSettled(
+      batch.map((task) => fetchJson(task.url, 10_000, 2)),
+    );
+    settled.forEach((result, index) => {
+      output.set(
+        batch[index].market,
+        result.status === "fulfilled" && Array.isArray(result.value)
+          ? result.value as CandleRow[]
+          : [],
+      );
+    });
+    if (offset + CANDLE_BATCH_SIZE < tasks.length) {
+      await sleep(CANDLE_BATCH_INTERVAL_MS);
+    }
+  }
+  return output;
+}
+
+function prioritizeWithBaseline(
+  eligible: UniverseRow[],
+  baseline15: Map<string, CandleRow[]>,
+): UniverseRow[] {
+  return eligible.map((row) => {
+    const metric = timeframeMetrics(baseline15.get(row.market) || []);
+    const dataScore = metric.bars >= 60
+      ? clamp(
+        50 + metric.trend_signal * 27 + metric.momentum_signal * 15 +
+          clamp((metric.volume_ratio - 1) * 8, -8, 8),
+        0,
+        100,
+      )
+      : 0;
+    return {
+      ...row,
+      initial_score: clamp(row.initial_score * 0.55 + dataScore * 0.45, 0, 100),
+    };
+  });
+}
+
+type MicroBundle = {
+  snapshots: Map<string, OrderbookSnapshot[]>;
+  trades: Map<string, TradeRow[]>;
+  ticks: Map<string, number>;
+};
+
+function fallbackTick(snapshots: OrderbookSnapshot[], price: number): number {
+  const gaps: number[] = [];
+  for (const snapshot of snapshots) {
+    const units = snapshot.orderbook_units || [];
+    for (let i = 1; i < units.length; i++) {
+      const bidGap = Math.abs(
+        Number(units[i - 1].bid_price) - Number(units[i].bid_price),
+      );
+      const askGap = Math.abs(
+        Number(units[i].ask_price) - Number(units[i - 1].ask_price),
+      );
+      if (bidGap > 0) gaps.push(bidGap);
+      if (askGap > 0) gaps.push(askGap);
+    }
+  }
+  return gaps.length
+    ? Math.min(...gaps)
+    : Math.max(price * 0.00001, Number.EPSILON);
+}
+
+async function loadMicrostructure(
+  finalists: PeriodAnalysis[],
+): Promise<MicroBundle> {
+  const markets = finalists.map((item) => item.universe.market);
+  const marketList = markets.join(",");
+  const snapshots = new Map(
+    markets.map((market) => [market, [] as OrderbookSnapshot[]]),
+  );
+  const trades = new Map<string, TradeRow[]>();
+  const ticks = new Map<string, number>();
+
+  const tradePromise = Promise.all(
+    markets.map(async (market) => {
+      const rows = await optional(
+        fetchJson(query("/v1/trades/ticks", { market, count: 500 }), 10_000, 2),
+      );
+      trades.set(market, Array.isArray(rows) ? rows : []);
+    }),
+  );
+  const instrumentPromise = optional(
+    fetchJson(
+      query("/v1/orderbook/instruments", { markets: marketList }),
+      10_000,
+      2,
+    ),
+  );
+
+  for (let sample = 0; sample < BOOK_SAMPLE_COUNT; sample++) {
+    const rows = await optional(
+      fetchJson(
+        query("/v1/orderbook", { markets: marketList, count: 15 }),
+        10_000,
+        2,
+      ),
+    );
+    if (Array.isArray(rows)) {
+      for (const row of rows) {
+        const market = String(row.market || "");
+        if (snapshots.has(market)) {
+          snapshots.get(market)!.push(row as OrderbookSnapshot);
+        }
+      }
+    }
+    if (sample < BOOK_SAMPLE_COUNT - 1) await sleep(BOOK_SAMPLE_INTERVAL_MS);
+  }
+
+  const instruments = await instrumentPromise;
+  if (Array.isArray(instruments)) {
+    for (const row of instruments) {
+      const tick = Number(row.tick_size);
+      if (String(row.market) && Number.isFinite(tick) && tick > 0) {
+        ticks.set(String(row.market), tick);
+      }
+    }
+  }
+  await tradePromise;
+
+  for (const finalist of finalists) {
+    const market = finalist.universe.market;
+    if (!ticks.has(market)) {
+      ticks.set(
+        market,
+        fallbackTick(
+          snapshots.get(market) || [],
+          finalist.universe.current_price,
+        ),
+      );
+    }
+  }
+  return { snapshots, trades, ticks };
+}
+
+function summarizeExclusions(
+  universe: UniverseRow[],
+): Array<{ reason: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const row of universe) {
+    if (!row.excluded_reason) continue;
+    counts.set(row.excluded_reason, (counts.get(row.excluded_reason) || 0) + 1);
+  }
+  return [...counts.entries()].map(([reason, count]) => ({ reason, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+function periodRanking(item: PeriodAnalysis, rank: number) {
+  return {
+    rank,
+    market: item.universe.market,
+    korean_name: item.universe.korean_name,
+    current_price: item.universe.current_price,
+    change_24h_pct: item.universe.change_24h_pct,
+    turnover_24h_krw: item.universe.turnover_24h_krw,
+    period_score: Number(item.period_score.toFixed(2)),
+    preliminary_status: item.preliminary_status,
+    trend: {
+      m5: Number(item.timeframes.m5.trend_signal.toFixed(3)),
+      m15: Number(item.timeframes.m15.trend_signal.toFixed(3)),
+      h4: Number(item.timeframes.h4.trend_signal.toFixed(3)),
+      day: Number(item.timeframes.day.trend_signal.toFixed(3)),
+    },
+  };
+}
+
+async function runScan(risk: RiskConfig) {
+  const started = Date.now();
+  const [markets, tickerRows] = await Promise.all([
+    getMarkets(),
+    fetchJson(query("/v1/ticker/all", { quote_currencies: "KRW" })),
+  ]);
+  const universe = buildUniverse(
+    markets,
+    Array.isArray(tickerRows) ? tickerRows as TickerRow[] : [],
+    Date.now(),
+  );
+  const deepLimit = Math.round(
+    clamp(
+      finite(Deno.env.get("DEEP_SCAN_LIMIT"), DEFAULT_DEEP_SCAN_LIMIT),
+      20,
+      40,
+    ),
+  );
+  const eligible = universe.filter((item) => item.eligible);
+  const baseline15 = await loadBaseline15(eligible);
+  const prioritized = prioritizeWithBaseline(eligible, baseline15);
+  const shortlist = selectShortlist(prioritized, deepLimit);
+  const datasets = await loadPeriodDatasets(shortlist, baseline15);
+  const periods = shortlist
+    .map((row) =>
+      analyzePeriod(
+        row,
+        datasets.get(row.market) || { m5: [], m15: [], h4: [], day: [] },
+      )
+    )
+    .sort((a, b) => b.period_score - a.period_score);
+
+  const candidatePool = [
+    ...periods.filter((item) => item.preliminary_status === "CANDIDATE"),
+    ...periods.filter((item) => item.preliminary_status !== "CANDIDATE"),
+  ];
+  const finalists = [
+    ...new Map(candidatePool.map((item) => [item.universe.market, item]))
+      .values(),
+  ]
+    .slice(0, FINALIST_LIMIT);
+  const microBundle = await loadMicrostructure(finalists);
+  const generatedAt = Date.now();
+  const finalCandidates: FinalCandidate[] = finalists
+    .map((period) => {
+      const market = period.universe.market;
+      const micro = computeMicrostructure(
+        microBundle.snapshots.get(market) || [],
+        microBundle.trades.get(market) || [],
+        generatedAt,
+      );
+      return finalizeCandidate(
+        period,
+        micro,
+        microBundle.ticks.get(market)!,
+        risk,
+      );
+    })
+    .sort((a, b) => {
+      if (a.decision === "BUY" && b.decision !== "BUY") return -1;
+      if (a.decision !== "BUY" && b.decision === "BUY") return 1;
+      return b.score - a.score;
+    });
+  finalCandidates.forEach((candidate, index) => candidate.rank = index + 1);
+  const recommendations = finalCandidates.filter((item) =>
+    item.decision === "BUY"
+  ).slice(0, 3);
+  const watchlist = finalCandidates.filter((item) => item.decision !== "BUY")
+    .slice(0, 5);
+  const status = recommendations.length ? "BUY_CANDIDATES" : "NO_BUY";
+
+  return {
+    scan_id: crypto.randomUUID(),
+    status,
+    headline: recommendations.length
+      ? `현재 매수 강제조건을 통과한 후보 ${recommendations.length}개가 탐지됐습니다.`
+      : "현재 모든 강제조건을 통과한 매수 후보가 없습니다.",
+    primary: recommendations[0] || null,
+    recommendations,
+    watchlist,
+    finalists: finalCandidates,
+    ranking: periods.slice(0, 20).map((item, index) =>
+      periodRanking(item, index + 1)
+    ),
+    coverage: {
+      listed_krw_markets: universe.length,
+      eligible_after_safety_filter: eligible.length,
+      excluded_at_universe_stage:
+        universe.filter((item) => !item.eligible).length,
+      period_screened_markets: eligible.length,
+      period_screened_complete:
+        [...baseline15.values()].filter((rows) => rows.length >= 60).length,
+      deep_period_analyzed: periods.length,
+      microstructure_finalists: finalCandidates.length,
+      excluded_summary: summarizeExclusions(universe),
+      periods: {
+        "5m": "최근 6시간(72봉)",
+        "15m": "최근 24시간(96봉)",
+        "4h": "최근 15일(90봉)",
+        "1d": "최근 60일(60봉)",
+      },
+    },
+    assumptions: {
+      quote_market: "KRW",
+      fee_per_side_pct: risk.feePerSidePct,
+      capital_krw: risk.capitalKrw,
+      risk_per_trade_pct: risk.riskPct,
+      min_net_rr: risk.minNetRR,
+      max_net_stop_pct: risk.maxStopPct,
+      automatic_order: false,
+      model_note:
+        "목표가·손절가·보유기간은 현재까지의 공개 시세 패턴에 근거한 조건부 추정이며 미래 가격을 보장하지 않습니다.",
+    },
+    meta: {
+      engine_version: ENGINE_VERSION,
+      generated_at: new Date(generatedAt).toISOString(),
+      elapsed_seconds: Number(((Date.now() - started) / 1000).toFixed(2)),
+      data_source: "UPBIT_PUBLIC_QUOTATION_API",
+      auth_mode: "PRIVATE_FRAGMENT_TOKEN",
+      auto_order: false,
+    },
+  };
+}
+
+Deno.serve(async (request: Request) => {
+  if (request.method === "OPTIONS") {
+    if (!originAllowed(request)) {
+      return new Response("origin not allowed", {
+        status: 403,
+        headers: corsHeaders(request),
+      });
+    }
+    return new Response("ok", { headers: corsHeaders(request) });
+  }
+  if (!originAllowed(request)) {
+    return json(request, { error: "허용되지 않은 접속 주소입니다." }, 403);
+  }
+  if (request.method !== "POST") {
+    return json(request, { error: "POST 요청만 지원합니다." }, 405);
+  }
+  if (!(Deno.env.get("SCAN_ACCESS_TOKEN") || "").trim()) {
+    return json(request, {
+      error: "서버의 SCAN_ACCESS_TOKEN이 설정되지 않았습니다.",
+    }, 500);
+  }
+  if (!tokenAllowed(request)) {
+    return json(request, { error: "개인 접속 URL이 올바르지 않습니다." }, 401);
+  }
+
+  const body = await request.json().catch(() => ({}));
+  if (String(body.action || "scan") !== "scan") {
+    return json(request, { error: "지원하지 않는 action입니다." }, 400);
+  }
+  const risk = parseRisk(body);
+  const cacheKey = JSON.stringify(risk);
+  const now = Date.now();
+  if (
+    cachedResult && cachedResult.expires > now && cachedResult.key === cacheKey
+  ) {
+    return json(request, { ...cachedResult.value as object, cached: true });
+  }
+  if (activeScan) {
+    return json(request, {
+      error: "이미 전체 시장 스캔이 진행 중입니다. 잠시 후 다시 시도하세요.",
+    }, 409);
+  }
+  if (now - lastScanStartedAt < REQUEST_COOLDOWN_MS) {
+    const retry = Math.ceil(
+      (REQUEST_COOLDOWN_MS - (now - lastScanStartedAt)) / 1000,
+    );
+    return json(request, {
+      error: `연속 호출 제한입니다. ${retry}초 후 다시 시도하세요.`,
+    }, 429);
+  }
+
+  activeScan = true;
+  lastScanStartedAt = now;
+  try {
+    const result = await runScan(risk);
+    cachedResult = {
+      expires: Date.now() + RESPONSE_CACHE_MS,
+      key: cacheKey,
+      value: result,
+    };
+    return json(request, result);
+  } catch (error) {
+    console.error("market scan failed", error);
+    return json(request, {
+      error: error instanceof Error ? error.message : String(error),
+    }, 500);
+  } finally {
+    activeScan = false;
+  }
+});
