@@ -180,6 +180,7 @@
   function candidateCard(candidate) {
     const actionable = candidate.decision === "BUY" && candidate.trade_plan?.actionable;
     const plan = candidate.trade_plan || {};
+    const watch = candidate.watch_entry_plan || {};
     const tone = candidate.decision.toLowerCase();
     const planRows = actionable
       ? `<div class="candidate-plan">
@@ -188,7 +189,14 @@
           <span><small>손절가격</small><b class="negative-text">${escapeHtml(price(plan.stop_price))}</b></span>
           <span><small>예상 보유</small><b>${escapeHtml(candidate.horizon.expected_window)}</b></span>
         </div>`
-      : `<div class="candidate-plan muted-plan"><span><small>진입·목표·손절</small><b>미제시 · 강제조건 미통과</b></span><span><small>관찰 분류</small><b>${escapeHtml(candidate.horizon.label)}</b></span></div>`;
+      : watch.available
+      ? `<div class="candidate-plan watch-plan">
+          <span><small>조건부 대기 매수가</small><b>${escapeHtml(price(watch.zone_low))} ~ ${escapeHtml(price(watch.zone_high))}</b></span>
+          <span><small>최대 허용 매수가</small><b>${escapeHtml(price(watch.max_price))}</b></span>
+          <span><small>무효화 가격</small><b class="negative-text">${escapeHtml(price(watch.invalidation_price))}</b></span>
+          <span><small>상태</small><b>${escapeHtml(watch.label)}</b></span>
+        </div><p class="watch-note">가격 도달 시 자동매수 금지 · 15분봉 마감 후 재스캔</p>`
+      : `<div class="candidate-plan muted-plan"><span><small>대기 매수가</small><b>미제시 · 안전조건 미충족</b></span><span><small>관찰 분류</small><b>${escapeHtml(candidate.horizon.label)}</b></span></div>`;
     const failed = (candidate.gates || []).filter(gate => !gate.passed).slice(0, 3);
     return `<article class="candidate-card panel ${tone}">
       <div class="candidate-head">
@@ -263,19 +271,41 @@
   function buildCandidateReport(candidate, result) {
     const actionable = candidate.decision === "BUY" && candidate.trade_plan?.actionable;
     const plan = candidate.trade_plan || {};
+    const watch = candidate.watch_entry_plan || {};
+    const watchAvailable = !actionable && Boolean(watch.available);
+    const watchLines = watchAvailable
+      ? [
+          `- 조건부 대기 매수구간: ${price(watch.zone_low)} ~ ${price(watch.zone_high)}`,
+          `- 최대 허용 매수가: ${price(watch.max_price)} / 현재가 대비 ${percent(-Number(watch.discount_from_current_pct || 0), 2, true)}`,
+          `- 대기 계획 무효화: ${price(watch.invalidation_price)} 이탈`,
+          watch.reference_target
+            ? `- 현재 데이터 기준 참고 목표가: ${price(watch.reference_target)}${watch.estimated_net_rr == null ? " / 손익비 재산정 필요" : ` / 예상 순손익비 ${Number(watch.estimated_net_rr).toFixed(2)}`}`
+            : "- 현재 데이터 기준 참고 목표가: 미제시(가격 도달 후 재산정)",
+          `- 예약매수 상태: ${watch.label}`,
+          `- 주의: ${watch.note}`,
+        ]
+      : [];
     const lines = [
       `## ${candidate.korean_name} (${candidate.market})`,
       `- 판정: ${candidate.decision_label}`,
       `- 현재가: ${price(candidate.current_price)} / 24시간: ${percent(candidate.change_24h_pct, 2, true)}`,
       `- 종합점수: ${Number(candidate.score).toFixed(2)} / 신뢰도: ${percent(candidate.confidence, 1)}`,
       `- 24시간 거래대금: ${turnover(candidate.turnover_24h_krw)}원`,
-      actionable ? `- 매수 검토 구간: ${price(plan.entry_low)} ~ ${price(plan.entry_high)}` : "- 매수 검토 구간: 미제시(강제조건 미통과)",
+      actionable ? `- 매수 검토 구간: ${price(plan.entry_low)} ~ ${price(plan.entry_high)}` : "- 현재가 매수 검토 구간: 미제시(강제조건 미통과)",
+      ...watchLines,
       actionable ? `- 단기 목표가: ${price(plan.short_target)} (비용 반영 ${percent(plan.short_net_return_pct, 2, true)})` : "- 단기 목표가: 미제시",
       actionable ? `- 중기 목표가: ${price(plan.medium_target)} (비용 반영 ${percent(plan.medium_net_return_pct, 2, true)})` : "- 중기 목표가: 미제시",
       actionable ? `- 손절가격: ${price(plan.stop_price)} (비용 반영 예상손실 ${percent(plan.net_stop_pct)})` : "- 손절가격: 미제시",
       actionable ? `- 추천 투입금: ${krw(plan.recommended_investment_krw)} / 위험예산 ${krw(plan.risk_budget_krw)} / R:R ${Number(plan.net_rr).toFixed(2)}` : "- 투입금·손익비: 미제시",
       `- 추세 유지 추정: ${candidate.horizon.label}, ${candidate.horizon.expected_window}, 지속성 ${Number(candidate.horizon.persistence_score).toFixed(1)}점`,
       `- 추정 설명: ${candidate.horizon.estimate}`,
+      ...(watchAvailable
+        ? [
+            "",
+            "### 조건부 대기 매수 전 확인",
+            ...(watch.conditions || []).map(item => `- ${item}`),
+          ]
+        : []),
       "",
       "### 시간축 지표",
       timeframeLine("5분", candidate.timeframes?.m5),
@@ -337,8 +367,9 @@
       "1. 현재 매수 후보가 실제로 단기·중기 추세 정렬과 호가·체결 조건을 동시에 충족하는지 반론 중심으로 검토",
       "2. 단기·중기 목표가와 손절가격의 구조적 근거 및 수수료·슬리피지 반영 손익비 재계산",
       "3. 추세 유지기간 분류가 과도하지 않은지, 더 보수적인 보유기간과 무효화 조건 제시",
-      "4. 시장경보·저유동·추격매수·데이터 부족·뉴스 미반영 위험 점검",
-      "5. 추천 근거가 약하면 억지 대안을 만들지 말고 '매수 보류'로 결론",
+      "4. 조건부 대기 매수구간이 지지선 위에 있고 가격 도달 후에도 목표가·순손익비가 유효한지 재검증",
+      "5. 시장경보·저유동·추격매수·데이터 부족·뉴스 미반영 위험 점검",
+      "6. 추천 근거가 약하면 억지 대안을 만들지 말고 '매수 보류'로 결론",
       "",
       "> 주의: 본 리포트는 공개 시세 기반 조건부 분석이며 미래 가격이나 수익을 보장하지 않습니다."
     ];

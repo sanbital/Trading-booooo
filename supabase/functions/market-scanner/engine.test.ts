@@ -321,6 +321,38 @@ Deno.test("final candidate never marks a failed-gate setup actionable", () => {
   assert(final.failed_gates.length > 0);
 });
 
+Deno.test("a strong WAIT setup receives a conditional watch-entry zone", () => {
+  const data = dataset(0.0012);
+  const price = timeframeMetrics(data.m5).close;
+  const period = analyzePeriod(universeRow(price), data);
+  const atr15 = period.timeframes.m15.atr14!;
+  period.timeframes.m15.rsi14 = 66;
+  period.timeframes.m15.support = price - atr15 * 0.35;
+  period.timeframes.m15.resistance = price + atr15 * 2.4;
+  period.timeframes.h4.resistance = null;
+  const micro = computeMicrostructure(
+    bookSnapshots(false),
+    trades(false),
+    1_800_000_000_000,
+  );
+  micro.best_bid = price - 0.1;
+  micro.best_ask = price + 0.1;
+  micro.spread_bps = 2;
+  const final = finalizeCandidate(period, micro, 0.1, risk);
+  assert(final.decision === "WAIT", final.decision);
+  assert(final.failed_gates.includes("micro_pressure"));
+  assert(final.watch_entry_plan.available, final.watch_entry_plan.note);
+  assert(final.watch_entry_plan.zone_low! < price);
+  assert(
+    final.watch_entry_plan.zone_low! >
+      final.watch_entry_plan.invalidation_price!,
+  );
+  assert(
+    final.watch_entry_plan.max_price === final.watch_entry_plan.zone_high,
+  );
+  assert(final.watch_entry_plan.conditions.length >= 4);
+});
+
 Deno.test("market alert is a hard gate even with bullish candles", () => {
   const data = dataset(0.0012);
   const price = timeframeMetrics(data.m5).close;
@@ -337,6 +369,7 @@ Deno.test("market alert is a hard gate even with bullish candles", () => {
   const final = finalizeCandidate(period, micro, 0.1, risk);
   assert(final.failed_gates.includes("market_event"));
   assert(final.decision !== "BUY");
+  assert(!final.watch_entry_plan.available);
 });
 
 Deno.test("a fully aligned, liquid, fee-aware setup can become BUY", () => {

@@ -1,4 +1,4 @@
-# Trading-booooo v2.0.1 — GitHub 웹 전용 배포 가이드
+# Trading-booooo v2.0.2 — GitHub 웹 전용 배포 가이드
 
 이 가이드는 **VS Code, PowerShell, Git, Supabase CLI를 전혀 사용하지 않습니다.** Windows 파일 탐색기, GitHub 웹사이트, Supabase 대시보드만 사용합니다.
 
@@ -47,9 +47,49 @@ Trading-booooo/
 
 Supabase 대시보드에서 프로젝트 `Trading-booootrading boooo`를 엽니다.
 
+### 2-1. Project Ref
 
+브라우저 주소가 아래와 같다면:
+
+```text
+https://supabase.com/dashboard/project/abcdefghijklmnop
+```
+
+마지막의 `abcdefghijklmnop`가 `Project Ref`입니다. 따로 복사해 둡니다.
+
+### 2-2. Project URL과 Publishable Key
+
+1. Supabase 프로젝트 왼쪽 아래 `Project Settings`를 엽니다.
+2. `API` 또는 `API Keys`를 엽니다.
+3. 다음 두 값을 복사해 둡니다.
+   - Project URL: `https://PROJECT_REF.supabase.co`
+   - Publishable Key: `sb_publishable_...` 형식 또는 기존 `anon` 키
+
+`service_role`, Secret Key, 데이터베이스 비밀번호는 프론트엔드에 사용하지 않습니다.
+
+### 2-3. Supabase Access Token
+
+1. Supabase 화면 오른쪽 위 사용자 메뉴를 누릅니다.
+2. `Account Settings` → `Access Tokens`로 이동합니다.
+3. 새 토큰 이름을 `Trading-booooo GitHub`로 입력하고 생성합니다.
+4. 생성 직후 보이는 토큰을 복사해 둡니다.
+
+이 토큰은 GitHub Actions가 Supabase에 함수를 배포할 때만 사용합니다. 권한이 큰 관리 토큰이므로 파일, `config.js`, README, 메모 공개글에 절대 넣지 않습니다.
+
+## 3. 개인 스캔 토큰 정하기
+
+로그인 대신 사용할 본인만의 문자열을 하나 정합니다.
+
+- 최소 32자
+- 영문 대·소문자, 숫자, `_`, `-`만 사용 권장
+- 다른 사이트에서 쓰는 비밀번호 재사용 금지
+- 비밀번호 관리자의 임의 문자열 생성 기능 사용 권장
 
 예시 형식만 참고하고, 아래 값을 그대로 사용하지 마세요.
+
+```text
+Boo_Replace_With_Your_Own_Random_32Plus_Chars
+```
 
 실제 값은 안전한 곳에 보관합니다. 아래에서는 `MY_SCAN_TOKEN`이라고 부릅니다.
 
@@ -79,7 +119,7 @@ GitHub의 `Trading-booooo` 저장소에서 다음 순서로 이동합니다.
 3. Windows에서 압축을 푼 `Trading-booooo` 폴더를 엽니다.
 4. **바깥쪽 `Trading-booooo` 폴더가 아니라 그 안의 모든 항목**을 업로드 영역으로 끌어놓습니다.
 5. 목록에 `.github`, `docs`, `supabase`, `README.md`가 보이는지 확인합니다.
-6. Commit message에 `Deploy Trading-booooo v2.0.1`을 입력합니다.
+6. Commit message에 `Deploy Trading-booooo v2.0.2`를 입력합니다.
 7. `Commit changes`를 누릅니다.
 
 정상 저장소 루트는 다음과 같아야 합니다.

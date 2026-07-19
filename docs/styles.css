@@ -288,6 +288,9 @@ button { color: inherit; }
 .candidate-plan small { color: var(--faint); font-size: 9px; }
 .candidate-plan b { margin-top: 3px; overflow: hidden; font-family: var(--mono); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .muted-plan { grid-template-columns: 1.4fr 0.6fr; opacity: 0.75; }
+.watch-plan > span { border-color: rgba(255, 190, 74, 0.18); background: rgba(255, 190, 74, 0.025); }
+.watch-plan > span:first-child b, .watch-plan > span:nth-child(2) b { color: var(--amber); }
+.watch-note { margin: 8px 2px 0; color: var(--amber); font-size: 9px; line-height: 1.5; }
 .failed-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 12px; }
 .failed-list li { padding: 4px 7px; border-radius: 6px; background: var(--red-soft); color: #ff9dae; font-size: 9px; }
 .failed-list .passed { background: var(--green-soft); color: var(--green); }

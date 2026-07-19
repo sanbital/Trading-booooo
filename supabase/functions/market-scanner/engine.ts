@@ -1,7 +1,7 @@
-// Trading-booooo Market Scanner v2.0.1
+// Trading-booooo Market Scanner v2.0.2
 // Pure analysis engine. Public market data only; no order or account operations.
 
-export const ENGINE_VERSION = "2.0.1";
+export const ENGINE_VERSION = "2.0.2";
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
 
@@ -164,6 +164,21 @@ export type TradePlan = {
   actionable: boolean;
 };
 
+export type WatchEntryPlan = {
+  available: boolean;
+  status: "CONDITIONAL" | "RECHECK_REQUIRED" | "UNAVAILABLE";
+  zone_low: number | null;
+  zone_high: number | null;
+  max_price: number | null;
+  invalidation_price: number | null;
+  reference_target: number | null;
+  estimated_net_rr: number | null;
+  discount_from_current_pct: number | null;
+  label: string;
+  conditions: string[];
+  note: string;
+};
+
 export type TrendHorizon = {
   code: "INTRADAY" | "SHORT" | "MEDIUM" | "LONG";
   label: string;
@@ -193,6 +208,7 @@ export type FinalCandidate = {
   decision: "BUY" | "WAIT" | "AVOID";
   decision_label: string;
   trade_plan: TradePlan;
+  watch_entry_plan: WatchEntryPlan;
   horizon: TrendHorizon;
   gates: Gate[];
   failed_gates: string[];
@@ -917,6 +933,157 @@ export function buildTradePlan(
   };
 }
 
+function unavailableWatchEntry(note: string): WatchEntryPlan {
+  return {
+    available: false,
+    status: "UNAVAILABLE",
+    zone_low: null,
+    zone_high: null,
+    max_price: null,
+    invalidation_price: null,
+    reference_target: null,
+    estimated_net_rr: null,
+    discount_from_current_pct: null,
+    label: "대기 매수가 미제시",
+    conditions: [],
+    note,
+  };
+}
+
+export function buildWatchEntryPlan(
+  period: PeriodAnalysis,
+  micro: Microstructure,
+  tradePlan: TradePlan,
+  tickSize: number,
+  risk: RiskConfig,
+  score: number,
+  checks: Gate[],
+  decision: FinalCandidate["decision"],
+): WatchEntryPlan {
+  if (decision !== "WAIT") {
+    return unavailableWatchEntry(
+      decision === "BUY"
+        ? "현재 매수 후보는 실행용 매수 구간을 사용합니다."
+        : "매수 제외 종목에는 대기 매수가를 제시하지 않습니다.",
+    );
+  }
+
+  // 가격이 달라지면 개선될 수 있는 조건만 대기 계획에서 허용한다.
+  // 시장경보·데이터·유동성·추세·과열·표본·스프레드·손절폭 실패는
+  // 단순한 가격 할인으로 해결할 수 없으므로 대기 매수가를 숨긴다.
+  const repricableFailures = new Set([
+    "micro_pressure",
+    "target_structure",
+    "reward_risk",
+    "score",
+  ]);
+  const blockingFailures = checks.filter((item) =>
+    !item.passed && !repricableFailures.has(item.key)
+  );
+  if (blockingFailures.length) {
+    return unavailableWatchEntry(
+      `가격만 낮아져도 해결되지 않는 조건이 남아 있습니다: ${
+        blockingFailures.map((item) => item.label).join(", ")
+      }`,
+    );
+  }
+  if (score < 55) {
+    return unavailableWatchEntry(
+      "종합점수가 55점 미만이라 가격 조정만으로는 관찰 매수 후보가 되기 어렵습니다.",
+    );
+  }
+
+  const current = period.universe.current_price;
+  const tick = tickSize > 0
+    ? tickSize
+    : Math.max(current * 0.0001, Number.EPSILON);
+  const atr15 = period.timeframes.m15.atr14 || current * 0.012;
+  const minimumAboveInvalidation = tradePlan.stop_price +
+    Math.max(tick * 2, atr15 * 0.18);
+  const tf = period.timeframes;
+  const anchors = [
+    tf.m15.ema21,
+    tf.m15.ema50,
+    tf.m15.support,
+    tf.h4.ema9,
+    tf.h4.support,
+  ].filter((value): value is number =>
+    value != null && value >= minimumAboveInvalidation && value < current
+  );
+  if (!anchors.length) {
+    return unavailableWatchEntry(
+      "현재 무효화선 위에서 사용할 수 있는 15분·4시간 지지 가격대가 없습니다.",
+    );
+  }
+
+  const center = Math.max(...anchors);
+  let zoneLow = roundToTick(
+    Math.max(minimumAboveInvalidation, center - atr15 * 0.3),
+    tick,
+    "up",
+  );
+  let zoneHigh = roundToTick(
+    Math.min(current - tick, center + atr15 * 0.2),
+    tick,
+    "down",
+  );
+  if (zoneHigh < zoneLow) {
+    const fallback = roundToTick(center, tick, "nearest");
+    if (fallback < minimumAboveInvalidation || fallback >= current) {
+      return unavailableWatchEntry(
+        "지지선과 무효화선 사이의 가격 간격이 너무 좁아 안전한 대기 구간을 만들 수 없습니다.",
+      );
+    }
+    zoneLow = fallback;
+    zoneHigh = fallback;
+  }
+
+  const hypotheticalEntry = zoneHigh + tick * risk.entrySlippageTicks;
+  const targetExecution = tradePlan.short_target_execution_estimate;
+  const stopExecution = tradePlan.stop_execution_estimate;
+  const gain = targetExecution > hypotheticalEntry
+    ? netGainPct(hypotheticalEntry, targetExecution, risk.feePerSidePct)
+    : 0;
+  const loss = stopExecution < hypotheticalEntry
+    ? netLossPct(hypotheticalEntry, stopExecution, risk.feePerSidePct)
+    : 0;
+  const estimatedRR = gain > 0 && loss > 0 ? gain / loss : null;
+  const rrReady = estimatedRR != null && estimatedRR >= risk.minNetRR;
+  const referenceTarget = targetExecution > hypotheticalEntry
+    ? tradePlan.short_target
+    : null;
+  const ema21Text = tf.m15.ema21
+    ? `${roundToTick(tf.m15.ema21, tick, "nearest").toLocaleString("ko-KR")}원`
+    : "15분 EMA21";
+
+  return {
+    available: true,
+    status: rrReady ? "CONDITIONAL" : "RECHECK_REQUIRED",
+    zone_low: zoneLow,
+    zone_high: zoneHigh,
+    max_price: zoneHigh,
+    invalidation_price: tradePlan.stop_price,
+    reference_target: referenceTarget,
+    estimated_net_rr: estimatedRR,
+    discount_from_current_pct: Math.max(
+      0,
+      ((current - zoneHigh) / current) * 100,
+    ),
+    label: rrReady ? "조건 충족 시 매수 검토" : "가격 도달 후 재산정 필요",
+    conditions: [
+      `가격 도달 후 15분봉 종가가 ${ema21Text} 위로 회복·유지`,
+      "최근 체결 압력이 -0.45 초과로 개선",
+      "호가 불균형이 -0.50 초과를 유지",
+      `재스캔에서 목표가 구조와 비용 포함 손익비 ${risk.minNetRR} 이상 통과`,
+      `${
+        tradePlan.stop_price.toLocaleString("ko-KR")
+      }원 이탈 시 대기 계획 취소`,
+    ],
+    note:
+      "이 가격대는 자동 주문 지시가 아니라 재점검 구간입니다. 가격에 닿은 뒤 15분봉 마감과 최신 호가·체결을 다시 확인해야 합니다.",
+  };
+}
+
 export function estimateHorizon(
   period: PeriodAnalysis,
   stopPrice: number,
@@ -1057,7 +1224,7 @@ export function finalizeCandidate(
       "micro_pressure",
       "초단기 수급",
       micro.trade_pressure > -0.45 && micro.book_imbalance > -0.5,
-      "매도 체결과 매도호가가 동시에 과도하게 우세하면 제외합니다.",
+      "최근 매도 체결 또는 매도호가가 허용 기준을 넘으면 제외합니다.",
     ),
     gate(
       "stop",
@@ -1092,6 +1259,16 @@ export function finalizeCandidate(
     ? "AVOID"
     : "WAIT";
   plan.actionable = decision === "BUY";
+  const watchEntryPlan = buildWatchEntryPlan(
+    period,
+    micro,
+    plan,
+    tickSize,
+    risk,
+    score,
+    checks,
+    decision,
+  );
   const horizon = estimateHorizon(period, plan.stop_price);
   const positives = [...period.positives];
   const negatives = [...period.negatives];
@@ -1140,6 +1317,7 @@ export function finalizeCandidate(
       ? "관찰·눌림 대기"
       : "매수 제외",
     trade_plan: plan,
+    watch_entry_plan: watchEntryPlan,
     horizon,
     gates: checks,
     failed_gates: failed.map((item) => item.key),

@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v2.0.1 — Supabase Edge Function
+// Trading-booooo Market Scanner v2.0.2 — Supabase Edge Function
 // KRW universe scan -> multi-period analysis -> orderbook/trade validation.
 // Read-only public market data. No account lookup, order creation, cancellation, or API keys.
 
