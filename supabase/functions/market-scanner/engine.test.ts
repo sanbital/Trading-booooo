@@ -460,6 +460,20 @@ Deno.test("executed ask wall that flips to defended bid confirms breakout", () =
   close(Number(result.confirmed_support_price), 100.1);
 });
 
+Deno.test("token post-breakout sells do not receive full support-defense credit", () => {
+  const weakDefense = dynamicTrades("breakout").map((trade, index) =>
+    index >= 10 ? { ...trade, trade_volume: 0.01 } : trade
+  );
+  const result = computeDynamicOrderflow(
+    dynamicFrames("breakout"),
+    weakDefense,
+    0.1,
+  );
+  assert(result.sufficient);
+  assert(result.breakout_score < 0.65, String(result.breakout_score));
+  assert(result.status !== "BREAKOUT_CONFIRMED", result.status);
+});
+
 Deno.test("trade plan keeps stop below entry and targets above entry", () => {
   const data = dataset(0.0012);
   const price = timeframeMetrics(data.m5).close;
@@ -483,6 +497,29 @@ Deno.test("trade plan keeps stop below entry and targets above entry", () => {
   assert(plan.medium_target > plan.short_target);
   assert(plan.net_stop_pct > 0);
   assert(plan.recommended_investment_krw <= risk.capitalKrw);
+});
+
+Deno.test("explicit default tuning parameters preserve the default trade plan", () => {
+  const data = dataset(0.0012);
+  const price = timeframeMetrics(data.m5).close;
+  const period = analyzePeriod(universeRow(price), data);
+  const micro = computeMicrostructure(
+    bookSnapshots(true),
+    trades(true),
+    1_800_000_000_000,
+  );
+  micro.best_bid = price - 0.1;
+  micro.best_ask = price + 0.1;
+  const implicit = buildTradePlan(period, micro, 0.1, risk);
+  const explicit = buildTradePlan(period, micro, 0.1, {
+    ...risk,
+    shortTargetAtrMult: 2.2,
+    stopAtrMult: 1.15,
+    mediumTargetAtr4hMult: 2.4,
+    mediumTargetAtrDayMult: 1.3,
+    scoreThreshold: 72,
+  });
+  assert(JSON.stringify(implicit) === JSON.stringify(explicit));
 });
 
 Deno.test("aligned timeframes receive a medium or long horizon", () => {

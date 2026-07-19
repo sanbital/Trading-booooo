@@ -1,7 +1,7 @@
-// Trading-booooo Market Scanner v2.3.0
+// Trading-booooo Market Scanner v2.3.2
 // Pure analysis engine. Public market data only; no order or account operations.
 
-export const ENGINE_VERSION = "2.3.0";
+export const ENGINE_VERSION = "2.3.2";
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
 
@@ -189,6 +189,13 @@ export type RiskConfig = {
   maxStopPct: number;
   entrySlippageTicks: number;
   exitSlippageTicks: number;
+  // 연구용 튜닝 손잡이. 모두 선택값이며, 미지정 시 운영 기본값을 유지한다.
+  // 백테스트(backtest/)에서 데이터로 그리드 서치하기 위한 파라미터.
+  shortTargetAtrMult?: number; // 기본 2.2 (단기 목표 = 진입 + atr15 * mult)
+  stopAtrMult?: number; // 기본 1.15 (손절 상한 = 진입 - atr15 * mult)
+  mediumTargetAtr4hMult?: number; // 기본 2.4
+  mediumTargetAtrDayMult?: number; // 기본 1.3
+  scoreThreshold?: number; // 기본 72 (BUY 최종 점수컷)
 };
 
 export type TradePlan = {
@@ -1116,11 +1123,13 @@ export function computeDynamicOrderflow(
       Number.EPSILON,
     );
 
+    const worstVisibleBid = current.bids.size
+      ? Math.min(...current.bids.keys())
+      : Number.NaN;
     previous.units.slice(0, WALL_LEVELS).forEach((unit, rank) => {
       const bidIsWall = previousBidNotionals[rank] >= localBidBaseline * 2.8;
       if (bidIsWall && unit.bidSize > 0) {
         const currentSize = current.bids.get(unit.bidPrice) || 0;
-        const worstVisibleBid = Math.min(...current.bids.keys());
         const pushedOutside = currentSize === 0 &&
           Number.isFinite(worstVisibleBid) && worstVisibleBid > unit.bidPrice;
         if (!pushedOutside) {
@@ -1217,13 +1226,21 @@ export function computeDynamicOrderflow(
       tick,
     );
     const executionCoverage = safeDiv(activeBuy, wall.maxSize);
-    const score = clamp(
-      Math.min(1, executionCoverage) * 0.5 + supportRatio * 0.35 +
-        (postSell > 0 ? 0.15 : 0),
+    // v2.3.2: 돌파 확정은 (1) 매도벽 실체결 소진, (2) 저항→지지 전환 유지,
+    // (3) 전환 가격에서 후속 시장가 매도를 실제로 흡수한 세 단계가 모두 필요하다.
+    // 단순 가중합만 쓰면 앞의 두 항만으로 0.65를 넘을 수 있으므로 최소조건도 건다.
+    const absorbedSellRatio = clamp(safeDiv(postSell, wall.maxSize), 0, 1);
+    const defenseCoverage = clamp(absorbedSellRatio / 0.25, 0, 1);
+    const rawScore = clamp(
+      Math.min(1, executionCoverage) * 0.45 + supportRatio * 0.3 +
+        defenseCoverage * 0.25,
       0,
       1,
     );
-    if (supportRatio >= 0.3 && score > breakoutScore) {
+    const sequenceConfirmed = executionCoverage >= 0.7 &&
+      supportRatio >= 0.4 && absorbedSellRatio >= 0.08;
+    const score = sequenceConfirmed ? rawScore : Math.min(rawScore, 0.64);
+    if (sequenceConfirmed && score > breakoutScore) {
       breakoutScore = score;
       confirmedSupport = wall.price;
     }
@@ -1497,9 +1514,10 @@ export function buildTradePlan(
   const nearestSupport = supports.length
     ? Math.max(...supports)
     : entryExecution - atr15;
+  const stopAtrMult = risk.stopAtrMult ?? 1.15;
   const stopRaw = Math.min(
     nearestSupport - Math.max(atr15 * 0.18, tick * 2),
-    entryExecution - atr15 * 1.15,
+    entryExecution - atr15 * stopAtrMult,
   );
   const stopPrice = roundToTick(Math.max(tick, stopRaw), tick, "down");
   const stopExecution = Math.max(
@@ -1520,7 +1538,8 @@ export function buildTradePlan(
     : null;
   // 왕복 수수료와 출구 슬리피지를 반영해도 1.5 수준의 순손익비가
   // 구조적으로 가능하도록 기본 변동성 목표를 2.2 ATR로 둔다.
-  const atrShortTarget = entryExecution + atr15 * 2.2;
+  const shortTargetAtrMult = risk.shortTargetAtrMult ?? 2.2;
+  const atrShortTarget = entryExecution + atr15 * shortTargetAtrMult;
   const shortRaw = nearestShortResistance
     ? Math.min(nearestShortResistance - tick * 2, atrShortTarget)
     : atrShortTarget;
@@ -1540,7 +1559,10 @@ export function buildTradePlan(
     ? Math.min(...mediumResistances)
     : null;
   const volatilityMediumTarget = entryExecution +
-    Math.min(atr4h * 2.4, atrDay * 1.3);
+    Math.min(
+      atr4h * (risk.mediumTargetAtr4hMult ?? 2.4),
+      atrDay * (risk.mediumTargetAtrDayMult ?? 1.3),
+    );
   const minimumMediumTarget = shortTarget + Math.max(atr15 * 0.8, tick * 3);
   const mediumRaw = nearestMediumResistance
     ? Math.min(
@@ -1967,8 +1989,8 @@ export function finalizeCandidate(
     gate(
       "score",
       "종합점수",
-      score >= 72,
-      "최종 점수가 72점 이상이어야 합니다.",
+      score >= (risk.scoreThreshold ?? 72),
+      `최종 점수가 ${risk.scoreThreshold ?? 72}점 이상이어야 합니다.`,
     ),
   ];
   const failed = checks.filter((check) => !check.passed);

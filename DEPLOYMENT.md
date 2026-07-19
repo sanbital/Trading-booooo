@@ -1,4 +1,4 @@
-# Trading-booooo v2.3.0 — GitHub 웹 전용 배포 가이드
+# Trading-booooo v2.3.2 — GitHub 웹 전용 배포 가이드
 
 이 가이드는 **VS Code, PowerShell, Git, Supabase CLI를 전혀 사용하지 않습니다.** Windows 파일 탐색기, GitHub 웹사이트, Supabase 대시보드만 사용합니다.
 
@@ -119,7 +119,7 @@ GitHub의 `Trading-booooo` 저장소에서 다음 순서로 이동합니다.
 3. Windows에서 압축을 푼 `Trading-booooo` 폴더를 엽니다.
 4. **바깥쪽 `Trading-booooo` 폴더가 아니라 그 안의 모든 항목**을 업로드 영역으로 끌어놓습니다.
 5. 목록에 `.github`, `docs`, `supabase`, `README.md`가 보이는지 확인합니다.
-6. Commit message에 `Deploy Trading-booooo v2.3.0`를 입력합니다.
+6. Commit message에 `Deploy Trading-booooo v2.3.2`를 입력합니다.
 7. `Commit changes`를 누릅니다.
 
 정상 저장소 루트는 다음과 같아야 합니다.
@@ -220,6 +220,20 @@ https://GITHUB_USERNAME.github.io/Trading-booooo/#access=MY_SCAN_TOKEN
 새 버전 ZIP을 받으면 압축을 풀고, 같은 방식으로 저장소 루트에 새 파일들을 업로드해 덮어씁니다. `supabase/functions/market-scanner` 또는 자동배포 파일이 바뀌면 GitHub Actions가 함수를 다시 배포합니다. `docs`만 바뀌면 GitHub Pages만 자동 갱신됩니다.
 
 비밀값은 보통 다시 등록할 필요가 없습니다.
+
+## GitHub에서 백테스트 실행
+
+v2.3.2에는 배포와 별개인 `Backtest Market Scanner` Action이 추가됩니다.
+
+1. 저장소 `Actions`를 누릅니다.
+2. 왼쪽 `Backtest Market Scanner`를 선택합니다.
+3. `Run workflow`를 누릅니다.
+4. 거래소, 쉼표로 구분한 종목, 조회일수를 입력합니다.
+5. 먼저 `sweep=false`로 실행합니다.
+6. 완료 후 실행 요약 또는 Artifacts의 리포트를 확인합니다.
+
+백테스트는 공개 캔들 API만 사용하며 Supabase 배포 비밀값을 사용하지 않습니다.
+실시간 동적 호가·체결의 정확도는 이 과거 캔들 결과에 포함되지 않습니다.
 
 ## 문제 해결
 
