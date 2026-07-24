@@ -1,4 +1,4 @@
-// Trading-booooo v2.6.0 — backtest CLI.
+// Trading-booooo v3.0.0 — backtest CLI.
 // Default: aligned full-period report. --sweep: 60/20/20 train/validation/holdout.
 
 import {

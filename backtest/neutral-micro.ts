@@ -55,6 +55,7 @@ export function neutralMicro(price: number, timestamp = Date.now()): Microstruct
       phase_trade_counts: [14, 13, 13],
       phase_consistent: true,
       data_quality: 0.8,
+      score_status: "UNKNOWN",
       spoof_like_score: 0,
       ask_absorption_score: 0,
       breakout_score: 0,

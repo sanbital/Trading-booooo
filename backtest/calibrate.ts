@@ -1,6 +1,6 @@
-// Trading-booooo v2.6.0 — guarded walk-forward calibration.
-// Parameter selection uses TRAIN only. Promotion uses VALIDATION only. HOLDOUT
-// is reported after the decision and never participates in selection/promotion.
+// Trading-booooo v3.1.0 — guarded, rolling walk-forward self-calibration.
+// TRAIN selects the challenger. Multiple chronological VALIDATION folds decide
+// promotion. HOLDOUT is reported after the decision and never participates in it.
 
 import { ACTIVE_CALIBRATION_PROFILE } from "../supabase/functions/market-scanner/calibration-profile.ts";
 import { ENGINE_VERSION, type RiskConfig } from "../supabase/functions/market-scanner/engine.ts";
@@ -16,14 +16,16 @@ import {
   loadHistories,
   runWindow,
   splitWindow,
+  type WindowRun,
 } from "./run.ts";
+import type { EvaluationWindow } from "./simulate.ts";
 import { buildCalibrationProfile, profileToTypeScript } from "./calibration.ts";
 
 const CANDIDATES: Array<Partial<RiskConfig>> = [];
-for (const scoreThreshold of [68, 72, 76]) {
-  for (const shortTargetAtrMult of [1.8, 2.2, 2.8]) {
-    for (const stopAtrMult of [0.9, 1.15]) {
-      for (const minNetRR of [1.3, 1.5]) {
+for (const scoreThreshold of [68, 72, 76, 80]) {
+  for (const shortTargetAtrMult of [1.8, 2.2, 2.8, 3.4]) {
+    for (const stopAtrMult of [0.9, 1.15, 1.4]) {
+      for (const minNetRR of [1.3, 1.5, 1.8]) {
         CANDIDATES.push({
           scoreThreshold,
           shortTargetAtrMult,
@@ -41,18 +43,24 @@ function finitePf(value: number): number {
   return Number.isFinite(value) ? value : 5;
 }
 
-function objective(run: ReturnType<typeof runWindow>): number {
+function objective(run: WindowRun): number {
   const metrics = computeMetrics(run.buy);
   const accuracy = computeAccuracyMetrics(run.signals);
   const sample = Math.min(1, metrics.trades / 30);
+  // Profit-first objective: after-cost expectancy and realised equity growth
+  // dominate. Hit-rate is only a supporting diagnostic so a high-accuracy but
+  // negative-payoff strategy cannot win calibration.
   return sample * (
-    metrics.expectancyPct * 3.5 +
-    Math.min(3, finitePf(metrics.profitFactor)) * 0.9 +
-    accuracy.buyHitRatePct / 100 * 1.2 +
-    accuracy.rejectionAccuracyPct / 100 * 0.45 -
-    accuracy.missedOpportunityRatePct / 100 * 0.8 -
-    metrics.forecastMaePct * 0.28 -
-    metrics.maxDrawdownPct * 0.08
+    metrics.expectancyPct * 4.5 +
+    metrics.equityFinalPct * 0.18 +
+    Math.min(3, finitePf(metrics.profitFactor)) * 1.0 +
+    Math.max(0, metrics.avgRealizedRR) * 0.45 +
+    accuracy.buyHitRatePct / 100 * 0.45 +
+    accuracy.rejectionAccuracyPct / 100 * 0.30 -
+    accuracy.missedOpportunityRatePct / 100 * 0.65 -
+    metrics.forecastMaePct * 0.22 -
+    Math.abs(metrics.forecastBiasPct) * 0.10 -
+    metrics.maxDrawdownPct * 0.12
   );
 }
 
@@ -71,6 +79,29 @@ function requiredParameters(
   };
 }
 
+function rollingFolds(window: EvaluationWindow, count = 3): EvaluationWindow[] {
+  const span = window.endMs - window.startMs;
+  return Array.from({ length: count }, (_, index) => ({
+    startMs: window.startMs + Math.floor(span * index / count),
+    endMs: window.startMs + Math.floor(span * (index + 1) / count),
+  }));
+}
+
+function parameterDriftSafe(candidate: ReturnType<typeof requiredParameters>): boolean {
+  const current = ACTIVE_CALIBRATION_PROFILE.parameters;
+  const limits: Record<keyof typeof candidate, number> = {
+    scoreThreshold: 8,
+    shortTargetAtrMult: 1.2,
+    stopAtrMult: 0.55,
+    minNetRR: 0.5,
+    mediumTargetAtr4hMult: 1.0,
+    mediumTargetAtrDayMult: 0.6,
+  };
+  return (Object.keys(candidate) as Array<keyof typeof candidate>).every((key) =>
+    Math.abs(candidate[key] - current[key]) <= limits[key]
+  );
+}
+
 if (import.meta.main) {
   const args = [...Deno.args];
   const writeProfile = args.includes("--write-profile");
@@ -86,8 +117,9 @@ if (import.meta.main) {
     Deno.exit(1);
   }
   const split = splitWindow(common);
+  const simulationOptions = { stepBars: 4, signalStepBars: 4 };
   const scored = CANDIDATES.map((overrides) => {
-    const trainRun = runWindow(histories, overrides, split.train, { stepBars: 4, signalStepBars: 4 });
+    const trainRun = runWindow(histories, overrides, split.train, simulationOptions);
     const metrics = computeMetrics(trainRun.buy);
     return { overrides, trainRun, metrics, score: objective(trainRun) };
   }).filter((row) =>
@@ -100,25 +132,68 @@ if (import.meta.main) {
     console.error("훈련구간 승격 가능한 조합이 없어 기존 프로필을 유지합니다.");
     Deno.exit(0);
   }
-  const baselineValidation = runWindow(histories, {}, split.validation, { stepBars: 4, signalStepBars: 4 });
-  const validation = runWindow(histories, selected.overrides, split.validation, { stepBars: 4, signalStepBars: 4 });
-  const holdout = runWindow(histories, selected.overrides, split.test, { stepBars: 4, signalStepBars: 4 });
+
+  const candidateParameters = requiredParameters(selected.overrides, histories[0].quoteCurrency);
+  const validationFolds = rollingFolds(split.validation, 3);
+  const foldReports = validationFolds.map((window, index) => {
+    const baseline = runWindow(histories, {}, window, simulationOptions);
+    const challenger = runWindow(histories, selected.overrides, window, simulationOptions);
+    const baselineMetrics = computeMetrics(baseline.buy);
+    const challengerMetrics = computeMetrics(challenger.buy);
+    const challengerAccuracy = computeAccuracyMetrics(challenger.signals);
+    const baselineObjective = objective(baseline);
+    const challengerObjective = objective(challenger);
+    const passed = challengerMetrics.trades >= 4 &&
+      challengerMetrics.expectancyPct > 0 &&
+      challengerMetrics.equityFinalPct > 0 &&
+      finitePf(challengerMetrics.profitFactor) >= 0.95 &&
+      challengerMetrics.maxDrawdownPct <= 18 &&
+      challengerAccuracy.missedOpportunityRatePct <= 45 &&
+      challengerObjective >= baselineObjective - 0.02;
+    return {
+      fold: index + 1,
+      window,
+      passed,
+      baselineMetrics,
+      challengerMetrics,
+      challengerAccuracy,
+      baselineObjective,
+      challengerObjective,
+    };
+  });
+
+  const baselineValidation = runWindow(histories, {}, split.validation, simulationOptions);
+  const validation = runWindow(histories, selected.overrides, split.validation, simulationOptions);
+  const holdout = runWindow(histories, selected.overrides, split.test, simulationOptions);
   const validationMetrics = computeMetrics(validation.buy);
   const validationAccuracy = computeAccuracyMetrics(validation.signals);
   const baselineMetrics = computeMetrics(baselineValidation.buy);
   const baselineScore = objective(baselineValidation);
   const candidateScore = objective(validation);
+  const foldsPassed = foldReports.filter((row) => row.passed).length;
 
   const promotionChecks = {
     validationTrades: validationMetrics.trades >= 15,
     positiveExpectancy: validationMetrics.expectancyPct > 0,
-    profitFactor: finitePf(validationMetrics.profitFactor) >= 1.08,
+    positiveNetEquity: validationMetrics.equityFinalPct > 0,
+    positiveMedianTrade: validationMetrics.medianPct > 0,
+    realizedRewardRisk: validationMetrics.avgRealizedRR >= 0.15,
+    profitFactor: finitePf(validationMetrics.profitFactor) >= 1.12,
     drawdown: validationMetrics.maxDrawdownPct <= 18,
     missedOpportunity: validationAccuracy.missedOpportunityRatePct <= 40,
     objectiveImprovement: candidateScore >= baselineScore + 0.03 ||
       (baselineMetrics.trades === 0 && validationMetrics.trades >= 15),
     noForecastCollapse: validationMetrics.forecastMaePct <=
       Math.max(5, baselineMetrics.forecastMaePct * 1.15 || 5),
+    noForecastBiasExplosion: Math.abs(validationMetrics.forecastBiasPct) <=
+      Math.max(3.5, Math.abs(baselineMetrics.forecastBiasPct) + 1.25),
+    rollingStability: foldsPassed >= 2,
+    noCatastrophicFold: foldReports.every((row) =>
+      row.challengerMetrics.maxDrawdownPct <= 22 &&
+      row.challengerMetrics.equityFinalPct > -1.5 &&
+      finitePf(row.challengerMetrics.profitFactor) >= 0.75
+    ),
+    boundedParameterDrift: parameterDriftSafe(candidateParameters),
   };
   const promoted = Object.values(promotionChecks).every(Boolean);
   const calibrationSignals = [
@@ -127,11 +202,13 @@ if (import.meta.main) {
   ];
   const profile = buildCalibrationProfile({
     signals: calibrationSignals,
-    parameters: requiredParameters(selected.overrides, histories[0].quoteCurrency),
+    parameters: candidateParameters,
     markets: histories.length,
     validationMetrics,
     validationAccuracy,
     promoted,
+    rollingFoldsPassed: foldsPassed,
+    rollingFoldsTotal: foldReports.length,
   });
 
   const report = {
@@ -156,6 +233,7 @@ if (import.meta.main) {
       accuracy: validationAccuracy,
       baselineObjective: baselineScore,
       candidateObjective: candidateScore,
+      rollingFolds: foldReports,
     },
     holdoutMonitoringOnly: {
       trades: computeMetrics(holdout.buy),
@@ -170,21 +248,29 @@ if (import.meta.main) {
     JSON.stringify(report, null, 2),
   );
   const markdown = [
-    `# Trading-booooo v${ENGINE_VERSION} 자동 교정 리포트`,
+    `# Trading-booooo v${ENGINE_VERSION} 자기교정 리포트`,
     "",
     `- 생성: ${report.generatedAt}`,
     `- 종목 수: ${histories.length}`,
     `- 승격 여부: ${promoted ? "PROMOTED" : "REJECTED — 기존 프로필 유지"}`,
     `- 선택 파라미터: ${JSON.stringify(profile.parameters)}`,
+    `- 롤링 검증: ${foldsPassed}/${foldReports.length}개 구간 통과`,
+    `- 최근 데이터 반감기: ${profile.recencyHalfLifeDays}일`,
+    `- 학습 세그먼트: ${profile.segments.length}개`,
     "",
     "## 승격 조건",
     ...Object.entries(promotionChecks).map(([key, value]) =>
       `- ${value ? "PASS" : "FAIL"} · ${key}`
     ),
     "",
+    "## 롤링 검증",
+    ...foldReports.map((row) =>
+      `- Fold ${row.fold}: ${row.passed ? "PASS" : "FAIL"} · 거래 ${row.challengerMetrics.trades} · 기대값 ${row.challengerMetrics.expectancyPct.toFixed(3)}% · PF ${Number.isFinite(row.challengerMetrics.profitFactor) ? row.challengerMetrics.profitFactor.toFixed(2) : "∞"}`
+    ),
+    "",
     "## VALIDATION 거래 성과",
     "```",
-    formatReport(validationMetrics, { label: "candidate" }),
+    formatReport(validationMetrics, { label: "challenger" }),
     "```",
     "",
     "## VALIDATION 실제 일치율",
@@ -199,6 +285,28 @@ if (import.meta.main) {
     "```",
   ].join("\n");
   await Deno.writeTextFile("backtest/output/calibration-report.md", markdown);
+
+  const historyRow = JSON.stringify({
+    generatedAt: report.generatedAt,
+    engineVersion: ENGINE_VERSION,
+    promoted,
+    selectedParameters: profile.parameters,
+    promotionChecks,
+    validation: validationMetrics,
+    validationAccuracy,
+    foldsPassed,
+    foldsTotal: foldReports.length,
+    holdoutMonitoringOnly: report.holdoutMonitoringOnly,
+  });
+  let existingHistory = "";
+  try {
+    existingHistory = await Deno.readTextFile("backtest/calibration-history.jsonl");
+  } catch {
+    // First run.
+  }
+  const historyLines = existingHistory.trim().split("\n").filter(Boolean).slice(-51);
+  historyLines.push(historyRow);
+  await Deno.writeTextFile("backtest/calibration-history.jsonl", historyLines.join("\n") + "\n");
 
   if (writeProfile && promoted) {
     await Deno.writeTextFile(

@@ -100,3 +100,43 @@ Deno.test("calibration builds smoothed score buckets and serializable runtime pr
     throw new Error("serialized profile is incomplete");
   }
 });
+
+Deno.test("calibration creates stable market and horizon segments with recency weighting", () => {
+  const now = Date.UTC(2026, 6, 24);
+  const signals = Array.from({ length: 48 }, (_, index) => ({
+    ...signal(80 + index % 4, index >= 12),
+    market: "KRW-SEGMENT",
+    signalTime: now - (47 - index) * 86_400_000,
+    horizonCode: "SHORT" as const,
+  }));
+  const trades = [trade(true), trade(true), trade(false)];
+  const profile = buildCalibrationProfile({
+    signals,
+    parameters: {
+      scoreThreshold: 72,
+      shortTargetAtrMult: 2.2,
+      stopAtrMult: 1.15,
+      minNetRR: 1.5,
+      mediumTargetAtr4hMult: 2.4,
+      mediumTargetAtrDayMult: 1.3,
+    },
+    markets: 1,
+    validationMetrics: computeMetrics(trades),
+    validationAccuracy: computeAccuracyMetrics(signals),
+    promoted: true,
+    rollingFoldsPassed: 3,
+    rollingFoldsTotal: 3,
+  });
+  if (profile.schemaVersion !== 2) throw new Error("schema must be v2");
+  if (profile.validation.rollingFoldsPassed !== 3) throw new Error("rolling fold evidence missing");
+  if (!profile.segments.some((row) => row.key === "MARKET:KRW-SEGMENT")) {
+    throw new Error("market segment missing");
+  }
+  if (!profile.segments.some((row) => row.key === "HORIZON:SHORT")) {
+    throw new Error("horizon segment missing");
+  }
+  const bucket = profile.buckets.find((row) => row.minScore === 78)!;
+  if (!(bucket.effectiveSamples > 0 && bucket.effectiveSamples <= bucket.samples)) {
+    throw new Error("invalid effective sample size");
+  }
+});

@@ -307,14 +307,14 @@
         <div><span class="rank">#${candidate.rank || "—"}</span><h3>${escapeHtml(candidate.korean_name)}</h3><small>${escapeHtml(candidate.source_exchange_label ? candidate.source_exchange_label + " · " : "")}${escapeHtml(candidate.market)}</small></div>
         <span class="verdict ${tone}">${escapeHtml(candidate.decision_label)}</span>
       </div>
-      <div class="candidate-score"><strong>${Number(candidate.combined_score ?? candidate.score).toFixed(1)}</strong><span>점</span><i></i><small>${cross ? "통합점수 · " : ""}신뢰도 ${percent(candidate.confidence, 1)}</small></div>
-      <div class="candidate-market"><span>현재가 <b>${escapeHtml(price(candidate.current_price, quote))}</b></span><span class="${candidate.change_24h_pct >= 0 ? "positive-text" : "negative-text"}">${percent(candidate.change_24h_pct, 2, true)}</span></div>
+      <div class="candidate-score"><strong>${Number(candidate.combined_score ?? candidate.score).toFixed(1)}</strong><span>점</span><i></i><small>${cross ? "통합점수 · " : ""}${forecast.calibrated ? `검증 신뢰도 ${percent(candidate.confidence, 1)}` : "신뢰도 미교정"}</small></div>
+      <div class="candidate-market"><span>실패 게이트 <b>${(candidate.failed_gates || []).length}개</b></span><span>현재가 <b>${escapeHtml(price(candidate.current_price, quote))}</b></span><span class="${candidate.change_24h_pct >= 0 ? "positive-text" : "negative-text"}">${percent(candidate.change_24h_pct, 2, true)}</span></div>
       ${crossStrip}
       ${planRows}
       <div class="forecast-strip">
-        <span><small>교정 예상 상승률</small><b class="positive-text">${escapeHtml(percent(forecast.expected_upside_pct, 2, true))}</b></span>
+        <span><small>${forecast.calibrated ? "교정 예상 상승률" : "사전 조건부 MFE"}</small><b class="positive-text">${escapeHtml(percent(forecast.expected_upside_pct, 2, true))}</b></span>
         <span><small>목표 선도달 추정</small><b>${escapeHtml(percent(forecast.target_hit_probability_pct, 1))}</b></span>
-        <span><small>예상 가격 범위</small><b>${escapeHtml(price(forecast.conservative_price, quote))} ~ ${escapeHtml(price(forecast.optimistic_price, quote))}</b></span>
+        <span><small>조건부 최대우호가격 범위</small><b>${escapeHtml(price(forecast.conservative_price, quote))} ~ ${escapeHtml(price(forecast.optimistic_price, quote))}</b></span>
         <span><small>교정 상태</small><b>${forecast.calibrated ? `검증표본 ${Number(forecast.calibration_samples || 0)}건` : "사전값·재교정 대기"}</b></span>
       </div>
       <div class="dynamic-strip ${dynamicTone}">
@@ -436,10 +436,10 @@
       `- 판정: ${candidate.decision_label}`,
       `- 현재가: ${price(candidate.current_price, quote)} / 24시간: ${percent(candidate.change_24h_pct, 2, true)}`,
       `- 가격 기준: ${candidate.price_context?.reference_source || plan.reference_source || "N/A"} / 초기 티커 ${price(candidate.price_context?.ticker_price, quote)} / 실시간 괴리 ${candidate.price_context?.ticker_live_deviation_bps == null ? "N/A" : Number(candidate.price_context.ticker_live_deviation_bps).toFixed(1) + "bp"}`,
-      `- 종합점수: ${Number(candidate.score).toFixed(2)}${candidate.combined_score != null ? ` / 통합점수: ${Number(candidate.combined_score).toFixed(2)}` : ""} / 신뢰도: ${percent(candidate.confidence, 1)}`,
+      `- 종합점수: ${Number(candidate.score).toFixed(2)}${candidate.combined_score != null ? ` / 통합점수: ${Number(candidate.combined_score).toFixed(2)}` : ""} / 신뢰도: ${forecast.calibrated ? percent(candidate.confidence, 1) : "미교정"}`,
       `- 24시간 거래대금: ${turnover(candidate.turnover_24h_quote ?? candidate.turnover_24h_krw, quote)}`,
-      `- 교정 예상 상승률(MFE): ${percent(forecast.expected_upside_pct, 2, true)} / 보수 ${percent(forecast.conservative_upside_pct, 2, true)} / 낙관 ${percent(forecast.optimistic_upside_pct, 2, true)}`,
-      `- 예상 가격 범위: ${price(forecast.conservative_price, quote)} ~ ${price(forecast.optimistic_price, quote)} / 중심 ${price(forecast.expected_price, quote)}`,
+      `- ${forecast.calibrated ? "교정 예상 상승률" : "사전 조건부 MFE"}: ${percent(forecast.expected_upside_pct, 2, true)} / 보수 ${percent(forecast.conservative_upside_pct, 2, true)} / 낙관 ${percent(forecast.optimistic_upside_pct, 2, true)}`,
+      `- 조건부 최대우호가격 범위: ${price(forecast.conservative_price, quote)} ~ ${price(forecast.optimistic_price, quote)} / 중심 ${price(forecast.expected_price, quote)} (현재가 포함 확률구간이 아님)`,
       `- 목표 선도달 추정: ${percent(forecast.target_hit_probability_pct, 1)}${forecast.wait_entry_probability_pct == null ? "" : ` / WAIT 진입 추정 ${percent(forecast.wait_entry_probability_pct, 1)}`}`,
       `- 예측 교정상태: ${forecast.calibrated ? `워크포워드 검증표본 ${Number(forecast.calibration_samples || 0)}건` : "표본 부족·보수적 사전값"} / 모델 ${forecast.model_version || "N/A"}`,
       ...(cross
@@ -455,7 +455,8 @@
       `- 현재가 기준 단기 목표가: ${price(plan.short_target, quote)} / 중기 목표가 ${price(plan.medium_target, quote)}`,
       `- 현재가 기준 손절가격: ${price(plan.stop_price, quote)} / 예상 체결 ${price(plan.stop_execution_estimate, quote)} / 비용 반영 손실 ${percent(plan.net_stop_pct)}`,
       `- 현재가 기준 비용 포함 손익비: ${Number(plan.net_rr || 0).toFixed(2)} / 구조 완성 ${plan.structure_complete ? "예" : "아니오"} / 실행 가능 ${actionable ? "예" : "아니오"}`,
-      `- 호가 깊이 검증: 양방향 커버리지 ${Number(plan.depth_coverage_ratio || 0).toFixed(2)}배 / 예상 진입 슬리피지 ${plan.estimated_entry_slippage_bps == null ? "N/A" : Number(plan.estimated_entry_slippage_bps).toFixed(1) + "bp"} / 매도·매수 가시잔량 ${turnover(plan.visible_bid_depth_quote || 0, quote)} / ${turnover(plan.visible_ask_depth_quote || 0, quote)}`,
+      `- 호가 깊이 검증: 가정 투입금 ${turnover(plan.assumed_order_notional_quote || 0, quote)} / 양방향 커버리지 ${Number(plan.depth_coverage_ratio || 0).toFixed(2)}배 / 예상 진입 슬리피지 ${plan.estimated_entry_slippage_bps == null ? "N/A" : Number(plan.estimated_entry_slippage_bps).toFixed(1) + "bp"} / 매도·매수 가시잔량 ${turnover(plan.visible_bid_depth_quote || 0, quote)} / ${turnover(plan.visible_ask_depth_quote || 0, quote)}`,
+      `- 비용·구조 여유: 추정 왕복비용 ${percent(plan.estimated_round_trip_cost_pct, 2)} / 첫 저항까지 비용 차감 순여유 ${percent(plan.structural_headroom_net_pct, 2, true)}`,
       ...(actionable ? [`- 추천 투입금: ${krw(plan.recommended_investment_quote ?? plan.recommended_investment_krw, quote)} / 위험예산 ${krw(plan.risk_budget_krw, quote)}`] : []),
       ...watchLines,
       `- 추세 유지 추정: ${candidate.horizon.label}, ${candidate.horizon.expected_window}, 지속성 ${Number(candidate.horizon.persistence_score).toFixed(1)}점`,
@@ -482,11 +483,11 @@
       `- 실시간 기준가격: ${price(candidate.microstructure?.reference_price, quote)} / 호가 최신성 ${candidate.microstructure?.live_book_age_ms == null ? "N/A" : (Number(candidate.microstructure.live_book_age_ms) / 1000).toFixed(1) + "초"}`,
       `- 평균 스프레드: ${candidate.microstructure?.spread_bps == null ? "N/A" : Number(candidate.microstructure.spread_bps).toFixed(2) + "bp"}`,
       `- 정적 호가 불균형(단독 긍정점수 미사용): ${Number(candidate.microstructure?.book_imbalance || 0).toFixed(3)}`,
-      `- 최근 체결 압력: ${Number(candidate.microstructure?.trade_pressure || 0).toFixed(3)} / 체결 표본 ${candidate.microstructure?.trade_count || 0}건`,
+      `- 최근 체결 압력: ${Number(candidate.microstructure?.trade_pressure || 0).toFixed(3)} / 체결 표본 ${candidate.microstructure?.trade_count || 0}건 / 평균 체결규모 ${candidate.microstructure?.average_trade_notional == null ? "N/A" : turnover(candidate.microstructure.average_trade_notional, quote)}`,
       `- 동적 판정: ${candidate.microstructure?.dynamic?.label || "데이터 없음"}`,
       `- 동적 표본: 관찰 ${Number(candidate.microstructure?.dynamic?.observation_ms || 0) / 1000}초 / 서로 다른 호가 ${candidate.microstructure?.dynamic?.distinct_book_updates || 0}회 / 동시간대 체결 ${candidate.microstructure?.dynamic?.aligned_trade_count || 0}건 / 품질 ${percent(Number(candidate.microstructure?.dynamic?.data_quality || 0) * 100, 1)}`,
       `- 구간 분산: 초반·중반·확인 ${candidate.microstructure?.dynamic?.covered_phases || 0}/3개 유효 / 호가 ${(candidate.microstructure?.dynamic?.phase_book_updates || []).join("/") || "—"}회 / 체결 ${(candidate.microstructure?.dynamic?.phase_trade_counts || []).join("/") || "—"}건`,
-      `- 의심 점수: 가짜 매수벽 ${Number(candidate.microstructure?.dynamic?.spoof_like_score || 0).toFixed(3)} / 매도 재보충·흡수 ${Number(candidate.microstructure?.dynamic?.ask_absorption_score || 0).toFixed(3)} / 돌파·지지전환 ${Number(candidate.microstructure?.dynamic?.breakout_score || 0).toFixed(3)}`,
+      `- 의심 점수: ${candidate.microstructure?.dynamic?.score_status === "VALID" ? `가짜 매수벽 ${Number(candidate.microstructure.dynamic.spoof_like_score || 0).toFixed(3)} / 매도 재보충·흡수 ${Number(candidate.microstructure.dynamic.ask_absorption_score || 0).toFixed(3)} / 돌파·지지전환 ${Number(candidate.microstructure.dynamic.breakout_score || 0).toFixed(3)}` : "UNKNOWN (동시간대 체결·구간 표본 부족)"}`,
       ...(candidate.microstructure?.dynamic?.evidence || []).map(item => `- 동적 근거: ${item}`),
       ...(candidate.microstructure?.dynamic?.warnings || []).map(item => `- 동적 경고: ${item}`),
       "",

@@ -1,4 +1,4 @@
-// Trading-booooo v2.6.0 — candle-layer walk-forward simulator.
+// Trading-booooo v3.0.0 — candle-layer walk-forward simulator.
 //
 // Historical candles do not contain historical orderbook/trade streams. The
 // microstructure layer is therefore injected as neutral and isolated from the

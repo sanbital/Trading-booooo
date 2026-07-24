@@ -1,9 +1,9 @@
-// Trading-booooo Market Scanner v2.6.0
+// Trading-booooo Market Scanner v3.0.0
 // Pure analysis engine. Public market data only; no order or account operations.
 
 import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-profile.ts";
 
-export const ENGINE_VERSION = "2.6.0";
+export const ENGINE_VERSION = "3.1.0";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -162,6 +162,7 @@ export type Microstructure = {
   imbalance_stability: number;
   trade_pressure: number;
   trade_count: number;
+  average_trade_notional: number | null;
   buy_notional: number;
   sell_notional: number;
   micro_score: number;
@@ -188,6 +189,7 @@ export type DynamicOrderflow = {
   phase_trade_counts: number[];
   phase_consistent: boolean;
   data_quality: number;
+  score_status: "VALID" | "UNKNOWN";
   spoof_like_score: number;
   ask_absorption_score: number;
   breakout_score: number;
@@ -257,7 +259,10 @@ export type TradePlan = {
   visible_ask_depth_quote: number;
   visible_bid_depth_quote: number;
   depth_coverage_ratio: number;
+  assumed_order_notional_quote: number;
   estimated_entry_slippage_bps: number | null;
+  estimated_round_trip_cost_pct: number;
+  structural_headroom_net_pct: number;
   short_target: number;
   short_target_execution_estimate: number;
   medium_target: number;
@@ -499,6 +504,30 @@ function cautionLabels(event?: MarketEvent): string[] {
   return labels;
 }
 
+const STABLE_OR_PEG_BASES = new Set([
+  "USDC", "FDUSD", "TUSD", "USDP", "DAI", "XUSD", "RLUSD", "PYUSD", "EURC", "AEUR",
+]);
+
+function baseSymbol(market: string): string {
+  const parts = String(market).toUpperCase().split("-");
+  return parts.length > 1 ? parts.at(-1)! : parts[0].replace(/USDT$/, "");
+}
+
+function isNonActionablePegAsset(
+  market: string,
+  quoteCurrency: "KRW" | "USDT",
+  current: number,
+  rangePct: number,
+  changePct: number,
+): boolean {
+  const base = baseSymbol(market);
+  if (STABLE_OR_PEG_BASES.has(base)) return true;
+  // Unknown USD-pegged tokens are excluded only when both price and realised range
+  // behave like a peg. This avoids treating low-volatility noise as trend quality.
+  return quoteCurrency === "USDT" && current >= 0.97 && current <= 1.03 &&
+    rangePct < 0.65 && Math.abs(changePct) < 0.45;
+}
+
 export function buildUniverse(
   markets: MarketRow[],
   tickers: TickerRow[],
@@ -568,6 +597,9 @@ export function buildUniverse(
     let excludedReason: string | null = null;
     if (cautions.length) excludedReason = `시장경보(${cautions.join(", ")})`;
     else if (!(current > 0)) excludedReason = "유효한 현재가 없음";
+    else if (isNonActionablePegAsset(market.market, quoteCurrency, current, rangePct, change)) {
+      excludedReason = "페그·초저변동 자산 — 거래비용 대비 기대이동 부족";
+    }
     else if (freshness > 15 * 60) excludedReason = "최근 체결이 15분 이상 없음";
     else if (turnover < minTurnover) {
       excludedReason = quoteCurrency === "KRW"
@@ -1211,6 +1243,7 @@ export function computeDynamicOrderflow(
     phase_trade_counts: phaseTradeCounts,
     phase_consistent: phaseConsistent,
     data_quality: dataQuality,
+    score_status: "UNKNOWN",
     spoof_like_score: 0,
     ask_absorption_score: 0,
     breakout_score: 0,
@@ -1466,9 +1499,10 @@ export function computeDynamicOrderflow(
     phase_trade_counts: phaseTradeCounts,
     phase_consistent: phaseConsistent,
     data_quality: dataQuality,
-    spoof_like_score: spoofScore,
-    ask_absorption_score: absorptionScore,
-    breakout_score: breakoutScore,
+    score_status: sufficient ? "VALID" : "UNKNOWN",
+    spoof_like_score: sufficient ? spoofScore : 0,
+    ask_absorption_score: sufficient ? absorptionScore : 0,
+    breakout_score: sufficient ? breakoutScore : 0,
     persistent_bid_wall_price: persistentBid?.price || null,
     persistent_ask_wall_price: persistentAsk?.price || null,
     confirmed_support_price: confirmedSupport,
@@ -1590,6 +1624,7 @@ export function computeMicrostructure(
     imbalance_stability: stability,
     trade_pressure: pressure,
     trade_count: tradeCount,
+    average_trade_notional: tradeCount > 0 ? (buyNotional + sellNotional) / tradeCount : null,
     buy_notional: buyNotional,
     sell_notional: sellNotional,
     micro_score: microScore,
@@ -1869,6 +1904,14 @@ export function buildTradePlan(
     micro.latest_asks || [],
     depthNotional,
   );
+  const feeRoundTripPct = risk.feePerSidePct * 2;
+  const spreadRoundTripPct = Math.max(0, Number(micro.spread_bps || 0)) / 100;
+  const slippageRoundTripPct = Math.max(0, Number(estimatedEntrySlippageBps || 0)) * 2 / 100;
+  const estimatedRoundTripCostPct = feeRoundTripPct + spreadRoundTripPct + slippageRoundTripPct;
+  const structuralHeadroomGrossPct = structuralResistance && structuralResistance > entryExecution
+    ? (structuralResistance / entryExecution - 1) * 100
+    : 0;
+  const structuralHeadroomNetPct = structuralHeadroomGrossPct - estimatedRoundTripCostPct;
 
   return {
     reference_price: referencePrice,
@@ -1886,7 +1929,10 @@ export function buildTradePlan(
     visible_ask_depth_quote: visibleAskDepth,
     visible_bid_depth_quote: visibleBidDepth,
     depth_coverage_ratio: depthCoverage,
+    assumed_order_notional_quote: depthNotional,
     estimated_entry_slippage_bps: estimatedEntrySlippageBps,
+    estimated_round_trip_cost_pct: estimatedRoundTripCostPct,
+    structural_headroom_net_pct: structuralHeadroomNetPct,
     short_target: shortTarget,
     short_target_execution_estimate: shortExecution,
     medium_target: mediumTarget,
@@ -1965,6 +2011,8 @@ export function buildWatchEntryPlan(
     "trend_15m",
     "trend_4h",
     "trend_context",
+    "minimum_edge",
+    "stop",
   ]);
   const explicitDynamicRisk = [
     "SPOOF_LIKE_RISK",
@@ -1993,11 +2041,10 @@ export function buildWatchEntryPlan(
     : Math.max(current * 0.0001, Number.EPSILON);
   const atr15 = period.timeframes.m15.atr14 || current * 0.012;
   const tf = period.timeframes;
+  // WAIT price zones must be anchored to static swing levels. Moving averages
+  // can migrate before price arrives and are therefore trigger references only.
   const anchors = [
-    tf.m15.ema21,
-    tf.m15.ema50,
     tf.m15.support,
-    tf.h4.ema9,
     tf.h4.support,
     micro.dynamic.sufficient ? micro.dynamic.confirmed_support_price : null,
     micro.dynamic.sufficient ? micro.dynamic.persistent_bid_wall_price : null,
@@ -2180,7 +2227,7 @@ export function estimatePriceForecast(
   score: number,
   decision: FinalCandidate["decision"],
 ): PriceForecast {
-  const bucket = calibrationBucket(score);
+  const bucket = calibrationBucket(score, period.universe.market, horizon.code);
   const calibrated = ACTIVE_CALIBRATION_PROFILE.promoted &&
     ACTIVE_CALIBRATION_PROFILE.source === "WALK_FORWARD" && bucket.samples >= 20;
   const entry = decision === "WAIT" && watch.available
@@ -2232,7 +2279,13 @@ export function estimatePriceForecast(
   const calibrationScaleLow = clamp(bucket.returnScaleLow, 0.2, calibrationScale);
   const calibrationScaleHigh = clamp(bucket.returnScaleHigh, calibrationScale, 1.6);
   const qualityShrink = clamp(0.62 + trendQuality * 0.22 + microQuality * 0.16 - overheat * 0.18, 0.4, 1);
-  const forecastCap = Math.max(shortGross, mediumGross);
+  const structuralGrossCap = plan.structural_resistance && plan.structural_resistance > entry
+    ? (plan.structural_resistance / entry - 1) * 100
+    : 0;
+  // MFE forecast is capped by the first identified structural resistance.
+  // A higher-timeframe continuation target may be shown separately, but it may not
+  // inflate the base-case expected move before a breakout is confirmed.
+  const forecastCap = Math.max(0, Math.min(Math.max(shortGross, mediumGross), structuralGrossCap));
   const expectedUpside = clamp(
     rawExpected * calibrationScale * qualityShrink,
     0,
@@ -2279,7 +2332,7 @@ export function estimatePriceForecast(
     "뉴스·상장 이슈·유동성 공백과 과거에 없던 시장 국면은 반영하지 못합니다.",
   ];
   return {
-    model_version: `${ENGINE_VERSION}-forecast.1`,
+    model_version: `${ENGINE_VERSION}-forecast.3`,
     calibration_source: ACTIVE_CALIBRATION_PROFILE.source,
     calibrated,
     calibration_samples: bucket.samples,
@@ -2417,8 +2470,9 @@ export function finalizeCandidate(
     gate(
       "micro_pressure",
       "초단기 수급",
-      micro.trade_pressure > -0.20 && micro.book_imbalance > -0.40,
-      "최근 체결 압력은 -0.20 초과, 정적 호가 불균형은 -0.40 초과여야 합니다.",
+      micro.trade_pressure > -0.20 && micro.book_imbalance > -0.40 &&
+        !(micro.book_imbalance >= 0.20 && micro.trade_pressure <= -0.20),
+      "최근 체결 압력은 -0.20 초과여야 하며, 매수 호가 우위인데 실제 체결이 매도 우위인 호가-테이프 괴리는 음의 신호로 차단합니다.",
     ),
     gate(
       "dynamic_safety",
@@ -2430,12 +2484,19 @@ export function finalizeCandidate(
       `스푸핑성 취소·매도 재보충/흡수·지지 붕괴 패턴이 없어야 합니다. 현재: ${micro.dynamic.label}`,
     ),
     gate(
+      "minimum_edge",
+      "최소 기대이동",
+      plan.structural_headroom_net_pct >= Math.max(0.6, plan.estimated_round_trip_cost_pct * 2),
+      `첫 구조적 저항까지 비용 차감 순이동이 최소 0.60%이고 총 왕복비용의 2배 이상이어야 합니다. 현재 순여유 ${plan.structural_headroom_net_pct.toFixed(2)}%, 추정 왕복비용 ${plan.estimated_round_trip_cost_pct.toFixed(2)}%`,
+    ),
+    gate(
       "stop",
       "손절폭",
       plan.structure_complete && plan.net_stop_pct >= 0.25 &&
         plan.net_stop_pct <= risk.maxStopPct &&
-        Number(plan.stop_distance_atr) <= (risk.stopAtrMult ?? 1.15) + 0.25,
-      `과거·현재 지지와 저항이 모두 확인되고 비용 포함 손절폭이 0.25~${risk.maxStopPct}%여야 합니다. 지지: ${plan.support_basis}, 저항: ${plan.target_basis}`,
+        (plan.entry_execution_estimate - plan.stop_execution_estimate) >=
+          Math.max(Number(tf.h4.atr14 || 0) * 1.0, Number(tf.m15.atr14 || 0) * 1.5),
+      `손절은 비용 포함 최대 ${risk.maxStopPct}% 이내이면서 정상 변동을 견디도록 4시간 ATR 1.0배와 15분 ATR 1.5배 중 큰 값 이상이어야 합니다. 현재 지지: ${plan.support_basis}, 저항: ${plan.target_basis}`,
     ),
     gate(
       "target_structure",

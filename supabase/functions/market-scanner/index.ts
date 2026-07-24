@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v2.6.0 — Supabase Edge Function
+// Trading-booooo Market Scanner v3.0.0 — Supabase Edge Function
 // Upbit KRW / Binance USDT universe scan -> multi-period analysis -> orderflow validation.
 // Read-only public market data. No account lookup, order creation, cancellation, or API keys.
 

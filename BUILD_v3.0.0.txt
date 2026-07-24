@@ -1,0 +1,12 @@
+Trading-booooo v3.0.0 build validation
+
+Validated in this environment:
+- TypeScript static check with TypeScript 5.8.3 and Deno global stubs: PASS
+- GitHub Actions YAML parse: PASS
+- Browser app JavaScript syntax: PASS
+- ZIP integrity: PASS
+
+Not executable in this environment:
+- Deno test suite and live exchange history fetch (Deno binary/network unavailable)
+
+GitHub Actions will run the authoritative Deno check/test suite before calibration or deployment.
