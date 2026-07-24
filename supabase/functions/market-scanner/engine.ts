@@ -1,10 +1,10 @@
-// Trading-booooo Market Scanner v3.0.0
+// Trading-booooo Market Scanner v4.0.0
 // Pure analysis engine. Public market data only; no order or account operations.
 
 import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-profile.ts";
 import type { EventRiskSnapshot } from "./event-risk.ts";
 
-export const ENGINE_VERSION = "3.3.0";
+export const ENGINE_VERSION = "4.0.0";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -217,10 +217,27 @@ export type RiskConfig = {
   stopAtrMult?: number; // 기본 1.15 (손절 상한 = 진입 - atr15 * mult)
   mediumTargetAtr4hMult?: number; // 기본 2.4
   mediumTargetAtrDayMult?: number; // 기본 1.3
-  scoreThreshold?: number; // 기본 72 (BUY 최종 점수컷)
+  scoreThreshold?: number; // v4: 백테스트와 라이브에 공통 적용되는 기간점수 컷
+  operatorMode?: "LOW_TOUCH";
+  dailyCheckCount?: number;
+  maxUnattendedHours?: number;
+  minActionableHoldingHours?: number;
+  recommendationValidMinutes?: number;
+  requirePrecommittedExit?: boolean;
+  minStructuralHeadroomNetPct?: number;
+  minCostMultiple?: number;
+  minTradePressure?: number;
+  maxNegativeBookImbalance?: number;
+  minDepthCoverage?: number;
+  maxSlippageBps?: number;
+  maxSpreadBps?: number;
+  stopMinAtr4hMult?: number;
+  stopMinAtr15mMult?: number;
+  firstTargetAllocationPct?: number;
+  exitPolicy?: "FIXED_T1" | "SCALE_OUT" | "TRAIL_AFTER_T1";
 };
 
-export type TargetStrategy = "SHORT_ONLY" | "SCALE_OUT";
+export type TargetStrategy = "SHORT_ONLY" | "SCALE_OUT" | "TRAIL_AFTER_T1";
 
 export type PriceForecast = {
   model_version: string;
@@ -317,9 +334,27 @@ export type TrendHorizon = {
   code: "INTRADAY" | "SHORT" | "MEDIUM" | "LONG";
   label: string;
   expected_window: string;
+  intended_holding_hours: number;
+  review_interval_hours: number;
+  max_holding_hours: number;
+  low_touch_compatible: boolean;
   persistence_score: number;
   estimate: string;
   invalidation: string[];
+};
+
+export type LowTouchExecutionPlan = {
+  mode: "LOW_TOUCH";
+  low_touch_compatible: boolean;
+  recommendation_valid_minutes: number;
+  valid_until: string;
+  intended_holding_hours: number;
+  next_review_after_hours: number;
+  max_holding_hours: number;
+  monitoring_requirement: "PRECOMMITTED_EXIT" | "RECHECK_REQUIRED";
+  buy_instruction: string;
+  exit_instruction: string;
+  stale_instruction: string;
 };
 
 export type Gate = {
@@ -340,12 +375,14 @@ export type FinalCandidate = {
   turnover_24h_quote: number;
   quote_currency: "KRW" | "USDT";
   score: number;
+  period_score: number;
   confidence: number;
   decision: "BUY" | "WAIT" | "AVOID";
   decision_label: string;
   trade_plan: TradePlan;
   watch_entry_plan: WatchEntryPlan;
   horizon: TrendHorizon;
+  execution_plan: LowTouchExecutionPlan;
   forecast: PriceForecast;
   gates: Gate[];
   failed_gates: string[];
@@ -1864,7 +1901,7 @@ export function buildTradePlan(
       period.timeframes.h4.overheat_score,
       period.timeframes.day.overheat_score,
     ) <= 0.48;
-  const firstTargetAllocation = 0.6;
+  const firstTargetAllocation = clamp((risk.firstTargetAllocationPct ?? 60) / 100, 0.4, 0.85);
   const continuationAllocation = 1 - firstTargetAllocation;
   const blendedExit = shortExecution * firstTargetAllocation +
     mediumExecution * continuationAllocation;
@@ -1877,12 +1914,20 @@ export function buildTradePlan(
   const useScaleOut = strongSwingContext &&
     mediumExecution > shortExecution + Math.max(atr15 * 0.65, tick * 4) &&
     shortRR >= 0.65 && blendedRR > shortRR;
-  const targetStrategy: TargetStrategy = useScaleOut
+  const requestedExitPolicy = risk.exitPolicy;
+  const targetStrategy: TargetStrategy = requestedExitPolicy === "FIXED_T1"
+    ? "SHORT_ONLY"
+    : requestedExitPolicy === "TRAIL_AFTER_T1" && useScaleOut
+    ? "TRAIL_AFTER_T1"
+    : requestedExitPolicy === "SCALE_OUT" && useScaleOut
+    ? "SCALE_OUT"
+    : useScaleOut
     ? "SCALE_OUT"
     : "SHORT_ONLY";
-  const expectedExit = useScaleOut ? blendedExit : shortExecution;
-  const expectedGain = useScaleOut ? blendedGain : shortGain;
-  const rr = useScaleOut ? blendedRR : shortRR;
+  const useContinuation = targetStrategy !== "SHORT_ONLY";
+  const expectedExit = useContinuation ? blendedExit : shortExecution;
+  const expectedGain = useContinuation ? blendedGain : shortGain;
+  const rr = useContinuation ? blendedRR : shortRR;
   const riskBudget = risk.capitalKrw * (risk.riskPct / 100);
   const investment = stopLoss > 0
     ? Math.min(risk.capitalKrw, riskBudget / (stopLoss / 100))
@@ -1940,11 +1985,13 @@ export function buildTradePlan(
     medium_target: mediumTarget,
     medium_target_execution_estimate: mediumExecution,
     target_strategy: targetStrategy,
-    target_strategy_label: targetStrategy === "SCALE_OUT"
-      ? "1차 60% 청산 후 2차 40% 추세추종"
+    target_strategy_label: targetStrategy === "TRAIL_AFTER_T1"
+      ? `1차 ${Math.round(firstTargetAllocation * 100)}% 청산 후 나머지 추적청산`
+      : targetStrategy === "SCALE_OUT"
+      ? `1차 ${Math.round(firstTargetAllocation * 100)}% 청산 후 2차 추세목표`
       : "단기 목표 일괄청산",
-    first_target_allocation_pct: targetStrategy === "SCALE_OUT" ? 60 : 100,
-    continuation_allocation_pct: targetStrategy === "SCALE_OUT" ? 40 : 0,
+    first_target_allocation_pct: targetStrategy !== "SHORT_ONLY" ? firstTargetAllocation * 100 : 100,
+    continuation_allocation_pct: targetStrategy !== "SHORT_ONLY" ? continuationAllocation * 100 : 0,
     expected_exit_price: expectedExit,
     expected_exit_net_return_pct: expectedGain,
     stop_price: stopPrice,
@@ -2146,12 +2193,16 @@ export function buildWatchEntryPlan(
 export function estimateHorizon(
   period: PeriodAnalysis,
   stopPrice: number,
+  risk: RiskConfig = { capitalKrw: 500_000, riskPct: 1, feePerSidePct: 0.05, minNetRR: 1.5, maxStopPct: 5, entrySlippageTicks: 0.5, exitSlippageTicks: 1 },
 ): TrendHorizon {
   const quote = period.universe.quote_currency || "KRW";
   const tf = period.timeframes;
   let code: TrendHorizon["code"] = "INTRADAY";
-  let label = "장중 단기 관찰 후보";
-  let window = "1~12시간";
+  let label = "반일 단기 후보";
+  let window = "6~18시간";
+  let intendedHours = 12;
+  let reviewHours = 4;
+  let maxHoldingHours = 18;
   const longDataReady = tf.day.bars >= 200 && tf.h4.bars >= 150;
   const lowOverheat = Math.max(
     tf.m15.overheat_score,
@@ -2165,8 +2216,11 @@ export function estimateHorizon(
     ["FULL_BULL", "BULL_PULLBACK"].includes(tf.m15.trend_state)
   ) {
     code = "LONG";
-    label = "중기 추세 관찰 후보";
-    window = "5~20일";
+    label = "중기 추세 보유 후보";
+    window = "7~20일";
+    intendedHours = 240;
+    reviewHours = 24;
+    maxHoldingHours = 480;
   } else if (
     lowOverheat &&
     ["FULL_BULL", "BULL_PULLBACK"].includes(tf.h4.trend_state) &&
@@ -2174,15 +2228,21 @@ export function estimateHorizon(
     ["FULL_BULL", "BULL_PULLBACK", "RECOVERY"].includes(tf.m15.trend_state)
   ) {
     code = "MEDIUM";
-    label = "단기·중기 관찰 후보";
-    window = "2~10일";
+    label = "수일 보유 후보";
+    window = "3~10일";
+    intendedHours = 120;
+    reviewHours = 12;
+    maxHoldingHours = 240;
   } else if (
     ["FULL_BULL", "BULL_PULLBACK", "RECOVERY"].includes(tf.m15.trend_state) &&
     tf.h4.trend_state !== "BEAR"
   ) {
     code = "SHORT";
-    label = "단기 관찰 후보";
-    window = "6~48시간";
+    label = "단기 보유 후보";
+    window = "18~72시간";
+    intendedHours = 48;
+    reviewHours = 8;
+    maxHoldingHours = 72;
   }
   const alignment = [tf.m5, tf.m15, tf.h4, tf.day]
     .map((metric) => metric.trend_state === "FULL_BULL"
@@ -2201,19 +2261,28 @@ export function estimateHorizon(
     18,
     longDataReady ? 82 : 74,
   );
+  const minHours = Math.max(4, risk.minActionableHoldingHours ?? 6);
+  const maxGap = Math.max(4, risk.maxUnattendedHours ?? 10);
+  const lowTouchCompatible = intendedHours >= minHours && reviewHours <= maxGap &&
+    tf.h4.trend_state !== "BEAR" && persistence >= 44;
   const estimate =
-    `${label}로 분류되며 ${window} 범위만 보수적으로 관찰합니다. 장기 보유 분류는 일봉 200개 이상과 4시간봉 150개 이상이 확보되고 과열이 낮을 때만 허용합니다.`;
+    `${label}로 분류되며 ${window} 범위에서 보유합니다. 사용자가 하루 2~3회만 확인한다는 전제에서 다음 확인 간격은 약 ${reviewHours}시간, 최대 보유는 ${maxHoldingHours}시간으로 제한합니다.`;
   const invalidation = [
     `${quotePriceText(stopPrice, quote)} 이탈`,
     tf.m15.ema21
       ? `15분봉 종가가 EMA21(${quotePriceText(tf.m15.ema21, quote)}) 아래에서 연속 마감`
       : "15분 추세가 하락 정렬로 전환",
     "4시간 구조가 혼조·하락으로 전환하거나 거래대금이 급감",
+    `${maxHoldingHours}시간 안에 계획된 상승이 발생하지 않으면 시간 종료`,
   ];
   return {
     code,
     label,
     expected_window: window,
+    intended_holding_hours: intendedHours,
+    review_interval_hours: reviewHours,
+    max_holding_hours: maxHoldingHours,
+    low_touch_compatible: lowTouchCompatible,
     persistence_score: persistence,
     estimate,
     invalidation,
@@ -2373,7 +2442,7 @@ export function finalizeCandidate(
   tickSize: number,
   risk: RiskConfig,
   eventRisk: EventRiskSnapshot = {
-    status: "CLEAR", label: "이벤트 평가 생략", checked_at: new Date(0).toISOString(), symbol: period.universe.market,
+    status: "UNKNOWN", label: "이벤트 평가 미수행", checked_at: new Date(0).toISOString(), symbol: period.universe.market,
     provider_status: {}, coverage_complete: false, volume_anomaly: false, volume_ratio_4h: 0, volume_ratio_day: 0, evidence: [], warnings: [],
   },
 ): FinalCandidate {
@@ -2386,6 +2455,10 @@ export function finalizeCandidate(
     100,
   );
   const tf = period.timeframes;
+  const horizon = estimateHorizon(period, plan.stop_price, risk);
+  const precommittedExitAvailable = plan.structure_complete &&
+    plan.stop_execution_estimate < plan.entry_execution_estimate &&
+    plan.short_target_execution_estimate > plan.entry_execution_estimate;
   const checks: Gate[] = [
     gate(
       "data",
@@ -2474,22 +2547,23 @@ export function finalizeCandidate(
     gate(
       "spread",
       "스프레드",
-      micro.spread_bps != null && micro.spread_bps <= 35,
-      "평균 스프레드가 35bp 이하여야 합니다.",
+      micro.spread_bps != null && micro.spread_bps <= (risk.maxSpreadBps ?? 35),
+      `평균 스프레드가 ${risk.maxSpreadBps ?? 35}bp 이하여야 합니다.`,
     ),
     gate(
       "depth",
       "호가 깊이·예상 슬리피지",
-      plan.depth_coverage_ratio >= 1.5 &&
+      plan.depth_coverage_ratio >= (risk.minDepthCoverage ?? 1.5) &&
         plan.estimated_entry_slippage_bps != null &&
-        plan.estimated_entry_slippage_bps <= 20,
-      `상위 호가의 양방향 깊이가 예상 투입금의 1.5배 이상이고 매수 예상 슬리피지가 20bp 이하여야 합니다. 현재 커버리지 ${plan.depth_coverage_ratio.toFixed(2)}배, 슬리피지 ${plan.estimated_entry_slippage_bps == null ? "N/A" : plan.estimated_entry_slippage_bps.toFixed(1) + "bp"}`,
+        plan.estimated_entry_slippage_bps <= (risk.maxSlippageBps ?? 20),
+      `상위 호가의 양방향 깊이가 예상 투입금의 ${risk.minDepthCoverage ?? 1.5}배 이상이고 매수 예상 슬리피지가 ${risk.maxSlippageBps ?? 20}bp 이하여야 합니다. 현재 커버리지 ${plan.depth_coverage_ratio.toFixed(2)}배, 슬리피지 ${plan.estimated_entry_slippage_bps == null ? "N/A" : plan.estimated_entry_slippage_bps.toFixed(1) + "bp"}`,
     ),
     gate(
       "micro_pressure",
       "초단기 수급",
-      micro.trade_pressure > -0.20 && micro.book_imbalance > -0.40 &&
-        !(micro.book_imbalance >= 0.20 && micro.trade_pressure <= -0.20),
+      micro.trade_pressure > (risk.minTradePressure ?? -0.20) &&
+        micro.book_imbalance > (risk.maxNegativeBookImbalance ?? -0.40) &&
+        !(micro.book_imbalance >= 0.20 && micro.trade_pressure <= (risk.minTradePressure ?? -0.20)),
       "최근 체결 압력은 -0.20 초과여야 하며, 매수 호가 우위인데 실제 체결이 매도 우위인 호가-테이프 괴리는 음의 신호로 차단합니다.",
     ),
     gate(
@@ -2504,8 +2578,11 @@ export function finalizeCandidate(
     gate(
       "minimum_edge",
       "최소 기대이동",
-      plan.structural_headroom_net_pct >= Math.max(0.6, plan.estimated_round_trip_cost_pct * 2),
-      `첫 구조적 저항까지 비용 차감 순이동이 최소 0.60%이고 총 왕복비용의 2배 이상이어야 합니다. 현재 순여유 ${plan.structural_headroom_net_pct.toFixed(2)}%, 추정 왕복비용 ${plan.estimated_round_trip_cost_pct.toFixed(2)}%`,
+      plan.structural_headroom_net_pct >= Math.max(
+        risk.minStructuralHeadroomNetPct ?? 0.6,
+        plan.estimated_round_trip_cost_pct * (risk.minCostMultiple ?? 2),
+      ),
+      `첫 구조적 저항까지 비용 차감 순이동이 최소 ${risk.minStructuralHeadroomNetPct ?? 0.6}%이고 총 왕복비용의 ${risk.minCostMultiple ?? 2}배 이상이어야 합니다. 현재 순여유 ${plan.structural_headroom_net_pct.toFixed(2)}%, 추정 왕복비용 ${plan.estimated_round_trip_cost_pct.toFixed(2)}%`,
     ),
     gate(
       "stop",
@@ -2513,8 +2590,11 @@ export function finalizeCandidate(
       plan.structure_complete && plan.net_stop_pct >= 0.25 &&
         plan.net_stop_pct <= risk.maxStopPct &&
         (plan.entry_execution_estimate - plan.stop_execution_estimate) >=
-          Math.max(Number(tf.h4.atr14 || 0) * 1.0, Number(tf.m15.atr14 || 0) * 1.5),
-      `손절은 비용 포함 최대 ${risk.maxStopPct}% 이내이면서 정상 변동을 견디도록 4시간 ATR 1.0배와 15분 ATR 1.5배 중 큰 값 이상이어야 합니다. 현재 지지: ${plan.support_basis}, 저항: ${plan.target_basis}`,
+          Math.max(
+            Number(tf.h4.atr14 || 0) * (risk.stopMinAtr4hMult ?? 1.0),
+            Number(tf.m15.atr14 || 0) * (risk.stopMinAtr15mMult ?? 1.5),
+          ),
+      `손절은 비용 포함 최대 ${risk.maxStopPct}% 이내이면서 정상 변동을 견디도록 4시간 ATR ${risk.stopMinAtr4hMult ?? 1.0}배와 15분 ATR ${risk.stopMinAtr15mMult ?? 1.5}배 중 큰 값 이상이어야 합니다. 현재 지지: ${plan.support_basis}, 저항: ${plan.target_basis}`,
     ),
     gate(
       "target_structure",
@@ -2524,6 +2604,12 @@ export function finalizeCandidate(
       `단기 목표는 실제 저항에서 도출되고 진입 실행가보다 높아야 합니다. 현재: ${plan.target_basis}`,
     ),
     gate(
+      "operator_fit",
+      "저빈도 운용 적합성",
+      horizon.low_touch_compatible && precommittedExitAvailable,
+      `하루 2~3회 확인하는 운용에 맞게 최소 ${risk.minActionableHoldingHours ?? 6}시간 이상 보유 가능하고, 다음 확인 간격이 ${risk.maxUnattendedHours ?? 10}시간 이내이며, 진입 즉시 손절·목표를 사전 확정할 수 있어야 합니다. 현재 ${horizon.expected_window}, 권장 확인 ${horizon.review_interval_hours}시간 간격입니다.`,
+    ),
+    gate(
       "reward_risk",
       "손익비",
       plan.short_net_return_pct > 0 && plan.net_rr >= risk.minNetRR,
@@ -2531,9 +2617,9 @@ export function finalizeCandidate(
     ),
     gate(
       "score",
-      "종합점수",
-      score >= (risk.scoreThreshold ?? ACTIVE_CALIBRATION_PROFILE.parameters.scoreThreshold),
-      `최종 점수가 ${risk.scoreThreshold ?? ACTIVE_CALIBRATION_PROFILE.parameters.scoreThreshold}점 이상이어야 합니다.`,
+      "기간 추세점수",
+      period.period_score >= (risk.scoreThreshold ?? ACTIVE_CALIBRATION_PROFILE.parameters.scoreThreshold),
+      `백테스트와 라이브에서 같은 의미를 갖도록 미세구조 점수가 아닌 기간 추세점수가 ${risk.scoreThreshold ?? ACTIVE_CALIBRATION_PROFILE.parameters.scoreThreshold}점 이상이어야 합니다. 현재 ${period.period_score.toFixed(2)}점입니다.`,
     ),
   ];
   const failed = checks.filter((check) => !check.passed);
@@ -2553,7 +2639,6 @@ export function finalizeCandidate(
     checks,
     decision,
   );
-  const horizon = estimateHorizon(period, plan.stop_price);
   const forecast = estimatePriceForecast(
     period,
     micro,
@@ -2619,6 +2704,25 @@ export function finalizeCandidate(
     20,
     88,
   );
+  const generatedAt = Number(micro.reference_timestamp || Date.now());
+  const validMinutes = Math.round(clamp(risk.recommendationValidMinutes ?? 15, 5, 30));
+  const executionPlan: LowTouchExecutionPlan = {
+    mode: "LOW_TOUCH",
+    low_touch_compatible: horizon.low_touch_compatible && precommittedExitAvailable,
+    recommendation_valid_minutes: validMinutes,
+    valid_until: new Date(generatedAt + validMinutes * 60_000).toISOString(),
+    intended_holding_hours: horizon.intended_holding_hours,
+    next_review_after_hours: horizon.review_interval_hours,
+    max_holding_hours: horizon.max_holding_hours,
+    monitoring_requirement: decision === "BUY" ? "PRECOMMITTED_EXIT" : "RECHECK_REQUIRED",
+    buy_instruction: decision === "BUY"
+      ? `추천 유효시간 안에 ${quotePriceText(plan.entry_low, period.universe.quote_currency)}~${quotePriceText(plan.entry_high, period.universe.quote_currency)}에서만 진입하고, 진입 직후 손절 ${quotePriceText(plan.stop_price, period.universe.quote_currency)}와 1차 목표 ${quotePriceText(plan.short_target, period.universe.quote_currency)}를 함께 정합니다.`
+      : "현재는 매수하지 말고 다음 접속 시 재스캔합니다.",
+    exit_instruction: plan.target_strategy === "SCALE_OUT"
+      ? `1차 목표에서 ${plan.first_target_allocation_pct}% 청산하고 나머지는 ${quotePriceText(plan.medium_target, period.universe.quote_currency)} 또는 추세 무효화 중 먼저 발생하는 조건에서 청산합니다.`
+      : `1차 목표 ${quotePriceText(plan.short_target, period.universe.quote_currency)}에서 일괄청산하며, ${horizon.max_holding_hours}시간이 지나면 목표 미도달이어도 재평가 또는 종료합니다.`,
+    stale_instruction: `${validMinutes}분이 지나면 호가·체결 조건이 낡은 것으로 간주하고 같은 가격이라도 매수하지 말고 다시 스캔합니다.`,
+  };
 
   return {
     market: period.universe.market,
@@ -2630,6 +2734,7 @@ export function finalizeCandidate(
     turnover_24h_quote: period.universe.turnover_24h_quote,
     quote_currency: period.universe.quote_currency,
     score,
+    period_score: period.period_score,
     confidence,
     decision,
     decision_label: decision === "BUY"
@@ -2642,6 +2747,7 @@ export function finalizeCandidate(
     trade_plan: plan,
     watch_entry_plan: watchEntryPlan,
     horizon,
+    execution_plan: executionPlan,
     forecast,
     gates: checks,
     failed_gates: failed.map((item) => item.key),

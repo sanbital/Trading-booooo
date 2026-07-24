@@ -252,7 +252,8 @@
     elements.primaryHorizon.textContent = `${horizon.label} · ${horizon.expected_window}`;
     elements.persistenceMeter.style.width = `${Math.max(0, Math.min(100, horizon.persistence_score))}%`;
     elements.persistenceScore.textContent = `${Math.round(horizon.persistence_score)}점`;
-    elements.primaryHorizonNote.textContent = horizon.estimate;
+    const execution = candidate.execution_plan || {};
+    elements.primaryHorizonNote.textContent = `${horizon.estimate}${execution.next_review_after_hours ? ` · 다음 확인 약 ${execution.next_review_after_hours}시간 후 · 최대 ${execution.max_holding_hours}시간 보유` : ""}`;
     elements.primaryPositives.innerHTML = listItems(candidate.positives, "강한 추가 근거가 없습니다.");
     elements.primaryWarnings.innerHTML = listItems(
       [...horizon.invalidation, ...(candidate.warnings || []).slice(0, 3)],
@@ -268,6 +269,7 @@
     const quote = candidateQuote(candidate);
     const cross = candidate.cross_exchange;
     const forecast = candidate.forecast || {};
+    const execution = candidate.execution_plan || {};
     const tone = candidate.decision.toLowerCase();
     const dynamicRisk = ["SPOOF_LIKE_RISK", "ASK_ABSORPTION_RISK", "SUPPORT_BREAKDOWN_RISK"].includes(dynamic.status);
     const dynamicTone = dynamicRisk
@@ -293,6 +295,9 @@
           <span><small>예상 순수익 / 손익비</small><b>${escapeHtml(percent(watch.expected_net_return_pct, 2, true))} · ${Number(watch.estimated_net_rr).toFixed(2)}</b></span>
         </div><p class="watch-scenario"><b>진입</b> ${escapeHtml(watch.entry_trigger)}<br><b>매도</b> ${escapeHtml(watch.exit_trigger)}<br><b>예상 보유</b> ${escapeHtml(candidate.horizon.expected_window)} · 추세 무효화 시 목표가 전이라도 종료</p><p class="watch-note">가격 도달 시 자동매수 금지 · 15분봉 마감 후 재스캔</p>`
       : `<div class="candidate-plan muted-plan"><span><small>현재가 진단 R:R</small><b>${Number(plan.net_rr || 0).toFixed(2)} · ${escapeHtml(plan.structure_complete ? "구조 확인" : "지지·저항 미완성")}</b></span><span><small>실패 조건</small><b>${escapeHtml(blockingLabels.join("·") || "안전조건 미충족")}</b></span><span><small>지지 / 저항</small><b>${escapeHtml(price(plan.structural_support, quote))} / ${escapeHtml(price(plan.structural_resistance, quote))}</b></span><span><small>관찰 분류</small><b>${escapeHtml(candidate.horizon.label)}</b></span></div>`;
+    const lowTouchStrip = execution.mode
+      ? `<p class="watch-scenario"><b>추천 유효</b> ${escapeHtml(execution.valid_until || "재스캔 전까지")}<br><b>다음 확인</b> 약 ${Number(execution.next_review_after_hours || 0)}시간 후 · 최대 ${Number(execution.max_holding_hours || 0)}시간 보유<br><b>매수</b> ${escapeHtml(execution.buy_instruction || "")}<br><b>매도</b> ${escapeHtml(execution.exit_instruction || "")}</p>`
+      : "";
     const failed = (candidate.gates || []).filter(gate => !gate.passed).slice(0, 3);
     const crossRows = cross?.venues?.map(venue =>
       `<span><b>${escapeHtml(venue.exchange_label)}</b> ${escapeHtml(venue.decision_label)} · ${Number(venue.score).toFixed(1)}점 · ${escapeHtml(venue.dynamic_label)}</span>`
@@ -311,6 +316,7 @@
       <div class="candidate-market"><span>실패 게이트 <b>${(candidate.failed_gates || []).length}개</b></span><span>현재가 <b>${escapeHtml(price(candidate.current_price, quote))}</b></span><span class="${candidate.change_24h_pct >= 0 ? "positive-text" : "negative-text"}">${percent(candidate.change_24h_pct, 2, true)}</span></div>
       ${crossStrip}
       ${planRows}
+      ${lowTouchStrip}
       <div class="forecast-strip">
         <span><small>${forecast.calibrated ? "교정 예상 상승률" : "사전 조건부 MFE"}</small><b class="positive-text">${escapeHtml(percent(forecast.expected_upside_pct, 2, true))}</b></span>
         <span><small>목표 선도달 추정</small><b>${escapeHtml(percent(forecast.target_hit_probability_pct, 1))}</b></span>
@@ -460,6 +466,10 @@
       ...(actionable ? [`- 추천 투입금: ${krw(plan.recommended_investment_quote ?? plan.recommended_investment_krw, quote)} / 위험예산 ${krw(plan.risk_budget_krw, quote)}`] : []),
       ...watchLines,
       `- 추세 유지 추정: ${candidate.horizon.label}, ${candidate.horizon.expected_window}, 지속성 ${Number(candidate.horizon.persistence_score).toFixed(1)}점`,
+      `- 저빈도 운용 적합성: ${candidate.execution_plan?.low_touch_compatible ? "적합" : "부적합"} / 추천 유효 ${candidate.execution_plan?.recommendation_valid_minutes ?? "N/A"}분 / 다음 확인 ${candidate.execution_plan?.next_review_after_hours ?? "N/A"}시간 후 / 최대 보유 ${candidate.execution_plan?.max_holding_hours ?? "N/A"}시간`,
+      `- 매수 실행: ${candidate.execution_plan?.buy_instruction || "N/A"}`,
+      `- 매도 실행: ${candidate.execution_plan?.exit_instruction || "N/A"}`,
+      `- 유효시간 경과: ${candidate.execution_plan?.stale_instruction || "재스캔"}`,
       `- 추정 설명: ${candidate.horizon.estimate}`,
       ...(watchAvailable
         ? [

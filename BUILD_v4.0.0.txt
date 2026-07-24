@@ -1,0 +1,10 @@
+Trading-booooo v4.0.0 build validation
+
+- TypeScript static check with Deno global stubs: PASS
+- Market scanner Node TypeScript test harness: 44/44 PASS
+- Backtest Node TypeScript test harness: 12/12 PASS
+- docs/app.js syntax: PASS
+- GitHub workflow YAML parse: PASS
+- ZIP integrity: PASS
+
+Authoritative Deno tests and Supabase end-to-end execution run in GitHub Actions after deployment.

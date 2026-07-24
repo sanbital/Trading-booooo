@@ -286,3 +286,23 @@ supabase secrets set EVENT_FEED_TOKEN=...
 GitHub Repository Secrets에 `SUPABASE_SERVICE_ROLE_KEY`와 `SUPABASE_DB_PASSWORD`를 추가합니다. 배포 workflow가 `supabase/migrations/202607240001_forward_learning.sql`을 적용하고 서비스 역할 키를 Edge Function secret으로 설정합니다.
 
 첫 배포 후 매일 평소처럼 스캐너를 실행하면 됩니다. 첫 실행은 저장만 하며, 다음 날 실행부터 18시간 이상 지난 전일 후보를 자동 평가합니다. 포워드 결과가 60건 미만이면 프로필을 변경하지 않고 계속 누적합니다.
+
+## v4.0.0 저빈도 자동학습 배포
+
+추가 GitHub Secret:
+
+```text
+LEARNING_ACCESS_TOKEN
+```
+
+32자 이상의 별도 난수 토큰을 사용합니다. 배포 Workflow가 `market-learning` Edge Function secret으로 설정합니다.
+
+배포 후 구성:
+
+1. 사용자가 `market-scanner`를 실행할 때만 그 시점의 추천 데이터가 생성됩니다.
+2. `.github/workflows/forward-learning.yml`이 6시간마다 성숙한 추천을 자동 평가합니다.
+3. 24h/72h/7d/20d 체크포인트가 `scanner_signal_horizon_outcomes`에 누적됩니다.
+4. 최소 표본과 검증 조건을 통과하면 DB 활성 프로필이 자동 변경되어 다음 스캔부터 즉시 적용됩니다.
+5. 활성 프로필 성과가 악화되면 이전 프로필로 자동 롤백됩니다.
+
+스캔 요청과 학습 요청은 분리되어 있으므로 전일 결과가 많아도 사용자 스캔 응답시간에 평가 작업이 더해지지 않습니다.

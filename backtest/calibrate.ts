@@ -1,4 +1,4 @@
-// Trading-booooo v3.2.0 — guarded, rolling walk-forward self-calibration.
+// Trading-booooo v4.0.0 — guarded, rolling walk-forward self-calibration.
 // TRAIN selects the challenger. Multiple chronological VALIDATION folds decide
 // promotion. HOLDOUT is reported after the decision and never participates in it.
 
@@ -22,9 +22,9 @@ import type { EvaluationWindow } from "./simulate.ts";
 import { buildCalibrationProfile, profileToTypeScript } from "./calibration.ts";
 
 const CANDIDATES: Array<Partial<RiskConfig>> = [];
-for (const scoreThreshold of [68, 72, 76, 80]) {
-  for (const shortTargetAtrMult of [1.8, 2.2, 2.8, 3.4]) {
-    for (const stopAtrMult of [0.9, 1.15, 1.4]) {
+for (const scoreThreshold of [68, 72, 76]) {
+  for (const shortTargetAtrMult of [1.8, 2.4, 3.0]) {
+    for (const stopAtrMult of [1.0, 1.35]) {
       for (const minNetRR of [1.3, 1.5, 1.8]) {
         CANDIDATES.push({
           scoreThreshold,
@@ -46,7 +46,7 @@ function finitePf(value: number): number {
 function objective(run: WindowRun): number {
   const metrics = computeMetrics(run.buy);
   const accuracy = computeAccuracyMetrics(run.signals);
-  const sample = Math.min(1, metrics.trades / 30);
+  const sample = Math.min(1, metrics.trades / 100);
   // Profit-first objective: after-cost expectancy and realised equity growth
   // dominate. Hit-rate is only a supporting diagnostic so a high-accuracy but
   // negative-payoff strategy cannot win calibration.
@@ -123,7 +123,7 @@ if (import.meta.main) {
     const metrics = computeMetrics(trainRun.buy);
     return { overrides, trainRun, metrics, score: objective(trainRun) };
   }).filter((row) =>
-    row.metrics.trades >= 30 && row.metrics.expectancyPct > 0 &&
+    row.metrics.trades >= 100 && row.metrics.expectancyPct > 0 &&
     finitePf(row.metrics.profitFactor) >= 1
   ).sort((a, b) => b.score - a.score || b.metrics.trades - a.metrics.trades);
 
@@ -143,7 +143,7 @@ if (import.meta.main) {
     const challengerAccuracy = computeAccuracyMetrics(challenger.signals);
     const baselineObjective = objective(baseline);
     const challengerObjective = objective(challenger);
-    const passed = challengerMetrics.trades >= 4 &&
+    const passed = challengerMetrics.trades >= 20 &&
       challengerMetrics.expectancyPct > 0 &&
       challengerMetrics.equityFinalPct > 0 &&
       finitePf(challengerMetrics.profitFactor) >= 0.95 &&
@@ -173,7 +173,7 @@ if (import.meta.main) {
   const foldsPassed = foldReports.filter((row) => row.passed).length;
 
   const promotionChecks = {
-    validationTrades: validationMetrics.trades >= 15,
+    validationTrades: validationMetrics.trades >= 60,
     positiveExpectancy: validationMetrics.expectancyPct > 0,
     positiveNetEquity: validationMetrics.equityFinalPct > 0,
     positiveMedianTrade: validationMetrics.medianPct > 0,
@@ -182,7 +182,7 @@ if (import.meta.main) {
     drawdown: validationMetrics.maxDrawdownPct <= 18,
     missedOpportunity: validationAccuracy.missedOpportunityRatePct <= 40,
     objectiveImprovement: candidateScore >= baselineScore + 0.03 ||
-      (baselineMetrics.trades === 0 && validationMetrics.trades >= 15),
+      (baselineMetrics.trades === 0 && validationMetrics.trades >= 60),
     noForecastCollapse: validationMetrics.forecastMaePct <=
       Math.max(5, baselineMetrics.forecastMaePct * 1.15 || 5),
     noForecastBiasExplosion: Math.abs(validationMetrics.forecastBiasPct) <=

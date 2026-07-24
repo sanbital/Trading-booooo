@@ -575,7 +575,7 @@ function makeTrade(
     levels.targetExecution,
     risk.feePerSidePct,
   );
-  const secondGain = levels.targetStrategy === "SCALE_OUT" &&
+  const secondGain = levels.targetStrategy !== "SHORT_ONLY" &&
       Number(levels.secondTargetExecution) > entryPrice
     ? netGainPct(
       entryPrice,
@@ -583,7 +583,7 @@ function makeTrade(
       risk.feePerSidePct,
     )
     : shortGain;
-  const firstAllocation = levels.targetStrategy === "SCALE_OUT"
+  const firstAllocation = levels.targetStrategy !== "SHORT_ONLY"
     ? Math.min(0.9, Math.max(0.1, levels.firstAllocation ?? 0.6))
     : 1;
   const plannedGain = shortGain * firstAllocation +
@@ -599,7 +599,7 @@ function makeTrade(
   }
 
   const slippage = history.tickSize * risk.exitSlippageTicks;
-  const resolved = levels.targetStrategy === "SCALE_OUT"
+  const resolved = levels.targetStrategy !== "SHORT_ONLY"
     ? resolveScaleOut(
       history.m15,
       entryIdx,
@@ -638,7 +638,7 @@ function makeTrade(
       entryPrice,
       exitPrice: resolved.exitPrice,
       target: levels.targetTrigger,
-      secondTarget: levels.targetStrategy === "SCALE_OUT"
+      secondTarget: levels.targetStrategy !== "SHORT_ONLY"
         ? Number(levels.secondTargetTrigger)
         : null,
       stop: levels.stopTrigger,

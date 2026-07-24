@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v3.3.0 — Supabase Edge Function
+// Trading-booooo Market Scanner v4.0.0 — Supabase Edge Function
 // Upbit KRW / Binance USDT universe scan -> multi-period analysis -> orderflow validation.
 // Read-only public market data. No account lookup, order creation, cancellation, or API keys.
 
@@ -27,10 +27,9 @@ import { baseAsset, combineCandidates } from "./combined.ts";
 import { ACTIVE_CALIBRATION_PROFILE } from "./calibration-profile.ts";
 import { assessEventRisk } from "./event-risk.ts";
 import {
-  autoCalibrateForward,
+  applyRuntimeRisk,
   loadRuntimeProfile,
   persistScan,
-  reconcileForwardOutcomes,
   type LearningParameters,
 } from "./forward-learning.ts";
 
@@ -274,6 +273,25 @@ function parseRisk(
       0.7,
       3,
     ),
+    operatorMode: "LOW_TOUCH",
+    dailyCheckCount: clamp(finite(body.daily_check_count, 3), 2, 3),
+    maxUnattendedHours: clamp(finite(body.max_unattended_hours, 10), 6, 12),
+    minActionableHoldingHours: clamp(finite(body.min_actionable_holding_hours, 6), 4, 12),
+    recommendationValidMinutes: clamp(finite(body.recommendation_valid_minutes, 15), 5, 30),
+    requirePrecommittedExit: true,
+    minStructuralHeadroomNetPct: clamp(finite(body.min_structural_headroom_net_pct, runtime?.minStructuralHeadroomNetPct ?? 0.6), 0.6, 2.5),
+    minCostMultiple: clamp(finite(body.min_cost_multiple, runtime?.minCostMultiple ?? 2), 2, 5),
+    minTradePressure: clamp(finite(body.min_trade_pressure, runtime?.minTradePressure ?? -0.2), -0.2, 0.35),
+    maxNegativeBookImbalance: clamp(finite(body.max_negative_book_imbalance, runtime?.maxNegativeBookImbalance ?? -0.4), -0.4, 0.2),
+    minDepthCoverage: clamp(finite(body.min_depth_coverage, runtime?.minDepthCoverage ?? 1.5), 1.5, 8),
+    maxSlippageBps: clamp(finite(body.max_slippage_bps, runtime?.maxSlippageBps ?? 20), 5, 20),
+    maxSpreadBps: clamp(finite(body.max_spread_bps, runtime?.maxSpreadBps ?? 35), 10, 35),
+    stopMinAtr4hMult: clamp(finite(body.stop_min_atr_4h_mult, runtime?.stopMinAtr4hMult ?? 1), 1, 2),
+    stopMinAtr15mMult: clamp(finite(body.stop_min_atr_15m_mult, runtime?.stopMinAtr15mMult ?? 1.5), 1.5, 3),
+    firstTargetAllocationPct: clamp(finite(body.first_target_allocation_pct, runtime?.firstTargetAllocationPct ?? 60), 50, 80),
+    exitPolicy: ["FIXED_T1", "SCALE_OUT", "TRAIL_AFTER_T1"].includes(String(runtime?.exitPolicy))
+      ? runtime?.exitPolicy
+      : "SCALE_OUT",
   };
 }
 
@@ -1519,17 +1537,21 @@ Deno.serve(async (request: Request) => {
     stopAtrMult: CALIBRATED_PARAMETERS.stopAtrMult,
     mediumTargetAtr4hMult: CALIBRATED_PARAMETERS.mediumTargetAtr4hMult,
     mediumTargetAtrDayMult: CALIBRATED_PARAMETERS.mediumTargetAtrDayMult,
+    minStructuralHeadroomNetPct: 0.6,
+    minCostMultiple: 2,
+    minTradePressure: -0.2,
+    maxNegativeBookImbalance: -0.4,
+    minDepthCoverage: 1.5,
+    maxSlippageBps: 20,
+    maxSpreadBps: 35,
+    stopMinAtr4hMult: 1,
+    stopMinAtr15mMult: 1.5,
+    firstTargetAllocationPct: 60,
+    exitPolicy: "SCALE_OUT",
   };
-  const beforeProfile = await loadRuntimeProfile(codeDefaults);
-  const reconciliation = await reconcileForwardOutcomes().catch(() => ({ evaluated: 0, errors: 1 }));
-  const calibration = await autoCalibrateForward(beforeProfile).catch((error) => ({
-    promoted: false,
-    reason: error instanceof Error ? error.message : String(error),
-    profile: beforeProfile,
-  }));
-  const runtimeProfile = calibration.profile;
-  const upbitRisk = parseRisk(body, "upbit", runtimeProfile.parameters);
-  const binanceRisk = parseRisk(body, "binance", runtimeProfile.parameters);
+  const runtimeProfile = await loadRuntimeProfile(codeDefaults);
+  const upbitRisk = applyRuntimeRisk(parseRisk(body, "upbit", runtimeProfile.parameters), runtimeProfile, codeDefaults);
+  const binanceRisk = applyRuntimeRisk(parseRisk(body, "binance", runtimeProfile.parameters), runtimeProfile, codeDefaults);
   const cacheKey = JSON.stringify({ scanMode, upbitRisk, binanceRisk, profileVersion: runtimeProfile.version });
   const now = Date.now();
   if (
@@ -1560,23 +1582,21 @@ Deno.serve(async (request: Request) => {
         scanMode === "upbit" ? upbitRisk : binanceRisk,
         scanMode,
       );
-    const persistence = await persistScan(result, runtimeProfile).catch((error) => ({
+    const persistence = await persistScan(result, runtimeProfile, { upbit: upbitRisk, binance: binanceRisk }).catch((error) => ({
       stored: false,
       reason: error instanceof Error ? error.message : String(error),
     }));
     const enriched = {
       ...result,
       learning: {
-        mode: "DAILY_FORWARD_AUTO_CALIBRATION",
-        previous_outcomes_evaluated: reconciliation.evaluated,
-        outcome_errors: reconciliation.errors,
+        mode: "BACKGROUND_FORWARD_AUTO_CALIBRATION",
         profile_version: runtimeProfile.version,
         profile_source: runtimeProfile.source,
         profile_samples: runtimeProfile.samples,
         validation_samples: runtimeProfile.validationSamples,
-        promoted_this_run: calibration.promoted,
-        promotion_reason: calibration.reason,
+        weekly_guardrails: codeDefaults,
         active_parameters: runtimeProfile.parameters,
+        operator_profile: { daily_checks: 2_3, mode: "LOW_TOUCH", max_unattended_hours: 10 },
         scan_persisted: persistence.stored,
         persistence_note: persistence.reason || null,
       },

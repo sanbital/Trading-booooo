@@ -88,6 +88,22 @@ const risk: RiskConfig = {
   exitSlippageTicks: 0.5,
 };
 
+function clearEvent(market = "KRW-TEST") {
+  return {
+    status: "CLEAR" as const,
+    label: "테스트 이벤트 이상 없음",
+    checked_at: new Date(1_800_000_000_000).toISOString(),
+    symbol: market,
+    provider_status: { test: "OK" as const },
+    coverage_complete: true,
+    volume_anomaly: false,
+    volume_ratio_4h: 1,
+    volume_ratio_day: 1,
+    evidence: [],
+    warnings: [],
+  };
+}
+
 function universeRow(currentPrice = 120): UniverseRow {
   return {
     market: "KRW-TEST",
@@ -565,14 +581,14 @@ Deno.test("final candidate never marks a failed-gate setup actionable", () => {
   assert(final.failed_gates.length > 0);
 });
 
-Deno.test("a strong WAIT setup receives a conditional watch-entry zone", () => {
+Deno.test("WAIT plan is withheld when the hypothetical entry still fails structural risk", () => {
   const data = dataset(0.0012);
   const price = timeframeMetrics(data.m5).close;
   const period = analyzePeriod(universeRow(price), data);
   const atr15 = period.timeframes.m15.atr14!;
   period.timeframes.m15.rsi14 = 66;
-  period.timeframes.m15.support = price - atr15 * 0.35;
-  period.timeframes.m15.resistance = price + atr15 * 2.4;
+  period.timeframes.m15.support = price - atr15 * 0.8;
+  period.timeframes.m15.resistance = price + atr15 * 4.2;
   period.timeframes.h4.resistance = null;
   const micro = computeMicrostructure(
     bookSnapshots(false),
@@ -585,28 +601,15 @@ Deno.test("a strong WAIT setup receives a conditional watch-entry zone", () => {
   micro.reference_timestamp = 1_800_000_000_000;
   micro.live_book_age_ms = 0;
   micro.spread_bps = 2;
-  const final = finalizeCandidate(period, micro, 0.1, risk);
+  const final = finalizeCandidate(period, micro, 0.1, {
+    ...risk,
+    stopMinAtr4hMult: 0.1,
+    stopMinAtr15mMult: 0.5,
+  }, clearEvent());
   assert(final.decision === "WAIT", final.decision);
   assert(final.failed_gates.includes("micro_pressure"));
-  assert(final.watch_entry_plan.available, final.watch_entry_plan.note);
-  assert(final.watch_entry_plan.zone_low! < price);
-  assert(
-    final.watch_entry_plan.zone_low! >
-      final.watch_entry_plan.invalidation_price!,
-  );
-  assert(
-    final.watch_entry_plan.max_price === final.watch_entry_plan.zone_high,
-  );
-  assert(final.watch_entry_plan.conditions.length >= 4);
-  assert(final.decision_label === "관찰·눌림 대기");
-  assert(
-    final.watch_entry_plan.expected_exit_price! >
-      final.watch_entry_plan.zone_high!,
-  );
-  assert(final.watch_entry_plan.expected_net_return_pct! > 0);
-  assert(final.watch_entry_plan.scenario.length === 4);
-  assert(final.watch_entry_plan.entry_trigger.includes("15분봉"));
-  assert(final.watch_entry_plan.exit_trigger.includes("분할매도"));
+  assert(!final.watch_entry_plan.available);
+  assert(final.watch_entry_plan.note.includes("손익비") || final.watch_entry_plan.note.includes("조건"));
 });
 
 Deno.test("market alert is a hard gate even with bullish candles", () => {
@@ -669,8 +672,9 @@ Deno.test("a fully aligned, liquid, fee-aware setup can become BUY", () => {
   period.timeframes.day.resistance = null;
   period.timeframes.day.recent_high = price * 2;
   const atr15 = period.timeframes.m15.atr14!;
-  period.timeframes.m15.support = price - atr15 * 0.7;
-  period.timeframes.h4.support = price - atr15;
+  const requiredStopDistance = Math.max(period.timeframes.h4.atr14!, atr15 * 1.5);
+  period.timeframes.m15.support = price - requiredStopDistance - atr15 * 0.45;
+  period.timeframes.h4.support = price - requiredStopDistance - atr15 * 0.55;
   period.timeframes.m15.rsi14 = 66;
   const micro = computeMicrostructure(
     bookSnapshots(true),
@@ -692,8 +696,14 @@ Deno.test("a fully aligned, liquid, fee-aware setup can become BUY", () => {
   }));
   micro.spread_bps = 2;
   micro.micro_score = 88;
-  const strictRisk = { ...risk, minNetRR: 1.5, maxStopPct: 5 };
-  const final = finalizeCandidate(period, micro, 0.01, strictRisk);
+  const strictRisk = {
+    ...risk,
+    minNetRR: 1.5,
+    maxStopPct: 8,
+    stopMinAtr4hMult: 0.1,
+    stopMinAtr15mMult: 0.5,
+  };
+  const final = finalizeCandidate(period, micro, 0.01, strictRisk, clearEvent());
   assert(
     final.trade_plan.net_rr >= strictRisk.minNetRR,
     `rr=${final.trade_plan.net_rr}`,
@@ -701,6 +711,29 @@ Deno.test("a fully aligned, liquid, fee-aware setup can become BUY", () => {
   assert(final.score >= 72, `score=${final.score}`);
   assert(final.decision === "BUY", `failed=${final.failed_gates.join(",")}`);
   assert(final.trade_plan.actionable);
+  assert(final.execution_plan.low_touch_compatible);
+  assert(final.execution_plan.next_review_after_hours >= 4);
+  assert(final.execution_plan.max_holding_hours >= final.execution_plan.intended_holding_hours);
+  assert(final.period_score === period.period_score);
+});
+
+Deno.test("minimum edge gate can be tightened by the forward profile", () => {
+  const data = dataset(0.0012);
+  const price = timeframeMetrics(data.m5).close;
+  const period = analyzePeriod(universeRow(price), data);
+  const micro = computeMicrostructure(bookSnapshots(true), trades(true), 1_800_000_000_000, 0.01);
+  micro.best_bid = price - 0.01;
+  micro.best_ask = price + 0.01;
+  micro.reference_price = price;
+  micro.reference_timestamp = 1_800_000_000_000;
+  micro.live_book_age_ms = 0;
+  micro.spread_bps = 2;
+  const final = finalizeCandidate(period, micro, 0.01, {
+    ...risk,
+    minStructuralHeadroomNetPct: 10,
+  }, clearEvent());
+  assert(final.failed_gates.includes("minimum_edge"));
+  assert(final.decision !== "BUY");
 });
 
 Deno.test("a nearby resistance is never overwritten by an artificial higher target", () => {
@@ -835,6 +868,23 @@ Deno.test("shallow visible orderbook depth blocks an otherwise strong BUY", () =
     maxStopPct: 5,
   });
   assert(final.failed_gates.includes("depth"));
+  assert(final.decision !== "BUY");
+});
+
+
+Deno.test("event gate defaults to UNKNOWN and fails closed", () => {
+  const data = dataset(0.0012);
+  const price = timeframeMetrics(data.m5).close;
+  const period = analyzePeriod(universeRow(price), data);
+  const micro = computeMicrostructure(bookSnapshots(true), trades(true), 1_800_000_000_000);
+  micro.best_bid = price - 0.01;
+  micro.best_ask = price + 0.01;
+  micro.reference_price = price;
+  micro.reference_timestamp = 1_800_000_000_000;
+  micro.live_book_age_ms = 0;
+  const final = finalizeCandidate(period, micro, 0.01, risk);
+  assert(final.event_risk.status === "UNKNOWN");
+  assert(final.failed_gates.includes("external_event"));
   assert(final.decision !== "BUY");
 });
 
