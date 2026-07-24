@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v3.0.0 — Supabase Edge Function
+// Trading-booooo Market Scanner v3.3.0 — Supabase Edge Function
 // Upbit KRW / Binance USDT universe scan -> multi-period analysis -> orderflow validation.
 // Read-only public market data. No account lookup, order creation, cancellation, or API keys.
 
@@ -25,6 +25,14 @@ import {
 } from "./engine.ts";
 import { baseAsset, combineCandidates } from "./combined.ts";
 import { ACTIVE_CALIBRATION_PROFILE } from "./calibration-profile.ts";
+import { assessEventRisk } from "./event-risk.ts";
+import {
+  autoCalibrateForward,
+  loadRuntimeProfile,
+  persistScan,
+  reconcileForwardOutcomes,
+  type LearningParameters,
+} from "./forward-learning.ts";
 
 
 const UPBIT = "https://api.upbit.com";
@@ -209,6 +217,7 @@ function tokenAllowed(request: Request): boolean {
 function parseRisk(
   body: Record<string, unknown>,
   exchange: Exchange,
+  runtime?: LearningParameters,
 ): RiskConfig {
   const binance = exchange === "binance";
   return {
@@ -233,7 +242,7 @@ function parseRisk(
       0.5,
     ),
     minNetRR: clamp(
-      finite(body.min_net_rr, CALIBRATED_PARAMETERS.minNetRR),
+      finite(body.min_net_rr, runtime?.minNetRR ?? CALIBRATED_PARAMETERS.minNetRR),
       1,
       5,
     ),
@@ -241,27 +250,27 @@ function parseRisk(
     entrySlippageTicks: clamp(finite(body.entry_slippage_ticks, 0.5), 0, 5),
     exitSlippageTicks: clamp(finite(body.exit_slippage_ticks, 1), 0, 10),
     scoreThreshold: clamp(
-      finite(body.score_threshold, CALIBRATED_PARAMETERS.scoreThreshold),
+      finite(body.score_threshold, runtime?.scoreThreshold ?? CALIBRATED_PARAMETERS.scoreThreshold),
       55,
       90,
     ),
     shortTargetAtrMult: clamp(
-      finite(body.short_target_atr_mult, CALIBRATED_PARAMETERS.shortTargetAtrMult),
+      finite(body.short_target_atr_mult, runtime?.shortTargetAtrMult ?? CALIBRATED_PARAMETERS.shortTargetAtrMult),
       1.2,
       5,
     ),
     stopAtrMult: clamp(
-      finite(body.stop_atr_mult, CALIBRATED_PARAMETERS.stopAtrMult),
+      finite(body.stop_atr_mult, runtime?.stopAtrMult ?? CALIBRATED_PARAMETERS.stopAtrMult),
       0.7,
       2.5,
     ),
     mediumTargetAtr4hMult: clamp(
-      finite(body.medium_target_atr_4h_mult, CALIBRATED_PARAMETERS.mediumTargetAtr4hMult),
+      finite(body.medium_target_atr_4h_mult, runtime?.mediumTargetAtr4hMult ?? CALIBRATED_PARAMETERS.mediumTargetAtr4hMult),
       1.2,
       5,
     ),
     mediumTargetAtrDayMult: clamp(
-      finite(body.medium_target_atr_day_mult, CALIBRATED_PARAMETERS.mediumTargetAtrDayMult),
+      finite(body.medium_target_atr_day_mult, runtime?.mediumTargetAtrDayMult ?? CALIBRATED_PARAMETERS.mediumTargetAtrDayMult),
       0.7,
       3,
     ),
@@ -1149,9 +1158,13 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
       .values(),
   ]
     .slice(0, FINALIST_LIMIT);
-  const microBundle = binance
-    ? await loadBinanceMicrostructure(finalists, instrumentTicks)
-    : await loadMicrostructure(finalists);
+  const [microBundle, eventRiskRows] = await Promise.all([
+    binance
+      ? loadBinanceMicrostructure(finalists, instrumentTicks)
+      : loadMicrostructure(finalists),
+    Promise.all(finalists.map(async (period) => [period.universe.market, await assessEventRisk(period)] as const)),
+  ]);
+  const eventRiskMap = new Map(eventRiskRows);
   const generatedAt = Date.now();
   const finalCandidates: FinalCandidate[] = finalists
     .map((period) => {
@@ -1167,6 +1180,7 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
         micro,
         microBundle.ticks.get(market)!,
         risk,
+        eventRiskMap.get(market),
       );
     })
     .sort((a, b) => {
@@ -1498,9 +1512,25 @@ Deno.serve(async (request: Request) => {
     : ["combined", "both", "all"].includes(requestedMode)
     ? "combined"
     : "upbit";
-  const upbitRisk = parseRisk(body, "upbit");
-  const binanceRisk = parseRisk(body, "binance");
-  const cacheKey = JSON.stringify({ scanMode, upbitRisk, binanceRisk });
+  const codeDefaults: LearningParameters = {
+    scoreThreshold: CALIBRATED_PARAMETERS.scoreThreshold,
+    minNetRR: CALIBRATED_PARAMETERS.minNetRR,
+    shortTargetAtrMult: CALIBRATED_PARAMETERS.shortTargetAtrMult,
+    stopAtrMult: CALIBRATED_PARAMETERS.stopAtrMult,
+    mediumTargetAtr4hMult: CALIBRATED_PARAMETERS.mediumTargetAtr4hMult,
+    mediumTargetAtrDayMult: CALIBRATED_PARAMETERS.mediumTargetAtrDayMult,
+  };
+  const beforeProfile = await loadRuntimeProfile(codeDefaults);
+  const reconciliation = await reconcileForwardOutcomes().catch(() => ({ evaluated: 0, errors: 1 }));
+  const calibration = await autoCalibrateForward(beforeProfile).catch((error) => ({
+    promoted: false,
+    reason: error instanceof Error ? error.message : String(error),
+    profile: beforeProfile,
+  }));
+  const runtimeProfile = calibration.profile;
+  const upbitRisk = parseRisk(body, "upbit", runtimeProfile.parameters);
+  const binanceRisk = parseRisk(body, "binance", runtimeProfile.parameters);
+  const cacheKey = JSON.stringify({ scanMode, upbitRisk, binanceRisk, profileVersion: runtimeProfile.version });
   const now = Date.now();
   if (
     cachedResult && cachedResult.expires > now && cachedResult.key === cacheKey
@@ -1530,12 +1560,33 @@ Deno.serve(async (request: Request) => {
         scanMode === "upbit" ? upbitRisk : binanceRisk,
         scanMode,
       );
+    const persistence = await persistScan(result, runtimeProfile).catch((error) => ({
+      stored: false,
+      reason: error instanceof Error ? error.message : String(error),
+    }));
+    const enriched = {
+      ...result,
+      learning: {
+        mode: "DAILY_FORWARD_AUTO_CALIBRATION",
+        previous_outcomes_evaluated: reconciliation.evaluated,
+        outcome_errors: reconciliation.errors,
+        profile_version: runtimeProfile.version,
+        profile_source: runtimeProfile.source,
+        profile_samples: runtimeProfile.samples,
+        validation_samples: runtimeProfile.validationSamples,
+        promoted_this_run: calibration.promoted,
+        promotion_reason: calibration.reason,
+        active_parameters: runtimeProfile.parameters,
+        scan_persisted: persistence.stored,
+        persistence_note: persistence.reason || null,
+      },
+    };
     cachedResult = {
       expires: Date.now() + RESPONSE_CACHE_MS,
       key: cacheKey,
-      value: result,
+      value: enriched,
     };
-    return json(request, result);
+    return json(request, enriched);
   } catch (error) {
     console.error("market scan failed", error);
     return json(request, {

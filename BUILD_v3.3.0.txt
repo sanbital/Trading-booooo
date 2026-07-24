@@ -1,0 +1,10 @@
+Trading-booooo v3.3.0 build validation
+
+- TypeScript static compilation: PASS (all market-scanner and backtest .ts files via TypeScript 5.8 compatibility check)
+- docs/app.js syntax: PASS
+- GitHub Actions YAML parse: PASS
+- Forward-learning unit cases added:
+  - ambiguous target/stop same bar => conservative stop-first
+  - no entry-zone touch => NO_ENTRY
+- Database migration included: supabase/migrations/202607240001_forward_learning.sql
+- Live exchange/Supabase end-to-end execution was not performed in this offline sandbox.

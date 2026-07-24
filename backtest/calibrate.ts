@@ -1,4 +1,4 @@
-// Trading-booooo v3.1.0 — guarded, rolling walk-forward self-calibration.
+// Trading-booooo v3.2.0 — guarded, rolling walk-forward self-calibration.
 // TRAIN selects the challenger. Multiple chronological VALIDATION folds decide
 // promotion. HOLDOUT is reported after the decision and never participates in it.
 

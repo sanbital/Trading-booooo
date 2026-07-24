@@ -2,8 +2,9 @@
 // Pure analysis engine. Public market data only; no order or account operations.
 
 import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-profile.ts";
+import type { EventRiskSnapshot } from "./event-risk.ts";
 
-export const ENGINE_VERSION = "3.1.0";
+export const ENGINE_VERSION = "3.3.0";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -353,6 +354,7 @@ export type FinalCandidate = {
   warnings: string[];
   timeframes: PeriodAnalysis["timeframes"];
   microstructure: Microstructure;
+  event_risk: EventRiskSnapshot;
   price_context: {
     ticker_price: number;
     live_reference_price: number | null;
@@ -2370,6 +2372,10 @@ export function finalizeCandidate(
   micro: Microstructure,
   tickSize: number,
   risk: RiskConfig,
+  eventRisk: EventRiskSnapshot = {
+    status: "CLEAR", label: "이벤트 평가 생략", checked_at: new Date(0).toISOString(), symbol: period.universe.market,
+    provider_status: {}, coverage_complete: false, volume_anomaly: false, volume_ratio_4h: 0, volume_ratio_day: 0, evidence: [], warnings: [],
+  },
 ): FinalCandidate {
   const plan = buildTradePlan(period, micro, tickSize, risk);
   // 과거 추세와 현재 실행 가능성을 거의 독립적인 축으로 유지한다.
@@ -2392,6 +2398,18 @@ export function finalizeCandidate(
       "시장경보",
       period.universe.caution_labels.length === 0,
       "유의·주의·경고 종목은 추천하지 않습니다.",
+    ),
+    gate(
+      "external_event",
+      "뉴스·공시·언락 이벤트",
+      eventRisk.status === "CLEAR",
+      eventRisk.status === "BLOCK"
+        ? `해킹·상장폐지·고위험 언락 등 중대 이벤트가 검출됐습니다: ${eventRisk.evidence.slice(0, 2).map((item) => item.title).join(" / ")}`
+        : eventRisk.status === "REVIEW"
+        ? `뉴스·공시 또는 설명되지 않은 거래대금 급증의 원인 확인이 필요합니다: ${eventRisk.evidence.slice(0, 2).map((item) => item.title).join(" / ") || "관련 이벤트 미확인"}`
+        : eventRisk.status === "UNKNOWN"
+        ? "이벤트 공급자 데이터가 없어 신규 BUY를 승인할 수 없습니다."
+        : "최근 중대 뉴스·공시·언락·보안 사고가 검출되지 않았습니다.",
     ),
     gate(
       "liquidity",
@@ -2521,7 +2539,7 @@ export function finalizeCandidate(
   const failed = checks.filter((check) => !check.passed);
   const decision: FinalCandidate["decision"] = failed.length === 0
     ? "BUY"
-    : score < 42 || tf.h4.trend_signal < -0.5
+    : eventRisk.status === "BLOCK" || score < 42 || tf.h4.trend_signal < -0.5
     ? "AVOID"
     : "WAIT";
   plan.actionable = decision === "BUY";
@@ -2570,6 +2588,11 @@ export function finalizeCandidate(
   }
   negatives.push(...micro.dynamic.warnings);
   warnings.push(...micro.dynamic.warnings);
+  warnings.push(...eventRisk.warnings);
+  for (const item of eventRisk.evidence.slice(0, 4)) {
+    const when = item.displayed_date || item.event_date || item.published_at || "시점 미상";
+    warnings.push(`[${item.severity}] ${item.category}: ${item.title} (${when}, ${item.source})`);
+  }
   for (const failedGate of failed) {
     warnings.push(`${failedGate.label}: ${failedGate.detail}`);
   }
@@ -2627,6 +2650,7 @@ export function finalizeCandidate(
     warnings: [...new Set(warnings)],
     timeframes: period.timeframes,
     microstructure: micro,
+    event_risk: eventRisk,
     price_context: {
       ticker_price: period.universe.current_price,
       live_reference_price: micro.reference_price,

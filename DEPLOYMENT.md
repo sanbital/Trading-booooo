@@ -264,3 +264,25 @@ v3.0.0에는 `Weekly Backtest Calibration` Action이 포함됩니다.
 - Supabase Edge Function 배포: <https://supabase.com/docs/guides/functions/deploy>
 - GitHub Actions 비밀값: <https://docs.github.com/en/actions/security-for-github-actions/security-guides/using-secrets-in-github-actions>
 - GitHub Pages 설정: <https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site>
+
+
+## v3.2.0 이벤트 위험 공급자 설정
+
+Supabase Edge Function Secrets에 다음 중 하나 이상을 등록하십시오. 미등록 또는 전부 오류이면 라이브 후보의 `external_event` 게이트가 통과하지 않습니다.
+
+```bash
+supabase secrets set NEWSAPI_KEY=...
+supabase secrets set COINMARKETCAL_API_KEY=...
+# 선택: 사내/별도 수집기
+supabase secrets set EVENT_FEED_URL=https://...
+supabase secrets set EVENT_FEED_TOKEN=...
+```
+
+커스텀 피드는 `GET EVENT_FEED_URL?symbol=ENS` 요청에 `events` 배열을 반환해야 합니다. 각 이벤트는 `title`, `category`, `severity`, `confidence`, `source`, `url`, `published_at`, `event_date` 필드를 사용할 수 있습니다.
+
+
+## v3.3.0 포워드 학습 추가 설정
+
+GitHub Repository Secrets에 `SUPABASE_SERVICE_ROLE_KEY`와 `SUPABASE_DB_PASSWORD`를 추가합니다. 배포 workflow가 `supabase/migrations/202607240001_forward_learning.sql`을 적용하고 서비스 역할 키를 Edge Function secret으로 설정합니다.
+
+첫 배포 후 매일 평소처럼 스캐너를 실행하면 됩니다. 첫 실행은 저장만 하며, 다음 날 실행부터 18시간 이상 지난 전일 후보를 자동 평가합니다. 포워드 결과가 60건 미만이면 프로필을 변경하지 않고 계속 누적합니다.

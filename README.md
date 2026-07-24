@@ -1,16 +1,20 @@
-# Trading-booooo Market Scanner v3.1.0
+# Trading-booooo Market Scanner v3.3.0
 
 업비트 KRW 현물과 바이낸스 USDT 현물을 전수 점검해 기간 추세, 가격구조, 최신 호가·체결, 비용 포함 손익비를 함께 통과한 후보만 제시하는 개인용 읽기 전용 분석 도구입니다. 자동 주문, 거래소 계정 조회, 거래소 API Key는 사용하지 않습니다.
 
-## v3.1.0에서 달라진 점
+## v3.3.0에서 달라진 점
 
-- 3개 롤링 VALIDATION 구간 중 2개 이상 통과해야 자동 승격
-- 최근 데이터 45일 반감기 가중으로 시장 국면 변화 반영
-- 점수구간 + 종목별 + 보유기간별 계층형 상승률 보정
-- 희소 표본 자동 후퇴, 파라미터 급변·예측 편향 폭증 차단
-- 매주 교정 이력을 `backtest/calibration-history.jsonl`에 누적
+- 매 실행 시작 시 18~36시간 전 미평가 후보의 이후 5분봉을 자동 조회해 결과 채점
+- 진입 여부, 목표·손절 선도달, 비용 차감 순수익, MFE, MAE, Peak Capture Ratio 영구 저장
+- BUY뿐 아니라 WAIT·AVOID를 포함한 거래소별 finalist 전체를 Supabase에 누적
+- 누적 포워드 표본 60건 이상부터 70/30 시간순 검증으로 challenger 자동 생성
+- 기대수익·Profit Factor·낙폭 목적함수가 기존 champion보다 개선될 때만 런타임 프로필 자동 승격
+- 승격된 score threshold, 최소 순 R:R, 목표 ATR 배수, 손절 ATR 배수를 같은 실행의 당일 추천부터 적용
+- 코드 재배포 없이 DB의 active runtime profile을 읽어 매일 로직을 자동 교정
+- 과거 백테스트 바스켓을 48개 시장으로 확대하고 기본 수집기간을 450일로 상향
+- Supabase 테이블·RLS·인덱스를 생성하는 migration과 자동 적용 workflow 추가
 
-자세한 내용은 `UPDATE_v3.1.0.md`를 참고하세요.
+자세한 내용은 `UPDATE_v3.3.0.md`를 참고하세요.
 
 ## 스캐너 처리 흐름
 
@@ -59,8 +63,10 @@ fragment는 GitHub 서버 요청에 포함되지 않지만 토큰이 들어간 �
 - `SUPABASE_ACCESS_TOKEN`
 - `SUPABASE_PROJECT_REF`
 - `SCAN_ACCESS_TOKEN` — 32자 이상
+- `SUPABASE_SERVICE_ROLE_KEY` — 포워드 로그 저장용
+- `SUPABASE_DB_PASSWORD` — migration 자동 적용용
 
-`main` 브랜치에서 스캐너 코드나 승격된 교정 프로필이 바뀌면 `.github/workflows/main.deploy-supabase.yml`이 타입검증·테스트 후 Edge Function을 배포합니다.
+`main` 브랜치에서 스캐너 코드나 DB migration이 바뀌면 `.github/workflows/main.deploy-supabase.yml`이 타입검증·테스트 후 Edge Function을 배포합니다.
 
 ## 파일 구조
 

@@ -40,6 +40,7 @@ export function neutralMicro(price: number, timestamp = Date.now()): Microstruct
     imbalance_stability: 0.8,
     trade_pressure: 0, // micro_pressure 게이트(> -0.45) 통과
     trade_count: 40,
+    average_trade_notional: 0.05,
     buy_notional: 1,
     sell_notional: 1,
     micro_score: 50, // 중립 — 최종점수에 ±0 기여
