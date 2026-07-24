@@ -1,4 +1,4 @@
-# Trading-booooo v3.0.0 — GitHub 웹 전용 배포 가이드
+# Trading-booooo v4.0.1 — GitHub 웹 전용 배포 가이드
 
 이 가이드는 **VS Code, PowerShell, Git, Supabase CLI를 전혀 사용하지 않습니다.** Windows 파일 탐색기, GitHub 웹사이트, Supabase 대시보드만 사용합니다.
 
@@ -12,9 +12,9 @@ Supabase 프로젝트의 **표시 이름은 배포에 사용되지 않습니다.
 ## 전체 순서
 
 1. ZIP 압축 풀기
-2. Supabase 값 3개 확인
-3. 개인 스캔 토큰 정하기
-4. GitHub 비밀값 3개 등록
+2. Supabase 값과 데이터베이스 비밀번호 확인
+3. 개인 스캔·학습 토큰 정하기
+4. GitHub 비밀값 5개 확인·등록
 5. GitHub에 파일 업로드
 6. 자동 함수 배포 성공 확인
 7. GitHub에서 `docs/config.js` 수정
@@ -76,7 +76,11 @@ https://supabase.com/dashboard/project/abcdefghijklmnop
 
 이 토큰은 GitHub Actions가 Supabase에 함수를 배포할 때만 사용합니다. 권한이 큰 관리 토큰이므로 파일, `config.js`, README, 메모 공개글에 절대 넣지 않습니다.
 
-## 3. 개인 스캔 토큰 정하기
+### 2-4. 데이터베이스 비밀번호
+
+프로젝트 생성 때 정한 Postgres 데이터베이스 비밀번호를 사용합니다. 기억나지 않으면 Supabase 프로젝트의 `Settings` → `Database`에서 새 비밀번호로 재설정합니다. 이 값은 migration을 자동 적용하는 GitHub Actions에서만 사용합니다.
+
+## 3. 개인 스캔·학습 토큰 정하기
 
 로그인 대신 사용할 본인만의 문자열을 하나 정합니다.
 
@@ -93,7 +97,9 @@ Boo_Replace_With_Your_Own_Random_32Plus_Chars
 
 실제 값은 안전한 곳에 보관합니다. 아래에서는 `MY_SCAN_TOKEN`이라고 부릅니다.
 
-## 4. GitHub 비밀값 3개 등록
+같은 방식으로 자동 학습 호출용 토큰도 별도로 하나 만듭니다. 최소 32자이며 스캔 토큰과 다른 문자열을 사용합니다. 아래에서는 `MY_LEARNING_TOKEN`이라고 부릅니다.
+
+## 4. GitHub 비밀값 5개 확인·등록
 
 GitHub의 `Trading-booooo` 저장소에서 다음 순서로 이동합니다.
 
@@ -102,13 +108,17 @@ GitHub의 `Trading-booooo` 저장소에서 다음 순서로 이동합니다.
 3. `Actions`
 4. `New repository secret`
 
-다음 3개를 정확한 이름으로 하나씩 만듭니다.
+기존 3개는 그대로 두고, 아래 2개를 추가하여 총 5개가 되게 합니다.
 
 | Name | Secret에 넣을 값 |
 |---|---|
-| `SUPABASE_ACCESS_TOKEN` | 2-3에서 만든 Supabase Access Token |
-| `SUPABASE_PROJECT_REF` | 2-1에서 복사한 Project Ref |
-| `SCAN_ACCESS_TOKEN` | 3에서 정한 개인 스캔 토큰 |
+| `SUPABASE_ACCESS_TOKEN` | 기존 Supabase Access Token |
+| `SUPABASE_PROJECT_REF` | 기존 Project Ref |
+| `SCAN_ACCESS_TOKEN` | 기존 개인 스캔 토큰 |
+| `SUPABASE_DB_PASSWORD` | 프로젝트 생성 때 정한 데이터베이스 비밀번호. 기억나지 않으면 Supabase Database Settings에서 재설정 |
+| `LEARNING_ACCESS_TOKEN` | 3단계에서 새로 만든 32자 이상 학습 토큰 |
+
+`SUPABASE_SERVICE_ROLE_KEY`는 GitHub Secret으로 만들지 않습니다. Supabase Edge Function 런타임에 기본 제공되는 환경변수를 사용합니다.
 
 저장 후 값이 다시 보이지 않는 것은 정상입니다. 이름 철자를 정확히 확인합니다.
 
@@ -119,7 +129,7 @@ GitHub의 `Trading-booooo` 저장소에서 다음 순서로 이동합니다.
 3. Windows에서 압축을 푼 `Trading-booooo` 폴더를 엽니다.
 4. **바깥쪽 `Trading-booooo` 폴더가 아니라 그 안의 모든 항목**을 업로드 영역으로 끌어놓습니다.
 5. 목록에 `.github`, `docs`, `supabase`, `README.md`가 보이는지 확인합니다.
-6. Commit message에 `Deploy Trading-booooo v3.0.0`을 입력합니다.
+6. Commit message에 `Deploy Trading-booooo v4.0.1`을 입력합니다.
 7. `Commit changes`를 누릅니다.
 
 정상 저장소 루트는 다음과 같아야 합니다.
@@ -283,11 +293,11 @@ supabase secrets set EVENT_FEED_TOKEN=...
 
 ## v3.3.0 포워드 학습 추가 설정
 
-GitHub Repository Secrets에 `SUPABASE_SERVICE_ROLE_KEY`와 `SUPABASE_DB_PASSWORD`를 추가합니다. 배포 workflow가 `supabase/migrations/202607240001_forward_learning.sql`을 적용하고 서비스 역할 키를 Edge Function secret으로 설정합니다.
+GitHub Repository Secrets에 `SUPABASE_DB_PASSWORD`를 추가합니다. `SUPABASE_SERVICE_ROLE_KEY`는 Edge Function 런타임에 기본 제공되므로 GitHub에 등록하지 않습니다. 배포 workflow가 migration을 적용합니다.
 
 첫 배포 후 매일 평소처럼 스캐너를 실행하면 됩니다. 첫 실행은 저장만 하며, 다음 날 실행부터 18시간 이상 지난 전일 후보를 자동 평가합니다. 포워드 결과가 60건 미만이면 프로필을 변경하지 않고 계속 누적합니다.
 
-## v4.0.0 저빈도 자동학습 배포
+## v4.0.1 저빈도 자동학습 배포
 
 추가 GitHub Secret:
 

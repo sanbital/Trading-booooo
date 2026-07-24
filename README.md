@@ -1,8 +1,8 @@
-# Trading-booooo Market Scanner v4.0.0
+# Trading-booooo Market Scanner v4.0.1
 
 하루 2~3회만 확인하는 사용자를 위한 저빈도 현물 추천·포워드 자기학습 엔진입니다. 추천 시점의 가격·호가·체결·이벤트를 저장하고, 24시간·72시간·7일·20일 실제 경로를 평가해 주간 워크포워드 안전선 안에서 로직을 자동 교정합니다.
 
-## v4.0.0 핵심
+## v4.0.1 핵심
 
 - 추천 유효시간 15분과 다음 확인 시점 명시
 - 초단타 대신 6시간~20일 보유계획 분류
@@ -13,11 +13,11 @@
 - 실패원인 자동분류, 자동 승격, 자동 롤백
 - 스캔과 학습을 분리해 Edge Function 타임아웃 방지
 
-자세한 내용은 `UPDATE_v4.0.0.md`를 참고하세요.
+자세한 내용은 `UPDATE_v4.0.1.md`를 참고하세요.
 
 ## 설치·배포
 
-`DEPLOYMENT.md`를 따라 Supabase migration, `market-scanner`, `market-learning` 함수를 배포합니다. GitHub Secret에는 기존 값 외에 `LEARNING_ACCESS_TOKEN`이 필요합니다.
+`DEPLOYMENT.md`를 따라 Supabase migration, `market-scanner`, `market-learning` 함수를 배포합니다. 기존 GitHub Secret 3개에 `SUPABASE_DB_PASSWORD`, `LEARNING_ACCESS_TOKEN` 두 개를 추가합니다. `SUPABASE_SERVICE_ROLE_KEY`는 Supabase Edge Function의 기본 환경변수이므로 GitHub Secret으로 추가하지 않습니다.
 
 ---
 
@@ -88,8 +88,8 @@ fragment는 GitHub 서버 요청에 포함되지 않지만 토큰이 들어간 �
 - `SUPABASE_ACCESS_TOKEN`
 - `SUPABASE_PROJECT_REF`
 - `SCAN_ACCESS_TOKEN` — 32자 이상
-- `SUPABASE_SERVICE_ROLE_KEY` — 포워드 로그 저장용
 - `SUPABASE_DB_PASSWORD` — migration 자동 적용용
+- `LEARNING_ACCESS_TOKEN` — 32자 이상, 자동 학습 호출 보호용
 
 `main` 브랜치에서 스캐너 코드나 DB migration이 바뀌면 `.github/workflows/main.deploy-supabase.yml`이 타입검증·테스트 후 Edge Function을 배포합니다.
 

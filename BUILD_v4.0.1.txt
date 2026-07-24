@@ -1,0 +1,4 @@
+Trading-booooo v4.0.1
+- Removed redundant GitHub SUPABASE_SERVICE_ROLE_KEY requirement
+- Uses Supabase Edge Function built-in service role environment
+- Required repository secrets: 5
