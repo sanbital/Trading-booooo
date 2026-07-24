@@ -1,0 +1,4 @@
+Trading-booooo v4.0.2
+- UI version label fixed
+- browser cache keys bumped
+- brand version follows engine_version after scan

@@ -109,6 +109,15 @@
     footerMeta: $("footer-meta")
   };
 
+  function updateBrandVersion(engineVersion = "") {
+    const version = String(engineVersion || config.uiVersion || "4.0.2").replace(/^v/i, "");
+    if (elements.brandSubtitle) {
+      elements.brandSubtitle.textContent = `UPBIT KRW + BINANCE USDT SPOT · v${version}`;
+    }
+  }
+
+  updateBrandVersion();
+
   function escapeHtml(value) {
     return String(value ?? "")
       .replaceAll("&", "&amp;")
@@ -373,6 +382,7 @@
       if (result.exchanges.binance) latestResults.binance = result.exchanges.binance;
     }
     setHidden(elements.results, false);
+    updateBrandVersion(result.meta?.engine_version);
     elements.headline.textContent = result.headline || "분석 완료";
     elements.resultSubline.textContent = `${kst(result.meta?.generated_at)} · 엔진 ${result.meta?.engine_version || "—"} · ${result.cached ? "최근 결과 재사용" : "신규 조회"}`;
     elements.totalMarkets.textContent = Number(result.coverage?.listed_markets ?? result.coverage?.listed_krw_markets ?? 0).toLocaleString("ko-KR");
