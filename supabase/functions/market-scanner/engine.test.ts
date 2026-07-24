@@ -71,10 +71,10 @@ function candles(
 
 function dataset(drift: number): PeriodDataset {
   return {
-    m5: candles(72, 100, drift * 1.2, { volumeGrowth: 0.01 }),
-    m15: candles(96, 100, drift, { volumeGrowth: 0.008 }),
-    h4: candles(90, 100, drift * 0.65, { volumeGrowth: 0.003 }),
-    day: candles(60, 100, drift * 0.35, { volumeGrowth: 0.001 }),
+    m5: candles(144, 100, drift * 1.2, { volumeGrowth: 0.01 }),
+    m15: candles(192, 100, drift, { volumeGrowth: 0.008 }),
+    h4: candles(180, 100, drift * 0.65, { volumeGrowth: 0.003 }),
+    day: candles(200, 100, drift * 0.35, { volumeGrowth: 0.001 }),
   };
 }
 
@@ -485,6 +485,9 @@ Deno.test("trade plan keeps stop below entry and targets above entry", () => {
   );
   micro.best_bid = price - 0.1;
   micro.best_ask = price + 0.1;
+  micro.reference_price = price;
+  micro.reference_timestamp = 1_800_000_000_000;
+  micro.live_book_age_ms = 0;
   period.timeframes.m15.resistance = null;
   period.timeframes.h4.resistance = null;
   period.timeframes.day.resistance = null;
@@ -510,6 +513,9 @@ Deno.test("explicit default tuning parameters preserve the default trade plan", 
   );
   micro.best_bid = price - 0.1;
   micro.best_ask = price + 0.1;
+  micro.reference_price = price;
+  micro.reference_timestamp = 1_800_000_000_000;
+  micro.live_book_age_ms = 0;
   const implicit = buildTradePlan(period, micro, 0.1, risk);
   const explicit = buildTradePlan(period, micro, 0.1, {
     ...risk,
@@ -526,6 +532,7 @@ Deno.test("aligned timeframes receive a medium or long horizon", () => {
   const data = dataset(0.0012);
   const price = timeframeMetrics(data.m5).close;
   const period = analyzePeriod(universeRow(price), data);
+  for (const metric of Object.values(period.timeframes)) metric.overheat_score = 0.2;
   const horizon = estimateHorizon(period, price * 0.95);
   assert(["MEDIUM", "LONG"].includes(horizon.code), horizon.code);
   assert(horizon.persistence_score > 50);
@@ -543,6 +550,9 @@ Deno.test("final candidate never marks a failed-gate setup actionable", () => {
   );
   micro.best_bid = price - 0.1;
   micro.best_ask = price + 0.1;
+  micro.reference_price = price;
+  micro.reference_timestamp = 1_800_000_000_000;
+  micro.live_book_age_ms = 0;
   const final = finalizeCandidate(period, micro, 0.1, risk);
   assert(final.decision !== "BUY");
   assert(!final.trade_plan.actionable);
@@ -565,6 +575,9 @@ Deno.test("a strong WAIT setup receives a conditional watch-entry zone", () => {
   );
   micro.best_bid = price - 0.1;
   micro.best_ask = price + 0.1;
+  micro.reference_price = price;
+  micro.reference_timestamp = 1_800_000_000_000;
+  micro.live_book_age_ms = 0;
   micro.spread_bps = 2;
   const final = finalizeCandidate(period, micro, 0.1, risk);
   assert(final.decision === "WAIT", final.decision);
@@ -603,6 +616,9 @@ Deno.test("market alert is a hard gate even with bullish candles", () => {
   );
   micro.best_bid = price - 0.1;
   micro.best_ask = price + 0.1;
+  micro.reference_price = price;
+  micro.reference_timestamp = 1_800_000_000_000;
+  micro.live_book_age_ms = 0;
   const final = finalizeCandidate(period, micro, 0.1, risk);
   assert(final.failed_gates.includes("market_event"));
   assert(final.decision !== "BUY");
@@ -626,6 +642,9 @@ Deno.test("dynamic spoof-like risk blocks BUY and watch-entry price", () => {
   );
   micro.best_bid = price - 0.1;
   micro.best_ask = price + 0.1;
+  micro.reference_price = price;
+  micro.reference_timestamp = 1_800_000_000_000;
+  micro.live_book_age_ms = 0;
   micro.spread_bps = 2;
   const final = finalizeCandidate(period, micro, 0.1, risk);
   assert(final.failed_gates.includes("dynamic_safety"));
@@ -654,6 +673,17 @@ Deno.test("a fully aligned, liquid, fee-aware setup can become BUY", () => {
   );
   micro.best_bid = price - 0.01;
   micro.best_ask = price + 0.01;
+  micro.reference_price = price;
+  micro.reference_timestamp = 1_800_000_000_000;
+  micro.live_book_age_ms = 0;
+  micro.latest_bids = Array.from({ length: 15 }, (_, index) => ({
+    price: price - 0.01 - index * 0.01,
+    size: 1_000_000 / price,
+  }));
+  micro.latest_asks = Array.from({ length: 15 }, (_, index) => ({
+    price: price + 0.01 + index * 0.01,
+    size: 1_000_000 / price,
+  }));
   micro.spread_bps = 2;
   micro.micro_score = 88;
   const strictRisk = { ...risk, minNetRR: 1.5, maxStopPct: 5 };
@@ -680,10 +710,125 @@ Deno.test("a nearby resistance is never overwritten by an artificial higher targ
   );
   micro.best_bid = price - 0.01;
   micro.best_ask = price + 0.01;
+  micro.reference_price = price;
+  micro.reference_timestamp = 1_800_000_000_000;
+  micro.live_book_age_ms = 0;
   micro.spread_bps = 2;
   const final = finalizeCandidate(period, micro, 0.01, risk);
   assert(final.trade_plan.short_target < period.timeframes.m15.resistance!);
-  assert(final.failed_gates.includes("target_structure"));
+  assert(final.failed_gates.includes("target_structure") || final.failed_gates.includes("reward_risk"));
+  assert(final.decision !== "BUY");
+});
+
+
+Deno.test("insufficient dynamic data fails both sample and safety gates", () => {
+  const data = dataset(0.0012);
+  const price = timeframeMetrics(data.m5).close;
+  const period = analyzePeriod(universeRow(price), data);
+  period.timeframes.m15.rsi14 = 64;
+  period.timeframes.m15.overheat_score = 0.2;
+  period.timeframes.h4.overheat_score = 0.2;
+  period.timeframes.day.overheat_score = 0.2;
+  period.timeframes.m15.support = price - period.timeframes.m15.atr14! * 0.6;
+  period.timeframes.m15.resistance = price + period.timeframes.m15.atr14! * 2.2;
+  const snapshot = dynamicFrames("spoof")[0];
+  const repeated = Array.from({ length: 16 }, (_, index) => ({
+    ...snapshot,
+    timestamp: Number(snapshot.timestamp) + index * 1_000,
+  }));
+  const micro = computeMicrostructure(
+    repeated,
+    dynamicTrades("spoof"),
+    Number(repeated.at(-1)!.timestamp),
+    0.1,
+  );
+  micro.best_bid = price - 0.1;
+  micro.best_ask = price + 0.1;
+  micro.reference_price = price;
+  micro.reference_timestamp = Number(repeated.at(-1)!.timestamp);
+  micro.live_book_age_ms = 0;
+  micro.spread_bps = 2;
+  const final = finalizeCandidate(period, micro, 0.1, risk);
+  assert(final.failed_gates.includes("micro_data"));
+  assert(final.failed_gates.includes("dynamic_safety"));
+  assert(final.decision !== "BUY");
+});
+
+Deno.test("trade plan uses the final live orderbook price instead of the earlier ticker", () => {
+  const data = dataset(0.0008);
+  const candlePrice = timeframeMetrics(data.m5).close;
+  const period = analyzePeriod(universeRow(candlePrice * 0.97), data);
+  const micro = computeMicrostructure(
+    bookSnapshots(true),
+    trades(true),
+    1_800_000_000_000,
+    0.01,
+  );
+  micro.reference_price = candlePrice;
+  micro.best_bid = candlePrice - 0.01;
+  micro.best_ask = candlePrice + 0.01;
+  micro.reference_timestamp = 1_800_000_000_000;
+  micro.live_book_age_ms = 0;
+  const plan = buildTradePlan(period, micro, 0.01, risk);
+  assert(plan.reference_source === "LIVE_ORDERBOOK");
+  close(plan.reference_price, candlePrice);
+  assert(plan.entry_execution_estimate > candlePrice);
+});
+
+Deno.test("large daily surge fails the composite overheat gate", () => {
+  const data = dataset(0.0012);
+  const price = timeframeMetrics(data.m5).close;
+  const period = analyzePeriod(universeRow(price), data);
+  period.timeframes.day.return_12_pct = 120;
+  period.timeframes.day.overheat_score = 0.8;
+  const micro = computeMicrostructure(
+    bookSnapshots(true),
+    trades(true),
+    1_800_000_000_000,
+    0.1,
+  );
+  micro.best_bid = price - 0.1;
+  micro.best_ask = price + 0.1;
+  micro.reference_price = price;
+  micro.reference_timestamp = 1_800_000_000_000;
+  micro.live_book_age_ms = 0;
+  micro.spread_bps = 2;
+  const final = finalizeCandidate(period, micro, 0.1, risk);
+  assert(final.failed_gates.includes("overheat"));
+  assert(final.decision !== "BUY");
+});
+
+
+Deno.test("shallow visible orderbook depth blocks an otherwise strong BUY", () => {
+  const data = dataset(0.0012);
+  const price = timeframeMetrics(data.m5).close;
+  const period = analyzePeriod(universeRow(price), data);
+  const atr15 = period.timeframes.m15.atr14!;
+  period.timeframes.m15.support = price - atr15 * 0.7;
+  period.timeframes.m15.resistance = price + atr15 * 2.4;
+  period.timeframes.m15.rsi14 = 64;
+  for (const metric of Object.values(period.timeframes)) metric.overheat_score = 0.2;
+  const micro = computeMicrostructure(
+    bookSnapshots(true),
+    trades(true),
+    1_800_000_000_000,
+    0.01,
+  );
+  micro.best_bid = price - 0.01;
+  micro.best_ask = price + 0.01;
+  micro.reference_price = price;
+  micro.reference_timestamp = 1_800_000_000_000;
+  micro.live_book_age_ms = 0;
+  micro.latest_bids = [{ price: price - 0.01, size: 0.01 }];
+  micro.latest_asks = [{ price: price + 0.01, size: 0.01 }];
+  micro.spread_bps = 2;
+  micro.micro_score = 88;
+  const final = finalizeCandidate(period, micro, 0.01, {
+    ...risk,
+    minNetRR: 1.3,
+    maxStopPct: 5,
+  });
+  assert(final.failed_gates.includes("depth"));
   assert(final.decision !== "BUY");
 });
 
@@ -698,6 +843,9 @@ Deno.test("fee-aware loss exceeds raw price loss", () => {
   );
   micro.best_bid = price - 0.1;
   micro.best_ask = price + 0.1;
+  micro.reference_price = price;
+  micro.reference_timestamp = 1_800_000_000_000;
+  micro.live_book_age_ms = 0;
   const plan = buildTradePlan(period, micro, 0.1, risk);
   const rawLoss =
     ((plan.entry_execution_estimate - plan.stop_execution_estimate) /

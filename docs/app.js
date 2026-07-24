@@ -280,7 +280,7 @@
           <span><small>무효화 가격</small><b class="negative-text">${escapeHtml(price(watch.invalidation_price, quote))}</b></span>
           <span><small>예상 순수익 / 손익비</small><b>${escapeHtml(percent(watch.expected_net_return_pct, 2, true))} · ${Number(watch.estimated_net_rr).toFixed(2)}</b></span>
         </div><p class="watch-scenario"><b>진입</b> ${escapeHtml(watch.entry_trigger)}<br><b>매도</b> ${escapeHtml(watch.exit_trigger)}<br><b>예상 보유</b> ${escapeHtml(candidate.horizon.expected_window)} · 추세 무효화 시 목표가 전이라도 종료</p><p class="watch-note">가격 도달 시 자동매수 금지 · 15분봉 마감 후 재스캔</p>`
-      : `<div class="candidate-plan muted-plan"><span><small>대기 매수가</small><b>미제시 · ${escapeHtml(blockingLabels.join("·") || "안전조건 미충족")}</b></span><span><small>관찰 분류</small><b>${escapeHtml(candidate.horizon.label)}</b></span></div>`;
+      : `<div class="candidate-plan muted-plan"><span><small>현재가 진단 R:R</small><b>${Number(plan.net_rr || 0).toFixed(2)} · ${escapeHtml(plan.structure_complete ? "구조 확인" : "지지·저항 미완성")}</b></span><span><small>실패 조건</small><b>${escapeHtml(blockingLabels.join("·") || "안전조건 미충족")}</b></span><span><small>지지 / 저항</small><b>${escapeHtml(price(plan.structural_support, quote))} / ${escapeHtml(price(plan.structural_resistance, quote))}</b></span><span><small>관찰 분류</small><b>${escapeHtml(candidate.horizon.label)}</b></span></div>`;
     const failed = (candidate.gates || []).filter(gate => !gate.passed).slice(0, 3);
     const crossRows = cross?.venues?.map(venue =>
       `<span><b>${escapeHtml(venue.exchange_label)}</b> ${escapeHtml(venue.decision_label)} · ${Number(venue.score).toFixed(1)}점 · ${escapeHtml(venue.dynamic_label)}</span>`
@@ -388,7 +388,8 @@
 
   function timeframeLine(label, metric, quote = activeQuote()) {
     if (!metric) return `- ${label}: 데이터 없음`;
-    return `- ${label}: 추세 ${Number(metric.trend_signal).toFixed(3)}, RSI14 ${metric.rsi14 == null ? "N/A" : Number(metric.rsi14).toFixed(1)}, EMA9/21/50 ${price(metric.ema9, quote)} / ${price(metric.ema21, quote)} / ${price(metric.ema50, quote)}, ATR ${percent(metric.atr_pct)}, 3봉수익률 ${percent(metric.return_3_pct, 2, true)}, 12봉수익률 ${percent(metric.return_12_pct, 2, true)}, 거래대금비 ${Number(metric.volume_ratio).toFixed(2)}배`;
+    const states = { FULL_BULL: "완전상승", BULL_PULLBACK: "상승눌림", RECOVERY: "회복", MIXED: "혼조", BEAR: "하락" };
+    return `- ${label}: 구조 ${states[metric.trend_state] || "미분류"}, 추세 ${Number(metric.trend_signal).toFixed(3)}, 과열 ${Number(metric.overheat_score || 0).toFixed(2)}, RSI14 ${metric.rsi14 == null ? "N/A" : Number(metric.rsi14).toFixed(1)}, EMA9/21/50 ${price(metric.ema9, quote)} / ${price(metric.ema21, quote)} / ${price(metric.ema50, quote)}, ATR ${percent(metric.atr_pct)}, 3봉수익률 ${percent(metric.return_3_pct, 2, true)}, 12봉수익률 ${percent(metric.return_12_pct, 2, true)}, 거래대금비 ${Number(metric.volume_ratio).toFixed(2)}배`;
   }
 
   function buildCandidateReport(candidate, result) {
@@ -415,6 +416,7 @@
       `- 거래소: ${candidate.source_exchange_label || (quote === "KRW" ? "업비트" : "바이낸스")}`,
       `- 판정: ${candidate.decision_label}`,
       `- 현재가: ${price(candidate.current_price, quote)} / 24시간: ${percent(candidate.change_24h_pct, 2, true)}`,
+      `- 가격 기준: ${candidate.price_context?.reference_source || plan.reference_source || "N/A"} / 초기 티커 ${price(candidate.price_context?.ticker_price, quote)} / 실시간 괴리 ${candidate.price_context?.ticker_live_deviation_bps == null ? "N/A" : Number(candidate.price_context.ticker_live_deviation_bps).toFixed(1) + "bp"}`,
       `- 종합점수: ${Number(candidate.score).toFixed(2)}${candidate.combined_score != null ? ` / 통합점수: ${Number(candidate.combined_score).toFixed(2)}` : ""} / 신뢰도: ${percent(candidate.confidence, 1)}`,
       `- 24시간 거래대금: ${turnover(candidate.turnover_24h_quote ?? candidate.turnover_24h_krw, quote)}`,
       ...(cross
@@ -423,13 +425,16 @@
             ...cross.venues.map(venue => `- ${venue.exchange_label}: ${venue.market} / ${venue.decision_label} / ${Number(venue.score).toFixed(2)}점 / ${venue.dynamic_label}`),
           ]
         : []),
-      actionable ? `- 매수 검토 구간: ${price(plan.entry_low, quote)} ~ ${price(plan.entry_high, quote)}` : "- 현재가 매수 검토 구간: 미제시(강제조건 미통과)",
+      `- 현재가 기준 진입 계산: ${price(plan.entry_low, quote)} ~ ${price(plan.entry_high, quote)} / 실행추정 ${price(plan.entry_execution_estimate, quote)} / 기준 ${plan.reference_source || "N/A"}`,
+      `- 구조적 지지: ${price(plan.structural_support, quote)} (${plan.support_basis || "미확인"})`,
+      `- 구조적 저항: ${price(plan.structural_resistance, quote)} (${plan.target_basis || "미확인"})`,
+      `- 현재가 기준 예상 매도가: ${price(plan.expected_exit_price ?? plan.short_target, quote)} / 예상 순수익 ${percent(plan.expected_exit_net_return_pct ?? plan.short_net_return_pct, 2, true)}`,
+      `- 현재가 기준 단기 목표가: ${price(plan.short_target, quote)} / 중기 목표가 ${price(plan.medium_target, quote)}`,
+      `- 현재가 기준 손절가격: ${price(plan.stop_price, quote)} / 예상 체결 ${price(plan.stop_execution_estimate, quote)} / 비용 반영 손실 ${percent(plan.net_stop_pct)}`,
+      `- 현재가 기준 비용 포함 손익비: ${Number(plan.net_rr || 0).toFixed(2)} / 구조 완성 ${plan.structure_complete ? "예" : "아니오"} / 실행 가능 ${actionable ? "예" : "아니오"}`,
+      `- 호가 깊이 검증: 양방향 커버리지 ${Number(plan.depth_coverage_ratio || 0).toFixed(2)}배 / 예상 진입 슬리피지 ${plan.estimated_entry_slippage_bps == null ? "N/A" : Number(plan.estimated_entry_slippage_bps).toFixed(1) + "bp"} / 매도·매수 가시잔량 ${turnover(plan.visible_bid_depth_quote || 0, quote)} / ${turnover(plan.visible_ask_depth_quote || 0, quote)}`,
+      ...(actionable ? [`- 추천 투입금: ${krw(plan.recommended_investment_quote ?? plan.recommended_investment_krw, quote)} / 위험예산 ${krw(plan.risk_budget_krw, quote)}`] : []),
       ...watchLines,
-      actionable ? `- 진입 시 예상 매도가: ${price(plan.expected_exit_price ?? plan.short_target, quote)} (수수료·슬리피지 반영 ${percent(plan.expected_exit_net_return_pct ?? plan.short_net_return_pct, 2, true)})` : watchAvailable ? "- 현재가 진입 예상 매도가: 해당 없음(눌림 시나리오 참조)" : "- 진입 시 예상 매도가: 미제시",
-      actionable ? `- 단기 목표가: ${price(plan.short_target, quote)}` : "- 현재가 기준 단기 목표가: 미제시",
-      actionable ? `- 중기 목표가: ${price(plan.medium_target, quote)} (비용 반영 ${percent(plan.medium_net_return_pct, 2, true)})` : "- 중기 목표가: 미제시",
-      actionable ? `- 손절가격: ${price(plan.stop_price, quote)} (비용 반영 예상손실 ${percent(plan.net_stop_pct)})` : "- 손절가격: 미제시",
-      actionable ? `- 추천 투입금: ${krw(plan.recommended_investment_quote ?? plan.recommended_investment_krw, quote)} / 위험예산 ${krw(plan.risk_budget_krw, quote)} / R:R ${Number(plan.net_rr).toFixed(2)}` : "- 투입금·손익비: 미제시",
       `- 추세 유지 추정: ${candidate.horizon.label}, ${candidate.horizon.expected_window}, 지속성 ${Number(candidate.horizon.persistence_score).toFixed(1)}점`,
       `- 추정 설명: ${candidate.horizon.estimate}`,
       ...(watchAvailable
@@ -451,6 +456,7 @@
       timeframeLine("일봉", candidate.timeframes?.day, quote),
       "",
       "### 최신 호가·체결",
+      `- 실시간 기준가격: ${price(candidate.microstructure?.reference_price, quote)} / 호가 최신성 ${candidate.microstructure?.live_book_age_ms == null ? "N/A" : (Number(candidate.microstructure.live_book_age_ms) / 1000).toFixed(1) + "초"}`,
       `- 평균 스프레드: ${candidate.microstructure?.spread_bps == null ? "N/A" : Number(candidate.microstructure.spread_bps).toFixed(2) + "bp"}`,
       `- 정적 호가 불균형(단독 긍정점수 미사용): ${Number(candidate.microstructure?.book_imbalance || 0).toFixed(3)}`,
       `- 최근 체결 압력: ${Number(candidate.microstructure?.trade_pressure || 0).toFixed(3)} / 체결 표본 ${candidate.microstructure?.trade_count || 0}건`,
@@ -503,7 +509,7 @@
             ...((result.exchange_errors || []).map(item => `- 부분 실패: ${item.exchange === "upbit" ? "업비트" : "바이낸스"} · ${item.message}`)),
           ]
         : []),
-      "- 조회창: 5분봉 약 6시간 / 15분봉 약 24시간 / 4시간봉 약 15일 / 일봉 약 60일",
+      "- 조회창: 5분봉 약 12시간 / 15분봉 약 48시간 / 4시간봉 약 30일 / 일봉 약 200일",
       "",
       "## 최종 매수 결론",
       recommendations.length

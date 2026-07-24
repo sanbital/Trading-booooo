@@ -1,4 +1,4 @@
-// Trading-booooo v2.4.0 — candle-layer walk-forward simulator.
+// Trading-booooo v2.5.0 — candle-layer walk-forward simulator.
 //
 // This deliberately does not pretend that historical candles contain orderbook
 // history. Dynamic orderflow is injected as neutral and must be evaluated by
@@ -160,7 +160,7 @@ function pointInTimeUniverse(
   m15Closed: SimCandle[],
   decisionTime: number,
 ): UniverseRow | null {
-  const recent = m15Closed.slice(-96);
+  const recent = m15Closed.slice(-192);
   if (recent.length < 96) return null;
   const opening = recent[0].open;
   const current = recent.at(-1)!.close;
@@ -209,10 +209,10 @@ function candidateAt(
   const universe = pointInTimeUniverse(history, m15Closed, decisionTime);
   if (!universe?.eligible) return null;
   const dataset: PeriodDataset = {
-    m5: rows(closedUpTo(history.m5, decisionTime, TF_MS.m5), 72),
-    m15: rows(m15Closed, 96),
-    h4: rows(closedUpTo(history.h4, decisionTime, TF_MS.h4), 90),
-    day: rows(closedUpTo(history.day, decisionTime, TF_MS.day), 60),
+    m5: rows(closedUpTo(history.m5, decisionTime, TF_MS.m5), 144),
+    m15: rows(m15Closed, 192),
+    h4: rows(closedUpTo(history.h4, decisionTime, TF_MS.h4), 180),
+    day: rows(closedUpTo(history.day, decisionTime, TF_MS.day), 200),
   };
   return finalizeCandidate(
     analyzePeriod(universe, dataset),
@@ -465,7 +465,7 @@ function simulateWait(
       if (bar.low <= stopTrigger) break; // trigger 전 무효화 우선
       if (bar.low <= zoneHigh && bar.high >= zoneLow) touched = true;
       if (!touched) continue;
-      const metric = timeframeMetrics(rows(history.m15.slice(0, k + 1), 96));
+      const metric = timeframeMetrics(rows(history.m15.slice(0, k + 1), 192));
       if (metric.ema21 != null && bar.close > metric.ema21) {
         triggerIdx = k;
         break;

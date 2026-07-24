@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v2.4.0 — Supabase Edge Function
+// Trading-booooo Market Scanner v2.5.0 — Supabase Edge Function
 // Upbit KRW / Binance USDT universe scan -> multi-period analysis -> orderflow validation.
 // Read-only public market data. No account lookup, order creation, cancellation, or API keys.
 
@@ -354,15 +354,15 @@ async function loadPeriodDatasets(
         market: row.market,
         key: "m5",
         path: "/v1/candles/minutes/5",
-        count: 72,
+        count: 144,
       },
       {
         market: row.market,
         key: "h4",
         path: "/v1/candles/minutes/240",
-        count: 90,
+        count: 180,
       },
-      { market: row.market, key: "day", path: "/v1/candles/days", count: 60 },
+      { market: row.market, key: "day", path: "/v1/candles/days", count: 200 },
     );
   }
 
@@ -396,7 +396,7 @@ async function loadBaseline15(
   const output = new Map<string, CandleRow[]>();
   const tasks = universe.map((row) => ({
     market: row.market,
-    url: query("/v1/candles/minutes/15", { market: row.market, count: 96 }),
+    url: query("/v1/candles/minutes/15", { market: row.market, count: 192 }),
   }));
   for (let offset = 0; offset < tasks.length; offset += CANDLE_BATCH_SIZE) {
     const batch = tasks.slice(offset, offset + CANDLE_BATCH_SIZE);
@@ -434,7 +434,7 @@ async function loadBinanceBaseline15(
           binanceQuery("/api/v3/klines", {
             symbol: row.market,
             interval: "15m",
-            limit: 96,
+            limit: 192,
           }),
           10_000,
           2,
@@ -470,9 +470,9 @@ async function loadBinancePeriodDatasets(
     })
   );
   const tasks = shortlist.flatMap((row) => [
-    { market: row.market, key: "m5" as const, interval: "5m", limit: 72 },
-    { market: row.market, key: "h4" as const, interval: "4h", limit: 90 },
-    { market: row.market, key: "day" as const, interval: "1d", limit: 60 },
+    { market: row.market, key: "m5" as const, interval: "5m", limit: 144 },
+    { market: row.market, key: "h4" as const, interval: "4h", limit: 180 },
+    { market: row.market, key: "day" as const, interval: "1d", limit: 200 },
   ]);
   for (
     let offset = 0;
@@ -514,10 +514,20 @@ function prioritizeWithBaseline(
 ): UniverseRow[] {
   return eligible.map((row) => {
     const metric = timeframeMetrics(baseline15.get(row.market) || []);
-    const dataScore = metric.bars >= 60
+    const pullbackDistanceAtr = metric.atr14 && metric.ema21
+      ? Math.abs(metric.close - metric.ema21) / metric.atr14
+      : 99;
+    const pullbackQuality = ["FULL_BULL", "BULL_PULLBACK", "RECOVERY"].includes(
+        metric.trend_state,
+      ) && pullbackDistanceAtr <= 1.2 &&
+        Number(metric.rsi14) >= 45 && Number(metric.rsi14) <= 70
+      ? 12
+      : 0;
+    const dataScore = metric.bars >= 80
       ? clamp(
-        50 + metric.trend_signal * 27 + metric.momentum_signal * 15 +
-          clamp((metric.volume_ratio - 1) * 8, -8, 8),
+        50 + metric.trend_signal * 24 + metric.momentum_signal * 10 +
+          pullbackQuality + clamp((metric.volume_ratio - 1) * 6, -6, 6) -
+          metric.overheat_score * 20,
         0,
         100,
       )
@@ -1168,7 +1178,7 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
         universe.filter((item) => !item.eligible).length,
       period_screened_markets: eligible.length,
       period_screened_complete:
-        [...baseline15.values()].filter((rows) => rows.length >= 60).length,
+        [...baseline15.values()].filter((rows) => rows.length >= 80).length,
       deep_period_analyzed: periods.length,
       microstructure_finalists: finalCandidates.length,
       dynamic_orderflow: {
@@ -1183,10 +1193,10 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
       },
       excluded_summary: summarizeExclusions(universe),
       periods: {
-        "5m": "최근 6시간(72봉)",
-        "15m": "최근 24시간(96봉)",
-        "4h": "최근 15일(90봉)",
-        "1d": "최근 60일(60봉)",
+        "5m": "최근 12시간(144봉)",
+        "15m": "최근 48시간(192봉)",
+        "4h": "최근 30일(180봉)",
+        "1d": "최근 200일(200봉)",
       },
     },
     assumptions: {
@@ -1206,6 +1216,8 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
       automatic_order: false,
       model_note:
         "목표가·손절가·보유기간은 현재까지의 공개 시세 패턴에 근거한 조건부 추정이며 미래 가격을 보장하지 않습니다.",
+      confidence_note:
+        "신뢰도는 상승 확률이 아니라 기간 데이터 완성도·동적 표본 품질·구조적 지지저항·호가 깊이를 합산한 판정 품질 지표입니다.",
     },
     meta: {
       engine_version: ENGINE_VERSION,
@@ -1362,10 +1374,10 @@ async function runCombinedScan(
         binance: binance?.coverage || null,
       },
       periods: {
-        "5m": "최근 6시간(72봉)",
-        "15m": "최근 24시간(96봉)",
-        "4h": "최근 15일(90봉)",
-        "1d": "최근 60일(60봉)",
+        "5m": "최근 12시간(144봉)",
+        "15m": "최근 48시간(192봉)",
+        "4h": "최근 30일(180봉)",
+        "1d": "최근 200일(200봉)",
       },
     },
     assumptions: {

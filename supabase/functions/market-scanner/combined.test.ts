@@ -29,9 +29,22 @@ function candidate(
     decision,
     decision_label: decision,
     trade_plan: {
+      reference_price: 100,
+      reference_source: "LIVE_ORDERBOOK",
       entry_low: 99,
       entry_high: 100,
       entry_execution_estimate: 100,
+      structural_support: 98.5,
+      support_basis: "test support",
+      structural_resistance: 103.1,
+      target_basis: "test resistance",
+      structure_complete: true,
+      stop_distance_atr: 1,
+      target_distance_atr: 2,
+      visible_ask_depth_quote: 1_000_000,
+      visible_bid_depth_quote: 1_000_000,
+      depth_coverage_ratio: 10,
+      estimated_entry_slippage_bps: 2,
       short_target: 103,
       short_target_execution_estimate: 102.9,
       expected_exit_price: 102.9,
@@ -90,6 +103,14 @@ function candidate(
         label: dynamicStatus,
       },
     } as FinalCandidate["microstructure"],
+    price_context: {
+      ticker_price: 100,
+      live_reference_price: 100,
+      reference_source: "LIVE_ORDERBOOK",
+      reference_timestamp: 1_800_000_000_000,
+      live_book_age_ms: 0,
+      ticker_live_deviation_bps: 0,
+    },
   };
 }
 

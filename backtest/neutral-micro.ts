@@ -24,6 +24,17 @@ export function neutralMicro(price: number): Microstructure {
     samples: 40,
     best_bid: bid,
     best_ask: ask,
+    reference_price: price,
+    reference_timestamp: Date.now(),
+    live_book_age_ms: 0,
+    latest_bids: Array.from({ length: 15 }, (_, index) => ({
+      price: bid * (1 - index * 0.0005),
+      size: 1_000_000 / price,
+    })),
+    latest_asks: Array.from({ length: 15 }, (_, index) => ({
+      price: ask * (1 + index * 0.0005),
+      size: 1_000_000 / price,
+    })),
     spread_bps: 10, // spread 게이트(<=35bp) 통과
     book_imbalance: 0, // micro_pressure 게이트(> -0.5) 통과
     imbalance_stability: 0.8,
