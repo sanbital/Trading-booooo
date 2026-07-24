@@ -495,8 +495,14 @@ Deno.test("trade plan keeps stop below entry and targets above entry", () => {
   const plan = buildTradePlan(period, micro, 0.1, risk);
   assert(plan.stop_price < plan.entry_execution_estimate);
   assert(plan.short_target > plan.entry_execution_estimate);
-  assert(plan.expected_exit_price === plan.short_target_execution_estimate);
-  assert(plan.expected_exit_net_return_pct === plan.short_net_return_pct);
+  if (plan.target_strategy === "SHORT_ONLY") {
+    assert(plan.expected_exit_price === plan.short_target_execution_estimate);
+    assert(plan.expected_exit_net_return_pct === plan.short_net_return_pct);
+  } else {
+    assert(plan.expected_exit_price > plan.short_target_execution_estimate);
+    assert(plan.expected_exit_price < plan.medium_target_execution_estimate);
+    assert(plan.expected_exit_net_return_pct === plan.blended_net_return_pct);
+  }
   assert(plan.medium_target > plan.short_target);
   assert(plan.net_stop_pct > 0);
   assert(plan.recommended_investment_krw <= risk.capitalKrw);

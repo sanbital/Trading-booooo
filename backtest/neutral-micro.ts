@@ -17,7 +17,7 @@
 
 import type { Microstructure } from "../supabase/functions/market-scanner/engine.ts";
 
-export function neutralMicro(price: number): Microstructure {
+export function neutralMicro(price: number, timestamp = Date.now()): Microstructure {
   const bid = price * 0.9995;
   const ask = price * 1.0005;
   return {
@@ -25,7 +25,7 @@ export function neutralMicro(price: number): Microstructure {
     best_bid: bid,
     best_ask: ask,
     reference_price: price,
-    reference_timestamp: Date.now(),
+    reference_timestamp: timestamp,
     live_book_age_ms: 0,
     latest_bids: Array.from({ length: 15 }, (_, index) => ({
       price: bid * (1 - index * 0.0005),

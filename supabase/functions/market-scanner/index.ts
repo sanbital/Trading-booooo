@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v2.5.0 — Supabase Edge Function
+// Trading-booooo Market Scanner v2.6.0 — Supabase Edge Function
 // Upbit KRW / Binance USDT universe scan -> multi-period analysis -> orderflow validation.
 // Read-only public market data. No account lookup, order creation, cancellation, or API keys.
 
@@ -9,6 +9,7 @@ import {
   clamp,
   computeMicrostructure,
   ENGINE_VERSION,
+  CALIBRATED_PARAMETERS,
   type FinalCandidate,
   finalizeCandidate,
   type MarketRow,
@@ -23,6 +24,8 @@ import {
   type UniverseRow,
 } from "./engine.ts";
 import { baseAsset, combineCandidates } from "./combined.ts";
+import { ACTIVE_CALIBRATION_PROFILE } from "./calibration-profile.ts";
+
 
 const UPBIT = "https://api.upbit.com";
 const UPBIT_WEBSOCKET = "wss://api.upbit.com/websocket/v1";
@@ -229,10 +232,39 @@ function parseRisk(
       0,
       0.5,
     ),
-    minNetRR: clamp(finite(body.min_net_rr, 1.5), 1, 5),
+    minNetRR: clamp(
+      finite(body.min_net_rr, CALIBRATED_PARAMETERS.minNetRR),
+      1,
+      5,
+    ),
     maxStopPct: clamp(finite(body.max_stop_pct, 5), 0.5, 12),
     entrySlippageTicks: clamp(finite(body.entry_slippage_ticks, 0.5), 0, 5),
     exitSlippageTicks: clamp(finite(body.exit_slippage_ticks, 1), 0, 10),
+    scoreThreshold: clamp(
+      finite(body.score_threshold, CALIBRATED_PARAMETERS.scoreThreshold),
+      55,
+      90,
+    ),
+    shortTargetAtrMult: clamp(
+      finite(body.short_target_atr_mult, CALIBRATED_PARAMETERS.shortTargetAtrMult),
+      1.2,
+      5,
+    ),
+    stopAtrMult: clamp(
+      finite(body.stop_atr_mult, CALIBRATED_PARAMETERS.stopAtrMult),
+      0.7,
+      2.5,
+    ),
+    mediumTargetAtr4hMult: clamp(
+      finite(body.medium_target_atr_4h_mult, CALIBRATED_PARAMETERS.mediumTargetAtr4hMult),
+      1.2,
+      5,
+    ),
+    mediumTargetAtrDayMult: clamp(
+      finite(body.medium_target_atr_day_mult, CALIBRATED_PARAMETERS.mediumTargetAtrDayMult),
+      0.7,
+      3,
+    ),
   };
 }
 
@@ -1208,6 +1240,11 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
       risk_per_trade_pct: risk.riskPct,
       min_net_rr: risk.minNetRR,
       max_net_stop_pct: risk.maxStopPct,
+      score_threshold: risk.scoreThreshold,
+      short_target_atr_mult: risk.shortTargetAtrMult,
+      stop_atr_mult: risk.stopAtrMult,
+      medium_target_atr_4h_mult: risk.mediumTargetAtr4hMult,
+      medium_target_atr_day_mult: risk.mediumTargetAtrDayMult,
       dynamic_observation_seconds: Number(
         (microBundle.observationMs / 1000).toFixed(1),
       ),
@@ -1218,6 +1255,15 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
         "목표가·손절가·보유기간은 현재까지의 공개 시세 패턴에 근거한 조건부 추정이며 미래 가격을 보장하지 않습니다.",
       confidence_note:
         "신뢰도는 상승 확률이 아니라 기간 데이터 완성도·동적 표본 품질·구조적 지지저항·호가 깊이를 합산한 판정 품질 지표입니다.",
+      calibration_profile: {
+        source: ACTIVE_CALIBRATION_PROFILE.source,
+        promoted: ACTIVE_CALIBRATION_PROFILE.promoted,
+        samples: ACTIVE_CALIBRATION_PROFILE.samples,
+        markets: ACTIVE_CALIBRATION_PROFILE.markets,
+        generated_at: ACTIVE_CALIBRATION_PROFILE.generatedAt,
+      },
+      forecast_note:
+        "예상 상승률은 목표가를 그대로 복사하지 않고 동일 점수구간의 백테스트 MFE와 목표 선도달률로 축소·보정합니다. 충분한 교정 표본이 없으면 보수적 사전값을 표시합니다.",
     },
     meta: {
       engine_version: ENGINE_VERSION,
@@ -1386,6 +1432,13 @@ async function runCombinedScan(
       binance: binance?.assumptions || null,
       risk_per_trade_pct: upbitRisk.riskPct,
       automatic_order: false,
+      calibration_profile: {
+        source: ACTIVE_CALIBRATION_PROFILE.source,
+        promoted: ACTIVE_CALIBRATION_PROFILE.promoted,
+        samples: ACTIVE_CALIBRATION_PROFILE.samples,
+        markets: ACTIVE_CALIBRATION_PROFILE.markets,
+        generated_at: ACTIVE_CALIBRATION_PROFILE.generatedAt,
+      },
       cross_exchange_rule:
         "동일 기초자산은 한 자리만 사용하며, 다른 거래소에서 AVOID 또는 동적 호가 위험이 나오면 BUY를 WAIT로 강등합니다.",
       model_note:

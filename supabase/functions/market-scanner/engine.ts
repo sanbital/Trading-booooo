@@ -1,7 +1,10 @@
-// Trading-booooo Market Scanner v2.5.0
+// Trading-booooo Market Scanner v2.6.0
 // Pure analysis engine. Public market data only; no order or account operations.
 
-export const ENGINE_VERSION = "2.5.0";
+import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-profile.ts";
+
+export const ENGINE_VERSION = "2.6.0";
+export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
 
@@ -214,6 +217,30 @@ export type RiskConfig = {
   scoreThreshold?: number; // 기본 72 (BUY 최종 점수컷)
 };
 
+export type TargetStrategy = "SHORT_ONLY" | "SCALE_OUT";
+
+export type PriceForecast = {
+  model_version: string;
+  calibration_source: "DEFAULT_PRIOR" | "WALK_FORWARD";
+  calibrated: boolean;
+  calibration_samples: number;
+  target_hit_probability_pct: number;
+  wait_entry_probability_pct: number | null;
+  raw_expected_upside_pct: number;
+  expected_upside_pct: number;
+  conservative_upside_pct: number;
+  optimistic_upside_pct: number;
+  expected_price: number;
+  conservative_price: number;
+  optimistic_price: number;
+  expected_net_return_pct: number;
+  confidence_band_pct: number;
+  horizon_bars_15m: number;
+  horizon_label: string;
+  drivers: string[];
+  caveats: string[];
+};
+
 export type TradePlan = {
   reference_price: number;
   reference_source: "LIVE_ORDERBOOK" | "HYPOTHETICAL_PULLBACK" | "TICKER_FALLBACK";
@@ -233,13 +260,22 @@ export type TradePlan = {
   estimated_entry_slippage_bps: number | null;
   short_target: number;
   short_target_execution_estimate: number;
+  medium_target: number;
+  medium_target_execution_estimate: number;
+  target_strategy: TargetStrategy;
+  target_strategy_label: string;
+  first_target_allocation_pct: number;
+  continuation_allocation_pct: number;
   expected_exit_price: number;
   expected_exit_net_return_pct: number;
-  medium_target: number;
   stop_price: number;
   stop_execution_estimate: number;
   short_net_return_pct: number;
   medium_net_return_pct: number;
+  short_net_rr: number;
+  medium_net_rr: number;
+  blended_net_return_pct: number;
+  blended_net_rr: number;
   net_stop_pct: number;
   net_rr: number;
   recommended_investment_krw: number;
@@ -304,6 +340,7 @@ export type FinalCandidate = {
   trade_plan: TradePlan;
   watch_entry_plan: WatchEntryPlan;
   horizon: TrendHorizon;
+  forecast: PriceForecast;
   gates: Gate[];
   failed_gates: string[];
   positives: string[];
@@ -1696,8 +1733,10 @@ export function buildTradePlan(
     .sort((left, right) => right[0] - left[0]);
   const structuralSupport = validSupports[0]?.[0] || null;
   const supportBasis = validSupports[0]?.[1] || "구조적 지지 미확인";
-  const stopAtrMult = risk.stopAtrMult ?? 1.15;
-  const stopBuffer = Math.max(atr15 * 0.18, tick * 2);
+  const stopAtrMult = risk.stopAtrMult ?? ACTIVE_CALIBRATION_PROFILE.parameters.stopAtrMult;
+  const spreadPrice = bestAsk > bestBid ? bestAsk - bestBid : 0;
+  // v2.6.0: stop buffer must survive normal noise, visible spread and tick granularity.
+  const stopBuffer = Math.max(atr15 * 0.35, spreadPrice * 3, tick * 2);
   const fallbackStop = entryExecution - atr15 * stopAtrMult;
   const stopRaw = structuralSupport != null
     ? structuralSupport - stopBuffer
@@ -1725,7 +1764,8 @@ export function buildTradePlan(
     .sort((left, right) => left[0] - right[0]);
   const structuralResistance = validTargets[0]?.[0] || null;
   const targetBasis = validTargets[0]?.[1] || "구조적 저항 미확인";
-  const shortTargetAtrMult = risk.shortTargetAtrMult ?? 2.2;
+  const shortTargetAtrMult = risk.shortTargetAtrMult ??
+    ACTIVE_CALIBRATION_PROFILE.parameters.shortTargetAtrMult;
   const atrShortCap = entryExecution + atr15 * shortTargetAtrMult;
   const targetBuffer = Math.max(tick * 2, atr15 * 0.04);
   const shortRaw = structuralResistance != null
@@ -1745,29 +1785,67 @@ export function buildTradePlan(
     .sort((a, b) => a - b);
   const nearestMediumResistance = mediumResistances[0] || null;
   const volatilityMediumTarget = entryExecution + Math.min(
-    atr4h * (risk.mediumTargetAtr4hMult ?? 2.4),
-    atrDay * (risk.mediumTargetAtrDayMult ?? 1.3),
+    atr4h * (risk.mediumTargetAtr4hMult ??
+      ACTIVE_CALIBRATION_PROFILE.parameters.mediumTargetAtr4hMult),
+    atrDay * (risk.mediumTargetAtrDayMult ??
+      ACTIVE_CALIBRATION_PROFILE.parameters.mediumTargetAtrDayMult),
   );
   const minimumMediumTarget = shortTarget + Math.max(atr15 * 0.8, tick * 3);
   const mediumRaw = nearestMediumResistance
     ? Math.min(nearestMediumResistance - targetBuffer, Math.max(volatilityMediumTarget, minimumMediumTarget))
     : Math.max(volatilityMediumTarget, minimumMediumTarget);
   const mediumTarget = roundToTick(mediumRaw, tick, "down");
+  const mediumExecution = Math.max(
+    tick,
+    mediumTarget - tick * risk.exitSlippageTicks,
+  );
 
   const shortGain = shortExecution > entryExecution
     ? netGainPct(entryExecution, shortExecution, risk.feePerSidePct)
     : 0;
-  const mediumGain = mediumTarget > entryExecution
-    ? netGainPct(
-      entryExecution,
-      mediumTarget - tick * risk.exitSlippageTicks,
-      risk.feePerSidePct,
-    )
+  const mediumGain = mediumExecution > entryExecution
+    ? netGainPct(entryExecution, mediumExecution, risk.feePerSidePct)
     : 0;
   const stopLoss = stopExecution < entryExecution
     ? netLossPct(entryExecution, stopExecution, risk.feePerSidePct)
     : 0;
-  const rr = stopLoss > 0 && shortGain > 0 ? shortGain / stopLoss : 0;
+  const shortRR = stopLoss > 0 && shortGain > 0 ? shortGain / stopLoss : 0;
+  const mediumRR = stopLoss > 0 && mediumGain > 0 ? mediumGain / stopLoss : 0;
+
+  // A nearby 15m resistance must not automatically invalidate a genuinely strong
+  // 4h/day swing. The alternative is an explicit scale-out plan: realise 60% at
+  // the first resistance and keep 40% for the higher-timeframe target.
+  const strongSwingContext =
+    ["FULL_BULL", "BULL_PULLBACK"].includes(period.timeframes.h4.trend_state) &&
+    ["FULL_BULL", "BULL_PULLBACK", "RECOVERY"].includes(
+      period.timeframes.day.trend_state,
+    ) &&
+    period.timeframes.h4.trend_signal > 0.35 &&
+    period.timeframes.day.trend_signal > 0.05 &&
+    Math.max(
+      period.timeframes.m15.overheat_score,
+      period.timeframes.h4.overheat_score,
+      period.timeframes.day.overheat_score,
+    ) <= 0.48;
+  const firstTargetAllocation = 0.6;
+  const continuationAllocation = 1 - firstTargetAllocation;
+  const blendedExit = shortExecution * firstTargetAllocation +
+    mediumExecution * continuationAllocation;
+  const blendedGain = blendedExit > entryExecution
+    ? netGainPct(entryExecution, blendedExit, risk.feePerSidePct)
+    : 0;
+  const blendedRR = stopLoss > 0 && blendedGain > 0
+    ? blendedGain / stopLoss
+    : 0;
+  const useScaleOut = strongSwingContext &&
+    mediumExecution > shortExecution + Math.max(atr15 * 0.65, tick * 4) &&
+    shortRR >= 0.65 && blendedRR > shortRR;
+  const targetStrategy: TargetStrategy = useScaleOut
+    ? "SCALE_OUT"
+    : "SHORT_ONLY";
+  const expectedExit = useScaleOut ? blendedExit : shortExecution;
+  const expectedGain = useScaleOut ? blendedGain : shortGain;
+  const rr = useScaleOut ? blendedRR : shortRR;
   const riskBudget = risk.capitalKrw * (risk.riskPct / 100);
   const investment = stopLoss > 0
     ? Math.min(risk.capitalKrw, riskBudget / (stopLoss / 100))
@@ -1811,13 +1889,24 @@ export function buildTradePlan(
     estimated_entry_slippage_bps: estimatedEntrySlippageBps,
     short_target: shortTarget,
     short_target_execution_estimate: shortExecution,
-    expected_exit_price: shortExecution,
-    expected_exit_net_return_pct: shortGain,
     medium_target: mediumTarget,
+    medium_target_execution_estimate: mediumExecution,
+    target_strategy: targetStrategy,
+    target_strategy_label: targetStrategy === "SCALE_OUT"
+      ? "1차 60% 청산 후 2차 40% 추세추종"
+      : "단기 목표 일괄청산",
+    first_target_allocation_pct: targetStrategy === "SCALE_OUT" ? 60 : 100,
+    continuation_allocation_pct: targetStrategy === "SCALE_OUT" ? 40 : 0,
+    expected_exit_price: expectedExit,
+    expected_exit_net_return_pct: expectedGain,
     stop_price: stopPrice,
     stop_execution_estimate: stopExecution,
     short_net_return_pct: shortGain,
     medium_net_return_pct: mediumGain,
+    short_net_rr: shortRR,
+    medium_net_rr: mediumRR,
+    blended_net_return_pct: blendedGain,
+    blended_net_rr: blendedRR,
     net_stop_pct: stopLoss,
     net_rr: rr,
     recommended_investment_krw: roundedInvestment,
@@ -1978,7 +2067,7 @@ export function buildWatchEntryPlan(
     invalidation_price: hypotheticalPlan.stop_price,
     reference_target: hypotheticalPlan.short_target,
     expected_exit_price: hypotheticalPlan.expected_exit_price,
-    expected_net_return_pct: hypotheticalPlan.short_net_return_pct,
+    expected_net_return_pct: hypotheticalPlan.expected_exit_net_return_pct,
     stop_price: hypotheticalPlan.stop_price,
     estimated_net_rr: hypotheticalPlan.net_rr,
     discount_from_current_pct: Math.max(0, ((current - zoneHigh) / current) * 100),
@@ -2079,6 +2168,138 @@ export function estimateHorizon(
     persistence_score: persistence,
     estimate,
     invalidation,
+  };
+}
+
+export function estimatePriceForecast(
+  period: PeriodAnalysis,
+  micro: Microstructure,
+  plan: TradePlan,
+  watch: WatchEntryPlan,
+  horizon: TrendHorizon,
+  score: number,
+  decision: FinalCandidate["decision"],
+): PriceForecast {
+  const bucket = calibrationBucket(score);
+  const calibrated = ACTIVE_CALIBRATION_PROFILE.promoted &&
+    ACTIVE_CALIBRATION_PROFILE.source === "WALK_FORWARD" && bucket.samples >= 20;
+  const entry = decision === "WAIT" && watch.available
+    ? Number(watch.zone_high)
+    : plan.entry_execution_estimate;
+  const shortExit = decision === "WAIT" && watch.available
+    ? Number(watch.expected_exit_price || watch.reference_target)
+    : plan.short_target_execution_estimate;
+  const mediumExit = decision === "WAIT" && watch.available
+    ? shortExit
+    : plan.medium_target_execution_estimate;
+  const expectedPlanExit = decision === "WAIT" && watch.available
+    ? shortExit
+    : plan.expected_exit_price;
+  const gross = (exit: number) =>
+    entry > 0 && exit > entry ? (exit / entry - 1) * 100 : 0;
+  const shortGross = gross(shortExit);
+  const mediumGross = gross(mediumExit);
+  const planGross = gross(expectedPlanExit);
+  const tf = period.timeframes;
+  const trendQuality = clamp(
+    0.5 + period.trend_signal * 0.28 + period.momentum_signal * 0.16,
+    0.2,
+    0.9,
+  );
+  const microQuality = micro.dynamic.sufficient
+    ? clamp(0.55 + micro.dynamic.data_quality * 0.35 + micro.trade_pressure * 0.1, 0.35, 0.95)
+    : 0.42;
+  const overheat = Math.max(
+    tf.m15.overheat_score,
+    tf.h4.overheat_score,
+    tf.day.overheat_score,
+  );
+  const decisionPenalty = decision === "BUY" ? 0 : decision === "WAIT" ? 0.07 : 0.18;
+  const measuredBase = bucket.targetHitRate;
+  const probability = clamp(
+    measuredBase + (trendQuality - 0.5) * 0.22 +
+      (microQuality - 0.5) * 0.14 - overheat * 0.18 - decisionPenalty,
+    0.12,
+    0.82,
+  );
+  const rawExpected = clamp(
+    planGross * 0.72 + shortGross * 0.18 + mediumGross * 0.10 +
+      Math.max(0, Number(tf.h4.atr_pct || 0)) * Math.max(0, period.trend_signal) * 0.35,
+    0,
+    Math.max(shortGross, mediumGross),
+  );
+  const calibrationScale = clamp(bucket.returnScale, 0.35, 1.25);
+  const calibrationScaleLow = clamp(bucket.returnScaleLow, 0.2, calibrationScale);
+  const calibrationScaleHigh = clamp(bucket.returnScaleHigh, calibrationScale, 1.6);
+  const qualityShrink = clamp(0.62 + trendQuality * 0.22 + microQuality * 0.16 - overheat * 0.18, 0.4, 1);
+  const forecastCap = Math.max(shortGross, mediumGross);
+  const expectedUpside = clamp(
+    rawExpected * calibrationScale * qualityShrink,
+    0,
+    forecastCap,
+  );
+  const conservativeUpside = clamp(
+    rawExpected * calibrationScaleLow * qualityShrink * 0.95,
+    0,
+    expectedUpside,
+  );
+  const optimisticUpside = clamp(
+    rawExpected * calibrationScaleHigh * qualityShrink * 1.05,
+    expectedUpside,
+    forecastCap,
+  );
+  const expectedPrice = entry * (1 + expectedUpside / 100);
+  const conservativePrice = entry * (1 + conservativeUpside / 100);
+  const optimisticPrice = entry * (1 + optimisticUpside / 100);
+  const expectedPlanNet = decision === "WAIT" && watch.available
+    ? Number(watch.expected_net_return_pct || 0)
+    : Number(plan.expected_exit_net_return_pct || 0);
+  const estimatedRoundTripCostPct = Math.max(0, planGross - expectedPlanNet);
+  const expectedNetReturn = Math.max(0, expectedUpside - estimatedRoundTripCostPct);
+  const horizonBars = horizon.code === "INTRADAY"
+    ? 48
+    : horizon.code === "SHORT"
+    ? 192
+    : horizon.code === "MEDIUM"
+    ? 960
+    : 1920;
+  const drivers: string[] = [
+    `기간 추세 ${(period.trend_signal * 100).toFixed(0)} / 모멘텀 ${(period.momentum_signal * 100).toFixed(0)}`,
+    `목표 전략: ${plan.target_strategy_label}`,
+    `과열 점수 ${overheat.toFixed(2)} / 동적 데이터 품질 ${micro.dynamic.data_quality.toFixed(2)}`,
+  ];
+  if (bucket.samples > 0) {
+    drivers.push(`동일 점수구간 백테스트 ${bucket.samples}건의 MFE·목표도달률 반영`);
+  }
+  const caveats = [
+    calibrated
+      ? "워크포워드 검증을 통과한 점수구간 보정값입니다."
+      : "아직 충분한 워크포워드 표본이 없어 보수적 사전값을 사용합니다.",
+    "예상 상승률은 목표가 보장이 아니라 해당 관찰기간의 최대 유리 변동(MFE) 추정치입니다.",
+    "뉴스·상장 이슈·유동성 공백과 과거에 없던 시장 국면은 반영하지 못합니다.",
+  ];
+  return {
+    model_version: `${ENGINE_VERSION}-forecast.1`,
+    calibration_source: ACTIVE_CALIBRATION_PROFILE.source,
+    calibrated,
+    calibration_samples: bucket.samples,
+    target_hit_probability_pct: probability * 100,
+    wait_entry_probability_pct: decision === "WAIT"
+      ? clamp(bucket.waitEntryRate + (trendQuality - 0.5) * 0.12 - overheat * 0.1, 0.08, 0.75) * 100
+      : null,
+    raw_expected_upside_pct: rawExpected,
+    expected_upside_pct: expectedUpside,
+    conservative_upside_pct: conservativeUpside,
+    optimistic_upside_pct: optimisticUpside,
+    expected_price: expectedPrice,
+    conservative_price: conservativePrice,
+    optimistic_price: optimisticPrice,
+    expected_net_return_pct: expectedNetReturn,
+    confidence_band_pct: Math.max(0, (optimisticUpside - conservativeUpside) / 2),
+    horizon_bars_15m: horizonBars,
+    horizon_label: horizon.expected_window,
+    drivers,
+    caveats,
   };
 }
 
@@ -2232,8 +2453,8 @@ export function finalizeCandidate(
     gate(
       "score",
       "종합점수",
-      score >= (risk.scoreThreshold ?? 72),
-      `최종 점수가 ${risk.scoreThreshold ?? 72}점 이상이어야 합니다.`,
+      score >= (risk.scoreThreshold ?? ACTIVE_CALIBRATION_PROFILE.parameters.scoreThreshold),
+      `최종 점수가 ${risk.scoreThreshold ?? ACTIVE_CALIBRATION_PROFILE.parameters.scoreThreshold}점 이상이어야 합니다.`,
     ),
   ];
   const failed = checks.filter((check) => !check.passed);
@@ -2254,6 +2475,15 @@ export function finalizeCandidate(
     decision,
   );
   const horizon = estimateHorizon(period, plan.stop_price);
+  const forecast = estimatePriceForecast(
+    period,
+    micro,
+    plan,
+    watchEntryPlan,
+    horizon,
+    score,
+    decision,
+  );
   const positives = [...period.positives];
   const negatives = [...period.negatives];
   const warnings = [...period.warnings];
@@ -2328,6 +2558,7 @@ export function finalizeCandidate(
     trade_plan: plan,
     watch_entry_plan: watchEntryPlan,
     horizon,
+    forecast,
     gates: checks,
     failed_gates: failed.map((item) => item.key),
     positives: [...new Set(positives)],

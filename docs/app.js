@@ -84,6 +84,10 @@
     primaryShortReturn: $("primary-short-return"),
     primaryMediumTarget: $("primary-medium-target"),
     primaryMediumReturn: $("primary-medium-return"),
+    primaryForecastUpside: $("primary-forecast-upside"),
+    primaryForecastProbability: $("primary-forecast-probability"),
+    primaryForecastRange: $("primary-forecast-range"),
+    primaryForecastCalibration: $("primary-forecast-calibration"),
     primaryStop: $("primary-stop"),
     primaryStopLoss: $("primary-stop-loss"),
     primaryInvestment: $("primary-investment"),
@@ -233,7 +237,14 @@
     elements.primaryShortTarget.textContent = price(plan.expected_exit_price ?? plan.short_target, quote);
     elements.primaryShortReturn.textContent = `수수료·슬리피지 반영 ${percent(plan.expected_exit_net_return_pct ?? plan.short_net_return_pct, 2, true)}`;
     elements.primaryMediumTarget.textContent = price(plan.medium_target, quote);
-    elements.primaryMediumReturn.textContent = `비용 반영 ${percent(plan.medium_net_return_pct, 2, true)}`;
+    elements.primaryMediumReturn.textContent = `${plan.target_strategy_label || "중기 추세 관찰"} · ${percent(plan.medium_net_return_pct, 2, true)}`;
+    const forecast = candidate.forecast || {};
+    elements.primaryForecastUpside.textContent = percent(forecast.expected_upside_pct, 2, true);
+    elements.primaryForecastProbability.textContent = `목표 선도달 추정 ${percent(forecast.target_hit_probability_pct, 1)} · 순수익 ${percent(forecast.expected_net_return_pct, 2, true)}`;
+    elements.primaryForecastRange.textContent = `${price(forecast.conservative_price, quote)} ~ ${price(forecast.optimistic_price, quote)}`;
+    elements.primaryForecastCalibration.textContent = forecast.calibrated
+      ? `워크포워드 교정 ${Number(forecast.calibration_samples || 0)}건`
+      : "교정 표본 부족 · 보수적 사전값";
     elements.primaryStop.textContent = price(plan.stop_price, quote);
     elements.primaryStopLoss.textContent = `예상 손실 ${percent(plan.net_stop_pct)} · ${krw(plan.estimated_loss_krw, quote)}`;
     elements.primaryInvestment.textContent = krw(plan.recommended_investment_quote ?? plan.recommended_investment_krw, quote);
@@ -256,6 +267,7 @@
     const dynamic = candidate.microstructure?.dynamic || {};
     const quote = candidateQuote(candidate);
     const cross = candidate.cross_exchange;
+    const forecast = candidate.forecast || {};
     const tone = candidate.decision.toLowerCase();
     const dynamicRisk = ["SPOOF_LIKE_RISK", "ASK_ABSORPTION_RISK", "SUPPORT_BREAKDOWN_RISK"].includes(dynamic.status);
     const dynamicTone = dynamicRisk
@@ -299,6 +311,12 @@
       <div class="candidate-market"><span>현재가 <b>${escapeHtml(price(candidate.current_price, quote))}</b></span><span class="${candidate.change_24h_pct >= 0 ? "positive-text" : "negative-text"}">${percent(candidate.change_24h_pct, 2, true)}</span></div>
       ${crossStrip}
       ${planRows}
+      <div class="forecast-strip">
+        <span><small>교정 예상 상승률</small><b class="positive-text">${escapeHtml(percent(forecast.expected_upside_pct, 2, true))}</b></span>
+        <span><small>목표 선도달 추정</small><b>${escapeHtml(percent(forecast.target_hit_probability_pct, 1))}</b></span>
+        <span><small>예상 가격 범위</small><b>${escapeHtml(price(forecast.conservative_price, quote))} ~ ${escapeHtml(price(forecast.optimistic_price, quote))}</b></span>
+        <span><small>교정 상태</small><b>${forecast.calibrated ? `검증표본 ${Number(forecast.calibration_samples || 0)}건` : "사전값·재교정 대기"}</b></span>
+      </div>
       <div class="dynamic-strip ${dynamicTone}">
         <span>동적 호가</span><b>${escapeHtml(dynamic.label || "이전 결과·재스캔 필요")}</b>
         <small>${Number(dynamic.observation_ms || 0) / 1000}s · 호가 ${Number(dynamic.distinct_book_updates || 0)} · 체결 ${Number(dynamic.aligned_trade_count || 0)} · 구간 ${Number(dynamic.covered_phases || 0)}/3</small>
@@ -398,6 +416,7 @@
     const watch = candidate.watch_entry_plan || {};
     const quote = candidateQuote(candidate);
     const cross = candidate.cross_exchange;
+    const forecast = candidate.forecast || {};
     const watchAvailable = !actionable && Boolean(watch.available);
     const watchLines = watchAvailable
       ? [
@@ -419,6 +438,10 @@
       `- 가격 기준: ${candidate.price_context?.reference_source || plan.reference_source || "N/A"} / 초기 티커 ${price(candidate.price_context?.ticker_price, quote)} / 실시간 괴리 ${candidate.price_context?.ticker_live_deviation_bps == null ? "N/A" : Number(candidate.price_context.ticker_live_deviation_bps).toFixed(1) + "bp"}`,
       `- 종합점수: ${Number(candidate.score).toFixed(2)}${candidate.combined_score != null ? ` / 통합점수: ${Number(candidate.combined_score).toFixed(2)}` : ""} / 신뢰도: ${percent(candidate.confidence, 1)}`,
       `- 24시간 거래대금: ${turnover(candidate.turnover_24h_quote ?? candidate.turnover_24h_krw, quote)}`,
+      `- 교정 예상 상승률(MFE): ${percent(forecast.expected_upside_pct, 2, true)} / 보수 ${percent(forecast.conservative_upside_pct, 2, true)} / 낙관 ${percent(forecast.optimistic_upside_pct, 2, true)}`,
+      `- 예상 가격 범위: ${price(forecast.conservative_price, quote)} ~ ${price(forecast.optimistic_price, quote)} / 중심 ${price(forecast.expected_price, quote)}`,
+      `- 목표 선도달 추정: ${percent(forecast.target_hit_probability_pct, 1)}${forecast.wait_entry_probability_pct == null ? "" : ` / WAIT 진입 추정 ${percent(forecast.wait_entry_probability_pct, 1)}`}`,
+      `- 예측 교정상태: ${forecast.calibrated ? `워크포워드 검증표본 ${Number(forecast.calibration_samples || 0)}건` : "표본 부족·보수적 사전값"} / 모델 ${forecast.model_version || "N/A"}`,
       ...(cross
         ? [
             `- 교차거래소 판정: ${cross.label}`,
@@ -491,6 +514,7 @@
       "",
       `- 분석시각: ${kst(result.meta?.generated_at)}`,
       `- 엔진: ${result.meta?.engine_version}`,
+      `- 예측 교정: ${result.assumptions?.calibration_profile?.promoted ? "워크포워드 승격 프로필" : "보수적 사전 프로필"} / 표본 ${Number(result.assumptions?.calibration_profile?.samples || 0)}건`,
       `- 최종 결론: ${result.headline}`,
       `- 분석 소요: ${Number(result.meta?.elapsed_seconds || 0).toFixed(2)}초`,
       `- 자동 주문: 없음`,
@@ -532,8 +556,9 @@
       "3. 추세 유지기간 분류가 과도하지 않은지, 더 보수적인 보유기간과 무효화 조건 제시",
       "4. 조건부 대기 매수구간·예상 매도가·손절가로 구성된 눌림 시나리오가 실제 지지선과 비용 포함 손익비를 충족하는지 재검증",
       "5. 동적 호가 로그에서 비체결성 대형벽 취소·매도벽 재보충/흡수·지지 붕괴가 실제 체결량과 정합적인지 재검증",
-      "6. 시장경보·저유동·추격매수·데이터 부족·뉴스 미반영 위험 점검",
-      "7. 추천 근거가 약하면 억지 대안을 만들지 말고 '매수 보류'로 결론",
+      "6. 교정 예상 상승률이 구조적 목표가와 실제 변동성에 비해 과장됐는지, 보수·중심·낙관 범위를 각각 검증",
+      "7. 시장경보·저유동·추격매수·데이터 부족·뉴스 미반영 위험 점검",
+      "8. 추천 근거가 약하면 억지 대안을 만들지 말고 '매수 보류'로 결론",
       "",
       "> 주의: 본 리포트는 공개 시세 기반 조건부 분석이며 미래 가격이나 수익을 보장하지 않습니다. 동적 호가 판정은 개별 주문 ID와 숨은 잔량을 볼 수 없어 스푸핑·아이스버그의 확정 판정이 아닙니다."
     ];

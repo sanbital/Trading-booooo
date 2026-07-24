@@ -1,0 +1,15 @@
+{
+  "fmt": {
+    "lineWidth": 100,
+    "indentWidth": 2,
+    "semiColons": true,
+    "singleQuote": false,
+    "include": ["backtest/**/*.ts", "supabase/functions/market-scanner/**/*.ts"]
+  },
+  "tasks": {
+    "check": "deno check supabase/functions/market-scanner/index.ts backtest/run.ts backtest/calibrate.ts",
+    "test": "deno test supabase/functions/market-scanner/*.test.ts backtest/*.test.ts",
+    "backtest": "deno run -A backtest/run.ts",
+    "calibrate": "deno run -A backtest/calibrate.ts --write-profile"
+  }
+}

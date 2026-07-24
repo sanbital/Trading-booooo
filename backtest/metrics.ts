@@ -1,4 +1,4 @@
-import type { Trade } from "./simulate.ts";
+import type { SignalEvaluation, Trade } from "./simulate.ts";
 
 export type Metrics = {
   trades: number;
@@ -15,11 +15,64 @@ export type Metrics = {
   avgRealizedRR: number;
   avgBarsHeld: number;
   avgAllocationPct: number;
-  exitBreakdown: { target: number; stop: number; time: number };
+  exitBreakdown: { target: number; stop: number; partialStop: number; time: number };
   equityFinalPct: number;
   maxDrawdownPct: number;
   avgPlannedRR: number;
   avgScore: number;
+  avgMfePct: number;
+  avgMaePct: number;
+  forecastMaePct: number;
+  forecastRmsePct: number;
+  forecastBiasPct: number;
+  ambiguousTrades: number;
+};
+
+export type GateAccuracy = {
+  gate: string;
+  samples: number;
+  correctRejections: number;
+  missedOpportunities: number;
+  accuracyPct: number;
+  missedOpportunityPct: number;
+};
+
+export type AccuracyMetrics = {
+  signals: number;
+  enteredSignals: number;
+  buySignals: number;
+  buyHitRatePct: number;
+  waitSignals: number;
+  waitEntries: number;
+  waitEntryRatePct: number;
+  waitHitRatePct: number;
+  targetFirst: number;
+  stopFirst: number;
+  timeoutProfit: number;
+  timeoutLoss: number;
+  noEntry: number;
+  rejectedSignals: number;
+  rejectionAccuracyPct: number;
+  missedOpportunityRatePct: number;
+  directionAccuracyPct: number;
+  avgMfePct: number;
+  avgMaePct: number;
+  forecastMaePct: number;
+  forecastRmsePct: number;
+  forecastBiasPct: number;
+  probabilityBrierScore: number;
+  ambiguousSignals: number;
+  byGate: GateAccuracy[];
+};
+
+const sum = (a: number[]) => a.reduce((s, x) => s + x, 0);
+const mean = (a: number[]) => a.length ? sum(a) / a.length : 0;
+const median = (values: number[]) => {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted.length % 2
+    ? sorted[(sorted.length - 1) / 2]
+    : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2;
 };
 
 function wilson95(wins: number, n: number): [number, number] {
@@ -50,30 +103,30 @@ export function computeMetrics(trades: Trade[]): Metrics {
     avgRealizedRR: 0,
     avgBarsHeld: 0,
     avgAllocationPct: 0,
-    exitBreakdown: { target: 0, stop: 0, time: 0 },
+    exitBreakdown: { target: 0, stop: 0, partialStop: 0, time: 0 },
     equityFinalPct: 0,
     maxDrawdownPct: 0,
     avgPlannedRR: 0,
     avgScore: 0,
+    avgMfePct: 0,
+    avgMaePct: 0,
+    forecastMaePct: 0,
+    forecastRmsePct: 0,
+    forecastBiasPct: 0,
+    ambiguousTrades: 0,
   };
   if (!n) return empty;
 
   const wins = trades.filter((t) => t.netPct > 0);
   const losses = trades.filter((t) => t.netPct <= 0);
-  const sum = (a: number[]) => a.reduce((s, x) => s + x, 0);
-  const mean = (a: number[]) => a.length ? sum(a) / a.length : 0;
-  const nets = trades.map((t) => t.netPct).sort((a, b) => a - b);
-  const median = nets.length % 2
-    ? nets[(nets.length - 1) / 2]
-    : (nets[nets.length / 2 - 1] + nets[nets.length / 2]) / 2;
+  const nets = trades.map((t) => t.netPct);
   const grossWin = sum(wins.map((t) => t.netPct));
   const grossLoss = Math.abs(sum(losses.map((t) => t.netPct)));
   const avgWin = mean(wins.map((t) => t.netPct));
   const avgLoss = Math.abs(mean(losses.map((t) => t.netPct)));
   const [winLow, winHigh] = wilson95(wins.length, n);
+  const forecastErrors = trades.map((t) => t.forecastErrorPct);
 
-  // 단일 종목에서는 포지션이 중복되지 않는다. 여러 종목을 합친 값은
-  // run.ts에서 자본곡선이 아닌 pooled signal 통계라고 명시한다.
   let equity = 1;
   let peak = 1;
   let maxDD = 0;
@@ -93,7 +146,7 @@ export function computeMetrics(trades: Trade[]): Metrics {
     avgWinPct: avgWin,
     avgLossPct: -avgLoss,
     expectancyPct: mean(nets),
-    medianPct: median,
+    medianPct: median(nets),
     profitFactor: grossLoss > 0 ? grossWin / grossLoss : Infinity,
     avgRealizedRR: avgLoss > 0 ? avgWin / avgLoss : Infinity,
     avgBarsHeld: mean(trades.map((t) => t.barsHeld)),
@@ -101,12 +154,103 @@ export function computeMetrics(trades: Trade[]): Metrics {
     exitBreakdown: {
       target: trades.filter((t) => t.exitReason === "TARGET").length,
       stop: trades.filter((t) => t.exitReason === "STOP").length,
+      partialStop: trades.filter((t) => t.exitReason === "PARTIAL_STOP").length,
       time: trades.filter((t) => t.exitReason === "TIME").length,
     },
     equityFinalPct: (equity - 1) * 100,
     maxDrawdownPct: maxDD * 100,
     avgPlannedRR: mean(trades.map((t) => t.plannedRR)),
     avgScore: mean(trades.map((t) => t.score)),
+    avgMfePct: mean(trades.map((t) => t.maxFavorableExcursionPct)),
+    avgMaePct: mean(trades.map((t) => t.maxAdverseExcursionPct)),
+    forecastMaePct: mean(forecastErrors.map(Math.abs)),
+    forecastRmsePct: Math.sqrt(mean(forecastErrors.map((value) => value ** 2))),
+    forecastBiasPct: mean(forecastErrors),
+    ambiguousTrades: trades.filter((t) => t.ambiguousSameBar).length,
+  };
+}
+
+export function computeAccuracyMetrics(signals: SignalEvaluation[]): AccuracyMetrics {
+  const entered = signals.filter((signal) => signal.entryStatus === "ENTERED");
+  const buy = entered.filter((signal) => signal.decision === "BUY");
+  const waits = signals.filter((signal) => signal.decision === "WAIT");
+  const waitEntries = entered.filter((signal) => signal.decision === "WAIT");
+  const hit = (signal: SignalEvaluation) => signal.outcome === "TARGET_FIRST";
+  const rejected = signals.filter((signal) =>
+    signal.outcome === "REJECT_CORRECT" || signal.outcome === "MISSED_OPPORTUNITY"
+  );
+  const errors = entered
+    .map((signal) => signal.forecastErrorPct)
+    .filter((value): value is number => value != null && Number.isFinite(value));
+  const mfes = entered
+    .map((signal) => signal.maxFavorableExcursionPct)
+    .filter((value): value is number => value != null);
+  const maes = entered
+    .map((signal) => signal.maxAdverseExcursionPct)
+    .filter((value): value is number => value != null);
+  const direction = signals.filter((signal) => signal.directionCorrect != null);
+  const briers = entered
+    .map((signal) => signal.brierScore)
+    .filter((value): value is number => value != null);
+
+  const gateMap = new Map<string, { correct: number; missed: number }>();
+  for (const signal of rejected) {
+    for (const gate of signal.failedGates) {
+      const row = gateMap.get(gate) || { correct: 0, missed: 0 };
+      if (signal.outcome === "REJECT_CORRECT") row.correct++;
+      else row.missed++;
+      gateMap.set(gate, row);
+    }
+  }
+  const byGate = [...gateMap.entries()].map(([gate, row]) => {
+    const samples = row.correct + row.missed;
+    return {
+      gate,
+      samples,
+      correctRejections: row.correct,
+      missedOpportunities: row.missed,
+      accuracyPct: samples ? row.correct / samples * 100 : 0,
+      missedOpportunityPct: samples ? row.missed / samples * 100 : 0,
+    };
+  }).sort((a, b) => b.samples - a.samples || b.accuracyPct - a.accuracyPct);
+
+  return {
+    signals: signals.length,
+    enteredSignals: entered.length,
+    buySignals: buy.length,
+    buyHitRatePct: buy.length ? buy.filter(hit).length / buy.length * 100 : 0,
+    waitSignals: waits.length,
+    waitEntries: waitEntries.length,
+    waitEntryRatePct: waits.length ? waitEntries.length / waits.length * 100 : 0,
+    waitHitRatePct: waitEntries.length
+      ? waitEntries.filter(hit).length / waitEntries.length * 100
+      : 0,
+    targetFirst: entered.filter(hit).length,
+    stopFirst: entered.filter((signal) => signal.outcome === "STOP_FIRST").length,
+    timeoutProfit: entered.filter((signal) => signal.outcome === "TIMEOUT_PROFIT").length,
+    timeoutLoss: entered.filter((signal) => signal.outcome === "TIMEOUT_LOSS").length,
+    noEntry: signals.filter((signal) => signal.outcome === "NO_ENTRY").length,
+    rejectedSignals: rejected.length,
+    rejectionAccuracyPct: rejected.length
+      ? rejected.filter((signal) => signal.outcome === "REJECT_CORRECT").length /
+        rejected.length * 100
+      : 0,
+    missedOpportunityRatePct: rejected.length
+      ? rejected.filter((signal) => signal.outcome === "MISSED_OPPORTUNITY").length /
+        rejected.length * 100
+      : 0,
+    directionAccuracyPct: direction.length
+      ? direction.filter((signal) => signal.directionCorrect).length /
+        direction.length * 100
+      : 0,
+    avgMfePct: mean(mfes),
+    avgMaePct: mean(maes),
+    forecastMaePct: mean(errors.map(Math.abs)),
+    forecastRmsePct: Math.sqrt(mean(errors.map((value) => value ** 2))),
+    forecastBiasPct: mean(errors),
+    probabilityBrierScore: mean(briers),
+    ambiguousSignals: signals.filter((signal) => signal.ambiguousSameBar).length,
+    byGate,
   };
 }
 
@@ -137,8 +281,13 @@ export function formatReport(
   }
   lines.push(`평균 보유            ${f(m.avgBarsHeld, 1)}봉 (15분)`);
   lines.push(
-    `청산 사유           목표 ${m.exitBreakdown.target} / 손절 ${m.exitBreakdown.stop} / 시간 ${m.exitBreakdown.time}`,
+    `청산 사유           목표 ${m.exitBreakdown.target} / 손절 ${m.exitBreakdown.stop} / 1차후본전 ${m.exitBreakdown.partialStop} / 시간 ${m.exitBreakdown.time}`,
   );
+  lines.push(`평균 MFE / MAE      +${f(m.avgMfePct)}% / -${f(m.avgMaePct)}%`);
+  lines.push(
+    `상승률 예측오차      MAE ${f(m.forecastMaePct)}%p / RMSE ${f(m.forecastRmsePct)}%p / 편향 ${f(m.forecastBiasPct)}%p`,
+  );
+  lines.push(`동일봉 목표·손절      ${m.ambiguousTrades}건 (보수적 손절 처리)`);
   lines.push(`평균 진입점수         ${f(m.avgScore, 1)}`);
   if (extra.benchmarkPct !== undefined) {
     lines.push(`동일기간 단순보유      ${f(extra.benchmarkPct)}%`);
@@ -148,4 +297,26 @@ export function formatReport(
     }
   }
   return lines.join("\n");
+}
+
+export function formatAccuracyReport(m: AccuracyMetrics): string {
+  const f = (x: number, d = 1) => Number.isFinite(x) ? x.toFixed(d) : "-";
+  return [
+    "── 신호 실제 일치율 ──",
+    `전체 평가 신호       ${m.signals}`,
+    `실제 진입 신호       ${m.enteredSignals}`,
+    `BUY 목표 선도달률    ${f(m.buyHitRatePct)}% (${m.buySignals}건)`,
+    `WAIT 조건 발동률     ${f(m.waitEntryRatePct)}% (${m.waitEntries}/${m.waitSignals})`,
+    `발동 WAIT 적중률     ${f(m.waitHitRatePct)}%`,
+    `목표/손절 선도달     ${m.targetFirst} / ${m.stopFirst}`,
+    `시간종료 이익/손실   ${m.timeoutProfit} / ${m.timeoutLoss}`,
+    `거절 정확도          ${f(m.rejectionAccuracyPct)}%`,
+    `놓친 기회율          ${f(m.missedOpportunityRatePct)}%`,
+    `방향 일치율          ${f(m.directionAccuracyPct)}%`,
+    `평균 MFE / MAE      +${f(m.avgMfePct, 2)}% / -${f(m.avgMaePct, 2)}%`,
+    `상승률 예측 MAE      ${f(m.forecastMaePct, 2)}%p`,
+    `상승률 예측 편향     ${f(m.forecastBiasPct, 2)}%p`,
+    `확률 Brier Score    ${f(m.probabilityBrierScore, 3)} (낮을수록 우수)`,
+    `동일봉 모호 신호     ${m.ambiguousSignals}건 (손절 우선)`,
+  ].join("\n");
 }

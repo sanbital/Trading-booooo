@@ -80,6 +80,7 @@ Deno.test("same-bar target and stop uses stop execution price", () => {
   );
   equal(exit?.exitReason, "STOP");
   equal(exit?.exitPrice, 94);
+  equal(exit?.ambiguousSameBar, true);
 });
 
 Deno.test("a gap below the stop exits at the worse opening execution", () => {
@@ -145,8 +146,8 @@ Deno.test("buy-and-hold uses the same requested window", () => {
   );
 });
 
-Deno.test("usable window waits for fifty completed daily candles", () => {
-  const days = 52;
+Deno.test("usable window waits for 120 completed daily candles", () => {
+  const days = 122;
   const history: MarketHistory = {
     exchange: "upbit",
     market: "KRW-TEST",
@@ -158,11 +159,11 @@ Deno.test("usable window waits for fifty completed daily candles", () => {
     day: Array.from({ length: days }, (_, i) => candle(i * TF_MS.day)),
   };
   const window = usableWindow(history);
-  equal(window?.startMs, 50 * TF_MS.day);
+  equal(window?.startMs, 120 * TF_MS.day);
 });
 
 Deno.test("full market simulation runs both BUY and WAIT evaluators", () => {
-  const days = 51;
+  const days = 121;
   const drifting = (openTime: number, index: number) => {
     const price = 100 + index * 0.002 + Math.sin(index / 7) * 0.2;
     return {
@@ -197,7 +198,7 @@ Deno.test("full market simulation runs both BUY and WAIT evaluators", () => {
     ),
   };
   const result = simulateMarket(history, risk());
-  equal(result.window?.startMs, 50 * TF_MS.day);
+  equal(result.window?.startMs, 120 * TF_MS.day);
   if (!Array.isArray(result.buyTrades) || !Array.isArray(result.waitTrades)) {
     throw new Error("simulation result arrays are missing");
   }

@@ -1,4 +1,4 @@
-# Trading-booooo v2.5.0 — GitHub 웹 전용 배포 가이드
+# Trading-booooo v2.6.0 — GitHub 웹 전용 배포 가이드
 
 이 가이드는 **VS Code, PowerShell, Git, Supabase CLI를 전혀 사용하지 않습니다.** Windows 파일 탐색기, GitHub 웹사이트, Supabase 대시보드만 사용합니다.
 
@@ -34,7 +34,7 @@ Supabase 프로젝트의 **표시 이름은 배포에 사용되지 않습니다.
 
 ```text
 Trading-booooo/
-├─ .github/workflows/deploy-supabase.yml
+├─ .github/workflows/main.deploy-supabase.yml
 ├─ docs/
 ├─ supabase/
 ├─ .gitignore
@@ -119,7 +119,7 @@ GitHub의 `Trading-booooo` 저장소에서 다음 순서로 이동합니다.
 3. Windows에서 압축을 푼 `Trading-booooo` 폴더를 엽니다.
 4. **바깥쪽 `Trading-booooo` 폴더가 아니라 그 안의 모든 항목**을 업로드 영역으로 끌어놓습니다.
 5. 목록에 `.github`, `docs`, `supabase`, `README.md`가 보이는지 확인합니다.
-6. Commit message에 `Deploy Trading-booooo v2.5.0`을 입력합니다.
+6. Commit message에 `Deploy Trading-booooo v2.6.0`을 입력합니다.
 7. `Commit changes`를 누릅니다.
 
 정상 저장소 루트는 다음과 같아야 합니다.
@@ -224,17 +224,18 @@ https://GITHUB_USERNAME.github.io/Trading-booooo/#access=MY_SCAN_TOKEN
 
 ## GitHub에서 백테스트 실행
 
-v2.5.0에도 배포와 별개인 `Backtest Market Scanner` Action이 포함됩니다.
+v2.6.0에는 `Weekly Backtest Calibration` Action이 포함됩니다.
 
 1. 저장소 `Actions`를 누릅니다.
-2. 왼쪽 `Backtest Market Scanner`를 선택합니다.
+2. 왼쪽 `Weekly Backtest Calibration`을 선택합니다.
 3. `Run workflow`를 누릅니다.
-4. 거래소, 쉼표로 구분한 종목, 조회일수를 입력합니다.
-5. 먼저 `sweep=false`로 실행합니다.
-6. 완료 후 실행 요약 또는 Artifacts의 리포트를 확인합니다.
+4. 조회일수는 최소 125일, 권장 180일로 입력합니다.
+5. 검증 통과 시 운영 프로필을 갱신하려면 `promote=true`를 유지합니다.
+6. 완료 후 `Artifacts`의 `calibration-report.md/json`을 확인합니다.
+7. 승격 조건을 모두 통과한 경우에만 교정 프로필이 자동 커밋되고 Supabase 재배포가 시작됩니다.
 
 백테스트는 공개 캔들 API만 사용하며 Supabase 배포 비밀값을 사용하지 않습니다.
-실시간 동적 호가·체결의 정확도는 이 과거 캔들 결과에 포함되지 않습니다.
+실시간 동적 호가·체결의 정확도는 이 과거 캔들 결과에 포함되지 않으며, 승격 실패 시 기존 운영값을 유지합니다.
 
 ## 문제 해결
 

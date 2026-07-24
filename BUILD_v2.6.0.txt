@@ -1,0 +1,13 @@
+Trading-booooo v2.6.0 build validation
+Date: 2026-07-24 KST
+
+- TypeScript static check: PASS
+- Frontend JavaScript syntax check: PASS
+- GitHub Actions YAML parse: PASS
+- Automated tests: PASS (47/47)
+- Secret/generated-data scan: PASS
+
+Local limitation:
+- Deno runtime and live exchange network calls were not executed in this sandbox.
+- The first GitHub Actions "Weekly Backtest Calibration" run performs the real 180-day data collection and guarded promotion check.
+- If data collection or promotion gates fail, the active calibration profile remains unchanged.

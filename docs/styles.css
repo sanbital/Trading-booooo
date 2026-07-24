@@ -432,3 +432,24 @@ footer { display: flex; justify-content: space-between; gap: 20px; width: min(12
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation-duration: 0.01ms !important; }
 }
+
+/* v2.6.0 forecast calibration */
+.price-grid article.forecast {
+  border-color: rgba(74, 222, 128, 0.2);
+  background: linear-gradient(180deg, rgba(74, 222, 128, 0.06), rgba(255,255,255,0.015));
+}
+.forecast-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+.forecast-strip span {
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.025);
+}
+.forecast-strip small, .forecast-strip b { display: block; }
+.forecast-strip small { color: var(--muted); margin-bottom: 4px; }
+@media (max-width: 620px) { .forecast-strip { grid-template-columns: 1fr; } }
