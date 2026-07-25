@@ -46,8 +46,7 @@ jobs:
       - name: Install Supabase CLI
         uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
         with:
-          version: 2.101.0
-          github-token: ${{ github.token }}
+          version: 2.109.1
 
       - name: Validate repository secrets
         shell: bash
@@ -106,8 +105,26 @@ jobs:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: |
-          supabase link --project-ref "${SUPABASE_PROJECT_REF}" --password "${SUPABASE_DB_PASSWORD}"
-          supabase db push --password "${SUPABASE_DB_PASSWORD}"
+          set -euo pipefail
+
+          # Supabase 공식 권장 방식: DB 비밀번호는 CLI 인자가 아니라
+          # SUPABASE_DB_PASSWORD 환경변수로 전달한다.
+          supabase link --project-ref "${SUPABASE_PROJECT_REF}"
+
+          # Supavisor 풀러의 간헐적 SASL 캐시 오류에 대비해 제한적으로 재시도한다.
+          for attempt in 1 2 3; do
+            echo "Database migration attempt ${attempt}/3"
+            if supabase db push; then
+              exit 0
+            fi
+
+            if [ "${attempt}" -eq 3 ]; then
+              echo "::error::Database migration failed after 3 attempts."
+              exit 1
+            fi
+
+            sleep $((attempt * 20))
+          done
 
       - name: Deploy Edge Functions
         shell: bash
