@@ -83,6 +83,51 @@ const BLOCKING_DYNAMIC = new Set([
   "INSUFFICIENT",
 ]);
 
+// Stage 5: hard bounds for scalp tunables. Any override — operator, env, or a future
+// self-correction pass — is clamped into these ranges. This is the "target/stop bounds"
+// safety rail: learning can nudge parameters but can never push them into regimes where
+// the fee math collapses or the stop becomes reckless.
+export interface ScalpBounds { min: number; max: number }
+export const SCALP_BOUNDS: Record<string, ScalpBounds> = {
+  minImbalance: { min: 0.3, max: 5 },
+  minStability: { min: 0.2, max: 0.95 },
+  maxSpreadBps: { min: 2, max: 30 },
+  maxAskAbsorption: { min: 0.1, max: 1 },
+  strongDownVeto: { min: -1, max: -0.2 },
+  weakDownThreshold: { min: -0.5, max: 0 },
+  weakDownPenalty: { min: 0.5, max: 1 },
+  basePWin: { min: 0.4, max: 0.6 },
+  targetPct: { min: 0.003, max: 0.02 },   // 0.3%–2% target
+  stopPct: { min: 0.002, max: 0.015 },     // 0.2%–1.5% stop
+  minimumEdge: { min: 0.0010, max: 0.005 }, // 0.10%–0.50% edge floor
+};
+
+function clampBound(key: string, value: number, fallback: number): number {
+  const b = SCALP_BOUNDS[key];
+  if (!Number.isFinite(value)) return fallback;
+  if (!b) return value;
+  return Math.max(b.min, Math.min(b.max, value));
+}
+
+/**
+ * Merge overrides onto the defaults, then clamp every bounded field. Callers should
+ * ALWAYS build the runtime config through this — never pass raw overrides straight in.
+ * Also enforces a structural invariant: target must exceed stop (positive reward:risk),
+ * otherwise the strategy is negative-expectancy by construction.
+ */
+export function resolveScalpSignalConfig(overrides: Partial<ScalpSignalConfig> = {}): ScalpSignalConfig {
+  const merged: ScalpSignalConfig = { ...DEFAULT_SCALP_SIGNAL, ...overrides };
+  for (const key of Object.keys(SCALP_BOUNDS)) {
+    (merged as any)[key] = clampBound(key, (merged as any)[key], (DEFAULT_SCALP_SIGNAL as any)[key]);
+  }
+  // Reward:risk invariant — target must be strictly greater than stop.
+  if (merged.targetPct <= merged.stopPct) {
+    merged.targetPct = clampBound("targetPct", merged.stopPct * 2, DEFAULT_SCALP_SIGNAL.targetPct);
+  }
+  return merged;
+}
+
+
 export interface ScalpSignalResult {
   decision: "BUY" | "WAIT" | "AVOID";
   vetoed: boolean;          // blocked by strong downtrend
