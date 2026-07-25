@@ -1,0 +1,11 @@
+Trading-booooo v5.0.0
+
+- Upbit KRW automatic full scan: every 300 seconds
+- Position watchdog: every 15 seconds
+- Static-egress order gateway: Fly.io nrt
+- Trading modes: PAUSED / PAPER / LIVE_LIMITED
+- Default mode: PAPER
+- Atomic order accounting RPCs
+- Identifier-based order reconciliation
+- Actual fills connected to forward self-calibration
+- Withdrawal endpoints: none

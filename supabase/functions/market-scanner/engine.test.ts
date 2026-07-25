@@ -717,6 +717,55 @@ Deno.test("a fully aligned, liquid, fee-aware setup can become BUY", () => {
   assert(final.period_score === period.period_score);
 });
 
+Deno.test("AUTOMATED mode emits a watchdog-compatible precommitted plan", () => {
+  const data = dataset(0.0012);
+  const price = timeframeMetrics(data.m5).close;
+  const period = analyzePeriod(universeRow(price), data);
+  period.timeframes.m15.resistance = null;
+  period.timeframes.h4.resistance = null;
+  period.timeframes.day.resistance = null;
+  period.timeframes.day.recent_high = price * 2;
+  const atr15 = period.timeframes.m15.atr14!;
+  const requiredStopDistance = Math.max(period.timeframes.h4.atr14!, atr15 * 1.5);
+  period.timeframes.m15.support = price - requiredStopDistance - atr15 * 0.45;
+  period.timeframes.h4.support = price - requiredStopDistance - atr15 * 0.55;
+  period.timeframes.m15.rsi14 = 66;
+  const micro = computeMicrostructure(bookSnapshots(true), trades(true), 1_800_000_000_000);
+  micro.best_bid = price - 0.01;
+  micro.best_ask = price + 0.01;
+  micro.reference_price = price;
+  micro.reference_timestamp = 1_800_000_000_000;
+  micro.live_book_age_ms = 0;
+  micro.latest_bids = Array.from({ length: 15 }, (_, index) => ({
+    price: price - 0.01 - index * 0.01,
+    size: 1_000_000 / price,
+  }));
+  micro.latest_asks = Array.from({ length: 15 }, (_, index) => ({
+    price: price + 0.01 + index * 0.01,
+    size: 1_000_000 / price,
+  }));
+  micro.spread_bps = 2;
+  micro.micro_score = 88;
+  const final = finalizeCandidate(period, micro, 0.01, {
+    ...risk,
+    operatorMode: "AUTOMATED",
+    recommendationValidMinutes: 5,
+    minActionableHoldingHours: 1,
+    maxUnattendedHours: 24,
+    requirePrecommittedExit: true,
+    minNetRR: 1.5,
+    maxStopPct: 8,
+    stopMinAtr4hMult: 0.1,
+    stopMinAtr15mMult: 0.5,
+  }, clearEvent());
+  assert(final.decision === "BUY", `failed=${final.failed_gates.join(",")}`);
+  assert(final.execution_plan.mode === "AUTOMATED");
+  assert(final.execution_plan.automated_compatible);
+  assert(final.execution_plan.monitoring_requirement === "AUTOMATED_WATCHDOG");
+  assert(final.execution_plan.recommendation_valid_minutes <= 15);
+  assert(final.execution_plan.next_review_after_hours <= 0.5);
+});
+
 Deno.test("minimum edge gate can be tightened by the forward profile", () => {
   const data = dataset(0.0012);
   const price = timeframeMetrics(data.m5).close;

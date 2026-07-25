@@ -1,4 +1,5 @@
 import { CALIBRATED_PARAMETERS, ENGINE_VERSION } from "../market-scanner/engine.ts";
+import { automationAllowed } from "../_shared/security.ts";
 import {
   autoCalibrateForward,
   loadRuntimeProfile,
@@ -52,7 +53,7 @@ const weekly: LearningParameters = {
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response(null, { status: 204 });
   if (request.method !== "POST") return json({ error: "POST only" }, 405);
-  if (!allowed(request)) return json({ error: "unauthorized" }, 401);
+  if (!allowed(request) && !automationAllowed(request)) return json({ error: "unauthorized" }, 401);
   try {
     const before = await loadRuntimeProfile(weekly);
     const reconciliation = await reconcileForwardOutcomes();

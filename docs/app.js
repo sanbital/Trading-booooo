@@ -110,7 +110,7 @@
   };
 
   function updateBrandVersion(engineVersion = "") {
-    const version = String(engineVersion || config.uiVersion || "4.0.2").replace(/^v/i, "");
+    const version = String(engineVersion || config.uiVersion || "5.1.0").replace(/^v/i, "");
     if (elements.brandSubtitle) {
       elements.brandSubtitle.textContent = `UPBIT KRW + BINANCE USDT SPOT · v${version}`;
     }

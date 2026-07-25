@@ -299,7 +299,7 @@ function featureVector(candidate: FinalCandidate, risk: RiskConfig): Record<stri
     average_trade_notional: candidate.microstructure.average_trade_notional,
     assumed_order_notional: candidate.trade_plan.assumed_order_notional_quote,
     average_trade_to_order_ratio: candidate.trade_plan.assumed_order_notional_quote > 0
-      ? candidate.microstructure.average_trade_notional / candidate.trade_plan.assumed_order_notional_quote
+      ? (candidate.microstructure.average_trade_notional ?? 0) / candidate.trade_plan.assumed_order_notional_quote
       : 0,
     atr15: candidate.timeframes.m15.atr14,
     atr4h: candidate.timeframes.h4.atr14,
@@ -309,6 +309,8 @@ function featureVector(candidate: FinalCandidate, risk: RiskConfig): Record<stri
     horizon_code: candidate.horizon.code,
     intended_horizon_hours: candidate.horizon.intended_holding_hours,
     low_touch_compatible: candidate.execution_plan.low_touch_compatible,
+    automated_compatible: candidate.execution_plan.automated_compatible,
+    operator_mode: candidate.execution_plan.mode,
     failed_gates: candidate.failed_gates,
     quote_currency: candidate.quote_currency,
     turnover_24h_quote: candidate.turnover_24h_quote,
@@ -329,6 +331,7 @@ function candidateRows(
   return candidates.map((candidate) => ({
     scan_id: scanId,
     exchange,
+    quote_currency: exchange === "upbit" ? "KRW" : "USDT",
     market: candidate.market,
     created_at: new Date().toISOString(),
     decision: candidate.decision,
@@ -747,7 +750,7 @@ function matches(row: LearningRow, parameters: LearningParameters): boolean {
     finite(f.depth_coverage) >= parameters.minDepthCoverage &&
     finite(f.slippage_bps, 999) <= parameters.maxSlippageBps &&
     finite(f.spread_bps, 999) <= parameters.maxSpreadBps &&
-    f.low_touch_compatible === true && String(f.event_status) === "CLEAR";
+    f.automated_compatible === true && String(f.event_status) === "CLEAR";
 }
 
 function selectedOutcome(row: LearningRow, parameters: LearningParameters): PolicyOutcome | null {
@@ -762,26 +765,37 @@ function metrics(rows: LearningRow[], parameters: LearningParameters): Metrics {
   if (!selected.length) {
     return { value: -999, n: 0, expectancy: 0, profitFactor: 0, maxDrawdown: 100, equity: 0, winRate: 0, capture: 0, tailLoss: 100, marketConcentration: 1 };
   }
-  const returns = selected.map((item) => item.outcome.net_return_pct);
-  const expectancy = returns.reduce((sum, value) => sum + value, 0) / returns.length;
-  const gains = returns.filter((value) => value > 0).reduce((sum, value) => sum + value, 0);
-  const losses = Math.abs(returns.filter((value) => value < 0).reduce((sum, value) => sum + value, 0));
+  const weighted = selected.map((item) => ({
+    ...item,
+    weight: item.row.feature_vector?.actual_execution_mode === "LIVE"
+      ? 2
+      : item.row.feature_vector?.actual_execution_mode === "PAPER"
+      ? 1.25
+      : 1,
+  }));
+  const returns = weighted.map((item) => item.outcome.net_return_pct);
+  const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
+  const expectancy = weighted.reduce((sum, item) => sum + item.outcome.net_return_pct * item.weight, 0) / totalWeight;
+  const gains = weighted.filter((item) => item.outcome.net_return_pct > 0)
+    .reduce((sum, item) => sum + item.outcome.net_return_pct * item.weight, 0);
+  const losses = Math.abs(weighted.filter((item) => item.outcome.net_return_pct < 0)
+    .reduce((sum, item) => sum + item.outcome.net_return_pct * item.weight, 0));
   const profitFactor = losses > 0 ? gains / losses : gains > 0 ? 5 : 0;
   let equity = 0;
   let peak = 0;
   let maxDrawdown = 0;
-  for (const value of returns) {
-    equity += value;
+  for (const item of weighted) {
+    equity += item.outcome.net_return_pct * item.weight;
     peak = Math.max(peak, equity);
     maxDrawdown = Math.max(maxDrawdown, peak - equity);
   }
-  const capture = median(selected.map((item) => item.outcome.peak_capture_ratio ?? 0));
+  const capture = median(weighted.flatMap((item) => Array(Math.max(1, Math.round(item.weight))).fill(item.outcome.peak_capture_ratio ?? 0)));
   const tailLoss = Math.abs(quantile(returns, 0.1));
   const byMarket = new Map<string, number>();
-  for (const item of selected) byMarket.set(item.row.market, (byMarket.get(item.row.market) || 0) + Math.abs(item.outcome.net_return_pct));
+  for (const item of weighted) byMarket.set(`${item.row.exchange}:${item.row.market}`, (byMarket.get(`${item.row.exchange}:${item.row.market}`) || 0) + Math.abs(item.outcome.net_return_pct) * item.weight);
   const totalAbs = [...byMarket.values()].reduce((sum, value) => sum + value, 0);
   const marketConcentration = totalAbs > 0 ? Math.max(...byMarket.values()) / totalAbs : 1;
-  const winRate = returns.filter((value) => value > 0).length / returns.length;
+  const winRate = weighted.reduce((sum, item) => sum + (item.outcome.net_return_pct > 0 ? item.weight : 0), 0) / totalWeight;
   const value = expectancy * 5 + Math.min(profitFactor, 4) * 0.8 + capture * 0.6 + equity * 0.03 -
     maxDrawdown * 0.18 - tailLoss * 0.3 - Math.max(0, marketConcentration - 0.35) * 3;
   return { value, n: selected.length, expectancy, profitFactor, maxDrawdown, equity, winRate, capture, tailLoss, marketConcentration };
@@ -843,13 +857,80 @@ function validationFolds(rows: LearningRow[]): LearningRow[][] {
 }
 
 async function loadLearningRows(): Promise<LearningRow[]> {
-  const rows = await (await rest(
-    `scanner_candidates?decision=eq.BUY&select=id,created_at,market,exchange,decision,profile_version,period_score,net_rr,feature_vector,active_policy_key,scanner_signal_horizon_outcomes!inner(is_final,policy_outcomes)&scanner_signal_horizon_outcomes.is_final=eq.true&order=created_at.desc&limit=${MAX_FORWARD_ROWS}`,
-  )).json() as any[];
+  const [finalRows, traded] = await Promise.all([
+    (await rest(
+      `scanner_candidates?decision=eq.BUY&select=id,created_at,market,exchange,decision,profile_version,period_score,net_rr,estimated_cost_pct,feature_vector,active_policy_key,scanner_signal_horizon_outcomes!inner(is_final,policy_outcomes)&scanner_signal_horizon_outcomes.is_final=eq.true&order=created_at.desc&limit=${MAX_FORWARD_ROWS}`,
+    )).json() as Promise<any[]>,
+    (await rest(
+      `trading_positions?candidate_id=not.is.null&state=eq.CLOSED&select=candidate_id,exchange,quote_currency,is_paper,average_entry_price,peak_price,trough_price,opened_at,closed_at,close_reason,realized_pnl_quote,realized_cost_quote,paid_fees_quote&order=closed_at.desc&limit=${MAX_FORWARD_ROWS}`,
+    )).json().catch(() => []) as Promise<any[]>,
+  ]);
+
+  // A real trade can settle before the candidate's longest 20-day observation
+  // checkpoint. Fetch those candidates directly so realized fills begin
+  // influencing guarded forward calibration as soon as the position closes.
+  const known = new Set((finalRows || []).map((row: any) => String(row.id)));
+  const missingIds = [...new Set((traded || []).map((row: any) => String(row.candidate_id || "")).filter((id: string) => id && !known.has(id)))];
+  const actualCandidateRows: any[] = [];
+  for (let offset = 0; offset < missingIds.length; offset += 100) {
+    const batch = missingIds.slice(offset, offset + 100);
+    const encoded = batch.map((id) => id.replaceAll('"', '')).join(",");
+    if (!encoded) continue;
+    const response = await rest(
+      `scanner_candidates?id=in.(${encoded})&decision=eq.BUY&select=id,created_at,market,exchange,decision,profile_version,period_score,net_rr,estimated_cost_pct,feature_vector,active_policy_key&limit=100`,
+    );
+    if (response.ok) actualCandidateRows.push(...await response.json());
+  }
+  const byId = new Map<string, any>();
+  for (const row of [...(finalRows || []), ...actualCandidateRows]) if (!byId.has(String(row.id))) byId.set(String(row.id), row);
+  const rows = [...byId.values()].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, MAX_FORWARD_ROWS);
+
+  const actualByCandidate = new Map<string, any>();
+  for (const position of traded || []) {
+    const id = String(position.candidate_id || "");
+    if (!id) continue;
+    const previous = actualByCandidate.get(id);
+    // Real fills outrank paper fills; otherwise keep the latest closed position.
+    if (!previous || (previous.is_paper === true && position.is_paper === false)) actualByCandidate.set(id, position);
+  }
   return rows.map((row) => {
-    const outcome = Array.isArray(row.scanner_signal_horizon_outcomes)
+    const horizon = Array.isArray(row.scanner_signal_horizon_outcomes)
       ? row.scanner_signal_horizon_outcomes[0]
       : row.scanner_signal_horizon_outcomes;
+    const policies: Record<string, PolicyOutcome> = { ...(horizon?.policy_outcomes || {}) };
+    const activeKey = row.active_policy_key || "FIXED_T1";
+    const actual = actualByCandidate.get(String(row.id));
+    const featureVector = { ...(row.feature_vector || {}) };
+    if (actual) {
+      const entry = finite(actual.average_entry_price);
+      const cost = finite(actual.realized_cost_quote);
+      const net = cost > 0 ? finite(actual.realized_pnl_quote) / cost * 100 : 0;
+      const mfe = entry > 0 ? Math.max(0, (finite(actual.peak_price, entry) / entry - 1) * 100) : 0;
+      const mae = entry > 0 ? Math.max(0, (1 - finite(actual.trough_price, entry) / entry) * 100) : 0;
+      const maxNet = Math.max(0, mfe - finite(row.estimated_cost_pct));
+      policies[activeKey] = {
+        policy_key: activeKey,
+        entered: true,
+        entry_price: entry || null,
+        entry_time: actual.opened_at || null,
+        exit_price: null,
+        exit_time: actual.closed_at || null,
+        outcome: `ACTUAL_${String(actual.close_reason || "CLOSED")}`,
+        net_return_pct: round(net),
+        mfe_pct: round(mfe),
+        mae_pct: round(mae),
+        peak_capture_ratio: maxNet > 0 ? round(clamp(net / maxNet, -1, 1)) : null,
+        target_1_hit: ["TARGET_1", "TARGET_2", "TRAIL"].includes(String(actual.close_reason)),
+        target_2_hit: String(actual.close_reason) === "TARGET_2",
+        stop_first: ["STOP", "TRAIL", "EMERGENCY"].includes(String(actual.close_reason)),
+        post_stop_mfe_pct: 0,
+      };
+      featureVector.actual_execution = true;
+      featureVector.actual_execution_mode = actual.is_paper ? "PAPER" : "LIVE";
+      featureVector.actual_paid_fees_quote = finite(actual.paid_fees_quote);
+      featureVector.actual_quote_currency = actual.quote_currency || null;
+      featureVector.actual_exchange = actual.exchange || row.exchange;
+    }
     return {
       id: row.id,
       created_at: row.created_at,
@@ -859,9 +940,9 @@ async function loadLearningRows(): Promise<LearningRow[]> {
       profile_version: Number(row.profile_version || 0),
       period_score: finite(row.period_score),
       net_rr: finite(row.net_rr),
-      feature_vector: row.feature_vector || {},
-      active_policy_key: row.active_policy_key || "FIXED_T1",
-      policy_outcomes: outcome?.policy_outcomes || {},
+      feature_vector: featureVector,
+      active_policy_key: activeKey,
+      policy_outcomes: policies,
     } satisfies LearningRow;
   }).reverse();
 }

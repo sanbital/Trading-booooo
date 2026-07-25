@@ -4,11 +4,16 @@
     "indentWidth": 2,
     "semiColons": true,
     "singleQuote": false,
-    "include": ["backtest/**/*.ts", "supabase/functions/market-scanner/**/*.ts"]
+    "include": [
+      "backtest/**/*.ts",
+      "supabase/functions/market-scanner/**/*.ts",
+      "supabase/functions/market-learning/**/*.ts",
+      "supabase/functions/market-autotrader/**/*.ts"
+    ]
   },
   "tasks": {
-    "check": "deno check supabase/functions/market-scanner/index.ts backtest/run.ts backtest/calibrate.ts",
-    "test": "deno test supabase/functions/market-scanner/*.test.ts backtest/*.test.ts",
+    "check": "deno check supabase/functions/market-scanner/index.ts supabase/functions/market-learning/index.ts supabase/functions/market-autotrader/index.ts backtest/run.ts backtest/calibrate.ts",
+    "test": "deno test supabase/functions/market-scanner/*.test.ts supabase/functions/market-autotrader/*.test.ts backtest/*.test.ts",
     "backtest": "deno run -A backtest/run.ts",
     "calibrate": "deno run -A backtest/calibrate.ts --write-profile"
   }

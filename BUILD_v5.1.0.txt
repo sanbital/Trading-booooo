@@ -1,0 +1,27 @@
+Trading-booooo v5.1.0 build
+
+Architecture
+- Upbit KRW spot + Binance USDT spot
+- Fly.io static-egress gateway
+- Supabase scanner/autotrader/learning/Postgres
+- GitHub Actions deployment and control
+
+Cadence
+- Combined full scan: 300 seconds
+- Position monitor: 15 seconds
+- Forward learning: hourly
+- Weekly walk-forward: 450 days
+
+Validation
+- Gateway Node syntax: PASS
+- Gateway tests: 7/7 PASS
+- Full TypeScript graph static check: PASS
+- Trading logic regression tests: 66/66 PASS
+- GitHub workflow YAML parse: PASS
+- JSON and frontend syntax checks: PASS
+- SQL migration reviewed for fresh v5 deployment
+
+Runtime validation limitations
+- No live exchange order was submitted.
+- No user Supabase/Fly deployment was performed in this build environment.
+- PAPER must be verified before LIVE_LIMITED is enabled.

@@ -111,6 +111,7 @@ function candidate(
     execution_plan: {
       mode: "LOW_TOUCH",
       low_touch_compatible: true,
+      automated_compatible: false,
       recommendation_valid_minutes: 15,
       valid_until: "2026-07-24T00:15:00.000Z",
       intended_holding_hours: 48,

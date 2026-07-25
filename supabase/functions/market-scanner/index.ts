@@ -1,6 +1,6 @@
-// Trading-booooo Market Scanner v4.0.2 — Supabase Edge Function
+// Trading-booooo Market Scanner v5.1.0 — Supabase Edge Function
 // Upbit KRW / Binance USDT universe scan -> multi-period analysis -> orderflow validation.
-// Read-only public market data. No account lookup, order creation, cancellation, or API keys.
+// Public market analysis. Private account/order execution is delegated to a fixed-IP gateway.
 
 import {
   analyzePeriod,
@@ -26,6 +26,7 @@ import {
 import { baseAsset, combineCandidates } from "./combined.ts";
 import { ACTIVE_CALIBRATION_PROFILE } from "./calibration-profile.ts";
 import { assessEventRisk } from "./event-risk.ts";
+import { automationAllowed } from "../_shared/security.ts";
 import {
   applyRuntimeRisk,
   loadRuntimeProfile,
@@ -219,6 +220,8 @@ function parseRisk(
   runtime?: LearningParameters,
 ): RiskConfig {
   const binance = exchange === "binance";
+  const automated = body.automation === true ||
+    String(body.operator_mode || "").toUpperCase() === "AUTOMATED";
   return {
     capitalKrw: clamp(
       finite(
@@ -273,12 +276,18 @@ function parseRisk(
       0.7,
       3,
     ),
-    operatorMode: "LOW_TOUCH",
-    dailyCheckCount: clamp(finite(body.daily_check_count, 3), 2, 3),
-    maxUnattendedHours: clamp(finite(body.max_unattended_hours, 10), 6, 12),
-    minActionableHoldingHours: clamp(finite(body.min_actionable_holding_hours, 6), 4, 12),
-    recommendationValidMinutes: clamp(finite(body.recommendation_valid_minutes, 15), 5, 30),
-    requirePrecommittedExit: true,
+    operatorMode: automated ? "AUTOMATED" : "LOW_TOUCH",
+    dailyCheckCount: automated ? 24 : clamp(finite(body.daily_check_count, 3), 2, 3),
+    maxUnattendedHours: automated
+      ? clamp(finite(body.max_unattended_hours, 24), 1, 72)
+      : clamp(finite(body.max_unattended_hours, 10), 6, 12),
+    minActionableHoldingHours: automated
+      ? clamp(finite(body.min_actionable_holding_hours, 1), 1, 12)
+      : clamp(finite(body.min_actionable_holding_hours, 6), 4, 12),
+    recommendationValidMinutes: automated
+      ? clamp(finite(body.recommendation_valid_minutes, 5), 1, 15)
+      : clamp(finite(body.recommendation_valid_minutes, 15), 5, 30),
+    requirePrecommittedExit: automated ? body.require_precommitted_exit !== false : true,
     minStructuralHeadroomNetPct: clamp(finite(body.min_structural_headroom_net_pct, runtime?.minStructuralHeadroomNetPct ?? 0.6), 0.6, 2.5),
     minCostMultiple: clamp(finite(body.min_cost_multiple, runtime?.minCostMultiple ?? 2), 2, 5),
     minTradePressure: clamp(finite(body.min_trade_pressure, runtime?.minTradePressure ?? -0.2), -0.2, 0.35),
@@ -1282,7 +1291,7 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
       ),
       dynamic_orderflow_note:
         "공개 호가에는 주문자·개별 주문 ID·숨은 잔량이 없어 스푸핑·아이스버그를 확정하지 않고 의심 패턴으로만 판정합니다.",
-      automatic_order: false,
+      automatic_order: risk.operatorMode === "AUTOMATED",
       model_note:
         "목표가·손절가·보유기간은 현재까지의 공개 시세 패턴에 근거한 조건부 추정이며 미래 가격을 보장하지 않습니다.",
       confidence_note:
@@ -1307,7 +1316,7 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
         ? "BINANCE_PUBLIC_SPOT_REST_API_AND_WEBSOCKET"
         : "UPBIT_PUBLIC_QUOTATION_API_AND_WEBSOCKET",
       auth_mode: "PRIVATE_FRAGMENT_TOKEN",
-      auto_order: false,
+      auto_order: risk.operatorMode === "AUTOMATED",
     },
   };
 }
@@ -1463,7 +1472,7 @@ async function runCombinedScan(
       upbit: upbit?.assumptions || null,
       binance: binance?.assumptions || null,
       risk_per_trade_pct: upbitRisk.riskPct,
-      automatic_order: false,
+      automatic_order: upbitRisk.operatorMode === "AUTOMATED",
       calibration_profile: {
         source: ACTIVE_CALIBRATION_PROFILE.source,
         promoted: ACTIVE_CALIBRATION_PROFILE.promoted,
@@ -1486,14 +1495,15 @@ async function runCombinedScan(
       quote_currency: "MIXED",
       data_source: "UPBIT_AND_BINANCE_PUBLIC_SPOT_REST_API_AND_WEBSOCKET",
       auth_mode: "PRIVATE_FRAGMENT_TOKEN",
-      auto_order: false,
+      auto_order: upbitRisk.operatorMode === "AUTOMATED",
     },
   };
 }
 
 Deno.serve(async (request: Request) => {
+  const automatedRequest = automationAllowed(request);
   if (request.method === "OPTIONS") {
-    if (!originAllowed(request)) {
+    if (!automatedRequest && !originAllowed(request)) {
       return new Response("origin not allowed", {
         status: 403,
         headers: corsHeaders(request),
@@ -1501,7 +1511,7 @@ Deno.serve(async (request: Request) => {
     }
     return new Response("ok", { headers: corsHeaders(request) });
   }
-  if (!originAllowed(request)) {
+  if (!automatedRequest && !originAllowed(request)) {
     return json(request, { error: "허용되지 않은 접속 주소입니다." }, 403);
   }
   if (request.method !== "POST") {
@@ -1512,7 +1522,7 @@ Deno.serve(async (request: Request) => {
       error: "서버의 SCAN_ACCESS_TOKEN이 설정되지 않았습니다.",
     }, 500);
   }
-  if (!tokenAllowed(request)) {
+  if (!automatedRequest && !tokenAllowed(request)) {
     return json(request, { error: "개인 접속 URL이 올바르지 않습니다." }, 401);
   }
 
@@ -1596,7 +1606,9 @@ Deno.serve(async (request: Request) => {
         validation_samples: runtimeProfile.validationSamples,
         weekly_guardrails: codeDefaults,
         active_parameters: runtimeProfile.parameters,
-        operator_profile: { daily_checks: 2_3, mode: "LOW_TOUCH", max_unattended_hours: 10 },
+        operator_profile: upbitRisk.operatorMode === "AUTOMATED"
+          ? { scan_interval_minutes: 5, monitor_interval_seconds: 15, mode: "AUTOMATED", max_unattended_hours: 24 }
+          : { daily_checks: "2_3", mode: "LOW_TOUCH", max_unattended_hours: 10 },
         scan_persisted: persistence.stored,
         persistence_note: persistence.reason || null,
       },

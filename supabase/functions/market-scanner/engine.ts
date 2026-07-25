@@ -1,10 +1,10 @@
-// Trading-booooo Market Scanner v4.0.2
+// Trading-booooo Market Scanner v5.1.0
 // Pure analysis engine. Public market data only; no order or account operations.
 
 import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-profile.ts";
 import type { EventRiskSnapshot } from "./event-risk.ts";
 
-export const ENGINE_VERSION = "4.0.2";
+export const ENGINE_VERSION = "5.1.0";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -218,7 +218,7 @@ export type RiskConfig = {
   mediumTargetAtr4hMult?: number; // 기본 2.4
   mediumTargetAtrDayMult?: number; // 기본 1.3
   scoreThreshold?: number; // v4: 백테스트와 라이브에 공통 적용되는 기간점수 컷
-  operatorMode?: "LOW_TOUCH";
+  operatorMode?: "LOW_TOUCH" | "AUTOMATED";
   dailyCheckCount?: number;
   maxUnattendedHours?: number;
   minActionableHoldingHours?: number;
@@ -344,14 +344,15 @@ export type TrendHorizon = {
 };
 
 export type LowTouchExecutionPlan = {
-  mode: "LOW_TOUCH";
+  mode: "LOW_TOUCH" | "AUTOMATED";
   low_touch_compatible: boolean;
+  automated_compatible: boolean;
   recommendation_valid_minutes: number;
   valid_until: string;
   intended_holding_hours: number;
   next_review_after_hours: number;
   max_holding_hours: number;
-  monitoring_requirement: "PRECOMMITTED_EXIT" | "RECHECK_REQUIRED";
+  monitoring_requirement: "PRECOMMITTED_EXIT" | "AUTOMATED_WATCHDOG" | "RECHECK_REQUIRED";
   buy_instruction: string;
   exit_instruction: string;
   stale_instruction: string;
@@ -2245,7 +2246,7 @@ export function estimateHorizon(
     maxHoldingHours = 72;
   }
   const alignment = [tf.m5, tf.m15, tf.h4, tf.day]
-    .map((metric) => metric.trend_state === "FULL_BULL"
+    .map<number>((metric) => metric.trend_state === "FULL_BULL"
       ? 1
       : metric.trend_state === "BULL_PULLBACK"
       ? 0.8
@@ -2261,12 +2262,14 @@ export function estimateHorizon(
     18,
     longDataReady ? 82 : 74,
   );
-  const minHours = Math.max(4, risk.minActionableHoldingHours ?? 6);
-  const maxGap = Math.max(4, risk.maxUnattendedHours ?? 10);
+  const automated = risk.operatorMode === "AUTOMATED";
+  const minHours = automated ? Math.max(1, risk.minActionableHoldingHours ?? 1) : Math.max(4, risk.minActionableHoldingHours ?? 6);
+  const maxGap = automated ? Math.max(1, risk.maxUnattendedHours ?? 2) : Math.max(4, risk.maxUnattendedHours ?? 10);
   const lowTouchCompatible = intendedHours >= minHours && reviewHours <= maxGap &&
     tf.h4.trend_state !== "BEAR" && persistence >= 44;
-  const estimate =
-    `${label}로 분류되며 ${window} 범위에서 보유합니다. 사용자가 하루 2~3회만 확인한다는 전제에서 다음 확인 간격은 약 ${reviewHours}시간, 최대 보유는 ${maxHoldingHours}시간으로 제한합니다.`;
+  const estimate = automated
+    ? `${label}로 분류되며 ${window} 범위에서 자동 보유·청산합니다. 15초 포지션 감시와 사전 손절·분할청산을 사용하며 최대 보유는 ${maxHoldingHours}시간입니다.`
+    : `${label}로 분류되며 ${window} 범위에서 보유합니다. 사용자가 하루 2~3회만 확인한다는 전제에서 다음 확인 간격은 약 ${reviewHours}시간, 최대 보유는 ${maxHoldingHours}시간으로 제한합니다.`;
   const invalidation = [
     `${quotePriceText(stopPrice, quote)} 이탈`,
     tf.m15.ema21
@@ -2605,9 +2608,14 @@ export function finalizeCandidate(
     ),
     gate(
       "operator_fit",
-      "저빈도 운용 적합성",
-      horizon.low_touch_compatible && precommittedExitAvailable,
-      `하루 2~3회 확인하는 운용에 맞게 최소 ${risk.minActionableHoldingHours ?? 6}시간 이상 보유 가능하고, 다음 확인 간격이 ${risk.maxUnattendedHours ?? 10}시간 이내이며, 진입 즉시 손절·목표를 사전 확정할 수 있어야 합니다. 현재 ${horizon.expected_window}, 권장 확인 ${horizon.review_interval_hours}시간 간격입니다.`,
+      risk.operatorMode === "AUTOMATED" ? "자동매매 운용 적합성" : "저빈도 운용 적합성",
+      risk.operatorMode === "AUTOMATED"
+        ? precommittedExitAvailable &&
+          horizon.intended_holding_hours >= (risk.minActionableHoldingHours ?? 1)
+        : horizon.low_touch_compatible && precommittedExitAvailable,
+      risk.operatorMode === "AUTOMATED"
+        ? `자동 감시·청산이 가능한 사전 확정 손절·목표가 필요하며 최소 ${risk.minActionableHoldingHours ?? 1}시간 보유 구조여야 합니다. 현재 ${horizon.expected_window}, 최대 보유 ${horizon.max_holding_hours}시간입니다.`
+        : `하루 2~3회 확인하는 운용에 맞게 최소 ${risk.minActionableHoldingHours ?? 6}시간 이상 보유 가능하고, 다음 확인 간격이 ${risk.maxUnattendedHours ?? 10}시간 이내이며, 진입 즉시 손절·목표를 사전 확정할 수 있어야 합니다. 현재 ${horizon.expected_window}, 권장 확인 ${horizon.review_interval_hours}시간 간격입니다.`,
     ),
     gate(
       "reward_risk",
@@ -2705,23 +2713,35 @@ export function finalizeCandidate(
     88,
   );
   const generatedAt = Number(micro.reference_timestamp || Date.now());
-  const validMinutes = Math.round(clamp(risk.recommendationValidMinutes ?? 15, 5, 30));
+  const automatedMode = risk.operatorMode === "AUTOMATED";
+  const validMinutes = Math.round(clamp(
+    risk.recommendationValidMinutes ?? (automatedMode ? 5 : 15),
+    automatedMode ? 1 : 5,
+    automatedMode ? 15 : 30,
+  ));
+  const automatedCompatible = precommittedExitAvailable &&
+    horizon.intended_holding_hours >= (risk.minActionableHoldingHours ?? 1);
   const executionPlan: LowTouchExecutionPlan = {
-    mode: "LOW_TOUCH",
+    mode: automatedMode ? "AUTOMATED" : "LOW_TOUCH",
     low_touch_compatible: horizon.low_touch_compatible && precommittedExitAvailable,
+    automated_compatible: automatedCompatible,
     recommendation_valid_minutes: validMinutes,
     valid_until: new Date(generatedAt + validMinutes * 60_000).toISOString(),
     intended_holding_hours: horizon.intended_holding_hours,
-    next_review_after_hours: horizon.review_interval_hours,
+    next_review_after_hours: automatedMode ? Math.min(0.5, horizon.review_interval_hours) : horizon.review_interval_hours,
     max_holding_hours: horizon.max_holding_hours,
-    monitoring_requirement: decision === "BUY" ? "PRECOMMITTED_EXIT" : "RECHECK_REQUIRED",
+    monitoring_requirement: decision === "BUY"
+      ? automatedMode ? "AUTOMATED_WATCHDOG" : "PRECOMMITTED_EXIT"
+      : "RECHECK_REQUIRED",
     buy_instruction: decision === "BUY"
-      ? `추천 유효시간 안에 ${quotePriceText(plan.entry_low, period.universe.quote_currency)}~${quotePriceText(plan.entry_high, period.universe.quote_currency)}에서만 진입하고, 진입 직후 손절 ${quotePriceText(plan.stop_price, period.universe.quote_currency)}와 1차 목표 ${quotePriceText(plan.short_target, period.universe.quote_currency)}를 함께 정합니다.`
-      : "현재는 매수하지 말고 다음 접속 시 재스캔합니다.",
-    exit_instruction: plan.target_strategy === "SCALE_OUT"
-      ? `1차 목표에서 ${plan.first_target_allocation_pct}% 청산하고 나머지는 ${quotePriceText(plan.medium_target, period.universe.quote_currency)} 또는 추세 무효화 중 먼저 발생하는 조건에서 청산합니다.`
-      : `1차 목표 ${quotePriceText(plan.short_target, period.universe.quote_currency)}에서 일괄청산하며, ${horizon.max_holding_hours}시간이 지나면 목표 미도달이어도 재평가 또는 종료합니다.`,
-    stale_instruction: `${validMinutes}분이 지나면 호가·체결 조건이 낡은 것으로 간주하고 같은 가격이라도 매수하지 말고 다시 스캔합니다.`,
+      ? automatedMode
+        ? `유효시간 안에 지정가 IOC로 ${quotePriceText(plan.entry_low, period.universe.quote_currency)}~${quotePriceText(plan.entry_high, period.universe.quote_currency)}에서만 자동 진입하고, 체결 즉시 손절 ${quotePriceText(plan.stop_price, period.universe.quote_currency)}·1차 목표 ${quotePriceText(plan.short_target, period.universe.quote_currency)}·최대 보유시간을 등록합니다.`
+        : `추천 유효시간 안에 ${quotePriceText(plan.entry_low, period.universe.quote_currency)}~${quotePriceText(plan.entry_high, period.universe.quote_currency)}에서만 진입하고, 진입 직후 손절 ${quotePriceText(plan.stop_price, period.universe.quote_currency)}와 1차 목표 ${quotePriceText(plan.short_target, period.universe.quote_currency)}를 함께 정합니다.`
+      : automatedMode ? "자동 진입하지 않고 다음 전체 스캔까지 대기합니다." : "현재는 매수하지 말고 다음 접속 시 재스캔합니다.",
+    exit_instruction: plan.target_strategy === "SCALE_OUT" || plan.target_strategy === "TRAIL_AFTER_T1"
+      ? `1차 목표에서 ${plan.first_target_allocation_pct}% 자동 청산하고 나머지는 ${plan.target_strategy === "TRAIL_AFTER_T1" ? "추적손절" : quotePriceText(plan.medium_target, period.universe.quote_currency)}·손절·최대 보유시간 중 먼저 발생하는 조건에서 자동 청산합니다.`
+      : `1차 목표 ${quotePriceText(plan.short_target, period.universe.quote_currency)}에서 일괄청산하며, ${horizon.max_holding_hours}시간이 지나면 목표 미도달이어도 자동 종료합니다.`,
+    stale_instruction: `${validMinutes}분이 지나면 호가·체결 조건이 낡은 것으로 간주하고 자동 주문을 생성하지 않습니다.`,
   };
 
   return {
