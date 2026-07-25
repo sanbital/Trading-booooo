@@ -3,6 +3,7 @@
 
 import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-profile.ts";
 import type { EventRiskSnapshot } from "./event-risk.ts";
+import { evaluateScalpSignal, DEFAULT_SCALP_SIGNAL, type ScalpSignalResult } from "../_shared/scalp/signal.ts";
 
 export const ENGINE_VERSION = "5.2.0";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
@@ -235,6 +236,9 @@ export type RiskConfig = {
   stopMinAtr15mMult?: number;
   firstTargetAllocationPct?: number;
   exitPolicy?: "FIXED_T1" | "SCALE_OUT" | "TRAIL_AFTER_T1";
+  // Stage 3: when "SCALP", entry is driven by orderbook microstructure with trend
+  // used only as a veto. Undefined/"TREND" preserves the original behavior exactly.
+  strategy?: "TREND" | "SCALP";
 };
 
 export type TargetStrategy = "SHORT_ONLY" | "SCALE_OUT" | "TRAIL_AFTER_T1";
@@ -393,6 +397,17 @@ export type FinalCandidate = {
   timeframes: PeriodAnalysis["timeframes"];
   microstructure: Microstructure;
   event_risk: EventRiskSnapshot;
+  // Stage 3: present only when the scan ran in SCALP strategy. Carries the scalp
+  // decision inputs the autotrader needs (target/stop/pWin) for its precise EV gate.
+  scalp?: {
+    pWin: number;
+    signal_score: number;
+    provisional_edge: number;
+    target_pct: number;
+    stop_pct: number;
+    vetoed: boolean;
+    reasons: string[];
+  };
   price_context: {
     ticker_price: number;
     live_reference_price: number | null;
@@ -2631,11 +2646,38 @@ export function finalizeCandidate(
     ),
   ];
   const failed = checks.filter((check) => !check.passed);
-  const decision: FinalCandidate["decision"] = failed.length === 0
+  let decision: FinalCandidate["decision"] = failed.length === 0
     ? "BUY"
     : eventRisk.status === "BLOCK" || score < 42 || tf.h4.trend_signal < -0.5
     ? "AVOID"
     : "WAIT";
+
+  // Stage 3: scalp strategy inverts the hierarchy — orderbook signal drives entry,
+  // trend is only a veto. Event-risk BLOCK and missing data still hard-block.
+  let scalpResult: ScalpSignalResult | null = null;
+  if (risk.strategy === "SCALP") {
+    if (eventRisk.status === "BLOCK" || period.data_completeness !== 1) {
+      decision = "AVOID";
+    } else {
+      scalpResult = evaluateScalpSignal(
+        {
+          samples: micro.samples,
+          spread_bps: micro.spread_bps,
+          book_imbalance: micro.book_imbalance,
+          imbalance_stability: micro.imbalance_stability,
+          trade_pressure: micro.trade_pressure,
+          live_book_age_ms: micro.live_book_age_ms,
+          persistent_bid_wall: micro.dynamic.persistent_bid_wall_price !== null,
+          ask_absorption_score: micro.dynamic.ask_absorption_score,
+          breakout_score: micro.dynamic.breakout_score,
+          dynamic_status: micro.dynamic.status,
+        },
+        { h4_trend_signal: tf.h4.trend_signal, composite_trend: period.trend_signal },
+        DEFAULT_SCALP_SIGNAL,
+      );
+      decision = scalpResult.decision;
+    }
+  }
   plan.actionable = decision === "BUY";
   const watchEntryPlan = buildWatchEntryPlan(
     period,
@@ -2757,6 +2799,17 @@ export function finalizeCandidate(
     period_score: period.period_score,
     confidence,
     decision,
+    scalp: scalpResult
+      ? {
+        pWin: scalpResult.pWin,
+        signal_score: scalpResult.signalScore,
+        provisional_edge: scalpResult.provisionalEdge,
+        target_pct: scalpResult.targetPct,
+        stop_pct: scalpResult.stopPct,
+        vetoed: scalpResult.vetoed,
+        reasons: scalpResult.reasons,
+      }
+      : undefined,
     decision_label: decision === "BUY"
       ? "현재 매수 후보"
       : decision === "WAIT" && watchEntryPlan.available
