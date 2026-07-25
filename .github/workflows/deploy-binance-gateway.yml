@@ -1,0 +1,150 @@
+name: Deploy Binance Static-IP Gateway (Paris)
+
+# Separate, Binance-only order gateway in Paris (cdg).
+# The existing Upbit gateway (Tokyo/nrt) and its workflow are NOT touched by this file.
+# This app carries ONLY Binance API keys and runs with the scheduler disabled.
+
+on:
+  workflow_dispatch:
+    inputs:
+      setup_only:
+        description: "Allocate the cdg static egress IP first, before creating/restricting the Binance API key"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-binance-order-gateway
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Test gateway
+        run: |
+          node --check gateway/server.mjs
+          node --test gateway/server.test.mjs
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Validate infrastructure secrets
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+          FLY_ORG: ${{ secrets.FLY_ORG }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
+        run: |
+          for name in FLY_API_TOKEN FLY_BINANCE_APP_NAME FLY_ORG SUPABASE_PROJECT_REF LEARNING_ACCESS_TOKEN; do
+            if [ -z "${!name:-}" ]; then echo "::error::GitHub repository secret ${name} is missing."; exit 1; fi
+          done
+          if [ "${#LEARNING_ACCESS_TOKEN}" -lt 32 ]; then echo "::error::LEARNING_ACCESS_TOKEN must be at least 32 characters."; exit 1; fi
+          if [ -z "${BINANCE_API_KEY:-}" ] || [ -z "${BINANCE_SECRET_KEY:-}" ]; then
+            echo "::error::BINANCE_API_KEY / BINANCE_SECRET_KEY are required for the Binance gateway."; exit 1
+          fi
+
+      - name: Create Fly app if needed
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+          FLY_ORG: ${{ secrets.FLY_ORG }}
+        run: |
+          if ! flyctl status -a "${FLY_BINANCE_APP_NAME}" >/dev/null 2>&1; then flyctl apps create "${FLY_BINANCE_APP_NAME}" --org "${FLY_ORG}"; fi
+
+      - name: Allocate one app-scoped static egress pair in Paris
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+        run: |
+          current="$(flyctl ips list -a "${FLY_BINANCE_APP_NAME}" 2>/dev/null || true)"
+          if ! printf '%s\n' "$current" | grep -qi "egress"; then flyctl ips allocate-egress -a "${FLY_BINANCE_APP_NAME}" -r cdg -y; fi
+          echo "Register/restrict the EGRESS IPv4 below in the Binance API key settings ONLY:"
+          flyctl ips list -a "${FLY_BINANCE_APP_NAME}"
+
+      - name: Resolve operating mode
+        id: mode
+        shell: bash
+        env:
+          SETUP_ONLY: ${{ github.event.inputs.setup_only }}
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
+        run: |
+          setup="${SETUP_ONLY:-true}"
+          bootstrap=false
+          if [ "$setup" != "true" ] && [ -n "${BINANCE_API_KEY:-}" ] && [ -n "${BINANCE_SECRET_KEY:-}" ]; then bootstrap=true; fi
+          echo "setup_only=$setup" >> "$GITHUB_OUTPUT"
+          echo "bootstrap=$bootstrap" >> "$GITHUB_OUTPUT"
+
+      - name: Configure gateway secrets (Binance only, scheduler off)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
+          BINANCE_MAX_ORDER_USDT: ${{ secrets.BINANCE_MAX_ORDER_USDT }}
+          BINANCE_MAX_DAILY_BUY_USDT: ${{ secrets.BINANCE_MAX_DAILY_BUY_USDT }}
+        run: |
+          # Same shared secret as the primary gateway so the autotrader's Binance-signed requests verify.
+          gateway_secret="$(printf 'gateway:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
+          autotrade_token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
+          flyctl secrets set -a "${FLY_BINANCE_APP_NAME}" \
+            "GATEWAY_SHARED_SECRET=${gateway_secret}" \
+            "SUPABASE_URL=https://${SUPABASE_PROJECT_REF}.supabase.co" \
+            "AUTOTRADE_ACCESS_TOKEN=${autotrade_token}" \
+            "SCHEDULER_ENABLED=false" \
+            "BINANCE_API_KEY=${BINANCE_API_KEY}" \
+            "BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}" \
+            "BINANCE_MAX_ORDER_USDT=${BINANCE_MAX_ORDER_USDT:-100}" \
+            "BINANCE_MAX_DAILY_BUY_USDT=${BINANCE_MAX_DAILY_BUY_USDT:-300}"
+
+      - name: Deploy one always-on Binance gateway Machine (Paris)
+        shell: bash
+        working-directory: gateway
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+        run: |
+          set -euo pipefail
+          test -f fly.binance.toml
+          test -f Dockerfile
+          flyctl deploy . --remote-only -a "${FLY_BINANCE_APP_NAME}" --config ./fly.binance.toml --ha=false
+          flyctl scale count 1 -a "${FLY_BINANCE_APP_NAME}" --yes
+          flyctl status -a "${FLY_BINANCE_APP_NAME}"
+
+      - name: Verify gateway health and show allowlist IP
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+        run: |
+          flyctl ips list -a "${FLY_BINANCE_APP_NAME}"
+          curl --fail-with-body --retry 12 --retry-delay 3 "https://${FLY_BINANCE_APP_NAME}.fly.dev/health"
+
+      - name: Verify Binance account
+        if: ${{ steps.mode.outputs.bootstrap == 'true' }}
+        shell: bash
+        env:
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        run: |
+          gateway_secret="$(printf 'gateway:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
+          node gateway/smoke.mjs "https://${FLY_BINANCE_APP_NAME}.fly.dev" "${gateway_secret}" "binance"
