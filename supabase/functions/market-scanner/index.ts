@@ -27,6 +27,7 @@ import { baseAsset, combineCandidates } from "./combined.ts";
 import { ACTIVE_CALIBRATION_PROFILE } from "./calibration-profile.ts";
 import { assessEventRisk } from "./event-risk.ts";
 import { automationAllowed } from "../_shared/security.ts";
+import { buildScanDiagnostics, websocketHealth, type ScanFunnel } from "../_shared/scalp/diagnostics.ts";
 import {
   applyRuntimeRisk,
   loadRuntimeProfile,
@@ -1223,9 +1224,37 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
     .slice(0, 5);
   const status = recommendations.length ? "BUY_CANDIDATES" : "NO_BUY";
 
+  const scanEndMs = Date.now();
+  const funnel: ScanFunnel = {
+    total_instruments: markets.length,
+    universe: universe.length,
+    eligible: eligible.length,
+    shortlist: shortlist.length,
+    analyzed: periods.length,
+    finalists: finalists.length,
+    final_candidates: finalCandidates.length,
+    buy: recommendations.length,
+  };
+  const diagnostics = buildScanDiagnostics({
+    startedMs: started,
+    endMs: scanEndMs,
+    exchange,
+    status,
+    funnel,
+    candidates: finalCandidates,
+    websocket: websocketHealth(
+      microBundle.snapshots,
+      finalists.map((f) => f.universe.market),
+      scanEndMs,
+      microBundle.websocketMarkets,
+      microBundle.observationMs,
+    ),
+  });
+
   return {
     scan_id: crypto.randomUUID(),
     status,
+    diagnostics,
     headline: recommendations.length
       ? `${
         binance ? "바이낸스 USDT" : "업비트 KRW"
@@ -1487,6 +1516,7 @@ async function runCombinedScan(
     },
     exchange_errors: scanErrors,
     exchanges: { upbit, binance },
+    diagnostics: { upbit: upbit?.diagnostics ?? null, binance: binance?.diagnostics ?? null },
     meta: {
       engine_version: ENGINE_VERSION,
       generated_at: new Date(generatedAt).toISOString(),
