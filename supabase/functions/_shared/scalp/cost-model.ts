@@ -99,6 +99,30 @@ export function stressSlippage(
   return { slippage: stressed, skip: false, consumedFraction: sim.consumedFraction };
 }
 
+/**
+ * Probability-weighted gross edge (before costs). Single source of truth for the
+ * EV formula, reused by the scanner where the order notional (and thus precise
+ * slippage) is not yet known.
+ */
+export function probabilityWeightedGross(pWin: number, expectedProfit: number, expectedLoss: number): number {
+  const pLoss = Math.max(0, 1 - pWin);
+  return pWin * expectedProfit - pLoss * expectedLoss;
+}
+
+/**
+ * Provisional edge used at scan time: probability-weighted gross minus round-trip
+ * fees only. Precise stressed slippage is applied later at order time (evaluateEdge),
+ * once the order notional and live depth are known.
+ */
+export function provisionalNetEdge(
+  pWin: number,
+  expectedProfit: number,
+  expectedLoss: number,
+  roundTripFeeFraction: number = DEFAULT_COST_MODEL.roundTripFeeFraction,
+): number {
+  return probabilityWeightedGross(pWin, expectedProfit, expectedLoss) - roundTripFeeFraction;
+}
+
 export interface EdgeInputs {
   pWin: number;            // 0..1  probability the target is hit before the stop
   expectedProfit: number;  // fraction, e.g. 0.004  (target width)
