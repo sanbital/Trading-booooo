@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 // withdrawal, transfer, margin, futures, leverage, or API-key management routes.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "5.2.0";
+const VERSION = "5.2.1";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
@@ -203,6 +203,14 @@ async function parseResponse(response, exchange) {
   return { data, headers: response.headers };
 }
 
+function contextualizeError(error, context) {
+  const wrapped = new Error(`${context}: ${error?.message || String(error)}`);
+  wrapped.code = error?.code;
+  wrapped.status = error?.status;
+  wrapped.data = error?.data;
+  wrapped.retryAfter = error?.retryAfter;
+  return wrapped;
+}
 async function upbitRequest(method, path, { query = {}, body = null, timeoutMs = 10_000 } = {}) {
   guardRate("upbit", upbitRateGroup(method, path, false));
   const parameters = method === "GET" || method === "DELETE" ? query : (body || {});
@@ -219,15 +227,18 @@ async function upbitRequest(method, path, { query = {}, body = null, timeoutMs =
       },
       body: body ? JSON.stringify(body) : undefined,
     });
-    const parsed = await parseResponse(response, "Upbit");
-    return { data: parsed.data, remainingReq: parsed.headers.get("remaining-req") };
+    try {
+      const parsed = await parseResponse(response, "Upbit");
+      return { data: parsed.data, remainingReq: parsed.headers.get("remaining-req") };
+    } catch (error) { throw contextualizeError(error, `Upbit ${method} ${path}`); }
   } finally { clearTimeout(timer); }
 }
 async function publicUpbit(path, query = {}) {
   guardRate("upbit", upbitRateGroup("GET", path, true));
   const encoded = encodedQueryString(query);
   const response = await fetch(`${UPBIT_BASE}${path}${encoded ? `?${encoded}` : ""}`, { headers: { Accept: "application/json" } });
-  return (await parseResponse(response, "Upbit public")).data;
+  try { return (await parseResponse(response, "Upbit public")).data; }
+  catch (error) { throw contextualizeError(error, `Upbit public GET ${path}`); }
 }
 
 async function syncBinanceTime(force = false) {
@@ -548,22 +559,43 @@ function fillSummary(order) {
   };
 }
 
-async function upbitPortfolio() {
-  const accounts = (await upbitRequest("GET", "/v1/accounts")).data;
+function buildUpbitPortfolio(accounts, tickers) {
   const rows = Array.isArray(accounts) ? accounts : [];
-  const markets = rows.filter((r) => r.currency !== "KRW" && Number(r.balance || 0) + Number(r.locked || 0) > 0).map((r) => `KRW-${r.currency}`);
-  const tickers = markets.length ? await publicUpbit("/v1/ticker", { markets: markets.join(",") }) : [];
-  const prices = Object.fromEntries((Array.isArray(tickers) ? tickers : []).map((r) => [r.market, Number(r.trade_price)]));
+  const tickerRows = Array.isArray(tickers) ? tickers : [];
+  const prices = Object.fromEntries(tickerRows
+    .filter((row) => String(row?.market || "").startsWith("KRW-") && Number(row?.trade_price) > 0)
+    .map((row) => [String(row.market), Number(row.trade_price)]));
   let total = 0; let available = 0; let locked = 0;
+  const unpricedAssets = [];
   for (const row of rows) {
-    const free = Number(row.balance || 0); const held = Number(row.locked || 0);
-    if (row.currency === "KRW") { available = free; locked = held; total += free + held; }
-    else total += (free + held) * Number(prices[`KRW-${row.currency}`] || Number(row.avg_buy_price || 0));
+    const currency = String(row?.currency || "").toUpperCase();
+    const free = Math.max(0, Number(row?.balance || 0));
+    const held = Math.max(0, Number(row?.locked || 0));
+    const quantity = free + held;
+    if (currency === "KRW") {
+      available = free; locked = held; total += quantity;
+      continue;
+    }
+    if (!(quantity > 0)) continue;
+    const market = `KRW-${currency}`;
+    const price = Number(prices[market] || 0);
+    if (price > 0) total += quantity * price;
+    else unpricedAssets.push({ currency, balance: free, locked: held, reason: "NO_ACTIVE_KRW_TICKER" });
   }
   return {
     exchange: "upbit", quote_currency: "KRW", accounts: rows, prices,
     total_equity_quote: total, available_quote: available, locked_quote: locked,
+    unpriced_assets: unpricedAssets,
   };
+}
+async function upbitPortfolio() {
+  const accounts = (await upbitRequest("GET", "/v1/accounts")).data;
+  // Query all active KRW tickers once. Constructing KRW-{asset} for every account
+  // balance can include delisted/dust assets and makes /v1/ticker fail the whole
+  // portfolio with 404 Code not found. Unpriced assets are surfaced separately and
+  // never counted as deployable capital.
+  const tickers = await publicUpbit("/v1/ticker/all", { quote_currencies: "KRW" });
+  return buildUpbitPortfolio(accounts, tickers);
 }
 async function binancePortfolio() {
   const account = (await binanceRequest("GET", "/api/v3/account", { omitZeroBalances: "true" })).data;
@@ -778,6 +810,8 @@ if (isMain) startServer().catch((error) => { console.error(error); process.exit(
 
 export {
   binanceQueryString,
+  buildUpbitPortfolio,
+  contextualizeError,
   createBinanceSignature,
   createUpbitJwt,
   floorStep,

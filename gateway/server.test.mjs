@@ -58,3 +58,28 @@ test("Upbit local rate guards follow API groups with headroom", () => {
   assert.equal(module.localRateLimit("upbit", "order"), 7);
   assert.equal(module.localRateLimit("upbit", "exchange-default"), 25);
 });
+
+test("Upbit portfolio ignores unpriced or delisted balances without failing the account", () => {
+  const portfolio = module.buildUpbitPortfolio([
+    { currency: "KRW", balance: "100000", locked: "5000" },
+    { currency: "BTC", balance: "0.01", locked: "0" },
+    { currency: "DUST", balance: "12", locked: "1" },
+  ], [
+    { market: "KRW-BTC", trade_price: 100000000 },
+  ]);
+  assert.equal(portfolio.available_quote, 100000);
+  assert.equal(portfolio.locked_quote, 5000);
+  assert.equal(portfolio.total_equity_quote, 1105000);
+  assert.deepEqual(portfolio.unpriced_assets, [
+    { currency: "DUST", balance: 12, locked: 1, reason: "NO_ACTIVE_KRW_TICKER" },
+  ]);
+});
+
+test("Upbit contextual errors identify the failing endpoint", () => {
+  const source = Object.assign(new Error("Code not found"), { status: 404, code: "not_found" });
+  const wrapped = module.contextualizeError(source, "Upbit public GET /v1/ticker/all");
+  assert.equal(wrapped.message, "Upbit public GET /v1/ticker/all: Code not found");
+  assert.equal(wrapped.status, 404);
+  assert.equal(wrapped.code, "not_found");
+});
+
