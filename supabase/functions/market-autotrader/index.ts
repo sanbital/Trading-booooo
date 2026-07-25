@@ -203,7 +203,7 @@ function defaultSettings(): TradingSettings & JsonRecord {
     withdrawal_mode: false, manual_intervention_required: false, manual_event_reason: null,
     max_daily_loss_pct: 1.5, max_weekly_loss_pct: 3, max_consecutive_losses: 3,
     entry_ttl_seconds: 180,
-    full_scan_interval_seconds: clamp(finite(env("AUTO_SCAN_INTERVAL_SECONDS"), 300), 60, 3600),
+    full_scan_interval_seconds: clamp(finite(env("AUTO_SCAN_INTERVAL_SECONDS"), 60), 60, 3600),
     monitor_interval_seconds: clamp(finite(env("AUTO_MONITOR_INTERVAL_SECONDS"), 15), 5, 300),
     max_new_entries_per_scan: 2, suppress_cross_exchange_same_asset: true,
     // Stage 4: scalp strategy. Default "TREND" = existing behavior, fully off.
@@ -921,13 +921,24 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
     portfolios[exchange] = await managedPortfolio(settings, exchange, await gateway(exchange, { action: "portfolio" }));
     stats[exchange] = await accountStats(exchange, finite(portfolios[exchange].managed.managedCapitalQuote), settings.mode !== "LIVE_LIMITED");
     const limits = exchangeLimits(settings, exchange);
+    // In SCALP mode the scalp-specific loss rails are authoritative. Without
+    // this override the legacy 1.5% daily / 3% weekly circuit would stop the
+    // engine long before the configured -20% scalp day limit.
+    const circuitSettings = (settings as any).strategy === "SCALP"
+      ? {
+        ...settings,
+        max_daily_loss_pct: finite((settings as any).scalp_daily_loss_pct, 20),
+        max_weekly_loss_pct: Math.max(20, finite((settings as any).scalp_daily_loss_pct, 20)),
+        max_consecutive_losses: Math.round(finite((settings as any).scalp_max_consecutive_losses, 4)),
+      }
+      : settings;
     circuits[exchange] = evaluateCircuit({
       mode: settings.mode, configured: settings.configured, exchangeEnabled: true, pauseNewEntries: settings.pause_new_entries || settings.withdrawal_mode || settings.manual_intervention_required,
       emergencyLiquidation: settings.emergency_liquidation, availableQuote: finite(portfolios[exchange].managed.managedAvailableQuote), minOrderQuote: limits.minOrder,
       openPositionsGlobal: stats[exchange].openGlobal, openPositionsExchange: stats[exchange].openExchange,
       entriesTodayGlobal: stats[exchange].entriesTodayGlobal, entriesTodayExchange: stats[exchange].entriesTodayExchange,
       dailyBoughtQuote: stats[exchange].dailyBoughtQuote, maxDailyBuyQuote: limits.dailyBuy,
-      dailyPnlPct: stats[exchange].dailyPnlPct, weeklyPnlPct: stats[exchange].weeklyPnlPct, consecutiveLosses: stats[exchange].consecutiveLosses, settings,
+      dailyPnlPct: stats[exchange].dailyPnlPct, weeklyPnlPct: stats[exchange].weeklyPnlPct, consecutiveLosses: stats[exchange].consecutiveLosses, settings: circuitSettings,
     });
   }
   if (!exchanges.some((exchange) => circuits[exchange].allowNewEntry)) {
@@ -1026,7 +1037,7 @@ async function control(body: JsonRecord, settings: TradingSettings & JsonRecord)
     upbit_allocation_krw: [0, 100_000_000_000], upbit_reserve_krw: [0, 100_000_000_000],
     binance_allocation_usdt: [0, 1_000_000_000], binance_reserve_usdt: [0, 1_000_000_000],
     max_daily_loss_pct: [0.2, 10], max_weekly_loss_pct: [0.5, 20], max_consecutive_losses: [1, 10],
-    entry_ttl_seconds: [30, 900], full_scan_interval_seconds: [300, 3600], monitor_interval_seconds: [10, 300], max_new_entries_per_scan: [1, 4],
+    entry_ttl_seconds: [30, 900], full_scan_interval_seconds: [60, 3600], monitor_interval_seconds: [10, 300], max_new_entries_per_scan: [1, 4],
   };
   for (const [key, [low, high]] of Object.entries(ranges)) if (body[key] != null) allowed[key] = clamp(finite(body[key]), low, high);
   if (!Object.keys(allowed).length) return settings;
