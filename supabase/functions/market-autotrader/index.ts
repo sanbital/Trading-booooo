@@ -1,4 +1,4 @@
-// Trading-booooo v5.2.0 — autonomous Upbit KRW + Binance USDT spot orchestrator.
+// Trading-booooo v5.2.3 — autonomous Upbit KRW + Binance USDT spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -27,7 +27,7 @@ import { scalpEntryDecision } from "../_shared/scalp/scalp-gate.ts";
 import { DEFAULT_SCALP_SAFETY, type ScalpSafetyConfig, type ScalpDayState } from "../_shared/scalp/safety.ts";
 import { DEFAULT_COST_MODEL, type CostModelConfig } from "../_shared/scalp/cost-model.ts";
 
-const VERSION = "5.2.2";
+const VERSION = "5.2.3";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const SERVICE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");

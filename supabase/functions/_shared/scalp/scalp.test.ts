@@ -31,7 +31,7 @@ Deno.test("GPT example is correctly rejected: +0.4/-0.3, pWin 0.60 => negative E
     askLevels: deepAsk, bidLevels: deepBid, notional: 1000, bestAsk: 100.0, bestBid: 99.9,
   };
   const r = evaluateEdge(inputs, DEFAULT_COST_MODEL);
-  // gross = 0.60*0.004 - 0.40*0.003 = 0.0012 ; minus ~0.001 fees minus slippage => below minimumEdge
+  // gross = 0.60*0.004 - 0.40*0.003 = 0.0012 ; minus fees and measured slippage => below minimumEdge
   assertEquals(r.enter, false);
   assert(r.expectedNetEdge < DEFAULT_COST_MODEL.minimumEdge);
 });

@@ -8,7 +8,7 @@
 //                     - round_trip_cost           // fees, both sides
 //                     - stress_slippage            // conservative, not raw book slippage
 //
-//   enter if expected_net_edge >= minimum_edge   (minimum_edge default 0.15%–0.20%)
+//   enter if expected_net_edge >= minimum_edge   (minimum_edge default 0.10%)
 //
 // NOTE: "target width - slippage - fees" is NOT expected value. A move that clears
 // the target can still be negative EV once win-probability is applied. This module
@@ -21,30 +21,30 @@ export interface OrderbookLevel { price: number; size: number }
 export interface StressSlippageConfig {
   // Multiplier applied to the raw simulated book slippage to account for
   // order cancellation, price drift and adverse selection right after a signal.
-  stressFactor: number;        // default 1.4  (1.3–1.5 recommended initially)
+  stressFactor: number;        // default 1.15; raw book impact is already measured directly
   // Flat penalties (as fractions of price) for transport latency and partial fills.
-  latencyPenalty: number;      // default 0.0005 (0.05%)
-  partialFillPenalty: number;  // default 0.0005 (0.05%)
+  latencyPenalty: number;      // default 0.0001 (0.01%)
+  partialFillPenalty: number;  // default 0.0001 (0.01%)
   // If the order would consume more than this fraction of visible depth, treat as unfillable.
-  maxDepthConsumption: number; // default 0.30
+  maxDepthConsumption: number; // default 0.60
 }
 
 export interface CostModelConfig {
   roundTripFeeFraction: number;  // fees for BOTH sides combined, e.g. 0.001 (0.10%)
-  minimumEdge: number;           // e.g. 0.0015 (0.15%)
+  minimumEdge: number;           // e.g. 0.001 (0.10%)
   slippage: StressSlippageConfig;
 }
 
 export const DEFAULT_STRESS: StressSlippageConfig = {
-  stressFactor: 1.4,
-  latencyPenalty: 0.0005,
-  partialFillPenalty: 0.0005,
-  maxDepthConsumption: 0.30,
+  stressFactor: 1.15,
+  latencyPenalty: 0.0001,
+  partialFillPenalty: 0.0001,
+  maxDepthConsumption: 0.60,
 };
 
 export const DEFAULT_COST_MODEL: CostModelConfig = {
   roundTripFeeFraction: 0.001,
-  minimumEdge: 0.0015,
+  minimumEdge: 0.001,
   slippage: DEFAULT_STRESS,
 };
 

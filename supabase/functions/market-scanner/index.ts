@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v5.2.0 — Supabase Edge Function
+// Trading-booooo Market Scanner v5.2.3 — Supabase Edge Function
 // Upbit KRW / Binance USDT universe scan -> multi-period analysis -> orderflow validation.
 // Public market analysis. Private account/order execution is delegated to a fixed-IP gateway.
 
