@@ -558,16 +558,22 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
 
   // Stage 4: scalp final gate — safety rails (halt/cap) FIRST, then precise stressed-slippage EV.
   // Only active when strategy === "SCALP"; otherwise the original flow is untouched.
+  let scalpStopPrice: number | null = null;
+  let scalpTarget1: number | null = null;
+  let scalpTarget2: number | null = null;
   if ((settings as any).strategy === "SCALP") {
+    const scalpPWin = finite((candidate as any).scalp_p_win ?? (candidate as any).snapshot?.scalp?.pWin ?? (candidate as any).scalp?.pWin, 0.5);
+    const scalpTargetPct = finite((candidate as any).scalp_target_pct ?? (candidate as any).snapshot?.scalp?.target_pct ?? (candidate as any).scalp?.target_pct, 0.006);
+    const scalpStopPct = finite((candidate as any).scalp_stop_pct ?? (candidate as any).snapshot?.scalp?.stop_pct ?? (candidate as any).scalp?.stop_pct, 0.003);
     const day = await scalpDayState(exchange, settings.mode !== "LIVE_LIMITED");
     const decision = scalpEntryDecision(
       {
         capitalQuote: finite(managed.managedCapitalQuote),
         requestedNotional: sizing.notionalQuote,
         day,
-        pWin: finite((candidate as any).scalp_p_win ?? (candidate as any).scalp?.pWin, 0.5),
-        targetPct: finite((candidate as any).scalp_target_pct ?? (candidate as any).scalp?.target_pct, 0.006),
-        stopPct: finite((candidate as any).scalp_stop_pct ?? (candidate as any).scalp?.stop_pct, 0.003),
+        pWin: scalpPWin,
+        targetPct: scalpTargetPct,
+        stopPct: scalpStopPct,
         askLevels: (market.asks || []).map((a: any) => ({ price: finite(a.price ?? a[0]), size: finite(a.size ?? a[1]) })),
         bidLevels: (market.bids || []).map((b: any) => ({ price: finite(b.price ?? b[0]), size: finite(b.size ?? b[1]) })),
         bestAsk, bestBid,
@@ -585,6 +591,11 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
         return { entered: false, exchange, market: candidate.market, reason: "scalp per-order cap below exchange minimum" };
       }
     }
+    // Exits follow the scalp target/stop the EV gate was evaluated on, not the wide
+    // trend plan — otherwise the position would hold to trend targets after a scalp entry.
+    scalpStopPrice = tickRound(entryPrice * (1 - scalpStopPct), rules.price_tick, "down");
+    scalpTarget1 = tickRound(entryPrice * (1 + scalpTargetPct), rules.price_tick, "up");
+    scalpTarget2 = tickRound(entryPrice * (1 + scalpTargetPct * 1.5), rules.price_tick, "up");
   }
 
   const maxHolding = (settings as any).strategy === "SCALP"
@@ -593,7 +604,7 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   const position = (await insert("trading_positions", {
     candidate_id: candidate.id, scan_id: candidate.scan_id, exchange, quote_currency: quote, market: candidate.market, base_asset: base,
     state: "ENTRY_PENDING", is_paper: settings.mode !== "LIVE_LIMITED", profile_version: candidate.profile_version || 0,
-    planned_entry_price: entryPrice, stop_price: candidate.stop_price, target_1: candidate.target_1, target_2: candidate.target_2,
+    planned_entry_price: entryPrice, stop_price: scalpStopPrice ?? candidate.stop_price, target_1: scalpTarget1 ?? candidate.target_1, target_2: scalpTarget2 ?? candidate.target_2,
     tick_size: rules.price_tick, quantity_step: rules.quantity_step, min_notional_quote: Math.max(limits.minOrder, rules.min_notional),
     t1_allocation_pct: plan.allocation, exit_policy: plan.exitPolicy, trailing_distance_pct: plan.trailingDistancePct,
     intended_horizon_hours: candidate.intended_horizon_hours, max_holding_at: maxHolding,
