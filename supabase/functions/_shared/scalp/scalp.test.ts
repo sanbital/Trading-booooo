@@ -72,7 +72,7 @@ Deno.test("entry gate clamps order to per-order cap", () => {
 
 Deno.test("daily loss limit halts entries", () => {
   const r = evaluateEntryGate(
-    { capitalQuote: 1_000_000, requestedNotional: 50_000, day: { realizedPnlQuote: -500_000, consecutiveLosses: 0 } },
+    { capitalQuote: 1_000_000, requestedNotional: 50_000, day: { realizedPnlQuote: -200_000, consecutiveLosses: 0 } },
     DEFAULT_SCALP_SAFETY,
   );
   assertEquals(r.allow, false);

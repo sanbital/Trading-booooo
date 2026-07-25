@@ -209,7 +209,8 @@ function defaultSettings(): TradingSettings & JsonRecord {
     // Stage 4: scalp strategy. Default "TREND" = existing behavior, fully off.
     strategy: (env("TRADING_STRATEGY") === "SCALP" ? "SCALP" : "TREND"),
     scalp_per_order_pct: clamp(finite(env("SCALP_PER_ORDER_PCT"), 10), 0.1, 100),
-    scalp_daily_loss_pct: clamp(finite(env("SCALP_DAILY_LOSS_PCT"), 50), 0.1, 100),
+    scalp_daily_loss_pct: clamp(finite(env("SCALP_DAILY_LOSS_PCT"), 20), 0.1, 100),
+    scalp_max_single_loss_pct: clamp(finite(env("SCALP_MAX_SINGLE_LOSS_PCT"), 5), 0.1, 100),
     scalp_max_consecutive_losses: clamp(finite(env("SCALP_MAX_CONSECUTIVE_LOSSES"), 4), 1, 50),
     scalp_kill_switch: env("SCALP_KILL_SWITCH") === "true",
     scalp_max_holding_minutes: clamp(finite(env("SCALP_MAX_HOLDING_MINUTES"), 30), 1, 1440),
@@ -218,7 +219,7 @@ function defaultSettings(): TradingSettings & JsonRecord {
 }
 async function loadSettings(): Promise<TradingSettings & JsonRecord> {
   const rows = await db("trading_settings?id=eq.1&select=*");
-  if (rows?.[0]) return rows[0];
+  if (rows?.[0]) return { ...defaultSettings(), ...rows[0] };
   return (await insert("trading_settings", defaultSettings()))[0];
 }
 async function ensureConfigured(settings: TradingSettings & JsonRecord, syncMode = false) {
@@ -293,6 +294,10 @@ async function runScanner(portfolios: Record<Exchange, any>, settings: TradingSe
       headers: { "content-type": "application/json", "x-autotrade-token": AUTOTRADE_TOKEN },
       body: JSON.stringify({
         action: "scan", exchange: "combined", operator_mode: "AUTOMATED", automation: true,
+        strategy: (settings as any).strategy,
+        scalp_overrides: {
+          minimumEdge: finite((settings as any).scalp_minimum_edge, DEFAULT_COST_MODEL.minimumEdge),
+        },
         capital_krw: Math.max(10_000, finite(portfolios.upbit?.managed?.managedCapitalQuote, portfolios.upbit?.available_quote || 10_000)),
         capital_usdt: Math.max(10, finite(portfolios.binance?.managed?.managedCapitalQuote, portfolios.binance?.available_quote || 10)),
         risk_pct: settings.risk_per_trade_pct,
@@ -612,7 +617,9 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   }))[0] as Position;
 
   if (settings.mode !== "LIVE_LIMITED") {
-    const paperPrice = depth.vwap > 0 ? depth.vwap : entryPrice; const paperQty = floorToStep(sizing.notionalQuote / paperPrice, rules.quantity_step || 0.00000001);
+    const paperPrice = depth.vwap > 0 ? depth.vwap : entryPrice;
+    // PAPER must use the same final, safety-capped quantity as LIVE.
+    const paperQty = floorToStep(quantity, rules.quantity_step || 0.00000001);
     const opened = await openPaperPosition(position, candidate, paperPrice, paperQty, paperQty * paperPrice);
     await event("PAPER_ENTRY", `${exchange}:${candidate.market} paper entry`, { price: paperPrice, quantity: paperQty, notional_quote: paperQty * paperPrice, quote }, { cycleId, positionId: position.id });
     return { entered: true, paper: true, exchange, market: candidate.market, position: opened };
@@ -884,7 +891,16 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       const values: JsonRecord = { peak_price: peak, trough_price: trough };
       if (position.t1_completed && position.exit_policy === "TRAIL_AFTER_T1") values.trailing_stop = nextTrailingStop(position.trailing_stop, peak, finite(position.trailing_distance_pct, 1.2), position.stop_price);
       if (peak !== finite(position.peak_price) || trough !== finite(position.trough_price) || values.trailing_stop) position = { ...position, ...(await patch("trading_positions", `id=eq.${position.id}`, values))[0] };
-      const decision = decideExit(position, current, Date.now(), settings.emergency_liquidation);
+      let decision = decideExit(position, current, Date.now(), settings.emergency_liquidation);
+      // Independent scalp backstop: no single position may lose more than the
+      // operator-selected percentage, even if the normal stop failed or moved.
+      if ((settings as any).strategy === "SCALP" && position.average_entry_price > 0) {
+        const lossPct = (current - position.average_entry_price) / position.average_entry_price * 100;
+        const maxSingleLossPct = Math.abs(finite((settings as any).scalp_max_single_loss_pct, 5));
+        if (lossPct <= -maxSingleLossPct) {
+          decision = { action: "STOP", reason: "scalp_max_single_loss" } as any;
+        }
+      }
       if (decision.action === "NONE") continue;
       try { actions.push(await applyExit(position, current, decision.action, cycleId)); }
       catch (error) { actions.push({ exchange, market: position.market, action: decision.action, error: error instanceof Error ? error.message : String(error) }); await event("EXIT_ERROR", error instanceof Error ? error.message : String(error), { decision }, { cycleId, positionId: position.id, level: "CRITICAL" }); }

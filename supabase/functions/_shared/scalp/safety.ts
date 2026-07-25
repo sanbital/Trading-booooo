@@ -7,12 +7,12 @@
 //
 // User-chosen values (2026-07-25):
 //   perOrderPctOfCapital = 0.10   (1 order <= 10% of capital)
-//   dailyLossPctOfCapital = 0.50  (halt new entries once day's realized loss >= 50%)
+//   dailyLossPctOfCapital = 0.20  (halt new entries once day's realized loss >= 20%)
 //   maxConsecutiveLosses = 4      (halt after 4 losses in a row)
 //   killSwitch            = false (operator can flip to true to stop everything)
 //
-// NOTE: a 50% daily-loss limit is very loose — it only triggers after half the
-// account is gone in a day. It is recorded as chosen, not recommended.
+// Operator-selected hard backstops. The normal scalp stop remains much tighter;
+// these limits guard against execution, data, or exit failures.
 
 export interface ScalpSafetyConfig {
   perOrderPctOfCapital: number;   // fraction, 0.10 = 10%
@@ -23,7 +23,7 @@ export interface ScalpSafetyConfig {
 
 export const DEFAULT_SCALP_SAFETY: ScalpSafetyConfig = {
   perOrderPctOfCapital: 0.10,
-  dailyLossPctOfCapital: 0.50,
+  dailyLossPctOfCapital: 0.20,
   maxConsecutiveLosses: 4,
   killSwitch: false,
 };
