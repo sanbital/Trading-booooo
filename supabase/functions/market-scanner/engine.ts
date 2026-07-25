@@ -3,7 +3,7 @@
 
 import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-profile.ts";
 import type { EventRiskSnapshot } from "./event-risk.ts";
-import { evaluateScalpSignal, DEFAULT_SCALP_SIGNAL, type ScalpSignalResult } from "../_shared/scalp/signal.ts";
+import { evaluateScalpSignal, resolveScalpSignalConfig, type ScalpSignalResult } from "../_shared/scalp/signal.ts";
 
 export const ENGINE_VERSION = "5.2.0";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
@@ -239,6 +239,9 @@ export type RiskConfig = {
   // Stage 3: when "SCALP", entry is driven by orderbook microstructure with trend
   // used only as a veto. Undefined/"TREND" preserves the original behavior exactly.
   strategy?: "TREND" | "SCALP";
+  // Stage 5: optional scalp parameter overrides. Always passed through
+  // resolveScalpSignalConfig(), which clamps them to SCALP_BOUNDS.
+  scalpOverrides?: Record<string, number>;
 };
 
 export type TargetStrategy = "SHORT_ONLY" | "SCALE_OUT" | "TRAIL_AFTER_T1";
@@ -2673,7 +2676,7 @@ export function finalizeCandidate(
           dynamic_status: micro.dynamic.status,
         },
         { h4_trend_signal: tf.h4.trend_signal, composite_trend: period.trend_signal },
-        DEFAULT_SCALP_SIGNAL,
+        resolveScalpSignalConfig(risk.scalpOverrides || {}),
       );
       decision = scalpResult.decision;
     }
