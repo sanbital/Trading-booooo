@@ -1154,14 +1154,31 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
       }
       : {},
   );
-  const deepLimit = Math.round(
-    clamp(
-      finite(Deno.env.get("DEEP_SCAN_LIMIT"), DEFAULT_DEEP_SCAN_LIMIT),
-      20,
-      40,
-    ),
-  );
-  const eligible = universe.filter((item) => item.eligible);
+  const scalpMode = risk.strategy === "SCALP";
+  // Scalp scans a small top-liquidity set: trend is only a veto, so deep multi-timeframe
+  // analysis over 30+ instruments is both unnecessary and the cause of WORKER_RESOURCE_LIMIT.
+  const deepLimit = scalpMode
+    ? Math.round(clamp(finite(Deno.env.get("SCALP_DEEP_SCAN_LIMIT"), 12), 6, 20))
+    : Math.round(
+      clamp(
+        finite(Deno.env.get("DEEP_SCAN_LIMIT"), DEFAULT_DEEP_SCAN_LIMIT),
+        20,
+        40,
+      ),
+    );
+  const finalistLimit = scalpMode
+    ? Math.round(clamp(finite(Deno.env.get("SCALP_FINALIST_LIMIT"), 6), 3, 10))
+    : FINALIST_LIMIT;
+  let eligible = universe.filter((item) => item.eligible);
+  if (scalpMode) {
+    // The heavy step is baseline15 over ALL eligible (hundreds of 15m candle fetches),
+    // which trips WORKER_RESOURCE_LIMIT. Scalp only trades top-liquidity names, so cap the
+    // universe by 24h turnover before that load.
+    const cap = Math.round(clamp(finite(Deno.env.get("SCALP_UNIVERSE_CAP"), 40), deepLimit, 120));
+    eligible = [...eligible]
+      .sort((a, b) => finite(b.turnover_24h_quote) - finite(a.turnover_24h_quote))
+      .slice(0, cap);
+  }
   const baseline15 = binance
     ? await loadBinanceBaseline15(eligible)
     : await loadBaseline15(eligible);
@@ -1187,7 +1204,7 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
     ...new Map(candidatePool.map((item) => [item.universe.market, item]))
       .values(),
   ]
-    .slice(0, FINALIST_LIMIT);
+    .slice(0, finalistLimit);
   const [microBundle, eventRiskRows] = await Promise.all([
     binance
       ? loadBinanceMicrostructure(finalists, instrumentTicks)
