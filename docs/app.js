@@ -953,6 +953,18 @@
     $("trader-mode").textContent = mode;
     $("trader-mode").className = mode === "LIVE_LIMITED" ? "mode-live" : "mode-paper";
     $("trader-mode-note").textContent = mode === "LIVE_LIMITED" ? "실제 주문 허용" : mode === "PAPER" ? "가상 체결·학습" : "운용 정지";
+    const strategy = String(settings.strategy || "TREND").toUpperCase();
+    $("trader-strategy").textContent = strategy;
+    $("trader-strategy").className = strategy === "SCALP" ? "state-running" : "mode-paper";
+    $("trader-strategy-note").textContent = strategy === "SCALP"
+      ? `최대 ${fmt(settings.scalp_max_holding_minutes, 0)}분 보유`
+      : "상위 추세 중심";
+    $("scalp-risk").textContent = strategy === "SCALP"
+      ? `1회 -${fmt(settings.scalp_max_single_loss_pct, 1)}% · 1일 -${fmt(settings.scalp_daily_loss_pct, 1)}%`
+      : "—";
+    $("scalp-risk-note").textContent = strategy === "SCALP"
+      ? `주문 ${fmt(settings.scalp_per_order_pct, 1)}% · 연속 ${fmt(settings.scalp_max_consecutive_losses, 0)}회`
+      : "스캘핑 비활성";
     const paused = Boolean(settings.pause_new_entries || settings.withdrawal_mode || settings.manual_intervention_required || mode === "PAUSED");
     $("entry-state").textContent = paused ? "중지" : "운용 중";
     $("entry-state").className = paused ? "state-paused" : "state-running";
@@ -969,6 +981,8 @@
     renderEvents(data);
     const alerts = [];
     if (settings.withdrawal_mode) alerts.push("출금 모드입니다. 신규 매수는 중지되어 있으며 출금 완료 후 ‘즉시 재개 + 지금 스캔’을 누르세요.");
+    if (settings.strategy === "SCALP" && settings.scalp_kill_switch) alerts.push("스캘핑 킬스위치가 켜져 있어 모든 신규 진입이 차단됩니다.");
+    if (settings.strategy === "SCALP" && (Number(settings.scalp_per_order_pct) < 1 || Number(settings.scalp_daily_loss_pct) < 1 || Number(settings.scalp_max_single_loss_pct) < 1)) alerts.push("스캘핑 퍼센트 설정이 비정상적으로 낮습니다. 설정 복구가 필요합니다.");
     if (settings.manual_intervention_required) alerts.push(`수동 거래가 감지되었습니다: ${settings.manual_event_reason || "계좌 잔고 변경"}. 장부는 실제 잔고로 조정되며 학습 표본에서 제외됩니다.`);
     if (!data.gateway?.ok) alerts.push(`주문 게이트웨이 오류: ${data.gateway?.error || "상태 확인 실패"}`);
     traderAlert.textContent = alerts.join(" ");

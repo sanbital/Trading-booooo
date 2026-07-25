@@ -236,7 +236,7 @@ button { color: inherit; }
 .button-secondary:hover, .card-copy:hover { border-color: rgba(50, 227, 155, 0.5); background: var(--green-soft); }
 .copy-status { color: var(--green); font-size: 11px; }
 
-.stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 12px; }
+.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; }
 .stat { padding: 20px; }
 .stat span, .stat small { display: block; }
 .stat span { color: var(--muted); font-size: 11px; }

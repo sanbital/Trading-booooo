@@ -27,7 +27,7 @@ import { scalpEntryDecision } from "../_shared/scalp/scalp-gate.ts";
 import { DEFAULT_SCALP_SAFETY, type ScalpSafetyConfig, type ScalpDayState } from "../_shared/scalp/safety.ts";
 import { DEFAULT_COST_MODEL, type CostModelConfig } from "../_shared/scalp/cost-model.ts";
 
-const VERSION = "5.2.0";
+const VERSION = "5.2.1";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const SERVICE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
@@ -217,9 +217,43 @@ function defaultSettings(): TradingSettings & JsonRecord {
     updated_at: new Date().toISOString(),
   };
 }
+const RECOVERED_SCALP_SETTINGS: JsonRecord = {
+  strategy: "SCALP",
+  scalp_per_order_pct: 10,
+  scalp_daily_loss_pct: 20,
+  scalp_max_single_loss_pct: 5,
+  scalp_max_consecutive_losses: 4,
+  scalp_kill_switch: false,
+  scalp_max_holding_minutes: 30,
+};
+
+function hasMalformedLegacyScalpSettings(settings: TradingSettings & JsonRecord): boolean {
+  return String(settings.strategy || "").toUpperCase() === "SCALP" &&
+    finite(settings.scalp_per_order_pct) <= 0.1 &&
+    finite(settings.scalp_daily_loss_pct) <= 0.1 &&
+    finite(settings.scalp_max_single_loss_pct) <= 0.1 &&
+    finite(settings.scalp_max_consecutive_losses) <= 1 &&
+    finite(settings.scalp_max_holding_minutes) <= 1 &&
+    settings.scalp_kill_switch === true;
+}
+
 async function loadSettings(): Promise<TradingSettings & JsonRecord> {
   const rows = await db("trading_settings?id=eq.1&select=*");
-  if (rows?.[0]) return { ...defaultSettings(), ...rows[0] };
+  if (rows?.[0]) {
+    const merged = { ...defaultSettings(), ...rows[0] } as TradingSettings & JsonRecord;
+    // v5.2.0 could persist percentage fractions (0.1) as percentage points and
+    // enable the kill switch at the same time. That signature blocks every live
+    // entry. Repair that exact legacy signature once, while preserving future
+    // intentional operator changes such as manually enabling the kill switch.
+    if (hasMalformedLegacyScalpSettings(merged)) {
+      const repaired = (await patch("trading_settings", "id=eq.1", {
+        ...RECOVERED_SCALP_SETTINGS,
+        version: finite(merged.version) + 1,
+      }))[0];
+      return { ...merged, ...RECOVERED_SCALP_SETTINGS, ...(repaired || {}) };
+    }
+    return merged;
+  }
   return (await insert("trading_settings", defaultSettings()))[0];
 }
 async function ensureConfigured(settings: TradingSettings & JsonRecord, syncMode = false) {
@@ -1026,7 +1060,8 @@ async function control(body: JsonRecord, settings: TradingSettings & JsonRecord)
   });
   if (safetyError) throw new Error(safetyError);
   if (body.mode != null) allowed.mode = parseMode(String(body.mode));
-  for (const key of ["pause_new_entries", "emergency_liquidation", "upbit_enabled", "binance_enabled", "suppress_cross_exchange_same_asset"] as const) if (body[key] != null) allowed[key] = Boolean(body[key]);
+  for (const key of ["pause_new_entries", "emergency_liquidation", "upbit_enabled", "binance_enabled", "suppress_cross_exchange_same_asset", "scalp_kill_switch"] as const) if (body[key] != null) allowed[key] = Boolean(body[key]);
+  if (body.strategy != null) allowed.strategy = String(body.strategy).toUpperCase() === "SCALP" ? "SCALP" : "TREND";
   if (body.upbit_allocation_mode != null) allowed.upbit_allocation_mode = String(body.upbit_allocation_mode).toUpperCase() === "FIXED" ? "FIXED" : "ALL";
   if (body.binance_allocation_mode != null) allowed.binance_allocation_mode = String(body.binance_allocation_mode).toUpperCase() === "FIXED" ? "FIXED" : "ALL";
   const ranges: Record<string, [number, number]> = {
@@ -1037,6 +1072,8 @@ async function control(body: JsonRecord, settings: TradingSettings & JsonRecord)
     upbit_allocation_krw: [0, 100_000_000_000], upbit_reserve_krw: [0, 100_000_000_000],
     binance_allocation_usdt: [0, 1_000_000_000], binance_reserve_usdt: [0, 1_000_000_000],
     max_daily_loss_pct: [0.2, 10], max_weekly_loss_pct: [0.5, 20], max_consecutive_losses: [1, 10],
+    scalp_per_order_pct: [0.1, 100], scalp_daily_loss_pct: [0.1, 100], scalp_max_single_loss_pct: [0.1, 100],
+    scalp_max_consecutive_losses: [1, 50], scalp_max_holding_minutes: [1, 1440],
     entry_ttl_seconds: [30, 900], full_scan_interval_seconds: [60, 3600], monitor_interval_seconds: [10, 300], max_new_entries_per_scan: [1, 4],
   };
   for (const [key, [low, high]] of Object.entries(ranges)) if (body[key] != null) allowed[key] = clamp(finite(body[key]), low, high);
