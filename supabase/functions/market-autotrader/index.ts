@@ -31,6 +31,16 @@ const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
 const DASHBOARD_TOKEN = env("DASHBOARD_ACCESS_TOKEN") || env("LEARNING_ACCESS_TOKEN");
 const GATEWAY_URL = env("ORDER_GATEWAY_URL").replace(/\/$/, "");
 const GATEWAY_SECRET = env("GATEWAY_SHARED_SECRET");
+// Optional exchange-split: route Binance orders to a dedicated gateway (e.g. Paris/cdg).
+// When BINANCE_ORDER_GATEWAY_URL is unset, Binance falls back to the primary gateway,
+// so existing single-gateway deployments behave exactly as before. Upbit always uses the primary.
+const BINANCE_GATEWAY_URL = env("BINANCE_ORDER_GATEWAY_URL").replace(/\/$/, "") || GATEWAY_URL;
+const BINANCE_GATEWAY_SECRET = env("BINANCE_GATEWAY_SHARED_SECRET") || GATEWAY_SECRET;
+function gatewayTarget(exchange: Exchange): { url: string; secret: string } {
+  return exchange === "binance"
+    ? { url: BINANCE_GATEWAY_URL, secret: BINANCE_GATEWAY_SECRET }
+    : { url: GATEWAY_URL, secret: GATEWAY_SECRET };
+}
 const DASHBOARD_ORIGIN = env("ALLOWED_ORIGINS").split(",")[0] || "*";
 const DEFAULT_MODE = parseMode(env("TRADING_MODE_DEFAULT") || "PAPER");
 const MAX_SCAN_SECONDS = 280;
@@ -155,12 +165,13 @@ async function hmacHex(secret: string, message: string): Promise<string> {
   return [...new Uint8Array(signature)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 async function gateway(exchange: Exchange, command: JsonRecord, timeoutMs = 15_000): Promise<any> {
+  const target = gatewayTarget(exchange);
   const raw = JSON.stringify({ exchange, ...command });
   const ts = String(Date.now()); const nonce = crypto.randomUUID();
-  const signature = await hmacHex(GATEWAY_SECRET, `${ts}\n${nonce}\n${raw}`);
+  const signature = await hmacHex(target.secret, `${ts}\n${nonce}\n${raw}`);
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${GATEWAY_URL}/v1/command`, {
+    const res = await fetch(`${target.url}/v1/command`, {
       method: "POST", signal: controller.signal,
       headers: { "content-type": "application/json", "x-gateway-ts": ts, "x-gateway-nonce": nonce, "x-gateway-signature": signature }, body: raw,
     });
@@ -868,8 +879,14 @@ async function status(settings: TradingSettings & JsonRecord) {
   let health: any;
   try { const res = await fetch(`${GATEWAY_URL}/health`, { headers: { accept: "application/json" } }); health = await res.json(); }
   catch (error) { health = { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+  let binanceHealth: any = null;
+  if (BINANCE_GATEWAY_URL && BINANCE_GATEWAY_URL !== GATEWAY_URL) {
+    try { const res = await fetch(`${BINANCE_GATEWAY_URL}/health`, { headers: { accept: "application/json" } }); binanceHealth = await res.json(); }
+    catch (error) { binanceHealth = { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+  }
   return {
     version: VERSION, settings, accounts, account_stats: accountStatsByExchange, positions, recently_closed_positions: closedPositions,
+    binance_gateway_health: binanceHealth,
     recent_orders: orders, recent_cycles: cycles, latest_accounts: snapshots, recent_events: events, cash_flows: cashFlows,
     learning: { profiles, active_profile: (profiles || []).find((row: any) => row.active) || profiles?.[0] || null }, gateway: health,
   };
