@@ -133,11 +133,15 @@ jobs:
 
       - name: Deploy one always-on gateway Machine
         shell: bash
+        working-directory: gateway
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
         run: |
-          flyctl deploy ./gateway --remote-only -a "${FLY_APP_NAME}" --config gateway/fly.toml --ha=false
+          set -euo pipefail
+          test -f fly.toml
+          test -f Dockerfile
+          flyctl deploy . --remote-only -a "${FLY_APP_NAME}" --config ./fly.toml --ha=false
           flyctl scale count 1 -a "${FLY_APP_NAME}" --yes
           flyctl status -a "${FLY_APP_NAME}"
 
