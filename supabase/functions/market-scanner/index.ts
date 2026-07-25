@@ -302,6 +302,7 @@ function parseRisk(
     exitPolicy: ["FIXED_T1", "SCALE_OUT", "TRAIL_AFTER_T1"].includes(String(runtime?.exitPolicy))
       ? runtime?.exitPolicy
       : "SCALE_OUT",
+    strategy: (String(body.strategy) === "SCALP" || Deno.env.get("TRADING_STRATEGY") === "SCALP") ? "SCALP" : "TREND",
   };
 }
 
