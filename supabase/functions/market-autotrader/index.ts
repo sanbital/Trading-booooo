@@ -23,6 +23,9 @@ import {
   type TradingMode,
   type TradingSettings,
 } from "./core.ts";
+import { scalpEntryDecision } from "../_shared/scalp/scalp-gate.ts";
+import { DEFAULT_SCALP_SAFETY, type ScalpSafetyConfig, type ScalpDayState } from "../_shared/scalp/safety.ts";
+import { DEFAULT_COST_MODEL, type CostModelConfig } from "../_shared/scalp/cost-model.ts";
 
 const VERSION = "5.2.0";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -200,9 +203,16 @@ function defaultSettings(): TradingSettings & JsonRecord {
     withdrawal_mode: false, manual_intervention_required: false, manual_event_reason: null,
     max_daily_loss_pct: 1.5, max_weekly_loss_pct: 3, max_consecutive_losses: 3,
     entry_ttl_seconds: 180,
-    full_scan_interval_seconds: clamp(finite(env("AUTO_SCAN_INTERVAL_SECONDS"), 300), 300, 3600),
-    monitor_interval_seconds: clamp(finite(env("AUTO_MONITOR_INTERVAL_SECONDS"), 15), 10, 300),
+    full_scan_interval_seconds: clamp(finite(env("AUTO_SCAN_INTERVAL_SECONDS"), 300), 60, 3600),
+    monitor_interval_seconds: clamp(finite(env("AUTO_MONITOR_INTERVAL_SECONDS"), 15), 5, 300),
     max_new_entries_per_scan: 2, suppress_cross_exchange_same_asset: true,
+    // Stage 4: scalp strategy. Default "TREND" = existing behavior, fully off.
+    strategy: (env("TRADING_STRATEGY") === "SCALP" ? "SCALP" : "TREND"),
+    scalp_per_order_pct: clamp(finite(env("SCALP_PER_ORDER_PCT"), 10), 0.1, 100),
+    scalp_daily_loss_pct: clamp(finite(env("SCALP_DAILY_LOSS_PCT"), 50), 0.1, 100),
+    scalp_max_consecutive_losses: clamp(finite(env("SCALP_MAX_CONSECUTIVE_LOSSES"), 4), 1, 50),
+    scalp_kill_switch: env("SCALP_KILL_SWITCH") === "true",
+    scalp_max_holding_minutes: clamp(finite(env("SCALP_MAX_HOLDING_MINUTES"), 30), 1, 1440),
     updated_at: new Date().toISOString(),
   };
 }
@@ -454,6 +464,51 @@ async function openPaperPosition(position: Position, candidate: Candidate, price
   return applyEntryAccounting(position, order, { executedVolume: quantity, executedFunds: notional, averagePrice: price, paidFeeQuote: fee });
 }
 
+// --- Stage 4 scalp helpers ---------------------------------------------------
+function scalpSafetyConfig(settings: TradingSettings): ScalpSafetyConfig {
+  return {
+    perOrderPctOfCapital: finite((settings as any).scalp_per_order_pct, DEFAULT_SCALP_SAFETY.perOrderPctOfCapital * 100) / 100,
+    dailyLossPctOfCapital: finite((settings as any).scalp_daily_loss_pct, DEFAULT_SCALP_SAFETY.dailyLossPctOfCapital * 100) / 100,
+    maxConsecutiveLosses: Math.round(finite((settings as any).scalp_max_consecutive_losses, DEFAULT_SCALP_SAFETY.maxConsecutiveLosses)),
+    killSwitch: (settings as any).scalp_kill_switch === true,
+  };
+}
+
+function scalpCostConfig(settings: TradingSettings, exchange: Exchange): CostModelConfig {
+  return {
+    ...DEFAULT_COST_MODEL,
+    roundTripFeeFraction: FEE_PCT[exchange] * 2 / 100,
+    minimumEdge: finite((settings as any).scalp_minimum_edge, DEFAULT_COST_MODEL.minimumEdge),
+  };
+}
+
+/**
+ * Day state for the scalp safety rails: today's realized P&L and the current
+ * consecutive-loss streak, scoped to this exchange and paper/live mode.
+ * Day boundary follows the exchange convention (KST for upbit, UTC for binance).
+ */
+async function scalpDayState(exchange: Exchange, isPaper: boolean): Promise<ScalpDayState> {
+  const now = new Date();
+  const dayStart = exchange === "upbit"
+    ? new Date(new Date(now.getTime() + 9 * 3600_000).setUTCHours(0, 0, 0, 0) - 9 * 3600_000) // KST midnight
+    : new Date(new Date(now).setUTCHours(0, 0, 0, 0)); // UTC midnight
+  const rows = await db(
+    `trading_positions?exchange=eq.${exchange}&is_paper=eq.${isPaper}&state=eq.CLOSED&closed_at=gte.${dayStart.toISOString()}&select=realized_pnl_quote,closed_at&order=closed_at.desc`,
+  ) as Array<{ realized_pnl_quote: number; closed_at: string }>;
+  let realizedPnlQuote = 0;
+  let consecutiveLosses = 0;
+  let streakOpen = true;
+  for (const row of rows || []) {
+    const pnl = finite(row.realized_pnl_quote);
+    realizedPnlQuote += pnl;
+    if (streakOpen) {
+      if (pnl < 0) consecutiveLosses += 1;
+      else streakOpen = false;
+    }
+  }
+  return { realizedPnlQuote, consecutiveLosses };
+}
+
 async function enterCandidate(candidate: Candidate, settings: TradingSettings, portfolio: any, activeBases: Set<string>, cycleId: string) {
   const exchange = candidate.exchange; const quote = quoteCurrency(exchange); const base = baseAsset(exchange, candidate.market);
   if (candidate.recommendation_valid_until && Date.now() > new Date(candidate.recommendation_valid_until).getTime()) return { entered: false, exchange, market: candidate.market, reason: "recommendation expired" };
@@ -498,10 +553,43 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   if (!sizing.allowed) return { entered: false, exchange, market: candidate.market, reason: sizing.reason };
   depth = executableDepth(market.asks, maxEntry, sizing.notionalQuote);
   if (!depth.executable || depth.availableFunds < sizing.notionalQuote * LIVE_MIN_DEPTH_BUFFER) return { entered: false, exchange, market: candidate.market, reason: "depth deteriorated during sizing" };
-  const quantity = floorToStep(sizing.notionalQuote / entryPrice, rules.quantity_step || 0.00000001);
+  let quantity = floorToStep(sizing.notionalQuote / entryPrice, rules.quantity_step || 0.00000001);
   if (!(quantity > 0) || quantity * entryPrice < Math.max(limits.minOrder, rules.min_notional)) return { entered: false, exchange, market: candidate.market, reason: "quantity below exchange minimum" };
 
-  const maxHolding = new Date(Date.now() + clamp(finite(candidate.intended_horizon_hours, 24), 1, 480) * 3600_000).toISOString();
+  // Stage 4: scalp final gate — safety rails (halt/cap) FIRST, then precise stressed-slippage EV.
+  // Only active when strategy === "SCALP"; otherwise the original flow is untouched.
+  if ((settings as any).strategy === "SCALP") {
+    const day = await scalpDayState(exchange, settings.mode !== "LIVE_LIMITED");
+    const decision = scalpEntryDecision(
+      {
+        capitalQuote: finite(managed.managedCapitalQuote),
+        requestedNotional: sizing.notionalQuote,
+        day,
+        pWin: finite((candidate as any).scalp_p_win ?? (candidate as any).scalp?.pWin, 0.5),
+        targetPct: finite((candidate as any).scalp_target_pct ?? (candidate as any).scalp?.target_pct, 0.006),
+        stopPct: finite((candidate as any).scalp_stop_pct ?? (candidate as any).scalp?.stop_pct, 0.003),
+        askLevels: (market.asks || []).map((a: any) => ({ price: finite(a.price ?? a[0]), size: finite(a.size ?? a[1]) })),
+        bidLevels: (market.bids || []).map((b: any) => ({ price: finite(b.price ?? b[0]), size: finite(b.size ?? b[1]) })),
+        bestAsk, bestBid,
+      },
+      scalpSafetyConfig(settings),
+      scalpCostConfig(settings, exchange),
+    );
+    if (!decision.allow) {
+      await event("SCALP_GATE_BLOCK", `${exchange}:${candidate.market} scalp gate blocked`, { reason: decision.reason, edge: decision.expectedNetEdge }, { cycleId });
+      return { entered: false, exchange, market: candidate.market, reason: `scalp gate: ${decision.reason}` };
+    }
+    if (decision.notional < sizing.notionalQuote) {
+      quantity = floorToStep(decision.notional / entryPrice, rules.quantity_step || 0.00000001);
+      if (!(quantity > 0) || quantity * entryPrice < Math.max(limits.minOrder, rules.min_notional)) {
+        return { entered: false, exchange, market: candidate.market, reason: "scalp per-order cap below exchange minimum" };
+      }
+    }
+  }
+
+  const maxHolding = (settings as any).strategy === "SCALP"
+    ? new Date(Date.now() + clamp(finite((settings as any).scalp_max_holding_minutes, 30), 1, 1440) * 60_000).toISOString()
+    : new Date(Date.now() + clamp(finite(candidate.intended_horizon_hours, 24), 1, 480) * 3600_000).toISOString();
   const position = (await insert("trading_positions", {
     candidate_id: candidate.id, scan_id: candidate.scan_id, exchange, quote_currency: quote, market: candidate.market, base_asset: base,
     state: "ENTRY_PENDING", is_paper: settings.mode !== "LIVE_LIMITED", profile_version: candidate.profile_version || 0,
