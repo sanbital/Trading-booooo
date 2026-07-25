@@ -27,7 +27,7 @@ import { scalpEntryDecision } from "../_shared/scalp/scalp-gate.ts";
 import { DEFAULT_SCALP_SAFETY, type ScalpSafetyConfig, type ScalpDayState } from "../_shared/scalp/safety.ts";
 import { DEFAULT_COST_MODEL, type CostModelConfig } from "../_shared/scalp/cost-model.ts";
 
-const VERSION = "5.2.1";
+const VERSION = "5.2.2";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const SERVICE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
@@ -191,13 +191,15 @@ function defaultSettings(): TradingSettings & JsonRecord {
     upbit_enabled: true, binance_enabled: true,
     max_open_positions: 4, max_open_positions_per_exchange: 2,
     max_daily_entries: 8, max_daily_entries_per_exchange: 4,
-    max_position_pct: 5, risk_per_trade_pct: 0.5,
-    max_order_krw: clamp(finite(env("UPBIT_MAX_ORDER_KRW") || env("MAX_ORDER_KRW"), 100_000), 5_000, 1_000_000_000),
+    // Financial exposure is controlled only by the operator allocation settings below.
+    // Legacy sizing fields remain for schema compatibility but are non-binding in SCALP.
+    max_position_pct: 100, risk_per_trade_pct: 100,
+    max_order_krw: 1_000_000_000,
     min_order_krw: 5_000,
-    max_daily_buy_krw: clamp(finite(env("UPBIT_MAX_DAILY_BUY_KRW"), 300_000), 5_000, 10_000_000_000),
-    max_order_usdt: clamp(finite(env("BINANCE_MAX_ORDER_USDT"), 100), 5, 10_000_000),
+    max_daily_buy_krw: 10_000_000_000,
+    max_order_usdt: 10_000_000,
     min_order_usdt: clamp(finite(env("BINANCE_MIN_ORDER_USDT"), 10), 5, 1000),
-    max_daily_buy_usdt: clamp(finite(env("BINANCE_MAX_DAILY_BUY_USDT"), 300), 5, 100_000_000),
+    max_daily_buy_usdt: 100_000_000,
     upbit_allocation_mode: "ALL", upbit_allocation_krw: 0, upbit_reserve_krw: 0,
     binance_allocation_mode: "ALL", binance_allocation_usdt: 0, binance_reserve_usdt: 0,
     withdrawal_mode: false, manual_intervention_required: false, manual_event_reason: null,
@@ -208,7 +210,7 @@ function defaultSettings(): TradingSettings & JsonRecord {
     max_new_entries_per_scan: 2, suppress_cross_exchange_same_asset: true,
     // Stage 4: scalp strategy. Default "TREND" = existing behavior, fully off.
     strategy: (env("TRADING_STRATEGY") === "SCALP" ? "SCALP" : "TREND"),
-    scalp_per_order_pct: clamp(finite(env("SCALP_PER_ORDER_PCT"), 10), 0.1, 100),
+    scalp_per_order_pct: 100, // deprecated: allocation UI is the sole exposure ceiling
     scalp_daily_loss_pct: clamp(finite(env("SCALP_DAILY_LOSS_PCT"), 20), 0.1, 100),
     scalp_max_single_loss_pct: clamp(finite(env("SCALP_MAX_SINGLE_LOSS_PCT"), 5), 0.1, 100),
     scalp_max_consecutive_losses: clamp(finite(env("SCALP_MAX_CONSECUTIVE_LOSSES"), 4), 1, 50),
@@ -219,7 +221,7 @@ function defaultSettings(): TradingSettings & JsonRecord {
 }
 const RECOVERED_SCALP_SETTINGS: JsonRecord = {
   strategy: "SCALP",
-  scalp_per_order_pct: 10,
+  scalp_per_order_pct: 100,
   scalp_daily_loss_pct: 20,
   scalp_max_single_loss_pct: 5,
   scalp_max_consecutive_losses: 4,
@@ -334,7 +336,7 @@ async function runScanner(portfolios: Record<Exchange, any>, settings: TradingSe
         },
         capital_krw: Math.max(10_000, finite(portfolios.upbit?.managed?.managedCapitalQuote, portfolios.upbit?.available_quote || 10_000)),
         capital_usdt: Math.max(10, finite(portfolios.binance?.managed?.managedCapitalQuote, portfolios.binance?.available_quote || 10)),
-        risk_pct: settings.risk_per_trade_pct,
+        risk_pct: (settings as any).strategy === "SCALP" ? 100 : settings.risk_per_trade_pct,
         recommendation_valid_minutes: Math.max(1, Math.ceil(settings.entry_ttl_seconds / 60)),
         min_actionable_holding_hours: 1, max_unattended_hours: 24, require_precommitted_exit: true,
       }),
@@ -477,9 +479,20 @@ async function managedPortfolio(settings: TradingSettings, exchange: Exchange, p
 }
 
 function exchangeLimits(settings: TradingSettings, exchange: Exchange) {
+  const allocationControlled = (settings as any).strategy === "SCALP";
   return exchange === "upbit"
-    ? { maxOrder: settings.max_order_krw, minOrder: settings.min_order_krw, quoteStep: 1000, dailyBuy: settings.max_daily_buy_krw }
-    : { maxOrder: settings.max_order_usdt, minOrder: settings.min_order_usdt, quoteStep: 0.01, dailyBuy: settings.max_daily_buy_usdt };
+    ? {
+      maxOrder: allocationControlled ? Number.MAX_SAFE_INTEGER : settings.max_order_krw,
+      minOrder: settings.min_order_krw,
+      quoteStep: 1000,
+      dailyBuy: allocationControlled ? Number.MAX_SAFE_INTEGER : settings.max_daily_buy_krw,
+    }
+    : {
+      maxOrder: allocationControlled ? Number.MAX_SAFE_INTEGER : settings.max_order_usdt,
+      minOrder: settings.min_order_usdt,
+      quoteStep: 0.01,
+      dailyBuy: allocationControlled ? Number.MAX_SAFE_INTEGER : settings.max_daily_buy_usdt,
+    };
 }
 function accountQuantity(portfolio: any, asset: string, freeOnly = false): number {
   const row = (Array.isArray(portfolio?.accounts) ? portfolio.accounts : []).find((item: any) => String(item.currency || item.asset).toUpperCase() === asset.toUpperCase());
@@ -506,9 +519,11 @@ async function openPaperPosition(position: Position, candidate: Candidate, price
 // --- Stage 4 scalp helpers ---------------------------------------------------
 function scalpSafetyConfig(settings: TradingSettings): ScalpSafetyConfig {
   return {
-    perOrderPctOfCapital: finite((settings as any).scalp_per_order_pct, DEFAULT_SCALP_SAFETY.perOrderPctOfCapital * 100) / 100,
+    // The dashboard allocation (ALL/FIXED minus reserve) is the sole exposure ceiling.
+    perOrderPctOfCapital: 1,
     dailyLossPctOfCapital: finite((settings as any).scalp_daily_loss_pct, DEFAULT_SCALP_SAFETY.dailyLossPctOfCapital * 100) / 100,
-    maxConsecutiveLosses: Math.round(finite((settings as any).scalp_max_consecutive_losses, DEFAULT_SCALP_SAFETY.maxConsecutiveLosses)),
+    // No unapproved streak cap; the approved daily loss rail remains authoritative.
+    maxConsecutiveLosses: Number.MAX_SAFE_INTEGER,
     killSwitch: (settings as any).scalp_kill_switch === true,
   };
 }
@@ -572,9 +587,20 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   if (finite(managed.managedAvailableQuote) < Math.max(limits.minOrder, rules.min_notional)) {
     return { entered: false, exchange, market: candidate.market, reason: "managed allocation has no available buying power" };
   }
-  const maxOrder = Math.min(limits.maxOrder, plan.recommended > 0 ? plan.recommended : limits.maxOrder);
-  const initial = calculatePositionSize({
-    equityQuote: finite(managed.managedCapitalQuote), availableQuote: finite(managed.managedAvailableQuote), entryPrice: bestAsk, stopPrice: candidate.stop_price,
+  const allocationOnly = (settings as any).strategy === "SCALP";
+  const managedAvailable = finite(managed.managedAvailableQuote);
+  const maxOrder = allocationOnly
+    ? managedAvailable
+    : Math.min(limits.maxOrder, plan.recommended > 0 ? plan.recommended : limits.maxOrder);
+  const allocationSizing = (entryPrice: number) => {
+    const minOrder = Math.max(limits.minOrder, rules.min_notional);
+    const notionalQuote = floorToStep(Math.min(managedAvailable, maxOrder), limits.quoteStep);
+    return notionalQuote >= minOrder
+      ? { allowed: true, notionalQuote, quantity: notionalQuote / entryPrice, stopDistancePct: 0, riskBudgetQuote: notionalQuote, reason: null }
+      : { allowed: false, notionalQuote: 0, quantity: 0, stopDistancePct: 0, riskBudgetQuote: 0, reason: `allocated order ${notionalQuote} below minimum ${minOrder}` };
+  };
+  const initial = allocationOnly ? allocationSizing(bestAsk) : calculatePositionSize({
+    equityQuote: finite(managed.managedCapitalQuote), availableQuote: managedAvailable, entryPrice: bestAsk, stopPrice: candidate.stop_price,
     maxPositionPct: settings.max_position_pct, riskPerTradePct: settings.risk_per_trade_pct,
     maxOrderQuote: maxOrder, minOrderQuote: Math.max(limits.minOrder, rules.min_notional), quoteStep: limits.quoteStep,
     extraLossPct: FEE_PCT[exchange] * 2 / 100 + 0.001,
@@ -583,8 +609,8 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   let depth = executableDepth(market.asks, maxEntry, initial.notionalQuote);
   if (!depth.executable || depth.availableFunds < initial.notionalQuote * LIVE_MIN_DEPTH_BUFFER) return { entered: false, exchange, market: candidate.market, reason: `insufficient ask depth (${depth.availableFunds.toFixed(exchange === "upbit" ? 0 : 2)} ${quote})` };
   const entryPrice = tickRound(Math.min(maxEntry, depth.worstPrice), rules.price_tick, "down");
-  const sizing = calculatePositionSize({
-    equityQuote: finite(managed.managedCapitalQuote), availableQuote: finite(managed.managedAvailableQuote), entryPrice, stopPrice: candidate.stop_price,
+  const sizing = allocationOnly ? allocationSizing(entryPrice) : calculatePositionSize({
+    equityQuote: finite(managed.managedCapitalQuote), availableQuote: managedAvailable, entryPrice, stopPrice: candidate.stop_price,
     maxPositionPct: settings.max_position_pct, riskPerTradePct: settings.risk_per_trade_pct,
     maxOrderQuote: maxOrder, minOrderQuote: Math.max(limits.minOrder, rules.min_notional), quoteStep: limits.quoteStep,
     extraLossPct: FEE_PCT[exchange] * 2 / 100 + 0.001,
@@ -627,7 +653,7 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
     if (decision.notional < sizing.notionalQuote) {
       quantity = floorToStep(decision.notional / entryPrice, rules.quantity_step || 0.00000001);
       if (!(quantity > 0) || quantity * entryPrice < Math.max(limits.minOrder, rules.min_notional)) {
-        return { entered: false, exchange, market: candidate.market, reason: "scalp per-order cap below exchange minimum" };
+        return { entered: false, exchange, market: candidate.market, reason: "allocation-controlled order below exchange minimum" };
       }
     }
     // Exits follow the scalp target/stop the EV gate was evaluated on, not the wide
@@ -961,9 +987,15 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
     const circuitSettings = (settings as any).strategy === "SCALP"
       ? {
         ...settings,
+        // Only operator-approved loss rails apply in SCALP. Allocation controls
+        // determine exposure; hidden position, entry-count, weekly, and streak caps do not.
+        max_open_positions: Number.MAX_SAFE_INTEGER,
+        max_open_positions_per_exchange: Number.MAX_SAFE_INTEGER,
+        max_daily_entries: Number.MAX_SAFE_INTEGER,
+        max_daily_entries_per_exchange: Number.MAX_SAFE_INTEGER,
         max_daily_loss_pct: finite((settings as any).scalp_daily_loss_pct, 20),
-        max_weekly_loss_pct: Math.max(20, finite((settings as any).scalp_daily_loss_pct, 20)),
-        max_consecutive_losses: Math.round(finite((settings as any).scalp_max_consecutive_losses, 4)),
+        max_weekly_loss_pct: Number.MAX_SAFE_INTEGER,
+        max_consecutive_losses: Number.MAX_SAFE_INTEGER,
       }
       : settings;
     circuits[exchange] = evaluateCircuit({
@@ -991,10 +1023,12 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
     const exchange = candidate.exchange;
     if (!exchanges.includes(exchange) || !circuits[exchange]?.allowNewEntry) continue;
     if (entries.filter((row) => row.entered || row.reserved).length >= settings.max_new_entries_per_scan) break;
-    const exchangeCapacity = Math.min(
-      settings.max_open_positions_per_exchange - stats[exchange].openExchange,
-      settings.max_daily_entries_per_exchange - stats[exchange].entriesTodayExchange,
-    );
+    const exchangeCapacity = (settings as any).strategy === "SCALP"
+      ? Number.MAX_SAFE_INTEGER
+      : Math.min(
+        settings.max_open_positions_per_exchange - stats[exchange].openExchange,
+        settings.max_daily_entries_per_exchange - stats[exchange].entriesTodayExchange,
+      );
     if (enteredPerExchange[exchange] >= Math.max(0, exchangeCapacity)) continue;
     if (activeMarkets.has(`${exchange}:${candidate.market}`)) continue;
     try {

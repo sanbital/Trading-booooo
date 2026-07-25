@@ -1,9 +1,9 @@
 // Scalp entry gate (Stage 4 — composition of Stage-1 safety + precise EV).
 //
 // This is the FINAL gate before a live scalp order. Order of enforcement:
-//   1) safety rails (kill switch, daily-loss halt, consecutive-loss halt) and the
-//      per-order cap  -> evaluateEntryGate
-//   2) precise stressed-slippage EV on the (capped) notional with live depth
+//   1) safety rails (kill switch and approved daily-loss halt) plus operator allocation
+//      boundary -> evaluateEntryGate
+//   2) precise stressed-slippage EV on the allocation-controlled notional with live depth
 //      -> evaluateEdge
 // Both must pass. The safety rails run FIRST, on purpose: a halted account never
 // reaches the order-sizing/EV path.
@@ -26,7 +26,7 @@ export interface ScalpGateInput {
 
 export interface ScalpGateResult {
   allow: boolean;
-  notional: number;        // capped notional to actually order (0 when blocked)
+  notional: number;        // allocation-controlled notional to order (0 when blocked)
   reason: string | null;   // halt/skip reason for logging
   expectedNetEdge: number | null;
 }
@@ -36,7 +36,7 @@ export function scalpEntryDecision(
   safetyCfg: ScalpSafetyConfig,
   costCfg: CostModelConfig,
 ): ScalpGateResult {
-  // 1) Safety rails + per-order cap.
+  // 1) Safety rails + operator allocation boundary.
   const safety = evaluateEntryGate(
     { capitalQuote: input.capitalQuote, requestedNotional: input.requestedNotional, day: input.day },
     safetyCfg,
@@ -45,7 +45,7 @@ export function scalpEntryDecision(
     return { allow: false, notional: 0, reason: safety.haltReason, expectedNetEdge: null };
   }
 
-  // 2) Precise EV on the capped notional with live depth.
+  // 2) Precise EV on the allocation-controlled notional with live depth.
   const edge = evaluateEdge(
     {
       pWin: input.pWin,

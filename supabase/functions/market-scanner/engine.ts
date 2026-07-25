@@ -1947,8 +1947,11 @@ export function buildTradePlan(
   const expectedExit = useContinuation ? blendedExit : shortExecution;
   const expectedGain = useContinuation ? blendedGain : shortGain;
   const rr = useContinuation ? blendedRR : shortRR;
-  const riskBudget = risk.capitalKrw * (risk.riskPct / 100);
-  const investment = stopLoss > 0
+  const allocationOnlySizing = risk.strategy === "SCALP";
+  const riskBudget = allocationOnlySizing ? risk.capitalKrw : risk.capitalKrw * (risk.riskPct / 100);
+  const investment = allocationOnlySizing
+    ? risk.capitalKrw
+    : stopLoss > 0
     ? Math.min(risk.capitalKrw, riskBudget / (stopLoss / 100))
     : 0;
   const roundedInvestment = risk.quoteCurrency === "USDT"

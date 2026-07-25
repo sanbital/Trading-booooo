@@ -6,25 +6,25 @@
 // trading for the day or entirely.
 //
 // User-chosen values (2026-07-25):
-//   perOrderPctOfCapital = 0.10   (1 order <= 10% of capital)
+//   perOrderPctOfCapital = 1.00   (no extra cap beyond operator allocation)
 //   dailyLossPctOfCapital = 0.20  (halt new entries once day's realized loss >= 20%)
-//   maxConsecutiveLosses = 4      (halt after 4 losses in a row)
+//   maxConsecutiveLosses = unlimited (no unapproved streak cap)
 //   killSwitch            = false (operator can flip to true to stop everything)
 //
 // Operator-selected hard backstops. The normal scalp stop remains much tighter;
 // these limits guard against execution, data, or exit failures.
 
 export interface ScalpSafetyConfig {
-  perOrderPctOfCapital: number;   // fraction, 0.10 = 10%
+  perOrderPctOfCapital: number;   // 1.00 = full operator-managed allocation
   dailyLossPctOfCapital: number;  // fraction, 0.50 = 50%
   maxConsecutiveLosses: number;   // integer
   killSwitch: boolean;
 }
 
 export const DEFAULT_SCALP_SAFETY: ScalpSafetyConfig = {
-  perOrderPctOfCapital: 0.10,
+  perOrderPctOfCapital: 1.00,
   dailyLossPctOfCapital: 0.20,
-  maxConsecutiveLosses: 4,
+  maxConsecutiveLosses: Number.MAX_SAFE_INTEGER,
   killSwitch: false,
 };
 
@@ -41,11 +41,11 @@ export interface EntryGateInput {
 
 export interface EntryGateResult {
   allow: boolean;
-  cappedNotional: number;     // requestedNotional clamped to the per-order cap
+  cappedNotional: number;     // requestedNotional bounded only by operator allocation
   haltReason: string | null;  // set when trading should stop (not just this order)
 }
 
-/** Hard cap for a single scalp order, independent of the global gateway cap. */
+/** No extra account-percentage cap: operator allocation is authoritative. */
 export function scalpOrderCap(capitalQuote: number, cfg: ScalpSafetyConfig): number {
   return Math.max(0, capitalQuote * cfg.perOrderPctOfCapital);
 }
@@ -54,8 +54,8 @@ export function scalpOrderCap(capitalQuote: number, cfg: ScalpSafetyConfig): num
  * Decide whether a scalp entry may proceed. Order of checks:
  *   1) kill switch          -> halt everything
  *   2) daily loss limit hit  -> halt for the day
- *   3) consecutive losses    -> halt for the day
- *   4) clamp order to per-order cap
+ *   3) optional consecutive-loss policy
+ *   4) keep the order inside the operator-managed allocation
  */
 export function evaluateEntryGate(input: EntryGateInput, cfg: ScalpSafetyConfig): EntryGateResult {
   if (cfg.killSwitch) {

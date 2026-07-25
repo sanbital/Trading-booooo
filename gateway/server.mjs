@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 // withdrawal, transfer, margin, futures, leverage, or API-key management routes.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "5.2.1";
+const VERSION = "5.2.2";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
@@ -23,10 +23,8 @@ const SCHEDULER_ENABLED = boolEnv("SCHEDULER_ENABLED", true);
 const SCAN_INTERVAL_MS = integerEnv("AUTO_SCAN_INTERVAL_SECONDS", 60, 60, 3600) * 1000;
 const MONITOR_INTERVAL_MS = integerEnv("AUTO_MONITOR_INTERVAL_SECONDS", 15, 10, 300) * 1000;
 const REQUEST_TOLERANCE_MS = integerEnv("GATEWAY_REQUEST_TOLERANCE_SECONDS", 60, 10, 300) * 1000;
-const UPBIT_MAX_ORDER_KRW = numberEnv("UPBIT_MAX_ORDER_KRW", 100_000, 5_000, 1_000_000_000);
-const UPBIT_MAX_DAILY_BUY_KRW = numberEnv("UPBIT_MAX_DAILY_BUY_KRW", 300_000, 5_000, 10_000_000_000);
-const BINANCE_MAX_ORDER_USDT = numberEnv("BINANCE_MAX_ORDER_USDT", 100, 5, 10_000_000);
-const BINANCE_MAX_DAILY_BUY_USDT = numberEnv("BINANCE_MAX_DAILY_BUY_USDT", 300, 5, 100_000_000);
+// Monetary exposure is controlled by the dashboard allocation settings in the autotrader.
+// The gateway validates order shape and exchange rules but adds no hidden monetary cap.
 const BOT_IDENTIFIER_PREFIX = "tb-";
 
 const nonceCache = new Map();
@@ -178,12 +176,8 @@ function refreshDailyCounter(exchange) {
   const today = exchange === "upbit" ? kstDate() : utcDate();
   if (state.dailyKey !== today) { state.dailyKey = today; state.dailyBuy = 0; }
 }
-function enforceBuyCaps(exchange, notional) {
-  refreshDailyCounter(exchange);
-  const maxOrder = exchange === "upbit" ? UPBIT_MAX_ORDER_KRW : BINANCE_MAX_ORDER_USDT;
-  const maxDaily = exchange === "upbit" ? UPBIT_MAX_DAILY_BUY_KRW : BINANCE_MAX_DAILY_BUY_USDT;
-  if (notional > maxOrder + 1e-8) throw new Error(`order exceeds gateway ${exchange} max order ${maxOrder}`);
-  if (rateState[exchange].dailyBuy + notional > maxDaily + 1e-8) throw new Error(`daily gateway ${exchange} buy cap ${maxDaily} exceeded`);
+function enforceBuyCaps(_exchange, notional) {
+  if (!(Number(notional) > 0 && Number.isFinite(Number(notional)))) throw new Error("invalid buy notional");
 }
 function recordBuy(exchange, notional) { refreshDailyCounter(exchange); rateState[exchange].dailyBuy += Math.max(0, Number(notional) || 0); }
 
@@ -771,8 +765,8 @@ function createServer() {
           scheduler: schedulerState,
           intervals: { scan_seconds: SCAN_INTERVAL_MS / 1000, monitor_seconds: MONITOR_INTERVAL_MS / 1000 },
           limits: {
-            upbit: { max_order_krw: UPBIT_MAX_ORDER_KRW, max_daily_buy_krw: UPBIT_MAX_DAILY_BUY_KRW },
-            binance: { max_order_usdt: BINANCE_MAX_ORDER_USDT, max_daily_buy_usdt: BINANCE_MAX_DAILY_BUY_USDT },
+            source: "operator_allocation",
+            hidden_monetary_caps: false,
           },
         });
       }

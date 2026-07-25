@@ -57,17 +57,17 @@ Deno.test("Thin ask depth forces a skip regardless of edge", () => {
   assertEquals(r.skipReason, "thin_ask_depth");
 });
 
-Deno.test("scalpOrderCap = 10% of capital", () => {
-  assertAlmostEquals(scalpOrderCap(1_000_000, DEFAULT_SCALP_SAFETY), 100_000, 1e-6);
+Deno.test("scalpOrderCap follows the full operator allocation", () => {
+  assertAlmostEquals(scalpOrderCap(1_000_000, DEFAULT_SCALP_SAFETY), 1_000_000, 1e-6);
 });
 
-Deno.test("entry gate clamps order to per-order cap", () => {
+Deno.test("entry gate adds no hidden cap inside the operator allocation", () => {
   const r = evaluateEntryGate(
     { capitalQuote: 1_000_000, requestedNotional: 500_000, day: { realizedPnlQuote: 0, consecutiveLosses: 0 } },
     DEFAULT_SCALP_SAFETY,
   );
   assert(r.allow);
-  assertAlmostEquals(r.cappedNotional, 100_000, 1e-6);
+  assertAlmostEquals(r.cappedNotional, 500_000, 1e-6);
 });
 
 Deno.test("daily loss limit halts entries", () => {
@@ -82,7 +82,7 @@ Deno.test("daily loss limit halts entries", () => {
 Deno.test("consecutive losses halt entries", () => {
   const r = evaluateEntryGate(
     { capitalQuote: 1_000_000, requestedNotional: 50_000, day: { realizedPnlQuote: -1000, consecutiveLosses: 4 } },
-    DEFAULT_SCALP_SAFETY,
+    { ...DEFAULT_SCALP_SAFETY, maxConsecutiveLosses: 4 },
   );
   assertEquals(r.allow, false);
   assertEquals(r.haltReason, "consecutive_losses");
