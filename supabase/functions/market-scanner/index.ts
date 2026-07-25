@@ -303,6 +303,7 @@ function parseRisk(
       ? runtime?.exitPolicy
       : "SCALE_OUT",
     strategy: (String(body.strategy) === "SCALP" || Deno.env.get("TRADING_STRATEGY") === "SCALP") ? "SCALP" : "TREND",
+    scalpOverrides: (body.scalp_overrides && typeof body.scalp_overrides === "object") ? body.scalp_overrides as Record<string, number> : undefined,
   };
 }
 
