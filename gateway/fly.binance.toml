@@ -1,0 +1,35 @@
+primary_region = "cdg"
+
+# Dedicated Binance order gateway (Paris/cdg).
+# The Upbit gateway (gateway/fly.toml, nrt) keeps SCHEDULER_ENABLED=true and remains the
+# only scheduler. This machine is order-execution only for Binance, so SCHEDULER_ENABLED=false
+# to avoid double-triggering the autotrader scan/monitor cycles.
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  SCHEDULER_ENABLED = "false"
+  AUTO_SCAN_INTERVAL_SECONDS = "300"
+  AUTO_MONITOR_INTERVAL_SECONDS = "15"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+[[http_service.checks]]
+  interval = "15s"
+  timeout = "3s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/health"
