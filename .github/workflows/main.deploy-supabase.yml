@@ -54,11 +54,11 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
           SCAN_ACCESS_TOKEN: ${{ secrets.SCAN_ACCESS_TOKEN }}
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
           FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
         run: |
-          for name in SUPABASE_ACCESS_TOKEN SUPABASE_PROJECT_REF SCAN_ACCESS_TOKEN SUPABASE_DB_PASSWORD LEARNING_ACCESS_TOKEN FLY_APP_NAME; do
+          for name in SUPABASE_ACCESS_TOKEN SUPABASE_PROJECT_REF SCAN_ACCESS_TOKEN SUPABASE_DB_URL LEARNING_ACCESS_TOKEN FLY_APP_NAME; do
             if [ -z "${!name:-}" ]; then echo "::error::GitHub repository secret ${name} is missing."; exit 1; fi
           done
           for name in SCAN_ACCESS_TOKEN LEARNING_ACCESS_TOKEN; do
@@ -101,30 +101,43 @@ jobs:
       - name: Apply database migrations
         shell: bash
         env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           set -euo pipefail
 
-          # Supabase 공식 권장 방식: DB 비밀번호는 CLI 인자가 아니라
-          # SUPABASE_DB_PASSWORD 환경변수로 전달한다.
-          supabase link --project-ref "${SUPABASE_PROJECT_REF}"
+          # GitHub-hosted runners are IPv4-oriented. Use the exact Session pooler
+          # connection string copied from Supabase Connect (port 5432), rather than
+          # allowing `supabase link` to synthesize a host/user combination.
+          python - <<'PY'
+          import os
+          from urllib.parse import urlparse
 
-          # Supavisor 풀러의 간헐적 SASL 캐시 오류에 대비해 제한적으로 재시도한다.
-          for attempt in 1 2 3; do
-            echo "Database migration attempt ${attempt}/3"
-            if supabase db push; then
-              exit 0
-            fi
+          project_ref = os.environ["SUPABASE_PROJECT_REF"].strip()
+          raw = os.environ["SUPABASE_DB_URL"].strip()
+          parsed = urlparse(raw)
 
-            if [ "${attempt}" -eq 3 ]; then
-              echo "::error::Database migration failed after 3 attempts."
-              exit 1
-            fi
+          if parsed.scheme not in {"postgres", "postgresql"}:
+              raise SystemExit("SUPABASE_DB_URL must start with postgres:// or postgresql://")
+          if not parsed.hostname or not parsed.hostname.endswith(".pooler.supabase.com"):
+              raise SystemExit("SUPABASE_DB_URL must be the Supabase Session pooler URL")
+          if parsed.port != 5432:
+              raise SystemExit("SUPABASE_DB_URL must use Session pooler port 5432")
+          expected_user = f"postgres.{project_ref}"
+          if parsed.username != expected_user:
+              raise SystemExit(
+                  f"SUPABASE_DB_URL username must be {expected_user}; got {parsed.username!r}"
+              )
+          if not parsed.password or parsed.password == "[YOUR-PASSWORD]":
+              raise SystemExit("SUPABASE_DB_URL must contain the real URL-encoded database password")
 
-            sleep $((attempt * 20))
-          done
+          print(
+              f"Validated Session pooler target: host={parsed.hostname}, "
+              f"port={parsed.port}, user={parsed.username}"
+          )
+          PY
+
+          supabase db push --db-url "${SUPABASE_DB_URL}"
 
       - name: Deploy Edge Functions
         shell: bash
