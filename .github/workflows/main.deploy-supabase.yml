@@ -57,8 +57,9 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
           FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
         run: |
-          for name in SUPABASE_ACCESS_TOKEN SUPABASE_PROJECT_REF SCAN_ACCESS_TOKEN SUPABASE_DB_URL LEARNING_ACCESS_TOKEN FLY_APP_NAME; do
+          for name in SUPABASE_ACCESS_TOKEN SUPABASE_PROJECT_REF SCAN_ACCESS_TOKEN SUPABASE_DB_URL LEARNING_ACCESS_TOKEN FLY_APP_NAME FLY_BINANCE_APP_NAME; do
             if [ -z "${!name:-}" ]; then echo "::error::GitHub repository secret ${name} is missing."; exit 1; fi
           done
           for name in SCAN_ACCESS_TOKEN LEARNING_ACCESS_TOKEN; do
@@ -73,10 +74,7 @@ jobs:
           SCAN_ACCESS_TOKEN: ${{ secrets.SCAN_ACCESS_TOKEN }}
           LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
           FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
-          UPBIT_MAX_ORDER_KRW: ${{ secrets.UPBIT_MAX_ORDER_KRW }}
-          UPBIT_MAX_DAILY_BUY_KRW: ${{ secrets.UPBIT_MAX_DAILY_BUY_KRW }}
-          BINANCE_MAX_ORDER_USDT: ${{ secrets.BINANCE_MAX_ORDER_USDT }}
-          BINANCE_MAX_DAILY_BUY_USDT: ${{ secrets.BINANCE_MAX_DAILY_BUY_USDT }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
         run: |
           allowed_origin="https://${GITHUB_REPOSITORY_OWNER,,}.github.io"
           autotrade_token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
@@ -89,12 +87,17 @@ jobs:
             "AUTOTRADE_ACCESS_TOKEN=${autotrade_token}" \
             "ORDER_GATEWAY_URL=https://${FLY_APP_NAME}.fly.dev" \
             "GATEWAY_SHARED_SECRET=${gateway_secret}" \
+            "BINANCE_ORDER_GATEWAY_URL=https://${FLY_BINANCE_APP_NAME}.fly.dev" \
+            "BINANCE_GATEWAY_SHARED_SECRET=${gateway_secret}" \
             "TRADING_MODE_DEFAULT=PAPER" \
-            "UPBIT_MAX_ORDER_KRW=${UPBIT_MAX_ORDER_KRW:-100000}" \
-            "UPBIT_MAX_DAILY_BUY_KRW=${UPBIT_MAX_DAILY_BUY_KRW:-300000}" \
-            "BINANCE_MAX_ORDER_USDT=${BINANCE_MAX_ORDER_USDT:-100}" \
-            "BINANCE_MAX_DAILY_BUY_USDT=${BINANCE_MAX_DAILY_BUY_USDT:-300}" \
-            "AUTO_SCAN_INTERVAL_SECONDS=300" \
+            "TRADING_STRATEGY=SCALP" \
+            "SCALP_PER_ORDER_PCT=100" \
+            "SCALP_DAILY_LOSS_PCT=20" \
+            "SCALP_MAX_SINGLE_LOSS_PCT=5" \
+            "SCALP_MAX_CONSECUTIVE_LOSSES=50" \
+            "SCALP_KILL_SWITCH=false" \
+            "SCALP_MAX_HOLDING_MINUTES=30" \
+            "AUTO_SCAN_INTERVAL_SECONDS=60" \
             "AUTO_MONITOR_INTERVAL_SECONDS=15" \
             --project-ref "${SUPABASE_PROJECT_REF}"
 
@@ -105,10 +108,6 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           set -euo pipefail
-
-          # GitHub-hosted runners are IPv4-oriented. Use the exact Session pooler
-          # connection string copied from Supabase Connect (port 5432), rather than
-          # allowing `supabase link` to synthesize a host/user combination.
           python - <<'PY'
           import os
           from urllib.parse import urlparse
@@ -125,18 +124,11 @@ jobs:
               raise SystemExit("SUPABASE_DB_URL must use Session pooler port 5432")
           expected_user = f"postgres.{project_ref}"
           if parsed.username != expected_user:
-              raise SystemExit(
-                  f"SUPABASE_DB_URL username must be {expected_user}; got {parsed.username!r}"
-              )
+              raise SystemExit(f"SUPABASE_DB_URL username must be {expected_user}; got {parsed.username!r}")
           if not parsed.password or parsed.password == "[YOUR-PASSWORD]":
               raise SystemExit("SUPABASE_DB_URL must contain the real URL-encoded database password")
-
-          print(
-              f"Validated Session pooler target: host={parsed.hostname}, "
-              f"port={parsed.port}, user={parsed.username}"
-          )
+          print(f"Validated Session pooler target: host={parsed.hostname}, port={parsed.port}, user={parsed.username}")
           PY
-
           supabase db push --db-url "${SUPABASE_DB_URL}"
 
       - name: Deploy Edge Functions

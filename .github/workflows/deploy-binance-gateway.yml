@@ -1,17 +1,20 @@
 name: Deploy Binance Static-IP Gateway (Paris)
 
-# Separate, Binance-only order gateway in Paris (cdg).
-# The existing Upbit gateway (Tokyo/nrt) and its workflow are NOT touched by this file.
-# This app carries ONLY Binance API keys and runs with the scheduler disabled.
-
+# Binance-only order gateway in Paris (cdg). It carries only Binance keys and
+# never runs the scheduler; Supabase routes Binance commands here explicitly.
 on:
   workflow_dispatch:
     inputs:
       setup_only:
-        description: "Allocate the cdg static egress IP first, before creating/restricting the Binance API key"
+        description: "Allocate the Paris static egress IP before restricting the Binance API key"
         required: true
         type: boolean
         default: true
+  push:
+    branches: [main]
+    paths:
+      - "gateway/**"
+      - ".github/workflows/deploy-binance-gateway.yml"
 
 permissions:
   contents: read
@@ -49,13 +52,10 @@ jobs:
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
           BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
         run: |
-          for name in FLY_API_TOKEN FLY_BINANCE_APP_NAME FLY_ORG SUPABASE_PROJECT_REF LEARNING_ACCESS_TOKEN; do
+          for name in FLY_API_TOKEN FLY_BINANCE_APP_NAME FLY_ORG SUPABASE_PROJECT_REF LEARNING_ACCESS_TOKEN BINANCE_API_KEY BINANCE_SECRET_KEY; do
             if [ -z "${!name:-}" ]; then echo "::error::GitHub repository secret ${name} is missing."; exit 1; fi
           done
           if [ "${#LEARNING_ACCESS_TOKEN}" -lt 32 ]; then echo "::error::LEARNING_ACCESS_TOKEN must be at least 32 characters."; exit 1; fi
-          if [ -z "${BINANCE_API_KEY:-}" ] || [ -z "${BINANCE_SECRET_KEY:-}" ]; then
-            echo "::error::BINANCE_API_KEY / BINANCE_SECRET_KEY are required for the Binance gateway."; exit 1
-          fi
 
       - name: Create Fly app if needed
         shell: bash
@@ -66,7 +66,7 @@ jobs:
         run: |
           if ! flyctl status -a "${FLY_BINANCE_APP_NAME}" >/dev/null 2>&1; then flyctl apps create "${FLY_BINANCE_APP_NAME}" --org "${FLY_ORG}"; fi
 
-      - name: Allocate one app-scoped static egress pair in Paris
+      - name: Allocate Paris static egress IP
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -74,7 +74,7 @@ jobs:
         run: |
           current="$(flyctl ips list -a "${FLY_BINANCE_APP_NAME}" 2>/dev/null || true)"
           if ! printf '%s\n' "$current" | grep -qi "egress"; then flyctl ips allocate-egress -a "${FLY_BINANCE_APP_NAME}" -r cdg -y; fi
-          echo "Register/restrict the EGRESS IPv4 below in the Binance API key settings ONLY:"
+          echo "Register/restrict the EGRESS IPv4 below in the Binance API settings only:"
           flyctl ips list -a "${FLY_BINANCE_APP_NAME}"
 
       - name: Resolve operating mode
@@ -82,16 +82,14 @@ jobs:
         shell: bash
         env:
           SETUP_ONLY: ${{ github.event.inputs.setup_only }}
-          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
-          BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           setup="${SETUP_ONLY:-true}"
-          bootstrap=false
-          if [ "$setup" != "true" ] && [ -n "${BINANCE_API_KEY:-}" ] && [ -n "${BINANCE_SECRET_KEY:-}" ]; then bootstrap=true; fi
+          if [ "$EVENT_NAME" = "push" ]; then setup=false; fi
           echo "setup_only=$setup" >> "$GITHUB_OUTPUT"
-          echo "bootstrap=$bootstrap" >> "$GITHUB_OUTPUT"
+          if [ "$setup" = "true" ]; then echo "bootstrap=false" >> "$GITHUB_OUTPUT"; else echo "bootstrap=true" >> "$GITHUB_OUTPUT"; fi
 
-      - name: Configure gateway secrets (Binance only, scheduler off)
+      - name: Configure Binance-only gateway secrets
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -100,10 +98,7 @@ jobs:
           LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
           BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
-          BINANCE_MAX_ORDER_USDT: ${{ secrets.BINANCE_MAX_ORDER_USDT }}
-          BINANCE_MAX_DAILY_BUY_USDT: ${{ secrets.BINANCE_MAX_DAILY_BUY_USDT }}
         run: |
-          # Same shared secret as the primary gateway so the autotrader's Binance-signed requests verify.
           gateway_secret="$(printf 'gateway:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
           autotrade_token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
           flyctl secrets set -a "${FLY_BINANCE_APP_NAME}" \
@@ -112,11 +107,12 @@ jobs:
             "AUTOTRADE_ACCESS_TOKEN=${autotrade_token}" \
             "SCHEDULER_ENABLED=false" \
             "BINANCE_API_KEY=${BINANCE_API_KEY}" \
-            "BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}" \
-            "BINANCE_MAX_ORDER_USDT=${BINANCE_MAX_ORDER_USDT:-100}" \
-            "BINANCE_MAX_DAILY_BUY_USDT=${BINANCE_MAX_DAILY_BUY_USDT:-300}"
+            "BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}"
+          # This Paris app must never carry Upbit credentials.
+          flyctl secrets unset -a "${FLY_BINANCE_APP_NAME}" \
+            UPBIT_ACCESS_KEY UPBIT_SECRET_KEY UPBIT_MAX_ORDER_KRW UPBIT_MAX_DAILY_BUY_KRW || true
 
-      - name: Deploy one always-on Binance gateway Machine (Paris)
+      - name: Deploy one always-on Binance gateway Machine
         shell: bash
         working-directory: gateway
         env:
@@ -130,7 +126,7 @@ jobs:
           flyctl scale count 1 -a "${FLY_BINANCE_APP_NAME}" --yes
           flyctl status -a "${FLY_BINANCE_APP_NAME}"
 
-      - name: Verify gateway health and show allowlist IP
+      - name: Verify Binance gateway health and allowlist IP
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -139,7 +135,7 @@ jobs:
           flyctl ips list -a "${FLY_BINANCE_APP_NAME}"
           curl --fail-with-body --retry 12 --retry-delay 3 "https://${FLY_BINANCE_APP_NAME}.fly.dev/health"
 
-      - name: Verify Binance account
+      - name: Verify Binance account through Paris gateway
         if: ${{ steps.mode.outputs.bootstrap == 'true' }}
         shell: bash
         env:

@@ -1,10 +1,10 @@
-name: Deploy Multi-Exchange Static-IP Gateway
+name: Deploy Upbit Static-IP Gateway (Tokyo)
 
 on:
   workflow_dispatch:
     inputs:
       setup_only:
-        description: "Allocate the static egress IP before creating/restricting exchange API keys"
+        description: "Allocate the Tokyo static egress IP before restricting the Upbit API key"
         required: true
         type: boolean
         default: true
@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-multi-exchange-order-gateway
+  group: deploy-upbit-order-gateway
   cancel-in-progress: false
 
 jobs:
@@ -62,7 +62,7 @@ jobs:
         run: |
           if ! flyctl status -a "${FLY_APP_NAME}" >/dev/null 2>&1; then flyctl apps create "${FLY_APP_NAME}" --org "${FLY_ORG}"; fi
 
-      - name: Allocate one app-scoped static egress pair
+      - name: Allocate Tokyo static egress IP
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -70,7 +70,7 @@ jobs:
         run: |
           current="$(flyctl ips list -a "${FLY_APP_NAME}" 2>/dev/null || true)"
           if ! printf '%s\n' "$current" | grep -qi "egress"; then flyctl ips allocate-egress -a "${FLY_APP_NAME}" -r nrt -y; fi
-          echo "Register/restrict the EGRESS IPv4 below in both Upbit and Binance API settings:"
+          echo "Register/restrict the EGRESS IPv4 below in the Upbit API settings only:"
           flyctl ips list -a "${FLY_APP_NAME}"
 
       - name: Resolve operating mode
@@ -81,22 +81,18 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           UPBIT_ACCESS_KEY: ${{ secrets.UPBIT_ACCESS_KEY }}
           UPBIT_SECRET_KEY: ${{ secrets.UPBIT_SECRET_KEY }}
-          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
-          BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
         run: |
           setup="${SETUP_ONLY:-true}"
           if [ "$EVENT_NAME" = "push" ]; then setup=false; fi
-          has_upbit=false; has_binance=false
+          has_upbit=false
           if [ -n "${UPBIT_ACCESS_KEY:-}" ] && [ -n "${UPBIT_SECRET_KEY:-}" ]; then has_upbit=true; fi
-          if [ -n "${BINANCE_API_KEY:-}" ] && [ -n "${BINANCE_SECRET_KEY:-}" ]; then has_binance=true; fi
           scheduler=false
-          if [ "$setup" != "true" ] && { [ "$has_upbit" = true ] || [ "$has_binance" = true ]; }; then scheduler=true; fi
+          if [ "$setup" != "true" ] && [ "$has_upbit" = true ]; then scheduler=true; fi
           echo "setup_only=$setup" >> "$GITHUB_OUTPUT"
           echo "scheduler=$scheduler" >> "$GITHUB_OUTPUT"
           echo "has_upbit=$has_upbit" >> "$GITHUB_OUTPUT"
-          echo "has_binance=$has_binance" >> "$GITHUB_OUTPUT"
 
-      - name: Configure gateway secrets
+      - name: Configure Upbit-only gateway secrets
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -105,12 +101,6 @@ jobs:
           LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
           UPBIT_ACCESS_KEY: ${{ secrets.UPBIT_ACCESS_KEY }}
           UPBIT_SECRET_KEY: ${{ secrets.UPBIT_SECRET_KEY }}
-          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
-          BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
-          UPBIT_MAX_ORDER_KRW: ${{ secrets.UPBIT_MAX_ORDER_KRW }}
-          UPBIT_MAX_DAILY_BUY_KRW: ${{ secrets.UPBIT_MAX_DAILY_BUY_KRW }}
-          BINANCE_MAX_ORDER_USDT: ${{ secrets.BINANCE_MAX_ORDER_USDT }}
-          BINANCE_MAX_DAILY_BUY_USDT: ${{ secrets.BINANCE_MAX_DAILY_BUY_USDT }}
           SCHEDULER: ${{ steps.mode.outputs.scheduler }}
         run: |
           autotrade_token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
@@ -120,18 +110,19 @@ jobs:
             "SUPABASE_URL=https://${SUPABASE_PROJECT_REF}.supabase.co"
             "AUTOTRADE_ACCESS_TOKEN=${autotrade_token}"
             "SCHEDULER_ENABLED=${SCHEDULER}"
-            "AUTO_SCAN_INTERVAL_SECONDS=300"
+            "AUTO_SCAN_INTERVAL_SECONDS=60"
             "AUTO_MONITOR_INTERVAL_SECONDS=15"
-            "UPBIT_MAX_ORDER_KRW=${UPBIT_MAX_ORDER_KRW:-100000}"
-            "UPBIT_MAX_DAILY_BUY_KRW=${UPBIT_MAX_DAILY_BUY_KRW:-300000}"
-            "BINANCE_MAX_ORDER_USDT=${BINANCE_MAX_ORDER_USDT:-100}"
-            "BINANCE_MAX_DAILY_BUY_USDT=${BINANCE_MAX_DAILY_BUY_USDT:-300}"
           )
-          if [ -n "${UPBIT_ACCESS_KEY:-}" ] && [ -n "${UPBIT_SECRET_KEY:-}" ]; then args+=("UPBIT_ACCESS_KEY=${UPBIT_ACCESS_KEY}" "UPBIT_SECRET_KEY=${UPBIT_SECRET_KEY}"); fi
-          if [ -n "${BINANCE_API_KEY:-}" ] && [ -n "${BINANCE_SECRET_KEY:-}" ]; then args+=("BINANCE_API_KEY=${BINANCE_API_KEY}" "BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}"); fi
+          if [ -n "${UPBIT_ACCESS_KEY:-}" ] && [ -n "${UPBIT_SECRET_KEY:-}" ]; then
+            args+=("UPBIT_ACCESS_KEY=${UPBIT_ACCESS_KEY}" "UPBIT_SECRET_KEY=${UPBIT_SECRET_KEY}")
+          fi
           flyctl secrets set -a "${FLY_APP_NAME}" "${args[@]}"
+          # This Tokyo app must never call Binance. Remove stale Binance credentials
+          # left by the old multi-exchange workflow.
+          flyctl secrets unset -a "${FLY_APP_NAME}" \
+            BINANCE_API_KEY BINANCE_SECRET_KEY BINANCE_MAX_ORDER_USDT BINANCE_MAX_DAILY_BUY_USDT || true
 
-      - name: Deploy one always-on gateway Machine
+      - name: Deploy one always-on Upbit gateway Machine
         shell: bash
         working-directory: gateway
         env:
@@ -145,7 +136,7 @@ jobs:
           flyctl scale count 1 -a "${FLY_APP_NAME}" --yes
           flyctl status -a "${FLY_APP_NAME}"
 
-      - name: Verify gateway health and show allowlist IP
+      - name: Verify Upbit gateway health and allowlist IP
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -154,22 +145,17 @@ jobs:
           flyctl ips list -a "${FLY_APP_NAME}"
           curl --fail-with-body --retry 12 --retry-delay 3 "https://${FLY_APP_NAME}.fly.dev/health"
 
-      - name: Verify configured exchange accounts and bootstrap
+      - name: Verify Upbit account and bootstrap
         if: ${{ steps.mode.outputs.scheduler == 'true' }}
         shell: bash
         env:
           FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
           LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-          HAS_UPBIT: ${{ steps.mode.outputs.has_upbit }}
-          HAS_BINANCE: ${{ steps.mode.outputs.has_binance }}
         run: |
-          exchanges=""
-          if [ "$HAS_UPBIT" = true ]; then exchanges="upbit"; fi
-          if [ "$HAS_BINANCE" = true ]; then exchanges="${exchanges:+$exchanges,}binance"; fi
           autotrade_token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
           gateway_secret="$(printf 'gateway:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
-          node gateway/smoke.mjs "https://${FLY_APP_NAME}.fly.dev" "${gateway_secret}" "${exchanges}"
+          node gateway/smoke.mjs "https://${FLY_APP_NAME}.fly.dev" "${gateway_secret}" "upbit"
           curl --fail-with-body --retry 3 --retry-delay 5 --max-time 60 -X POST \
             -H "content-type: application/json" -H "x-autotrade-token: ${autotrade_token}" \
             -d '{"action":"bootstrap"}' \
