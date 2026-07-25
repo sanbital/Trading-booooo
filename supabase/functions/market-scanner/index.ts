@@ -1176,7 +1176,7 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
     // universe by 24h turnover before that load.
     const cap = Math.round(clamp(finite(Deno.env.get("SCALP_UNIVERSE_CAP"), 40), deepLimit, 120));
     eligible = [...eligible]
-      .sort((a, b) => finite(b.turnover_24h_quote) - finite(a.turnover_24h_quote))
+      .sort((a, b) => finite(b.turnover_24h_quote, 0) - finite(a.turnover_24h_quote, 0))
       .slice(0, cap);
   }
   const baseline15 = binance
