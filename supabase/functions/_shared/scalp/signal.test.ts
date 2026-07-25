@@ -53,3 +53,17 @@ Deno.test("missing support wall blocks when required", () => {
   assert(r.reasons.includes("no_support_wall"));
   assert(r.decision !== "BUY");
 });
+
+import { resolveScalpSignalConfig, SCALP_BOUNDS } from "./signal.ts";
+
+Deno.test("resolver clamps out-of-range overrides", () => {
+  const c = resolveScalpSignalConfig({ targetPct: 0.5, stopPct: 0.0001, minimumEdge: 99 });
+  assertEquals(c.targetPct, SCALP_BOUNDS.targetPct.max);
+  assertEquals(c.stopPct, SCALP_BOUNDS.stopPct.min);
+  assertEquals(c.minimumEdge, SCALP_BOUNDS.minimumEdge.max);
+});
+
+Deno.test("resolver enforces target > stop invariant", () => {
+  const c = resolveScalpSignalConfig({ targetPct: 0.003, stopPct: 0.005 });
+  if (!(c.targetPct > c.stopPct)) throw new Error("target must exceed stop");
+});
