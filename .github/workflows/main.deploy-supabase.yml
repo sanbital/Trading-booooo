@@ -1,36 +1,50 @@
-name: Deploy Supabase Market Scanner
+name: Deploy Supabase Trading Engine
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
+      - "supabase/functions/_shared/**"
       - "supabase/functions/market-scanner/**"
+      - "supabase/functions/market-learning/**"
+      - "supabase/functions/market-autotrader/**"
       - "supabase/config.toml"
-      - ".github/workflows/deploy-supabase.yml"
+      - "supabase/migrations/**"
+      - "deno.json"
+      - ".github/workflows/main.deploy-supabase.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: deploy-market-scanner
+  group: deploy-supabase-trading-engine
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Deploy market-scanner
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
 
-      - name: Setup Supabase CLI
-        uses: supabase/setup-cli@v2
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Validate TypeScript and tests
+        run: |
+          deno task check
+          deno task test
+          node --check gateway/server.mjs
+          node --test gateway/server.test.mjs
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
         with:
           version: 2.101.0
           github-token: ${{ github.token }}
@@ -41,18 +55,16 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
           SCAN_ACCESS_TOKEN: ${{ secrets.SCAN_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+          FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
         run: |
-          for name in SUPABASE_ACCESS_TOKEN SUPABASE_PROJECT_REF SCAN_ACCESS_TOKEN; do
-            if [ -z "${!name:-}" ]; then
-              echo "::error::GitHub repository secret ${name} is missing."
-              exit 1
-            fi
+          for name in SUPABASE_ACCESS_TOKEN SUPABASE_PROJECT_REF SCAN_ACCESS_TOKEN SUPABASE_DB_PASSWORD LEARNING_ACCESS_TOKEN FLY_APP_NAME; do
+            if [ -z "${!name:-}" ]; then echo "::error::GitHub repository secret ${name} is missing."; exit 1; fi
           done
-
-          if [ "${#SCAN_ACCESS_TOKEN}" -lt 32 ]; then
-            echo "::error::SCAN_ACCESS_TOKEN must be at least 32 characters."
-            exit 1
-          fi
+          for name in SCAN_ACCESS_TOKEN LEARNING_ACCESS_TOKEN; do
+            value="${!name}"; if [ "${#value}" -lt 32 ]; then echo "::error::${name} must be at least 32 characters."; exit 1; fi
+          done
 
       - name: Set Edge Function secrets
         shell: bash
@@ -60,21 +72,62 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
           SCAN_ACCESS_TOKEN: ${{ secrets.SCAN_ACCESS_TOKEN }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+          FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
+          UPBIT_MAX_ORDER_KRW: ${{ secrets.UPBIT_MAX_ORDER_KRW }}
+          UPBIT_MAX_DAILY_BUY_KRW: ${{ secrets.UPBIT_MAX_DAILY_BUY_KRW }}
+          BINANCE_MAX_ORDER_USDT: ${{ secrets.BINANCE_MAX_ORDER_USDT }}
+          BINANCE_MAX_DAILY_BUY_USDT: ${{ secrets.BINANCE_MAX_DAILY_BUY_USDT }}
         run: |
           allowed_origin="https://${GITHUB_REPOSITORY_OWNER,,}.github.io"
+          autotrade_token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
+          gateway_secret="$(printf 'gateway:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
           supabase secrets set \
             "SCAN_ACCESS_TOKEN=${SCAN_ACCESS_TOKEN}" \
             "ALLOWED_ORIGINS=${allowed_origin}" \
             "DEEP_SCAN_LIMIT=30" \
+            "LEARNING_ACCESS_TOKEN=${LEARNING_ACCESS_TOKEN}" \
+            "AUTOTRADE_ACCESS_TOKEN=${autotrade_token}" \
+            "ORDER_GATEWAY_URL=https://${FLY_APP_NAME}.fly.dev" \
+            "GATEWAY_SHARED_SECRET=${gateway_secret}" \
+            "TRADING_MODE_DEFAULT=PAPER" \
+            "UPBIT_MAX_ORDER_KRW=${UPBIT_MAX_ORDER_KRW:-100000}" \
+            "UPBIT_MAX_DAILY_BUY_KRW=${UPBIT_MAX_DAILY_BUY_KRW:-300000}" \
+            "BINANCE_MAX_ORDER_USDT=${BINANCE_MAX_ORDER_USDT:-100}" \
+            "BINANCE_MAX_DAILY_BUY_USDT=${BINANCE_MAX_DAILY_BUY_USDT:-300}" \
+            "AUTO_SCAN_INTERVAL_SECONDS=300" \
+            "AUTO_MONITOR_INTERVAL_SECONDS=15" \
             --project-ref "${SUPABASE_PROJECT_REF}"
 
-      - name: Deploy Edge Function
+      - name: Apply database migrations
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          supabase link --project-ref "${SUPABASE_PROJECT_REF}" --password "${SUPABASE_DB_PASSWORD}"
+          supabase db push --password "${SUPABASE_DB_PASSWORD}"
+
+      - name: Deploy Edge Functions
         shell: bash
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
-          supabase functions deploy market-scanner \
-            --project-ref "${SUPABASE_PROJECT_REF}" \
-            --no-verify-jwt \
-            --use-api
+          for fn in market-scanner market-learning market-autotrader; do
+            supabase functions deploy "$fn" --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
+          done
+
+      - name: Bootstrap autonomous trading configuration
+        continue-on-error: true
+        shell: bash
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        run: |
+          autotrade_token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
+          curl --fail-with-body --retry 3 --retry-delay 5 --max-time 60 -X POST \
+            -H "content-type: application/json" -H "x-autotrade-token: ${autotrade_token}" \
+            -d '{"action":"bootstrap"}' \
+            "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/market-autotrader"
