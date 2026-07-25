@@ -862,7 +862,7 @@ async function loadLearningRows(): Promise<LearningRow[]> {
       `scanner_candidates?decision=eq.BUY&select=id,created_at,market,exchange,decision,profile_version,period_score,net_rr,estimated_cost_pct,feature_vector,active_policy_key,scanner_signal_horizon_outcomes!inner(is_final,policy_outcomes)&scanner_signal_horizon_outcomes.is_final=eq.true&order=created_at.desc&limit=${MAX_FORWARD_ROWS}`,
     )).json() as Promise<any[]>,
     (await rest(
-      `trading_positions?candidate_id=not.is.null&state=eq.CLOSED&select=candidate_id,exchange,quote_currency,is_paper,average_entry_price,peak_price,trough_price,opened_at,closed_at,close_reason,realized_pnl_quote,realized_cost_quote,paid_fees_quote&order=closed_at.desc&limit=${MAX_FORWARD_ROWS}`,
+      `trading_positions?candidate_id=not.is.null&state=eq.CLOSED&select=candidate_id,exchange,quote_currency,is_paper,average_entry_price,peak_price,trough_price,opened_at,closed_at,close_reason,realized_pnl_quote,realized_cost_quote,paid_fees_quote,metadata&order=closed_at.desc&limit=${MAX_FORWARD_ROWS}`,
     )).json().catch(() => []) as Promise<any[]>,
   ]);
 
@@ -889,6 +889,7 @@ async function loadLearningRows(): Promise<LearningRow[]> {
   for (const position of traded || []) {
     const id = String(position.candidate_id || "");
     if (!id) continue;
+    if (String(position.close_reason || "").startsWith("MANUAL") || position.metadata?.exclude_from_learning === true) continue;
     const previous = actualByCandidate.get(id);
     // Real fills outrank paper fills; otherwise keep the latest closed position.
     if (!previous || (previous.is_paper === true && position.is_paper === false)) actualByCandidate.set(id, position);

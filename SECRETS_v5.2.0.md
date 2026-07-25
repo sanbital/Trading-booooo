@@ -1,0 +1,37 @@
+# Trading-booooo v5.2.0 GitHub Repository Secrets
+
+## 필수
+
+```text
+SCAN_ACCESS_TOKEN
+SUPABASE_ACCESS_TOKEN
+SUPABASE_PROJECT_REF
+SUPABASE_DB_URL
+LEARNING_ACCESS_TOKEN
+FLY_API_TOKEN
+FLY_APP_NAME
+FLY_ORG
+UPBIT_ACCESS_KEY
+UPBIT_SECRET_KEY
+BINANCE_API_KEY
+BINANCE_SECRET_KEY
+```
+
+## 대시보드 권장
+
+```text
+DASHBOARD_ACCESS_TOKEN
+```
+
+32자 이상의 별도 임의 문자열을 권장합니다. 미설정 시 배포 워크플로가 기존 `LEARNING_ACCESS_TOKEN`을 대시보드 토큰으로 사용합니다.
+
+## 선택 상한
+
+```text
+UPBIT_MAX_ORDER_KRW
+UPBIT_MAX_DAILY_BUY_KRW
+BINANCE_MAX_ORDER_USDT
+BINANCE_MAX_DAILY_BUY_USDT
+```
+
+API 키에는 자산조회·주문조회·현물 주문만 허용하고 출금 권한은 부여하지 않습니다.

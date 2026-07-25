@@ -1,5 +1,5 @@
-# Trading-booooo v5.1.0 배포
+# Trading-booooo v5.2.0 배포
 
-자동매매 설치 가이드는 [`DEPLOYMENT_AUTOTRADE.md`](./DEPLOYMENT_AUTOTRADE.md)를 사용하십시오.
+자동매매, 운영 대시보드, 거래소별 운용금, 수동 매도·출금 안전장치의 전체 설치 가이드는 [`DEPLOYMENT_AUTOTRADE.md`](./DEPLOYMENT_AUTOTRADE.md)를 사용하십시오.
 
-기존 스캐너만 계속 사용하려면 현재 GitHub Pages와 `Deploy Supabase Trading Engine` Workflow를 유지하면 됩니다. 자동매매를 켜려면 Fly.io 고정 IP 게이트웨이와 업비트·바이낸스 Spot API Key 설정이 추가로 필요합니다.
+최종 덮어쓰기 순서는 [`DEPLOYMENT_v5.2.0.md`](./DEPLOYMENT_v5.2.0.md), Secret 목록은 [`SECRETS_v5.2.0.md`](./SECRETS_v5.2.0.md)를 확인하십시오.

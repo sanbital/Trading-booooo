@@ -3,12 +3,12 @@ import crypto from "node:crypto";
 import dns from "node:dns";
 import { pathToFileURL } from "node:url";
 
-// Trading-booooo v5.1.0 static-egress order gateway.
+// Trading-booooo v5.2.0 static-egress order gateway.
 // It deliberately exposes only spot account/order primitives. There are no
 // withdrawal, transfer, margin, futures, leverage, or API-key management routes.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "5.1.0";
+const VERSION = "5.2.0";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
@@ -31,8 +31,8 @@ const BOT_IDENTIFIER_PREFIX = "tb-";
 
 const nonceCache = new Map();
 const rateState = {
-  upbit: { second: 0, count: 0, dailyKey: kstDate(), dailyBuy: 0 },
-  binance: { second: 0, count: 0, dailyKey: utcDate(), dailyBuy: 0 },
+  upbit: { groups: new Map(), dailyKey: kstDate(), dailyBuy: 0 },
+  binance: { groups: new Map(), dailyKey: utcDate(), dailyBuy: 0 },
 };
 const schedulerState = {
   startedAt: new Date().toISOString(),
@@ -142,13 +142,36 @@ function verifyGatewayRequest(req, rawBody) {
   nonceCache.set(String(nonce), now + REQUEST_TOLERANCE_MS * 2);
   return { ok: true };
 }
-function guardRate(exchange) {
+function upbitRateGroup(method, path, isPublic = false) {
+  if (isPublic) {
+    if (path.includes("/ticker")) return "ticker";
+    if (path.includes("/orderbook")) return "orderbook";
+    if (path.includes("/candles/")) return "candle";
+    if (path.includes("/trades/")) return "trade";
+    if (path.includes("/market")) return "market";
+    return "quotation";
+  }
+  if (method === "POST" && path === "/v1/orders") return "order";
+  if (method === "POST" && path === "/v1/orders/test") return "order-test";
+  return "exchange-default";
+}
+function localRateLimit(exchange, group) {
+  if (exchange === "upbit") {
+    if (group === "order" || group === "order-test") return 7; // official 8/s, keep one request headroom
+    if (["ticker", "orderbook", "candle", "trade", "market", "quotation"].includes(group)) return 9; // official 10/s
+    return 25; // exchange.default is 30/s
+  }
+  return 12;
+}
+function guardRate(exchange, group = "default") {
   const state = rateState[exchange];
   const second = Math.floor(Date.now() / 1000);
-  if (state.second !== second) { state.second = second; state.count = 0; }
-  state.count++;
-  const max = exchange === "upbit" ? 7 : 12;
-  if (state.count > max) throw Object.assign(new Error(`local ${exchange} rate guard exceeded`), { status: 429, code: "LOCAL_RATE_GUARD" });
+  const current = state.groups.get(group) || { second: 0, count: 0 };
+  if (current.second !== second) { current.second = second; current.count = 0; }
+  current.count++;
+  state.groups.set(group, current);
+  const max = localRateLimit(exchange, group);
+  if (current.count > max) throw Object.assign(new Error(`local ${exchange} ${group} rate guard exceeded`), { status: 429, code: "LOCAL_RATE_GUARD" });
 }
 function refreshDailyCounter(exchange) {
   const state = rateState[exchange];
@@ -181,7 +204,7 @@ async function parseResponse(response, exchange) {
 }
 
 async function upbitRequest(method, path, { query = {}, body = null, timeoutMs = 10_000 } = {}) {
-  guardRate("upbit");
+  guardRate("upbit", upbitRateGroup(method, path, false));
   const parameters = method === "GET" || method === "DELETE" ? query : (body || {});
   const encoded = encodedQueryString(query);
   const url = `${UPBIT_BASE}${path}${encoded ? `?${encoded}` : ""}`;
@@ -201,7 +224,7 @@ async function upbitRequest(method, path, { query = {}, body = null, timeoutMs =
   } finally { clearTimeout(timer); }
 }
 async function publicUpbit(path, query = {}) {
-  guardRate("upbit");
+  guardRate("upbit", upbitRateGroup("GET", path, true));
   const encoded = encodedQueryString(query);
   const response = await fetch(`${UPBIT_BASE}${path}${encoded ? `?${encoded}` : ""}`, { headers: { Accept: "application/json" } });
   return (await parseResponse(response, "Upbit public")).data;
@@ -209,6 +232,7 @@ async function publicUpbit(path, query = {}) {
 
 async function syncBinanceTime(force = false) {
   if (!force && Date.now() - lastBinanceTimeSyncAt < 10 * 60_000) return binanceTimeOffsetMs;
+  guardRate("binance", "rest");
   const started = Date.now();
   const response = await fetch(`${BINANCE_BASE}/api/v3/time`, { headers: { Accept: "application/json" } });
   const data = (await parseResponse(response, "Binance time")).data;
@@ -220,7 +244,7 @@ async function syncBinanceTime(force = false) {
   return binanceTimeOffsetMs;
 }
 async function publicBinance(path, query = {}, timeoutMs = 10_000) {
-  guardRate("binance");
+  guardRate("binance", "rest");
   const encoded = binanceQueryString(query);
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -232,7 +256,7 @@ async function binanceRequest(method, path, parameters = {}, { timeoutMs = 10_00
   if (!BINANCE_API_KEY || !BINANCE_SECRET_KEY) {
     throw Object.assign(new Error("BINANCE_API_KEY/BINANCE_SECRET_KEY are not configured"), { status: 503, code: "BINANCE_KEYS_MISSING" });
   }
-  guardRate("binance");
+  guardRate("binance", "rest");
   await syncBinanceTime(false);
   const signed = {
     ...parameters,
@@ -403,12 +427,12 @@ async function upbitCreateOrder(payload, waitForFinalMs = 2500) {
       try { normalized = await upbitGetOrder(identifier); } catch { throw error; }
     } else throw error;
   }
-  if (side === "bid" && type === "LIMIT" && normalized.executed_funds > 0) recordBuy("upbit", normalized.executed_funds);
   const deadline = Date.now() + Math.max(0, Math.min(5000, Number(waitForFinalMs) || 0));
   while (Date.now() < deadline && ["OPEN", "PARTIALLY_FILLED"].includes(normalized.status)) {
     await sleep(300);
     normalized = await upbitGetOrder(identifier);
   }
+  if (side === "bid" && type === "LIMIT" && normalized.executed_funds > 0) recordBuy("upbit", normalized.executed_funds);
   return { order: normalized, fill: fillSummary(normalized) };
 }
 async function upbitOrderTest(payload) {
@@ -501,12 +525,12 @@ async function binanceCreateOrder(payload, waitForFinalMs = 2500) {
       try { normalized = await binanceGetOrder(conformed.order.newClientOrderId, info.symbol); } catch { throw error; }
     } else throw error;
   }
-  if (conformed.order.side === "BUY" && normalized.executed_funds > 0) recordBuy("binance", normalized.executed_funds);
   const deadline = Date.now() + Math.max(0, Math.min(5000, Number(waitForFinalMs) || 0));
   while (Date.now() < deadline && ["OPEN", "PARTIALLY_FILLED"].includes(normalized.status)) {
     await sleep(250);
     normalized = await binanceGetOrder(conformed.order.newClientOrderId, info.symbol);
   }
+  if (conformed.order.side === "BUY" && normalized.executed_funds > 0) recordBuy("binance", normalized.executed_funds);
   return { order: normalized, fill: fillSummary(normalized), symbol_info: info };
 }
 async function binanceOrderTest(payload) {
@@ -757,6 +781,8 @@ export {
   createBinanceSignature,
   createUpbitJwt,
   floorStep,
+  upbitRateGroup,
+  localRateLimit,
   normalizeBinanceOrder,
   normalizeUpbitOrder,
   rawQueryString,

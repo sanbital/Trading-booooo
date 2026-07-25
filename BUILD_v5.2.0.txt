@@ -1,0 +1,31 @@
+Trading-booooo v5.2.0 final build
+
+Base: v5.1.0
+Included deployment hotfixes:
+- Supabase CLI pinned 2.109.1
+- SUPABASE_DB_URL Session pooler migration
+- Fly gateway working-directory config fix
+
+New operator system:
+- GitHub Pages private operator dashboard
+- Upbit KRW / Binance USDT full or fixed allocation
+- protected KRW and protected USDT reserves
+- manual trade, deposit, and withdrawal detection
+- actual-balance position reconciliation
+- manual-intervention outcomes excluded from learning
+- immediate dashboard resume and immediate combined scan
+
+Final hardening:
+- server-side LIVE and emergency confirmations
+- dashboard token kept in page memory only
+- disabled exchanges still monitor existing positions
+- quote-currency capital base excludes unrelated manual coin holdings
+- manual partial-sale accounting resets to remaining entry basis
+- Upbit API-group local rate guards with safety headroom
+- post-reconciliation buy-notional recording
+- PAPER and LIVE circuit statistics isolated
+- unresolved manual asset locks block resume
+
+Validation:
+- 81/81 automated tests passed
+- TypeScript, JavaScript, YAML, HTML, and private-secret scans passed

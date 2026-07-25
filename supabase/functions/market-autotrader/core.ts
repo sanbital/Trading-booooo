@@ -20,6 +20,14 @@ export type TradingSettings = {
   max_order_usdt: number;
   min_order_usdt: number;
   max_daily_buy_usdt: number;
+  upbit_allocation_mode: "ALL" | "FIXED";
+  upbit_allocation_krw: number;
+  upbit_reserve_krw: number;
+  binance_allocation_mode: "ALL" | "FIXED";
+  binance_allocation_usdt: number;
+  binance_reserve_usdt: number;
+  withdrawal_mode: boolean;
+  manual_intervention_required: boolean;
   max_daily_loss_pct: number;
   max_weekly_loss_pct: number;
   max_consecutive_losses: number;
@@ -29,6 +37,46 @@ export type TradingSettings = {
   max_new_entries_per_scan: number;
   suppress_cross_exchange_same_asset: boolean;
 };
+
+
+export type ManagedCapitalInput = {
+  totalEquityQuote?: number;
+  capitalBaseQuote?: number;
+  availableQuote: number;
+  openCostQuote: number;
+  allocationMode: "ALL" | "FIXED";
+  fixedAllocationQuote: number;
+  reserveQuote: number;
+};
+
+export type ManagedCapitalResult = {
+  capitalBaseQuote: number;
+  managedCapitalQuote: number;
+  managedAvailableQuote: number;
+  protectedReserveQuote: number;
+  openCostQuote: number;
+  allocationMode: "ALL" | "FIXED";
+};
+
+export function calculateManagedCapital(input: ManagedCapitalInput): ManagedCapitalResult {
+  const capitalBase = Math.max(0, finite(input.capitalBaseQuote, finite(input.totalEquityQuote)));
+  const available = Math.max(0, finite(input.availableQuote));
+  const openCost = Math.max(0, finite(input.openCostQuote));
+  const reserve = clamp(finite(input.reserveQuote), 0, capitalBase);
+  const usableEquity = Math.max(0, capitalBase - reserve);
+  const mode = input.allocationMode === "FIXED" ? "FIXED" : "ALL";
+  const requested = mode === "FIXED" ? Math.max(0, finite(input.fixedAllocationQuote)) : usableEquity;
+  const managedCapital = Math.min(usableEquity, requested);
+  const unallocatedWithinCap = Math.max(0, managedCapital - openCost);
+  return {
+    capitalBaseQuote: capitalBase,
+    managedCapitalQuote: managedCapital,
+    managedAvailableQuote: Math.min(available, unallocatedWithinCap),
+    protectedReserveQuote: reserve,
+    openCostQuote: openCost,
+    allocationMode: mode,
+  };
+}
 
 export type SizingInput = {
   equityQuote: number;
@@ -218,6 +266,71 @@ export function t1SellQuantity(initialQuantity: number, remainingQuantity: numbe
 export function nextTrailingStop(current: number | null | undefined, peak: number, distancePct: number, hardStop: number): number {
   const candidate = peak * (1 - clamp(distancePct, 0.1, 20) / 100);
   return Math.max(finite(current), finite(hardStop), candidate);
+}
+
+
+export function dangerousControlError(input: {
+  mode?: unknown;
+  emergencyLiquidation?: unknown;
+  confirmation?: unknown;
+}): string | null {
+  const mode = String(input.mode || "").toUpperCase();
+  const confirmation = String(input.confirmation || "");
+  if (mode === "LIVE_LIMITED" && confirmation !== "ENABLE_LIVE") {
+    return "LIVE_LIMITED requires confirmation ENABLE_LIVE";
+  }
+  if (input.emergencyLiquidation === true && confirmation !== "LIQUIDATE_NOW") {
+    return "emergency liquidation requires confirmation LIQUIDATE_NOW";
+  }
+  return null;
+}
+
+
+export function resumeSafetyError(input: {
+  emergencyLiquidation: boolean;
+  activePositionCount: number;
+  unresolvedManualCount?: number;
+}): string | null {
+  if (Math.max(0, finite(input.unresolvedManualCount)) > 0) {
+    return "manual account intervention is still unresolved; resume is blocked";
+  }
+  if (input.emergencyLiquidation && Math.max(0, finite(input.activePositionCount)) > 0) {
+    return "emergency liquidation still has active positions; resume is blocked";
+  }
+  return null;
+}
+
+export function externalQuoteIntervention(exchange: Exchange, externalDelta: number, withdrawalMode: boolean) {
+  const decrease = finite(externalDelta) < 0;
+  const direction = decrease ? "decreased" : "increased";
+  return {
+    pauseNewEntries: true,
+    manualInterventionRequired: !withdrawalMode,
+    reason: withdrawalMode
+      ? `WITHDRAWAL_MODE_BALANCE_${decrease ? "DECREASE" : "INCREASE"}`
+      : `${exchange}: quote balance ${direction} outside bot orders`,
+  };
+}
+
+
+export type ManualReconcileAccountingInput = {
+  initialQuantity: number;
+  actualQuantity: number;
+  originalEntryCostQuote: number;
+  originalEntryFeeQuote: number;
+};
+
+export function manualReconcileAccounting(input: ManualReconcileAccountingInput) {
+  const initial = Math.max(0, finite(input.initialQuantity));
+  const actual = clamp(finite(input.actualQuantity), 0, initial);
+  const remainingRatio = initial > 0 ? actual / initial : 0;
+  return {
+    remainingRatio,
+    remainingCostQuote: Math.max(0, finite(input.originalEntryCostQuote)) * remainingRatio,
+    remainingEntryFeeQuote: Math.max(0, finite(input.originalEntryFeeQuote)) * remainingRatio,
+    realizedProceedsQuote: 0,
+    realizedPnlQuote: 0,
+  };
 }
 
 export function baseAsset(exchange: Exchange, market: string): string {

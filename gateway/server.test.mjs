@@ -46,3 +46,15 @@ test("normalized orders use a common state model", () => {
   assert.equal(binance.status, "FILLED");
   assert.equal(binance.average_price, 10);
 });
+
+
+test("Upbit local rate guards follow API groups with headroom", () => {
+  assert.equal(module.upbitRateGroup("GET", "/v1/ticker", true), "ticker");
+  assert.equal(module.upbitRateGroup("GET", "/v1/orderbook", true), "orderbook");
+  assert.equal(module.upbitRateGroup("POST", "/v1/orders", false), "order");
+  assert.equal(module.upbitRateGroup("POST", "/v1/orders/test", false), "order-test");
+  assert.equal(module.upbitRateGroup("GET", "/v1/accounts", false), "exchange-default");
+  assert.equal(module.localRateLimit("upbit", "ticker"), 9);
+  assert.equal(module.localRateLimit("upbit", "order"), 7);
+  assert.equal(module.localRateLimit("upbit", "exchange-default"), 25);
+});

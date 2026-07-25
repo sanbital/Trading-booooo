@@ -1,10 +1,10 @@
-// Trading-booooo Market Scanner v5.1.0
+// Trading-booooo Market Scanner v5.2.0
 // Pure analysis engine. Public market data only; no order or account operations.
 
 import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-profile.ts";
 import type { EventRiskSnapshot } from "./event-risk.ts";
 
-export const ENGINE_VERSION = "5.1.0";
+export const ENGINE_VERSION = "5.2.0";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;

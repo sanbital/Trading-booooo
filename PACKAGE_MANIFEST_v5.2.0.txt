@@ -1,0 +1,28 @@
+Trading-booooo v5.2.0 final package
+Build date: 2026-07-25
+
+Primary additions
+- GitHub Pages operator dashboard
+- Upbit KRW full/fixed allocation and protected KRW reserve
+- Binance USDT full/fixed allocation and protected USDT reserve
+- Manual sell, deposit, withdrawal, and locked-asset reconciliation
+- Immediate operator resume followed by immediate combined scan
+- Manual intervention results excluded from strategy learning
+- Supabase Session Pooler deployment fix
+- Fly monorepo gateway path fix
+
+Safety
+- PAPER is the default mode
+- No withdrawal, transfer, futures, margin, leverage, or market-buy route
+- LIVE_LIMITED requires ENABLE_LIVE
+- Emergency liquidation requires LIQUIDATE_NOW
+- Unresolved manual asset locks and unfinished emergency liquidation block resume
+
+Validation
+- Gateway tests: 8/8
+- Scanner/backtest/learning/autotrader tests: 73/73
+- Total: 81/81
+- TypeScript, JavaScript, YAML, HTML, SQL marker, and secret scans passed
+- No live exchange order was executed during validation
+
+Start with DEPLOYMENT_v5.2.0.md.

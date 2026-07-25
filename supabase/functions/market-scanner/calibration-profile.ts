@@ -1,4 +1,4 @@
-// Trading-booooo v5.1.0 — active self-calibration profile.
+// Trading-booooo v5.2.0 — active self-calibration profile.
 //
 // The weekly walk-forward workflow may replace this file only when a challenger
 // passes rolling validation guards. HOLDOUT data is monitoring-only and never
@@ -65,7 +65,7 @@ const DEFAULT_BUCKETS: CalibrationBucket[] = [
 
 export const ACTIVE_CALIBRATION_PROFILE: CalibrationProfile = {
   schemaVersion: 2,
-  engineVersion: "5.1.0",
+  engineVersion: "5.2.0",
   generatedAt: "2026-07-24T00:00:00.000Z",
   source: "DEFAULT_PRIOR",
   promoted: false,

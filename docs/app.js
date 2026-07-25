@@ -110,7 +110,7 @@
   };
 
   function updateBrandVersion(engineVersion = "") {
-    const version = String(engineVersion || config.uiVersion || "5.1.0").replace(/^v/i, "");
+    const version = String(engineVersion || config.uiVersion || "5.2.0").replace(/^v/i, "");
     if (elements.brandSubtitle) {
       elements.brandSubtitle.textContent = `UPBIT KRW + BINANCE USDT SPOT · v${version}`;
     }
@@ -755,4 +755,328 @@
   }
 
   boot();
+})();
+
+(() => {
+  "use strict";
+
+  const config = window.TRADING_SCANNER_CONFIG || {};
+  const $ = id => document.getElementById(id);
+  const viewButtons = [...document.querySelectorAll("[data-view]")];
+  const scannerView = $("scanner-view");
+  const traderView = $("trader-view");
+  const login = $("trader-login");
+  const consoleView = $("trader-console");
+  const tokenInput = $("trader-token");
+  const loginStatus = $("trader-login-status");
+  const controlStatus = $("control-status");
+  const allocationStatus = $("allocation-status");
+  const traderAlert = $("trader-alert");
+  let token = "";
+  let pollTimer = null;
+  let currentStatus = null;
+  let allocationDirty = false;
+  let traderVisible = false;
+
+  const fmt = (value, digits = 2) => Number.isFinite(Number(value))
+    ? Number(value).toLocaleString("ko-KR", { maximumFractionDigits: digits })
+    : "—";
+  const money = (value, quote) => quote === "KRW" ? `${fmt(value, 0)}원` : `${fmt(value, 4)} USDT`;
+  const dateTime = value => value ? new Date(value).toLocaleString("ko-KR") : "—";
+  const escapeHtml = value => String(value ?? "")
+    .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+  const setHidden = (element, hidden) => element?.classList.toggle("hidden", hidden);
+
+  function endpoint() {
+    return `${String(config.supabaseUrl || "").replace(/\/$/, "")}/functions/v1/${config.autotraderFunctionName || "market-autotrader"}`;
+  }
+
+  async function request(body, timeoutMs = 60000) {
+    if (!token || token.length < 32) throw new Error("32자 이상의 DASHBOARD_ACCESS_TOKEN을 입력하세요.");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(endpoint(), {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "content-type": "application/json",
+          "x-autotrade-token": token,
+          ...(config.supabasePublishableKey ? { apikey: config.supabasePublishableKey } : {}),
+        },
+        body: JSON.stringify(body),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.ok === false) {
+        if (response.status === 401) lockDashboard("토큰이 올바르지 않습니다.");
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      return data;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function setView(view) {
+    traderVisible = view === "trader";
+    viewButtons.forEach(button => button.classList.toggle("active", button.dataset.view === view));
+    setHidden(scannerView, traderVisible);
+    setHidden(traderView, !traderVisible);
+    if (traderVisible && token && !currentStatus) unlockDashboard();
+    managePolling();
+  }
+
+  function managePolling() {
+    clearInterval(pollTimer);
+    pollTimer = null;
+    if (traderVisible && token && !consoleView?.classList.contains("hidden")) {
+      pollTimer = setInterval(() => loadStatus(true), 15000);
+    }
+  }
+
+  function lockDashboard(message = "") {
+    token = "";
+    if (tokenInput) tokenInput.value = "";
+    currentStatus = null;
+    setHidden(login, false);
+    setHidden(consoleView, true);
+    loginStatus.textContent = message;
+    clearInterval(pollTimer);
+  }
+
+  async function unlockDashboard() {
+    const entered = String(tokenInput?.value || token || "").trim();
+    if (entered.length < 32) {
+      loginStatus.textContent = "32자 이상의 토큰을 입력하세요.";
+      return;
+    }
+    token = entered;
+    loginStatus.textContent = "계좌와 엔진 상태를 확인하는 중입니다.";
+    try {
+      await loadStatus(false);
+      setHidden(login, true);
+      setHidden(consoleView, false);
+      loginStatus.textContent = "";
+      managePolling();
+    } catch (error) {
+      loginStatus.textContent = `접속 실패: ${error.message || error}`;
+    }
+  }
+
+  function accountFor(data, exchange) {
+    const row = data?.accounts?.[exchange] || {};
+    return { row, managed: row.managed || {}, quote: exchange === "upbit" ? "KRW" : "USDT" };
+  }
+
+  function renderAccount(data, exchange) {
+    const { row, managed, quote } = accountFor(data, exchange);
+    $(`${exchange}-equity`).textContent = row.error ? "연결 오류" : money(row.total_equity_quote, quote);
+    $(`${exchange}-available`).textContent = row.error ? "—" : money(row.available_quote, quote);
+    $(`${exchange}-managed`).textContent = row.error ? "—" : money(managed.managedCapitalQuote, quote);
+    $(`${exchange}-managed-available`).textContent = row.error ? "—" : money(managed.managedAvailableQuote, quote);
+  }
+
+  function renderAllocations(settings) {
+    if (allocationDirty) return;
+    $("upbit-enabled").checked = Boolean(settings.upbit_enabled);
+    $("binance-enabled").checked = Boolean(settings.binance_enabled);
+    $("upbit-allocation-mode").value = settings.upbit_allocation_mode || "ALL";
+    $("binance-allocation-mode").value = settings.binance_allocation_mode || "ALL";
+    $("upbit-allocation-value").value = Number(settings.upbit_allocation_krw || 0);
+    $("upbit-reserve-value").value = Number(settings.upbit_reserve_krw || 0);
+    $("binance-allocation-value").value = Number(settings.binance_allocation_usdt || 0);
+    $("binance-reserve-value").value = Number(settings.binance_reserve_usdt || 0);
+    toggleAllocationInputs();
+  }
+
+  function toggleAllocationInputs() {
+    $("upbit-allocation-value").disabled = $("upbit-allocation-mode").value !== "FIXED";
+    $("binance-allocation-value").disabled = $("binance-allocation-mode").value !== "FIXED";
+  }
+
+  function renderPositions(data) {
+    const rows = Array.isArray(data.positions) ? data.positions : [];
+    $("open-position-count").textContent = String(rows.length);
+    $("open-position-note").textContent = rows.length ? `${rows.filter(row => !row.is_paper).length}개 실거래` : "현재 보유 없음";
+    $("positions-body").innerHTML = rows.length ? rows.map(row => `
+      <tr>
+        <td>${row.exchange === "upbit" ? "UPBIT" : "BINANCE"}</td>
+        <td><strong>${escapeHtml(row.market)}</strong></td>
+        <td>${escapeHtml(row.state)}</td>
+        <td>${row.is_paper ? "PAPER" : "LIVE"}</td>
+        <td>${fmt(row.remaining_quantity, 8)}</td>
+        <td>${fmt(row.average_entry_price || row.planned_entry_price, 8)}</td>
+        <td>${fmt(row.stop_price, 8)}</td>
+        <td>${fmt(row.target_1, 8)}</td>
+        <td>${dateTime(row.max_holding_at)}</td>
+      </tr>`).join("") : '<tr><td colspan="9" class="muted">열린 포지션이 없습니다.</td></tr>';
+  }
+
+  function renderLearning(data) {
+    const active = data?.learning?.active_profile;
+    const metrics = active?.evidence?.metrics || active?.evidence || {};
+    const profile = active?.parameters || {};
+    $("learning-status").innerHTML = [
+      ["활성 프로필", active ? `v${active.version}` : "기본 안전 프로필"],
+      ["프로필 출처", active?.source || "WEEKLY BASELINE"],
+      ["Profit Factor", metrics.profit_factor ?? metrics.pf ?? "—"],
+      ["기대수익", metrics.expectancy_pct != null ? `${fmt(metrics.expectancy_pct, 3)}%` : "—"],
+      ["진입 최소점수", profile.min_score ?? profile.minScore ?? "—"],
+      ["학습 표본", active ? `${fmt(active.samples, 0)} / 검증 ${fmt(active.validation_samples, 0)}` : "—"],
+      ["목표함수", active?.objective != null ? fmt(active.objective, 4) : "—"],
+      ["최근 승격", active?.promoted_at ? dateTime(active.promoted_at) : "—"],
+    ].map(([label, value]) => `<div class="detail-row"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
+  }
+
+  function renderEvents(data) {
+    const events = Array.isArray(data.recent_events) ? data.recent_events.slice(0, 12) : [];
+    $("events-list").innerHTML = events.length ? events.map(row => `
+      <div class="event-item ${String(row.level || "").toLowerCase()}">
+        <strong>${escapeHtml(row.code)}</strong>
+        <p>${escapeHtml(row.message)}</p>
+        <small>${dateTime(row.created_at)}</small>
+      </div>`).join("") : '<p class="muted">기록된 이벤트가 없습니다.</p>';
+    const flows = Array.isArray(data.cash_flows) ? data.cash_flows.slice(0, 10) : [];
+    $("cashflow-list").innerHTML = flows.length ? flows.map(row => `
+      <div class="event-item warning">
+        <strong>${escapeHtml(row.flow_type)} · ${row.exchange === "upbit" ? "UPBIT" : "BINANCE"}</strong>
+        <p>${money(row.amount_quote, row.quote_currency)}</p>
+        <small>${dateTime(row.detected_at)}</small>
+      </div>`).join("") : '<p class="muted">수동 변경이나 외부 현금 흐름이 없습니다.</p>';
+  }
+
+  function renderStatus(data) {
+    currentStatus = data;
+    const settings = data.settings || {};
+    const mode = settings.mode || "—";
+    $("trader-mode").textContent = mode;
+    $("trader-mode").className = mode === "LIVE_LIMITED" ? "mode-live" : "mode-paper";
+    $("trader-mode-note").textContent = mode === "LIVE_LIMITED" ? "실제 주문 허용" : mode === "PAPER" ? "가상 체결·학습" : "운용 정지";
+    const paused = Boolean(settings.pause_new_entries || settings.withdrawal_mode || settings.manual_intervention_required || mode === "PAUSED");
+    $("entry-state").textContent = paused ? "중지" : "운용 중";
+    $("entry-state").className = paused ? "state-paused" : "state-running";
+    $("entry-state-note").textContent = settings.withdrawal_mode ? "출금 모드" : settings.manual_intervention_required ? "수동 변경 확인 필요" : settings.pause_new_entries ? "사용자 중지" : "신규 후보 자동 실행";
+    $("gateway-state").textContent = data.gateway?.ok ? "정상" : "오류";
+    $("gateway-state").className = data.gateway?.ok ? "state-running" : "state-paused";
+    $("gateway-heartbeat").textContent = settings.last_gateway_heartbeat_at ? `마지막 ${dateTime(settings.last_gateway_heartbeat_at)}` : "하트비트 없음";
+    $("operator-updated").textContent = `v${data.version || "5.2.0"} · ${new Date().toLocaleString("ko-KR")} 갱신`;
+    renderAccount(data, "upbit");
+    renderAccount(data, "binance");
+    renderAllocations(settings);
+    renderPositions(data);
+    renderLearning(data);
+    renderEvents(data);
+    const alerts = [];
+    if (settings.withdrawal_mode) alerts.push("출금 모드입니다. 신규 매수는 중지되어 있으며 출금 완료 후 ‘즉시 재개 + 지금 스캔’을 누르세요.");
+    if (settings.manual_intervention_required) alerts.push(`수동 거래가 감지되었습니다: ${settings.manual_event_reason || "계좌 잔고 변경"}. 장부는 실제 잔고로 조정되며 학습 표본에서 제외됩니다.`);
+    if (!data.gateway?.ok) alerts.push(`주문 게이트웨이 오류: ${data.gateway?.error || "상태 확인 실패"}`);
+    traderAlert.textContent = alerts.join(" ");
+    setHidden(traderAlert, alerts.length === 0);
+  }
+
+  async function loadStatus(silent = false) {
+    if (!silent) $("operator-updated").textContent = "상태 불러오는 중";
+    const data = await request({ action: "status" }, 45000);
+    renderStatus(data);
+    return data;
+  }
+
+  async function runAction(label, body, options = {}) {
+    const target = options.statusTarget || controlStatus;
+    target.textContent = `${label} 처리 중입니다.`;
+    try {
+      const result = await request(body, options.timeoutMs || 120000);
+      target.textContent = `${label} 완료`;
+      await loadStatus(true);
+      return result;
+    } catch (error) {
+      target.textContent = `${label} 실패: ${error.message || error}`;
+      throw error;
+    }
+  }
+
+  async function resumeNow() {
+    const button = $("resume-now");
+    button.disabled = true;
+    controlStatus.textContent = "계좌를 실제 잔고로 맞춘 뒤 즉시 재개합니다.";
+    try {
+      await request({ action: "resume" }, 120000);
+      controlStatus.textContent = "재개 완료. 대기시간 없이 지금 통합 스캔을 시작했습니다.";
+      await loadStatus(true);
+      try {
+        const scan = await request({ action: "scan" }, 330000);
+        controlStatus.textContent = scan.status === "SKIPPED"
+          ? `즉시 재개 완료 · 스캔은 ${scan.reason || "다른 작업 실행 중"}`
+          : "즉시 재개 및 통합 스캔 완료";
+      } catch (scanError) {
+        controlStatus.textContent = `운용은 즉시 재개됐지만 첫 스캔이 실패했습니다: ${scanError.message || scanError}`;
+      }
+      await loadStatus(true);
+    } catch (error) {
+      controlStatus.textContent = `즉시 재개 실패: ${error.message || error}`;
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function saveAllocation() {
+    const upbitMode = $("upbit-allocation-mode").value;
+    const binanceMode = $("binance-allocation-mode").value;
+    const upbitFixed = Number($("upbit-allocation-value").value || 0);
+    const binanceFixed = Number($("binance-allocation-value").value || 0);
+    const upbitReserve = Number($("upbit-reserve-value").value || 0);
+    const binanceReserve = Number($("binance-reserve-value").value || 0);
+    if (![upbitFixed, binanceFixed, upbitReserve, binanceReserve].every(value => Number.isFinite(value) && value >= 0)) {
+      throw new Error("운용금과 보호금에는 0 이상의 숫자만 입력하세요.");
+    }
+    if (upbitMode === "FIXED" && upbitFixed < 5000) throw new Error("업비트 선택 운용금은 최소 5,000 KRW입니다.");
+    if (binanceMode === "FIXED" && binanceFixed < 5) throw new Error("바이낸스 선택 운용금은 최소 5 USDT입니다.");
+    allocationStatus.textContent = "저장 중";
+    await request({
+      action: "control",
+      upbit_enabled: $("upbit-enabled").checked,
+      binance_enabled: $("binance-enabled").checked,
+      upbit_allocation_mode: upbitMode,
+      upbit_allocation_krw: upbitFixed,
+      upbit_reserve_krw: upbitReserve,
+      binance_allocation_mode: binanceMode,
+      binance_allocation_usdt: binanceFixed,
+      binance_reserve_usdt: binanceReserve,
+    });
+    allocationDirty = false;
+    allocationStatus.textContent = "저장 완료";
+    await loadStatus(true);
+    setTimeout(() => allocationStatus.textContent = "", 2500);
+  }
+
+  viewButtons.forEach(button => button.addEventListener("click", () => setView(button.dataset.view)));
+  $("unlock-trader")?.addEventListener("click", unlockDashboard);
+  tokenInput?.addEventListener("keydown", event => { if (event.key === "Enter") unlockDashboard(); });
+  $("lock-trader")?.addEventListener("click", () => lockDashboard("대시보드를 잠갔습니다."));
+  $("refresh-trader")?.addEventListener("click", () => loadStatus(false).catch(error => controlStatus.textContent = error.message));
+  $("pause-entries")?.addEventListener("click", () => runAction("신규 매수 중지", { action: "control", pause_new_entries: true }));
+  $("resume-now")?.addEventListener("click", resumeNow);
+  $("withdrawal-mode")?.addEventListener("click", async () => {
+    if (!confirm("출금 모드를 시작하면 신규 매수가 즉시 중지됩니다. 계속할까요?")) return;
+    await runAction("출금 모드", { action: "withdrawal_mode" });
+  });
+  $("reconcile-now")?.addEventListener("click", () => runAction("계좌 대조", { action: "reconcile" }, { timeoutMs: 120000 }));
+  $("set-paper-mode")?.addEventListener("click", () => runAction("PAPER 전환", { action: "control", mode: "PAPER", pause_new_entries: false }));
+  $("set-live-mode")?.addEventListener("click", async () => {
+    const confirmation = prompt("실제 주문을 허용하려면 ENABLE_LIVE를 입력하세요.");
+    if (confirmation !== "ENABLE_LIVE") return;
+    await runAction("LIVE_LIMITED 전환", { action: "control", mode: "LIVE_LIMITED", pause_new_entries: false, confirmation });
+  });
+  $("emergency-liquidate")?.addEventListener("click", async () => {
+    const confirmation = prompt("모든 봇 포지션을 시장가로 청산하려면 LIQUIDATE_NOW를 입력하세요.");
+    if (confirmation !== "LIQUIDATE_NOW") return;
+    await runAction("비상 청산 설정", { action: "control", pause_new_entries: true, emergency_liquidation: true, confirmation });
+    await runAction("비상 청산 실행", { action: "monitor" }, { timeoutMs: 120000 });
+  });
+  $("save-allocation")?.addEventListener("click", () => saveAllocation().catch(error => allocationStatus.textContent = `저장 실패: ${error.message || error}`));
+  ["upbit-allocation-mode", "binance-allocation-mode"].forEach(id => $(id)?.addEventListener("change", () => { allocationDirty = true; toggleAllocationInputs(); }));
+  ["upbit-enabled", "binance-enabled", "upbit-allocation-value", "upbit-reserve-value", "binance-allocation-value", "binance-reserve-value"].forEach(id => $(id)?.addEventListener("input", () => allocationDirty = true));
+
+  setView("scanner");
 })();

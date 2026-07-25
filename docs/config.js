@@ -2,10 +2,11 @@
 // Publishable(또는 기존 Anon) Key는 브라우저용 공개 키입니다.
 // Service Role / Secret Key / SCAN_ACCESS_TOKEN은 절대 이 파일에 넣지 마세요.
 window.TRADING_SCANNER_CONFIG = {
-  uiVersion: "5.1.0",
+  uiVersion: "5.2.0",
   supabaseUrl: "https://etaajwpernzrcdrifdnw.supabase.co",
   supabasePublishableKey: "sb_publishable_FLldZQ4AurlgETbjZp6uVQ_qrSXReHX",
   functionName: "market-scanner",
+  autotraderFunctionName: "market-autotrader",
   requestTimeoutMs: 140000,
   defaultCapitalKrw: 500000,
   defaultRiskPct: 1,

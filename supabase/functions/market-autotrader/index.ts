@@ -1,30 +1,37 @@
-// Trading-booooo v5.1.0 — autonomous Upbit KRW + Binance USDT spot orchestrator.
+// Trading-booooo v5.2.0 — autonomous Upbit KRW + Binance USDT spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
   adjustedPlanForFill,
   baseAsset,
+  calculateManagedCapital,
   calculatePositionSize,
   clamp,
   decideExit,
+  dangerousControlError,
   evaluateCircuit,
+  externalQuoteIntervention,
   finite,
   floorToStep,
+  manualReconcileAccounting,
   nextTrailingStop,
   normalizedOrderState,
   quoteCurrency,
+  resumeSafetyError,
   t1SellQuantity,
   type Exchange,
   type TradingMode,
   type TradingSettings,
 } from "./core.ts";
 
-const VERSION = "5.1.0";
+const VERSION = "5.2.0";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const SERVICE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
+const DASHBOARD_TOKEN = env("DASHBOARD_ACCESS_TOKEN") || env("LEARNING_ACCESS_TOKEN");
 const GATEWAY_URL = env("ORDER_GATEWAY_URL").replace(/\/$/, "");
 const GATEWAY_SECRET = env("GATEWAY_SHARED_SECRET");
+const DASHBOARD_ORIGIN = env("ALLOWED_ORIGINS").split(",")[0] || "*";
 const DEFAULT_MODE = parseMode(env("TRADING_MODE_DEFAULT") || "PAPER");
 const MAX_SCAN_SECONDS = 280;
 const LIVE_MAX_SPREAD_BPS = clamp(finite(env("LIVE_MAX_SPREAD_BPS"), 25), 5, 50);
@@ -104,14 +111,25 @@ function safeEqual(left: string, right: string): boolean {
 }
 function authorized(request: Request): boolean {
   const provided = (request.headers.get("x-autotrade-token") || "").trim();
-  return AUTOTRADE_TOKEN.length >= 32 && provided.length > 0 && safeEqual(AUTOTRADE_TOKEN, provided);
+  if (!provided) return false;
+  return (AUTOTRADE_TOKEN.length >= 32 && safeEqual(AUTOTRADE_TOKEN, provided)) ||
+    (DASHBOARD_TOKEN.length >= 32 && safeEqual(DASHBOARD_TOKEN, provided));
 }
+const CORS_HEADERS = {
+  "access-control-allow-origin": DASHBOARD_ORIGIN,
+  "access-control-allow-methods": "POST, OPTIONS",
+  "access-control-allow-headers": "content-type, x-autotrade-token, apikey, authorization",
+  "access-control-max-age": "86400",
+};
 function response(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...CORS_HEADERS, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
 }
 function requiredConfiguration() {
   const missing: string[] = [];
-  for (const [name, value] of Object.entries({ SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY: SERVICE_KEY, AUTOTRADE_ACCESS_TOKEN: AUTOTRADE_TOKEN, ORDER_GATEWAY_URL: GATEWAY_URL, GATEWAY_SHARED_SECRET: GATEWAY_SECRET })) if (!value) missing.push(name);
+  for (const [name, value] of Object.entries({ SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY: SERVICE_KEY, AUTOTRADE_ACCESS_TOKEN: AUTOTRADE_TOKEN, DASHBOARD_ACCESS_TOKEN: DASHBOARD_TOKEN, ORDER_GATEWAY_URL: GATEWAY_URL, GATEWAY_SHARED_SECRET: GATEWAY_SECRET })) if (!value) missing.push(name);
   if (missing.length) throw new Error(`missing configuration: ${missing.join(", ")}`);
 }
 function dbHeaders(extra: Record<string, string> = {}): HeadersInit {
@@ -166,6 +184,9 @@ function defaultSettings(): TradingSettings & JsonRecord {
     max_order_usdt: clamp(finite(env("BINANCE_MAX_ORDER_USDT"), 100), 5, 10_000_000),
     min_order_usdt: clamp(finite(env("BINANCE_MIN_ORDER_USDT"), 10), 5, 1000),
     max_daily_buy_usdt: clamp(finite(env("BINANCE_MAX_DAILY_BUY_USDT"), 300), 5, 100_000_000),
+    upbit_allocation_mode: "ALL", upbit_allocation_krw: 0, upbit_reserve_krw: 0,
+    binance_allocation_mode: "ALL", binance_allocation_usdt: 0, binance_reserve_usdt: 0,
+    withdrawal_mode: false, manual_intervention_required: false, manual_event_reason: null,
     max_daily_loss_pct: 1.5, max_weekly_loss_pct: 3, max_consecutive_losses: 3,
     entry_ttl_seconds: 180,
     full_scan_interval_seconds: clamp(finite(env("AUTO_SCAN_INTERVAL_SECONDS"), 300), 300, 3600),
@@ -195,6 +216,14 @@ async function withLease<T>(name: string, seconds: number, work: () => Promise<T
   if (await rpc("acquire_trading_lease", { p_name: name, p_owner: owner, p_seconds: seconds }) !== true) return null;
   try { return await work(); } finally { await rpc("release_trading_lease", { p_name: name, p_owner: owner }).catch(() => null); }
 }
+async function withLeaseRetry<T>(name: string, seconds: number, attempts: number, delayMs: number, work: () => Promise<T>): Promise<T | null> {
+  for (let attempt = 1; attempt <= Math.max(1, attempts); attempt++) {
+    const result = await withLease(name, seconds, work);
+    if (result != null) return result;
+    if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return null;
+}
 
 function dayBoundary(exchange: Exchange, daysAgo = 0): string {
   const offset = exchange === "upbit" ? 9 : 0;
@@ -207,16 +236,16 @@ function weekBoundary(exchange: Exchange): string {
   date.setUTCDate(date.getUTCDate() - day + 1); date.setUTCHours(0, 0, 0, 0);
   return new Date(date.getTime() - offset * 3600_000).toISOString();
 }
-async function accountStats(exchange: Exchange, equityQuote: number) {
+async function accountStats(exchange: Exchange, equityQuote: number, isPaper: boolean) {
   const [activeGlobal, activeExchange, todayGlobal, todayExchange, dailyBuyOrders, dailyClosed, weeklyClosed, recentClosed] = await Promise.all([
-    db("trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING)&select=id,exchange,market,base_asset"),
-    db(`trading_positions?exchange=eq.${exchange}&state=in.(ENTRY_PENDING,OPEN,EXITING)&select=id,market,base_asset`),
-    db(`trading_positions?created_at=gte.${encodeURIComponent(dayBoundary("upbit"))}&state=neq.CANCELLED&select=id`),
-    db(`trading_positions?exchange=eq.${exchange}&created_at=gte.${encodeURIComponent(dayBoundary(exchange))}&state=neq.CANCELLED&select=id`),
-    db(`trading_orders?exchange=eq.${exchange}&side=eq.BUY&requested_at=gte.${encodeURIComponent(dayBoundary(exchange))}&state=in.(APPLIED,EXCHANGE_DONE,EXCHANGE_PARTIAL_CANCELLED)&select=executed_funds_quote`),
-    db(`trading_positions?exchange=eq.${exchange}&closed_at=gte.${encodeURIComponent(dayBoundary(exchange))}&state=eq.CLOSED&select=realized_pnl_quote`),
-    db(`trading_positions?exchange=eq.${exchange}&closed_at=gte.${encodeURIComponent(weekBoundary(exchange))}&state=eq.CLOSED&select=realized_pnl_quote`),
-    db(`trading_positions?exchange=eq.${exchange}&state=eq.CLOSED&select=realized_pnl_quote&order=closed_at.desc&limit=20`),
+    db(`trading_positions?is_paper=eq.${isPaper}&state=in.(ENTRY_PENDING,OPEN,EXITING)&select=id,exchange,market,base_asset`),
+    db(`trading_positions?exchange=eq.${exchange}&is_paper=eq.${isPaper}&state=in.(ENTRY_PENDING,OPEN,EXITING)&select=id,market,base_asset`),
+    db(`trading_positions?is_paper=eq.${isPaper}&created_at=gte.${encodeURIComponent(dayBoundary("upbit"))}&state=neq.CANCELLED&select=id`),
+    db(`trading_positions?exchange=eq.${exchange}&is_paper=eq.${isPaper}&created_at=gte.${encodeURIComponent(dayBoundary(exchange))}&state=neq.CANCELLED&select=id`),
+    db(`trading_orders?exchange=eq.${exchange}&side=eq.BUY&requested_at=gte.${encodeURIComponent(dayBoundary(exchange))}&state=in.(APPLIED,EXCHANGE_DONE,EXCHANGE_PARTIAL_CANCELLED)&select=executed_funds_quote,trading_positions!inner(is_paper)&trading_positions.is_paper=eq.${isPaper}`),
+    db(`trading_positions?exchange=eq.${exchange}&is_paper=eq.${isPaper}&closed_at=gte.${encodeURIComponent(dayBoundary(exchange))}&state=eq.CLOSED&select=realized_pnl_quote`),
+    db(`trading_positions?exchange=eq.${exchange}&is_paper=eq.${isPaper}&closed_at=gte.${encodeURIComponent(weekBoundary(exchange))}&state=eq.CLOSED&select=realized_pnl_quote`),
+    db(`trading_positions?exchange=eq.${exchange}&is_paper=eq.${isPaper}&state=eq.CLOSED&select=realized_pnl_quote&order=closed_at.desc&limit=20`),
   ]);
   const dailyBoughtQuote = (dailyBuyOrders || []).reduce((sum: number, row: any) => sum + finite(row.executed_funds_quote), 0);
   const daily = (dailyClosed || []).reduce((sum: number, row: any) => sum + finite(row.realized_pnl_quote), 0);
@@ -243,8 +272,8 @@ async function runScanner(portfolios: Record<Exchange, any>, settings: TradingSe
       headers: { "content-type": "application/json", "x-autotrade-token": AUTOTRADE_TOKEN },
       body: JSON.stringify({
         action: "scan", exchange: "combined", operator_mode: "AUTOMATED", automation: true,
-        capital_krw: Math.max(10_000, finite(portfolios.upbit?.available_quote, 10_000)),
-        capital_usdt: Math.max(10, finite(portfolios.binance?.available_quote, 10)),
+        capital_krw: Math.max(10_000, finite(portfolios.upbit?.managed?.managedCapitalQuote, portfolios.upbit?.available_quote || 10_000)),
+        capital_usdt: Math.max(10, finite(portfolios.binance?.managed?.managedCapitalQuote, portfolios.binance?.available_quote || 10)),
         risk_pct: settings.risk_per_trade_pct,
         recommendation_valid_minutes: Math.max(1, Math.ceil(settings.entry_ttl_seconds / 60)),
         min_actionable_holding_hours: 1, max_unattended_hours: 24, require_precommitted_exit: true,
@@ -352,6 +381,41 @@ async function applyExitAccounting(position: Position, orderRow: any, fill: any,
   return { applied: Boolean(result?.applied), closed: Boolean(result?.closed), position: result?.position || position, fillPrice: price, quantity };
 }
 
+function allocationConfig(settings: TradingSettings, exchange: Exchange) {
+  return exchange === "upbit"
+    ? { mode: settings.upbit_allocation_mode || "ALL", fixed: finite(settings.upbit_allocation_krw), reserve: finite(settings.upbit_reserve_krw) }
+    : { mode: settings.binance_allocation_mode || "ALL", fixed: finite(settings.binance_allocation_usdt), reserve: finite(settings.binance_reserve_usdt) };
+}
+async function managedPortfolio(settings: TradingSettings, exchange: Exchange, portfolio: any) {
+  const paper = settings.mode !== "LIVE_LIMITED";
+  const active = await db(`trading_positions?exchange=eq.${exchange}&state=in.(ENTRY_PENDING,OPEN,EXITING)&is_paper=eq.${paper}&select=market,remaining_quantity,average_entry_price,planned_entry_price`) as any[];
+  let openCost = 0;
+  let botPositionValue = 0;
+  for (const row of active || []) {
+    const quantity = Math.max(0, finite(row.remaining_quantity));
+    const entry = Math.max(0, finite(row.average_entry_price, row.planned_entry_price));
+    const current = Math.max(0, finite(portfolio?.prices?.[row.market], entry));
+    openCost += quantity * entry;
+    botPositionValue += quantity * current;
+  }
+  // Capital allocation is quote-currency based: Upbit KRW and Binance USDT.
+  // Manual coin holdings are excluded; only quote cash/locked quote and bot positions count.
+  const capitalBaseQuote = Math.max(0, finite(portfolio.available_quote)) +
+    Math.max(0, finite(portfolio.locked_quote)) + botPositionValue;
+  const config = allocationConfig(settings, exchange);
+  const managed = calculateManagedCapital({
+    capitalBaseQuote,
+    availableQuote: finite(portfolio.available_quote),
+    // Use the more conservative of entry cost and current value so a winning
+    // position cannot make a fixed allocation appear to have free capacity.
+    openCostQuote: Math.max(openCost, botPositionValue),
+    allocationMode: config.mode === "FIXED" ? "FIXED" : "ALL",
+    fixedAllocationQuote: config.fixed,
+    reserveQuote: config.reserve,
+  });
+  return { ...portfolio, managed: { ...managed, botPositionValueQuote: botPositionValue } };
+}
+
 function exchangeLimits(settings: TradingSettings, exchange: Exchange) {
   return exchange === "upbit"
     ? { maxOrder: settings.max_order_krw, minOrder: settings.min_order_krw, quoteStep: 1000, dailyBuy: settings.max_daily_buy_krw }
@@ -398,9 +462,14 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   if (!Number.isFinite(spreadBps) || spreadBps > LIVE_MAX_SPREAD_BPS) return { entered: false, exchange, market: candidate.market, reason: `spread ${spreadBps.toFixed(1)}bp exceeds ${LIVE_MAX_SPREAD_BPS}bp` };
 
   const plan = candidatePlan(candidate); const rules = await symbolRules(exchange, candidate, plan); const limits = exchangeLimits(settings, exchange);
+  const managedPortfolioState = await managedPortfolio(settings, exchange, portfolio);
+  const managed = managedPortfolioState.managed;
+  if (finite(managed.managedAvailableQuote) < Math.max(limits.minOrder, rules.min_notional)) {
+    return { entered: false, exchange, market: candidate.market, reason: "managed allocation has no available buying power" };
+  }
   const maxOrder = Math.min(limits.maxOrder, plan.recommended > 0 ? plan.recommended : limits.maxOrder);
   const initial = calculatePositionSize({
-    equityQuote: finite(portfolio.total_equity_quote), availableQuote: finite(portfolio.available_quote), entryPrice: bestAsk, stopPrice: candidate.stop_price,
+    equityQuote: finite(managed.managedCapitalQuote), availableQuote: finite(managed.managedAvailableQuote), entryPrice: bestAsk, stopPrice: candidate.stop_price,
     maxPositionPct: settings.max_position_pct, riskPerTradePct: settings.risk_per_trade_pct,
     maxOrderQuote: maxOrder, minOrderQuote: Math.max(limits.minOrder, rules.min_notional), quoteStep: limits.quoteStep,
     extraLossPct: FEE_PCT[exchange] * 2 / 100 + 0.001,
@@ -410,7 +479,7 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   if (!depth.executable || depth.availableFunds < initial.notionalQuote * LIVE_MIN_DEPTH_BUFFER) return { entered: false, exchange, market: candidate.market, reason: `insufficient ask depth (${depth.availableFunds.toFixed(exchange === "upbit" ? 0 : 2)} ${quote})` };
   const entryPrice = tickRound(Math.min(maxEntry, depth.worstPrice), rules.price_tick, "down");
   const sizing = calculatePositionSize({
-    equityQuote: finite(portfolio.total_equity_quote), availableQuote: finite(portfolio.available_quote), entryPrice, stopPrice: candidate.stop_price,
+    equityQuote: finite(managed.managedCapitalQuote), availableQuote: finite(managed.managedAvailableQuote), entryPrice, stopPrice: candidate.stop_price,
     maxPositionPct: settings.max_position_pct, riskPerTradePct: settings.risk_per_trade_pct,
     maxOrderQuote: maxOrder, minOrderQuote: Math.max(limits.minOrder, rules.min_notional), quoteStep: limits.quoteStep,
     extraLossPct: FEE_PCT[exchange] * 2 / 100 + 0.001,
@@ -429,7 +498,7 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
     tick_size: rules.price_tick, quantity_step: rules.quantity_step, min_notional_quote: Math.max(limits.minOrder, rules.min_notional),
     t1_allocation_pct: plan.allocation, exit_policy: plan.exitPolicy, trailing_distance_pct: plan.trailingDistancePct,
     intended_horizon_hours: candidate.intended_horizon_hours, max_holding_at: maxHolding,
-    metadata: { cycle_id: cycleId, sizing, quote_at_entry: market, execution_depth: depth, live_spread_bps: spreadBps, engine_version: VERSION },
+    metadata: { cycle_id: cycleId, sizing, managed_allocation: managed, quote_at_entry: market, execution_depth: depth, live_spread_bps: spreadBps, engine_version: VERSION },
   }))[0] as Position;
 
   if (settings.mode !== "LIVE_LIMITED") {
@@ -466,15 +535,27 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   }
 }
 
-async function snapshotAccount(exchange: Exchange, portfolio: any, positions: Position[], prices: Record<string, number>) {
+async function snapshotAccount(exchange: Exchange, portfolio: any, positions: Position[], prices: Record<string, number>, settings: TradingSettings) {
   let openCost = 0; let unrealized = 0;
-  for (const position of positions.filter((row) => row.exchange === exchange)) {
+  const paper = settings.mode !== "LIVE_LIMITED";
+  for (const position of positions.filter((row) => row.exchange === exchange && row.is_paper === paper)) {
     const qty = finite(position.remaining_quantity); const entry = finite(position.average_entry_price); const current = finite(prices[position.market], entry);
     openCost += qty * entry; unrealized += qty * (current - entry);
   }
+  const botPositionValue = positions
+    .filter((row) => row.exchange === exchange && row.is_paper === paper)
+    .reduce((sum, position) => sum + Math.max(0, finite(position.remaining_quantity)) * Math.max(0, finite(prices[position.market], position.average_entry_price)), 0);
+  const capitalBaseQuote = Math.max(0, finite(portfolio.available_quote)) + Math.max(0, finite(portfolio.locked_quote)) + botPositionValue;
+  const config = allocationConfig(settings, exchange);
+  const managed = calculateManagedCapital({
+    capitalBaseQuote, availableQuote: finite(portfolio.available_quote), openCostQuote: Math.max(openCost, botPositionValue),
+    allocationMode: config.mode === "FIXED" ? "FIXED" : "ALL", fixedAllocationQuote: config.fixed, reserveQuote: config.reserve,
+  });
   await db("trading_account_snapshots", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({
     exchange, quote_currency: quoteCurrency(exchange), total_equity_quote: finite(portfolio.total_equity_quote), available_quote: finite(portfolio.available_quote), locked_quote: finite(portfolio.locked_quote),
-    bot_open_cost_quote: openCost, bot_unrealized_pnl_quote: unrealized, balances: portfolio.accounts || [], prices: { ...(portfolio.prices || {}), ...prices },
+    bot_open_cost_quote: openCost, bot_unrealized_pnl_quote: unrealized, capital_base_quote: managed.capitalBaseQuote, managed_capital_quote: managed.managedCapitalQuote,
+    managed_available_quote: managed.managedAvailableQuote, protected_reserve_quote: managed.protectedReserveQuote, allocation_mode: managed.allocationMode,
+    balances: portfolio.accounts || [], prices: { ...(portfolio.prices || {}), ...prices },
   }) });
 }
 async function sellPaper(position: Position, quantity: number, price: number, purpose: string, cycleId: string) {
@@ -561,28 +642,130 @@ async function reconcileExitPending(position: Position, cycleId: string) {
   }
 }
 
+async function reconcileManualReduction(position: Position, actualQuantity: number, currentPrice: number, cycleId: string) {
+  const previous = Math.max(0, finite(position.remaining_quantity));
+  const actual = Math.max(0, Math.min(previous, finite(actualQuantity)));
+  const missing = Math.max(0, previous - actual);
+  if (!(missing > Math.max(1e-10, previous * 1e-7))) return position;
+  const estimatedValue = missing * Math.max(0, finite(currentPrice, position.average_entry_price));
+  const dust = position.exchange === "upbit" ? 1000 : 1;
+  const closed = actual * Math.max(0, finite(currentPrice, position.average_entry_price)) < dust;
+  const entryOrder = (await db(`trading_orders?position_id=eq.${position.id}&purpose=eq.ENTRY&state=eq.APPLIED&select=executed_funds_quote,paid_fee_quote&order=created_at.asc&limit=1`).catch(() => []))[0];
+  const accounting = manualReconcileAccounting({
+    initialQuantity: finite(position.initial_quantity),
+    actualQuantity: closed ? 0 : actual,
+    originalEntryCostQuote: finite(entryOrder?.executed_funds_quote, position.realized_cost_quote),
+    originalEntryFeeQuote: finite(entryOrder?.paid_fee_quote),
+  });
+  const metadata = {
+    ...(position.metadata || {}),
+    exclude_from_learning: true,
+    manual_reconcile: { detected_at: new Date().toISOString(), previous_quantity: previous, actual_quantity: actual, missing_quantity: missing, estimated_value_quote: estimatedValue },
+  };
+  const values: JsonRecord = {
+    remaining_quantity: closed ? 0 : actual,
+    realized_cost_quote: accounting.remainingCostQuote,
+    realized_proceeds_quote: accounting.realizedProceedsQuote,
+    paid_fees_quote: accounting.remainingEntryFeeQuote,
+    realized_pnl_quote: accounting.realizedPnlQuote,
+    metadata,
+    ...(closed ? { state: "CLOSED", close_reason: "MANUAL_RECONCILE", closed_at: new Date().toISOString() } : {}),
+  };
+  const updated = (await patch("trading_positions", `id=eq.${position.id}`, values))[0] || { ...position, ...values };
+  await insert("trading_cash_flows", {
+    exchange: position.exchange, quote_currency: position.quote_currency, flow_type: "MANUAL_POSITION_REDUCTION",
+    amount_quote: estimatedValue, details: { position_id: position.id, market: position.market, base_asset: position.base_asset, previous_quantity: previous, actual_quantity: actual, estimated_price: currentPrice },
+  });
+  await event("MANUAL_POSITION_REDUCTION", `${position.exchange}:${position.market} manual balance reduction reconciled`, {
+    previous_quantity: previous, actual_quantity: actual, missing_quantity: missing, estimated_value_quote: estimatedValue, closed,
+  }, { cycleId, positionId: position.id, level: "CRITICAL" });
+  return updated;
+}
+
+async function detectExternalQuoteFlow(exchange: Exchange, portfolio: any, settings: TradingSettings & JsonRecord, cycleId: string) {
+  const rows = await db(`trading_account_snapshots?exchange=eq.${exchange}&select=available_quote,captured_at&order=captured_at.desc&limit=1`) as any[];
+  const last = rows?.[0];
+  if (!last) return { detected: false, delta: 0 };
+  const since = String(last.captured_at || "");
+  const orders = await db(`trading_orders?exchange=eq.${exchange}&state=eq.APPLIED&requested_at=gte.${encodeURIComponent(since)}&select=side,executed_funds_quote,paid_fee_quote,trading_positions!inner(is_paper)&trading_positions.is_paper=eq.false`) as any[];
+  let expectedOrderDelta = 0;
+  for (const order of orders || []) {
+    const funds = Math.max(0, finite(order.executed_funds_quote));
+    const fee = Math.max(0, finite(order.paid_fee_quote));
+    expectedOrderDelta += String(order.side).toUpperCase() === "SELL" ? funds - fee : -(funds + fee);
+  }
+  const previous = finite(last.available_quote);
+  const current = finite(portfolio.available_quote);
+  const expected = previous + expectedOrderDelta;
+  const externalDelta = current - expected;
+  const threshold = exchange === "upbit" ? 5000 : 5;
+  if (Math.abs(externalDelta) < threshold) return { detected: false, delta: externalDelta };
+  const flowType = externalDelta < 0 ? "EXTERNAL_DECREASE" : "EXTERNAL_INCREASE";
+  await insert("trading_cash_flows", {
+    exchange, quote_currency: quoteCurrency(exchange), flow_type: flowType, amount_quote: Math.abs(externalDelta),
+    details: { previous_available_quote: previous, expected_available_quote: expected, current_available_quote: current, bot_order_delta_quote: expectedOrderDelta, previous_snapshot_at: since, withdrawal_mode: settings.withdrawal_mode },
+  });
+  await event(flowType, `${exchange} external quote balance change observed; entries paused for operator review`, { external_delta_quote: externalDelta, previous, expected, current }, { cycleId, level: "CRITICAL" });
+  const intervention = externalQuoteIntervention(exchange, externalDelta, Boolean(settings.withdrawal_mode));
+  await patch("trading_settings", "id=eq.1", {
+    pause_new_entries: intervention.pauseNewEntries,
+    manual_intervention_required: intervention.manualInterventionRequired,
+    manual_event_reason: intervention.reason,
+    last_manual_event_at: new Date().toISOString(),
+  });
+  return { detected: true, delta: externalDelta, flow_type: flowType };
+}
+
 async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRecord) {
   const tracked = await db("trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING)&select=*&order=created_at.asc") as Position[];
   for (const position of tracked.filter((p) => p.state === "ENTRY_PENDING")) await reconcileEntryPending(position, cycleId);
   for (const position of tracked.filter((p) => p.state === "EXITING")) await reconcileExitPending(position, cycleId);
   const open = await db("trading_positions?state=eq.OPEN&select=*&order=created_at.asc") as Position[];
   const actions: any[] = []; const prices: Record<string, number> = {}; const portfolios: Partial<Record<Exchange, any>> = {};
+  const unresolvedManualAssets: string[] = [];
   for (const exchange of ["upbit", "binance"] as Exchange[]) {
     const exchangePositions = open.filter((p) => p.exchange === exchange);
-    if (!exchangePositions.length) continue;
+    const exchangeEnabled = exchange === "upbit" ? settings.upbit_enabled : settings.binance_enabled;
+    // Disabling an exchange blocks new entries only. Existing positions must remain monitored and exit-capable.
+    if (!exchangeEnabled && exchangePositions.length === 0) continue;
     const portfolio = await gateway(exchange, { action: "portfolio" }); portfolios[exchange] = portfolio;
-    const availableByAsset = new Map<string, number>();
-    for (const account of portfolio.accounts || []) availableByAsset.set(String(account.currency || "").toUpperCase(), Math.max(0, finite(account.balance) + finite(account.locked)));
-    const trackedByAsset = new Map<string, number>();
-    for (const position of exchangePositions.filter((p) => !p.is_paper)) trackedByAsset.set(position.base_asset, (trackedByAsset.get(position.base_asset) || 0) + position.remaining_quantity);
-    const mismatches = new Set<string>();
-    for (const [asset, quantity] of trackedByAsset) if ((availableByAsset.get(asset) || 0) + 1e-10 < quantity * 0.999999) mismatches.add(asset);
-    if (mismatches.size) {
-      await patch("trading_settings", "id=eq.1", { pause_new_entries: true });
-      await event("ACCOUNT_POSITION_MISMATCH", `${exchange} account balance below bot ledger; entries paused`, { exchange, assets: [...mismatches] }, { cycleId, level: "CRITICAL" });
+    await detectExternalQuoteFlow(exchange, portfolio, settings, cycleId);
+    const totalByAsset = new Map<string, number>();
+    const freeByAsset = new Map<string, number>();
+    for (const account of portfolio.accounts || []) {
+      const asset = String(account.currency || account.asset || "").toUpperCase();
+      const free = Math.max(0, finite(account.balance ?? account.free));
+      const locked = Math.max(0, finite(account.locked));
+      freeByAsset.set(asset, free);
+      totalByAsset.set(asset, free + locked);
     }
     const quotes = await Promise.all(exchangePositions.map(async (position) => [position.market, await marketQuote(exchange, position.market)] as const));
     for (const [market, quote] of quotes) prices[market] = finite(quote.current, (finite(quote.best_ask) + finite(quote.best_bid)) / 2);
+    const mismatches = new Set<string>();
+    for (const position of exchangePositions.filter((row) => !row.is_paper)) {
+      const expected = finite(position.remaining_quantity);
+      const actualTotal = totalByAsset.get(position.base_asset) || 0;
+      const actualFree = freeByAsset.get(position.base_asset) || 0;
+      if (actualTotal + 1e-10 < expected * 0.999999) {
+        mismatches.add(position.base_asset);
+        await reconcileManualReduction(position, actualTotal, prices[position.market], cycleId);
+      } else if (actualFree + 1e-10 < expected * 0.999999) {
+        // An OPEN bot position should not have its base asset locked. Treat a
+        // manual limit-sell or other external lock as intervention so the bot
+        // does not compete with the user's order or miss an exit silently.
+        mismatches.add(position.base_asset);
+        unresolvedManualAssets.push(`${exchange}:${position.base_asset}`);
+        await event("MANUAL_ASSET_LOCK", `${exchange}:${position.market} base asset is externally locked; entries and exits paused for review`, {
+          expected_quantity: expected, free_quantity: actualFree, total_quantity: actualTotal,
+        }, { cycleId, positionId: position.id, level: "CRITICAL" });
+      }
+    }
+    if (mismatches.size) {
+      await patch("trading_settings", "id=eq.1", {
+        pause_new_entries: true, manual_intervention_required: true, manual_event_reason: `${exchange}: ${[...mismatches].join(", ")}`, last_manual_event_at: new Date().toISOString(),
+      });
+      await event("ACCOUNT_POSITION_MISMATCH", `${exchange} manual position change detected; entries paused until dashboard resume`, { exchange, assets: [...mismatches] }, { cycleId, level: "CRITICAL" });
+    }
     for (const original of exchangePositions) {
       let position = original;
       if (!position.is_paper && mismatches.has(position.base_asset)) { actions.push({ exchange, market: position.market, action: "PAUSED", reason: "account mismatch" }); continue; }
@@ -598,9 +781,9 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
     }
   }
   const stillOpen = await db("trading_positions?state=eq.OPEN&select=*") as Position[];
-  for (const exchange of Object.keys(portfolios) as Exchange[]) await snapshotAccount(exchange, portfolios[exchange], stillOpen, prices);
+  for (const exchange of Object.keys(portfolios) as Exchange[]) await snapshotAccount(exchange, portfolios[exchange], stillOpen, prices, settings);
   await patch("trading_settings", "id=eq.1", { last_monitor_at: new Date().toISOString(), last_gateway_heartbeat_at: new Date().toISOString(), gateway_error_count: 0, ...(settings.emergency_liquidation && stillOpen.length === 0 ? { emergency_liquidation: false, pause_new_entries: true } : {}) });
-  return { positions: open.length, actions };
+  return { positions: open.length, actions, unresolved_manual_assets: unresolvedManualAssets };
 }
 
 async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord) {
@@ -609,12 +792,12 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
   const stats = {} as Record<Exchange, any>;
   const circuits = {} as Record<Exchange, any>;
   for (const exchange of exchanges) {
-    portfolios[exchange] = await gateway(exchange, { action: "portfolio" });
-    stats[exchange] = await accountStats(exchange, finite(portfolios[exchange].total_equity_quote));
+    portfolios[exchange] = await managedPortfolio(settings, exchange, await gateway(exchange, { action: "portfolio" }));
+    stats[exchange] = await accountStats(exchange, finite(portfolios[exchange].managed.managedCapitalQuote), settings.mode !== "LIVE_LIMITED");
     const limits = exchangeLimits(settings, exchange);
     circuits[exchange] = evaluateCircuit({
-      mode: settings.mode, configured: settings.configured, exchangeEnabled: true, pauseNewEntries: settings.pause_new_entries,
-      emergencyLiquidation: settings.emergency_liquidation, availableQuote: finite(portfolios[exchange].available_quote), minOrderQuote: limits.minOrder,
+      mode: settings.mode, configured: settings.configured, exchangeEnabled: true, pauseNewEntries: settings.pause_new_entries || settings.withdrawal_mode || settings.manual_intervention_required,
+      emergencyLiquidation: settings.emergency_liquidation, availableQuote: finite(portfolios[exchange].managed.managedAvailableQuote), minOrderQuote: limits.minOrder,
       openPositionsGlobal: stats[exchange].openGlobal, openPositionsExchange: stats[exchange].openExchange,
       entriesTodayGlobal: stats[exchange].entriesTodayGlobal, entriesTodayExchange: stats[exchange].entriesTodayExchange,
       dailyBoughtQuote: stats[exchange].dailyBoughtQuote, maxDailyBuyQuote: limits.dailyBuy,
@@ -659,26 +842,57 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
 }
 
 async function status(settings: TradingSettings & JsonRecord) {
-  const [positions, orders, cycles, snapshots] = await Promise.all([
+  const [positions, closedPositions, orders, cycles, snapshots, events, cashFlows, profiles] = await Promise.all([
     db("trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING)&select=*&order=created_at.desc"),
-    db("trading_orders?select=*&order=created_at.desc&limit=30"),
+    db("trading_positions?state=eq.CLOSED&select=*&order=closed_at.desc&limit=20"),
+    db("trading_orders?select=*&order=created_at.desc&limit=40"),
     db("trading_cycle_runs?select=*&order=started_at.desc&limit=20"),
-    db("trading_account_snapshots?select=*&order=captured_at.desc&limit=4"),
+    db("trading_account_snapshots?select=*&order=captured_at.desc&limit=8"),
+    db("trading_events?select=*&order=created_at.desc&limit=50"),
+    db("trading_cash_flows?select=*&order=detected_at.desc&limit=20"),
+    db("scanner_runtime_profiles?select=version,source,active,parameters,samples,validation_samples,objective,champion_objective,evidence,promoted_at,parent_version&order=version.desc&limit=3").catch(() => []),
   ]);
+  const accounts: JsonRecord = {};
+  const accountStatsByExchange: JsonRecord = {};
+  for (const exchange of ["upbit", "binance"] as Exchange[]) {
+    const exchangeEnabled = exchange === "upbit" ? settings.upbit_enabled : settings.binance_enabled;
+    const hasTrackedPosition = (positions || []).some((row: any) => row.exchange === exchange);
+    if (!exchangeEnabled && !hasTrackedPosition) continue;
+    try {
+      accounts[exchange] = await managedPortfolio(settings, exchange, await gateway(exchange, { action: "portfolio" }));
+      accountStatsByExchange[exchange] = await accountStats(exchange, finite(accounts[exchange].managed.managedCapitalQuote), settings.mode !== "LIVE_LIMITED");
+    } catch (error) {
+      accounts[exchange] = { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
   let health: any;
   try { const res = await fetch(`${GATEWAY_URL}/health`, { headers: { accept: "application/json" } }); health = await res.json(); }
   catch (error) { health = { ok: false, error: error instanceof Error ? error.message : String(error) }; }
-  return { version: VERSION, settings, positions, recent_orders: orders, recent_cycles: cycles, latest_accounts: snapshots, gateway: health };
+  return {
+    version: VERSION, settings, accounts, account_stats: accountStatsByExchange, positions, recently_closed_positions: closedPositions,
+    recent_orders: orders, recent_cycles: cycles, latest_accounts: snapshots, recent_events: events, cash_flows: cashFlows,
+    learning: { profiles, active_profile: (profiles || []).find((row: any) => row.active) || profiles?.[0] || null }, gateway: health,
+  };
 }
 async function control(body: JsonRecord, settings: TradingSettings & JsonRecord) {
   const allowed: JsonRecord = {};
+  const safetyError = dangerousControlError({
+    mode: body.mode,
+    emergencyLiquidation: body.emergency_liquidation,
+    confirmation: body.confirmation,
+  });
+  if (safetyError) throw new Error(safetyError);
   if (body.mode != null) allowed.mode = parseMode(String(body.mode));
   for (const key of ["pause_new_entries", "emergency_liquidation", "upbit_enabled", "binance_enabled", "suppress_cross_exchange_same_asset"] as const) if (body[key] != null) allowed[key] = Boolean(body[key]);
+  if (body.upbit_allocation_mode != null) allowed.upbit_allocation_mode = String(body.upbit_allocation_mode).toUpperCase() === "FIXED" ? "FIXED" : "ALL";
+  if (body.binance_allocation_mode != null) allowed.binance_allocation_mode = String(body.binance_allocation_mode).toUpperCase() === "FIXED" ? "FIXED" : "ALL";
   const ranges: Record<string, [number, number]> = {
     max_open_positions: [1, 20], max_open_positions_per_exchange: [1, 10], max_daily_entries: [1, 50], max_daily_entries_per_exchange: [1, 25],
     max_position_pct: [0.5, 25], risk_per_trade_pct: [0.05, 2],
     max_order_krw: [5000, 1_000_000_000], min_order_krw: [5000, 1_000_000], max_daily_buy_krw: [5000, 10_000_000_000],
     max_order_usdt: [5, 10_000_000], min_order_usdt: [5, 1000], max_daily_buy_usdt: [5, 100_000_000],
+    upbit_allocation_krw: [0, 100_000_000_000], upbit_reserve_krw: [0, 100_000_000_000],
+    binance_allocation_usdt: [0, 1_000_000_000], binance_reserve_usdt: [0, 1_000_000_000],
     max_daily_loss_pct: [0.2, 10], max_weekly_loss_pct: [0.5, 20], max_consecutive_losses: [1, 10],
     entry_ttl_seconds: [30, 900], full_scan_interval_seconds: [300, 3600], monitor_interval_seconds: [10, 300], max_new_entries_per_scan: [1, 4],
   };
@@ -689,6 +903,7 @@ async function control(body: JsonRecord, settings: TradingSettings & JsonRecord)
 }
 
 Deno.serve(async (request: Request) => {
+  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
   if (request.method !== "POST") return response({ error: "POST only" }, 405);
   if (!authorized(request)) return response({ error: "unauthorized" }, 401);
   let cycleId = "";
@@ -696,7 +911,7 @@ Deno.serve(async (request: Request) => {
     requiredConfiguration(); const body = await request.json().catch(() => ({})) as JsonRecord; const action = String(body.action || "status").toLowerCase();
     let settings = await loadSettings(); if (!settings.configured) settings = await ensureConfigured(settings);
     if (action === "status") return response({ ok: true, ...(await status(settings)) });
-    const kind: CycleKind = action === "scan" ? "SCAN" : action === "monitor" ? "MONITOR" : action === "control" ? "CONTROL" : "BOOTSTRAP";
+    const kind: CycleKind = action === "scan" ? "SCAN" : action === "monitor" ? "MONITOR" : ["control", "resume", "reconcile", "withdrawal_mode"].includes(action) ? "CONTROL" : "BOOTSTRAP";
     cycleId = await beginCycle(kind, settings.mode);
     if (action === "bootstrap") {
       settings = await ensureConfigured(settings, Boolean(body.sync_mode));
@@ -709,6 +924,46 @@ Deno.serve(async (request: Request) => {
       await finishCycle(cycleId, "SUCCESS", result); return response({ ok: true, cycle_id: cycleId, ...result });
     }
     if (action === "control") { settings = await control(body, settings); await finishCycle(cycleId, "SUCCESS", { settings }); return response({ ok: true, cycle_id: cycleId, settings }); }
+    if (action === "withdrawal_mode") {
+      settings = (await patch("trading_settings", "id=eq.1", {
+        pause_new_entries: true, withdrawal_mode: true, manual_intervention_required: false, manual_event_reason: "WITHDRAWAL_MODE",
+        last_manual_event_at: new Date().toISOString(), version: finite(settings.version) + 1,
+      }))[0];
+      await event("WITHDRAWAL_MODE_ENABLED", "withdrawal mode enabled; new entries paused", {}, { cycleId, level: "WARNING" });
+      await finishCycle(cycleId, "SUCCESS", { settings });
+      return response({ ok: true, cycle_id: cycleId, settings });
+    }
+    if (action === "reconcile") {
+      const result = await withLease("autotrader-monitor", 90, () => monitorCycle(cycleId, { ...settings, pause_new_entries: true }));
+      await finishCycle(cycleId, result == null ? "SKIPPED" : "SUCCESS", result || { reason: "monitor lease busy" });
+      return response({ ok: true, status: result == null ? "SKIPPED" : "SUCCESS", cycle_id: cycleId, result });
+    }
+    if (action === "resume") {
+      const reconciliation = await withLeaseRetry("autotrader-monitor", 90, 6, 2_000, () => monitorCycle(cycleId, { ...settings, pause_new_entries: true }));
+      if (reconciliation == null) {
+        await finishCycle(cycleId, "SKIPPED", { reason: "account reconciliation is busy; nothing was resumed" });
+        return response({ ok: false, error: "account reconciliation is busy; try the resume button again", cycle_id: cycleId }, 409);
+      }
+      const activeAfterReconcile = await db("trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING)&select=id&limit=1");
+      const resumeError = resumeSafetyError({
+        emergencyLiquidation: Boolean(settings.emergency_liquidation),
+        activePositionCount: activeAfterReconcile.length,
+        unresolvedManualCount: Array.isArray((reconciliation as any).unresolved_manual_assets)
+          ? (reconciliation as any).unresolved_manual_assets.length
+          : 0,
+      });
+      if (resumeError) {
+        await finishCycle(cycleId, "SKIPPED", { reason: resumeError, reconciliation });
+        return response({ ok: false, error: resumeError, cycle_id: cycleId, reconciliation }, 409);
+      }
+      settings = (await patch("trading_settings", "id=eq.1", {
+        pause_new_entries: false, withdrawal_mode: false, manual_intervention_required: false, manual_event_reason: null,
+        emergency_liquidation: false, last_resume_at: new Date().toISOString(), version: finite(settings.version) + 1,
+      }))[0];
+      await event("TRADING_RESUMED_NOW", "new entries resumed immediately by operator after successful reconciliation", { reconciliation }, { cycleId });
+      await finishCycle(cycleId, "SUCCESS", { settings, reconciliation, scan_now: true });
+      return response({ ok: true, cycle_id: cycleId, settings, reconciliation, scan_now: true });
+    }
     if (action === "monitor") {
       const result = await withLease("autotrader-monitor", 90, () => monitorCycle(cycleId, settings));
       if (result == null) { await finishCycle(cycleId, "SKIPPED", { reason: "monitor lease busy" }); return response({ ok: true, status: "SKIPPED", reason: "monitor lease busy" }); }
