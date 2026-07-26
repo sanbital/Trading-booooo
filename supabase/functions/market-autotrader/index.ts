@@ -29,8 +29,9 @@ import { evaluateHold, marketDataStale, resolveHoldConfig, type ScalpHoldConfig 
 import { DEFAULT_SCALP_SAFETY, type ScalpSafetyConfig, type ScalpDayState } from "../_shared/scalp/safety.ts";
 import { DEFAULT_COST_MODEL, type CostModelConfig } from "../_shared/scalp/cost-model.ts";
 import { resolveGeometryConfig, resolveMinimumEdge } from "../_shared/scalp/geometry.ts";
+import { evaluateExploration, resolveExplorationConfig } from "../_shared/scalp/exploration.ts";
 
-const VERSION = "5.9.1";
+const VERSION = "5.10.1";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -172,9 +173,28 @@ async function hmacHex(secret: string, message: string): Promise<string> {
   const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
   return [...new Uint8Array(signature)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
-async function gateway(exchange: Exchange, command: JsonRecord, timeoutMs = 15_000): Promise<any> {
+/**
+ * v5.10.1: retry once on an expired signature.
+ *
+ * The gateway rejects a request whose `x-gateway-ts` is more than
+ * GATEWAY_REQUEST_TOLERANCE_SECONDS old on arrival. The timestamp is stamped when the
+ * request is BUILT, but compared against when it LANDS, and a Supabase Edge isolate can be
+ * suspended or delayed in between. The result was `gateway 401: expired gateway request`,
+ * which is not a 5xx so it was never classified as a connectivity failure: the cycle simply
+ * threw, logged ENGINE_ERROR_NO_PAUSE, and produced nothing. Five in fifty minutes, each
+ * one a lost scan.
+ *
+ * Retrying is safe here specifically because a 401 is rejected at the AUTH layer, before
+ * the gateway touches an exchange — no order can have been placed. That is not true of a
+ * replayed-nonce rejection, which means the first attempt DID get through, so that one is
+ * deliberately excluded.
+ */
+const RETRYABLE_GATEWAY_ERROR = /expired gateway request/i;
+
+async function gatewayOnce(exchange: Exchange, command: JsonRecord, timeoutMs: number): Promise<any> {
   const target = gatewayTarget(exchange);
   const raw = JSON.stringify({ exchange, ...command });
+  // Stamp and sign as late as possible, immediately before dispatch.
   const ts = String(Date.now()); const nonce = crypto.randomUUID();
   const signature = await hmacHex(target.secret, `${ts}\n${nonce}\n${raw}`);
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -194,6 +214,17 @@ async function gateway(exchange: Exchange, command: JsonRecord, timeoutMs = 15_0
     }
     return data.result;
   } finally { clearTimeout(timer); }
+}
+
+async function gateway(exchange: Exchange, command: JsonRecord, timeoutMs = 15_000): Promise<any> {
+  try {
+    return await gatewayOnce(exchange, command, timeoutMs);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!RETRYABLE_GATEWAY_ERROR.test(message)) throw error;
+    // Fresh timestamp and nonce. The exchange was never reached on the first attempt.
+    return await gatewayOnce(exchange, command, timeoutMs);
+  }
 }
 
 function defaultSettings(): TradingSettings & JsonRecord {
@@ -270,6 +301,21 @@ function defaultSettings(): TradingSettings & JsonRecord {
     // Query the exchange for this account's real commission rate instead of assuming the
     // list price. Set false to pin the static FEE_PCT table.
     scalp_use_live_fees: env("SCALP_USE_LIVE_FEES") !== "false",
+    scalp_min_edge_cost_fraction: clamp(finite(env("SCALP_MIN_EDGE_COST_FRACTION"), 0.25), 0, 1),
+    // v5.10 --------------------------------------------------------------------
+    // Budget spent on trades taken for their INFORMATION value.
+    //
+    // The EV gate rejects using pWin = neutralWinRate + signalEdge, and signalEdge comes
+    // from weights chosen by hand that have never been measured against an outcome. Being
+    // strict on that basis is not caution, it is arbitrary — and it guarantees the weights
+    // stay unmeasured, because no trades means no outcomes means no calibration.
+    //
+    // These override the EV threshold and NOTHING else. Kill switch, daily loss, depth,
+    // spread and exchange minimums all still apply.
+    scalp_exploration_per_day: clamp(finite(env("SCALP_EXPLORATION_PER_DAY"), 40), 0, 500),
+    scalp_exploration_per_scan: clamp(finite(env("SCALP_EXPLORATION_PER_SCAN"), 1), 0, 10),
+    scalp_exploration_size_fraction: clamp(finite(env("SCALP_EXPLORATION_SIZE_FRACTION"), 0.33), 0.05, 1),
+    scalp_exploration_min_edge_cost_multiple: clamp(finite(env("SCALP_EXPLORATION_MIN_EDGE_COST_MULTIPLE"), -1), -5, 0),
     // v5.5 --------------------------------------------------------------------
     // Post the entry on the bid instead of taking the ask.
     //
@@ -759,6 +805,14 @@ function scalpCostConfig(settings: TradingSettings, exchange: Exchange, feePct =
  * consecutive-loss streak, scoped to this exchange and paper/live mode.
  * Day boundary follows the exchange convention (KST for upbit, UTC for binance).
  */
+/** Exploration entries already spent today, scoped to the exchange and paper/live mode. */
+async function explorationUsedToday(exchange: Exchange, isPaper: boolean): Promise<number> {
+  const rows = await db(
+    `trading_positions?exchange=eq.${exchange}&is_paper=eq.${isPaper}&created_at=gte.${encodeURIComponent(dayBoundary(exchange))}&select=id,metadata`,
+  ).catch(() => []) as any[];
+  return (rows || []).filter((r) => r?.metadata?.is_exploration === true).length;
+}
+
 async function scalpDayState(exchange: Exchange, isPaper: boolean): Promise<ScalpDayState> {
   const now = new Date();
   const dayStart = exchange === "upbit"
@@ -781,7 +835,7 @@ async function scalpDayState(exchange: Exchange, isPaper: boolean): Promise<Scal
   return { realizedPnlQuote, consecutiveLosses };
 }
 
-async function enterCandidate(candidate: Candidate, settings: TradingSettings, portfolio: any, activeBases: Set<string>, cycleId: string) {
+async function enterCandidate(candidate: Candidate, settings: TradingSettings, portfolio: any, activeBases: Set<string>, cycleId: string, explorationUsedThisScan = 0) {
   const exchange = candidate.exchange; const quote = quoteCurrency(exchange); const base = baseAsset(exchange, candidate.market);
   if (candidate.recommendation_valid_until && Date.now() > new Date(candidate.recommendation_valid_until).getTime()) return { entered: false, exchange, market: candidate.market, reason: "recommendation expired" };
   const existing = await db(`trading_positions?exchange=eq.${exchange}&market=eq.${candidate.market}&state=in.(ENTRY_PENDING,OPEN,EXITING)&select=id&limit=1`);
@@ -864,6 +918,7 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   let scalpTarget2: number | null = null;
   let scalpAudit: JsonRecord | null = null;
   let decisionNotional = sizing.notionalQuote;
+  let isExploration = false;
   if ((settings as any).strategy === "SCALP") {
     const scalpSnapshot = (candidate as any).snapshot?.scalp || {};
     const scanPWin = finite((candidate as any).scalp_p_win ?? scalpSnapshot.pWin ?? (candidate as any).scalp?.pWin, 0.5);
@@ -934,8 +989,36 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
       slot_quote: Number.isFinite(slotQuote) ? slotQuote : null,
     };
     if (!decision.allow) {
-      await event("SCALP_GATE_BLOCK", `${exchange}:${candidate.market} scalp gate blocked`, { reason: decision.reason, ...scalpAudit }, { cycleId });
-      return { entered: false, exchange, market: candidate.market, reason: `scalp gate: ${decision.reason}` };
+      // v5.10: the EV threshold — and only the EV threshold — may be overridden by the
+      // exploration budget, because it is the one check built on unmeasured coefficients.
+      const explorationCfg = resolveExplorationConfig({
+        maxPerDay: finite((settings as any).scalp_exploration_per_day, 40),
+        maxPerScan: finite((settings as any).scalp_exploration_per_scan, 1),
+        sizeFraction: finite((settings as any).scalp_exploration_size_fraction, 0.33),
+        minEdgeCostMultiple: finite((settings as any).scalp_exploration_min_edge_cost_multiple, -1),
+      });
+      const exploration = evaluateExploration({
+        blockReason: decision.reason,
+        expectedNetEdge: decision.expectedNetEdge,
+        roundTripCost: FEE_PCT[exchange] * 2 / 100,
+        usedToday: await explorationUsedToday(exchange, settings.mode !== "LIVE_LIMITED"),
+        usedThisScan: explorationUsedThisScan,
+      }, explorationCfg);
+
+      if (!exploration.explore) {
+        await event("SCALP_GATE_BLOCK", `${exchange}:${candidate.market} scalp gate blocked`, { reason: decision.reason, exploration: exploration.reason, ...scalpAudit }, { cycleId });
+        return { entered: false, exchange, market: candidate.market, reason: `scalp gate: ${decision.reason}` };
+      }
+      isExploration = true;
+      decisionNotional = decision.notional * exploration.sizeFraction;
+      quantity = floorToStep(decisionNotional / entryPrice, rules.quantity_step || 0.00000001);
+      if (!(quantity > 0) || quantity * entryPrice < Math.max(limits.minOrder, rules.min_notional)) {
+        await event("SCALP_GATE_BLOCK", `${exchange}:${candidate.market} exploration size below exchange minimum`, { reason: decision.reason, ...scalpAudit }, { cycleId });
+        return { entered: false, exchange, market: candidate.market, reason: "exploration size below exchange minimum" };
+      }
+      await event("SCALP_EXPLORATION_ENTRY", `${exchange}:${candidate.market} taken on exploration budget`, {
+        expected_net_edge: decision.expectedNetEdge, size_fraction: exploration.sizeFraction, ...scalpAudit,
+      }, { cycleId, level: "INFO" });
     }
     decisionNotional = decision.notional;
     if (decision.notional < sizing.notionalQuote) {
@@ -989,6 +1072,8 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
       // v5.3: the full entry-time signal, persisted so the pWin calibration loop can
       // later join predicted probability against the realized outcome on this row.
       scalp_signal: scalpAudit,
+      // Tagged so calibration can weight these and so their cost is reportable separately.
+      is_exploration: isExploration,
       scalp_expected_minutes: (settings as any).strategy === "SCALP" ? scalpExpectedMinutes : null,
       scalp_safety_ttl_minutes: (settings as any).strategy === "SCALP" ? scalpSafetyTtlMinutes : null,
       expected_resolution_at: (settings as any).strategy === "SCALP"
@@ -1040,7 +1125,7 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
         price: makerPrice, quantity: makerQuantity, best_bid: bestBid, best_ask: bestAsk, spread_bps: spreadBps,
       }, { cycleId, positionId: position.id, orderId: makerOrderRow.id });
       // Reserved, not entered: the slot's capital is committed until the order resolves.
-      return { entered: false, reserved: true, maker_pending: true, exchange, market: candidate.market, position: { ...position, ...(rows[0] || {}) }, reason: "maker entry resting" };
+      return { entered: false, reserved: true, maker_pending: true, exchange, market: candidate.market, position: { ...position, ...(rows[0] || {}) }, reason: "maker entry resting", exploration: isExploration };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await patch("trading_orders", `id=eq.${makerOrderRow.id}`, { state: "REJECTED", error_message: message, completed_at: new Date().toISOString() });
@@ -1081,7 +1166,7 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
     // v5.3: rest the first-target limit sell now, so the profit path never depends on a
     // 15-second poll catching the touch. No-op unless scalp_resting_tp is enabled.
     const withTp = await placeRestingTakeProfit(opened as Position, settings, cycleId);
-    return { entered: true, paper: false, exchange, market: candidate.market, position: withTp };
+    return { entered: true, paper: false, exchange, market: candidate.market, position: withTp, exploration: isExploration };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const status = Number((error as any)?.status || 0);
@@ -2081,6 +2166,7 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
   const active = (await db("trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING)&select=exchange,market,base_asset")) as any[];
   const activeMarkets = new Set(active.map((row) => `${row.exchange}:${row.market}`)); const activeBases = new Set(active.map((row) => row.base_asset));
   const entries: any[] = []; const enteredPerExchange: Record<Exchange, number> = { upbit: 0, binance: 0 };
+  let explorationThisScan = 0;
   for (const candidate of candidates) {
     const exchange = candidate.exchange;
     if (!exchanges.includes(exchange) || !circuits[exchange]?.allowNewEntry) continue;
@@ -2094,7 +2180,9 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
     if (enteredPerExchange[exchange] >= Math.max(0, exchangeCapacity)) continue;
     if (activeMarkets.has(`${exchange}:${candidate.market}`)) continue;
     try {
-      const entry = await enterCandidate(candidate, settings, portfolios[exchange], activeBases, cycleId); entries.push(entry);
+      const entry = await enterCandidate(candidate, settings, portfolios[exchange], activeBases, cycleId, explorationThisScan);
+      if (entry?.exploration) explorationThisScan += 1;
+      entries.push(entry);
       if (entry.entered || entry.reserved) {
         enteredPerExchange[exchange]++; activeMarkets.add(`${exchange}:${candidate.market}`); activeBases.add(baseAsset(exchange, candidate.market));
         if (entry.entered && !entry.paper) portfolios[exchange] = await gateway(exchange, { action: "portfolio" });
@@ -2269,7 +2357,10 @@ Deno.serve(async (request: Request) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (cycleId) await finishCycle(cycleId, "FAILED", {}, message).catch(() => null);
-    const availabilityFailure = /gateway\s+(?:5\d\d)|fetch failed|network|timeout|timed out|abort|econn|enotfound|socket|502|503|504/i.test(message);
+    // v5.10.1: a signature that expires twice in a row is a latency/clock problem, i.e. an
+    // availability fault. Classifying it as one routes it into the gateway_error_count path
+    // that now auto-resumes once things recover, instead of dying silently every cycle.
+    const availabilityFailure = /gateway\s+(?:5\d\d)|expired gateway request|fetch failed|network|timeout|timed out|abort|econn|enotfound|socket|502|503|504/i.test(message);
     if (availabilityFailure) {
       const current = await loadSettings().catch(() => ({ gateway_error_count: 0 }));
       const count = 1 + finite(current.gateway_error_count);

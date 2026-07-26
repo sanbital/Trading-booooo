@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 // withdrawal, transfer, margin, futures, leverage, or API-key management routes.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "5.9.1";
+const VERSION = "5.10.1";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
@@ -22,7 +22,14 @@ const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
 const SCHEDULER_ENABLED = boolEnv("SCHEDULER_ENABLED", true);
 const SCAN_INTERVAL_MS = integerEnv("AUTO_SCAN_INTERVAL_SECONDS", 60, 60, 3600) * 1000;
 const MONITOR_INTERVAL_MS = integerEnv("AUTO_MONITOR_INTERVAL_SECONDS", 15, 10, 300) * 1000;
-const REQUEST_TOLERANCE_MS = integerEnv("GATEWAY_REQUEST_TOLERANCE_SECONDS", 60, 10, 300) * 1000;
+// v5.10.1: 60 -> 180 seconds.
+//
+// The timestamp is stamped when the caller builds the request and checked when it lands.
+// A Supabase Edge isolate can be suspended or delayed in between, and at 60 seconds that
+// produced intermittent `401 expired gateway request` — five in fifty minutes, each one a
+// lost scan cycle. Replay protection does not depend on this window: the nonce cache does
+// that job and holds each nonce for twice the tolerance, so widening it costs nothing.
+const REQUEST_TOLERANCE_MS = integerEnv("GATEWAY_REQUEST_TOLERANCE_SECONDS", 180, 10, 600) * 1000;
 // Monetary exposure is controlled by the dashboard allocation settings in the autotrader.
 // The gateway validates order shape and exchange rules but adds no hidden monetary cap.
 const BOT_IDENTIFIER_PREFIX = "tb-";
