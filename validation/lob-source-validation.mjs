@@ -16,9 +16,14 @@ const migration = read("supabase/migrations/202607260016_lob_scalp_v600.sql");
 const gateway = read("gateway/server.mjs");
 const entry = read("supabase/functions/_shared/lob/entry.ts");
 const patterns = read("supabase/functions/_shared/lob/patterns.ts");
+const heat = read("supabase/functions/_shared/lob/market-heat.ts");
 const exit = read("supabase/functions/_shared/lob/exit.ts");
 
 check("LOB strategy is default in scanner", scannerIndex.includes('|| "LOB_SCALP"'));
+check("whole-market heat runs before candle analysis", scannerIndex.includes("sampleWholeMarketHeat") && scannerIndex.includes("runLobHeatScan"));
+check("heat prioritizes current flow acceleration", heat.includes("notionalAcceleration") && heat.includes("recentNotionalPerSecond"));
+const runScanBody = scannerIndex.slice(scannerIndex.indexOf("async function runScan"));
+check("LOB scanner bypasses candle fetch", runScanBody.indexOf("return await runLobHeatScan") >= 0 && runScanBody.indexOf("return await runLobHeatScan") < runScanBody.indexOf("const universe = buildUniverse"));
 check("trend is explicitly auxiliary", entry.includes("auxiliary only; never a veto"));
 check("five LOB pattern families exist", [
   "ABSORPTION_REVERSAL", "QUEUE_DEPLETION_BREAKOUT", "SWEEP_RECLAIM",
@@ -38,7 +43,7 @@ check("default LOB timeout is 180 seconds", migration.includes("lob_max_holding_
 check("absolute LOB timeout is 300 seconds", migration.includes("lob_absolute_max_holding_seconds = 300"));
 check("exit priority is deterministic", exit.includes("RISK_EMERGENCY") && exit.includes("RECONCILIATION_FAILURE") && exit.includes("STOP_HIT") && exit.includes("LOB_INVALIDATION") && exit.includes("SIGNAL_REVERSAL") && exit.includes("TARGET_HIT") && exit.includes("TIMEOUT"));
 check("deployment remains PAPER", migration.includes("mode = 'PAPER'"));
-check("gateway defaults to 15-second scans", gateway.includes('AUTO_SCAN_INTERVAL_SECONDS", 15, 10'));
-check("gateway defaults to 5-second monitoring", gateway.includes('AUTO_MONITOR_INTERVAL_SECONDS", 5, 5'));
+check("gateway defaults to 12-second scans", gateway.includes('AUTO_SCAN_INTERVAL_SECONDS", 12, 8'));
+check("gateway defaults to 2-second monitoring", gateway.includes('AUTO_MONITOR_INTERVAL_SECONDS", 2, 1'));
 
 console.log(JSON.stringify({ ok: true, checks: checks.length, names: checks }, null, 2));

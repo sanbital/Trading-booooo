@@ -3,12 +3,12 @@ import crypto from "node:crypto";
 import dns from "node:dns";
 import { pathToFileURL } from "node:url";
 
-// Trading-booooo v6.0.0-LOB static-egress spot order gateway.
+// Trading-booooo v6.1.0-HEAT static-egress spot order gateway.
 // It deliberately exposes only spot account/order primitives. There are no
 // withdrawal, transfer, margin, futures, leverage, or API-key management routes.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "6.0.0-LOB";
+const VERSION = "6.1.0-HEAT";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
@@ -20,8 +20,8 @@ const SHARED_SECRET = env("GATEWAY_SHARED_SECRET");
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
 const SCHEDULER_ENABLED = boolEnv("SCHEDULER_ENABLED", true);
-const SCAN_INTERVAL_MS = integerEnv("AUTO_SCAN_INTERVAL_SECONDS", 15, 10, 3600) * 1000;
-const MONITOR_INTERVAL_MS = integerEnv("AUTO_MONITOR_INTERVAL_SECONDS", 5, 5, 300) * 1000;
+const SCAN_INTERVAL_MS = integerEnv("AUTO_SCAN_INTERVAL_SECONDS", 12, 8, 3600) * 1000;
+const MONITOR_INTERVAL_MS = integerEnv("AUTO_MONITOR_INTERVAL_SECONDS", 2, 1, 300) * 1000;
 // v5.10.1: 60 -> 180 seconds.
 //
 // The timestamp is stamped when the caller builds the request and checked when it lands.
@@ -948,7 +948,7 @@ export async function startServer() {
   await discoverEgressIp();
   if (BINANCE_API_KEY && BINANCE_SECRET_KEY) syncBinanceTime(true).catch((error) => console.warn("Binance time sync failed", error.message));
   if (SCHEDULER_ENABLED) {
-    setTimeout(() => schedulerTick("monitor"), 5_000).unref();
+    setTimeout(() => schedulerTick("monitor"), 2_000).unref();
     setTimeout(() => schedulerTick("scan"), 20_000).unref();
     setInterval(() => schedulerTick("monitor"), MONITOR_INTERVAL_MS).unref();
     setInterval(() => schedulerTick("scan"), SCAN_INTERVAL_MS).unref();
