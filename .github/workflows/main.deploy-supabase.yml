@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "supabase/functions/_shared/**"
+      - "backtest/**"
       - "supabase/functions/market-scanner/**"
       - "supabase/functions/market-learning/**"
       - "supabase/functions/market-autotrader/**"
@@ -90,15 +91,18 @@ jobs:
             "BINANCE_ORDER_GATEWAY_URL=https://${FLY_BINANCE_APP_NAME}.fly.dev" \
             "BINANCE_GATEWAY_SHARED_SECRET=${gateway_secret}" \
             "TRADING_MODE_DEFAULT=PAPER" \
-            "TRADING_STRATEGY=SCALP" \
+            "TRADING_STRATEGY=LOB_SCALP" \
             "SCALP_PER_ORDER_PCT=100" \
-            "SCALP_DAILY_LOSS_PCT=20" \
+            "SCALP_DAILY_LOSS_PCT=30" \
             "SCALP_MAX_SINGLE_LOSS_PCT=5" \
             "SCALP_MAX_CONSECUTIVE_LOSSES=50" \
             "SCALP_KILL_SWITCH=false" \
-            "SCALP_MAX_HOLDING_MINUTES=30" \
-            "AUTO_SCAN_INTERVAL_SECONDS=60" \
-            "AUTO_MONITOR_INTERVAL_SECONDS=15" \
+            "SCALP_MAX_HOLDING_MINUTES=3" \
+            "LOB_MAX_HOLDING_SECONDS=180" \
+            "LOB_ABSOLUTE_MAX_HOLDING_SECONDS=300" \
+            "LOB_SCAN_INTERVAL_SECONDS=15" \
+            "AUTO_SCAN_INTERVAL_SECONDS=15" \
+            "AUTO_MONITOR_INTERVAL_SECONDS=5" \
             --project-ref "${SUPABASE_PROJECT_REF}"
 
       - name: Apply database migrations
