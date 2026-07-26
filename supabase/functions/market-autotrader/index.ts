@@ -1,4 +1,4 @@
-// Trading-booooo v5.2.5 — autonomous Upbit KRW + Binance USDT spot orchestrator.
+// Trading-booooo v5.3.1 — autonomous Upbit KRW + Binance USDT spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -23,10 +23,15 @@ import {
   type TradingSettings,
 } from "./core.ts";
 import { scalpEntryDecision } from "../_shared/scalp/scalp-gate.ts";
+import { DEFAULT_SCALP_SIGNAL, refreshPWinAtOrderTime } from "../_shared/scalp/signal.ts";
+import { applyCalibration, IDENTITY_CALIBRATION, type CalibrationModel } from "../_shared/scalp/calibration.ts";
+import { evaluateHold, resolveHoldConfig, safetyTtlExceeded, type ScalpHoldConfig } from "../_shared/scalp/hold.ts";
 import { DEFAULT_SCALP_SAFETY, type ScalpSafetyConfig, type ScalpDayState } from "../_shared/scalp/safety.ts";
 import { DEFAULT_COST_MODEL, type CostModelConfig } from "../_shared/scalp/cost-model.ts";
 
-const VERSION = "5.2.5";
+const VERSION = "5.4.0";
+// Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
+const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const SERVICE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
@@ -220,7 +225,41 @@ function defaultSettings(): TradingSettings & JsonRecord {
     scalp_max_single_loss_pct: clamp(finite(env("SCALP_MAX_SINGLE_LOSS_PCT"), 5), 0.1, 100),
     scalp_max_consecutive_losses: clamp(finite(env("SCALP_MAX_CONSECUTIVE_LOSSES"), 4), 1, 50),
     scalp_kill_switch: env("SCALP_KILL_SWITCH") === "true",
-    scalp_max_holding_minutes: clamp(finite(env("SCALP_MAX_HOLDING_MINUTES"), 30), 1, 1440),
+    // v5.3 --------------------------------------------------------------------
+    // Default raised 30 -> 120. A cost-cleared target cannot be reached in 30
+    // minutes on most symbols; geometry.ts sizes the per-symbol horizon and this
+    // is only the hard ceiling.
+    scalp_max_holding_minutes: clamp(finite(env("SCALP_MAX_HOLDING_MINUTES"), 120), 1, 1440),
+    // Capital is split into this many concurrent slots. v5.2.5 sized every entry at
+    // the FULL available allocation, so the first candidate consumed everything and
+    // the "max 2 entries per scan" allowance could never be used.
+    scalp_position_slots: clamp(finite(env("SCALP_POSITION_SLOTS"), 6), 1, 20),
+    // Excess win rate the signal is assumed to deliver. Drives barrier width.
+    scalp_edge_budget: clamp(finite(env("SCALP_EDGE_BUDGET"), 0.10), 0.02, 0.30),
+    scalp_reward_risk: clamp(finite(env("SCALP_REWARD_RISK"), 2.0), 1, 4),
+    scalp_slippage_allowance: clamp(finite(env("SCALP_SLIPPAGE_ALLOWANCE"), 0.0009), 0, 0.01),
+    // Half-life applied to scan-time alpha when the signal is re-priced at order time.
+    scalp_alpha_half_life_ms: clamp(finite(env("SCALP_ALPHA_HALF_LIFE_MS"), 20000), 1000, 300000),
+    // Move the effective stop to breakeven+cost once the first target is taken.
+    scalp_breakeven_after_t1: env("SCALP_BREAKEVEN_AFTER_T1") !== "false",
+    // Rest a limit sell at the first target instead of market-selling when a 15s poll
+    // notices the target was crossed. Default OFF: this changes the order lifecycle and
+    // should be enabled only after a small-size live trial. See restingTakeProfit below.
+    scalp_resting_tp: env("SCALP_RESTING_TP") === "true",
+    // v5.4 --------------------------------------------------------------------
+    // The 30-minute forced exit is GONE. It was a safety timeout from the original
+    // fixed +0.60%/-0.30% barrier, not a profit rule, and it force-sold positions whose
+    // thesis was still intact while paying a full round trip for a non-outcome.
+    // Positions are now held while the live edge survives; absolute time is only a
+    // stuck-ledger backstop, and the operator sets it.
+    scalp_safety_ttl_minutes: clamp(finite(env("SCALP_SAFETY_TTL_MINUTES"), 360), 10, 10080),
+    scalp_hold_alpha_half_life_minutes: clamp(finite(env("SCALP_HOLD_ALPHA_HALF_LIFE_MINUTES"), 12), 1, 240),
+    scalp_hold_min_edge_after_expected: clamp(finite(env("SCALP_HOLD_MIN_EDGE_AFTER_EXPECTED"), 0.0005), 0, 0.01),
+    scalp_hold_reversal_imbalance: clamp(finite(env("SCALP_HOLD_REVERSAL_IMBALANCE"), -0.25), -1, 0),
+    scalp_hold_reversal_confirmations: clamp(finite(env("SCALP_HOLD_REVERSAL_CONFIRMATIONS"), 2), 1, 10),
+    // Query the exchange for this account's real commission rate instead of assuming the
+    // list price. Set false to pin the static FEE_PCT table.
+    scalp_use_live_fees: env("SCALP_USE_LIVE_FEES") !== "false",
     updated_at: new Date().toISOString(),
   };
 }
@@ -339,9 +378,23 @@ async function runScanner(portfolios: Record<Exchange, any>, settings: TradingSe
         scalp_overrides: {
           minimumEdge: finite((settings as any).scalp_minimum_edge, DEFAULT_COST_MODEL.minimumEdge),
         },
+        // v5.3: barrier geometry. `edgeBudget` is the dominant knob — it is the excess
+        // win rate the signal is assumed to deliver, and it sets how wide T + S must be
+        // for the required win rate to be attainable at all.
+        geometry_overrides: {
+          edgeBudget: finite((settings as any).scalp_edge_budget, 0.10),
+          rewardRiskRatio: finite((settings as any).scalp_reward_risk, 2.0),
+          slippageAllowance: finite((settings as any).scalp_slippage_allowance, 0.0009),
+          minimumEdge: finite((settings as any).scalp_minimum_edge, DEFAULT_COST_MODEL.minimumEdge),
+          maxHorizonMinutes: finite((settings as any).scalp_max_holding_minutes, 120),
+        },
         capital_krw: Math.max(10_000, finite(portfolios.upbit?.managed?.managedCapitalQuote, portfolios.upbit?.available_quote || 10_000)),
         capital_usdt: Math.max(10, finite(portfolios.binance?.managed?.managedCapitalQuote, portfolios.binance?.available_quote || 10)),
         risk_pct: (settings as any).strategy === "SCALP" ? 100 : settings.risk_per_trade_pct,
+        // v5.4: the scanner sizes barriers from cost, so it must receive the account's
+        // real commission rate rather than recomputing the list price.
+        upbit_fee_per_side_pct: await liveFeePct("upbit", settings),
+        binance_fee_per_side_pct: await liveFeePct("binance", settings),
         recommendation_valid_minutes: Math.max(1, Math.ceil(settings.entry_ttl_seconds / 60)),
         min_actionable_holding_hours: 1, max_unattended_hours: 24, require_precommitted_exit: true,
       }),
@@ -352,8 +405,18 @@ async function runScanner(portfolios: Record<Exchange, any>, settings: TradingSe
     return data;
   } finally { clearTimeout(timer); }
 }
-async function loadBuyCandidates(scanId: string): Promise<Candidate[]> {
-  return db(`scanner_candidates?scan_id=eq.${scanId}&decision=eq.BUY&exchange=in.(upbit,binance)&select=*&order=score.desc,period_score.desc`);
+async function loadBuyCandidates(scanId: string, settings?: TradingSettings): Promise<Candidate[]> {
+  const rows = await db(`scanner_candidates?scan_id=eq.${scanId}&decision=eq.BUY&exchange=in.(upbit,binance)&select=*&order=score.desc,period_score.desc`) as Candidate[];
+  if (String((settings as any)?.strategy || "") !== "SCALP") return rows;
+  // v5.3: in SCALP the entry decision comes from the orderbook signal, but v5.2.5 still
+  // handed the candidates to the sizer ordered by the LEGACY TREND SCORE. Combined with
+  // full-allocation sizing that meant the single position the bot could hold was chosen
+  // by trend score rather than by scalp expected value. Re-rank by provisional edge.
+  const edge = (row: Candidate) => {
+    const scalp = (row as any).snapshot?.scalp;
+    return finite(scalp?.provisional_edge, Number.NEGATIVE_INFINITY);
+  };
+  return [...rows].sort((a, b) => edge(b) - edge(a));
 }
 function tickRound(value: number, tick: number, direction: "down" | "up" | "nearest" = "nearest") {
   const t = tick > 0 ? tick : Math.max(0.00000001, value * 0.000001); const units = value / t;
@@ -370,14 +433,48 @@ function executableDepth(asks: any[], maxEntry: number, requestedNotional: numbe
   }
   return { executable: executionFunds + 1e-8 >= requestedNotional, availableFunds, executionFunds, volume, vwap: volume > 0 ? executionFunds / volume : 0, worstPrice };
 }
-function candidatePlan(candidate: Candidate) {
+/**
+ * v5.3: top-of-book imbalance from a live orderbook, using the same depth and decay as
+ * the scanner's `book_imbalance_top`, so the order-time refresh is on the same scale as
+ * the scan-time term it replaces. Keep SCALP_BOOK_DEPTH / SCALP_BOOK_DECAY in
+ * market-scanner/engine.ts in sync with these two constants.
+ */
+const SCALP_BOOK_DEPTH = 5;
+const SCALP_BOOK_DECAY = 1.5;
+function topOfBookImbalance(bids: Array<{ price: number; size: number }>, asks: Array<{ price: number; size: number }>): number {
+  let bid = 0; let ask = 0;
+  for (let i = 0; i < SCALP_BOOK_DEPTH; i++) {
+    const weight = 1 / Math.pow(i + 1, SCALP_BOOK_DECAY);
+    const b = bids[i]; const a = asks[i];
+    if (b && finite(b.price) > 0 && finite(b.size) > 0) bid += finite(b.price) * finite(b.size) * weight;
+    if (a && finite(a.price) > 0 && finite(a.size) > 0) ask += finite(a.price) * finite(a.size) * weight;
+  }
+  const total = bid + ask;
+  return total > 0 ? (bid - ask) / total : 0;
+}
+
+function candidatePlan(candidate: Candidate, settings?: TradingSettings) {
   const trade = candidate.snapshot?.trade_plan || {}; const tick = finite(trade.tick_size, finite(candidate.feature_vector?.tick_size));
   const allocation = clamp(finite(trade.first_target_allocation_pct, 60), 50, 80); const strategy = String(trade.target_strategy || "SCALE_OUT");
+  const isScalp = String((settings as any)?.strategy || "") === "SCALP";
+  const scalpStopPct = finite((candidate as any).snapshot?.scalp?.stop_pct, 0.003);
   return {
     tick, allocation,
-    exitPolicy: strategy === "TRAIL_AFTER_T1" ? "TRAIL_AFTER_T1" : strategy === "SHORT_ONLY" ? "FIXED_T1" : "SCALE_OUT",
+    // v5.3: SCALP always trails after the first target.
+    //
+    // v5.2.5 defaulted to SCALE_OUT, under which the runner kept the ORIGINAL stop after
+    // T1 — so a position that reached +T and retraced closed the remainder at -S and
+    // could end net negative despite having hit its target. The legacy 1.2% trail was
+    // also inert at scalp scale: nextTrailingStop() floors at the hard stop, so with a
+    // 0.6% target the trail never engaged until the peak passed +0.91%.
+    exitPolicy: isScalp
+      ? "TRAIL_AFTER_T1"
+      : strategy === "TRAIL_AFTER_T1" ? "TRAIL_AFTER_T1" : strategy === "SHORT_ONLY" ? "FIXED_T1" : "SCALE_OUT",
     recommended: finite(trade.recommended_investment_quote, finite(trade.recommended_investment_krw)),
-    trailingDistancePct: clamp(finite(candidate.feature_vector?.risk_snapshot?.trailing_distance_pct, 1.2), 0.5, 5),
+    // Trail one stop-width below the peak instead of a flat 1.2%.
+    trailingDistancePct: isScalp
+      ? clamp(scalpStopPct * 100, 0.1, 5)
+      : clamp(finite(candidate.feature_vector?.risk_snapshot?.trailing_distance_pct, 1.2), 0.5, 5),
   };
 }
 async function marketQuote(exchange: Exchange, market: string) { return gateway(exchange, { action: "quote", market }); }
@@ -434,11 +531,25 @@ async function applyEntryAccounting(position: Position, orderRow: any, fill: any
   });
   return result?.position || position;
 }
-async function applyExitAccounting(position: Position, orderRow: any, fill: any, action: string, fallbackPrice: number) {
+async function applyExitAccounting(position: Position, orderRow: any, fill: any, action: string, fallbackPrice: number, breakevenAfterT1 = true) {
   const quantity = finite(fill.executedVolume); const price = finite(fill.averagePrice, fallbackPrice);
   if (!(quantity > 0 && price > 0)) throw new Error("exit fill has no executable quantity");
+  // v5.3: once the first target is realized the remainder must never be able to give
+  // the trade back. The trail is floored at entry + round-trip cost, i.e. true breakeven
+  // after fees, not at the original stop.
+  //
+  // NOTE: this is applied to `trailing_stop`, not `stop_price`. The trading_positions
+  // check constraint requires stop_price < average_entry_price, so breakeven cannot be
+  // expressed there. decideExit() uses max(stop_price, trailing_stop) once t1_completed,
+  // so seeding the trail achieves the same effect without a schema change.
+  const breakevenFloor = breakevenAfterT1 && finite(position.average_entry_price) > 0
+    ? finite(position.average_entry_price) * (1 + FEE_PCT[position.exchange as Exchange] * 2 / 100)
+    : 0;
   const nextTrail = action === "TARGET_1" && position.exit_policy === "TRAIL_AFTER_T1"
-    ? nextTrailingStop(position.trailing_stop, Math.max(price, finite(position.peak_price, position.average_entry_price)), finite(position.trailing_distance_pct, 1.2), position.stop_price)
+    ? Math.max(
+      breakevenFloor,
+      nextTrailingStop(position.trailing_stop, Math.max(price, finite(position.peak_price, position.average_entry_price)), finite(position.trailing_distance_pct, 1.2), position.stop_price),
+    )
     : null;
   const result = await rpc("apply_trading_exit_order", {
     p_order_id: orderRow.id, p_action: action, p_fill_price: price, p_fill_quantity: quantity,
@@ -533,10 +644,10 @@ function scalpSafetyConfig(settings: TradingSettings): ScalpSafetyConfig {
   };
 }
 
-function scalpCostConfig(settings: TradingSettings, exchange: Exchange): CostModelConfig {
+function scalpCostConfig(settings: TradingSettings, exchange: Exchange, feePct = FEE_PCT[exchange]): CostModelConfig {
   return {
     ...DEFAULT_COST_MODEL,
-    roundTripFeeFraction: FEE_PCT[exchange] * 2 / 100,
+    roundTripFeeFraction: feePct * 2 / 100,
     minimumEdge: finite((settings as any).scalp_minimum_edge, DEFAULT_COST_MODEL.minimumEdge),
   };
 }
@@ -574,6 +685,10 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   const existing = await db(`trading_positions?exchange=eq.${exchange}&market=eq.${candidate.market}&state=in.(ENTRY_PENDING,OPEN,EXITING)&select=id&limit=1`);
   if (existing.length) return { entered: false, exchange, market: candidate.market, reason: "market already tracked" };
   if (settings.suppress_cross_exchange_same_asset && activeBases.has(base)) return { entered: false, exchange, market: candidate.market, reason: `base asset ${base} already exposed on another market` };
+  // v5.4: asset-scoped pause. A confirmed mismatch on one coin no longer stops the
+  // whole system; it stops that coin.
+  const assetLocks = Array.isArray((settings as any).manual_asset_locks) ? (settings as any).manual_asset_locks : [];
+  if (assetLocks.includes(`${exchange}:${base}`)) return { entered: false, exchange, market: candidate.market, reason: `asset ${base} is paused pending manual review` };
 
   const market = await marketQuote(exchange, candidate.market);
   const bestAsk = finite(market.best_ask); const bestBid = finite(market.best_bid);
@@ -581,12 +696,18 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   if (accountQuantity(portfolio, base) * Math.max(finite(market.current), bestBid) >= (exchange === "upbit" ? 1000 : 1)) {
     return { entered: false, exchange, market: candidate.market, reason: "pre-existing account balance detected; manual and bot holdings are isolated" };
   }
-  const maxEntry = finite(candidate.entry_high);
+  // v5.3: in SCALP the entry ceiling must come from the live book, not from the trend
+  // plan's entry zone. `candidate.entry_high` is computed from 15m ATR structure and
+  // routinely sits below the current ask, which silently blocked scalp entries.
+  const scalpStopPctForCeiling = finite((candidate as any).snapshot?.scalp?.stop_pct, 0.003);
+  const maxEntry = (settings as any).strategy === "SCALP"
+    ? bestAsk * (1 + Math.min(0.25 * scalpStopPctForCeiling, 0.002))
+    : finite(candidate.entry_high);
   if (!(maxEntry > 0) || bestAsk > maxEntry) return { entered: false, exchange, market: candidate.market, reason: `best ask ${bestAsk} above entry ceiling ${maxEntry}` };
   const spreadBps = (bestAsk / bestBid - 1) * 10_000;
   if (!Number.isFinite(spreadBps) || spreadBps > LIVE_MAX_SPREAD_BPS) return { entered: false, exchange, market: candidate.market, reason: `spread ${spreadBps.toFixed(1)}bp exceeds ${LIVE_MAX_SPREAD_BPS}bp` };
 
-  const plan = candidatePlan(candidate); const rules = await symbolRules(exchange, candidate, plan); const limits = exchangeLimits(settings, exchange);
+  const plan = candidatePlan(candidate, settings); const rules = await symbolRules(exchange, candidate, plan); const limits = exchangeLimits(settings, exchange);
   const managedPortfolioState = await managedPortfolio(settings, exchange, portfolio);
   const managed = managedPortfolioState.managed;
   if (finite(managed.managedAvailableQuote) < Math.max(limits.minOrder, rules.min_notional)) {
@@ -594,8 +715,16 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   }
   const allocationOnly = (settings as any).strategy === "SCALP";
   const managedAvailable = finite(managed.managedAvailableQuote);
+  // v5.3: split the managed allocation into concurrent slots. v5.2.5 used
+  // `managedAvailable` directly, so candidate #1 took the entire exchange balance,
+  // candidate #2 always failed the exchange minimum, and the bot ran a single
+  // position at a time — the opposite of the intended high-turnover profile.
+  const slots = allocationOnly ? clamp(finite((settings as any).scalp_position_slots, 6), 1, 20) : 1;
+  const slotQuote = allocationOnly
+    ? Math.max(0, finite(managed.managedCapitalQuote)) / slots
+    : Number.POSITIVE_INFINITY;
   const maxOrder = allocationOnly
-    ? managedAvailable
+    ? Math.min(managedAvailable, slotQuote)
     : Math.min(limits.maxOrder, plan.recommended > 0 ? plan.recommended : limits.maxOrder);
   const allocationSizing = (entryPrice: number) => {
     const minOrder = Math.max(limits.minOrder, rules.min_notional);
@@ -631,10 +760,40 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   let scalpStopPrice: number | null = null;
   let scalpTarget1: number | null = null;
   let scalpTarget2: number | null = null;
+  let scalpAudit: JsonRecord | null = null;
   if ((settings as any).strategy === "SCALP") {
-    const scalpPWin = finite((candidate as any).scalp_p_win ?? (candidate as any).snapshot?.scalp?.pWin ?? (candidate as any).scalp?.pWin, 0.5);
-    const scalpTargetPct = finite((candidate as any).scalp_target_pct ?? (candidate as any).snapshot?.scalp?.target_pct ?? (candidate as any).scalp?.target_pct, 0.006);
-    const scalpStopPct = finite((candidate as any).scalp_stop_pct ?? (candidate as any).snapshot?.scalp?.stop_pct ?? (candidate as any).scalp?.stop_pct, 0.003);
+    const scalpSnapshot = (candidate as any).snapshot?.scalp || {};
+    const scanPWin = finite((candidate as any).scalp_p_win ?? scalpSnapshot.pWin ?? (candidate as any).scalp?.pWin, 0.5);
+    const scalpTargetPct = finite((candidate as any).scalp_target_pct ?? scalpSnapshot.target_pct ?? (candidate as any).scalp?.target_pct, 0.006);
+    const scalpStopPct = finite((candidate as any).scalp_stop_pct ?? scalpSnapshot.stop_pct ?? (candidate as any).scalp?.stop_pct, 0.003);
+    const resolveProbability = clamp(finite(scalpSnapshot.geometry?.resolve_probability, 1), 0, 1);
+
+    const askLevels = (market.asks || []).map((a: any) => ({ price: finite(a.price ?? a[0]), size: finite(a.size ?? a[1]) }));
+    const bidLevels = (market.bids || []).map((b: any) => ({ price: finite(b.price ?? b[0]), size: finite(b.size ?? b[1]) }));
+
+    // v5.3: re-price the signal against the book that exists RIGHT NOW.
+    // v5.2.5 carried `pWin` verbatim from the scan and only refreshed depth, so with a
+    // 60s scan cadence the entry could be driven by a minute-old orderbook reading while
+    // `maxBookAgeMs: 5000` implied freshness was enforced.
+    const signalAtMs = Date.parse(String(scalpSnapshot.signal_at || candidate.created_at || ""));
+    const signalAgeMs = Number.isFinite(signalAtMs) ? Math.max(0, Date.now() - signalAtMs) : 60_000;
+    const liveImbalance = topOfBookImbalance(bidLevels, askLevels);
+    const rawPWin = refreshPWinAtOrderTime(
+      scanPWin,
+      finite(scalpSnapshot.imbalance_contribution, 0),
+      liveImbalance,
+      signalAgeMs,
+      {
+        ...DEFAULT_SCALP_SIGNAL,
+        alphaHalfLifeMs: clamp(finite((settings as any).scalp_alpha_half_life_ms, DEFAULT_SCALP_SIGNAL.alphaHalfLifeMs), 1000, 300000),
+      },
+      finite(scalpSnapshot.trend_penalty, 1),
+    );
+    // v5.3: correct the model's probability with whatever the realized outcomes say.
+    // Identity until the calibration job has enough samples to promote a profile.
+    const calibration = await loadScalpCalibration();
+    const scalpPWin = applyCalibration(rawPWin, calibration);
+
     const day = await scalpDayState(exchange, settings.mode !== "LIVE_LIMITED");
     const decision = scalpEntryDecision(
       {
@@ -644,15 +803,33 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
         pWin: scalpPWin,
         targetPct: scalpTargetPct,
         stopPct: scalpStopPct,
-        askLevels: (market.asks || []).map((a: any) => ({ price: finite(a.price ?? a[0]), size: finite(a.size ?? a[1]) })),
-        bidLevels: (market.bids || []).map((b: any) => ({ price: finite(b.price ?? b[0]), size: finite(b.size ?? b[1]) })),
+        askLevels,
+        bidLevels,
         bestAsk, bestBid,
+        resolveProbability,
+        timeoutReturn: 0,
       },
       scalpSafetyConfig(settings),
-      scalpCostConfig(settings, exchange),
+      scalpCostConfig(settings, exchange, await liveFeePct(exchange, settings)),
     );
+    scalpAudit = {
+      scan_p_win: scanPWin,
+      raw_order_p_win: rawPWin,
+      order_p_win: scalpPWin,
+      calibration: { slope: calibration.a, intercept: calibration.b, samples: calibration.samples },
+      signal_age_ms: signalAgeMs,
+      live_top_imbalance: liveImbalance,
+      resolve_probability: resolveProbability,
+      target_pct: scalpTargetPct,
+      stop_pct: scalpStopPct,
+      expected_net_edge: decision.expectedNetEdge,
+      geometry: scalpSnapshot.geometry || null,
+      features: scalpSnapshot.features || null,
+      slots,
+      slot_quote: Number.isFinite(slotQuote) ? slotQuote : null,
+    };
     if (!decision.allow) {
-      await event("SCALP_GATE_BLOCK", `${exchange}:${candidate.market} scalp gate blocked`, { reason: decision.reason, edge: decision.expectedNetEdge }, { cycleId });
+      await event("SCALP_GATE_BLOCK", `${exchange}:${candidate.market} scalp gate blocked`, { reason: decision.reason, ...scalpAudit }, { cycleId });
       return { entered: false, exchange, market: candidate.market, reason: `scalp gate: ${decision.reason}` };
     }
     if (decision.notional < sizing.notionalQuote) {
@@ -668,8 +845,27 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
     scalpTarget2 = tickRound(entryPrice * (1 + scalpTargetPct * 1.5), rules.price_tick, "up");
   }
 
+  // v5.3: the holding horizon is per symbol. geometry.ts stretches it to the time the
+  // symbol actually needs, at its own volatility, to travel `target_pct`; the operator
+  // setting is only the ceiling. v5.2.5 used a flat 30 minutes for everything, which
+  // guaranteed a time exit on any symbol slower than the (fixed) target.
+  // v5.4: two different clocks, with two different jobs.
+  //   expected_resolution_at — volatility-derived estimate of when this symbol should
+  //     have reached its target. NOT an exit. Past it, the hold test gets stricter.
+  //   max_holding_at — the absolute backstop against a stuck ledger. Operator-set,
+  //     default 6 hours. This is the only absolute time that can close a position.
+  const scalpHorizonCeiling = clamp(finite((settings as any).scalp_max_holding_minutes, 120), 1, 1440);
+  const scalpExpectedMinutes = clamp(
+    finite((candidate as any).snapshot?.scalp?.geometry?.horizon_minutes, scalpHorizonCeiling),
+    1,
+    scalpHorizonCeiling,
+  );
+  const scalpSafetyTtlMinutes = Math.max(
+    scalpExpectedMinutes,
+    clamp(finite((settings as any).scalp_safety_ttl_minutes, 360), 10, 10080),
+  );
   const maxHolding = (settings as any).strategy === "SCALP"
-    ? new Date(Date.now() + clamp(finite((settings as any).scalp_max_holding_minutes, 30), 1, 1440) * 60_000).toISOString()
+    ? new Date(Date.now() + scalpSafetyTtlMinutes * 60_000).toISOString()
     : new Date(Date.now() + clamp(finite(candidate.intended_horizon_hours, 24), 1, 480) * 3600_000).toISOString();
   const position = (await insert("trading_positions", {
     candidate_id: candidate.id, scan_id: candidate.scan_id, exchange, quote_currency: quote, market: candidate.market, base_asset: base,
@@ -678,7 +874,18 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
     tick_size: rules.price_tick, quantity_step: rules.quantity_step, min_notional_quote: Math.max(limits.minOrder, rules.min_notional),
     t1_allocation_pct: plan.allocation, exit_policy: plan.exitPolicy, trailing_distance_pct: plan.trailingDistancePct,
     intended_horizon_hours: candidate.intended_horizon_hours, max_holding_at: maxHolding,
-    metadata: { cycle_id: cycleId, sizing, managed_allocation: managed, quote_at_entry: market, execution_depth: depth, live_spread_bps: spreadBps, engine_version: VERSION },
+    metadata: {
+      cycle_id: cycleId, sizing, managed_allocation: managed, quote_at_entry: market,
+      execution_depth: depth, live_spread_bps: spreadBps, engine_version: VERSION,
+      // v5.3: the full entry-time signal, persisted so the pWin calibration loop can
+      // later join predicted probability against the realized outcome on this row.
+      scalp_signal: scalpAudit,
+      scalp_expected_minutes: (settings as any).strategy === "SCALP" ? scalpExpectedMinutes : null,
+      scalp_safety_ttl_minutes: (settings as any).strategy === "SCALP" ? scalpSafetyTtlMinutes : null,
+      expected_resolution_at: (settings as any).strategy === "SCALP"
+        ? new Date(Date.now() + scalpExpectedMinutes * 60_000).toISOString()
+        : null,
+    },
   }))[0] as Position;
 
   if (settings.mode !== "LIVE_LIMITED") {
@@ -718,7 +925,10 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
     }
     const opened = await applyEntryAccounting(position, orderRow, updated.fill);
     await event("LIVE_ENTRY", `${exchange}:${candidate.market} live entry`, { fill_price: updated.fill.averagePrice, quantity: updated.fill.executedVolume }, { cycleId, positionId: position.id, orderId: orderRow.id });
-    return { entered: true, paper: false, exchange, market: candidate.market, position: opened };
+    // v5.3: rest the first-target limit sell now, so the profit path never depends on a
+    // 15-second poll catching the touch. No-op unless scalp_resting_tp is enabled.
+    const withTp = await placeRestingTakeProfit(opened as Position, settings, cycleId);
+    return { entered: true, paper: false, exchange, market: candidate.market, position: withTp };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const status = Number((error as any)?.status || 0);
@@ -735,6 +945,265 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
     await event("ENTRY_RESULT_UNKNOWN", `${exchange}:${candidate.market} entry requires reconciliation`, { identifier, error: message }, { cycleId, positionId: position.id, orderId: orderRow.id, level: "CRITICAL" });
     return { entered: false, reserved: true, pending_reconcile: true, exchange, market: candidate.market, reason: "entry result unknown; duplicate suppressed" };
   }
+}
+
+// =====================================================================================
+// v5.3: resting take-profit
+// =====================================================================================
+//
+// The v5.2.5 profit exit was: poll the ticker every 15 seconds, and when it is at or
+// above the target, send a MARKET sell. That loses on both sides of the same trade:
+//
+//   1) If price touches the target and retreats inside the 15s gap, the WIN NEVER
+//      HAPPENS — the position stays open and often closes later at the stop. This is a
+//      direct, and large, hit to realized win rate.
+//   2) Even when the poll catches it, a market sell fills at the best BID, i.e. the
+//      target minus the spread, so every winner is smaller than the EV model assumed.
+//
+// Resting a limit sell at the target from the moment of entry removes both: the
+// exchange matches at exactly the target price, with no polling in the profit path.
+//
+// The cost is a real order-lifecycle state machine. The invariants are:
+//   - A resting TP is accounted EXACTLY ONCE, at its terminal state. While it is OPEN or
+//     PARTIALLY_FILLED nothing is booked, so partial fills cannot be double counted.
+//   - Any other exit (stop, time, emergency) MUST cancel the TP and confirm the cancel
+//     before market-selling. The resting order locks the base asset; selling first would
+//     be rejected for insufficient balance and leave the position stuck.
+//   - If the cancel reveals the TP filled in the meantime, that fill is booked as
+//     TARGET_1 and the exit is re-evaluated on the next cycle rather than forced.
+
+const TP_TERMINAL_STATUSES = ["FILLED", "CANCELED", "PARTIALLY_FILLED_CANCELED", "REJECTED", "EXPIRED"];
+
+// v5.3: active pWin calibration, loaded once per cycle. Falls back to the identity, so a
+// missing table or a failed read can never change trading behavior.
+let calibrationCache: { model: CalibrationModel; expires: number } | null = null;
+async function loadScalpCalibration(): Promise<CalibrationModel> {
+  if (calibrationCache && calibrationCache.expires > Date.now()) return calibrationCache.model;
+  let model: CalibrationModel = { ...IDENTITY_CALIBRATION };
+  try {
+    const rows = await db("scalp_calibration_profiles?active=eq.true&select=slope,intercept,train_samples&limit=1");
+    const row = rows?.[0];
+    if (row) {
+      model = {
+        ...IDENTITY_CALIBRATION,
+        a: finite(row.slope, 1) || 1,
+        b: finite(row.intercept, 0),
+        samples: finite(row.train_samples, 0),
+      };
+    }
+  } catch {
+    // Table absent or unreadable: stay on the identity.
+  }
+  calibrationCache = { model, expires: Date.now() + 60_000 };
+  return model;
+}
+
+/**
+ * v5.4: base-asset quantity locked by the bot's OWN resting orders, per asset.
+ *
+ * Every identifier this system creates starts with the bot prefix, and the gateway
+ * refuses to touch any order that does not. So an open order carrying that prefix is
+ * definitionally ours, and the quantity it reserves must be counted as still held —
+ * otherwise the reconciliation reads our own working orders as a user locking the coin.
+ *
+ * Falls back to parsing the raw exchange payload when the gateway predates the
+ * normalized remaining-volume field, and returns an empty map on any failure so a
+ * transient error can never manufacture a mismatch.
+ */
+/**
+ * v5.4: real per-side taker fee for this account, in percent.
+ *
+ * FEE_PCT was a hardcoded list price (Upbit 0.05, Binance 0.10). Binance applies a 25%
+ * discount when fee payment in BNB is enabled, VIP tiers move both sides, and some pairs
+ * run promotions. Required win rate is a direct function of cost, so an assumed fee
+ * mis-sizes every barrier the geometry module produces. Falls back to FEE_PCT on any
+ * failure, and never blocks a cycle.
+ */
+const feeCache: Partial<Record<Exchange, { pct: number; expires: number }>> = {};
+async function liveFeePct(exchange: Exchange, settings: TradingSettings): Promise<number> {
+  if ((settings as any).scalp_use_live_fees === false) return FEE_PCT[exchange];
+  const cached = feeCache[exchange];
+  if (cached && cached.expires > Date.now()) return cached.pct;
+  let pct = FEE_PCT[exchange];
+  try {
+    const fees = await gateway(exchange, { action: "fees" });
+    const taker = finite(fees?.taker_pct, NaN);
+    // Sanity band: a reported rate outside it means the payload changed shape, not that
+    // trading suddenly became free.
+    if (Number.isFinite(taker) && taker >= 0 && taker <= 1) pct = taker;
+  } catch {
+    // Gateway may predate the `fees` action; keep the static assumption.
+  }
+  feeCache[exchange] = { pct, expires: Date.now() + 30 * 60_000 };
+  return pct;
+}
+
+async function botLockedQuantities(exchange: Exchange, positions: Position[]): Promise<Map<string, number>> {
+  const locked = new Map<string, number>();
+  try {
+    const rows = await gateway(exchange, { action: "open_orders" });
+    const ours = new Set(
+      ((await db(`trading_orders?exchange=eq.${exchange}&state=in.(REQUESTED,ACCEPTED,OPEN,PARTIAL,APPLIED)&select=identifier`).catch(() => [])) as any[])
+        .map((row) => String(row.identifier || "")),
+    );
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const clientId = String(row?.client_order_id || "");
+      // Prefix match is the authoritative test; the ledger lookup is a second confirmation
+      // and never a requirement, because an order can exist on the exchange a moment
+      // before our row is written.
+      if (!clientId.startsWith(BOT_ORDER_PREFIX) && !ours.has(clientId)) continue;
+      const side = String(row?.side ?? row?.raw?.side ?? "").toUpperCase();
+      if (side && !["SELL", "ASK"].includes(side)) continue;
+      const raw = row?.raw || {};
+      const remaining = finite(
+        row?.remaining_volume,
+        finite(raw.remaining_volume, Math.max(0, finite(raw.origQty, finite(raw.volume)) - finite(raw.executedQty, finite(raw.executed_volume)))),
+      );
+      if (!(remaining > 0)) continue;
+      const market = String(row?.market ?? raw.market ?? raw.symbol ?? "");
+      const asset = baseAsset(exchange, market) ||
+        positions.find((p) => p.market === market)?.base_asset || "";
+      if (!asset) continue;
+      locked.set(asset, (locked.get(asset) || 0) + remaining);
+    }
+  } catch {
+    // Unreadable open orders must not be treated as evidence of anything.
+    return new Map();
+  }
+  return locked;
+}
+
+function scalpHoldConfig(settings: TradingSettings, exchange: Exchange): ScalpHoldConfig {
+  return resolveHoldConfig({
+    alphaHalfLifeMinutes: finite((settings as any).scalp_hold_alpha_half_life_minutes, 12),
+    minEdgeAfterExpected: finite((settings as any).scalp_hold_min_edge_after_expected, 0.0005),
+    reversalImbalance: finite((settings as any).scalp_hold_reversal_imbalance, -0.25),
+    reversalConfirmations: finite((settings as any).scalp_hold_reversal_confirmations, 2),
+    safetyTtlMinutes: finite((settings as any).scalp_safety_ttl_minutes, 360),
+    // One side only: the entry leg is sunk cost and must not be charged again.
+    exitCostFraction: FEE_PCT[exchange] / 100 + finite((settings as any).scalp_slippage_allowance, 0.0009) / 2,
+  });
+}
+
+function restingTpEnabled(settings: TradingSettings, position: Position): boolean {
+  return String((settings as any).strategy || "") === "SCALP" &&
+    (settings as any).scalp_resting_tp === true &&
+    !position.is_paper;
+}
+
+function restingTpIdentifier(position: Position): string | null {
+  const id = position.metadata?.tp_identifier;
+  return typeof id === "string" && id ? id : null;
+}
+
+/** Place the first-target limit sell immediately after the entry fill is booked. */
+async function placeRestingTakeProfit(position: Position, settings: TradingSettings, cycleId: string): Promise<Position> {
+  if (!restingTpEnabled(settings, position) || restingTpIdentifier(position)) return position;
+  const target = finite(position.target_1);
+  const step = finite(position.quantity_step, 0.00000001);
+  const remaining = finite(position.remaining_quantity);
+  if (!(target > 0 && remaining > 0)) return position;
+  const qty = floorToStep(t1SellQuantity(finite(position.initial_quantity), remaining, finite(position.t1_allocation_pct, 60)), step);
+  const minNotional = finite(position.min_notional_quote, position.exchange === "upbit" ? 5000 : 10);
+  // Both the TP slice AND the remainder must clear the exchange minimum, otherwise the
+  // runner becomes un-sellable dust. If they cannot, fall back to the polling exit path.
+  if (!(qty > 0) || qty * target < minNotional || (remaining - qty) * target < minNotional) {
+    await event("TP_REST_SKIPPED", `${position.exchange}:${position.market} resting TP below exchange minimum`, { qty, target, minNotional }, { cycleId, positionId: position.id });
+    return position;
+  }
+  const identifier = uniqueId("tp", position.id);
+  const orderRow = await createOrderRecord({
+    position_id: position.id, candidate_id: position.candidate_id, cycle_id: cycleId, exchange: position.exchange,
+    quote_currency: position.quote_currency, identifier, market: position.market, side: "SELL", purpose: "TARGET_1",
+    order_type: "LIMIT", time_in_force: position.exchange === "binance" ? "GTC" : null,
+    requested_price: target, requested_volume: qty, requested_notional_quote: qty * target, state: "REQUESTED",
+  });
+  try {
+    const result = await gateway(position.exchange, {
+      action: "create_order",
+      order: {
+        market: position.market, side: "SELL", type: "LIMIT", price: target, quantity: qty, identifier,
+        // Upbit rests plain limit orders by default and only accepts ioc/fok here, so the
+        // field is omitted. The Binance path defaults to IOC when unset, so GTC is explicit.
+        ...(position.exchange === "binance" ? { time_in_force: "GTC" } : {}),
+      },
+      wait_for_final_ms: 0,
+    }, 20_000);
+    await updateOrderFromGateway(orderRow, result);
+    const updated = await patch("trading_positions", `id=eq.${position.id}`, {
+      metadata: { ...(position.metadata || {}), tp_identifier: identifier, tp_order_id: orderRow.id, tp_price: target, tp_quantity: qty, tp_placed_at: new Date().toISOString() },
+    });
+    await event("TP_RESTED", `${position.exchange}:${position.market} resting take-profit placed`, { price: target, quantity: qty, identifier }, { cycleId, positionId: position.id, orderId: orderRow.id });
+    return { ...position, ...(updated[0] || {}) } as Position;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await patch("trading_orders", `id=eq.${orderRow.id}`, { state: "REJECTED", error_message: message, completed_at: new Date().toISOString() });
+    // Non-fatal: the position simply keeps the v5.2.5 polling exit behavior.
+    await event("TP_REST_FAILED", `${position.exchange}:${position.market} resting take-profit rejected`, { error: message }, { cycleId, positionId: position.id, level: "WARNING" });
+    return position;
+  }
+}
+
+/** Book a resting TP that has reached a terminal state. Returns the refreshed position. */
+async function settleRestingTakeProfit(position: Position, order: any, cycleId: string): Promise<Position> {
+  const orderRow = (await db(`trading_orders?id=eq.${position.metadata?.tp_order_id}&select=*&limit=1`))[0];
+  if (!orderRow) return position;
+  const updated = await updateOrderFromGateway(orderRow, order);
+  const clearMeta = { ...(position.metadata || {}), tp_identifier: null, tp_settled_at: new Date().toISOString() };
+  if (finite(updated.fill.executedVolume) > 0) {
+    const result = await finalizeExitFill(position, { orderRow: updated.row, ...updated }, "TARGET_1", finite(position.target_1), cycleId);
+    const next = (result as any)?.position || position;
+    const rows = await patch("trading_positions", `id=eq.${next.id}`, { metadata: { ...(next.metadata || {}), ...clearMeta } });
+    return { ...next, ...(rows[0] || {}) } as Position;
+  }
+  const rows = await patch("trading_positions", `id=eq.${position.id}`, { metadata: clearMeta });
+  return { ...position, ...(rows[0] || {}) } as Position;
+}
+
+/** Poll a live resting TP. Books it only once it is terminal. */
+async function syncRestingTakeProfit(position: Position, cycleId: string): Promise<Position> {
+  const identifier = restingTpIdentifier(position);
+  if (!identifier) return position;
+  let order: any;
+  try {
+    order = await gateway(position.exchange, { action: "get_order", identifier, market: position.market });
+  } catch (error) {
+    // Transport failure: leave the order in place and retry next cycle. Never assume it
+    // is gone — assuming that and re-selling is how duplicate exits happen.
+    await event("TP_SYNC_ERROR", `${position.exchange}:${position.market} resting TP query failed`, { error: error instanceof Error ? error.message : String(error) }, { cycleId, positionId: position.id, level: "WARNING" });
+    return position;
+  }
+  const status = String(order?.status || order?.order?.status || "");
+  if (!TP_TERMINAL_STATUSES.includes(status)) return position;
+  return settleRestingTakeProfit(position, order, cycleId);
+}
+
+/**
+ * Cancel the resting TP and confirm it is terminal before any market exit.
+ * Returns false when the caller must NOT proceed to sell this cycle.
+ */
+async function cancelRestingTakeProfit(position: Position, cycleId: string): Promise<{ ok: boolean; position: Position }> {
+  const identifier = restingTpIdentifier(position);
+  if (!identifier) return { ok: true, position };
+  let terminal: any = null;
+  for (let attempt = 0; attempt < 3 && !terminal; attempt++) {
+    try {
+      const result = attempt === 0
+        ? await gateway(position.exchange, { action: "cancel_order", identifier, market: position.market })
+        : await gateway(position.exchange, { action: "get_order", identifier, market: position.market });
+      const status = String(result?.status || result?.order?.status || "");
+      if (TP_TERMINAL_STATUSES.includes(status)) terminal = result;
+    } catch (error) {
+      // A cancel can legitimately fail because the order already filled; the follow-up
+      // get_order resolves which case this is.
+      await event("TP_CANCEL_RETRY", `${position.exchange}:${position.market} resting TP cancel attempt failed`, { attempt, error: error instanceof Error ? error.message : String(error) }, { cycleId, positionId: position.id, level: "WARNING" });
+    }
+  }
+  if (!terminal) {
+    await event("TP_CANCEL_UNRESOLVED", `${position.exchange}:${position.market} resting TP not confirmed cancelled; exit deferred`, { identifier }, { cycleId, positionId: position.id, level: "CRITICAL" });
+    return { ok: false, position };
+  }
+  return { ok: true, position: await settleRestingTakeProfit(position, terminal, cycleId) };
 }
 
 async function snapshotAccount(exchange: Exchange, portfolio: any, positions: Position[], prices: Record<string, number>, settings: TradingSettings) {
@@ -791,14 +1260,14 @@ async function sellLive(position: Position, quantity: number, purpose: string, c
     throw error;
   }
 }
-async function finalizeExitFill(position: Position, result: any, action: string, fallbackPrice: number, cycleId: string) {
-  const applied = await applyExitAccounting(position, result.orderRow, result.fill || {}, action, fallbackPrice); const updated = applied.position;
+async function finalizeExitFill(position: Position, result: any, action: string, fallbackPrice: number, cycleId: string, breakevenAfterT1 = true) {
+  const applied = await applyExitAccounting(position, result.orderRow, result.fill || {}, action, fallbackPrice, breakevenAfterT1); const updated = applied.position;
   await event(applied.closed ? "POSITION_CLOSED" : "PARTIAL_EXIT", `${position.exchange}:${position.market} ${action}`, {
     price: applied.fillPrice, sold_quantity: applied.quantity, remaining: finite(updated?.remaining_quantity), pnl_quote: finite(updated?.realized_pnl_quote), quote: position.quote_currency, accounting_applied: applied.applied,
   }, { cycleId, positionId: position.id, orderId: result.orderRow.id });
   return { action, exchange: position.exchange, market: position.market, closed: applied.closed, position: updated };
 }
-async function applyExit(position: Position, price: number, action: string, cycleId: string) {
+async function applyExit(position: Position, price: number, action: string, cycleId: string, breakevenAfterT1 = true) {
   let quantity = action === "TARGET_1" ? t1SellQuantity(position.initial_quantity, position.remaining_quantity, position.t1_allocation_pct) : finite(position.remaining_quantity);
   const minNotional = finite(position.min_notional_quote, position.exchange === "upbit" ? 5000 : 10);
   if (quantity * price < minNotional || (position.remaining_quantity - quantity) * price < minNotional) quantity = position.remaining_quantity;
@@ -806,7 +1275,7 @@ async function applyExit(position: Position, price: number, action: string, cycl
   if (!(quantity > 0)) return { action: "NONE", reason: "zero sell quantity" };
   if (!position.is_paper) position = { ...position, ...(await patch("trading_positions", `id=eq.${position.id}`, { state: "EXITING", metadata: { ...(position.metadata || {}), pending_exit_action: action, pending_exit_at: new Date().toISOString() } }))[0] };
   const result = position.is_paper ? await sellPaper(position, quantity, price, action, cycleId) : await sellLive(position, quantity, action, cycleId);
-  return finalizeExitFill(position, result, action, price, cycleId);
+  return finalizeExitFill(position, result, action, price, cycleId, breakevenAfterT1);
 }
 
 async function reconcileEntryPending(position: Position, cycleId: string) {
@@ -938,6 +1407,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
   for (const position of tracked.filter((p) => p.state === "EXITING")) await reconcileExitPending(position, cycleId);
   const open = await db("trading_positions?state=eq.OPEN&select=*&order=created_at.asc") as Position[];
   const actions: any[] = []; const prices: Record<string, number> = {}; const portfolios: Partial<Record<Exchange, any>> = {};
+  const books: Record<string, any> = {};
   const unresolvedManualAssets: string[] = [];
   for (const exchange of ["upbit", "binance"] as Exchange[]) {
     const exchangePositions = open.filter((p) => p.exchange === exchange);
@@ -956,8 +1426,28 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       totalByAsset.set(asset, free + locked);
     }
     const quotes = await Promise.all(exchangePositions.map(async (position) => [position.market, await marketQuote(exchange, position.market)] as const));
-    for (const [market, quote] of quotes) prices[market] = finite(quote.current, (finite(quote.best_ask) + finite(quote.best_bid)) / 2);
+    // v5.4: retain the full book, not just the price. The holding decision is made from
+    // the live orderbook; discarding it here is what forced the fallback to a wall clock.
+    for (const [market, quote] of quotes) {
+      prices[market] = finite(quote.current, (finite(quote.best_ask) + finite(quote.best_bid)) / 2);
+      books[market] = quote;
+    }
+    // v5.4 ---------------------------------------------------------------------------
+    // The bot's OWN open orders lock base asset. v5.2.5 compared `expected` against the
+    // FREE balance, so any bot-placed resting sell (and every in-flight exit) looked like
+    // a user had locked the coin, and after 3 checks — 45 seconds — it set
+    // manual_intervention_required, which halts NEW ENTRIES ON EVERY MARKET AND BOTH
+    // EXCHANGES. A bot doing its job could therefore shut the whole system down.
+    //
+    // Fix, in two parts:
+    //   1) Add the quantity locked by our own orders back before comparing.
+    //   2) A locked-but-present asset is never a global halt. Only an asset that has
+    //      actually LEFT the account is, and even then the pause is scoped to that asset
+    //      unless the pattern is systemic (several assets at once => wrong account, key
+    //      change, or exchange-side problem).
+    const botLockedByAsset = await botLockedQuantities(exchange, exchangePositions);
     const mismatches = new Set<string>();
+    const vanishedAssets = new Set<string>();
     for (const originalPosition of exchangePositions.filter((row) => !row.is_paper)) {
       let position = originalPosition;
       // Only a position backed by a successfully APPLIED entry fill may be
@@ -975,12 +1465,22 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       const expected = finite(position.remaining_quantity);
       const actualTotal = totalByAsset.get(position.base_asset) || 0;
       const actualFree = freeByAsset.get(position.base_asset) || 0;
+      const botLocked = botLockedByAsset.get(position.base_asset) || 0;
+      // Quantity we ourselves put beyond reach counts as present.
+      const effectiveFree = actualFree + botLocked;
       const totalMissing = actualTotal + 1e-10 < expected * 0.999999;
-      const freeMissing = !totalMissing && actualFree + 1e-10 < expected * 0.999999;
+      const freeMissing = !totalMissing && effectiveFree + 1e-10 < expected * 0.999999;
       const previousCount = Math.max(0, Math.floor(finite(position.metadata?.account_mismatch_count)));
       if (!totalMissing && !freeMissing) {
         if (previousCount > 0) await patch("trading_positions", `id=eq.${position.id}`, { metadata: { ...(position.metadata || {}), account_mismatch_count: 0, last_account_mismatch_at: null } });
         continue;
+      }
+      if (freeMissing && botLocked > 0) {
+        // Partially explained by our own orders but still short: record it and keep
+        // watching. Never escalate a lock we are partly responsible for.
+        await event("ACCOUNT_LOCK_PARTIALLY_EXPLAINED", `${exchange}:${position.market} lock partially explained by bot orders`, {
+          expected_quantity: expected, free_quantity: actualFree, bot_locked_quantity: botLocked, total_quantity: actualTotal,
+        }, { cycleId, positionId: position.id, level: "INFO" });
       }
       const mismatchCount = previousCount + 1;
       position = { ...position, ...(await patch("trading_positions", `id=eq.${position.id}`, {
@@ -994,19 +1494,38 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       }
       mismatches.add(position.base_asset);
       if (totalMissing) {
+        vanishedAssets.add(position.base_asset);
         await reconcileManualReduction(position, actualTotal, prices[position.market], cycleId);
       } else {
         unresolvedManualAssets.push(`${exchange}:${position.base_asset}`);
-        await event("MANUAL_ASSET_LOCK", `${exchange}:${position.market} confirmed base-asset lock after 3 checks`, {
-          expected_quantity: expected, free_quantity: actualFree, total_quantity: actualTotal,
-        }, { cycleId, positionId: position.id, level: "CRITICAL" });
+        // Locked but present, and NOT explained by our own orders. That is a user limit
+        // order on this coin — a reason to leave this asset alone, not to stop trading.
+        await event("MANUAL_ASSET_LOCK", `${exchange}:${position.market} base-asset lock not explained by bot orders`, {
+          expected_quantity: expected, free_quantity: actualFree, bot_locked_quantity: botLocked, total_quantity: actualTotal, scope: "ASSET_ONLY",
+        }, { cycleId, positionId: position.id, level: "WARNING" });
       }
     }
     if (mismatches.size) {
+      // Scope the pause to the affected assets. enterCandidate skips these; every other
+      // market keeps trading.
+      const previousLocks = Array.isArray((settings as any).manual_asset_locks) ? (settings as any).manual_asset_locks : [];
+      const nextLocks = [...new Set([...previousLocks, ...[...mismatches].map((asset) => `${exchange}:${asset}`)])];
+      // Escalate to a full halt only when the pattern is systemic: an asset that actually
+      // left the account, and more than one of them. One manual sale is not a system fault.
+      const systemic = vanishedAssets.size >= 2 ||
+        (vanishedAssets.size >= 1 && vanishedAssets.size >= Math.ceil(exchangePositions.length / 2) && exchangePositions.length >= 2);
       await patch("trading_settings", "id=eq.1", {
-        pause_new_entries: true, manual_intervention_required: true, manual_event_reason: `SAFETY_POSITION_MISMATCH:${exchange}:${[...mismatches].join(",")}`, last_manual_event_at: new Date().toISOString(),
+        manual_asset_locks: nextLocks,
+        ...(systemic
+          ? { pause_new_entries: true, manual_intervention_required: true, manual_event_reason: `SAFETY_POSITION_MISMATCH:${exchange}:${[...vanishedAssets].join(",")}`, last_manual_event_at: new Date().toISOString() }
+          : {}),
       });
-      await event("SAFETY_PAUSE", `${exchange} confirmed position mismatch on 3 consecutive checks; entries paused`, { exchange, assets: [...mismatches], source: "ACCOUNT_RECONCILIATION" }, { cycleId, level: "CRITICAL" });
+      await event(systemic ? "SAFETY_PAUSE" : "ASSET_SCOPED_PAUSE",
+        systemic
+          ? `${exchange} multiple positions vanished from the account; all entries paused`
+          : `${exchange} entries paused for affected assets only; other markets continue`,
+        { exchange, assets: [...mismatches], vanished: [...vanishedAssets], scope: systemic ? "GLOBAL" : "ASSET", source: "ACCOUNT_RECONCILIATION" },
+        { cycleId, level: systemic ? "CRITICAL" : "WARNING" });
     }
     for (const original of exchangePositions) {
       let position = original;
@@ -1016,7 +1535,71 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       const values: JsonRecord = { peak_price: peak, trough_price: trough };
       if (position.t1_completed && position.exit_policy === "TRAIL_AFTER_T1") values.trailing_stop = nextTrailingStop(position.trailing_stop, peak, finite(position.trailing_distance_pct, 1.2), position.stop_price);
       if (peak !== finite(position.peak_price) || trough !== finite(position.trough_price) || values.trailing_stop) position = { ...position, ...(await patch("trading_positions", `id=eq.${position.id}`, values))[0] };
+      // v5.3: settle a resting take-profit that has reached a terminal state before
+      // deciding anything else, so the position's remaining quantity is current.
+      if (restingTpEnabled(settings, position)) {
+        position = await syncRestingTakeProfit(position, cycleId);
+        if (String(position.state) !== "OPEN" || finite(position.remaining_quantity) <= 0) {
+          actions.push({ exchange, market: position.market, action: "TARGET_1", reason: "resting take-profit filled" });
+          continue;
+        }
+      }
       let decision = decideExit(position, current, Date.now(), settings.emergency_liquidation);
+      // v5.4: replace the fixed time exit with a live-edge test.
+      //
+      // decideExit() still returns TIME_EXIT at max_holding_at, but for SCALP that column
+      // now holds the operator's SAFETY TTL (default 6h), not a 30-minute trading rule.
+      // Everything between entry and that backstop is decided by whether the reason for
+      // the trade is still true.
+      if ((settings as any).strategy === "SCALP" && decision.action === "NONE" && !settings.emergency_liquidation) {
+        const holdCfg = scalpHoldConfig(settings, exchange);
+        const book = books[position.market];
+        const liveImbalance = book
+          ? topOfBookImbalance(
+            (book.bids || []).map((b: any) => ({ price: finite(b.price ?? b[0]), size: finite(b.size ?? b[1]) })),
+            (book.asks || []).map((a: any) => ({ price: finite(a.price ?? a[0]), size: finite(a.size ?? a[1]) })),
+          )
+          : 0;
+        const openedAt = Date.parse(String(position.opened_at || position.created_at || ""));
+        const heldMinutes = Number.isFinite(openedAt) ? Math.max(0, (Date.now() - openedAt) / 60_000) : 0;
+        const hold = evaluateHold({
+          entryPrice: finite(position.average_entry_price),
+          currentPrice: current,
+          targetPrice: finite(position.target_2, finite(position.target_1)),
+          stopPrice: Math.max(finite(position.stop_price), finite(position.trailing_stop)),
+          entryPWin: finite(position.metadata?.scalp_signal?.order_p_win, holdCfg.basePWin),
+          liveImbalance,
+          reversalStreak: Math.max(0, Math.floor(finite(position.metadata?.hold_reversal_streak))),
+          heldMinutes,
+          expectedMinutes: finite(position.metadata?.scalp_expected_minutes, 0),
+          t1Completed: position.t1_completed === true,
+        }, holdCfg);
+
+        if (hold.reversalStreak !== finite(position.metadata?.hold_reversal_streak)) {
+          position = { ...position, ...(await patch("trading_positions", `id=eq.${position.id}`, {
+            metadata: { ...(position.metadata || {}), hold_reversal_streak: hold.reversalStreak, last_hold_edge: hold.liveEdge, last_hold_p_win: hold.livePWin, last_hold_at: new Date().toISOString() },
+          }))[0] };
+        }
+        if (hold.action === "EXIT") {
+          decision = { action: "STOP", fraction: 1, reason: `live_hold:${hold.reason}` } as any;
+          await event("SCALP_HOLD_EXIT", `${exchange}:${position.market} live edge exhausted`, {
+            reason: hold.reason, live_edge: hold.liveEdge, live_p_win: hold.livePWin, held_minutes: heldMinutes,
+            expected_minutes: finite(position.metadata?.scalp_expected_minutes, 0), live_imbalance: liveImbalance,
+          }, { cycleId, positionId: position.id, level: "INFO" });
+        } else if (hold.action === "TIGHTEN" && position.t1_completed) {
+          // Pull the trail up to just under the current price instead of dumping.
+          const tightened = Math.max(finite(position.trailing_stop), current * (1 - Math.max(0.001, holdCfg.exitCostFraction * 2)));
+          if (tightened > finite(position.trailing_stop)) {
+            position = { ...position, ...(await patch("trading_positions", `id=eq.${position.id}`, { trailing_stop: tightened }))[0] };
+            await event("SCALP_HOLD_TIGHTEN", `${exchange}:${position.market} trail tightened on faded edge`, { reason: hold.reason, trailing_stop: tightened, live_edge: hold.liveEdge }, { cycleId, positionId: position.id });
+          }
+        }
+      }
+      // The resting order owns the first target. Without this the 15s poll would ALSO
+      // fire a market TARGET_1 and the position would be sold twice.
+      if (decision.action === "TARGET_1" && restingTpIdentifier(position)) {
+        decision = { action: "NONE", fraction: 0, reason: "first target handled by resting order" } as any;
+      }
       // Independent scalp backstop: no single position may lose more than the
       // operator-selected percentage, even if the normal stop failed or moved.
       if ((settings as any).strategy === "SCALP" && position.average_entry_price > 0) {
@@ -1027,7 +1610,21 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         }
       }
       if (decision.action === "NONE") continue;
-      try { actions.push(await applyExit(position, current, decision.action, cycleId)); }
+      // v5.3: the resting sell locks the base asset. Cancel and CONFIRM before any market
+      // exit; a rejected sell would leave the position open with no protection.
+      if (restingTpIdentifier(position)) {
+        const cancelled = await cancelRestingTakeProfit(position, cycleId);
+        position = cancelled.position;
+        if (!cancelled.ok) {
+          actions.push({ exchange, market: position.market, action: decision.action, error: "resting take-profit cancel unconfirmed; exit deferred one cycle" });
+          continue;
+        }
+        if (String(position.state) !== "OPEN" || finite(position.remaining_quantity) <= 0) continue;
+        const recheck = decideExit(position, current, Date.now(), settings.emergency_liquidation);
+        if (recheck.action === "NONE") continue;
+        decision = recheck;
+      }
+      try { actions.push(await applyExit(position, current, decision.action, cycleId, (settings as any).scalp_breakeven_after_t1 !== false)); }
       catch (error) { actions.push({ exchange, market: position.market, action: decision.action, error: error instanceof Error ? error.message : String(error) }); await event("EXIT_ERROR", error instanceof Error ? error.message : String(error), { decision }, { cycleId, positionId: position.id, level: "CRITICAL" }); }
     }
   }
@@ -1080,7 +1677,7 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
   const result = await runScanner(portfolios, settings); const scanId = String(result.scan_id || result.meta?.scan_id || "");
   if (!scanId) throw new Error("scanner response did not include scan_id");
   await db(`trading_cycle_runs?id=eq.${cycleId}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ scan_id: scanId }) });
-  const candidates = await loadBuyCandidates(scanId);
+  const candidates = await loadBuyCandidates(scanId, settings);
   const active = (await db("trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING)&select=exchange,market,base_asset")) as any[];
   const activeMarkets = new Set(active.map((row) => `${row.exchange}:${row.market}`)); const activeBases = new Set(active.map((row) => row.base_asset));
   const entries: any[] = []; const enteredPerExchange: Record<Exchange, number> = { upbit: 0, binance: 0 };

@@ -239,7 +239,9 @@ Deno.serve(async (request: Request) => {
     const latest = latestSnapshots(snapshots);
     const trades = positions
       .map((position) => calculateTrade(position, orders, latest[position.exchange as Exchange]))
-      .filter(Boolean)
+      // TS does not narrow through filter(Boolean); the predicate makes the null removal
+      // visible to the type checker. Runtime behavior is unchanged.
+      .filter((row): row is JsonRecord => Boolean(row))
       .sort((left: any, right: any) => new Date(right.entry_at || 0).getTime() - new Date(left.entry_at || 0).getTime());
 
     return response({

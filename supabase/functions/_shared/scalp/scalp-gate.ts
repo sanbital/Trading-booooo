@@ -22,6 +22,10 @@ export interface ScalpGateInput {
   bidLevels: OrderbookLevel[];
   bestAsk: number;
   bestBid: number;
+  /** v5.3: P(a barrier resolves before the max holding time). Omit for legacy behavior. */
+  resolveProbability?: number;
+  /** v5.3: expected return when the trade ends at the time exit. */
+  timeoutReturn?: number;
 }
 
 export interface ScalpGateResult {
@@ -56,6 +60,8 @@ export function scalpEntryDecision(
       notional: safety.cappedNotional,
       bestAsk: input.bestAsk,
       bestBid: input.bestBid,
+      resolveProbability: input.resolveProbability ?? 1,
+      timeoutReturn: input.timeoutReturn ?? 0,
     },
     costCfg,
   );

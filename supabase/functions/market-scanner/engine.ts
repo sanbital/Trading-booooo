@@ -4,6 +4,12 @@
 import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-profile.ts";
 import type { EventRiskSnapshot } from "./event-risk.ts";
 import { evaluateScalpSignal, resolveScalpSignalConfig, type ScalpSignalResult } from "../_shared/scalp/signal.ts";
+import {
+  resolveGeometryConfig,
+  resolveScalpGeometry,
+  sigmaFromAtrPct,
+  type ScalpGeometry,
+} from "../_shared/scalp/geometry.ts";
 
 export const ENGINE_VERSION = "5.2.3";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
@@ -163,6 +169,17 @@ export type Microstructure = {
   book_imbalance: number;
   imbalance_stability: number;
   trade_pressure: number;
+  // v5.3 (scalp-only additions; the three fields above keep their v5.2.5 meaning so
+  // TREND behavior and the backtest harness are unchanged).
+  //
+  // book_imbalance averages EVERY visible level with a slow 1/n^0.72 decay across the
+  // WHOLE observation window. Deep levels are the most spoofable and least predictive,
+  // and a window mean is not a current reading. For scalp entry we want the top of the
+  // book, now.
+  book_imbalance_top: number;
+  // trade_pressure is a flat 10-minute sum. For entry timing that is far too slow;
+  // this is the same quantity with a short exponential half-life.
+  trade_pressure_fast: number;
   trade_count: number;
   average_trade_notional: number | null;
   buy_notional: number;
@@ -242,6 +259,9 @@ export type RiskConfig = {
   // Stage 5: optional scalp parameter overrides. Always passed through
   // resolveScalpSignalConfig(), which clamps them to SCALP_BOUNDS.
   scalpOverrides?: Record<string, number>;
+  // v5.3: overrides for the volatility-scaled barrier geometry. Clamped by
+  // resolveGeometryConfig() against GEOMETRY_BOUNDS.
+  geometryOverrides?: Record<string, number>;
 };
 
 export type TargetStrategy = "SHORT_ONLY" | "SCALE_OUT" | "TRAIL_AFTER_T1";
@@ -410,6 +430,25 @@ export type FinalCandidate = {
     stop_pct: number;
     vetoed: boolean;
     reasons: string[];
+    // v5.3: everything below lets the autotrader re-price the signal against a live
+    // book at order time, and lets the calibration loop reconstruct the inputs later.
+    imbalance_contribution?: number;
+    trend_penalty?: number;
+    features?: Record<string, number>;
+    signal_at?: string;
+    geometry?: {
+      horizon_minutes: number;
+      resolve_probability: number;
+      sigma_bar: number;
+      sigma_horizon: number;
+      cost_floor_target: number;
+      volatility_target: number;
+      binding_constraint: string;
+      required_excess_win_rate: number;
+      neutral_win_rate: number;
+      bars_to_target: number | null;
+      horizon_sufficient: boolean;
+    } | null;
   };
   price_context: {
     ticker_price: number;
@@ -1570,6 +1609,12 @@ export function computeDynamicOrderflow(
   };
 }
 
+// v5.3 scalp microstructure constants.
+const SCALP_BOOK_DEPTH = 5;            // levels of the book that carry short-horizon signal
+const SCALP_BOOK_DECAY = 1.5;          // steeper than the 0.72 used for the trend view
+const SCALP_BOOK_RECENT_FRAMES = 4;    // average only the most recent frames
+const SCALP_FLOW_HALF_LIFE_MS = 45_000; // executed-flow half-life for entry timing
+
 export function computeMicrostructure(
   snapshots: OrderbookSnapshot[],
   trades: TradeRow[],
@@ -1582,6 +1627,7 @@ export function computeMicrostructure(
   let bestBid: number | null = null;
   let bestAsk: number | null = null;
 
+  const topImbalances: number[] = [];
   for (const frame of frames) {
     const units = frame.units;
     if (!units.length) continue;
@@ -1593,6 +1639,15 @@ export function computeMicrostructure(
       ask += unit.askPrice * unit.askSize * weight;
     });
     imbalances.push(safeDiv(bid - ask, bid + ask));
+    // v5.3: top-of-book only, steeper decay. Levels beyond SCALP_BOOK_DEPTH are ignored.
+    let topBid = 0;
+    let topAsk = 0;
+    units.slice(0, SCALP_BOOK_DEPTH).forEach((unit, index) => {
+      const weight = 1 / Math.pow(index + 1, SCALP_BOOK_DECAY);
+      topBid += unit.bidPrice * unit.bidSize * weight;
+      topAsk += unit.askPrice * unit.askSize * weight;
+    });
+    topImbalances.push(safeDiv(topBid - topAsk, topBid + topAsk));
     const first = units[0];
     const bidPrice = first.bidPrice;
     const askPrice = first.askPrice;
@@ -1607,6 +1662,8 @@ export function computeMicrostructure(
 
   let buyNotional = 0;
   let sellNotional = 0;
+  let fastBuyNotional = 0;
+  let fastSellNotional = 0;
   let tradeCount = 0;
   const recentTrades = distinctTrades(trades).filter((trade) => {
     const timestamp = tradeTimestamp(trade);
@@ -1623,6 +1680,10 @@ export function computeMicrostructure(
     tradeCount++;
     if (String(trade.ask_bid).toUpperCase() === "BID") buyNotional += notional;
     else sellNotional += notional;
+    // v5.3: exponentially weighted copy for scalp entry timing.
+    const decay = Math.pow(0.5, Math.max(0, currentMs - timestamp) / SCALP_FLOW_HALF_LIFE_MS);
+    if (String(trade.ask_bid).toUpperCase() === "BID") fastBuyNotional += notional * decay;
+    else fastSellNotional += notional * decay;
   }
   const bookImbalance = mean(imbalances);
   const imbalanceDeviation = mean(
@@ -1679,8 +1740,17 @@ export function computeMicrostructure(
       : [],
     spread_bps: spreadBps,
     book_imbalance: bookImbalance,
+    // v5.3: the LAST few frames only, so the scalp signal reads the current book rather
+    // than the average of the whole observation window.
+    book_imbalance_top: topImbalances.length
+      ? mean(topImbalances.slice(-SCALP_BOOK_RECENT_FRAMES))
+      : bookImbalance,
     imbalance_stability: stability,
     trade_pressure: pressure,
+    trade_pressure_fast: safeDiv(
+      fastBuyNotional - fastSellNotional,
+      fastBuyNotional + fastSellNotional,
+    ),
     trade_count: tradeCount,
     average_trade_notional: tradeCount > 0 ? (buyNotional + sellNotional) / tradeCount : null,
     buy_notional: buyNotional,
@@ -2661,17 +2731,29 @@ export function finalizeCandidate(
   // Stage 3: scalp strategy inverts the hierarchy — orderbook signal drives entry,
   // trend is only a veto. Event-risk BLOCK and missing data still hard-block.
   let scalpResult: ScalpSignalResult | null = null;
+  let scalpGeometry: ScalpGeometry | null = null;
   if (risk.strategy === "SCALP") {
     if (eventRisk.status === "BLOCK" || period.data_completeness !== 1) {
       decision = "AVOID";
     } else {
+      // v5.3: barriers are derived per symbol from its own 5m volatility and from the
+      // exchange's cost structure, instead of a flat +0.60% / -0.30% for everything.
+      const geometryConfig = resolveGeometryConfig({
+        roundTripFeeFraction: risk.feePerSidePct * 2 / 100,
+        ...(risk.geometryOverrides || {}),
+      });
+      scalpGeometry = resolveScalpGeometry(
+        sigmaFromAtrPct(tf.m5.atr_pct, geometryConfig),
+        geometryConfig,
+      );
       scalpResult = evaluateScalpSignal(
         {
           samples: micro.samples,
           spread_bps: micro.spread_bps,
-          book_imbalance: micro.book_imbalance,
+          // v5.3: fresh top-of-book and fast executed flow, not window averages.
+          book_imbalance: micro.book_imbalance_top,
           imbalance_stability: micro.imbalance_stability,
-          trade_pressure: micro.trade_pressure,
+          trade_pressure: micro.trade_pressure_fast,
           live_book_age_ms: micro.live_book_age_ms,
           persistent_bid_wall: micro.dynamic.persistent_bid_wall_price !== null,
           ask_absorption_score: micro.dynamic.ask_absorption_score,
@@ -2679,7 +2761,13 @@ export function finalizeCandidate(
           dynamic_status: micro.dynamic.status,
         },
         { h4_trend_signal: tf.h4.trend_signal, composite_trend: period.trend_signal },
-        resolveScalpSignalConfig(risk.scalpOverrides || {}),
+        resolveScalpSignalConfig({
+          ...(risk.scalpOverrides || {}),
+          targetPct: scalpGeometry.targetPct,
+          stopPct: scalpGeometry.stopPct,
+          roundTripFeeFraction: geometryConfig.roundTripFeeFraction,
+          resolveProbability: scalpGeometry.resolveProbability,
+        }),
       );
       decision = scalpResult.decision;
     }
@@ -2814,6 +2902,26 @@ export function finalizeCandidate(
         stop_pct: scalpResult.stopPct,
         vetoed: scalpResult.vetoed,
         reasons: scalpResult.reasons,
+        // v5.3 additions.
+        imbalance_contribution: scalpResult.imbalanceContribution,
+        trend_penalty: scalpResult.trendPenalty,
+        features: scalpResult.features,
+        signal_at: new Date().toISOString(),
+        geometry: scalpGeometry
+          ? {
+            horizon_minutes: scalpGeometry.horizonMinutes,
+            resolve_probability: scalpGeometry.resolveProbability,
+            sigma_bar: scalpGeometry.sigmaBar,
+            sigma_horizon: scalpGeometry.sigmaHorizon,
+            cost_floor_target: scalpGeometry.costFloorTarget,
+            volatility_target: scalpGeometry.volatilityTarget,
+            binding_constraint: scalpGeometry.bindingConstraint,
+            required_excess_win_rate: scalpGeometry.requiredExcessWinRate,
+            neutral_win_rate: scalpGeometry.neutralWinRate,
+            bars_to_target: Number.isFinite(scalpGeometry.barsToTarget) ? scalpGeometry.barsToTarget : null,
+            horizon_sufficient: scalpGeometry.horizonSufficient,
+          }
+          : null,
       }
       : undefined,
     decision_label: decision === "BUY"

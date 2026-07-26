@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 // withdrawal, transfer, margin, futures, leverage, or API-key management routes.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "5.2.4";
+const VERSION = "5.4.0";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
@@ -370,6 +370,13 @@ function normalizeUpbitOrder(order) {
     average_price: executedVolume > 0 ? executedFunds / executedVolume : Number(order?.avg_price || 0) || null,
     paid_fee: Number.isFinite(paidFee) ? paidFee : 0,
     fee_asset: "KRW",
+    // v5.4: the autotrader must be able to tell that a resting order is ITS OWN and how
+    // much base asset it reserves. Without these the account reconciliation reads the
+    // bot's own working orders as a user locking the coin.
+    side: String(order?.side || "").toLowerCase() === "ask" ? "SELL" : String(order?.side || "").toLowerCase() === "bid" ? "BUY" : null,
+    market: order?.market || null,
+    requested_volume: Number(order?.volume || 0),
+    remaining_volume: Number(order?.remaining_volume ?? Math.max(0, Number(order?.volume || 0) - executedVolume)),
     trades: normalizedTrades,
     raw: order,
   };
@@ -401,6 +408,11 @@ function normalizeBinanceOrder(order) {
     average_price: executedVolume > 0 ? executedFunds / executedVolume : null,
     paid_fee: Number.isFinite(commissions) ? commissions : 0,
     fee_asset: feeAssetSet.length === 1 ? feeAssetSet[0] : feeAssetSet.length ? "MIXED" : null,
+    // v5.4: see the Upbit normalizer above.
+    side: order?.side ? String(order.side).toUpperCase() : null,
+    market: order?.symbol || null,
+    requested_volume: Number(order?.origQty || 0),
+    remaining_volume: Math.max(0, Number(order?.origQty || 0) - executedVolume),
     trades,
     raw: order,
   };
@@ -672,6 +684,40 @@ async function cancelOrder(exchange, identifier, market) {
     symbol: validateBinanceSymbol(market), origClientOrderId: id,
   })).data);
 }
+// v5.4: real account commission rates.
+//
+// The cost model hardcoded 0.05% (Upbit) and 0.10% (Binance) per side. Those are list
+// prices: Binance applies a 25% discount when "pay fees with BNB" is enabled, VIP tiers
+// move both sides, and some pairs run promotional rates. Since required win rate is a
+// direct function of cost, trading on an assumed fee rather than the account's real one
+// mis-sizes every barrier. Fail soft: on any error the caller keeps its defaults.
+async function accountFees(exchange, market = null) {
+  if (exchange === "upbit") {
+    const symbol = market ? validateUpbitMarket(market) : "KRW-BTC";
+    const chance = (await upbitRequest("GET", "/v1/orders/chance", { query: { market: symbol } })).data;
+    const bid = Number(chance?.bid_fee);
+    const ask = Number(chance?.ask_fee);
+    return {
+      exchange: "upbit", market: symbol,
+      maker_pct: Number.isFinite(bid) ? bid * 100 : null,
+      taker_pct: Number.isFinite(ask) ? ask * 100 : null,
+      source: "orders_chance",
+    };
+  }
+  const account = (await binanceRequest("GET", "/api/v3/account", { omitZeroBalances: "true" })).data;
+  const rates = account?.commissionRates || {};
+  const maker = Number(rates.maker);
+  const taker = Number(rates.taker);
+  return {
+    exchange: "binance", market: market || null,
+    maker_pct: Number.isFinite(maker) ? maker * 100 : null,
+    taker_pct: Number.isFinite(taker) ? taker * 100 : null,
+    // Reported rates already include the BNB discount when fee payment in BNB is enabled.
+    bnb_fee_payment: account?.canTrade != null ? Boolean(account?.commissionRates) : null,
+    source: "account_commission_rates",
+  };
+}
+
 async function openOrders(exchange, market = null) {
   if (exchange === "upbit") {
     const rows = (await upbitRequest("GET", "/v1/orders/open", {
@@ -706,6 +752,7 @@ async function handleCommand(command) {
     case "get_order": return getOrder(exchange, command.identifier, command.market);
     case "cancel_order": return cancelOrder(exchange, command.identifier, command.market);
     case "open_orders": return openOrders(exchange, command.market || null);
+    case "fees": return accountFees(exchange, command.market || null);
     case "cancel_bot_orders": return cancelBotOrders(exchange, command.market || null);
     default: throw new Error("unsupported gateway action");
   }

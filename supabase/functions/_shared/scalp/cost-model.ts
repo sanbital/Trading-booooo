@@ -104,9 +104,27 @@ export function stressSlippage(
  * EV formula, reused by the scanner where the order notional (and thus precise
  * slippage) is not yet known.
  */
-export function probabilityWeightedGross(pWin: number, expectedProfit: number, expectedLoss: number): number {
+export function probabilityWeightedGross(
+  pWin: number,
+  expectedProfit: number,
+  expectedLoss: number,
+  resolveProbability = 1,
+  timeoutReturn = 0,
+): number {
   const pLoss = Math.max(0, 1 - pWin);
-  return pWin * expectedProfit - pLoss * expectedLoss;
+  // v5.3: a scalp does not always end at a barrier. With a finite maximum holding time
+  // there is a third outcome — the time exit — which pays roughly nothing but still
+  // costs a full round trip. v5.2.5 assumed pWin + pLoss = 1 with no timeout branch,
+  // which overstated expected value on every symbol too slow to reach its target.
+  //
+  //   pTarget  = pWin        * resolveProbability
+  //   pStop    = (1 - pWin)  * resolveProbability
+  //   pTimeout = 1 - resolveProbability
+  //
+  // pWin is therefore the probability of hitting the target GIVEN the trade resolves.
+  const resolve = Math.max(0, Math.min(1, resolveProbability));
+  const barrier = (pWin * expectedProfit - pLoss * expectedLoss) * resolve;
+  return barrier + (1 - resolve) * timeoutReturn;
 }
 
 /**
@@ -119,8 +137,11 @@ export function provisionalNetEdge(
   expectedProfit: number,
   expectedLoss: number,
   roundTripFeeFraction: number = DEFAULT_COST_MODEL.roundTripFeeFraction,
+  resolveProbability = 1,
+  timeoutReturn = 0,
 ): number {
-  return probabilityWeightedGross(pWin, expectedProfit, expectedLoss) - roundTripFeeFraction;
+  return probabilityWeightedGross(pWin, expectedProfit, expectedLoss, resolveProbability, timeoutReturn) -
+    roundTripFeeFraction;
 }
 
 export interface EdgeInputs {
@@ -132,6 +153,10 @@ export interface EdgeInputs {
   notional: number;        // planned order size in quote
   bestAsk: number;
   bestBid: number;
+  /** v5.3: P(either barrier is touched before the max holding time). 1 = legacy behavior. */
+  resolveProbability?: number;
+  /** v5.3: expected return if the trade ends at the time exit instead of a barrier. */
+  timeoutReturn?: number;
 }
 
 export interface EdgeResult {
@@ -165,8 +190,13 @@ export function evaluateEdge(inputs: EdgeInputs, cfg: CostModelConfig = DEFAULT_
     return { enter: false, expectedNetEdge: -1, roundTripCost: cfg.roundTripFeeFraction, entrySlippage: entry.slippage, exitSlippage: 1, skipReason: "thin_bid_depth" };
   }
 
-  const pLoss = Math.max(0, 1 - inputs.pWin);
-  const grossEdge = inputs.pWin * inputs.expectedProfit - pLoss * inputs.expectedLoss;
+  const grossEdge = probabilityWeightedGross(
+    inputs.pWin,
+    inputs.expectedProfit,
+    inputs.expectedLoss,
+    inputs.resolveProbability ?? 1,
+    inputs.timeoutReturn ?? 0,
+  );
   const expectedNetEdge = grossEdge - cfg.roundTripFeeFraction - entry.slippage - exitSlip;
 
   return {

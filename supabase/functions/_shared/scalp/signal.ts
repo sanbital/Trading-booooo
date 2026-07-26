@@ -45,6 +45,10 @@ export interface ScalpSignalConfig {
   stopPct: number;
   roundTripFeeFraction: number;
   minimumEdge: number;
+  /** v5.3: P(a barrier is touched before the max holding time). Supplied by geometry.ts. */
+  resolveProbability: number;
+  /** v5.3: half-life used to decay scan-time alpha when the signal is re-priced at order time. */
+  alphaHalfLifeMs: number;
 }
 
 export const DEFAULT_SCALP_SIGNAL: ScalpSignalConfig = {
@@ -68,6 +72,10 @@ export const DEFAULT_SCALP_SIGNAL: ScalpSignalConfig = {
   roundTripFeeFraction: 0.001,
   // Original agreement: costs must be cleared with about 0.10% net margin.
   minimumEdge: 0.001,
+  // 1 preserves the v5.2.5 (barrier-always-resolves) behavior; geometry.ts overrides it.
+  resolveProbability: 1,
+  // Microstructure alpha decays in seconds, not minutes. See refreshPWinAtOrderTime().
+  alphaHalfLifeMs: 20_000,
 };
 
 const HARD_RISK_DYNAMIC = new Set([
@@ -86,8 +94,8 @@ export const SCALP_BOUNDS: Record<string, ScalpBounds> = {
   weakDownThreshold: { min: -0.50, max: 0 },
   weakDownPenalty: { min: 0.70, max: 1 },
   basePWin: { min: 0.45, max: 0.62 },
-  targetPct: { min: 0.003, max: 0.02 },
-  stopPct: { min: 0.002, max: 0.015 },
+  targetPct: { min: 0.003, max: 0.05 },
+  stopPct: { min: 0.0015, max: 0.025 },
   minimumEdge: { min: 0.001, max: 0.003 },
 };
 
@@ -118,6 +126,47 @@ export interface ScalpSignalResult {
   targetPct: number;
   stopPct: number;
   reasons: string[];
+  /** v5.3: pWin term contributed by the resting orderbook, so it can be recomputed
+   *  against a fresh book at order time instead of being reused from scan time. */
+  imbalanceContribution: number;
+  /** v5.3: multiplicative trend penalty already applied to pWin (1 = none). */
+  trendPenalty: number;
+  /** v5.3: raw feature values, persisted for the pWin calibration loop. */
+  features: Record<string, number>;
+}
+
+/** v5.3: the pWin term contributed by the resting book, isolated so it can be re-priced. */
+export function imbalanceContribution(bookImbalance: number): number {
+  return clamp(bookImbalance, -0.40, 0.60) * 0.18;
+}
+
+/**
+ * v5.3: re-price a scan-time pWin against the orderbook that exists at order time.
+ *
+ * v5.2.5 computed pWin during the scan and then reused that number verbatim when the
+ * order was actually placed, refreshing only the depth used for slippage. With a 60s
+ * scan cadence the signal driving the entry could be a minute old — far beyond the
+ * useful life of orderbook alpha — while `maxBookAgeMs: 5000` gave the false impression
+ * that freshness was being enforced.
+ *
+ * The book term is recomputed from the live book. Everything else (trade pressure,
+ * breakout, absorption) cannot be recomputed without re-observing, so it is decayed
+ * toward the base rate with `alphaHalfLifeMs`.
+ */
+export function refreshPWinAtOrderTime(
+  scanPWin: number,
+  scanImbalanceContribution: number,
+  freshBookImbalance: number,
+  ageMs: number,
+  cfg: ScalpSignalConfig = DEFAULT_SCALP_SIGNAL,
+  trendPenalty = 1,
+): number {
+  const basePWin = cfg.basePWin * trendPenalty;
+  const scanAlpha = scanPWin - basePWin - scanImbalanceContribution * trendPenalty;
+  const decay = Math.pow(0.5, Math.max(0, ageMs) / Math.max(1, cfg.alphaHalfLifeMs));
+  const refreshed = basePWin + scanAlpha * decay +
+    imbalanceContribution(freshBookImbalance) * trendPenalty;
+  return clamp(refreshed, cfg.pWinFloor, cfg.pWinCeil);
 }
 
 function clamp(x: number, lo: number, hi: number): number {
@@ -159,7 +208,7 @@ export function evaluateScalpSignal(
 
   // Combine current book + executed trades into one probability estimate.
   // No single ordinary micro factor must be perfect if the combined flow is strong.
-  const imbalanceContribution = clamp(micro.book_imbalance, -0.40, 0.60) * 0.18;
+  const imbalanceTerm = imbalanceContribution(micro.book_imbalance);
   const pressureContribution = clamp(micro.trade_pressure, -1, 1) * 0.12;
   const stabilityContribution = (clamp(micro.imbalance_stability, 0, 1) - 0.50) * 0.08;
   const breakoutContribution = clamp(micro.breakout_score, 0, 1) * 0.10;
@@ -171,14 +220,21 @@ export function evaluateScalpSignal(
     ? -0.03
     : 0;
 
-  let pWin = cfg.basePWin + imbalanceContribution + pressureContribution +
+  let pWin = cfg.basePWin + imbalanceTerm + pressureContribution +
     stabilityContribution + breakoutContribution + bidWallContribution -
     absorptionPenalty + dynamicAdjustment;
-  if (trend.composite_trend <= cfg.weakDownThreshold) pWin *= cfg.weakDownPenalty;
+  const trendPenalty = trend.composite_trend <= cfg.weakDownThreshold ? cfg.weakDownPenalty : 1;
+  pWin *= trendPenalty;
   pWin = clamp(pWin, cfg.pWinFloor, cfg.pWinCeil);
 
   const signalScore = clamp((pWin - cfg.pWinFloor) / (cfg.pWinCeil - cfg.pWinFloor), 0, 1);
-  const provisionalEdge = provisionalNetEdge(pWin, cfg.targetPct, cfg.stopPct, cfg.roundTripFeeFraction);
+  const provisionalEdge = provisionalNetEdge(
+    pWin,
+    cfg.targetPct,
+    cfg.stopPct,
+    cfg.roundTripFeeFraction,
+    cfg.resolveProbability,
+  );
   if (provisionalEdge < cfg.minimumEdge) waitReasons.push("edge_below_minimum");
 
   reasons.push(...waitReasons, ...avoidReasons);
@@ -188,5 +244,29 @@ export function evaluateScalpSignal(
     ? "WAIT"
     : "BUY";
 
-  return { decision, vetoed, pWin, signalScore, provisionalEdge, targetPct: cfg.targetPct, stopPct: cfg.stopPct, reasons };
+  return {
+    decision,
+    vetoed,
+    pWin,
+    signalScore,
+    provisionalEdge,
+    targetPct: cfg.targetPct,
+    stopPct: cfg.stopPct,
+    reasons,
+    imbalanceContribution: imbalanceTerm,
+    trendPenalty,
+    features: {
+      book_imbalance: micro.book_imbalance,
+      imbalance_stability: micro.imbalance_stability,
+      trade_pressure: micro.trade_pressure,
+      breakout_score: micro.breakout_score,
+      ask_absorption_score: micro.ask_absorption_score,
+      persistent_bid_wall: micro.persistent_bid_wall ? 1 : 0,
+      spread_bps: micro.spread_bps ?? -1,
+      samples: micro.samples,
+      h4_trend_signal: trend.h4_trend_signal,
+      composite_trend: trend.composite_trend,
+      resolve_probability: cfg.resolveProbability,
+    },
+  };
 }
