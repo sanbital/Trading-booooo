@@ -10,11 +10,11 @@ const base = {
   capitalQuote: 1_000_000,
   requestedNotional: 500_000,
   day: { realizedPnlQuote: 0, consecutiveLosses: 0 },
-  pWin: 0.7, targetPct: 0.008, stopPct: 0.003,
+  pWin: 0.9, targetPct: 0.008, stopPct: 0.003,
   askLevels: deepAsk, bidLevels: deepBid, bestAsk: 100.0, bestBid: 99.9,
 };
 
-Deno.test("passes without an extra cap inside operator allocation", () => {
+Deno.test("passes a strong forecast without an extra cap inside operator allocation", () => {
   const r = scalpEntryDecision(base, DEFAULT_SCALP_SAFETY, DEFAULT_COST_MODEL);
   assert(r.allow);
   assertEquals(r.notional, 500_000);

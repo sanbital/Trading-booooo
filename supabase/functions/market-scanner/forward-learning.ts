@@ -307,7 +307,7 @@ function featureVector(candidate: FinalCandidate, risk: RiskConfig): Record<stri
     event_status: candidate.event_risk.status,
     dynamic_status: candidate.microstructure.dynamic.status,
     horizon_code: candidate.horizon.code,
-    intended_horizon_hours: candidate.horizon.intended_holding_hours,
+    intended_horizon_hours: candidate.execution_plan.intended_holding_hours,
     low_touch_compatible: candidate.execution_plan.low_touch_compatible,
     automated_compatible: candidate.execution_plan.automated_compatible,
     operator_mode: candidate.execution_plan.mode,
@@ -346,7 +346,7 @@ function candidateRows(
     net_rr: candidate.trade_plan?.net_rr ?? candidate.watch_entry_plan?.estimated_net_rr,
     estimated_cost_pct: candidate.trade_plan?.estimated_round_trip_cost_pct,
     failed_gate_count: candidate.failed_gates?.length || 0,
-    intended_horizon_hours: candidate.horizon.intended_holding_hours,
+    intended_horizon_hours: candidate.execution_plan.intended_holding_hours,
     recommendation_valid_until: candidate.execution_plan.valid_until,
     active_policy_key: candidate.trade_plan.target_strategy === "SHORT_ONLY"
       ? "FIXED_T1"

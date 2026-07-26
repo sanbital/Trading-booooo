@@ -40,7 +40,7 @@ Deno.test("the dashboard fallback banner is not older than the engine", async ()
     /export const ENGINE_VERSION = "([^"]+)"/,
   );
   const html = await Deno.readTextFile(new URL("docs/index.html", ROOT));
-  const banner = html.match(/SPOT · v([0-9.]+)/);
+  const banner = html.match(/SPOT · v([0-9A-Za-z.-]+)/);
   // The banner is overwritten from the API once a scan loads, but until then this string
   // is what the operator sees — and after a failed deploy it may be all they ever see.
   assertEquals(banner?.[1], scanner, "docs/index.html banner version is stale");

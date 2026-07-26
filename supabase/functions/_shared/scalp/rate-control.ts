@@ -1,128 +1,126 @@
-// Scalp trade-rate controller (v5.11).
+// Trading-booooo v5.12 — throughput controller.
 //
-// THE TARGET
-// ----------
-// Roughly five entries per hour per exchange. Trade frequency is not an outcome to be
-// hoped for, it is the control variable — the gate exists to serve the rate, not the other
-// way round.
-//
-// WHY A CONTROLLER RATHER THAN A LOOSER CONSTANT
-// ----------------------------------------------
-// Every previous attempt set the EV threshold to a fixed number and let the trade rate be
-// whatever fell out. It fell out at roughly one entry every two hours. Loosening the
-// constant by hand would just move the failure: too tight and nothing trades, too loose and
-// nothing is filtered, and neither setting knows which it is because the coefficients
-// inside pWin have never been measured.
-//
-// Measuring the realized rate and steering toward the target closes that loop. The
-// threshold becomes whatever produces five trades an hour, bounded.
-//
-// WHY SIZE IS THE RISK KNOB, NOT RATE
-// -----------------------------------
-// At 240 entries a day the arithmetic is brutal and symmetric:
-//
-//     edge = 0    ->  -3.2% per day  ->  about -62% in a month
-//     edge = +10pp -> +3.2% per day  ->  about +157% in a month
-//
-// Frequency amplifies the sign of the edge; it does not create one. So rate is held at the
-// target and SIZE carries the uncertainty: small while the edge is unmeasured, full once
-// shadow outcomes confirm it. That way the samples needed to settle the question arrive at
-// full speed while the capital exposed to the answer stays small.
-//
-// The one case where the controller stops pushing is a MEASURED negative edge. That is not
-// caution — it is the measurement doing its job.
-//
-// Pure functions only — no I/O.
+// Non-negotiable invariant: trade-rate control may change capacity (slots, scan breadth,
+// evaluation cadence and shadow-label volume), but it may NEVER reduce EV, win-rate,
+// fill-rate, liquidity, exposure or loss-limit gates.
 
 export interface RateControlConfig {
-  /** Entries per hour, per exchange. */
+  /** Filled entries per hour, per exchange. A target, never a reason to weaken quality. */
   targetTradesPerHour: number;
-  /** Rolling window used to measure the realized rate. */
   windowMinutes: number;
-  /** Cap on threshold relaxation, as a multiple of round-trip cost. */
-  maxRelaxationCostMultiple: number;
-  /** Relaxation added per cycle when under target. */
-  relaxationStep: number;
-  /** Relaxation removed per cycle when at or above target. */
-  tightenStep: number;
-  /** Order size while the edge is still unmeasured. */
+  minSlots: number;
+  maxSlots: number;
+  targetUtilization: number;
+  minScanUniverse: number;
+  maxScanUniverse: number;
+  minEvaluationIntervalSeconds: number;
+  maxEvaluationIntervalSeconds: number;
+  slotStep: number;
+  scanUniverseStep: number;
+  evaluationStepSeconds: number;
   unprovenSizeFraction: number;
-  /** Resolved shadow samples required before size is allowed to reach full. */
   samplesForFullSize: number;
-  /** Measured edge below this, with enough samples, stops the controller pushing. */
   negativeEdgeThreshold: number;
 }
 
 export const DEFAULT_RATE_CONTROL: RateControlConfig = {
   targetTradesPerHour: 5,
   windowMinutes: 60,
-  maxRelaxationCostMultiple: 1.5,
-  relaxationStep: 0.15,
-  tightenStep: 0.25,
+  minSlots: 2,
+  maxSlots: 12,
+  targetUtilization: 0.70,
+  minScanUniverse: 30,
+  maxScanUniverse: 240,
+  minEvaluationIntervalSeconds: 30,
+  maxEvaluationIntervalSeconds: 300,
+  slotStep: 1,
+  scanUniverseStep: 20,
+  evaluationStepSeconds: 15,
   unprovenSizeFraction: 0.35,
   samplesForFullSize: 400,
   negativeEdgeThreshold: 0,
 };
 
-export const RATE_CONTROL_BOUNDS: Record<string, { min: number; max: number }> = {
+export const RATE_CONTROL_BOUNDS: Record<keyof RateControlConfig, { min: number; max: number }> = {
   targetTradesPerHour: { min: 0, max: 60 },
   windowMinutes: { min: 10, max: 1440 },
-  maxRelaxationCostMultiple: { min: 0, max: 5 },
-  relaxationStep: { min: 0.01, max: 1 },
-  tightenStep: { min: 0.01, max: 1 },
+  minSlots: { min: 1, max: 20 },
+  maxSlots: { min: 1, max: 20 },
+  targetUtilization: { min: 0.1, max: 0.95 },
+  minScanUniverse: { min: 10, max: 1000 },
+  maxScanUniverse: { min: 10, max: 1000 },
+  minEvaluationIntervalSeconds: { min: 15, max: 3600 },
+  maxEvaluationIntervalSeconds: { min: 15, max: 3600 },
+  slotStep: { min: 1, max: 5 },
+  scanUniverseStep: { min: 1, max: 200 },
+  evaluationStepSeconds: { min: 1, max: 300 },
   unprovenSizeFraction: { min: 0.05, max: 1 },
   samplesForFullSize: { min: 50, max: 20_000 },
   negativeEdgeThreshold: { min: -0.5, max: 0.1 },
 };
 
 function clamp(x: number, lo: number, hi: number): number {
-  return Math.max(lo, Math.min(hi, x));
+  return Math.max(lo, Math.min(hi, Number.isFinite(x) ? x : lo));
 }
 
 export function resolveRateControlConfig(overrides: Partial<RateControlConfig> = {}): RateControlConfig {
-  const merged: RateControlConfig = { ...DEFAULT_RATE_CONTROL, ...overrides };
-  for (const key of Object.keys(RATE_CONTROL_BOUNDS)) {
+  const merged = { ...DEFAULT_RATE_CONTROL, ...overrides } as RateControlConfig;
+  for (const key of Object.keys(RATE_CONTROL_BOUNDS) as Array<keyof RateControlConfig>) {
     const bound = RATE_CONTROL_BOUNDS[key];
-    const value = (merged as unknown as Record<string, number>)[key];
-    (merged as unknown as Record<string, number>)[key] = Number.isFinite(value)
-      ? clamp(value, bound.min, bound.max)
-      : (DEFAULT_RATE_CONTROL as unknown as Record<string, number>)[key];
+    merged[key] = clamp(Number(merged[key]), bound.min, bound.max) as never;
+  }
+  if (merged.maxSlots < merged.minSlots) merged.maxSlots = merged.minSlots;
+  if (merged.maxScanUniverse < merged.minScanUniverse) merged.maxScanUniverse = merged.minScanUniverse;
+  if (merged.maxEvaluationIntervalSeconds < merged.minEvaluationIntervalSeconds) {
+    merged.maxEvaluationIntervalSeconds = merged.minEvaluationIntervalSeconds;
   }
   return merged;
 }
 
 export interface RateControlInput {
-  /** Entries actually opened on this exchange inside the window. */
   entriesInWindow: number;
-  /** Length of the window actually observed, in minutes. */
   observedMinutes: number;
-  /** Relaxation currently in effect, as a multiple of round-trip cost. */
-  currentRelaxation: number;
-  /** Resolved shadow samples backing the edge measurement. */
+  currentSlots: number;
+  currentScanUniverse: number;
+  currentEvaluationIntervalSeconds: number;
+  averageHoldingMinutes: number;
+  /** Conservative fill probability. Used only to calculate required attempts/capacity. */
+  pFillLowerBound: number;
   edgeSamples: number;
-  /** Lower bound of the measured edge. null when nothing has been measured yet. */
   measuredEdgeLowerBound: number | null;
+  /** Kept for wire compatibility with v5.11; ignored and always reset to zero. */
+  currentRelaxation?: number;
 }
 
 export interface RateControlDecision {
-  /** Multiple of round-trip cost to subtract from the EV threshold. */
-  relaxation: number;
-  /** Multiplier applied to order size. */
+  /** Always zero. v5.12 forbids threshold relaxation. */
+  relaxation: 0;
   sizeFraction: number;
   observedRate: number;
   targetRate: number;
-  /** True when a measured negative edge has stopped the controller. */
   edgeNegative: boolean;
+  desiredSlots: number;
+  scanUniverse: number;
+  evaluationIntervalSeconds: number;
+  attemptsRequiredPerHour: number;
+  estimatedFilledCapacityPerHour: number;
   reason: string;
 }
 
-/**
- * Size as a function of evidence, not of nerve.
- *
- * Unmeasured edge means small size at full rate: the samples that settle the question
- * arrive quickly while little capital rides on the answer. Size grows with sample count
- * only once the measured edge is positive.
- */
+export function calculateDesiredSlots(
+  targetFilledEntriesPerHour: number,
+  averageHoldingMinutes: number,
+  targetUtilization: number,
+  minSlots: number,
+  maxSlots: number,
+): number {
+  const raw = Math.max(0, targetFilledEntriesPerHour) *
+    (Math.max(1, averageHoldingMinutes) / 60) /
+    Math.max(targetUtilization, 0.1);
+  return Math.min(maxSlots, Math.max(minSlots, Math.ceil(raw)));
+}
+
+/** Size can grow only with positive lower-bound evidence, never merely with sample count. */
 export function sizeForEvidence(
   edgeSamples: number,
   measuredEdgeLowerBound: number | null,
@@ -131,7 +129,11 @@ export function sizeForEvidence(
   if (measuredEdgeLowerBound == null || edgeSamples <= 0) return cfg.unprovenSizeFraction;
   if (measuredEdgeLowerBound <= cfg.negativeEdgeThreshold) return cfg.unprovenSizeFraction;
   const confidence = clamp(edgeSamples / cfg.samplesForFullSize, 0, 1);
-  return clamp(cfg.unprovenSizeFraction + (1 - cfg.unprovenSizeFraction) * confidence, cfg.unprovenSizeFraction, 1);
+  return clamp(
+    cfg.unprovenSizeFraction + (1 - cfg.unprovenSizeFraction) * confidence,
+    cfg.unprovenSizeFraction,
+    1,
+  );
 }
 
 export function evaluateRateControl(
@@ -139,50 +141,80 @@ export function evaluateRateControl(
   cfg: RateControlConfig = DEFAULT_RATE_CONTROL,
 ): RateControlDecision {
   const minutes = Math.max(1, input.observedMinutes);
-  const observedRate = input.entriesInWindow * 60 / minutes;
+  const observedRate = Math.max(0, input.entriesInWindow) * 60 / minutes;
   const sizeFraction = sizeForEvidence(input.edgeSamples, input.measuredEdgeLowerBound, cfg);
   const edgeNegative = input.measuredEdgeLowerBound != null &&
     input.edgeSamples >= cfg.samplesForFullSize / 2 &&
     input.measuredEdgeLowerBound <= cfg.negativeEdgeThreshold;
+  const fill = clamp(input.pFillLowerBound, 0.01, 1);
+  const attemptsRequiredPerHour = cfg.targetTradesPerHour <= 0 ? 0 : cfg.targetTradesPerHour / fill;
+  const formulaSlots = calculateDesiredSlots(
+    cfg.targetTradesPerHour,
+    input.averageHoldingMinutes,
+    cfg.targetUtilization,
+    cfg.minSlots,
+    cfg.maxSlots,
+  );
 
-  const base = { sizeFraction, observedRate, targetRate: cfg.targetTradesPerHour, edgeNegative };
+  let desiredSlots = clamp(Math.round(input.currentSlots), cfg.minSlots, cfg.maxSlots);
+  let scanUniverse = clamp(Math.round(input.currentScanUniverse), cfg.minScanUniverse, cfg.maxScanUniverse);
+  let evaluationIntervalSeconds = clamp(
+    Math.round(input.currentEvaluationIntervalSeconds),
+    cfg.minEvaluationIntervalSeconds,
+    cfg.maxEvaluationIntervalSeconds,
+  );
+  let reason = "capacity_stable";
 
-  // A measured negative edge is the one condition that stops the controller. Pushing rate
-  // into a signal that has been shown not to work is not persistence, it is paying to be
-  // wrong faster.
   if (edgeNegative) {
-    return { ...base, relaxation: 0, reason: "measured_edge_negative" };
-  }
-  if (cfg.targetTradesPerHour <= 0) {
-    return { ...base, relaxation: 0, reason: "rate_target_disabled" };
+    // Capacity is not pushed into a measured negative signal. Quality gates still decide
+    // every candidate and size remains at the unproven fraction.
+    reason = "measured_edge_negative_capacity_frozen";
+  } else if (cfg.targetTradesPerHour <= 0) {
+    reason = "rate_target_disabled";
+  } else if (observedRate < cfg.targetTradesPerHour) {
+    desiredSlots = Math.min(cfg.maxSlots, Math.max(formulaSlots, desiredSlots + cfg.slotStep));
+    scanUniverse = Math.min(cfg.maxScanUniverse, scanUniverse + cfg.scanUniverseStep);
+    evaluationIntervalSeconds = Math.max(
+      cfg.minEvaluationIntervalSeconds,
+      evaluationIntervalSeconds - cfg.evaluationStepSeconds,
+    );
+    reason = desiredSlots >= cfg.maxSlots && scanUniverse >= cfg.maxScanUniverse &&
+        evaluationIntervalSeconds <= cfg.minEvaluationIntervalSeconds
+      ? "below_target_at_capacity_limit"
+      : "below_target_increasing_capacity";
+  } else {
+    // Reduce only obvious excess capacity; never below the formula-derived slot need.
+    desiredSlots = Math.max(formulaSlots, cfg.minSlots, desiredSlots - cfg.slotStep);
+    scanUniverse = Math.max(cfg.minScanUniverse, scanUniverse - cfg.scanUniverseStep);
+    evaluationIntervalSeconds = Math.min(
+      cfg.maxEvaluationIntervalSeconds,
+      evaluationIntervalSeconds + cfg.evaluationStepSeconds,
+    );
+    reason = "at_or_above_target_releasing_capacity";
   }
 
-  if (observedRate < cfg.targetTradesPerHour) {
-    const relaxation = clamp(
-      input.currentRelaxation + cfg.relaxationStep,
-      0,
-      cfg.maxRelaxationCostMultiple,
-    );
-    const reason = relaxation >= cfg.maxRelaxationCostMultiple
-      ? "below_target_at_max_relaxation"
-      : "below_target_relaxing";
-    return { ...base, relaxation, reason };
-  }
+  const estimatedFilledCapacityPerHour = desiredSlots * 60 /
+    Math.max(1, input.averageHoldingMinutes) * cfg.targetUtilization;
   return {
-    ...base,
-    relaxation: clamp(input.currentRelaxation - cfg.tightenStep, 0, cfg.maxRelaxationCostMultiple),
-    reason: "at_or_above_target_tightening",
+    relaxation: 0,
+    sizeFraction,
+    observedRate,
+    targetRate: cfg.targetTradesPerHour,
+    edgeNegative,
+    desiredSlots,
+    scanUniverse,
+    evaluationIntervalSeconds,
+    attemptsRequiredPerHour,
+    estimatedFilledCapacityPerHour,
+    reason,
   };
 }
 
-/**
- * The EV threshold after relaxation. Never negative: the controller can remove the margin
- * above cost, but it cannot make the engine accept a trade it expects to lose money on.
- */
+/** @deprecated v5.12 never relaxes EV thresholds. Kept to make stale callers fail safe. */
 export function relaxedMinimumEdge(
   baseMinimumEdge: number,
-  relaxation: number,
-  roundTripCost: number,
+  _relaxation: number,
+  _roundTripCost: number,
 ): number {
-  return Math.max(0, baseMinimumEdge - Math.max(0, relaxation) * Math.max(0, roundTripCost));
+  return Math.max(0, baseMinimumEdge);
 }

@@ -1,4 +1,4 @@
-// Trading-booooo v5.3.1 — autonomous Upbit KRW + Binance USDT spot orchestrator.
+// Trading-booooo v6.0.0-LOB — autonomous Upbit KRW + Binance USDT spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -29,10 +29,16 @@ import { evaluateHold, marketDataStale, resolveHoldConfig, type ScalpHoldConfig 
 import { DEFAULT_SCALP_SAFETY, type ScalpSafetyConfig, type ScalpDayState } from "../_shared/scalp/safety.ts";
 import { DEFAULT_COST_MODEL, type CostModelConfig } from "../_shared/scalp/cost-model.ts";
 import { resolveGeometryConfig, resolveMinimumEdge } from "../_shared/scalp/geometry.ts";
-import { evaluateExploration, resolveExplorationConfig } from "../_shared/scalp/exploration.ts";
-import { evaluateRateControl, relaxedMinimumEdge, resolveRateControlConfig } from "../_shared/scalp/rate-control.ts";
+import { evaluateRateControl, resolveRateControlConfig } from "../_shared/scalp/rate-control.ts";
+import { DEFAULT_CANDIDATE_GATE, SHADOW_CANDIDATE_GATE, type GateConfig } from "../_shared/scalp/candidate-gate.ts";
+import { calculateOrderNotional } from "../_shared/scalp/risk-allocator.ts";
+import { nextReconciliationFailure, reconciliationRetryDue, type ReconciliationPhase } from "../_shared/scalp/reconciliation.ts";
+import { normalizeStrategyProfile, profileHoldingCeilingMinutes, resolveProfileHolding } from "../_shared/scalp/profile.ts";
+import { evaluateLobEntry } from "../_shared/lob/entry.ts";
+import { evaluateLobExit } from "../_shared/lob/exit.ts";
+import type { LobFeatureVector } from "../_shared/lob/types.ts";
 
-const VERSION = "5.11.0";
+const VERSION = "6.0.0-LOB";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -94,7 +100,7 @@ type Position = JsonRecord & {
   quote_currency: "KRW" | "USDT";
   market: string;
   base_asset: string;
-  state: "ENTRY_PENDING" | "OPEN" | "EXITING" | "CLOSED" | "CANCELLED" | "ERROR";
+  state: "ENTRY_PENDING" | "OPEN" | "EXITING" | "RECONCILING" | "RECONCILIATION_FAILED" | "MANUAL_INTERVENTION_REQUIRED" | "CLOSED" | "CANCELLED" | "ERROR";
   is_paper: boolean;
   initial_quantity: number;
   remaining_quantity: number;
@@ -122,6 +128,13 @@ function env(name: string): string { return (Deno.env.get(name) || "").trim(); }
 function parseMode(value: string): TradingMode {
   const mode = String(value).toUpperCase();
   return mode === "LIVE_LIMITED" ? "LIVE_LIMITED" : mode === "PAUSED" ? "PAUSED" : "PAPER";
+}
+function isLobStrategy(value: unknown): boolean {
+  return String(value || "").toUpperCase() === "LOB_SCALP";
+}
+function isScalpStrategy(value: unknown): boolean {
+  const normalized = String(value || "").toUpperCase();
+  return normalized === "SCALP" || normalized === "LOB_SCALP";
 }
 function safeEqual(left: string, right: string): boolean {
   const a = new TextEncoder().encode(left); const b = new TextEncoder().encode(right);
@@ -233,7 +246,7 @@ function defaultSettings(): TradingSettings & JsonRecord {
     id: 1, configured: true, mode: DEFAULT_MODE, pause_new_entries: false, emergency_liquidation: false,
     upbit_enabled: true, binance_enabled: true,
     max_open_positions: 4, max_open_positions_per_exchange: 2,
-    max_daily_entries: 8, max_daily_entries_per_exchange: 4,
+    max_daily_entries: Number.MAX_SAFE_INTEGER, max_daily_entries_per_exchange: Number.MAX_SAFE_INTEGER,
     // Financial exposure is controlled only by the operator allocation settings below.
     // Legacy sizing fields remain for schema compatibility but are non-binding in SCALP.
     max_position_pct: 100, risk_per_trade_pct: 100,
@@ -247,17 +260,16 @@ function defaultSettings(): TradingSettings & JsonRecord {
     binance_allocation_mode: "ALL", binance_allocation_usdt: 0, binance_reserve_usdt: 0,
     withdrawal_mode: false, manual_intervention_required: false, manual_event_reason: null,
     max_daily_loss_pct: 1.5, max_weekly_loss_pct: 3, max_consecutive_losses: 3,
-    entry_ttl_seconds: 180,
-    full_scan_interval_seconds: clamp(finite(env("AUTO_SCAN_INTERVAL_SECONDS"), 60), 60, 3600),
-    monitor_interval_seconds: clamp(finite(env("AUTO_MONITOR_INTERVAL_SECONDS"), 15), 5, 300),
-    // v5.7.2: 2 -> 4. A resting maker entry counts against this budget while it waits, so
-    // a low fill rate throttles throughput twice over — once for the slot it holds and once
-    // for the per-scan allowance it consumes. The DB constraint caps this at 4.
-    max_new_entries_per_scan: 4, suppress_cross_exchange_same_asset: true,
+    entry_ttl_seconds: 20,
+    full_scan_interval_seconds: clamp(finite(env("AUTO_SCAN_INTERVAL_SECONDS"), 15), 10, 3600),
+    monitor_interval_seconds: clamp(finite(env("AUTO_MONITOR_INTERVAL_SECONDS"), 5), 5, 300),
+    // v5.12: capacity controller may raise this up to 12. The total-exposure-invariant
+    // risk allocator prevents the additional attempts from increasing strategy exposure.
+    max_new_entries_per_scan: 20, suppress_cross_exchange_same_asset: true,
     // Stage 4: scalp strategy. Default "TREND" = existing behavior, fully off.
-    strategy: (env("TRADING_STRATEGY") === "SCALP" ? "SCALP" : "TREND"),
+    strategy: env("TRADING_STRATEGY") === "TREND" ? "TREND" : env("TRADING_STRATEGY") === "SCALP" ? "SCALP" : "LOB_SCALP",
     scalp_per_order_pct: 100, // deprecated: allocation UI is the sole exposure ceiling
-    scalp_daily_loss_pct: clamp(finite(env("SCALP_DAILY_LOSS_PCT"), 20), 0.1, 100),
+    scalp_daily_loss_pct: clamp(finite(env("SCALP_DAILY_LOSS_PCT"), 30), 0.1, 100),
     scalp_max_single_loss_pct: clamp(finite(env("SCALP_MAX_SINGLE_LOSS_PCT"), 5), 0.1, 100),
     scalp_max_consecutive_losses: clamp(finite(env("SCALP_MAX_CONSECUTIVE_LOSSES"), 4), 1, 50),
     scalp_kill_switch: env("SCALP_KILL_SWITCH") === "true",
@@ -268,7 +280,7 @@ function defaultSettings(): TradingSettings & JsonRecord {
     // v5.6: back to a scalp horizon. Throughput-optimal barriers are narrow, so they
     // resolve fast; the wide-barrier / long-hold combination of v5.4 was a consequence of
     // taker costs, not of the strategy.
-    scalp_max_holding_minutes: clamp(finite(env("SCALP_MAX_HOLDING_MINUTES"), 45), 1, 1440),
+    scalp_max_holding_minutes: clamp(finite(env("SCALP_MAX_HOLDING_MINUTES"), 3), 0.1, 5),
     // Capital is split into this many concurrent slots. v5.2.5 sized every entry at
     // the FULL available allocation, so the first candidate consumed everything and
     // the "max 2 entries per scan" allowance could never be used.
@@ -288,13 +300,18 @@ function defaultSettings(): TradingSettings & JsonRecord {
     // winner and loses target touches that happen between polls, which is precisely the
     // cost the maker pivot exists to remove.
     scalp_resting_tp: env("SCALP_RESTING_TP") !== "false",
-    // v5.4 --------------------------------------------------------------------
-    // The 30-minute forced exit is GONE. It was a safety timeout from the original
-    // fixed +0.60%/-0.30% barrier, not a profit rule, and it force-sold positions whose
-    // thesis was still intact while paying a full round trip for a non-outcome.
-    // Positions are now held while the live edge survives; absolute time is only a
-    // stuck-ledger backstop, and the operator sets it.
-    scalp_safety_ttl_minutes: clamp(finite(env("SCALP_SAFETY_TTL_MINUTES"), 360), 10, 10080),
+    // v5.12: max holding is a real barrier outcome. HF_SCALP is capped at 30 minutes;
+    // INTRADAY_SCALP may extend to 120 minutes. The live-edge hold test can exit earlier,
+    // but never extend a trade beyond the approved profile timeout.
+    scalp_safety_ttl_minutes: clamp(finite(env("SCALP_SAFETY_TTL_MINUTES"), 5), 0.1, 5),
+    // v6 LOB_SCALP: second-scale horizons and order-book-only execution controls.
+    lob_max_holding_seconds: clamp(finite(env("LOB_MAX_HOLDING_SECONDS"), 180), 1, 300),
+    lob_absolute_max_holding_seconds: clamp(finite(env("LOB_ABSOLUTE_MAX_HOLDING_SECONDS"), 300), 1, 300),
+    lob_scan_interval_seconds: clamp(finite(env("LOB_SCAN_INTERVAL_SECONDS"), 15), 10, 60),
+    lob_min_net_ev_bps: clamp(finite(env("LOB_MIN_NET_EV_BPS"), 0.01), 0, 100),
+    lob_max_book_age_ms: clamp(finite(env("LOB_MAX_BOOK_AGE_MS"), 2500), 100, 10000),
+    lob_max_spread_bps: clamp(finite(env("LOB_MAX_SPREAD_BPS"), 30), 1, 100),
+    lob_min_bid_depth_ratio: clamp(finite(env("LOB_MIN_BID_DEPTH_RATIO"), 0.35), 0.05, 1),
     scalp_hold_alpha_half_life_minutes: clamp(finite(env("SCALP_HOLD_ALPHA_HALF_LIFE_MINUTES"), 12), 1, 240),
     scalp_hold_min_edge_after_expected: clamp(finite(env("SCALP_HOLD_MIN_EDGE_AFTER_EXPECTED"), 0.0005), 0, 0.01),
     scalp_hold_reversal_imbalance: clamp(finite(env("SCALP_HOLD_REVERSAL_IMBALANCE"), -0.25), -1, 0),
@@ -303,6 +320,12 @@ function defaultSettings(): TradingSettings & JsonRecord {
     // list price. Set false to pin the static FEE_PCT table.
     scalp_use_live_fees: env("SCALP_USE_LIVE_FEES") !== "false",
     scalp_min_edge_cost_fraction: clamp(finite(env("SCALP_MIN_EDGE_COST_FRACTION"), 0.25), 0, 1),
+    // v5.12: execution profile and lower-bound candidate gate.
+    scalp_strategy_profile: "LOB_SCALP",
+    scalp_min_win_probability_lcb: clamp(finite(env("SCALP_MIN_WIN_PROBABILITY_LCB"), 0.50), 0.50, 0.95),
+    scalp_min_fill_probability_lcb: clamp(finite(env("SCALP_MIN_FILL_PROBABILITY_LCB"), 0.30), 0.05, 0.95),
+    scalp_min_forecast_samples: clamp(finite(env("SCALP_MIN_FORECAST_SAMPLES"), 60), 0, 20000),
+    scalp_min_independent_blocks: clamp(finite(env("SCALP_MIN_INDEPENDENT_BLOCKS"), 3), 0, 1000),
     // v5.10 --------------------------------------------------------------------
     // Budget spent on trades taken for their INFORMATION value.
     //
@@ -313,8 +336,8 @@ function defaultSettings(): TradingSettings & JsonRecord {
     //
     // These override the EV threshold and NOTHING else. Kill switch, daily loss, depth,
     // spread and exchange minimums all still apply.
-    scalp_exploration_per_day: clamp(finite(env("SCALP_EXPLORATION_PER_DAY"), 40), 0, 500),
-    scalp_exploration_per_scan: clamp(finite(env("SCALP_EXPLORATION_PER_SCAN"), 1), 0, 10),
+    scalp_exploration_per_day: 0, // v5.12: live EV-gate bypass disabled; shadow labelling only
+    scalp_exploration_per_scan: 0,
     scalp_exploration_size_fraction: clamp(finite(env("SCALP_EXPLORATION_SIZE_FRACTION"), 0.33), 0.05, 1),
     scalp_exploration_min_edge_cost_multiple: clamp(finite(env("SCALP_EXPLORATION_MIN_EDGE_COST_MULTIPLE"), -1), -5, 0),
     // v5.11 --------------------------------------------------------------------
@@ -324,10 +347,16 @@ function defaultSettings(): TradingSettings & JsonRecord {
     // rides on the answer.
     scalp_target_trades_per_hour: clamp(finite(env("SCALP_TARGET_TRADES_PER_HOUR"), 5), 0, 60),
     scalp_rate_window_minutes: clamp(finite(env("SCALP_RATE_WINDOW_MINUTES"), 60), 10, 1440),
-    scalp_rate_max_relaxation: clamp(finite(env("SCALP_RATE_MAX_RELAXATION"), 1.5), 0, 5),
-    scalp_unproven_size_fraction: clamp(finite(env("SCALP_UNPROVEN_SIZE_FRACTION"), 0.35), 0.05, 1),
+    scalp_target_utilization: clamp(finite(env("SCALP_TARGET_UTILIZATION"), 0.70), 0.1, 0.95),
+    scalp_min_position_slots: clamp(finite(env("SCALP_MIN_POSITION_SLOTS"), 2), 1, 20),
+    scalp_max_position_slots: clamp(finite(env("SCALP_MAX_POSITION_SLOTS"), 12), 1, 20),
+    scalp_scan_universe: clamp(finite(env("SCALP_SCAN_UNIVERSE"), 60), 10, 1000),
+    scalp_min_scan_universe: clamp(finite(env("SCALP_MIN_SCAN_UNIVERSE"), 30), 10, 1000),
+    scalp_max_scan_universe: clamp(finite(env("SCALP_MAX_SCAN_UNIVERSE"), 240), 10, 1000),
+    scalp_average_holding_minutes: clamp(finite(env("SCALP_AVERAGE_HOLDING_MINUTES"), 2), 0.1, 5),
+    scalp_unproven_size_fraction: clamp(finite(env("SCALP_UNPROVEN_SIZE_FRACTION"), 1), 0.05, 1),
     scalp_samples_for_full_size: clamp(finite(env("SCALP_SAMPLES_FOR_FULL_SIZE"), 400), 50, 20000),
-    scalp_rate_relaxation: 0,
+    scalp_rate_relaxation: 0, // compatibility column; v5.12 always resets to zero
     // v5.5 --------------------------------------------------------------------
     // Post the entry on the bid instead of taking the ask.
     //
@@ -426,8 +455,8 @@ function weekBoundary(exchange: Exchange): string {
 }
 async function accountStats(exchange: Exchange, equityQuote: number, isPaper: boolean) {
   const [activeGlobal, activeExchange, todayGlobal, todayExchange, dailyBuyOrders, dailyClosed, weeklyClosed, recentClosed] = await Promise.all([
-    db(`trading_positions?is_paper=eq.${isPaper}&state=in.(ENTRY_PENDING,OPEN,EXITING)&select=id,exchange,market,base_asset`),
-    db(`trading_positions?exchange=eq.${exchange}&is_paper=eq.${isPaper}&state=in.(ENTRY_PENDING,OPEN,EXITING)&select=id,market,base_asset`),
+    db(`trading_positions?is_paper=eq.${isPaper}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id,exchange,market,base_asset`),
+    db(`trading_positions?exchange=eq.${exchange}&is_paper=eq.${isPaper}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id,market,base_asset`),
     db(`trading_positions?is_paper=eq.${isPaper}&created_at=gte.${encodeURIComponent(dayBoundary("upbit"))}&state=neq.CANCELLED&select=id`),
     db(`trading_positions?exchange=eq.${exchange}&is_paper=eq.${isPaper}&created_at=gte.${encodeURIComponent(dayBoundary(exchange))}&state=neq.CANCELLED&select=id`),
     db(`trading_orders?exchange=eq.${exchange}&side=eq.BUY&requested_at=gte.${encodeURIComponent(dayBoundary(exchange))}&state=in.(APPLIED,EXCHANGE_DONE,EXCHANGE_PARTIAL_CANCELLED)&select=executed_funds_quote,trading_positions!inner(is_paper)&trading_positions.is_paper=eq.${isPaper}`),
@@ -461,9 +490,20 @@ async function runScanner(portfolios: Record<Exchange, any>, settings: TradingSe
       body: JSON.stringify({
         action: "scan", exchange: "combined", operator_mode: "AUTOMATED", automation: true,
         strategy: (settings as any).strategy,
-        scalp_overrides: {
-          minimumEdge: finite((settings as any).scalp_minimum_edge, DEFAULT_COST_MODEL.minimumEdge),
-        },
+        strategy_profile: normalizeStrategyProfile((settings as any).scalp_strategy_profile),
+        scalp_overrides: isLobStrategy((settings as any).strategy)
+          ? {
+            // LOB_SCALP follows the user's sole economic threshold: expected net profit
+            // after fees/slippage must be strictly positive. Legacy pWin/pFill buffers do
+            // not leak into this route.
+            minimumEdge: Math.max(0, finite((settings as any).lob_min_net_ev_bps, 0.01)) / 10_000,
+            maxBookAgeMs: Math.max(100, finite((settings as any).lob_max_book_age_ms, 2500)),
+            maxSpreadBps: Math.max(1, finite((settings as any).lob_max_spread_bps, 30)),
+            maxHoldingSeconds: Math.round(clamp(finite((settings as any).lob_max_holding_seconds, 180), 1, 300)),
+          }
+          : {
+            minimumEdge: finite((settings as any).scalp_minimum_edge, DEFAULT_COST_MODEL.minimumEdge),
+          },
         // v5.3: barrier geometry. `edgeBudget` is the dominant knob — it is the excess
         // win rate the signal is assumed to deliver, and it sets how wide T + S must be
         // for the required win rate to be attainable at all.
@@ -486,17 +526,23 @@ async function runScanner(portfolios: Record<Exchange, any>, settings: TradingSe
             : finite((settings as any).scalp_spread_capture, 0.0005),
           minimumEdge: finite((settings as any).scalp_minimum_edge, DEFAULT_COST_MODEL.minimumEdge),
           minEdgeCostFraction: finite((settings as any).scalp_min_edge_cost_fraction, 0.25),
-          maxHorizonMinutes: finite((settings as any).scalp_max_holding_minutes, 120),
+          maxHorizonMinutes: Math.max(
+            5,
+            Math.min(
+              profileHoldingCeilingMinutes(normalizeStrategyProfile((settings as any).scalp_strategy_profile)),
+              finite((settings as any).scalp_max_holding_minutes, 30),
+            ),
+          ),
         },
         capital_krw: Math.max(10_000, finite(portfolios.upbit?.managed?.managedCapitalQuote, portfolios.upbit?.available_quote || 10_000)),
         capital_usdt: Math.max(10, finite(portfolios.binance?.managed?.managedCapitalQuote, portfolios.binance?.available_quote || 10)),
-        risk_pct: (settings as any).strategy === "SCALP" ? 100 : settings.risk_per_trade_pct,
+        risk_pct: isScalpStrategy((settings as any).strategy) ? 100 : settings.risk_per_trade_pct,
         // v5.4: the scanner sizes barriers from cost, so it must receive the account's
         // real commission rate rather than recomputing the list price.
         upbit_fee_per_side_pct: await liveFeePct("upbit", settings),
         binance_fee_per_side_pct: await liveFeePct("binance", settings),
         recommendation_valid_minutes: Math.max(1, Math.ceil(settings.entry_ttl_seconds / 60)),
-        min_actionable_holding_hours: 1, max_unattended_hours: 24, require_precommitted_exit: true,
+        min_actionable_holding_hours: 0.08, max_unattended_hours: 2, require_precommitted_exit: true,
       }),
     });
     const text = await res.text(); let data: any;
@@ -507,16 +553,23 @@ async function runScanner(portfolios: Record<Exchange, any>, settings: TradingSe
 }
 async function loadBuyCandidates(scanId: string, settings?: TradingSettings): Promise<Candidate[]> {
   const rows = await db(`scanner_candidates?scan_id=eq.${scanId}&decision=eq.BUY&exchange=in.(upbit,binance)&select=*&order=score.desc,period_score.desc`) as Candidate[];
-  if (String((settings as any)?.strategy || "") !== "SCALP") return rows;
+  if (!isScalpStrategy((settings as any)?.strategy)) return rows;
   // v5.3: in SCALP the entry decision comes from the orderbook signal, but v5.2.5 still
   // handed the candidates to the sizer ordered by the LEGACY TREND SCORE. Combined with
   // full-allocation sizing that meant the single position the bot could hold was chosen
   // by trend score rather than by scalp expected value. Re-rank by provisional edge.
   const edge = (row: Candidate) => {
-    const scalp = (row as any).snapshot?.scalp;
-    return finite(scalp?.provisional_edge, Number.NEGATIVE_INFINITY);
+    const snapshot = (row as any).snapshot || {};
+    if (isLobStrategy((settings as any)?.strategy)) {
+      const hotness = finite(snapshot.lob?.hotness_score, 0);
+      const ev = finite(snapshot.lob?.ev_lower_bound_bps, Number.NEGATIVE_INFINITY);
+      return hotness * 1000 + ev;
+    }
+    return finite(snapshot.scalp?.provisional_edge, Number.NEGATIVE_INFINITY);
   };
-  return [...rows].sort((a, b) => edge(b) - edge(a));
+  const ranked = [...rows].sort((a, b) => edge(b) - edge(a));
+  const universe = clamp(finite((settings as any)?.scalp_scan_universe, ranked.length || 1), 1, 1000);
+  return ranked.slice(0, universe);
 }
 function tickRound(value: number, tick: number, direction: "down" | "up" | "nearest" = "nearest") {
   const t = tick > 0 ? tick : Math.max(0.00000001, value * 0.000001); const units = value / t;
@@ -553,6 +606,56 @@ function topOfBookImbalance(bids: Array<{ price: number; size: number }>, asks: 
   return total > 0 ? (bid - ask) / total : 0;
 }
 
+function liveLobFeatures(scan: any, market: any): LobFeatureVector {
+  const base = (scan?.features || {}) as Partial<LobFeatureVector>;
+  const bids = (market?.bids || []).map((b: any) => ({ price: finite(b.price ?? b[0]), size: finite(b.size ?? b[1]) }));
+  const asks = (market?.asks || []).map((a: any) => ({ price: finite(a.price ?? a[0]), size: finite(a.size ?? a[1]) }));
+  const bestBid = finite(market?.best_bid, bids[0]?.price);
+  const bestAsk = finite(market?.best_ask, asks[0]?.price);
+  const mid = bestBid > 0 && bestAsk > 0 ? (bestBid + bestAsk) / 2 : finite(market?.current);
+  const bidSize = finite(bids[0]?.size); const askSize = finite(asks[0]?.size);
+  const microprice = bidSize + askSize > 0 ? (bestAsk * bidSize + bestBid * askSize) / (bidSize + askSize) : mid;
+  const bidDepth = bids.slice(0, 10).reduce((sum: number, x: any) => sum + x.price * x.size, 0);
+  const askDepth = asks.slice(0, 10).reduce((sum: number, x: any) => sum + x.price * x.size, 0);
+  const flow = market?.trade_flow || {};
+  const buyNotional = finite(flow.buy_notional, base.buyNotional);
+  const sellNotional = finite(flow.sell_notional, base.sellNotional);
+  const tradeCount = Math.max(0, Math.floor(finite(flow.trade_count, base.tradeCount)));
+  return {
+    samples: Math.max(1, Math.floor(finite(base.samples, tradeCount))),
+    observationMs: Math.max(1, finite(base.observationMs, 15000)),
+    bookAgeMs: 0,
+    spreadBps: bestBid > 0 ? (bestAsk / bestBid - 1) * 10000 : null,
+    bookImbalance: topOfBookImbalance(bids, asks),
+    imbalanceStability: clamp(finite(base.imbalanceStability, 0.5), 0, 1),
+    tradePressureFast: clamp(finite(flow.pressure, base.tradePressureFast), -1, 1),
+    tradeCount,
+    buyNotional,
+    sellNotional,
+    averageTradeNotional: tradeCount > 0 ? (buyNotional + sellNotional) / tradeCount : finite(base.averageTradeNotional, 0),
+    bookUpdateRate: finite(base.bookUpdateRate, 1),
+    tradeArrivalRate: tradeCount / Math.max(1, finite(base.observationMs, 15000) / 1000),
+    aggressiveNotionalPerSecond: (buyNotional + sellNotional) / Math.max(1, finite(base.observationMs, 15000) / 1000),
+    micropriceDeviationBps: mid > 0 ? (microprice / mid - 1) * 10000 : 0,
+    bidDepthQuote: bidDepth,
+    askDepthQuote: askDepth,
+    depthRatio: askDepth > 0 ? bidDepth / askDepth : bidDepth > 0 ? 10 : 1,
+    spoofLikeScore: finite(base.spoofLikeScore, 0),
+    askAbsorptionScore: finite(base.askAbsorptionScore, 0),
+    bidAbsorptionScore: finite(base.bidAbsorptionScore, 0),
+    breakoutScore: finite(base.breakoutScore, 0),
+    sweepReclaimScore: finite(base.sweepReclaimScore, 0),
+    ofiPersistence: finite(base.ofiPersistence, 0),
+    persistentBidWall: Boolean(base.persistentBidWall),
+    persistentAskWall: Boolean(base.persistentAskWall),
+    dynamicStatus: String(base.dynamicStatus || "NEUTRAL"),
+    dataQuality: finite(base.dataQuality, 0.5),
+    turnover24hQuote: finite(base.turnover24hQuote, 0),
+    minActionableTurnover24h: Math.max(1, finite(base.minActionableTurnover24h, 1)),
+    trendContext: finite(base.trendContext, 0),
+  };
+}
+
 /** Total resting bid notional in the visible book. */
 function bidDepthQuote(book: any): number {
   return (Array.isArray(book?.bids) ? book.bids : []).reduce(
@@ -564,7 +667,7 @@ function bidDepthQuote(book: any): number {
 function candidatePlan(candidate: Candidate, settings?: TradingSettings) {
   const trade = candidate.snapshot?.trade_plan || {}; const tick = finite(trade.tick_size, finite(candidate.feature_vector?.tick_size));
   const allocation = clamp(finite(trade.first_target_allocation_pct, 60), 50, 80); const strategy = String(trade.target_strategy || "SCALE_OUT");
-  const isScalp = String((settings as any)?.strategy || "") === "SCALP";
+  const isScalp = isScalpStrategy((settings as any)?.strategy);
   const scalpStopPct = finite((candidate as any).snapshot?.scalp?.stop_pct, 0.003);
   return {
     tick, allocation,
@@ -712,7 +815,7 @@ function allocationConfig(settings: TradingSettings, exchange: Exchange) {
 }
 async function managedPortfolio(settings: TradingSettings, exchange: Exchange, portfolio: any) {
   const paper = settings.mode !== "LIVE_LIMITED";
-  const active = await db(`trading_positions?exchange=eq.${exchange}&state=in.(ENTRY_PENDING,OPEN,EXITING)&is_paper=eq.${paper}&select=market,remaining_quantity,average_entry_price,planned_entry_price`) as any[];
+  const active = await db(`trading_positions?exchange=eq.${exchange}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&is_paper=eq.${paper}&select=market,remaining_quantity,average_entry_price,planned_entry_price`) as any[];
   let openCost = 0;
   let botPositionValue = 0;
   for (const row of active || []) {
@@ -741,7 +844,7 @@ async function managedPortfolio(settings: TradingSettings, exchange: Exchange, p
 }
 
 function exchangeLimits(settings: TradingSettings, exchange: Exchange) {
-  const allocationControlled = (settings as any).strategy === "SCALP";
+  const allocationControlled = isScalpStrategy((settings as any).strategy);
   return exchange === "upbit"
     ? {
       maxOrder: allocationControlled ? Number.MAX_SAFE_INTEGER : settings.max_order_krw,
@@ -805,16 +908,29 @@ function scalpCostConfig(settings: TradingSettings, exchange: Exchange, feePct =
     minEdgeCostFraction: finite((settings as any).scalp_min_edge_cost_fraction, 0.25),
     minimumEdge: finite((settings as any).scalp_minimum_edge, DEFAULT_COST_MODEL.minimumEdge),
   });
-  // v5.11: the rate controller may remove the margin above cost, never more than that.
+  // v5.12: throughput control cannot modify the EV threshold.
   const roundTripCost = feePct * 2 / 100;
   return {
     ...DEFAULT_COST_MODEL,
     roundTripFeeFraction: roundTripCost,
-    minimumEdge: relaxedMinimumEdge(
-      resolveMinimumEdge(geometry),
-      finite((settings as any).scalp_rate_relaxation, 0),
-      roundTripCost,
-    ),
+    minimumEdge: resolveMinimumEdge(geometry),
+  };
+}
+
+function scalpCandidateGateConfig(settings: TradingSettings & JsonRecord): GateConfig {
+  const base = settings.mode === "LIVE_LIMITED" ? DEFAULT_CANDIDATE_GATE : SHADOW_CANDIDATE_GATE;
+  return {
+    ...base,
+    lowerQuantile: settings.mode === "LIVE_LIMITED" ? 0.05 : 0.10,
+    minWinProbabilityLowerBound: clamp(finite((settings as any).scalp_min_win_probability_lcb, 0.50), 0.50, 0.95),
+    minFillProbabilityLowerBound: clamp(finite((settings as any).scalp_min_fill_probability_lcb, 0.30), 0.05, 0.95),
+    minEffectiveSamples: settings.mode === "LIVE_LIMITED"
+      ? Math.max(0, Math.floor(finite((settings as any).scalp_min_forecast_samples, 60)))
+      : 0,
+    minIndependentBlocks: settings.mode === "LIVE_LIMITED"
+      ? Math.max(0, Math.floor(finite((settings as any).scalp_min_independent_blocks, 3)))
+      : 0,
+    requireCalibrationReady: settings.mode === "LIVE_LIMITED",
   };
 }
 
@@ -823,14 +939,6 @@ function scalpCostConfig(settings: TradingSettings, exchange: Exchange, feePct =
  * consecutive-loss streak, scoped to this exchange and paper/live mode.
  * Day boundary follows the exchange convention (KST for upbit, UTC for binance).
  */
-/** Exploration entries already spent today, scoped to the exchange and paper/live mode. */
-async function explorationUsedToday(exchange: Exchange, isPaper: boolean): Promise<number> {
-  const rows = await db(
-    `trading_positions?exchange=eq.${exchange}&is_paper=eq.${isPaper}&created_at=gte.${encodeURIComponent(dayBoundary(exchange))}&select=id,metadata`,
-  ).catch(() => []) as any[];
-  return (rows || []).filter((r) => r?.metadata?.is_exploration === true).length;
-}
-
 async function scalpDayState(exchange: Exchange, isPaper: boolean): Promise<ScalpDayState> {
   const now = new Date();
   const dayStart = exchange === "upbit"
@@ -853,10 +961,10 @@ async function scalpDayState(exchange: Exchange, isPaper: boolean): Promise<Scal
   return { realizedPnlQuote, consecutiveLosses };
 }
 
-async function enterCandidate(candidate: Candidate, settings: TradingSettings, portfolio: any, activeBases: Set<string>, cycleId: string, explorationUsedThisScan = 0) {
+async function enterCandidate(candidate: Candidate, settings: TradingSettings, portfolio: any, activeBases: Set<string>, cycleId: string) {
   const exchange = candidate.exchange; const quote = quoteCurrency(exchange); const base = baseAsset(exchange, candidate.market);
   if (candidate.recommendation_valid_until && Date.now() > new Date(candidate.recommendation_valid_until).getTime()) return { entered: false, exchange, market: candidate.market, reason: "recommendation expired" };
-  const existing = await db(`trading_positions?exchange=eq.${exchange}&market=eq.${candidate.market}&state=in.(ENTRY_PENDING,OPEN,EXITING)&select=id&limit=1`);
+  const existing = await db(`trading_positions?exchange=eq.${exchange}&market=eq.${candidate.market}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id&limit=1`);
   if (existing.length) return { entered: false, exchange, market: candidate.market, reason: "market already tracked" };
   if (settings.suppress_cross_exchange_same_asset && activeBases.has(base)) return { entered: false, exchange, market: candidate.market, reason: `base asset ${base} already exposed on another market` };
   // v5.4: asset-scoped pause. A confirmed mismatch on one coin no longer stops the
@@ -874,7 +982,7 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   // plan's entry zone. `candidate.entry_high` is computed from 15m ATR structure and
   // routinely sits below the current ask, which silently blocked scalp entries.
   const scalpStopPctForCeiling = finite((candidate as any).snapshot?.scalp?.stop_pct, 0.003);
-  const maxEntry = (settings as any).strategy === "SCALP"
+  const maxEntry = isScalpStrategy((settings as any).strategy)
     ? bestAsk * (1 + Math.min(0.25 * scalpStopPctForCeiling, 0.002))
     : finite(candidate.entry_high);
   if (!(maxEntry > 0) || bestAsk > maxEntry) return { entered: false, exchange, market: candidate.market, reason: `best ask ${bestAsk} above entry ceiling ${maxEntry}` };
@@ -887,21 +995,35 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   if (finite(managed.managedAvailableQuote) < Math.max(limits.minOrder, rules.min_notional)) {
     return { entered: false, exchange, market: candidate.market, reason: "managed allocation has no available buying power" };
   }
-  const allocationOnly = (settings as any).strategy === "SCALP";
+  const allocationOnly = isScalpStrategy((settings as any).strategy);
   const managedAvailable = finite(managed.managedAvailableQuote);
-  // v5.3: split the managed allocation into concurrent slots. v5.2.5 used
-  // `managedAvailable` directly, so candidate #1 took the entire exchange balance,
-  // candidate #2 always failed the exchange minimum, and the bot ran a single
-  // position at a time — the opposite of the intended high-turnover profile.
+  // v5.12: slots divide a fixed total-exposure cap. Increasing slots must never increase
+  // strategy gross exposure. Risk, depth and exchange limits are applied before sizeFraction.
   const slots = allocationOnly ? clamp(finite((settings as any).scalp_position_slots, 6), 1, 20) : 1;
-  const slotQuote = allocationOnly
-    ? Math.max(0, finite(managed.managedCapitalQuote)) / slots
-    : Number.POSITIVE_INFINITY;
-  // v5.11: size carries the uncertainty. Small while the edge is unmeasured, full once
-  // shadow outcomes confirm it — frequency stays at target throughout.
-  const evidenceSize = allocationOnly ? clamp(finite((settings as any).scalp_size_fraction, 0.35), 0.05, 1) : 1;
+  const evidenceSize = allocationOnly
+    ? isLobStrategy((settings as any).strategy) ? 1 : clamp(finite((settings as any).scalp_size_fraction, 0.35), 0.05, 1)
+    : 1;
+  const visibleAskDepth = Math.max(0, (market.asks || []).reduce(
+    (sum: number, row: any) => sum + finite(row.price ?? row[0]) * finite(row.size ?? row[1]),
+    0,
+  ));
+  const scalpStopPctForSizing = finite((candidate as any).snapshot?.scalp?.stop_pct, 0.003);
+  const riskSizing = allocationOnly ? calculateOrderNotional({
+    managedCapitalQuote: finite(managed.managedCapitalQuote),
+    maxStrategyExposureFraction: 1,
+    desiredSlots: slots,
+    perTradeLossBudgetQuote: finite(managed.managedCapitalQuote) *
+      clamp(finite((settings as any).scalp_max_single_loss_pct, 5), 0.1, 100) / 100,
+    stopPct: Math.max(0.000001, scalpStopPctForSizing),
+    estimatedExitCostPct: FEE_PCT[exchange] * 2 / 100 + 0.001,
+    depthLimitedNotional: visibleAskDepth / LIVE_MIN_DEPTH_BUFFER,
+    exchangeLimitedNotional: limits.maxOrder,
+    sizeFraction: evidenceSize,
+    currentExposureQuote: finite(managed.openCostQuote),
+  }) : null;
+  const slotQuote = allocationOnly ? finite(riskSizing?.slotCap) : Number.POSITIVE_INFINITY;
   const maxOrder = allocationOnly
-    ? Math.min(managedAvailable, slotQuote * evidenceSize)
+    ? Math.min(managedAvailable, finite(riskSizing?.notionalQuote))
     : Math.min(limits.maxOrder, plan.recommended > 0 ? plan.recommended : limits.maxOrder);
   const allocationSizing = (entryPrice: number) => {
     const minOrder = Math.max(limits.minOrder, rules.min_notional);
@@ -939,8 +1061,44 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   let scalpTarget2: number | null = null;
   let scalpAudit: JsonRecord | null = null;
   let decisionNotional = sizing.notionalQuote;
-  let isExploration = false;
-  if ((settings as any).strategy === "SCALP") {
+  if (isLobStrategy((settings as any).strategy)) {
+    const lobSnapshot = (candidate as any).snapshot?.lob || {};
+    const features = liveLobFeatures(lobSnapshot, market);
+    const liveFee = await liveFeePct(exchange, settings);
+    const decision = evaluateLobEntry(features, {
+      roundTripFeeBps: liveFee * 2 * 100,
+      entrySlippageBps: makerEntryEnabled(settings) ? 0 : Math.max(0.1, spreadBps * 0.15),
+      targetExitSlippageBps: (settings as any).scalp_resting_tp !== false ? 0 : Math.max(0.1, spreadBps * 0.15),
+      stopExitSlippageBps: Math.max(0.4, spreadBps * 0.55),
+      spreadBps,
+    }, {
+      minEvBps: Math.max(0, finite((settings as any).lob_min_net_ev_bps, 0.01)),
+      maxBookAgeMs: Math.max(250, finite((settings as any).lob_max_book_age_ms, 2500)),
+      maxSpreadBps: Math.max(1, finite((settings as any).lob_max_spread_bps, LIVE_MAX_SPREAD_BPS)),
+      maxHoldingSeconds: Math.round(clamp(finite((settings as any).lob_max_holding_seconds, 180), 1, 300)),
+      absoluteMaxHoldingSeconds: Math.round(clamp(finite((settings as any).lob_absolute_max_holding_seconds, 300), 1, 300)),
+    });
+    scalpAudit = {
+      strategy: "LOB_SCALP", pattern: decision.pattern, patterns: decision.patterns,
+      hotness: decision.hotness, p_target: decision.pTarget, p_stop: decision.pStop,
+      p_timeout: decision.pTimeout, p_fill: decision.pFill,
+      target_bps: decision.targetBps, stop_bps: decision.stopBps,
+      target_return_net_bps: decision.targetReturnNetBps,
+      ev_net_bps: decision.evNetBps, ev_lower_bound_bps: decision.evLowerBoundBps,
+      max_holding_seconds: decision.maxHoldingSeconds, reasons: decision.reasons,
+      features: decision.features, scanned_lob: lobSnapshot, slots, slot_quote: Number.isFinite(slotQuote) ? slotQuote : null,
+      risk_sizing: riskSizing,
+    };
+    if (decision.decision !== "BUY") {
+      await event("LOB_CANDIDATE_DISCARD", `${exchange}:${candidate.market} live LOB recheck discarded`, scalpAudit, { cycleId, level: "INFO" });
+      return { entered: false, exchange, market: candidate.market, reason: `LOB recheck: ${decision.reasons.join(",") || decision.decision}` };
+    }
+    const targetPct = decision.targetBps / 10000;
+    const stopPct = Math.min(0.05, decision.stopBps / 10000);
+    scalpStopPrice = tickRound(entryPrice * (1 - stopPct), rules.price_tick, "down");
+    scalpTarget1 = tickRound(entryPrice * (1 + targetPct), rules.price_tick, "up");
+    scalpTarget2 = scalpTarget1;
+  } else if ((settings as any).strategy === "SCALP") {
     const scalpSnapshot = (candidate as any).snapshot?.scalp || {};
     const scanPWin = finite((candidate as any).scalp_p_win ?? scalpSnapshot.pWin ?? (candidate as any).scalp?.pWin, 0.5);
     const scalpTargetPct = finite((candidate as any).scalp_target_pct ?? scalpSnapshot.target_pct ?? (candidate as any).scalp?.target_pct, 0.006);
@@ -988,10 +1146,21 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
         bidLevels,
         bestAsk, bestBid,
         resolveProbability,
-        timeoutReturn: 0,
+        expectedHoldingMinutes: clamp(finite(scalpSnapshot.geometry?.horizon_minutes, 15), 1, 1440),
+        expectedOrderType: (settings as any).scalp_maker_entry === false ? "IOC_LIMIT" : "POST_ONLY",
+        depthCoverageRatio: depth.availableFunds / Math.max(1, sizing.notionalQuote),
+        spreadBps,
+        bookImbalance: liveImbalance,
+        signalAgeMs,
+        forecastEffectiveSamples: calibration.samples,
+        forecastIndependentBlocks: Math.floor(calibration.samples / 20),
+        forecastCalibrationReady: calibration.samples >= Math.max(0, finite((settings as any).scalp_min_forecast_samples, 60)),
+        modelVersion: `${VERSION}-outcome.bridge.1`,
+        calibrationVersion: `platt:${calibration.a.toFixed(6)}:${calibration.b.toFixed(6)}`,
       },
       scalpSafetyConfig(settings),
       scalpCostConfig(settings, exchange, await liveFeePct(exchange, settings)),
+      scalpCandidateGateConfig(settings),
     );
     scalpAudit = {
       scan_p_win: scanPWin,
@@ -1004,42 +1173,25 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
       target_pct: scalpTargetPct,
       stop_pct: scalpStopPct,
       expected_net_edge: decision.expectedNetEdge,
+      ev_lower_bound: decision.evLowerBound,
+      p_win_lower_bound: decision.pWinLowerBound,
+      p_fill_lower_bound: decision.pFillLowerBound,
+      rejection_reasons: decision.rejectionReasons,
+      capital_efficiency: decision.evaluation?.capitalEfficiency ?? null,
       geometry: scalpSnapshot.geometry || null,
       features: scalpSnapshot.features || null,
+      strategy_profile: normalizeStrategyProfile((settings as any).scalp_strategy_profile),
       slots,
       slot_quote: Number.isFinite(slotQuote) ? slotQuote : null,
+      risk_sizing: riskSizing,
     };
     if (!decision.allow) {
-      // v5.10: the EV threshold — and only the EV threshold — may be overridden by the
-      // exploration budget, because it is the one check built on unmeasured coefficients.
-      const explorationCfg = resolveExplorationConfig({
-        maxPerDay: finite((settings as any).scalp_exploration_per_day, 40),
-        maxPerScan: finite((settings as any).scalp_exploration_per_scan, 1),
-        sizeFraction: finite((settings as any).scalp_exploration_size_fraction, 0.33),
-        minEdgeCostMultiple: finite((settings as any).scalp_exploration_min_edge_cost_multiple, -1),
-      });
-      const exploration = evaluateExploration({
-        blockReason: decision.reason,
-        expectedNetEdge: decision.expectedNetEdge,
-        roundTripCost: FEE_PCT[exchange] * 2 / 100,
-        usedToday: await explorationUsedToday(exchange, settings.mode !== "LIVE_LIMITED"),
-        usedThisScan: explorationUsedThisScan,
-      }, explorationCfg);
-
-      if (!exploration.explore) {
-        await event("SCALP_GATE_BLOCK", `${exchange}:${candidate.market} scalp gate blocked`, { reason: decision.reason, exploration: exploration.reason, ...scalpAudit }, { cycleId });
-        return { entered: false, exchange, market: candidate.market, reason: `scalp gate: ${decision.reason}` };
-      }
-      isExploration = true;
-      decisionNotional = decision.notional * exploration.sizeFraction;
-      quantity = floorToStep(decisionNotional / entryPrice, rules.quantity_step || 0.00000001);
-      if (!(quantity > 0) || quantity * entryPrice < Math.max(limits.minOrder, rules.min_notional)) {
-        await event("SCALP_GATE_BLOCK", `${exchange}:${candidate.market} exploration size below exchange minimum`, { reason: decision.reason, ...scalpAudit }, { cycleId });
-        return { entered: false, exchange, market: candidate.market, reason: "exploration size below exchange minimum" };
-      }
-      await event("SCALP_EXPLORATION_ENTRY", `${exchange}:${candidate.market} taken on exploration budget`, {
-        expected_net_edge: decision.expectedNetEdge, size_fraction: exploration.sizeFraction, ...scalpAudit,
+      // v5.12: rejected candidates remain available to shadow replay, but no live/paper
+      // entry may bypass EV, pWin or pFill lower bounds.
+      await event("SCALP_GATE_BLOCK", `${exchange}:${candidate.market} scalp gate blocked`, {
+        reason: decision.reason, shadow_only: true, ...scalpAudit,
       }, { cycleId, level: "INFO" });
+      return { entered: false, exchange, market: candidate.market, reason: `scalp gate: ${decision.reason}` };
     }
     decisionNotional = decision.notional;
     if (decision.notional < sizing.notionalQuote) {
@@ -1055,26 +1207,24 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
     scalpTarget2 = tickRound(entryPrice * (1 + scalpTargetPct * 1.5), rules.price_tick, "up");
   }
 
-  // v5.3: the holding horizon is per symbol. geometry.ts stretches it to the time the
-  // symbol actually needs, at its own volatility, to travel `target_pct`; the operator
-  // setting is only the ceiling. v5.2.5 used a flat 30 minutes for everything, which
-  // guaranteed a time exit on any symbol slower than the (fixed) target.
-  // v5.4: two different clocks, with two different jobs.
-  //   expected_resolution_at — volatility-derived estimate of when this symbol should
-  //     have reached its target. NOT an exit. Past it, the hold test gets stricter.
-  //   max_holding_at — the absolute backstop against a stuck ledger. Operator-set,
-  //     default 6 hours. This is the only absolute time that can close a position.
-  const scalpHorizonCeiling = clamp(finite((settings as any).scalp_max_holding_minutes, 120), 1, 1440);
-  const scalpExpectedMinutes = clamp(
-    finite((candidate as any).snapshot?.scalp?.geometry?.horizon_minutes, scalpHorizonCeiling),
-    1,
-    scalpHorizonCeiling,
+  // v5.12: per-symbol expected resolution is retained for diagnostics, while
+  // max_holding_at is the hard TIMEOUT barrier. The profile ceiling prevents an HF signal
+  // from silently turning into an intraday position.
+  const holdingProfile = resolveProfileHolding(
+    isLobStrategy((settings as any).strategy) ? "LOB_SCALP" : (settings as any).scalp_strategy_profile,
+    finite((settings as any).scalp_max_holding_minutes, 3),
+    finite((settings as any).scalp_safety_ttl_minutes, 5),
+    isLobStrategy((settings as any).strategy)
+      ? finite((candidate as any).snapshot?.lob?.max_holding_seconds, 180) / 60
+      : finite((candidate as any).snapshot?.scalp?.geometry?.horizon_minutes, 15),
   );
-  const scalpSafetyTtlMinutes = Math.max(
-    scalpExpectedMinutes,
-    clamp(finite((settings as any).scalp_safety_ttl_minutes, 360), 10, 10080),
-  );
-  const maxHolding = (settings as any).strategy === "SCALP"
+  const scalpExpectedMinutes = isLobStrategy((settings as any).strategy)
+    ? clamp(finite((candidate as any).snapshot?.lob?.max_holding_seconds, 180) / 60, 0.1, 5)
+    : holdingProfile.expectedResolutionMinutes;
+  const scalpSafetyTtlMinutes = isLobStrategy((settings as any).strategy)
+    ? clamp(finite((settings as any).lob_absolute_max_holding_seconds, 300) / 60, 0.1, 5)
+    : holdingProfile.timeoutMinutes;
+  const maxHolding = isScalpStrategy((settings as any).strategy)
     ? new Date(Date.now() + scalpSafetyTtlMinutes * 60_000).toISOString()
     : new Date(Date.now() + clamp(finite(candidate.intended_horizon_hours, 24), 1, 480) * 3600_000).toISOString();
   const position = (await insert("trading_positions", {
@@ -1093,11 +1243,12 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
       // v5.3: the full entry-time signal, persisted so the pWin calibration loop can
       // later join predicted probability against the realized outcome on this row.
       scalp_signal: scalpAudit,
+      lob_signal: isLobStrategy((settings as any).strategy) ? scalpAudit : null,
       // Tagged so calibration can weight these and so their cost is reportable separately.
-      is_exploration: isExploration,
-      scalp_expected_minutes: (settings as any).strategy === "SCALP" ? scalpExpectedMinutes : null,
-      scalp_safety_ttl_minutes: (settings as any).strategy === "SCALP" ? scalpSafetyTtlMinutes : null,
-      expected_resolution_at: (settings as any).strategy === "SCALP"
+      is_exploration: false,
+      scalp_expected_minutes: isScalpStrategy((settings as any).strategy) ? scalpExpectedMinutes : null,
+      scalp_safety_ttl_minutes: isScalpStrategy((settings as any).strategy) ? scalpSafetyTtlMinutes : null,
+      expected_resolution_at: isScalpStrategy((settings as any).strategy)
         ? new Date(Date.now() + scalpExpectedMinutes * 60_000).toISOString()
         : null,
     },
@@ -1146,7 +1297,7 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
         price: makerPrice, quantity: makerQuantity, best_bid: bestBid, best_ask: bestAsk, spread_bps: spreadBps,
       }, { cycleId, positionId: position.id, orderId: makerOrderRow.id });
       // Reserved, not entered: the slot's capital is committed until the order resolves.
-      return { entered: false, reserved: true, maker_pending: true, exchange, market: candidate.market, position: { ...position, ...(rows[0] || {}) }, reason: "maker entry resting", exploration: isExploration };
+      return { entered: false, reserved: true, maker_pending: true, exchange, market: candidate.market, position: { ...position, ...(rows[0] || {}) }, reason: "maker entry resting", exploration: false };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await patch("trading_orders", `id=eq.${makerOrderRow.id}`, { state: "REJECTED", error_message: message, completed_at: new Date().toISOString() });
@@ -1187,7 +1338,7 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
     // v5.3: rest the first-target limit sell now, so the profit path never depends on a
     // 15-second poll catching the touch. No-op unless scalp_resting_tp is enabled.
     const withTp = await placeRestingTakeProfit(opened as Position, settings, cycleId);
-    return { entered: true, paper: false, exchange, market: candidate.market, position: withTp, exploration: isExploration };
+    return { entered: true, paper: false, exchange, market: candidate.market, position: withTp, exploration: false };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const status = Number((error as any)?.status || 0);
@@ -1347,7 +1498,7 @@ function scalpHoldConfig(settings: TradingSettings, exchange: Exchange): ScalpHo
 }
 
 function restingTpEnabled(settings: TradingSettings, position: Position): boolean {
-  return String((settings as any).strategy || "") === "SCALP" &&
+  return isScalpStrategy((settings as any).strategy) &&
     (settings as any).scalp_resting_tp === true &&
     !position.is_paper;
 }
@@ -1491,7 +1642,7 @@ async function cancelRestingTakeProfit(position: Position, cycleId: string): Pro
 // so the order is simply abandoned when it goes stale or the book walks away.
 
 function makerEntryEnabled(settings: TradingSettings): boolean {
-  return String((settings as any).strategy || "") === "SCALP" &&
+  return isScalpStrategy((settings as any).strategy) &&
     (settings as any).scalp_maker_entry !== false &&
     settings.mode === "LIVE_LIMITED";
 }
@@ -1534,7 +1685,7 @@ async function syncMakerEntry(position: Position, settings: TradingSettings, cyc
     order = await gateway(position.exchange, { action: "get_order", identifier, market: position.market });
   } catch (error) {
     await event("MAKER_ENTRY_SYNC_ERROR", `${position.exchange}:${position.market} resting entry query failed`, { error: error instanceof Error ? error.message : String(error) }, { cycleId, positionId: position.id, level: "WARNING" });
-    return { pending: true, position };
+    throw error;
   }
   const status = String(order?.status || "");
   const orderRow = (await db(`trading_orders?id=eq.${orderRowId}&select=*&limit=1`))[0];
@@ -1567,9 +1718,10 @@ async function syncMakerEntry(position: Position, settings: TradingSettings, cyc
     } catch {
       try {
         order = await gateway(position.exchange, { action: "get_order", identifier, market: position.market });
-      } catch {
-        // Unresolved: never abandon an order that might still be live.
-        return { pending: true, position };
+      } catch (error) {
+        // Unresolved: never abandon an order that might still be live. Escalate through
+        // the reconciliation state machine instead of silently polling forever.
+        throw error;
       }
     }
   }
@@ -1713,13 +1865,78 @@ async function applyExit(position: Position, price: number, action: string, cycl
   return finalizeExitFill(position, result, action, price, cycleId, breakevenAfterT1);
 }
 
+function clearedReconciliationMetadata(metadata: JsonRecord | null | undefined): JsonRecord {
+  const next = { ...(metadata || {}) };
+  for (const key of [
+    "reconciliation_phase", "reconciliation_failure_count", "reconciliation_last_error",
+    "reconciliation_failed_at", "reconciliation_retry_at", "reconciliation_retry_started_at",
+  ]) delete next[key];
+  next.reconciliation_last_success_at = new Date().toISOString();
+  return next;
+}
+
+async function recordReconciliationFailure(
+  position: Position,
+  phase: ReconciliationPhase,
+  message: string,
+  cycleId: string,
+  orderId?: string,
+) {
+  const decision = nextReconciliationFailure({
+    previousFailures: finite(position.metadata?.reconciliation_failure_count),
+    phase,
+    maxAutomaticRetries: 3,
+    baseBackoffMs: 5000,
+  });
+  const metadata = {
+    ...(position.metadata || {}),
+    reconciliation_phase: phase,
+    reconciliation_failure_count: decision.failureCount,
+    reconciliation_last_error: message,
+    reconciliation_failed_at: new Date().toISOString(),
+    reconciliation_retry_at: decision.retryAtMs == null ? null : new Date(decision.retryAtMs).toISOString(),
+  };
+  await patch("trading_positions", `id=eq.${position.id}`, { state: decision.state, metadata });
+  if (decision.pauseNewEntries) {
+    await patch("trading_settings", "id=eq.1", {
+      pause_new_entries: true,
+      manual_intervention_required: true,
+      manual_event_reason: `RECONCILIATION_FAILED:${position.exchange}:${position.market}:${phase}`,
+      last_manual_event_at: new Date().toISOString(),
+    });
+  }
+  await event(
+    decision.manualInterventionRequired ? "RECONCILIATION_MANUAL_REQUIRED" : "RECONCILIATION_FAILED",
+    `${position.exchange}:${position.market} ${phase.toLowerCase()} reconciliation failed`,
+    { phase, failure_count: decision.failureCount, retry_at: metadata.reconciliation_retry_at, error: message },
+    { cycleId, positionId: position.id, orderId, level: decision.manualInterventionRequired ? "CRITICAL" : "WARNING" },
+  );
+}
+
 async function reconcileEntryPending(position: Position, cycleId: string, settings?: TradingSettings) {
   if (position.is_paper) return;
+  if (position.state === "RECONCILIATION_FAILED") {
+    if (!reconciliationRetryDue(position.metadata?.reconciliation_retry_at)) return;
+    position = { ...position, ...(await patch("trading_positions", `id=eq.${position.id}`, {
+      state: "ENTRY_PENDING",
+      metadata: { ...(position.metadata || {}), reconciliation_retry_started_at: new Date().toISOString() },
+    }))[0] };
+  }
   // v5.5: a resting maker entry has its own lifecycle — TTL, book-drift cancel, and a
   // partial fill that must clear the exchange minimum before it is booked. The generic
   // path below would treat a still-working order as an orphan.
   if (position.metadata?.maker_entry_identifier && settings) {
-    await syncMakerEntry(position, settings, cycleId);
+    try {
+      await syncMakerEntry(position, settings, cycleId);
+    } catch (error) {
+      await recordReconciliationFailure(
+        position,
+        "ENTRY",
+        error instanceof Error ? error.message : String(error),
+        cycleId,
+        position.metadata?.maker_entry_order_id,
+      );
+    }
     return;
   }
   const orderRow = (await db(`trading_orders?position_id=eq.${position.id}&purpose=eq.ENTRY&select=*&order=created_at.desc&limit=1`))[0];
@@ -1731,34 +1948,53 @@ async function reconcileEntryPending(position: Position, cycleId: string, settin
     }
     return;
   }
+  position = { ...position, ...(await patch("trading_positions", `id=eq.${position.id}`, {
+    state: "RECONCILING",
+    metadata: { ...(position.metadata || {}), reconciliation_phase: "ENTRY", reconciliation_started_at: new Date().toISOString() },
+  }))[0] };
   try {
     const order = await gateway(position.exchange, { action: "get_order", identifier: orderRow.identifier, market: position.market });
     const updated = await updateOrderFromGateway(orderRow, order);
-    if (finite(updated.fill.executedVolume) > 0 && finite(updated.fill.averagePrice) > 0) await applyEntryAccounting(position, orderRow, updated.fill);
-    else if (["FILLED", "CANCELED", "PARTIALLY_FILLED_CANCELED"].includes(String(updated.order?.status))) await patch("trading_positions", `id=eq.${position.id}`, { state: "CANCELLED", close_reason: "ENTRY_NOT_FILLED", closed_at: new Date().toISOString() });
+    if (finite(updated.fill.executedVolume) > 0 && finite(updated.fill.averagePrice) > 0) {
+      await applyEntryAccounting(position, orderRow, updated.fill);
+      await patch("trading_positions", `id=eq.${position.id}`, { metadata: clearedReconciliationMetadata(position.metadata) });
+    } else if (["FILLED", "CANCELED", "PARTIALLY_FILLED_CANCELED"].includes(String(updated.order?.status))) await patch("trading_positions", `id=eq.${position.id}`, { state: "CANCELLED", close_reason: "ENTRY_NOT_FILLED", closed_at: new Date().toISOString(), metadata: clearedReconciliationMetadata(position.metadata) });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error); const requested = new Date(orderRow.requested_at || orderRow.created_at || 0).getTime();
     if (Date.now() - requested > 120_000 && /not found|404|-2013|order/i.test(message)) {
       await patch("trading_orders", `id=eq.${orderRow.id}`, { state: "NOT_FOUND", error_message: message, completed_at: new Date().toISOString() });
       await patch("trading_positions", `id=eq.${position.id}`, { state: "CANCELLED", close_reason: "ENTRY_ORDER_NOT_FOUND", closed_at: new Date().toISOString() });
-    } else await event("ENTRY_RECONCILE_ERROR", message, { identifier: orderRow.identifier }, { cycleId, positionId: position.id, orderId: orderRow.id, level: "WARNING" });
+    } else await recordReconciliationFailure(position, "ENTRY", message, cycleId, orderRow.id);
   }
 }
 async function reconcileExitPending(position: Position, cycleId: string) {
   if (position.is_paper) { await patch("trading_positions", `id=eq.${position.id}`, { state: "OPEN" }); return; }
+  if (position.state === "RECONCILIATION_FAILED") {
+    if (!reconciliationRetryDue(position.metadata?.reconciliation_retry_at)) return;
+    position = { ...position, ...(await patch("trading_positions", `id=eq.${position.id}`, {
+      state: "EXITING",
+      metadata: { ...(position.metadata || {}), reconciliation_retry_started_at: new Date().toISOString() },
+    }))[0] };
+  }
   const orderRow = (await db(`trading_orders?position_id=eq.${position.id}&side=eq.SELL&select=*&order=created_at.desc&limit=1`))[0];
   if (!orderRow) { await patch("trading_positions", `id=eq.${position.id}`, { state: "OPEN" }); return; }
+  position = { ...position, ...(await patch("trading_positions", `id=eq.${position.id}`, {
+    state: "RECONCILING",
+    metadata: { ...(position.metadata || {}), reconciliation_phase: "EXIT", reconciliation_started_at: new Date().toISOString() },
+  }))[0] };
   try {
     const order = await gateway(position.exchange, { action: "get_order", identifier: orderRow.identifier, market: position.market });
     const updated = await updateOrderFromGateway(orderRow, order);
-    if (finite(updated.fill.executedVolume) > 0) await finalizeExitFill(position, { orderRow, ...updated }, String(orderRow.purpose || position.metadata?.pending_exit_action || "MANUAL_RECONCILE"), finite(updated.fill.averagePrice, position.average_entry_price), cycleId);
-    else if (["FILLED", "CANCELED", "PARTIALLY_FILLED_CANCELED"].includes(String(updated.order?.status))) await patch("trading_positions", `id=eq.${position.id}`, { state: "OPEN", metadata: { ...(position.metadata || {}), pending_exit_action: null, pending_exit_at: null } });
+    if (finite(updated.fill.executedVolume) > 0) {
+      await finalizeExitFill(position, { orderRow, ...updated }, String(orderRow.purpose || position.metadata?.pending_exit_action || "MANUAL_RECONCILE"), finite(updated.fill.averagePrice, position.average_entry_price), cycleId);
+      await patch("trading_positions", `id=eq.${position.id}`, { metadata: clearedReconciliationMetadata(position.metadata) });
+    } else if (["FILLED", "CANCELED", "PARTIALLY_FILLED_CANCELED"].includes(String(updated.order?.status))) await patch("trading_positions", `id=eq.${position.id}`, { state: "OPEN", metadata: { ...clearedReconciliationMetadata(position.metadata), pending_exit_action: null, pending_exit_at: null } });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error); const requested = new Date(orderRow.requested_at || orderRow.created_at || 0).getTime();
     if (Date.now() - requested > 120_000 && /not found|404|-2013|order/i.test(message)) {
       await patch("trading_orders", `id=eq.${orderRow.id}`, { state: "NOT_FOUND", error_message: message, completed_at: new Date().toISOString() });
       await patch("trading_positions", `id=eq.${position.id}`, { state: "OPEN", metadata: { ...(position.metadata || {}), pending_exit_action: null, pending_exit_at: null } });
-    } else await event("EXIT_RECONCILE_ERROR", message, { identifier: orderRow.identifier }, { cycleId, positionId: position.id, orderId: orderRow.id, level: "CRITICAL" });
+    } else await recordReconciliationFailure(position, "EXIT", message, cycleId, orderRow.id);
   }
 }
 
@@ -1844,9 +2080,15 @@ async function detectExternalQuoteFlow(exchange: Exchange, portfolio: any, setti
 }
 
 async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRecord) {
-  const tracked = await db("trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING)&select=*&order=created_at.asc") as Position[];
-  for (const position of tracked.filter((p) => p.state === "ENTRY_PENDING")) await reconcileEntryPending(position, cycleId, settings);
-  for (const position of tracked.filter((p) => p.state === "EXITING")) await reconcileExitPending(position, cycleId);
+  const tracked = await db("trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*&order=created_at.asc") as Position[];
+  for (const position of tracked.filter((p) =>
+    p.state === "ENTRY_PENDING" ||
+    (["RECONCILING", "RECONCILIATION_FAILED"].includes(p.state) && p.metadata?.reconciliation_phase === "ENTRY")
+  )) await reconcileEntryPending(position, cycleId, settings);
+  for (const position of tracked.filter((p) =>
+    p.state === "EXITING" ||
+    (["RECONCILING", "RECONCILIATION_FAILED"].includes(p.state) && p.metadata?.reconciliation_phase === "EXIT")
+  )) await reconcileExitPending(position, cycleId);
   const open = await db("trading_positions?state=eq.OPEN&select=*&order=created_at.asc") as Position[];
   const actions: any[] = []; const prices: Record<string, number> = {}; const portfolios: Partial<Record<Exchange, any>> = {};
   const books: Record<string, any> = {};
@@ -2012,15 +2254,37 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           continue;
         }
       }
-      const scalpMode = (settings as any).strategy === "SCALP";
-      let decision = decideExit(position, current, Date.now(), settings.emergency_liquidation, !scalpMode);
-      // v5.4: replace the fixed time exit with a live-edge test.
-      //
-      // decideExit() still returns TIME_EXIT at max_holding_at, but for SCALP that column
-      // now holds the operator's SAFETY TTL (default 6h), not a 30-minute trading rule.
-      // Everything between entry and that backstop is decided by whether the reason for
-      // the trade is still true.
-      if (scalpMode && decision.action === "NONE" && !settings.emergency_liquidation) {
+      const scalpMode = isScalpStrategy((settings as any).strategy);
+      // v5.12: TIMEOUT is one of the modelled barrier outcomes. Live edge may close the
+      // position earlier, but the approved strategy profile always enforces max_holding_at.
+      let decision = decideExit(position, current, Date.now(), settings.emergency_liquidation, true);
+      if (isLobStrategy((settings as any).strategy) && decision.action === "NONE" && !settings.emergency_liquidation) {
+        const book = books[position.market];
+        const bids = (book?.bids || []).map((b: any) => ({ price: finite(b.price ?? b[0]), size: finite(b.size ?? b[1]) }));
+        const asks = (book?.asks || []).map((a: any) => ({ price: finite(a.price ?? a[0]), size: finite(a.size ?? a[1]) }));
+        const imbalance = topOfBookImbalance(bids, asks);
+        const bestBid = finite(book?.best_bid); const bestAsk = finite(book?.best_ask);
+        const spread = bestBid > 0 ? (bestAsk / bestBid - 1) * 10000 : Number.POSITIVE_INFINITY;
+        const openedAt = Date.parse(String(position.opened_at || position.created_at || ""));
+        const heldSeconds = Number.isFinite(openedAt) ? Math.max(0, (Date.now() - openedAt) / 1000) : 0;
+        const entryDepth = Math.max(1, finite(position.metadata?.entry_bid_depth_quote, 1));
+        const exit = evaluateLobExit({
+          emergency: false,
+          reconciliationFailed: String(position.state) === "RECONCILIATION_FAILED",
+          currentPrice: current, stopPrice: finite(position.stop_price), targetPrice: finite(position.target_1),
+          heldSeconds, maxHoldingSeconds: clamp(finite(position.metadata?.lob_signal?.max_holding_seconds, 180), 1, 300),
+          bookImbalance: imbalance, tradePressure: finite(book?.trade_flow?.pressure, 0),
+          micropriceDeviationBps: imbalance * Math.max(0, spread) * 0.5,
+          spreadBps: spread, maxSpreadBps: finite((settings as any).lob_max_spread_bps, LIVE_MAX_SPREAD_BPS),
+          bidDepthRatio: book ? bidDepthQuote(book) / entryDepth : 0,
+          minBidDepthRatio: clamp(finite((settings as any).lob_min_bid_depth_ratio, 0.35), 0.05, 1),
+          dynamicStatus: position.metadata?.lob_signal?.features?.dynamicStatus,
+        });
+        if (exit.exit) {
+          decision = { action: exit.reason === "TARGET_HIT" ? "TARGET_1" : "STOP", fraction: 1, reason: `lob:${exit.reason}` } as any;
+          await event("LOB_EXIT", `${exchange}:${position.market} ${exit.reason}`, { ...exit, held_seconds: heldSeconds, imbalance, spread_bps: spread }, { cycleId, positionId: position.id });
+        }
+      } else if (scalpMode && decision.action === "NONE" && !settings.emergency_liquidation) {
         const holdCfg = scalpHoldConfig(settings, exchange);
         const book = books[position.market];
         const liveImbalance = book
@@ -2104,7 +2368,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       }
       // Independent scalp backstop: no single position may lose more than the
       // operator-selected percentage, even if the normal stop failed or moved.
-      if ((settings as any).strategy === "SCALP" && position.average_entry_price > 0) {
+      if (isScalpStrategy((settings as any).strategy) && position.average_entry_price > 0) {
         const lossPct = (current - position.average_entry_price) / position.average_entry_price * 100;
         const maxSingleLossPct = Math.abs(finite((settings as any).scalp_max_single_loss_pct, 5));
         if (lossPct <= -maxSingleLossPct) {
@@ -2122,7 +2386,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           continue;
         }
         if (String(position.state) !== "OPEN" || finite(position.remaining_quantity) <= 0) continue;
-        const recheck = decideExit(position, current, Date.now(), settings.emergency_liquidation, !scalpMode);
+        const recheck = decideExit(position, current, Date.now(), settings.emergency_liquidation, true);
         if (recheck.action === "NONE") continue;
         decision = recheck;
       }
@@ -2148,7 +2412,7 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
     // In SCALP mode the scalp-specific loss rails are authoritative. Without
     // this override the legacy 1.5% daily / 3% weekly circuit would stop the
     // engine long before the configured -20% scalp day limit.
-    const circuitSettings = (settings as any).strategy === "SCALP"
+    const circuitSettings = isScalpStrategy((settings as any).strategy)
       ? {
         ...settings,
         // Only operator-approved loss rails apply in SCALP. Allocation controls
@@ -2157,7 +2421,7 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
         max_open_positions_per_exchange: Number.MAX_SAFE_INTEGER,
         max_daily_entries: Number.MAX_SAFE_INTEGER,
         max_daily_entries_per_exchange: Number.MAX_SAFE_INTEGER,
-        max_daily_loss_pct: finite((settings as any).scalp_daily_loss_pct, 20),
+        max_daily_loss_pct: finite((settings as any).scalp_daily_loss_pct, 30),
         max_weekly_loss_pct: Number.MAX_SAFE_INTEGER,
         max_consecutive_losses: Number.MAX_SAFE_INTEGER,
       }
@@ -2180,21 +2444,38 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
     await patch("trading_settings", "id=eq.1", { last_full_scan_at: new Date().toISOString(), last_gateway_heartbeat_at: new Date().toISOString() });
     return { skipped: true, circuits, stats };
   }
-  // v5.11: measure the realized rate and steer the threshold toward the target before the
-  // scan's candidates are evaluated.
+  // v5.12: rate control changes capacity only. EV/pWin/pFill and risk gates are immutable.
   const rateCfg = resolveRateControlConfig({
     targetTradesPerHour: finite((settings as any).scalp_target_trades_per_hour, 5),
     windowMinutes: finite((settings as any).scalp_rate_window_minutes, 60),
-    maxRelaxationCostMultiple: finite((settings as any).scalp_rate_max_relaxation, 1.5),
+    minSlots: finite((settings as any).scalp_min_position_slots, 2),
+    maxSlots: finite((settings as any).scalp_max_position_slots, 12),
+    targetUtilization: finite((settings as any).scalp_target_utilization, 0.70),
+    minScanUniverse: finite((settings as any).scalp_min_scan_universe, 30),
+    maxScanUniverse: finite((settings as any).scalp_max_scan_universe, 240),
+    minEvaluationIntervalSeconds: 30,
+    maxEvaluationIntervalSeconds: 300,
     unprovenSizeFraction: finite((settings as any).scalp_unproven_size_fraction, 0.35),
     samplesForFullSize: finite((settings as any).scalp_samples_for_full_size, 400),
   });
-  if ((settings as any).strategy === "SCALP") {
+  if (isLobStrategy((settings as any).strategy)) {
+    const desiredSlots = clamp(finite((settings as any).scalp_position_slots, 12), 1, 20);
+    const scanUniverse = clamp(finite((settings as any).scalp_scan_universe, 120), 20, 1000);
+    const interval = clamp(finite((settings as any).lob_scan_interval_seconds, 15), 10, 60);
+    settings = { ...settings, scalp_size_fraction: 1, scalp_position_slots: desiredSlots,
+      scalp_scan_universe: scanUniverse, full_scan_interval_seconds: interval,
+      max_new_entries_per_scan: Math.min(20, desiredSlots) } as any;
+    await patch("trading_settings", "id=eq.1", {
+      scalp_size_fraction: 1, scalp_position_slots: desiredSlots,
+      scalp_scan_universe: scanUniverse, full_scan_interval_seconds: interval,
+      max_new_entries_per_scan: Math.min(20, desiredSlots),
+    }).catch(() => null);
+  } else if ((settings as any).strategy === "SCALP") {
     const windowStart = new Date(Date.now() - rateCfg.windowMinutes * 60_000).toISOString();
+    // Throughput target is FILLED entries, not submitted/cancelled attempts.
     const recent = await db(
-      `trading_positions?created_at=gte.${encodeURIComponent(windowStart)}&is_paper=eq.${settings.mode !== "LIVE_LIMITED"}&select=id,exchange`,
+      `trading_positions?opened_at=gte.${encodeURIComponent(windowStart)}&is_paper=eq.${settings.mode !== "LIVE_LIMITED"}&select=id,exchange`,
     ).catch(() => []) as any[];
-    // Target is per exchange; take the slower side so neither is starved.
     const perExchange = (["upbit", "binance"] as Exchange[])
       .filter((x) => exchanges.includes(x))
       .map((x) => (recent || []).filter((r) => r.exchange === x).length);
@@ -2202,18 +2483,41 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
     const rate = evaluateRateControl({
       entriesInWindow: slowest,
       observedMinutes: rateCfg.windowMinutes,
+      currentSlots: finite((settings as any).scalp_position_slots, 6),
+      currentScanUniverse: finite((settings as any).scalp_scan_universe, 60),
+      currentEvaluationIntervalSeconds: finite(settings.full_scan_interval_seconds, 60),
+      averageHoldingMinutes: finite((settings as any).scalp_average_holding_minutes, 15),
+      pFillLowerBound: finite((settings as any).scalp_min_fill_probability_lcb, 0.30),
       currentRelaxation: finite((settings as any).scalp_rate_relaxation, 0),
       edgeSamples: Math.max(0, Math.floor(finite((settings as any).scalp_edge_budget_samples))),
       measuredEdgeLowerBound: (settings as any).scalp_edge_budget_source === "MEASURED"
         ? finite((settings as any).scalp_edge_budget, 0)
         : null,
     }, rateCfg);
-    settings = { ...settings, scalp_rate_relaxation: rate.relaxation, scalp_size_fraction: rate.sizeFraction } as any;
+    const nextPerScan = Math.max(1, Math.min(12, rate.desiredSlots));
+    settings = {
+      ...settings,
+      scalp_rate_relaxation: 0,
+      scalp_size_fraction: rate.sizeFraction,
+      scalp_position_slots: rate.desiredSlots,
+      scalp_scan_universe: rate.scanUniverse,
+      full_scan_interval_seconds: rate.evaluationIntervalSeconds,
+      max_new_entries_per_scan: nextPerScan,
+    } as any;
     await patch("trading_settings", "id=eq.1", {
-      scalp_rate_relaxation: rate.relaxation, scalp_size_fraction: rate.sizeFraction,
+      scalp_rate_relaxation: 0,
+      scalp_size_fraction: rate.sizeFraction,
+      scalp_position_slots: rate.desiredSlots,
+      scalp_scan_universe: rate.scanUniverse,
+      full_scan_interval_seconds: rate.evaluationIntervalSeconds,
+      max_new_entries_per_scan: nextPerScan,
     }).catch(() => null);
     await event("SCALP_RATE_CONTROL", `observed ${rate.observedRate.toFixed(1)}/h vs target ${rate.targetRate}/h`, {
-      observed_rate: rate.observedRate, target_rate: rate.targetRate, relaxation: rate.relaxation,
+      observed_rate: rate.observedRate, target_rate: rate.targetRate, threshold_relaxation: 0,
+      desired_slots: rate.desiredSlots, scan_universe: rate.scanUniverse,
+      evaluation_interval_seconds: rate.evaluationIntervalSeconds,
+      attempts_required_per_hour: rate.attemptsRequiredPerHour,
+      estimated_filled_capacity_per_hour: rate.estimatedFilledCapacityPerHour,
       size_fraction: rate.sizeFraction, edge_negative: rate.edgeNegative, reason: rate.reason,
     }, { cycleId, level: rate.edgeNegative ? "WARNING" : "INFO" });
   }
@@ -2222,15 +2526,14 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
   if (!scanId) throw new Error("scanner response did not include scan_id");
   await db(`trading_cycle_runs?id=eq.${cycleId}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ scan_id: scanId }) });
   const candidates = await loadBuyCandidates(scanId, settings);
-  const active = (await db("trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING)&select=exchange,market,base_asset")) as any[];
+  const active = (await db("trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=exchange,market,base_asset")) as any[];
   const activeMarkets = new Set(active.map((row) => `${row.exchange}:${row.market}`)); const activeBases = new Set(active.map((row) => row.base_asset));
   const entries: any[] = []; const enteredPerExchange: Record<Exchange, number> = { upbit: 0, binance: 0 };
-  let explorationThisScan = 0;
   for (const candidate of candidates) {
     const exchange = candidate.exchange;
     if (!exchanges.includes(exchange) || !circuits[exchange]?.allowNewEntry) continue;
     if (entries.filter((row) => row.entered || row.reserved).length >= settings.max_new_entries_per_scan) break;
-    const exchangeCapacity = (settings as any).strategy === "SCALP"
+    const exchangeCapacity = isScalpStrategy((settings as any).strategy)
       ? Number.MAX_SAFE_INTEGER
       : Math.min(
         settings.max_open_positions_per_exchange - stats[exchange].openExchange,
@@ -2239,8 +2542,7 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
     if (enteredPerExchange[exchange] >= Math.max(0, exchangeCapacity)) continue;
     if (activeMarkets.has(`${exchange}:${candidate.market}`)) continue;
     try {
-      const entry = await enterCandidate(candidate, settings, portfolios[exchange], activeBases, cycleId, explorationThisScan);
-      if (entry?.exploration) explorationThisScan += 1;
+      const entry = await enterCandidate(candidate, settings, portfolios[exchange], activeBases, cycleId);
       entries.push(entry);
       if (entry.entered || entry.reserved) {
         enteredPerExchange[exchange]++; activeMarkets.add(`${exchange}:${candidate.market}`); activeBases.add(baseAsset(exchange, candidate.market));
@@ -2257,7 +2559,7 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
 
 async function status(settings: TradingSettings & JsonRecord) {
   const [positions, closedPositions, orders, cycles, snapshots, events, cashFlows, profiles] = await Promise.all([
-    db("trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING)&select=*&order=created_at.desc"),
+    db("trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*&order=created_at.desc"),
     db("trading_positions?state=eq.CLOSED&select=*&order=closed_at.desc&limit=20"),
     db("trading_orders?select=*&order=created_at.desc&limit=40"),
     db("trading_cycle_runs?select=*&order=started_at.desc&limit=20"),
@@ -2304,11 +2606,14 @@ async function control(body: JsonRecord, settings: TradingSettings & JsonRecord)
   if (safetyError) throw new Error(safetyError);
   if (body.mode != null) allowed.mode = parseMode(String(body.mode));
   for (const key of ["pause_new_entries", "emergency_liquidation", "upbit_enabled", "binance_enabled", "suppress_cross_exchange_same_asset", "scalp_kill_switch"] as const) if (body[key] != null) allowed[key] = Boolean(body[key]);
-  if (body.strategy != null) allowed.strategy = String(body.strategy).toUpperCase() === "SCALP" ? "SCALP" : "TREND";
+  if (body.strategy != null) {
+    const strategy = String(body.strategy).toUpperCase();
+    allowed.strategy = strategy === "TREND" ? "TREND" : strategy === "SCALP" ? "SCALP" : "LOB_SCALP";
+  }
   if (body.upbit_allocation_mode != null) allowed.upbit_allocation_mode = String(body.upbit_allocation_mode).toUpperCase() === "FIXED" ? "FIXED" : "ALL";
   if (body.binance_allocation_mode != null) allowed.binance_allocation_mode = String(body.binance_allocation_mode).toUpperCase() === "FIXED" ? "FIXED" : "ALL";
   const ranges: Record<string, [number, number]> = {
-    max_open_positions: [1, 20], max_open_positions_per_exchange: [1, 10], max_daily_entries: [1, 50], max_daily_entries_per_exchange: [1, 25],
+    max_open_positions: [1, 20], max_open_positions_per_exchange: [1, 20], max_daily_entries: [1, 1000000], max_daily_entries_per_exchange: [1, 1000000],
     max_position_pct: [0.5, 25], risk_per_trade_pct: [0.05, 2],
     max_order_krw: [5000, 1_000_000_000], min_order_krw: [5000, 1_000_000], max_daily_buy_krw: [5000, 10_000_000_000],
     max_order_usdt: [5, 10_000_000], min_order_usdt: [5, 1000], max_daily_buy_usdt: [5, 100_000_000],
@@ -2316,8 +2621,10 @@ async function control(body: JsonRecord, settings: TradingSettings & JsonRecord)
     binance_allocation_usdt: [0, 1_000_000_000], binance_reserve_usdt: [0, 1_000_000_000],
     max_daily_loss_pct: [0.2, 10], max_weekly_loss_pct: [0.5, 20], max_consecutive_losses: [1, 10],
     scalp_per_order_pct: [0.1, 100], scalp_daily_loss_pct: [0.1, 100], scalp_max_single_loss_pct: [0.1, 100],
-    scalp_max_consecutive_losses: [1, 50], scalp_max_holding_minutes: [1, 1440],
-    entry_ttl_seconds: [30, 900], full_scan_interval_seconds: [60, 3600], monitor_interval_seconds: [10, 300], max_new_entries_per_scan: [1, 4],
+    scalp_max_consecutive_losses: [1, 50], scalp_max_holding_minutes: [0.1, 5],
+    entry_ttl_seconds: [5, 900], full_scan_interval_seconds: [10, 3600], monitor_interval_seconds: [5, 300], max_new_entries_per_scan: [1, 20],
+    lob_max_holding_seconds: [1, 300], lob_absolute_max_holding_seconds: [1, 300], lob_scan_interval_seconds: [10, 60],
+    lob_min_net_ev_bps: [0, 100], lob_max_book_age_ms: [100, 10000], lob_max_spread_bps: [1, 100], lob_min_bid_depth_ratio: [0.05, 1],
   };
   for (const [key, [low, high]] of Object.entries(ranges)) if (body[key] != null) allowed[key] = clamp(finite(body[key]), low, high);
   if (!Object.keys(allowed).length) return settings;
@@ -2381,7 +2688,7 @@ Deno.serve(async (request: Request) => {
         await finishCycle(cycleId, "SKIPPED", { reason: "account reconciliation is busy; nothing was resumed" });
         return response({ ok: false, error: "account reconciliation is busy; try the resume button again", cycle_id: cycleId }, 409);
       }
-      const activeAfterReconcile = await db("trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING)&select=id&limit=1");
+      const activeAfterReconcile = await db("trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id&limit=1");
       const resumeError = resumeSafetyError({
         emergencyLiquidation: Boolean(settings.emergency_liquidation),
         activePositionCount: activeAfterReconcile.length,

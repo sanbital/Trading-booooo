@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v5.2.3 — Supabase Edge Function
+// Trading-booooo Market Scanner v6.0.0-LOB — Supabase Edge Function
 // Upbit KRW / Binance USDT universe scan -> multi-period analysis -> orderflow validation.
 // Public market analysis. Private account/order execution is delegated to a fixed-IP gateway.
 
@@ -45,11 +45,11 @@ const MIN_BINANCE_ACTIONABLE_TURNOVER_24H = 1_000_000;
 const DEFAULT_DEEP_SCAN_LIMIT = 30;
 const FINALIST_LIMIT = 8;
 const BOOK_SAMPLE_COUNT = 4;
-const BOOK_SAMPLE_INTERVAL_MS = 600;
-const DEFAULT_DYNAMIC_OBSERVATION_MS = 60_000;
-const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 90_000;
-const MIN_DYNAMIC_OBSERVATION_MS = 45_000;
-const MAX_DYNAMIC_OBSERVATION_MS = 90_000;
+const BOOK_SAMPLE_INTERVAL_MS = 250;
+const DEFAULT_DYNAMIC_OBSERVATION_MS = 15_000;
+const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 20_000;
+const MIN_DYNAMIC_OBSERVATION_MS = 8_000;
+const MAX_DYNAMIC_OBSERVATION_MS = 30_000;
 const MAX_DYNAMIC_BOOK_EVENTS = 1_200;
 const MAX_DYNAMIC_TRADE_EVENTS = 2_500;
 const CANDLE_BATCH_SIZE = 7;
@@ -302,7 +302,10 @@ function parseRisk(
     exitPolicy: ["FIXED_T1", "SCALE_OUT", "TRAIL_AFTER_T1"].includes(String(runtime?.exitPolicy))
       ? runtime?.exitPolicy
       : "SCALE_OUT",
-    strategy: (String(body.strategy) === "SCALP" || Deno.env.get("TRADING_STRATEGY") === "SCALP") ? "SCALP" : "TREND",
+    strategy: (() => {
+      const value = String(body.strategy || Deno.env.get("TRADING_STRATEGY") || "LOB_SCALP").toUpperCase();
+      return value === "TREND" ? "TREND" : value === "SCALP" ? "SCALP" : "LOB_SCALP";
+    })(),
     scalpOverrides: (body.scalp_overrides && typeof body.scalp_overrides === "object") ? body.scalp_overrides as Record<string, number> : undefined,
     // v5.3: volatility-scaled barrier geometry knobs. Clamped by resolveGeometryConfig().
     geometryOverrides: (body.geometry_overrides && typeof body.geometry_overrides === "object") ? body.geometry_overrides as Record<string, number> : undefined,
@@ -1156,7 +1159,7 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
       }
       : {},
   );
-  const scalpMode = risk.strategy === "SCALP";
+  const scalpMode = risk.strategy === "SCALP" || risk.strategy === "LOB_SCALP";
   // Scalp scans a small top-liquidity set: trend is only a veto, so deep multi-timeframe
   // analysis over 30+ instruments is both unnecessary and the cause of WORKER_RESOURCE_LIMIT.
   const deepLimit = scalpMode
@@ -1164,7 +1167,7 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
     // became the throughput ceiling: only the finalists get a realtime orderbook read, so
     // a narrow funnel starves the slots. Still bounded at 20 because deep multi-timeframe
     // analysis over 30+ instruments is what trips WORKER_RESOURCE_LIMIT.
-    ? Math.round(clamp(finite(Deno.env.get("SCALP_DEEP_SCAN_LIMIT"), 16), 6, 20))
+    ? Math.round(clamp(finite(Deno.env.get("SCALP_DEEP_SCAN_LIMIT"), risk.strategy === "LOB_SCALP" ? 24 : 16), 6, 30))
     : Math.round(
       clamp(
         finite(Deno.env.get("DEEP_SCAN_LIMIT"), DEFAULT_DEEP_SCAN_LIMIT),
@@ -1174,9 +1177,14 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
     );
   const finalistLimit = scalpMode
     // v5.7.2: 6 -> 8 finalists get live orderbook + trade-flow analysis per exchange.
-    ? Math.round(clamp(finite(Deno.env.get("SCALP_FINALIST_LIMIT"), 8), 3, 10))
+    ? Math.round(clamp(finite(Deno.env.get("SCALP_FINALIST_LIMIT"), risk.strategy === "LOB_SCALP" ? 16 : 8), 3, 20))
     : FINALIST_LIMIT;
-  let eligible = universe.filter((item) => item.eligible);
+  let eligible = risk.strategy === "LOB_SCALP"
+    ? universe
+      .filter((item) => item.current_price > 0 && item.freshness_seconds <= 15 * 60 &&
+        item.turnover_24h_quote >= Math.min(item.min_actionable_turnover_24h, item.quote_currency === "KRW" ? 500_000_000 : 500_000))
+      .map((item) => ({ ...item, eligible: true, excluded_reason: null }))
+    : universe.filter((item) => item.eligible);
   if (scalpMode) {
     // v5.6: rank the scalp universe by SCALPABILITY, not by turnover.
     //
@@ -1222,10 +1230,24 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
     )
     .sort((a, b) => b.period_score - a.period_score);
 
-  const candidatePool = [
-    ...periods.filter((item) => item.preliminary_status === "CANDIDATE"),
-    ...periods.filter((item) => item.preliminary_status !== "CANDIDATE"),
-  ];
+  // LOB_SCALP does not allow trend status to determine which books receive the realtime
+  // observation budget. The pre-rank is only an activity proxy; the authoritative rank is
+  // computed from websocket book/trade events after the observation window.
+  const lobPrefilterScore = (item: PeriodAnalysis): number => {
+    const turnoverRatio = finite(item.universe.turnover_24h_quote, 0) /
+      Math.max(1, finite(item.universe.min_actionable_turnover_24h, 1));
+    return Math.log1p(Math.max(0, turnoverRatio)) * 25 +
+      clamp(finite(item.timeframes.m5.volume_ratio, 0), 0, 8) * 8 +
+      clamp(finite(item.timeframes.m5.atr_pct, 0), 0, 5) * 6 +
+      clamp(finite(item.universe.day_range_pct, 0), 0, 30) * 1.5 -
+      clamp(finite(item.universe.freshness_seconds, 0), 0, 300) * 0.03;
+  };
+  const candidatePool = risk.strategy === "LOB_SCALP"
+    ? [...periods].sort((a, b) => lobPrefilterScore(b) - lobPrefilterScore(a))
+    : [
+      ...periods.filter((item) => item.preliminary_status === "CANDIDATE"),
+      ...periods.filter((item) => item.preliminary_status !== "CANDIDATE"),
+    ];
   const finalists = [
     ...new Map(candidatePool.map((item) => [item.universe.market, item]))
       .values(),
@@ -1259,12 +1281,17 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
     .sort((a, b) => {
       if (a.decision === "BUY" && b.decision !== "BUY") return -1;
       if (a.decision !== "BUY" && b.decision === "BUY") return 1;
+      if (risk.strategy === "LOB_SCALP") {
+        const hot = finite(b.lob?.hotness_score, 0) - finite(a.lob?.hotness_score, 0);
+        if (Math.abs(hot) > 1e-9) return hot;
+        return finite(b.lob?.ev_lower_bound_bps, -1e9) - finite(a.lob?.ev_lower_bound_bps, -1e9);
+      }
       return b.score - a.score;
     });
   finalCandidates.forEach((candidate, index) => candidate.rank = index + 1);
   const recommendations = finalCandidates.filter((item) =>
     item.decision === "BUY"
-  ).slice(0, 3);
+  ).slice(0, risk.strategy === "LOB_SCALP" ? finalistLimit : 3);
   const watchlist = finalCandidates.filter((item) => item.decision !== "BUY")
     .slice(0, 5);
   const status = recommendations.length ? "BUY_CANDIDATES" : "NO_BUY";
@@ -1449,7 +1476,7 @@ async function runCombinedScan(
   const finalists = combineCandidates(
     upbit?.finalists || [],
     binance?.finalists || [],
-    4,
+    20,
   );
   const recommendations = finalists.filter((candidate) =>
     candidate.decision === "BUY" && candidate.trade_plan.actionable &&
@@ -1483,7 +1510,7 @@ async function runCombinedScan(
     scan_id: crypto.randomUUID(),
     status,
     headline: recommendations.length
-      ? `업비트·바이낸스 동시 점검 결과, 현재 매수 강제조건을 통과한 통합 Top 4 내 후보 ${recommendations.length}개가 탐지됐습니다.`
+      ? `업비트·바이낸스 동시 점검 결과, 현재 매수 강제조건을 통과한 통합 LOB 후보 ${recommendations.length}개가 탐지됐습니다.`
       : finalists.length
       ? `업비트·바이낸스 동시 점검 결과, 현재가 매수 후보는 없으며 조건부 관찰 Top ${finalists.length}개를 제시합니다.`
       : "업비트·바이낸스 동시 점검 결과, 안전하게 제시할 통합 후보가 없습니다.",

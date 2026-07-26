@@ -4,6 +4,8 @@
 import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-profile.ts";
 import type { EventRiskSnapshot } from "./event-risk.ts";
 import { evaluateScalpSignal, resolveScalpSignalConfig, type ScalpSignalResult } from "../_shared/scalp/signal.ts";
+import { evaluateLobEntry } from "../_shared/lob/entry.ts";
+import type { LobEntryDecision, LobFeatureVector } from "../_shared/lob/types.ts";
 import {
   resolveGeometryConfig,
   resolveMinimumEdge,
@@ -12,7 +14,7 @@ import {
   type ScalpGeometry,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "5.11.0";
+export const ENGINE_VERSION = "6.0.0-LOB";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -186,6 +188,17 @@ export type Microstructure = {
   buy_notional: number;
   sell_notional: number;
   micro_score: number;
+  // v6 LOB_SCALP: scan-time activity and microstructure fields.
+  book_update_rate: number;
+  trade_arrival_rate: number;
+  aggressive_notional_per_second: number;
+  microprice_deviation_bps: number;
+  bid_depth_quote: number;
+  ask_depth_quote: number;
+  depth_ratio: number;
+  bid_absorption_score: number;
+  sweep_reclaim_score: number;
+  ofi_persistence: number;
   dynamic: DynamicOrderflow;
 };
 
@@ -256,7 +269,7 @@ export type RiskConfig = {
   exitPolicy?: "FIXED_T1" | "SCALE_OUT" | "TRAIL_AFTER_T1";
   // Stage 3: when "SCALP", entry is driven by orderbook microstructure with trend
   // used only as a veto. Undefined/"TREND" preserves the original behavior exactly.
-  strategy?: "TREND" | "SCALP";
+  strategy?: "TREND" | "SCALP" | "LOB_SCALP";
   // Stage 5: optional scalp parameter overrides. Always passed through
   // resolveScalpSignalConfig(), which clamps them to SCALP_BOUNDS.
   scalpOverrides?: Record<string, number>;
@@ -421,6 +434,27 @@ export type FinalCandidate = {
   timeframes: PeriodAnalysis["timeframes"];
   microstructure: Microstructure;
   event_risk: EventRiskSnapshot;
+  // v6: authoritative LOB_SCALP decision. Trend fields are auxiliary context only.
+  lob?: {
+    pattern: string | null;
+    patterns: Array<{ name: string; confidence: number; primary: boolean; evidence: string[]; invalidations: string[] }>;
+    hotness_score: number;
+    activity_score: number;
+    tradability_score: number;
+    p_target: number;
+    p_stop: number;
+    p_timeout: number;
+    p_fill: number;
+    target_bps: number;
+    stop_bps: number;
+    target_return_net_bps: number;
+    ev_net_bps: number;
+    ev_lower_bound_bps: number;
+    max_holding_seconds: number;
+    reasons: string[];
+    features: LobFeatureVector;
+    signal_at: string;
+  };
   // Stage 3: present only when the scan ran in SCALP strategy. Carries the scalp
   // decision inputs the autotrader needs (target/stop/pWin) for its precise EV gate.
   scalp?: {
@@ -473,6 +507,11 @@ export type UniverseConfig = {
 
 export function clamp(value: number, low: number, high: number): number {
   return Math.min(high, Math.max(low, Number.isFinite(value) ? value : low));
+}
+
+function finiteOr(value: unknown, fallback = 0): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 export function safeDiv(a: number, b: number, fallback = 0): number {
@@ -1080,9 +1119,9 @@ type WallStat = {
   lastIndex: number;
 };
 
-const DYNAMIC_MIN_OBSERVATION_MS = 45_000;
-const DYNAMIC_MIN_BOOK_UPDATES = 25;
-const DYNAMIC_MIN_TRADES = 20;
+const DYNAMIC_MIN_OBSERVATION_MS = 8_000;
+const DYNAMIC_MIN_BOOK_UPDATES = 12;
+const DYNAMIC_MIN_TRADES = 8;
 const DYNAMIC_PHASE_COUNT = 3;
 const WALL_LEVELS = 3;
 const TRACKED_LEVELS = 15;
@@ -1616,7 +1655,7 @@ export function computeDynamicOrderflow(
 const SCALP_BOOK_DEPTH = 5;            // levels of the book that carry short-horizon signal
 const SCALP_BOOK_DECAY = 1.5;          // steeper than the 0.72 used for the trend view
 const SCALP_BOOK_RECENT_FRAMES = 4;    // average only the most recent frames
-const SCALP_FLOW_HALF_LIFE_MS = 45_000; // executed-flow half-life for entry timing
+const SCALP_FLOW_HALF_LIFE_MS = 4_000; // executed-flow half-life for entry timing
 
 export function computeMicrostructure(
   snapshots: OrderbookSnapshot[],
@@ -1728,6 +1767,68 @@ export function computeMicrostructure(
     ? null
     : Math.max(0, currentMs - referenceTimestamp);
 
+  // v6 LOB_SCALP derived activity and event features. These use only events at or before
+  // currentMs; no candle/trend value can create an entry.
+  const observationSeconds = Math.max(1, dynamic.observation_ms / 1000);
+  const bookUpdateRate = dynamic.distinct_book_updates / observationSeconds;
+  const tradeArrivalRate = dynamic.aligned_trade_count / observationSeconds;
+  const eventWindowMs = Math.max(8_000, dynamic.observation_ms || 15_000);
+  const eventTrades = recentTrades.filter((trade) => {
+    const ts = tradeTimestamp(trade);
+    return ts >= currentMs - eventWindowMs && ts <= currentMs + 1000;
+  });
+  const aggressiveNotional = eventTrades.reduce((sum, trade) =>
+    sum + Math.max(0, number(trade.trade_price) * number(trade.trade_volume)), 0);
+  const aggressiveNotionalPerSecond = aggressiveNotional / observationSeconds;
+  const latestUnit = latestFrame?.units?.[0];
+  const mid = latestFrame ? (latestFrame.bestBid + latestFrame.bestAsk) / 2 : 0;
+  const microprice = latestUnit && latestUnit.bidSize + latestUnit.askSize > 0
+    ? (latestUnit.askPrice * latestUnit.bidSize + latestUnit.bidPrice * latestUnit.askSize) /
+      (latestUnit.bidSize + latestUnit.askSize)
+    : mid;
+  const micropriceDeviationBps = mid > 0 ? (microprice / mid - 1) * 10_000 : 0;
+  const bidDepthQuote = latestFrame
+    ? latestFrame.units.slice(0, 10).reduce((sum, unit) => sum + unit.bidPrice * unit.bidSize, 0)
+    : 0;
+  const askDepthQuote = latestFrame
+    ? latestFrame.units.slice(0, 10).reduce((sum, unit) => sum + unit.askPrice * unit.askSize, 0)
+    : 0;
+  const depthRatio = askDepthQuote > 0 ? bidDepthQuote / askDepthQuote : bidDepthQuote > 0 ? 10 : 0;
+  const bidAbsorptionScore = clamp(
+    (dynamic.persistent_bid_wall_price != null ? 0.35 : 0) +
+      Math.max(0, -safeDiv(fastBuyNotional - fastSellNotional, fastBuyNotional + fastSellNotional)) * 0.30 +
+      clamp((depthRatio - 1) / 3, 0, 1) * 0.20 +
+      clamp(micropriceDeviationBps / 5, 0, 1) * 0.15,
+    0,
+    1,
+  );
+  const eventPrices = eventTrades.map((trade) => number(trade.trade_price)).filter((x) => x > 0);
+  const firstEventPrice = eventPrices[0] || mid;
+  const eventLow = eventPrices.length ? Math.min(...eventPrices) : mid;
+  const sweepDepthBps = firstEventPrice > 0 ? Math.max(0, (firstEventPrice / Math.max(eventLow, Number.EPSILON) - 1) * 10_000) : 0;
+  const reclaimBps = eventLow > 0 ? Math.max(0, (mid / eventLow - 1) * 10_000) : 0;
+  const sweepReclaimScore = clamp(
+    clamp(sweepDepthBps / 12, 0, 1) * 0.35 + clamp(reclaimBps / 10, 0, 1) * 0.35 +
+      clamp(safeDiv(fastBuyNotional - fastSellNotional, fastBuyNotional + fastSellNotional), 0, 1) * 0.30,
+    0,
+    1,
+  );
+  const phaseWidthMs = Math.max(1, eventWindowMs / 3);
+  const phasePressure = [0, 1, 2].map((phase) => {
+    let buy = 0; let sell = 0;
+    const phaseStart = currentMs - eventWindowMs + phase * phaseWidthMs;
+    const phaseEnd = phaseStart + phaseWidthMs;
+    for (const trade of eventTrades) {
+      const ts = tradeTimestamp(trade);
+      if (ts < phaseStart || ts > phaseEnd) continue;
+      const notional = number(trade.trade_price) * number(trade.trade_volume);
+      if (String(trade.ask_bid).toUpperCase() === "BID") buy += notional; else sell += notional;
+    }
+    return safeDiv(buy - sell, buy + sell);
+  });
+  const positivePhases = phasePressure.filter((x) => x > 0.05).length / 3;
+  const ofiPersistence = clamp(positivePhases * 0.65 + clamp(mean(phasePressure), 0, 1) * 0.35, 0, 1);
+
   return {
     samples: frames.length,
     best_bid: bestBid,
@@ -1759,6 +1860,16 @@ export function computeMicrostructure(
     buy_notional: buyNotional,
     sell_notional: sellNotional,
     micro_score: microScore,
+    book_update_rate: bookUpdateRate,
+    trade_arrival_rate: tradeArrivalRate,
+    aggressive_notional_per_second: aggressiveNotionalPerSecond,
+    microprice_deviation_bps: micropriceDeviationBps,
+    bid_depth_quote: bidDepthQuote,
+    ask_depth_quote: askDepthQuote,
+    depth_ratio: depthRatio,
+    bid_absorption_score: bidAbsorptionScore,
+    sweep_reclaim_score: sweepReclaimScore,
+    ofi_persistence: ofiPersistence,
     dynamic,
   };
 }
@@ -2020,7 +2131,7 @@ export function buildTradePlan(
   const expectedExit = useContinuation ? blendedExit : shortExecution;
   const expectedGain = useContinuation ? blendedGain : shortGain;
   const rr = useContinuation ? blendedRR : shortRR;
-  const allocationOnlySizing = risk.strategy === "SCALP";
+  const allocationOnlySizing = risk.strategy === "SCALP" || risk.strategy === "LOB_SCALP";
   const riskBudget = allocationOnlySizing ? risk.capitalKrw : risk.capitalKrw * (risk.riskPct / 100);
   const investment = allocationOnlySizing
     ? risk.capitalKrw
@@ -2731,10 +2842,11 @@ export function finalizeCandidate(
     ? "AVOID"
     : "WAIT";
 
-  // Stage 3: scalp strategy inverts the hierarchy — orderbook signal drives entry,
-  // trend is only a veto. Event-risk BLOCK and missing data still hard-block.
+  // Legacy SCALP remains for backwards compatibility. v6 LOB_SCALP is a separate,
+  // order-book-authoritative route: trend/news/RSI/EMA cannot create or veto an order.
   let scalpResult: ScalpSignalResult | null = null;
   let scalpGeometry: ScalpGeometry | null = null;
+  let lobResult: LobEntryDecision | null = null;
   if (risk.strategy === "SCALP") {
     if (eventRisk.status === "BLOCK" || period.data_completeness !== 1) {
       decision = "AVOID";
@@ -2780,17 +2892,103 @@ export function finalizeCandidate(
       decision = scalpResult.decision;
     }
   }
+
+  if (risk.strategy === "LOB_SCALP") {
+    const features: LobFeatureVector = {
+      samples: micro.samples,
+      observationMs: micro.dynamic.observation_ms,
+      bookAgeMs: micro.live_book_age_ms,
+      spreadBps: micro.spread_bps,
+      bookImbalance: micro.book_imbalance_top,
+      imbalanceStability: micro.imbalance_stability,
+      tradePressureFast: micro.trade_pressure_fast,
+      tradeCount: micro.trade_count,
+      buyNotional: micro.buy_notional,
+      sellNotional: micro.sell_notional,
+      averageTradeNotional: micro.average_trade_notional,
+      bookUpdateRate: micro.book_update_rate,
+      tradeArrivalRate: micro.trade_arrival_rate,
+      aggressiveNotionalPerSecond: micro.aggressive_notional_per_second,
+      micropriceDeviationBps: micro.microprice_deviation_bps,
+      bidDepthQuote: micro.bid_depth_quote,
+      askDepthQuote: micro.ask_depth_quote,
+      depthRatio: micro.depth_ratio,
+      spoofLikeScore: micro.dynamic.spoof_like_score,
+      askAbsorptionScore: micro.dynamic.ask_absorption_score,
+      bidAbsorptionScore: micro.bid_absorption_score,
+      breakoutScore: micro.dynamic.breakout_score,
+      sweepReclaimScore: micro.sweep_reclaim_score,
+      ofiPersistence: micro.ofi_persistence,
+      persistentBidWall: micro.dynamic.persistent_bid_wall_price !== null,
+      persistentAskWall: micro.dynamic.persistent_ask_wall_price !== null,
+      dynamicStatus: micro.dynamic.status,
+      dataQuality: micro.dynamic.data_quality,
+      turnover24hQuote: period.universe.turnover_24h_quote,
+      minActionableTurnover24h: period.universe.min_actionable_turnover_24h,
+      trendContext: period.trend_signal,
+    };
+    const spread = Math.max(0, micro.spread_bps || 0);
+    lobResult = evaluateLobEntry(
+      features,
+      {
+        roundTripFeeBps: risk.feePerSidePct * 2 * 100,
+        entrySlippageBps: Math.max(0.10, spread * 0.08),
+        targetExitSlippageBps: Math.max(0.10, spread * 0.08),
+        stopExitSlippageBps: Math.max(0.40, spread * 0.45),
+        spreadBps: spread,
+      },
+      {
+        minEvBps: Math.max(0, finiteOr((risk.scalpOverrides || {}).minimumEdge, 0) * 10_000),
+        maxBookAgeMs: Math.max(250, finiteOr((risk.scalpOverrides || {}).maxBookAgeMs, 2500)),
+        maxSpreadBps: Math.max(1, finiteOr((risk.scalpOverrides || {}).maxSpreadBps, risk.maxSpreadBps ?? 30)),
+        maxHoldingSeconds: Math.round(clamp(finiteOr((risk.scalpOverrides || {}).maxHoldingSeconds, 180), 1, 300)),
+        absoluteMaxHoldingSeconds: 300,
+      },
+    );
+    decision = lobResult.decision;
+
+    // The exit geometry is solved from the LOB event and actual cost estimate, not from
+    // 15m/4h ATR structure. The 5% stop is an absolute user ceiling, not a target.
+    const reference = plan.entry_execution_estimate > 0 ? plan.entry_execution_estimate : plan.reference_price;
+    if (reference > 0) {
+      plan.short_target = roundToTick(reference * (1 + lobResult.targetBps / 10_000), plan.tick_size, "up");
+      plan.short_target_execution_estimate = plan.short_target;
+      plan.medium_target = plan.short_target;
+      plan.medium_target_execution_estimate = plan.short_target;
+      plan.expected_exit_price = plan.short_target;
+      plan.stop_price = roundToTick(reference * (1 - Math.min(500, lobResult.stopBps) / 10_000), plan.tick_size, "down");
+      plan.stop_execution_estimate = plan.stop_price;
+      plan.short_net_return_pct = lobResult.targetReturnNetBps / 100;
+      plan.medium_net_return_pct = plan.short_net_return_pct;
+      plan.expected_exit_net_return_pct = plan.short_net_return_pct;
+      plan.blended_net_return_pct = plan.short_net_return_pct;
+      plan.net_stop_pct = Math.min(5, Math.abs(lobResult.stopReturnNetBps) / 100);
+      plan.net_rr = plan.net_stop_pct > 0 ? plan.short_net_return_pct / plan.net_stop_pct : 0;
+      plan.short_net_rr = plan.net_rr;
+      plan.medium_net_rr = plan.net_rr;
+      plan.blended_net_rr = plan.net_rr;
+      plan.target_strategy = "SHORT_ONLY";
+      plan.target_strategy_label = "LOB 이벤트 목표 일괄청산";
+      plan.first_target_allocation_pct = 100;
+      plan.continuation_allocation_pct = 0;
+      plan.structure_complete = true;
+      plan.target_basis = `LOB ${lobResult.pattern || "NONE"}`;
+      plan.support_basis = "실시간 LOB 무효화·절대 5% 손실 상한";
+    }
+  }
   plan.actionable = decision === "BUY";
-  const watchEntryPlan = buildWatchEntryPlan(
-    period,
-    micro,
-    plan,
-    tickSize,
-    risk,
-    score,
-    checks,
-    decision,
-  );
+  const watchEntryPlan = risk.strategy === "LOB_SCALP"
+    ? unavailableWatchEntry("LOB_SCALP은 눌림목 대기 주문을 만들지 않고 다음 실시간 호가창 스캔에서 다시 판단합니다.")
+    : buildWatchEntryPlan(
+      period,
+      micro,
+      plan,
+      tickSize,
+      risk,
+      score,
+      checks,
+      decision,
+    );
   const forecast = estimatePriceForecast(
     period,
     micro,
@@ -2800,6 +2998,17 @@ export function finalizeCandidate(
     score,
     decision,
   );
+  const effectiveChecks: Gate[] = lobResult
+    ? [
+      gate("lob_data", "LOB 데이터", !lobResult.reasons.some((r) => ["INSUFFICIENT_LOB_SAMPLES", "STALE_ORDERBOOK"].includes(r)), `${micro.samples}개 표본 / book age ${micro.live_book_age_ms ?? "N/A"}ms`),
+      gate("lob_spread", "LOB 스프레드", !lobResult.reasons.includes("SPREAD_TOO_WIDE"), `${micro.spread_bps?.toFixed(2) ?? "N/A"}bp`),
+      gate("lob_activity", "호가창 활동도", !lobResult.reasons.includes("BOOK_NOT_HOT_ENOUGH"), `hotness ${lobResult.hotness.hotnessScore.toFixed(1)}`),
+      gate("lob_pattern", "호가창 패턴", !lobResult.reasons.includes("NO_PRIMARY_LOB_PATTERN"), lobResult.pattern || "NONE"),
+      gate("lob_net_ev", "비용 차감 순EV", lobResult.evLowerBoundBps > 0, `${lobResult.evLowerBoundBps.toFixed(3)}bp`),
+      gate("lob_stop", "절대 손실 상한", lobResult.stopBps <= 500, `${lobResult.stopBps.toFixed(1)}bp / 500bp`),
+    ]
+    : checks;
+  const effectiveFailed = effectiveChecks.filter((check) => !check.passed);
   const positives = [...period.positives];
   const negatives = [...period.negatives];
   const warnings = [...period.warnings];
@@ -2830,7 +3039,7 @@ export function finalizeCandidate(
     const when = item.displayed_date || item.event_date || item.published_at || "시점 미상";
     warnings.push(`[${item.severity}] ${item.category}: ${item.title} (${when}, ${item.source})`);
   }
-  for (const failedGate of failed) {
+  for (const failedGate of effectiveFailed) {
     warnings.push(`${failedGate.label}: ${failedGate.detail}`);
   }
   if (decision !== "BUY") {
@@ -2852,40 +3061,51 @@ export function finalizeCandidate(
     25 + period.data_completeness * 22 + micro.dynamic.data_quality * 24 +
       micro.imbalance_stability * 5 + (plan.structure_complete ? 10 : 0) +
       (plan.reference_source === "LIVE_ORDERBOOK" ? 6 : 0) +
-      Math.min(8, plan.depth_coverage_ratio * 2) - failed.length * 2.5,
+      Math.min(8, plan.depth_coverage_ratio * 2) - effectiveFailed.length * 2.5 +
+      (lobResult ? lobResult.hotness.hotnessScore * 0.10 : 0),
     20,
     88,
   );
   const generatedAt = Number(micro.reference_timestamp || Date.now());
   const automatedMode = risk.operatorMode === "AUTOMATED";
-  const validMinutes = Math.round(clamp(
-    risk.recommendationValidMinutes ?? (automatedMode ? 5 : 15),
-    automatedMode ? 1 : 5,
-    automatedMode ? 15 : 30,
-  ));
-  const automatedCompatible = precommittedExitAvailable &&
-    horizon.intended_holding_hours >= (risk.minActionableHoldingHours ?? 1);
+  const validMinutes = risk.strategy === "LOB_SCALP"
+    ? 1
+    : Math.round(clamp(
+      risk.recommendationValidMinutes ?? (automatedMode ? 5 : 15),
+      automatedMode ? 1 : 5,
+      automatedMode ? 15 : 30,
+    ));
+  const automatedCompatible = risk.strategy === "LOB_SCALP"
+    ? true
+    : precommittedExitAvailable && horizon.intended_holding_hours >= (risk.minActionableHoldingHours ?? 1);
+  const lobHoldingHours = lobResult ? lobResult.maxHoldingSeconds / 3600 : null;
   const executionPlan: LowTouchExecutionPlan = {
     mode: automatedMode ? "AUTOMATED" : "LOW_TOUCH",
     low_touch_compatible: horizon.low_touch_compatible && precommittedExitAvailable,
     automated_compatible: automatedCompatible,
     recommendation_valid_minutes: validMinutes,
     valid_until: new Date(generatedAt + validMinutes * 60_000).toISOString(),
-    intended_holding_hours: horizon.intended_holding_hours,
+    intended_holding_hours: lobHoldingHours ?? horizon.intended_holding_hours,
     next_review_after_hours: automatedMode ? Math.min(0.5, horizon.review_interval_hours) : horizon.review_interval_hours,
-    max_holding_hours: horizon.max_holding_hours,
+    max_holding_hours: lobHoldingHours ?? horizon.max_holding_hours,
     monitoring_requirement: decision === "BUY"
       ? automatedMode ? "AUTOMATED_WATCHDOG" : "PRECOMMITTED_EXIT"
       : "RECHECK_REQUIRED",
     buy_instruction: decision === "BUY"
-      ? automatedMode
+      ? lobResult
+        ? `현재 실시간 호가에서 ${lobResult.pattern || "LOB 패턴"}을 주문 직전에 다시 검증한 뒤 진입하고, 체결 즉시 손절 ${quotePriceText(plan.stop_price, period.universe.quote_currency)}·목표 ${quotePriceText(plan.short_target, period.universe.quote_currency)}·${lobResult.maxHoldingSeconds}초 타임아웃을 등록합니다.`
+        : automatedMode
         ? `유효시간 안에 지정가 IOC로 ${quotePriceText(plan.entry_low, period.universe.quote_currency)}~${quotePriceText(plan.entry_high, period.universe.quote_currency)}에서만 자동 진입하고, 체결 즉시 손절 ${quotePriceText(plan.stop_price, period.universe.quote_currency)}·1차 목표 ${quotePriceText(plan.short_target, period.universe.quote_currency)}·최대 보유시간을 등록합니다.`
         : `추천 유효시간 안에 ${quotePriceText(plan.entry_low, period.universe.quote_currency)}~${quotePriceText(plan.entry_high, period.universe.quote_currency)}에서만 진입하고, 진입 직후 손절 ${quotePriceText(plan.stop_price, period.universe.quote_currency)}와 1차 목표 ${quotePriceText(plan.short_target, period.universe.quote_currency)}를 함께 정합니다.`
       : automatedMode ? "자동 진입하지 않고 다음 전체 스캔까지 대기합니다." : "현재는 매수하지 말고 다음 접속 시 재스캔합니다.",
-    exit_instruction: plan.target_strategy === "SCALE_OUT" || plan.target_strategy === "TRAIL_AFTER_T1"
+    exit_instruction: lobResult
+      ? `목표 ${quotePriceText(plan.short_target, period.universe.quote_currency)} 일괄청산, 손절, 호가창 무효화, 흐름 반전, ${lobResult.maxHoldingSeconds}초 타임아웃 중 먼저 발생하는 조건으로 즉시 종료합니다.`
+      : plan.target_strategy === "SCALE_OUT" || plan.target_strategy === "TRAIL_AFTER_T1"
       ? `1차 목표에서 ${plan.first_target_allocation_pct}% 자동 청산하고 나머지는 ${plan.target_strategy === "TRAIL_AFTER_T1" ? "추적손절" : quotePriceText(plan.medium_target, period.universe.quote_currency)}·손절·최대 보유시간 중 먼저 발생하는 조건에서 자동 청산합니다.`
       : `1차 목표 ${quotePriceText(plan.short_target, period.universe.quote_currency)}에서 일괄청산하며, ${horizon.max_holding_hours}시간이 지나면 목표 미도달이어도 자동 종료합니다.`,
-    stale_instruction: `${validMinutes}분이 지나면 호가·체결 조건이 낡은 것으로 간주하고 자동 주문을 생성하지 않습니다.`,
+    stale_instruction: lobResult
+      ? "다음 실시간 재검사에서 호가·체결 패턴이 유지되지 않으면 주문을 폐기합니다."
+      : `${validMinutes}분이 지나면 호가·체결 조건이 낡은 것으로 간주하고 자동 주문을 생성하지 않습니다.`,
   };
 
   return {
@@ -2901,7 +3121,33 @@ export function finalizeCandidate(
     period_score: period.period_score,
     confidence,
     decision,
-    scalp: scalpResult
+    lob: lobResult
+      ? {
+        pattern: lobResult.pattern,
+        patterns: lobResult.patterns.map((item) => ({
+          name: item.name, confidence: item.confidence, primary: item.primary, evidence: item.evidence, invalidations: item.invalidations,
+        })),
+        hotness_score: lobResult.hotness.hotnessScore,
+        activity_score: lobResult.hotness.activityScore,
+        tradability_score: lobResult.hotness.tradabilityScore,
+        p_target: lobResult.pTarget, p_stop: lobResult.pStop, p_timeout: lobResult.pTimeout, p_fill: lobResult.pFill,
+        target_bps: lobResult.targetBps, stop_bps: lobResult.stopBps,
+        target_return_net_bps: lobResult.targetReturnNetBps,
+        ev_net_bps: lobResult.evNetBps, ev_lower_bound_bps: lobResult.evLowerBoundBps,
+        max_holding_seconds: lobResult.maxHoldingSeconds, reasons: lobResult.reasons, features: lobResult.features,
+        signal_at: new Date().toISOString(),
+      }
+      : undefined,
+    scalp: lobResult
+      ? {
+        pWin: lobResult.pTarget, signal_score: lobResult.hotness.hotnessScore / 100,
+        provisional_edge: lobResult.evLowerBoundBps / 10_000,
+        target_pct: lobResult.targetBps / 10_000, stop_pct: lobResult.stopBps / 10_000,
+        vetoed: false, reasons: lobResult.reasons, imbalance_contribution: 0, trend_penalty: 0,
+        neutral_win_rate: lobResult.pTarget, signal_edge: lobResult.evLowerBoundBps / 10_000,
+        features: lobResult.features as unknown as ScalpSignalResult["features"], signal_at: new Date().toISOString(), geometry: null,
+      }
+      : scalpResult
       ? {
         pWin: scalpResult.pWin,
         signal_score: scalpResult.signalScore,
@@ -2935,7 +3181,7 @@ export function finalizeCandidate(
       }
       : undefined,
     decision_label: decision === "BUY"
-      ? "현재 매수 후보"
+      ? risk.strategy === "LOB_SCALP" ? "실시간 LOB 매수 후보" : "현재 매수 후보"
       : decision === "WAIT" && watchEntryPlan.available
       ? "관찰·눌림 대기"
       : decision === "WAIT"
@@ -2946,8 +3192,8 @@ export function finalizeCandidate(
     horizon,
     execution_plan: executionPlan,
     forecast,
-    gates: checks,
-    failed_gates: failed.map((item) => item.key),
+    gates: effectiveChecks,
+    failed_gates: effectiveFailed.map((item) => item.key),
     positives: [...new Set(positives)],
     negatives: [...new Set(negatives)],
     warnings: [...new Set(warnings)],

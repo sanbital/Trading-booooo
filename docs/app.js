@@ -14,8 +14,8 @@
       label: "업비트 + 바이낸스",
       quote: "MIXED",
       button: "두 거래소 동시 스캔",
-      title: "업비트와 바이낸스를 동시에 점검하고<br>통합 Top 4만 추립니다.",
-      description: "양 거래소 현물 전체를 병렬 분석하고 동일 코인은 한 자리로 합칩니다. 한쪽은 긍정이어도 다른 거래소에서 회피·스푸핑성 취소·매도흡수·지지붕괴가 확인되면 현재가 매수를 보류합니다."
+      title: "업비트와 바이낸스를 동시에 점검하고<br>현재 가장 뜨거운 호가창을 추립니다.",
+      description: "양 거래소 현물 전체에서 거래대금·체결속도·호가 갱신률을 먼저 비교하고, 최종 후보의 흡수·소진·스윕·OFI·재충전 패턴을 실시간 검증합니다. 추세는 보조 정보일 뿐 주문 권한이 없습니다."
     },
     upbit: {
       label: "업비트 현물",
@@ -27,7 +27,7 @@
       fee: Number(config.defaultFeePerSidePct || 0.05),
       button: "원화마켓 전체 스캔",
       title: "업비트 원화마켓을 전수 점검하고<br>현재의 매수 후보만 추립니다.",
-      description: "전체 상장 종목의 현재가·거래대금을 1차 점검하고, 안전필터 통과 종목 전부의 15분봉을 확인한 뒤 상위 후보의 5분·4시간·일봉과 최신 호가·체결을 교차검증합니다. 조건 미달이면 추천하지 않습니다."
+      description: "원화마켓 전체의 현재 거래대금과 유동성을 점검한 뒤, 가장 활발한 후보의 실시간 호가 갱신·체결 도착·공격적 체결대금과 LOB 패턴을 집중 관찰합니다."
     },
     binance: {
       label: "바이낸스 현물",
@@ -39,7 +39,7 @@
       fee: Number(config.defaultBinanceFeePerSidePct || 0.1),
       button: "USDT 현물 전체 스캔",
       title: "바이낸스 USDT 현물을 전수 점검하고<br>현재의 매수 후보만 추립니다.",
-      description: "바이낸스에서 거래 가능한 USDT 현물 전체를 기간 분석하고, 최종 후보의 실시간 호가와 체결을 교차검증합니다. 업비트 결과와 점수·자금·거래대금은 서로 섞지 않습니다."
+      description: "바이낸스 USDT 현물 전체에서 현재 가장 뜨거운 호가창을 선별하고, 비용 차감 순EV가 양수인 LOB 패턴만 주문 직전 재검사합니다. 업비트와 자금·수수료·유동성 기준은 분리합니다."
     }
   };
 
@@ -294,7 +294,7 @@
           <span><small>매수 구간</small><b>${escapeHtml(price(plan.entry_low, quote))} ~ ${escapeHtml(price(plan.entry_high, quote))}</b></span>
           <span><small>진입 시 예상 매도가</small><b class="positive-text">${escapeHtml(price(plan.expected_exit_price ?? plan.short_target, quote))}</b></span>
           <span><small>손절가격</small><b class="negative-text">${escapeHtml(price(plan.stop_price, quote))}</b></span>
-          <span><small>중기 목표 / 예상 보유</small><b>${escapeHtml(price(plan.medium_target, quote))} · ${escapeHtml(candidate.horizon.expected_window)}</b></span>
+          <span><small>LOB 목표 / 최대 보유</small><b>${escapeHtml(price(plan.medium_target, quote))} · ${escapeHtml(candidate.horizon.expected_window)}</b></span>
         </div>`
       : watch.available
       ? `<div class="candidate-plan watch-plan">
@@ -955,19 +955,20 @@
     $("trader-mode-note").textContent = mode === "LIVE_LIMITED" ? "실제 주문 허용" : mode === "PAPER" ? "가상 체결·학습" : "운용 정지";
     const strategy = String(settings.strategy || "TREND").toUpperCase();
     $("trader-strategy").textContent = strategy;
-    $("trader-strategy").className = strategy === "SCALP" ? "state-running" : "mode-paper";
-    // v5.7.2: 이 라벨은 사실과 달랐다. scalp_max_holding_minutes 는 v5.4 이후
-    // '강제청산 시각'이 아니라 변동성으로 산출하는 '목표 도달 예상시간의 상한'이며,
-    // 실제로 시간 때문에 청산되는 시점은 scalp_safety_ttl_minutes 다.
-    $("trader-strategy-note").textContent = strategy === "SCALP"
-      ? `시간 기반 청산 없음 · 도달예상 ≤${fmt(settings.scalp_max_holding_minutes, 0)}분`
+    const scalpActive = strategy === "SCALP" || strategy === "LOB_SCALP";
+    $("trader-strategy").className = scalpActive ? "state-running" : "mode-paper";
+    const scalpProfile = String(settings.scalp_strategy_profile || (strategy === "LOB_SCALP" ? "LOB_SCALP" : "HF_SCALP"));
+    $("trader-strategy-note").textContent = strategy === "LOB_SCALP"
+      ? `호가창·체결 중심 · 기본 ${fmt(settings.lob_max_holding_seconds || 180, 0)}초 / 절대 ${fmt(settings.lob_absolute_max_holding_seconds || 300, 0)}초`
+      : strategy === "SCALP"
+      ? `${scalpProfile} · 최대 ${fmt(settings.scalp_safety_ttl_minutes || settings.scalp_max_holding_minutes, 0)}분 TIMEOUT`
       : "상위 추세 중심";
-    $("scalp-risk").textContent = strategy === "SCALP"
+    $("scalp-risk").textContent = scalpActive
       ? `1회 -${fmt(settings.scalp_max_single_loss_pct, 1)}% · 1일 -${fmt(settings.scalp_daily_loss_pct, 1)}%`
       : "—";
-    $("scalp-risk-note").textContent = strategy === "SCALP"
-      ? "운용금 설정 기준 · 추가 비중 상한 없음"
-      : "스캘핑 비활성";
+    $("scalp-risk-note").textContent = strategy === "LOB_SCALP"
+      ? "거래횟수 상한 없음 · 비용 차감 순EV 양수만"
+      : strategy === "SCALP" ? "운용금 설정 기준" : "스캘핑 비활성";
     const paused = Boolean(settings.pause_new_entries || settings.withdrawal_mode || settings.manual_intervention_required || mode === "PAUSED");
     $("entry-state").textContent = paused ? "중지" : "운용 중";
     $("entry-state").className = paused ? "state-paused" : "state-running";
@@ -984,8 +985,8 @@
     renderEvents(data);
     const alerts = [];
     if (settings.withdrawal_mode) alerts.push("출금 모드입니다. 신규 매수는 중지되어 있으며 출금 완료 후 ‘즉시 재개 + 지금 스캔’을 누르세요.");
-    if (settings.strategy === "SCALP" && settings.scalp_kill_switch) alerts.push("스캘핑 킬스위치가 켜져 있어 모든 신규 진입이 차단됩니다.");
-    if (settings.strategy === "SCALP" && (Number(settings.scalp_daily_loss_pct) < 1 || Number(settings.scalp_max_single_loss_pct) < 1)) alerts.push("스캘핑 손실 제한 설정이 비정상적으로 낮습니다. 설정 복구가 필요합니다.");
+    if ((settings.strategy === "SCALP" || settings.strategy === "LOB_SCALP") && settings.scalp_kill_switch) alerts.push("스캘핑 킬스위치가 켜져 있어 모든 신규 진입이 차단됩니다.");
+    if ((settings.strategy === "SCALP" || settings.strategy === "LOB_SCALP") && (Number(settings.scalp_daily_loss_pct) < 1 || Number(settings.scalp_max_single_loss_pct) < 1)) alerts.push("스캘핑 손실 제한 설정이 비정상적으로 낮습니다. 설정 복구가 필요합니다.");
     if (settings.manual_intervention_required) alerts.push(`수동 거래가 감지되었습니다: ${settings.manual_event_reason || "계좌 잔고 변경"}. 장부는 실제 잔고로 조정되며 학습 표본에서 제외됩니다.`);
     if (!data.gateway?.ok) alerts.push(`주문 게이트웨이 오류: ${data.gateway?.error || "상태 확인 실패"}`);
     traderAlert.textContent = alerts.join(" ");

@@ -31,8 +31,9 @@
 //      the entry signal fades out of the estimate. Time therefore still matters — as a
 //      confidence decay, not as a trigger.
 //
-// Absolute time survives only as a backstop against stuck ledgers and broken monitors,
-// at a horizon the operator sets (default 6 hours, not 30 minutes).
+// v5.12 keeps this module focused on early economic exits. The orchestrator separately
+// enforces the approved profile TIMEOUT (HF_SCALP <=30m, INTRADAY_SCALP <=120m), so live
+// edge may shorten a trade but can never extend it beyond the barrier horizon.
 //
 // Pure functions only — no I/O.
 
@@ -195,9 +196,8 @@ export function evaluateHold(
   const reversed = input.liveImbalance <= cfg.reversalImbalance;
   const reversalStreak = reversed ? Math.max(0, input.reversalStreak) + 1 : 0;
   const livePWin = decayedPWin(input.entryPWin, input.liveImbalance, input.heldMinutes, cfg, input.neutralWinRate ?? 0);
-  // v5.8: elapsed time no longer participates in the decision. It survives only inside
-  // decayedPWin(), where it lowers the weight of a stale entry reading — a confidence
-  // model, not a clock. A position whose live edge is intact is held indefinitely.
+  // Elapsed time does not trigger an EARLY exit inside this module. It only decays the
+  // stale entry signal; the orchestrator owns the separate profile TIMEOUT barrier.
   const flowReversed = (input.tradePressure ?? 0) <= cfg.reversalTradePressure;
   const flowReversalStreak = flowReversed ? Math.max(0, input.flowReversalStreak ?? 0) + 1 : 0;
 
@@ -255,9 +255,9 @@ export function evaluateHold(
  * v5.8: the only remaining time-shaped check, and it does not sell anything.
  *
  * It asks whether the position still has LIVE MARKET DATA behind it. A position that is
- * being evaluated every cycle is never closed for being old; a position whose quotes have
- * stopped arriving is not being managed at all, and that is an operator matter — the
- * caller raises an alert rather than liquidating on a guess about a market it cannot see.
+ * being evaluated every cycle is not closed early merely for age; the separate profile
+ * TIMEOUT still applies. A position whose quotes have stopped arriving is an operator
+ * matter — the caller raises an alert rather than liquidating on a guessed price.
  */
 export function marketDataStale(
   minutesSinceEvaluation: number,

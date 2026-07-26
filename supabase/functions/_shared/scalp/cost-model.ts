@@ -99,6 +99,26 @@ export function stressSlippage(
   return { slippage: stressed, skip: false, consumedFraction: sim.consumedFraction };
 }
 
+/** Conservative sell-side slippage below the best bid. */
+export function stressSellSlippage(
+  levels: OrderbookLevel[],
+  notional: number,
+  referencePrice: number,
+  cfg: StressSlippageConfig = DEFAULT_STRESS,
+): { slippage: number; skip: boolean; consumedFraction: number } {
+  if (referencePrice <= 0) return { slippage: 1, skip: true, consumedFraction: 1 };
+  const sim = simulateFill(levels, notional);
+  if (!sim.fillable || sim.consumedFraction > cfg.maxDepthConsumption) {
+    return { slippage: 1, skip: true, consumedFraction: sim.consumedFraction };
+  }
+  const rawSlippage = Math.max(0, (referencePrice - sim.avgPrice) / referencePrice);
+  return {
+    slippage: rawSlippage * cfg.stressFactor + cfg.latencyPenalty + cfg.partialFillPenalty,
+    skip: false,
+    consumedFraction: sim.consumedFraction,
+  };
+}
+
 /**
  * Probability-weighted gross edge (before costs). Single source of truth for the
  * EV formula, reused by the scanner where the order notional (and thus precise
@@ -178,17 +198,11 @@ export function evaluateEdge(inputs: EdgeInputs, cfg: CostModelConfig = DEFAULT_
     return { enter: false, expectedNetEdge: -1, roundTripCost: cfg.roundTripFeeFraction, entrySlippage: entry.slippage, exitSlippage: 0, skipReason: "thin_ask_depth" };
   }
   // Exit is a sell: slippage is downward, measured as the fraction below best bid.
-  const exitSim = simulateFill(inputs.bidLevels, inputs.notional);
-  let exitSlip = 0; let exitSkip = false;
-  if (!exitSim.fillable || exitSim.consumedFraction > cfg.slippage.maxDepthConsumption) {
-    exitSkip = true;
-  } else {
-    const rawExit = Math.max(0, (inputs.bestBid - exitSim.avgPrice) / inputs.bestBid);
-    exitSlip = rawExit * cfg.slippage.stressFactor + cfg.slippage.latencyPenalty + cfg.slippage.partialFillPenalty;
-  }
-  if (exitSkip) {
+  const exit = stressSellSlippage(inputs.bidLevels, inputs.notional, inputs.bestBid, cfg.slippage);
+  if (exit.skip) {
     return { enter: false, expectedNetEdge: -1, roundTripCost: cfg.roundTripFeeFraction, entrySlippage: entry.slippage, exitSlippage: 1, skipReason: "thin_bid_depth" };
   }
+  const exitSlip = exit.slippage;
 
   const grossEdge = probabilityWeightedGross(
     inputs.pWin,

@@ -40,7 +40,7 @@ function createdColumns(files: Array<{ name: string; sql: string }>): Map<string
   return created;
 }
 
-Deno.test("every scalp settings column written in SQL is created first", async () => {
+Deno.test("every scalp and LOB settings column written in SQL is created first", async () => {
   const files = await migrationFiles();
   const created = createdColumns(files);
   const violations: string[] = [];
@@ -48,10 +48,10 @@ Deno.test("every scalp settings column written in SQL is created first", async (
   for (const { name, sql } of files) {
     const referenced = new Set<string>();
     // UPDATE ... SET <col> =
-    for (const m of sql.matchAll(/^\s*(?:set|,)\s+(scalp_[a-z_]+)\s*=/gim)) referenced.add(m[1]);
+    for (const m of sql.matchAll(/^\s*(?:set|,)\s+((?:scalp|lob)_[a-z_]+)\s*=/gim)) referenced.add(m[1]);
     // WHERE / CHECK / COALESCE against a settings column
-    for (const m of sql.matchAll(/coalesce\(\s*(scalp_[a-z_]+)/gi)) referenced.add(m[1]);
-    for (const m of sql.matchAll(/check\s*\(\s*(scalp_[a-z_]+)/gi)) referenced.add(m[1]);
+    for (const m of sql.matchAll(/coalesce\(\s*((?:scalp|lob)_[a-z_]+)/gi)) referenced.add(m[1]);
+    for (const m of sql.matchAll(/check\s*\(\s*((?:scalp|lob)_[a-z_]+)/gi)) referenced.add(m[1]);
 
     for (const column of referenced) {
       const source = created.get(column);
@@ -62,11 +62,11 @@ Deno.test("every scalp settings column written in SQL is created first", async (
   assertEquals(violations, [], `migration ordering violations:\n  ${violations.join("\n  ")}`);
 });
 
-Deno.test("every scalp setting the engine reads exists as a column", async () => {
+Deno.test("every scalp and LOB setting the engine reads exists as a column", async () => {
   const code = await Deno.readTextFile(AUTOTRADER);
   const read = new Set<string>([
-    ...[...code.matchAll(/\(settings as any\)\.(scalp_[a-z_]+)/g)].map((m) => m[1]),
-    ...[...code.matchAll(/settings\.(scalp_[a-z_]+)/g)].map((m) => m[1]),
+    ...[...code.matchAll(/\(settings as any\)\.((?:scalp|lob)_[a-z_]+)/g)].map((m) => m[1]),
+    ...[...code.matchAll(/settings\.((?:scalp|lob)_[a-z_]+)/g)].map((m) => m[1]),
   ]);
   const created = createdColumns(await migrationFiles());
   // A setting that only ever lives in code cannot be changed from the dashboard, and the
