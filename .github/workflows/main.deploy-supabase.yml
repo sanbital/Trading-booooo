@@ -98,11 +98,20 @@ jobs:
             "SCALP_MAX_CONSECUTIVE_LOSSES=50" \
             "SCALP_KILL_SWITCH=false" \
             "SCALP_MAX_HOLDING_MINUTES=3" \
+            "SCALP_MAKER_ENTRY_TTL_SECONDS=8" \
+            "SCALP_MAKER_ENTRY_DRIFT_TICKS=1" \
             "LOB_MAX_HOLDING_SECONDS=180" \
             "LOB_ABSOLUTE_MAX_HOLDING_SECONDS=300" \
-            "LOB_SCAN_INTERVAL_SECONDS=15" \
-            "AUTO_SCAN_INTERVAL_SECONDS=15" \
-            "AUTO_MONITOR_INTERVAL_SECONDS=5" \
+            "LOB_SCAN_INTERVAL_SECONDS=12" \
+            "LOB_MIN_NET_EV_BPS=0" \
+            "LOB_MAX_BOOK_AGE_MS=5000" \
+            "LOB_MAX_SPREAD_BPS=60" \
+            "LOB_HEAT_SAMPLE_COUNT=3" \
+            "LOB_HEAT_SAMPLE_INTERVAL_MS=900" \
+            "LOB_HEAT_FINALIST_LIMIT=12" \
+            "LOB_OBSERVATION_MS=8000" \
+            "AUTO_SCAN_INTERVAL_SECONDS=12" \
+            "AUTO_MONITOR_INTERVAL_SECONDS=2" \
             --project-ref "${SUPABASE_PROJECT_REF}"
 
       - name: Apply database migrations
@@ -141,7 +150,9 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
-          for fn in market-scanner market-learning market-autotrader; do
+          # v6.2: the calibration jobs were never in this loop, so the self-correction
+          # functions the system depends on were only ever deployed by hand -- if at all.
+          for fn in market-scanner market-learning market-autotrader scalp-calibration lob-calibration; do
             supabase functions deploy "$fn" --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
           done
 

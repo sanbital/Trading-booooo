@@ -1,0 +1,58 @@
+name: LOB Calibration
+
+on:
+  schedule:
+    # Hourly. LOB positions resolve in minutes, so a usable sample count accumulates far
+    # faster than the legacy scalp model's did — there is no reason to measure less often.
+    - cron: "42 * * * *"
+  workflow_dispatch:
+    inputs:
+      window_hours:
+        description: "Lookback window in hours"
+        required: false
+        default: "168"
+      dry_run:
+        description: "Compute the profile without promoting it (1 = yes)"
+        required: false
+        default: "0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lob-calibration
+  cancel-in-progress: false
+
+jobs:
+  calibrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate secrets
+        shell: bash
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        run: |
+          for name in SUPABASE_PROJECT_REF LEARNING_ACCESS_TOKEN; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing secret ${name}"
+              exit 1
+            fi
+          done
+          if [ "${#LEARNING_ACCESS_TOKEN}" -lt 32 ]; then
+            echo "::error::LEARNING_ACCESS_TOKEN must be at least 32 characters"
+            exit 1
+          fi
+
+      - name: Measure realized LOB outcomes
+        shell: bash
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+          WINDOW_HOURS: ${{ github.event.inputs.window_hours || '168' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || '0' }}
+        run: |
+          curl --fail-with-body --retry 3 --retry-delay 5 --max-time 120 \
+            -H "x-learning-token: ${LEARNING_ACCESS_TOKEN}" \
+            "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/lob-calibration?window_hours=${WINDOW_HOURS}&dry_run=${DRY_RUN}"
