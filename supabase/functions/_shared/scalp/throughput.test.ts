@@ -1,6 +1,7 @@
 import { assert, assertAlmostEquals, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   costFloorWidth,
+  resolveMinimumEdge,
   DEFAULT_SCALP_GEOMETRY,
   effectiveRoundTripCost,
   resolveGeometryConfig,
@@ -147,4 +148,46 @@ Deno.test("legacy sizing is still reachable for taker configurations", () => {
   );
   const g = resolveScalpGeometry(sigmaFromAtrPct(0.8, legacy), legacy);
   assertAlmostEquals(g.targetPct / g.stopPct, 2, 1e-9);
+});
+
+Deno.test("the EV threshold cannot exceed what the optimum produces", () => {
+  // The v5.6 regression: at W* = 2C/δ the expected value per trade is exactly C, but the
+  // gate kept an absolute 0.10% while C under maker execution is 0.08%. A signal
+  // delivering precisely the assumed edge was rejected — the design refused its own
+  // optimum, and live entries collapsed.
+  for (const fee of [0.001, 0.0015, 0.002]) {
+    const cfg = resolveGeometryConfig({ ...MAKER, roundTripFeeFraction: fee });
+    const C = effectiveRoundTripCost(cfg);
+    const designEv = cfg.edgeBudget * costFloorWidth(cfg) - C;
+    assertAlmostEquals(designEv, C, 1e-12);
+    assert(
+      resolveMinimumEdge(cfg) < designEv,
+      `threshold ${resolveMinimumEdge(cfg)} blocks the design's own output ${designEv}`,
+    );
+  }
+});
+
+Deno.test("the threshold scales with cost rather than sitting at an absolute level", () => {
+  const cheap = resolveGeometryConfig({ ...MAKER, roundTripFeeFraction: 0.001 });
+  const dear = resolveGeometryConfig({ ...MAKER, roundTripFeeFraction: 0.002 });
+  assert(resolveMinimumEdge(dear) > resolveMinimumEdge(cheap));
+  assertAlmostEquals(
+    resolveMinimumEdge(cheap) / effectiveRoundTripCost(cheap),
+    resolveMinimumEdge(dear) / effectiveRoundTripCost(dear),
+    1e-12,
+  );
+});
+
+Deno.test("legacy mode keeps the absolute threshold", () => {
+  const legacy = resolveGeometryConfig({ ...MAKER, throughputOptimal: false, minimumEdge: 0.001 });
+  assertAlmostEquals(resolveMinimumEdge(legacy), 0.001, 1e-12);
+});
+
+Deno.test("a signal at exactly the assumed edge can pass", () => {
+  const cfg = resolveGeometryConfig({ ...MAKER, targetWinRate: 0.58, edgeBudget: 0.10 });
+  const g = resolveScalpGeometry(sigmaFromAtrPct(0.8, cfg), cfg);
+  const p = g.neutralWinRate + cfg.edgeBudget;
+  const gross = p * g.targetPct - (1 - p) * g.stopPct;
+  const requiredResolve = (resolveMinimumEdge(cfg) + effectiveRoundTripCost(cfg)) / gross;
+  assert(requiredResolve < 1, `needs ${requiredResolve} resolution probability — unreachable`);
 });

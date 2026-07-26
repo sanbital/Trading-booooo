@@ -197,7 +197,16 @@ export function calculatePositionSize(input: SizingInput): SizingResult {
   };
 }
 
-export function decideExit(position: ExitPosition, currentPrice: number, nowMs = Date.now(), emergency = false): ExitDecision {
+export function decideExit(
+  position: ExitPosition,
+  currentPrice: number,
+  nowMs = Date.now(),
+  emergency = false,
+  // v5.8: SCALP passes false. Holding time no longer closes anything — a position is sold
+  // when the market says so (stop, target, trail, live edge, flow reversal, liquidity
+  // event), never because a clock ran out.
+  allowTimeExit = true,
+): ExitDecision {
   const price = finite(currentPrice);
   if (!(price > 0) || finite(position.remaining_quantity) <= 0) {
     return { action: "NONE", fraction: 0, reason: "no executable quantity or price" };
@@ -218,8 +227,12 @@ export function decideExit(position: ExitPosition, currentPrice: number, nowMs =
   if (!position.t1_completed && price >= finite(position.target_1)) {
     return { action: "TARGET_1", fraction: 0, reason: "first target reached" };
   }
-  const maxHolding = new Date(position.max_holding_at).getTime();
-  if (Number.isFinite(maxHolding) && nowMs >= maxHolding) return { action: "TIME_EXIT", fraction: 1, reason: "maximum holding time reached" };
+  if (allowTimeExit) {
+    const maxHolding = new Date(position.max_holding_at).getTime();
+    if (Number.isFinite(maxHolding) && nowMs >= maxHolding) {
+      return { action: "TIME_EXIT", fraction: 1, reason: "maximum holding time reached" };
+    }
+  }
   return { action: "NONE", fraction: 0, reason: "hold" };
 }
 

@@ -49,8 +49,21 @@ export interface ScalpGeometryConfig {
   /** Assumed both-side stressed slippage, as a fraction. Precise slippage is still
    *  computed against the live book at order time; this is only for barrier sizing. */
   slippageAllowance: number;
-  /** Required net edge after all costs. */
+  /** Required net edge after all costs. Used directly only in legacy (non-throughput) mode. */
   minimumEdge: number;
+  /**
+   * v5.8.1: safety margin as a FRACTION OF COST, for throughput mode.
+   *
+   * THE BUG THIS FIXES. At the throughput optimum W* = 2C/δ the expected value per trade
+   * is exactly C — that is what the optimum means. v5.6 kept `minimumEdge` at a fixed
+   * 0.10% while C under maker execution is 0.08%, so the EV gate demanded MORE THAN THE
+   * DESIGN CAN PRODUCE. A signal delivering precisely the assumed edge was rejected;
+   * nothing below about +15pp could ever pass. The design was refusing its own optimum.
+   *
+   * The margin exists to absorb error in the COST estimate, so it must scale with cost
+   * rather than sit at an absolute level chosen for a different geometry.
+   */
+  minEdgeCostFraction: number;
   /**
    * v5.5: spread earned per round trip when both legs are posted rather than taken.
    *
@@ -124,6 +137,7 @@ export const DEFAULT_SCALP_GEOMETRY: ScalpGeometryConfig = {
   roundTripFeeFraction: 0.001,
   slippageAllowance: 0.0009,
   minimumEdge: 0.001,
+  minEdgeCostFraction: 0.25,
   // Conservative default: roughly half of the 15bp spread gate. Live spread is measured
   // per symbol at order time; this is only the sizing assumption.
   spreadCaptureFraction: 0.0005,
@@ -161,6 +175,7 @@ export const GEOMETRY_BOUNDS: Record<string, { min: number; max: number }> = {
   resolveShape: { min: 0.5, max: 3.0 },
   slippageAllowance: { min: 0, max: 0.01 },
   spreadCaptureFraction: { min: 0, max: 0.005 },
+  minEdgeCostFraction: { min: 0, max: 1 },
 };
 
 function clamp(x: number, lo: number, hi: number): number {
@@ -276,6 +291,17 @@ export function costFloorWidth(cfg: ScalpGeometryConfig): number {
 }
 
 /**
+ * The net-edge threshold the EV gate should actually apply.
+ *
+ * In throughput mode the optimum yields EV = C, so the threshold must be a fraction of C.
+ * Applying an absolute figure sized for a different geometry blocks everything.
+ */
+export function resolveMinimumEdge(cfg: ScalpGeometryConfig): number {
+  if (!cfg.throughputOptimal) return cfg.minimumEdge;
+  return effectiveRoundTripCost(cfg) * cfg.minEdgeCostFraction;
+}
+
+/**
  * Split W into target and stop so the realized win rate lands on targetWinRate.
  * Returns the reward:risk ratio T/S.
  */
@@ -320,7 +346,7 @@ export function resolveScalpGeometry(
       costFloorTarget,
       volatilityTarget: 0,
       bindingConstraint: "COST_FLOOR",
-      requiredExcessWinRate: (effectiveRoundTripCost(cfg) + cfg.minimumEdge) / (targetPct + stopPct),
+      requiredExcessWinRate: (effectiveRoundTripCost(cfg) + resolveMinimumEdge(cfg)) / (targetPct + stopPct),
       neutralWinRate: stopPct / (targetPct + stopPct),
       resolveProbability: 0,
       barsToTarget: Number.POSITIVE_INFINITY,
@@ -365,7 +391,7 @@ export function resolveScalpGeometry(
     costFloorTarget,
     volatilityTarget,
     bindingConstraint,
-    requiredExcessWinRate: (effectiveRoundTripCost(cfg) + cfg.minimumEdge) / (targetPct + stopPct),
+    requiredExcessWinRate: (effectiveRoundTripCost(cfg) + resolveMinimumEdge(cfg)) / (targetPct + stopPct),
     neutralWinRate: stopPct / (targetPct + stopPct),
     resolveProbability,
     barsToTarget,

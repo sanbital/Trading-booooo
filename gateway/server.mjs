@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 // withdrawal, transfer, margin, futures, leverage, or API-key management routes.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "5.7.3";
+const VERSION = "5.8.1";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
@@ -663,12 +663,53 @@ async function binancePortfolio() {
     commission_rates: account?.commissionRates || null,
   };
 }
+/**
+ * v5.8: executed trade flow.
+ *
+ * With mechanical time exits removed, market data is the ONLY thing that closes a losing
+ * position before its stop. Until now the monitor received the orderbook and nothing else,
+ * so it could see resting intent but never actual aggression — the single most direct
+ * evidence that a thesis has died. Both endpoints are public and cost one extra call.
+ *
+ * Returns a signed pressure in [-1, 1]: +1 is pure buyer aggression, -1 pure seller.
+ * Weighted by recency so a burst thirty seconds ago does not outvote what is happening now.
+ */
+const TRADE_FLOW_HALF_LIFE_MS = 20_000;
+
+function summarizeTradeFlow(trades, nowMs) {
+  let buy = 0;
+  let sell = 0;
+  let latest = 0;
+  for (const t of trades) {
+    const notional = t.price * t.qty;
+    if (!(notional > 0)) continue;
+    const age = Math.max(0, nowMs - t.ts);
+    const weight = Math.pow(0.5, age / TRADE_FLOW_HALF_LIFE_MS);
+    if (t.buyerTaker) buy += notional * weight;
+    else sell += notional * weight;
+    if (t.ts > latest) latest = t.ts;
+  }
+  const total = buy + sell;
+  return {
+    pressure: total > 0 ? (buy - sell) / total : 0,
+    buy_notional: buy,
+    sell_notional: sell,
+    trade_count: trades.length,
+    last_trade_at: latest || null,
+    half_life_ms: TRADE_FLOW_HALF_LIFE_MS,
+  };
+}
+
+const EMPTY_FLOW = { pressure: 0, buy_notional: 0, sell_notional: 0, trade_count: 0, last_trade_at: null, half_life_ms: TRADE_FLOW_HALF_LIFE_MS };
+
 async function quote(exchange, market) {
   const symbol = validateMarket(exchange, market);
   if (exchange === "upbit") {
-    const [tickers, books] = await Promise.all([
+    const [tickers, books, ticks] = await Promise.all([
       publicUpbit("/v1/ticker", { markets: symbol }),
       publicUpbit("/v1/orderbook", { markets: symbol }),
+      // Trade flow must never be able to break a quote the exit path depends on.
+      publicUpbit("/v1/trades/ticks", { market: symbol, count: 100 }).catch(() => null),
     ]);
     const ticker = Array.isArray(tickers) ? tickers[0] : null;
     const book = Array.isArray(books) ? books[0] : null;
@@ -679,12 +720,25 @@ async function quote(exchange, market) {
       best_bid: Number(units[0]?.bid_price || ticker?.trade_price || 0),
       asks: units.map((unit) => ({ price: Number(unit.ask_price), size: Number(unit.ask_size) })),
       bids: units.map((unit) => ({ price: Number(unit.bid_price), size: Number(unit.bid_size) })),
+      // ask_bid === "BID" means the BUYER lifted the offer, i.e. buyer-initiated.
+      trade_flow: Array.isArray(ticks)
+        ? summarizeTradeFlow(
+          ticks.map((t) => ({
+            price: Number(t.trade_price),
+            qty: Number(t.trade_volume),
+            ts: Number(t.timestamp) || Date.now(),
+            buyerTaker: String(t.ask_bid).toUpperCase() === "BID",
+          })),
+          Date.now(),
+        )
+        : EMPTY_FLOW,
       raw: { ticker, book },
     };
   }
-  const [ticker, depth] = await Promise.all([
+  const [ticker, depth, trades] = await Promise.all([
     publicBinance("/api/v3/ticker/bookTicker", { symbol }),
     publicBinance("/api/v3/depth", { symbol, limit: 100 }),
+    publicBinance("/api/v3/trades", { symbol, limit: 100 }).catch(() => null),
   ]);
   const asks = Array.isArray(depth?.asks) ? depth.asks.map(([price, size]) => ({ price: Number(price), size: Number(size) })) : [];
   const bids = Array.isArray(depth?.bids) ? depth.bids.map(([price, size]) => ({ price: Number(price), size: Number(size) })) : [];
@@ -692,7 +746,20 @@ async function quote(exchange, market) {
   const bestBid = Number(ticker?.bidPrice || bids[0]?.price || 0);
   return {
     exchange, market: symbol, current: bestAsk > 0 && bestBid > 0 ? (bestAsk + bestBid) / 2 : Number(ticker?.price || 0),
-    best_ask: bestAsk, best_bid: bestBid, asks, bids, raw: { ticker, depth },
+    best_ask: bestAsk, best_bid: bestBid, asks, bids,
+    // isBuyerMaker === true means the buyer was resting, so the SELLER was the aggressor.
+    trade_flow: Array.isArray(trades)
+      ? summarizeTradeFlow(
+        trades.map((t) => ({
+          price: Number(t.price),
+          qty: Number(t.qty),
+          ts: Number(t.time) || Date.now(),
+          buyerTaker: t.isBuyerMaker === false,
+        })),
+        Date.now(),
+      )
+      : EMPTY_FLOW,
+    raw: { ticker, depth },
   };
 }
 

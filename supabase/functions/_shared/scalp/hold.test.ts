@@ -3,8 +3,8 @@ import {
   DEFAULT_SCALP_HOLD,
   decayedPWin,
   evaluateHold,
+  marketDataStale,
   resolveHoldConfig,
-  safetyTtlExceeded,
   type HoldInputs,
 } from "./hold.ts";
 
@@ -20,17 +20,8 @@ const base: HoldInputs = {
   liveImbalance: 0.20,
   reversalStreak: 0,
   heldMinutes: 5,
-  expectedMinutes: 90,
   t1Completed: false,
 };
-
-Deno.test("a live position is not sold merely because time passed", () => {
-  // Two hours in, past the expected resolution time, but the book still supports it.
-  const d = evaluateHold({ ...base, heldMinutes: 120, expectedMinutes: 90 }, cfg);
-  assertEquals(d.pastExpected, true);
-  assertEquals(d.action, "HOLD");
-  assert(d.liveEdge > 0);
-});
 
 Deno.test("upside is measured from the current price, not the entry", () => {
   const early = evaluateHold({ ...base, currentPrice: 100.1 }, cfg);
@@ -61,7 +52,6 @@ Deno.test("a faded position with no room left is exited", () => {
     ...base,
     currentPrice: 101.95,
     heldMinutes: 200,
-    expectedMinutes: 90,
     liveImbalance: 0,
   }, cfg);
   assertEquals(d.action, "EXIT");
@@ -101,21 +91,6 @@ Deno.test("a trend flip to strong down exits", () => {
   assertEquals(evaluateHold({ ...base, h4TrendSignal: -0.3 }, cfg).action, "HOLD");
 });
 
-Deno.test("past the expected time the bar rises but stays finite", () => {
-  // Stop already trailed up to 100.2, so the remaining risk is small and the position is
-  // genuinely marginal rather than obviously bad. Before the expected time the bar is
-  // "positive"; after it the position must clear minEdgeAfterExpected to keep its slot.
-  const strict = { ...cfg, minEdgeAfterExpected: 0.0035 };
-  const marginal = { ...base, currentPrice: 100.8, stopPrice: 100.2, expectedMinutes: 90 };
-  const before = evaluateHold({ ...marginal, heldMinutes: 10 }, strict);
-  const after = evaluateHold({ ...marginal, heldMinutes: 100 }, strict);
-  assertEquals(before.action, "HOLD");
-  assertEquals(after.action, "EXIT");
-  assertEquals(after.reason, "edge_below_hold_threshold");
-  // Still positive edge — it is being closed for slot economics, not because it is losing.
-  assert(after.liveEdge > 0);
-});
-
 Deno.test("a near-target position with a distant stop is closed on economics alone", () => {
   // Almost no upside left and a stop 2.5% below: continuing to hold is negative EV even
   // though nothing is "wrong". This is the case the old 30-minute clock got right only by
@@ -130,23 +105,55 @@ Deno.test("a profitable runner past T1 is tightened rather than dumped", () => {
     ...base,
     currentPrice: 101.9,
     heldMinutes: 200,
-    expectedMinutes: 90,
     t1Completed: true,
     liveImbalance: 0,
   }, cfg);
   assertEquals(d.action, "TIGHTEN");
 });
 
-Deno.test("safety TTL is a backstop, not a trading rule", () => {
-  assertEquals(safetyTtlExceeded(359, cfg), false);
-  assertEquals(safetyTtlExceeded(360, cfg), true);
-  // And it is nowhere near the old 30-minute forced exit.
-  assert(cfg.safetyTtlMinutes >= 60);
-});
-
 Deno.test("hold config clamps hostile overrides", () => {
-  const c = resolveHoldConfig({ safetyTtlMinutes: 1, reversalConfirmations: 99, alphaHalfLifeMinutes: -5 });
-  assert(c.safetyTtlMinutes >= 10);
+  const c = resolveHoldConfig({ staleDataMinutes: 1, reversalConfirmations: 99, alphaHalfLifeMinutes: -5 });
+  assert(c.staleDataMinutes >= 5);
   assert(c.reversalConfirmations <= 10);
   assert(c.alphaHalfLifeMinutes >= 1);
+});
+
+Deno.test("elapsed time alone never closes a position", () => {
+  // The constraint: a scalp is sold on market data, not on a clock. A position with an
+  // intact live edge is held whether it is five minutes or five hours old.
+  for (const held of [5, 45, 120, 600, 5000]) {
+    assertEquals(evaluateHold({ ...base, heldMinutes: held, liveImbalance: 0.35 }, cfg).action, "HOLD");
+  }
+});
+
+Deno.test("executed flow turning against the position closes it", () => {
+  // Resting orders state intent; trades state what actually happened.
+  const first = evaluateHold({ ...base, tradePressure: -0.55 }, cfg);
+  assertEquals(first.flowReversalStreak, 1);
+  assertEquals(first.action, "HOLD");
+  const second = evaluateHold({ ...base, tradePressure: -0.55, flowReversalStreak: first.flowReversalStreak }, cfg);
+  assertEquals(second.action, "EXIT");
+  assertEquals(second.reason, "trade_flow_reversal_confirmed");
+  // Buying pressure clears the streak.
+  assertEquals(evaluateHold({ ...base, tradePressure: 0.4, flowReversalStreak: 1 }, cfg).flowReversalStreak, 0);
+});
+
+Deno.test("a liquidity event closes the position", () => {
+  const wide = evaluateHold({ ...base, spreadBps: cfg.maxSpreadBps + 10 }, cfg);
+  assertEquals(wide.action, "EXIT");
+  assertEquals(wide.reason, "spread_blowout");
+  const thin = evaluateHold({ ...base, bidDepthRatio: cfg.minBidDepthRatio / 2 }, cfg);
+  assertEquals(thin.action, "EXIT");
+  assertEquals(thin.reason, "bid_support_evaporated");
+  // Healthy readings do not.
+  assertEquals(evaluateHold({ ...base, spreadBps: 8, bidDepthRatio: 0.9 }, cfg).action, "HOLD");
+});
+
+Deno.test("missing market data is an alert, not a sell", () => {
+  // The only remaining time-shaped check asks whether DATA is arriving, and it closes
+  // nothing — the caller raises an operator alert instead.
+  assertEquals(marketDataStale(cfg.staleDataMinutes - 1, cfg), false);
+  assertEquals(marketDataStale(cfg.staleDataMinutes, cfg), true);
+  // Even at that point evaluateHold itself still refuses to exit on time alone.
+  assertEquals(evaluateHold({ ...base, heldMinutes: 10_000, liveImbalance: 0.35 }, cfg).action, "HOLD");
 });

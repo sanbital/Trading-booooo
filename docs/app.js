@@ -960,7 +960,7 @@
     // '강제청산 시각'이 아니라 변동성으로 산출하는 '목표 도달 예상시간의 상한'이며,
     // 실제로 시간 때문에 청산되는 시점은 scalp_safety_ttl_minutes 다.
     $("trader-strategy-note").textContent = strategy === "SCALP"
-      ? `도달예상 ≤${fmt(settings.scalp_max_holding_minutes, 0)}분 · 안전청산 ${fmt(settings.scalp_safety_ttl_minutes, 0)}분`
+      ? `시간 기반 청산 없음 · 도달예상 ≤${fmt(settings.scalp_max_holding_minutes, 0)}분`
       : "상위 추세 중심";
     $("scalp-risk").textContent = strategy === "SCALP"
       ? `1회 -${fmt(settings.scalp_max_single_loss_pct, 1)}% · 1일 -${fmt(settings.scalp_daily_loss_pct, 1)}%`

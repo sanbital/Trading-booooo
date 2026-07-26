@@ -6,12 +6,13 @@ import type { EventRiskSnapshot } from "./event-risk.ts";
 import { evaluateScalpSignal, resolveScalpSignalConfig, type ScalpSignalResult } from "../_shared/scalp/signal.ts";
 import {
   resolveGeometryConfig,
+  resolveMinimumEdge,
   resolveScalpGeometry,
   sigmaFromAtrPct,
   type ScalpGeometry,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "5.7.3";
+export const ENGINE_VERSION = "5.8.1";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -2768,6 +2769,8 @@ export function finalizeCandidate(
           targetPct: scalpGeometry.targetPct,
           stopPct: scalpGeometry.stopPct,
           roundTripFeeFraction: geometryConfig.roundTripFeeFraction,
+          // v5.8.1: the gate must use the threshold the geometry was solved for.
+          minimumEdge: resolveMinimumEdge(geometryConfig),
           resolveProbability: scalpGeometry.resolveProbability,
           // v5.7: pWin must be anchored to the barrier geometry. Without this a wide
           // target inherits the probability of a narrow one and its EV is inflated.

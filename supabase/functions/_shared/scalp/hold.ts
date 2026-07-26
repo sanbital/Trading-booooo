@@ -45,17 +45,30 @@ export interface ScalpHoldConfig {
   liveImbalanceWeight: number;
   /** One-side exit cost (fee + expected slippage) as a fraction. */
   exitCostFraction: number;
+  /** Executed-flow pressure at or below this is treated as seller aggression. */
+  reversalTradePressure: number;
   /**
-   * Edge required to keep holding once the position is past its expected resolution
-   * time. Before that point the bar is simply "edge > 0".
+   * Spread, in basis points, at which execution cost alone is judged to have destroyed
+   * what is left of the trade. A blowout is a liquidity event, not a clock.
    */
-  minEdgeAfterExpected: number;
+  maxSpreadBps: number;
+  /**
+   * Bid-side depth as a fraction of what it was at entry. Support evaporating underneath
+   * a position is a market fact and closes it.
+   */
+  minBidDepthRatio: number;
   /** Live imbalance at or below this is treated as an orderbook reversal. */
   reversalImbalance: number;
   /** Consecutive reversal observations required before acting on it. */
   reversalConfirmations: number;
-  /** Absolute backstop. Not a trading rule — a stuck-ledger guard. */
-  safetyTtlMinutes: number;
+  /**
+   * v5.8: NOT a holding-time limit.
+   *
+   * Minutes without a usable market evaluation before the position is flagged for operator
+   * review. The trigger is missing DATA, not elapsed time: a position with live quotes is
+   * never closed for being old, however long it has been open.
+   */
+  staleDataMinutes: number;
   pWinFloor: number;
   pWinCeil: number;
 }
@@ -65,10 +78,12 @@ export const DEFAULT_SCALP_HOLD: ScalpHoldConfig = {
   basePWin: 0.52,
   liveImbalanceWeight: 0.18,
   exitCostFraction: 0.0008,
-  minEdgeAfterExpected: 0.0005,
+  reversalTradePressure: -0.30,
+  maxSpreadBps: 40,
+  minBidDepthRatio: 0.35,
   reversalImbalance: -0.25,
   reversalConfirmations: 2,
-  safetyTtlMinutes: 360,
+  staleDataMinutes: 30,
   pWinFloor: 0.05,
   pWinCeil: 0.95,
 };
@@ -77,10 +92,12 @@ export const HOLD_BOUNDS: Record<string, { min: number; max: number }> = {
   alphaHalfLifeMinutes: { min: 1, max: 240 },
   liveImbalanceWeight: { min: 0, max: 0.4 },
   exitCostFraction: { min: 0, max: 0.01 },
-  minEdgeAfterExpected: { min: 0, max: 0.01 },
+  reversalTradePressure: { min: -1, max: 0 },
+  maxSpreadBps: { min: 10, max: 200 },
+  minBidDepthRatio: { min: 0, max: 1 },
   reversalImbalance: { min: -1, max: 0 },
   reversalConfirmations: { min: 1, max: 10 },
-  safetyTtlMinutes: { min: 10, max: 10_080 },
+  staleDataMinutes: { min: 5, max: 1440 },
 };
 
 function clamp(x: number, lo: number, hi: number): number {
@@ -119,9 +136,16 @@ export interface HoldInputs {
   reversalStreak: number;
   /** v5.7: barrier-implied baseline the entry edge was measured against. 0 = unknown. */
   neutralWinRate?: number;
+  /** Used ONLY to decay the entry signal's weight. Never to trigger an exit. */
   heldMinutes: number;
-  /** Volatility-derived expected time to resolution, from geometry.ts. */
-  expectedMinutes: number;
+  /** Recency-weighted executed flow, -1..1. Positive is buyer aggression. */
+  tradePressure?: number;
+  /** Consecutive prior observations of seller-dominated flow. */
+  flowReversalStreak?: number;
+  /** Current spread in basis points. */
+  spreadBps?: number | null;
+  /** Bid-side depth now, as a fraction of the depth observed at entry. */
+  bidDepthRatio?: number | null;
   /** Live orderflow status, when available. */
   dynamicStatus?: string;
   /** 4h trend signal, when available — a hard flip is a real exit reason. */
@@ -137,8 +161,8 @@ export interface HoldDecision {
   livePWin: number;
   remainingUpside: number;
   remainingDownside: number;
-  pastExpected: boolean;
   reversalStreak: number;
+  flowReversalStreak: number;
 }
 
 /**
@@ -171,7 +195,11 @@ export function evaluateHold(
   const reversed = input.liveImbalance <= cfg.reversalImbalance;
   const reversalStreak = reversed ? Math.max(0, input.reversalStreak) + 1 : 0;
   const livePWin = decayedPWin(input.entryPWin, input.liveImbalance, input.heldMinutes, cfg, input.neutralWinRate ?? 0);
-  const pastExpected = input.expectedMinutes > 0 && input.heldMinutes >= input.expectedMinutes;
+  // v5.8: elapsed time no longer participates in the decision. It survives only inside
+  // decayedPWin(), where it lowers the weight of a stale entry reading — a confidence
+  // model, not a clock. A position whose live edge is intact is held indefinitely.
+  const flowReversed = (input.tradePressure ?? 0) <= cfg.reversalTradePressure;
+  const flowReversalStreak = flowReversed ? Math.max(0, input.flowReversalStreak ?? 0) + 1 : 0;
 
   // Upside still available FROM HERE, and risk still at stake from here.
   const remainingUpside = price > 0 ? Math.max(0, (input.targetPrice - price) / price) : 0;
@@ -179,7 +207,7 @@ export function evaluateHold(
   // Exit cost only. The entry leg is sunk.
   const liveEdge = livePWin * remainingUpside - (1 - livePWin) * remainingDownside - cfg.exitCostFraction;
 
-  const base = { liveEdge, livePWin, remainingUpside, remainingDownside, pastExpected, reversalStreak };
+  const base = { liveEdge, livePWin, remainingUpside, remainingDownside, reversalStreak, flowReversalStreak };
 
   // --- hard exits: the entry thesis is not merely weaker, it is contradicted -----------
   if (input.dynamicStatus && HOLD_RISK_STATUSES.has(input.dynamicStatus)) {
@@ -194,29 +222,46 @@ export function evaluateHold(
   if (reversalStreak >= cfg.reversalConfirmations) {
     return { action: "EXIT", reason: "orderbook_reversal_confirmed", ...base };
   }
+  // Executed flow turning against the position is the most direct evidence the thesis is
+  // dead — resting orders state intent, trades state what actually happened.
+  if (flowReversalStreak >= cfg.reversalConfirmations) {
+    return { action: "EXIT", reason: "trade_flow_reversal_confirmed", ...base };
+  }
+  // Liquidity events. Both are market facts, both destroy the remaining trade.
+  if (input.spreadBps != null && Number.isFinite(input.spreadBps) && input.spreadBps > cfg.maxSpreadBps) {
+    return { action: "EXIT", reason: "spread_blowout", ...base };
+  }
+  if (input.bidDepthRatio != null && Number.isFinite(input.bidDepthRatio) && input.bidDepthRatio < cfg.minBidDepthRatio) {
+    return { action: "EXIT", reason: "bid_support_evaporated", ...base };
+  }
 
   // --- economic exit ------------------------------------------------------------------
-  // Before the expected resolution time the bar is simply "still positive". After it, the
-  // position must justify continued occupancy of a slot.
-  const requiredEdge = pastExpected ? cfg.minEdgeAfterExpected : 0;
-  if (liveEdge < requiredEdge) {
+  // One bar, and it does not move with the clock: is there still positive expected value
+  // in holding, priced against what it costs to get out?
+  if (liveEdge < 0) {
     // In profit with a faded edge, tighten rather than dump — the trailing stop can still
     // capture more than an immediate market sell, and the runner is already protected at
     // breakeven once T1 is done.
     if (input.t1Completed && price > input.entryPrice) {
-      return { action: "TIGHTEN", reason: pastExpected ? "edge_faded_past_expected" : "edge_faded", ...base };
+      return { action: "TIGHTEN", reason: "edge_faded", ...base };
     }
-    return { action: "EXIT", reason: pastExpected ? "edge_below_hold_threshold" : "edge_negative", ...base };
+    return { action: "EXIT", reason: "edge_negative", ...base };
   }
 
-  return { action: "HOLD", reason: pastExpected ? "edge_intact_past_expected" : "edge_intact", ...base };
+  return { action: "HOLD", reason: "edge_intact", ...base };
 }
 
 /**
- * The absolute backstop. This is deliberately NOT part of evaluateHold: it is not a
- * trading judgement, it is protection against a stuck ledger or a monitor that stopped
- * updating. Operator-configurable; default 6 hours.
+ * v5.8: the only remaining time-shaped check, and it does not sell anything.
+ *
+ * It asks whether the position still has LIVE MARKET DATA behind it. A position that is
+ * being evaluated every cycle is never closed for being old; a position whose quotes have
+ * stopped arriving is not being managed at all, and that is an operator matter — the
+ * caller raises an alert rather than liquidating on a guess about a market it cannot see.
  */
-export function safetyTtlExceeded(heldMinutes: number, cfg: ScalpHoldConfig = DEFAULT_SCALP_HOLD): boolean {
-  return heldMinutes >= cfg.safetyTtlMinutes;
+export function marketDataStale(
+  minutesSinceEvaluation: number,
+  cfg: ScalpHoldConfig = DEFAULT_SCALP_HOLD,
+): boolean {
+  return minutesSinceEvaluation >= cfg.staleDataMinutes;
 }

@@ -25,11 +25,12 @@ import {
 import { scalpEntryDecision } from "../_shared/scalp/scalp-gate.ts";
 import { DEFAULT_SCALP_SIGNAL, refreshPWinAtOrderTime } from "../_shared/scalp/signal.ts";
 import { applyCalibration, IDENTITY_CALIBRATION, type CalibrationModel } from "../_shared/scalp/calibration.ts";
-import { evaluateHold, resolveHoldConfig, safetyTtlExceeded, type ScalpHoldConfig } from "../_shared/scalp/hold.ts";
+import { evaluateHold, marketDataStale, resolveHoldConfig, type ScalpHoldConfig } from "../_shared/scalp/hold.ts";
 import { DEFAULT_SCALP_SAFETY, type ScalpSafetyConfig, type ScalpDayState } from "../_shared/scalp/safety.ts";
 import { DEFAULT_COST_MODEL, type CostModelConfig } from "../_shared/scalp/cost-model.ts";
+import { resolveGeometryConfig, resolveMinimumEdge } from "../_shared/scalp/geometry.ts";
 
-const VERSION = "5.7.3";
+const VERSION = "5.8.1";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -426,6 +427,7 @@ async function runScanner(portfolios: Record<Exchange, any>, settings: TradingSe
             ? 0
             : finite((settings as any).scalp_spread_capture, 0.0005),
           minimumEdge: finite((settings as any).scalp_minimum_edge, DEFAULT_COST_MODEL.minimumEdge),
+          minEdgeCostFraction: finite((settings as any).scalp_min_edge_cost_fraction, 0.25),
           maxHorizonMinutes: finite((settings as any).scalp_max_holding_minutes, 120),
         },
         capital_krw: Math.max(10_000, finite(portfolios.upbit?.managed?.managedCapitalQuote, portfolios.upbit?.available_quote || 10_000)),
@@ -491,6 +493,14 @@ function topOfBookImbalance(bids: Array<{ price: number; size: number }>, asks: 
   }
   const total = bid + ask;
   return total > 0 ? (bid - ask) / total : 0;
+}
+
+/** Total resting bid notional in the visible book. */
+function bidDepthQuote(book: any): number {
+  return (Array.isArray(book?.bids) ? book.bids : []).reduce(
+    (total: number, level: any) => total + finite(level?.price ?? level?.[0]) * finite(level?.size ?? level?.[1]),
+    0,
+  );
 }
 
 function candidatePlan(candidate: Candidate, settings?: TradingSettings) {
@@ -723,10 +733,24 @@ function scalpSafetyConfig(settings: TradingSettings): ScalpSafetyConfig {
 }
 
 function scalpCostConfig(settings: TradingSettings, exchange: Exchange, feePct = FEE_PCT[exchange]): CostModelConfig {
+  // v5.8.1: the order-time gate must apply the SAME threshold the barriers were solved
+  // for. Holding an absolute 0.10% here while the throughput optimum yields 0.08% per
+  // trade rejected every candidate the design was built to accept.
+  const maker = (settings as any).scalp_maker_entry !== false;
+  const geometry = resolveGeometryConfig({
+    roundTripFeeFraction: feePct * 2 / 100,
+    slippageAllowance: maker
+      ? finite((settings as any).scalp_maker_slippage_allowance, 0.0003)
+      : finite((settings as any).scalp_slippage_allowance, 0.0009),
+    spreadCaptureFraction: maker ? finite((settings as any).scalp_spread_capture, 0.0005) : 0,
+    edgeBudget: finite((settings as any).scalp_edge_budget, 0.10),
+    minEdgeCostFraction: finite((settings as any).scalp_min_edge_cost_fraction, 0.25),
+    minimumEdge: finite((settings as any).scalp_minimum_edge, DEFAULT_COST_MODEL.minimumEdge),
+  });
   return {
     ...DEFAULT_COST_MODEL,
     roundTripFeeFraction: feePct * 2 / 100,
-    minimumEdge: finite((settings as any).scalp_minimum_edge, DEFAULT_COST_MODEL.minimumEdge),
+    minimumEdge: resolveMinimumEdge(geometry),
   };
 }
 
@@ -959,6 +983,9 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
     metadata: {
       cycle_id: cycleId, sizing, managed_allocation: managed, quote_at_entry: market,
       execution_depth: depth, live_spread_bps: spreadBps, engine_version: VERSION,
+      // Baseline for the bid-support check: how much resting bid stood under the position
+      // at entry. A large fall in this is support evaporating.
+      entry_bid_depth_quote: bidDepthQuote(market),
       // v5.3: the full entry-time signal, persisted so the pWin calibration loop can
       // later join predicted probability against the realized outcome on this row.
       scalp_signal: scalpAudit,
@@ -1202,10 +1229,12 @@ async function botLockedQuantities(exchange: Exchange, positions: Position[]): P
 function scalpHoldConfig(settings: TradingSettings, exchange: Exchange): ScalpHoldConfig {
   return resolveHoldConfig({
     alphaHalfLifeMinutes: finite((settings as any).scalp_hold_alpha_half_life_minutes, 12),
-    minEdgeAfterExpected: finite((settings as any).scalp_hold_min_edge_after_expected, 0.0005),
     reversalImbalance: finite((settings as any).scalp_hold_reversal_imbalance, -0.25),
+    reversalTradePressure: finite((settings as any).scalp_hold_reversal_trade_pressure, -0.30),
+    maxSpreadBps: finite((settings as any).scalp_hold_max_spread_bps, 40),
+    minBidDepthRatio: finite((settings as any).scalp_hold_min_bid_depth_ratio, 0.35),
     reversalConfirmations: finite((settings as any).scalp_hold_reversal_confirmations, 2),
-    safetyTtlMinutes: finite((settings as any).scalp_safety_ttl_minutes, 360),
+    staleDataMinutes: finite((settings as any).scalp_stale_data_minutes, 30),
     // One side only: the entry leg is sunk cost and must not be charged again.
     exitCostFraction: FEE_PCT[exchange] / 100 + finite((settings as any).scalp_slippage_allowance, 0.0009) / 2,
   });
@@ -1837,14 +1866,15 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           continue;
         }
       }
-      let decision = decideExit(position, current, Date.now(), settings.emergency_liquidation);
+      const scalpMode = (settings as any).strategy === "SCALP";
+      let decision = decideExit(position, current, Date.now(), settings.emergency_liquidation, !scalpMode);
       // v5.4: replace the fixed time exit with a live-edge test.
       //
       // decideExit() still returns TIME_EXIT at max_holding_at, but for SCALP that column
       // now holds the operator's SAFETY TTL (default 6h), not a 30-minute trading rule.
       // Everything between entry and that backstop is decided by whether the reason for
       // the trade is still true.
-      if ((settings as any).strategy === "SCALP" && decision.action === "NONE" && !settings.emergency_liquidation) {
+      if (scalpMode && decision.action === "NONE" && !settings.emergency_liquidation) {
         const holdCfg = scalpHoldConfig(settings, exchange);
         const book = books[position.market];
         const liveImbalance = book
@@ -1867,14 +1897,44 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           liveImbalance,
           reversalStreak: Math.max(0, Math.floor(finite(position.metadata?.hold_reversal_streak))),
           heldMinutes,
-          expectedMinutes: finite(position.metadata?.scalp_expected_minutes, 0),
+          // v5.8: executed flow, spread and bid support — the market data that now carries
+          // the entire burden of closing a position early.
+          tradePressure: finite(book?.trade_flow?.pressure, 0),
+          flowReversalStreak: Math.max(0, Math.floor(finite(position.metadata?.hold_flow_reversal_streak))),
+          spreadBps: book && finite(book.best_bid) > 0
+            ? (finite(book.best_ask) / finite(book.best_bid) - 1) * 10_000
+            : null,
+          bidDepthRatio: finite(position.metadata?.entry_bid_depth_quote, 0) > 0 && book
+            ? bidDepthQuote(book) / finite(position.metadata?.entry_bid_depth_quote)
+            : null,
           t1Completed: position.t1_completed === true,
         }, holdCfg);
 
-        if (hold.reversalStreak !== finite(position.metadata?.hold_reversal_streak)) {
+        if (
+          hold.reversalStreak !== finite(position.metadata?.hold_reversal_streak) ||
+          hold.flowReversalStreak !== finite(position.metadata?.hold_flow_reversal_streak)
+        ) {
           position = { ...position, ...(await patch("trading_positions", `id=eq.${position.id}`, {
-            metadata: { ...(position.metadata || {}), hold_reversal_streak: hold.reversalStreak, last_hold_edge: hold.liveEdge, last_hold_p_win: hold.livePWin, last_hold_at: new Date().toISOString() },
+            metadata: {
+              ...(position.metadata || {}),
+              hold_reversal_streak: hold.reversalStreak,
+              hold_flow_reversal_streak: hold.flowReversalStreak,
+              last_hold_edge: hold.liveEdge, last_hold_p_win: hold.livePWin,
+              last_hold_at: new Date().toISOString(),
+            },
           }))[0] };
+        }
+        // v5.8: a position that has stopped receiving quotes is not being managed. That is
+        // an operator matter, not a reason to sell blind into a market we cannot see.
+        const lastEval = Date.parse(String(position.metadata?.last_hold_at || position.opened_at || ""));
+        const minutesSinceEval = Number.isFinite(lastEval) ? (Date.now() - lastEval) / 60_000 : 0;
+        if (marketDataStale(minutesSinceEval, holdCfg) && !position.metadata?.stale_data_flagged_at) {
+          await patch("trading_positions", `id=eq.${position.id}`, {
+            metadata: { ...(position.metadata || {}), stale_data_flagged_at: new Date().toISOString() },
+          });
+          await event("POSITION_UNEVALUATED", `${exchange}:${position.market} no usable market data for ${Math.round(minutesSinceEval)}m; review required`, {
+            minutes_since_evaluation: Math.round(minutesSinceEval),
+          }, { cycleId, positionId: position.id, level: "CRITICAL" });
         }
         if (hold.action === "EXIT") {
           decision = { action: "STOP", fraction: 1, reason: `live_hold:${hold.reason}` } as any;
@@ -1916,7 +1976,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           continue;
         }
         if (String(position.state) !== "OPEN" || finite(position.remaining_quantity) <= 0) continue;
-        const recheck = decideExit(position, current, Date.now(), settings.emergency_liquidation);
+        const recheck = decideExit(position, current, Date.now(), settings.emergency_liquidation, !scalpMode);
         if (recheck.action === "NONE") continue;
         decision = recheck;
       }
