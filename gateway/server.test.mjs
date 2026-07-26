@@ -38,6 +38,12 @@ test("Binance quantity flooring obeys LOT_SIZE step", () => {
   assert.equal(module.floorStep(1.234567, 0.001), 1.234);
   assert.equal(module.floorStep(0.000019, 0.00001), 0.00001);
 });
+test("Binance quantity formatting never leaks floating-point precision", () => {
+  assert.equal(module.formatStep(2.0600000000000005, 0.01), "2.06");
+  assert.equal(module.formatStep(1.23456789, 0.001), "1.234");
+  assert.equal(module.formatStep(0.000019, 0.00001), "0.00001");
+  assert.equal(module.stepPrecision(1e-8), 8);
+});
 test("normalized orders use a common state model", () => {
   const upbit = module.normalizeUpbitOrder({ uuid: "u", identifier: "tb-a", state: "done", executed_volume: "2", executed_funds: "20", paid_fee: "0.01", trades: [] });
   assert.equal(upbit.status, "FILLED");

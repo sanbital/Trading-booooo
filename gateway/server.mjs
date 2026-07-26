@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 // withdrawal, transfer, margin, futures, leverage, or API-key management routes.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "5.2.2";
+const VERSION = "5.2.4";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
@@ -74,11 +74,21 @@ function decimal(value, maxDecimals = 16) {
   if (!Number.isFinite(n)) throw new Error("invalid decimal value");
   return n.toFixed(maxDecimals).replace(/0+$/, "").replace(/\.$/, "");
 }
+function stepPrecision(step) {
+  const text = String(step).toLowerCase();
+  if (text.includes("e-")) return Math.min(16, Math.max(0, Number(text.split("e-")[1]) || 0));
+  return Math.min(16, Math.max(0, (text.split(".")[1] || "").replace(/0+$/, "").length));
+}
 function floorStep(value, step) {
   const v = Number(value); const s = Number(step);
   if (!(v > 0 && s > 0)) return 0;
-  const precision = Math.min(16, Math.max(0, (String(s).split(".")[1] || "").replace(/0+$/, "").length));
+  const precision = stepPrecision(s);
   return Number((Math.floor((v + s * 1e-9) / s) * s).toFixed(precision));
+}
+function formatStep(value, step) {
+  const floored = floorStep(value, step);
+  if (!(floored > 0)) return "0";
+  return floored.toFixed(stepPrecision(step));
 }
 function pairs(object = {}) {
   const result = [];
@@ -492,7 +502,10 @@ function conformBinanceOrder(payload, info) {
     symbol: info.symbol,
     side,
     type,
-    quantity: decimal(quantity, 16),
+    // Keep the exact LOT_SIZE decimal precision. Converting the floored number back
+    // through a generic 16-decimal formatter can expose binary floating-point tails
+    // (for example 2.06 -> 2.0600000000000001), which Binance rejects as -1111.
+    quantity: formatStep(quantity, info.quantity_step),
     newClientOrderId: clientOrderId,
     newOrderRespType: "FULL",
   };
@@ -503,7 +516,7 @@ function conformBinanceOrder(payload, info) {
     if (info.min_notional > 0 && notional < info.min_notional) throw new Error(`Binance order notional ${notional} below ${info.min_notional}`);
     if (info.max_notional > 0 && notional > info.max_notional) throw new Error(`Binance order notional ${notional} above ${info.max_notional}`);
     if (side === "BUY") enforceBuyCaps("binance", notional);
-    order.price = decimal(price, 16);
+    order.price = formatStep(price, info.price_tick);
     order.timeInForce = String(payload.time_in_force || payload.timeInForce || "IOC").toUpperCase();
   } else if (side === "BUY") {
     throw new Error("Binance market orders are restricted to sells");
@@ -809,6 +822,8 @@ export {
   createBinanceSignature,
   createUpbitJwt,
   floorStep,
+  formatStep,
+  stepPrecision,
   upbitRateGroup,
   localRateLimit,
   normalizeBinanceOrder,
