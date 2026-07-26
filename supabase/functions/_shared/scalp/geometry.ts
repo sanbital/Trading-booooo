@@ -52,14 +52,56 @@ export interface ScalpGeometryConfig {
   /** Required net edge after all costs. */
   minimumEdge: number;
   /**
+   * v5.5: spread earned per round trip when both legs are posted rather than taken.
+   *
+   * A taker PAYS the spread twice — buying at the ask and selling at the bid — so the
+   * true round-trip cost is `fees + spread`. A maker EARNS it: buying at the bid and
+   * selling at the ask makes the cost `fees - spread`. On Upbit and Binance the maker and
+   * taker fee schedules are identical, so the entire gain is the spread.
+   *
+   * Set to 0 for taker execution.
+   */
+  spreadCaptureFraction: number;
+  /**
    * The excess win rate (over the neutral S/(T+S)) that the signal is assumed to
    * deliver. This is the single most important knob in the system: it sets how wide
    * the barriers must be. LOWER value => WIDER barriers => easier to clear costs.
    * 0.10 = "the signal is worth 10 percentage points of win rate".
    */
   edgeBudget: number;
-  /** Target : stop ratio. 2.0 => T = 2S. */
+  /**
+   * Target : stop ratio.
+   *
+   * v5.6: normally DERIVED from targetWinRate rather than set. The neutral (no-alpha)
+   * win rate of a barrier pair is S/(T+S), so a 2:1 reward:risk mathematically caps the
+   * win rate at 33% before any edge. Asking for a >50% win rate is asking for S >= T.
+   * Kept as an explicit override for taker/legacy configurations.
+   */
   rewardRiskRatio: number;
+  /**
+   * v5.6: the win rate the operator wants the bot to actually print.
+   *
+   *   realized win rate = neutral + edge = S/(T+S) + edgeBudget
+   *
+   * so the split is pinned by S/(T+S) = targetWinRate - edgeBudget. Set to 0 to fall
+   * back to the fixed rewardRiskRatio.
+   */
+  targetWinRate: number;
+  /**
+   * v5.6: size barriers for THROUGHPUT rather than per-trade margin.
+   *
+   * Total profit is (trades per hour) x (expected value per trade). Barrier resolution
+   * time scales with W^2 for a random walk, so
+   *
+   *     profit rate  ∝  (δW − C) / W²  =  δ/W − C/W²
+   *     d/dW = 0     ⇒  W* = 2C/δ,     max rate ∝ δ²/(4C)
+   *
+   * Wider is NOT better: past W* the extra edge per trade is more than paid for by the
+   * time the position occupies a slot. The break-even-plus-margin sizing used through
+   * v5.5 has no upper bound and drifts toward swing widths, which is how a scalper turns
+   * into something else. Set false to restore that behavior.
+   */
+  throughputOptimal: boolean;
   /** Target expressed as a multiple of the horizon sigma, before the cost floor. */
   targetSigmaMult: number;
   /** ATR is a mean range, not a standard deviation. sigma ~= ATR * this. */
@@ -82,8 +124,13 @@ export const DEFAULT_SCALP_GEOMETRY: ScalpGeometryConfig = {
   roundTripFeeFraction: 0.001,
   slippageAllowance: 0.0009,
   minimumEdge: 0.001,
+  // Conservative default: roughly half of the 15bp spread gate. Live spread is measured
+  // per symbol at order time; this is only the sizing assumption.
+  spreadCaptureFraction: 0.0005,
   edgeBudget: 0.10,
   rewardRiskRatio: 2.0,
+  targetWinRate: 0.58,
+  throughputOptimal: true,
   targetSigmaMult: 0.90,
   atrToSigma: 0.625,
   barMinutes: 5,
@@ -99,7 +146,9 @@ export const DEFAULT_SCALP_GEOMETRY: ScalpGeometryConfig = {
 
 export const GEOMETRY_BOUNDS: Record<string, { min: number; max: number }> = {
   edgeBudget: { min: 0.02, max: 0.30 },
-  rewardRiskRatio: { min: 1.0, max: 4.0 },
+  // Below 1.0 the target is tighter than the stop — the classic high-win-rate scalp.
+  rewardRiskRatio: { min: 0.4, max: 4.0 },
+  targetWinRate: { min: 0, max: 0.80 },
   targetSigmaMult: { min: 0.30, max: 3.0 },
   atrToSigma: { min: 0.30, max: 1.0 },
   baseHorizonMinutes: { min: 15, max: 480 },
@@ -111,6 +160,7 @@ export const GEOMETRY_BOUNDS: Record<string, { min: number; max: number }> = {
   maxStopPct: { min: 0.002, max: 0.05 },
   resolveShape: { min: 0.5, max: 3.0 },
   slippageAllowance: { min: 0, max: 0.01 },
+  spreadCaptureFraction: { min: 0, max: 0.005 },
 };
 
 function clamp(x: number, lo: number, hi: number): number {
@@ -208,16 +258,50 @@ export function barrierResolveProbability(
  *     delta_required = (C + m) / (T + S) <= edgeBudget
  *  => T + S >= (C + m) / edgeBudget
  */
+/** Round-trip cost actually borne, net of any spread the execution style earns back. */
+export function effectiveRoundTripCost(cfg: ScalpGeometryConfig): number {
+  return Math.max(0, cfg.roundTripFeeFraction + cfg.slippageAllowance - cfg.spreadCaptureFraction);
+}
+
+/**
+ * Total barrier width W = T + S.
+ *
+ * THROUGHPUT mode solves for the width that maximizes profit per unit TIME, W* = 2C/δ.
+ * LEGACY mode keeps the v5.5 break-even-plus-margin floor, which has no upper bound.
+ */
 export function costFloorWidth(cfg: ScalpGeometryConfig): number {
-  const cost = cfg.roundTripFeeFraction + cfg.slippageAllowance;
+  const cost = effectiveRoundTripCost(cfg);
+  if (cfg.throughputOptimal) return (2 * cost) / cfg.edgeBudget;
   return (cost + cfg.minimumEdge) / cfg.edgeBudget;
+}
+
+/**
+ * Split W into target and stop so the realized win rate lands on targetWinRate.
+ * Returns the reward:risk ratio T/S.
+ */
+export function resolveRewardRisk(cfg: ScalpGeometryConfig): number {
+  if (!(cfg.targetWinRate > 0)) return cfg.rewardRiskRatio;
+  // realized = S/W + edgeBudget  ⇒  S/W = targetWinRate − edgeBudget
+  const stopShare = Math.min(0.9, Math.max(0.1, cfg.targetWinRate - cfg.edgeBudget));
+  return (1 - stopShare) / stopShare;
+}
+
+/** Minimum 5m ATR (percent) for a symbol to reach `halfWidth` inside `minutes`. */
+export function scalpableAtrPct(
+  halfWidth: number,
+  minutes: number,
+  cfg: ScalpGeometryConfig = DEFAULT_SCALP_GEOMETRY,
+): number {
+  const bars = Math.max(1, minutes / cfg.barMinutes);
+  const sigma = halfWidth / Math.sqrt(bars);
+  return (sigma / cfg.atrToSigma) * 100;
 }
 
 export function resolveScalpGeometry(
   sigmaBar: number | null,
   cfg: ScalpGeometryConfig = DEFAULT_SCALP_GEOMETRY,
 ): ScalpGeometry {
-  const rr = cfg.rewardRiskRatio;
+  const rr = resolveRewardRisk(cfg);
   const floorWidth = costFloorWidth(cfg);
   const costFloorTarget = floorWidth * rr / (1 + rr);
 
@@ -236,8 +320,7 @@ export function resolveScalpGeometry(
       costFloorTarget,
       volatilityTarget: 0,
       bindingConstraint: "COST_FLOOR",
-      requiredExcessWinRate: (cfg.roundTripFeeFraction + cfg.slippageAllowance + cfg.minimumEdge) /
-        (targetPct + stopPct),
+      requiredExcessWinRate: (effectiveRoundTripCost(cfg) + cfg.minimumEdge) / (targetPct + stopPct),
       neutralWinRate: stopPct / (targetPct + stopPct),
       resolveProbability: 0,
       barsToTarget: Number.POSITIVE_INFINITY,
@@ -248,7 +331,12 @@ export function resolveScalpGeometry(
   const baseBars = cfg.baseHorizonMinutes / cfg.barMinutes;
   const volatilityTarget = cfg.targetSigmaMult * sigmaBar * Math.sqrt(baseBars);
 
-  const rawTarget = Math.max(costFloorTarget, volatilityTarget);
+  // v5.6: in throughput mode the optimum is a POINT, not a floor. A high-volatility symbol
+  // should be traded FASTER at the same width, not given a wider target — widening it
+  // trades away turnover, which is where the profit actually comes from.
+  const rawTarget = cfg.throughputOptimal
+    ? costFloorTarget
+    : Math.max(costFloorTarget, volatilityTarget);
   const targetPct = clamp(rawTarget, cfg.minTargetPct, cfg.maxTargetPct);
   const stopPct = clamp(targetPct / rr, cfg.minStopPct, cfg.maxStopPct);
 
@@ -277,8 +365,7 @@ export function resolveScalpGeometry(
     costFloorTarget,
     volatilityTarget,
     bindingConstraint,
-    requiredExcessWinRate: (cfg.roundTripFeeFraction + cfg.slippageAllowance + cfg.minimumEdge) /
-      (targetPct + stopPct),
+    requiredExcessWinRate: (effectiveRoundTripCost(cfg) + cfg.minimumEdge) / (targetPct + stopPct),
     neutralWinRate: stopPct / (targetPct + stopPct),
     resolveProbability,
     barsToTarget,

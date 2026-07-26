@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 // withdrawal, transfer, margin, futures, leverage, or API-key management routes.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "5.4.2";
+const VERSION = "5.6.0";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
@@ -443,7 +443,18 @@ async function upbitCreateOrder(payload, waitForFinalMs = 2500) {
     if (!(volume > 0)) throw new Error("Upbit market sell requires positive quantity");
     body.ord_type = "market";
     body.volume = decimal(volume, 16);
-  } else throw new Error("Upbit order type must be LIMIT or MARKET");
+  } else if (type === "LIMIT_MAKER") {
+    // Upbit has no post-only flag. A bid priced at or below the best bid cannot cross, so
+    // it rests as a maker by construction; the autotrader is responsible for pricing it
+    // there. Mapped to a plain limit with NO time_in_force — setting one would make it
+    // IOC or FOK, which is exactly the taker behavior being avoided.
+    const price = Number(payload.price); const volume = Number(payload.quantity ?? payload.volume);
+    if (!(price > 0 && volume > 0)) throw new Error("Upbit maker order requires positive price and quantity");
+    if (side === "bid") enforceBuyCaps("upbit", price * volume);
+    body.ord_type = "limit";
+    body.price = decimal(price, 12);
+    body.volume = decimal(volume, 16);
+  } else throw new Error("Upbit order type must be LIMIT, LIMIT_MAKER or MARKET");
 
   let normalized;
   try {
@@ -466,7 +477,7 @@ async function upbitOrderTest(payload) {
   const market = validateUpbitMarket(payload.market); const identifier = validateIdentifier(payload.identifier);
   const side = payload.side === "SELL" || payload.side === "ask" ? "ask" : payload.side === "BUY" || payload.side === "bid" ? "bid" : null;
   const type = String(payload.type || payload.ord_type || "").toUpperCase();
-  if (!side || !["LIMIT", "MARKET"].includes(type)) throw new Error("invalid Upbit test order");
+  if (!side || !["LIMIT", "MARKET", "LIMIT_MAKER"].includes(type)) throw new Error("invalid Upbit test order");
   const body = { market, side, identifier };
   if (type === "LIMIT") {
     const price = Number(payload.price); const quantity = Number(payload.quantity ?? payload.volume);
@@ -505,7 +516,12 @@ function conformBinanceOrder(payload, info) {
   const side = String(payload.side || "").toUpperCase();
   const type = String(payload.type || payload.ord_type || "").toUpperCase();
   if (!["BUY", "SELL"].includes(side)) throw new Error("invalid Binance order side");
-  if (!["LIMIT", "MARKET"].includes(type)) throw new Error("Binance order type must be LIMIT or MARKET");
+  // v5.5: LIMIT_MAKER is post-only — Binance REJECTS it outright if it would cross and
+  // take. That rejection is the point: accidental taker execution becomes impossible
+  // rather than merely unlikely, so the maker cost model can be trusted.
+  if (!["LIMIT", "MARKET", "LIMIT_MAKER"].includes(type)) {
+    throw new Error("Binance order type must be LIMIT, LIMIT_MAKER or MARKET");
+  }
   const clientOrderId = validateIdentifier(payload.identifier || payload.newClientOrderId);
   let quantity = floorStep(Number(payload.quantity ?? payload.volume), info.quantity_step);
   if (!(quantity > 0) || quantity < info.min_quantity) throw new Error("Binance quantity is below LOT_SIZE minimum");
@@ -530,10 +546,19 @@ function conformBinanceOrder(payload, info) {
     if (side === "BUY") enforceBuyCaps("binance", notional);
     order.price = formatStep(price, info.price_tick);
     order.timeInForce = String(payload.time_in_force || payload.timeInForce || "IOC").toUpperCase();
+  } else if (type === "LIMIT_MAKER") {
+    const price = floorStep(Number(payload.price), info.price_tick);
+    if (!(price > 0)) throw new Error("Binance maker order requires a valid tick-aligned price");
+    const notional = price * quantity;
+    if (info.min_notional > 0 && notional < info.min_notional) throw new Error(`Binance order notional ${notional} below ${info.min_notional}`);
+    if (info.max_notional > 0 && notional > info.max_notional) throw new Error(`Binance order notional ${notional} above ${info.max_notional}`);
+    if (side === "BUY") enforceBuyCaps("binance", notional);
+    order.price = formatStep(price, info.price_tick);
+    // LIMIT_MAKER accepts no timeInForce.
   } else if (side === "BUY") {
     throw new Error("Binance market orders are restricted to sells");
   }
-  return { order, info, notional: type === "LIMIT" ? Number(order.price) * Number(order.quantity) : 0 };
+  return { order, info, notional: ["LIMIT", "LIMIT_MAKER"].includes(type) ? Number(order.price) * Number(order.quantity) : 0 };
 }
 async function binanceGetOrder(identifier, symbol) {
   const data = (await binanceRequest("GET", "/api/v3/order", {

@@ -29,7 +29,7 @@ import { evaluateHold, resolveHoldConfig, safetyTtlExceeded, type ScalpHoldConfi
 import { DEFAULT_SCALP_SAFETY, type ScalpSafetyConfig, type ScalpDayState } from "../_shared/scalp/safety.ts";
 import { DEFAULT_COST_MODEL, type CostModelConfig } from "../_shared/scalp/cost-model.ts";
 
-const VERSION = "5.4.2";
+const VERSION = "5.6.0";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -229,23 +229,29 @@ function defaultSettings(): TradingSettings & JsonRecord {
     // Default raised 30 -> 120. A cost-cleared target cannot be reached in 30
     // minutes on most symbols; geometry.ts sizes the per-symbol horizon and this
     // is only the hard ceiling.
-    scalp_max_holding_minutes: clamp(finite(env("SCALP_MAX_HOLDING_MINUTES"), 120), 1, 1440),
+    // v5.6: back to a scalp horizon. Throughput-optimal barriers are narrow, so they
+    // resolve fast; the wide-barrier / long-hold combination of v5.4 was a consequence of
+    // taker costs, not of the strategy.
+    scalp_max_holding_minutes: clamp(finite(env("SCALP_MAX_HOLDING_MINUTES"), 45), 1, 1440),
     // Capital is split into this many concurrent slots. v5.2.5 sized every entry at
     // the FULL available allocation, so the first candidate consumed everything and
     // the "max 2 entries per scan" allowance could never be used.
     scalp_position_slots: clamp(finite(env("SCALP_POSITION_SLOTS"), 6), 1, 20),
     // Excess win rate the signal is assumed to deliver. Drives barrier width.
     scalp_edge_budget: clamp(finite(env("SCALP_EDGE_BUDGET"), 0.10), 0.02, 0.30),
-    scalp_reward_risk: clamp(finite(env("SCALP_REWARD_RISK"), 2.0), 1, 4),
+    scalp_reward_risk: clamp(finite(env("SCALP_REWARD_RISK"), 2.0), 0.4, 4),
+    // v5.6: target realized win rate. Drives the target/stop split.
+    scalp_target_win_rate: clamp(finite(env("SCALP_TARGET_WIN_RATE"), 0.58), 0, 0.8),
     scalp_slippage_allowance: clamp(finite(env("SCALP_SLIPPAGE_ALLOWANCE"), 0.0009), 0, 0.01),
     // Half-life applied to scan-time alpha when the signal is re-priced at order time.
     scalp_alpha_half_life_ms: clamp(finite(env("SCALP_ALPHA_HALF_LIFE_MS"), 20000), 1000, 300000),
     // Move the effective stop to breakeven+cost once the first target is taken.
     scalp_breakeven_after_t1: env("SCALP_BREAKEVEN_AFTER_T1") !== "false",
-    // Rest a limit sell at the first target instead of market-selling when a 15s poll
-    // notices the target was crossed. Default OFF: this changes the order lifecycle and
-    // should be enabled only after a small-size live trial. See restingTakeProfit below.
-    scalp_resting_tp: env("SCALP_RESTING_TP") === "true",
+    // v5.5: ON by default. This is the maker EXIT leg — the counterpart to
+    // scalp_maker_entry. Market-selling on a 15s poll gives the spread back on every
+    // winner and loses target touches that happen between polls, which is precisely the
+    // cost the maker pivot exists to remove.
+    scalp_resting_tp: env("SCALP_RESTING_TP") !== "false",
     // v5.4 --------------------------------------------------------------------
     // The 30-minute forced exit is GONE. It was a safety timeout from the original
     // fixed +0.60%/-0.30% barrier, not a profit rule, and it force-sold positions whose
@@ -260,6 +266,24 @@ function defaultSettings(): TradingSettings & JsonRecord {
     // Query the exchange for this account's real commission rate instead of assuming the
     // list price. Set false to pin the static FEE_PCT table.
     scalp_use_live_fees: env("SCALP_USE_LIVE_FEES") !== "false",
+    // v5.5 --------------------------------------------------------------------
+    // Post the entry on the bid instead of taking the ask.
+    //
+    // A taker PAYS the spread twice per round trip; a maker EARNS it. Upbit and Binance
+    // charge makers and takers identically, so the whole gain is the spread — which is
+    // the difference between a scalp that clears its costs and one that cannot.
+    // It also raises the REALIZED win rate: entering a spread lower puts the target
+    // closer and the stop further away, measured from where the market actually is.
+    scalp_maker_entry: env("SCALP_MAKER_ENTRY") !== "false",
+    // How long a resting entry waits before it is abandoned. Unfilled costs nothing.
+    scalp_maker_entry_ttl_seconds: clamp(finite(env("SCALP_MAKER_ENTRY_TTL_SECONDS"), 90), 5, 900),
+    // Cancel early if the book walks away from our resting bid by this many ticks.
+    scalp_maker_entry_drift_ticks: clamp(finite(env("SCALP_MAKER_ENTRY_DRIFT_TICKS"), 3), 1, 50),
+    // Assumed spread earned per round trip when sizing barriers. Live spread is measured
+    // per symbol at order time; this is only the sizing input.
+    scalp_spread_capture: clamp(finite(env("SCALP_SPREAD_CAPTURE"), 0.0005), 0, 0.005),
+    // Only the stop branch crosses the book under maker execution.
+    scalp_maker_slippage_allowance: clamp(finite(env("SCALP_MAKER_SLIPPAGE_ALLOWANCE"), 0.0003), 0, 0.01),
     updated_at: new Date().toISOString(),
   };
 }
@@ -383,8 +407,21 @@ async function runScanner(portfolios: Record<Exchange, any>, settings: TradingSe
         // for the required win rate to be attainable at all.
         geometry_overrides: {
           edgeBudget: finite((settings as any).scalp_edge_budget, 0.10),
+          // v5.6: the win rate the bot should print. The barrier split is derived from it,
+          // because neutral win rate IS S/(T+S) — a 2:1 reward:risk caps the win rate at
+          // 33% no matter how good the signal is.
+          targetWinRate: finite((settings as any).scalp_target_win_rate, 0.58),
           rewardRiskRatio: finite((settings as any).scalp_reward_risk, 2.0),
-          slippageAllowance: finite((settings as any).scalp_slippage_allowance, 0.0009),
+          // v5.5: a maker entry does not cross the book, so it has NO entry slippage, and
+          // the resting take-profit has none either. Only the stop branch market-sells.
+          // The 0.0009 taker allowance assumed two crossings and over-taxes maker sizing.
+          slippageAllowance: (settings as any).scalp_maker_entry === false
+            ? finite((settings as any).scalp_slippage_allowance, 0.0009)
+            : finite((settings as any).scalp_maker_slippage_allowance, 0.0003),
+          // Maker execution earns the spread back; taker execution pays it.
+          spreadCaptureFraction: (settings as any).scalp_maker_entry === false
+            ? 0
+            : finite((settings as any).scalp_spread_capture, 0.0005),
           minimumEdge: finite((settings as any).scalp_minimum_edge, DEFAULT_COST_MODEL.minimumEdge),
           maxHorizonMinutes: finite((settings as any).scalp_max_holding_minutes, 120),
         },
@@ -799,6 +836,7 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   let scalpTarget1: number | null = null;
   let scalpTarget2: number | null = null;
   let scalpAudit: JsonRecord | null = null;
+  let decisionNotional = sizing.notionalQuote;
   if ((settings as any).strategy === "SCALP") {
     const scalpSnapshot = (candidate as any).snapshot?.scalp || {};
     const scanPWin = finite((candidate as any).scalp_p_win ?? scalpSnapshot.pWin ?? (candidate as any).scalp?.pWin, 0.5);
@@ -870,6 +908,7 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
       await event("SCALP_GATE_BLOCK", `${exchange}:${candidate.market} scalp gate blocked`, { reason: decision.reason, ...scalpAudit }, { cycleId });
       return { entered: false, exchange, market: candidate.market, reason: `scalp gate: ${decision.reason}` };
     }
+    decisionNotional = decision.notional;
     if (decision.notional < sizing.notionalQuote) {
       quantity = floorToStep(decision.notional / entryPrice, rules.quantity_step || 0.00000001);
       if (!(quantity > 0) || quantity * entryPrice < Math.max(limits.minOrder, rules.min_notional)) {
@@ -933,6 +972,50 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
     const opened = await openPaperPosition(position, candidate, paperPrice, paperQty, paperQty * paperPrice);
     await event("PAPER_ENTRY", `${exchange}:${candidate.market} paper entry`, { price: paperPrice, quantity: paperQty, notional_quote: paperQty * paperPrice, quote }, { cycleId, positionId: position.id });
     return { entered: true, paper: true, exchange, market: candidate.market, position: opened };
+  }
+
+  // v5.5: maker route. Post on the bid and wait instead of taking the ask.
+  if (makerEntryEnabled(settings)) {
+    const makerPrice = makerBidPrice(bestBid, rules.price_tick);
+    const makerQuantity = floorToStep(decisionNotional / makerPrice, rules.quantity_step || 0.00000001);
+    if (!(makerPrice > 0 && makerQuantity > 0) || makerQuantity * makerPrice < Math.max(limits.minOrder, rules.min_notional)) {
+      await patch("trading_positions", `id=eq.${position.id}`, { state: "CANCELLED", close_reason: "MAKER_ENTRY_BELOW_MINIMUM", closed_at: new Date().toISOString() });
+      return { entered: false, exchange, market: candidate.market, reason: "maker order below exchange minimum" };
+    }
+    const makerIdentifier = uniqueId("m", position.id);
+    const makerOrderRow = await createOrderRecord({
+      position_id: position.id, candidate_id: candidate.id, cycle_id: cycleId, exchange, quote_currency: quote,
+      identifier: makerIdentifier, market: candidate.market, side: "BUY", purpose: "ENTRY", order_type: "LIMIT_MAKER",
+      requested_price: makerPrice, requested_volume: makerQuantity, requested_notional_quote: makerQuantity * makerPrice, state: "REQUESTED",
+    });
+    try {
+      const result = await gateway(exchange, {
+        action: "create_order",
+        order: { market: candidate.market, side: "BUY", type: "LIMIT_MAKER", price: makerPrice, quantity: makerQuantity, identifier: makerIdentifier },
+        wait_for_final_ms: 0,
+      }, 20_000);
+      await updateOrderFromGateway(makerOrderRow, result);
+      const rows = await patch("trading_positions", `id=eq.${position.id}`, {
+        planned_entry_price: makerPrice,
+        metadata: {
+          ...(position.metadata || {}),
+          maker_entry_identifier: makerIdentifier, maker_entry_order_id: makerOrderRow.id,
+          maker_entry_price: makerPrice, maker_entry_placed_at: new Date().toISOString(),
+          maker_best_bid_at_placement: bestBid, maker_best_ask_at_placement: bestAsk,
+        },
+      });
+      await event("MAKER_ENTRY_RESTED", `${exchange}:${candidate.market} entry posted on the bid`, {
+        price: makerPrice, quantity: makerQuantity, best_bid: bestBid, best_ask: bestAsk, spread_bps: spreadBps,
+      }, { cycleId, positionId: position.id, orderId: makerOrderRow.id });
+      // Reserved, not entered: the slot's capital is committed until the order resolves.
+      return { entered: false, reserved: true, maker_pending: true, exchange, market: candidate.market, position: { ...position, ...(rows[0] || {}) }, reason: "maker entry resting" };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await patch("trading_orders", `id=eq.${makerOrderRow.id}`, { state: "REJECTED", error_message: message, completed_at: new Date().toISOString() });
+      await patch("trading_positions", `id=eq.${position.id}`, { state: "CANCELLED", close_reason: "MAKER_ENTRY_REJECTED", closed_at: new Date().toISOString() });
+      await event("MAKER_ENTRY_REJECTED", `${exchange}:${candidate.market} maker entry rejected`, { error: message, price: makerPrice }, { cycleId, positionId: position.id, level: "WARNING" });
+      return { entered: false, exchange, market: candidate.market, reason: message };
+    }
   }
 
   const testIdentifier = uniqueId("t", position.id);
@@ -1244,6 +1327,140 @@ async function cancelRestingTakeProfit(position: Position, cycleId: string): Pro
   return { ok: true, position: await settleRestingTakeProfit(position, terminal, cycleId) };
 }
 
+// =====================================================================================
+// v5.5: maker entry
+// =====================================================================================
+//
+// v5.2.5 through v5.4 entered with a LIMIT IOC priced at the ask — a taker order in all
+// but name. Combined with the MARKET exit, every round trip paid the spread twice, so the
+// true cost was `fees + spread` rather than `fees`. On Upbit that is 0.17% against a 0.10%
+// fee schedule; the nine live trades of 2026-07-26 had a median absolute price move of
+// 0.109%, i.e. smaller than the cost they were paying. Those trades could not have won.
+//
+// Posting on the bid inverts the sign of the spread term: cost becomes `fees - spread`.
+// Because Upbit and Binance price makers and takers identically, that swing IS the entire
+// improvement, and it is larger than anything available from signal tuning.
+//
+// It also raises the realized win rate. Entering one spread lower puts the target one
+// spread closer and the stop one spread further, measured from where the market actually
+// trades. For a 0.6%/0.3% barrier pair at a 0.05% spread the neutral win rate moves from
+// 33.3% to 38.9% on the entry leg alone, and the resting take-profit repeats the effect
+// on the exit leg.
+//
+// The cost is fill uncertainty. An unfilled maker entry costs nothing but an opportunity,
+// so the order is simply abandoned when it goes stale or the book walks away.
+
+function makerEntryEnabled(settings: TradingSettings): boolean {
+  return String((settings as any).strategy || "") === "SCALP" &&
+    (settings as any).scalp_maker_entry !== false &&
+    settings.mode === "LIVE_LIMITED";
+}
+
+/**
+ * Price a resting bid. Never above the best bid: on Binance a crossing LIMIT_MAKER is
+ * rejected outright, and on Upbit — which has no post-only flag — pricing at or below the
+ * best bid is the only thing that guarantees the order rests instead of taking.
+ */
+export function makerBidPrice(bestBid: number, tick: number): number {
+  const t = tick > 0 ? tick : Math.max(1e-8, bestBid * 1e-6);
+  return Math.floor(bestBid / t) * t;
+}
+
+/** Has the book moved far enough that this resting bid is no longer competitive? */
+export function makerEntryStale(
+  restingPrice: number,
+  bestBid: number,
+  tick: number,
+  driftTicks: number,
+): boolean {
+  if (!(restingPrice > 0 && bestBid > 0)) return true;
+  const t = tick > 0 ? tick : Math.max(1e-8, bestBid * 1e-6);
+  // Only downward drift matters: if the bid rises we are deep in the queue and unlikely
+  // to fill; if it falls, our order is near the front and worth keeping.
+  return (bestBid - restingPrice) / t >= driftTicks;
+}
+
+/**
+ * Resolve a resting entry. Returns whether the position is still awaiting fill.
+ * Booked exactly once, at a terminal state, for the same reason as the resting exit.
+ */
+async function syncMakerEntry(position: Position, settings: TradingSettings, cycleId: string) {
+  const identifier = String(position.metadata?.maker_entry_identifier || "");
+  const orderRowId = position.metadata?.maker_entry_order_id;
+  if (!identifier || !orderRowId) return { pending: false, position };
+
+  let order: any;
+  try {
+    order = await gateway(position.exchange, { action: "get_order", identifier, market: position.market });
+  } catch (error) {
+    await event("MAKER_ENTRY_SYNC_ERROR", `${position.exchange}:${position.market} resting entry query failed`, { error: error instanceof Error ? error.message : String(error) }, { cycleId, positionId: position.id, level: "WARNING" });
+    return { pending: true, position };
+  }
+  const status = String(order?.status || "");
+  const orderRow = (await db(`trading_orders?id=eq.${orderRowId}&select=*&limit=1`))[0];
+  if (!orderRow) return { pending: false, position };
+
+  const placedAt = Date.parse(String(position.metadata?.maker_entry_placed_at || ""));
+  const ageSeconds = Number.isFinite(placedAt) ? (Date.now() - placedAt) / 1000 : Number.POSITIVE_INFINITY;
+  const ttl = clamp(finite((settings as any).scalp_maker_entry_ttl_seconds, 90), 5, 900);
+
+  let drifted = false;
+  if (status === "OPEN" || status === "PARTIALLY_FILLED") {
+    try {
+      const market = await marketQuote(position.exchange, position.market);
+      drifted = makerEntryStale(
+        finite(position.metadata?.maker_entry_price),
+        finite(market.best_bid),
+        finite(position.tick_size),
+        clamp(finite((settings as any).scalp_maker_entry_drift_ticks, 3), 1, 50),
+      );
+    } catch { /* quote unavailable: fall back to the TTL alone */ }
+  }
+
+  const expired = ageSeconds >= ttl || drifted;
+  if ((status === "OPEN" || status === "PARTIALLY_FILLED") && !expired) return { pending: true, position };
+
+  // Terminal, stale or drifted: stop the order so the fill amount is final.
+  if (status === "OPEN" || status === "PARTIALLY_FILLED") {
+    try {
+      order = await gateway(position.exchange, { action: "cancel_order", identifier, market: position.market });
+    } catch {
+      try {
+        order = await gateway(position.exchange, { action: "get_order", identifier, market: position.market });
+      } catch {
+        // Unresolved: never abandon an order that might still be live.
+        return { pending: true, position };
+      }
+    }
+  }
+
+  const updated = await updateOrderFromGateway(orderRow, order);
+  const filled = finite(updated.fill.executedVolume);
+  const minNotional = finite(position.min_notional_quote, position.exchange === "upbit" ? 5000 : 10);
+  const fillPrice = finite(updated.fill.averagePrice, finite(position.planned_entry_price));
+
+  if (filled > 0 && filled * fillPrice >= minNotional) {
+    const opened = await applyEntryAccounting(position, updated.row, updated.fill);
+    await event("MAKER_ENTRY_FILLED", `${position.exchange}:${position.market} maker entry filled`, {
+      price: fillPrice, quantity: filled, wait_seconds: Math.round(ageSeconds), drifted, partial: status !== "FILLED",
+    }, { cycleId, positionId: position.id, orderId: updated.row.id });
+    const withTp = await placeRestingTakeProfit(opened as Position, settings, cycleId);
+    return { pending: false, position: withTp };
+  }
+
+  // Nothing usable filled. This is the normal, free outcome of a maker quote.
+  await patch("trading_positions", `id=eq.${position.id}`, {
+    state: "CANCELLED",
+    close_reason: drifted ? "MAKER_ENTRY_DRIFTED" : "MAKER_ENTRY_UNFILLED",
+    closed_at: new Date().toISOString(),
+    metadata: { ...(position.metadata || {}), exclude_from_learning: true, maker_entry_wait_seconds: Math.round(ageSeconds), maker_entry_filled: filled },
+  });
+  await event("MAKER_ENTRY_UNFILLED", `${position.exchange}:${position.market} resting entry expired without a usable fill`, {
+    wait_seconds: Math.round(ageSeconds), drifted, filled_quantity: filled,
+  }, { cycleId, positionId: position.id, level: "INFO" });
+  return { pending: false, position };
+}
+
 async function snapshotAccount(exchange: Exchange, portfolio: any, positions: Position[], prices: Record<string, number>, settings: TradingSettings) {
   let openCost = 0; let unrealized = 0;
   const paper = settings.mode !== "LIVE_LIMITED";
@@ -1316,8 +1533,15 @@ async function applyExit(position: Position, price: number, action: string, cycl
   return finalizeExitFill(position, result, action, price, cycleId, breakevenAfterT1);
 }
 
-async function reconcileEntryPending(position: Position, cycleId: string) {
+async function reconcileEntryPending(position: Position, cycleId: string, settings?: TradingSettings) {
   if (position.is_paper) return;
+  // v5.5: a resting maker entry has its own lifecycle — TTL, book-drift cancel, and a
+  // partial fill that must clear the exchange minimum before it is booked. The generic
+  // path below would treat a still-working order as an orphan.
+  if (position.metadata?.maker_entry_identifier && settings) {
+    await syncMakerEntry(position, settings, cycleId);
+    return;
+  }
   const orderRow = (await db(`trading_orders?position_id=eq.${position.id}&purpose=eq.ENTRY&select=*&order=created_at.desc&limit=1`))[0];
   if (!orderRow) {
     const createdAt = new Date((position as any).created_at || 0).getTime();
@@ -1441,7 +1665,7 @@ async function detectExternalQuoteFlow(exchange: Exchange, portfolio: any, setti
 
 async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRecord) {
   const tracked = await db("trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING)&select=*&order=created_at.asc") as Position[];
-  for (const position of tracked.filter((p) => p.state === "ENTRY_PENDING")) await reconcileEntryPending(position, cycleId);
+  for (const position of tracked.filter((p) => p.state === "ENTRY_PENDING")) await reconcileEntryPending(position, cycleId, settings);
   for (const position of tracked.filter((p) => p.state === "EXITING")) await reconcileExitPending(position, cycleId);
   const open = await db("trading_positions?state=eq.OPEN&select=*&order=created_at.asc") as Position[];
   const actions: any[] = []; const prices: Record<string, number> = {}; const portfolios: Partial<Record<Exchange, any>> = {};

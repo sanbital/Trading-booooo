@@ -1173,12 +1173,31 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
     : FINALIST_LIMIT;
   let eligible = universe.filter((item) => item.eligible);
   if (scalpMode) {
-    // The heavy step is baseline15 over ALL eligible (hundreds of 15m candle fetches),
-    // which trips WORKER_RESOURCE_LIMIT. Scalp only trades top-liquidity names, so cap the
-    // universe by 24h turnover before that load.
+    // v5.6: rank the scalp universe by SCALPABILITY, not by turnover.
+    //
+    // Ranking by 24h turnover selects the largest caps, whose short-horizon range is the
+    // smallest relative to trading cost. That is how the live book ended up holding
+    // KRW-ETH four times in eight hours: ETH's 30-minute move was 0.04-0.11% against a
+    // 0.10% round trip. Direction was irrelevant — those trades could not clear costs.
+    //
+    // A barrier is only reachable inside a scalp horizon if the symbol actually travels
+    // that far, and travel scales with volatility. Liquidity remains a hard floor (a wide
+    // spread destroys the maker economics), but among liquid names the ordering must be
+    // by movement.
     const cap = Math.round(clamp(finite(Deno.env.get("SCALP_UNIVERSE_CAP"), 40), deepLimit, 120));
-    eligible = [...eligible]
-      .sort((a, b) => finite(b.turnover_24h_quote, 0) - finite(a.turnover_24h_quote, 0))
+    const liquidityFloorRatio = clamp(finite(Deno.env.get("SCALP_LIQUIDITY_FLOOR_RATIO"), 1), 0.2, 20);
+    const liquid = eligible.filter((item) =>
+      finite(item.turnover_24h_quote, 0) >= finite(item.min_actionable_turnover_24h, 0) * liquidityFloorRatio
+    );
+    const pool = liquid.length >= deepLimit ? liquid : eligible;
+    // day_range_pct is the 24h high-low range and is available before any candle fetch,
+    // so it costs nothing at this stage. Turnover only breaks ties.
+    eligible = [...pool]
+      .sort((a, b) => {
+        const rangeDelta = finite(b.day_range_pct, 0) - finite(a.day_range_pct, 0);
+        if (Math.abs(rangeDelta) > 1e-9) return rangeDelta;
+        return finite(b.turnover_24h_quote, 0) - finite(a.turnover_24h_quote, 0);
+      })
       .slice(0, cap);
   }
   const baseline15 = binance

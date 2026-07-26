@@ -10,8 +10,13 @@ import {
 import { probabilityWeightedGross, provisionalNetEdge } from "./cost-model.ts";
 import { DEFAULT_SCALP_SIGNAL, refreshPWinAtOrderTime } from "./signal.ts";
 
-const UPBIT = { ...DEFAULT_SCALP_GEOMETRY, roundTripFeeFraction: 0.001 };
-const BINANCE = { ...DEFAULT_SCALP_GEOMETRY, roundTripFeeFraction: 0.002 };
+// v5.5: 이 파일은 배리어 산정 자체를 검증하므로 체결방식 변수를 제거하기 위해
+// 스프레드 회수 0(테이커) 기준으로 고정한다. 메이커 경제성은 maker.test.ts 담당.
+// v5.6: 이 파일은 레거시(break-even+margin) 배리어 산정을 검증한다.
+// 처리량 최적 모드와 승률 기반 분할은 throughput.test.ts 담당.
+const LEGACY = { spreadCaptureFraction: 0, throughputOptimal: false, targetWinRate: 0 };
+const UPBIT = { ...DEFAULT_SCALP_GEOMETRY, ...LEGACY, roundTripFeeFraction: 0.001 };
+const BINANCE = { ...DEFAULT_SCALP_GEOMETRY, ...LEGACY, roundTripFeeFraction: 0.002 };
 
 Deno.test("v5.2.5 geometry required an unreachable win rate", () => {
   // The defect this module exists to fix: with T=0.60% / S=0.30% the neutral win rate
