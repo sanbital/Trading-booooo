@@ -940,10 +940,10 @@
     const flows = Array.isArray(data.cash_flows) ? data.cash_flows.slice(0, 10) : [];
     $("cashflow-list").innerHTML = flows.length ? flows.map(row => `
       <div class="event-item warning">
-        <strong>${escapeHtml(row.flow_type)} · ${row.exchange === "upbit" ? "UPBIT" : "BINANCE"}</strong>
+        <strong>${escapeHtml(({ EXTERNAL_INCREASE: '잔고 증가 감지', EXTERNAL_DECREASE: '잔고 감소 감지', MANUAL_POSITION_REDUCTION: '포지션 수량 불일치' })[row.flow_type] || row.flow_type)} · ${row.exchange === "upbit" ? "UPBIT" : "BINANCE"}</strong>
         <p>${money(row.amount_quote, row.quote_currency)}</p>
         <small>${dateTime(row.detected_at)}</small>
-      </div>`).join("") : '<p class="muted">수동 변경이나 외부 현금 흐름이 없습니다.</p>';
+      </div>`).join("") : '<p class="muted">기록된 잔고 변동이 없습니다.</p>';
   }
 
   function renderStatus(data) {
@@ -1069,7 +1069,14 @@
   tokenInput?.addEventListener("keydown", event => { if (event.key === "Enter") unlockDashboard(); });
   $("lock-trader")?.addEventListener("click", () => lockDashboard("대시보드를 잠갔습니다."));
   $("refresh-trader")?.addEventListener("click", () => loadStatus(false).catch(error => controlStatus.textContent = error.message));
-  $("pause-entries")?.addEventListener("click", () => runAction("신규 매수 중지", { action: "control", pause_new_entries: true }));
+  $("pause-entries")?.addEventListener("click", async () => {
+    const confirmation = prompt("신규 매수를 중지하려면 PAUSE_NOW를 입력하세요.");
+    if (confirmation !== "PAUSE_NOW") return;
+    await runAction("신규 매수 중지", {
+      action: "control", pause_new_entries: true, pause_confirmation: confirmation,
+      control_source: "DASHBOARD_OPERATOR", control_reason: "OPERATOR_REQUEST",
+    });
+  });
   $("resume-now")?.addEventListener("click", resumeNow);
   $("withdrawal-mode")?.addEventListener("click", async () => {
     if (!confirm("출금 모드를 시작하면 신규 매수가 즉시 중지됩니다. 계속할까요?")) return;

@@ -1,4 +1,4 @@
-// Trading-booooo v5.2.4 — autonomous Upbit KRW + Binance USDT spot orchestrator.
+// Trading-booooo v5.2.5 — autonomous Upbit KRW + Binance USDT spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -10,7 +10,6 @@ import {
   decideExit,
   dangerousControlError,
   evaluateCircuit,
-  externalQuoteIntervention,
   finite,
   floorToStep,
   manualReconcileAccounting,
@@ -27,7 +26,7 @@ import { scalpEntryDecision } from "../_shared/scalp/scalp-gate.ts";
 import { DEFAULT_SCALP_SAFETY, type ScalpSafetyConfig, type ScalpDayState } from "../_shared/scalp/safety.ts";
 import { DEFAULT_COST_MODEL, type CostModelConfig } from "../_shared/scalp/cost-model.ts";
 
-const VERSION = "5.2.4";
+const VERSION = "5.2.5";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const SERVICE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
@@ -895,8 +894,17 @@ async function reconcileManualReduction(position: Position, actualQuantity: numb
 async function detectExternalQuoteFlow(exchange: Exchange, portfolio: any, settings: TradingSettings & JsonRecord, cycleId: string) {
   const rows = await db(`trading_account_snapshots?exchange=eq.${exchange}&select=available_quote,captured_at&order=captured_at.desc&limit=1`) as any[];
   const last = rows?.[0];
-  if (!last) return { detected: false, delta: 0 };
+  if (!last) return { detected: false, delta: 0, baseline: "INITIAL" };
   const since = String(last.captured_at || "");
+  const snapshotAt = new Date(since).getTime();
+  // A stale snapshot after deploy/restart is not evidence of manual trading. The
+  // current monitor cycle will write a fresh snapshot and establish a new baseline.
+  if (!Number.isFinite(snapshotAt) || Date.now() - snapshotAt > 120_000) {
+    await event("BALANCE_BASELINE_RESET", `${exchange} stale balance snapshot replaced without pausing trading`, {
+      previous_snapshot_at: since, current_available_quote: finite(portfolio.available_quote), engine_version: VERSION,
+    }, { cycleId, level: "INFO" });
+    return { detected: false, delta: 0, baseline: "RESET" };
+  }
   const orders = await db(`trading_orders?exchange=eq.${exchange}&state=eq.APPLIED&requested_at=gte.${encodeURIComponent(since)}&select=side,executed_funds_quote,paid_fee_quote,trading_positions!inner(is_paper)&trading_positions.is_paper=eq.false`) as any[];
   let expectedOrderDelta = 0;
   for (const order of orders || []) {
@@ -913,17 +921,15 @@ async function detectExternalQuoteFlow(exchange: Exchange, portfolio: any, setti
   const flowType = externalDelta < 0 ? "EXTERNAL_DECREASE" : "EXTERNAL_INCREASE";
   await insert("trading_cash_flows", {
     exchange, quote_currency: quoteCurrency(exchange), flow_type: flowType, amount_quote: Math.abs(externalDelta),
-    details: { previous_available_quote: previous, expected_available_quote: expected, current_available_quote: current, bot_order_delta_quote: expectedOrderDelta, previous_snapshot_at: since, withdrawal_mode: settings.withdrawal_mode },
+    details: { previous_available_quote: previous, expected_available_quote: expected, current_available_quote: current, bot_order_delta_quote: expectedOrderDelta, previous_snapshot_at: since, withdrawal_mode: settings.withdrawal_mode, detection_mode: "RECORD_ONLY", engine_version: VERSION },
   });
-  await event(flowType, `${exchange} external quote balance change observed; entries paused for operator review`, { external_delta_quote: externalDelta, previous, expected, current }, { cycleId, level: "CRITICAL" });
-  const intervention = externalQuoteIntervention(exchange, externalDelta, Boolean(settings.withdrawal_mode));
-  await patch("trading_settings", "id=eq.1", {
-    pause_new_entries: intervention.pauseNewEntries,
-    manual_intervention_required: intervention.manualInterventionRequired,
-    manual_event_reason: intervention.reason,
-    last_manual_event_at: new Date().toISOString(),
-  });
-  return { detected: true, delta: externalDelta, flow_type: flowType };
+  // Quote-balance deltas are informational. Deposits, fee rebates, conversions,
+  // gateway changes and delayed snapshots can all produce them. They must never
+  // be treated as proof of a manual trade or automatically pause the engine.
+  await event(flowType, `${exchange} quote balance delta recorded; trading remains active`, {
+    external_delta_quote: externalDelta, previous, expected, current, auto_pause: false,
+  }, { cycleId, level: "WARNING" });
+  return { detected: true, delta: externalDelta, flow_type: flowType, paused: false };
 }
 
 async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRecord) {
@@ -952,29 +958,55 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
     const quotes = await Promise.all(exchangePositions.map(async (position) => [position.market, await marketQuote(exchange, position.market)] as const));
     for (const [market, quote] of quotes) prices[market] = finite(quote.current, (finite(quote.best_ask) + finite(quote.best_bid)) / 2);
     const mismatches = new Set<string>();
-    for (const position of exchangePositions.filter((row) => !row.is_paper)) {
+    for (const originalPosition of exchangePositions.filter((row) => !row.is_paper)) {
+      let position = originalPosition;
+      // Only a position backed by a successfully APPLIED entry fill may be
+      // compared with exchange balances. Ghost/legacy rows are cancelled rather
+      // than mislabeled as a user manual sale.
+      const appliedEntry = (await db(`trading_orders?position_id=eq.${position.id}&purpose=eq.ENTRY&state=eq.APPLIED&select=id&limit=1`).catch(() => []))[0];
+      if (!appliedEntry) {
+        await patch("trading_positions", `id=eq.${position.id}`, {
+          state: "CANCELLED", close_reason: "UNVERIFIED_OPEN_POSITION", closed_at: new Date().toISOString(),
+          metadata: { ...(position.metadata || {}), exclude_from_learning: true, verification_error: "NO_APPLIED_ENTRY_ORDER" },
+        });
+        await event("UNVERIFIED_POSITION_CANCELLED", `${exchange}:${position.market} unverified internal position cleared without pausing trading`, {}, { cycleId, positionId: position.id, level: "WARNING" });
+        continue;
+      }
       const expected = finite(position.remaining_quantity);
       const actualTotal = totalByAsset.get(position.base_asset) || 0;
       const actualFree = freeByAsset.get(position.base_asset) || 0;
-      if (actualTotal + 1e-10 < expected * 0.999999) {
-        mismatches.add(position.base_asset);
+      const totalMissing = actualTotal + 1e-10 < expected * 0.999999;
+      const freeMissing = !totalMissing && actualFree + 1e-10 < expected * 0.999999;
+      const previousCount = Math.max(0, Math.floor(finite(position.metadata?.account_mismatch_count)));
+      if (!totalMissing && !freeMissing) {
+        if (previousCount > 0) await patch("trading_positions", `id=eq.${position.id}`, { metadata: { ...(position.metadata || {}), account_mismatch_count: 0, last_account_mismatch_at: null } });
+        continue;
+      }
+      const mismatchCount = previousCount + 1;
+      position = { ...position, ...(await patch("trading_positions", `id=eq.${position.id}`, {
+        metadata: { ...(position.metadata || {}), account_mismatch_count: mismatchCount, last_account_mismatch_at: new Date().toISOString(), observed_total_quantity: actualTotal, observed_free_quantity: actualFree },
+      }))[0] };
+      if (mismatchCount < 3) {
+        await event("ACCOUNT_MISMATCH_OBSERVED", `${exchange}:${position.market} balance mismatch awaiting confirmation ${mismatchCount}/3`, {
+          expected_quantity: expected, free_quantity: actualFree, total_quantity: actualTotal,
+        }, { cycleId, positionId: position.id, level: "WARNING" });
+        continue;
+      }
+      mismatches.add(position.base_asset);
+      if (totalMissing) {
         await reconcileManualReduction(position, actualTotal, prices[position.market], cycleId);
-      } else if (actualFree + 1e-10 < expected * 0.999999) {
-        // An OPEN bot position should not have its base asset locked. Treat a
-        // manual limit-sell or other external lock as intervention so the bot
-        // does not compete with the user's order or miss an exit silently.
-        mismatches.add(position.base_asset);
+      } else {
         unresolvedManualAssets.push(`${exchange}:${position.base_asset}`);
-        await event("MANUAL_ASSET_LOCK", `${exchange}:${position.market} base asset is externally locked; entries and exits paused for review`, {
+        await event("MANUAL_ASSET_LOCK", `${exchange}:${position.market} confirmed base-asset lock after 3 checks`, {
           expected_quantity: expected, free_quantity: actualFree, total_quantity: actualTotal,
         }, { cycleId, positionId: position.id, level: "CRITICAL" });
       }
     }
     if (mismatches.size) {
       await patch("trading_settings", "id=eq.1", {
-        pause_new_entries: true, manual_intervention_required: true, manual_event_reason: `${exchange}: ${[...mismatches].join(", ")}`, last_manual_event_at: new Date().toISOString(),
+        pause_new_entries: true, manual_intervention_required: true, manual_event_reason: `SAFETY_POSITION_MISMATCH:${exchange}:${[...mismatches].join(",")}`, last_manual_event_at: new Date().toISOString(),
       });
-      await event("ACCOUNT_POSITION_MISMATCH", `${exchange} manual position change detected; entries paused until dashboard resume`, { exchange, assets: [...mismatches] }, { cycleId, level: "CRITICAL" });
+      await event("SAFETY_PAUSE", `${exchange} confirmed position mismatch on 3 consecutive checks; entries paused`, { exchange, assets: [...mismatches], source: "ACCOUNT_RECONCILIATION" }, { cycleId, level: "CRITICAL" });
     }
     for (const original of exchangePositions) {
       let position = original;
@@ -1170,7 +1202,21 @@ Deno.serve(async (request: Request) => {
       const result = { settings, portfolios, gateway: await status(settings).then((row) => row.gateway) };
       await finishCycle(cycleId, "SUCCESS", result); return response({ ok: true, cycle_id: cycleId, ...result });
     }
-    if (action === "control") { settings = await control(body, settings); await finishCycle(cycleId, "SUCCESS", { settings }); return response({ ok: true, cycle_id: cycleId, settings }); }
+    if (action === "control") {
+      const operatorPause = body.pause_new_entries === true && settings.pause_new_entries !== true;
+      if (operatorPause && String(body.pause_confirmation || "") !== "PAUSE_NOW") {
+        await finishCycle(cycleId, "FAILED", {}, "pause confirmation required");
+        return response({ ok: false, error: "PAUSE_NOW confirmation is required", cycle_id: cycleId }, 400);
+      }
+      settings = await control(body, settings);
+      if (operatorPause) {
+        await event("OPERATOR_PAUSE", "new entries paused by explicit operator command", {
+          source: String(body.control_source || "API"), reason: String(body.control_reason || "OPERATOR_REQUEST"), user_agent: request.headers.get("user-agent") || null,
+        }, { cycleId, level: "WARNING" });
+      }
+      await finishCycle(cycleId, "SUCCESS", { settings });
+      return response({ ok: true, cycle_id: cycleId, settings });
+    }
     if (action === "withdrawal_mode") {
       settings = (await patch("trading_settings", "id=eq.1", {
         pause_new_entries: true, withdrawal_mode: true, manual_intervention_required: false, manual_event_reason: "WITHDRAWAL_MODE",
@@ -1225,8 +1271,19 @@ Deno.serve(async (request: Request) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (cycleId) await finishCycle(cycleId, "FAILED", {}, message).catch(() => null);
-    const current = await loadSettings().catch(() => ({ gateway_error_count: 0 })); const count = 1 + finite(current.gateway_error_count);
-    await patch("trading_settings", "id=eq.1", { gateway_error_count: count, ...(count >= 3 ? { pause_new_entries: true } : {}) }).catch(() => null);
+    const availabilityFailure = /gateway\s+(?:5\d\d)|fetch failed|network|timeout|timed out|abort|econn|enotfound|socket|502|503|504/i.test(message);
+    if (availabilityFailure) {
+      const current = await loadSettings().catch(() => ({ gateway_error_count: 0 }));
+      const count = 1 + finite(current.gateway_error_count);
+      const pause = count >= 3;
+      await patch("trading_settings", "id=eq.1", {
+        gateway_error_count: count,
+        ...(pause ? { pause_new_entries: true, manual_event_reason: "SAFETY_GATEWAY_UNAVAILABLE", last_manual_event_at: new Date().toISOString() } : {}),
+      }).catch(() => null);
+      if (pause) await event("SAFETY_PAUSE", "gateway unavailable for 3 consecutive engine calls; entries paused", { error: message, count, source: "GATEWAY_AVAILABILITY" }, { cycleId, level: "CRITICAL" }).catch(() => null);
+    } else {
+      await event("ENGINE_ERROR_NO_PAUSE", "non-connectivity engine error recorded without pausing entries", { error: message }, { cycleId, level: "WARNING" }).catch(() => null);
+    }
     console.error("market-autotrader failed", error); return response({ ok: false, error: message, version: VERSION }, 500);
   }
 });
