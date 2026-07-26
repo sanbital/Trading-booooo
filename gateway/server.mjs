@@ -3,12 +3,12 @@ import crypto from "node:crypto";
 import dns from "node:dns";
 import { pathToFileURL } from "node:url";
 
-// Trading-booooo v5.2.0 static-egress order gateway.
+// Trading-booooo v6.0.0-LOB static-egress spot order gateway.
 // It deliberately exposes only spot account/order primitives. There are no
 // withdrawal, transfer, margin, futures, leverage, or API-key management routes.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "5.11.0";
+const VERSION = "6.0.0-LOB";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
@@ -20,8 +20,8 @@ const SHARED_SECRET = env("GATEWAY_SHARED_SECRET");
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
 const SCHEDULER_ENABLED = boolEnv("SCHEDULER_ENABLED", true);
-const SCAN_INTERVAL_MS = integerEnv("AUTO_SCAN_INTERVAL_SECONDS", 60, 60, 3600) * 1000;
-const MONITOR_INTERVAL_MS = integerEnv("AUTO_MONITOR_INTERVAL_SECONDS", 15, 10, 300) * 1000;
+const SCAN_INTERVAL_MS = integerEnv("AUTO_SCAN_INTERVAL_SECONDS", 15, 10, 3600) * 1000;
+const MONITOR_INTERVAL_MS = integerEnv("AUTO_MONITOR_INTERVAL_SECONDS", 5, 5, 300) * 1000;
 // v5.10.1: 60 -> 180 seconds.
 //
 // The timestamp is stamped when the caller builds the request and checked when it lands.
