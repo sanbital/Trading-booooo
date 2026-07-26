@@ -33,7 +33,7 @@ check("maker entry TTL is 8 seconds", trader.includes('SCALP_MAKER_ENTRY_TTL_SEC
 // The version this script pins to moves with each release; the invariant it protects is
 // that all four sources agree, not that they say 6.1.0. supabase/functions/_shared/scalp/
 // version.test.ts enforces the agreement itself.
-check("version is consistent", [engine, trader, gateway, dashboard].every((source) => source.includes("6.3.0-HEAT")));
+check("version is consistent", [engine, trader, gateway, dashboard].every((source) => source.includes("6.3.1-HEAT")));
 check("Deno check includes market heat", deno.includes("market-heat.ts"));
 check("workflow validates before migrations", workflow.indexOf("deno task check") < workflow.indexOf("Apply database migrations"));
 
