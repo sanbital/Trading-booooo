@@ -22,6 +22,10 @@ alter table public.trading_settings
   -- Move the effective stop to entry + round-trip fee once the first target is taken.
   add column if not exists scalp_breakeven_after_t1 boolean not null default true;
 
+-- 재푸시 안전성: 부분 적용 후 재실행되어도 깨지지 않도록 선삭제.
+alter table public.trading_settings drop constraint if exists trading_settings_scalp_position_slots_ck;
+alter table public.trading_settings drop constraint if exists trading_settings_scalp_edge_budget_ck;
+alter table public.trading_settings drop constraint if exists trading_settings_scalp_reward_risk_ck;
 alter table public.trading_settings
   add constraint trading_settings_scalp_position_slots_ck
     check (scalp_position_slots between 1 and 20) not valid,

@@ -434,6 +434,8 @@ export type FinalCandidate = {
     // book at order time, and lets the calibration loop reconstruct the inputs later.
     imbalance_contribution?: number;
     trend_penalty?: number;
+    neutral_win_rate?: number;
+    signal_edge?: number;
     features?: Record<string, number>;
     signal_at?: string;
     geometry?: {
@@ -2767,6 +2769,9 @@ export function finalizeCandidate(
           stopPct: scalpGeometry.stopPct,
           roundTripFeeFraction: geometryConfig.roundTripFeeFraction,
           resolveProbability: scalpGeometry.resolveProbability,
+          // v5.7: pWin must be anchored to the barrier geometry. Without this a wide
+          // target inherits the probability of a narrow one and its EV is inflated.
+          neutralWinRate: scalpGeometry.neutralWinRate,
         }),
       );
       decision = scalpResult.decision;
@@ -2905,6 +2910,8 @@ export function finalizeCandidate(
         // v5.3 additions.
         imbalance_contribution: scalpResult.imbalanceContribution,
         trend_penalty: scalpResult.trendPenalty,
+        neutral_win_rate: scalpResult.neutralWinRate,
+        signal_edge: scalpResult.signalEdge,
         features: scalpResult.features,
         signal_at: new Date().toISOString(),
         geometry: scalpGeometry

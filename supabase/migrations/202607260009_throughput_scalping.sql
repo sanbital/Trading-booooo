@@ -19,6 +19,7 @@ alter table public.trading_settings
   -- the target/stop split. Set 0 to fall back to a fixed reward:risk.
   add column if not exists scalp_target_win_rate numeric not null default 0.58;
 
+alter table public.trading_settings drop constraint if exists trading_settings_target_win_rate_ck;
 alter table public.trading_settings
   add constraint trading_settings_target_win_rate_ck
     check (scalp_target_win_rate >= 0 and scalp_target_win_rate <= 0.80) not valid;

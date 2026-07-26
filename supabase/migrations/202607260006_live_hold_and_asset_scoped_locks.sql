@@ -22,6 +22,10 @@ alter table public.trading_settings
   -- 3) Use the account's real commission rate instead of the hardcoded list price.
   add column if not exists scalp_use_live_fees boolean not null default true;
 
+-- 재푸시 안전성: 부분 적용 후 재실행되어도 깨지지 않도록 선삭제.
+alter table public.trading_settings drop constraint if exists trading_settings_scalp_safety_ttl_ck;
+alter table public.trading_settings drop constraint if exists trading_settings_scalp_hold_half_life_ck;
+alter table public.trading_settings drop constraint if exists trading_settings_scalp_hold_reversal_ck;
 alter table public.trading_settings
   add constraint trading_settings_scalp_safety_ttl_ck
     check (scalp_safety_ttl_minutes between 10 and 10080) not valid,
@@ -36,6 +40,8 @@ alter table public.trading_settings validate constraint trading_settings_scalp_h
 
 -- Operator-facing limits. These already existed as columns but were effectively decided by
 -- code defaults; the constraints make the allowed dashboard range explicit.
+-- 재푸시 안전성: 부분 적용 후 재실행되어도 깨지지 않도록 선삭제.
+alter table public.trading_settings drop constraint if exists trading_settings_max_new_entries_per_scan_ck;
 alter table public.trading_settings
   add constraint trading_settings_max_new_entries_per_scan_ck
     check (max_new_entries_per_scan between 1 and 4) not valid;

@@ -47,6 +47,22 @@ export interface ScalpSignalConfig {
   minimumEdge: number;
   /** v5.3: P(a barrier is touched before the max holding time). Supplied by geometry.ts. */
   resolveProbability: number;
+  /**
+   * v5.7: the driftless probability of touching the target first, S/(T+S).
+   *
+   * THE BUG THIS FIXES. Through v5.6 pWin was built as `basePWin + microstructure terms`
+   * with no reference to where the barriers actually are, so a 4% target was assigned the
+   * same probability as a 0.6% one and its expected value was inflated accordingly. That
+   * is what made wide-target sizing look attractive.
+   *
+   * P(target first) depends on the barrier geometry before any signal exists. The
+   * microstructure model can only supply an EDGE over that baseline:
+   *
+   *     pWin = neutralWinRate + signalEdge
+   *
+   * Supplied by geometry.ts. Leave at 0 to fall back to the legacy absolute basePWin.
+   */
+  neutralWinRate: number;
   /** v5.3: half-life used to decay scan-time alpha when the signal is re-priced at order time. */
   alphaHalfLifeMs: number;
 }
@@ -74,6 +90,8 @@ export const DEFAULT_SCALP_SIGNAL: ScalpSignalConfig = {
   minimumEdge: 0.001,
   // 1 preserves the v5.2.5 (barrier-always-resolves) behavior; geometry.ts overrides it.
   resolveProbability: 1,
+  // 0 = not supplied; the legacy absolute basePWin is used instead.
+  neutralWinRate: 0,
   // Microstructure alpha decays in seconds, not minutes. See refreshPWinAtOrderTime().
   alphaHalfLifeMs: 20_000,
 };
@@ -129,8 +147,12 @@ export interface ScalpSignalResult {
   /** v5.3: pWin term contributed by the resting orderbook, so it can be recomputed
    *  against a fresh book at order time instead of being reused from scan time. */
   imbalanceContribution: number;
-  /** v5.3: multiplicative trend penalty already applied to pWin (1 = none). */
+  /** v5.3: multiplicative trend penalty already applied to the signal edge (1 = none). */
   trendPenalty: number;
+  /** v5.7: barrier-implied baseline the edge was added to. */
+  neutralWinRate: number;
+  /** v5.7: the edge the microstructure model claims over that baseline. */
+  signalEdge: number;
   /** v5.3: raw feature values, persisted for the pWin calibration loop. */
   features: Record<string, number>;
 }
@@ -160,11 +182,16 @@ export function refreshPWinAtOrderTime(
   ageMs: number,
   cfg: ScalpSignalConfig = DEFAULT_SCALP_SIGNAL,
   trendPenalty = 1,
+  neutralWinRate = 0,
 ): number {
-  const basePWin = cfg.basePWin * trendPenalty;
-  const scanAlpha = scanPWin - basePWin - scanImbalanceContribution * trendPenalty;
+  // v5.7: decay toward the BARRIER BASELINE, not toward a flat constant. As the signal
+  // ages the estimate must fall back to what the geometry alone implies.
+  const anchor = neutralWinRate > 0
+    ? neutralWinRate
+    : (cfg.neutralWinRate > 0 ? cfg.neutralWinRate : cfg.basePWin);
+  const scanEdge = scanPWin - anchor - scanImbalanceContribution * trendPenalty;
   const decay = Math.pow(0.5, Math.max(0, ageMs) / Math.max(1, cfg.alphaHalfLifeMs));
-  const refreshed = basePWin + scanAlpha * decay +
+  const refreshed = anchor + scanEdge * decay +
     imbalanceContribution(freshBookImbalance) * trendPenalty;
   return clamp(refreshed, cfg.pWinFloor, cfg.pWinCeil);
 }
@@ -220,12 +247,21 @@ export function evaluateScalpSignal(
     ? -0.03
     : 0;
 
-  let pWin = cfg.basePWin + imbalanceTerm + pressureContribution +
-    stabilityContribution + breakoutContribution + bidWallContribution -
-    absorptionPenalty + dynamicAdjustment;
+  // The microstructure model produces an EDGE over the barrier baseline, not an absolute
+  // probability. Summing these terms onto a flat 0.52 was the modelling error: it made
+  // pWin independent of where the target and stop actually sit.
+  let signalEdge = imbalanceTerm + pressureContribution + stabilityContribution +
+    breakoutContribution + bidWallContribution - absorptionPenalty + dynamicAdjustment;
+  // A weak downtrend erodes the EDGE. Applying it to the probability instead would drag
+  // the estimate below the geometric baseline, which the trend cannot do.
   const trendPenalty = trend.composite_trend <= cfg.weakDownThreshold ? cfg.weakDownPenalty : 1;
-  pWin *= trendPenalty;
-  pWin = clamp(pWin, cfg.pWinFloor, cfg.pWinCeil);
+  signalEdge *= trendPenalty;
+  // Anchor: the driftless probability implied by this barrier pair. Falls back to the
+  // legacy absolute base only when geometry has not supplied one.
+  const anchor = cfg.neutralWinRate > 0
+    ? cfg.neutralWinRate
+    : (cfg.targetPct + cfg.stopPct > 0 ? cfg.stopPct / (cfg.targetPct + cfg.stopPct) : cfg.basePWin);
+  const pWin = clamp(anchor + signalEdge, cfg.pWinFloor, cfg.pWinCeil);
 
   const signalScore = clamp((pWin - cfg.pWinFloor) / (cfg.pWinCeil - cfg.pWinFloor), 0, 1);
   const provisionalEdge = provisionalNetEdge(
@@ -255,6 +291,8 @@ export function evaluateScalpSignal(
     reasons,
     imbalanceContribution: imbalanceTerm,
     trendPenalty,
+    neutralWinRate: anchor,
+    signalEdge,
     features: {
       book_imbalance: micro.book_imbalance,
       imbalance_stability: micro.imbalance_stability,

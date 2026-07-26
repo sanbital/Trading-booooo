@@ -8,8 +8,15 @@ const goodMicro: ScalpMicro = {
 };
 const flatTrend: ScalpTrend = { h4_trend_signal: 0.1, composite_trend: 0.05 };
 
+// v5.7: pWin is now anchored to the barrier-implied baseline S/(T+S) rather than a flat
+// 0.52, so a decision depends on the geometry it is evaluated against. These tests use the
+// throughput-optimal split geometry.ts actually produces (near 1:1, ~48% neutral). Under
+// the old 2:1 default the same orderflow no longer clears the edge threshold — correctly,
+// because a 2:1 barrier caps the neutral win rate at 33%.
+const SCALP_GEOMETRY = { ...DEFAULT_SCALP_SIGNAL, targetPct: 0.0083, stopPct: 0.0077, neutralWinRate: 0.481 };
+
 Deno.test("combined healthy orderflow + non-veto trend => BUY", () => {
-  const r = evaluateScalpSignal(goodMicro, flatTrend);
+  const r = evaluateScalpSignal(goodMicro, flatTrend, SCALP_GEOMETRY);
   assertEquals(r.decision, "BUY");
   assertEquals(r.vetoed, false);
   assert(r.provisionalEdge >= DEFAULT_SCALP_SIGNAL.minimumEdge);
@@ -35,7 +42,7 @@ Deno.test("ordinary weak imbalance is soft-scored, not a standalone block", () =
 });
 
 Deno.test("missing support wall does not block by default", () => {
-  const r = evaluateScalpSignal({ ...goodMicro, persistent_bid_wall: false }, flatTrend);
+  const r = evaluateScalpSignal({ ...goodMicro, persistent_bid_wall: false }, flatTrend, SCALP_GEOMETRY);
   assert(r.reasons.includes("no_support_wall"));
   assertEquals(r.decision, "BUY");
 });
@@ -78,4 +85,39 @@ Deno.test("resolver clamps out-of-range overrides", () => {
 Deno.test("resolver enforces target > stop invariant", () => {
   const c = resolveScalpSignalConfig({ targetPct: 0.003, stopPct: 0.005 });
   if (!(c.targetPct > c.stopPct)) throw new Error("target must exceed stop");
+});
+
+Deno.test("v5.7: pWin responds to the barrier geometry", () => {
+  // THE REGRESSION THIS GUARDS. Through v5.6 pWin was `0.52 + microstructure terms`, with
+  // no reference to where the target and stop sat, so widening the reward:risk ratio
+  // produced free expected value out of nothing. That is why the design kept drifting
+  // toward swing-width targets.
+  const wide = evaluateScalpSignal(goodMicro, flatTrend, {
+    ...DEFAULT_SCALP_SIGNAL, targetPct: 0.012, stopPct: 0.003, neutralWinRate: 0.2,
+  });
+  const even = evaluateScalpSignal(goodMicro, flatTrend, {
+    ...DEFAULT_SCALP_SIGNAL, targetPct: 0.0075, stopPct: 0.0075, neutralWinRate: 0.5,
+  });
+  // Identical orderflow, so the claimed EDGE must be identical...
+  assert(Math.abs(wide.signalEdge - even.signalEdge) < 1e-12);
+  // ...but a 4:1 barrier cannot have the same hit probability as a 1:1 one.
+  assert(wide.pWin < even.pWin - 0.25, `${wide.pWin} vs ${even.pWin}`);
+  assert(Math.abs(wide.pWin - (wide.neutralWinRate + wide.signalEdge)) < 1e-12);
+});
+
+Deno.test("v5.7: without a supplied baseline the barriers still set the anchor", () => {
+  const r = evaluateScalpSignal(goodMicro, flatTrend, {
+    ...DEFAULT_SCALP_SIGNAL, targetPct: 0.008, stopPct: 0.002, neutralWinRate: 0,
+  });
+  // 4:1 implies a 20% neutral rate; the flat 0.52 must not survive as a fallback.
+  assert(Math.abs(r.neutralWinRate - 0.2) < 1e-9, `anchor ${r.neutralWinRate}`);
+});
+
+Deno.test("v5.7: the trend penalty erodes the edge, not the baseline", () => {
+  const cfg = { ...DEFAULT_SCALP_SIGNAL, targetPct: 0.0083, stopPct: 0.0077, neutralWinRate: 0.481 };
+  const clean = evaluateScalpSignal(goodMicro, flatTrend, cfg);
+  const weak = evaluateScalpSignal(goodMicro, { h4_trend_signal: -0.3, composite_trend: -0.4 }, cfg);
+  assert(weak.signalEdge < clean.signalEdge);
+  // A soft downtrend cannot push the estimate below what the geometry alone implies.
+  assert(weak.pWin >= cfg.neutralWinRate - 1e-12);
 });

@@ -29,7 +29,7 @@ import { evaluateHold, resolveHoldConfig, safetyTtlExceeded, type ScalpHoldConfi
 import { DEFAULT_SCALP_SAFETY, type ScalpSafetyConfig, type ScalpDayState } from "../_shared/scalp/safety.ts";
 import { DEFAULT_COST_MODEL, type CostModelConfig } from "../_shared/scalp/cost-model.ts";
 
-const VERSION = "5.6.0";
+const VERSION = "5.7.1";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -864,6 +864,8 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
         alphaHalfLifeMs: clamp(finite((settings as any).scalp_alpha_half_life_ms, DEFAULT_SCALP_SIGNAL.alphaHalfLifeMs), 1000, 300000),
       },
       finite(scalpSnapshot.trend_penalty, 1),
+      // v5.7: anchor the refresh to the barrier baseline, not a flat constant.
+      finite(scalpSnapshot.neutral_win_rate, 0),
     );
     // v5.3: correct the model's probability with whatever the realized outcomes say.
     // Identity until the calibration job has enough samples to promote a profile.
@@ -1856,6 +1858,9 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           targetPrice: finite(position.target_2, finite(position.target_1)),
           stopPrice: Math.max(finite(position.stop_price), finite(position.trailing_stop)),
           entryPWin: finite(position.metadata?.scalp_signal?.order_p_win, holdCfg.basePWin),
+          // v5.7: as the signal ages the estimate must fall back to what the barrier
+          // geometry alone implies, not to a flat constant.
+          neutralWinRate: finite(position.metadata?.scalp_signal?.geometry?.neutral_win_rate, 0),
           liveImbalance,
           reversalStreak: Math.max(0, Math.floor(finite(position.metadata?.hold_reversal_streak))),
           heldMinutes,

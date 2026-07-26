@@ -24,6 +24,19 @@
 -- neutral win rate moves 33.3% -> 38.9% on the entry leg, and the resting take-profit
 -- repeats the effect on the exit leg.
 
+-- Columns that only ever existed as code-level settings.
+--
+-- scalp_resting_tp was introduced in v5.3 as an env/default setting and a matching column
+-- was never created, so statement 5 below ("set scalp_resting_tp = true") failed with
+-- SQLSTATE 42703 and took the whole deploy with it. scalp_minimum_edge and
+-- scalp_maker_slippage_allowance have the same gap: the code reads them and silently falls
+-- back to a default, so they were invisible until something referenced them in SQL — and
+-- they cannot be changed from the dashboard at all.
+alter table public.trading_settings
+  add column if not exists scalp_resting_tp boolean not null default true,
+  add column if not exists scalp_minimum_edge numeric not null default 0.001,
+  add column if not exists scalp_maker_slippage_allowance numeric not null default 0.0003;
+
 alter table public.trading_settings
   -- Post the entry on the bid instead of taking the ask.
   add column if not exists scalp_maker_entry boolean not null default true,
@@ -36,6 +49,10 @@ alter table public.trading_settings
   -- symbol at order time; this is only the sizing input.
   add column if not exists scalp_spread_capture numeric not null default 0.0005;
 
+-- Idempotent: a migration that failed partway must be safe to re-push.
+alter table public.trading_settings drop constraint if exists trading_settings_maker_entry_ttl_ck;
+alter table public.trading_settings drop constraint if exists trading_settings_maker_drift_ticks_ck;
+alter table public.trading_settings drop constraint if exists trading_settings_spread_capture_ck;
 alter table public.trading_settings
   add constraint trading_settings_maker_entry_ttl_ck
     check (scalp_maker_entry_ttl_seconds between 5 and 900) not valid,

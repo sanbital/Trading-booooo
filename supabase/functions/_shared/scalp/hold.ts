@@ -117,6 +117,8 @@ export interface HoldInputs {
   liveImbalance: number;
   /** Consecutive prior observations of a reversed book. */
   reversalStreak: number;
+  /** v5.7: barrier-implied baseline the entry edge was measured against. 0 = unknown. */
+  neutralWinRate?: number;
   heldMinutes: number;
   /** Volatility-derived expected time to resolution, from geometry.ts. */
   expectedMinutes: number;
@@ -150,11 +152,15 @@ export function decayedPWin(
   liveImbalance: number,
   heldMinutes: number,
   cfg: ScalpHoldConfig = DEFAULT_SCALP_HOLD,
+  neutralWinRate = 0,
 ): number {
+  // v5.7: decay toward the BARRIER BASELINE. A stale signal leaves the geometry, not a
+  // flat 0.52 that has nothing to do with where this position's target and stop sit.
+  const anchor = neutralWinRate > 0 ? neutralWinRate : cfg.basePWin;
   const decay = Math.pow(0.5, Math.max(0, heldMinutes) / Math.max(0.01, cfg.alphaHalfLifeMinutes));
-  const carried = (entryPWin - cfg.basePWin) * decay;
+  const carried = (entryPWin - anchor) * decay;
   const live = clamp(liveImbalance, -0.40, 0.60) * cfg.liveImbalanceWeight * (1 - decay);
-  return clamp(cfg.basePWin + carried + live, cfg.pWinFloor, cfg.pWinCeil);
+  return clamp(anchor + carried + live, cfg.pWinFloor, cfg.pWinCeil);
 }
 
 export function evaluateHold(
@@ -164,7 +170,7 @@ export function evaluateHold(
   const price = input.currentPrice;
   const reversed = input.liveImbalance <= cfg.reversalImbalance;
   const reversalStreak = reversed ? Math.max(0, input.reversalStreak) + 1 : 0;
-  const livePWin = decayedPWin(input.entryPWin, input.liveImbalance, input.heldMinutes, cfg);
+  const livePWin = decayedPWin(input.entryPWin, input.liveImbalance, input.heldMinutes, cfg, input.neutralWinRate ?? 0);
   const pastExpected = input.expectedMinutes > 0 && input.heldMinutes >= input.expectedMinutes;
 
   // Upside still available FROM HERE, and risk still at stake from here.
