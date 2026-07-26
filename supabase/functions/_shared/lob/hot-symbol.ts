@@ -21,8 +21,11 @@ export function scoreHotSymbol(features: LobFeatureVector): HotSymbolScore {
   const notional = logNorm(features.aggressiveNotionalPerSecond, Math.max(1, features.minActionableTurnover24h / 86_400));
   const turnover = logNorm(turnoverRatio, 20);
   const flowEnergy = clamp(Math.abs(features.tradePressureFast) * 0.55 + features.ofiPersistence * 0.45);
+  const marketHeat = clamp(features.marketHeatScore / 100);
+  const acceleration = clamp(features.notionalAcceleration);
   const activityScore = clamp(
-    update * 0.24 + arrival * 0.28 + notional * 0.24 + turnover * 0.12 + flowEnergy * 0.12,
+    marketHeat * 0.30 + acceleration * 0.18 + update * 0.14 + arrival * 0.14 +
+      notional * 0.12 + flowEnergy * 0.08 + turnover * 0.04,
   );
 
   const spread = features.spreadBps == null ? 0 : clamp(1 - features.spreadBps / 30);
@@ -47,6 +50,8 @@ export function scoreHotSymbol(features: LobFeatureVector): HotSymbolScore {
       aggressive_notional: notional * 100,
       turnover_ratio: turnover * 100,
       flow_energy: flowEnergy * 100,
+      market_heat: marketHeat * 100,
+      notional_acceleration: acceleration * 100,
       spread: spread * 100,
       freshness: freshness * 100,
       depth: depth * 100,

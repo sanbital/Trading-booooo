@@ -1,4 +1,4 @@
-// Trading-booooo v6.0.0 — LOB_SCALP domain types.
+// Trading-booooo v6.1.0-HEAT — LOB_SCALP domain types.
 // Fractions use decimal form unless a field explicitly ends with Bps/Pct.
 
 export type LobPatternName =
@@ -42,6 +42,10 @@ export interface LobFeatureVector {
   turnover24hQuote: number;
   minActionableTurnover24h: number;
   trendContext: number;
+  marketHeatScore: number;
+  recentNotionalPerSecond: number;
+  notionalAcceleration: number;
+  tradeCountPerSecond: number;
 }
 
 export interface LobPatternSignal {

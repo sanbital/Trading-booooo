@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v5.2.3
+// Trading-booooo Market Scanner v6.1.0-HEAT
 // Pure analysis engine. Public market data only; no order or account operations.
 
 import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-profile.ts";
@@ -14,7 +14,7 @@ import {
   type ScalpGeometry,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "6.0.0-LOB";
+export const ENGINE_VERSION = "6.1.0-HEAT";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -42,6 +42,7 @@ export type TickerRow = {
   acc_trade_price_24h?: number | string;
   trade_timestamp?: number | string;
   timestamp?: number | string;
+  trade_count?: number | string;
 };
 
 export type CandleRow = {
@@ -104,6 +105,11 @@ export type UniverseRow = {
   eligible: boolean;
   excluded_reason: string | null;
   caution_labels: string[];
+  heat_rank?: number;
+  market_heat_score?: number;
+  recent_notional_per_second?: number;
+  notional_acceleration?: number;
+  trade_count_per_second?: number;
 };
 
 export type TrendState =
@@ -454,6 +460,11 @@ export type FinalCandidate = {
     reasons: string[];
     features: LobFeatureVector;
     signal_at: string;
+    heat_rank?: number;
+    market_heat_score?: number;
+    recent_notional_per_second?: number;
+    notional_acceleration?: number;
+    trade_count_per_second?: number;
   };
   // Stage 3: present only when the scan ran in SCALP strategy. Carries the scalp
   // decision inputs the autotrader needs (target/stop/pWin) for its precise EV gate.
@@ -2926,6 +2937,10 @@ export function finalizeCandidate(
       turnover24hQuote: period.universe.turnover_24h_quote,
       minActionableTurnover24h: period.universe.min_actionable_turnover_24h,
       trendContext: period.trend_signal,
+      marketHeatScore: finiteOr(period.universe.market_heat_score, 0),
+      recentNotionalPerSecond: finiteOr(period.universe.recent_notional_per_second, 0),
+      notionalAcceleration: finiteOr(period.universe.notional_acceleration, 0),
+      tradeCountPerSecond: finiteOr(period.universe.trade_count_per_second, 0),
     };
     const spread = Math.max(0, micro.spread_bps || 0);
     lobResult = evaluateLobEntry(
@@ -3069,7 +3084,7 @@ export function finalizeCandidate(
   const generatedAt = Number(micro.reference_timestamp || Date.now());
   const automatedMode = risk.operatorMode === "AUTOMATED";
   const validMinutes = risk.strategy === "LOB_SCALP"
-    ? 1
+    ? 20 / 60
     : Math.round(clamp(
       risk.recommendationValidMinutes ?? (automatedMode ? 5 : 15),
       automatedMode ? 1 : 5,

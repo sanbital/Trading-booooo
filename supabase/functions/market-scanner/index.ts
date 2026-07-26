@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v6.0.0-LOB — Supabase Edge Function
+// Trading-booooo Market Scanner v6.1.0-HEAT — Supabase Edge Function
 // Upbit KRW / Binance USDT universe scan -> multi-period analysis -> orderflow validation.
 // Public market analysis. Private account/order execution is delegated to a fixed-IP gateway.
 
@@ -19,6 +19,7 @@ import {
   type RiskConfig,
   selectShortlist,
   type TickerRow,
+  type TimeframeMetrics,
   timeframeMetrics,
   type TradeRow,
   type UniverseRow,
@@ -34,6 +35,7 @@ import {
   persistScan,
   type LearningParameters,
 } from "./forward-learning.ts";
+import { rankMarketHeat, type MarketHeatScore, type MarketHeatTicker } from "../_shared/lob/market-heat.ts";
 
 
 const UPBIT = "https://api.upbit.com";
@@ -46,10 +48,10 @@ const DEFAULT_DEEP_SCAN_LIMIT = 30;
 const FINALIST_LIMIT = 8;
 const BOOK_SAMPLE_COUNT = 4;
 const BOOK_SAMPLE_INTERVAL_MS = 250;
-const DEFAULT_DYNAMIC_OBSERVATION_MS = 15_000;
-const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 20_000;
+const DEFAULT_DYNAMIC_OBSERVATION_MS = 8_000;
+const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 10_000;
 const MIN_DYNAMIC_OBSERVATION_MS = 8_000;
-const MAX_DYNAMIC_OBSERVATION_MS = 30_000;
+const MAX_DYNAMIC_OBSERVATION_MS = 12_000;
 const MAX_DYNAMIC_BOOK_EVENTS = 1_200;
 const MAX_DYNAMIC_TRADE_EVENTS = 2_500;
 const CANDLE_BATCH_SIZE = 7;
@@ -383,6 +385,7 @@ function normalizeBinanceTickers(raw: unknown): TickerRow[] {
       signed_change_rate: Number(row.priceChangePercent) / 100,
       acc_trade_price_24h: Number(row.quoteVolume),
       trade_timestamp: Number(row.closeTime),
+      trade_count: Number(row.count),
     };
   });
 }
@@ -907,6 +910,7 @@ function fallbackTick(snapshots: OrderbookSnapshot[], price: number): number {
 
 async function loadMicrostructure(
   finalists: PeriodAnalysis[],
+  observationOverrideMs?: number,
 ): Promise<MicroBundle> {
   const markets = finalists.map((item) => item.universe.market);
   const marketList = markets.join(",");
@@ -915,7 +919,9 @@ async function loadMicrostructure(
   );
   const trades = new Map<string, TradeRow[]>();
   const ticks = new Map<string, number>();
-  const observationMs = dynamicObservationMs(finalists);
+  const observationMs = observationOverrideMs == null
+    ? dynamicObservationMs(finalists)
+    : Math.round(clamp(observationOverrideMs, MIN_DYNAMIC_OBSERVATION_MS, MAX_DYNAMIC_OBSERVATION_MS));
   const dynamicPromise = optional(
     collectDynamicStream(markets, observationMs),
   );
@@ -1002,6 +1008,7 @@ async function loadMicrostructure(
 async function loadBinanceMicrostructure(
   finalists: PeriodAnalysis[],
   instrumentTicks: Map<string, number>,
+  observationOverrideMs?: number,
 ): Promise<MicroBundle> {
   const markets = finalists.map((item) => item.universe.market);
   const snapshots = new Map(
@@ -1009,7 +1016,9 @@ async function loadBinanceMicrostructure(
   );
   const trades = new Map<string, TradeRow[]>();
   const ticks = new Map(instrumentTicks);
-  const observationMs = dynamicObservationMs(finalists);
+  const observationMs = observationOverrideMs == null
+    ? dynamicObservationMs(finalists)
+    : Math.round(clamp(observationOverrideMs, MIN_DYNAMIC_OBSERVATION_MS, MAX_DYNAMIC_OBSERVATION_MS));
   const dynamicPromise = optional(
     collectBinanceDynamicStream(markets, observationMs),
   );
@@ -1123,6 +1132,309 @@ function periodRanking(item: PeriodAnalysis, rank: number) {
   };
 }
 
+
+function heatTickerSnapshot(rows: TickerRow[], timestampMs: number): MarketHeatTicker[] {
+  return rows.flatMap((row) => {
+    const opening = finite(row.opening_price, finite(row.trade_price, 0));
+    const high = finite(row.high_price, finite(row.trade_price, 0));
+    const low = finite(row.low_price, finite(row.trade_price, 0));
+    const price = finite(row.trade_price, 0);
+    if (!row.market || !(price > 0)) return [];
+    return [{
+      market: String(row.market),
+      timestampMs,
+      price,
+      turnover24hQuote: Math.max(0, finite(row.acc_trade_price_24h, 0)),
+      tradeCount: finite(row.trade_count, Number.NaN),
+      change24hPct: finite(row.signed_change_rate, 0) * 100,
+      range24hPct: opening > 0 ? Math.max(0, (high - low) / opening * 100) : 0,
+    }];
+  });
+}
+
+async function sampleWholeMarketHeat(
+  exchange: Exchange,
+  firstRows: TickerRow[],
+): Promise<{ latestRows: TickerRow[]; heat: MarketHeatScore[]; sampleCount: number; elapsedMs: number }> {
+  const started = Date.now();
+  const sampleCount = Math.round(clamp(finite(Deno.env.get("LOB_HEAT_SAMPLE_COUNT"), 3), 2, 5));
+  const intervalMs = Math.round(clamp(finite(Deno.env.get("LOB_HEAT_SAMPLE_INTERVAL_MS"), 900), 400, 2000));
+  const snapshots: MarketHeatTicker[][] = [heatTickerSnapshot(firstRows, Date.now())];
+  let latestRows = firstRows;
+  for (let sample = 1; sample < sampleCount; sample++) {
+    await sleep(intervalMs);
+    const raw = exchange === "binance"
+      ? await fetchJson(binanceQuery("/api/v3/ticker/24hr"), 10_000, 2)
+      : await fetchJson(query("/v1/ticker/all", { quote_currencies: "KRW" }), 10_000, 2);
+    latestRows = exchange === "binance"
+      ? normalizeBinanceTickers(raw)
+      : Array.isArray(raw) ? raw as TickerRow[] : [];
+    snapshots.push(heatTickerSnapshot(latestRows, Date.now()));
+  }
+  const heat = rankMarketHeat(snapshots, exchange === "binance"
+    ? {
+      minimumTurnover24hQuote: 100_000,
+      referenceRecentNotionalPerSecond: 25_000,
+      referenceTradeCountPerSecond: 8,
+    }
+    : {
+      minimumTurnover24hQuote: 100_000_000,
+      referenceRecentNotionalPerSecond: 15_000_000,
+      referenceTradeCountPerSecond: 8,
+    });
+  return { latestRows, heat, sampleCount, elapsedMs: Date.now() - started };
+}
+
+function neutralHeatTimeframe(price: number, trend: number): TimeframeMetrics {
+  return {
+    bars: 0,
+    close: price,
+    ema9: null,
+    ema21: null,
+    ema50: null,
+    rsi14: null,
+    atr14: null,
+    atr_pct: null,
+    macd_histogram: null,
+    return_3_pct: 0,
+    return_12_pct: 0,
+    volume_ratio: 1,
+    trend_signal: trend,
+    momentum_signal: trend,
+    trend_state: trend > 0.15 ? "RECOVERY" : trend < -0.15 ? "BEAR" : "MIXED",
+    ema21_slope_pct: null,
+    atr_normalized_return_12: null,
+    overheat_score: 0,
+    overextension_pct: null,
+    recent_high: price,
+    recent_low: price,
+    support: null,
+    resistance: null,
+  };
+}
+
+function heatPeriod(row: UniverseRow): PeriodAnalysis {
+  const trend = clamp(row.change_24h_pct / 100, -1, 1) * 0.25;
+  const tf = neutralHeatTimeframe(row.current_price, trend);
+  return {
+    universe: row,
+    timeframes: { m5: tf, m15: tf, h4: tf, day: tf },
+    period_score: finite(row.market_heat_score, 0),
+    trend_signal: trend,
+    momentum_signal: trend,
+    data_completeness: 0,
+    preliminary_status: "CANDIDATE",
+    positives: [
+      `전 종목 실시간 거래대금 가속도 기준 Heat rank ${row.heat_rank ?? "N/A"}입니다.`,
+      `최근 체결대금 속도 ${Math.round(finite(row.recent_notional_per_second, 0)).toLocaleString("en-US")} ${row.quote_currency}/s입니다.`,
+    ],
+    negatives: [],
+    warnings: row.caution_labels.length
+      ? [`거래소 경보 표시는 정보로만 유지합니다: ${row.caution_labels.join(", ")}`]
+      : [],
+  };
+}
+
+function clearLobEventRisk(market: string) {
+  return {
+    status: "CLEAR" as const,
+    label: "LOB 경로 외부 이벤트 비차단",
+    checked_at: new Date().toISOString(),
+    symbol: market,
+    provider_status: {},
+    coverage_complete: false,
+    volume_anomaly: false,
+    volume_ratio_4h: 0,
+    volume_ratio_day: 0,
+    evidence: [],
+    warnings: [],
+  };
+}
+
+async function runLobHeatScan(
+  risk: RiskConfig,
+  exchange: Exchange,
+  markets: MarketRow[],
+  firstRows: TickerRow[],
+  instrumentTicks: Map<string, number>,
+  started: number,
+) {
+  const binance = exchange === "binance";
+  const heatSample = await sampleWholeMarketHeat(exchange, firstRows);
+  const universe = buildUniverse(
+    markets,
+    heatSample.latestRows,
+    Date.now(),
+    binance
+      ? {
+        quoteCurrency: "USDT",
+        marketMatches: (market) => market.endsWith("USDT"),
+        minTurnover24h: 0,
+        minActionableTurnover24h: 100_000,
+        liquidityLogFloor: 4.7,
+      }
+      : {
+        minTurnover24h: 0,
+        minActionableTurnover24h: 100_000_000,
+        liquidityLogFloor: 7.7,
+      },
+  );
+  const universeByMarket = new Map(universe.map((row) => [row.market, row]));
+  const finalistLimit = Math.round(clamp(finite(Deno.env.get("LOB_HEAT_FINALIST_LIMIT"), 12), 4, 20));
+  const heatRanked = heatSample.heat.flatMap((heat) => {
+    const row = universeByMarket.get(heat.market);
+    if (!row || !(row.current_price > 0) || row.freshness_seconds > 300) return [];
+    return [{
+      ...row,
+      eligible: true,
+      excluded_reason: null,
+      heat_rank: heat.rank,
+      market_heat_score: heat.heatScore,
+      recent_notional_per_second: heat.recentNotionalPerSecond,
+      notional_acceleration: heat.notionalAcceleration,
+      trade_count_per_second: heat.tradeCountPerSecond,
+    } as UniverseRow];
+  });
+  const selectedRows = heatRanked.slice(0, finalistLimit);
+  const finalists = selectedRows.map(heatPeriod);
+  const observationMs = Math.round(clamp(finite(Deno.env.get("LOB_OBSERVATION_MS"), 8_000), 8_000, 12_000));
+  const microBundle = binance
+    ? await loadBinanceMicrostructure(finalists, instrumentTicks, observationMs)
+    : await loadMicrostructure(finalists, observationMs);
+  const generatedAt = Date.now();
+  const finalCandidates = finalists.map((period) => {
+    const market = period.universe.market;
+    const micro = computeMicrostructure(
+      microBundle.snapshots.get(market) || [],
+      microBundle.trades.get(market) || [],
+      generatedAt,
+      microBundle.ticks.get(market)!,
+    );
+    return finalizeCandidate(
+      period,
+      micro,
+      microBundle.ticks.get(market)!,
+      risk,
+      clearLobEventRisk(market),
+    );
+  }).sort((left, right) => {
+    if (left.decision === "BUY" && right.decision !== "BUY") return -1;
+    if (left.decision !== "BUY" && right.decision === "BUY") return 1;
+    const heatDelta = finite(right.lob?.market_heat_score, 0) - finite(left.lob?.market_heat_score, 0);
+    if (Math.abs(heatDelta) > 1e-9) return heatDelta;
+    return finite(right.lob?.ev_lower_bound_bps, -1e9) - finite(left.lob?.ev_lower_bound_bps, -1e9);
+  });
+  finalCandidates.forEach((candidate, index) => candidate.rank = index + 1);
+  const recommendations = finalCandidates.filter((candidate) => candidate.decision === "BUY");
+  const watchlist = finalCandidates.filter((candidate) => candidate.decision !== "BUY").slice(0, 8);
+  const status = recommendations.length ? "BUY_CANDIDATES" : "NO_BUY";
+  const scanEndMs = Date.now();
+  const funnel: ScanFunnel = {
+    total_instruments: markets.length,
+    universe: universe.length,
+    eligible: heatRanked.length,
+    shortlist: selectedRows.length,
+    analyzed: selectedRows.length,
+    finalists: finalists.length,
+    final_candidates: finalCandidates.length,
+    buy: recommendations.length,
+  };
+  const diagnostics = buildScanDiagnostics({
+    startedMs: started,
+    endMs: scanEndMs,
+    exchange,
+    status,
+    funnel,
+    candidates: finalCandidates,
+    websocket: websocketHealth(
+      microBundle.snapshots,
+      finalists.map((row) => row.universe.market),
+      scanEndMs,
+      microBundle.websocketMarkets,
+      microBundle.observationMs,
+    ),
+  });
+  return {
+    scan_id: crypto.randomUUID(),
+    status,
+    diagnostics,
+    headline: recommendations.length
+      ? `${binance ? "바이낸스 USDT" : "업비트 KRW"} 전 종목 Heat 스캔에서 LOB 매수 후보 ${recommendations.length}개가 탐지됐습니다.`
+      : `${binance ? "바이낸스 USDT" : "업비트 KRW"} 전 종목의 현재 자금 이동을 측정했으나 비용 차감 순EV가 양수인 LOB 진입은 없습니다.`,
+    primary: recommendations[0] || null,
+    recommendations,
+    watchlist,
+    finalists: finalCandidates,
+    ranking: heatSample.heat.slice(0, 20).map((row) => ({
+      rank: row.rank,
+      market: row.market,
+      korean_name: universeByMarket.get(row.market)?.korean_name || row.market,
+      current_price: universeByMarket.get(row.market)?.current_price || 0,
+      change_24h_pct: row.change24hPct,
+      turnover_24h_krw: row.turnover24hQuote,
+      turnover_24h_quote: row.turnover24hQuote,
+      period_score: Number(row.heatScore.toFixed(2)),
+      preliminary_status: "CANDIDATE" as const,
+      trend: { m5: 0, m15: 0, h4: 0, day: 0 },
+      market_heat_score: Number(row.heatScore.toFixed(2)),
+      recent_notional_per_second: Number(row.recentNotionalPerSecond.toFixed(2)),
+      notional_acceleration: Number(row.notionalAcceleration.toFixed(4)),
+      trade_count_per_second: Number(row.tradeCountPerSecond.toFixed(2)),
+    })),
+    coverage: {
+      exchange,
+      exchange_label: binance ? "바이낸스 현물" : "업비트 현물",
+      quote_currency: binance ? "USDT" : "KRW",
+      listed_markets: universe.length,
+      listed_krw_markets: universe.length,
+      eligible_after_safety_filter: heatRanked.length,
+      excluded_at_universe_stage: universe.length - heatRanked.length,
+      period_screened_markets: 0,
+      period_screened_complete: 0,
+      deep_period_analyzed: 0,
+      microstructure_finalists: finalCandidates.length,
+      heat_engine: {
+        mode: "WHOLE_MARKET_TICKER_DELTA",
+        sample_count: heatSample.sampleCount,
+        sample_elapsed_seconds: Number((heatSample.elapsedMs / 1000).toFixed(2)),
+        ranked_markets: heatSample.heat.length,
+        selected_for_lob: selectedRows.length,
+      },
+      dynamic_orderflow: {
+        requested_observation_seconds: Number((microBundle.observationMs / 1000).toFixed(1)),
+        websocket_markets: microBundle.websocketMarkets,
+        sufficient_markets: finalCandidates.filter((candidate) => candidate.microstructure.dynamic.sufficient).length,
+      },
+      excluded_summary: [],
+      periods: { heat: "전 종목 0.9초 간격 티커 누적거래대금 차분", lob: "상위 Heat 종목 8초 실시간 호가·체결" },
+    },
+    assumptions: {
+      exchange,
+      quote_market: binance ? "USDT" : "KRW",
+      fee_per_side_pct: risk.feePerSidePct,
+      capital_quote: risk.capitalKrw,
+      capital_currency: binance ? "USDT" : "KRW",
+      risk_per_trade_pct: risk.riskPct,
+      strategy: "LOB_SCALP_HEAT_FIRST",
+      trend_role: "AUXILIARY_ONLY",
+      hard_economic_gate: "TARGET_NET_PROFIT_GT_0_AND_CONSERVATIVE_NET_EV_GT_0",
+      automatic_order: risk.operatorMode === "AUTOMATED",
+    },
+    meta: {
+      engine_version: ENGINE_VERSION,
+      generated_at: new Date(generatedAt).toISOString(),
+      elapsed_seconds: Number(((Date.now() - started) / 1000).toFixed(2)),
+      exchange,
+      quote_currency: binance ? "USDT" : "KRW",
+      data_source: binance
+        ? "BINANCE_ALL_TICKER_DELTA_PLUS_PUBLIC_LOB_WEBSOCKET"
+        : "UPBIT_ALL_TICKER_DELTA_PLUS_PUBLIC_LOB_WEBSOCKET",
+      auth_mode: "PRIVATE_FRAGMENT_TOKEN",
+      auto_order: risk.operatorMode === "AUTOMATED",
+    },
+  };
+}
+
 async function runScan(risk: RiskConfig, exchange: Exchange) {
   const started = Date.now();
   const binance = exchange === "binance";
@@ -1144,6 +1456,9 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
     ]);
     markets = values[0] as MarketRow[];
     tickerRows = Array.isArray(values[1]) ? values[1] as TickerRow[] : [];
+  }
+  if (String(risk.strategy) === "LOB_SCALP") {
+    return await runLobHeatScan(risk, exchange, markets, tickerRows, instrumentTicks, started);
   }
   const universe = buildUniverse(
     markets,

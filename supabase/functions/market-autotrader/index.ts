@@ -1,4 +1,4 @@
-// Trading-booooo v6.0.0-LOB — autonomous Upbit KRW + Binance USDT spot orchestrator.
+// Trading-booooo v6.1.0-HEAT — autonomous Upbit KRW + Binance USDT spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -38,7 +38,7 @@ import { evaluateLobEntry } from "../_shared/lob/entry.ts";
 import { evaluateLobExit } from "../_shared/lob/exit.ts";
 import type { LobFeatureVector } from "../_shared/lob/types.ts";
 
-const VERSION = "6.0.0-LOB";
+const VERSION = "6.1.0-HEAT";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -261,8 +261,8 @@ function defaultSettings(): TradingSettings & JsonRecord {
     withdrawal_mode: false, manual_intervention_required: false, manual_event_reason: null,
     max_daily_loss_pct: 1.5, max_weekly_loss_pct: 3, max_consecutive_losses: 3,
     entry_ttl_seconds: 20,
-    full_scan_interval_seconds: clamp(finite(env("AUTO_SCAN_INTERVAL_SECONDS"), 15), 10, 3600),
-    monitor_interval_seconds: clamp(finite(env("AUTO_MONITOR_INTERVAL_SECONDS"), 5), 5, 300),
+    full_scan_interval_seconds: clamp(finite(env("AUTO_SCAN_INTERVAL_SECONDS"), 12), 8, 3600),
+    monitor_interval_seconds: clamp(finite(env("AUTO_MONITOR_INTERVAL_SECONDS"), 2), 1, 300),
     // v5.12: capacity controller may raise this up to 12. The total-exposure-invariant
     // risk allocator prevents the additional attempts from increasing strategy exposure.
     max_new_entries_per_scan: 20, suppress_cross_exchange_same_asset: true,
@@ -309,8 +309,8 @@ function defaultSettings(): TradingSettings & JsonRecord {
     lob_absolute_max_holding_seconds: clamp(finite(env("LOB_ABSOLUTE_MAX_HOLDING_SECONDS"), 300), 1, 300),
     lob_scan_interval_seconds: clamp(finite(env("LOB_SCAN_INTERVAL_SECONDS"), 15), 10, 60),
     lob_min_net_ev_bps: clamp(finite(env("LOB_MIN_NET_EV_BPS"), 0.01), 0, 100),
-    lob_max_book_age_ms: clamp(finite(env("LOB_MAX_BOOK_AGE_MS"), 2500), 100, 10000),
-    lob_max_spread_bps: clamp(finite(env("LOB_MAX_SPREAD_BPS"), 30), 1, 100),
+    lob_max_book_age_ms: clamp(finite(env("LOB_MAX_BOOK_AGE_MS"), 5000), 100, 10000),
+    lob_max_spread_bps: clamp(finite(env("LOB_MAX_SPREAD_BPS"), 60), 1, 100),
     lob_min_bid_depth_ratio: clamp(finite(env("LOB_MIN_BID_DEPTH_RATIO"), 0.35), 0.05, 1),
     scalp_hold_alpha_half_life_minutes: clamp(finite(env("SCALP_HOLD_ALPHA_HALF_LIFE_MINUTES"), 12), 1, 240),
     scalp_hold_min_edge_after_expected: clamp(finite(env("SCALP_HOLD_MIN_EDGE_AFTER_EXPECTED"), 0.0005), 0, 0.01),
@@ -367,9 +367,9 @@ function defaultSettings(): TradingSettings & JsonRecord {
     // closer and the stop further away, measured from where the market actually is.
     scalp_maker_entry: env("SCALP_MAKER_ENTRY") !== "false",
     // How long a resting entry waits before it is abandoned. Unfilled costs nothing.
-    scalp_maker_entry_ttl_seconds: clamp(finite(env("SCALP_MAKER_ENTRY_TTL_SECONDS"), 90), 5, 900),
+    scalp_maker_entry_ttl_seconds: clamp(finite(env("SCALP_MAKER_ENTRY_TTL_SECONDS"), 8), 5, 900),
     // Cancel early if the book walks away from our resting bid by this many ticks.
-    scalp_maker_entry_drift_ticks: clamp(finite(env("SCALP_MAKER_ENTRY_DRIFT_TICKS"), 3), 1, 50),
+    scalp_maker_entry_drift_ticks: clamp(finite(env("SCALP_MAKER_ENTRY_DRIFT_TICKS"), 1), 1, 50),
     // Assumed spread earned per round trip when sizing barriers. Live spread is measured
     // per symbol at order time; this is only the sizing input.
     scalp_spread_capture: clamp(finite(env("SCALP_SPREAD_CAPTURE"), 0.0005), 0, 0.005),
@@ -541,7 +541,9 @@ async function runScanner(portfolios: Record<Exchange, any>, settings: TradingSe
         // real commission rate rather than recomputing the list price.
         upbit_fee_per_side_pct: await liveFeePct("upbit", settings),
         binance_fee_per_side_pct: await liveFeePct("binance", settings),
-        recommendation_valid_minutes: Math.max(1, Math.ceil(settings.entry_ttl_seconds / 60)),
+        recommendation_valid_minutes: isLobStrategy((settings as any).strategy)
+          ? settings.entry_ttl_seconds / 60
+          : Math.max(1, Math.ceil(settings.entry_ttl_seconds / 60)),
         min_actionable_holding_hours: 0.08, max_unattended_hours: 2, require_precommitted_exit: true,
       }),
     });
@@ -653,6 +655,10 @@ function liveLobFeatures(scan: any, market: any): LobFeatureVector {
     turnover24hQuote: finite(base.turnover24hQuote, 0),
     minActionableTurnover24h: Math.max(1, finite(base.minActionableTurnover24h, 1)),
     trendContext: finite(base.trendContext, 0),
+    marketHeatScore: finite(base.marketHeatScore, finite(scan?.market_heat_score, 0)),
+    recentNotionalPerSecond: finite(base.recentNotionalPerSecond, finite(scan?.recent_notional_per_second, 0)),
+    notionalAcceleration: finite(base.notionalAcceleration, finite(scan?.notional_acceleration, 0)),
+    tradeCountPerSecond: finite(base.tradeCountPerSecond, finite(scan?.trade_count_per_second, 0)),
   };
 }
 
@@ -1072,7 +1078,7 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
       stopExitSlippageBps: Math.max(0.4, spreadBps * 0.55),
       spreadBps,
     }, {
-      minEvBps: Math.max(0, finite((settings as any).lob_min_net_ev_bps, 0.01)),
+      minEvBps: Math.max(0, finite((settings as any).lob_min_net_ev_bps, 0)),
       maxBookAgeMs: Math.max(250, finite((settings as any).lob_max_book_age_ms, 2500)),
       maxSpreadBps: Math.max(1, finite((settings as any).lob_max_spread_bps, LIVE_MAX_SPREAD_BPS)),
       maxHoldingSeconds: Math.round(clamp(finite((settings as any).lob_max_holding_seconds, 180), 1, 300)),
@@ -1693,7 +1699,7 @@ async function syncMakerEntry(position: Position, settings: TradingSettings, cyc
 
   const placedAt = Date.parse(String(position.metadata?.maker_entry_placed_at || ""));
   const ageSeconds = Number.isFinite(placedAt) ? (Date.now() - placedAt) / 1000 : Number.POSITIVE_INFINITY;
-  const ttl = clamp(finite((settings as any).scalp_maker_entry_ttl_seconds, 90), 5, 900);
+  const ttl = clamp(finite((settings as any).scalp_maker_entry_ttl_seconds, isLobStrategy((settings as any).strategy) ? 8 : 90), 5, 900);
 
   let drifted = false;
   if (status === "OPEN" || status === "PARTIALLY_FILLED") {
@@ -1703,7 +1709,7 @@ async function syncMakerEntry(position: Position, settings: TradingSettings, cyc
         finite(position.metadata?.maker_entry_price),
         finite(market.best_bid),
         finite(position.tick_size),
-        clamp(finite((settings as any).scalp_maker_entry_drift_ticks, 3), 1, 50),
+        clamp(finite((settings as any).scalp_maker_entry_drift_ticks, isLobStrategy((settings as any).strategy) ? 1 : 3), 1, 50),
       );
     } catch { /* quote unavailable: fall back to the TTL alone */ }
   }

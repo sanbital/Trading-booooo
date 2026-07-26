@@ -12,13 +12,13 @@ function clamp(value: number, low: number, high: number): number {
 }
 
 export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
-  minSamples: 8,
-  maxBookAgeMs: 2500,
-  maxSpreadBps: 30,
-  minHotnessScore: 25,
-  minPrimaryPatternConfidence: 0.48,
-  minNetProfitBps: 0.5,
-  minEvBps: 0.01,
+  minSamples: 4,
+  maxBookAgeMs: 5000,
+  maxSpreadBps: 60,
+  minHotnessScore: 0,
+  minPrimaryPatternConfidence: 0.32,
+  minNetProfitBps: 0.01,
+  minEvBps: 0,
   minTargetBps: 8,
   maxTargetBps: 120,
   minStopBps: 6,
@@ -46,7 +46,7 @@ export function evaluateLobEntry(
   if (features.samples < cfg.minSamples) reasons.push("INSUFFICIENT_LOB_SAMPLES");
   if (features.bookAgeMs == null || features.bookAgeMs > cfg.maxBookAgeMs) reasons.push("STALE_ORDERBOOK");
   if (features.spreadBps == null || features.spreadBps > cfg.maxSpreadBps) reasons.push("SPREAD_TOO_WIDE");
-  if (features.spoofLikeScore >= 0.85) reasons.push("SPOOF_LIKE_BOOK");
+  if (features.spoofLikeScore >= 0.97) reasons.push("SPOOF_LIKE_BOOK");
   if (hotness.hotnessScore < cfg.minHotnessScore) reasons.push("BOOK_NOT_HOT_ENOUGH");
   if (!primary) reasons.push("NO_PRIMARY_LOB_PATTERN");
 
