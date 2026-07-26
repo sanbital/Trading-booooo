@@ -67,6 +67,15 @@ export function neutralMicro(price: number, timestamp = Date.now()): Microstruct
     ofi_persistence: 0,
     dynamic: {
       status: "NEUTRAL", // dynamic_safety 게이트 통과
+      // v6.2 trap fields. Historical candles carry no order-book events, so these stay at
+      // the values that mean "nothing detected" — a perfectly efficient path and zero
+      // noise — rather than at values that would let a backtest claim a trap it never saw.
+      ask_spoof_score: 0,
+      ask_refill_ratio: 0,
+      path_efficiency: 1,
+      reversal_rate: 0,
+      noise_band_bps: 0,
+      quote_flicker_rate: 0,
       label: "동적 특이 위험 없음",
       sufficient: true, // micro_data 게이트 통과
       observation_ms: 60_000,
