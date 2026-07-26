@@ -29,7 +29,7 @@ import { evaluateHold, resolveHoldConfig, safetyTtlExceeded, type ScalpHoldConfi
 import { DEFAULT_SCALP_SAFETY, type ScalpSafetyConfig, type ScalpDayState } from "../_shared/scalp/safety.ts";
 import { DEFAULT_COST_MODEL, type CostModelConfig } from "../_shared/scalp/cost-model.ts";
 
-const VERSION = "5.7.1";
+const VERSION = "5.7.3";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -217,7 +217,10 @@ function defaultSettings(): TradingSettings & JsonRecord {
     entry_ttl_seconds: 180,
     full_scan_interval_seconds: clamp(finite(env("AUTO_SCAN_INTERVAL_SECONDS"), 60), 60, 3600),
     monitor_interval_seconds: clamp(finite(env("AUTO_MONITOR_INTERVAL_SECONDS"), 15), 5, 300),
-    max_new_entries_per_scan: 2, suppress_cross_exchange_same_asset: true,
+    // v5.7.2: 2 -> 4. A resting maker entry counts against this budget while it waits, so
+    // a low fill rate throttles throughput twice over — once for the slot it holds and once
+    // for the per-scan allowance it consumes. The DB constraint caps this at 4.
+    max_new_entries_per_scan: 4, suppress_cross_exchange_same_asset: true,
     // Stage 4: scalp strategy. Default "TREND" = existing behavior, fully off.
     strategy: (env("TRADING_STRATEGY") === "SCALP" ? "SCALP" : "TREND"),
     scalp_per_order_pct: 100, // deprecated: allocation UI is the sole exposure ceiling

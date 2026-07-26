@@ -1160,7 +1160,11 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
   // Scalp scans a small top-liquidity set: trend is only a veto, so deep multi-timeframe
   // analysis over 30+ instruments is both unnecessary and the cause of WORKER_RESOURCE_LIMIT.
   const deepLimit = scalpMode
-    ? Math.round(clamp(finite(Deno.env.get("SCALP_DEEP_SCAN_LIMIT"), 12), 6, 20))
+    // v5.7.2: 12 -> 16. With 6 capital slots per exchange the FUNNEL, not the capital,
+    // became the throughput ceiling: only the finalists get a realtime orderbook read, so
+    // a narrow funnel starves the slots. Still bounded at 20 because deep multi-timeframe
+    // analysis over 30+ instruments is what trips WORKER_RESOURCE_LIMIT.
+    ? Math.round(clamp(finite(Deno.env.get("SCALP_DEEP_SCAN_LIMIT"), 16), 6, 20))
     : Math.round(
       clamp(
         finite(Deno.env.get("DEEP_SCAN_LIMIT"), DEFAULT_DEEP_SCAN_LIMIT),
@@ -1169,7 +1173,8 @@ async function runScan(risk: RiskConfig, exchange: Exchange) {
       ),
     );
   const finalistLimit = scalpMode
-    ? Math.round(clamp(finite(Deno.env.get("SCALP_FINALIST_LIMIT"), 6), 3, 10))
+    // v5.7.2: 6 -> 8 finalists get live orderbook + trade-flow analysis per exchange.
+    ? Math.round(clamp(finite(Deno.env.get("SCALP_FINALIST_LIMIT"), 8), 3, 10))
     : FINALIST_LIMIT;
   let eligible = universe.filter((item) => item.eligible);
   if (scalpMode) {

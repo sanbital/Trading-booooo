@@ -53,3 +53,11 @@ update public.trading_positions p
  where s.id = 1 and s.strategy = 'SCALP' and p.state = 'OPEN';
 
 update public.trading_settings set updated_at = now() where id = 1;
+
+-- v5.7.2: raise the per-scan entry allowance. With six capital slots per exchange the
+-- funnel became the throughput ceiling rather than the capital, and a resting maker entry
+-- consumes this budget while it waits for a fill.
+update public.trading_settings
+   set max_new_entries_per_scan = greatest(coalesce(max_new_entries_per_scan, 2), 4),
+       updated_at = now()
+ where id = 1 and strategy = 'SCALP';

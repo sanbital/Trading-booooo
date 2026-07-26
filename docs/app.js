@@ -956,8 +956,11 @@
     const strategy = String(settings.strategy || "TREND").toUpperCase();
     $("trader-strategy").textContent = strategy;
     $("trader-strategy").className = strategy === "SCALP" ? "state-running" : "mode-paper";
+    // v5.7.2: 이 라벨은 사실과 달랐다. scalp_max_holding_minutes 는 v5.4 이후
+    // '강제청산 시각'이 아니라 변동성으로 산출하는 '목표 도달 예상시간의 상한'이며,
+    // 실제로 시간 때문에 청산되는 시점은 scalp_safety_ttl_minutes 다.
     $("trader-strategy-note").textContent = strategy === "SCALP"
-      ? `최대 ${fmt(settings.scalp_max_holding_minutes, 0)}분 보유`
+      ? `도달예상 ≤${fmt(settings.scalp_max_holding_minutes, 0)}분 · 안전청산 ${fmt(settings.scalp_safety_ttl_minutes, 0)}분`
       : "상위 추세 중심";
     $("scalp-risk").textContent = strategy === "SCALP"
       ? `1회 -${fmt(settings.scalp_max_single_loss_pct, 1)}% · 1일 -${fmt(settings.scalp_daily_loss_pct, 1)}%`
@@ -972,7 +975,7 @@
     $("gateway-state").textContent = data.gateway?.ok ? "정상" : "오류";
     $("gateway-state").className = data.gateway?.ok ? "state-running" : "state-paused";
     $("gateway-heartbeat").textContent = settings.last_gateway_heartbeat_at ? `마지막 ${dateTime(settings.last_gateway_heartbeat_at)}` : "하트비트 없음";
-    $("operator-updated").textContent = `v${data.version || "5.2.0"} · ${new Date().toLocaleString("ko-KR")} 갱신`;
+    $("operator-updated").textContent = `설정 rev.${data.version ?? "—"} · ${new Date().toLocaleString("ko-KR")} 갱신`;
     renderAccount(data, "upbit");
     renderAccount(data, "binance");
     renderAllocations(settings);
