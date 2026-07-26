@@ -346,7 +346,12 @@ function candidateRows(
     net_rr: candidate.trade_plan?.net_rr ?? candidate.watch_entry_plan?.estimated_net_rr,
     estimated_cost_pct: candidate.trade_plan?.estimated_round_trip_cost_pct,
     failed_gate_count: candidate.failed_gates?.length || 0,
-    intended_horizon_hours: candidate.execution_plan?.intended_holding_hours ?? 1,
+    // v6.3.2: `intended_horizon_hours` is an integer column and LOB_SCALP holds for 180
+    // seconds, i.e. 0.05 hours -- Postgres rejected the whole 24-row batch on that one
+    // value. The true sub-hour horizon is already carried losslessly in
+    // `snapshot.lob.max_holding_seconds`; this column only buckets maturity for the legacy
+    // forward-learning job, so the smallest valid bucket is the correct answer here.
+    intended_horizon_hours: Math.max(1, Math.ceil(finite(candidate.execution_plan?.intended_holding_hours, 1))),
     recommendation_valid_until: candidate.execution_plan?.valid_until ?? null,
     // v6.3.1: these three reached into `trade_plan` and `execution_plan` without the
     // optional chaining every neighbouring line uses. LOB_SCALP does not build a pullback
