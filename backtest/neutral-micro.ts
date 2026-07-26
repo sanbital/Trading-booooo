@@ -51,20 +51,6 @@ export function neutralMicro(price: number, timestamp = Date.now()): Microstruct
     buy_notional: 1,
     sell_notional: 1,
     micro_score: 50, // 중립 — 최종점수에 ±0 기여
-
-    // v6 LOB_SCALP fields. Historical candle backtests cannot reconstruct these
-    // event-stream values, so the stub remains explicitly neutral rather than
-    // fabricating directional order-book evidence.
-    book_update_rate: 0,
-    trade_arrival_rate: 0,
-    aggressive_notional_per_second: 0,
-    microprice_deviation_bps: 0,
-    bid_depth_quote: 15_000_000,
-    ask_depth_quote: 15_000_000,
-    depth_ratio: 1,
-    bid_absorption_score: 0,
-    sweep_reclaim_score: 0,
-    ofi_persistence: 0,
     dynamic: {
       status: "NEUTRAL", // dynamic_safety 게이트 통과
       label: "동적 특이 위험 없음",
