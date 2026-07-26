@@ -1,4 +1,4 @@
-// Trading-booooo v5.2.3 — autonomous Upbit KRW + Binance USDT spot orchestrator.
+// Trading-booooo v5.2.4 — autonomous Upbit KRW + Binance USDT spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -27,7 +27,7 @@ import { scalpEntryDecision } from "../_shared/scalp/scalp-gate.ts";
 import { DEFAULT_SCALP_SAFETY, type ScalpSafetyConfig, type ScalpDayState } from "../_shared/scalp/safety.ts";
 import { DEFAULT_COST_MODEL, type CostModelConfig } from "../_shared/scalp/cost-model.ts";
 
-const VERSION = "5.2.3";
+const VERSION = "5.2.4";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const SERVICE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
@@ -180,7 +180,13 @@ async function gateway(exchange: Exchange, command: JsonRecord, timeoutMs = 15_0
     });
     const text = await res.text(); let data: any;
     try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
-    if (!res.ok || !data?.ok) throw new Error(`gateway ${res.status}: ${data?.error || text}`);
+    if (!res.ok || !data?.ok) {
+      const error = new Error(`gateway ${res.status}: ${data?.error || text}`) as Error & { status?: number; code?: string; payload?: any };
+      error.status = res.status;
+      error.code = data?.code || `GATEWAY_${res.status}`;
+      error.payload = data;
+      throw error;
+    }
     return data.result;
   } finally { clearTimeout(timer); }
 }
@@ -686,7 +692,17 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   }
 
   const testIdentifier = uniqueId("t", position.id);
-  await gateway(exchange, { action: "order_test", order: { market: candidate.market, side: "BUY", type: "LIMIT", price: entryPrice, quantity, time_in_force: "IOC", identifier: testIdentifier } });
+  try {
+    await gateway(exchange, { action: "order_test", order: { market: candidate.market, side: "BUY", type: "LIMIT", price: entryPrice, quantity, time_in_force: "IOC", identifier: testIdentifier } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await patch("trading_positions", `id=eq.${position.id}`, {
+      state: "CANCELLED", close_reason: "ENTRY_TEST_REJECTED", closed_at: new Date().toISOString(),
+      metadata: { ...(position.metadata || {}), entry_test_error: message },
+    });
+    await event("ENTRY_ERROR", `${exchange}:${candidate.market} entry test rejected`, { error: message }, { cycleId, positionId: position.id, level: "WARNING" });
+    return { entered: false, exchange, market: candidate.market, reason: message };
+  }
   const identifier = uniqueId("e", position.id);
   const orderRow = await createOrderRecord({
     position_id: position.id, candidate_id: candidate.id, cycle_id: cycleId, exchange, quote_currency: quote,
@@ -706,6 +722,16 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
     return { entered: true, paper: false, exchange, market: candidate.market, position: opened };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const status = Number((error as any)?.status || 0);
+    // A deterministic 4xx rejection means Binance/Upbit did not accept the order.
+    // Do not leave a ghost ENTRY_PENDING position. Only transport/5xx uncertainty
+    // remains reserved for duplicate-safe reconciliation.
+    if (status >= 400 && status < 500) {
+      await patch("trading_orders", `id=eq.${orderRow.id}`, { state: "REJECTED", error_message: message, completed_at: new Date().toISOString() });
+      await patch("trading_positions", `id=eq.${position.id}`, { state: "CANCELLED", close_reason: "ENTRY_REJECTED", closed_at: new Date().toISOString() });
+      await event("ENTRY_ERROR", `${exchange}:${candidate.market} entry rejected`, { identifier, error: message, status }, { cycleId, positionId: position.id, orderId: orderRow.id, level: "WARNING" });
+      return { entered: false, exchange, market: candidate.market, reason: message };
+    }
     await patch("trading_orders", `id=eq.${orderRow.id}`, { state: "UNKNOWN", error_message: message });
     await event("ENTRY_RESULT_UNKNOWN", `${exchange}:${candidate.market} entry requires reconciliation`, { identifier, error: message }, { cycleId, positionId: position.id, orderId: orderRow.id, level: "CRITICAL" });
     return { entered: false, reserved: true, pending_reconcile: true, exchange, market: candidate.market, reason: "entry result unknown; duplicate suppressed" };
@@ -787,7 +813,14 @@ async function applyExit(position: Position, price: number, action: string, cycl
 async function reconcileEntryPending(position: Position, cycleId: string) {
   if (position.is_paper) return;
   const orderRow = (await db(`trading_orders?position_id=eq.${position.id}&purpose=eq.ENTRY&select=*&order=created_at.desc&limit=1`))[0];
-  if (!orderRow) return;
+  if (!orderRow) {
+    const createdAt = new Date((position as any).created_at || 0).getTime();
+    if (!Number.isFinite(createdAt) || Date.now() - createdAt > 30_000) {
+      await patch("trading_positions", `id=eq.${position.id}`, { state: "CANCELLED", close_reason: "ORPHAN_ENTRY_PENDING", closed_at: new Date().toISOString() });
+      await event("ORPHAN_ENTRY_CANCELLED", `${position.exchange}:${position.market} orphan pending entry cleared`, {}, { cycleId, positionId: position.id, level: "WARNING" });
+    }
+    return;
+  }
   try {
     const order = await gateway(position.exchange, { action: "get_order", identifier: orderRow.identifier, market: position.market });
     const updated = await updateOrderFromGateway(orderRow, order);
