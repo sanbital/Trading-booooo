@@ -30,8 +30,9 @@ import { DEFAULT_SCALP_SAFETY, type ScalpSafetyConfig, type ScalpDayState } from
 import { DEFAULT_COST_MODEL, type CostModelConfig } from "../_shared/scalp/cost-model.ts";
 import { resolveGeometryConfig, resolveMinimumEdge } from "../_shared/scalp/geometry.ts";
 import { evaluateExploration, resolveExplorationConfig } from "../_shared/scalp/exploration.ts";
+import { evaluateRateControl, relaxedMinimumEdge, resolveRateControlConfig } from "../_shared/scalp/rate-control.ts";
 
-const VERSION = "5.10.1";
+const VERSION = "5.11.0";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -316,6 +317,17 @@ function defaultSettings(): TradingSettings & JsonRecord {
     scalp_exploration_per_scan: clamp(finite(env("SCALP_EXPLORATION_PER_SCAN"), 1), 0, 10),
     scalp_exploration_size_fraction: clamp(finite(env("SCALP_EXPLORATION_SIZE_FRACTION"), 0.33), 0.05, 1),
     scalp_exploration_min_edge_cost_multiple: clamp(finite(env("SCALP_EXPLORATION_MIN_EDGE_COST_MULTIPLE"), -1), -5, 0),
+    // v5.11 --------------------------------------------------------------------
+    // Trade frequency is the CONTROL VARIABLE, not an outcome. The gate serves the rate.
+    // Risk is carried by SIZE, which stays small until shadow outcomes confirm an edge —
+    // so the samples that settle the question arrive at full speed while little capital
+    // rides on the answer.
+    scalp_target_trades_per_hour: clamp(finite(env("SCALP_TARGET_TRADES_PER_HOUR"), 5), 0, 60),
+    scalp_rate_window_minutes: clamp(finite(env("SCALP_RATE_WINDOW_MINUTES"), 60), 10, 1440),
+    scalp_rate_max_relaxation: clamp(finite(env("SCALP_RATE_MAX_RELAXATION"), 1.5), 0, 5),
+    scalp_unproven_size_fraction: clamp(finite(env("SCALP_UNPROVEN_SIZE_FRACTION"), 0.35), 0.05, 1),
+    scalp_samples_for_full_size: clamp(finite(env("SCALP_SAMPLES_FOR_FULL_SIZE"), 400), 50, 20000),
+    scalp_rate_relaxation: 0,
     // v5.5 --------------------------------------------------------------------
     // Post the entry on the bid instead of taking the ask.
     //
@@ -793,10 +805,16 @@ function scalpCostConfig(settings: TradingSettings, exchange: Exchange, feePct =
     minEdgeCostFraction: finite((settings as any).scalp_min_edge_cost_fraction, 0.25),
     minimumEdge: finite((settings as any).scalp_minimum_edge, DEFAULT_COST_MODEL.minimumEdge),
   });
+  // v5.11: the rate controller may remove the margin above cost, never more than that.
+  const roundTripCost = feePct * 2 / 100;
   return {
     ...DEFAULT_COST_MODEL,
-    roundTripFeeFraction: feePct * 2 / 100,
-    minimumEdge: resolveMinimumEdge(geometry),
+    roundTripFeeFraction: roundTripCost,
+    minimumEdge: relaxedMinimumEdge(
+      resolveMinimumEdge(geometry),
+      finite((settings as any).scalp_rate_relaxation, 0),
+      roundTripCost,
+    ),
   };
 }
 
@@ -879,8 +897,11 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   const slotQuote = allocationOnly
     ? Math.max(0, finite(managed.managedCapitalQuote)) / slots
     : Number.POSITIVE_INFINITY;
+  // v5.11: size carries the uncertainty. Small while the edge is unmeasured, full once
+  // shadow outcomes confirm it — frequency stays at target throughout.
+  const evidenceSize = allocationOnly ? clamp(finite((settings as any).scalp_size_fraction, 0.35), 0.05, 1) : 1;
   const maxOrder = allocationOnly
-    ? Math.min(managedAvailable, slotQuote)
+    ? Math.min(managedAvailable, slotQuote * evidenceSize)
     : Math.min(limits.maxOrder, plan.recommended > 0 ? plan.recommended : limits.maxOrder);
   const allocationSizing = (entryPrice: number) => {
     const minOrder = Math.max(limits.minOrder, rules.min_notional);
@@ -2159,6 +2180,44 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
     await patch("trading_settings", "id=eq.1", { last_full_scan_at: new Date().toISOString(), last_gateway_heartbeat_at: new Date().toISOString() });
     return { skipped: true, circuits, stats };
   }
+  // v5.11: measure the realized rate and steer the threshold toward the target before the
+  // scan's candidates are evaluated.
+  const rateCfg = resolveRateControlConfig({
+    targetTradesPerHour: finite((settings as any).scalp_target_trades_per_hour, 5),
+    windowMinutes: finite((settings as any).scalp_rate_window_minutes, 60),
+    maxRelaxationCostMultiple: finite((settings as any).scalp_rate_max_relaxation, 1.5),
+    unprovenSizeFraction: finite((settings as any).scalp_unproven_size_fraction, 0.35),
+    samplesForFullSize: finite((settings as any).scalp_samples_for_full_size, 400),
+  });
+  if ((settings as any).strategy === "SCALP") {
+    const windowStart = new Date(Date.now() - rateCfg.windowMinutes * 60_000).toISOString();
+    const recent = await db(
+      `trading_positions?created_at=gte.${encodeURIComponent(windowStart)}&is_paper=eq.${settings.mode !== "LIVE_LIMITED"}&select=id,exchange`,
+    ).catch(() => []) as any[];
+    // Target is per exchange; take the slower side so neither is starved.
+    const perExchange = (["upbit", "binance"] as Exchange[])
+      .filter((x) => exchanges.includes(x))
+      .map((x) => (recent || []).filter((r) => r.exchange === x).length);
+    const slowest = perExchange.length ? Math.min(...perExchange) : 0;
+    const rate = evaluateRateControl({
+      entriesInWindow: slowest,
+      observedMinutes: rateCfg.windowMinutes,
+      currentRelaxation: finite((settings as any).scalp_rate_relaxation, 0),
+      edgeSamples: Math.max(0, Math.floor(finite((settings as any).scalp_edge_budget_samples))),
+      measuredEdgeLowerBound: (settings as any).scalp_edge_budget_source === "MEASURED"
+        ? finite((settings as any).scalp_edge_budget, 0)
+        : null,
+    }, rateCfg);
+    settings = { ...settings, scalp_rate_relaxation: rate.relaxation, scalp_size_fraction: rate.sizeFraction } as any;
+    await patch("trading_settings", "id=eq.1", {
+      scalp_rate_relaxation: rate.relaxation, scalp_size_fraction: rate.sizeFraction,
+    }).catch(() => null);
+    await event("SCALP_RATE_CONTROL", `observed ${rate.observedRate.toFixed(1)}/h vs target ${rate.targetRate}/h`, {
+      observed_rate: rate.observedRate, target_rate: rate.targetRate, relaxation: rate.relaxation,
+      size_fraction: rate.sizeFraction, edge_negative: rate.edgeNegative, reason: rate.reason,
+    }, { cycleId, level: rate.edgeNegative ? "WARNING" : "INFO" });
+  }
+
   const result = await runScanner(portfolios, settings); const scanId = String(result.scan_id || result.meta?.scan_id || "");
   if (!scanId) throw new Error("scanner response did not include scan_id");
   await db(`trading_cycle_runs?id=eq.${cycleId}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ scan_id: scanId }) });
