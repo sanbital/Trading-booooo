@@ -18,7 +18,7 @@ import {
   type ScalpGeometry,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "6.3.1-HEAT";
+export const ENGINE_VERSION = "6.3.3-HEAT";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -295,6 +295,7 @@ export type RiskConfig = {
   /** v6.2: measured per-pattern and per-trap corrections. Null until enough trades closed. */
   lobLearning?: LobLearningProfile | null;
   lobTrapOverrides?: Record<string, number>;
+  lobUncertaintyHaircut?: number;
   // Stage 5: optional scalp parameter overrides. Always passed through
   // resolveScalpSignalConfig(), which clamps them to SCALP_BOUNDS.
   scalpOverrides?: Record<string, number>;
@@ -3043,6 +3044,7 @@ export function finalizeCandidate(
         maxSpreadBps: Math.max(1, finiteOr((risk.scalpOverrides || {}).maxSpreadBps, risk.maxSpreadBps ?? 30)),
         maxHoldingSeconds: Math.round(clamp(finiteOr((risk.scalpOverrides || {}).maxHoldingSeconds, 180), 1, 300)),
         absoluteMaxHoldingSeconds: 300,
+        uncertaintyHaircut: clamp(finiteOr(risk.lobUncertaintyHaircut, 0.25), 0, 0.9),
         trap: risk.lobTrapOverrides || {},
         disabledVetoes: unearnedVetoes(learning),
         patternProbabilityMultiplier: patternMultiplier(learning, provisionalPattern),
