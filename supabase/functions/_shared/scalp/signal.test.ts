@@ -43,8 +43,10 @@ Deno.test("missing support wall does not block by default", () => {
 Deno.test("dynamic insufficient is penalized rather than automatically blocked", () => {
   const r = evaluateScalpSignal({ ...goodMicro, dynamic_status: "INSUFFICIENT" }, flatTrend);
   assert(r.reasons.includes("dynamic_insufficient"));
-  assert(r.decision === "BUY" || r.decision === "WAIT");
+  // 순서 주의: assert() 는 `asserts` 시그니처라 이 줄을 먼저 두면 decision 이
+  // "BUY" | "WAIT" 로 좁혀져 다음 "AVOID" 비교가 TS2367 로 거부된다.
   assertEquals(r.decision === "AVOID", false);
+  assert(r.decision === "BUY" || r.decision === "WAIT");
 });
 
 Deno.test("wide spread waits because it is a real execution-cost issue", () => {

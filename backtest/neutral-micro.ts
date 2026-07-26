@@ -38,8 +38,14 @@ export function neutralMicro(price: number, timestamp = Date.now()): Microstruct
     })),
     spread_bps: 10, // spread 게이트(<=35bp) 통과
     book_imbalance: 0, // micro_pressure 게이트(> -0.5) 통과
+    // v5.3에서 SCALP 전용으로 추가된 신선도 필드. 백테스트는 과거 오더북이 없어
+    // 이 값들을 재현할 수 없으므로, 위 book_imbalance / trade_pressure 와 같은
+    // 이유로 중립(0)을 주입한다. SCALP 신호는 백테스트가 아니라 전진 페이퍼로만
+    // 검증된다는 이 파일의 전제는 그대로다.
+    book_imbalance_top: 0,
     imbalance_stability: 0.8,
     trade_pressure: 0, // micro_pressure 게이트(> -0.45) 통과
+    trade_pressure_fast: 0,
     trade_count: 40,
     average_trade_notional: 0.05,
     buy_notional: 1,

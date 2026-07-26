@@ -29,7 +29,7 @@ import { evaluateHold, resolveHoldConfig, safetyTtlExceeded, type ScalpHoldConfi
 import { DEFAULT_SCALP_SAFETY, type ScalpSafetyConfig, type ScalpDayState } from "../_shared/scalp/safety.ts";
 import { DEFAULT_COST_MODEL, type CostModelConfig } from "../_shared/scalp/cost-model.ts";
 
-const VERSION = "5.4.1";
+const VERSION = "5.4.2";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
