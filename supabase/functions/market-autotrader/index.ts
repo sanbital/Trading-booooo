@@ -29,7 +29,7 @@ import { evaluateHold, resolveHoldConfig, safetyTtlExceeded, type ScalpHoldConfi
 import { DEFAULT_SCALP_SAFETY, type ScalpSafetyConfig, type ScalpDayState } from "../_shared/scalp/safety.ts";
 import { DEFAULT_COST_MODEL, type CostModelConfig } from "../_shared/scalp/cost-model.ts";
 
-const VERSION = "5.4.0";
+const VERSION = "5.4.1";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -502,11 +502,41 @@ async function storeFills(orderRow: any, normalized: any) {
   }));
   await db("trading_fills?on_conflict=order_id,trade_id", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(rows) });
 }
+/**
+ * v5.4.1: commission charged IN THE BASE ASSET.
+ *
+ * Binance spot deducts the buy commission from the coin you receive whenever fee payment
+ * in BNB is off. `executedQty` is the GROSS matched quantity, so the amount that actually
+ * lands in the account is `executedQty - commission`. Booking the gross figure makes the
+ * ledger permanently expect ~0.1% more coin than exists, and the account reconciliation
+ * then reads that shortfall as a user having sold — which halts the whole system.
+ *
+ * Upbit charges its fee in KRW on both sides, so its base quantity is unaffected. That is
+ * why the mismatch only ever appeared on Binance.
+ */
+function baseAssetFee(order: any, fill: any, baseAssetSymbol: string): number {
+  const symbol = String(baseAssetSymbol || "").toUpperCase();
+  if (!symbol) return 0;
+  const trades = Array.isArray(order?.trades) ? order.trades : Array.isArray(fill?.trades) ? fill.trades : [];
+  if (trades.length) {
+    // Per-fill is authoritative: a single order can pay commission in several assets.
+    return trades.reduce(
+      (total: number, trade: any) =>
+        String(trade?.fee_asset || "").toUpperCase() === symbol ? total + Math.max(0, finite(trade?.fee)) : total,
+      0,
+    );
+  }
+  const aggregateAsset = String(fill?.feeAsset || order?.fee_asset || "").toUpperCase();
+  return aggregateAsset === symbol ? Math.max(0, finite(fill?.paidFee, order?.paid_fee)) : 0;
+}
+
 async function updateOrderFromGateway(orderRow: any, payload: any) {
   const order = payload?.order || payload; const fill = payload?.fill || {
     executedVolume: finite(order?.executed_volume), executedFunds: finite(order?.executed_funds), averagePrice: finite(order?.average_price), paidFee: finite(order?.paid_fee), feeAsset: order?.fee_asset,
   };
   const feeQuote = feeQuoteEstimate(orderRow.exchange, order, fill);
+  // Attach the base-asset commission so the caller can book the NET quantity received.
+  const paidFeeBase = baseAssetFee(order, fill, baseAsset(orderRow.exchange as Exchange, orderRow.market));
   const rows = await patch("trading_orders", `id=eq.${orderRow.id}`, {
     exchange_order_id: order?.exchange_order_id || null,
     state: normalizedOrderState(orderRow.state, order?.status),
@@ -516,11 +546,19 @@ async function updateOrderFromGateway(orderRow: any, payload: any) {
     raw_response: order || {},
   });
   await storeFills(orderRow, order);
-  return { row: rows[0] || orderRow, order, fill: { ...fill, paidFeeQuote: feeQuote } };
+  return { row: rows[0] || orderRow, order, fill: { ...fill, paidFeeQuote: feeQuote, paidFeeBase } };
 }
 async function applyEntryAccounting(position: Position, orderRow: any, fill: any) {
-  const quantity = finite(fill.executedVolume); const price = finite(fill.averagePrice);
+  const grossQuantity = finite(fill.executedVolume); const price = finite(fill.averagePrice);
+  // v5.4.1: book what the account actually received, not what was matched. See baseAssetFee().
+  const baseFee = Math.max(0, finite(fill.paidFeeBase, baseAssetFee(null, fill, position.base_asset)));
+  const quantity = floorToStep(Math.max(0, grossQuantity - baseFee), finite(position.quantity_step, 0.00000001));
   if (!(quantity > 0 && price > 0)) throw new Error("entry fill has no executable quantity");
+  if (baseFee > 0) {
+    await event("ENTRY_BASE_FEE_ADJUSTED", `${position.exchange}:${position.market} commission paid in base asset`, {
+      gross_quantity: grossQuantity, base_fee: baseFee, booked_quantity: quantity, base_asset: position.base_asset,
+    }, { positionId: position.id, orderId: orderRow.id, level: "INFO" });
+  }
   const adjusted = adjustedPlanForFill(position.planned_entry_price, price, position.stop_price, position.target_1, position.target_2);
   const result = await rpc("apply_trading_entry_order", {
     p_order_id: orderRow.id, p_fill_price: price, p_fill_quantity: quantity,
@@ -1468,6 +1506,32 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       const botLocked = botLockedByAsset.get(position.base_asset) || 0;
       // Quantity we ourselves put beyond reach counts as present.
       const effectiveFree = actualFree + botLocked;
+
+      // v5.4.1: fee-sized shortfalls are OUR OWN accounting, not a user's trade.
+      //
+      // Binance deducts the buy commission from the base asset, so the account legitimately
+      // holds ~0.1% less than the matched quantity. v5.2.5 compared against a 0.0001%
+      // tolerance, so every Binance entry drifted into "the coin is gone" and, 45 seconds
+      // later, halted the entire system. Entries booked from v5.4.1 onward are already net
+      // of that commission; this tolerance heals positions opened before the fix and any
+      // step-size rounding dust.
+      const shortfall = Math.max(0, expected - actualTotal);
+      const feeDustTolerance = Math.max(
+        finite(position.quantity_step, 0) * 2,
+        expected * FEE_PCT[exchange] / 100 * 3,
+      );
+      if (shortfall > 0 && shortfall <= feeDustTolerance) {
+        const healed = Math.max(0, expected - shortfall);
+        position = { ...position, ...(await patch("trading_positions", `id=eq.${position.id}`, {
+          remaining_quantity: healed,
+          metadata: { ...(position.metadata || {}), account_mismatch_count: 0, last_account_mismatch_at: null, fee_dust_healed_quantity: shortfall, fee_dust_healed_at: new Date().toISOString() },
+        }))[0] };
+        await event("LEDGER_FEE_DUST_HEALED", `${exchange}:${position.market} ledger aligned to account; shortfall within fee tolerance`, {
+          expected_quantity: expected, actual_quantity: actualTotal, shortfall, tolerance: feeDustTolerance, healed_quantity: healed,
+        }, { cycleId, positionId: position.id, level: "INFO" });
+        continue;
+      }
+
       const totalMissing = actualTotal + 1e-10 < expected * 0.999999;
       const freeMissing = !totalMissing && effectiveFree + 1e-10 < expected * 0.999999;
       const previousCount = Math.max(0, Math.floor(finite(position.metadata?.account_mismatch_count)));
