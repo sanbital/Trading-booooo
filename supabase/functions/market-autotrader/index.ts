@@ -43,7 +43,7 @@ import { effectiveSlots, evaluateModelHealth, shouldConvertToTaker } from "../_s
 import { evaluateLobExit } from "../_shared/lob/exit.ts";
 import type { LobFeatureVector } from "../_shared/lob/types.ts";
 
-const VERSION = "6.3.0-HEAT";
+const VERSION = "6.3.1-HEAT";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");

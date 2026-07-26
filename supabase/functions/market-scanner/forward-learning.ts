@@ -346,13 +346,18 @@ function candidateRows(
     net_rr: candidate.trade_plan?.net_rr ?? candidate.watch_entry_plan?.estimated_net_rr,
     estimated_cost_pct: candidate.trade_plan?.estimated_round_trip_cost_pct,
     failed_gate_count: candidate.failed_gates?.length || 0,
-    intended_horizon_hours: candidate.execution_plan.intended_holding_hours,
-    recommendation_valid_until: candidate.execution_plan.valid_until,
-    active_policy_key: candidate.trade_plan.target_strategy === "SHORT_ONLY"
+    intended_horizon_hours: candidate.execution_plan?.intended_holding_hours ?? 1,
+    recommendation_valid_until: candidate.execution_plan?.valid_until ?? null,
+    // v6.3.1: these three reached into `trade_plan` and `execution_plan` without the
+    // optional chaining every neighbouring line uses. LOB_SCALP does not build a pullback
+    // plan, so a single absent field threw inside `.map()` and took the whole batch with
+    // it -- after the scan-run row had already been written, which is why the scan looked
+    // healthy while `scanner_candidates` stayed empty.
+    active_policy_key: candidate.trade_plan?.target_strategy === "SHORT_ONLY"
       ? "FIXED_T1"
-      : candidate.trade_plan.target_strategy === "TRAIL_AFTER_T1"
-      ? `TRAIL_AFTER_T1_${Math.round(candidate.trade_plan.first_target_allocation_pct)}`
-      : `SCALE_OUT_${Math.round(candidate.trade_plan.first_target_allocation_pct)}`,
+      : candidate.trade_plan?.target_strategy === "TRAIL_AFTER_T1"
+      ? `TRAIL_AFTER_T1_${Math.round(candidate.trade_plan?.first_target_allocation_pct ?? 0)}`
+      : `SCALE_OUT_${Math.round(candidate.trade_plan?.first_target_allocation_pct ?? 0)}`,
     profile_version: profile.version,
     feature_vector: featureVector(candidate, risk),
     applied_parameters: profile.parameters,
@@ -367,6 +372,29 @@ export async function persistScan(
 ): Promise<{ stored: boolean; reason?: string }> {
   if (!configured()) return { stored: false, reason: "SUPABASE persistence not configured" };
   const scanId = String(result.scan_id);
+
+  // Build first. Row construction is the step that can throw, and until v6.3.1 it threw
+  // AFTER the scan-run insert, leaving a healthy-looking scan with no candidates and no
+  // trace of why.
+  let rows: any[] = [];
+  let buildError: string | null = null;
+  try {
+    if (result.meta?.exchange === "combined") {
+      rows.push(...candidateRows(scanId, "upbit", result.exchanges?.upbit?.finalists || [], profile, risks.upbit));
+      rows.push(...candidateRows(scanId, "binance", result.exchanges?.binance?.finalists || [], profile, risks.binance));
+    } else {
+      const exchange = result.meta.exchange as Exchange;
+      rows.push(...candidateRows(scanId, exchange, result.finalists || [], profile, risks[exchange]));
+    }
+  } catch (error) {
+    buildError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    rows = [];
+    console.error(`[persistScan] candidate row build failed for scan ${scanId}: ${buildError}`);
+  }
+
+  const upbitFinalists = result.exchanges?.upbit?.finalists?.length ?? 0;
+  const binanceFinalists = result.exchanges?.binance?.finalists?.length ?? 0;
+
   await rest("scanner_scan_runs", {
     method: "POST",
     headers: { Prefer: "return=minimal" },
@@ -378,23 +406,38 @@ export async function persistScan(
       status: result.status,
       profile_version: profile.version,
       profile_source: profile.source,
-      summary: { coverage: result.coverage, assumptions: result.assumptions },
+      summary: {
+        coverage: result.coverage,
+        assumptions: result.assumptions,
+        // v6.3.1: queryable persistence outcome. Previously this lived only in the HTTP
+        // response, so a silent failure was invisible from SQL and from the function logs.
+        persistence: {
+          upbit_finalists: upbitFinalists,
+          binance_finalists: binanceFinalists,
+          rows_built: rows.length,
+          build_error: buildError,
+        },
+      },
     }),
   });
-  const rows: any[] = [];
-  if (result.meta?.exchange === "combined") {
-    rows.push(...candidateRows(scanId, "upbit", result.exchanges?.upbit?.finalists || [], profile, risks.upbit));
-    rows.push(...candidateRows(scanId, "binance", result.exchanges?.binance?.finalists || [], profile, risks.binance));
-  } else {
-    const exchange = result.meta.exchange as Exchange;
-    rows.push(...candidateRows(scanId, exchange, result.finalists || [], profile, risks[exchange]));
+
+  if (buildError) return { stored: false, reason: `candidate row build failed: ${buildError}` };
+  if (!rows.length) {
+    const note = `no finalists to persist (upbit ${upbitFinalists}, binance ${binanceFinalists})`;
+    console.error(`[persistScan] ${note} for scan ${scanId}`);
+    return { stored: false, reason: note };
   }
-  if (rows.length) {
+
+  try {
     await rest("scanner_candidates?on_conflict=scan_id,exchange,market", {
       method: "POST",
       headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
       body: JSON.stringify(rows),
     });
+  } catch (error) {
+    const note = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    console.error(`[persistScan] candidate insert failed for scan ${scanId}: ${note}`);
+    return { stored: false, reason: `candidate insert failed: ${note}` };
   }
   return { stored: true };
 }

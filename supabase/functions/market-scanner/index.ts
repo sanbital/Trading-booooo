@@ -2042,8 +2042,12 @@ Deno.serve(async (request: Request) => {
       );
     const persistence = await persistScan(result, runtimeProfile, { upbit: upbitRisk, binance: binanceRisk }).catch((error) => ({
       stored: false,
-      reason: error instanceof Error ? error.message : String(error),
+      reason: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
     }));
+    // v6.3.1: a swallowed catch is how a broken scan can look healthy for half an hour.
+    if (!persistence.stored) {
+      console.error(`[market-scanner] scan not persisted: ${persistence.reason || "unknown"}`);
+    }
     const enriched = {
       ...result,
       learning: {
