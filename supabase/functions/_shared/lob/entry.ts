@@ -26,7 +26,8 @@ export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   maxStopBps: 500, // user's absolute per-trade ceiling is enforced separately at 5%
   maxHoldingSeconds: 180,
   absoluteMaxHoldingSeconds: 300,
-  uncertaintyHaircut: 0.08,
+  // v6.3.3: a FRACTION of the signal edge, not an absolute subtraction. See below.
+  uncertaintyHaircut: 0.25,
   trap: {},
   disabledVetoes: [],
   patternProbabilityMultiplier: 1,
@@ -160,9 +161,22 @@ export function evaluateLobEntry(
     pTarget * targetReturnNetBps + pStop * stopReturnNetBps + pTimeout * timeoutReturnNetBps
   );
 
-  // The haircut is applied to the signal edge, not to the geometric term, for the same
-  // reason: uncertainty lives in the model's beliefs, not in the arithmetic.
-  const conservativeEdge = signalEdge - cfg.uncertaintyHaircut;
+  // The haircut is applied to the signal edge, not to the geometric term: uncertainty lives
+  // in the model's beliefs, not in the arithmetic.
+  //
+  // v6.3.3: it is now a fraction of the edge rather than a flat subtraction. The absolute
+  // form was mis-scaled by an order of magnitude relative to what it was discounting --
+  // signal edges here run roughly 0.05 to 0.12 and are hard-capped at 0.18, so subtracting
+  // a flat 0.08 did not discount the signal, it deleted it. Live rejections confirmed this:
+  // 19 of 24 candidates failed on NET_EV_NOT_POSITIVE while the barrier arithmetic was fine.
+  //
+  // Worse, whenever the edge fell below the haircut the "conservative" probability dropped
+  // BELOW the neutral win rate, which asserts the signal is actively harmful. That is not
+  // caution; it is a sign error dressed as prudence.
+  //
+  // The EV threshold itself is untouched at zero. This does not admit negative-EV trades --
+  // it stops one arbitrary constant from manufacturing negative EV out of positive ones.
+  const conservativeEdge = signalEdge * (1 - clamp(cfg.uncertaintyHaircut, 0, 0.9));
   const conservativePTarget = Math.min(
     resolveProbability,
     clamp(neutralWinRate + conservativeEdge, 0.02, 0.92),
