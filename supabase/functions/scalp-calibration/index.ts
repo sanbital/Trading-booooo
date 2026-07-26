@@ -13,6 +13,14 @@
 // Read-only against trading data; the only write is the calibration profile.
 
 import {
+  DEFAULT_EDGE_PROPOSAL,
+  measureEdge,
+  proposeEdgeBudget,
+  resolveBarrierOutcome,
+  type Candle,
+  type ShadowSample,
+} from "../_shared/scalp/shadow.ts";
+import {
   DEFAULT_CALIBRATION_FIT,
   evaluatePromotion,
   IDENTITY_CALIBRATION,
@@ -125,7 +133,120 @@ async function loadIncumbent(): Promise<CalibrationModel> {
   };
 }
 
+/** Public candle fetch. No credentials — these are the same endpoints the scanner uses. */
+async function fetchCandles(exchange: string, market: string, sinceMs: number): Promise<Candle[]> {
+  const minutes = Math.min(200, Math.max(1, Math.ceil((Date.now() - sinceMs) / 60_000) + 2));
+  try {
+    if (exchange === "upbit") {
+      const res = await fetch(
+        `https://api.upbit.com/v1/candles/minutes/1?market=${encodeURIComponent(market)}&count=${minutes}`,
+      );
+      if (!res.ok) return [];
+      const rows = await res.json();
+      // Upbit returns newest-first.
+      return (Array.isArray(rows) ? rows : [])
+        .map((r: any) => ({
+          ts: Date.parse(r.candle_date_time_utc + "Z"),
+          high: Number(r.high_price),
+          low: Number(r.low_price),
+          close: Number(r.trade_price),
+        }))
+        .filter((c: Candle) => Number.isFinite(c.ts) && c.ts >= sinceMs)
+        .sort((a: Candle, b: Candle) => a.ts - b.ts);
+    }
+    const res = await fetch(
+      `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(market)}&interval=1m&startTime=${Math.floor(sinceMs)}&limit=${minutes}`,
+    );
+    if (!res.ok) return [];
+    const rows = await res.json();
+    return (Array.isArray(rows) ? rows : []).map((r: any) => ({
+      ts: Number(r[0]),
+      high: Number(r[2]),
+      low: Number(r[3]),
+      close: Number(r[4]),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Replay every scored candidate that has matured and record which barrier it would have
+ * touched first. This is where the sample count comes from: all finalists, not just fills.
+ */
+async function evaluateShadowCandidates(settings: any) {
+  const horizonMinutes = Math.max(5, Number(settings?.scalp_max_holding_minutes) || 45);
+  // Only candidates old enough to have resolved, and recent enough for 1m candles.
+  const matured = new Date(Date.now() - horizonMinutes * 60_000).toISOString();
+  const floor = new Date(Date.now() - 6 * 3600_000).toISOString();
+  const rows = await db(
+    `scanner_candidates?created_at=lte.${encodeURIComponent(matured)}&created_at=gte.${encodeURIComponent(floor)}` +
+      `&select=id,scan_id,exchange,market,created_at,decision,snapshot&order=created_at.asc&limit=400`,
+  ) as any[];
+  if (!rows?.length) return { evaluated: 0, inserted: 0 };
+
+  const existing = new Set(
+    ((await db(
+      `scalp_shadow_outcomes?candidate_id=in.(${rows.map((r) => r.id).join(",")})&select=candidate_id`,
+    ).catch(() => [])) as any[]).map((r) => r.candidate_id),
+  );
+
+  const inserts: any[] = [];
+  for (const row of rows) {
+    if (existing.has(row.id)) continue;
+    const scalp = row.snapshot?.scalp;
+    const targetPct = Number(scalp?.target_pct);
+    const stopPct = Number(scalp?.stop_pct);
+    const reference = Number(row.snapshot?.price_context?.live_reference_price ?? row.snapshot?.current_price);
+    if (!(targetPct > 0 && stopPct > 0 && reference > 0)) continue;
+
+    const scannedMs = Date.parse(row.created_at);
+    const candles = await fetchCandles(row.exchange, row.market, scannedMs);
+    if (!candles.length) continue;
+    const result = resolveBarrierOutcome(candles, reference, targetPct, stopPct, horizonMinutes);
+    inserts.push({
+      candidate_id: row.id, scan_id: row.scan_id, exchange: row.exchange, market: row.market,
+      scanned_at: row.created_at,
+      predicted_p_win: Number(scalp?.pWin) || null,
+      neutral_win_rate: Number(scalp?.geometry?.neutral_win_rate ?? scalp?.neutral_win_rate) || null,
+      signal_edge: Number(scalp?.signal_edge) || null,
+      target_pct: targetPct, stop_pct: stopPct, decision: row.decision,
+      outcome: result.outcome, bars_to_resolve: result.barsToResolve, realized_return: result.realizedReturn,
+      features: scalp?.features || {},
+    });
+    // Public endpoints; stay polite.
+    await new Promise((r) => setTimeout(r, 60));
+  }
+  if (inserts.length) {
+    await db("scalp_shadow_outcomes?on_conflict=candidate_id", {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify(inserts),
+    }).catch(() => null);
+  }
+  return { evaluated: rows.length, inserted: inserts.length };
+}
+
 async function runCalibration(dryRun: boolean) {
+  const settings = (await db("trading_settings?id=eq.1&select=*&limit=1").catch(() => []))?.[0] || {};
+  const shadow = await evaluateShadowCandidates(settings).catch(() => ({ evaluated: 0, inserted: 0 }));
+
+  // Measure the signal's actual excess win rate. This is what edgeBudget means, and it has
+  // never been measured — the value has been assumed since the strategy was written.
+  const shadowRows = await db(
+    "scalp_shadow_outcomes?select=neutral_win_rate,signal_edge,outcome,predicted_p_win&order=scanned_at.desc&limit=5000",
+  ).catch(() => []) as any[];
+  const shadowSamples: ShadowSample[] = (shadowRows || [])
+    .filter((r) => Number.isFinite(Number(r.neutral_win_rate)))
+    .map((r) => ({
+      neutralWinRate: Number(r.neutral_win_rate),
+      signalEdge: Number(r.signal_edge) || 0,
+      outcome: r.outcome,
+    }));
+  const measurement = measureEdge(shadowSamples);
+  const currentEdgeBudget = Number(settings.scalp_edge_budget) || 0.10;
+  const edgeProposal = proposeEdgeBudget(measurement, currentEdgeBudget, DEFAULT_EDGE_PROPOSAL);
+
   const rows = await db(
     "trading_positions?state=eq.CLOSED&is_paper=eq.false&select=id,closed_at,close_reason,t1_completed,realized_pnl_quote,metadata&order=closed_at.asc&limit=5000",
   ) as ClosedPosition[];
@@ -137,6 +258,25 @@ async function runCalibration(dryRun: boolean) {
   const bins = reliabilityBins(resolved);
 
   const report = {
+    shadow: {
+      ...shadow,
+      stored_samples: shadowSamples.length,
+      resolved: measurement.resolved,
+      resolve_rate: measurement.resolveRate,
+      realized_win_rate: measurement.realizedWinRate,
+      neutral_win_rate: measurement.neutralWinRate,
+      measured_edge: measurement.measuredEdge,
+      edge_lower_bound: measurement.edgeLowerBound,
+      predicted_edge: measurement.predictedEdge,
+      standard_error: measurement.standardError,
+    },
+    edge_budget: {
+      current: edgeProposal.current,
+      proposed: edgeProposal.proposed,
+      apply: edgeProposal.apply,
+      reason: edgeProposal.reason,
+      auto_tune_enabled: settings.scalp_auto_tune_edge_budget === true,
+    },
     closed_positions: rows?.length || 0,
     usable_samples: all.length,
     resolved_samples: resolved.length,
@@ -159,6 +299,22 @@ async function runCalibration(dryRun: boolean) {
     reliability_bins: bins,
     dry_run: dryRun,
   };
+
+  // Write the measured edge back only when the operator has enabled it. Reporting is
+  // always on: knowing the number matters even when nothing is changed automatically.
+  if (edgeProposal.apply && settings.scalp_auto_tune_edge_budget === true && !dryRun) {
+    await db("trading_settings?id=eq.1", {
+      method: "PATCH",
+      headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({
+        scalp_edge_budget: edgeProposal.proposed,
+        scalp_edge_budget_source: "MEASURED",
+        scalp_edge_budget_measured_at: new Date().toISOString(),
+        scalp_edge_budget_samples: measurement.resolved,
+        updated_at: new Date().toISOString(),
+      }),
+    }).catch(() => null);
+  }
 
   if (!decision.promote || dryRun) return { ...report, promoted: false };
 

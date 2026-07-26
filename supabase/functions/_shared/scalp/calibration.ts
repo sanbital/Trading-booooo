@@ -84,7 +84,10 @@ export const DEFAULT_CALIBRATION_FIT: CalibrationFitConfig = {
   // 300, not 100: at the sample counts this system produces, a fit must not be allowed to
   // swing the live probability model. n=300 is where the fit first carries half the weight.
   priorStrength: 300,
-  minSamples: 200,
+  // v5.9: 200 -> 60. The shrinkage above already keeps a thin sample near the identity —
+  // at n=60 the fit carries 17% weight — so the extra gate did nothing except guarantee
+  // the loop never started. Real fills are scarce; shadow outcomes are not.
+  minSamples: 60,
   holdoutFraction: 0.3,
   minBrierImprovement: 0.002,
   iterations: 400,

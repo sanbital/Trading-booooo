@@ -30,7 +30,7 @@ import { DEFAULT_SCALP_SAFETY, type ScalpSafetyConfig, type ScalpDayState } from
 import { DEFAULT_COST_MODEL, type CostModelConfig } from "../_shared/scalp/cost-model.ts";
 import { resolveGeometryConfig, resolveMinimumEdge } from "../_shared/scalp/geometry.ts";
 
-const VERSION = "5.8.1";
+const VERSION = "5.9.0";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -2017,7 +2017,11 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
       }
       : settings;
     circuits[exchange] = evaluateCircuit({
-      mode: settings.mode, configured: settings.configured, exchangeEnabled: true, pauseNewEntries: settings.pause_new_entries || settings.withdrawal_mode || settings.manual_intervention_required,
+      mode: settings.mode, configured: settings.configured, exchangeEnabled: true,
+      pauseNewEntries: settings.pause_new_entries || settings.withdrawal_mode || settings.manual_intervention_required,
+      pausedByOperator: Boolean(settings.pause_new_entries),
+      withdrawalMode: Boolean(settings.withdrawal_mode),
+      manualInterventionRequired: Boolean(settings.manual_intervention_required),
       emergencyLiquidation: settings.emergency_liquidation, availableQuote: finite(portfolios[exchange].managed.managedAvailableQuote), minOrderQuote: limits.minOrder,
       openPositionsGlobal: stats[exchange].openGlobal, openPositionsExchange: stats[exchange].openExchange,
       entriesTodayGlobal: stats[exchange].entriesTodayGlobal, entriesTodayExchange: stats[exchange].entriesTodayExchange,

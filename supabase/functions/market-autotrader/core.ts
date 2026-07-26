@@ -118,6 +118,10 @@ export type ExitDecision = {
 };
 
 export type CircuitInput = {
+  /** v5.8.2: split out so the log names the actual cause. All optional for compatibility. */
+  pausedByOperator?: boolean;
+  withdrawalMode?: boolean;
+  manualInterventionRequired?: boolean;
   mode: TradingMode;
   configured: boolean;
   exchangeEnabled: boolean;
@@ -241,7 +245,17 @@ export function evaluateCircuit(input: CircuitInput): CircuitResult {
   if (!input.configured) reasons.push("trading settings are not configured");
   if (!input.exchangeEnabled) reasons.push("exchange is disabled");
   if (input.mode === "PAUSED") reasons.push("trading mode is PAUSED");
-  if (input.pauseNewEntries) reasons.push("new entries are paused");
+  // v5.8.2: three unrelated conditions used to collapse into one indistinguishable
+  // message. An operator reading "new entries are paused" could not tell whether they had
+  // pressed pause, whether withdrawal mode was on, or whether the account reconciliation
+  // had flagged something — which are three completely different problems with three
+  // different fixes. Name whichever one is actually true.
+  if (input.pausedByOperator) reasons.push("new entries paused by operator");
+  if (input.withdrawalMode) reasons.push("withdrawal mode is active");
+  if (input.manualInterventionRequired) reasons.push("manual account intervention is unresolved");
+  if (input.pauseNewEntries && !input.pausedByOperator && !input.withdrawalMode && !input.manualInterventionRequired) {
+    reasons.push("new entries are paused");
+  }
   if (input.emergencyLiquidation) reasons.push("emergency liquidation active");
   if (input.openPositionsGlobal >= input.settings.max_open_positions) reasons.push("global maximum open positions reached");
   if (input.openPositionsExchange >= input.settings.max_open_positions_per_exchange) reasons.push("exchange maximum open positions reached");

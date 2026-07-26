@@ -174,3 +174,33 @@ Deno.test("resume cannot cancel an unfinished emergency liquidation", () => {
   assert(resumeSafetyError({ emergencyLiquidation: false, activePositionCount: 5 }) === null);
   assert(resumeSafetyError({ emergencyLiquidation: false, activePositionCount: 0, unresolvedManualCount: 1 }) !== null);
 });
+
+Deno.test("a pause names which condition caused it", () => {
+  // "new entries are paused" used to cover operator pause, withdrawal mode and an
+  // unresolved account mismatch alike, so the log could not tell the operator which of
+  // three different problems they were looking at.
+  const base = {
+    mode: "LIVE_LIMITED" as const, configured: true, exchangeEnabled: true,
+    emergencyLiquidation: false, availableQuote: 1_000_000, minOrderQuote: 5000,
+    openPositionsGlobal: 0, openPositionsExchange: 0,
+    entriesTodayGlobal: 0, entriesTodayExchange: 0,
+    dailyBoughtQuote: 0, maxDailyBuyQuote: 1_000_000_000,
+    dailyPnlPct: 0, weeklyPnlPct: 0, consecutiveLosses: 0,
+    settings: {
+      max_open_positions: 10, max_open_positions_per_exchange: 10,
+      max_daily_entries: 100, max_daily_entries_per_exchange: 100,
+      max_daily_loss_pct: 20, max_weekly_loss_pct: 100, max_consecutive_losses: 100,
+    } as any,
+  };
+  const operator = evaluateCircuit({ ...base, pauseNewEntries: true, pausedByOperator: true });
+  assert(operator.reasons.some((r) => r.includes("operator")), operator.reasons.join(" / "));
+
+  const withdrawal = evaluateCircuit({ ...base, pauseNewEntries: true, withdrawalMode: true });
+  assert(withdrawal.reasons.some((r) => r.includes("withdrawal")), withdrawal.reasons.join(" / "));
+
+  const manual = evaluateCircuit({ ...base, pauseNewEntries: true, manualInterventionRequired: true });
+  assert(manual.reasons.some((r) => r.includes("manual account")), manual.reasons.join(" / "));
+
+  // Nothing blocking: entries allowed.
+  assert(evaluateCircuit({ ...base, pauseNewEntries: false }).allowNewEntry, "entries should be allowed");
+});
