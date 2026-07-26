@@ -18,11 +18,18 @@ const hot: LobFeatureVector = {
   averageTradeNotional: 6500, bookUpdateRate: 18, tradeArrivalRate: 12,
   aggressiveNotionalPerSecond: 70000, micropriceDeviationBps: 2.2,
   bidDepthQuote: 2000000, askDepthQuote: 900000, depthRatio: 2.2,
-  spoofLikeScore: 0.05, askAbsorptionScore: 0.08, bidAbsorptionScore: 0.72,
+  spoofLikeScore: 0.05, askSpoofScore: 0.04, askRefillRatio: 0.05,
+  askAbsorptionScore: 0.08, bidAbsorptionScore: 0.72,
   breakoutScore: 0.82, sweepReclaimScore: 0.65, ofiPersistence: 0.86,
   persistentBidWall: true, persistentAskWall: false, dynamicStatus: "BREAKOUT_CONFIRMED",
   dataQuality: 0.95, turnover24hQuote: 100000000, minActionableTurnover24h: 1000000,
   trendContext: -0.8,
+  // v6.1 added four heat fields and v6.2 four path fields; the fixture was never updated,
+  // so `deno task test` failed type-checking on this object and the deploy could not run.
+  marketHeatScore: 82, recentNotionalPerSecond: 90000, notionalAcceleration: 0.7,
+  tradeCountPerSecond: 12,
+  pathEfficiency: 0.55, reversalRate: 0.35, noiseBandBps: 4, quoteFlickerRate: 20,
+  fundingPremiumBps: 2.5, fundingAttention: 0.3, fundingEdge: 0.01,
 };
 
 const costs = {

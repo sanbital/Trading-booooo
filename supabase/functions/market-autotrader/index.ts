@@ -34,11 +34,16 @@ import { DEFAULT_CANDIDATE_GATE, SHADOW_CANDIDATE_GATE, type GateConfig } from "
 import { calculateOrderNotional } from "../_shared/scalp/risk-allocator.ts";
 import { nextReconciliationFailure, reconciliationRetryDue, type ReconciliationPhase } from "../_shared/scalp/reconciliation.ts";
 import { normalizeStrategyProfile, profileHoldingCeilingMinutes, resolveProfileHolding } from "../_shared/scalp/profile.ts";
-import { evaluateLobEntry } from "../_shared/lob/entry.ts";
+import { evaluateLobEntry, neutralWinRateOf } from "../_shared/lob/entry.ts";
+import { detectLobPatternName } from "../_shared/lob/patterns.ts";
+import type { LobTrapConfig } from "../_shared/lob/traps.ts";
+import type { LobLearningProfile } from "../_shared/lob/learning.ts";
+import { patternMultiplier, unearnedVetoes } from "../_shared/lob/learning.ts";
+import { effectiveSlots, evaluateModelHealth, shouldConvertToTaker } from "../_shared/lob/health.ts";
 import { evaluateLobExit } from "../_shared/lob/exit.ts";
 import type { LobFeatureVector } from "../_shared/lob/types.ts";
 
-const VERSION = "6.1.0-HEAT";
+const VERSION = "6.3.0-HEAT";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -643,6 +648,8 @@ function liveLobFeatures(scan: any, market: any): LobFeatureVector {
     askDepthQuote: askDepth,
     depthRatio: askDepth > 0 ? bidDepth / askDepth : bidDepth > 0 ? 10 : 1,
     spoofLikeScore: finite(base.spoofLikeScore, 0),
+    askSpoofScore: finite(base.askSpoofScore, 0),
+    askRefillRatio: finite(base.askRefillRatio, 0),
     askAbsorptionScore: finite(base.askAbsorptionScore, 0),
     bidAbsorptionScore: finite(base.bidAbsorptionScore, 0),
     breakoutScore: finite(base.breakoutScore, 0),
@@ -659,6 +666,19 @@ function liveLobFeatures(scan: any, market: any): LobFeatureVector {
     recentNotionalPerSecond: finite(base.recentNotionalPerSecond, finite(scan?.recent_notional_per_second, 0)),
     notionalAcceleration: finite(base.notionalAcceleration, finite(scan?.notional_acceleration, 0)),
     tradeCountPerSecond: finite(base.tradeCountPerSecond, finite(scan?.trade_count_per_second, 0)),
+    // v6.2: path shape is measured over the scan's observation window and cannot be
+    // recomputed from a single live snapshot, so the scan value is carried forward. The
+    // candidate TTL is what bounds how stale it may be.
+    pathEfficiency: finite(base.pathEfficiency, 1),
+    reversalRate: finite(base.reversalRate, 0),
+    noiseBandBps: finite(base.noiseBandBps, 0),
+    quoteFlickerRate: finite(base.quoteFlickerRate, 0),
+    // Perp positioning is sampled once per scan alongside the heat snapshot. Re-fetching it
+    // at order time would add a network hop to the latency-critical path for a signal that
+    // is capped at +/-0.03 of the edge, so the scan value is carried forward.
+    fundingPremiumBps: finite(base.fundingPremiumBps, 0),
+    fundingAttention: finite(base.fundingAttention, 0),
+    fundingEdge: finite(base.fundingEdge, 0),
   };
 }
 
@@ -1005,7 +1025,17 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   const managedAvailable = finite(managed.managedAvailableQuote);
   // v5.12: slots divide a fixed total-exposure cap. Increasing slots must never increase
   // strategy gross exposure. Risk, depth and exchange limits are applied before sizeFraction.
-  const slots = allocationOnly ? clamp(finite((settings as any).scalp_position_slots, 6), 1, 20) : 1;
+  // v6.3: a fixed slot count strands capital whenever fewer books qualify than there are
+  // slots -- six slots with two candidates leaves two thirds of the account doing nothing.
+  // The configured count remains the ceiling, so one candidate can never absorb everything.
+  const configuredSlots = allocationOnly ? clamp(finite((settings as any).scalp_position_slots, 6), 1, 20) : 1;
+  const slots = allocationOnly && isLobStrategy((settings as any).strategy)
+    ? effectiveSlots(
+      configuredSlots,
+      finite((candidate as any).__candidate_pool_size, configuredSlots),
+      finite((candidate as any).__open_positions, 0),
+    )
+    : configuredSlots;
   const evidenceSize = allocationOnly
     ? isLobStrategy((settings as any).strategy) ? 1 : clamp(finite((settings as any).scalp_size_fraction, 0.35), 0.05, 1)
     : 1;
@@ -1071,6 +1101,8 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
     const lobSnapshot = (candidate as any).snapshot?.lob || {};
     const features = liveLobFeatures(lobSnapshot, market);
     const liveFee = await liveFeePct(exchange, settings);
+    const lobLearning = await loadLobLearning();
+    const makerFill = await loadMakerFillStats();
     const decision = evaluateLobEntry(features, {
       roundTripFeeBps: liveFee * 2 * 100,
       entrySlippageBps: makerEntryEnabled(settings) ? 0 : Math.max(0.1, spreadBps * 0.15),
@@ -1083,6 +1115,9 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
       maxSpreadBps: Math.max(1, finite((settings as any).lob_max_spread_bps, LIVE_MAX_SPREAD_BPS)),
       maxHoldingSeconds: Math.round(clamp(finite((settings as any).lob_max_holding_seconds, 180), 1, 300)),
       absoluteMaxHoldingSeconds: Math.round(clamp(finite((settings as any).lob_absolute_max_holding_seconds, 300), 1, 300)),
+      trap: lobTrapOverrides(settings),
+      disabledVetoes: unearnedVetoes(lobLearning),
+      patternProbabilityMultiplier: patternMultiplier(lobLearning, detectLobPatternName(features)),
     });
     scalpAudit = {
       strategy: "LOB_SCALP", pattern: decision.pattern, patterns: decision.patterns,
@@ -1090,10 +1125,25 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
       p_timeout: decision.pTimeout, p_fill: decision.pFill,
       target_bps: decision.targetBps, stop_bps: decision.stopBps,
       target_return_net_bps: decision.targetReturnNetBps,
+      // v6.2: the calibration job needs the arithmetic term separated from the model's
+      // belief, otherwise it cannot tell a wide stop from actual predictive skill.
+      neutral_win_rate: neutralWinRateOf(decision.targetBps, decision.stopBps),
+      noise_adjusted_stop_bps: decision.noiseAdjustedStopBps,
+      traps: decision.traps.traps.map((trap) => trap.name),
+      trap_detail: decision.traps.traps,
       ev_net_bps: decision.evNetBps, ev_lower_bound_bps: decision.evLowerBoundBps,
       max_holding_seconds: decision.maxHoldingSeconds, reasons: decision.reasons,
       features: decision.features, scanned_lob: lobSnapshot, slots, slot_quote: Number.isFinite(slotQuote) ? slotQuote : null,
       risk_sizing: riskSizing,
+      // v6.3: the open question from v5.5 -- what fraction of maker entries actually fill --
+      // recorded on every entry so it stops being a guess. `convertToTaker` is the measured
+      // recommendation; acting on it costs 2.4x more per round trip on Upbit, so it is
+      // reported first and switched on deliberately.
+      maker_fill: (() => {
+        const evAtTaker = decision.evLowerBoundBps -
+          (Math.max(0.1, spreadBps * 0.15) + Math.max(0.1, spreadBps * 0.15));
+        return { ...makerFill, ...shouldConvertToTaker(makerFill, evAtTaker) };
+      })(),
     };
     if (decision.decision !== "BUY") {
       await event("LOB_CANDIDATE_DISCARD", `${exchange}:${candidate.market} live LOB recheck discarded`, scalpAudit, { cycleId, level: "INFO" });
@@ -1389,6 +1439,83 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
 //     TARGET_1 and the exit is re-evaluated on the next cycle rather than forced.
 
 const TP_TERMINAL_STATUSES = ["FILLED", "CANCELED", "PARTIALLY_FILLED_CANCELED", "REJECTED", "EXPIRED"];
+
+// v6.2: the measured LOB profile, loaded once per cycle. A missing table, a failed read or
+// a profile with too few samples all fall back to null, which means "apply no correction" --
+// never to a correction of unknown provenance.
+let lobLearningCache: { profile: LobLearningProfile | null; expires: number } | null = null;
+async function loadLobLearning(): Promise<LobLearningProfile | null> {
+  if (lobLearningCache && lobLearningCache.expires > Date.now()) return lobLearningCache.profile;
+  let profile: LobLearningProfile | null = null;
+  try {
+    const rows = await db(
+      "lob_learning_profiles?active=eq.true&select=generated_at,samples,base_hit_rate,patterns,traps,notes&order=generated_at.desc&limit=1",
+    );
+    const row = rows?.[0];
+    if (row && Array.isArray(row.patterns)) {
+      profile = {
+        generatedAtMs: Date.parse(String(row.generated_at || "")) || Date.now(),
+        samples: finite(row.samples, 0),
+        baseHitRate: finite(row.base_hit_rate, 0),
+        patterns: row.patterns,
+        traps: Array.isArray(row.traps) ? row.traps : [],
+        notes: Array.isArray(row.notes) ? row.notes : [],
+      };
+    }
+  } catch {
+    // Table absent or unreadable: trade the uncorrected model rather than guessing.
+  }
+  lobLearningCache = { profile, expires: Date.now() + 60_000 };
+  return profile;
+}
+
+/** Operator overrides for trap thresholds. Absent keys keep the module defaults. */
+function lobTrapOverrides(settings: JsonRecord): Partial<LobTrapConfig> {
+  // Written out one column at a time on purpose. A loop over a name table reads more
+  // neatly but hides the columns from the migration guard, which exists precisely because
+  // a setting that has no column fails the next deploy that touches it.
+  const overrides: Partial<LobTrapConfig> = {};
+  const take = (key: keyof LobTrapConfig, value: unknown) => {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) (overrides as any)[key] = parsed;
+  };
+  take("askIcebergAbsorption", (settings as any).lob_trap_ask_iceberg_absorption);
+  take("askIcebergRefillRatio", (settings as any).lob_trap_ask_iceberg_refill);
+  take("bidSpoofScore", (settings as any).lob_trap_bid_spoof);
+  take("askSpoofScore", (settings as any).lob_trap_ask_spoof);
+  take("stopNoiseMultiple", (settings as any).lob_trap_stop_noise_multiple);
+  take("maxViableStopBps", (settings as any).lob_trap_max_viable_stop_bps);
+  take("flickerPerTrade", (settings as any).lob_trap_flicker_per_trade);
+  return overrides;
+}
+
+// v6.3: maker fill rate. No new instrumentation was needed -- a filled maker entry becomes
+// an OPEN position and an unfilled one is CANCELLED with a MAKER_ENTRY_* reason, so the rate
+// has been recoverable from `trading_positions` all along. It was simply never computed,
+// which is why "what fraction of maker entries actually fill" stayed an open question while
+// the entire cost model depended on the answer.
+let makerFillCache: { stats: { rested: number; filled: number }; expires: number } | null = null;
+async function loadMakerFillStats(): Promise<{ rested: number; filled: number }> {
+  if (makerFillCache && makerFillCache.expires > Date.now()) return makerFillCache.stats;
+  let stats = { rested: 0, filled: 0 };
+  try {
+    const since = new Date(Date.now() - 24 * 3_600_000).toISOString();
+    const rows = await db(
+      `trading_positions?created_at=gte.${since}&select=state,close_reason,metadata&limit=5000`,
+    );
+    for (const row of rows || []) {
+      if (!row?.metadata?.maker_entry_placed_at) continue;
+      stats.rested++;
+      const reason = String(row.close_reason || "");
+      const unfilled = reason === "MAKER_ENTRY_UNFILLED" || reason === "MAKER_ENTRY_DRIFTED";
+      if (!unfilled && String(row.state) !== "CANCELLED") stats.filled++;
+    }
+  } catch {
+    // Unreadable: report zero samples, which the policy treats as "not yet measured".
+  }
+  makerFillCache = { stats, expires: Date.now() + 300_000 };
+  return stats;
+}
 
 // v5.3: active pWin calibration, loaded once per cycle. Falls back to the identity, so a
 // missing table or a failed read can never change trading behavior.
@@ -2537,6 +2664,11 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
   const entries: any[] = []; const enteredPerExchange: Record<Exchange, number> = { upbit: 0, binance: 0 };
   for (const candidate of candidates) {
     const exchange = candidate.exchange;
+    // v6.3: how many books are actually competing for capital this cycle, and how much is
+    // already committed. Slot sizing needs both, or it divides the account by a slot count
+    // that no candidate exists to fill.
+    (candidate as any).__candidate_pool_size = candidates.length;
+    (candidate as any).__open_positions = active.length;
     if (!exchanges.includes(exchange) || !circuits[exchange]?.allowNewEntry) continue;
     if (entries.filter((row) => row.entered || row.reserved).length >= settings.max_new_entries_per_scan) break;
     const exchangeCapacity = isScalpStrategy((settings as any).strategy)

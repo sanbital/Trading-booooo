@@ -1,4 +1,4 @@
-// Trading-booooo v6.1.0-HEAT — LOB_SCALP domain types.
+// Trading-booooo v6.2.0-HEAT — LOB_SCALP domain types.
 // Fractions use decimal form unless a field explicitly ends with Bps/Pct.
 
 export type LobPatternName =
@@ -9,6 +9,8 @@ export type LobPatternName =
   | "REPLENISHMENT_ICEBERG";
 
 export type LobDecisionState = "BUY" | "WAIT" | "AVOID";
+
+import type { LobTrapAssessment, LobTrapConfig } from "./traps.ts";
 
 export interface LobFeatureVector {
   samples: number;
@@ -29,8 +31,13 @@ export interface LobFeatureVector {
   bidDepthQuote: number;
   askDepthQuote: number;
   depthRatio: number;
+  /** Bid-side spoof (허매수): resting bids cancelled rather than executed. 0..1 */
   spoofLikeScore: number;
+  /** Ask-side spoof (허매도): resting asks cancelled rather than executed. 0..1 */
+  askSpoofScore: number;
   askAbsorptionScore: number;
+  /** Refilled / executed quantity at ask walls. The iceberg-ceiling measure. */
+  askRefillRatio: number;
   bidAbsorptionScore: number;
   breakoutScore: number;
   sweepReclaimScore: number;
@@ -46,6 +53,20 @@ export interface LobFeatureVector {
   recentNotionalPerSecond: number;
   notionalAcceleration: number;
   tradeCountPerSecond: number;
+  /** |net displacement| / path length over the observation window. 1 = trend, ~0 = chop. */
+  pathEfficiency: number;
+  /** Share of consecutive mid-price steps that reverse direction. 0..1 */
+  reversalRate: number;
+  /** Median adverse excursion in bps for a long opened at a random point in the window. */
+  noiseBandBps: number;
+  /** Top-of-book size changes per second. */
+  quoteFlickerRate: number;
+  /** Perp mark-to-index premium in bps. 0 when no perpetual exists for this asset. */
+  fundingPremiumBps: number;
+  /** 0..1 leveraged-attention proxy from perp premium magnitude and change. */
+  fundingAttention: number;
+  /** Bounded additive edge from perp positioning. Never a veto. */
+  fundingEdge: number;
 }
 
 export interface LobPatternSignal {
@@ -87,6 +108,12 @@ export interface LobEntryConfig {
   maxHoldingSeconds: number;
   absoluteMaxHoldingSeconds: number;
   uncertaintyHaircut: number;
+  /** Trap thresholds. See traps.ts. */
+  trap: Partial<LobTrapConfig>;
+  /** Traps demoted from veto to penalty because measurement showed they earn nothing. */
+  disabledVetoes: string[];
+  /** Learned per-pattern correction to pTarget. 1 = no correction. */
+  patternProbabilityMultiplier: number;
 }
 
 export interface LobEntryDecision {
@@ -108,4 +135,7 @@ export interface LobEntryDecision {
   maxHoldingSeconds: number;
   reasons: string[];
   features: LobFeatureVector;
+  traps: LobTrapAssessment;
+  /** Stop actually used after the book's own noise band was taken into account. */
+  noiseAdjustedStopBps: number;
 }

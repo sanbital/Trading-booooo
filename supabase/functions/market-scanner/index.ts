@@ -35,6 +35,13 @@ import {
   persistScan,
   type LearningParameters,
 } from "./forward-learning.ts";
+import {
+  fetchFundingSnapshot,
+  NEUTRAL_FUNDING,
+  perpSymbolFor,
+  scoreFunding,
+  type FundingObservation,
+} from "../_shared/lob/funding.ts";
 import { rankMarketHeat, type MarketHeatScore, type MarketHeatTicker } from "../_shared/lob/market-heat.ts";
 
 
@@ -1185,6 +1192,13 @@ async function sampleWholeMarketHeat(
   return { latestRows, heat, sampleCount, elapsedMs: Date.now() - started };
 }
 
+/** Perp funding is auxiliary; it can be switched off without touching the trading path. */
+function fundingEnabled(): boolean {
+  return String(Deno.env.get("LOB_FUNDING_SIGNAL") ?? "true").toLowerCase() !== "false";
+}
+
+let previousFunding = new Map<string, FundingObservation>();
+
 function neutralHeatTimeframe(price: number, trend: number): TimeframeMetrics {
   return {
     bars: 0,
@@ -1281,9 +1295,20 @@ async function runLobHeatScan(
   );
   const universeByMarket = new Map(universe.map((row) => [row.market, row]));
   const finalistLimit = Math.round(clamp(finite(Deno.env.get("LOB_HEAT_FINALIST_LIMIT"), 12), 4, 20));
+  // v6.2: one call for every perpetual, taken alongside the heat sample. A per-symbol
+  // request pattern would not fit a 12-second scan, and a late scan is worse than a scan
+  // without this signal — so a failure here returns an empty map and everything downstream
+  // resolves to neutral.
+  const fundingNow = fundingEnabled()
+    ? await fetchFundingSnapshot()
+    : new Map<string, FundingObservation>();
   const heatRanked = heatSample.heat.flatMap((heat) => {
     const row = universeByMarket.get(heat.market);
     if (!row || !(row.current_price > 0) || row.freshness_seconds > 300) return [];
+    const perp = perpSymbolFor(heat.market);
+    const funding = perp
+      ? scoreFunding(fundingNow.get(perp), previousFunding.get(perp))
+      : NEUTRAL_FUNDING;
     return [{
       ...row,
       eligible: true,
@@ -1293,8 +1318,14 @@ async function runLobHeatScan(
       recent_notional_per_second: heat.recentNotionalPerSecond,
       notional_acceleration: heat.notionalAcceleration,
       trade_count_per_second: heat.tradeCountPerSecond,
+      funding_premium_bps: funding.premiumBps,
+      funding_attention: funding.attention,
+      funding_edge: funding.edge,
     } as UniverseRow];
   });
+  // Carried to the next scan so the premium *delta* is available. An isolate recycle simply
+  // resets it, which yields a zero delta rather than a stale one.
+  if (fundingNow.size) previousFunding = fundingNow;
   const selectedRows = heatRanked.slice(0, finalistLimit);
   const finalists = selectedRows.map(heatPeriod);
   const observationMs = Math.round(clamp(finite(Deno.env.get("LOB_OBSERVATION_MS"), 8_000), 8_000, 12_000));

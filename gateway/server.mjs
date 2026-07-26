@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 // withdrawal, transfer, margin, futures, leverage, or API-key management routes.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "6.1.0-HEAT";
+const VERSION = "6.3.0-HEAT";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
@@ -21,6 +21,7 @@ const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
 const SCHEDULER_ENABLED = boolEnv("SCHEDULER_ENABLED", true);
 const SCAN_INTERVAL_MS = integerEnv("AUTO_SCAN_INTERVAL_SECONDS", 12, 8, 3600) * 1000;
+const COLD_START_SCAN_MS = integerEnv("LOB_COLD_START_SCAN_SECONDS", 3, 1, 120) * 1000;
 const MONITOR_INTERVAL_MS = integerEnv("AUTO_MONITOR_INTERVAL_SECONDS", 2, 1, 300) * 1000;
 // v5.10.1: 60 -> 180 seconds.
 //
@@ -949,7 +950,11 @@ export async function startServer() {
   if (BINANCE_API_KEY && BINANCE_SECRET_KEY) syncBinanceTime(true).catch((error) => console.warn("Binance time sync failed", error.message));
   if (SCHEDULER_ENABLED) {
     setTimeout(() => schedulerTick("monitor"), 2_000).unref();
-    setTimeout(() => schedulerTick("scan"), 20_000).unref();
+    // v6.2: the first scan used to wait 20 seconds after boot, so every deploy and every
+    // machine restart bought roughly two scan cycles of nothing. The heat sample is
+    // self-contained within a single scan -- it takes its own three snapshots -- so there
+    // is no warm-up state that the delay was protecting.
+    setTimeout(() => schedulerTick("scan"), COLD_START_SCAN_MS).unref();
     setInterval(() => schedulerTick("monitor"), MONITOR_INTERVAL_MS).unref();
     setInterval(() => schedulerTick("scan"), SCAN_INTERVAL_MS).unref();
     setInterval(discoverEgressIp, 6 * 60 * 60 * 1000).unref();

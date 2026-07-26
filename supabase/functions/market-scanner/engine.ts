@@ -5,6 +5,10 @@ import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-pro
 import type { EventRiskSnapshot } from "./event-risk.ts";
 import { evaluateScalpSignal, resolveScalpSignalConfig, type ScalpSignalResult } from "../_shared/scalp/signal.ts";
 import { evaluateLobEntry } from "../_shared/lob/entry.ts";
+import { midPathStatistics } from "../_shared/lob/traps.ts";
+import { detectLobPatternName } from "../_shared/lob/patterns.ts";
+import type { LobLearningProfile } from "../_shared/lob/learning.ts";
+import { patternMultiplier, unearnedVetoes } from "../_shared/lob/learning.ts";
 import type { LobEntryDecision, LobFeatureVector } from "../_shared/lob/types.ts";
 import {
   resolveGeometryConfig,
@@ -14,7 +18,7 @@ import {
   type ScalpGeometry,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "6.1.0-HEAT";
+export const ENGINE_VERSION = "6.3.0-HEAT";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -107,6 +111,9 @@ export type UniverseRow = {
   caution_labels: string[];
   heat_rank?: number;
   market_heat_score?: number;
+  funding_premium_bps?: number;
+  funding_attention?: number;
+  funding_edge?: number;
   recent_notional_per_second?: number;
   notional_acceleration?: number;
   trade_count_per_second?: number;
@@ -230,6 +237,15 @@ export type DynamicOrderflow = {
   data_quality: number;
   score_status: "VALID" | "UNKNOWN";
   spoof_like_score: number;
+  // v6.2: ask-side mirror of the spoof measure, plus the chop and queue-churn measures the
+  // trap module needs. Without these the scanner could describe a hazard it had no way to
+  // detect: a refilling ask ceiling, or a book whose own noise is wider than the stop.
+  ask_spoof_score: number;
+  ask_refill_ratio: number;
+  path_efficiency: number;
+  reversal_rate: number;
+  noise_band_bps: number;
+  quote_flicker_rate: number;
   ask_absorption_score: number;
   breakout_score: number;
   persistent_bid_wall_price: number | null;
@@ -276,6 +292,9 @@ export type RiskConfig = {
   // Stage 3: when "SCALP", entry is driven by orderbook microstructure with trend
   // used only as a veto. Undefined/"TREND" preserves the original behavior exactly.
   strategy?: "TREND" | "SCALP" | "LOB_SCALP";
+  /** v6.2: measured per-pattern and per-trap corrections. Null until enough trades closed. */
+  lobLearning?: LobLearningProfile | null;
+  lobTrapOverrides?: Record<string, number>;
   // Stage 5: optional scalp parameter overrides. Always passed through
   // resolveScalpSignalConfig(), which clamps them to SCALP_BOUNDS.
   scalpOverrides?: Record<string, number>;
@@ -462,6 +481,9 @@ export type FinalCandidate = {
     signal_at: string;
     heat_rank?: number;
     market_heat_score?: number;
+  funding_premium_bps?: number;
+  funding_attention?: number;
+  funding_edge?: number;
     recent_notional_per_second?: number;
     notional_acceleration?: number;
     trade_count_per_second?: number;
@@ -1395,6 +1417,14 @@ export function computeDynamicOrderflow(
     data_quality: dataQuality,
     score_status: "UNKNOWN",
     spoof_like_score: 0,
+    ask_spoof_score: 0,
+    ask_refill_ratio: 0,
+    // A window too thin to judge reports perfect efficiency and zero noise so that no trap
+    // fires on absence of evidence; `data_quality` is what marks the reading unreliable.
+    path_efficiency: 1,
+    reversal_rate: 0,
+    noise_band_bps: 0,
+    quote_flicker_rate: 0,
     ask_absorption_score: 0,
     breakout_score: 0,
     persistent_bid_wall_price: null,
@@ -1422,9 +1452,13 @@ export function computeDynamicOrderflow(
   );
 
   let spoofScore = 0;
+  let askSpoofScore = 0;
   let absorptionMax = 0;
   let absorptionEvents = 0;
   let breakdownScore = 0;
+  let refillTotal = 0;
+  let executedTotal = 0;
+  let flickerEvents = 0;
 
   for (let index = 0; index < frames.length - 1; index++) {
     const previous = frames[index];
@@ -1447,6 +1481,14 @@ export function computeDynamicOrderflow(
       ),
       Number.EPSILON,
     );
+
+    // v6.2: queue churn. A change at the touch with no print behind it means the queue is
+    // being rewritten by other participants, which is what erodes a maker order's priority.
+    if (
+      previous.bestBid !== current.bestBid || previous.bestAsk !== current.bestAsk ||
+      (previous.units[0]?.bidSize || 0) !== (current.units[0]?.bidSize || 0) ||
+      (previous.units[0]?.askSize || 0) !== (current.units[0]?.askSize || 0)
+    ) flickerEvents++;
 
     const worstVisibleBid = current.bids.size
       ? Math.min(...current.bids.keys())
@@ -1498,18 +1540,31 @@ export function computeDynamicOrderflow(
           current.timestamp,
           tick,
         );
+        const currentSize = current.asks.get(unit.askPrice) || 0;
         if (activeBuy > 0) {
-          const currentSize = current.asks.get(unit.askPrice) || 0;
           const expectedRemaining = Math.max(0, unit.askSize - activeBuy);
           const replenished = Math.max(0, currentSize - expectedRemaining);
           const buyRatio = safeDiv(activeBuy, unit.askSize);
           const refillRatio = safeDiv(replenished, activeBuy);
+          // v6.2: aggregate the raw quantities as well. The ratio of everything that came
+          // back to everything that was eaten is the iceberg-ceiling measure; a per-event
+          // max cannot distinguish one lucky refill from a seller who never stops reloading.
+          refillTotal += replenished;
+          executedTotal += activeBuy;
           if (buyRatio >= 0.12 && refillRatio >= 0.45) {
             absorptionEvents++;
             absorptionMax = Math.max(
               absorptionMax,
               clamp(buyRatio * 0.45 + refillRatio * 0.55, 0, 1),
             );
+          }
+        } else {
+          // v6.2: the ask-side mirror of the bid spoof test. A large resting ask that
+          // shrinks with no aggressive buying behind it was cancelled, not executed.
+          const reduction = Math.max(0, unit.askSize - currentSize);
+          const unexplainedRatio = safeDiv(reduction, unit.askSize);
+          if (unexplainedRatio >= 0.55) {
+            askSpoofScore = Math.max(askSpoofScore, clamp(unexplainedRatio, 0, 1));
           }
         }
       }
@@ -1570,6 +1625,17 @@ export function computeDynamicOrderflow(
       confirmedSupport = wall.price;
     }
   }
+
+  // v6.2: mid-price path shape over the observation window. `noise_band_bps` is the
+  // median adverse excursion for a long opened at an arbitrary moment -- the number that
+  // decides whether a given stop width is risk control or a coin flip.
+  const midSeries = frames
+    .map((frame) => (frame.bestBid + frame.bestAsk) / 2)
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const pathStats = midPathStatistics(midSeries);
+  const observationSeconds = Math.max(0.25, observationMs / 1000);
+  const quoteFlickerRate = flickerEvents / observationSeconds;
+  const askRefillRatio = executedTotal > 0 ? refillTotal / executedTotal : 0;
 
   const lastMid = (frames.at(-1)!.bestBid + frames.at(-1)!.bestAsk) / 2;
   const persistentBid =
@@ -1651,6 +1717,12 @@ export function computeDynamicOrderflow(
     data_quality: dataQuality,
     score_status: sufficient ? "VALID" : "UNKNOWN",
     spoof_like_score: sufficient ? spoofScore : 0,
+    ask_spoof_score: sufficient ? askSpoofScore : 0,
+    ask_refill_ratio: sufficient ? askRefillRatio : 0,
+    path_efficiency: sufficient ? pathStats.pathEfficiency : 1,
+    reversal_rate: sufficient ? pathStats.reversalRate : 0,
+    noise_band_bps: sufficient ? pathStats.noiseBandBps : 0,
+    quote_flicker_rate: sufficient ? quoteFlickerRate : 0,
     ask_absorption_score: sufficient ? absorptionScore : 0,
     breakout_score: sufficient ? breakoutScore : 0,
     persistent_bid_wall_price: persistentBid?.price || null,
@@ -2925,6 +2997,8 @@ export function finalizeCandidate(
       askDepthQuote: micro.ask_depth_quote,
       depthRatio: micro.depth_ratio,
       spoofLikeScore: micro.dynamic.spoof_like_score,
+      askSpoofScore: micro.dynamic.ask_spoof_score,
+      askRefillRatio: micro.dynamic.ask_refill_ratio,
       askAbsorptionScore: micro.dynamic.ask_absorption_score,
       bidAbsorptionScore: micro.bid_absorption_score,
       breakoutScore: micro.dynamic.breakout_score,
@@ -2941,8 +3015,19 @@ export function finalizeCandidate(
       recentNotionalPerSecond: finiteOr(period.universe.recent_notional_per_second, 0),
       notionalAcceleration: finiteOr(period.universe.notional_acceleration, 0),
       tradeCountPerSecond: finiteOr(period.universe.trade_count_per_second, 0),
+      pathEfficiency: micro.dynamic.path_efficiency,
+      reversalRate: micro.dynamic.reversal_rate,
+      noiseBandBps: micro.dynamic.noise_band_bps,
+      quoteFlickerRate: micro.dynamic.quote_flicker_rate,
+      fundingPremiumBps: finiteOr(period.universe.funding_premium_bps, 0),
+      fundingAttention: finiteOr(period.universe.funding_attention, 0),
+      fundingEdge: finiteOr(period.universe.funding_edge, 0),
     };
     const spread = Math.max(0, micro.spread_bps || 0);
+    // v6.2: the learned profile scales the signal edge and can retire a veto that
+    // measurement showed was blocking trades without those trades being worse.
+    const learning = risk.lobLearning ?? null;
+    const provisionalPattern = detectLobPatternName(features);
     lobResult = evaluateLobEntry(
       features,
       {
@@ -2958,6 +3043,9 @@ export function finalizeCandidate(
         maxSpreadBps: Math.max(1, finiteOr((risk.scalpOverrides || {}).maxSpreadBps, risk.maxSpreadBps ?? 30)),
         maxHoldingSeconds: Math.round(clamp(finiteOr((risk.scalpOverrides || {}).maxHoldingSeconds, 180), 1, 300)),
         absoluteMaxHoldingSeconds: 300,
+        trap: risk.lobTrapOverrides || {},
+        disabledVetoes: unearnedVetoes(learning),
+        patternProbabilityMultiplier: patternMultiplier(learning, provisionalPattern),
       },
     );
     decision = lobResult.decision;

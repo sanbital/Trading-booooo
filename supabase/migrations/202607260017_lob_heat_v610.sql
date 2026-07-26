@@ -1,6 +1,8 @@
 -- Trading-booooo v6.1.0-HEAT — heat-first ultra-short LOB runtime settings.
 -- This is a new migration because v6.0.0 migration 202607260016 may already be applied.
--- Deployment intentionally returns to PAPER; the operator must explicitly re-enable live mode.
+-- v6.2: the mode reset that used to live here was removed. Re-arming after every deploy
+-- was the largest single source of idle time for a strategy built on capital turnover.
+-- See 202607260019_deploy_readiness_v620.sql.
 
 alter table public.trading_settings drop constraint if exists trading_settings_full_scan_interval_seconds_check;
 alter table public.trading_settings add constraint trading_settings_full_scan_interval_seconds_check
@@ -48,7 +50,6 @@ update public.trading_settings
        max_new_entries_per_scan = 20,
        max_daily_entries = 1000000,
        max_daily_entries_per_exchange = 1000000,
-       mode = 'PAPER',
        version = coalesce(version, 0) + 1,
        updated_at = now()
  where id = 1;

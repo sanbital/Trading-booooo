@@ -23,9 +23,12 @@ export function scoreHotSymbol(features: LobFeatureVector): HotSymbolScore {
   const flowEnergy = clamp(Math.abs(features.tradePressureFast) * 0.55 + features.ofiPersistence * 0.45);
   const marketHeat = clamp(features.marketHeatScore / 100);
   const acceleration = clamp(features.notionalAcceleration);
+  // v6.2: perp attention is a small term. Leveraged pressure marks where the crowd is, but
+  // this bot trades spot, so the executable evidence still has to come from the spot book.
+  const funding = clamp(features.fundingAttention);
   const activityScore = clamp(
-    marketHeat * 0.30 + acceleration * 0.18 + update * 0.14 + arrival * 0.14 +
-      notional * 0.12 + flowEnergy * 0.08 + turnover * 0.04,
+    marketHeat * 0.28 + acceleration * 0.17 + update * 0.13 + arrival * 0.13 +
+      notional * 0.11 + flowEnergy * 0.08 + turnover * 0.04 + funding * 0.06,
   );
 
   const spread = features.spreadBps == null ? 0 : clamp(1 - features.spreadBps / 30);
@@ -52,6 +55,7 @@ export function scoreHotSymbol(features: LobFeatureVector): HotSymbolScore {
       flow_energy: flowEnergy * 100,
       market_heat: marketHeat * 100,
       notional_acceleration: acceleration * 100,
+      funding_attention: funding * 100,
       spread: spread * 100,
       freshness: freshness * 100,
       depth: depth * 100,

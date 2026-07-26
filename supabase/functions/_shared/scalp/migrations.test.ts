@@ -67,6 +67,11 @@ Deno.test("every scalp and LOB setting the engine reads exists as a column", asy
   const read = new Set<string>([
     ...[...code.matchAll(/\(settings as any\)\.((?:scalp|lob)_[a-z_]+)/g)].map((m) => m[1]),
     ...[...code.matchAll(/settings\.((?:scalp|lob)_[a-z_]+)/g)].map((m) => m[1]),
+    // v6.2: bracket access, e.g. settings["lob_trap_bid_spoof"]. Quoted identifiers on
+    // their own are NOT included -- "scalp_max_single_loss" is an exit reason, not a
+    // column, and treating every string literal as a settings read would fail the deploy
+    // on a name that was never meant to be one.
+    ...[...code.matchAll(/settings[^\n]{0,12}\[\s*["'`]((?:scalp|lob)_[a-z_]+)["'`]\s*\]/g)].map((m) => m[1]),
   ]);
   const created = createdColumns(await migrationFiles());
   // A setting that only ever lives in code cannot be changed from the dashboard, and the

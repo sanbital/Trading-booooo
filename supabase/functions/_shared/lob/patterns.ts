@@ -1,4 +1,4 @@
-import type { LobFeatureVector, LobPatternSignal } from "./types.ts";
+import type { LobFeatureVector, LobPatternName, LobPatternSignal } from "./types.ts";
 
 function clamp(value: number, low = 0, high = 1): number {
   return Math.max(low, Math.min(high, Number.isFinite(value) ? value : low));
@@ -76,4 +76,14 @@ export function detectLobPatterns(f: LobFeatureVector): LobPatternSignal[] {
 
   return [absorption, depletion, reclaim, ofi, iceberg]
     .sort((a, b) => b.confidence - a.confidence);
+}
+
+/**
+ * Highest-confidence primary pattern, used to look up that pattern's learned correction
+ * before the full entry evaluation runs. Returns null when no primary family is present,
+ * in which case the caller applies no correction rather than an averaged one.
+ */
+export function detectLobPatternName(features: LobFeatureVector): LobPatternName | null {
+  const primary = detectLobPatterns(features).find((pattern) => pattern.primary);
+  return primary ? primary.name : null;
 }
