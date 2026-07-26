@@ -48,6 +48,18 @@ alter table public.trading_settings add constraint trading_settings_monitor_inte
   check (monitor_interval_seconds between 5 and 300) not valid;
 alter table public.trading_settings validate constraint trading_settings_monitor_interval_seconds_check;
 
+-- v6 uses 5 minutes as the absolute LOB safety TTL. The previous scalp migration
+-- allowed only 10..10080 minutes, so replace that stale constraint before the
+-- singleton settings row is updated.
+alter table public.trading_settings drop constraint if exists trading_settings_scalp_safety_ttl_ck;
+alter table public.trading_settings add constraint trading_settings_scalp_safety_ttl_ck
+  check (scalp_safety_ttl_minutes between 1 and 10080) not valid;
+alter table public.trading_settings validate constraint trading_settings_scalp_safety_ttl_ck;
+
+-- The original table created an automatic `_check` constraint (1..4), while
+-- later migrations also added a separately named `_ck` constraint. Drop both so
+-- the v6 batch-capacity value cannot be blocked by a stale duplicate.
+alter table public.trading_settings drop constraint if exists trading_settings_max_new_entries_per_scan_check;
 alter table public.trading_settings drop constraint if exists trading_settings_max_new_entries_per_scan_ck;
 alter table public.trading_settings add constraint trading_settings_max_new_entries_per_scan_ck
   check (max_new_entries_per_scan between 1 and 20) not valid;
