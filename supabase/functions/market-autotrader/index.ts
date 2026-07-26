@@ -30,7 +30,7 @@ import { DEFAULT_SCALP_SAFETY, type ScalpSafetyConfig, type ScalpDayState } from
 import { DEFAULT_COST_MODEL, type CostModelConfig } from "../_shared/scalp/cost-model.ts";
 import { resolveGeometryConfig, resolveMinimumEdge } from "../_shared/scalp/geometry.ts";
 
-const VERSION = "5.9.0";
+const VERSION = "5.9.1";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -1495,6 +1495,46 @@ async function syncMakerEntry(position: Position, settings: TradingSettings, cyc
   return { pending: false, position };
 }
 
+/**
+ * v5.9.1: automatic recovery from an INFRASTRUCTURE pause.
+ *
+ * Three consecutive connectivity failures set `pause_new_entries` with the reason
+ * SAFETY_GATEWAY_UNAVAILABLE. When the gateway came back, `gateway_error_count` reset to
+ * zero on the next successful cycle — but the pause it had caused did not. The only path
+ * that cleared it was an operator pressing resume, so a transient network blip stopped the
+ * bot indefinitely. For a system whose whole purpose is to keep trading and fight it out,
+ * silently latching off after a hiccup is the worst possible failure mode.
+ *
+ * The distinction that matters is WHAT failed:
+ *   - infrastructure (gateway unreachable)  -> recovers on its own once healthy again
+ *   - account (balances do not reconcile)   -> still needs human eyes, never auto-cleared
+ *   - operator intent (manual pause, withdrawal mode) -> never auto-cleared
+ */
+const AUTO_RECOVERABLE_PAUSE_REASONS = ["SAFETY_GATEWAY_UNAVAILABLE"];
+
+async function tryAutoResume(settings: TradingSettings & JsonRecord, cycleId: string) {
+  if (!settings.pause_new_entries) return settings;
+  const reason = String(settings.manual_event_reason || "");
+  if (!AUTO_RECOVERABLE_PAUSE_REASONS.includes(reason)) return settings;
+  // An unresolved account discrepancy outranks connectivity recovery.
+  if (settings.manual_intervention_required || settings.withdrawal_mode) return settings;
+
+  const healthy = 1 + Math.max(0, Math.floor(finite((settings as any).gateway_recovery_cycles)));
+  const required = clamp(finite((settings as any).gateway_recovery_cycles_required, 3), 1, 20);
+  if (healthy < required) {
+    const rows = await patch("trading_settings", "id=eq.1", { gateway_recovery_cycles: healthy }).catch(() => []);
+    return { ...settings, ...(rows[0] || { gateway_recovery_cycles: healthy }) };
+  }
+  const rows = await patch("trading_settings", "id=eq.1", {
+    pause_new_entries: false, manual_event_reason: null, gateway_recovery_cycles: 0,
+    gateway_error_count: 0, last_resume_at: new Date().toISOString(),
+  }).catch(() => []);
+  await event("TRADING_AUTO_RESUMED", `gateway healthy for ${healthy} consecutive cycles; entries resumed automatically`, {
+    previous_reason: reason, healthy_cycles: healthy,
+  }, { cycleId, level: "WARNING" });
+  return { ...settings, ...(rows[0] || {}), pause_new_entries: false, manual_event_reason: null } as TradingSettings & JsonRecord;
+}
+
 async function snapshotAccount(exchange: Exchange, portfolio: any, positions: Position[], prices: Record<string, number>, settings: TradingSettings) {
   let openCost = 0; let unrealized = 0;
   const paper = settings.mode !== "LIVE_LIMITED";
@@ -2220,6 +2260,7 @@ Deno.serve(async (request: Request) => {
       await finishCycle(cycleId, "SUCCESS", result); return response({ ok: true, status: "SUCCESS", cycle_id: cycleId, result });
     }
     if (action === "scan") {
+      settings = await tryAutoResume(settings, cycleId);
       const result = await withLease("autotrader-scan", MAX_SCAN_SECONDS + 30, () => scanCycle(cycleId, settings));
       if (result == null) { await finishCycle(cycleId, "SKIPPED", { reason: "scan lease busy" }); return response({ ok: true, status: "SKIPPED", reason: "scan lease busy" }); }
       await finishCycle(cycleId, result.skipped ? "SKIPPED" : "SUCCESS", result); return response({ ok: true, status: result.skipped ? "SKIPPED" : "SUCCESS", cycle_id: cycleId, result });
@@ -2234,7 +2275,7 @@ Deno.serve(async (request: Request) => {
       const count = 1 + finite(current.gateway_error_count);
       const pause = count >= 3;
       await patch("trading_settings", "id=eq.1", {
-        gateway_error_count: count,
+        gateway_error_count: count, gateway_recovery_cycles: 0,
         ...(pause ? { pause_new_entries: true, manual_event_reason: "SAFETY_GATEWAY_UNAVAILABLE", last_manual_event_at: new Date().toISOString() } : {}),
       }).catch(() => null);
       if (pause) await event("SAFETY_PAUSE", "gateway unavailable for 3 consecutive engine calls; entries paused", { error: message, count, source: "GATEWAY_AVAILABILITY" }, { cycleId, level: "CRITICAL" }).catch(() => null);
