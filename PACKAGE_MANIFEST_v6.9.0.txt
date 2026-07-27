@@ -1,0 +1,36 @@
+Trading-booooo v6.9.0-EVIDENCE-SIZED-LIVE-VALIDATION
+Base: v6.8.1-RESIDUAL-LABEL-INTEGRITY
+
+Changed/new files:
+.github/workflows/main.deploy-supabase.yml
+BUILD_v6.9.0.txt
+CHANGELOG-v6.9.0.md
+MODEL_REVIEW_v6.9.0.md
+PACKAGE_MANIFEST_v6.9.0.txt
+README.md
+SQL_VERIFY_v690.sql
+UPDATE_v6.9.0.md
+VALIDATION_v6.9.0.md
+docs/config.js
+docs/index.html
+gateway/server.mjs
+supabase/functions/_shared/lob/adaptive-policy.test.ts
+supabase/functions/_shared/lob/adaptive-policy.ts
+supabase/functions/_shared/lob/entry.ts
+supabase/functions/_shared/lob/ev-bias.test.ts
+supabase/functions/_shared/lob/ev-bias.ts
+supabase/functions/_shared/lob/evidence-sizing.test.ts
+supabase/functions/_shared/lob/evidence-sizing.ts
+supabase/functions/_shared/lob/governance.test.ts
+supabase/functions/_shared/lob/governance.ts
+supabase/functions/_shared/lob/lob.test.ts
+supabase/functions/_shared/lob/types.ts
+supabase/functions/_shared/scalp/latency.test.ts
+supabase/functions/_shared/scalp/latency.ts
+supabase/functions/_shared/scalp/v690-invariants.test.ts
+supabase/functions/lob-calibration/index.ts
+supabase/functions/market-autotrader/index.ts
+supabase/functions/market-scanner/engine.ts
+supabase/migrations/202607270022_evidence_sized_live_validation_v690.sql
+validation/v681-deploy-validation.mjs
+validation/v690-deploy-validation.mjs

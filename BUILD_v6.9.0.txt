@@ -1,0 +1,6 @@
+Trading-booooo v6.9.0-EVIDENCE-SIZED-LIVE-VALIDATION
+Base: v6.8.1-RESIDUAL-LABEL-INTEGRITY
+Migration: 202607270022_evidence_sized_live_validation_v690.sql
+Review: MODEL_REVIEW_v6.9.0.md
+Verify: SQL_VERIFY_v690.sql
+Final gate: GitHub Actions deno task check + deno task test

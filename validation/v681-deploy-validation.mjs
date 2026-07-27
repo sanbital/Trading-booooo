@@ -19,12 +19,12 @@ const dashboard = read("docs/index.html");
 
 const version = engine.match(/ENGINE_VERSION\s*=\s*"([^"]+)"/)?.[1];
 check(
-  "v6.8.1 migration is newest",
-  migrations.at(-1) === "202607270021_residual_label_integrity_v681.sql",
+  "v6.8.1 migration remains present",
+  migrations.includes("202607270021_residual_label_integrity_v681.sql"),
 );
 check(
   "release versions agree",
-  version === "6.8.1-RESIDUAL-LABEL-INTEGRITY" &&
+  Boolean(version) &&
     [autotrader, gateway, dashboard].every((source) => source.includes(version)),
 );
 check(
