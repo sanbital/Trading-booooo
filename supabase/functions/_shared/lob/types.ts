@@ -101,6 +101,11 @@ export interface LobCostEstimate {
    * module stays usable before any measurement exists.
    */
   latencyPenaltyBps?: number;
+  /**
+   * Confirmed optimism in prior entry-time EV forecasts, measured as realized net bps minus
+   * the forecast lower bound. This is an EV-level correction, not a fabricated fee.
+   */
+  forecastBiasPenaltyBps?: number;
 }
 
 export interface LobEntryConfig {
@@ -155,6 +160,7 @@ export interface LobEntryDecision {
   timeoutReturnNetBps: number;
   evNetBps: number;
   evLowerBoundBps: number;
+  forecastBiasPenaltyBps: number;
   maxHoldingSeconds: number;
   reasons: string[];
   features: LobFeatureVector;

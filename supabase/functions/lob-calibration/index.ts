@@ -1,4 +1,4 @@
-// Trading-booooo v6.8.1-RESIDUAL-LABEL-INTEGRITY — LOB_SCALP calibration job.
+// Trading-booooo v6.9.0-EVIDENCE-SIZED-LIVE-VALIDATION — LOB_SCALP calibration job.
 //
 // Reads closed LOB positions, reconstructs (predicted pTarget, neutral win rate, realized
 // outcome) triples from `trading_positions.metadata.lob_signal`, and writes a profile that
@@ -25,6 +25,8 @@ import {
 } from "../_shared/lob/governance.ts";
 import type { LobPatternName } from "../_shared/lob/types.ts";
 import type { LobTrapName } from "../_shared/lob/traps.ts";
+import { estimateEvBias, type EvBiasSample } from "../_shared/lob/ev-bias.ts";
+import { proposeLobAdaptivePolicy } from "../_shared/lob/adaptive-policy.ts";
 
 const SUPABASE_URL = (Deno.env.get("SUPABASE_URL") || "").replace(/\/+$/, "");
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -114,6 +116,12 @@ async function evaluateGovernance(dryRun: boolean): Promise<any> {
     (dataset.baseline_exposures || []) as LobPolicyExposure[],
     (dataset.candidate_exposures || []) as LobPolicyExposure[],
     phase,
+    {
+      currentTrafficFraction: Math.max(
+        0,
+        Math.min(0.5, finite(dataset.candidate_traffic_fraction, 0.5)),
+      ),
+    },
   );
   if (dryRun) return { available: true, phase, evaluation, applied: null };
   const applied = await db("rpc/apply_lob_policy_decision", {
@@ -200,6 +208,54 @@ function toSample(row: any): LobOutcomeSample | null {
   };
 }
 
+async function measureLiveForecastDiagnostics(settings: any): Promise<any> {
+  const compatibleEngines =
+    "6.8.1-RESIDUAL-LABEL-INTEGRITY,6.9.0-EVIDENCE-SIZED-LIVE-VALIDATION";
+  const rows = await db(
+    "lob_online_outcomes?accounting_quality=in.(NO_RESIDUAL,RESIDUAL_MARKED_TO_EXIT)" +
+      `&engine_version=in.(${compatibleEngines})` +
+      "&select=net_bps,entry_snapshot,closed_at,engine_version&order=closed_at.desc&limit=2000",
+  ).catch(() => []) as any[];
+  const evSamples: EvBiasSample[] = (rows || []).flatMap((row: any) => {
+    const predicted = finite(
+      row?.entry_snapshot?.ev_lower_bound_bps ?? row?.entry_snapshot?.ev_net_bps,
+      Number.NaN,
+    );
+    const realized = finite(row?.net_bps, Number.NaN);
+    return Number.isFinite(predicted) && Number.isFinite(realized)
+      ? [{ predictedEvBps: predicted, realizedNetBps: realized }]
+      : [];
+  });
+  const evBias = estimateEvBias(evSamples);
+  const insufficient = (rows || []).filter((row: any) =>
+    String(
+      row?.entry_snapshot?.features?.dynamicStatus ??
+        row?.entry_snapshot?.scanned_lob?.features?.dynamicStatus ??
+        "",
+    ).toUpperCase().includes("INSUFFICIENT")
+  ).length;
+  const insufficientDataShare = rows?.length ? insufficient / rows.length : 0;
+  const latencySamples = Math.max(0, finite(settings?.scalp_latency_samples));
+  const latencyMeasured = String(settings?.scalp_latency_source || "") === "MEASURED" &&
+    latencySamples >= 30;
+  const latencySloBreached = latencyMeasured &&
+    finite(settings?.scalp_latency_p95_ms) > Math.max(250, finite(settings?.lob_max_book_age_ms, 5000));
+  const policyProposal = proposeLobAdaptivePolicy({
+    latencyMeasured,
+    latencySloBreached,
+    evBiasPenaltyBps: evBias.penaltyBps,
+    insufficientDataShare,
+  });
+  return {
+    rows: rows?.length || 0,
+    evBias,
+    insufficientDataShare,
+    latencyMeasured,
+    latencySloBreached,
+    policyProposal,
+  };
+}
+
 Deno.serve(async (request: Request) => {
   if (request.method === "OPTIONS") return new Response(null, { status: 204 });
   if (!SUPABASE_URL || !SERVICE_KEY) return json({ error: "supabase env missing" }, 500);
@@ -214,6 +270,20 @@ Deno.serve(async (request: Request) => {
   const since = new Date(Date.now() - windowHours * 3_600_000).toISOString();
 
   try {
+    const settings = (await db("trading_settings?id=eq.1&select=*&limit=1").catch(() => []))?.[0] || {};
+    const liveDiagnostics = await measureLiveForecastDiagnostics(settings);
+    if (!dryRun) {
+      await db("trading_settings?id=eq.1", {
+        method: "PATCH",
+        body: JSON.stringify({
+          scalp_ev_bias_penalty_bps: liveDiagnostics.evBias.penaltyBps,
+          scalp_ev_bias_samples: liveDiagnostics.evBias.samples,
+          scalp_ev_bias_source: liveDiagnostics.evBias.samples >= 40 ? "MEASURED" : "UNMEASURED",
+          scalp_ev_bias_measured_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }),
+      }).catch(() => null);
+    }
     let onlineBackfilled = 0;
     if (!dryRun) {
       try {
@@ -248,6 +318,7 @@ Deno.serve(async (request: Request) => {
         window_hours: windowHours,
         online_backfilled: onlineBackfilled,
         profile,
+        live_diagnostics: liveDiagnostics,
         governance,
       });
     }
@@ -268,7 +339,7 @@ Deno.serve(async (request: Request) => {
           window_hours: windowHours,
           patterns: profile.patterns,
           traps: profile.traps,
-          notes: [...profile.notes, "VALIDATION_CANDIDATE_ONLY_V680"],
+          notes: [...profile.notes, "VALIDATION_CANDIDATE_ONLY_V690"],
         }),
       });
       profileId = inserted?.[0]?.id ?? null;
@@ -276,13 +347,17 @@ Deno.serve(async (request: Request) => {
 
     const governance = await evaluateGovernance(false);
     let challenger: any = null;
-    const terminalDecision = governance?.evaluation?.decision &&
-      governance.evaluation.decision !== "HOLD";
+    const terminalDecision = ["PROMOTE", "REJECT", "CONFIRM", "ROLLBACK"].includes(
+      String(governance?.evaluation?.decision || ""),
+    );
     if (governance?.phase === "IDLE" || terminalDecision) {
       try {
         challenger = await db("rpc/create_lob_policy_challenger", {
           method: "POST",
-          body: JSON.stringify({ p_min_new_samples: 20 }),
+          body: JSON.stringify({
+            p_min_new_samples: 20,
+            p_policy_definition: liveDiagnostics.policyProposal,
+          }),
         });
       } catch (error) {
         challenger = {
@@ -300,6 +375,7 @@ Deno.serve(async (request: Request) => {
       online_backfilled: onlineBackfilled,
       profile_id: profileId,
       profile,
+      live_diagnostics: liveDiagnostics,
       governance,
       challenger,
     });

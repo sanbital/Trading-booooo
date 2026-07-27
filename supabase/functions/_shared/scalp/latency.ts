@@ -265,6 +265,71 @@ export function latencyCostFromNoiseBandBps(
   return Math.max(cfg.floorBps, Math.min(cfg.ceilingBps, scaled));
 }
 
+export interface ResolvedLatencyPenaltyInput {
+  noiseBandBps: number;
+  observationWindowMs: number;
+  measured: boolean;
+  measuredP95Ms: number;
+  measuredSamples: number;
+  operatorPriorBps: number;
+  assumedP95Ms: number;
+  unmeasuredFloorBps: number;
+  penaltyMultiplier?: number;
+}
+
+export interface ResolvedLatencyPenalty {
+  bps: number;
+  source:
+    | "NOISE_BAND_X_MEASURED_P95_SHRUNK"
+    | "NOISE_BAND_X_ASSUMED_P95"
+    | "CONSERVATIVE_UNMEASURED_FLOOR";
+}
+
+/**
+ * Resolve a latency charge even before the measurement loop matures.
+ *
+ * The previous runtime returned zero whenever `scalp_latency_source` was UNMEASURED. That
+ * made the shortest-horizon strategy assume instantaneous execution exactly when it knew
+ * least about the path. The fallback now uses the same book noise model with a bounded
+ * assumed p95, or a small operator floor when the book cannot price itself.
+ */
+export function resolveLatencyPenaltyBps(
+  input: ResolvedLatencyPenaltyInput,
+): ResolvedLatencyPenalty {
+  const prior = Math.max(0, Number(input.operatorPriorBps) || 0);
+  const floor = Math.max(0.25, Number(input.unmeasuredFloorBps) || 0, prior);
+  const multiplier = Math.max(0.75, Math.min(1.75, Number(input.penaltyMultiplier) || 1));
+  if (input.measured && input.measuredP95Ms > 0 && input.noiseBandBps > 0 && input.observationWindowMs > 0) {
+    const raw = latencyCostFromNoiseBandBps({
+      noiseBandBps: input.noiseBandBps,
+      latencyMs: input.measuredP95Ms,
+      observationWindowMs: input.observationWindowMs,
+    }, { floorBps: 0, unmeasuredBps: floor });
+    return {
+      bps: Math.min(15, shrunkLatencyCostBps(raw, input.measuredSamples, {
+        floorBps: floor,
+        unmeasuredBps: floor,
+      }) * multiplier),
+      source: "NOISE_BAND_X_MEASURED_P95_SHRUNK",
+    };
+  }
+  if (input.noiseBandBps > 0 && input.observationWindowMs > 0) {
+    const raw = latencyCostFromNoiseBandBps({
+      noiseBandBps: input.noiseBandBps,
+      latencyMs: Math.max(250, input.assumedP95Ms),
+      observationWindowMs: input.observationWindowMs,
+    }, { floorBps: floor, unmeasuredBps: floor });
+    return {
+      bps: Math.min(15, Math.max(floor, raw) * multiplier),
+      source: "NOISE_BAND_X_ASSUMED_P95",
+    };
+  }
+  return {
+    bps: Math.min(15, floor * multiplier),
+    source: "CONSERVATIVE_UNMEASURED_FLOOR",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Service level
 // ---------------------------------------------------------------------------

@@ -183,3 +183,31 @@ Deno.test("noise-band cost falls back rather than returning zero on a missing ba
     DEFAULT_LATENCY_COST.unmeasuredBps,
   );
 });
+
+Deno.test("unmeasured latency is conservatively priced instead of silently charged at zero", async () => {
+  const { resolveLatencyPenaltyBps } = await import("./latency.ts");
+  const fromNoise = resolveLatencyPenaltyBps({
+    noiseBandBps: 8,
+    observationWindowMs: 8000,
+    measured: false,
+    measuredP95Ms: 0,
+    measuredSamples: 0,
+    operatorPriorBps: 0,
+    assumedP95Ms: 1500,
+    unmeasuredFloorBps: 1,
+  });
+  if (!(fromNoise.bps >= 1)) throw new Error(JSON.stringify(fromNoise));
+  if (fromNoise.source !== "NOISE_BAND_X_ASSUMED_P95") throw new Error(JSON.stringify(fromNoise));
+
+  const floorOnly = resolveLatencyPenaltyBps({
+    noiseBandBps: 0,
+    observationWindowMs: 8000,
+    measured: false,
+    measuredP95Ms: 0,
+    measuredSamples: 0,
+    operatorPriorBps: 0,
+    assumedP95Ms: 1500,
+    unmeasuredFloorBps: 1,
+  });
+  if (floorOnly.bps !== 1) throw new Error(JSON.stringify(floorOnly));
+});
