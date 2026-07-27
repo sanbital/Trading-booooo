@@ -43,13 +43,13 @@ import {
 import { detectLobPatternName } from "../_shared/lob/patterns.ts";
 import type { LobTrapConfig } from "../_shared/lob/traps.ts";
 import type { LobLearningProfile } from "../_shared/lob/learning.ts";
-import { patternMultiplier, unearnedVetoes } from "../_shared/lob/learning.ts";
+import { patternDeployment, unearnedVetoes } from "../_shared/lob/learning.ts";
 import { effectiveSlots, evaluateModelHealth, shouldConvertToTaker } from "../_shared/lob/health.ts";
 import { evaluateLobExit } from "../_shared/lob/exit.ts";
-import type { LobFeatureVector } from "../_shared/lob/types.ts";
+import type { LobFeatureVector, LobPatternName } from "../_shared/lob/types.ts";
 import {
-  compareLobSelection,
   lobSelectionMetrics,
+  rankLobSelections,
 } from "../_shared/lob/selection.ts";
 import {
   bookTimestampOf,
@@ -68,7 +68,7 @@ import {
   validateSpotMarket,
 } from "../_shared/spot-market.ts";
 
-const VERSION = "6.6.0-LIVE-DATA";
+const VERSION = "6.6.1-JOINT-OBJECTIVE";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -605,10 +605,14 @@ async function loadBuyCandidates(scanId: string, settings?: TradingSettings): Pr
       binance: await loadMakerFillStats("binance"),
     }
     : null;
-  // v6.6: today's 67 live trades exposed that hotness-first is not EV ranking. The old
-  // formula `hotness * 1000 + ev` made even a 0.01 hotness difference overwhelm the
-  // complete EV range. Rank by conservative EV first; use profit per slot-second only
-  // inside the measurement-noise band, and hotness as the final tie-breaker.
+  const lobLearning = isLobStrategy((settings as any)?.strategy)
+    ? await loadLobLearning()
+    : null;
+  // v6.6.1: the first live deployment proved that a low-sample calibration cannot own the
+  // hard gate: 17/17 candidates were discarded and throughput fell to zero. Evidence now
+  // changes ordering immediately while the base positive-EV gate stays intact until that
+  // exact pattern has enough samples. Non-dominated sorting jointly rewards net EV,
+  // profitable-trade probability and EV per slot-second; it removes no candidate.
   const selection = (row: Candidate) => {
     const snapshot = (row as any).snapshot || {};
     if (isLobStrategy((settings as any)?.strategy)) {
@@ -622,23 +626,29 @@ async function loadBuyCandidates(scanId: string, settings?: TradingSettings): Pr
         stats?.rested || 0,
       );
       const fillScale = rawPFill > 0 ? calibrated.probability / rawPFill : 1;
+      const deployment = patternDeployment(
+        lobLearning,
+        String(lob.pattern || "") as LobPatternName,
+      );
       return lobSelectionMetrics({
         ...lob,
         ev_lower_bound_bps: finite(
           lob.ev_lower_bound_bps,
           Number.NEGATIVE_INFINITY,
         ) * fillScale,
+        pattern_quality: deployment.rankingQuality,
+        empirical_profitable_rate: deployment.profitableRate,
+        empirical_hold_seconds: deployment.medianHoldSeconds,
       });
     }
     return null;
   };
-  const ranked = [...rows].sort((a, b) => {
-    if (isLobStrategy((settings as any)?.strategy)) {
-      return compareLobSelection(selection(a)!, selection(b)!);
-    }
-    return finite((b as any).snapshot?.scalp?.provisional_edge, Number.NEGATIVE_INFINITY) -
-      finite((a as any).snapshot?.scalp?.provisional_edge, Number.NEGATIVE_INFINITY);
-  });
+  const ranked = isLobStrategy((settings as any)?.strategy)
+    ? rankLobSelections([...rows], (row) => selection(row)!)
+    : [...rows].sort((a, b) =>
+      finite((b as any).snapshot?.scalp?.provisional_edge, Number.NEGATIVE_INFINITY) -
+      finite((a as any).snapshot?.scalp?.provisional_edge, Number.NEGATIVE_INFINITY)
+    );
   const universe = clamp(finite((settings as any)?.scalp_scan_universe, ranked.length || 1), 1, 1000);
   return ranked.slice(0, universe);
 }
@@ -1362,6 +1372,8 @@ async function enterCandidateInner(candidate: Candidate, settings: TradingSettin
     const measuredMakerFillRate = makerFill.rested > 0
       ? makerFill.filled / makerFill.rested
       : 0;
+    const livePattern = detectLobPatternName(features);
+    const patternPolicy = patternDeployment(lobLearning, livePattern);
     // v6.5: execution delay is now priced from measurement instead of being absent from
     // this path entirely. The book's own noise band supplies the volatility and the
     // measured p95 tick-to-order supplies the time; see _shared/scalp/latency.ts.
@@ -1386,7 +1398,9 @@ async function enterCandidateInner(candidate: Candidate, settings: TradingSettin
       uncertaintyHaircut: clamp(finite((settings as any).lob_uncertainty_haircut, 0.25), 0, 0.9),
       trap: lobTrapOverrides(settings),
       disabledVetoes: unearnedVetoes(lobLearning),
-      patternProbabilityMultiplier: patternMultiplier(lobLearning, detectLobPatternName(features)),
+      // Adverse learning owns ordering and rotation, not permission to trade. This protects
+      // turnover; only mature positive evidence may lift the probability estimate.
+      patternProbabilityMultiplier: patternPolicy.gateMultiplier,
       measuredMakerFillRate,
       makerFillSamples: makerFill.rested,
     });
@@ -1396,6 +1410,16 @@ async function enterCandidateInner(candidate: Candidate, settings: TradingSettin
       p_timeout: decision.pTimeout, p_fill: decision.pFill,
       p_fill_raw: decision.rawPFill,
       p_fill_calibration_weight: decision.fillCalibrationWeight,
+      pattern_learning: {
+        samples: patternPolicy.samples,
+        observed_multiplier: patternPolicy.observedMultiplier,
+        gate_multiplier: patternPolicy.gateMultiplier,
+        gate_weight: patternPolicy.gateWeight,
+        ranking_quality: patternPolicy.rankingQuality,
+        profitable_rate: patternPolicy.profitableRate,
+        mean_net_bps: patternPolicy.meanNetBps,
+        median_hold_seconds: patternPolicy.medianHoldSeconds,
+      },
       target_bps: decision.targetBps, stop_bps: decision.stopBps,
       target_return_net_bps: decision.targetReturnNetBps,
       // v6.2: the calibration job needs the arithmetic term separated from the model's
@@ -1426,16 +1450,26 @@ async function enterCandidateInner(candidate: Candidate, settings: TradingSettin
     // book trades or not. A rejection now carries the same evidence an entry does.
     (candidate as any).__decision_audit = scalpAudit;
     // Ranking inputs for rotation: what this book is worth per second of slot occupancy.
+    const rotationMetrics = lobSelectionMetrics({
+      ev_lower_bound_bps: decision.evLowerBoundBps,
+      p_target: decision.pTarget,
+      target_bps: decision.targetBps,
+      stop_bps: decision.stopBps,
+      max_holding_seconds: decision.maxHoldingSeconds,
+      pattern_quality: patternPolicy.rankingQuality,
+      empirical_profitable_rate: patternPolicy.profitableRate,
+      empirical_hold_seconds: patternPolicy.medianHoldSeconds,
+      features: {
+        noiseBandBps: finite((features as any).noiseBandBps, 0),
+        observationMs: Math.max(
+          1000,
+          finite((settings as any).lob_observation_window_ms, 8000),
+        ),
+      },
+    });
     (candidate as any).__rotation = {
-      evLowerBoundBps: decision.evLowerBoundBps,
-      expectedSecondsToResolve: expectedResolutionSeconds(
-        decision.targetBps,
-        decision.stopBps,
-        // The noise band is measured over the observation window; rebase it to 1 second.
-        finite((features as any).noiseBandBps, 0) /
-          Math.sqrt(Math.max(1, Math.max(1000, finite((settings as any).lob_observation_window_ms, 8000)) / 1000)),
-        { min: 5, max: decision.maxHoldingSeconds },
-      ),
+      evLowerBoundBps: rotationMetrics.qualityAdjustedEvBps,
+      expectedSecondsToResolve: rotationMetrics.expectedSecondsToResolve,
       entryCostBps: liveFee * 100 + latencyPenalty.bps,
     };
     if (decision.decision !== "BUY") {
@@ -2371,6 +2405,42 @@ async function reconcileEntryPending(position: Position, cycleId: string, settin
       metadata: { ...(position.metadata || {}), reconciliation_retry_started_at: new Date().toISOString() },
     }))[0] };
   }
+  let orderRow: any = null;
+  // v6.6.1 legacy recovery: older maker entries were moved to RECONCILING before their
+  // phase was stamped. They have zero booked quantity and an EXCHANGE_OPEN `tb-m-` order,
+  // so the monitor filter skipped them forever and the exchange bid never reached its TTL
+  // cancel. Rebuild the maker metadata from the durable order row; never infer a fill.
+  if (
+    !position.metadata?.maker_entry_identifier &&
+    finite(position.initial_quantity) <= 0 &&
+    finite(position.remaining_quantity) <= 0
+  ) {
+    orderRow = (await db(
+      `trading_orders?position_id=eq.${position.id}&purpose=eq.ENTRY&select=*&order=created_at.desc&limit=1`,
+    ))[0];
+    if (
+      orderRow &&
+      (String(orderRow.order_type).toUpperCase() === "LIMIT_MAKER" ||
+        String(orderRow.identifier).startsWith("tb-m-"))
+    ) {
+      const metadata = {
+        ...(position.metadata || {}),
+        reconciliation_phase: "ENTRY",
+        maker_entry_identifier: orderRow.identifier,
+        maker_entry_order_id: orderRow.id,
+        maker_entry_price: finite(orderRow.requested_price, position.planned_entry_price),
+        maker_entry_placed_at: orderRow.requested_at || orderRow.created_at,
+        legacy_maker_recovered_at: new Date().toISOString(),
+      };
+      position = {
+        ...position,
+        ...(await patch("trading_positions", `id=eq.${position.id}`, {
+          state: "ENTRY_PENDING",
+          metadata,
+        }))[0],
+      };
+    }
+  }
   // v5.5: a resting maker entry has its own lifecycle — TTL, book-drift cancel, and a
   // partial fill that must clear the exchange minimum before it is booked. The generic
   // path below would treat a still-working order as an orphan.
@@ -2388,7 +2458,8 @@ async function reconcileEntryPending(position: Position, cycleId: string, settin
     }
     return;
   }
-  const orderRow = (await db(`trading_orders?position_id=eq.${position.id}&purpose=eq.ENTRY&select=*&order=created_at.desc&limit=1`))[0];
+  orderRow = orderRow ||
+    (await db(`trading_orders?position_id=eq.${position.id}&purpose=eq.ENTRY&select=*&order=created_at.desc&limit=1`))[0];
   if (!orderRow) {
     const createdAt = new Date((position as any).created_at || 0).getTime();
     if (!Number.isFinite(createdAt) || Date.now() - createdAt > 30_000) {
@@ -2532,7 +2603,14 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
   const tracked = await db("trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*&order=created_at.asc") as Position[];
   for (const position of tracked.filter((p) =>
     p.state === "ENTRY_PENDING" ||
-    (["RECONCILING", "RECONCILIATION_FAILED"].includes(p.state) && p.metadata?.reconciliation_phase === "ENTRY")
+    (["RECONCILING", "RECONCILIATION_FAILED"].includes(p.state) && (
+      p.metadata?.reconciliation_phase === "ENTRY" ||
+      (
+        !p.metadata?.reconciliation_phase &&
+        finite(p.initial_quantity) <= 0 &&
+        finite(p.remaining_quantity) <= 0
+      )
+    ))
   )) await reconcileEntryPending(position, cycleId, settings);
   for (const position of tracked.filter((p) =>
     p.state === "EXITING" ||

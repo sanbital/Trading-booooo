@@ -1,4 +1,4 @@
-// Trading-booooo v6.6.0-LIVE-DATA — LOB_SCALP calibration job.
+// Trading-booooo v6.6.1-JOINT-OBJECTIVE — LOB_SCALP calibration job.
 //
 // Reads closed LOB positions, reconstructs (predicted pTarget, neutral win rate, realized
 // outcome) triples from `trading_positions.metadata.lob_signal`, and writes a profile that
@@ -15,10 +15,7 @@
 //
 // Read-only against trading data; the only writes are to lob_learning_profiles.
 
-import {
-  buildLobLearningProfile,
-  type LobOutcomeSample,
-} from "../_shared/lob/learning.ts";
+import { buildLobLearningProfile, type LobOutcomeSample } from "../_shared/lob/learning.ts";
 import type { LobPatternName } from "../_shared/lob/types.ts";
 import type { LobTrapName } from "../_shared/lob/traps.ts";
 
@@ -138,6 +135,13 @@ function toSample(row: any): LobOutcomeSample | null {
     neutral,
     outcome: outcomeOf(row),
     netBps: Number.isFinite(entry) ? netBps : 0,
+    heldSeconds: (() => {
+      const openedAt = Date.parse(String(row.opened_at || row.created_at || ""));
+      const closedAt = Date.parse(String(row.closed_at || row.updated_at || ""));
+      return Number.isFinite(openedAt) && Number.isFinite(closedAt)
+        ? Math.max(0, (closedAt - openedAt) / 1000)
+        : 0;
+    })(),
     traps,
     exploration: Boolean(row?.metadata?.exploration ?? signal.exploration),
     closedAtMs: Date.parse(String(row.closed_at || row.updated_at || "")) || Date.now(),
@@ -150,14 +154,17 @@ Deno.serve(async (request: Request) => {
   if (!allowed(request)) return json({ error: "unauthorized" }, 401);
 
   const url = new URL(request.url);
-  const windowHours = Math.max(1, Math.min(720, Number(url.searchParams.get("window_hours") || 168)));
+  const windowHours = Math.max(
+    1,
+    Math.min(720, Number(url.searchParams.get("window_hours") || 168)),
+  );
   const dryRun = url.searchParams.get("dry_run") === "1";
   const since = new Date(Date.now() - windowHours * 3_600_000).toISOString();
 
   try {
     const rows = await db(
       `trading_positions?state=eq.CLOSED&is_paper=eq.false&closed_at=gte.${since}` +
-        `&select=id,closed_at,updated_at,close_reason,average_entry_price,realized_pnl_quote,realized_cost_quote,metadata` +
+        `&select=id,created_at,opened_at,closed_at,updated_at,close_reason,average_entry_price,realized_pnl_quote,realized_cost_quote,metadata` +
         `&order=closed_at.desc&limit=5000`,
     );
 

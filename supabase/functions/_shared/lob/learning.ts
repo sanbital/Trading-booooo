@@ -40,6 +40,8 @@ export interface LobOutcomeSample {
   outcome: 0 | 1;
   /** Net return actually realized, in bps, after fees. */
   netBps: number;
+  /** Wall-clock slot occupancy from opened_at to closed_at. */
+  heldSeconds?: number;
   /** Traps that were flagged at entry but did not veto. */
   traps: LobTrapName[];
   /** True when the trade was taken by the exploration budget rather than the EV gate. */
@@ -59,6 +61,10 @@ export interface LobPatternStat {
   /** predictedHitRate - neutralWinRate. The edge the model claimed. */
   predictedEdge: number;
   meanNetBps: number;
+  /** Share of trades with positive realized net P&L, including profitable early exits. */
+  profitableRate?: number;
+  /** Median slot occupancy. Used for capital-turnover ranking, never as a trade veto. */
+  medianHoldSeconds?: number;
   /** Multiplier applied to the model's *signal edge*, never to the geometric term. Shrunk toward 1. */
   probabilityMultiplier: number;
   /** Lower bound of the Wilson interval on the realized hit rate. */
@@ -124,6 +130,13 @@ function mean(values: number[]): number {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 }
 
+function median(values: number[]): number {
+  const sorted = values.filter(Number.isFinite).sort((left, right) => left - right);
+  if (!sorted.length) return 0;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
 /** Wilson score interval lower bound — honest at the sample counts this will actually see. */
 export function wilsonLowerBound(successes: number, total: number, z = 1.96): number {
   if (total <= 0) return 0;
@@ -157,7 +170,9 @@ export function buildLobLearningProfile(
   const patterns: LobPatternStat[] = [];
   for (const [pattern, rows] of byPattern) {
     if (rows.length < cfg.minPatternSamples) {
-      notes.push(`${pattern}: ${rows.length}표본 — 최소 ${cfg.minPatternSamples}표본 미달로 미반영`);
+      notes.push(
+        `${pattern}: ${rows.length}표본 — 최소 ${cfg.minPatternSamples}표본 미달로 미반영`,
+      );
       continue;
     }
     const hits = rows.filter((row) => row.outcome === 1).length;
@@ -182,6 +197,8 @@ export function buildLobLearningProfile(
       measuredEdge,
       predictedEdge,
       meanNetBps: mean(rows.map((row) => row.netBps)),
+      profitableRate: rows.filter((row) => row.netBps > 0).length / rows.length,
+      medianHoldSeconds: median(rows.map((row) => Number(row.heldSeconds))),
       probabilityMultiplier: clamp(shrunk, cfg.minMultiplier, cfg.maxMultiplier),
       hitRateLowerBound: wilsonLowerBound(hits, rows.length),
     });
@@ -250,6 +267,88 @@ export function patternMultiplier(
   if (!profile || !pattern) return 1;
   const row = profile.patterns.find((entry) => entry.pattern === pattern);
   return row ? row.probabilityMultiplier : 1;
+}
+
+export interface LobPatternDeployment {
+  samples: number;
+  observedMultiplier: number;
+  /**
+   * Multiplier allowed to affect the hard EV gate. Low-sample evidence is deliberately
+   * ranking-only: otherwise the model can "improve" win rate by taking no trades.
+   */
+  gateMultiplier: number;
+  gateWeight: number;
+  /** Joint quality term for candidate ordering. It never changes EV's sign. */
+  rankingQuality: number;
+  profitableRate: number | null;
+  meanNetBps: number | null;
+  medianHoldSeconds: number | null;
+}
+
+/**
+ * Split learning into two jobs:
+ *
+ * 1. Ranking reacts immediately, so the scarce slot-second moves toward patterns with
+ *    better realized win rate, net return and holding time.
+ * 2. Adverse pattern evidence never owns the hard gate, because that improves measured
+ *    win rate by deleting turnover. Mature positive evidence may lift the gate estimate
+ *    after 120 samples and reaches full influence at 360; adverse evidence continues to
+ *    act through priority and rotation.
+ */
+export function patternDeployment(
+  profile: LobLearningProfile | null | undefined,
+  pattern: LobPatternName | null,
+  gateStartSamples = 120,
+  gateFullSamples = 360,
+): LobPatternDeployment {
+  const row = profile && pattern
+    ? profile.patterns.find((entry) => entry.pattern === pattern)
+    : null;
+  if (!row) {
+    return {
+      samples: 0,
+      observedMultiplier: 1,
+      gateMultiplier: 1,
+      gateWeight: 0,
+      rankingQuality: 1,
+      profitableRate: null,
+      meanNetBps: null,
+      medianHoldSeconds: null,
+    };
+  }
+
+  const samples = Math.max(0, Number(row.samples) || 0);
+  const observedMultiplier = clamp(Number(row.probabilityMultiplier), 0.30, 1.35);
+  const start = Math.max(1, gateStartSamples);
+  const full = Math.max(start + 1, gateFullSamples);
+  const gateWeight = clamp((samples - start) / (full - start), 0, 1);
+  const gateTarget = Math.max(1, observedMultiplier);
+  const gateMultiplier = 1 + (gateTarget - 1) * gateWeight;
+  const profitableRate = Number.isFinite(Number(row.profitableRate))
+    ? clamp(Number(row.profitableRate), 0, 1)
+    : null;
+  const meanNetBps = Number.isFinite(Number(row.meanNetBps)) ? Number(row.meanNetBps) : null;
+  const medianHoldSeconds = Number.isFinite(Number(row.medianHoldSeconds)) &&
+      Number(row.medianHoldSeconds) > 0
+    ? Number(row.medianHoldSeconds)
+    : null;
+
+  // All factors stay positive, so this can reorder candidates but can never turn a
+  // positive raw EV into a negative one or admit a negative raw EV.
+  const winFactor = profitableRate == null ? 1 : clamp(0.5 + profitableRate, 0.5, 1.5);
+  const netFactor = meanNetBps == null ? 1 : clamp(1 + meanNetBps / 100, 0.5, 1.5);
+  const rankingQuality = clamp(observedMultiplier * winFactor * netFactor, 0.15, 1.75);
+
+  return {
+    samples,
+    observedMultiplier,
+    gateMultiplier,
+    gateWeight,
+    rankingQuality,
+    profitableRate,
+    meanNetBps,
+    medianHoldSeconds,
+  };
 }
 
 /**

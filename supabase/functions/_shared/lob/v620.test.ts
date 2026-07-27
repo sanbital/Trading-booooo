@@ -1,7 +1,13 @@
 import { assert, assertAlmostEquals, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { assessLobTraps, midPathStatistics } from "./traps.ts";
 import { NEUTRAL_FUNDING, perpSymbolFor, scoreFunding } from "./funding.ts";
-import { buildLobLearningProfile, patternMultiplier, unearnedVetoes, wilsonLowerBound } from "./learning.ts";
+import {
+  buildLobLearningProfile,
+  patternDeployment,
+  patternMultiplier,
+  unearnedVetoes,
+  wilsonLowerBound,
+} from "./learning.ts";
 import type { LobOutcomeSample } from "./learning.ts";
 import { calibrateMakerFillProbability, neutralWinRateOf } from "./entry.ts";
 import { effectiveSlots, evaluateModelHealth, shouldConvertToTaker, surprisingStreak } from "./health.ts";
@@ -134,6 +140,7 @@ function sample(overrides: Partial<LobOutcomeSample> = {}): LobOutcomeSample {
     neutral: 0.40,
     outcome: 1,
     netBps: 5,
+    heldSeconds: 60,
     traps: [],
     exploration: false,
     closedAtMs: Date.now(),
@@ -186,6 +193,78 @@ Deno.test("same-day live evidence can correct a pattern below the old 0.65 floor
   const multiplier = patternMultiplier(profile, "ABSORPTION_REVERSAL");
   assert(multiplier < 0.65, "adverse live evidence must not be discarded by the old floor");
   assert(multiplier >= 0.30, "the conservative correction floor still applies");
+});
+
+Deno.test("same-day evidence ranks immediately but cannot zero the hard gate", () => {
+  const rows = [
+    ...Array.from({ length: 2 }, () =>
+      sample({
+        pattern: "ABSORPTION_REVERSAL",
+        predicted: 0.51,
+        neutral: 0.40,
+        outcome: 1,
+        netBps: 8,
+        heldSeconds: 40,
+      })),
+    ...Array.from({ length: 27 }, () =>
+      sample({
+        pattern: "ABSORPTION_REVERSAL",
+        predicted: 0.51,
+        neutral: 0.40,
+        outcome: 0,
+        netBps: -20,
+        heldSeconds: 80,
+      })),
+  ];
+  const profile = buildLobLearningProfile(rows);
+  const deployment = patternDeployment(profile, "ABSORPTION_REVERSAL");
+  assert(deployment.observedMultiplier < 0.65);
+  assertEquals(deployment.gateWeight, 0);
+  assertEquals(deployment.gateMultiplier, 1);
+  assert(deployment.rankingQuality < 1, "bad same-day evidence must still lower priority");
+  assertAlmostEquals(deployment.profitableRate!, 2 / 29, 1e-12);
+  assertEquals(deployment.medianHoldSeconds, 80);
+});
+
+Deno.test("mature adverse evidence remains ranking-only and cannot delete turnover", () => {
+  const profile = buildLobLearningProfile(
+    Array.from({ length: 360 }, (_, index) =>
+      sample({
+        outcome: index < 36 ? 1 : 0,
+        netBps: index < 36 ? 10 : -10,
+      })
+    ),
+  );
+  const row = profile.patterns[0];
+  const atStart = patternDeployment(
+    { ...profile, patterns: [{ ...row, samples: 120 }] },
+    "OFI_CONTINUATION",
+  );
+  const halfway = patternDeployment(
+    { ...profile, patterns: [{ ...row, samples: 240 }] },
+    "OFI_CONTINUATION",
+  );
+  const mature = patternDeployment(profile, "OFI_CONTINUATION");
+  assertEquals(atStart.gateMultiplier, 1);
+  assertAlmostEquals(halfway.gateWeight, 0.5, 1e-12);
+  assertEquals(halfway.gateMultiplier, 1);
+  assertEquals(mature.gateMultiplier, 1);
+});
+
+Deno.test("mature positive evidence may lift EV without adverse evidence deleting trades", () => {
+  const profile = buildLobLearningProfile(
+    Array.from({ length: 360 }, () =>
+      sample({
+        predicted: 0.48,
+        neutral: 0.40,
+        outcome: 1,
+        netBps: 15,
+      })
+    ),
+  );
+  const deployment = patternDeployment(profile, "OFI_CONTINUATION");
+  assert(deployment.observedMultiplier > 1);
+  assertAlmostEquals(deployment.gateMultiplier, deployment.observedMultiplier, 1e-12);
 });
 
 Deno.test("a trap that marks no worse trades loses its veto", () => {
@@ -275,6 +354,8 @@ Deno.test("LOB calibration reads only closed LIVE positions", async () => {
     new URL("../../lob-calibration/index.ts", import.meta.url),
   );
   assert(source.includes("state=eq.CLOSED&is_paper=eq.false"));
+  assert(source.includes("opened_at"));
+  assert(source.includes("heldSeconds"));
 });
 
 Deno.test("slots never exceed the configured ceiling and never strand capital", () => {
