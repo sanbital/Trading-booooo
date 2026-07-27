@@ -102,9 +102,16 @@ export interface LobLearningConfig {
 
 export const DEFAULT_LOB_LEARNING_CONFIG: LobLearningConfig = {
   priorStrength: 120,
-  minPatternSamples: 25,
+  // A high-frequency strategy can collect a useful same-day pattern sample quickly.
+  // Twelve starts the correction, while the 120-sample prior limits one day to a small
+  // move. Waiting for 25 left every pattern except ABSORPTION_REVERSAL unmeasured today.
+  minPatternSamples: 12,
   minTrapSamples: 20,
-  minMultiplier: 0.65,
+  // The old 0.65 floor discarded adverse evidence: today's live ABSORPTION multiplier
+  // shrinks to 0.24, yet the floor forced it back to 0.65. A 0.30 floor remains
+  // conservative without claiming that a measured losing signal still owns most of its
+  // hand-written edge.
+  minMultiplier: 0.30,
   maxMultiplier: 1.35,
   neutralLiftThreshold: -0.03,
 };

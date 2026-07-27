@@ -10,6 +10,7 @@ import {
   floorToStep,
   manualReconcileAccounting,
   nextTrailingStop,
+  reconcileAccount,
   resumeSafetyError,
   normalizedOrderState,
   t1SellQuantity,
@@ -20,6 +21,24 @@ function assert(condition: unknown, message = "assertion failed"): asserts condi
   if (!condition) throw new Error(message);
 }
 function near(a: number, b: number, tolerance = 1e-8) { assert(Math.abs(a - b) <= tolerance, `${a} != ${b}`); }
+/**
+ * v6.5 repair: this file used `assertEquals` twenty-one times and never defined or
+ * imported it. Every one of those calls is inside the seven reconciliation tests v6.4.0
+ * added -- the guards covering the DUST_ALIGN path, the bot's own resting sell being
+ * mistaken for a manual lock, and the "unreadable open orders blame nobody" rule. Those
+ * are the tests for the two incidents that caused the 8h39m ETH hold and the LTC pause,
+ * and they have never once executed: the file throws ReferenceError the moment the first
+ * one runs, and `deno task test` -- which CI runs before every deploy -- has been unable
+ * to run in the packaging environment since deno.land became unreachable.
+ *
+ * Defined locally rather than imported so the file keeps its existing zero-dependency
+ * shape.
+ */
+function assertEquals<T>(actual: T, expected: T, message?: string): void {
+  const a = JSON.stringify(actual);
+  const b = JSON.stringify(expected);
+  if (a !== b) throw new Error(message || `assertEquals failed: ${a} !== ${b}`);
+}
 
 const settings: TradingSettings = {
   configured: true, mode: "PAPER", pause_new_entries: false, emergency_liquidation: false,
@@ -203,4 +222,116 @@ Deno.test("a pause names which condition caused it", () => {
 
   // Nothing blocking: entries allowed.
   assert(evaluateCircuit({ ...base, pauseNewEntries: false }).allowNewEntry, "entries should be allowed");
+});
+
+// v6.4 — the two false positives that stopped live trading.
+
+Deno.test("fee dust never pauses an asset", () => {
+  // Binance takes the buy commission out of the base asset, so the account holds ~0.1%
+  // less than the matched quantity. This is the AVAX/LTC shape.
+  const out = reconcileAccount({
+    bookedQuantity: 38.55001,
+    freeQuantity: 38.51275,
+    lockedQuantity: 0,
+    botLockedQuantity: 0,
+    price: 6.77,
+    dustToleranceQuote: 10,
+    feePctPerSide: 0.1,
+  });
+  assertEquals(out.verdict, "DUST_ALIGN");
+  assertEquals(out.blockNewEntries, false);
+  assertEquals(out.allowExit, true);
+});
+
+Deno.test("a difference worth less than the dust threshold is never a manual trade", () => {
+  const out = reconcileAccount({
+    bookedQuantity: 1,
+    freeQuantity: 0.94,         // 0.06 missing = 6 USD, under the 10 USD floor
+    lockedQuantity: 0,
+    botLockedQuantity: 0,
+    price: 100,
+    dustToleranceQuote: 10,
+    feePctPerSide: 0.1,
+  });
+  assertEquals(out.verdict, "DUST_ALIGN");
+  assertEquals(out.blockNewEntries, false);
+});
+
+Deno.test("the absolute floor cannot swallow half a position", () => {
+  // A 10 USD floor on a 12 USD position would otherwise let the whole thing disappear
+  // without anyone noticing.
+  const out = reconcileAccount({
+    bookedQuantity: 1.2,
+    freeQuantity: 0.2,
+    lockedQuantity: 0,
+    botLockedQuantity: 0,
+    price: 10,
+    dustToleranceQuote: 10,
+    feePctPerSide: 0.1,
+  });
+  assertEquals(out.verdict, "VANISHED");
+  assertEquals(out.blockNewEntries, true);
+  assertEquals(out.allowExit, true);
+});
+
+Deno.test("the bot's own resting sell is not a manual lock", () => {
+  const out = reconcileAccount({
+    bookedQuantity: 10,
+    freeQuantity: 0,
+    lockedQuantity: 10,
+    botLockedQuantity: 10,      // our own take-profit
+    price: 100,
+    dustToleranceQuote: 10,
+    feePctPerSide: 0.1,
+  });
+  assertEquals(out.verdict, "MATCH");
+  assertEquals(out.blockNewEntries, false);
+  assertEquals(out.sellableQuantity, 10);
+});
+
+Deno.test("unreadable open orders blame nobody", () => {
+  const out = reconcileAccount({
+    bookedQuantity: 10,
+    freeQuantity: 0,
+    lockedQuantity: 10,
+    botLockedQuantity: null,    // the open_orders call failed
+    price: 100,
+    dustToleranceQuote: 10,
+    feePctPerSide: 0.1,
+  });
+  assertEquals(out.verdict, "UNKNOWN_LOCK");
+  assertEquals(out.blockNewEntries, false);
+});
+
+Deno.test("a real manual sale blocks entries but never blocks the exit", () => {
+  // This is the upbit:ETH shape. Entries stop; the remaining position stays exitable.
+  const out = reconcileAccount({
+    bookedQuantity: 0.0854,
+    freeQuantity: 0.02,
+    lockedQuantity: 0,
+    botLockedQuantity: 0,
+    price: 5_000_000,
+    dustToleranceQuote: 14000,
+    feePctPerSide: 0.05,
+  });
+  assertEquals(out.verdict, "VANISHED");
+  assertEquals(out.blockNewEntries, true);
+  assertEquals(out.allowExit, true);
+  assertEquals(out.sellableQuantity, 0.02);
+});
+
+Deno.test("a user limit order on the coin blocks entries but leaves the free part exitable", () => {
+  const out = reconcileAccount({
+    bookedQuantity: 10,
+    freeQuantity: 4,
+    lockedQuantity: 6,
+    botLockedQuantity: 0,       // the lock is not ours
+    price: 100,
+    dustToleranceQuote: 10,
+    feePctPerSide: 0.1,
+  });
+  assertEquals(out.verdict, "ASSET_REVIEW");
+  assertEquals(out.blockNewEntries, true);
+  assertEquals(out.allowExit, true);
+  assertEquals(out.sellableQuantity, 4);
 });

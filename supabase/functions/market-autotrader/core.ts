@@ -379,3 +379,146 @@ export function normalizedOrderState(currentState: string | null | undefined, ga
   if (state === "OPEN") return "EXCHANGE_OPEN";
   return "UNKNOWN";
 }
+
+// ---------------------------------------------------------------------------
+// v6.4: account reconciliation verdict.
+//
+// Two incidents produced this function.
+//
+//   2026-07-26  binance:LTC — a resting take-profit the bot itself had placed locked the
+//               base asset. The comparison treated the locked quantity as missing and
+//               paused the asset.
+//   2026-07-27  upbit:ETH   — a position flagged by that comparison was skipped by the
+//               monitor loop for 8h39m. It was never priced, never evaluated and never
+//               sold; a human closed it by hand.
+//
+// The verdict therefore answers two separate questions, and the second one is the
+// important one: a mismatch decides whether we may BUY this asset, never whether we may
+// SELL what we already hold.
+// ---------------------------------------------------------------------------
+
+const DUST_MAX_FRACTION = 0.5;
+
+export type ReconcileVerdict = "MATCH" | "DUST_ALIGN" | "UNKNOWN_LOCK" | "ASSET_REVIEW" | "VANISHED";
+
+export interface ReconcileInput {
+  /** Quantity the ledger says we hold. */
+  bookedQuantity: number;
+  /** Exchange free balance. */
+  freeQuantity: number;
+  /** Exchange locked balance. */
+  lockedQuantity: number;
+  /** Quantity locked by the bot's OWN open orders, or null when unreadable. */
+  botLockedQuantity: number | null;
+  /** Reference price in the quote currency. */
+  price: number;
+  /** Differences below this quote value are noise, never a manual trade. */
+  dustToleranceQuote: number;
+  /** Per-side fee rate as a percentage, e.g. 0.1 for Binance. */
+  feePctPerSide: number;
+  /** Exchange quantity step, if known. */
+  quantityStep?: number;
+}
+
+export interface ReconcileOutput {
+  verdict: ReconcileVerdict;
+  /** Ledger quantity after alignment. */
+  alignedQuantity: number;
+  /** What can actually be delivered to a sell order right now. */
+  sellableQuantity: number;
+  /** New entries on this asset are blocked. */
+  blockNewEntries: boolean;
+  /**
+   * Exits are ALWAYS permitted. The field exists so the intent is explicit in the type
+   * rather than implied by the absence of a check.
+   */
+  allowExit: true;
+  shortfallQuantity: number;
+  shortfallQuote: number;
+  toleranceQuantity: number;
+  reason: string;
+}
+
+export function reconcileAccount(input: ReconcileInput): ReconcileOutput {
+  const booked = Math.max(0, finite(input.bookedQuantity));
+  const free = Math.max(0, finite(input.freeQuantity));
+  const locked = Math.max(0, finite(input.lockedQuantity));
+  const total = free + locked;
+  const price = Math.max(0, finite(input.price));
+
+  const botLockedKnown = input.botLockedQuantity !== null && input.botLockedQuantity !== undefined;
+  const botLocked = botLockedKnown ? Math.min(Math.max(0, finite(input.botLockedQuantity)), locked) : 0;
+  // Our own resting order has not left the account and we can cancel it at will, so it
+  // counts as deliverable.
+  const effectiveFree = free + botLocked;
+
+  // The dust threshold is absolute, which is what the operator asked for: a difference
+  // worth a few dollars is noise regardless of what caused it. It carries one guard —
+  // losing half a position is information no matter how little the half is worth, so the
+  // absolute floor never swallows more than DUST_MAX_FRACTION of the holding. On a
+  // normally sized position the guard never binds; it only stops a very small position
+  // from being able to vanish silently.
+  const dustQuantityRaw = price > 0 ? Math.max(0, finite(input.dustToleranceQuote)) / price : 0;
+  const dustQuantity = Math.min(dustQuantityRaw, booked * DUST_MAX_FRACTION);
+  const tolerance = Math.max(
+    Math.max(0, finite(input.quantityStep)) * 2,
+    booked * Math.max(0, finite(input.feePctPerSide)) / 100 * 3,
+    dustQuantity,
+  );
+
+  const shortfall = Math.max(0, booked - total);
+  const base = {
+    shortfallQuantity: shortfall,
+    shortfallQuote: shortfall * price,
+    toleranceQuantity: tolerance,
+    allowExit: true as const,
+  };
+
+  if (booked <= total + 1e-12 && booked <= effectiveFree + 1e-12) {
+    return { ...base, verdict: "MATCH", alignedQuantity: booked, sellableQuantity: effectiveFree, blockNewEntries: false, reason: "ledger agrees with the account" };
+  }
+
+  if (shortfall > 0 && shortfall <= tolerance) {
+    const aligned = Math.max(0, booked - shortfall);
+    return {
+      ...base,
+      verdict: "DUST_ALIGN",
+      alignedQuantity: aligned,
+      sellableQuantity: Math.min(aligned, Math.max(effectiveFree, total)),
+      blockNewEntries: false,
+      reason: `shortfall ${shortfall} within tolerance ${tolerance}; ledger aligned, trading unaffected`,
+    };
+  }
+
+  if (shortfall > tolerance) {
+    return {
+      ...base,
+      verdict: "VANISHED",
+      alignedQuantity: total,
+      sellableQuantity: effectiveFree,
+      blockNewEntries: true,
+      reason: `quantity left the account beyond tolerance; entries blocked, remaining ${effectiveFree} still exitable`,
+    };
+  }
+
+  // Present but locked. Whether that is our doing decides everything.
+  if (!botLockedKnown) {
+    return {
+      ...base,
+      verdict: "UNKNOWN_LOCK",
+      alignedQuantity: booked,
+      sellableQuantity: free,
+      blockNewEntries: false,
+      reason: "open orders unreadable; a lock cannot be attributed to anyone this cycle",
+    };
+  }
+
+  return {
+    ...base,
+    verdict: "ASSET_REVIEW",
+    alignedQuantity: booked,
+    sellableQuantity: effectiveFree,
+    blockNewEntries: true,
+    reason: `balance locked by an order that is not ours; entries blocked on this asset, ${effectiveFree} still exitable`,
+  };
+}

@@ -31,10 +31,35 @@ export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   trap: {},
   disabledVetoes: [],
   patternProbabilityMultiplier: 1,
+  measuredMakerFillRate: 0,
+  makerFillSamples: 0,
+  makerFillPriorStrength: 60,
 };
 
 /** Largest amount the signal is ever allowed to move the probability off pure geometry. */
 const MAX_SIGNAL_EDGE = 0.18;
+
+/**
+ * Shrink the book-derived fill probability toward the exchange's realized maker fill
+ * rate. The raw model still separates good queues from bad ones; the measurement corrects
+ * its level. With no attempts the model is unchanged.
+ */
+export function calibrateMakerFillProbability(
+  rawProbability: number,
+  measuredRate: number,
+  samples: number,
+  priorStrength = 60,
+): { probability: number; weight: number } {
+  const raw = clamp(rawProbability, 0.05, 0.99);
+  const n = Math.max(0, Number.isFinite(samples) ? samples : 0);
+  if (!(n > 0) || !Number.isFinite(measuredRate)) {
+    return { probability: raw, weight: 0 };
+  }
+  const prior = Math.max(1, Number.isFinite(priorStrength) ? priorStrength : 60);
+  const weight = n / (n + prior);
+  const probability = raw * (1 - weight) + clamp(measuredRate, 0.01, 0.99) * weight;
+  return { probability: clamp(probability, 0.05, 0.99), weight };
+}
 
 /**
  * LOB-only entry decision.
@@ -59,8 +84,14 @@ export function evaluateLobEntry(
   const hotness = scoreHotSymbol(features);
   const rawPatterns = detectLobPatterns(features);
 
-  const totalTargetCostBps = Math.max(0, costs.roundTripFeeBps + costs.entrySlippageBps + costs.targetExitSlippageBps);
-  const totalStopCostBps = Math.max(0, costs.roundTripFeeBps + costs.entrySlippageBps + costs.stopExitSlippageBps);
+  // v6.5: the order is not filled at the price the book showed when the decision was made.
+  // The gap is measured (see _shared/scalp/latency.ts) rather than assumed, and it is
+  // charged to entry AND to the stop exit: a stop is a market order into a book that has
+  // already moved, so the delay is paid twice on the losing side and once on the winning
+  // one, where a resting take-profit is filled at its own price.
+  const latencyBps = Math.max(0, Number.isFinite(costs.latencyPenaltyBps as number) ? costs.latencyPenaltyBps as number : 0);
+  const totalTargetCostBps = Math.max(0, costs.roundTripFeeBps + costs.entrySlippageBps + costs.targetExitSlippageBps + latencyBps);
+  const totalStopCostBps = Math.max(0, costs.roundTripFeeBps + costs.entrySlippageBps + costs.stopExitSlippageBps + latencyBps * 2);
 
   // Provisional geometry, used only to ask the trap module whether this book's own noise
   // can accommodate the stop the model would otherwise have chosen.
@@ -147,12 +178,19 @@ export function evaluateLobEntry(
   const pTarget = Math.min(resolveProbability, clamp(neutralWinRate + signalEdge, 0.05, 0.92));
   const pTimeout = 1 - resolveProbability;
   const pStop = Math.max(0, resolveProbability - pTarget);
-  const pFill = clamp(
+  const rawPFill = clamp(
     0.30 + hotness.tradabilityScore / 100 * 0.48 + clamp(features.depthRatio / 3, 0, 1) * 0.12 -
       clamp((features.spreadBps || 0) / 50, 0, 1) * 0.10,
     0.05,
     0.99,
   );
+  const fillCalibration = calibrateMakerFillProbability(
+    rawPFill,
+    cfg.measuredMakerFillRate,
+    cfg.makerFillSamples,
+    cfg.makerFillPriorStrength,
+  );
+  const pFill = fillCalibration.probability;
 
   const targetReturnNetBps = targetBps - totalTargetCostBps;
   const stopReturnNetBps = -(stopBps + totalStopCostBps);
@@ -208,6 +246,8 @@ export function evaluateLobEntry(
     pStop,
     pTimeout,
     pFill,
+    rawPFill,
+    fillCalibrationWeight: fillCalibration.weight,
     targetBps,
     stopBps,
     targetReturnNetBps,

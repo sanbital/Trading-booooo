@@ -29,6 +29,11 @@ import {
   type CalibrationModel,
   type CalibrationSample,
 } from "../_shared/scalp/calibration.ts";
+import {
+  DEFAULT_LATENCY_SLO,
+  evaluateLatencySlo,
+  summarize,
+} from "../_shared/scalp/latency.ts";
 
 const SUPABASE_URL = (Deno.env.get("SUPABASE_URL") || "").replace(/\/+$/, "");
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -227,9 +232,56 @@ async function evaluateShadowCandidates(settings: any) {
   return { evaluated: rows.length, inserted: inserts.length };
 }
 
+/**
+ * v6.5: turn the raw latency samples into the number the entry gate actually charges.
+ *
+ * `cost-model.ts` has subtracted a flat 1bp for execution delay since v5.2 without one
+ * millisecond ever being recorded. This closes that loop: p95 tick-to-order is measured
+ * here, written to `scalp_latency_p95_ms`, and combined at order time with each book's own
+ * noise band to price the delay per symbol instead of per system.
+ *
+ * The p95 is used rather than the median deliberately. The cost of being late is not the
+ * typical delay, it is the delay bad enough to matter, and a scalper that sizes to its
+ * median latency systematically underprices its own tail.
+ */
+async function measureLatency(): Promise<Record<string, unknown>> {
+  const since = new Date(Date.now() - 24 * 3600_000).toISOString();
+  const rows = await db(
+    `trading_latency_samples?created_at=gte.${encodeURIComponent(since)}&select=tick_to_order_ms,tick_to_decision_ms,quote_to_decision_ms,order_round_trip_ms,book_captured_at&order=created_at.desc&limit=20000`,
+  ).catch(() => []) as any[];
+
+  const list = Array.isArray(rows) ? rows : [];
+  const pick = (key: string): number[] =>
+    list.map((r) => Number(r[key])).filter((v) => Number.isFinite(v));
+
+  const tickToOrder = summarize(pick("tick_to_order_ms"));
+  const tickToDecision = summarize(pick("tick_to_decision_ms"));
+  const quoteToDecision = summarize(pick("quote_to_decision_ms"));
+  const orderRoundTrip = summarize(pick("order_round_trip_ms"));
+  // Rows with no exchange book timestamp cannot be audited for staleness at all. Counting
+  // them is the point: before v6.5 that was every row in the system.
+  const anchored = list.filter((r) => r.book_captured_at).length;
+
+  const slo = evaluateLatencySlo(
+    { tickToOrder, quoteToDecision, decisionsSeen: list.length },
+    DEFAULT_LATENCY_SLO,
+  );
+
+  return {
+    samples: list.length,
+    exchange_anchored_samples: anchored,
+    tick_to_order: tickToOrder,
+    tick_to_decision: tickToDecision,
+    quote_to_decision: quoteToDecision,
+    order_round_trip: orderRoundTrip,
+    slo,
+  };
+}
+
 async function runCalibration(dryRun: boolean) {
   const settings = (await db("trading_settings?id=eq.1&select=*&limit=1").catch(() => []))?.[0] || {};
   const shadow = await evaluateShadowCandidates(settings).catch(() => ({ evaluated: 0, inserted: 0 }));
+  const latency = await measureLatency().catch(() => null);
 
   // Measure the signal's actual excess win rate. This is what edgeBudget means, and it has
   // never been measured — the value has been assumed since the strategy was written.
@@ -258,6 +310,7 @@ async function runCalibration(dryRun: boolean) {
   const bins = reliabilityBins(resolved);
 
   const report = {
+    latency,
     shadow: {
       ...shadow,
       stored_samples: shadowSamples.length,
@@ -302,6 +355,27 @@ async function runCalibration(dryRun: boolean) {
 
   // Write the measured edge back only when the operator has enabled it. Reporting is
   // always on: knowing the number matters even when nothing is changed automatically.
+  // v6.5.1: the measured p95 replaces the unearned constant. A thin sample is written too --
+  // the shrinkage toward the zero-cost prior happens at read time in the autotrader, so the raw
+  // measurement stays visible here instead of being pre-blended into something that cannot
+  // be checked against the distribution it came from.
+  const latencySamples = Number((latency as any)?.samples) || 0;
+  if (
+    latency && latencySamples >= DEFAULT_LATENCY_SLO.minSamples &&
+    settings.scalp_auto_tune_latency !== false && !dryRun
+  ) {
+    await db("trading_settings?id=eq.1", {
+      method: "PATCH",
+      headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({
+        scalp_latency_p95_ms: Number((latency as any)?.tick_to_order?.p95) || 0,
+        scalp_latency_samples: latencySamples,
+        scalp_latency_source: "MEASURED",
+        updated_at: new Date().toISOString(),
+      }),
+    }).catch(() => null);
+  }
+
   if (edgeProposal.apply && settings.scalp_auto_tune_edge_budget === true && !dryRun) {
     await db("trading_settings?id=eq.1", {
       method: "PATCH",

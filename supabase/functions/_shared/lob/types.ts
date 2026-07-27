@@ -91,6 +91,16 @@ export interface LobCostEstimate {
   targetExitSlippageBps: number;
   stopExitSlippageBps: number;
   spreadBps: number;
+  /**
+   * v6.5: adverse price movement expected while the order is in flight, in bps.
+   *
+   * Before v6.5 this was a flat 1bp buried in the scalp cost model and absent from the LOB
+   * path entirely — the strategy with the shortest horizon in the system was the one that
+   * did not price its own execution delay. It is now measured per exchange from
+   * `trading_latency_samples` and scaled by the symbol's volatility. Optional so the
+   * module stays usable before any measurement exists.
+   */
+  latencyPenaltyBps?: number;
 }
 
 export interface LobEntryConfig {
@@ -114,6 +124,12 @@ export interface LobEntryConfig {
   disabledVetoes: string[];
   /** Learned per-pattern correction to pTarget. 1 = no correction. */
   patternProbabilityMultiplier: number;
+  /** Realized maker-entry fill rate for this exchange. */
+  measuredMakerFillRate: number;
+  /** Number of maker-entry attempts behind measuredMakerFillRate. */
+  makerFillSamples: number;
+  /** Samples at which measured fill rate and the book model receive equal weight. */
+  makerFillPriorStrength: number;
 }
 
 export interface LobEntryDecision {
@@ -125,6 +141,8 @@ export interface LobEntryDecision {
   pStop: number;
   pTimeout: number;
   pFill: number;
+  rawPFill: number;
+  fillCalibrationWeight: number;
   targetBps: number;
   stopBps: number;
   targetReturnNetBps: number;

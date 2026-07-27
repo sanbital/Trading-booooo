@@ -1,4 +1,5 @@
 import type { FinalCandidate, RiskConfig, TargetStrategy } from "./engine.ts";
+import { validateSpotMarket } from "../_shared/spot-market.ts";
 
 export type Exchange = "upbit" | "binance";
 export type ExitPolicy = "FIXED_T1" | "SCALE_OUT" | "TRAIL_AFTER_T1";
@@ -328,46 +329,62 @@ function candidateRows(
   profile: RuntimeProfile,
   risk: RiskConfig,
 ) {
-  return candidates.map((candidate) => ({
-    scan_id: scanId,
-    exchange,
-    quote_currency: exchange === "upbit" ? "KRW" : "USDT",
-    market: candidate.market,
-    created_at: new Date().toISOString(),
-    decision: candidate.decision,
-    score: candidate.score,
-    period_score: candidate.period_score,
-    confidence: candidate.confidence,
-    entry_low: candidate.trade_plan?.entry_low ?? candidate.watch_entry_plan?.zone_low,
-    entry_high: candidate.trade_plan?.entry_execution_estimate ?? candidate.watch_entry_plan?.zone_high,
-    stop_price: candidate.trade_plan?.stop_execution_estimate ?? candidate.watch_entry_plan?.stop_price,
-    target_1: candidate.trade_plan?.short_target_execution_estimate ?? candidate.watch_entry_plan?.reference_target,
-    target_2: candidate.trade_plan?.medium_target_execution_estimate,
-    net_rr: candidate.trade_plan?.net_rr ?? candidate.watch_entry_plan?.estimated_net_rr,
-    estimated_cost_pct: candidate.trade_plan?.estimated_round_trip_cost_pct,
-    failed_gate_count: candidate.failed_gates?.length || 0,
-    // v6.3.2: `intended_horizon_hours` is an integer column and LOB_SCALP holds for 180
-    // seconds, i.e. 0.05 hours -- Postgres rejected the whole 24-row batch on that one
-    // value. The true sub-hour horizon is already carried losslessly in
-    // `snapshot.lob.max_holding_seconds`; this column only buckets maturity for the legacy
-    // forward-learning job, so the smallest valid bucket is the correct answer here.
-    intended_horizon_hours: Math.max(1, Math.ceil(finite(candidate.execution_plan?.intended_holding_hours, 1))),
-    recommendation_valid_until: candidate.execution_plan?.valid_until ?? null,
-    // v6.3.1: these three reached into `trade_plan` and `execution_plan` without the
-    // optional chaining every neighbouring line uses. LOB_SCALP does not build a pullback
-    // plan, so a single absent field threw inside `.map()` and took the whole batch with
-    // it -- after the scan-run row had already been written, which is why the scan looked
-    // healthy while `scanner_candidates` stayed empty.
-    active_policy_key: candidate.trade_plan?.target_strategy === "SHORT_ONLY"
-      ? "FIXED_T1"
-      : candidate.trade_plan?.target_strategy === "TRAIL_AFTER_T1"
-      ? `TRAIL_AFTER_T1_${Math.round(candidate.trade_plan?.first_target_allocation_pct ?? 0)}`
-      : `SCALE_OUT_${Math.round(candidate.trade_plan?.first_target_allocation_pct ?? 0)}`,
-    profile_version: profile.version,
-    feature_vector: featureVector(candidate, risk),
-    applied_parameters: profile.parameters,
-    snapshot: candidate,
-  }));
+  const rows: any[] = [];
+  const invalid: Array<{ exchange: string; market: string; reason: string }> = [];
+  for (const candidate of candidates) {
+    const route = validateSpotMarket(exchange, candidate.market);
+    if (!route.ok) {
+      const rejected = {
+        exchange,
+        market: String(candidate.market || ""),
+        reason: route.reason,
+      };
+      invalid.push(rejected);
+      console.error(`[persistScan] invalid candidate market route: ${JSON.stringify(rejected)}`);
+      continue;
+    }
+    rows.push({
+      scan_id: scanId,
+      exchange: route.exchange,
+      quote_currency: route.exchange === "upbit" ? "KRW" : "USDT",
+      market: route.market,
+      created_at: new Date().toISOString(),
+      decision: candidate.decision,
+      score: candidate.score,
+      period_score: candidate.period_score,
+      confidence: candidate.confidence,
+      entry_low: candidate.trade_plan?.entry_low ?? candidate.watch_entry_plan?.zone_low,
+      entry_high: candidate.trade_plan?.entry_execution_estimate ?? candidate.watch_entry_plan?.zone_high,
+      stop_price: candidate.trade_plan?.stop_execution_estimate ?? candidate.watch_entry_plan?.stop_price,
+      target_1: candidate.trade_plan?.short_target_execution_estimate ?? candidate.watch_entry_plan?.reference_target,
+      target_2: candidate.trade_plan?.medium_target_execution_estimate,
+      net_rr: candidate.trade_plan?.net_rr ?? candidate.watch_entry_plan?.estimated_net_rr,
+      estimated_cost_pct: candidate.trade_plan?.estimated_round_trip_cost_pct,
+      failed_gate_count: candidate.failed_gates?.length || 0,
+      // v6.3.2: `intended_horizon_hours` is an integer column and LOB_SCALP holds for 180
+      // seconds, i.e. 0.05 hours -- Postgres rejected the whole 24-row batch on that one
+      // value. The true sub-hour horizon is already carried losslessly in
+      // `snapshot.lob.max_holding_seconds`; this column only buckets maturity for the legacy
+      // forward-learning job, so the smallest valid bucket is the correct answer here.
+      intended_horizon_hours: Math.max(1, Math.ceil(finite(candidate.execution_plan?.intended_holding_hours, 1))),
+      recommendation_valid_until: candidate.execution_plan?.valid_until ?? null,
+      // v6.3.1: these three reached into `trade_plan` and `execution_plan` without the
+      // optional chaining every neighbouring line uses. LOB_SCALP does not build a pullback
+      // plan, so a single absent field threw inside `.map()` and took the whole batch with
+      // it -- after the scan-run row had already been written, which is why the scan looked
+      // healthy while `scanner_candidates` stayed empty.
+      active_policy_key: candidate.trade_plan?.target_strategy === "SHORT_ONLY"
+        ? "FIXED_T1"
+        : candidate.trade_plan?.target_strategy === "TRAIL_AFTER_T1"
+        ? `TRAIL_AFTER_T1_${Math.round(candidate.trade_plan?.first_target_allocation_pct ?? 0)}`
+        : `SCALE_OUT_${Math.round(candidate.trade_plan?.first_target_allocation_pct ?? 0)}`,
+      profile_version: profile.version,
+      feature_vector: featureVector(candidate, risk),
+      applied_parameters: profile.parameters,
+      snapshot: candidate,
+    });
+  }
+  return { rows, invalid };
 }
 
 export async function persistScan(
@@ -382,18 +399,24 @@ export async function persistScan(
   // AFTER the scan-run insert, leaving a healthy-looking scan with no candidates and no
   // trace of why.
   let rows: any[] = [];
+  let invalidMarketRows: Array<{ exchange: string; market: string; reason: string }> = [];
   let buildError: string | null = null;
   try {
+    const append = (batch: ReturnType<typeof candidateRows>) => {
+      rows.push(...batch.rows);
+      invalidMarketRows.push(...batch.invalid);
+    };
     if (result.meta?.exchange === "combined") {
-      rows.push(...candidateRows(scanId, "upbit", result.exchanges?.upbit?.finalists || [], profile, risks.upbit));
-      rows.push(...candidateRows(scanId, "binance", result.exchanges?.binance?.finalists || [], profile, risks.binance));
+      append(candidateRows(scanId, "upbit", result.exchanges?.upbit?.finalists || [], profile, risks.upbit));
+      append(candidateRows(scanId, "binance", result.exchanges?.binance?.finalists || [], profile, risks.binance));
     } else {
       const exchange = result.meta.exchange as Exchange;
-      rows.push(...candidateRows(scanId, exchange, result.finalists || [], profile, risks[exchange]));
+      append(candidateRows(scanId, exchange, result.finalists || [], profile, risks[exchange]));
     }
   } catch (error) {
     buildError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
     rows = [];
+    invalidMarketRows = [];
     console.error(`[persistScan] candidate row build failed for scan ${scanId}: ${buildError}`);
   }
 
@@ -420,6 +443,8 @@ export async function persistScan(
           upbit_finalists: upbitFinalists,
           binance_finalists: binanceFinalists,
           rows_built: rows.length,
+          invalid_market_rows: invalidMarketRows.length,
+          invalid_market_samples: invalidMarketRows.slice(0, 10),
           build_error: buildError,
         },
       },

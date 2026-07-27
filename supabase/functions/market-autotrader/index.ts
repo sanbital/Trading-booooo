@@ -8,6 +8,7 @@ import {
   calculatePositionSize,
   clamp,
   decideExit,
+  reconcileAccount,
   dangerousControlError,
   evaluateCircuit,
   finite,
@@ -34,7 +35,11 @@ import { DEFAULT_CANDIDATE_GATE, SHADOW_CANDIDATE_GATE, type GateConfig } from "
 import { calculateOrderNotional } from "../_shared/scalp/risk-allocator.ts";
 import { nextReconciliationFailure, reconciliationRetryDue, type ReconciliationPhase } from "../_shared/scalp/reconciliation.ts";
 import { normalizeStrategyProfile, profileHoldingCeilingMinutes, resolveProfileHolding } from "../_shared/scalp/profile.ts";
-import { evaluateLobEntry, neutralWinRateOf } from "../_shared/lob/entry.ts";
+import {
+  calibrateMakerFillProbability,
+  evaluateLobEntry,
+  neutralWinRateOf,
+} from "../_shared/lob/entry.ts";
 import { detectLobPatternName } from "../_shared/lob/patterns.ts";
 import type { LobTrapConfig } from "../_shared/lob/traps.ts";
 import type { LobLearningProfile } from "../_shared/lob/learning.ts";
@@ -42,8 +47,28 @@ import { patternMultiplier, unearnedVetoes } from "../_shared/lob/learning.ts";
 import { effectiveSlots, evaluateModelHealth, shouldConvertToTaker } from "../_shared/lob/health.ts";
 import { evaluateLobExit } from "../_shared/lob/exit.ts";
 import type { LobFeatureVector } from "../_shared/lob/types.ts";
+import {
+  compareLobSelection,
+  lobSelectionMetrics,
+} from "../_shared/lob/selection.ts";
+import {
+  bookTimestampOf,
+  latencyCostFromNoiseBandBps,
+  LatencyTrace,
+  shrunkLatencyCostBps,
+} from "../_shared/scalp/latency.ts";
+import {
+  evaluateRotation,
+  expectedResolutionSeconds,
+  remainingValueBps,
+  type HeldPositionRate,
+} from "../_shared/scalp/rotation.ts";
+import {
+  settleSpotMarketReads,
+  validateSpotMarket,
+} from "../_shared/spot-market.ts";
 
-const VERSION = "6.3.3-HEAT";
+const VERSION = "6.6.0-LIVE-DATA";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -71,6 +96,19 @@ const FEE_PCT: Record<Exchange, number> = {
   upbit: clamp(finite(env("UPBIT_FEE_PER_SIDE_PCT"), 0.05), 0, 0.5),
   binance: clamp(finite(env("BINANCE_FEE_PER_SIDE_PCT"), 0.1), 0, 0.5),
 };
+
+// v6.4: balance differences worth less than this are accounting noise, not a human
+// trading behind the bot's back. Expressed in the quote currency of each exchange so no
+// FX lookup sits on the safety path — a failed rate fetch must not decide whether the
+// engine halts. Defaults are ~10 USD on both sides.
+const DUST_TOLERANCE_QUOTE_DEFAULT: Record<Exchange, number> = { upbit: 14000, binance: 10 };
+
+function dustToleranceQuote(settings: TradingSettings & JsonRecord, exchange: Exchange): number {
+  const configured = exchange === "upbit"
+    ? finite((settings as any).reconcile_dust_tolerance_krw, DUST_TOLERANCE_QUOTE_DEFAULT.upbit)
+    : finite((settings as any).reconcile_dust_tolerance_usdt, DUST_TOLERANCE_QUOTE_DEFAULT.binance);
+  return Math.max(0, configured);
+}
 
 type JsonRecord = Record<string, any>;
 type CycleKind = "SCAN" | "MONITOR" | "BOOTSTRAP" | "CONTROL";
@@ -561,20 +599,46 @@ async function runScanner(portfolios: Record<Exchange, any>, settings: TradingSe
 async function loadBuyCandidates(scanId: string, settings?: TradingSettings): Promise<Candidate[]> {
   const rows = await db(`scanner_candidates?scan_id=eq.${scanId}&decision=eq.BUY&exchange=in.(upbit,binance)&select=*&order=score.desc,period_score.desc`) as Candidate[];
   if (!isScalpStrategy((settings as any)?.strategy)) return rows;
-  // v5.3: in SCALP the entry decision comes from the orderbook signal, but v5.2.5 still
-  // handed the candidates to the sizer ordered by the LEGACY TREND SCORE. Combined with
-  // full-allocation sizing that meant the single position the bot could hold was chosen
-  // by trend score rather than by scalp expected value. Re-rank by provisional edge.
-  const edge = (row: Candidate) => {
+  const makerByExchange = isLobStrategy((settings as any)?.strategy)
+    ? {
+      upbit: await loadMakerFillStats("upbit"),
+      binance: await loadMakerFillStats("binance"),
+    }
+    : null;
+  // v6.6: today's 67 live trades exposed that hotness-first is not EV ranking. The old
+  // formula `hotness * 1000 + ev` made even a 0.01 hotness difference overwhelm the
+  // complete EV range. Rank by conservative EV first; use profit per slot-second only
+  // inside the measurement-noise band, and hotness as the final tie-breaker.
+  const selection = (row: Candidate) => {
     const snapshot = (row as any).snapshot || {};
     if (isLobStrategy((settings as any)?.strategy)) {
-      const hotness = finite(snapshot.lob?.hotness_score, 0);
-      const ev = finite(snapshot.lob?.ev_lower_bound_bps, Number.NEGATIVE_INFINITY);
-      return hotness * 1000 + ev;
+      const lob = snapshot.lob || {};
+      const stats = makerByExchange?.[row.exchange];
+      const measuredRate = stats && stats.rested > 0 ? stats.filled / stats.rested : 0;
+      const rawPFill = finite(lob.p_fill, 0);
+      const calibrated = calibrateMakerFillProbability(
+        rawPFill,
+        measuredRate,
+        stats?.rested || 0,
+      );
+      const fillScale = rawPFill > 0 ? calibrated.probability / rawPFill : 1;
+      return lobSelectionMetrics({
+        ...lob,
+        ev_lower_bound_bps: finite(
+          lob.ev_lower_bound_bps,
+          Number.NEGATIVE_INFINITY,
+        ) * fillScale,
+      });
     }
-    return finite(snapshot.scalp?.provisional_edge, Number.NEGATIVE_INFINITY);
+    return null;
   };
-  const ranked = [...rows].sort((a, b) => edge(b) - edge(a));
+  const ranked = [...rows].sort((a, b) => {
+    if (isLobStrategy((settings as any)?.strategy)) {
+      return compareLobSelection(selection(a)!, selection(b)!);
+    }
+    return finite((b as any).snapshot?.scalp?.provisional_edge, Number.NEGATIVE_INFINITY) -
+      finite((a as any).snapshot?.scalp?.provisional_edge, Number.NEGATIVE_INFINITY);
+  });
   const universe = clamp(finite((settings as any)?.scalp_scan_universe, ranked.length || 1), 1, 1000);
   return ranked.slice(0, universe);
 }
@@ -987,7 +1051,194 @@ async function scalpDayState(exchange: Exchange, isPaper: boolean): Promise<Scal
   return { realizedPnlQuote, consecutiveLosses };
 }
 
+// =====================================================================================
+// v6.5: the decision ledger
+// =====================================================================================
+//
+// Until now a candidate that was rejected at order time left one INFO event and nothing
+// else, while a candidate that traded left an order and a position with no key joining it
+// back to the scan that produced it. Both halves of that are a problem, but the rejections
+// are the worse one: the reasons trades DO NOT happen are the primary evidence for whether
+// the gates are calibrated, and they were the least durable thing in the system.
+//
+// Every write here is best-effort. Instrumentation that can fail an order is worse than no
+// instrumentation, and a swallowed failure that hides itself is worse still -- so failures
+// are caught, but they raise an event rather than disappearing, which is exactly what the
+// v6.3 `.catch(() => null)` on persistScan did not do.
+
+interface DecisionRecord {
+  decisionId: string;
+  cycleId: string;
+  scanId: string | null;
+  exchange: Exchange;
+  market: string;
+  outcome: "ENTERED" | "REJECTED" | "ROTATED_IN" | "ERROR";
+  reason: string | null;
+  audit: JsonRecord | null;
+}
+
+async function recordDecision(record: DecisionRecord): Promise<void> {
+  try {
+    const audit = (record.audit || {}) as JsonRecord;
+    await insert("trading_decisions", {
+      id: record.decisionId,
+      cycle_id: record.cycleId,
+      scan_id: record.scanId,
+      exchange: record.exchange,
+      market: record.market,
+      strategy: null,
+      outcome: record.outcome,
+      reason: record.reason ? String(record.reason).slice(0, 500) : null,
+      ev_lower_bound_bps: finiteOrNull((audit as any).ev_lower_bound_bps),
+      target_bps: finiteOrNull((audit as any).target_bps),
+      stop_bps: finiteOrNull((audit as any).stop_bps),
+      neutral_win_rate: finiteOrNull((audit as any).neutral_win_rate),
+      p_target: finiteOrNull((audit as any).p_target),
+      audit,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await event("DECISION_LEDGER_WRITE_FAILED", message, { decision_id: record.decisionId }, {
+      cycleId: record.cycleId,
+      level: "WARNING",
+    }).catch(() => null);
+  }
+}
+
+async function recordLatency(trace: LatencyTrace, extra: JsonRecord = {}): Promise<void> {
+  try {
+    // A trace with no book anchor still gets written. The COUNT of decisions that could
+    // not be timed is itself the SLO's coverage metric, so dropping them would make the
+    // measurement look healthier the worse the instrumentation got.
+    await insert("trading_latency_samples", trace.toRow(extra) as JsonRecord);
+  } catch {
+    // No event here: a latency row is pure telemetry and the ledger write above already
+    // reports storage trouble. Retrying or escalating twice for the same outage adds noise.
+  }
+}
+
+function finiteOrNull(value: unknown): number | null {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * The latency cost to charge this candidate, in bps.
+ *
+ * Prefers the book's own measured noise band scaled to the measured p95 tick-to-order
+ * time. Falls back to the settings-level shrunk estimate, and finally to the flat 1bp
+ * constant that was the only thing here before v6.5.
+ */
+function latencyPenaltyBpsFor(
+  settings: TradingSettings & JsonRecord,
+  noiseBandBps: number,
+  observationWindowMs: number,
+): { bps: number; source: string } {
+  const priorBps = Math.max(0, finite((settings as any).scalp_latency_penalty_bps, 0));
+  const samples = Math.max(0, Math.floor(finite((settings as any).scalp_latency_samples, 0)));
+  const p95 = finite((settings as any).scalp_latency_p95_ms, 0);
+  const measured = String((settings as any).scalp_latency_source || "ASSUMED") === "MEASURED";
+  if (measured && p95 > 0 && noiseBandBps > 0 && observationWindowMs > 0) {
+    const raw = latencyCostFromNoiseBandBps({
+      noiseBandBps,
+      latencyMs: p95,
+      observationWindowMs,
+    }, {
+      floorBps: 0,
+      unmeasuredBps: priorBps,
+    });
+    return {
+      // v6.5.1: the v6.5 changelog promised n/(n+60) shrinkage, but the measured
+      // noise-band branch returned the raw estimate at full weight. Shrink the actual
+      // symbol-specific estimate toward the operator prior (zero by default).
+      bps: shrunkLatencyCostBps(raw, samples, {
+        floorBps: 0,
+        unmeasuredBps: priorBps,
+      }),
+      source: "NOISE_BAND_X_MEASURED_P95_SHRUNK",
+    };
+  }
+  // Observe first. A non-zero value here exists only when the operator explicitly set a
+  // prior; the release default and migration default are both zero.
+  return { bps: priorBps, source: measured ? "MEASURED_UNPRICED" : "UNMEASURED" };
+}
+
+/**
+ * v6.5: one wrapper around the entry path so that EVERY outcome is recorded once.
+ *
+ * `enterCandidateInner` has more than twenty early returns, each a different reason not to
+ * trade. Adding a ledger write to each of them would guarantee that the next reason added
+ * forgets one -- which is the same class of mistake as the swallowed catch. The wrapper
+ * records whatever the inner function returns, so a rejection cannot be silent no matter
+ * where in the gate it happens.
+ */
 async function enterCandidate(candidate: Candidate, settings: TradingSettings, portfolio: any, activeBases: Set<string>, cycleId: string) {
+  const decisionId = crypto.randomUUID();
+  const route = validateSpotMarket(candidate.exchange, candidate.market);
+  if (!route.ok) {
+    const reason = `invalid market route: ${route.reason}`;
+    await recordDecision({
+      decisionId,
+      cycleId,
+      scanId: candidate.scan_id ? String(candidate.scan_id) : null,
+      exchange: candidate.exchange,
+      market: String(candidate.market || ""),
+      outcome: "REJECTED",
+      reason,
+      audit: {
+        candidate_id: candidate.id,
+        raw_exchange: candidate.exchange,
+        raw_market: candidate.market,
+      },
+    });
+    await event("CANDIDATE_MARKET_REJECTED", reason, {
+      candidate_id: candidate.id,
+      exchange: candidate.exchange,
+      market: candidate.market,
+    }, { cycleId, level: "WARNING" }).catch(() => null);
+    return {
+      entered: false,
+      exchange: candidate.exchange,
+      market: candidate.market,
+      reason,
+      decision_id: decisionId,
+    };
+  }
+  candidate = { ...candidate, exchange: route.exchange, market: route.market };
+  const trace = new LatencyTrace(decisionId, candidate.exchange, candidate.market);
+  let result: any;
+  try {
+    result = await enterCandidateInner(candidate, settings, portfolio, activeBases, cycleId, decisionId, trace);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await recordDecision({
+      decisionId, cycleId, scanId: candidate.scan_id ? String(candidate.scan_id) : null,
+      exchange: candidate.exchange, market: candidate.market,
+      outcome: "ERROR", reason: message, audit: (candidate as any).__decision_audit || null,
+    });
+    await recordLatency(trace, { outcome: "ERROR" });
+    throw error;
+  }
+  const outcome = result?.entered ? "ENTERED" : result?.reserved ? "ENTERED" : "REJECTED";
+  await recordDecision({
+    decisionId, cycleId, scanId: candidate.scan_id ? String(candidate.scan_id) : null,
+    exchange: candidate.exchange, market: candidate.market,
+    outcome,
+    reason: result?.reason ? String(result.reason) : null,
+    audit: {
+      ...((candidate as any).__decision_audit || {}),
+      entered: Boolean(result?.entered),
+      reserved: Boolean(result?.reserved),
+      paper: Boolean(result?.paper),
+      position_id: result?.position?.id || null,
+      latency: trace.segments(),
+    },
+  });
+  await recordLatency(trace, { outcome });
+  return { ...result, decision_id: decisionId };
+}
+
+async function enterCandidateInner(candidate: Candidate, settings: TradingSettings, portfolio: any, activeBases: Set<string>, cycleId: string, decisionId: string, trace: LatencyTrace) {
   const exchange = candidate.exchange; const quote = quoteCurrency(exchange); const base = baseAsset(exchange, candidate.market);
   if (candidate.recommendation_valid_until && Date.now() > new Date(candidate.recommendation_valid_until).getTime()) return { entered: false, exchange, market: candidate.market, reason: "recommendation expired" };
   const existing = await db(`trading_positions?exchange=eq.${exchange}&market=eq.${candidate.market}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id&limit=1`);
@@ -999,6 +1250,11 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   if (assetLocks.includes(`${exchange}:${base}`)) return { entered: false, exchange, market: candidate.market, reason: `asset ${base} is paused pending manual review` };
 
   const market = await marketQuote(exchange, candidate.market);
+  // v6.5: the two anchors of the whole measurement. `book_captured` is the exchange's own
+  // orderbook timestamp where the venue publishes one (Upbit) and the gateway's receipt
+  // time where it does not (Binance) -- the difference is recorded, not smoothed over.
+  trace.mark("book_captured", bookTimestampOf(market));
+  trace.mark("quote_received");
   const bestAsk = finite(market.best_ask); const bestBid = finite(market.best_bid);
   if (!(bestAsk > 0 && bestBid > 0)) return { entered: false, exchange, market: candidate.market, reason: "empty orderbook" };
   if (accountQuantity(portfolio, base) * Math.max(finite(market.current), bestBid) >= (exchange === "upbit" ? 1000 : 1)) {
@@ -1102,13 +1358,25 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
     const features = liveLobFeatures(lobSnapshot, market);
     const liveFee = await liveFeePct(exchange, settings);
     const lobLearning = await loadLobLearning();
-    const makerFill = await loadMakerFillStats();
+    const makerFill = await loadMakerFillStats(exchange);
+    const measuredMakerFillRate = makerFill.rested > 0
+      ? makerFill.filled / makerFill.rested
+      : 0;
+    // v6.5: execution delay is now priced from measurement instead of being absent from
+    // this path entirely. The book's own noise band supplies the volatility and the
+    // measured p95 tick-to-order supplies the time; see _shared/scalp/latency.ts.
+    const latencyPenalty = latencyPenaltyBpsFor(
+      settings as TradingSettings & JsonRecord,
+      finite((features as any).noiseBandBps, 0),
+      Math.max(1000, finite((settings as any).lob_observation_window_ms, 8000)),
+    );
     const decision = evaluateLobEntry(features, {
       roundTripFeeBps: liveFee * 2 * 100,
       entrySlippageBps: makerEntryEnabled(settings) ? 0 : Math.max(0.1, spreadBps * 0.15),
       targetExitSlippageBps: (settings as any).scalp_resting_tp !== false ? 0 : Math.max(0.1, spreadBps * 0.15),
       stopExitSlippageBps: Math.max(0.4, spreadBps * 0.55),
       spreadBps,
+      latencyPenaltyBps: latencyPenalty.bps,
     }, {
       minEvBps: Math.max(0, finite((settings as any).lob_min_net_ev_bps, 0)),
       maxBookAgeMs: Math.max(250, finite((settings as any).lob_max_book_age_ms, 2500)),
@@ -1119,11 +1387,15 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
       trap: lobTrapOverrides(settings),
       disabledVetoes: unearnedVetoes(lobLearning),
       patternProbabilityMultiplier: patternMultiplier(lobLearning, detectLobPatternName(features)),
+      measuredMakerFillRate,
+      makerFillSamples: makerFill.rested,
     });
     scalpAudit = {
       strategy: "LOB_SCALP", pattern: decision.pattern, patterns: decision.patterns,
       hotness: decision.hotness, p_target: decision.pTarget, p_stop: decision.pStop,
       p_timeout: decision.pTimeout, p_fill: decision.pFill,
+      p_fill_raw: decision.rawPFill,
+      p_fill_calibration_weight: decision.fillCalibrationWeight,
       target_bps: decision.targetBps, stop_bps: decision.stopBps,
       target_return_net_bps: decision.targetReturnNetBps,
       // v6.2: the calibration job needs the arithmetic term separated from the model's
@@ -1145,6 +1417,26 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
           (Math.max(0.1, spreadBps * 0.15) + Math.max(0.1, spreadBps * 0.15));
         return { ...makerFill, ...shouldConvertToTaker(makerFill, evAtTaker) };
       })(),
+      decision_id: decisionId,
+      latency_penalty_bps: latencyPenalty.bps,
+      latency_penalty_source: latencyPenalty.source,
+    };
+    trace.mark("decision_made");
+    // v6.5: the audit travels with the candidate so the wrapper can file it whether this
+    // book trades or not. A rejection now carries the same evidence an entry does.
+    (candidate as any).__decision_audit = scalpAudit;
+    // Ranking inputs for rotation: what this book is worth per second of slot occupancy.
+    (candidate as any).__rotation = {
+      evLowerBoundBps: decision.evLowerBoundBps,
+      expectedSecondsToResolve: expectedResolutionSeconds(
+        decision.targetBps,
+        decision.stopBps,
+        // The noise band is measured over the observation window; rebase it to 1 second.
+        finite((features as any).noiseBandBps, 0) /
+          Math.sqrt(Math.max(1, Math.max(1000, finite((settings as any).lob_observation_window_ms, 8000)) / 1000)),
+        { min: 5, max: decision.maxHoldingSeconds },
+      ),
+      entryCostBps: liveFee * 100 + latencyPenalty.bps,
     };
     if (decision.decision !== "BUY") {
       await event("LOB_CANDIDATE_DISCARD", `${exchange}:${candidate.market} live LOB recheck discarded`, scalpAudit, { cycleId, level: "INFO" });
@@ -1285,7 +1577,8 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
     ? new Date(Date.now() + scalpSafetyTtlMinutes * 60_000).toISOString()
     : new Date(Date.now() + clamp(finite(candidate.intended_horizon_hours, 24), 1, 480) * 3600_000).toISOString();
   const position = (await insert("trading_positions", {
-    candidate_id: candidate.id, scan_id: candidate.scan_id, exchange, quote_currency: quote, market: candidate.market, base_asset: base,
+    candidate_id: candidate.id, scan_id: candidate.scan_id, decision_id: decisionId,
+    exchange, quote_currency: quote, market: candidate.market, base_asset: base,
     state: "ENTRY_PENDING", is_paper: settings.mode !== "LIVE_LIMITED", profile_version: candidate.profile_version || 0,
     planned_entry_price: entryPrice, stop_price: scalpStopPrice ?? candidate.stop_price, target_1: scalpTarget1 ?? candidate.target_1, target_2: scalpTarget2 ?? candidate.target_2,
     tick_size: rules.price_tick, quantity_step: rules.quantity_step, min_notional_quote: Math.max(limits.minOrder, rules.min_notional),
@@ -1330,16 +1623,20 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
     }
     const makerIdentifier = uniqueId("m", position.id);
     const makerOrderRow = await createOrderRecord({
-      position_id: position.id, candidate_id: candidate.id, cycle_id: cycleId, exchange, quote_currency: quote,
+      position_id: position.id, candidate_id: candidate.id, cycle_id: cycleId, decision_id: decisionId, exchange, quote_currency: quote,
       identifier: makerIdentifier, market: candidate.market, side: "BUY", purpose: "ENTRY", order_type: "LIMIT_MAKER",
       requested_price: makerPrice, requested_volume: makerQuantity, requested_notional_quote: makerQuantity * makerPrice, state: "REQUESTED",
     });
     try {
+      trace.mark("order_submitted");
       const result = await gateway(exchange, {
         action: "create_order",
         order: { market: candidate.market, side: "BUY", type: "LIMIT_MAKER", price: makerPrice, quantity: makerQuantity, identifier: makerIdentifier },
         wait_for_final_ms: 0,
       }, 20_000);
+      // The gateway reports when the exchange actually answered; prefer it over our own
+      // clock, which includes the return trip and would flatter the measurement.
+      trace.mark("order_acked", finite((result as any)?.timing?.acked_at_ms) || null);
       await updateOrderFromGateway(makerOrderRow, result);
       const rows = await patch("trading_positions", `id=eq.${position.id}`, {
         planned_entry_price: makerPrice,
@@ -1378,12 +1675,14 @@ async function enterCandidate(candidate: Candidate, settings: TradingSettings, p
   }
   const identifier = uniqueId("e", position.id);
   const orderRow = await createOrderRecord({
-    position_id: position.id, candidate_id: candidate.id, cycle_id: cycleId, exchange, quote_currency: quote,
+    position_id: position.id, candidate_id: candidate.id, cycle_id: cycleId, decision_id: decisionId, exchange, quote_currency: quote,
     identifier, market: candidate.market, side: "BUY", purpose: "ENTRY", order_type: "LIMIT", time_in_force: "IOC",
     requested_price: entryPrice, requested_volume: quantity, requested_notional_quote: quantity * entryPrice, state: "REQUESTED",
   });
   try {
+    trace.mark("order_submitted");
     const result = await gateway(exchange, { action: "create_order", order: { market: candidate.market, side: "BUY", type: "LIMIT", price: entryPrice, quantity, time_in_force: "IOC", identifier }, wait_for_final_ms: 4000 }, 20_000);
+    trace.mark("order_acked", finite((result as any)?.timing?.acked_at_ms) || null);
     const updated = await updateOrderFromGateway(orderRow, result);
     if (!(finite(updated.fill.executedVolume) > 0 && finite(updated.fill.averagePrice) > 0)) {
       if (["OPEN", "PARTIALLY_FILLED"].includes(String(updated.order?.status))) return { entered: false, reserved: true, pending_reconcile: true, exchange, market: candidate.market, reason: "entry order still reconciling" };
@@ -1495,27 +1794,37 @@ function lobTrapOverrides(settings: JsonRecord): Partial<LobTrapConfig> {
 // has been recoverable from `trading_positions` all along. It was simply never computed,
 // which is why "what fraction of maker entries actually fill" stayed an open question while
 // the entire cost model depended on the answer.
-let makerFillCache: { stats: { rested: number; filled: number }; expires: number } | null = null;
-async function loadMakerFillStats(): Promise<{ rested: number; filled: number }> {
-  if (makerFillCache && makerFillCache.expires > Date.now()) return makerFillCache.stats;
-  let stats = { rested: 0, filled: 0 };
+let makerFillCache: {
+  stats: Record<Exchange, { rested: number; filled: number }>;
+  expires: number;
+} | null = null;
+async function loadMakerFillStats(exchange: Exchange): Promise<{ rested: number; filled: number }> {
+  if (makerFillCache && makerFillCache.expires > Date.now()) {
+    return makerFillCache.stats[exchange];
+  }
+  const stats: Record<Exchange, { rested: number; filled: number }> = {
+    upbit: { rested: 0, filled: 0 },
+    binance: { rested: 0, filled: 0 },
+  };
   try {
     const since = new Date(Date.now() - 24 * 3_600_000).toISOString();
     const rows = await db(
-      `trading_positions?created_at=gte.${since}&select=state,close_reason,metadata&limit=5000`,
+      `trading_positions?created_at=gte.${since}&is_paper=eq.false&select=exchange,state,close_reason,opened_at,metadata&limit=5000`,
     );
     for (const row of rows || []) {
       if (!row?.metadata?.maker_entry_placed_at) continue;
-      stats.rested++;
+      const venue = String(row.exchange) as Exchange;
+      if (!(venue in stats)) continue;
+      stats[venue].rested++;
       const reason = String(row.close_reason || "");
       const unfilled = reason === "MAKER_ENTRY_UNFILLED" || reason === "MAKER_ENTRY_DRIFTED";
-      if (!unfilled && String(row.state) !== "CANCELLED") stats.filled++;
+      if (!unfilled && row.opened_at) stats[venue].filled++;
     }
   } catch {
     // Unreadable: report zero samples, which the policy treats as "not yet measured".
   }
   makerFillCache = { stats, expires: Date.now() + 300_000 };
-  return stats;
+  return stats[exchange];
 }
 
 // v5.3: active pWin calibration, loaded once per cycle. Falls back to the identity, so a
@@ -1582,7 +1891,11 @@ async function liveFeePct(exchange: Exchange, settings: TradingSettings): Promis
   return pct;
 }
 
-async function botLockedQuantities(exchange: Exchange, positions: Position[]): Promise<Map<string, number>> {
+// v6.4: the return type carries "we could not read the book" as a distinct value.
+// Returning an empty Map on failure was indistinguishable from "we hold no orders",
+// so one failed open_orders call made every bot-placed resting sell look like a user
+// lock — the exact false positive that halted LTC.
+async function botLockedQuantities(exchange: Exchange, positions: Position[]): Promise<Map<string, number> | null> {
   const locked = new Map<string, number>();
   try {
     const rows = await gateway(exchange, { action: "open_orders" });
@@ -1611,8 +1924,10 @@ async function botLockedQuantities(exchange: Exchange, positions: Position[]): P
       locked.set(asset, (locked.get(asset) || 0) + remaining);
     }
   } catch {
-    // Unreadable open orders must not be treated as evidence of anything.
-    return new Map();
+    // Unreadable open orders must not be treated as evidence of anything. `null` says
+    // "unknown"; an empty Map would say "we definitely hold no orders", which is a claim
+    // we cannot make when the request failed.
+    return null;
   }
   return locked;
 }
@@ -2243,12 +2558,25 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       freeByAsset.set(asset, free);
       totalByAsset.set(asset, free + locked);
     }
-    const quotes = await Promise.all(exchangePositions.map(async (position) => [position.market, await marketQuote(exchange, position.market)] as const));
+    // v6.5.1: one malformed market or one failed quote must not reject the whole monitor
+    // batch. The old Promise.all stopped exit evaluation for every healthy position.
+    const quoteResults = await settleSpotMarketReads(
+      exchangePositions,
+      async (venue, market) => await marketQuote(venue, market),
+    );
+    const quoteErrorsByPosition = new Map<string, string>();
     // v5.4: retain the full book, not just the price. The holding decision is made from
     // the live orderbook; discarding it here is what forced the fallback to a wall clock.
-    for (const [market, quote] of quotes) {
-      prices[market] = finite(quote.current, (finite(quote.best_ask) + finite(quote.best_bid)) / 2);
-      books[market] = quote;
+    for (const result of quoteResults) {
+      if (!result.ok) {
+        quoteErrorsByPosition.set(String(result.item.id), result.error);
+        continue;
+      }
+      prices[result.market] = finite(
+        result.value.current,
+        (finite(result.value.best_ask) + finite(result.value.best_bid)) / 2,
+      );
+      books[result.market] = result.value;
     }
     // v5.4 ---------------------------------------------------------------------------
     // The bot's OWN open orders lock base asset. v5.2.5 compared `expected` against the
@@ -2263,9 +2591,21 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
     //      actually LEFT the account is, and even then the pause is scoped to that asset
     //      unless the pattern is systemic (several assets at once => wrong account, key
     //      change, or exchange-side problem).
-    const botLockedByAsset = await botLockedQuantities(exchange, exchangePositions);
+    const botLockedResult = await botLockedQuantities(exchange, exchangePositions);
+    // v6.4: when the open-order book is unreadable we cannot attribute a lock to anyone.
+    // Suppress the locked-balance branch entirely rather than blaming the user for it.
+    const botLockedKnown = botLockedResult !== null;
+    const botLockedByAsset = botLockedResult ?? new Map<string, number>();
+    if (!botLockedKnown) {
+      await event("BOT_LOCK_UNKNOWN", `${exchange} open orders unreadable; locked-balance mismatch checks suspended this cycle`, {
+        positions: exchangePositions.length,
+      }, { cycleId, level: "WARNING" });
+    }
     const mismatches = new Set<string>();
     const vanishedAssets = new Set<string>();
+    // v6.4: quantity we can actually sell right now, per asset. Used to size an exit on
+    // an asset under review instead of refusing to exit at all.
+    const sellableByAsset = new Map<string, number>();
     for (const originalPosition of exchangePositions.filter((row) => !row.is_paper)) {
       let position = originalPosition;
       // Only a position backed by a successfully APPLIED entry fill may be
@@ -2284,36 +2624,54 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       const actualTotal = totalByAsset.get(position.base_asset) || 0;
       const actualFree = freeByAsset.get(position.base_asset) || 0;
       const botLocked = botLockedByAsset.get(position.base_asset) || 0;
-      // Quantity we ourselves put beyond reach counts as present.
-      const effectiveFree = actualFree + botLocked;
 
-      // v5.4.1: fee-sized shortfalls are OUR OWN accounting, not a user's trade.
+      // Reconciliation verdict.
       //
-      // Binance deducts the buy commission from the base asset, so the account legitimately
-      // holds ~0.1% less than the matched quantity. v5.2.5 compared against a 0.0001%
-      // tolerance, so every Binance entry drifted into "the coin is gone" and, 45 seconds
-      // later, halted the entire system. Entries booked from v5.4.1 onward are already net
-      // of that commission; this tolerance heals positions opened before the fix and any
-      // step-size rounding dust.
-      const shortfall = Math.max(0, expected - actualTotal);
-      const feeDustTolerance = Math.max(
-        finite(position.quantity_step, 0) * 2,
-        expected * FEE_PCT[exchange] / 100 * 3,
-      );
-      if (shortfall > 0 && shortfall <= feeDustTolerance) {
-        const healed = Math.max(0, expected - shortfall);
+      // v5.4.1 fixed the Binance case where the buy commission is taken out of the base
+      // asset, so the account legitimately holds ~0.1% less than the matched quantity.
+      // v6.4 moves the whole judgement into one unit-tested function in core.ts and adds
+      // a NOTIONAL dust floor to it: a difference worth less than the operator's threshold
+      // is accounting noise, not someone trading behind the bot.
+      //
+      // The verdict governs ENTRIES on this asset. It never governs exits — see the
+      // monitor loop below.
+      const referencePrice = Math.max(0, finite(prices[position.market], finite(position.average_entry_price)));
+      const dustQuote = dustToleranceQuote(settings, exchange);
+      const verdict = reconcileAccount({
+        bookedQuantity: expected,
+        freeQuantity: actualFree,
+        lockedQuantity: Math.max(0, actualTotal - actualFree),
+        botLockedQuantity: botLockedKnown ? botLocked : null,
+        price: referencePrice,
+        dustToleranceQuote: dustQuote,
+        feePctPerSide: FEE_PCT[exchange],
+        quantityStep: finite(position.quantity_step, 0),
+      });
+      sellableByAsset.set(position.base_asset, verdict.sellableQuantity);
+
+      if (verdict.verdict === "DUST_ALIGN") {
         position = { ...position, ...(await patch("trading_positions", `id=eq.${position.id}`, {
-          remaining_quantity: healed,
-          metadata: { ...(position.metadata || {}), account_mismatch_count: 0, last_account_mismatch_at: null, fee_dust_healed_quantity: shortfall, fee_dust_healed_at: new Date().toISOString() },
+          remaining_quantity: verdict.alignedQuantity,
+          metadata: { ...(position.metadata || {}), account_mismatch_count: 0, last_account_mismatch_at: null, fee_dust_healed_quantity: verdict.shortfallQuantity, fee_dust_healed_at: new Date().toISOString() },
         }))[0] };
-        await event("LEDGER_FEE_DUST_HEALED", `${exchange}:${position.market} ledger aligned to account; shortfall within fee tolerance`, {
-          expected_quantity: expected, actual_quantity: actualTotal, shortfall, tolerance: feeDustTolerance, healed_quantity: healed,
+        await event("LEDGER_FEE_DUST_HEALED", `${exchange}:${position.market} ledger aligned to account; difference below the dust threshold`, {
+          expected_quantity: expected, actual_quantity: actualTotal, shortfall: verdict.shortfallQuantity,
+          shortfall_quote: verdict.shortfallQuote, dust_tolerance_quote: dustQuote,
+          tolerance_quantity: verdict.toleranceQuantity, healed_quantity: verdict.alignedQuantity,
+          reason: verdict.reason,
         }, { cycleId, positionId: position.id, level: "INFO" });
         continue;
       }
 
-      const totalMissing = actualTotal + 1e-10 < expected * 0.999999;
-      const freeMissing = !totalMissing && effectiveFree + 1e-10 < expected * 0.999999;
+      if (verdict.verdict === "UNKNOWN_LOCK") {
+        await event("ACCOUNT_LOCK_UNATTRIBUTED", `${exchange}:${position.market} locked balance cannot be attributed while open orders are unreadable`, {
+          expected_quantity: expected, free_quantity: actualFree, total_quantity: actualTotal, reason: verdict.reason,
+        }, { cycleId, positionId: position.id, level: "WARNING" });
+        continue;
+      }
+
+      const totalMissing = verdict.verdict === "VANISHED";
+      const freeMissing = verdict.verdict === "ASSET_REVIEW";
       const previousCount = Math.max(0, Math.floor(finite(position.metadata?.account_mismatch_count)));
       if (!totalMissing && !freeMissing) {
         if (previousCount > 0) await patch("trading_positions", `id=eq.${position.id}`, { metadata: { ...(position.metadata || {}), account_mismatch_count: 0, last_account_mismatch_at: null } });
@@ -2373,8 +2731,57 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
     }
     for (const original of exchangePositions) {
       let position = original;
-      if (!position.is_paper && mismatches.has(position.base_asset)) { actions.push({ exchange, market: position.market, action: "PAUSED", reason: "account mismatch" }); continue; }
-      const current = prices[position.market]; if (!(current > 0)) continue;
+      // v6.4 -------------------------------------------------------------------------
+      // A detected mismatch pauses NEW ENTRIES on that asset. It must never stop us from
+      // MANAGING what we already hold.
+      //
+      // Until now this branch skipped the position entirely, so a coin under review was
+      // never priced, never evaluated and never sold — the ledger froze it in place and
+      // the only way out was a human selling by hand. An Upbit ETH position sat open for
+      // 8h39m this way while every other market kept trading.
+      //
+      // The exit path below runs for these positions now; the only concession is that the
+      // quantity is capped at what the account can actually deliver.
+      const underReview = !position.is_paper && mismatches.has(position.base_asset);
+      if (underReview) {
+        const sellable = Math.max(0, finite(sellableByAsset.get(position.base_asset), 0));
+        const booked = finite(position.remaining_quantity);
+        if (sellable <= 0) {
+          actions.push({ exchange, market: position.market, action: "PAUSED", reason: "asset under review and nothing sellable in account" });
+          await event("EXIT_BLOCKED_NO_BALANCE", `${exchange}:${position.market} under review with no deliverable balance`, {
+            booked_quantity: booked, sellable_quantity: sellable,
+          }, { cycleId, positionId: position.id, level: "WARNING" });
+          continue;
+        }
+        if (sellable + 1e-12 < booked) {
+          position = { ...position, remaining_quantity: sellable };
+          await event("EXIT_QUANTITY_CAPPED", `${exchange}:${position.market} exit sized to deliverable balance while under review`, {
+            booked_quantity: booked, sellable_quantity: sellable,
+          }, { cycleId, positionId: position.id, level: "WARNING" });
+        }
+      }
+      const current = prices[position.market];
+      if (!(current > 0)) {
+        // v6.4: this used to be a bare `continue`. A market that stops quoting produced no
+        // log line anywhere, so a position could go unmanaged indefinitely and look normal.
+        const priorMisses = Math.max(0, Math.floor(finite(position.metadata?.quote_miss_count)));
+        const misses = priorMisses + 1;
+        await patch("trading_positions", `id=eq.${position.id}`, {
+          metadata: { ...(position.metadata || {}), quote_miss_count: misses, last_quote_miss_at: new Date().toISOString() },
+        }).catch(() => null);
+        await event("MARKET_DATA_UNAVAILABLE", `${exchange}:${position.market} no usable quote; exit evaluation skipped ${misses}x`, {
+          consecutive_misses: misses,
+          error: quoteErrorsByPosition.get(String(position.id)) || null,
+          isolated: true,
+        }, { cycleId, positionId: position.id, level: misses >= 4 ? "CRITICAL" : "WARNING" });
+        actions.push({ exchange, market: position.market, action: "UNEVALUATED", reason: "no market data" });
+        continue;
+      }
+      if (finite(position.metadata?.quote_miss_count) > 0) {
+        position = { ...position, ...(await patch("trading_positions", `id=eq.${position.id}`, {
+          metadata: { ...(position.metadata || {}), quote_miss_count: 0, last_quote_miss_at: null },
+        }))[0] };
+      }
       const peak = Math.max(current, finite(position.peak_price, position.average_entry_price)); const trough = Math.min(current, finite(position.trough_price, position.average_entry_price));
       const values: JsonRecord = { peak_price: peak, trough_price: trough };
       if (position.t1_completed && position.exit_policy === "TRAIL_AFTER_T1") values.trailing_stop = nextTrailingStop(position.trailing_stop, peak, finite(position.trailing_distance_pct, 1.2), position.stop_price);
@@ -2392,6 +2799,19 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       // v5.12: TIMEOUT is one of the modelled barrier outcomes. Live edge may close the
       // position earlier, but the approved strategy profile always enforces max_holding_at.
       let decision = decideExit(position, current, Date.now(), settings.emergency_liquidation, true);
+      // v6.5: a slot marked for rotation by the scan cycle closes here, on the monitor's
+      // own price and through the ordinary exit path -- cancelling the resting take-profit,
+      // booking the fill, reconciling. The scan cycle deliberately does NOT sell: it has
+      // neither a fresh price nor the exit plumbing, and a second code path that liquidates
+      // positions is exactly the kind of divergence that produced the 8h39m ETH hold.
+      if (decision.action === "NONE" && position.metadata?.rotation_displaced_at && !settings.emergency_liquidation) {
+        decision = { action: "STOP", fraction: 1, reason: "rotation:displaced" } as any;
+        await event("SLOT_ROTATION_EXIT", `${exchange}:${position.market} closed to free capital for a better book`, {
+          displaced_for: position.metadata?.rotation_displaced_for || null,
+          slot_rate: position.metadata?.slot_rate || null,
+          marked_at: position.metadata?.rotation_displaced_at,
+        }, { cycleId, positionId: position.id });
+      }
       if (isLobStrategy((settings as any).strategy) && decision.action === "NONE" && !settings.emergency_liquidation) {
         const book = books[position.market];
         const bids = (book?.bids || []).map((b: any) => ({ price: finite(b.price ?? b[0]), size: finite(b.size ?? b[1]) }));
@@ -2417,6 +2837,57 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         if (exit.exit) {
           decision = { action: exit.reason === "TARGET_HIT" ? "TARGET_1" : "STOP", fraction: 1, reason: `lob:${exit.reason}` } as any;
           await event("LOB_EXIT", `${exchange}:${position.market} ${exit.reason}`, { ...exit, held_seconds: heldSeconds, imbalance, spread_bps: spread }, { cycleId, positionId: position.id });
+        } else {
+          // v6.5: record what this slot is still earning per second, so the scan cycle can
+          // compare a new book against the capital already committed WITHOUT re-quoting
+          // every open position. The monitor already holds the price; the scan does not.
+          const remaining = remainingValueBps({
+            currentPrice: current,
+            targetPrice: finite(position.target_1),
+            stopPrice: finite(position.stop_price),
+            entryPTarget: finite(position.metadata?.lob_signal?.p_target, 0),
+            entryNeutralWinRate: finite(position.metadata?.lob_signal?.neutral_win_rate, 0),
+            heldSeconds,
+            edgeHalfLifeSeconds: Math.max(
+              10,
+              clamp(finite(position.metadata?.lob_signal?.max_holding_seconds, 180), 1, 300) / 2,
+            ),
+          });
+          const expectedSeconds = expectedResolutionSeconds(
+            Math.max(1, remaining.remainingUpsideBps),
+            Math.max(1, remaining.remainingDownsideBps),
+            finite(position.metadata?.lob_signal?.features?.noiseBandBps, 0) /
+              Math.sqrt(Math.max(1, finite((settings as any).lob_observation_window_ms, 8000) / 1000)),
+            {
+              min: 5,
+              // A position cannot occupy the slot past its precommitted LOB timeout.
+              // Reporting 600s here while the position must close at 180s understated
+              // its profit rate and broke capital-rotation comparisons.
+              max: Math.max(
+                5,
+                clamp(
+                  finite(position.metadata?.lob_signal?.max_holding_seconds, 180) -
+                    heldSeconds,
+                  5,
+                  300,
+                ),
+              ),
+            },
+          );
+          await patch("trading_positions", `id=eq.${position.id}`, {
+            metadata: {
+              ...(position.metadata || {}),
+              slot_rate: {
+                remaining_ev_bps: remaining.remainingEvBps,
+                remaining_upside_bps: remaining.remainingUpsideBps,
+                remaining_downside_bps: remaining.remainingDownsideBps,
+                p_target_now: remaining.pTargetNow,
+                expected_seconds_to_resolve: expectedSeconds,
+                exit_cost_bps: FEE_PCT[exchange] * 100 + Math.max(0.4, spread * 0.55),
+                measured_at: new Date().toISOString(),
+              },
+            },
+          }).catch(() => null);
         }
       } else if (scalpMode && decision.action === "NONE" && !settings.emergency_liquidation) {
         const holdCfg = scalpHoldConfig(settings, exchange);
@@ -2532,6 +3003,159 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
   for (const exchange of Object.keys(portfolios) as Exchange[]) await snapshotAccount(exchange, portfolios[exchange], stillOpen, prices, settings);
   await patch("trading_settings", "id=eq.1", { last_monitor_at: new Date().toISOString(), last_gateway_heartbeat_at: new Date().toISOString(), gateway_error_count: 0, ...(settings.emergency_liquidation && stillOpen.length === 0 ? { emergency_liquidation: false, pause_new_entries: true } : {}) });
   return { positions: open.length, actions, unresolved_manual_assets: unresolvedManualAssets };
+}
+
+// =====================================================================================
+// v6.5: capital rotation
+// =====================================================================================
+//
+// Entry has only ever asked one question per candidate: does this book clear its own cost
+// floor? Capital already committed never entered the comparison, so with every slot full a
+// book worth ten times the worst holding was declined without being compared to it. The
+// scarce resource in this strategy is not opportunity, it is the slot-second.
+//
+// The comparison happens ONLY when a candidate was turned away for lack of capital. A free
+// slot is always better than a rotation, because filling it costs nothing.
+
+/**
+ * Did this candidate fail on capital rather than on merit?
+ *
+ * Matched against the exact strings the sizing path produces. Anything else -- a failed
+ * gate, a trap, a spread, a stale book -- is a judgement that the book is not worth
+ * trading, and no amount of free capital would change it.
+ */
+function capitalStarved(reason: unknown): boolean {
+  const text = String(reason || "").toLowerCase();
+  if (!text) return false;
+  return text.includes("managed allocation has no available buying power") ||
+    text.includes("allocated order") && text.includes("below minimum");
+}
+
+/** Rotations already performed in the trailing hour, counted from the event log. */
+async function countRecentRotations(): Promise<number> {
+  const since = new Date(Date.now() - 3600_000).toISOString();
+  try {
+    const rows = await db(
+      `trading_events?code=eq.SLOT_ROTATION&created_at=gte.${encodeURIComponent(since)}&select=id`,
+    ) as any[];
+    return Array.isArray(rows) ? rows.length : 0;
+  } catch {
+    // Unknown means "assume the budget is spent". Failing closed on a throughput feature
+    // costs one cycle of opportunity; failing open costs real money in churn.
+    return Number.MAX_SAFE_INTEGER;
+  }
+}
+
+/**
+ * Compare a starved candidate against the worst slot currently held, and mark that slot
+ * for closure if the candidate wins by enough to pay for the switch.
+ *
+ * Nothing is sold here -- see the monitor cycle. This function's only side effects are a
+ * metadata flag and an event.
+ */
+async function considerRotation(
+  candidate: Candidate,
+  entry: any,
+  settings: TradingSettings & JsonRecord,
+  cycleId: string,
+): Promise<{ rotated: boolean; reason: string; detail?: JsonRecord } | null> {
+  const rotationInput = (candidate as any).__rotation;
+  // No rotation payload means the candidate never reached the LOB decision -- it was
+  // rejected before its worth was ever computed, so there is nothing to compare.
+  if (!rotationInput) return null;
+
+  const open = await db(
+    "trading_positions?state=eq.OPEN&select=id,exchange,market,opened_at,metadata,state",
+  ).catch(() => []) as any[];
+
+  const held: HeldPositionRate[] = (open || [])
+    .map((row) => {
+      const rate = row.metadata?.slot_rate;
+      // A position the monitor has not yet measured is not a candidate for displacement.
+      // Treating an unmeasured slot as worthless would make the newest position the first
+      // one killed, which is precisely backwards.
+      if (!rate) return null;
+      const openedAt = Date.parse(String(row.opened_at || ""));
+      return {
+        positionId: String(row.id),
+        exchange: String(row.exchange),
+        market: String(row.market),
+        remainingEvBps: finite(rate.remaining_ev_bps, 0),
+        expectedSecondsToResolve: Math.max(1, finite(rate.expected_seconds_to_resolve, 180)),
+        exitCostBps: Math.max(0, finite(rate.exit_cost_bps, 10)),
+        ageSeconds: Number.isFinite(openedAt) ? Math.max(0, (Date.now() - openedAt) / 1000) : 0,
+        state: String(row.state),
+      } as HeldPositionRate;
+    })
+    .filter((row): row is HeldPositionRate => row !== null);
+
+  if (!held.length) {
+    return { rotated: false, reason: "no measured slot available to compare against" };
+  }
+
+  const decision = evaluateRotation(
+    {
+      exchange: candidate.exchange,
+      market: candidate.market,
+      evLowerBoundBps: finite(rotationInput.evLowerBoundBps, 0),
+      expectedSecondsToResolve: Math.max(1, finite(rotationInput.expectedSecondsToResolve, 180)),
+    },
+    held,
+    {
+      candidateEntryCostBps: Math.max(0, finite(rotationInput.entryCostBps, 0)),
+      rotationsInLastHour: 0, // budget is enforced by the caller, which knows the count
+    },
+    {
+      hysteresisFraction: clamp(finite((settings as any).lob_rotation_hysteresis, 0.40), 0.10, 3),
+      minHoldSeconds: clamp(finite((settings as any).lob_rotation_min_hold_seconds, 60), 10, 3600),
+      maxRotationsPerHour: Math.max(0, Math.floor(finite((settings as any).lob_max_rotations_per_hour, 6))),
+    },
+  );
+
+  const detail: JsonRecord = {
+    candidate: `${candidate.exchange}:${candidate.market}`,
+    candidate_rate_bps_per_second: decision.candidateRateBpsPerSecond,
+    incumbent_rate_bps_per_second: decision.incumbentRateBpsPerSecond,
+    improvement_bps_per_second: decision.improvementBpsPerSecond,
+    required_improvement_bps_per_second: decision.requiredImprovementBpsPerSecond,
+    switching_cost_bps: decision.switchingCostBps,
+    net_candidate_ev_bps: decision.netCandidateEvBps,
+    displace: decision.displace ? `${decision.displace.exchange}:${decision.displace.market}` : null,
+    entry_reason: entry?.reason || null,
+  };
+
+  if (!decision.rotate || !decision.displace) {
+    // Declined rotations are logged too. The distribution of near-misses is the evidence
+    // for whether the hysteresis is set anywhere near right, and it is only visible if
+    // the comparisons that failed are recorded as well as the ones that passed.
+    await event("SLOT_ROTATION_DECLINED", decision.reason, detail, { cycleId, level: "INFO" });
+    return { rotated: false, reason: decision.reason, detail };
+  }
+
+  const displaced = decision.displace;
+  const rows = await patch("trading_positions", `id=eq.${displaced.positionId}`, {
+    metadata: {
+      ...((open.find((row) => String(row.id) === displaced.positionId)?.metadata) || {}),
+      rotation_displaced_at: new Date().toISOString(),
+      rotation_displaced_for: `${candidate.exchange}:${candidate.market}`,
+      rotation_detail: detail,
+    },
+  }).catch(() => null);
+
+  if (!rows || !rows.length) {
+    await event("SLOT_ROTATION_FAILED", "could not mark the displaced position", detail, {
+      cycleId,
+      level: "WARNING",
+    });
+    return { rotated: false, reason: "failed to mark displaced position", detail };
+  }
+
+  await event("SLOT_ROTATION", decision.reason, detail, {
+    cycleId,
+    positionId: displaced.positionId,
+    level: "INFO",
+  });
+  return { rotated: true, reason: decision.reason, detail };
 }
 
 async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord) {
@@ -2663,6 +3287,11 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
   const active = (await db("trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=exchange,market,base_asset")) as any[];
   const activeMarkets = new Set(active.map((row) => `${row.exchange}:${row.market}`)); const activeBases = new Set(active.map((row) => row.base_asset));
   const entries: any[] = []; const enteredPerExchange: Record<Exchange, number> = { upbit: 0, binance: 0 };
+  const rotations: any[] = [];
+  const rotationBudget = (settings as any).lob_rotation_enabled === false
+    ? 0
+    : Math.max(0, Math.floor(finite((settings as any).lob_max_rotations_per_hour, 6)));
+  let rotationsThisHour = rotationBudget > 0 ? await countRecentRotations() : 0;
   for (const candidate of candidates) {
     const exchange = candidate.exchange;
     // v6.3: how many books are actually competing for capital this cycle, and how much is
@@ -2686,6 +3315,16 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
       if (entry.entered || entry.reserved) {
         enteredPerExchange[exchange]++; activeMarkets.add(`${exchange}:${candidate.market}`); activeBases.add(baseAsset(exchange, candidate.market));
         if (entry.entered && !entry.paper) portfolios[exchange] = await gateway(exchange, { action: "portfolio" });
+      } else if (capitalStarved(entry.reason) && rotationsThisHour < rotationBudget) {
+        // v6.5: the book cleared every gate and was turned away only because the capital
+        // is already spent. Until now that was the end of it -- a candidate worth ten
+        // times the worst holding was declined without ever being compared to it, which
+        // is the wrong objective for a strategy whose scarce resource is the slot-second.
+        const rotation = await considerRotation(candidate, entry, settings, cycleId);
+        if (rotation?.rotated) {
+          rotationsThisHour++;
+          rotations.push(rotation);
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error); entries.push({ entered: false, exchange, market: candidate.market, error: message });
@@ -2693,7 +3332,7 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
     }
   }
   await patch("trading_settings", "id=eq.1", { last_full_scan_at: new Date().toISOString(), last_gateway_heartbeat_at: new Date().toISOString(), gateway_error_count: 0 });
-  return { scan_id: scanId, buy_candidates: candidates.length, entries, circuits, stats };
+  return { scan_id: scanId, buy_candidates: candidates.length, entries, rotations, circuits, stats };
 }
 
 async function status(settings: TradingSettings & JsonRecord) {

@@ -1,4 +1,4 @@
-// Trading-booooo v6.2.0-HEAT — LOB_SCALP calibration job.
+// Trading-booooo v6.6.0-LIVE-DATA — LOB_SCALP calibration job.
 //
 // Reads closed LOB positions, reconstructs (predicted pTarget, neutral win rate, realized
 // outcome) triples from `trading_positions.metadata.lob_signal`, and writes a profile that
@@ -156,7 +156,7 @@ Deno.serve(async (request: Request) => {
 
   try {
     const rows = await db(
-      `trading_positions?state=eq.CLOSED&closed_at=gte.${since}` +
+      `trading_positions?state=eq.CLOSED&is_paper=eq.false&closed_at=gte.${since}` +
         `&select=id,closed_at,updated_at,close_reason,average_entry_price,realized_pnl_quote,realized_cost_quote,metadata` +
         `&order=closed_at.desc&limit=5000`,
     );

@@ -3,7 +3,7 @@ import { assessLobTraps, midPathStatistics } from "./traps.ts";
 import { NEUTRAL_FUNDING, perpSymbolFor, scoreFunding } from "./funding.ts";
 import { buildLobLearningProfile, patternMultiplier, unearnedVetoes, wilsonLowerBound } from "./learning.ts";
 import type { LobOutcomeSample } from "./learning.ts";
-import { neutralWinRateOf } from "./entry.ts";
+import { calibrateMakerFillProbability, neutralWinRateOf } from "./entry.ts";
 import { effectiveSlots, evaluateModelHealth, shouldConvertToTaker, surprisingStreak } from "./health.ts";
 
 const cleanBook = {
@@ -165,6 +165,29 @@ Deno.test("an unmeasured pattern is left alone rather than penalised", () => {
   assertEquals(patternMultiplier(null, "SWEEP_RECLAIM"), 1);
 });
 
+Deno.test("same-day live evidence can correct a pattern below the old 0.65 floor", () => {
+  const rows = [
+    ...Array.from({ length: 2 }, () =>
+      sample({
+        pattern: "ABSORPTION_REVERSAL",
+        predicted: 0.51,
+        neutral: 0.40,
+        outcome: 1,
+      })),
+    ...Array.from({ length: 27 }, () =>
+      sample({
+        pattern: "ABSORPTION_REVERSAL",
+        predicted: 0.51,
+        neutral: 0.40,
+        outcome: 0,
+      })),
+  ];
+  const profile = buildLobLearningProfile(rows);
+  const multiplier = patternMultiplier(profile, "ABSORPTION_REVERSAL");
+  assert(multiplier < 0.65, "adverse live evidence must not be discarded by the old floor");
+  assert(multiplier >= 0.30, "the conservative correction floor still applies");
+});
+
 Deno.test("a trap that marks no worse trades loses its veto", () => {
   // Both arms hit at the same rate, so the flag is separating nothing. Leaving it as a hard
   // block would cost throughput permanently and could never be disproved, because vetoed
@@ -234,6 +257,24 @@ Deno.test("taker conversion needs a measured low fill rate AND surviving economi
   // Low fill rate but the edge only existed because of the spread capture.
   assertEquals(shouldConvertToTaker({ rested: 100, filled: 10 }, -2).convertToTaker, false);
   assertEquals(shouldConvertToTaker({ rested: 100, filled: 10 }, 4).convertToTaker, true);
+});
+
+Deno.test("maker pFill is shrunk toward the exchange's realized fill rate", () => {
+  const unmeasured = calibrateMakerFillProbability(0.78, 0.39, 0);
+  assertAlmostEquals(unmeasured.probability, 0.78, 1e-12);
+  assertEquals(unmeasured.weight, 0);
+
+  const measured = calibrateMakerFillProbability(0.78, 0.39, 171, 60);
+  assert(measured.probability < 0.78);
+  assert(measured.probability > 0.39);
+  assertAlmostEquals(measured.weight, 171 / 231, 1e-12);
+});
+
+Deno.test("LOB calibration reads only closed LIVE positions", async () => {
+  const source = await Deno.readTextFile(
+    new URL("../../lob-calibration/index.ts", import.meta.url),
+  );
+  assert(source.includes("state=eq.CLOSED&is_paper=eq.false"));
 });
 
 Deno.test("slots never exceed the configured ceiling and never strand capital", () => {
