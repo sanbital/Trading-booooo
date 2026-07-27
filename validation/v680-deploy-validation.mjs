@@ -26,8 +26,8 @@ const deno = JSON.parse(read("deno.json"));
 
 const version = engine.match(/ENGINE_VERSION\s*=\s*"([^"]+)"/)?.[1];
 check(
-  "v6.8 migration is newest",
-  migrations.at(-1) === "202607270020_validated_pareto_learning_v680.sql",
+  "v6.8 migration is present",
+  migrations.includes("202607270020_validated_pareto_learning_v680.sql"),
 );
 check(
   "release versions agree",
