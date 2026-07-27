@@ -30,11 +30,17 @@ check("workflow scan and monitor match runtime", workflow.includes("AUTO_SCAN_IN
 check("heat branch precedes candle branch", scanner.indexOf("return await runLobHeatScan") > 0 && scanner.indexOf("return await runLobHeatScan") < scanner.indexOf("loadBaseline15(eligible)", scanner.indexOf("async function runScan")));
 check("candidate validity is 20 seconds", engine.includes('? 20 / 60'));
 check("maker entry TTL is 8 seconds", trader.includes('SCALP_MAKER_ENTRY_TTL_SECONDS"), 8'));
-// The version this script pins to moves with each release; the invariant it protects is
-// that all four sources agree, not that they say 6.1.0. supabase/functions/_shared/scalp/
-// version.test.ts enforces the agreement itself.
-check("version is consistent", [engine, trader, gateway, dashboard].every((source) => source.includes("6.3.1-HEAT")));
-check("Deno check includes market heat", deno.includes("market-heat.ts"));
+// The release string moves; this script protects agreement rather than one historical tag.
+const currentVersion = engine.match(/ENGINE_VERSION\s*=\s*"([^"]+)"/)?.[1];
+check(
+  "version is consistent",
+  Boolean(currentVersion) &&
+    [trader, gateway, dashboard].every((source) => source.includes(currentVersion)),
+);
+check(
+  "Deno check covers the LOB import roots",
+  deno.includes("market-scanner/index.ts") && deno.includes("market-autotrader/index.ts"),
+);
 check("workflow validates before migrations", workflow.indexOf("deno task check") < workflow.indexOf("Apply database migrations"));
 
 console.log(JSON.stringify({ ok: true, checks: results.length, names: results }, null, 2));

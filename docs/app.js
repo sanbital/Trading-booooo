@@ -1336,27 +1336,49 @@
   function renderLearning(data) {
     const lob = data?.learning?.lob;
     if (data?.settings?.strategy === "LOB_SCALP" && lob) {
-      $("learning-status").innerHTML = [
-        ["활성 프로필", `ONLINE LOB v${fmt(lob.profile_version, 0)}`],
-        ["갱신 방식", "실거래 종료 즉시"],
+      const governance = lob.governance || null;
+      const champion = governance?.champion || null;
+      const alternate = governance?.alternate || null;
+      const phaseLabel = governance?.phase === "CHALLENGE"
+        ? "도전자 실거래 검증"
+        : governance?.phase === "CONFIRMATION"
+        ? "승격 후 재확인"
+        : "검증된 챔피언 운용";
+      const rows = [
         [
-          "수익거래율",
+          "활성 모델",
+          champion
+            ? `CHAMPION P${fmt(champion.version, 0)}${
+              champion.confirmed ? " · 검증 완료" : " · 잠정 승격"
+            }`
+            : `LEGACY ONLINE #${fmt(lob.profile_version, 0)}`,
+        ],
+        ["운용 상태", champion ? phaseLabel : "정책 거버넌스 배포 대기"],
+        [
+          "대체 모델",
+          alternate
+            ? `${alternate.status} P${fmt(alternate.version, 0)} · ${
+              fmt((alternate.traffic_fraction || 0) * 100, 0)
+            }% 교차검증`
+            : "없음",
+        ],
+        ["데이터 갱신", "실거래 종료 즉시 · 정책은 검증 후 적용"],
+        [
+          "전체 원장 승률",
           lob.profitable_rate != null ? `${fmt(lob.profitable_rate * 100, 1)}%` : "표본 대기",
         ],
         [
-          "평균 순손익",
+          "전체 원장 순손익",
           lob.mean_net_bps != null ? `${fmt(lob.mean_net_bps, 2)} bp` : "표본 대기",
         ],
         [
-          "학습 범위",
+          "원시 학습 범위",
           `${fmt(lob.samples, 0)}건 / ${fmt(lob.profiled_markets, 0)}코인`,
         ],
-        [
-          "평균 보유",
-          lob.mean_hold_seconds != null ? `${fmt(lob.mean_hold_seconds, 1)}초` : "표본 대기",
-        ],
-        ["최근 갱신", lob.last_updated_at ? dateTime(lob.last_updated_at) : "표본 대기"],
-      ].map(([label, value]) =>
+        ["승격 조건", "승률↑ · 순익↑ · 거래·회전 유지"],
+        ["최근 데이터", lob.last_updated_at ? dateTime(lob.last_updated_at) : "표본 대기"],
+      ];
+      $("learning-status").innerHTML = rows.map(([label, value]) =>
         `<div class="detail-row"><span>${escapeHtml(label)}</span><strong>${
           escapeHtml(value)
         }</strong></div>`

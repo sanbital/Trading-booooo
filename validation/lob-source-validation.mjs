@@ -36,9 +36,18 @@ check("per-trade stop is capped at 5 percent", scanner.includes("Math.min(500, l
 check("daily loss cap is 30 percent", migration.includes("scalp_daily_loss_pct = 30"));
 check("per-trade loss cap is 5 percent", migration.includes("scalp_max_single_loss_pct = 5"));
 check("no practical daily trade-count ceiling", migration.includes("max_daily_entries = 1000000") && trader.includes("Number.MAX_SAFE_INTEGER"));
-const lobBranch = trader.indexOf('if (isLobStrategy');
-const legacyRateBranch = trader.indexOf('event("SCALP_RATE_CONTROL"');
-check("LOB route does not emit SCALP_RATE_CONTROL", lobBranch >= 0 && legacyRateBranch > lobBranch && trader.includes('} else if ((settings as any).strategy === "SCALP") {'));
+const legacyRateBranch = trader.indexOf('"SCALP_RATE_CONTROL"');
+const lobRateBranch = trader.lastIndexOf("if (isLobStrategy", legacyRateBranch);
+const scalpRateBranch = trader.indexOf(
+  '} else if ((settings as any).strategy === "SCALP") {',
+  lobRateBranch,
+);
+check(
+  "LOB route does not emit SCALP_RATE_CONTROL",
+  lobRateBranch >= 0 &&
+    scalpRateBranch > lobRateBranch &&
+    legacyRateBranch > scalpRateBranch,
+);
 check("default LOB timeout is 180 seconds", migration.includes("lob_max_holding_seconds = 180"));
 check("absolute LOB timeout is 300 seconds", migration.includes("lob_absolute_max_holding_seconds = 300"));
 check("exit priority is deterministic", exit.includes("RISK_EMERGENCY") && exit.includes("RECONCILIATION_FAILURE") && exit.includes("STOP_HIT") && exit.includes("LOB_INVALIDATION") && exit.includes("SIGNAL_REVERSAL") && exit.includes("TARGET_HIT") && exit.includes("TIMEOUT"));

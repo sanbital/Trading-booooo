@@ -7,6 +7,11 @@
   let latestPerformance = null;
   let pending = false;
   let refreshQueued = false;
+  let performanceExpanded = false;
+  let performancePage = 1;
+
+  const COLLAPSED_TRADE_LIMIT = 10;
+  const EXPANDED_PAGE_SIZE = 50;
 
   const $ = id => document.getElementById(id);
   const escapeHtml = value => String(value ?? "")
@@ -72,6 +77,8 @@
           <select id="performance-period-filter" aria-label="기간 필터">
             <option value="all">전체 기간</option><option value="today">오늘</option><option value="7">최근 7일</option><option value="30">최근 30일</option>
           </select>
+          <button id="performance-csv-download" class="button-secondary performance-action-button" type="button">CSV 다운로드</button>
+          <button id="performance-expand-toggle" class="button-secondary performance-action-button" type="button">더 보기 · 50개</button>
         </div>
       </div>
       <div class="table-wrap panel performance-table-wrap">
@@ -83,11 +90,38 @@
           <tbody id="trade-performance-body"><tr><td colspan="13" class="muted">성과 데이터를 불러오는 중입니다.</td></tr></tbody>
         </table>
       </div>
+      <div class="performance-list-footer">
+        <span id="performance-row-summary" class="performance-row-summary" aria-live="polite"></span>
+        <nav id="performance-pagination" class="performance-pagination hidden" aria-label="거래별 성과 페이지">
+          <button id="performance-page-prev" class="button-secondary performance-page-button" type="button">이전</button>
+          <span id="performance-page-info"></span>
+          <button id="performance-page-next" class="button-secondary performance-page-button" type="button">다음</button>
+        </nav>
+      </div>
       <p id="performance-definition" class="performance-definition"></p>`;
     positionsSection.insertAdjacentElement("afterend", trades);
 
     ["performance-exchange-filter", "performance-state-filter", "performance-period-filter"]
-      .forEach(id => $(id)?.addEventListener("change", renderTrades));
+      .forEach(id => $(id)?.addEventListener("change", () => {
+        performancePage = 1;
+        renderTrades();
+      }));
+    $("performance-csv-download")?.addEventListener("click", downloadTradesCsv);
+    $("performance-expand-toggle")?.addEventListener("click", () => {
+      performanceExpanded = !performanceExpanded;
+      performancePage = 1;
+      renderTrades();
+    });
+    $("performance-page-prev")?.addEventListener("click", () => {
+      performancePage = Math.max(1, performancePage - 1);
+      renderTrades();
+      $("trade-performance-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    $("performance-page-next")?.addEventListener("click", () => {
+      performancePage += 1;
+      renderTrades();
+      $("trade-performance-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   function renderExchange(exchange, row) {
@@ -147,14 +181,87 @@
     });
   }
 
+  function tradeStateLabel(row) {
+    return row.is_closed ? "종료" : row.state === "EXITING" ? "청산 중" : "보유 중";
+  }
+
+  function csvCell(value) {
+    if (value == null) return '""';
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+    let text = String(value);
+    if (/^[=+\-@]/.test(text)) text = `'${text}`;
+    return `"${text.replaceAll('"', '""')}"`;
+  }
+
+  function downloadTradesCsv() {
+    const rows = filteredTrades();
+    if (!rows.length) return;
+    const headers = [
+      "거래소",
+      "종목",
+      "상태",
+      "진입 시각",
+      "청산 시각",
+      "거래시간(초)",
+      "투자금",
+      "통화",
+      "진입가",
+      "현재가·청산가",
+      "수수료",
+      "순손익",
+      "순수익률(%)",
+      "청산 사유",
+    ];
+    const lines = [
+      headers.map(csvCell).join(","),
+      ...rows.map(row => {
+        const mark = row.is_closed ? row.average_exit_price : row.current_price;
+        return [
+          row.exchange === "upbit" ? "UPBIT" : "BINANCE",
+          row.market,
+          tradeStateLabel(row),
+          row.entry_at ? dateTime(row.entry_at) : "",
+          row.exit_at ? dateTime(row.exit_at) : "",
+          finite(row.duration_seconds),
+          finite(row.invested_cost_quote),
+          row.quote_currency,
+          finite(row.average_entry_price),
+          finite(mark),
+          finite(row.total_fees_quote),
+          finite(row.net_pnl_quote),
+          finite(row.return_pct),
+          row.close_reason || (row.is_closed ? "종료" : "보유 중"),
+        ].map(csvCell).join(",");
+      }),
+    ];
+    const blob = new Blob(["\uFEFF", lines.join("\r\n")], {
+      type: "text/csv;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `trading-performance-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
   function renderTrades() {
     const body = $("trade-performance-body");
     if (!body || !latestPerformance) return;
     const rows = filteredTrades();
-    body.innerHTML = rows.length ? rows.map(row => {
+    const pageSize = performanceExpanded ? EXPANDED_PAGE_SIZE : COLLAPSED_TRADE_LIMIT;
+    const totalPages = performanceExpanded
+      ? Math.max(1, Math.ceil(rows.length / EXPANDED_PAGE_SIZE))
+      : 1;
+    performancePage = Math.max(1, Math.min(performancePage, totalPages));
+    const start = performanceExpanded ? (performancePage - 1) * EXPANDED_PAGE_SIZE : 0;
+    const visibleRows = rows.slice(start, start + pageSize);
+    body.innerHTML = visibleRows.length ? visibleRows.map(row => {
       const quote = row.quote_currency;
       const mark = row.is_closed ? row.average_exit_price : row.current_price;
-      const stateLabel = row.is_closed ? "종료" : row.state === "EXITING" ? "청산 중" : "보유 중";
+      const stateLabel = tradeStateLabel(row);
       return `<tr>
         <td>${row.exchange === "upbit" ? "UPBIT" : "BINANCE"}</td>
         <td><strong>${escapeHtml(row.market)}</strong></td>
@@ -171,8 +278,34 @@
         <td>${escapeHtml(row.close_reason || (row.is_closed ? "종료" : "보유 중"))}</td>
       </tr>`;
     }).join("") : '<tr><td colspan="13" class="muted">선택 조건에 해당하는 실제 체결 거래가 없습니다.</td></tr>';
+
+    const expandToggle = $("performance-expand-toggle");
+    if (expandToggle) {
+      expandToggle.textContent = performanceExpanded ? "접기 · 최신 10개" : "더 보기 · 50개";
+      expandToggle.disabled = rows.length <= COLLAPSED_TRADE_LIMIT && !performanceExpanded;
+    }
+    const csvDownload = $("performance-csv-download");
+    if (csvDownload) csvDownload.disabled = rows.length === 0;
+
+    const shownFrom = rows.length ? start + 1 : 0;
+    const shownTo = Math.min(rows.length, start + visibleRows.length);
+    const summary = $("performance-row-summary");
+    if (summary) {
+      summary.textContent = performanceExpanded
+        ? `필터 결과 ${rows.length}건 · ${shownFrom}–${shownTo} 표시`
+        : `최신 ${shownTo}건 표시 · 필터 결과 ${rows.length}건`;
+    }
+    const pagination = $("performance-pagination");
+    if (pagination) pagination.classList.toggle("hidden", !performanceExpanded || totalPages <= 1);
+    const pageInfo = $("performance-page-info");
+    if (pageInfo) pageInfo.textContent = `${performancePage} / ${totalPages}`;
+    const previous = $("performance-page-prev");
+    if (previous) previous.disabled = performancePage <= 1;
+    const next = $("performance-page-next");
+    if (next) next.disabled = performancePage >= totalPages;
+
     const definition = $("performance-definition");
-    if (definition) definition.textContent = "누적 수익률은 실제 진입원가 가중 기준입니다. 순손익은 진입·청산 수수료와 열린 포지션의 현재 평가액을 반영합니다.";
+    if (definition) definition.textContent = "기본 화면은 최신 10건입니다. 더 보기에서는 페이지당 50건을 표시하며, CSV는 현재 필터에 해당하는 전체 거래를 저장합니다. 누적 수익률은 실제 진입원가 가중 기준입니다.";
   }
 
   function render() {

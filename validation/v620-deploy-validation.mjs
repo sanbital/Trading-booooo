@@ -24,7 +24,10 @@ const deno = JSON.parse(read("../deno.json"));
 
 console.log("v6.2.0-HEAT deploy invariants");
 check("no deploy migration disarms trading", !heat.includes("mode = 'PAPER'"));
-check("readiness migration is the newest", newest === "202607260019_deploy_readiness_v620.sql");
+check(
+  "validated policy migration is the newest",
+  newest === "202607270020_validated_pareto_learning_v680.sql",
+);
 check("readiness migration preserves operator halts",
   readiness.includes("manual_intervention_required") && readiness.includes("withdrawal_mode"));
 check("cold start scan is configurable and short", gateway.includes("COLD_START_SCAN_MS") &&
@@ -38,7 +41,8 @@ check("chop widens the stop rather than blocking", traps.includes("veto: false")
 check("calibration jobs are deployed by CI", workflow.includes("lob-calibration"));
 check("tests run with filesystem read permission", deno.tasks.test.includes("--allow-read"));
 check("check task covers the new modules",
-  deno.tasks.check.includes("traps.ts") && deno.tasks.check.includes("learning.ts"));
+  deno.tasks.check.includes("market-autotrader/index.ts") &&
+    deno.tasks.check.includes("lob-calibration/index.ts"));
 
 console.log(failures ? `\n${failures} FAILED` : "\nall invariants hold");
 process.exit(failures ? 1 : 0);
