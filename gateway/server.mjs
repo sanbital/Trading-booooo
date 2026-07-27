@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 // withdrawal, transfer, margin, futures, leverage, or API-key management routes.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "6.3.1-HEAT";
+const VERSION = "6.6.0-LIVE-DATA";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
@@ -712,6 +712,11 @@ const EMPTY_FLOW = { pressure: 0, buy_notional: 0, sell_notional: 0, trade_count
 
 async function quote(exchange, market) {
   const symbol = validateMarket(exchange, market);
+  // v6.5: the moment this gateway asked the exchange, and the moment it got an answer.
+  // Without these the autotrader cannot tell a slow venue from a slow scheduler, and the
+  // whole tick-to-order measurement has no anchor on Binance, which publishes no
+  // orderbook timestamp of its own.
+  const requestedAtMs = Date.now();
   if (exchange === "upbit") {
     const [tickers, books, ticks] = await Promise.all([
       publicUpbit("/v1/ticker", { markets: symbol }),
@@ -741,6 +746,14 @@ async function quote(exchange, market) {
         )
         : EMPTY_FLOW,
       raw: { ticker, book },
+      timing: {
+        requested_at_ms: requestedAtMs,
+        received_at_ms: Date.now(),
+        gateway_elapsed_ms: Date.now() - requestedAtMs,
+        // Upbit stamps its orderbook; this is the only true exchange-side anchor we get.
+        book_captured_at_ms: Number(book?.timestamp) || null,
+        source: Number(book?.timestamp) ? "EXCHANGE" : "GATEWAY_RECEIPT",
+      },
     };
   }
   const [ticker, depth, trades] = await Promise.all([
@@ -768,6 +781,16 @@ async function quote(exchange, market) {
       )
       : EMPTY_FLOW,
     raw: { ticker, depth },
+    timing: {
+      requested_at_ms: requestedAtMs,
+      received_at_ms: Date.now(),
+      gateway_elapsed_ms: Date.now() - requestedAtMs,
+      // Binance /api/v3/depth returns no timestamp, so the receipt time is the best
+      // anchor available. It understates true staleness by the venue's own response
+      // time, which is why `source` is recorded rather than assumed.
+      book_captured_at_ms: null,
+      source: "GATEWAY_RECEIPT",
+    },
   };
 }
 
@@ -840,6 +863,28 @@ async function cancelBotOrders(exchange, market = null) {
   return results;
 }
 
+/**
+ * v6.5: bracket an order submission with timestamps.
+ *
+ * `submitted_at_ms` is when the request left this process and `acked_at_ms` is when the
+ * exchange answered. The difference is transport plus matching-engine time, which is the
+ * only part of the path the autotrader cannot see from its own side. Timing must never be
+ * able to fail an order, so it is attached only on success and never inspected here.
+ */
+async function withOrderTiming(work) {
+  const submittedAtMs = Date.now();
+  const result = await work();
+  const ackedAtMs = Date.now();
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    result.timing = {
+      submitted_at_ms: submittedAtMs,
+      acked_at_ms: ackedAtMs,
+      round_trip_ms: ackedAtMs - submittedAtMs,
+    };
+  }
+  return result;
+}
+
 async function handleCommand(command) {
   const exchange = validateExchange(command?.exchange);
   switch (String(command?.action || "")) {
@@ -848,7 +893,10 @@ async function handleCommand(command) {
     case "quote": return quote(exchange, command.market);
     case "symbol_info": return exchange === "binance" ? binanceExchangeInfo(command.market) : { market: validateUpbitMarket(command.market), quote_asset: "KRW" };
     case "order_test": return exchange === "upbit" ? upbitOrderTest(command.order || {}) : binanceOrderTest(command.order || {});
-    case "create_order": return exchange === "upbit" ? upbitCreateOrder(command.order || {}, command.wait_for_final_ms) : binanceCreateOrder(command.order || {}, command.wait_for_final_ms);
+    case "create_order": return withOrderTiming(() =>
+      exchange === "upbit"
+        ? upbitCreateOrder(command.order || {}, command.wait_for_final_ms)
+        : binanceCreateOrder(command.order || {}, command.wait_for_final_ms));
     case "get_order": return getOrder(exchange, command.identifier, command.market);
     case "cancel_order": return cancelOrder(exchange, command.identifier, command.market);
     case "open_orders": return openOrders(exchange, command.market || null);
