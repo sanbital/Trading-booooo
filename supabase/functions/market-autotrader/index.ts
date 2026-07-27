@@ -1,10 +1,11 @@
-// Trading-booooo v6.1.0-HEAT — autonomous Upbit KRW + Binance USDT spot orchestrator.
+// Trading-booooo v6.8.1-RESIDUAL-LABEL-INTEGRITY — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
   adjustedPlanForFill,
   baseAsset,
   calculateManagedCapital,
+  calculateExitResidualAccounting,
   calculatePositionSize,
   clamp,
   dangerousControlError,
@@ -67,9 +68,16 @@ import {
 } from "../_shared/lob/entry.ts";
 import { detectLobPatternName } from "../_shared/lob/patterns.ts";
 import type { LobTrapConfig } from "../_shared/lob/traps.ts";
-import type { LobLearningProfile } from "../_shared/lob/learning.ts";
 import { patternDeployment, unearnedVetoes } from "../_shared/lob/learning.ts";
-import { type LobOnlineProfileRow, resolveLobOnlineMarketPolicy } from "../_shared/lob/online.ts";
+import { resolveLobOnlineMarketPolicy } from "../_shared/lob/online.ts";
+import {
+  assignLobPolicy,
+  type LobPolicyBundle,
+  type LobPolicyRuntime,
+  type LobPolicyVersionRow,
+  policyBundleByVersion,
+  resolveLobPolicyRuntime,
+} from "../_shared/lob/governance.ts";
 import {
   effectiveSlots,
   evaluateModelHealth,
@@ -92,7 +100,7 @@ import {
 } from "../_shared/scalp/rotation.ts";
 import { settleSpotMarketReads, validateSpotMarket } from "../_shared/spot-market.ts";
 
-const VERSION = "6.7.0-ONLINE-COIN-LEARNING";
+const VERSION = "6.8.1-RESIDUAL-LABEL-INTEGRITY";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -198,6 +206,10 @@ type Position = JsonRecord & {
   realized_cost_quote: number;
   paid_fees_quote: number;
   realized_pnl_quote: number;
+  residual_quantity: number;
+  residual_value_quote: number;
+  residual_fee_base: number;
+  accounting_version: string | null;
 };
 
 function env(name: string): string {
@@ -911,7 +923,11 @@ async function runScanner(
     clearTimeout(timer);
   }
 }
-async function loadBuyCandidates(scanId: string, settings?: TradingSettings): Promise<Candidate[]> {
+async function loadBuyCandidates(
+  scanId: string,
+  settings?: TradingSettings,
+  cycleId?: string,
+): Promise<Candidate[]> {
   const rows = await db(
     `scanner_candidates?scan_id=eq.${scanId}&decision=eq.BUY&exchange=in.(upbit,binance)&select=*&order=score.desc,period_score.desc`,
   ) as Candidate[];
@@ -922,9 +938,18 @@ async function loadBuyCandidates(scanId: string, settings?: TradingSettings): Pr
       binance: await loadMakerFillStats("binance"),
     }
     : null;
-  const lobLearning = isLobStrategy((settings as any)?.strategy) ? await loadLobLearning() : null;
+  const policyRuntime = isLobStrategy((settings as any)?.strategy)
+    ? await loadLobPolicyRuntime()
+    : null;
+  const policy = policyRuntime ? assignLobPolicy(policyRuntime, scanId) : null;
+  if (isLobStrategy((settings as any)?.strategy) && !policy) {
+    throw new Error("validated LOB policy unavailable; refusing an unversioned entry cycle");
+  }
+  const lobLearning = isLobStrategy((settings as any)?.strategy)
+    ? policy?.patternProfile ?? null
+    : null;
   const onlineProfiles = isLobStrategy((settings as any)?.strategy)
-    ? await loadLobOnlineProfiles()
+    ? policy?.onlineProfiles ?? []
     : [];
   // v6.6.1: the first live deployment proved that a low-sample calibration cannot own the
   // hard gate: 17/17 candidates were discarded and throughput fell to zero. Evidence now
@@ -958,6 +983,16 @@ async function loadBuyCandidates(scanId: string, settings?: TradingSettings): Pr
       // The live pattern is detected again immediately before the order and may resolve to
       // a different per-coin profile.
       (row as any).__online_policy = onlinePolicy;
+      (row as any).__policy_bundle = policy;
+      (row as any).__policy_assignment = policy
+        ? {
+          version: policy.version,
+          lane: policy.lane,
+          status: policy.status,
+          phase: policy.phase,
+          parent_version: policy.parentVersion,
+        }
+        : null;
       return lobSelectionMetrics({
         ...lob,
         ev_lower_bound_bps: finite(
@@ -983,6 +1018,9 @@ async function loadBuyCandidates(scanId: string, settings?: TradingSettings): Pr
     1,
     1000,
   );
+  if (cycleId && isLobStrategy((settings as any)?.strategy)) {
+    await recordLobPolicyExposure(cycleId, scanId, policy, rows.length);
+  }
   return ranked.slice(0, universe);
 }
 function tickRound(value: number, tick: number, direction: "down" | "up" | "nearest" = "nearest") {
@@ -1188,11 +1226,33 @@ function uniqueId(prefix: string, id: string) {
 async function createOrderRecord(values: JsonRecord) {
   return (await insert("trading_orders", values))[0];
 }
-function feeQuoteEstimate(exchange: Exchange, order: any, fill: any): number {
+function feeQuoteEstimate(exchange: Exchange, market: string, order: any, fill: any): number {
   const quote = quoteCurrency(exchange);
+  const base = baseAsset(exchange, market);
+  const trades = Array.isArray(order?.trades)
+    ? order.trades
+    : Array.isArray(fill?.trades)
+    ? fill.trades
+    : [];
+  if (trades.length) {
+    return trades.reduce((total: number, trade: any) => {
+      const asset = String(trade?.fee_asset || "").toUpperCase();
+      const fee = Math.max(0, finite(trade?.fee));
+      if (asset === quote) return total + fee;
+      // A commission paid in the traded base asset is not a separate quote-currency
+      // expense. It reduces the quantity left in the account and is captured by residual
+      // accounting on exit (or by net received quantity on entry).
+      if (asset === base) return total;
+      // Third-asset fees (for example BNB discount on ETHUSDT) do reduce total account
+      // equity. When no direct conversion is supplied, retain the conservative exchange
+      // fee-rate estimate on the matched quote funds.
+      return total + Math.max(0, finite(trade?.funds)) * FEE_PCT[exchange] / 100;
+    }, 0);
+  }
   const feeAsset = String(fill?.feeAsset || order?.fee_asset || "").toUpperCase();
-  const paid = finite(fill?.paidFee, finite(order?.paid_fee));
+  const paid = Math.max(0, finite(fill?.paidFee, finite(order?.paid_fee)));
   if (feeAsset === quote) return paid;
+  if (feeAsset === base) return 0;
   return finite(fill?.executedFunds, finite(order?.executed_funds)) * FEE_PCT[exchange] / 100;
 }
 async function storeFills(orderRow: any, normalized: any) {
@@ -1207,9 +1267,13 @@ async function storeFills(orderRow: any, normalized: any) {
     funds_quote: finite(trade.funds, finite(trade.price) * finite(trade.volume)),
     fee_amount: finite(trade.fee),
     fee_asset: trade.fee_asset || null,
-    fee_quote_estimate: String(trade.fee_asset || "").toUpperCase() === quote
-      ? finite(trade.fee)
-      : finite(trade.funds) * FEE_PCT[orderRow.exchange as Exchange] / 100,
+    fee_quote_estimate: (() => {
+      const feeAsset = String(trade.fee_asset || "").toUpperCase();
+      const base = baseAsset(orderRow.exchange as Exchange, orderRow.market);
+      if (feeAsset === quote) return finite(trade.fee);
+      if (feeAsset === base) return 0;
+      return finite(trade.funds) * FEE_PCT[orderRow.exchange as Exchange] / 100;
+    })(),
     executed_at: trade.executed_at || null,
     raw: trade.raw || trade,
   }));
@@ -1262,7 +1326,7 @@ async function updateOrderFromGateway(orderRow: any, payload: any) {
     paidFee: finite(order?.paid_fee),
     feeAsset: order?.fee_asset,
   };
-  const feeQuote = feeQuoteEstimate(orderRow.exchange, order, fill);
+  const feeQuote = feeQuoteEstimate(orderRow.exchange, orderRow.market, order, fill);
   // Attach the base-asset commission so the caller can book the NET quantity received.
   const paidFeeBase = baseAssetFee(
     order,
@@ -1298,10 +1362,10 @@ async function applyEntryAccounting(position: Position, orderRow: any, fill: any
     0,
     finite(fill.paidFeeBase, baseAssetFee(null, fill, position.base_asset)),
   );
-  const quantity = floorToStep(
-    Math.max(0, grossQuantity - baseFee),
-    finite(position.quantity_step, 0.00000001),
-  );
+  // Store the exact net quantity received. Holdings are allowed below the exchange order
+  // step; only a future SELL request must be floored. Flooring here silently discarded up
+  // to one step of real account inventory and pushed the same value into fake PnL loss.
+  const quantity = Math.max(0, grossQuantity - baseFee);
   if (!(quantity > 0 && price > 0)) throw new Error("entry fill has no executable quantity");
   if (baseFee > 0) {
     await event(
@@ -1368,6 +1432,18 @@ async function applyExitAccounting(
       ),
     )
     : null;
+  const baseFee = Math.max(
+    0,
+    finite(fill.paidFeeBase, baseAssetFee(orderRow?.raw_response || null, fill, position.base_asset)),
+  );
+  const dustValueQuote = position.exchange === "upbit" ? 1000 : 1;
+  const residualPreview = calculateExitResidualAccounting({
+    remainingQuantity: finite(position.remaining_quantity),
+    soldQuantity: quantity,
+    baseFeeQuantity: baseFee,
+    markPrice: price,
+    dustValueQuote,
+  });
   const result = await rpc("apply_trading_exit_order", {
     p_order_id: orderRow.id,
     p_action: action,
@@ -1376,14 +1452,30 @@ async function applyExitAccounting(
     p_fill_funds: finite(fill.executedFunds, price * quantity),
     p_fill_fee_quote: finite(fill.paidFeeQuote, fill.paidFee),
     p_trailing_stop: nextTrail,
-    p_dust_value_quote: position.exchange === "upbit" ? 1000 : 1,
+    p_dust_value_quote: dustValueQuote,
   });
+  if (Boolean(result?.closed) && residualPreview.residualValueQuote > 0) {
+    await event(
+      "EXIT_RESIDUAL_VALUED",
+      `${position.exchange}:${position.market} residual included in economic close`,
+      {
+        sold_quantity: quantity,
+        base_fee_quantity: baseFee,
+        residual_quantity: finite(result?.position?.residual_quantity, residualPreview.residualQuantity),
+        residual_value_quote: finite(
+          result?.position?.residual_value_quote,
+          residualPreview.residualValueQuote,
+        ),
+        accounting_version: result?.position?.accounting_version || "6.8.1",
+      },
+      { positionId: position.id, orderId: orderRow.id, level: "INFO" },
+    );
+  }
   if (Boolean(result?.closed) && position.metadata?.lob_signal) {
     try {
       const learned = await rpc("learn_lob_trade_outcome", {
         p_position_id: position.id,
       });
-      lobOnlineCache = null;
       await event(
         "LOB_ONLINE_PROFILE_UPDATED",
         `${position.exchange}:${position.market} online profile updated`,
@@ -2098,13 +2190,23 @@ async function enterCandidateInner(
     const lobSnapshot = (candidate as any).snapshot?.lob || {};
     const features = liveLobFeatures(lobSnapshot, market);
     const liveFee = await liveFeePct(exchange, settings);
-    const lobLearning = await loadLobLearning();
+    const assignedPolicy = ((candidate as any).__policy_bundle as LobPolicyBundle | null) ??
+      assignLobPolicy(await loadLobPolicyRuntime(), String(candidate.scan_id || cycleId));
+    if (!assignedPolicy || assignedPolicy.version <= 0) {
+      return {
+        entered: false,
+        exchange,
+        market: candidate.market,
+        reason: "validated LOB policy unavailable",
+      };
+    }
+    const lobLearning = assignedPolicy.patternProfile;
     const makerFill = await loadMakerFillStats(exchange);
     const measuredMakerFillRate = makerFill.rested > 0 ? makerFill.filled / makerFill.rested : 0;
     const livePattern = detectLobPatternName(features);
     const patternPolicy = patternDeployment(lobLearning, livePattern);
     const onlinePolicy = resolveLobOnlineMarketPolicy(
-      await loadLobOnlineProfiles(),
+      assignedPolicy.onlineProfiles,
       exchange,
       candidate.market,
       livePattern,
@@ -2167,6 +2269,23 @@ async function enterCandidateInner(
         mean_net_bps: patternPolicy.meanNetBps,
         median_hold_seconds: patternPolicy.medianHoldSeconds,
       },
+      policy: assignedPolicy
+        ? {
+          version: assignedPolicy.version,
+          lane: assignedPolicy.lane,
+          status: assignedPolicy.status,
+          phase: assignedPolicy.phase,
+          parent_version: assignedPolicy.parentVersion,
+          evaluation_started_at: assignedPolicy.evaluationStartedAt,
+        }
+        : {
+          version: 0,
+          lane: "LEGACY",
+          status: "CHAMPION",
+          phase: "IDLE",
+          parent_version: null,
+          evaluation_started_at: null,
+        },
       coin_learning: {
         profile_version: onlinePolicy.profileVersion,
         source: onlinePolicy.source,
@@ -2785,53 +2904,61 @@ const TP_TERMINAL_STATUSES = [
   "EXPIRED",
 ];
 
-// v6.2: the measured LOB profile, loaded once per cycle. A missing table, a failed read or
-// a profile with too few samples all fall back to null, which means "apply no correction" --
-// never to a correction of unknown provenance.
-let lobLearningCache: { profile: LobLearningProfile | null; expires: number } | null = null;
-async function loadLobLearning(): Promise<LobLearningProfile | null> {
-  if (lobLearningCache && lobLearningCache.expires > Date.now()) return lobLearningCache.profile;
-  let profile: LobLearningProfile | null = null;
+// v6.8: raw learning tables are observations. Runtime decisions use only immutable policy
+// snapshots from lob_policy_versions. Read governance once per scan/monitor request rather
+// than keeping an isolate-global cache: after rejection or rollback, even one more entry
+// under the retired model would contaminate the next cohort. The selected immutable bundle
+// travels with every candidate, so its order-time recheck cannot switch policies.
+async function loadLobPolicyRuntime(): Promise<LobPolicyRuntime> {
   try {
     const rows = await db(
-      "lob_learning_profiles?active=eq.true&select=generated_at,samples,base_hit_rate,patterns,traps,notes&order=generated_at.desc&limit=1",
-    );
-    const row = rows?.[0];
-    if (row && Array.isArray(row.patterns)) {
-      profile = {
-        generatedAtMs: Date.parse(String(row.generated_at || "")) || Date.now(),
-        samples: finite(row.samples, 0),
-        baseHitRate: finite(row.base_hit_rate, 0),
-        patterns: row.patterns,
-        traps: Array.isArray(row.traps) ? row.traps : [],
-        notes: Array.isArray(row.notes) ? row.notes : [],
-      };
-    }
+      "lob_policy_versions?status=in.(CHAMPION,CHALLENGER,CONTROL)" +
+        "&select=version,status,parent_version,engine_version,fingerprint,source_online_version," +
+        "traffic_fraction,evaluation_started_at,created_at,confirmed_at,online_profiles," +
+        "pattern_profile,metrics,decision_reason&order=version.desc",
+    ) as LobPolicyVersionRow[];
+    return resolveLobPolicyRuntime(Array.isArray(rows) ? rows : []);
   } catch {
-    // Table absent or unreadable: trade the uncorrected model rather than guessing.
+    // New entries fail closed at the caller. Monitor logic can still protect existing
+    // positions from their entry-pinned exit parameters while the database recovers.
+    return { champion: null, alternate: null, phase: "IDLE" };
   }
-  lobLearningCache = { profile, expires: Date.now() + 60_000 };
-  return profile;
 }
 
-// v6.7: per-coin profiles are updated synchronously after each closed LOB trade. The cache
-// is deliberately short: it removes duplicate reads inside one cycle while allowing the
-// very next cycle to consume a newly incremented profile version.
-let lobOnlineCache: { rows: LobOnlineProfileRow[]; expires: number } | null = null;
-async function loadLobOnlineProfiles(): Promise<LobOnlineProfileRow[]> {
-  if (lobOnlineCache && lobOnlineCache.expires > Date.now()) return lobOnlineCache.rows;
-  let rows: LobOnlineProfileRow[] = [];
-  try {
-    const loaded = await db(
-      "lob_market_profiles?select=exchange,market,pattern,version,samples,profitable_trades,target_hits,early_exit_losses,ewma_net_bps,ewma_hold_seconds,ewma_profitable_hold_seconds,ewma_mae_bps,ewma_mfe_bps,ewma_profitable_mae_bps,exit_counts,updated_at&order=updated_at.desc&limit=5000",
-    );
-    rows = Array.isArray(loaded) ? loaded as LobOnlineProfileRow[] : [];
-  } catch {
-    // During a rolling deploy the migration may not exist yet. The prior remains valid;
-    // missing online evidence never invents a penalty or bypass.
-  }
-  lobOnlineCache = { rows, expires: Date.now() + 5_000 };
-  return rows;
+async function recordLobPolicyExposure(
+  cycleId: string,
+  scanId: string,
+  policy: LobPolicyBundle | null,
+  candidateCount: number,
+) {
+  if (!policy || policy.version <= 0) return;
+  await db("lob_policy_cycle_exposures?on_conflict=cycle_id", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify({
+      cycle_id: cycleId,
+      scan_id: scanId,
+      policy_version: policy.version,
+      policy_lane: policy.lane,
+      candidate_count: Math.max(0, Math.floor(candidateCount)),
+      entry_attempts: 0,
+      reservations: 0,
+      assigned_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }),
+  }).catch(() => null);
+}
+
+async function completeLobPolicyExposure(
+  cycleId: string,
+  entryAttempts: number,
+  reservations: number,
+) {
+  await patch("lob_policy_cycle_exposures", `cycle_id=eq.${cycleId}`, {
+    entry_attempts: Math.max(0, Math.floor(entryAttempts)),
+    reservations: Math.max(0, Math.floor(reservations)),
+    completed_at: new Date().toISOString(),
+  }).catch(() => null);
 }
 
 /** Operator overrides for trap thresholds. Absent keys keep the module defaults. */
@@ -4201,9 +4328,12 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
   const open = await db(
     "trading_positions?state=eq.OPEN&select=*&order=created_at.asc",
   ) as Position[];
-  const onlineProfiles = isLobStrategy((settings as any).strategy)
-    ? await loadLobOnlineProfiles()
-    : [];
+  const lobPolicyRuntime = isLobStrategy((settings as any).strategy)
+    ? await loadLobPolicyRuntime()
+    : null;
+  const championPolicy = lobPolicyRuntime?.champion
+    ? policyBundleByVersion(lobPolicyRuntime, finite(lobPolicyRuntime.champion.version))
+    : null;
   const actions: any[] = [];
   const prices: Record<string, number> = {};
   const portfolios: Partial<Record<Exchange, any>> = {};
@@ -4689,12 +4819,35 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           ? Math.max(0, (Date.now() - openedAt) / 1000)
           : 0;
         const entryDepth = Math.max(1, finite(position.metadata?.entry_bid_depth_quote, 1));
-        const onlinePolicy = resolveLobOnlineMarketPolicy(
-          onlineProfiles,
+        const entryPolicyVersion = finite(position.metadata?.lob_signal?.policy?.version, -1);
+        const entryPolicy = lobPolicyRuntime && entryPolicyVersion >= 0
+          ? policyBundleByVersion(lobPolicyRuntime, entryPolicyVersion)
+          : null;
+        const pinnedCoinPolicy = position.metadata?.lob_signal?.coin_learning || {};
+        const fallbackOnlinePolicy = resolveLobOnlineMarketPolicy(
+          entryPolicy?.onlineProfiles ?? championPolicy?.onlineProfiles ?? [],
           exchange,
           position.market,
           String(position.metadata?.lob_signal?.pattern || "") as LobPatternName,
         );
+        // Exit behavior is pinned at entry. A later profile update or promotion cannot
+        // relabel an already-open position into another cohort or move its soft stop.
+        const softExitGraceSeconds = clamp(
+          finite(
+            pinnedCoinPolicy.soft_exit_grace_seconds,
+            fallbackOnlinePolicy.softExitGraceSeconds,
+          ),
+          6,
+          24,
+        );
+        const softExitConfirmations = Math.round(clamp(
+          finite(
+            pinnedCoinPolicy.soft_exit_confirmations,
+            fallbackOnlinePolicy.softExitConfirmations,
+          ),
+          2,
+          4,
+        ));
         const exit = evaluateLobExit({
           emergency: false,
           reconciliationFailed: String(position.state) === "RECONCILIATION_FAILED",
@@ -4719,8 +4872,8 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           dynamicStatus: undefined,
           previousSoftReason: position.metadata?.lob_soft_exit_reason || null,
           softSignalStreak: finite(position.metadata?.lob_soft_exit_streak),
-          softExitGraceSeconds: onlinePolicy.softExitGraceSeconds,
-          softExitConfirmations: onlinePolicy.softExitConfirmations,
+          softExitGraceSeconds,
+          softExitConfirmations,
         });
         if (
           exit.nextSoftReason !== (position.metadata?.lob_soft_exit_reason || null) ||
@@ -4733,7 +4886,13 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
                 ...(position.metadata || {}),
                 lob_soft_exit_reason: exit.nextSoftReason,
                 lob_soft_exit_streak: exit.nextSoftSignalStreak,
-                lob_soft_exit_profile_version: onlinePolicy.profileVersion,
+                lob_soft_exit_profile_version: finite(
+                  pinnedCoinPolicy.profile_version,
+                  fallbackOnlinePolicy.profileVersion,
+                ),
+                lob_soft_exit_policy_version: entryPolicyVersion >= 0
+                  ? entryPolicyVersion
+                  : championPolicy?.version ?? 0,
                 lob_soft_exit_last_checked_at: new Date().toISOString(),
               },
             }))[0],
@@ -4750,7 +4909,16 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             held_seconds: heldSeconds,
             imbalance,
             spread_bps: spread,
-            online_policy: onlinePolicy,
+            online_policy: {
+              ...fallbackOnlinePolicy,
+              policy_version: entryPolicyVersion >= 0
+                ? entryPolicyVersion
+                : championPolicy?.version ?? 0,
+              policy_lane: position.metadata?.lob_signal?.policy?.lane || "LEGACY",
+              pinned_at_entry: Boolean(position.metadata?.lob_signal?.coin_learning),
+              soft_exit_grace_seconds: softExitGraceSeconds,
+              soft_exit_confirmations: softExitConfirmations,
+            },
           }, { cycleId, positionId: position.id });
         } else {
           // v6.5: record what this slot is still earning per second, so the scan cycle can
@@ -5353,7 +5521,7 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
     headers: { Prefer: "return=minimal" },
     body: JSON.stringify({ scan_id: scanId }),
   });
-  const candidates = await loadBuyCandidates(scanId, settings);
+  const candidates = await loadBuyCandidates(scanId, settings, cycleId);
   const active = (await db(
     "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=exchange,market,base_asset",
   )) as any[];
@@ -5427,6 +5595,11 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
     last_gateway_heartbeat_at: new Date().toISOString(),
     gateway_error_count: 0,
   });
+  await completeLobPolicyExposure(
+    cycleId,
+    entries.length,
+    entries.filter((row) => row.entered || row.reserved).length,
+  );
   return {
     scan_id: scanId,
     buy_candidates: candidates.length,
@@ -5449,6 +5622,7 @@ async function status(settings: TradingSettings & JsonRecord) {
     profiles,
     lobBatchProfiles,
     lobOnlineStatus,
+    lobPolicyStatus,
   ] = await Promise.all([
     db(
       "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*&order=created_at.desc",
@@ -5466,6 +5640,10 @@ async function status(settings: TradingSettings & JsonRecord) {
       "lob_learning_profiles?active=eq.true&select=generated_at,samples,base_hit_rate,patterns,notes&order=generated_at.desc&limit=1",
     ).catch(() => []),
     db("rpc/get_lob_online_learning_status", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }).catch(() => null),
+    db("rpc/get_lob_policy_status", {
       method: "POST",
       body: JSON.stringify({}),
     }).catch(() => null),
@@ -5517,6 +5695,9 @@ async function status(settings: TradingSettings & JsonRecord) {
   const resolvedOnlineStatus = Array.isArray(lobOnlineStatus)
     ? lobOnlineStatus[0]
     : lobOnlineStatus;
+  const resolvedPolicyStatus = Array.isArray(lobPolicyStatus)
+    ? lobPolicyStatus[0]
+    : lobPolicyStatus;
   const lobLearningStatus = {
     mode: "ONLINE_ON_EVERY_LIVE_CLOSE",
     profile_version: 0,
@@ -5530,6 +5711,9 @@ async function status(settings: TradingSettings & JsonRecord) {
     ...(resolvedOnlineStatus && typeof resolvedOnlineStatus === "object"
       ? resolvedOnlineStatus
       : {}),
+    governance: resolvedPolicyStatus && typeof resolvedPolicyStatus === "object"
+      ? resolvedPolicyStatus
+      : null,
     batch_profile: lobBatchProfiles?.[0] || null,
   };
   return {

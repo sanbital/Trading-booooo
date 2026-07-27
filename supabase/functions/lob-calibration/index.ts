@@ -1,4 +1,4 @@
-// Trading-booooo v6.7.0-ONLINE-COIN-LEARNING — LOB_SCALP calibration job.
+// Trading-booooo v6.8.1-RESIDUAL-LABEL-INTEGRITY — LOB_SCALP calibration job.
 //
 // Reads closed LOB positions, reconstructs (predicted pTarget, neutral win rate, realized
 // outcome) triples from `trading_positions.metadata.lob_signal`, and writes a profile that
@@ -13,10 +13,16 @@
 // count in days rather than weeks. No candle-based shadow reconstruction is involved, and
 // therefore none of its resolution limits apply.
 //
-// Closed-trade facts are read-only. Writes promote the batch pattern profile and invoke
-// the idempotent online-profile backfill for any close missed during a transient failure.
+// Closed-trade facts are read-only. Raw profiles are immutable challenger inputs, never
+// automatic production releases. Promotion is owned by the full-size live cohort gate.
 
 import { buildLobLearningProfile, type LobOutcomeSample } from "../_shared/lob/learning.ts";
+import {
+  evaluateLobPolicy,
+  type LobPolicyExposure,
+  type LobPolicyPhase,
+  type LobPolicyTrade,
+} from "../_shared/lob/governance.ts";
 import type { LobPatternName } from "../_shared/lob/types.ts";
 import type { LobTrapName } from "../_shared/lob/traps.ts";
 
@@ -80,6 +86,51 @@ async function db(path: string, init: RequestInit = {}): Promise<any> {
 function finite(value: unknown, fallback = 0): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+async function evaluateGovernance(dryRun: boolean): Promise<any> {
+  let dataset: any;
+  try {
+    dataset = await db("rpc/get_lob_policy_evaluation_dataset", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  } catch (error) {
+    return {
+      available: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+  if (!dataset || dataset.phase === "IDLE") {
+    return { available: true, phase: "IDLE", decision: null, dataset };
+  }
+  const phase = String(dataset.phase) as Exclude<LobPolicyPhase, "IDLE">;
+  if (phase !== "CHALLENGE" && phase !== "CONFIRMATION") {
+    return { available: false, reason: `unknown governance phase ${phase}` };
+  }
+  const evaluation = evaluateLobPolicy(
+    (dataset.baseline_trades || []) as LobPolicyTrade[],
+    (dataset.candidate_trades || []) as LobPolicyTrade[],
+    (dataset.baseline_exposures || []) as LobPolicyExposure[],
+    (dataset.candidate_exposures || []) as LobPolicyExposure[],
+    phase,
+  );
+  if (dryRun) return { available: true, phase, evaluation, applied: null };
+  const applied = await db("rpc/apply_lob_policy_decision", {
+    method: "POST",
+    body: JSON.stringify({
+      p_expected_champion: phase === "CHALLENGE"
+        ? dataset.baseline_version
+        : dataset.candidate_version,
+      p_expected_alternate: phase === "CHALLENGE"
+        ? dataset.candidate_version
+        : dataset.baseline_version,
+      p_decision: evaluation.decision,
+      p_metrics: evaluation,
+      p_reason: evaluation.reason,
+    }),
+  });
+  return { available: true, phase, evaluation, applied };
 }
 
 /**
@@ -190,53 +241,67 @@ Deno.serve(async (request: Request) => {
     const profile = buildLobLearningProfile(samples);
 
     if (dryRun) {
+      const governance = await evaluateGovernance(true);
       return json({
         ok: true,
         dry_run: true,
         window_hours: windowHours,
         online_backfilled: onlineBackfilled,
         profile,
+        governance,
       });
     }
 
-    // A profile with no measurable pattern would apply a multiplier of 1 everywhere, which
-    // is what happens with no profile at all. Writing it would only add churn.
-    if (!profile.patterns.length) {
-      return json({
-        ok: true,
-        promoted: false,
-        reason: "no pattern reached the minimum sample count",
-        window_hours: windowHours,
-        online_backfilled: onlineBackfilled,
-        profile,
+    // Preserve every measurable batch as immutable challenger evidence. The old `active`
+    // switch is deliberately untouched: v6.8 runtime reads only frozen policy versions.
+    // A calibration job can no longer replace production merely because twelve observations
+    // happened to exist in the same market regime.
+    let profileId: string | null = null;
+    if (profile.patterns.length) {
+      const inserted = await db("lob_learning_profiles", {
+        method: "POST",
+        body: JSON.stringify({
+          generated_at: new Date(profile.generatedAtMs).toISOString(),
+          active: false,
+          samples: profile.samples,
+          base_hit_rate: profile.baseHitRate,
+          window_hours: windowHours,
+          patterns: profile.patterns,
+          traps: profile.traps,
+          notes: [...profile.notes, "VALIDATION_CANDIDATE_ONLY_V680"],
+        }),
       });
+      profileId = inserted?.[0]?.id ?? null;
     }
 
-    await db("lob_learning_profiles?active=eq.true", {
-      method: "PATCH",
-      body: JSON.stringify({ active: false }),
-    });
-    const inserted = await db("lob_learning_profiles", {
-      method: "POST",
-      body: JSON.stringify({
-        generated_at: new Date(profile.generatedAtMs).toISOString(),
-        active: true,
-        samples: profile.samples,
-        base_hit_rate: profile.baseHitRate,
-        window_hours: windowHours,
-        patterns: profile.patterns,
-        traps: profile.traps,
-        notes: profile.notes,
-      }),
-    });
+    const governance = await evaluateGovernance(false);
+    let challenger: any = null;
+    const terminalDecision = governance?.evaluation?.decision &&
+      governance.evaluation.decision !== "HOLD";
+    if (governance?.phase === "IDLE" || terminalDecision) {
+      try {
+        challenger = await db("rpc/create_lob_policy_challenger", {
+          method: "POST",
+          body: JSON.stringify({ p_min_new_samples: 20 }),
+        });
+      } catch (error) {
+        challenger = {
+          created: false,
+          reason: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
 
     return json({
       ok: true,
-      promoted: true,
+      promoted: governance?.evaluation?.decision === "PROMOTE" ||
+        governance?.evaluation?.decision === "CONFIRM",
       window_hours: windowHours,
       online_backfilled: onlineBackfilled,
-      profile_id: inserted?.[0]?.id ?? null,
+      profile_id: profileId,
       profile,
+      governance,
+      challenger,
     });
   } catch (error) {
     return json({ error: String(error instanceof Error ? error.message : error) }, 500);

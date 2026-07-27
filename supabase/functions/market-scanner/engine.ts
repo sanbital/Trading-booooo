@@ -18,7 +18,7 @@ import {
   type ScalpGeometry,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "6.7.0-ONLINE-COIN-LEARNING";
+export const ENGINE_VERSION = "6.8.1-RESIDUAL-LABEL-INTEGRITY";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;

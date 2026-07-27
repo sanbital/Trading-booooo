@@ -124,15 +124,24 @@ function calculateTrade(position: JsonRecord, orders: JsonRecord[], snapshot: Js
   const exitFunds = sells.reduce((sum, order) => sum + Math.max(0, finite(order.executed_funds_quote)), 0);
   const exitFees = sells.reduce((sum, order) => sum + Math.max(0, finite(order.paid_fee_quote)), 0);
   const remainingQuantity = Math.max(0, finite(position.remaining_quantity, entryVolume - exitVolume));
+  const residualQuantity = position.state === "CLOSED"
+    ? Math.max(0, finite(position.residual_quantity))
+    : 0;
   const snapshotPrice = finite(snapshot?.prices?.[position.market]);
   const averageEntryPrice = finite(position.average_entry_price, entryFunds / entryVolume);
   const currentPrice = position.state === "CLOSED"
     ? finite(sells.at(-1)?.average_fill_price, averageEntryPrice)
     : finite(snapshotPrice, averageEntryPrice);
-  const currentValue = remainingQuantity * currentPrice;
+  const residualValueQuote = position.state === "CLOSED"
+    ? Math.max(0, finite(position.residual_value_quote, residualQuantity * currentPrice))
+    : 0;
+  const currentValue = remainingQuantity * currentPrice + residualValueQuote;
   const totalFees = entryFees + exitFees;
   const grossPnl = exitFunds + currentValue - entryFunds;
-  const netPnl = exitFunds - exitFees + currentValue - entryFunds - entryFees;
+  const calculatedNetPnl = exitFunds - exitFees + currentValue - entryFunds - entryFees;
+  const netPnl = position.state === "CLOSED"
+    ? finite(position.realized_pnl_quote, calculatedNetPnl)
+    : calculatedNetPnl;
   const investedCost = entryFunds + entryFees;
   const returnPct = investedCost > 0 ? netPnl / investedCost * 100 : 0;
   const averageExitPrice = exitVolume > 0 ? exitFunds / exitVolume : null;
@@ -159,6 +168,9 @@ function calculateTrade(position: JsonRecord, orders: JsonRecord[], snapshot: Js
     duration_seconds: durationSeconds(entryAt, exitAt),
     entry_quantity: entryVolume,
     remaining_quantity: remainingQuantity,
+    residual_quantity: residualQuantity,
+    residual_value_quote: residualValueQuote,
+    accounting_version: position.accounting_version || null,
     average_entry_price: averageEntryPrice,
     average_exit_price: averageExitPrice,
     current_price: currentPrice,
