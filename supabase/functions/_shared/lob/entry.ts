@@ -34,6 +34,7 @@ export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   measuredMakerFillRate: 0,
   makerFillSamples: 0,
   makerFillPriorStrength: 60,
+  learnedStopFloorBps: 0,
 };
 
 /** Largest amount the signal is ever allowed to move the probability off pure geometry. */
@@ -89,9 +90,18 @@ export function evaluateLobEntry(
   // charged to entry AND to the stop exit: a stop is a market order into a book that has
   // already moved, so the delay is paid twice on the losing side and once on the winning
   // one, where a resting take-profit is filled at its own price.
-  const latencyBps = Math.max(0, Number.isFinite(costs.latencyPenaltyBps as number) ? costs.latencyPenaltyBps as number : 0);
-  const totalTargetCostBps = Math.max(0, costs.roundTripFeeBps + costs.entrySlippageBps + costs.targetExitSlippageBps + latencyBps);
-  const totalStopCostBps = Math.max(0, costs.roundTripFeeBps + costs.entrySlippageBps + costs.stopExitSlippageBps + latencyBps * 2);
+  const latencyBps = Math.max(
+    0,
+    Number.isFinite(costs.latencyPenaltyBps as number) ? costs.latencyPenaltyBps as number : 0,
+  );
+  const totalTargetCostBps = Math.max(
+    0,
+    costs.roundTripFeeBps + costs.entrySlippageBps + costs.targetExitSlippageBps + latencyBps,
+  );
+  const totalStopCostBps = Math.max(
+    0,
+    costs.roundTripFeeBps + costs.entrySlippageBps + costs.stopExitSlippageBps + latencyBps * 2,
+  );
 
   // Provisional geometry, used only to ask the trap module whether this book's own noise
   // can accommodate the stop the model would otherwise have chosen.
@@ -110,24 +120,38 @@ export function evaluateLobEntry(
     cfg.maxStopBps,
   );
 
-  const traps = assessLobTraps({
-    askAbsorptionScore: features.askAbsorptionScore,
-    askRefillRatio: features.askRefillRatio,
-    bidSpoofScore: features.spoofLikeScore,
-    askSpoofScore: features.askSpoofScore,
-    pathEfficiency: features.pathEfficiency,
-    reversalRate: features.reversalRate,
-    noiseBandBps: features.noiseBandBps,
-    quoteFlickerRate: features.quoteFlickerRate,
-    tradeArrivalRate: features.tradeArrivalRate,
-    dataQuality: features.dataQuality,
-  }, provisionalStopBps, cfg.trap);
+  const traps = assessLobTraps(
+    {
+      askAbsorptionScore: features.askAbsorptionScore,
+      askRefillRatio: features.askRefillRatio,
+      bidSpoofScore: features.spoofLikeScore,
+      askSpoofScore: features.askSpoofScore,
+      pathEfficiency: features.pathEfficiency,
+      reversalRate: features.reversalRate,
+      noiseBandBps: features.noiseBandBps,
+      quoteFlickerRate: features.quoteFlickerRate,
+      tradeArrivalRate: features.tradeArrivalRate,
+      dataQuality: features.dataQuality,
+    },
+    provisionalStopBps,
+    cfg.trap,
+  );
 
   // A stop inside the book's own noise band is not a risk control, it is a coin flip with a
   // fee attached. Widen it instead of pretending, and let the EV gate reject the trade if
   // the wider stop no longer pays.
+  // A stop narrower than the execution friction is an automatic fee pump: even a normal
+  // one-spread move triggers a taker exit before the signal has had time to resolve.
+  // Market-specific winner MAE may widen this further, but every wider geometry is priced
+  // back through the EV gate below.
+  const microstructureStopFloorBps = Math.max(
+    cfg.minStopBps,
+    Math.max(0, costs.spreadBps) * 2,
+    totalStopCostBps * 1.25,
+    Math.max(0, cfg.learnedStopFloorBps),
+  );
   const stopBps = clamp(
-    Math.max(provisionalStopBps, traps.requiredStopBps),
+    Math.max(provisionalStopBps, traps.requiredStopBps, microstructureStopFloorBps),
     cfg.minStopBps,
     cfg.maxStopBps,
   );
@@ -139,11 +163,16 @@ export function evaluateLobEntry(
     ...pattern,
     confidence: clamp(pattern.confidence * traps.confidenceMultiplier, 0, 1),
   })).sort((left, right) => right.confidence - left.confidence);
-  const primary = patterns.find((p) => p.primary && p.confidence >= cfg.minPrimaryPatternConfidence) || null;
+  const primary =
+    patterns.find((p) => p.primary && p.confidence >= cfg.minPrimaryPatternConfidence) || null;
 
   if (features.samples < cfg.minSamples) reasons.push("INSUFFICIENT_LOB_SAMPLES");
-  if (features.bookAgeMs == null || features.bookAgeMs > cfg.maxBookAgeMs) reasons.push("STALE_ORDERBOOK");
-  if (features.spreadBps == null || features.spreadBps > cfg.maxSpreadBps) reasons.push("SPREAD_TOO_WIDE");
+  if (features.bookAgeMs == null || features.bookAgeMs > cfg.maxBookAgeMs) {
+    reasons.push("STALE_ORDERBOOK");
+  }
+  if (features.spreadBps == null || features.spreadBps > cfg.maxSpreadBps) {
+    reasons.push("SPREAD_TOO_WIDE");
+  }
   for (const name of activeVetoes) reasons.push(`TRAP_${name}`);
   if (hotness.hotnessScore < cfg.minHotnessScore) reasons.push("BOOK_NOT_HOT_ENOUGH");
   if (!primary) reasons.push("NO_PRIMARY_LOB_PATTERN");
@@ -171,7 +200,8 @@ export function evaluateLobEntry(
   );
 
   const resolveProbability = clamp(
-    0.45 + activity * 0.25 + patternConfidence * 0.20 + clamp(features.tradeArrivalRate / 10, 0, 1) * 0.10,
+    0.45 + activity * 0.25 + patternConfidence * 0.20 +
+      clamp(features.tradeArrivalRate / 10, 0, 1) * 0.10,
     0.25,
     0.97,
   );
@@ -194,7 +224,8 @@ export function evaluateLobEntry(
 
   const targetReturnNetBps = targetBps - totalTargetCostBps;
   const stopReturnNetBps = -(stopBps + totalStopCostBps);
-  const timeoutReturnNetBps = -(costs.roundTripFeeBps + costs.entrySlippageBps + costs.stopExitSlippageBps) * 0.75;
+  const timeoutReturnNetBps =
+    -(costs.roundTripFeeBps + costs.entrySlippageBps + costs.stopExitSlippageBps) * 0.75;
   const evNetBps = pFill * (
     pTarget * targetReturnNetBps + pStop * stopReturnNetBps + pTimeout * timeoutReturnNetBps
   );
@@ -222,7 +253,7 @@ export function evaluateLobEntry(
   const conservativePStop = Math.max(0, resolveProbability - conservativePTarget);
   const evLowerBoundBps = pFill * (
     conservativePTarget * targetReturnNetBps + conservativePStop * stopReturnNetBps +
-      pTimeout * timeoutReturnNetBps
+    pTimeout * timeoutReturnNetBps
   );
 
   if (!(targetReturnNetBps > 0)) reasons.push("TARGET_NET_PROFIT_NOT_POSITIVE");

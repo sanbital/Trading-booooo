@@ -1,4 +1,4 @@
-// Trading-booooo v6.6.1-JOINT-OBJECTIVE — LOB_SCALP calibration job.
+// Trading-booooo v6.7.0-ONLINE-COIN-LEARNING — LOB_SCALP calibration job.
 //
 // Reads closed LOB positions, reconstructs (predicted pTarget, neutral win rate, realized
 // outcome) triples from `trading_positions.metadata.lob_signal`, and writes a profile that
@@ -13,7 +13,8 @@
 // count in days rather than weeks. No candle-based shadow reconstruction is involved, and
 // therefore none of its resolution limits apply.
 //
-// Read-only against trading data; the only writes are to lob_learning_profiles.
+// Closed-trade facts are read-only. Writes promote the batch pattern profile and invoke
+// the idempotent online-profile backfill for any close missed during a transient failure.
 
 import { buildLobLearningProfile, type LobOutcomeSample } from "../_shared/lob/learning.ts";
 import type { LobPatternName } from "../_shared/lob/types.ts";
@@ -162,6 +163,20 @@ Deno.serve(async (request: Request) => {
   const since = new Date(Date.now() - windowHours * 3_600_000).toISOString();
 
   try {
+    let onlineBackfilled = 0;
+    if (!dryRun) {
+      try {
+        onlineBackfilled = finite(
+          await db("rpc/backfill_lob_online_learning", {
+            method: "POST",
+            body: JSON.stringify({ p_limit: 5000 }),
+          }),
+        );
+      } catch {
+        // Rolling deploy: the online migration may not exist yet. Pattern calibration
+        // remains independently valid and the next hourly run retries the backfill.
+      }
+    }
     const rows = await db(
       `trading_positions?state=eq.CLOSED&is_paper=eq.false&closed_at=gte.${since}` +
         `&select=id,created_at,opened_at,closed_at,updated_at,close_reason,average_entry_price,realized_pnl_quote,realized_cost_quote,metadata` +
@@ -174,7 +189,15 @@ Deno.serve(async (request: Request) => {
 
     const profile = buildLobLearningProfile(samples);
 
-    if (dryRun) return json({ ok: true, dry_run: true, window_hours: windowHours, profile });
+    if (dryRun) {
+      return json({
+        ok: true,
+        dry_run: true,
+        window_hours: windowHours,
+        online_backfilled: onlineBackfilled,
+        profile,
+      });
+    }
 
     // A profile with no measurable pattern would apply a multiplier of 1 everywhere, which
     // is what happens with no profile at all. Writing it would only add churn.
@@ -184,6 +207,7 @@ Deno.serve(async (request: Request) => {
         promoted: false,
         reason: "no pattern reached the minimum sample count",
         window_hours: windowHours,
+        online_backfilled: onlineBackfilled,
         profile,
       });
     }
@@ -210,6 +234,7 @@ Deno.serve(async (request: Request) => {
       ok: true,
       promoted: true,
       window_hours: windowHours,
+      online_backfilled: onlineBackfilled,
       profile_id: inserted?.[0]?.id ?? null,
       profile,
     });

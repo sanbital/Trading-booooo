@@ -130,6 +130,11 @@ export interface LobEntryConfig {
   makerFillSamples: number;
   /** Samples at which measured fill rate and the book model receive equal weight. */
   makerFillPriorStrength: number;
+  /**
+   * Per-market stop floor learned from profitable trades' adverse excursion.
+   * The entry path recalculates EV after applying it; it is never a bypass.
+   */
+  learnedStopFloorBps: number;
 }
 
 export interface LobEntryDecision {

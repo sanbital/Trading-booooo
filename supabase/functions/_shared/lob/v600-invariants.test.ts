@@ -21,10 +21,12 @@ Deno.test("v6 LOB route has no pWin or pFill hard gate", async () => {
 });
 
 Deno.test("v6 migration applies user-selected loss caps and no trade-count ceiling", async () => {
-  const sql = await Deno.readTextFile(new URL(
-    "supabase/migrations/202607260016_lob_scalp_v600.sql",
-    ROOT,
-  ));
+  const sql = await Deno.readTextFile(
+    new URL(
+      "supabase/migrations/202607260016_lob_scalp_v600.sql",
+      ROOT,
+    ),
+  );
   assert(sql.includes("scalp_max_single_loss_pct = 5"));
   assert(sql.includes("scalp_daily_loss_pct = 30"));
   assert(sql.includes("max_daily_entries = 1000000"));
@@ -34,12 +36,14 @@ Deno.test("v6 migration applies user-selected loss caps and no trade-count ceili
 });
 
 Deno.test("v6 LOB route does not generate legacy rate-control events", async () => {
-  const code = await Deno.readTextFile(new URL(
-    "supabase/functions/market-autotrader/index.ts",
-    ROOT,
-  ));
+  const code = await Deno.readTextFile(
+    new URL(
+      "supabase/functions/market-autotrader/index.ts",
+      ROOT,
+    ),
+  );
   const lob = code.indexOf("if (isLobStrategy((settings as any).strategy))");
-  const legacy = code.indexOf('} else if ((settings as any).strategy === "SCALP") {', lob);
-  const rateEvent = code.indexOf('event("SCALP_RATE_CONTROL"', legacy);
+  const legacy = code.indexOf('(settings as any).strategy === "SCALP"', lob);
+  const rateEvent = code.indexOf('"SCALP_RATE_CONTROL"', legacy);
   assert(lob >= 0 && legacy > lob && rateEvent > legacy);
 });

@@ -139,3 +139,19 @@ Deno.test("joint-objective migration keeps positive EV and repairs legacy maker 
   assert(source.includes("finite(p.initial_quantity) <= 0"));
   assert(source.includes("await syncMakerEntry(position, settings, cycleId)"));
 });
+
+Deno.test("online coin learning versions every close and restores operator slot allocation", async () => {
+  const sql = await Deno.readTextFile(
+    new URL(
+      "../../../migrations/202607270019_lob_online_coin_learning_v670.sql",
+      import.meta.url,
+    ),
+  );
+  assert(sql.includes("create table if not exists public.lob_online_outcomes"));
+  assert(sql.includes("create table if not exists public.lob_market_profiles"));
+  assert(sql.includes("learn_lob_trade_outcome"));
+  assert(sql.includes("get_lob_online_learning_status"));
+  assert(sql.includes("on conflict (position_id) do nothing"));
+  assert(sql.includes("set scalp_position_slots = 6"));
+  assert(!sql.includes("set scalp_position_slots = greatest"));
+});
