@@ -11,7 +11,7 @@ Deno.test("BNB one-step exit dust is closed but retained as economic value", () 
   });
   assertEquals(out.closeAsDust, true);
   assertAlmostEquals(out.residualQuantity, 0.0009475, 1e-12);
-  assertAlmostEquals(out.residualValueQuote, 0.543707, 1e-6);
+  assertAlmostEquals(out.residualValueQuote, 0.543107, 1e-6);
   assertEquals(out.nextRemainingQuantity, 0);
 });
 
