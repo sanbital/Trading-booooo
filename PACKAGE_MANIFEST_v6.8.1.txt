@@ -1,0 +1,37 @@
+Trading-booooo v6.8.1-RESIDUAL-LABEL-INTEGRITY
+
+Primary v6.8.1 files
+--------------------
+CHANGELOG-v6.8.1.md
+AI_FEEDBACK_REVIEW_v6.8.1.md
+UPDATE_v6.8.1.md
+VALIDATION_v6.8.1.md
+SQL_VERIFY_v681.sql
+supabase/migrations/202607270021_residual_label_integrity_v681.sql
+supabase/functions/market-autotrader/residual-accounting.test.ts
+validation/v681-deploy-validation.mjs
+
+Modified runtime files
+----------------------
+README.md
+supabase/functions/market-autotrader/core.ts
+supabase/functions/market-autotrader/index.ts
+supabase/functions/market-performance/index.ts
+supabase/functions/market-scanner/engine.ts
+supabase/functions/lob-calibration/index.ts
+gateway/server.mjs
+docs/config.js
+docs/index.html
+
+Carried forward unchanged
+-------------------------
+v6.8 validated Pareto policy governance and all cumulative migrations.
+
+Required cumulative migrations
+------------------------------
+Upload every file in supabase/migrations. Do not upload only the v6.8.1 migration.
+
+Secrets and live credentials
+----------------------------
+No API key, service-role key, access token, database password or exchange secret is
+included in this package.

@@ -1,0 +1,40 @@
+Trading-booooo v6.8.0-VALIDATED-PARETO-LEARNING
+
+Primary v6.8 files
+------------------
+CHANGELOG-v6.8.0.md
+MODEL_REVIEW_v6.8.0.md
+UPDATE_v6.8.0.md
+VALIDATION_v6.8.0.md
+SQL_VERIFY_v680.sql
+supabase/migrations/202607270020_validated_pareto_learning_v680.sql
+supabase/functions/_shared/lob/governance.ts
+supabase/functions/_shared/lob/governance.test.ts
+validation/v680-deploy-validation.mjs
+
+Modified runtime files
+----------------------
+deno.json
+README.md
+supabase/functions/market-autotrader/index.ts
+supabase/functions/lob-calibration/index.ts
+supabase/functions/market-scanner/engine.ts
+gateway/server.mjs
+docs/app.js
+docs/config.js
+docs/index.html
+
+Trade-history UI carried forward from v6.7
+------------------------------------------
+docs/performance.js
+docs/performance.css
+
+Required cumulative migrations
+------------------------------
+All files in supabase/migrations must be uploaded. Do not upload only the v6.8 migration
+into a repository that is missing v6.5.1-v6.7 cumulative files.
+
+Secrets and live credentials
+----------------------------
+No API key, service-role key, access token, database password or exchange secret is
+included in this package.

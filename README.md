@@ -1,4 +1,18 @@
-# Trading-booooo v5.2.0
+# Trading-booooo v6.8.1
+
+현재 배포판은 `6.8.1-RESIDUAL-LABEL-INTEGRITY`이다. v6.8의 검증형 Pareto
+정책 승격 구조를 유지하면서, 청산 후 남은 quantity-step 잔량을 가짜 손실로
+기록하던 회계·학습 라벨을 수정한다.
+
+- 업데이트: [`UPDATE_v6.8.1.md`](./UPDATE_v6.8.1.md)
+- 변경 내용: [`CHANGELOG-v6.8.1.md`](./CHANGELOG-v6.8.1.md)
+- 검증 기록: [`VALIDATION_v6.8.1.md`](./VALIDATION_v6.8.1.md)
+- 다른 AI 피드백 검토: [`AI_FEEDBACK_REVIEW_v6.8.1.md`](./AI_FEEDBACK_REVIEW_v6.8.1.md)
+- 배포 후 SQL 확인: [`SQL_VERIFY_v681.sql`](./SQL_VERIFY_v681.sql)
+- v6.8 외부 검토 요청서: [`MODEL_REVIEW_v6.8.0.md`](./MODEL_REVIEW_v6.8.0.md)
+
+아래 문서의 초기 구축 설명 중 버전별 기본값은 누적 마이그레이션의 최신 값을
+우선한다.
 
 업비트 **KRW 현물**과 바이낸스 **USDT 현물**을 5분마다 통합 스캔하고, 열린 포지션을 15초마다 감시·청산하는 자기교정형 자동매매 엔진입니다. 브라우저를 열어둘 필요가 없습니다.
 
@@ -71,6 +85,13 @@ GitHub Pages에 스캐너와 자동매매 운영 대시보드가 함께 배포�
 - PAPER와 LIVE_LIMITED의 손실·진입 회로 통계는 서로 섞이지 않음
 
 `전액`은 잔고를 한 주문에 모두 넣는 의미가 아닙니다. 업비트는 KRW, 바이낸스는 USDT 현금과 봇이 보유한 포지션만 자본 기준으로 삼고 보호금을 제외합니다. 사용자가 별도로 보유한 코인의 평가액은 운용 한도를 부풀리지 않습니다. 실제 주문 크기는 손절거리·거래당 위험·종목당 비중·1회 주문 상한을 다시 적용합니다.
+
+## v6.8.1 청산 잔량 무결성
+
+거래소 주문 step 때문에 최종 청산에서 매도하지 못한 소량 코인은 계좌 자산으로
+남는다. v6.8.1은 이를 `residual_quantity`와 `residual_value_quote`로 보존하고,
+실현손익과 온라인 학습 라벨에 경제적 가치를 포함한다. 재구성할 수 없는 과거
+라벨은 `LEGACY_UNVERIFIED`로 분리해 학습에서 제외한다.
 
 ## 자기교정
 
