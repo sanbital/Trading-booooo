@@ -74,6 +74,28 @@ test("normalized orders use a common state model", () => {
   assert.equal(binance.average_price, 10);
 });
 
+test("Upbit zero-string cumulative fields cannot hide trade-level partial fills", () => {
+  const order = module.normalizeUpbitOrder({
+    uuid: "partial",
+    identifier: "tb-m-partial",
+    state: "cancel",
+    volume: "9.47051225",
+    remaining_volume: "3.76874777",
+    executed_volume: "5.70176448",
+    executed_funds: "0",
+    paid_fee: "6.62259944352",
+    trades: [{
+      uuid: "fill-1",
+      price: "2323",
+      volume: "5.70176448",
+      funds: "13245.19888704",
+    }],
+  });
+  assert.equal(order.status, "PARTIALLY_FILLED_CANCELED");
+  assert.equal(order.executed_funds, 13245.19888704);
+  assert.equal(order.average_price, 2323);
+});
+
 
 test("Upbit local rate guards follow API groups with headroom", () => {
   assert.equal(module.upbitRateGroup("GET", "/v1/ticker", true), "ticker");
@@ -109,4 +131,3 @@ test("Upbit contextual errors identify the failing endpoint", () => {
   assert.equal(wrapped.status, 404);
   assert.equal(wrapped.code, "not_found");
 });
-

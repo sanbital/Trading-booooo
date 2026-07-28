@@ -18,13 +18,14 @@ const evidence = read("supabase/functions/_shared/lob/evidence-sizing.ts");
 const calibration = read("supabase/functions/lob-calibration/index.ts");
 const telemetrySecurity = read("supabase/migrations/202607280005_private_trading_telemetry_rls.sql");
 const learningRepair = read("supabase/migrations/202607280006_learning_ingestion_and_dashboard_truth.sql");
+const admissionTruth = read("supabase/migrations/202607290001_exploration_budget_telemetry_only.sql");
 
 const migrationVersions = migrations.map((name) => name.split("_", 1)[0]);
 check("migration versions are globally unique", new Set(migrationVersions).size === migrationVersions.length);
 check("v6.10 joint objective migration remains present", migrations.includes("202607280003_joint_compound_growth_v610.sql"));
 check("admission-safe payoff migration remains present", migrations.includes("202607280004_verified_payoff_governor_r7.sql"));
 check("private telemetry migration remains present", migrations.includes("202607280005_private_trading_telemetry_rls.sql"));
-check("learning ingestion repair is newest", migrations.at(-1) === "202607280006_learning_ingestion_and_dashboard_truth.sql");
+check("admission truth repair is newest", migrations.at(-1) === "202607290001_exploration_budget_telemetry_only.sql");
 check("decision and latency telemetry enable RLS", ["trading_decisions", "trading_latency_samples"].every((table) => telemetrySecurity.includes(`alter table if exists public.${table}`)) && (telemetrySecurity.match(/enable row level security/g) || []).length === 2);
 check("public telemetry privileges are revoked", ["trading_decisions", "trading_latency_samples"].every((table) => telemetrySecurity.includes(`revoke all privileges on table public.${table}`)) && telemetrySecurity.includes("from public, anon, authenticated"));
 check("no public telemetry policies are created", !/\bcreate\s+policy\b/i.test(telemetrySecurity));
@@ -40,7 +41,8 @@ check("reservations are durable", migration.includes("reserved_quote") && migrat
 check("asset locks are auditable", migration.includes("create table if not exists public.trading_asset_locks") && migration.includes("QUERY_FAILED"));
 check("residual inventory is durable and sweep-safe", migration.includes("trading_residual_inventory") && migration.includes("RESIDUAL_SWEEP"));
 check("marked pnl and exposure are accounted", trader.includes("calculateExposureLedger") && migration.includes("marked_pnl_quote"));
-check("exploration has a loss budget", migration.includes("lob_exploration_budget_daily") && trader.includes("claim_lob_exploration_budget_v610"));
+check("exploration loss ledger is telemetry-only", migration.includes("lob_exploration_budget_daily") && trader.includes("claim_lob_exploration_budget_v610") && admissionTruth.includes("'enforcement','TELEMETRY_ONLY'") && !trader.includes('close_reason: "LOW_EVIDENCE_BUDGET_EXHAUSTED"'));
+check("partial-fill progress cannot regress", trader.includes("mergeOrderExecutionProgress") && gateway.includes("cancelled.executed_volume > 0"));
 check("joint objective keeps all three user objectives", objective.includes("accountLogGrowthPerHour") && objective.includes("winRate") && objective.includes("capitalTurnsPerHour"));
 check("promotion is 15 to 25 to 50", governance.includes("currentTrafficFraction: 0.15") && governance.includes("expandedTrafficFraction: 0.25") && migration.includes("jsonb_build_array(0.15,0.25,0.50)"));
 check("EV bias uses fill conditional outcomes", migration.includes("FILL_CONDITIONAL") && calibration.includes(version));

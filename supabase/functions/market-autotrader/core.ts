@@ -152,6 +152,54 @@ export function finite(value: unknown, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+export type OrderExecutionProgress = {
+  executedVolume?: unknown;
+  executedFunds?: unknown;
+  averagePrice?: unknown;
+};
+
+export type ResolvedOrderExecutionProgress = {
+  executedVolume: number;
+  executedFunds: number;
+  averagePrice: number;
+};
+
+/**
+ * Exchange order snapshots are not guaranteed to be cumulative-complete.
+ *
+ * Upbit can return a partial-fill cancellation with the cumulative volume present while
+ * `executed_funds` and `trades` are empty. A later snapshot must therefore never erase
+ * execution progress already recorded from an earlier poll. The average price is retained
+ * independently so the final partial fill remains executable even when quote funds are
+ * omitted by the cancellation response.
+ */
+export function mergeOrderExecutionProgress(
+  existing: OrderExecutionProgress,
+  incoming: OrderExecutionProgress,
+): ResolvedOrderExecutionProgress {
+  const existingVolume = Math.max(0, finite(existing.executedVolume));
+  const incomingVolume = Math.max(0, finite(incoming.executedVolume));
+  const executedVolume = Math.max(existingVolume, incomingVolume);
+  const existingFunds = Math.max(0, finite(existing.executedFunds));
+  const incomingFunds = Math.max(0, finite(incoming.executedFunds));
+  let executedFunds = Math.max(existingFunds, incomingFunds);
+  const incomingAverage = Math.max(0, finite(incoming.averagePrice));
+  const existingAverage = Math.max(0, finite(existing.averagePrice));
+  const averagePrice = incomingAverage > 0
+    ? incomingAverage
+    : existingAverage > 0
+    ? existingAverage
+    : executedVolume > 0 && executedFunds > 0
+    ? executedFunds / executedVolume
+    : 0;
+  // If the venue advanced the cumulative volume but omitted cumulative quote funds, retain
+  // the last authoritative average rather than manufacturing a zero-notional fill.
+  if (executedVolume > 0 && averagePrice > 0) {
+    executedFunds = Math.max(executedFunds, executedVolume * averagePrice);
+  }
+  return { executedVolume, executedFunds, averagePrice };
+}
+
 export function clamp(value: number, low: number, high: number): number {
   return Math.min(high, Math.max(low, Number.isFinite(value) ? value : low));
 }

@@ -45,3 +45,23 @@ Deno.test("the dashboard fallback banner is not older than the engine", async ()
   // is what the operator sees — and after a failed deploy it may be all they ever see.
   assertEquals(banner?.[1], scanner, "docs/index.html banner version is stale");
 });
+
+Deno.test("operator status is the authoritative dashboard version source", async () => {
+  const app = await Deno.readTextFile(new URL("docs/app.js", ROOT));
+  const html = await Deno.readTextFile(new URL("docs/index.html", ROOT));
+  assertEquals(
+    app.includes("updateBrandVersion(data?.version, true)"),
+    true,
+    "trading status must update the header from the deployed autotrader",
+  );
+  assertEquals(
+    app.includes("authoritativeEngineVersion || reported"),
+    true,
+    "a cached scanner result must not downgrade the authoritative version",
+  );
+  assertEquals(
+    html.includes('config.js?v=6.10.0-r6'),
+    true,
+    "config cache key must move with the dashboard release",
+  );
+});

@@ -8,6 +8,7 @@
   let activeExchange = "combined";
   let scanning = false;
   let progressTimers = [];
+  let authoritativeEngineVersion = "";
 
   const exchangeSettings = {
     combined: {
@@ -112,8 +113,12 @@
     footerMeta: $("footer-meta"),
   };
 
-  function updateBrandVersion(engineVersion = "") {
-    const version = String(engineVersion || config.uiVersion || "5.2.0").replace(/^v/i, "");
+  function updateBrandVersion(engineVersion = "", authoritative = false) {
+    const reported = String(engineVersion || "").replace(/^v/i, "");
+    if (authoritative && reported) authoritativeEngineVersion = reported;
+    const version = String(
+      authoritativeEngineVersion || reported || config.uiVersion || "unknown",
+    ).replace(/^v/i, "");
     if (elements.brandSubtitle) {
       elements.brandSubtitle.textContent = `UPBIT KRW + BINANCE USDT SPOT · v${version}`;
     }
@@ -1392,6 +1397,7 @@
       const verifiedSamples = finite(governance?.verified_live_outcome_samples);
       const championSamples = finite(governance?.verified_champion_samples);
       const alternateSamples = finite(governance?.verified_alternate_samples);
+      const currentMetrics = alternate?.metrics?.baseline || null;
       const phaseLabel = governance?.phase === "CHALLENGE"
         ? "도전자 실거래 검증"
         : governance?.phase === "CONFIRMATION"
@@ -1403,9 +1409,9 @@
           champion
             ? `CHAMPION P${fmt(champion.version, 0)}${
               initialChampion
-                ? " · 초기 기준 정책"
+                ? " · 초기 기준 정책 · 성과 미확정"
                 : champion.confirmed
-                ? " · 검증 완료"
+                ? " · 승격 검증 완료"
                 : " · 잠정 승격"
             }`
             : `LEGACY ONLINE #${fmt(lob.profile_version, 0)}`,
@@ -1430,6 +1436,20 @@
           finite(calibration?.train_samples) > 0
             ? `학습 ${fmt(calibration.train_samples, 0)}건 · slope ${fmt(calibration.slope, 3)}`
             : "초기값 · 유효 표본 대기",
+        ],
+        [
+          "현행 검증 성과",
+          finite(currentMetrics?.samples) > 0
+            ? `승률 ${fmt(finite(currentMetrics?.winRate) * 100, 1)}% · 평균 ${
+              fmt(currentMetrics?.meanNetBps, 2)
+            } bp`
+            : "현행 표본 대기",
+        ],
+        [
+          "현재 승격 판정",
+          alternate?.metrics?.decision === "HOLD"
+            ? "보류 · 개선 근거 부족"
+            : alternate?.metrics?.decision || "평가 대기",
         ],
         [
           "원시 원장 승률(참고)",
@@ -1512,6 +1532,7 @@
 
   function renderStatus(data) {
     currentStatus = data;
+    updateBrandVersion(data?.version, true);
     const settings = data.settings || {};
     const mode = settings.mode || "—";
     $("trader-mode").textContent = mode;

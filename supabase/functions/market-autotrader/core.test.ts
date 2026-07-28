@@ -9,6 +9,7 @@ import {
   externalQuoteIntervention,
   floorToStep,
   manualReconcileAccounting,
+  mergeOrderExecutionProgress,
   nextTrailingStop,
   reconcileAccount,
   resumeSafetyError,
@@ -126,6 +127,24 @@ Deno.test("gateway order status mapping is idempotent", () => {
   assert(normalizedOrderState("REQUESTED", "FILLED") === "EXCHANGE_DONE");
   assert(normalizedOrderState("APPLIED", "OPEN") === "APPLIED");
   assert(normalizedOrderState("REQUESTED", "PARTIALLY_FILLED_CANCELED") === "EXCHANGE_PARTIAL_CANCELLED");
+});
+
+Deno.test("partial-fill cancellation cannot erase previously observed execution", () => {
+  const merged = mergeOrderExecutionProgress(
+    { executedVolume: 5.70176448, executedFunds: 13245.19888704, averagePrice: 2323 },
+    { executedVolume: 5.70176448, executedFunds: 0, averagePrice: 0 },
+  );
+  near(merged.executedVolume, 5.70176448);
+  near(merged.executedFunds, 13245.19888704);
+  near(merged.averagePrice, 2323);
+});
+
+Deno.test("later cumulative volume uses the retained authoritative average", () => {
+  const merged = mergeOrderExecutionProgress(
+    { executedVolume: 2, executedFunds: 200, averagePrice: 100 },
+    { executedVolume: 3, executedFunds: 0, averagePrice: null },
+  );
+  assertEquals(merged, { executedVolume: 3, executedFunds: 300, averagePrice: 100 });
 });
 
 

@@ -15,6 +15,7 @@ import {
   finite,
   floorToStep,
   manualReconcileAccounting,
+  mergeOrderExecutionProgress,
   nextTrailingStop,
   normalizedOrderState,
   quoteCurrency,
@@ -72,7 +73,11 @@ import {
 import { detectLobPatternName } from "../_shared/lob/patterns.ts";
 import type { LobTrapConfig } from "../_shared/lob/traps.ts";
 import { patternDeployment, unearnedVetoes } from "../_shared/lob/learning.ts";
-import { resolveLobOnlineMarketPolicy } from "../_shared/lob/online.ts";
+import {
+  onlineAdverseEvPenaltyBps,
+  type LobOnlineProfileRow,
+  resolveLobOnlineMarketPolicy,
+} from "../_shared/lob/online.ts";
 import {
   assignLobPolicy,
   type LobPolicyBundle,
@@ -982,7 +987,12 @@ async function loadBuyCandidates(
     ? policy?.patternProfile ?? null
     : null;
   const onlineProfiles = isLobStrategy((settings as any)?.strategy)
-    ? policy?.onlineProfiles ?? []
+    ? await db(
+      "lob_market_profiles?select=exchange,market,pattern,version,samples,profitable_trades," +
+        "target_hits,early_exit_losses,ewma_net_bps,ewma_hold_seconds," +
+        "ewma_profitable_hold_seconds,ewma_mae_bps,ewma_mfe_bps," +
+        "ewma_profitable_mae_bps,exit_counts,updated_at&limit=5000",
+    ).catch(() => policy?.onlineProfiles ?? []) as LobOnlineProfileRow[]
     : [];
   // v6.6.1: the first live deployment proved that a low-sample calibration cannot own the
   // hard gate: 17/17 candidates were discarded and throughput fell to zero. Evidence now
@@ -1016,6 +1026,10 @@ async function loadBuyCandidates(
       // The live pattern is detected again immediately before the order and may resolve to
       // a different per-coin profile.
       (row as any).__online_policy = onlinePolicy;
+      // Live observations are a common admission overlay for both policy lanes. They are
+      // pinned onto the candidate and persisted with an entry, preserving causal audit
+      // while allowing repeated market-specific losses to affect the next order.
+      (row as any).__live_online_profiles = onlineProfiles;
       (row as any).__policy_bundle = policy;
       (row as any).__policy_assignment = policy
         ? {
@@ -1353,12 +1367,23 @@ function baseAssetFee(order: any, fill: any, baseAssetSymbol: string): number {
 
 async function updateOrderFromGateway(orderRow: any, payload: any) {
   const order = payload?.order || payload;
-  const fill = payload?.fill || {
+  const rawFill = payload?.fill || {
     executedVolume: finite(order?.executed_volume),
     executedFunds: finite(order?.executed_funds),
     averagePrice: finite(order?.average_price),
     paidFee: finite(order?.paid_fee),
     feeAsset: order?.fee_asset,
+  };
+  const progress = mergeOrderExecutionProgress({
+    executedVolume: orderRow.executed_volume,
+    executedFunds: orderRow.executed_funds_quote,
+    averagePrice: orderRow.average_fill_price,
+  }, rawFill);
+  const fill = {
+    ...rawFill,
+    executedVolume: progress.executedVolume,
+    executedFunds: progress.executedFunds,
+    averagePrice: progress.averagePrice,
   };
   const feeResolution = feeResolutionFor(orderRow.exchange, orderRow.market, order, fill);
   const feeQuote = feeResolution.feeQuote;
@@ -1384,9 +1409,9 @@ async function updateOrderFromGateway(orderRow: any, payload: any) {
   const rows = await patch("trading_orders", `id=eq.${orderRow.id}`, {
     exchange_order_id: order?.exchange_order_id || null,
     state: normalizedOrderState(orderRow.state, order?.status),
-    executed_volume: finite(fill.executedVolume),
-    average_fill_price: finite(fill.averagePrice) || null,
-    executed_funds_quote: finite(fill.executedFunds),
+    executed_volume: progress.executedVolume,
+    average_fill_price: progress.averagePrice || null,
+    executed_funds_quote: progress.executedFunds,
     paid_fee_quote: feeQuote,
     fee_asset: fill.feeAsset || order?.fee_asset || null,
     fee_accounting_quality: feeQuality,
@@ -2193,8 +2218,11 @@ async function enterCandidateInner(
     }
     const livePattern = detectLobPatternName(features);
     const patternPolicy = patternDeployment(assignedPolicy.patternProfile, livePattern);
+    const liveOnlineProfiles = Array.isArray((candidate as any).__live_online_profiles)
+      ? (candidate as any).__live_online_profiles as LobOnlineProfileRow[]
+      : assignedPolicy.onlineProfiles;
     const onlinePolicy = resolveLobOnlineMarketPolicy(
-      assignedPolicy.onlineProfiles,
+      liveOnlineProfiles,
       exchange,
       candidate.market,
       livePattern,
@@ -2398,11 +2426,19 @@ async function enterCandidateInner(
       Math.max(1000, finite((settings as any).lob_observation_window_ms, 8000)),
       assignedPolicy.policyDefinition.latency,
     );
-    const evBiasPenaltyBps = boundedEvBiasPenalty(
+    const calibratedEvBiasPenaltyBps = boundedEvBiasPenalty(
       (settings as any).scalp_ev_bias_penalty_bps,
       assignedPolicy.policyDefinition.evBias.penaltyMultiplier,
       assignedPolicy.policyDefinition.evBias.maxPenaltyBps,
     );
+    const onlineMarketPenaltyBps = onlineAdverseEvPenaltyBps(
+      onlinePolicy,
+      assignedPolicy.policyDefinition.evBias.maxPenaltyBps,
+    );
+    // These are two estimates of the same optimism, not independent costs. Apply the
+    // stronger one once so repeated negative fee-net evidence corrects admission without
+    // double-counting it or imposing a trade-count cap.
+    const evBiasPenaltyBps = Math.max(calibratedEvBiasPenaltyBps, onlineMarketPenaltyBps);
     const decision = evaluateLobEntry(features, {
       roundTripFeeBps,
       entrySlippageBps: makerEntryEnabled(settings) ? 0 : Math.max(0.1, spreadBps * 0.15),
@@ -2537,8 +2573,12 @@ async function enterCandidateInner(
       risk_sizing: riskSizing,
       evidence_sizing: evidenceSizing,
       forecast_bias_penalty_bps: decision.forecastBiasPenaltyBps,
+      calibrated_forecast_bias_penalty_bps: calibratedEvBiasPenaltyBps,
+      online_market_adverse_penalty_bps: onlineMarketPenaltyBps,
       forecast_bias_samples: Math.max(0, finite((settings as any).scalp_ev_bias_samples, 0)),
-      forecast_bias_source: String((settings as any).scalp_ev_bias_source || "UNMEASURED"),
+      forecast_bias_source: onlineMarketPenaltyBps > calibratedEvBiasPenaltyBps
+        ? "ONLINE_MARKET_EVIDENCE"
+        : String((settings as any).scalp_ev_bias_source || "UNMEASURED"),
       // v6.3: the open question from v5.5 -- what fraction of maker entries actually fill --
       // recorded on every entry so it stops being a guess. `convertToTaker` is the measured
       // recommendation; acting on it costs 2.4x more per round trip on Upbit, so it is
@@ -2864,24 +2904,18 @@ async function enterCandidateInner(
       p_worst_case_loss_quote: explorationWorstCaseLossQuote,
     });
     if (explorationClaim?.allowed !== true) {
-      const cancelled = await patch("trading_positions", `id=eq.${position.id}`, {
-        state: "CANCELLED",
-        reserved_quote: 0,
-        reserved_quantity: 0,
-        reservation_expires_at: null,
-        close_reason: "LOW_EVIDENCE_BUDGET_EXHAUSTED",
-        closed_at: new Date().toISOString(),
-      });
-      position = (cancelled[0] || position) as Position;
-      return {
-        entered: false,
-        exchange,
-        market: candidate.market,
-        reason: "low-evidence daily loss budget exhausted",
-      };
+      // The operator-approved daily stop is `scalp_daily_loss_pct`. This separate learning
+      // ledger is telemetry only: it must never become a hidden second circuit breaker.
+      await event(
+        "LOW_EVIDENCE_BUDGET_OBSERVED",
+        `${exchange}:${candidate.market} learning-loss telemetry threshold exceeded`,
+        { ...(explorationClaim || {}), enforcement: "TELEMETRY_ONLY" },
+        { cycleId, positionId: position.id, level: "INFO" },
+      );
     }
     const explorationBudget = {
       ...(explorationClaim || {}),
+      enforcement: "TELEMETRY_ONLY",
       claimed_loss_quote: explorationWorstCaseLossQuote,
       day_key: explorationClaim?.day_key || explorationClaim?.row?.day_key || null,
     };
@@ -4202,10 +4236,22 @@ async function syncMakerEntry(position: Position, settings: TradingSettings, cyc
     position.min_notional_quote,
     position.exchange === "upbit" ? 5000 : 10,
   );
-  const fillPrice = finite(updated.fill.averagePrice, finite(position.planned_entry_price));
+  const reportedPrice = finite(updated.fill.averagePrice);
+  const reportedFunds = finite(updated.fill.executedFunds);
+  const fillPrice = reportedPrice > 0
+    ? reportedPrice
+    : filled > 0 && reportedFunds > 0
+    ? reportedFunds / filled
+    : finite(position.planned_entry_price);
+  const resolvedFill = {
+    ...updated.fill,
+    executedVolume: filled,
+    averagePrice: fillPrice,
+    executedFunds: Math.max(reportedFunds, filled * Math.max(0, fillPrice)),
+  };
 
   if (filled > 0 && filled * fillPrice >= minNotional) {
-    const opened = await applyEntryAccounting(position, updated.row, updated.fill);
+    const opened = await applyEntryAccounting(position, updated.row, resolvedFill);
     await event(
       "MAKER_ENTRY_FILLED",
       `${position.exchange}:${position.market} maker entry filled`,

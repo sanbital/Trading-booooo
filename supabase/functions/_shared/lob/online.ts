@@ -43,6 +43,28 @@ export interface LobOnlineMarketPolicy {
   patternUpdatedAtMs: number | null;
 }
 
+/**
+ * Charge mature, market-specific adverse evidence back to the admission EV.
+ *
+ * This is deliberately not a trade-count limit and does not penalize unseen markets.
+ * It only corrects an estimated positive edge after the same market/pattern has produced
+ * enough fee-net outcomes to show that the estimate is too optimistic. Candidate ranking
+ * continues to rotate capital toward other markets, preserving discovery and turnover.
+ */
+export function onlineAdverseEvPenaltyBps(
+  policy: Pick<LobOnlineMarketPolicy, "marketSamples" | "meanNetBps">,
+  maxPenaltyBps = 30,
+  startSamples = 8,
+  fullSamples = 40,
+): number {
+  const samples = Math.max(0, Math.floor(finite(policy.marketSamples)));
+  const meanNetBps = policy.meanNetBps == null ? 0 : finite(policy.meanNetBps);
+  if (meanNetBps >= 0 || samples < startSamples) return 0;
+  const denominator = Math.max(1, fullSamples - startSamples);
+  const evidenceWeight = clamp((samples - startSamples) / denominator, 0, 1);
+  return clamp(-meanNetBps * evidenceWeight, 0, Math.max(0, finite(maxPenaltyBps, 30)));
+}
+
 function finite(value: unknown, fallback = 0): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;

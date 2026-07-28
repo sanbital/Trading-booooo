@@ -1,4 +1,8 @@
-import { type LobOnlineProfileRow, resolveLobOnlineMarketPolicy } from "./online.ts";
+import {
+  onlineAdverseEvPenaltyBps,
+  type LobOnlineProfileRow,
+  resolveLobOnlineMarketPolicy,
+} from "./online.ts";
 
 function assert(condition: unknown, message = "assertion failed"): asserts condition {
   if (!condition) throw new Error(message);
@@ -60,6 +64,18 @@ Deno.test("coin evidence is hierarchically shrunk instead of overfitting one tra
   assert(policy.profitableRate! > 0, "two losses must not erase the parent prior");
   assert(policy.profitableRate! < 0.4, "coin losses must still lower priority");
   assert(policy.softExitConfirmations === 4);
+});
+
+Deno.test("adverse EV correction is silent for unseen and immature markets", () => {
+  assert(onlineAdverseEvPenaltyBps({ marketSamples: 0, meanNetBps: -50 }) === 0);
+  assert(onlineAdverseEvPenaltyBps({ marketSamples: 7, meanNetBps: -50 }) === 0);
+  assert(onlineAdverseEvPenaltyBps({ marketSamples: 40, meanNetBps: 5 }) === 0);
+});
+
+Deno.test("mature fee-net market losses reduce admission EV without a trade-count cap", () => {
+  const penalty = onlineAdverseEvPenaltyBps({ marketSamples: 29, meanNetBps: -24 }, 30);
+  assert(penalty > 15 && penalty < 17);
+  assert(onlineAdverseEvPenaltyBps({ marketSamples: 80, meanNetBps: -90 }, 30) === 30);
 });
 
 Deno.test("winner adverse excursion learns a stop floor only after enough successes", () => {

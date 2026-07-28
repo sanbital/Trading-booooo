@@ -21,6 +21,9 @@ Deno.test("v6.10 accounting and exposure ledgers are wired into the runtime", as
   assert(source.includes("recordJointObjectiveSnapshot"));
   assert(source.includes("claim_lob_exploration_budget_v610"));
   assert(source.includes("p_position_id: position.id"));
+  assert(source.includes('enforcement: "TELEMETRY_ONLY"'));
+  assert(!source.includes('close_reason: "LOW_EVIDENCE_BUDGET_EXHAUSTED"'));
+  assert(!source.includes('reason: "low-evidence daily loss budget exhausted"'));
 });
 
 Deno.test("v6.10 migration separates fee quality and settles exploration cancellation", async () => {
@@ -44,4 +47,14 @@ Deno.test("v6.10 self-learning is bounded and cannot rewrite source or operator 
   assert(!migration.includes("scalp_daily_loss_pct="));
   assert(!migration.includes("upbit_enabled="));
   assert(!migration.includes("binance_enabled="));
+});
+
+Deno.test("low-evidence ledger is telemetry and cannot become a hidden daily stop", async () => {
+  const sql = await Deno.readTextFile(
+    new URL("supabase/migrations/202607290001_exploration_budget_telemetry_only.sql", ROOT),
+  );
+  assert(sql.includes("'allowed',true"));
+  assert(sql.includes("'enforcement','TELEMETRY_ONLY'"));
+  assert(sql.includes("v_exceeded :="));
+  assert(!sql.includes("'allowed',false,'reason','DAILY_LOSS_BUDGET_EXHAUSTED'"));
 });

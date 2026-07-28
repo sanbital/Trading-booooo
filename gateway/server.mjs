@@ -354,9 +354,17 @@ function normalizeStatus(exchange, rawStatus, executedQty = 0, originalQty = 0) 
 }
 function normalizeUpbitOrder(order) {
   const trades = Array.isArray(order?.trades) ? order.trades : [];
-  const executedVolume = Number(order?.executed_volume || trades.reduce((sum, row) => sum + Number(row.volume || 0), 0));
-  const executedFunds = Number(order?.executed_funds || trades.reduce((sum, row) => sum + Number(row.funds || Number(row.price || 0) * Number(row.volume || 0)), 0));
-  const paidFee = Number(order?.paid_fee || trades.reduce((sum, row) => sum + Number(row.fee || 0), 0));
+  const tradeVolume = trades.reduce((sum, row) => sum + Number(row.volume || 0), 0);
+  const tradeFunds = trades.reduce(
+    (sum, row) => sum + Number(row.funds || Number(row.price || 0) * Number(row.volume || 0)),
+    0,
+  );
+  const tradeFees = trades.reduce((sum, row) => sum + Number(row.fee || 0), 0);
+  // Upbit occasionally serializes the cumulative fields as the truthy string "0" even
+  // though `trades` contains fills. Do not let that placeholder suppress the fill ledger.
+  const executedVolume = Math.max(Number(order?.executed_volume || 0), tradeVolume);
+  const executedFunds = Math.max(Number(order?.executed_funds || 0), tradeFunds);
+  const paidFee = Math.max(Number(order?.paid_fee || 0), tradeFees);
   const normalizedTrades = trades.map((trade) => ({
     trade_id: trade.uuid || null,
     price: Number(trade.price || 0),
@@ -897,7 +905,20 @@ async function getOrder(exchange, identifier, market) {
 async function cancelOrder(exchange, identifier, market) {
   const id = validateIdentifier(identifier);
   if (exchange === "upbit") {
-    return normalizeUpbitOrder((await upbitRequest("DELETE", "/v1/order", { query: { identifier: id } })).data);
+    const cancelled = normalizeUpbitOrder(
+      (await upbitRequest("DELETE", "/v1/order", { query: { identifier: id } })).data,
+    );
+    if (cancelled.executed_volume > 0 && !(cancelled.executed_funds > 0)) {
+      // The cancellation acknowledgement may omit the trade list. Re-read the terminal
+      // order so a real partial fill can never be reported as zero-notional.
+      try {
+        return await upbitGetOrder(id);
+      } catch {
+        // The autotrader also merges cumulative progress monotonically. Returning the
+        // acknowledgement is safer than treating a successful cancel as a live order.
+      }
+    }
+    return cancelled;
   }
   return normalizeBinanceOrder((await binanceRequest("DELETE", "/api/v3/order", {
     symbol: validateBinanceSymbol(market), origClientOrderId: id,
