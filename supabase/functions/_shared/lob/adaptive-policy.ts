@@ -42,6 +42,16 @@ export interface LobAdaptivePolicyDefinition {
   };
 }
 
+export type LobAdaptivePolicyInput = {
+  /** Legacy rows may still carry schemaVersion 1; normalization always emits version 2. */
+  schemaVersion?: number;
+  family?: LobAdaptivePolicyFamily | string | null;
+  evidenceSizing?: Partial<LobAdaptivePolicyDefinition["evidenceSizing"]> | null;
+  exploration?: Partial<LobAdaptivePolicyDefinition["exploration"]> | null;
+  latency?: Partial<LobAdaptivePolicyDefinition["latency"]> | null;
+  evBias?: Partial<LobAdaptivePolicyDefinition["evBias"]> | null;
+};
+
 export interface LobAdaptiveDiagnostics {
   latencyMeasured: boolean;
   latencySloBreached: boolean;
@@ -93,7 +103,7 @@ function positiveInt(value: unknown, fallback: number, low: number, high: number
 }
 
 export function normalizeLobAdaptivePolicy(
-  raw: Partial<LobAdaptivePolicyDefinition> | null | undefined,
+  raw: LobAdaptivePolicyInput | null | undefined,
 ): LobAdaptivePolicyDefinition {
   const base = DEFAULT_LOB_ADAPTIVE_POLICY;
   const evidence = raw?.evidenceSizing || {} as Partial<LobAdaptivePolicyDefinition["evidenceSizing"]>;
