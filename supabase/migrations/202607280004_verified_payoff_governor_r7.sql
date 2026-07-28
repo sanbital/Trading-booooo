@@ -1,4 +1,4 @@
--- Trading-booooo v6.10.0 r7 — VERIFIED PAYOFF GOVERNOR
+-- Trading-booooo v6.10.0 r7 — VERIFIED PAYOFF GOVERNOR (migration 202607280004)
 --
 -- Adds bounded economic-entry controls only. Operator loss rails, exchange permissions,
 -- spot-only rules, withdrawal/transfer bans and emergency exits are untouched.

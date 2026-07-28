@@ -61,7 +61,7 @@ v6.10.0은 다음 세 가지를 동시에 달성해야 한다.
 - `gateway/server.mjs`
 - `supabase/functions/market-autotrader/index.ts`
 - `supabase/migrations/202607280001_fee_ledger_integrity_v691.sql`
-- `supabase/migrations/202607280002_joint_compound_growth_v610.sql`
+- `supabase/migrations/202607280003_joint_compound_growth_v610.sql`
 
 수정 내용:
 
@@ -364,7 +364,7 @@ sweep은 다음을 모두 만족할 때만 허용한다.
 - `supabase/functions/market-autotrader/residual-ledger.ts`
 - `supabase/functions/market-autotrader/residual-ledger.test.ts`
 - `supabase/functions/_shared/scalp/v6100-invariants.test.ts`
-- `supabase/migrations/202607280002_joint_compound_growth_v610.sql`
+- `supabase/migrations/202607280003_joint_compound_growth_v610.sql`
 - `validation/v6100-deploy-validation.mjs`
 - `SQL_VERIFY_v6100.sql`
 
@@ -393,7 +393,7 @@ sweep은 다음을 모두 만족할 때만 허용한다.
 2. GitHub 저장소 전체 파일 교체
 3. 신규 migration 존재 확인
    - `202607280001_fee_ledger_integrity_v691.sql`
-   - `202607280002_joint_compound_growth_v610.sql`
+   - `202607280003_joint_compound_growth_v610.sql`
 4. 새 커밋 push
 5. GitHub Actions 전체 통과 확인
 6. migration 적용

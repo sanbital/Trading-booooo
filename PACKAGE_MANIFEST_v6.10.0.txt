@@ -256,7 +256,7 @@
 ./supabase/migrations/202607270021_residual_label_integrity_v681.sql
 ./supabase/migrations/202607270022_evidence_sized_live_validation_v690.sql
 ./supabase/migrations/202607280001_fee_ledger_integrity_v691.sql
-./supabase/migrations/202607280002_joint_compound_growth_v610.sql
+./supabase/migrations/202607280003_joint_compound_growth_v610.sql
 ./test-support/assert.ts
 ./validation/lob-source-validation.mjs
 ./validation/v610-deploy-validation.mjs

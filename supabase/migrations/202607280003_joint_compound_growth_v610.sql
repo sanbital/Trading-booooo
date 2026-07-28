@@ -1,4 +1,4 @@
--- Trading-booooo v6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE
+-- Trading-booooo v6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE (migration 202607280003)
 --
 -- Economic contract:
 --   1. maximize cost-net account growth,
