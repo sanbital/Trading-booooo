@@ -14,6 +14,7 @@ const calibration = read("supabase/functions/lob-calibration/index.ts");
 const governance = read("supabase/functions/_shared/lob/governance.ts");
 const adaptive = read("supabase/functions/_shared/lob/adaptive-policy.ts");
 const evidence = read("supabase/functions/_shared/lob/evidence-sizing.ts");
+const allocator = read("supabase/functions/_shared/scalp/risk-allocator.ts");
 const latency = read("supabase/functions/_shared/scalp/latency.ts");
 const evBias = read("supabase/functions/_shared/lob/ev-bias.ts");
 const engine = read("supabase/functions/market-scanner/engine.ts");
@@ -28,8 +29,11 @@ check(
     [autotrader, gateway, dashboard].every((source) => source.includes(version)),
 );
 check(
-  "configured slot count is the hard capital denominator",
-  autotrader.includes("const slots = configuredSlots;") && !autotrader.includes("effectiveSlots("),
+  "slot adaptation preserves total exposure while supporting the operator minimum",
+  autotrader.includes("capitalSupportedSlotCount(") &&
+    allocator.includes("const exposureCap =") &&
+    allocator.includes("return Math.min(configured, supported)") &&
+    !autotrader.includes("effectiveSlots("),
 );
 check(
   "insufficient evidence is size-capped rather than hard-vetoed",
