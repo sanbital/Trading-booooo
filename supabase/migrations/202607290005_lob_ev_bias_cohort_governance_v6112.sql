@@ -120,12 +120,12 @@ begin
   then
     v_weight := v_core_n::numeric / (v_core_n + 80);
     v_approved := least(new.lob_ev_bias_core_cap_bps, greatest(0, -v_core_mean * v_weight));
-    new.scalp_ev_bias_source := 'MEASURED_CORE';
+    new.scalp_ev_bias_source := 'MEASURED';
   elsif v_core_n >= new.lob_ev_bias_min_core_samples then
     -- A mature core cohort does not confirm systematic optimism. Retain only a small
     -- operational cushion instead of carrying exploratory losses into the core lane.
     v_approved := least(v_raw, new.lob_ev_bias_fallback_cap_bps / 2);
-    new.scalp_ev_bias_source := 'CORE_NOT_ADVERSE';
+    new.scalp_ev_bias_source := 'MEASURED';
   else
     -- Low-evidence-only history is informative for local pattern/market penalties and the
     -- exploration budget, but is not representative enough to own a global veto.
@@ -135,7 +135,7 @@ begin
         (new.lob_ev_bias_core_cap_bps - new.lob_ev_bias_fallback_cap_bps) *
         least(1, v_core_n::numeric / greatest(1, new.lob_ev_bias_min_core_samples))
     );
-    new.scalp_ev_bias_source := 'SHRUNK_LOW_EVIDENCE';
+    new.scalp_ev_bias_source := 'UNMEASURED';
   end if;
 
   new.lob_ev_bias_raw_penalty_bps := v_raw;
