@@ -1,11 +1,11 @@
-// Trading-booooo v6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE — autonomous spot orchestrator.
+// Trading-booooo v6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
   adjustedPlanForFill,
   baseAsset,
-  calculateManagedCapital,
   calculateExitResidualAccounting,
+  calculateManagedCapital,
   calculatePositionSize,
   clamp,
   dangerousControlError,
@@ -54,7 +54,10 @@ import {
   type GateConfig,
   SHADOW_CANDIDATE_GATE,
 } from "../_shared/scalp/candidate-gate.ts";
-import { calculateOrderNotional } from "../_shared/scalp/risk-allocator.ts";
+import {
+  calculateOrderNotional,
+  enforceMinimumExecutableNotional,
+} from "../_shared/scalp/risk-allocator.ts";
 import {
   nextReconciliationFailure,
   type ReconciliationPhase,
@@ -74,8 +77,8 @@ import { detectLobPatternName } from "../_shared/lob/patterns.ts";
 import type { LobTrapConfig } from "../_shared/lob/traps.ts";
 import { patternDeployment, unearnedVetoes } from "../_shared/lob/learning.ts";
 import {
-  onlineAdverseEvPenaltyBps,
   type LobOnlineProfileRow,
+  onlineAdverseEvPenaltyBps,
   resolveLobOnlineMarketPolicy,
 } from "../_shared/lob/online.ts";
 import {
@@ -86,10 +89,7 @@ import {
   policyBundleByVersion,
   resolveLobPolicyRuntime,
 } from "../_shared/lob/governance.ts";
-import {
-  evaluateModelHealth,
-  shouldConvertToTaker,
-} from "../_shared/lob/health.ts";
+import { evaluateModelHealth, shouldConvertToTaker } from "../_shared/lob/health.ts";
 import { evaluateLobExit } from "../_shared/lob/exit.ts";
 import type { LobFeatureVector, LobPatternName } from "../_shared/lob/types.ts";
 import { lobSelectionMetrics, rankLobSelections } from "../_shared/lob/selection.ts";
@@ -113,7 +113,7 @@ import {
   summarizeEntryAdmission,
 } from "./entry-admission.ts";
 
-const VERSION = "6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE";
+const VERSION = "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -436,7 +436,7 @@ function defaultSettings(): TradingSettings & JsonRecord {
     max_position_pct: 100,
     risk_per_trade_pct: 100,
     max_order_krw: 1_000_000_000,
-    min_order_krw: 5_000,
+    min_order_krw: 40_000,
     max_daily_buy_krw: 10_000_000_000,
     max_order_usdt: 10_000_000,
     min_order_usdt: clamp(finite(env("BINANCE_MIN_ORDER_USDT"), 10), 5, 1000),
@@ -735,21 +735,26 @@ async function withLeaseRetry<T>(
   return null;
 }
 
-function dayBoundary(exchange: Exchange, daysAgo = 0): string {
-  const offset = exchange === "upbit" ? 9 : 0;
+function dayBoundary(_exchange: Exchange, daysAgo = 0): string {
+  const offset = 9;
   const date = new Date(Date.now() + offset * 3600_000);
   date.setUTCHours(0, 0, 0, 0);
   return new Date(date.getTime() - offset * 3600_000 - daysAgo * 86400_000).toISOString();
 }
-function weekBoundary(exchange: Exchange): string {
-  const offset = exchange === "upbit" ? 9 : 0;
+function weekBoundary(_exchange: Exchange): string {
+  const offset = 9;
   const date = new Date(Date.now() + offset * 3600_000);
   const day = date.getUTCDay() || 7;
   date.setUTCDate(date.getUTCDate() - day + 1);
   date.setUTCHours(0, 0, 0, 0);
   return new Date(date.getTime() - offset * 3600_000).toISOString();
 }
-async function accountStats(exchange: Exchange, equityQuote: number, isPaper: boolean, portfolio: any = null) {
+async function accountStats(
+  exchange: Exchange,
+  equityQuote: number,
+  isPaper: boolean,
+  portfolio: any = null,
+) {
   const [
     activeGlobal,
     activeExchange,
@@ -759,6 +764,7 @@ async function accountStats(exchange: Exchange, equityQuote: number, isPaper: bo
     dailyClosed,
     weeklyClosed,
     recentClosed,
+    dailySeedSnapshots,
   ] = await Promise.all([
     db(
       `trading_positions?is_paper=eq.${isPaper}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id,exchange,market,base_asset,state,remaining_quantity,reserved_quote,reserved_quantity,average_entry_price,planned_entry_price,realized_cost_quote,realized_proceeds_quote,paid_fees_quote,residual_value_quote`,
@@ -794,6 +800,11 @@ async function accountStats(exchange: Exchange, equityQuote: number, isPaper: bo
     db(
       `trading_positions?exchange=eq.${exchange}&is_paper=eq.${isPaper}&state=eq.CLOSED&select=realized_pnl_quote&order=closed_at.desc&limit=20`,
     ),
+    isPaper ? Promise.resolve([]) : db(
+      `trading_account_snapshots?exchange=eq.${exchange}&captured_at=gte.${
+        encodeURIComponent(dayBoundary(exchange))
+      }&select=total_equity_quote,managed_capital_quote,captured_at&order=captured_at.asc&limit=1`,
+    ),
   ]);
   const dailyBoughtQuote = (dailyBuyOrders || []).reduce(
     (sum: number, row: any) => sum + finite(row.executed_funds_quote),
@@ -827,6 +838,13 @@ async function accountStats(exchange: Exchange, equityQuote: number, isPaper: bo
   }, 0);
   const dailyEconomic = daily + markedOpenPnl;
   const weeklyEconomic = weekly + markedOpenPnl;
+  const dailySeedEquityQuote = Math.max(
+    0,
+    finite(
+      dailySeedSnapshots?.[0]?.total_equity_quote,
+      finite(portfolio?.total_equity_quote, equityQuote),
+    ),
+  );
   let consecutiveLosses = 0;
   for (const row of recentClosed || []) {
     if (finite(row.realized_pnl_quote) < 0) consecutiveLosses++;
@@ -844,7 +862,8 @@ async function accountStats(exchange: Exchange, equityQuote: number, isPaper: bo
     weeklyPnlQuote: weeklyEconomic,
     realizedDailyPnlQuote: daily,
     markedOpenPnlQuote: markedOpenPnl,
-    dailyPnlPct: equityQuote > 0 ? dailyEconomic / equityQuote * 100 : 0,
+    dailySeedEquityQuote,
+    dailyPnlPct: dailySeedEquityQuote > 0 ? dailyEconomic / dailySeedEquityQuote * 100 : 0,
     weeklyPnlPct: equityQuote > 0 ? weeklyEconomic / equityQuote * 100 : 0,
     consecutiveLosses,
   };
@@ -1527,7 +1546,10 @@ async function applyExitAccounting(
     : null;
   const baseFee = Math.max(
     0,
-    finite(fill.paidFeeBase, baseAssetFee(orderRow?.raw_response || null, fill, position.base_asset)),
+    finite(
+      fill.paidFeeBase,
+      baseAssetFee(orderRow?.raw_response || null, fill, position.base_asset),
+    ),
   );
   const dustValueQuote = position.exchange === "upbit" ? 1000 : 1;
   const residualPreview = calculateExitResidualAccounting({
@@ -1566,7 +1588,10 @@ async function applyExitAccounting(
       {
         sold_quantity: quantity,
         base_fee_quantity: baseFee,
-        residual_quantity: finite(result?.position?.residual_quantity, residualPreview.residualQuantity),
+        residual_quantity: finite(
+          result?.position?.residual_quantity,
+          residualPreview.residualQuantity,
+        ),
         residual_value_quote: finite(
           result?.position?.residual_value_quote,
           residualPreview.residualValueQuote,
@@ -1684,7 +1709,11 @@ async function managedPortfolio(settings: TradingSettings, exchange: Exchange, p
       botPositionValueQuote: botPositionValue,
       reservedExposureQuote: reservedExposure,
       residualInventoryValueQuote: residualInventoryValue,
-      maxStrategyExposurePct: clamp(finite((settings as any).scalp_max_strategy_exposure_pct, 100), 10, 100),
+      maxStrategyExposurePct: clamp(
+        finite((settings as any).scalp_max_strategy_exposure_pct, 100),
+        10,
+        100,
+      ),
     },
   };
 }
@@ -1848,16 +1877,23 @@ function scalpCandidateGateConfig(settings: TradingSettings & JsonRecord): GateC
 /**
  * Day state for the scalp safety rails: today's realized P&L and the current
  * consecutive-loss streak, scoped to this exchange and paper/live mode.
- * Day boundary follows the exchange convention (KST for upbit, UTC for binance).
+ * Both exchanges use the operator's KST accounting day. The loss denominator is the
+ * first total-equity snapshot after KST midnight, never the shrinking current balance.
  */
-async function scalpDayState(exchange: Exchange, isPaper: boolean): Promise<ScalpDayState> {
-  const now = new Date();
-  const dayStart = exchange === "upbit"
-    ? new Date(new Date(now.getTime() + 9 * 3600_000).setUTCHours(0, 0, 0, 0) - 9 * 3600_000) // KST midnight
-    : new Date(new Date(now).setUTCHours(0, 0, 0, 0)); // UTC midnight
-  const rows = await db(
-    `trading_positions?exchange=eq.${exchange}&is_paper=eq.${isPaper}&state=eq.CLOSED&closed_at=gte.${dayStart.toISOString()}&select=realized_pnl_quote,closed_at&order=closed_at.desc`,
-  ) as Array<{ realized_pnl_quote: number; closed_at: string }>;
+async function scalpDayState(
+  exchange: Exchange,
+  isPaper: boolean,
+  currentEquityQuote: number,
+): Promise<ScalpDayState> {
+  const dayStart = dayBoundary(exchange);
+  const [rows, seedRows] = await Promise.all([
+    db(
+      `trading_positions?exchange=eq.${exchange}&is_paper=eq.${isPaper}&state=eq.CLOSED&closed_at=gte.${dayStart}&select=realized_pnl_quote,closed_at&order=closed_at.desc`,
+    ) as Promise<Array<{ realized_pnl_quote: number; closed_at: string }>>,
+    isPaper ? Promise.resolve([]) : db(
+      `trading_account_snapshots?exchange=eq.${exchange}&captured_at=gte.${dayStart}&select=total_equity_quote,captured_at&order=captured_at.asc&limit=1`,
+    ),
+  ]);
   let realizedPnlQuote = 0;
   let consecutiveLosses = 0;
   let streakOpen = true;
@@ -1869,7 +1905,14 @@ async function scalpDayState(exchange: Exchange, isPaper: boolean): Promise<Scal
       else streakOpen = false;
     }
   }
-  return { realizedPnlQuote, consecutiveLosses };
+  return {
+    realizedPnlQuote,
+    consecutiveLosses,
+    dailySeedEquityQuote: Math.max(
+      0,
+      finite(seedRows?.[0]?.total_equity_quote, currentEquityQuote),
+    ),
+  };
 }
 
 // =====================================================================================
@@ -2127,7 +2170,9 @@ async function enterCandidateInner(
   let activeLock: any = null;
   try {
     activeLock = (await db(
-      `trading_asset_locks?exchange=eq.${exchange}&asset=eq.${encodeURIComponent(base)}&state=eq.LOCKED&select=reason,clean_checks&limit=1`,
+      `trading_asset_locks?exchange=eq.${exchange}&asset=eq.${
+        encodeURIComponent(base)
+      }&state=eq.LOCKED&select=reason,clean_checks&limit=1`,
     ))[0] || null;
   } catch (error) {
     // Rolling-deploy fallback: preserve a known legacy lock, but fail closed when the
@@ -2193,12 +2238,15 @@ async function enterCandidateInner(
     };
   }
   const spreadBps = (bestAsk / bestBid - 1) * 10_000;
-  if (!Number.isFinite(spreadBps) || spreadBps > LIVE_MAX_SPREAD_BPS) {
+  const entryMaxSpreadBps = isLobStrategy((settings as any).strategy)
+    ? Math.max(1, finite((settings as any).lob_max_spread_bps, 60))
+    : LIVE_MAX_SPREAD_BPS;
+  if (!Number.isFinite(spreadBps) || spreadBps > entryMaxSpreadBps) {
     return {
       entered: false,
       exchange,
       market: candidate.market,
-      reason: `spread ${spreadBps.toFixed(1)}bp exceeds ${LIVE_MAX_SPREAD_BPS}bp`,
+      reason: `spread ${spreadBps.toFixed(1)}bp exceeds ${entryMaxSpreadBps}bp`,
     };
   }
 
@@ -2287,7 +2335,8 @@ async function enterCandidateInner(
   const riskSizing = allocationOnly
     ? calculateOrderNotional({
       managedCapitalQuote: finite(managed.managedCapitalQuote),
-      maxStrategyExposureFraction: clamp(finite((settings as any).scalp_max_strategy_exposure_pct, 100), 10, 100) / 100,
+      maxStrategyExposureFraction:
+        clamp(finite((settings as any).scalp_max_strategy_exposure_pct, 100), 10, 100) / 100,
       desiredSlots: slots,
       perTradeLossBudgetQuote: finite(managed.managedCapitalQuote) *
         clamp(finite((settings as any).scalp_max_single_loss_pct, 5), 0.1, 100) / 100,
@@ -2300,8 +2349,15 @@ async function enterCandidateInner(
     })
     : null;
   const slotQuote = allocationOnly ? finite(riskSizing?.slotCap) : Number.POSITIVE_INFINITY;
+  const riskNotional = allocationOnly && riskSizing
+    ? enforceMinimumExecutableNotional(
+      riskSizing,
+      Math.max(limits.minOrder, rules.min_notional),
+      managedAvailable,
+    )
+    : 0;
   const maxOrder = allocationOnly
-    ? Math.min(managedAvailable, finite(riskSizing?.notionalQuote))
+    ? Math.min(managedAvailable, riskNotional)
     : Math.min(limits.maxOrder, plan.recommended > 0 ? plan.recommended : limits.maxOrder);
   const allocationSizing = (entryPrice: number) => {
     const minOrder = Math.max(limits.minOrder, rules.min_notional);
@@ -2485,7 +2541,7 @@ async function enterCandidateInner(
     });
     scalpAudit = {
       strategy: "LOB_SCALP",
-      strategy_revision: "6.10.0-r8-ADMISSION-CONTINUITY",
+      strategy_revision: "6.11.0-r1-CONTINUOUS-ADAPTIVE-EXECUTION",
       recommendation,
       pattern: decision.pattern,
       patterns: decision.patterns,
@@ -2694,7 +2750,11 @@ async function enterCandidateInner(
     const calibration = await loadScalpCalibration();
     const scalpPWin = applyCalibration(rawPWin, calibration);
 
-    const day = await scalpDayState(exchange, settings.mode !== "LIVE_LIMITED");
+    const day = await scalpDayState(
+      exchange,
+      settings.mode !== "LIVE_LIMITED",
+      finite(managed.managedCapitalQuote),
+    );
     const decision = scalpEntryDecision(
       {
         capitalQuote: finite(managed.managedCapitalQuote),
@@ -2795,13 +2855,23 @@ async function enterCandidateInner(
   if (settings.mode === "LIVE_LIMITED" && lowEvidenceTrade) {
     const maxConcurrent = Math.max(
       1,
-      Math.floor(finite(lobSizingContext?.assignedPolicy?.policyDefinition?.exploration?.maxConcurrentLowEvidence, 1)),
+      Math.floor(
+        finite(
+          lobSizingContext?.assignedPolicy?.policyDefinition?.exploration?.maxConcurrentLowEvidence,
+          1,
+        ),
+      ),
     );
     const activeLowEvidence = await db(
       `trading_positions?exchange=eq.${exchange}&state=in.(ENTRY_PENDING,OPEN,EXITING)&metadata->>low_evidence=eq.true&select=id`,
     ).catch(() => []);
     if (activeLowEvidence.length >= maxConcurrent) {
-      return { entered: false, exchange, market: candidate.market, reason: "low-evidence concurrency budget exhausted" };
+      return {
+        entered: false,
+        exchange,
+        market: candidate.market,
+        reason: "low-evidence concurrency budget exhausted",
+      };
     }
     const stopFraction = Math.max(
       0.000001,
@@ -2845,8 +2915,12 @@ async function enterCandidateInner(
     state: "ENTRY_PENDING",
     reserved_quote: quantity * entryPrice,
     reserved_quantity: quantity,
-    reservation_expires_at: new Date(Date.now() + Math.max(30, finite(settings.entry_ttl_seconds, 180)) * 1000).toISOString(),
-    fee_accounting_quality: settings.mode === "LIVE_LIMITED" ? "LEGACY_UNVERIFIED" : "NOT_APPLICABLE",
+    reservation_expires_at: new Date(
+      Date.now() + Math.max(30, finite(settings.entry_ttl_seconds, 180)) * 1000,
+    ).toISOString(),
+    fee_accounting_quality: settings.mode === "LIVE_LIMITED"
+      ? "LEGACY_UNVERIFIED"
+      : "NOT_APPLICABLE",
     fee_accounting_version: "6.10.0",
     is_paper: settings.mode !== "LIVE_LIMITED",
     profile_version: candidate.profile_version || 0,
@@ -2925,7 +2999,11 @@ async function enterCandidateInner(
         exploration_budget: explorationBudget,
       },
     });
-    position = (updated[0] || { ...position, metadata: { ...(position.metadata || {}), exploration_budget: explorationBudget } }) as Position;
+    position = (updated[0] ||
+      {
+        ...position,
+        metadata: { ...(position.metadata || {}), exploration_budget: explorationBudget },
+      }) as Position;
   }
 
   if (settings.mode !== "LIVE_LIMITED") {
@@ -3014,7 +3092,9 @@ async function enterCandidateInner(
         planned_entry_price: makerPrice,
         reserved_quote: makerQuantity * makerPrice,
         reserved_quantity: makerQuantity,
-        reservation_expires_at: new Date(Date.now() + Math.max(30, finite(settings.entry_ttl_seconds, 180)) * 1000).toISOString(),
+        reservation_expires_at: new Date(
+          Date.now() + Math.max(30, finite(settings.entry_ttl_seconds, 180)) * 1000,
+        ).toISOString(),
         metadata: {
           ...(position.metadata || {}),
           maker_entry_identifier: makerIdentifier,
@@ -3084,9 +3164,9 @@ async function enterCandidateInner(
     const message = error instanceof Error ? error.message : String(error);
     await patch("trading_positions", `id=eq.${position.id}`, {
       state: "CANCELLED",
-        reserved_quote: 0,
-        reserved_quantity: 0,
-        reservation_expires_at: null,
+      reserved_quote: 0,
+      reserved_quantity: 0,
+      reservation_expires_at: null,
       close_reason: "ENTRY_TEST_REJECTED",
       closed_at: new Date().toISOString(),
       metadata: { ...(position.metadata || {}), entry_test_error: message },
@@ -3487,7 +3567,9 @@ async function botLockedQuantities(
 async function reconcileFeeLedger(cycleId: string) {
   const due = new Date().toISOString();
   const rows = await db(
-    `trading_orders?state=eq.APPLIED&executed_funds_quote=gt.0&fee_accounting_quality=in.(ESTIMATED,MISSING,LEGACY_UNVERIFIED)&or=(fee_reconcile_next_at.is.null,fee_reconcile_next_at.lte.${encodeURIComponent(due)})&select=*&order=completed_at.desc&limit=12`,
+    `trading_orders?state=eq.APPLIED&executed_funds_quote=gt.0&fee_accounting_quality=in.(ESTIMATED,MISSING,LEGACY_UNVERIFIED)&or=(fee_reconcile_next_at.is.null,fee_reconcile_next_at.lte.${
+      encodeURIComponent(due)
+    })&select=*&order=completed_at.desc&limit=12`,
   ).catch(() => []) as any[];
   const results: any[] = [];
   for (const row of rows) {
@@ -3506,7 +3588,8 @@ async function reconcileFeeLedger(cycleId: string) {
         fee_reconcile_attempts: attempts + 1,
         fee_reconcile_next_at: exact
           ? null
-          : new Date(Date.now() + Math.min(3_600_000, 60_000 * 2 ** Math.min(6, attempts))).toISOString(),
+          : new Date(Date.now() + Math.min(3_600_000, 60_000 * 2 ** Math.min(6, attempts)))
+            .toISOString(),
         fee_reconciled_at: exact ? new Date().toISOString() : null,
       });
       let recomputed: any = null;
@@ -3516,7 +3599,9 @@ async function reconcileFeeLedger(cycleId: string) {
         }).catch(() => null);
         const position = recomputed?.position;
         if (exact && position?.state === "CLOSED" && position?.metadata?.lob_signal) {
-          await rpc("learn_lob_trade_outcome", { p_position_id: row.position_id }).catch(() => null);
+          await rpc("learn_lob_trade_outcome", { p_position_id: row.position_id }).catch(() =>
+            null
+          );
         }
       }
       results.push({ order_id: row.id, quality, exact, recomputed: Boolean(recomputed?.updated) });
@@ -3531,7 +3616,12 @@ async function reconcileFeeLedger(cycleId: string) {
       await event(
         "FEE_RECONCILIATION_RETRY",
         `${row.exchange}:${row.market} fee detail remains unresolved`,
-        { order_id: row.id, attempts: attempts + 1, next_at: nextAt, error: error instanceof Error ? error.message : String(error) },
+        {
+          order_id: row.id,
+          attempts: attempts + 1,
+          next_at: nextAt,
+          error: error instanceof Error ? error.message : String(error),
+        },
         { cycleId, positionId: row.position_id, orderId: row.id, level: "WARNING" },
       );
     }
@@ -3550,9 +3640,13 @@ async function recordJointObjectiveSnapshot(
   ).catch(() => []))[0];
   const latestMs = Date.parse(String(latest?.captured_at || ""));
   if (Number.isFinite(latestMs) && Date.now() - latestMs < 60_000) return null;
-  const flowSince = Number.isFinite(latestMs) ? new Date(latestMs).toISOString() : new Date(0).toISOString();
+  const flowSince = Number.isFinite(latestMs)
+    ? new Date(latestMs).toISOString()
+    : new Date(0).toISOString();
   const cashFlows = await db(
-    `trading_cash_flows?exchange=eq.${exchange}&detected_at=gt.${encodeURIComponent(flowSince)}&select=flow_type,amount_quote`,
+    `trading_cash_flows?exchange=eq.${exchange}&detected_at=gt.${
+      encodeURIComponent(flowSince)
+    }&select=flow_type,amount_quote`,
   ).catch(() => []) as any[];
   const externalFlowQuote = cashFlows.reduce((sum, row) => {
     const amount = Math.max(0, finite(row.amount_quote));
@@ -3561,7 +3655,9 @@ async function recordJointObjectiveSnapshot(
   const managed = await managedPortfolio(settings, exchange, rawPortfolio);
   const dayStart = dayBoundary(exchange);
   const realizedRows = await db(
-    `trading_positions?exchange=eq.${exchange}&is_paper=eq.${settings.mode !== "LIVE_LIMITED"}&state=eq.CLOSED&closed_at=gte.${encodeURIComponent(dayStart)}&select=realized_pnl_quote`,
+    `trading_positions?exchange=eq.${exchange}&is_paper=eq.${
+      settings.mode !== "LIVE_LIMITED"
+    }&state=eq.CLOSED&closed_at=gte.${encodeURIComponent(dayStart)}&select=realized_pnl_quote`,
   ).catch(() => []) as any[];
   const realizedDaily = realizedRows.reduce(
     (sum, row) => sum + finite(row.realized_pnl_quote),
@@ -3596,7 +3692,10 @@ async function recordJointObjectiveSnapshot(
       finite(managed?.managed?.openCostQuote) - finite(managed?.managed?.reservedExposureQuote),
     ),
     reserved_exposure_quote: Math.max(0, finite(managed?.managed?.reservedExposureQuote)),
-    residual_inventory_value_quote: Math.max(0, finite(managed?.managed?.residualInventoryValueQuote)),
+    residual_inventory_value_quote: Math.max(
+      0,
+      finite(managed?.managed?.residualInventoryValueQuote),
+    ),
     marked_open_pnl_quote: markedOpen,
     realized_daily_pnl_quote: realizedDaily,
     external_flow_quote: finite(externalFlowQuote),
@@ -3635,7 +3734,9 @@ async function reconcilePersistedAssetLocks(
     `trading_asset_locks?exchange=eq.${exchange}&state=eq.LOCKED&select=asset,reason,clean_checks`,
   ).catch(() => []) as any[];
   if (!locks.length) return;
-  const activeAssets = new Set(activePositions.map((row) => String(row.base_asset || "").toUpperCase()));
+  const activeAssets = new Set(
+    activePositions.map((row) => String(row.base_asset || "").toUpperCase()),
+  );
   const residualRows = await db(
     `trading_residual_inventory?exchange=eq.${exchange}&state=in.(AVAILABLE,RESERVED_FOR_REENTRY)&select=asset,remaining_quantity`,
   ).catch(() => []) as any[];
@@ -3647,14 +3748,20 @@ async function reconcilePersistedAssetLocks(
   const balances = new Map<string, number>();
   for (const row of Array.isArray(portfolio?.accounts) ? portfolio.accounts : []) {
     const asset = String(row.currency || row.asset || "").toUpperCase();
-    balances.set(asset, Math.max(0, finite(row.balance ?? row.free)) + Math.max(0, finite(row.locked)));
+    balances.set(
+      asset,
+      Math.max(0, finite(row.balance ?? row.free)) + Math.max(0, finite(row.locked)),
+    );
   }
   for (const lock of locks) {
     const asset = String(lock.asset || "").toUpperCase();
     if (orderAssets === null) {
       await rpc("record_asset_lock_check_v610", {
-        p_exchange: exchange, p_asset: asset, p_status: "QUERY_FAILED",
-        p_reason: "OPEN_ORDERS_UNREADABLE", p_metadata: { cycle_id: cycleId },
+        p_exchange: exchange,
+        p_asset: asset,
+        p_status: "QUERY_FAILED",
+        p_reason: "OPEN_ORDERS_UNREADABLE",
+        p_metadata: { cycle_id: cycleId },
       }).catch(() => null);
       continue;
     }
@@ -3667,8 +3774,14 @@ async function reconcilePersistedAssetLocks(
       p_exchange: exchange,
       p_asset: asset,
       p_status: clean ? "CLEAN" : "MISMATCH",
-      p_reason: clean ? "NO_ACTIVE_POSITION_ORDER_OR_UNEXPLAINED_BALANCE" : "LOCK_CONDITION_STILL_PRESENT",
-      p_metadata: { cycle_id: cycleId, account_quantity: accountQty, residual_quantity: residualQty },
+      p_reason: clean
+        ? "NO_ACTIVE_POSITION_ORDER_OR_UNEXPLAINED_BALANCE"
+        : "LOCK_CONDITION_STILL_PRESENT",
+      p_metadata: {
+        cycle_id: cycleId,
+        account_quantity: accountQty,
+        residual_quantity: residualQty,
+      },
     }).catch(() => null);
   }
 }
@@ -3694,7 +3807,9 @@ async function sweepResidualInventory(
   );
   const groups = new Map<string, any[]>();
   for (const row of rows) {
-    const key = `${String(row.asset || "").toUpperCase()}|${String(row.market || "").toUpperCase()}`;
+    const key = `${String(row.asset || "").toUpperCase()}|${
+      String(row.market || "").toUpperCase()
+    }`;
     groups.set(key, [...(groups.get(key) || []), row]);
   }
   for (const group of groups.values()) {
@@ -3704,7 +3819,11 @@ async function sweepResidualInventory(
     // Keep BNB available for Binance commission payment.
     if (exchange === "binance" && asset === "BNB") continue;
     const planned = await db(
-      `scanner_candidates?exchange=eq.${exchange}&market=eq.${encodeURIComponent(market)}&decision=eq.BUY&created_at=gte.${encodeURIComponent(new Date(Date.now() - 300_000).toISOString())}&select=id&limit=1`,
+      `scanner_candidates?exchange=eq.${exchange}&market=eq.${
+        encodeURIComponent(market)
+      }&decision=eq.BUY&created_at=gte.${
+        encodeURIComponent(new Date(Date.now() - 300_000).toISOString())
+      }&select=id&limit=1`,
     ).catch(() => []);
     let quote: any;
     try {
@@ -3796,7 +3915,8 @@ async function sweepResidualInventory(
         const cumulativeBaseFee = Math.max(0, finite(row.paid_fee_base_quantity)) + baseFeeFromRow;
         const originalMarkValue = Math.max(0, finite(row.original_quantity)) *
           Math.max(0, finite(row.mark_price));
-        const residualPnl = cumulativeProceeds - cumulativeFees + remaining * price - originalMarkValue;
+        const residualPnl = cumulativeProceeds - cumulativeFees + remaining * price -
+          originalMarkValue;
         await patch("trading_residual_inventory", `position_id=eq.${row.position_id}`, {
           remaining_quantity: remaining,
           swept_quantity: Math.max(0, finite(row.swept_quantity)) + soldFromRow,
@@ -4271,9 +4391,9 @@ async function syncMakerEntry(position: Position, settings: TradingSettings, cyc
   // Nothing usable filled. This is the normal, free outcome of a maker quote.
   await patch("trading_positions", `id=eq.${position.id}`, {
     state: "CANCELLED",
-        reserved_quote: 0,
-        reserved_quantity: 0,
-        reservation_expires_at: null,
+    reserved_quote: 0,
+    reserved_quantity: 0,
+    reservation_expires_at: null,
     close_reason: drifted ? "MAKER_ENTRY_DRIFTED" : "MAKER_ENTRY_UNFILLED",
     closed_at: new Date().toISOString(),
     metadata: {
@@ -4299,12 +4419,9 @@ async function syncMakerEntry(position: Position, settings: TradingSettings, cyc
 /**
  * v5.9.1: automatic recovery from an INFRASTRUCTURE pause.
  *
- * Three consecutive connectivity failures set `pause_new_entries` with the reason
- * SAFETY_GATEWAY_UNAVAILABLE. When the gateway came back, `gateway_error_count` reset to
- * zero on the next successful cycle — but the pause it had caused did not. The only path
- * that cleared it was an operator pressing resume, so a transient network blip stopped the
- * bot indefinitely. For a system whose whole purpose is to keep trading and fight it out,
- * silently latching off after a hiccup is the worst possible failure mode.
+ * Legacy recovery for releases that latched a global SAFETY_GATEWAY_UNAVAILABLE pause.
+ * v6.11 never creates that automatic pause, but clearing an old one remains necessary
+ * during a rolling deployment.
  *
  * The distinction that matters is WHAT failed:
  *   - infrastructure (gateway unreachable)  -> recovers on its own once healthy again
@@ -4617,13 +4734,19 @@ async function recordReconciliationFailure(
       : new Date(decision.retryAtMs).toISOString(),
   };
   await patch("trading_positions", `id=eq.${position.id}`, { state: decision.state, metadata });
-  if (decision.pauseNewEntries) {
-    await patch("trading_settings", "id=eq.1", {
-      pause_new_entries: true,
-      manual_intervention_required: true,
-      manual_event_reason: `RECONCILIATION_FAILED:${position.exchange}:${position.market}:${phase}`,
-      last_manual_event_at: new Date().toISOString(),
-    });
+  if (decision.manualInterventionRequired) {
+    await rpc("record_asset_lock_check_v610", {
+      p_exchange: position.exchange,
+      p_asset: position.base_asset,
+      p_status: "MISMATCH",
+      p_reason: `RECONCILIATION_FAILED_${phase}`,
+      p_metadata: {
+        cycle_id: cycleId,
+        position_id: position.id,
+        error: message,
+        scope: "ASSET_ONLY",
+      },
+    }).catch(() => null);
   }
   await event(
     decision.manualInterventionRequired
@@ -4635,6 +4758,7 @@ async function recordReconciliationFailure(
       failure_count: decision.failureCount,
       retry_at: metadata.reconciliation_retry_at,
       error: message,
+      scope: "ASSET_ONLY",
     },
     {
       cycleId,
@@ -5040,17 +5164,27 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
   const tracked = await db(
     "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*&order=created_at.asc",
   ) as Position[];
-  for (const ghost of tracked.filter((row) =>
-    row.state !== "ENTRY_PENDING" && finite(row.remaining_quantity) <= 0 &&
-    finite((row as any).reserved_quote) <= 0
-  )) {
+  for (
+    const ghost of tracked.filter((row) =>
+      row.state !== "ENTRY_PENDING" && finite(row.remaining_quantity) <= 0 &&
+      finite((row as any).reserved_quote) <= 0
+    )
+  ) {
     await patch("trading_positions", `id=eq.${ghost.id}`, {
-      state: "CLOSED", remaining_quantity: 0, reserved_quote: 0, reserved_quantity: 0,
-      reservation_expires_at: null, closed_at: ghost.closed_at || new Date().toISOString(),
+      state: "CLOSED",
+      remaining_quantity: 0,
+      reserved_quote: 0,
+      reserved_quantity: 0,
+      reservation_expires_at: null,
+      closed_at: ghost.closed_at || new Date().toISOString(),
       close_reason: ghost.close_reason || "ZERO_QUANTITY_AUTO_CLOSE_V610",
     });
-    await event("ZERO_QUANTITY_GHOST_CLOSED", `${ghost.exchange}:${ghost.market} zero-quantity ghost closed`, {},
-      { cycleId, positionId: ghost.id, level: "WARNING" });
+    await event(
+      "ZERO_QUANTITY_GHOST_CLOSED",
+      `${ghost.exchange}:${ghost.market} zero-quantity ghost closed`,
+      {},
+      { cycleId, positionId: ghost.id, level: "WARNING" },
+    );
   }
   for (
     const position of tracked.filter((p) =>
@@ -5082,7 +5216,10 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
   const championPolicy = lobPolicyRuntime?.champion
     ? policyBundleByVersion(lobPolicyRuntime, finite(lobPolicyRuntime.champion.version))
     : null;
-  const actions: any[] = feeReconciliations.map((row) => ({ action: "FEE_RECONCILIATION", ...row }));
+  const actions: any[] = feeReconciliations.map((row) => ({
+    action: "FEE_RECONCILIATION",
+    ...row,
+  }));
   const prices: Record<string, number> = {};
   const portfolios: Partial<Record<Exchange, any>> = {};
   const books: Record<string, any> = {};
@@ -5152,7 +5289,13 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       portfolio,
       trackedExchangePositions,
     ).catch(() => null);
-    await reconcilePersistedAssetLocks(exchange, portfolio, trackedExchangePositions, allOpenOrderAssets, cycleId);
+    await reconcilePersistedAssetLocks(
+      exchange,
+      portfolio,
+      trackedExchangePositions,
+      allOpenOrderAssets,
+      cycleId,
+    );
     if (!botLockedKnown) {
       await event(
         "BOT_LOCK_UNKNOWN",
@@ -5179,9 +5322,9 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       if (!appliedEntry) {
         await patch("trading_positions", `id=eq.${position.id}`, {
           state: "CANCELLED",
-        reserved_quote: 0,
-        reserved_quantity: 0,
-        reservation_expires_at: null,
+          reserved_quote: 0,
+          reserved_quantity: 0,
+          reservation_expires_at: null,
           close_reason: "UNVERIFIED_OPEN_POSITION",
           closed_at: new Date().toISOString(),
           metadata: {
@@ -5370,41 +5513,25 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           p_metadata: { cycle_id: cycleId, source: "ACCOUNT_RECONCILIATION" },
         }).catch(() => null);
       }
-      // Escalate to a full halt only when the pattern is systemic: an asset that actually
-      // left the account, and more than one of them. One manual sale is not a system fault.
-      const systemic = vanishedAssets.size >= 2 ||
-        (vanishedAssets.size >= 1 &&
-          vanishedAssets.size >= Math.ceil(exchangePositions.length / 2) &&
-          exchangePositions.length >= 2);
-      await patch("trading_settings", "id=eq.1", {
-        ...(systemic
-          ? {
-            pause_new_entries: true,
-            manual_intervention_required: true,
-            manual_event_reason: `SAFETY_POSITION_MISMATCH:${exchange}:${
-              [...vanishedAssets].join(",")
-            }`,
-            last_manual_event_at: new Date().toISOString(),
-          }
-          : {}),
-      });
       await event(
-        systemic ? "SAFETY_PAUSE" : "ASSET_SCOPED_PAUSE",
-        systemic
-          ? `${exchange} multiple positions vanished from the account; all entries paused`
-          : `${exchange} entries paused for affected assets only; other markets continue`,
+        "ASSET_SCOPED_PAUSE",
+        `${exchange} entries paused for affected assets only; other markets continue`,
         {
           exchange,
           assets: [...mismatches],
           vanished: [...vanishedAssets],
-          scope: systemic ? "GLOBAL" : "ASSET",
+          scope: "ASSET",
           source: "ACCOUNT_RECONCILIATION",
         },
-        { cycleId, level: systemic ? "CRITICAL" : "WARNING" },
+        { cycleId, level: vanishedAssets.size ? "CRITICAL" : "WARNING" },
       );
     }
     const residualSweeps = await sweepResidualInventory(
-      exchange, settings, trackedExchangePositions, allOpenOrderAssets, cycleId,
+      exchange,
+      settings,
+      trackedExchangePositions,
+      allOpenOrderAssets,
+      cycleId,
     );
     actions.push(...residualSweeps.map((row) => ({ action: "RESIDUAL_SWEEP", ...row })));
     for (const original of exchangePositions) {
@@ -6441,9 +6568,15 @@ async function status(settings: TradingSettings & JsonRecord) {
     db(
       "scalp_calibration_profiles?active=eq.true&select=created_at,slope,intercept,train_samples,holdout_samples,promotion_reason&order=created_at.desc&limit=1",
     ).catch(() => []),
-    db("trading_asset_locks?state=eq.LOCKED&select=exchange,asset,reason,clean_checks,last_checked_at,last_check_status,locked_at&order=locked_at.asc").catch(() => []),
-    db("trading_residual_inventory?state=in.(AVAILABLE,RESERVED_FOR_REENTRY,SWEEP_PENDING)&select=exchange,asset,market,remaining_quantity,value_quote,state,updated_at&order=updated_at.asc").catch(() => []),
-    db("trading_joint_objective_snapshots?select=*&order=captured_at.desc&limit=40").catch(() => []),
+    db(
+      "trading_asset_locks?state=eq.LOCKED&select=exchange,asset,reason,clean_checks,last_checked_at,last_check_status,locked_at&order=locked_at.asc",
+    ).catch(() => []),
+    db(
+      "trading_residual_inventory?state=in.(AVAILABLE,RESERVED_FOR_REENTRY,SWEEP_PENDING)&select=exchange,asset,market,remaining_quantity,value_quote,state,updated_at&order=updated_at.asc",
+    ).catch(() => []),
+    db("trading_joint_objective_snapshots?select=*&order=captured_at.desc&limit=40").catch(
+      () => [],
+    ),
   ]);
   const accounts: JsonRecord = {};
   const accountStatsByExchange: JsonRecord = {};
@@ -6520,7 +6653,8 @@ async function status(settings: TradingSettings & JsonRecord) {
     accounts,
     account_stats: accountStatsByExchange,
     positions: (positions || []).filter((row: any) =>
-      row.state === "ENTRY_PENDING" || finite(row.remaining_quantity) > 0 || finite(row.reserved_quote) > 0
+      row.state === "ENTRY_PENDING" || finite(row.remaining_quantity) > 0 ||
+      finite(row.reserved_quote) > 0
     ),
     asset_locks: assetLocks || [],
     residual_inventory: residualInventory || [],
@@ -6586,9 +6720,9 @@ async function control(body: JsonRecord, settings: TradingSettings & JsonRecord)
     max_daily_entries_per_exchange: [1, 1000000],
     max_position_pct: [0.5, 25],
     risk_per_trade_pct: [0.05, 2],
-    max_order_krw: [5000, 1_000_000_000],
-    min_order_krw: [5000, 1_000_000],
-    max_daily_buy_krw: [5000, 10_000_000_000],
+    max_order_krw: [40000, 1_000_000_000],
+    min_order_krw: [40000, 1_000_000],
+    max_daily_buy_krw: [40000, 10_000_000_000],
     max_order_usdt: [5, 10_000_000],
     min_order_usdt: [5, 1000],
     max_daily_buy_usdt: [5, 100_000_000],
@@ -6822,24 +6956,21 @@ Deno.serve(async (request: Request) => {
     if (availabilityFailure) {
       const current = await loadSettings().catch(() => ({ gateway_error_count: 0 }));
       const count = 1 + finite(current.gateway_error_count);
-      const pause = count >= 3;
       await patch("trading_settings", "id=eq.1", {
         gateway_error_count: count,
         gateway_recovery_cycles: 0,
-        ...(pause
-          ? {
-            pause_new_entries: true,
-            manual_event_reason: "SAFETY_GATEWAY_UNAVAILABLE",
-            last_manual_event_at: new Date().toISOString(),
-          }
-          : {}),
       }).catch(() => null);
-      if (pause) {
+      if (count >= 3) {
         await event(
-          "SAFETY_PAUSE",
-          "gateway unavailable for 3 consecutive engine calls; entries paused",
-          { error: message, count, source: "GATEWAY_AVAILABILITY" },
-          { cycleId, level: "CRITICAL" },
+          "GATEWAY_DEGRADED_NO_GLOBAL_PAUSE",
+          "gateway availability degraded; future cycles will keep retrying",
+          {
+            error: message,
+            count,
+            source: "GATEWAY_AVAILABILITY",
+            scope: "FAILED_CYCLE_ONLY",
+          },
+          { cycleId, level: "WARNING" },
         ).catch(() => null);
       }
     } else {

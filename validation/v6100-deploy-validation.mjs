@@ -19,13 +19,14 @@ const calibration = read("supabase/functions/lob-calibration/index.ts");
 const telemetrySecurity = read("supabase/migrations/202607280005_private_trading_telemetry_rls.sql");
 const learningRepair = read("supabase/migrations/202607280006_learning_ingestion_and_dashboard_truth.sql");
 const admissionTruth = read("supabase/migrations/202607290001_exploration_budget_telemetry_only.sql");
+const currentVersion = engine.match(/ENGINE_VERSION\s*=\s*"([^"]+)"/)?.[1];
 
 const migrationVersions = migrations.map((name) => name.split("_", 1)[0]);
 check("migration versions are globally unique", new Set(migrationVersions).size === migrationVersions.length);
 check("v6.10 joint objective migration remains present", migrations.includes("202607280003_joint_compound_growth_v610.sql"));
 check("admission-safe payoff migration remains present", migrations.includes("202607280004_verified_payoff_governor_r7.sql"));
 check("private telemetry migration remains present", migrations.includes("202607280005_private_trading_telemetry_rls.sql"));
-check("admission truth repair is newest", migrations.at(-1) === "202607290001_exploration_budget_telemetry_only.sql");
+check("admission truth repair remains present", migrations.includes("202607290001_exploration_budget_telemetry_only.sql"));
 check("decision and latency telemetry enable RLS", ["trading_decisions", "trading_latency_samples"].every((table) => telemetrySecurity.includes(`alter table if exists public.${table}`)) && (telemetrySecurity.match(/enable row level security/g) || []).length === 2);
 check("public telemetry privileges are revoked", ["trading_decisions", "trading_latency_samples"].every((table) => telemetrySecurity.includes(`revoke all privileges on table public.${table}`)) && telemetrySecurity.includes("from public, anon, authenticated"));
 check("no public telemetry policies are created", !/\bcreate\s+policy\b/i.test(telemetrySecurity));
@@ -34,7 +35,11 @@ check("LOB backfill counts successful inserts only", learningRepair.includes("v_
 check("policy status uses the complete verified-voter predicate", learningRepair.includes("fee_accounting_quality in (") && learningRepair.includes("prediction_basis = 'FILL_CONDITIONAL'") && learningRepair.includes("'verified_champion_samples'"));
 check("dashboard distinguishes verified and raw learning", dashboardJs.includes("정책 검증 표본") && dashboardJs.includes("원시 원장 승률(참고)") && dashboardJs.includes("초기 기준 정책"));
 check("dust inventory is grouped before alerting", dashboardJs.includes("summarizeResidualInventory") && dashboardJs.includes("처리 가능 잔량") && dashboardJs.includes("최소주문 미만 잔량"));
-check("release versions agree", [trader, engine, gateway, dashboard].every((s) => s.includes(version)));
+check(
+  "current release versions agree",
+  Boolean(currentVersion) &&
+    [trader, gateway, dashboard].every((source) => source.includes(currentVersion)),
+);
 check("dashboard runtime helpers are defined", dashboardJs.includes("const finite = (value, fallback = 0)") && dashboardJs.indexOf("const finite = (value, fallback = 0)") < dashboardJs.indexOf("finite(row.remaining_quantity)"));
 check("fee quality is separate from residual quality", migration.includes("fee_accounting_quality") && migration.includes("accounting_quality"));
 check("reservations are durable", migration.includes("reserved_quote") && migration.includes("reservation_expires_at"));

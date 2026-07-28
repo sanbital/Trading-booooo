@@ -1,6 +1,6 @@
 import {
-  onlineAdverseEvPenaltyBps,
   type LobOnlineProfileRow,
+  onlineAdverseEvPenaltyBps,
   resolveLobOnlineMarketPolicy,
 } from "./online.ts";
 
@@ -66,16 +66,42 @@ Deno.test("coin evidence is hierarchically shrunk instead of overfitting one tra
   assert(policy.softExitConfirmations === 4);
 });
 
-Deno.test("adverse EV correction is silent for unseen and immature markets", () => {
-  assert(onlineAdverseEvPenaltyBps({ marketSamples: 0, meanNetBps: -50 }) === 0);
-  assert(onlineAdverseEvPenaltyBps({ marketSamples: 7, meanNetBps: -50 }) === 0);
-  assert(onlineAdverseEvPenaltyBps({ marketSamples: 40, meanNetBps: 5 }) === 0);
+Deno.test("adverse EV correction is silent without either market or parent evidence", () => {
+  assert(
+    onlineAdverseEvPenaltyBps({ marketSamples: 0, globalSamples: 0, meanNetBps: -50 }) ===
+      0,
+  );
+  assert(
+    onlineAdverseEvPenaltyBps({ marketSamples: 7, globalSamples: 11, meanNetBps: -50 }) ===
+      0,
+  );
+  assert(
+    onlineAdverseEvPenaltyBps({ marketSamples: 40, globalSamples: 120, meanNetBps: 5 }) ===
+      0,
+  );
+});
+
+Deno.test("an unseen market inherits a partial adverse exchange-pattern correction", () => {
+  const penalty = onlineAdverseEvPenaltyBps({
+    marketSamples: 0,
+    globalSamples: 66,
+    meanNetBps: -20,
+  });
+  assert(penalty > 4.9 && penalty < 5.1);
 });
 
 Deno.test("mature fee-net market losses reduce admission EV without a trade-count cap", () => {
-  const penalty = onlineAdverseEvPenaltyBps({ marketSamples: 29, meanNetBps: -24 }, 30);
+  const penalty = onlineAdverseEvPenaltyBps(
+    { marketSamples: 29, globalSamples: 0, meanNetBps: -24 },
+    30,
+  );
   assert(penalty > 15 && penalty < 17);
-  assert(onlineAdverseEvPenaltyBps({ marketSamples: 80, meanNetBps: -90 }, 30) === 30);
+  assert(
+    onlineAdverseEvPenaltyBps(
+      { marketSamples: 80, globalSamples: 120, meanNetBps: -90 },
+      30,
+    ) === 30,
+  );
 });
 
 Deno.test("winner adverse excursion learns a stop floor only after enough successes", () => {

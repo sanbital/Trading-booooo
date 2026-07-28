@@ -1,18 +1,15 @@
-// Trading-booooo performance API v6.10.0 — fill-time integrity revision r6.
+// Trading-booooo performance API v6.11.0 — continuous adaptive execution revision r1.
 // Read-only authenticated endpoint. A trade exists only when an actual ENTRY fill exists.
 // Closed trades additionally require an actual SELL fill. Mutable order timestamps are never
 // used as market lifecycle timestamps.
 
-import {
-  type JsonRecord as TimeJsonRecord,
-  resolveLifecycleTimes,
-} from "./time-integrity.ts";
+import { type JsonRecord as TimeJsonRecord, resolveLifecycleTimes } from "./time-integrity.ts";
 
 type JsonRecord = Record<string, any>;
 type Exchange = "upbit" | "binance";
 
-const VERSION = "6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE";
-const PERFORMANCE_REVISION = "6.10.0-r6-FILL-TIME-INTEGRITY";
+const VERSION = "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION";
+const PERFORMANCE_REVISION = "6.11.0-r1-CONTINUOUS-ADAPTIVE-EXECUTION";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const SERVICE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
@@ -93,7 +90,9 @@ function kstDayKey(value: string | Date): string {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   const kst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
-  return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, "0")}-${String(kst.getUTCDate()).padStart(2, "0")}`;
+  return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, "0")}-${
+    String(kst.getUTCDate()).padStart(2, "0")
+  }`;
 }
 
 function latestSnapshots(rows: JsonRecord[]): Record<Exchange, JsonRecord | null> {
@@ -145,7 +144,10 @@ function calculateTrade(
     );
   };
 
-  const entryVolume = buys.reduce((sum, order) => sum + Math.max(0, numeric(order.executed_volume)), 0);
+  const entryVolume = buys.reduce(
+    (sum, order) => sum + Math.max(0, numeric(order.executed_volume)),
+    0,
+  );
   const entryFunds = buys.reduce(
     (sum, order) => sum + Math.max(0, numeric(order.executed_funds_quote)),
     0,
@@ -155,7 +157,10 @@ function calculateTrade(
     return { quality: "ENTRY_ECONOMICS_MISSING", trade: null };
   }
 
-  const exitVolume = sells.reduce((sum, order) => sum + Math.max(0, numeric(order.executed_volume)), 0);
+  const exitVolume = sells.reduce(
+    (sum, order) => sum + Math.max(0, numeric(order.executed_volume)),
+    0,
+  );
   const exitFunds = sells.reduce(
     (sum, order) => sum + Math.max(0, numeric(order.executed_funds_quote)),
     0,
@@ -346,11 +351,12 @@ function aggregate(
     capital_utilization: managedCapitalHours > 0 ? exposureHours / managedCapitalHours : 0,
     account_capital_turns_per_hour: accountCapitalTurnoverPerHour,
     objective_observation_hours: observationHours,
-    fee_verified_trade_count: exchangeTrades.filter((trade) =>
-      ["EXACT", "AGGREGATE_EXACT", "THIRD_ASSET_MARKED", "BASE_ASSET_ACCOUNTED"].includes(
-        String(trade.fee_accounting_quality || ""),
-      )
-    ).length,
+    fee_verified_trade_count:
+      exchangeTrades.filter((trade) =>
+        ["EXACT", "AGGREGATE_EXACT", "THIRD_ASSET_MARKED", "BASE_ASSET_ACCOUNTED"].includes(
+          String(trade.fee_accounting_quality || ""),
+        )
+      ).length,
     fill_time_verified_trade_count: exchangeTrades.length,
     return_basis: "ACTUAL_ENTRY_COST_WEIGHTED",
     time_basis: "TRADING_FILLS_EXECUTED_AT",
@@ -369,11 +375,15 @@ Deno.serve(async (request: Request) => {
 
   try {
     const [positions, orders, fills, snapshots, objectiveRows] = await Promise.all([
-      db("trading_positions?is_paper=eq.false&state=in.(OPEN,EXITING,CLOSED)&select=*&order=created_at.desc&limit=2000"),
+      db(
+        "trading_positions?is_paper=eq.false&state=in.(OPEN,EXITING,CLOSED)&select=*&order=created_at.desc&limit=2000",
+      ),
       db("trading_orders?state=eq.APPLIED&select=*&order=requested_at.asc&limit=10000"),
       db("trading_fills?select=*&order=executed_at.asc&limit=20000"),
       db("trading_account_snapshots?select=*&order=captured_at.desc&limit=500"),
-      db("trading_joint_objective_snapshots?engine_version=eq.6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE&select=*&order=captured_at.desc&limit=5000")
+      db(
+        "trading_joint_objective_snapshots?engine_version=in.(6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE,6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION)&select=*&order=captured_at.desc&limit=5000",
+      )
         .catch(() => []),
     ]);
 
@@ -388,8 +398,11 @@ Deno.serve(async (request: Request) => {
         latest[position.exchange as Exchange],
       );
       qualityCounts[result.quality] = (qualityCounts[result.quality] || 0) + 1;
-      if (result.trade &&
-        (result.trade.is_closed || result.trade.remaining_quantity > 0 || result.trade.reserved_quote > 0)) {
+      if (
+        result.trade &&
+        (result.trade.is_closed || result.trade.remaining_quantity > 0 ||
+          result.trade.reserved_quote > 0)
+      ) {
         trades.push(result.trade);
       }
     }

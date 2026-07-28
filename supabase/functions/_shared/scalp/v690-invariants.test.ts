@@ -7,7 +7,10 @@ Deno.test("v6.9 fixes slot concentration and evidence-sizes LOB exploration", as
     new URL("../../market-autotrader/index.ts", import.meta.url),
   );
   assert(source.includes("const slots = configuredSlots;"));
-  assert(!source.includes("effectiveSlots("), "autotrader must not dynamically reduce slot denominator");
+  assert(
+    !source.includes("effectiveSlots("),
+    "autotrader must not dynamically reduce slot denominator",
+  );
   assert(source.includes("lobEvidenceSizeFraction"));
   assert(source.includes("sizeFraction: evidenceSize"));
   assert(source.includes("forecastBiasPenaltyBps"));
@@ -31,15 +34,15 @@ Deno.test("v6.9 migration permits only verified live outcomes to vote", async ()
   assert(!sql.includes("scalp_max_single_loss_pct ="));
 });
 
-Deno.test("v6.9.1 hotfix versions remain aligned", async () => {
+Deno.test("the current scanner and autotrader versions remain aligned", async () => {
   const scanner = await Deno.readTextFile(
     new URL("../../market-scanner/engine.ts", import.meta.url),
   );
   const autotrader = await Deno.readTextFile(
     new URL("../../market-autotrader/index.ts", import.meta.url),
   );
-  const expected = "6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE";
-  assert(scanner.includes(expected));
-  assert(autotrader.includes(expected));
-  assertEquals(expected, "6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE");
+  const scannerVersion = scanner.match(/ENGINE_VERSION = "([^"]+)"/)?.[1];
+  const autotraderVersion = autotrader.match(/const VERSION = "([^"]+)"/)?.[1];
+  assert(scannerVersion);
+  assertEquals(autotraderVersion, scannerVersion);
 });

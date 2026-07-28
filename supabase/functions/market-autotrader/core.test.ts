@@ -3,17 +3,17 @@ import {
   baseAsset,
   calculateManagedCapital,
   calculatePositionSize,
-  decideExit,
   dangerousControlError,
+  decideExit,
   evaluateCircuit,
   externalQuoteIntervention,
   floorToStep,
   manualReconcileAccounting,
   mergeOrderExecutionProgress,
   nextTrailingStop,
+  normalizedOrderState,
   reconcileAccount,
   resumeSafetyError,
-  normalizedOrderState,
   t1SellQuantity,
   type TradingSettings,
 } from "./core.ts";
@@ -21,7 +21,9 @@ import {
 function assert(condition: unknown, message = "assertion failed"): asserts condition {
   if (!condition) throw new Error(message);
 }
-function near(a: number, b: number, tolerance = 1e-8) { assert(Math.abs(a - b) <= tolerance, `${a} != ${b}`); }
+function near(a: number, b: number, tolerance = 1e-8) {
+  assert(Math.abs(a - b) <= tolerance, `${a} != ${b}`);
+}
 /**
  * v6.5 repair: this file used `assertEquals` twenty-one times and never defined or
  * imported it. Every one of those calls is inside the seven reconciliation tests v6.4.0
@@ -42,47 +44,107 @@ function assertEquals<T>(actual: T, expected: T, message?: string): void {
 }
 
 const settings: TradingSettings = {
-  configured: true, mode: "PAPER", pause_new_entries: false, emergency_liquidation: false,
-  upbit_enabled: true, binance_enabled: true,
-  max_open_positions: 4, max_open_positions_per_exchange: 2,
-  max_daily_entries: 8, max_daily_entries_per_exchange: 4,
-  max_position_pct: 5, risk_per_trade_pct: 0.5,
-  max_order_krw: 100000, min_order_krw: 5000, max_daily_buy_krw: 300000,
-  max_order_usdt: 100, min_order_usdt: 10, max_daily_buy_usdt: 300,
-  upbit_allocation_mode: "ALL", upbit_allocation_krw: 0, upbit_reserve_krw: 0,
-  binance_allocation_mode: "ALL", binance_allocation_usdt: 0, binance_reserve_usdt: 0,
-  withdrawal_mode: false, manual_intervention_required: false,
-  max_daily_loss_pct: 1.5, max_weekly_loss_pct: 3, max_consecutive_losses: 3,
-  entry_ttl_seconds: 180, full_scan_interval_seconds: 300, monitor_interval_seconds: 15,
-  max_new_entries_per_scan: 2, suppress_cross_exchange_same_asset: true,
+  configured: true,
+  mode: "PAPER",
+  pause_new_entries: false,
+  emergency_liquidation: false,
+  upbit_enabled: true,
+  binance_enabled: true,
+  max_open_positions: 4,
+  max_open_positions_per_exchange: 2,
+  max_daily_entries: 8,
+  max_daily_entries_per_exchange: 4,
+  max_position_pct: 5,
+  risk_per_trade_pct: 0.5,
+  max_order_krw: 100000,
+  min_order_krw: 5000,
+  max_daily_buy_krw: 300000,
+  max_order_usdt: 100,
+  min_order_usdt: 10,
+  max_daily_buy_usdt: 300,
+  upbit_allocation_mode: "ALL",
+  upbit_allocation_krw: 0,
+  upbit_reserve_krw: 0,
+  binance_allocation_mode: "ALL",
+  binance_allocation_usdt: 0,
+  binance_reserve_usdt: 0,
+  withdrawal_mode: false,
+  manual_intervention_required: false,
+  max_daily_loss_pct: 1.5,
+  max_weekly_loss_pct: 3,
+  max_consecutive_losses: 3,
+  entry_ttl_seconds: 180,
+  full_scan_interval_seconds: 300,
+  monitor_interval_seconds: 15,
+  max_new_entries_per_scan: 2,
+  suppress_cross_exchange_same_asset: true,
 };
 
 Deno.test("generic quote sizing works for KRW and USDT", () => {
   const krw = calculatePositionSize({
-    equityQuote: 10_000_000, availableQuote: 3_000_000, entryPrice: 1000, stopPrice: 970,
-    maxPositionPct: 5, riskPerTradePct: 0.5, maxOrderQuote: 100_000, minOrderQuote: 5000, quoteStep: 1000,
+    equityQuote: 10_000_000,
+    availableQuote: 3_000_000,
+    entryPrice: 1000,
+    stopPrice: 970,
+    maxPositionPct: 5,
+    riskPerTradePct: 0.5,
+    maxOrderQuote: 100_000,
+    minOrderQuote: 5000,
+    quoteStep: 1000,
   });
-  assert(krw.allowed); assert(krw.notionalQuote === 100_000);
+  assert(krw.allowed);
+  assert(krw.notionalQuote === 100_000);
   const usdt = calculatePositionSize({
-    equityQuote: 2000, availableQuote: 500, entryPrice: 2, stopPrice: 1.94,
-    maxPositionPct: 5, riskPerTradePct: 0.5, maxOrderQuote: 100, minOrderQuote: 10, quoteStep: 0.01,
+    equityQuote: 2000,
+    availableQuote: 500,
+    entryPrice: 2,
+    stopPrice: 1.94,
+    maxPositionPct: 5,
+    riskPerTradePct: 0.5,
+    maxOrderQuote: 100,
+    minOrderQuote: 10,
+    quoteStep: 0.01,
   });
-  assert(usdt.allowed); assert(usdt.notionalQuote <= 100 && usdt.notionalQuote >= 10);
+  assert(usdt.allowed);
+  assert(usdt.notionalQuote <= 100 && usdt.notionalQuote >= 10);
 });
 
-
 Deno.test("managed capital supports full and fixed exchange allocation", () => {
-  const all = calculateManagedCapital({ totalEquityQuote: 1_000_000, availableQuote: 600_000, openCostQuote: 200_000, allocationMode: "ALL", fixedAllocationQuote: 0, reserveQuote: 100_000 });
+  const all = calculateManagedCapital({
+    totalEquityQuote: 1_000_000,
+    availableQuote: 600_000,
+    openCostQuote: 200_000,
+    allocationMode: "ALL",
+    fixedAllocationQuote: 0,
+    reserveQuote: 100_000,
+  });
   assert(all.managedCapitalQuote === 900_000);
   assert(all.managedAvailableQuote === 600_000);
-  const fixed = calculateManagedCapital({ totalEquityQuote: 1_000_000, availableQuote: 800_000, openCostQuote: 200_000, allocationMode: "FIXED", fixedAllocationQuote: 500_000, reserveQuote: 100_000 });
+  const fixed = calculateManagedCapital({
+    totalEquityQuote: 1_000_000,
+    availableQuote: 800_000,
+    openCostQuote: 200_000,
+    allocationMode: "FIXED",
+    fixedAllocationQuote: 500_000,
+    reserveQuote: 100_000,
+  });
   assert(fixed.managedCapitalQuote === 500_000);
   assert(fixed.managedAvailableQuote === 300_000);
 });
 
 Deno.test("invalid stop blocks sizing", () => {
-  assert(!calculatePositionSize({ equityQuote: 1000, availableQuote: 1000, entryPrice: 10, stopPrice: 11,
-    maxPositionPct: 5, riskPerTradePct: 0.5, maxOrderQuote: 100, minOrderQuote: 10 }).allowed);
+  assert(
+    !calculatePositionSize({
+      equityQuote: 1000,
+      availableQuote: 1000,
+      entryPrice: 10,
+      stopPrice: 11,
+      maxPositionPct: 5,
+      riskPerTradePct: 0.5,
+      maxOrderQuote: 100,
+      minOrderQuote: 10,
+    }).allowed,
+  );
 });
 
 Deno.test("floorToStep handles Binance precision", () => {
@@ -90,7 +152,14 @@ Deno.test("floorToStep handles Binance precision", () => {
 });
 
 Deno.test("exit priority is emergency then stop then targets then time", () => {
-  const p = { remaining_quantity: 10, stop_price: 90, target_1: 110, target_2: 120, t1_completed: false, max_holding_at: new Date(Date.now() + 100000).toISOString() };
+  const p = {
+    remaining_quantity: 10,
+    stop_price: 90,
+    target_1: 110,
+    target_2: 120,
+    t1_completed: false,
+    max_holding_at: new Date(Date.now() + 100000).toISOString(),
+  };
   assert(decideExit(p, 100, Date.now(), true).action === "EMERGENCY");
   assert(decideExit(p, 89).action === "STOP");
   assert(decideExit(p, 111).action === "TARGET_1");
@@ -99,18 +168,33 @@ Deno.test("exit priority is emergency then stop then targets then time", () => {
 
 Deno.test("circuit enforces global and exchange limits", () => {
   const result = evaluateCircuit({
-    mode: "LIVE_LIMITED", configured: true, exchangeEnabled: true, pauseNewEntries: false,
-    emergencyLiquidation: false, availableQuote: 1000, minOrderQuote: 10,
-    openPositionsGlobal: 2, openPositionsExchange: 2, entriesTodayGlobal: 2, entriesTodayExchange: 1,
-    dailyBoughtQuote: 0, maxDailyBuyQuote: 300,
-    dailyPnlPct: 0, weeklyPnlPct: 0, consecutiveLosses: 0, settings,
+    mode: "LIVE_LIMITED",
+    configured: true,
+    exchangeEnabled: true,
+    pauseNewEntries: false,
+    emergencyLiquidation: false,
+    availableQuote: 1000,
+    minOrderQuote: 10,
+    openPositionsGlobal: 2,
+    openPositionsExchange: 2,
+    entriesTodayGlobal: 2,
+    entriesTodayExchange: 1,
+    dailyBoughtQuote: 0,
+    maxDailyBuyQuote: 300,
+    dailyPnlPct: 0,
+    weeklyPnlPct: 0,
+    consecutiveLosses: 0,
+    settings,
   });
-  assert(!result.allowNewEntry); assert(result.reasons.some((x) => x.includes("exchange maximum")));
+  assert(!result.allowNewEntry);
+  assert(result.reasons.some((x) => x.includes("exchange maximum")));
 });
 
 Deno.test("fill adjustment preserves percentage structure", () => {
   const p = adjustedPlanForFill(100, 102, 95, 110, 120);
-  near(p.stopPrice, 96.9); near(p.target1, 112.2); near(p.target2 || 0, 122.4);
+  near(p.stopPrice, 96.9);
+  near(p.target1, 112.2);
+  near(p.target2 || 0, 122.4);
 });
 
 Deno.test("partial sell and trail are bounded", () => {
@@ -126,7 +210,9 @@ Deno.test("market base normalization prevents cross-exchange duplicate exposure"
 Deno.test("gateway order status mapping is idempotent", () => {
   assert(normalizedOrderState("REQUESTED", "FILLED") === "EXCHANGE_DONE");
   assert(normalizedOrderState("APPLIED", "OPEN") === "APPLIED");
-  assert(normalizedOrderState("REQUESTED", "PARTIALLY_FILLED_CANCELED") === "EXCHANGE_PARTIAL_CANCELLED");
+  assert(
+    normalizedOrderState("REQUESTED", "PARTIALLY_FILLED_CANCELED") === "EXCHANGE_PARTIAL_CANCELLED",
+  );
 });
 
 Deno.test("partial-fill cancellation cannot erase previously observed execution", () => {
@@ -147,23 +233,38 @@ Deno.test("later cumulative volume uses the retained authoritative average", () 
   assertEquals(merged, { executedVolume: 3, executedFunds: 300, averagePrice: 100 });
 });
 
-
 Deno.test("dangerous controls require server-side confirmations", () => {
-  if (dangerousControlError({ mode: "LIVE_LIMITED" }) == null) throw new Error("LIVE confirmation must be required");
-  if (dangerousControlError({ mode: "LIVE_LIMITED", confirmation: "ENABLE_LIVE" }) != null) throw new Error("valid LIVE confirmation rejected");
-  if (dangerousControlError({ emergencyLiquidation: true }) == null) throw new Error("emergency confirmation must be required");
-  if (dangerousControlError({ emergencyLiquidation: true, confirmation: "LIQUIDATE_NOW" }) != null) throw new Error("valid emergency confirmation rejected");
+  if (dangerousControlError({ mode: "LIVE_LIMITED" }) == null) {
+    throw new Error("LIVE confirmation must be required");
+  }
+  if (dangerousControlError({ mode: "LIVE_LIMITED", confirmation: "ENABLE_LIVE" }) != null) {
+    throw new Error("valid LIVE confirmation rejected");
+  }
+  if (dangerousControlError({ emergencyLiquidation: true }) == null) {
+    throw new Error("emergency confirmation must be required");
+  }
+  if (
+    dangerousControlError({ emergencyLiquidation: true, confirmation: "LIQUIDATE_NOW" }) != null
+  ) throw new Error("valid emergency confirmation rejected");
 });
 
-Deno.test("external quote increases and decreases both pause new entries", () => {
+Deno.test("external quote changes are recorded without an automatic global pause", () => {
   const increase = externalQuoteIntervention("upbit", 10000, false);
   const decrease = externalQuoteIntervention("binance", -50, false);
-  if (!increase.pauseNewEntries || !increase.manualInterventionRequired || !increase.reason.includes("increased")) throw new Error("external increase must pause");
-  if (!decrease.pauseNewEntries || !decrease.manualInterventionRequired || !decrease.reason.includes("decreased")) throw new Error("external decrease must pause");
+  if (
+    increase.pauseNewEntries || increase.manualInterventionRequired ||
+    !increase.reason.includes("increased")
+  ) throw new Error("external increase must remain telemetry only");
+  if (
+    decrease.pauseNewEntries || decrease.manualInterventionRequired ||
+    !decrease.reason.includes("decreased")
+  ) throw new Error("external decrease must remain telemetry only");
   const withdrawal = externalQuoteIntervention("upbit", 10000, true);
-  if (!withdrawal.pauseNewEntries || withdrawal.manualInterventionRequired || !withdrawal.reason.startsWith("WITHDRAWAL_MODE")) throw new Error("withdrawal mode classification invalid");
+  if (
+    withdrawal.pauseNewEntries || withdrawal.manualInterventionRequired ||
+    !withdrawal.reason.startsWith("WITHDRAWAL_MODE")
+  ) throw new Error("withdrawal mode classification invalid");
 });
-
 
 Deno.test("quote-currency capital base excludes unrelated manual coin equity", () => {
   const result = calculateManagedCapital({
@@ -176,7 +277,9 @@ Deno.test("quote-currency capital base excludes unrelated manual coin equity", (
     reserveQuote: 100_000,
   });
   if (result.capitalBaseQuote !== 1_000_000) throw new Error("quote capital base mismatch");
-  if (result.managedCapitalQuote !== 900_000) throw new Error("manual coin equity must not inflate allocation");
+  if (result.managedCapitalQuote !== 900_000) {
+    throw new Error("manual coin equity must not inflate allocation");
+  }
 });
 
 Deno.test("manual reconciliation resets prior bot proceeds and keeps only remaining entry basis", () => {
@@ -210,7 +313,13 @@ Deno.test("resume cannot cancel an unfinished emergency liquidation", () => {
   assert(resumeSafetyError({ emergencyLiquidation: true, activePositionCount: 1 }) !== null);
   assert(resumeSafetyError({ emergencyLiquidation: true, activePositionCount: 0 }) === null);
   assert(resumeSafetyError({ emergencyLiquidation: false, activePositionCount: 5 }) === null);
-  assert(resumeSafetyError({ emergencyLiquidation: false, activePositionCount: 0, unresolvedManualCount: 1 }) !== null);
+  assert(
+    resumeSafetyError({
+      emergencyLiquidation: false,
+      activePositionCount: 0,
+      unresolvedManualCount: 1,
+    }) !== null,
+  );
 });
 
 Deno.test("a pause names which condition caused it", () => {
@@ -218,16 +327,29 @@ Deno.test("a pause names which condition caused it", () => {
   // unresolved account mismatch alike, so the log could not tell the operator which of
   // three different problems they were looking at.
   const base = {
-    mode: "LIVE_LIMITED" as const, configured: true, exchangeEnabled: true,
-    emergencyLiquidation: false, availableQuote: 1_000_000, minOrderQuote: 5000,
-    openPositionsGlobal: 0, openPositionsExchange: 0,
-    entriesTodayGlobal: 0, entriesTodayExchange: 0,
-    dailyBoughtQuote: 0, maxDailyBuyQuote: 1_000_000_000,
-    dailyPnlPct: 0, weeklyPnlPct: 0, consecutiveLosses: 0,
+    mode: "LIVE_LIMITED" as const,
+    configured: true,
+    exchangeEnabled: true,
+    emergencyLiquidation: false,
+    availableQuote: 1_000_000,
+    minOrderQuote: 5000,
+    openPositionsGlobal: 0,
+    openPositionsExchange: 0,
+    entriesTodayGlobal: 0,
+    entriesTodayExchange: 0,
+    dailyBoughtQuote: 0,
+    maxDailyBuyQuote: 1_000_000_000,
+    dailyPnlPct: 0,
+    weeklyPnlPct: 0,
+    consecutiveLosses: 0,
     settings: {
-      max_open_positions: 10, max_open_positions_per_exchange: 10,
-      max_daily_entries: 100, max_daily_entries_per_exchange: 100,
-      max_daily_loss_pct: 20, max_weekly_loss_pct: 100, max_consecutive_losses: 100,
+      max_open_positions: 10,
+      max_open_positions_per_exchange: 10,
+      max_daily_entries: 100,
+      max_daily_entries_per_exchange: 100,
+      max_daily_loss_pct: 20,
+      max_weekly_loss_pct: 100,
+      max_consecutive_losses: 100,
     } as any,
   };
   const operator = evaluateCircuit({ ...base, pauseNewEntries: true, pausedByOperator: true });
@@ -236,11 +358,18 @@ Deno.test("a pause names which condition caused it", () => {
   const withdrawal = evaluateCircuit({ ...base, pauseNewEntries: true, withdrawalMode: true });
   assert(withdrawal.reasons.some((r) => r.includes("withdrawal")), withdrawal.reasons.join(" / "));
 
-  const manual = evaluateCircuit({ ...base, pauseNewEntries: true, manualInterventionRequired: true });
+  const manual = evaluateCircuit({
+    ...base,
+    pauseNewEntries: true,
+    manualInterventionRequired: true,
+  });
   assert(manual.reasons.some((r) => r.includes("manual account")), manual.reasons.join(" / "));
 
   // Nothing blocking: entries allowed.
-  assert(evaluateCircuit({ ...base, pauseNewEntries: false }).allowNewEntry, "entries should be allowed");
+  assert(
+    evaluateCircuit({ ...base, pauseNewEntries: false }).allowNewEntry,
+    "entries should be allowed",
+  );
 });
 
 // v6.4 — the two false positives that stopped live trading.
@@ -265,7 +394,7 @@ Deno.test("fee dust never pauses an asset", () => {
 Deno.test("a difference worth less than the dust threshold is never a manual trade", () => {
   const out = reconcileAccount({
     bookedQuantity: 1,
-    freeQuantity: 0.94,         // 0.06 missing = 6 USD, under the 10 USD floor
+    freeQuantity: 0.94, // 0.06 missing = 6 USD, under the 10 USD floor
     lockedQuantity: 0,
     botLockedQuantity: 0,
     price: 100,
@@ -298,7 +427,7 @@ Deno.test("the bot's own resting sell is not a manual lock", () => {
     bookedQuantity: 10,
     freeQuantity: 0,
     lockedQuantity: 10,
-    botLockedQuantity: 10,      // our own take-profit
+    botLockedQuantity: 10, // our own take-profit
     price: 100,
     dustToleranceQuote: 10,
     feePctPerSide: 0.1,
@@ -313,7 +442,7 @@ Deno.test("unreadable open orders fail closed for entries but preserve exits", (
     bookedQuantity: 10,
     freeQuantity: 0,
     lockedQuantity: 10,
-    botLockedQuantity: null,    // the open_orders call failed
+    botLockedQuantity: null, // the open_orders call failed
     price: 100,
     dustToleranceQuote: 10,
     feePctPerSide: 0.1,
@@ -346,7 +475,7 @@ Deno.test("a user limit order on the coin blocks entries but leaves the free par
     bookedQuantity: 10,
     freeQuantity: 4,
     lockedQuantity: 6,
-    botLockedQuantity: 0,       // the lock is not ours
+    botLockedQuantity: 0, // the lock is not ours
     price: 100,
     dustToleranceQuote: 10,
     feePctPerSide: 0.1,

@@ -38,7 +38,6 @@ export type TradingSettings = {
   suppress_cross_exchange_same_asset: boolean;
 };
 
-
 export type ManagedCapitalInput = {
   totalEquityQuote?: number;
   capitalBaseQuote?: number;
@@ -65,7 +64,9 @@ export function calculateManagedCapital(input: ManagedCapitalInput): ManagedCapi
   const reserve = clamp(finite(input.reserveQuote), 0, capitalBase);
   const usableEquity = Math.max(0, capitalBase - reserve);
   const mode = input.allocationMode === "FIXED" ? "FIXED" : "ALL";
-  const requested = mode === "FIXED" ? Math.max(0, finite(input.fixedAllocationQuote)) : usableEquity;
+  const requested = mode === "FIXED"
+    ? Math.max(0, finite(input.fixedAllocationQuote))
+    : usableEquity;
   const managedCapital = Math.min(usableEquity, requested);
   const unallocatedWithinCap = Math.max(0, managedCapital - openCost);
   return {
@@ -210,7 +211,6 @@ export function floorToStep(value: number, step: number): number {
   return Math.floor((value + s * 1e-10) / s) * s;
 }
 
-
 export type ExitResidualAccountingInput = {
   remainingQuantity: number;
   soldQuantity: number;
@@ -266,7 +266,14 @@ export function calculatePositionSize(input: SizingInput): SizingResult {
   const entry = finite(input.entryPrice);
   const stop = finite(input.stopPrice);
   if (!(entry > 0) || !(stop > 0) || stop >= entry) {
-    return { allowed: false, notionalQuote: 0, quantity: 0, stopDistancePct: 0, riskBudgetQuote: 0, reason: "invalid entry/stop" };
+    return {
+      allowed: false,
+      notionalQuote: 0,
+      quantity: 0,
+      stopDistancePct: 0,
+      riskBudgetQuote: 0,
+      reason: "invalid entry/stop",
+    };
   }
   const stopDistance = (entry - stop) / entry;
   const extraLoss = clamp(finite(input.extraLossPct, 0.002), 0, 0.03);
@@ -313,19 +320,25 @@ export function decideExit(
   if (!(price > 0) || finite(position.remaining_quantity) <= 0) {
     return { action: "NONE", fraction: 0, reason: "no executable quantity or price" };
   }
-  if (emergency) return { action: "EMERGENCY", fraction: 1, reason: "emergency liquidation enabled" };
+  if (emergency) {
+    return { action: "EMERGENCY", fraction: 1, reason: "emergency liquidation enabled" };
+  }
   const effectiveStop = position.t1_completed && finite(position.trailing_stop) > 0
     ? Math.max(finite(position.stop_price), finite(position.trailing_stop))
     : finite(position.stop_price);
   if (price <= effectiveStop) {
     return {
-      action: position.t1_completed && finite(position.trailing_stop) >= finite(position.stop_price) ? "TRAIL" : "STOP",
+      action: position.t1_completed && finite(position.trailing_stop) >= finite(position.stop_price)
+        ? "TRAIL"
+        : "STOP",
       fraction: 1,
       reason: `price ${price} <= exit stop ${effectiveStop}`,
     };
   }
   const target2 = finite(position.target_2);
-  if (target2 > 0 && price >= target2) return { action: "TARGET_2", fraction: 1, reason: "second target reached" };
+  if (target2 > 0 && price >= target2) {
+    return { action: "TARGET_2", fraction: 1, reason: "second target reached" };
+  }
   if (!position.t1_completed && price >= finite(position.target_1)) {
     return { action: "TARGET_1", fraction: 0, reason: "first target reached" };
   }
@@ -351,32 +364,62 @@ export function evaluateCircuit(input: CircuitInput): CircuitResult {
   if (input.pausedByOperator) reasons.push("new entries paused by operator");
   if (input.withdrawalMode) reasons.push("withdrawal mode is active");
   if (input.manualInterventionRequired) reasons.push("manual account intervention is unresolved");
-  if (input.pauseNewEntries && !input.pausedByOperator && !input.withdrawalMode && !input.manualInterventionRequired) {
+  if (
+    input.pauseNewEntries && !input.pausedByOperator && !input.withdrawalMode &&
+    !input.manualInterventionRequired
+  ) {
     reasons.push("new entries are paused");
   }
   if (input.emergencyLiquidation) reasons.push("emergency liquidation active");
-  if (input.openPositionsGlobal >= input.settings.max_open_positions) reasons.push("global maximum open positions reached");
-  if (input.openPositionsExchange >= input.settings.max_open_positions_per_exchange) reasons.push("exchange maximum open positions reached");
-  if (input.entriesTodayGlobal >= input.settings.max_daily_entries) reasons.push("global maximum daily entries reached");
-  if (input.entriesTodayExchange >= input.settings.max_daily_entries_per_exchange) reasons.push("exchange maximum daily entries reached");
-  if (input.dailyBoughtQuote >= input.maxDailyBuyQuote) reasons.push("exchange daily buy notional limit reached");
-  if (input.availableQuote < input.minOrderQuote) reasons.push("insufficient available quote balance");
-  if (input.dailyPnlPct <= -Math.abs(input.settings.max_daily_loss_pct)) reasons.push("daily loss limit reached");
-  if (input.weeklyPnlPct <= -Math.abs(input.settings.max_weekly_loss_pct)) reasons.push("weekly loss limit reached");
-  if (input.consecutiveLosses >= input.settings.max_consecutive_losses) reasons.push("consecutive loss limit reached");
+  if (input.openPositionsGlobal >= input.settings.max_open_positions) {
+    reasons.push("global maximum open positions reached");
+  }
+  if (input.openPositionsExchange >= input.settings.max_open_positions_per_exchange) {
+    reasons.push("exchange maximum open positions reached");
+  }
+  if (input.entriesTodayGlobal >= input.settings.max_daily_entries) {
+    reasons.push("global maximum daily entries reached");
+  }
+  if (input.entriesTodayExchange >= input.settings.max_daily_entries_per_exchange) {
+    reasons.push("exchange maximum daily entries reached");
+  }
+  if (input.dailyBoughtQuote >= input.maxDailyBuyQuote) {
+    reasons.push("exchange daily buy notional limit reached");
+  }
+  if (input.availableQuote < input.minOrderQuote) {
+    reasons.push("insufficient available quote balance");
+  }
+  if (input.dailyPnlPct <= -Math.abs(input.settings.max_daily_loss_pct)) {
+    reasons.push("daily loss limit reached");
+  }
+  if (input.weeklyPnlPct <= -Math.abs(input.settings.max_weekly_loss_pct)) {
+    reasons.push("weekly loss limit reached");
+  }
+  if (input.consecutiveLosses >= input.settings.max_consecutive_losses) {
+    reasons.push("consecutive loss limit reached");
+  }
   return {
     allowNewEntry: reasons.length === 0 && input.mode !== "PAUSED",
-    hardStop: input.emergencyLiquidation || input.dailyPnlPct <= -Math.abs(input.settings.max_daily_loss_pct) ||
+    hardStop: input.emergencyLiquidation ||
+      input.dailyPnlPct <= -Math.abs(input.settings.max_daily_loss_pct) ||
       input.weeklyPnlPct <= -Math.abs(input.settings.max_weekly_loss_pct),
     reasons,
   };
 }
 
-export function adjustedPlanForFill(plannedEntry: number, fillEntry: number, stop: number, target1: number, target2: number | null) {
+export function adjustedPlanForFill(
+  plannedEntry: number,
+  fillEntry: number,
+  stop: number,
+  target1: number,
+  target2: number | null,
+) {
   if (!(plannedEntry > 0 && fillEntry > 0)) throw new Error("invalid entry prices");
   const stopPct = clamp((plannedEntry - stop) / plannedEntry, 0.001, 0.5);
   const t1Pct = clamp((target1 - plannedEntry) / plannedEntry, 0.001, 1);
-  const t2Pct = target2 && target2 > plannedEntry ? clamp((target2 - plannedEntry) / plannedEntry, t1Pct, 2) : null;
+  const t2Pct = target2 && target2 > plannedEntry
+    ? clamp((target2 - plannedEntry) / plannedEntry, t1Pct, 2)
+    : null;
   return {
     stopPrice: fillEntry * (1 - stopPct),
     target1: fillEntry * (1 + t1Pct),
@@ -384,15 +427,26 @@ export function adjustedPlanForFill(plannedEntry: number, fillEntry: number, sto
   };
 }
 
-export function t1SellQuantity(initialQuantity: number, remainingQuantity: number, allocationPct: number): number {
-  return Math.min(Math.max(0, remainingQuantity), Math.max(0, initialQuantity) * clamp(allocationPct, 1, 99) / 100);
+export function t1SellQuantity(
+  initialQuantity: number,
+  remainingQuantity: number,
+  allocationPct: number,
+): number {
+  return Math.min(
+    Math.max(0, remainingQuantity),
+    Math.max(0, initialQuantity) * clamp(allocationPct, 1, 99) / 100,
+  );
 }
 
-export function nextTrailingStop(current: number | null | undefined, peak: number, distancePct: number, hardStop: number): number {
+export function nextTrailingStop(
+  current: number | null | undefined,
+  peak: number,
+  distancePct: number,
+  hardStop: number,
+): number {
   const candidate = peak * (1 - clamp(distancePct, 0.1, 20) / 100);
   return Math.max(finite(current), finite(hardStop), candidate);
 }
-
 
 export function dangerousControlError(input: {
   mode?: unknown;
@@ -410,7 +464,6 @@ export function dangerousControlError(input: {
   return null;
 }
 
-
 export function resumeSafetyError(input: {
   emergencyLiquidation: boolean;
   activePositionCount: number;
@@ -425,18 +478,21 @@ export function resumeSafetyError(input: {
   return null;
 }
 
-export function externalQuoteIntervention(exchange: Exchange, externalDelta: number, withdrawalMode: boolean) {
+export function externalQuoteIntervention(
+  exchange: Exchange,
+  externalDelta: number,
+  withdrawalMode: boolean,
+) {
   const decrease = finite(externalDelta) < 0;
   const direction = decrease ? "decreased" : "increased";
   return {
-    pauseNewEntries: true,
-    manualInterventionRequired: !withdrawalMode,
+    pauseNewEntries: false,
+    manualInterventionRequired: false,
     reason: withdrawalMode
       ? `WITHDRAWAL_MODE_BALANCE_${decrease ? "DECREASE" : "INCREASE"}`
-      : `${exchange}: quote balance ${direction} outside bot orders`,
+      : `${exchange}: quote balance ${direction} outside bot orders; recorded without global pause`,
   };
 }
-
 
 export type ManualReconcileAccountingInput = {
   initialQuantity: number;
@@ -460,14 +516,21 @@ export function manualReconcileAccounting(input: ManualReconcileAccountingInput)
 
 export function baseAsset(exchange: Exchange, market: string): string {
   const normalized = String(market || "").toUpperCase();
-  return exchange === "upbit" ? normalized.split("-")[1] || normalized : normalized.endsWith("USDT") ? normalized.slice(0, -4) : normalized;
+  return exchange === "upbit"
+    ? normalized.split("-")[1] || normalized
+    : normalized.endsWith("USDT")
+    ? normalized.slice(0, -4)
+    : normalized;
 }
 
 export function quoteCurrency(exchange: Exchange): "KRW" | "USDT" {
   return exchange === "upbit" ? "KRW" : "USDT";
 }
 
-export function normalizedOrderState(currentState: string | null | undefined, gatewayState: string | null | undefined): string {
+export function normalizedOrderState(
+  currentState: string | null | undefined,
+  gatewayState: string | null | undefined,
+): string {
   if (String(currentState || "").toUpperCase() === "APPLIED") return "APPLIED";
   const state = String(gatewayState || "UNKNOWN").toUpperCase();
   if (state === "FILLED") return "EXCHANGE_DONE";
@@ -497,7 +560,12 @@ export function normalizedOrderState(currentState: string | null | undefined, ga
 
 const DUST_MAX_FRACTION = 0.5;
 
-export type ReconcileVerdict = "MATCH" | "DUST_ALIGN" | "UNKNOWN_LOCK" | "ASSET_REVIEW" | "VANISHED";
+export type ReconcileVerdict =
+  | "MATCH"
+  | "DUST_ALIGN"
+  | "UNKNOWN_LOCK"
+  | "ASSET_REVIEW"
+  | "VANISHED";
 
 export interface ReconcileInput {
   /** Quantity the ledger says we hold. */
@@ -545,7 +613,9 @@ export function reconcileAccount(input: ReconcileInput): ReconcileOutput {
   const price = Math.max(0, finite(input.price));
 
   const botLockedKnown = input.botLockedQuantity !== null && input.botLockedQuantity !== undefined;
-  const botLocked = botLockedKnown ? Math.min(Math.max(0, finite(input.botLockedQuantity)), locked) : 0;
+  const botLocked = botLockedKnown
+    ? Math.min(Math.max(0, finite(input.botLockedQuantity)), locked)
+    : 0;
   // Our own resting order has not left the account and we can cancel it at will, so it
   // counts as deliverable.
   const effectiveFree = free + botLocked;
@@ -573,7 +643,14 @@ export function reconcileAccount(input: ReconcileInput): ReconcileOutput {
   };
 
   if (booked <= total + 1e-12 && booked <= effectiveFree + 1e-12) {
-    return { ...base, verdict: "MATCH", alignedQuantity: booked, sellableQuantity: effectiveFree, blockNewEntries: false, reason: "ledger agrees with the account" };
+    return {
+      ...base,
+      verdict: "MATCH",
+      alignedQuantity: booked,
+      sellableQuantity: effectiveFree,
+      blockNewEntries: false,
+      reason: "ledger agrees with the account",
+    };
   }
 
   if (shortfall > 0 && shortfall <= tolerance) {
@@ -584,7 +661,8 @@ export function reconcileAccount(input: ReconcileInput): ReconcileOutput {
       alignedQuantity: aligned,
       sellableQuantity: Math.min(aligned, Math.max(effectiveFree, total)),
       blockNewEntries: false,
-      reason: `shortfall ${shortfall} within tolerance ${tolerance}; ledger aligned, trading unaffected`,
+      reason:
+        `shortfall ${shortfall} within tolerance ${tolerance}; ledger aligned, trading unaffected`,
     };
   }
 
@@ -595,7 +673,8 @@ export function reconcileAccount(input: ReconcileInput): ReconcileOutput {
       alignedQuantity: total,
       sellableQuantity: effectiveFree,
       blockNewEntries: true,
-      reason: `quantity left the account beyond tolerance; entries blocked, remaining ${effectiveFree} still exitable`,
+      reason:
+        `quantity left the account beyond tolerance; entries blocked, remaining ${effectiveFree} still exitable`,
     };
   }
 
@@ -607,7 +686,8 @@ export function reconcileAccount(input: ReconcileInput): ReconcileOutput {
       alignedQuantity: booked,
       sellableQuantity: free,
       blockNewEntries: true,
-      reason: "open orders unreadable; entries blocked fail-closed, existing holdings remain exitable",
+      reason:
+        "open orders unreadable; entries blocked fail-closed, existing holdings remain exitable",
     };
   }
 
@@ -617,6 +697,7 @@ export function reconcileAccount(input: ReconcileInput): ReconcileOutput {
     alignedQuantity: booked,
     sellableQuantity: effectiveFree,
     blockNewEntries: true,
-    reason: `balance locked by an order that is not ours; entries blocked on this asset, ${effectiveFree} still exitable`,
+    reason:
+      `balance locked by an order that is not ours; entries blocked on this asset, ${effectiveFree} still exitable`,
   };
 }

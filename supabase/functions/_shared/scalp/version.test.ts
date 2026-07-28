@@ -23,7 +23,10 @@ async function versionIn(path: string, pattern: RegExp): Promise<string> {
 
 Deno.test("engine, autotrader and gateway report the same version", async () => {
   const [scanner, autotrader, gateway] = await Promise.all([
-    versionIn("supabase/functions/market-scanner/engine.ts", /export const ENGINE_VERSION = "([^"]+)"/),
+    versionIn(
+      "supabase/functions/market-scanner/engine.ts",
+      /export const ENGINE_VERSION = "([^"]+)"/,
+    ),
     versionIn("supabase/functions/market-autotrader/index.ts", /const VERSION = "([^"]+)"/),
     versionIn("gateway/server.mjs", /const VERSION = "([^"]+)"/),
   ]);
@@ -65,8 +68,8 @@ Deno.test("operator status is the authoritative dashboard version source", async
     "a cached scanner result must not downgrade the authoritative version",
   );
   assertEquals(
-    html.includes('config.js?v=6.10.0-r7') &&
-      html.includes('app.js?v=6.10.0-r7'),
+    html.includes("config.js?v=6.11.0-r1") &&
+      html.includes("app.js?v=6.11.0-r1"),
     true,
     "dashboard cache keys must move with the dashboard release",
   );

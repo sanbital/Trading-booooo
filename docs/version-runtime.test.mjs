@@ -21,7 +21,7 @@ function loadVersionHelper() {
   };
   const window = {
     TRADING_SCANNER_CONFIG: {
-      uiVersion: "6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE",
+      uiVersion: "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION",
     },
   };
   vm.runInNewContext(helperSource, { document, window });
@@ -35,20 +35,20 @@ test("trading status can update the shared header without a ReferenceError", () 
   assert.match(subtitle.textContent, /v5\.2\.3$/);
 
   window.updateTradingBrandVersion(
-    "6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE",
+    "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION",
     true,
   );
   assert.match(
     subtitle.textContent,
-    /v6\.10\.0-JOINT-COMPOUND-GROWTH-GOVERNANCE$/,
+    /v6\.11\.0-CONTINUOUS-ADAPTIVE-EXECUTION$/,
   );
 });
 
 test("a later cached scanner response cannot downgrade the operator version", () => {
   const { subtitle, window } = loadVersionHelper();
 
-  window.updateTradingBrandVersion("6.10.0", true);
+  window.updateTradingBrandVersion("6.11.0", true);
   window.updateTradingBrandVersion("5.2.3");
 
-  assert.match(subtitle.textContent, /v6\.10\.0$/);
+  assert.match(subtitle.textContent, /v6\.11\.0$/);
 });

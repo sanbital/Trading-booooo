@@ -26,6 +26,29 @@ export interface SizingDecision {
   sizeFraction: number;
 }
 
+/**
+ * Lift evidence-sized notional to an operator-required minimum only when every hard
+ * ceiling can fund that minimum. This never overrides capital, slot, loss, depth,
+ * exchange, or immediately available quote limits.
+ */
+export function enforceMinimumExecutableNotional(
+  decision: SizingDecision,
+  minimumNotional: number,
+  availableQuote: number,
+): number {
+  const minimum = Math.max(0, finite(minimumNotional));
+  const hardCeiling = Math.min(
+    Math.max(0, finite(availableQuote)),
+    Math.max(0, finite(decision.remainingExposureCap)),
+    Math.max(0, finite(decision.slotCap)),
+    Math.max(0, finite(decision.riskCap)),
+    Math.max(0, finite(decision.depthCap)),
+    Math.max(0, finite(decision.exchangeCap)),
+  );
+  const requested = Math.min(Math.max(0, finite(decision.notionalQuote)), hardCeiling);
+  return requested < minimum && hardCeiling >= minimum ? minimum : requested;
+}
+
 function finite(value: number, fallback = 0): number {
   return Number.isFinite(value) ? value : fallback;
 }
@@ -41,7 +64,10 @@ export function calculateOrderNotional(input: SizingInput): SizingDecision {
   const remainingExposureCap = Math.max(0, totalExposureCap - currentExposure);
   const slots = Math.max(1, Math.floor(finite(input.desiredSlots, 1)));
   const slotCap = totalExposureCap / slots;
-  const lossRate = Math.max(1e-8, finite(input.stopPct) + Math.max(0, finite(input.estimatedExitCostPct)));
+  const lossRate = Math.max(
+    1e-8,
+    finite(input.stopPct) + Math.max(0, finite(input.estimatedExitCostPct)),
+  );
   const riskCap = Math.max(0, finite(input.perTradeLossBudgetQuote)) / lossRate;
   const depthCap = Math.max(0, finite(input.depthLimitedNotional));
   const exchangeCap = Math.max(0, finite(input.exchangeLimitedNotional));

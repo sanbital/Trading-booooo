@@ -3,7 +3,11 @@
 
 import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-profile.ts";
 import type { EventRiskSnapshot } from "./event-risk.ts";
-import { evaluateScalpSignal, resolveScalpSignalConfig, type ScalpSignalResult } from "../_shared/scalp/signal.ts";
+import {
+  evaluateScalpSignal,
+  resolveScalpSignalConfig,
+  type ScalpSignalResult,
+} from "../_shared/scalp/signal.ts";
 import { evaluateLobEntry } from "../_shared/lob/entry.ts";
 import { midPathStatistics } from "../_shared/lob/traps.ts";
 import { detectLobPatternName } from "../_shared/lob/patterns.ts";
@@ -14,11 +18,11 @@ import {
   resolveGeometryConfig,
   resolveMinimumEdge,
   resolveScalpGeometry,
-  sigmaFromAtrPct,
   type ScalpGeometry,
+  sigmaFromAtrPct,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE";
+export const ENGINE_VERSION = "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -463,7 +467,15 @@ export type FinalCandidate = {
   // v6: authoritative LOB_SCALP decision. Trend fields are auxiliary context only.
   lob?: {
     pattern: string | null;
-    patterns: Array<{ name: string; confidence: number; primary: boolean; evidence: string[]; invalidations: string[] }>;
+    patterns: Array<
+      {
+        name: string;
+        confidence: number;
+        primary: boolean;
+        evidence: string[];
+        invalidations: string[];
+      }
+    >;
     hotness_score: number;
     activity_score: number;
     tradability_score: number;
@@ -482,9 +494,9 @@ export type FinalCandidate = {
     signal_at: string;
     heat_rank?: number;
     market_heat_score?: number;
-  funding_premium_bps?: number;
-  funding_attention?: number;
-  funding_edge?: number;
+    funding_premium_bps?: number;
+    funding_attention?: number;
+    funding_edge?: number;
     recent_notional_per_second?: number;
     notional_acceleration?: number;
     trade_count_per_second?: number;
@@ -556,22 +568,16 @@ export function median(values: number[]): number {
   const clean = values.filter(Number.isFinite).sort((a, b) => a - b);
   if (!clean.length) return 0;
   const middle = Math.floor(clean.length / 2);
-  return clean.length % 2
-    ? clean[middle]
-    : (clean[middle - 1] + clean[middle]) / 2;
+  return clean.length % 2 ? clean[middle] : (clean[middle - 1] + clean[middle]) / 2;
 }
 
 export function mean(values: number[]): number {
   const clean = values.filter(Number.isFinite);
-  return clean.length
-    ? clean.reduce((sum, value) => sum + value, 0) / clean.length
-    : 0;
+  return clean.length ? clean.reduce((sum, value) => sum + value, 0) / clean.length : 0;
 }
 
 export function pctChange(first: number, last: number): number {
-  return first > 0 && Number.isFinite(last)
-    ? ((last - first) / first) * 100
-    : 0;
+  return first > 0 && Number.isFinite(last) ? ((last - first) / first) * 100 : 0;
 }
 
 export function emaSeries(values: number[], period: number): number[] {
@@ -644,9 +650,7 @@ export function macdHistogram(
   if (values.length < slow + signal) return null;
   const fastSeries = emaSeries(values, fast);
   const slowSeries = emaSeries(values, slow);
-  const macdSeries = values.map((_, index) =>
-    fastSeries[index] - slowSeries[index]
-  );
+  const macdSeries = values.map((_, index) => fastSeries[index] - slowSeries[index]);
   const signalSeries = emaSeries(macdSeries, signal);
   return macdSeries.at(-1)! - signalSeries.at(-1)!;
 }
@@ -678,7 +682,16 @@ function cautionLabels(event?: MarketEvent): string[] {
 }
 
 const STABLE_OR_PEG_BASES = new Set([
-  "USDC", "FDUSD", "TUSD", "USDP", "DAI", "XUSD", "RLUSD", "PYUSD", "EURC", "AEUR",
+  "USDC",
+  "FDUSD",
+  "TUSD",
+  "USDP",
+  "DAI",
+  "XUSD",
+  "RLUSD",
+  "PYUSD",
+  "EURC",
+  "AEUR",
 ]);
 
 function baseSymbol(market: string): string {
@@ -736,9 +749,7 @@ export function buildUniverse(
     );
     const freshness = Math.max(0, (nowMs - tradeTimestamp) / 1000);
     const rangePct = opening > 0 ? ((high - low) / opening) * 100 : 0;
-    const position = high > low
-      ? clamp((current - low) / (high - low), 0, 1)
-      : 0.5;
+    const position = high > low ? clamp((current - low) / (high - low), 0, 1) : 0.5;
     const cautions = cautionLabels(market.market_event);
     if (market.market_warning && market.market_warning !== "NONE") {
       cautions.push(market.market_warning);
@@ -772,8 +783,7 @@ export function buildUniverse(
     else if (!(current > 0)) excludedReason = "유효한 현재가 없음";
     else if (isNonActionablePegAsset(market.market, quoteCurrency, current, rangePct, change)) {
       excludedReason = "페그·초저변동 자산 — 거래비용 대비 기대이동 부족";
-    }
-    else if (freshness > 15 * 60) excludedReason = "최근 체결이 15분 이상 없음";
+    } else if (freshness > 15 * 60) excludedReason = "최근 체결이 15분 이상 없음";
     else if (turnover < minTurnover) {
       excludedReason = quoteCurrency === "KRW"
         ? "24시간 거래대금 5억원 미만"
@@ -809,12 +819,14 @@ export function selectShortlist(
   limit = 30,
 ): UniverseRow[] {
   const eligible = universe.filter((row) => row.eligible);
-  const byInitial = [...eligible].sort((a, b) =>
-    b.initial_score - a.initial_score
-  ).slice(0, Math.ceil(limit * 0.65));
-  const byLiquidity = [...eligible].sort((a, b) =>
-    b.turnover_24h_krw - a.turnover_24h_krw
-  ).slice(0, Math.ceil(limit * 0.25));
+  const byInitial = [...eligible].sort((a, b) => b.initial_score - a.initial_score).slice(
+    0,
+    Math.ceil(limit * 0.65),
+  );
+  const byLiquidity = [...eligible].sort((a, b) => b.turnover_24h_krw - a.turnover_24h_krw).slice(
+    0,
+    Math.ceil(limit * 0.25),
+  );
   const byMomentum = [...eligible]
     .filter((row) => row.change_24h_pct >= 0 && row.change_24h_pct <= 18)
     .sort((a, b) => b.change_24h_pct - a.change_24h_pct)
@@ -845,9 +857,9 @@ function chronological(raw: CandleRow[]): CandleRow[] {
 }
 
 function nearestResistance(highs: number[], current: number): number | null {
-  const candidates = highs.slice(0, -2).filter((value) =>
-    value > current * 1.0015
-  ).sort((a, b) => a - b);
+  const candidates = highs.slice(0, -2).filter((value) => value > current * 1.0015).sort((a, b) =>
+    a - b
+  );
   return candidates[0] || null;
 }
 
@@ -904,9 +916,7 @@ export function timeframeMetrics(raw: CandleRow[]): TimeframeMetrics {
   const return12 = closes.length >= 13 ? pctChange(closes.at(-13)!, close) : 0;
   const volumeBase = median(volumes.slice(-21, -1));
   const volumeRatio = safeDiv(volumes.at(-1) || 0, volumeBase, 1);
-  const slopeReference = closes.length >= 6
-    ? emaSeries(closes, 21).at(-6)!
-    : ema21Value || close;
+  const slopeReference = closes.length >= 6 ? emaSeries(closes, 21).at(-6)! : ema21Value || close;
 
   const aboveFast = ema9Value != null ? Math.sign(close - ema9Value) : 0;
   const fastAboveSlow = ema9Value != null && ema21Value != null
@@ -967,9 +977,7 @@ export function timeframeMetrics(raw: CandleRow[]): TimeframeMetrics {
     ema21Value,
     recentLows.length >= 6 ? Math.min(...recentLows.slice(-6)) : null,
     recentLows.length ? recentLow : null,
-  ].filter((value): value is number =>
-    value != null && value > 0 && value < close
-  );
+  ].filter((value): value is number => value != null && value > 0 && value < close);
 
   return {
     bars: rows.length,
@@ -1009,9 +1017,8 @@ export function analyzePeriod(
     day: timeframeMetrics(dataset.day),
   };
   const requiredBars = { m5: 60, m15: 80, h4: 120, day: 120 };
-  const completeKeys =
-    (Object.keys(requiredBars) as Array<keyof typeof requiredBars>)
-      .filter((key) => timeframes[key].bars >= requiredBars[key]);
+  const completeKeys = (Object.keys(requiredBars) as Array<keyof typeof requiredBars>)
+    .filter((key) => timeframes[key].bars >= requiredBars[key]);
   const completeness = completeKeys.length / 4;
   const weights = { m5: 0.15, m15: 0.3, h4: 0.35, day: 0.2 };
   const trend = (Object.keys(weights) as Array<keyof typeof weights>)
@@ -1041,9 +1048,7 @@ export function analyzePeriod(
   if (universe.change_24h_pct > 20) {
     penalty += Math.min(18, (universe.change_24h_pct - 20) * 0.8 + 8);
     warnings.push(
-      `24시간 ${
-        universe.change_24h_pct.toFixed(1)
-      }% 상승으로 추격 매수 위험이 큽니다.`,
+      `24시간 ${universe.change_24h_pct.toFixed(1)}% 상승으로 추격 매수 위험이 큽니다.`,
     );
   }
   const maxOverheat = Math.max(
@@ -1094,9 +1099,7 @@ export function analyzePeriod(
   }
   if (timeframes.m15.volume_ratio >= 1.3) {
     positives.push(
-      `15분 거래대금이 최근 중앙값의 ${
-        timeframes.m15.volume_ratio.toFixed(2)
-      }배입니다.`,
+      `15분 거래대금이 최근 중앙값의 ${timeframes.m15.volume_ratio.toFixed(2)}배입니다.`,
     );
   }
   if (timeframes.m15.volume_ratio < 0.55) {
@@ -1106,14 +1109,13 @@ export function analyzePeriod(
     warnings.push("상승 추세와 단기 모멘텀이 엇갈려 눌림 확인이 필요합니다.");
   }
 
-  const preliminaryStatus: PeriodAnalysis["preliminary_status"] =
-    periodScore >= 65 &&
+  const preliminaryStatus: PeriodAnalysis["preliminary_status"] = periodScore >= 65 &&
       ["FULL_BULL", "BULL_PULLBACK", "RECOVERY"].includes(timeframes.m15.trend_state) &&
       ["FULL_BULL", "BULL_PULLBACK", "RECOVERY"].includes(timeframes.h4.trend_state)
-      ? "CANDIDATE"
-      : periodScore < 40 || timeframes.h4.trend_signal < -0.55
-      ? "AVOID"
-      : "WAIT";
+    ? "CANDIDATE"
+    : periodScore < 40 || timeframes.h4.trend_signal < -0.55
+    ? "AVOID"
+    : "WAIT";
 
   return {
     universe,
@@ -1221,9 +1223,7 @@ function distinctTrades(trades: TradeRow[]): TradeRow[] {
     if (!(timestamp > 0 && price > 0 && volume > 0)) return false;
     const id = String(
       trade.sequential_id ||
-        `${timestamp}:${price}:${volume}:${
-          String(trade.ask_bid).toUpperCase()
-        }`,
+        `${timestamp}:${price}:${volume}:${String(trade.ask_bid).toUpperCase()}`,
     );
     if (seen.has(id)) return false;
     seen.add(id);
@@ -1364,9 +1364,7 @@ export function computeDynamicOrderflow(
     : observedGaps.length
     ? Math.min(...observedGaps)
     : Number.EPSILON;
-  const observationMs = frames.length >= 2
-    ? frames.at(-1)!.timestamp - frames[0].timestamp
-    : 0;
+  const observationMs = frames.length >= 2 ? frames.at(-1)!.timestamp - frames[0].timestamp : 0;
   const start = frames[0]?.timestamp || 0;
   const end = frames.at(-1)?.timestamp || 0;
   const alignedTrades = distinctTrades(trades).filter((trade) => {
@@ -1388,9 +1386,7 @@ export function computeDynamicOrderflow(
     phaseTradeCounts[phaseIndex(tradeTimestamp(trade))]++;
   }
   const coveredPhases =
-    phaseBookUpdates.filter((books, index) =>
-      books >= 3 && phaseTradeCounts[index] >= 2
-    ).length;
+    phaseBookUpdates.filter((books, index) => books >= 3 && phaseTradeCounts[index] >= 2).length;
   const phaseConsistent = coveredPhases === DYNAMIC_PHASE_COUNT;
   const tradeIndex = indexTradesByPrice(alignedTrades, tick);
   const dataQuality = clamp(
@@ -1491,9 +1487,7 @@ export function computeDynamicOrderflow(
       (previous.units[0]?.askSize || 0) !== (current.units[0]?.askSize || 0)
     ) flickerEvents++;
 
-    const worstVisibleBid = current.bids.size
-      ? Math.min(...current.bids.keys())
-      : Number.NaN;
+    const worstVisibleBid = current.bids.size ? Math.min(...current.bids.keys()) : Number.NaN;
     previous.units.slice(0, WALL_LEVELS).forEach((unit, rank) => {
       const bidIsWall = previousBidNotionals[rank] >= localBidBaseline * 2.8;
       if (bidIsWall && unit.bidSize > 0) {
@@ -1594,9 +1588,7 @@ export function computeDynamicOrderflow(
       tick,
     );
     const postFrames = frames.slice(crossedIndex);
-    const bidSupportFrames = postFrames.filter((frame) =>
-      frame.bids.has(wall.price)
-    );
+    const bidSupportFrames = postFrames.filter((frame) => frame.bids.has(wall.price));
     const supportRatio = safeDiv(bidSupportFrames.length, postFrames.length);
     const postSell = volumeAtPrice(
       tradeIndex,
@@ -1668,16 +1660,12 @@ export function computeDynamicOrderflow(
   const warnings: string[] = [];
   if (persistentBid) {
     evidence.push(
-      `${
-        displayPrice(persistentBid.price)
-      } 가격대의 인접 매수벽이 관찰창에서 반복 유지됐습니다.`,
+      `${displayPrice(persistentBid.price)} 가격대의 인접 매수벽이 관찰창에서 반복 유지됐습니다.`,
     );
   }
   if (persistentAsk) {
     evidence.push(
-      `${
-        displayPrice(persistentAsk.price)
-      } 가격대의 인접 매도벽이 관찰창에서 반복 유지됐습니다.`,
+      `${displayPrice(persistentAsk.price)} 가격대의 인접 매도벽이 관찰창에서 반복 유지됐습니다.`,
     );
   }
   if (status === "BREAKOUT_CONFIRMED" && confirmedSupport) {
@@ -1736,9 +1724,9 @@ export function computeDynamicOrderflow(
 }
 
 // v5.3 scalp microstructure constants.
-const SCALP_BOOK_DEPTH = 5;            // levels of the book that carry short-horizon signal
-const SCALP_BOOK_DECAY = 1.5;          // steeper than the 0.72 used for the trend view
-const SCALP_BOOK_RECENT_FRAMES = 4;    // average only the most recent frames
+const SCALP_BOOK_DEPTH = 5; // levels of the book that carry short-horizon signal
+const SCALP_BOOK_DECAY = 1.5; // steeper than the 0.72 used for the trend view
+const SCALP_BOOK_RECENT_FRAMES = 4; // average only the most recent frames
 const SCALP_FLOW_HALF_LIFE_MS = 4_000; // executed-flow half-life for entry timing
 
 export function computeMicrostructure(
@@ -1821,9 +1809,7 @@ export function computeMicrostructure(
     buyNotional + sellNotional,
   );
   const spreadBps = spreads.length ? mean(spreads) : null;
-  const spreadPenalty = spreadBps == null
-    ? 12
-    : Math.max(0, spreadBps - 8) * 0.7;
+  const spreadPenalty = spreadBps == null ? 12 : Math.max(0, spreadBps - 8) * 0.7;
   const dynamic = computeDynamicOrderflow(snapshots, trades, tickSize);
   const dynamicAdjustment = dynamic.status === "BREAKOUT_CONFIRMED"
     ? 16
@@ -1843,9 +1829,7 @@ export function computeMicrostructure(
   );
   const microScore = dynamic.sufficient ? rawMicroScore : Math.min(42, rawMicroScore);
   const latestFrame = frames.at(-1) || null;
-  const referencePrice = latestFrame
-    ? (latestFrame.bestBid + latestFrame.bestAsk) / 2
-    : null;
+  const referencePrice = latestFrame ? (latestFrame.bestBid + latestFrame.bestAsk) / 2 : null;
   const referenceTimestamp = latestFrame?.timestamp || null;
   const liveBookAgeMs = referenceTimestamp == null
     ? null
@@ -1861,8 +1845,10 @@ export function computeMicrostructure(
     const ts = tradeTimestamp(trade);
     return ts >= currentMs - eventWindowMs && ts <= currentMs + 1000;
   });
-  const aggressiveNotional = eventTrades.reduce((sum, trade) =>
-    sum + Math.max(0, number(trade.trade_price) * number(trade.trade_volume)), 0);
+  const aggressiveNotional = eventTrades.reduce(
+    (sum, trade) => sum + Math.max(0, number(trade.trade_price) * number(trade.trade_volume)),
+    0,
+  );
   const aggressiveNotionalPerSecond = aggressiveNotional / observationSeconds;
   const latestUnit = latestFrame?.units?.[0];
   const mid = latestFrame ? (latestFrame.bestBid + latestFrame.bestAsk) / 2 : 0;
@@ -1880,7 +1866,10 @@ export function computeMicrostructure(
   const depthRatio = askDepthQuote > 0 ? bidDepthQuote / askDepthQuote : bidDepthQuote > 0 ? 10 : 0;
   const bidAbsorptionScore = clamp(
     (dynamic.persistent_bid_wall_price != null ? 0.35 : 0) +
-      Math.max(0, -safeDiv(fastBuyNotional - fastSellNotional, fastBuyNotional + fastSellNotional)) * 0.30 +
+      Math.max(
+          0,
+          -safeDiv(fastBuyNotional - fastSellNotional, fastBuyNotional + fastSellNotional),
+        ) * 0.30 +
       clamp((depthRatio - 1) / 3, 0, 1) * 0.20 +
       clamp(micropriceDeviationBps / 5, 0, 1) * 0.15,
     0,
@@ -1889,29 +1878,38 @@ export function computeMicrostructure(
   const eventPrices = eventTrades.map((trade) => number(trade.trade_price)).filter((x) => x > 0);
   const firstEventPrice = eventPrices[0] || mid;
   const eventLow = eventPrices.length ? Math.min(...eventPrices) : mid;
-  const sweepDepthBps = firstEventPrice > 0 ? Math.max(0, (firstEventPrice / Math.max(eventLow, Number.EPSILON) - 1) * 10_000) : 0;
+  const sweepDepthBps = firstEventPrice > 0
+    ? Math.max(0, (firstEventPrice / Math.max(eventLow, Number.EPSILON) - 1) * 10_000)
+    : 0;
   const reclaimBps = eventLow > 0 ? Math.max(0, (mid / eventLow - 1) * 10_000) : 0;
   const sweepReclaimScore = clamp(
     clamp(sweepDepthBps / 12, 0, 1) * 0.35 + clamp(reclaimBps / 10, 0, 1) * 0.35 +
-      clamp(safeDiv(fastBuyNotional - fastSellNotional, fastBuyNotional + fastSellNotional), 0, 1) * 0.30,
+      clamp(safeDiv(fastBuyNotional - fastSellNotional, fastBuyNotional + fastSellNotional), 0, 1) *
+        0.30,
     0,
     1,
   );
   const phaseWidthMs = Math.max(1, eventWindowMs / 3);
   const phasePressure = [0, 1, 2].map((phase) => {
-    let buy = 0; let sell = 0;
+    let buy = 0;
+    let sell = 0;
     const phaseStart = currentMs - eventWindowMs + phase * phaseWidthMs;
     const phaseEnd = phaseStart + phaseWidthMs;
     for (const trade of eventTrades) {
       const ts = tradeTimestamp(trade);
       if (ts < phaseStart || ts > phaseEnd) continue;
       const notional = number(trade.trade_price) * number(trade.trade_volume);
-      if (String(trade.ask_bid).toUpperCase() === "BID") buy += notional; else sell += notional;
+      if (String(trade.ask_bid).toUpperCase() === "BID") buy += notional;
+      else sell += notional;
     }
     return safeDiv(buy - sell, buy + sell);
   });
   const positivePhases = phasePressure.filter((x) => x > 0.05).length / 3;
-  const ofiPersistence = clamp(positivePhases * 0.65 + clamp(mean(phasePressure), 0, 1) * 0.35, 0, 1);
+  const ofiPersistence = clamp(
+    positivePhases * 0.65 + clamp(mean(phasePressure), 0, 1) * 0.35,
+    0,
+    1,
+  );
 
   return {
     samples: frames.length,
@@ -2003,8 +2001,7 @@ function quotePriceText(value: number, quote: "KRW" | "USDT"): string {
 function visibleDepthQuote(
   levels: Array<{ price: number; size: number }>,
 ): number {
-  return levels.reduce((sum, level) =>
-    sum + Math.max(0, level.price) * Math.max(0, level.size), 0);
+  return levels.reduce((sum, level) => sum + Math.max(0, level.price) * Math.max(0, level.size), 0);
 }
 
 function estimateBuySlippageBps(
@@ -2052,17 +2049,13 @@ export function buildTradePlan(
     : liveReference
     ? "LIVE_ORDERBOOK"
     : "TICKER_FALLBACK";
-  const tick = tickSize > 0
-    ? tickSize
-    : Math.max(referencePrice * 0.0001, Number.EPSILON);
+  const tick = tickSize > 0 ? tickSize : Math.max(referencePrice * 0.0001, Number.EPSILON);
   const atr15 = period.timeframes.m15.atr14 || referencePrice * 0.012;
   const atr4h = period.timeframes.h4.atr14 || atr15 * 3;
   const atrDay = period.timeframes.day.atr14 || atr4h * 2;
   const bestBid = micro.best_bid || referencePrice;
   const bestAsk = micro.best_ask || referencePrice;
-  const entryHighRaw = hypotheticalReference
-    ? referencePrice
-    : Math.max(referencePrice, bestAsk);
+  const entryHighRaw = hypotheticalReference ? referencePrice : Math.max(referencePrice, bestAsk);
   const entryHigh = roundToTick(entryHighRaw, tick, "up");
   const entryLow = roundToTick(
     hypotheticalReference
@@ -2099,17 +2092,13 @@ export function buildTradePlan(
   // v2.6.0: stop buffer must survive normal noise, visible spread and tick granularity.
   const stopBuffer = Math.max(atr15 * 0.35, spreadPrice * 3, tick * 2);
   const fallbackStop = entryExecution - atr15 * stopAtrMult;
-  const stopRaw = structuralSupport != null
-    ? structuralSupport - stopBuffer
-    : fallbackStop;
+  const stopRaw = structuralSupport != null ? structuralSupport - stopBuffer : fallbackStop;
   const stopPrice = roundToTick(Math.max(tick, stopRaw), tick, "down");
   const stopExecution = Math.max(
     tick,
     stopPrice - tick * risk.exitSlippageTicks,
   );
-  const stopDistanceAtr = atr15 > 0
-    ? (entryExecution - stopExecution) / atr15
-    : null;
+  const stopDistanceAtr = atr15 > 0 ? (entryExecution - stopExecution) / atr15 : null;
 
   const targetCandidates = [
     [period.timeframes.m15.resistance, "15분 최근 저항"],
@@ -2119,9 +2108,7 @@ export function buildTradePlan(
     [safeDynamic ? micro.dynamic.target_cap_price : null, "실시간 반복 매도벽"],
   ] as Array<[number | null, string]>;
   const validTargets = targetCandidates
-    .filter((item): item is [number, string] =>
-      item[0] != null && item[0] > entryExecution
-    )
+    .filter((item): item is [number, string] => item[0] != null && item[0] > entryExecution)
     .sort((left, right) => left[0] - right[0]);
   const structuralResistance = validTargets[0]?.[0] || null;
   const targetBasis = validTargets[0]?.[1] || "구조적 저항 미확인";
@@ -2134,9 +2121,7 @@ export function buildTradePlan(
     : atrShortCap;
   const shortTarget = roundToTick(shortRaw, tick, "down");
   const shortExecution = Math.max(tick, shortTarget - tick * risk.exitSlippageTicks);
-  const targetDistanceAtr = atr15 > 0
-    ? (shortExecution - entryExecution) / atr15
-    : null;
+  const targetDistanceAtr = atr15 > 0 ? (shortExecution - entryExecution) / atr15 : null;
 
   const mediumResistances = [
     period.timeframes.h4.resistance,
@@ -2153,7 +2138,10 @@ export function buildTradePlan(
   );
   const minimumMediumTarget = shortTarget + Math.max(atr15 * 0.8, tick * 3);
   const mediumRaw = nearestMediumResistance
-    ? Math.min(nearestMediumResistance - targetBuffer, Math.max(volatilityMediumTarget, minimumMediumTarget))
+    ? Math.min(
+      nearestMediumResistance - targetBuffer,
+      Math.max(volatilityMediumTarget, minimumMediumTarget),
+    )
     : Math.max(volatilityMediumTarget, minimumMediumTarget);
   const mediumTarget = roundToTick(mediumRaw, tick, "down");
   const mediumExecution = Math.max(
@@ -2184,10 +2172,10 @@ export function buildTradePlan(
     period.timeframes.h4.trend_signal > 0.35 &&
     period.timeframes.day.trend_signal > 0.05 &&
     Math.max(
-      period.timeframes.m15.overheat_score,
-      period.timeframes.h4.overheat_score,
-      period.timeframes.day.overheat_score,
-    ) <= 0.48;
+        period.timeframes.m15.overheat_score,
+        period.timeframes.h4.overheat_score,
+        period.timeframes.day.overheat_score,
+      ) <= 0.48;
   const firstTargetAllocation = clamp((risk.firstTargetAllocationPct ?? 60) / 100, 0.4, 0.85);
   const continuationAllocation = 1 - firstTargetAllocation;
   const blendedExit = shortExecution * firstTargetAllocation +
@@ -2195,9 +2183,7 @@ export function buildTradePlan(
   const blendedGain = blendedExit > entryExecution
     ? netGainPct(entryExecution, blendedExit, risk.feePerSidePct)
     : 0;
-  const blendedRR = stopLoss > 0 && blendedGain > 0
-    ? blendedGain / stopLoss
-    : 0;
+  const blendedRR = stopLoss > 0 && blendedGain > 0 ? blendedGain / stopLoss : 0;
   const useScaleOut = strongSwingContext &&
     mediumExecution > shortExecution + Math.max(atr15 * 0.65, tick * 4) &&
     shortRR >= 0.65 && blendedRR > shortRR;
@@ -2216,7 +2202,9 @@ export function buildTradePlan(
   const expectedGain = useContinuation ? blendedGain : shortGain;
   const rr = useContinuation ? blendedRR : shortRR;
   const allocationOnlySizing = risk.strategy === "SCALP" || risk.strategy === "LOB_SCALP";
-  const riskBudget = allocationOnlySizing ? risk.capitalKrw : risk.capitalKrw * (risk.riskPct / 100);
+  const riskBudget = allocationOnlySizing
+    ? risk.capitalKrw
+    : risk.capitalKrw * (risk.riskPct / 100);
   const investment = allocationOnlySizing
     ? risk.capitalKrw
     : stopLoss > 0
@@ -2280,7 +2268,9 @@ export function buildTradePlan(
       : targetStrategy === "SCALE_OUT"
       ? `1차 ${Math.round(firstTargetAllocation * 100)}% 청산 후 2차 추세목표`
       : "단기 목표 일괄청산",
-    first_target_allocation_pct: targetStrategy !== "SHORT_ONLY" ? firstTargetAllocation * 100 : 100,
+    first_target_allocation_pct: targetStrategy !== "SHORT_ONLY"
+      ? firstTargetAllocation * 100
+      : 100,
     continuation_allocation_pct: targetStrategy !== "SHORT_ONLY" ? continuationAllocation * 100 : 0,
     expected_exit_price: expectedExit,
     expected_exit_net_return_pct: expectedGain,
@@ -2358,14 +2348,14 @@ export function buildWatchEntryPlan(
     "ASK_ABSORPTION_RISK",
     "SUPPORT_BREAKDOWN_RISK",
   ].includes(micro.dynamic.status);
-  const hardFailures = checks.filter((item) =>
-    !item.passed && hardFailureKeys.has(item.key)
-  );
+  const hardFailures = checks.filter((item) => !item.passed && hardFailureKeys.has(item.key));
   if (hardFailures.length || explicitDynamicRisk) {
     return unavailableWatchEntry(
       explicitDynamicRisk
         ? `현재 동적 호가에서 ${micro.dynamic.label}가 탐지돼 가격 할인만으로는 대기 매수를 만들 수 없습니다.`
-        : `가격만 낮아져도 해결되지 않는 조건이 남아 있습니다: ${hardFailures.map((item) => item.label).join(", ")}`,
+        : `가격만 낮아져도 해결되지 않는 조건이 남아 있습니다: ${
+          hardFailures.map((item) => item.label).join(", ")
+        }`,
     );
   }
   if (score < 52) {
@@ -2375,9 +2365,7 @@ export function buildWatchEntryPlan(
   }
 
   const current = micro.reference_price || period.universe.current_price;
-  const tick = tickSize > 0
-    ? tickSize
-    : Math.max(current * 0.0001, Number.EPSILON);
+  const tick = tickSize > 0 ? tickSize : Math.max(current * 0.0001, Number.EPSILON);
   const atr15 = period.timeframes.m15.atr14 || current * 0.012;
   const tf = period.timeframes;
   // WAIT price zones must be anchored to static swing levels. Moving averages
@@ -2483,7 +2471,15 @@ export function buildWatchEntryPlan(
 export function estimateHorizon(
   period: PeriodAnalysis,
   stopPrice: number,
-  risk: RiskConfig = { capitalKrw: 500_000, riskPct: 1, feePerSidePct: 0.05, minNetRR: 1.5, maxStopPct: 5, entrySlippageTicks: 0.5, exitSlippageTicks: 1 },
+  risk: RiskConfig = {
+    capitalKrw: 500_000,
+    riskPct: 1,
+    feePerSidePct: 0.05,
+    minNetRR: 1.5,
+    maxStopPct: 5,
+    entrySlippageTicks: 0.5,
+    exitSlippageTicks: 1,
+  },
 ): TrendHorizon {
   const quote = period.universe.quote_currency || "KRW";
   const tf = period.timeframes;
@@ -2535,15 +2531,17 @@ export function estimateHorizon(
     maxHoldingHours = 72;
   }
   const alignment = [tf.m5, tf.m15, tf.h4, tf.day]
-    .map<number>((metric) => metric.trend_state === "FULL_BULL"
-      ? 1
-      : metric.trend_state === "BULL_PULLBACK"
-      ? 0.8
-      : metric.trend_state === "RECOVERY"
-      ? 0.55
-      : metric.trend_state === "MIXED"
-      ? 0.3
-      : 0)
+    .map<number>((metric) =>
+      metric.trend_state === "FULL_BULL"
+        ? 1
+        : metric.trend_state === "BULL_PULLBACK"
+        ? 0.8
+        : metric.trend_state === "RECOVERY"
+        ? 0.55
+        : metric.trend_state === "MIXED"
+        ? 0.3
+        : 0
+    )
     .reduce((sum, value) => sum + value, 0) / 4;
   const persistence = clamp(
     28 + alignment * 42 + Math.max(0, period.momentum_signal) * 8 -
@@ -2552,8 +2550,12 @@ export function estimateHorizon(
     longDataReady ? 82 : 74,
   );
   const automated = risk.operatorMode === "AUTOMATED";
-  const minHours = automated ? Math.max(1, risk.minActionableHoldingHours ?? 1) : Math.max(4, risk.minActionableHoldingHours ?? 6);
-  const maxGap = automated ? Math.max(1, risk.maxUnattendedHours ?? 2) : Math.max(4, risk.maxUnattendedHours ?? 10);
+  const minHours = automated
+    ? Math.max(1, risk.minActionableHoldingHours ?? 1)
+    : Math.max(4, risk.minActionableHoldingHours ?? 6);
+  const maxGap = automated
+    ? Math.max(1, risk.maxUnattendedHours ?? 2)
+    : Math.max(4, risk.maxUnattendedHours ?? 10);
   const lowTouchCompatible = intendedHours >= minHours && reviewHours <= maxGap &&
     tf.h4.trend_state !== "BEAR" && persistence >= 44;
   const estimate = automated
@@ -2605,8 +2607,7 @@ export function estimatePriceForecast(
   const expectedPlanExit = decision === "WAIT" && watch.available
     ? shortExit
     : plan.expected_exit_price;
-  const gross = (exit: number) =>
-    entry > 0 && exit > entry ? (exit / entry - 1) * 100 : 0;
+  const gross = (exit: number) => entry > 0 && exit > entry ? (exit / entry - 1) * 100 : 0;
   const shortGross = gross(shortExit);
   const mediumGross = gross(mediumExit);
   const planGross = gross(expectedPlanExit);
@@ -2641,7 +2642,11 @@ export function estimatePriceForecast(
   const calibrationScale = clamp(bucket.returnScale, 0.35, 1.25);
   const calibrationScaleLow = clamp(bucket.returnScaleLow, 0.2, calibrationScale);
   const calibrationScaleHigh = clamp(bucket.returnScaleHigh, calibrationScale, 1.6);
-  const qualityShrink = clamp(0.62 + trendQuality * 0.22 + microQuality * 0.16 - overheat * 0.18, 0.4, 1);
+  const qualityShrink = clamp(
+    0.62 + trendQuality * 0.22 + microQuality * 0.16 - overheat * 0.18,
+    0.4,
+    1,
+  );
   const structuralGrossCap = plan.structural_resistance && plan.structural_resistance > entry
     ? (plan.structural_resistance / entry - 1) * 100
     : 0;
@@ -2680,7 +2685,9 @@ export function estimatePriceForecast(
     ? 960
     : 1920;
   const drivers: string[] = [
-    `기간 추세 ${(period.trend_signal * 100).toFixed(0)} / 모멘텀 ${(period.momentum_signal * 100).toFixed(0)}`,
+    `기간 추세 ${(period.trend_signal * 100).toFixed(0)} / 모멘텀 ${
+      (period.momentum_signal * 100).toFixed(0)
+    }`,
     `목표 전략: ${plan.target_strategy_label}`,
     `과열 점수 ${overheat.toFixed(2)} / 동적 데이터 품질 ${micro.dynamic.data_quality.toFixed(2)}`,
   ];
@@ -2734,8 +2741,17 @@ export function finalizeCandidate(
   tickSize: number,
   risk: RiskConfig,
   eventRisk: EventRiskSnapshot = {
-    status: "UNKNOWN", label: "이벤트 평가 미수행", checked_at: new Date(0).toISOString(), symbol: period.universe.market,
-    provider_status: {}, coverage_complete: false, volume_anomaly: false, volume_ratio_4h: 0, volume_ratio_day: 0, evidence: [], warnings: [],
+    status: "UNKNOWN",
+    label: "이벤트 평가 미수행",
+    checked_at: new Date(0).toISOString(),
+    symbol: period.universe.market,
+    provider_status: {},
+    coverage_complete: false,
+    volume_anomaly: false,
+    volume_ratio_4h: 0,
+    volume_ratio_day: 0,
+    evidence: [],
+    warnings: [],
   },
 ): FinalCandidate {
   const plan = buildTradePlan(period, micro, tickSize, risk);
@@ -2769,9 +2785,14 @@ export function finalizeCandidate(
       "뉴스·공시·언락 이벤트",
       eventRisk.status === "CLEAR",
       eventRisk.status === "BLOCK"
-        ? `해킹·상장폐지·고위험 언락 등 중대 이벤트가 검출됐습니다: ${eventRisk.evidence.slice(0, 2).map((item) => item.title).join(" / ")}`
+        ? `해킹·상장폐지·고위험 언락 등 중대 이벤트가 검출됐습니다: ${
+          eventRisk.evidence.slice(0, 2).map((item) => item.title).join(" / ")
+        }`
         : eventRisk.status === "REVIEW"
-        ? `뉴스·공시 또는 설명되지 않은 거래대금 급증의 원인 확인이 필요합니다: ${eventRisk.evidence.slice(0, 2).map((item) => item.title).join(" / ") || "관련 이벤트 미확인"}`
+        ? `뉴스·공시 또는 설명되지 않은 거래대금 급증의 원인 확인이 필요합니다: ${
+          eventRisk.evidence.slice(0, 2).map((item) => item.title).join(" / ") ||
+          "관련 이벤트 미확인"
+        }`
         : eventRisk.status === "UNKNOWN"
         ? "이벤트 공급자 데이터가 없어 신규 BUY를 승인할 수 없습니다."
         : "최근 중대 뉴스·공시·언락·보안 사고가 검출되지 않았습니다.",
@@ -2798,7 +2819,9 @@ export function finalizeCandidate(
       "실시간 기준가격",
       plan.reference_source === "LIVE_ORDERBOOK" &&
         micro.live_book_age_ms != null && micro.live_book_age_ms <= 10_000,
-      `진입·손절·목표 계산은 10초 이내 최신 호가 중간가를 사용해야 합니다. 현재 출처: ${plan.reference_source}, 호가 나이 ${micro.live_book_age_ms == null ? "N/A" : (micro.live_book_age_ms / 1000).toFixed(1) + "초"}`,
+      `진입·손절·목표 계산은 10초 이내 최신 호가 중간가를 사용해야 합니다. 현재 출처: ${plan.reference_source}, 호가 나이 ${
+        micro.live_book_age_ms == null ? "N/A" : (micro.live_book_age_ms / 1000).toFixed(1) + "초"
+      }`,
     ),
     gate(
       "trend_15m",
@@ -2819,14 +2842,18 @@ export function finalizeCandidate(
       "중기 추세 맥락",
       tf.day.trend_state !== "BEAR" &&
         (tf.day.trend_state !== "MIXED" || tf.h4.trend_state === "FULL_BULL"),
-      `일봉이 완전 하락 정렬이 아니고, 일봉 혼조라면 4시간 완전 상승 정렬이 필요합니다. 현재 일봉: ${trendStateLabel(tf.day.trend_state)}`,
+      `일봉이 완전 하락 정렬이 아니고, 일봉 혼조라면 4시간 완전 상승 정렬이 필요합니다. 현재 일봉: ${
+        trendStateLabel(tf.day.trend_state)
+      }`,
     ),
     gate(
       "overheat",
       "과열 제한",
       Math.max(tf.m15.overheat_score, tf.h4.overheat_score, tf.day.overheat_score) <= 0.58 &&
         period.universe.change_24h_pct <= 20 && tf.day.return_12_pct <= 80,
-      `RSI·EMA 이격·ATR 대비 상승폭·누적 급등을 합산한 과열 점수가 0.58 이하여야 합니다. 현재 최대 ${Math.max(tf.m15.overheat_score, tf.h4.overheat_score, tf.day.overheat_score).toFixed(2)}`,
+      `RSI·EMA 이격·ATR 대비 상승폭·누적 급등을 합산한 과열 점수가 0.58 이하여야 합니다. 현재 최대 ${
+        Math.max(tf.m15.overheat_score, tf.h4.overheat_score, tf.day.overheat_score).toFixed(2)
+      }`,
     ),
     gate(
       "micro_data",
@@ -2848,7 +2875,15 @@ export function finalizeCandidate(
       plan.depth_coverage_ratio >= (risk.minDepthCoverage ?? 1.5) &&
         plan.estimated_entry_slippage_bps != null &&
         plan.estimated_entry_slippage_bps <= (risk.maxSlippageBps ?? 20),
-      `상위 호가의 양방향 깊이가 예상 투입금의 ${risk.minDepthCoverage ?? 1.5}배 이상이고 매수 예상 슬리피지가 ${risk.maxSlippageBps ?? 20}bp 이하여야 합니다. 현재 커버리지 ${plan.depth_coverage_ratio.toFixed(2)}배, 슬리피지 ${plan.estimated_entry_slippage_bps == null ? "N/A" : plan.estimated_entry_slippage_bps.toFixed(1) + "bp"}`,
+      `상위 호가의 양방향 깊이가 예상 투입금의 ${
+        risk.minDepthCoverage ?? 1.5
+      }배 이상이고 매수 예상 슬리피지가 ${
+        risk.maxSlippageBps ?? 20
+      }bp 이하여야 합니다. 현재 커버리지 ${plan.depth_coverage_ratio.toFixed(2)}배, 슬리피지 ${
+        plan.estimated_entry_slippage_bps == null
+          ? "N/A"
+          : plan.estimated_entry_slippage_bps.toFixed(1) + "bp"
+      }`,
     ),
     gate(
       "micro_pressure",
@@ -2874,7 +2909,11 @@ export function finalizeCandidate(
         risk.minStructuralHeadroomNetPct ?? 0.6,
         plan.estimated_round_trip_cost_pct * (risk.minCostMultiple ?? 2),
       ),
-      `첫 구조적 저항까지 비용 차감 순이동이 최소 ${risk.minStructuralHeadroomNetPct ?? 0.6}%이고 총 왕복비용의 ${risk.minCostMultiple ?? 2}배 이상이어야 합니다. 현재 순여유 ${plan.structural_headroom_net_pct.toFixed(2)}%, 추정 왕복비용 ${plan.estimated_round_trip_cost_pct.toFixed(2)}%`,
+      `첫 구조적 저항까지 비용 차감 순이동이 최소 ${
+        risk.minStructuralHeadroomNetPct ?? 0.6
+      }%이고 총 왕복비용의 ${risk.minCostMultiple ?? 2}배 이상이어야 합니다. 현재 순여유 ${
+        plan.structural_headroom_net_pct.toFixed(2)
+      }%, 추정 왕복비용 ${plan.estimated_round_trip_cost_pct.toFixed(2)}%`,
     ),
     gate(
       "stop",
@@ -2886,7 +2925,11 @@ export function finalizeCandidate(
             Number(tf.h4.atr14 || 0) * (risk.stopMinAtr4hMult ?? 1.0),
             Number(tf.m15.atr14 || 0) * (risk.stopMinAtr15mMult ?? 1.5),
           ),
-      `손절은 비용 포함 최대 ${risk.maxStopPct}% 이내이면서 정상 변동을 견디도록 4시간 ATR ${risk.stopMinAtr4hMult ?? 1.0}배와 15분 ATR ${risk.stopMinAtr15mMult ?? 1.5}배 중 큰 값 이상이어야 합니다. 현재 지지: ${plan.support_basis}, 저항: ${plan.target_basis}`,
+      `손절은 비용 포함 최대 ${risk.maxStopPct}% 이내이면서 정상 변동을 견디도록 4시간 ATR ${
+        risk.stopMinAtr4hMult ?? 1.0
+      }배와 15분 ATR ${
+        risk.stopMinAtr15mMult ?? 1.5
+      }배 중 큰 값 이상이어야 합니다. 현재 지지: ${plan.support_basis}, 저항: ${plan.target_basis}`,
     ),
     gate(
       "target_structure",
@@ -2903,8 +2946,14 @@ export function finalizeCandidate(
           horizon.intended_holding_hours >= (risk.minActionableHoldingHours ?? 1)
         : horizon.low_touch_compatible && precommittedExitAvailable,
       risk.operatorMode === "AUTOMATED"
-        ? `자동 감시·청산이 가능한 사전 확정 손절·목표가 필요하며 최소 ${risk.minActionableHoldingHours ?? 1}시간 보유 구조여야 합니다. 현재 ${horizon.expected_window}, 최대 보유 ${horizon.max_holding_hours}시간입니다.`
-        : `하루 2~3회 확인하는 운용에 맞게 최소 ${risk.minActionableHoldingHours ?? 6}시간 이상 보유 가능하고, 다음 확인 간격이 ${risk.maxUnattendedHours ?? 10}시간 이내이며, 진입 즉시 손절·목표를 사전 확정할 수 있어야 합니다. 현재 ${horizon.expected_window}, 권장 확인 ${horizon.review_interval_hours}시간 간격입니다.`,
+        ? `자동 감시·청산이 가능한 사전 확정 손절·목표가 필요하며 최소 ${
+          risk.minActionableHoldingHours ?? 1
+        }시간 보유 구조여야 합니다. 현재 ${horizon.expected_window}, 최대 보유 ${horizon.max_holding_hours}시간입니다.`
+        : `하루 2~3회 확인하는 운용에 맞게 최소 ${
+          risk.minActionableHoldingHours ?? 6
+        }시간 이상 보유 가능하고, 다음 확인 간격이 ${
+          risk.maxUnattendedHours ?? 10
+        }시간 이내이며, 진입 즉시 손절·목표를 사전 확정할 수 있어야 합니다. 현재 ${horizon.expected_window}, 권장 확인 ${horizon.review_interval_hours}시간 간격입니다.`,
     ),
     gate(
       "reward_risk",
@@ -2915,8 +2964,11 @@ export function finalizeCandidate(
     gate(
       "score",
       "기간 추세점수",
-      period.period_score >= (risk.scoreThreshold ?? ACTIVE_CALIBRATION_PROFILE.parameters.scoreThreshold),
-      `백테스트와 라이브에서 같은 의미를 갖도록 미세구조 점수가 아닌 기간 추세점수가 ${risk.scoreThreshold ?? ACTIVE_CALIBRATION_PROFILE.parameters.scoreThreshold}점 이상이어야 합니다. 현재 ${period.period_score.toFixed(2)}점입니다.`,
+      period.period_score >=
+        (risk.scoreThreshold ?? ACTIVE_CALIBRATION_PROFILE.parameters.scoreThreshold),
+      `백테스트와 라이브에서 같은 의미를 갖도록 미세구조 점수가 아닌 기간 추세점수가 ${
+        risk.scoreThreshold ?? ACTIVE_CALIBRATION_PROFILE.parameters.scoreThreshold
+      }점 이상이어야 합니다. 현재 ${period.period_score.toFixed(2)}점입니다.`,
     ),
   ];
   const failed = checks.filter((check) => !check.passed);
@@ -3041,8 +3093,13 @@ export function finalizeCandidate(
       {
         minEvBps: Math.max(0, finiteOr((risk.scalpOverrides || {}).minimumEdge, 0) * 10_000),
         maxBookAgeMs: Math.max(250, finiteOr((risk.scalpOverrides || {}).maxBookAgeMs, 2500)),
-        maxSpreadBps: Math.max(1, finiteOr((risk.scalpOverrides || {}).maxSpreadBps, risk.maxSpreadBps ?? 30)),
-        maxHoldingSeconds: Math.round(clamp(finiteOr((risk.scalpOverrides || {}).maxHoldingSeconds, 180), 1, 300)),
+        maxSpreadBps: Math.max(
+          1,
+          finiteOr((risk.scalpOverrides || {}).maxSpreadBps, risk.maxSpreadBps ?? 30),
+        ),
+        maxHoldingSeconds: Math.round(
+          clamp(finiteOr((risk.scalpOverrides || {}).maxHoldingSeconds, 180), 1, 300),
+        ),
         absoluteMaxHoldingSeconds: 300,
         uncertaintyHaircut: clamp(finiteOr(risk.lobUncertaintyHaircut, 0.25), 0, 0.9),
         trap: risk.lobTrapOverrides || {},
@@ -3054,14 +3111,24 @@ export function finalizeCandidate(
 
     // The exit geometry is solved from the LOB event and actual cost estimate, not from
     // 15m/4h ATR structure. The 5% stop is an absolute user ceiling, not a target.
-    const reference = plan.entry_execution_estimate > 0 ? plan.entry_execution_estimate : plan.reference_price;
+    const reference = plan.entry_execution_estimate > 0
+      ? plan.entry_execution_estimate
+      : plan.reference_price;
     if (reference > 0) {
-      plan.short_target = roundToTick(reference * (1 + lobResult.targetBps / 10_000), plan.tick_size, "up");
+      plan.short_target = roundToTick(
+        reference * (1 + lobResult.targetBps / 10_000),
+        plan.tick_size,
+        "up",
+      );
       plan.short_target_execution_estimate = plan.short_target;
       plan.medium_target = plan.short_target;
       plan.medium_target_execution_estimate = plan.short_target;
       plan.expected_exit_price = plan.short_target;
-      plan.stop_price = roundToTick(reference * (1 - Math.min(500, lobResult.stopBps) / 10_000), plan.tick_size, "down");
+      plan.stop_price = roundToTick(
+        reference * (1 - Math.min(500, lobResult.stopBps) / 10_000),
+        plan.tick_size,
+        "down",
+      );
       plan.stop_execution_estimate = plan.stop_price;
       plan.short_net_return_pct = lobResult.targetReturnNetBps / 100;
       plan.medium_net_return_pct = plan.short_net_return_pct;
@@ -3083,7 +3150,9 @@ export function finalizeCandidate(
   }
   plan.actionable = decision === "BUY";
   const watchEntryPlan = risk.strategy === "LOB_SCALP"
-    ? unavailableWatchEntry("LOB_SCALP은 눌림목 대기 주문을 만들지 않고 다음 실시간 호가창 스캔에서 다시 판단합니다.")
+    ? unavailableWatchEntry(
+      "LOB_SCALP은 눌림목 대기 주문을 만들지 않고 다음 실시간 호가창 스캔에서 다시 판단합니다.",
+    )
     : buildWatchEntryPlan(
       period,
       micro,
@@ -3105,12 +3174,42 @@ export function finalizeCandidate(
   );
   const effectiveChecks: Gate[] = lobResult
     ? [
-      gate("lob_data", "LOB 데이터", !lobResult.reasons.some((r) => ["INSUFFICIENT_LOB_SAMPLES", "STALE_ORDERBOOK"].includes(r)), `${micro.samples}개 표본 / book age ${micro.live_book_age_ms ?? "N/A"}ms`),
-      gate("lob_spread", "LOB 스프레드", !lobResult.reasons.includes("SPREAD_TOO_WIDE"), `${micro.spread_bps?.toFixed(2) ?? "N/A"}bp`),
-      gate("lob_activity", "호가창 활동도", !lobResult.reasons.includes("BOOK_NOT_HOT_ENOUGH"), `hotness ${lobResult.hotness.hotnessScore.toFixed(1)}`),
-      gate("lob_pattern", "호가창 패턴", !lobResult.reasons.includes("NO_PRIMARY_LOB_PATTERN"), lobResult.pattern || "NONE"),
-      gate("lob_net_ev", "비용 차감 순EV", lobResult.evLowerBoundBps > 0, `${lobResult.evLowerBoundBps.toFixed(3)}bp`),
-      gate("lob_stop", "절대 손실 상한", lobResult.stopBps <= 500, `${lobResult.stopBps.toFixed(1)}bp / 500bp`),
+      gate(
+        "lob_data",
+        "LOB 데이터",
+        !lobResult.reasons.some((r) => ["INSUFFICIENT_LOB_SAMPLES", "STALE_ORDERBOOK"].includes(r)),
+        `${micro.samples}개 표본 / book age ${micro.live_book_age_ms ?? "N/A"}ms`,
+      ),
+      gate(
+        "lob_spread",
+        "LOB 스프레드",
+        !lobResult.reasons.includes("SPREAD_TOO_WIDE"),
+        `${micro.spread_bps?.toFixed(2) ?? "N/A"}bp`,
+      ),
+      gate(
+        "lob_activity",
+        "호가창 활동도",
+        !lobResult.reasons.includes("BOOK_NOT_HOT_ENOUGH"),
+        `hotness ${lobResult.hotness.hotnessScore.toFixed(1)}`,
+      ),
+      gate(
+        "lob_pattern",
+        "호가창 패턴",
+        !lobResult.reasons.includes("NO_PRIMARY_LOB_PATTERN"),
+        lobResult.pattern || "NONE",
+      ),
+      gate(
+        "lob_net_ev",
+        "비용 차감 순EV",
+        lobResult.evLowerBoundBps > 0,
+        `${lobResult.evLowerBoundBps.toFixed(3)}bp`,
+      ),
+      gate(
+        "lob_stop",
+        "절대 손실 상한",
+        lobResult.stopBps <= 500,
+        `${lobResult.stopBps.toFixed(1)}bp / 500bp`,
+      ),
     ]
     : checks;
   const effectiveFailed = effectiveChecks.filter((check) => !check.passed);
@@ -3158,7 +3257,9 @@ export function finalizeCandidate(
     : null;
   if (liveDeviationBps != null && liveDeviationBps > 25) {
     warnings.push(
-      `초기 24시간 티커 가격과 최종 실시간 호가 기준가격이 ${liveDeviationBps.toFixed(1)}bp 차이납니다. 진입 계산에는 실시간 호가를 사용했습니다.`,
+      `초기 24시간 티커 가격과 최종 실시간 호가 기준가격이 ${
+        liveDeviationBps.toFixed(1)
+      }bp 차이납니다. 진입 계산에는 실시간 호가를 사용했습니다.`,
     );
   }
 
@@ -3187,9 +3288,8 @@ export function finalizeCandidate(
       automatedMode ? 1 : 5,
       automatedMode ? 15 : 30,
     ));
-  const automatedCompatible = risk.strategy === "LOB_SCALP"
-    ? true
-    : precommittedExitAvailable && horizon.intended_holding_hours >= (risk.minActionableHoldingHours ?? 1);
+  const automatedCompatible = risk.strategy === "LOB_SCALP" ? true : precommittedExitAvailable &&
+    horizon.intended_holding_hours >= (risk.minActionableHoldingHours ?? 1);
   const lobHoldingHours = lobResult ? lobResult.maxHoldingSeconds / 3600 : null;
   const executionPlan: LowTouchExecutionPlan = {
     mode: automatedMode ? "AUTOMATED" : "LOW_TOUCH",
@@ -3198,23 +3298,55 @@ export function finalizeCandidate(
     recommendation_valid_minutes: validMinutes,
     valid_until: new Date(generatedAt + validMinutes * 60_000).toISOString(),
     intended_holding_hours: lobHoldingHours ?? horizon.intended_holding_hours,
-    next_review_after_hours: automatedMode ? Math.min(0.5, horizon.review_interval_hours) : horizon.review_interval_hours,
+    next_review_after_hours: automatedMode
+      ? Math.min(0.5, horizon.review_interval_hours)
+      : horizon.review_interval_hours,
     max_holding_hours: lobHoldingHours ?? horizon.max_holding_hours,
     monitoring_requirement: decision === "BUY"
       ? automatedMode ? "AUTOMATED_WATCHDOG" : "PRECOMMITTED_EXIT"
       : "RECHECK_REQUIRED",
     buy_instruction: decision === "BUY"
       ? lobResult
-        ? `현재 실시간 호가에서 ${lobResult.pattern || "LOB 패턴"}을 주문 직전에 다시 검증한 뒤 진입하고, 체결 즉시 손절 ${quotePriceText(plan.stop_price, period.universe.quote_currency)}·목표 ${quotePriceText(plan.short_target, period.universe.quote_currency)}·${lobResult.maxHoldingSeconds}초 타임아웃을 등록합니다.`
+        ? `현재 실시간 호가에서 ${
+          lobResult.pattern || "LOB 패턴"
+        }을 주문 직전에 다시 검증한 뒤 진입하고, 체결 즉시 손절 ${
+          quotePriceText(plan.stop_price, period.universe.quote_currency)
+        }·목표 ${
+          quotePriceText(plan.short_target, period.universe.quote_currency)
+        }·${lobResult.maxHoldingSeconds}초 타임아웃을 등록합니다.`
         : automatedMode
-        ? `유효시간 안에 지정가 IOC로 ${quotePriceText(plan.entry_low, period.universe.quote_currency)}~${quotePriceText(plan.entry_high, period.universe.quote_currency)}에서만 자동 진입하고, 체결 즉시 손절 ${quotePriceText(plan.stop_price, period.universe.quote_currency)}·1차 목표 ${quotePriceText(plan.short_target, period.universe.quote_currency)}·최대 보유시간을 등록합니다.`
-        : `추천 유효시간 안에 ${quotePriceText(plan.entry_low, period.universe.quote_currency)}~${quotePriceText(plan.entry_high, period.universe.quote_currency)}에서만 진입하고, 진입 직후 손절 ${quotePriceText(plan.stop_price, period.universe.quote_currency)}와 1차 목표 ${quotePriceText(plan.short_target, period.universe.quote_currency)}를 함께 정합니다.`
-      : automatedMode ? "자동 진입하지 않고 다음 전체 스캔까지 대기합니다." : "현재는 매수하지 말고 다음 접속 시 재스캔합니다.",
+        ? `유효시간 안에 지정가 IOC로 ${
+          quotePriceText(plan.entry_low, period.universe.quote_currency)
+        }~${
+          quotePriceText(plan.entry_high, period.universe.quote_currency)
+        }에서만 자동 진입하고, 체결 즉시 손절 ${
+          quotePriceText(plan.stop_price, period.universe.quote_currency)
+        }·1차 목표 ${
+          quotePriceText(plan.short_target, period.universe.quote_currency)
+        }·최대 보유시간을 등록합니다.`
+        : `추천 유효시간 안에 ${quotePriceText(plan.entry_low, period.universe.quote_currency)}~${
+          quotePriceText(plan.entry_high, period.universe.quote_currency)
+        }에서만 진입하고, 진입 직후 손절 ${
+          quotePriceText(plan.stop_price, period.universe.quote_currency)
+        }와 1차 목표 ${
+          quotePriceText(plan.short_target, period.universe.quote_currency)
+        }를 함께 정합니다.`
+      : automatedMode
+      ? "자동 진입하지 않고 다음 전체 스캔까지 대기합니다."
+      : "현재는 매수하지 말고 다음 접속 시 재스캔합니다.",
     exit_instruction: lobResult
-      ? `목표 ${quotePriceText(plan.short_target, period.universe.quote_currency)} 일괄청산, 손절, 호가창 무효화, 흐름 반전, ${lobResult.maxHoldingSeconds}초 타임아웃 중 먼저 발생하는 조건으로 즉시 종료합니다.`
+      ? `목표 ${
+        quotePriceText(plan.short_target, period.universe.quote_currency)
+      } 일괄청산, 손절, 호가창 무효화, 흐름 반전, ${lobResult.maxHoldingSeconds}초 타임아웃 중 먼저 발생하는 조건으로 즉시 종료합니다.`
       : plan.target_strategy === "SCALE_OUT" || plan.target_strategy === "TRAIL_AFTER_T1"
-      ? `1차 목표에서 ${plan.first_target_allocation_pct}% 자동 청산하고 나머지는 ${plan.target_strategy === "TRAIL_AFTER_T1" ? "추적손절" : quotePriceText(plan.medium_target, period.universe.quote_currency)}·손절·최대 보유시간 중 먼저 발생하는 조건에서 자동 청산합니다.`
-      : `1차 목표 ${quotePriceText(plan.short_target, period.universe.quote_currency)}에서 일괄청산하며, ${horizon.max_holding_hours}시간이 지나면 목표 미도달이어도 자동 종료합니다.`,
+      ? `1차 목표에서 ${plan.first_target_allocation_pct}% 자동 청산하고 나머지는 ${
+        plan.target_strategy === "TRAIL_AFTER_T1"
+          ? "추적손절"
+          : quotePriceText(plan.medium_target, period.universe.quote_currency)
+      }·손절·최대 보유시간 중 먼저 발생하는 조건에서 자동 청산합니다.`
+      : `1차 목표 ${
+        quotePriceText(plan.short_target, period.universe.quote_currency)
+      }에서 일괄청산하며, ${horizon.max_holding_hours}시간이 지나면 목표 미도달이어도 자동 종료합니다.`,
     stale_instruction: lobResult
       ? "다음 실시간 재검사에서 호가·체결 패턴이 유지되지 않으면 주문을 폐기합니다."
       : `${validMinutes}분이 지나면 호가·체결 조건이 낡은 것으로 간주하고 자동 주문을 생성하지 않습니다.`,
@@ -3237,27 +3369,46 @@ export function finalizeCandidate(
       ? {
         pattern: lobResult.pattern,
         patterns: lobResult.patterns.map((item) => ({
-          name: item.name, confidence: item.confidence, primary: item.primary, evidence: item.evidence, invalidations: item.invalidations,
+          name: item.name,
+          confidence: item.confidence,
+          primary: item.primary,
+          evidence: item.evidence,
+          invalidations: item.invalidations,
         })),
         hotness_score: lobResult.hotness.hotnessScore,
         activity_score: lobResult.hotness.activityScore,
         tradability_score: lobResult.hotness.tradabilityScore,
-        p_target: lobResult.pTarget, p_stop: lobResult.pStop, p_timeout: lobResult.pTimeout, p_fill: lobResult.pFill,
-        target_bps: lobResult.targetBps, stop_bps: lobResult.stopBps,
+        p_target: lobResult.pTarget,
+        p_stop: lobResult.pStop,
+        p_timeout: lobResult.pTimeout,
+        p_fill: lobResult.pFill,
+        target_bps: lobResult.targetBps,
+        stop_bps: lobResult.stopBps,
         target_return_net_bps: lobResult.targetReturnNetBps,
-        ev_net_bps: lobResult.evNetBps, ev_lower_bound_bps: lobResult.evLowerBoundBps,
-        max_holding_seconds: lobResult.maxHoldingSeconds, reasons: lobResult.reasons, features: lobResult.features,
+        ev_net_bps: lobResult.evNetBps,
+        ev_lower_bound_bps: lobResult.evLowerBoundBps,
+        max_holding_seconds: lobResult.maxHoldingSeconds,
+        reasons: lobResult.reasons,
+        features: lobResult.features,
         signal_at: new Date().toISOString(),
       }
       : undefined,
     scalp: lobResult
       ? {
-        pWin: lobResult.pTarget, signal_score: lobResult.hotness.hotnessScore / 100,
+        pWin: lobResult.pTarget,
+        signal_score: lobResult.hotness.hotnessScore / 100,
         provisional_edge: lobResult.evLowerBoundBps / 10_000,
-        target_pct: lobResult.targetBps / 10_000, stop_pct: lobResult.stopBps / 10_000,
-        vetoed: false, reasons: lobResult.reasons, imbalance_contribution: 0, trend_penalty: 0,
-        neutral_win_rate: lobResult.pTarget, signal_edge: lobResult.evLowerBoundBps / 10_000,
-        features: lobResult.features as unknown as ScalpSignalResult["features"], signal_at: new Date().toISOString(), geometry: null,
+        target_pct: lobResult.targetBps / 10_000,
+        stop_pct: lobResult.stopBps / 10_000,
+        vetoed: false,
+        reasons: lobResult.reasons,
+        imbalance_contribution: 0,
+        trend_penalty: 0,
+        neutral_win_rate: lobResult.pTarget,
+        signal_edge: lobResult.evLowerBoundBps / 10_000,
+        features: lobResult.features as unknown as ScalpSignalResult["features"],
+        signal_at: new Date().toISOString(),
+        geometry: null,
       }
       : scalpResult
       ? {
@@ -3286,7 +3437,9 @@ export function finalizeCandidate(
             binding_constraint: scalpGeometry.bindingConstraint,
             required_excess_win_rate: scalpGeometry.requiredExcessWinRate,
             neutral_win_rate: scalpGeometry.neutralWinRate,
-            bars_to_target: Number.isFinite(scalpGeometry.barsToTarget) ? scalpGeometry.barsToTarget : null,
+            bars_to_target: Number.isFinite(scalpGeometry.barsToTarget)
+              ? scalpGeometry.barsToTarget
+              : null,
             horizon_sufficient: scalpGeometry.horizonSufficient,
           }
           : null,

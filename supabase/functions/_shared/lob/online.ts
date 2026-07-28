@@ -44,24 +44,38 @@ export interface LobOnlineMarketPolicy {
 }
 
 /**
- * Charge mature, market-specific adverse evidence back to the admission EV.
+ * Charge adverse fee-net evidence back to the admission EV.
  *
- * This is deliberately not a trade-count limit and does not penalize unseen markets.
- * It only corrects an estimated positive edge after the same market/pattern has produced
- * enough fee-net outcomes to show that the estimate is too optimistic. Candidate ranking
- * continues to rotate capital toward other markets, preserving discovery and turnover.
+ * Exact market evidence receives full weight after it matures. An unseen market inherits
+ * at most half of mature exchange-pattern evidence, so repeated pattern-wide losses stop
+ * being ignored while new markets retain an exploration lane. This is an EV correction,
+ * never a trade-count limit or hard pattern veto.
  */
 export function onlineAdverseEvPenaltyBps(
-  policy: Pick<LobOnlineMarketPolicy, "marketSamples" | "meanNetBps">,
+  policy: Pick<LobOnlineMarketPolicy, "marketSamples" | "globalSamples" | "meanNetBps">,
   maxPenaltyBps = 30,
-  startSamples = 8,
-  fullSamples = 40,
+  marketStartSamples = 8,
+  marketFullSamples = 40,
+  globalStartSamples = 12,
+  globalFullSamples = 120,
 ): number {
-  const samples = Math.max(0, Math.floor(finite(policy.marketSamples)));
   const meanNetBps = policy.meanNetBps == null ? 0 : finite(policy.meanNetBps);
-  if (meanNetBps >= 0 || samples < startSamples) return 0;
-  const denominator = Math.max(1, fullSamples - startSamples);
-  const evidenceWeight = clamp((samples - startSamples) / denominator, 0, 1);
+  if (meanNetBps >= 0) return 0;
+  const marketSamples = Math.max(0, Math.floor(finite(policy.marketSamples)));
+  const globalSamples = Math.max(0, Math.floor(finite(policy.globalSamples)));
+  const marketWeight = marketSamples < marketStartSamples ? 0 : clamp(
+    (marketSamples - marketStartSamples) /
+      Math.max(1, marketFullSamples - marketStartSamples),
+    0,
+    1,
+  );
+  const globalWeight = globalSamples < globalStartSamples ? 0 : 0.5 * clamp(
+    (globalSamples - globalStartSamples) /
+      Math.max(1, globalFullSamples - globalStartSamples),
+    0,
+    1,
+  );
+  const evidenceWeight = Math.max(marketWeight, globalWeight);
   return clamp(-meanNetBps * evidenceWeight, 0, Math.max(0, finite(maxPenaltyBps, 30)));
 }
 

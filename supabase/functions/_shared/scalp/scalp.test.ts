@@ -79,6 +79,40 @@ Deno.test("daily loss limit halts entries", () => {
   assertEquals(r.haltReason, "daily_loss_limit");
 });
 
+Deno.test("daily loss uses KST seed equity and includes marked open loss", () => {
+  const cfg = { ...DEFAULT_SCALP_SAFETY, dailyLossPctOfCapital: 0.30 };
+  const stillTrading = evaluateEntryGate(
+    {
+      capitalQuote: 70_000,
+      requestedNotional: 40_000,
+      day: {
+        realizedPnlQuote: -25_000,
+        markedOpenPnlQuote: 0,
+        dailySeedEquityQuote: 100_000,
+        consecutiveLosses: 0,
+      },
+    },
+    cfg,
+  );
+  assertEquals(stillTrading.allow, true);
+
+  const halted = evaluateEntryGate(
+    {
+      capitalQuote: 70_000,
+      requestedNotional: 40_000,
+      day: {
+        realizedPnlQuote: -25_000,
+        markedOpenPnlQuote: -6_000,
+        dailySeedEquityQuote: 100_000,
+        consecutiveLosses: 0,
+      },
+    },
+    cfg,
+  );
+  assertEquals(halted.allow, false);
+  assertEquals(halted.haltReason, "daily_loss_limit");
+});
+
 Deno.test("consecutive losses halt entries", () => {
   const r = evaluateEntryGate(
     { capitalQuote: 1_000_000, requestedNotional: 50_000, day: { realizedPnlQuote: -1000, consecutiveLosses: 4 } },

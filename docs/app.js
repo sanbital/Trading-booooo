@@ -1238,7 +1238,7 @@
       if (group.states.has("SWEEP_PENDING")) return true;
       if (group.exchange === "binance" && group.asset === "BNB") return false;
       const minimum = group.exchange === "upbit"
-        ? Math.max(0, finite(settings?.min_order_krw, 5000))
+        ? Math.max(40_000, finite(settings?.min_order_krw, 40_000))
         : Math.max(0, finite(settings?.min_order_usdt, 5));
       return group.valueQuote >= minimum * buffer;
     });

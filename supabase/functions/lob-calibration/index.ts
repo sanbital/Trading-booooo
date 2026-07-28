@@ -1,4 +1,4 @@
-// Trading-booooo v6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE — LOB_SCALP calibration job.
+// Trading-booooo v6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION — LOB_SCALP calibration job.
 //
 // Reads closed LOB positions, reconstructs (predicted pTarget, neutral win rate, realized
 // outcome) triples from `trading_positions.metadata.lob_signal`, and writes a profile that
@@ -116,7 +116,11 @@ async function evaluateGovernance(dryRun: boolean): Promise<any> {
     Math.min(0.5, finite(dataset.candidate_traffic_fraction, 0.15)),
   );
   const nextTrafficFraction = currentTrafficFraction < 0.25 ? 0.25 : 0.50;
-  const stageSamples = currentTrafficFraction < 0.25 ? 30 : currentTrafficFraction < 0.50 ? 60 : 100;
+  const stageSamples = currentTrafficFraction < 0.25
+    ? 30
+    : currentTrafficFraction < 0.50
+    ? 60
+    : 100;
   const evaluationLook = Math.max(0, Math.floor(finite(dataset.evaluation_look, 0)));
   // Alpha spending: repeated looks become stricter instead of silently increasing the
   // false-promotion rate. The stage boundary itself also raises the sample requirement.
@@ -227,12 +231,15 @@ function toSample(row: any): LobOutcomeSample | null {
 }
 
 async function measureLiveForecastDiagnostics(settings: any): Promise<any> {
-  const compatibleEngines = "6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE";
+  const compatibleEngines = [
+    "6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE",
+    "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION",
+  ];
   const rows = await db(
     "lob_online_outcomes?accounting_quality=in.(NO_RESIDUAL,RESIDUAL_MARKED_TO_EXIT)" +
       "&fee_accounting_quality=in.(EXACT,AGGREGATE_EXACT,THIRD_ASSET_MARKED,BASE_ASSET_ACCOUNTED)" +
       "&prediction_basis=eq.FILL_CONDITIONAL" +
-      `&engine_version=eq.${compatibleEngines}` +
+      `&engine_version=in.(${compatibleEngines.join(",")})` +
       "&select=net_bps,entry_snapshot,closed_at,engine_version,fee_accounting_quality,prediction_basis&order=closed_at.desc&limit=2000",
   ).catch(() => []) as any[];
   const evSamples: EvBiasSample[] = (rows || []).flatMap((row: any) => {
@@ -259,7 +266,8 @@ async function measureLiveForecastDiagnostics(settings: any): Promise<any> {
   const latencyMeasured = String(settings?.scalp_latency_source || "") === "MEASURED" &&
     latencySamples >= 30;
   const latencySloBreached = latencyMeasured &&
-    finite(settings?.scalp_latency_p95_ms) > Math.max(250, finite(settings?.scalp_latency_slo_ms, 1500));
+    finite(settings?.scalp_latency_p95_ms) >
+      Math.max(250, finite(settings?.scalp_latency_slo_ms, 1500));
   const policyStatus = await db("rpc/get_lob_policy_status", {
     method: "POST",
     body: JSON.stringify({}),
@@ -302,7 +310,8 @@ Deno.serve(async (request: Request) => {
   const since = new Date(Date.now() - windowHours * 3_600_000).toISOString();
 
   try {
-    const settings = (await db("trading_settings?id=eq.1&select=*&limit=1").catch(() => []))?.[0] || {};
+    const settings = (await db("trading_settings?id=eq.1&select=*&limit=1").catch(() => []))?.[0] ||
+      {};
     const liveDiagnostics = await measureLiveForecastDiagnostics(settings);
     if (!dryRun) {
       await db("trading_settings?id=eq.1", {
