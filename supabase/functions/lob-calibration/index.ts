@@ -1,4 +1,4 @@
-// Trading-booooo v6.9.1-FEE-LEDGER-INTEGRITY — LOB_SCALP calibration job.
+// Trading-booooo v6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE — LOB_SCALP calibration job.
 //
 // Reads closed LOB positions, reconstructs (predicted pTarget, neutral win rate, realized
 // outcome) triples from `trading_positions.metadata.lob_signal`, and writes a profile that
@@ -110,6 +110,18 @@ async function evaluateGovernance(dryRun: boolean): Promise<any> {
   if (phase !== "CHALLENGE" && phase !== "CONFIRMATION") {
     return { available: false, reason: `unknown governance phase ${phase}` };
   }
+  const currentTrafficFraction = Math.max(
+    0,
+    Math.min(0.5, finite(dataset.candidate_traffic_fraction, 0.15)),
+  );
+  const nextTrafficFraction = currentTrafficFraction < 0.25 ? 0.25 : 0.50;
+  const stageSamples = currentTrafficFraction < 0.25 ? 30 : currentTrafficFraction < 0.50 ? 60 : 100;
+  const evaluationLook = Math.max(0, Math.floor(finite(dataset.evaluation_look, 0)));
+  // Alpha spending: repeated looks become stricter instead of silently increasing the
+  // false-promotion rate. The stage boundary itself also raises the sample requirement.
+  const zScore = currentTrafficFraction < 0.25
+    ? 1.644853626951 + Math.min(0.30, evaluationLook * 0.02)
+    : 1.95996398454 + Math.min(0.30, evaluationLook * 0.015);
   const evaluation = evaluateLobPolicy(
     (dataset.baseline_trades || []) as LobPolicyTrade[],
     (dataset.candidate_trades || []) as LobPolicyTrade[],
@@ -117,10 +129,15 @@ async function evaluateGovernance(dryRun: boolean): Promise<any> {
     (dataset.candidate_exposures || []) as LobPolicyExposure[],
     phase,
     {
-      currentTrafficFraction: Math.max(
-        0,
-        Math.min(0.5, finite(dataset.candidate_traffic_fraction, 0.5)),
-      ),
+      currentTrafficFraction,
+      expandedTrafficFraction: nextTrafficFraction,
+      canaryMinBaselineSamples: stageSamples,
+      canaryMinCandidateSamples: stageSamples,
+      canaryMinObservationHours: 24,
+      minSamplesPerArm: 100,
+      minAssignedScansPerArm: 60,
+      minIndependentBlocksPerArm: 3,
+      zScore,
     },
   );
   if (dryRun) return { available: true, phase, evaluation, applied: null };
@@ -209,16 +226,18 @@ function toSample(row: any): LobOutcomeSample | null {
 }
 
 async function measureLiveForecastDiagnostics(settings: any): Promise<any> {
-  const compatibleEngines =
-    "6.8.1-RESIDUAL-LABEL-INTEGRITY,6.9.1-FEE-LEDGER-INTEGRITY";
+  const compatibleEngines = "6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE";
   const rows = await db(
     "lob_online_outcomes?accounting_quality=in.(NO_RESIDUAL,RESIDUAL_MARKED_TO_EXIT)" +
-      `&engine_version=in.(${compatibleEngines})` +
-      "&select=net_bps,entry_snapshot,closed_at,engine_version&order=closed_at.desc&limit=2000",
+      "&fee_accounting_quality=in.(EXACT,AGGREGATE_EXACT,THIRD_ASSET_MARKED,BASE_ASSET_ACCOUNTED)" +
+      "&prediction_basis=eq.FILL_CONDITIONAL" +
+      `&engine_version=eq.${compatibleEngines}` +
+      "&select=net_bps,entry_snapshot,closed_at,engine_version,fee_accounting_quality,prediction_basis&order=closed_at.desc&limit=2000",
   ).catch(() => []) as any[];
   const evSamples: EvBiasSample[] = (rows || []).flatMap((row: any) => {
     const predicted = finite(
-      row?.entry_snapshot?.ev_lower_bound_bps ?? row?.entry_snapshot?.ev_net_bps,
+      row?.entry_snapshot?.conditional_ev_lower_bound_bps ??
+        row?.entry_snapshot?.conditional_ev_net_bps,
       Number.NaN,
     );
     const realized = finite(row?.net_bps, Number.NaN);
@@ -239,12 +258,24 @@ async function measureLiveForecastDiagnostics(settings: any): Promise<any> {
   const latencyMeasured = String(settings?.scalp_latency_source || "") === "MEASURED" &&
     latencySamples >= 30;
   const latencySloBreached = latencyMeasured &&
-    finite(settings?.scalp_latency_p95_ms) > Math.max(250, finite(settings?.lob_max_book_age_ms, 5000));
+    finite(settings?.scalp_latency_p95_ms) > Math.max(250, finite(settings?.scalp_latency_slo_ms, 1500));
+  const policyStatus = await db("rpc/get_lob_policy_status", {
+    method: "POST",
+    body: JSON.stringify({}),
+  }).catch(() => null);
+  const currentFamily = policyStatus?.champion?.policy_definition?.family || null;
+  const proposalRound = Math.max(
+    0,
+    finite(policyStatus?.champion?.metrics?.proposal_round, 0) +
+      finite(policyStatus?.alternate?.metrics?.proposal_round, 0) + 1,
+  );
   const policyProposal = proposeLobAdaptivePolicy({
     latencyMeasured,
     latencySloBreached,
     evBiasPenaltyBps: evBias.penaltyBps,
     insufficientDataShare,
+    currentFamily,
+    proposalRound,
   });
   return {
     rows: rows?.length || 0,
@@ -339,7 +370,7 @@ Deno.serve(async (request: Request) => {
           window_hours: windowHours,
           patterns: profile.patterns,
           traps: profile.traps,
-          notes: [...profile.notes, "VALIDATION_CANDIDATE_ONLY_V690"],
+          notes: [...profile.notes, "VALIDATION_CANDIDATE_ONLY_V610"],
         }),
       });
       profileId = inserted?.[0]?.id ?? null;

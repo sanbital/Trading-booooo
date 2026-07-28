@@ -38,8 +38,8 @@ Deno.test("v6.9.1 hotfix versions remain aligned", async () => {
   const autotrader = await Deno.readTextFile(
     new URL("../../market-autotrader/index.ts", import.meta.url),
   );
-  const expected = "6.9.1-FEE-LEDGER-INTEGRITY";
+  const expected = "6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE";
   assert(scanner.includes(expected));
   assert(autotrader.includes(expected));
-  assertEquals(expected, "6.9.1-FEE-LEDGER-INTEGRITY");
+  assertEquals(expected, "6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE");
 });

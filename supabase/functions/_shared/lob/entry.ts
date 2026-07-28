@@ -224,17 +224,26 @@ export function evaluateLobEntry(
 
   const targetReturnNetBps = targetBps - totalTargetCostBps;
   const stopReturnNetBps = -(stopBps + totalStopCostBps);
-  const timeoutReturnNetBps =
-    -(costs.roundTripFeeBps + costs.entrySlippageBps + costs.stopExitSlippageBps) * 0.75;
+  // Timeout is an executable close, not a discounted hypothetical. Charge the full entry,
+  // exit, latency and fee budget. The old arbitrary 0.75 multiplier understated this branch.
+  const timeoutReturnNetBps = -(
+    costs.roundTripFeeBps + costs.entrySlippageBps + costs.stopExitSlippageBps +
+    Math.max(0, Number(costs.latencyPenaltyBps || 0))
+  );
   const forecastBiasPenaltyBps = Math.max(
     0,
     Number.isFinite(costs.forecastBiasPenaltyBps as number)
       ? costs.forecastBiasPenaltyBps as number
       : 0,
   );
-  const evNetBps = pFill * (
-    pTarget * targetReturnNetBps + pStop * stopReturnNetBps + pTimeout * timeoutReturnNetBps
-  ) - forecastBiasPenaltyBps;
+  // Bias is learned from FILLED trades, therefore it corrects conditional-on-fill EV.
+  // Multiplying first and subtracting later compared attempt EV against filled-only outcomes
+  // and systematically under-detected optimism when pFill < 1.
+  const conditionalEvNetBps =
+    pTarget * targetReturnNetBps + pStop * stopReturnNetBps + pTimeout * timeoutReturnNetBps -
+    forecastBiasPenaltyBps;
+  const attemptEvNetBps = pFill * conditionalEvNetBps;
+  const evNetBps = conditionalEvNetBps;
 
   // The haircut is applied to the signal edge, not to the geometric term: uncertainty lives
   // in the model's beliefs, not in the arithmetic.
@@ -257,10 +266,11 @@ export function evaluateLobEntry(
     clamp(neutralWinRate + conservativeEdge, 0.02, 0.92),
   );
   const conservativePStop = Math.max(0, resolveProbability - conservativePTarget);
-  const evLowerBoundBps = pFill * (
+  const conditionalEvLowerBoundBps =
     conservativePTarget * targetReturnNetBps + conservativePStop * stopReturnNetBps +
-    pTimeout * timeoutReturnNetBps
-  ) - forecastBiasPenaltyBps;
+    pTimeout * timeoutReturnNetBps - forecastBiasPenaltyBps;
+  const attemptEvLowerBoundBps = pFill * conditionalEvLowerBoundBps;
+  const evLowerBoundBps = conditionalEvLowerBoundBps;
 
   if (!(targetReturnNetBps > 0)) reasons.push("TARGET_NET_PROFIT_NOT_POSITIVE");
   if (!(evLowerBoundBps > cfg.minEvBps)) reasons.push("NET_EV_NOT_POSITIVE");
@@ -290,6 +300,10 @@ export function evaluateLobEntry(
     targetReturnNetBps,
     stopReturnNetBps,
     timeoutReturnNetBps,
+    conditionalEvNetBps,
+    conditionalEvLowerBoundBps,
+    attemptEvNetBps,
+    attemptEvLowerBoundBps,
     evNetBps,
     evLowerBoundBps,
     forecastBiasPenaltyBps,

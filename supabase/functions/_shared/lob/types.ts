@@ -158,6 +158,13 @@ export interface LobEntryDecision {
   targetReturnNetBps: number;
   stopReturnNetBps: number;
   timeoutReturnNetBps: number;
+  /** EV conditional on the maker entry actually filling. */
+  conditionalEvNetBps: number;
+  conditionalEvLowerBoundBps: number;
+  /** Order-attempt EV after fill probability; used for capital scheduling, not bias fitting. */
+  attemptEvNetBps: number;
+  attemptEvLowerBoundBps: number;
+  /** Backward-compatible aliases: conditional EV in v6.10. */
   evNetBps: number;
   evLowerBoundBps: number;
   forecastBiasPenaltyBps: number;

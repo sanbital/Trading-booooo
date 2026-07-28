@@ -102,6 +102,7 @@ export interface LobPolicyMetrics {
   liveVerifiedFraction: number;
   distinctMarkets: number;
   independentTimeBlocks: number;
+  observationHours: number;
 }
 
 export interface LobPolicyPromotionConfig {
@@ -125,37 +126,33 @@ export interface LobPolicyPromotionConfig {
   expandedTrafficFraction: number;
   canaryMinBaselineSamples: number;
   canaryMinCandidateSamples: number;
+  canaryMinObservationHours: number;
 }
 
 export const DEFAULT_LOB_POLICY_PROMOTION_CONFIG: LobPolicyPromotionConfig = {
-  // The supplied live cohort reached 67 closes in one day. Forty per lane balances
-  // same-day response with enough observations to reject obvious noise.
-  minSamplesPerArm: 40,
+  // Final promotion is deliberately harder than a canary expansion. All three economic
+  // objectives — cost-net return, profitable-trade rate and capital turnover — must improve
+  // in point estimate and remain inside strict confidence/non-inferiority boundaries.
+  minSamplesPerArm: 100,
   earlyStopSamplesPerArm: 20,
-  maxSamplesPerArm: 120,
-  minAssignedScansPerArm: 20,
-  zScore: 1.281551565545,
+  maxSamplesPerArm: 400,
+  minAssignedScansPerArm: 60,
+  zScore: 1.95996398454,
   minProfitFactor: 1,
-  // A challenger may never create cosmetic performance by silently shrinking the order.
   minNotionalRatio: 0.98,
-  // Drawdown is a safety invariant, not a substitute objective. Five percent tolerance
-  // prevents one ordering accident from blocking an otherwise strict Pareto improvement.
   maxDrawdownRatio: 1.05,
-  // Promotion must be supported by the exchange × pattern cells shared by both arms.
-  // This prevents a favourable market mix from masquerading as model improvement.
-  minCommonMixCoverage: 0.65,
+  minCommonMixCoverage: 0.70,
   minLiveVerifiedFraction: 1,
   minDistinctMarketsPerArm: 2,
-  minIndependentBlocksPerArm: 2,
-  // Candidate may be statistically indistinguishable on secondary metrics while net return
-  // improves. These are non-inferiority margins, not permission for material degradation.
-  netNonInferiorityBps: 2,
-  winRateNonInferiority: 0.03,
-  turnoverNonInferiorityRatio: 0.90,
-  currentTrafficFraction: 0.50,
-  expandedTrafficFraction: 0.50,
-  canaryMinBaselineSamples: 20,
-  canaryMinCandidateSamples: 10,
+  minIndependentBlocksPerArm: 3,
+  netNonInferiorityBps: 1,
+  winRateNonInferiority: 0.02,
+  turnoverNonInferiorityRatio: 0.95,
+  currentTrafficFraction: 0.15,
+  expandedTrafficFraction: 0.25,
+  canaryMinBaselineSamples: 30,
+  canaryMinCandidateSamples: 30,
+  canaryMinObservationHours: 24,
 };
 
 export type LobPolicyDecision =
@@ -330,6 +327,22 @@ export function policyBundleByVersion(
   };
 }
 
+/** Count genuinely separated evidence blocks. Consecutive closes in the same burst are
+ * autocorrelated and count once; a new block requires a four-hour gap. This is deliberately
+ * stricter than the old UTC-hour bucket, where 10:59 and 11:01 falsely counted as independent. */
+export function independentEvidenceBlockCount(closedAtMs: number[], gapMs = 4 * 3_600_000): number {
+  const ordered = closedAtMs.filter(Number.isFinite).sort((a, b) => a - b);
+  let blocks = 0;
+  let lastAnchor = Number.NEGATIVE_INFINITY;
+  for (const value of ordered) {
+    if (blocks === 0 || value - lastAnchor >= gapMs) {
+      blocks++;
+      lastAnchor = value;
+    }
+  }
+  return blocks;
+}
+
 export function calculateLobPolicyMetrics(
   trades: LobPolicyTrade[],
   exposures: LobPolicyExposure[] = [],
@@ -418,9 +431,13 @@ export function calculateLobPolicyMetrics(
   const distinctMarkets = new Set(usable.map((trade) =>
     `${String(trade.exchange || "").toLowerCase()}:${String(trade.market || "").toUpperCase()}`
   ).filter((key) => key !== ":")).size;
-  const independentTimeBlocks = new Set(usable.map((trade) =>
-    Math.floor(Math.max(0, finite(trade.closedAtMs)) / 3_600_000)
-  )).size;
+  const closedTimes = usable.map((trade) => Math.max(0, finite(trade.closedAtMs))).filter((value) => value > 0);
+  const independentTimeBlocks = independentEvidenceBlockCount(closedTimes);
+  const exposureTimes = exposures.map((row) => Math.max(0, finite(row.assignedAtMs))).filter((value) => value > 0);
+  const allTimes = [...closedTimes, ...exposureTimes];
+  const observationHours = allTimes.length >= 2
+    ? (Math.max(...allTimes) - Math.min(...allTimes)) / 3_600_000
+    : 0;
   return {
     samples,
     wins,
@@ -452,6 +469,7 @@ export function calculateLobPolicyMetrics(
     liveVerifiedFraction: samples > 0 ? liveVerifiedSamples / samples : 0,
     distinctMarkets,
     independentTimeBlocks,
+    observationHours,
   };
 }
 
@@ -635,12 +653,13 @@ export function evaluateLobPolicy(
       candidate.geometricMeanBps > 0 &&
       candidate.profitFactor > cfg.minProfitFactor,
     net_return_improved: net.delta > 0 && net.lower >= -cfg.netNonInferiorityBps,
-    win_rate_improved: win.lower >= -cfg.winRateNonInferiority,
+    win_rate_improved: win.delta > 0 && win.lower >= -cfg.winRateNonInferiority,
     completed_trade_rate_preserved: deltas.tradesPerAssignedScanRatio >=
       cfg.turnoverNonInferiorityRatio,
     slot_turnover_preserved: deltas.tradesPerSlotHourRatio >= cfg.turnoverNonInferiorityRatio,
     capital_turnover_preserved: deltas.capitalTurnsPerHourRatio >=
       cfg.turnoverNonInferiorityRatio,
+    capital_turnover_improved: deltas.capitalTurnsPerHourRatio > 1,
     notional_preserved: deltas.meanNotionalRatio >= cfg.minNotionalRatio,
     exchange_pattern_mix_preserved: mix.coverage >= cfg.minCommonMixCoverage &&
       mix.winRateDelta >= -Math.min(0.01, cfg.winRateNonInferiority) &&
@@ -648,13 +667,16 @@ export function evaluateLobPolicy(
     drawdown_not_materially_worse: baseline.maxDrawdownBps <= 0
       ? candidate.maxDrawdownBps <= cfg.netNonInferiorityBps
       : deltas.maxDrawdownRatio <= cfg.maxDrawdownRatio,
+    joint_objective_point_dominance: net.delta > 0 && win.delta > 0 &&
+      deltas.capitalTurnsPerHourRatio > 1,
     meaningful_improvement: net.lower > 0 || win.lower > 0 ||
-      deltas.capitalTurnsPerHourRatio >= 1.05 ||
-      deltas.tradesPerAssignedScanRatio >= 1.05,
+      deltas.capitalTurnsPerHourRatio >= 1.05,
   };
   const canaryReady = cfg.currentTrafficFraction < cfg.expandedTrafficFraction &&
     baseline.samples >= cfg.canaryMinBaselineSamples &&
-    candidate.samples >= cfg.canaryMinCandidateSamples;
+    candidate.samples >= cfg.canaryMinCandidateSamples &&
+    baseline.observationHours >= cfg.canaryMinObservationHours &&
+    candidate.observationHours >= cfg.canaryMinObservationHours;
   const canarySafe = canaryReady &&
     gates.live_verified_labels &&
     gates.live_market_breadth &&
@@ -662,14 +684,16 @@ export function evaluateLobPolicy(
     candidate.meanNetBps > 0 && candidate.profitFactor >= 0.90 &&
     net.upper >= -cfg.netNonInferiorityBps &&
     win.upper >= -cfg.winRateNonInferiority &&
-    deltas.tradesPerAssignedScanRatio >= 0.75 &&
-    deltas.capitalTurnsPerHourRatio >= 0.75 &&
+    deltas.tradesPerAssignedScanRatio >= 0.90 &&
+    deltas.capitalTurnsPerHourRatio >= 0.90 &&
+    gates.notional_preserved &&
+    gates.exchange_pattern_mix_preserved &&
     gates.drawdown_not_materially_worse;
   if (canarySafe) {
     return {
       decision: "EXPAND",
       phase,
-      reason: "canary is live-verified and non-harmful; expanding traffic for decisive comparison",
+      reason: "canary passed accounting, time-breadth and joint non-harm tests; advancing one bounded traffic stage",
       baseline,
       candidate,
       deltas,

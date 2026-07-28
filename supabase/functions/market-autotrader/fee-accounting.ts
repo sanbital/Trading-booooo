@@ -2,6 +2,7 @@ export type FeeResolutionSource =
   | "PER_FILL_QUOTE"
   | "AGGREGATE_QUOTE"
   | "BASE_ASSET"
+  | "THIRD_ASSET_MARKED"
   | "ESTIMATED_THIRD_ASSET"
   | "ESTIMATED_MISSING"
   | "MIXED"
@@ -71,6 +72,7 @@ export function resolveFeeQuote(input: {
   let sawQuote = false;
   let sawBase = false;
   let sawThird = false;
+  let sawThirdEstimated = false;
 
   for (const trade of trades) {
     const fee = Math.max(0, finite(trade?.fee));
@@ -83,11 +85,18 @@ export function resolveFeeQuote(input: {
     } else if (asset === base) {
       sawBase = true;
     } else {
+      const markedQuote = Math.max(
+        0,
+        finite(trade?.fee_quote_marked, finite(trade?.raw?.fee_quote_marked, finite(trade?.raw?.feeQuoteMarked))),
+      );
       const suppliedQuoteEstimate = Math.max(0, finite(trade?.fee_quote_estimate));
-      feeQuote += suppliedQuoteEstimate > 0
+      feeQuote += markedQuote > 0
+        ? markedQuote
+        : suppliedQuoteEstimate > 0
         ? suppliedQuoteEstimate
         : Math.max(0, finite(trade?.funds)) * ratePct / 100;
       sawThird = true;
+      if (!(markedQuote > 0)) sawThirdEstimated = true;
     }
   }
 
@@ -96,7 +105,7 @@ export function resolveFeeQuote(input: {
     const source: FeeResolutionSource = kinds > 1
       ? "MIXED"
       : sawThird
-      ? "ESTIMATED_THIRD_ASSET"
+      ? sawThirdEstimated ? "ESTIMATED_THIRD_ASSET" : "THIRD_ASSET_MARKED"
       : sawBase
       ? "BASE_ASSET"
       : "PER_FILL_QUOTE";
@@ -106,7 +115,7 @@ export function resolveFeeQuote(input: {
       aggregatePaidFee,
       aggregateFeeAsset,
       positiveTradeFeeCount,
-      estimated: sawThird,
+      estimated: sawThirdEstimated,
       complete: true,
     };
   }
@@ -248,12 +257,16 @@ export function allocateNormalizedTradeFees(input: {
       return { feeAmount, feeAsset, feeQuoteEstimate: 0, source: "BASE_ASSET" };
     }
     if (feeAmount > 0) {
+      const markedQuote = Math.max(
+        0,
+        finite(trade?.fee_quote_marked, finite(trade?.raw?.fee_quote_marked, finite(trade?.raw?.feeQuoteMarked))),
+      );
       return {
         feeAmount,
         feeAsset,
-        feeQuoteEstimate: Math.max(0, finite(trade?.fee_quote_estimate)) ||
+        feeQuoteEstimate: markedQuote || Math.max(0, finite(trade?.fee_quote_estimate)) ||
           funds * Math.max(0, finite(input.defaultFeePct)) / 100,
-        source: "ESTIMATED_THIRD_ASSET",
+        source: markedQuote > 0 ? "THIRD_ASSET_MARKED" : "ESTIMATED_THIRD_ASSET",
       };
     }
     return { feeAmount: 0, feeAsset, feeQuoteEstimate: 0, source: "MISSING" };

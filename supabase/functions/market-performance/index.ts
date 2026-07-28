@@ -1,4 +1,4 @@
-// Trading-booooo performance API v1.0.0
+// Trading-booooo performance API v6.10.0
 // Read-only, authenticated dashboard endpoint. Computes performance only from
 // live positions backed by an APPLIED entry fill; rejected/cancelled/ghost rows
 // never count as trades.
@@ -6,7 +6,7 @@
 type JsonRecord = Record<string, any>;
 type Exchange = "upbit" | "binance";
 
-const VERSION = "1.0.0";
+const VERSION = "6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const SERVICE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
@@ -110,19 +110,27 @@ function latestSnapshots(rows: JsonRecord[]): Record<Exchange, JsonRecord | null
   return latest;
 }
 
-function calculateTrade(position: JsonRecord, orders: JsonRecord[], snapshot: JsonRecord | null): JsonRecord | null {
+function calculateTrade(position: JsonRecord, orders: JsonRecord[], fills: JsonRecord[], snapshot: JsonRecord | null): JsonRecord | null {
   const positionOrders = orders.filter((order) => order.position_id === position.id);
   const buys = positionOrders.filter((order) => String(order.side).toUpperCase() === "BUY" && String(order.purpose).toUpperCase() === "ENTRY");
   const sells = positionOrders.filter((order) => String(order.side).toUpperCase() === "SELL");
 
+  const feeForOrder = (order: JsonRecord) => {
+    const orderFee = Math.max(0, finite(order.paid_fee_quote));
+    if (orderFee > 0) return orderFee;
+    return fills.filter((fill) => fill.order_id === order.id).reduce(
+      (sum, fill) => sum + Math.max(0, finite(fill.fee_quote_estimate)),
+      0,
+    );
+  };
   const entryVolume = buys.reduce((sum, order) => sum + Math.max(0, finite(order.executed_volume)), 0);
   const entryFunds = buys.reduce((sum, order) => sum + Math.max(0, finite(order.executed_funds_quote)), 0);
-  const entryFees = buys.reduce((sum, order) => sum + Math.max(0, finite(order.paid_fee_quote)), 0);
+  const entryFees = buys.reduce((sum, order) => sum + feeForOrder(order), 0);
   if (!(entryVolume > 0 && entryFunds > 0)) return null;
 
   const exitVolume = sells.reduce((sum, order) => sum + Math.max(0, finite(order.executed_volume)), 0);
   const exitFunds = sells.reduce((sum, order) => sum + Math.max(0, finite(order.executed_funds_quote)), 0);
-  const exitFees = sells.reduce((sum, order) => sum + Math.max(0, finite(order.paid_fee_quote)), 0);
+  const exitFees = sells.reduce((sum, order) => sum + feeForOrder(order), 0);
   const remainingQuantity = Math.max(0, finite(position.remaining_quantity, entryVolume - exitVolume));
   const residualQuantity = position.state === "CLOSED"
     ? Math.max(0, finite(position.residual_quantity))
@@ -171,6 +179,10 @@ function calculateTrade(position: JsonRecord, orders: JsonRecord[], snapshot: Js
     residual_quantity: residualQuantity,
     residual_value_quote: residualValueQuote,
     accounting_version: position.accounting_version || null,
+    accounting_quality: position.metadata?.exit_residual_accounting?.quality || null,
+    fee_accounting_version: position.fee_accounting_version || null,
+    fee_accounting_quality: position.fee_accounting_quality || null,
+    reserved_quote: Math.max(0, finite(position.reserved_quote)),
     average_entry_price: averageEntryPrice,
     average_exit_price: averageExitPrice,
     current_price: currentPrice,
@@ -187,7 +199,7 @@ function calculateTrade(position: JsonRecord, orders: JsonRecord[], snapshot: Js
   };
 }
 
-function aggregate(exchange: Exchange, trades: JsonRecord[], snapshot: JsonRecord | null): JsonRecord {
+function aggregate(exchange: Exchange, trades: JsonRecord[], snapshot: JsonRecord | null, objectiveRows: JsonRecord[] = []): JsonRecord {
   const exchangeTrades = trades.filter((trade) => trade.exchange === exchange);
   const closed = exchangeTrades.filter((trade) => trade.is_closed);
   const open = exchangeTrades.filter((trade) => trade.is_open);
@@ -208,6 +220,50 @@ function aggregate(exchange: Exchange, trades: JsonRecord[], snapshot: JsonRecor
   const holdSamples = closed.map((trade) => finite(trade.duration_seconds, NaN)).filter(Number.isFinite);
   const todayNet = sum(todayClosed, "net_pnl_quote") + sum(todayOpened, "net_pnl_quote");
   const todayInvested = sum(todayClosed, "invested_cost_quote") + sum(todayOpened, "invested_cost_quote");
+  const objective = objectiveRows
+    .filter((row) => row.exchange === exchange)
+    .sort((a, b) => new Date(a.captured_at || 0).getTime() - new Date(b.captured_at || 0).getTime());
+  const firstObjective = objective[0] || null;
+  const lastObjective = objective.at(-1) || null;
+  const observationHours = firstObjective && lastObjective
+    ? Math.max(0, (new Date(lastObjective.captured_at).getTime() - new Date(firstObjective.captured_at).getTime()) / 3_600_000)
+    : 0;
+  const startEquity = finite(firstObjective?.total_equity_quote);
+  const endEquity = finite(lastObjective?.total_equity_quote);
+  const rawAccountLogGrowth = startEquity > 0 && endEquity > 0 ? Math.log(endEquity / startEquity) : 0;
+  let flowAdjustedAccountLogGrowth = 0;
+  let managedCapitalHours = 0;
+  let exposureHours = 0;
+  for (let index = 1; index < objective.length; index++) {
+    const previous = objective[index - 1];
+    const current = objective[index];
+    const previousAt = new Date(previous.captured_at || 0).getTime();
+    const currentAt = new Date(current.captured_at || 0).getTime();
+    const intervalHours = Math.max(0, (currentAt - previousAt) / 3_600_000);
+    const previousEquity = Math.max(0, finite(previous.total_equity_quote));
+    // Positive flow is a deposit and must be removed from ending equity; negative flow is
+    // a withdrawal and is added back. This keeps wealth growth separate from cash movement.
+    const adjustedEndingEquity = finite(current.total_equity_quote) - finite(current.external_flow_quote);
+    if (previousEquity > 0 && adjustedEndingEquity > 0) {
+      flowAdjustedAccountLogGrowth += Math.log(adjustedEndingEquity / previousEquity);
+    }
+    const managed = Math.max(0, finite(previous.managed_capital_quote));
+    const exposure = Math.max(
+      0,
+      finite(previous.filled_exposure_quote) + finite(previous.reserved_exposure_quote),
+    );
+    managedCapitalHours += managed * intervalHours;
+    exposureHours += exposure * intervalHours;
+  }
+  const windowStartMs = firstObjective ? new Date(firstObjective.captured_at || 0).getTime() : 0;
+  const windowEndMs = lastObjective ? new Date(lastObjective.captured_at || 0).getTime() : 0;
+  const windowTrades = exchangeTrades.filter((trade) => {
+    const entryMs = new Date(trade.entry_at || 0).getTime();
+    return Number.isFinite(entryMs) && entryMs >= windowStartMs && entryMs <= windowEndMs;
+  });
+  const accountCapitalTurnoverPerHour = managedCapitalHours > 0
+    ? sum(windowTrades, "entry_funds_quote") / managedCapitalHours
+    : 0;
 
   return {
     exchange,
@@ -231,6 +287,15 @@ function aggregate(exchange: Exchange, trades: JsonRecord[], snapshot: JsonRecor
     profit_factor: grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? null : 0,
     average_return_pct: closed.length > 0 ? sum(closed, "return_pct") / closed.length : 0,
     average_hold_seconds: holdSamples.length > 0 ? holdSamples.reduce((a, b) => a + b, 0) / holdSamples.length : null,
+    raw_account_log_growth: rawAccountLogGrowth,
+    account_log_growth: flowAdjustedAccountLogGrowth,
+    account_log_growth_per_hour: observationHours > 0 ? flowAdjustedAccountLogGrowth / observationHours : 0,
+    capital_utilization: managedCapitalHours > 0 ? exposureHours / managedCapitalHours : 0,
+    account_capital_turns_per_hour: accountCapitalTurnoverPerHour,
+    objective_observation_hours: observationHours,
+    fee_verified_trade_count: exchangeTrades.filter((trade) =>
+      ["EXACT", "AGGREGATE_EXACT", "THIRD_ASSET_MARKED", "BASE_ASSET_ACCOUNTED"].includes(String(trade.fee_accounting_quality || ""))
+    ).length,
     return_basis: "ACTUAL_ENTRY_COST_WEIGHTED",
   };
 }
@@ -242,18 +307,21 @@ Deno.serve(async (request: Request) => {
   if (!SUPABASE_URL || !SERVICE_KEY) return response({ ok: false, error: "missing Supabase configuration" }, 500);
 
   try {
-    const [positions, orders, snapshots] = await Promise.all([
+    const [positions, orders, fills, snapshots, objectiveRows] = await Promise.all([
       db("trading_positions?is_paper=eq.false&state=in.(OPEN,EXITING,CLOSED)&select=*&order=created_at.desc&limit=1000"),
       db("trading_orders?state=eq.APPLIED&select=*&order=requested_at.asc&limit=5000"),
+      db("trading_fills?select=*&order=executed_at.asc&limit=10000"),
       db("trading_account_snapshots?select=*&order=captured_at.desc&limit=200"),
+      db("trading_joint_objective_snapshots?engine_version=eq.6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE&select=*&order=captured_at.desc&limit=2000").catch(() => []),
     ]);
 
     const latest = latestSnapshots(snapshots);
     const trades = positions
-      .map((position) => calculateTrade(position, orders, latest[position.exchange as Exchange]))
+      .map((position) => calculateTrade(position, orders, fills, latest[position.exchange as Exchange]))
       // TS does not narrow through filter(Boolean); the predicate makes the null removal
       // visible to the type checker. Runtime behavior is unchanged.
       .filter((row): row is JsonRecord => Boolean(row))
+      .filter((row) => row.is_closed || row.remaining_quantity > 0 || row.reserved_quote > 0)
       .sort((left: any, right: any) => new Date(right.entry_at || 0).getTime() - new Date(left.entry_at || 0).getTime());
 
     return response({
@@ -261,14 +329,15 @@ Deno.serve(async (request: Request) => {
       version: VERSION,
       generated_at: new Date().toISOString(),
       exchanges: {
-        upbit: aggregate("upbit", trades, latest.upbit),
-        binance: aggregate("binance", trades, latest.binance),
+        upbit: aggregate("upbit", trades, latest.upbit, objectiveRows),
+        binance: aggregate("binance", trades, latest.binance, objectiveRows),
       },
       trades,
       definitions: {
         cumulative_return_pct: "누적 순손익 / 실제 진입원가 합계",
         current_open_return_pct: "현재 열린 포지션 순손익 / 열린 포지션 실제 진입원가",
         net_pnl_quote: "청산대금-청산수수료+현재평가액-진입대금-진입수수료",
+        joint_objective: "외부 현금흐름을 제거한 계좌 로그성장률·승률·관리자본 회전율을 각각 보존·개선하는 Pareto 계약",
         excluded_states: ["CANCELLED", "ENTRY_TEST_REJECTED", "ENTRY_REJECTED", "ENTRY_NOT_FILLED", "ORPHAN_ENTRY_PENDING"],
       },
     });

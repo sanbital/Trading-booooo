@@ -18,7 +18,7 @@ import {
   type ScalpGeometry,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "6.9.1-FEE-LEDGER-INTEGRITY";
+export const ENGINE_VERSION = "6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;

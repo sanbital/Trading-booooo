@@ -39,6 +39,8 @@ export interface LobOnlineMarketPolicy {
   /** Consecutive monitor observations required before a soft exit. */
   softExitConfirmations: number;
   source: "PRIOR" | "PATTERN" | "MARKET";
+  marketUpdatedAtMs: number | null;
+  patternUpdatedAtMs: number | null;
 }
 
 function finite(value: unknown, fallback = 0): number {
@@ -177,5 +179,7 @@ export function resolveLobOnlineMarketPolicy(
     softExitGraceSeconds,
     softExitConfirmations,
     source: exact ? "MARKET" : global ? "PATTERN" : "PRIOR",
+    marketUpdatedAtMs: exact?.updated_at ? Date.parse(String(exact.updated_at)) || null : null,
+    patternUpdatedAtMs: global?.updated_at ? Date.parse(String(global.updated_at)) || null : null,
   };
 }

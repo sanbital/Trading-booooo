@@ -39,8 +39,8 @@ function trades(
     profitable: winningIndexes.has(index),
     heldSeconds,
     notionalQuote,
-    // Two or more independent hour blocks are required before live promotion.
-    closedAtMs: (1 + Math.floor(index / Math.max(1, Math.ceil(count / 2)))) * 3_600_000 + index,
+    // Three independent blocks separated by at least four hours are required.
+    closedAtMs: (1 + Math.floor(index / Math.max(1, Math.ceil(count / 3)))) * 12 * 3_600_000 + index,
     liveVerified: true,
     accountingQuality: "NO_RESIDUAL",
   }));
@@ -159,7 +159,7 @@ Deno.test("normal order size is compared inside each exchange, not across curren
     exposures(1, 40),
     exposures(2, 40),
     "CHALLENGE",
-    { zScore: 0 },
+    { zScore: 0, currentTrafficFraction: 0.50, minSamplesPerArm: 40, minAssignedScansPerArm: 40 },
   );
   assert(Math.abs(evaluation.deltas.meanNotionalRatio - 1) < 1e-9);
   assert(evaluation.gates.notional_preserved);
@@ -182,38 +182,41 @@ Deno.test("higher win rate and return are rejected when completed trade rate fal
 });
 
 Deno.test("a strict joint improvement promotes only after every invariant passes", () => {
-  const baseline = trades(1, 60, 1, 0.45, 90);
-  const candidate = trades(2, 60, 14, 0.68, 55);
+  const baseline = trades(1, 100, 1, 0.45, 90);
+  const candidate = trades(2, 100, 14, 0.68, 55);
   const evaluation = evaluateLobPolicy(
     baseline,
     candidate,
-    exposures(1, 60),
-    exposures(2, 60),
+    exposures(1, 100),
+    exposures(2, 100),
     "CHALLENGE",
+    { currentTrafficFraction: 0.50 },
   );
   assert(evaluation.decision === "PROMOTE", JSON.stringify(evaluation.gates));
   assert(Object.values(evaluation.gates).every(Boolean));
 });
 
 Deno.test("the second live comparison confirms or rolls back a provisional champion", () => {
-  const control = trades(1, 60, 2, 0.50, 80);
-  const strong = trades(2, 60, 15, 0.70, 50);
+  const control = trades(1, 100, 2, 0.50, 80);
+  const strong = trades(2, 100, 15, 0.70, 50);
   const confirmed = evaluateLobPolicy(
     control,
     strong,
-    exposures(1, 60),
-    exposures(2, 60),
+    exposures(1, 100),
+    exposures(2, 100),
     "CONFIRMATION",
+    { currentTrafficFraction: 0.50 },
   );
   assert(confirmed.decision === "CONFIRM");
 
-  const weak = trades(2, 60, -12, 0.25, 100);
+  const weak = trades(2, 100, -12, 0.25, 100);
   const rolledBack = evaluateLobPolicy(
     control,
     weak,
-    exposures(1, 60),
-    exposures(2, 60),
+    exposures(1, 100),
+    exposures(2, 100),
     "CONFIRMATION",
+    { currentTrafficFraction: 0.50 },
   );
   assert(rolledBack.decision === "ROLLBACK");
 });
@@ -266,14 +269,14 @@ Deno.test("a favourable exchange-pattern mix cannot fake model improvement", () 
 Deno.test("a safe 15 percent canary expands before it can promote", () => {
   const evaluation = evaluateLobPolicy(
     trades(1, 30, 4, 0.50, 70),
-    trades(2, 15, 6, 0.53, 65),
+    trades(2, 30, 6, 0.53, 65),
     exposures(1, 30),
-    exposures(2, 15),
+    exposures(2, 30),
     "CHALLENGE",
     {
       zScore: 0,
       currentTrafficFraction: 0.15,
-      expandedTrafficFraction: 0.50,
+      expandedTrafficFraction: 0.25,
     },
   );
   assert(evaluation.decision === "EXPAND", JSON.stringify(evaluation));

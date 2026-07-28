@@ -1,4 +1,4 @@
-// Trading-booooo v6.9.1-FEE-LEDGER-INTEGRITY — autonomous spot orchestrator.
+// Trading-booooo v6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -24,6 +24,8 @@ import {
   type TradingMode,
   type TradingSettings,
 } from "./core.ts";
+import { calculateExposureLedger, reservationAfterFill } from "./exposure-ledger.ts";
+import { residualSweepDecision } from "./residual-ledger.ts";
 import { allocateNormalizedTradeFees, resolveFeeQuote } from "./fee-accounting.ts";
 import { scalpEntryDecision } from "../_shared/scalp/scalp-gate.ts";
 import { DEFAULT_SCALP_SIGNAL, refreshPWinAtOrderTime } from "../_shared/scalp/signal.ts";
@@ -101,7 +103,7 @@ import { settleSpotMarketReads, validateSpotMarket } from "../_shared/spot-marke
 import { lobEvidenceSizeFraction } from "../_shared/lob/evidence-sizing.ts";
 import { boundedEvBiasPenalty } from "../_shared/lob/ev-bias.ts";
 
-const VERSION = "6.9.1-FEE-LEDGER-INTEGRITY";
+const VERSION = "6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -737,7 +739,7 @@ function weekBoundary(exchange: Exchange): string {
   date.setUTCHours(0, 0, 0, 0);
   return new Date(date.getTime() - offset * 3600_000).toISOString();
 }
-async function accountStats(exchange: Exchange, equityQuote: number, isPaper: boolean) {
+async function accountStats(exchange: Exchange, equityQuote: number, isPaper: boolean, portfolio: any = null) {
   const [
     activeGlobal,
     activeExchange,
@@ -749,10 +751,10 @@ async function accountStats(exchange: Exchange, equityQuote: number, isPaper: bo
     recentClosed,
   ] = await Promise.all([
     db(
-      `trading_positions?is_paper=eq.${isPaper}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id,exchange,market,base_asset`,
+      `trading_positions?is_paper=eq.${isPaper}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id,exchange,market,base_asset,state,remaining_quantity,reserved_quote,reserved_quantity,average_entry_price,planned_entry_price,realized_cost_quote,realized_proceeds_quote,paid_fees_quote,residual_value_quote`,
     ),
     db(
-      `trading_positions?exchange=eq.${exchange}&is_paper=eq.${isPaper}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id,market,base_asset`,
+      `trading_positions?exchange=eq.${exchange}&is_paper=eq.${isPaper}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id,market,base_asset,state,remaining_quantity,reserved_quote,reserved_quantity,average_entry_price,planned_entry_price,realized_cost_quote,realized_proceeds_quote,paid_fees_quote,residual_value_quote`,
     ),
     db(
       `trading_positions?is_paper=eq.${isPaper}&created_at=gte.${
@@ -795,6 +797,26 @@ async function accountStats(exchange: Exchange, equityQuote: number, isPaper: bo
     (sum: number, row: any) => sum + finite(row.realized_pnl_quote),
     0,
   );
+  const markedOpenPnl = (activeExchange || []).reduce((sum: number, row: any) => {
+    const entry = Math.max(0, finite(row.average_entry_price, row.planned_entry_price));
+    const current = Math.max(0, finite(portfolio?.prices?.[row.market], entry));
+    return sum + calculateExposureLedger({
+      state: row.state,
+      remainingQuantity: row.remaining_quantity,
+      reservedQuote: row.reserved_quote,
+      reservedQuantity: row.reserved_quantity,
+      averageEntryPrice: row.average_entry_price,
+      plannedEntryPrice: row.planned_entry_price,
+      currentPrice: current,
+      realizedCostQuote: row.realized_cost_quote,
+      realizedProceedsQuote: row.realized_proceeds_quote,
+      paidFeesQuote: row.paid_fees_quote,
+      residualValueQuote: row.residual_value_quote,
+      estimatedExitCostPct: FEE_PCT[exchange] / 100 + 0.0005,
+    }).markedNetPnlQuote;
+  }, 0);
+  const dailyEconomic = daily + markedOpenPnl;
+  const weeklyEconomic = weekly + markedOpenPnl;
   let consecutiveLosses = 0;
   for (const row of recentClosed || []) {
     if (finite(row.realized_pnl_quote) < 0) consecutiveLosses++;
@@ -808,10 +830,12 @@ async function accountStats(exchange: Exchange, equityQuote: number, isPaper: bo
     entriesTodayGlobal: todayGlobal.length,
     entriesTodayExchange: todayExchange.length,
     dailyBoughtQuote,
-    dailyPnlQuote: daily,
-    weeklyPnlQuote: weekly,
-    dailyPnlPct: equityQuote > 0 ? daily / equityQuote * 100 : 0,
-    weeklyPnlPct: equityQuote > 0 ? weekly / equityQuote * 100 : 0,
+    dailyPnlQuote: dailyEconomic,
+    weeklyPnlQuote: weeklyEconomic,
+    realizedDailyPnlQuote: daily,
+    markedOpenPnlQuote: markedOpenPnl,
+    dailyPnlPct: equityQuote > 0 ? dailyEconomic / equityQuote * 100 : 0,
+    weeklyPnlPct: equityQuote > 0 ? weeklyEconomic / equityQuote * 100 : 0,
     consecutiveLosses,
   };
 }
@@ -1268,7 +1292,15 @@ async function storeFills(orderRow: any, normalized: any) {
       fee_asset: allocated.feeAsset,
       fee_quote_estimate: allocated.feeQuoteEstimate,
       executed_at: trade.executed_at || null,
-      raw: trade.raw || trade,
+      raw: {
+        ...(trade.raw || trade),
+        fee_accounting: {
+          version: "6.10.0",
+          source: allocated.source,
+          marked_quote: allocated.source === "THIRD_ASSET_MARKED",
+          fee_quote: allocated.feeQuoteEstimate,
+        },
+      },
     };
   });
   await db("trading_fills?on_conflict=order_id,trade_id", {
@@ -1322,6 +1354,19 @@ async function updateOrderFromGateway(orderRow: any, payload: any) {
   };
   const feeResolution = feeResolutionFor(orderRow.exchange, orderRow.market, order, fill);
   const feeQuote = feeResolution.feeQuote;
+  const feeQuality = feeResolution.source === "PER_FILL_QUOTE"
+    ? "EXACT"
+    : feeResolution.source === "AGGREGATE_QUOTE"
+    ? "AGGREGATE_EXACT"
+    : feeResolution.source === "THIRD_ASSET_MARKED"
+    ? "THIRD_ASSET_MARKED"
+    : feeResolution.source === "BASE_ASSET"
+    ? "BASE_ASSET_ACCOUNTED"
+    : feeResolution.source === "MIXED" && !feeResolution.estimated
+    ? "EXACT"
+    : feeResolution.source === "MISSING"
+    ? "MISSING"
+    : "ESTIMATED";
   // Attach the base-asset commission so the caller can book the NET quantity received.
   const paidFeeBase = baseAssetFee(
     order,
@@ -1336,6 +1381,15 @@ async function updateOrderFromGateway(orderRow: any, payload: any) {
     executed_funds_quote: finite(fill.executedFunds),
     paid_fee_quote: feeQuote,
     fee_asset: fill.feeAsset || order?.fee_asset || null,
+    fee_accounting_quality: feeQuality,
+    fee_accounting_version: "6.10.0",
+    fee_quote_source: feeResolution.source,
+    fee_reconciled_at: feeQuality === "ESTIMATED" || feeQuality === "MISSING"
+      ? null
+      : new Date().toISOString(),
+    fee_reconcile_next_at: feeQuality === "ESTIMATED" || feeQuality === "MISSING"
+      ? orderRow.fee_reconcile_next_at || new Date(Date.now() + 60_000).toISOString()
+      : null,
     completed_at:
       ["FILLED", "CANCELED", "PARTIALLY_FILLED_CANCELED"].includes(String(order?.status))
         ? new Date().toISOString()
@@ -1343,7 +1397,7 @@ async function updateOrderFromGateway(orderRow: any, payload: any) {
     raw_response: {
       ...(order || {}),
       fee_accounting: {
-        version: "6.9.1",
+        version: "6.10.0",
         source: feeResolution.source,
         fee_quote: feeQuote,
         aggregate_fee_asset: feeResolution.aggregateFeeAsset,
@@ -1460,6 +1514,18 @@ async function applyExitAccounting(
     p_trailing_stop: nextTrail,
     p_dust_value_quote: dustValueQuote,
   });
+  if (Boolean(result?.closed) && result?.applied !== false && position.metadata?.is_exploration) {
+    try {
+      await rpc("settle_lob_exploration_budget_v610", { p_position_id: position.id });
+    } catch (error) {
+      await event(
+        "EXPLORATION_BUDGET_SETTLEMENT_FAILED",
+        `${position.exchange}:${position.market} exploration budget settlement failed`,
+        { error: error instanceof Error ? error.message : String(error) },
+        { positionId: position.id, orderId: orderRow.id, level: "WARNING" },
+      );
+    }
+  }
   if (Boolean(result?.closed) && residualPreview.residualValueQuote > 0) {
     await event(
       "EXIT_RESIDUAL_VALUED",
@@ -1528,34 +1594,66 @@ function allocationConfig(settings: TradingSettings, exchange: Exchange) {
 }
 async function managedPortfolio(settings: TradingSettings, exchange: Exchange, portfolio: any) {
   const paper = settings.mode !== "LIVE_LIMITED";
-  const active = await db(
-    `trading_positions?exchange=eq.${exchange}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&is_paper=eq.${paper}&select=market,remaining_quantity,average_entry_price,planned_entry_price`,
-  ) as any[];
-  let openCost = 0;
-  let botPositionValue = 0;
-  for (const row of active || []) {
+  const [active, residualRows] = await Promise.all([
+    db(
+      `trading_positions?exchange=eq.${exchange}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&is_paper=eq.${paper}&select=market,state,remaining_quantity,reserved_quote,reserved_quantity,average_entry_price,planned_entry_price,realized_cost_quote,realized_proceeds_quote,paid_fees_quote,residual_value_quote`,
+    ) as Promise<any[]>,
+    db(
+      `trading_residual_inventory?exchange=eq.${exchange}&state=in.(AVAILABLE,RESERVED_FOR_REENTRY,SWEEP_PENDING)&select=market,remaining_quantity,value_quote`,
+    ).catch(() => []) as Promise<any[]>,
+  ]);
+  const residualInventoryValue = (residualRows || []).reduce((sum: number, row: any) => {
     const quantity = Math.max(0, finite(row.remaining_quantity));
+    const livePrice = Math.max(0, finite(portfolio?.prices?.[row.market]));
+    const markedValue = livePrice > 0 ? quantity * livePrice : Math.max(0, finite(row.value_quote));
+    return sum + markedValue;
+  }, 0);
+  let bookedExposure = 0;
+  let botPositionValue = 0;
+  let reservedExposure = 0;
+  for (const row of active || []) {
     const entry = Math.max(0, finite(row.average_entry_price, row.planned_entry_price));
     const current = Math.max(0, finite(portfolio?.prices?.[row.market], entry));
-    openCost += quantity * entry;
-    botPositionValue += quantity * current;
+    const ledger = calculateExposureLedger({
+      state: row.state,
+      remainingQuantity: row.remaining_quantity,
+      reservedQuote: row.reserved_quote,
+      reservedQuantity: row.reserved_quantity,
+      averageEntryPrice: row.average_entry_price,
+      plannedEntryPrice: row.planned_entry_price,
+      currentPrice: current,
+      realizedCostQuote: row.realized_cost_quote,
+      realizedProceedsQuote: row.realized_proceeds_quote,
+      paidFeesQuote: row.paid_fees_quote,
+      residualValueQuote: row.residual_value_quote,
+      estimatedExitCostPct: FEE_PCT[exchange] / 100 + 0.0005,
+    });
+    bookedExposure += ledger.totalExposureQuote;
+    reservedExposure += ledger.reservedExposureQuote;
+    botPositionValue += ledger.liquidationValueQuote;
   }
-  // Capital allocation is quote-currency based: Upbit KRW and Binance USDT.
-  // Manual coin holdings are excluded; only quote cash/locked quote and bot positions count.
   const capitalBaseQuote = Math.max(0, finite(portfolio.available_quote)) +
-    Math.max(0, finite(portfolio.locked_quote)) + botPositionValue;
+    Math.max(0, finite(portfolio.locked_quote)) + botPositionValue + residualInventoryValue;
   const config = allocationConfig(settings, exchange);
   const managed = calculateManagedCapital({
     capitalBaseQuote,
     availableQuote: finite(portfolio.available_quote),
-    // Use the more conservative of entry cost and current value so a winning
-    // position cannot make a fixed allocation appear to have free capacity.
-    openCostQuote: Math.max(openCost, botPositionValue),
+    openCostQuote: bookedExposure,
     allocationMode: config.mode === "FIXED" ? "FIXED" : "ALL",
     fixedAllocationQuote: config.fixed,
     reserveQuote: config.reserve,
   });
-  return { ...portfolio, managed: { ...managed, botPositionValueQuote: botPositionValue } };
+  return {
+    ...portfolio,
+    managed: {
+      ...managed,
+      openCostQuote: bookedExposure,
+      botPositionValueQuote: botPositionValue,
+      reservedExposureQuote: reservedExposure,
+      residualInventoryValueQuote: residualInventoryValue,
+      maxStrategyExposurePct: clamp(finite((settings as any).scalp_max_strategy_exposure_pct, 100), 10, 100),
+    },
+  };
 }
 
 function exchangeLimits(settings: TradingSettings, exchange: Exchange) {
@@ -1980,15 +2078,27 @@ async function enterCandidateInner(
   }
   // v5.4: asset-scoped pause. A confirmed mismatch on one coin no longer stops the
   // whole system; it stops that coin.
-  const assetLocks = Array.isArray((settings as any).manual_asset_locks)
-    ? (settings as any).manual_asset_locks
-    : [];
-  if (assetLocks.includes(`${exchange}:${base}`)) {
+  let activeLock: any = null;
+  try {
+    activeLock = (await db(
+      `trading_asset_locks?exchange=eq.${exchange}&asset=eq.${encodeURIComponent(base)}&state=eq.LOCKED&select=reason,clean_checks&limit=1`,
+    ))[0] || null;
+  } catch {
+    // Rolling-deploy fallback: before the lock-ledger migration exists, preserve the old
+    // JSONB lock semantics. A ledger read failure must never silently unlock an asset.
+    const legacyLocks = Array.isArray((settings as any).manual_asset_locks)
+      ? (settings as any).manual_asset_locks
+      : [];
+    if (legacyLocks.map(String).includes(`${exchange}:${base}`)) {
+      activeLock = { reason: "LEGACY_MANUAL_ASSET_LOCK", clean_checks: 0 };
+    }
+  }
+  if (activeLock) {
     return {
       entered: false,
       exchange,
       market: candidate.market,
-      reason: `asset ${base} is paused pending manual review`,
+      reason: `asset ${base} is paused: ${activeLock.reason || "account reconciliation"}`,
     };
   }
 
@@ -2067,6 +2177,8 @@ async function enterCandidateInner(
       featureSamples: finite((features as any).samples, 0),
       marketSamples: onlinePolicy.marketSamples,
       patternSamples: onlinePolicy.globalSamples,
+      marketUpdatedAtMs: onlinePolicy.marketUpdatedAtMs,
+      patternUpdatedAtMs: onlinePolicy.patternUpdatedAtMs,
     }, assignedPolicy.policyDefinition);
     lobSizingContext = {
       lobSnapshot,
@@ -2119,7 +2231,7 @@ async function enterCandidateInner(
   const riskSizing = allocationOnly
     ? calculateOrderNotional({
       managedCapitalQuote: finite(managed.managedCapitalQuote),
-      maxStrategyExposureFraction: 1,
+      maxStrategyExposureFraction: clamp(finite((settings as any).scalp_max_strategy_exposure_pct, 100), 10, 100) / 100,
       desiredSlots: slots,
       perTradeLossBudgetQuote: finite(managed.managedCapitalQuote) *
         clamp(finite((settings as any).scalp_max_single_loss_pct, 5), 0.1, 100) / 100,
@@ -2343,6 +2455,12 @@ async function enterCandidateInner(
       noise_adjusted_stop_bps: decision.noiseAdjustedStopBps,
       traps: decision.traps.traps.map((trap) => trap.name),
       trap_detail: decision.traps.traps,
+      prediction_basis: "FILL_CONDITIONAL",
+      conditional_ev_net_bps: decision.conditionalEvNetBps,
+      conditional_ev_lower_bound_bps: decision.conditionalEvLowerBoundBps,
+      attempt_ev_net_bps: decision.attemptEvNetBps,
+      attempt_ev_lower_bound_bps: decision.attemptEvLowerBoundBps,
+      // Compatibility aliases are conditional-on-fill from v6.10 onward.
       ev_net_bps: decision.evNetBps,
       ev_lower_bound_bps: decision.evLowerBoundBps,
       max_holding_seconds: decision.maxHoldingSeconds,
@@ -2563,6 +2681,31 @@ async function enterCandidateInner(
     scalpTarget2 = tickRound(entryPrice * (1 + scalpTargetPct * 1.5), rules.price_tick, "up");
   }
 
+  // Low-evidence trades preserve learning throughput, but they have their own daily loss
+  // budget and concurrency cap. The budget is claimed only AFTER the position row exists,
+  // so every reserve has an idempotent position key and cancellation cannot leak budget.
+  const lowEvidenceTrade = isLobStrategy((settings as any).strategy) &&
+    Boolean(lobSizingContext?.evidenceSizing?.lowEvidence);
+  let explorationWorstCaseLossQuote = 0;
+  if (settings.mode === "LIVE_LIMITED" && lowEvidenceTrade) {
+    const maxConcurrent = Math.max(
+      1,
+      Math.floor(finite(lobSizingContext?.assignedPolicy?.policyDefinition?.exploration?.maxConcurrentLowEvidence, 1)),
+    );
+    const activeLowEvidence = await db(
+      `trading_positions?exchange=eq.${exchange}&state=in.(ENTRY_PENDING,OPEN,EXITING)&metadata->>low_evidence=eq.true&select=id`,
+    ).catch(() => []);
+    if (activeLowEvidence.length >= maxConcurrent) {
+      return { entered: false, exchange, market: candidate.market, reason: "low-evidence concurrency budget exhausted" };
+    }
+    const stopFraction = Math.max(
+      0.000001,
+      scalpStopPrice && entryPrice > 0 ? (entryPrice - scalpStopPrice) / entryPrice : 0.005,
+    );
+    explorationWorstCaseLossQuote = decisionNotional *
+      (stopFraction + FEE_PCT[exchange] * 2 / 100 + 0.001);
+  }
+
   // v5.12: per-symbol expected resolution is retained for diagnostics, while
   // max_holding_at is the hard TIMEOUT barrier. The profile ceiling prevents an HF signal
   // from silently turning into an intraday position.
@@ -2586,7 +2729,7 @@ async function enterCandidateInner(
     ? new Date(Date.now() + scalpSafetyTtlMinutes * 60_000).toISOString()
     : new Date(Date.now() + clamp(finite(candidate.intended_horizon_hours, 24), 1, 480) * 3600_000)
       .toISOString();
-  const position = (await insert("trading_positions", {
+  let position = (await insert("trading_positions", {
     candidate_id: candidate.id,
     scan_id: candidate.scan_id,
     decision_id: decisionId,
@@ -2595,6 +2738,11 @@ async function enterCandidateInner(
     market: candidate.market,
     base_asset: base,
     state: "ENTRY_PENDING",
+    reserved_quote: quantity * entryPrice,
+    reserved_quantity: quantity,
+    reservation_expires_at: new Date(Date.now() + Math.max(30, finite(settings.entry_ttl_seconds, 180)) * 1000).toISOString(),
+    fee_accounting_quality: settings.mode === "LIVE_LIMITED" ? "LEGACY_UNVERIFIED" : "NOT_APPLICABLE",
+    fee_accounting_version: "6.10.0",
     is_paper: settings.mode !== "LIVE_LIMITED",
     profile_version: candidate.profile_version || 0,
     planned_entry_price: entryPrice,
@@ -2623,9 +2771,14 @@ async function enterCandidateInner(
       // v5.3: the full entry-time signal, persisted so the pWin calibration loop can
       // later join predicted probability against the realized outcome on this row.
       scalp_signal: scalpAudit,
-      lob_signal: isLobStrategy((settings as any).strategy) ? scalpAudit : null,
+      lob_signal: isLobStrategy((settings as any).strategy)
+        ? { ...(scalpAudit || {}), prediction_basis: "FILL_CONDITIONAL" }
+        : null,
+      prediction_basis: isLobStrategy((settings as any).strategy) ? "FILL_CONDITIONAL" : null,
+      low_evidence: Boolean(lobSizingContext?.evidenceSizing?.lowEvidence),
       // Tagged so calibration can weight these and so their cost is reportable separately.
-      is_exploration: false,
+      is_exploration: lowEvidenceTrade,
+      exploration_budget: (candidate as any).__exploration_budget || null,
       scalp_expected_minutes: isScalpStrategy((settings as any).strategy)
         ? scalpExpectedMinutes
         : null,
@@ -2637,6 +2790,44 @@ async function enterCandidateInner(
         : null,
     },
   }))[0] as Position;
+
+  if (settings.mode === "LIVE_LIMITED" && lowEvidenceTrade) {
+    const explorationClaim = await rpc("claim_lob_exploration_budget_v610", {
+      p_position_id: position.id,
+      p_exchange: exchange,
+      p_managed_capital_quote: finite(managed.managedCapitalQuote),
+      p_worst_case_loss_quote: explorationWorstCaseLossQuote,
+    });
+    if (explorationClaim?.allowed !== true) {
+      const cancelled = await patch("trading_positions", `id=eq.${position.id}`, {
+        state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
+        close_reason: "LOW_EVIDENCE_BUDGET_EXHAUSTED",
+        closed_at: new Date().toISOString(),
+      });
+      position = (cancelled[0] || position) as Position;
+      return {
+        entered: false,
+        exchange,
+        market: candidate.market,
+        reason: "low-evidence daily loss budget exhausted",
+      };
+    }
+    const explorationBudget = {
+      ...(explorationClaim || {}),
+      claimed_loss_quote: explorationWorstCaseLossQuote,
+      day_key: explorationClaim?.day_key || explorationClaim?.row?.day_key || null,
+    };
+    const updated = await patch("trading_positions", `id=eq.${position.id}`, {
+      metadata: {
+        ...(position.metadata || {}),
+        exploration_budget: explorationBudget,
+      },
+    });
+    position = (updated[0] || { ...position, metadata: { ...(position.metadata || {}), exploration_budget: explorationBudget } }) as Position;
+  }
 
   if (settings.mode !== "LIVE_LIMITED") {
     const paperPrice = depth.vwap > 0 ? depth.vwap : entryPrice;
@@ -2671,6 +2862,9 @@ async function enterCandidateInner(
     ) {
       await patch("trading_positions", `id=eq.${position.id}`, {
         state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
         close_reason: "MAKER_ENTRY_BELOW_MINIMUM",
         closed_at: new Date().toISOString(),
       });
@@ -2719,6 +2913,9 @@ async function enterCandidateInner(
       await updateOrderFromGateway(makerOrderRow, result);
       const rows = await patch("trading_positions", `id=eq.${position.id}`, {
         planned_entry_price: makerPrice,
+        reserved_quote: makerQuantity * makerPrice,
+        reserved_quantity: makerQuantity,
+        reservation_expires_at: new Date(Date.now() + Math.max(30, finite(settings.entry_ttl_seconds, 180)) * 1000).toISOString(),
         metadata: {
           ...(position.metadata || {}),
           maker_entry_identifier: makerIdentifier,
@@ -2745,7 +2942,7 @@ async function enterCandidateInner(
         market: candidate.market,
         position: { ...position, ...(rows[0] || {}) },
         reason: "maker entry resting",
-        exploration: false,
+        exploration: lowEvidenceTrade,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -2756,6 +2953,9 @@ async function enterCandidateInner(
       });
       await patch("trading_positions", `id=eq.${position.id}`, {
         state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
         close_reason: "MAKER_ENTRY_REJECTED",
         closed_at: new Date().toISOString(),
       });
@@ -2785,6 +2985,9 @@ async function enterCandidateInner(
     const message = error instanceof Error ? error.message : String(error);
     await patch("trading_positions", `id=eq.${position.id}`, {
       state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
       close_reason: "ENTRY_TEST_REJECTED",
       closed_at: new Date().toISOString(),
       metadata: { ...(position.metadata || {}), entry_test_error: message },
@@ -2843,6 +3046,9 @@ async function enterCandidateInner(
       }
       await patch("trading_positions", `id=eq.${position.id}`, {
         state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
         close_reason: "ENTRY_NOT_FILLED",
         closed_at: new Date().toISOString(),
       });
@@ -2862,7 +3068,7 @@ async function enterCandidateInner(
       exchange,
       market: candidate.market,
       position: withTp,
-      exploration: false,
+      exploration: lowEvidenceTrade,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -2878,6 +3084,9 @@ async function enterCandidateInner(
       });
       await patch("trading_positions", `id=eq.${position.id}`, {
         state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
         close_reason: "ENTRY_REJECTED",
         closed_at: new Date().toISOString(),
       });
@@ -3174,6 +3383,359 @@ async function botLockedQuantities(
     return null;
   }
   return locked;
+}
+
+async function reconcileFeeLedger(cycleId: string) {
+  const due = new Date().toISOString();
+  const rows = await db(
+    `trading_orders?state=eq.APPLIED&executed_funds_quote=gt.0&fee_accounting_quality=in.(ESTIMATED,MISSING,LEGACY_UNVERIFIED)&or=(fee_reconcile_next_at.is.null,fee_reconcile_next_at.lte.${encodeURIComponent(due)})&select=*&order=completed_at.desc&limit=12`,
+  ).catch(() => []) as any[];
+  const results: any[] = [];
+  for (const row of rows) {
+    const attempts = Math.max(0, Math.floor(finite(row.fee_reconcile_attempts)));
+    try {
+      const order = await gateway(row.exchange as Exchange, {
+        action: "get_order",
+        identifier: row.identifier,
+        market: row.market,
+      });
+      const updated = await updateOrderFromGateway(row, order);
+      const quality = String(updated.row?.fee_accounting_quality || "");
+      const exact = ["EXACT", "AGGREGATE_EXACT", "THIRD_ASSET_MARKED", "BASE_ASSET_ACCOUNTED"]
+        .includes(quality);
+      await patch("trading_orders", `id=eq.${row.id}`, {
+        fee_reconcile_attempts: attempts + 1,
+        fee_reconcile_next_at: exact
+          ? null
+          : new Date(Date.now() + Math.min(3_600_000, 60_000 * 2 ** Math.min(6, attempts))).toISOString(),
+        fee_reconciled_at: exact ? new Date().toISOString() : null,
+      });
+      let recomputed: any = null;
+      if (row.position_id) {
+        recomputed = await rpc("recompute_position_economic_accounting_v610", {
+          p_position_id: row.position_id,
+        }).catch(() => null);
+        const position = recomputed?.position;
+        if (exact && position?.state === "CLOSED" && position?.metadata?.lob_signal) {
+          await rpc("learn_lob_trade_outcome", { p_position_id: row.position_id }).catch(() => null);
+        }
+      }
+      results.push({ order_id: row.id, quality, exact, recomputed: Boolean(recomputed?.updated) });
+    } catch (error) {
+      const nextAt = new Date(
+        Date.now() + Math.min(3_600_000, 60_000 * 2 ** Math.min(6, attempts)),
+      ).toISOString();
+      await patch("trading_orders", `id=eq.${row.id}`, {
+        fee_reconcile_attempts: attempts + 1,
+        fee_reconcile_next_at: nextAt,
+      }).catch(() => null);
+      await event(
+        "FEE_RECONCILIATION_RETRY",
+        `${row.exchange}:${row.market} fee detail remains unresolved`,
+        { order_id: row.id, attempts: attempts + 1, next_at: nextAt, error: error instanceof Error ? error.message : String(error) },
+        { cycleId, positionId: row.position_id, orderId: row.id, level: "WARNING" },
+      );
+    }
+  }
+  return results;
+}
+
+async function recordJointObjectiveSnapshot(
+  exchange: Exchange,
+  settings: TradingSettings & JsonRecord,
+  rawPortfolio: any,
+  trackedPositions: Position[],
+) {
+  const latest = (await db(
+    `trading_joint_objective_snapshots?exchange=eq.${exchange}&select=captured_at&order=captured_at.desc&limit=1`,
+  ).catch(() => []))[0];
+  const latestMs = Date.parse(String(latest?.captured_at || ""));
+  if (Number.isFinite(latestMs) && Date.now() - latestMs < 60_000) return null;
+  const flowSince = Number.isFinite(latestMs) ? new Date(latestMs).toISOString() : new Date(0).toISOString();
+  const cashFlows = await db(
+    `trading_cash_flows?exchange=eq.${exchange}&detected_at=gt.${encodeURIComponent(flowSince)}&select=flow_type,amount_quote`,
+  ).catch(() => []) as any[];
+  const externalFlowQuote = cashFlows.reduce((sum, row) => {
+    const amount = Math.max(0, finite(row.amount_quote));
+    return sum + (String(row.flow_type).toUpperCase() === "EXTERNAL_DECREASE" ? -amount : amount);
+  }, 0);
+  const managed = await managedPortfolio(settings, exchange, rawPortfolio);
+  const dayStart = dayBoundary(exchange);
+  const realizedRows = await db(
+    `trading_positions?exchange=eq.${exchange}&is_paper=eq.${settings.mode !== "LIVE_LIMITED"}&state=eq.CLOSED&closed_at=gte.${encodeURIComponent(dayStart)}&select=realized_pnl_quote`,
+  ).catch(() => []) as any[];
+  const realizedDaily = realizedRows.reduce(
+    (sum, row) => sum + finite(row.realized_pnl_quote),
+    0,
+  );
+  const markedOpen = trackedPositions.reduce((sum, row) => {
+    if (row.state === "ENTRY_PENDING" || finite(row.remaining_quantity) <= 0) return sum;
+    const entry = Math.max(0, finite(row.average_entry_price, row.planned_entry_price));
+    const current = Math.max(0, finite(rawPortfolio?.prices?.[row.market], entry));
+    return sum + calculateExposureLedger({
+      state: row.state,
+      remainingQuantity: row.remaining_quantity,
+      reservedQuote: row.reserved_quote,
+      reservedQuantity: row.reserved_quantity,
+      averageEntryPrice: row.average_entry_price,
+      plannedEntryPrice: row.planned_entry_price,
+      currentPrice: current,
+      realizedCostQuote: row.realized_cost_quote,
+      realizedProceedsQuote: row.realized_proceeds_quote,
+      paidFeesQuote: row.paid_fees_quote,
+      residualValueQuote: row.residual_value_quote,
+      estimatedExitCostPct: FEE_PCT[exchange] / 100 + 0.0005,
+    }).markedNetPnlQuote;
+  }, 0);
+  return (await insert("trading_joint_objective_snapshots", {
+    exchange,
+    total_equity_quote: Math.max(0, finite(rawPortfolio?.total_equity_quote)),
+    managed_capital_quote: Math.max(0, finite(managed?.managed?.managedCapitalQuote)),
+    managed_available_quote: Math.max(0, finite(managed?.managed?.managedAvailableQuote)),
+    filled_exposure_quote: Math.max(
+      0,
+      finite(managed?.managed?.openCostQuote) - finite(managed?.managed?.reservedExposureQuote),
+    ),
+    reserved_exposure_quote: Math.max(0, finite(managed?.managed?.reservedExposureQuote)),
+    residual_inventory_value_quote: Math.max(0, finite(managed?.managed?.residualInventoryValueQuote)),
+    marked_open_pnl_quote: markedOpen,
+    realized_daily_pnl_quote: realizedDaily,
+    external_flow_quote: finite(externalFlowQuote),
+    engine_version: VERSION,
+    metadata: {
+      strategy: (settings as any).strategy,
+      max_strategy_exposure_pct: finite((settings as any).scalp_max_strategy_exposure_pct, 100),
+    },
+  }))[0];
+}
+
+async function openOrderAssets(exchange: Exchange): Promise<Set<string> | null> {
+  try {
+    const rows = await gateway(exchange, { action: "open_orders" });
+    const assets = new Set<string>();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const raw = row?.raw || {};
+      const market = String(row?.market ?? raw.market ?? raw.symbol ?? "");
+      const asset = baseAsset(exchange, market);
+      if (asset) assets.add(asset.toUpperCase());
+    }
+    return assets;
+  } catch {
+    return null;
+  }
+}
+
+async function reconcilePersistedAssetLocks(
+  exchange: Exchange,
+  portfolio: any,
+  activePositions: Position[],
+  orderAssets: Set<string> | null,
+  cycleId: string,
+) {
+  const locks = await db(
+    `trading_asset_locks?exchange=eq.${exchange}&state=eq.LOCKED&select=asset,reason,clean_checks`,
+  ).catch(() => []) as any[];
+  if (!locks.length) return;
+  const activeAssets = new Set(activePositions.map((row) => String(row.base_asset || "").toUpperCase()));
+  const residualRows = await db(
+    `trading_residual_inventory?exchange=eq.${exchange}&state=in.(AVAILABLE,RESERVED_FOR_REENTRY)&select=asset,remaining_quantity`,
+  ).catch(() => []) as any[];
+  const residual = new Map<string, number>();
+  for (const row of residualRows) {
+    const asset = String(row.asset || "").toUpperCase();
+    residual.set(asset, (residual.get(asset) || 0) + Math.max(0, finite(row.remaining_quantity)));
+  }
+  const balances = new Map<string, number>();
+  for (const row of Array.isArray(portfolio?.accounts) ? portfolio.accounts : []) {
+    const asset = String(row.currency || row.asset || "").toUpperCase();
+    balances.set(asset, Math.max(0, finite(row.balance ?? row.free)) + Math.max(0, finite(row.locked)));
+  }
+  for (const lock of locks) {
+    const asset = String(lock.asset || "").toUpperCase();
+    if (orderAssets === null) {
+      await rpc("record_asset_lock_check_v610", {
+        p_exchange: exchange, p_asset: asset, p_status: "QUERY_FAILED",
+        p_reason: "OPEN_ORDERS_UNREADABLE", p_metadata: { cycle_id: cycleId },
+      }).catch(() => null);
+      continue;
+    }
+    const accountQty = balances.get(asset) || 0;
+    const residualQty = residual.get(asset) || 0;
+    const quantityTolerance = Math.max(1e-12, residualQty * 0.005);
+    const clean = !activeAssets.has(asset) && !orderAssets.has(asset) &&
+      accountQty <= residualQty + quantityTolerance;
+    await rpc("record_asset_lock_check_v610", {
+      p_exchange: exchange,
+      p_asset: asset,
+      p_status: clean ? "CLEAN" : "MISMATCH",
+      p_reason: clean ? "NO_ACTIVE_POSITION_ORDER_OR_UNEXPLAINED_BALANCE" : "LOCK_CONDITION_STILL_PRESENT",
+      p_metadata: { cycle_id: cycleId, account_quantity: accountQty, residual_quantity: residualQty },
+    }).catch(() => null);
+  }
+}
+
+async function sweepResidualInventory(
+  exchange: Exchange,
+  settings: TradingSettings & JsonRecord,
+  activePositions: Position[],
+  orderAssets: Set<string> | null,
+  cycleId: string,
+) {
+  if (
+    settings.mode !== "LIVE_LIMITED" ||
+    (settings as any).residual_sweep_enabled === false ||
+    orderAssets === null
+  ) return [];
+  const rows = await db(
+    `trading_residual_inventory?exchange=eq.${exchange}&state=eq.AVAILABLE&remaining_quantity=gt.0&select=*&order=updated_at.asc`,
+  ).catch(() => []) as any[];
+  const actions: any[] = [];
+  const activeAssets = new Set(
+    activePositions.map((row) => String(row.base_asset || "").toUpperCase()),
+  );
+  const groups = new Map<string, any[]>();
+  for (const row of rows) {
+    const key = `${String(row.asset || "").toUpperCase()}|${String(row.market || "").toUpperCase()}`;
+    groups.set(key, [...(groups.get(key) || []), row]);
+  }
+  for (const group of groups.values()) {
+    const first = group[0];
+    const asset = String(first.asset || "").toUpperCase();
+    const market = String(first.market || "").toUpperCase();
+    // Keep BNB available for Binance commission payment.
+    if (exchange === "binance" && asset === "BNB") continue;
+    const planned = await db(
+      `scanner_candidates?exchange=eq.${exchange}&market=eq.${encodeURIComponent(market)}&decision=eq.BUY&created_at=gte.${encodeURIComponent(new Date(Date.now() - 300_000).toISOString())}&select=id&limit=1`,
+    ).catch(() => []);
+    let quote: any;
+    try {
+      quote = await marketQuote(exchange, market);
+    } catch {
+      continue;
+    }
+    const price = Math.max(0, finite(quote?.best_bid, quote?.current));
+    const totalQuantity = group.reduce(
+      (sum, row) => sum + Math.max(0, finite(row.remaining_quantity)),
+      0,
+    );
+    const minOrder = exchange === "upbit"
+      ? finite(settings.min_order_krw, 5000)
+      : finite(settings.min_order_usdt, 10);
+    const decision = residualSweepDecision({
+      quantity: totalQuantity,
+      markPrice: price,
+      minOrderQuote: minOrder,
+      activePosition: activeAssets.has(asset),
+      openOrder: orderAssets.has(asset),
+      plannedReentry: planned.length > 0,
+      sweepBuffer: finite((settings as any).residual_sweep_buffer, 1.10),
+    });
+    if (!decision.allowed) continue;
+    const identifier = uniqueId("rs", String(first.position_id));
+    const orderRow = await createOrderRecord({
+      position_id: null,
+      candidate_id: null,
+      cycle_id: cycleId,
+      decision_id: null,
+      exchange,
+      quote_currency: quoteCurrency(exchange),
+      identifier,
+      market,
+      side: "SELL",
+      purpose: "RESIDUAL_SWEEP",
+      order_type: "MARKET",
+      requested_volume: totalQuantity,
+      requested_notional_quote: decision.valueQuote,
+      state: "REQUESTED",
+    });
+    for (const row of group) {
+      await patch("trading_residual_inventory", `position_id=eq.${row.position_id}`, {
+        state: "SWEEP_PENDING",
+        sweep_order_id: orderRow.id,
+        updated_at: new Date().toISOString(),
+      });
+    }
+    try {
+      const result = await gateway(exchange, {
+        action: "create_order",
+        order: { market, side: "SELL", type: "MARKET", quantity: totalQuantity, identifier },
+        wait_for_final_ms: 4000,
+      }, 20_000);
+      const updated = await updateOrderFromGateway(orderRow, result);
+      const sold = Math.max(0, finite(updated.fill.executedVolume));
+      const baseFee = Math.max(0, finite(updated.fill.paidFeeBase));
+      const proceeds = Math.max(0, finite(updated.fill.executedFunds));
+      const quoteFee = Math.max(0, finite(updated.fill.paidFeeQuote));
+      let soldLeft = sold;
+      let baseFeeLeft = baseFee;
+      let allocatedProceeds = 0;
+      let allocatedQuoteFee = 0;
+      for (let index = 0; index < group.length; index++) {
+        const row = group[index];
+        const before = Math.max(0, finite(row.remaining_quantity));
+        const soldFromRow = Math.min(before, soldLeft);
+        soldLeft -= soldFromRow;
+        const afterSale = Math.max(0, before - soldFromRow);
+        const baseFeeFromRow = Math.min(afterSale, baseFeeLeft);
+        baseFeeLeft -= baseFeeFromRow;
+        const remaining = Math.max(0, afterSale - baseFeeFromRow);
+        const isLastSoldAllocation = index === group.length - 1 || soldLeft <= 1e-12;
+        const proceedsShare = sold > 0
+          ? isLastSoldAllocation
+            ? Math.max(0, proceeds - allocatedProceeds)
+            : proceeds * soldFromRow / sold
+          : 0;
+        const feeShare = sold > 0
+          ? isLastSoldAllocation
+            ? Math.max(0, quoteFee - allocatedQuoteFee)
+            : quoteFee * soldFromRow / sold
+          : 0;
+        allocatedProceeds += proceedsShare;
+        allocatedQuoteFee += feeShare;
+        const cumulativeProceeds = Math.max(0, finite(row.realized_proceeds_quote)) + proceedsShare;
+        const cumulativeFees = Math.max(0, finite(row.paid_fees_quote)) + feeShare;
+        const cumulativeBaseFee = Math.max(0, finite(row.paid_fee_base_quantity)) + baseFeeFromRow;
+        const originalMarkValue = Math.max(0, finite(row.original_quantity)) *
+          Math.max(0, finite(row.mark_price));
+        const residualPnl = cumulativeProceeds - cumulativeFees + remaining * price - originalMarkValue;
+        await patch("trading_residual_inventory", `position_id=eq.${row.position_id}`, {
+          remaining_quantity: remaining,
+          swept_quantity: Math.max(0, finite(row.swept_quantity)) + soldFromRow,
+          realized_proceeds_quote: cumulativeProceeds,
+          paid_fees_quote: cumulativeFees,
+          paid_fee_base_quantity: cumulativeBaseFee,
+          value_quote: remaining * price,
+          residual_pnl_quote: residualPnl,
+          state: remaining <= 1e-12 ? "SWEPT" : "AVAILABLE",
+          updated_at: new Date().toISOString(),
+        });
+      }
+      actions.push({
+        asset,
+        market,
+        sold,
+        base_fee_quantity: baseFee,
+        proceeds_quote: proceeds,
+        fee_quote: quoteFee,
+        remaining: Math.max(0, totalQuantity - sold - baseFee),
+        source_positions: group.length,
+        order_id: orderRow.id,
+      });
+    } catch (error) {
+      for (const row of group) {
+        await patch("trading_residual_inventory", `position_id=eq.${row.position_id}`, {
+          state: "AVAILABLE",
+          sweep_order_id: null,
+          updated_at: new Date().toISOString(),
+        });
+      }
+      await event("RESIDUAL_SWEEP_FAILED", `${exchange}:${asset} residual sweep failed`, {
+        error: error instanceof Error ? error.message : String(error),
+        source_positions: group.length,
+      }, { cycleId, orderId: orderRow.id, level: "WARNING" });
+    }
+  }
+  return actions;
 }
 
 function scalpHoldConfig(settings: TradingSettings, exchange: Exchange): ScalpHoldConfig {
@@ -3531,7 +4093,19 @@ async function syncMakerEntry(position: Position, settings: TradingSettings, cyc
 
   const expired = ageSeconds >= ttl || drifted;
   if ((status === "OPEN" || status === "PARTIALLY_FILLED") && !expired) {
-    return { pending: true, position };
+    const pendingUpdate = await updateOrderFromGateway(orderRow, order);
+    const reservation = reservationAfterFill(
+      finite(orderRow.requested_notional_quote, finite(position.reserved_quote)),
+      finite(orderRow.requested_volume, finite(position.reserved_quantity)),
+      finite(pendingUpdate.fill.executedFunds),
+      finite(pendingUpdate.fill.executedVolume),
+    );
+    const rows = await patch("trading_positions", `id=eq.${position.id}`, {
+      reserved_quote: reservation.reservedQuote,
+      reserved_quantity: reservation.reservedQuantity,
+      reservation_expires_at: new Date(placedAt + ttl * 1000).toISOString(),
+    });
+    return { pending: true, position: { ...position, ...(rows[0] || {}) } };
   }
 
   // Terminal, stale or drifted: stop the order so the fill amount is final.
@@ -3586,6 +4160,9 @@ async function syncMakerEntry(position: Position, settings: TradingSettings, cyc
   // Nothing usable filled. This is the normal, free outcome of a maker quote.
   await patch("trading_positions", `id=eq.${position.id}`, {
     state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
     close_reason: drifted ? "MAKER_ENTRY_DRIFTED" : "MAKER_ENTRY_UNFILLED",
     closed_at: new Date().toISOString(),
     metadata: {
@@ -4038,6 +4615,9 @@ async function reconcileEntryPending(
     if (!Number.isFinite(createdAt) || Date.now() - createdAt > 30_000) {
       await patch("trading_positions", `id=eq.${position.id}`, {
         state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
         close_reason: "ORPHAN_ENTRY_PENDING",
         closed_at: new Date().toISOString(),
       });
@@ -4078,6 +4658,9 @@ async function reconcileEntryPending(
     ) {
       await patch("trading_positions", `id=eq.${position.id}`, {
         state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
         close_reason: "ENTRY_NOT_FILLED",
         closed_at: new Date().toISOString(),
         metadata: clearedReconciliationMetadata(position.metadata),
@@ -4094,6 +4677,9 @@ async function reconcileEntryPending(
       });
       await patch("trading_positions", `id=eq.${position.id}`, {
         state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
         close_reason: "ENTRY_ORDER_NOT_FOUND",
         closed_at: new Date().toISOString(),
       });
@@ -4343,6 +4929,18 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
   const tracked = await db(
     "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*&order=created_at.asc",
   ) as Position[];
+  for (const ghost of tracked.filter((row) =>
+    row.state !== "ENTRY_PENDING" && finite(row.remaining_quantity) <= 0 &&
+    finite((row as any).reserved_quote) <= 0
+  )) {
+    await patch("trading_positions", `id=eq.${ghost.id}`, {
+      state: "CLOSED", remaining_quantity: 0, reserved_quote: 0, reserved_quantity: 0,
+      reservation_expires_at: null, closed_at: ghost.closed_at || new Date().toISOString(),
+      close_reason: ghost.close_reason || "ZERO_QUANTITY_AUTO_CLOSE_V610",
+    });
+    await event("ZERO_QUANTITY_GHOST_CLOSED", `${ghost.exchange}:${ghost.market} zero-quantity ghost closed`, {},
+      { cycleId, positionId: ghost.id, level: "WARNING" });
+  }
   for (
     const position of tracked.filter((p) =>
       p.state === "ENTRY_PENDING" ||
@@ -4363,6 +4961,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         p.metadata?.reconciliation_phase === "EXIT")
     )
   ) await reconcileExitPending(position, cycleId);
+  const feeReconciliations = await reconcileFeeLedger(cycleId);
   const open = await db(
     "trading_positions?state=eq.OPEN&select=*&order=created_at.asc",
   ) as Position[];
@@ -4372,7 +4971,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
   const championPolicy = lobPolicyRuntime?.champion
     ? policyBundleByVersion(lobPolicyRuntime, finite(lobPolicyRuntime.champion.version))
     : null;
-  const actions: any[] = [];
+  const actions: any[] = feeReconciliations.map((row) => ({ action: "FEE_RECONCILIATION", ...row }));
   const prices: Record<string, number> = {};
   const portfolios: Partial<Record<Exchange, any>> = {};
   const books: Record<string, any> = {};
@@ -4434,6 +5033,15 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
     // Suppress the locked-balance branch entirely rather than blaming the user for it.
     const botLockedKnown = botLockedResult !== null;
     const botLockedByAsset = botLockedResult ?? new Map<string, number>();
+    const allOpenOrderAssets = await openOrderAssets(exchange);
+    const trackedExchangePositions = tracked.filter((p) => p.exchange === exchange);
+    await recordJointObjectiveSnapshot(
+      exchange,
+      settings,
+      portfolio,
+      trackedExchangePositions,
+    ).catch(() => null);
+    await reconcilePersistedAssetLocks(exchange, portfolio, trackedExchangePositions, allOpenOrderAssets, cycleId);
     if (!botLockedKnown) {
       await event(
         "BOT_LOCK_UNKNOWN",
@@ -4460,6 +5068,9 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       if (!appliedEntry) {
         await patch("trading_positions", `id=eq.${position.id}`, {
           state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
           close_reason: "UNVERIFIED_OPEN_POSITION",
           closed_at: new Date().toISOString(),
           metadata: {
@@ -4639,12 +5250,15 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
     if (mismatches.size) {
       // Scope the pause to the affected assets. enterCandidate skips these; every other
       // market keeps trading.
-      const previousLocks = Array.isArray((settings as any).manual_asset_locks)
-        ? (settings as any).manual_asset_locks
-        : [];
-      const nextLocks = [
-        ...new Set([...previousLocks, ...[...mismatches].map((asset) => `${exchange}:${asset}`)]),
-      ];
+      for (const asset of mismatches) {
+        await rpc("record_asset_lock_check_v610", {
+          p_exchange: exchange,
+          p_asset: asset,
+          p_status: "MISMATCH",
+          p_reason: vanishedAssets.has(asset) ? "ASSET_VANISHED" : "UNATTRIBUTED_ACCOUNT_LOCK",
+          p_metadata: { cycle_id: cycleId, source: "ACCOUNT_RECONCILIATION" },
+        }).catch(() => null);
+      }
       // Escalate to a full halt only when the pattern is systemic: an asset that actually
       // left the account, and more than one of them. One manual sale is not a system fault.
       const systemic = vanishedAssets.size >= 2 ||
@@ -4652,7 +5266,6 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           vanishedAssets.size >= Math.ceil(exchangePositions.length / 2) &&
           exchangePositions.length >= 2);
       await patch("trading_settings", "id=eq.1", {
-        manual_asset_locks: nextLocks,
         ...(systemic
           ? {
             pause_new_entries: true,
@@ -4679,6 +5292,10 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         { cycleId, level: systemic ? "CRITICAL" : "WARNING" },
       );
     }
+    const residualSweeps = await sweepResidualInventory(
+      exchange, settings, trackedExchangePositions, allOpenOrderAssets, cycleId,
+    );
+    actions.push(...residualSweeps.map((row) => ({ action: "RESIDUAL_SWEEP", ...row })));
     for (const original of exchangePositions) {
       let position = original;
       // v6.4 -------------------------------------------------------------------------
@@ -5397,6 +6014,7 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
       exchange,
       finite(portfolios[exchange].managed.managedCapitalQuote),
       settings.mode !== "LIVE_LIMITED",
+      portfolios[exchange],
     );
     const limits = exchangeLimits(settings, exchange);
     // In SCALP mode the scalp-specific loss rails are authoritative. Without
@@ -5605,9 +6223,12 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
         enteredPerExchange[exchange]++;
         activeMarkets.add(`${exchange}:${candidate.market}`);
         activeBases.add(baseAsset(exchange, candidate.market));
-        if (entry.entered && !entry.paper) {
-          portfolios[exchange] = await gateway(exchange, { action: "portfolio" });
-        }
+        // Recompute booked exposure after every fill OR resting reservation. Without this,
+        // later candidates in the same scan reused capital already committed by the first.
+        const refreshedRaw = !entry.paper
+          ? await gateway(exchange, { action: "portfolio" })
+          : portfolios[exchange];
+        portfolios[exchange] = await managedPortfolio(settings, exchange, refreshedRaw);
       } else if (capitalStarved(entry.reason) && rotationsThisHour < rotationBudget) {
         // v6.5: the book cleared every gate and was turned away only because the capital
         // is already spent. Until now that was the end of it -- a candidate worth ten
@@ -5661,6 +6282,9 @@ async function status(settings: TradingSettings & JsonRecord) {
     lobBatchProfiles,
     lobOnlineStatus,
     lobPolicyStatus,
+    assetLocks,
+    residualInventory,
+    objectiveSnapshots,
   ] = await Promise.all([
     db(
       "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*&order=created_at.desc",
@@ -5685,6 +6309,9 @@ async function status(settings: TradingSettings & JsonRecord) {
       method: "POST",
       body: JSON.stringify({}),
     }).catch(() => null),
+    db("trading_asset_locks?state=eq.LOCKED&select=exchange,asset,reason,clean_checks,last_checked_at,last_check_status,locked_at&order=locked_at.asc").catch(() => []),
+    db("trading_residual_inventory?state=in.(AVAILABLE,RESERVED_FOR_REENTRY,SWEEP_PENDING)&select=exchange,asset,market,remaining_quantity,value_quote,state,updated_at&order=updated_at.asc").catch(() => []),
+    db("trading_joint_objective_snapshots?select=*&order=captured_at.desc&limit=40").catch(() => []),
   ]);
   const accounts: JsonRecord = {};
   const accountStatsByExchange: JsonRecord = {};
@@ -5704,6 +6331,7 @@ async function status(settings: TradingSettings & JsonRecord) {
         exchange,
         finite(accounts[exchange].managed.managedCapitalQuote),
         settings.mode !== "LIVE_LIMITED",
+        accounts[exchange],
       );
     } catch (error) {
       accounts[exchange] = {
@@ -5759,7 +6387,12 @@ async function status(settings: TradingSettings & JsonRecord) {
     settings,
     accounts,
     account_stats: accountStatsByExchange,
-    positions,
+    positions: (positions || []).filter((row: any) =>
+      row.state === "ENTRY_PENDING" || finite(row.remaining_quantity) > 0 || finite(row.reserved_quote) > 0
+    ),
+    asset_locks: assetLocks || [],
+    residual_inventory: residualInventory || [],
+    joint_objective_snapshots: objectiveSnapshots || [],
     recently_closed_positions: closedPositions,
     binance_gateway_health: binanceHealth,
     recent_orders: orders,
@@ -5792,6 +6425,7 @@ async function control(body: JsonRecord, settings: TradingSettings & JsonRecord)
       "binance_enabled",
       "suppress_cross_exchange_same_asset",
       "scalp_kill_switch",
+      "residual_sweep_enabled",
     ] as const
   ) if (body[key] != null) allowed[key] = Boolean(body[key]);
   if (body.strategy != null) {
@@ -5825,6 +6459,11 @@ async function control(body: JsonRecord, settings: TradingSettings & JsonRecord)
     max_order_usdt: [5, 10_000_000],
     min_order_usdt: [5, 1000],
     max_daily_buy_usdt: [5, 100_000_000],
+    scalp_max_strategy_exposure_pct: [10, 100],
+    scalp_low_evidence_daily_loss_pct: [0.05, 2],
+    asset_lock_clean_checks_required: [1, 10],
+    residual_sweep_buffer: [1, 2],
+    scalp_latency_slo_ms: [250, 5000],
     upbit_allocation_krw: [0, 100_000_000_000],
     upbit_reserve_krw: [0, 100_000_000_000],
     binance_allocation_usdt: [0, 1_000_000_000],
