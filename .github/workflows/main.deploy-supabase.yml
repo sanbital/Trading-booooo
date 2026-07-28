@@ -49,6 +49,7 @@ jobs:
           node validation/v680-deploy-validation.mjs
           node validation/v681-deploy-validation.mjs
           node validation/v690-deploy-validation.mjs
+          node validation/v691-deploy-validation.mjs
 
       - name: Install Supabase CLI
         uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
