@@ -17,10 +17,10 @@ const gateway = read("gateway/server.mjs");
 const dashboard = read("docs/index.html");
 
 const version = engine.match(/ENGINE_VERSION\s*=\s*"([^"]+)"/)?.[1];
-check("v6.9.1 migration is newest", migrations.at(-1) === "202607280001_fee_ledger_integrity_v691.sql");
+check("v6.9.1 migration remains present", migrations.includes("202607280001_fee_ledger_integrity_v691.sql"));
 check(
   "release versions agree",
-  version === "6.9.1-FEE-LEDGER-INTEGRITY" &&
+  Boolean(version) &&
     [autotrader, gateway, dashboard].every((source) => source.includes(version)),
 );
 check(

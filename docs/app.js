@@ -1324,7 +1324,7 @@
         <td><strong>${escapeHtml(row.market)}</strong></td>
         <td>${escapeHtml(row.state)}</td>
         <td>${row.is_paper ? "PAPER" : "LIVE"}</td>
-        <td>${fmt(row.remaining_quantity, 8)}</td>
+        <td>${fmt(Math.max(finite(row.remaining_quantity), finite(row.reserved_quantity)), 8)}</td>
         <td>${fmt(row.average_entry_price || row.planned_entry_price, 8)}</td>
         <td>${fmt(row.stop_price, 8)}</td>
         <td>${fmt(row.target_1, 8)}</td>
@@ -1523,6 +1523,16 @@
     }
     if (!data.gateway?.ok) {
       alerts.push(`주문 게이트웨이 오류: ${data.gateway?.error || "상태 확인 실패"}`);
+    }
+    const activeLocks = Array.isArray(data.asset_locks) ? data.asset_locks.filter((row) => row.state === "LOCKED") : [];
+    if (activeLocks.length) {
+      alerts.push(`자산 잠금 ${activeLocks.length}건: ${activeLocks.slice(0, 5).map((row) => `${row.exchange}:${row.asset}`).join(", ")}`);
+    }
+    const residuals = Array.isArray(data.residual_inventory)
+      ? data.residual_inventory.filter((row) => finite(row.remaining_quantity) > 0)
+      : [];
+    if (residuals.length) {
+      alerts.push(`잔량 원장 ${residuals.length}건 · 재진입 합산 또는 조건부 sweep 대기`);
     }
     traderAlert.textContent = alerts.join(" ");
     setHidden(traderAlert, alerts.length === 0);

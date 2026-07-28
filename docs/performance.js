@@ -147,6 +147,10 @@
           <div><span>거래 수</span><b>${fmt(row?.trade_count, 0)}건 · 보유 ${fmt(row?.open_trade_count, 0)}</b></div>
           <div><span>평균 거래수익률</span><b class="${pnlClass(row?.average_return_pct)}">${pct(row?.average_return_pct)}</b></div>
           <div><span>평균 보유시간</span><b>${row?.average_hold_seconds == null ? "—" : duration(row.average_hold_seconds)}</b></div>
+          <div><span>계좌 로그성장/시간</span><b class="${pnlClass(row?.account_log_growth_per_hour)}">${fmt(finite(row?.account_log_growth_per_hour) * 100, 4)}%/h</b></div>
+          <div><span>관리자본 활용률</span><b>${fmt(finite(row?.capital_utilization) * 100, 1)}%</b></div>
+          <div><span>관리자본 회전율</span><b>${fmt(row?.account_capital_turns_per_hour, 4)}회/h</b></div>
+          <div><span>수수료 검증 거래</span><b>${fmt(row?.fee_verified_trade_count, 0)}건</b></div>
         </div>
       </article>`;
   }
@@ -211,6 +215,8 @@
       "순손익",
       "순수익률(%)",
       "청산 사유",
+      "수수료 품질",
+      "잔량 회계 품질",
     ];
     const lines = [
       headers.map(csvCell).join(","),
@@ -231,6 +237,8 @@
           finite(row.net_pnl_quote),
           finite(row.return_pct),
           row.close_reason || (row.is_closed ? "종료" : "보유 중"),
+          row.fee_accounting_quality || "",
+          row.accounting_quality || "",
         ].map(csvCell).join(",");
       }),
     ];
@@ -272,7 +280,7 @@
         <td>${money(row.invested_cost_quote, quote)}</td>
         <td>${fmt(row.average_entry_price, 8)}</td>
         <td>${fmt(mark, 8)}</td>
-        <td>${money(row.total_fees_quote, quote)}</td>
+        <td title="수수료 품질: ${escapeHtml(row.fee_accounting_quality || "미확인")}">${money(row.total_fees_quote, quote)}</td>
         <td class="${pnlClass(row.net_pnl_quote)}"><strong>${signedMoney(row.net_pnl_quote, quote)}</strong></td>
         <td class="${pnlClass(row.return_pct)}"><strong>${pct(row.return_pct)}</strong></td>
         <td>${escapeHtml(row.close_reason || (row.is_closed ? "종료" : "보유 중"))}</td>
@@ -305,7 +313,7 @@
     if (next) next.disabled = performancePage >= totalPages;
 
     const definition = $("performance-definition");
-    if (definition) definition.textContent = "기본 화면은 최신 10건입니다. 더 보기에서는 페이지당 50건을 표시하며, CSV는 현재 필터에 해당하는 전체 거래를 저장합니다. 누적 수익률은 실제 진입원가 가중 기준입니다.";
+    if (definition) definition.textContent = "기본 화면은 최신 10건입니다. 계좌 로그성장은 입출금 등 외부 현금흐름을 제거하며, 관리자본 회전율·활용률·승률을 함께 봅니다. 수수료 품질이 검증되지 않은 거래는 학습·승격 표본에서 제외됩니다.";
   }
 
   function render() {

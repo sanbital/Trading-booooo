@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 // withdrawal, transfer, margin, futures, leverage, or API-key management routes.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "6.9.1-FEE-LEDGER-INTEGRITY";
+const VERSION = "6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
@@ -362,7 +362,8 @@ function normalizeUpbitOrder(order) {
     price: Number(trade.price || 0),
     volume: Number(trade.volume || 0),
     funds: Number(trade.funds || Number(trade.price || 0) * Number(trade.volume || 0)),
-    fee: Number(trade.fee || 0),
+    // Upbit trade rows omit fee; null preserves "missing" instead of fabricating zero.
+    fee: trade.fee == null ? null : Number(trade.fee),
     fee_asset: "KRW",
     executed_at: trade.created_at || null,
     raw: trade,
@@ -399,6 +400,66 @@ function binanceTradesToFills(trades) {
     time: trade?.time,
   }));
 }
+async function markBinanceCommissionQuote(fills, tradedSymbol) {
+  const rows = Array.isArray(fills) ? fills.map((row) => ({ ...row })) : [];
+  const quote = "USDT";
+  const base = String(tradedSymbol || "").toUpperCase().endsWith(quote)
+    ? String(tradedSymbol).toUpperCase().slice(0, -quote.length)
+    : "";
+  const cache = new Map();
+  for (const row of rows) {
+    const asset = String(row.commissionAsset || "").toUpperCase();
+    const amount = Math.max(0, Number(row.commission || 0));
+    if (!(amount > 0)) continue;
+    if (asset === quote) {
+      row.feeQuoteMarked = amount;
+      row.feeQuoteMarkSource = "QUOTE_ASSET_EXACT";
+      continue;
+    }
+    if (asset === base) {
+      row.feeQuoteMarked = 0;
+      row.feeQuoteMarkSource = "BASE_ASSET_QUANTITY_ACCOUNTING";
+      continue;
+    }
+    const ts = Math.max(0, Number(row.time || 0));
+    const minute = Math.floor(ts / 60_000) * 60_000;
+    const pair = `${asset}USDT`;
+    const key = `${pair}:${minute}`;
+    let mark = cache.get(key);
+    if (mark === undefined) {
+      mark = 0;
+      try {
+        const klines = await publicBinance("/api/v3/klines", {
+          symbol: pair,
+          interval: "1m",
+          startTime: minute,
+          endTime: minute + 59_999,
+          limit: 1,
+        });
+        const candle = Array.isArray(klines) ? klines[0] : null;
+        // Use the minute VWAP proxy (quote volume / base volume) when available; it is a
+        // deterministic execution-time mark, not the old arbitrary percentage estimate.
+        const baseVolume = Number(candle?.[5] || 0);
+        const quoteVolume = Number(candle?.[7] || 0);
+        mark = baseVolume > 0 && quoteVolume > 0
+          ? quoteVolume / baseVolume
+          : Number(candle?.[4] || 0);
+      } catch {
+        mark = 0;
+      }
+      cache.set(key, mark);
+    }
+    if (mark > 0) {
+      row.feeQuoteMarked = amount * mark;
+      row.feeQuoteMarkPrice = mark;
+      row.feeQuoteMarkSource = "EXECUTION_MINUTE_VWAP";
+    } else {
+      row.feeQuoteMarked = null;
+      row.feeQuoteMarkSource = "MARK_UNAVAILABLE";
+    }
+  }
+  return rows;
+}
 function normalizeBinanceOrder(order) {
   const fills = Array.isArray(order?.fills) ? order.fills : [];
   const executedVolume = Number(order?.executedQty || 0);
@@ -412,6 +473,8 @@ function normalizeBinanceOrder(order) {
     funds: Number(fill.price || 0) * Number(fill.qty || 0),
     fee: Number(fill.commission || 0),
     fee_asset: fill.commissionAsset || null,
+    fee_quote_marked: Number(fill.feeQuoteMarked || 0),
+    fee_quote_mark_source: fill.feeQuoteMarkSource || null,
     executed_at: fill?.time
       ? new Date(Number(fill.time)).toISOString()
       : order?.transactTime
@@ -593,7 +656,7 @@ async function binanceGetOrder(identifier, symbol) {
       const trades = (await binanceRequest("GET", "/api/v3/myTrades", {
         symbol: market, orderId: data.orderId, limit: 1000,
       })).data;
-      data.fills = binanceTradesToFills(trades);
+      data.fills = await markBinanceCommissionQuote(binanceTradesToFills(trades), market);
     } catch (error) {
       // Order status must remain recoverable even if the commission-detail lookup is
       // temporarily unavailable. The autotrader then records a conservative fee estimate
@@ -610,6 +673,9 @@ async function binanceCreateOrder(payload, waitForFinalMs = 2500) {
   let normalized;
   try {
     const raw = (await binanceRequest("POST", "/api/v3/order", conformed.order, { timeoutMs: 12_000 })).data;
+    if (Array.isArray(raw?.fills) && raw.fills.length) {
+      raw.fills = await markBinanceCommissionQuote(raw.fills, info.symbol);
+    }
     normalized = normalizeBinanceOrder(raw);
   } catch (error) {
     // Binance documents 5xx/-1007 as UNKNOWN execution status. Reconcile by

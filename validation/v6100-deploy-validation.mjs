@@ -1,0 +1,36 @@
+import { readFileSync, readdirSync } from "node:fs";
+
+const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+const failures = [];
+const passed = [];
+const check = (name, condition) => (condition ? passed : failures).push(name);
+const version = "6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE";
+const migrations = readdirSync(new URL("../supabase/migrations/", import.meta.url)).filter((n) => n.endsWith(".sql")).sort();
+const migration = read("supabase/migrations/202607280002_joint_compound_growth_v610.sql");
+const trader = read("supabase/functions/market-autotrader/index.ts");
+const engine = read("supabase/functions/market-scanner/engine.ts");
+const gateway = read("gateway/server.mjs");
+const dashboard = read("docs/index.html");
+const governance = read("supabase/functions/_shared/lob/governance.ts");
+const objective = read("supabase/functions/_shared/lob/joint-objective.ts");
+const evidence = read("supabase/functions/_shared/lob/evidence-sizing.ts");
+const calibration = read("supabase/functions/lob-calibration/index.ts");
+
+check("v6.10 migration is newest", migrations.at(-1) === "202607280002_joint_compound_growth_v610.sql");
+check("release versions agree", [trader, engine, gateway, dashboard].every((s) => s.includes(version)));
+check("fee quality is separate from residual quality", migration.includes("fee_accounting_quality") && migration.includes("accounting_quality"));
+check("reservations are durable", migration.includes("reserved_quote") && migration.includes("reservation_expires_at"));
+check("asset locks are auditable", migration.includes("create table if not exists public.trading_asset_locks") && migration.includes("QUERY_FAILED"));
+check("residual inventory is durable and sweep-safe", migration.includes("trading_residual_inventory") && migration.includes("RESIDUAL_SWEEP"));
+check("marked pnl and exposure are accounted", trader.includes("calculateExposureLedger") && migration.includes("marked_pnl_quote"));
+check("exploration has a loss budget", migration.includes("lob_exploration_budget_daily") && trader.includes("claim_lob_exploration_budget_v610"));
+check("joint objective keeps all three user objectives", objective.includes("accountLogGrowthPerHour") && objective.includes("winRate") && objective.includes("capitalTurnsPerHour"));
+check("promotion is 15 to 25 to 50", governance.includes("currentTrafficFraction: 0.15") && governance.includes("expandedTrafficFraction: 0.25") && migration.includes("jsonb_build_array(0.15,0.25,0.50)"));
+check("EV bias uses fill conditional outcomes", migration.includes("FILL_CONDITIONAL") && calibration.includes(version));
+check("evidence sizing is hierarchical and age-aware", evidence.includes("hierarchical") && evidence.includes("age"));
+check("operator safety rails are not learned", !migration.includes("scalp_daily_loss_pct =") && !migration.includes("scalp_max_single_loss_pct ="));
+
+for (const name of passed) console.log(`  ok   ${name}`);
+for (const name of failures) console.log(`  FAIL ${name}`);
+console.log(failures.length ? `\n${failures.length} FAILED` : `\nall ${passed.length} v6.10 deploy invariants hold`);
+process.exit(failures.length ? 1 : 0);
