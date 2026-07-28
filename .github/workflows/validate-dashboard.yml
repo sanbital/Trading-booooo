@@ -1,0 +1,28 @@
+name: Validate Trading Dashboard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "validation/v6100-deploy-validation.mjs"
+      - ".github/workflows/validate-dashboard.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Validate dashboard JavaScript
+        run: |
+          node --check docs/app.js
+          node validation/v6100-deploy-validation.mjs
