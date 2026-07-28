@@ -1191,6 +1191,10 @@
       .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
   const setHidden = (element, hidden) => element?.classList.toggle("hidden", hidden);
+  const finite = (value, fallback = 0) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+  };
 
   function endpoint() {
     return `${String(config.supabaseUrl || "").replace(/\/$/, "")}/functions/v1/${
