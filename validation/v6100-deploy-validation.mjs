@@ -16,11 +16,16 @@ const governance = read("supabase/functions/_shared/lob/governance.ts");
 const objective = read("supabase/functions/_shared/lob/joint-objective.ts");
 const evidence = read("supabase/functions/_shared/lob/evidence-sizing.ts");
 const calibration = read("supabase/functions/lob-calibration/index.ts");
+const telemetrySecurity = read("supabase/migrations/202607280005_private_trading_telemetry_rls.sql");
 
 const migrationVersions = migrations.map((name) => name.split("_", 1)[0]);
 check("migration versions are globally unique", new Set(migrationVersions).size === migrationVersions.length);
 check("v6.10 joint objective migration remains present", migrations.includes("202607280003_joint_compound_growth_v610.sql"));
-check("admission-safe payoff migration is newest", migrations.at(-1) === "202607280004_verified_payoff_governor_r7.sql");
+check("admission-safe payoff migration remains present", migrations.includes("202607280004_verified_payoff_governor_r7.sql"));
+check("private telemetry migration is newest", migrations.at(-1) === "202607280005_private_trading_telemetry_rls.sql");
+check("decision and latency telemetry enable RLS", ["trading_decisions", "trading_latency_samples"].every((table) => telemetrySecurity.includes(`alter table if exists public.${table}`)) && (telemetrySecurity.match(/enable row level security/g) || []).length === 2);
+check("public telemetry privileges are revoked", ["trading_decisions", "trading_latency_samples"].every((table) => telemetrySecurity.includes(`revoke all privileges on table public.${table}`)) && telemetrySecurity.includes("from public, anon, authenticated"));
+check("no public telemetry policies are created", !/\bcreate\s+policy\b/i.test(telemetrySecurity));
 check("release versions agree", [trader, engine, gateway, dashboard].every((s) => s.includes(version)));
 check("dashboard runtime helpers are defined", dashboardJs.includes("const finite = (value, fallback = 0)") && dashboardJs.indexOf("const finite = (value, fallback = 0)") < dashboardJs.indexOf("finite(row.remaining_quantity)"));
 check("fee quality is separate from residual quality", migration.includes("fee_accounting_quality") && migration.includes("accounting_quality"));
