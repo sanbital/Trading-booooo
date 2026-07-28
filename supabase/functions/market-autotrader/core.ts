@@ -558,8 +558,8 @@ export function reconcileAccount(input: ReconcileInput): ReconcileOutput {
       verdict: "UNKNOWN_LOCK",
       alignedQuantity: booked,
       sellableQuantity: free,
-      blockNewEntries: false,
-      reason: "open orders unreadable; a lock cannot be attributed to anyone this cycle",
+      blockNewEntries: true,
+      reason: "open orders unreadable; entries blocked fail-closed, existing holdings remain exitable",
     };
   }
 

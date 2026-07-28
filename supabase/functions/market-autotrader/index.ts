@@ -2083,14 +2083,21 @@ async function enterCandidateInner(
     activeLock = (await db(
       `trading_asset_locks?exchange=eq.${exchange}&asset=eq.${encodeURIComponent(base)}&state=eq.LOCKED&select=reason,clean_checks&limit=1`,
     ))[0] || null;
-  } catch {
-    // Rolling-deploy fallback: before the lock-ledger migration exists, preserve the old
-    // JSONB lock semantics. A ledger read failure must never silently unlock an asset.
+  } catch (error) {
+    // Rolling-deploy fallback: preserve a known legacy lock, but fail closed when the
+    // authoritative lock ledger itself cannot be read. This blocks only a new entry;
+    // monitor/exit paths remain independent and continue to protect existing holdings.
     const legacyLocks = Array.isArray((settings as any).manual_asset_locks)
       ? (settings as any).manual_asset_locks
       : [];
     if (legacyLocks.map(String).includes(`${exchange}:${base}`)) {
       activeLock = { reason: "LEGACY_MANUAL_ASSET_LOCK", clean_checks: 0 };
+    } else {
+      activeLock = {
+        reason: "LOCK_LEDGER_QUERY_FAILED",
+        clean_checks: 0,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
   }
   if (activeLock) {
@@ -2346,6 +2353,17 @@ async function enterCandidateInner(
       evidenceSizing,
     } = lobSizingContext;
     const liveFee = await liveFeePct(exchange, settings);
+    const roundTripFeeBps = liveFee * 2 * 100;
+    const minimumTargetNetProfitBps = Math.max(
+      0,
+      finite((settings as any).lob_min_target_net_profit_bps, 2),
+      roundTripFeeBps * 0.20,
+    );
+    const minimumVerifiedEvBps = Math.max(
+      0,
+      finite((settings as any).lob_min_verified_ev_cushion_bps, 0.5),
+      roundTripFeeBps * 0.05,
+    );
     const lobLearning = assignedPolicy.patternProfile;
     const makerFill = await loadMakerFillStats(exchange);
     const measuredMakerFillRate = makerFill.rested > 0 ? makerFill.filled / makerFill.rested : 0;
@@ -2364,7 +2382,7 @@ async function enterCandidateInner(
       assignedPolicy.policyDefinition.evBias.maxPenaltyBps,
     );
     const decision = evaluateLobEntry(features, {
-      roundTripFeeBps: liveFee * 2 * 100,
+      roundTripFeeBps,
       entrySlippageBps: makerEntryEnabled(settings) ? 0 : Math.max(0.1, spreadBps * 0.15),
       targetExitSlippageBps: (settings as any).scalp_resting_tp !== false
         ? 0
@@ -2374,7 +2392,21 @@ async function enterCandidateInner(
       latencyPenaltyBps: latencyPenalty.bps,
       forecastBiasPenaltyBps: evBiasPenaltyBps,
     }, {
-      minEvBps: Math.max(0, finite((settings as any).lob_min_net_ev_bps, 0)),
+      minEvBps: Math.max(
+        minimumVerifiedEvBps,
+        finite((settings as any).lob_min_net_ev_bps, 0),
+      ),
+      minNetProfitBps: minimumTargetNetProfitBps,
+      maxStopToTargetRatio: clamp(
+        finite((settings as any).lob_max_stop_to_target_ratio, 1.35),
+        0.75,
+        5,
+      ),
+      minNetRewardRiskRatio: clamp(
+        finite((settings as any).lob_min_net_reward_risk_ratio, 0.80),
+        0.10,
+        5,
+      ),
       maxBookAgeMs: Math.max(250, finite((settings as any).lob_max_book_age_ms, 2500)),
       maxSpreadBps: Math.max(1, finite((settings as any).lob_max_spread_bps, LIVE_MAX_SPREAD_BPS)),
       maxHoldingSeconds: Math.round(
@@ -2395,6 +2427,7 @@ async function enterCandidateInner(
     });
     scalpAudit = {
       strategy: "LOB_SCALP",
+      strategy_revision: "6.10.0-r7-VERIFIED-PAYOFF-GOVERNOR",
       pattern: decision.pattern,
       patterns: decision.patterns,
       hotness: decision.hotness,
@@ -2413,6 +2446,10 @@ async function enterCandidateInner(
         profitable_rate: patternPolicy.profitableRate,
         mean_net_bps: patternPolicy.meanNetBps,
         median_hold_seconds: patternPolicy.medianHoldSeconds,
+        profit_factor: patternPolicy.profitFactor,
+        payoff_ratio: patternPolicy.payoffRatio,
+        mean_net_lower_bound_bps: patternPolicy.meanNetLowerBoundBps,
+        deployment_reason: patternPolicy.deploymentReason,
       },
       policy: assignedPolicy
         ? {
@@ -2449,6 +2486,10 @@ async function enterCandidateInner(
       target_bps: decision.targetBps,
       stop_bps: decision.stopBps,
       target_return_net_bps: decision.targetReturnNetBps,
+      stop_to_target_ratio: decision.stopToTargetRatio,
+      net_reward_risk_ratio: decision.netRewardRiskRatio,
+      minimum_target_net_profit_bps: decision.minimumTargetNetProfitBps,
+      minimum_verified_ev_bps: decision.minimumVerifiedEvBps,
       // v6.2: the calibration job needs the arithmetic term separated from the model's
       // belief, otherwise it cannot tell a wide stop from actual predictive skill.
       neutral_win_rate: neutralWinRateOf(decision.targetBps, decision.stopBps),

@@ -289,7 +289,7 @@ Deno.test("the bot's own resting sell is not a manual lock", () => {
   assertEquals(out.sellableQuantity, 10);
 });
 
-Deno.test("unreadable open orders blame nobody", () => {
+Deno.test("unreadable open orders fail closed for entries but preserve exits", () => {
   const out = reconcileAccount({
     bookedQuantity: 10,
     freeQuantity: 0,
@@ -300,7 +300,9 @@ Deno.test("unreadable open orders blame nobody", () => {
     feePctPerSide: 0.1,
   });
   assertEquals(out.verdict, "UNKNOWN_LOCK");
-  assertEquals(out.blockNewEntries, false);
+  assertEquals(out.blockNewEntries, true);
+  assertEquals(out.allowExit, true);
+  assertEquals(out.sellableQuantity, 0);
 });
 
 Deno.test("a real manual sale blocks entries but never blocks the exit", () => {
