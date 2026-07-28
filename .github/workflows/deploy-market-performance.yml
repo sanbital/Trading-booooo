@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "supabase/functions/market-performance/**"
+      - "deno.json"
       - ".github/workflows/deploy-market-performance.yml"
   workflow_dispatch:
 
@@ -24,6 +25,16 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Validate fill-time performance code
+        run: |
+          deno check supabase/functions/market-performance/index.ts
+          deno test supabase/functions/market-performance/*.test.ts
 
       - name: Install Supabase CLI
         uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
