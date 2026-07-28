@@ -57,6 +57,25 @@ function clamp(value: number, low: number, high: number): number {
   return Math.max(low, Math.min(high, finite(value, low)));
 }
 
+/**
+ * Reduce concurrency only when fixed slot division would make every order smaller than
+ * the executable minimum. Total strategy exposure is unchanged; fewer slots simply make
+ * the operator's minimum ticket possible with the capital that is actually available.
+ */
+export function capitalSupportedSlotCount(
+  managedCapitalQuote: number,
+  maxStrategyExposureFraction: number,
+  configuredSlots: number,
+  minimumNotional: number,
+): number {
+  const configured = Math.max(1, Math.floor(finite(configuredSlots, 1)));
+  const exposureCap = Math.max(0, finite(managedCapitalQuote)) *
+    clamp(maxStrategyExposureFraction, 0, 1);
+  const minimum = Math.max(1e-8, finite(minimumNotional, 1e-8));
+  const supported = Math.max(1, Math.floor(exposureCap / minimum));
+  return Math.min(configured, supported);
+}
+
 export function calculateOrderNotional(input: SizingInput): SizingDecision {
   const managed = Math.max(0, finite(input.managedCapitalQuote));
   const totalExposureCap = managed * clamp(input.maxStrategyExposureFraction, 0, 1);

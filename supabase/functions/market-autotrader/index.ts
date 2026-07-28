@@ -55,6 +55,7 @@ import {
   SHADOW_CANDIDATE_GATE,
 } from "../_shared/scalp/candidate-gate.ts";
 import {
+  capitalSupportedSlotCount,
   calculateOrderNotional,
   enforceMinimumExecutableNotional,
 } from "../_shared/scalp/risk-allocator.ts";
@@ -2310,13 +2311,27 @@ async function enterCandidateInner(
   }
   const allocationOnly = isScalpStrategy((settings as any).strategy);
   const managedAvailable = finite(managed.managedAvailableQuote);
-  // v6.9: slot count is a hard capital denominator. With three configured slots, no
-  // single LOB position may exceed one third of managed capital merely because fewer books
-  // qualified in this scan. Idle capital is preferable to silently concentrating risk.
+  const strategyExposureFraction = allocationOnly
+    ? clamp(finite((settings as any).scalp_max_strategy_exposure_pct, 100), 10, 100) / 100
+    : 1;
+  // Quantity is floored to the exchange step after quote sizing. Fund one quantity/quote
+  // step above the operator floor so that flooring cannot turn KRW 40,000 into 39,999.x.
+  const executableMinimumNotional = Math.max(limits.minOrder, rules.min_notional) +
+    Math.max(limits.quoteStep, Math.max(0, finite(rules.quantity_step)) * bestAsk);
+  // Keep the configured denominator whenever capital supports it. If fixed division would
+  // make every ticket smaller than the operator floor, contract concurrency just enough to
+  // permit a valid ticket without increasing total strategy exposure.
   const configuredSlots = allocationOnly
     ? clamp(finite((settings as any).scalp_position_slots, 6), 1, 20)
     : 1;
-  const slots = configuredSlots;
+  const slots = allocationOnly
+    ? capitalSupportedSlotCount(
+      finite(managed.managedCapitalQuote),
+      strategyExposureFraction,
+      configuredSlots,
+      executableMinimumNotional,
+    )
+    : 1;
   // LOB evidence sizing is resolved from the immutable policy and current live book before
   // allocation. The configured slot count remains the hard ceiling denominator.
   const evidenceSize = allocationOnly
@@ -2335,8 +2350,7 @@ async function enterCandidateInner(
   const riskSizing = allocationOnly
     ? calculateOrderNotional({
       managedCapitalQuote: finite(managed.managedCapitalQuote),
-      maxStrategyExposureFraction:
-        clamp(finite((settings as any).scalp_max_strategy_exposure_pct, 100), 10, 100) / 100,
+      maxStrategyExposureFraction: strategyExposureFraction,
       desiredSlots: slots,
       perTradeLossBudgetQuote: finite(managed.managedCapitalQuote) *
         clamp(finite((settings as any).scalp_max_single_loss_pct, 5), 0.1, 100) / 100,
@@ -2349,11 +2363,6 @@ async function enterCandidateInner(
     })
     : null;
   const slotQuote = allocationOnly ? finite(riskSizing?.slotCap) : Number.POSITIVE_INFINITY;
-  // Quantity is floored to the exchange step after quote sizing. Fund one quantity/quote
-  // step above the operator floor so that flooring cannot turn KRW 40,000 into 39,999.x.
-  // The allocator still refuses the lift when any hard ceiling cannot fund this buffer.
-  const executableMinimumNotional = Math.max(limits.minOrder, rules.min_notional) +
-    Math.max(limits.quoteStep, Math.max(0, finite(rules.quantity_step)) * bestAsk);
   const riskNotional = allocationOnly && riskSizing
     ? enforceMinimumExecutableNotional(
       riskSizing,

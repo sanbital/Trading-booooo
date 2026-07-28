@@ -3,7 +3,11 @@ import {
   assertAlmostEquals,
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { calculateOrderNotional, enforceMinimumExecutableNotional } from "./risk-allocator.ts";
+import {
+  capitalSupportedSlotCount,
+  calculateOrderNotional,
+  enforceMinimumExecutableNotional,
+} from "./risk-allocator.ts";
 
 Deno.test("more slots do not increase total exposure cap", () => {
   const make = (slots: number) =>
@@ -38,6 +42,12 @@ Deno.test("sizeFraction applies to slot-normal not total capital", () => {
     sizeFraction: 0.35,
   });
   assertAlmostEquals(d.notionalQuote, 35_000, 1e-9);
+});
+
+Deno.test("slot count contracts only enough to support the operator minimum", () => {
+  assertEquals(capitalSupportedSlotCount(78_000, 1, 3, 40_001), 1);
+  assertEquals(capitalSupportedSlotCount(123_000, 1, 3, 40_001), 3);
+  assertEquals(capitalSupportedSlotCount(1_000_000, 0.8, 8, 40_001), 8);
 });
 
 Deno.test("operator minimum lifts evidence sizing without crossing hard ceilings", () => {

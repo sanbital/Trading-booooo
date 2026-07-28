@@ -6,7 +6,7 @@ Deno.test("v6.9 fixes slot concentration and evidence-sizes LOB exploration", as
   const source = await Deno.readTextFile(
     new URL("../../market-autotrader/index.ts", import.meta.url),
   );
-  assert(source.includes("const slots = configuredSlots;"));
+  assert(source.includes("capitalSupportedSlotCount("));
   assert(
     !source.includes("effectiveSlots("),
     "autotrader must not dynamically reduce slot denominator",
