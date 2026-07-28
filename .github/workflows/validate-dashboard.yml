@@ -25,4 +25,5 @@ jobs:
       - name: Validate dashboard JavaScript
         run: |
           node --check docs/app.js
+          node --test docs/version-runtime.test.mjs
           node validation/v6100-deploy-validation.mjs

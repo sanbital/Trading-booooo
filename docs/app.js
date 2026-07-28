@@ -1,6 +1,25 @@
 (() => {
   "use strict";
 
+  let authoritativeEngineVersion = "";
+
+  window.updateTradingBrandVersion = (engineVersion = "", authoritative = false) => {
+    const reported = String(engineVersion || "").replace(/^v/i, "");
+    if (authoritative && reported) authoritativeEngineVersion = reported;
+    const configured = window.TRADING_SCANNER_CONFIG?.uiVersion || "unknown";
+    const version = String(
+      authoritativeEngineVersion || reported || configured,
+    ).replace(/^v/i, "");
+    const subtitle = document.getElementById("brand-subtitle");
+    if (subtitle) {
+      subtitle.textContent = `UPBIT KRW + BINANCE USDT SPOT · v${version}`;
+    }
+  };
+})();
+
+(() => {
+  "use strict";
+
   const $ = (id) => document.getElementById(id);
   const config = window.TRADING_SCANNER_CONFIG || {};
   let latestResult = null;
@@ -8,7 +27,6 @@
   let activeExchange = "combined";
   let scanning = false;
   let progressTimers = [];
-  let authoritativeEngineVersion = "";
 
   const exchangeSettings = {
     combined: {
@@ -113,18 +131,7 @@
     footerMeta: $("footer-meta"),
   };
 
-  function updateBrandVersion(engineVersion = "", authoritative = false) {
-    const reported = String(engineVersion || "").replace(/^v/i, "");
-    if (authoritative && reported) authoritativeEngineVersion = reported;
-    const version = String(
-      authoritativeEngineVersion || reported || config.uiVersion || "unknown",
-    ).replace(/^v/i, "");
-    if (elements.brandSubtitle) {
-      elements.brandSubtitle.textContent = `UPBIT KRW + BINANCE USDT SPOT · v${version}`;
-    }
-  }
-
-  updateBrandVersion();
+  window.updateTradingBrandVersion();
 
   function escapeHtml(value) {
     return String(value ?? "")
@@ -528,7 +535,7 @@
       if (result.exchanges.binance) latestResults.binance = result.exchanges.binance;
     }
     setHidden(elements.results, false);
-    updateBrandVersion(result.meta?.engine_version);
+    window.updateTradingBrandVersion(result.meta?.engine_version);
     elements.headline.textContent = result.headline || "분석 완료";
     elements.resultSubline.textContent = `${kst(result.meta?.generated_at)} · 엔진 ${
       result.meta?.engine_version || "—"
@@ -1532,7 +1539,7 @@
 
   function renderStatus(data) {
     currentStatus = data;
-    updateBrandVersion(data?.version, true);
+    window.updateTradingBrandVersion(data?.version, true);
     const settings = data.settings || {};
     const mode = settings.mode || "—";
     $("trader-mode").textContent = mode;

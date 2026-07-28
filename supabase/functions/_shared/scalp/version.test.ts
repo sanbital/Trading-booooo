@@ -50,18 +50,24 @@ Deno.test("operator status is the authoritative dashboard version source", async
   const app = await Deno.readTextFile(new URL("docs/app.js", ROOT));
   const html = await Deno.readTextFile(new URL("docs/index.html", ROOT));
   assertEquals(
-    app.includes("updateBrandVersion(data?.version, true)"),
+    app.includes("window.updateTradingBrandVersion(data?.version, true)"),
     true,
     "trading status must update the header from the deployed autotrader",
   );
   assertEquals(
-    app.includes("authoritativeEngineVersion || reported"),
+    app.includes("window.updateTradingBrandVersion ="),
+    true,
+    "the shared version updater must be available to both dashboard modules",
+  );
+  assertEquals(
+    app.includes("authoritativeEngineVersion || reported || configured"),
     true,
     "a cached scanner result must not downgrade the authoritative version",
   );
   assertEquals(
-    html.includes('config.js?v=6.10.0-r6'),
+    html.includes('config.js?v=6.10.0-r7') &&
+      html.includes('app.js?v=6.10.0-r7'),
     true,
-    "config cache key must move with the dashboard release",
+    "dashboard cache keys must move with the dashboard release",
   );
 });
