@@ -1,6 +1,5 @@
 import {
   assertEquals,
-  assertStrictEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   earliestExecutedAt,
@@ -31,7 +30,7 @@ Deno.test("rejected zero-fill position is not a verified trade", () => {
     exitFills: [],
   });
   assertEquals(result.quality, "ENTRY_FILL_MISSING");
-  assertStrictEquals(result.durationSeconds, null);
+  assertEquals(result.durationSeconds, null);
 });
 
 Deno.test("closed position without sell fill is excluded", () => {
@@ -41,7 +40,7 @@ Deno.test("closed position without sell fill is excluded", () => {
     exitFills: [],
   });
   assertEquals(result.quality, "EXIT_FILL_MISSING");
-  assertStrictEquals(result.durationSeconds, null);
+  assertEquals(result.durationSeconds, null);
 });
 
 Deno.test("time reversal is never converted to zero seconds", () => {
@@ -51,7 +50,7 @@ Deno.test("time reversal is never converted to zero seconds", () => {
     exitFills: [{ executed_at: "2026-07-28T03:00:00Z", volume: 1 }],
   });
   assertEquals(result.quality, "TIME_REVERSED");
-  assertStrictEquals(result.durationSeconds, null);
+  assertEquals(result.durationSeconds, null);
 });
 
 Deno.test("open duration uses verified entry fill", () => {
