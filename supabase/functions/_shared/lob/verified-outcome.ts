@@ -95,10 +95,12 @@ export function verifiedOutcomeToSample(
     ? 1
     : 0;
 
-  const traps = Array.isArray(snapshot.traps)
+  const traps: LobTrapName[] = Array.isArray(snapshot.traps)
     ? snapshot.traps
-      .map(String)
-      .filter((name): name is LobTrapName => TRAPS.has(name as LobTrapName))
+      .map((name: unknown): string => String(name))
+      .filter((name: string): name is LobTrapName =>
+        TRAPS.has(name as LobTrapName)
+      )
     : [];
 
   const heldSeconds = Math.max(0, finite(row.held_seconds, 0));
