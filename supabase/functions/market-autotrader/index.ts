@@ -2349,10 +2349,15 @@ async function enterCandidateInner(
     })
     : null;
   const slotQuote = allocationOnly ? finite(riskSizing?.slotCap) : Number.POSITIVE_INFINITY;
+  // Quantity is floored to the exchange step after quote sizing. Fund one quantity/quote
+  // step above the operator floor so that flooring cannot turn KRW 40,000 into 39,999.x.
+  // The allocator still refuses the lift when any hard ceiling cannot fund this buffer.
+  const executableMinimumNotional = Math.max(limits.minOrder, rules.min_notional) +
+    Math.max(limits.quoteStep, Math.max(0, finite(rules.quantity_step)) * bestAsk);
   const riskNotional = allocationOnly && riskSizing
     ? enforceMinimumExecutableNotional(
       riskSizing,
-      Math.max(limits.minOrder, rules.min_notional),
+      executableMinimumNotional,
       managedAvailable,
     )
     : 0;

@@ -45,9 +45,11 @@ check(
     allocator.includes("decision.remainingExposureCap") &&
     allocator.includes("decision.slotCap") &&
     allocator.includes("decision.riskCap") &&
-    allocator.includes("decision.depthCap") &&
+  allocator.includes("decision.depthCap") &&
     allocator.includes("decision.exchangeCap") &&
-    trader.includes("enforceMinimumExecutableNotional("),
+    trader.includes("enforceMinimumExecutableNotional(") &&
+    trader.includes("const executableMinimumNotional =") &&
+    trader.includes("rules.quantity_step"),
 );
 check(
   "both exchanges use KST daily boundaries",
