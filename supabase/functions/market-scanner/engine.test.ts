@@ -766,6 +766,32 @@ Deno.test("AUTOMATED mode emits a watchdog-compatible precommitted plan", () => 
   assert(final.execution_plan.next_review_after_hours <= 0.5);
 });
 
+Deno.test("LOB recommendation validity starts after candidate evaluation, not at book observation", () => {
+  const data = dataset(0.0012);
+  const price = timeframeMetrics(data.m5).close;
+  const period = analyzePeriod(universeRow(price), data);
+  const micro = computeMicrostructure(bookSnapshots(true), trades(true), 1_700_000_000_000);
+  micro.best_bid = price - 0.01;
+  micro.best_ask = price + 0.01;
+  micro.reference_price = price;
+  // Deliberately ancient. This is the market-data timestamp that used to make every
+  // recommendation expire before the scan response reached market-autotrader.
+  micro.reference_timestamp = 1_700_000_000_000;
+  micro.live_book_age_ms = 0;
+  micro.spread_bps = 2;
+  const before = Date.now();
+  const final = finalizeCandidate(period, micro, 0.01, {
+    ...risk,
+    strategy: "LOB_SCALP",
+    operatorMode: "AUTOMATED",
+    recommendationValidMinutes: 2,
+  }, clearEvent());
+  const validUntil = Date.parse(final.execution_plan.valid_until);
+  assert(final.execution_plan.recommendation_valid_minutes === 2);
+  assert(validUntil >= before + 119_000, `validUntil=${validUntil}, before=${before}`);
+  assert(validUntil <= Date.now() + 121_000, `validUntil=${validUntil}`);
+});
+
 Deno.test("minimum edge gate can be tightened by the forward profile", () => {
   const data = dataset(0.0012);
   const price = timeframeMetrics(data.m5).close;

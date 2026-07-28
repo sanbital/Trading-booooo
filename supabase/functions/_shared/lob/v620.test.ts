@@ -349,13 +349,14 @@ Deno.test("maker pFill is shrunk toward the exchange's realized fill rate", () =
   assertAlmostEquals(measured.weight, 171 / 231, 1e-12);
 });
 
-Deno.test("LOB calibration reads only closed LIVE positions", async () => {
+Deno.test("LOB calibration reads only verified closed LIVE outcomes", async () => {
   const source = await Deno.readTextFile(
     new URL("../../lob-calibration/index.ts", import.meta.url),
   );
-  assert(source.includes("state=eq.CLOSED&is_paper=eq.false"));
-  assert(source.includes("opened_at"));
-  assert(source.includes("heldSeconds"));
+  assert(source.includes("lob_online_outcomes?closed_at=gte."));
+  assert(source.includes("verifiedOutcomeToSample"));
+  assert(source.includes("fee_accounting_quality=in.(EXACT,AGGREGATE_EXACT"));
+  assert(source.includes("prediction_basis=eq.FILL_CONDITIONAL"));
 });
 
 Deno.test("slots never exceed the configured ceiling and never strand capital", () => {

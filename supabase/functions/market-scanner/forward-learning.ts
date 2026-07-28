@@ -59,6 +59,17 @@ export type StoredCandidate = {
   snapshot: Record<string, unknown>;
 };
 
+/**
+ * The legacy forward learner evaluates 24h-480h candle paths. LOB/SCALP candidates resolve
+ * in seconds to minutes and are learned from verified trading-position outcomes instead.
+ * Feeding them into this queue assigns the wrong horizon and can permanently occupy the
+ * oldest reconciliation batch.
+ */
+export function legacyForwardEligible(candidate: Pick<StoredCandidate, "snapshot">): boolean {
+  const snapshot = candidate?.snapshot || {};
+  return !snapshot.lob && !snapshot.scalp;
+}
+
 export type Bar = { t: number; o: number; h: number; l: number; c: number };
 
 export type PolicyOutcome = {
@@ -755,15 +766,16 @@ async function pendingForCheckpoint(hours: number, limit = MAX_RECONCILE_BATCH):
   const matured = new Date(Date.now() - hours * 3600_000).toISOString();
   const previousCheckpoint = hours === 24 ? 0 : hours === 72 ? 24 : hours === 168 ? 72 : 168;
   const candidates = await (await rest(
-    `scanner_candidates?decision=eq.BUY&created_at=lte.${encodeURIComponent(matured)}&intended_horizon_hours=gt.${previousCheckpoint}&select=id,scan_id,exchange,market,created_at,decision,score,period_score,entry_low,entry_high,stop_price,target_1,target_2,net_rr,estimated_cost_pct,intended_horizon_hours,active_policy_key,profile_version,feature_vector,applied_parameters,snapshot&order=created_at.asc&limit=${limit}`,
+    `scanner_candidates?decision=eq.BUY&created_at=lte.${encodeURIComponent(matured)}&intended_horizon_hours=gt.${previousCheckpoint}&snapshot->>lob=is.null&snapshot->>scalp=is.null&select=id,scan_id,exchange,market,created_at,decision,score,period_score,entry_low,entry_high,stop_price,target_1,target_2,net_rr,estimated_cost_pct,intended_horizon_hours,active_policy_key,profile_version,feature_vector,applied_parameters,snapshot&order=created_at.asc&limit=${limit}`,
   )).json() as StoredCandidate[];
-  if (!candidates.length) return [];
-  const ids = candidates.map((row) => row.id);
+  const eligible = candidates.filter(legacyForwardEligible);
+  if (!eligible.length) return [];
+  const ids = eligible.map((row) => row.id);
   const existing = await (await rest(
     `scanner_signal_horizon_outcomes?candidate_id=in.(${ids.join(",")})&horizon_hours=eq.${hours}&select=candidate_id`,
   )).json() as Array<{ candidate_id: string }>;
   const done = new Set(existing.map((row) => row.candidate_id));
-  return candidates.filter((row) => !done.has(row.id));
+  return eligible.filter((row) => !done.has(row.id));
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, worker: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
@@ -783,11 +795,29 @@ async function mapLimit<T, R>(items: T[], limit: number, worker: (item: T) => Pr
   return results;
 }
 
-export async function reconcileForwardOutcomes(): Promise<{ evaluated: number; errors: number; byHorizon: Record<string, number> }> {
-  if (!configured()) return { evaluated: 0, errors: 0, byHorizon: {} };
+export async function reconcileForwardOutcomes(): Promise<{
+  evaluated: number;
+  errors: number;
+  byHorizon: Record<string, number>;
+  errorSamples: Array<{
+    candidateId: string;
+    exchange: Exchange;
+    market: string;
+    horizonHours: number;
+    error: string;
+  }>;
+}> {
+  if (!configured()) return { evaluated: 0, errors: 0, byHorizon: {}, errorSamples: [] };
   let evaluated = 0;
   let errors = 0;
   const byHorizon: Record<string, number> = {};
+  const errorSamples: Array<{
+    candidateId: string;
+    exchange: Exchange;
+    market: string;
+    horizonHours: number;
+    error: string;
+  }> = [];
   for (const hours of CHECKPOINTS) {
     const pending = await pendingForCheckpoint(hours);
     const settled = await mapLimit(pending, RECONCILE_CONCURRENCY, async (candidate) => {
@@ -798,7 +828,19 @@ export async function reconcileForwardOutcomes(): Promise<{ evaluated: number; e
       return evaluatePath(candidate, bars, to, hours);
     });
     const outcomes = settled.flatMap((row) => row.status === "fulfilled" ? [row.value] : []);
-    errors += settled.filter((row) => row.status === "rejected").length;
+    settled.forEach((row, index) => {
+      if (row.status !== "rejected") return;
+      errors++;
+      if (errorSamples.length >= 12) return;
+      const candidate = pending[index];
+      errorSamples.push({
+        candidateId: candidate.id,
+        exchange: candidate.exchange,
+        market: candidate.market,
+        horizonHours: hours,
+        error: row.reason instanceof Error ? row.reason.message : String(row.reason),
+      });
+    });
     if (outcomes.length) {
       await rest("scanner_signal_horizon_outcomes?on_conflict=candidate_id,horizon_hours", {
         method: "POST",
@@ -809,7 +851,7 @@ export async function reconcileForwardOutcomes(): Promise<{ evaluated: number; e
     evaluated += outcomes.length;
     byHorizon[String(hours)] = outcomes.length;
   }
-  return { evaluated, errors, byHorizon };
+  return { evaluated, errors, byHorizon, errorSamples };
 }
 
 function matches(row: LearningRow, parameters: LearningParameters): boolean {

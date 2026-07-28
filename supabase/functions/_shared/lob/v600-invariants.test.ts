@@ -13,8 +13,14 @@ Deno.test("v6 LOB route owns entry authority and trend is auxiliary", async () =
 });
 
 Deno.test("v6 LOB route has no pWin or pFill hard gate", async () => {
-  const entry = await Deno.readTextFile(new URL("supabase/functions/_shared/lob/entry.ts", ROOT));
-  assert(entry.includes("TARGET_NET_PROFIT_NOT_POSITIVE"));
+  const [entry, payoff] = await Promise.all([
+    Deno.readTextFile(new URL("supabase/functions/_shared/lob/entry.ts", ROOT)),
+    Deno.readTextFile(new URL("supabase/functions/_shared/lob/payoff-governor.ts", ROOT)),
+  ]);
+  assert(
+    entry.includes("TARGET_NET_PROFIT_NOT_POSITIVE") ||
+      payoff.includes("TARGET_NET_CUSHION_TOO_SMALL"),
+  );
   assert(entry.includes("NET_EV_NOT_POSITIVE"));
   assertEquals(entry.includes("PWIN_LOWER_BOUND_BELOW"), false);
   assertEquals(entry.includes("PFILL_LOWER_BOUND_TOO_LOW"), false);

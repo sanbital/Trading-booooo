@@ -102,6 +102,11 @@ import {
 import { settleSpotMarketReads, validateSpotMarket } from "../_shared/spot-market.ts";
 import { lobEvidenceSizeFraction } from "../_shared/lob/evidence-sizing.ts";
 import { boundedEvBiasPenalty } from "../_shared/lob/ev-bias.ts";
+import {
+  lobRecommendationWindowSeconds,
+  recommendationAdmission,
+  summarizeEntryAdmission,
+} from "./entry-admission.ts";
 
 const VERSION = "6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
@@ -846,6 +851,9 @@ async function runScanner(
 ): Promise<any> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), MAX_SCAN_SECONDS * 1000);
+  const lobRecommendationSeconds = lobRecommendationWindowSeconds(
+    settings.full_scan_interval_seconds,
+  );
   try {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/market-scanner`, {
       method: "POST",
@@ -928,7 +936,7 @@ async function runScanner(
         upbit_fee_per_side_pct: await liveFeePct("upbit", settings),
         binance_fee_per_side_pct: await liveFeePct("binance", settings),
         recommendation_valid_minutes: isLobStrategy((settings as any).strategy)
-          ? settings.entry_ttl_seconds / 60
+          ? lobRecommendationSeconds / 60
           : Math.max(1, Math.ceil(settings.entry_ttl_seconds / 60)),
         min_actionable_holding_hours: 0.08,
         max_unattended_hours: 2,
@@ -2058,10 +2066,23 @@ async function enterCandidateInner(
   const exchange = candidate.exchange;
   const quote = quoteCurrency(exchange);
   const base = baseAsset(exchange, candidate.market);
-  if (
-    candidate.recommendation_valid_until &&
-    Date.now() > new Date(candidate.recommendation_valid_until).getTime()
-  ) return { entered: false, exchange, market: candidate.market, reason: "recommendation expired" };
+  const recommendation = recommendationAdmission({
+    strategy: (settings as any).strategy,
+    recommendationValidUntil: candidate.recommendation_valid_until,
+    candidateCreatedAt: candidate.created_at,
+    lobLiveRecheckMaxAgeMs: lobRecommendationWindowSeconds(
+      settings.full_scan_interval_seconds,
+    ) * 1000,
+  });
+  (candidate as any).__decision_audit = { recommendation };
+  if (!recommendation.allowed) {
+    return {
+      entered: false,
+      exchange,
+      market: candidate.market,
+      reason: `recommendation expired (${recommendation.reason})`,
+    };
+  }
   const existing = await db(
     `trading_positions?exchange=eq.${exchange}&market=eq.${candidate.market}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id&limit=1`,
   );
@@ -2354,15 +2375,16 @@ async function enterCandidateInner(
     } = lobSizingContext;
     const liveFee = await liveFeePct(exchange, settings);
     const roundTripFeeBps = liveFee * 2 * 100;
+    // Fees, slippage and latency are already subtracted below. Adding a second
+    // fee-proportional cushion double-counted costs and turned a positive-net rule into an
+    // undocumented no-trade rule.
     const minimumTargetNetProfitBps = Math.max(
-      0,
-      finite((settings as any).lob_min_target_net_profit_bps, 2),
-      roundTripFeeBps * 0.20,
+      0.01,
+      finite((settings as any).lob_min_target_net_profit_bps, 0.01),
     );
     const minimumVerifiedEvBps = Math.max(
       0,
-      finite((settings as any).lob_min_verified_ev_cushion_bps, 0.5),
-      roundTripFeeBps * 0.05,
+      finite((settings as any).lob_min_verified_ev_cushion_bps, 0),
     );
     const lobLearning = assignedPolicy.patternProfile;
     const makerFill = await loadMakerFillStats(exchange);
@@ -2427,7 +2449,8 @@ async function enterCandidateInner(
     });
     scalpAudit = {
       strategy: "LOB_SCALP",
-      strategy_revision: "6.10.0-r7-VERIFIED-PAYOFF-GOVERNOR",
+      strategy_revision: "6.10.0-r8-ADMISSION-CONTINUITY",
+      recommendation,
       pattern: decision.pattern,
       patterns: decision.patterns,
       hotness: decision.hotness,
@@ -2506,6 +2529,7 @@ async function enterCandidateInner(
       ev_lower_bound_bps: decision.evLowerBoundBps,
       max_holding_seconds: decision.maxHoldingSeconds,
       reasons: decision.reasons,
+      warnings: decision.warnings,
       features: decision.features,
       scanned_lob: lobSnapshot,
       slots,
@@ -6300,10 +6324,27 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
     entries.length,
     entries.filter((row) => row.entered || row.reserved).length,
   );
+  const admission = summarizeEntryAdmission(candidates.length, entries);
+  await event(
+    admission.admissionCollapse ? "ENTRY_ADMISSION_COLLAPSE" : "ENTRY_ADMISSION_SUMMARY",
+    admission.admissionCollapse
+      ? `${admission.attempts} entry attempts produced zero reservations`
+      : `${admission.reservations}/${admission.attempts} entry attempts reserved`,
+    {
+      ...admission,
+      scan_id: scanId,
+      // The raw decisions remain in the decision ledger. This compact aggregate makes a
+      // throughput collapse visible in one status row instead of requiring thousands of
+      // individual rejection records to be inspected.
+      rejection_reasons: admission.rejectionReasons,
+    },
+    { cycleId, level: admission.admissionCollapse ? "WARNING" : "INFO" },
+  );
   return {
     scan_id: scanId,
     buy_candidates: candidates.length,
     entries,
+    admission,
     rotations,
     circuits,
     stats,

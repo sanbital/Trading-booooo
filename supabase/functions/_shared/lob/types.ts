@@ -116,9 +116,9 @@ export interface LobEntryConfig {
   minPrimaryPatternConfidence: number;
   minNetProfitBps: number;
   minEvBps: number;
-  /** Maximum noise-aware gross stop / target ratio. Never narrows the stop; rejects the trade. */
+  /** Maximum noise-aware gross stop / target ratio used as an auditable warning. */
   maxStopToTargetRatio: number;
-  /** Minimum fee-adjusted target reward / fee-adjusted stop loss. */
+  /** Minimum fee-adjusted target reward / fee-adjusted stop loss used as a warning. */
   minNetRewardRiskRatio: number;
   maxTargetBps: number;
   minTargetBps: number;
@@ -178,6 +178,7 @@ export interface LobEntryDecision {
   forecastBiasPenaltyBps: number;
   maxHoldingSeconds: number;
   reasons: string[];
+  warnings: string[];
   features: LobFeatureVector;
   traps: LobTrapAssessment;
   /** Stop actually used after the book's own noise band was taken into account. */

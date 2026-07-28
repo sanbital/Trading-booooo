@@ -19,7 +19,7 @@ export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   maxSpreadBps: 60,
   minHotnessScore: 0,
   minPrimaryPatternConfidence: 0.32,
-  minNetProfitBps: 2,
+  minNetProfitBps: 0.01,
   minEvBps: 0,
   maxStopToTargetRatio: 1.35,
   minNetRewardRiskRatio: 0.80,
@@ -85,6 +85,7 @@ export function evaluateLobEntry(
 ): LobEntryDecision {
   const cfg = { ...DEFAULT_LOB_ENTRY_CONFIG, ...overrides };
   const reasons: string[] = [];
+  const warnings: string[] = [];
   const hotness = scoreHotSymbol(features);
   const rawPatterns = detectLobPatterns(features);
 
@@ -285,6 +286,7 @@ export function evaluateLobEntry(
   const evLowerBoundBps = conditionalEvLowerBoundBps;
 
   for (const reason of payoff.reasons) reasons.push(reason);
+  for (const warning of payoff.warnings) warnings.push(warning);
   if (!(evLowerBoundBps > cfg.minEvBps)) reasons.push("NET_EV_NOT_POSITIVE");
 
   const technicalBlock = reasons.some((r) =>
@@ -325,6 +327,7 @@ export function evaluateLobEntry(
     forecastBiasPenaltyBps,
     maxHoldingSeconds: Math.min(cfg.absoluteMaxHoldingSeconds, Math.max(1, cfg.maxHoldingSeconds)),
     reasons,
+    warnings,
     features,
     traps,
     noiseAdjustedStopBps: stopBps,

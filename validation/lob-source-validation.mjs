@@ -15,6 +15,7 @@ const trader = read("supabase/functions/market-autotrader/index.ts");
 const migration = read("supabase/migrations/202607260016_lob_scalp_v600.sql");
 const gateway = read("gateway/server.mjs");
 const entry = read("supabase/functions/_shared/lob/entry.ts");
+const payoff = read("supabase/functions/_shared/lob/payoff-governor.ts");
 const patterns = read("supabase/functions/_shared/lob/patterns.ts");
 const heat = read("supabase/functions/_shared/lob/market-heat.ts");
 const exit = read("supabase/functions/_shared/lob/exit.ts");
@@ -30,7 +31,11 @@ check("five LOB pattern families exist", [
   "OFI_CONTINUATION", "REPLENISHMENT_ICEBERG",
 ].every((name) => patterns.includes(name)));
 check("iceberg cannot enter alone", patterns.includes('"REPLENISHMENT_ICEBERG"') && patterns.includes("false,"));
-check("positive target net return is mandatory", entry.includes("TARGET_NET_PROFIT_NOT_POSITIVE"));
+check(
+  "positive target net return is mandatory",
+  entry.includes("TARGET_NET_PROFIT_NOT_POSITIVE") ||
+    payoff.includes("TARGET_NET_CUSHION_TOO_SMALL"),
+);
 check("positive net EV is mandatory", entry.includes("NET_EV_NOT_POSITIVE"));
 check("per-trade stop is capped at 5 percent", scanner.includes("Math.min(500, lobResult.stopBps)"));
 check("daily loss cap is 30 percent", migration.includes("scalp_daily_loss_pct = 30"));

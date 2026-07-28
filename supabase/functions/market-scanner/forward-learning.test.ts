@@ -1,6 +1,7 @@
 import {
   applyRuntimeRisk,
   evaluatePath,
+  legacyForwardEligible,
   type LearningParameters,
   type RuntimeProfile,
   type StoredCandidate,
@@ -80,6 +81,14 @@ Deno.test("forward evaluator compares fixed, scale-out and trailing policies", (
   assert(Object.keys(result.policy_outcomes).includes("TRAIL_AFTER_T1_60"));
   assert(result.policy_outcomes.SCALE_OUT_60.target_2_hit);
   assert(result.optimal_policy_key != null);
+});
+
+Deno.test("legacy 24h forward learning excludes second-scale scalp candidates", () => {
+  assert(!legacyForwardEligible({ snapshot: { lob: { pattern: "SWEEP_RECLAIM" } } }));
+  assert(!legacyForwardEligible({ snapshot: { scalp: { target_pct: 0.003 } } }));
+  assert(legacyForwardEligible({
+    snapshot: { trade_plan: { target_strategy: "SHORT_ONLY" } },
+  }));
 });
 
 Deno.test("runtime profile cannot loosen weekly score, RR or micro safety", () => {

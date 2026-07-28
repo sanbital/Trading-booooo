@@ -9,6 +9,10 @@ on:
       - "supabase/functions/market-scanner/**"
       - "supabase/functions/market-learning/**"
       - "supabase/functions/market-autotrader/**"
+      # `deno task check/test` validates this function too. A test-only repair here must
+      # therefore rerun the engine workflow instead of leaving a previously blocked engine
+      # revision undeployed.
+      - "supabase/functions/market-performance/**"
       - "supabase/config.toml"
       - "supabase/migrations/**"
       - "deno.json"

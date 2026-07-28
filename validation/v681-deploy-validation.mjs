@@ -69,7 +69,10 @@ check(
 check(
   "performance API uses authoritative corrected pnl",
   performance.includes("residual_value_quote") &&
-    performance.includes("finite(position.realized_pnl_quote, calculatedNetPnl)"),
+    (
+      performance.includes("finite(position.realized_pnl_quote, calculatedNetPnl)") ||
+      performance.includes("numeric(position.realized_pnl_quote, calculatedNetPnl)")
+    ),
 );
 check(
   "regression cases cover BNB and ETH",

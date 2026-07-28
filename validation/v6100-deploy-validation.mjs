@@ -17,7 +17,8 @@ const objective = read("supabase/functions/_shared/lob/joint-objective.ts");
 const evidence = read("supabase/functions/_shared/lob/evidence-sizing.ts");
 const calibration = read("supabase/functions/lob-calibration/index.ts");
 
-check("v6.10 migration is newest", migrations.at(-1) === "202607280002_joint_compound_growth_v610.sql");
+check("v6.10 joint objective migration remains present", migrations.includes("202607280002_joint_compound_growth_v610.sql"));
+check("admission-safe payoff migration is newest", migrations.at(-1) === "202607280003_verified_payoff_governor_r7.sql");
 check("release versions agree", [trader, engine, gateway, dashboard].every((s) => s.includes(version)));
 check("dashboard runtime helpers are defined", dashboardJs.includes("const finite = (value, fallback = 0)") && dashboardJs.indexOf("const finite = (value, fallback = 0)") < dashboardJs.indexOf("finite(row.remaining_quantity)"));
 check("fee quality is separate from residual quality", migration.includes("fee_accounting_quality") && migration.includes("accounting_quality"));

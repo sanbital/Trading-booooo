@@ -110,8 +110,8 @@ jobs:
             "SUPABASE_URL=https://${SUPABASE_PROJECT_REF}.supabase.co"
             "AUTOTRADE_ACCESS_TOKEN=${autotrade_token}"
             "SCHEDULER_ENABLED=${SCHEDULER}"
-            "AUTO_SCAN_INTERVAL_SECONDS=60"
-            "AUTO_MONITOR_INTERVAL_SECONDS=15"
+            "AUTO_SCAN_INTERVAL_SECONDS=12"
+            "AUTO_MONITOR_INTERVAL_SECONDS=2"
           )
           if [ -n "${UPBIT_ACCESS_KEY:-}" ] && [ -n "${UPBIT_SECRET_KEY:-}" ]; then
             args+=("UPBIT_ACCESS_KEY=${UPBIT_ACCESS_KEY}" "UPBIT_SECRET_KEY=${UPBIT_SECRET_KEY}")

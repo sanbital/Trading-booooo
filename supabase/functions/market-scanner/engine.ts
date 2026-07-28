@@ -3171,10 +3171,17 @@ export function finalizeCandidate(
     20,
     88,
   );
-  const generatedAt = Number(micro.reference_timestamp || Date.now());
+  // Recommendation validity is an admission-pipeline clock, not a market-data clock.
+  // Starting it at the first microstructure observation caused a 20-second LOB candidate
+  // to expire while the remaining symbols were still being scanned and persisted.
+  // Market freshness remains independently enforced by live_book_age_ms here and by the
+  // full orderbook recheck in market-autotrader.
+  const generatedAt = risk.strategy === "LOB_SCALP"
+    ? Date.now()
+    : Number(micro.reference_timestamp || Date.now());
   const automatedMode = risk.operatorMode === "AUTOMATED";
   const validMinutes = risk.strategy === "LOB_SCALP"
-    ? 20 / 60
+    ? clamp(risk.recommendationValidMinutes ?? 2, 1, 5)
     : Math.round(clamp(
       risk.recommendationValidMinutes ?? (automatedMode ? 5 : 15),
       automatedMode ? 1 : 5,

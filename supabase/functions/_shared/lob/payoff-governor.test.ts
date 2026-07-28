@@ -23,7 +23,7 @@ Deno.test("realized payoff summary is fee-net and JSON-safe", () => {
   assert(!JSON.stringify(summary).includes("Infinity"));
 });
 
-Deno.test("mature adverse payoff evidence reduces the hard gate", () => {
+Deno.test("mature adverse payoff evidence ranks lower without deleting turnover", () => {
   const decision = payoffAwareDeployment({
     samples: 140,
     observedMultiplier: 0.70,
@@ -35,8 +35,7 @@ Deno.test("mature adverse payoff evidence reduces the hard gate", () => {
     medianHoldSeconds: 151,
   });
   assert(decision.gateWeight === 1);
-  assert(decision.gateMultiplier < 1);
-  assert(decision.gateMultiplier >= 0.55);
+  assert(decision.gateMultiplier === 1);
   assert(decision.rankingQuality < 1);
 });
 
@@ -84,8 +83,23 @@ Deno.test("fee-thin or asymmetric entry geometry is rejected", () => {
   });
   assert(!decision.allowed);
   assert(decision.reasons.includes("TARGET_NET_CUSHION_TOO_SMALL"));
-  assert(decision.reasons.includes("STOP_TARGET_ASYMMETRY"));
-  assert(decision.reasons.includes("NET_PAYOFF_TOO_WEAK"));
+  assert(decision.warnings.includes("STOP_TARGET_ASYMMETRY"));
+  assert(decision.warnings.includes("NET_PAYOFF_TOO_WEAK"));
+});
+
+Deno.test("payoff shape cannot veto an otherwise positive target branch", () => {
+  const decision = evaluateEntryPayoff({
+    targetBps: 20,
+    stopBps: 35,
+    targetReturnNetBps: 3,
+    stopReturnNetBps: -48,
+    minNetProfitBps: 2,
+    maxStopToTargetRatio: 1.35,
+    minNetRewardRiskRatio: 0.80,
+  });
+  assert(decision.allowed);
+  assert(decision.warnings.includes("STOP_TARGET_ASYMMETRY"));
+  assert(decision.warnings.includes("NET_PAYOFF_TOO_WEAK"));
 });
 
 Deno.test("balanced fee-adjusted entry geometry passes", () => {

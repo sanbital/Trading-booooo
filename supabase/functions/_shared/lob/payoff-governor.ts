@@ -1,4 +1,4 @@
-// Trading-booooo v6.10.0 r7 — verified payoff governor.
+// Trading-booooo v6.10.0 r8 — verified payoff governor with admission continuity.
 //
 // The verified trade history showed that faster turnover alone did not create positive EV:
 // Binance turnover improved while win rate stayed at 16%, and Upbit win rate improved while
@@ -60,6 +60,7 @@ export interface EntryPayoffDecision {
   stopToTargetRatio: number;
   netRewardRiskRatio: number;
   reasons: string[];
+  warnings: string[];
 }
 
 function finite(value: unknown, fallback = 0): number {
@@ -136,12 +137,12 @@ export function summarizeRealizedPayoff(
 /**
  * Turns verified realized payoff evidence into two separate controls.
  *
- * - gateMultiplier affects the bounded signal edge used by the hard EV gate.
+ * - gateMultiplier may lift the bounded signal edge used by the hard EV gate.
  * - rankingQuality determines which candidate receives scarce slot-seconds.
  *
- * Adverse evidence is allowed to reduce the gate only after enough samples. It is never a
- * permanent blacklist: the multiplier is bounded at 0.55 and low-sample evidence remains
- * close to one, preserving exploration and turnover.
+ * Adverse evidence remains ranking- and sizing-only. Allowing it to reduce the hard gate
+ * makes the system "improve" its measured win rate by deleting future observations, which
+ * both collapses turnover and prevents the evidence from ever recovering.
  */
 export function payoffAwareDeployment(
   input: PayoffDeploymentInput,
@@ -169,7 +170,11 @@ export function payoffAwareDeployment(
     0.55,
     1.30,
   );
-  const gateMultiplier = 1 + (performanceTarget - 1) * gateWeight;
+  // Only the probability calibration may alter the entry probability. Profit factor,
+  // payoff and holding time remain ranking/sizing evidence; multiplying all of them into
+  // pTarget would double-count the same realized outcomes and can overstate the hard gate.
+  const positiveGateTarget = Math.max(1, observedMultiplier);
+  const gateMultiplier = 1 + (positiveGateTarget - 1) * gateWeight;
 
   const profitableRate = input.profitableRate == null
     ? null
@@ -201,11 +206,12 @@ export function payoffAwareDeployment(
 }
 
 /**
- * Rejects structurally weak fee-adjusted geometry.
+ * Separates the one economic veto from payoff-shape diagnostics.
  *
  * This does not tighten a stop inside market noise. The stop remains noise-aware; when that
- * required stop makes the trade economically asymmetric, the correct action is to skip the
- * trade rather than manufacture a high transaction count with negative payoff.
+ * required stop makes the geometry asymmetric, the expected-value calculation still prices
+ * the full loss branch. A fixed reward/risk ratio must not independently delete a trade that
+ * remains positive-EV at its estimated win rate.
  */
 export function evaluateEntryPayoff(input: EntryPayoffInput): EntryPayoffDecision {
   const targetBps = Math.max(0, finite(input.targetBps));
@@ -222,14 +228,16 @@ export function evaluateEntryPayoff(input: EntryPayoffInput): EntryPayoffDecisio
     : Number.POSITIVE_INFINITY;
 
   const reasons: string[] = [];
+  const warnings: string[] = [];
   if (!(targetNet >= minNetProfitBps)) reasons.push("TARGET_NET_CUSHION_TOO_SMALL");
-  if (!(stopToTargetRatio <= maxStopToTargetRatio)) reasons.push("STOP_TARGET_ASYMMETRY");
-  if (!(netRewardRiskRatio >= minNetRewardRiskRatio)) reasons.push("NET_PAYOFF_TOO_WEAK");
+  if (!(stopToTargetRatio <= maxStopToTargetRatio)) warnings.push("STOP_TARGET_ASYMMETRY");
+  if (!(netRewardRiskRatio >= minNetRewardRiskRatio)) warnings.push("NET_PAYOFF_TOO_WEAK");
 
   return {
     allowed: reasons.length === 0,
     stopToTargetRatio,
     netRewardRiskRatio,
     reasons,
+    warnings,
   };
 }
