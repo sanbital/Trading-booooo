@@ -15,6 +15,7 @@ on:
       - "supabase/functions/market-performance/**"
       - "supabase/config.toml"
       - "supabase/migrations/**"
+      - "validation/**"
       - "deno.json"
       - ".github/workflows/main.deploy-supabase.yml"
   workflow_dispatch:
