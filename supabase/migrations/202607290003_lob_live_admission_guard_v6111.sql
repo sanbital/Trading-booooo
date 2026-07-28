@@ -28,7 +28,7 @@ update public.trading_settings
        lob_max_stop_to_target_ratio = least(coalesce(lob_max_stop_to_target_ratio, 1), 1),
        lob_min_net_ev_bps = greatest(coalesce(lob_min_net_ev_bps, 3), 3),
        lob_min_verified_ev_cushion_bps = greatest(coalesce(lob_min_verified_ev_cushion_bps, 3), 3),
-       scalp_low_evidence_daily_loss_pct = 0,
+       scalp_low_evidence_daily_loss_pct = 0.05,
        lob_live_admission_revision = '6.11.1-DB-GUARD',
        version = version + 1,
        updated_at = now()
