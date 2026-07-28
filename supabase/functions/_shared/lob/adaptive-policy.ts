@@ -175,10 +175,17 @@ export function proposeLobAdaptivePolicy(
       family: "LATENCY_GUARDED",
       score: (!diagnostics.latencyMeasured ? 2 : 0) + (diagnostics.latencySloBreached ? 3 : 0),
     },
-    { family: "EV_DEBIASED", score: clamp(finite(diagnostics.evBiasPenaltyBps, 0) / 3, 0, 4) },
-    { family: "QUALITY_WEIGHTED", score: clamp(finite(diagnostics.insufficientDataShare, 0), 0, 1) * 4 },
+    {
+      family: "EV_DEBIASED",
+      score: clamp(finite(diagnostics.evBiasPenaltyBps, 0) / 3, 0, 4),
+    },
+    {
+      family: "QUALITY_WEIGHTED",
+      score: clamp(finite(diagnostics.insufficientDataShare, 0), 0, 1) * 4,
+    },
     { family: "BALANCED", score: 0.25 },
-  ].sort((a, b) => b.score - a.score || a.family.localeCompare(b.family));
+  ];
+  scores.sort((a, b) => b.score - a.score || a.family.localeCompare(b.family));
   const current = diagnostics.currentFamily || null;
   const round = Math.max(0, Math.floor(finite(diagnostics.proposalRound, 0)));
   const viable = scores.filter((row) => row.score >= Math.max(0.25, scores[0].score * 0.40));
