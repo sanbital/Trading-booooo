@@ -29,6 +29,10 @@
 
 import type { LobPatternName } from "./types.ts";
 import type { LobTrapName } from "./traps.ts";
+import {
+  payoffAwareDeployment,
+  summarizeRealizedPayoff,
+} from "./payoff-governor.ts";
 
 export interface LobOutcomeSample {
   pattern: LobPatternName;
@@ -61,6 +65,12 @@ export interface LobPatternStat {
   /** predictedHitRate - neutralWinRate. The edge the model claimed. */
   predictedEdge: number;
   meanNetBps: number;
+  meanWinBps?: number | null;
+  meanLossBps?: number | null;
+  payoffRatio?: number | null;
+  profitFactor?: number | null;
+  netBpsStdDev?: number | null;
+  meanNetLowerBoundBps?: number | null;
   /** Share of trades with positive realized net P&L, including profitable early exits. */
   profitableRate?: number;
   /** Median slot occupancy. Used for capital-turnover ranking, never as a trade veto. */
@@ -188,6 +198,7 @@ export function buildLobLearningProfile(
     const rawMultiplier = Math.abs(predictedEdge) > 0.005 ? measuredEdge / predictedEdge : 1;
     const weight = rows.length / (rows.length + cfg.priorStrength);
     const shrunk = 1 + (rawMultiplier - 1) * weight;
+    const payoff = summarizeRealizedPayoff(rows.map((row) => row.netBps));
     patterns.push({
       pattern,
       samples: rows.length,
@@ -196,7 +207,13 @@ export function buildLobLearningProfile(
       neutralWinRate: neutral,
       measuredEdge,
       predictedEdge,
-      meanNetBps: mean(rows.map((row) => row.netBps)),
+      meanNetBps: payoff.meanNetBps ?? 0,
+      meanWinBps: payoff.meanWinBps,
+      meanLossBps: payoff.meanLossBps,
+      payoffRatio: payoff.payoffRatio,
+      profitFactor: payoff.profitFactor,
+      netBpsStdDev: payoff.standardDeviationBps,
+      meanNetLowerBoundBps: payoff.meanLowerBoundBps,
       profitableRate: rows.filter((row) => row.netBps > 0).length / rows.length,
       medianHoldSeconds: median(rows.map((row) => Number(row.heldSeconds))),
       probabilityMultiplier: clamp(shrunk, cfg.minMultiplier, cfg.maxMultiplier),
@@ -283,6 +300,10 @@ export interface LobPatternDeployment {
   profitableRate: number | null;
   meanNetBps: number | null;
   medianHoldSeconds: number | null;
+  profitFactor: number | null;
+  payoffRatio: number | null;
+  meanNetLowerBoundBps: number | null;
+  deploymentReason: string;
 }
 
 /**
@@ -314,16 +335,15 @@ export function patternDeployment(
       profitableRate: null,
       meanNetBps: null,
       medianHoldSeconds: null,
+      profitFactor: null,
+      payoffRatio: null,
+      meanNetLowerBoundBps: null,
+      deploymentReason: "no verified pattern evidence",
     };
   }
 
   const samples = Math.max(0, Number(row.samples) || 0);
   const observedMultiplier = clamp(Number(row.probabilityMultiplier), 0.30, 1.35);
-  const start = Math.max(1, gateStartSamples);
-  const full = Math.max(start + 1, gateFullSamples);
-  const gateWeight = clamp((samples - start) / (full - start), 0, 1);
-  const gateTarget = Math.max(1, observedMultiplier);
-  const gateMultiplier = 1 + (gateTarget - 1) * gateWeight;
   const profitableRate = Number.isFinite(Number(row.profitableRate))
     ? clamp(Number(row.profitableRate), 0, 1)
     : null;
@@ -332,22 +352,42 @@ export function patternDeployment(
       Number(row.medianHoldSeconds) > 0
     ? Number(row.medianHoldSeconds)
     : null;
+  const profitFactor = Number.isFinite(Number(row.profitFactor))
+    ? Number(row.profitFactor)
+    : null;
+  const payoffRatio = Number.isFinite(Number(row.payoffRatio))
+    ? Number(row.payoffRatio)
+    : null;
+  const meanNetLowerBoundBps = Number.isFinite(Number(row.meanNetLowerBoundBps))
+    ? Number(row.meanNetLowerBoundBps)
+    : null;
 
-  // All factors stay positive, so this can reorder candidates but can never turn a
-  // positive raw EV into a negative one or admit a negative raw EV.
-  const winFactor = profitableRate == null ? 1 : clamp(0.5 + profitableRate, 0.5, 1.5);
-  const netFactor = meanNetBps == null ? 1 : clamp(1 + meanNetBps / 100, 0.5, 1.5);
-  const rankingQuality = clamp(observedMultiplier * winFactor * netFactor, 0.15, 1.75);
+  const deployment = payoffAwareDeployment({
+    samples,
+    observedMultiplier,
+    profitableRate,
+    meanNetBps,
+    profitFactor,
+    payoffRatio,
+    meanLowerBoundBps: meanNetLowerBoundBps,
+    medianHoldSeconds,
+    gateStartSamples,
+    gateFullSamples,
+  });
 
   return {
     samples,
     observedMultiplier,
-    gateMultiplier,
-    gateWeight,
-    rankingQuality,
+    gateMultiplier: deployment.gateMultiplier,
+    gateWeight: deployment.gateWeight,
+    rankingQuality: deployment.rankingQuality,
     profitableRate,
     meanNetBps,
     medianHoldSeconds,
+    profitFactor,
+    payoffRatio,
+    meanNetLowerBoundBps,
+    deploymentReason: deployment.reason,
   };
 }
 

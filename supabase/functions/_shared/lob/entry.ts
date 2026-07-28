@@ -1,6 +1,7 @@
 import { scoreHotSymbol } from "./hot-symbol.ts";
 import { detectLobPatterns } from "./patterns.ts";
 import { assessLobTraps, type LobTrapName } from "./traps.ts";
+import { evaluateEntryPayoff } from "./payoff-governor.ts";
 import type {
   LobCostEstimate,
   LobEntryConfig,
@@ -18,8 +19,10 @@ export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   maxSpreadBps: 60,
   minHotnessScore: 0,
   minPrimaryPatternConfidence: 0.32,
-  minNetProfitBps: 0.01,
+  minNetProfitBps: 2,
   minEvBps: 0,
+  maxStopToTargetRatio: 1.35,
+  minNetRewardRiskRatio: 0.80,
   minTargetBps: 8,
   maxTargetBps: 120,
   minStopBps: 6,
@@ -224,6 +227,15 @@ export function evaluateLobEntry(
 
   const targetReturnNetBps = targetBps - totalTargetCostBps;
   const stopReturnNetBps = -(stopBps + totalStopCostBps);
+  const payoff = evaluateEntryPayoff({
+    targetBps,
+    stopBps,
+    targetReturnNetBps,
+    stopReturnNetBps,
+    minNetProfitBps: cfg.minNetProfitBps,
+    maxStopToTargetRatio: cfg.maxStopToTargetRatio,
+    minNetRewardRiskRatio: cfg.minNetRewardRiskRatio,
+  });
   // Timeout is an executable close, not a discounted hypothetical. Charge the full entry,
   // exit, latency and fee budget. The old arbitrary 0.75 multiplier understated this branch.
   const timeoutReturnNetBps = -(
@@ -272,7 +284,7 @@ export function evaluateLobEntry(
   const attemptEvLowerBoundBps = pFill * conditionalEvLowerBoundBps;
   const evLowerBoundBps = conditionalEvLowerBoundBps;
 
-  if (!(targetReturnNetBps > 0)) reasons.push("TARGET_NET_PROFIT_NOT_POSITIVE");
+  for (const reason of payoff.reasons) reasons.push(reason);
   if (!(evLowerBoundBps > cfg.minEvBps)) reasons.push("NET_EV_NOT_POSITIVE");
 
   const technicalBlock = reasons.some((r) =>
@@ -300,6 +312,10 @@ export function evaluateLobEntry(
     targetReturnNetBps,
     stopReturnNetBps,
     timeoutReturnNetBps,
+    stopToTargetRatio: payoff.stopToTargetRatio,
+    netRewardRiskRatio: payoff.netRewardRiskRatio,
+    minimumTargetNetProfitBps: cfg.minNetProfitBps,
+    minimumVerifiedEvBps: cfg.minEvBps,
     conditionalEvNetBps,
     conditionalEvLowerBoundBps,
     attemptEvNetBps,

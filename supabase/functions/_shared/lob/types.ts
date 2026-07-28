@@ -116,6 +116,10 @@ export interface LobEntryConfig {
   minPrimaryPatternConfidence: number;
   minNetProfitBps: number;
   minEvBps: number;
+  /** Maximum noise-aware gross stop / target ratio. Never narrows the stop; rejects the trade. */
+  maxStopToTargetRatio: number;
+  /** Minimum fee-adjusted target reward / fee-adjusted stop loss. */
+  minNetRewardRiskRatio: number;
   maxTargetBps: number;
   minTargetBps: number;
   minStopBps: number;
@@ -158,6 +162,10 @@ export interface LobEntryDecision {
   targetReturnNetBps: number;
   stopReturnNetBps: number;
   timeoutReturnNetBps: number;
+  stopToTargetRatio: number;
+  netRewardRiskRatio: number;
+  minimumTargetNetProfitBps: number;
+  minimumVerifiedEvBps: number;
   /** EV conditional on the maker entry actually filling. */
   conditionalEvNetBps: number;
   conditionalEvLowerBoundBps: number;
