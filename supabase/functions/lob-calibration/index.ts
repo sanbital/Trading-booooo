@@ -27,6 +27,7 @@ import type { LobPatternName } from "../_shared/lob/types.ts";
 import type { LobTrapName } from "../_shared/lob/traps.ts";
 import { estimateEvBias, type EvBiasSample } from "../_shared/lob/ev-bias.ts";
 import { proposeLobAdaptivePolicy } from "../_shared/lob/adaptive-policy.ts";
+import { verifiedOutcomeToSample } from "../_shared/lob/verified-outcome.ts";
 
 const SUPABASE_URL = (Deno.env.get("SUPABASE_URL") || "").replace(/\/+$/, "");
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -330,13 +331,15 @@ Deno.serve(async (request: Request) => {
       }
     }
     const rows = await db(
-      `trading_positions?state=eq.CLOSED&is_paper=eq.false&closed_at=gte.${since}` +
-        `&select=id,created_at,opened_at,closed_at,updated_at,close_reason,average_entry_price,realized_pnl_quote,realized_cost_quote,metadata` +
-        `&order=closed_at.desc&limit=5000`,
+      `lob_online_outcomes?closed_at=gte.${since}` +
+        "&accounting_quality=in.(NO_RESIDUAL,RESIDUAL_MARKED_TO_EXIT)" +
+        "&fee_accounting_quality=in.(EXACT,AGGREGATE_EXACT,THIRD_ASSET_MARKED,BASE_ASSET_ACCOUNTED)" +
+        "&prediction_basis=eq.FILL_CONDITIONAL" +
+        "&select=*&order=closed_at.desc&limit=5000",
     );
 
     const samples = (rows || [])
-      .map(toSample)
+      .map(verifiedOutcomeToSample)
       .filter((sample: LobOutcomeSample | null): sample is LobOutcomeSample => sample !== null);
 
     const profile = buildLobLearningProfile(samples);
@@ -370,7 +373,11 @@ Deno.serve(async (request: Request) => {
           window_hours: windowHours,
           patterns: profile.patterns,
           traps: profile.traps,
-          notes: [...profile.notes, "VALIDATION_CANDIDATE_ONLY_V610"],
+          notes: [
+            ...profile.notes,
+            "VALIDATION_CANDIDATE_ONLY_V610",
+            "VERIFIED_OUTCOMES_ONLY_R7",
+          ],
         }),
       });
       profileId = inserted?.[0]?.id ?? null;
