@@ -1,4 +1,4 @@
-// Trading-booooo v6.9.0-EVIDENCE-SIZED-LIVE-VALIDATION — autonomous spot orchestrator.
+// Trading-booooo v6.9.1-FEE-LEDGER-INTEGRITY — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -24,6 +24,7 @@ import {
   type TradingMode,
   type TradingSettings,
 } from "./core.ts";
+import { allocateNormalizedTradeFees, resolveFeeQuote } from "./fee-accounting.ts";
 import { scalpEntryDecision } from "../_shared/scalp/scalp-gate.ts";
 import { DEFAULT_SCALP_SIGNAL, refreshPWinAtOrderTime } from "../_shared/scalp/signal.ts";
 import {
@@ -100,7 +101,7 @@ import { settleSpotMarketReads, validateSpotMarket } from "../_shared/spot-marke
 import { lobEvidenceSizeFraction } from "../_shared/lob/evidence-sizing.ts";
 import { boundedEvBiasPenalty } from "../_shared/lob/ev-bias.ts";
 
-const VERSION = "6.9.0-EVIDENCE-SIZED-LIVE-VALIDATION";
+const VERSION = "6.9.1-FEE-LEDGER-INTEGRITY";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -1226,57 +1227,50 @@ function uniqueId(prefix: string, id: string) {
 async function createOrderRecord(values: JsonRecord) {
   return (await insert("trading_orders", values))[0];
 }
-function feeQuoteEstimate(exchange: Exchange, market: string, order: any, fill: any): number {
-  const quote = quoteCurrency(exchange);
-  const base = baseAsset(exchange, market);
-  const trades = Array.isArray(order?.trades)
-    ? order.trades
-    : Array.isArray(fill?.trades)
-    ? fill.trades
-    : [];
-  if (trades.length) {
-    return trades.reduce((total: number, trade: any) => {
-      const asset = String(trade?.fee_asset || "").toUpperCase();
-      const fee = Math.max(0, finite(trade?.fee));
-      if (asset === quote) return total + fee;
-      // A commission paid in the traded base asset is not a separate quote-currency
-      // expense. It reduces the quantity left in the account and is captured by residual
-      // accounting on exit (or by net received quantity on entry).
-      if (asset === base) return total;
-      // Third-asset fees (for example BNB discount on ETHUSDT) do reduce total account
-      // equity. When no direct conversion is supplied, retain the conservative exchange
-      // fee-rate estimate on the matched quote funds.
-      return total + Math.max(0, finite(trade?.funds)) * FEE_PCT[exchange] / 100;
-    }, 0);
-  }
-  const feeAsset = String(fill?.feeAsset || order?.fee_asset || "").toUpperCase();
-  const paid = Math.max(0, finite(fill?.paidFee, finite(order?.paid_fee)));
-  if (feeAsset === quote) return paid;
-  if (feeAsset === base) return 0;
-  return finite(fill?.executedFunds, finite(order?.executed_funds)) * FEE_PCT[exchange] / 100;
+function feeResolutionFor(exchange: Exchange, market: string, order: any, fill: any) {
+  return resolveFeeQuote({
+    quoteAsset: quoteCurrency(exchange),
+    baseAsset: baseAsset(exchange, market),
+    defaultFeePct: FEE_PCT[exchange],
+    order,
+    fill,
+    // Binance GET /api/v3/order omits commissions. The gateway now enriches it from
+    // /api/v3/myTrades; a conservative fallback remains if that detail lookup fails.
+    estimateWhenMissing: exchange === "binance",
+  });
 }
 async function storeFills(orderRow: any, normalized: any) {
   const trades = Array.isArray(normalized?.trades) ? normalized.trades : [];
   if (!trades.length) return;
   const quote = orderRow.quote_currency;
-  const rows = trades.map((trade: any, index: number) => ({
-    order_id: orderRow.id,
-    trade_id: trade.trade_id || `${orderRow.id}-${index}`,
-    price: finite(trade.price),
-    volume: finite(trade.volume),
-    funds_quote: finite(trade.funds, finite(trade.price) * finite(trade.volume)),
-    fee_amount: finite(trade.fee),
-    fee_asset: trade.fee_asset || null,
-    fee_quote_estimate: (() => {
-      const feeAsset = String(trade.fee_asset || "").toUpperCase();
-      const base = baseAsset(orderRow.exchange as Exchange, orderRow.market);
-      if (feeAsset === quote) return finite(trade.fee);
-      if (feeAsset === base) return 0;
-      return finite(trade.funds) * FEE_PCT[orderRow.exchange as Exchange] / 100;
-    })(),
-    executed_at: trade.executed_at || null,
-    raw: trade.raw || trade,
-  }));
+  const allocatedFees = allocateNormalizedTradeFees({
+    quoteAsset: quote,
+    baseAsset: baseAsset(orderRow.exchange as Exchange, orderRow.market),
+    defaultFeePct: FEE_PCT[orderRow.exchange as Exchange],
+    aggregatePaidFee: finite(normalized?.paid_fee),
+    aggregateFeeAsset: normalized?.fee_asset || null,
+    executedFunds: finite(normalized?.executed_funds),
+    trades,
+  });
+  const rows = trades.map((trade: any, index: number) => {
+    const allocated = allocatedFees[index] || {
+      feeAmount: 0,
+      feeAsset: trade.fee_asset || null,
+      feeQuoteEstimate: 0,
+    };
+    return {
+      order_id: orderRow.id,
+      trade_id: trade.trade_id || `${orderRow.id}-${index}`,
+      price: finite(trade.price),
+      volume: finite(trade.volume),
+      funds_quote: finite(trade.funds, finite(trade.price) * finite(trade.volume)),
+      fee_amount: allocated.feeAmount,
+      fee_asset: allocated.feeAsset,
+      fee_quote_estimate: allocated.feeQuoteEstimate,
+      executed_at: trade.executed_at || null,
+      raw: trade.raw || trade,
+    };
+  });
   await db("trading_fills?on_conflict=order_id,trade_id", {
     method: "POST",
     headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
@@ -1326,7 +1320,8 @@ async function updateOrderFromGateway(orderRow: any, payload: any) {
     paidFee: finite(order?.paid_fee),
     feeAsset: order?.fee_asset,
   };
-  const feeQuote = feeQuoteEstimate(orderRow.exchange, orderRow.market, order, fill);
+  const feeResolution = feeResolutionFor(orderRow.exchange, orderRow.market, order, fill);
+  const feeQuote = feeResolution.feeQuote;
   // Attach the base-asset commission so the caller can book the NET quantity received.
   const paidFeeBase = baseAssetFee(
     order,
@@ -1345,7 +1340,18 @@ async function updateOrderFromGateway(orderRow: any, payload: any) {
       ["FILLED", "CANCELED", "PARTIALLY_FILLED_CANCELED"].includes(String(order?.status))
         ? new Date().toISOString()
         : null,
-    raw_response: order || {},
+    raw_response: {
+      ...(order || {}),
+      fee_accounting: {
+        version: "6.9.1",
+        source: feeResolution.source,
+        fee_quote: feeQuote,
+        aggregate_fee_asset: feeResolution.aggregateFeeAsset,
+        positive_trade_fee_count: feeResolution.positiveTradeFeeCount,
+        estimated: feeResolution.estimated,
+        complete: feeResolution.complete,
+      },
+    },
   });
   await storeFills(orderRow, order);
   return {
