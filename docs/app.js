@@ -1174,6 +1174,7 @@
   const controlStatus = $("control-status");
   const allocationStatus = $("allocation-status");
   const traderAlert = $("trader-alert");
+  const traderNotice = $("trader-notice");
   let token = "";
   let pollTimer = null;
   let currentStatus = null;
@@ -1195,6 +1196,49 @@
     const number = Number(value);
     return Number.isFinite(number) ? number : fallback;
   };
+
+  function summarizeResidualInventory(rows, settings) {
+    const residuals = Array.isArray(rows)
+      ? rows.filter((row) => finite(row.remaining_quantity) > 0)
+      : [];
+    const groups = new Map();
+    for (const row of residuals) {
+      const exchange = String(row.exchange || "").toLowerCase();
+      const asset = String(row.asset || "").toUpperCase();
+      const market = String(row.market || "").toUpperCase();
+      const key = `${exchange}:${asset}:${market}`;
+      const current = groups.get(key) || {
+        exchange,
+        asset,
+        market,
+        rows: 0,
+        valueQuote: 0,
+        states: new Set(),
+      };
+      current.rows += 1;
+      current.valueQuote += Math.max(0, finite(row.value_quote));
+      current.states.add(String(row.state || ""));
+      groups.set(key, current);
+    }
+    const buffer = Math.max(1, finite(settings?.residual_sweep_buffer, 1.1));
+    const list = [...groups.values()];
+    const actionable = list.filter((group) => {
+      if (group.states.has("SWEEP_PENDING")) return true;
+      if (group.exchange === "binance" && group.asset === "BNB") return false;
+      const minimum = group.exchange === "upbit"
+        ? Math.max(0, finite(settings?.min_order_krw, 5000))
+        : Math.max(0, finite(settings?.min_order_usdt, 5));
+      return group.valueQuote >= minimum * buffer;
+    });
+    const totals = list.reduce(
+      (sum, group) => {
+        sum[group.exchange] = (sum[group.exchange] || 0) + group.valueQuote;
+        return sum;
+      },
+      { upbit: 0, binance: 0 },
+    );
+    return { residuals, groups: list, actionable, totals };
+  }
 
   function endpoint() {
     return `${String(config.supabaseUrl || "").replace(/\/$/, "")}/functions/v1/${
@@ -1343,6 +1387,11 @@
       const governance = lob.governance || null;
       const champion = governance?.champion || null;
       const alternate = governance?.alternate || null;
+      const calibration = data?.learning?.scalp_calibration || null;
+      const initialChampion = champion?.decision_reason === "INITIAL_V670_POLICY_FROZEN";
+      const verifiedSamples = finite(governance?.verified_live_outcome_samples);
+      const championSamples = finite(governance?.verified_champion_samples);
+      const alternateSamples = finite(governance?.verified_alternate_samples);
       const phaseLabel = governance?.phase === "CHALLENGE"
         ? "도전자 실거래 검증"
         : governance?.phase === "CONFIRMATION"
@@ -1353,7 +1402,11 @@
           "활성 모델",
           champion
             ? `CHAMPION P${fmt(champion.version, 0)}${
-              champion.confirmed ? " · 검증 완료" : " · 잠정 승격"
+              initialChampion
+                ? " · 초기 기준 정책"
+                : champion.confirmed
+                ? " · 검증 완료"
+                : " · 잠정 승격"
             }`
             : `LEGACY ONLINE #${fmt(lob.profile_version, 0)}`,
         ],
@@ -1366,21 +1419,38 @@
             }% 교차검증`
             : "없음",
         ],
-        ["데이터 갱신", "실거래 종료 즉시 · 정책은 검증 후 적용"],
         [
-          "전체 원장 승률",
+          "정책 검증 표본",
+          `${fmt(verifiedSamples, 0)}건 · P${fmt(champion?.version, 0)} ${fmt(championSamples, 0)} / P${
+            fmt(alternate?.version, 0)
+          } ${fmt(alternateSamples, 0)}`,
+        ],
+        [
+          "확률 교정",
+          finite(calibration?.train_samples) > 0
+            ? `학습 ${fmt(calibration.train_samples, 0)}건 · slope ${fmt(calibration.slope, 3)}`
+            : "초기값 · 유효 표본 대기",
+        ],
+        [
+          "원시 원장 승률(참고)",
           lob.profitable_rate != null ? `${fmt(lob.profitable_rate * 100, 1)}%` : "표본 대기",
         ],
         [
-          "전체 원장 순손익",
+          "원시 원장 순손익(참고)",
           lob.mean_net_bps != null ? `${fmt(lob.mean_net_bps, 2)} bp` : "표본 대기",
         ],
         [
-          "원시 학습 범위",
+          "원시 원장 범위(참고)",
           `${fmt(lob.samples, 0)}건 / ${fmt(lob.profiled_markets, 0)}코인`,
         ],
         ["승격 조건", "승률↑ · 순익↑ · 거래·회전 유지"],
-        ["최근 데이터", lob.last_updated_at ? dateTime(lob.last_updated_at) : "표본 대기"],
+        [
+          "최근 검증 데이터",
+          governance?.last_verified_update_at
+            ? dateTime(governance.last_verified_update_at)
+            : "현행 표본 대기",
+        ],
+        ["최근 원시 데이터", lob.last_updated_at ? dateTime(lob.last_updated_at) : "표본 대기"],
       ];
       $("learning-status").innerHTML = rows.map(([label, value]) =>
         `<div class="detail-row"><span>${escapeHtml(label)}</span><strong>${
@@ -1532,14 +1602,24 @@
     if (activeLocks.length) {
       alerts.push(`자산 잠금 ${activeLocks.length}건: ${activeLocks.slice(0, 5).map((row) => `${row.exchange}:${row.asset}`).join(", ")}`);
     }
-    const residuals = Array.isArray(data.residual_inventory)
-      ? data.residual_inventory.filter((row) => finite(row.remaining_quantity) > 0)
-      : [];
-    if (residuals.length) {
-      alerts.push(`잔량 원장 ${residuals.length}건 · 재진입 합산 또는 조건부 sweep 대기`);
+    const residualSummary = summarizeResidualInventory(data.residual_inventory, settings);
+    if (residualSummary.actionable.length) {
+      alerts.push(
+        `처리 가능 잔량 ${residualSummary.actionable.length}자산 · 재진입 또는 조건부 sweep 확인 필요`,
+      );
     }
     traderAlert.textContent = alerts.join(" ");
     setHidden(traderAlert, alerts.length === 0);
+    const notices = [];
+    if (residualSummary.groups.length && !residualSummary.actionable.length) {
+      notices.push(
+        `최소주문 미만 잔량 ${residualSummary.groups.length}자산 · BINANCE ${
+          fmt(residualSummary.totals.binance, 2)
+        } USDT · UPBIT ${fmt(residualSummary.totals.upbit, 2)}원 · 신규 진입 시 합산`,
+      );
+    }
+    traderNotice.textContent = notices.join(" ");
+    setHidden(traderNotice, notices.length === 0);
   }
 
   async function loadStatus(silent = false) {

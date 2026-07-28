@@ -81,7 +81,8 @@ check(
 check(
   "dashboard distinguishes raw samples from policy versions",
   dashboardApp.includes("CHAMPION P") &&
-    dashboardApp.includes("실거래 종료 즉시 · 정책은 검증 후 적용"),
+    dashboardApp.includes("정책 검증 표본") &&
+    dashboardApp.includes("원시 원장 승률(참고)"),
 );
 check(
   "trade history is ten-row collapsed and fifty-row paginated",

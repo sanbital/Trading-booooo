@@ -6364,6 +6364,7 @@ async function status(settings: TradingSettings & JsonRecord) {
     lobBatchProfiles,
     lobOnlineStatus,
     lobPolicyStatus,
+    scalpCalibration,
     assetLocks,
     residualInventory,
     objectiveSnapshots,
@@ -6391,6 +6392,9 @@ async function status(settings: TradingSettings & JsonRecord) {
       method: "POST",
       body: JSON.stringify({}),
     }).catch(() => null),
+    db(
+      "scalp_calibration_profiles?active=eq.true&select=created_at,slope,intercept,train_samples,holdout_samples,promotion_reason&order=created_at.desc&limit=1",
+    ).catch(() => []),
     db("trading_asset_locks?state=eq.LOCKED&select=exchange,asset,reason,clean_checks,last_checked_at,last_check_status,locked_at&order=locked_at.asc").catch(() => []),
     db("trading_residual_inventory?state=in.(AVAILABLE,RESERVED_FOR_REENTRY,SWEEP_PENDING)&select=exchange,asset,market,remaining_quantity,value_quote,state,updated_at&order=updated_at.asc").catch(() => []),
     db("trading_joint_objective_snapshots?select=*&order=captured_at.desc&limit=40").catch(() => []),
@@ -6485,6 +6489,7 @@ async function status(settings: TradingSettings & JsonRecord) {
     learning: {
       profiles,
       active_profile: (profiles || []).find((row: any) => row.active) || profiles?.[0] || null,
+      scalp_calibration: scalpCalibration?.[0] || null,
       lob: lobLearningStatus,
     },
     gateway: health,

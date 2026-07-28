@@ -218,6 +218,7 @@ button { color: inherit; }
 .alert { margin: 16px 0 0; padding: 14px 16px; border-radius: 12px; font-size: 13px; }
 .alert-error { border: 1px solid rgba(255, 102, 127, 0.3); background: var(--red-soft); color: #ffc2cc; }
 .alert-warning { border: 1px solid rgba(245, 197, 107, 0.3); background: rgba(245, 197, 107, 0.08); color: #f5d999; }
+.alert-info { border: 1px solid rgba(132, 151, 173, 0.24); background: rgba(132, 151, 173, 0.06); color: var(--muted); }
 .alert code { color: #fff; font-family: var(--mono); }
 
 .results { margin-top: 28px; }
