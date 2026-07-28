@@ -1,20 +1,21 @@
-// Trading-booooo performance API v6.11.0 — continuous adaptive execution revision r1.
-// Read-only authenticated endpoint. A trade exists only when an actual ENTRY fill exists.
-// Closed trades additionally require an actual SELL fill. Mutable order timestamps are never
-// used as market lifecycle timestamps.
+// Trading-booooo performance API v6.11.0 — performance freshness revision r2.
+// The dashboard is built only from actual LIVE fills. PostgREST is paged explicitly so
+// the default 1,000-row response cap cannot freeze the trade list at an old timestamp.
 
 import { type JsonRecord as TimeJsonRecord, resolveLifecycleTimes } from "./time-integrity.ts";
+import { collectPages } from "./rest-pagination.ts";
 
 type JsonRecord = Record<string, any>;
 type Exchange = "upbit" | "binance";
 
 const VERSION = "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION";
-const PERFORMANCE_REVISION = "6.11.0-r1-CONTINUOUS-ADAPTIVE-EXECUTION";
+const PERFORMANCE_REVISION = "6.11.0-r2-PAGINATED-LIVE-FILLS";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const SERVICE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
 const DASHBOARD_TOKEN = env("DASHBOARD_ACCESS_TOKEN") || env("LEARNING_ACCESS_TOKEN");
 const DASHBOARD_ORIGIN = env("ALLOWED_ORIGINS").split(",")[0] || "*";
+const REST_PAGE_SIZE = 1000;
 
 function env(name: string): string {
   return (Deno.env.get(name) || "").trim();
@@ -55,7 +56,9 @@ function response(body: unknown, status = 200): Response {
     headers: {
       ...CORS_HEADERS,
       "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
+      "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+      pragma: "no-cache",
+      expires: "0",
     },
   });
 }
@@ -65,12 +68,20 @@ function dbHeaders(extra: Record<string, string> = {}): HeadersInit {
     apikey: SERVICE_KEY,
     authorization: `Bearer ${SERVICE_KEY}`,
     "content-type": "application/json",
+    "cache-control": "no-cache",
+    pragma: "no-cache",
     ...extra,
   };
 }
 
-async function db(path: string): Promise<any[]> {
-  const result = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: dbHeaders() });
+async function dbPage(path: string, from: number, to: number): Promise<any[]> {
+  const result = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    headers: dbHeaders({
+      Range: `${from}-${to}`,
+      "Range-Unit": "items",
+    }),
+    cache: "no-store",
+  });
   const text = await result.text();
   let data: any;
   try {
@@ -86,13 +97,22 @@ async function db(path: string): Promise<any[]> {
   return Array.isArray(data) ? data : [];
 }
 
+async function dbAll(path: string, maxRows: number): Promise<any[]> {
+  return collectPages(
+    (from, to) => dbPage(path, from, to),
+    { pageSize: REST_PAGE_SIZE, maxRows },
+  );
+}
+
+async function dbLimited(path: string): Promise<any[]> {
+  return dbPage(path, 0, REST_PAGE_SIZE - 1);
+}
+
 function kstDayKey(value: string | Date): string {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   const kst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
-  return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, "0")}-${
-    String(kst.getUTCDate()).padStart(2, "0")
-  }`;
+  return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, "0")}-${String(kst.getUTCDate()).padStart(2, "0")}`;
 }
 
 function latestSnapshots(rows: JsonRecord[]): Record<Exchange, JsonRecord | null> {
@@ -106,25 +126,33 @@ function latestSnapshots(rows: JsonRecord[]): Record<Exchange, JsonRecord | null
   return latest;
 }
 
-function orderFills(orderIds: Set<string>, fills: JsonRecord[]): JsonRecord[] {
-  return fills.filter((fill) => orderIds.has(String(fill.order_id || "")));
+function groupBy<T extends JsonRecord>(rows: T[], key: string): Map<string, T[]> {
+  const grouped = new Map<string, T[]>();
+  for (const row of rows) {
+    const value = String(row[key] || "");
+    if (!value) continue;
+    const current = grouped.get(value) || [];
+    current.push(row);
+    grouped.set(value, current);
+  }
+  return grouped;
 }
 
 function calculateTrade(
   position: JsonRecord,
-  orders: JsonRecord[],
-  fills: JsonRecord[],
+  positionOrders: JsonRecord[],
+  fillsByOrder: Map<string, JsonRecord[]>,
   snapshot: JsonRecord | null,
 ): { quality: string; trade: JsonRecord | null } {
-  const positionOrders = orders.filter((order) => order.position_id === position.id);
   const buys = positionOrders.filter((order) =>
     String(order.side).toUpperCase() === "BUY" && String(order.purpose).toUpperCase() === "ENTRY"
   );
   const sells = positionOrders.filter((order) => String(order.side).toUpperCase() === "SELL");
-  const entryOrderIds = new Set(buys.map((order) => String(order.id)));
-  const exitOrderIds = new Set(sells.map((order) => String(order.id)));
-  const entryFills = orderFills(entryOrderIds, fills);
-  const exitFills = orderFills(exitOrderIds, fills);
+  const fillsForOrders = (orders: JsonRecord[]) => orders.flatMap((order) =>
+    fillsByOrder.get(String(order.id || "")) || []
+  );
+  const entryFills = fillsForOrders(buys);
+  const exitFills = fillsForOrders(sells);
   const lifecycle = resolveLifecycleTimes({
     state: position.state,
     entryFills: entryFills as TimeJsonRecord[],
@@ -138,33 +166,25 @@ function calculateTrade(
   const feeForOrder = (order: JsonRecord) => {
     const orderFee = Math.max(0, numeric(order.paid_fee_quote));
     if (orderFee > 0) return orderFee;
-    return fills.filter((fill) => fill.order_id === order.id).reduce(
+    return (fillsByOrder.get(String(order.id || "")) || []).reduce(
       (sum, fill) => sum + Math.max(0, numeric(fill.fee_quote_estimate)),
       0,
     );
   };
+  const sumFills = (rows: JsonRecord[], key: string) =>
+    rows.reduce((sum, fill) => sum + Math.max(0, numeric(fill[key])), 0);
 
-  const entryVolume = buys.reduce(
-    (sum, order) => sum + Math.max(0, numeric(order.executed_volume)),
-    0,
-  );
-  const entryFunds = buys.reduce(
-    (sum, order) => sum + Math.max(0, numeric(order.executed_funds_quote)),
-    0,
-  );
+  // Actual fill economics are the source of truth. This also includes partially filled orders
+  // that later ended in EXCHANGE_CANCELLED, which the old APPLIED-only query omitted.
+  const entryVolume = sumFills(entryFills, "volume");
+  const entryFunds = sumFills(entryFills, "funds_quote");
   const entryFees = buys.reduce((sum, order) => sum + feeForOrder(order), 0);
   if (!(entryVolume > 0 && entryFunds > 0)) {
     return { quality: "ENTRY_ECONOMICS_MISSING", trade: null };
   }
 
-  const exitVolume = sells.reduce(
-    (sum, order) => sum + Math.max(0, numeric(order.executed_volume)),
-    0,
-  );
-  const exitFunds = sells.reduce(
-    (sum, order) => sum + Math.max(0, numeric(order.executed_funds_quote)),
-    0,
-  );
+  const exitVolume = sumFills(exitFills, "volume");
+  const exitFunds = sumFills(exitFills, "funds_quote");
   const exitFees = sells.reduce((sum, order) => sum + feeForOrder(order), 0);
   const remainingQuantity = Math.max(
     0,
@@ -375,26 +395,30 @@ Deno.serve(async (request: Request) => {
 
   try {
     const [positions, orders, fills, snapshots, objectiveRows] = await Promise.all([
-      db(
-        "trading_positions?is_paper=eq.false&state=in.(OPEN,EXITING,CLOSED)&select=*&order=created_at.desc&limit=2000",
+      dbAll(
+        "trading_positions?is_paper=eq.false&state=in.(OPEN,EXITING,CLOSED)&select=*&order=created_at.asc,id.asc",
+        10_000,
       ),
-      db("trading_orders?state=eq.APPLIED&select=*&order=requested_at.asc&limit=10000"),
-      db("trading_fills?select=*&order=executed_at.asc&limit=20000"),
-      db("trading_account_snapshots?select=*&order=captured_at.desc&limit=500"),
-      db(
-        "trading_joint_objective_snapshots?engine_version=in.(6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE,6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION)&select=*&order=captured_at.desc&limit=5000",
-      )
-        .catch(() => []),
+      dbAll("trading_orders?select=*&order=requested_at.asc,id.asc", 50_000),
+      dbAll("trading_fills?select=*&order=executed_at.asc,id.asc", 100_000),
+      dbLimited("trading_account_snapshots?select=*&order=captured_at.desc&limit=500"),
+      dbAll(
+        "trading_joint_objective_snapshots?engine_version=in.(6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE,6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION)&select=*&order=captured_at.asc,id.asc",
+        10_000,
+      ).catch(() => []),
     ]);
 
     const latest = latestSnapshots(snapshots);
+    const ordersByPosition = groupBy(orders, "position_id");
+    const fillsByOrder = groupBy(fills, "order_id");
     const qualityCounts: Record<string, number> = {};
     const trades: JsonRecord[] = [];
+
     for (const position of positions) {
       const result = calculateTrade(
         position,
-        orders,
-        fills,
+        ordersByPosition.get(String(position.id || "")) || [],
+        fillsByOrder,
         latest[position.exchange as Exchange],
       );
       qualityCounts[result.quality] = (qualityCounts[result.quality] || 0) + 1;
@@ -406,15 +430,42 @@ Deno.serve(async (request: Request) => {
         trades.push(result.trade);
       }
     }
+
     trades.sort((left, right) =>
       new Date(right.entry_at || 0).getTime() - new Date(left.entry_at || 0).getTime()
     );
+    const newestTrade = trades[0] || null;
+    const newestExitAt = trades.reduce<string | null>((latestAt, trade) => {
+      if (!trade.exit_at) return latestAt;
+      if (!latestAt) return trade.exit_at;
+      return new Date(trade.exit_at).getTime() > new Date(latestAt).getTime()
+        ? trade.exit_at
+        : latestAt;
+    }, null);
+
+    console.log("market-performance snapshot", {
+      revision: PERFORMANCE_REVISION,
+      positions: positions.length,
+      orders: orders.length,
+      fills: fills.length,
+      trades: trades.length,
+      newest_entry_at: newestTrade?.entry_at || null,
+      newest_exit_at: newestExitAt,
+    });
 
     return response({
       ok: true,
       version: VERSION,
       performance_revision: PERFORMANCE_REVISION,
       generated_at: new Date().toISOString(),
+      source_counts: {
+        positions: positions.length,
+        orders: orders.length,
+        fills: fills.length,
+        trades: trades.length,
+      },
+      newest_entry_at: newestTrade?.entry_at || null,
+      newest_exit_at: newestExitAt,
       exchanges: {
         upbit: aggregate("upbit", trades, latest.upbit, objectiveRows),
         binance: aggregate("binance", trades, latest.binance, objectiveRows),
@@ -431,10 +482,11 @@ Deno.serve(async (request: Request) => {
         trade_time: "ENTRY fill 최소 executed_at부터 SELL fill 최대 executed_at까지",
         lifecycle_requirement:
           "ENTRY fill 필수, CLOSED 포지션은 SELL fill 필수, 시간 역전 거래 제외",
+        pagination: "PostgREST 응답을 1,000행 단위로 끝까지 페이지 조회",
         joint_objective:
           "외부 현금흐름을 제거한 계좌 로그성장률·승률·관리자본 회전율을 각각 보존·개선하는 Pareto 계약",
         excluded_states: [
-          "CANCELLED",
+          "CANCELLED_WITHOUT_FILL",
           "ENTRY_TEST_REJECTED",
           "ENTRY_REJECTED",
           "ENTRY_NOT_FILLED",
