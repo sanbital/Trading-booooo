@@ -11,6 +11,7 @@ const migrations = readdirSync(new URL("../supabase/migrations/", import.meta.ur
 const migration = read("supabase/migrations/202607270021_residual_label_integrity_v681.sql");
 const core = read("supabase/functions/market-autotrader/core.ts");
 const autotrader = read("supabase/functions/market-autotrader/index.ts");
+const feeAccounting = read("supabase/functions/market-autotrader/fee-accounting.ts");
 const performance = read("supabase/functions/market-performance/index.ts");
 const tests = read("supabase/functions/market-autotrader/residual-accounting.test.ts");
 const engine = read("supabase/functions/market-scanner/engine.ts");
@@ -44,8 +45,9 @@ check(
 );
 check(
   "base fee is not double charged in quote",
-  autotrader.includes("if (asset === base) return total") &&
-    autotrader.includes("if (feeAsset === base) return 0") &&
+  feeAccounting.includes('source: "BASE_ASSET"') &&
+    feeAccounting.includes("feeQuote: 0") &&
+    feeAccounting.includes("feeQuoteEstimate: 0") &&
     migration.includes("then 0\n        when upper(coalesce(f.fee_asset"),
 );
 check(

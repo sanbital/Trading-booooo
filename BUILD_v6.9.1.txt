@@ -1,0 +1,5 @@
+Trading-booooo v6.9.1-FEE-LEDGER-INTEGRITY
+Base: v6.9.0-EVIDENCE-SIZED-LIVE-VALIDATION
+Migration: 202607280001_fee_ledger_integrity_v691.sql
+Verify: SQL_VERIFY_v691_FEE_LEDGER.sql
+Final gate: GitHub Actions deno task check + deno task test + v691 deploy validation

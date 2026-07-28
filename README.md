@@ -1,14 +1,14 @@
-# Trading-booooo v6.9.0
+# Trading-booooo v6.9.1
 
-현재 배포판은 `6.9.0-EVIDENCE-SIZED-LIVE-VALIDATION`이다. v6.8.1의
-청산 잔량·학습 라벨 무결성을 유지하면서, 고정 슬롯 분모, evidence 기반 탐색 크기,
-미측정 지연비용, EV 낙관 편향 교정, 회계 검증 실거래 canary 승격을 추가한다.
+현재 배포판은 `6.9.1-FEE-LEDGER-INTEGRITY`이다. v6.9.0의 7개 개선을 유지하면서,
+Upbit 주문 전체 `paid_fee`가 개별 체결의 빈 수수료 필드 때문에 0으로 소실되던
+회계·학습 라벨 오류를 수정한다.
 
-- 외부 AI 검토 요청서: [`MODEL_REVIEW_v6.9.0.md`](./MODEL_REVIEW_v6.9.0.md)
-- 업데이트: [`UPDATE_v6.9.0.md`](./UPDATE_v6.9.0.md)
-- 변경 내용: [`CHANGELOG-v6.9.0.md`](./CHANGELOG-v6.9.0.md)
-- 검증 기록: [`VALIDATION_v6.9.0.md`](./VALIDATION_v6.9.0.md)
-- 배포 후 SQL 확인: [`SQL_VERIFY_v690.sql`](./SQL_VERIFY_v690.sql)
+- 현재 업데이트: [`UPDATE_v6.9.1.md`](./UPDATE_v6.9.1.md)
+- 현재 변경 내용: [`CHANGELOG-v6.9.1.md`](./CHANGELOG-v6.9.1.md)
+- 현재 검증 기록: [`VALIDATION_v6.9.1.md`](./VALIDATION_v6.9.1.md)
+- 배포 후 수수료 원장 확인: [`SQL_VERIFY_v691_FEE_LEDGER.sql`](./SQL_VERIFY_v691_FEE_LEDGER.sql)
+- v6.9.0 외부 AI 검토 요청서: [`MODEL_REVIEW_v6.9.0.md`](./MODEL_REVIEW_v6.9.0.md)
 - v6.8.1 잔량 회계: [`CHANGELOG-v6.8.1.md`](./CHANGELOG-v6.8.1.md)
 
 아래 문서의 초기 구축 설명 중 버전별 기본값은 누적 마이그레이션의 최신 값을

@@ -34,6 +34,27 @@ test("Upbit JWT has three HS512 segments", () => {
   const header = JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString());
   assert.equal(header.alg, "HS512");
 });
+
+test("Binance myTrades rows are converted into commission-bearing fills", () => {
+  const fills = module.binanceTradesToFills([{
+    id: 77,
+    orderId: 11,
+    price: "100",
+    qty: "0.5",
+    commission: "0.00005",
+    commissionAsset: "BNB",
+    time: 123456,
+  }]);
+  assert.deepEqual(fills, [{
+    tradeId: "77",
+    price: "100",
+    qty: "0.5",
+    commission: "0.00005",
+    commissionAsset: "BNB",
+    time: 123456,
+  }]);
+});
+
 test("Binance quantity flooring obeys LOT_SIZE step", () => {
   assert.equal(module.floorStep(1.234567, 0.001), 1.234);
   assert.equal(module.floorStep(0.000019, 0.00001), 0.00001);

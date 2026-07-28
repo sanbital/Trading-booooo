@@ -21,10 +21,10 @@ const gateway = read("gateway/server.mjs");
 const dashboard = read("docs/index.html");
 
 const version = engine.match(/ENGINE_VERSION\s*=\s*"([^"]+)"/)?.[1];
-check("v6.9 migration is newest", migrations.at(-1) === "202607270022_evidence_sized_live_validation_v690.sql");
+check("v6.9 migration exists", migrations.includes("202607270022_evidence_sized_live_validation_v690.sql"));
 check(
   "release versions agree",
-  version === "6.9.0-EVIDENCE-SIZED-LIVE-VALIDATION" &&
+  version === "6.9.1-FEE-LEDGER-INTEGRITY" &&
     [autotrader, gateway, dashboard].every((source) => source.includes(version)),
 );
 check(

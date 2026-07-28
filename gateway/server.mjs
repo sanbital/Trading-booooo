@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 // withdrawal, transfer, margin, futures, leverage, or API-key management routes.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "6.9.0-EVIDENCE-SIZED-LIVE-VALIDATION";
+const VERSION = "6.9.1-FEE-LEDGER-INTEGRITY";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
@@ -389,6 +389,16 @@ function normalizeUpbitOrder(order) {
     raw: order,
   };
 }
+function binanceTradesToFills(trades) {
+  return (Array.isArray(trades) ? trades : []).map((trade) => ({
+    tradeId: trade?.id != null ? String(trade.id) : trade?.tradeId,
+    price: trade?.price,
+    qty: trade?.qty,
+    commission: trade?.commission,
+    commissionAsset: trade?.commissionAsset,
+    time: trade?.time,
+  }));
+}
 function normalizeBinanceOrder(order) {
   const fills = Array.isArray(order?.fills) ? order.fills : [];
   const executedVolume = Number(order?.executedQty || 0);
@@ -402,7 +412,11 @@ function normalizeBinanceOrder(order) {
     funds: Number(fill.price || 0) * Number(fill.qty || 0),
     fee: Number(fill.commission || 0),
     fee_asset: fill.commissionAsset || null,
-    executed_at: order?.transactTime ? new Date(Number(order.transactTime)).toISOString() : null,
+    executed_at: fill?.time
+      ? new Date(Number(fill.time)).toISOString()
+      : order?.transactTime
+      ? new Date(Number(order.transactTime)).toISOString()
+      : null,
     raw: fill,
   }));
   return {
@@ -569,9 +583,25 @@ function conformBinanceOrder(payload, info) {
   return { order, info, notional: ["LIMIT", "LIMIT_MAKER"].includes(type) ? Number(order.price) * Number(order.quantity) : 0 };
 }
 async function binanceGetOrder(identifier, symbol) {
+  const market = validateBinanceSymbol(symbol);
   const data = (await binanceRequest("GET", "/api/v3/order", {
-    symbol: validateBinanceSymbol(symbol), origClientOrderId: validateIdentifier(identifier),
+    symbol: market, origClientOrderId: validateIdentifier(identifier),
   })).data;
+  const executedQty = Number(data?.executedQty || 0);
+  if (executedQty > 0 && data?.orderId != null) {
+    try {
+      const trades = (await binanceRequest("GET", "/api/v3/myTrades", {
+        symbol: market, orderId: data.orderId, limit: 1000,
+      })).data;
+      data.fills = binanceTradesToFills(trades);
+    } catch (error) {
+      // Order status must remain recoverable even if the commission-detail lookup is
+      // temporarily unavailable. The autotrader then records a conservative fee estimate
+      // instead of zero and the next reconciliation can replace it with exact fills.
+      data.fills = [];
+      data.fee_lookup_error = error?.message || String(error);
+    }
+  }
   return normalizeBinanceOrder(data);
 }
 async function binanceCreateOrder(payload, waitForFinalMs = 2500) {
@@ -1016,6 +1046,7 @@ if (isMain) startServer().catch((error) => { console.error(error); process.exit(
 
 export {
   binanceQueryString,
+  binanceTradesToFills,
   buildUpbitPortfolio,
   contextualizeError,
   createBinanceSignature,
