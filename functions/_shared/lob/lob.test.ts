@@ -93,6 +93,20 @@ test("fees and slippage can make a candidate non-actionable", () => {
   assert(expensive.decision !== "BUY", "negative net EV must not enter");
 });
 
+test("confirmed live forecast optimism is charged directly to entry EV", () => {
+  const uncorrected = evaluateLobEntry(hot, costs);
+  const corrected = evaluateLobEntry(hot, { ...costs, forecastBiasPenaltyBps: 5 });
+  assert(
+    Math.abs((uncorrected.evNetBps - corrected.evNetBps) - 5) < 1e-9,
+    "EV bias penalty must lower mean EV by the measured amount",
+  );
+  assert(
+    Math.abs((uncorrected.evLowerBoundBps - corrected.evLowerBoundBps) - 5) < 1e-9,
+    "EV bias penalty must also lower the conservative bound",
+  );
+  assert(corrected.forecastBiasPenaltyBps === 5, "audit must retain the applied penalty");
+});
+
 test("a learned wider stop is repriced through EV instead of bypassing it", () => {
   const learned = evaluateLobEntry(hot, costs, { learnedStopFloorBps: 80 });
   assert(learned.stopBps >= 80, "winner MAE floor must reach the executable stop");

@@ -226,9 +226,15 @@ export function evaluateLobEntry(
   const stopReturnNetBps = -(stopBps + totalStopCostBps);
   const timeoutReturnNetBps =
     -(costs.roundTripFeeBps + costs.entrySlippageBps + costs.stopExitSlippageBps) * 0.75;
+  const forecastBiasPenaltyBps = Math.max(
+    0,
+    Number.isFinite(costs.forecastBiasPenaltyBps as number)
+      ? costs.forecastBiasPenaltyBps as number
+      : 0,
+  );
   const evNetBps = pFill * (
     pTarget * targetReturnNetBps + pStop * stopReturnNetBps + pTimeout * timeoutReturnNetBps
-  );
+  ) - forecastBiasPenaltyBps;
 
   // The haircut is applied to the signal edge, not to the geometric term: uncertainty lives
   // in the model's beliefs, not in the arithmetic.
@@ -254,7 +260,7 @@ export function evaluateLobEntry(
   const evLowerBoundBps = pFill * (
     conservativePTarget * targetReturnNetBps + conservativePStop * stopReturnNetBps +
     pTimeout * timeoutReturnNetBps
-  );
+  ) - forecastBiasPenaltyBps;
 
   if (!(targetReturnNetBps > 0)) reasons.push("TARGET_NET_PROFIT_NOT_POSITIVE");
   if (!(evLowerBoundBps > cfg.minEvBps)) reasons.push("NET_EV_NOT_POSITIVE");
@@ -286,6 +292,7 @@ export function evaluateLobEntry(
     timeoutReturnNetBps,
     evNetBps,
     evLowerBoundBps,
+    forecastBiasPenaltyBps,
     maxHoldingSeconds: Math.min(cfg.absoluteMaxHoldingSeconds, Math.max(1, cfg.maxHoldingSeconds)),
     reasons,
     features,

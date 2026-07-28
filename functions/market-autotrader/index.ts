@@ -1,10 +1,11 @@
-// Trading-booooo v6.8.0-VALIDATED-PARETO-LEARNING — autonomous spot orchestrator.
+// Trading-booooo v6.9.1-FEE-LEDGER-INTEGRITY — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
   adjustedPlanForFill,
   baseAsset,
   calculateManagedCapital,
+  calculateExitResidualAccounting,
   calculatePositionSize,
   clamp,
   dangerousControlError,
@@ -23,6 +24,7 @@ import {
   type TradingMode,
   type TradingSettings,
 } from "./core.ts";
+import { allocateNormalizedTradeFees, resolveFeeQuote } from "./fee-accounting.ts";
 import { scalpEntryDecision } from "../_shared/scalp/scalp-gate.ts";
 import { DEFAULT_SCALP_SIGNAL, refreshPWinAtOrderTime } from "../_shared/scalp/signal.ts";
 import {
@@ -78,7 +80,6 @@ import {
   resolveLobPolicyRuntime,
 } from "../_shared/lob/governance.ts";
 import {
-  effectiveSlots,
   evaluateModelHealth,
   shouldConvertToTaker,
 } from "../_shared/lob/health.ts";
@@ -87,9 +88,8 @@ import type { LobFeatureVector, LobPatternName } from "../_shared/lob/types.ts";
 import { lobSelectionMetrics, rankLobSelections } from "../_shared/lob/selection.ts";
 import {
   bookTimestampOf,
-  latencyCostFromNoiseBandBps,
   LatencyTrace,
-  shrunkLatencyCostBps,
+  resolveLatencyPenaltyBps,
 } from "../_shared/scalp/latency.ts";
 import {
   evaluateRotation,
@@ -98,8 +98,10 @@ import {
   remainingValueBps,
 } from "../_shared/scalp/rotation.ts";
 import { settleSpotMarketReads, validateSpotMarket } from "../_shared/spot-market.ts";
+import { lobEvidenceSizeFraction } from "../_shared/lob/evidence-sizing.ts";
+import { boundedEvBiasPenalty } from "../_shared/lob/ev-bias.ts";
 
-const VERSION = "6.8.0-VALIDATED-PARETO-LEARNING";
+const VERSION = "6.9.1-FEE-LEDGER-INTEGRITY";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -205,6 +207,10 @@ type Position = JsonRecord & {
   realized_cost_quote: number;
   paid_fees_quote: number;
   realized_pnl_quote: number;
+  residual_quantity: number;
+  residual_value_quote: number;
+  residual_fee_base: number;
+  accounting_version: string | null;
 };
 
 function env(name: string): string {
@@ -1221,31 +1227,50 @@ function uniqueId(prefix: string, id: string) {
 async function createOrderRecord(values: JsonRecord) {
   return (await insert("trading_orders", values))[0];
 }
-function feeQuoteEstimate(exchange: Exchange, order: any, fill: any): number {
-  const quote = quoteCurrency(exchange);
-  const feeAsset = String(fill?.feeAsset || order?.fee_asset || "").toUpperCase();
-  const paid = finite(fill?.paidFee, finite(order?.paid_fee));
-  if (feeAsset === quote) return paid;
-  return finite(fill?.executedFunds, finite(order?.executed_funds)) * FEE_PCT[exchange] / 100;
+function feeResolutionFor(exchange: Exchange, market: string, order: any, fill: any) {
+  return resolveFeeQuote({
+    quoteAsset: quoteCurrency(exchange),
+    baseAsset: baseAsset(exchange, market),
+    defaultFeePct: FEE_PCT[exchange],
+    order,
+    fill,
+    // Binance GET /api/v3/order omits commissions. The gateway now enriches it from
+    // /api/v3/myTrades; a conservative fallback remains if that detail lookup fails.
+    estimateWhenMissing: exchange === "binance",
+  });
 }
 async function storeFills(orderRow: any, normalized: any) {
   const trades = Array.isArray(normalized?.trades) ? normalized.trades : [];
   if (!trades.length) return;
   const quote = orderRow.quote_currency;
-  const rows = trades.map((trade: any, index: number) => ({
-    order_id: orderRow.id,
-    trade_id: trade.trade_id || `${orderRow.id}-${index}`,
-    price: finite(trade.price),
-    volume: finite(trade.volume),
-    funds_quote: finite(trade.funds, finite(trade.price) * finite(trade.volume)),
-    fee_amount: finite(trade.fee),
-    fee_asset: trade.fee_asset || null,
-    fee_quote_estimate: String(trade.fee_asset || "").toUpperCase() === quote
-      ? finite(trade.fee)
-      : finite(trade.funds) * FEE_PCT[orderRow.exchange as Exchange] / 100,
-    executed_at: trade.executed_at || null,
-    raw: trade.raw || trade,
-  }));
+  const allocatedFees = allocateNormalizedTradeFees({
+    quoteAsset: quote,
+    baseAsset: baseAsset(orderRow.exchange as Exchange, orderRow.market),
+    defaultFeePct: FEE_PCT[orderRow.exchange as Exchange],
+    aggregatePaidFee: finite(normalized?.paid_fee),
+    aggregateFeeAsset: normalized?.fee_asset || null,
+    executedFunds: finite(normalized?.executed_funds),
+    trades,
+  });
+  const rows = trades.map((trade: any, index: number) => {
+    const allocated = allocatedFees[index] || {
+      feeAmount: 0,
+      feeAsset: trade.fee_asset || null,
+      feeQuoteEstimate: 0,
+    };
+    return {
+      order_id: orderRow.id,
+      trade_id: trade.trade_id || `${orderRow.id}-${index}`,
+      price: finite(trade.price),
+      volume: finite(trade.volume),
+      funds_quote: finite(trade.funds, finite(trade.price) * finite(trade.volume)),
+      fee_amount: allocated.feeAmount,
+      fee_asset: allocated.feeAsset,
+      fee_quote_estimate: allocated.feeQuoteEstimate,
+      executed_at: trade.executed_at || null,
+      raw: trade.raw || trade,
+    };
+  });
   await db("trading_fills?on_conflict=order_id,trade_id", {
     method: "POST",
     headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
@@ -1295,7 +1320,8 @@ async function updateOrderFromGateway(orderRow: any, payload: any) {
     paidFee: finite(order?.paid_fee),
     feeAsset: order?.fee_asset,
   };
-  const feeQuote = feeQuoteEstimate(orderRow.exchange, order, fill);
+  const feeResolution = feeResolutionFor(orderRow.exchange, orderRow.market, order, fill);
+  const feeQuote = feeResolution.feeQuote;
   // Attach the base-asset commission so the caller can book the NET quantity received.
   const paidFeeBase = baseAssetFee(
     order,
@@ -1314,7 +1340,18 @@ async function updateOrderFromGateway(orderRow: any, payload: any) {
       ["FILLED", "CANCELED", "PARTIALLY_FILLED_CANCELED"].includes(String(order?.status))
         ? new Date().toISOString()
         : null,
-    raw_response: order || {},
+    raw_response: {
+      ...(order || {}),
+      fee_accounting: {
+        version: "6.9.1",
+        source: feeResolution.source,
+        fee_quote: feeQuote,
+        aggregate_fee_asset: feeResolution.aggregateFeeAsset,
+        positive_trade_fee_count: feeResolution.positiveTradeFeeCount,
+        estimated: feeResolution.estimated,
+        complete: feeResolution.complete,
+      },
+    },
   });
   await storeFills(orderRow, order);
   return {
@@ -1331,10 +1368,10 @@ async function applyEntryAccounting(position: Position, orderRow: any, fill: any
     0,
     finite(fill.paidFeeBase, baseAssetFee(null, fill, position.base_asset)),
   );
-  const quantity = floorToStep(
-    Math.max(0, grossQuantity - baseFee),
-    finite(position.quantity_step, 0.00000001),
-  );
+  // Store the exact net quantity received. Holdings are allowed below the exchange order
+  // step; only a future SELL request must be floored. Flooring here silently discarded up
+  // to one step of real account inventory and pushed the same value into fake PnL loss.
+  const quantity = Math.max(0, grossQuantity - baseFee);
   if (!(quantity > 0 && price > 0)) throw new Error("entry fill has no executable quantity");
   if (baseFee > 0) {
     await event(
@@ -1401,6 +1438,18 @@ async function applyExitAccounting(
       ),
     )
     : null;
+  const baseFee = Math.max(
+    0,
+    finite(fill.paidFeeBase, baseAssetFee(orderRow?.raw_response || null, fill, position.base_asset)),
+  );
+  const dustValueQuote = position.exchange === "upbit" ? 1000 : 1;
+  const residualPreview = calculateExitResidualAccounting({
+    remainingQuantity: finite(position.remaining_quantity),
+    soldQuantity: quantity,
+    baseFeeQuantity: baseFee,
+    markPrice: price,
+    dustValueQuote,
+  });
   const result = await rpc("apply_trading_exit_order", {
     p_order_id: orderRow.id,
     p_action: action,
@@ -1409,8 +1458,25 @@ async function applyExitAccounting(
     p_fill_funds: finite(fill.executedFunds, price * quantity),
     p_fill_fee_quote: finite(fill.paidFeeQuote, fill.paidFee),
     p_trailing_stop: nextTrail,
-    p_dust_value_quote: position.exchange === "upbit" ? 1000 : 1,
+    p_dust_value_quote: dustValueQuote,
   });
+  if (Boolean(result?.closed) && residualPreview.residualValueQuote > 0) {
+    await event(
+      "EXIT_RESIDUAL_VALUED",
+      `${position.exchange}:${position.market} residual included in economic close`,
+      {
+        sold_quantity: quantity,
+        base_fee_quantity: baseFee,
+        residual_quantity: finite(result?.position?.residual_quantity, residualPreview.residualQuantity),
+        residual_value_quote: finite(
+          result?.position?.residual_value_quote,
+          residualPreview.residualValueQuote,
+        ),
+        accounting_version: result?.position?.accounting_version || "6.8.1",
+      },
+      { positionId: position.id, orderId: orderRow.id, level: "INFO" },
+    );
+  }
   if (Boolean(result?.closed) && position.metadata?.lob_signal) {
     try {
       const learned = await rpc("learn_lob_trade_outcome", {
@@ -1757,34 +1823,32 @@ function latencyPenaltyBpsFor(
   settings: TradingSettings & JsonRecord,
   noiseBandBps: number,
   observationWindowMs: number,
+  policy: {
+    assumedP95Ms: number;
+    unmeasuredFloorBps: number;
+    penaltyMultiplier: number;
+  },
 ): { bps: number; source: string } {
-  const priorBps = Math.max(0, finite((settings as any).scalp_latency_penalty_bps, 0));
-  const samples = Math.max(0, Math.floor(finite((settings as any).scalp_latency_samples, 0)));
-  const p95 = finite((settings as any).scalp_latency_p95_ms, 0);
-  const measured = String((settings as any).scalp_latency_source || "ASSUMED") === "MEASURED";
-  if (measured && p95 > 0 && noiseBandBps > 0 && observationWindowMs > 0) {
-    const raw = latencyCostFromNoiseBandBps({
-      noiseBandBps,
-      latencyMs: p95,
-      observationWindowMs,
-    }, {
-      floorBps: 0,
-      unmeasuredBps: priorBps,
-    });
-    return {
-      // v6.5.1: the v6.5 changelog promised n/(n+60) shrinkage, but the measured
-      // noise-band branch returned the raw estimate at full weight. Shrink the actual
-      // symbol-specific estimate toward the operator prior (zero by default).
-      bps: shrunkLatencyCostBps(raw, samples, {
-        floorBps: 0,
-        unmeasuredBps: priorBps,
-      }),
-      source: "NOISE_BAND_X_MEASURED_P95_SHRUNK",
-    };
-  }
-  // Observe first. A non-zero value here exists only when the operator explicitly set a
-  // prior; the release default and migration default are both zero.
-  return { bps: priorBps, source: measured ? "MEASURED_UNPRICED" : "UNMEASURED" };
+  return resolveLatencyPenaltyBps({
+    noiseBandBps,
+    observationWindowMs,
+    measured: String((settings as any).scalp_latency_source || "ASSUMED") === "MEASURED",
+    measuredP95Ms: finite((settings as any).scalp_latency_p95_ms, 0),
+    measuredSamples: Math.max(0, Math.floor(finite((settings as any).scalp_latency_samples, 0))),
+    operatorPriorBps: Math.max(0, finite((settings as any).scalp_latency_penalty_bps, 0)),
+    assumedP95Ms: Math.max(
+      250,
+      finite((settings as any).scalp_unmeasured_latency_ms, policy.assumedP95Ms),
+    ),
+    unmeasuredFloorBps: Math.max(
+      0.25,
+      finite(
+        (settings as any).scalp_unmeasured_latency_penalty_bps,
+        policy.unmeasuredFloorBps,
+      ),
+    ),
+    penaltyMultiplier: policy.penaltyMultiplier,
+  });
 }
 
 /**
@@ -1975,6 +2039,46 @@ async function enterCandidateInner(
     };
   }
 
+  let lobSizingContext: any = null;
+  if (isLobStrategy((settings as any).strategy)) {
+    const lobSnapshot = (candidate as any).snapshot?.lob || {};
+    const features = liveLobFeatures(lobSnapshot, market);
+    const assignedPolicy = ((candidate as any).__policy_bundle as LobPolicyBundle | null) ??
+      assignLobPolicy(await loadLobPolicyRuntime(), String(candidate.scan_id || cycleId));
+    if (!assignedPolicy || assignedPolicy.version <= 0) {
+      return {
+        entered: false,
+        exchange,
+        market: candidate.market,
+        reason: "validated LOB policy unavailable",
+      };
+    }
+    const livePattern = detectLobPatternName(features);
+    const patternPolicy = patternDeployment(assignedPolicy.patternProfile, livePattern);
+    const onlinePolicy = resolveLobOnlineMarketPolicy(
+      assignedPolicy.onlineProfiles,
+      exchange,
+      candidate.market,
+      livePattern,
+    );
+    const evidenceSizing = lobEvidenceSizeFraction({
+      dataQuality: finite((features as any).dataQuality, 0),
+      dynamicStatus: String((features as any).dynamicStatus || "INSUFFICIENT"),
+      featureSamples: finite((features as any).samples, 0),
+      marketSamples: onlinePolicy.marketSamples,
+      patternSamples: onlinePolicy.globalSamples,
+    }, assignedPolicy.policyDefinition);
+    lobSizingContext = {
+      lobSnapshot,
+      features,
+      assignedPolicy,
+      livePattern,
+      patternPolicy,
+      onlinePolicy,
+      evidenceSizing,
+    };
+  }
+
   const plan = candidatePlan(candidate, settings);
   const rules = await symbolRules(exchange, candidate, plan);
   const limits = exchangeLimits(settings, exchange);
@@ -1990,24 +2094,18 @@ async function enterCandidateInner(
   }
   const allocationOnly = isScalpStrategy((settings as any).strategy);
   const managedAvailable = finite(managed.managedAvailableQuote);
-  // v5.12: slots divide a fixed total-exposure cap. Increasing slots must never increase
-  // strategy gross exposure. Risk, depth and exchange limits are applied before sizeFraction.
-  // v6.3: a fixed slot count strands capital whenever fewer books qualify than there are
-  // slots -- six slots with two candidates leaves two thirds of the account doing nothing.
-  // The configured count remains the ceiling, so one candidate can never absorb everything.
+  // v6.9: slot count is a hard capital denominator. With three configured slots, no
+  // single LOB position may exceed one third of managed capital merely because fewer books
+  // qualified in this scan. Idle capital is preferable to silently concentrating risk.
   const configuredSlots = allocationOnly
     ? clamp(finite((settings as any).scalp_position_slots, 6), 1, 20)
     : 1;
-  const slots = allocationOnly && isLobStrategy((settings as any).strategy)
-    ? effectiveSlots(
-      configuredSlots,
-      finite((candidate as any).__candidate_pool_size, configuredSlots),
-      finite((candidate as any).__open_positions, 0),
-    )
-    : configuredSlots;
+  const slots = configuredSlots;
+  // LOB evidence sizing is resolved from the immutable policy and current live book before
+  // allocation. The configured slot count remains the hard ceiling denominator.
   const evidenceSize = allocationOnly
     ? isLobStrategy((settings as any).strategy)
-      ? 1
+      ? clamp(finite(lobSizingContext?.evidenceSizing?.fraction, 0.35), 0.10, 1)
       : clamp(finite((settings as any).scalp_size_fraction, 0.35), 0.05, 1)
     : 1;
   const visibleAskDepth = Math.max(
@@ -2127,30 +2225,18 @@ async function enterCandidateInner(
   let scalpAudit: JsonRecord | null = null;
   let decisionNotional = sizing.notionalQuote;
   if (isLobStrategy((settings as any).strategy)) {
-    const lobSnapshot = (candidate as any).snapshot?.lob || {};
-    const features = liveLobFeatures(lobSnapshot, market);
+    const {
+      lobSnapshot,
+      features,
+      assignedPolicy,
+      patternPolicy,
+      onlinePolicy,
+      evidenceSizing,
+    } = lobSizingContext;
     const liveFee = await liveFeePct(exchange, settings);
-    const assignedPolicy = ((candidate as any).__policy_bundle as LobPolicyBundle | null) ??
-      assignLobPolicy(await loadLobPolicyRuntime(), String(candidate.scan_id || cycleId));
-    if (!assignedPolicy || assignedPolicy.version <= 0) {
-      return {
-        entered: false,
-        exchange,
-        market: candidate.market,
-        reason: "validated LOB policy unavailable",
-      };
-    }
     const lobLearning = assignedPolicy.patternProfile;
     const makerFill = await loadMakerFillStats(exchange);
     const measuredMakerFillRate = makerFill.rested > 0 ? makerFill.filled / makerFill.rested : 0;
-    const livePattern = detectLobPatternName(features);
-    const patternPolicy = patternDeployment(lobLearning, livePattern);
-    const onlinePolicy = resolveLobOnlineMarketPolicy(
-      assignedPolicy.onlineProfiles,
-      exchange,
-      candidate.market,
-      livePattern,
-    );
     // v6.5: execution delay is now priced from measurement instead of being absent from
     // this path entirely. The book's own noise band supplies the volatility and the
     // measured p95 tick-to-order supplies the time; see _shared/scalp/latency.ts.
@@ -2158,6 +2244,12 @@ async function enterCandidateInner(
       settings as TradingSettings & JsonRecord,
       finite((features as any).noiseBandBps, 0),
       Math.max(1000, finite((settings as any).lob_observation_window_ms, 8000)),
+      assignedPolicy.policyDefinition.latency,
+    );
+    const evBiasPenaltyBps = boundedEvBiasPenalty(
+      (settings as any).scalp_ev_bias_penalty_bps,
+      assignedPolicy.policyDefinition.evBias.penaltyMultiplier,
+      assignedPolicy.policyDefinition.evBias.maxPenaltyBps,
     );
     const decision = evaluateLobEntry(features, {
       roundTripFeeBps: liveFee * 2 * 100,
@@ -2168,6 +2260,7 @@ async function enterCandidateInner(
       stopExitSlippageBps: Math.max(0.4, spreadBps * 0.55),
       spreadBps,
       latencyPenaltyBps: latencyPenalty.bps,
+      forecastBiasPenaltyBps: evBiasPenaltyBps,
     }, {
       minEvBps: Math.max(0, finite((settings as any).lob_min_net_ev_bps, 0)),
       maxBookAgeMs: Math.max(250, finite((settings as any).lob_max_book_age_ms, 2500)),
@@ -2217,6 +2310,7 @@ async function enterCandidateInner(
           phase: assignedPolicy.phase,
           parent_version: assignedPolicy.parentVersion,
           evaluation_started_at: assignedPolicy.evaluationStartedAt,
+          definition: assignedPolicy.policyDefinition,
         }
         : {
           version: 0,
@@ -2258,6 +2352,10 @@ async function enterCandidateInner(
       slots,
       slot_quote: Number.isFinite(slotQuote) ? slotQuote : null,
       risk_sizing: riskSizing,
+      evidence_sizing: evidenceSizing,
+      forecast_bias_penalty_bps: decision.forecastBiasPenaltyBps,
+      forecast_bias_samples: Math.max(0, finite((settings as any).scalp_ev_bias_samples, 0)),
+      forecast_bias_source: String((settings as any).scalp_ev_bias_source || "UNMEASURED"),
       // v6.3: the open question from v5.5 -- what fraction of maker entries actually fill --
       // recorded on every entry so it stops being a guess. `convertToTaker` is the measured
       // recommendation; acting on it costs 2.4x more per round trip on Upbit, so it is
@@ -2855,7 +2953,7 @@ async function loadLobPolicyRuntime(): Promise<LobPolicyRuntime> {
       "lob_policy_versions?status=in.(CHAMPION,CHALLENGER,CONTROL)" +
         "&select=version,status,parent_version,engine_version,fingerprint,source_online_version," +
         "traffic_fraction,evaluation_started_at,created_at,confirmed_at,online_profiles," +
-        "pattern_profile,metrics,decision_reason&order=version.desc",
+        "pattern_profile,policy_definition,metrics,decision_reason&order=version.desc",
     ) as LobPolicyVersionRow[];
     return resolveLobPolicyRuntime(Array.isArray(rows) ? rows : []);
   } catch {

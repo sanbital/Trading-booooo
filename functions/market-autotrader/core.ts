@@ -162,6 +162,56 @@ export function floorToStep(value: number, step: number): number {
   return Math.floor((value + s * 1e-10) / s) * s;
 }
 
+
+export type ExitResidualAccountingInput = {
+  remainingQuantity: number;
+  soldQuantity: number;
+  baseFeeQuantity?: number;
+  markPrice: number;
+  dustValueQuote: number;
+};
+
+export type ExitResidualAccountingResult = {
+  soldQuantity: number;
+  baseFeeQuantity: number;
+  physicalRemainingQuantity: number;
+  closeAsDust: boolean;
+  nextRemainingQuantity: number;
+  residualQuantity: number;
+  residualValueQuote: number;
+};
+
+/**
+ * Economic close accounting for exchange quantity-step dust.
+ *
+ * A market sell can be rounded down by one quantity step and a sell commission may also
+ * be paid in the base asset. The unmarketable remainder is still an account asset. When
+ * it is small enough to close operationally, value it at the exit mark instead of
+ * treating the whole remainder as a trading loss.
+ */
+export function calculateExitResidualAccounting(
+  input: ExitResidualAccountingInput,
+): ExitResidualAccountingResult {
+  const remaining = Math.max(0, finite(input.remainingQuantity));
+  const sold = Math.min(remaining, Math.max(0, finite(input.soldQuantity)));
+  const afterSale = Math.max(0, remaining - sold);
+  const baseFee = Math.min(afterSale, Math.max(0, finite(input.baseFeeQuantity)));
+  const physicalRemaining = Math.max(0, afterSale - baseFee);
+  const markPrice = Math.max(0, finite(input.markPrice));
+  const residualValue = physicalRemaining * markPrice;
+  const dustThreshold = Math.max(0, finite(input.dustValueQuote));
+  const closeAsDust = physicalRemaining <= 1e-12 || residualValue < dustThreshold;
+  return {
+    soldQuantity: sold,
+    baseFeeQuantity: baseFee,
+    physicalRemainingQuantity: physicalRemaining,
+    closeAsDust,
+    nextRemainingQuantity: closeAsDust ? 0 : physicalRemaining,
+    residualQuantity: closeAsDust ? physicalRemaining : 0,
+    residualValueQuote: closeAsDust ? residualValue : 0,
+  };
+}
+
 export function calculatePositionSize(input: SizingInput): SizingResult {
   const equity = Math.max(0, finite(input.equityQuote));
   const available = Math.max(0, finite(input.availableQuote));

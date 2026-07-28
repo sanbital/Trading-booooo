@@ -32,11 +32,17 @@ function trades(
   return Array.from({ length: count }, (_, index) => ({
     id: `${policyVersion}-${index}`,
     policyVersion,
+    exchange: index % 2 === 0 ? "upbit" : "binance",
+    market: index % 2 === 0 ? "KRW-ETH" : "BTCUSDT",
+    pattern: index % 2 === 0 ? "ABSORPTION_REVERSAL" : "OFI_CONTINUATION",
     netBps: winningIndexes.has(index) ? winNet : lossNet,
     profitable: winningIndexes.has(index),
     heldSeconds,
     notionalQuote,
-    closedAtMs: 1_000 + index,
+    // Two or more independent hour blocks are required before live promotion.
+    closedAtMs: (1 + Math.floor(index / Math.max(1, Math.ceil(count / 2)))) * 3_600_000 + index,
+    liveVerified: true,
+    accountingQuality: "NO_RESIDUAL",
   }));
 }
 
@@ -105,7 +111,9 @@ Deno.test("KRW and USDT performance is normalized before aggregation", () => {
       netBps: -10,
       heldSeconds: 60,
       notionalQuote: 100_000,
-      closedAtMs: 1,
+      closedAtMs: 3_600_001,
+      liveVerified: true,
+      accountingQuality: "NO_RESIDUAL",
     },
     {
       policyVersion: 1,
@@ -113,7 +121,9 @@ Deno.test("KRW and USDT performance is normalized before aggregation", () => {
       netBps: 20,
       heldSeconds: 60,
       notionalQuote: 10,
-      closedAtMs: 2,
+      closedAtMs: 7_200_002,
+      liveVerified: true,
+      accountingQuality: "NO_RESIDUAL",
     },
   ]);
   assert(Math.abs(metrics.notionalWeightedNetBps - 5) < 1e-9);
@@ -249,6 +259,42 @@ Deno.test("a favourable exchange-pattern mix cannot fake model improvement", () 
   assert(evaluation.gates.win_rate_improved);
   assert(!evaluation.gates.exchange_pattern_mix_preserved);
   assert(evaluation.deltas.mixAdjustedMeanNetBps < 0);
+  assert(evaluation.decision !== "PROMOTE");
+});
+
+
+Deno.test("a safe 15 percent canary expands before it can promote", () => {
+  const evaluation = evaluateLobPolicy(
+    trades(1, 30, 4, 0.50, 70),
+    trades(2, 15, 6, 0.53, 65),
+    exposures(1, 30),
+    exposures(2, 15),
+    "CHALLENGE",
+    {
+      zScore: 0,
+      currentTrafficFraction: 0.15,
+      expandedTrafficFraction: 0.50,
+    },
+  );
+  assert(evaluation.decision === "EXPAND", JSON.stringify(evaluation));
+});
+
+Deno.test("shadow, backtest and unverified accounting labels can never vote", () => {
+  const baseline = trades(1, 60, 2, 0.50, 70);
+  const candidate = trades(2, 60, 20, 0.75, 40).map((row) => ({
+    ...row,
+    liveVerified: false,
+    accountingQuality: "LEGACY_UNVERIFIED",
+  }));
+  const evaluation = evaluateLobPolicy(
+    baseline,
+    candidate,
+    exposures(1, 60),
+    exposures(2, 60),
+    "CHALLENGE",
+    { zScore: 0 },
+  );
+  assert(!evaluation.gates.live_verified_labels);
   assert(evaluation.decision !== "PROMOTE");
 });
 
