@@ -31,15 +31,15 @@ Deno.test("v6.9 migration permits only verified live outcomes to vote", async ()
   assert(!sql.includes("scalp_max_single_loss_pct ="));
 });
 
-Deno.test("v6.9 versions remain aligned", async () => {
+Deno.test("v6.9.1 hotfix versions remain aligned", async () => {
   const scanner = await Deno.readTextFile(
     new URL("../../market-scanner/engine.ts", import.meta.url),
   );
   const autotrader = await Deno.readTextFile(
     new URL("../../market-autotrader/index.ts", import.meta.url),
   );
-  const expected = "6.9.0-EVIDENCE-SIZED-LIVE-VALIDATION";
+  const expected = "6.9.1-FEE-LEDGER-INTEGRITY";
   assert(scanner.includes(expected));
   assert(autotrader.includes(expected));
-  assertEquals(expected, "6.9.0-EVIDENCE-SIZED-LIVE-VALIDATION");
+  assertEquals(expected, "6.9.1-FEE-LEDGER-INTEGRITY");
 });

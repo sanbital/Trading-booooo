@@ -1,4 +1,4 @@
-// Trading-booooo v6.9.0-EVIDENCE-SIZED-LIVE-VALIDATION — LOB_SCALP calibration job.
+// Trading-booooo v6.9.1-FEE-LEDGER-INTEGRITY — LOB_SCALP calibration job.
 //
 // Reads closed LOB positions, reconstructs (predicted pTarget, neutral win rate, realized
 // outcome) triples from `trading_positions.metadata.lob_signal`, and writes a profile that
@@ -210,7 +210,7 @@ function toSample(row: any): LobOutcomeSample | null {
 
 async function measureLiveForecastDiagnostics(settings: any): Promise<any> {
   const compatibleEngines =
-    "6.8.1-RESIDUAL-LABEL-INTEGRITY,6.9.0-EVIDENCE-SIZED-LIVE-VALIDATION";
+    "6.8.1-RESIDUAL-LABEL-INTEGRITY,6.9.1-FEE-LEDGER-INTEGRITY";
   const rows = await db(
     "lob_online_outcomes?accounting_quality=in.(NO_RESIDUAL,RESIDUAL_MARKED_TO_EXIT)" +
       `&engine_version=in.(${compatibleEngines})` +
