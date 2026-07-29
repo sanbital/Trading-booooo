@@ -21,20 +21,32 @@ function positiveVotes(f: LobFeatureVector): number {
 }
 
 /**
- * Five LOB pattern families.
+ * Six LOB pattern families.
  *
- * v6.12.4 removes the additive-score loophole that let one very large component declare a
- * LONG pattern while the live tape, microprice and book all pointed down. Confidence still
- * ranks candidates, but `primary` now means the mechanism itself is directionally coherent.
- * Iceberg/replenishment remains corroborating evidence and is never sufficient alone.
+ * Momentum continuation is deliberately separate from mean-reversion/queue patterns. A large
+ * 24h gain is context only; primary status also requires current ticker-notional acceleration,
+ * aggressive buys, positive microprice, tight spread and at least two directional votes.
  */
 export function detectLobPatterns(f: LobFeatureVector): LobPatternSignal[] {
   const positiveFlow = clamp((f.tradePressureFast + 1) / 2);
   const positiveBook = clamp((f.bookImbalance + 1) / 2);
   const positiveMicroprice = clamp((f.micropriceDeviationBps + 5) / 10);
+  const positiveMicroMomentum = clamp(f.micropriceDeviationBps / 5);
   const depthSupport = clamp((f.depthRatio - 0.5) / 2);
   const lowAskAbsorption = clamp(1 - f.askAbsorptionScore);
   const votes = positiveVotes(f);
+
+  // heatPeriod encodes signed 24h return as change_pct / 400 in trendContext.
+  const impliedChange24hPct = clamp(f.trendContext * 400, -100, 100);
+  const changeScore = clamp((impliedChange24hPct - 3) / 27);
+  const accelerationScore = clamp(f.notionalAcceleration);
+  const heatScore = clamp(f.marketHeatScore / 100);
+  const momentumPrimary = impliedChange24hPct >= 3 && impliedChange24hPct <= 60 &&
+    f.marketHeatScore >= 45 && f.notionalAcceleration >= 0.02 &&
+    f.tradePressureFast >= 0.25 && f.micropriceDeviationBps >= 0 &&
+    f.bookImbalance > -0.65 && votes >= 2 &&
+    f.spreadBps != null && f.spreadBps <= 8 &&
+    f.recentNotionalPerSecond > 0 && f.tradeCount >= 8;
 
   const absorptionPrimary = f.bidAbsorptionScore >= 0.45 &&
     f.micropriceDeviationBps >= -1 &&
@@ -43,6 +55,23 @@ export function detectLobPatterns(f: LobFeatureVector): LobPatternSignal[] {
   const reclaimPrimary = f.sweepReclaimScore >= 0.45 && votes >= 2;
   const ofiPrimary = f.ofiPersistence >= 0.45 && f.tradePressureFast >= 0.15 && votes >= 2 &&
     f.trendContext >= -0.001;
+
+  const momentum = signal(
+    "MOMENTUM_CONTINUATION",
+    changeScore * 0.24 + positiveFlow * 0.24 + accelerationScore * 0.18 +
+      heatScore * 0.14 + positiveMicroMomentum * 0.10 + clamp(votes / 3) * 0.10,
+    momentumPrimary,
+    [
+      "24시간 상승 흐름 위에서 전 종목 거래대금 가속이 재점화됨",
+      "공격 매수·마이크로프라이스·근접 호가가 상승 지속을 확인함",
+    ],
+    [
+      "거래대금 가속 소멸",
+      "공격 체결압력 음전환",
+      "마이크로프라이스 하락 전환",
+      "돌파 레벨 재진입",
+    ],
+  );
 
   const absorption = signal(
     "ABSORPTION_REVERSAL",
@@ -96,14 +125,11 @@ export function detectLobPatterns(f: LobFeatureVector): LobPatternSignal[] {
     ["재충전 중단", "벽 가격 하향 이동", "취소 비율 급증"],
   );
 
-  return [absorption, depletion, reclaim, ofi, iceberg]
+  return [momentum, absorption, depletion, reclaim, ofi, iceberg]
     .sort((a, b) => b.confidence - a.confidence);
 }
 
-/**
- * Highest-confidence directionally coherent primary pattern. Returning null is preferable to
- * inventing a LONG from one isolated score; the scanner continues to the next hot symbol.
- */
+/** Highest-confidence directionally coherent primary pattern. */
 export function detectLobPatternName(features: LobFeatureVector): LobPatternName | null {
   const primary = detectLobPatterns(features).find((pattern) => pattern.primary);
   return primary ? primary.name : null;
