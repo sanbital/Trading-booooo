@@ -106,7 +106,6 @@ import {
   remainingValueBps,
 } from "../_shared/scalp/rotation.ts";
 import { settleSpotMarketReads, validateSpotMarket } from "../_shared/spot-market.ts";
-import { lobEvidenceSizeFraction } from "../_shared/lob/evidence-sizing.ts";
 import { boundedEvBiasPenalty } from "../_shared/lob/ev-bias.ts";
 import {
   lobRecommendationWindowSeconds,
@@ -2292,15 +2291,25 @@ async function enterCandidateInner(
       candidate.market,
       livePattern,
     );
-    const evidenceSizing = lobEvidenceSizeFraction({
-      dataQuality: finite((features as any).dataQuality, 0),
-      dynamicStatus: String((features as any).dynamicStatus || "INSUFFICIENT"),
-      featureSamples: finite((features as any).samples, 0),
-      marketSamples: onlinePolicy.marketSamples,
-      patternSamples: onlinePolicy.globalSamples,
-      marketUpdatedAtMs: onlinePolicy.marketUpdatedAtMs,
-      patternUpdatedAtMs: onlinePolicy.patternUpdatedAtMs,
-    }, assignedPolicy.policyDefinition);
+    // v7 sizing permission is present-tense LOB-only as well. Historical market/pattern
+    // outcomes stay in the audit payload but cannot shrink an otherwise valid live setup.
+    const qualityScore = clamp(finite((features as any).dataQuality, 0), 0, 1);
+    const featureScore = clamp(finite((features as any).samples, 0) / 4, 0, 1);
+    const insufficient = String((features as any).dynamicStatus || "INSUFFICIENT")
+      .toUpperCase().includes("INSUFFICIENT") || qualityScore < 0.25 || featureScore < 1;
+    const evidenceSizing = {
+      fraction: insufficient ? 0.35 : 1,
+      qualityScore,
+      featureScore,
+      marketScore: 0,
+      parentScore: 0,
+      onlineScore: 0,
+      marketRecencyWeight: 0,
+      parentRecencyWeight: 0,
+      lowEvidence: insufficient,
+      cappedBy: insufficient ? "INSUFFICIENT_STATUS" : "NONE",
+      reason: insufficient ? "current LOB evidence insufficient" : "current LOB evidence complete",
+    };
     lobSizingContext = {
       lobSnapshot,
       features,
