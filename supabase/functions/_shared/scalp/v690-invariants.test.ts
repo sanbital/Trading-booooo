@@ -2,7 +2,7 @@
 
 import { assert, assertEquals } from "../../../../test-support/assert.ts";
 
-Deno.test("v6.9 fixes slot concentration and evidence-sizes LOB exploration", async () => {
+Deno.test("v7 keeps slot concentration safety and sizes only from current LOB evidence", async () => {
   const source = await Deno.readTextFile(
     new URL("../../market-autotrader/index.ts", import.meta.url),
   );
@@ -11,7 +11,8 @@ Deno.test("v6.9 fixes slot concentration and evidence-sizes LOB exploration", as
     !source.includes("effectiveSlots("),
     "autotrader must not dynamically reduce slot denominator",
   );
-  assert(source.includes("lobEvidenceSizeFraction"));
+  assert(source.includes("current LOB evidence complete"));
+  assert(!source.includes("lobEvidenceSizeFraction("));
   assert(source.includes("sizeFraction: evidenceSize"));
   assert(source.includes("forecastBiasPenaltyBps"));
   assert(source.includes("resolveLatencyPenaltyBps"));

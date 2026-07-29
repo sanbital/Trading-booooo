@@ -1,6 +1,6 @@
-// Trading-booooo v6.1.0-HEAT — whole-market short-horizon activity ranking.
-// This module intentionally uses only all-market ticker deltas. It lets the scanner find
-// where money is moving NOW before spending the expensive L2 observation budget.
+// Trading-booooo v7.0.0-TOP10-LOB-ONLY — per-exchange 24h gainer ranking.
+// The 24h return fixes the eligible universe. Ticker deltas only remove weakening names
+// from that already-fixed Top 10; they never promote rank 11 or below.
 
 export interface MarketHeatTicker {
   market: string;
@@ -19,7 +19,12 @@ export interface MarketHeatScore {
   recentNotionalPerSecond: number;
   previousNotionalPerSecond: number;
   notionalAcceleration: number;
+  notionalTrend: number;
   tradeCountPerSecond: number;
+  previousTradeCountPerSecond: number;
+  tradeSpeedTrend: number;
+  flowHealthy: boolean;
+  flowExclusionReasons: string[];
   turnover24hQuote: number;
   change24hPct: number;
   range24hPct: number;
@@ -46,8 +51,8 @@ function logNorm(value: number, reference: number): number {
 }
 
 /**
- * Rank every market by current capital-flow velocity, not by trend or total 24h turnover.
- * A recently exploding mid-cap can outrank a large cap whose tape has gone quiet.
+ * Rank each exchange strictly by current rolling 24h percentage gain.
+ * Flow fields are exclusion diagnostics only and do not influence the rank.
  */
 export function rankMarketHeat(
   snapshots: MarketHeatTicker[][],
@@ -66,12 +71,44 @@ export function rankMarketHeat(
     if (!prev || !early || !(last.price > 0)) continue;
     const recentSeconds = Math.max(0.25, (last.timestampMs - prev.timestampMs) / 1000);
     const previousSeconds = Math.max(0.25, (prev.timestampMs - early.timestampMs) / 1000);
-    const recentNotional = Math.max(0, finite(last.turnover24hQuote) - finite(prev.turnover24hQuote));
-    const previousNotional = Math.max(0, finite(prev.turnover24hQuote) - finite(early.turnover24hQuote));
+    const recentNotional = Math.max(
+      0,
+      finite(last.turnover24hQuote) - finite(prev.turnover24hQuote),
+    );
+    const previousNotional = Math.max(
+      0,
+      finite(prev.turnover24hQuote) - finite(early.turnover24hQuote),
+    );
     const recentNotionalPerSecond = recentNotional / recentSeconds;
     const previousNotionalPerSecond = previousNotional / previousSeconds;
     const recentCount = Math.max(0, finite(last.tradeCount) - finite(prev.tradeCount));
+    const previousCount = Math.max(0, finite(prev.tradeCount) - finite(early.tradeCount));
     const tradeCountPerSecond = recentCount / recentSeconds;
+    const previousTradeCountPerSecond = previousCount / previousSeconds;
+    const notionalTrend = clamp(
+      (recentNotionalPerSecond - previousNotionalPerSecond) /
+        Math.max(1, recentNotionalPerSecond + previousNotionalPerSecond),
+      -1,
+      1,
+    );
+    const hasTradeCounts = Number.isFinite(Number(last.tradeCount)) &&
+      Number.isFinite(Number(prev.tradeCount)) && Number.isFinite(Number(early.tradeCount));
+    const tradeSpeedTrend = hasTradeCounts
+      ? clamp(
+        (tradeCountPerSecond - previousTradeCountPerSecond) /
+          Math.max(0.01, tradeCountPerSecond + previousTradeCountPerSecond),
+        -1,
+        1,
+      )
+      : 0;
+    const flowExclusionReasons: string[] = [];
+    if (finite(last.turnover24hQuote) < config.minimumTurnover24hQuote) {
+      flowExclusionReasons.push("TURNOVER_TOO_LOW");
+    }
+    if (notionalTrend < -0.20) flowExclusionReasons.push("NOTIONAL_FLOW_DECLINING");
+    if (hasTradeCounts && tradeSpeedTrend < -0.20) {
+      flowExclusionReasons.push("TRADE_SPEED_DECLINING");
+    }
     const accelerationBase = Math.max(
       config.referenceRecentNotionalPerSecond * 0.02,
       previousNotionalPerSecond,
@@ -111,7 +148,14 @@ export function rankMarketHeat(
       recentNotionalPerSecond,
       previousNotionalPerSecond,
       notionalAcceleration,
+      notionalTrend,
       tradeCountPerSecond,
+      previousTradeCountPerSecond,
+      tradeSpeedTrend,
+      flowHealthy: flowExclusionReasons.length === 0 && recentNotionalPerSecond > 0,
+      flowExclusionReasons: recentNotionalPerSecond > 0
+        ? flowExclusionReasons
+        : [...flowExclusionReasons, "NO_RECENT_NOTIONAL_FLOW"],
       turnover24hQuote: finite(last.turnover24hQuote),
       change24hPct: finite(last.change24hPct),
       range24hPct: finite(last.range24hPct),
@@ -127,7 +171,9 @@ export function rankMarketHeat(
   }
 
   return scored
-    .sort((left, right) => right.heatScore - left.heatScore ||
-      right.recentNotionalPerSecond - left.recentNotionalPerSecond)
+    .sort((left, right) =>
+      right.change24hPct - left.change24hPct ||
+      right.turnover24hQuote - left.turnover24hQuote
+    )
     .map((row, index) => ({ ...row, rank: index + 1 }));
 }

@@ -1,4 +1,4 @@
-// Trading-booooo v6.14.0-MOMENTUM-CONTINUATION-SCALP — LOB_SCALP domain types.
+// Trading-booooo v7.0.0-TOP10-LOB-ONLY — LOB_SCALP domain types.
 // Fractions use decimal form unless a field explicitly ends with Bps/Pct.
 
 export type LobPatternName =
@@ -14,6 +14,8 @@ export type LobDecisionState = "BUY" | "WAIT" | "AVOID";
 import type { LobTrapAssessment, LobTrapConfig } from "./traps.ts";
 
 export interface LobFeatureVector {
+  universeMode?: "TOP10_24H_GAINERS_LOB_ONLY";
+  gainerRank?: number;
   samples: number;
   observationMs: number;
   bookAgeMs: number | null;
@@ -54,6 +56,9 @@ export interface LobFeatureVector {
   recentNotionalPerSecond: number;
   notionalAcceleration: number;
   tradeCountPerSecond: number;
+  notionalTrend?: number;
+  tradeSpeedTrend?: number;
+  tradeArrivalTrend?: number;
   /** |net displacement| / path length over the observation window. 1 = trend, ~0 = chop. */
   pathEfficiency: number;
   /** Share of consecutive mid-price steps that reverse direction. 0..1 */

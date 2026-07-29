@@ -12,6 +12,8 @@ function assert(condition: unknown, message: string): void {
 }
 
 const hot: LobFeatureVector = {
+  universeMode: "TOP10_24H_GAINERS_LOB_ONLY",
+  gainerRank: 3,
   samples: 80,
   observationMs: 15000,
   bookAgeMs: 100,
@@ -51,6 +53,9 @@ const hot: LobFeatureVector = {
   recentNotionalPerSecond: 90000,
   notionalAcceleration: 0.7,
   tradeCountPerSecond: 12,
+  notionalTrend: 0.4,
+  tradeSpeedTrend: 0.3,
+  tradeArrivalTrend: 0.2,
   pathEfficiency: 0.55,
   reversalRate: 0.35,
   noiseBandBps: 4,
@@ -107,17 +112,10 @@ test("confirmed live forecast optimism is charged directly to entry EV", () => {
   assert(corrected.forecastBiasPenaltyBps === 5, "audit must retain the applied penalty");
 });
 
-test("a learned wider stop is repriced through EV instead of bypassing it", () => {
+test("a learned wider stop remains auditable but cannot become a hidden admission gate", () => {
   const learned = evaluateLobEntry(hot, costs, { learnedStopFloorBps: 80 });
   assert(learned.stopBps >= 80, "winner MAE floor must reach the executable stop");
-  if (learned.decision === "BUY") {
-    assert(learned.evLowerBoundBps > 0, "wider stop must still clear positive net EV");
-  } else {
-    assert(
-      learned.reasons.includes("NET_EV_NOT_POSITIVE"),
-      "a wider stop that no longer pays must be rejected by EV",
-    );
-  }
+  assert(!learned.reasons.includes("NET_EV_NOT_POSITIVE"), "modeled EV is audit-only in v7");
 });
 
 test("signal reversal exits before target or timeout", () => {

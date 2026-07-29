@@ -2,17 +2,30 @@ import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.t
 
 const ROOT = new URL("../../../../", import.meta.url);
 
-Deno.test("v6 LOB route owns entry authority and trend is auxiliary", async () => {
+Deno.test("v7 LOB route owns entry authority and external indicators are excluded", async () => {
   const [entry, scanner] = await Promise.all([
     Deno.readTextFile(new URL("supabase/functions/_shared/lob/entry.ts", ROOT)),
     Deno.readTextFile(new URL("supabase/functions/market-scanner/engine.ts", ROOT)),
   ]);
-  assert(entry.includes("auxiliary only; never a veto"));
+  assert(entry.includes("Entry permission here is current order-book/tape only"));
+  assertEquals(entry.includes("trendAssist"), false);
+  assertEquals(entry.includes("features.fundingEdge"), false);
   assert(scanner.includes('if (risk.strategy === "LOB_SCALP")'));
   assert(scanner.includes("decision = lobResult.decision"));
 });
 
-Deno.test("v6 LOB route has no pWin or pFill hard gate", async () => {
+Deno.test("v7 ranks Binance USDT and Upbit KRW universes independently", async () => {
+  const scanner = await Deno.readTextFile(
+    new URL("supabase/functions/market-scanner/index.ts", ROOT),
+  );
+  assert(scanner.includes("rows.filter((row) => allowedMarkets.has(String(row.market)))"));
+  assert(scanner.includes("new Set(markets.map((row) => row.market))"));
+  assert(scanner.includes("const topTen = heatSample.heat.slice(0, 10)"));
+  assert(scanner.includes("const selectedRows = heatRanked"));
+  assert(scanner.includes("ranking: heatSample.heat.slice(0, 10)"));
+});
+
+Deno.test("v7 LOB route has no modeled EV, pWin or pFill hard gate", async () => {
   const [entry, payoff] = await Promise.all([
     Deno.readTextFile(new URL("supabase/functions/_shared/lob/entry.ts", ROOT)),
     Deno.readTextFile(new URL("supabase/functions/_shared/lob/payoff-governor.ts", ROOT)),
@@ -21,7 +34,7 @@ Deno.test("v6 LOB route has no pWin or pFill hard gate", async () => {
     entry.includes("TARGET_NET_PROFIT_NOT_POSITIVE") ||
       payoff.includes("TARGET_NET_CUSHION_TOO_SMALL"),
   );
-  assert(entry.includes("NET_EV_NOT_POSITIVE"));
+  assertEquals(entry.includes('reasons.push("NET_EV_NOT_POSITIVE")'), false);
   assertEquals(entry.includes("PWIN_LOWER_BOUND_BELOW"), false);
   assertEquals(entry.includes("PFILL_LOWER_BOUND_TOO_LOW"), false);
 });
