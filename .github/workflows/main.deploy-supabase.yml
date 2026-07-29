@@ -48,15 +48,7 @@ jobs:
           deno task test
           node --check gateway/server.mjs
           node --test gateway/server.test.mjs
-          node validation/lob-source-validation.mjs
-          node validation/v610-deploy-validation.mjs
-          node validation/v620-deploy-validation.mjs
-          node validation/v680-deploy-validation.mjs
-          node validation/v681-deploy-validation.mjs
-          node validation/v690-deploy-validation.mjs
-          node validation/v691-deploy-validation.mjs
-          node validation/v6100-deploy-validation.mjs
-          node validation/v6110-deploy-validation.mjs
+          node validation/v700-deploy-validation.mjs
 
       - name: Install Supabase CLI
         uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
@@ -156,7 +148,11 @@ jobs:
               raise SystemExit("SUPABASE_DB_URL must contain the real URL-encoded database password")
           print(f"Validated Session pooler target: host={parsed.hostname}, port={parsed.port}, user={parsed.username}")
           PY
-          supabase db push --db-url "${SUPABASE_DB_URL}"
+          command -v psql >/dev/null
+          psql "${SUPABASE_DB_URL}" \
+            --set=ON_ERROR_STOP=1 \
+            --single-transaction \
+            --file supabase/migrations/202607290021_top10_lob_only_v700.sql
 
       - name: Deploy Edge Functions
         shell: bash
