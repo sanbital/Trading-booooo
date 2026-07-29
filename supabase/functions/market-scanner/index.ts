@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v6.1.0-HEAT — Supabase Edge Function
+// Trading-booooo Market Scanner v6.13.0-REALIZED-EDGE-PROFIT-RETENTION — Supabase Edge Function
 // Upbit KRW / Binance USDT universe scan -> multi-period analysis -> orderflow validation.
 // Public market analysis. Private account/order execution is delegated to a fixed-IP gateway.
 
@@ -43,6 +43,7 @@ import {
   type FundingObservation,
 } from "../_shared/lob/funding.ts";
 import { rankMarketHeat, type MarketHeatScore, type MarketHeatTicker } from "../_shared/lob/market-heat.ts";
+import { loadLobSearchExpansion, selectLobSearchRows } from "./search-expansion.ts";
 
 
 const UPBIT = "https://api.upbit.com";
@@ -1294,7 +1295,20 @@ async function runLobHeatScan(
       },
   );
   const universeByMarket = new Map(universe.map((row) => [row.market, row]));
-  const finalistLimit = Math.round(clamp(finite(Deno.env.get("LOB_HEAT_FINALIST_LIMIT"), 12), 4, 20));
+  const searchExpansionRaw = await loadLobSearchExpansion();
+  const configuredBaseFinalists = Math.round(clamp(
+    finite(Deno.env.get("LOB_HEAT_FINALIST_LIMIT"), searchExpansionRaw.baseFinalists),
+    4,
+    20,
+  ));
+  const searchExpansion = {
+    ...searchExpansionRaw,
+    baseFinalists: configuredBaseFinalists,
+    finalistLimit: searchExpansionRaw.enabled
+      ? Math.round(clamp(Math.max(configuredBaseFinalists, searchExpansionRaw.finalistLimit), configuredBaseFinalists, 20))
+      : configuredBaseFinalists,
+  };
+  const finalistLimit = searchExpansion.finalistLimit;
   // v6.2: one call for every perpetual, taken alongside the heat sample. A per-symbol
   // request pattern would not fit a 12-second scan, and a late scan is worse than a scan
   // without this signal — so a failure here returns an empty map and everything downstream
@@ -1326,9 +1340,16 @@ async function runLobHeatScan(
   // Carried to the next scan so the premium *delta* is available. An isolate recycle simply
   // resets it, which yields a zero delta rather than a stale one.
   if (fundingNow.size) previousFunding = fundingNow;
-  const selectedRows = heatRanked.slice(0, finalistLimit);
+  const selectedRows = selectLobSearchRows(heatRanked, searchExpansion);
   const finalists = selectedRows.map(heatPeriod);
-  const observationMs = Math.round(clamp(finite(Deno.env.get("LOB_OBSERVATION_MS"), 8_000), 8_000, 12_000));
+  const configuredObservationMs = Math.round(clamp(
+    finite(Deno.env.get("LOB_OBSERVATION_MS"), 8_000),
+    8_000,
+    12_000,
+  ));
+  const observationMs = searchExpansion.enabled
+    ? Math.round(clamp(Math.max(configuredObservationMs, searchExpansion.observationMs), 8_000, 12_000))
+    : configuredObservationMs;
   const microBundle = binance
     ? await loadBinanceMicrostructure(finalists, instrumentTicks, observationMs)
     : await loadMicrostructure(finalists, observationMs);
@@ -1431,6 +1452,18 @@ async function runLobHeatScan(
         ranked_markets: heatSample.heat.length,
         selected_for_lob: selectedRows.length,
       },
+      adaptive_search: {
+        enabled: searchExpansion.enabled,
+        reason: searchExpansion.reason,
+        failure_streak: searchExpansion.failureStreak,
+        core_finalists: searchExpansion.baseFinalists,
+        observed_finalists: selectedRows.length,
+        requested_finalists: finalistLimit,
+        observation_ms: observationMs,
+        rotation_pool: searchExpansion.rotationPool,
+        evaluated_at: searchExpansion.evaluatedAt,
+        thresholds_relaxed: false,
+      },
       dynamic_orderflow: {
         requested_observation_seconds: Number((microBundle.observationMs / 1000).toFixed(1)),
         websocket_markets: microBundle.websocketMarkets,
@@ -1449,6 +1482,10 @@ async function runLobHeatScan(
       strategy: "LOB_SCALP_HEAT_FIRST",
       trend_role: "AUXILIARY_ONLY",
       hard_economic_gate: "TARGET_NET_PROFIT_GT_0_AND_CONSERVATIVE_NET_EV_GT_0",
+      search_policy: searchExpansion.enabled
+        ? "CORE_HEAT_PLUS_ROTATING_TAIL_WITH_UNCHANGED_ENTRY_GATES"
+        : "CORE_HEAT",
+      search_thresholds_relaxed: false,
       automatic_order: risk.operatorMode === "AUTOMATED",
     },
     meta: {
