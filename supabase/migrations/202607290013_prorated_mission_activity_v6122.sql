@@ -12,7 +12,7 @@ set search_path = public
 as $$
 declare
   cfg public.trading_settings%rowtype;
-  v_eval_start timestamptz;
+  v_eval_start timestamptz := null;
   v_elapsed_fraction numeric := 1;
   v_period_goal integer := 0;
   v_prorated_goal integer := 0;
@@ -22,10 +22,6 @@ begin
   select * into cfg from public.trading_settings where id=1;
   if not found then return new; end if;
 
-  v_eval_start := coalesce(
-    public.safe_numeric_v6112(null)::timestamptz,
-    null
-  );
   begin
     v_eval_start := (new.metrics->>'evaluation_start')::timestamptz;
   exception when others then
@@ -86,7 +82,6 @@ for each row execute function public.normalize_partial_mission_scorecard_v6122()
 revoke all on function public.normalize_partial_mission_scorecard_v6122()
   from public,anon,authenticated;
 
--- Re-run current periods through the normal scorecard path.
 select public.refresh_trading_mission_scorecard_v6120('HOURLY','upbit',now());
 select public.refresh_trading_mission_scorecard_v6120('HOURLY','binance',now());
 select public.refresh_trading_mission_scorecard_v6120('DAILY','upbit',now());
