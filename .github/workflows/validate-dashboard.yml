@@ -5,8 +5,7 @@ on:
     branches: [main]
     paths:
       - "docs/**"
-      - "validation/v6100-deploy-validation.mjs"
-      - "validation/v6110-deploy-validation.mjs"
+      - "validation/v700-deploy-validation.mjs"
       - ".github/workflows/validate-dashboard.yml"
   workflow_dispatch:
 
@@ -27,5 +26,4 @@ jobs:
         run: |
           node --check docs/app.js
           node --test docs/version-runtime.test.mjs
-          node validation/v6100-deploy-validation.mjs
-          node validation/v6110-deploy-validation.mjs
+          node validation/v700-deploy-validation.mjs
