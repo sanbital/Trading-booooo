@@ -25,13 +25,18 @@ type SearchSettingsRow = {
   lob_search_state_fresh_minutes?: number | string;
 };
 
+/** Exact field contract emitted by rankMarketHeat(). */
 export type LobRankedSearchRow = {
   market: string;
-  liquidity_score?: number;
-  turnover_24h_quote?: number;
-  change_24h_pct?: number;
-  market_heat_score?: number;
-  notional_acceleration?: number;
+  rank?: number;
+  heatScore?: number;
+  recentNotionalPerSecond?: number;
+  previousNotionalPerSecond?: number;
+  notionalAcceleration?: number;
+  tradeCountPerSecond?: number;
+  turnover24hQuote?: number;
+  change24hPct?: number;
+  range24hPct?: number;
 };
 
 function finite(value: unknown, fallback: number): number {
@@ -93,26 +98,15 @@ export async function loadLobSearchExpansion(nowMs = Date.now()): Promise<LobSea
     if (!row) return defaults();
 
     const baseFinalists = Math.round(clamp(finite(row.lob_search_base_finalists, 12), 4, 20));
-    const maxFinalists = Math.round(
-      clamp(finite(row.lob_search_max_finalists, 20), baseFinalists, 20),
-    );
-    const baseObservation = Math.round(
-      clamp(finite(row.lob_search_base_observation_ms, 8000), 8000, 12000),
-    );
-    const maxObservation = Math.round(
-      clamp(finite(row.lob_search_max_observation_ms, 12000), baseObservation, 12000),
-    );
+    const maxFinalists = Math.round(clamp(finite(row.lob_search_max_finalists, 20), baseFinalists, 20));
+    const baseObservation = Math.round(clamp(finite(row.lob_search_base_observation_ms, 8000), 8000, 12000));
+    const maxObservation = Math.round(clamp(finite(row.lob_search_max_observation_ms, 12000), baseObservation, 12000));
     const failureStreak = Math.max(0, Math.floor(finite(row.lob_search_failure_streak, 0)));
-    const rotationPool = Math.round(
-      clamp(finite(row.lob_search_rotation_pool, 48), maxFinalists, 120),
-    );
-    const rotationMinutes = Math.round(
-      clamp(finite(row.lob_search_rotation_minutes, 1), 1, 30),
-    );
+    const rotationPool = Math.round(clamp(finite(row.lob_search_rotation_pool, 48), maxFinalists, 120));
+    const rotationMinutes = Math.round(clamp(finite(row.lob_search_rotation_minutes, 1), 1, 30));
     const freshMinutes = clamp(finite(row.lob_search_state_fresh_minutes, 20), 5, 120);
     const evaluatedAtMs = Date.parse(String(row.lob_search_last_evaluated_at || ""));
-    const stateFresh = Number.isFinite(evaluatedAtMs) &&
-      Math.max(0, nowMs - evaluatedAtMs) <= freshMinutes * 60_000;
+    const stateFresh = Number.isFinite(evaluatedAtMs) && Math.max(0, nowMs - evaluatedAtMs) <= freshMinutes * 60_000;
     const requested = row.lob_search_expand_enabled !== false && row.lob_search_failure === true;
 
     if (!requested) {
@@ -155,11 +149,7 @@ export async function loadLobSearchExpansion(nowMs = Date.now()): Promise<LobSea
   }
 }
 
-export function selectLobSearchRows<T>(
-  rows: T[],
-  expansion: LobSearchExpansion,
-  nowMs = Date.now(),
-): T[] {
+export function selectLobSearchRows<T>(rows: T[], expansion: LobSearchExpansion, nowMs = Date.now()): T[] {
   const source = Array.isArray(rows) ? rows : [];
   const baseCount = Math.min(source.length, expansion.baseFinalists);
   const core = source.slice(0, baseCount);
@@ -172,17 +162,12 @@ export function selectLobSearchRows<T>(
   const bucketMs = Math.max(1, expansion.rotationMinutes) * 60_000;
   const bucket = Math.floor(nowMs / bucketMs);
   const offset = (bucket * extraCount) % tail.length;
-  const rotated = Array.from({ length: extraCount }, (_, index) => tail[(offset + index) % tail.length]);
-  return [...core, ...rotated];
+  return [...core, ...Array.from({ length: extraCount }, (_, i) => tail[(offset + i) % tail.length])];
 }
 
 /**
- * Allocates scarce websocket observation slots across three independent opportunity sources:
- * whole-market Heat leaders, current 3–60% momentum continuations and deep liquid books.
- *
- * The momentum reserve does not buy a gainer. It only guarantees observation, and ranks an
- * earlier-stage accelerating mover ahead of a stale high-return symbol. All economic, direction,
- * spread, trap and risk gates still run after the live book/trade window is collected.
+ * Allocates websocket observation slots across Heat leaders, current momentum continuations and
+ * deep liquid books. It receives MarketHeatScore directly, so camelCase is part of the contract.
  */
 export function selectCostAwareLobRows<T extends LobRankedSearchRow>(
   rows: T[],
@@ -194,10 +179,7 @@ export function selectCostAwareLobRows<T extends LobRankedSearchRow>(
   const limit = Math.min(source.length, expansion.finalistLimit);
   const liquidityReserve = Math.min(3, Math.max(1, Math.floor(expansion.baseFinalists / 4)));
   const momentumReserve = Math.min(4, Math.max(2, Math.floor(expansion.baseFinalists / 3)));
-  const heatCoreCount = Math.max(
-    1,
-    Math.min(limit, expansion.baseFinalists - liquidityReserve - momentumReserve),
-  );
+  const heatCoreCount = Math.max(1, Math.min(limit, expansion.baseFinalists - liquidityReserve - momentumReserve));
   const selected: T[] = [];
   const seen = new Set<string>();
   const add = (row: T | undefined) => {
@@ -209,13 +191,13 @@ export function selectCostAwareLobRows<T extends LobRankedSearchRow>(
   source.slice(0, heatCoreCount).forEach(add);
 
   [...source]
-    .filter((row) => finite(row.change_24h_pct, 0) >= 3 && finite(row.change_24h_pct, 0) <= 60)
+    .filter((row) => finite(row.change24hPct, 0) >= 3 && finite(row.change24hPct, 0) <= 60)
     .sort((left, right) => {
       const score = (row: T) =>
-        Math.min(30, finite(row.change_24h_pct, 0)) * 2 +
-        finite(row.notional_acceleration, 0) * 35 +
-        finite(row.market_heat_score, 0) * 0.25 +
-        Math.log10(Math.max(1, finite(row.turnover_24h_quote, 0)));
+        Math.min(30, finite(row.change24hPct, 0)) * 2 +
+        finite(row.notionalAcceleration, 0) * 35 +
+        finite(row.heatScore, 0) * 0.25 +
+        Math.log10(Math.max(1, finite(row.turnover24hQuote, 0)));
       return score(right) - score(left);
     })
     .forEach((row) => {
@@ -224,8 +206,8 @@ export function selectCostAwareLobRows<T extends LobRankedSearchRow>(
 
   [...source]
     .sort((left, right) =>
-      finite(right.liquidity_score, 0) - finite(left.liquidity_score, 0) ||
-      finite(right.turnover_24h_quote, 0) - finite(left.turnover_24h_quote, 0)
+      finite(right.turnover24hQuote, 0) - finite(left.turnover24hQuote, 0) ||
+      finite(right.recentNotionalPerSecond, 0) - finite(left.recentNotionalPerSecond, 0)
     )
     .forEach((row) => {
       if (selected.length < heatCoreCount + momentumReserve + liquidityReserve) add(row);
