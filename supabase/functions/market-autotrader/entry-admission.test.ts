@@ -58,4 +58,38 @@ Deno.test("admission summary exposes a zero-reservation collapse and gate reason
   assert(summary.rejectionReasons.RECOMMENDATION_EXPIRED === 1);
   assert(summary.rejectionReasons.NET_EV_NOT_POSITIVE === 1);
   assert(summary.rejectionReasons.STALE_ORDERBOOK === 1);
+  assert(!summary.antiGamingFailure, "negative-EV/structural rows must not become forced trades");
+});
+
+Deno.test("positive-EV opportunities cannot be hidden by reducing activity to zero", () => {
+  const rows = Array.from({ length: 5 }, () => ({
+    reason: "database 400: LOB_ADMISSION_REJECT[upbit:KRW-X]: CORE_OPPORTUNITY_SCORE_LOW",
+    audit: {
+      attempt_ev_lower_bound_bps: 1.8,
+      net_reward_risk_ratio: 0.92,
+    },
+  }));
+  const summary = summarizeEntryAdmission(12, rows, 0.20);
+  assert(summary.qualifiedAttempts === 5);
+  assert(summary.requiredReservations === 1);
+  assert(summary.zeroTradeWithQualifiedOpportunity);
+  assert(summary.antiGamingFailure);
+  assert(summary.activityShortfall === 1);
+});
+
+Deno.test("meeting the opportunity-normalized activity floor clears anti-gaming failure", () => {
+  const summary = summarizeEntryAdmission(12, [
+    {
+      entered: true,
+      audit: { attempt_ev_lower_bound_bps: 2, net_reward_risk_ratio: 1.1 },
+    },
+    ...Array.from({ length: 4 }, () => ({
+      reason: "LOB_ADMISSION_REJECT[binance:XUSDT]: CORE_OPPORTUNITY_SCORE_LOW",
+      lob_signal: { attempt_ev_lower_bound_bps: 1.2, net_reward_risk_ratio: 0.90 },
+    })),
+  ], 0.20);
+  assert(summary.qualifiedAttempts === 5);
+  assert(summary.reservations === 1);
+  assert(summary.participationRate === 0.2);
+  assert(!summary.antiGamingFailure);
 });
