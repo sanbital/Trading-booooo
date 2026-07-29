@@ -1195,6 +1195,7 @@ function heatTickerSnapshot(rows: TickerRow[], timestampMs: number): MarketHeatT
 async function sampleWholeMarketHeat(
   exchange: Exchange,
   firstRows: TickerRow[],
+  allowedMarkets: ReadonlySet<string>,
 ): Promise<
   { latestRows: TickerRow[]; heat: MarketHeatScore[]; sampleCount: number; elapsedMs: number }
 > {
@@ -1204,7 +1205,7 @@ async function sampleWholeMarketHeat(
     clamp(finite(Deno.env.get("LOB_HEAT_SAMPLE_INTERVAL_MS"), 900), 400, 2000),
   );
   const eligibleRows = (rows: TickerRow[]) =>
-    exchange === "binance" ? rows.filter((row) => String(row.market).endsWith("USDT")) : rows;
+    rows.filter((row) => allowedMarkets.has(String(row.market)));
   const snapshots: MarketHeatTicker[][] = [
     heatTickerSnapshot(eligibleRows(firstRows), Date.now()),
   ];
@@ -1315,7 +1316,11 @@ async function runLobHeatScan(
   started: number,
 ) {
   const binance = exchange === "binance";
-  const heatSample = await sampleWholeMarketHeat(exchange, firstRows);
+  const heatSample = await sampleWholeMarketHeat(
+    exchange,
+    firstRows,
+    new Set(markets.map((row) => row.market)),
+  );
   const universe = buildUniverse(
     markets,
     heatSample.latestRows,

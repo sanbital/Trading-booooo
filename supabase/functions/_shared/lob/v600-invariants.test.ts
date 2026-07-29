@@ -18,7 +18,8 @@ Deno.test("v7 ranks Binance USDT and Upbit KRW universes independently", async (
   const scanner = await Deno.readTextFile(
     new URL("supabase/functions/market-scanner/index.ts", ROOT),
   );
-  assert(scanner.includes('rows.filter((row) => String(row.market).endsWith("USDT"))'));
+  assert(scanner.includes("rows.filter((row) => allowedMarkets.has(String(row.market)))"));
+  assert(scanner.includes("new Set(markets.map((row) => row.market))"));
   assert(scanner.includes("const topTen = heatSample.heat.slice(0, 10)"));
   assert(scanner.includes("const selectedRows = heatRanked"));
 });
