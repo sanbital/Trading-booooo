@@ -25,6 +25,12 @@ type SearchSettingsRow = {
   lob_search_state_fresh_minutes?: number | string;
 };
 
+export type LobRankedSearchRow = {
+  market: string;
+  liquidity_score?: number;
+  turnover_24h_quote?: number;
+};
+
 function finite(value: unknown, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -49,10 +55,6 @@ function defaults(reason: LobSearchExpansion["reason"] = "UNAVAILABLE"): LobSear
   };
 }
 
-/**
- * Reads only search-health and observation-budget settings. A database failure fails back to
- * the normal 12-book/8-second scan; it never changes an economic entry threshold.
- */
 export async function loadLobSearchExpansion(nowMs = Date.now()): Promise<LobSearchExpansion> {
   const url = (Deno.env.get("SUPABASE_URL") || "").replace(/\/$/, "");
   const key = (Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "").trim();
@@ -112,30 +114,19 @@ export async function loadLobSearchExpansion(nowMs = Date.now()): Promise<LobSea
 
     if (!requested) {
       return {
-        ...defaults("NORMAL"),
-        failureStreak,
-        baseFinalists,
-        finalistLimit: baseFinalists,
-        observationMs: baseObservation,
-        rotationPool,
-        rotationMinutes,
+        ...defaults("NORMAL"), failureStreak, baseFinalists, finalistLimit: baseFinalists,
+        observationMs: baseObservation, rotationPool, rotationMinutes,
         evaluatedAt: row.lob_search_last_evaluated_at || null,
       };
     }
     if (!stateFresh) {
       return {
-        ...defaults("STALE_STATE"),
-        failureStreak,
-        baseFinalists,
-        finalistLimit: baseFinalists,
-        observationMs: baseObservation,
-        rotationPool,
-        rotationMinutes,
+        ...defaults("STALE_STATE"), failureStreak, baseFinalists, finalistLimit: baseFinalists,
+        observationMs: baseObservation, rotationPool, rotationMinutes,
         evaluatedAt: row.lob_search_last_evaluated_at || null,
       };
     }
 
-    // Streak 1: 18 books / 10s. Streak 2+: 20 books / 12s. Only observation breadth changes.
     const finalistLimit = Math.min(
       maxFinalists,
       baseFinalists + Math.min(maxFinalists - baseFinalists, 4 + failureStreak * 2),
@@ -161,10 +152,6 @@ export async function loadLobSearchExpansion(nowMs = Date.now()): Promise<LobSea
   }
 }
 
-/**
- * Always observes the core Heat leaders. Extra websocket slots rotate through the next Heat
- * ranks, so search failure broadens coverage instead of repeating the same rejected books.
- */
 export function selectLobSearchRows<T>(
   rows: T[],
   expansion: LobSearchExpansion,
@@ -174,18 +161,67 @@ export function selectLobSearchRows<T>(
   const baseCount = Math.min(source.length, expansion.baseFinalists);
   const core = source.slice(0, baseCount);
   if (!expansion.enabled || expansion.finalistLimit <= baseCount) return core;
-
   const extraCount = Math.min(expansion.finalistLimit - baseCount, source.length - baseCount);
   if (extraCount <= 0) return core;
   const tailEnd = Math.min(source.length, baseCount + expansion.rotationPool);
   const tail = source.slice(baseCount, tailEnd);
   if (tail.length <= extraCount) return [...core, ...tail];
-
   const bucketMs = Math.max(1, expansion.rotationMinutes) * 60_000;
   const bucket = Math.floor(nowMs / bucketMs);
   const offset = (bucket * extraCount) % tail.length;
-  const rotated = Array.from({ length: extraCount }, (_, index) =>
-    tail[(offset + index) % tail.length]
-  );
+  const rotated = Array.from({ length: extraCount }, (_, index) => tail[(offset + index) % tail.length]);
   return [...core, ...rotated];
+}
+
+/**
+ * Keeps Heat leaders, reserves four normal-core slots for the most liquid markets, and uses
+ * remaining expanded slots for rotating discovery. Observation allocation changes; entry
+ * economics, direction gates and risk limits do not.
+ */
+export function selectCostAwareLobRows<T extends LobRankedSearchRow>(
+  rows: T[],
+  expansion: LobSearchExpansion,
+  nowMs = Date.now(),
+): T[] {
+  const source = Array.isArray(rows) ? rows : [];
+  if (!source.length) return [];
+  const limit = Math.min(source.length, expansion.finalistLimit);
+  const reserve = Math.min(4, Math.max(1, Math.floor(expansion.baseFinalists / 3)));
+  const heatCoreCount = Math.max(1, Math.min(limit, expansion.baseFinalists - reserve));
+  const selected: T[] = [];
+  const seen = new Set<string>();
+  const add = (row: T | undefined) => {
+    if (!row || seen.has(row.market) || selected.length >= limit) return;
+    seen.add(row.market);
+    selected.push(row);
+  };
+
+  source.slice(0, heatCoreCount).forEach(add);
+  [...source]
+    .sort((left, right) =>
+      finite(right.liquidity_score, 0) - finite(left.liquidity_score, 0) ||
+      finite(right.turnover_24h_quote, 0) - finite(left.turnover_24h_quote, 0)
+    )
+    .forEach((row) => {
+      if (selected.length < heatCoreCount + reserve) add(row);
+    });
+
+  source.filter((row) => !seen.has(row.market))
+    .slice(0, Math.max(0, expansion.baseFinalists - selected.length))
+    .forEach(add);
+  if (!expansion.enabled || selected.length >= limit) return selected.slice(0, limit);
+
+  const extraCount = limit - selected.length;
+  const pool = source
+    .slice(heatCoreCount, Math.min(source.length, heatCoreCount + expansion.rotationPool))
+    .filter((row) => !seen.has(row.market));
+  if (pool.length <= extraCount) {
+    pool.forEach(add);
+    return selected.slice(0, limit);
+  }
+  const bucketMs = Math.max(1, expansion.rotationMinutes) * 60_000;
+  const bucket = Math.floor(nowMs / bucketMs);
+  const offset = (bucket * extraCount) % pool.length;
+  for (let index = 0; index < extraCount; index++) add(pool[(offset + index) % pool.length]);
+  return selected.slice(0, limit);
 }
