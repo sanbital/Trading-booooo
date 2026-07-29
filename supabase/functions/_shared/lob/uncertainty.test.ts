@@ -5,7 +5,7 @@ import type { LobFeatureVector } from "./types.ts";
 function features(overrides: Partial<LobFeatureVector> = {}): LobFeatureVector {
   return {
     samples: 30,
-    observationMs: 10_000,
+    observationMs: 20_000,
     bookAgeMs: 100,
     spreadBps: 3,
     bookImbalance: 0.5,
@@ -63,6 +63,14 @@ Deno.test("insufficient observations keep the full base haircut", () => {
   const result = resolveLobUncertaintyHaircut(features({
     dynamicStatus: "INSUFFICIENT",
     dataQuality: 0.35,
+  }), 0.25);
+  assertEquals(result.tier, "BASE");
+  assertAlmostEquals(result.haircut, 0.25, 1e-12);
+});
+
+Deno.test("a sub-20-second window cannot earn an uncertainty discount", () => {
+  const result = resolveLobUncertaintyHaircut(features({
+    observationMs: 19_999,
   }), 0.25);
   assertEquals(result.tier, "BASE");
   assertAlmostEquals(result.haircut, 0.25, 1e-12);

@@ -115,7 +115,7 @@ jobs:
             "LOB_HEAT_SAMPLE_COUNT=3" \
             "LOB_HEAT_SAMPLE_INTERVAL_MS=900" \
             "LOB_HEAT_FINALIST_LIMIT=12" \
-            "LOB_OBSERVATION_MS=8000" \
+            "LOB_OBSERVATION_MS=20000" \
             "AUTO_SCAN_INTERVAL_SECONDS=12" \
             "AUTO_MONITOR_INTERVAL_SECONDS=2" \
             --project-ref "${SUPABASE_PROJECT_REF}"

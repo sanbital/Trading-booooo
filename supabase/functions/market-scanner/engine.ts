@@ -1159,7 +1159,7 @@ type WallStat = {
   lastIndex: number;
 };
 
-const DYNAMIC_MIN_OBSERVATION_MS = 8_000;
+const DYNAMIC_MIN_OBSERVATION_MS = 20_000;
 const DYNAMIC_MIN_BOOK_UPDATES = 12;
 const DYNAMIC_MIN_TRADES = 8;
 const DYNAMIC_PHASE_COUNT = 3;

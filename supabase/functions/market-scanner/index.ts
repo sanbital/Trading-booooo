@@ -55,10 +55,10 @@ const DEFAULT_DEEP_SCAN_LIMIT = 30;
 const FINALIST_LIMIT = 8;
 const BOOK_SAMPLE_COUNT = 4;
 const BOOK_SAMPLE_INTERVAL_MS = 250;
-const DEFAULT_DYNAMIC_OBSERVATION_MS = 8_000;
-const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 10_000;
-const MIN_DYNAMIC_OBSERVATION_MS = 8_000;
-const MAX_DYNAMIC_OBSERVATION_MS = 12_000;
+const DEFAULT_DYNAMIC_OBSERVATION_MS = 20_000;
+const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 25_000;
+const MIN_DYNAMIC_OBSERVATION_MS = 20_000;
+const MAX_DYNAMIC_OBSERVATION_MS = 30_000;
 const MAX_DYNAMIC_BOOK_EVENTS = 1_200;
 const MAX_DYNAMIC_TRADE_EVENTS = 2_500;
 const CANDLE_BATCH_SIZE = 7;
@@ -1371,9 +1371,9 @@ async function runLobHeatScan(
   const selectedRows = heatRanked;
   const finalists = selectedRows.map(heatPeriod);
   const configuredObservationMs = Math.round(clamp(
-    finite(Deno.env.get("LOB_OBSERVATION_MS"), 8_000),
-    8_000,
-    12_000,
+    finite(Deno.env.get("LOB_OBSERVATION_MS"), 20_000),
+    20_000,
+    30_000,
   ));
   const observationMs = configuredObservationMs;
   const microBundle = binance
@@ -1506,7 +1506,7 @@ async function runLobHeatScan(
       excluded_summary: [],
       periods: {
         universe: "거래소별 rolling 24시간 상승률 Top 10",
-        lob: "Top 10 중 흐름 유지 종목 8초 실시간 호가·체결",
+        lob: "Top 10 중 흐름 유지 종목 최소 20초 실시간 호가·체결",
       },
     },
     assumptions: {

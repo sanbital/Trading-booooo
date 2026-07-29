@@ -44,6 +44,14 @@ check(
     scanner.includes("TOP10_24H_GAINERS_LOB_ONLY"),
 );
 check(
+  "every live Top-10 LOB scan observes for at least 20 seconds",
+  scanner.includes("const MIN_DYNAMIC_OBSERVATION_MS = 20_000;") &&
+    scanner.includes('finite(Deno.env.get("LOB_OBSERVATION_MS"), 20_000)') &&
+    scanner.includes('lob: "Top 10 중 흐름 유지 종목 최소 20초 실시간 호가·체결"') &&
+    engine.includes("const DYNAMIC_MIN_OBSERVATION_MS = 20_000;") &&
+    deployWorkflow.includes('"LOB_OBSERVATION_MS=20000"'),
+);
+check(
   "the v7 entry path is order-book and tape only",
   entry.includes("Entry permission here is current order-book/tape only") &&
     !entry.includes("trendAssist") &&

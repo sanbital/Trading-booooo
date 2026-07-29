@@ -41,7 +41,7 @@ export function resolveLobUncertaintyHaircut(
   const evidenceScore = clamp(
     quality * 0.35 +
       clamp(samples / 40, 0, 1) * 0.15 +
-      clamp(observationMs / 8_000, 0, 1) * 0.10 +
+      clamp(observationMs / 20_000, 0, 1) * 0.10 +
       (votes / 3) * 0.25 +
       clamp(1 - spread / 12, 0, 1) * 0.15,
     0,
@@ -49,7 +49,7 @@ export function resolveLobUncertaintyHaircut(
   );
 
   const strong = statusUsable && quality >= 0.50 && votes === 3 && spread <= 5 &&
-    samples >= 12 && observationMs >= 8_000;
+    samples >= 12 && observationMs >= 20_000;
   if (strong) {
     return {
       haircut: Math.min(base, Math.max(0.05, base * 0.25)),
@@ -60,7 +60,7 @@ export function resolveLobUncertaintyHaircut(
   }
 
   const supported = statusUsable && quality >= 0.60 && votes >= 2 && spread <= 8 &&
-    samples >= 20 && observationMs >= 8_000;
+    samples >= 20 && observationMs >= 20_000;
   if (supported) {
     return {
       haircut: Math.min(base, Math.max(0.10, base * 0.50)),
