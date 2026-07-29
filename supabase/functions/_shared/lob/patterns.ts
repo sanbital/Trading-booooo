@@ -24,8 +24,9 @@ function positiveVotes(f: LobFeatureVector): number {
  * Six LOB pattern families.
  *
  * Momentum continuation is deliberately separate from mean-reversion/queue patterns. A large
- * 24h gain is context only; primary status also requires current ticker-notional acceleration,
- * aggressive buys, positive microprice, tight spread and at least two directional votes.
+ * 24h gain is context only; primary status also requires aligned trades from the same live book
+ * window, current ticker-notional acceleration, aggressive buys, positive microprice and a tight
+ * spread. Ten-minute REST history can describe context but cannot certify a live continuation.
  */
 export function detectLobPatterns(f: LobFeatureVector): LobPatternSignal[] {
   const positiveFlow = clamp((f.tradePressureFast + 1) / 2);
@@ -41,10 +42,12 @@ export function detectLobPatterns(f: LobFeatureVector): LobPatternSignal[] {
   const changeScore = clamp((impliedChange24hPct - 3) / 27);
   const accelerationScore = clamp(f.notionalAcceleration);
   const heatScore = clamp(f.marketHeatScore / 100);
+  const liveTradeEvidence = f.tradeArrivalRate > 0 && f.aggressiveNotionalPerSecond > 0 &&
+    f.dataQuality >= 0.25;
   const momentumPrimary = impliedChange24hPct >= 3 && impliedChange24hPct <= 60 &&
     f.marketHeatScore >= 45 && f.notionalAcceleration >= 0.02 &&
     f.tradePressureFast >= 0.25 && f.micropriceDeviationBps >= 0 &&
-    f.bookImbalance > -0.65 && votes >= 2 &&
+    f.bookImbalance > -0.65 && votes >= 2 && liveTradeEvidence &&
     f.spreadBps != null && f.spreadBps <= 8 &&
     f.recentNotionalPerSecond > 0 && f.tradeCount >= 8;
 
@@ -58,14 +61,16 @@ export function detectLobPatterns(f: LobFeatureVector): LobPatternSignal[] {
 
   const momentum = signal(
     "MOMENTUM_CONTINUATION",
-    changeScore * 0.24 + positiveFlow * 0.24 + accelerationScore * 0.18 +
-      heatScore * 0.14 + positiveMicroMomentum * 0.10 + clamp(votes / 3) * 0.10,
+    changeScore * 0.20 + positiveFlow * 0.21 + accelerationScore * 0.16 +
+      heatScore * 0.12 + positiveMicroMomentum * 0.09 + clamp(votes / 3) * 0.08 +
+      clamp(f.dataQuality, 0, 1) * 0.08 + clamp(f.tradeArrivalRate / 4, 0, 1) * 0.06,
     momentumPrimary,
     [
       "24시간 상승 흐름 위에서 전 종목 거래대금 가속이 재점화됨",
-      "공격 매수·마이크로프라이스·근접 호가가 상승 지속을 확인함",
+      "동일 관찰창의 공격 매수·마이크로프라이스·근접 호가가 상승 지속을 확인함",
     ],
     [
+      "동시간대 체결 표본 소멸",
       "거래대금 가속 소멸",
       "공격 체결압력 음전환",
       "마이크로프라이스 하락 전환",
