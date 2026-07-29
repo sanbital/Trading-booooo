@@ -43,7 +43,7 @@ import {
   type FundingObservation,
 } from "../_shared/lob/funding.ts";
 import { rankMarketHeat, type MarketHeatScore, type MarketHeatTicker } from "../_shared/lob/market-heat.ts";
-import { loadLobSearchExpansion, selectLobSearchRows } from "./search-expansion.ts";
+import { loadLobSearchExpansion, selectCostAwareLobRows } from "./search-expansion.ts";
 
 
 const UPBIT = "https://api.upbit.com";
@@ -1340,7 +1340,7 @@ async function runLobHeatScan(
   // Carried to the next scan so the premium *delta* is available. An isolate recycle simply
   // resets it, which yields a zero delta rather than a stale one.
   if (fundingNow.size) previousFunding = fundingNow;
-  const selectedRows = selectLobSearchRows(heatRanked, searchExpansion);
+  const selectedRows = selectCostAwareLobRows(heatRanked, searchExpansion);
   const finalists = selectedRows.map(heatPeriod);
   const configuredObservationMs = Math.round(clamp(
     finite(Deno.env.get("LOB_OBSERVATION_MS"), 8_000),
