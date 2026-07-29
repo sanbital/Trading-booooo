@@ -23,13 +23,14 @@ export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   minEvBps: 0,
   maxStopToTargetRatio: 1.35,
   minNetRewardRiskRatio: 0.80,
-  minTargetBps: 8,
-  maxTargetBps: 120,
+  minTargetBps: 12,
+  // A 180-second scalp cannot use the old 120bp swing-like ceiling. Verified live trades had
+  // a 5.3bp median MFE and only 19.6% ever printed 40bp, while the old target averaged 75bp.
+  maxTargetBps: 60,
   minStopBps: 6,
   maxStopBps: 500, // user's absolute per-trade ceiling is enforced separately at 5%
   maxHoldingSeconds: 180,
   absoluteMaxHoldingSeconds: 300,
-  // v6.3.3: a FRACTION of the signal edge, not an absolute subtraction. See below.
   uncertaintyHaircut: 0.25,
   trap: {},
   disabledVetoes: [],
@@ -40,13 +41,11 @@ export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   learnedStopFloorBps: 0,
 };
 
-/** Largest amount the signal is ever allowed to move the probability off pure geometry. */
-const MAX_SIGNAL_EDGE = 0.18;
+/** Largest amount coherent order-flow evidence may move probability off pure geometry. */
+const MAX_SIGNAL_EDGE = 0.24;
 
 /**
- * Shrink the book-derived fill probability toward the exchange's realized maker fill
- * rate. The raw model still separates good queues from bad ones; the measurement corrects
- * its level. With no attempts the model is unchanged.
+ * Shrink the book-derived fill probability toward the exchange's realized maker fill rate.
  */
 export function calibrateMakerFillProbability(
   rawProbability: number,
@@ -68,15 +67,18 @@ export function calibrateMakerFillProbability(
 /**
  * LOB-only entry decision.
  *
- * v6.2 corrects the structural error inherited from v6.0: `pTarget` was built from
- * `0.34 + patternConfidence * 0.34 + ...` and the barrier widths were computed afterwards
- * and never fed back into it. Widening the target therefore raised expected value for free,
- * which is the same defect that pulled the previous scalp model toward swing horizons and
- * was fixed there in v5.7. Here the probability starts from the arithmetic the barriers
- * force -- a long with target T and stop S resolves at the target S/(T+S) of the time under
- * a driftless random walk -- and the signal may only add a bounded edge on top.
+ * v6.12.4 fixes three live-measured defects:
  *
- * The economic hard gate remains net EV > 0 after real fees and expected slippage.
+ * 1. Target geometry used `abs(microprice)`, so a sharply bearish microprice increased the
+ *    LONG target. Geometry now uses only directionally favourable evidence and is capped for
+ *    the 180-second horizon.
+ * 2. Activity previously added directly to LONG probability. Activity now controls whether
+ *    the bracket resolves inside the horizon; signed tape/book evidence controls direction.
+ * 3. `pTarget = min(resolveProbability, conditionalTargetShare)` confused an unconditional
+ *    probability with a conditional share. The correct decomposition is
+ *    `pTarget = pResolve * p(Target | resolved)` and likewise for the stop.
+ *
+ * The economic hard gate remains fee-net EV > 0 after slippage, latency and forecast bias.
  */
 export function evaluateLobEntry(
   features: LobFeatureVector,
@@ -89,11 +91,6 @@ export function evaluateLobEntry(
   const hotness = scoreHotSymbol(features);
   const rawPatterns = detectLobPatterns(features);
 
-  // v6.5: the order is not filled at the price the book showed when the decision was made.
-  // The gap is measured (see _shared/scalp/latency.ts) rather than assumed, and it is
-  // charged to entry AND to the stop exit: a stop is a market order into a book that has
-  // already moved, so the delay is paid twice on the losing side and once on the winning
-  // one, where a resting take-profit is filled at its own price.
   const latencyBps = Math.max(
     0,
     Number.isFinite(costs.latencyPenaltyBps as number) ? costs.latencyPenaltyBps as number : 0,
@@ -107,19 +104,29 @@ export function evaluateLobEntry(
     costs.roundTripFeeBps + costs.entrySlippageBps + costs.stopExitSlippageBps + latencyBps * 2,
   );
 
-  // Provisional geometry, used only to ask the trap module whether this book's own noise
-  // can accommodate the stop the model would otherwise have chosen.
   const provisionalPatternConfidence = rawPatterns[0]?.confidence ?? 0;
   const provisionalActivity = hotness.activityScore / 100;
-  const movementBps = 6 + provisionalPatternConfidence * 62 + provisionalActivity * 26 +
-    Math.abs(features.micropriceDeviationBps) * 0.8 + Math.max(0, features.spreadBps || 0) * 0.35;
+  const positivePressure = clamp(features.tradePressureFast, 0, 1);
+  const positiveMicroprice = clamp(features.micropriceDeviationBps / 8, 0, 1);
+  const positiveBook = clamp(features.bookImbalance, 0, 1);
+  const directionalConsensus = (positivePressure + positiveMicroprice + positiveBook) / 3;
+
+  // Live MFE shows a 75bp average target was unreachable for this horizon. Use an executable
+  // 30–50bp family for ordinary strong books, while costs can still raise the gross floor.
+  const movementBps = 10 + provisionalPatternConfidence * 22 +
+    clamp(features.dataQuality, 0, 1) * 10 + directionalConsensus * 10 +
+    provisionalActivity * 6 + clamp(features.ofiPersistence, 0, 1) * 4 +
+    Math.max(0, features.spreadBps || 0) * 0.15;
   const targetBps = clamp(
     Math.max(cfg.minTargetBps, totalTargetCostBps + cfg.minNetProfitBps, movementBps),
     cfg.minTargetBps,
     cfg.maxTargetBps,
   );
+  // The old 55–90% stop/target ratio made average losses too large for a fee-heavy scalp.
+  // Confidence now earns a tighter planned stop, while noise, costs and learned winner MAE may
+  // widen it below. The database additionally enforces tick-executable geometry.
   const provisionalStopBps = clamp(
-    Math.max(cfg.minStopBps, targetBps * (0.55 + (1 - provisionalPatternConfidence) * 0.35)),
+    Math.max(cfg.minStopBps, targetBps * (0.38 + (1 - provisionalPatternConfidence) * 0.22)),
     cfg.minStopBps,
     cfg.maxStopBps,
   );
@@ -141,13 +148,6 @@ export function evaluateLobEntry(
     cfg.trap,
   );
 
-  // A stop inside the book's own noise band is not a risk control, it is a coin flip with a
-  // fee attached. Widen it instead of pretending, and let the EV gate reject the trade if
-  // the wider stop no longer pays.
-  // A stop narrower than the execution friction is an automatic fee pump: even a normal
-  // one-spread move triggers a taker exit before the signal has had time to resolve.
-  // Market-specific winner MAE may widen this further, but every wider geometry is priced
-  // back through the EV gate below.
   const microstructureStopFloorBps = Math.max(
     cfg.minStopBps,
     Math.max(0, costs.spreadBps) * 2,
@@ -162,7 +162,6 @@ export function evaluateLobEntry(
 
   const disabled = new Set(cfg.disabledVetoes as LobTrapName[]);
   const activeVetoes = traps.vetoes.filter((name) => !disabled.has(name));
-
   const patterns = rawPatterns.map((pattern) => ({
     ...pattern,
     confidence: clamp(pattern.confidence * traps.confidenceMultiplier, 0, 1),
@@ -183,35 +182,38 @@ export function evaluateLobEntry(
 
   const patternConfidence = primary?.confidence ?? 0;
   const activity = hotness.activityScore / 100;
-  const trendAssist = clamp(features.trendContext, -1, 1) * 0.02; // auxiliary only; never a veto
+  const signedPressure = clamp(features.tradePressureFast, -1, 1);
+  const signedMicroprice = clamp(features.micropriceDeviationBps / 8, -1, 1);
+  const signedBook = clamp(features.bookImbalance, -1, 1);
+  const signedOfi = clamp(features.ofiPersistence, 0, 1) * (signedPressure >= 0 ? 1 : -1);
+  const qualityEdge = (clamp(features.dataQuality, 0, 1) - 0.35) * 0.05;
+  const trendAssist = clamp(features.trendContext, -1, 1) * 0.02;
 
-  // Geometry first. This term cannot be wrong -- it is arithmetic, not a belief.
+  // Geometry is arithmetic; the signal contributes only a bounded, signed displacement.
   const neutralWinRate = targetBps + stopBps > 0 ? stopBps / (targetBps + stopBps) : 0.5;
-
-  // The signal may only add a bounded edge, and the learned multiplier scales the edge
-  // rather than the probability, so a miscalibrated pattern can never drag the estimate
-  // below what the barriers themselves guarantee.
-  // Perp positioning enters here and only here: as one bounded term inside the signal edge,
-  // subject to the same MAX_SIGNAL_EDGE cap and the same learned multiplier as everything
-  // else. It cannot create a trade on its own and it cannot block one.
-  const rawSignalEdge = (patternConfidence - 0.35) * 0.24 + activity * 0.09 +
-    clamp(features.ofiPersistence, 0, 1) * 0.05 + trendAssist +
-    clamp(features.fundingEdge, -0.03, 0.03);
+  const rawSignalEdge = (patternConfidence - 0.45) * 0.20 + signedPressure * 0.08 +
+    signedMicroprice * 0.05 + signedBook * 0.05 + signedOfi * 0.04 + qualityEdge +
+    trendAssist + clamp(features.fundingEdge, -0.03, 0.03);
   const signalEdge = clamp(
     rawSignalEdge * clamp(cfg.patternProbabilityMultiplier, 0.3, 2) * traps.confidenceMultiplier,
     -MAX_SIGNAL_EDGE,
     MAX_SIGNAL_EDGE,
   );
 
+  // Activity determines whether either barrier resolves during the 180-second horizon. It no
+  // longer creates a bullish directional edge merely because the tape is busy.
   const resolveProbability = clamp(
-    0.45 + activity * 0.25 + patternConfidence * 0.20 +
-      clamp(features.tradeArrivalRate / 10, 0, 1) * 0.10,
+    0.40 + activity * 0.22 + patternConfidence * 0.18 +
+      clamp(features.tradeArrivalRate / 10, 0, 1) * 0.08 +
+      clamp(features.dataQuality, 0, 1) * 0.12,
     0.25,
-    0.97,
+    0.95,
   );
-  const pTarget = Math.min(resolveProbability, clamp(neutralWinRate + signalEdge, 0.05, 0.92));
+  const conditionalTargetShare = clamp(neutralWinRate + signalEdge, 0.05, 0.92);
+  const pTarget = resolveProbability * conditionalTargetShare;
+  const pStop = resolveProbability * (1 - conditionalTargetShare);
   const pTimeout = 1 - resolveProbability;
-  const pStop = Math.max(0, resolveProbability - pTarget);
+
   const rawPFill = clamp(
     0.30 + hotness.tradabilityScore / 100 * 0.48 + clamp(features.depthRatio / 3, 0, 1) * 0.12 -
       clamp((features.spreadBps || 0) / 50, 0, 1) * 0.10,
@@ -237,8 +239,6 @@ export function evaluateLobEntry(
     maxStopToTargetRatio: cfg.maxStopToTargetRatio,
     minNetRewardRiskRatio: cfg.minNetRewardRiskRatio,
   });
-  // Timeout is an executable close, not a discounted hypothetical. Charge the full entry,
-  // exit, latency and fee budget. The old arbitrary 0.75 multiplier understated this branch.
   const timeoutReturnNetBps = -(
     costs.roundTripFeeBps + costs.entrySlippageBps + costs.stopExitSlippageBps +
     Math.max(0, Number(costs.latencyPenaltyBps || 0))
@@ -249,36 +249,20 @@ export function evaluateLobEntry(
       ? costs.forecastBiasPenaltyBps as number
       : 0,
   );
-  // Bias is learned from FILLED trades, therefore it corrects conditional-on-fill EV.
-  // Multiplying first and subtracting later compared attempt EV against filled-only outcomes
-  // and systematically under-detected optimism when pFill < 1.
   const conditionalEvNetBps =
     pTarget * targetReturnNetBps + pStop * stopReturnNetBps + pTimeout * timeoutReturnNetBps -
     forecastBiasPenaltyBps;
   const attemptEvNetBps = pFill * conditionalEvNetBps;
   const evNetBps = conditionalEvNetBps;
 
-  // The haircut is applied to the signal edge, not to the geometric term: uncertainty lives
-  // in the model's beliefs, not in the arithmetic.
-  //
-  // v6.3.3: it is now a fraction of the edge rather than a flat subtraction. The absolute
-  // form was mis-scaled by an order of magnitude relative to what it was discounting --
-  // signal edges here run roughly 0.05 to 0.12 and are hard-capped at 0.18, so subtracting
-  // a flat 0.08 did not discount the signal, it deleted it. Live rejections confirmed this:
-  // 19 of 24 candidates failed on NET_EV_NOT_POSITIVE while the barrier arithmetic was fine.
-  //
-  // Worse, whenever the edge fell below the haircut the "conservative" probability dropped
-  // BELOW the neutral win rate, which asserts the signal is actively harmful. That is not
-  // caution; it is a sign error dressed as prudence.
-  //
-  // The EV threshold itself is untouched at zero. This does not admit negative-EV trades --
-  // it stops one arbitrary constant from manufacturing negative EV out of positive ones.
   const conservativeEdge = signalEdge * (1 - clamp(cfg.uncertaintyHaircut, 0, 0.9));
-  const conservativePTarget = Math.min(
-    resolveProbability,
-    clamp(neutralWinRate + conservativeEdge, 0.02, 0.92),
+  const conservativeConditionalTargetShare = clamp(
+    neutralWinRate + conservativeEdge,
+    0.02,
+    0.92,
   );
-  const conservativePStop = Math.max(0, resolveProbability - conservativePTarget);
+  const conservativePTarget = resolveProbability * conservativeConditionalTargetShare;
+  const conservativePStop = resolveProbability * (1 - conservativeConditionalTargetShare);
   const conditionalEvLowerBoundBps =
     conservativePTarget * targetReturnNetBps + conservativePStop * stopReturnNetBps +
     pTimeout * timeoutReturnNetBps - forecastBiasPenaltyBps;
