@@ -1,0 +1,86 @@
+name: Adaptive Search v6.13.0
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/adaptive-search-v6130.trigger
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-adaptive-search:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch scanner search breadth and version
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          scanner = Path('supabase/functions/market-scanner/index.ts')
+          text = scanner.read_text(encoding='utf-8')
+          replacements = [
+            (
+              '// Trading-booooo Market Scanner v6.1.0-HEAT — Supabase Edge Function',
+              '// Trading-booooo Market Scanner v6.13.0-REALIZED-EDGE-PROFIT-RETENTION — Supabase Edge Function',
+            ),
+            (
+              'import { rankMarketHeat, type MarketHeatScore, type MarketHeatTicker } from "../_shared/lob/market-heat.ts";\n',
+              'import { rankMarketHeat, type MarketHeatScore, type MarketHeatTicker } from "../_shared/lob/market-heat.ts";\nimport { loadLobSearchExpansion, selectLobSearchRows } from "./search-expansion.ts";\n',
+            ),
+            (
+              '  const finalistLimit = Math.round(clamp(finite(Deno.env.get("LOB_HEAT_FINALIST_LIMIT"), 12), 4, 20));\n',
+              '  const searchExpansionRaw = await loadLobSearchExpansion();\n  const configuredBaseFinalists = Math.round(clamp(\n    finite(Deno.env.get("LOB_HEAT_FINALIST_LIMIT"), searchExpansionRaw.baseFinalists),\n    4,\n    20,\n  ));\n  const searchExpansion = {\n    ...searchExpansionRaw,\n    baseFinalists: configuredBaseFinalists,\n    finalistLimit: searchExpansionRaw.enabled\n      ? Math.round(clamp(Math.max(configuredBaseFinalists, searchExpansionRaw.finalistLimit), configuredBaseFinalists, 20))\n      : configuredBaseFinalists,\n  };\n  const finalistLimit = searchExpansion.finalistLimit;\n',
+            ),
+            (
+              '  const selectedRows = heatRanked.slice(0, finalistLimit);\n',
+              '  const selectedRows = selectLobSearchRows(heatRanked, searchExpansion);\n',
+            ),
+            (
+              '  const observationMs = Math.round(clamp(finite(Deno.env.get("LOB_OBSERVATION_MS"), 8_000), 8_000, 12_000));\n',
+              '  const configuredObservationMs = Math.round(clamp(\n    finite(Deno.env.get("LOB_OBSERVATION_MS"), 8_000),\n    8_000,\n    12_000,\n  ));\n  const observationMs = searchExpansion.enabled\n    ? Math.round(clamp(Math.max(configuredObservationMs, searchExpansion.observationMs), 8_000, 12_000))\n    : configuredObservationMs;\n',
+            ),
+            (
+              '      heat_engine: {\n        mode: "WHOLE_MARKET_TICKER_DELTA",\n        sample_count: heatSample.sampleCount,\n        sample_elapsed_seconds: Number((heatSample.elapsedMs / 1000).toFixed(2)),\n        ranked_markets: heatSample.heat.length,\n        selected_for_lob: selectedRows.length,\n      },\n',
+              '      heat_engine: {\n        mode: "WHOLE_MARKET_TICKER_DELTA",\n        sample_count: heatSample.sampleCount,\n        sample_elapsed_seconds: Number((heatSample.elapsedMs / 1000).toFixed(2)),\n        ranked_markets: heatSample.heat.length,\n        selected_for_lob: selectedRows.length,\n      },\n      adaptive_search: {\n        enabled: searchExpansion.enabled,\n        reason: searchExpansion.reason,\n        failure_streak: searchExpansion.failureStreak,\n        core_finalists: searchExpansion.baseFinalists,\n        observed_finalists: selectedRows.length,\n        requested_finalists: finalistLimit,\n        observation_ms: observationMs,\n        rotation_pool: searchExpansion.rotationPool,\n        evaluated_at: searchExpansion.evaluatedAt,\n        thresholds_relaxed: false,\n      },\n',
+            ),
+            (
+              '      hard_economic_gate: "TARGET_NET_PROFIT_GT_0_AND_CONSERVATIVE_NET_EV_GT_0",\n',
+              '      hard_economic_gate: "TARGET_NET_PROFIT_GT_0_AND_CONSERVATIVE_NET_EV_GT_0",\n      search_policy: searchExpansion.enabled\n        ? "CORE_HEAT_PLUS_ROTATING_TAIL_WITH_UNCHANGED_ENTRY_GATES"\n        : "CORE_HEAT",\n      search_thresholds_relaxed: false,\n',
+            ),
+          ]
+          for old, new in replacements:
+            if old not in text:
+              raise SystemExit(f'missing scanner patch anchor: {old[:100]!r}')
+            text = text.replace(old, new, 1)
+          scanner.write_text(text, encoding='utf-8')
+
+          engine = Path('supabase/functions/market-scanner/engine.ts')
+          engine_text = engine.read_text(encoding='utf-8')
+          for old, new in [
+            ('// Trading-booooo Market Scanner v6.1.0-HEAT', '// Trading-booooo Market Scanner v6.13.0-REALIZED-EDGE-PROFIT-RETENTION'),
+            ('export const ENGINE_VERSION = "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION";', 'export const ENGINE_VERSION = "6.13.0-REALIZED-EDGE-PROFIT-RETENTION";'),
+          ]:
+            if old not in engine_text:
+              raise SystemExit(f'missing engine patch anchor: {old}')
+            engine_text = engine_text.replace(old, new, 1)
+          engine.write_text(engine_text, encoding='utf-8')
+          PY
+
+      - name: Commit adaptive scanner
+        run: |
+          if git diff --quiet; then
+            echo "No scanner changes required"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/market-scanner/index.ts supabase/functions/market-scanner/engine.ts
+          git commit -m "feat(v6.13): expand search instead of lowering entry gates"
+          git push
