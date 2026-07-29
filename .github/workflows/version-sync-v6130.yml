@@ -1,0 +1,63 @@
+name: Version Sync v6.13.0
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/version-sync-v6130.trigger
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Synchronize engine and dashboard revision
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              Path('supabase/functions/market-autotrader/index.ts'): [
+                  ('Trading-booooo v6.12.4-MISSION-CALIBRATED-LOB', 'Trading-booooo v6.13.0-REALIZED-EDGE-PROFIT-RETENTION'),
+                  ('const VERSION = "6.12.4-MISSION-CALIBRATED-LOB";', 'const VERSION = "6.13.0-REALIZED-EDGE-PROFIT-RETENTION";'),
+                  ('strategy_revision: "6.11.0-r1-CONTINUOUS-ADAPTIVE-EXECUTION"', 'strategy_revision: "6.13.0-REALIZED-EDGE-PROFIT-RETENTION"'),
+              ],
+              Path('docs/config.js'): [
+                  ('const UI_VERSION = "6.12.4-MISSION-CALIBRATED-LOB";', 'const UI_VERSION = "6.13.0-REALIZED-EDGE-PROFIT-RETENTION";'),
+                  ('const DASHBOARD_REVISION = "6.12.4-r1-VERSION-SYNCHRONIZED";', 'const DASHBOARD_REVISION = "6.13.0-r1-REALIZED-EDGE-PROFIT-RETENTION";'),
+              ],
+              Path('docs/index.html'): [
+                  ('6.12.4-r1-VERSION-SYNCHRONIZED', '6.13.0-r1-REALIZED-EDGE-PROFIT-RETENTION'),
+                  ('v6.12.4-MISSION-CALIBRATED-LOB', 'v6.13.0-REALIZED-EDGE-PROFIT-RETENTION'),
+              ],
+          }
+
+          for path, pairs in replacements.items():
+              text = path.read_text(encoding='utf-8')
+              original = text
+              for old, new in pairs:
+                  if old not in text:
+                      raise SystemExit(f'missing expected version string in {path}: {old}')
+                  text = text.replace(old, new)
+              if text != original:
+                  path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Commit synchronized version
+        run: |
+          if git diff --quiet; then
+            echo "No version changes required"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/market-autotrader/index.ts docs/config.js docs/index.html
+          git commit -m "chore(v6.13): synchronize engine and dashboard revision"
+          git push
