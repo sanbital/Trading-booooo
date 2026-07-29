@@ -1203,7 +1203,11 @@ async function sampleWholeMarketHeat(
   const intervalMs = Math.round(
     clamp(finite(Deno.env.get("LOB_HEAT_SAMPLE_INTERVAL_MS"), 900), 400, 2000),
   );
-  const snapshots: MarketHeatTicker[][] = [heatTickerSnapshot(firstRows, Date.now())];
+  const eligibleRows = (rows: TickerRow[]) =>
+    exchange === "binance" ? rows.filter((row) => String(row.market).endsWith("USDT")) : rows;
+  const snapshots: MarketHeatTicker[][] = [
+    heatTickerSnapshot(eligibleRows(firstRows), Date.now()),
+  ];
   let latestRows = firstRows;
   for (let sample = 1; sample < sampleCount; sample++) {
     await sleep(intervalMs);
@@ -1215,7 +1219,7 @@ async function sampleWholeMarketHeat(
       : Array.isArray(raw)
       ? raw as TickerRow[]
       : [];
-    snapshots.push(heatTickerSnapshot(latestRows, Date.now()));
+    snapshots.push(heatTickerSnapshot(eligibleRows(latestRows), Date.now()));
   }
   const heat = rankMarketHeat(
     snapshots,

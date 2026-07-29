@@ -14,6 +14,15 @@ Deno.test("v7 LOB route owns entry authority and external indicators are exclude
   assert(scanner.includes("decision = lobResult.decision"));
 });
 
+Deno.test("v7 ranks Binance USDT and Upbit KRW universes independently", async () => {
+  const scanner = await Deno.readTextFile(
+    new URL("supabase/functions/market-scanner/index.ts", ROOT),
+  );
+  assert(scanner.includes('rows.filter((row) => String(row.market).endsWith("USDT"))'));
+  assert(scanner.includes("const topTen = heatSample.heat.slice(0, 10)"));
+  assert(scanner.includes("const selectedRows = heatRanked"));
+});
+
 Deno.test("v7 LOB route has no modeled EV, pWin or pFill hard gate", async () => {
   const [entry, payoff] = await Promise.all([
     Deno.readTextFile(new URL("supabase/functions/_shared/lob/entry.ts", ROOT)),
