@@ -1,4 +1,4 @@
-// Trading-booooo v6.12.4-MISSION-CALIBRATED-LOB — autonomous spot orchestrator.
+// Trading-booooo v6.13.0-REALIZED-EDGE-PROFIT-RETENTION — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -114,7 +114,7 @@ import {
   summarizeEntryAdmission,
 } from "./entry-admission.ts";
 
-const VERSION = "6.12.4-MISSION-CALIBRATED-LOB";
+const VERSION = "6.13.0-REALIZED-EDGE-PROFIT-RETENTION";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -2555,7 +2555,7 @@ async function enterCandidateInner(
     });
     scalpAudit = {
       strategy: "LOB_SCALP",
-      strategy_revision: "6.11.0-r1-CONTINUOUS-ADAPTIVE-EXECUTION",
+      strategy_revision: "6.13.0-REALIZED-EDGE-PROFIT-RETENTION",
       recommendation,
       pattern: decision.pattern,
       patterns: decision.patterns,
