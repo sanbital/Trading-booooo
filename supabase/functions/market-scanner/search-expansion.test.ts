@@ -1,5 +1,9 @@
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { selectLobSearchRows, type LobSearchExpansion } from "./search-expansion.ts";
+import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  selectCostAwareLobRows,
+  selectLobSearchRows,
+  type LobSearchExpansion,
+} from "./search-expansion.ts";
 
 function expansion(overrides: Partial<LobSearchExpansion> = {}): LobSearchExpansion {
   return {
@@ -40,4 +44,22 @@ Deno.test("expanded search never duplicates or exceeds the configured limit", ()
   const selected = selectLobSearchRows(rows, expansion({ finalistLimit: 20 }), 180_000);
   assertEquals(selected.length, 20);
   assertEquals(new Set(selected).size, 20);
+});
+
+Deno.test("cost-aware search preserves heat leaders and reserves liquid markets", () => {
+  const rows = Array.from({ length: 30 }, (_, index) => ({
+    market: `M${index + 1}`,
+    liquidity_score: index >= 20 ? 1_000 - index : 30 - index,
+    turnover_24h_quote: index >= 20 ? 1_000_000_000 - index : 30 - index,
+  }));
+  const selected = selectCostAwareLobRows(
+    rows,
+    expansion({ enabled: false, finalistLimit: 12 }),
+    0,
+  );
+  assertEquals(selected.length, 12);
+  assertEquals(selected.slice(0, 8).map((row) => row.market), rows.slice(0, 8).map((row) => row.market));
+  assert(selected.some((row) => row.market === "M21"));
+  assert(selected.some((row) => row.market === "M22"));
+  assertEquals(new Set(selected.map((row) => row.market)).size, 12);
 });
