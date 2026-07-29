@@ -7,9 +7,9 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://etaajwpernzrcdrifdnw.supabase.co; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; upgrade-insecure-requests">
   <meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
   <title>Trading-booooo AI Trader Dashboard</title>
-  <link rel="stylesheet" href="./styles.css?v=6.13.0-r1-REALIZED-EDGE-PROFIT-RETENTION">
-  <script src="./config.js?v=6.13.0-r1-REALIZED-EDGE-PROFIT-RETENTION"></script>
-  <script src="./app.js?v=6.13.0-r1-REALIZED-EDGE-PROFIT-RETENTION" defer></script>
+  <link rel="stylesheet" href="./styles.css?v=6.14.1-r1-MOMENTUM-LIVE-TRADE-CONTRACT">
+  <script src="./config.js?v=6.14.1-r1-MOMENTUM-LIVE-TRADE-CONTRACT"></script>
+  <script src="./app.js?v=6.14.1-r1-MOMENTUM-LIVE-TRADE-CONTRACT" defer></script>
 </head>
 <body>
   <div class="ambient ambient-a"></div>
@@ -20,7 +20,7 @@
       <span class="brand-mark">TB</span>
       <span>
         <strong>TRADING-BOOOOO</strong>
-        <small id="brand-subtitle">UPBIT KRW + BINANCE USDT SPOT · v6.13.0-REALIZED-EDGE-PROFIT-RETENTION</small>
+        <small id="brand-subtitle">UPBIT KRW + BINANCE USDT SPOT · v6.14.1-MOMENTUM-LIVE-TRADE-CONTRACT</small>
       </span>
     </a>
     <div class="status-chip"><span class="status-dot"></span> AUTO ENGINE · 기본 PAPER</div>
@@ -78,200 +78,35 @@
     <section id="results" class="results hidden">
       <section class="result-header panel">
         <div>
-          <p class="eyebrow">SCAN VERDICT</p>
-          <h2 id="headline">분석 결과</h2>
-          <p id="result-subline" class="muted"></p>
+          <p class="eyebrow">SCAN RESULT</p>
+          <h2 id="result-title">분석 결과</h2>
+          <p id="result-summary"></p>
         </div>
         <div class="result-actions">
-          <button id="copy-report-btn" class="button-secondary" type="button">심층분석용 리포트 복사</button>
-          <span id="copy-status" class="copy-status"></span>
+          <span id="analysis-time"></span>
+          <button id="report-button" type="button">HTML 리포트 저장</button>
         </div>
       </section>
 
-      <div id="exchange-warning" class="alert alert-warning hidden" role="status"></div>
+      <section id="market-list" class="market-list"></section>
+    </section>
 
-      <section class="stats-grid" aria-label="스캔 범위">
-        <article class="stat panel"><span id="listed-market-label">양 거래소 상장 종목</span><strong id="total-markets">—</strong><small>전수 1차 점검</small></article>
-        <article class="stat panel"><span>안전 필터 통과</span><strong id="eligible-markets">—</strong><small>전부 15분봉 기간검증</small></article>
-        <article class="stat panel"><span>기간 정밀분석</span><strong id="deep-markets">—</strong><small>양 거래소 합계</small></article>
-        <article class="stat panel"><span>총 분석시간</span><strong id="elapsed">—</strong><small id="data-source-label">두 거래소 공개시세</small></article>
-      </section>
-
-      <section id="no-buy-banner" class="no-buy panel hidden">
-        <span class="no-buy-icon">—</span>
-        <div><strong>현재 매수 추천 없음</strong><p>강제조건을 모두 통과한 종목이 없습니다. 아래 관심 후보는 진입 추천이 아니라 재점검 대상입니다.</p></div>
-      </section>
-
-      <section id="primary-section" class="primary panel hidden">
-        <div class="primary-top">
-          <div>
-            <p class="eyebrow">PRIMARY PICK</p>
-            <div class="asset-title"><h2 id="primary-name">—</h2><span id="primary-market">—</span></div>
-            <p id="primary-decision" class="decision-badge">현재 매수 후보</p>
-          </div>
-          <div class="score-block">
-            <div class="score-ring"><strong id="primary-score">—</strong><span>점</span></div>
-            <p>신뢰도 <b id="primary-confidence">—</b></p>
-          </div>
-        </div>
-
-        <div class="price-grid">
-          <article><span>현재가</span><strong id="primary-price">—</strong><small id="primary-change">—</small></article>
-          <article><span>매수 검토 구간</span><strong id="primary-entry">—</strong><small>체결 슬리피지 별도 반영</small></article>
-          <article class="target"><span>진입 시 예상 매도가</span><strong id="primary-short-target">—</strong><small id="primary-short-return">수수료·슬리피지 반영</small></article>
-          <article class="target"><span>중기 목표가</span><strong id="primary-medium-target">—</strong><small id="primary-medium-return">—</small></article>
-          <article class="forecast"><span>교정 예상 상승률</span><strong id="primary-forecast-upside">—</strong><small id="primary-forecast-probability">—</small></article>
-          <article class="forecast"><span>예상 가격 범위</span><strong id="primary-forecast-range">—</strong><small id="primary-forecast-calibration">—</small></article>
-          <article class="danger"><span>손절가격</span><strong id="primary-stop">—</strong><small id="primary-stop-loss">—</small></article>
-          <article><span>추천 투입금</span><strong id="primary-investment">—</strong><small id="primary-risk-budget">—</small></article>
-        </div>
-
-        <div class="horizon-card">
-          <div><span>추세 유지 추정</span><strong id="primary-horizon">—</strong></div>
-          <div class="persistence"><span>지속성 점수</span><div class="meter"><i id="persistence-meter"></i></div><b id="persistence-score">—</b></div>
-          <p id="primary-horizon-note">—</p>
-        </div>
-
-        <div class="evidence-grid">
-          <article><h3>매수 근거</h3><ul id="primary-positives"></ul></article>
-          <article><h3>주의·무효화 조건</h3><ul id="primary-warnings"></ul></article>
-        </div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-heading">
-          <div><p class="eyebrow">HOT LOB</p><h2 id="finalists-title">실시간 호가창 상위 후보</h2></div>
-          <p id="finalists-description">현재 거래대금·체결속도·호가 갱신률과 LOB 패턴을 기준으로 정렬한 결과입니다.</p>
-        </div>
-        <div id="recommendations-grid" class="candidate-grid"></div>
-      </section>
-
-      <section class="section-block">
-        <div class="section-heading">
-          <div><p class="eyebrow">PERIOD RANKING</p><h2 id="ranking-title">양 거래소 기간분석 상위 20종목</h2></div>
-          <p>이 표의 점수만으로 매수하지 마세요. BUY 표시는 최종 호가·체결 게이트까지 통과한 경우에만 부여됩니다.</p>
-        </div>
-        <div class="table-wrap panel">
-          <table>
-            <thead><tr><th>순위</th><th>거래소</th><th>종목</th><th>현재가</th><th>24H</th><th>거래대금</th><th>기간점수</th><th>5분</th><th>15분</th><th>4시간</th><th>일봉</th></tr></thead>
-            <tbody id="ranking-body"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="method-grid">
-        <article class="panel">
-          <p class="eyebrow">COVERAGE</p><h3>제외 사유</h3><ul id="coverage-exclusions" class="compact-list"></ul>
-        </article>
-        <article class="panel">
-          <p class="eyebrow">DATA WINDOW</p><h3>조회 기간</h3>
-          <ul class="compact-list"><li>5분봉 144개 · 최근 약 12시간</li><li>15분봉 192개 · 최근 약 48시간</li><li>4시간봉 180개 · 최근 약 30일</li><li>일봉 200개 · 최근 약 200일</li><li>최종 후보 · 실시간 동적 호가 기본 15초</li><li>저유동 경계 후보 · 최대 20초</li></ul>
-        </article>
-        <article class="panel warning-panel">
-          <p class="eyebrow">RISK NOTICE</p><h3>판정의 한계</h3>
-          <p>목표가·손절가·보유기간은 현재 시점의 공개시세에 근거한 조건부 추정입니다. 자동매매를 켜더라도 급격한 갭, API·네트워크 장애, 예상 밖의 슬리피지와 시장 이벤트로 손실이 발생할 수 있으며 수익을 보장하지 않습니다. 실거래는 별도 LIVE_LIMITED 승인 후에만 시작됩니다.</p>
-        </article>
-      </section>
+    <section class="panel methodology">
+      <p class="eyebrow">ANALYSIS PIPELINE</p>
+      <h2>후보를 뽑는 순서</h2>
+      <ol>
+        <li><strong>전 종목 안전 필터</strong><span>거래 가능 여부, 유의 종목, 24시간 거래대금, 데이터 신선도를 먼저 확인합니다.</span></li>
+        <li><strong>Heat + 모멘텀 + 유동성 관찰</strong><span>전 종목 거래대금 가속과 24시간 상승 흐름을 보되, 동일 관찰창의 공격 매수·마이크로프라이스·호가 방향이 확인된 종목만 모멘텀 후보로 인정합니다.</span></li>
+        <li><strong>실시간 호가·체결</strong><span>짧은 웹소켓 관찰창에서 스프레드, 깊이, 체결압력, 매도벽 소진·재충전과 지지붕괴를 검증합니다.</span></li>
+        <li><strong>비용·위험 계산</strong><span>수수료, 슬리피지, 호가 단위, 손절 비용을 차감한 보수 EV와 손익비가 양수인지 확인합니다.</span></li>
+        <li><strong>조건부 결론</strong><span>현재가 매수, 눌림목 대기, 회피 중 하나로 분류하고 무효화 조건과 청산 계획을 함께 제공합니다.</span></li>
+      </ol>
     </section>
     </div>
 
-    <section id="trader-view" class="app-view hidden" aria-label="자동매매 운영 대시보드">
-      <section id="trader-login" class="panel trader-login">
-        <div>
-          <p class="eyebrow">PRIVATE OPERATOR CONSOLE</p>
-          <h1>자동매매 운영 대시보드</h1>
-          <p class="muted">보안을 위해 토큰은 브라우저 저장소에 보관하지 않습니다. GitHub Secret의 <code>DASHBOARD_ACCESS_TOKEN</code> 값을 입력하세요. 미설정 상태라면 기존 <code>LEARNING_ACCESS_TOKEN</code>도 사용할 수 있습니다.</p>
-        </div>
-        <div class="token-form">
-          <input id="trader-token" type="password" autocomplete="off" placeholder="DASHBOARD_ACCESS_TOKEN">
-          <button id="unlock-trader" class="scan-button" type="button">대시보드 열기</button>
-          <p id="trader-login-status" class="scan-status" aria-live="polite"></p>
-        </div>
-      </section>
-
-      <div id="trader-console" class="hidden">
-        <section class="panel operator-header">
-          <div>
-            <p class="eyebrow">AUTONOMOUS SPOT OPERATOR</p>
-            <h1>UPBIT KRW · BINANCE USDT</h1>
-            <p id="operator-updated" class="muted">상태 불러오는 중</p>
-          </div>
-          <div class="operator-actions">
-            <button id="refresh-trader" class="button-secondary" type="button">새로고침</button>
-            <button id="lock-trader" class="button-secondary" type="button">잠금</button>
-          </div>
-        </section>
-
-        <div id="trader-alert" class="alert alert-warning hidden" role="alert"></div>
-        <div id="trader-notice" class="alert alert-info hidden" role="status"></div>
-
-        <section class="trader-summary-grid">
-          <article class="panel summary-card"><span>운용 모드</span><strong id="trader-mode">—</strong><small id="trader-mode-note">—</small></article>
-          <article class="panel summary-card"><span>전략</span><strong id="trader-strategy">—</strong><small id="trader-strategy-note">—</small></article>
-          <article class="panel summary-card"><span>스캘핑 손실 제한</span><strong id="scalp-risk">—</strong><small id="scalp-risk-note">—</small></article>
-          <article class="panel summary-card"><span>신규 매수</span><strong id="entry-state">—</strong><small id="entry-state-note">—</small></article>
-          <article class="panel summary-card"><span>게이트웨이</span><strong id="gateway-state">—</strong><small id="gateway-heartbeat">—</small></article>
-          <article class="panel summary-card"><span>열린 포지션</span><strong id="open-position-count">—</strong><small id="open-position-note">—</small></article>
-        </section>
-
-        <section class="panel control-panel">
-          <div class="section-heading compact-heading">
-            <div><p class="eyebrow">OPERATOR CONTROL</p><h2>운용 제어</h2></div>
-            <p>재개 버튼은 대기시간 없이 즉시 신규 매수를 열고 바로 통합 스캔을 시작합니다.</p>
-          </div>
-          <div class="control-buttons">
-            <button id="pause-entries" class="button-secondary" type="button">신규 매수 중지</button>
-            <button id="resume-now" class="button-primary" type="button">즉시 재개 + 지금 스캔</button>
-            <button id="withdrawal-mode" class="button-secondary" type="button">출금 모드 시작</button>
-            <button id="reconcile-now" class="button-secondary" type="button">계좌 즉시 대조</button>
-            <button id="set-paper-mode" class="button-secondary" type="button">PAPER 전환</button>
-            <button id="set-live-mode" class="button-danger-outline" type="button">LIVE_LIMITED 전환</button>
-            <button id="emergency-liquidate" class="button-danger" type="button">비상 전량 청산</button>
-          </div>
-          <p id="control-status" class="scan-status" aria-live="polite"></p>
-        </section>
-
-        <section class="section-block">
-          <div class="section-heading">
-            <div><p class="eyebrow">CAPITAL ALLOCATION</p><h2>거래소별 운용 사이즈</h2></div>
-            <p>전액은 업비트 KRW·바이낸스 USDT 현금과 봇 보유 포지션만 기준으로 보호금을 제외한 전체를 운용합니다. 수동 보유 코인은 운용 한도에서 제외됩니다.</p>
-          </div>
-          <div class="allocation-grid">
-            <article class="panel allocation-card" data-allocation-exchange="upbit">
-              <div class="allocation-head"><div><span>UPBIT</span><h3>원화 운용</h3></div><label class="switch-line"><input id="upbit-enabled" type="checkbox"> 신규 매수</label></div>
-              <div class="balance-grid"><div><span>총자산</span><strong id="upbit-equity">—</strong></div><div><span>주문 가능 원화</span><strong id="upbit-available">—</strong></div><div><span>봇 운용 한도</span><strong id="upbit-managed">—</strong></div><div><span>신규 투자 가능</span><strong id="upbit-managed-available">—</strong></div></div>
-              <label>운용 방식<select id="upbit-allocation-mode"><option value="ALL">전액</option><option value="FIXED">선택 금액</option></select></label>
-              <label>선택 운용금<input id="upbit-allocation-value" type="number" min="0" step="10000"><em>KRW</em></label>
-              <label>보호 원화<input id="upbit-reserve-value" type="number" min="0" step="10000"><em>KRW</em></label>
-            </article>
-            <article class="panel allocation-card" data-allocation-exchange="binance">
-              <div class="allocation-head"><div><span>BINANCE</span><h3>USDT 운용</h3></div><label class="switch-line"><input id="binance-enabled" type="checkbox"> 신규 매수</label></div>
-              <div class="balance-grid"><div><span>총자산</span><strong id="binance-equity">—</strong></div><div><span>주문 가능 USDT</span><strong id="binance-available">—</strong></div><div><span>봇 운용 한도</span><strong id="binance-managed">—</strong></div><div><span>신규 투자 가능</span><strong id="binance-managed-available">—</strong></div></div>
-              <label>운용 방식<select id="binance-allocation-mode"><option value="ALL">전액</option><option value="FIXED">선택 금액</option></select></label>
-              <label>선택 운용금<input id="binance-allocation-value" type="number" min="0" step="10"><em>USDT</em></label>
-              <label>보호 USDT<input id="binance-reserve-value" type="number" min="0" step="10"><em>USDT</em></label>
-            </article>
-          </div>
-          <div class="allocation-save-row"><button id="save-allocation" class="button-primary" type="button">운용 사이즈 저장</button><span id="allocation-status" class="copy-status"></span></div>
-        </section>
-
-        <section class="section-block">
-          <div class="section-heading"><div><p class="eyebrow">OPEN POSITIONS</p><h2>현재 포지션</h2></div><p>수동 매도·출금이 감지되면 장부를 실제 잔고로 맞추고 신규 매수를 자동 중지합니다.</p></div>
-          <div class="table-wrap panel"><table><thead><tr><th>거래소</th><th>종목</th><th>상태</th><th>모드</th><th>수량</th><th>평균 진입</th><th>손절</th><th>목표1</th><th>보유 종료</th></tr></thead><tbody id="positions-body"></tbody></table></div>
-        </section>
-
-        <section class="dashboard-lower-grid">
-          <article class="panel"><p class="eyebrow">LEARNING</p><h3>자기교정 상태</h3><div id="learning-status" class="detail-stack"></div></article>
-          <article class="panel"><p class="eyebrow">RECENT EVENTS</p><h3>최근 이벤트</h3><div id="events-list" class="event-list"></div></article>
-          <article class="panel"><p class="eyebrow">CASH FLOW</p><h3>잔고 변동·계좌 대조 기록</h3><div id="cashflow-list" class="event-list"></div></article>
-        </section>
-      </div>
-    </section>
+    <div id="trader-view" class="app-view hidden">
+      <section id="trader-dashboard" class="panel"></section>
+    </div>
   </main>
-
-  <footer>
-    <span>TRADING-BOOOOO · SCAN · LEARN · EXECUTE</span>
-    <span id="footer-meta">엔진 준비 중</span>
-  </footer>
 </body>
 </html>
