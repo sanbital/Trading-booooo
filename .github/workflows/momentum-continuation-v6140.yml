@@ -1,0 +1,420 @@
+name: Momentum Continuation v6.14.0
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/momentum-continuation-v6140.trigger
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-momentum:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch shared LOB momentum model and search allocation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'missing patch anchor in {path}: {old[:140]!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace_once(
+              'supabase/functions/_shared/lob/types.ts',
+              '  | "OFI_CONTINUATION"\n  | "REPLENISHMENT_ICEBERG";',
+              '  | "OFI_CONTINUATION"\n  | "MOMENTUM_CONTINUATION"\n  | "REPLENISHMENT_ICEBERG";',
+          )
+
+          replace_once(
+              'supabase/functions/_shared/lob/patterns.ts',
+              '  const votes = positiveVotes(f);\n\n  const absorptionPrimary',
+              '''  const votes = positiveVotes(f);
+  // heatPeriod stores signed 24h return as change_pct / 400 in trendContext. Momentum is
+  // present-tense continuation only when the whole-market ticker pulse and the live tape agree.
+  const impliedChange24hPct = clamp(f.trendContext * 400, -100, 100);
+  const changeScore = clamp((impliedChange24hPct - 3) / 27);
+  const accelerationScore = clamp(f.notionalAcceleration);
+  const heatScore = clamp(f.marketHeatScore / 100);
+  const positiveMicroMomentum = clamp(f.micropriceDeviationBps / 5);
+  const momentumPrimary = impliedChange24hPct >= 3 && impliedChange24hPct <= 60 &&
+    f.marketHeatScore >= 45 && f.notionalAcceleration >= 0.02 &&
+    f.tradePressureFast >= 0.25 && f.micropriceDeviationBps >= 0 &&
+    f.bookImbalance > -0.65 && votes >= 2 &&
+    f.spreadBps != null && f.spreadBps <= 8 &&
+    f.recentNotionalPerSecond > 0 && f.tradeCount >= 8;
+
+  const absorptionPrimary''',
+          )
+
+          replace_once(
+              'supabase/functions/_shared/lob/patterns.ts',
+              '  const absorption = signal(\n',
+              '''  const momentum = signal(
+    "MOMENTUM_CONTINUATION",
+    changeScore * 0.24 + positiveFlow * 0.24 + accelerationScore * 0.18 +
+      heatScore * 0.14 + positiveMicroMomentum * 0.10 + clamp(votes / 3) * 0.10,
+    momentumPrimary,
+    [
+      "24시간 상승 흐름 위에서 전 종목 거래대금 가속이 재점화됨",
+      "공격 매수·마이크로프라이스·근접 호가가 상승 지속을 확인함",
+    ],
+    [
+      "거래대금 가속 소멸",
+      "공격 체결압력 음전환",
+      "마이크로프라이스 하락 전환",
+      "돌파 레벨 재진입",
+    ],
+  );
+
+  const absorption = signal(
+''',
+          )
+
+          replace_once(
+              'supabase/functions/_shared/lob/patterns.ts',
+              '  return [absorption, depletion, reclaim, ofi, iceberg]\n',
+              '  return [momentum, absorption, depletion, reclaim, ofi, iceberg]\n',
+          )
+
+          replace_once(
+              'supabase/functions/_shared/lob/entry.ts',
+              'const MAX_SIGNAL_EDGE = 0.24;',
+              'const MAX_SIGNAL_EDGE = 0.24;\nconst MAX_MOMENTUM_SIGNAL_EDGE = 0.40;',
+          )
+
+          replace_once(
+              'supabase/functions/_shared/lob/entry.ts',
+              '''  const directionalConsensus = (positivePressure + positiveMicroprice + positiveBook) / 3;
+
+  // Live MFE shows a 75bp average target was unreachable for this horizon. Use an executable
+  // 30–50bp family for ordinary strong books, while costs can still raise the gross floor.
+  const movementBps = 10 + provisionalPatternConfidence * 22 +
+    clamp(features.dataQuality, 0, 1) * 10 + directionalConsensus * 10 +
+    provisionalActivity * 6 + clamp(features.ofiPersistence, 0, 1) * 4 +
+    Math.max(0, features.spreadBps || 0) * 0.15;
+  const targetBps = clamp(
+    Math.max(cfg.minTargetBps, totalTargetCostBps + cfg.minNetProfitBps, movementBps),
+    cfg.minTargetBps,
+    cfg.maxTargetBps,
+  );
+''',
+              '''  const directionalConsensus = (positivePressure + positiveMicroprice + positiveBook) / 3;
+  const provisionalMomentum = rawPatterns.find((pattern) =>
+    pattern.name === "MOMENTUM_CONTINUATION" && pattern.primary
+  ) || null;
+  const impliedChange24hPct = clamp(features.trendContext * 400, -100, 100);
+  const momentumChangeScore = clamp((impliedChange24hPct - 3) / 27, 0, 1);
+  const momentumPulse = clamp(
+    momentumChangeScore * 0.22 + positivePressure * 0.28 +
+      clamp(features.notionalAcceleration, 0, 1) * 0.22 +
+      clamp(features.marketHeatScore / 100, 0, 1) * 0.16 +
+      clamp(features.micropriceDeviationBps / 5, 0, 1) * 0.12,
+    0,
+    1,
+  );
+
+  // Ordinary LOB patterns retain the measured 30–50bp geometry. A live continuation pulse
+  // earns a wider 60–140bp bracket because Binance's 20bp round-trip fee makes a 30bp target
+  // economically meaningless on a multi-percent intraday mover.
+  const ordinaryMovementBps = 10 + provisionalPatternConfidence * 22 +
+    clamp(features.dataQuality, 0, 1) * 10 + directionalConsensus * 10 +
+    provisionalActivity * 6 + clamp(features.ofiPersistence, 0, 1) * 4 +
+    Math.max(0, features.spreadBps || 0) * 0.15;
+  const momentumMovementBps = 55 + momentumChangeScore * 45 +
+    positivePressure * 25 + clamp(features.notionalAcceleration, 0, 1) * 20 +
+    clamp(features.marketHeatScore / 100, 0, 1) * 15;
+  const movementBps = provisionalMomentum ? momentumMovementBps : ordinaryMovementBps;
+  const targetCeilingBps = provisionalMomentum ? Math.max(cfg.maxTargetBps, 140) : cfg.maxTargetBps;
+  const targetBps = clamp(
+    Math.max(cfg.minTargetBps, totalTargetCostBps + cfg.minNetProfitBps, movementBps),
+    cfg.minTargetBps,
+    targetCeilingBps,
+  );
+''',
+          )
+
+          replace_once(
+              'supabase/functions/_shared/lob/entry.ts',
+              '''  const provisionalStopBps = clamp(
+    Math.max(cfg.minStopBps, targetBps * (0.38 + (1 - provisionalPatternConfidence) * 0.22)),
+    cfg.minStopBps,
+    cfg.maxStopBps,
+  );
+''',
+              '''  const plannedStopRatio = provisionalMomentum
+    ? 0.28 + (1 - provisionalPatternConfidence) * 0.14
+    : 0.38 + (1 - provisionalPatternConfidence) * 0.22;
+  const provisionalStopBps = clamp(
+    Math.max(cfg.minStopBps, targetBps * plannedStopRatio),
+    cfg.minStopBps,
+    cfg.maxStopBps,
+  );
+''',
+          )
+
+          replace_once(
+              'supabase/functions/_shared/lob/entry.ts',
+              '''  const patternConfidence = primary?.confidence ?? 0;
+  const activity = hotness.activityScore / 100;
+''',
+              '''  const patternConfidence = primary?.confidence ?? 0;
+  const isMomentum = primary?.name === "MOMENTUM_CONTINUATION";
+  const activity = hotness.activityScore / 100;
+''',
+          )
+
+          replace_once(
+              'supabase/functions/_shared/lob/entry.ts',
+              '''  const rawSignalEdge = (patternConfidence - 0.45) * 0.20 + signedPressure * 0.08 +
+    signedMicroprice * 0.05 + signedBook * 0.05 + signedOfi * 0.04 + qualityEdge +
+    trendAssist + clamp(features.fundingEdge, -0.03, 0.03);
+  const signalEdge = clamp(
+    rawSignalEdge * clamp(cfg.patternProbabilityMultiplier, 0.3, 2) * traps.confidenceMultiplier,
+    -MAX_SIGNAL_EDGE,
+    MAX_SIGNAL_EDGE,
+  );
+''',
+              '''  const momentumDirectionalEdge = isMomentum
+    ? momentumPulse * 0.45 + momentumChangeScore * 0.14
+    : 0;
+  const rawSignalEdge = (patternConfidence - 0.45) * 0.20 + signedPressure * 0.08 +
+    signedMicroprice * 0.05 + signedBook * 0.05 + signedOfi * 0.04 + qualityEdge +
+    trendAssist + clamp(features.fundingEdge, -0.03, 0.03) + momentumDirectionalEdge;
+  const maxSignalEdge = isMomentum ? MAX_MOMENTUM_SIGNAL_EDGE : MAX_SIGNAL_EDGE;
+  const signalEdge = clamp(
+    rawSignalEdge * clamp(cfg.patternProbabilityMultiplier, 0.3, 2) * traps.confidenceMultiplier,
+    -maxSignalEdge,
+    maxSignalEdge,
+  );
+''',
+          )
+
+          replace_once(
+              'supabase/functions/_shared/lob/entry.ts',
+              '''  const resolveProbability = clamp(
+    0.40 + activity * 0.22 + patternConfidence * 0.18 +
+      clamp(features.tradeArrivalRate / 10, 0, 1) * 0.08 +
+      clamp(features.dataQuality, 0, 1) * 0.12,
+    0.25,
+    0.95,
+  );
+''',
+              '''  const resolveProbability = clamp(
+    0.40 + activity * 0.22 + patternConfidence * 0.18 +
+      clamp(features.tradeArrivalRate / 10, 0, 1) * 0.08 +
+      clamp(features.dataQuality, 0, 1) * 0.12 +
+      (isMomentum ? 0.10 + momentumPulse * 0.12 : 0),
+    0.25,
+    0.95,
+  );
+''',
+          )
+
+          replace_once(
+              'supabase/functions/_shared/lob/entry.ts',
+              '''    maxHoldingSeconds: Math.min(cfg.absoluteMaxHoldingSeconds, Math.max(1, cfg.maxHoldingSeconds)),
+''',
+              '''    maxHoldingSeconds: Math.min(
+      cfg.absoluteMaxHoldingSeconds,
+      Math.max(1, isMomentum ? Math.min(90, cfg.maxHoldingSeconds) : cfg.maxHoldingSeconds),
+    ),
+''',
+          )
+
+          replace_once(
+              'supabase/functions/market-scanner/search-expansion.ts',
+              '''export type LobRankedSearchRow = {
+  market: string;
+  liquidity_score?: number;
+  turnover_24h_quote?: number;
+};
+''',
+              '''export type LobRankedSearchRow = {
+  market: string;
+  liquidity_score?: number;
+  turnover_24h_quote?: number;
+  change_24h_pct?: number;
+  market_heat_score?: number;
+  notional_acceleration?: number;
+};
+''',
+          )
+
+          path = Path('supabase/functions/market-scanner/search-expansion.ts')
+          text = path.read_text(encoding='utf-8')
+          start = text.index('export function selectCostAwareLobRows')
+          new_function = '''export function selectCostAwareLobRows<T extends LobRankedSearchRow>(
+  rows: T[],
+  expansion: LobSearchExpansion,
+  nowMs = Date.now(),
+): T[] {
+  const source = Array.isArray(rows) ? rows : [];
+  if (!source.length) return [];
+  const limit = Math.min(source.length, expansion.finalistLimit);
+  const liquidityReserve = Math.min(3, Math.max(1, Math.floor(expansion.baseFinalists / 4)));
+  const momentumReserve = Math.min(4, Math.max(2, Math.floor(expansion.baseFinalists / 3)));
+  const heatCoreCount = Math.max(
+    1,
+    Math.min(limit, expansion.baseFinalists - liquidityReserve - momentumReserve),
+  );
+  const selected: T[] = [];
+  const seen = new Set<string>();
+  const add = (row: T | undefined) => {
+    if (!row || seen.has(row.market) || selected.length >= limit) return;
+    seen.add(row.market);
+    selected.push(row);
+  };
+
+  source.slice(0, heatCoreCount).forEach(add);
+
+  // Force-observe large gainers only while the present whole-market pulse is still active.
+  // A high 24h return with zero acceleration ranks below an earlier-stage 5–15% mover whose
+  // turnover is currently accelerating, so the lane does not simply chase yesterday's pump.
+  [...source]
+    .filter((row) => finite(row.change_24h_pct, 0) >= 3 && finite(row.change_24h_pct, 0) <= 60)
+    .sort((left, right) => {
+      const score = (row: T) =>
+        Math.min(30, finite(row.change_24h_pct, 0)) * 2 +
+        finite(row.notional_acceleration, 0) * 35 +
+        finite(row.market_heat_score, 0) * 0.25 +
+        Math.log10(Math.max(1, finite(row.turnover_24h_quote, 0)));
+      return score(right) - score(left);
+    })
+    .forEach((row) => {
+      if (selected.length < heatCoreCount + momentumReserve) add(row);
+    });
+
+  [...source]
+    .sort((left, right) =>
+      finite(right.liquidity_score, 0) - finite(left.liquidity_score, 0) ||
+      finite(right.turnover_24h_quote, 0) - finite(left.turnover_24h_quote, 0)
+    )
+    .forEach((row) => {
+      if (selected.length < heatCoreCount + momentumReserve + liquidityReserve) add(row);
+    });
+
+  source.filter((row) => !seen.has(row.market))
+    .slice(0, Math.max(0, expansion.baseFinalists - selected.length))
+    .forEach(add);
+  if (!expansion.enabled || selected.length >= limit) return selected.slice(0, limit);
+
+  const extraCount = limit - selected.length;
+  const pool = source
+    .slice(heatCoreCount, Math.min(source.length, heatCoreCount + expansion.rotationPool))
+    .filter((row) => !seen.has(row.market));
+  if (pool.length <= extraCount) {
+    pool.forEach(add);
+    return selected.slice(0, limit);
+  }
+  const bucketMs = Math.max(1, expansion.rotationMinutes) * 60_000;
+  const bucket = Math.floor(nowMs / bucketMs);
+  const offset = (bucket * extraCount) % pool.length;
+  for (let index = 0; index < extraCount; index++) add(pool[(offset + index) % pool.length]);
+  return selected.slice(0, limit);
+}
+'''
+          path.write_text(text[:start] + new_function, encoding='utf-8')
+
+          replace_once(
+              'supabase/functions/market-scanner/engine.ts',
+              'export const ENGINE_VERSION = "6.13.0-REALIZED-EDGE-PROFIT-RETENTION";',
+              'export const ENGINE_VERSION = "6.14.0-MOMENTUM-CONTINUATION-SCALP";',
+          )
+          replace_once(
+              'supabase/functions/market-scanner/index.ts',
+              '// Trading-booooo Market Scanner v6.13.0-REALIZED-EDGE-PROFIT-RETENTION',
+              '// Trading-booooo Market Scanner v6.14.0-MOMENTUM-CONTINUATION-SCALP',
+          )
+          replace_once(
+              'supabase/functions/market-autotrader/index.ts',
+              '// Trading-booooo v6.13.0-REALIZED-EDGE-PROFIT-RETENTION',
+              '// Trading-booooo v6.14.0-MOMENTUM-CONTINUATION-SCALP',
+          )
+          replace_once(
+              'supabase/functions/market-autotrader/index.ts',
+              'const VERSION = "6.13.0-REALIZED-EDGE-PROFIT-RETENTION";',
+              'const VERSION = "6.14.0-MOMENTUM-CONTINUATION-SCALP";',
+          )
+
+          config = Path('docs/config.js')
+          config_text = config.read_text(encoding='utf-8')
+          config_text = config_text.replace('6.13.0-REALIZED-EDGE-PROFIT-RETENTION', '6.14.0-MOMENTUM-CONTINUATION-SCALP')
+          config.write_text(config_text, encoding='utf-8')
+          index = Path('docs/index.html')
+          index_text = index.read_text(encoding='utf-8')
+          index_text = index_text.replace('6.13.0-REALIZED-EDGE-PROFIT-RETENTION', '6.14.0-MOMENTUM-CONTINUATION-SCALP')
+          index.write_text(index_text, encoding='utf-8')
+          PY
+
+      - name: Add deterministic momentum tests
+        run: |
+          cat > supabase/functions/_shared/lob/momentum-continuation.test.ts <<'EOF'
+          import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+          import { evaluateLobEntry } from "./entry.ts";
+          import { detectLobPatterns } from "./patterns.ts";
+          import type { LobCostEstimate, LobFeatureVector } from "./types.ts";
+
+          const features: LobFeatureVector = {
+            samples: 45, observationMs: 11000, bookAgeMs: 80, spreadBps: 1.2,
+            bookImbalance: 0.12, imbalanceStability: 0.8, tradePressureFast: 0.68,
+            tradeCount: 80, buyNotional: 90000, sellNotional: 18000,
+            averageTradeNotional: 1350, bookUpdateRate: 15, tradeArrivalRate: 8,
+            aggressiveNotionalPerSecond: 9000, micropriceDeviationBps: 2.4,
+            bidDepthQuote: 800000, askDepthQuote: 500000, depthRatio: 1.6,
+            spoofLikeScore: 0, askSpoofScore: 0, askAbsorptionScore: 0.08,
+            askRefillRatio: 0.05, bidAbsorptionScore: 0.2, breakoutScore: 0.55,
+            sweepReclaimScore: 0.3, ofiPersistence: 0.72, persistentBidWall: true,
+            persistentAskWall: false, dynamicStatus: "BREAKOUT_CONFIRMED", dataQuality: 0.65,
+            turnover24hQuote: 120000000, minActionableTurnover24h: 100000,
+            trendContext: 0.03, marketHeatScore: 78, recentNotionalPerSecond: 200000,
+            notionalAcceleration: 0.55, tradeCountPerSecond: 18, pathEfficiency: 0.82,
+            reversalRate: 0.12, noiseBandBps: 5, quoteFlickerRate: 4,
+            fundingPremiumBps: 0, fundingAttention: 0, fundingEdge: 0,
+          };
+          const costs: LobCostEstimate = {
+            roundTripFeeBps: 20, entrySlippageBps: 1, targetExitSlippageBps: 1,
+            stopExitSlippageBps: 2, spreadBps: 1.2, latencyPenaltyBps: 0.5,
+            forecastBiasPenaltyBps: 0,
+          };
+
+          Deno.test("large gainer needs a live continuation pulse", () => {
+            const pattern = detectLobPatterns(features).find((row) => row.name === "MOMENTUM_CONTINUATION");
+            assert(pattern?.primary);
+            const stale = detectLobPatterns({ ...features, notionalAcceleration: 0 })
+              .find((row) => row.name === "MOMENTUM_CONTINUATION");
+            assertEquals(stale?.primary, false);
+          });
+
+          Deno.test("momentum lane uses fee-meaningful target and short horizon", () => {
+            const decision = evaluateLobEntry(features, costs);
+            assertEquals(decision.pattern, "MOMENTUM_CONTINUATION");
+            assert(decision.targetBps >= 60);
+            assert(decision.targetBps <= 140);
+            assert(decision.stopBps < decision.targetBps);
+            assertEquals(decision.maxHoldingSeconds, 90);
+            assert(decision.conditionalEvLowerBoundBps > 0);
+          });
+          EOF
+
+      - name: Commit integrated model
+        run: |
+          if git diff --quiet; then
+            echo "No momentum changes required"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions docs
+          git commit -m "feat(v6.14): detect and scalp live momentum continuation"
+          git push
