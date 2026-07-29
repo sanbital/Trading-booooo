@@ -1,11 +1,11 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const failures = [];
 const passed = [];
 const check = (name, condition) => (condition ? passed : failures).push(name);
 
-const version = "7.0.0-TOP10-LOB-ONLY";
+const version = "7.0.3-RESIDUAL-BALANCE-LEDGER-INTEGRITY";
 const dashboardRevision = "7.0.0-r2-TOP10-LOB-ONLY-DASHBOARD-RESTORE";
 const migrations = readdirSync(new URL("../supabase/migrations/", import.meta.url))
   .filter((name) => name.endsWith(".sql"))
@@ -20,14 +20,21 @@ const dashboardConfig = read("docs/config.js");
 const dashboardJs = read("docs/app.js");
 const dashboardTest = read("docs/version-runtime.test.mjs");
 const migration = read("supabase/migrations/202607290021_top10_lob_only_v700.sql");
+const settlementMigration = read(
+  "supabase/migrations/20260729230827_tp_settlement_integrity_v701.sql",
+);
+const profitProtectionMigration = read(
+  "supabase/migrations/20260729232553_profit_protection_constraint_integrity_v702.sql",
+);
+const residualLedgerMigration = read(
+  "supabase/migrations/20260729233331_residual_balance_ledger_integrity_v703.sql",
+);
 const deployWorkflow = read(".github/workflows/main.deploy-supabase.yml");
 const dashboardWorkflow = read(".github/workflows/validate-dashboard.yml");
 
 check(
   "scanner, trader, engine and dashboard agree on v7",
-  [scanner, trader, engine, dashboard, dashboardConfig].every((source) =>
-    source.includes(version)
-  ),
+  [scanner, trader, engine, dashboard, dashboardConfig].every((source) => source.includes(version)),
 );
 check(
   "each exchange fixes its 24h gainer Top 10 before flow exclusions",
@@ -89,7 +96,44 @@ check(
   "engine deployment validates v7 and applies only the idempotent current migration",
   deployWorkflow.includes("node validation/v700-deploy-validation.mjs") &&
     deployWorkflow.includes("--single-transaction") &&
-    deployWorkflow.includes("202607290021_top10_lob_only_v700.sql"),
+    deployWorkflow.includes("202607290021_top10_lob_only_v700.sql") &&
+    deployWorkflow.includes("20260729230827_tp_settlement_integrity_v701.sql") &&
+    deployWorkflow.includes(
+      "20260729232553_profit_protection_constraint_integrity_v702.sql",
+    ) &&
+    deployWorkflow.includes(
+      "20260729233331_residual_balance_ledger_integrity_v703.sql",
+    ),
+);
+check(
+  "TP settlement is ordered before balance reconciliation and fails closed on material overfill",
+  trader.includes("TP_PRE_RECONCILIATION_FAILED") &&
+    trader.includes("BALANCE_REDUCTION_DEFERRED_FOR_BOT_EXIT") &&
+    trader.indexOf("await syncRestingTakeProfit(position, cycleId)") <
+      trader.indexOf("const open = await db(") &&
+    settlementMigration.includes("materially exceeds remaining position") &&
+    settlementMigration.includes(
+      "v_position_fill_funds := v_fill_funds_total * v_allocation_ratio",
+    ) &&
+    settlementMigration.includes("TP_SETTLEMENT_ACCOUNTING_REPAIRED"),
+);
+check(
+  "profit protection preserves the static-stop constraint and writes only the trail",
+  profitProtectionMigration.includes(
+    "constraint v702_static_stop_below_entry check (stop_price < average_entry_price)",
+  ) &&
+    profitProtectionMigration.includes("new.trailing_stop := v_candidate_stop") &&
+    !profitProtectionMigration.includes("new.stop_price := v_candidate_stop") &&
+    profitProtectionMigration.includes("V702_STATIC_STOP_WAS_MUTATED") &&
+    profitProtectionMigration.includes("V702_PROFIT_TRAIL_WAS_NOT_RAISED"),
+);
+check(
+  "residual repair is fail-closed and never writes to the exchange account",
+  residualLedgerMigration.includes("cfg.pause_new_entries = true") &&
+    residualLedgerMigration.includes("s.captured_at >= now() - interval '2 minutes'") &&
+    residualLedgerMigration.includes("'RESIDUAL_BALANCE_LEDGER_REPAIRED'") &&
+    residualLedgerMigration.includes("V703_RESIDUAL_RECONCILIATION_FAILED") &&
+    !residualLedgerMigration.includes("create_order"),
 );
 
 for (const name of passed) console.log(`  ok   ${name}`);

@@ -165,6 +165,114 @@ export type ResolvedOrderExecutionProgress = {
   averagePrice: number;
 };
 
+export type BotExitOrderSnapshot = {
+  side?: unknown;
+  purpose?: unknown;
+  state?: unknown;
+  executedVolume?: unknown;
+  executed_volume?: unknown;
+};
+
+/**
+ * True when an unapplied bot SELL can account for a base-balance reduction.
+ *
+ * Exchange order state and position accounting are deliberately separate. A FILLED or
+ * partially-filled order removes base asset before the position RPC books the fill. During
+ * that interval the balance difference is order settlement in progress, never evidence of
+ * a manual sale.
+ */
+export function pendingBotExitMayExplainBalanceReduction(
+  orders: BotExitOrderSnapshot[],
+): boolean {
+  const definitelySettled = new Set([
+    "APPLIED",
+    "REJECTED",
+    "NOT_FOUND",
+    "EXCHANGE_CANCELLED",
+    "CANCELLED",
+  ]);
+  return (orders || []).some((order) => {
+    const side = String(order?.side || "SELL").toUpperCase();
+    if (side !== "SELL" && side !== "ASK") return false;
+    const state = String(order?.state || "UNKNOWN").toUpperCase();
+    const executed = Math.max(
+      0,
+      finite(order?.executedVolume, finite(order?.executed_volume)),
+    );
+    if (state !== "APPLIED" && executed > 0) return true;
+    if (definitelySettled.has(state)) return false;
+    // REQUESTED/UNKNOWN may already have reached the exchange while the response or ledger
+    // update is in flight. EXCHANGE_DONE and partial-cancelled have definitely reduced the
+    // balance but have not yet been applied to the position.
+    return true;
+  });
+}
+
+export type ExitFillAllocationInput = {
+  remainingQuantity: number;
+  fillQuantity: number;
+  fillFunds?: number;
+  fillFeeQuote?: number;
+  fillPrice: number;
+  quantityStep?: number;
+  dustValueQuote?: number;
+};
+
+export type ExitFillAllocationResult = {
+  positionQuantity: number;
+  positionFunds: number;
+  positionFeeQuote: number;
+  unallocatedQuantity: number;
+  unallocatedFunds: number;
+  unallocatedFeeQuote: number;
+  allocationRatio: number;
+  allowedExcessQuantity: number;
+};
+
+/**
+ * Allocate one exchange SELL fill to the position without ever pairing full proceeds with
+ * a smaller quantity/cost basis.
+ *
+ * A few exchange quantity steps (or less than the operational dust value) can legitimately
+ * come from pre-existing account residue. Material overfills indicate stale position state
+ * and must fail closed for reconciliation instead of fabricating profit.
+ */
+export function allocateExitFillToPosition(
+  input: ExitFillAllocationInput,
+): ExitFillAllocationResult {
+  const remaining = Math.max(0, finite(input.remainingQuantity));
+  const fillQuantity = Math.max(0, finite(input.fillQuantity));
+  const fillPrice = Math.max(0, finite(input.fillPrice));
+  if (!(remaining > 0 && fillQuantity > 0 && fillPrice > 0)) {
+    throw new Error("exit fill allocation requires positive position, quantity and price");
+  }
+  const positionQuantity = Math.min(remaining, fillQuantity);
+  const excessQuantity = Math.max(0, fillQuantity - remaining);
+  const stepAllowance = Math.max(0, finite(input.quantityStep)) * 5;
+  const dustAllowance = Math.max(0, finite(input.dustValueQuote)) / fillPrice;
+  const allowedExcessQuantity = Math.max(1e-12, stepAllowance, dustAllowance);
+  if (excessQuantity > allowedExcessQuantity + 1e-12) {
+    throw new Error(
+      `exit fill quantity ${fillQuantity} materially exceeds remaining position ${remaining}`,
+    );
+  }
+  const allocationRatio = positionQuantity / fillQuantity;
+  const fillFunds = Math.max(0, finite(input.fillFunds, fillQuantity * fillPrice));
+  const fillFee = Math.max(0, finite(input.fillFeeQuote));
+  const positionFunds = fillFunds * allocationRatio;
+  const positionFeeQuote = fillFee * allocationRatio;
+  return {
+    positionQuantity,
+    positionFunds,
+    positionFeeQuote,
+    unallocatedQuantity: excessQuantity,
+    unallocatedFunds: Math.max(0, fillFunds - positionFunds),
+    unallocatedFeeQuote: Math.max(0, fillFee - positionFeeQuote),
+    allocationRatio,
+    allowedExcessQuantity,
+  };
+}
+
 /**
  * Exchange order snapshots are not guaranteed to be cumulative-complete.
  *

@@ -1,8 +1,9 @@
-// Trading-booooo v7.0.0-TOP10-LOB-ONLY — autonomous spot orchestrator.
+// Trading-booooo v7.0.3-RESIDUAL-BALANCE-LEDGER-INTEGRITY — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
   adjustedPlanForFill,
+  allocateExitFillToPosition,
   baseAsset,
   calculateExitResidualAccounting,
   calculateManagedCapital,
@@ -18,6 +19,7 @@ import {
   mergeOrderExecutionProgress,
   nextTrailingStop,
   normalizedOrderState,
+  pendingBotExitMayExplainBalanceReduction,
   quoteCurrency,
   reconcileAccount,
   resumeSafetyError,
@@ -113,7 +115,7 @@ import {
   summarizeEntryAdmission,
 } from "./entry-admission.ts";
 
-const VERSION = "7.0.0-TOP10-LOB-ONLY";
+const VERSION = "7.0.3-RESIDUAL-BALANCE-LEDGER-INTEGRITY";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -1568,10 +1570,19 @@ async function applyExitAccounting(
     ),
   );
   const dustValueQuote = position.exchange === "upbit" ? 1000 : 1;
+  const allocation = allocateExitFillToPosition({
+    remainingQuantity: finite(position.remaining_quantity),
+    fillQuantity: quantity,
+    fillFunds: finite(fill.executedFunds, price * quantity),
+    fillFeeQuote: finite(fill.paidFeeQuote, fill.paidFee),
+    fillPrice: price,
+    quantityStep: finite(position.quantity_step),
+    dustValueQuote,
+  });
   const residualPreview = calculateExitResidualAccounting({
     remainingQuantity: finite(position.remaining_quantity),
-    soldQuantity: quantity,
-    baseFeeQuantity: baseFee,
+    soldQuantity: allocation.positionQuantity,
+    baseFeeQuantity: baseFee * allocation.allocationRatio,
     markPrice: price,
     dustValueQuote,
   });
@@ -1585,6 +1596,20 @@ async function applyExitAccounting(
     p_trailing_stop: nextTrail,
     p_dust_value_quote: dustValueQuote,
   });
+  if (allocation.unallocatedQuantity > 0 && result?.applied !== false) {
+    await event(
+      "EXIT_FILL_DUST_UNALLOCATED",
+      `${position.exchange}:${position.market} dust-sized fill excess kept outside position PnL`,
+      {
+        exchange_fill_quantity: quantity,
+        position_quantity: allocation.positionQuantity,
+        unallocated_quantity: allocation.unallocatedQuantity,
+        unallocated_funds_quote: allocation.unallocatedFunds,
+        unallocated_fee_quote: allocation.unallocatedFeeQuote,
+      },
+      { positionId: position.id, orderId: orderRow.id, level: "WARNING" },
+    );
+  }
   if (Boolean(result?.closed) && result?.applied !== false && position.metadata?.is_exploration) {
     try {
       await rpc("settle_lob_exploration_budget_v610", { p_position_id: position.id });
@@ -2569,7 +2594,7 @@ async function enterCandidateInner(
     });
     scalpAudit = {
       strategy: "LOB_SCALP",
-      strategy_revision: "7.0.0-TOP10-LOB-ONLY",
+      strategy_revision: "7.0.3-RESIDUAL-BALANCE-LEDGER-INTEGRITY",
       recommendation,
       pattern: decision.pattern,
       patterns: decision.patterns,
@@ -4011,6 +4036,28 @@ function restingTpIdentifier(position: Position): string | null {
   return typeof id === "string" && id ? id : null;
 }
 
+async function unappliedBotSellOrders(position: Position): Promise<any[]> {
+  const rows = await db(
+    `trading_orders?position_id=eq.${position.id}&side=eq.SELL&select=*&order=created_at.desc&limit=12`,
+  ).catch(() => []) as any[];
+  return rows.filter((row) =>
+    pendingBotExitMayExplainBalanceReduction([{
+      side: row.side,
+      purpose: row.purpose,
+      state: row.state,
+      executedVolume: row.executed_volume,
+    }])
+  );
+}
+
+async function unappliedRestingTpOrder(position: Position): Promise<any | null> {
+  const rows = await unappliedBotSellOrders(position);
+  const metadataOrderId = String(position.metadata?.tp_order_id || "");
+  return rows.find((row) => metadataOrderId && String(row.id) === metadataOrderId) ||
+    rows.find((row) => String(row.purpose).toUpperCase() === "TARGET_1") ||
+    null;
+}
+
 /** Place the first-target limit sell immediately after the entry fill is booked. */
 async function placeRestingTakeProfit(
   position: Position,
@@ -4119,14 +4166,15 @@ async function settleRestingTakeProfit(
   position: Position,
   order: any,
   cycleId: string,
+  knownOrderRow?: any,
 ): Promise<Position> {
-  const orderRow =
+  const orderRow = knownOrderRow ||
     (await db(`trading_orders?id=eq.${position.metadata?.tp_order_id}&select=*&limit=1`))[0];
   if (!orderRow) return position;
   const updated = await updateOrderFromGateway(orderRow, order);
-  const clearMeta = {
-    ...(position.metadata || {}),
+  const settledMeta = {
     tp_identifier: null,
+    tp_order_id: null,
     tp_settled_at: new Date().toISOString(),
   };
   if (finite(updated.fill.executedVolume) > 0) {
@@ -4139,18 +4187,55 @@ async function settleRestingTakeProfit(
     );
     const next = (result as any)?.position || position;
     const rows = await patch("trading_positions", `id=eq.${next.id}`, {
-      metadata: { ...(next.metadata || {}), ...clearMeta },
+      metadata: { ...(next.metadata || {}), ...settledMeta },
     });
     return { ...next, ...(rows[0] || {}) } as Position;
   }
-  const rows = await patch("trading_positions", `id=eq.${position.id}`, { metadata: clearMeta });
+  const rows = await patch("trading_positions", `id=eq.${position.id}`, {
+    metadata: { ...(position.metadata || {}), ...settledMeta },
+  });
   return { ...position, ...(rows[0] || {}) } as Position;
 }
 
 /** Poll a live resting TP. Books it only once it is terminal. */
 async function syncRestingTakeProfit(position: Position, cycleId: string): Promise<Position> {
-  const identifier = restingTpIdentifier(position);
+  const orderRow = await unappliedRestingTpOrder(position);
+  if (!orderRow) {
+    if (restingTpIdentifier(position)) {
+      const rows = await patch("trading_positions", `id=eq.${position.id}`, {
+        metadata: {
+          ...(position.metadata || {}),
+          tp_identifier: null,
+          tp_order_id: null,
+          tp_reference_cleared_at: new Date().toISOString(),
+        },
+      });
+      return { ...position, ...(rows[0] || {}) } as Position;
+    }
+    return position;
+  }
+  const identifier = String(orderRow.identifier || restingTpIdentifier(position) || "");
   if (!identifier) return position;
+  if (
+    restingTpIdentifier(position) !== identifier ||
+    String(position.metadata?.tp_order_id || "") !== String(orderRow.id)
+  ) {
+    const rows = await patch("trading_positions", `id=eq.${position.id}`, {
+      metadata: {
+        ...(position.metadata || {}),
+        tp_identifier: identifier,
+        tp_order_id: orderRow.id,
+        tp_reference_recovered_at: new Date().toISOString(),
+      },
+    });
+    position = { ...position, ...(rows[0] || {}) } as Position;
+    await event(
+      "TP_REFERENCE_RECOVERED",
+      `${position.exchange}:${position.market} resting TP reference recovered from order ledger`,
+      { identifier, order_id: orderRow.id, order_state: orderRow.state },
+      { cycleId, positionId: position.id, orderId: orderRow.id, level: "WARNING" },
+    );
+  }
   let order: any;
   try {
     order = await gateway(position.exchange, {
@@ -4170,8 +4255,11 @@ async function syncRestingTakeProfit(position: Position, cycleId: string): Promi
     return position;
   }
   const status = String(order?.status || order?.order?.status || "");
-  if (!TP_TERMINAL_STATUSES.includes(status)) return position;
-  return settleRestingTakeProfit(position, order, cycleId);
+  if (!TP_TERMINAL_STATUSES.includes(status)) {
+    await updateOrderFromGateway(orderRow, order);
+    return position;
+  }
+  return settleRestingTakeProfit(position, order, cycleId, orderRow);
 }
 
 /**
@@ -4993,15 +5081,23 @@ async function reconcileExitPending(position: Position, cycleId: string) {
     });
     const updated = await updateOrderFromGateway(orderRow, order);
     if (finite(updated.fill.executedVolume) > 0) {
-      await finalizeExitFill(
+      const finalized = await finalizeExitFill(
         position,
         { orderRow, ...updated },
         String(orderRow.purpose || position.metadata?.pending_exit_action || "MANUAL_RECONCILE"),
         finite(updated.fill.averagePrice, position.average_entry_price),
         cycleId,
       );
+      const refreshed = (finalized as any)?.position || position;
+      const refreshedState = String(refreshed.state);
       await patch("trading_positions", `id=eq.${position.id}`, {
-        metadata: clearedReconciliationMetadata(position.metadata),
+        // An already-APPLIED order is an idempotent no-op. If a timeout left the row in
+        // RECONCILING, explicitly restore OPEN so durable TP recovery and normal monitoring
+        // can continue instead of replaying the same completed exit forever.
+        ...(refreshedState === "CLOSED" || finite(refreshed.remaining_quantity) <= 0
+          ? {}
+          : { state: "OPEN" }),
+        metadata: clearedReconciliationMetadata(refreshed.metadata),
       });
     } else if (
       ["FILLED", "CANCELED", "PARTIALLY_FILLED_CANCELED"].includes(String(updated.order?.status))
@@ -5235,6 +5331,24 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
     )
   ) await reconcileExitPending(position, cycleId);
   const feeReconciliations = await reconcileFeeLedger(cycleId);
+  // Exchange balances move before our position ledger does. Resolve every durable resting
+  // TP first — including rows whose metadata reference was lost — so account reconciliation
+  // never classifies the bot's own fill as a manual sale.
+  const tpCandidates = await db(
+    "trading_positions?state=in.(OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&is_paper=eq.false&select=*&order=created_at.asc",
+  ) as Position[];
+  for (const position of tpCandidates) {
+    try {
+      await syncRestingTakeProfit(position, cycleId);
+    } catch (error) {
+      await event(
+        "TP_PRE_RECONCILIATION_FAILED",
+        `${position.exchange}:${position.market} TP settlement failed before balance comparison`,
+        { error: error instanceof Error ? error.message : String(error) },
+        { cycleId, positionId: position.id, level: "CRITICAL" },
+      );
+    }
+  }
   const open = await db(
     "trading_positions?state=eq.OPEN&select=*&order=created_at.asc",
   ) as Position[];
@@ -5400,6 +5514,39 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         quantityStep: finite(position.quantity_step, 0),
       });
       sellableByAsset.set(position.base_asset, verdict.sellableQuantity);
+
+      if (verdict.shortfallQuantity > 1e-12) {
+        const pendingSellOrders = await unappliedBotSellOrders(position);
+        if (pendingSellOrders.length > 0) {
+          if (finite(position.metadata?.account_mismatch_count) > 0) {
+            await patch("trading_positions", `id=eq.${position.id}`, {
+              metadata: {
+                ...(position.metadata || {}),
+                account_mismatch_count: 0,
+                last_account_mismatch_at: null,
+              },
+            });
+          }
+          await event(
+            "BALANCE_REDUCTION_DEFERRED_FOR_BOT_EXIT",
+            `${exchange}:${position.market} balance reduction belongs to unsettled bot SELL`,
+            {
+              expected_quantity: expected,
+              actual_quantity: actualTotal,
+              shortfall_quantity: verdict.shortfallQuantity,
+              orders: pendingSellOrders.map((row) => ({
+                id: row.id,
+                purpose: row.purpose,
+                state: row.state,
+                executed_volume: row.executed_volume,
+                requested_volume: row.requested_volume,
+              })),
+            },
+            { cycleId, positionId: position.id, level: "INFO" },
+          );
+          continue;
+        }
+      }
 
       if (verdict.verdict === "DUST_ALIGN") {
         position = {

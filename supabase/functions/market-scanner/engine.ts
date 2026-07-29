@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v7.0.0-TOP10-LOB-ONLY
+// Trading-booooo Market Scanner v7.0.3-RESIDUAL-BALANCE-LEDGER-INTEGRITY
 // Pure analysis engine. Public market data only; no order or account operations.
 
 import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-profile.ts";
@@ -20,7 +20,7 @@ import {
   sigmaFromAtrPct,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "7.0.0-TOP10-LOB-ONLY";
+export const ENGINE_VERSION = "7.0.3-RESIDUAL-BALANCE-LEDGER-INTEGRITY";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;

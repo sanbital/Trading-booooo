@@ -1,5 +1,6 @@
 import {
   adjustedPlanForFill,
+  allocateExitFillToPosition,
   baseAsset,
   calculateManagedCapital,
   calculatePositionSize,
@@ -12,6 +13,7 @@ import {
   mergeOrderExecutionProgress,
   nextTrailingStop,
   normalizedOrderState,
+  pendingBotExitMayExplainBalanceReduction,
   reconcileAccount,
   resumeSafetyError,
   t1SellQuantity,
@@ -231,6 +233,65 @@ Deno.test("later cumulative volume uses the retained authoritative average", () 
     { executedVolume: 3, executedFunds: 0, averagePrice: null },
   );
   assertEquals(merged, { executedVolume: 3, executedFunds: 300, averagePrice: 100 });
+});
+
+Deno.test("unapplied resting sell defers manual balance reduction", () => {
+  assert(
+    pendingBotExitMayExplainBalanceReduction([
+      { side: "SELL", state: "EXCHANGE_OPEN", executed_volume: 0 },
+    ]),
+  );
+  assert(
+    pendingBotExitMayExplainBalanceReduction([
+      { side: "SELL", state: "EXCHANGE_PARTIAL", executed_volume: 8 },
+    ]),
+  );
+  assert(
+    pendingBotExitMayExplainBalanceReduction([
+      { side: "SELL", state: "EXCHANGE_DONE", executed_volume: 8 },
+    ]),
+  );
+  assert(
+    !pendingBotExitMayExplainBalanceReduction([
+      { side: "SELL", state: "APPLIED", executed_volume: 8 },
+      { side: "SELL", state: "EXCHANGE_CANCELLED", executed_volume: 0 },
+    ]),
+  );
+});
+
+Deno.test("material TP overfill is rejected instead of creating fake profit", () => {
+  let message = "";
+  try {
+    allocateExitFillToPosition({
+      remainingQuantity: 336.0183,
+      fillQuantity: 1344,
+      fillFunds: 26.208,
+      fillFeeQuote: 0.026208,
+      fillPrice: 0.0195,
+      quantityStep: 0.1,
+      dustValueQuote: 1,
+    });
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+  }
+  assert(message.includes("materially exceeds remaining position"));
+});
+
+Deno.test("dust-sized overfill is prorated across quantity, funds and fee", () => {
+  const allocation = allocateExitFillToPosition({
+    remainingQuantity: 1595,
+    fillQuantity: 1598,
+    fillFunds: 25.6479,
+    fillFeeQuote: 0.0256479,
+    fillPrice: 0.01605,
+    quantityStep: 1,
+    dustValueQuote: 1,
+  });
+  near(allocation.positionQuantity, 1595);
+  near(allocation.positionFunds, 25.59975);
+  near(allocation.positionFeeQuote, 0.02559975);
+  near(allocation.unallocatedQuantity, 3);
+  near(allocation.unallocatedFunds, 0.04815);
 });
 
 Deno.test("dangerous controls require server-side confirmations", () => {

@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 // withdrawal, transfer, margin, futures, leverage, or API-key management routes.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "7.0.0-TOP10-LOB-ONLY";
+const VERSION = "7.0.3-RESIDUAL-BALANCE-LEDGER-INTEGRITY";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
@@ -54,7 +54,9 @@ const schedulerState = {
 let binanceTimeOffsetMs = 0;
 let lastBinanceTimeSyncAt = 0;
 
-function env(name, fallback = "") { return String(process.env[name] ?? fallback).trim(); }
+function env(name, fallback = "") {
+  return String(process.env[name] ?? fallback).trim();
+}
 function boolEnv(name, fallback) {
   const value = env(name);
   return value ? ["1", "true", "yes", "on"].includes(value.toLowerCase()) : fallback;
@@ -63,20 +65,31 @@ function numberEnv(name, fallback, min, max) {
   const value = Number(env(name));
   return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
 }
-function integerEnv(name, fallback, min, max) { return Math.round(numberEnv(name, fallback, min, max)); }
+function integerEnv(name, fallback, min, max) {
+  return Math.round(numberEnv(name, fallback, min, max));
+}
 function kstDate(date = new Date()) {
   return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
   }).format(date);
 }
-function utcDate(date = new Date()) { return date.toISOString().slice(0, 10); }
-function base64url(input) { return Buffer.from(input).toString("base64url"); }
+function utcDate(date = new Date()) {
+  return date.toISOString().slice(0, 10);
+}
+function base64url(input) {
+  return Buffer.from(input).toString("base64url");
+}
 function safeEqual(left, right) {
   const a = Buffer.from(String(left));
   const b = Buffer.from(String(right));
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
-function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 function decimal(value, maxDecimals = 16) {
   const n = Number(value);
   if (!Number.isFinite(n)) throw new Error("invalid decimal value");
@@ -88,7 +101,8 @@ function stepPrecision(step) {
   return Math.min(16, Math.max(0, (text.split(".")[1] || "").replace(/0+$/, "").length));
 }
 function floorStep(value, step) {
-  const v = Number(value); const s = Number(step);
+  const v = Number(value);
+  const s = Number(step);
   if (!(v > 0 && s > 0)) return 0;
   const precision = stepPrecision(s);
   return Number((Math.floor((v + s * 1e-9) / s) * s).toFixed(precision));
@@ -109,9 +123,13 @@ function pairs(object = {}) {
   }
   return result;
 }
-function rawQueryString(object = {}) { return pairs(object).map(([key, value]) => `${key}=${value}`).join("&"); }
+function rawQueryString(object = {}) {
+  return pairs(object).map(([key, value]) => `${key}=${value}`).join("&");
+}
 function encodedQueryString(object = {}) {
-  return pairs(object).map(([key, value]) => `${encodeURIComponent(key).replace(/%5B%5D/g, "[]")}=${encodeURIComponent(value)}`).join("&");
+  return pairs(object).map(([key, value]) =>
+    `${encodeURIComponent(key).replace(/%5B%5D/g, "[]")}=${encodeURIComponent(value)}`
+  ).join("&");
 }
 function binanceQueryString(object = {}) {
   return Object.entries(object)
@@ -122,7 +140,10 @@ function binanceQueryString(object = {}) {
 
 function createUpbitJwt(parameters = {}) {
   if (!UPBIT_ACCESS_KEY || !UPBIT_SECRET_KEY) {
-    throw Object.assign(new Error("UPBIT_ACCESS_KEY/UPBIT_SECRET_KEY are not configured"), { status: 503, code: "UPBIT_KEYS_MISSING" });
+    throw Object.assign(new Error("UPBIT_ACCESS_KEY/UPBIT_SECRET_KEY are not configured"), {
+      status: 503,
+      code: "UPBIT_KEYS_MISSING",
+    });
   }
   const payload = { access_key: UPBIT_ACCESS_KEY, nonce: crypto.randomUUID() };
   const raw = rawQueryString(parameters);
@@ -136,7 +157,12 @@ function createUpbitJwt(parameters = {}) {
   return `${h}.${p}.${sig}`;
 }
 function createBinanceSignature(queryString) {
-  if (!BINANCE_SECRET_KEY) throw Object.assign(new Error("BINANCE_SECRET_KEY is not configured"), { status: 503, code: "BINANCE_KEYS_MISSING" });
+  if (!BINANCE_SECRET_KEY) {
+    throw Object.assign(new Error("BINANCE_SECRET_KEY is not configured"), {
+      status: 503,
+      code: "BINANCE_KEYS_MISSING",
+    });
+  }
   return crypto.createHmac("sha256", BINANCE_SECRET_KEY).update(queryString).digest("hex");
 }
 
@@ -144,17 +170,30 @@ function pruneNonces(now = Date.now()) {
   for (const [nonce, expiry] of nonceCache.entries()) if (expiry <= now) nonceCache.delete(nonce);
 }
 function verifyGatewayRequest(req, rawBody) {
-  if (!SHARED_SECRET || SHARED_SECRET.length < 32) return { ok: false, status: 503, error: "gateway secret is not configured" };
+  if (!SHARED_SECRET || SHARED_SECRET.length < 32) {
+    return { ok: false, status: 503, error: "gateway secret is not configured" };
+  }
   const timestamp = req.headers["x-gateway-ts"];
   const nonce = req.headers["x-gateway-nonce"];
   const signature = req.headers["x-gateway-signature"];
-  if (!timestamp || !nonce || !signature) return { ok: false, status: 401, error: "missing signed gateway headers" };
-  const ts = Number(timestamp); const now = Date.now();
-  if (!Number.isFinite(ts) || Math.abs(now - ts) > REQUEST_TOLERANCE_MS) return { ok: false, status: 401, error: "expired gateway request" };
+  if (!timestamp || !nonce || !signature) {
+    return { ok: false, status: 401, error: "missing signed gateway headers" };
+  }
+  const ts = Number(timestamp);
+  const now = Date.now();
+  if (!Number.isFinite(ts) || Math.abs(now - ts) > REQUEST_TOLERANCE_MS) {
+    return { ok: false, status: 401, error: "expired gateway request" };
+  }
   pruneNonces(now);
-  if (nonceCache.has(String(nonce))) return { ok: false, status: 409, error: "replayed gateway request" };
-  const expected = crypto.createHmac("sha256", SHARED_SECRET).update(`${timestamp}\n${nonce}\n${rawBody}`).digest("hex");
-  if (!safeEqual(expected, signature)) return { ok: false, status: 401, error: "invalid gateway signature" };
+  if (nonceCache.has(String(nonce))) {
+    return { ok: false, status: 409, error: "replayed gateway request" };
+  }
+  const expected = crypto.createHmac("sha256", SHARED_SECRET).update(
+    `${timestamp}\n${nonce}\n${rawBody}`,
+  ).digest("hex");
+  if (!safeEqual(expected, signature)) {
+    return { ok: false, status: 401, error: "invalid gateway signature" };
+  }
   nonceCache.set(String(nonce), now + REQUEST_TOLERANCE_MS * 2);
   return { ok: true };
 }
@@ -183,28 +222,49 @@ function guardRate(exchange, group = "default") {
   const state = rateState[exchange];
   const second = Math.floor(Date.now() / 1000);
   const current = state.groups.get(group) || { second: 0, count: 0 };
-  if (current.second !== second) { current.second = second; current.count = 0; }
+  if (current.second !== second) {
+    current.second = second;
+    current.count = 0;
+  }
   current.count++;
   state.groups.set(group, current);
   const max = localRateLimit(exchange, group);
-  if (current.count > max) throw Object.assign(new Error(`local ${exchange} ${group} rate guard exceeded`), { status: 429, code: "LOCAL_RATE_GUARD" });
+  if (current.count > max) {
+    throw Object.assign(new Error(`local ${exchange} ${group} rate guard exceeded`), {
+      status: 429,
+      code: "LOCAL_RATE_GUARD",
+    });
+  }
 }
 function refreshDailyCounter(exchange) {
   const state = rateState[exchange];
   const today = exchange === "upbit" ? kstDate() : utcDate();
-  if (state.dailyKey !== today) { state.dailyKey = today; state.dailyBuy = 0; }
+  if (state.dailyKey !== today) {
+    state.dailyKey = today;
+    state.dailyBuy = 0;
+  }
 }
 function enforceBuyCaps(_exchange, notional) {
-  if (!(Number(notional) > 0 && Number.isFinite(Number(notional)))) throw new Error("invalid buy notional");
+  if (!(Number(notional) > 0 && Number.isFinite(Number(notional)))) {
+    throw new Error("invalid buy notional");
+  }
 }
-function recordBuy(exchange, notional) { refreshDailyCounter(exchange); rateState[exchange].dailyBuy += Math.max(0, Number(notional) || 0); }
+function recordBuy(exchange, notional) {
+  refreshDailyCounter(exchange);
+  rateState[exchange].dailyBuy += Math.max(0, Number(notional) || 0);
+}
 
 async function parseResponse(response, exchange) {
   const text = await response.text();
   let data;
-  try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { raw: text };
+  }
   if (!response.ok) {
-    const message = data?.error?.message || data?.msg || data?.message || `${exchange} ${response.status}`;
+    const message = data?.error?.message || data?.msg || data?.message ||
+      `${exchange} ${response.status}`;
     const error = new Error(message);
     error.code = data?.error?.name || data?.code || `HTTP_${response.status}`;
     error.status = response.status;
@@ -228,10 +288,12 @@ async function upbitRequest(method, path, { query = {}, body = null, timeoutMs =
   const parameters = method === "GET" || method === "DELETE" ? query : (body || {});
   const encoded = encodedQueryString(query);
   const url = `${UPBIT_BASE}${path}${encoded ? `?${encoded}` : ""}`;
-  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
-      method, signal: controller.signal,
+      method,
+      signal: controller.signal,
       headers: {
         Accept: "application/json",
         Authorization: `Bearer ${createUpbitJwt(parameters)}`,
@@ -242,22 +304,33 @@ async function upbitRequest(method, path, { query = {}, body = null, timeoutMs =
     try {
       const parsed = await parseResponse(response, "Upbit");
       return { data: parsed.data, remainingReq: parsed.headers.get("remaining-req") };
-    } catch (error) { throw contextualizeError(error, `Upbit ${method} ${path}`); }
-  } finally { clearTimeout(timer); }
+    } catch (error) {
+      throw contextualizeError(error, `Upbit ${method} ${path}`);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
 }
 async function publicUpbit(path, query = {}) {
   guardRate("upbit", upbitRateGroup("GET", path, true));
   const encoded = encodedQueryString(query);
-  const response = await fetch(`${UPBIT_BASE}${path}${encoded ? `?${encoded}` : ""}`, { headers: { Accept: "application/json" } });
-  try { return (await parseResponse(response, "Upbit public")).data; }
-  catch (error) { throw contextualizeError(error, `Upbit public GET ${path}`); }
+  const response = await fetch(`${UPBIT_BASE}${path}${encoded ? `?${encoded}` : ""}`, {
+    headers: { Accept: "application/json" },
+  });
+  try {
+    return (await parseResponse(response, "Upbit public")).data;
+  } catch (error) {
+    throw contextualizeError(error, `Upbit public GET ${path}`);
+  }
 }
 
 async function syncBinanceTime(force = false) {
   if (!force && Date.now() - lastBinanceTimeSyncAt < 10 * 60_000) return binanceTimeOffsetMs;
   guardRate("binance", "rest");
   const started = Date.now();
-  const response = await fetch(`${BINANCE_BASE}/api/v3/time`, { headers: { Accept: "application/json" } });
+  const response = await fetch(`${BINANCE_BASE}/api/v3/time`, {
+    headers: { Accept: "application/json" },
+  });
   const data = (await parseResponse(response, "Binance time")).data;
   const ended = Date.now();
   const serverTime = Number(data?.serverTime);
@@ -269,15 +342,29 @@ async function syncBinanceTime(force = false) {
 async function publicBinance(path, query = {}, timeoutMs = 10_000) {
   guardRate("binance", "rest");
   const encoded = binanceQueryString(query);
-  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${BINANCE_BASE}${path}${encoded ? `?${encoded}` : ""}`, { signal: controller.signal, headers: { Accept: "application/json" } });
+    const response = await fetch(`${BINANCE_BASE}${path}${encoded ? `?${encoded}` : ""}`, {
+      signal: controller.signal,
+      headers: { Accept: "application/json" },
+    });
     return (await parseResponse(response, "Binance public")).data;
-  } finally { clearTimeout(timer); }
+  } finally {
+    clearTimeout(timer);
+  }
 }
-async function binanceRequest(method, path, parameters = {}, { timeoutMs = 10_000, retryTimestamp = true } = {}) {
+async function binanceRequest(
+  method,
+  path,
+  parameters = {},
+  { timeoutMs = 10_000, retryTimestamp = true } = {},
+) {
   if (!BINANCE_API_KEY || !BINANCE_SECRET_KEY) {
-    throw Object.assign(new Error("BINANCE_API_KEY/BINANCE_SECRET_KEY are not configured"), { status: 503, code: "BINANCE_KEYS_MISSING" });
+    throw Object.assign(new Error("BINANCE_API_KEY/BINANCE_SECRET_KEY are not configured"), {
+      status: 503,
+      code: "BINANCE_KEYS_MISSING",
+    });
   }
   guardRate("binance", "rest");
   await syncBinanceTime(false);
@@ -288,7 +375,8 @@ async function binanceRequest(method, path, parameters = {}, { timeoutMs = 10_00
   };
   const payload = binanceQueryString(signed);
   const signature = createBinanceSignature(payload);
-  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${BINANCE_BASE}${path}?${payload}&signature=${signature}`, {
       method,
@@ -305,28 +393,40 @@ async function binanceRequest(method, path, parameters = {}, { timeoutMs = 10_00
       }
       throw error;
     }
-  } finally { clearTimeout(timer); }
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function validateExchange(exchange) {
   const value = String(exchange || "").toLowerCase();
-  if (value !== "upbit" && value !== "binance") throw new Error("exchange must be upbit or binance");
+  if (value !== "upbit" && value !== "binance") {
+    throw new Error("exchange must be upbit or binance");
+  }
   return value;
 }
 function validateUpbitMarket(market) {
   const value = String(market || "").toUpperCase();
-  if (!/^KRW-[A-Z0-9]{2,20}$/.test(value)) throw new Error("only Upbit KRW spot markets are allowed");
+  if (!/^KRW-[A-Z0-9]{2,20}$/.test(value)) {
+    throw new Error("only Upbit KRW spot markets are allowed");
+  }
   return value;
 }
 function validateBinanceSymbol(symbol) {
   const value = String(symbol || "").toUpperCase();
-  if (!/^[A-Z0-9]{2,24}USDT$/.test(value)) throw new Error("only Binance USDT spot symbols are allowed");
+  if (!/^[A-Z0-9]{2,24}USDT$/.test(value)) {
+    throw new Error("only Binance USDT spot symbols are allowed");
+  }
   return value;
 }
-function validateMarket(exchange, market) { return exchange === "upbit" ? validateUpbitMarket(market) : validateBinanceSymbol(market); }
+function validateMarket(exchange, market) {
+  return exchange === "upbit" ? validateUpbitMarket(market) : validateBinanceSymbol(market);
+}
 function validateIdentifier(identifier) {
   const value = String(identifier || "");
-  if (!value.startsWith(BOT_IDENTIFIER_PREFIX) || value.length > 36 || !/^[A-Za-z0-9_-]+$/.test(value)) throw new Error("invalid bot order identifier");
+  if (
+    !value.startsWith(BOT_IDENTIFIER_PREFIX) || value.length > 36 || !/^[A-Za-z0-9_-]+$/.test(value)
+  ) throw new Error("invalid bot order identifier");
   return value;
 }
 function validateMarkets(exchange, markets) {
@@ -341,13 +441,17 @@ function normalizeStatus(exchange, rawStatus, executedQty = 0, originalQty = 0) 
   if (exchange === "upbit") {
     if (rawStatus === "done") return "FILLED";
     if (rawStatus === "cancel") return executedQty > 0 ? "PARTIALLY_FILLED_CANCELED" : "CANCELED";
-    if (rawStatus === "wait" || rawStatus === "watch") return executedQty > 0 ? "PARTIALLY_FILLED" : "OPEN";
+    if (rawStatus === "wait" || rawStatus === "watch") {
+      return executedQty > 0 ? "PARTIALLY_FILLED" : "OPEN";
+    }
     return "UNKNOWN";
   }
   const status = String(rawStatus || "").toUpperCase();
   if (status === "FILLED") return "FILLED";
   if (status === "PARTIALLY_FILLED") return "PARTIALLY_FILLED";
-  if (["CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED"].includes(status)) return executedQty > 0 ? "PARTIALLY_FILLED_CANCELED" : "CANCELED";
+  if (["CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED"].includes(status)) {
+    return executedQty > 0 ? "PARTIALLY_FILLED_CANCELED" : "CANCELED";
+  }
   if (status === "NEW" || status === "PENDING_NEW") return "OPEN";
   if (originalQty > 0 && executedQty >= originalQty) return "FILLED";
   return "UNKNOWN";
@@ -384,16 +488,24 @@ function normalizeUpbitOrder(order) {
     status: normalizeStatus("upbit", order?.state, executedVolume, Number(order?.volume || 0)),
     executed_volume: Number.isFinite(executedVolume) ? executedVolume : 0,
     executed_funds: Number.isFinite(executedFunds) ? executedFunds : 0,
-    average_price: executedVolume > 0 ? executedFunds / executedVolume : Number(order?.avg_price || 0) || null,
+    average_price: executedVolume > 0
+      ? executedFunds / executedVolume
+      : Number(order?.avg_price || 0) || null,
     paid_fee: Number.isFinite(paidFee) ? paidFee : 0,
     fee_asset: "KRW",
     // v5.4: the autotrader must be able to tell that a resting order is ITS OWN and how
     // much base asset it reserves. Without these the account reconciliation reads the
     // bot's own working orders as a user locking the coin.
-    side: String(order?.side || "").toLowerCase() === "ask" ? "SELL" : String(order?.side || "").toLowerCase() === "bid" ? "BUY" : null,
+    side: String(order?.side || "").toLowerCase() === "ask"
+      ? "SELL"
+      : String(order?.side || "").toLowerCase() === "bid"
+      ? "BUY"
+      : null,
     market: order?.market || null,
     requested_volume: Number(order?.volume || 0),
-    remaining_volume: Number(order?.remaining_volume ?? Math.max(0, Number(order?.volume || 0) - executedVolume)),
+    remaining_volume: Number(
+      order?.remaining_volume ?? Math.max(0, Number(order?.volume || 0) - executedVolume),
+    ),
     trades: normalizedTrades,
     raw: order,
   };
@@ -471,7 +583,10 @@ async function markBinanceCommissionQuote(fills, tradedSymbol) {
 function normalizeBinanceOrder(order) {
   const fills = Array.isArray(order?.fills) ? order.fills : [];
   const executedVolume = Number(order?.executedQty || 0);
-  const executedFunds = Number(order?.cummulativeQuoteQty || order?.cumulativeQuoteQty || fills.reduce((sum, row) => sum + Number(row.price || 0) * Number(row.qty || 0), 0));
+  const executedFunds = Number(
+    order?.cummulativeQuoteQty || order?.cumulativeQuoteQty ||
+      fills.reduce((sum, row) => sum + Number(row.price || 0) * Number(row.qty || 0), 0),
+  );
   const commissions = fills.reduce((sum, row) => sum + Number(row.commission || 0), 0);
   const feeAssetSet = [...new Set(fills.map((row) => row.commissionAsset).filter(Boolean))];
   const trades = fills.map((fill, index) => ({
@@ -518,13 +633,20 @@ async function upbitGetOrder(identifier) {
 async function upbitCreateOrder(payload, waitForFinalMs = 2500) {
   const market = validateUpbitMarket(payload.market);
   const identifier = validateIdentifier(payload.identifier);
-  const side = payload.side === "SELL" || payload.side === "ask" ? "ask" : payload.side === "BUY" || payload.side === "bid" ? "bid" : null;
+  const side = payload.side === "SELL" || payload.side === "ask"
+    ? "ask"
+    : payload.side === "BUY" || payload.side === "bid"
+    ? "bid"
+    : null;
   if (!side) throw new Error("invalid Upbit order side");
   const type = String(payload.type || payload.ord_type || "").toUpperCase();
   const body = { market, side, identifier };
   if (type === "LIMIT") {
-    const price = Number(payload.price); const volume = Number(payload.quantity ?? payload.volume);
-    if (!(price > 0 && volume > 0)) throw new Error("Upbit limit order requires positive price and quantity");
+    const price = Number(payload.price);
+    const volume = Number(payload.quantity ?? payload.volume);
+    if (!(price > 0 && volume > 0)) {
+      throw new Error("Upbit limit order requires positive price and quantity");
+    }
     if (side === "bid") enforceBuyCaps("upbit", price * volume);
     body.ord_type = "limit";
     body.price = decimal(price, 12);
@@ -541,8 +663,11 @@ async function upbitCreateOrder(payload, waitForFinalMs = 2500) {
     // it rests as a maker by construction; the autotrader is responsible for pricing it
     // there. Mapped to a plain limit with NO time_in_force — setting one would make it
     // IOC or FOK, which is exactly the taker behavior being avoided.
-    const price = Number(payload.price); const volume = Number(payload.quantity ?? payload.volume);
-    if (!(price > 0 && volume > 0)) throw new Error("Upbit maker order requires positive price and quantity");
+    const price = Number(payload.price);
+    const volume = Number(payload.quantity ?? payload.volume);
+    if (!(price > 0 && volume > 0)) {
+      throw new Error("Upbit maker order requires positive price and quantity");
+    }
     if (side === "bid") enforceBuyCaps("upbit", price * volume);
     body.ord_type = "limit";
     body.price = decimal(price, 12);
@@ -555,7 +680,11 @@ async function upbitCreateOrder(payload, waitForFinalMs = 2500) {
     normalized = normalizeUpbitOrder(raw);
   } catch (error) {
     if (["AbortError", "TypeError"].includes(error?.name) || Number(error?.status) >= 500) {
-      try { normalized = await upbitGetOrder(identifier); } catch { throw error; }
+      try {
+        normalized = await upbitGetOrder(identifier);
+      } catch {
+        throw error;
+      }
     } else throw error;
   }
   const deadline = Date.now() + Math.max(0, Math.min(5000, Number(waitForFinalMs) || 0));
@@ -563,19 +692,35 @@ async function upbitCreateOrder(payload, waitForFinalMs = 2500) {
     await sleep(300);
     normalized = await upbitGetOrder(identifier);
   }
-  if (side === "bid" && type === "LIMIT" && normalized.executed_funds > 0) recordBuy("upbit", normalized.executed_funds);
+  if (side === "bid" && type === "LIMIT" && normalized.executed_funds > 0) {
+    recordBuy("upbit", normalized.executed_funds);
+  }
   return { order: normalized, fill: fillSummary(normalized) };
 }
 async function upbitOrderTest(payload) {
-  const market = validateUpbitMarket(payload.market); const identifier = validateIdentifier(payload.identifier);
-  const side = payload.side === "SELL" || payload.side === "ask" ? "ask" : payload.side === "BUY" || payload.side === "bid" ? "bid" : null;
+  const market = validateUpbitMarket(payload.market);
+  const identifier = validateIdentifier(payload.identifier);
+  const side = payload.side === "SELL" || payload.side === "ask"
+    ? "ask"
+    : payload.side === "BUY" || payload.side === "bid"
+    ? "bid"
+    : null;
   const type = String(payload.type || payload.ord_type || "").toUpperCase();
-  if (!side || !["LIMIT", "MARKET", "LIMIT_MAKER"].includes(type)) throw new Error("invalid Upbit test order");
+  if (!side || !["LIMIT", "MARKET", "LIMIT_MAKER"].includes(type)) {
+    throw new Error("invalid Upbit test order");
+  }
   const body = { market, side, identifier };
   if (type === "LIMIT") {
-    const price = Number(payload.price); const quantity = Number(payload.quantity ?? payload.volume);
-    if (!(price > 0 && quantity > 0)) throw new Error("Upbit limit test requires price and quantity");
-    Object.assign(body, { ord_type: "limit", price: decimal(price, 12), volume: decimal(quantity, 16) });
+    const price = Number(payload.price);
+    const quantity = Number(payload.quantity ?? payload.volume);
+    if (!(price > 0 && quantity > 0)) {
+      throw new Error("Upbit limit test requires price and quantity");
+    }
+    Object.assign(body, {
+      ord_type: "limit",
+      price: decimal(price, 12),
+      volume: decimal(quantity, 16),
+    });
     if (payload.time_in_force) body.time_in_force = String(payload.time_in_force).toLowerCase();
   } else {
     if (side !== "ask") throw new Error("Upbit market test is restricted to sell");
@@ -590,8 +735,12 @@ async function binanceExchangeInfo(symbol) {
   const market = validateBinanceSymbol(symbol);
   const data = await publicBinance("/api/v3/exchangeInfo", { symbol: market });
   const row = Array.isArray(data?.symbols) ? data.symbols[0] : null;
-  if (!row || row.status !== "TRADING" || row.isSpotTradingAllowed === false) throw new Error(`Binance ${market} is not available for spot trading`);
-  const filters = Object.fromEntries((row.filters || []).map((filter) => [filter.filterType, filter]));
+  if (!row || row.status !== "TRADING" || row.isSpotTradingAllowed === false) {
+    throw new Error(`Binance ${market} is not available for spot trading`);
+  }
+  const filters = Object.fromEntries(
+    (row.filters || []).map((filter) => [filter.filterType, filter]),
+  );
   return {
     symbol: market,
     base_asset: row.baseAsset,
@@ -617,8 +766,12 @@ function conformBinanceOrder(payload, info) {
   }
   const clientOrderId = validateIdentifier(payload.identifier || payload.newClientOrderId);
   let quantity = floorStep(Number(payload.quantity ?? payload.volume), info.quantity_step);
-  if (!(quantity > 0) || quantity < info.min_quantity) throw new Error("Binance quantity is below LOT_SIZE minimum");
-  if (info.max_quantity > 0 && quantity > info.max_quantity) quantity = floorStep(info.max_quantity, info.quantity_step);
+  if (!(quantity > 0) || quantity < info.min_quantity) {
+    throw new Error("Binance quantity is below LOT_SIZE minimum");
+  }
+  if (info.max_quantity > 0 && quantity > info.max_quantity) {
+    quantity = floorStep(info.max_quantity, info.quantity_step);
+  }
   const order = {
     symbol: info.symbol,
     side,
@@ -634,8 +787,12 @@ function conformBinanceOrder(payload, info) {
     const price = floorStep(Number(payload.price), info.price_tick);
     if (!(price > 0)) throw new Error("Binance limit order requires a valid tick-aligned price");
     const notional = price * quantity;
-    if (info.min_notional > 0 && notional < info.min_notional) throw new Error(`Binance order notional ${notional} below ${info.min_notional}`);
-    if (info.max_notional > 0 && notional > info.max_notional) throw new Error(`Binance order notional ${notional} above ${info.max_notional}`);
+    if (info.min_notional > 0 && notional < info.min_notional) {
+      throw new Error(`Binance order notional ${notional} below ${info.min_notional}`);
+    }
+    if (info.max_notional > 0 && notional > info.max_notional) {
+      throw new Error(`Binance order notional ${notional} above ${info.max_notional}`);
+    }
     if (side === "BUY") enforceBuyCaps("binance", notional);
     order.price = formatStep(price, info.price_tick);
     order.timeInForce = String(payload.time_in_force || payload.timeInForce || "IOC").toUpperCase();
@@ -643,26 +800,39 @@ function conformBinanceOrder(payload, info) {
     const price = floorStep(Number(payload.price), info.price_tick);
     if (!(price > 0)) throw new Error("Binance maker order requires a valid tick-aligned price");
     const notional = price * quantity;
-    if (info.min_notional > 0 && notional < info.min_notional) throw new Error(`Binance order notional ${notional} below ${info.min_notional}`);
-    if (info.max_notional > 0 && notional > info.max_notional) throw new Error(`Binance order notional ${notional} above ${info.max_notional}`);
+    if (info.min_notional > 0 && notional < info.min_notional) {
+      throw new Error(`Binance order notional ${notional} below ${info.min_notional}`);
+    }
+    if (info.max_notional > 0 && notional > info.max_notional) {
+      throw new Error(`Binance order notional ${notional} above ${info.max_notional}`);
+    }
     if (side === "BUY") enforceBuyCaps("binance", notional);
     order.price = formatStep(price, info.price_tick);
     // LIMIT_MAKER accepts no timeInForce.
   } else if (side === "BUY") {
     throw new Error("Binance market orders are restricted to sells");
   }
-  return { order, info, notional: ["LIMIT", "LIMIT_MAKER"].includes(type) ? Number(order.price) * Number(order.quantity) : 0 };
+  return {
+    order,
+    info,
+    notional: ["LIMIT", "LIMIT_MAKER"].includes(type)
+      ? Number(order.price) * Number(order.quantity)
+      : 0,
+  };
 }
 async function binanceGetOrder(identifier, symbol) {
   const market = validateBinanceSymbol(symbol);
   const data = (await binanceRequest("GET", "/api/v3/order", {
-    symbol: market, origClientOrderId: validateIdentifier(identifier),
+    symbol: market,
+    origClientOrderId: validateIdentifier(identifier),
   })).data;
   const executedQty = Number(data?.executedQty || 0);
   if (executedQty > 0 && data?.orderId != null) {
     try {
       const trades = (await binanceRequest("GET", "/api/v3/myTrades", {
-        symbol: market, orderId: data.orderId, limit: 1000,
+        symbol: market,
+        orderId: data.orderId,
+        limit: 1000,
       })).data;
       data.fills = await markBinanceCommissionQuote(binanceTradesToFills(trades), market);
     } catch (error) {
@@ -680,7 +850,8 @@ async function binanceCreateOrder(payload, waitForFinalMs = 2500) {
   const conformed = conformBinanceOrder(payload, info);
   let normalized;
   try {
-    const raw = (await binanceRequest("POST", "/api/v3/order", conformed.order, { timeoutMs: 12_000 })).data;
+    const raw =
+      (await binanceRequest("POST", "/api/v3/order", conformed.order, { timeoutMs: 12_000 })).data;
     if (Array.isArray(raw?.fills) && raw.fills.length) {
       raw.fills = await markBinanceCommissionQuote(raw.fills, info.symbol);
     }
@@ -688,8 +859,15 @@ async function binanceCreateOrder(payload, waitForFinalMs = 2500) {
   } catch (error) {
     // Binance documents 5xx/-1007 as UNKNOWN execution status. Reconcile by
     // deterministic clientOrderId; never submit the same economic order twice.
-    if (["AbortError", "TypeError"].includes(error?.name) || Number(error?.status) >= 500 || Number(error?.code) === -1007) {
-      try { normalized = await binanceGetOrder(conformed.order.newClientOrderId, info.symbol); } catch { throw error; }
+    if (
+      ["AbortError", "TypeError"].includes(error?.name) || Number(error?.status) >= 500 ||
+      Number(error?.code) === -1007
+    ) {
+      try {
+        normalized = await binanceGetOrder(conformed.order.newClientOrderId, info.symbol);
+      } catch {
+        throw error;
+      }
     } else throw error;
   }
   const deadline = Date.now() + Math.max(0, Math.min(5000, Number(waitForFinalMs) || 0));
@@ -697,7 +875,9 @@ async function binanceCreateOrder(payload, waitForFinalMs = 2500) {
     await sleep(250);
     normalized = await binanceGetOrder(conformed.order.newClientOrderId, info.symbol);
   }
-  if (conformed.order.side === "BUY" && normalized.executed_funds > 0) recordBuy("binance", normalized.executed_funds);
+  if (conformed.order.side === "BUY" && normalized.executed_funds > 0) {
+    recordBuy("binance", normalized.executed_funds);
+  }
   return { order: normalized, fill: fillSummary(normalized), symbol_info: info };
 }
 async function binanceOrderTest(payload) {
@@ -718,10 +898,14 @@ function fillSummary(order) {
 function buildUpbitPortfolio(accounts, tickers) {
   const rows = Array.isArray(accounts) ? accounts : [];
   const tickerRows = Array.isArray(tickers) ? tickers : [];
-  const prices = Object.fromEntries(tickerRows
-    .filter((row) => String(row?.market || "").startsWith("KRW-") && Number(row?.trade_price) > 0)
-    .map((row) => [String(row.market), Number(row.trade_price)]));
-  let total = 0; let available = 0; let locked = 0;
+  const prices = Object.fromEntries(
+    tickerRows
+      .filter((row) => String(row?.market || "").startsWith("KRW-") && Number(row?.trade_price) > 0)
+      .map((row) => [String(row.market), Number(row.trade_price)]),
+  );
+  let total = 0;
+  let available = 0;
+  let locked = 0;
   const unpricedAssets = [];
   for (const row of rows) {
     const currency = String(row?.currency || "").toUpperCase();
@@ -729,18 +913,30 @@ function buildUpbitPortfolio(accounts, tickers) {
     const held = Math.max(0, Number(row?.locked || 0));
     const quantity = free + held;
     if (currency === "KRW") {
-      available = free; locked = held; total += quantity;
+      available = free;
+      locked = held;
+      total += quantity;
       continue;
     }
     if (!(quantity > 0)) continue;
     const market = `KRW-${currency}`;
     const price = Number(prices[market] || 0);
     if (price > 0) total += quantity * price;
-    else unpricedAssets.push({ currency, balance: free, locked: held, reason: "NO_ACTIVE_KRW_TICKER" });
+    else {unpricedAssets.push({
+        currency,
+        balance: free,
+        locked: held,
+        reason: "NO_ACTIVE_KRW_TICKER",
+      });}
   }
   return {
-    exchange: "upbit", quote_currency: "KRW", accounts: rows, prices,
-    total_equity_quote: total, available_quote: available, locked_quote: locked,
+    exchange: "upbit",
+    quote_currency: "KRW",
+    accounts: rows,
+    prices,
+    total_equity_quote: total,
+    available_quote: available,
+    locked_quote: locked,
     unpriced_assets: unpricedAssets,
   };
 }
@@ -754,11 +950,16 @@ async function upbitPortfolio() {
   return buildUpbitPortfolio(accounts, tickers);
 }
 async function binancePortfolio() {
-  const account = (await binanceRequest("GET", "/api/v3/account", { omitZeroBalances: "true" })).data;
+  const account =
+    (await binanceRequest("GET", "/api/v3/account", { omitZeroBalances: "true" })).data;
   const balances = Array.isArray(account?.balances) ? account.balances : [];
   const tickers = await publicBinance("/api/v3/ticker/price");
-  const prices = Object.fromEntries((Array.isArray(tickers) ? tickers : []).map((r) => [r.symbol, Number(r.price)]));
-  let total = 0; let available = 0; let locked = 0;
+  const prices = Object.fromEntries(
+    (Array.isArray(tickers) ? tickers : []).map((r) => [r.symbol, Number(r.price)]),
+  );
+  let total = 0;
+  let available = 0;
+  let locked = 0;
   const accounts = balances.map((row) => ({
     currency: row.asset,
     balance: Number(row.free || 0),
@@ -766,12 +967,20 @@ async function binancePortfolio() {
     avg_buy_price: null,
   }));
   for (const row of accounts) {
-    if (row.currency === "USDT") { available = row.balance; locked = row.locked; total += row.balance + row.locked; }
-    else total += (row.balance + row.locked) * Number(prices[`${row.currency}USDT`] || 0);
+    if (row.currency === "USDT") {
+      available = row.balance;
+      locked = row.locked;
+      total += row.balance + row.locked;
+    } else total += (row.balance + row.locked) * Number(prices[`${row.currency}USDT`] || 0);
   }
   return {
-    exchange: "binance", quote_currency: "USDT", accounts, prices,
-    total_equity_quote: total, available_quote: available, locked_quote: locked,
+    exchange: "binance",
+    quote_currency: "USDT",
+    accounts,
+    prices,
+    total_equity_quote: total,
+    available_quote: available,
+    locked_quote: locked,
     commission_rates: account?.commissionRates || null,
   };
 }
@@ -812,7 +1021,14 @@ function summarizeTradeFlow(trades, nowMs) {
   };
 }
 
-const EMPTY_FLOW = { pressure: 0, buy_notional: 0, sell_notional: 0, trade_count: 0, last_trade_at: null, half_life_ms: TRADE_FLOW_HALF_LIFE_MS };
+const EMPTY_FLOW = {
+  pressure: 0,
+  buy_notional: 0,
+  sell_notional: 0,
+  trade_count: 0,
+  last_trade_at: null,
+  half_life_ms: TRADE_FLOW_HALF_LIFE_MS,
+};
 
 async function quote(exchange, market) {
   const symbol = validateMarket(exchange, market);
@@ -832,7 +1048,9 @@ async function quote(exchange, market) {
     const book = Array.isArray(books) ? books[0] : null;
     const units = Array.isArray(book?.orderbook_units) ? book.orderbook_units : [];
     return {
-      exchange, market: symbol, current: Number(ticker?.trade_price || 0),
+      exchange,
+      market: symbol,
+      current: Number(ticker?.trade_price || 0),
       best_ask: Number(units[0]?.ask_price || ticker?.trade_price || 0),
       best_bid: Number(units[0]?.bid_price || ticker?.trade_price || 0),
       asks: units.map((unit) => ({ price: Number(unit.ask_price), size: Number(unit.ask_size) })),
@@ -865,13 +1083,22 @@ async function quote(exchange, market) {
     publicBinance("/api/v3/depth", { symbol, limit: 100 }),
     publicBinance("/api/v3/trades", { symbol, limit: 100 }).catch(() => null),
   ]);
-  const asks = Array.isArray(depth?.asks) ? depth.asks.map(([price, size]) => ({ price: Number(price), size: Number(size) })) : [];
-  const bids = Array.isArray(depth?.bids) ? depth.bids.map(([price, size]) => ({ price: Number(price), size: Number(size) })) : [];
+  const asks = Array.isArray(depth?.asks)
+    ? depth.asks.map(([price, size]) => ({ price: Number(price), size: Number(size) }))
+    : [];
+  const bids = Array.isArray(depth?.bids)
+    ? depth.bids.map(([price, size]) => ({ price: Number(price), size: Number(size) }))
+    : [];
   const bestAsk = Number(ticker?.askPrice || asks[0]?.price || 0);
   const bestBid = Number(ticker?.bidPrice || bids[0]?.price || 0);
   return {
-    exchange, market: symbol, current: bestAsk > 0 && bestBid > 0 ? (bestAsk + bestBid) / 2 : Number(ticker?.price || 0),
-    best_ask: bestAsk, best_bid: bestBid, asks, bids,
+    exchange,
+    market: symbol,
+    current: bestAsk > 0 && bestBid > 0 ? (bestAsk + bestBid) / 2 : Number(ticker?.price || 0),
+    best_ask: bestAsk,
+    best_bid: bestBid,
+    asks,
+    bids,
     // isBuyerMaker === true means the buyer was resting, so the SELLER was the aggressor.
     trade_flow: Array.isArray(trades)
       ? summarizeTradeFlow(
@@ -920,9 +1147,12 @@ async function cancelOrder(exchange, identifier, market) {
     }
     return cancelled;
   }
-  return normalizeBinanceOrder((await binanceRequest("DELETE", "/api/v3/order", {
-    symbol: validateBinanceSymbol(market), origClientOrderId: id,
-  })).data);
+  return normalizeBinanceOrder(
+    (await binanceRequest("DELETE", "/api/v3/order", {
+      symbol: validateBinanceSymbol(market),
+      origClientOrderId: id,
+    })).data,
+  );
 }
 // v5.4: real account commission rates.
 //
@@ -934,22 +1164,26 @@ async function cancelOrder(exchange, identifier, market) {
 async function accountFees(exchange, market = null) {
   if (exchange === "upbit") {
     const symbol = market ? validateUpbitMarket(market) : "KRW-BTC";
-    const chance = (await upbitRequest("GET", "/v1/orders/chance", { query: { market: symbol } })).data;
+    const chance =
+      (await upbitRequest("GET", "/v1/orders/chance", { query: { market: symbol } })).data;
     const bid = Number(chance?.bid_fee);
     const ask = Number(chance?.ask_fee);
     return {
-      exchange: "upbit", market: symbol,
+      exchange: "upbit",
+      market: symbol,
       maker_pct: Number.isFinite(bid) ? bid * 100 : null,
       taker_pct: Number.isFinite(ask) ? ask * 100 : null,
       source: "orders_chance",
     };
   }
-  const account = (await binanceRequest("GET", "/api/v3/account", { omitZeroBalances: "true" })).data;
+  const account =
+    (await binanceRequest("GET", "/api/v3/account", { omitZeroBalances: "true" })).data;
   const rates = account?.commissionRates || {};
   const maker = Number(rates.maker);
   const taker = Number(rates.taker);
   return {
-    exchange: "binance", market: market || null,
+    exchange: "binance",
+    market: market || null,
     maker_pct: Number.isFinite(maker) ? maker * 100 : null,
     taker_pct: Number.isFinite(taker) ? taker * 100 : null,
     // Reported rates already include the BNB discount when fee payment in BNB is enabled.
@@ -961,20 +1195,44 @@ async function accountFees(exchange, market = null) {
 async function openOrders(exchange, market = null) {
   if (exchange === "upbit") {
     const rows = (await upbitRequest("GET", "/v1/orders/open", {
-      query: { states: ["wait", "watch"], limit: 100, order_by: "asc", ...(market ? { market: validateUpbitMarket(market) } : {}) },
+      query: {
+        states: ["wait", "watch"],
+        limit: 100,
+        order_by: "asc",
+        ...(market ? { market: validateUpbitMarket(market) } : {}),
+      },
     })).data;
     return (Array.isArray(rows) ? rows : []).map(normalizeUpbitOrder);
   }
-  const rows = (await binanceRequest("GET", "/api/v3/openOrders", market ? { symbol: validateBinanceSymbol(market) } : {})).data;
+  const rows = (await binanceRequest(
+    "GET",
+    "/api/v3/openOrders",
+    market ? { symbol: validateBinanceSymbol(market) } : {},
+  )).data;
   return (Array.isArray(rows) ? rows : []).map(normalizeBinanceOrder);
 }
 async function cancelBotOrders(exchange, market = null) {
   const rows = await openOrders(exchange, market);
-  const targets = rows.filter((row) => String(row.client_order_id || "").startsWith(BOT_IDENTIFIER_PREFIX));
+  const targets = rows.filter((row) =>
+    String(row.client_order_id || "").startsWith(BOT_IDENTIFIER_PREFIX)
+  );
   const results = [];
   for (const row of targets) {
-    try { results.push(await cancelOrder(exchange, row.client_order_id, market || row.raw?.symbol || row.raw?.market)); }
-    catch (error) { results.push({ client_order_id: row.client_order_id, error: error.message, code: error.code }); }
+    try {
+      results.push(
+        await cancelOrder(
+          exchange,
+          row.client_order_id,
+          market || row.raw?.symbol || row.raw?.market,
+        ),
+      );
+    } catch (error) {
+      results.push({
+        client_order_id: row.client_order_id,
+        error: error.message,
+        code: error.code,
+      });
+    }
     await sleep(exchange === "upbit" ? 150 : 80);
   }
   return results;
@@ -1005,30 +1263,54 @@ async function withOrderTiming(work) {
 async function handleCommand(command) {
   const exchange = validateExchange(command?.exchange);
   switch (String(command?.action || "")) {
-    case "portfolio": return exchange === "upbit" ? upbitPortfolio() : binancePortfolio();
-    case "accounts": return exchange === "upbit" ? (await upbitRequest("GET", "/v1/accounts")).data : (await binanceRequest("GET", "/api/v3/account", { omitZeroBalances: "true" })).data;
-    case "quote": return quote(exchange, command.market);
-    case "symbol_info": return exchange === "binance" ? binanceExchangeInfo(command.market) : { market: validateUpbitMarket(command.market), quote_asset: "KRW" };
-    case "order_test": return exchange === "upbit" ? upbitOrderTest(command.order || {}) : binanceOrderTest(command.order || {});
-    case "create_order": return withOrderTiming(() =>
-      exchange === "upbit"
-        ? upbitCreateOrder(command.order || {}, command.wait_for_final_ms)
-        : binanceCreateOrder(command.order || {}, command.wait_for_final_ms));
-    case "get_order": return getOrder(exchange, command.identifier, command.market);
-    case "cancel_order": return cancelOrder(exchange, command.identifier, command.market);
-    case "open_orders": return openOrders(exchange, command.market || null);
-    case "fees": return accountFees(exchange, command.market || null);
-    case "cancel_bot_orders": return cancelBotOrders(exchange, command.market || null);
-    default: throw new Error("unsupported gateway action");
+    case "portfolio":
+      return exchange === "upbit" ? upbitPortfolio() : binancePortfolio();
+    case "accounts":
+      return exchange === "upbit"
+        ? (await upbitRequest("GET", "/v1/accounts")).data
+        : (await binanceRequest("GET", "/api/v3/account", { omitZeroBalances: "true" })).data;
+    case "quote":
+      return quote(exchange, command.market);
+    case "symbol_info":
+      return exchange === "binance"
+        ? binanceExchangeInfo(command.market)
+        : { market: validateUpbitMarket(command.market), quote_asset: "KRW" };
+    case "order_test":
+      return exchange === "upbit"
+        ? upbitOrderTest(command.order || {})
+        : binanceOrderTest(command.order || {});
+    case "create_order":
+      return withOrderTiming(() =>
+        exchange === "upbit"
+          ? upbitCreateOrder(command.order || {}, command.wait_for_final_ms)
+          : binanceCreateOrder(command.order || {}, command.wait_for_final_ms)
+      );
+    case "get_order":
+      return getOrder(exchange, command.identifier, command.market);
+    case "cancel_order":
+      return cancelOrder(exchange, command.identifier, command.market);
+    case "open_orders":
+      return openOrders(exchange, command.market || null);
+    case "fees":
+      return accountFees(exchange, command.market || null);
+    case "cancel_bot_orders":
+      return cancelBotOrders(exchange, command.market || null);
+    default:
+      throw new Error("unsupported gateway action");
   }
 }
 function sendJson(res, status, body) {
   const text = JSON.stringify(body);
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "content-length": Buffer.byteLength(text) });
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    "content-length": Buffer.byteLength(text),
+  });
   res.end(text);
 }
 async function readBody(req, maxBytes = 65_536) {
-  const chunks = []; let size = 0;
+  const chunks = [];
+  let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
     if (size > maxBytes) throw new Error("request body too large");
@@ -1037,20 +1319,34 @@ async function readBody(req, maxBytes = 65_536) {
   return Buffer.concat(chunks).toString("utf8");
 }
 async function callAutotrader(action) {
-  if (!SUPABASE_URL || !AUTOTRADE_TOKEN) throw new Error("SUPABASE_URL/AUTOTRADE_ACCESS_TOKEN not configured");
+  if (!SUPABASE_URL || !AUTOTRADE_TOKEN) {
+    throw new Error("SUPABASE_URL/AUTOTRADE_ACCESS_TOKEN not configured");
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), action === "scan" ? 360_000 : 45_000);
   try {
     const response = await fetch(`${SUPABASE_URL}/functions/v1/market-autotrader`, {
-      method: "POST", signal: controller.signal,
+      method: "POST",
+      signal: controller.signal,
       headers: { "content-type": "application/json", "x-autotrade-token": AUTOTRADE_TOKEN },
-      body: JSON.stringify({ action, source: "static-ip-gateway-scheduler", at: new Date().toISOString() }),
+      body: JSON.stringify({
+        action,
+        source: "static-ip-gateway-scheduler",
+        at: new Date().toISOString(),
+      }),
     });
-    const text = await response.text(); let data;
-    try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+    const text = await response.text();
+    let data;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = { raw: text };
+    }
     if (!response.ok) throw new Error(`autotrader ${response.status}: ${data?.error || text}`);
     return data;
-  } finally { clearTimeout(timer); }
+  } finally {
+    clearTimeout(timer);
+  }
 }
 async function schedulerTick(kind) {
   const key = kind === "scan" ? "scanRunning" : "monitorRunning";
@@ -1059,19 +1355,24 @@ async function schedulerTick(kind) {
   try {
     const result = await callAutotrader(kind);
     schedulerState[kind === "scan" ? "lastScanAt" : "lastMonitorAt"] = new Date().toISOString();
-    schedulerState[kind === "scan" ? "lastScanResult" : "lastMonitorResult"] = result?.status || "ok";
+    schedulerState[kind === "scan" ? "lastScanResult" : "lastMonitorResult"] = result?.status ||
+      "ok";
     schedulerState.lastError = null;
   } catch (error) {
     schedulerState.lastError = `${kind}: ${error.message}`;
     console.error("scheduler", kind, error);
-  } finally { schedulerState[key] = false; }
+  } finally {
+    schedulerState[key] = false;
+  }
 }
 async function discoverEgressIp() {
   try {
     const response = await fetch("https://api4.ipify.org?format=json");
     const data = await response.json();
     schedulerState.egressIpv4 = data.ip || null;
-  } catch (error) { console.warn("egress IP discovery failed", error.message); }
+  } catch (error) {
+    console.warn("egress IP discovery failed", error.message);
+  }
 }
 
 function createServer() {
@@ -1088,22 +1389,33 @@ function createServer() {
           },
           scheduler_enabled: SCHEDULER_ENABLED,
           scheduler: schedulerState,
-          intervals: { scan_seconds: SCAN_INTERVAL_MS / 1000, monitor_seconds: MONITOR_INTERVAL_MS / 1000 },
+          intervals: {
+            scan_seconds: SCAN_INTERVAL_MS / 1000,
+            monitor_seconds: MONITOR_INTERVAL_MS / 1000,
+          },
           limits: {
             source: "operator_allocation",
             hidden_monetary_caps: false,
           },
         });
       }
-      if (req.method !== "POST" || url.pathname !== "/v1/command") return sendJson(res, 404, { error: "not found" });
+      if (req.method !== "POST" || url.pathname !== "/v1/command") {
+        return sendJson(res, 404, { error: "not found" });
+      }
       const raw = await readBody(req);
       const verification = verifyGatewayRequest(req, raw);
-      if (!verification.ok) return sendJson(res, verification.status, { error: verification.error });
+      if (!verification.ok) {
+        return sendJson(res, verification.status, { error: verification.error });
+      }
       const result = await handleCommand(raw ? JSON.parse(raw) : {});
       return sendJson(res, 200, { ok: true, result, version: VERSION });
     } catch (error) {
       console.error("gateway request failed", error);
-      return sendJson(res, Number(error.status) || 400, { ok: false, error: error.message, code: error.code || "GATEWAY_ERROR" });
+      return sendJson(res, Number(error.status) || 400, {
+        ok: false,
+        error: error.message,
+        code: error.code || "GATEWAY_ERROR",
+      });
     }
   });
 }
@@ -1112,7 +1424,9 @@ export async function startServer() {
   await new Promise((resolve) => server.listen(PORT, "0.0.0.0", resolve));
   console.log(`Trading-booooo multi-exchange gateway v${VERSION} listening on ${PORT}`);
   await discoverEgressIp();
-  if (BINANCE_API_KEY && BINANCE_SECRET_KEY) syncBinanceTime(true).catch((error) => console.warn("Binance time sync failed", error.message));
+  if (BINANCE_API_KEY && BINANCE_SECRET_KEY) {
+    syncBinanceTime(true).catch((error) => console.warn("Binance time sync failed", error.message));
+  }
   if (SCHEDULER_ENABLED) {
     setTimeout(() => schedulerTick("monitor"), 2_000).unref();
     // v6.2: the first scan used to wait 20 seconds after boot, so every deploy and every
@@ -1129,7 +1443,12 @@ export async function startServer() {
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (isMain) startServer().catch((error) => { console.error(error); process.exit(1); });
+if (isMain) {
+  startServer().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
 
 export {
   binanceQueryString,
@@ -1138,17 +1457,17 @@ export {
   contextualizeError,
   createBinanceSignature,
   createUpbitJwt,
+  encodedQueryString,
   floorStep,
   formatStep,
-  stepPrecision,
-  upbitRateGroup,
   localRateLimit,
   normalizeBinanceOrder,
   normalizeUpbitOrder,
   rawQueryString,
-  encodedQueryString,
+  stepPrecision,
+  upbitRateGroup,
   validateBinanceSymbol,
+  validateExchange,
   validateIdentifier,
   validateUpbitMarket,
-  validateExchange,
 };
