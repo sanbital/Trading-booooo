@@ -124,7 +124,7 @@ begin
    where lower(s.exchange)=v_exchange
      and s.scanned_at>=v_eval_start and s.scanned_at<v_period_end
      and coalesce(s.model_version,'') like '6.12.%'
-     and coalesce(s.horizon_hours,999)<=0.10;
+     and coalesce(s.expected_holding_minutes,999)<=6;
 
   v_shadow_missed:=greatest(0,v_shadow_profitable-v_shadow_captured);
   v_capture:=case when v_shadow_profitable>0 then v_shadow_captured::numeric/v_shadow_profitable else 1 end;
