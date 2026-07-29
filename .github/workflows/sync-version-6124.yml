@@ -1,0 +1,88 @@
+name: Synchronize v6.12.4 release version
+
+on:
+  push:
+    paths:
+      - ".github/workflows/sync-version-6124.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  synchronize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Synchronize engine and dashboard version
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          release = "6.12.4-MISSION-CALIBRATED-LOB"
+          dashboard_revision = "6.12.4-r1-VERSION-SYNCHRONIZED"
+
+          replacements = {
+              Path("supabase/functions/market-autotrader/index.ts"): [
+                  (
+                      "// Trading-booooo v6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION — autonomous spot orchestrator.",
+                      f"// Trading-booooo v{release} — autonomous spot orchestrator.",
+                  ),
+                  (
+                      'const VERSION = "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION";',
+                      f'const VERSION = "{release}";',
+                  ),
+              ],
+              Path("docs/config.js"): [
+                  (
+                      'const UI_VERSION = "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION";',
+                      f'const UI_VERSION = "{release}";',
+                  ),
+                  (
+                      'const DASHBOARD_REVISION = "6.11.0-r2-PAGINATED-LIVE-FILLS";',
+                      f'const DASHBOARD_REVISION = "{dashboard_revision}";',
+                  ),
+              ],
+              Path("docs/index.html"): [
+                  ("./styles.css?v=6.11.0-r1", f"./styles.css?v={dashboard_revision}"),
+                  ("./config.js?v=6.11.0-r1", f"./config.js?v={dashboard_revision}"),
+                  ("./app.js?v=6.11.0-r1", f"./app.js?v={dashboard_revision}"),
+                  (
+                      "UPBIT KRW + BINANCE USDT SPOT · v6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION",
+                      f"UPBIT KRW + BINANCE USDT SPOT · v{release}",
+                  ),
+              ],
+          }
+
+          for path, rules in replacements.items():
+              text = path.read_text(encoding="utf-8")
+              original = text
+              for old, new in rules:
+                  if old not in text:
+                      raise SystemExit(f"Expected version token not found in {path}: {old}")
+                  text = text.replace(old, new)
+              if text == original:
+                  raise SystemExit(f"No changes produced for {path}")
+              path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Verify no stale public version remains
+        shell: bash
+        run: |
+          ! grep -n "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION" \
+            supabase/functions/market-autotrader/index.ts docs/index.html docs/config.js
+          grep -n "6.12.4-MISSION-CALIBRATED-LOB" \
+            supabase/functions/market-autotrader/index.ts docs/index.html docs/config.js
+
+      - name: Commit synchronized release
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/market-autotrader/index.ts docs/index.html docs/config.js
+          git diff --cached --quiet || git commit -m "chore(v6.12.4): synchronize engine and dashboard release"
+          git push
