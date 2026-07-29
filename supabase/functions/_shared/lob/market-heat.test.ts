@@ -9,6 +9,14 @@ Deno.test("markets rank strictly by 24h gain while weakening flow is marked for 
   const rows = rankMarketHeat([
     [
       {
+        market: "THIN",
+        timestampMs: 0,
+        price: 100,
+        turnover24hQuote: 10_000,
+        tradeCount: 10,
+        change24hPct: 40,
+      },
+      {
         market: "GAINER",
         timestampMs: 0,
         price: 100,
@@ -27,6 +35,14 @@ Deno.test("markets rank strictly by 24h gain while weakening flow is marked for 
     ],
     [
       {
+        market: "THIN",
+        timestampMs: 1000,
+        price: 100,
+        turnover24hQuote: 11_000,
+        tradeCount: 11,
+        change24hPct: 40,
+      },
+      {
         market: "GAINER",
         timestampMs: 1000,
         price: 100,
@@ -44,6 +60,14 @@ Deno.test("markets rank strictly by 24h gain while weakening flow is marked for 
       },
     ],
     [
+      {
+        market: "THIN",
+        timestampMs: 2000,
+        price: 100,
+        turnover24hQuote: 12_000,
+        tradeCount: 12,
+        change24hPct: 40,
+      },
       {
         market: "GAINER",
         timestampMs: 2000,
@@ -66,7 +90,9 @@ Deno.test("markets rank strictly by 24h gain while weakening flow is marked for 
     referenceRecentNotionalPerSecond: 5_000_000,
     referenceTradeCountPerSecond: 10,
   });
-  assert(rows[0].market === "GAINER", "24h percentage gain must own the rank");
-  assert(!rows[0].flowHealthy, "declining notional and trade speed must exclude the leader");
-  assert(rows[1].flowHealthy, "rank two remains eligible when its live flow accelerates");
+  assert(rows[0].market === "THIN", "Top 10 must be fixed before liquidity exclusions");
+  assert(!rows[0].flowHealthy, "thin turnover must exclude without promoting a lower rank");
+  assert(rows[1].market === "GAINER", "24h percentage gain must own the rank");
+  assert(!rows[1].flowHealthy, "declining notional and trade speed must exclude the leader");
+  assert(rows[2].flowHealthy, "lower rank remains eligible when its live flow accelerates");
 });

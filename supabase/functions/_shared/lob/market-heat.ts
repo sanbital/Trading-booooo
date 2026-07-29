@@ -102,6 +102,9 @@ export function rankMarketHeat(
       )
       : 0;
     const flowExclusionReasons: string[] = [];
+    if (finite(last.turnover24hQuote) < config.minimumTurnover24hQuote) {
+      flowExclusionReasons.push("TURNOVER_TOO_LOW");
+    }
     if (notionalTrend < -0.20) flowExclusionReasons.push("NOTIONAL_FLOW_DECLINING");
     if (hasTradeCounts && tradeSpeedTrend < -0.20) {
       flowExclusionReasons.push("TRADE_SPEED_DECLINING");
@@ -138,7 +141,6 @@ export function rankMarketHeat(
       turnover * 0.06 +
       range * 0.04
     ) * 100;
-    if (finite(last.turnover24hQuote) < config.minimumTurnover24hQuote) continue;
     scored.push({
       market,
       rank: 0,
