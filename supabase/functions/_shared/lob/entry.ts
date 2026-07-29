@@ -25,8 +25,9 @@ export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   maxStopToTargetRatio: 1.35,
   minNetRewardRiskRatio: 0.80,
   minTargetBps: 12,
-  // A 180-second scalp cannot use the old 120bp swing-like ceiling. Verified live trades had
-  // a 5.3bp median MFE and only 19.6% ever printed 40bp, while the old target averaged 75bp.
+  // Ordinary 180-second LOB events remain capped at 60bp. The separately identified momentum
+  // continuation family may earn a larger target below because Binance's 20bp fee floor makes
+  // a 30bp target economically meaningless on an actively accelerating multi-percent mover.
   maxTargetBps: 60,
   minStopBps: 6,
   maxStopBps: 500, // user's absolute per-trade ceiling is enforced separately at 5%
@@ -42,12 +43,12 @@ export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   learnedStopFloorBps: 0,
 };
 
-/** Largest amount coherent order-flow evidence may move probability off pure geometry. */
+/** Largest amount ordinary coherent order-flow evidence may move probability off geometry. */
 const MAX_SIGNAL_EDGE = 0.24;
+/** Momentum needs a larger bounded displacement to represent a distinct continuation regime. */
+const MAX_MOMENTUM_SIGNAL_EDGE = 0.40;
 
-/**
- * Shrink the book-derived fill probability toward the exchange's realized maker fill rate.
- */
+/** Shrink the book-derived fill probability toward the exchange's realized maker fill rate. */
 export function calibrateMakerFillProbability(
   rawProbability: number,
   measuredRate: number,
@@ -68,18 +69,12 @@ export function calibrateMakerFillProbability(
 /**
  * LOB-only entry decision.
  *
- * v6.12.4 fixes three live-measured defects:
+ * v6.14 keeps ordinary queue/mean-reversion economics unchanged and adds a separate,
+ * present-tense continuation regime. A 24h gain alone never changes the bracket or probability:
+ * the momentum pattern must first be primary, which requires live aggressive buying, notional
+ * acceleration, positive microprice, a tight book and coherent direction.
  *
- * 1. Target geometry used `abs(microprice)`, so a sharply bearish microprice increased the
- *    LONG target. Geometry now uses only directionally favourable evidence and is capped for
- *    the 180-second horizon.
- * 2. Activity previously added directly to LONG probability. Activity now controls whether
- *    the bracket resolves inside the horizon; signed tape/book evidence controls direction.
- * 3. `pTarget = min(resolveProbability, conditionalTargetShare)` confused an unconditional
- *    probability with a conditional share. The correct decomposition is
- *    `pTarget = pResolve * p(Target | resolved)` and likewise for the stop.
- *
- * The economic hard gate remains fee-net EV > 0 after slippage, latency and forecast bias.
+ * The economic hard gate remains fee-net conservative EV > 0 after slippage, latency and bias.
  */
 export function evaluateLobEntry(
   features: LobFeatureVector,
@@ -111,23 +106,45 @@ export function evaluateLobEntry(
   const positiveMicroprice = clamp(features.micropriceDeviationBps / 8, 0, 1);
   const positiveBook = clamp(features.bookImbalance, 0, 1);
   const directionalConsensus = (positivePressure + positiveMicroprice + positiveBook) / 3;
+  const provisionalMomentum = rawPatterns.find((pattern) =>
+    pattern.name === "MOMENTUM_CONTINUATION" && pattern.primary
+  ) || null;
+  // heatPeriod stores signed 24h return as change_pct / 400 in trendContext.
+  const impliedChange24hPct = clamp(features.trendContext * 400, -100, 100);
+  const momentumChangeScore = clamp((impliedChange24hPct - 3) / 27, 0, 1);
+  const momentumPulse = clamp(
+    momentumChangeScore * 0.22 + positivePressure * 0.28 +
+      clamp(features.notionalAcceleration, 0, 1) * 0.22 +
+      clamp(features.marketHeatScore / 100, 0, 1) * 0.16 +
+      clamp(features.micropriceDeviationBps / 5, 0, 1) * 0.12,
+    0,
+    1,
+  );
 
-  // Live MFE shows a 75bp average target was unreachable for this horizon. Use an executable
-  // 30–50bp family for ordinary strong books, while costs can still raise the gross floor.
-  const movementBps = 10 + provisionalPatternConfidence * 22 +
+  // Ordinary LOB patterns retain the measured 30–50bp geometry. A live continuation pulse
+  // earns a wider 60–140bp bracket because Binance's fee floor otherwise consumes the move.
+  const ordinaryMovementBps = 10 + provisionalPatternConfidence * 22 +
     clamp(features.dataQuality, 0, 1) * 10 + directionalConsensus * 10 +
     provisionalActivity * 6 + clamp(features.ofiPersistence, 0, 1) * 4 +
     Math.max(0, features.spreadBps || 0) * 0.15;
+  const momentumMovementBps = 55 + momentumChangeScore * 45 +
+    positivePressure * 25 + clamp(features.notionalAcceleration, 0, 1) * 20 +
+    clamp(features.marketHeatScore / 100, 0, 1) * 15;
+  const movementBps = provisionalMomentum ? momentumMovementBps : ordinaryMovementBps;
+  const targetCeilingBps = provisionalMomentum ? Math.max(cfg.maxTargetBps, 140) : cfg.maxTargetBps;
   const targetBps = clamp(
     Math.max(cfg.minTargetBps, totalTargetCostBps + cfg.minNetProfitBps, movementBps),
     cfg.minTargetBps,
-    cfg.maxTargetBps,
+    targetCeilingBps,
   );
-  // The old 55–90% stop/target ratio made average losses too large for a fee-heavy scalp.
-  // Confidence now earns a tighter planned stop, while noise, costs and learned winner MAE may
-  // widen it below. The database additionally enforces tick-executable geometry.
+
+  // Momentum invalidates faster than an ordinary absorption trade, so its planned stop is a
+  // smaller share of the target. Cost/noise/tick floors below can still widen it honestly.
+  const plannedStopRatio = provisionalMomentum
+    ? 0.28 + (1 - provisionalPatternConfidence) * 0.14
+    : 0.38 + (1 - provisionalPatternConfidence) * 0.22;
   const provisionalStopBps = clamp(
-    Math.max(cfg.minStopBps, targetBps * (0.38 + (1 - provisionalPatternConfidence) * 0.22)),
+    Math.max(cfg.minStopBps, targetBps * plannedStopRatio),
     cfg.minStopBps,
     cfg.maxStopBps,
   );
@@ -182,6 +199,7 @@ export function evaluateLobEntry(
   if (!primary) reasons.push("NO_PRIMARY_LOB_PATTERN");
 
   const patternConfidence = primary?.confidence ?? 0;
+  const isMomentum = primary?.name === "MOMENTUM_CONTINUATION";
   const activity = hotness.activityScore / 100;
   const signedPressure = clamp(features.tradePressureFast, -1, 1);
   const signedMicroprice = clamp(features.micropriceDeviationBps / 8, -1, 1);
@@ -190,23 +208,27 @@ export function evaluateLobEntry(
   const qualityEdge = (clamp(features.dataQuality, 0, 1) - 0.35) * 0.05;
   const trendAssist = clamp(features.trendContext, -1, 1) * 0.02;
 
-  // Geometry is arithmetic; the signal contributes only a bounded, signed displacement.
   const neutralWinRate = targetBps + stopBps > 0 ? stopBps / (targetBps + stopBps) : 0.5;
+  const momentumDirectionalEdge = isMomentum
+    ? momentumPulse * 0.45 + momentumChangeScore * 0.14
+    : 0;
   const rawSignalEdge = (patternConfidence - 0.45) * 0.20 + signedPressure * 0.08 +
     signedMicroprice * 0.05 + signedBook * 0.05 + signedOfi * 0.04 + qualityEdge +
-    trendAssist + clamp(features.fundingEdge, -0.03, 0.03);
+    trendAssist + clamp(features.fundingEdge, -0.03, 0.03) + momentumDirectionalEdge;
+  const maxSignalEdge = isMomentum ? MAX_MOMENTUM_SIGNAL_EDGE : MAX_SIGNAL_EDGE;
   const signalEdge = clamp(
     rawSignalEdge * clamp(cfg.patternProbabilityMultiplier, 0.3, 2) * traps.confidenceMultiplier,
-    -MAX_SIGNAL_EDGE,
-    MAX_SIGNAL_EDGE,
+    -maxSignalEdge,
+    maxSignalEdge,
   );
 
-  // Activity determines whether either barrier resolves during the 180-second horizon. It no
-  // longer creates a bullish directional edge merely because the tape is busy.
+  // Activity controls whether the bracket resolves. The explicit momentum boost is allowed only
+  // after the present-tense pattern has been established, never from 24h return alone.
   const resolveProbability = clamp(
     0.40 + activity * 0.22 + patternConfidence * 0.18 +
       clamp(features.tradeArrivalRate / 10, 0, 1) * 0.08 +
-      clamp(features.dataQuality, 0, 1) * 0.12,
+      clamp(features.dataQuality, 0, 1) * 0.12 +
+      (isMomentum ? 0.10 + momentumPulse * 0.12 : 0),
     0.25,
     0.95,
   );
@@ -317,7 +339,10 @@ export function evaluateLobEntry(
     evNetBps,
     evLowerBoundBps,
     forecastBiasPenaltyBps,
-    maxHoldingSeconds: Math.min(cfg.absoluteMaxHoldingSeconds, Math.max(1, cfg.maxHoldingSeconds)),
+    maxHoldingSeconds: Math.min(
+      cfg.absoluteMaxHoldingSeconds,
+      Math.max(1, isMomentum ? Math.min(90, cfg.maxHoldingSeconds) : cfg.maxHoldingSeconds),
+    ),
     reasons,
     warnings,
     features,
