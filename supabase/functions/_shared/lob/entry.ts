@@ -2,6 +2,7 @@ import { scoreHotSymbol } from "./hot-symbol.ts";
 import { detectLobPatterns } from "./patterns.ts";
 import { assessLobTraps, type LobTrapName } from "./traps.ts";
 import { evaluateEntryPayoff } from "./payoff-governor.ts";
+import { resolveLobUncertaintyHaircut } from "./uncertainty.ts";
 import type {
   LobCostEstimate,
   LobEntryConfig,
@@ -255,7 +256,14 @@ export function evaluateLobEntry(
   const attemptEvNetBps = pFill * conditionalEvNetBps;
   const evNetBps = conditionalEvNetBps;
 
-  const conservativeEdge = signalEdge * (1 - clamp(cfg.uncertaintyHaircut, 0, 0.9));
+  const uncertainty = resolveLobUncertaintyHaircut(
+    features,
+    clamp(cfg.uncertaintyHaircut, 0, 0.9),
+  );
+  const conservativeEdge = signalEdge * (1 - uncertainty.haircut);
+  if (uncertainty.tier !== "BASE") {
+    warnings.push(`EVIDENCE_UNCERTAINTY_${uncertainty.tier}`);
+  }
   const conservativeConditionalTargetShare = clamp(
     neutralWinRate + conservativeEdge,
     0.02,
