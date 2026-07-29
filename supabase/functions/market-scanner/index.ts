@@ -1446,7 +1446,7 @@ async function runLobHeatScan(
     recommendations,
     watchlist,
     finalists: finalCandidates,
-    ranking: heatSample.heat.slice(0, 20).map((row) => ({
+    ranking: heatSample.heat.slice(0, 10).map((row) => ({
       rank: row.rank,
       market: row.market,
       korean_name: universeByMarket.get(row.market)?.korean_name || row.market,

@@ -22,6 +22,7 @@ Deno.test("v7 ranks Binance USDT and Upbit KRW universes independently", async (
   assert(scanner.includes("new Set(markets.map((row) => row.market))"));
   assert(scanner.includes("const topTen = heatSample.heat.slice(0, 10)"));
   assert(scanner.includes("const selectedRows = heatRanked"));
+  assert(scanner.includes("ranking: heatSample.heat.slice(0, 10)"));
 });
 
 Deno.test("v7 LOB route has no modeled EV, pWin or pFill hard gate", async () => {

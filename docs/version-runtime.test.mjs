@@ -4,6 +4,7 @@ import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 
 const source = await readFile(new URL("./app.js", import.meta.url), "utf8");
+const html = await readFile(new URL("./index.html", import.meta.url), "utf8");
 const helperEnd = source.indexOf("})();");
 
 if (helperEnd < 0) {
@@ -51,4 +52,19 @@ test("a later cached scanner response cannot downgrade the operator version", ()
   window.updateTradingBrandVersion("5.2.3");
 
   assert.match(subtitle.textContent, /v6\.11\.0$/);
+});
+
+test("the dashboard HTML provides every static element required by app.js", () => {
+  const requiredIds = new Set(
+    [...source.matchAll(/\$\("([^"]+)"\)/g)].map((match) => match[1]),
+  );
+  const missing = [...requiredIds].filter(
+    (id) => !html.includes(`id="${id}"`),
+  );
+
+  assert.deepEqual(
+    missing,
+    [],
+    `index.html is missing app.js elements: ${missing.join(", ")}`,
+  );
 });

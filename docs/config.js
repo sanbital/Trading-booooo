@@ -2,7 +2,7 @@
 // Publishable(또는 기존 Anon) Key는 브라우저용 공개 키입니다.
 // Service Role / Secret Key / SCAN_ACCESS_TOKEN은 절대 이 파일에 넣지 마세요.
 const UI_VERSION = "7.0.0-TOP10-LOB-ONLY";
-const DASHBOARD_REVISION = "7.0.0-r1-TOP10-LOB-ONLY";
+const DASHBOARD_REVISION = "7.0.0-r2-TOP10-LOB-ONLY-DASHBOARD-RESTORE";
 
 window.TRADING_SCANNER_CONFIG = {
   uiVersion: UI_VERSION,

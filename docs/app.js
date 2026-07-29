@@ -33,9 +33,9 @@
       label: "업비트 + 바이낸스",
       quote: "MIXED",
       button: "두 거래소 동시 스캔",
-      title: "업비트와 바이낸스를 동시에 점검하고<br>현재 가장 뜨거운 호가창을 추립니다.",
+      title: "업비트와 바이낸스를 각각 순위화하고<br>24시간 상승률 Top 10의 호가창만 봅니다.",
       description:
-        "양 거래소 현물 전체에서 거래대금·체결속도·호가 갱신률을 먼저 비교하고, 최종 후보의 흡수·소진·스윕·OFI·재충전 패턴을 실시간 검증합니다. 추세는 보조 정보일 뿐 주문 권한이 없습니다.",
+        "각 거래소의 활성 현물을 24시간 상승률로 순위화해 Top 10을 먼저 고정합니다. 거래대금·체결속도가 약해지거나 허매수·허매도 위험이 있는 종목은 제외하며 11위 이하로 보충하지 않습니다.",
     },
     upbit: {
       label: "업비트 현물",
@@ -48,7 +48,7 @@
       button: "원화마켓 전체 스캔",
       title: "업비트 원화마켓을 전수 점검하고<br>현재의 매수 후보만 추립니다.",
       description:
-        "원화마켓 전체의 현재 거래대금과 유동성을 점검한 뒤, 가장 활발한 후보의 실시간 호가 갱신·체결 도착·공격적 체결대금과 LOB 패턴을 집중 관찰합니다.",
+        "원화마켓의 24시간 상승률 Top 10을 먼저 고정한 뒤, 거래대금·체결속도와 실시간 호가 갱신·공격 매수·흡수·스윕·OFI만 집중 관찰합니다.",
     },
     binance: {
       label: "바이낸스 현물",
@@ -61,7 +61,7 @@
       button: "USDT 현물 전체 스캔",
       title: "바이낸스 USDT 현물을 전수 점검하고<br>현재의 매수 후보만 추립니다.",
       description:
-        "바이낸스 USDT 현물 전체에서 현재 가장 뜨거운 호가창을 선별하고, 비용 차감 순EV가 양수인 LOB 패턴만 주문 직전 재검사합니다. 업비트와 자금·수수료·유동성 기준은 분리합니다.",
+        "USDT 현물의 24시간 상승률 Top 10을 먼저 고정한 뒤, 거래대금·체결속도와 아이스버그·허매수·허매도·흡수·스윕·OFI를 주문 직전 다시 검사합니다.",
     },
   };
 
@@ -503,11 +503,7 @@
   function renderRanking(rows) {
     elements.rankingBody.innerHTML = (rows || []).map((row) => {
       const quote = row.quote_currency === "USDT" ? "USDT" : activeQuote();
-      const cells = [row.trend?.m5, row.trend?.m15, row.trend?.h4, row.trend?.day]
-        .map((value) => {
-          const [label, className] = trendLabel(value);
-          return `<td><span class="trend ${className}">${label}</span></td>`;
-        }).join("");
+      const flowTone = row.flow_healthy === false ? "negative-text" : "positive-text";
       return `<tr>
         <td><b>${row.rank}</b></td><td><span class="venue-badge ${
         escapeHtml(row.exchange || activeExchange)
@@ -520,8 +516,16 @@
         row.change_24h_pct >= 0 ? "positive-text" : "negative-text"
       }">${percent(row.change_24h_pct, 2, true)}</td>
         <td>${turnover(row.turnover_24h_quote ?? row.turnover_24h_krw, quote)}</td><td><b>${
-        Number(row.period_score).toFixed(1)
-      }</b></td>${cells}
+        Number(row.market_heat_score ?? row.period_score ?? 0).toFixed(1)
+      }</b></td>
+        <td class="${flowTone}">${percent(Number(row.notional_acceleration || 0) * 100, 2, true)}</td>
+        <td>${Number(row.trade_count_per_second || 0).toFixed(2)}</td>
+        <td class="${Number(row.notional_trend || 0) >= 0 ? "positive-text" : "negative-text"}">${
+        percent(Number(row.notional_trend || 0) * 100, 2, true)
+      }</td>
+        <td class="${Number(row.trade_speed_trend || 0) >= 0 ? "positive-text" : "negative-text"}">${
+        percent(Number(row.trade_speed_trend || 0) * 100, 2, true)
+      }</td>
       </tr>`;
     }).join("");
   }
@@ -546,7 +550,9 @@
     elements.eligibleMarkets.textContent = Number(
       result.coverage?.eligible_after_safety_filter || 0,
     ).toLocaleString("ko-KR");
-    elements.deepMarkets.textContent = Number(result.coverage?.deep_period_analyzed || 0)
+    elements.deepMarkets.textContent = Number(
+      result.coverage?.microstructure_finalists ?? result.coverage?.deep_period_analyzed ?? 0,
+    )
       .toLocaleString("ko-KR");
     elements.elapsed.textContent = `${Number(result.meta?.elapsed_seconds || 0).toFixed(1)}초`;
     const combined = exchange === "combined";
@@ -559,13 +565,15 @@
         ).join(" / ")
       }`
       : "";
-    elements.finalistsTitle.textContent = combined ? "통합 Top 4" : "최종 정밀분석 후보";
+    elements.finalistsTitle.textContent = combined
+      ? "거래소별 24시간 상승률 Top 10 · LOB 통과 후보"
+      : "24시간 상승률 Top 10 · LOB 통과 후보";
     elements.finalistsDescription.textContent = combined
-      ? "동일 기초자산을 한 자리로 합치고 양 거래소의 기간·호가·체결 신호를 교차검증한 결과입니다. 위험 신호가 충돌하면 BUY를 보류합니다."
-      : "기간분석 상위 종목에 실시간 체결-호가 동적 교차검증을 추가한 결과입니다.";
+      ? "업비트와 바이낸스를 각각 순위화해 Top 10을 먼저 고정하고, 현재 거래대금·체결속도·호가·체결만으로 약화 종목을 제외한 결과입니다."
+      : "Top 10을 먼저 고정하고 현재 거래대금·체결속도·호가·체결만으로 약화 종목을 제외한 결과입니다.";
     elements.rankingTitle.textContent = combined
-      ? "양 거래소 기간분석 상위 20종목"
-      : `${result.coverage?.exchange_label || "거래소"} 기간분석 상위 20종목`;
+      ? "업비트·바이낸스 각각 24시간 상승률 Top 10"
+      : `${result.coverage?.exchange_label || "거래소"} 24시간 상승률 Top 10`;
     setHidden(elements.noBuyBanner, result.status !== "NO_BUY");
     renderPrimary(result.primary);
     renderCandidates(result);
@@ -1037,21 +1045,19 @@
       ? "바이낸스 USDT 현물"
       : "업비트 원화마켓";
     const steps = [
-      [0, `1/5 · ${marketName} 전체 현재가·거래대금을 점검 중입니다.`],
-      [4500, "2/5 · 안전필터 통과 전 종목의 15분봉 24시간 구간을 점검 중입니다."],
-      [20000, "3/5 · 상위 30종목의 5분·4시간·일봉을 추가 분석 중입니다."],
+      [0, `1/5 · ${marketName} 활성 현물의 24시간 상승률을 순위화합니다.`],
+      [4500, "2/5 · 거래소별 Top 10을 먼저 고정합니다."],
+      [20000, "3/5 · Top 10의 거래대금과 체결속도 약화를 점검합니다."],
       [
         39000,
         `4/5 · ${
           activeExchange === "combined" ? "양 거래소 " : ""
-        }최종 후보의 실시간 호가·체결을 60~90초 동안 동시 관찰 중입니다.`,
+        }Top 10의 아이스버그·흡수·스윕·OFI와 허매수·허매도를 관찰합니다.`,
       ],
-      [70000, "4/5 · 중반 구간에서 벽 취소·재보충·실체결 소진의 반복 여부를 확인 중입니다."],
+      [70000, "4/5 · 벽 취소·재보충·실체결 소진의 반복 여부를 확인합니다."],
       [
         100000,
-        `5/5 · 마지막 확인 구간의 지지 전환·손익비${
-          activeExchange === "combined" ? "·교차거래소 일치" : ""
-        }를 검증 중입니다.`,
+        "5/5 · 현재 호가 지지와 공격 매수 지속 여부로 최종 진입을 판정합니다.",
       ],
       [145000, "저유동 후보의 연장 관찰 또는 API 응답이 진행 중입니다. 조금만 기다려 주세요."],
     ];
@@ -1120,10 +1126,10 @@
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       renderResult(data);
       elements.scanStatus.textContent = data.status === "NO_BUY"
-        ? `스캔 완료 · 현재가 매수 후보는 없으며 안전한 통합 후보 ${
+        ? `스캔 완료 · Top 10 안에 현재가 매수 후보가 없으며 LOB 관찰 후보 ${
           data.finalists?.length || 0
         }개를 표시했습니다.`
-        : `스캔 완료 · 통합 Top ${data.finalists?.length || 0} 중 현재 매수 후보 ${
+        : `스캔 완료 · 거래소별 Top 10 중 현재 매수 후보 ${
           data.recommendations?.length || 0
         }개를 탐지했습니다.`;
     } catch (error) {
