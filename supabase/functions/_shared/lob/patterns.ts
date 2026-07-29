@@ -11,7 +11,14 @@ function signal(
   evidence: string[],
   invalidations: string[],
 ): LobPatternSignal {
-  return { name, direction: "LONG", confidence: clamp(confidence), primary, evidence, invalidations };
+  return {
+    name,
+    direction: "LONG",
+    confidence: clamp(confidence),
+    primary,
+    evidence,
+    invalidations,
+  };
 }
 
 function positiveVotes(f: LobFeatureVector): number {
@@ -23,10 +30,8 @@ function positiveVotes(f: LobFeatureVector): number {
 /**
  * Six LOB pattern families.
  *
- * Momentum continuation is deliberately separate from mean-reversion/queue patterns. A large
- * 24h gain is context only; primary status also requires aligned trades from the same live book
- * window, current ticker-notional acceleration, aggressive buys, positive microprice and a tight
- * spread. Ten-minute REST history can describe context but cannot certify a live continuation.
+ * The 24h return is not used here. It has already fixed the Top-10 universe. Every primary
+ * decision below comes only from the current book and executed tape.
  */
 export function detectLobPatterns(f: LobFeatureVector): LobPatternSignal[] {
   const positiveFlow = clamp((f.tradePressureFast + 1) / 2);
@@ -37,36 +42,35 @@ export function detectLobPatterns(f: LobFeatureVector): LobPatternSignal[] {
   const lowAskAbsorption = clamp(1 - f.askAbsorptionScore);
   const votes = positiveVotes(f);
 
-  // heatPeriod encodes signed 24h return as change_pct / 400 in trendContext.
-  const impliedChange24hPct = clamp(f.trendContext * 400, -100, 100);
-  const changeScore = clamp((impliedChange24hPct - 3) / 27);
-  const accelerationScore = clamp(f.notionalAcceleration);
-  const heatScore = clamp(f.marketHeatScore / 100);
+  const notionalTrend = clamp((Number(f.notionalTrend) + 1) / 2);
+  const tradeSpeedTrend = clamp((Number(f.tradeSpeedTrend) + 1) / 2);
+  const tapeTrend = clamp((Number(f.tradeArrivalTrend) + 1) / 2);
   const liveTradeEvidence = f.tradeArrivalRate > 0 && f.aggressiveNotionalPerSecond > 0 &&
     f.dataQuality >= 0.25;
-  const momentumPrimary = impliedChange24hPct >= 3 && impliedChange24hPct <= 60 &&
-    f.marketHeatScore >= 45 && f.notionalAcceleration >= 0.02 &&
-    f.tradePressureFast >= 0.25 && f.micropriceDeviationBps >= 0 &&
-    f.bookImbalance > -0.65 && votes >= 2 && liveTradeEvidence &&
-    f.spreadBps != null && f.spreadBps <= 8 &&
-    f.recentNotionalPerSecond > 0 && f.tradeCount >= 8;
+  const momentumPrimary = f.universeMode === "TOP10_24H_GAINERS_LOB_ONLY" &&
+    Number(f.gainerRank) >= 1 && Number(f.gainerRank) <= 10 &&
+    Number(f.notionalTrend) >= -0.20 && Number(f.tradeSpeedTrend) >= -0.20 &&
+    Number(f.tradeArrivalTrend) >= -0.20 &&
+    f.tradePressureFast >= 0.12 && f.micropriceDeviationBps >= -0.5 &&
+    f.bookImbalance > -0.55 && votes >= 2 && liveTradeEvidence &&
+    f.spreadBps != null && f.spreadBps <= 12 &&
+    f.recentNotionalPerSecond > 0 && f.tradeCount >= 4;
 
   const absorptionPrimary = f.bidAbsorptionScore >= 0.45 &&
     f.micropriceDeviationBps >= -1 &&
     (f.persistentBidWall || f.depthRatio >= 1);
   const depletionPrimary = f.breakoutScore >= 0.60 && votes >= 2;
   const reclaimPrimary = f.sweepReclaimScore >= 0.45 && votes >= 2;
-  const ofiPrimary = f.ofiPersistence >= 0.45 && f.tradePressureFast >= 0.15 && votes >= 2 &&
-    f.trendContext >= -0.001;
+  const ofiPrimary = f.ofiPersistence >= 0.45 && f.tradePressureFast >= 0.15 && votes >= 2;
 
   const momentum = signal(
     "MOMENTUM_CONTINUATION",
-    changeScore * 0.20 + positiveFlow * 0.21 + accelerationScore * 0.16 +
-      heatScore * 0.12 + positiveMicroMomentum * 0.09 + clamp(votes / 3) * 0.08 +
-      clamp(f.dataQuality, 0, 1) * 0.08 + clamp(f.tradeArrivalRate / 4, 0, 1) * 0.06,
+    positiveFlow * 0.24 + notionalTrend * 0.16 + tradeSpeedTrend * 0.12 +
+      tapeTrend * 0.12 + positiveMicroMomentum * 0.10 + clamp(votes / 3) * 0.10 +
+      clamp(f.dataQuality, 0, 1) * 0.08 + clamp(f.tradeArrivalRate / 4, 0, 1) * 0.08,
     momentumPrimary,
     [
-      "24시간 상승 흐름 위에서 전 종목 거래대금 가속이 재점화됨",
+      "Top 10 종목의 현재 거래대금·체결속도가 유지됨",
       "동일 관찰창의 공격 매수·마이크로프라이스·근접 호가가 상승 지속을 확인함",
     ],
     [
@@ -118,7 +122,12 @@ export function detectLobPatterns(f: LobFeatureVector): LobPatternSignal[] {
       positiveMicroprice * 0.14 + clamp(f.imbalanceStability) * 0.12,
     ofiPrimary,
     ["주문흐름·공격 체결·마이크로프라이스가 같은 방향", "상대 매도 호가가 지속 소진됨"],
-    ["반대 방향 공격 체결 급증", "OFI 부호 역전", "마이크로프라이스 불리한 이동", "핵심 레벨이 체결 없이 취소"],
+    [
+      "반대 방향 공격 체결 급증",
+      "OFI 부호 역전",
+      "마이크로프라이스 불리한 이동",
+      "핵심 레벨이 체결 없이 취소",
+    ],
   );
 
   const iceberg = signal(

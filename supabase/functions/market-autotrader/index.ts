@@ -1,4 +1,4 @@
-// Trading-booooo v6.13.0-REALIZED-EDGE-PROFIT-RETENTION — autonomous spot orchestrator.
+// Trading-booooo v7.0.0-TOP10-LOB-ONLY — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -55,8 +55,8 @@ import {
   SHADOW_CANDIDATE_GATE,
 } from "../_shared/scalp/candidate-gate.ts";
 import {
-  capitalSupportedSlotCount,
   calculateOrderNotional,
+  capitalSupportedSlotCount,
   enforceMinimumExecutableNotional,
 } from "../_shared/scalp/risk-allocator.ts";
 import {
@@ -76,7 +76,7 @@ import {
 } from "../_shared/lob/entry.ts";
 import { detectLobPatternName } from "../_shared/lob/patterns.ts";
 import type { LobTrapConfig } from "../_shared/lob/traps.ts";
-import { patternDeployment, unearnedVetoes } from "../_shared/lob/learning.ts";
+import { patternDeployment } from "../_shared/lob/learning.ts";
 import {
   type LobOnlineProfileRow,
   onlineAdverseEvPenaltyBps,
@@ -93,7 +93,7 @@ import {
 import { evaluateModelHealth, shouldConvertToTaker } from "../_shared/lob/health.ts";
 import { evaluateLobExit } from "../_shared/lob/exit.ts";
 import type { LobFeatureVector, LobPatternName } from "../_shared/lob/types.ts";
-import { lobSelectionMetrics, rankLobSelections } from "../_shared/lob/selection.ts";
+import { lobSelectionMetrics } from "../_shared/lob/selection.ts";
 import {
   bookTimestampOf,
   LatencyTrace,
@@ -114,7 +114,7 @@ import {
   summarizeEntryAdmission,
 } from "./entry-admission.ts";
 
-const VERSION = "6.13.0-REALIZED-EDGE-PROFIT-RETENTION";
+const VERSION = "7.0.0-TOP10-LOB-ONLY";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -1075,7 +1075,18 @@ async function loadBuyCandidates(
     return null;
   };
   const ranked = isLobStrategy((settings as any)?.strategy)
-    ? rankLobSelections([...rows], (row) => selection(row)!)
+    ? [...rows].map((row) => {
+      selection(row);
+      return row;
+    }).sort((left, right) => {
+      const leftFeatures = (left as any).snapshot?.lob?.features || {};
+      const rightFeatures = (right as any).snapshot?.lob?.features || {};
+      const rankDelta = finite(leftFeatures.gainerRank, 99) -
+        finite(rightFeatures.gainerRank, 99);
+      if (Math.abs(rankDelta) > 1e-9) return rankDelta;
+      return finite(rightFeatures.tradePressureFast, -1) -
+        finite(leftFeatures.tradePressureFast, -1);
+    })
     : [...rows].sort((a, b) =>
       finite((b as any).snapshot?.scalp?.provisional_edge, Number.NEGATIVE_INFINITY) -
       finite((a as any).snapshot?.scalp?.provisional_edge, Number.NEGATIVE_INFINITY)
@@ -1180,6 +1191,8 @@ function liveLobFeatures(scan: any, market: any): LobFeatureVector {
   const sellNotional = finite(flow.sell_notional, base.sellNotional);
   const tradeCount = Math.max(0, Math.floor(finite(flow.trade_count, base.tradeCount)));
   return {
+    universeMode: base.universeMode,
+    gainerRank: finite(base.gainerRank, finite(scan?.gainer_rank, 99)),
     samples: Math.max(1, Math.floor(finite(base.samples, tradeCount))),
     observationMs: Math.max(1, finite(base.observationMs, 15000)),
     bookAgeMs: 0,
@@ -1223,6 +1236,9 @@ function liveLobFeatures(scan: any, market: any): LobFeatureVector {
     ),
     notionalAcceleration: finite(base.notionalAcceleration, finite(scan?.notional_acceleration, 0)),
     tradeCountPerSecond: finite(base.tradeCountPerSecond, finite(scan?.trade_count_per_second, 0)),
+    notionalTrend: finite(base.notionalTrend, finite(scan?.notional_trend, 0)),
+    tradeSpeedTrend: finite(base.tradeSpeedTrend, finite(scan?.trade_speed_trend, 0)),
+    tradeArrivalTrend: finite(base.tradeArrivalTrend, 0),
     // v6.2: path shape is measured over the scan's observation window and cannot be
     // recomputed from a single live snapshot, so the scan value is carried forward. The
     // candidate TTL is what bounds how stale it may be.
@@ -1233,9 +1249,9 @@ function liveLobFeatures(scan: any, market: any): LobFeatureVector {
     // Perp positioning is sampled once per scan alongside the heat snapshot. Re-fetching it
     // at order time would add a network hop to the latency-critical path for a signal that
     // is capped at +/-0.03 of the edge, so the scan value is carried forward.
-    fundingPremiumBps: finite(base.fundingPremiumBps, 0),
-    fundingAttention: finite(base.fundingAttention, 0),
-    fundingEdge: finite(base.fundingEdge, 0),
+    fundingPremiumBps: 0,
+    fundingAttention: 0,
+    fundingEdge: 0,
   };
 }
 
@@ -2480,11 +2496,6 @@ async function enterCandidateInner(
       0.01,
       finite((settings as any).lob_min_target_net_profit_bps, 0.01),
     );
-    const minimumVerifiedEvBps = Math.max(
-      0,
-      finite((settings as any).lob_min_verified_ev_cushion_bps, 0),
-    );
-    const lobLearning = assignedPolicy.patternProfile;
     const makerFill = await loadMakerFillStats(exchange);
     const measuredMakerFillRate = makerFill.rested > 0 ? makerFill.filled / makerFill.rested : 0;
     // v6.5: execution delay is now priced from measurement instead of being absent from
@@ -2508,7 +2519,6 @@ async function enterCandidateInner(
     // These are two estimates of the same optimism, not independent costs. Apply the
     // stronger one once so repeated negative fee-net evidence corrects admission without
     // double-counting it or imposing a trade-count cap.
-    const evBiasPenaltyBps = Math.max(calibratedEvBiasPenaltyBps, onlineMarketPenaltyBps);
     const decision = evaluateLobEntry(features, {
       roundTripFeeBps,
       entrySlippageBps: makerEntryEnabled(settings) ? 0 : Math.max(0.1, spreadBps * 0.15),
@@ -2518,12 +2528,9 @@ async function enterCandidateInner(
       stopExitSlippageBps: Math.max(0.4, spreadBps * 0.55),
       spreadBps,
       latencyPenaltyBps: latencyPenalty.bps,
-      forecastBiasPenaltyBps: evBiasPenaltyBps,
+      forecastBiasPenaltyBps: 0,
     }, {
-      minEvBps: Math.max(
-        minimumVerifiedEvBps,
-        finite((settings as any).lob_min_net_ev_bps, 0),
-      ),
+      minEvBps: 0,
       minNetProfitBps: minimumTargetNetProfitBps,
       maxStopToTargetRatio: clamp(
         finite((settings as any).lob_max_stop_to_target_ratio, 1.35),
@@ -2545,17 +2552,15 @@ async function enterCandidateInner(
       ),
       uncertaintyHaircut: clamp(finite((settings as any).lob_uncertainty_haircut, 0.25), 0, 0.9),
       trap: lobTrapOverrides(settings),
-      disabledVetoes: unearnedVetoes(lobLearning),
-      // Adverse learning owns ordering and rotation, not permission to trade. This protects
-      // turnover; only mature positive evidence may lift the probability estimate.
-      patternProbabilityMultiplier: patternPolicy.gateMultiplier,
+      disabledVetoes: [],
+      patternProbabilityMultiplier: 1,
       measuredMakerFillRate,
       makerFillSamples: makerFill.rested,
-      learnedStopFloorBps: onlinePolicy.learnedStopFloorBps,
+      learnedStopFloorBps: 0,
     });
     scalpAudit = {
       strategy: "LOB_SCALP",
-      strategy_revision: "6.13.0-REALIZED-EDGE-PROFIT-RETENTION",
+      strategy_revision: "7.0.0-TOP10-LOB-ONLY",
       recommendation,
       pattern: decision.pattern,
       patterns: decision.patterns,

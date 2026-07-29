@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v6.13.0-REALIZED-EDGE-PROFIT-RETENTION
+// Trading-booooo Market Scanner v7.0.0-TOP10-LOB-ONLY
 // Pure analysis engine. Public market data only; no order or account operations.
 
 import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-profile.ts";
@@ -10,9 +10,7 @@ import {
 } from "../_shared/scalp/signal.ts";
 import { evaluateLobEntry } from "../_shared/lob/entry.ts";
 import { midPathStatistics } from "../_shared/lob/traps.ts";
-import { detectLobPatternName } from "../_shared/lob/patterns.ts";
 import type { LobLearningProfile } from "../_shared/lob/learning.ts";
-import { patternMultiplier, unearnedVetoes } from "../_shared/lob/learning.ts";
 import type { LobEntryDecision, LobFeatureVector } from "../_shared/lob/types.ts";
 import {
   resolveGeometryConfig,
@@ -22,7 +20,7 @@ import {
   sigmaFromAtrPct,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "6.13.0-REALIZED-EDGE-PROFIT-RETENTION";
+export const ENGINE_VERSION = "7.0.0-TOP10-LOB-ONLY";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -114,6 +112,8 @@ export type UniverseRow = {
   excluded_reason: string | null;
   caution_labels: string[];
   heat_rank?: number;
+  gainer_rank?: number;
+  universe_mode?: "TOP10_24H_GAINERS_LOB_ONLY";
   market_heat_score?: number;
   funding_premium_bps?: number;
   funding_attention?: number;
@@ -121,6 +121,10 @@ export type UniverseRow = {
   recent_notional_per_second?: number;
   notional_acceleration?: number;
   trade_count_per_second?: number;
+  notional_trend?: number;
+  trade_speed_trend?: number;
+  flow_healthy?: boolean;
+  flow_exclusion_reasons?: string[];
 };
 
 export type TrendState =
@@ -3030,7 +3034,20 @@ export function finalizeCandidate(
   }
 
   if (risk.strategy === "LOB_SCALP") {
+    const phaseCounts = micro.dynamic.phase_trade_counts;
+    const lastPhaseCount = phaseCounts.at(-1) ?? 0;
+    const previousPhaseCount = phaseCounts.at(-2) ?? lastPhaseCount;
+    const tradeArrivalTrend = phaseCounts.length >= 2
+      ? clamp(
+        (lastPhaseCount - previousPhaseCount) /
+          Math.max(1, lastPhaseCount + previousPhaseCount),
+        -1,
+        1,
+      )
+      : 0;
     const features: LobFeatureVector = {
+      universeMode: period.universe.universe_mode,
+      gainerRank: finiteOr(period.universe.gainer_rank, 99),
       samples: micro.samples,
       observationMs: micro.dynamic.observation_ms,
       bookAgeMs: micro.live_book_age_ms,
@@ -3068,6 +3085,9 @@ export function finalizeCandidate(
       recentNotionalPerSecond: finiteOr(period.universe.recent_notional_per_second, 0),
       notionalAcceleration: finiteOr(period.universe.notional_acceleration, 0),
       tradeCountPerSecond: finiteOr(period.universe.trade_count_per_second, 0),
+      notionalTrend: finiteOr(period.universe.notional_trend, 0),
+      tradeSpeedTrend: finiteOr(period.universe.trade_speed_trend, 0),
+      tradeArrivalTrend,
       pathEfficiency: micro.dynamic.path_efficiency,
       reversalRate: micro.dynamic.reversal_rate,
       noiseBandBps: micro.dynamic.noise_band_bps,
@@ -3079,8 +3099,6 @@ export function finalizeCandidate(
     const spread = Math.max(0, micro.spread_bps || 0);
     // v6.2: the learned profile scales the signal edge and can retire a veto that
     // measurement showed was blocking trades without those trades being worse.
-    const learning = risk.lobLearning ?? null;
-    const provisionalPattern = detectLobPatternName(features);
     lobResult = evaluateLobEntry(
       features,
       {
@@ -3103,8 +3121,9 @@ export function finalizeCandidate(
         absoluteMaxHoldingSeconds: 300,
         uncertaintyHaircut: clamp(finiteOr(risk.lobUncertaintyHaircut, 0.25), 0, 0.9),
         trap: risk.lobTrapOverrides || {},
-        disabledVetoes: unearnedVetoes(learning),
-        patternProbabilityMultiplier: patternMultiplier(learning, provisionalPattern),
+        disabledVetoes: [],
+        patternProbabilityMultiplier: 1,
+        learnedStopFloorBps: 0,
       },
     );
     decision = lobResult.decision;

@@ -5,6 +5,8 @@ import type { LobCostEstimate, LobFeatureVector } from "./types.ts";
 
 function momentumFeatures(overrides: Partial<LobFeatureVector> = {}): LobFeatureVector {
   return {
+    universeMode: "TOP10_24H_GAINERS_LOB_ONLY",
+    gainerRank: 2,
     samples: 45,
     observationMs: 11000,
     bookAgeMs: 80,
@@ -43,6 +45,9 @@ function momentumFeatures(overrides: Partial<LobFeatureVector> = {}): LobFeature
     recentNotionalPerSecond: 200000,
     notionalAcceleration: 0.55,
     tradeCountPerSecond: 18,
+    notionalTrend: 0.45,
+    tradeSpeedTrend: 0.35,
+    tradeArrivalTrend: 0.25,
     pathEfficiency: 0.82,
     reversalRate: 0.12,
     noiseBandBps: 5,
@@ -64,13 +69,13 @@ const binanceCosts: LobCostEstimate = {
   forecastBiasPenaltyBps: 0,
 };
 
-Deno.test("24h gainer requires a live continuation pulse", () => {
+Deno.test("Top-10 eligibility still requires a live continuation pulse", () => {
   const live = detectLobPatterns(momentumFeatures()).find((row) =>
     row.name === "MOMENTUM_CONTINUATION"
   );
   assert(live?.primary);
 
-  const stale = detectLobPatterns(momentumFeatures({ notionalAcceleration: 0 })).find((row) =>
+  const stale = detectLobPatterns(momentumFeatures({ tradeArrivalTrend: -0.4 })).find((row) =>
     row.name === "MOMENTUM_CONTINUATION"
   );
   assertEquals(stale?.primary, false);
@@ -95,7 +100,7 @@ Deno.test("momentum geometry is fee-meaningful and short-lived", () => {
 
 Deno.test("large stale gainer does not inherit momentum target", () => {
   const decision = evaluateLobEntry(
-    momentumFeatures({ trendContext: 0.075, notionalAcceleration: 0, tradePressureFast: 0.05 }),
+    momentumFeatures({ trendContext: 0.075, tradeArrivalTrend: -0.4, tradePressureFast: 0.05 }),
     binanceCosts,
   );
   assert(decision.pattern !== "MOMENTUM_CONTINUATION");

@@ -69,12 +69,9 @@ export function calibrateMakerFillProbability(
 /**
  * LOB-only entry decision.
  *
- * v6.14 keeps ordinary queue/mean-reversion economics unchanged and adds a separate,
- * present-tense continuation regime. A 24h gain alone never changes the bracket or probability:
- * the momentum pattern must first be primary, which requires live aggressive buying, notional
- * acceleration, positive microprice, a tight book and coherent direction.
- *
- * The economic hard gate remains fee-net conservative EV > 0 after slippage, latency and bias.
+ * v7 fixes eligibility outside this function to each exchange's rolling 24h Top 10.
+ * Entry permission here is current order-book/tape only. Model EV is retained for audit and
+ * scheduling, but it is not an admission veto.
  */
 export function evaluateLobEntry(
   features: LobFeatureVector,
@@ -106,17 +103,15 @@ export function evaluateLobEntry(
   const positiveMicroprice = clamp(features.micropriceDeviationBps / 8, 0, 1);
   const positiveBook = clamp(features.bookImbalance, 0, 1);
   const directionalConsensus = (positivePressure + positiveMicroprice + positiveBook) / 3;
-  const provisionalMomentum = rawPatterns.find((pattern) =>
-    pattern.name === "MOMENTUM_CONTINUATION" && pattern.primary
-  ) || null;
-  // heatPeriod stores signed 24h return as change_pct / 400 in trendContext.
-  const impliedChange24hPct = clamp(features.trendContext * 400, -100, 100);
-  const momentumChangeScore = clamp((impliedChange24hPct - 3) / 27, 0, 1);
+  const provisionalMomentum =
+    rawPatterns.find((pattern) => pattern.name === "MOMENTUM_CONTINUATION" && pattern.primary) ||
+    null;
   const momentumPulse = clamp(
-    momentumChangeScore * 0.22 + positivePressure * 0.28 +
-      clamp(features.notionalAcceleration, 0, 1) * 0.22 +
-      clamp(features.marketHeatScore / 100, 0, 1) * 0.16 +
-      clamp(features.micropriceDeviationBps / 5, 0, 1) * 0.12,
+    positivePressure * 0.32 +
+      clamp((Number(features.notionalTrend) + 1) / 2, 0, 1) * 0.20 +
+      clamp((Number(features.tradeSpeedTrend) + 1) / 2, 0, 1) * 0.16 +
+      clamp((Number(features.tradeArrivalTrend) + 1) / 2, 0, 1) * 0.16 +
+      clamp(features.micropriceDeviationBps / 5, 0, 1) * 0.16,
     0,
     1,
   );
@@ -127,9 +122,8 @@ export function evaluateLobEntry(
     clamp(features.dataQuality, 0, 1) * 10 + directionalConsensus * 10 +
     provisionalActivity * 6 + clamp(features.ofiPersistence, 0, 1) * 4 +
     Math.max(0, features.spreadBps || 0) * 0.15;
-  const momentumMovementBps = 55 + momentumChangeScore * 45 +
-    positivePressure * 25 + clamp(features.notionalAcceleration, 0, 1) * 20 +
-    clamp(features.marketHeatScore / 100, 0, 1) * 15;
+  const momentumMovementBps = 55 + momentumPulse * 55 +
+    positivePressure * 25 + clamp(features.ofiPersistence, 0, 1) * 15;
   const movementBps = provisionalMomentum ? momentumMovementBps : ordinaryMovementBps;
   const targetCeilingBps = provisionalMomentum ? Math.max(cfg.maxTargetBps, 140) : cfg.maxTargetBps;
   const targetBps = clamp(
@@ -194,9 +188,24 @@ export function evaluateLobEntry(
   if (features.spreadBps == null || features.spreadBps > cfg.maxSpreadBps) {
     reasons.push("SPREAD_TOO_WIDE");
   }
+  if (
+    features.universeMode !== "TOP10_24H_GAINERS_LOB_ONLY" ||
+    !(Number(features.gainerRank) >= 1 && Number(features.gainerRank) <= 10)
+  ) {
+    reasons.push("OUTSIDE_24H_GAINER_TOP10");
+  }
+  if (Number(features.notionalTrend) < -0.20) reasons.push("FLOW_NOTIONAL_DECLINING");
+  if (Number(features.tradeSpeedTrend) < -0.20) reasons.push("FLOW_TRADE_SPEED_DECLINING");
+  if (Number(features.tradeArrivalTrend) < -0.20) reasons.push("TAPE_SPEED_DECLINING");
+  if (features.tradePressureFast < -0.10) reasons.push("SELL_PRESSURE_DOMINANT");
+  if (features.micropriceDeviationBps < -1.0) reasons.push("MICROPRICE_BEARISH");
   for (const name of activeVetoes) reasons.push(`TRAP_${name}`);
   if (hotness.hotnessScore < cfg.minHotnessScore) reasons.push("BOOK_NOT_HOT_ENOUGH");
-  if (!primary) reasons.push("NO_PRIMARY_LOB_PATTERN");
+  const coherentPositiveBook = positivePressure >= 0.12 &&
+    features.micropriceDeviationBps >= -0.5 &&
+    features.bookImbalance > -0.55 && features.tradeArrivalRate > 0 &&
+    Number(features.tradeArrivalTrend) >= -0.20;
+  if (!primary && !coherentPositiveBook) reasons.push("NO_PRIMARY_LOB_PATTERN");
 
   const patternConfidence = primary?.confidence ?? 0;
   const isMomentum = primary?.name === "MOMENTUM_CONTINUATION";
@@ -206,15 +215,12 @@ export function evaluateLobEntry(
   const signedBook = clamp(features.bookImbalance, -1, 1);
   const signedOfi = clamp(features.ofiPersistence, 0, 1) * (signedPressure >= 0 ? 1 : -1);
   const qualityEdge = (clamp(features.dataQuality, 0, 1) - 0.35) * 0.05;
-  const trendAssist = clamp(features.trendContext, -1, 1) * 0.02;
 
   const neutralWinRate = targetBps + stopBps > 0 ? stopBps / (targetBps + stopBps) : 0.5;
-  const momentumDirectionalEdge = isMomentum
-    ? momentumPulse * 0.45 + momentumChangeScore * 0.14
-    : 0;
+  const momentumDirectionalEdge = isMomentum ? momentumPulse * 0.45 : 0;
   const rawSignalEdge = (patternConfidence - 0.45) * 0.20 + signedPressure * 0.08 +
     signedMicroprice * 0.05 + signedBook * 0.05 + signedOfi * 0.04 + qualityEdge +
-    trendAssist + clamp(features.fundingEdge, -0.03, 0.03) + momentumDirectionalEdge;
+    momentumDirectionalEdge;
   const maxSignalEdge = isMomentum ? MAX_MOMENTUM_SIGNAL_EDGE : MAX_SIGNAL_EDGE;
   const signalEdge = clamp(
     rawSignalEdge * clamp(cfg.patternProbabilityMultiplier, 0.3, 2) * traps.confidenceMultiplier,
@@ -272,8 +278,8 @@ export function evaluateLobEntry(
       ? costs.forecastBiasPenaltyBps as number
       : 0,
   );
-  const conditionalEvNetBps =
-    pTarget * targetReturnNetBps + pStop * stopReturnNetBps + pTimeout * timeoutReturnNetBps -
+  const conditionalEvNetBps = pTarget * targetReturnNetBps + pStop * stopReturnNetBps +
+    pTimeout * timeoutReturnNetBps -
     forecastBiasPenaltyBps;
   const attemptEvNetBps = pFill * conditionalEvNetBps;
   const evNetBps = conditionalEvNetBps;
@@ -293,18 +299,21 @@ export function evaluateLobEntry(
   );
   const conservativePTarget = resolveProbability * conservativeConditionalTargetShare;
   const conservativePStop = resolveProbability * (1 - conservativeConditionalTargetShare);
-  const conditionalEvLowerBoundBps =
-    conservativePTarget * targetReturnNetBps + conservativePStop * stopReturnNetBps +
+  const conditionalEvLowerBoundBps = conservativePTarget * targetReturnNetBps +
+    conservativePStop * stopReturnNetBps +
     pTimeout * timeoutReturnNetBps - forecastBiasPenaltyBps;
   const attemptEvLowerBoundBps = pFill * conditionalEvLowerBoundBps;
   const evLowerBoundBps = conditionalEvLowerBoundBps;
 
   for (const reason of payoff.reasons) reasons.push(reason);
   for (const warning of payoff.warnings) warnings.push(warning);
-  if (!(evLowerBoundBps > cfg.minEvBps)) reasons.push("NET_EV_NOT_POSITIVE");
-
   const technicalBlock = reasons.some((r) =>
-    r.startsWith("TRAP_") || [
+    r.startsWith("TRAP_") ||
+    r.startsWith("FLOW_") ||
+    r === "TAPE_SPEED_DECLINING" ||
+    r === "SELL_PRESSURE_DOMINANT" ||
+    r === "MICROPRICE_BEARISH" ||
+    r === "OUTSIDE_24H_GAINER_TOP10" || [
       "INSUFFICIENT_LOB_SAMPLES",
       "STALE_ORDERBOOK",
       "SPREAD_TOO_WIDE",
