@@ -29,6 +29,9 @@ export type LobRankedSearchRow = {
   market: string;
   liquidity_score?: number;
   turnover_24h_quote?: number;
+  change_24h_pct?: number;
+  market_heat_score?: number;
+  notional_acceleration?: number;
 };
 
 function finite(value: unknown, fallback: number): number {
@@ -174,9 +177,12 @@ export function selectLobSearchRows<T>(
 }
 
 /**
- * Keeps Heat leaders, reserves four normal-core slots for the most liquid markets, and uses
- * remaining expanded slots for rotating discovery. Observation allocation changes; entry
- * economics, direction gates and risk limits do not.
+ * Allocates scarce websocket observation slots across three independent opportunity sources:
+ * whole-market Heat leaders, current 3–60% momentum continuations and deep liquid books.
+ *
+ * The momentum reserve does not buy a gainer. It only guarantees observation, and ranks an
+ * earlier-stage accelerating mover ahead of a stale high-return symbol. All economic, direction,
+ * spread, trap and risk gates still run after the live book/trade window is collected.
  */
 export function selectCostAwareLobRows<T extends LobRankedSearchRow>(
   rows: T[],
@@ -186,8 +192,12 @@ export function selectCostAwareLobRows<T extends LobRankedSearchRow>(
   const source = Array.isArray(rows) ? rows : [];
   if (!source.length) return [];
   const limit = Math.min(source.length, expansion.finalistLimit);
-  const reserve = Math.min(4, Math.max(1, Math.floor(expansion.baseFinalists / 3)));
-  const heatCoreCount = Math.max(1, Math.min(limit, expansion.baseFinalists - reserve));
+  const liquidityReserve = Math.min(3, Math.max(1, Math.floor(expansion.baseFinalists / 4)));
+  const momentumReserve = Math.min(4, Math.max(2, Math.floor(expansion.baseFinalists / 3)));
+  const heatCoreCount = Math.max(
+    1,
+    Math.min(limit, expansion.baseFinalists - liquidityReserve - momentumReserve),
+  );
   const selected: T[] = [];
   const seen = new Set<string>();
   const add = (row: T | undefined) => {
@@ -197,13 +207,28 @@ export function selectCostAwareLobRows<T extends LobRankedSearchRow>(
   };
 
   source.slice(0, heatCoreCount).forEach(add);
+
+  [...source]
+    .filter((row) => finite(row.change_24h_pct, 0) >= 3 && finite(row.change_24h_pct, 0) <= 60)
+    .sort((left, right) => {
+      const score = (row: T) =>
+        Math.min(30, finite(row.change_24h_pct, 0)) * 2 +
+        finite(row.notional_acceleration, 0) * 35 +
+        finite(row.market_heat_score, 0) * 0.25 +
+        Math.log10(Math.max(1, finite(row.turnover_24h_quote, 0)));
+      return score(right) - score(left);
+    })
+    .forEach((row) => {
+      if (selected.length < heatCoreCount + momentumReserve) add(row);
+    });
+
   [...source]
     .sort((left, right) =>
       finite(right.liquidity_score, 0) - finite(left.liquidity_score, 0) ||
       finite(right.turnover_24h_quote, 0) - finite(left.turnover_24h_quote, 0)
     )
     .forEach((row) => {
-      if (selected.length < heatCoreCount + reserve) add(row);
+      if (selected.length < heatCoreCount + momentumReserve + liquidityReserve) add(row);
     });
 
   source.filter((row) => !seen.has(row.market))
