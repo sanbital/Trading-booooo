@@ -1,0 +1,548 @@
+name: Apply strict LOB 30s EV hotfix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/strict-lob-v706-hotfix.yml"
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: strict-lob-v706-hotfix
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Apply v7.0.6 strict LOB gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          OLD_VERSION = "7.0.5-LOB-30S-MINIMUM"
+          NEW_VERSION = "7.0.6-STRICT-LOB-30S-EV-GATE"
+          OLD_DASHBOARD = "7.0.5-r1-LOB-30S-MINIMUM"
+          NEW_DASHBOARD = "7.0.6-r1-STRICT-LOB-30S-EV-GATE"
+
+          def read(path: str) -> str:
+              return Path(path).read_text(encoding="utf-8")
+
+          def write(path: str, text: str) -> None:
+              Path(path).write_text(text, encoding="utf-8")
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              text = read(path)
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one occurrence, found {count}: {old[:120]!r}")
+              write(path, text.replace(old, new, 1))
+
+          def replace_n(path: str, old: str, new: str, expected: int) -> None:
+              text = read(path)
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(f"{path}: expected {expected} occurrences, found {count}: {old[:120]!r}")
+              write(path, text.replace(old, new))
+
+          def replace_all_if_present(path: str, old: str, new: str) -> None:
+              text = read(path)
+              if old in text:
+                  write(path, text.replace(old, new))
+
+          version_files = [
+              "supabase/functions/market-scanner/index.ts",
+              "supabase/functions/market-scanner/engine.ts",
+              "supabase/functions/market-autotrader/index.ts",
+              "docs/config.js",
+              "docs/index.html",
+              "docs/version-runtime.test.mjs",
+              "gateway/server.mjs",
+              "validation/v700-deploy-validation.mjs",
+          ]
+          for path in version_files:
+              replace_all_if_present(path, OLD_VERSION, NEW_VERSION)
+              replace_all_if_present(path, OLD_DASHBOARD, NEW_DASHBOARD)
+
+          scanner = "supabase/functions/market-scanner/index.ts"
+          replace_once(
+              scanner,
+              "const MAX_DYNAMIC_OBSERVATION_MS = 60_000;\n"
+              "const MAX_DYNAMIC_BOOK_EVENTS = 1_200;",
+              "const MAX_DYNAMIC_OBSERVATION_MS = 60_000;\n"
+              "const REQUIRED_PER_MARKET_BOOK_OBSERVATION_MS = 30_000;\n"
+              "const DYNAMIC_STREAM_HARD_TIMEOUT_BUFFER_MS = 35_000;\n"
+              "const MAX_DYNAMIC_BOOK_EVENTS = 1_200;",
+          )
+          replace_once(
+              scanner,
+              "type DynamicStreamBundle = {\n"
+              "  snapshots: Map<string, OrderbookSnapshot[]>;\n"
+              "  trades: Map<string, TradeRow[]>;\n"
+              "};",
+              "type DynamicMarketCoverage = {\n"
+              "  firstBookReceivedAt: number | null;\n"
+              "  lastBookReceivedAt: number | null;\n"
+              "  bookObservationMs: number;\n"
+              "  complete: boolean;\n"
+              "};\n"
+              "\n"
+              "type DynamicStreamBundle = {\n"
+              "  snapshots: Map<string, OrderbookSnapshot[]>;\n"
+              "  trades: Map<string, TradeRow[]>;\n"
+              "  coverage: Map<string, DynamicMarketCoverage>;\n"
+              "};",
+          )
+          replace_once(
+              scanner,
+              "function normalizeStreamMarket(value: unknown): string {\n"
+              "  return String(value || \"\").toUpperCase().replace(/\\.(1|5|15|30)$/, \"\");\n"
+              "}",
+              "function normalizeStreamMarket(value: unknown): string {\n"
+              "  return String(value || \"\").toUpperCase().replace(/\\.(1|5|15|30)$/, \"\");\n"
+              "}\n"
+              "\n"
+              "function dynamicCoverage(markets: string[]): Map<string, DynamicMarketCoverage> {\n"
+              "  return new Map(markets.map((market) => [market, {\n"
+              "    firstBookReceivedAt: null,\n"
+              "    lastBookReceivedAt: null,\n"
+              "    bookObservationMs: 0,\n"
+              "    complete: false,\n"
+              "  }]));\n"
+              "}\n"
+              "\n"
+              "function recordDynamicBookCoverage(\n"
+              "  coverage: Map<string, DynamicMarketCoverage>,\n"
+              "  market: string,\n"
+              "  receivedAt: number,\n"
+              "): void {\n"
+              "  const state = coverage.get(market);\n"
+              "  if (!state) return;\n"
+              "  if (state.firstBookReceivedAt == null) state.firstBookReceivedAt = receivedAt;\n"
+              "  state.lastBookReceivedAt = receivedAt;\n"
+              "  state.bookObservationMs = Math.max(0, receivedAt - state.firstBookReceivedAt);\n"
+              "  state.complete = state.bookObservationMs >= REQUIRED_PER_MARKET_BOOK_OBSERVATION_MS;\n"
+              "}\n"
+              "\n"
+              "function allDynamicMarketsCovered(\n"
+              "  coverage: Map<string, DynamicMarketCoverage>,\n"
+              "): boolean {\n"
+              "  return coverage.size > 0 && [...coverage.values()].every((state) => state.complete);\n"
+              "}",
+          )
+          replace_n(
+              scanner,
+              "  const trades = new Map(markets.map((market) => [market, [] as TradeRow[]]));\n"
+              "  if (!markets.length) return Promise.resolve({ snapshots, trades });",
+              "  const trades = new Map(markets.map((market) => [market, [] as TradeRow[]]));\n"
+              "  const coverage = dynamicCoverage(markets);\n"
+              "  if (!markets.length) return Promise.resolve({ snapshots, trades, coverage });",
+              2,
+          )
+          replace_n(
+              scanner,
+              "      else resolve({ snapshots, trades });",
+              "      else resolve({ snapshots, trades, coverage });",
+              2,
+          )
+          replace_n(
+              scanner,
+              "      observationTimer = setTimeout(() => finish(), observationMs);",
+              "      observationTimer = setTimeout(\n"
+              "        () => finish(),\n"
+              "        observationMs + DYNAMIC_STREAM_HARD_TIMEOUT_BUFFER_MS,\n"
+              "      );",
+              2,
+          )
+          replace_once(
+              scanner,
+              "          if (row.type === \"orderbook\" && Array.isArray(row.orderbook_units)) {\n"
+              "            const bucket = snapshots.get(market)!;\n"
+              "            if (bucket.length < MAX_DYNAMIC_BOOK_EVENTS) {\n"
+              "              bucket.push({ ...row, market } as OrderbookSnapshot);\n"
+              "            }\n"
+              "          } else if (row.type === \"trade\") {",
+              "          if (row.type === \"orderbook\" && Array.isArray(row.orderbook_units)) {\n"
+              "            const receivedAt = Date.now();\n"
+              "            recordDynamicBookCoverage(coverage, market, receivedAt);\n"
+              "            const bucket = snapshots.get(market)!;\n"
+              "            if (bucket.length < MAX_DYNAMIC_BOOK_EVENTS) {\n"
+              "              bucket.push({ ...row, market, timestamp: receivedAt } as OrderbookSnapshot);\n"
+              "            }\n"
+              "            if (allDynamicMarketsCovered(coverage)) finish();\n"
+              "          } else if (row.type === \"trade\") {",
+          )
+          replace_once(
+              scanner,
+              "      timestamp: Number(row.E || receivedAt),",
+              "      timestamp: receivedAt,",
+          )
+          replace_once(
+              scanner,
+              "        if (stream.includes(\"@depth\") || Array.isArray(row.bids)) {\n"
+              "          const snapshot = binanceOrderbookSnapshot(symbol, row);\n"
+              "          const bucket = snapshots.get(symbol)!;\n"
+              "          if (snapshot && bucket.length < MAX_DYNAMIC_BOOK_EVENTS) {\n"
+              "            bucket.push(snapshot);\n"
+              "          }\n"
+              "        } else if (stream.includes(\"@trade\") || row.e === \"trade\") {",
+              "        if (stream.includes(\"@depth\") || Array.isArray(row.bids)) {\n"
+              "          const receivedAt = Date.now();\n"
+              "          const snapshot = binanceOrderbookSnapshot(symbol, row, receivedAt);\n"
+              "          recordDynamicBookCoverage(coverage, symbol, receivedAt);\n"
+              "          const bucket = snapshots.get(symbol)!;\n"
+              "          if (snapshot && bucket.length < MAX_DYNAMIC_BOOK_EVENTS) {\n"
+              "            bucket.push(snapshot);\n"
+              "          }\n"
+              "          if (allDynamicMarketsCovered(coverage)) finish();\n"
+              "        } else if (stream.includes(\"@trade\") || row.e === \"trade\") {",
+          )
+          replace_n(
+              scanner,
+              "      const streamedBooks = dynamic.snapshots.get(market) || [];\n"
+              "      const streamedTrades = dynamic.trades.get(market) || [];\n"
+              "      if (streamedBooks.length >= 2) {\n"
+              "        snapshots.set(market, streamedBooks);\n"
+              "        websocketMarkets++;\n"
+              "      }\n"
+              "      if (streamedTrades.length) {\n"
+              "        trades.set(market, [\n"
+              "          ...(trades.get(market) || []),\n"
+              "          ...streamedTrades,\n"
+              "        ]);\n"
+              "      }",
+              "      const streamedBooks = dynamic.snapshots.get(market) || [];\n"
+              "      const streamedTrades = dynamic.trades.get(market) || [];\n"
+              "      const coverage = dynamic.coverage.get(market);\n"
+              "      if (coverage?.complete && streamedBooks.length >= 2) {\n"
+              "        snapshots.set(market, streamedBooks);\n"
+              "        websocketMarkets++;\n"
+              "        if (streamedTrades.length) {\n"
+              "          trades.set(market, [\n"
+              "            ...(trades.get(market) || []),\n"
+              "            ...streamedTrades,\n"
+              "          ]);\n"
+              "        }\n"
+              "      }",
+              2,
+          )
+
+          entry = "supabase/functions/_shared/lob/entry.ts"
+          replace_once(entry, "  minEvBps: 0,", "  minEvBps: 0.5,")
+          replace_once(
+              entry,
+              " * Entry permission here is current order-book/tape only. Model EV is retained for audit and\n"
+              " * scheduling, but it is not an admission veto.",
+              " * Entry permission here is current order-book/tape only, with fee/slippage-adjusted EV and\n"
+              " * conservative lower bounds enforced as hard live-admission vetoes.",
+          )
+          replace_once(
+              entry,
+              "  for (const reason of payoff.reasons) reasons.push(reason);\n"
+              "  for (const warning of payoff.warnings) warnings.push(warning);\n"
+              "  const technicalBlock = reasons.some((r) =>\n"
+              "    r.startsWith(\"TRAP_\") ||\n"
+              "    r.startsWith(\"FLOW_\") ||\n"
+              "    r === \"TAPE_SPEED_DECLINING\" ||\n"
+              "    r === \"SELL_PRESSURE_DOMINANT\" ||\n"
+              "    r === \"MICROPRICE_BEARISH\" ||\n"
+              "    r === \"OUTSIDE_24H_GAINER_TOP10\" || [\n"
+              "      \"INSUFFICIENT_LOB_SAMPLES\",\n"
+              "      \"INSUFFICIENT_OBSERVATION_WINDOW\",\n"
+              "      \"STALE_ORDERBOOK\",\n"
+              "      \"SPREAD_TOO_WIDE\",\n"
+              "    ].includes(r)\n"
+              "  );\n"
+              "  const decision = reasons.length === 0 ? \"BUY\" : technicalBlock ? \"AVOID\" : \"WAIT\";",
+              "  for (const reason of payoff.reasons) reasons.push(reason);\n"
+              "  for (const warning of payoff.warnings) {\n"
+              "    warnings.push(warning);\n"
+              "    if (warning === \"NET_PAYOFF_TOO_WEAK\" || warning === \"STOP_TARGET_ASYMMETRY\") {\n"
+              "      reasons.push(warning);\n"
+              "    }\n"
+              "  }\n"
+              "  const minimumVerifiedEvBps = Math.max(0.01, cfg.minEvBps);\n"
+              "  if (!(conditionalEvNetBps > minimumVerifiedEvBps)) {\n"
+              "    reasons.push(\"LOB_CONDITIONAL_EV_TOO_LOW\");\n"
+              "  }\n"
+              "  if (!(conditionalEvLowerBoundBps > minimumVerifiedEvBps)) {\n"
+              "    reasons.push(\"LOB_CONDITIONAL_EV_LOWER_BOUND_TOO_LOW\");\n"
+              "  }\n"
+              "  if (!(attemptEvNetBps > minimumVerifiedEvBps)) {\n"
+              "    reasons.push(\"LOB_ATTEMPT_EV_TOO_LOW\");\n"
+              "  }\n"
+              "  if (!(attemptEvLowerBoundBps > minimumVerifiedEvBps)) {\n"
+              "    reasons.push(\"LOB_ATTEMPT_EV_LOWER_BOUND_TOO_LOW\");\n"
+              "  }\n"
+              "  const technicalBlock = reasons.some((r) =>\n"
+              "    r.startsWith(\"TRAP_\") ||\n"
+              "    r.startsWith(\"FLOW_\") ||\n"
+              "    r.startsWith(\"LOB_CONDITIONAL_EV_\") ||\n"
+              "    r.startsWith(\"LOB_ATTEMPT_EV_\") ||\n"
+              "    r === \"NET_PAYOFF_TOO_WEAK\" ||\n"
+              "    r === \"STOP_TARGET_ASYMMETRY\" ||\n"
+              "    r === \"TAPE_SPEED_DECLINING\" ||\n"
+              "    r === \"SELL_PRESSURE_DOMINANT\" ||\n"
+              "    r === \"MICROPRICE_BEARISH\" ||\n"
+              "    r === \"OUTSIDE_24H_GAINER_TOP10\" || [\n"
+              "      \"INSUFFICIENT_LOB_SAMPLES\",\n"
+              "      \"INSUFFICIENT_OBSERVATION_WINDOW\",\n"
+              "      \"STALE_ORDERBOOK\",\n"
+              "      \"SPREAD_TOO_WIDE\",\n"
+              "    ].includes(r)\n"
+              "  );\n"
+              "  const decision = reasons.length === 0 ? \"BUY\" : technicalBlock ? \"AVOID\" : \"WAIT\";",
+          )
+          replace_once(
+              entry,
+              "    minimumVerifiedEvBps: cfg.minEvBps,",
+              "    minimumVerifiedEvBps,",
+          )
+
+          trader = "supabase/functions/market-autotrader/index.ts"
+          replace_once(
+              trader,
+              "      Math.max(1000, finite((settings as any).lob_observation_window_ms, 8000)),",
+              "      Math.max(30_000, finite((settings as any).lob_observation_window_ms, 32_000)),",
+          )
+          replace_once(
+              trader,
+              "        observationMs: Math.max(\n"
+              "          1000,\n"
+              "          finite((settings as any).lob_observation_window_ms, 8000),\n"
+              "        ),",
+              "        observationMs: Math.max(\n"
+              "          30_000,\n"
+              "          finite((settings as any).lob_observation_window_ms, 32_000),\n"
+              "        ),",
+          )
+          replace_once(
+              trader,
+              "      minEvBps: 0,",
+              "      minEvBps: Math.max(\n"
+              "        0.01,\n"
+              "        finite((settings as any).lob_min_net_ev_bps, 0.50),\n"
+              "        finite((settings as any).lob_min_verified_ev_cushion_bps, 0.50),\n"
+              "      ),",
+          )
+          replace_once(
+              trader,
+              "    if (decision.decision !== \"BUY\") {",
+              "    const strictLiveReasons: string[] = [];\n"
+              "    const liveMinEvBps = Math.max(\n"
+              "      0.01,\n"
+              "      finite((settings as any).lob_min_net_ev_bps, 0.50),\n"
+              "      finite((settings as any).lob_min_verified_ev_cushion_bps, 0.50),\n"
+              "    );\n"
+              "    if (finite((features as any).observationMs, 0) < 30_000) {\n"
+              "      strictLiveReasons.push(\"LIVE_OBSERVATION_UNDER_30S\");\n"
+              "    }\n"
+              "    if (Boolean(evidenceSizing?.lowEvidence)) {\n"
+              "      strictLiveReasons.push(\"LIVE_LOW_EVIDENCE_SHADOW_ONLY\");\n"
+              "    }\n"
+              "    const learnedSampleFloor = Math.max(\n"
+              "      30,\n"
+              "      Math.floor(finite((settings as any).lob_live_min_pattern_samples, 40)),\n"
+              "    );\n"
+              "    const learnedMeanNetBps = patternPolicy.meanNetBps == null\n"
+              "      ? Number.NaN\n"
+              "      : Number(patternPolicy.meanNetBps);\n"
+              "    const learnedProfitableRate = patternPolicy.profitableRate == null\n"
+              "      ? Number.NaN\n"
+              "      : Number(patternPolicy.profitableRate);\n"
+              "    if (\n"
+              "      patternPolicy.samples >= learnedSampleFloor &&\n"
+              "      ((Number.isFinite(learnedMeanNetBps) && learnedMeanNetBps <= 0) ||\n"
+              "        (Number.isFinite(learnedProfitableRate) && learnedProfitableRate < 0.35))\n"
+              "    ) {\n"
+              "      strictLiveReasons.push(\"LIVE_NEGATIVE_LEARNED_PATTERN\");\n"
+              "    }\n"
+              "    if (!(decision.conditionalEvNetBps > liveMinEvBps)) {\n"
+              "      strictLiveReasons.push(\"LIVE_CONDITIONAL_EV_TOO_LOW\");\n"
+              "    }\n"
+              "    if (!(decision.conditionalEvLowerBoundBps > liveMinEvBps)) {\n"
+              "      strictLiveReasons.push(\"LIVE_CONDITIONAL_EV_LB_TOO_LOW\");\n"
+              "    }\n"
+              "    if (!(decision.attemptEvNetBps > liveMinEvBps)) {\n"
+              "      strictLiveReasons.push(\"LIVE_ATTEMPT_EV_TOO_LOW\");\n"
+              "    }\n"
+              "    if (!(decision.attemptEvLowerBoundBps > liveMinEvBps)) {\n"
+              "      strictLiveReasons.push(\"LIVE_ATTEMPT_EV_LB_TOO_LOW\");\n"
+              "    }\n"
+              "    for (const warning of decision.warnings) {\n"
+              "      if (warning === \"NET_PAYOFF_TOO_WEAK\" || warning === \"STOP_TARGET_ASYMMETRY\") {\n"
+              "        strictLiveReasons.push(`LIVE_${warning}`);\n"
+              "      }\n"
+              "    }\n"
+              "    if (settings.mode === \"LIVE_LIMITED\" && strictLiveReasons.length) {\n"
+              "      (scalpAudit as JsonRecord).strict_live_gate = {\n"
+              "        allowed: false,\n"
+              "        reasons: strictLiveReasons,\n"
+              "        minimum_ev_bps: liveMinEvBps,\n"
+              "        required_observation_ms: 30_000,\n"
+              "      };\n"
+              "      await event(\n"
+              "        \"LOB_STRICT_LIVE_GATE_BLOCK\",\n"
+              "        `${exchange}:${candidate.market} strict live gate blocked`,\n"
+              "        scalpAudit,\n"
+              "        { cycleId, level: \"INFO\" },\n"
+              "      );\n"
+              "      return {\n"
+              "        entered: false,\n"
+              "        exchange,\n"
+              "        market: candidate.market,\n"
+              "        reason: `strict live gate: ${strictLiveReasons.join(\",\")}`,\n"
+              "      };\n"
+              "    }\n"
+              "    if (decision.decision !== \"BUY\") {",
+          )
+
+          lob_test = "supabase/functions/_shared/lob/lob.test.ts"
+          replace_once(
+              lob_test,
+              "test(\"a learned wider stop remains auditable but cannot become a hidden admission gate\", () => {\n"
+              "  const learned = evaluateLobEntry(hot, costs, { learnedStopFloorBps: 80 });\n"
+              "  assert(learned.stopBps >= 80, \"winner MAE floor must reach the executable stop\");\n"
+              "  assert(!learned.reasons.includes(\"NET_EV_NOT_POSITIVE\"), \"modeled EV is audit-only in v7\");\n"
+              "});",
+              "test(\"a learned wider stop cannot bypass strict fee-net EV admission\", () => {\n"
+              "  const learned = evaluateLobEntry(hot, costs, { learnedStopFloorBps: 80 });\n"
+              "  assert(learned.stopBps >= 80, \"winner MAE floor must reach the executable stop\");\n"
+              "  assert(learned.decision !== \"BUY\", \"negative conservative EV must be blocked\");\n"
+              "  assert(\n"
+              "    learned.reasons.some((reason) => reason.startsWith(\"LOB_\") || reason === \"NET_PAYOFF_TOO_WEAK\"),\n"
+              "    \"the strict EV/payoff reason must remain auditable\",\n"
+              "  );\n"
+              "});",
+          )
+
+          migration_path = "supabase/migrations/20260730054600_strict_lob_30s_ev_gate_v706.sql"
+          migration = """-- v7.0.6: strict fee-net LOB admission and shadow-only low-evidence policy.
+          update public.trading_settings
+          set lob_observation_window_ms = greatest(lob_observation_window_ms, 32000),
+              lob_search_base_observation_ms = greatest(lob_search_base_observation_ms, 32000),
+              lob_search_max_observation_ms = greatest(lob_search_max_observation_ms, 32000),
+              lob_min_net_ev_bps = greatest(lob_min_net_ev_bps, 0.50),
+              lob_min_verified_ev_cushion_bps = greatest(lob_min_verified_ev_cushion_bps, 0.50),
+              lob_live_shadow_low_evidence = true,
+              lob_mission_enabled = false,
+              lob_mission_hourly_min_trades = 0,
+              lob_mission_daily_min_trades = 0,
+              lob_mission_weekly_min_trades = 0,
+              lob_mission_activity_deficit = false,
+              lob_mission_activity_deficit_streak = 0,
+              lob_live_admission_revision = '7.0.6-STRICT-LOB-30S-EV-GATE',
+              lob_model_revision = '7.0.6-STRICT-LOB-30S-EV-GATE',
+              version = version + 1,
+              updated_at = now()
+          where id = 1;
+          """
+          write(migration_path, migration)
+
+          deploy = ".github/workflows/main.deploy-supabase.yml"
+          replace_once(deploy, '"LOB_MIN_NET_EV_BPS=0"', '"LOB_MIN_NET_EV_BPS=0.5"')
+          replace_once(deploy, '"LOB_MAX_SPREAD_BPS=60"', '"LOB_MAX_SPREAD_BPS=35"')
+          replace_once(
+              deploy,
+              "            --file supabase/migrations/20260730041336_min_lob_observation_30s_v705.sql",
+              "            --file supabase/migrations/20260730041336_min_lob_observation_30s_v705.sql \\\n"
+              "            --file supabase/migrations/20260730054600_strict_lob_30s_ev_gate_v706.sql",
+          )
+
+          validation = "validation/v700-deploy-validation.mjs"
+          replace_once(
+              validation,
+              "const observationMigration = read(\n"
+              "  \"supabase/migrations/20260730041336_min_lob_observation_30s_v705.sql\",\n"
+              ");",
+              "const observationMigration = read(\n"
+              "  \"supabase/migrations/20260730041336_min_lob_observation_30s_v705.sql\",\n"
+              ");\n"
+              "const strictGateMigration = read(\n"
+              "  \"supabase/migrations/20260730054600_strict_lob_30s_ev_gate_v706.sql\",\n"
+              ");",
+          )
+          replace_once(
+              validation,
+              "    scanner.includes(\"const MIN_DYNAMIC_OBSERVATION_MS = 32_000;\") &&\n"
+              "    scanner.includes('finite(Deno.env.get(\"LOB_OBSERVATION_MS\"), 32_000)') &&",
+              "    scanner.includes(\"const MIN_DYNAMIC_OBSERVATION_MS = 32_000;\") &&\n"
+              "    scanner.includes(\"const REQUIRED_PER_MARKET_BOOK_OBSERVATION_MS = 30_000;\") &&\n"
+              "    scanner.includes(\"allDynamicMarketsCovered\") &&\n"
+              "    scanner.includes(\"coverage?.complete\") &&\n"
+              "    scanner.includes('finite(Deno.env.get(\"LOB_OBSERVATION_MS\"), 32_000)') &&",
+          )
+          replace_once(
+              validation,
+              "check(\n"
+              "  \"the v7 entry path is order-book and tape only\",\n"
+              "  entry.includes(\"Entry permission here is current order-book/tape only\") &&\n"
+              "    !entry.includes(\"trendAssist\") &&\n"
+              "    !entry.includes(\"features.fundingEdge\") &&\n"
+              "    !entry.includes('reasons.push(\"NET_EV_NOT_POSITIVE\")') &&\n"
+              "    !entry.includes(\"PWIN_LOWER_BOUND_BELOW\") &&\n"
+              "    !entry.includes(\"PFILL_LOWER_BOUND_TOO_LOW\"),\n"
+              ");",
+              "check(\n"
+              "  \"the v7 entry path is LOB-only and strict fee-net EV gated\",\n"
+              "  entry.includes(\"Entry permission here is current order-book/tape only\") &&\n"
+              "    entry.includes(\"LOB_CONDITIONAL_EV_TOO_LOW\") &&\n"
+              "    entry.includes(\"LOB_ATTEMPT_EV_LOWER_BOUND_TOO_LOW\") &&\n"
+              "    entry.includes(\"NET_PAYOFF_TOO_WEAK\") &&\n"
+              "    trader.includes(\"LOB_STRICT_LIVE_GATE_BLOCK\") &&\n"
+              "    trader.includes(\"LIVE_LOW_EVIDENCE_SHADOW_ONLY\") &&\n"
+              "    trader.includes(\"LIVE_NEGATIVE_LEARNED_PATTERN\") &&\n"
+              "    !entry.includes(\"trendAssist\") &&\n"
+              "    !entry.includes(\"features.fundingEdge\") &&\n"
+              "    !entry.includes(\"PWIN_LOWER_BOUND_BELOW\") &&\n"
+              "    !entry.includes(\"PFILL_LOWER_BOUND_TOO_LOW\"),\n"
+              ");",
+          )
+          replace_once(
+              validation,
+              "    deployWorkflow.includes(\"20260730031800_exit_learning_integrity_v704.sql\") &&\n"
+              "    deployWorkflow.includes(\"20260730041336_min_lob_observation_30s_v705.sql\"),",
+              "    deployWorkflow.includes(\"20260730031800_exit_learning_integrity_v704.sql\") &&\n"
+              "    deployWorkflow.includes(\"20260730041336_min_lob_observation_30s_v705.sql\") &&\n"
+              "    deployWorkflow.includes(\"20260730054600_strict_lob_30s_ev_gate_v706.sql\") &&\n"
+              "    strictGateMigration.includes(\"lob_live_shadow_low_evidence = true\") &&\n"
+              "    strictGateMigration.includes(\"lob_mission_enabled = false\") &&\n"
+              "    strictGateMigration.includes(\"lob_min_net_ev_bps = greatest\"),",
+          )
+
+          Path(".github/workflows/strict-lob-v706-hotfix.yml").unlink()
+          PY
+
+      - name: Commit strict gate update
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Trading-booooo deploy bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(v7.0.6): enforce per-symbol 30s LOB and strict EV gates"
+          git push origin HEAD:main
+
+      - name: Dispatch production deployment
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${GITHUB_REPOSITORY}/actions/workflows/main.deploy-supabase.yml/dispatches" \
+            -f ref=main
