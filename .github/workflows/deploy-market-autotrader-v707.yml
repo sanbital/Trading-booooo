@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/deploy-market-autotrader-v707.yml"
+  issues:
+    types: [opened]
   workflow_dispatch:
 
 permissions:
@@ -16,6 +18,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.event_name != 'issues' || github.event.issue.title == '[DEPLOY] market-autotrader v7.0.7'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
