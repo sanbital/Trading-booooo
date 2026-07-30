@@ -1245,7 +1245,7 @@
       if (group.exchange === "binance" && group.asset === "BNB") return false;
       const minimum = group.exchange === "upbit"
         ? Math.max(40_000, finite(settings?.min_order_krw, 40_000))
-        : Math.max(0, finite(settings?.min_order_usdt, 5));
+        : Math.max(90, finite(settings?.min_order_usdt, 90));
       return group.valueQuote >= minimum * buffer;
     });
     const totals = list.reduce(

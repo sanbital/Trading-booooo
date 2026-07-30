@@ -2,6 +2,8 @@ import {
   adjustedPlanForFill,
   allocateExitFillToPosition,
   baseAsset,
+  BINANCE_MIN_ORDER_USDT,
+  binanceMinOrderUsdt,
   calculateManagedCapital,
   calculatePositionSize,
   dangerousControlError,
@@ -81,6 +83,13 @@ const settings: TradingSettings = {
   max_new_entries_per_scan: 2,
   suppress_cross_exchange_same_asset: true,
 };
+
+Deno.test("Binance operator minimum is fixed at 90 USDT", () => {
+  assertEquals(BINANCE_MIN_ORDER_USDT, 90);
+  assertEquals(binanceMinOrderUsdt(5), 90);
+  assertEquals(binanceMinOrderUsdt(90), 90);
+  assertEquals(binanceMinOrderUsdt(125), 125);
+});
 
 Deno.test("generic quote sizing works for KRW and USDT", () => {
   const krw = calculatePositionSize({

@@ -14,6 +14,8 @@ const migrationVersions = migrations.map((name) => name.split("_", 1)[0]);
 const scanner = read("supabase/functions/market-scanner/index.ts");
 const engine = read("supabase/functions/market-scanner/engine.ts");
 const trader = read("supabase/functions/market-autotrader/index.ts");
+const traderCore = read("supabase/functions/market-autotrader/core.ts");
+const traderCoreTest = read("supabase/functions/market-autotrader/core.test.ts");
 const entry = read("supabase/functions/_shared/lob/entry.ts");
 const dashboard = read("docs/index.html");
 const dashboardConfig = read("docs/config.js");
@@ -50,6 +52,20 @@ check(
     scanner.includes('lob: "Top 10 중 흐름 유지 종목 최소 20초 실시간 호가·체결"') &&
     engine.includes("const DYNAMIC_MIN_OBSERVATION_MS = 20_000;") &&
     deployWorkflow.includes('"LOB_OBSERVATION_MS=20000"'),
+);
+check(
+  "Binance entry and partial-exit sizing use the 90 USDT operator floor",
+  traderCore.includes("export const BINANCE_MIN_ORDER_USDT = 90;") &&
+    traderCore.includes(
+      "clamp(finite(value, BINANCE_MIN_ORDER_USDT), BINANCE_MIN_ORDER_USDT, 1000)",
+    ) &&
+    trader.includes("merged.min_order_usdt = binanceMinOrderUsdt(merged.min_order_usdt)") &&
+    trader.includes("minOrder: binanceMinOrderUsdt(settings.min_order_usdt)") &&
+    trader.includes("min_order_usdt: [BINANCE_MIN_ORDER_USDT, 1000]") &&
+    trader.includes("positionMinNotionalQuote(position)") &&
+    traderCoreTest.includes("Binance operator minimum is fixed at 90 USDT") &&
+    dashboardJs.includes("Math.max(90, finite(settings?.min_order_usdt, 90))") &&
+    deployWorkflow.includes('"BINANCE_MIN_ORDER_USDT=90"'),
 );
 check(
   "the v7 entry path is order-book and tape only",

@@ -5,6 +5,8 @@ import {
   adjustedPlanForFill,
   allocateExitFillToPosition,
   baseAsset,
+  BINANCE_MIN_ORDER_USDT,
+  binanceMinOrderUsdt,
   calculateExitResidualAccounting,
   calculateManagedCapital,
   calculatePositionSize,
@@ -441,7 +443,9 @@ function defaultSettings(): TradingSettings & JsonRecord {
     min_order_krw: 40_000,
     max_daily_buy_krw: 10_000_000_000,
     max_order_usdt: 10_000_000,
-    min_order_usdt: clamp(finite(env("BINANCE_MIN_ORDER_USDT"), 10), 5, 1000),
+    min_order_usdt: binanceMinOrderUsdt(
+      finite(env("BINANCE_MIN_ORDER_USDT"), BINANCE_MIN_ORDER_USDT),
+    ),
     max_daily_buy_usdt: 100_000_000,
     upbit_allocation_mode: "ALL",
     upbit_allocation_krw: 0,
@@ -642,6 +646,8 @@ async function loadSettings(): Promise<TradingSettings & JsonRecord> {
   const rows = await db("trading_settings?id=eq.1&select=*");
   if (rows?.[0]) {
     const merged = { ...defaultSettings(), ...rows[0] } as TradingSettings & JsonRecord;
+    // Database values from older releases must not lower the operator's live Binance floor.
+    merged.min_order_usdt = binanceMinOrderUsdt(merged.min_order_usdt);
     // v5.2.0 could persist percentage fractions (0.1) as percentage points and
     // enable the kill switch at the same time. That signature blocks every live
     // entry. Repair that exact legacy signature once, while preserving future
@@ -1770,10 +1776,17 @@ function exchangeLimits(settings: TradingSettings, exchange: Exchange) {
     }
     : {
       maxOrder: allocationControlled ? Number.MAX_SAFE_INTEGER : settings.max_order_usdt,
-      minOrder: settings.min_order_usdt,
+      minOrder: binanceMinOrderUsdt(settings.min_order_usdt),
       quoteStep: 0.01,
       dailyBuy: allocationControlled ? Number.MAX_SAFE_INTEGER : settings.max_daily_buy_usdt,
     };
+}
+function positionMinNotionalQuote(position: Position): number {
+  const stored = finite(
+    position.min_notional_quote,
+    position.exchange === "upbit" ? 5000 : BINANCE_MIN_ORDER_USDT,
+  );
+  return position.exchange === "binance" ? Math.max(BINANCE_MIN_ORDER_USDT, stored) : stored;
 }
 function accountQuantity(portfolio: any, asset: string, freeOnly = false): number {
   const row = (Array.isArray(portfolio?.accounts) ? portfolio.accounts : []).find((item: any) =>
@@ -3891,7 +3904,7 @@ async function sweepResidualInventory(
     );
     const minOrder = exchange === "upbit"
       ? finite(settings.min_order_krw, 5000)
-      : finite(settings.min_order_usdt, 10);
+      : binanceMinOrderUsdt(settings.min_order_usdt);
     const decision = residualSweepDecision({
       quantity: totalQuantity,
       markPrice: price,
@@ -4077,10 +4090,7 @@ async function placeRestingTakeProfit(
     ),
     step,
   );
-  const minNotional = finite(
-    position.min_notional_quote,
-    position.exchange === "upbit" ? 5000 : 10,
-  );
+  const minNotional = positionMinNotionalQuote(position);
   // Both the TP slice AND the remainder must clear the exchange minimum, otherwise the
   // runner becomes un-sellable dust. If they cannot, fall back to the polling exit path.
   if (!(qty > 0) || qty * target < minNotional || (remaining - qty) * target < minNotional) {
@@ -4468,10 +4478,7 @@ async function syncMakerEntry(position: Position, settings: TradingSettings, cyc
 
   const updated = await updateOrderFromGateway(orderRow, order);
   const filled = finite(updated.fill.executedVolume);
-  const minNotional = finite(
-    position.min_notional_quote,
-    position.exchange === "upbit" ? 5000 : 10,
-  );
+  const minNotional = positionMinNotionalQuote(position);
   const reportedPrice = finite(updated.fill.averagePrice);
   const reportedFunds = finite(updated.fill.executedFunds);
   const fillPrice = reportedPrice > 0
@@ -4781,10 +4788,7 @@ async function applyExit(
       position.t1_allocation_pct,
     )
     : finite(position.remaining_quantity);
-  const minNotional = finite(
-    position.min_notional_quote,
-    position.exchange === "upbit" ? 5000 : 10,
-  );
+  const minNotional = positionMinNotionalQuote(position);
   if (
     quantity * price < minNotional || (position.remaining_quantity - quantity) * price < minNotional
   ) quantity = position.remaining_quantity;
@@ -6899,7 +6903,7 @@ async function control(body: JsonRecord, settings: TradingSettings & JsonRecord)
     min_order_krw: [40000, 1_000_000],
     max_daily_buy_krw: [40000, 10_000_000_000],
     max_order_usdt: [5, 10_000_000],
-    min_order_usdt: [5, 1000],
+    min_order_usdt: [BINANCE_MIN_ORDER_USDT, 1000],
     max_daily_buy_usdt: [5, 100_000_000],
     scalp_max_strategy_exposure_pct: [10, 100],
     scalp_low_evidence_daily_loss_pct: [0.05, 2],

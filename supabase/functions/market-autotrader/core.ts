@@ -1,5 +1,6 @@
 export type TradingMode = "PAUSED" | "PAPER" | "LIVE_LIMITED";
 export type Exchange = "upbit" | "binance";
+export const BINANCE_MIN_ORDER_USDT = 90;
 
 export type TradingSettings = {
   configured: boolean;
@@ -311,6 +312,10 @@ export function mergeOrderExecutionProgress(
 
 export function clamp(value: number, low: number, high: number): number {
   return Math.min(high, Math.max(low, Number.isFinite(value) ? value : low));
+}
+
+export function binanceMinOrderUsdt(value: unknown): number {
+  return clamp(finite(value, BINANCE_MIN_ORDER_USDT), BINANCE_MIN_ORDER_USDT, 1000);
 }
 
 export function floorToStep(value: number, step: number): number {
