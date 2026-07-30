@@ -37,18 +37,20 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply pending per-symbol 30s scanner patch
+      - name: Apply pending v7.0.7 LOB scanner-plan lock
         shell: bash
         run: |
           set -euo pipefail
-          if [ -f validation/apply-v706-per-symbol-observation.py ]; then
-            python3 validation/apply-v706-per-symbol-observation.py
-            git config user.name "Trading-booooo deploy bot"
-            git config user.email "actions@users.noreply.github.com"
-            git add -A
-            git commit -m "fix(v7.0.6): require 30s observation per symbol [skip ci]"
-            git push origin HEAD:main
-          fi
+          python3 scripts/apply_v707_lob_plan_lock.py
+          git diff --check
+          git config user.name "Trading-booooo deploy bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add \
+            supabase/functions/_shared/lob/types.ts \
+            supabase/functions/_shared/lob/entry.ts \
+            supabase/functions/market-autotrader/index.ts
+          git commit -m "fix(v7.0.7): lock autotrader to scanner LOB plan geometry [skip ci]"
+          git push origin HEAD:main
 
       - name: Set up Deno
         uses: denoland/setup-deno@v2
