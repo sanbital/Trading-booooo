@@ -1,0 +1,51 @@
+name: Deploy market-autotrader v7.0.7
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-market-autotrader-v707.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-market-autotrader-v707
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Verify v7.0.7 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'const VERSION = "7.0.7-LOB-SCAN-PLAN-LOCK";' supabase/functions/market-autotrader/index.ts
+          grep -Fq 'fixedTargetBps?: number;' supabase/functions/_shared/lob/types.ts
+          grep -Fq 'FIXED_SCAN_PLAN_GEOMETRY' supabase/functions/_shared/lob/entry.ts
+          grep -Fq 'ignoredStaleOpenOrder' supabase/functions/_shared/lob/entry.ts
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Deploy market-autotrader
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN}"
+          test -n "${SUPABASE_PROJECT_REF}"
+          supabase functions deploy market-autotrader \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
