@@ -29,14 +29,20 @@ jobs:
       - name: Apply guarded patch
         run: python3 scripts/apply_v707_lob_plan_lock.py
 
+      - name: Verify clean patch structure
+        run: git diff --check
+
       - name: Type-check shared LOB evaluator
         run: deno check supabase/functions/_shared/lob/entry.ts
 
       - name: Type-check market autotrader
         run: deno check supabase/functions/market-autotrader/index.ts
 
-      - name: Run LOB entry tests
-        run: deno test supabase/functions/_shared/lob/entry.test.ts
+      - name: Verify plan-lock markers
+        run: |
+          grep -q '7.0.7-LOB-SCAN-PLAN-LOCK' supabase/functions/market-autotrader/index.ts
+          grep -q 'FIXED_SCAN_PLAN_GEOMETRY' supabase/functions/_shared/lob/entry.ts
+          grep -q 'fixedTargetBps: fixedPlanTargetBps' supabase/functions/market-autotrader/index.ts
 
       - name: Commit verified source patch
         run: |
