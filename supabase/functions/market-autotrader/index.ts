@@ -1,4 +1,4 @@
-// Trading-booooo v7.0.5-LOB-30S-MINIMUM — autonomous spot orchestrator.
+// Trading-booooo v7.0.7-LOB-SCAN-PLAN-LOCK — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -117,7 +117,7 @@ import {
   summarizeEntryAdmission,
 } from "./entry-admission.ts";
 
-const VERSION = "7.0.5-LOB-30S-MINIMUM";
+const VERSION = "7.0.7-LOB-SCAN-PLAN-LOCK";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -2307,6 +2307,23 @@ async function enterCandidateInner(
   let lobSizingContext: any = null;
   if (isLobStrategy((settings as any).strategy)) {
     const lobSnapshot = (candidate as any).snapshot?.lob || {};
+    const fixedPlanTargetBps = finite(lobSnapshot.target_bps, 0);
+    const fixedPlanStopBps = finite(lobSnapshot.stop_bps, 0);
+    const fixedPlanMaxHoldingSeconds = Math.round(
+      finite(lobSnapshot.max_holding_seconds, 0),
+    );
+    if (
+      !(fixedPlanTargetBps > 0) ||
+      !(fixedPlanStopBps > 0) ||
+      !(fixedPlanMaxHoldingSeconds > 0)
+    ) {
+      return {
+        entered: false,
+        exchange,
+        market: candidate.market,
+        reason: "scanner LOB plan geometry is missing or invalid",
+      };
+    }
     const features = liveLobFeatures(lobSnapshot, market);
     const assignedPolicy = ((candidate as any).__policy_bundle as LobPolicyBundle | null) ??
       assignLobPolicy(await loadLobPolicyRuntime(), String(candidate.scan_id || cycleId));
@@ -2356,6 +2373,9 @@ async function enterCandidateInner(
       patternPolicy,
       onlinePolicy,
       evidenceSizing,
+      fixedPlanTargetBps,
+      fixedPlanStopBps,
+      fixedPlanMaxHoldingSeconds,
     };
   }
 
@@ -2533,6 +2553,9 @@ async function enterCandidateInner(
       patternPolicy,
       onlinePolicy,
       evidenceSizing,
+      fixedPlanTargetBps,
+      fixedPlanStopBps,
+      fixedPlanMaxHoldingSeconds,
     } = lobSizingContext;
     const liveFee = await liveFeePct(exchange, settings);
     const roundTripFeeBps = liveFee * 2 * 100;
@@ -2604,10 +2627,15 @@ async function enterCandidateInner(
       measuredMakerFillRate,
       makerFillSamples: makerFill.rested,
       learnedStopFloorBps: 0,
+      overrides: {
+        fixedTargetBps: fixedPlanTargetBps,
+        fixedStopBps: fixedPlanStopBps,
+        fixedMaxHoldingSeconds: fixedPlanMaxHoldingSeconds,
+      },
     });
     scalpAudit = {
       strategy: "LOB_SCALP",
-      strategy_revision: "7.0.5-LOB-30S-MINIMUM",
+      strategy_revision: "7.0.7-LOB-SCAN-PLAN-LOCK",
       recommendation,
       pattern: decision.pattern,
       patterns: decision.patterns,
@@ -2689,6 +2717,11 @@ async function enterCandidateInner(
       reasons: decision.reasons,
       warnings: decision.warnings,
       features: decision.features,
+      fixed_scan_plan_geometry: {
+        target_bps: fixedPlanTargetBps,
+        stop_bps: fixedPlanStopBps,
+        max_holding_seconds: fixedPlanMaxHoldingSeconds,
+      },
       scanned_lob: lobSnapshot,
       slots,
       slot_quote: Number.isFinite(slotQuote) ? slotQuote : null,

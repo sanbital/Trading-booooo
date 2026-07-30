@@ -82,6 +82,25 @@ export function evaluateLobEntry(
   const cfg = { ...DEFAULT_LOB_ENTRY_CONFIG, ...overrides };
   const reasons: string[] = [];
   const warnings: string[] = [];
+  const rawFixedTargetBps = Number(cfg.fixedTargetBps);
+  const rawFixedStopBps = Number(cfg.fixedStopBps);
+  const rawFixedMaxHoldingSeconds = Number(cfg.fixedMaxHoldingSeconds);
+  const fixedTargetBps =
+    Number.isFinite(rawFixedTargetBps) && rawFixedTargetBps > 0
+      ? rawFixedTargetBps
+      : null;
+  const fixedStopBps =
+    Number.isFinite(rawFixedStopBps) && rawFixedStopBps > 0
+      ? rawFixedStopBps
+      : null;
+  const fixedMaxHoldingSeconds =
+    Number.isFinite(rawFixedMaxHoldingSeconds) && rawFixedMaxHoldingSeconds > 0
+      ? Math.round(rawFixedMaxHoldingSeconds)
+      : null;
+  const hasFixedPlanGeometry =
+    fixedTargetBps !== null &&
+    fixedStopBps !== null &&
+    fixedMaxHoldingSeconds !== null;
   const hotness = scoreHotSymbol(features);
   const rawPatterns = detectLobPatterns(features);
 
@@ -127,22 +146,26 @@ export function evaluateLobEntry(
     positivePressure * 25 + clamp(features.ofiPersistence, 0, 1) * 15;
   const movementBps = provisionalMomentum ? momentumMovementBps : ordinaryMovementBps;
   const targetCeilingBps = provisionalMomentum ? Math.max(cfg.maxTargetBps, 140) : cfg.maxTargetBps;
-  const targetBps = clamp(
-    Math.max(cfg.minTargetBps, totalTargetCostBps + cfg.minNetProfitBps, movementBps),
-    cfg.minTargetBps,
-    targetCeilingBps,
-  );
+  const targetBps = hasFixedPlanGeometry
+    ? fixedTargetBps as number
+    : clamp(
+      Math.max(cfg.minTargetBps, totalTargetCostBps + cfg.minNetProfitBps, movementBps),
+      cfg.minTargetBps,
+      targetCeilingBps,
+    );
 
   // Momentum invalidates faster than an ordinary absorption trade, so its planned stop is a
   // smaller share of the target. Cost/noise/tick floors below can still widen it honestly.
   const plannedStopRatio = provisionalMomentum
     ? 0.28 + (1 - provisionalPatternConfidence) * 0.14
     : 0.38 + (1 - provisionalPatternConfidence) * 0.22;
-  const provisionalStopBps = clamp(
-    Math.max(cfg.minStopBps, targetBps * plannedStopRatio),
-    cfg.minStopBps,
-    cfg.maxStopBps,
-  );
+  const provisionalStopBps = hasFixedPlanGeometry
+    ? fixedStopBps as number
+    : clamp(
+      Math.max(cfg.minStopBps, targetBps * plannedStopRatio),
+      cfg.minStopBps,
+      cfg.maxStopBps,
+    );
 
   const traps = assessLobTraps(
     {
@@ -167,11 +190,25 @@ export function evaluateLobEntry(
     totalStopCostBps * 1.25,
     Math.max(0, cfg.learnedStopFloorBps),
   );
-  const stopBps = clamp(
-    Math.max(provisionalStopBps, traps.requiredStopBps, microstructureStopFloorBps),
+  const liveStopFloorBps = Math.max(
     cfg.minStopBps,
-    cfg.maxStopBps,
+    traps.requiredStopBps,
+    microstructureStopFloorBps,
   );
+  const stopBps = hasFixedPlanGeometry
+    ? fixedStopBps as number
+    : clamp(
+      Math.max(provisionalStopBps, liveStopFloorBps),
+      cfg.minStopBps,
+      cfg.maxStopBps,
+    );
+
+  if (hasFixedPlanGeometry) {
+    warnings.push("FIXED_SCAN_PLAN_GEOMETRY");
+    if (stopBps < liveStopFloorBps) {
+      reasons.push("FIXED_PLAN_STOP_INVALIDATED");
+    }
+  }
 
   const disabled = new Set(cfg.disabledVetoes as LobTrapName[]);
   const activeVetoes = traps.vetoes.filter((name) => !disabled.has(name));
@@ -314,6 +351,7 @@ export function evaluateLobEntry(
   const technicalBlock = reasons.some((r) =>
     r.startsWith("TRAP_") ||
     r.startsWith("FLOW_") ||
+    r.startsWith("FIXED_PLAN_") ||
     r === "TAPE_SPEED_DECLINING" ||
     r === "SELL_PRESSURE_DOMINANT" ||
     r === "MICROPRICE_BEARISH" ||
@@ -353,10 +391,12 @@ export function evaluateLobEntry(
     evNetBps,
     evLowerBoundBps,
     forecastBiasPenaltyBps,
-    maxHoldingSeconds: Math.min(
-      cfg.absoluteMaxHoldingSeconds,
-      Math.max(1, isMomentum ? Math.min(90, cfg.maxHoldingSeconds) : cfg.maxHoldingSeconds),
-    ),
+    maxHoldingSeconds: hasFixedPlanGeometry
+      ? fixedMaxHoldingSeconds as number
+      : Math.min(
+        cfg.absoluteMaxHoldingSeconds,
+        Math.max(1, isMomentum ? Math.min(90, cfg.maxHoldingSeconds) : cfg.maxHoldingSeconds),
+      ),
     reasons,
     warnings,
     features,

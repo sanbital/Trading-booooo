@@ -134,6 +134,10 @@ export interface LobEntryConfig {
   maxStopBps: number;
   maxHoldingSeconds: number;
   absoluteMaxHoldingSeconds: number;
+  /** Immutable scanner-plan geometry used by the order-time live recheck. */
+  fixedTargetBps?: number;
+  fixedStopBps?: number;
+  fixedMaxHoldingSeconds?: number;
   uncertaintyHaircut: number;
   /** Trap thresholds. See traps.ts. */
   trap: Partial<LobTrapConfig>;
