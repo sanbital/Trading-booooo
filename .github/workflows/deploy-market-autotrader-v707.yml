@@ -1,4 +1,4 @@
-name: Deploy market-autotrader v7.0.7
+name: Deploy market-autotrader v7.0.8
 
 on:
   push:
@@ -16,17 +16,33 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-market-autotrader-v707
+  group: deploy-market-autotrader-v708
   cancel-in-progress: false
 
 jobs:
   deploy:
-    if: github.event_name != 'issues' || github.event.issue.title == '[DEPLOY] market-autotrader v7.0.7'
+    if: github.event_name != 'issues' || github.event.issue.title == '[DEPLOY] market-autotrader v7.0.8'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Stamp v7.0.8 runtime version
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('supabase/functions/market-autotrader/index.ts')
+          source = path.read_text()
+          old = '7.0.7-LOB-SCAN-PLAN-LOCK'
+          new = '7.0.8-PROFIT-ONLY-EXIT'
+          if old not in source:
+              raise SystemExit(f'expected runtime version {old} not found')
+          path.write_text(source.replace(old, new))
+          PY
+          grep -q '7.0.8-PROFIT-ONLY-EXIT' supabase/functions/market-autotrader/index.ts
 
       - name: Install Supabase CLI
         uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
