@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: deploy-supabase-trading-engine
@@ -35,7 +35,20 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Apply pending per-symbol 30s scanner patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f validation/apply-v706-per-symbol-observation.py ]; then
+            python3 validation/apply-v706-per-symbol-observation.py
+            git config user.name "Trading-booooo deploy bot"
+            git config user.email "actions@users.noreply.github.com"
+            git add -A
+            git commit -m "fix(v7.0.6): require 30s observation per symbol [skip ci]"
+            git push origin HEAD:main
+          fi
 
       - name: Set up Deno
         uses: denoland/setup-deno@v2
