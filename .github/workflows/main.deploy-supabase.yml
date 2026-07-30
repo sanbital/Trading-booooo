@@ -1,5 +1,6 @@
 name: Deploy Supabase Trading Engine
 
+# Deployment retrigger: 2026-07-31 v7.0.7 production rollout
 on:
   push:
     branches: [main]
