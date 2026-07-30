@@ -1,0 +1,2 @@
+Deploy market-autotrader v7.0.7 from commit cb215efd8ff7a4d97236614ae4e08ea6f3f7e106.
+Triggered 2026-07-31 KST.
