@@ -156,7 +156,8 @@ jobs:
             --file supabase/migrations/202607290021_top10_lob_only_v700.sql \
             --file supabase/migrations/20260729230827_tp_settlement_integrity_v701.sql \
             --file supabase/migrations/20260729232553_profit_protection_constraint_integrity_v702.sql \
-            --file supabase/migrations/20260729233331_residual_balance_ledger_integrity_v703.sql
+            --file supabase/migrations/20260729233331_residual_balance_ledger_integrity_v703.sql \
+            --file supabase/migrations/20260730031800_exit_learning_integrity_v704.sql
 
       - name: Deploy Edge Functions
         shell: bash

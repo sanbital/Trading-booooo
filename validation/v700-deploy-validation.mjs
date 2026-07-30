@@ -5,7 +5,7 @@ const failures = [];
 const passed = [];
 const check = (name, condition) => (condition ? passed : failures).push(name);
 
-const version = "7.0.3-RESIDUAL-BALANCE-LEDGER-INTEGRITY";
+const version = "7.0.4-EXIT-LEARNING-INTEGRITY";
 const dashboardRevision = "7.0.0-r2-TOP10-LOB-ONLY-DASHBOARD-RESTORE";
 const migrations = readdirSync(new URL("../supabase/migrations/", import.meta.url))
   .filter((name) => name.endsWith(".sql"))
@@ -31,6 +31,9 @@ const profitProtectionMigration = read(
 const residualLedgerMigration = read(
   "supabase/migrations/20260729233331_residual_balance_ledger_integrity_v703.sql",
 );
+const exitLearningMigration = read(
+  "supabase/migrations/20260730031800_exit_learning_integrity_v704.sql",
+);
 const deployWorkflow = read(".github/workflows/main.deploy-supabase.yml");
 const dashboardWorkflow = read(".github/workflows/validate-dashboard.yml");
 
@@ -51,6 +54,8 @@ check(
     scanner.includes('finite(Deno.env.get("LOB_OBSERVATION_MS"), 20_000)') &&
     scanner.includes('lob: "Top 10 중 흐름 유지 종목 최소 20초 실시간 호가·체결"') &&
     engine.includes("const DYNAMIC_MIN_OBSERVATION_MS = 20_000;") &&
+    entry.includes("features.observationMs < cfg.minObservationMs") &&
+    entry.includes("INSUFFICIENT_OBSERVATION_WINDOW") &&
     deployWorkflow.includes('"LOB_OBSERVATION_MS=20000"'),
 );
 check(
@@ -64,8 +69,33 @@ check(
     trader.includes("min_order_usdt: [BINANCE_MIN_ORDER_USDT, 1000]") &&
     trader.includes("positionMinNotionalQuote(position)") &&
     traderCoreTest.includes("Binance operator minimum is fixed at 90 USDT") &&
+    trader.includes('exchange === "binance" ? "FOK" : "IOC"') &&
     dashboardJs.includes("Math.max(90, finite(settings?.min_order_usdt, 90))") &&
     deployWorkflow.includes('"BINANCE_MIN_ORDER_USDT=90"'),
+);
+check(
+  "pre-target protected profit is executable and semantic exits remain auditable",
+  traderCore.includes(
+    "const trailActive = finite(position.trailing_stop) > finite(position.stop_price)",
+  ) &&
+    traderCoreTest.includes("pre-target profit protection trail is executable") &&
+    exitLearningMigration.includes("label_trading_exit_reason_v704") &&
+    exitLearningMigration.includes("LOB_INVALIDATION") &&
+    exitLearningMigration.includes("SIGNAL_REVERSAL") &&
+    exitLearningMigration.includes("TIMEOUT"),
+);
+check(
+  "online learning accepts verified current engines and momentum entries",
+  exitLearningMigration.includes("regexp_match(coalesce(new.engine_version") &&
+    exitLearningMigration.includes("'MOMENTUM_CONTINUATION'") &&
+    exitLearningMigration.includes("backfill_lob_online_learning(5000)"),
+);
+check(
+  "account snapshots preserve exchange-observation time for cash-flow attribution",
+  trader.includes("portfolioCapturedAt[exchange] = new Date().toISOString()") &&
+    trader.includes("portfolioCapturedAt[exchange]") &&
+    exitLearningMigration.includes("detection_mode") &&
+    exitLearningMigration.includes("executed_funds_quote"),
 );
 check(
   "the v7 entry path is order-book and tape only",
@@ -127,7 +157,8 @@ check(
     ) &&
     deployWorkflow.includes(
       "20260729233331_residual_balance_ledger_integrity_v703.sql",
-    ),
+    ) &&
+    deployWorkflow.includes("20260730031800_exit_learning_integrity_v704.sql"),
 );
 check(
   "TP settlement is ordered before balance reconciliation and fails closed on material overfill",

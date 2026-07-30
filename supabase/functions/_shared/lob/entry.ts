@@ -16,6 +16,7 @@ function clamp(value: number, low: number, high: number): number {
 
 export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   minSamples: 4,
+  minObservationMs: 20_000,
   maxBookAgeMs: 5000,
   maxSpreadBps: 60,
   minHotnessScore: 0,
@@ -182,6 +183,9 @@ export function evaluateLobEntry(
     patterns.find((p) => p.primary && p.confidence >= cfg.minPrimaryPatternConfidence) || null;
 
   if (features.samples < cfg.minSamples) reasons.push("INSUFFICIENT_LOB_SAMPLES");
+  if (features.observationMs < cfg.minObservationMs) {
+    reasons.push("INSUFFICIENT_OBSERVATION_WINDOW");
+  }
   if (features.bookAgeMs == null || features.bookAgeMs > cfg.maxBookAgeMs) {
     reasons.push("STALE_ORDERBOOK");
   }
@@ -315,6 +319,7 @@ export function evaluateLobEntry(
     r === "MICROPRICE_BEARISH" ||
     r === "OUTSIDE_24H_GAINER_TOP10" || [
       "INSUFFICIENT_LOB_SAMPLES",
+      "INSUFFICIENT_OBSERVATION_WINDOW",
       "STALE_ORDERBOOK",
       "SPREAD_TOO_WIDE",
     ].includes(r)

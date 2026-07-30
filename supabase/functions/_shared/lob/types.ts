@@ -116,6 +116,8 @@ export interface LobCostEstimate {
 
 export interface LobEntryConfig {
   minSamples: number;
+  /** Minimum wall-clock coverage of the live order-book/tape observation. */
+  minObservationMs: number;
   maxBookAgeMs: number;
   maxSpreadBps: number;
   minHotnessScore: number;

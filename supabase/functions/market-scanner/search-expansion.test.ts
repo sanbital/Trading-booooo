@@ -12,7 +12,7 @@ function expansion(overrides: Partial<LobSearchExpansion> = {}): LobSearchExpans
     failureStreak: 1,
     baseFinalists: 12,
     finalistLimit: 18,
-    observationMs: 10000,
+    observationMs: 20000,
     rotationPool: 48,
     rotationMinutes: 1,
     evaluatedAt: "2026-07-29T00:00:00Z",

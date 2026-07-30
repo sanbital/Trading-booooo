@@ -436,14 +436,16 @@ export function decideExit(
   if (emergency) {
     return { action: "EMERGENCY", fraction: 1, reason: "emergency liquidation enabled" };
   }
-  const effectiveStop = position.t1_completed && finite(position.trailing_stop) > 0
+  // Profit protection can raise trailing_stop before TARGET_1. Restricting the trail to
+  // t1_completed made the database record a protected profit floor that the exit engine
+  // silently ignored, allowing TIMEOUT/LOB exits to give the entire MFE back.
+  const trailActive = finite(position.trailing_stop) > finite(position.stop_price);
+  const effectiveStop = trailActive
     ? Math.max(finite(position.stop_price), finite(position.trailing_stop))
     : finite(position.stop_price);
   if (price <= effectiveStop) {
     return {
-      action: position.t1_completed && finite(position.trailing_stop) >= finite(position.stop_price)
-        ? "TRAIL"
-        : "STOP",
+      action: trailActive ? "TRAIL" : "STOP",
       fraction: 1,
       reason: `price ${price} <= exit stop ${effectiveStop}`,
     };

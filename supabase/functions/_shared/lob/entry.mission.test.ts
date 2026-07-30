@@ -10,7 +10,7 @@ import type { LobCostEstimate, LobFeatureVector } from "./types.ts";
 function features(overrides: Partial<LobFeatureVector> = {}): LobFeatureVector {
   return {
     samples: 12,
-    observationMs: 8000,
+    observationMs: 20000,
     bookAgeMs: 100,
     spreadBps: 3,
     bookImbalance: 0.35,

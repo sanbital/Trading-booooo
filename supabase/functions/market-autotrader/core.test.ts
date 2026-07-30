@@ -177,6 +177,22 @@ Deno.test("exit priority is emergency then stop then targets then time", () => {
   assert(decideExit({ ...p, t1_completed: true }, 121).action === "TARGET_2");
 });
 
+Deno.test("pre-target profit protection trail is executable", () => {
+  const p = {
+    remaining_quantity: 10,
+    stop_price: 90,
+    target_1: 110,
+    target_2: 120,
+    t1_completed: false,
+    trailing_stop: 102,
+    max_holding_at: new Date(Date.now() + 100000).toISOString(),
+  };
+  const protectedExit = decideExit(p, 101);
+  assert(protectedExit.action === "TRAIL");
+  assert(protectedExit.reason.includes("102"));
+  assert(decideExit({ ...p, trailing_stop: 89 }, 91).action === "NONE");
+});
+
 Deno.test("circuit enforces global and exchange limits", () => {
   const result = evaluateCircuit({
     mode: "LIVE_LIMITED",
