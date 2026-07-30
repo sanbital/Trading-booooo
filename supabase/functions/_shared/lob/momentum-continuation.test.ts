@@ -8,7 +8,7 @@ function momentumFeatures(overrides: Partial<LobFeatureVector> = {}): LobFeature
     universeMode: "TOP10_24H_GAINERS_LOB_ONLY",
     gainerRank: 2,
     samples: 45,
-    observationMs: 11000,
+    observationMs: 20000,
     bookAgeMs: 80,
     spreadBps: 1.2,
     bookImbalance: 0.12,
