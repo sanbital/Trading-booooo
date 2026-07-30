@@ -94,7 +94,10 @@ test("a live entry requires the complete 20-second observation", () => {
     short.reasons.includes("INSUFFICIENT_OBSERVATION_WINDOW"),
     "short observation reason must be explicit",
   );
-  assert(evaluateLobEntry({ ...hot, observationMs: 20000 }, costs).decision === "BUY");
+  assert(
+    evaluateLobEntry({ ...hot, observationMs: 20000 }, costs).decision === "BUY",
+    "20 seconds must remain eligible",
+  );
 });
 
 test("fees and slippage can make a candidate non-actionable", () => {
