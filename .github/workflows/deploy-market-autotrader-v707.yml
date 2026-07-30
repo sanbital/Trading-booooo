@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/deploy-market-autotrader-v707.yml"
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
   issues:
     types: [opened]
   workflow_dispatch:
