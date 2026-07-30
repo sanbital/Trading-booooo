@@ -85,7 +85,7 @@ replace_once(
 replace_once(
     "supabase/functions/market-autotrader/index.ts",
     """      makerFillSamples: makerFill.rested,\n      learnedStopFloorBps: 0,\n    });""",
-    """      makerFillSamples: makerFill.rested,\n      learnedStopFloorBps: 0,\n      fixedTargetBps: fixedPlanTargetBps,\n      fixedStopBps: fixedPlanStopBps,\n      fixedMaxHoldingSeconds: fixedPlanMaxHoldingSeconds,\n    });""",
+    """      makerFillSamples: makerFill.rested,\n      learnedStopFloorBps: 0,\n      overrides: {\n        fixedTargetBps: fixedPlanTargetBps,\n        fixedStopBps: fixedPlanStopBps,\n        fixedMaxHoldingSeconds: fixedPlanMaxHoldingSeconds,\n      },\n    });""",
 )
 
 replace_once(
