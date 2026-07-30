@@ -12,68 +12,92 @@ def replace_once(path: str, old: str, new: str) -> None:
 
 replace_once(
     "supabase/functions/_shared/lob/types.ts",
-    """  absoluteMaxHoldingSeconds?: number;\n  minFillProbability: number;""",
-    """  absoluteMaxHoldingSeconds?: number;\n  fixedTargetBps?: number;\n  fixedStopBps?: number;\n  fixedMaxHoldingSeconds?: number;\n  minFillProbability: number;""",
+    """  maxHoldingSeconds: number;\n  absoluteMaxHoldingSeconds: number;\n  uncertaintyHaircut: number;""",
+    """  maxHoldingSeconds: number;\n  absoluteMaxHoldingSeconds: number;\n  /** Immutable scanner-plan geometry used by the order-time live recheck. */\n  fixedTargetBps?: number;\n  fixedStopBps?: number;\n  fixedMaxHoldingSeconds?: number;\n  uncertaintyHaircut: number;""",
 )
 
 replace_once(
     "supabase/functions/_shared/lob/entry.ts",
-    """  const cfg = modeConfig(mode);\n  const reasons: string[] = [];\n  const warnings: string[] = [];""",
-    """  const cfg = modeConfig(mode);\n  const reasons: string[] = [];\n  const warnings: string[] = [];\n  const rawFixedTargetBps = Number(cfg.fixedTargetBps);\n  const rawFixedStopBps = Number(cfg.fixedStopBps);\n  const rawFixedMaxHoldingSeconds = Number(cfg.fixedMaxHoldingSeconds);\n  const fixedTargetBps =\n    Number.isFinite(rawFixedTargetBps) && rawFixedTargetBps > 0\n      ? rawFixedTargetBps\n      : null;\n  const fixedStopBps =\n    Number.isFinite(rawFixedStopBps) && rawFixedStopBps > 0\n      ? rawFixedStopBps\n      : null;\n  const fixedMaxHoldingSeconds =\n    Number.isFinite(rawFixedMaxHoldingSeconds) && rawFixedMaxHoldingSeconds > 0\n      ? Math.round(rawFixedMaxHoldingSeconds)\n      : null;\n  const hasFixedPlanGeometry =\n    fixedTargetBps !== null &&\n    fixedStopBps !== null &&\n    fixedMaxHoldingSeconds !== null;""",
+    """  const cfg = { ...DEFAULT_LOB_ENTRY_CONFIG, ...overrides };\n  const reasons: string[] = [];\n  const warnings: string[] = [];""",
+    """  const cfg = { ...DEFAULT_LOB_ENTRY_CONFIG, ...overrides };\n  const reasons: string[] = [];\n  const warnings: string[] = [];\n  const rawFixedTargetBps = Number(cfg.fixedTargetBps);\n  const rawFixedStopBps = Number(cfg.fixedStopBps);\n  const rawFixedMaxHoldingSeconds = Number(cfg.fixedMaxHoldingSeconds);\n  const fixedTargetBps =\n    Number.isFinite(rawFixedTargetBps) && rawFixedTargetBps > 0\n      ? rawFixedTargetBps\n      : null;\n  const fixedStopBps =\n    Number.isFinite(rawFixedStopBps) && rawFixedStopBps > 0\n      ? rawFixedStopBps\n      : null;\n  const fixedMaxHoldingSeconds =\n    Number.isFinite(rawFixedMaxHoldingSeconds) && rawFixedMaxHoldingSeconds > 0\n      ? Math.round(rawFixedMaxHoldingSeconds)\n      : null;\n  const hasFixedPlanGeometry =\n    fixedTargetBps !== null &&\n    fixedStopBps !== null &&\n    fixedMaxHoldingSeconds !== null;""",
 )
 
 replace_once(
     "supabase/functions/_shared/lob/entry.ts",
-    """  const targetBps = clamp(\n    regime === \"MICRO_MOMENTUM\" ? Math.max(targetNormal, momentumMove) : targetNormal,\n    cfg.minTargetBps,\n    targetCeilingBps,\n  );""",
-    """  const targetBps = hasFixedPlanGeometry\n    ? fixedTargetBps as number\n    : clamp(\n      regime === \"MICRO_MOMENTUM\" ? Math.max(targetNormal, momentumMove) : targetNormal,\n      cfg.minTargetBps,\n      targetCeilingBps,\n    );""",
+    """  const targetBps = clamp(\n    Math.max(cfg.minTargetBps, totalTargetCostBps + cfg.minNetProfitBps, movementBps),\n    cfg.minTargetBps,\n    targetCeilingBps,\n  );""",
+    """  const targetBps = hasFixedPlanGeometry\n    ? fixedTargetBps as number\n    : clamp(\n      Math.max(cfg.minTargetBps, totalTargetCostBps + cfg.minNetProfitBps, movementBps),\n      cfg.minTargetBps,\n      targetCeilingBps,\n    );""",
 )
 
 replace_once(
     "supabase/functions/_shared/lob/entry.ts",
-    """  const provisionalStopBps = Math.min(\n    cfg.maxStopBps,\n    Math.max(\n      cfg.minTargetBps * 0.45,\n      totalCostsBps + 1.5,\n      features.spreadBps * 1.25,\n      microstructureStopFloorBps,\n    ),\n  );""",
-    """  const provisionalStopBps = hasFixedPlanGeometry\n    ? fixedStopBps as number\n    : Math.min(\n      cfg.maxStopBps,\n      Math.max(\n        cfg.minTargetBps * 0.45,\n        totalCostsBps + 1.5,\n        features.spreadBps * 1.25,\n        microstructureStopFloorBps,\n      ),\n    );""",
+    """  const provisionalStopBps = clamp(\n    Math.max(cfg.minStopBps, targetBps * plannedStopRatio),\n    cfg.minStopBps,\n    cfg.maxStopBps,\n  );""",
+    """  const provisionalStopBps = hasFixedPlanGeometry\n    ? fixedStopBps as number\n    : clamp(\n      Math.max(cfg.minStopBps, targetBps * plannedStopRatio),\n      cfg.minStopBps,\n      cfg.maxStopBps,\n    );""",
 )
 
 replace_once(
     "supabase/functions/_shared/lob/entry.ts",
-    """  const stopBps = Math.min(\n    cfg.maxStopBps,\n    Math.max(\n      provisionalStopBps,\n      traps.requiredStopBps,\n      totalCostsBps + 1.5,\n      microstructureStopFloorBps,\n    ),\n  );""",
-    """  const liveStopFloorBps = Math.max(\n    traps.requiredStopBps,\n    totalCostsBps + 1.5,\n    microstructureStopFloorBps,\n  );\n  const stopBps = hasFixedPlanGeometry\n    ? fixedStopBps as number\n    : Math.min(\n      cfg.maxStopBps,\n      Math.max(provisionalStopBps, liveStopFloorBps),\n    );\n\n  if (hasFixedPlanGeometry) {\n    warnings.push(\"FIXED_SCAN_PLAN_GEOMETRY\");\n    if (stopBps < liveStopFloorBps) {\n      reasons.push(\"FIXED_PLAN_STOP_INVALIDATED\");\n    }\n  }""",
+    """  const stopBps = clamp(\n    Math.max(provisionalStopBps, traps.requiredStopBps, microstructureStopFloorBps),\n    cfg.minStopBps,\n    cfg.maxStopBps,\n  );""",
+    """  const liveStopFloorBps = Math.max(\n    cfg.minStopBps,\n    traps.requiredStopBps,\n    microstructureStopFloorBps,\n  );\n  const stopBps = hasFixedPlanGeometry\n    ? fixedStopBps as number\n    : clamp(\n      Math.max(provisionalStopBps, liveStopFloorBps),\n      cfg.minStopBps,\n      cfg.maxStopBps,\n    );\n\n  if (hasFixedPlanGeometry) {\n    warnings.push(\"FIXED_SCAN_PLAN_GEOMETRY\");\n    if (stopBps < liveStopFloorBps) {\n      reasons.push(\"FIXED_PLAN_STOP_INVALIDATED\");\n    }\n  }""",
 )
 
 replace_once(
     "supabase/functions/_shared/lob/entry.ts",
-    """    reason.startsWith(\"SIDE_\") ||\n    reason.startsWith(\"REVERSAL_\")""",
-    """    reason.startsWith(\"SIDE_\") ||\n    reason.startsWith(\"FIXED_PLAN_\") ||\n    reason.startsWith(\"REVERSAL_\")""",
+    """    r.startsWith(\"TRAP_\") ||\n    r.startsWith(\"FLOW_\") ||""",
+    """    r.startsWith(\"TRAP_\") ||\n    r.startsWith(\"FLOW_\") ||\n    r.startsWith(\"FIXED_PLAN_\") ||""",
 )
 
 replace_once(
     "supabase/functions/_shared/lob/entry.ts",
-    """    maxHoldingSeconds: adaptiveMaxHoldingSeconds({\n      side,\n      features,\n      targetBps,\n      stopBps,\n      minHoldingSeconds: cfg.minHoldingSeconds,\n      maxHoldingSeconds: cfg.maxHoldingSeconds,\n      absoluteMaxHoldingSeconds: cfg.absoluteMaxHoldingSeconds,\n    }),""",
-    """    maxHoldingSeconds: hasFixedPlanGeometry\n      ? fixedMaxHoldingSeconds as number\n      : adaptiveMaxHoldingSeconds({\n        side,\n        features,\n        targetBps,\n        stopBps,\n        minHoldingSeconds: cfg.minHoldingSeconds,\n        maxHoldingSeconds: cfg.maxHoldingSeconds,\n        absoluteMaxHoldingSeconds: cfg.absoluteMaxHoldingSeconds,\n      }),""",
+    """    maxHoldingSeconds: Math.min(\n      cfg.absoluteMaxHoldingSeconds,\n      Math.max(1, isMomentum ? Math.min(90, cfg.maxHoldingSeconds) : cfg.maxHoldingSeconds),\n    ),""",
+    """    maxHoldingSeconds: hasFixedPlanGeometry\n      ? fixedMaxHoldingSeconds as number\n      : Math.min(\n        cfg.absoluteMaxHoldingSeconds,\n        Math.max(1, isMomentum ? Math.min(90, cfg.maxHoldingSeconds) : cfg.maxHoldingSeconds),\n      ),""",
 )
 
 replace_once(
     "supabase/functions/market-autotrader/index.ts",
-    'const AUTOTRADER_ENHANCEMENT_REVISION = "7.0.5-LOB-30S-MINIMUM";',
-    'const AUTOTRADER_ENHANCEMENT_REVISION = "7.0.7-LOB-SCAN-PLAN-LOCK";',
+    "// Trading-booooo v7.0.5-LOB-30S-MINIMUM — autonomous spot orchestrator.",
+    "// Trading-booooo v7.0.7-LOB-SCAN-PLAN-LOCK — autonomous spot orchestrator.",
 )
 
 replace_once(
     "supabase/functions/market-autotrader/index.ts",
-    """  if (observationMs < minObservationMs) {\n    return {\n      ok: false,\n      reason: `Scanner observation ${observationMs}ms is below ${minObservationMs}ms`,\n    };\n  }""",
-    """  if (observationMs < minObservationMs) {\n    return {\n      ok: false,\n      reason: `Scanner observation ${observationMs}ms is below ${minObservationMs}ms`,\n    };\n  }\n\n  const fixedPlanTargetBps = Number(lobSnapshot.target_bps);\n  const fixedPlanStopBps = Number(lobSnapshot.stop_bps);\n  const fixedPlanMaxHoldingSeconds = Number(lobSnapshot.max_holding_seconds);\n  const hasValidFixedPlanGeometry =\n    Number.isFinite(fixedPlanTargetBps) &&\n    fixedPlanTargetBps > 0 &&\n    Number.isFinite(fixedPlanStopBps) &&\n    fixedPlanStopBps > 0 &&\n    Number.isFinite(fixedPlanMaxHoldingSeconds) &&\n    fixedPlanMaxHoldingSeconds > 0;\n\n  if (!hasValidFixedPlanGeometry) {\n    return {\n      ok: false,\n      reason: \"Scanner LOB plan geometry is missing or invalid\",\n    };\n  }""",
+    'const VERSION = "7.0.5-LOB-30S-MINIMUM";',
+    'const VERSION = "7.0.7-LOB-SCAN-PLAN-LOCK";',
 )
 
 replace_once(
     "supabase/functions/market-autotrader/index.ts",
-    """        minHoldingSeconds: 30,\n        maxHoldingSeconds: 40,\n        absoluteMaxHoldingSeconds: 40,""",
-    """        minHoldingSeconds: 30,\n        maxHoldingSeconds: 40,\n        absoluteMaxHoldingSeconds: 40,\n        fixedTargetBps: fixedPlanTargetBps,\n        fixedStopBps: fixedPlanStopBps,\n        fixedMaxHoldingSeconds: fixedPlanMaxHoldingSeconds,""",
+    """    const lobSnapshot = (candidate as any).snapshot?.lob || {};\n    const features = liveLobFeatures(lobSnapshot, market);""",
+    """    const lobSnapshot = (candidate as any).snapshot?.lob || {};\n    const fixedPlanTargetBps = finite(lobSnapshot.target_bps, 0);\n    const fixedPlanStopBps = finite(lobSnapshot.stop_bps, 0);\n    const fixedPlanMaxHoldingSeconds = Math.round(\n      finite(lobSnapshot.max_holding_seconds, 0),\n    );\n    if (\n      !(fixedPlanTargetBps > 0) ||\n      !(fixedPlanStopBps > 0) ||\n      !(fixedPlanMaxHoldingSeconds > 0)\n    ) {\n      return {\n        entered: false,\n        exchange,\n        market: candidate.market,\n        reason: \"scanner LOB plan geometry is missing or invalid\",\n      };\n    }\n    const features = liveLobFeatures(lobSnapshot, market);""",
 )
 
 replace_once(
     "supabase/functions/market-autotrader/index.ts",
-    """        observation_ms: observationMs,\n        min_observation_ms: minObservationMs,""",
-    """        observation_ms: observationMs,\n        min_observation_ms: minObservationMs,\n        fixed_scan_plan_geometry: {\n          target_bps: fixedPlanTargetBps,\n          stop_bps: fixedPlanStopBps,\n          max_holding_seconds: fixedPlanMaxHoldingSeconds,\n        },""",
+    """      onlinePolicy,\n      evidenceSizing,\n    };""",
+    """      onlinePolicy,\n      evidenceSizing,\n      fixedPlanTargetBps,\n      fixedPlanStopBps,\n      fixedPlanMaxHoldingSeconds,\n    };""",
+)
+
+replace_once(
+    "supabase/functions/market-autotrader/index.ts",
+    """      onlinePolicy,\n      evidenceSizing,\n    } = lobSizingContext;""",
+    """      onlinePolicy,\n      evidenceSizing,\n      fixedPlanTargetBps,\n      fixedPlanStopBps,\n      fixedPlanMaxHoldingSeconds,\n    } = lobSizingContext;""",
+)
+
+replace_once(
+    "supabase/functions/market-autotrader/index.ts",
+    """      makerFillSamples: makerFill.rested,\n      learnedStopFloorBps: 0,\n    });""",
+    """      makerFillSamples: makerFill.rested,\n      learnedStopFloorBps: 0,\n      fixedTargetBps: fixedPlanTargetBps,\n      fixedStopBps: fixedPlanStopBps,\n      fixedMaxHoldingSeconds: fixedPlanMaxHoldingSeconds,\n    });""",
+)
+
+replace_once(
+    "supabase/functions/market-autotrader/index.ts",
+    '      strategy_revision: "7.0.5-LOB-30S-MINIMUM",',
+    '      strategy_revision: "7.0.7-LOB-SCAN-PLAN-LOCK",',
+)
+
+replace_once(
+    "supabase/functions/market-autotrader/index.ts",
+    """      features: decision.features,\n      scanned_lob: lobSnapshot,""",
+    """      features: decision.features,\n      fixed_scan_plan_geometry: {\n        target_bps: fixedPlanTargetBps,\n        stop_bps: fixedPlanStopBps,\n        max_holding_seconds: fixedPlanMaxHoldingSeconds,\n      },\n      scanned_lob: lobSnapshot,""",
 )
 
 print("v7.0.7 LOB scanner-plan lock patch applied successfully")
