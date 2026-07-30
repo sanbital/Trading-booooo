@@ -110,9 +110,9 @@ jobs:
             "LOB_MAX_HOLDING_SECONDS=180" \
             "LOB_ABSOLUTE_MAX_HOLDING_SECONDS=300" \
             "LOB_SCAN_INTERVAL_SECONDS=12" \
-            "LOB_MIN_NET_EV_BPS=0" \
+            "LOB_MIN_NET_EV_BPS=0.5" \
             "LOB_MAX_BOOK_AGE_MS=5000" \
-            "LOB_MAX_SPREAD_BPS=60" \
+            "LOB_MAX_SPREAD_BPS=35" \
             "LOB_HEAT_SAMPLE_COUNT=3" \
             "LOB_HEAT_SAMPLE_INTERVAL_MS=900" \
             "LOB_HEAT_FINALIST_LIMIT=12" \
@@ -158,7 +158,8 @@ jobs:
             --file supabase/migrations/20260729232553_profit_protection_constraint_integrity_v702.sql \
             --file supabase/migrations/20260729233331_residual_balance_ledger_integrity_v703.sql \
             --file supabase/migrations/20260730031800_exit_learning_integrity_v704.sql \
-            --file supabase/migrations/20260730041336_min_lob_observation_30s_v705.sql
+            --file supabase/migrations/20260730041336_min_lob_observation_30s_v705.sql \
+            --file supabase/migrations/20260730055800_strict_lob_live_admission_v706.sql
 
       - name: Deploy Edge Functions
         shell: bash
