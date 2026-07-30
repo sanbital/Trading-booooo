@@ -55,7 +55,7 @@ function defaults(reason: LobSearchExpansion["reason"] = "UNAVAILABLE"): LobSear
     failureStreak: 0,
     baseFinalists: 12,
     finalistLimit: 12,
-    observationMs: 20000,
+    observationMs: 32000,
     rotationPool: 48,
     rotationMinutes: 1,
     evaluatedAt: null,
@@ -100,10 +100,10 @@ export async function loadLobSearchExpansion(nowMs = Date.now()): Promise<LobSea
     const baseFinalists = Math.round(clamp(finite(row.lob_search_base_finalists, 12), 4, 20));
     const maxFinalists = Math.round(clamp(finite(row.lob_search_max_finalists, 20), baseFinalists, 20));
     const baseObservation = Math.round(
-      clamp(finite(row.lob_search_base_observation_ms, 20000), 20000, 30000),
+      clamp(finite(row.lob_search_base_observation_ms, 32000), 32000, 60000),
     );
     const maxObservation = Math.round(
-      clamp(finite(row.lob_search_max_observation_ms, 30000), baseObservation, 30000),
+      clamp(finite(row.lob_search_max_observation_ms, 60000), baseObservation, 60000),
     );
     const failureStreak = Math.max(0, Math.floor(finite(row.lob_search_failure_streak, 0)));
     const rotationPool = Math.round(clamp(finite(row.lob_search_rotation_pool, 48), maxFinalists, 120));

@@ -15,7 +15,7 @@ const hot: LobFeatureVector = {
   universeMode: "TOP10_24H_GAINERS_LOB_ONLY",
   gainerRank: 3,
   samples: 80,
-  observationMs: 20000,
+  observationMs: 30000,
   bookAgeMs: 100,
   spreadBps: 3,
   bookImbalance: 0.32,
@@ -87,16 +87,16 @@ test("stale orderbook is discarded", () => {
   assert(stale.decision === "AVOID", "stale book must be avoided");
 });
 
-test("a live entry requires the complete 20-second observation", () => {
-  const short = evaluateLobEntry({ ...hot, observationMs: 19999 }, costs);
-  assert(short.decision !== "BUY", "19.999 seconds must not be eligible");
+test("a live entry requires the complete 30-second observation", () => {
+  const short = evaluateLobEntry({ ...hot, observationMs: 29999 }, costs);
+  assert(short.decision !== "BUY", "29.999 seconds must not be eligible");
   assert(
     short.reasons.includes("INSUFFICIENT_OBSERVATION_WINDOW"),
     "short observation reason must be explicit",
   );
   assert(
-    evaluateLobEntry({ ...hot, observationMs: 20000 }, costs).decision === "BUY",
-    "20 seconds must remain eligible",
+    evaluateLobEntry({ ...hot, observationMs: 30000 }, costs).decision === "BUY",
+    "30 seconds must remain eligible",
   );
 });
 

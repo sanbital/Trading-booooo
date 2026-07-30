@@ -1,4 +1,4 @@
-// Trading-booooo v7.0.4-EXIT-LEARNING-INTEGRITY — autonomous spot orchestrator.
+// Trading-booooo v7.0.5-LOB-30S-MINIMUM — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -117,7 +117,7 @@ import {
   summarizeEntryAdmission,
 } from "./entry-admission.ts";
 
-const VERSION = "7.0.4-EXIT-LEARNING-INTEGRITY";
+const VERSION = "7.0.5-LOB-30S-MINIMUM";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -2607,7 +2607,7 @@ async function enterCandidateInner(
     });
     scalpAudit = {
       strategy: "LOB_SCALP",
-      strategy_revision: "7.0.4-EXIT-LEARNING-INTEGRITY",
+      strategy_revision: "7.0.5-LOB-30S-MINIMUM",
       recommendation,
       pattern: decision.pattern,
       patterns: decision.patterns,

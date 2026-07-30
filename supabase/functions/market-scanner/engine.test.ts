@@ -439,7 +439,7 @@ Deno.test("trades clustered in one phase fail the three-phase data gate", () => 
   assert(!result.sufficient);
 });
 
-Deno.test("dynamic orderflow requires a full 20-second observation window", () => {
+Deno.test("dynamic orderflow requires a full 30-second observation window", () => {
   const start = 1_800_100_000_000;
   const evaluate = (intervalMs: number) => {
     const frames = dynamicFrames("absorption").slice(0, 12).map((snapshot, index) => ({
@@ -454,14 +454,14 @@ Deno.test("dynamic orderflow requires a full 20-second observation window", () =
     return computeDynamicOrderflow(frames, flow, 0.1);
   };
 
-  const short = evaluate(1_800);
-  assert(short.observation_ms < 20_000);
+  const short = evaluate(2_700);
+  assert(short.observation_ms < 30_000);
   assert(short.distinct_book_updates >= 12);
   assert(short.aligned_trade_count >= 8);
   assert(!short.sufficient);
 
-  const complete = evaluate(1_900);
-  assert(complete.observation_ms >= 20_000);
+  const complete = evaluate(2_800);
+  assert(complete.observation_ms >= 30_000);
   assert(complete.phase_consistent);
   assert(complete.sufficient);
 });

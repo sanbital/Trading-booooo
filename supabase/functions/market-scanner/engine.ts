@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v7.0.4-EXIT-LEARNING-INTEGRITY
+// Trading-booooo Market Scanner v7.0.5-LOB-30S-MINIMUM
 // Pure analysis engine. Public market data only; no order or account operations.
 
 import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-profile.ts";
@@ -20,7 +20,7 @@ import {
   sigmaFromAtrPct,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "7.0.4-EXIT-LEARNING-INTEGRITY";
+export const ENGINE_VERSION = "7.0.5-LOB-30S-MINIMUM";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -1159,7 +1159,7 @@ type WallStat = {
   lastIndex: number;
 };
 
-const DYNAMIC_MIN_OBSERVATION_MS = 20_000;
+const DYNAMIC_MIN_OBSERVATION_MS = 30_000;
 const DYNAMIC_MIN_BOOK_UPDATES = 12;
 const DYNAMIC_MIN_TRADES = 8;
 const DYNAMIC_PHASE_COUNT = 3;

@@ -68,8 +68,8 @@ Deno.test("operator status is the authoritative dashboard version source", async
     "a cached scanner result must not downgrade the authoritative version",
   );
   assertEquals(
-    html.includes("config.js?v=7.0.0-r2-TOP10-LOB-ONLY-DASHBOARD-RESTORE") &&
-      html.includes("app.js?v=7.0.0-r2-TOP10-LOB-ONLY-DASHBOARD-RESTORE"),
+    html.includes("config.js?v=7.0.5-r1-LOB-30S-MINIMUM") &&
+      html.includes("app.js?v=7.0.5-r1-LOB-30S-MINIMUM"),
     true,
     "dashboard cache keys must move with the dashboard release",
   );

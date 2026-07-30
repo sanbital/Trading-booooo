@@ -5,8 +5,8 @@ const failures = [];
 const passed = [];
 const check = (name, condition) => (condition ? passed : failures).push(name);
 
-const version = "7.0.4-EXIT-LEARNING-INTEGRITY";
-const dashboardRevision = "7.0.0-r2-TOP10-LOB-ONLY-DASHBOARD-RESTORE";
+const version = "7.0.5-LOB-30S-MINIMUM";
+const dashboardRevision = "7.0.5-r1-LOB-30S-MINIMUM";
 const migrations = readdirSync(new URL("../supabase/migrations/", import.meta.url))
   .filter((name) => name.endsWith(".sql"))
   .sort();
@@ -34,6 +34,9 @@ const residualLedgerMigration = read(
 const exitLearningMigration = read(
   "supabase/migrations/20260730031800_exit_learning_integrity_v704.sql",
 );
+const observationMigration = read(
+  "supabase/migrations/20260730041336_min_lob_observation_30s_v705.sql",
+);
 const deployWorkflow = read(".github/workflows/main.deploy-supabase.yml");
 const dashboardWorkflow = read(".github/workflows/validate-dashboard.yml");
 
@@ -49,14 +52,17 @@ check(
     scanner.includes("TOP10_24H_GAINERS_LOB_ONLY"),
 );
 check(
-  "every live Top-10 LOB scan observes for at least 20 seconds",
-  scanner.includes("const MIN_DYNAMIC_OBSERVATION_MS = 20_000;") &&
-    scanner.includes('finite(Deno.env.get("LOB_OBSERVATION_MS"), 20_000)') &&
-    scanner.includes('lob: "Top 10 중 흐름 유지 종목 최소 20초 실시간 호가·체결"') &&
-    engine.includes("const DYNAMIC_MIN_OBSERVATION_MS = 20_000;") &&
+  "every live Top-10 LOB scan proves at least 30 seconds of coverage",
+  scanner.includes("const MIN_DYNAMIC_OBSERVATION_MS = 32_000;") &&
+    scanner.includes('finite(Deno.env.get("LOB_OBSERVATION_MS"), 32_000)') &&
+    scanner.includes('lob: "Top 10 중 흐름 유지 종목 최소 30초 실시간 호가·체결"') &&
+    engine.includes("const DYNAMIC_MIN_OBSERVATION_MS = 30_000;") &&
+    entry.includes("minObservationMs: 30_000") &&
     entry.includes("features.observationMs < cfg.minObservationMs") &&
     entry.includes("INSUFFICIENT_OBSERVATION_WINDOW") &&
-    deployWorkflow.includes('"LOB_OBSERVATION_MS=20000"'),
+    deployWorkflow.includes('"LOB_OBSERVATION_MS=32000"') &&
+    observationMigration.includes("lob_observation_window_ms = 32000") &&
+    observationMigration.includes("lob_observation_window_ms between 32000 and 60000"),
 );
 check(
   "Binance entry and partial-exit sizing use the 90 USDT operator floor",
@@ -158,7 +164,8 @@ check(
     deployWorkflow.includes(
       "20260729233331_residual_balance_ledger_integrity_v703.sql",
     ) &&
-    deployWorkflow.includes("20260730031800_exit_learning_integrity_v704.sql"),
+    deployWorkflow.includes("20260730031800_exit_learning_integrity_v704.sql") &&
+    deployWorkflow.includes("20260730041336_min_lob_observation_30s_v705.sql"),
 );
 check(
   "TP settlement is ordered before balance reconciliation and fails closed on material overfill",

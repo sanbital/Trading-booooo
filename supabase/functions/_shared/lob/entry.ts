@@ -16,7 +16,7 @@ function clamp(value: number, low: number, high: number): number {
 
 export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   minSamples: 4,
-  minObservationMs: 20_000,
+  minObservationMs: 30_000,
   maxBookAgeMs: 5000,
   maxSpreadBps: 60,
   minHotnessScore: 0,
