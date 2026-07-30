@@ -61,6 +61,11 @@ const DEFAULT_DYNAMIC_OBSERVATION_MS = 32_000;
 const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 35_000;
 const MIN_DYNAMIC_OBSERVATION_MS = 32_000;
 const MAX_DYNAMIC_OBSERVATION_MS = 60_000;
+// Every symbol must receive its own full 30-second wall-clock observation window.
+// The global socket-open timer alone is insufficient because a symbol's first frame can arrive late.
+const REQUIRED_PER_MARKET_OBSERVATION_MS = 30_000;
+const DYNAMIC_STREAM_HARD_TIMEOUT_BUFFER_MS = 35_000;
+const DYNAMIC_COVERAGE_POLL_MS = 250;
 const MAX_DYNAMIC_BOOK_EVENTS = 1_200;
 const MAX_DYNAMIC_TRADE_EVENTS = 2_500;
 const CANDLE_BATCH_SIZE = 7;
@@ -667,9 +672,17 @@ type MicroBundle = {
   observationMs: number;
 };
 
+type DynamicMarketCoverage = {
+  firstBookReceivedAt: number | null;
+  lastBookReceivedAt: number | null;
+  observedForMs: number;
+  complete: boolean;
+};
+
 type DynamicStreamBundle = {
   snapshots: Map<string, OrderbookSnapshot[]>;
   trades: Map<string, TradeRow[]>;
+  coverage: Map<string, DynamicMarketCoverage>;
 };
 
 function dynamicObservationMs(finalists: PeriodAnalysis[]): number {
@@ -697,6 +710,46 @@ function normalizeStreamMarket(value: unknown): string {
   return String(value || "").toUpperCase().replace(/\.(1|5|15|30)$/, "");
 }
 
+function initializeDynamicCoverage(
+  markets: string[],
+): Map<string, DynamicMarketCoverage> {
+  return new Map(markets.map((market) => [market, {
+    firstBookReceivedAt: null,
+    lastBookReceivedAt: null,
+    observedForMs: 0,
+    complete: false,
+  }]));
+}
+
+function recordDynamicBookFrame(
+  coverage: Map<string, DynamicMarketCoverage>,
+  market: string,
+  receivedAt: number,
+): void {
+  const state = coverage.get(market);
+  if (!state) return;
+  if (state.firstBookReceivedAt == null) state.firstBookReceivedAt = receivedAt;
+  state.lastBookReceivedAt = receivedAt;
+}
+
+function refreshDynamicCoverage(
+  coverage: Map<string, DynamicMarketCoverage>,
+  now = Date.now(),
+): void {
+  for (const state of coverage.values()) {
+    state.observedForMs = state.firstBookReceivedAt == null
+      ? 0
+      : Math.max(0, now - state.firstBookReceivedAt);
+    state.complete = state.observedForMs >= REQUIRED_PER_MARKET_OBSERVATION_MS;
+  }
+}
+
+function allDynamicMarketsCovered(
+  coverage: Map<string, DynamicMarketCoverage>,
+): boolean {
+  return coverage.size > 0 && [...coverage.values()].every((state) => state.complete);
+}
+
 async function websocketText(data: unknown): Promise<string> {
   if (typeof data === "string") return data;
   if (data instanceof ArrayBuffer) return new TextDecoder().decode(data);
@@ -717,13 +770,15 @@ function collectDynamicStream(
     markets.map((market) => [market, [] as OrderbookSnapshot[]]),
   );
   const trades = new Map(markets.map((market) => [market, [] as TradeRow[]]));
-  if (!markets.length) return Promise.resolve({ snapshots, trades });
+  const coverage = initializeDynamicCoverage(markets);
+  if (!markets.length) return Promise.resolve({ snapshots, trades, coverage });
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(UPBIT_WEBSOCKET);
     socket.binaryType = "arraybuffer";
     let opened = false;
     let settled = false;
     let observationTimer: ReturnType<typeof setTimeout> | undefined;
+    let coverageTimer: ReturnType<typeof setInterval> | undefined;
     const connectionTimer = setTimeout(() => {
       if (!opened) finish(new Error("Upbit WebSocket connection timeout"));
     }, 8_000);
@@ -733,6 +788,7 @@ function collectDynamicStream(
       settled = true;
       clearTimeout(connectionTimer);
       if (observationTimer != null) clearTimeout(observationTimer);
+      if (coverageTimer != null) clearInterval(coverageTimer);
       try {
         if (
           socket.readyState === WebSocket.OPEN ||
@@ -742,7 +798,10 @@ function collectDynamicStream(
         // 연결 정리 실패는 이미 수집된 공개 시세 분석을 무효화하지 않는다.
       }
       if (error) reject(error);
-      else resolve({ snapshots, trades });
+      else {
+        refreshDynamicCoverage(coverage);
+        resolve({ snapshots, trades, coverage });
+      }
     }
 
     socket.onopen = () => {
@@ -754,7 +813,14 @@ function collectDynamicStream(
         { type: "trade", codes: markets },
         { format: "DEFAULT" },
       ]));
-      observationTimer = setTimeout(() => finish(), observationMs);
+      coverageTimer = setInterval(() => {
+        refreshDynamicCoverage(coverage);
+        if (allDynamicMarketsCovered(coverage)) finish();
+      }, DYNAMIC_COVERAGE_POLL_MS);
+      observationTimer = setTimeout(
+        () => finish(),
+        observationMs + DYNAMIC_STREAM_HARD_TIMEOUT_BUFFER_MS,
+      );
     };
     socket.onmessage = async (event) => {
       try {
@@ -766,9 +832,11 @@ function collectDynamicStream(
           const market = normalizeStreamMarket(row.code || row.market);
           if (!snapshots.has(market)) continue;
           if (row.type === "orderbook" && Array.isArray(row.orderbook_units)) {
+            const receivedAt = Date.now();
+            recordDynamicBookFrame(coverage, market, receivedAt);
             const bucket = snapshots.get(market)!;
             if (bucket.length < MAX_DYNAMIC_BOOK_EVENTS) {
-              bucket.push({ ...row, market } as OrderbookSnapshot);
+              bucket.push({ ...row, market, timestamp: receivedAt } as OrderbookSnapshot);
             }
           } else if (row.type === "trade") {
             const bucket = trades.get(market)!;
@@ -816,7 +884,7 @@ function binanceOrderbookSnapshot(
     ? {
       market,
       code: market,
-      timestamp: Number(row.E || receivedAt),
+      timestamp: receivedAt,
       orderbook_units: units,
     }
     : null;
@@ -850,7 +918,8 @@ function collectBinanceDynamicStream(
     markets.map((market) => [market, [] as OrderbookSnapshot[]]),
   );
   const trades = new Map(markets.map((market) => [market, [] as TradeRow[]]));
-  if (!markets.length) return Promise.resolve({ snapshots, trades });
+  const coverage = initializeDynamicCoverage(markets);
+  if (!markets.length) return Promise.resolve({ snapshots, trades, coverage });
   const streams = markets.flatMap((market) => [
     `${market.toLowerCase()}@depth20@100ms`,
     `${market.toLowerCase()}@trade`,
@@ -862,6 +931,7 @@ function collectBinanceDynamicStream(
     let opened = false;
     let settled = false;
     let observationTimer: ReturnType<typeof setTimeout> | undefined;
+    let coverageTimer: ReturnType<typeof setInterval> | undefined;
     const connectionTimer = setTimeout(() => {
       if (!opened) finish(new Error("Binance WebSocket connection timeout"));
     }, 8_000);
@@ -871,6 +941,7 @@ function collectBinanceDynamicStream(
       settled = true;
       clearTimeout(connectionTimer);
       if (observationTimer != null) clearTimeout(observationTimer);
+      if (coverageTimer != null) clearInterval(coverageTimer);
       try {
         if (
           socket.readyState === WebSocket.OPEN ||
@@ -880,13 +951,23 @@ function collectBinanceDynamicStream(
         // 수집 종료 중 연결 정리 실패는 이미 받은 공개 데이터에 영향이 없다.
       }
       if (error) reject(error);
-      else resolve({ snapshots, trades });
+      else {
+        refreshDynamicCoverage(coverage);
+        resolve({ snapshots, trades, coverage });
+      }
     }
 
     socket.onopen = () => {
       opened = true;
       clearTimeout(connectionTimer);
-      observationTimer = setTimeout(() => finish(), observationMs);
+      coverageTimer = setInterval(() => {
+        refreshDynamicCoverage(coverage);
+        if (allDynamicMarketsCovered(coverage)) finish();
+      }, DYNAMIC_COVERAGE_POLL_MS);
+      observationTimer = setTimeout(
+        () => finish(),
+        observationMs + DYNAMIC_STREAM_HARD_TIMEOUT_BUFFER_MS,
+      );
     };
     socket.onmessage = async (event) => {
       try {
@@ -901,7 +982,9 @@ function collectBinanceDynamicStream(
           .toUpperCase();
         if (!snapshots.has(symbol)) return;
         if (stream.includes("@depth") || Array.isArray(row.bids)) {
-          const snapshot = binanceOrderbookSnapshot(symbol, row);
+          const receivedAt = Date.now();
+          const snapshot = binanceOrderbookSnapshot(symbol, row, receivedAt);
+          recordDynamicBookFrame(coverage, symbol, receivedAt);
           const bucket = snapshots.get(symbol)!;
           if (snapshot && bucket.length < MAX_DYNAMIC_BOOK_EVENTS) {
             bucket.push(snapshot);
@@ -1018,15 +1101,16 @@ async function loadMicrostructure(
     for (const market of markets) {
       const streamedBooks = dynamic.snapshots.get(market) || [];
       const streamedTrades = dynamic.trades.get(market) || [];
-      if (streamedBooks.length >= 2) {
+      const marketCoverage = dynamic.coverage.get(market);
+      if (marketCoverage?.complete && streamedBooks.length >= 2) {
         snapshots.set(market, streamedBooks);
         websocketMarkets++;
-      }
-      if (streamedTrades.length) {
-        trades.set(market, [
-          ...(trades.get(market) || []),
-          ...streamedTrades,
-        ]);
+        if (streamedTrades.length) {
+          trades.set(market, [
+            ...(trades.get(market) || []),
+            ...streamedTrades,
+          ]);
+        }
       }
     }
   }
@@ -1115,15 +1199,16 @@ async function loadBinanceMicrostructure(
     for (const market of markets) {
       const streamedBooks = dynamic.snapshots.get(market) || [];
       const streamedTrades = dynamic.trades.get(market) || [];
-      if (streamedBooks.length >= 2) {
+      const marketCoverage = dynamic.coverage.get(market);
+      if (marketCoverage?.complete && streamedBooks.length >= 2) {
         snapshots.set(market, streamedBooks);
         websocketMarkets++;
-      }
-      if (streamedTrades.length) {
-        trades.set(market, [
-          ...(trades.get(market) || []),
-          ...streamedTrades,
-        ]);
+        if (streamedTrades.length) {
+          trades.set(market, [
+            ...(trades.get(market) || []),
+            ...streamedTrades,
+          ]);
+        }
       }
     }
   }
