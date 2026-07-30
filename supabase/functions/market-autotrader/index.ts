@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 74072)
-Total output lines: 7184
-
 // Trading-booooo v7.0.4-EXIT-LEARNING-INTEGRITY — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
@@ -2438,7 +2435,2369 @@ async function enterCandidateInner(
     : 0;
   const maxOrder = allocationOnly
     ? Math.min(managedAvailable, riskNotional)
-    : Math.min(limits.maxOrder, plan.recommended > 0 …24072 tokens truncated…onMinNotionalQuote(position);
+    : Math.min(limits.maxOrder, plan.recommended > 0 ? plan.recommended : limits.maxOrder);
+  const allocationSizing = (entryPrice: number) => {
+    const minOrder = Math.max(limits.minOrder, rules.min_notional);
+    const notionalQuote = floorToStep(Math.min(managedAvailable, maxOrder), limits.quoteStep);
+    return notionalQuote >= minOrder
+      ? {
+        allowed: true,
+        notionalQuote,
+        quantity: notionalQuote / entryPrice,
+        stopDistancePct: 0,
+        riskBudgetQuote: notionalQuote,
+        reason: null,
+      }
+      : {
+        allowed: false,
+        notionalQuote: 0,
+        quantity: 0,
+        stopDistancePct: 0,
+        riskBudgetQuote: 0,
+        reason: `allocated order ${notionalQuote} below minimum ${minOrder}`,
+      };
+  };
+  const initial = allocationOnly ? allocationSizing(bestAsk) : calculatePositionSize({
+    equityQuote: finite(managed.managedCapitalQuote),
+    availableQuote: managedAvailable,
+    entryPrice: bestAsk,
+    stopPrice: candidate.stop_price,
+    maxPositionPct: settings.max_position_pct,
+    riskPerTradePct: settings.risk_per_trade_pct,
+    maxOrderQuote: maxOrder,
+    minOrderQuote: Math.max(limits.minOrder, rules.min_notional),
+    quoteStep: limits.quoteStep,
+    extraLossPct: FEE_PCT[exchange] * 2 / 100 + 0.001,
+  });
+  if (!initial.allowed) {
+    return { entered: false, exchange, market: candidate.market, reason: initial.reason };
+  }
+  let depth = executableDepth(market.asks, maxEntry, initial.notionalQuote);
+  if (!depth.executable || depth.availableFunds < initial.notionalQuote * LIVE_MIN_DEPTH_BUFFER) {
+    return {
+      entered: false,
+      exchange,
+      market: candidate.market,
+      reason: `insufficient ask depth (${
+        depth.availableFunds.toFixed(exchange === "upbit" ? 0 : 2)
+      } ${quote})`,
+    };
+  }
+  const entryPrice = tickRound(Math.min(maxEntry, depth.worstPrice), rules.price_tick, "down");
+  const sizing = allocationOnly ? allocationSizing(entryPrice) : calculatePositionSize({
+    equityQuote: finite(managed.managedCapitalQuote),
+    availableQuote: managedAvailable,
+    entryPrice,
+    stopPrice: candidate.stop_price,
+    maxPositionPct: settings.max_position_pct,
+    riskPerTradePct: settings.risk_per_trade_pct,
+    maxOrderQuote: maxOrder,
+    minOrderQuote: Math.max(limits.minOrder, rules.min_notional),
+    quoteStep: limits.quoteStep,
+    extraLossPct: FEE_PCT[exchange] * 2 / 100 + 0.001,
+  });
+  if (!sizing.allowed) {
+    return { entered: false, exchange, market: candidate.market, reason: sizing.reason };
+  }
+  depth = executableDepth(market.asks, maxEntry, sizing.notionalQuote);
+  if (!depth.executable || depth.availableFunds < sizing.notionalQuote * LIVE_MIN_DEPTH_BUFFER) {
+    return {
+      entered: false,
+      exchange,
+      market: candidate.market,
+      reason: "depth deteriorated during sizing",
+    };
+  }
+  let quantity = floorToStep(sizing.notionalQuote / entryPrice, rules.quantity_step || 0.00000001);
+  if (!(quantity > 0) || quantity * entryPrice < Math.max(limits.minOrder, rules.min_notional)) {
+    return {
+      entered: false,
+      exchange,
+      market: candidate.market,
+      reason: "quantity below exchange minimum",
+    };
+  }
+
+  // Stage 4: scalp final gate — safety rails (halt/cap) FIRST, then precise stressed-slippage EV.
+  // Only active when strategy === "SCALP"; otherwise the original flow is untouched.
+  let scalpStopPrice: number | null = null;
+  let scalpTarget1: number | null = null;
+  let scalpTarget2: number | null = null;
+  let scalpAudit: JsonRecord | null = null;
+  let decisionNotional = sizing.notionalQuote;
+  if (isLobStrategy((settings as any).strategy)) {
+    const {
+      lobSnapshot,
+      features,
+      assignedPolicy,
+      patternPolicy,
+      onlinePolicy,
+      evidenceSizing,
+    } = lobSizingContext;
+    const liveFee = await liveFeePct(exchange, settings);
+    const roundTripFeeBps = liveFee * 2 * 100;
+    // Fees, slippage and latency are already subtracted below. Adding a second
+    // fee-proportional cushion double-counted costs and turned a positive-net rule into an
+    // undocumented no-trade rule.
+    const minimumTargetNetProfitBps = Math.max(
+      0.01,
+      finite((settings as any).lob_min_target_net_profit_bps, 0.01),
+    );
+    const makerFill = await loadMakerFillStats(exchange);
+    const measuredMakerFillRate = makerFill.rested > 0 ? makerFill.filled / makerFill.rested : 0;
+    // v6.5: execution delay is now priced from measurement instead of being absent from
+    // this path entirely. The book's own noise band supplies the volatility and the
+    // measured p95 tick-to-order supplies the time; see _shared/scalp/latency.ts.
+    const latencyPenalty = latencyPenaltyBpsFor(
+      settings as TradingSettings & JsonRecord,
+      finite((features as any).noiseBandBps, 0),
+      Math.max(1000, finite((settings as any).lob_observation_window_ms, 8000)),
+      assignedPolicy.policyDefinition.latency,
+    );
+    const calibratedEvBiasPenaltyBps = boundedEvBiasPenalty(
+      (settings as any).scalp_ev_bias_penalty_bps,
+      assignedPolicy.policyDefinition.evBias.penaltyMultiplier,
+      assignedPolicy.policyDefinition.evBias.maxPenaltyBps,
+    );
+    const onlineMarketPenaltyBps = onlineAdverseEvPenaltyBps(
+      onlinePolicy,
+      assignedPolicy.policyDefinition.evBias.maxPenaltyBps,
+    );
+    // These are two estimates of the same optimism, not independent costs. Apply the
+    // stronger one once so repeated negative fee-net evidence corrects admission without
+    // double-counting it or imposing a trade-count cap.
+    const decision = evaluateLobEntry(features, {
+      roundTripFeeBps,
+      entrySlippageBps: makerEntryEnabled(settings) ? 0 : Math.max(0.1, spreadBps * 0.15),
+      targetExitSlippageBps: (settings as any).scalp_resting_tp !== false
+        ? 0
+        : Math.max(0.1, spreadBps * 0.15),
+      stopExitSlippageBps: Math.max(0.4, spreadBps * 0.55),
+      spreadBps,
+      latencyPenaltyBps: latencyPenalty.bps,
+      forecastBiasPenaltyBps: 0,
+    }, {
+      minEvBps: 0,
+      minNetProfitBps: minimumTargetNetProfitBps,
+      maxStopToTargetRatio: clamp(
+        finite((settings as any).lob_max_stop_to_target_ratio, 1.35),
+        0.75,
+        5,
+      ),
+      minNetRewardRiskRatio: clamp(
+        finite((settings as any).lob_min_net_reward_risk_ratio, 0.80),
+        0.10,
+        5,
+      ),
+      maxBookAgeMs: Math.max(250, finite((settings as any).lob_max_book_age_ms, 2500)),
+      maxSpreadBps: Math.max(1, finite((settings as any).lob_max_spread_bps, LIVE_MAX_SPREAD_BPS)),
+      maxHoldingSeconds: Math.round(
+        clamp(finite((settings as any).lob_max_holding_seconds, 180), 1, 300),
+      ),
+      absoluteMaxHoldingSeconds: Math.round(
+        clamp(finite((settings as any).lob_absolute_max_holding_seconds, 300), 1, 300),
+      ),
+      uncertaintyHaircut: clamp(finite((settings as any).lob_uncertainty_haircut, 0.25), 0, 0.9),
+      trap: lobTrapOverrides(settings),
+      disabledVetoes: [],
+      patternProbabilityMultiplier: 1,
+      measuredMakerFillRate,
+      makerFillSamples: makerFill.rested,
+      learnedStopFloorBps: 0,
+    });
+    scalpAudit = {
+      strategy: "LOB_SCALP",
+      strategy_revision: "7.0.4-EXIT-LEARNING-INTEGRITY",
+      recommendation,
+      pattern: decision.pattern,
+      patterns: decision.patterns,
+      hotness: decision.hotness,
+      p_target: decision.pTarget,
+      p_stop: decision.pStop,
+      p_timeout: decision.pTimeout,
+      p_fill: decision.pFill,
+      p_fill_raw: decision.rawPFill,
+      p_fill_calibration_weight: decision.fillCalibrationWeight,
+      pattern_learning: {
+        samples: patternPolicy.samples,
+        observed_multiplier: patternPolicy.observedMultiplier,
+        gate_multiplier: patternPolicy.gateMultiplier,
+        gate_weight: patternPolicy.gateWeight,
+        ranking_quality: patternPolicy.rankingQuality,
+        profitable_rate: patternPolicy.profitableRate,
+        mean_net_bps: patternPolicy.meanNetBps,
+        median_hold_seconds: patternPolicy.medianHoldSeconds,
+        profit_factor: patternPolicy.profitFactor,
+        payoff_ratio: patternPolicy.payoffRatio,
+        mean_net_lower_bound_bps: patternPolicy.meanNetLowerBoundBps,
+        deployment_reason: patternPolicy.deploymentReason,
+      },
+      policy: assignedPolicy
+        ? {
+          version: assignedPolicy.version,
+          lane: assignedPolicy.lane,
+          status: assignedPolicy.status,
+          phase: assignedPolicy.phase,
+          parent_version: assignedPolicy.parentVersion,
+          evaluation_started_at: assignedPolicy.evaluationStartedAt,
+          definition: assignedPolicy.policyDefinition,
+        }
+        : {
+          version: 0,
+          lane: "LEGACY",
+          status: "CHAMPION",
+          phase: "IDLE",
+          parent_version: null,
+          evaluation_started_at: null,
+        },
+      coin_learning: {
+        profile_version: onlinePolicy.profileVersion,
+        source: onlinePolicy.source,
+        market_samples: onlinePolicy.marketSamples,
+        pattern_samples: onlinePolicy.globalSamples,
+        profitable_rate: onlinePolicy.profitableRate,
+        target_hit_rate: onlinePolicy.targetHitRate,
+        mean_net_bps: onlinePolicy.meanNetBps,
+        expected_hold_seconds: onlinePolicy.expectedHoldSeconds,
+        ranking_quality: onlinePolicy.rankingQuality,
+        learned_stop_floor_bps: onlinePolicy.learnedStopFloorBps,
+        soft_exit_grace_seconds: onlinePolicy.softExitGraceSeconds,
+        soft_exit_confirmations: onlinePolicy.softExitConfirmations,
+      },
+      target_bps: decision.targetBps,
+      stop_bps: decision.stopBps,
+      target_return_net_bps: decision.targetReturnNetBps,
+      stop_to_target_ratio: decision.stopToTargetRatio,
+      net_reward_risk_ratio: decision.netRewardRiskRatio,
+      minimum_target_net_profit_bps: decision.minimumTargetNetProfitBps,
+      minimum_verified_ev_bps: decision.minimumVerifiedEvBps,
+      // v6.2: the calibration job needs the arithmetic term separated from the model's
+      // belief, otherwise it cannot tell a wide stop from actual predictive skill.
+      neutral_win_rate: neutralWinRateOf(decision.targetBps, decision.stopBps),
+      noise_adjusted_stop_bps: decision.noiseAdjustedStopBps,
+      traps: decision.traps.traps.map((trap) => trap.name),
+      trap_detail: decision.traps.traps,
+      prediction_basis: "FILL_CONDITIONAL",
+      conditional_ev_net_bps: decision.conditionalEvNetBps,
+      conditional_ev_lower_bound_bps: decision.conditionalEvLowerBoundBps,
+      attempt_ev_net_bps: decision.attemptEvNetBps,
+      attempt_ev_lower_bound_bps: decision.attemptEvLowerBoundBps,
+      // Compatibility aliases are conditional-on-fill from v6.10 onward.
+      ev_net_bps: decision.evNetBps,
+      ev_lower_bound_bps: decision.evLowerBoundBps,
+      max_holding_seconds: decision.maxHoldingSeconds,
+      reasons: decision.reasons,
+      warnings: decision.warnings,
+      features: decision.features,
+      scanned_lob: lobSnapshot,
+      slots,
+      slot_quote: Number.isFinite(slotQuote) ? slotQuote : null,
+      risk_sizing: riskSizing,
+      evidence_sizing: evidenceSizing,
+      forecast_bias_penalty_bps: decision.forecastBiasPenaltyBps,
+      calibrated_forecast_bias_penalty_bps: calibratedEvBiasPenaltyBps,
+      online_market_adverse_penalty_bps: onlineMarketPenaltyBps,
+      forecast_bias_samples: Math.max(0, finite((settings as any).scalp_ev_bias_samples, 0)),
+      forecast_bias_source: onlineMarketPenaltyBps > calibratedEvBiasPenaltyBps
+        ? "ONLINE_MARKET_EVIDENCE"
+        : String((settings as any).scalp_ev_bias_source || "UNMEASURED"),
+      // v6.3: the open question from v5.5 -- what fraction of maker entries actually fill --
+      // recorded on every entry so it stops being a guess. `convertToTaker` is the measured
+      // recommendation; acting on it costs 2.4x more per round trip on Upbit, so it is
+      // reported first and switched on deliberately.
+      maker_fill: (() => {
+        const evAtTaker = decision.evLowerBoundBps -
+          (Math.max(0.1, spreadBps * 0.15) + Math.max(0.1, spreadBps * 0.15));
+        return { ...makerFill, ...shouldConvertToTaker(makerFill, evAtTaker) };
+      })(),
+      decision_id: decisionId,
+      latency_penalty_bps: latencyPenalty.bps,
+      latency_penalty_source: latencyPenalty.source,
+    };
+    trace.mark("decision_made");
+    // v6.5: the audit travels with the candidate so the wrapper can file it whether this
+    // book trades or not. A rejection now carries the same evidence an entry does.
+    (candidate as any).__decision_audit = scalpAudit;
+    // Ranking inputs for rotation: what this book is worth per second of slot occupancy.
+    const rotationMetrics = lobSelectionMetrics({
+      ev_lower_bound_bps: decision.evLowerBoundBps,
+      p_target: decision.pTarget,
+      target_bps: decision.targetBps,
+      stop_bps: decision.stopBps,
+      max_holding_seconds: decision.maxHoldingSeconds,
+      pattern_quality: patternPolicy.rankingQuality,
+      empirical_profitable_rate: patternPolicy.profitableRate,
+      empirical_hold_seconds: patternPolicy.medianHoldSeconds,
+      features: {
+        noiseBandBps: finite((features as any).noiseBandBps, 0),
+        observationMs: Math.max(
+          1000,
+          finite((settings as any).lob_observation_window_ms, 8000),
+        ),
+      },
+    });
+    (candidate as any).__rotation = {
+      evLowerBoundBps: rotationMetrics.qualityAdjustedEvBps,
+      expectedSecondsToResolve: rotationMetrics.expectedSecondsToResolve,
+      entryCostBps: liveFee * 100 + latencyPenalty.bps,
+    };
+    if (decision.decision !== "BUY") {
+      await event(
+        "LOB_CANDIDATE_DISCARD",
+        `${exchange}:${candidate.market} live LOB recheck discarded`,
+        scalpAudit,
+        { cycleId, level: "INFO" },
+      );
+      return {
+        entered: false,
+        exchange,
+        market: candidate.market,
+        reason: `LOB recheck: ${decision.reasons.join(",") || decision.decision}`,
+      };
+    }
+    const targetPct = decision.targetBps / 10000;
+    const stopPct = Math.min(0.05, decision.stopBps / 10000);
+    scalpStopPrice = tickRound(entryPrice * (1 - stopPct), rules.price_tick, "down");
+    scalpTarget1 = tickRound(entryPrice * (1 + targetPct), rules.price_tick, "up");
+    scalpTarget2 = scalpTarget1;
+  } else if ((settings as any).strategy === "SCALP") {
+    const scalpSnapshot = (candidate as any).snapshot?.scalp || {};
+    const scanPWin = finite(
+      (candidate as any).scalp_p_win ?? scalpSnapshot.pWin ?? (candidate as any).scalp?.pWin,
+      0.5,
+    );
+    const scalpTargetPct = finite(
+      (candidate as any).scalp_target_pct ?? scalpSnapshot.target_pct ??
+        (candidate as any).scalp?.target_pct,
+      0.006,
+    );
+    const scalpStopPct = finite(
+      (candidate as any).scalp_stop_pct ?? scalpSnapshot.stop_pct ??
+        (candidate as any).scalp?.stop_pct,
+      0.003,
+    );
+    const resolveProbability = clamp(finite(scalpSnapshot.geometry?.resolve_probability, 1), 0, 1);
+
+    const askLevels = (market.asks || []).map((a: any) => ({
+      price: finite(a.price ?? a[0]),
+      size: finite(a.size ?? a[1]),
+    }));
+    const bidLevels = (market.bids || []).map((b: any) => ({
+      price: finite(b.price ?? b[0]),
+      size: finite(b.size ?? b[1]),
+    }));
+
+    // v5.3: re-price the signal against the book that exists RIGHT NOW.
+    // v5.2.5 carried `pWin` verbatim from the scan and only refreshed depth, so with a
+    // 60s scan cadence the entry could be driven by a minute-old orderbook reading while
+    // `maxBookAgeMs: 5000` implied freshness was enforced.
+    const signalAtMs = Date.parse(String(scalpSnapshot.signal_at || candidate.created_at || ""));
+    const signalAgeMs = Number.isFinite(signalAtMs) ? Math.max(0, Date.now() - signalAtMs) : 60_000;
+    const liveImbalance = topOfBookImbalance(bidLevels, askLevels);
+    const rawPWin = refreshPWinAtOrderTime(
+      scanPWin,
+      finite(scalpSnapshot.imbalance_contribution, 0),
+      liveImbalance,
+      signalAgeMs,
+      {
+        ...DEFAULT_SCALP_SIGNAL,
+        alphaHalfLifeMs: clamp(
+          finite((settings as any).scalp_alpha_half_life_ms, DEFAULT_SCALP_SIGNAL.alphaHalfLifeMs),
+          1000,
+          300000,
+        ),
+      },
+      finite(scalpSnapshot.trend_penalty, 1),
+      // v5.7: anchor the refresh to the barrier baseline, not a flat constant.
+      finite(scalpSnapshot.neutral_win_rate, 0),
+    );
+    // v5.3: correct the model's probability with whatever the realized outcomes say.
+    // Identity until the calibration job has enough samples to promote a profile.
+    const calibration = await loadScalpCalibration();
+    const scalpPWin = applyCalibration(rawPWin, calibration);
+
+    const day = await scalpDayState(
+      exchange,
+      settings.mode !== "LIVE_LIMITED",
+      finite(managed.managedCapitalQuote),
+    );
+    const decision = scalpEntryDecision(
+      {
+        capitalQuote: finite(managed.managedCapitalQuote),
+        requestedNotional: sizing.notionalQuote,
+        day,
+        pWin: scalpPWin,
+        targetPct: scalpTargetPct,
+        stopPct: scalpStopPct,
+        askLevels,
+        bidLevels,
+        bestAsk,
+        bestBid,
+        resolveProbability,
+        expectedHoldingMinutes: clamp(finite(scalpSnapshot.geometry?.horizon_minutes, 15), 1, 1440),
+        expectedOrderType: (settings as any).scalp_maker_entry === false
+          ? "IOC_LIMIT"
+          : "POST_ONLY",
+        depthCoverageRatio: depth.availableFunds / Math.max(1, sizing.notionalQuote),
+        spreadBps,
+        bookImbalance: liveImbalance,
+        signalAgeMs,
+        forecastEffectiveSamples: calibration.samples,
+        forecastIndependentBlocks: Math.floor(calibration.samples / 20),
+        forecastCalibrationReady: calibration.samples >=
+          Math.max(0, finite((settings as any).scalp_min_forecast_samples, 60)),
+        modelVersion: `${VERSION}-outcome.bridge.1`,
+        calibrationVersion: `platt:${calibration.a.toFixed(6)}:${calibration.b.toFixed(6)}`,
+      },
+      scalpSafetyConfig(settings),
+      scalpCostConfig(settings, exchange, await liveFeePct(exchange, settings)),
+      scalpCandidateGateConfig(settings),
+    );
+    scalpAudit = {
+      scan_p_win: scanPWin,
+      raw_order_p_win: rawPWin,
+      order_p_win: scalpPWin,
+      calibration: { slope: calibration.a, intercept: calibration.b, samples: calibration.samples },
+      signal_age_ms: signalAgeMs,
+      live_top_imbalance: liveImbalance,
+      resolve_probability: resolveProbability,
+      target_pct: scalpTargetPct,
+      stop_pct: scalpStopPct,
+      expected_net_edge: decision.expectedNetEdge,
+      ev_lower_bound: decision.evLowerBound,
+      p_win_lower_bound: decision.pWinLowerBound,
+      p_fill_lower_bound: decision.pFillLowerBound,
+      rejection_reasons: decision.rejectionReasons,
+      capital_efficiency: decision.evaluation?.capitalEfficiency ?? null,
+      geometry: scalpSnapshot.geometry || null,
+      features: scalpSnapshot.features || null,
+      strategy_profile: normalizeStrategyProfile((settings as any).scalp_strategy_profile),
+      slots,
+      slot_quote: Number.isFinite(slotQuote) ? slotQuote : null,
+      risk_sizing: riskSizing,
+    };
+    if (!decision.allow) {
+      // v5.12: rejected candidates remain available to shadow replay, but no live/paper
+      // entry may bypass EV, pWin or pFill lower bounds.
+      await event("SCALP_GATE_BLOCK", `${exchange}:${candidate.market} scalp gate blocked`, {
+        reason: decision.reason,
+        shadow_only: true,
+        ...scalpAudit,
+      }, { cycleId, level: "INFO" });
+      return {
+        entered: false,
+        exchange,
+        market: candidate.market,
+        reason: `scalp gate: ${decision.reason}`,
+      };
+    }
+    decisionNotional = decision.notional;
+    if (decision.notional < sizing.notionalQuote) {
+      quantity = floorToStep(decision.notional / entryPrice, rules.quantity_step || 0.00000001);
+      if (
+        !(quantity > 0) || quantity * entryPrice < Math.max(limits.minOrder, rules.min_notional)
+      ) {
+        return {
+          entered: false,
+          exchange,
+          market: candidate.market,
+          reason: "allocation-controlled order below exchange minimum",
+        };
+      }
+    }
+    // Exits follow the scalp target/stop the EV gate was evaluated on, not the wide
+    // trend plan — otherwise the position would hold to trend targets after a scalp entry.
+    scalpStopPrice = tickRound(entryPrice * (1 - scalpStopPct), rules.price_tick, "down");
+    scalpTarget1 = tickRound(entryPrice * (1 + scalpTargetPct), rules.price_tick, "up");
+    scalpTarget2 = tickRound(entryPrice * (1 + scalpTargetPct * 1.5), rules.price_tick, "up");
+  }
+
+  // Low-evidence trades preserve learning throughput, but they have their own daily loss
+  // budget and concurrency cap. The budget is claimed only AFTER the position row exists,
+  // so every reserve has an idempotent position key and cancellation cannot leak budget.
+  const lowEvidenceTrade = isLobStrategy((settings as any).strategy) &&
+    Boolean(lobSizingContext?.evidenceSizing?.lowEvidence);
+  let explorationWorstCaseLossQuote = 0;
+  if (settings.mode === "LIVE_LIMITED" && lowEvidenceTrade) {
+    const maxConcurrent = Math.max(
+      1,
+      Math.floor(
+        finite(
+          lobSizingContext?.assignedPolicy?.policyDefinition?.exploration?.maxConcurrentLowEvidence,
+          1,
+        ),
+      ),
+    );
+    const activeLowEvidence = await db(
+      `trading_positions?exchange=eq.${exchange}&state=in.(ENTRY_PENDING,OPEN,EXITING)&metadata->>low_evidence=eq.true&select=id`,
+    ).catch(() => []);
+    if (activeLowEvidence.length >= maxConcurrent) {
+      return {
+        entered: false,
+        exchange,
+        market: candidate.market,
+        reason: "low-evidence concurrency budget exhausted",
+      };
+    }
+    const stopFraction = Math.max(
+      0.000001,
+      scalpStopPrice && entryPrice > 0 ? (entryPrice - scalpStopPrice) / entryPrice : 0.005,
+    );
+    explorationWorstCaseLossQuote = decisionNotional *
+      (stopFraction + FEE_PCT[exchange] * 2 / 100 + 0.001);
+  }
+
+  // v5.12: per-symbol expected resolution is retained for diagnostics, while
+  // max_holding_at is the hard TIMEOUT barrier. The profile ceiling prevents an HF signal
+  // from silently turning into an intraday position.
+  const holdingProfile = resolveProfileHolding(
+    isLobStrategy((settings as any).strategy)
+      ? "LOB_SCALP"
+      : (settings as any).scalp_strategy_profile,
+    finite((settings as any).scalp_max_holding_minutes, 3),
+    finite((settings as any).scalp_safety_ttl_minutes, 5),
+    isLobStrategy((settings as any).strategy)
+      ? finite((candidate as any).snapshot?.lob?.max_holding_seconds, 180) / 60
+      : finite((candidate as any).snapshot?.scalp?.geometry?.horizon_minutes, 15),
+  );
+  const scalpExpectedMinutes = isLobStrategy((settings as any).strategy)
+    ? clamp(finite((candidate as any).snapshot?.lob?.max_holding_seconds, 180) / 60, 0.1, 5)
+    : holdingProfile.expectedResolutionMinutes;
+  const scalpSafetyTtlMinutes = isLobStrategy((settings as any).strategy)
+    ? clamp(finite((settings as any).lob_absolute_max_holding_seconds, 300) / 60, 0.1, 5)
+    : holdingProfile.timeoutMinutes;
+  const maxHolding = isScalpStrategy((settings as any).strategy)
+    ? new Date(Date.now() + scalpSafetyTtlMinutes * 60_000).toISOString()
+    : new Date(Date.now() + clamp(finite(candidate.intended_horizon_hours, 24), 1, 480) * 3600_000)
+      .toISOString();
+  let position = (await insert("trading_positions", {
+    candidate_id: candidate.id,
+    scan_id: candidate.scan_id,
+    decision_id: decisionId,
+    exchange,
+    quote_currency: quote,
+    market: candidate.market,
+    base_asset: base,
+    state: "ENTRY_PENDING",
+    reserved_quote: quantity * entryPrice,
+    reserved_quantity: quantity,
+    reservation_expires_at: new Date(
+      Date.now() + Math.max(30, finite(settings.entry_ttl_seconds, 180)) * 1000,
+    ).toISOString(),
+    fee_accounting_quality: settings.mode === "LIVE_LIMITED"
+      ? "LEGACY_UNVERIFIED"
+      : "NOT_APPLICABLE",
+    fee_accounting_version: "6.10.0",
+    is_paper: settings.mode !== "LIVE_LIMITED",
+    profile_version: candidate.profile_version || 0,
+    planned_entry_price: entryPrice,
+    stop_price: scalpStopPrice ?? candidate.stop_price,
+    target_1: scalpTarget1 ?? candidate.target_1,
+    target_2: scalpTarget2 ?? candidate.target_2,
+    tick_size: rules.price_tick,
+    quantity_step: rules.quantity_step,
+    min_notional_quote: Math.max(limits.minOrder, rules.min_notional),
+    t1_allocation_pct: plan.allocation,
+    exit_policy: plan.exitPolicy,
+    trailing_distance_pct: plan.trailingDistancePct,
+    intended_horizon_hours: candidate.intended_horizon_hours,
+    max_holding_at: maxHolding,
+    metadata: {
+      cycle_id: cycleId,
+      sizing,
+      managed_allocation: managed,
+      quote_at_entry: market,
+      execution_depth: depth,
+      live_spread_bps: spreadBps,
+      engine_version: VERSION,
+      // Baseline for the bid-support check: how much resting bid stood under the position
+      // at entry. A large fall in this is support evaporating.
+      entry_bid_depth_quote: bidDepthQuote(market),
+      // v5.3: the full entry-time signal, persisted so the pWin calibration loop can
+      // later join predicted probability against the realized outcome on this row.
+      scalp_signal: scalpAudit,
+      lob_signal: isLobStrategy((settings as any).strategy)
+        ? { ...(scalpAudit || {}), prediction_basis: "FILL_CONDITIONAL" }
+        : null,
+      prediction_basis: isLobStrategy((settings as any).strategy) ? "FILL_CONDITIONAL" : null,
+      low_evidence: Boolean(lobSizingContext?.evidenceSizing?.lowEvidence),
+      // Tagged so calibration can weight these and so their cost is reportable separately.
+      is_exploration: lowEvidenceTrade,
+      exploration_budget: (candidate as any).__exploration_budget || null,
+      scalp_expected_minutes: isScalpStrategy((settings as any).strategy)
+        ? scalpExpectedMinutes
+        : null,
+      scalp_safety_ttl_minutes: isScalpStrategy((settings as any).strategy)
+        ? scalpSafetyTtlMinutes
+        : null,
+      expected_resolution_at: isScalpStrategy((settings as any).strategy)
+        ? new Date(Date.now() + scalpExpectedMinutes * 60_000).toISOString()
+        : null,
+    },
+  }))[0] as Position;
+
+  if (settings.mode === "LIVE_LIMITED" && lowEvidenceTrade) {
+    const explorationClaim = await rpc("claim_lob_exploration_budget_v610", {
+      p_position_id: position.id,
+      p_exchange: exchange,
+      p_managed_capital_quote: finite(managed.managedCapitalQuote),
+      p_worst_case_loss_quote: explorationWorstCaseLossQuote,
+    });
+    if (explorationClaim?.allowed !== true) {
+      // The operator-approved daily stop is `scalp_daily_loss_pct`. This separate learning
+      // ledger is telemetry only: it must never become a hidden second circuit breaker.
+      await event(
+        "LOW_EVIDENCE_BUDGET_OBSERVED",
+        `${exchange}:${candidate.market} learning-loss telemetry threshold exceeded`,
+        { ...(explorationClaim || {}), enforcement: "TELEMETRY_ONLY" },
+        { cycleId, positionId: position.id, level: "INFO" },
+      );
+    }
+    const explorationBudget = {
+      ...(explorationClaim || {}),
+      enforcement: "TELEMETRY_ONLY",
+      claimed_loss_quote: explorationWorstCaseLossQuote,
+      day_key: explorationClaim?.day_key || explorationClaim?.row?.day_key || null,
+    };
+    const updated = await patch("trading_positions", `id=eq.${position.id}`, {
+      metadata: {
+        ...(position.metadata || {}),
+        exploration_budget: explorationBudget,
+      },
+    });
+    position = (updated[0] ||
+      {
+        ...position,
+        metadata: { ...(position.metadata || {}), exploration_budget: explorationBudget },
+      }) as Position;
+  }
+
+  if (settings.mode !== "LIVE_LIMITED") {
+    const paperPrice = depth.vwap > 0 ? depth.vwap : entryPrice;
+    // PAPER must use the same final, safety-capped quantity as LIVE.
+    const paperQty = floorToStep(quantity, rules.quantity_step || 0.00000001);
+    const opened = await openPaperPosition(
+      position,
+      candidate,
+      paperPrice,
+      paperQty,
+      paperQty * paperPrice,
+    );
+    await event("PAPER_ENTRY", `${exchange}:${candidate.market} paper entry`, {
+      price: paperPrice,
+      quantity: paperQty,
+      notional_quote: paperQty * paperPrice,
+      quote,
+    }, { cycleId, positionId: position.id });
+    return { entered: true, paper: true, exchange, market: candidate.market, position: opened };
+  }
+
+  // v5.5: maker route. Post on the bid and wait instead of taking the ask.
+  if (makerEntryEnabled(settings)) {
+    const makerPrice = makerBidPrice(bestBid, rules.price_tick);
+    const makerQuantity = floorToStep(
+      decisionNotional / makerPrice,
+      rules.quantity_step || 0.00000001,
+    );
+    if (
+      !(makerPrice > 0 && makerQuantity > 0) ||
+      makerQuantity * makerPrice < Math.max(limits.minOrder, rules.min_notional)
+    ) {
+      await patch("trading_positions", `id=eq.${position.id}`, {
+        state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
+        close_reason: "MAKER_ENTRY_BELOW_MINIMUM",
+        closed_at: new Date().toISOString(),
+      });
+      return {
+        entered: false,
+        exchange,
+        market: candidate.market,
+        reason: "maker order below exchange minimum",
+      };
+    }
+    const makerIdentifier = uniqueId("m", position.id);
+    const makerOrderRow = await createOrderRecord({
+      position_id: position.id,
+      candidate_id: candidate.id,
+      cycle_id: cycleId,
+      decision_id: decisionId,
+      exchange,
+      quote_currency: quote,
+      identifier: makerIdentifier,
+      market: candidate.market,
+      side: "BUY",
+      purpose: "ENTRY",
+      order_type: "LIMIT_MAKER",
+      requested_price: makerPrice,
+      requested_volume: makerQuantity,
+      requested_notional_quote: makerQuantity * makerPrice,
+      state: "REQUESTED",
+    });
+    try {
+      trace.mark("order_submitted");
+      const result = await gateway(exchange, {
+        action: "create_order",
+        order: {
+          market: candidate.market,
+          side: "BUY",
+          type: "LIMIT_MAKER",
+          price: makerPrice,
+          quantity: makerQuantity,
+          identifier: makerIdentifier,
+        },
+        wait_for_final_ms: 0,
+      }, 20_000);
+      // The gateway reports when the exchange actually answered; prefer it over our own
+      // clock, which includes the return trip and would flatter the measurement.
+      trace.mark("order_acked", finite((result as any)?.timing?.acked_at_ms) || null);
+      await updateOrderFromGateway(makerOrderRow, result);
+      const rows = await patch("trading_positions", `id=eq.${position.id}`, {
+        planned_entry_price: makerPrice,
+        reserved_quote: makerQuantity * makerPrice,
+        reserved_quantity: makerQuantity,
+        reservation_expires_at: new Date(
+          Date.now() + Math.max(30, finite(settings.entry_ttl_seconds, 180)) * 1000,
+        ).toISOString(),
+        metadata: {
+          ...(position.metadata || {}),
+          maker_entry_identifier: makerIdentifier,
+          maker_entry_order_id: makerOrderRow.id,
+          maker_entry_price: makerPrice,
+          maker_entry_placed_at: new Date().toISOString(),
+          maker_best_bid_at_placement: bestBid,
+          maker_best_ask_at_placement: bestAsk,
+        },
+      });
+      await event("MAKER_ENTRY_RESTED", `${exchange}:${candidate.market} entry posted on the bid`, {
+        price: makerPrice,
+        quantity: makerQuantity,
+        best_bid: bestBid,
+        best_ask: bestAsk,
+        spread_bps: spreadBps,
+      }, { cycleId, positionId: position.id, orderId: makerOrderRow.id });
+      // Reserved, not entered: the slot's capital is committed until the order resolves.
+      return {
+        entered: false,
+        reserved: true,
+        maker_pending: true,
+        exchange,
+        market: candidate.market,
+        position: { ...position, ...(rows[0] || {}) },
+        reason: "maker entry resting",
+        exploration: lowEvidenceTrade,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await patch("trading_orders", `id=eq.${makerOrderRow.id}`, {
+        state: "REJECTED",
+        error_message: message,
+        completed_at: new Date().toISOString(),
+      });
+      await patch("trading_positions", `id=eq.${position.id}`, {
+        state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
+        close_reason: "MAKER_ENTRY_REJECTED",
+        closed_at: new Date().toISOString(),
+      });
+      await event("MAKER_ENTRY_REJECTED", `${exchange}:${candidate.market} maker entry rejected`, {
+        error: message,
+        price: makerPrice,
+      }, { cycleId, positionId: position.id, level: "WARNING" });
+      return { entered: false, exchange, market: candidate.market, reason: message };
+    }
+  }
+
+  // The configured Binance 90 USDT minimum applies to the executed trade. IOC allowed
+  // nominal 90 USDT orders to open 5–30 USDT partial positions; FOK makes that venue's
+  // entry atomic while retaining Upbit's proven IOC path.
+  const entryTimeInForce = exchange === "binance" ? "FOK" : "IOC";
+  const testIdentifier = uniqueId("t", position.id);
+  try {
+    await gateway(exchange, {
+      action: "order_test",
+      order: {
+        market: candidate.market,
+        side: "BUY",
+        type: "LIMIT",
+        price: entryPrice,
+        quantity,
+        time_in_force: entryTimeInForce,
+        identifier: testIdentifier,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await patch("trading_positions", `id=eq.${position.id}`, {
+      state: "CANCELLED",
+      reserved_quote: 0,
+      reserved_quantity: 0,
+      reservation_expires_at: null,
+      close_reason: "ENTRY_TEST_REJECTED",
+      closed_at: new Date().toISOString(),
+      metadata: { ...(position.metadata || {}), entry_test_error: message },
+    });
+    await event("ENTRY_ERROR", `${exchange}:${candidate.market} entry test rejected`, {
+      error: message,
+    }, { cycleId, positionId: position.id, level: "WARNING" });
+    return { entered: false, exchange, market: candidate.market, reason: message };
+  }
+  const identifier = uniqueId("e", position.id);
+  const orderRow = await createOrderRecord({
+    position_id: position.id,
+    candidate_id: candidate.id,
+    cycle_id: cycleId,
+    decision_id: decisionId,
+    exchange,
+    quote_currency: quote,
+    identifier,
+    market: candidate.market,
+    side: "BUY",
+    purpose: "ENTRY",
+    order_type: "LIMIT",
+    time_in_force: entryTimeInForce,
+    requested_price: entryPrice,
+    requested_volume: quantity,
+    requested_notional_quote: quantity * entryPrice,
+    state: "REQUESTED",
+  });
+  try {
+    trace.mark("order_submitted");
+    const result = await gateway(exchange, {
+      action: "create_order",
+      order: {
+        market: candidate.market,
+        side: "BUY",
+        type: "LIMIT",
+        price: entryPrice,
+        quantity,
+        time_in_force: entryTimeInForce,
+        identifier,
+      },
+      wait_for_final_ms: 4000,
+    }, 20_000);
+    trace.mark("order_acked", finite((result as any)?.timing?.acked_at_ms) || null);
+    const updated = await updateOrderFromGateway(orderRow, result);
+    if (!(finite(updated.fill.executedVolume) > 0 && finite(updated.fill.averagePrice) > 0)) {
+      if (["OPEN", "PARTIALLY_FILLED"].includes(String(updated.order?.status))) {
+        return {
+          entered: false,
+          reserved: true,
+          pending_reconcile: true,
+          exchange,
+          market: candidate.market,
+          reason: "entry order still reconciling",
+        };
+      }
+      await patch("trading_positions", `id=eq.${position.id}`, {
+        state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
+        close_reason: "ENTRY_NOT_FILLED",
+        closed_at: new Date().toISOString(),
+      });
+      return { entered: false, exchange, market: candidate.market, reason: "IOC entry not filled" };
+    }
+    const opened = await applyEntryAccounting(position, orderRow, updated.fill);
+    await event("LIVE_ENTRY", `${exchange}:${candidate.market} live entry`, {
+      fill_price: updated.fill.averagePrice,
+      quantity: updated.fill.executedVolume,
+    }, { cycleId, positionId: position.id, orderId: orderRow.id });
+    // v5.3: rest the first-target limit sell now, so the profit path never depends on a
+    // 15-second poll catching the touch. No-op unless scalp_resting_tp is enabled.
+    const withTp = await placeRestingTakeProfit(opened as Position, settings, cycleId);
+    return {
+      entered: true,
+      paper: false,
+      exchange,
+      market: candidate.market,
+      position: withTp,
+      exploration: lowEvidenceTrade,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const status = Number((error as any)?.status || 0);
+    // A deterministic 4xx rejection means Binance/Upbit did not accept the order.
+    // Do not leave a ghost ENTRY_PENDING position. Only transport/5xx uncertainty
+    // remains reserved for duplicate-safe reconciliation.
+    if (status >= 400 && status < 500) {
+      await patch("trading_orders", `id=eq.${orderRow.id}`, {
+        state: "REJECTED",
+        error_message: message,
+        completed_at: new Date().toISOString(),
+      });
+      await patch("trading_positions", `id=eq.${position.id}`, {
+        state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
+        close_reason: "ENTRY_REJECTED",
+        closed_at: new Date().toISOString(),
+      });
+      await event("ENTRY_ERROR", `${exchange}:${candidate.market} entry rejected`, {
+        identifier,
+        error: message,
+        status,
+      }, { cycleId, positionId: position.id, orderId: orderRow.id, level: "WARNING" });
+      return { entered: false, exchange, market: candidate.market, reason: message };
+    }
+    await patch("trading_orders", `id=eq.${orderRow.id}`, {
+      state: "UNKNOWN",
+      error_message: message,
+    });
+    await event(
+      "ENTRY_RESULT_UNKNOWN",
+      `${exchange}:${candidate.market} entry requires reconciliation`,
+      { identifier, error: message },
+      { cycleId, positionId: position.id, orderId: orderRow.id, level: "CRITICAL" },
+    );
+    return {
+      entered: false,
+      reserved: true,
+      pending_reconcile: true,
+      exchange,
+      market: candidate.market,
+      reason: "entry result unknown; duplicate suppressed",
+    };
+  }
+}
+
+// =====================================================================================
+// v5.3: resting take-profit
+// =====================================================================================
+//
+// The v5.2.5 profit exit was: poll the ticker every 15 seconds, and when it is at or
+// above the target, send a MARKET sell. That loses on both sides of the same trade:
+//
+//   1) If price touches the target and retreats inside the 15s gap, the WIN NEVER
+//      HAPPENS — the position stays open and often closes later at the stop. This is a
+//      direct, and large, hit to realized win rate.
+//   2) Even when the poll catches it, a market sell fills at the best BID, i.e. the
+//      target minus the spread, so every winner is smaller than the EV model assumed.
+//
+// Resting a limit sell at the target from the moment of entry removes both: the
+// exchange matches at exactly the target price, with no polling in the profit path.
+//
+// The cost is a real order-lifecycle state machine. The invariants are:
+//   - A resting TP is accounted EXACTLY ONCE, at its terminal state. While it is OPEN or
+//     PARTIALLY_FILLED nothing is booked, so partial fills cannot be double counted.
+//   - Any other exit (stop, time, emergency) MUST cancel the TP and confirm the cancel
+//     before market-selling. The resting order locks the base asset; selling first would
+//     be rejected for insufficient balance and leave the position stuck.
+//   - If the cancel reveals the TP filled in the meantime, that fill is booked as
+//     TARGET_1 and the exit is re-evaluated on the next cycle rather than forced.
+
+const TP_TERMINAL_STATUSES = [
+  "FILLED",
+  "CANCELED",
+  "PARTIALLY_FILLED_CANCELED",
+  "REJECTED",
+  "EXPIRED",
+];
+
+// v6.8: raw learning tables are observations. Runtime decisions use only immutable policy
+// snapshots from lob_policy_versions. Read governance once per scan/monitor request rather
+// than keeping an isolate-global cache: after rejection or rollback, even one more entry
+// under the retired model would contaminate the next cohort. The selected immutable bundle
+// travels with every candidate, so its order-time recheck cannot switch policies.
+async function loadLobPolicyRuntime(): Promise<LobPolicyRuntime> {
+  try {
+    const rows = await db(
+      "lob_policy_versions?status=in.(CHAMPION,CHALLENGER,CONTROL)" +
+        "&select=version,status,parent_version,engine_version,fingerprint,source_online_version," +
+        "traffic_fraction,evaluation_started_at,created_at,confirmed_at,online_profiles," +
+        "pattern_profile,policy_definition,metrics,decision_reason&order=version.desc",
+    ) as LobPolicyVersionRow[];
+    return resolveLobPolicyRuntime(Array.isArray(rows) ? rows : []);
+  } catch {
+    // New entries fail closed at the caller. Monitor logic can still protect existing
+    // positions from their entry-pinned exit parameters while the database recovers.
+    return { champion: null, alternate: null, phase: "IDLE" };
+  }
+}
+
+async function recordLobPolicyExposure(
+  cycleId: string,
+  scanId: string,
+  policy: LobPolicyBundle | null,
+  candidateCount: number,
+) {
+  if (!policy || policy.version <= 0) return;
+  await db("lob_policy_cycle_exposures?on_conflict=cycle_id", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify({
+      cycle_id: cycleId,
+      scan_id: scanId,
+      policy_version: policy.version,
+      policy_lane: policy.lane,
+      candidate_count: Math.max(0, Math.floor(candidateCount)),
+      entry_attempts: 0,
+      reservations: 0,
+      assigned_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }),
+  }).catch(() => null);
+}
+
+async function completeLobPolicyExposure(
+  cycleId: string,
+  entryAttempts: number,
+  reservations: number,
+) {
+  await patch("lob_policy_cycle_exposures", `cycle_id=eq.${cycleId}`, {
+    entry_attempts: Math.max(0, Math.floor(entryAttempts)),
+    reservations: Math.max(0, Math.floor(reservations)),
+    completed_at: new Date().toISOString(),
+  }).catch(() => null);
+}
+
+/** Operator overrides for trap thresholds. Absent keys keep the module defaults. */
+function lobTrapOverrides(settings: JsonRecord): Partial<LobTrapConfig> {
+  // Written out one column at a time on purpose. A loop over a name table reads more
+  // neatly but hides the columns from the migration guard, which exists precisely because
+  // a setting that has no column fails the next deploy that touches it.
+  const overrides: Partial<LobTrapConfig> = {};
+  const take = (key: keyof LobTrapConfig, value: unknown) => {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) (overrides as any)[key] = parsed;
+  };
+  take("askIcebergAbsorption", (settings as any).lob_trap_ask_iceberg_absorption);
+  take("askIcebergRefillRatio", (settings as any).lob_trap_ask_iceberg_refill);
+  take("bidSpoofScore", (settings as any).lob_trap_bid_spoof);
+  take("askSpoofScore", (settings as any).lob_trap_ask_spoof);
+  take("stopNoiseMultiple", (settings as any).lob_trap_stop_noise_multiple);
+  take("maxViableStopBps", (settings as any).lob_trap_max_viable_stop_bps);
+  take("flickerPerTrade", (settings as any).lob_trap_flicker_per_trade);
+  return overrides;
+}
+
+// v6.3: maker fill rate. No new instrumentation was needed -- a filled maker entry becomes
+// an OPEN position and an unfilled one is CANCELLED with a MAKER_ENTRY_* reason, so the rate
+// has been recoverable from `trading_positions` all along. It was simply never computed,
+// which is why "what fraction of maker entries actually fill" stayed an open question while
+// the entire cost model depended on the answer.
+let makerFillCache: {
+  stats: Record<Exchange, { rested: number; filled: number }>;
+  expires: number;
+} | null = null;
+async function loadMakerFillStats(exchange: Exchange): Promise<{ rested: number; filled: number }> {
+  if (makerFillCache && makerFillCache.expires > Date.now()) {
+    return makerFillCache.stats[exchange];
+  }
+  const stats: Record<Exchange, { rested: number; filled: number }> = {
+    upbit: { rested: 0, filled: 0 },
+    binance: { rested: 0, filled: 0 },
+  };
+  try {
+    const since = new Date(Date.now() - 24 * 3_600_000).toISOString();
+    const rows = await db(
+      `trading_positions?created_at=gte.${since}&is_paper=eq.false&select=exchange,state,close_reason,opened_at,metadata&limit=5000`,
+    );
+    for (const row of rows || []) {
+      if (!row?.metadata?.maker_entry_placed_at) continue;
+      const venue = String(row.exchange) as Exchange;
+      if (!(venue in stats)) continue;
+      stats[venue].rested++;
+      const reason = String(row.close_reason || "");
+      const unfilled = reason === "MAKER_ENTRY_UNFILLED" || reason === "MAKER_ENTRY_DRIFTED";
+      if (!unfilled && row.opened_at) stats[venue].filled++;
+    }
+  } catch {
+    // Unreadable: report zero samples, which the policy treats as "not yet measured".
+  }
+  makerFillCache = { stats, expires: Date.now() + 300_000 };
+  return stats[exchange];
+}
+
+// v5.3: active pWin calibration, loaded once per cycle. Falls back to the identity, so a
+// missing table or a failed read can never change trading behavior.
+let calibrationCache: { model: CalibrationModel; expires: number } | null = null;
+async function loadScalpCalibration(): Promise<CalibrationModel> {
+  if (calibrationCache && calibrationCache.expires > Date.now()) return calibrationCache.model;
+  let model: CalibrationModel = { ...IDENTITY_CALIBRATION };
+  try {
+    const rows = await db(
+      "scalp_calibration_profiles?active=eq.true&select=slope,intercept,train_samples&limit=1",
+    );
+    const row = rows?.[0];
+    if (row) {
+      model = {
+        ...IDENTITY_CALIBRATION,
+        a: finite(row.slope, 1) || 1,
+        b: finite(row.intercept, 0),
+        samples: finite(row.train_samples, 0),
+      };
+    }
+  } catch {
+    // Table absent or unreadable: stay on the identity.
+  }
+  calibrationCache = { model, expires: Date.now() + 60_000 };
+  return model;
+}
+
+/**
+ * v5.4: base-asset quantity locked by the bot's OWN resting orders, per asset.
+ *
+ * Every identifier this system creates starts with the bot prefix, and the gateway
+ * refuses to touch any order that does not. So an open order carrying that prefix is
+ * definitionally ours, and the quantity it reserves must be counted as still held —
+ * otherwise the reconciliation reads our own working orders as a user locking the coin.
+ *
+ * Falls back to parsing the raw exchange payload when the gateway predates the
+ * normalized remaining-volume field, and returns an empty map on any failure so a
+ * transient error can never manufacture a mismatch.
+ */
+/**
+ * v5.4: real per-side taker fee for this account, in percent.
+ *
+ * FEE_PCT was a hardcoded list price (Upbit 0.05, Binance 0.10). Binance applies a 25%
+ * discount when fee payment in BNB is enabled, VIP tiers move both sides, and some pairs
+ * run promotions. Required win rate is a direct function of cost, so an assumed fee
+ * mis-sizes every barrier the geometry module produces. Falls back to FEE_PCT on any
+ * failure, and never blocks a cycle.
+ */
+const feeCache: Partial<Record<Exchange, { pct: number; expires: number }>> = {};
+async function liveFeePct(exchange: Exchange, settings: TradingSettings): Promise<number> {
+  if ((settings as any).scalp_use_live_fees === false) return FEE_PCT[exchange];
+  const cached = feeCache[exchange];
+  if (cached && cached.expires > Date.now()) return cached.pct;
+  let pct = FEE_PCT[exchange];
+  try {
+    const fees = await gateway(exchange, { action: "fees" });
+    const taker = finite(fees?.taker_pct, NaN);
+    // Sanity band: a reported rate outside it means the payload changed shape, not that
+    // trading suddenly became free.
+    if (Number.isFinite(taker) && taker >= 0 && taker <= 1) pct = taker;
+  } catch {
+    // Gateway may predate the `fees` action; keep the static assumption.
+  }
+  feeCache[exchange] = { pct, expires: Date.now() + 30 * 60_000 };
+  return pct;
+}
+
+// v6.4: the return type carries "we could not read the book" as a distinct value.
+// Returning an empty Map on failure was indistinguishable from "we hold no orders",
+// so one failed open_orders call made every bot-placed resting sell look like a user
+// lock — the exact false positive that halted LTC.
+async function botLockedQuantities(
+  exchange: Exchange,
+  positions: Position[],
+): Promise<Map<string, number> | null> {
+  const locked = new Map<string, number>();
+  try {
+    const rows = await gateway(exchange, { action: "open_orders" });
+    const ours = new Set(
+      ((await db(
+        `trading_orders?exchange=eq.${exchange}&state=in.(REQUESTED,ACCEPTED,OPEN,PARTIAL,APPLIED)&select=identifier`,
+      ).catch(() => [])) as any[])
+        .map((row) => String(row.identifier || "")),
+    );
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const clientId = String(row?.client_order_id || "");
+      // Prefix match is the authoritative test; the ledger lookup is a second confirmation
+      // and never a requirement, because an order can exist on the exchange a moment
+      // before our row is written.
+      if (!clientId.startsWith(BOT_ORDER_PREFIX) && !ours.has(clientId)) continue;
+      const side = String(row?.side ?? row?.raw?.side ?? "").toUpperCase();
+      if (side && !["SELL", "ASK"].includes(side)) continue;
+      const raw = row?.raw || {};
+      const remaining = finite(
+        row?.remaining_volume,
+        finite(
+          raw.remaining_volume,
+          Math.max(
+            0,
+            finite(raw.origQty, finite(raw.volume)) -
+              finite(raw.executedQty, finite(raw.executed_volume)),
+          ),
+        ),
+      );
+      if (!(remaining > 0)) continue;
+      const market = String(row?.market ?? raw.market ?? raw.symbol ?? "");
+      const asset = baseAsset(exchange, market) ||
+        positions.find((p) => p.market === market)?.base_asset || "";
+      if (!asset) continue;
+      locked.set(asset, (locked.get(asset) || 0) + remaining);
+    }
+  } catch {
+    // Unreadable open orders must not be treated as evidence of anything. `null` says
+    // "unknown"; an empty Map would say "we definitely hold no orders", which is a claim
+    // we cannot make when the request failed.
+    return null;
+  }
+  return locked;
+}
+
+async function reconcileFeeLedger(cycleId: string) {
+  const due = new Date().toISOString();
+  const rows = await db(
+    `trading_orders?state=eq.APPLIED&executed_funds_quote=gt.0&fee_accounting_quality=in.(ESTIMATED,MISSING,LEGACY_UNVERIFIED)&or=(fee_reconcile_next_at.is.null,fee_reconcile_next_at.lte.${
+      encodeURIComponent(due)
+    })&select=*&order=completed_at.desc&limit=12`,
+  ).catch(() => []) as any[];
+  const results: any[] = [];
+  for (const row of rows) {
+    const attempts = Math.max(0, Math.floor(finite(row.fee_reconcile_attempts)));
+    try {
+      const order = await gateway(row.exchange as Exchange, {
+        action: "get_order",
+        identifier: row.identifier,
+        market: row.market,
+      });
+      const updated = await updateOrderFromGateway(row, order);
+      const quality = String(updated.row?.fee_accounting_quality || "");
+      const exact = ["EXACT", "AGGREGATE_EXACT", "THIRD_ASSET_MARKED", "BASE_ASSET_ACCOUNTED"]
+        .includes(quality);
+      await patch("trading_orders", `id=eq.${row.id}`, {
+        fee_reconcile_attempts: attempts + 1,
+        fee_reconcile_next_at: exact
+          ? null
+          : new Date(Date.now() + Math.min(3_600_000, 60_000 * 2 ** Math.min(6, attempts)))
+            .toISOString(),
+        fee_reconciled_at: exact ? new Date().toISOString() : null,
+      });
+      let recomputed: any = null;
+      if (row.position_id) {
+        recomputed = await rpc("recompute_position_economic_accounting_v610", {
+          p_position_id: row.position_id,
+        }).catch(() => null);
+        const position = recomputed?.position;
+        if (exact && position?.state === "CLOSED" && position?.metadata?.lob_signal) {
+          await rpc("learn_lob_trade_outcome", { p_position_id: row.position_id }).catch(() =>
+            null
+          );
+        }
+      }
+      results.push({ order_id: row.id, quality, exact, recomputed: Boolean(recomputed?.updated) });
+    } catch (error) {
+      const nextAt = new Date(
+        Date.now() + Math.min(3_600_000, 60_000 * 2 ** Math.min(6, attempts)),
+      ).toISOString();
+      await patch("trading_orders", `id=eq.${row.id}`, {
+        fee_reconcile_attempts: attempts + 1,
+        fee_reconcile_next_at: nextAt,
+      }).catch(() => null);
+      await event(
+        "FEE_RECONCILIATION_RETRY",
+        `${row.exchange}:${row.market} fee detail remains unresolved`,
+        {
+          order_id: row.id,
+          attempts: attempts + 1,
+          next_at: nextAt,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        { cycleId, positionId: row.position_id, orderId: row.id, level: "WARNING" },
+      );
+    }
+  }
+  return results;
+}
+
+async function recordJointObjectiveSnapshot(
+  exchange: Exchange,
+  settings: TradingSettings & JsonRecord,
+  rawPortfolio: any,
+  trackedPositions: Position[],
+) {
+  const latest = (await db(
+    `trading_joint_objective_snapshots?exchange=eq.${exchange}&select=captured_at&order=captured_at.desc&limit=1`,
+  ).catch(() => []))[0];
+  const latestMs = Date.parse(String(latest?.captured_at || ""));
+  if (Number.isFinite(latestMs) && Date.now() - latestMs < 60_000) return null;
+  const flowSince = Number.isFinite(latestMs)
+    ? new Date(latestMs).toISOString()
+    : new Date(0).toISOString();
+  const cashFlows = await db(
+    `trading_cash_flows?exchange=eq.${exchange}&detected_at=gt.${
+      encodeURIComponent(flowSince)
+    }&select=flow_type,amount_quote`,
+  ).catch(() => []) as any[];
+  const externalFlowQuote = cashFlows.reduce((sum, row) => {
+    const amount = Math.max(0, finite(row.amount_quote));
+    return sum + (String(row.flow_type).toUpperCase() === "EXTERNAL_DECREASE" ? -amount : amount);
+  }, 0);
+  const managed = await managedPortfolio(settings, exchange, rawPortfolio);
+  const dayStart = dayBoundary(exchange);
+  const realizedRows = await db(
+    `trading_positions?exchange=eq.${exchange}&is_paper=eq.${
+      settings.mode !== "LIVE_LIMITED"
+    }&state=eq.CLOSED&closed_at=gte.${encodeURIComponent(dayStart)}&select=realized_pnl_quote`,
+  ).catch(() => []) as any[];
+  const realizedDaily = realizedRows.reduce(
+    (sum, row) => sum + finite(row.realized_pnl_quote),
+    0,
+  );
+  const markedOpen = trackedPositions.reduce((sum, row) => {
+    if (row.state === "ENTRY_PENDING" || finite(row.remaining_quantity) <= 0) return sum;
+    const entry = Math.max(0, finite(row.average_entry_price, row.planned_entry_price));
+    const current = Math.max(0, finite(rawPortfolio?.prices?.[row.market], entry));
+    return sum + calculateExposureLedger({
+      state: row.state,
+      remainingQuantity: row.remaining_quantity,
+      reservedQuote: row.reserved_quote,
+      reservedQuantity: row.reserved_quantity,
+      averageEntryPrice: row.average_entry_price,
+      plannedEntryPrice: row.planned_entry_price,
+      currentPrice: current,
+      realizedCostQuote: row.realized_cost_quote,
+      realizedProceedsQuote: row.realized_proceeds_quote,
+      paidFeesQuote: row.paid_fees_quote,
+      residualValueQuote: row.residual_value_quote,
+      estimatedExitCostPct: FEE_PCT[exchange] / 100 + 0.0005,
+    }).markedNetPnlQuote;
+  }, 0);
+  return (await insert("trading_joint_objective_snapshots", {
+    exchange,
+    total_equity_quote: Math.max(0, finite(rawPortfolio?.total_equity_quote)),
+    managed_capital_quote: Math.max(0, finite(managed?.managed?.managedCapitalQuote)),
+    managed_available_quote: Math.max(0, finite(managed?.managed?.managedAvailableQuote)),
+    filled_exposure_quote: Math.max(
+      0,
+      finite(managed?.managed?.openCostQuote) - finite(managed?.managed?.reservedExposureQuote),
+    ),
+    reserved_exposure_quote: Math.max(0, finite(managed?.managed?.reservedExposureQuote)),
+    residual_inventory_value_quote: Math.max(
+      0,
+      finite(managed?.managed?.residualInventoryValueQuote),
+    ),
+    marked_open_pnl_quote: markedOpen,
+    realized_daily_pnl_quote: realizedDaily,
+    external_flow_quote: finite(externalFlowQuote),
+    engine_version: VERSION,
+    metadata: {
+      strategy: (settings as any).strategy,
+      max_strategy_exposure_pct: finite((settings as any).scalp_max_strategy_exposure_pct, 100),
+    },
+  }))[0];
+}
+
+async function openOrderAssets(exchange: Exchange): Promise<Set<string> | null> {
+  try {
+    const rows = await gateway(exchange, { action: "open_orders" });
+    const assets = new Set<string>();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const raw = row?.raw || {};
+      const market = String(row?.market ?? raw.market ?? raw.symbol ?? "");
+      const asset = baseAsset(exchange, market);
+      if (asset) assets.add(asset.toUpperCase());
+    }
+    return assets;
+  } catch {
+    return null;
+  }
+}
+
+async function reconcilePersistedAssetLocks(
+  exchange: Exchange,
+  portfolio: any,
+  activePositions: Position[],
+  orderAssets: Set<string> | null,
+  cycleId: string,
+) {
+  const locks = await db(
+    `trading_asset_locks?exchange=eq.${exchange}&state=eq.LOCKED&select=asset,reason,clean_checks`,
+  ).catch(() => []) as any[];
+  if (!locks.length) return;
+  const activeAssets = new Set(
+    activePositions.map((row) => String(row.base_asset || "").toUpperCase()),
+  );
+  const residualRows = await db(
+    `trading_residual_inventory?exchange=eq.${exchange}&state=in.(AVAILABLE,RESERVED_FOR_REENTRY)&select=asset,remaining_quantity`,
+  ).catch(() => []) as any[];
+  const residual = new Map<string, number>();
+  for (const row of residualRows) {
+    const asset = String(row.asset || "").toUpperCase();
+    residual.set(asset, (residual.get(asset) || 0) + Math.max(0, finite(row.remaining_quantity)));
+  }
+  const balances = new Map<string, number>();
+  for (const row of Array.isArray(portfolio?.accounts) ? portfolio.accounts : []) {
+    const asset = String(row.currency || row.asset || "").toUpperCase();
+    balances.set(
+      asset,
+      Math.max(0, finite(row.balance ?? row.free)) + Math.max(0, finite(row.locked)),
+    );
+  }
+  for (const lock of locks) {
+    const asset = String(lock.asset || "").toUpperCase();
+    if (orderAssets === null) {
+      await rpc("record_asset_lock_check_v610", {
+        p_exchange: exchange,
+        p_asset: asset,
+        p_status: "QUERY_FAILED",
+        p_reason: "OPEN_ORDERS_UNREADABLE",
+        p_metadata: { cycle_id: cycleId },
+      }).catch(() => null);
+      continue;
+    }
+    const accountQty = balances.get(asset) || 0;
+    const residualQty = residual.get(asset) || 0;
+    const quantityTolerance = Math.max(1e-12, residualQty * 0.005);
+    const clean = !activeAssets.has(asset) && !orderAssets.has(asset) &&
+      accountQty <= residualQty + quantityTolerance;
+    await rpc("record_asset_lock_check_v610", {
+      p_exchange: exchange,
+      p_asset: asset,
+      p_status: clean ? "CLEAN" : "MISMATCH",
+      p_reason: clean
+        ? "NO_ACTIVE_POSITION_ORDER_OR_UNEXPLAINED_BALANCE"
+        : "LOCK_CONDITION_STILL_PRESENT",
+      p_metadata: {
+        cycle_id: cycleId,
+        account_quantity: accountQty,
+        residual_quantity: residualQty,
+      },
+    }).catch(() => null);
+  }
+}
+
+async function sweepResidualInventory(
+  exchange: Exchange,
+  settings: TradingSettings & JsonRecord,
+  activePositions: Position[],
+  orderAssets: Set<string> | null,
+  cycleId: string,
+) {
+  if (
+    settings.mode !== "LIVE_LIMITED" ||
+    (settings as any).residual_sweep_enabled === false ||
+    orderAssets === null
+  ) return [];
+  const rows = await db(
+    `trading_residual_inventory?exchange=eq.${exchange}&state=eq.AVAILABLE&remaining_quantity=gt.0&select=*&order=updated_at.asc`,
+  ).catch(() => []) as any[];
+  const actions: any[] = [];
+  const activeAssets = new Set(
+    activePositions.map((row) => String(row.base_asset || "").toUpperCase()),
+  );
+  const groups = new Map<string, any[]>();
+  for (const row of rows) {
+    const key = `${String(row.asset || "").toUpperCase()}|${
+      String(row.market || "").toUpperCase()
+    }`;
+    groups.set(key, [...(groups.get(key) || []), row]);
+  }
+  for (const group of groups.values()) {
+    const first = group[0];
+    const asset = String(first.asset || "").toUpperCase();
+    const market = String(first.market || "").toUpperCase();
+    // Keep BNB available for Binance commission payment.
+    if (exchange === "binance" && asset === "BNB") continue;
+    const planned = await db(
+      `scanner_candidates?exchange=eq.${exchange}&market=eq.${
+        encodeURIComponent(market)
+      }&decision=eq.BUY&created_at=gte.${
+        encodeURIComponent(new Date(Date.now() - 300_000).toISOString())
+      }&select=id&limit=1`,
+    ).catch(() => []);
+    let quote: any;
+    try {
+      quote = await marketQuote(exchange, market);
+    } catch {
+      continue;
+    }
+    const price = Math.max(0, finite(quote?.best_bid, quote?.current));
+    const totalQuantity = group.reduce(
+      (sum, row) => sum + Math.max(0, finite(row.remaining_quantity)),
+      0,
+    );
+    const minOrder = exchange === "upbit"
+      ? finite(settings.min_order_krw, 5000)
+      : binanceMinOrderUsdt(settings.min_order_usdt);
+    const decision = residualSweepDecision({
+      quantity: totalQuantity,
+      markPrice: price,
+      minOrderQuote: minOrder,
+      activePosition: activeAssets.has(asset),
+      openOrder: orderAssets.has(asset),
+      plannedReentry: planned.length > 0,
+      sweepBuffer: finite((settings as any).residual_sweep_buffer, 1.10),
+    });
+    if (!decision.allowed) continue;
+    const identifier = uniqueId("rs", String(first.position_id));
+    const orderRow = await createOrderRecord({
+      position_id: null,
+      candidate_id: null,
+      cycle_id: cycleId,
+      decision_id: null,
+      exchange,
+      quote_currency: quoteCurrency(exchange),
+      identifier,
+      market,
+      side: "SELL",
+      purpose: "RESIDUAL_SWEEP",
+      order_type: "MARKET",
+      requested_volume: totalQuantity,
+      requested_notional_quote: decision.valueQuote,
+      state: "REQUESTED",
+    });
+    for (const row of group) {
+      await patch("trading_residual_inventory", `position_id=eq.${row.position_id}`, {
+        state: "SWEEP_PENDING",
+        sweep_order_id: orderRow.id,
+        updated_at: new Date().toISOString(),
+      });
+    }
+    try {
+      const result = await gateway(exchange, {
+        action: "create_order",
+        order: { market, side: "SELL", type: "MARKET", quantity: totalQuantity, identifier },
+        wait_for_final_ms: 4000,
+      }, 20_000);
+      const updated = await updateOrderFromGateway(orderRow, result);
+      const sold = Math.max(0, finite(updated.fill.executedVolume));
+      const baseFee = Math.max(0, finite(updated.fill.paidFeeBase));
+      const proceeds = Math.max(0, finite(updated.fill.executedFunds));
+      const quoteFee = Math.max(0, finite(updated.fill.paidFeeQuote));
+      let soldLeft = sold;
+      let baseFeeLeft = baseFee;
+      let allocatedProceeds = 0;
+      let allocatedQuoteFee = 0;
+      for (let index = 0; index < group.length; index++) {
+        const row = group[index];
+        const before = Math.max(0, finite(row.remaining_quantity));
+        const soldFromRow = Math.min(before, soldLeft);
+        soldLeft -= soldFromRow;
+        const afterSale = Math.max(0, before - soldFromRow);
+        const baseFeeFromRow = Math.min(afterSale, baseFeeLeft);
+        baseFeeLeft -= baseFeeFromRow;
+        const remaining = Math.max(0, afterSale - baseFeeFromRow);
+        const isLastSoldAllocation = index === group.length - 1 || soldLeft <= 1e-12;
+        const proceedsShare = sold > 0
+          ? isLastSoldAllocation
+            ? Math.max(0, proceeds - allocatedProceeds)
+            : proceeds * soldFromRow / sold
+          : 0;
+        const feeShare = sold > 0
+          ? isLastSoldAllocation
+            ? Math.max(0, quoteFee - allocatedQuoteFee)
+            : quoteFee * soldFromRow / sold
+          : 0;
+        allocatedProceeds += proceedsShare;
+        allocatedQuoteFee += feeShare;
+        const cumulativeProceeds = Math.max(0, finite(row.realized_proceeds_quote)) + proceedsShare;
+        const cumulativeFees = Math.max(0, finite(row.paid_fees_quote)) + feeShare;
+        const cumulativeBaseFee = Math.max(0, finite(row.paid_fee_base_quantity)) + baseFeeFromRow;
+        const originalMarkValue = Math.max(0, finite(row.original_quantity)) *
+          Math.max(0, finite(row.mark_price));
+        const residualPnl = cumulativeProceeds - cumulativeFees + remaining * price -
+          originalMarkValue;
+        await patch("trading_residual_inventory", `position_id=eq.${row.position_id}`, {
+          remaining_quantity: remaining,
+          swept_quantity: Math.max(0, finite(row.swept_quantity)) + soldFromRow,
+          realized_proceeds_quote: cumulativeProceeds,
+          paid_fees_quote: cumulativeFees,
+          paid_fee_base_quantity: cumulativeBaseFee,
+          value_quote: remaining * price,
+          residual_pnl_quote: residualPnl,
+          state: remaining <= 1e-12 ? "SWEPT" : "AVAILABLE",
+          updated_at: new Date().toISOString(),
+        });
+      }
+      actions.push({
+        asset,
+        market,
+        sold,
+        base_fee_quantity: baseFee,
+        proceeds_quote: proceeds,
+        fee_quote: quoteFee,
+        remaining: Math.max(0, totalQuantity - sold - baseFee),
+        source_positions: group.length,
+        order_id: orderRow.id,
+      });
+    } catch (error) {
+      for (const row of group) {
+        await patch("trading_residual_inventory", `position_id=eq.${row.position_id}`, {
+          state: "AVAILABLE",
+          sweep_order_id: null,
+          updated_at: new Date().toISOString(),
+        });
+      }
+      await event("RESIDUAL_SWEEP_FAILED", `${exchange}:${asset} residual sweep failed`, {
+        error: error instanceof Error ? error.message : String(error),
+        source_positions: group.length,
+      }, { cycleId, orderId: orderRow.id, level: "WARNING" });
+    }
+  }
+  return actions;
+}
+
+function scalpHoldConfig(settings: TradingSettings, exchange: Exchange): ScalpHoldConfig {
+  return resolveHoldConfig({
+    alphaHalfLifeMinutes: finite((settings as any).scalp_hold_alpha_half_life_minutes, 12),
+    reversalImbalance: finite((settings as any).scalp_hold_reversal_imbalance, -0.25),
+    reversalTradePressure: finite((settings as any).scalp_hold_reversal_trade_pressure, -0.30),
+    maxSpreadBps: finite((settings as any).scalp_hold_max_spread_bps, 40),
+    minBidDepthRatio: finite((settings as any).scalp_hold_min_bid_depth_ratio, 0.35),
+    reversalConfirmations: finite((settings as any).scalp_hold_reversal_confirmations, 2),
+    staleDataMinutes: finite((settings as any).scalp_stale_data_minutes, 30),
+    // One side only: the entry leg is sunk cost and must not be charged again.
+    exitCostFraction: FEE_PCT[exchange] / 100 +
+      finite((settings as any).scalp_slippage_allowance, 0.0009) / 2,
+  });
+}
+
+function restingTpEnabled(settings: TradingSettings, position: Position): boolean {
+  return isScalpStrategy((settings as any).strategy) &&
+    (settings as any).scalp_resting_tp === true &&
+    !position.is_paper;
+}
+
+function restingTpIdentifier(position: Position): string | null {
+  const id = position.metadata?.tp_identifier;
+  return typeof id === "string" && id ? id : null;
+}
+
+async function unappliedBotSellOrders(position: Position): Promise<any[]> {
+  const rows = await db(
+    `trading_orders?position_id=eq.${position.id}&side=eq.SELL&select=*&order=created_at.desc&limit=12`,
+  ).catch(() => []) as any[];
+  return rows.filter((row) =>
+    pendingBotExitMayExplainBalanceReduction([{
+      side: row.side,
+      purpose: row.purpose,
+      state: row.state,
+      executedVolume: row.executed_volume,
+    }])
+  );
+}
+
+async function unappliedRestingTpOrder(position: Position): Promise<any | null> {
+  const rows = await unappliedBotSellOrders(position);
+  const metadataOrderId = String(position.metadata?.tp_order_id || "");
+  return rows.find((row) => metadataOrderId && String(row.id) === metadataOrderId) ||
+    rows.find((row) => String(row.purpose).toUpperCase() === "TARGET_1") ||
+    null;
+}
+
+/** Place the first-target limit sell immediately after the entry fill is booked. */
+async function placeRestingTakeProfit(
+  position: Position,
+  settings: TradingSettings,
+  cycleId: string,
+): Promise<Position> {
+  if (!restingTpEnabled(settings, position) || restingTpIdentifier(position)) return position;
+  const target = finite(position.target_1);
+  const step = finite(position.quantity_step, 0.00000001);
+  const remaining = finite(position.remaining_quantity);
+  if (!(target > 0 && remaining > 0)) return position;
+  const qty = floorToStep(
+    t1SellQuantity(
+      finite(position.initial_quantity),
+      remaining,
+      finite(position.t1_allocation_pct, 60),
+    ),
+    step,
+  );
+  const minNotional = positionMinNotionalQuote(position);
+  // Both the TP slice AND the remainder must clear the exchange minimum, otherwise the
+  // runner becomes un-sellable dust. If they cannot, fall back to the polling exit path.
+  if (!(qty > 0) || qty * target < minNotional || (remaining - qty) * target < minNotional) {
+    await event(
+      "TP_REST_SKIPPED",
+      `${position.exchange}:${position.market} resting TP below exchange minimum`,
+      { qty, target, minNotional },
+      { cycleId, positionId: position.id },
+    );
+    return position;
+  }
+  const identifier = uniqueId("tp", position.id);
+  const orderRow = await createOrderRecord({
+    position_id: position.id,
+    candidate_id: position.candidate_id,
+    cycle_id: cycleId,
+    exchange: position.exchange,
+    quote_currency: position.quote_currency,
+    identifier,
+    market: position.market,
+    side: "SELL",
+    purpose: "TARGET_1",
+    order_type: "LIMIT",
+    time_in_force: position.exchange === "binance" ? "GTC" : null,
+    requested_price: target,
+    requested_volume: qty,
+    requested_notional_quote: qty * target,
+    state: "REQUESTED",
+  });
+  try {
+    const result = await gateway(position.exchange, {
+      action: "create_order",
+      order: {
+        market: position.market,
+        side: "SELL",
+        type: "LIMIT",
+        price: target,
+        quantity: qty,
+        identifier,
+        // Upbit rests plain limit orders by default and only accepts ioc/fok here, so the
+        // field is omitted. The Binance path defaults to IOC when unset, so GTC is explicit.
+        ...(position.exchange === "binance" ? { time_in_force: "GTC" } : {}),
+      },
+      wait_for_final_ms: 0,
+    }, 20_000);
+    await updateOrderFromGateway(orderRow, result);
+    const updated = await patch("trading_positions", `id=eq.${position.id}`, {
+      metadata: {
+        ...(position.metadata || {}),
+        tp_identifier: identifier,
+        tp_order_id: orderRow.id,
+        tp_price: target,
+        tp_quantity: qty,
+        tp_placed_at: new Date().toISOString(),
+      },
+    });
+    await event("TP_RESTED", `${position.exchange}:${position.market} resting take-profit placed`, {
+      price: target,
+      quantity: qty,
+      identifier,
+    }, { cycleId, positionId: position.id, orderId: orderRow.id });
+    return { ...position, ...(updated[0] || {}) } as Position;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await patch("trading_orders", `id=eq.${orderRow.id}`, {
+      state: "REJECTED",
+      error_message: message,
+      completed_at: new Date().toISOString(),
+    });
+    // Non-fatal: the position simply keeps the v5.2.5 polling exit behavior.
+    await event(
+      "TP_REST_FAILED",
+      `${position.exchange}:${position.market} resting take-profit rejected`,
+      { error: message },
+      { cycleId, positionId: position.id, level: "WARNING" },
+    );
+    return position;
+  }
+}
+
+/** Book a resting TP that has reached a terminal state. Returns the refreshed position. */
+async function settleRestingTakeProfit(
+  position: Position,
+  order: any,
+  cycleId: string,
+  knownOrderRow?: any,
+): Promise<Position> {
+  const orderRow = knownOrderRow ||
+    (await db(`trading_orders?id=eq.${position.metadata?.tp_order_id}&select=*&limit=1`))[0];
+  if (!orderRow) return position;
+  const updated = await updateOrderFromGateway(orderRow, order);
+  const settledMeta = {
+    tp_identifier: null,
+    tp_order_id: null,
+    tp_settled_at: new Date().toISOString(),
+  };
+  if (finite(updated.fill.executedVolume) > 0) {
+    const result = await finalizeExitFill(
+      position,
+      { orderRow: updated.row, ...updated },
+      "TARGET_1",
+      finite(position.target_1),
+      cycleId,
+    );
+    const next = (result as any)?.position || position;
+    const rows = await patch("trading_positions", `id=eq.${next.id}`, {
+      metadata: { ...(next.metadata || {}), ...settledMeta },
+    });
+    return { ...next, ...(rows[0] || {}) } as Position;
+  }
+  const rows = await patch("trading_positions", `id=eq.${position.id}`, {
+    metadata: { ...(position.metadata || {}), ...settledMeta },
+  });
+  return { ...position, ...(rows[0] || {}) } as Position;
+}
+
+/** Poll a live resting TP. Books it only once it is terminal. */
+async function syncRestingTakeProfit(position: Position, cycleId: string): Promise<Position> {
+  const orderRow = await unappliedRestingTpOrder(position);
+  if (!orderRow) {
+    if (restingTpIdentifier(position)) {
+      const rows = await patch("trading_positions", `id=eq.${position.id}`, {
+        metadata: {
+          ...(position.metadata || {}),
+          tp_identifier: null,
+          tp_order_id: null,
+          tp_reference_cleared_at: new Date().toISOString(),
+        },
+      });
+      return { ...position, ...(rows[0] || {}) } as Position;
+    }
+    return position;
+  }
+  const identifier = String(orderRow.identifier || restingTpIdentifier(position) || "");
+  if (!identifier) return position;
+  if (
+    restingTpIdentifier(position) !== identifier ||
+    String(position.metadata?.tp_order_id || "") !== String(orderRow.id)
+  ) {
+    const rows = await patch("trading_positions", `id=eq.${position.id}`, {
+      metadata: {
+        ...(position.metadata || {}),
+        tp_identifier: identifier,
+        tp_order_id: orderRow.id,
+        tp_reference_recovered_at: new Date().toISOString(),
+      },
+    });
+    position = { ...position, ...(rows[0] || {}) } as Position;
+    await event(
+      "TP_REFERENCE_RECOVERED",
+      `${position.exchange}:${position.market} resting TP reference recovered from order ledger`,
+      { identifier, order_id: orderRow.id, order_state: orderRow.state },
+      { cycleId, positionId: position.id, orderId: orderRow.id, level: "WARNING" },
+    );
+  }
+  let order: any;
+  try {
+    order = await gateway(position.exchange, {
+      action: "get_order",
+      identifier,
+      market: position.market,
+    });
+  } catch (error) {
+    // Transport failure: leave the order in place and retry next cycle. Never assume it
+    // is gone — assuming that and re-selling is how duplicate exits happen.
+    await event(
+      "TP_SYNC_ERROR",
+      `${position.exchange}:${position.market} resting TP query failed`,
+      { error: error instanceof Error ? error.message : String(error) },
+      { cycleId, positionId: position.id, level: "WARNING" },
+    );
+    return position;
+  }
+  const status = String(order?.status || order?.order?.status || "");
+  if (!TP_TERMINAL_STATUSES.includes(status)) {
+    await updateOrderFromGateway(orderRow, order);
+    return position;
+  }
+  return settleRestingTakeProfit(position, order, cycleId, orderRow);
+}
+
+/**
+ * Cancel the resting TP and confirm it is terminal before any market exit.
+ * Returns false when the caller must NOT proceed to sell this cycle.
+ */
+async function cancelRestingTakeProfit(
+  position: Position,
+  cycleId: string,
+): Promise<{ ok: boolean; position: Position }> {
+  const identifier = restingTpIdentifier(position);
+  if (!identifier) return { ok: true, position };
+  let terminal: any = null;
+  for (let attempt = 0; attempt < 3 && !terminal; attempt++) {
+    try {
+      const result = attempt === 0
+        ? await gateway(position.exchange, {
+          action: "cancel_order",
+          identifier,
+          market: position.market,
+        })
+        : await gateway(position.exchange, {
+          action: "get_order",
+          identifier,
+          market: position.market,
+        });
+      const status = String(result?.status || result?.order?.status || "");
+      if (TP_TERMINAL_STATUSES.includes(status)) terminal = result;
+    } catch (error) {
+      // A cancel can legitimately fail because the order already filled; the follow-up
+      // get_order resolves which case this is.
+      await event(
+        "TP_CANCEL_RETRY",
+        `${position.exchange}:${position.market} resting TP cancel attempt failed`,
+        { attempt, error: error instanceof Error ? error.message : String(error) },
+        { cycleId, positionId: position.id, level: "WARNING" },
+      );
+    }
+  }
+  if (!terminal) {
+    await event(
+      "TP_CANCEL_UNRESOLVED",
+      `${position.exchange}:${position.market} resting TP not confirmed cancelled; exit deferred`,
+      { identifier },
+      { cycleId, positionId: position.id, level: "CRITICAL" },
+    );
+    return { ok: false, position };
+  }
+  return { ok: true, position: await settleRestingTakeProfit(position, terminal, cycleId) };
+}
+
+// =====================================================================================
+// v5.5: maker entry
+// =====================================================================================
+//
+// v5.2.5 through v5.4 entered with a LIMIT IOC priced at the ask — a taker order in all
+// but name. Combined with the MARKET exit, every round trip paid the spread twice, so the
+// true cost was `fees + spread` rather than `fees`. On Upbit that is 0.17% against a 0.10%
+// fee schedule; the nine live trades of 2026-07-26 had a median absolute price move of
+// 0.109%, i.e. smaller than the cost they were paying. Those trades could not have won.
+//
+// Posting on the bid inverts the sign of the spread term: cost becomes `fees - spread`.
+// Because Upbit and Binance price makers and takers identically, that swing IS the entire
+// improvement, and it is larger than anything available from signal tuning.
+//
+// It also raises the realized win rate. Entering one spread lower puts the target one
+// spread closer and the stop one spread further, measured from where the market actually
+// trades. For a 0.6%/0.3% barrier pair at a 0.05% spread the neutral win rate moves from
+// 33.3% to 38.9% on the entry leg alone, and the resting take-profit repeats the effect
+// on the exit leg.
+//
+// The cost is fill uncertainty. An unfilled maker entry costs nothing but an opportunity,
+// so the order is simply abandoned when it goes stale or the book walks away.
+
+function makerEntryEnabled(settings: TradingSettings): boolean {
+  return isScalpStrategy((settings as any).strategy) &&
+    (settings as any).scalp_maker_entry !== false &&
+    settings.mode === "LIVE_LIMITED";
+}
+
+/**
+ * Price a resting bid. Never above the best bid: on Binance a crossing LIMIT_MAKER is
+ * rejected outright, and on Upbit — which has no post-only flag — pricing at or below the
+ * best bid is the only thing that guarantees the order rests instead of taking.
+ */
+export function makerBidPrice(bestBid: number, tick: number): number {
+  const t = tick > 0 ? tick : Math.max(1e-8, bestBid * 1e-6);
+  return Math.floor(bestBid / t) * t;
+}
+
+/** Has the book moved far enough that this resting bid is no longer competitive? */
+export function makerEntryStale(
+  restingPrice: number,
+  bestBid: number,
+  tick: number,
+  driftTicks: number,
+): boolean {
+  if (!(restingPrice > 0 && bestBid > 0)) return true;
+  const t = tick > 0 ? tick : Math.max(1e-8, bestBid * 1e-6);
+  // Only downward drift matters: if the bid rises we are deep in the queue and unlikely
+  // to fill; if it falls, our order is near the front and worth keeping.
+  return (bestBid - restingPrice) / t >= driftTicks;
+}
+
+/**
+ * Resolve a resting entry. Returns whether the position is still awaiting fill.
+ * Booked exactly once, at a terminal state, for the same reason as the resting exit.
+ */
+async function syncMakerEntry(position: Position, settings: TradingSettings, cycleId: string) {
+  const identifier = String(position.metadata?.maker_entry_identifier || "");
+  const orderRowId = position.metadata?.maker_entry_order_id;
+  if (!identifier || !orderRowId) return { pending: false, position };
+
+  let order: any;
+  try {
+    order = await gateway(position.exchange, {
+      action: "get_order",
+      identifier,
+      market: position.market,
+    });
+  } catch (error) {
+    await event(
+      "MAKER_ENTRY_SYNC_ERROR",
+      `${position.exchange}:${position.market} resting entry query failed`,
+      { error: error instanceof Error ? error.message : String(error) },
+      { cycleId, positionId: position.id, level: "WARNING" },
+    );
+    throw error;
+  }
+  const status = String(order?.status || "");
+  const orderRow = (await db(`trading_orders?id=eq.${orderRowId}&select=*&limit=1`))[0];
+  if (!orderRow) return { pending: false, position };
+
+  const placedAt = Date.parse(String(position.metadata?.maker_entry_placed_at || ""));
+  const ageSeconds = Number.isFinite(placedAt)
+    ? (Date.now() - placedAt) / 1000
+    : Number.POSITIVE_INFINITY;
+  const ttl = clamp(
+    finite(
+      (settings as any).scalp_maker_entry_ttl_seconds,
+      isLobStrategy((settings as any).strategy) ? 8 : 90,
+    ),
+    5,
+    900,
+  );
+
+  let drifted = false;
+  if (status === "OPEN" || status === "PARTIALLY_FILLED") {
+    try {
+      const market = await marketQuote(position.exchange, position.market);
+      drifted = makerEntryStale(
+        finite(position.metadata?.maker_entry_price),
+        finite(market.best_bid),
+        finite(position.tick_size),
+        clamp(
+          finite(
+            (settings as any).scalp_maker_entry_drift_ticks,
+            isLobStrategy((settings as any).strategy) ? 1 : 3,
+          ),
+          1,
+          50,
+        ),
+      );
+    } catch { /* quote unavailable: fall back to the TTL alone */ }
+  }
+
+  const expired = ageSeconds >= ttl || drifted;
+  if ((status === "OPEN" || status === "PARTIALLY_FILLED") && !expired) {
+    const pendingUpdate = await updateOrderFromGateway(orderRow, order);
+    const reservation = reservationAfterFill(
+      finite(orderRow.requested_notional_quote, finite(position.reserved_quote)),
+      finite(orderRow.requested_volume, finite(position.reserved_quantity)),
+      finite(pendingUpdate.fill.executedFunds),
+      finite(pendingUpdate.fill.executedVolume),
+    );
+    const rows = await patch("trading_positions", `id=eq.${position.id}`, {
+      reserved_quote: reservation.reservedQuote,
+      reserved_quantity: reservation.reservedQuantity,
+      reservation_expires_at: new Date(placedAt + ttl * 1000).toISOString(),
+    });
+    return { pending: true, position: { ...position, ...(rows[0] || {}) } };
+  }
+
+  // Terminal, stale or drifted: stop the order so the fill amount is final.
+  if (status === "OPEN" || status === "PARTIALLY_FILLED") {
+    try {
+      order = await gateway(position.exchange, {
+        action: "cancel_order",
+        identifier,
+        market: position.market,
+      });
+    } catch {
+      try {
+        order = await gateway(position.exchange, {
+          action: "get_order",
+          identifier,
+          market: position.market,
+        });
+      } catch (error) {
+        // Unresolved: never abandon an order that might still be live. Escalate through
+        // the reconciliation state machine instead of silently polling forever.
+        throw error;
+      }
+    }
+  }
+
+  const updated = await updateOrderFromGateway(orderRow, order);
+  const filled = finite(updated.fill.executedVolume);
+  const minNotional = positionMinNotionalQuote(position);
+  const reportedPrice = finite(updated.fill.averagePrice);
+  const reportedFunds = finite(updated.fill.executedFunds);
+  const fillPrice = reportedPrice > 0
+    ? reportedPrice
+    : filled > 0 && reportedFunds > 0
+    ? reportedFunds / filled
+    : finite(position.planned_entry_price);
+  const resolvedFill = {
+    ...updated.fill,
+    executedVolume: filled,
+    averagePrice: fillPrice,
+    executedFunds: Math.max(reportedFunds, filled * Math.max(0, fillPrice)),
+  };
+
+  if (filled > 0 && filled * fillPrice >= minNotional) {
+    const opened = await applyEntryAccounting(position, updated.row, resolvedFill);
+    await event(
+      "MAKER_ENTRY_FILLED",
+      `${position.exchange}:${position.market} maker entry filled`,
+      {
+        price: fillPrice,
+        quantity: filled,
+        wait_seconds: Math.round(ageSeconds),
+        drifted,
+        partial: status !== "FILLED",
+      },
+      { cycleId, positionId: position.id, orderId: updated.row.id },
+    );
+    const withTp = await placeRestingTakeProfit(opened as Position, settings, cycleId);
+    return { pending: false, position: withTp };
+  }
+
+  // Nothing usable filled. This is the normal, free outcome of a maker quote.
+  await patch("trading_positions", `id=eq.${position.id}`, {
+    state: "CANCELLED",
+    reserved_quote: 0,
+    reserved_quantity: 0,
+    reservation_expires_at: null,
+    close_reason: drifted ? "MAKER_ENTRY_DRIFTED" : "MAKER_ENTRY_UNFILLED",
+    closed_at: new Date().toISOString(),
+    metadata: {
+      ...(position.metadata || {}),
+      exclude_from_learning: true,
+      maker_entry_wait_seconds: Math.round(ageSeconds),
+      maker_entry_filled: filled,
+    },
+  });
+  await event(
+    "MAKER_ENTRY_UNFILLED",
+    `${position.exchange}:${position.market} resting entry expired without a usable fill`,
+    {
+      wait_seconds: Math.round(ageSeconds),
+      drifted,
+      filled_quantity: filled,
+    },
+    { cycleId, positionId: position.id, level: "INFO" },
+  );
+  return { pending: false, position };
+}
+
+/**
+ * v5.9.1: automatic recovery from an INFRASTRUCTURE pause.
+ *
+ * Legacy recovery for releases that latched a global SAFETY_GATEWAY_UNAVAILABLE pause.
+ * v6.11 never creates that automatic pause, but clearing an old one remains necessary
+ * during a rolling deployment.
+ *
+ * The distinction that matters is WHAT failed:
+ *   - infrastructure (gateway unreachable)  -> recovers on its own once healthy again
+ *   - account (balances do not reconcile)   -> still needs human eyes, never auto-cleared
+ *   - operator intent (manual pause, withdrawal mode) -> never auto-cleared
+ */
+const AUTO_RECOVERABLE_PAUSE_REASONS = ["SAFETY_GATEWAY_UNAVAILABLE"];
+
+async function tryAutoResume(settings: TradingSettings & JsonRecord, cycleId: string) {
+  if (!settings.pause_new_entries) return settings;
+  const reason = String(settings.manual_event_reason || "");
+  if (!AUTO_RECOVERABLE_PAUSE_REASONS.includes(reason)) return settings;
+  // An unresolved account discrepancy outranks connectivity recovery.
+  if (settings.manual_intervention_required || settings.withdrawal_mode) return settings;
+
+  const healthy = 1 + Math.max(0, Math.floor(finite((settings as any).gateway_recovery_cycles)));
+  const required = clamp(finite((settings as any).gateway_recovery_cycles_required, 3), 1, 20);
+  if (healthy < required) {
+    const rows = await patch("trading_settings", "id=eq.1", { gateway_recovery_cycles: healthy })
+      .catch(() => []);
+    return { ...settings, ...(rows[0] || { gateway_recovery_cycles: healthy }) };
+  }
+  const rows = await patch("trading_settings", "id=eq.1", {
+    pause_new_entries: false,
+    manual_event_reason: null,
+    gateway_recovery_cycles: 0,
+    gateway_error_count: 0,
+    last_resume_at: new Date().toISOString(),
+  }).catch(() => []);
+  await event(
+    "TRADING_AUTO_RESUMED",
+    `gateway healthy for ${healthy} consecutive cycles; entries resumed automatically`,
+    {
+      previous_reason: reason,
+      healthy_cycles: healthy,
+    },
+    { cycleId, level: "WARNING" },
+  );
+  return { ...settings, ...(rows[0] || {}), pause_new_entries: false, manual_event_reason: null } as
+    & TradingSettings
+    & JsonRecord;
+}
+
+async function snapshotAccount(
+  exchange: Exchange,
+  portfolio: any,
+  positions: Position[],
+  prices: Record<string, number>,
+  settings: TradingSettings,
+  capturedAt?: string,
+) {
+  let openCost = 0;
+  let unrealized = 0;
+  const paper = settings.mode !== "LIVE_LIMITED";
+  for (
+    const position of positions.filter((row) => row.exchange === exchange && row.is_paper === paper)
+  ) {
+    const qty = finite(position.remaining_quantity);
+    const entry = finite(position.average_entry_price);
+    const current = finite(prices[position.market], entry);
+    openCost += qty * entry;
+    unrealized += qty * (current - entry);
+  }
+  const botPositionValue = positions
+    .filter((row) => row.exchange === exchange && row.is_paper === paper)
+    .reduce(
+      (sum, position) =>
+        sum +
+        Math.max(0, finite(position.remaining_quantity)) *
+          Math.max(0, finite(prices[position.market], position.average_entry_price)),
+      0,
+    );
+  const capitalBaseQuote = Math.max(0, finite(portfolio.available_quote)) +
+    Math.max(0, finite(portfolio.locked_quote)) + botPositionValue;
+  const config = allocationConfig(settings, exchange);
+  const managed = calculateManagedCapital({
+    capitalBaseQuote,
+    availableQuote: finite(portfolio.available_quote),
+    openCostQuote: Math.max(openCost, botPositionValue),
+    allocationMode: config.mode === "FIXED" ? "FIXED" : "ALL",
+    fixedAllocationQuote: config.fixed,
+    reserveQuote: config.reserve,
+  });
+  await db("trading_account_snapshots", {
+    method: "POST",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify({
+      exchange,
+      quote_currency: quoteCurrency(exchange),
+      // This balance was read before exits in the current monitor cycle. Use the read
+      // time instead of the later INSERT time so the next cycle attributes intervening
+      // bot orders instead of recording them as external cash flow.
+      captured_at: capturedAt || new Date().toISOString(),
+      total_equity_quote: finite(portfolio.total_equity_quote),
+      available_quote: finite(portfolio.available_quote),
+      locked_quote: finite(portfolio.locked_quote),
+      bot_open_cost_quote: openCost,
+      bot_unrealized_pnl_quote: unrealized,
+      capital_base_quote: managed.capitalBaseQuote,
+      managed_capital_quote: managed.managedCapitalQuote,
+      managed_available_quote: managed.managedAvailableQuote,
+      protected_reserve_quote: managed.protectedReserveQuote,
+      allocation_mode: managed.allocationMode,
+      balances: portfolio.accounts || [],
+      prices: { ...(portfolio.prices || {}), ...prices },
+    }),
+  });
+}
+async function sellPaper(
+  position: Position,
+  quantity: number,
+  price: number,
+  purpose: string,
+  cycleId: string,
+) {
+  const qty = Math.min(position.remaining_quantity, quantity);
+  const funds = qty * price;
+  const fee = funds * FEE_PCT[position.exchange] / 100;
+  const order = await createOrderRecord({
+    position_id: position.id,
+    candidate_id: position.candidate_id,
+    cycle_id: cycleId,
+    exchange: position.exchange,
+    quote_currency: position.quote_currency,
+    identifier: uniqueId("px", position.id),
+    market: position.market,
+    side: "SELL",
+    purpose,
+    order_type: "PAPER_MARKET",
+    requested_volume: qty,
+    state: "EXCHANGE_DONE",
+    executed_volume: qty,
+    average_fill_price: price,
+    executed_funds_quote: funds,
+    paid_fee_quote: fee,
+    fee_asset: position.quote_currency,
+    completed_at: new Date().toISOString(),
+    raw_response: { paper: true },
+  });
+  await insert("trading_fills", {
+    order_id: order.id,
+    trade_id: `paper-${order.id}`,
+    price,
+    volume: qty,
+    funds_quote: funds,
+    fee_amount: fee,
+    fee_asset: position.quote_currency,
+    fee_quote_estimate: fee,
+    executed_at: new Date().toISOString(),
+    raw: { paper: true },
+  });
+  return {
+    orderRow: order,
+    fill: { executedVolume: qty, executedFunds: funds, averagePrice: price, paidFeeQuote: fee },
+    order: { status: "FILLED" },
+  };
+}
+async function sellLive(position: Position, quantity: number, purpose: string, cycleId: string) {
+  const portfolio = await gateway(position.exchange, { action: "portfolio" });
+  const available = accountQuantity(portfolio, position.base_asset, true);
+  const step = finite(position.quantity_step, 0.00000001);
+  const qty = floorToStep(Math.min(position.remaining_quantity, quantity, available), step);
+  if (!(qty > 0)) throw new Error(`no available ${position.base_asset} balance for exit`);
+  const identifier = uniqueId("x", position.id);
+  const orderRow = await createOrderRecord({
+    position_id: position.id,
+    candidate_id: position.candidate_id,
+    cycle_id: cycleId,
+    exchange: position.exchange,
+    quote_currency: position.quote_currency,
+    identifier,
+    market: position.market,
+    side: "SELL",
+    purpose,
+    order_type: "MARKET",
+    requested_volume: qty,
+    state: "REQUESTED",
+  });
+  try {
+    const result = await gateway(position.exchange, {
+      action: "create_order",
+      order: { market: position.market, side: "SELL", type: "MARKET", quantity: qty, identifier },
+      wait_for_final_ms: 4000,
+    }, 20_000);
+    const updated = await updateOrderFromGateway(orderRow, result);
+    if (finite(updated.fill.executedVolume) <= 0) throw new Error("market sell returned no fill");
+    return { orderRow, ...updated };
+  } catch (error) {
+    await patch("trading_orders", `id=eq.${orderRow.id}`, {
+      state: "UNKNOWN",
+      error_message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+async function finalizeExitFill(
+  position: Position,
+  result: any,
+  action: string,
+  fallbackPrice: number,
+  cycleId: string,
+  breakevenAfterT1 = true,
+) {
+  const applied = await applyExitAccounting(
+    position,
+    result.orderRow,
+    result.fill || {},
+    action,
+    fallbackPrice,
+    breakevenAfterT1,
+  );
+  const updated = applied.position;
+  await event(
+    applied.closed ? "POSITION_CLOSED" : "PARTIAL_EXIT",
+    `${position.exchange}:${position.market} ${action}`,
+    {
+      price: applied.fillPrice,
+      sold_quantity: applied.quantity,
+      remaining: finite(updated?.remaining_quantity),
+      pnl_quote: finite(updated?.realized_pnl_quote),
+      quote: position.quote_currency,
+      accounting_applied: applied.applied,
+    },
+    { cycleId, positionId: position.id, orderId: result.orderRow.id },
+  );
+  return {
+    action,
+    exchange: position.exchange,
+    market: position.market,
+    closed: applied.closed,
+    position: updated,
+  };
+}
+async function applyExit(
+  position: Position,
+  price: number,
+  action: string,
+  cycleId: string,
+  breakevenAfterT1 = true,
+  decisionReason?: string,
+) {
+  let quantity = action === "TARGET_1"
+    ? t1SellQuantity(
+      position.initial_quantity,
+      position.remaining_quantity,
+      position.t1_allocation_pct,
+    )
+    : finite(position.remaining_quantity);
+  const minNotional = positionMinNotionalQuote(position);
   if (
     quantity * price < minNotional || (position.remaining_quantity - quantity) * price < minNotional
   ) quantity = position.remaining_quantity;
