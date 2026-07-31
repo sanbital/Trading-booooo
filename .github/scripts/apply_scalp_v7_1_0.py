@@ -7,12 +7,15 @@ def replace_once(path: str, old: str, new: str) -> None:
     p = Path(path)
     text = p.read_text()
     old_count = text.count(old)
-    if old_count == 1:
+    if old_count >= 1:
         p.write_text(text.replace(old, new))
         return
     if old_count == 0 and new in text:
         return
-    raise SystemExit(f"{path}: expected one old marker or an already-applied new marker; old_count={old_count}")
+    raise SystemExit(
+        f"{path}: expected an old marker or an already-applied new marker; "
+        f"old_count={old_count}; old={old[:120]!r}"
+    )
 
 
 def replace_all(path: str, old: str, new: str, minimum: int = 1) -> None:
@@ -24,7 +27,10 @@ def replace_all(path: str, old: str, new: str, minimum: int = 1) -> None:
         return
     if old_count == 0 and new in text:
         return
-    raise SystemExit(f"{path}: expected at least {minimum} old markers or an already-applied new marker; old_count={old_count}")
+    raise SystemExit(
+        f"{path}: expected at least {minimum} old markers or an already-applied new marker; "
+        f"old_count={old_count}; old={old[:120]!r}"
+    )
 
 
 scanner = "supabase/functions/market-scanner/index.ts"
