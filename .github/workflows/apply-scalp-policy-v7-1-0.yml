@@ -1,20 +1,21 @@
 name: Apply scalp policy v7.1.0
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/apply-scalp-policy-v7-1-0.yml
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  patch-and-verify:
+  patch-verify-deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Sync latest main
@@ -38,16 +39,29 @@ jobs:
         run: |
           if git diff --quiet; then
             echo "No source changes detected"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add supabase/functions/market-scanner/index.ts \
+                    supabase/functions/market-scanner/engine.ts \
+                    supabase/functions/_shared/lob/entry.ts \
+                    supabase/functions/_shared/lob/exit.ts \
+                    supabase/functions/market-autotrader/index.ts \
+                    supabase/functions/market-autotrader/core.ts \
+                    supabase/migrations/20260731033000_scalp_v7_1_0_risk_and_holding.sql
+            git commit -m "fix: enforce 45s observation and bounded scalp exits"
+            git push origin main
+          fi
+
+      - name: Deploy Supabase functions
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ]; then
+            echo "SUPABASE_ACCESS_TOKEN is not configured"
             exit 1
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add supabase/functions/market-scanner/index.ts \
-                  supabase/functions/market-scanner/engine.ts \
-                  supabase/functions/_shared/lob/entry.ts \
-                  supabase/functions/_shared/lob/exit.ts \
-                  supabase/functions/market-autotrader/index.ts \
-                  supabase/functions/market-autotrader/core.ts \
-                  supabase/migrations/20260731033000_scalp_v7_1_0_risk_and_holding.sql
-          git commit -m "fix: enforce 45s observation and bounded scalp exits"
-          git push origin main
+          npx --yes supabase@latest functions deploy market-scanner \
+            --project-ref etaajwpernzrcdrifdnw --no-verify-jwt
+          npx --yes supabase@latest functions deploy market-autotrader \
+            --project-ref etaajwpernzrcdrifdnw --no-verify-jwt
