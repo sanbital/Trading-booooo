@@ -27,24 +27,8 @@ jobs:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
 
-      - name: Extract and apply reviewed deterministic patch
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          workflow = Path('.github/workflows/lob-consistency-hotfix.yml').read_text()
-          marker = "          python3 - <<'PY'\n"
-          start = workflow.index(marker) + len(marker)
-          end = workflow.index("\n          PY", start)
-          lines = workflow[start:end].splitlines()
-          script = "\n".join(
-              line[10:] if line.startswith("          ") else line
-              for line in lines
-          ) + "\n"
-          Path('/tmp/apply_lob_hotfix.py').write_text(script)
-          PY
-          python3 /tmp/apply_lob_hotfix.py
+      - name: Apply robust reviewed LOB patch
+        run: python3 .github/scripts/apply_lob_7_1_2.py
 
       - uses: denoland/setup-deno@v2
         with:
