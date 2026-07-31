@@ -17,146 +17,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply policy patch
-        shell: bash
+      - name: Sync latest main
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
+          git fetch origin main
+          git checkout -B main origin/main
 
-          RELEASE = "7.1.0-LOB-45S-180-300-RISK20"
-
-          def replace_exact(path: str, old: str, new: str, expected: int = 1) -> None:
-              p = Path(path)
-              text = p.read_text()
-              count = text.count(old)
-              if count != expected:
-                  raise SystemExit(f"{path}: expected {expected} matches, found {count}: {old[:120]!r}")
-              p.write_text(text.replace(old, new))
-
-          def replace_at_least(path: str, old: str, new: str, minimum: int = 1) -> None:
-              p = Path(path)
-              text = p.read_text()
-              count = text.count(old)
-              if count < minimum:
-                  raise SystemExit(f"{path}: expected at least {minimum} matches, found {count}: {old!r}")
-              p.write_text(text.replace(old, new))
-
-          scanner = "supabase/functions/market-scanner/index.ts"
-          replace_exact(
-              scanner,
-              "// Trading-booooo Market Scanner v7.0.5-LOB-30S-MINIMUM — Supabase Edge Function",
-              f"// Trading-booooo Market Scanner v{RELEASE} — Supabase Edge Function",
-          )
-          replace_exact(
-              scanner,
-              "// A 32-second collection timer gives the first/last websocket frame enough margin to prove\n// at least 30 seconds of actual order-book and tape coverage.\nconst DEFAULT_DYNAMIC_OBSERVATION_MS = 32_000;\nconst LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 35_000;\nconst MIN_DYNAMIC_OBSERVATION_MS = 32_000;\nconst MAX_DYNAMIC_OBSERVATION_MS = 60_000;\n// Every symbol must receive its own full 30-second wall-clock observation window.\n// The global socket-open timer alone is insufficient because a symbol's first frame can arrive late.\nconst REQUIRED_PER_MARKET_OBSERVATION_MS = 30_000;",
-              "// The collector runs slightly beyond the required per-market window so late first frames\n// still receive a full 45 seconds. Low-liquidity books may use the 60-second ceiling.\nconst DEFAULT_DYNAMIC_OBSERVATION_MS = 47_000;\nconst LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 60_000;\nconst MIN_DYNAMIC_OBSERVATION_MS = 47_000;\nconst MAX_DYNAMIC_OBSERVATION_MS = 60_000;\n// Every symbol must receive its own full 45-second wall-clock observation window.\n// The global socket-open timer alone is insufficient because a symbol's first frame can arrive late.\nconst REQUIRED_PER_MARKET_OBSERVATION_MS = 45_000;",
-          )
-          replace_exact(
-              scanner,
-              'finite(Deno.env.get("LOB_OBSERVATION_MS"), 32_000),\n    32_000,\n    60_000,',
-              'finite(Deno.env.get("LOB_OBSERVATION_MS"), DEFAULT_DYNAMIC_OBSERVATION_MS),\n    MIN_DYNAMIC_OBSERVATION_MS,\n    MAX_DYNAMIC_OBSERVATION_MS,',
-          )
-          replace_exact(
-              scanner,
-              'lob: "Top 10 중 흐름 유지 종목 최소 30초 실시간 호가·체결",',
-              'lob: "Top 10 중 흐름 유지 종목 최소 45초 실시간 호가·체결",',
-          )
-
-          engine = "supabase/functions/market-scanner/engine.ts"
-          replace_exact(
-              engine,
-              "// Trading-booooo Market Scanner v7.0.5-LOB-30S-MINIMUM",
-              f"// Trading-booooo Market Scanner v{RELEASE}",
-          )
-          replace_exact(
-              engine,
-              'export const ENGINE_VERSION = "7.0.5-LOB-30S-MINIMUM";',
-              f'export const ENGINE_VERSION = "{RELEASE}";',
-          )
-          replace_exact(engine, "const DYNAMIC_MIN_OBSERVATION_MS = 30_000;", "const DYNAMIC_MIN_OBSERVATION_MS = 45_000;")
-          replace_exact(engine, "const DYNAMIC_MIN_BOOK_UPDATES = 12;", "const DYNAMIC_MIN_BOOK_UPDATES = 25;")
-          replace_exact(engine, "const DYNAMIC_MIN_TRADES = 8;", "const DYNAMIC_MIN_TRADES = 20;")
-          replace_exact(
-              engine,
-              'finiteOr((risk.scalpOverrides || {}).maxHoldingSeconds, 180), 1, 300',
-              'finiteOr((risk.scalpOverrides || {}).maxHoldingSeconds, 300), 1, 300',
-          )
-
-          entry = "supabase/functions/_shared/lob/entry.ts"
-          replace_exact(entry, "minObservationMs: 30_000,", "minObservationMs: 45_000,")
-          replace_exact(
-              entry,
-              "// Ordinary 180-second LOB events remain capped at 60bp. The separately identified momentum",
-              "// Ordinary 300-second LOB events remain capped at 60bp. The separately identified momentum",
-          )
-          replace_exact(entry, "maxHoldingSeconds: 180,", "maxHoldingSeconds: 300,")
-          replace_exact(
-              entry,
-              "Math.max(1, isMomentum ? Math.min(90, cfg.maxHoldingSeconds) : cfg.maxHoldingSeconds),",
-              "Math.max(1, isMomentum ? Math.min(180, cfg.maxHoldingSeconds) : cfg.maxHoldingSeconds),",
-          )
-
-          autotrader = "supabase/functions/market-autotrader/index.ts"
-          replace_exact(
-              autotrader,
-              "// Trading-booooo v7.0.7-LOB-SCAN-PLAN-LOCK — autonomous spot orchestrator.",
-              f"// Trading-booooo v{RELEASE} — autonomous spot orchestrator.",
-          )
-          replace_exact(
-              autotrader,
-              'const VERSION = "7.0.7-LOB-SCAN-PLAN-LOCK";',
-              f'const VERSION = "{RELEASE}";',
-          )
-          replace_exact(
-              autotrader,
-              'scalp_daily_loss_pct: clamp(finite(env("SCALP_DAILY_LOSS_PCT"), 30), 0.1, 100),',
-              'scalp_daily_loss_pct: clamp(finite(env("SCALP_DAILY_LOSS_PCT"), 20), 0.1, 100),',
-          )
-          replace_exact(
-              autotrader,
-              'max_daily_loss_pct: finite((settings as any).scalp_daily_loss_pct, 30),',
-              'max_daily_loss_pct: finite((settings as any).scalp_daily_loss_pct, 20),',
-          )
-          replace_at_least(
-              autotrader,
-              'finite((settings as any).lob_max_holding_seconds, 180)',
-              'finite((settings as any).lob_max_holding_seconds, 300)',
-              2,
-          )
-          replace_exact(
-              autotrader,
-              'finite(position.metadata?.lob_signal?.max_holding_seconds, 180)',
-              'finite(position.metadata?.lob_signal?.max_holding_seconds, 300)',
-          )
-
-          core = "supabase/functions/market-autotrader/core.ts"
-          replace_exact(
-              core,
-              "// v5.8: SCALP passes false. Holding time no longer closes anything — a position is sold\n  // when the market says so (stop, target, trail, live edge, flow reversal, liquidity\n  // event), never because a clock ran out.",
-              "// v7.1: the approved holding deadline is always a hard exit boundary, including SCALP.\n  // Losses may not be extended beyond the signal's 180/300-second lifetime.",
-          )
-
-          exit_path = Path("supabase/functions/_shared/lob/exit.ts")
-          exit_path.write_text('''// Trading-booooo v7.1.0 — bounded LOB exit policy.\n//\n// Exit priority:\n//   1) account safety / reconciliation,\n//   2) configured -5% hard stop,\n//   3) fee-aware positive target,\n//   4) confirmed or severe LOB invalidation / reversal,\n//   5) unconditional 180/300-second time exit.\n//\n// A losing position is never extended beyond maxHoldingSeconds.\n\nexport type LobExitReason =\n  | "RISK_EMERGENCY"\n  | "RECONCILIATION_FAILURE"\n  | "STOP_HIT"\n  | "LOB_INVALIDATION"\n  | "SIGNAL_REVERSAL"\n  | "TARGET_HIT"\n  | "TIMEOUT"\n  | "HOLD";\n\nexport interface LobExitInput {\n  emergency: boolean;\n  reconciliationFailed: boolean;\n  currentPrice: number;\n  stopPrice: number;\n  targetPrice: number;\n  heldSeconds: number;\n  maxHoldingSeconds: number;\n  bookImbalance: number;\n  tradePressure: number;\n  micropriceDeviationBps: number;\n  spreadBps: number;\n  maxSpreadBps: number;\n  bidDepthRatio: number;\n  minBidDepthRatio: number;\n  dynamicStatus?: string;\n  previousSoftReason?: "LOB_INVALIDATION" | "SIGNAL_REVERSAL" | null;\n  softSignalStreak?: number;\n  softExitConfirmations?: number;\n  softExitGraceSeconds?: number;\n}\n\nexport interface LobExitDecision {\n  exit: boolean;\n  reason: LobExitReason;\n  priority: number;\n  nextSoftReason: "LOB_INVALIDATION" | "SIGNAL_REVERSAL" | null;\n  nextSoftSignalStreak: number;\n  severeSoftSignal: boolean;\n}\n\nfunction hold(input: {\n  reason?: "LOB_INVALIDATION" | "SIGNAL_REVERSAL" | null;\n  streak?: number;\n  severe?: boolean;\n} = {}): LobExitDecision {\n  return {\n    exit: false,\n    reason: "HOLD",\n    priority: 0,\n    nextSoftReason: input.reason ?? null,\n    nextSoftSignalStreak: Math.max(0, Math.floor(Number(input.streak) || 0)),\n    severeSoftSignal: Boolean(input.severe),\n  };\n}\n\n/** Deterministic v7.1 priority: safety, stop, target, invalidation, timeout, hold. */\nexport function evaluateLobExit(input: LobExitInput): LobExitDecision {\n  const hard = (reason: LobExitReason, priority: number): LobExitDecision => ({\n    exit: true,\n    reason,\n    priority,\n    nextSoftReason: null,\n    nextSoftSignalStreak: 0,\n    severeSoftSignal: false,\n  });\n\n  if (input.emergency) return hard("RISK_EMERGENCY", 100);\n  if (input.reconciliationFailed) return hard("RECONCILIATION_FAILURE", 95);\n\n  if (\n    Number.isFinite(input.stopPrice) && input.stopPrice > 0 &&\n    input.currentPrice <= input.stopPrice\n  ) {\n    return hard("STOP_HIT", 90);\n  }\n\n  if (\n    Number.isFinite(input.targetPrice) && input.targetPrice > 0 &&\n    input.currentPrice >= input.targetPrice\n  ) {\n    return hard("TARGET_HIT", 85);\n  }\n\n  const invalidStatus = new Set([\n    "SUPPORT_BREAKDOWN_RISK",\n    "SPOOF_LIKE_RISK",\n    "ASK_ABSORPTION_RISK",\n  ]);\n  const invalidated = invalidStatus.has(String(input.dynamicStatus || "")) ||\n    input.spreadBps > input.maxSpreadBps ||\n    input.bidDepthRatio < input.minBidDepthRatio;\n  const reversed = input.bookImbalance <= -0.20 &&\n    input.tradePressure <= -0.20 &&\n    input.micropriceDeviationBps < 0;\n  const softReason: "LOB_INVALIDATION" | "SIGNAL_REVERSAL" | null = invalidated\n    ? "LOB_INVALIDATION"\n    : reversed\n    ? "SIGNAL_REVERSAL"\n    : null;\n\n  if (softReason) {\n    const nextStreak = input.previousSoftReason === softReason\n      ? Math.max(0, Math.floor(Number(input.softSignalStreak) || 0)) + 1\n      : 1;\n    const confirmations = Math.max(1, Math.floor(Number(input.softExitConfirmations) || 2));\n    const graceSeconds = Math.max(0, Number(input.softExitGraceSeconds) || 15);\n    const severe = input.spreadBps > input.maxSpreadBps * 2 ||\n      input.bidDepthRatio < input.minBidDepthRatio * 0.25 ||\n      (\n        input.bookImbalance <= -0.65 &&\n        input.tradePressure <= -0.65 &&\n        input.micropriceDeviationBps < 0\n      );\n\n    if (severe || (input.heldSeconds >= graceSeconds && nextStreak >= confirmations)) {\n      return hard(softReason, severe ? 82 : 78);\n    }\n    return hold({ reason: softReason, streak: nextStreak, severe });\n  }\n\n  const maxHoldingSeconds = Math.max(1, Number(input.maxHoldingSeconds) || 300);\n  if (input.heldSeconds >= maxHoldingSeconds) {\n    return hard("TIMEOUT", 70);\n  }\n\n  return hold();\n}\n''')
-
-          migration = Path("supabase/migrations/20260731033000_scalp_v7_1_0_risk_and_holding.sql")
-          migration.write_text('''do $$\ndeclare\n  has_table boolean := to_regclass('public.trading_settings') is not null;\nbegin\n  if not has_table then\n    return;\n  end if;\n\n  if exists (select 1 from information_schema.columns where table_schema='public' and table_name='trading_settings' and column_name='scalp_daily_loss_pct') then\n    execute 'update public.trading_settings set scalp_daily_loss_pct = 20 where id = 1';\n  end if;\n  if exists (select 1 from information_schema.columns where table_schema='public' and table_name='trading_settings' and column_name='scalp_max_single_loss_pct') then\n    execute 'update public.trading_settings set scalp_max_single_loss_pct = 5 where id = 1';\n  end if;\n  if exists (select 1 from information_schema.columns where table_schema='public' and table_name='trading_settings' and column_name='lob_max_holding_seconds') then\n    execute 'update public.trading_settings set lob_max_holding_seconds = 300 where id = 1';\n  end if;\n  if exists (select 1 from information_schema.columns where table_schema='public' and table_name='trading_settings' and column_name='lob_absolute_max_holding_seconds') then\n    execute 'update public.trading_settings set lob_absolute_max_holding_seconds = 300 where id = 1';\n  end if;\n  if exists (select 1 from information_schema.columns where table_schema='public' and table_name='trading_settings' and column_name='version') then\n    execute 'update public.trading_settings set version = coalesce(version, 0) + 1 where id = 1';\n  end if;\n  if exists (select 1 from information_schema.columns where table_schema='public' and table_name='trading_settings' and column_name='updated_at') then\n    execute 'update public.trading_settings set updated_at = now() where id = 1';\n  end if;\nend $$;\n''')
-
-          # Fail closed if any old policy markers remain in active source.
-          checks = {
-              scanner: ["REQUIRED_PER_MARKET_OBSERVATION_MS = 45_000", "DEFAULT_DYNAMIC_OBSERVATION_MS = 47_000"],
-              engine: ["DYNAMIC_MIN_OBSERVATION_MS = 45_000", "DYNAMIC_MIN_BOOK_UPDATES = 25", "DYNAMIC_MIN_TRADES = 20"],
-              entry: ["minObservationMs: 45_000", "maxHoldingSeconds: 300", "Math.min(180, cfg.maxHoldingSeconds)"],
-              autotrader: ["SCALP_DAILY_LOSS_PCT\"), 20", "lob_max_holding_seconds, 300", f'const VERSION = "{RELEASE}"'],
-              str(exit_path): ['return hard("TIMEOUT", 70)', 'return hard(softReason, severe ? 82 : 78)'],
-          }
-          for path, needles in checks.items():
-              text = Path(path).read_text()
-              for needle in needles:
-                  if needle not in text:
-                      raise SystemExit(f"{path}: missing verification marker {needle!r}")
-          PY
+      - name: Apply policy patch
+        run: python3 .github/scripts/apply_scalp_v7_1_0.py
 
       - uses: denoland/setup-deno@v2
         with:
@@ -168,10 +35,9 @@ jobs:
           deno check supabase/functions/market-autotrader/index.ts
 
       - name: Commit policy update
-        shell: bash
         run: |
           if git diff --quiet; then
-            echo "No changes to commit"
+            echo "No source changes detected"
             exit 1
           fi
           git config user.name "github-actions[bot]"
@@ -184,4 +50,4 @@ jobs:
                   supabase/functions/market-autotrader/core.ts \
                   supabase/migrations/20260731033000_scalp_v7_1_0_risk_and_holding.sql
           git commit -m "fix: enforce 45s observation and bounded scalp exits"
-          git push origin HEAD:main
+          git push origin main
