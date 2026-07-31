@@ -37,9 +37,13 @@ check(
 );
 check(
   "insufficient evidence is size-capped rather than hard-vetoed",
-  autotrader.includes("lobEvidenceSizeFraction") &&
+  autotrader.includes("const evidenceSizing = {") &&
+    autotrader.includes("fraction: insufficient ? 0.35 : 1") &&
+    autotrader.includes('cappedBy: insufficient ? "INSUFFICIENT_STATUS" : "NONE"') &&
     autotrader.includes("sizeFraction: evidenceSize") &&
-    evidence.includes("insufficientStatusCap") && evidence.includes("unprovenFloorFraction"),
+    evidence.includes("lobEvidenceSizeFraction") &&
+    evidence.includes("insufficientStatusCap") &&
+    evidence.includes("unprovenFloorFraction"),
 );
 check(
   "policy evolution is bounded and auditable",
