@@ -22,7 +22,7 @@ export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   minHotnessScore: 0,
   minPrimaryPatternConfidence: 0.32,
   minNetProfitBps: 0.01,
-  minEvBps: 0,
+  minEvBps: 0.50,
   maxStopToTargetRatio: 1.35,
   minNetRewardRiskRatio: 0.80,
   minTargetBps: 12,
@@ -71,8 +71,8 @@ export function calibrateMakerFillProbability(
  * LOB-only entry decision.
  *
  * v7 fixes eligibility outside this function to each exchange's rolling 24h Top 10.
- * Entry permission here is current order-book/tape only. Model EV is retained for audit and
- * scheduling, but it is not an admission veto.
+ * Entry permission here is current order-book/tape only. Model EV is a live admission gate so
+ * scanner BUY and final order admission use the same verified positive-edge requirement.
  */
 export function evaluateLobEntry(
   features: LobFeatureVector,
@@ -345,9 +345,22 @@ export function evaluateLobEntry(
     pTimeout * timeoutReturnNetBps - forecastBiasPenaltyBps;
   const attemptEvLowerBoundBps = pFill * conditionalEvLowerBoundBps;
   const evLowerBoundBps = conditionalEvLowerBoundBps;
+  const minimumVerifiedEvBps = Math.max(
+    0.50,
+    Number.isFinite(cfg.minEvBps) ? cfg.minEvBps : 0,
+  );
 
   for (const reason of payoff.reasons) reasons.push(reason);
   for (const warning of payoff.warnings) warnings.push(warning);
+  if (!(evNetBps > 0) && !reasons.includes("EV_NON_POSITIVE")) {
+    reasons.push("EV_NON_POSITIVE");
+  }
+  if (
+    !(evLowerBoundBps >= minimumVerifiedEvBps) &&
+    !reasons.includes("EV_BELOW_MINIMUM")
+  ) {
+    reasons.push("EV_BELOW_MINIMUM");
+  }
   const technicalBlock = reasons.some((r) =>
     r.startsWith("TRAP_") ||
     r.startsWith("FLOW_") ||
@@ -355,6 +368,8 @@ export function evaluateLobEntry(
     r === "TAPE_SPEED_DECLINING" ||
     r === "SELL_PRESSURE_DOMINANT" ||
     r === "MICROPRICE_BEARISH" ||
+    r === "EV_NON_POSITIVE" ||
+    r === "EV_BELOW_MINIMUM" ||
     r === "OUTSIDE_24H_GAINER_TOP10" || [
       "INSUFFICIENT_LOB_SAMPLES",
       "INSUFFICIENT_OBSERVATION_WINDOW",
@@ -383,7 +398,7 @@ export function evaluateLobEntry(
     stopToTargetRatio: payoff.stopToTargetRatio,
     netRewardRiskRatio: payoff.netRewardRiskRatio,
     minimumTargetNetProfitBps: cfg.minNetProfitBps,
-    minimumVerifiedEvBps: cfg.minEvBps,
+    minimumVerifiedEvBps,
     conditionalEvNetBps,
     conditionalEvLowerBoundBps,
     attemptEvNetBps,
