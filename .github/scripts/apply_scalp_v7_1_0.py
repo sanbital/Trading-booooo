@@ -43,14 +43,14 @@ old_monitor = '''      const scalpMode = isScalpStrategy((settings as any).strat
         }
       }'''
 
-new_monitor = f'''      const scalpMode = isScalpStrategy((settings as any).strategy);
+new_monitor = '''      const scalpMode = isScalpStrategy((settings as any).strategy);
       const lobMode = isLobStrategy((settings as any).strategy);
       const lobEntryPrice = finite(position.average_entry_price);
       const openedAt = Date.parse(String(position.opened_at || position.created_at || ""));
       const heldSeconds = Number.isFinite(openedAt)
         ? Math.max(0, (Date.now() - openedAt) / 1000)
         : 0;
-      // {POLICY_MARKER}: after 180 seconds, the clock never forces a losing exit.
+      // POST_180_FEE_NET_PROFIT_EXIT_V712: after 180 seconds, the clock never forces a losing exit.
       // Estimated fee-net PnL is calculated on the remaining quantity. Upbit requires at
       // least KRW 1 net; Binance exits on any strictly positive USDT estimate.
       const lobFeeRate = clamp(FEE_PCT[exchange] / 100, 0, 0.01);
@@ -71,13 +71,13 @@ new_monitor = f'''      const scalpMode = isScalpStrategy((settings as any).stra
       );
       if (lobMode && !settings.emergency_liquidation) {
         if (lobHardStopHit) {
-          decision = {{ action: "STOP", fraction: 1, reason: "lob:-5pct-hard-stop" }};
-        }} else if (heldSeconds >= 180) {{
+          decision = { action: "STOP", fraction: 1, reason: "lob:-5pct-hard-stop" };
+        } else if (heldSeconds >= 180) {
           decision = lobPost180ProfitReady
-            ? {{ action: "TARGET_1", fraction: 1, reason: "lob:post-180-fee-net-profit" }}
-            : {{ action: "NONE", fraction: 0, reason: "lob:post-180-hold-until-net-profit-or--5pct" }};
-        }}
-      }}'''
+            ? { action: "TARGET_1", fraction: 1, reason: "lob:post-180-fee-net-profit" }
+            : { action: "NONE", fraction: 0, reason: "lob:post-180-hold-until-net-profit-or--5pct" };
+        }
+      }'''
 
 replace_once(AUTOTRADER, old_monitor, new_monitor, POLICY_MARKER)
 
@@ -94,7 +94,7 @@ replace_once(
     '        const lobExitProfitReady = exchange === "upbit"\n'
     '          ? lobNetProfitQuote >= 1\n'
     '          : lobNetProfitQuote > 0;',
-    'lobNetProfitQuote >= 1',
+    'lobExitProfitReady = exchange === "upbit"',
 )
 
 MIGRATION.write_text("""do $$
