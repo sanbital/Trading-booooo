@@ -2,3 +2,4 @@ Trigger the validated post-180 fee-net profit exit deployment.
 Retry after repairing the policy patcher syntax.
 Run the aligned 45-second, 180-second, and release-version test suite.
 Final fixture correction for the 45-second observation gate.
+Use the full 31-sample dynamic evidence window.
