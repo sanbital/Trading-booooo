@@ -45,11 +45,11 @@ replace_once(
     '''Deno.test("dynamic orderflow requires a full 45-second observation window", () => {
   const start = 1_800_100_000_000;
   const evaluate = (intervalMs: number) => {
-    const frames = dynamicFrames("absorption").slice(0, 16).map((snapshot, index) => ({
+    const frames = dynamicFrames("absorption").slice(0, 31).map((snapshot, index) => ({
       ...snapshot,
       timestamp: start + index * intervalMs,
     }));
-    const flow = dynamicTrades("absorption").slice(0, 16).map((trade, index) => ({
+    const flow = dynamicTrades("absorption").slice(0, 31).map((trade, index) => ({
       ...trade,
       timestamp: start + index * intervalMs,
       trade_timestamp: start + index * intervalMs,
@@ -57,18 +57,20 @@ replace_once(
     return computeDynamicOrderflow(frames, flow, 0.1);
   };
 
-  const short = evaluate(2_900);
+  const short = evaluate(1_400);
   assert(short.observation_ms < 45_000);
-  assert(short.distinct_book_updates >= 16);
-  assert(short.aligned_trade_count >= 8);
+  assert(short.distinct_book_updates >= 25);
+  assert(short.aligned_trade_count >= 20);
   assert(!short.sufficient);
 
-  const complete = evaluate(3_000);
+  const complete = evaluate(1_500);
   assert(complete.observation_ms >= 45_000);
+  assert(complete.distinct_book_updates >= 25);
+  assert(complete.aligned_trade_count >= 20);
   assert(complete.phase_consistent);
   assert(complete.sufficient);
 });''',
-    'slice(0, 16)',
+    'slice(0, 31)',
 )
 
 momentum_test = "supabase/functions/_shared/lob/momentum-continuation.test.ts"
@@ -79,7 +81,7 @@ replace_once(
 )
 
 for path, marker in {
-    engine_test: "slice(0, 16)",
+    engine_test: "slice(0, 31)",
     momentum_test: "observationMs: 45000",
 }.items():
     if marker not in Path(path).read_text():
