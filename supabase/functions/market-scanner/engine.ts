@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v7.1.0-LOB-45S-180-300-RISK20
+// Trading-booooo Market Scanner v7.1.1-LOB-45S-PROFIT-OR-5PCT
 // Pure analysis engine. Public market data only; no order or account operations.
 
 import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-profile.ts";
@@ -20,7 +20,7 @@ import {
   sigmaFromAtrPct,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "7.1.0-LOB-45S-180-300-RISK20";
+export const ENGINE_VERSION = "7.1.1-LOB-45S-PROFIT-OR-5PCT";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -3116,9 +3116,9 @@ export function finalizeCandidate(
           finiteOr((risk.scalpOverrides || {}).maxSpreadBps, risk.maxSpreadBps ?? 30),
         ),
         maxHoldingSeconds: Math.round(
-          clamp(finiteOr((risk.scalpOverrides || {}).maxHoldingSeconds, 300), 1, 300),
+          clamp(finiteOr((risk.scalpOverrides || {}).maxHoldingSeconds, 180), 1, 300),
         ),
-        absoluteMaxHoldingSeconds: 300,
+        absoluteMaxHoldingSeconds: 180,
         uncertaintyHaircut: clamp(finiteOr(risk.lobUncertaintyHaircut, 0.25), 0, 0.9),
         trap: risk.lobTrapOverrides || {},
         disabledVetoes: [],

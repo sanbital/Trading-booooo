@@ -26,13 +26,13 @@ export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   maxStopToTargetRatio: 1.35,
   minNetRewardRiskRatio: 0.80,
   minTargetBps: 12,
-  // Ordinary 300-second LOB events remain capped at 60bp. The separately identified momentum
+  // The first 180 seconds are the expected resolution window; they are not a forced exit deadline.
   // continuation family may earn a larger target below because Binance's 20bp fee floor makes
   // a 30bp target economically meaningless on an actively accelerating multi-percent mover.
   maxTargetBps: 60,
   minStopBps: 6,
   maxStopBps: 500, // user's absolute per-trade ceiling is enforced separately at 5%
-  maxHoldingSeconds: 300,
+  maxHoldingSeconds: 180,
   absoluteMaxHoldingSeconds: 300,
   uncertaintyHaircut: 0.25,
   trap: {},

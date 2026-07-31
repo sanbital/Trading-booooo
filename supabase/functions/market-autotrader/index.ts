@@ -1,4 +1,4 @@
-// Trading-booooo v7.1.0-LOB-45S-180-300-RISK20 — autonomous spot orchestrator.
+// Trading-booooo v7.1.1-LOB-45S-PROFIT-OR-5PCT — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -117,7 +117,7 @@ import {
   summarizeEntryAdmission,
 } from "./entry-admission.ts";
 
-const VERSION = "7.1.0-LOB-45S-180-300-RISK20";
+const VERSION = "7.1.1-LOB-45S-PROFIT-OR-5PCT";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -907,7 +907,7 @@ async function runScanner(
             maxBookAgeMs: Math.max(100, finite((settings as any).lob_max_book_age_ms, 2500)),
             maxSpreadBps: Math.max(1, finite((settings as any).lob_max_spread_bps, 30)),
             maxHoldingSeconds: Math.round(
-              clamp(finite((settings as any).lob_max_holding_seconds, 300), 1, 300),
+              clamp(finite((settings as any).lob_max_holding_seconds, 180), 1, 300),
             ),
           }
           : {
@@ -2615,7 +2615,7 @@ async function enterCandidateInner(
       maxBookAgeMs: Math.max(250, finite((settings as any).lob_max_book_age_ms, 2500)),
       maxSpreadBps: Math.max(1, finite((settings as any).lob_max_spread_bps, LIVE_MAX_SPREAD_BPS)),
       maxHoldingSeconds: Math.round(
-        clamp(finite((settings as any).lob_max_holding_seconds, 300), 1, 300),
+        clamp(finite((settings as any).lob_max_holding_seconds, 180), 1, 300),
       ),
       absoluteMaxHoldingSeconds: Math.round(
         clamp(finite((settings as any).lob_absolute_max_holding_seconds, 300), 1, 300),
@@ -2633,7 +2633,7 @@ async function enterCandidateInner(
     });
     scalpAudit = {
       strategy: "LOB_SCALP",
-      strategy_revision: "7.0.7-LOB-SCAN-PLAN-LOCK",
+      strategy_revision: "7.1.1-LOB-45S-PROFIT-OR-5PCT",
       recommendation,
       pattern: decision.pattern,
       patterns: decision.patterns,
@@ -2772,7 +2772,18 @@ async function enterCandidateInner(
       expectedSecondsToResolve: rotationMetrics.expectedSecondsToResolve,
       entryCostBps: liveFee * 100 + latencyPenalty.bps,
     };
-    if (decision.decision !== "BUY") {
+    // v7.1.1: FIXED_PLAN_STOP_INVALIDATED was a scanner/autotrader contract mismatch.
+    // Ignore that code only when it is the sole blocker and the live recheck still has
+    // a primary pattern, positive conditional EV and positive fee-net target.
+    const effectiveRecheckReasons = decision.reasons.filter((reason) =>
+      reason !== "FIXED_PLAN_STOP_INVALIDATED"
+    );
+    const fixedPlanCompatibilityEntry = decision.decision !== "BUY" &&
+      effectiveRecheckReasons.length === 0 &&
+      Boolean(decision.pattern) &&
+      decision.conditionalEvNetBps > 0 &&
+      decision.targetReturnNetBps > 0;
+    if (decision.decision !== "BUY" && !fixedPlanCompatibilityEntry) {
       await event(
         "LOB_CANDIDATE_DISCARD",
         `${exchange}:${candidate.market} live LOB recheck discarded`,
@@ -2787,7 +2798,9 @@ async function enterCandidateInner(
       };
     }
     const targetPct = decision.targetBps / 10000;
-    const stopPct = Math.min(0.05, decision.stopBps / 10000);
+    // The model stop remains available for entry EV, but execution uses the user's
+    // single hard-loss boundary. No tighter LOB stop may liquidate a losing position.
+    const stopPct = 0.05;
     scalpStopPrice = tickRound(entryPrice * (1 - stopPct), rules.price_tick, "down");
     scalpTarget1 = tickRound(entryPrice * (1 + targetPct), rules.price_tick, "up");
     scalpTarget2 = scalpTarget1;
@@ -5881,15 +5894,29 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         }
       }
       const scalpMode = isScalpStrategy((settings as any).strategy);
-      // v5.12: TIMEOUT is one of the modelled barrier outcomes. Live edge may close the
-      // position earlier, but the approved strategy profile always enforces max_holding_at.
+      const lobMode = isLobStrategy((settings as any).strategy);
+      const lobEntryPrice = finite(position.average_entry_price);
+      // Fee-aware positive exit floor: round-trip fees plus a 2bp execution buffer.
+      const lobProfitFloorPrice = lobEntryPrice > 0
+        ? lobEntryPrice * (1 + (FEE_PCT[exchange] * 2 + 0.02) / 100)
+        : Number.POSITIVE_INFINITY;
+      // The 180-second LOB horizon is a review point, not a timeout.
       let decision = decideExit(
         position,
         current,
         Date.now(),
         settings.emergency_liquidation,
-        true,
+        !lobMode,
       );
+      // LOB losses may only close at the explicit -5% boundary. Target/trail/other
+      // ordinary exits are accepted only after estimated round-trip costs are recovered.
+      if (lobMode && decision.action !== "NONE" && !settings.emergency_liquidation) {
+        const hardStopHit = lobEntryPrice > 0 && current <= lobEntryPrice * 0.95;
+        const profitReady = current >= lobProfitFloorPrice;
+        if (!hardStopHit && !profitReady) {
+          decision = { action: "NONE", fraction: 0, reason: "lob hold until profit or -5%" };
+        }
+      }
       // v6.5: a slot marked for rotation by the scan cycle closes here, on the monitor's
       // own price and through the ordinary exit path -- cancelling the resting take-profit,
       // booking the fill, reconciling. The scan cycle deliberately does NOT sell: it has
@@ -5897,7 +5924,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       // positions is exactly the kind of divergence that produced the 8h39m ETH hold.
       if (
         decision.action === "NONE" && position.metadata?.rotation_displaced_at &&
-        !settings.emergency_liquidation
+        !settings.emergency_liquidation && !lobMode
       ) {
         decision = { action: "STOP", fraction: 1, reason: "rotation:displaced" } as any;
         await event(
@@ -5912,7 +5939,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         );
       }
       if (
-        isLobStrategy((settings as any).strategy) && decision.action === "NONE" &&
+        lobMode && decision.action === "NONE" &&
         !settings.emergency_liquidation
       ) {
         const book = books[position.market];
@@ -5970,7 +5997,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           targetPrice: finite(position.target_1),
           heldSeconds,
           maxHoldingSeconds: clamp(
-            finite(position.metadata?.lob_signal?.max_holding_seconds, 300),
+            finite(position.metadata?.lob_signal?.max_holding_seconds, 180),
             1,
             300,
           ),
@@ -6012,7 +6039,11 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             }))[0],
           };
         }
-        if (exit.exit) {
+        const lobExitSafetyReason = exit.reason === "RISK_EMERGENCY" ||
+          exit.reason === "RECONCILIATION_FAILURE" ||
+          exit.reason === "STOP_HIT";
+        const lobExitProfitReady = current >= lobProfitFloorPrice;
+        if (exit.exit && (lobExitSafetyReason || lobExitProfitReady)) {
           decision = {
             action: exit.reason === "TARGET_HIT" ? "TARGET_1" : "STOP",
             fraction: 1,
@@ -6047,7 +6078,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             heldSeconds,
             edgeHalfLifeSeconds: Math.max(
               10,
-              clamp(finite(position.metadata?.lob_signal?.max_holding_seconds, 300), 1, 300) / 2,
+              clamp(finite(position.metadata?.lob_signal?.max_holding_seconds, 180), 1, 300) / 2,
             ),
           });
           const expectedSeconds = expectedResolutionSeconds(
@@ -6065,7 +6096,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
               max: Math.max(
                 5,
                 clamp(
-                  finite(position.metadata?.lob_signal?.max_holding_seconds, 300) -
+                  finite(position.metadata?.lob_signal?.max_holding_seconds, 180) -
                     heldSeconds,
                   5,
                   300,

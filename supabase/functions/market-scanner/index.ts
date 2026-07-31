@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v7.1.0-LOB-45S-180-300-RISK20 — Supabase Edge Function
+// Trading-booooo Market Scanner v7.1.1-LOB-45S-PROFIT-OR-5PCT — Supabase Edge Function
 // Upbit KRW / Binance USDT universe scan -> multi-period analysis -> orderflow validation.
 // Public market analysis. Private account/order execution is delegated to a fixed-IP gateway.
 

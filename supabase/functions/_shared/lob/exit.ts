@@ -1,13 +1,5 @@
-// Trading-booooo v7.1.0 — bounded LOB exit policy.
-//
-// Exit priority:
-//   1) account safety / reconciliation,
-//   2) configured -5% hard stop,
-//   3) fee-aware positive target,
-//   4) confirmed or severe LOB invalidation / reversal,
-//   5) unconditional 180/300-second time exit.
-//
-// A losing position is never extended beyond maxHoldingSeconds.
+// Trading-booooo v7.1.1 — LOB exit policy: profit opportunity or -5% hard stop.
+// The 180-second horizon is informational only and never forces a losing exit.
 
 export type LobExitReason =
   | "RISK_EMERGENCY"
@@ -65,7 +57,6 @@ function hold(input: {
   };
 }
 
-/** Deterministic v7.1 priority: safety, stop, target, invalidation, timeout, hold. */
 export function evaluateLobExit(input: LobExitInput): LobExitDecision {
   const hard = (reason: LobExitReason, priority: number): LobExitDecision => ({
     exit: true,
@@ -78,18 +69,10 @@ export function evaluateLobExit(input: LobExitInput): LobExitDecision {
 
   if (input.emergency) return hard("RISK_EMERGENCY", 100);
   if (input.reconciliationFailed) return hard("RECONCILIATION_FAILURE", 95);
-
-  if (
-    Number.isFinite(input.stopPrice) && input.stopPrice > 0 &&
-    input.currentPrice <= input.stopPrice
-  ) {
+  if (Number.isFinite(input.stopPrice) && input.stopPrice > 0 && input.currentPrice <= input.stopPrice) {
     return hard("STOP_HIT", 90);
   }
-
-  if (
-    Number.isFinite(input.targetPrice) && input.targetPrice > 0 &&
-    input.currentPrice >= input.targetPrice
-  ) {
+  if (Number.isFinite(input.targetPrice) && input.targetPrice > 0 && input.currentPrice >= input.targetPrice) {
     return hard("TARGET_HIT", 85);
   }
 
@@ -118,22 +101,14 @@ export function evaluateLobExit(input: LobExitInput): LobExitDecision {
     const graceSeconds = Math.max(0, Number(input.softExitGraceSeconds) || 15);
     const severe = input.spreadBps > input.maxSpreadBps * 2 ||
       input.bidDepthRatio < input.minBidDepthRatio * 0.25 ||
-      (
-        input.bookImbalance <= -0.65 &&
-        input.tradePressure <= -0.65 &&
-        input.micropriceDeviationBps < 0
-      );
-
+      (input.bookImbalance <= -0.65 && input.tradePressure <= -0.65 && input.micropriceDeviationBps < 0);
     if (severe || (input.heldSeconds >= graceSeconds && nextStreak >= confirmations)) {
       return hard(softReason, severe ? 82 : 78);
     }
     return hold({ reason: softReason, streak: nextStreak, severe });
   }
 
-  const maxHoldingSeconds = Math.max(1, Number(input.maxHoldingSeconds) || 300);
-  if (input.heldSeconds >= maxHoldingSeconds) {
-    return hard("TIMEOUT", 70);
-  }
-
+  // Deliberately no TIMEOUT branch. Continue holding after 180 seconds until a fee-net
+  // profitable exit is available or the configured -5% hard stop is reached.
   return hold();
 }

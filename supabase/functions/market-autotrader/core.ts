@@ -424,8 +424,8 @@ export function decideExit(
   currentPrice: number,
   nowMs = Date.now(),
   emergency = false,
-  // v7.1: the approved holding deadline is always a hard exit boundary, including SCALP.
-  // Losses may not be extended beyond the signal's 180/300-second lifetime.
+  // v7.1.1: LOB_SCALP passes allowTimeExit=false. The 180-second value is a
+  // review horizon, never a forced liquidation deadline.
   allowTimeExit = true,
 ): ExitDecision {
   const price = finite(currentPrice);
