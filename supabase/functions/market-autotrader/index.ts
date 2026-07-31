@@ -5896,11 +5896,22 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       const scalpMode = isScalpStrategy((settings as any).strategy);
       const lobMode = isLobStrategy((settings as any).strategy);
       const lobEntryPrice = finite(position.average_entry_price);
-      // Fee-aware positive exit floor: round-trip fees plus a 2bp execution buffer.
-      const lobProfitFloorPrice = lobEntryPrice > 0
-        ? lobEntryPrice * (1 + (FEE_PCT[exchange] * 2 + 0.02) / 100)
-        : Number.POSITIVE_INFINITY;
-      // The 180-second LOB horizon is a review point, not a timeout.
+      const openedAt = Date.parse(String(position.opened_at || position.created_at || ""));
+      const heldSeconds = Number.isFinite(openedAt)
+        ? Math.max(0, (Date.now() - openedAt) / 1000)
+        : 0;
+      // POST_180_FEE_NET_PROFIT_EXIT_V712: after 180 seconds, the clock never forces a losing exit.
+      // Estimated fee-net PnL is calculated on the remaining quantity. Upbit requires at
+      // least KRW 1 net; Binance exits on any strictly positive USDT estimate.
+      const lobFeeRate = clamp(FEE_PCT[exchange] / 100, 0, 0.01);
+      const lobRemainingQuantity = Math.max(0, finite(position.remaining_quantity));
+      const lobEntryNotional = lobEntryPrice * lobRemainingQuantity;
+      const lobExitNotional = current * lobRemainingQuantity;
+      const lobNetProfitQuote = lobExitNotional * (1 - lobFeeRate) -
+        lobEntryNotional * (1 + lobFeeRate);
+      const lobHardStopHit = lobEntryPrice > 0 && current <= lobEntryPrice * 0.95;
+      const lobPost180ProfitReady = heldSeconds >= 180 &&
+        (exchange === "upbit" ? lobNetProfitQuote >= 1 : lobNetProfitQuote > 0);
       let decision = decideExit(
         position,
         current,
@@ -5908,13 +5919,13 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         settings.emergency_liquidation,
         !lobMode,
       );
-      // LOB losses may only close at the explicit -5% boundary. Target/trail/other
-      // ordinary exits are accepted only after estimated round-trip costs are recovered.
-      if (lobMode && decision.action !== "NONE" && !settings.emergency_liquidation) {
-        const hardStopHit = lobEntryPrice > 0 && current <= lobEntryPrice * 0.95;
-        const profitReady = current >= lobProfitFloorPrice;
-        if (!hardStopHit && !profitReady) {
-          decision = { action: "NONE", fraction: 0, reason: "lob hold until profit or -5%" };
+      if (lobMode && !settings.emergency_liquidation) {
+        if (lobHardStopHit) {
+          decision = { action: "STOP", fraction: 1, reason: "lob:-5pct-hard-stop" };
+        } else if (heldSeconds >= 180) {
+          decision = lobPost180ProfitReady
+            ? { action: "TARGET_1", fraction: 1, reason: "lob:post-180-fee-net-profit" }
+            : { action: "NONE", fraction: 0, reason: "lob:post-180-hold-until-net-profit-or--5pct" };
         }
       }
       // v6.5: a slot marked for rotation by the scan cycle closes here, on the monitor's
@@ -5955,10 +5966,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         const bestBid = finite(book?.best_bid);
         const bestAsk = finite(book?.best_ask);
         const spread = bestBid > 0 ? (bestAsk / bestBid - 1) * 10000 : Number.POSITIVE_INFINITY;
-        const openedAt = Date.parse(String(position.opened_at || position.created_at || ""));
-        const heldSeconds = Number.isFinite(openedAt)
-          ? Math.max(0, (Date.now() - openedAt) / 1000)
-          : 0;
+        // heldSeconds is computed before the primary LOB exit decision.
         const entryDepth = Math.max(1, finite(position.metadata?.entry_bid_depth_quote, 1));
         const entryPolicyVersion = finite(position.metadata?.lob_signal?.policy?.version, -1);
         const entryPolicy = lobPolicyRuntime && entryPolicyVersion >= 0
@@ -6042,7 +6050,9 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         const lobExitSafetyReason = exit.reason === "RISK_EMERGENCY" ||
           exit.reason === "RECONCILIATION_FAILURE" ||
           exit.reason === "STOP_HIT";
-        const lobExitProfitReady = current >= lobProfitFloorPrice;
+        const lobExitProfitReady = exchange === "upbit"
+          ? lobNetProfitQuote >= 1
+          : lobNetProfitQuote > 0;
         if (exit.exit && (lobExitSafetyReason || lobExitProfitReady)) {
           decision = {
             action: exit.reason === "TARGET_HIT" ? "TARGET_1" : "STOP",

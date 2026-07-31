@@ -3,12 +3,12 @@ import crypto from "node:crypto";
 import dns from "node:dns";
 import { pathToFileURL } from "node:url";
 
-// Trading-booooo v6.1.0-HEAT static-egress spot order gateway.
+// Trading-booooo v7.1.1-LOB-45S-PROFIT-OR-5PCT static-egress spot order gateway.
 // It deliberately exposes only spot account/order primitives. There are no
 // withdrawal, transfer, margin, futures, leverage, or API-key management routes.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "7.0.5-LOB-30S-MINIMUM";
+const VERSION = "7.1.1-LOB-45S-PROFIT-OR-5PCT";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");

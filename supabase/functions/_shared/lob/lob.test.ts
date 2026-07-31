@@ -15,7 +15,7 @@ const hot: LobFeatureVector = {
   universeMode: "TOP10_24H_GAINERS_LOB_ONLY",
   gainerRank: 3,
   samples: 80,
-  observationMs: 30000,
+  observationMs: 45000,
   bookAgeMs: 100,
   spreadBps: 3,
   bookImbalance: 0.32,
@@ -87,16 +87,16 @@ test("stale orderbook is discarded", () => {
   assert(stale.decision === "AVOID", "stale book must be avoided");
 });
 
-test("a live entry requires the complete 30-second observation", () => {
-  const short = evaluateLobEntry({ ...hot, observationMs: 29999 }, costs);
-  assert(short.decision !== "BUY", "29.999 seconds must not be eligible");
+test("a live entry requires the complete 45-second observation", () => {
+  const short = evaluateLobEntry({ ...hot, observationMs: 44999 }, costs);
+  assert(short.decision !== "BUY", "44.999 seconds must not be eligible");
   assert(
     short.reasons.includes("INSUFFICIENT_OBSERVATION_WINDOW"),
     "short observation reason must be explicit",
   );
   assert(
-    evaluateLobEntry({ ...hot, observationMs: 30000 }, costs).decision === "BUY",
-    "30 seconds must remain eligible",
+    evaluateLobEntry({ ...hot, observationMs: 45000 }, costs).decision === "BUY",
+    "45 seconds must remain eligible",
   );
 });
 
@@ -147,8 +147,9 @@ test("signal reversal exits before target or timeout", () => {
     maxSpreadBps: 30,
     bidDepthRatio: 0.8,
     minBidDepthRatio: 0.3,
+    softExitConfirmations: 1,
   });
-  assert(decision.reason === "SIGNAL_REVERSAL", "signal reversal priority must fire");
+  assert(decision.reason === "SIGNAL_REVERSAL", "confirmed signal reversal priority must fire");
 });
 
 test("maker-fill sell pressure needs settlement and repeated soft confirmation", () => {

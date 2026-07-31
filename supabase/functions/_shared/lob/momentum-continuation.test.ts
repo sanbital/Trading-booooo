@@ -8,7 +8,7 @@ function momentumFeatures(overrides: Partial<LobFeatureVector> = {}): LobFeature
     universeMode: "TOP10_24H_GAINERS_LOB_ONLY",
     gainerRank: 2,
     samples: 45,
-    observationMs: 30000,
+    observationMs: 45000,
     bookAgeMs: 80,
     spreadBps: 1.2,
     bookImbalance: 0.12,
@@ -91,7 +91,7 @@ Deno.test("momentum geometry is fee-meaningful and short-lived", () => {
   assertEquals(decision.pattern, "MOMENTUM_CONTINUATION");
   assert(decision.targetBps >= 60 && decision.targetBps <= 140);
   assert(decision.stopBps < decision.targetBps);
-  assertEquals(decision.maxHoldingSeconds, 90);
+  assertEquals(decision.maxHoldingSeconds, 180);
   assert(decision.targetReturnNetBps > 20);
   assert(decision.conditionalEvNetBps > 0);
   assert(decision.conditionalEvLowerBoundBps > 0);
@@ -104,5 +104,5 @@ Deno.test("large stale gainer does not inherit momentum target", () => {
     binanceCosts,
   );
   assert(decision.pattern !== "MOMENTUM_CONTINUATION");
-  assert(decision.maxHoldingSeconds !== 90 || decision.decision !== "BUY");
+  assert(decision.maxHoldingSeconds !== 180 || decision.decision !== "BUY");
 });
