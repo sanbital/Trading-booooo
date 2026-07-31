@@ -32,13 +32,16 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import textwrap
 
           workflow = Path('.github/workflows/lob-consistency-hotfix.yml').read_text()
           marker = "          python3 - <<'PY'\n"
           start = workflow.index(marker) + len(marker)
           end = workflow.index("\n          PY", start)
-          script = textwrap.dedent(workflow[start:end])
+          lines = workflow[start:end].splitlines()
+          script = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in lines
+          ) + "\n"
           Path('/tmp/apply_lob_hotfix.py').write_text(script)
           PY
           python3 /tmp/apply_lob_hotfix.py
