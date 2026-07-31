@@ -56,11 +56,11 @@ const FINALIST_LIMIT = 8;
 const BOOK_SAMPLE_COUNT = 4;
 const BOOK_SAMPLE_INTERVAL_MS = 250;
 // The collector runs slightly beyond the required per-market window so late first frames
-// still receive a full 45 seconds. Low-liquidity books may use the 60-second ceiling.
+// still receive a full 45 seconds. All books use the 47–50 second observation range.
 const DEFAULT_DYNAMIC_OBSERVATION_MS = 47_000;
-const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 60_000;
+const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 50_000;
 const MIN_DYNAMIC_OBSERVATION_MS = 47_000;
-const MAX_DYNAMIC_OBSERVATION_MS = 60_000;
+const MAX_DYNAMIC_OBSERVATION_MS = 50_000;
 // Every symbol must receive its own full 45-second wall-clock observation window.
 // The global socket-open timer alone is insufficient because a symbol's first frame can arrive late.
 const REQUIRED_PER_MARKET_OBSERVATION_MS = 45_000;
@@ -1369,7 +1369,7 @@ function heatPeriod(row: UniverseRow): PeriodAnalysis {
       `최근 체결대금 속도 ${
         Math.round(finite(row.recent_notional_per_second, 0)).toLocaleString("en-US")
       } ${row.quote_currency}/s입니다.`,
-      "거래대금·체결속도 감소 필터를 통과했습니다.",
+      "거래대금·체결속도 변화는 사전 제외 없이 호가 관찰 진단값으로만 사용합니다.",
     ],
     negatives: [],
     warnings: row.caution_labels.length
@@ -1432,7 +1432,7 @@ async function runLobHeatScan(
   const topTen = heatSample.heat.slice(0, 10);
   const heatRanked = topTen.flatMap((heat) => {
     const row = universeByMarket.get(heat.market);
-    if (!row || !(row.current_price > 0) || row.freshness_seconds > 300 || !heat.flowHealthy) {
+    if (!row || !(row.current_price > 0) || row.freshness_seconds > 300) {
       return [];
     }
     return [{
@@ -1566,7 +1566,7 @@ async function runLobHeatScan(
       deep_period_analyzed: 0,
       microstructure_finalists: finalCandidates.length,
       heat_engine: {
-        mode: "TOP10_24H_GAINERS_THEN_FLOW_EXCLUSION",
+        mode: "TOP10_24H_GAINERS_OBSERVE_ALL",
         sample_count: heatSample.sampleCount,
         sample_elapsed_seconds: Number((heatSample.elapsedMs / 1000).toFixed(2)),
         ranked_markets: heatSample.heat.length,
@@ -1593,7 +1593,7 @@ async function runLobHeatScan(
       excluded_summary: [],
       periods: {
         universe: "거래소별 rolling 24시간 상승률 Top 10",
-        lob: "Top 10 중 흐름 유지 종목 최소 45초 실시간 호가·체결",
+        lob: "Top 10 전 종목 47~50초 실시간 호가·체결",
       },
     },
     assumptions: {
