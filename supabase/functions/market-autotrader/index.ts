@@ -5925,7 +5925,11 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         } else if (heldSeconds >= 180) {
           decision = lobPost180ProfitReady
             ? { action: "TARGET_1", fraction: 1, reason: "lob:post-180-fee-net-profit" }
-            : { action: "NONE", fraction: 0, reason: "lob:post-180-hold-until-net-profit-or--5pct" };
+            : {
+              action: "NONE",
+              fraction: 0,
+              reason: "lob:post-180-hold-until-net-profit-or--5pct",
+            };
         }
       }
       // v6.5: a slot marked for rotation by the scan cycle closes here, on the monitor's
