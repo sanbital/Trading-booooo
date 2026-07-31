@@ -85,20 +85,17 @@ export function evaluateLobEntry(
   const rawFixedTargetBps = Number(cfg.fixedTargetBps);
   const rawFixedStopBps = Number(cfg.fixedStopBps);
   const rawFixedMaxHoldingSeconds = Number(cfg.fixedMaxHoldingSeconds);
-  const fixedTargetBps =
-    Number.isFinite(rawFixedTargetBps) && rawFixedTargetBps > 0
-      ? rawFixedTargetBps
-      : null;
-  const fixedStopBps =
-    Number.isFinite(rawFixedStopBps) && rawFixedStopBps > 0
-      ? rawFixedStopBps
-      : null;
+  const fixedTargetBps = Number.isFinite(rawFixedTargetBps) && rawFixedTargetBps > 0
+    ? rawFixedTargetBps
+    : null;
+  const fixedStopBps = Number.isFinite(rawFixedStopBps) && rawFixedStopBps > 0
+    ? rawFixedStopBps
+    : null;
   const fixedMaxHoldingSeconds =
     Number.isFinite(rawFixedMaxHoldingSeconds) && rawFixedMaxHoldingSeconds > 0
       ? Math.round(rawFixedMaxHoldingSeconds)
       : null;
-  const hasFixedPlanGeometry =
-    fixedTargetBps !== null &&
+  const hasFixedPlanGeometry = fixedTargetBps !== null &&
     fixedStopBps !== null &&
     fixedMaxHoldingSeconds !== null;
   const hotness = scoreHotSymbol(features);
@@ -126,12 +123,19 @@ export function evaluateLobEntry(
   const provisionalMomentum =
     rawPatterns.find((pattern) => pattern.name === "MOMENTUM_CONTINUATION" && pattern.primary) ||
     null;
+  const liveTradeActivity = clamp(features.tradeArrivalRate / 4, 0, 1);
+  const liveNotionalIntensity = clamp(
+    features.aggressiveNotionalPerSecond /
+      Math.max(1, features.minActionableTurnover24h / 3600),
+    0,
+    1,
+  );
   const momentumPulse = clamp(
-    positivePressure * 0.32 +
-      clamp((Number(features.notionalTrend) + 1) / 2, 0, 1) * 0.20 +
-      clamp((Number(features.tradeSpeedTrend) + 1) / 2, 0, 1) * 0.16 +
-      clamp((Number(features.tradeArrivalTrend) + 1) / 2, 0, 1) * 0.16 +
-      clamp(features.micropriceDeviationBps / 5, 0, 1) * 0.16,
+    positivePressure * 0.34 + clamp(features.ofiPersistence, 0, 1) * 0.18 +
+      liveTradeActivity * 0.14 + liveNotionalIntensity * 0.10 +
+      clamp((Number(features.tradeArrivalTrend) + 1) / 2, 0, 1) * 0.10 +
+      clamp(features.micropriceDeviationBps / 5, 0, 1) * 0.08 +
+      clamp(features.dataQuality, 0, 1) * 0.06,
     0,
     1,
   );
@@ -146,26 +150,22 @@ export function evaluateLobEntry(
     positivePressure * 25 + clamp(features.ofiPersistence, 0, 1) * 15;
   const movementBps = provisionalMomentum ? momentumMovementBps : ordinaryMovementBps;
   const targetCeilingBps = provisionalMomentum ? Math.max(cfg.maxTargetBps, 140) : cfg.maxTargetBps;
-  const targetBps = hasFixedPlanGeometry
-    ? fixedTargetBps as number
-    : clamp(
-      Math.max(cfg.minTargetBps, totalTargetCostBps + cfg.minNetProfitBps, movementBps),
-      cfg.minTargetBps,
-      targetCeilingBps,
-    );
+  const targetBps = hasFixedPlanGeometry ? fixedTargetBps as number : clamp(
+    Math.max(cfg.minTargetBps, totalTargetCostBps + cfg.minNetProfitBps, movementBps),
+    cfg.minTargetBps,
+    targetCeilingBps,
+  );
 
   // Momentum invalidates faster than an ordinary absorption trade, so its planned stop is a
   // smaller share of the target. Cost/noise/tick floors below can still widen it honestly.
   const plannedStopRatio = provisionalMomentum
     ? 0.28 + (1 - provisionalPatternConfidence) * 0.14
     : 0.38 + (1 - provisionalPatternConfidence) * 0.22;
-  const provisionalStopBps = hasFixedPlanGeometry
-    ? fixedStopBps as number
-    : clamp(
-      Math.max(cfg.minStopBps, targetBps * plannedStopRatio),
-      cfg.minStopBps,
-      cfg.maxStopBps,
-    );
+  const provisionalStopBps = hasFixedPlanGeometry ? fixedStopBps as number : clamp(
+    Math.max(cfg.minStopBps, targetBps * plannedStopRatio),
+    cfg.minStopBps,
+    cfg.maxStopBps,
+  );
 
   const traps = assessLobTraps(
     {
@@ -195,13 +195,11 @@ export function evaluateLobEntry(
     traps.requiredStopBps,
     microstructureStopFloorBps,
   );
-  const stopBps = hasFixedPlanGeometry
-    ? fixedStopBps as number
-    : clamp(
-      Math.max(provisionalStopBps, liveStopFloorBps),
-      cfg.minStopBps,
-      cfg.maxStopBps,
-    );
+  const stopBps = hasFixedPlanGeometry ? fixedStopBps as number : clamp(
+    Math.max(provisionalStopBps, liveStopFloorBps),
+    cfg.minStopBps,
+    cfg.maxStopBps,
+  );
 
   if (hasFixedPlanGeometry) {
     warnings.push("FIXED_SCAN_PLAN_GEOMETRY");
@@ -235,11 +233,18 @@ export function evaluateLobEntry(
   ) {
     reasons.push("OUTSIDE_24H_GAINER_TOP10");
   }
-  if (Number(features.notionalTrend) < -0.20) reasons.push("FLOW_NOTIONAL_DECLINING");
-  if (Number(features.tradeSpeedTrend) < -0.20) reasons.push("FLOW_TRADE_SPEED_DECLINING");
-  if (Number(features.tradeArrivalTrend) < -0.20) reasons.push("TAPE_SPEED_DECLINING");
+  if (Number(features.notionalTrend) < -0.20) warnings.push("FLOW_NOTIONAL_DECLINING_DIAGNOSTIC");
+  if (Number(features.tradeSpeedTrend) < -0.20) {
+    warnings.push("FLOW_TRADE_SPEED_DECLINING_DIAGNOSTIC");
+  }
+  if (Number(features.tradeArrivalTrend) < -0.20) warnings.push("TAPE_SPEED_DECLINING_DIAGNOSTIC");
   if (features.tradePressureFast < -0.10) reasons.push("SELL_PRESSURE_DOMINANT");
-  if (features.micropriceDeviationBps < -1.0) reasons.push("MICROPRICE_BEARISH");
+  const bearishMicropriceConfirmed = features.micropriceDeviationBps < -2.5 &&
+    features.tradePressureFast < 0.05 && features.bookImbalance < 0.10;
+  if (bearishMicropriceConfirmed) reasons.push("MICROPRICE_BEARISH");
+  else if (features.micropriceDeviationBps < -1.0) {
+    warnings.push("MICROPRICE_BEARISH_UNCONFIRMED");
+  }
   for (const name of activeVetoes) reasons.push(`TRAP_${name}`);
   if (hotness.hotnessScore < cfg.minHotnessScore) reasons.push("BOOK_NOT_HOT_ENOUGH");
   const coherentPositiveBook = positivePressure >= 0.12 &&
@@ -345,14 +350,14 @@ export function evaluateLobEntry(
     pTimeout * timeoutReturnNetBps - forecastBiasPenaltyBps;
   const attemptEvLowerBoundBps = pFill * conditionalEvLowerBoundBps;
   const evLowerBoundBps = conditionalEvLowerBoundBps;
+  if (!(evLowerBoundBps > cfg.minEvBps)) reasons.push("EV_BELOW_MINIMUM");
 
   for (const reason of payoff.reasons) reasons.push(reason);
   for (const warning of payoff.warnings) warnings.push(warning);
   const technicalBlock = reasons.some((r) =>
     r.startsWith("TRAP_") ||
-    r.startsWith("FLOW_") ||
     r.startsWith("FIXED_PLAN_") ||
-    r === "TAPE_SPEED_DECLINING" ||
+    r === "EV_BELOW_MINIMUM" ||
     r === "SELL_PRESSURE_DOMINANT" ||
     r === "MICROPRICE_BEARISH" ||
     r === "OUTSIDE_24H_GAINER_TOP10" || [
@@ -391,12 +396,10 @@ export function evaluateLobEntry(
     evNetBps,
     evLowerBoundBps,
     forecastBiasPenaltyBps,
-    maxHoldingSeconds: hasFixedPlanGeometry
-      ? fixedMaxHoldingSeconds as number
-      : Math.min(
-        cfg.absoluteMaxHoldingSeconds,
-        Math.max(1, isMomentum ? Math.min(180, cfg.maxHoldingSeconds) : cfg.maxHoldingSeconds),
-      ),
+    maxHoldingSeconds: hasFixedPlanGeometry ? fixedMaxHoldingSeconds as number : Math.min(
+      cfg.absoluteMaxHoldingSeconds,
+      Math.max(1, isMomentum ? Math.min(180, cfg.maxHoldingSeconds) : cfg.maxHoldingSeconds),
+    ),
     reasons,
     warnings,
     features,

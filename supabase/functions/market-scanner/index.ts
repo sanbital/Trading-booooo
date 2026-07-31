@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v7.1.1-LOB-45S-PROFIT-OR-5PCT — Supabase Edge Function
+// Trading-booooo Market Scanner v7.1.2-LOB-CONSISTENCY — Supabase Edge Function
 // Upbit KRW / Binance USDT universe scan -> multi-period analysis -> orderflow validation.
 // Public market analysis. Private account/order execution is delegated to a fixed-IP gateway.
 
@@ -750,6 +750,27 @@ function allDynamicMarketsCovered(
   return coverage.size > 0 && [...coverage.values()].every((state) => state.complete);
 }
 
+function sealDynamicObservation(
+  snapshots: Map<string, OrderbookSnapshot[]>,
+  coverage: Map<string, DynamicMarketCoverage>,
+  now = Date.now(),
+): void {
+  for (const [market, bucket] of snapshots.entries()) {
+    const last = bucket.at(-1);
+    if (!last) continue;
+    const lastTimestamp = Number(last.timestamp || 0);
+    if (now - lastTimestamp > 50) {
+      bucket.push({
+        ...last,
+        market,
+        timestamp: now,
+        stream_type: "OBSERVATION_END",
+      });
+    }
+  }
+  refreshDynamicCoverage(coverage, now);
+}
+
 async function websocketText(data: unknown): Promise<string> {
   if (typeof data === "string") return data;
   if (data instanceof ArrayBuffer) return new TextDecoder().decode(data);
@@ -799,7 +820,7 @@ function collectDynamicStream(
       }
       if (error) reject(error);
       else {
-        refreshDynamicCoverage(coverage);
+        sealDynamicObservation(snapshots, coverage);
         resolve({ snapshots, trades, coverage });
       }
     }
@@ -952,7 +973,7 @@ function collectBinanceDynamicStream(
       }
       if (error) reject(error);
       else {
-        refreshDynamicCoverage(coverage);
+        sealDynamicObservation(snapshots, coverage);
         resolve({ snapshots, trades, coverage });
       }
     }
@@ -1102,15 +1123,20 @@ async function loadMicrostructure(
       const streamedBooks = dynamic.snapshots.get(market) || [];
       const streamedTrades = dynamic.trades.get(market) || [];
       const marketCoverage = dynamic.coverage.get(market);
-      if (marketCoverage?.complete && streamedBooks.length >= 2) {
+      if (streamedBooks.length >= 2) {
         snapshots.set(market, streamedBooks);
-        websocketMarkets++;
-        if (streamedTrades.length) {
-          trades.set(market, [
-            ...(trades.get(market) || []),
-            ...streamedTrades,
-          ]);
-        }
+        if (marketCoverage?.complete) websocketMarkets++;
+      } else if (streamedBooks.length === 1) {
+        snapshots.set(market, [
+          ...(snapshots.get(market) || []),
+          ...streamedBooks,
+        ]);
+      }
+      if (streamedTrades.length) {
+        trades.set(market, [
+          ...(trades.get(market) || []),
+          ...streamedTrades,
+        ]);
       }
     }
   }
@@ -1200,15 +1226,20 @@ async function loadBinanceMicrostructure(
       const streamedBooks = dynamic.snapshots.get(market) || [];
       const streamedTrades = dynamic.trades.get(market) || [];
       const marketCoverage = dynamic.coverage.get(market);
-      if (marketCoverage?.complete && streamedBooks.length >= 2) {
+      if (streamedBooks.length >= 2) {
         snapshots.set(market, streamedBooks);
-        websocketMarkets++;
-        if (streamedTrades.length) {
-          trades.set(market, [
-            ...(trades.get(market) || []),
-            ...streamedTrades,
-          ]);
-        }
+        if (marketCoverage?.complete) websocketMarkets++;
+      } else if (streamedBooks.length === 1) {
+        snapshots.set(market, [
+          ...(snapshots.get(market) || []),
+          ...streamedBooks,
+        ]);
+      }
+      if (streamedTrades.length) {
+        trades.set(market, [
+          ...(trades.get(market) || []),
+          ...streamedTrades,
+        ]);
       }
     }
   }

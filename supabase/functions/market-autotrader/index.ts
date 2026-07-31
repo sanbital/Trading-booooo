@@ -1,4 +1,4 @@
-// Trading-booooo v7.1.1-LOB-45S-PROFIT-OR-5PCT — autonomous spot orchestrator.
+// Trading-booooo v7.1.2-LOB-CONSISTENCY — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -117,7 +117,7 @@ import {
   summarizeEntryAdmission,
 } from "./entry-admission.ts";
 
-const VERSION = "7.1.1-LOB-45S-PROFIT-OR-5PCT";
+const VERSION = "7.1.2-LOB-CONSISTENCY";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -1191,6 +1191,13 @@ function liveLobFeatures(scan: any, market: any): LobFeatureVector {
   const microprice = bidSize + askSize > 0
     ? (bestAsk * bidSize + bestBid * askSize) / (bidSize + askSize)
     : mid;
+  const liveMicropriceDeviationBps = mid > 0 ? (microprice / mid - 1) * 10000 : 0;
+  const scanMicropriceDeviationBps = finite(
+    base.micropriceDeviationBps,
+    liveMicropriceDeviationBps,
+  );
+  const robustMicropriceDeviationBps = scanMicropriceDeviationBps * 0.70 +
+    liveMicropriceDeviationBps * 0.30;
   const bidDepth = bids.slice(0, 10).reduce((sum: number, x: any) => sum + x.price * x.size, 0);
   const askDepth = asks.slice(0, 10).reduce((sum: number, x: any) => sum + x.price * x.size, 0);
   const flow = market?.trade_flow || {};
@@ -1217,7 +1224,7 @@ function liveLobFeatures(scan: any, market: any): LobFeatureVector {
     tradeArrivalRate: tradeCount / Math.max(1, finite(base.observationMs, 15000) / 1000),
     aggressiveNotionalPerSecond: (buyNotional + sellNotional) /
       Math.max(1, finite(base.observationMs, 15000) / 1000),
-    micropriceDeviationBps: mid > 0 ? (microprice / mid - 1) * 10000 : 0,
+    micropriceDeviationBps: robustMicropriceDeviationBps,
     bidDepthQuote: bidDepth,
     askDepthQuote: askDepth,
     depthRatio: askDepth > 0 ? bidDepth / askDepth : bidDepth > 0 ? 10 : 1,
@@ -2088,6 +2095,11 @@ function latencyPenaltyBpsFor(
  * records whatever the inner function returns, so a rejection cannot be silent no matter
  * where in the gate it happens.
  */
+function expectedLobAdmissionRejection(message: string): boolean {
+  return /(?:FIXED_PLAN_STOP_INVALIDATED|EV_BELOW_MINIMUM|TARGET_NET_CUSHION_TOO_SMALL|NO_PRIMARY_LOB_PATTERN|INSUFFICIENT_LOB_SAMPLES|INSUFFICIENT_OBSERVATION_WINDOW|STALE_ORDERBOOK|SPREAD_TOO_WIDE|low-evidence|uneconomic payoff|admission rejected|LOB recheck)/i
+    .test(message);
+}
+
 async function enterCandidate(
   candidate: Candidate,
   settings: TradingSettings,
@@ -2141,17 +2153,33 @@ async function enterCandidate(
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const expectedRejection = isLobStrategy((settings as any).strategy) &&
+      expectedLobAdmissionRejection(message);
     await recordDecision({
       decisionId,
       cycleId,
       scanId: candidate.scan_id ? String(candidate.scan_id) : null,
       exchange: candidate.exchange,
       market: candidate.market,
-      outcome: "ERROR",
+      outcome: expectedRejection ? "REJECTED" : "ERROR",
       reason: message,
       audit: (candidate as any).__decision_audit || null,
     });
-    await recordLatency(trace, { outcome: "ERROR" });
+    await recordLatency(trace, { outcome: expectedRejection ? "REJECTED" : "ERROR" });
+    if (expectedRejection) {
+      await event("LOB_EXPECTED_REJECTION", message, {
+        candidate_id: candidate.id,
+        exchange: candidate.exchange,
+        market: candidate.market,
+      }, { cycleId, level: "INFO" }).catch(() => null);
+      return {
+        entered: false,
+        exchange: candidate.exchange,
+        market: candidate.market,
+        reason: message,
+        decision_id: decisionId,
+      };
+    }
     throw error;
   }
   const outcome = result?.entered ? "ENTERED" : result?.reserved ? "ENTERED" : "REJECTED";
@@ -2627,13 +2655,10 @@ async function enterCandidateInner(
       measuredMakerFillRate,
       makerFillSamples: makerFill.rested,
       learnedStopFloorBps: 0,
-      fixedTargetBps: fixedPlanTargetBps,
-      fixedStopBps: fixedPlanStopBps,
-      fixedMaxHoldingSeconds: fixedPlanMaxHoldingSeconds,
     });
     scalpAudit = {
       strategy: "LOB_SCALP",
-      strategy_revision: "7.1.1-LOB-45S-PROFIT-OR-5PCT",
+      strategy_revision: "7.1.2-LOB-CONSISTENCY",
       recommendation,
       pattern: decision.pattern,
       patterns: decision.patterns,
@@ -2772,18 +2797,9 @@ async function enterCandidateInner(
       expectedSecondsToResolve: rotationMetrics.expectedSecondsToResolve,
       entryCostBps: liveFee * 100 + latencyPenalty.bps,
     };
-    // v7.1.1: FIXED_PLAN_STOP_INVALIDATED was a scanner/autotrader contract mismatch.
-    // Ignore that code only when it is the sole blocker and the live recheck still has
-    // a primary pattern, positive conditional EV and positive fee-net target.
-    const effectiveRecheckReasons = decision.reasons.filter((reason) =>
-      reason !== "FIXED_PLAN_STOP_INVALIDATED"
-    );
-    const fixedPlanCompatibilityEntry = decision.decision !== "BUY" &&
-      effectiveRecheckReasons.length === 0 &&
-      Boolean(decision.pattern) &&
-      decision.conditionalEvNetBps > 0 &&
-      decision.targetReturnNetBps > 0;
-    if (decision.decision !== "BUY" && !fixedPlanCompatibilityEntry) {
+    // The shared evaluator is authoritative at scan and order time. The live
+    // recheck solves fresh geometry and must retain positive conservative EV.
+    if (decision.decision !== "BUY") {
       await event(
         "LOB_CANDIDATE_DISCARD",
         `${exchange}:${candidate.market} live LOB recheck discarded`,
@@ -2798,9 +2814,9 @@ async function enterCandidateInner(
       };
     }
     const targetPct = decision.targetBps / 10000;
-    // The model stop remains available for entry EV, but execution uses the user's
-    // single hard-loss boundary. No tighter LOB stop may liquidate a losing position.
-    const stopPct = 0.05;
+    // Execute the freshly solved stop used by the order-time EV calculation.
+    // Five percent remains the absolute per-trade loss ceiling.
+    const stopPct = clamp(decision.stopBps / 10000, 0.0001, 0.05);
     scalpStopPrice = tickRound(entryPrice * (1 - stopPct), rules.price_tick, "down");
     scalpTarget1 = tickRound(entryPrice * (1 + targetPct), rules.price_tick, "up");
     scalpTarget2 = scalpTarget1;
@@ -5925,7 +5941,11 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         } else if (heldSeconds >= 180) {
           decision = lobPost180ProfitReady
             ? { action: "TARGET_1", fraction: 1, reason: "lob:post-180-fee-net-profit" }
-            : { action: "NONE", fraction: 0, reason: "lob:post-180-hold-until-net-profit-or--5pct" };
+            : {
+              action: "NONE",
+              fraction: 0,
+              reason: "lob:post-180-hold-until-net-profit-or--5pct",
+            };
         }
       }
       // v6.5: a slot marked for rotation by the scan cycle closes here, on the monitor's
