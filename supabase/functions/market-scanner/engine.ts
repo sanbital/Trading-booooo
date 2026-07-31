@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v7.1.1-LOB-45S-PROFIT-OR-5PCT
+// Trading-booooo Market Scanner v7.1.2-LOB-CONSISTENCY
 // Pure analysis engine. Public market data only; no order or account operations.
 
 import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-profile.ts";
@@ -20,7 +20,7 @@ import {
   sigmaFromAtrPct,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "7.1.1-LOB-45S-PROFIT-OR-5PCT";
+export const ENGINE_VERSION = "7.1.2-LOB-CONSISTENCY";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -1189,8 +1189,10 @@ function distinctBookFrames(snapshots: OrderbookSnapshot[]): BookFrame[] {
   let previousSignature = "";
   for (const item of ordered) {
     const signature = bookSignature(item.snapshot);
-    if (!signature || signature === previousSignature) continue;
-    previousSignature = signature;
+    const observationBoundary = String(item.snapshot.stream_type || "").toUpperCase() ===
+      "OBSERVATION_END";
+    if (!signature || (signature === previousSignature && !observationBoundary)) continue;
+    if (signature !== previousSignature) previousSignature = signature;
     const units = (item.snapshot.orderbook_units || []).slice(0, TRACKED_LEVELS)
       .map((unit) => ({
         bidPrice: number(unit.bid_price),
@@ -1854,13 +1856,27 @@ export function computeMicrostructure(
     0,
   );
   const aggressiveNotionalPerSecond = aggressiveNotional / observationSeconds;
-  const latestUnit = latestFrame?.units?.[0];
   const mid = latestFrame ? (latestFrame.bestBid + latestFrame.bestAsk) / 2 : 0;
-  const microprice = latestUnit && latestUnit.bidSize + latestUnit.askSize > 0
-    ? (latestUnit.askPrice * latestUnit.bidSize + latestUnit.bidPrice * latestUnit.askSize) /
-      (latestUnit.bidSize + latestUnit.askSize)
-    : mid;
-  const micropriceDeviationBps = mid > 0 ? (microprice / mid - 1) * 10_000 : 0;
+  const recentMicroFrames = frames.slice(
+    -Math.max(5, Math.min(60, Math.ceil(frames.length * 0.35))),
+  );
+  const micropriceSamples = recentMicroFrames.flatMap((frame) => {
+    const unit = frame.units[0];
+    const frameMid = (frame.bestBid + frame.bestAsk) / 2;
+    if (!unit || !(frameMid > 0) || !(unit.bidSize + unit.askSize > 0)) return [];
+    const frameMicroprice = (unit.askPrice * unit.bidSize + unit.bidPrice * unit.askSize) /
+      (unit.bidSize + unit.askSize);
+    return [(frameMicroprice / frameMid - 1) * 10_000];
+  });
+  const sortedMicroprice = [...micropriceSamples].sort((a, b) => a - b);
+  const trim = Math.floor(sortedMicroprice.length * 0.10);
+  const trimmedMicroprice = sortedMicroprice.slice(
+    trim,
+    Math.max(trim + 1, sortedMicroprice.length - trim),
+  );
+  const micropriceDeviationBps = sortedMicroprice.length
+    ? median(sortedMicroprice) * 0.65 + mean(trimmedMicroprice) * 0.35
+    : 0;
   const bidDepthQuote = latestFrame
     ? latestFrame.units.slice(0, 10).reduce((sum, unit) => sum + unit.bidPrice * unit.bidSize, 0)
     : 0;
@@ -3220,8 +3236,10 @@ export function finalizeCandidate(
       gate(
         "lob_net_ev",
         "비용 차감 순EV",
-        lobResult.evLowerBoundBps > 0,
-        `${lobResult.evLowerBoundBps.toFixed(3)}bp`,
+        lobResult.evLowerBoundBps > lobResult.minimumVerifiedEvBps,
+        `${lobResult.evLowerBoundBps.toFixed(3)}bp / 최소 ${
+          lobResult.minimumVerifiedEvBps.toFixed(3)
+        }bp`,
       ),
       gate(
         "lob_stop",

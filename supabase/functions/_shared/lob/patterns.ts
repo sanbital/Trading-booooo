@@ -42,19 +42,21 @@ export function detectLobPatterns(f: LobFeatureVector): LobPatternSignal[] {
   const lowAskAbsorption = clamp(1 - f.askAbsorptionScore);
   const votes = positiveVotes(f);
 
-  const notionalTrend = clamp((Number(f.notionalTrend) + 1) / 2);
-  const tradeSpeedTrend = clamp((Number(f.tradeSpeedTrend) + 1) / 2);
   const tapeTrend = clamp((Number(f.tradeArrivalTrend) + 1) / 2);
+  const liveActivity = clamp(f.tradeArrivalRate / 4, 0, 1);
+  const liveNotionalIntensity = clamp(
+    f.aggressiveNotionalPerSecond /
+      Math.max(1, f.minActionableTurnover24h / 3600),
+    0,
+    1,
+  );
   const liveTradeEvidence = f.tradeArrivalRate > 0 && f.aggressiveNotionalPerSecond > 0 &&
     f.dataQuality >= 0.25;
   const momentumPrimary = f.universeMode === "TOP10_24H_GAINERS_LOB_ONLY" &&
     Number(f.gainerRank) >= 1 && Number(f.gainerRank) <= 10 &&
-    Number(f.notionalTrend) >= -0.20 && Number(f.tradeSpeedTrend) >= -0.20 &&
-    Number(f.tradeArrivalTrend) >= -0.20 &&
     f.tradePressureFast >= 0.12 && f.micropriceDeviationBps >= -0.5 &&
     f.bookImbalance > -0.55 && votes >= 2 && liveTradeEvidence &&
-    f.spreadBps != null && f.spreadBps <= 12 &&
-    f.recentNotionalPerSecond > 0 && f.tradeCount >= 4;
+    f.spreadBps != null && f.spreadBps <= 12 && f.tradeCount >= 4;
 
   const absorptionPrimary = f.bidAbsorptionScore >= 0.45 &&
     f.micropriceDeviationBps >= -1 &&
@@ -65,9 +67,10 @@ export function detectLobPatterns(f: LobFeatureVector): LobPatternSignal[] {
 
   const momentum = signal(
     "MOMENTUM_CONTINUATION",
-    positiveFlow * 0.24 + notionalTrend * 0.16 + tradeSpeedTrend * 0.12 +
-      tapeTrend * 0.12 + positiveMicroMomentum * 0.10 + clamp(votes / 3) * 0.10 +
-      clamp(f.dataQuality, 0, 1) * 0.08 + clamp(f.tradeArrivalRate / 4, 0, 1) * 0.08,
+    positiveFlow * 0.28 + tapeTrend * 0.14 + liveActivity * 0.12 +
+      liveNotionalIntensity * 0.10 + positiveMicroMomentum * 0.10 +
+      clamp(votes / 3) * 0.10 + clamp(f.dataQuality, 0, 1) * 0.08 +
+      clamp(f.ofiPersistence, 0, 1) * 0.08,
     momentumPrimary,
     [
       "Top 10 종목의 현재 거래대금·체결속도가 유지됨",
