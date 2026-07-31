@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/scripts/apply_scalp_v7_1_0.py"
+      - ".github/scripts/align_v712_tests.py"
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
@@ -36,6 +37,7 @@ jobs:
         run: |
           python3 .github/scripts/apply_scalp_v7_1_0.py
           python3 .github/scripts/fix_lob_config_shape.py
+          python3 .github/scripts/align_v712_tests.py
 
       - uses: denoland/setup-deno@v2
         with:
@@ -76,11 +78,18 @@ jobs:
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add supabase/functions/market-scanner/index.ts \
                     supabase/functions/market-scanner/engine.ts \
+                    supabase/functions/market-scanner/engine.test.ts \
                     supabase/functions/_shared/lob/entry.ts \
                     supabase/functions/_shared/lob/exit.ts \
+                    supabase/functions/_shared/lob/lob.test.ts \
+                    supabase/functions/_shared/lob/momentum-continuation.test.ts \
+                    supabase/functions/_shared/scalp/v512-invariants.test.ts \
+                    supabase/functions/_shared/scalp/version.test.ts \
                     supabase/functions/market-autotrader/index.ts \
                     supabase/functions/market-autotrader/core.ts \
-                    supabase/migrations/20260731033000_scalp_v7_1_0_risk_and_holding.sql
+                    supabase/migrations/20260731033000_scalp_v7_1_0_risk_and_holding.sql \
+                    gateway/server.mjs \
+                    docs/index.html
             git commit -m "fix: exit fee-net profit immediately after 180s"
             git push origin main
             echo "changed=true" >> "$GITHUB_OUTPUT"
