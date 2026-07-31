@@ -7,6 +7,11 @@ function assert(condition: unknown, message = "assertion failed"): asserts condi
 Deno.test("spot market validation binds each exchange to its canonical symbol format", () => {
   assert(validateSpotMarket("upbit", "KRW-ETH").ok);
   assert(validateSpotMarket("binance", "ETHUSDT").ok);
+  assert(validateSpotMarket("upbit", "KRW-A").ok);
+  assert(validateSpotMarket("upbit", "KRW-T").ok);
+  assert(validateSpotMarket("binance", "AUSDT").ok);
+  assert(!validateSpotMarket("upbit", "KRW-").ok);
+  assert(!validateSpotMarket("binance", "USDT").ok);
   assert(!validateSpotMarket("upbit", "ETHUSDT").ok);
   assert(!validateSpotMarket("binance", "KRW-ETH").ok);
   assert(!validateSpotMarket("upbit", "krw-eth").ok);
