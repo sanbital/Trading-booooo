@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v7.0.5-LOB-30S-MINIMUM
+// Trading-booooo Market Scanner v7.1.0-LOB-45S-180-300-RISK20
 // Pure analysis engine. Public market data only; no order or account operations.
 
 import { ACTIVE_CALIBRATION_PROFILE, calibrationBucket } from "./calibration-profile.ts";
@@ -20,7 +20,7 @@ import {
   sigmaFromAtrPct,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "7.0.5-LOB-30S-MINIMUM";
+export const ENGINE_VERSION = "7.1.0-LOB-45S-180-300-RISK20";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -1159,9 +1159,9 @@ type WallStat = {
   lastIndex: number;
 };
 
-const DYNAMIC_MIN_OBSERVATION_MS = 30_000;
-const DYNAMIC_MIN_BOOK_UPDATES = 12;
-const DYNAMIC_MIN_TRADES = 8;
+const DYNAMIC_MIN_OBSERVATION_MS = 45_000;
+const DYNAMIC_MIN_BOOK_UPDATES = 25;
+const DYNAMIC_MIN_TRADES = 20;
 const DYNAMIC_PHASE_COUNT = 3;
 const WALL_LEVELS = 3;
 const TRACKED_LEVELS = 15;
@@ -3116,7 +3116,7 @@ export function finalizeCandidate(
           finiteOr((risk.scalpOverrides || {}).maxSpreadBps, risk.maxSpreadBps ?? 30),
         ),
         maxHoldingSeconds: Math.round(
-          clamp(finiteOr((risk.scalpOverrides || {}).maxHoldingSeconds, 180), 1, 300),
+          clamp(finiteOr((risk.scalpOverrides || {}).maxHoldingSeconds, 300), 1, 300),
         ),
         absoluteMaxHoldingSeconds: 300,
         uncertaintyHaircut: clamp(finiteOr(risk.lobUncertaintyHaircut, 0.25), 0, 0.9),

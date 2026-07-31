@@ -424,9 +424,8 @@ export function decideExit(
   currentPrice: number,
   nowMs = Date.now(),
   emergency = false,
-  // v5.8: SCALP passes false. Holding time no longer closes anything — a position is sold
-  // when the market says so (stop, target, trail, live edge, flow reversal, liquidity
-  // event), never because a clock ran out.
+  // v7.1: the approved holding deadline is always a hard exit boundary, including SCALP.
+  // Losses may not be extended beyond the signal's 180/300-second lifetime.
   allowTimeExit = true,
 ): ExitDecision {
   const price = finite(currentPrice);

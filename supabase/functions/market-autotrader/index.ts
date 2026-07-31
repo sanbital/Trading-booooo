@@ -1,4 +1,4 @@
-// Trading-booooo v7.0.7-LOB-SCAN-PLAN-LOCK — autonomous spot orchestrator.
+// Trading-booooo v7.1.0-LOB-45S-180-300-RISK20 — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -117,7 +117,7 @@ import {
   summarizeEntryAdmission,
 } from "./entry-admission.ts";
 
-const VERSION = "7.0.7-LOB-SCAN-PLAN-LOCK";
+const VERSION = "7.1.0-LOB-45S-180-300-RISK20";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -473,7 +473,7 @@ function defaultSettings(): TradingSettings & JsonRecord {
       ? "SCALP"
       : "LOB_SCALP",
     scalp_per_order_pct: 100, // deprecated: allocation UI is the sole exposure ceiling
-    scalp_daily_loss_pct: clamp(finite(env("SCALP_DAILY_LOSS_PCT"), 30), 0.1, 100),
+    scalp_daily_loss_pct: clamp(finite(env("SCALP_DAILY_LOSS_PCT"), 20), 0.1, 100),
     scalp_max_single_loss_pct: clamp(finite(env("SCALP_MAX_SINGLE_LOSS_PCT"), 5), 0.1, 100),
     scalp_max_consecutive_losses: clamp(finite(env("SCALP_MAX_CONSECUTIVE_LOSSES"), 4), 1, 50),
     scalp_kill_switch: env("SCALP_KILL_SWITCH") === "true",
@@ -907,7 +907,7 @@ async function runScanner(
             maxBookAgeMs: Math.max(100, finite((settings as any).lob_max_book_age_ms, 2500)),
             maxSpreadBps: Math.max(1, finite((settings as any).lob_max_spread_bps, 30)),
             maxHoldingSeconds: Math.round(
-              clamp(finite((settings as any).lob_max_holding_seconds, 180), 1, 300),
+              clamp(finite((settings as any).lob_max_holding_seconds, 300), 1, 300),
             ),
           }
           : {
@@ -2615,7 +2615,7 @@ async function enterCandidateInner(
       maxBookAgeMs: Math.max(250, finite((settings as any).lob_max_book_age_ms, 2500)),
       maxSpreadBps: Math.max(1, finite((settings as any).lob_max_spread_bps, LIVE_MAX_SPREAD_BPS)),
       maxHoldingSeconds: Math.round(
-        clamp(finite((settings as any).lob_max_holding_seconds, 180), 1, 300),
+        clamp(finite((settings as any).lob_max_holding_seconds, 300), 1, 300),
       ),
       absoluteMaxHoldingSeconds: Math.round(
         clamp(finite((settings as any).lob_absolute_max_holding_seconds, 300), 1, 300),
@@ -2627,11 +2627,9 @@ async function enterCandidateInner(
       measuredMakerFillRate,
       makerFillSamples: makerFill.rested,
       learnedStopFloorBps: 0,
-      overrides: {
-        fixedTargetBps: fixedPlanTargetBps,
-        fixedStopBps: fixedPlanStopBps,
-        fixedMaxHoldingSeconds: fixedPlanMaxHoldingSeconds,
-      },
+      fixedTargetBps: fixedPlanTargetBps,
+      fixedStopBps: fixedPlanStopBps,
+      fixedMaxHoldingSeconds: fixedPlanMaxHoldingSeconds,
     });
     scalpAudit = {
       strategy: "LOB_SCALP",
@@ -5972,7 +5970,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           targetPrice: finite(position.target_1),
           heldSeconds,
           maxHoldingSeconds: clamp(
-            finite(position.metadata?.lob_signal?.max_holding_seconds, 180),
+            finite(position.metadata?.lob_signal?.max_holding_seconds, 300),
             1,
             300,
           ),
@@ -6049,7 +6047,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             heldSeconds,
             edgeHalfLifeSeconds: Math.max(
               10,
-              clamp(finite(position.metadata?.lob_signal?.max_holding_seconds, 180), 1, 300) / 2,
+              clamp(finite(position.metadata?.lob_signal?.max_holding_seconds, 300), 1, 300) / 2,
             ),
           });
           const expectedSeconds = expectedResolutionSeconds(
@@ -6067,7 +6065,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
               max: Math.max(
                 5,
                 clamp(
-                  finite(position.metadata?.lob_signal?.max_holding_seconds, 180) -
+                  finite(position.metadata?.lob_signal?.max_holding_seconds, 300) -
                     heldSeconds,
                   5,
                   300,
@@ -6497,7 +6495,7 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
         max_open_positions_per_exchange: Number.MAX_SAFE_INTEGER,
         max_daily_entries: Number.MAX_SAFE_INTEGER,
         max_daily_entries_per_exchange: Number.MAX_SAFE_INTEGER,
-        max_daily_loss_pct: finite((settings as any).scalp_daily_loss_pct, 30),
+        max_daily_loss_pct: finite((settings as any).scalp_daily_loss_pct, 20),
         max_weekly_loss_pct: Number.MAX_SAFE_INTEGER,
         max_consecutive_losses: Number.MAX_SAFE_INTEGER,
       }
