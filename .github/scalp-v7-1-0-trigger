@@ -1,2 +1,3 @@
-triggered_at=2026-07-31T03:42:00Z
+triggered_at=2026-07-31T03:46:00Z
 policy=45s-observation,180s-momentum,300s-ordinary,5pct-trade,20pct-daily
+attempt=2
