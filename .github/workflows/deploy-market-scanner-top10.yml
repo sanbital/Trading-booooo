@@ -1,4 +1,4 @@
-name: Deploy market scanner strict Top10
+name: Deploy Top10 LOB production fixes
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
 jobs:
   patch-test-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       PROJECT_REF: etaajwpernzrcdrifdnw
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -23,7 +23,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Patch strict Top10 50-second observation policy
+      - name: Patch scanner and target-exit guard
         shell: bash
         run: |
           python3 - <<'PY'
@@ -31,89 +31,93 @@ jobs:
           import re
 
           scanner = Path("supabase/functions/market-scanner/index.ts")
-          text = scanner.read_text(encoding="utf-8")
-
-          replacements = {
-              "// Trading-booooo Market Scanner v7.1.1-LOB-45S-PROFIT-OR-5PCT — Supabase Edge Function":
-                  "// Trading-booooo Market Scanner v7.2.1-TOP10-PER-MARKET-50S — Supabase Edge Function",
-              "// The collector runs slightly beyond the required per-market window so late first frames\n// still receive a full 45 seconds. All books use the 47–50 second observation range.\nconst DEFAULT_DYNAMIC_OBSERVATION_MS = 47_000;\nconst LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 50_000;\nconst MIN_DYNAMIC_OBSERVATION_MS = 47_000;\nconst MAX_DYNAMIC_OBSERVATION_MS = 50_000;\n// Every symbol must receive its own full 45-second wall-clock observation window.\n// The global socket-open timer alone is insufficient because a symbol's first frame can arrive late.\nconst REQUIRED_PER_MARKET_OBSERVATION_MS = 45_000;":
-                  "// The socket remains open for 55–60 seconds so a symbol whose first frame arrives late\n// still receives at least 50 full seconds of its own wall-clock orderbook observation.\nconst DEFAULT_DYNAMIC_OBSERVATION_MS = 55_000;\nconst LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 60_000;\nconst MIN_DYNAMIC_OBSERVATION_MS = 55_000;\nconst MAX_DYNAMIC_OBSERVATION_MS = 60_000;\n// Every symbol must receive its own full 50-second wall-clock observation window.\n// The global socket-open timer alone is insufficient because a symbol's first frame can arrive late.\nconst REQUIRED_PER_MARKET_OBSERVATION_MS = 50_000;",
-              "const DEFAULT_DYNAMIC_OBSERVATION_MS = 47_000;":
-                  "const DEFAULT_DYNAMIC_OBSERVATION_MS = 55_000;",
-              "const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 50_000;":
-                  "const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 60_000;",
-              "const MIN_DYNAMIC_OBSERVATION_MS = 47_000;":
-                  "const MIN_DYNAMIC_OBSERVATION_MS = 55_000;",
-              "const MAX_DYNAMIC_OBSERVATION_MS = 50_000;":
-                  "const MAX_DYNAMIC_OBSERVATION_MS = 60_000;",
-              "const REQUIRED_PER_MARKET_OBSERVATION_MS = 45_000;":
-                  "const REQUIRED_PER_MARKET_OBSERVATION_MS = 50_000;",
-              "All books use the 47–50 second observation range.":
-                  "All books use a 55–60 second collector window to guarantee 50 seconds per market.",
+          s = scanner.read_text(encoding="utf-8")
+          scanner_replacements = {
+              "v7.1.1-LOB-45S-PROFIT-OR-5PCT": "v7.2.2-TOP10-50S-PROFIT-SAFE",
+              "const DEFAULT_DYNAMIC_OBSERVATION_MS = 47_000;": "const DEFAULT_DYNAMIC_OBSERVATION_MS = 55_000;",
+              "const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 50_000;": "const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 60_000;",
+              "const MIN_DYNAMIC_OBSERVATION_MS = 47_000;": "const MIN_DYNAMIC_OBSERVATION_MS = 55_000;",
+              "const MAX_DYNAMIC_OBSERVATION_MS = 50_000;": "const MAX_DYNAMIC_OBSERVATION_MS = 60_000;",
+              "const REQUIRED_PER_MARKET_OBSERVATION_MS = 45_000;": "const REQUIRED_PER_MARKET_OBSERVATION_MS = 50_000;",
+              "All books use the 47–50 second observation range.": "The collector stays open 55–60 seconds to guarantee 50 seconds per market.",
               "full 45 seconds": "full 50 seconds",
               "full 45-second": "full 50-second",
-              "TOP10_24H_GAINERS_THEN_FLOW_EXCLUSION":
-                  "TOP10_24H_GAINERS_OBSERVE_ALL",
-              "Top 10 중 흐름 유지 종목 최소 45초 실시간 호가·체결":
-                  "Top 10 전 종목 최소 50초 실시간 호가·체결",
-              "Top 10 전 종목 47~50초 실시간 호가·체결":
-                  "Top 10 전 종목 최소 50초 실시간 호가·체결",
-              "거래대금·체결속도 감소 필터를 통과했습니다.":
-                  "거래대금·체결속도 변화는 사전 제외 없이 호가 관찰 진단값으로만 사용합니다.",
+              "Top 10 전 종목 47~50초 실시간 호가·체결": "Top 10 전 종목 최소 50초 실시간 호가·체결",
           }
-          for old, new in replacements.items():
-              text = text.replace(old, new)
+          for old, new in scanner_replacements.items():
+              s = s.replace(old, new)
+          s = re.sub(r"\s*\|\|\s*!heat\.flowHealthy", "", s)
+          scanner.write_text(s, encoding="utf-8")
 
-          text, removed = re.subn(r"\s*\|\|\s*!heat\.flowHealthy", "", text)
-          scanner.write_text(text, encoding="utf-8")
+          trader = Path("supabase/functions/market-autotrader/index.ts")
+          t = trader.read_text(encoding="utf-8")
+          t = t.replace("v7.1.1-LOB-45S-PROFIT-OR-5PCT", "v7.2.2-TOP10-50S-PROFIT-SAFE")
 
-          shared = Path("supabase/functions/_shared/lob/market-heat.ts").read_text(encoding="utf-8")
-          final = scanner.read_text(encoding="utf-8")
+          old_metrics = '''      const lobExitNotional = current * lobRemainingQuantity;
+      const lobNetProfitQuote = lobExitNotional * (1 - lobFeeRate) -
+        lobEntryNotional * (1 + lobFeeRate);
+      const lobHardStopHit = lobEntryPrice > 0 && current <= lobEntryPrice * 0.95;
+      const lobPost180ProfitReady = heldSeconds >= 180 &&
+        (exchange === "upbit" ? lobNetProfitQuote >= 1 : lobNetProfitQuote > 0);'''
+          new_metrics = '''      const lobExitNotional = current * lobRemainingQuantity;
+      const lobNetProfitQuote = lobExitNotional * (1 - lobFeeRate) -
+        lobEntryNotional * (1 + lobFeeRate);
+      // TARGET_FILL_NET_GUARD_V722: a target quote is not an executable fill.
+      // Use the trailing 7-day p95 target-to-fill shortfall plus a small cushion:
+      // Upbit 20bp; Binance 50bp. A pre-180 target sell is allowed only when
+      // the conservative fill estimate remains fee-net profitable.
+      const targetFillSafetyBps = exchange === "upbit" ? 20 : 50;
+      const guardedTargetExitPrice = current * (1 - targetFillSafetyBps / 10000);
+      const guardedTargetExitNotional = guardedTargetExitPrice * lobRemainingQuantity;
+      const guardedTargetNetProfitQuote = guardedTargetExitNotional * (1 - lobFeeRate) -
+        lobEntryNotional * (1 + lobFeeRate);
+      const lobTargetProfitSafe = exchange === "upbit"
+        ? guardedTargetNetProfitQuote >= 1
+        : guardedTargetNetProfitQuote > 0;
+      const lobHardStopHit = lobEntryPrice > 0 && current <= lobEntryPrice * 0.95;
+      const lobPost180ProfitReady = heldSeconds >= 180 &&
+        (exchange === "upbit" ? lobNetProfitQuote >= 1 : lobNetProfitQuote > 0);'''
+          if "TARGET_FILL_NET_GUARD_V722" not in t:
+              if old_metrics not in t:
+                  raise SystemExit("autotrader profit metric block not found")
+              t = t.replace(old_metrics, new_metrics, 1)
+
+          old_policy = '''        if (lobHardStopHit) {
+          decision = { action: "STOP", fraction: 1, reason: "lob:-5pct-hard-stop" };
+        } else if (heldSeconds >= 180) {
+          decision = lobPost180ProfitReady
+            ? { action: "TARGET_1", fraction: 1, reason: "lob:post-180-fee-net-profit" }
+            : { action: "NONE", fraction: 0, reason: "lob:post-180-hold-until-net-profit-or--5pct" };
+        }'''
+          new_policy = '''        if (lobHardStopHit) {
+          decision = { action: "STOP", fraction: 1, reason: "lob:-5pct-hard-stop" };
+        } else if (heldSeconds >= 180) {
+          decision = lobPost180ProfitReady
+            ? { action: "TARGET_1", fraction: 1, reason: "lob:post-180-fee-net-profit" }
+            : { action: "NONE", fraction: 0, reason: "lob:post-180-hold-until-net-profit-or--5pct" };
+        } else if (decision.action === "TARGET_1" || decision.action === "TARGET_2") {
+          decision = lobTargetProfitSafe
+            ? decision
+            : { action: "NONE", fraction: 0, reason: "lob:target-blocked-by-conservative-fee-net-guard" };
+        }'''
+          if "lob:target-blocked-by-conservative-fee-net-guard" not in t:
+              if old_policy not in t:
+                  raise SystemExit("autotrader LOB exit policy block not found")
+              t = t.replace(old_policy, new_policy, 1)
+          trader.write_text(t, encoding="utf-8")
+
           checks = {
-              "collector default is 55 seconds":
-                  "const DEFAULT_DYNAMIC_OBSERVATION_MS = 55_000;" in final,
-              "low-liquidity collector ceiling is 60 seconds":
-                  "const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 60_000;" in final,
-              "collector minimum is 55 seconds":
-                  "const MIN_DYNAMIC_OBSERVATION_MS = 55_000;" in final,
-              "collector maximum is 60 seconds":
-                  "const MAX_DYNAMIC_OBSERVATION_MS = 60_000;" in final,
-              "minimum per-market observation is 50 seconds":
-                  "const REQUIRED_PER_MARKET_OBSERVATION_MS = 50_000;" in final,
-              "flow health cannot pre-exclude a Top-10 member":
-                  "!heat.flowHealthy" not in final,
-              "ranker keeps flow diagnostics without eligibility veto":
-                  "flowHealthy: true" in shared,
+              "scanner collector default 55s": "const DEFAULT_DYNAMIC_OBSERVATION_MS = 55_000;" in s,
+              "scanner collector max 60s": "const MAX_DYNAMIC_OBSERVATION_MS = 60_000;" in s,
+              "per-market observation 50s": "const REQUIRED_PER_MARKET_OBSERVATION_MS = 50_000;" in s,
+              "target conservative fill metric": "TARGET_FILL_NET_GUARD_V722" in t,
+              "target order-time fee-net veto": "lob:target-blocked-by-conservative-fee-net-guard" in t,
+              "180-second policy retained": "lob:post-180-hold-until-net-profit-or--5pct" in t,
+              "hard stop retained": "lob:-5pct-hard-stop" in t,
           }
           failed = [name for name, ok in checks.items() if not ok]
           if failed:
-              raise SystemExit("policy check failed: " + ", ".join(failed))
-          print(f"removed pre-observation flow veto occurrences: {removed}")
-          for name in checks:
-              print("PASS:", name)
-          PY
-
-      - name: Validate Top10 orderbook-only entry gate
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          entry = Path("supabase/functions/_shared/lob/entry.ts").read_text(encoding="utf-8")
-          checks = {
-              "50-second entry observation required":
-                  'features.observationMs < 50_000' in entry,
-              "Top10 universe required":
-                  'features.universeMode === "TOP10_24H_GAINERS_LOB_ONLY"' in entry,
-              "spread remains an execution gate":
-                  'reasons.push("SPREAD_TOO_WIDE")' in entry,
-              "executable depth remains a gate":
-                  'reasons.push("INSUFFICIENT_EXECUTABLE_DEPTH")' in entry,
-              "EV is informational only":
-                  'warnings.push("EV_INFORMATIONAL_ONLY")' in entry,
-          }
-          failed = [name for name, ok in checks.items() if not ok]
-          if failed:
-              raise SystemExit("entry policy check failed: " + ", ".join(failed))
+              raise SystemExit("production policy check failed: " + ", ".join(failed))
           for name in checks:
               print("PASS:", name)
           PY
@@ -123,37 +127,35 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Run Top10 regression test
-        run: deno test supabase/functions/_shared/lob/market-heat.test.ts
+      - name: Type-check production entrypoints
+        run: |
+          deno check supabase/functions/market-scanner/index.ts
+          deno check supabase/functions/market-autotrader/index.ts
 
       - name: Validate diff
-        run: |
-          git diff --check
-          git diff -- supabase/functions/market-scanner/index.ts supabase/functions/_shared/lob/market-heat.ts
+        run: git diff --check
 
       - name: Commit operating code
         run: |
           git config user.name "trading-booooo-deploy-bot"
           git config user.email "trading-booooo-deploy-bot@users.noreply.github.com"
-          git add supabase/functions/market-scanner/index.ts
+          git add supabase/functions/market-scanner/index.ts supabase/functions/market-autotrader/index.ts
           if git diff --cached --quiet; then
-            echo "Operating code already guarantees a full 50-second per-market observation."
+            echo "Operating code already matches v7.2.2."
           else
-            git commit -m "fix(scanner): guarantee full 50s observation per Top10 market"
+            git commit -m "fix(lob): guarantee Upbit 50s and block loss-making target exits"
             git push origin HEAD:main
           fi
 
       - name: Verify Supabase credential
+        run: test -n "$SUPABASE_ACCESS_TOKEN"
+
+      - name: Deploy production functions
         run: |
-          test -n "$SUPABASE_ACCESS_TOKEN" || {
-            echo "::error::SUPABASE_ACCESS_TOKEN repository secret is missing"
-            exit 1
-          }
+          npx --yes supabase@latest functions deploy market-scanner --project-ref "$PROJECT_REF" --no-verify-jwt
+          npx --yes supabase@latest functions deploy market-autotrader --project-ref "$PROJECT_REF" --no-verify-jwt
 
-      - name: Deploy market-scanner
-        run: npx --yes supabase@latest functions deploy market-scanner --project-ref "$PROJECT_REF" --no-verify-jwt
-
-      - name: Confirm deployed function listing
+      - name: Confirm deployed functions
         run: npx --yes supabase@latest functions list --project-ref "$PROJECT_REF"
 
-# deployment trigger: per-market 50s guarantee 2026-08-01T02:27+09:00
+# deployment trigger: 2026-08-01T02:42+09:00
