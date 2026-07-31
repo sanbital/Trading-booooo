@@ -50,9 +50,7 @@ jobs:
           for old, new in replacements.items():
               text = text.replace(old, new)
 
-          # A Top-10 member may not be removed before its LOB/tape observation.
           text, removed = re.subn(r"\s*\|\|\s*!heat\.flowHealthy", "", text)
-
           scanner.write_text(text, encoding="utf-8")
 
           shared = Path("supabase/functions/_shared/lob/market-heat.ts").read_text(encoding="utf-8")
@@ -75,6 +73,26 @@ jobs:
           if failed:
               raise SystemExit("policy check failed: " + ", ".join(failed))
           print(f"removed pre-observation flow veto occurrences: {removed}")
+          for name in checks:
+              print("PASS:", name)
+          PY
+
+      - name: Validate verified EV admission gate
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          entry = Path("supabase/functions/_shared/lob/entry.ts").read_text(encoding="utf-8")
+          checks = {
+              "positive raw EV required": 'reasons.push("EV_NON_POSITIVE")' in entry,
+              "minimum conservative EV is 0.50bp": 'const minimumVerifiedEvBps = Math.max(' in entry and '0.50,' in entry,
+              "conservative EV failure recorded": 'reasons.push("EV_BELOW_MINIMUM")' in entry,
+              "raw EV failure blocks BUY": 'r === "EV_NON_POSITIVE"' in entry,
+              "lower-bound EV failure blocks BUY": 'r === "EV_BELOW_MINIMUM"' in entry,
+          }
+          failed = [name for name, ok in checks.items() if not ok]
+          if failed:
+              raise SystemExit("EV admission policy check failed: " + ", ".join(failed))
           for name in checks:
               print("PASS:", name)
           PY
@@ -116,3 +134,5 @@ jobs:
 
       - name: Confirm deployed function listing
         run: npx --yes supabase@latest functions list --project-ref "$PROJECT_REF"
+
+# deployment trigger: verified EV gate 2026-08-01T00:55+09:00
