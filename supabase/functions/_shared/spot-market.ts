@@ -1,4 +1,4 @@
-// Trading-booooo v6.5.1-GUARD — canonical spot-market routing and failure isolation.
+// Trading-booooo v6.5.2-GUARD — canonical spot-market routing and failure isolation.
 //
 // A gateway route is a pair, not two independent strings:
 //   upbit   <-> KRW-BASE
@@ -15,8 +15,10 @@ export type SpotMarketValidation =
   | { ok: true; exchange: SpotExchange; market: string }
   | { ok: false; exchange: string; market: string; reason: string };
 
-const UPBIT_MARKET = /^KRW-[A-Z0-9]{2,20}$/;
-const BINANCE_MARKET = /^[A-Z0-9]{2,24}USDT$/;
+// Single-character base assets are valid exchange symbols (for example KRW-A / KRW-T).
+// Require at least one base character while retaining uppercase alphanumeric routing only.
+const UPBIT_MARKET = /^KRW-[A-Z0-9]{1,20}$/;
+const BINANCE_MARKET = /^[A-Z0-9]{1,24}USDT$/;
 
 export function validateSpotMarket(exchange: unknown, market: unknown): SpotMarketValidation {
   const venue = typeof exchange === "string" ? exchange : String(exchange ?? "");
