@@ -1,6 +1,7 @@
-// Trading-booooo v7.0.0-TOP10-LOB-ONLY — per-exchange 24h gainer ranking.
-// The 24h return fixes the eligible universe. Ticker deltas only remove weakening names
-// from that already-fixed Top 10; they never promote rank 11 or below.
+// Trading-booooo v7.1.1-TOP10-LOB-ONLY — strict per-exchange 24h gainer ranking.
+// The rolling 24h return fixes the observed universe. Flow, turnover, and trade-speed
+// fields remain diagnostics for the 45–50 second LOB/tape recheck and never exclude
+// a valid Top 10 name before that observation.
 
 export interface MarketHeatTicker {
   market: string;
@@ -52,7 +53,8 @@ function logNorm(value: number, reference: number): number {
 
 /**
  * Rank each exchange strictly by current rolling 24h percentage gain.
- * Flow fields are exclusion diagnostics only and do not influence the rank.
+ * Flow fields are observation diagnostics only and do not influence rank or
+ * eligibility for the strict Top 10 LOB/tape observation set.
  */
 export function rankMarketHeat(
   snapshots: MarketHeatTicker[][],
@@ -152,7 +154,9 @@ export function rankMarketHeat(
       tradeCountPerSecond,
       previousTradeCountPerSecond,
       tradeSpeedTrend,
-      flowHealthy: flowExclusionReasons.length === 0 && recentNotionalPerSecond > 0,
+      // Top-10 membership is rank-only. Weakening-flow diagnostics are retained
+      // for the 45–50 second LOB/tape decision, never as a pre-observation veto.
+      flowHealthy: true,
       flowExclusionReasons: recentNotionalPerSecond > 0
         ? flowExclusionReasons
         : [...flowExclusionReasons, "NO_RECENT_NOTIONAL_FLOW"],
