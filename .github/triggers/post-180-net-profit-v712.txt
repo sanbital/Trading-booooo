@@ -1,2 +1,3 @@
 Trigger the validated post-180 fee-net profit exit deployment.
 Retry after repairing the policy patcher syntax.
+Run the aligned 45-second, 180-second, and release-version test suite.
