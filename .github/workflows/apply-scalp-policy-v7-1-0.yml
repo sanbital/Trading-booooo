@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/scripts/apply_scalp_v7_1_0.py"
       - ".github/scripts/align_v712_tests.py"
+      - ".github/scripts/fix_v712_remaining_tests.py"
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
@@ -38,6 +39,7 @@ jobs:
           python3 .github/scripts/apply_scalp_v7_1_0.py
           python3 .github/scripts/fix_lob_config_shape.py
           python3 .github/scripts/align_v712_tests.py
+          python3 .github/scripts/fix_v712_remaining_tests.py
 
       - uses: denoland/setup-deno@v2
         with:
