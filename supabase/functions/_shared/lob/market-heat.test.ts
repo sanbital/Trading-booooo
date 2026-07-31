@@ -1,98 +1,69 @@
-import { rankMarketHeat } from "./market-heat.ts";
+import { rankMarketHeat, type MarketHeatTicker } from "./market-heat.ts";
 
-function assert(condition: unknown, message: string) {
+function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
-Deno.test("markets rank strictly by 24h gain while weakening flow is marked for exclusion", () => {
-  const base = 1_000_000;
-  const rows = rankMarketHeat([
-    [
-      {
-        market: "THIN",
-        timestampMs: 0,
-        price: 100,
-        turnover24hQuote: 10_000,
-        tradeCount: 10,
-        change24hPct: 40,
-      },
-      {
-        market: "GAINER",
-        timestampMs: 0,
-        price: 100,
-        turnover24hQuote: 10_000_000_000,
-        tradeCount: 1000,
-        change24hPct: 30,
-      },
-      {
-        market: "FLOW",
-        timestampMs: 0,
-        price: 100,
-        turnover24hQuote: 1_000_000_000,
-        tradeCount: 100,
-        change24hPct: 10,
-      },
-    ],
-    [
-      {
-        market: "THIN",
-        timestampMs: 1000,
-        price: 100,
-        turnover24hQuote: 11_000,
-        tradeCount: 11,
-        change24hPct: 40,
-      },
-      {
-        market: "GAINER",
-        timestampMs: 1000,
-        price: 100,
-        turnover24hQuote: 10_000_000_000 + base * 10,
-        tradeCount: 1010,
-        change24hPct: 30,
-      },
-      {
-        market: "FLOW",
-        timestampMs: 1000,
-        price: 100,
-        turnover24hQuote: 1_000_000_000 + base,
-        tradeCount: 102,
-        change24hPct: 10,
-      },
-    ],
-    [
-      {
-        market: "THIN",
-        timestampMs: 2000,
-        price: 100,
-        turnover24hQuote: 12_000,
-        tradeCount: 12,
-        change24hPct: 40,
-      },
-      {
-        market: "GAINER",
-        timestampMs: 2000,
-        price: 100,
-        turnover24hQuote: 10_000_000_000 + base * 11,
-        tradeCount: 1011,
-        change24hPct: 30,
-      },
-      {
-        market: "FLOW",
-        timestampMs: 2000,
-        price: 100,
-        turnover24hQuote: 1_000_000_000 + base * 21,
-        tradeCount: 132,
-        change24hPct: 10,
-      },
-    ],
-  ], {
-    minimumTurnover24hQuote: 100_000_000,
-    referenceRecentNotionalPerSecond: 5_000_000,
-    referenceTradeCountPerSecond: 10,
+function snapshot(
+  timestampMs: number,
+  stage: "early" | "previous" | "latest",
+): MarketHeatTicker[] {
+  return Array.from({ length: 11 }, (_, index) => {
+    const rank = index + 1;
+    const baseTurnover = 1_000_000 + rank * 10_000;
+    const baseCount = 1_000 + rank * 10;
+    const previousNotional = 1_000;
+    const recentNotional = rank === 3 ? 100 : rank === 10 ? 0 : 1_200;
+    const previousTrades = 10;
+    const recentTrades = rank === 7 ? 1 : rank === 10 ? 0 : 12;
+
+    const turnover24hQuote = stage === "early"
+      ? baseTurnover
+      : stage === "previous"
+      ? baseTurnover + previousNotional
+      : baseTurnover + previousNotional + recentNotional;
+    const tradeCount = stage === "early"
+      ? baseCount
+      : stage === "previous"
+      ? baseCount + previousTrades
+      : baseCount + previousTrades + recentTrades;
+
+    return {
+      market: `M${rank}`,
+      timestampMs,
+      price: 100 + rank,
+      turnover24hQuote,
+      tradeCount,
+      change24hPct: 21 - rank,
+      range24hPct: 5,
+    };
   });
-  assert(rows[0].market === "THIN", "Top 10 must be fixed before liquidity exclusions");
-  assert(!rows[0].flowHealthy, "thin turnover must exclude without promoting a lower rank");
-  assert(rows[1].market === "GAINER", "24h percentage gain must own the rank");
-  assert(!rows[1].flowHealthy, "declining notional and trade speed must exclude the leader");
-  assert(rows[2].flowHealthy, "lower rank remains eligible when its live flow accelerates");
+}
+
+Deno.test("strict 24h Top 10 is fully observed without weakening-flow prefilter", () => {
+  const ranked = rankMarketHeat(
+    [snapshot(1_000, "early"), snapshot(2_000, "previous"), snapshot(3_000, "latest")],
+    {
+      minimumTurnover24hQuote: 1,
+      referenceRecentNotionalPerSecond: 1_000,
+      referenceTradeCountPerSecond: 10,
+    },
+  );
+
+  const observed = ranked.slice(0, 10).filter((row) => row.flowHealthy);
+  assert(observed.length === 10, `expected all Top 10, got ${observed.length}`);
+  assert(observed.every((row, index) => row.market === `M${index + 1}`), "Top 10 rank order changed");
+  assert(!observed.some((row) => row.market === "M11"), "rank 11 was incorrectly backfilled");
+  assert(
+    observed.find((row) => row.market === "M3")?.flowExclusionReasons.includes("NOTIONAL_FLOW_DECLINING"),
+    "notional decline diagnostic was lost",
+  );
+  assert(
+    observed.find((row) => row.market === "M7")?.flowExclusionReasons.includes("TRADE_SPEED_DECLINING"),
+    "trade-speed decline diagnostic was lost",
+  );
+  assert(
+    observed.find((row) => row.market === "M10")?.flowExclusionReasons.includes("NO_RECENT_NOTIONAL_FLOW"),
+    "zero-flow diagnostic was lost",
+  );
 });
