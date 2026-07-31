@@ -1,4 +1,4 @@
-// Trading-booooo v7.1.2-LOB-CONSISTENCY — autonomous spot orchestrator.
+// Trading-booooo v7.1.3-ENTRY-DUST-GUARD — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -117,7 +117,7 @@ import {
   summarizeEntryAdmission,
 } from "./entry-admission.ts";
 
-const VERSION = "7.1.2-LOB-CONSISTENCY";
+const VERSION = "7.1.3-ENTRY-DUST-GUARD";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -2658,7 +2658,7 @@ async function enterCandidateInner(
     });
     scalpAudit = {
       strategy: "LOB_SCALP",
-      strategy_revision: "7.1.2-LOB-CONSISTENCY",
+      strategy_revision: "7.1.3-ENTRY-DUST-GUARD",
       recommendation,
       pattern: decision.pattern,
       patterns: decision.patterns,
@@ -3362,6 +3362,95 @@ async function enterCandidateInner(
         closed_at: new Date().toISOString(),
       });
       return { entered: false, exchange, market: candidate.market, reason: "IOC entry not filled" };
+    }
+    // v7.1.3: IOC can legally return a microscopic partial fill before canceling the
+    // remainder. That quantity cannot be sold because it is below the exchange minimum.
+    // Do not promote it to an OPEN position or start an impossible exit/reconciliation
+    // loop. Preserve the real asset as residual inventory and close the position ledger.
+    const executedVolume = Math.max(0, finite(updated.fill.executedVolume));
+    const executedPrice = Math.max(0, finite(updated.fill.averagePrice));
+    const executedFunds = Math.max(
+      0,
+      finite(updated.fill.executedFunds, executedVolume * executedPrice),
+    );
+    const paidFeeQuote = Math.max(0, finite(updated.fill.paidFeeQuote));
+    const paidFeeBase = Math.max(0, finite(updated.fill.paidFeeBase));
+    const netExecutedVolume = Math.max(0, executedVolume - paidFeeBase);
+    const minimumExecutedNotional = Math.max(limits.minOrder, rules.min_notional);
+    if (executedFunds + 1e-12 < minimumExecutedNotional) {
+      const residualValueQuote = netExecutedVolume * executedPrice;
+      const now = new Date().toISOString();
+      await db("trading_residual_inventory?on_conflict=position_id", {
+        method: "POST",
+        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify({
+          position_id: position.id,
+          exchange,
+          asset: base,
+          market: candidate.market,
+          original_quantity: netExecutedVolume,
+          remaining_quantity: netExecutedVolume,
+          mark_price: executedPrice,
+          value_quote: residualValueQuote,
+          state: "AVAILABLE",
+          swept_quantity: 0,
+          realized_proceeds_quote: 0,
+          paid_fees_quote: 0,
+          paid_fee_base_quantity: paidFeeBase,
+          residual_pnl_quote: 0,
+          created_at: now,
+          updated_at: now,
+        }),
+      });
+      const closedRows = await patch("trading_positions", `id=eq.${position.id}`, {
+        state: "CLOSED",
+        initial_quantity: netExecutedVolume,
+        remaining_quantity: 0,
+        average_entry_price: executedPrice,
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
+        realized_cost_quote: executedFunds,
+        paid_fees_quote: paidFeeQuote,
+        realized_pnl_quote: residualValueQuote - executedFunds - paidFeeQuote,
+        residual_quantity: netExecutedVolume,
+        residual_value_quote: residualValueQuote,
+        residual_fee_base: paidFeeBase,
+        close_reason: "ENTRY_PARTIAL_FILL_BELOW_MIN_NOTIONAL",
+        closed_at: now,
+        max_holding_at: now,
+        metadata: {
+          ...(position.metadata || {}),
+          entry_dust_guard: {
+            version: VERSION,
+            detected_at: now,
+            executed_volume: executedVolume,
+            net_executed_volume: netExecutedVolume,
+            executed_funds_quote: executedFunds,
+            minimum_executable_notional: minimumExecutedNotional,
+          },
+        },
+      });
+      await event(
+        "ENTRY_DUST_CAPTURED",
+        `${exchange}:${candidate.market} sub-minimum IOC fill moved to residual inventory`,
+        {
+          executed_volume: executedVolume,
+          net_executed_volume: netExecutedVolume,
+          executed_funds_quote: executedFunds,
+          minimum_executable_notional: minimumExecutedNotional,
+          residual_value_quote: residualValueQuote,
+        },
+        { cycleId, positionId: position.id, orderId: orderRow.id, level: "WARNING" },
+      );
+      return {
+        entered: false,
+        residual_dust: true,
+        exchange,
+        market: candidate.market,
+        position: closedRows[0] || position,
+        reason: "partial IOC fill below executable minimum moved to residual inventory",
+      };
     }
     const opened = await applyEntryAccounting(position, orderRow, updated.fill);
     await event("LIVE_ENTRY", `${exchange}:${candidate.market} live entry`, {
