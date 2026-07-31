@@ -16,7 +16,7 @@ function clamp(value: number, low: number, high: number): number {
 
 export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   minSamples: 4,
-  minObservationMs: 30_000,
+  minObservationMs: 45_000,
   maxBookAgeMs: 5000,
   maxSpreadBps: 60,
   minHotnessScore: 0,
@@ -26,13 +26,13 @@ export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   maxStopToTargetRatio: 1.35,
   minNetRewardRiskRatio: 0.80,
   minTargetBps: 12,
-  // Ordinary 180-second LOB events remain capped at 60bp. The separately identified momentum
+  // Ordinary 300-second LOB events remain capped at 60bp. The separately identified momentum
   // continuation family may earn a larger target below because Binance's 20bp fee floor makes
   // a 30bp target economically meaningless on an actively accelerating multi-percent mover.
   maxTargetBps: 60,
   minStopBps: 6,
   maxStopBps: 500, // user's absolute per-trade ceiling is enforced separately at 5%
-  maxHoldingSeconds: 180,
+  maxHoldingSeconds: 300,
   absoluteMaxHoldingSeconds: 300,
   uncertaintyHaircut: 0.25,
   trap: {},
@@ -395,7 +395,7 @@ export function evaluateLobEntry(
       ? fixedMaxHoldingSeconds as number
       : Math.min(
         cfg.absoluteMaxHoldingSeconds,
-        Math.max(1, isMomentum ? Math.min(90, cfg.maxHoldingSeconds) : cfg.maxHoldingSeconds),
+        Math.max(1, isMomentum ? Math.min(180, cfg.maxHoldingSeconds) : cfg.maxHoldingSeconds),
       ),
     reasons,
     warnings,
