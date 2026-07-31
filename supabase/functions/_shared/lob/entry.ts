@@ -1,8 +1,6 @@
 import { scoreHotSymbol } from "./hot-symbol.ts";
 import { detectLobPatterns } from "./patterns.ts";
-import { assessLobTraps, type LobTrapName } from "./traps.ts";
-import { evaluateEntryPayoff } from "./payoff-governor.ts";
-import { resolveLobUncertaintyHaircut } from "./uncertainty.ts";
+import { assessLobTraps } from "./traps.ts";
 import type {
   LobCostEstimate,
   LobEntryConfig,
@@ -14,29 +12,39 @@ function clamp(value: number, low: number, high: number): number {
   return Math.max(low, Math.min(high, Number.isFinite(value) ? value : low));
 }
 
+function finite(value: unknown, fallback = 0): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   minSamples: 4,
-  minObservationMs: 45_000,
-  maxBookAgeMs: 5000,
+  // Every candidate must be judged from a full 50-second live book/tape window.
+  minObservationMs: 50_000,
+  maxBookAgeMs: 5_000,
   maxSpreadBps: 60,
   minHotnessScore: 0,
-  minPrimaryPatternConfidence: 0.32,
-  minNetProfitBps: 0.01,
-  minEvBps: 0.50,
-  maxStopToTargetRatio: 1.35,
-  minNetRewardRiskRatio: 0.80,
+  minPrimaryPatternConfidence: 0,
+  minNetProfitBps: 0,
+  minEvBps: 0,
+  maxStopToTargetRatio: 100,
+  minNetRewardRiskRatio: 0,
   minTargetBps: 12,
-  // The first 180 seconds are the expected resolution window; they are not a forced exit deadline.
-  // continuation family may earn a larger target below because Binance's 20bp fee floor makes
-  // a 30bp target economically meaningless on an actively accelerating multi-percent mover.
-  maxTargetBps: 60,
+  maxTargetBps: 80,
   minStopBps: 6,
-  maxStopBps: 500, // user's absolute per-trade ceiling is enforced separately at 5%
+  maxStopBps: 500,
+  // 180 seconds changes exit behaviour. It is not a forced holding deadline.
   maxHoldingSeconds: 180,
-  absoluteMaxHoldingSeconds: 300,
-  uncertaintyHaircut: 0.25,
+  absoluteMaxHoldingSeconds: 0,
+  uncertaintyHaircut: 0,
   trap: {},
-  disabledVetoes: [],
+  disabledVetoes: [
+    "ASK_ICEBERG",
+    "BID_SPOOF",
+    "ASK_SPOOF",
+    "CHOP_NO_VIABLE_STOP",
+    "QUOTE_FLICKER",
+  ],
   patternProbabilityMultiplier: 1,
   measuredMakerFillRate: 0,
   makerFillSamples: 0,
@@ -44,12 +52,10 @@ export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   learnedStopFloorBps: 0,
 };
 
-/** Largest amount ordinary coherent order-flow evidence may move probability off geometry. */
-const MAX_SIGNAL_EDGE = 0.24;
-/** Momentum needs a larger bounded displacement to represent a distinct continuation regime. */
-const MAX_MOMENTUM_SIGNAL_EDGE = 0.40;
-
-/** Shrink the book-derived fill probability toward the exchange's realized maker fill rate. */
+/**
+ * Shrink a raw maker-fill estimate toward measured execution history.
+ * This is retained only for execution diagnostics and never blocks BUY.
+ */
 export function calibrateMakerFillProbability(
   rawProbability: number,
   measuredRate: number,
@@ -57,22 +63,25 @@ export function calibrateMakerFillProbability(
   priorStrength = 60,
 ): { probability: number; weight: number } {
   const raw = clamp(rawProbability, 0.05, 0.99);
-  const n = Math.max(0, Number.isFinite(samples) ? samples : 0);
+  const n = Math.max(0, finite(samples));
   if (!(n > 0) || !Number.isFinite(measuredRate)) {
     return { probability: raw, weight: 0 };
   }
-  const prior = Math.max(1, Number.isFinite(priorStrength) ? priorStrength : 60);
+  const prior = Math.max(1, finite(priorStrength, 60));
   const weight = n / (n + prior);
-  const probability = raw * (1 - weight) + clamp(measuredRate, 0.01, 0.99) * weight;
-  return { probability: clamp(probability, 0.05, 0.99), weight };
+  return {
+    probability: clamp(raw * (1 - weight) + clamp(measuredRate, 0.01, 0.99) * weight, 0.05, 0.99),
+    weight,
+  };
 }
 
 /**
- * LOB-only entry decision.
+ * Pure Top-10 order-book entry gate.
  *
- * v7 fixes eligibility outside this function to each exchange's rolling 24h Top 10.
- * Entry permission here is current order-book/tape only. Model EV is a live admission gate so
- * scanner BUY and final order admission use the same verified positive-edge requirement.
+ * BUY is decided only from the current 50-second order book and tape. EV, market regime,
+ * candle trend, learned pattern profitability, cross-exchange disagreement and payoff
+ * geometry are not admission gates. Operational validity, freshness, spread and executable
+ * depth remain because an order cannot be placed safely without them.
  */
 export function evaluateLobEntry(
   features: LobFeatureVector,
@@ -80,92 +89,38 @@ export function evaluateLobEntry(
   overrides: Partial<LobEntryConfig> = {},
 ): LobEntryDecision {
   const cfg = { ...DEFAULT_LOB_ENTRY_CONFIG, ...overrides };
+  // User policy is authoritative even when an old runtime profile still contains stricter values.
+  cfg.minObservationMs = 50_000;
+  cfg.minEvBps = 0;
+  cfg.minNetProfitBps = 0;
+  cfg.minPrimaryPatternConfidence = 0;
+  cfg.minHotnessScore = 0;
+
   const reasons: string[] = [];
   const warnings: string[] = [];
-  const rawFixedTargetBps = Number(cfg.fixedTargetBps);
-  const rawFixedStopBps = Number(cfg.fixedStopBps);
-  const rawFixedMaxHoldingSeconds = Number(cfg.fixedMaxHoldingSeconds);
-  const fixedTargetBps =
-    Number.isFinite(rawFixedTargetBps) && rawFixedTargetBps > 0
-      ? rawFixedTargetBps
-      : null;
-  const fixedStopBps =
-    Number.isFinite(rawFixedStopBps) && rawFixedStopBps > 0
-      ? rawFixedStopBps
-      : null;
-  const fixedMaxHoldingSeconds =
-    Number.isFinite(rawFixedMaxHoldingSeconds) && rawFixedMaxHoldingSeconds > 0
-      ? Math.round(rawFixedMaxHoldingSeconds)
-      : null;
-  const hasFixedPlanGeometry =
-    fixedTargetBps !== null &&
-    fixedStopBps !== null &&
-    fixedMaxHoldingSeconds !== null;
   const hotness = scoreHotSymbol(features);
-  const rawPatterns = detectLobPatterns(features);
+  const patterns = detectLobPatterns(features);
+  const primary = patterns.find((pattern) => pattern.primary) ?? patterns[0] ?? null;
 
-  const latencyBps = Math.max(
+  const rawFixedTargetBps = finite(cfg.fixedTargetBps, 0);
+  const rawFixedStopBps = finite(cfg.fixedStopBps, 0);
+  const targetCostBps = Math.max(
     0,
-    Number.isFinite(costs.latencyPenaltyBps as number) ? costs.latencyPenaltyBps as number : 0,
+    finite(costs.roundTripFeeBps) + finite(costs.entrySlippageBps) +
+      finite(costs.targetExitSlippageBps) + finite(costs.latencyPenaltyBps),
   );
-  const totalTargetCostBps = Math.max(
+  const stopCostBps = Math.max(
     0,
-    costs.roundTripFeeBps + costs.entrySlippageBps + costs.targetExitSlippageBps + latencyBps,
+    finite(costs.roundTripFeeBps) + finite(costs.entrySlippageBps) +
+      finite(costs.stopExitSlippageBps) + finite(costs.latencyPenaltyBps) * 2,
   );
-  const totalStopCostBps = Math.max(
-    0,
-    costs.roundTripFeeBps + costs.entrySlippageBps + costs.stopExitSlippageBps + latencyBps * 2,
-  );
-
-  const provisionalPatternConfidence = rawPatterns[0]?.confidence ?? 0;
-  const provisionalActivity = hotness.activityScore / 100;
-  const positivePressure = clamp(features.tradePressureFast, 0, 1);
-  const positiveMicroprice = clamp(features.micropriceDeviationBps / 8, 0, 1);
-  const positiveBook = clamp(features.bookImbalance, 0, 1);
-  const directionalConsensus = (positivePressure + positiveMicroprice + positiveBook) / 3;
-  const provisionalMomentum =
-    rawPatterns.find((pattern) => pattern.name === "MOMENTUM_CONTINUATION" && pattern.primary) ||
-    null;
-  const momentumPulse = clamp(
-    positivePressure * 0.32 +
-      clamp((Number(features.notionalTrend) + 1) / 2, 0, 1) * 0.20 +
-      clamp((Number(features.tradeSpeedTrend) + 1) / 2, 0, 1) * 0.16 +
-      clamp((Number(features.tradeArrivalTrend) + 1) / 2, 0, 1) * 0.16 +
-      clamp(features.micropriceDeviationBps / 5, 0, 1) * 0.16,
-    0,
-    1,
-  );
-
-  // Ordinary LOB patterns retain the measured 30–50bp geometry. A live continuation pulse
-  // earns a wider 60–140bp bracket because Binance's fee floor otherwise consumes the move.
-  const ordinaryMovementBps = 10 + provisionalPatternConfidence * 22 +
-    clamp(features.dataQuality, 0, 1) * 10 + directionalConsensus * 10 +
-    provisionalActivity * 6 + clamp(features.ofiPersistence, 0, 1) * 4 +
-    Math.max(0, features.spreadBps || 0) * 0.15;
-  const momentumMovementBps = 55 + momentumPulse * 55 +
-    positivePressure * 25 + clamp(features.ofiPersistence, 0, 1) * 15;
-  const movementBps = provisionalMomentum ? momentumMovementBps : ordinaryMovementBps;
-  const targetCeilingBps = provisionalMomentum ? Math.max(cfg.maxTargetBps, 140) : cfg.maxTargetBps;
-  const targetBps = hasFixedPlanGeometry
-    ? fixedTargetBps as number
-    : clamp(
-      Math.max(cfg.minTargetBps, totalTargetCostBps + cfg.minNetProfitBps, movementBps),
-      cfg.minTargetBps,
-      targetCeilingBps,
-    );
-
-  // Momentum invalidates faster than an ordinary absorption trade, so its planned stop is a
-  // smaller share of the target. Cost/noise/tick floors below can still widen it honestly.
-  const plannedStopRatio = provisionalMomentum
-    ? 0.28 + (1 - provisionalPatternConfidence) * 0.14
-    : 0.38 + (1 - provisionalPatternConfidence) * 0.22;
-  const provisionalStopBps = hasFixedPlanGeometry
-    ? fixedStopBps as number
-    : clamp(
-      Math.max(cfg.minStopBps, targetBps * plannedStopRatio),
-      cfg.minStopBps,
-      cfg.maxStopBps,
-    );
+  const targetBps = rawFixedTargetBps > 0
+    ? rawFixedTargetBps
+    : clamp(Math.max(cfg.minTargetBps, targetCostBps + 2), cfg.minTargetBps, cfg.maxTargetBps);
+  // The actual absolute loss boundary is -5% in the autotrader exit path.
+  const stopBps = rawFixedStopBps > 0
+    ? rawFixedStopBps
+    : 500;
 
   const traps = assessLobTraps(
     {
@@ -180,113 +135,46 @@ export function evaluateLobEntry(
       tradeArrivalRate: features.tradeArrivalRate,
       dataQuality: features.dataQuality,
     },
-    provisionalStopBps,
+    stopBps,
     cfg.trap,
   );
+  for (const trap of traps.traps) warnings.push(`LOB_DIAGNOSTIC_${trap.name}`);
 
-  const microstructureStopFloorBps = Math.max(
-    cfg.minStopBps,
-    Math.max(0, costs.spreadBps) * 2,
-    totalStopCostBps * 1.25,
-    Math.max(0, cfg.learnedStopFloorBps),
-  );
-  const liveStopFloorBps = Math.max(
-    cfg.minStopBps,
-    traps.requiredStopBps,
-    microstructureStopFloorBps,
-  );
-  const stopBps = hasFixedPlanGeometry
-    ? fixedStopBps as number
-    : clamp(
-      Math.max(provisionalStopBps, liveStopFloorBps),
-      cfg.minStopBps,
-      cfg.maxStopBps,
-    );
-
-  if (hasFixedPlanGeometry) {
-    warnings.push("FIXED_SCAN_PLAN_GEOMETRY");
-    if (stopBps < liveStopFloorBps) {
-      reasons.push("FIXED_PLAN_STOP_INVALIDATED");
-    }
-  }
-
-  const disabled = new Set(cfg.disabledVetoes as LobTrapName[]);
-  const activeVetoes = traps.vetoes.filter((name) => !disabled.has(name));
-  const patterns = rawPatterns.map((pattern) => ({
-    ...pattern,
-    confidence: clamp(pattern.confidence * traps.confidenceMultiplier, 0, 1),
-  })).sort((left, right) => right.confidence - left.confidence);
-  const primary =
-    patterns.find((p) => p.primary && p.confidence >= cfg.minPrimaryPatternConfidence) || null;
-
-  if (features.samples < cfg.minSamples) reasons.push("INSUFFICIENT_LOB_SAMPLES");
-  if (features.observationMs < cfg.minObservationMs) {
-    reasons.push("INSUFFICIENT_OBSERVATION_WINDOW");
-  }
-  if (features.bookAgeMs == null || features.bookAgeMs > cfg.maxBookAgeMs) {
-    reasons.push("STALE_ORDERBOOK");
-  }
-  if (features.spreadBps == null || features.spreadBps > cfg.maxSpreadBps) {
-    reasons.push("SPREAD_TOO_WIDE");
-  }
+  // Structural and execution checks only.
   if (
     features.universeMode !== "TOP10_24H_GAINERS_LOB_ONLY" ||
-    !(Number(features.gainerRank) >= 1 && Number(features.gainerRank) <= 10)
-  ) {
-    reasons.push("OUTSIDE_24H_GAINER_TOP10");
+    !(finite(features.gainerRank) >= 1 && finite(features.gainerRank) <= 10)
+  ) reasons.push("OUTSIDE_24H_GAINER_TOP10");
+  if (features.samples < cfg.minSamples) reasons.push("INSUFFICIENT_LOB_SAMPLES");
+  if (features.observationMs < 50_000) reasons.push("INSUFFICIENT_50S_OBSERVATION");
+  if (features.bookAgeMs == null || features.bookAgeMs > cfg.maxBookAgeMs) reasons.push("STALE_ORDERBOOK");
+  if (features.spreadBps == null || features.spreadBps > cfg.maxSpreadBps) reasons.push("SPREAD_TOO_WIDE");
+  if (!(features.bidDepthQuote > 0) || !(features.askDepthQuote > 0) || !(features.depthRatio > 0)) {
+    reasons.push("UNEXECUTABLE_ORDERBOOK_DEPTH");
   }
-  if (Number(features.notionalTrend) < -0.20) reasons.push("FLOW_NOTIONAL_DECLINING");
-  if (Number(features.tradeSpeedTrend) < -0.20) reasons.push("FLOW_TRADE_SPEED_DECLINING");
-  if (Number(features.tradeArrivalTrend) < -0.20) reasons.push("TAPE_SPEED_DECLINING");
-  if (features.tradePressureFast < -0.10) reasons.push("SELL_PRESSURE_DOMINANT");
-  if (features.micropriceDeviationBps < -1.0) reasons.push("MICROPRICE_BEARISH");
-  for (const name of activeVetoes) reasons.push(`TRAP_${name}`);
-  if (hotness.hotnessScore < cfg.minHotnessScore) reasons.push("BOOK_NOT_HOT_ENOUGH");
-  const coherentPositiveBook = positivePressure >= 0.12 &&
-    features.micropriceDeviationBps >= -0.5 &&
-    features.bookImbalance > -0.55 && features.tradeArrivalRate > 0 &&
-    Number(features.tradeArrivalTrend) >= -0.20;
-  if (!primary && !coherentPositiveBook) reasons.push("NO_PRIMARY_LOB_PATTERN");
 
-  const patternConfidence = primary?.confidence ?? 0;
-  const isMomentum = primary?.name === "MOMENTUM_CONTINUATION";
-  const activity = hotness.activityScore / 100;
-  const signedPressure = clamp(features.tradePressureFast, -1, 1);
-  const signedMicroprice = clamp(features.micropriceDeviationBps / 8, -1, 1);
-  const signedBook = clamp(features.bookImbalance, -1, 1);
-  const signedOfi = clamp(features.ofiPersistence, 0, 1) * (signedPressure >= 0 ? 1 : -1);
-  const qualityEdge = (clamp(features.dataQuality, 0, 1) - 0.35) * 0.05;
-
-  const neutralWinRate = targetBps + stopBps > 0 ? stopBps / (targetBps + stopBps) : 0.5;
-  const momentumDirectionalEdge = isMomentum ? momentumPulse * 0.45 : 0;
-  const rawSignalEdge = (patternConfidence - 0.45) * 0.20 + signedPressure * 0.08 +
-    signedMicroprice * 0.05 + signedBook * 0.05 + signedOfi * 0.04 + qualityEdge +
-    momentumDirectionalEdge;
-  const maxSignalEdge = isMomentum ? MAX_MOMENTUM_SIGNAL_EDGE : MAX_SIGNAL_EDGE;
-  const signalEdge = clamp(
-    rawSignalEdge * clamp(cfg.patternProbabilityMultiplier, 0.3, 2) * traps.confidenceMultiplier,
-    -maxSignalEdge,
-    maxSignalEdge,
-  );
-
-  // Activity controls whether the bracket resolves. The explicit momentum boost is allowed only
-  // after the present-tense pattern has been established, never from 24h return alone.
-  const resolveProbability = clamp(
-    0.40 + activity * 0.22 + patternConfidence * 0.18 +
-      clamp(features.tradeArrivalRate / 10, 0, 1) * 0.08 +
-      clamp(features.dataQuality, 0, 1) * 0.12 +
-      (isMomentum ? 0.10 + momentumPulse * 0.12 : 0),
-    0.25,
-    0.95,
-  );
-  const conditionalTargetShare = clamp(neutralWinRate + signalEdge, 0.05, 0.92);
-  const pTarget = resolveProbability * conditionalTargetShare;
-  const pStop = resolveProbability * (1 - conditionalTargetShare);
-  const pTimeout = 1 - resolveProbability;
+  // Present-tense order-book/tape judgement. This intentionally does not depend on the
+  // broader market direction, so a falling market can still produce a valid scalp entry.
+  const pressure = clamp(finite(features.tradePressureFast), -1, 1);
+  const microprice = clamp(finite(features.micropriceDeviationBps) / 8, -1, 1);
+  const imbalance = clamp(finite(features.bookImbalance), -1, 1);
+  const ofi = clamp(finite(features.ofiPersistence), 0, 1);
+  const arrival = Math.max(0, finite(features.tradeArrivalRate));
+  const flowScore = pressure * 0.42 + microprice * 0.24 + imbalance * 0.20 + ofi * 0.14;
+  const positiveVotes = [
+    pressure >= 0.04,
+    microprice >= -0.03,
+    imbalance >= -0.12,
+    ofi >= 0.12,
+    features.persistentBidWall,
+    features.askSpoofScore >= 0.45,
+  ].filter(Boolean).length;
+  const orderBookGood = arrival > 0 && positiveVotes >= 3 && flowScore >= -0.015;
+  if (!orderBookGood) reasons.push("LOB_FLOW_NOT_BUYABLE_NOW");
 
   const rawPFill = clamp(
-    0.30 + hotness.tradabilityScore / 100 * 0.48 + clamp(features.depthRatio / 3, 0, 1) * 0.12 -
-      clamp((features.spreadBps || 0) / 50, 0, 1) * 0.10,
+    0.35 + hotness.tradabilityScore / 100 * 0.45 + clamp(features.depthRatio / 3, 0, 1) * 0.15 -
+      clamp(finite(features.spreadBps) / Math.max(1, cfg.maxSpreadBps), 0, 1) * 0.10,
     0.05,
     0.99,
   );
@@ -296,88 +184,17 @@ export function evaluateLobEntry(
     cfg.makerFillSamples,
     cfg.makerFillPriorStrength,
   );
-  const pFill = fillCalibration.probability;
+  const pTarget = clamp(0.50 + flowScore * 0.25, 0.20, 0.85);
+  const pStop = clamp(1 - pTarget, 0.10, 0.75);
+  const pTimeout = 0;
+  const targetReturnNetBps = targetBps - targetCostBps;
+  const stopReturnNetBps = -(stopBps + stopCostBps);
+  const informationalEv = pTarget * targetReturnNetBps + pStop * stopReturnNetBps;
+  const decision = reasons.length === 0 ? "BUY" : "WAIT";
 
-  const targetReturnNetBps = targetBps - totalTargetCostBps;
-  const stopReturnNetBps = -(stopBps + totalStopCostBps);
-  const payoff = evaluateEntryPayoff({
-    targetBps,
-    stopBps,
-    targetReturnNetBps,
-    stopReturnNetBps,
-    minNetProfitBps: cfg.minNetProfitBps,
-    maxStopToTargetRatio: cfg.maxStopToTargetRatio,
-    minNetRewardRiskRatio: cfg.minNetRewardRiskRatio,
-  });
-  const timeoutReturnNetBps = -(
-    costs.roundTripFeeBps + costs.entrySlippageBps + costs.stopExitSlippageBps +
-    Math.max(0, Number(costs.latencyPenaltyBps || 0))
-  );
-  const forecastBiasPenaltyBps = Math.max(
-    0,
-    Number.isFinite(costs.forecastBiasPenaltyBps as number)
-      ? costs.forecastBiasPenaltyBps as number
-      : 0,
-  );
-  const conditionalEvNetBps = pTarget * targetReturnNetBps + pStop * stopReturnNetBps +
-    pTimeout * timeoutReturnNetBps -
-    forecastBiasPenaltyBps;
-  const attemptEvNetBps = pFill * conditionalEvNetBps;
-  const evNetBps = conditionalEvNetBps;
-
-  const uncertainty = resolveLobUncertaintyHaircut(
-    features,
-    clamp(cfg.uncertaintyHaircut, 0, 0.9),
-  );
-  const conservativeEdge = signalEdge * (1 - uncertainty.haircut);
-  if (uncertainty.tier !== "BASE") {
-    warnings.push(`EVIDENCE_UNCERTAINTY_${uncertainty.tier}`);
-  }
-  const conservativeConditionalTargetShare = clamp(
-    neutralWinRate + conservativeEdge,
-    0.02,
-    0.92,
-  );
-  const conservativePTarget = resolveProbability * conservativeConditionalTargetShare;
-  const conservativePStop = resolveProbability * (1 - conservativeConditionalTargetShare);
-  const conditionalEvLowerBoundBps = conservativePTarget * targetReturnNetBps +
-    conservativePStop * stopReturnNetBps +
-    pTimeout * timeoutReturnNetBps - forecastBiasPenaltyBps;
-  const attemptEvLowerBoundBps = pFill * conditionalEvLowerBoundBps;
-  const evLowerBoundBps = conditionalEvLowerBoundBps;
-  const minimumVerifiedEvBps = Math.max(
-    0.50,
-    Number.isFinite(cfg.minEvBps) ? cfg.minEvBps : 0,
-  );
-
-  for (const reason of payoff.reasons) reasons.push(reason);
-  for (const warning of payoff.warnings) warnings.push(warning);
-  if (!(evNetBps > 0) && !reasons.includes("EV_NON_POSITIVE")) {
-    reasons.push("EV_NON_POSITIVE");
-  }
-  if (
-    !(evLowerBoundBps >= minimumVerifiedEvBps) &&
-    !reasons.includes("EV_BELOW_MINIMUM")
-  ) {
-    reasons.push("EV_BELOW_MINIMUM");
-  }
-  const technicalBlock = reasons.some((r) =>
-    r.startsWith("TRAP_") ||
-    r.startsWith("FLOW_") ||
-    r.startsWith("FIXED_PLAN_") ||
-    r === "TAPE_SPEED_DECLINING" ||
-    r === "SELL_PRESSURE_DOMINANT" ||
-    r === "MICROPRICE_BEARISH" ||
-    r === "EV_NON_POSITIVE" ||
-    r === "EV_BELOW_MINIMUM" ||
-    r === "OUTSIDE_24H_GAINER_TOP10" || [
-      "INSUFFICIENT_LOB_SAMPLES",
-      "INSUFFICIENT_OBSERVATION_WINDOW",
-      "STALE_ORDERBOOK",
-      "SPREAD_TOO_WIDE",
-    ].includes(r)
-  );
-  const decision = reasons.length === 0 ? "BUY" : technicalBlock ? "AVOID" : "WAIT";
+  warnings.push("EV_INFORMATIONAL_ONLY");
+  warnings.push("PATTERN_INFORMATIONAL_ONLY");
+  warnings.push("MARKET_REGIME_IGNORED");
 
   return {
     decision,
@@ -387,31 +204,28 @@ export function evaluateLobEntry(
     pTarget,
     pStop,
     pTimeout,
-    pFill,
+    pFill: fillCalibration.probability,
     rawPFill,
     fillCalibrationWeight: fillCalibration.weight,
     targetBps,
     stopBps,
     targetReturnNetBps,
     stopReturnNetBps,
-    timeoutReturnNetBps,
-    stopToTargetRatio: payoff.stopToTargetRatio,
-    netRewardRiskRatio: payoff.netRewardRiskRatio,
-    minimumTargetNetProfitBps: cfg.minNetProfitBps,
-    minimumVerifiedEvBps,
-    conditionalEvNetBps,
-    conditionalEvLowerBoundBps,
-    attemptEvNetBps,
-    attemptEvLowerBoundBps,
-    evNetBps,
-    evLowerBoundBps,
-    forecastBiasPenaltyBps,
-    maxHoldingSeconds: hasFixedPlanGeometry
-      ? fixedMaxHoldingSeconds as number
-      : Math.min(
-        cfg.absoluteMaxHoldingSeconds,
-        Math.max(1, isMomentum ? Math.min(180, cfg.maxHoldingSeconds) : cfg.maxHoldingSeconds),
-      ),
+    timeoutReturnNetBps: 0,
+    stopToTargetRatio: targetBps > 0 ? stopBps / targetBps : 0,
+    netRewardRiskRatio: Math.abs(stopReturnNetBps) > 0
+      ? Math.max(0, targetReturnNetBps) / Math.abs(stopReturnNetBps)
+      : 0,
+    minimumTargetNetProfitBps: 0,
+    minimumVerifiedEvBps: 0,
+    conditionalEvNetBps: informationalEv,
+    conditionalEvLowerBoundBps: informationalEv,
+    attemptEvNetBps: informationalEv * fillCalibration.probability,
+    attemptEvLowerBoundBps: informationalEv * fillCalibration.probability,
+    evNetBps: informationalEv,
+    evLowerBoundBps: informationalEv,
+    forecastBiasPenaltyBps: 0,
+    maxHoldingSeconds: 180,
     reasons,
     warnings,
     features,
@@ -420,7 +234,7 @@ export function evaluateLobEntry(
   };
 }
 
-/** Exposed so callers can record what the barriers implied, alongside the model's belief. */
+/** Barrier-neutral probability retained for reporting only. */
 export function neutralWinRateOf(targetBps: number, stopBps: number): number {
   return targetBps + stopBps > 0 ? stopBps / (targetBps + stopBps) : 0.5;
 }
