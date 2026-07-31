@@ -23,7 +23,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Patch strict Top10 observation policy
+      - name: Patch strict Top10 50-second observation policy
         shell: bash
         run: |
           python3 - <<'PY'
@@ -34,16 +34,30 @@ jobs:
           text = scanner.read_text(encoding="utf-8")
 
           replacements = {
-              "const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 60_000;":
-                  "const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 50_000;",
-              "const MAX_DYNAMIC_OBSERVATION_MS = 60_000;":
-                  "const MAX_DYNAMIC_OBSERVATION_MS = 50_000;",
-              "Low-liquidity books may use the 60-second ceiling.":
-                  "All books use the 47–50 second observation range.",
+              "// Trading-booooo Market Scanner v7.1.1-LOB-45S-PROFIT-OR-5PCT — Supabase Edge Function":
+                  "// Trading-booooo Market Scanner v7.2.1-TOP10-PER-MARKET-50S — Supabase Edge Function",
+              "// The collector runs slightly beyond the required per-market window so late first frames\n// still receive a full 45 seconds. All books use the 47–50 second observation range.\nconst DEFAULT_DYNAMIC_OBSERVATION_MS = 47_000;\nconst LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 50_000;\nconst MIN_DYNAMIC_OBSERVATION_MS = 47_000;\nconst MAX_DYNAMIC_OBSERVATION_MS = 50_000;\n// Every symbol must receive its own full 45-second wall-clock observation window.\n// The global socket-open timer alone is insufficient because a symbol's first frame can arrive late.\nconst REQUIRED_PER_MARKET_OBSERVATION_MS = 45_000;":
+                  "// The socket remains open for 55–60 seconds so a symbol whose first frame arrives late\n// still receives at least 50 full seconds of its own wall-clock orderbook observation.\nconst DEFAULT_DYNAMIC_OBSERVATION_MS = 55_000;\nconst LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 60_000;\nconst MIN_DYNAMIC_OBSERVATION_MS = 55_000;\nconst MAX_DYNAMIC_OBSERVATION_MS = 60_000;\n// Every symbol must receive its own full 50-second wall-clock observation window.\n// The global socket-open timer alone is insufficient because a symbol's first frame can arrive late.\nconst REQUIRED_PER_MARKET_OBSERVATION_MS = 50_000;",
+              "const DEFAULT_DYNAMIC_OBSERVATION_MS = 47_000;":
+                  "const DEFAULT_DYNAMIC_OBSERVATION_MS = 55_000;",
+              "const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 50_000;":
+                  "const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 60_000;",
+              "const MIN_DYNAMIC_OBSERVATION_MS = 47_000;":
+                  "const MIN_DYNAMIC_OBSERVATION_MS = 55_000;",
+              "const MAX_DYNAMIC_OBSERVATION_MS = 50_000;":
+                  "const MAX_DYNAMIC_OBSERVATION_MS = 60_000;",
+              "const REQUIRED_PER_MARKET_OBSERVATION_MS = 45_000;":
+                  "const REQUIRED_PER_MARKET_OBSERVATION_MS = 50_000;",
+              "All books use the 47–50 second observation range.":
+                  "All books use a 55–60 second collector window to guarantee 50 seconds per market.",
+              "full 45 seconds": "full 50 seconds",
+              "full 45-second": "full 50-second",
               "TOP10_24H_GAINERS_THEN_FLOW_EXCLUSION":
                   "TOP10_24H_GAINERS_OBSERVE_ALL",
               "Top 10 중 흐름 유지 종목 최소 45초 실시간 호가·체결":
-                  "Top 10 전 종목 47~50초 실시간 호가·체결",
+                  "Top 10 전 종목 최소 50초 실시간 호가·체결",
+              "Top 10 전 종목 47~50초 실시간 호가·체결":
+                  "Top 10 전 종목 최소 50초 실시간 호가·체결",
               "거래대금·체결속도 감소 필터를 통과했습니다.":
                   "거래대금·체결속도 변화는 사전 제외 없이 호가 관찰 진단값으로만 사용합니다.",
           }
@@ -56,14 +70,16 @@ jobs:
           shared = Path("supabase/functions/_shared/lob/market-heat.ts").read_text(encoding="utf-8")
           final = scanner.read_text(encoding="utf-8")
           checks = {
-              "low-liquidity observation ceiling is 50 seconds":
-                  "const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 50_000;" in final,
-              "global observation ceiling is 50 seconds":
-                  "const MAX_DYNAMIC_OBSERVATION_MS = 50_000;" in final,
-              "default observation remains inside 45–50 seconds":
-                  "const DEFAULT_DYNAMIC_OBSERVATION_MS = 47_000;" in final,
-              "minimum per-market observation remains 45 seconds":
-                  "const REQUIRED_PER_MARKET_OBSERVATION_MS = 45_000;" in final,
+              "collector default is 55 seconds":
+                  "const DEFAULT_DYNAMIC_OBSERVATION_MS = 55_000;" in final,
+              "low-liquidity collector ceiling is 60 seconds":
+                  "const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 60_000;" in final,
+              "collector minimum is 55 seconds":
+                  "const MIN_DYNAMIC_OBSERVATION_MS = 55_000;" in final,
+              "collector maximum is 60 seconds":
+                  "const MAX_DYNAMIC_OBSERVATION_MS = 60_000;" in final,
+              "minimum per-market observation is 50 seconds":
+                  "const REQUIRED_PER_MARKET_OBSERVATION_MS = 50_000;" in final,
               "flow health cannot pre-exclude a Top-10 member":
                   "!heat.flowHealthy" not in final,
               "ranker keeps flow diagnostics without eligibility veto":
@@ -77,22 +93,27 @@ jobs:
               print("PASS:", name)
           PY
 
-      - name: Validate verified EV admission gate
+      - name: Validate Top10 orderbook-only entry gate
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
           entry = Path("supabase/functions/_shared/lob/entry.ts").read_text(encoding="utf-8")
           checks = {
-              "positive raw EV required": 'reasons.push("EV_NON_POSITIVE")' in entry,
-              "minimum conservative EV is 0.50bp": 'const minimumVerifiedEvBps = Math.max(' in entry and '0.50,' in entry,
-              "conservative EV failure recorded": 'reasons.push("EV_BELOW_MINIMUM")' in entry,
-              "raw EV failure blocks BUY": 'r === "EV_NON_POSITIVE"' in entry,
-              "lower-bound EV failure blocks BUY": 'r === "EV_BELOW_MINIMUM"' in entry,
+              "50-second entry observation required":
+                  'features.observationMs < 50_000' in entry,
+              "Top10 universe required":
+                  'features.universeMode === "TOP10_24H_GAINERS_LOB_ONLY"' in entry,
+              "spread remains an execution gate":
+                  'reasons.push("SPREAD_TOO_WIDE")' in entry,
+              "executable depth remains a gate":
+                  'reasons.push("INSUFFICIENT_EXECUTABLE_DEPTH")' in entry,
+              "EV is informational only":
+                  'warnings.push("EV_INFORMATIONAL_ONLY")' in entry,
           }
           failed = [name for name, ok in checks.items() if not ok]
           if failed:
-              raise SystemExit("EV admission policy check failed: " + ", ".join(failed))
+              raise SystemExit("entry policy check failed: " + ", ".join(failed))
           for name in checks:
               print("PASS:", name)
           PY
@@ -116,9 +137,9 @@ jobs:
           git config user.email "trading-booooo-deploy-bot@users.noreply.github.com"
           git add supabase/functions/market-scanner/index.ts
           if git diff --cached --quiet; then
-            echo "Operating code already matches strict Top10 policy."
+            echo "Operating code already guarantees a full 50-second per-market observation."
           else
-            git commit -m "fix(scanner): observe strict top 10 for 47-50 seconds"
+            git commit -m "fix(scanner): guarantee full 50s observation per Top10 market"
             git push origin HEAD:main
           fi
 
@@ -135,4 +156,4 @@ jobs:
       - name: Confirm deployed function listing
         run: npx --yes supabase@latest functions list --project-ref "$PROJECT_REF"
 
-# deployment trigger: verified EV gate 2026-08-01T00:55+09:00
+# deployment trigger: per-market 50s guarantee 2026-08-01T02:27+09:00
