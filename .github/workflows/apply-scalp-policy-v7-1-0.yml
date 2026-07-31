@@ -24,7 +24,9 @@ jobs:
           git checkout -B main origin/main
 
       - name: Apply policy patch
-        run: python3 .github/scripts/apply_scalp_v7_1_0.py
+        run: |
+          python3 .github/scripts/apply_scalp_v7_1_0.py
+          python3 .github/scripts/fix_lob_config_shape.py
 
       - uses: denoland/setup-deno@v2
         with:
