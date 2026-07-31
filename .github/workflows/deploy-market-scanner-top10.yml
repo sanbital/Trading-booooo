@@ -1,0 +1,118 @@
+name: Deploy market scanner strict Top10
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/deploy-market-scanner-top10.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PROJECT_REF: etaajwpernzrcdrifdnw
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch strict Top10 observation policy
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          scanner = Path("supabase/functions/market-scanner/index.ts")
+          text = scanner.read_text(encoding="utf-8")
+
+          replacements = {
+              "const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 60_000;":
+                  "const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 50_000;",
+              "const MAX_DYNAMIC_OBSERVATION_MS = 60_000;":
+                  "const MAX_DYNAMIC_OBSERVATION_MS = 50_000;",
+              "Low-liquidity books may use the 60-second ceiling.":
+                  "All books use the 47–50 second observation range.",
+              "TOP10_24H_GAINERS_THEN_FLOW_EXCLUSION":
+                  "TOP10_24H_GAINERS_OBSERVE_ALL",
+              "Top 10 중 흐름 유지 종목 최소 45초 실시간 호가·체결":
+                  "Top 10 전 종목 47~50초 실시간 호가·체결",
+              "거래대금·체결속도 감소 필터를 통과했습니다.":
+                  "거래대금·체결속도 변화는 사전 제외 없이 호가 관찰 진단값으로만 사용합니다.",
+          }
+          for old, new in replacements.items():
+              text = text.replace(old, new)
+
+          # A Top-10 member may not be removed before its LOB/tape observation.
+          text, removed = re.subn(r"\s*\|\|\s*!heat\.flowHealthy", "", text)
+
+          scanner.write_text(text, encoding="utf-8")
+
+          shared = Path("supabase/functions/_shared/lob/market-heat.ts").read_text(encoding="utf-8")
+          final = scanner.read_text(encoding="utf-8")
+          checks = {
+              "low-liquidity observation ceiling is 50 seconds":
+                  "const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 50_000;" in final,
+              "global observation ceiling is 50 seconds":
+                  "const MAX_DYNAMIC_OBSERVATION_MS = 50_000;" in final,
+              "default observation remains inside 45–50 seconds":
+                  "const DEFAULT_DYNAMIC_OBSERVATION_MS = 47_000;" in final,
+              "minimum per-market observation remains 45 seconds":
+                  "const REQUIRED_PER_MARKET_OBSERVATION_MS = 45_000;" in final,
+              "flow health cannot pre-exclude a Top-10 member":
+                  "!heat.flowHealthy" not in final,
+              "ranker keeps flow diagnostics without eligibility veto":
+                  "flowHealthy: true" in shared,
+          }
+          failed = [name for name, ok in checks.items() if not ok]
+          if failed:
+              raise SystemExit("policy check failed: " + ", ".join(failed))
+          print(f"removed pre-observation flow veto occurrences: {removed}")
+          for name in checks:
+              print("PASS:", name)
+          PY
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Run Top10 regression test
+        run: deno test supabase/functions/_shared/lob/market-heat.test.ts
+
+      - name: Validate diff
+        run: |
+          git diff --check
+          git diff -- supabase/functions/market-scanner/index.ts supabase/functions/_shared/lob/market-heat.ts
+
+      - name: Commit operating code
+        run: |
+          git config user.name "trading-booooo-deploy-bot"
+          git config user.email "trading-booooo-deploy-bot@users.noreply.github.com"
+          git add supabase/functions/market-scanner/index.ts
+          if git diff --cached --quiet; then
+            echo "Operating code already matches strict Top10 policy."
+          else
+            git commit -m "fix(scanner): observe strict top 10 for 47-50 seconds"
+            git push origin HEAD:main
+          fi
+
+      - name: Verify Supabase credential
+        run: |
+          test -n "$SUPABASE_ACCESS_TOKEN" || {
+            echo "::error::SUPABASE_ACCESS_TOKEN repository secret is missing"
+            exit 1
+          }
+
+      - name: Deploy market-scanner
+        run: npx --yes supabase@latest functions deploy market-scanner --project-ref "$PROJECT_REF" --no-verify-jwt
+
+      - name: Confirm deployed function listing
+        run: npx --yes supabase@latest functions list --project-ref "$PROJECT_REF"
