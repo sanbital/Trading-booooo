@@ -74,5 +74,5 @@ jobs:
             -H "content-type: application/json" \
             -H "x-autotrade-token: ${autotrade_token}" \
             "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/market-performance")"
-          jq -e '.ok == true and .performance_revision == "6.11.0-r3-CACHED-120S"' <<< "$body" >/dev/null
+          jq -e '.ok == true and .performance_revision == "6.11.0-r4-TRADING-DB-LOAD-SHED"' <<< "$body" >/dev/null
           jq '{ok, version, performance_revision, generated_at, source_counts}' <<< "$body"
