@@ -9,13 +9,16 @@ type JsonRecord = Record<string, any>;
 type Exchange = "upbit" | "binance";
 
 const VERSION = "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION";
-const PERFORMANCE_REVISION = "6.11.0-r2-PAGINATED-LIVE-FILLS";
+const PERFORMANCE_REVISION = "6.11.0-r3-CACHED-120S";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const SERVICE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
 const DASHBOARD_TOKEN = env("DASHBOARD_ACCESS_TOKEN") || env("LEARNING_ACCESS_TOKEN");
 const DASHBOARD_ORIGIN = env("ALLOWED_ORIGINS").split(",")[0] || "*";
 const REST_PAGE_SIZE = 1000;
+const PERFORMANCE_CACHE_TTL_MS = 120_000;
+let performanceCache: { body: JsonRecord; cachedAt: number } | null = null;
+let performanceRefreshInFlight = false;
 
 function env(name: string): string {
   return (Deno.env.get(name) || "").trim();
@@ -393,6 +396,34 @@ Deno.serve(async (request: Request) => {
     return response({ ok: false, error: "missing Supabase configuration" }, 500);
   }
 
+  const now = Date.now();
+  if (performanceCache && now - performanceCache.cachedAt < PERFORMANCE_CACHE_TTL_MS) {
+    return response({
+      ...performanceCache.body,
+      cache_status: "HIT",
+      cache_age_seconds: Math.floor((now - performanceCache.cachedAt) / 1000),
+      cache_ttl_seconds: PERFORMANCE_CACHE_TTL_MS / 1000,
+    });
+  }
+  if (performanceRefreshInFlight) {
+    if (performanceCache) {
+      return response({
+        ...performanceCache.body,
+        cache_status: "STALE_WHILE_REFRESH",
+        cache_age_seconds: Math.floor((now - performanceCache.cachedAt) / 1000),
+        cache_ttl_seconds: PERFORMANCE_CACHE_TTL_MS / 1000,
+      });
+    }
+    return response({
+      ok: false,
+      error: "performance refresh already in progress",
+      version: VERSION,
+      performance_revision: PERFORMANCE_REVISION,
+      retry_after_seconds: 5,
+    }, 503);
+  }
+
+  performanceRefreshInFlight = true;
   try {
     const [positions, orders, fills, snapshots, objectiveRows] = await Promise.all([
       dbAll(
@@ -453,7 +484,7 @@ Deno.serve(async (request: Request) => {
       newest_exit_at: newestExitAt,
     });
 
-    return response({
+    const body: JsonRecord = {
       ok: true,
       version: VERSION,
       performance_revision: PERFORMANCE_REVISION,
@@ -493,14 +524,32 @@ Deno.serve(async (request: Request) => {
           "ORPHAN_ENTRY_PENDING",
         ],
       },
+    };
+    performanceCache = { body, cachedAt: Date.now() };
+    return response({
+      ...body,
+      cache_status: "MISS",
+      cache_age_seconds: 0,
+      cache_ttl_seconds: PERFORMANCE_CACHE_TTL_MS / 1000,
     });
   } catch (error) {
     console.error("market-performance failed", error);
+    if (performanceCache) {
+      return response({
+        ...performanceCache.body,
+        cache_status: "STALE_ON_ERROR",
+        cache_age_seconds: Math.floor((Date.now() - performanceCache.cachedAt) / 1000),
+        cache_ttl_seconds: PERFORMANCE_CACHE_TTL_MS / 1000,
+        cache_error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return response({
       ok: false,
       error: error instanceof Error ? error.message : String(error),
       version: VERSION,
       performance_revision: PERFORMANCE_REVISION,
     }, 500);
+  } finally {
+    performanceRefreshInFlight = false;
   }
 });
