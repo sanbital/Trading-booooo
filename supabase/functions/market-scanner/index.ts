@@ -57,15 +57,15 @@ const FINALIST_LIMIT = 8;
 const BOOK_SAMPLE_COUNT = 4;
 const BOOK_SAMPLE_INTERVAL_MS = 250;
 // A complete market may finish at 50 seconds. A thin market keeps the same socket open for
-// up to 15 seconds more so INSUFFICIENT means "still insufficient after extension".
+// up to 10 seconds more. This stays below the Edge request ceiling after scan setup work.
 const DEFAULT_DYNAMIC_OBSERVATION_MS = 50_000;
 const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 50_000;
 const MIN_DYNAMIC_OBSERVATION_MS = 50_000;
-const MAX_DYNAMIC_OBSERVATION_MS = 65_000;
+const MAX_DYNAMIC_OBSERVATION_MS = 60_000;
 // Every symbol must receive its own full 50-second wall-clock observation window.
 // The global socket-open timer alone is insufficient because a symbol's first frame can arrive late.
 const REQUIRED_PER_MARKET_OBSERVATION_MS = 50_000;
-const EXTENDED_PER_MARKET_OBSERVATION_MS = 65_000;
+const EXTENDED_PER_MARKET_OBSERVATION_MS = 60_000;
 const DYNAMIC_STREAM_HARD_TIMEOUT_BUFFER_MS = 35_000;
 const DYNAMIC_COVERAGE_POLL_MS = 250;
 const DYNAMIC_SUFFICIENCY_RECHECK_MS = 1_000;
