@@ -6655,8 +6655,12 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         settings.emergency_liquidation,
         !lobMode,
       );
-      if (lobMode && !settings.emergency_liquidation && heldSeconds >= 180) {
-        // The sole post-180 sell authority is the executable-depth override below.
+      if (
+        lobMode && !settings.emergency_liquidation && heldSeconds >= 180 &&
+        !(finite(position.stop_price) > 0 && current <= finite(position.stop_price))
+      ) {
+        // After 180 seconds, ordinary exits still use executable-net policy. A real
+        // scanner-derived stop remains authoritative at every position age.
         decision = { action: "NONE", fraction: 0, reason: "lob:post-180-await-executable-net" };
       }
       // v6.5: a slot marked for rotation by the scan cycle closes here, on the monitor's
@@ -7332,14 +7336,14 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           })
           : null;
 
-        if (heldSeconds < 180) {
-          if (plannedStopRequested) {
-            decision = {
-              action: "STOP",
-              fraction: 1,
-              reason: "lob:STOP_HIT",
-            };
-          } else if (targetRequested) {
+        if (plannedStopRequested) {
+          decision = {
+            action: "STOP",
+            fraction: 1,
+            reason: "lob:STOP_HIT",
+          };
+        } else if (heldSeconds < 180) {
+          if (targetRequested) {
             decision = {
               action: "TARGET_1",
               fraction: 1,
