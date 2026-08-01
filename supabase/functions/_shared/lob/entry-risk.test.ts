@@ -157,15 +157,16 @@ Deno.test("insufficient dynamic evidence waits after the collector extension", (
   assert(decision.reasons.includes("LOB_DYNAMIC_EVIDENCE_INSUFFICIENT"));
 });
 
-Deno.test("EV and candle-like context cannot change LOB admission", () => {
+Deno.test("untradeable costs cannot be ignored by LOB admission", () => {
   const baseline = evaluateLobEntry(features(), costs);
-  const hostileInformationalInputs = evaluateLobEntry(features({ trendContext: -1 }), {
+  const hostileCosts = evaluateLobEntry(features({ trendContext: -1 }), {
     ...costs,
     roundTripFeeBps: 10_000,
     forecastBiasPenaltyBps: 10_000,
   });
   assert(baseline.decision === "BUY");
-  assert(hostileInformationalInputs.decision === "BUY");
+  assert(hostileCosts.decision === "WAIT");
+  assert(hostileCosts.reasons.includes("REWARD_RISK_FAILED"));
 });
 
 Deno.test("reward-risk failure cannot be bypassed", () => {
@@ -176,4 +177,27 @@ Deno.test("reward-risk failure cannot be bypassed", () => {
   });
   assert(decision.decision === "WAIT");
   assert(decision.reasons.includes("REWARD_RISK_FAILED"));
+});
+
+Deno.test("planned stop comes from observed LOB noise instead of the 5 percent emergency cap", () => {
+  const decision = evaluateLobEntry(features({ noiseBandBps: 12 }), costs, {
+    fixedStopBps: 500,
+    minNetRewardRiskRatio: 1.5,
+    maxStopToTargetRatio: 1 / 1.5,
+  });
+  assert(decision.stopBps === 15, `expected 15bp planned stop, got ${decision.stopBps}`);
+  assert(decision.stopBps < 200);
+  assert(decision.warnings.includes("LEGACY_EMERGENCY_STOP_IGNORED_FOR_PLANNED_RISK"));
+});
+
+Deno.test("operator policy requires 20bp net target and caps the legacy RR floor at 0.5", () => {
+  const decision = evaluateLobEntry(features(), costs, {
+    minNetProfitBps: 0,
+    minNetRewardRiskRatio: 1.5,
+    maxStopToTargetRatio: 1 / 1.5,
+  });
+  assert(decision.targetReturnNetBps >= 20);
+  assert(decision.minimumTargetNetProfitBps === 20);
+  assert(decision.decision === "BUY", decision.reasons.join(","));
+  assert(decision.netRewardRiskRatio >= 0.5);
 });

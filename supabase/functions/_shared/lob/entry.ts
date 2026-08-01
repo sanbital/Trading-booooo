@@ -17,6 +17,15 @@ function finite(value: unknown, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+// Operator policy for the high-turnover LOB scalp route.
+// The 5% account-protection boundary is an emergency exit owned by the autotrader. It must
+// never be used as the ordinary planned loss in scanner reward/risk arithmetic.
+const OPERATOR_MIN_TARGET_NET_PROFIT_BPS = 20;
+const OPERATOR_MIN_NET_REWARD_RISK_RATIO = 0.5;
+const OPERATOR_MAX_STOP_TO_TARGET_RATIO = 2;
+const PLANNED_SCALP_STOP_MAX_BPS = 200;
+const LEGACY_EMERGENCY_STOP_BPS = 500;
+
 export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   minSamples: 4,
   // Every candidate must be judged from a full 50-second live book/tape window.
@@ -25,14 +34,15 @@ export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   maxSpreadBps: 60,
   minHotnessScore: 0,
   minPrimaryPatternConfidence: 0,
-  minNetProfitBps: 0,
+  minNetProfitBps: OPERATOR_MIN_TARGET_NET_PROFIT_BPS,
   minEvBps: 0,
-  maxStopToTargetRatio: 100,
-  minNetRewardRiskRatio: 0,
+  maxStopToTargetRatio: OPERATOR_MAX_STOP_TO_TARGET_RATIO,
+  minNetRewardRiskRatio: OPERATOR_MIN_NET_REWARD_RISK_RATIO,
   minTargetBps: 12,
   maxTargetBps: 80,
   minStopBps: 6,
-  maxStopBps: 500,
+  // This remains the absolute emergency boundary. Planned scalp stops are capped separately.
+  maxStopBps: LEGACY_EMERGENCY_STOP_BPS,
   // 180 seconds changes exit behaviour. It is not a forced holding deadline.
   maxHoldingSeconds: 180,
   absoluteMaxHoldingSeconds: 0,
@@ -70,7 +80,11 @@ export function calibrateMakerFillProbability(
   const prior = Math.max(1, finite(priorStrength, 60));
   const weight = n / (n + prior);
   return {
-    probability: clamp(raw * (1 - weight) + clamp(measuredRate, 0.01, 0.99) * weight, 0.05, 0.99),
+    probability: clamp(
+      raw * (1 - weight) + clamp(measuredRate, 0.01, 0.99) * weight,
+      0.05,
+      0.99,
+    ),
     weight,
   };
 }
@@ -134,7 +148,9 @@ export function assessLobEntryRisk(
     (bidSpoofDetected && adverseFlowSignals.length >= 2);
   if (bidSpoofConfirmed) reasons.push("BID_SPOOF_CONFIRMED_BY_WEAK_FLOW");
 
-  if (askSpoofDetected && !bidSpoofDetected && !supportBreakdown) warnings.push("ASK_SPOOF");
+  if (askSpoofDetected && !bidSpoofDetected && !supportBreakdown) {
+    warnings.push("ASK_SPOOF");
+  }
   if (bidSpoofDetected && adverseFlowSignals.length > 0) {
     warnings.push(`BID_SPOOF_ADVERSE_FLOW_${adverseFlowSignals.length}`);
   }
@@ -185,10 +201,19 @@ export function evaluateLobEntry(
   overrides: Partial<LobEntryConfig> = {},
 ): LobEntryDecision {
   const cfg = { ...DEFAULT_LOB_ENTRY_CONFIG, ...overrides };
-  // User policy is authoritative even when an old runtime profile still contains stricter values.
+  // Current operator policy is authoritative even when an old scanner/runtime profile
+  // still sends the former 1.5 RR floor or the 5% emergency boundary as a fixed stop.
   cfg.minObservationMs = 50_000;
   cfg.minEvBps = 0;
-  cfg.minNetProfitBps = 0;
+  cfg.minNetProfitBps = Math.max(
+    OPERATOR_MIN_TARGET_NET_PROFIT_BPS,
+    finite(cfg.minNetProfitBps, OPERATOR_MIN_TARGET_NET_PROFIT_BPS),
+  );
+  cfg.maxStopToTargetRatio = OPERATOR_MAX_STOP_TO_TARGET_RATIO;
+  cfg.minNetRewardRiskRatio = Math.min(
+    OPERATOR_MIN_NET_REWARD_RISK_RATIO,
+    Math.max(0, finite(cfg.minNetRewardRiskRatio, OPERATOR_MIN_NET_REWARD_RISK_RATIO)),
+  );
   cfg.minPrimaryPatternConfidence = 0;
   cfg.minHotnessScore = 0;
 
@@ -210,12 +235,23 @@ export function evaluateLobEntry(
     finite(costs.roundTripFeeBps) + finite(costs.entrySlippageBps) +
       finite(costs.stopExitSlippageBps) + finite(costs.latencyPenaltyBps) * 2,
   );
-  const targetBps = rawFixedTargetBps > 0
-    ? rawFixedTargetBps
-    : clamp(Math.max(cfg.minTargetBps, targetCostBps + 2), cfg.minTargetBps, cfg.maxTargetBps);
-  // The actual absolute loss boundary is -5% in the autotrader exit path.
-  const stopBps = rawFixedStopBps > 0 ? rawFixedStopBps : 500;
+  const targetFloorBps = Math.max(cfg.minTargetBps, targetCostBps + cfg.minNetProfitBps);
+  const targetBps = clamp(
+    Math.max(rawFixedTargetBps, targetFloorBps),
+    cfg.minTargetBps,
+    cfg.maxTargetBps,
+  );
 
+  const usableFixedStopBps = rawFixedStopBps > 0 &&
+      rawFixedStopBps < LEGACY_EMERGENCY_STOP_BPS
+    ? rawFixedStopBps
+    : 0;
+  if (rawFixedStopBps >= LEGACY_EMERGENCY_STOP_BPS) {
+    warnings.push("LEGACY_EMERGENCY_STOP_IGNORED_FOR_PLANNED_RISK");
+  }
+
+  const trapCfg = { ...DEFAULT_LOB_TRAP_CONFIG, ...(cfg.trap || {}) };
+  const provisionalStopBps = Math.max(cfg.minStopBps, usableFixedStopBps);
   const traps = assessLobTraps(
     {
       askAbsorptionScore: features.askAbsorptionScore,
@@ -229,9 +265,28 @@ export function evaluateLobEntry(
       tradeArrivalRate: features.tradeArrivalRate,
       dataQuality: features.dataQuality,
     },
-    stopBps,
+    provisionalStopBps,
     cfg.trap,
   );
+  const plannedStopCeilingBps = Math.max(
+    cfg.minStopBps,
+    Math.min(cfg.maxStopBps, trapCfg.maxViableStopBps, PLANNED_SCALP_STOP_MAX_BPS),
+  );
+  const dynamicStopFloorBps = Math.max(
+    cfg.minStopBps,
+    traps.requiredStopBps,
+    Math.max(0, finite(features.spreadBps)) * 2,
+    Math.max(0, finite(cfg.learnedStopFloorBps)),
+  );
+  const stopBps = clamp(
+    Math.max(usableFixedStopBps, dynamicStopFloorBps),
+    cfg.minStopBps,
+    plannedStopCeilingBps,
+  );
+  if (traps.requiredStopBps > plannedStopCeilingBps) {
+    reasons.push("STOP_TO_TARGET_RATIO_FAILED");
+    warnings.push("LOB_NOISE_REQUIRES_NON_SCALP_STOP");
+  }
   for (const trap of traps.traps) warnings.push(`LOB_DIAGNOSTIC_${trap.name}`);
 
   // Structural and execution checks only.
@@ -261,7 +316,8 @@ export function evaluateLobEntry(
   const flowScore = risk.flowScore;
 
   const rawPFill = clamp(
-    0.35 + hotness.tradabilityScore / 100 * 0.45 + clamp(features.depthRatio / 3, 0, 1) * 0.15 -
+    0.35 + hotness.tradabilityScore / 100 * 0.45 +
+      clamp(features.depthRatio / 3, 0, 1) * 0.15 -
       clamp(finite(features.spreadBps) / Math.max(1, cfg.maxSpreadBps), 0, 1) * 0.10,
     0.05,
     0.99,
@@ -277,14 +333,25 @@ export function evaluateLobEntry(
   const pTimeout = 0;
   const targetReturnNetBps = targetBps - targetCostBps;
   const stopReturnNetBps = -(stopBps + stopCostBps);
-  const stopToTargetRatio = targetBps > 0 ? stopBps / targetBps : Number.POSITIVE_INFINITY;
+  const stopToTargetRatio = targetBps > 0
+    ? stopBps / targetBps
+    : Number.POSITIVE_INFINITY;
   const netRewardRiskRatio = Math.abs(stopReturnNetBps) > 0
     ? Math.max(0, targetReturnNetBps) / Math.abs(stopReturnNetBps)
     : 0;
-  if (stopToTargetRatio > cfg.maxStopToTargetRatio) reasons.push("STOP_TO_TARGET_RATIO_FAILED");
-  if (netRewardRiskRatio < cfg.minNetRewardRiskRatio) reasons.push("REWARD_RISK_FAILED");
+  if (targetReturnNetBps < cfg.minNetProfitBps) {
+    reasons.push("REWARD_RISK_FAILED");
+    warnings.push("TARGET_NET_PROFIT_TOO_LOW");
+  }
+  if (stopToTargetRatio > cfg.maxStopToTargetRatio) {
+    reasons.push("STOP_TO_TARGET_RATIO_FAILED");
+  }
+  if (netRewardRiskRatio < cfg.minNetRewardRiskRatio) {
+    reasons.push("REWARD_RISK_FAILED");
+  }
   const informationalEv = pTarget * targetReturnNetBps + pStop * stopReturnNetBps;
-  const decision = reasons.length === 0 ? "BUY" : "WAIT";
+  const uniqueReasons = [...new Set(reasons)];
+  const decision = uniqueReasons.length === 0 ? "BUY" : "WAIT";
 
   warnings.push("EV_INFORMATIONAL_ONLY");
   warnings.push("PATTERN_INFORMATIONAL_ONLY");
@@ -308,7 +375,7 @@ export function evaluateLobEntry(
     timeoutReturnNetBps: 0,
     stopToTargetRatio,
     netRewardRiskRatio,
-    minimumTargetNetProfitBps: 0,
+    minimumTargetNetProfitBps: cfg.minNetProfitBps,
     minimumVerifiedEvBps: 0,
     conditionalEvNetBps: informationalEv,
     conditionalEvLowerBoundBps: informationalEv,
@@ -318,8 +385,8 @@ export function evaluateLobEntry(
     evLowerBoundBps: informationalEv,
     forecastBiasPenaltyBps: 0,
     maxHoldingSeconds: 180,
-    reasons,
-    warnings,
+    reasons: uniqueReasons,
+    warnings: [...new Set(warnings)],
     features,
     traps,
     noiseAdjustedStopBps: stopBps,
