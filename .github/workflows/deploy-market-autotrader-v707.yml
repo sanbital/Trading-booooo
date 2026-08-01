@@ -1,4 +1,4 @@
-name: Deploy market-autotrader v7.1.7
+name: Deploy market-autotrader v7.1.8
 
 on:
   push:
@@ -11,6 +11,7 @@ on:
       - "scripts/fix_v716_patch_compat.py"
       - "scripts/fix_v717_patch_compat.py"
       - "scripts/apply_v717_final_exit_policy.py"
+      - "scripts/apply_v718_pre180_exit_policy.py"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
@@ -23,6 +24,7 @@ on:
       - "scripts/fix_v716_patch_compat.py"
       - "scripts/fix_v717_patch_compat.py"
       - "scripts/apply_v717_final_exit_policy.py"
+      - "scripts/apply_v718_pre180_exit_policy.py"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   workflow_dispatch:
 
@@ -30,7 +32,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-market-autotrader-v717
+  group: deploy-market-autotrader-v718
   cancel-in-progress: false
 
 jobs:
@@ -47,7 +49,7 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Build and validate v7.1.7 deployment artifact
+      - name: Build and validate v7.1.8 deployment artifact
         shell: bash
         run: |
           set -euo pipefail
@@ -56,12 +58,17 @@ jobs:
           python3 scripts/apply_v716_target_balance_hotfix.py
           python3 scripts/fix_v717_patch_compat.py
           python3 scripts/apply_v717_final_exit_policy.py
+          python3 scripts/apply_v718_pre180_exit_policy.py
           deno fmt \
             supabase/functions/market-autotrader/index.ts \
             supabase/functions/_shared/lob/exit.ts
-          grep -q 'const VERSION = "7.1.7-FINAL-EXIT-POLICY";' \
+          grep -q 'const VERSION = "7.1.8-PRE180-TARGET-REVERSAL";' \
             supabase/functions/market-autotrader/index.ts
-          grep -q 'EXIT_BLOCKED_MIN_HOLD' \
+          grep -q 'lob:pre-180-target' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'EXIT_BLOCKED_PRE180_POLICY' \
+            supabase/functions/market-autotrader/index.ts
+          ! grep -q 'EXIT_BLOCKED_MIN_HOLD' \
             supabase/functions/market-autotrader/index.ts
           grep -q 'POSITIVE_NET_AFTER_180S' \
             supabase/functions/market-autotrader/index.ts
@@ -95,7 +102,7 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Build exact v7.1.7 production artifact
+      - name: Build exact v7.1.8 production artifact
         shell: bash
         run: |
           set -euo pipefail
@@ -104,6 +111,7 @@ jobs:
           python3 scripts/apply_v716_target_balance_hotfix.py
           python3 scripts/fix_v717_patch_compat.py
           python3 scripts/apply_v717_final_exit_policy.py
+          python3 scripts/apply_v718_pre180_exit_policy.py
           deno fmt \
             supabase/functions/market-autotrader/index.ts \
             supabase/functions/_shared/lob/exit.ts
@@ -114,7 +122,7 @@ jobs:
         with:
           version: 2.109.1
 
-      - name: Deploy market-autotrader v7.1.7
+      - name: Deploy market-autotrader v7.1.8
         shell: bash
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -131,3 +139,4 @@ jobs:
 # deployment trigger: 2026-08-01 13:25 KST v7.1.7 final exit policy
 # pull-request validation trigger: 2026-08-01 13:54 KST
 # recovery redeploy: 2026-08-01T06:13Z
+# v7.1.8: allow protected targets and qualified LOB reversals before 180 seconds
