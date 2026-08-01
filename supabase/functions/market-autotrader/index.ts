@@ -1,4 +1,4 @@
-// Trading-booooo v7.2.3-EXECUTABLE-NET-INTEGRITY — autonomous spot orchestrator.
+// Trading-booooo v7.2.4-FAST-ENTRY — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -79,7 +79,7 @@ import {
   neutralWinRateOf,
 } from "../_shared/lob/entry.ts";
 import { detectLobPatternName } from "../_shared/lob/patterns.ts";
-import { assessLobPreOrderPair, type LobPreOrderRecheck } from "../_shared/lob/preorder.ts";
+import { type LobPreOrderRecheck } from "../_shared/lob/preorder.ts";
 import type { LobTrapConfig } from "../_shared/lob/traps.ts";
 import { patternDeployment } from "../_shared/lob/learning.ts";
 import {
@@ -121,7 +121,7 @@ import { type ExecutableNetExitQuote, quoteExecutableNetExit } from "./executabl
 import { buildTradingHeartbeatPatch, type TradingHeartbeatPatch } from "./heartbeat.ts";
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
 
-const VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY";
+const VERSION = "7.2.4-FAST-ENTRY";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -3103,45 +3103,10 @@ async function enterCandidateInner(
     scalpTarget2 = tickRound(entryPrice * (1 + scalpTargetPct * 1.5), rules.price_tick, "up");
   }
 
-  // First of two fresh checks. The work below (reservation and its audit writes) supplies
-  // most of the spacing before the second quote, so this does not add a blind two-second wait.
+  // v7.2.4: do not perform a network quote here. The live LOB decision above already
+  // validated the current book. A single final quote is taken after reservation and
+  // immediately before order construction, eliminating serial confirmation latency.
   let firstLobPreOrderRecheck: LobPreOrderRecheck | null = null;
-  let firstLobPreOrderCheckedAtMs = 0;
-  if (isLobStrategy((settings as any).strategy)) {
-    const firstPreOrderMarket = await marketQuote(exchange, candidate.market);
-    firstLobPreOrderRecheck = evaluateLobPreOrderRecheck(
-      lobSizingContext.lobSnapshot,
-      firstPreOrderMarket,
-      {
-        maxEntry,
-        maxSpreadBps: entryMaxSpreadBps,
-        requiredNotionalQuote: decisionNotional,
-        ...lobSizingContext.preOrderGate,
-        trap: lobTrapOverrides(settings),
-      },
-    );
-    firstLobPreOrderCheckedAtMs = Date.now();
-    if (!firstLobPreOrderRecheck.passed) {
-      await event(
-        "LOB_PREORDER_RECHECK_BLOCK",
-        `${exchange}:${candidate.market} first pre-order LOB recheck blocked`,
-        {
-          stage: 1,
-          reasons: firstLobPreOrderRecheck.reasons,
-          best_bid: firstLobPreOrderRecheck.bestBid,
-          best_ask: firstLobPreOrderRecheck.bestAsk,
-          spread_bps: firstLobPreOrderRecheck.spreadBps,
-        },
-        { cycleId, level: "INFO" },
-      );
-      return {
-        entered: false,
-        exchange,
-        market: candidate.market,
-        reason: `LOB pre-order recheck 1: ${firstLobPreOrderRecheck.reasons.join(",")}`,
-      };
-    }
-  }
 
   // Low-evidence trades preserve learning throughput, but they have their own daily loss
   // budget and concurrency cap. The budget is claimed only AFTER the position row exists,
@@ -3318,14 +3283,14 @@ async function enterCandidateInner(
   }
 
   let secondLobPreOrderRecheck: LobPreOrderRecheck | null = null;
-  if (firstLobPreOrderRecheck) {
-    // Target a 500ms separation. If DB/order preparation already consumed it, continue
-    // immediately rather than imposing additional latency.
-    await waitMs(500 - (Date.now() - firstLobPreOrderCheckedAtMs));
-    const secondPreOrderMarket = await marketQuote(exchange, candidate.market);
+  if (isLobStrategy((settings as any).strategy)) {
+    // v7.2.4 single-final validation: one fresh quote, no wait, no paired persistence
+    // check, and no audit DB write before the exchange request. A failed final book
+    // still blocks immediately; a passed book proceeds directly to order construction.
+    const finalPreOrderMarket = await marketQuote(exchange, candidate.market);
     secondLobPreOrderRecheck = evaluateLobPreOrderRecheck(
       lobSizingContext.lobSnapshot,
-      secondPreOrderMarket,
+      finalPreOrderMarket,
       {
         maxEntry,
         maxSpreadBps: entryMaxSpreadBps,
@@ -3334,11 +3299,10 @@ async function enterCandidateInner(
         trap: lobTrapOverrides(settings),
       },
     );
-    const pair = assessLobPreOrderPair(firstLobPreOrderRecheck, secondLobPreOrderRecheck);
-    const secondAudit = {
+    const finalAudit = {
       checked_at: secondLobPreOrderRecheck.checkedAt,
-      passed: pair.passed,
-      reasons: pair.reasons,
+      passed: secondLobPreOrderRecheck.passed,
+      reasons: secondLobPreOrderRecheck.reasons,
       best_bid: secondLobPreOrderRecheck.bestBid,
       best_ask: secondLobPreOrderRecheck.bestAsk,
       spread_bps: secondLobPreOrderRecheck.spreadBps,
@@ -3346,9 +3310,10 @@ async function enterCandidateInner(
       ask_depth_quote: secondLobPreOrderRecheck.askDepthQuote,
       trade_pressure_fast: secondLobPreOrderRecheck.tradePressureFast,
       microprice_deviation_bps: secondLobPreOrderRecheck.micropriceDeviationBps,
-      interval_ms: Math.max(0, Date.now() - firstLobPreOrderCheckedAtMs),
+      interval_ms: 0,
+      validation_mode: "SINGLE_FINAL_NO_WAIT",
     };
-    if (!pair.passed) {
+    if (!secondLobPreOrderRecheck.passed) {
       await patch("trading_positions", `id=eq.${position.id}`, {
         state: "CANCELLED",
         reserved_quote: 0,
@@ -3356,28 +3321,27 @@ async function enterCandidateInner(
         reservation_expires_at: null,
         close_reason: "LOB_PREORDER_RECHECK_BLOCKED",
         closed_at: new Date().toISOString(),
-        metadata: { ...(position.metadata || {}), pre_order_lob_recheck_2: secondAudit },
+        metadata: { ...(position.metadata || {}), pre_order_lob_recheck_2: finalAudit },
       });
       await event(
         "LOB_PREORDER_RECHECK_BLOCK",
-        `${exchange}:${candidate.market} second pre-order LOB recheck blocked`,
-        { stage: 2, ...secondAudit },
+        `${exchange}:${candidate.market} final pre-order LOB check blocked`,
+        { stage: "FINAL", ...finalAudit },
         { cycleId, positionId: position.id, level: "INFO" },
       );
       return {
         entered: false,
         exchange,
         market: candidate.market,
-        reason: `LOB pre-order recheck 2: ${pair.reasons.join(",")}`,
+        reason: `LOB final pre-order check: ${secondLobPreOrderRecheck.reasons.join(",")}`,
       };
     }
-    const updated = await patch("trading_positions", `id=eq.${position.id}`, {
-      metadata: { ...(position.metadata || {}), pre_order_lob_recheck_2: secondAudit },
-    });
-    position = (updated[0] || {
+    // Keep the audit in memory. The normal post-order position update persists it without
+    // adding a blocking database round trip between the final quote and order submission.
+    position = {
       ...position,
-      metadata: { ...(position.metadata || {}), pre_order_lob_recheck_2: secondAudit },
-    }) as Position;
+      metadata: { ...(position.metadata || {}), pre_order_lob_recheck_2: finalAudit },
+    };
   }
 
   if (settings.mode !== "LIVE_LIMITED") {
@@ -3527,36 +3491,9 @@ async function enterCandidateInner(
   // nominal 90 USDT orders to open 5–30 USDT partial positions; FOK makes that venue's
   // entry atomic while retaining Upbit's proven IOC path.
   const entryTimeInForce = exchange === "binance" ? "FOK" : "IOC";
-  const testIdentifier = uniqueId("t", position.id);
-  try {
-    await gateway(exchange, {
-      action: "order_test",
-      order: {
-        market: candidate.market,
-        side: "BUY",
-        type: "LIMIT",
-        price: entryPrice,
-        quantity,
-        time_in_force: entryTimeInForce,
-        identifier: testIdentifier,
-      },
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await patch("trading_positions", `id=eq.${position.id}`, {
-      state: "CANCELLED",
-      reserved_quote: 0,
-      reserved_quantity: 0,
-      reservation_expires_at: null,
-      close_reason: "ENTRY_TEST_REJECTED",
-      closed_at: new Date().toISOString(),
-      metadata: { ...(position.metadata || {}), entry_test_error: message },
-    });
-    await event("ENTRY_ERROR", `${exchange}:${candidate.market} entry test rejected`, {
-      error: message,
-    }, { cycleId, positionId: position.id, level: "WARNING" });
-    return { entered: false, exchange, market: candidate.market, reason: message };
-  }
+  // v7.2.4: skip the exchange order_test round trip. Precision, minimum notional,
+  // depth, spread and executable-price checks have already run locally; the real order
+  // response remains the authoritative acceptance check.
   const identifier = uniqueId("e", position.id);
   const orderRow = await createOrderRecord({
     position_id: position.id,
