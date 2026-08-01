@@ -87,7 +87,7 @@ jobs:
           has_upbit=false
           if [ -n "${UPBIT_ACCESS_KEY:-}" ] && [ -n "${UPBIT_SECRET_KEY:-}" ]; then has_upbit=true; fi
           scheduler=false
-          if [ "$setup" != "true" ] && [ "$has_upbit" = true ]; then scheduler=true; fi
+          # Emergency infrastructure recovery: temporarily stop the scheduler without changing trading logic.\n          if false && [ "$setup" != "true" ] && [ "$has_upbit" = true ]; then scheduler=true; fi
           echo "setup_only=$setup" >> "$GITHUB_OUTPUT"
           echo "scheduler=$scheduler" >> "$GITHUB_OUTPUT"
           echo "has_upbit=$has_upbit" >> "$GITHUB_OUTPUT"
