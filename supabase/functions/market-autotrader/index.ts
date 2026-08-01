@@ -7308,7 +7308,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         const requestedReason = String((decision as any).reason || "");
         const targetRequested = requestedAction === "TARGET_1" || requestedAction === "TARGET_2";
         const plannedStopRequested = requestedAction === "STOP" &&
-          requestedReason === "lob:STOP_HIT" &&
+          finite(position.stop_price) > 0 &&
           current <= finite(position.stop_price);
         const reversalRequested = requestedAction === "STOP" &&
           (requestedReason === "lob:SIGNAL_REVERSAL" ||
