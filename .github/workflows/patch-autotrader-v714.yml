@@ -1,0 +1,78 @@
+name: Patch autotrader v7.1.4 volatility-aware exit policy
+
+on:
+  push:
+    branches:
+      - fix/v714-volatility-aware-exit-policy
+    paths:
+      - .github/workflows/patch-autotrader-v714.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout policy branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply v7.1.4 state machine
+        run: python3 scripts/patch_v714_exit_policy.py
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Format and type-check
+        run: |
+          deno fmt \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/_shared/lob/exit.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          git diff --check
+
+      - name: Validate policy invariants
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          engine = Path("supabase/functions/market-autotrader/index.ts").read_text()
+          exit_policy = Path("supabase/functions/_shared/lob/exit.ts").read_text()
+          migration = Path("supabase/migrations/20260801023000_enforce_v714_volatility_aware_exit_policy.sql").read_text()
+
+          assert 'const VERSION = "7.1.4-VOLATILITY-AWARE-EXIT";' in engine
+          assert 'if (heldSeconds < 60)' in engine
+          assert 'else if (heldSeconds < 180)' in engine
+          assert 'softReason === "SIGNAL_REVERSAL"' in engine and '? 30' in engine
+          assert 'softReason === "LOB_INVALIDATION"' in engine and '? 50' in engine
+          assert 'guardedNetProfitQuote > 0' in engine
+          assert 'drawdownPct <= -3' in engine
+          assert 'lob:pre-180-target-guarded-net-at-least-1' not in engine
+          assert 'return hard(softReason' not in exit_policy
+          assert "V714_PRE60_SELL_LOCK" in migration
+          assert "V714_60_180_EXIT_BLOCKED" in migration
+          assert "v_guarded_net > 0" in migration
+          assert "v_drawdown_pct <= -3" in migration
+          assert "v_is_resting_target" in migration
+          print("PASS: all v7.1.4 exit-policy invariants")
+          PY
+
+      - name: Commit patched source and migration
+        run: |
+          git config user.name "trading-booooo-deploy-bot"
+          git config user.email "trading-booooo-deploy-bot@users.noreply.github.com"
+          git add \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/_shared/lob/exit.ts \
+            supabase/migrations/20260801023000_enforce_v714_volatility_aware_exit_policy.sql
+          if git diff --cached --quiet; then
+            echo "v7.1.4 policy is already applied."
+          else
+            git commit -m "fix(autotrader): add volatility-aware 60/180s exit policy"
+            git push origin HEAD:fix/v714-volatility-aware-exit-policy
+          fi
