@@ -1,3 +1,4 @@
+# Read-only validator: this file must never rewrite trading source or migrations.
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
