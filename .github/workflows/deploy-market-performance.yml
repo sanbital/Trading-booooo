@@ -61,3 +61,4 @@ jobs:
             --project-ref "${SUPABASE_PROJECT_REF}" \
             --no-verify-jwt \
             --use-api
+# recovery redeploy: 2026-08-01T06:13Z
