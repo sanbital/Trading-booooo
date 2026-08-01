@@ -1,0 +1,46 @@
+name: One-shot Supabase DB session recovery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-shot-db-session-recovery.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      PGCONNECT_TIMEOUT: "20"
+      PGSSLMODE: require
+    steps:
+      - name: Validate direct database URL
+        shell: bash
+        run: test -n "$SUPABASE_DB_URL"
+
+      - name: Terminate stale client sessions
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          select now() as recovery_started_at, current_database() as database_name;
+
+          select count(*) as client_sessions_before
+          from pg_stat_activity
+          where datname = current_database()
+            and pid <> pg_backend_pid()
+            and backend_type = 'client backend';
+
+          select pid, pg_terminate_backend(pid) as terminated
+          from pg_stat_activity
+          where datname = current_database()
+            and pid <> pg_backend_pid()
+            and backend_type = 'client backend';
+
+          select pg_sleep(3);
+          select now() as recovery_verified_at, 1 as database_connection_ok;
+          SQL
