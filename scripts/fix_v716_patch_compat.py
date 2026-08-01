@@ -3,11 +3,11 @@ from pathlib import Path
 path = Path("scripts/apply_v716_target_balance_hotfix.py")
 text = path.read_text(encoding="utf-8")
 
-old_primary = r'''r''' + "'''" + r'''      const lobEntryNotional = lobEntryPrice \\* lobRemainingQuantity;\\n      const lobExitNotional = current \\* lobRemainingQuantity;\\n      const lobNetProfitQuote = lobExitNotional \\* \\(1 - lobFeeRate\\) -\\n        lobEntryNotional \\* \\(1 \\+ lobFeeRate\\);''' + "'''"
-new_primary = r'''r''' + "'''" + r'''      const lobEntryNotional = lobEntryPrice \\* lobRemainingQuantity;\\n      const lobExitNotional = current \\* lobRemainingQuantity;\\n      const lobEntryFeeRate = exchange === \\"upbit\\" \\? lobFeeRate : 0;\\n      const lobNetProfitQuote = lobExitNotional \\* \\(1 - lobFeeRate\\) -\\n        lobEntryNotional \\* \\(1 \\+ lobEntryFeeRate\\);''' + "'''"
+old_primary = r'''      const lobEntryNotional = lobEntryPrice \* lobRemainingQuantity;\n      const lobExitNotional = current \* lobRemainingQuantity;\n      const lobNetProfitQuote = lobExitNotional \* \(1 - lobFeeRate\) -\n        lobEntryNotional \* \(1 \+ lobFeeRate\);'''
+new_primary = r'''      const lobEntryNotional = lobEntryPrice \* lobRemainingQuantity;\n      const lobExitNotional = current \* lobRemainingQuantity;\n      const lobEntryFeeRate = exchange === \"upbit\" \? lobFeeRate : 0;\n      const lobNetProfitQuote = lobExitNotional \* \(1 - lobFeeRate\) -\n        lobEntryNotional \* \(1 \+ lobEntryFeeRate\);'''
 
-old_policy = r'''r''' + "'''" + r'''        const policyEntryCost = lobEntryPrice \\* policyQuantity \\* \\(1 \\+ policyFeeRate\\);\\n        const guardedNetProfitQuote = ([^;]+?) -\\n          policyEntryCost;''' + "'''"
-new_policy = r'''r''' + "'''" + r'''        const policyEntryCost = lobEntryPrice \\* policyQuantity \\*\\n          \\(1 \\+ policyEntryFeeRate\\);\\n        const guardedNetProfitQuote = ([^;]+?) -\\n          policyEntryCost;''' + "'''"
+old_policy = r'''        const policyEntryCost = lobEntryPrice \* policyQuantity \* \(1 \+ policyFeeRate\);\n        const guardedNetProfitQuote = ([^;]+?) -\n          policyEntryCost;'''
+new_policy = r'''        const policyEntryCost = lobEntryPrice \* policyQuantity \*\n          \(1 \+ policyEntryFeeRate\);\n        const guardedNetProfitQuote = ([^;]+?) -\n          policyEntryCost;'''
 
 for label, old, new in (
     ("primary post-180 exact cost", old_primary, new_primary),
