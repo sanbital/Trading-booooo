@@ -2943,7 +2943,7 @@ async function enterCandidateInner(
     const targetEntryCost = entryPrice * quantity * (1 + targetEntryFeeRate);
     const netPositiveTargetPrice = (targetEntryCost + targetProfitBufferQuote) /
       (quantity * (1 - targetFeeRate));
-    const stopPct = 0.03;
+    const stopPct = clamp(finite(decision.stopBps, 0) / 10_000, 0.0006, 0.02);
     scalpStopPrice = tickRound(entryPrice * (1 - stopPct), rules.price_tick, "down");
     scalpTarget1 = tickRound(
       Math.max(entryPrice * (1 + targetPct), netPositiveTargetPrice),
@@ -7303,6 +7303,9 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         const requestedAction = decision.action;
         const requestedReason = String((decision as any).reason || "");
         const targetRequested = requestedAction === "TARGET_1" || requestedAction === "TARGET_2";
+        const plannedStopRequested = requestedAction === "STOP" &&
+          requestedReason === "lob:STOP_HIT" &&
+          current <= finite(position.stop_price);
         const reversalRequested = requestedAction === "STOP" &&
           (requestedReason === "lob:SIGNAL_REVERSAL" ||
             requestedReason === "lob:LOB_INVALIDATION");
@@ -7330,7 +7333,13 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           : null;
 
         if (heldSeconds < 180) {
-          if (targetRequested) {
+          if (plannedStopRequested) {
+            decision = {
+              action: "STOP",
+              fraction: 1,
+              reason: "lob:STOP_HIT",
+            };
+          } else if (targetRequested) {
             decision = {
               action: "TARGET_1",
               fraction: 1,
@@ -7420,10 +7429,16 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           ((decision as any).reason === "lob:SIGNAL_REVERSAL" ||
             (decision as any).reason === "lob:LOB_INVALIDATION") &&
           Boolean(position.metadata?.lob_soft_exit_qualified);
-        if (!approvedPre180Target && !approvedPre180Reversal) {
+        const approvedPre180PlannedStop = decision.action === "STOP" &&
+          (decision as any).reason === "lob:STOP_HIT" &&
+          current <= finite(position.stop_price);
+        if (
+          !approvedPre180Target && !approvedPre180Reversal &&
+          !approvedPre180PlannedStop
+        ) {
           await event(
             "EXIT_BLOCKED_PRE180_POLICY",
-            `${exchange}:${position.market} exit was not an approved target or qualified reversal`,
+            `${exchange}:${position.market} exit was not an approved target, planned stop, or qualified reversal`,
             {
               held_seconds: heldSeconds,
               blocked_action: decision.action,
