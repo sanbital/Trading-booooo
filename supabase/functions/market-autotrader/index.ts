@@ -117,7 +117,7 @@ import {
   summarizeEntryAdmission,
 } from "./entry-admission.ts";
 
-const VERSION = "7.1.1-LOB-45S-PROFIT-OR-5PCT";
+const VERSION = "7.1.3-180S-NET1-OR-MINUS3";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -2798,11 +2798,20 @@ async function enterCandidateInner(
       };
     }
     const targetPct = decision.targetBps / 10000;
-    // The model stop remains available for entry EV, but execution uses the user's
-    // single hard-loss boundary. No tighter LOB stop may liquidate a losing position.
-    const stopPct = 0.05;
+    // v7.1.3: every target must remain at least one quote-currency unit profitable
+    // after round-trip fees and a conservative p95 exit-price shortfall.
+    const targetFeeRate = clamp(FEE_PCT[exchange] / 100, 0, 0.01);
+    const targetShortfallBps = exchange === "upbit" ? 20 : 50;
+    const targetEntryCost = entryPrice * quantity * (1 + targetFeeRate);
+    const netOneTargetPrice = ((targetEntryCost + 1) / (quantity * (1 - targetFeeRate))) /
+      (1 - targetShortfallBps / 10000);
+    const stopPct = 0.03;
     scalpStopPrice = tickRound(entryPrice * (1 - stopPct), rules.price_tick, "down");
-    scalpTarget1 = tickRound(entryPrice * (1 + targetPct), rules.price_tick, "up");
+    scalpTarget1 = tickRound(
+      Math.max(entryPrice * (1 + targetPct), netOneTargetPrice),
+      rules.price_tick,
+      "up",
+    );
     scalpTarget2 = scalpTarget1;
   } else if ((settings as any).strategy === "SCALP") {
     const scalpSnapshot = (candidate as any).snapshot?.scalp || {};
@@ -5925,7 +5934,11 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         } else if (heldSeconds >= 180) {
           decision = lobPost180ProfitReady
             ? { action: "TARGET_1", fraction: 1, reason: "lob:post-180-fee-net-profit" }
-            : { action: "NONE", fraction: 0, reason: "lob:post-180-hold-until-net-profit-or--5pct" };
+            : {
+              action: "NONE",
+              fraction: 0,
+              reason: "lob:post-180-hold-until-net-profit-or--5pct",
+            };
         }
       }
       // v6.5: a slot marked for rotation by the scan cycle closes here, on the monitor's
@@ -6271,6 +6284,73 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision = { action: "STOP", reason: "scalp_max_single_loss" } as any;
         }
       }
+      // v7.1.3 canonical LOB exit policy. This final override runs after target,
+      // trail, LOB invalidation, live-hold and loss-backstop decisions so none can bypass it.
+      if (lobMode && !settings.emergency_liquidation) {
+        const policyFeeRate = clamp(FEE_PCT[exchange] / 100, 0, 0.01);
+        const policyQuantity = Math.max(0, finite(position.remaining_quantity));
+        const policyShortfallBps = exchange === "upbit" ? 20 : 50;
+        const guardedExitPrice = current * (1 - policyShortfallBps / 10000);
+        const policyEntryCost = lobEntryPrice * policyQuantity * (1 + policyFeeRate);
+        const guardedNetProfitQuote = guardedExitPrice * policyQuantity * (1 - policyFeeRate) -
+          policyEntryCost;
+        const drawdownPct = lobEntryPrice > 0 ? (current / lobEntryPrice - 1) * 100 : 0;
+        const requestedAction = decision.action;
+
+        if (heldSeconds < 180) {
+          decision = requestedAction !== "NONE" && guardedNetProfitQuote >= 1
+            ? {
+              action: "TARGET_1",
+              fraction: 1,
+              reason: "lob:pre-180-target-guarded-net-at-least-1",
+            }
+            : {
+              action: "NONE",
+              fraction: 0,
+              reason: "lob:pre-180-hold-no-stop-no-loss-exit",
+            };
+        } else if (guardedNetProfitQuote >= 1) {
+          decision = {
+            action: "TARGET_1",
+            fraction: 1,
+            reason: "lob:post-180-guarded-net-at-least-1",
+          };
+        } else if (drawdownPct <= -3) {
+          decision = {
+            action: "STOP",
+            fraction: 1,
+            reason: "lob:post-180-minus-3pct-stop",
+          };
+        } else {
+          decision = {
+            action: "NONE",
+            fraction: 0,
+            reason: "lob:post-180-hold-until-net1-or-minus3pct",
+          };
+        }
+
+        if (decision.action !== "NONE") {
+          position = {
+            ...position,
+            ...(await patch("trading_positions", `id=eq.${position.id}`, {
+              metadata: {
+                ...(position.metadata || {}),
+                exit_policy_quote: {
+                  revision: "7.1.3-180S-NET1-OR-MINUS3",
+                  price: current,
+                  measured_at: new Date().toISOString(),
+                  held_seconds: heldSeconds,
+                  guarded_net_profit_quote: guardedNetProfitQuote,
+                  drawdown_pct: drawdownPct,
+                  requested_action: requestedAction,
+                  approved_action: decision.action,
+                },
+              },
+            }))[0],
+          };
+        }
+      }
+
       if (decision.action === "NONE") continue;
       // v5.3: the resting sell locks the base asset. Cancel and CONFIRM before any market
       // exit; a rejected sell would leave the position open with no protection.
