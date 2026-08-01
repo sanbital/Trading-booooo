@@ -1,0 +1,22 @@
+name: Emergency DB Recovery
+
+on:
+  push:
+    paths:
+      - ".github/workflows/emergency-db-recovery.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Call one-shot recovery endpoint
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --show-error --silent \
+            --max-time 90 \
+            "https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/db-health-check?key=recover-20260801-1429-7c9d"
