@@ -1,6 +1,6 @@
 import { scoreHotSymbol } from "./hot-symbol.ts";
 import { detectLobPatterns } from "./patterns.ts";
-import { assessLobTraps } from "./traps.ts";
+import { assessLobTraps, DEFAULT_LOB_TRAP_CONFIG } from "./traps.ts";
 import type {
   LobCostEstimate,
   LobEntryConfig,
@@ -75,6 +75,100 @@ export function calibrateMakerFillProbability(
   };
 }
 
+export type LobEntryRiskAssessment = {
+  reasons: string[];
+  warnings: string[];
+  adverseFlowSignals: string[];
+  positiveVotes: number;
+  flowScore: number;
+  bidSpoofThreshold: number;
+  askSpoofThreshold: number;
+};
+
+/**
+ * Admission policy for the failure modes observed in live Top-10 entries.
+ *
+ * A weak tape is not an independent veto: it confirms that a disappearing bid wall is
+ * dangerous. Likewise, an ask wall disappearing without executions is often bullish for
+ * a long and is never rejected by itself. This keeps the gate narrow while making the
+ * exact spoof/support combinations auditable at scan time and immediately before an order.
+ */
+export function assessLobEntryRisk(
+  features: LobFeatureVector,
+  trapOverrides: LobEntryConfig["trap"] = {},
+): LobEntryRiskAssessment {
+  const trapCfg = { ...DEFAULT_LOB_TRAP_CONFIG, ...trapOverrides };
+  const reasons: string[] = [];
+  const warnings: string[] = [];
+  const status = String(features.dynamicStatus || "INSUFFICIENT").toUpperCase();
+  const pressure = clamp(finite(features.tradePressureFast), -1, 1);
+  const micropriceBps = finite(features.micropriceDeviationBps);
+  const microprice = clamp(micropriceBps / 8, -1, 1);
+  const imbalance = clamp(finite(features.bookImbalance), -1, 1);
+  const ofi = clamp(finite(features.ofiPersistence), 0, 1);
+  const bidSpoof = clamp(finite(features.spoofLikeScore), 0, 1);
+  const askSpoof = clamp(finite(features.askSpoofScore), 0, 1);
+  const bidSpoofDetected = bidSpoof >= trapCfg.bidSpoofScore;
+  const askSpoofDetected = askSpoof >= trapCfg.askSpoofScore;
+  const supportBreakdown = status.includes("SUPPORT_BREAKDOWN");
+  const dynamicInsufficient = status.includes("INSUFFICIENT") ||
+    clamp(finite(features.dataQuality), 0, 1) < trapCfg.minDataQuality;
+
+  const adverseFlowSignals = [
+    finite(features.tradeSpeedTrend) <= -0.20 ? "TRADE_SPEED_DECLINING" : null,
+    finite(features.notionalTrend) <= -0.20 ? "FLOW_NOTIONAL_DECLINING" : null,
+    pressure < 0 ? "SELL_PRESSURE_DOMINANT" : null,
+    micropriceBps < 0 ? "MICROPRICE_BEARISH" : null,
+  ].filter((value): value is string => value !== null);
+
+  if (dynamicInsufficient) reasons.push("LOB_DYNAMIC_EVIDENCE_INSUFFICIENT");
+  if (supportBreakdown) reasons.push("SUPPORT_BREAKDOWN_RISK");
+  if (bidSpoofDetected && askSpoofDetected) reasons.push("TWO_SIDED_SPOOF_RISK");
+
+  // A very strong disappearing bid needs one confirming weak-flow sign. At the normal
+  // threshold two independent signs are required, avoiding a broad decay-only veto.
+  const severeBidSpoofThreshold = Math.max(0.90, trapCfg.bidSpoofScore);
+  const bidSpoofConfirmed =
+    (bidSpoof >= severeBidSpoofThreshold && adverseFlowSignals.length >= 1) ||
+    (bidSpoofDetected && adverseFlowSignals.length >= 2);
+  if (bidSpoofConfirmed) reasons.push("BID_SPOOF_CONFIRMED_BY_WEAK_FLOW");
+
+  if (askSpoofDetected && !bidSpoofDetected && !supportBreakdown) {
+    warnings.push("ASK_SPOOF_INFORMATIONAL_ONLY");
+  }
+  if (bidSpoofDetected && adverseFlowSignals.length > 0) {
+    warnings.push(`BID_SPOOF_ADVERSE_FLOW_${adverseFlowSignals.length}`);
+  }
+
+  // A wall that is already disappearing cannot vote for its own reliability. Ask spoof
+  // may remain a bullish vote only while neither side is in a blocking spoof/support pair.
+  const persistentBidVote = features.persistentBidWall && !bidSpoofDetected;
+  const askSpoofVote = askSpoof >= 0.45 && !bidSpoofDetected && !supportBreakdown;
+  const positiveVotes = [
+    pressure >= 0.04,
+    microprice >= -0.03,
+    imbalance >= -0.12,
+    ofi >= 0.12,
+    persistentBidVote,
+    askSpoofVote,
+  ].filter(Boolean).length;
+  const flowScore = pressure * 0.42 + microprice * 0.24 + imbalance * 0.20 + ofi * 0.14;
+  const arrival = Math.max(0, finite(features.tradeArrivalRate));
+  if (!(arrival > 0 && positiveVotes >= 3 && flowScore >= -0.015)) {
+    reasons.push("LOB_FLOW_NOT_BUYABLE_NOW");
+  }
+
+  return {
+    reasons: [...new Set(reasons)],
+    warnings: [...new Set(warnings)],
+    adverseFlowSignals,
+    positiveVotes,
+    flowScore,
+    bidSpoofThreshold: trapCfg.bidSpoofScore,
+    askSpoofThreshold: trapCfg.askSpoofScore,
+  };
+}
+
 /**
  * Pure Top-10 order-book entry gate.
  *
@@ -118,9 +212,7 @@ export function evaluateLobEntry(
     ? rawFixedTargetBps
     : clamp(Math.max(cfg.minTargetBps, targetCostBps + 2), cfg.minTargetBps, cfg.maxTargetBps);
   // The actual absolute loss boundary is -5% in the autotrader exit path.
-  const stopBps = rawFixedStopBps > 0
-    ? rawFixedStopBps
-    : 500;
+  const stopBps = rawFixedStopBps > 0 ? rawFixedStopBps : 500;
 
   const traps = assessLobTraps(
     {
@@ -147,30 +239,24 @@ export function evaluateLobEntry(
   ) reasons.push("OUTSIDE_24H_GAINER_TOP10");
   if (features.samples < cfg.minSamples) reasons.push("INSUFFICIENT_LOB_SAMPLES");
   if (features.observationMs < 50_000) reasons.push("INSUFFICIENT_50S_OBSERVATION");
-  if (features.bookAgeMs == null || features.bookAgeMs > cfg.maxBookAgeMs) reasons.push("STALE_ORDERBOOK");
-  if (features.spreadBps == null || features.spreadBps > cfg.maxSpreadBps) reasons.push("SPREAD_TOO_WIDE");
-  if (!(features.bidDepthQuote > 0) || !(features.askDepthQuote > 0) || !(features.depthRatio > 0)) {
+  if (features.bookAgeMs == null || features.bookAgeMs > cfg.maxBookAgeMs) {
+    reasons.push("STALE_ORDERBOOK");
+  }
+  if (features.spreadBps == null || features.spreadBps > cfg.maxSpreadBps) {
+    reasons.push("SPREAD_TOO_WIDE");
+  }
+  if (
+    !(features.bidDepthQuote > 0) || !(features.askDepthQuote > 0) || !(features.depthRatio > 0)
+  ) {
     reasons.push("UNEXECUTABLE_ORDERBOOK_DEPTH");
   }
 
-  // Present-tense order-book/tape judgement. This intentionally does not depend on the
-  // broader market direction, so a falling market can still produce a valid scalp entry.
-  const pressure = clamp(finite(features.tradePressureFast), -1, 1);
-  const microprice = clamp(finite(features.micropriceDeviationBps) / 8, -1, 1);
-  const imbalance = clamp(finite(features.bookImbalance), -1, 1);
-  const ofi = clamp(finite(features.ofiPersistence), 0, 1);
-  const arrival = Math.max(0, finite(features.tradeArrivalRate));
-  const flowScore = pressure * 0.42 + microprice * 0.24 + imbalance * 0.20 + ofi * 0.14;
-  const positiveVotes = [
-    pressure >= 0.04,
-    microprice >= -0.03,
-    imbalance >= -0.12,
-    ofi >= 0.12,
-    features.persistentBidWall,
-    features.askSpoofScore >= 0.45,
-  ].filter(Boolean).length;
-  const orderBookGood = arrival > 0 && positiveVotes >= 3 && flowScore >= -0.015;
-  if (!orderBookGood) reasons.push("LOB_FLOW_NOT_BUYABLE_NOW");
+  // Present-tense LOB judgement. Weak flow is used only as spoof confirmation; EV,
+  // candles and broad market direction remain informational and cannot veto an entry.
+  const risk = assessLobEntryRisk(features, cfg.trap);
+  reasons.push(...risk.reasons);
+  warnings.push(...risk.warnings);
+  const flowScore = risk.flowScore;
 
   const rawPFill = clamp(
     0.35 + hotness.tradabilityScore / 100 * 0.45 + clamp(features.depthRatio / 3, 0, 1) * 0.15 -
