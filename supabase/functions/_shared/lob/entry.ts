@@ -25,6 +25,7 @@ const OPERATOR_MIN_NET_REWARD_RISK_RATIO = 0.25;
 const OPERATOR_MAX_STOP_TO_TARGET_RATIO = 4;
 const PLANNED_SCALP_STOP_MAX_BPS = 200;
 const LEGACY_EMERGENCY_STOP_BPS = 500;
+const ECONOMIC_GATE_EPSILON = 1e-9;
 
 export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   minSamples: 4,
@@ -337,14 +338,14 @@ export function evaluateLobEntry(
   const netRewardRiskRatio = Math.abs(stopReturnNetBps) > 0
     ? Math.max(0, targetReturnNetBps) / Math.abs(stopReturnNetBps)
     : 0;
-  if (targetReturnNetBps < cfg.minNetProfitBps) {
+  if (targetReturnNetBps + ECONOMIC_GATE_EPSILON < cfg.minNetProfitBps) {
     reasons.push("REWARD_RISK_FAILED");
     warnings.push("TARGET_NET_PROFIT_TOO_LOW");
   }
-  if (stopToTargetRatio > cfg.maxStopToTargetRatio) {
+  if (stopToTargetRatio > cfg.maxStopToTargetRatio + ECONOMIC_GATE_EPSILON) {
     reasons.push("STOP_TO_TARGET_RATIO_FAILED");
   }
-  if (netRewardRiskRatio < cfg.minNetRewardRiskRatio) {
+  if (netRewardRiskRatio + ECONOMIC_GATE_EPSILON < cfg.minNetRewardRiskRatio) {
     reasons.push("REWARD_RISK_FAILED");
   }
   const informationalEv = pTarget * targetReturnNetBps + pStop * stopReturnNetBps;
