@@ -1,40 +1,46 @@
-name: Patch autotrader v7.1.4 volatility-aware exit policy
+name: Validate autotrader v7.1.4 exit policy
 
 on:
   push:
     branches:
       - fix/v714-volatility-aware-exit-policy
+      - main
     paths:
-      - .github/workflows/patch-autotrader-v714.yml
+      - "supabase/functions/market-autotrader/**"
+      - "supabase/functions/_shared/lob/exit.ts"
+      - "supabase/migrations/*v714*"
+      - "scripts/patch_v714_exit_policy.py"
+      - ".github/workflows/patch-autotrader-v714.yml"
   pull_request:
     branches:
       - main
     types: [opened, synchronize, reopened]
     paths:
-      - .github/workflows/patch-autotrader-v714.yml
+      - "supabase/functions/market-autotrader/**"
+      - "supabase/functions/_shared/lob/exit.ts"
+      - "supabase/migrations/*v714*"
+      - "scripts/patch_v714_exit_policy.py"
+      - ".github/workflows/patch-autotrader-v714.yml"
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: validate-autotrader-v714-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  patch-and-commit:
+  validate:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Checkout policy branch
+      - name: Check out event revision
         uses: actions/checkout@v4
         with:
-          ref: fix/v714-volatility-aware-exit-policy
           fetch-depth: 0
 
-      - name: Apply v7.1.4 state machine
-        run: |
-          if grep -q 'const VERSION = "7.1.4-VOLATILITY-AWARE-EXIT";' \
-            supabase/functions/market-autotrader/index.ts; then
-            echo "v7.1.4 source is already patched; continuing with validation."
-          else
-            python3 scripts/patch_v714_exit_policy.py
-          fi
+      - name: Validate immutable v7.1.4 policy
+        run: python3 scripts/patch_v714_exit_policy.py
 
       - name: Set up Deno
         uses: denoland/setup-deno@v2
@@ -43,49 +49,17 @@ jobs:
 
       - name: Format and type-check
         run: |
-          deno fmt \
+          deno fmt --check \
             supabase/functions/market-autotrader/index.ts \
             supabase/functions/_shared/lob/exit.ts
           deno check supabase/functions/market-autotrader/index.ts
-          git diff --check
+          git diff --exit-code
 
-      - name: Validate policy invariants
+      - name: Confirm workflows are non-mutating
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          engine = Path("supabase/functions/market-autotrader/index.ts").read_text()
-          exit_policy = Path("supabase/functions/_shared/lob/exit.ts").read_text()
-          migration = Path("supabase/migrations/20260801023000_enforce_v714_volatility_aware_exit_policy.sql").read_text()
-
-          assert 'const VERSION = "7.1.4-VOLATILITY-AWARE-EXIT";' in engine
-          assert 'if (heldSeconds < 60)' in engine
-          assert 'else if (heldSeconds < 180)' in engine
-          assert 'softReason === "SIGNAL_REVERSAL"' in engine and '? 30' in engine
-          assert 'softReason === "LOB_INVALIDATION"' in engine and '? 50' in engine
-          assert 'guardedNetProfitQuote > 0' in engine
-          assert 'drawdownPct <= -3' in engine
-          assert 'lob:pre-180-target-guarded-net-at-least-1' not in engine
-          assert 'return hard(softReason' not in exit_policy
-          assert "V714_PRE60_SELL_LOCK" in migration
-          assert "V714_60_180_EXIT_BLOCKED" in migration
-          assert "v_guarded_net > 0" in migration
-          assert "v_drawdown_pct <= -3" in migration
-          assert "v_is_resting_target" in migration
-          print("PASS: all v7.1.4 exit-policy invariants")
-          PY
-
-      - name: Commit patched source and migration
-        run: |
-          git config user.name "trading-booooo-deploy-bot"
-          git config user.email "trading-booooo-deploy-bot@users.noreply.github.com"
-          git add \
-            supabase/functions/market-autotrader/index.ts \
-            supabase/functions/_shared/lob/exit.ts \
-            supabase/migrations/20260801023000_enforce_v714_volatility_aware_exit_policy.sql
-          if git diff --cached --quiet; then
-            echo "v7.1.4 policy is already applied."
-          else
-            git commit -m "fix(autotrader): add volatility-aware 60/180s exit policy"
-            git push origin HEAD:fix/v714-volatility-aware-exit-policy
-          fi
+          set -euo pipefail
+          ! grep -R "python3 .github/scripts/apply_scalp_v7_1_0.py" .github/workflows
+          ! grep -R "Stamp v7.0.8 runtime version" .github/workflows
+          ! grep -R "git push origin main" \
+            .github/workflows/apply-scalp-policy-v7-1-0.yml \
+            .github/workflows/patch-autotrader-v714.yml
