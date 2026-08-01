@@ -120,6 +120,7 @@ import {
 import { type ExecutableNetExitQuote, quoteExecutableNetExit } from "./executable-exit.ts";
 import { buildTradingHeartbeatPatch, type TradingHeartbeatPatch } from "./heartbeat.ts";
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
+import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 
 const VERSION = "7.3.0-EXECUTABLE-STOP-PARITY";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
@@ -2728,23 +2729,16 @@ async function enterCandidateInner(
       forecastBiasPenaltyBps: 0,
     };
     const lobExecutionGate = {
-      minEvBps: 0,
-      minNetProfitBps: minimumTargetNetProfitBps,
-      maxGainerRank: Math.round(
-        clamp(finite((settings as any).lob_max_gainer_rank, 3), 1, 10),
-      ),
-      maxStopToTargetRatio: clamp(
-        finite((settings as any).lob_max_stop_to_target_ratio, 1.35),
-        0.75,
-        5,
-      ),
-      minNetRewardRiskRatio: clamp(
-        Math.max(1.5, finite((settings as any).lob_min_net_reward_risk_ratio, 1.5)),
-        1.5,
-        5,
-      ),
-      maxBookAgeMs: Math.max(250, finite((settings as any).lob_max_book_age_ms, 2500)),
-      maxSpreadBps: Math.max(1, finite((settings as any).lob_max_spread_bps, LIVE_MAX_SPREAD_BPS)),
+      // Same builder the scanner uses, so the first-pass BUY judgement and this
+      // order-time recheck cannot drift apart again.
+      ...buildLobGateConfig({
+        minNetProfitBps: minimumTargetNetProfitBps,
+        minNetRewardRiskRatio: finite((settings as any).lob_min_net_reward_risk_ratio, 1.5),
+        maxStopToTargetRatio: finite((settings as any).lob_max_stop_to_target_ratio, 1.35),
+        maxGainerRank: finite((settings as any).lob_max_gainer_rank, 3),
+        maxBookAgeMs: finite((settings as any).lob_max_book_age_ms, 2500),
+        maxSpreadBps: finite((settings as any).lob_max_spread_bps, LIVE_MAX_SPREAD_BPS),
+      }, { maxSpreadBps: LIVE_MAX_SPREAD_BPS }),
       maxHoldingSeconds: Math.round(
         clamp(finite((settings as any).lob_max_holding_seconds, 180), 1, 300),
       ),

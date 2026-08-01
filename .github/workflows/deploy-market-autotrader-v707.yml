@@ -137,8 +137,21 @@ jobs:
             supabase/functions/_shared/lob/entry.ts
           grep -q 'maxGainerRank' \
             supabase/functions/_shared/lob/entry.ts
+          # One gate definition for both stages. Building it separately is what let the
+          # scanner store BUY candidates the executor then refused, with no trade and no
+          # recorded reason in between.
+          grep -q 'buildLobGateConfig' \
+            supabase/functions/market-scanner/engine.ts
+          grep -q 'buildLobGateConfig' \
+            supabase/functions/market-autotrader/index.ts
+          ! grep -q 'minNetRewardRiskRatio: risk.minNetRR' \
+            supabase/functions/market-scanner/engine.ts
+          # failed_gates must be the whole rejection set, and a stored BUY must carry none.
+          grep -q 'unnamedLobReasons' \
+            supabase/functions/market-scanner/engine.ts
           deno test --allow-env --allow-read \
             supabase/functions/_shared/lob/entry-risk.test.ts \
+            supabase/functions/_shared/lob/gate-config.test.ts \
             supabase/functions/_shared/lob/preorder.test.ts \
             supabase/functions/market-autotrader/executable-exit.test.ts \
             supabase/functions/market-autotrader/entry-integrity.test.ts \
