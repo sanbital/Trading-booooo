@@ -115,6 +115,18 @@ export interface LobCostEstimate {
 }
 
 export interface LobEntryConfig {
+  /**
+   * Worst 24h-gainer rank still admitted. Measured performance degrades monotonically with
+   * rank (ranks 1-3 profitable, 4-6 and 7-10 progressively negative), and the top ranks also
+   * carry the resting depth an exit actually needs, so this is a liquidity constraint rather
+   * than a forecast hurdle. Defaults to the measured-safe ceiling of 3 when unset.
+   */
+  maxGainerRank?: number;
+  /**
+   * Primary pattern names that may not open a position. Unset keeps the measured default
+   * (the continuation families); an explicit empty array reopens every pattern.
+   */
+  blockedPatterns?: string[];
   minSamples: number;
   /** Minimum wall-clock coverage of the live order-book/tape observation. */
   minObservationMs: number;

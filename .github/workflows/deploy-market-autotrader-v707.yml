@@ -1,5 +1,5 @@
-name: Deploy executable-net integrity v7.2.3
-# v7.2.3 is canonical source. No runtime patch chain may rewrite the validated artifact.
+name: Deploy executable-stop parity v7.3.0
+# v7.3.0 is canonical source. No runtime patch chain may rewrite the validated artifact.
 
 on:
   push:
@@ -25,7 +25,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-executable-net-integrity-v723
+  group: deploy-executable-stop-parity-v730
   cancel-in-progress: false
 
 jobs:
@@ -42,7 +42,7 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Validate canonical v7.2.3 deployment artifact
+      - name: Validate canonical v7.3.0 deployment artifact
         shell: bash
         run: |
           set -euo pipefail
@@ -55,11 +55,11 @@ jobs:
             supabase/functions/market-scanner/engine.ts \
             supabase/functions/_shared/lob/entry.ts \
             gateway/server.mjs
-          grep -q 'const VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY";' \
+          grep -q 'const VERSION = "7.3.0-EXECUTABLE-STOP-PARITY";' \
             supabase/functions/market-autotrader/index.ts
-          grep -q 'ENGINE_VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY"' \
+          grep -q 'ENGINE_VERSION = "7.3.0-EXECUTABLE-STOP-PARITY"' \
             supabase/functions/market-scanner/engine.ts
-          grep -q 'const VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY";' gateway/server.mjs
+          grep -q 'const VERSION = "7.3.0-EXECUTABLE-STOP-PARITY";' gateway/server.mjs
           grep -q 'quoteExecutableNetExit' \
             supabase/functions/market-autotrader/index.ts
           grep -q 'time_in_force: "FOK"' \
@@ -117,6 +117,26 @@ jobs:
             supabase/functions/market-autotrader/index.ts
           grep -q 'EXCHANGE_BALANCE_ZERO_RECONCILED' \
             supabase/functions/market-autotrader/index.ts
+          # v7.3.0: the terminal policy price must be persisted, or guard_lob_sell_order_v714
+          # rejects every live sell with V724_EXIT_BLOCK_MISSING_ECONOMICS.
+          grep -q 'price: guardedExitPrice' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'POST180_MAX_HOLD_TIMEOUT' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'lob_post180_max_hold_seconds' \
+            supabase/functions/market-autotrader/index.ts
+          # The -2% stop is measured on the executable bid VWAP, never the display price.
+          grep -q 'executableExitPrice' \
+            supabase/functions/market-autotrader/index.ts
+          ! grep -q 'const guardedExitPrice = current;' \
+            supabase/functions/market-autotrader/index.ts
+          # Trap vetoes are an entry authority, not a diagnostic string.
+          grep -q 'if (trap.veto) reasons.push' \
+            supabase/functions/_shared/lob/entry.ts
+          grep -q 'traps.confidenceMultiplier' \
+            supabase/functions/_shared/lob/entry.ts
+          grep -q 'maxGainerRank' \
+            supabase/functions/_shared/lob/entry.ts
           deno test --allow-env --allow-read \
             supabase/functions/_shared/lob/entry-risk.test.ts \
             supabase/functions/_shared/lob/preorder.test.ts \
@@ -147,7 +167,7 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Verify exact canonical v7.2.3 production artifact
+      - name: Verify exact canonical v7.3.0 production artifact
         shell: bash
         run: |
           set -euo pipefail
@@ -169,7 +189,7 @@ jobs:
         with:
           version: 2.109.1
 
-      - name: Deploy scanner and autotrader v7.2.3
+      - name: Deploy scanner and autotrader v7.3.0
         shell: bash
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -191,4 +211,4 @@ jobs:
 # v7.1.8: allow protected targets and qualified LOB reversals before 180 seconds
 # v7.1.9: preserve positive-net exit and collect post-180 recovery shadow outcomes
 # v7.2.0: tighten the post-180 executable-net hard stop from -3% to -2%
-# v7.2.3: executable full-depth FOK net exit, strict entry integrity, partial heartbeat writes
+# v7.3.0: executable-VWAP terminal stop, bounded post-180 hold, trap vetoes wired into entry

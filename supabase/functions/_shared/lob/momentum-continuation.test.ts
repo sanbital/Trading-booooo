@@ -90,10 +90,24 @@ Deno.test("momentum pattern remains short-lived and informational", () => {
   const decision = evaluateLobEntry(momentumFeatures(), binanceCosts);
   assertEquals(decision.pattern, "MOMENTUM_CONTINUATION");
   assert(decision.targetBps >= 12 && decision.targetBps <= 80);
-  assertEquals(decision.stopBps, 500);
+  // Planned stop is noise-derived and bounded by the scalp ceiling, not the 500bp
+  // emergency loss cap it used to be conflated with.
+  assert(decision.stopBps > 0);
+  assert(decision.stopBps <= 200);
   assertEquals(decision.maxHoldingSeconds, 180);
   assert(decision.targetReturnNetBps > 0);
-  assertEquals(decision.decision, "BUY");
+});
+
+Deno.test("momentum continuation is blocked by default and reopenable by config", () => {
+  const blocked = evaluateLobEntry(momentumFeatures(), binanceCosts);
+  assertEquals(blocked.decision, "WAIT");
+  assert(blocked.reasons.includes("LOB_PATTERN_BLOCKED_MOMENTUM_CONTINUATION"));
+
+  const reopened = evaluateLobEntry(momentumFeatures(), binanceCosts, {
+    blockedPatterns: [],
+  });
+  assert(!reopened.reasons.some((reason) => reason.startsWith("LOB_PATTERN_BLOCKED_")));
+  assertEquals(reopened.decision, "BUY");
 });
 
 Deno.test("large historical gainer context cannot change present-tense admission", () => {

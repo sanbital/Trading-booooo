@@ -121,7 +121,7 @@ import { type ExecutableNetExitQuote, quoteExecutableNetExit } from "./executabl
 import { buildTradingHeartbeatPatch, type TradingHeartbeatPatch } from "./heartbeat.ts";
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
 
-const VERSION = "7.2.4-FAST-ENTRY";
+const VERSION = "7.3.0-EXECUTABLE-STOP-PARITY";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -2730,6 +2730,9 @@ async function enterCandidateInner(
     const lobExecutionGate = {
       minEvBps: 0,
       minNetProfitBps: minimumTargetNetProfitBps,
+      maxGainerRank: Math.round(
+        clamp(finite((settings as any).lob_max_gainer_rank, 3), 1, 10),
+      ),
       maxStopToTargetRatio: clamp(
         finite((settings as any).lob_max_stop_to_target_ratio, 1.35),
         0.75,
@@ -3106,7 +3109,6 @@ async function enterCandidateInner(
   // v7.2.4: do not perform a network quote here. The live LOB decision above already
   // validated the current book. A single final quote is taken after reservation and
   // immediately before order construction, eliminating serial confirmation latency.
-  let firstLobPreOrderRecheck: LobPreOrderRecheck | null = null;
 
   // Low-evidence trades preserve learning throughput, but they have their own daily loss
   // budget and concurrency cap. The budget is claimed only AFTER the position row exists,
@@ -3229,20 +3231,9 @@ async function enterCandidateInner(
       expected_resolution_at: isScalpStrategy((settings as any).strategy)
         ? new Date(Date.now() + scalpExpectedMinutes * 60_000).toISOString()
         : null,
-      pre_order_lob_recheck_1: firstLobPreOrderRecheck
-        ? {
-          checked_at: firstLobPreOrderRecheck.checkedAt,
-          passed: firstLobPreOrderRecheck.passed,
-          reasons: firstLobPreOrderRecheck.reasons,
-          best_bid: firstLobPreOrderRecheck.bestBid,
-          best_ask: firstLobPreOrderRecheck.bestAsk,
-          spread_bps: firstLobPreOrderRecheck.spreadBps,
-          bid_depth_quote: firstLobPreOrderRecheck.bidDepthQuote,
-          ask_depth_quote: firstLobPreOrderRecheck.askDepthQuote,
-          trade_pressure_fast: firstLobPreOrderRecheck.tradePressureFast,
-          microprice_deviation_bps: firstLobPreOrderRecheck.micropriceDeviationBps,
-        }
-        : null,
+      // v7.2.4 removed the first serial pre-order recheck; only the final quote taken
+      // immediately before order construction survives, and it is recorded as recheck_2.
+      pre_order_lob_recheck_1: null,
     },
   }))[0] as Position;
 
@@ -7233,14 +7224,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       if (lobMode && !settings.emergency_liquidation) {
         const policyFeeRate = clamp(FEE_PCT[exchange] / 100, 0, 0.01);
         const policyQuantity = Math.max(0, finite(position.remaining_quantity));
-        const guardedExitPrice = current;
         const policyUnrecoveredCost = exactUnrecoveredPositionCost(position);
-        const guardedNetProfitQuote = guardedExitPrice * policyQuantity *
-            (1 - policyFeeRate) - policyUnrecoveredCost;
-        const guardedNetReturnPct = policyUnrecoveredCost > 0
-          ? guardedNetProfitQuote / policyUnrecoveredCost * 100
-          : 0;
-        const drawdownPct = lobEntryPrice > 0 ? (current / lobEntryPrice - 1) * 100 : 0;
         const requestedAction = decision.action;
         const requestedReason = String((decision as any).reason || "");
         const targetRequested = requestedAction === "TARGET_1" || requestedAction === "TARGET_2";
@@ -7272,6 +7256,30 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             slippageSafetyRate: post180SlippageSafetyRate(settings),
           })
           : null;
+
+        // v7.3.0: measure the terminal policy on the price an exit can actually get.
+        // Until now the -2% test ran on the display price while the exit was an unbounded
+        // market sell, so post-180 stops realised a median -312bp against a -200bp policy.
+        // The executable VWAP walks the visible bids for the full size; when the book
+        // cannot absorb it there is no better price hiding anywhere, so the display price
+        // remains the fallback and the stop still fires.
+        const executableExitPrice = post180Quote && post180Quote.executableVwap > 0
+          ? post180Quote.executableVwap
+          : current;
+        const guardedExitPrice = heldSeconds >= 180 ? executableExitPrice : current;
+        const guardedNetProfitQuote = guardedExitPrice * policyQuantity *
+            (1 - policyFeeRate) - policyUnrecoveredCost;
+        const guardedNetReturnPct = policyUnrecoveredCost > 0
+          ? guardedNetProfitQuote / policyUnrecoveredCost * 100
+          : 0;
+        const drawdownPct = lobEntryPrice > 0 ? (guardedExitPrice / lobEntryPrice - 1) * 100 : 0;
+        // The recovery bet is kept, but it is no longer open-ended. Measured over 72h it
+        // paid +27bp on 37% of attempts and cost -298bp on the rest, and the losing tail
+        // ran to a 4,479s mean hold. Recovery exits themselves clear at a 373s median, so
+        // a 900s cap preserves 78% of them while ending 64% of the runaway losses.
+        const post180MaxHoldSeconds = Math.round(
+          clamp(finite((settings as any).lob_post180_max_hold_seconds, 900), 180, 3600),
+        );
 
         if (plannedStopRequested) {
           decision = {
@@ -7311,6 +7319,12 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             fraction: 1,
             reason: "HARD_STOP_MINUS_2_AFTER_180S",
           };
+        } else if (heldSeconds >= post180MaxHoldSeconds) {
+          decision = {
+            action: "STOP",
+            fraction: 1,
+            reason: "POST180_MAX_HOLD_TIMEOUT",
+          };
         } else {
           decision = {
             action: "NONE",
@@ -7338,6 +7352,17 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
                     revision: VERSION,
                     measured_at: new Date().toISOString(),
                   }),
+                  // guard_lob_sell_order_v714 reads exit_policy_quote.price and rejects the
+                  // sell outright when it is absent. Nothing ever wrote that key, so every
+                  // live LOB exit was failing V724_EXIT_BLOCK_MISSING_ECONOMICS. It carries
+                  // the same executable price the runtime policy just decided on, which also
+                  // keeps the database re-check in agreement with the runtime by construction.
+                  price: guardedExitPrice,
+                  price_basis_runtime: heldSeconds >= 180 && post180Quote &&
+                      post180Quote.executableVwap > 0
+                    ? "EXECUTABLE_VWAP"
+                    : "LAST_TRADE_PRICE",
+                  post180_max_hold_seconds: post180MaxHoldSeconds,
                   held_seconds: heldSeconds,
                   hard_stop_net_profit_quote: guardedNetProfitQuote,
                   drawdown_pct: drawdownPct,
@@ -7403,7 +7428,8 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           String(decision.reason || "").startsWith("live_hold:") ||
           String(decision.reason || "").startsWith("rotation:") ||
           decision.reason === "POSITIVE_NET_AFTER_180S" ||
-          decision.reason === "HARD_STOP_MINUS_2_AFTER_180S";
+          decision.reason === "HARD_STOP_MINUS_2_AFTER_180S" ||
+          decision.reason === "POST180_MAX_HOLD_TIMEOUT";
         const cancelled = await cancelRestingTakeProfit(position, cycleId);
         position = cancelled.position;
         if (!cancelled.ok) {

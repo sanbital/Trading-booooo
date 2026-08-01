@@ -90,7 +90,10 @@ Deno.test("coherent breakout uses short-horizon target geometry", () => {
   assertEquals(decision.pattern, "QUEUE_DEPLETION_BREAKOUT");
   assert(decision.targetBps >= 12);
   assert(decision.targetBps <= 80);
-  assertEquals(decision.stopBps, 500);
+  // The planned stop was separated from the 500bp emergency loss cap: it is now derived
+  // from the book's own noise and bounded by the scalp ceiling, so it can never be 500.
+  assert(decision.stopBps > 0);
+  assert(decision.stopBps <= 200);
 });
 
 Deno.test("target and stop are unconditional resolved probabilities", () => {

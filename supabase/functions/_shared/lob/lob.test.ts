@@ -217,5 +217,79 @@ test("target hit outranks a simultaneous soft invalidation", () => {
     bidDepthRatio: 0.01,
     minBidDepthRatio: 0.3,
   });
-  assert(target.reason === "TARGET_HIT", "a realized target must not be labelled as a stop");
+  // Reaching the target arms the persistent book trail instead of forcing a fixed-price
+  // exit, so above the trail stop the correct answer is HOLD. What must never happen is
+  // the realized target being relabelled as a stop or an invalidation.
+  assert(!target.exit, "an armed target trail holds while price is above the trail stop");
+  assert(target.reason === "HOLD", "a realized target must not be labelled as a stop");
+  assert(target.nextSoftReason === null, "the trail must not inherit a soft exit reason");
+
+  // Retracing into the trail stop, still at or above the target, is the exit the trail
+  // exists to produce — and it is a target exit, not a stop.
+  const retraced = evaluateLobExit({
+    emergency: false,
+    reconciliationFailed: false,
+    currentPrice: 105,
+    stopPrice: 95,
+    targetPrice: 105,
+    heldSeconds: 25,
+    maxHoldingSeconds: 180,
+    bookImbalance: -0.8,
+    tradePressure: -0.8,
+    micropriceDeviationBps: -4,
+    spreadBps: 80,
+    maxSpreadBps: 30,
+    bidDepthRatio: 0.01,
+    minBidDepthRatio: 0.3,
+    softSignalStreak: target.nextSoftSignalStreak,
+  });
+  assert(retraced.exit, "a retrace into the trail stop must exit");
+  assert(retraced.reason === "TARGET_HIT", "the trail exit is a target exit");
+});
+
+test("a target trail that loses the target floor disarms instead of ordering a blocked sell", () => {
+  const armed = evaluateLobExit({
+    emergency: false,
+    reconciliationFailed: false,
+    currentPrice: 106,
+    stopPrice: 95,
+    targetPrice: 105,
+    heldSeconds: 20,
+    maxHoldingSeconds: 180,
+    bookImbalance: 0.2,
+    tradePressure: 0.2,
+    micropriceDeviationBps: 2,
+    spreadBps: 10,
+    maxSpreadBps: 30,
+    bidDepthRatio: 1,
+    minBidDepthRatio: 0.3,
+  });
+  assert(!armed.exit, "the trail arms on the first touch");
+
+  // A protected target order can only fill at or above the stored target. Requesting one
+  // below the target produced an order with no bids to match, so the position ran on to a
+  // loss instead. Below the floor the trail disarms and ordinary evaluation resumes.
+  const gapped = evaluateLobExit({
+    emergency: false,
+    reconciliationFailed: false,
+    currentPrice: 104,
+    stopPrice: 95,
+    targetPrice: 105,
+    heldSeconds: 30,
+    maxHoldingSeconds: 180,
+    bookImbalance: 0.2,
+    tradePressure: 0.2,
+    micropriceDeviationBps: 2,
+    spreadBps: 10,
+    maxSpreadBps: 30,
+    bidDepthRatio: 1,
+    minBidDepthRatio: 0.3,
+    softSignalStreak: armed.nextSoftSignalStreak,
+  });
+  assert(!gapped.exit, "no exit may be requested below the target floor");
+  assert(gapped.reason === "HOLD", "losing the target floor is a hold, not an exit");
+  assert(
+    gapped.nextSoftSignalStreak >= 0,
+    "the encoded trail peak must be cleared once the trail disarms",
+  );
 });

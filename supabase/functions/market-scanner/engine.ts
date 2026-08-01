@@ -20,7 +20,7 @@ import {
   sigmaFromAtrPct,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY";
+export const ENGINE_VERSION = "7.3.0-EXECUTABLE-STOP-PARITY";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -3110,6 +3110,9 @@ export function finalizeCandidate(
       },
       {
         minEvBps: Math.max(0, finiteOr((risk.scalpOverrides || {}).minimumEdge, 0) * 10_000),
+        maxGainerRank: Math.round(
+          clamp(finiteOr((risk.scalpOverrides || {}).maxGainerRank, 3), 1, 10),
+        ),
         maxBookAgeMs: Math.max(250, finiteOr((risk.scalpOverrides || {}).maxBookAgeMs, 2500)),
         maxSpreadBps: Math.max(
           1,

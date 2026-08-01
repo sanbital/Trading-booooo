@@ -201,3 +201,57 @@ Deno.test("operator policy requires 20bp net target and caps the legacy RR floor
   assert(decision.decision === "BUY", decision.reasons.join(","));
   assert(decision.netRewardRiskRatio >= 0.25);
 });
+
+Deno.test("a refilling ask wall vetoes the entry instead of only logging", () => {
+  // ASK_ICEBERG: a resting seller that reloads at the same price is a ceiling sitting under
+  // the target. assessLobTraps has always detected it; until v7.3.0 the verdict was dropped
+  // on the floor and only reappeared as a LOB_DIAGNOSTIC_ warning string.
+  const decision = evaluateLobEntry(
+    features({ askAbsorptionScore: 0.80, askRefillRatio: 0.90 }),
+    costs,
+  );
+  assert(decision.reasons.includes("LOB_TRAP_ASK_ICEBERG"));
+  assert(decision.decision !== "BUY");
+});
+
+Deno.test("허매수 bid spoof vetoes through the trap assessment", () => {
+  const decision = evaluateLobEntry(features({ spoofLikeScore: 0.85 }), costs);
+  assert(decision.reasons.includes("LOB_TRAP_BID_SPOOF"));
+  assert(decision.decision !== "BUY");
+});
+
+Deno.test("an unreliable observation window cannot be vetoed as if it were clean", () => {
+  // Below minDataQuality the trap scores are not trusted enough to veto on, so the book is
+  // "unknown", not "clean" — it must not produce a trap veto reason of its own.
+  const decision = evaluateLobEntry(
+    features({ askAbsorptionScore: 0.80, askRefillRatio: 0.90, dataQuality: 0.05 }),
+    costs,
+  );
+  assert(!decision.reasons.some((reason) => reason.startsWith("LOB_TRAP_")));
+});
+
+Deno.test("a non-vetoing hazard shrinks the claimed edge without asserting a bearish view", () => {
+  const clean = evaluateLobEntry(features(), costs);
+  const flickering = evaluateLobEntry(
+    features({ quoteFlickerRate: 400, tradeArrivalRate: 1 }),
+    costs,
+  );
+  assert(flickering.warnings.includes("LOB_DIAGNOSTIC_QUOTE_FLICKER"));
+  assert(!flickering.reasons.includes("LOB_TRAP_QUOTE_FLICKER"));
+  assert(flickering.pTarget < clean.pTarget, "a less legible book claims a smaller edge");
+  assert(flickering.pTarget >= 0.5, "reduced legibility is not a bearish view");
+});
+
+Deno.test("the gainer rank ceiling is enforced and configurable", () => {
+  // Ranks 1-3 averaged +19.4bp at a 65% win rate on live fills; 4-6 averaged -31.4bp and
+  // 7-10 averaged -40.7bp. This is a liquidity constraint, not a forecast hurdle.
+  const admitted = evaluateLobEntry(features({ gainerRank: 3 }), costs);
+  assert(!admitted.reasons.includes("OUTSIDE_24H_GAINER_TOP10"));
+
+  const rejected = evaluateLobEntry(features({ gainerRank: 5 }), costs);
+  assert(rejected.reasons.includes("OUTSIDE_24H_GAINER_TOP10"));
+  assert(rejected.decision !== "BUY");
+
+  const widened = evaluateLobEntry(features({ gainerRank: 5 }), costs, { maxGainerRank: 10 });
+  assert(!widened.reasons.includes("OUTSIDE_24H_GAINER_TOP10"));
+});
