@@ -1,13 +1,23 @@
-name: Deploy market-autotrader v7.0.8
+name: Deploy market-autotrader v7.1.4
 
 on:
   push:
     branches: [main]
     paths:
+      - "supabase/functions/market-autotrader/**"
+      - "supabase/functions/_shared/lob/exit.ts"
+      - "supabase/migrations/20260801023000_enforce_v714_volatility_aware_exit_policy.sql"
+      - "supabase/migrations/20260801024500_lock_v714_exit_policy.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
+    paths:
+      - "supabase/functions/market-autotrader/**"
+      - "supabase/functions/_shared/lob/exit.ts"
+      - "supabase/migrations/20260801023000_enforce_v714_volatility_aware_exit_policy.sql"
+      - "supabase/migrations/20260801024500_lock_v714_exit_policy.sql"
+      - ".github/workflows/deploy-market-autotrader-v707.yml"
   issues:
     types: [opened]
   workflow_dispatch:
@@ -16,40 +26,79 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-market-autotrader-v708
+  group: deploy-market-autotrader-v714
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    if: github.event_name != 'issues' || github.event.issue.title == '[DEPLOY] market-autotrader v7.0.8'
+  validate:
+    if: github.event_name != 'issues' || github.event.issue.title == '[DEPLOY] market-autotrader v7.1.4'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
 
-      - name: Stamp v7.0.8 runtime version
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Verify immutable v7.1.4 source
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
-          path = Path('supabase/functions/market-autotrader/index.ts')
-          source = path.read_text()
-          old = '7.0.7-LOB-SCAN-PLAN-LOCK'
-          new = '7.0.8-PROFIT-ONLY-EXIT'
-          if old not in source:
-              raise SystemExit(f'expected runtime version {old} not found')
-          path.write_text(source.replace(old, new))
+
+          engine = Path("supabase/functions/market-autotrader/index.ts").read_text()
+          exit_policy = Path("supabase/functions/_shared/lob/exit.ts").read_text()
+          lock = Path("supabase/migrations/20260801024500_lock_v714_exit_policy.sql").read_text()
+
+          assert 'const VERSION = "7.1.4-VOLATILITY-AWARE-EXIT";' in engine
+          assert 'lob:pre-60-sell-lock-except-target' in engine
+          assert 'lob:60-180-hold-unless-target-or-qualified-reversal' in engine
+          assert 'lob:post-180-guarded-net-positive' in engine
+          assert 'lob:post-180-minus-3pct-stop' in engine
+          assert 'return hard(softReason' not in exit_policy
+          assert 'drop trigger if exists trading_positions_v708_profit_only_exit' in lock
+          assert 'drop trigger if exists zz_trading_positions_exit_policy_v713' in lock
+          assert 'drop trigger if exists zz_trading_orders_lob_exit_guard_v713' in lock
+          assert 'zz_trading_positions_exit_policy_v714' in lock
+          assert 'zz_trading_orders_lob_exit_guard_v714' in lock
+          print("PASS: deployment source is v7.1.4 and contains no legacy stamping")
           PY
-          grep -q '7.0.8-PROFIT-ONLY-EXIT' supabase/functions/market-autotrader/index.ts
+          deno fmt --check \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/_shared/lob/exit.ts
+          deno check supabase/functions/market-autotrader/index.ts
+
+  deploy:
+    needs: validate
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out validated main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Reconfirm v7.1.4 before deployment
+        run: |
+          set -euo pipefail
+          grep -q 'const VERSION = "7.1.4-VOLATILITY-AWARE-EXIT";' \
+            supabase/functions/market-autotrader/index.ts
+          ! grep -q 'Stamp v7.0.8 runtime version' \
+            .github/workflows/deploy-market-autotrader-v707.yml
 
       - name: Install Supabase CLI
         uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
         with:
           version: 2.109.1
 
-      - name: Deploy market-autotrader
+      - name: Deploy market-autotrader v7.1.4
         shell: bash
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
