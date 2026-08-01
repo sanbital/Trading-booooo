@@ -9,7 +9,7 @@ type JsonRecord = Record<string, any>;
 type Exchange = "upbit" | "binance";
 
 const VERSION = "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION";
-const PERFORMANCE_REVISION = "6.11.0-r4-TRADING-DB-LOAD-SHED";
+const PERFORMANCE_REVISION = "6.11.0-r5-SELECTIVE-READ-CACHE";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const SERVICE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
@@ -17,7 +17,6 @@ const DASHBOARD_TOKEN = env("DASHBOARD_ACCESS_TOKEN") || env("LEARNING_ACCESS_TO
 const DASHBOARD_ORIGIN = env("ALLOWED_ORIGINS").split(",")[0] || "*";
 const REST_PAGE_SIZE = 1000;
 const PERFORMANCE_CACHE_TTL_MS = 120_000;
-const PERFORMANCE_LOAD_SHED = true;
 let performanceCache: { body: JsonRecord; cachedAt: number } | null = null;
 let performanceRefreshInFlight = false;
 
@@ -240,7 +239,7 @@ function calculateTrade(
       residual_quantity: residualQuantity,
       residual_value_quote: residualValueQuote,
       accounting_version: position.accounting_version || null,
-      accounting_quality: position.metadata?.exit_residual_accounting?.quality || null,
+      accounting_quality: position.accounting_quality || null,
       fee_accounting_version: position.fee_accounting_version || null,
       fee_accounting_quality: position.fee_accounting_quality || null,
       reserved_quote: Math.max(0, numeric(position.reserved_quote)),
@@ -396,17 +395,6 @@ Deno.serve(async (request: Request) => {
   if (!SUPABASE_URL || !SERVICE_KEY) {
     return response({ ok: false, error: "missing Supabase configuration" }, 500);
   }
-  if (PERFORMANCE_LOAD_SHED) {
-    return response({
-      ok: false,
-      status: "TEMPORARY_LOAD_SHED",
-      error: "Performance aggregation is temporarily paused to protect live trading database capacity.",
-      version: VERSION,
-      performance_revision: PERFORMANCE_REVISION,
-      retry_after_seconds: 300,
-      trading_impact: "NONE",
-    }, 503);
-  }
 
   const now = Date.now();
   if (performanceCache && now - performanceCache.cachedAt < PERFORMANCE_CACHE_TTL_MS) {
@@ -439,14 +427,22 @@ Deno.serve(async (request: Request) => {
   try {
     const [positions, orders, fills, snapshots, objectiveRows] = await Promise.all([
       dbAll(
-        "trading_positions?is_paper=eq.false&state=in.(OPEN,EXITING,CLOSED)&select=*&order=created_at.asc,id.asc",
+        "trading_positions?is_paper=eq.false&state=in.(OPEN,EXITING,CLOSED)&select=id,exchange,quote_currency,market,state,close_reason,remaining_quantity,residual_quantity,residual_value_quote,average_entry_price,realized_pnl_quote,accounting_version,fee_accounting_version,fee_accounting_quality,reserved_quote,created_at,accounting_quality:metadata->exit_residual_accounting->>quality&order=created_at.asc,id.asc",
         10_000,
       ),
-      dbAll("trading_orders?select=*&order=requested_at.asc,id.asc", 50_000),
-      dbAll("trading_fills?select=*&order=executed_at.asc,id.asc", 100_000),
-      dbLimited("trading_account_snapshots?select=*&order=captured_at.desc&limit=500"),
       dbAll(
-        "trading_joint_objective_snapshots?engine_version=in.(6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE,6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION)&select=*&order=captured_at.asc,id.asc",
+        "trading_orders?select=id,position_id,side,purpose,paid_fee_quote,requested_at&order=requested_at.asc,id.asc",
+        50_000,
+      ),
+      dbAll(
+        "trading_fills?select=id,order_id,volume,funds_quote,fee_quote_estimate,executed_at&order=executed_at.asc,id.asc",
+        100_000,
+      ),
+      dbLimited(
+        "trading_account_snapshots?select=exchange,captured_at,total_equity_quote,managed_capital_quote,prices&order=captured_at.desc&limit=10",
+      ),
+      dbAll(
+        "trading_joint_objective_snapshots?engine_version=in.(6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE,6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION)&select=id,exchange,captured_at,total_equity_quote,managed_capital_quote,filled_exposure_quote,reserved_exposure_quote,external_flow_quote,engine_version&order=captured_at.asc,id.asc",
         10_000,
       ).catch(() => []),
     ]);
