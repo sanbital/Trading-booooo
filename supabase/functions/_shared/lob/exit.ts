@@ -1,6 +1,7 @@
-// Trading-booooo v7.1.4 — LOB signal classification for volatility-aware exits.
-// Hard target/stop detection is immediate, but soft LOB signals are only classified here.
-// The monitor owns the 60-second sell lock and the 30/50-second persistence windows.
+// Trading-booooo v7.2.4 — persistent order-book trailing exits for LOB positions.
+// Planned stops remain immediate. Before 180 seconds, reaching the stored target arms
+// a persistent trailing take-profit instead of forcing an immediate fixed-price exit.
+// The canonical post-180 executable-net and -2% hard-stop policy remains in the monitor.
 
 export type LobExitReason =
   | "RISK_EMERGENCY"
@@ -43,6 +44,14 @@ export interface LobExitDecision {
   severeSoftSignal: boolean;
 }
 
+// The monitor already persists nextSoftSignalStreak on every pass. Negative values below
+// this base are reserved for the armed target-trail peak, so the trail survives stateless
+// edge-function invocations without a schema change or a second exit code path.
+const TARGET_TRAIL_STATE_BASE = 1_000_000;
+const TARGET_TRAIL_MIN_BPS = 8;
+const TARGET_TRAIL_MAX_BPS = 24;
+const TARGET_TRAIL_POLICY_SECONDS = 180;
+
 function hold(input: {
   reason?: "LOB_INVALIDATION" | "SIGNAL_REVERSAL" | null;
   streak?: number;
@@ -55,6 +64,27 @@ function hold(input: {
     nextSoftReason: input.reason ?? null,
     nextSoftSignalStreak: Math.max(0, Math.floor(Number(input.streak) || 0)),
     severeSoftSignal: Boolean(input.severe),
+  };
+}
+
+function encodeTargetTrailPeakBps(peakBps: number): number {
+  return -(TARGET_TRAIL_STATE_BASE + Math.max(0, Math.round(peakBps)));
+}
+
+function decodeTargetTrailPeakBps(value: number | undefined): number | null {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric > -TARGET_TRAIL_STATE_BASE) return null;
+  return Math.max(0, -Math.round(numeric) - TARGET_TRAIL_STATE_BASE);
+}
+
+function holdTargetTrail(peakBps: number): LobExitDecision {
+  return {
+    exit: false,
+    reason: "HOLD",
+    priority: 0,
+    nextSoftReason: null,
+    nextSoftSignalStreak: encodeTargetTrailPeakBps(peakBps),
+    severeSoftSignal: false,
   };
 }
 
@@ -75,11 +105,44 @@ export function evaluateLobExit(input: LobExitInput): LobExitDecision {
   ) {
     return hard("STOP_HIT", 90);
   }
-  if (
-    Number.isFinite(input.targetPrice) && input.targetPrice > 0 &&
-    input.currentPrice >= input.targetPrice
-  ) {
-    return hard("TARGET_HIT", 85);
+
+  const validTarget = Number.isFinite(input.targetPrice) && input.targetPrice > 0
+    ? input.targetPrice
+    : 0;
+  const storedTrailPeakBps = decodeTargetTrailPeakBps(input.softSignalStreak);
+  const targetReached = validTarget > 0 && input.currentPrice >= validTarget;
+  const targetTrailArmed = input.heldSeconds < TARGET_TRAIL_POLICY_SECONDS &&
+    validTarget > 0 &&
+    (targetReached || storedTrailPeakBps !== null);
+
+  if (targetTrailArmed) {
+    const currentPeakBps = Math.max(0, (input.currentPrice / validTarget - 1) * 10_000);
+    const peakBps = Math.max(storedTrailPeakBps ?? 0, currentPeakBps);
+    const peakPrice = validTarget * (1 + peakBps / 10_000);
+    const safeSpreadBps = Number.isFinite(input.spreadBps)
+      ? Math.max(0, input.spreadBps)
+      : TARGET_TRAIL_MIN_BPS;
+    const trailDistanceBps = Math.min(
+      TARGET_TRAIL_MAX_BPS,
+      Math.max(TARGET_TRAIL_MIN_BPS, safeSpreadBps * 0.75),
+    );
+    // Never move the protective trail below the original economically viable target.
+    const trailStopPrice = Math.max(
+      validTarget,
+      peakPrice * (1 - trailDistanceBps / 10_000),
+    );
+    const bookWeakening = input.bookImbalance <= -0.05 ||
+      input.tradePressure <= -0.05 ||
+      input.micropriceDeviationBps < 0 ||
+      input.bidDepthRatio < input.minBidDepthRatio;
+    const retracedToTrail = input.currentPrice <= trailStopPrice;
+    const targetFloorLost = input.currentPrice < validTarget;
+
+    if (targetFloorLost || (retracedToTrail && bookWeakening)) {
+      return hard("TARGET_HIT", 85);
+    }
+
+    return holdTargetTrail(peakBps);
   }
 
   const invalidStatus = new Set([
@@ -108,7 +171,7 @@ export function evaluateLobExit(input: LobExitInput): LobExitDecision {
       (input.bookImbalance <= -0.65 && input.tradePressure <= -0.65 &&
         input.micropriceDeviationBps < 0);
     // Never convert a transient or even severe soft signal directly into a sell here.
-    // Continuous elapsed time is enforced by market-autotrader after the first 60 seconds.
+    // Continuous elapsed time is enforced by market-autotrader before 180 seconds.
     return hold({ reason: softReason, streak: nextStreak, severe });
   }
 
