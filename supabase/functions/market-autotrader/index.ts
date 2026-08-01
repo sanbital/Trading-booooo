@@ -1,4 +1,4 @@
-// Trading-booooo v7.1.4-VOLATILITY-AWARE-EXIT — autonomous spot orchestrator.
+// Trading-booooo v7.2.2-LOB-ENTRY-RISK-GATES — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -79,6 +79,7 @@ import {
   neutralWinRateOf,
 } from "../_shared/lob/entry.ts";
 import { detectLobPatternName } from "../_shared/lob/patterns.ts";
+import { assessLobPreOrderPair, type LobPreOrderRecheck } from "../_shared/lob/preorder.ts";
 import type { LobTrapConfig } from "../_shared/lob/traps.ts";
 import { patternDeployment } from "../_shared/lob/learning.ts";
 import {
@@ -1262,6 +1263,62 @@ function liveLobFeatures(scan: any, market: any): LobFeatureVector {
   };
 }
 
+/** Re-run the same LOB-only gate on a fresh gateway quote; no EV or candle input exists here. */
+export function evaluateLobPreOrderRecheck(
+  lobSnapshot: any,
+  market: any,
+  options: {
+    maxEntry: number;
+    maxSpreadBps: number;
+    requiredNotionalQuote: number;
+    trap?: Partial<LobTrapConfig>;
+  },
+): LobPreOrderRecheck {
+  const features = liveLobFeatures(lobSnapshot, market);
+  const decision = evaluateLobEntry(features, {
+    roundTripFeeBps: 0,
+    entrySlippageBps: 0,
+    targetExitSlippageBps: 0,
+    stopExitSlippageBps: 0,
+    spreadBps: Math.max(0, finite(features.spreadBps)),
+  }, {
+    maxBookAgeMs: 5_000,
+    maxSpreadBps: options.maxSpreadBps,
+    trap: options.trap || {},
+  });
+  const bestBid = finite(market?.best_bid);
+  const bestAsk = finite(market?.best_ask);
+  const reasons = [...decision.reasons];
+  if (!(bestBid > 0 && bestAsk > 0)) reasons.push("PREORDER_EMPTY_ORDERBOOK");
+  if (!(options.maxEntry > 0) || bestAsk > options.maxEntry) {
+    reasons.push("PREORDER_ENTRY_CEILING_BREACHED");
+  }
+  const depth = executableDepth(
+    Array.isArray(market?.asks) ? market.asks : [],
+    options.maxEntry,
+    options.requiredNotionalQuote,
+  );
+  if (
+    !depth.executable ||
+    depth.availableFunds < options.requiredNotionalQuote * LIVE_MIN_DEPTH_BUFFER
+  ) reasons.push("PREORDER_ASK_DEPTH_DROPPED");
+  const uniqueReasons = [...new Set(reasons)];
+  return {
+    passed: uniqueReasons.length === 0,
+    reasons: uniqueReasons,
+    decision: decision.decision,
+    checkedAt: new Date().toISOString(),
+    bestBid,
+    bestAsk,
+    spreadBps: features.spreadBps,
+    bidDepthQuote: features.bidDepthQuote,
+    askDepthQuote: features.askDepthQuote,
+    tradePressureFast: features.tradePressureFast,
+    micropriceDeviationBps: features.micropriceDeviationBps,
+    features,
+  };
+}
+
 /** Total resting bid notional in the visible book. */
 function bidDepthQuote(book: any): number {
   return (Array.isArray(book?.bids) ? book.bids : []).reduce(
@@ -1307,6 +1364,9 @@ function candidatePlan(candidate: Candidate, settings?: TradingSettings) {
 }
 async function marketQuote(exchange: Exchange, market: string) {
   return gateway(exchange, { action: "quote", market });
+}
+function waitMs(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, milliseconds)));
 }
 function uniqueId(prefix: string, id: string) {
   const compact = id.replaceAll("-", "").slice(0, 12);
@@ -2965,6 +3025,45 @@ async function enterCandidateInner(
     scalpTarget2 = tickRound(entryPrice * (1 + scalpTargetPct * 1.5), rules.price_tick, "up");
   }
 
+  // First of two fresh checks. The work below (reservation and its audit writes) supplies
+  // most of the spacing before the second quote, so this does not add a blind two-second wait.
+  let firstLobPreOrderRecheck: LobPreOrderRecheck | null = null;
+  let firstLobPreOrderCheckedAtMs = 0;
+  if (isLobStrategy((settings as any).strategy)) {
+    const firstPreOrderMarket = await marketQuote(exchange, candidate.market);
+    firstLobPreOrderRecheck = evaluateLobPreOrderRecheck(
+      lobSizingContext.lobSnapshot,
+      firstPreOrderMarket,
+      {
+        maxEntry,
+        maxSpreadBps: entryMaxSpreadBps,
+        requiredNotionalQuote: decisionNotional,
+        trap: lobTrapOverrides(settings),
+      },
+    );
+    firstLobPreOrderCheckedAtMs = Date.now();
+    if (!firstLobPreOrderRecheck.passed) {
+      await event(
+        "LOB_PREORDER_RECHECK_BLOCK",
+        `${exchange}:${candidate.market} first pre-order LOB recheck blocked`,
+        {
+          stage: 1,
+          reasons: firstLobPreOrderRecheck.reasons,
+          best_bid: firstLobPreOrderRecheck.bestBid,
+          best_ask: firstLobPreOrderRecheck.bestAsk,
+          spread_bps: firstLobPreOrderRecheck.spreadBps,
+        },
+        { cycleId, level: "INFO" },
+      );
+      return {
+        entered: false,
+        exchange,
+        market: candidate.market,
+        reason: `LOB pre-order recheck 1: ${firstLobPreOrderRecheck.reasons.join(",")}`,
+      };
+    }
+  }
+
   // Low-evidence trades preserve learning throughput, but they have their own daily loss
   // budget and concurrency cap. The budget is claimed only AFTER the position row exists,
   // so every reserve has an idempotent position key and cancellation cannot leak budget.
@@ -3086,6 +3185,20 @@ async function enterCandidateInner(
       expected_resolution_at: isScalpStrategy((settings as any).strategy)
         ? new Date(Date.now() + scalpExpectedMinutes * 60_000).toISOString()
         : null,
+      pre_order_lob_recheck_1: firstLobPreOrderRecheck
+        ? {
+          checked_at: firstLobPreOrderRecheck.checkedAt,
+          passed: firstLobPreOrderRecheck.passed,
+          reasons: firstLobPreOrderRecheck.reasons,
+          best_bid: firstLobPreOrderRecheck.bestBid,
+          best_ask: firstLobPreOrderRecheck.bestAsk,
+          spread_bps: firstLobPreOrderRecheck.spreadBps,
+          bid_depth_quote: firstLobPreOrderRecheck.bidDepthQuote,
+          ask_depth_quote: firstLobPreOrderRecheck.askDepthQuote,
+          trade_pressure_fast: firstLobPreOrderRecheck.tradePressureFast,
+          microprice_deviation_bps: firstLobPreOrderRecheck.micropriceDeviationBps,
+        }
+        : null,
     },
   }))[0] as Position;
 
@@ -3125,6 +3238,68 @@ async function enterCandidateInner(
       }) as Position;
   }
 
+  let secondLobPreOrderRecheck: LobPreOrderRecheck | null = null;
+  if (firstLobPreOrderRecheck) {
+    // Target a 500ms separation. If DB/order preparation already consumed it, continue
+    // immediately rather than imposing additional latency.
+    await waitMs(500 - (Date.now() - firstLobPreOrderCheckedAtMs));
+    const secondPreOrderMarket = await marketQuote(exchange, candidate.market);
+    secondLobPreOrderRecheck = evaluateLobPreOrderRecheck(
+      lobSizingContext.lobSnapshot,
+      secondPreOrderMarket,
+      {
+        maxEntry,
+        maxSpreadBps: entryMaxSpreadBps,
+        requiredNotionalQuote: decisionNotional,
+        trap: lobTrapOverrides(settings),
+      },
+    );
+    const pair = assessLobPreOrderPair(firstLobPreOrderRecheck, secondLobPreOrderRecheck);
+    const secondAudit = {
+      checked_at: secondLobPreOrderRecheck.checkedAt,
+      passed: pair.passed,
+      reasons: pair.reasons,
+      best_bid: secondLobPreOrderRecheck.bestBid,
+      best_ask: secondLobPreOrderRecheck.bestAsk,
+      spread_bps: secondLobPreOrderRecheck.spreadBps,
+      bid_depth_quote: secondLobPreOrderRecheck.bidDepthQuote,
+      ask_depth_quote: secondLobPreOrderRecheck.askDepthQuote,
+      trade_pressure_fast: secondLobPreOrderRecheck.tradePressureFast,
+      microprice_deviation_bps: secondLobPreOrderRecheck.micropriceDeviationBps,
+      interval_ms: Math.max(0, Date.now() - firstLobPreOrderCheckedAtMs),
+    };
+    if (!pair.passed) {
+      await patch("trading_positions", `id=eq.${position.id}`, {
+        state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
+        close_reason: "LOB_PREORDER_RECHECK_BLOCKED",
+        closed_at: new Date().toISOString(),
+        metadata: { ...(position.metadata || {}), pre_order_lob_recheck_2: secondAudit },
+      });
+      await event(
+        "LOB_PREORDER_RECHECK_BLOCK",
+        `${exchange}:${candidate.market} second pre-order LOB recheck blocked`,
+        { stage: 2, ...secondAudit },
+        { cycleId, positionId: position.id, level: "INFO" },
+      );
+      return {
+        entered: false,
+        exchange,
+        market: candidate.market,
+        reason: `LOB pre-order recheck 2: ${pair.reasons.join(",")}`,
+      };
+    }
+    const updated = await patch("trading_positions", `id=eq.${position.id}`, {
+      metadata: { ...(position.metadata || {}), pre_order_lob_recheck_2: secondAudit },
+    });
+    position = (updated[0] || {
+      ...position,
+      metadata: { ...(position.metadata || {}), pre_order_lob_recheck_2: secondAudit },
+    }) as Position;
+  }
+
   if (settings.mode !== "LIVE_LIMITED") {
     const paperPrice = depth.vwap > 0 ? depth.vwap : entryPrice;
     // PAPER must use the same final, safety-capped quantity as LIVE.
@@ -3147,7 +3322,10 @@ async function enterCandidateInner(
 
   // v5.5: maker route. Post on the bid and wait instead of taking the ask.
   if (makerEntryEnabled(settings)) {
-    const makerPrice = makerBidPrice(bestBid, rules.price_tick);
+    const makerPrice = makerBidPrice(
+      secondLobPreOrderRecheck?.bestBid || bestBid,
+      rules.price_tick,
+    );
     const makerQuantity = floorToStep(
       decisionNotional / makerPrice,
       rules.quantity_step || 0.00000001,

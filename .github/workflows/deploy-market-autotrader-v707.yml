@@ -1,10 +1,12 @@
-name: Deploy market-autotrader v7.2.0
+name: Deploy LOB entry risk gates v7.2.2
+# Base source stays 7.1.4-VOLATILITY-AWARE-EXIT; ordered runtime patches produce v7.2.2.
 
 on:
   push:
     branches: [main]
     paths:
       - "supabase/functions/market-autotrader/**"
+      - "supabase/functions/market-scanner/**"
       - "supabase/functions/_shared/lob/**"
       - "scripts/apply_v715_runtime_hotfix.py"
       - "scripts/apply_v716_target_balance_hotfix.py"
@@ -14,12 +16,14 @@ on:
       - "scripts/apply_v718_pre180_exit_policy.py"
       - "scripts/apply_v719_post180_recovery_shadow.py"
       - "scripts/apply_v720_post180_minus2_hard_stop.py"
+      - "scripts/apply_v722_lob_entry_risk_gates.py"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
     paths:
       - "supabase/functions/market-autotrader/**"
+      - "supabase/functions/market-scanner/**"
       - "supabase/functions/_shared/lob/**"
       - "scripts/apply_v715_runtime_hotfix.py"
       - "scripts/apply_v716_target_balance_hotfix.py"
@@ -29,6 +33,7 @@ on:
       - "scripts/apply_v718_pre180_exit_policy.py"
       - "scripts/apply_v719_post180_recovery_shadow.py"
       - "scripts/apply_v720_post180_minus2_hard_stop.py"
+      - "scripts/apply_v722_lob_entry_risk_gates.py"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   workflow_dispatch:
 
@@ -36,7 +41,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-market-autotrader-v720
+  group: deploy-lob-entry-risk-gates-v722
   cancel-in-progress: false
 
 jobs:
@@ -53,7 +58,7 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Build and validate v7.2.0 deployment artifact
+      - name: Build and validate v7.2.2 deployment artifact
         shell: bash
         run: |
           set -euo pipefail
@@ -65,11 +70,23 @@ jobs:
           python3 scripts/apply_v718_pre180_exit_policy.py
           python3 scripts/apply_v719_post180_recovery_shadow.py
           python3 scripts/apply_v720_post180_minus2_hard_stop.py
+          python3 scripts/apply_v722_lob_entry_risk_gates.py
           deno fmt \
             supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-scanner/index.ts \
             supabase/functions/_shared/lob/exit.ts
-          grep -q 'const VERSION = "7.2.0-POST180-MINUS2-HARD-STOP";' \
+          grep -q 'const VERSION = "7.2.2-LOB-ENTRY-RISK-GATES";' \
             supabase/functions/market-autotrader/index.ts
+          grep -q 'LOB_PREORDER_RECHECK_BLOCK' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'PREORDER_SUPPORT_EVAPORATION_CONFIRMED' \
+            supabase/functions/_shared/lob/preorder.ts
+          grep -q 'BID_SPOOF_CONFIRMED_BY_WEAK_FLOW' \
+            supabase/functions/_shared/lob/entry.ts
+          grep -q 'SUPPORT_BREAKDOWN_RISK' \
+            supabase/functions/_shared/lob/entry.ts
+          grep -q 'const EXTENDED_PER_MARKET_OBSERVATION_MS = 65_000;' \
+            supabase/functions/market-scanner/index.ts
           grep -q 'lob:pre-180-target' \
             supabase/functions/market-autotrader/index.ts
           grep -q 'EXIT_BLOCKED_PRE180_POLICY' \
@@ -102,7 +119,14 @@ jobs:
             supabase/functions/market-autotrader/index.ts
           grep -q 'EXCHANGE_BALANCE_ZERO_RECONCILED' \
             supabase/functions/market-autotrader/index.ts
-          deno check supabase/functions/market-autotrader/index.ts
+          deno test --allow-env --allow-read \
+            supabase/functions/_shared/lob/entry-risk.test.ts \
+            supabase/functions/_shared/lob/preorder.test.ts \
+            supabase/functions/market-autotrader/entry-admission.test.ts \
+            supabase/functions/market-autotrader/core.test.ts
+          deno check \
+            supabase/functions/market-scanner/index.ts \
+            supabase/functions/market-autotrader/index.ts
 
   deploy:
     needs: validate
@@ -120,7 +144,7 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Build exact v7.2.0 production artifact
+      - name: Build exact v7.2.2 production artifact
         shell: bash
         run: |
           set -euo pipefail
@@ -132,17 +156,21 @@ jobs:
           python3 scripts/apply_v718_pre180_exit_policy.py
           python3 scripts/apply_v719_post180_recovery_shadow.py
           python3 scripts/apply_v720_post180_minus2_hard_stop.py
+          python3 scripts/apply_v722_lob_entry_risk_gates.py
           deno fmt \
             supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-scanner/index.ts \
             supabase/functions/_shared/lob/exit.ts
-          deno check supabase/functions/market-autotrader/index.ts
+          deno check \
+            supabase/functions/market-scanner/index.ts \
+            supabase/functions/market-autotrader/index.ts
 
       - name: Install Supabase CLI
         uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
         with:
           version: 2.109.1
 
-      - name: Deploy market-autotrader v7.2.0
+      - name: Deploy scanner and autotrader v7.2.2
         shell: bash
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -151,10 +179,12 @@ jobs:
           set -euo pipefail
           test -n "${SUPABASE_ACCESS_TOKEN}"
           test -n "${SUPABASE_PROJECT_REF}"
-          supabase functions deploy market-autotrader \
-            --project-ref "${SUPABASE_PROJECT_REF}" \
-            --no-verify-jwt \
-            --use-api
+          for fn in market-scanner market-autotrader; do
+            supabase functions deploy "$fn" \
+              --project-ref "${SUPABASE_PROJECT_REF}" \
+              --no-verify-jwt \
+              --use-api
+          done
 
 # deployment trigger: 2026-08-01 13:25 KST v7.1.7 final exit policy
 # pull-request validation trigger: 2026-08-01 13:54 KST
@@ -162,3 +192,4 @@ jobs:
 # v7.1.8: allow protected targets and qualified LOB reversals before 180 seconds
 # v7.1.9: preserve positive-net exit and collect post-180 recovery shadow outcomes
 # v7.2.0: tighten the post-180 executable-net hard stop from -3% to -2%
+# v7.2.2: narrow spoof/support entry gates, extended thin-book observation, dual pre-order recheck
