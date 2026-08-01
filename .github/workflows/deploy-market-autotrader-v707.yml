@@ -1,4 +1,4 @@
-name: Deploy market-autotrader v7.1.5
+name: Deploy market-autotrader v7.1.6
 
 on:
   push:
@@ -7,6 +7,7 @@ on:
       - "supabase/functions/market-autotrader/**"
       - "supabase/functions/_shared/lob/**"
       - "scripts/apply_v715_runtime_hotfix.py"
+      - "scripts/apply_v716_target_balance_hotfix.py"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
@@ -15,6 +16,7 @@ on:
       - "supabase/functions/market-autotrader/**"
       - "supabase/functions/_shared/lob/**"
       - "scripts/apply_v715_runtime_hotfix.py"
+      - "scripts/apply_v716_target_balance_hotfix.py"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   workflow_dispatch:
 
@@ -22,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-market-autotrader-v715
+  group: deploy-market-autotrader-v716
   cancel-in-progress: false
 
 jobs:
@@ -39,21 +41,26 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Build and validate v7.1.5 deployment artifact
+      - name: Build and validate v7.1.6 deployment artifact
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/apply_v715_runtime_hotfix.py
+          python3 scripts/apply_v716_target_balance_hotfix.py
           deno fmt \
             supabase/functions/market-autotrader/index.ts \
             supabase/functions/_shared/lob/exit.ts
-          grep -q 'const VERSION = "7.1.5-EXECUTABLE-NET-EXIT";' \
+          grep -q 'const VERSION = "7.1.6-PROTECTED-TARGET-BALANCE-RECONCILE";' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'TARGET_NET_GUARD_BLOCKED' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'time_in_force: "FOK"' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'EXCHANGE_BALANCE_ZERO_RECONCILED' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'exactUnrecoveredPositionCost(position)' \
             supabase/functions/market-autotrader/index.ts
           grep -q 'lob:pre-60-absolute-sell-lock' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'function executableBidVwap' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'marked_pnl_quote: liveMark.markedNetPnlQuote' \
             supabase/functions/market-autotrader/index.ts
           deno check supabase/functions/market-autotrader/index.ts
 
@@ -73,11 +80,12 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Build exact v7.1.5 production artifact
+      - name: Build exact v7.1.6 production artifact
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/apply_v715_runtime_hotfix.py
+          python3 scripts/apply_v716_target_balance_hotfix.py
           deno fmt \
             supabase/functions/market-autotrader/index.ts \
             supabase/functions/_shared/lob/exit.ts
@@ -88,7 +96,7 @@ jobs:
         with:
           version: 2.109.1
 
-      - name: Deploy market-autotrader v7.1.5
+      - name: Deploy market-autotrader v7.1.6
         shell: bash
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
