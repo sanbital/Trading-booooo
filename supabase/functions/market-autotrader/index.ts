@@ -1,4 +1,4 @@
-// Trading-booooo v7.1.1-LOB-45S-PROFIT-OR-5PCT — autonomous spot orchestrator.
+// Trading-booooo v7.1.4-VOLATILITY-AWARE-EXIT — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -117,7 +117,7 @@ import {
   summarizeEntryAdmission,
 } from "./entry-admission.ts";
 
-const VERSION = "7.1.3-180S-NET1-OR-MINUS3";
+const VERSION = "7.1.4-VOLATILITY-AWARE-EXIT";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -5918,9 +5918,9 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       const lobExitNotional = current * lobRemainingQuantity;
       const lobNetProfitQuote = lobExitNotional * (1 - lobFeeRate) -
         lobEntryNotional * (1 + lobFeeRate);
-      const lobHardStopHit = lobEntryPrice > 0 && current <= lobEntryPrice * 0.95;
-      const lobPost180ProfitReady = heldSeconds >= 180 &&
-        (exchange === "upbit" ? lobNetProfitQuote >= 1 : lobNetProfitQuote > 0);
+      const lobHardStopHit = heldSeconds >= 180 &&
+        lobEntryPrice > 0 && current <= lobEntryPrice * 0.97;
+      const lobPost180ProfitReady = heldSeconds >= 180 && lobNetProfitQuote > 0;
       let decision = decideExit(
         position,
         current,
@@ -5930,14 +5930,14 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       );
       if (lobMode && !settings.emergency_liquidation) {
         if (lobHardStopHit) {
-          decision = { action: "STOP", fraction: 1, reason: "lob:-5pct-hard-stop" };
+          decision = { action: "STOP", fraction: 1, reason: "lob:post-180-minus-3pct-stop" };
         } else if (heldSeconds >= 180) {
           decision = lobPost180ProfitReady
             ? { action: "TARGET_1", fraction: 1, reason: "lob:post-180-fee-net-profit" }
             : {
               action: "NONE",
               fraction: 0,
-              reason: "lob:post-180-hold-until-net-profit-or--5pct",
+              reason: "lob:post-180-hold-until-net-positive-or-minus3pct",
             };
         }
       }
@@ -6037,17 +6037,50 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           softExitGraceSeconds,
           softExitConfirmations,
         });
-        if (
-          exit.nextSoftReason !== (position.metadata?.lob_soft_exit_reason || null) ||
-          exit.nextSoftSignalStreak !== finite(position.metadata?.lob_soft_exit_streak)
-        ) {
+        const softReason = exit.nextSoftReason;
+        const priorSoftReason = position.metadata?.lob_soft_exit_reason || null;
+        const priorSoftStartedAt = Date.parse(
+          String(position.metadata?.lob_soft_exit_started_at || ""),
+        );
+        // The first minute never contributes to a reversal timer. A signal must remain
+        // continuously adverse after second 60 before it can authorize a losing exit.
+        const softWindowEligible = heldSeconds >= 60 && heldSeconds < 180 && softReason !== null;
+        const earliestSoftStart = Number.isFinite(openedAt) ? openedAt + 60_000 : Date.now();
+        const canReuseSoftStart = softWindowEligible && priorSoftReason === softReason &&
+          Number.isFinite(priorSoftStartedAt) && priorSoftStartedAt >= earliestSoftStart;
+        const softStartedAtMs = softWindowEligible
+          ? (canReuseSoftStart ? priorSoftStartedAt : Date.now())
+          : Number.NaN;
+        const softRequiredSeconds = softReason === "SIGNAL_REVERSAL"
+          ? 30
+          : softReason === "LOB_INVALIDATION"
+          ? 50
+          : 0;
+        const softSignalAgeSeconds = softWindowEligible && Number.isFinite(softStartedAtMs)
+          ? Math.max(0, (Date.now() - softStartedAtMs) / 1000)
+          : 0;
+        const softExitQualified = softWindowEligible && softRequiredSeconds > 0 &&
+          softSignalAgeSeconds >= softRequiredSeconds;
+        const softStartedAtIso = Number.isFinite(softStartedAtMs)
+          ? new Date(softStartedAtMs).toISOString()
+          : null;
+        const softMetadataChanged = softReason !== priorSoftReason ||
+          exit.nextSoftSignalStreak !== finite(position.metadata?.lob_soft_exit_streak) ||
+          String(position.metadata?.lob_soft_exit_started_at || "") !==
+            String(softStartedAtIso || "") ||
+          finite(position.metadata?.lob_soft_exit_required_seconds) !== softRequiredSeconds ||
+          Boolean(position.metadata?.lob_soft_exit_qualified) !== softExitQualified;
+        if (softMetadataChanged) {
           position = {
             ...position,
             ...(await patch("trading_positions", `id=eq.${position.id}`, {
               metadata: {
                 ...(position.metadata || {}),
-                lob_soft_exit_reason: exit.nextSoftReason,
+                lob_soft_exit_reason: softReason,
                 lob_soft_exit_streak: exit.nextSoftSignalStreak,
+                lob_soft_exit_started_at: softStartedAtIso,
+                lob_soft_exit_required_seconds: softRequiredSeconds,
+                lob_soft_exit_qualified: softExitQualified,
                 lob_soft_exit_profile_version: finite(
                   pinnedCoinPolicy.profile_version,
                   fallbackOnlinePolicy.profileVersion,
@@ -6063,17 +6096,17 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         const lobExitSafetyReason = exit.reason === "RISK_EMERGENCY" ||
           exit.reason === "RECONCILIATION_FAILURE" ||
           exit.reason === "STOP_HIT";
-        const lobExitProfitReady = exchange === "upbit"
-          ? lobNetProfitQuote >= 1
-          : lobNetProfitQuote > 0;
-        if (exit.exit && (lobExitSafetyReason || lobExitProfitReady)) {
+        const lobSoftExitReady = softExitQualified && softReason !== null;
+        if (exit.reason === "TARGET_HIT" || lobSoftExitReady || lobExitSafetyReason) {
+          const approvedReason = lobSoftExitReady ? softReason : exit.reason;
           decision = {
-            action: exit.reason === "TARGET_HIT" ? "TARGET_1" : "STOP",
+            action: approvedReason === "TARGET_HIT" ? "TARGET_1" : "STOP",
             fraction: 1,
-            reason: `lob:${exit.reason}`,
+            reason: `lob:${approvedReason}`,
           } as any;
-          await event("LOB_EXIT", `${exchange}:${position.market} ${exit.reason}`, {
+          await event("LOB_EXIT", `${exchange}:${position.market} ${approvedReason}`, {
             ...exit,
+            reason: approvedReason,
             held_seconds: heldSeconds,
             imbalance,
             spread_bps: spread,
@@ -6284,8 +6317,8 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision = { action: "STOP", reason: "scalp_max_single_loss" } as any;
         }
       }
-      // v7.1.3 canonical LOB exit policy. This final override runs after target,
-      // trail, LOB invalidation, live-hold and loss-backstop decisions so none can bypass it.
+      // v7.1.4 volatility-aware LOB exit policy. This final override is the only
+      // non-emergency authority allowed to approve an executable sell.
       if (lobMode && !settings.emergency_liquidation) {
         const policyFeeRate = clamp(FEE_PCT[exchange] / 100, 0, 0.01);
         const policyQuantity = Math.max(0, finite(position.remaining_quantity));
@@ -6296,24 +6329,50 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           policyEntryCost;
         const drawdownPct = lobEntryPrice > 0 ? (current / lobEntryPrice - 1) * 100 : 0;
         const requestedAction = decision.action;
+        const requestedReason = String((decision as any).reason || "");
+        const targetRequested = requestedAction === "TARGET_1" || requestedAction === "TARGET_2";
+        const reversalRequested = requestedAction === "STOP" &&
+          (requestedReason === "lob:SIGNAL_REVERSAL" ||
+            requestedReason === "lob:LOB_INVALIDATION");
+        const reversalQualified = Boolean(position.metadata?.lob_soft_exit_qualified);
 
-        if (heldSeconds < 180) {
-          decision = requestedAction !== "NONE" && guardedNetProfitQuote >= 1
+        if (heldSeconds < 60) {
+          decision = targetRequested
             ? {
               action: "TARGET_1",
               fraction: 1,
-              reason: "lob:pre-180-target-guarded-net-at-least-1",
+              reason: "lob:pre-60-target-only",
             }
             : {
               action: "NONE",
               fraction: 0,
-              reason: "lob:pre-180-hold-no-stop-no-loss-exit",
+              reason: "lob:pre-60-sell-lock-except-target",
             };
-        } else if (guardedNetProfitQuote >= 1) {
+        } else if (heldSeconds < 180) {
+          if (targetRequested) {
+            decision = {
+              action: "TARGET_1",
+              fraction: 1,
+              reason: "lob:60-180-target",
+            };
+          } else if (reversalRequested && reversalQualified) {
+            decision = {
+              action: "STOP",
+              fraction: 1,
+              reason: requestedReason,
+            };
+          } else {
+            decision = {
+              action: "NONE",
+              fraction: 0,
+              reason: "lob:60-180-hold-unless-target-or-qualified-reversal",
+            };
+          }
+        } else if (guardedNetProfitQuote > 0) {
           decision = {
             action: "TARGET_1",
             fraction: 1,
-            reason: "lob:post-180-guarded-net-at-least-1",
+            reason: "lob:post-180-guarded-net-positive",
           };
         } else if (drawdownPct <= -3) {
           decision = {
@@ -6325,7 +6384,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision = {
             action: "NONE",
             fraction: 0,
-            reason: "lob:post-180-hold-until-net1-or-minus3pct",
+            reason: "lob:post-180-hold-until-net-positive-or-minus3pct",
           };
         }
 
@@ -6336,14 +6395,27 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
               metadata: {
                 ...(position.metadata || {}),
                 exit_policy_quote: {
-                  revision: "7.1.3-180S-NET1-OR-MINUS3",
+                  revision: "7.1.4-VOLATILITY-AWARE-EXIT",
                   price: current,
                   measured_at: new Date().toISOString(),
                   held_seconds: heldSeconds,
                   guarded_net_profit_quote: guardedNetProfitQuote,
                   drawdown_pct: drawdownPct,
                   requested_action: requestedAction,
+                  requested_reason: requestedReason,
+                  reversal_qualified: reversalQualified,
+                  soft_signal_age_seconds: finite(
+                    position.metadata?.lob_soft_exit_started_at
+                      ? (Date.now() -
+                        Date.parse(String(position.metadata.lob_soft_exit_started_at))) /
+                        1000
+                      : 0,
+                  ),
+                  soft_signal_required_seconds: finite(
+                    position.metadata?.lob_soft_exit_required_seconds,
+                  ),
                   approved_action: decision.action,
+                  approved_reason: (decision as any).reason,
                 },
               },
             }))[0],
