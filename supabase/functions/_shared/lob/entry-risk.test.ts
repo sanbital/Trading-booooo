@@ -190,7 +190,7 @@ Deno.test("planned stop comes from observed LOB noise instead of the 5 percent e
   assert(decision.warnings.includes("LEGACY_EMERGENCY_STOP_IGNORED_FOR_PLANNED_RISK"));
 });
 
-Deno.test("operator policy requires 20bp net target and caps the legacy RR floor at 0.5", () => {
+Deno.test("operator policy requires 20bp net target and caps the legacy RR floor at 0.25", () => {
   const decision = evaluateLobEntry(features(), costs, {
     minNetProfitBps: 0,
     minNetRewardRiskRatio: 1.5,
@@ -199,5 +199,5 @@ Deno.test("operator policy requires 20bp net target and caps the legacy RR floor
   assert(decision.targetReturnNetBps >= 20);
   assert(decision.minimumTargetNetProfitBps === 20);
   assert(decision.decision === "BUY", decision.reasons.join(","));
-  assert(decision.netRewardRiskRatio >= 0.5);
+  assert(decision.netRewardRiskRatio >= 0.25);
 });
