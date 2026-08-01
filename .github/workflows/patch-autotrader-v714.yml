@@ -28,7 +28,13 @@ jobs:
           fetch-depth: 0
 
       - name: Apply v7.1.4 state machine
-        run: python3 scripts/patch_v714_exit_policy.py
+        run: |
+          if grep -q 'const VERSION = "7.1.4-VOLATILITY-AWARE-EXIT";' \
+            supabase/functions/market-autotrader/index.ts; then
+            echo "v7.1.4 source is already patched; continuing with validation."
+          else
+            python3 scripts/patch_v714_exit_policy.py
+          fi
 
       - name: Set up Deno
         uses: denoland/setup-deno@v2
