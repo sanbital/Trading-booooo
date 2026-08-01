@@ -48,11 +48,11 @@ jobs:
 
       - name: Validate, format, type-check and test immutable v7.3.0 policy
         run: |
-          grep -q 'const VERSION = "7.3.0-EXECUTABLE-STOP-PARITY";' \
+          grep -q 'const VERSION = "7.3.2-NO-PLANNED-STOP-TRIGGER";' \
             supabase/functions/market-autotrader/index.ts
-          grep -q 'ENGINE_VERSION = "7.3.0-EXECUTABLE-STOP-PARITY"' \
+          grep -q 'ENGINE_VERSION = "7.3.2-NO-PLANNED-STOP-TRIGGER"' \
             supabase/functions/market-scanner/engine.ts
-          grep -q 'const VERSION = "7.3.0-EXECUTABLE-STOP-PARITY";' gateway/server.mjs
+          grep -q 'const VERSION = "7.3.2-NO-PLANNED-STOP-TRIGGER";' gateway/server.mjs
           grep -q 'time_in_force: "FOK"' supabase/functions/market-autotrader/index.ts
           grep -q 'expectedNetProfitQuote > 0' \
             supabase/functions/market-autotrader/executable-exit.ts

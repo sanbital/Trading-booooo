@@ -122,7 +122,7 @@ import { buildTradingHeartbeatPatch, type TradingHeartbeatPatch } from "./heartb
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 
-const VERSION = "7.3.0-EXECUTABLE-STOP-PARITY";
+const VERSION = "7.3.2-NO-PLANNED-STOP-TRIGGER";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -7222,9 +7222,6 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         const requestedAction = decision.action;
         const requestedReason = String((decision as any).reason || "");
         const targetRequested = requestedAction === "TARGET_1" || requestedAction === "TARGET_2";
-        const plannedStopRequested = requestedAction === "STOP" &&
-          finite(position.stop_price) > 0 &&
-          current <= finite(position.stop_price);
         const reversalRequested = requestedAction === "STOP" &&
           (requestedReason === "lob:SIGNAL_REVERSAL" ||
             requestedReason === "lob:LOB_INVALIDATION");
@@ -7232,24 +7229,24 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         const post180BuyFeeQuote = heldSeconds >= 180
           ? await paidBuyFeeQuote(position)
           : Math.max(0, finite(position.paid_fees_quote));
-        const post180Quote = heldSeconds >= 180
-          ? quoteExecutableNetExit({
-            bids: (books[position.market]?.bids || []).map((row: any) => ({
-              price: finite(row?.price ?? row?.[0]),
-              size: finite(row?.size ?? row?.[1]),
-            })),
-            requestedQuantity: policyQuantity,
-            availableQuantity: position.is_paper
-              ? policyQuantity
-              : accountQuantity(portfolios[exchange], position.base_asset, true),
-            quantityStep: finite(position.quantity_step, 0.00000001),
-            buyPrincipalQuote: finite(position.realized_cost_quote),
-            alreadyPaidFeesQuote: finite(position.paid_fees_quote),
-            priorSellProceedsQuote: finite(position.realized_proceeds_quote),
-            sellFeeRate: policyFeeRate,
-            slippageSafetyRate: post180SlippageSafetyRate(settings),
-          })
-          : null;
+        // The -2% floor now applies at any age, so the executable quote is needed at any
+        // age too. It walks a book already in memory — no extra network call.
+        const post180Quote = quoteExecutableNetExit({
+          bids: (books[position.market]?.bids || []).map((row: any) => ({
+            price: finite(row?.price ?? row?.[0]),
+            size: finite(row?.size ?? row?.[1]),
+          })),
+          requestedQuantity: policyQuantity,
+          availableQuantity: position.is_paper
+            ? policyQuantity
+            : accountQuantity(portfolios[exchange], position.base_asset, true),
+          quantityStep: finite(position.quantity_step, 0.00000001),
+          buyPrincipalQuote: finite(position.realized_cost_quote),
+          alreadyPaidFeesQuote: finite(position.paid_fees_quote),
+          priorSellProceedsQuote: finite(position.realized_proceeds_quote),
+          sellFeeRate: policyFeeRate,
+          slippageSafetyRate: post180SlippageSafetyRate(settings),
+        });
 
         // v7.3.0: measure the terminal policy on the price an exit can actually get.
         // Until now the -2% test ran on the display price while the exit was an unbounded
@@ -7260,7 +7257,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         const executableExitPrice = post180Quote && post180Quote.executableVwap > 0
           ? post180Quote.executableVwap
           : current;
-        const guardedExitPrice = heldSeconds >= 180 ? executableExitPrice : current;
+        const guardedExitPrice = executableExitPrice;
         const guardedNetProfitQuote = guardedExitPrice * policyQuantity *
             (1 - policyFeeRate) - policyUnrecoveredCost;
         const guardedNetReturnPct = policyUnrecoveredCost > 0
@@ -7275,11 +7272,20 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           clamp(finite((settings as any).lob_post180_max_hold_seconds, 900), 180, 3600),
         );
 
-        if (plannedStopRequested) {
+        // 180 seconds is not a minimum hold. It is the condition that selects which exit
+        // strategy applies: before it, a position leaves at its (fluid) target or on a
+        // confirmed book breakdown; after it, any positive executable net closes it
+        // immediately. Taking profit is available throughout.
+        //
+        // The one price-based floor spans both regimes. The scanner's planned stop used to
+        // terminate positions on touch at any age — a 29s exit at -38bp — which is neither
+        // regime's rule. It is gone; -2% of executable net is the only price that forces a
+        // sell, and it is measured the same way in both.
+        if (guardedNetReturnPct <= -2) {
           decision = {
             action: "STOP",
             fraction: 1,
-            reason: "lob:STOP_HIT",
+            reason: "HARD_STOP_MINUS_2",
           };
         } else if (heldSeconds < 180) {
           if (targetRequested) {
@@ -7306,12 +7312,6 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             action: "STOP",
             fraction: 1,
             reason: "POSITIVE_NET_AFTER_180S",
-          };
-        } else if (guardedNetReturnPct <= -2) {
-          decision = {
-            action: "STOP",
-            fraction: 1,
-            reason: "HARD_STOP_MINUS_2_AFTER_180S",
           };
         } else if (heldSeconds >= post180MaxHoldSeconds) {
           decision = {
@@ -7422,7 +7422,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           String(decision.reason || "").startsWith("live_hold:") ||
           String(decision.reason || "").startsWith("rotation:") ||
           decision.reason === "POSITIVE_NET_AFTER_180S" ||
-          decision.reason === "HARD_STOP_MINUS_2_AFTER_180S" ||
+          decision.reason === "HARD_STOP_MINUS_2" ||
           decision.reason === "POST180_MAX_HOLD_TIMEOUT";
         const cancelled = await cancelRestingTakeProfit(position, cycleId);
         position = cancelled.position;
