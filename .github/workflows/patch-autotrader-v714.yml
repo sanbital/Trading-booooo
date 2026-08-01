@@ -6,6 +6,12 @@ on:
       - fix/v714-volatility-aware-exit-policy
     paths:
       - .github/workflows/patch-autotrader-v714.yml
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/patch-autotrader-v714.yml
 
 permissions:
   contents: write
@@ -18,6 +24,7 @@ jobs:
       - name: Checkout policy branch
         uses: actions/checkout@v4
         with:
+          ref: fix/v714-volatility-aware-exit-policy
           fetch-depth: 0
 
       - name: Apply v7.1.4 state machine
