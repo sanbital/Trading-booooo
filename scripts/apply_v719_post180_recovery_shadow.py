@@ -173,7 +173,7 @@ metadata_marker = '''                lob_soft_exit_history: softHistory,
 metadata_replacement = metadata_marker + '''                lob_post180_shadow_history: post180ShadowHistory,
                 lob_post180_recovery_shadow: post180ShadowEligible
                   ? {
-                    revision: NEW_VERSION,
+                    revision: "7.1.9-POST180-RECOVERY-SHADOW",
                     mode: "SHADOW_ONLY",
                     started_at: priorPost180Shadow.started_at || new Date(nowMs).toISOString(),
                     price_at_180: post180PriceAt180,
