@@ -1,0 +1,108 @@
+name: Fast entry hotfix 2026-08-02
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/fast-entry-hotfix-20260802.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-fast-entry:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Remove serial LOB rechecks and order-test round trip
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('supabase/functions/market-autotrader/index.ts')
+          source = path.read_text(encoding='utf-8')
+
+          old_header = '// Trading-booooo v7.2.3-EXECUTABLE-NET-INTEGRITY — autonomous spot orchestrator.'
+          new_header = '// Trading-booooo v7.2.4-FAST-ENTRY — autonomous spot orchestrator.'
+          old_version = 'const VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY";'
+          new_version = 'const VERSION = "7.2.4-FAST-ENTRY";'
+          old_import = 'import { assessLobPreOrderPair, type LobPreOrderRecheck } from "../_shared/lob/preorder.ts";'
+          new_import = 'import { type LobPreOrderRecheck } from "../_shared/lob/preorder.ts";'
+
+          for old, new, label in [
+              (old_header, new_header, 'header'),
+              (old_version, new_version, 'version'),
+              (old_import, new_import, 'preorder import'),
+          ]:
+              if source.count(old) != 1:
+                  raise SystemExit(f'{label} patch point count was {source.count(old)}, expected 1')
+              source = source.replace(old, new, 1)
+
+          first_start_marker = '  // First of two fresh checks. The work below (reservation and its audit writes) supplies\n'
+          first_end_marker = '\n\n  // Low-evidence trades preserve learning throughput'
+          first_start = source.find(first_start_marker)
+          first_end = source.find(first_end_marker, first_start)
+          if first_start < 0 or first_end < 0:
+              raise SystemExit('first serial recheck block patch point missing')
+          first_replacement = '''  // v7.2.4: do not perform a network quote here. The live LOB decision above already\n  // validated the current book. A single final quote is taken after reservation and\n  // immediately before order construction, eliminating serial confirmation latency.\n  let firstLobPreOrderRecheck: LobPreOrderRecheck | null = null;'''
+          source = source[:first_start] + first_replacement + source[first_end:]
+
+          second_start_marker = '  let secondLobPreOrderRecheck: LobPreOrderRecheck | null = null;\n'
+          second_end_marker = '\n\n  if (settings.mode !== "LIVE_LIMITED") {'
+          second_start = source.find(second_start_marker)
+          second_end = source.find(second_end_marker, second_start)
+          if second_start < 0 or second_end < 0:
+              raise SystemExit('second serial recheck block patch point missing')
+          second_replacement = '''  let secondLobPreOrderRecheck: LobPreOrderRecheck | null = null;\n  if (isLobStrategy((settings as any).strategy)) {\n    // v7.2.4 single-final validation: one fresh quote, no wait, no paired persistence\n    // check, and no audit DB write before the exchange request. A failed final book\n    // still blocks immediately; a passed book proceeds directly to order construction.\n    const finalPreOrderMarket = await marketQuote(exchange, candidate.market);\n    secondLobPreOrderRecheck = evaluateLobPreOrderRecheck(\n      lobSizingContext.lobSnapshot,\n      finalPreOrderMarket,\n      {\n        maxEntry,\n        maxSpreadBps: entryMaxSpreadBps,\n        requiredNotionalQuote: decisionNotional,\n        ...lobSizingContext.preOrderGate,\n        trap: lobTrapOverrides(settings),\n      },\n    );\n    const finalAudit = {\n      checked_at: secondLobPreOrderRecheck.checkedAt,\n      passed: secondLobPreOrderRecheck.passed,\n      reasons: secondLobPreOrderRecheck.reasons,\n      best_bid: secondLobPreOrderRecheck.bestBid,\n      best_ask: secondLobPreOrderRecheck.bestAsk,\n      spread_bps: secondLobPreOrderRecheck.spreadBps,\n      bid_depth_quote: secondLobPreOrderRecheck.bidDepthQuote,\n      ask_depth_quote: secondLobPreOrderRecheck.askDepthQuote,\n      trade_pressure_fast: secondLobPreOrderRecheck.tradePressureFast,\n      microprice_deviation_bps: secondLobPreOrderRecheck.micropriceDeviationBps,\n      interval_ms: 0,\n      validation_mode: "SINGLE_FINAL_NO_WAIT",\n    };\n    if (!secondLobPreOrderRecheck.passed) {\n      await patch("trading_positions", `id=eq.${position.id}`, {\n        state: "CANCELLED",\n        reserved_quote: 0,\n        reserved_quantity: 0,\n        reservation_expires_at: null,\n        close_reason: "LOB_PREORDER_RECHECK_BLOCKED",\n        closed_at: new Date().toISOString(),\n        metadata: { ...(position.metadata || {}), pre_order_lob_recheck_2: finalAudit },\n      });\n      await event(\n        "LOB_PREORDER_RECHECK_BLOCK",\n        `${exchange}:${candidate.market} final pre-order LOB check blocked`,\n        { stage: "FINAL", ...finalAudit },\n        { cycleId, positionId: position.id, level: "INFO" },\n      );\n      return {\n        entered: false,\n        exchange,\n        market: candidate.market,\n        reason: `LOB final pre-order check: ${secondLobPreOrderRecheck.reasons.join(",")}`,\n      };\n    }\n    // Keep the audit in memory. The normal post-order position update persists it without\n    // adding a blocking database round trip between the final quote and order submission.\n    position = {\n      ...position,\n      metadata: { ...(position.metadata || {}), pre_order_lob_recheck_2: finalAudit },\n    };\n  }'''
+          source = source[:second_start] + second_replacement + source[second_end:]
+
+          test_start_marker = '  const testIdentifier = uniqueId("t", position.id);\n'
+          test_end_marker = '  const identifier = uniqueId("e", position.id);'
+          test_start = source.find(test_start_marker)
+          test_end = source.find(test_end_marker, test_start)
+          if test_start < 0 or test_end < 0:
+              raise SystemExit('order-test block patch point missing')
+          test_replacement = '''  // v7.2.4: skip the exchange order_test round trip. Precision, minimum notional,\n  // depth, spread and executable-price checks have already run locally; the real order\n  // response remains the authoritative acceptance check.\n  const identifier = uniqueId("e", position.id);'''
+          source = source[:test_start] + test_replacement + source[test_end + len(test_end_marker):]
+
+          forbidden = [
+              'First of two fresh checks',
+              'assessLobPreOrderPair(',
+              'const testIdentifier = uniqueId("t", position.id)',
+              'action: "order_test"',
+              'await waitMs(500 - (Date.now() - firstLobPreOrderCheckedAtMs))',
+          ]
+          for item in forbidden:
+              if item in source:
+                  raise SystemExit(f'forbidden latency path remains: {item}')
+          required = [
+              'const VERSION = "7.2.4-FAST-ENTRY";',
+              'validation_mode: "SINGLE_FINAL_NO_WAIT"',
+              'const finalPreOrderMarket = await marketQuote(exchange, candidate.market);',
+          ]
+          for item in required:
+              if item not in source:
+                  raise SystemExit(f'required fast-entry marker missing: {item}')
+
+          path.write_text(source, encoding='utf-8')
+          PY
+
+      - name: Validate patch
+        run: |
+          git diff --check
+          grep -n '7.2.4-FAST-ENTRY' supabase/functions/market-autotrader/index.ts
+          grep -n 'SINGLE_FINAL_NO_WAIT' supabase/functions/market-autotrader/index.ts
+          ! grep -n 'action: "order_test"' supabase/functions/market-autotrader/index.ts
+
+      - name: Commit hotfix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add supabase/functions/market-autotrader/index.ts
+          git commit -m 'fix: remove serial LOB entry rechecks'
+          git push origin HEAD:main
