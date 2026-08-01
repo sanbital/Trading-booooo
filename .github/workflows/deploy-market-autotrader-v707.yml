@@ -110,4 +110,4 @@ jobs:
             --no-verify-jwt \
             --use-api
 
-# retrigger: 2026-08-01 target-exit and balance-reconcile hotfix
+# deployment trigger: 2026-08-01 13:05 KST v7.1.6 production release
