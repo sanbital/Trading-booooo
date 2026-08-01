@@ -120,7 +120,7 @@ jobs:
                 'the planned stop is an exit trigger again; only -2% of executable net may force a sell';
             end if;
             if position('HARD_STOP_MINUS_2' in v_def) = 0 then
-              raise exception 'guard lost the -2%% executable-net stop';
+              raise exception 'guard lost the executable-net stop at minus 2 percent';
             end if;
             if position('lob:STOP_HIT' in v_def) > 0 then
               raise exception
