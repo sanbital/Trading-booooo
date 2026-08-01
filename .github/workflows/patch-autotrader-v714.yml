@@ -1,4 +1,4 @@
-name: Validate autotrader v7.2.3 executable-net policy
+name: Validate autotrader v7.3.0 executable-stop policy
 
 on:
   push:
@@ -28,7 +28,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: validate-autotrader-v723-${{ github.ref }}
+  group: validate-autotrader-v730-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -46,13 +46,13 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Validate, format, type-check and test immutable v7.2.3 policy
+      - name: Validate, format, type-check and test immutable v7.3.0 policy
         run: |
-          grep -q 'const VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY";' \
+          grep -q 'const VERSION = "7.3.0-EXECUTABLE-STOP-PARITY";' \
             supabase/functions/market-autotrader/index.ts
-          grep -q 'ENGINE_VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY"' \
+          grep -q 'ENGINE_VERSION = "7.3.0-EXECUTABLE-STOP-PARITY"' \
             supabase/functions/market-scanner/engine.ts
-          grep -q 'const VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY";' gateway/server.mjs
+          grep -q 'const VERSION = "7.3.0-EXECUTABLE-STOP-PARITY";' gateway/server.mjs
           grep -q 'time_in_force: "FOK"' supabase/functions/market-autotrader/index.ts
           grep -q 'expectedNetProfitQuote > 0' \
             supabase/functions/market-autotrader/executable-exit.ts
