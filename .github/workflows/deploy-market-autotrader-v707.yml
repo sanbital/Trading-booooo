@@ -85,7 +85,7 @@ jobs:
             supabase/functions/_shared/lob/entry.ts
           grep -q 'SUPPORT_BREAKDOWN_RISK' \
             supabase/functions/_shared/lob/entry.ts
-          grep -q 'const EXTENDED_PER_MARKET_OBSERVATION_MS = 65_000;' \
+          grep -q 'const EXTENDED_PER_MARKET_OBSERVATION_MS = 60_000;' \
             supabase/functions/market-scanner/index.ts
           grep -q 'lob:pre-180-target' \
             supabase/functions/market-autotrader/index.ts
@@ -192,4 +192,4 @@ jobs:
 # v7.1.8: allow protected targets and qualified LOB reversals before 180 seconds
 # v7.1.9: preserve positive-net exit and collect post-180 recovery shadow outcomes
 # v7.2.0: tighten the post-180 executable-net hard stop from -3% to -2%
-# v7.2.2: narrow spoof/support entry gates, extended thin-book observation, dual pre-order recheck
+# v7.2.2: narrow spoof/support entry gates, 10s thin-book extension, dual pre-order recheck
