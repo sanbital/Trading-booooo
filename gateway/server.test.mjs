@@ -10,10 +10,16 @@ process.env.SCHEDULER_ENABLED = "false";
 const module = await import(`./server.mjs?test=${Date.now()}`);
 
 test("Upbit raw query preserves unhashed array convention", () => {
-  assert.equal(module.rawQueryString({ market: "KRW-BTC", states: ["wait", "watch"] }), "market=KRW-BTC&states[]=wait&states[]=watch");
+  assert.equal(
+    module.rawQueryString({ market: "KRW-BTC", states: ["wait", "watch"] }),
+    "market=KRW-BTC&states[]=wait&states[]=watch",
+  );
 });
 test("Upbit encoded query is safe for transport", () => {
-  assert.equal(module.encodedQueryString({ market: "KRW-BTC", states: ["wait", "watch"] }), "market=KRW-BTC&states[]=wait&states[]=watch");
+  assert.equal(
+    module.encodedQueryString({ market: "KRW-BTC", states: ["wait", "watch"] }),
+    "market=KRW-BTC&states[]=wait&states[]=watch",
+  );
 });
 test("Binance query and signature are deterministic", () => {
   const query = module.binanceQueryString({ symbol: "BTCUSDT", side: "BUY", timestamp: 123 });
@@ -27,6 +33,21 @@ test("gateway restricts identifiers and spot markets", () => {
   assert.throws(() => module.validateBinanceSymbol("BTCUSDC"));
   assert.equal(module.validateIdentifier("tb-e-abc"), "tb-e-abc");
   assert.throws(() => module.validateIdentifier("manual-order"));
+});
+
+test("gateway blocks orders from a missing or different engine revision", () => {
+  assert.throws(
+    () => module.assertOrderEngineVersion({}),
+    (error) => error.code === "ENGINE_VERSION_MISMATCH" && error.status === 409,
+  );
+  assert.throws(
+    () => module.assertOrderEngineVersion({ engine_version: "7.2.2-LOB-ENTRY-RISK-GATES" }),
+    (error) => error.code === "ENGINE_VERSION_MISMATCH",
+  );
+  assert.equal(
+    module.assertOrderEngineVersion({ engine_version: "7.2.3-EXECUTABLE-NET-INTEGRITY" }),
+    true,
+  );
 });
 test("Upbit JWT has three HS512 segments", () => {
   const token = module.createUpbitJwt({ market: "KRW-BTC" });
@@ -66,10 +87,25 @@ test("Binance quantity formatting never leaks floating-point precision", () => {
   assert.equal(module.stepPrecision(1e-8), 8);
 });
 test("normalized orders use a common state model", () => {
-  const upbit = module.normalizeUpbitOrder({ uuid: "u", identifier: "tb-a", state: "done", executed_volume: "2", executed_funds: "20", paid_fee: "0.01", trades: [] });
+  const upbit = module.normalizeUpbitOrder({
+    uuid: "u",
+    identifier: "tb-a",
+    state: "done",
+    executed_volume: "2",
+    executed_funds: "20",
+    paid_fee: "0.01",
+    trades: [],
+  });
   assert.equal(upbit.status, "FILLED");
   assert.equal(upbit.average_price, 10);
-  const binance = module.normalizeBinanceOrder({ orderId: 1, clientOrderId: "tb-b", status: "FILLED", executedQty: "2", cummulativeQuoteQty: "20", fills: [] });
+  const binance = module.normalizeBinanceOrder({
+    orderId: 1,
+    clientOrderId: "tb-b",
+    status: "FILLED",
+    executedQty: "2",
+    cummulativeQuoteQty: "20",
+    fills: [],
+  });
   assert.equal(binance.status, "FILLED");
   assert.equal(binance.average_price, 10);
 });
@@ -95,7 +131,6 @@ test("Upbit zero-string cumulative fields cannot hide trade-level partial fills"
   assert.equal(order.executed_funds, 13245.19888704);
   assert.equal(order.average_price, 2323);
 });
-
 
 test("Upbit local rate guards follow API groups with headroom", () => {
   assert.equal(module.upbitRateGroup("GET", "/v1/ticker", true), "ticker");

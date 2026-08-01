@@ -1,5 +1,5 @@
-name: Deploy LOB entry risk gates v7.2.2
-# Base source stays 7.1.4-VOLATILITY-AWARE-EXIT; ordered runtime patches produce v7.2.2.
+name: Deploy executable-net integrity v7.2.3
+# v7.2.3 is canonical source. No runtime patch chain may rewrite the validated artifact.
 
 on:
   push:
@@ -7,16 +7,8 @@ on:
     paths:
       - "supabase/functions/market-autotrader/**"
       - "supabase/functions/market-scanner/**"
-      - "supabase/functions/_shared/lob/**"
-      - "scripts/apply_v715_runtime_hotfix.py"
-      - "scripts/apply_v716_target_balance_hotfix.py"
-      - "scripts/fix_v716_patch_compat.py"
-      - "scripts/fix_v717_patch_compat.py"
-      - "scripts/apply_v717_final_exit_policy.py"
-      - "scripts/apply_v718_pre180_exit_policy.py"
-      - "scripts/apply_v719_post180_recovery_shadow.py"
-      - "scripts/apply_v720_post180_minus2_hard_stop.py"
-      - "scripts/apply_v722_lob_entry_risk_gates.py"
+      - "supabase/functions/_shared/**"
+      - "gateway/**"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
@@ -24,16 +16,8 @@ on:
     paths:
       - "supabase/functions/market-autotrader/**"
       - "supabase/functions/market-scanner/**"
-      - "supabase/functions/_shared/lob/**"
-      - "scripts/apply_v715_runtime_hotfix.py"
-      - "scripts/apply_v716_target_balance_hotfix.py"
-      - "scripts/fix_v716_patch_compat.py"
-      - "scripts/fix_v717_patch_compat.py"
-      - "scripts/apply_v717_final_exit_policy.py"
-      - "scripts/apply_v718_pre180_exit_policy.py"
-      - "scripts/apply_v719_post180_recovery_shadow.py"
-      - "scripts/apply_v720_post180_minus2_hard_stop.py"
-      - "scripts/apply_v722_lob_entry_risk_gates.py"
+      - "supabase/functions/_shared/**"
+      - "gateway/**"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   workflow_dispatch:
 
@@ -41,7 +25,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-lob-entry-risk-gates-v722
+  group: deploy-executable-net-integrity-v723
   cancel-in-progress: false
 
 jobs:
@@ -58,25 +42,39 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Build and validate v7.2.2 deployment artifact
+      - name: Validate canonical v7.2.3 deployment artifact
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/apply_v715_runtime_hotfix.py
-          python3 scripts/fix_v716_patch_compat.py
-          python3 scripts/apply_v716_target_balance_hotfix.py
-          python3 scripts/fix_v717_patch_compat.py
-          python3 scripts/apply_v717_final_exit_policy.py
-          python3 scripts/apply_v718_pre180_exit_policy.py
-          python3 scripts/apply_v719_post180_recovery_shadow.py
-          python3 scripts/apply_v720_post180_minus2_hard_stop.py
-          python3 scripts/apply_v722_lob_entry_risk_gates.py
-          deno fmt \
+          deno fmt --check \
             supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-autotrader/executable-exit.ts \
+            supabase/functions/market-autotrader/entry-integrity.ts \
+            supabase/functions/market-autotrader/heartbeat.ts \
             supabase/functions/market-scanner/index.ts \
-            supabase/functions/_shared/lob/exit.ts
-          grep -q 'const VERSION = "7.2.2-LOB-ENTRY-RISK-GATES";' \
+            supabase/functions/market-scanner/engine.ts \
+            supabase/functions/_shared/lob/entry.ts \
+            gateway/server.mjs
+          grep -q 'const VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY";' \
             supabase/functions/market-autotrader/index.ts
+          grep -q 'ENGINE_VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY"' \
+            supabase/functions/market-scanner/engine.ts
+          grep -q 'const VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY";' gateway/server.mjs
+          grep -q 'quoteExecutableNetExit' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'time_in_force: "FOK"' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'failed_gate_count' \
+            supabase/functions/market-autotrader/entry-integrity.ts
+          grep -q 'NEGATIVE_TRADE_PRESSURE' \
+            supabase/functions/_shared/lob/entry.ts
+          grep -q 'SPOOF_WARNING' \
+            supabase/functions/_shared/lob/entry.ts
+          grep -q 'REWARD_RISK_FAILED' \
+            supabase/functions/_shared/lob/entry.ts
+          grep -q 'buildTradingHeartbeatPatch' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'ENGINE_VERSION_MISMATCH' gateway/server.mjs
           grep -q 'LOB_PREORDER_RECHECK_BLOCK' \
             supabase/functions/market-autotrader/index.ts
           grep -q 'PREORDER_SUPPORT_EVAPORATION_CONFIRMED' \
@@ -122,8 +120,13 @@ jobs:
           deno test --allow-env --allow-read \
             supabase/functions/_shared/lob/entry-risk.test.ts \
             supabase/functions/_shared/lob/preorder.test.ts \
+            supabase/functions/market-autotrader/executable-exit.test.ts \
+            supabase/functions/market-autotrader/entry-integrity.test.ts \
+            supabase/functions/market-autotrader/heartbeat.test.ts \
             supabase/functions/market-autotrader/entry-admission.test.ts \
             supabase/functions/market-autotrader/core.test.ts
+          node --check gateway/server.mjs
+          node --test gateway/server.test.mjs
           deno check \
             supabase/functions/market-scanner/index.ts \
             supabase/functions/market-autotrader/index.ts
@@ -144,23 +147,19 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Build exact v7.2.2 production artifact
+      - name: Verify exact canonical v7.2.3 production artifact
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/apply_v715_runtime_hotfix.py
-          python3 scripts/fix_v716_patch_compat.py
-          python3 scripts/apply_v716_target_balance_hotfix.py
-          python3 scripts/fix_v717_patch_compat.py
-          python3 scripts/apply_v717_final_exit_policy.py
-          python3 scripts/apply_v718_pre180_exit_policy.py
-          python3 scripts/apply_v719_post180_recovery_shadow.py
-          python3 scripts/apply_v720_post180_minus2_hard_stop.py
-          python3 scripts/apply_v722_lob_entry_risk_gates.py
-          deno fmt \
+          deno fmt --check \
             supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-autotrader/executable-exit.ts \
+            supabase/functions/market-autotrader/entry-integrity.ts \
+            supabase/functions/market-autotrader/heartbeat.ts \
             supabase/functions/market-scanner/index.ts \
-            supabase/functions/_shared/lob/exit.ts
+            supabase/functions/market-scanner/engine.ts \
+            supabase/functions/_shared/lob/entry.ts \
+            gateway/server.mjs
           deno check \
             supabase/functions/market-scanner/index.ts \
             supabase/functions/market-autotrader/index.ts
@@ -170,7 +169,7 @@ jobs:
         with:
           version: 2.109.1
 
-      - name: Deploy scanner and autotrader v7.2.2
+      - name: Deploy scanner and autotrader v7.2.3
         shell: bash
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -192,4 +191,4 @@ jobs:
 # v7.1.8: allow protected targets and qualified LOB reversals before 180 seconds
 # v7.1.9: preserve positive-net exit and collect post-180 recovery shadow outcomes
 # v7.2.0: tighten the post-180 executable-net hard stop from -3% to -2%
-# v7.2.2: narrow spoof/support entry gates, 10s thin-book extension, dual pre-order recheck
+# v7.2.3: executable full-depth FOK net exit, strict entry integrity, partial heartbeat writes

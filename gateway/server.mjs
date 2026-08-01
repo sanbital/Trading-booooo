@@ -3,12 +3,12 @@ import crypto from "node:crypto";
 import dns from "node:dns";
 import { pathToFileURL } from "node:url";
 
-// Trading-booooo v7.1.1-LOB-45S-PROFIT-OR-5PCT static-egress spot order gateway.
+// Trading-booooo v7.2.3-EXECUTABLE-NET-INTEGRITY static-egress spot order gateway.
 // It deliberately exposes only spot account/order primitives. There are no
 // withdrawal, transfer, margin, futures, leverage, or API-key management routes.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "7.1.1-LOB-45S-PROFIT-OR-5PCT";
+const VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
@@ -1260,6 +1260,17 @@ async function withOrderTiming(work) {
   return result;
 }
 
+function assertOrderEngineVersion(command) {
+  const supplied = String(command?.engine_version || "");
+  if (supplied !== VERSION) {
+    throw Object.assign(
+      new Error(`engine version mismatch: command=${supplied || "MISSING"}, gateway=${VERSION}`),
+      { status: 409, code: "ENGINE_VERSION_MISMATCH" },
+    );
+  }
+  return true;
+}
+
 async function handleCommand(command) {
   const exchange = validateExchange(command?.exchange);
   switch (String(command?.action || "")) {
@@ -1280,6 +1291,7 @@ async function handleCommand(command) {
         ? upbitOrderTest(command.order || {})
         : binanceOrderTest(command.order || {});
     case "create_order":
+      assertOrderEngineVersion(command);
       return withOrderTiming(() =>
         exchange === "upbit"
           ? upbitCreateOrder(command.order || {}, command.wait_for_final_ms)
@@ -1333,6 +1345,7 @@ async function callAutotrader(action) {
         action,
         source: "static-ip-gateway-scheduler",
         at: new Date().toISOString(),
+        engine_version: VERSION,
       }),
     });
     const text = await response.text();
@@ -1451,6 +1464,7 @@ if (isMain) {
 }
 
 export {
+  assertOrderEngineVersion,
   binanceQueryString,
   binanceTradesToFills,
   buildUpbitPortfolio,

@@ -79,10 +79,16 @@ Deno.test("support breakdown is an unconditional LOB entry block", () => {
   assert(decision.reasons.includes("SUPPORT_BREAKDOWN_RISK"));
 });
 
-Deno.test("ask spoof alone stays informational", () => {
+Deno.test("ask spoof warning is an unconditional entry block", () => {
   const decision = evaluateLobEntry(features({ askSpoofScore: 0.90 }), costs);
-  assert(decision.decision === "BUY", decision.reasons.join(","));
-  assert(decision.warnings.includes("ASK_SPOOF_INFORMATIONAL_ONLY"));
+  assert(decision.decision === "WAIT");
+  assert(decision.reasons.includes("SPOOF_WARNING"));
+});
+
+Deno.test("negative trade pressure is an unconditional entry block", () => {
+  const decision = evaluateLobEntry(features({ tradePressureFast: -0.0001 }), costs);
+  assert(decision.decision === "WAIT");
+  assert(decision.reasons.includes("NEGATIVE_TRADE_PRESSURE"));
 });
 
 Deno.test("bid and ask spoof together block the painted book", () => {
@@ -160,4 +166,14 @@ Deno.test("EV and candle-like context cannot change LOB admission", () => {
   });
   assert(baseline.decision === "BUY");
   assert(hostileInformationalInputs.decision === "BUY");
+});
+
+Deno.test("reward-risk failure cannot be bypassed", () => {
+  const decision = evaluateLobEntry(features(), costs, {
+    fixedTargetBps: 20,
+    fixedStopBps: 100,
+    minNetRewardRiskRatio: 0.5,
+  });
+  assert(decision.decision === "WAIT");
+  assert(decision.reasons.includes("REWARD_RISK_FAILED"));
 });

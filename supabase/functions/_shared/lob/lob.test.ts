@@ -15,7 +15,7 @@ const hot: LobFeatureVector = {
   universeMode: "TOP10_24H_GAINERS_LOB_ONLY",
   gainerRank: 3,
   samples: 80,
-  observationMs: 45000,
+  observationMs: 50000,
   bookAgeMs: 100,
   spreadBps: 3,
   bookImbalance: 0.32,
@@ -76,7 +76,6 @@ const costs = {
 test("bearish trend cannot veto a hot LOB BUY", () => {
   const good = evaluateLobEntry(hot, costs);
   assert(good.decision === "BUY", `hot LOB should buy: ${good.reasons.join(",")}`);
-  assert(good.evLowerBoundBps > 0, "EV lower bound must be positive");
   assert(good.targetReturnNetBps > 0, "target net must be positive");
   assert(good.pattern != null, "a primary pattern is required");
   assert(good.features.trendContext < 0, "test must prove bearish trend is not a veto");
@@ -84,45 +83,49 @@ test("bearish trend cannot veto a hot LOB BUY", () => {
 
 test("stale orderbook is discarded", () => {
   const stale = evaluateLobEntry({ ...hot, bookAgeMs: 10000 }, costs);
-  assert(stale.decision === "AVOID", "stale book must be avoided");
+  assert(stale.decision === "WAIT", "stale book must wait");
 });
 
-test("a live entry requires the complete 45-second observation", () => {
-  const short = evaluateLobEntry({ ...hot, observationMs: 44999 }, costs);
-  assert(short.decision !== "BUY", "44.999 seconds must not be eligible");
+test("a live entry requires the complete 50-second observation", () => {
+  const short = evaluateLobEntry({ ...hot, observationMs: 49999 }, costs);
+  assert(short.decision !== "BUY", "49.999 seconds must not be eligible");
   assert(
-    short.reasons.includes("INSUFFICIENT_OBSERVATION_WINDOW"),
+    short.reasons.includes("INSUFFICIENT_50S_OBSERVATION"),
     "short observation reason must be explicit",
   );
   assert(
-    evaluateLobEntry({ ...hot, observationMs: 45000 }, costs).decision === "BUY",
-    "45 seconds must remain eligible",
+    evaluateLobEntry({ ...hot, observationMs: 50000 }, costs).decision === "BUY",
+    "50 seconds must remain eligible",
   );
 });
 
-test("fees and slippage can make a candidate non-actionable", () => {
+test("fees and slippage feed the mandatory reward-risk gate", () => {
   const expensive = evaluateLobEntry({ ...hot, spreadBps: 25 }, {
     roundTripFeeBps: 20,
     entrySlippageBps: 8,
     targetExitSlippageBps: 8,
     stopExitSlippageBps: 12,
     spreadBps: 25,
-  }, { maxSpreadBps: 40, maxTargetBps: 30 });
-  assert(expensive.decision !== "BUY", "negative net EV must not enter");
+  }, { maxSpreadBps: 40, maxTargetBps: 30, minNetRewardRiskRatio: 1.5 });
+  assert(expensive.decision !== "BUY", "cost-adjusted reward-risk failure must not enter");
+  assert(
+    expensive.reasons.includes("REWARD_RISK_FAILED"),
+    "reward-risk rejection must be explicit",
+  );
 });
 
-test("confirmed live forecast optimism is charged directly to entry EV", () => {
+test("forecast optimism remains informational and cannot alter LOB admission", () => {
   const uncorrected = evaluateLobEntry(hot, costs);
   const corrected = evaluateLobEntry(hot, { ...costs, forecastBiasPenaltyBps: 5 });
   assert(
-    Math.abs((uncorrected.evNetBps - corrected.evNetBps) - 5) < 1e-9,
-    "EV bias penalty must lower mean EV by the measured amount",
+    Math.abs(uncorrected.evNetBps - corrected.evNetBps) < 1e-9,
+    "forecast bias must not alter LOB entry EV",
   );
   assert(
-    Math.abs((uncorrected.evLowerBoundBps - corrected.evLowerBoundBps) - 5) < 1e-9,
-    "EV bias penalty must also lower the conservative bound",
+    Math.abs(uncorrected.evLowerBoundBps - corrected.evLowerBoundBps) < 1e-9,
+    "forecast bias must not alter the conservative bound",
   );
-  assert(corrected.forecastBiasPenaltyBps === 5, "audit must retain the applied penalty");
+  assert(corrected.forecastBiasPenaltyBps === 0, "no modeled bias may become an entry gate");
 });
 
 test("a learned wider stop remains auditable but cannot become a hidden admission gate", () => {
@@ -131,7 +134,7 @@ test("a learned wider stop remains auditable but cannot become a hidden admissio
   assert(!learned.reasons.includes("NET_EV_NOT_POSITIVE"), "modeled EV is audit-only in v7");
 });
 
-test("signal reversal exits before target or timeout", () => {
+test("signal reversal is classified for monitor persistence before any sell", () => {
   const decision = evaluateLobExit({
     emergency: false,
     reconciliationFailed: false,
@@ -149,7 +152,8 @@ test("signal reversal exits before target or timeout", () => {
     minBidDepthRatio: 0.3,
     softExitConfirmations: 1,
   });
-  assert(decision.reason === "SIGNAL_REVERSAL", "confirmed signal reversal priority must fire");
+  assert(!decision.exit, "classification alone must not sell");
+  assert(decision.nextSoftReason === "SIGNAL_REVERSAL", "reversal must remain auditable");
 });
 
 test("maker-fill sell pressure needs settlement and repeated soft confirmation", () => {
@@ -192,7 +196,8 @@ test("maker-fill sell pressure needs settlement and repeated soft confirmation",
     softExitGraceSeconds: 6,
     softExitConfirmations: 2,
   });
-  assert(confirmed.exit && confirmed.reason === "SIGNAL_REVERSAL", "persistent reversal must exit");
+  assert(!confirmed.exit, "the monitor owns continuous-time qualification and sell approval");
+  assert(confirmed.nextSoftReason === "SIGNAL_REVERSAL", "persistent reversal remains classified");
 });
 
 test("target hit outranks a simultaneous soft invalidation", () => {

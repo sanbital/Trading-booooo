@@ -1,4 +1,9 @@
-import type { FinalCandidate, RiskConfig, TargetStrategy } from "./engine.ts";
+import {
+  ENGINE_VERSION,
+  type FinalCandidate,
+  type RiskConfig,
+  type TargetStrategy,
+} from "./engine.ts";
 import { validateSpotMarket } from "../_shared/spot-market.ts";
 
 export type Exchange = "upbit" | "binance";
@@ -392,7 +397,7 @@ function candidateRows(
       profile_version: profile.version,
       feature_vector: featureVector(candidate, risk),
       applied_parameters: profile.parameters,
-      snapshot: candidate,
+      snapshot: { ...candidate, engine_version: ENGINE_VERSION },
     });
   }
   return { rows, invalid };
