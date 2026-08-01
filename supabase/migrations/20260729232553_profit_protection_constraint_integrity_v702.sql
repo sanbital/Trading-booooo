@@ -201,36 +201,82 @@ before update of peak_price, paid_fees_quote, realized_cost_quote
 on v702_profit_constraint_test
 for each row execute function public.protect_lob_open_profit_v6130();
 
-insert into v702_profit_constraint_test values (
-  false,
-  'OPEN',
-  jsonb_build_object(
-    'lob_signal',
-    jsonb_build_object('strategy', 'LOB_SCALP', 'pattern', 'MOMENTUM_CONTINUATION')
-  ),
-  'binance',
-  1000,
-  1000,
-  990,
-  null,
-  0.1,
-  now() - interval '20 seconds',
-  100,
-  0.1
-);
-
-update v702_profit_constraint_test set peak_price = 1004.5;
-
+-- The fixture used to pin peak_price at 1004.5, a 45bp excursion chosen against the
+-- thresholds in force in July. Those thresholds live in trading_settings and are meant to
+-- be tuned, so once they moved past 45bp this check began aborting the migration with
+-- V702_PROFIT_TRAIL_WAS_NOT_RAISED — taking the whole --file batch down with it, since the
+-- deploy workflow applies the list in one transaction. A regression guard for
+-- "stop_price must never be mutated" should not be a tripwire on operator tuning.
+--
+-- So the excursion is now derived from the same arithmetic the trigger itself performs,
+-- and clears whatever bar is currently configured. What is asserted is unchanged and is
+-- what this migration exists to protect: the static stop is untouched, the protected price
+-- lands in trailing_stop, and the audit says so.
 do $$
 declare
   r v702_profit_constraint_test%rowtype;
+  cfg public.trading_settings%rowtype;
+  v_entry numeric := 1000;
+  v_stop numeric := 990;
+  v_cost numeric := 100;
+  v_fees numeric := 0.1;
+  v_observed_entry_fee_bps numeric;
+  v_cost_buffer numeric;
+  v_cost_recovery_trigger numeric;
+  v_peak numeric;
+  v_hold_seconds integer;
 begin
+  select * into cfg from public.trading_settings where id = 1;
+  if not found or not cfg.lob_profit_protect_enabled then
+    -- The trigger legitimately does nothing in this state, so there is no invariant to
+    -- observe. Say so rather than failing the deploy on an unrelated configuration.
+    raise notice 'V702: profit protection unconfigured or disabled; trail assertions skipped';
+    return;
+  end if;
+
+  v_observed_entry_fee_bps := v_fees / v_cost * 10000;
+  v_cost_buffer := greatest(
+    cfg.lob_profit_protect_cost_buffer_bps_binance,
+    v_observed_entry_fee_bps * 2 + 2
+  );
+  v_cost_recovery_trigger := greatest(
+    cfg.lob_profit_protect_breakeven_trigger_bps,
+    v_cost_buffer + cfg.lob_momentum_cost_recovery_margin_bps
+  );
+  -- One tick clear of the lowest stage that raises the trail at all.
+  v_peak := v_entry * (1 + (v_cost_recovery_trigger + 10) / 10000);
+  v_hold_seconds := greatest(20, cfg.lob_profit_protect_min_hold_seconds + 5);
+
+  insert into v702_profit_constraint_test values (
+    false,
+    'OPEN',
+    jsonb_build_object(
+      'lob_signal',
+      jsonb_build_object('strategy', 'LOB_SCALP', 'pattern', 'MOMENTUM_CONTINUATION')
+    ),
+    'binance',
+    v_entry,
+    v_entry,
+    v_stop,
+    null,
+    0.1,
+    now() - make_interval(secs => v_hold_seconds),
+    v_cost,
+    v_fees
+  );
+
+  update v702_profit_constraint_test set peak_price = v_peak;
+
   select * into r from v702_profit_constraint_test limit 1;
-  if r.stop_price <> 990 then
+  if r.stop_price <> v_stop then
     raise exception 'V702_STATIC_STOP_WAS_MUTATED';
   end if;
   if coalesce(r.trailing_stop, 0) <= r.average_entry_price then
-    raise exception 'V702_PROFIT_TRAIL_WAS_NOT_RAISED';
+    raise exception
+      'V702_PROFIT_TRAIL_WAS_NOT_RAISED (mfe_bps=%, cost_recovery_trigger_bps=%, min_hold=%)',
+      round((v_peak / v_entry - 1) * 10000, 4),
+      round(v_cost_recovery_trigger, 4),
+      cfg.lob_profit_protect_min_hold_seconds;
   end if;
   if r.metadata#>>'{profit_protection,protection_column}' <> 'trailing_stop' then
     raise exception 'V702_PROTECTION_COLUMN_AUDIT_MISSING';
