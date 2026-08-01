@@ -1,4 +1,4 @@
-// Trading-booooo Market Scanner v7.1.1-LOB-45S-PROFIT-OR-5PCT — Supabase Edge Function
+// Trading-booooo Market Scanner v7.2.2-LOB-ENTRY-RISK-GATES — Supabase Edge Function
 // Upbit KRW / Binance USDT universe scan -> multi-period analysis -> orderflow validation.
 // Public market analysis. Private account/order execution is delegated to a fixed-IP gateway.
 
@@ -8,6 +8,7 @@ import {
   CALIBRATED_PARAMETERS,
   type CandleRow,
   clamp,
+  computeDynamicOrderflow,
   computeMicrostructure,
   ENGINE_VERSION,
   type FinalCandidate,
@@ -55,17 +56,19 @@ const DEFAULT_DEEP_SCAN_LIMIT = 30;
 const FINALIST_LIMIT = 8;
 const BOOK_SAMPLE_COUNT = 4;
 const BOOK_SAMPLE_INTERVAL_MS = 250;
-// The collector runs slightly beyond the required per-market window so late first frames
-// still receive a full 45 seconds. All books use the 47–50 second observation range.
-const DEFAULT_DYNAMIC_OBSERVATION_MS = 47_000;
+// A complete market may finish at 50 seconds. A thin market keeps the same socket open for
+// up to 15 seconds more so INSUFFICIENT means "still insufficient after extension".
+const DEFAULT_DYNAMIC_OBSERVATION_MS = 50_000;
 const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 50_000;
-const MIN_DYNAMIC_OBSERVATION_MS = 47_000;
-const MAX_DYNAMIC_OBSERVATION_MS = 50_000;
-// Every symbol must receive its own full 45-second wall-clock observation window.
+const MIN_DYNAMIC_OBSERVATION_MS = 50_000;
+const MAX_DYNAMIC_OBSERVATION_MS = 65_000;
+// Every symbol must receive its own full 50-second wall-clock observation window.
 // The global socket-open timer alone is insufficient because a symbol's first frame can arrive late.
-const REQUIRED_PER_MARKET_OBSERVATION_MS = 45_000;
+const REQUIRED_PER_MARKET_OBSERVATION_MS = 50_000;
+const EXTENDED_PER_MARKET_OBSERVATION_MS = 65_000;
 const DYNAMIC_STREAM_HARD_TIMEOUT_BUFFER_MS = 35_000;
 const DYNAMIC_COVERAGE_POLL_MS = 250;
+const DYNAMIC_SUFFICIENCY_RECHECK_MS = 1_000;
 const MAX_DYNAMIC_BOOK_EVENTS = 1_200;
 const MAX_DYNAMIC_TRADE_EVENTS = 2_500;
 const CANDLE_BATCH_SIZE = 7;
@@ -677,6 +680,8 @@ type DynamicMarketCoverage = {
   lastBookReceivedAt: number | null;
   observedForMs: number;
   complete: boolean;
+  extendedForInsufficient: boolean;
+  lastSufficiencyCheckAt: number | null;
 };
 
 type DynamicStreamBundle = {
@@ -718,6 +723,8 @@ function initializeDynamicCoverage(
     lastBookReceivedAt: null,
     observedForMs: 0,
     complete: false,
+    extendedForInsufficient: false,
+    lastSufficiencyCheckAt: null,
   }]));
 }
 
@@ -734,13 +741,35 @@ function recordDynamicBookFrame(
 
 function refreshDynamicCoverage(
   coverage: Map<string, DynamicMarketCoverage>,
+  snapshots?: Map<string, OrderbookSnapshot[]>,
+  trades?: Map<string, TradeRow[]>,
   now = Date.now(),
 ): void {
-  for (const state of coverage.values()) {
+  for (const [market, state] of coverage.entries()) {
     state.observedForMs = state.firstBookReceivedAt == null
       ? 0
       : Math.max(0, now - state.firstBookReceivedAt);
-    state.complete = state.observedForMs >= REQUIRED_PER_MARKET_OBSERVATION_MS;
+    if (state.complete || state.observedForMs < REQUIRED_PER_MARKET_OBSERVATION_MS) continue;
+    if (state.observedForMs >= EXTENDED_PER_MARKET_OBSERVATION_MS) {
+      state.complete = true;
+      state.extendedForInsufficient = true;
+      continue;
+    }
+    if (!snapshots || !trades) continue;
+    if (
+      state.lastSufficiencyCheckAt != null &&
+      now - state.lastSufficiencyCheckAt < DYNAMIC_SUFFICIENCY_RECHECK_MS
+    ) continue;
+    state.lastSufficiencyCheckAt = now;
+    const dynamic = computeDynamicOrderflow(
+      snapshots.get(market) || [],
+      trades.get(market) || [],
+      Number.EPSILON,
+    );
+    // Entry requires 50 seconds even though the lower-level feature calculator can be
+    // reused by legacy callers with a 45-second window.
+    state.complete = dynamic.sufficient && dynamic.observation_ms >= 50_000;
+    state.extendedForInsufficient = !state.complete;
   }
 }
 
@@ -799,7 +828,7 @@ function collectDynamicStream(
       }
       if (error) reject(error);
       else {
-        refreshDynamicCoverage(coverage);
+        refreshDynamicCoverage(coverage, snapshots, trades);
         resolve({ snapshots, trades, coverage });
       }
     }
@@ -814,7 +843,7 @@ function collectDynamicStream(
         { format: "DEFAULT" },
       ]));
       coverageTimer = setInterval(() => {
-        refreshDynamicCoverage(coverage);
+        refreshDynamicCoverage(coverage, snapshots, trades);
         if (allDynamicMarketsCovered(coverage)) finish();
       }, DYNAMIC_COVERAGE_POLL_MS);
       observationTimer = setTimeout(
@@ -952,7 +981,7 @@ function collectBinanceDynamicStream(
       }
       if (error) reject(error);
       else {
-        refreshDynamicCoverage(coverage);
+        refreshDynamicCoverage(coverage, snapshots, trades);
         resolve({ snapshots, trades, coverage });
       }
     }
@@ -961,7 +990,7 @@ function collectBinanceDynamicStream(
       opened = true;
       clearTimeout(connectionTimer);
       coverageTimer = setInterval(() => {
-        refreshDynamicCoverage(coverage);
+        refreshDynamicCoverage(coverage, snapshots, trades);
         if (allDynamicMarketsCovered(coverage)) finish();
       }, DYNAMIC_COVERAGE_POLL_MS);
       observationTimer = setTimeout(
