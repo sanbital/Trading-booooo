@@ -36,6 +36,87 @@ replace_once(
     "        const earliestSoftStart = Number.isFinite(openedAt) ? openedAt : nowMs;",
     "reversal history start",
 )
+replace_once(
+    '''        const monitorIntervalSeconds = clamp(
+          finite((settings as any).monitor_interval_seconds, 2),
+          1,
+          10,
+        );
+''',
+    "",
+    "remove sample-count cadence assumption",
+)
+
+# Measure the adverse windows by actual elapsed milliseconds instead of assuming
+# every successful monitor cycle lands exactly on the configured two-second cadence.
+# This keeps 24/30 + final 10 and 40/50 + final 14 exact when an exchange request
+# makes a monitor cycle take longer than its nominal interval.
+replace_once(
+    "            sample.at >= earliestSoftStart && sample.at >= nowMs - 55_000 && sample.at <= nowMs",
+    "            sample.at >= earliestSoftStart && sample.at >= nowMs - 75_000 && sample.at <= nowMs",
+    "retain a pre-window sample for elapsed-time coverage",
+)
+old_qualification = '''        const qualifiesSoftWindow = (
+          reason: "SIGNAL_REVERSAL" | "LOB_INVALIDATION",
+          windowSeconds: number,
+          requiredBadSeconds: number,
+          tailSeconds: number,
+        ): boolean => {
+          const samples = softHistory.filter((sample: any) =>
+            sample.at >= nowMs - windowSeconds * 1000
+          );
+          const badRequired = Math.ceil(requiredBadSeconds / monitorIntervalSeconds);
+          const tailRequired = Math.ceil(tailSeconds / monitorIntervalSeconds);
+          const badCount = samples.filter((sample: any) => sample.reason === reason).length;
+          const tail = samples.slice(-tailRequired);
+          return badCount >= badRequired && tail.length >= tailRequired &&
+            tail.every((sample: any) => sample.reason === reason);
+        };'''
+new_qualification = '''        const coveredBadMilliseconds = (
+          reason: "SIGNAL_REVERSAL" | "LOB_INVALIDATION",
+          windowStartMs: number,
+        ): number => {
+          const samples = [...softHistory]
+            .filter((sample: any) => sample.at <= nowMs)
+            .sort((left: any, right: any) => left.at - right.at);
+          let activeReason: "SIGNAL_REVERSAL" | "LOB_INVALIDATION" | null = null;
+          let cursorMs = windowStartMs;
+          let coveredMs = 0;
+          for (const sample of samples) {
+            if (sample.at <= windowStartMs) {
+              activeReason = sample.reason;
+              continue;
+            }
+            const sampleAtMs = Math.min(nowMs, sample.at);
+            if (activeReason === reason) {
+              coveredMs += Math.max(0, sampleAtMs - cursorMs);
+            }
+            cursorMs = Math.max(cursorMs, sampleAtMs);
+            activeReason = sample.reason;
+          }
+          if (activeReason === reason) coveredMs += Math.max(0, nowMs - cursorMs);
+          return coveredMs;
+        };
+        const qualifiesSoftWindow = (
+          reason: "SIGNAL_REVERSAL" | "LOB_INVALIDATION",
+          windowSeconds: number,
+          requiredBadSeconds: number,
+          tailSeconds: number,
+        ): boolean => {
+          const latestReason = softHistory.length
+            ? softHistory[softHistory.length - 1].reason
+            : null;
+          const badMs = coveredBadMilliseconds(reason, nowMs - windowSeconds * 1000);
+          const tailBadMs = coveredBadMilliseconds(reason, nowMs - tailSeconds * 1000);
+          return latestReason === reason &&
+            badMs >= requiredBadSeconds * 1000 &&
+            tailBadMs >= tailSeconds * 1000;
+        };'''
+replace_once(
+    old_qualification,
+    new_qualification,
+    "time-weighted reversal qualification",
+)
 
 old_policy = '''        if (heldSeconds < 60) {
           decision = {
@@ -134,6 +215,7 @@ required = [
     'reason: "lob:pre-180-target"',
     'reason: "lob:pre-180-hold-unless-target-or-qualified-reversal"',
     "EXIT_BLOCKED_PRE180_POLICY",
+    "coveredBadMilliseconds",
     "POSITIVE_NET_AFTER_180S",
     "HARD_STOP_MINUS_3_AFTER_180S",
     "guardedNetReturnPct <= -3",
