@@ -1,0 +1,35 @@
+name: Apply LOB planned stop hotfix
+
+on:
+  push:
+    branches:
+      - agent/fix-lob-execution-stop
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[hotfix-applied]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/fix-lob-execution-stop
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Apply exact source replacements
+        run: python3 scripts/apply-lob-planned-stop-hotfix.py
+      - name: Format and verify changed source
+        run: |
+          deno fmt supabase/functions/market-autotrader/index.ts
+          git diff --check
+      - name: Commit patched source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/market-autotrader/index.ts
+          git commit -m "fix: enforce planned LOB stop at execution [hotfix-applied]"
+          git push origin HEAD:agent/fix-lob-execution-stop
