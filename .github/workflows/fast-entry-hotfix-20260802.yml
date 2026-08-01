@@ -106,3 +106,5 @@ jobs:
           git add supabase/functions/market-autotrader/index.ts
           git commit -m 'fix: remove serial LOB entry rechecks'
           git push origin HEAD:main
+
+# trigger: workflow existed before this push
