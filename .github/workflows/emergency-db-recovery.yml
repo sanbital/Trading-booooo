@@ -20,3 +20,5 @@ jobs:
           curl --fail-with-body --show-error --silent \
             --max-time 90 \
             "https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/db-health-check?key=recover-20260801-1429-7c9d"
+
+# recovery trigger 2026-08-01 14:30 KST
