@@ -1,8 +1,8 @@
 // 배포 전에 아래 두 값만 본인 Supabase 프로젝트 값으로 교체하세요.
 // Publishable(또는 기존 Anon) Key는 브라우저용 공개 키입니다.
 // Service Role / Secret Key / SCAN_ACCESS_TOKEN은 절대 이 파일에 넣지 마세요.
-const UI_VERSION = "7.0.5-LOB-30S-MINIMUM";
-const DASHBOARD_REVISION = "7.0.5-r1-LOB-30S-MINIMUM";
+const UI_VERSION = "7.1.6-PROTECTED-TARGET-BALANCE-RECONCILE";
+const DASHBOARD_REVISION = "7.1.6-r1-PROTECTED-TARGET-BALANCE-RECONCILE";
 
 window.TRADING_SCANNER_CONFIG = {
   uiVersion: UI_VERSION,
@@ -35,8 +35,7 @@ if (document.readyState === "loading") {
 }
 window.addEventListener("pageshow", applyDashboardVersion);
 
-// 성과판은 기존 app.js를 건드리지 않고 보조 모듈로 주입합니다.
-// revision을 URL에 포함해 iOS Safari의 오래된 JS/CSS 캐시를 강제로 무효화합니다.
+// 성과판과 운영 화면 보정 모듈은 revision을 URL에 포함해 브라우저 캐시를 강제로 무효화합니다.
 (() => {
   const assetVersion = encodeURIComponent(DASHBOARD_REVISION);
   const stylesheet = document.createElement("link");
@@ -44,8 +43,13 @@ window.addEventListener("pageshow", applyDashboardVersion);
   stylesheet.href = `./performance.css?v=${assetVersion}`;
   document.head.appendChild(stylesheet);
 
-  const script = document.createElement("script");
-  script.src = `./performance.js?v=${assetVersion}`;
-  script.defer = true;
-  document.head.appendChild(script);
+  const performanceScript = document.createElement("script");
+  performanceScript.src = `./performance.js?v=${assetVersion}`;
+  performanceScript.defer = true;
+  document.head.appendChild(performanceScript);
+
+  const dashboardFixScript = document.createElement("script");
+  dashboardFixScript.src = `./dashboard-v716-fix.js?v=${assetVersion}`;
+  dashboardFixScript.defer = true;
+  document.head.appendChild(dashboardFixScript);
 })();
