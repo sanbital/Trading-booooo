@@ -7,20 +7,17 @@ end = text.find("\n\npolicy_start =", start)
 if start < 0 or end < 0:
     raise SystemExit("v7.1.7 guarded-return patch block not found")
 replacement = r'''# Add guarded executable net return, then enforce the exact 60/180-second policy.
-text, guarded_return_count = re.subn(
-    r''' + "'''" + r'''(        const guardedNetProfitQuote = .*?policyUnrecoveredCost;)''' + "'''" + r''',
-    r''' + "'''" + r'''\1
-        const guardedNetReturnPct = policyUnrecoveredCost > 0
-          ? guardedNetProfitQuote / policyUnrecoveredCost * 100
-          : 0;''' + "'''" + r''',
+guarded_match = re.search(
+    r''' + "'''" + r'''        const guardedNetProfitQuote = .*?policyUnrecoveredCost;''' + "'''" + r''',
     text,
-    count=1,
     flags=re.S,
 )
-if guarded_return_count != 1:
-    raise SystemExit(
-        f"guarded executable return: expected exactly one match, found {guarded_return_count}"
-    )'''
+if not guarded_match:
+    raise SystemExit("guarded executable return: source expression not found")
+text = text[:guarded_match.end()] + ''' + "'''" + r'''
+        const guardedNetReturnPct = policyUnrecoveredCost > 0
+          ? guardedNetProfitQuote / policyUnrecoveredCost * 100
+          : 0;''' + "'''" + r''' + text[guarded_match.end():]'''
 text = text[:start] + replacement + text[end:]
 path.write_text(text, encoding="utf-8")
 print("aligned v7.1.7 guarded-return insertion with v7.1.6 artifact")
