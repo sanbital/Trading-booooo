@@ -333,9 +333,7 @@ export function evaluateLobEntry(
   const pTimeout = 0;
   const targetReturnNetBps = targetBps - targetCostBps;
   const stopReturnNetBps = -(stopBps + stopCostBps);
-  const stopToTargetRatio = targetBps > 0
-    ? stopBps / targetBps
-    : Number.POSITIVE_INFINITY;
+  const stopToTargetRatio = targetBps > 0 ? stopBps / targetBps : Number.POSITIVE_INFINITY;
   const netRewardRiskRatio = Math.abs(stopReturnNetBps) > 0
     ? Math.max(0, targetReturnNetBps) / Math.abs(stopReturnNetBps)
     : 0;
