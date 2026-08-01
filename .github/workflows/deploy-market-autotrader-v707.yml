@@ -1,5 +1,6 @@
 name: Deploy market-autotrader v7.1.6
 
+# Validation marker: protected target + authenticated balance reconciliation.
 on:
   push:
     branches: [main]
