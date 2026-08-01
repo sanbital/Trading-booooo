@@ -6,12 +6,13 @@
   let dashboardToken = "";
   let latestPerformance = null;
   let pending = false;
-  let refreshQueued = false;
+  let lastPerformanceLoadStartedAt = 0;
   let performanceExpanded = false;
   let performancePage = 1;
 
   const COLLAPSED_TRADE_LIMIT = 10;
   const EXPANDED_PAGE_SIZE = 50;
+  const PERFORMANCE_REFRESH_MS = 120_000;
 
   const $ = id => document.getElementById(id);
   const escapeHtml = value => String(value ?? "")
@@ -323,8 +324,15 @@
   }
 
   async function loadPerformance() {
-    if (!dashboardToken || pending) return;
+    const now = Date.now();
+    if (
+      !dashboardToken ||
+      pending ||
+      document.hidden ||
+      now - lastPerformanceLoadStartedAt < PERFORMANCE_REFRESH_MS
+    ) return;
     pending = true;
+    lastPerformanceLoadStartedAt = now;
     try {
       const endpoint = `${String(config.supabaseUrl || "").replace(/\/$/, "")}/functions/v1/${config.performanceFunctionName || "market-performance"}`;
       const response = await originalFetch(endpoint, {
@@ -345,16 +353,16 @@
       if (grid) grid.innerHTML = `<article class="panel performance-empty performance-negative">성과 집계 실패: ${escapeHtml(error?.message || error)}</article>`;
     } finally {
       pending = false;
-      if (refreshQueued) {
-        refreshQueued = false;
-        queueMicrotask(loadPerformance);
-      }
     }
   }
 
   function scheduleLoad() {
-    if (pending) refreshQueued = true;
-    else queueMicrotask(loadPerformance);
+    if (
+      pending ||
+      document.hidden ||
+      Date.now() - lastPerformanceLoadStartedAt < PERFORMANCE_REFRESH_MS
+    ) return;
+    queueMicrotask(loadPerformance);
   }
 
   window.fetch = async (input, init = {}) => {
