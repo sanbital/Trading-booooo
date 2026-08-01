@@ -117,7 +117,7 @@ jobs:
             end if;
             if position('coalesce(p.stop_price, 0) > 0' in v_def) > 0 then
               raise exception
-                'the planned stop is an exit trigger again; only -2% of executable net may force a sell';
+                'the planned stop is an exit trigger again; only minus 2 percent of executable net may force a sell';
             end if;
             if position('HARD_STOP_MINUS_2' in v_def) = 0 then
               raise exception 'guard lost the executable-net stop at minus 2 percent';
