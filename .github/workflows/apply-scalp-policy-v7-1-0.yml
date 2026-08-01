@@ -1,109 +1,81 @@
-name: Apply scalp exit policy v7.1.2
+name: Guard v7.1.4 exit policy
 
 on:
   push:
     branches: [main]
     paths:
-      - ".github/scripts/apply_scalp_v7_1_0.py"
-      - ".github/scripts/align_v712_tests.py"
-      - ".github/scripts/fix_v712_remaining_tests.py"
+      - "supabase/functions/market-autotrader/**"
+      - "supabase/functions/_shared/lob/exit.ts"
+      - "supabase/migrations/*v714*"
+      - ".github/workflows/apply-scalp-policy-v7-1-0.yml"
+      - ".github/workflows/deploy-market-autotrader-v707.yml"
+      - ".github/workflows/patch-autotrader-v714.yml"
+      - "scripts/patch_v714_exit_policy.py"
   pull_request:
+    branches: [main]
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: apply-scalp-exit-policy-v7-1-2
-  cancel-in-progress: false
+  group: guard-v714-exit-policy-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  patch-verify-deploy:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+  verify-v714-only:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out event revision
+        uses: actions/checkout@v4
         with:
-          ref: main
           fetch-depth: 0
-
-      - name: Sync latest main
-        run: |
-          git fetch origin main
-          git checkout -B main origin/main
-
-      - name: Apply post-180 net-profit policy
-        run: |
-          python3 .github/scripts/apply_scalp_v7_1_0.py
-          python3 .github/scripts/fix_lob_config_shape.py
-          python3 .github/scripts/align_v712_tests.py
-          python3 .github/scripts/fix_v712_remaining_tests.py
 
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
 
-      - name: Full Deno check
-        run: deno task check
-
-      - name: Full Deno tests
-        run: deno task test
-
-      - name: Gateway tests
+      - name: Reject legacy policy mutators
         shell: bash
         run: |
           set -euo pipefail
-          shopt -s nullglob globstar
-          tests=(gateway/*.test.mjs gateway/**/*.test.mjs)
-          if [ ${#tests[@]} -eq 0 ]; then
-            echo "No gateway test files found; validating gateway syntax instead"
-            node --check gateway/server.mjs
-          else
-            node --test "${tests[@]}"
-          fi
+          python3 - <<'PY'
+          from pathlib import Path
 
-      - name: Validate v6.9 invariants
-        run: node validation/v690-deploy-validation.mjs
+          engine = Path("supabase/functions/market-autotrader/index.ts").read_text()
+          deploy = Path(".github/workflows/deploy-market-autotrader-v707.yml").read_text()
+          guard = Path(".github/workflows/apply-scalp-policy-v7-1-0.yml").read_text()
+          migration = Path("supabase/migrations/20260801024500_lock_v714_exit_policy.sql").read_text()
 
-      - name: Commit policy update
-        id: commit
-        shell: bash
+          required_version = 'const VERSION = "7.1.4-VOLATILITY-AWARE-EXIT";'
+          assert required_version in engine, "autotrader is not pinned to v7.1.4"
+
+          forbidden_deploy_commands = (
+              "python3 .github/scripts/" + "apply_scalp_v7_1_0.py",
+              "python3 .github/scripts/" + "align_v712_tests.py",
+              "python3 .github/scripts/" + "fix_v712_remaining_tests.py",
+              "Stamp v7.0.8 " + "runtime version",
+              "git push origin " + "main",
+          )
+          for command in forbidden_deploy_commands:
+              assert command not in deploy, f"legacy deploy mutator remains: {command}"
+
+          write_permission = "contents:" + " write"
+          assert write_permission not in guard, "policy guard must remain read-only"
+          assert "7.1.4-VOLATILITY-AWARE-EXIT" in deploy
+          assert "trading_positions_v708_profit_only_exit" in migration
+          assert "zz_trading_positions_exit_policy_v713" in migration
+          assert "zz_trading_orders_lob_exit_guard_v713" in migration
+          assert "zz_trading_positions_exit_policy_v714" in migration
+          assert "zz_trading_orders_lob_exit_guard_v714" in migration
+          print("PASS: legacy workflows cannot rewrite v7.1.4")
+          PY
+
+      - name: Type-check v7.1.4 runtime
         run: |
-          set -euo pipefail
-          if git diff --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No source changes detected"
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add supabase/functions/market-scanner/index.ts \
-                    supabase/functions/market-scanner/engine.ts \
-                    supabase/functions/market-scanner/engine.test.ts \
-                    supabase/functions/_shared/lob/entry.ts \
-                    supabase/functions/_shared/lob/exit.ts \
-                    supabase/functions/_shared/lob/lob.test.ts \
-                    supabase/functions/_shared/lob/momentum-continuation.test.ts \
-                    supabase/functions/_shared/scalp/v512-invariants.test.ts \
-                    supabase/functions/_shared/scalp/version.test.ts \
-                    supabase/functions/market-autotrader/index.ts \
-                    supabase/functions/market-autotrader/core.ts \
-                    supabase/migrations/20260731033000_scalp_v7_1_0_risk_and_holding.sql \
-                    gateway/server.mjs \
-                    docs/index.html
-            git commit -m "fix: exit fee-net profit immediately after 180s"
-            git push origin main
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Deploy Supabase functions
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-        run: |
-          set -euo pipefail
-          test -n "$SUPABASE_ACCESS_TOKEN"
-          npx --yes supabase@latest functions deploy market-scanner \
-            --project-ref etaajwpernzrcdrifdnw --no-verify-jwt --use-api
-          npx --yes supabase@latest functions deploy market-autotrader \
-            --project-ref etaajwpernzrcdrifdnw --no-verify-jwt --use-api
+          deno fmt --check \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/_shared/lob/exit.ts
+          deno check supabase/functions/market-autotrader/index.ts

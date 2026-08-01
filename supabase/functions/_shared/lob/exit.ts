@@ -1,5 +1,6 @@
-// Trading-booooo v7.1.1 — LOB exit policy: profit opportunity or -5% hard stop.
-// The 180-second horizon is informational only and never forces a losing exit.
+// Trading-booooo v7.1.4 — LOB signal classification for volatility-aware exits.
+// Hard target/stop detection is immediate, but soft LOB signals are only classified here.
+// The monitor owns the 60-second sell lock and the 30/50-second persistence windows.
 
 export type LobExitReason =
   | "RISK_EMERGENCY"
@@ -69,10 +70,15 @@ export function evaluateLobExit(input: LobExitInput): LobExitDecision {
 
   if (input.emergency) return hard("RISK_EMERGENCY", 100);
   if (input.reconciliationFailed) return hard("RECONCILIATION_FAILURE", 95);
-  if (Number.isFinite(input.stopPrice) && input.stopPrice > 0 && input.currentPrice <= input.stopPrice) {
+  if (
+    Number.isFinite(input.stopPrice) && input.stopPrice > 0 && input.currentPrice <= input.stopPrice
+  ) {
     return hard("STOP_HIT", 90);
   }
-  if (Number.isFinite(input.targetPrice) && input.targetPrice > 0 && input.currentPrice >= input.targetPrice) {
+  if (
+    Number.isFinite(input.targetPrice) && input.targetPrice > 0 &&
+    input.currentPrice >= input.targetPrice
+  ) {
     return hard("TARGET_HIT", 85);
   }
 
@@ -97,18 +103,14 @@ export function evaluateLobExit(input: LobExitInput): LobExitDecision {
     const nextStreak = input.previousSoftReason === softReason
       ? Math.max(0, Math.floor(Number(input.softSignalStreak) || 0)) + 1
       : 1;
-    const confirmations = Math.max(1, Math.floor(Number(input.softExitConfirmations) || 2));
-    const graceSeconds = Math.max(0, Number(input.softExitGraceSeconds) || 15);
     const severe = input.spreadBps > input.maxSpreadBps * 2 ||
       input.bidDepthRatio < input.minBidDepthRatio * 0.25 ||
-      (input.bookImbalance <= -0.65 && input.tradePressure <= -0.65 && input.micropriceDeviationBps < 0);
-    if (severe || (input.heldSeconds >= graceSeconds && nextStreak >= confirmations)) {
-      return hard(softReason, severe ? 82 : 78);
-    }
+      (input.bookImbalance <= -0.65 && input.tradePressure <= -0.65 &&
+        input.micropriceDeviationBps < 0);
+    // Never convert a transient or even severe soft signal directly into a sell here.
+    // Continuous elapsed time is enforced by market-autotrader after the first 60 seconds.
     return hold({ reason: softReason, streak: nextStreak, severe });
   }
 
-  // Deliberately no TIMEOUT branch. Continue holding after 180 seconds until a fee-net
-  // profitable exit is available or the configured -5% hard stop is reached.
   return hold();
 }

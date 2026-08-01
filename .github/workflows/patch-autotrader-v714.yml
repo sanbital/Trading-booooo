@@ -1,0 +1,56 @@
+name: Validate autotrader v7.1.4 exit policy
+
+on:
+  push:
+    branches:
+      - fix/v714-volatility-aware-exit-policy
+      - main
+    paths:
+      - "supabase/functions/market-autotrader/**"
+      - "supabase/functions/_shared/lob/exit.ts"
+      - "supabase/migrations/*v714*"
+      - "scripts/patch_v714_exit_policy.py"
+      - ".github/workflows/patch-autotrader-v714.yml"
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+    paths:
+      - "supabase/functions/market-autotrader/**"
+      - "supabase/functions/_shared/lob/exit.ts"
+      - "supabase/migrations/*v714*"
+      - "scripts/patch_v714_exit_policy.py"
+      - ".github/workflows/patch-autotrader-v714.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-autotrader-v714-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out event revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate immutable v7.1.4 policy
+        run: python3 scripts/patch_v714_exit_policy.py
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Format and type-check
+        run: |
+          deno fmt --check \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/_shared/lob/exit.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          git diff --exit-code
