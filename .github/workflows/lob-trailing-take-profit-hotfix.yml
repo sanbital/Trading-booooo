@@ -1,0 +1,376 @@
+name: Apply LOB order-book trailing take-profit
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/lob-trailing-take-profit-hotfix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Patch market-autotrader
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("supabase/functions/market-autotrader/index.ts")
+          text = path.read_text(encoding="utf-8")
+
+          def replace_once(old: str, new: str, label: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              "// Trading-booooo v7.2.3-EXECUTABLE-NET-INTEGRITY — autonomous spot orchestrator.",
+              "// Trading-booooo v7.2.4-ORDERBOOK-TRAILING-TP — autonomous spot orchestrator.",
+              "header version",
+          )
+          replace_once(
+              'const VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY";',
+              'const VERSION = "7.2.4-ORDERBOOK-TRAILING-TP";',
+              "runtime version",
+          )
+
+          replace_once(
+              '''        const reversalRequested = requestedAction === "STOP" &&
+          (requestedReason === "lob:SIGNAL_REVERSAL" ||
+            requestedReason === "lob:LOB_INVALIDATION");
+        const reversalQualified = Boolean(position.metadata?.lob_soft_exit_qualified);''',
+              '''        const reversalQualified = Boolean(position.metadata?.lob_soft_exit_qualified);
+        const qualifiedSoftReason = position.metadata?.lob_soft_exit_reason === "SIGNAL_REVERSAL" ||
+            position.metadata?.lob_soft_exit_reason === "LOB_INVALIDATION"
+          ? String(position.metadata.lob_soft_exit_reason)
+          : null;
+        const reversalRequested = (requestedAction === "STOP" &&
+            (requestedReason === "lob:SIGNAL_REVERSAL" ||
+              requestedReason === "lob:LOB_INVALIDATION")) ||
+          (reversalQualified && qualifiedSoftReason !== null);
+
+        // v7.2.4: target_1 is no longer an executable fixed take-profit for LOB positions.
+        // It remains a planning/reference price only. Once the position is executable-net
+        // positive, the monitor arms a ratcheting trail whose distance is set by the live
+        // order book. Strong continuation gets room; weakening flow tightens the trail.
+        const lobTrailActive = position.t1_completed === true &&
+          String(position.exit_policy || "") === "TRAIL_AFTER_T1";
+        const liveLobBook = books[position.market];
+        const liveLobBids = (liveLobBook?.bids || []).map((row: any) => ({
+          price: finite(row?.price ?? row?.[0]),
+          size: finite(row?.size ?? row?.[1]),
+        })).filter((row: any) => row.price > 0 && row.size > 0);
+        const liveLobAsks = (liveLobBook?.asks || []).map((row: any) => ({
+          price: finite(row?.price ?? row?.[0]),
+          size: finite(row?.size ?? row?.[1]),
+        })).filter((row: any) => row.price > 0 && row.size > 0);
+        const liveBestBid = finite(liveLobBook?.best_bid, liveLobBids[0]?.price || 0);
+        const liveBestAsk = finite(liveLobBook?.best_ask, liveLobAsks[0]?.price || 0);
+        const hasUsableLobBook = liveBestBid > 0 && liveBestAsk > liveBestBid &&
+          liveLobBids.length > 0 && liveLobAsks.length > 0;
+        const liveSpreadBps = hasUsableLobBook
+          ? (liveBestAsk / liveBestBid - 1) * 10_000
+          : Number.POSITIVE_INFINITY;
+        const liveBookImbalance = hasUsableLobBook
+          ? topOfBookImbalance(liveLobBids, liveLobAsks)
+          : 0;
+        const liveTradePressure = finite(liveLobBook?.trade_flow?.pressure, 0);
+        const liveEntryBidDepth = Math.max(
+          1,
+          finite(position.metadata?.entry_bid_depth_quote, 1),
+        );
+        const liveBidDepthRatio = hasUsableLobBook
+          ? bidDepthQuote(liveLobBook) / liveEntryBidDepth
+          : 0;
+        const maxLiveSpreadBps = finite(
+          (settings as any).lob_max_spread_bps,
+          LIVE_MAX_SPREAD_BPS,
+        );
+        const lobNoiseBandBps = Math.max(
+          0,
+          finite(position.metadata?.lob_signal?.features?.noiseBandBps, 0),
+        );
+        const orderbookContinuationStrong = hasUsableLobBook &&
+          liveTradePressure >= 0.08 &&
+          liveBookImbalance >= 0.05 &&
+          liveBidDepthRatio >= 0.85 &&
+          liveSpreadBps <= maxLiveSpreadBps * 0.75;
+        const orderbookWeakening = !hasUsableLobBook ||
+          liveTradePressure < 0 ||
+          liveBookImbalance <= -0.10 ||
+          liveBidDepthRatio < 0.65 ||
+          liveSpreadBps > maxLiveSpreadBps * 0.90;
+        const orderbookTrailRegime = orderbookContinuationStrong
+          ? "STRONG_CONTINUATION"
+          : orderbookWeakening
+          ? "WEAKENING"
+          : "NEUTRAL";
+        const orderbookTrailDistanceBps = clamp(
+          orderbookContinuationStrong
+            ? Math.max(35, liveSpreadBps * 2.5, lobNoiseBandBps * 0.75)
+            : orderbookWeakening
+            ? Math.max(
+              8,
+              Math.min(
+                20,
+                (Number.isFinite(liveSpreadBps) ? liveSpreadBps : maxLiveSpreadBps) * 1.25 +
+                  lobNoiseBandBps * 0.15,
+              ),
+            )
+            : Math.max(18, liveSpreadBps * 1.8, lobNoiseBandBps * 0.45),
+          8,
+          orderbookContinuationStrong ? 80 : orderbookWeakening ? 24 : 50,
+        );
+        const trailActivationRequested = !lobTrailActive &&
+          hasUsableLobBook &&
+          policyQuantity > 0 &&
+          guardedNetProfitQuote > 0;''',
+              "order-book trailing inputs",
+          )
+
+          replace_once(
+              '''        } else if (heldSeconds < 180) {
+          if (targetRequested) {
+            decision = {
+              action: "TARGET_1",
+              fraction: 1,
+              reason: "lob:pre-180-target",
+            };
+          } else if (reversalRequested && reversalQualified) {
+            decision = {
+              action: "STOP",
+              fraction: 1,
+              reason: requestedReason,
+            };
+          } else {
+            decision = {
+              action: "NONE",
+              fraction: 0,
+              reason: "lob:pre-180-hold-unless-target-or-qualified-reversal",
+            };
+          }
+        } else if (post180Quote?.allowed) {''',
+              '''        } else if (heldSeconds < 180) {
+          if (reversalRequested && reversalQualified) {
+            decision = {
+              action: "STOP",
+              fraction: 1,
+              reason: qualifiedSoftReason ? `lob:${qualifiedSoftReason}` : requestedReason,
+            };
+          } else if (
+            lobTrailActive ||
+            trailActivationRequested ||
+            (targetRequested && hasUsableLobBook)
+          ) {
+            const wasTrailActive = lobTrailActive;
+            const priorPeak = Math.max(
+              lobEntryPrice,
+              finite(position.peak_price, lobEntryPrice),
+            );
+            const nextPeak = hasUsableLobBook ? Math.max(priorPeak, current) : priorPeak;
+            const priorTrailStop = Math.max(0, finite(position.trailing_stop));
+            const feeBreakEvenFloor = lobEntryPrice > 0
+              ? lobEntryPrice * (1 + FEE_PCT[exchange] * 2 / 100)
+              : 0;
+            const rawTrailCandidate = hasUsableLobBook
+              ? nextPeak * (1 - orderbookTrailDistanceBps / 10_000)
+              : priorTrailStop;
+            const unboundedTrailStop = Math.max(
+              priorTrailStop,
+              feeBreakEvenFloor,
+              rawTrailCandidate,
+            );
+            // Arming must never sell on the same tick. After arming, a retracement through
+            // the ratcheted stop is a full take-profit. The stop only moves upward.
+            const nextTrailStop = wasTrailActive
+              ? unboundedTrailStop
+              : Math.min(current * (1 - 1 / 10_000), unboundedTrailStop);
+            const trailHit = wasTrailActive &&
+              hasUsableLobBook &&
+              nextPeak > current &&
+              nextTrailStop > 0 &&
+              current <= nextTrailStop;
+            const priorRegime = String(
+              position.metadata?.lob_trailing_take_profit?.regime || "",
+            );
+            const peakAdvanceBps = priorPeak > 0
+              ? Math.max(0, (nextPeak / priorPeak - 1) * 10_000)
+              : Number.POSITIVE_INFINITY;
+            const stopAdvanceBps = priorTrailStop > 0
+              ? Math.max(0, (nextTrailStop / priorTrailStop - 1) * 10_000)
+              : Number.POSITIVE_INFINITY;
+            const shouldPersistTrail = !wasTrailActive ||
+              trailHit ||
+              peakAdvanceBps >= 1 ||
+              stopAdvanceBps >= 1 ||
+              priorRegime !== orderbookTrailRegime;
+
+            if (shouldPersistTrail) {
+              position = {
+                ...position,
+                ...(await patch("trading_positions", `id=eq.${position.id}`, {
+                  exit_policy: "TRAIL_AFTER_T1",
+                  t1_completed: true,
+                  peak_price: nextPeak,
+                  trailing_stop: nextTrailStop,
+                  trailing_distance_pct: orderbookTrailDistanceBps / 100,
+                  metadata: {
+                    ...(position.metadata || {}),
+                    lob_trailing_take_profit: {
+                      revision: VERSION,
+                      mode: "ORDERBOOK_TRAILING_TAKE_PROFIT",
+                      activated_at:
+                        position.metadata?.lob_trailing_take_profit?.activated_at ||
+                        new Date().toISOString(),
+                      updated_at: new Date().toISOString(),
+                      activation_rule: "EXECUTABLE_NET_POSITIVE",
+                      fixed_target_execution_disabled: true,
+                      regime: orderbookTrailRegime,
+                      peak_price: nextPeak,
+                      trailing_stop: nextTrailStop,
+                      trail_distance_bps: orderbookTrailDistanceBps,
+                      executable_bid: current,
+                      spread_bps: liveSpreadBps,
+                      book_imbalance: liveBookImbalance,
+                      trade_pressure: liveTradePressure,
+                      bid_depth_ratio: liveBidDepthRatio,
+                      noise_band_bps: lobNoiseBandBps,
+                      held_seconds: heldSeconds,
+                    },
+                  },
+                }))[0],
+              };
+            }
+
+            if (!wasTrailActive) {
+              await event(
+                "LOB_TRAILING_TP_ARMED",
+                `${exchange}:${position.market} order-book trailing take-profit armed`,
+                {
+                  held_seconds: heldSeconds,
+                  current_price: current,
+                  peak_price: nextPeak,
+                  trailing_stop: nextTrailStop,
+                  trail_distance_bps: orderbookTrailDistanceBps,
+                  regime: orderbookTrailRegime,
+                  guarded_net_profit_quote: guardedNetProfitQuote,
+                  former_fixed_target: finite(position.target_1),
+                },
+                { cycleId, positionId: position.id, level: "INFO" },
+              );
+            }
+
+            if (trailHit) {
+              decision = {
+                action: "STOP",
+                fraction: 1,
+                reason: "lob:ORDERBOOK_TRAILING_TAKE_PROFIT",
+              } as any;
+            } else {
+              decision = {
+                action: "NONE",
+                fraction: 0,
+                reason: wasTrailActive
+                  ? "lob:pre-180-orderbook-trailing"
+                  : "lob:pre-180-orderbook-trailing-armed",
+              } as any;
+            }
+          } else {
+            decision = {
+              action: "NONE",
+              fraction: 0,
+              reason: "lob:pre-180-hold-until-net-positive-trail-or-qualified-reversal",
+            };
+          }
+        } else if (post180Quote?.allowed) {''',
+              "pre-180 trailing policy",
+          )
+
+          replace_once(
+              '''      if (lobMode && heldSeconds < 180 && decision.action !== "NONE") {
+        const approvedPre180Target = decision.action === "TARGET_1" ||
+          decision.action === "TARGET_2";
+        const approvedPre180Reversal = decision.action === "STOP" &&
+          ((decision as any).reason === "lob:SIGNAL_REVERSAL" ||
+            (decision as any).reason === "lob:LOB_INVALIDATION") &&
+          Boolean(position.metadata?.lob_soft_exit_qualified);
+        const approvedPre180PlannedStop = decision.action === "STOP" &&
+          (decision as any).reason === "lob:STOP_HIT" &&
+          current <= finite(position.stop_price);
+        if (
+          !approvedPre180Target && !approvedPre180Reversal &&
+          !approvedPre180PlannedStop
+        ) {
+          await event(
+            "EXIT_BLOCKED_PRE180_POLICY",
+            `${exchange}:${position.market} exit was not an approved target, planned stop, or qualified reversal`,''',
+              '''      if (lobMode && heldSeconds < 180 && decision.action !== "NONE") {
+        const approvedPre180TrailingTakeProfit = decision.action === "STOP" &&
+          (decision as any).reason === "lob:ORDERBOOK_TRAILING_TAKE_PROFIT" &&
+          position.t1_completed === true &&
+          finite(position.trailing_stop) > 0 &&
+          current <= finite(position.trailing_stop);
+        const approvedPre180Reversal = decision.action === "STOP" &&
+          ((decision as any).reason === "lob:SIGNAL_REVERSAL" ||
+            (decision as any).reason === "lob:LOB_INVALIDATION") &&
+          Boolean(position.metadata?.lob_soft_exit_qualified);
+        const approvedPre180PlannedStop = decision.action === "STOP" &&
+          (decision as any).reason === "lob:STOP_HIT" &&
+          current <= finite(position.stop_price);
+        if (
+          !approvedPre180TrailingTakeProfit && !approvedPre180Reversal &&
+          !approvedPre180PlannedStop
+        ) {
+          await event(
+            "EXIT_BLOCKED_PRE180_POLICY",
+            `${exchange}:${position.market} exit was not an approved order-book trail, planned stop, or qualified reversal`,''',
+              "pre-180 exit authorization",
+          )
+
+          replace_once(
+              '''              // A position cannot occupy the slot past its precommitted LOB timeout.
+              // Reporting 600s here while the position must close at 180s understated
+              // its profit rate and broke capital-rotation comparisons.''',
+              '''              // 180 seconds changes the policy to executable-net recovery; it is not
+              // a forced close. Cap the rate horizon only for comparable slot accounting.''',
+              "stale 180-second comment",
+          )
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Commit patched engine
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No source change produced"
+            exit 1
+          fi
+          git config user.name "Trading-booooo automation"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/market-autotrader/index.ts
+          git commit -m "feat: trail LOB profits from live order-book flow"
+          git push origin HEAD:main
+
+      - name: Deploy market-autotrader
+        if: ${{ secrets.SUPABASE_ACCESS_TOKEN != '' }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        shell: bash
+        run: |
+          npx --yes supabase@latest functions deploy market-autotrader \
+            --project-ref etaajwpernzrcdrifdnw \
+            --no-verify-jwt \
+            --use-api
