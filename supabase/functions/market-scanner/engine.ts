@@ -9,6 +9,7 @@ import {
   type ScalpSignalResult,
 } from "../_shared/scalp/signal.ts";
 import { evaluateLobEntry } from "../_shared/lob/entry.ts";
+import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 import { midPathStatistics } from "../_shared/lob/traps.ts";
 import type { LobLearningProfile } from "../_shared/lob/learning.ts";
 import type { LobEntryDecision, LobFeatureVector } from "../_shared/lob/types.ts";
@@ -20,7 +21,7 @@ import {
   sigmaFromAtrPct,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "7.3.0-EXECUTABLE-STOP-PARITY";
+export const ENGINE_VERSION = "7.3.2-NO-PLANNED-STOP-TRIGGER";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -3109,17 +3110,18 @@ export function finalizeCandidate(
         spreadBps: spread,
       },
       {
-        minEvBps: Math.max(0, finiteOr((risk.scalpOverrides || {}).minimumEdge, 0) * 10_000),
-        maxGainerRank: Math.round(
-          clamp(finiteOr((risk.scalpOverrides || {}).maxGainerRank, 3), 1, 10),
-        ),
-        maxBookAgeMs: Math.max(250, finiteOr((risk.scalpOverrides || {}).maxBookAgeMs, 2500)),
-        maxSpreadBps: Math.max(
-          1,
-          finiteOr((risk.scalpOverrides || {}).maxSpreadBps, risk.maxSpreadBps ?? 30),
-        ),
-        maxStopToTargetRatio: 1 / Math.max(0.01, risk.minNetRR),
-        minNetRewardRiskRatio: risk.minNetRR,
+        // Same gate the executor applies at order time. Building it separately here is
+        // what let the scanner write BUY candidates the executor then refused.
+        ...buildLobGateConfig({
+          minNetRewardRiskRatio: risk.minNetRR,
+          maxStopToTargetRatio: (risk.scalpOverrides || {}).maxStopToTargetRatio,
+          maxGainerRank: (risk.scalpOverrides || {}).maxGainerRank,
+          maxBookAgeMs: (risk.scalpOverrides || {}).maxBookAgeMs,
+          maxSpreadBps: (risk.scalpOverrides || {}).maxSpreadBps,
+          minNetProfitBps: (risk.scalpOverrides || {}).minimumEdge != null
+            ? Math.max(0, finiteOr((risk.scalpOverrides || {}).minimumEdge, 0) * 10_000)
+            : undefined,
+        }, { maxSpreadBps: risk.maxSpreadBps ?? 30 }),
         maxHoldingSeconds: Math.round(
           clamp(finiteOr((risk.scalpOverrides || {}).maxHoldingSeconds, 180), 1, 300),
         ),
@@ -3251,7 +3253,36 @@ export function finalizeCandidate(
       ),
     ]
     : checks;
-  const effectiveFailed = effectiveChecks.filter((check) => !check.passed);
+  // failed_gates is what entry-integrity blocks on, so it must be the whole rejection set,
+  // not the subset someone remembered to enumerate above. Every reason evaluateLobEntry
+  // returns that no named gate already covers is carried through under its own key —
+  // otherwise a candidate refused for a trap veto, a rank ceiling or a blocked pattern is
+  // recorded as having failed nothing at all, and the operator sees a silent WAIT.
+  const namedGateReasons = new Set([
+    "INSUFFICIENT_LOB_SAMPLES",
+    "STALE_ORDERBOOK",
+    "SPREAD_TOO_WIDE",
+    "BOOK_NOT_HOT_ENOUGH",
+    "NO_PRIMARY_LOB_PATTERN",
+    "NEGATIVE_TRADE_PRESSURE",
+    "SPOOF_WARNING",
+    "REWARD_RISK_FAILED",
+    "STOP_TO_TARGET_RATIO_FAILED",
+  ]);
+  const unnamedLobReasons: Gate[] = lobResult
+    ? lobResult.reasons
+      .filter((reason) => !namedGateReasons.has(reason))
+      .map((reason) => gate(reason.toLowerCase(), reason, false, "LOB 진입 판정 거절 사유"))
+    : [];
+  const effectiveFailed = [
+    ...effectiveChecks.filter((check) => !check.passed),
+    ...unnamedLobReasons,
+  ];
+  // A stored BUY must never carry a failed gate. The two used to be computed from
+  // different places, so a candidate could be saved as BUY and rejected at order time.
+  if (effectiveFailed.length > 0 && decision === "BUY") {
+    decision = "WAIT";
+  }
   const positives = [...period.positives];
   const negatives = [...period.negatives];
   const warnings = [...period.warnings];

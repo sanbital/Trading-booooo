@@ -100,11 +100,14 @@ export function evaluateLobExit(input: LobExitInput): LobExitDecision {
 
   if (input.emergency) return hard("RISK_EMERGENCY", 100);
   if (input.reconciliationFailed) return hard("RECONCILIATION_FAILURE", 95);
-  if (
-    Number.isFinite(input.stopPrice) && input.stopPrice > 0 && input.currentPrice <= input.stopPrice
-  ) {
-    return hard("STOP_HIT", 90);
-  }
+
+  // The scanner's planned stop no longer terminates a position on touch. It was firing
+  // within seconds of entry — a 29s exit at -38bp is the shape of it — which is the
+  // opposite of the policy: before 180 seconds only a confirmed book breakdown may sell,
+  // and the sole price-based floor is the -2% emergency stop. That floor needs the exact
+  // cost basis and fee schedule, so the monitor owns it; this function no longer has a
+  // price-triggered stop of its own. stopPrice is retained on the input for callers that
+  // still report it.
 
   const validTarget = Number.isFinite(input.targetPrice) && input.targetPrice > 0
     ? input.targetPrice

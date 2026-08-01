@@ -161,7 +161,57 @@ jobs:
             --file supabase/migrations/20260729233331_residual_balance_ledger_integrity_v703.sql \
             --file supabase/migrations/20260730031800_exit_learning_integrity_v704.sql \
             --file supabase/migrations/20260730041336_min_lob_observation_30s_v705.sql \
-            --file supabase/migrations/20260730055800_strict_lob_live_admission_v706.sql
+            --file supabase/migrations/20260730055800_strict_lob_live_admission_v706.sql \
+            --file supabase/migrations/20260802040000_v730_executable_stop_parity_and_post180_cap.sql \
+            --file supabase/migrations/20260802050000_v731_restore_quote_fallbacks_and_planned_stop_authority.sql \
+            --file supabase/migrations/20260802060000_v732_planned_stop_is_not_an_exit_trigger.sql
+
+      - name: Verify the sell guard survived the batch
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          # The --file list is hand-maintained and ordered, and several entries rebuild
+          # guard_lob_sell_order_v714 in full. Whichever runs last wins, so a misordered or
+          # truncated list can leave a superseded guard in place and still report success —
+          # that is how the planned-stop reason gate came back once already. Assert the end
+          # state instead of trusting the order.
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            v_def text;
+          begin
+            select pg_get_functiondef(p.oid) into v_def
+            from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname = 'public' and p.proname = 'guard_lob_sell_order_v714';
+
+            if v_def is null then
+              raise exception 'guard_lob_sell_order_v714 is missing after the batch';
+            end if;
+            if position('exit_policy_quote,executable_vwap' in v_def) = 0
+               or position('live_mark,executable_price' in v_def) = 0 then
+              raise exception 'guard lost the multi-field executable quote fallback';
+            end if;
+            if position('coalesce(p.stop_price, 0) > 0' in v_def) > 0 then
+              raise exception
+                'the planned stop is an exit trigger again; only minus 2 percent of executable net may force a sell';
+            end if;
+            if position('HARD_STOP_MINUS_2' in v_def) = 0 then
+              raise exception 'guard lost the executable-net stop at minus 2 percent';
+            end if;
+            if position('lob:STOP_HIT' in v_def) > 0 then
+              raise exception
+                'planned-stop authority is gated on a reason string again; risk control must not depend on a diagnostic';
+            end if;
+            if position('POST180_MAX_HOLD_TIMEOUT' in v_def) = 0 then
+              raise exception 'guard is missing the bounded post-180 timeout branch';
+            end if;
+            raise notice 'sell guard end state verified';
+          end
+          $$;
+          SQL
 
       - name: Deploy Edge Functions
         shell: bash

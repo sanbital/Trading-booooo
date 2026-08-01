@@ -1,0 +1,148 @@
+name: Apply v7.3.0 exit-policy migration
+
+# Applies exactly one migration: the v7.3.0 guard, the post-180 hold cap and the
+# gainer-rank ceiling.
+#
+# It does not go through "Deploy Supabase Trading Engine" because that workflow feeds psql
+# a hand-maintained --file list inside a single transaction, and the third entry
+# (20260729232553_profit_protection_constraint_integrity_v702.sql) currently aborts on its
+# own embedded regression check, V702_PROFIT_TRAIL_WAS_NOT_RAISED. That rolls the whole
+# batch back before it reaches anything newer, which is why every migration since 30 July
+# has been applied by a workflow of its own. This one keeps that pattern rather than
+# editing an unrelated July migration's assertions to get a green run.
+#
+# The migration is re-runnable: create-or-replace function, add-column-if-not-exists, and a
+# constraint behind an existence check. Running it twice is a no-op.
+
+# v7.3.1 is a correction and needs to reach production before this file is on main, so the
+# self-triggering push is back: a workflow_dispatch-only file is not listed in the Actions
+# UI until it reaches the default branch, and there is no other way to run it from here.
+# Both migrations are re-runnable, so the firing that happens again on merge is a no-op.
+on:
+  push:
+    paths:
+      - .github/workflows/apply-v730-migration.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apply-v730-migration
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate the pooler target
+        shell: bash
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from urllib.parse import urlparse
+
+          project_ref = os.environ["SUPABASE_PROJECT_REF"].strip()
+          parsed = urlparse(os.environ["SUPABASE_DB_URL"].strip())
+          if parsed.scheme not in {"postgres", "postgresql"}:
+              raise SystemExit("SUPABASE_DB_URL must start with postgres:// or postgresql://")
+          if not parsed.hostname or not parsed.hostname.endswith(".pooler.supabase.com"):
+              raise SystemExit("SUPABASE_DB_URL must be the Supabase Session pooler URL")
+          if parsed.port != 5432:
+              raise SystemExit("SUPABASE_DB_URL must use Session pooler port 5432")
+          expected_user = f"postgres.{project_ref}"
+          if parsed.username != expected_user:
+              raise SystemExit(f"SUPABASE_DB_URL username must be {expected_user}")
+          if not parsed.password or parsed.password == "[YOUR-PASSWORD]":
+              raise SystemExit("SUPABASE_DB_URL must carry the real URL-encoded password")
+          print(f"Validated pooler target: host={parsed.hostname}, user={parsed.username}")
+          PY
+
+      - name: Apply the migration
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          command -v psql >/dev/null
+          # v7.3.1 must follow v7.3.0: it restores the deployed behaviour v7.3.0 overwrote
+          # and re-applies the v7.3.0 changes on top of the correct base. One transaction,
+          # so a failure in either leaves the guard exactly as it was.
+          psql "${SUPABASE_DB_URL}" \
+            --set=ON_ERROR_STOP=1 \
+            --single-transaction \
+            --file supabase/migrations/20260802040000_v730_executable_stop_parity_and_post180_cap.sql \
+            --file supabase/migrations/20260802050000_v731_restore_quote_fallbacks_and_planned_stop_authority.sql \
+            --file supabase/migrations/20260802060000_v732_planned_stop_is_not_an_exit_trigger.sql
+
+      - name: Verify the guard and settings took effect
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          # Fail loudly rather than reporting a green deploy that changed nothing.
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            v_def text;
+          begin
+            select pg_get_functiondef(p.oid) into v_def
+            from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname = 'public' and p.proname = 'guard_lob_sell_order_v714';
+
+            if v_def is null then
+              raise exception 'guard_lob_sell_order_v714 is missing after the migration';
+            end if;
+            if position('7.3.0-EXECUTABLE-STOP-PARITY' in v_def) = 0 then
+              raise exception 'guard does not admit the v7.3.0 revision';
+            end if;
+            if position('POST180_MAX_HOLD_TIMEOUT' in v_def) = 0 then
+              raise exception 'guard is missing the bounded post-180 timeout branch';
+            end if;
+
+            -- The two behaviours v7.3.0 reverted. Assert them explicitly so a future
+            -- rebuild from a stale source cannot drop them silently a second time.
+            if position('exit_policy_quote,executable_vwap' in v_def) = 0
+               or position('live_mark,executable_price' in v_def) = 0 then
+              raise exception 'guard lost the multi-field executable quote fallback';
+            end if;
+            if position('coalesce(p.stop_price, 0) > 0' in v_def) > 0 then
+              raise exception
+                'the planned stop is an exit trigger again; only minus 2 percent of executable net may force a sell';
+            end if;
+            if position('HARD_STOP_MINUS_2' in v_def) = 0 then
+              raise exception 'guard lost the executable-net stop at minus 2 percent';
+            end if;
+            if position('lob:STOP_HIT' in v_def) > 0 then
+              raise exception
+                'planned-stop authority is gated on a reason string again; risk control must not depend on a diagnostic';
+            end if;
+
+            if not exists (
+              select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'trading_settings'
+                and column_name = 'lob_post180_max_hold_seconds'
+            ) then
+              raise exception 'trading_settings.lob_post180_max_hold_seconds is missing';
+            end if;
+            if not exists (
+              select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'trading_settings'
+                and column_name = 'lob_max_gainer_rank'
+            ) then
+              raise exception 'trading_settings.lob_max_gainer_rank is missing';
+            end if;
+
+            raise notice 'v7.3.0 guard and settings verified';
+          end
+          $$;
+          SQL

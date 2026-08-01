@@ -55,11 +55,11 @@ jobs:
             supabase/functions/market-scanner/engine.ts \
             supabase/functions/_shared/lob/entry.ts \
             gateway/server.mjs
-          grep -q 'const VERSION = "7.3.0-EXECUTABLE-STOP-PARITY";' \
+          grep -q 'const VERSION = "7.3.2-NO-PLANNED-STOP-TRIGGER";' \
             supabase/functions/market-autotrader/index.ts
-          grep -q 'ENGINE_VERSION = "7.3.0-EXECUTABLE-STOP-PARITY"' \
+          grep -q 'ENGINE_VERSION = "7.3.2-NO-PLANNED-STOP-TRIGGER"' \
             supabase/functions/market-scanner/engine.ts
-          grep -q 'const VERSION = "7.3.0-EXECUTABLE-STOP-PARITY";' gateway/server.mjs
+          grep -q 'const VERSION = "7.3.2-NO-PLANNED-STOP-TRIGGER";' gateway/server.mjs
           grep -q 'quoteExecutableNetExit' \
             supabase/functions/market-autotrader/index.ts
           grep -q 'time_in_force: "FOK"' \
@@ -93,7 +93,7 @@ jobs:
             supabase/functions/market-autotrader/index.ts
           grep -q 'POSITIVE_NET_AFTER_180S' \
             supabase/functions/market-autotrader/index.ts
-          grep -q 'HARD_STOP_MINUS_2_AFTER_180S' \
+          grep -q 'HARD_STOP_MINUS_2' \
             supabase/functions/market-autotrader/index.ts
           ! grep -q 'HARD_STOP_MINUS_3_AFTER_180S' \
             supabase/functions/market-autotrader/index.ts
@@ -128,6 +128,12 @@ jobs:
           # The -2% stop is measured on the executable bid VWAP, never the display price.
           grep -q 'executableExitPrice' \
             supabase/functions/market-autotrader/index.ts
+          # The planned stop is not an exit trigger. -2% of executable net is the only
+          # price that forces a sell, in both regimes.
+          ! grep -q 'plannedStopRequested' \
+            supabase/functions/market-autotrader/index.ts
+          ! grep -q 'return hard("STOP_HIT", 90)' \
+            supabase/functions/_shared/lob/exit.ts
           ! grep -q 'const guardedExitPrice = current;' \
             supabase/functions/market-autotrader/index.ts
           # Trap vetoes are an entry authority, not a diagnostic string.
@@ -137,8 +143,21 @@ jobs:
             supabase/functions/_shared/lob/entry.ts
           grep -q 'maxGainerRank' \
             supabase/functions/_shared/lob/entry.ts
+          # One gate definition for both stages. Building it separately is what let the
+          # scanner store BUY candidates the executor then refused, with no trade and no
+          # recorded reason in between.
+          grep -q 'buildLobGateConfig' \
+            supabase/functions/market-scanner/engine.ts
+          grep -q 'buildLobGateConfig' \
+            supabase/functions/market-autotrader/index.ts
+          ! grep -q 'minNetRewardRiskRatio: risk.minNetRR' \
+            supabase/functions/market-scanner/engine.ts
+          # failed_gates must be the whole rejection set, and a stored BUY must carry none.
+          grep -q 'unnamedLobReasons' \
+            supabase/functions/market-scanner/engine.ts
           deno test --allow-env --allow-read \
             supabase/functions/_shared/lob/entry-risk.test.ts \
+            supabase/functions/_shared/lob/gate-config.test.ts \
             supabase/functions/_shared/lob/preorder.test.ts \
             supabase/functions/market-autotrader/executable-exit.test.ts \
             supabase/functions/market-autotrader/entry-integrity.test.ts \
