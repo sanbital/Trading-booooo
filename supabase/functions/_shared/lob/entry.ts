@@ -21,8 +21,8 @@ function finite(value: unknown, fallback = 0): number {
 // The 5% account-protection boundary is an emergency exit owned by the autotrader. It must
 // never be used as the ordinary planned loss in scanner reward/risk arithmetic.
 const OPERATOR_MIN_TARGET_NET_PROFIT_BPS = 20;
-const OPERATOR_MIN_NET_REWARD_RISK_RATIO = 0.5;
-const OPERATOR_MAX_STOP_TO_TARGET_RATIO = 2;
+const OPERATOR_MIN_NET_REWARD_RISK_RATIO = 0.25;
+const OPERATOR_MAX_STOP_TO_TARGET_RATIO = 4;
 const PLANNED_SCALP_STOP_MAX_BPS = 200;
 const LEGACY_EMERGENCY_STOP_BPS = 500;
 
