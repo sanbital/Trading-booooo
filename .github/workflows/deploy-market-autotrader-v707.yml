@@ -109,3 +109,5 @@ jobs:
             --project-ref "${SUPABASE_PROJECT_REF}" \
             --no-verify-jwt \
             --use-api
+
+# retrigger: 2026-08-01 target-exit and balance-reconcile hotfix
