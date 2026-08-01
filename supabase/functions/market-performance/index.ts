@@ -9,7 +9,7 @@ type JsonRecord = Record<string, any>;
 type Exchange = "upbit" | "binance";
 
 const VERSION = "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION";
-const PERFORMANCE_REVISION = "6.11.0-r3-CACHED-120S";
+const PERFORMANCE_REVISION = "6.11.0-r4-TRADING-DB-LOAD-SHED";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const SERVICE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
@@ -17,6 +17,7 @@ const DASHBOARD_TOKEN = env("DASHBOARD_ACCESS_TOKEN") || env("LEARNING_ACCESS_TO
 const DASHBOARD_ORIGIN = env("ALLOWED_ORIGINS").split(",")[0] || "*";
 const REST_PAGE_SIZE = 1000;
 const PERFORMANCE_CACHE_TTL_MS = 120_000;
+const PERFORMANCE_LOAD_SHED = true;
 let performanceCache: { body: JsonRecord; cachedAt: number } | null = null;
 let performanceRefreshInFlight = false;
 
@@ -394,6 +395,17 @@ Deno.serve(async (request: Request) => {
   if (!authorized(request)) return response({ ok: false, error: "unauthorized" }, 401);
   if (!SUPABASE_URL || !SERVICE_KEY) {
     return response({ ok: false, error: "missing Supabase configuration" }, 500);
+  }
+  if (PERFORMANCE_LOAD_SHED) {
+    return response({
+      ok: false,
+      status: "TEMPORARY_LOAD_SHED",
+      error: "Performance aggregation is temporarily paused to protect live trading database capacity.",
+      version: VERSION,
+      performance_revision: PERFORMANCE_REVISION,
+      retry_after_seconds: 300,
+      trading_impact: "NONE",
+    }, 503);
   }
 
   const now = Date.now();
