@@ -1,4 +1,4 @@
-name: Deploy market-autotrader v7.1.6
+name: Deploy market-autotrader v7.1.7
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
       - "supabase/functions/_shared/lob/**"
       - "scripts/apply_v715_runtime_hotfix.py"
       - "scripts/apply_v716_target_balance_hotfix.py"
+      - "scripts/apply_v717_final_exit_policy.py"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
@@ -17,6 +18,7 @@ on:
       - "supabase/functions/_shared/lob/**"
       - "scripts/apply_v715_runtime_hotfix.py"
       - "scripts/apply_v716_target_balance_hotfix.py"
+      - "scripts/apply_v717_final_exit_policy.py"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   workflow_dispatch:
 
@@ -24,7 +26,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-market-autotrader-v716
+  group: deploy-market-autotrader-v717
   cancel-in-progress: false
 
 jobs:
@@ -41,26 +43,33 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Build and validate v7.1.6 deployment artifact
+      - name: Build and validate v7.1.7 deployment artifact
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/apply_v715_runtime_hotfix.py
           python3 scripts/apply_v716_target_balance_hotfix.py
+          python3 scripts/apply_v717_final_exit_policy.py
           deno fmt \
             supabase/functions/market-autotrader/index.ts \
             supabase/functions/_shared/lob/exit.ts
-          grep -q 'const VERSION = "7.1.6-PROTECTED-TARGET-BALANCE-RECONCILE";' \
+          grep -q 'const VERSION = "7.1.7-FINAL-EXIT-POLICY";' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'EXIT_BLOCKED_MIN_HOLD' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'POSITIVE_NET_AFTER_180S' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'HARD_STOP_MINUS_3_AFTER_180S' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'lob_soft_exit_history' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'guardedNetReturnPct <= -3' \
             supabase/functions/market-autotrader/index.ts
           grep -q 'TARGET_NET_GUARD_BLOCKED' \
             supabase/functions/market-autotrader/index.ts
           grep -q 'time_in_force: "FOK"' \
             supabase/functions/market-autotrader/index.ts
           grep -q 'EXCHANGE_BALANCE_ZERO_RECONCILED' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'exactUnrecoveredPositionCost(position)' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'lob:pre-60-absolute-sell-lock' \
             supabase/functions/market-autotrader/index.ts
           deno check supabase/functions/market-autotrader/index.ts
 
@@ -80,12 +89,13 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Build exact v7.1.6 production artifact
+      - name: Build exact v7.1.7 production artifact
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/apply_v715_runtime_hotfix.py
           python3 scripts/apply_v716_target_balance_hotfix.py
+          python3 scripts/apply_v717_final_exit_policy.py
           deno fmt \
             supabase/functions/market-autotrader/index.ts \
             supabase/functions/_shared/lob/exit.ts
@@ -96,7 +106,7 @@ jobs:
         with:
           version: 2.109.1
 
-      - name: Deploy market-autotrader v7.1.6
+      - name: Deploy market-autotrader v7.1.7
         shell: bash
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -110,4 +120,4 @@ jobs:
             --no-verify-jwt \
             --use-api
 
-# deployment trigger: 2026-08-01 13:18 KST v7.1.6 production release
+# deployment trigger: 2026-08-01 13:25 KST v7.1.7 final exit policy
