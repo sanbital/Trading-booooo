@@ -26,6 +26,10 @@ const OPERATOR_MAX_STOP_TO_TARGET_RATIO = 4;
 const PLANNED_SCALP_STOP_MAX_BPS = 200;
 const LEGACY_EMERGENCY_STOP_BPS = 500;
 const ECONOMIC_GATE_EPSILON = 1e-9;
+/** Continuation families that lost money on live fills; overridable via LobEntryConfig. */
+const DEFAULT_BLOCKED_LOB_PATTERNS = ["OFI_CONTINUATION", "MOMENTUM_CONTINUATION"];
+/** Worst 24h-gainer rank admitted by default; overridable via LobEntryConfig. */
+const DEFAULT_MAX_GAINER_RANK = 3;
 
 export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   minSamples: 4,
@@ -224,6 +228,18 @@ export function evaluateLobEntry(
   const patterns = detectLobPatterns(features);
   const primary = patterns.find((pattern) => pattern.primary) ?? patterns[0] ?? null;
 
+  // Continuation patterns buy after the move is already paid for, and 72h of live fills
+  // priced that: MOMENTUM_CONTINUATION won 20% of 24 trades and OFI_CONTINUATION averaged
+  // -30bp over 30, while the absorption/reversal families stayed positive. Blocked by
+  // default and reopened through settings rather than deleted, so the decision stays
+  // visible and reversible.
+  const blockedPatterns = Array.isArray(cfg.blockedPatterns)
+    ? cfg.blockedPatterns.map((name) => String(name).toUpperCase())
+    : DEFAULT_BLOCKED_LOB_PATTERNS;
+  if (primary?.name && blockedPatterns.includes(String(primary.name).toUpperCase())) {
+    reasons.push(`LOB_PATTERN_BLOCKED_${primary.name}`);
+  }
+
   const rawFixedTargetBps = finite(cfg.fixedTargetBps, 0);
   const rawFixedStopBps = finite(cfg.fixedStopBps, 0);
   const targetCostBps = Math.max(
@@ -288,12 +304,26 @@ export function evaluateLobEntry(
     reasons.push("STOP_TO_TARGET_RATIO_FAILED");
     warnings.push("LOB_NOISE_REQUIRES_NON_SCALP_STOP");
   }
-  for (const trap of traps.traps) warnings.push(`LOB_DIAGNOSTIC_${trap.name}`);
+  // v7.3.0: the trap assessment is an entry authority, not a log line. Vetoing hazards
+  // (허매수 BID_SPOOF, 양방향 조작 ASK_SPOOF, 재충전 매도벽 ASK_ICEBERG, 손절이 노이즈에
+  // 잡히는 CHOP_NO_VIABLE_STOP) block the entry outright. Non-vetoing hazards keep their
+  // diagnostic warning and instead shrink the edge this book is allowed to claim.
+  // assessLobTraps already refuses to veto on an unreliable window, so a thin sample
+  // degrades to "unknown", never to "clean".
+  for (const trap of traps.traps) {
+    if (trap.veto) reasons.push(`LOB_TRAP_${trap.name}`);
+    else warnings.push(`LOB_DIAGNOSTIC_${trap.name}`);
+  }
 
   // Structural and execution checks only.
+  const maxGainerRank = clamp(
+    Math.floor(finite(cfg.maxGainerRank, DEFAULT_MAX_GAINER_RANK)) || DEFAULT_MAX_GAINER_RANK,
+    1,
+    10,
+  );
   if (
     features.universeMode !== "TOP10_24H_GAINERS_LOB_ONLY" ||
-    !(finite(features.gainerRank) >= 1 && finite(features.gainerRank) <= 10)
+    !(finite(features.gainerRank) >= 1 && finite(features.gainerRank) <= maxGainerRank)
   ) reasons.push("OUTSIDE_24H_GAINER_TOP10");
   if (features.samples < cfg.minSamples) reasons.push("INSUFFICIENT_LOB_SAMPLES");
   if (features.observationMs < 50_000) reasons.push("INSUFFICIENT_50S_OBSERVATION");
@@ -329,7 +359,10 @@ export function evaluateLobEntry(
     cfg.makerFillSamples,
     cfg.makerFillPriorStrength,
   );
-  const pTarget = clamp(0.50 + flowScore * 0.25, 0.20, 0.85);
+  // A non-vetoing hazard does not make the book bearish; it makes the book less legible.
+  // So it shrinks the edge claimed over a coin flip rather than scaling the probability
+  // itself, which would wrongly assert a downward view.
+  const pTarget = clamp(0.50 + flowScore * 0.25 * traps.confidenceMultiplier, 0.20, 0.85);
   const pStop = clamp(1 - pTarget, 0.10, 0.75);
   const pTimeout = 0;
   const targetReturnNetBps = targetBps - targetCostBps;

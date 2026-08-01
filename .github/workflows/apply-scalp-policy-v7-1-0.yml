@@ -1,4 +1,4 @@
-name: Guard v7.2.3 executable-net integrity
+name: Guard v7.3.0 executable-stop parity
 
 on:
   push:
@@ -21,7 +21,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: guard-v723-executable-net-${{ github.ref }}
+  group: guard-v730-executable-stop-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -38,7 +38,7 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Reject legacy policy mutators and verify v7.2.3 invariants
+      - name: Reject legacy policy mutators and verify v7.3.0 invariants
         shell: bash
         run: |
           set -euo pipefail
@@ -54,7 +54,7 @@ jobs:
           deploy = Path(".github/workflows/deploy-market-autotrader-v707.yml").read_text()
           guard = Path(".github/workflows/apply-scalp-policy-v7-1-0.yml").read_text()
 
-          version = "7.2.3-EXECUTABLE-NET-INTEGRITY"
+          version = "7.3.0-EXECUTABLE-STOP-PARITY"
           assert f'const VERSION = "{version}";' in engine
           assert f'ENGINE_VERSION = "{version}"' in scanner
           assert f'const VERSION = "{version}";' in gateway
@@ -80,10 +80,11 @@ jobs:
           assert write_permission not in guard, "policy guard must remain read-only"
           assert version in deploy
           assert "7.1.4-VOLATILITY-AWARE-EXIT" not in deploy
-          print("PASS: legacy workflows cannot rewrite v7.2.3")
+          assert "7.2.3-EXECUTABLE-NET-INTEGRITY" not in deploy
+          print("PASS: legacy workflows cannot rewrite v7.3.0")
           PY
 
-      - name: Type-check and test v7.2.3 runtime
+      - name: Type-check and test v7.3.0 runtime
         run: |
           deno fmt --check \
             supabase/functions/market-autotrader/index.ts \

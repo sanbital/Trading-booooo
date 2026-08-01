@@ -44,8 +44,11 @@ test("gateway blocks orders from a missing or different engine revision", () => 
     () => module.assertOrderEngineVersion({ engine_version: "7.2.2-LOB-ENTRY-RISK-GATES" }),
     (error) => error.code === "ENGINE_VERSION_MISMATCH",
   );
+  // Read the accepted revision off the module rather than pinning it here: the assertion
+  // under test is "command revision must equal gateway revision", which is what should be
+  // verified on every release, not the spelling of whichever revision is current.
   assert.equal(
-    module.assertOrderEngineVersion({ engine_version: "7.2.3-EXECUTABLE-NET-INTEGRITY" }),
+    module.assertOrderEngineVersion({ engine_version: module.VERSION }),
     true,
   );
 });

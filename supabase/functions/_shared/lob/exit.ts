@@ -131,14 +131,18 @@ export function evaluateLobExit(input: LobExitInput): LobExitDecision {
       validTarget,
       peakPrice * (1 - trailDistanceBps / 10_000),
     );
-    const bookWeakening = input.bookImbalance <= -0.05 ||
-      input.tradePressure <= -0.05 ||
-      input.micropriceDeviationBps < 0 ||
-      input.bidDepthRatio < input.minBidDepthRatio;
-    const retracedToTrail = input.currentPrice <= trailStopPrice;
-    const targetFloorLost = input.currentPrice < validTarget;
-
-    if (targetFloorLost || (retracedToTrail && bookWeakening)) {
+    // A target exit is executed as a protected limit at or above the stored target, so it
+    // can only fill while the book still trades there. Emitting it after the target floor
+    // is already lost produced an order with no bids to match: over 72h every one of those
+    // exits was blocked and the position ran on to a loss (TARGET_NET_GUARD_BREACH, 20 for
+    // 20). So the trail fires while price is still at or above the target, and a book that
+    // gaps straight through the floor disarms the trail and returns to ordinary
+    // evaluation — where the planned stop and the soft signals can still act — instead of
+    // requesting a sell that cannot execute.
+    if (input.currentPrice < validTarget) {
+      return hold();
+    }
+    if (input.currentPrice <= trailStopPrice) {
       return hard("TARGET_HIT", 85);
     }
 
