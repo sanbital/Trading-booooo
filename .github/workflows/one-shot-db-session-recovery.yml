@@ -1,4 +1,4 @@
-name: One-shot Supabase DB session recovery
+name: One-shot Supabase project restart
 
 on:
   push:
@@ -10,37 +10,58 @@ permissions:
   contents: read
 
 jobs:
-  recover:
+  restart:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 12
     env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       PGCONNECT_TIMEOUT: "20"
       PGSSLMODE: require
     steps:
-      - name: Validate direct database URL
+      - name: Validate recovery credentials
         shell: bash
-        run: test -n "$SUPABASE_DB_URL"
+        run: |
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -n "$SUPABASE_PROJECT_REF"
+          test -n "$SUPABASE_DB_URL"
 
-      - name: Terminate stale client sessions
+      - name: Restart Supabase project
         shell: bash
         run: |
           set -euo pipefail
-          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
-          select now() as recovery_started_at, current_database() as database_name;
+          curl --fail-with-body --show-error --silent \
+            -X POST \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/restart"
 
-          select count(*) as client_sessions_before
-          from pg_stat_activity
-          where datname = current_database()
-            and pid <> pg_backend_pid()
-            and backend_type = 'client backend';
+      - name: Wait for project health
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            body="$(curl --show-error --silent \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/health" || true)"
+            if printf '%s' "$body" | grep -q '"status":"ACTIVE_HEALTHY"'; then
+              printf '%s\n' "$body"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Project health did not recover within 10 minutes."
+          exit 1
 
-          select pid, pg_terminate_backend(pid) as terminated
-          from pg_stat_activity
-          where datname = current_database()
-            and pid <> pg_backend_pid()
-            and backend_type = 'client backend';
-
-          select pg_sleep(3);
-          select now() as recovery_verified_at, 1 as database_connection_ok;
-          SQL
+      - name: Verify database connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            if psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -c "select now() as database_now, current_database() as database_name;"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
