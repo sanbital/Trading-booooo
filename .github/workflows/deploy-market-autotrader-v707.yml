@@ -110,4 +110,4 @@ jobs:
             --no-verify-jwt \
             --use-api
 
-# deployment trigger: 2026-08-01 13:05 KST v7.1.6 production release
+# deployment trigger: 2026-08-01 13:18 KST v7.1.6 production release
