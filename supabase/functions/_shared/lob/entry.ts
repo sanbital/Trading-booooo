@@ -88,10 +88,9 @@ export type LobEntryRiskAssessment = {
 /**
  * Admission policy for the failure modes observed in live Top-10 entries.
  *
- * A weak tape is not an independent veto: it confirms that a disappearing bid wall is
- * dangerous. Likewise, an ask wall disappearing without executions is often bullish for
- * a long and is never rejected by itself. This keeps the gate narrow while making the
- * exact spoof/support combinations auditable at scan time and immediately before an order.
+ * The execution contract is fail-closed: negative aggressive flow and either-side spoof
+ * warnings reject a BUY on their own. The same function is used at scan evaluation and at
+ * both order-time rechecks so those conditions cannot become informational on one path.
  */
 export function assessLobEntryRisk(
   features: LobFeatureVector,
@@ -123,6 +122,8 @@ export function assessLobEntryRisk(
 
   if (dynamicInsufficient) reasons.push("LOB_DYNAMIC_EVIDENCE_INSUFFICIENT");
   if (supportBreakdown) reasons.push("SUPPORT_BREAKDOWN_RISK");
+  if (pressure < 0) reasons.push("NEGATIVE_TRADE_PRESSURE");
+  if (bidSpoofDetected || askSpoofDetected) reasons.push("SPOOF_WARNING");
   if (bidSpoofDetected && askSpoofDetected) reasons.push("TWO_SIDED_SPOOF_RISK");
 
   // A very strong disappearing bid needs one confirming weak-flow sign. At the normal
@@ -133,9 +134,7 @@ export function assessLobEntryRisk(
     (bidSpoofDetected && adverseFlowSignals.length >= 2);
   if (bidSpoofConfirmed) reasons.push("BID_SPOOF_CONFIRMED_BY_WEAK_FLOW");
 
-  if (askSpoofDetected && !bidSpoofDetected && !supportBreakdown) {
-    warnings.push("ASK_SPOOF_INFORMATIONAL_ONLY");
-  }
+  if (askSpoofDetected && !bidSpoofDetected && !supportBreakdown) warnings.push("ASK_SPOOF");
   if (bidSpoofDetected && adverseFlowSignals.length > 0) {
     warnings.push(`BID_SPOOF_ADVERSE_FLOW_${adverseFlowSignals.length}`);
   }
@@ -171,6 +170,9 @@ export function assessLobEntryRisk(
 
 /**
  * Pure Top-10 order-book entry gate.
+ *
+ * Entry permission here is current order-book/tape only. EV, candles and broad market
+ * direction remain informational, while execution safety and reward/risk stay mandatory.
  *
  * BUY is decided only from the current 50-second order book and tape. EV, market regime,
  * candle trend, learned pattern profitability, cross-exchange disagreement and payoff
@@ -251,7 +253,7 @@ export function evaluateLobEntry(
     reasons.push("UNEXECUTABLE_ORDERBOOK_DEPTH");
   }
 
-  // Present-tense LOB judgement. Weak flow is used only as spoof confirmation; EV,
+  // Present-tense LOB judgement. Negative flow and spoof warnings fail closed; EV,
   // candles and broad market direction remain informational and cannot veto an entry.
   const risk = assessLobEntryRisk(features, cfg.trap);
   reasons.push(...risk.reasons);
@@ -275,6 +277,12 @@ export function evaluateLobEntry(
   const pTimeout = 0;
   const targetReturnNetBps = targetBps - targetCostBps;
   const stopReturnNetBps = -(stopBps + stopCostBps);
+  const stopToTargetRatio = targetBps > 0 ? stopBps / targetBps : Number.POSITIVE_INFINITY;
+  const netRewardRiskRatio = Math.abs(stopReturnNetBps) > 0
+    ? Math.max(0, targetReturnNetBps) / Math.abs(stopReturnNetBps)
+    : 0;
+  if (stopToTargetRatio > cfg.maxStopToTargetRatio) reasons.push("STOP_TO_TARGET_RATIO_FAILED");
+  if (netRewardRiskRatio < cfg.minNetRewardRiskRatio) reasons.push("REWARD_RISK_FAILED");
   const informationalEv = pTarget * targetReturnNetBps + pStop * stopReturnNetBps;
   const decision = reasons.length === 0 ? "BUY" : "WAIT";
 
@@ -298,10 +306,8 @@ export function evaluateLobEntry(
     targetReturnNetBps,
     stopReturnNetBps,
     timeoutReturnNetBps: 0,
-    stopToTargetRatio: targetBps > 0 ? stopBps / targetBps : 0,
-    netRewardRiskRatio: Math.abs(stopReturnNetBps) > 0
-      ? Math.max(0, targetReturnNetBps) / Math.abs(stopReturnNetBps)
-      : 0,
+    stopToTargetRatio,
+    netRewardRiskRatio,
     minimumTargetNetProfitBps: 0,
     minimumVerifiedEvBps: 0,
     conditionalEvNetBps: informationalEv,

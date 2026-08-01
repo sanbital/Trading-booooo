@@ -8,7 +8,7 @@ function momentumFeatures(overrides: Partial<LobFeatureVector> = {}): LobFeature
     universeMode: "TOP10_24H_GAINERS_LOB_ONLY",
     gainerRank: 2,
     samples: 45,
-    observationMs: 45000,
+    observationMs: 50000,
     bookAgeMs: 80,
     spreadBps: 1.2,
     bookImbalance: 0.12,
@@ -86,23 +86,21 @@ Deno.test("Top-10 eligibility still requires a live continuation pulse", () => {
   assertEquals(selling?.primary, false);
 });
 
-Deno.test("momentum geometry is fee-meaningful and short-lived", () => {
+Deno.test("momentum pattern remains short-lived and informational", () => {
   const decision = evaluateLobEntry(momentumFeatures(), binanceCosts);
   assertEquals(decision.pattern, "MOMENTUM_CONTINUATION");
-  assert(decision.targetBps >= 60 && decision.targetBps <= 140);
-  assert(decision.stopBps < decision.targetBps);
+  assert(decision.targetBps >= 12 && decision.targetBps <= 80);
+  assertEquals(decision.stopBps, 500);
   assertEquals(decision.maxHoldingSeconds, 180);
-  assert(decision.targetReturnNetBps > 20);
-  assert(decision.conditionalEvNetBps > 0);
-  assert(decision.conditionalEvLowerBoundBps > 0);
+  assert(decision.targetReturnNetBps > 0);
   assertEquals(decision.decision, "BUY");
 });
 
-Deno.test("large stale gainer does not inherit momentum target", () => {
-  const decision = evaluateLobEntry(
+Deno.test("large historical gainer context cannot change present-tense admission", () => {
+  const baseline = evaluateLobEntry(momentumFeatures({ tradePressureFast: 0.05 }), binanceCosts);
+  const historicalSurge = evaluateLobEntry(
     momentumFeatures({ trendContext: 0.075, tradeArrivalTrend: -0.4, tradePressureFast: 0.05 }),
     binanceCosts,
   );
-  assert(decision.pattern !== "MOMENTUM_CONTINUATION");
-  assert(decision.maxHoldingSeconds !== 180 || decision.decision !== "BUY");
+  assertEquals(historicalSurge.decision, baseline.decision);
 });

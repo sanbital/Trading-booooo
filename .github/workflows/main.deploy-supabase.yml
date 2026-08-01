@@ -1,15 +1,12 @@
 name: Deploy Supabase Trading Engine
 
-# Deployment retrigger: 2026-07-31 v7.0.7 production rollout
+# Non-ordering Supabase services. Scanner/autotrader are owned by the v7.2.3 workflow.
 on:
   push:
     branches: [main]
     paths:
-      - "supabase/functions/_shared/**"
       - "backtest/**"
-      - "supabase/functions/market-scanner/**"
       - "supabase/functions/market-learning/**"
-      - "supabase/functions/market-autotrader/**"
       # `deno task check/test` validates this function too. A test-only repair here must
       # therefore rerun the engine workflow instead of leaving a previously blocked engine
       # revision undeployed.
@@ -18,7 +15,6 @@ on:
       - "supabase/migrations/**"
       - "validation/**"
       - "deno.json"
-      - ".github/workflows/main.deploy-supabase.yml"
   workflow_dispatch:
 
 permissions:
@@ -38,14 +34,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify v7.0.7 LOB scanner-plan lock
+      - name: Verify repository integrity
         shell: bash
         run: |
           set -euo pipefail
-          grep -Fq 'fixedTargetBps?: number;' supabase/functions/_shared/lob/types.ts
-          grep -Fq 'FIXED_SCAN_PLAN_GEOMETRY' supabase/functions/_shared/lob/entry.ts
-          grep -Fq 'const VERSION = "7.0.7-LOB-SCAN-PLAN-LOCK";' supabase/functions/market-autotrader/index.ts
-          grep -Fq 'fixed_scan_plan_geometry' supabase/functions/market-autotrader/index.ts
           git diff --check
 
       - name: Set up Deno
@@ -59,7 +51,6 @@ jobs:
           deno task test
           node --check gateway/server.mjs
           node --test gateway/server.test.mjs
-          node validation/v700-deploy-validation.mjs
 
       - name: Install Supabase CLI
         uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
@@ -180,7 +171,7 @@ jobs:
         run: |
           # v6.2: the calibration jobs were never in this loop, so the self-correction
           # functions the system depends on were only ever deployed by hand -- if at all.
-          for fn in market-scanner market-learning market-autotrader scalp-calibration lob-calibration; do
+          for fn in market-learning scalp-calibration lob-calibration; do
             supabase functions deploy "$fn" --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
           done
 

@@ -1,8 +1,8 @@
 // 배포 전에 아래 두 값만 본인 Supabase 프로젝트 값으로 교체하세요.
 // Publishable(또는 기존 Anon) Key는 브라우저용 공개 키입니다.
 // Service Role / Secret Key / SCAN_ACCESS_TOKEN은 절대 이 파일에 넣지 마세요.
-const UI_VERSION = "7.1.6-PROTECTED-TARGET-BALANCE-RECONCILE";
-const DASHBOARD_REVISION = "7.1.6-r2-PERFORMANCE-LOAD-SHED";
+const UI_VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY";
+const DASHBOARD_REVISION = "7.2.3-r1-EXECUTABLE-NET-INTEGRITY";
 
 window.TRADING_SCANNER_CONFIG = {
   uiVersion: UI_VERSION,

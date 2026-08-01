@@ -1,4 +1,4 @@
-// Trading-booooo v7.2.2-LOB-ENTRY-RISK-GATES — autonomous spot orchestrator.
+// Trading-booooo v7.2.3-EXECUTABLE-NET-INTEGRITY — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -97,7 +97,7 @@ import {
 } from "../_shared/lob/governance.ts";
 import { evaluateModelHealth, shouldConvertToTaker } from "../_shared/lob/health.ts";
 import { evaluateLobExit } from "../_shared/lob/exit.ts";
-import type { LobFeatureVector, LobPatternName } from "../_shared/lob/types.ts";
+import type { LobCostEstimate, LobFeatureVector, LobPatternName } from "../_shared/lob/types.ts";
 import { lobSelectionMetrics } from "../_shared/lob/selection.ts";
 import {
   bookTimestampOf,
@@ -117,8 +117,11 @@ import {
   recommendationAdmission,
   summarizeEntryAdmission,
 } from "./entry-admission.ts";
+import { type ExecutableNetExitQuote, quoteExecutableNetExit } from "./executable-exit.ts";
+import { buildTradingHeartbeatPatch, type TradingHeartbeatPatch } from "./heartbeat.ts";
+import { assessCandidateIntegrity } from "./entry-integrity.ts";
 
-const VERSION = "7.1.4-VOLATILITY-AWARE-EXIT";
+const VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -179,6 +182,7 @@ type Candidate = JsonRecord & {
   target_1: number;
   target_2: number | null;
   net_rr: number;
+  failed_gate_count: number;
   intended_horizon_hours: number;
   recommendation_valid_until: string | null;
   active_policy_key: string;
@@ -325,6 +329,9 @@ async function patch(table: string, filter: string, values: JsonRecord): Promise
     body: JSON.stringify({ ...values, updated_at: new Date().toISOString() }),
   });
 }
+async function patchTradingHeartbeat(values: TradingHeartbeatPatch): Promise<any[]> {
+  return patch("trading_settings", "id=eq.1", buildTradingHeartbeatPatch(values));
+}
 async function insert(table: string, values: JsonRecord | JsonRecord[]): Promise<any[]> {
   return db(table, {
     method: "POST",
@@ -413,13 +420,16 @@ async function gatewayOnce(
 }
 
 async function gateway(exchange: Exchange, command: JsonRecord, timeoutMs = 15_000): Promise<any> {
+  const versionedCommand = String(command?.action || "") === "create_order"
+    ? { ...command, engine_version: VERSION }
+    : command;
   try {
-    return await gatewayOnce(exchange, command, timeoutMs);
+    return await gatewayOnce(exchange, versionedCommand, timeoutMs);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!RETRYABLE_GATEWAY_ERROR.test(message)) throw error;
     // Fresh timestamp and nonce. The exchange was never reached on the first attempt.
-    return await gatewayOnce(exchange, command, timeoutMs);
+    return await gatewayOnce(exchange, versionedCommand, timeoutMs);
   }
 }
 
@@ -842,7 +852,7 @@ async function accountStats(
       realizedProceedsQuote: row.realized_proceeds_quote,
       paidFeesQuote: row.paid_fees_quote,
       residualValueQuote: row.residual_value_quote,
-      estimatedExitCostPct: FEE_PCT[exchange] / 100 + 0.0005,
+      estimatedExitCostPct: FEE_PCT[exchange] / 100,
     }).markedNetPnlQuote;
   }, 0);
   const dailyEconomic = daily + markedOpenPnl;
@@ -964,6 +974,13 @@ async function runScanner(
           ),
         ),
         risk_pct: isScalpStrategy((settings as any).strategy) ? 100 : settings.risk_per_trade_pct,
+        min_net_rr: isLobStrategy((settings as any).strategy)
+          ? clamp(
+            Math.max(1.5, finite((settings as any).lob_min_net_reward_risk_ratio, 1.5)),
+            1.5,
+            5,
+          )
+          : undefined,
         // v5.4: the scanner sizes barriers from cost, so it must receive the account's
         // real commission rate rather than recomputing the list price.
         upbit_fee_per_side_pct: await liveFeePct("upbit", settings),
@@ -1269,21 +1286,28 @@ export function evaluateLobPreOrderRecheck(
   market: any,
   options: {
     maxEntry: number;
+    maxBookAgeMs: number;
     maxSpreadBps: number;
     requiredNotionalQuote: number;
+    costs: LobCostEstimate;
+    fixedTargetBps: number;
+    fixedStopBps: number;
+    maxStopToTargetRatio: number;
+    minNetRewardRiskRatio: number;
     trap?: Partial<LobTrapConfig>;
   },
 ): LobPreOrderRecheck {
   const features = liveLobFeatures(lobSnapshot, market);
   const decision = evaluateLobEntry(features, {
-    roundTripFeeBps: 0,
-    entrySlippageBps: 0,
-    targetExitSlippageBps: 0,
-    stopExitSlippageBps: 0,
+    ...options.costs,
     spreadBps: Math.max(0, finite(features.spreadBps)),
   }, {
-    maxBookAgeMs: 5_000,
+    maxBookAgeMs: options.maxBookAgeMs,
     maxSpreadBps: options.maxSpreadBps,
+    fixedTargetBps: options.fixedTargetBps,
+    fixedStopBps: options.fixedStopBps,
+    maxStopToTargetRatio: options.maxStopToTargetRatio,
+    minNetRewardRiskRatio: options.minNetRewardRiskRatio,
     trap: options.trap || {},
   });
   const bestBid = finite(market?.best_bid);
@@ -1328,12 +1352,37 @@ function bidDepthQuote(book: any): number {
   );
 }
 
+/** Quantity-aware executable sell price. If visible depth is incomplete, value the
+ * entire quantity at the lowest visible bid instead of falling back to ticker/mid. */
+function executableBidVwap(book: any, requestedQuantity: number): number {
+  const requested = Math.max(0, finite(requestedQuantity));
+  if (!(requested > 0)) return 0;
+  let remaining = requested;
+  let filled = 0;
+  let funds = 0;
+  let lowestVisibleBid = 0;
+  for (const level of Array.isArray(book?.bids) ? book.bids : []) {
+    const price = Math.max(0, finite(level?.price ?? level?.[0]));
+    const size = Math.max(0, finite(level?.size ?? level?.[1]));
+    if (!(price > 0 && size > 0)) continue;
+    lowestVisibleBid = price;
+    const take = Math.min(remaining, size);
+    funds += take * price;
+    filled += take;
+    remaining -= take;
+    if (remaining <= 1e-12) break;
+  }
+  if (filled + 1e-12 >= requested) return funds / requested;
+  return lowestVisibleBid > 0 ? lowestVisibleBid : Math.max(0, finite(book?.best_bid));
+}
+
 function candidatePlan(candidate: Candidate, settings?: TradingSettings) {
   const trade = candidate.snapshot?.trade_plan || {};
   const tick = finite(trade.tick_size, finite(candidate.feature_vector?.tick_size));
   const allocation = clamp(finite(trade.first_target_allocation_pct, 60), 50, 80);
   const strategy = String(trade.target_strategy || "SCALE_OUT");
   const isScalp = isScalpStrategy((settings as any)?.strategy);
+  const isLob = isLobStrategy((settings as any)?.strategy);
   const scalpStopPct = finite((candidate as any).snapshot?.scalp?.stop_pct, 0.003);
   return {
     tick,
@@ -1345,7 +1394,9 @@ function candidatePlan(candidate: Candidate, settings?: TradingSettings) {
     // could end net negative despite having hit its target. The legacy 1.2% trail was
     // also inert at scalp scale: nextTrailingStop() floors at the hard stop, so with a
     // 0.6% target the trail never engaged until the peak passed +0.91%.
-    exitPolicy: isScalp
+    exitPolicy: isLob
+      ? "FIXED_T1"
+      : isScalp
       ? "TRAIL_AFTER_T1"
       : strategy === "TRAIL_AFTER_T1"
       ? "TRAIL_AFTER_T1"
@@ -1791,7 +1842,7 @@ async function managedPortfolio(settings: TradingSettings, exchange: Exchange, p
       realizedProceedsQuote: row.realized_proceeds_quote,
       paidFeesQuote: row.paid_fees_quote,
       residualValueQuote: row.residual_value_quote,
-      estimatedExitCostPct: FEE_PCT[exchange] / 100 + 0.0005,
+      estimatedExitCostPct: FEE_PCT[exchange] / 100,
     });
     bookedExposure += ledger.totalExposureQuote;
     reservedExposure += ledger.reservedExposureQuote;
@@ -2257,6 +2308,22 @@ async function enterCandidateInner(
     ) * 1000,
   });
   (candidate as any).__decision_audit = { recommendation };
+  const candidateIntegrity = assessCandidateIntegrity(candidate, VERSION);
+  (candidate as any).__decision_audit = {
+    recommendation,
+    failed_gate_count: candidateIntegrity.failedGateCount,
+    failed_gates: candidateIntegrity.failedGates,
+    candidate_engine_version: candidateIntegrity.candidateEngineVersion || null,
+    execution_engine_version: VERSION,
+  };
+  if (!candidateIntegrity.allowed) {
+    return {
+      entered: false,
+      exchange,
+      market: candidate.market,
+      reason: candidateIntegrity.reason,
+    };
+  }
   if (!recommendation.allowed) {
     return {
       entered: false,
@@ -2649,7 +2716,7 @@ async function enterCandidateInner(
     // These are two estimates of the same optimism, not independent costs. Apply the
     // stronger one once so repeated negative fee-net evidence corrects admission without
     // double-counting it or imposing a trade-count cap.
-    const decision = evaluateLobEntry(features, {
+    const lobExecutionCosts: LobCostEstimate = {
       roundTripFeeBps,
       entrySlippageBps: makerEntryEnabled(settings) ? 0 : Math.max(0.1, spreadBps * 0.15),
       targetExitSlippageBps: (settings as any).scalp_resting_tp !== false
@@ -2659,7 +2726,8 @@ async function enterCandidateInner(
       spreadBps,
       latencyPenaltyBps: latencyPenalty.bps,
       forecastBiasPenaltyBps: 0,
-    }, {
+    };
+    const lobExecutionGate = {
       minEvBps: 0,
       minNetProfitBps: minimumTargetNetProfitBps,
       maxStopToTargetRatio: clamp(
@@ -2668,8 +2736,8 @@ async function enterCandidateInner(
         5,
       ),
       minNetRewardRiskRatio: clamp(
-        finite((settings as any).lob_min_net_reward_risk_ratio, 0.80),
-        0.10,
+        Math.max(1.5, finite((settings as any).lob_min_net_reward_risk_ratio, 1.5)),
+        1.5,
         5,
       ),
       maxBookAgeMs: Math.max(250, finite((settings as any).lob_max_book_age_ms, 2500)),
@@ -2690,10 +2758,19 @@ async function enterCandidateInner(
       fixedTargetBps: fixedPlanTargetBps,
       fixedStopBps: fixedPlanStopBps,
       fixedMaxHoldingSeconds: fixedPlanMaxHoldingSeconds,
-    });
+    };
+    const decision = evaluateLobEntry(features, lobExecutionCosts, lobExecutionGate);
+    lobSizingContext.preOrderGate = {
+      costs: lobExecutionCosts,
+      maxBookAgeMs: lobExecutionGate.maxBookAgeMs,
+      fixedTargetBps: fixedPlanTargetBps,
+      fixedStopBps: fixedPlanStopBps,
+      maxStopToTargetRatio: lobExecutionGate.maxStopToTargetRatio,
+      minNetRewardRiskRatio: lobExecutionGate.minNetRewardRiskRatio,
+    };
     scalpAudit = {
       strategy: "LOB_SCALP",
-      strategy_revision: "7.1.1-LOB-45S-PROFIT-OR-5PCT",
+      strategy_revision: VERSION,
       recommendation,
       pattern: decision.pattern,
       patterns: decision.patterns,
@@ -2858,17 +2935,18 @@ async function enterCandidateInner(
       };
     }
     const targetPct = decision.targetBps / 10000;
-    // v7.1.3: every target must remain at least one quote-currency unit profitable
-    // after round-trip fees and a conservative p95 exit-price shortfall.
+    // The target only needs to clear actual entry/exit fees plus one minimum
+    // quote-currency display unit. No second synthetic price haircut is applied.
     const targetFeeRate = clamp(FEE_PCT[exchange] / 100, 0, 0.01);
-    const targetShortfallBps = exchange === "upbit" ? 20 : 50;
-    const targetEntryCost = entryPrice * quantity * (1 + targetFeeRate);
-    const netOneTargetPrice = ((targetEntryCost + 1) / (quantity * (1 - targetFeeRate))) /
-      (1 - targetShortfallBps / 10000);
+    const targetEntryFeeRate = exchange === "upbit" ? targetFeeRate : 0;
+    const targetProfitBufferQuote = exchange === "upbit" ? 1 : 0.01;
+    const targetEntryCost = entryPrice * quantity * (1 + targetEntryFeeRate);
+    const netPositiveTargetPrice = (targetEntryCost + targetProfitBufferQuote) /
+      (quantity * (1 - targetFeeRate));
     const stopPct = 0.03;
     scalpStopPrice = tickRound(entryPrice * (1 - stopPct), rules.price_tick, "down");
     scalpTarget1 = tickRound(
-      Math.max(entryPrice * (1 + targetPct), netOneTargetPrice),
+      Math.max(entryPrice * (1 + targetPct), netPositiveTargetPrice),
       rules.price_tick,
       "up",
     );
@@ -3038,6 +3116,7 @@ async function enterCandidateInner(
         maxEntry,
         maxSpreadBps: entryMaxSpreadBps,
         requiredNotionalQuote: decisionNotional,
+        ...lobSizingContext.preOrderGate,
         trap: lobTrapOverrides(settings),
       },
     );
@@ -3251,6 +3330,7 @@ async function enterCandidateInner(
         maxEntry,
         maxSpreadBps: entryMaxSpreadBps,
         requiredNotionalQuote: decisionNotional,
+        ...lobSizingContext.preOrderGate,
         trap: lobTrapOverrides(settings),
       },
     );
@@ -3980,7 +4060,7 @@ async function recordJointObjectiveSnapshot(
       realizedProceedsQuote: row.realized_proceeds_quote,
       paidFeesQuote: row.paid_fees_quote,
       residualValueQuote: row.residual_value_quote,
-      estimatedExitCostPct: FEE_PCT[exchange] / 100 + 0.0005,
+      estimatedExitCostPct: FEE_PCT[exchange] / 100,
     }).markedNetPnlQuote;
   }, 0);
   return (await insert("trading_joint_objective_snapshots", {
@@ -4274,9 +4354,13 @@ function scalpHoldConfig(settings: TradingSettings, exchange: Exchange): ScalpHo
 }
 
 function restingTpEnabled(settings: TradingSettings, position: Position): boolean {
+  const openedAt = Date.parse(String(position.opened_at || position.created_at || ""));
+  const heldSeconds = Number.isFinite(openedAt) ? Math.max(0, (Date.now() - openedAt) / 1000) : 0;
   return isScalpStrategy((settings as any).strategy) &&
+    !isLobStrategy((settings as any).strategy) &&
     (settings as any).scalp_resting_tp === true &&
-    !position.is_paper;
+    !position.is_paper &&
+    heldSeconds >= 60;
 }
 
 function restingTpIdentifier(position: Position): string | null {
@@ -4841,7 +4925,18 @@ async function snapshotAccount(
     const entry = finite(position.average_entry_price);
     const current = finite(prices[position.market], entry);
     openCost += qty * entry;
-    unrealized += qty * (current - entry);
+    unrealized += calculateExposureLedger({
+      state: position.state,
+      remainingQuantity: position.remaining_quantity,
+      averageEntryPrice: position.average_entry_price,
+      plannedEntryPrice: position.planned_entry_price,
+      currentPrice: current,
+      realizedCostQuote: position.realized_cost_quote,
+      realizedProceedsQuote: position.realized_proceeds_quote,
+      paidFeesQuote: position.paid_fees_quote,
+      residualValueQuote: position.residual_value_quote,
+      estimatedExitCostPct: FEE_PCT[exchange] / 100,
+    }).markedNetPnlQuote;
   }
   const botPositionValue = positions
     .filter((row) => row.exchange === exchange && row.is_paper === paper)
@@ -4937,13 +5032,229 @@ async function sellPaper(
     order: { status: "FILLED" },
   };
 }
-async function sellLive(position: Position, quantity: number, purpose: string, cycleId: string) {
+type ProtectedTargetQuote = {
+  limitPrice: number;
+  expectedNetProfitQuote: number;
+  availableQuantity: number;
+  measuredAt: string;
+};
+
+type ProtectedPositiveNetQuote = ProtectedTargetQuote & {
+  sellQuantity: number;
+  audit: JsonRecord;
+};
+
+function exactUnrecoveredPositionCost(position: Position): number {
+  return Math.max(
+    0,
+    finite(position.realized_cost_quote) + finite(position.paid_fees_quote) -
+      finite(position.realized_proceeds_quote),
+  );
+}
+
+function protectedTargetProfitBuffer(position: Position): number {
+  return position.exchange === "upbit" ? 1 : 0.01;
+}
+
+function post180SlippageSafetyRate(settings: TradingSettings & JsonRecord): number {
+  return clamp(
+    Math.max(0.0009, finite((settings as any).scalp_slippage_allowance, 0.0009)),
+    0,
+    0.01,
+  );
+}
+
+async function paidBuyFeeQuote(position: Position): Promise<number> {
+  const rows = await db(
+    `trading_orders?position_id=eq.${position.id}&side=eq.BUY&state=in.(APPLIED,EXCHANGE_DONE,EXCHANGE_PARTIAL_CANCELLED)&select=paid_fee_quote`,
+  ).catch(() => []) as any[];
+  const exact = rows.reduce((sum, row) => sum + Math.max(0, finite(row?.paid_fee_quote)), 0);
+  return exact > 0 ? exact : Math.max(0, finite(position.paid_fees_quote));
+}
+
+function executableNetExitAudit(
+  position: Position,
+  quote: ExecutableNetExitQuote,
+  buyFeeQuote: number,
+  measuredAt: string,
+): JsonRecord {
+  return {
+    revision: VERSION,
+    price_basis: "FULL_VISIBLE_BID_DEPTH_FOK_FLOOR",
+    measured_at: measuredAt,
+    allowed: quote.allowed,
+    block_reason: quote.allowed ? null : quote.reason,
+    sell_price: quote.limitPrice,
+    executable_vwap: quote.executableVwap,
+    sell_quantity: quote.sellQuantity,
+    requested_quantity: quote.requestedQuantity,
+    account_available_quantity: quote.availableQuantity,
+    visible_executable_quantity: quote.visibleExecutableQuantity,
+    expected_gross_proceeds_quote: quote.expectedGrossProceedsQuote,
+    protected_gross_proceeds_quote: quote.protectedGrossProceedsQuote,
+    buy_principal_quote: quote.buyPrincipalQuote,
+    buy_fee_quote: buyFeeQuote,
+    already_paid_fees_quote: quote.alreadyPaidFeesQuote,
+    prior_sell_proceeds_quote: quote.priorSellProceedsQuote,
+    unrecovered_cost_quote: quote.unrecoveredCostQuote,
+    expected_sell_fee_quote: quote.expectedSellFeeQuote,
+    slippage_safety_quote: quote.slippageSafetyQuote,
+    expected_net_profit_quote: Number.isFinite(quote.expectedNetProfitQuote)
+      ? quote.expectedNetProfitQuote
+      : null,
+    order_type: "LIMIT",
+    time_in_force: "FOK",
+    engine_version: VERSION,
+    position_engine_version: position.metadata?.engine_version || null,
+  };
+}
+
+async function preparePositiveNetAfter180Exit(
+  position: Position,
+  requestedQuantity: number,
+  settings: TradingSettings & JsonRecord,
+  cycleId: string,
+): Promise<ProtectedPositiveNetQuote | null> {
+  const [portfolio, market, buyFeeQuote] = await Promise.all([
+    gateway(position.exchange, { action: "portfolio" }),
+    marketQuote(position.exchange, position.market),
+    paidBuyFeeQuote(position),
+  ]);
+  const availableQuantity = accountQuantity(portfolio, position.base_asset, true);
+  const measuredAt = new Date().toISOString();
+  const quote = quoteExecutableNetExit({
+    bids: (market?.bids || []).map((row: any) => ({
+      price: finite(row?.price ?? row?.[0]),
+      size: finite(row?.size ?? row?.[1]),
+    })),
+    requestedQuantity,
+    availableQuantity,
+    quantityStep: finite(position.quantity_step, 0.00000001),
+    buyPrincipalQuote: finite(position.realized_cost_quote),
+    alreadyPaidFeesQuote: finite(position.paid_fees_quote),
+    priorSellProceedsQuote: finite(position.realized_proceeds_quote),
+    sellFeeRate: clamp(FEE_PCT[position.exchange] / 100, 0, 0.01),
+    slippageSafetyRate: post180SlippageSafetyRate(settings),
+  });
+  const audit = executableNetExitAudit(position, quote, buyFeeQuote, measuredAt);
+  await patch("trading_positions", `id=eq.${position.id}`, {
+    metadata: {
+      ...(position.metadata || {}),
+      exit_policy_quote: audit,
+    },
+  });
+  if (!quote.allowed) {
+    await event(
+      "POSITIVE_NET_AFTER_180S_BLOCKED",
+      `${position.exchange}:${position.market} executable net was not strictly positive`,
+      audit,
+      { cycleId, positionId: position.id, level: "INFO" },
+    );
+    return null;
+  }
+  return {
+    limitPrice: quote.limitPrice,
+    expectedNetProfitQuote: quote.expectedNetProfitQuote,
+    availableQuantity: quote.visibleExecutableQuantity,
+    measuredAt,
+    sellQuantity: quote.sellQuantity,
+    audit,
+  };
+}
+
+async function prepareProtectedTarget(
+  position: Position,
+  quantity: number,
+  purpose: string,
+  cycleId: string,
+): Promise<ProtectedTargetQuote | null> {
+  const quote = await marketQuote(position.exchange, position.market);
+  const feeRate = clamp(FEE_PCT[position.exchange] / 100, 0, 0.01);
+  const cost = exactUnrecoveredPositionCost(position);
+  const profitBuffer = protectedTargetProfitBuffer(position);
+  const tick = Math.max(0.000000000001, finite(position.tick_size, 0.00000001));
+  const plannedTarget = purpose === "TARGET_2"
+    ? Math.max(finite(position.target_2), finite(position.target_1))
+    : finite(position.target_1);
+  const economicFloor = quantity > 0 && 1 - feeRate > 0
+    ? (cost + profitBuffer) / (quantity * (1 - feeRate))
+    : Number.POSITIVE_INFINITY;
+  const limitPrice = tickRound(Math.max(plannedTarget, economicFloor), tick, "up");
+  const bids = (quote?.bids || []).map((row: any) => ({
+    price: finite(row?.price ?? row?.[0]),
+    size: finite(row?.size ?? row?.[1]),
+  })).filter((row: any) => row.price > 0 && row.size > 0 && row.price + tick * 1e-9 >= limitPrice);
+  const availableQuantity = bids.reduce((sum: number, row: any) => sum + row.size, 0);
+  const expectedNetProfitQuote = limitPrice * quantity * (1 - feeRate) - cost;
+  const measuredAt = new Date().toISOString();
+  const protectedQuote = {
+    revision: "7.1.6-PROTECTED-TARGET",
+    purpose,
+    measured_at: measuredAt,
+    limit_price: limitPrice,
+    planned_target: plannedTarget,
+    economic_floor: economicFloor,
+    requested_quantity: quantity,
+    available_quantity_at_or_above_floor: availableQuantity,
+    exact_unrecovered_cost_quote: cost,
+    exit_fee_rate: feeRate,
+    minimum_profit_quote: profitBuffer,
+    expected_net_profit_quote: expectedNetProfitQuote,
+  };
+  if (
+    !(limitPrice > 0) || expectedNetProfitQuote <= profitBuffer ||
+    availableQuantity + Math.max(1e-12, quantity * 1e-8) < quantity
+  ) {
+    await patch("trading_positions", `id=eq.${position.id}`, {
+      metadata: {
+        ...(position.metadata || {}),
+        target_net_guard: { ...protectedQuote, allowed: false },
+      },
+    });
+    await event(
+      "TARGET_NET_GUARD_BLOCKED",
+      `${position.exchange}:${position.market} protected target not executable at positive net`,
+      { ...protectedQuote, allowed: false },
+      { cycleId, positionId: position.id, level: "INFO" },
+    );
+    return null;
+  }
+  await patch("trading_positions", `id=eq.${position.id}`, {
+    metadata: {
+      ...(position.metadata || {}),
+      target_net_guard: { ...protectedQuote, allowed: true },
+    },
+  });
+  return { limitPrice, expectedNetProfitQuote, availableQuantity, measuredAt };
+}
+
+async function sellLive(
+  position: Position,
+  quantity: number,
+  purpose: string,
+  cycleId: string,
+  protectedLimit: ProtectedTargetQuote | ProtectedPositiveNetQuote | null = null,
+) {
   const portfolio = await gateway(position.exchange, { action: "portfolio" });
   const available = accountQuantity(portfolio, position.base_asset, true);
   const step = finite(position.quantity_step, 0.00000001);
   const qty = floorToStep(Math.min(position.remaining_quantity, quantity, available), step);
   if (!(qty > 0)) throw new Error(`no available ${position.base_asset} balance for exit`);
   const identifier = uniqueId("x", position.id);
+  const isProtectedTarget = purpose === "TARGET_1" || purpose === "TARGET_2";
+  const isProtectedLimit = protectedLimit !== null;
+  if (isProtectedTarget && !isProtectedLimit) {
+    throw new Error("protected target quote is required for target exit");
+  }
+  if (
+    protectedLimit && "sellQuantity" in protectedLimit &&
+    Math.abs(qty - protectedLimit.sellQuantity) > Math.max(1e-12, step * 1e-6)
+  ) {
+    throw new Error("protected positive-net quantity changed before order submission");
+  }
+  const orderType = isProtectedLimit ? "LIMIT" : "MARKET";
+  const timeInForce = isProtectedLimit ? "FOK" : null;
+  const requestedPrice = isProtectedLimit ? protectedLimit!.limitPrice : null;
   const orderRow = await createOrderRecord({
     position_id: position.id,
     candidate_id: position.candidate_id,
@@ -4954,19 +5265,35 @@ async function sellLive(position: Position, quantity: number, purpose: string, c
     market: position.market,
     side: "SELL",
     purpose,
-    order_type: "MARKET",
+    order_type: orderType,
+    time_in_force: timeInForce,
+    requested_price: requestedPrice,
     requested_volume: qty,
+    requested_notional_quote: requestedPrice ? requestedPrice * qty : null,
     state: "REQUESTED",
   });
   try {
     const result = await gateway(position.exchange, {
       action: "create_order",
-      order: { market: position.market, side: "SELL", type: "MARKET", quantity: qty, identifier },
+      order: isProtectedLimit
+        ? {
+          market: position.market,
+          side: "SELL",
+          type: "LIMIT",
+          price: requestedPrice,
+          quantity: qty,
+          time_in_force: "FOK",
+          identifier,
+        }
+        : { market: position.market, side: "SELL", type: "MARKET", quantity: qty, identifier },
       wait_for_final_ms: 4000,
     }, 20_000);
     const updated = await updateOrderFromGateway(orderRow, result);
-    if (finite(updated.fill.executedVolume) <= 0) throw new Error("market sell returned no fill");
-    return { orderRow, ...updated };
+    if (finite(updated.fill.executedVolume) <= 0) {
+      if (isProtectedLimit) return { orderRow, ...updated, noFill: true };
+      throw new Error("market sell returned no fill");
+    }
+    return { orderRow, ...updated, noFill: false };
   } catch (error) {
     await patch("trading_orders", `id=eq.${orderRow.id}`, {
       state: "UNKNOWN",
@@ -5020,8 +5347,13 @@ async function applyExit(
   cycleId: string,
   breakevenAfterT1 = true,
   decisionReason?: string,
+  settings?: TradingSettings & JsonRecord,
 ) {
-  let quantity = action === "TARGET_1"
+  const targetAction = action === "TARGET_1" || action === "TARGET_2";
+  const positiveNetAfter180 = decisionReason === "POSITIVE_NET_AFTER_180S";
+  let quantity = targetAction && position.metadata?.lob_signal
+    ? finite(position.remaining_quantity)
+    : action === "TARGET_1"
     ? t1SellQuantity(
       position.initial_quantity,
       position.remaining_quantity,
@@ -5034,6 +5366,25 @@ async function applyExit(
   ) quantity = position.remaining_quantity;
   quantity = floorToStep(quantity, finite(position.quantity_step, 0.00000001));
   if (!(quantity > 0)) return { action: "NONE", reason: "zero sell quantity" };
+
+  const protectedTarget = !position.is_paper && targetAction
+    ? await prepareProtectedTarget(position, quantity, action, cycleId)
+    : null;
+  if (!position.is_paper && targetAction && !protectedTarget) {
+    return { action: "NONE", reason: "target net guard blocked or insufficient protected depth" };
+  }
+  const protectedPositiveNet = !position.is_paper && positiveNetAfter180 && settings
+    ? await preparePositiveNetAfter180Exit(position, quantity, settings, cycleId)
+    : null;
+  if (!position.is_paper && positiveNetAfter180 && !protectedPositiveNet) {
+    return {
+      action: "NONE",
+      reason: "positive-net order-time recheck blocked; position retained",
+    };
+  }
+  if (protectedPositiveNet) quantity = protectedPositiveNet.sellQuantity;
+  const protectedLimit = protectedTarget || protectedPositiveNet;
+
   if (!position.is_paper) {
     position = {
       ...position,
@@ -5044,14 +5395,93 @@ async function applyExit(
           pending_exit_action: action,
           pending_exit_reason: decisionReason || action,
           pending_exit_at: new Date().toISOString(),
+          ...(protectedPositiveNet ? { exit_policy_quote: protectedPositiveNet.audit } : {}),
         },
       }))[0],
     };
   }
   const result = position.is_paper
     ? await sellPaper(position, quantity, price, action, cycleId)
-    : await sellLive(position, quantity, action, cycleId);
-  return finalizeExitFill(position, result, action, price, cycleId, breakevenAfterT1);
+    : await sellLive(position, quantity, action, cycleId, protectedLimit);
+
+  if (!position.is_paper && (result as any)?.noFill) {
+    const reopened = (await patch("trading_positions", `id=eq.${position.id}`, {
+      state: "OPEN",
+      metadata: {
+        ...(position.metadata || {}),
+        pending_exit_action: null,
+        pending_exit_reason: null,
+        pending_exit_at: null,
+        protected_limit_last_unfilled_at: new Date().toISOString(),
+      },
+    }))[0] || position;
+    await event(
+      positiveNetAfter180
+        ? "POSITIVE_NET_AFTER_180S_FOK_NOT_FILLED"
+        : "TARGET_PROTECTED_ORDER_NOT_FILLED",
+      `${position.exchange}:${position.market} protected FOK did not fill; position retained`,
+      {
+        action,
+        limit_price: protectedLimit?.limitPrice,
+        expected_net_profit_quote: protectedLimit?.expectedNetProfitQuote,
+      },
+      { cycleId, positionId: position.id, orderId: result.orderRow?.id, level: "INFO" },
+    );
+    return { action: "NONE", reason: "protected target not filled", position: reopened };
+  }
+
+  let finalized = await finalizeExitFill(
+    position,
+    result,
+    action,
+    protectedLimit?.limitPrice || price,
+    cycleId,
+    breakevenAfterT1,
+  );
+  if (
+    (targetAction || positiveNetAfter180) && finalized?.closed &&
+    finite(finalized?.position?.realized_pnl_quote) <= 0
+  ) {
+    const breachReason = positiveNetAfter180
+      ? "POSITIVE_NET_AFTER_180S_GUARD_BREACH"
+      : "TARGET_NET_GUARD_BREACH";
+    const corrected = (await patch("trading_positions", `id=eq.${position.id}`, {
+      close_reason: breachReason,
+      metadata: {
+        ...(finalized.position?.metadata || position.metadata || {}),
+        original_close_reason: action,
+        executable_net_guard_breached_at: new Date().toISOString(),
+      },
+    }))[0] || finalized.position;
+    await event(
+      breachReason,
+      `${position.exchange}:${position.market} protected exit accounting was non-positive`,
+      {
+        action,
+        realized_pnl_quote: finite(corrected?.realized_pnl_quote),
+        limit_price: protectedLimit?.limitPrice,
+      },
+      { cycleId, positionId: position.id, orderId: result.orderRow?.id, level: "CRITICAL" },
+    );
+    finalized = { ...finalized, position: corrected };
+  }
+  if (
+    finalized?.closed &&
+    (decisionReason === "POSITIVE_NET_AFTER_180S" ||
+      decisionReason === "HARD_STOP_MINUS_2_AFTER_180S") &&
+    !(decisionReason === "POSITIVE_NET_AFTER_180S" &&
+      finite(finalized?.position?.realized_pnl_quote) <= 0)
+  ) {
+    const corrected = (await patch("trading_positions", `id=eq.${position.id}`, {
+      close_reason: decisionReason,
+      metadata: {
+        ...(finalized.position?.metadata || position.metadata || {}),
+        terminal_exit_reason: decisionReason,
+      },
+    }))[0] || finalized.position;
+    finalized = { ...finalized, position: corrected };
+  }
+  return finalized;
 }
 
 function clearedReconciliationMetadata(metadata: JsonRecord | null | undefined): JsonRecord {
@@ -5613,6 +6043,12 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
   const unresolvedManualAssets: string[] = [];
   for (const exchange of ["upbit", "binance"] as Exchange[]) {
     const exchangePositions = open.filter((p) => p.exchange === exchange);
+    const balanceTrackedPositions = tracked.filter((p) =>
+      p.exchange === exchange && !p.is_paper &&
+      ["OPEN", "RECONCILING", "RECONCILIATION_FAILED", "MANUAL_INTERVENTION_REQUIRED"].includes(
+        String(p.state),
+      )
+    );
     const exchangeEnabled = exchange === "upbit"
       ? settings.upbit_enabled
       : settings.binance_enabled;
@@ -5646,8 +6082,11 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         continue;
       }
       prices[result.market] = finite(
-        result.value.current,
-        (finite(result.value.best_ask) + finite(result.value.best_bid)) / 2,
+        result.value.best_bid,
+        finite(
+          result.value.current,
+          (finite(result.value.best_ask) + finite(result.value.best_bid)) / 2,
+        ),
       );
       books[result.market] = result.value;
     }
@@ -5664,7 +6103,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
     //      actually LEFT the account is, and even then the pause is scoped to that asset
     //      unless the pattern is systemic (several assets at once => wrong account, key
     //      change, or exchange-side problem).
-    const botLockedResult = await botLockedQuantities(exchange, exchangePositions);
+    const botLockedResult = await botLockedQuantities(exchange, balanceTrackedPositions);
     // v6.4: when the open-order book is unreadable we cannot attribute a lock to anyone.
     // Suppress the locked-balance branch entirely rather than blaming the user for it.
     const botLockedKnown = botLockedResult !== null;
@@ -5699,7 +6138,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
     // v6.4: quantity we can actually sell right now, per asset. Used to size an exit on
     // an asset under review instead of refusing to exit at all.
     const sellableByAsset = new Map<string, number>();
-    for (const originalPosition of exchangePositions.filter((row) => !row.is_paper)) {
+    for (const originalPosition of balanceTrackedPositions) {
       let position = originalPosition;
       // Only a position backed by a successfully APPLIED entry fill may be
       // compared with exchange balances. Ghost/legacy rows are cancelled rather
@@ -5733,6 +6172,53 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       const actualTotal = totalByAsset.get(position.base_asset) || 0;
       const actualFree = freeByAsset.get(position.base_asset) || 0;
       const botLocked = botLockedByAsset.get(position.base_asset) || 0;
+
+      // A stale non-OPEN row with an authenticated zero total balance and no exchange
+      // order cannot represent a live holding. Reconcile it in this scan rather than
+      // leaving a permanent RECONCILING ghost outside the OPEN-only monitor loop.
+      if (
+        position.state !== "OPEN" && actualTotal <= 1e-12 &&
+        allOpenOrderAssets !== null && !allOpenOrderAssets.has(position.base_asset)
+      ) {
+        const pendingSellOrders = await unappliedBotSellOrders(position);
+        if (!pendingSellOrders.length) {
+          const reconciledAt = new Date().toISOString();
+          await patch("trading_positions", `id=eq.${position.id}`, {
+            state: "CLOSED",
+            remaining_quantity: 0,
+            reserved_quote: 0,
+            reserved_quantity: 0,
+            reservation_expires_at: null,
+            closed_at: reconciledAt,
+            close_reason: "EXCHANGE_BALANCE_ZERO_RECONCILED",
+            marked_pnl_quote: null,
+            metadata: {
+              ...(position.metadata || {}),
+              exclude_from_learning: true,
+              display_data_status: "EXCHANGE_BALANCE_ZERO_RECONCILED",
+              exchange_balance_reconciliation: {
+                revision: "7.1.6-BALANCE-RECONCILE",
+                observed_total_quantity: actualTotal,
+                observed_free_quantity: actualFree,
+                reconciled_at: reconciledAt,
+                reason: "AUTHENTICATED_EXCHANGE_BALANCE_ZERO",
+              },
+            },
+          });
+          await event(
+            "STALE_POSITION_BALANCE_RECONCILED",
+            `${exchange}:${position.market} stale managed row closed after zero-balance check`,
+            {
+              previous_state: position.state,
+              expected_quantity: expected,
+              actual_total_quantity: actualTotal,
+              revision: "7.1.6-BALANCE-RECONCILE",
+            },
+            { cycleId, positionId: position.id, level: "WARNING" },
+          );
+          continue;
+        }
+      }
 
       // Reconciliation verdict.
       //
@@ -5848,14 +6334,32 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         Math.floor(finite(position.metadata?.account_mismatch_count)),
       );
       if (!totalMissing && !freeMissing) {
-        if (previousCount > 0) {
+        const phaseMissing = !position.metadata?.reconciliation_phase;
+        const recoverLegacyState =
+          ["RECONCILING", "RECONCILIATION_FAILED"].includes(String(position.state)) && phaseMissing;
+        if (previousCount > 0 || recoverLegacyState) {
           await patch("trading_positions", `id=eq.${position.id}`, {
+            ...(recoverLegacyState ? { state: "OPEN" } : {}),
             metadata: {
               ...(position.metadata || {}),
               account_mismatch_count: 0,
               last_account_mismatch_at: null,
+              balance_reconciliation_checked_at: new Date().toISOString(),
+              observed_total_quantity: actualTotal,
+              observed_free_quantity: actualFree,
+              ...(recoverLegacyState
+                ? { legacy_reconciliation_recovered_at: new Date().toISOString() }
+                : {}),
             },
           });
+          if (recoverLegacyState) {
+            await event(
+              "LEGACY_RECONCILING_POSITION_RECOVERED",
+              `${exchange}:${position.market} balance-backed legacy row returned to OPEN`,
+              { previous_state: position.state, actual_total_quantity: actualTotal },
+              { cycleId, positionId: position.id, level: "WARNING" },
+            );
+          }
         }
         continue;
       }
@@ -6003,7 +6507,10 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           );
         }
       }
-      const current = prices[position.market];
+      const current = executableBidVwap(
+        books[position.market],
+        finite(position.remaining_quantity),
+      ) || prices[position.market];
       if (!(current > 0)) {
         // v6.4: this used to be a bare `continue`. A market that stops quoting produced no
         // log line anywhere, so a position could go unmanaged indefinitely and look normal.
@@ -6048,7 +6555,49 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       }
       const peak = Math.max(current, finite(position.peak_price, position.average_entry_price));
       const trough = Math.min(current, finite(position.trough_price, position.average_entry_price));
-      const values: JsonRecord = { peak_price: peak, trough_price: trough };
+      const liveMark = calculateExposureLedger({
+        state: position.state,
+        remainingQuantity: position.remaining_quantity,
+        reservedQuote: position.reserved_quote,
+        reservedQuantity: position.reserved_quantity,
+        averageEntryPrice: position.average_entry_price,
+        plannedEntryPrice: position.planned_entry_price,
+        currentPrice: current,
+        realizedCostQuote: position.realized_cost_quote,
+        realizedProceedsQuote: position.realized_proceeds_quote,
+        paidFeesQuote: position.paid_fees_quote,
+        residualValueQuote: position.residual_value_quote,
+        estimatedExitCostPct: FEE_PCT[exchange] / 100,
+      });
+      const markCostBasis = Math.max(
+        1e-12,
+        finite(position.realized_cost_quote) + finite(position.paid_fees_quote),
+      );
+      const lobPosition = isLobStrategy(position.metadata?.lob_signal?.strategy);
+      const values: JsonRecord = {
+        peak_price: peak,
+        trough_price: trough,
+        marked_pnl_quote: liveMark.markedNetPnlQuote,
+        metadata: lobPosition
+          ? {
+            ...(position.metadata || {}),
+            active_exit_revision: VERSION,
+            exit_policy_revision: VERSION,
+            live_mark: {
+              revision: VERSION,
+              price_basis: "QUANTITY_AWARE_EXECUTABLE_BID",
+              executable_price: current,
+              quantity: finite(position.remaining_quantity),
+              gross_return_pct: finite(position.average_entry_price) > 0
+                ? (current / finite(position.average_entry_price) - 1) * 100
+                : 0,
+              fee_net_pnl_quote: liveMark.markedNetPnlQuote,
+              fee_net_return_pct: liveMark.markedNetPnlQuote / markCostBasis * 100,
+              measured_at: new Date().toISOString(),
+            },
+          }
+          : position.metadata,
+      };
       if (position.t1_completed && position.exit_policy === "TRAIL_AFTER_T1") {
         values.trailing_stop = nextTrailingStop(
           position.trailing_stop,
@@ -6057,18 +6606,16 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           position.stop_price,
         );
       }
-      if (
-        peak !== finite(position.peak_price) || trough !== finite(position.trough_price) ||
-        values.trailing_stop
-      ) {
-        position = {
-          ...position,
-          ...(await patch("trading_positions", `id=eq.${position.id}`, values))[0],
-        };
-      }
+      position = {
+        ...position,
+        ...(await patch("trading_positions", `id=eq.${position.id}`, values))[0],
+      };
       // v5.3: settle a resting take-profit that has reached a terminal state before
       // deciding anything else, so the position's remaining quantity is current.
       if (restingTpEnabled(settings, position)) {
+        if (!restingTpIdentifier(position)) {
+          position = await placeRestingTakeProfit(position, settings, cycleId);
+        }
         position = await syncRestingTakeProfit(position, cycleId);
         if (String(position.state) !== "OPEN" || finite(position.remaining_quantity) <= 0) {
           actions.push({
@@ -6082,23 +6629,25 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       }
       const scalpMode = isScalpStrategy((settings as any).strategy);
       const lobMode = isLobStrategy((settings as any).strategy);
+      if (lobMode && restingTpIdentifier(position)) {
+        const cancelled = await cancelRestingTakeProfit(position, cycleId);
+        position = cancelled.position;
+        if (!cancelled.ok) {
+          actions.push({
+            exchange,
+            market: position.market,
+            action: "NONE",
+            reason: "LOB resting sell cancellation unconfirmed; exit deferred",
+          });
+          continue;
+        }
+        if (String(position.state) !== "OPEN" || finite(position.remaining_quantity) <= 0) continue;
+      }
       const lobEntryPrice = finite(position.average_entry_price);
       const openedAt = Date.parse(String(position.opened_at || position.created_at || ""));
       const heldSeconds = Number.isFinite(openedAt)
         ? Math.max(0, (Date.now() - openedAt) / 1000)
         : 0;
-      // POST_180_FEE_NET_PROFIT_EXIT_V712: after 180 seconds, the clock never forces a losing exit.
-      // Estimated fee-net PnL is calculated on the remaining quantity. Upbit requires at
-      // least KRW 1 net; Binance exits on any strictly positive USDT estimate.
-      const lobFeeRate = clamp(FEE_PCT[exchange] / 100, 0, 0.01);
-      const lobRemainingQuantity = Math.max(0, finite(position.remaining_quantity));
-      const lobEntryNotional = lobEntryPrice * lobRemainingQuantity;
-      const lobExitNotional = current * lobRemainingQuantity;
-      const lobNetProfitQuote = lobExitNotional * (1 - lobFeeRate) -
-        lobEntryNotional * (1 + lobFeeRate);
-      const lobHardStopHit = heldSeconds >= 180 &&
-        lobEntryPrice > 0 && current <= lobEntryPrice * 0.97;
-      const lobPost180ProfitReady = heldSeconds >= 180 && lobNetProfitQuote > 0;
       let decision = decideExit(
         position,
         current,
@@ -6106,18 +6655,9 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         settings.emergency_liquidation,
         !lobMode,
       );
-      if (lobMode && !settings.emergency_liquidation) {
-        if (lobHardStopHit) {
-          decision = { action: "STOP", fraction: 1, reason: "lob:post-180-minus-3pct-stop" };
-        } else if (heldSeconds >= 180) {
-          decision = lobPost180ProfitReady
-            ? { action: "TARGET_1", fraction: 1, reason: "lob:post-180-fee-net-profit" }
-            : {
-              action: "NONE",
-              fraction: 0,
-              reason: "lob:post-180-hold-until-net-positive-or-minus3pct",
-            };
-        }
+      if (lobMode && !settings.emergency_liquidation && heldSeconds >= 180) {
+        // The sole post-180 sell authority is the executable-depth override below.
+        decision = { action: "NONE", fraction: 0, reason: "lob:post-180-await-executable-net" };
       }
       // v6.5: a slot marked for rotation by the scan cycle closes here, on the monitor's
       // own price and through the ordinary exit path -- cancelling the resting take-profit,
@@ -6215,39 +6755,242 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           softExitGraceSeconds,
           softExitConfirmations,
         });
-        const softReason = exit.nextSoftReason;
-        const priorSoftReason = position.metadata?.lob_soft_exit_reason || null;
-        const priorSoftStartedAt = Date.parse(
-          String(position.metadata?.lob_soft_exit_started_at || ""),
+        const rawSoftReason = exit.nextSoftReason;
+        const nowMs = Date.now();
+        const priorPost180Shadow = position.metadata?.lob_post180_recovery_shadow || {};
+        const post180ShadowEligible = heldSeconds >= 180;
+        const post180PriceAt180 = post180ShadowEligible
+          ? Math.max(0, finite(priorPost180Shadow.price_at_180, current))
+          : 0;
+        const post180NoiseBandBps = clamp(
+          Math.max(
+            60,
+            finite(position.metadata?.lob_signal?.features?.noiseBandBps, 0) * 4,
+            finite(pinnedCoinPolicy.learned_stop_floor_bps, 0) * 2,
+            Math.max(0, spread) * 3,
+          ),
+          60,
+          220,
         );
-        // The first minute never contributes to a reversal timer. A signal must remain
-        // continuously adverse after second 60 before it can authorize a losing exit.
-        const softWindowEligible = heldSeconds >= 60 && heldSeconds < 180 && softReason !== null;
-        const earliestSoftStart = Number.isFinite(openedAt) ? openedAt + 60_000 : Date.now();
-        const canReuseSoftStart = softWindowEligible && priorSoftReason === softReason &&
-          Number.isFinite(priorSoftStartedAt) && priorSoftStartedAt >= earliestSoftStart;
-        const softStartedAtMs = softWindowEligible
-          ? (canReuseSoftStart ? priorSoftStartedAt : Date.now())
-          : Number.NaN;
+        const priorPost180History = Array.isArray(position.metadata?.lob_post180_shadow_history)
+          ? position.metadata.lob_post180_shadow_history
+          : [];
+        let post180ShadowHistory = priorPost180History
+          .map((sample: any) => ({
+            at: finite(sample?.at),
+            reason: sample?.reason === "SIGNAL_REVERSAL" || sample?.reason === "LOB_INVALIDATION"
+              ? sample.reason
+              : null,
+            price: finite(sample?.price),
+            adverse_bps: finite(sample?.adverse_bps),
+          }))
+          .filter((sample: any) => sample.at >= nowMs - 180_000 && sample.at <= nowMs);
+        if (post180ShadowEligible) {
+          const adverseBps = post180PriceAt180 > 0 ? (current / post180PriceAt180 - 1) * 10000 : 0;
+          post180ShadowHistory.push({
+            at: nowMs,
+            reason: rawSoftReason,
+            price: current,
+            adverse_bps: adverseBps,
+          });
+          post180ShadowHistory = post180ShadowHistory.slice(-120);
+        } else {
+          post180ShadowHistory = [];
+        }
+        const coveredPost180AdverseMs = (windowStartMs: number): number => {
+          const samples = [...post180ShadowHistory]
+            .filter((sample: any) => sample.at <= nowMs)
+            .sort((left: any, right: any) => left.at - right.at);
+          let activeReason: "SIGNAL_REVERSAL" | "LOB_INVALIDATION" | null = null;
+          let cursorMs = windowStartMs;
+          let coveredMs = 0;
+          for (const sample of samples) {
+            if (sample.at <= windowStartMs) {
+              activeReason = sample.reason;
+              continue;
+            }
+            const sampleAtMs = Math.min(nowMs, sample.at);
+            if (activeReason !== null) coveredMs += Math.max(0, sampleAtMs - cursorMs);
+            cursorMs = Math.max(cursorMs, sampleAtMs);
+            activeReason = sample.reason;
+          }
+          if (activeReason !== null) coveredMs += Math.max(0, nowMs - cursorMs);
+          return coveredMs;
+        };
+        const post180LatestReason = post180ShadowHistory.length
+          ? post180ShadowHistory[post180ShadowHistory.length - 1].reason
+          : null;
+        const post180AdversePersistent = post180ShadowEligible && post180LatestReason !== null &&
+          coveredPost180AdverseMs(nowMs - 60_000) >= 45_000 &&
+          coveredPost180AdverseMs(nowMs - 20_000) >= 18_000;
+        let post180Phase = post180ShadowEligible
+          ? String(priorPost180Shadow.phase || "POST180_RECOVERY_HOLD")
+          : "INACTIVE";
+        let post180FailedReclaims = post180ShadowEligible
+          ? Math.max(0, Math.floor(finite(priorPost180Shadow.failed_reclaims)))
+          : 0;
+        let post180LowestPrice = post180ShadowEligible
+          ? Math.min(current, finite(priorPost180Shadow.lowest_price, current))
+          : current;
+        let post180ReclaimHigh = post180ShadowEligible
+          ? Math.max(current, finite(priorPost180Shadow.reclaim_high, current))
+          : current;
+        const post180AdverseFromStartBps = post180PriceAt180 > 0
+          ? (current / post180PriceAt180 - 1) * 10000
+          : 0;
+        const post180ReboundFromLowBps = post180LowestPrice > 0
+          ? (current / post180LowestPrice - 1) * 10000
+          : 0;
+        const post180ReclaimThresholdBps = clamp(post180NoiseBandBps * 0.35, 24, 80);
+        if (post180ShadowEligible) {
+          if (
+            post180Phase === "POST180_RECOVERY_HOLD" &&
+            post180AdverseFromStartBps <= -post180NoiseBandBps
+          ) {
+            post180Phase = "POST180_BREACH_WATCH";
+            post180LowestPrice = current;
+            post180ReclaimHigh = current;
+          } else if (
+            (post180Phase === "POST180_BREACH_WATCH" ||
+              post180Phase === "POST180_FAILED_RECLAIM_1") &&
+            post180ReboundFromLowBps >= post180ReclaimThresholdBps
+          ) {
+            post180Phase = "POST180_RECLAIM_TEST";
+            post180ReclaimHigh = current;
+          } else if (post180Phase === "POST180_RECLAIM_TEST") {
+            post180ReclaimHigh = Math.max(post180ReclaimHigh, current);
+            const retestedLow = current <= post180LowestPrice * 1.0005;
+            const hadMeaningfulRebound = post180ReclaimHigh >=
+              post180LowestPrice * (1 + post180ReclaimThresholdBps / 10000);
+            if (retestedLow && hadMeaningfulRebound && post180AdversePersistent) {
+              post180FailedReclaims += 1;
+              post180Phase = post180FailedReclaims >= 2
+                ? "POST180_FAILED_RECLAIM_2"
+                : "POST180_FAILED_RECLAIM_1";
+              post180LowestPrice = current;
+              post180ReclaimHigh = current;
+            }
+          }
+          if (
+            post180Phase !== "POST180_RECLAIM_TEST" &&
+            post180Phase !== "POST180_FAILED_RECLAIM_2"
+          ) {
+            post180LowestPrice = Math.min(post180LowestPrice, current);
+          }
+        }
+        const priorPost180ShadowQualified = Boolean(priorPost180Shadow.shadow_exit_qualified);
+        const post180ShadowQualified = post180ShadowEligible &&
+          post180FailedReclaims >= 2 &&
+          post180Phase === "POST180_FAILED_RECLAIM_2" &&
+          post180AdversePersistent &&
+          post180AdverseFromStartBps <= -post180NoiseBandBps;
+        const softWindowEligible = heldSeconds < 180;
+        const earliestSoftStart = Number.isFinite(openedAt) ? openedAt : nowMs;
+        const priorHistory = Array.isArray(position.metadata?.lob_soft_exit_history)
+          ? position.metadata.lob_soft_exit_history
+          : [];
+        let softHistory = priorHistory
+          .map((sample: any) => ({
+            at: finite(sample?.at),
+            reason: sample?.reason === "SIGNAL_REVERSAL" || sample?.reason === "LOB_INVALIDATION"
+              ? sample.reason
+              : null,
+          }))
+          .filter((sample: any) =>
+            sample.at >= earliestSoftStart && sample.at >= nowMs - 75_000 && sample.at <= nowMs
+          );
+        let recoveryStartedAtMs = Date.parse(
+          String(position.metadata?.lob_soft_exit_recovery_started_at || ""),
+        );
+        if (!softWindowEligible) {
+          softHistory = [];
+          recoveryStartedAtMs = Number.NaN;
+        } else {
+          softHistory.push({ at: nowMs, reason: rawSoftReason });
+          softHistory = softHistory.slice(-80);
+          if (rawSoftReason === null) {
+            if (!Number.isFinite(recoveryStartedAtMs)) recoveryStartedAtMs = nowMs;
+            if (nowMs - recoveryStartedAtMs >= 8_000) softHistory = [];
+          } else {
+            recoveryStartedAtMs = Number.NaN;
+          }
+        }
+        const coveredBadMilliseconds = (
+          reason: "SIGNAL_REVERSAL" | "LOB_INVALIDATION",
+          windowStartMs: number,
+        ): number => {
+          const samples = [...softHistory]
+            .filter((sample: any) => sample.at <= nowMs)
+            .sort((left: any, right: any) => left.at - right.at);
+          let activeReason: "SIGNAL_REVERSAL" | "LOB_INVALIDATION" | null = null;
+          let cursorMs = windowStartMs;
+          let coveredMs = 0;
+          for (const sample of samples) {
+            if (sample.at <= windowStartMs) {
+              activeReason = sample.reason;
+              continue;
+            }
+            const sampleAtMs = Math.min(nowMs, sample.at);
+            if (activeReason === reason) {
+              coveredMs += Math.max(0, sampleAtMs - cursorMs);
+            }
+            cursorMs = Math.max(cursorMs, sampleAtMs);
+            activeReason = sample.reason;
+          }
+          if (activeReason === reason) coveredMs += Math.max(0, nowMs - cursorMs);
+          return coveredMs;
+        };
+        const qualifiesSoftWindow = (
+          reason: "SIGNAL_REVERSAL" | "LOB_INVALIDATION",
+          windowSeconds: number,
+          requiredBadSeconds: number,
+          tailSeconds: number,
+        ): boolean => {
+          const latestReason = softHistory.length
+            ? softHistory[softHistory.length - 1].reason
+            : null;
+          const badMs = coveredBadMilliseconds(reason, nowMs - windowSeconds * 1000);
+          const tailBadMs = coveredBadMilliseconds(reason, nowMs - tailSeconds * 1000);
+          return latestReason === reason &&
+            badMs >= requiredBadSeconds * 1000 &&
+            tailBadMs >= tailSeconds * 1000;
+        };
+        const clearReversalQualified = softWindowEligible && qualifiesSoftWindow(
+          "SIGNAL_REVERSAL",
+          30,
+          24,
+          10,
+        );
+        const ambiguousReversalQualified = softWindowEligible && qualifiesSoftWindow(
+          "LOB_INVALIDATION",
+          50,
+          40,
+          14,
+        );
+        const softReason = softWindowEligible ? rawSoftReason : null;
         const softRequiredSeconds = softReason === "SIGNAL_REVERSAL"
           ? 30
           : softReason === "LOB_INVALIDATION"
           ? 50
           : 0;
-        const softSignalAgeSeconds = softWindowEligible && Number.isFinite(softStartedAtMs)
-          ? Math.max(0, (Date.now() - softStartedAtMs) / 1000)
+        const softExitQualified = softReason === "SIGNAL_REVERSAL"
+          ? clearReversalQualified
+          : softReason === "LOB_INVALIDATION"
+          ? ambiguousReversalQualified
+          : false;
+        const matchingSoftSamples = softReason
+          ? softHistory.filter((sample: any) => sample.reason === softReason)
+          : [];
+        const softStartedAtMs = matchingSoftSamples.length
+          ? finite(matchingSoftSamples[0].at)
+          : Number.NaN;
+        const softSignalAgeSeconds = Number.isFinite(softStartedAtMs)
+          ? Math.max(0, (nowMs - softStartedAtMs) / 1000)
           : 0;
-        const softExitQualified = softWindowEligible && softRequiredSeconds > 0 &&
-          softSignalAgeSeconds >= softRequiredSeconds;
         const softStartedAtIso = Number.isFinite(softStartedAtMs)
           ? new Date(softStartedAtMs).toISOString()
           : null;
-        const softMetadataChanged = softReason !== priorSoftReason ||
-          exit.nextSoftSignalStreak !== finite(position.metadata?.lob_soft_exit_streak) ||
-          String(position.metadata?.lob_soft_exit_started_at || "") !==
-            String(softStartedAtIso || "") ||
-          finite(position.metadata?.lob_soft_exit_required_seconds) !== softRequiredSeconds ||
-          Boolean(position.metadata?.lob_soft_exit_qualified) !== softExitQualified;
+        const softMetadataChanged = true;
         if (softMetadataChanged) {
           position = {
             ...position,
@@ -6259,6 +7002,33 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
                 lob_soft_exit_started_at: softStartedAtIso,
                 lob_soft_exit_required_seconds: softRequiredSeconds,
                 lob_soft_exit_qualified: softExitQualified,
+                lob_soft_exit_history: softHistory,
+                lob_soft_exit_recovery_started_at: Number.isFinite(recoveryStartedAtMs)
+                  ? new Date(recoveryStartedAtMs).toISOString()
+                  : null,
+                lob_post180_shadow_history: post180ShadowHistory,
+                lob_post180_recovery_shadow: post180ShadowEligible
+                  ? {
+                    revision: "7.1.9-POST180-RECOVERY-SHADOW",
+                    mode: "SHADOW_ONLY",
+                    started_at: priorPost180Shadow.started_at || new Date(nowMs).toISOString(),
+                    price_at_180: post180PriceAt180,
+                    phase: post180Phase,
+                    failed_reclaims: post180FailedReclaims,
+                    lowest_price: post180LowestPrice,
+                    reclaim_high: post180ReclaimHigh,
+                    adverse_band_bps: post180NoiseBandBps,
+                    reclaim_threshold_bps: post180ReclaimThresholdBps,
+                    adverse_from_180_bps: post180AdverseFromStartBps,
+                    adverse_persistent: post180AdversePersistent,
+                    latest_reason: post180LatestReason,
+                    shadow_exit_qualified: post180ShadowQualified,
+                    qualified_at: post180ShadowQualified
+                      ? priorPost180Shadow.qualified_at || new Date(nowMs).toISOString()
+                      : null,
+                    checked_at: new Date(nowMs).toISOString(),
+                  }
+                  : null,
                 lob_soft_exit_profile_version: finite(
                   pinnedCoinPolicy.profile_version,
                   fallbackOnlinePolicy.profileVersion,
@@ -6270,6 +7040,28 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
               },
             }))[0],
           };
+        }
+        if (post180ShadowQualified && !priorPost180ShadowQualified) {
+          await event(
+            "LOB_POST180_SHADOW_SOFT_EXIT",
+            `${exchange}:${position.market} second reclaim failure qualified in shadow mode`,
+            {
+              mode: "SHADOW_ONLY",
+              held_seconds: heldSeconds,
+              price_at_180: post180PriceAt180,
+              current_price: current,
+              adverse_from_180_bps: post180AdverseFromStartBps,
+              adverse_band_bps: post180NoiseBandBps,
+              reclaim_threshold_bps: post180ReclaimThresholdBps,
+              failed_reclaims: post180FailedReclaims,
+              latest_reason: post180LatestReason,
+              adverse_persistent: post180AdversePersistent,
+              executable_action: "HOLD",
+              canonical_positive_exit_preserved: true,
+              canonical_hard_stop_preserved: true,
+            },
+            { cycleId, positionId: position.id, level: "INFO" },
+          );
         }
         const lobExitSafetyReason = exit.reason === "RISK_EMERGENCY" ||
           exit.reason === "RECONCILIATION_FAILURE" ||
@@ -6500,11 +7292,13 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       if (lobMode && !settings.emergency_liquidation) {
         const policyFeeRate = clamp(FEE_PCT[exchange] / 100, 0, 0.01);
         const policyQuantity = Math.max(0, finite(position.remaining_quantity));
-        const policyShortfallBps = exchange === "upbit" ? 20 : 50;
-        const guardedExitPrice = current * (1 - policyShortfallBps / 10000);
-        const policyEntryCost = lobEntryPrice * policyQuantity * (1 + policyFeeRate);
-        const guardedNetProfitQuote = guardedExitPrice * policyQuantity * (1 - policyFeeRate) -
-          policyEntryCost;
+        const guardedExitPrice = current;
+        const policyUnrecoveredCost = exactUnrecoveredPositionCost(position);
+        const guardedNetProfitQuote = guardedExitPrice * policyQuantity *
+            (1 - policyFeeRate) - policyUnrecoveredCost;
+        const guardedNetReturnPct = policyUnrecoveredCost > 0
+          ? guardedNetProfitQuote / policyUnrecoveredCost * 100
+          : 0;
         const drawdownPct = lobEntryPrice > 0 ? (current / lobEntryPrice - 1) * 100 : 0;
         const requestedAction = decision.action;
         const requestedReason = String((decision as any).reason || "");
@@ -6513,25 +7307,34 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           (requestedReason === "lob:SIGNAL_REVERSAL" ||
             requestedReason === "lob:LOB_INVALIDATION");
         const reversalQualified = Boolean(position.metadata?.lob_soft_exit_qualified);
+        const post180BuyFeeQuote = heldSeconds >= 180
+          ? await paidBuyFeeQuote(position)
+          : Math.max(0, finite(position.paid_fees_quote));
+        const post180Quote = heldSeconds >= 180
+          ? quoteExecutableNetExit({
+            bids: (books[position.market]?.bids || []).map((row: any) => ({
+              price: finite(row?.price ?? row?.[0]),
+              size: finite(row?.size ?? row?.[1]),
+            })),
+            requestedQuantity: policyQuantity,
+            availableQuantity: position.is_paper
+              ? policyQuantity
+              : accountQuantity(portfolios[exchange], position.base_asset, true),
+            quantityStep: finite(position.quantity_step, 0.00000001),
+            buyPrincipalQuote: finite(position.realized_cost_quote),
+            alreadyPaidFeesQuote: finite(position.paid_fees_quote),
+            priorSellProceedsQuote: finite(position.realized_proceeds_quote),
+            sellFeeRate: policyFeeRate,
+            slippageSafetyRate: post180SlippageSafetyRate(settings),
+          })
+          : null;
 
-        if (heldSeconds < 60) {
-          decision = targetRequested
-            ? {
-              action: "TARGET_1",
-              fraction: 1,
-              reason: "lob:pre-60-target-only",
-            }
-            : {
-              action: "NONE",
-              fraction: 0,
-              reason: "lob:pre-60-sell-lock-except-target",
-            };
-        } else if (heldSeconds < 180) {
+        if (heldSeconds < 180) {
           if (targetRequested) {
             decision = {
               action: "TARGET_1",
               fraction: 1,
-              reason: "lob:60-180-target",
+              reason: "lob:pre-180-target",
             };
           } else if (reversalRequested && reversalQualified) {
             decision = {
@@ -6543,41 +7346,50 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             decision = {
               action: "NONE",
               fraction: 0,
-              reason: "lob:60-180-hold-unless-target-or-qualified-reversal",
+              reason: "lob:pre-180-hold-unless-target-or-qualified-reversal",
             };
           }
-        } else if (guardedNetProfitQuote > 0) {
-          decision = {
-            action: "TARGET_1",
-            fraction: 1,
-            reason: "lob:post-180-guarded-net-positive",
-          };
-        } else if (drawdownPct <= -3) {
+        } else if (post180Quote?.allowed) {
           decision = {
             action: "STOP",
             fraction: 1,
-            reason: "lob:post-180-minus-3pct-stop",
+            reason: "POSITIVE_NET_AFTER_180S",
+          };
+        } else if (guardedNetReturnPct <= -2) {
+          decision = {
+            action: "STOP",
+            fraction: 1,
+            reason: "HARD_STOP_MINUS_2_AFTER_180S",
           };
         } else {
           decision = {
             action: "NONE",
             fraction: 0,
-            reason: "lob:post-180-hold-until-net-positive-or-minus3pct",
+            reason: "lob:post-180-hold-until-net-positive-or-minus2pct",
           };
         }
 
-        if (decision.action !== "NONE") {
+        if (heldSeconds >= 180 || decision.action !== "NONE") {
+          const executableAudit = post180Quote
+            ? executableNetExitAudit(
+              position,
+              post180Quote,
+              post180BuyFeeQuote,
+              new Date().toISOString(),
+            )
+            : null;
           position = {
             ...position,
             ...(await patch("trading_positions", `id=eq.${position.id}`, {
               metadata: {
                 ...(position.metadata || {}),
                 exit_policy_quote: {
-                  revision: "7.1.4-VOLATILITY-AWARE-EXIT",
-                  price: current,
-                  measured_at: new Date().toISOString(),
+                  ...(executableAudit || {
+                    revision: VERSION,
+                    measured_at: new Date().toISOString(),
+                  }),
                   held_seconds: heldSeconds,
-                  guarded_net_profit_quote: guardedNetProfitQuote,
+                  hard_stop_net_profit_quote: guardedNetProfitQuote,
                   drawdown_pct: drawdownPct,
                   requested_action: requestedAction,
                   requested_reason: requestedReason,
@@ -6601,13 +7413,41 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         }
       }
 
+      if (lobMode && heldSeconds < 180 && decision.action !== "NONE") {
+        const approvedPre180Target = decision.action === "TARGET_1" ||
+          decision.action === "TARGET_2";
+        const approvedPre180Reversal = decision.action === "STOP" &&
+          ((decision as any).reason === "lob:SIGNAL_REVERSAL" ||
+            (decision as any).reason === "lob:LOB_INVALIDATION") &&
+          Boolean(position.metadata?.lob_soft_exit_qualified);
+        if (!approvedPre180Target && !approvedPre180Reversal) {
+          await event(
+            "EXIT_BLOCKED_PRE180_POLICY",
+            `${exchange}:${position.market} exit was not an approved target or qualified reversal`,
+            {
+              held_seconds: heldSeconds,
+              blocked_action: decision.action,
+              blocked_reason: (decision as any).reason || null,
+              current_price: current,
+            },
+            { cycleId, positionId: position.id, level: "WARNING" },
+          );
+          decision = {
+            action: "NONE",
+            fraction: 0,
+            reason: "EXIT_BLOCKED_PRE180_POLICY",
+          } as any;
+        }
+      }
       if (decision.action === "NONE") continue;
       // v5.3: the resting sell locks the base asset. Cancel and CONFIRM before any market
       // exit; a rejected sell would leave the position open with no protection.
       if (restingTpIdentifier(position)) {
         const nonPriceDecisionConfirmed = String(decision.reason || "").startsWith("lob:") ||
           String(decision.reason || "").startsWith("live_hold:") ||
-          String(decision.reason || "").startsWith("rotation:");
+          String(decision.reason || "").startsWith("rotation:") ||
+          decision.reason === "POSITIVE_NET_AFTER_180S" ||
+          decision.reason === "HARD_STOP_MINUS_2_AFTER_180S";
         const cancelled = await cancelRestingTakeProfit(position, cycleId);
         position = cancelled.position;
         if (!cancelled.ok) {
@@ -6639,6 +7479,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             cycleId,
             (settings as any).scalp_breakeven_after_t1 !== false,
             decision.reason,
+            settings,
           ),
         );
       } catch (error) {
@@ -6665,14 +7506,18 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       portfolioCapturedAt[exchange],
     );
   }
-  await patch("trading_settings", "id=eq.1", {
-    last_monitor_at: new Date().toISOString(),
-    last_gateway_heartbeat_at: new Date().toISOString(),
-    gateway_error_count: 0,
-    ...(settings.emergency_liquidation && stillOpen.length === 0
-      ? { emergency_liquidation: false, pause_new_entries: true }
-      : {}),
+  const monitorHeartbeatAt = new Date().toISOString();
+  await patchTradingHeartbeat({
+    lastMonitorAt: monitorHeartbeatAt,
+    lastGatewayHeartbeatAt: monitorHeartbeatAt,
+    gatewayErrorCount: 0,
   });
+  if (settings.emergency_liquidation && stillOpen.length === 0) {
+    await patch("trading_settings", "id=eq.1", {
+      emergency_liquidation: false,
+      pause_new_entries: true,
+    });
+  }
   return { positions: open.length, actions, unresolved_manual_assets: unresolvedManualAssets };
 }
 
@@ -6902,9 +7747,10 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
       { circuits, stats },
       { cycleId, level: exchanges.some((x) => circuits[x].hardStop) ? "CRITICAL" : "WARNING" },
     );
-    await patch("trading_settings", "id=eq.1", {
-      last_full_scan_at: new Date().toISOString(),
-      last_gateway_heartbeat_at: new Date().toISOString(),
+    const heartbeatAt = new Date().toISOString();
+    await patchTradingHeartbeat({
+      lastFullScanAt: heartbeatAt,
+      lastGatewayHeartbeatAt: heartbeatAt,
     });
     return { skipped: true, circuits, stats };
   }
@@ -7086,10 +7932,11 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
       });
     }
   }
-  await patch("trading_settings", "id=eq.1", {
-    last_full_scan_at: new Date().toISOString(),
-    last_gateway_heartbeat_at: new Date().toISOString(),
-    gateway_error_count: 0,
+  const scanHeartbeatAt = new Date().toISOString();
+  await patchTradingHeartbeat({
+    lastFullScanAt: scanHeartbeatAt,
+    lastGatewayHeartbeatAt: scanHeartbeatAt,
+    gatewayErrorCount: 0,
   });
   await completeLobPolicyExposure(
     cycleId,
@@ -7120,6 +7967,44 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
     rotations,
     circuits,
     stats,
+  };
+}
+
+function displayPosition(row: any): any {
+  const lob = isLobStrategy(row?.metadata?.lob_signal?.strategy);
+  if (!lob) return row;
+  const revision = String(
+    row?.metadata?.active_exit_revision ||
+      row?.metadata?.exit_policy_revision ||
+      "7.1.9-POST180-RECOVERY-SHADOW",
+  );
+  return {
+    ...row,
+    exit_policy: "EXECUTABLE_NET_EXIT",
+    strategy_revision: revision,
+    stop_bps: 300,
+    marked_pnl_quote: finite(
+      row?.marked_pnl_quote,
+      finite(row?.metadata?.live_mark?.fee_net_pnl_quote),
+    ),
+    active_exit_policy: {
+      revision,
+      price_basis: "QUANTITY_AWARE_EXECUTABLE_BID",
+      minimum_hold_seconds: 60,
+      hard_stop_after_seconds: 180,
+      hard_stop_return_pct: -2,
+      hard_stop_price: row?.stop_price,
+      marked_pnl_quote: finite(
+        row?.marked_pnl_quote,
+        finite(row?.metadata?.live_mark?.fee_net_pnl_quote),
+      ),
+      measured_at: row?.metadata?.live_mark?.measured_at || null,
+    },
+    historical_entry_signal: {
+      engine_version: row?.metadata?.engine_version || null,
+      strategy_revision: row?.metadata?.lob_signal?.strategy_revision || null,
+      stop_bps: row?.metadata?.lob_signal?.stop_bps ?? null,
+    },
   };
 }
 
@@ -7254,11 +8139,11 @@ async function status(settings: TradingSettings & JsonRecord) {
     positions: (positions || []).filter((row: any) =>
       row.state === "ENTRY_PENDING" || finite(row.remaining_quantity) > 0 ||
       finite(row.reserved_quote) > 0
-    ),
+    ).map(displayPosition),
     asset_locks: assetLocks || [],
     residual_inventory: residualInventory || [],
     joint_objective_snapshots: objectiveSnapshots || [],
-    recently_closed_positions: closedPositions,
+    recently_closed_positions: (closedPositions || []).map(displayPosition),
     binance_gateway_health: binanceHealth,
     recent_orders: orders,
     recent_cycles: cycles,
@@ -7392,9 +8277,9 @@ Deno.serve(async (request: Request) => {
           portfolios[exchange] = await gateway(exchange, { action: "portfolio" });
         }
       }
-      await patch("trading_settings", "id=eq.1", {
-        last_gateway_heartbeat_at: new Date().toISOString(),
-        gateway_error_count: 0,
+      await patchTradingHeartbeat({
+        lastGatewayHeartbeatAt: new Date().toISOString(),
+        gatewayErrorCount: 0,
       });
       const result = {
         settings,

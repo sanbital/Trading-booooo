@@ -1,15 +1,15 @@
-name: Validate autotrader v7.1.4 exit policy
+name: Validate autotrader v7.2.3 executable-net policy
 
 on:
   push:
     branches:
-      - fix/v714-volatility-aware-exit-policy
       - main
     paths:
       - "supabase/functions/market-autotrader/**"
-      - "supabase/functions/_shared/lob/exit.ts"
-      - "supabase/migrations/*v714*"
-      - "scripts/patch_v714_exit_policy.py"
+      - "supabase/functions/market-scanner/engine.ts"
+      - "supabase/functions/market-scanner/forward-learning.ts"
+      - "supabase/functions/_shared/lob/entry.ts"
+      - "gateway/**"
       - ".github/workflows/patch-autotrader-v714.yml"
   pull_request:
     branches:
@@ -17,16 +17,18 @@ on:
     types: [opened, synchronize, reopened]
     paths:
       - "supabase/functions/market-autotrader/**"
-      - "supabase/functions/_shared/lob/exit.ts"
-      - "supabase/migrations/*v714*"
-      - "scripts/patch_v714_exit_policy.py"
+      - "supabase/functions/market-scanner/engine.ts"
+      - "supabase/functions/market-scanner/forward-learning.ts"
+      - "supabase/functions/_shared/lob/entry.ts"
+      - "gateway/**"
       - ".github/workflows/patch-autotrader-v714.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: validate-autotrader-v714-${{ github.ref }}
+  group: validate-autotrader-v723-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -39,18 +41,33 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate immutable v7.1.4 policy
-        run: python3 scripts/patch_v714_exit_policy.py
-
       - name: Set up Deno
         uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
 
-      - name: Format and type-check
+      - name: Validate, format, type-check and test immutable v7.2.3 policy
         run: |
+          grep -q 'const VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY";' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'ENGINE_VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY"' \
+            supabase/functions/market-scanner/engine.ts
+          grep -q 'const VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY";' gateway/server.mjs
+          grep -q 'time_in_force: "FOK"' supabase/functions/market-autotrader/index.ts
+          grep -q 'expectedNetProfitQuote > 0' \
+            supabase/functions/market-autotrader/executable-exit.ts
+          grep -q 'ENGINE_VERSION_MISMATCH' gateway/server.mjs
           deno fmt --check \
             supabase/functions/market-autotrader/index.ts \
-            supabase/functions/_shared/lob/exit.ts
+            supabase/functions/market-autotrader/executable-exit.ts \
+            supabase/functions/market-autotrader/entry-integrity.ts \
+            supabase/functions/market-autotrader/heartbeat.ts \
+            supabase/functions/market-scanner/engine.ts \
+            supabase/functions/_shared/lob/entry.ts \
+            gateway/server.mjs
           deno check supabase/functions/market-autotrader/index.ts
+          deno test \
+            supabase/functions/market-autotrader/executable-exit.test.ts \
+            supabase/functions/market-autotrader/entry-integrity.test.ts \
+            supabase/functions/market-autotrader/heartbeat.test.ts
           git diff --exit-code

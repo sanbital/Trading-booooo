@@ -20,7 +20,7 @@ import {
   sigmaFromAtrPct,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "7.1.1-LOB-45S-PROFIT-OR-5PCT";
+export const ENGINE_VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -3115,6 +3115,8 @@ export function finalizeCandidate(
           1,
           finiteOr((risk.scalpOverrides || {}).maxSpreadBps, risk.maxSpreadBps ?? 30),
         ),
+        maxStopToTargetRatio: 1 / Math.max(0.01, risk.minNetRR),
+        minNetRewardRiskRatio: risk.minNetRR,
         maxHoldingSeconds: Math.round(
           clamp(finiteOr((risk.scalpOverrides || {}).maxHoldingSeconds, 180), 1, 300),
         ),
@@ -3218,10 +3220,25 @@ export function finalizeCandidate(
         lobResult.pattern || "NONE",
       ),
       gate(
-        "lob_net_ev",
-        "비용 차감 순EV",
-        lobResult.evLowerBoundBps > 0,
-        `${lobResult.evLowerBoundBps.toFixed(3)}bp`,
+        "lob_pressure",
+        "체결압력",
+        !lobResult.reasons.includes("NEGATIVE_TRADE_PRESSURE"),
+        `${micro.trade_pressure_fast.toFixed(4)}`,
+      ),
+      gate(
+        "lob_spoof",
+        "스푸핑 경고",
+        !lobResult.reasons.includes("SPOOF_WARNING"),
+        `bid ${micro.dynamic.spoof_like_score.toFixed(3)} / ask ${
+          micro.dynamic.ask_spoof_score.toFixed(3)
+        }`,
+      ),
+      gate(
+        "lob_reward_risk",
+        "비용 차감 손익비",
+        !lobResult.reasons.includes("REWARD_RISK_FAILED") &&
+          !lobResult.reasons.includes("STOP_TO_TARGET_RATIO_FAILED"),
+        `${lobResult.netRewardRiskRatio.toFixed(3)} / ${risk.minNetRR.toFixed(3)}`,
       ),
       gate(
         "lob_stop",
