@@ -61,4 +61,18 @@ jobs:
             --project-ref "${SUPABASE_PROJECT_REF}" \
             --no-verify-jwt \
             --use-api
-# recovery redeploy: 2026-08-01T06:13Z
+
+      - name: Verify deployed dashboard API
+        shell: bash
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        run: |
+          if [ -z "${LEARNING_ACCESS_TOKEN:-}" ]; then echo "::error::LEARNING_ACCESS_TOKEN is missing."; exit 1; fi
+          autotrade_token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
+          body="$(curl --fail-with-body --retry 3 --retry-delay 3 --max-time 60 -X POST \
+            -H "content-type: application/json" \
+            -H "x-autotrade-token: ${autotrade_token}" \
+            "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/market-performance")"
+          jq -e '.ok == true and .performance_revision == "6.11.0-r2-PAGINATED-LIVE-FILLS"' <<< "$body" >/dev/null
+          jq '{ok, version, performance_revision, generated_at, source_counts}' <<< "$body"
