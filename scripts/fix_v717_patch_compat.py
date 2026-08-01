@@ -1,7 +1,7 @@
 from pathlib import Path
 
-path = Path("scripts/apply_v717_final_exit_policy.py")
-text = path.read_text(encoding="utf-8")
+patch_path = Path("scripts/apply_v717_final_exit_policy.py")
+text = patch_path.read_text(encoding="utf-8")
 start = text.find("# Add guarded executable net return")
 end = text.find("\n\npolicy_start =", start)
 if start < 0 or end < 0:
@@ -19,5 +19,16 @@ text = text[:guarded_match.end()] + ''' + "'''" + r'''
           ? guardedNetProfitQuote / policyUnrecoveredCost * 100
           : 0;''' + "'''" + r''' + text[guarded_match.end():]'''
 text = text[:start] + replacement + text[end:]
-path.write_text(text, encoding="utf-8")
-print("aligned v7.1.7 guarded-return insertion with v7.1.6 artifact")
+patch_path.write_text(text, encoding="utf-8")
+
+engine_path = Path("supabase/functions/market-autotrader/index.ts")
+engine = engine_path.read_text(encoding="utf-8")
+old = '  if (!position.is_paper && result?.noFill) {'
+new = '  if (!position.is_paper && (result as any)?.noFill) {'
+count = engine.count(old)
+if count != 1:
+    raise SystemExit(f"protected target noFill type guard: expected one match, found {count}")
+engine = engine.replace(old, new, 1)
+engine_path.write_text(engine, encoding="utf-8")
+
+print("aligned v7.1.7 guarded-return insertion and protected-target noFill type")
