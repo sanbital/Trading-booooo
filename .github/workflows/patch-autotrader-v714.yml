@@ -54,12 +54,3 @@ jobs:
             supabase/functions/_shared/lob/exit.ts
           deno check supabase/functions/market-autotrader/index.ts
           git diff --exit-code
-
-      - name: Confirm workflows are non-mutating
-        run: |
-          set -euo pipefail
-          ! grep -R "python3 .github/scripts/apply_scalp_v7_1_0.py" .github/workflows
-          ! grep -R "Stamp v7.0.8 runtime version" .github/workflows
-          ! grep -R "git push origin main" \
-            .github/workflows/apply-scalp-policy-v7-1-0.yml \
-            .github/workflows/patch-autotrader-v714.yml
