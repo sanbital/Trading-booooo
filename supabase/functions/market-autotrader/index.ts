@@ -1,4 +1,4 @@
-// Trading-booooo v7.2.4-LOB-PLANNED-STOP — autonomous spot orchestrator.
+// Trading-booooo v7.2.3-EXECUTABLE-NET-INTEGRITY — autonomous spot orchestrator.
 // Private service-role function. No withdrawal, transfer, margin, futures, leverage, or market-buy routes exist.
 
 import {
@@ -121,7 +121,7 @@ import { type ExecutableNetExitQuote, quoteExecutableNetExit } from "./executabl
 import { buildTradingHeartbeatPatch, type TradingHeartbeatPatch } from "./heartbeat.ts";
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
 
-const VERSION = "7.2.4-LOB-PLANNED-STOP";
+const VERSION = "7.2.3-EXECUTABLE-NET-INTEGRITY";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
