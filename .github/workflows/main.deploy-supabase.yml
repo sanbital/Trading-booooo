@@ -161,7 +161,8 @@ jobs:
             --file supabase/migrations/20260729233331_residual_balance_ledger_integrity_v703.sql \
             --file supabase/migrations/20260730031800_exit_learning_integrity_v704.sql \
             --file supabase/migrations/20260730041336_min_lob_observation_30s_v705.sql \
-            --file supabase/migrations/20260730055800_strict_lob_live_admission_v706.sql
+            --file supabase/migrations/20260730055800_strict_lob_live_admission_v706.sql \
+            --file supabase/migrations/20260802040000_v730_executable_stop_parity_and_post180_cap.sql
 
       - name: Deploy Edge Functions
         shell: bash
