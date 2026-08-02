@@ -11,8 +11,6 @@ function assert(condition: unknown, message = "assertion failed"): asserts condi
 function candidate(now: number, step: number): MinuteCandle[] {
   const start = now - 50 * 60_000;
   return Array.from({ length: 44 }, (_, index) => {
-    // The reference window is volatile, then compresses before a two-candle release.
-    // This is a real squeeze rather than an always-flat series.
     const quietAmplitude = index < 22 ? 0.08 : 0.004;
     const quiet = Math.sin(index * 1.7) * quietAmplitude;
     const launch = index >= 42 ? (index - 41) * step : 0;
@@ -30,33 +28,45 @@ function candidate(now: number, step: number): MinuteCandle[] {
   });
 }
 
-Deno.test("pre-breakout gate has an admissible small-candle squeeze-release zone", () => {
+Deno.test("CORE4 plus auxiliary score admits a pre-expansion upper-band touch", () => {
   const now = Date.UTC(2026, 7, 2, 15, 0, 30);
   let accepted = null;
-  for (const step of [0.006, 0.008, 0.01, 0.012, 0.015, 0.018, 0.02]) {
+  for (const step of [0.006, 0.008, 0.01, 0.012, 0.015, 0.018, 0.02, 0.025]) {
     const result = evaluateMinuteEntryGate(candidate(now, step), now);
     if (result.passed) {
       accepted = result;
       break;
     }
   }
-  assert(accepted, "no synthetic pre-breakout setup passed");
+  assert(accepted, "no synthetic CORE4 setup passed");
   assert(accepted.version === MINUTE_ENTRY_GATE_VERSION);
-  assert(accepted.preBreakout && accepted.squeezeRelease);
-  assert(accepted.bodyAtrRatio != null && accepted.bodyAtrRatio <= 0.75);
+  assert(accepted.corePassed && accepted.upperBandTouched);
+  assert(accepted.auxiliaryPassed && accepted.auxiliaryScore >= 40);
 });
 
-Deno.test("a completed giant bullish candle is never a new entry", () => {
+Deno.test("the four primary conditions remain hard gates", () => {
   const now = Date.UTC(2026, 7, 2, 15, 0, 30);
   const candles = candidate(now, 0.012);
   const last = candles.at(-1)!;
-  last.open = last.close - 0.8;
+  last.open = last.close + 0.02;
+  last.high = Math.max(last.high, last.open + 0.01);
+  const result = evaluateMinuteEntryGate(candles, now);
+  assert(!result.passed);
+  assert(result.reasons.includes("M1_PREVIOUS_CANDLE_NOT_BULLISH"));
+});
+
+Deno.test("a completed expansion candle is rejected by the auxiliary score", () => {
+  const now = Date.UTC(2026, 7, 2, 15, 0, 30);
+  const candles = candidate(now, 0.012);
+  const last = candles.at(-1)!;
+  last.open = last.close - 1.2;
   last.low = last.open - 0.05;
   last.high = last.close + 0.05;
   last.volume = 400;
   const result = evaluateMinuteEntryGate(candles, now);
   assert(!result.passed);
-  assert(result.reasons.includes("M1_CANDLE_ALREADY_EXTENDED"));
+  assert(result.auxiliarySignals.includes("PENALTY_COMPLETED_EXPANSION_CANDLE"));
+  assert(result.reasons.includes("M1_AUXILIARY_SCORE_TOO_LOW"));
 });
 
 Deno.test("forming candle is excluded and insufficient history fails closed", () => {

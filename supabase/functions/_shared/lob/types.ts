@@ -92,6 +92,10 @@ export interface LobFeatureVector {
   m1VolumeRatio?: number | null;
   m1SqueezeRelease?: boolean;
   m1PreBreakout?: boolean;
+  m1CorePassed?: boolean;
+  m1UpperBandTouched?: boolean;
+  m1AuxiliaryScore?: number | null;
+  m1AuxiliaryPassed?: boolean;
   m1BearishUpperBandReentry?: boolean;
   m1UpperBandReclaimed?: boolean;
   m1PreviousAtUpperBand?: boolean;

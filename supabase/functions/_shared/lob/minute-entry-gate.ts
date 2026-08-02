@@ -1,7 +1,7 @@
 // One-minute pre-breakout confirmation for LOB_SCALP.
 // The completed candle must still be small: this gate deliberately enters before the
 // expansion candle, never after it. Stochastic is raw %K 14, %K smoothing 3, %D 3.
-export const MINUTE_ENTRY_GATE_VERSION = "M1-BB-PREBREAKOUT-STOCH-14-3-3-V2";
+export const MINUTE_ENTRY_GATE_VERSION = "M1-BB-CORE4-AUX-SCORE-STOCH-14-3-3-V3";
 export const MINUTE_STOCH_LENGTH = 14;
 export const MINUTE_STOCH_K_SMOOTHING = 3;
 export const MINUTE_STOCH_D_SMOOTHING = 3;
@@ -41,6 +41,11 @@ export type MinuteEntryGate = {
   volumeRatio: number | null;
   squeezeRelease: boolean;
   preBreakout: boolean;
+  corePassed: boolean;
+  upperBandTouched: boolean;
+  auxiliaryScore: number;
+  auxiliaryPassed: boolean;
+  auxiliarySignals: string[];
   bearishUpperBandReentry: boolean;
   upperBandReclaimed: boolean;
   previousAtUpperBand: boolean;
@@ -147,6 +152,11 @@ function emptyGate(error: unknown = null, available = false): MinuteEntryGate {
     volumeRatio: null,
     squeezeRelease: false,
     preBreakout: false,
+    corePassed: false,
+    upperBandTouched: false,
+    auxiliaryScore: 0,
+    auxiliaryPassed: false,
+    auxiliarySignals: [],
     bearishUpperBandReentry: false,
     upperBandReclaimed: false,
     previousAtUpperBand: false,
@@ -259,22 +269,54 @@ export function evaluateMinuteEntryGate(
     return Boolean(rowAtr && row.close > row.open && (row.close - row.open) / rowAtr >= 0.90);
   });
 
-  const reasons: string[] = [];
-  if (!previousBullish) reasons.push("M1_PREVIOUS_CANDLE_NOT_BULLISH");
-  if (!(stoch.k > stoch.d)) reasons.push("M1_STOCH_K_NOT_ABOVE_D");
-  if (stoch.previousK != null && stoch.k < stoch.previousK - 2) reasons.push("M1_STOCH_K_FADING");
-  if (!squeezeRelease) reasons.push("M1_BB_SQUEEZE_NOT_RELEASING");
-  if (!(bandPosition >= 0.78 && bandPosition <= 1.08)) reasons.push("M1_NOT_NEAR_UPPER_BAND");
-  if (!(upperBandSlopePct > 0)) reasons.push("M1_UPPER_BAND_NOT_RISING");
-  if (
-    !(bodyAtrRatio >= 0.05 && bodyAtrRatio <= 0.75) || rangeAtrRatio > 1.20 || recentLargeBullish
-  ) {
-    reasons.push("M1_CANDLE_ALREADY_EXTENDED");
-  }
-  if (recentAdvanceAtr > 1.25) reasons.push("M1_RECENT_MOVE_ALREADY_EXTENDED");
-  if (!(volumeRatio >= 1.05)) reasons.push("M1_VOLUME_NOT_EXPANDING");
+  // CORE4 is deliberately small and explicit. These are the only mandatory 1m gates:
+  // 1) previous completed candle is bullish, 2) Stoch(14,3,3) K>D,
+  // 3) that candle touched/closed above the upper band, 4) upper band slopes upward.
+  const upperBandTouched = last.high >= currentBb.upper * 0.9995 || last.close >= currentBb.upper;
+  const coreReasons: string[] = [];
+  if (!previousBullish) coreReasons.push("M1_PREVIOUS_CANDLE_NOT_BULLISH");
+  if (!(stoch.k > stoch.d)) coreReasons.push("M1_STOCH_K_NOT_ABOVE_D");
+  if (!upperBandTouched) coreReasons.push("M1_UPPER_BAND_NOT_TOUCHED");
+  if (!(upperBandSlopePct > 0)) coreReasons.push("M1_UPPER_BAND_NOT_RISING");
+  const corePassed = coreReasons.length === 0;
 
-  const preBreakout = reasons.length === 0;
+  // Everything else is supporting evidence, not an independent veto. Positive structure
+  // earns points; severe extension receives penalties so a completed expansion candle does
+  // not pass merely because volume and band width are high.
+  const auxiliarySignals: string[] = [];
+  let rawAuxiliaryScore = 0;
+  const add = (condition: boolean, points: number, label: string) => {
+    if (!condition) return;
+    rawAuxiliaryScore += points;
+    auxiliarySignals.push(label);
+  };
+  add(squeezeRelease, 20, "SQUEEZE_RELEASE");
+  add(bandWidthExpansionRatio >= 1.003, 10, "BAND_WIDTH_EXPANDING");
+  add(stoch.previousK == null || stoch.k >= stoch.previousK - 2, 15, "STOCH_NOT_FADING");
+  add(volumeRatio >= 0.90, 15, "VOLUME_SUPPORTED");
+  add(bodyAtrRatio >= 0.03 && bodyAtrRatio <= 0.90, 15, "BODY_NOT_EXTENDED");
+  add(rangeAtrRatio <= 1.50, 10, "RANGE_NOT_EXTENDED");
+  add(recentAdvanceAtr <= 1.50, 10, "RECENT_ADVANCE_NOT_EXTENDED");
+  add(bandPosition >= 0.85, 5, "CLOSE_NEAR_UPPER_BAND");
+
+  if (bodyAtrRatio > 1.20 || recentLargeBullish) {
+    rawAuxiliaryScore -= 25;
+    auxiliarySignals.push("PENALTY_COMPLETED_EXPANSION_CANDLE");
+  }
+  if (rangeAtrRatio > 1.80) {
+    rawAuxiliaryScore -= 15;
+    auxiliarySignals.push("PENALTY_WIDE_RANGE");
+  }
+  if (recentAdvanceAtr > 2.00) {
+    rawAuxiliaryScore -= 20;
+    auxiliarySignals.push("PENALTY_LATE_ADVANCE");
+  }
+
+  const auxiliaryScore = Math.max(0, Math.min(100, rawAuxiliaryScore));
+  const auxiliaryPassed = auxiliaryScore >= 40;
+  const reasons = [...coreReasons];
+  if (corePassed && !auxiliaryPassed) reasons.push("M1_AUXILIARY_SCORE_TOO_LOW");
+  const preBreakout = corePassed && auxiliaryPassed;
   return {
     version: MINUTE_ENTRY_GATE_VERSION,
     passed: preBreakout,
@@ -295,6 +337,11 @@ export function evaluateMinuteEntryGate(
     volumeRatio,
     squeezeRelease,
     preBreakout,
+    corePassed,
+    upperBandTouched,
+    auxiliaryScore,
+    auxiliaryPassed,
+    auxiliarySignals,
     bearishUpperBandReentry,
     upperBandReclaimed,
     previousAtUpperBand,

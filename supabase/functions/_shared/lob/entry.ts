@@ -27,6 +27,10 @@ const OPERATOR_MAX_STOP_TO_TARGET_RATIO = 4;
 const PLANNED_SCALP_STOP_MAX_BPS = 200;
 const LEGACY_EMERGENCY_STOP_BPS = 500;
 const ECONOMIC_GATE_EPSILON = 1e-9;
+export const EFFECTIVE_OBSERVATION_MIN_MS = 13_500;
+const EFFECTIVE_OBSERVATION_MIN_SAMPLES = 20;
+const EFFECTIVE_OBSERVATION_MIN_TRADES = 20;
+const EFFECTIVE_OBSERVATION_MIN_QUALITY = 0.45;
 /** Continuation families that lost money on live fills; overridable via LobEntryConfig. */
 const DEFAULT_BLOCKED_LOB_PATTERNS: string[] = [];
 /** Worst 24h-gainer rank admitted by default; overridable via LobEntryConfig. */
@@ -95,6 +99,15 @@ export function calibrateMakerFillProbability(
   };
 }
 
+export function hasEffectiveLobObservation(features: LobFeatureVector): boolean {
+  const observationMs = Math.max(0, finite(features.observationMs));
+  if (observationMs >= 15_000) return true;
+  return observationMs >= EFFECTIVE_OBSERVATION_MIN_MS &&
+    Math.max(0, finite(features.samples)) >= EFFECTIVE_OBSERVATION_MIN_SAMPLES &&
+    Math.max(0, finite(features.tradeCount)) >= EFFECTIVE_OBSERVATION_MIN_TRADES &&
+    clamp(finite(features.dataQuality), 0, 1) >= EFFECTIVE_OBSERVATION_MIN_QUALITY;
+}
+
 export type LobEntryRiskAssessment = {
   reasons: string[];
   warnings: string[];
@@ -130,7 +143,8 @@ export function assessLobEntryRisk(
   const bidSpoofDetected = bidSpoof >= trapCfg.bidSpoofScore;
   const askSpoofDetected = askSpoof >= trapCfg.askSpoofScore;
   const supportBreakdown = status.includes("SUPPORT_BREAKDOWN");
-  const dynamicInsufficient = status.includes("INSUFFICIENT") ||
+  const effectiveObservation = hasEffectiveLobObservation(features);
+  const dynamicInsufficient = (!effectiveObservation && status.includes("INSUFFICIENT")) ||
     clamp(finite(features.dataQuality), 0, 1) < trapCfg.minDataQuality;
   const buyNotional = Math.max(0, finite(features.buyNotional));
   const sellNotional = Math.max(0, finite(features.sellNotional));
@@ -353,7 +367,7 @@ export function evaluateLobEntry(
     !(finite(features.gainerRank) >= 1 && finite(features.gainerRank) <= maxGainerRank)
   ) reasons.push("OUTSIDE_24H_GAINER_TOP10");
   if (features.samples < cfg.minSamples) reasons.push("INSUFFICIENT_LOB_SAMPLES");
-  if (features.observationMs < 15_000) reasons.push("INSUFFICIENT_15S_OBSERVATION");
+  if (!hasEffectiveLobObservation(features)) reasons.push("INSUFFICIENT_EFFECTIVE_OBSERVATION");
   if (features.bookAgeMs == null || features.bookAgeMs > cfg.maxBookAgeMs) {
     reasons.push("STALE_ORDERBOOK");
   }

@@ -1,4 +1,4 @@
-import { assessLobEntryRisk } from "./entry.ts";
+import { assessLobEntryRisk, hasEffectiveLobObservation } from "./entry.ts";
 import type { LobFeatureVector } from "./types.ts";
 
 function assert(condition: unknown, message = "assertion failed"): asserts condition {
@@ -53,4 +53,29 @@ Deno.test("acceleration alone cannot authorize an entry", () => {
 Deno.test("no live tape remains a hard rejection", () => {
   const result = assessLobEntryRisk(features({ tradeArrivalRate: 0 }));
   assert(result.reasons.includes("NO_LIVE_BUY_TAPE"));
+});
+
+Deno.test("13.5s boundary tolerance requires substantial live samples", () => {
+  assert(hasEffectiveLobObservation(features({
+    observationMs: 14_976,
+    samples: 53,
+    tradeCount: 81,
+    dataQuality: 0.78,
+  })));
+  assert(
+    !hasEffectiveLobObservation(features({
+      observationMs: 13_267,
+      samples: 53,
+      tradeCount: 81,
+      dataQuality: 0.78,
+    })),
+  );
+  assert(
+    !hasEffectiveLobObservation(features({
+      observationMs: 14_500,
+      samples: 8,
+      tradeCount: 5,
+      dataQuality: 0.8,
+    })),
+  );
 });

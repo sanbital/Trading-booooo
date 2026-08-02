@@ -21,7 +21,7 @@ import {
   sigmaFromAtrPct,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "7.3.7-15S-TOP10-COMPOSITE-PRESSURE";
+export const ENGINE_VERSION = "7.3.8-M1-CORE-SCORE-OBS-TOLERANCE";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -137,6 +137,10 @@ export type UniverseRow = {
   m1_volume_ratio?: number | null;
   m1_squeeze_release?: boolean;
   m1_pre_breakout?: boolean;
+  m1_core_passed?: boolean;
+  m1_upper_band_touched?: boolean;
+  m1_auxiliary_score?: number | null;
+  m1_auxiliary_passed?: boolean;
   m1_bearish_upper_band_reentry?: boolean;
   m1_upper_band_reclaimed?: boolean;
   m1_previous_at_upper_band?: boolean;
@@ -1185,7 +1189,7 @@ type WallStat = {
 
 // The scanner makes one synchronized 15-second decision. Sample floors are scaled to
 // that window; three-phase consistency remains mandatory, so shorter never means one-tick.
-const DYNAMIC_MIN_OBSERVATION_MS = 15_000;
+const DYNAMIC_MIN_OBSERVATION_MS = 13_500;
 const DYNAMIC_MIN_BOOK_UPDATES = 12;
 const DYNAMIC_MIN_TRADES = 8;
 const DYNAMIC_PHASE_COUNT = 3;
@@ -3139,6 +3143,10 @@ export function finalizeCandidate(
       m1VolumeRatio: period.universe.m1_volume_ratio ?? null,
       m1SqueezeRelease: period.universe.m1_squeeze_release === true,
       m1PreBreakout: period.universe.m1_pre_breakout === true,
+      m1CorePassed: period.universe.m1_core_passed === true,
+      m1UpperBandTouched: period.universe.m1_upper_band_touched === true,
+      m1AuxiliaryScore: period.universe.m1_auxiliary_score ?? null,
+      m1AuxiliaryPassed: period.universe.m1_auxiliary_passed === true,
       m1BearishUpperBandReentry: period.universe.m1_bearish_upper_band_reentry === true,
       m1UpperBandReclaimed: period.universe.m1_upper_band_reclaimed === true,
       m1PreviousAtUpperBand: period.universe.m1_previous_at_upper_band === true,

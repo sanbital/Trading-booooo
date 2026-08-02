@@ -127,7 +127,7 @@ import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 import { loadMinuteEntryGate } from "../_shared/lob/minute-entry-market.ts";
 
-const VERSION = "7.3.7-15S-TOP10-COMPOSITE-PRESSURE";
+const VERSION = "7.3.8-M1-CORE-SCORE-OBS-TOLERANCE";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -1301,6 +1301,10 @@ function liveLobFeatures(scan: any, market: any): LobFeatureVector {
     m1VolumeRatio: base.m1VolumeRatio ?? null,
     m1SqueezeRelease: base.m1SqueezeRelease === true,
     m1PreBreakout: base.m1PreBreakout === true,
+    m1CorePassed: base.m1CorePassed === true,
+    m1UpperBandTouched: base.m1UpperBandTouched === true,
+    m1AuxiliaryScore: base.m1AuxiliaryScore ?? null,
+    m1AuxiliaryPassed: base.m1AuxiliaryPassed === true,
     m1BearishUpperBandReentry: base.m1BearishUpperBandReentry === true,
     m1UpperBandReclaimed: base.m1UpperBandReclaimed === true,
     m1PreviousAtUpperBand: base.m1PreviousAtUpperBand === true,
