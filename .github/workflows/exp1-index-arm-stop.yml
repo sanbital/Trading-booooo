@@ -114,4 +114,4 @@ jobs:
           git commit -m "fix: enforce EXP-1 arm stops before 180s"
           git push origin HEAD:main
 
-# staged
+# armed
