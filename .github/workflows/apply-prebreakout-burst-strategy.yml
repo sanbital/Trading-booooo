@@ -6,6 +6,8 @@ on:
     paths:
       - ".github/workflows/apply-prebreakout-burst-strategy.yml"
       - "scripts/apply_prebreakout_burst_strategy.py"
+  issues:
+    types: [opened]
   workflow_dispatch:
 
 permissions:
@@ -17,6 +19,7 @@ concurrency:
 
 jobs:
   patch-deploy-verify:
+    if: github.event_name != 'issues' || github.event.issue.title == '[DEPLOY] pre-breakout burst strategy'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
