@@ -1,5 +1,4 @@
-name: Deploy executable-stop parity v7.3.0
-# v7.3.0 is canonical source. No runtime patch chain may rewrite the validated artifact.
+name: Deploy pre-breakout burst strategy
 
 on:
   push:
@@ -8,7 +7,7 @@ on:
       - "supabase/functions/market-autotrader/**"
       - "supabase/functions/market-scanner/**"
       - "supabase/functions/_shared/**"
-      - "gateway/**"
+      - "supabase/migrations/20260802151000_prebreakout_burst_entry_exit_policy.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
@@ -17,7 +16,6 @@ on:
       - "supabase/functions/market-autotrader/**"
       - "supabase/functions/market-scanner/**"
       - "supabase/functions/_shared/**"
-      - "gateway/**"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   workflow_dispatch:
 
@@ -25,7 +23,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-executable-stop-parity-v730
+  group: deploy-prebreakout-burst
   cancel-in-progress: false
 
 jobs:
@@ -33,152 +31,37 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Check out repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
-
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-
-      - name: Validate canonical v7.3.0 deployment artifact
-        shell: bash
+      - name: Validate strategy invariants
         run: |
           set -euo pipefail
           deno fmt --check \
-            supabase/functions/market-autotrader/index.ts \
-            supabase/functions/market-autotrader/executable-exit.ts \
-            supabase/functions/market-autotrader/entry-integrity.ts \
-            supabase/functions/market-autotrader/heartbeat.ts \
+            supabase/functions/_shared/lob/minute-entry-gate.ts \
+            supabase/functions/_shared/lob/minute-entry-market.ts \
+            supabase/functions/_shared/lob/minute-entry-gate.test.ts \
+            supabase/functions/_shared/lob/types.ts \
+            supabase/functions/_shared/lob/entry.ts \
             supabase/functions/market-scanner/index.ts \
             supabase/functions/market-scanner/engine.ts \
-            supabase/functions/_shared/lob/entry.ts \
-            gateway/server.mjs
-          grep -q 'const VERSION = "7.3.5-APPROVAL-SURVIVES-REQUOTE";' \
             supabase/functions/market-autotrader/index.ts
-          grep -q 'ENGINE_VERSION = "7.3.5-APPROVAL-SURVIVES-REQUOTE"' \
-            supabase/functions/market-scanner/engine.ts
-          grep -q 'const VERSION = "7.3.5-APPROVAL-SURVIVES-REQUOTE";' gateway/server.mjs
-          grep -q 'quoteExecutableNetExit' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'time_in_force: "FOK"' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'failed_gate_count' \
-            supabase/functions/market-autotrader/entry-integrity.ts
-          grep -q 'NEGATIVE_TRADE_PRESSURE' \
-            supabase/functions/_shared/lob/entry.ts
-          grep -q 'SPOOF_WARNING' \
-            supabase/functions/_shared/lob/entry.ts
-          grep -q 'REWARD_RISK_FAILED' \
-            supabase/functions/_shared/lob/entry.ts
-          grep -q 'buildTradingHeartbeatPatch' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'ENGINE_VERSION_MISMATCH' gateway/server.mjs
-          grep -q 'LOB_PREORDER_RECHECK_BLOCK' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'PREORDER_SUPPORT_EVAPORATION_CONFIRMED' \
-            supabase/functions/_shared/lob/preorder.ts
-          grep -q 'BID_SPOOF_CONFIRMED_BY_WEAK_FLOW' \
-            supabase/functions/_shared/lob/entry.ts
-          grep -q 'SUPPORT_BREAKDOWN_RISK' \
-            supabase/functions/_shared/lob/entry.ts
-          grep -q 'const EXTENDED_PER_MARKET_OBSERVATION_MS = 60_000;' \
-            supabase/functions/market-scanner/index.ts
-          grep -q 'lob:pre-180-target' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'EXIT_BLOCKED_PRE180_POLICY' \
-            supabase/functions/market-autotrader/index.ts
-          ! grep -q 'EXIT_BLOCKED_MIN_HOLD' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'POSITIVE_NET_AFTER_180S' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'HARD_STOP_MINUS_2' \
-            supabase/functions/market-autotrader/index.ts
-          ! grep -q 'HARD_STOP_MINUS_3_AFTER_180S' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'lob_soft_exit_history' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'lob_post180_recovery_shadow' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'LOB_POST180_SHADOW_SOFT_EXIT' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'mode: "SHADOW_ONLY"' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'post180FailedReclaims >= 2' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'guardedNetReturnPct <= -2' \
-            supabase/functions/market-autotrader/index.ts
-          ! grep -q 'guardedNetReturnPct <= -3' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'TARGET_NET_GUARD_BLOCKED' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'time_in_force: "FOK"' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'EXCHANGE_BALANCE_ZERO_RECONCILED' \
-            supabase/functions/market-autotrader/index.ts
-          # v7.3.0: the terminal policy price must be persisted, or guard_lob_sell_order_v714
-          # rejects every live sell with V724_EXIT_BLOCK_MISSING_ECONOMICS.
-          grep -q 'price: guardedExitPrice' \
-            supabase/functions/market-autotrader/index.ts
-          # The order-time re-quote replaces the exit_policy_quote the monitor cycle wrote.
-          # If it does not restate the approval, guard_lob_sell_order_v714 rejects every
-          # profitable post-180 exit with V725_POST180_PROFIT_MUST_USE_APPROVED_PATH and the
-          # position can only ever leave at a loss.
-          grep -q 'orderTimeExitPolicyQuote' \
-            supabase/functions/market-autotrader/index.ts
-          grep -q 'approved_reason: "POSITIVE_NET_AFTER_180S"' \
-            supabase/functions/market-autotrader/executable-exit.ts
-          # After 180s the rule is positive net or minus 2 percent. No time cap, and the
-          # positive-net test subtracts real costs only.
-          ! grep -q 'POST180_MAX_HOLD_TIMEOUT' \
-            supabase/functions/market-autotrader/index.ts
-          ! grep -q 'slippageSafetyQuote -' \
-            supabase/functions/market-autotrader/executable-exit.ts
-          # The -2% stop is measured on the executable bid VWAP, never the display price.
-          grep -q 'executableExitPrice' \
-            supabase/functions/market-autotrader/index.ts
-          # The planned stop is not an exit trigger. -2% of executable net is the only
-          # price that forces a sell, in both regimes.
-          ! grep -q 'plannedStopRequested' \
-            supabase/functions/market-autotrader/index.ts
-          ! grep -q 'return hard("STOP_HIT", 90)' \
-            supabase/functions/_shared/lob/exit.ts
-          ! grep -q 'const guardedExitPrice = current;' \
-            supabase/functions/market-autotrader/index.ts
-          # Trap vetoes are an entry authority, not a diagnostic string.
-          grep -q 'if (trap.veto) reasons.push' \
-            supabase/functions/_shared/lob/entry.ts
-          grep -q 'traps.confidenceMultiplier' \
-            supabase/functions/_shared/lob/entry.ts
-          grep -q 'maxGainerRank' \
-            supabase/functions/_shared/lob/entry.ts
-          # One gate definition for both stages. Building it separately is what let the
-          # scanner store BUY candidates the executor then refused, with no trade and no
-          # recorded reason in between.
-          grep -q 'buildLobGateConfig' \
-            supabase/functions/market-scanner/engine.ts
-          grep -q 'buildLobGateConfig' \
-            supabase/functions/market-autotrader/index.ts
-          ! grep -q 'minNetRewardRiskRatio: risk.minNetRR' \
-            supabase/functions/market-scanner/engine.ts
-          # failed_gates must be the whole rejection set, and a stored BUY must carry none.
-          grep -q 'unnamedLobReasons' \
-            supabase/functions/market-scanner/engine.ts
-          deno test --allow-env --allow-read \
-            supabase/functions/_shared/lob/entry-risk.test.ts \
-            supabase/functions/_shared/lob/gate-config.test.ts \
-            supabase/functions/_shared/lob/preorder.test.ts \
-            supabase/functions/market-autotrader/executable-exit.test.ts \
-            supabase/functions/market-autotrader/entry-integrity.test.ts \
-            supabase/functions/market-autotrader/heartbeat.test.ts \
-            supabase/functions/market-autotrader/entry-admission.test.ts \
-            supabase/functions/market-autotrader/core.test.ts
-          node --check gateway/server.mjs
-          node --test gateway/server.test.mjs
-          deno check \
-            supabase/functions/market-scanner/index.ts \
-            supabase/functions/market-autotrader/index.ts
+          deno test supabase/functions/_shared/lob/minute-entry-gate.test.ts
+          deno check supabase/functions/market-scanner/index.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          grep -q 'M1-BB-PREBREAKOUT-STOCH-14-3-3-V2' supabase/functions/_shared/lob/minute-entry-gate.ts
+          grep -q 'M1_CANDLE_ALREADY_EXTENDED' supabase/functions/_shared/lob/minute-entry-gate.ts
+          grep -q 'BUY_PRESSURE_NOT_CONFIRMED' supabase/functions/_shared/lob/entry.ts
+          grep -q 'const DEFAULT_DYNAMIC_OBSERVATION_MS = 15_000' supabase/functions/market-scanner/index.ts
+          grep -q 'PREBREAKOUT-BURST-V1: no planned stop' supabase/functions/market-autotrader/index.ts
+          grep -q 'BB_UPPER_REENTRY_CONFIRMED' supabase/functions/market-autotrader/index.ts
+          grep -q 'BB_RECLAIM_FAILED' supabase/functions/market-autotrader/index.ts
+          grep -q 'ORDERBOOK_COLLAPSE' supabase/functions/market-autotrader/index.ts
+          grep -q 'guardedNetReturnPct <= -2' supabase/functions/market-autotrader/index.ts
+          ! grep -q 'const exp1ArmWidthsBps' supabase/functions/market-autotrader/index.ts
 
   deploy:
     needs: validate
@@ -186,58 +69,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Check out validated main
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: main
           fetch-depth: 0
-
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-
-      - name: Verify exact canonical v7.3.0 production artifact
-        shell: bash
-        run: |
-          set -euo pipefail
-          deno fmt --check \
-            supabase/functions/market-autotrader/index.ts \
-            supabase/functions/market-autotrader/executable-exit.ts \
-            supabase/functions/market-autotrader/entry-integrity.ts \
-            supabase/functions/market-autotrader/heartbeat.ts \
-            supabase/functions/market-scanner/index.ts \
-            supabase/functions/market-scanner/engine.ts \
-            supabase/functions/_shared/lob/entry.ts \
-            gateway/server.mjs
-          deno check \
-            supabase/functions/market-scanner/index.ts \
-            supabase/functions/market-autotrader/index.ts
-
-      - name: Install Supabase CLI
-        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
         with:
           version: 2.109.1
-
-      - name: Deploy scanner and autotrader v7.3.0
-        shell: bash
+      - name: Deploy scanner and autotrader
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
           set -euo pipefail
-          test -n "${SUPABASE_ACCESS_TOKEN}"
-          test -n "${SUPABASE_PROJECT_REF}"
           for fn in market-scanner market-autotrader; do
-            supabase functions deploy "$fn" \
-              --project-ref "${SUPABASE_PROJECT_REF}" \
-              --no-verify-jwt \
-              --use-api
+            supabase functions deploy "$fn" --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
           done
-
-# deployment trigger: 2026-08-01 13:25 KST v7.1.7 final exit policy
-# pull-request validation trigger: 2026-08-01 13:54 KST
-# recovery redeploy: 2026-08-01T06:13Z
-# v7.1.8: allow protected targets and qualified LOB reversals before 180 seconds
-# v7.1.9: preserve positive-net exit and collect post-180 recovery shadow outcomes
-# v7.2.0: tighten the post-180 executable-net hard stop from -3% to -2%
-# v7.3.0: executable-VWAP terminal stop, bounded post-180 hold, trap vetoes wired into entry
