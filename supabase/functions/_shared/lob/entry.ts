@@ -30,7 +30,7 @@ const ECONOMIC_GATE_EPSILON = 1e-9;
 /** Continuation families that lost money on live fills; overridable via LobEntryConfig. */
 const DEFAULT_BLOCKED_LOB_PATTERNS: string[] = [];
 /** Worst 24h-gainer rank admitted by default; overridable via LobEntryConfig. */
-const DEFAULT_MAX_GAINER_RANK = 3;
+const DEFAULT_MAX_GAINER_RANK = 10;
 
 export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   minSamples: 4,
@@ -161,20 +161,33 @@ export function assessLobEntryRisk(
     warnings.push(`BID_SPOOF_ADVERSE_FLOW_${adverseFlowSignals.length}`);
   }
 
-  // Entry is armed by the completed pre-breakout candle, but executed only when real buys
-  // are accelerating now. Resting depth alone never counts as pressure.
-  const pressureConfirmations = [
+  // COMPOSITE-PRESSURE-V1: acceleration is one vote, never a standalone mandatory gate.
+  // A live tape-side confirmation must combine with current book/price evidence. This keeps
+  // resting depth from authorizing a BUY while allowing valid pressure whose short-window
+  // acceleration happens to be flat at the sampling boundary.
+  const liveTape = Math.max(0, finite(features.tradeArrivalRate)) > 0;
+  const tapePressureVotes = [
+    pressure >= 0.10,
+    buySellRatio >= 1.15,
+    acceleration > 0,
+  ].filter(Boolean).length;
+  const bookPressureVotes = [
     ofi >= 0.45,
     micropriceBps >= 0,
     imbalance >= 0,
     finite(features.depthRatio) >= 0.90,
     finite(features.tradeSpeedTrend) >= -0.05,
   ].filter(Boolean).length;
-  if (pressure < 0.10) reasons.push("BUY_PRESSURE_TOO_WEAK");
-  if (buySellRatio < 1.25) reasons.push("AGGRESSIVE_BUY_NOTIONAL_TOO_WEAK");
-  if (!(acceleration > 0)) reasons.push("BUY_FLOW_NOT_ACCELERATING");
-  if (pressureConfirmations < 3) reasons.push("BUY_PRESSURE_NOT_CONFIRMED");
-  if (!(Math.max(0, finite(features.tradeArrivalRate)) > 0)) reasons.push("NO_LIVE_BUY_TAPE");
+  const pressureConfirmations = tapePressureVotes + bookPressureVotes + (liveTape ? 1 : 0);
+
+  if (!liveTape) reasons.push("NO_LIVE_BUY_TAPE");
+  if (pressure < 0 && buySellRatio < 1) reasons.push("SELL_PRESSURE_DOMINANT");
+  if (tapePressureVotes < 1 || pressureConfirmations < 5) {
+    reasons.push("BUY_PRESSURE_NOT_CONFIRMED");
+  }
+  if (pressure < 0.10) warnings.push("BUY_PRESSURE_BELOW_PRIMARY_THRESHOLD");
+  if (buySellRatio < 1.15) warnings.push("AGGRESSIVE_BUY_NOTIONAL_BELOW_PRIMARY_THRESHOLD");
+  if (!(acceleration > 0)) warnings.push("BUY_FLOW_NOT_ACCELERATING_OPTIONAL_VOTE");
 
   const flowScore = pressure * 0.42 + microprice * 0.24 + imbalance * 0.20 + ofi * 0.14;
   return {

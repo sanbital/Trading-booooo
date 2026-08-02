@@ -36,7 +36,7 @@ export const LOB_MIN_NET_REWARD_RISK_RATIO = 1.5;
 export const LOB_MAX_NET_REWARD_RISK_RATIO = 5;
 export const LOB_MIN_STOP_TO_TARGET_RATIO = 0.75;
 export const LOB_MAX_STOP_TO_TARGET_RATIO = 5;
-export const LOB_DEFAULT_MAX_GAINER_RANK = 3;
+export const LOB_DEFAULT_MAX_GAINER_RANK = 10;
 
 function finite(value: unknown, fallback: number): number {
   const parsed = Number(value);

@@ -21,7 +21,7 @@ import {
   sigmaFromAtrPct,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "7.3.5-APPROVAL-SURVIVES-REQUOTE";
+export const ENGINE_VERSION = "7.3.7-15S-TOP10-COMPOSITE-PRESSURE";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;
@@ -1183,9 +1183,11 @@ type WallStat = {
   lastIndex: number;
 };
 
-const DYNAMIC_MIN_OBSERVATION_MS = 45_000;
-const DYNAMIC_MIN_BOOK_UPDATES = 25;
-const DYNAMIC_MIN_TRADES = 20;
+// The scanner makes one synchronized 15-second decision. Sample floors are scaled to
+// that window; three-phase consistency remains mandatory, so shorter never means one-tick.
+const DYNAMIC_MIN_OBSERVATION_MS = 15_000;
+const DYNAMIC_MIN_BOOK_UPDATES = 12;
+const DYNAMIC_MIN_TRADES = 8;
 const DYNAMIC_PHASE_COUNT = 3;
 const WALL_LEVELS = 3;
 const TRACKED_LEVELS = 15;
@@ -1418,7 +1420,7 @@ export function computeDynamicOrderflow(
   const phaseConsistent = coveredPhases === DYNAMIC_PHASE_COUNT;
   const tradeIndex = indexTradesByPrice(alignedTrades, tick);
   const dataQuality = clamp(
-    Math.min(1, observationMs / 60_000) * 0.3 +
+    Math.min(1, observationMs / DYNAMIC_MIN_OBSERVATION_MS) * 0.3 +
       Math.min(1, frames.length / 40) * 0.28 +
       Math.min(1, alignedTrades.length / 40) * 0.27 +
       (coveredPhases / DYNAMIC_PHASE_COUNT) * 0.15,

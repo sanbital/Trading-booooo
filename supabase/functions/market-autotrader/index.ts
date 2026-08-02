@@ -127,7 +127,7 @@ import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 import { loadMinuteEntryGate } from "../_shared/lob/minute-entry-market.ts";
 
-const VERSION = "7.3.5-APPROVAL-SURVIVES-REQUOTE";
+const VERSION = "7.3.7-15S-TOP10-COMPOSITE-PRESSURE";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");

@@ -62,12 +62,12 @@ const BOOK_SAMPLE_INTERVAL_MS = 250;
 // The old 50-second wait entered after the expansion candle. Fifteen seconds is enough
 // to confirm real tape pressure while the completed 1m candle is still pre-breakout.
 const DEFAULT_DYNAMIC_OBSERVATION_MS = 15_000;
-const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 20_000;
-const MIN_DYNAMIC_OBSERVATION_MS = 12_000;
-const MAX_DYNAMIC_OBSERVATION_MS = 25_000;
+const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 15_000;
+const MIN_DYNAMIC_OBSERVATION_MS = 15_000;
+const MAX_DYNAMIC_OBSERVATION_MS = 15_000;
 const REQUIRED_PER_MARKET_OBSERVATION_MS = 15_000;
-const EXTENDED_PER_MARKET_OBSERVATION_MS = 25_000;
-const DYNAMIC_STREAM_HARD_TIMEOUT_BUFFER_MS = 20_000;
+const EXTENDED_PER_MARKET_OBSERVATION_MS = 15_000;
+const DYNAMIC_STREAM_HARD_TIMEOUT_BUFFER_MS = 5_000;
 const DYNAMIC_COVERAGE_POLL_MS = 250;
 const DYNAMIC_SUFFICIENCY_RECHECK_MS = 1_000;
 const MAX_DYNAMIC_BOOK_EVENTS = 1_200;
@@ -751,14 +751,16 @@ function refreshDynamicCoverage(
       ? 0
       : Math.max(0, now - state.firstBookReceivedAt);
     if (state.complete || state.observedForMs < REQUIRED_PER_MARKET_OBSERVATION_MS) continue;
-    if (state.observedForMs >= EXTENDED_PER_MARKET_OBSERVATION_MS) {
-      state.complete = true;
-      state.extendedForInsufficient = true;
+    const reachedDeadline = state.observedForMs >= EXTENDED_PER_MARKET_OBSERVATION_MS;
+    if (!snapshots || !trades) {
+      if (reachedDeadline) {
+        state.complete = true;
+        state.extendedForInsufficient = true;
+      }
       continue;
     }
-    if (!snapshots || !trades) continue;
     if (
-      state.lastSufficiencyCheckAt != null &&
+      !reachedDeadline && state.lastSufficiencyCheckAt != null &&
       now - state.lastSufficiencyCheckAt < DYNAMIC_SUFFICIENCY_RECHECK_MS
     ) continue;
     state.lastSufficiencyCheckAt = now;
@@ -767,10 +769,13 @@ function refreshDynamicCoverage(
       trades.get(market) || [],
       Number.EPSILON,
     );
-    // Entry requires 50 seconds even though the lower-level feature calculator can be
-    // reused by legacy callers with a 45-second window.
-    state.complete = dynamic.sufficient && dynamic.observation_ms >= 50_000;
-    state.extendedForInsufficient = !state.complete;
+    state.complete = dynamic.sufficient &&
+      dynamic.observation_ms >= REQUIRED_PER_MARKET_OBSERVATION_MS;
+    state.extendedForInsufficient = false;
+    if (!state.complete && reachedDeadline) {
+      state.complete = true;
+      state.extendedForInsufficient = true;
+    }
   }
 }
 
