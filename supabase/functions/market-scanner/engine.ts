@@ -119,6 +119,14 @@ export type UniverseRow = {
   funding_premium_bps?: number;
   funding_attention?: number;
   funding_edge?: number;
+  m1_gate_version?: string;
+  m1_data_available?: boolean;
+  m1_previous_bullish?: boolean | null;
+  m1_stoch_k?: number | null;
+  m1_stoch_d?: number | null;
+  m1_completed_bars?: number;
+  m1_completed_candle_open_time?: string | null;
+  m1_completed_candle_close_time?: string | null;
   recent_notional_per_second?: number;
   notional_acceleration?: number;
   trade_count_per_second?: number;
@@ -3096,6 +3104,14 @@ export function finalizeCandidate(
       fundingPremiumBps: finiteOr(period.universe.funding_premium_bps, 0),
       fundingAttention: finiteOr(period.universe.funding_attention, 0),
       fundingEdge: finiteOr(period.universe.funding_edge, 0),
+      m1GateVersion: period.universe.m1_gate_version,
+      m1DataAvailable: period.universe.m1_data_available === true,
+      m1PreviousBullish: period.universe.m1_previous_bullish ?? null,
+      m1StochK: period.universe.m1_stoch_k ?? null,
+      m1StochD: period.universe.m1_stoch_d ?? null,
+      m1CompletedBars: Math.max(0, Math.floor(finiteOr(period.universe.m1_completed_bars, 0))),
+      m1CompletedCandleOpenTime: period.universe.m1_completed_candle_open_time ?? null,
+      m1CompletedCandleCloseTime: period.universe.m1_completed_candle_close_time ?? null,
     };
     const spread = Math.max(0, micro.spread_bps || 0);
     // v6.2: the learned profile scales the signal edge and can retire a veto that
@@ -3122,6 +3138,7 @@ export function finalizeCandidate(
             ? Math.max(0, finiteOr((risk.scalpOverrides || {}).minimumEdge, 0) * 10_000)
             : undefined,
         }, { maxSpreadBps: risk.maxSpreadBps ?? 30 }),
+        requireMinuteEntryGate: true,
         maxHoldingSeconds: Math.round(
           clamp(finiteOr((risk.scalpOverrides || {}).maxHoldingSeconds, 180), 1, 300),
         ),

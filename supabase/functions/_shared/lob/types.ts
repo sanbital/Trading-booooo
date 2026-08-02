@@ -73,6 +73,15 @@ export interface LobFeatureVector {
   fundingAttention: number;
   /** Bounded additive edge from perp positioning. Never a veto. */
   fundingEdge: number;
+  /** Mandatory completed 1m candle + Stoch(14,3,3) entry confirmation. */
+  m1GateVersion?: string;
+  m1DataAvailable?: boolean;
+  m1PreviousBullish?: boolean | null;
+  m1StochK?: number | null;
+  m1StochD?: number | null;
+  m1CompletedBars?: number;
+  m1CompletedCandleOpenTime?: string | null;
+  m1CompletedCandleCloseTime?: string | null;
 }
 
 export interface LobPatternSignal {
@@ -127,6 +136,8 @@ export interface LobEntryConfig {
    * (the continuation families); an explicit empty array reopens every pattern.
    */
   blockedPatterns?: string[];
+  /** Require the completed 1m bullish candle and Stoch(14,3,3) %K > %D gate. */
+  requireMinuteEntryGate?: boolean;
   minSamples: number;
   /** Minimum wall-clock coverage of the live order-book/tape observation. */
   minObservationMs: number;

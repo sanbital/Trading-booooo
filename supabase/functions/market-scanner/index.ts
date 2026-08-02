@@ -45,6 +45,7 @@ import {
   type MarketHeatTicker,
   rankMarketHeat,
 } from "../_shared/lob/market-heat.ts";
+import { loadMinuteEntryGates } from "../_shared/lob/minute-entry-market.ts";
 
 const UPBIT = "https://api.upbit.com";
 const UPBIT_WEBSOCKET = "wss://api.upbit.com/websocket/v1";
@@ -1485,7 +1486,25 @@ async function runLobHeatScan(
     } as UniverseRow];
   });
   const selectedRows = heatRanked;
-  const finalists = selectedRows.map(heatPeriod);
+  const minuteEntryGates = await loadMinuteEntryGates(
+    exchange,
+    selectedRows.map((row) => row.market),
+  );
+  const candleGatedRows = selectedRows.map((row) => {
+    const gate = minuteEntryGates.get(row.market);
+    return {
+      ...row,
+      m1_gate_version: gate?.version,
+      m1_data_available: gate?.dataAvailable === true,
+      m1_previous_bullish: gate?.previousBullish ?? null,
+      m1_stoch_k: gate?.stochK ?? null,
+      m1_stoch_d: gate?.stochD ?? null,
+      m1_completed_bars: gate?.completedBars ?? 0,
+      m1_completed_candle_open_time: gate?.completedCandleOpenTime ?? null,
+      m1_completed_candle_close_time: gate?.completedCandleCloseTime ?? null,
+    };
+  });
+  const finalists = candleGatedRows.map(heatPeriod);
   const configuredObservationMs = Math.round(clamp(
     finite(Deno.env.get("LOB_OBSERVATION_MS"), DEFAULT_DYNAMIC_OBSERVATION_MS),
     MIN_DYNAMIC_OBSERVATION_MS,
@@ -1635,6 +1654,7 @@ async function runLobHeatScan(
       strategy: "TOP10_24H_GAINERS_LOB_ONLY",
       trend_role: "UNIVERSE_RANK_ONLY_NOT_ENTRY_SIGNAL",
       hard_economic_gate: "TARGET_NET_PROFIT_GT_0",
+      m1_entry_gate: "PREVIOUS_CANDLE_BULLISH_AND_STOCH_14_3_3_K_GT_D",
       search_policy: "STRICT_TOP10_NO_BACKFILL",
       search_thresholds_relaxed: false,
       automatic_order: risk.operatorMode === "AUTOMATED",

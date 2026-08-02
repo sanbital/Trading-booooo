@@ -1,4 +1,5 @@
 import { scoreHotSymbol } from "./hot-symbol.ts";
+import { MINUTE_ENTRY_GATE_VERSION } from "./minute-entry-gate.ts";
 import { detectLobPatterns } from "./patterns.ts";
 import { assessLobTraps, DEFAULT_LOB_TRAP_CONFIG } from "./traps.ts";
 import type {
@@ -313,6 +314,29 @@ export function evaluateLobEntry(
   for (const trap of traps.traps) {
     if (trap.veto) reasons.push(`LOB_TRAP_${trap.name}`);
     else warnings.push(`LOB_DIAGNOSTIC_${trap.name}`);
+  }
+
+  // Operator-added 1m entry gate. It is opt-in at the shared-library level so legacy
+  // research fixtures remain valid, but both production admission stages set it to true.
+  if (cfg.requireMinuteEntryGate === true) {
+    const k = Number(features.m1StochK);
+    const d = Number(features.m1StochD);
+    if (
+      features.m1GateVersion !== MINUTE_ENTRY_GATE_VERSION ||
+      features.m1DataAvailable !== true
+    ) {
+      reasons.push("M1_CANDLE_DATA_UNAVAILABLE");
+    } else if (
+      Math.max(0, Math.floor(Number(features.m1CompletedBars) || 0)) < 18 ||
+      !Number.isFinite(k) || !Number.isFinite(d)
+    ) {
+      reasons.push("M1_CANDLE_DATA_INSUFFICIENT");
+    } else {
+      if (features.m1PreviousBullish !== true) {
+        reasons.push("M1_PREVIOUS_CANDLE_NOT_BULLISH");
+      }
+      if (!(k > d)) reasons.push("M1_STOCH_K_NOT_ABOVE_D");
+    }
   }
 
   // Structural and execution checks only.

@@ -125,6 +125,7 @@ import {
 import { buildTradingHeartbeatPatch, type TradingHeartbeatPatch } from "./heartbeat.ts";
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
+import { loadMinuteEntryGate } from "../_shared/lob/minute-entry-market.ts";
 
 const VERSION = "7.3.5-APPROVAL-SURVIVES-REQUOTE";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
@@ -1282,10 +1283,19 @@ function liveLobFeatures(scan: any, market: any): LobFeatureVector {
     fundingPremiumBps: 0,
     fundingAttention: 0,
     fundingEdge: 0,
+    m1GateVersion: base.m1GateVersion,
+    m1DataAvailable: base.m1DataAvailable === true,
+    m1PreviousBullish: base.m1PreviousBullish ?? null,
+    m1StochK: base.m1StochK ?? null,
+    m1StochD: base.m1StochD ?? null,
+    m1CompletedBars: Math.max(0, Math.floor(finite(base.m1CompletedBars, 0))),
+    m1CompletedCandleOpenTime: base.m1CompletedCandleOpenTime ?? null,
+    m1CompletedCandleCloseTime: base.m1CompletedCandleCloseTime ?? null,
   };
 }
 
-/** Re-run the same LOB-only gate on a fresh gateway quote; no EV or candle input exists here. */
+/** Re-run the LOB gate on a fresh quote; the immutable scan-time 1m gate is carried here,
+ * and a second fresh 1m fetch is enforced immediately before the order. */
 export function evaluateLobPreOrderRecheck(
   lobSnapshot: any,
   market: any,
@@ -1299,6 +1309,7 @@ export function evaluateLobPreOrderRecheck(
     fixedStopBps: number;
     maxStopToTargetRatio: number;
     minNetRewardRiskRatio: number;
+    requireMinuteEntryGate: boolean;
     trap?: Partial<LobTrapConfig>;
   },
 ): LobPreOrderRecheck {
@@ -1313,6 +1324,7 @@ export function evaluateLobPreOrderRecheck(
     fixedStopBps: options.fixedStopBps,
     maxStopToTargetRatio: options.maxStopToTargetRatio,
     minNetRewardRiskRatio: options.minNetRewardRiskRatio,
+    requireMinuteEntryGate: options.requireMinuteEntryGate,
     trap: options.trap || {},
   });
   const bestBid = finite(market?.best_bid);
@@ -2743,6 +2755,7 @@ async function enterCandidateInner(
         maxBookAgeMs: finite((settings as any).lob_max_book_age_ms, 2500),
         maxSpreadBps: finite((settings as any).lob_max_spread_bps, LIVE_MAX_SPREAD_BPS),
       }, { maxSpreadBps: LIVE_MAX_SPREAD_BPS }),
+      requireMinuteEntryGate: true,
       maxHoldingSeconds: Math.round(
         clamp(finite((settings as any).lob_max_holding_seconds, 180), 1, 300),
       ),
@@ -2768,6 +2781,7 @@ async function enterCandidateInner(
       fixedStopBps: fixedPlanStopBps,
       maxStopToTargetRatio: lobExecutionGate.maxStopToTargetRatio,
       minNetRewardRiskRatio: lobExecutionGate.minNetRewardRiskRatio,
+      requireMinuteEntryGate: true,
     };
     scalpAudit = {
       strategy: "LOB_SCALP",
@@ -3276,7 +3290,10 @@ async function enterCandidateInner(
     // v7.2.4 single-final validation: one fresh quote, no wait, no paired persistence
     // check, and no audit DB write before the exchange request. A failed final book
     // still blocks immediately; a passed book proceeds directly to order construction.
-    const finalPreOrderMarket = await marketQuote(exchange, candidate.market);
+    const [finalPreOrderMarket, finalMinuteEntryGate] = await Promise.all([
+      marketQuote(exchange, candidate.market),
+      loadMinuteEntryGate(exchange, candidate.market),
+    ]);
     secondLobPreOrderRecheck = evaluateLobPreOrderRecheck(
       lobSizingContext.lobSnapshot,
       finalPreOrderMarket,
@@ -3288,10 +3305,18 @@ async function enterCandidateInner(
         trap: lobTrapOverrides(settings),
       },
     );
+    const finalReasons = [
+      ...new Set([
+        ...secondLobPreOrderRecheck.reasons,
+        ...finalMinuteEntryGate.reasons,
+      ]),
+    ];
+    const finalPassed = secondLobPreOrderRecheck.passed && finalMinuteEntryGate.passed;
     const finalAudit = {
       checked_at: secondLobPreOrderRecheck.checkedAt,
-      passed: secondLobPreOrderRecheck.passed,
-      reasons: secondLobPreOrderRecheck.reasons,
+      passed: finalPassed,
+      reasons: finalReasons,
+      minute_entry_gate: finalMinuteEntryGate,
       best_bid: secondLobPreOrderRecheck.bestBid,
       best_ask: secondLobPreOrderRecheck.bestAsk,
       spread_bps: secondLobPreOrderRecheck.spreadBps,
@@ -3302,7 +3327,7 @@ async function enterCandidateInner(
       interval_ms: 0,
       validation_mode: "SINGLE_FINAL_NO_WAIT",
     };
-    if (!secondLobPreOrderRecheck.passed) {
+    if (!finalPassed) {
       await patch("trading_positions", `id=eq.${position.id}`, {
         state: "CANCELLED",
         reserved_quote: 0,
@@ -3322,7 +3347,7 @@ async function enterCandidateInner(
         entered: false,
         exchange,
         market: candidate.market,
-        reason: `LOB final pre-order check: ${secondLobPreOrderRecheck.reasons.join(",")}`,
+        reason: `LOB final pre-order check: ${finalReasons.join(",")}`,
       };
     }
     // Keep the audit in memory. The normal post-order position update persists it without

@@ -77,9 +77,7 @@ export function evaluateMinuteEntryGate(
     if (closeTimeMs > nowMs - COMPLETION_GRACE_MS) continue;
     unique.set(openTimeMs, { openTimeMs, closeTimeMs, open, high, low, close });
   }
-  const completed = [...unique.values()].sort((left, right) =>
-    left.openTimeMs - right.openTimeMs
-  );
+  const completed = [...unique.values()].sort((left, right) => left.openTimeMs - right.openTimeMs);
   const last = completed.at(-1) ?? null;
   if (completed.length < MINUTE_GATE_MIN_COMPLETED_BARS || !last) {
     return {
