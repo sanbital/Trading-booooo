@@ -44,6 +44,78 @@ jobs:
           from public.trading_settings t
           where t.id = 1;
 
+          select key, value
+          from public.trading_settings t,
+               lateral jsonb_each_text(to_jsonb(t))
+          where t.id = 1
+            and (
+              key ilike '%observation%' or key ilike '%scan%' or key ilike '%gainer%' or
+              key ilike '%entry%' or key ilike '%lob%'
+            )
+          order by key;
+
+          with latest as (
+            select id, status, created_at, summary
+            from public.scanner_scan_runs
+            order by created_at desc
+            limit 1
+          )
+          select jsonb_build_object(
+            'scan_id', id,
+            'status', status,
+            'created_at', created_at,
+            'upbit_observed', summary#>>'{coverage,exchanges,upbit,dynamic_orderflow,websocket_markets}',
+            'upbit_sufficient', summary#>>'{coverage,exchanges,upbit,dynamic_orderflow,sufficient_markets}',
+            'upbit_observation_seconds', summary#>>'{coverage,exchanges,upbit,dynamic_orderflow,requested_observation_seconds}',
+            'binance_observed', summary#>>'{coverage,exchanges,binance,dynamic_orderflow,websocket_markets}',
+            'binance_sufficient', summary#>>'{coverage,exchanges,binance,dynamic_orderflow,sufficient_markets}',
+            'binance_observation_seconds', summary#>>'{coverage,exchanges,binance,dynamic_orderflow,requested_observation_seconds}'
+          ) as latest_scan_summary
+          from latest;
+
+          with latest as (
+            select id from public.scanner_scan_runs order by created_at desc limit 1
+          )
+          select decision, count(*) as candidates
+          from public.scanner_candidates c, latest l
+          where c.scan_id = l.id
+          group by decision
+          order by decision;
+
+          with latest as (
+            select id from public.scanner_scan_runs order by created_at desc limit 1
+          ), reasons as (
+            select jsonb_array_elements_text(coalesce(c.snapshot#>'{lob,reasons}', '[]'::jsonb)) as reason
+            from public.scanner_candidates c, latest l
+            where c.scan_id = l.id
+          )
+          select reason, count(*) as blocked_markets
+          from reasons
+          group by reason
+          order by blocked_markets desc, reason;
+
+          with latest as (
+            select id from public.scanner_scan_runs order by created_at desc limit 1
+          )
+          select
+            coalesce(c.snapshot#>>'{lob,features,dynamicStatus}', 'NULL') as dynamic_status,
+            count(*) as markets
+          from public.scanner_candidates c, latest l
+          where c.scan_id = l.id
+          group by 1
+          order by 2 desc, 1;
+
+          with latest as (
+            select id from public.scanner_scan_runs order by created_at desc limit 1
+          )
+          select
+            count(*) filter (where coalesce((c.snapshot#>>'{lob,features,m1PreBreakout}')::boolean, false)) as m1_prebreakout_true,
+            count(*) filter (where coalesce((c.snapshot#>>'{lob,features,m1SqueezeRelease}')::boolean, false)) as m1_squeeze_release_true,
+            count(*) filter (where coalesce((c.snapshot#>>'{lob,features,m1PreviousBullish}')::boolean, false)) as previous_bullish_true,
+            count(*) as total_markets
+          from public.scanner_candidates c, latest l
+          where c.scan_id = l.id;
+
           select table_name
           from information_schema.tables
           where table_schema = 'public'
