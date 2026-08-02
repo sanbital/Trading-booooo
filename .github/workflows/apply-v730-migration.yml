@@ -18,6 +18,11 @@ name: Apply v7.3.0 exit-policy migration
 # self-triggering push is back: a workflow_dispatch-only file is not listed in the Actions
 # UI until it reaches the default branch, and there is no other way to run it from here.
 # Both migrations are re-runnable, so the firing that happens again on merge is a no-op.
+
+# v7.3.5 is appended here rather than left to "Deploy Supabase Trading Engine". That
+# workflow's --file list carries it too, but the batch still aborts on the July v702
+# assertion before reaching anything newer, so a migration that is only listed there never
+# reaches the database. This file is the one that actually applies them.
 on:
   push:
     paths:
@@ -82,7 +87,8 @@ jobs:
             --file supabase/migrations/20260802050000_v731_restore_quote_fallbacks_and_planned_stop_authority.sql \
             --file supabase/migrations/20260802060000_v732_planned_stop_is_not_an_exit_trigger.sql \
             --file supabase/migrations/20260802070000_v733_repair_post180_timeout_branch.sql \
-            --file supabase/migrations/20260802080000_v734_remove_post180_hold_cap.sql
+            --file supabase/migrations/20260802080000_v734_remove_post180_hold_cap.sql \
+            --file supabase/migrations/20260802090000_v735_admit_requote_approval_revision.sql
 
       - name: Verify the guard and settings took effect
         shell: bash
@@ -106,6 +112,12 @@ jobs:
             end if;
             if position('7.3.0-EXECUTABLE-STOP-PARITY' in v_def) = 0 then
               raise exception 'guard does not admit the v7.3.0 revision';
+            end if;
+            -- The runtime signs every exit quote with its own VERSION and the guard admits a
+            -- decision only from a revision it knows. A deployed engine whose revision is
+            -- missing here cannot close a single position at a profit.
+            if position('7.3.5-APPROVAL-SURVIVES-REQUOTE' in v_def) = 0 then
+              raise exception 'guard does not admit the deployed v7.3.5 runtime revision';
             end if;
             if position('POST180_MAX_HOLD_TIMEOUT' in v_def) > 0 then
               raise exception
