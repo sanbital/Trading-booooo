@@ -1,42 +1,101 @@
-name: Apply EXP1 index arm stop
+name: Guard v7.3.0 executable-stop parity
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
-      - .github/exp1-index-arm-stop-main.trigger
+      - "supabase/functions/market-autotrader/**"
+      - "supabase/functions/market-scanner/engine.ts"
+      - "supabase/functions/market-scanner/forward-learning.ts"
+      - "supabase/functions/_shared/lob/entry.ts"
+      - "gateway/**"
+      - ".github/workflows/apply-scalp-policy-v7-1-0.yml"
+      - ".github/workflows/deploy-market-autotrader-v707.yml"
+      - ".github/workflows/patch-autotrader-v714.yml"
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: guard-v730-executable-stop-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  patch:
+  verify-v714-only:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Check out event revision
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Set up Deno
-        uses: denoland/setup-deno@v2
+
+      - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Apply reviewed patch
-        run: python3 .github/scripts/apply-exp1-index-arm-stop.py
-      - name: Format and type-check
-        run: |
-          deno fmt supabase/functions/market-autotrader/index.ts
-          python3 .github/scripts/apply-exp1-index-arm-stop.py
-          deno check supabase/functions/market-autotrader/index.ts
-      - name: Commit source patch
+
+      - name: Reject legacy policy mutators and verify v7.3.0 invariants
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add supabase/functions/market-autotrader/index.ts
-          git diff --cached --quiet && exit 0
-          git commit -m "fix: enforce EXP-1 arm stops before 180s"
-          git push origin HEAD:main
+          python3 - <<'PY'
+          from pathlib import Path
+
+          engine = Path("supabase/functions/market-autotrader/index.ts").read_text()
+          executable = Path("supabase/functions/market-autotrader/executable-exit.ts").read_text()
+          integrity = Path("supabase/functions/market-autotrader/entry-integrity.ts").read_text()
+          heartbeat = Path("supabase/functions/market-autotrader/heartbeat.ts").read_text()
+          scanner = Path("supabase/functions/market-scanner/engine.ts").read_text()
+          gateway = Path("gateway/server.mjs").read_text()
+          deploy = Path(".github/workflows/deploy-market-autotrader-v707.yml").read_text()
+          guard = Path(".github/workflows/apply-scalp-policy-v7-1-0.yml").read_text()
+
+          version = "7.3.5-APPROVAL-SURVIVES-REQUOTE"
+          assert f'const VERSION = "{version}";' in engine
+          assert f'ENGINE_VERSION = "{version}"' in scanner
+          assert f'const VERSION = "{version}";' in gateway
+          assert "quoteExecutableNetExit" in engine
+          assert 'time_in_force: "FOK"' in engine
+          assert "expectedNetProfitQuote > 0" in executable
+          assert "failed_gate_count" in integrity
+          assert "buildTradingHeartbeatPatch" in heartbeat
+          assert "ENGINE_VERSION_MISMATCH" in gateway
+
+          forbidden_deploy_commands = (
+              "python3 .github/scripts/" + "apply_scalp_v7_1_0.py",
+              "python3 .github/scripts/" + "align_v712_tests.py",
+              "python3 .github/scripts/" + "fix_v712_remaining_tests.py",
+              "scripts/patch_" + "v714_exit_policy.py",
+              "Stamp v7.0.8 " + "runtime version",
+              "git push origin " + "main",
+          )
+          for command in forbidden_deploy_commands:
+              assert command not in deploy, f"legacy deploy mutator remains: {command}"
+
+          write_permission = "contents:" + " write"
+          assert write_permission not in guard, "policy guard must remain read-only"
+          assert version in deploy
+          assert "7.1.4-VOLATILITY-AWARE-EXIT" not in deploy
+          assert "7.2.3-EXECUTABLE-NET-INTEGRITY" not in deploy
+          print("PASS: legacy workflows cannot rewrite v7.3.0")
+          PY
+
+      - name: Type-check and test v7.3.0 runtime
+        run: |
+          deno fmt --check \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-autotrader/executable-exit.ts \
+            supabase/functions/market-autotrader/entry-integrity.ts \
+            supabase/functions/market-autotrader/heartbeat.ts \
+            supabase/functions/market-scanner/engine.ts \
+            supabase/functions/_shared/lob/entry.ts \
+            gateway/server.mjs
+          deno check supabase/functions/market-autotrader/index.ts
+          deno test \
+            supabase/functions/market-autotrader/executable-exit.test.ts \
+            supabase/functions/market-autotrader/entry-integrity.test.ts \
+            supabase/functions/market-autotrader/heartbeat.test.ts
