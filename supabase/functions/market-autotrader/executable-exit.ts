@@ -23,6 +23,43 @@ export type ExecutableNetExitQuote = {
   expectedNetProfitQuote: number;
 };
 
+export type ExitPolicyQuoteRecord = Record<string, unknown>;
+
+/**
+ * The exit_policy_quote the sell INSERT is actually checked against.
+ *
+ * guard_lob_sell_order_v714 does not re-derive the exit decision. It reads it out of
+ * exit_policy_quote and authorises a post-180 profit exit only when that object says
+ * `approved_reason = 'POSITIVE_NET_AFTER_180S'`. The monitor cycle writes that field, and
+ * the order-time re-quote then replaced the whole object with an audit that never carried
+ * it — so by the time the order reached the trigger the approval was gone and the guard
+ * raised V725_POST180_PROFIT_MUST_USE_APPROVED_PATH on every profitable post-180 exit.
+ * Losses were untouched: they leave through the -2% branch, which does not re-quote and so
+ * keeps its approved_reason. A position in profit could therefore only sit there until it
+ * became a loss, which is the opposite of the policy.
+ *
+ * The re-quote now restates the decision it is re-quoting for, and restates `price` with
+ * it: the guard reads `price` ahead of `executable_vwap`, so carrying the monitor cycle's
+ * price forward unchanged would have the guard value the order off a book from seconds ago.
+ */
+export function orderTimeExitPolicyQuote(
+  priorQuote: ExitPolicyQuoteRecord | null | undefined,
+  audit: ExitPolicyQuoteRecord,
+  quote: ExecutableNetExitQuote,
+): ExitPolicyQuoteRecord {
+  const executablePrice = quote.executableVwap > 0 ? quote.executableVwap : quote.limitPrice;
+  return {
+    ...(priorQuote && typeof priorQuote === "object" ? priorQuote : {}),
+    ...audit,
+    ...(executablePrice > 0
+      ? { price: executablePrice, price_basis_runtime: "EXECUTABLE_VWAP" }
+      : {}),
+    ...(quote.allowed
+      ? { approved_action: "STOP", approved_reason: "POSITIVE_NET_AFTER_180S" }
+      : { approved_action: "NONE", approved_reason: `BLOCKED_${quote.reason}` }),
+  };
+}
+
 function finite(value: unknown, fallback = 0): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;

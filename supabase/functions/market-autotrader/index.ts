@@ -117,12 +117,16 @@ import {
   recommendationAdmission,
   summarizeEntryAdmission,
 } from "./entry-admission.ts";
-import { type ExecutableNetExitQuote, quoteExecutableNetExit } from "./executable-exit.ts";
+import {
+  type ExecutableNetExitQuote,
+  orderTimeExitPolicyQuote,
+  quoteExecutableNetExit,
+} from "./executable-exit.ts";
 import { buildTradingHeartbeatPatch, type TradingHeartbeatPatch } from "./heartbeat.ts";
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 
-const VERSION = "7.3.4-NET-POSITIVE-EXIT";
+const VERSION = "7.3.5-APPROVAL-SURVIVES-REQUOTE";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -5058,7 +5062,13 @@ async function preparePositiveNetAfter180Exit(
     sellFeeRate: clamp(FEE_PCT[position.exchange] / 100, 0, 0.01),
     slippageSafetyRate: post180SlippageSafetyRate(settings),
   });
-  const audit = executableNetExitAudit(position, quote, buyFeeQuote, measuredAt);
+  // The guard reads its authority out of exit_policy_quote, and this write replaces the
+  // one the monitor cycle made, so the decision has to be carried across the re-quote.
+  const audit = orderTimeExitPolicyQuote(
+    position.metadata?.exit_policy_quote as JsonRecord | undefined,
+    executableNetExitAudit(position, quote, buyFeeQuote, measuredAt),
+    quote,
+  ) as JsonRecord;
   await patch("trading_positions", `id=eq.${position.id}`, {
     metadata: {
       ...(position.metadata || {}),

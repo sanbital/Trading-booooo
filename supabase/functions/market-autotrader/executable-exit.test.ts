@@ -1,4 +1,4 @@
-import { quoteExecutableNetExit } from "./executable-exit.ts";
+import { orderTimeExitPolicyQuote, quoteExecutableNetExit } from "./executable-exit.ts";
 
 function assert(condition: unknown, message = "assertion failed"): asserts condition {
   if (!condition) throw new Error(message);
@@ -93,4 +93,87 @@ Deno.test("prior proceeds reduce only the unrecovered cost", () => {
   });
   assert(quote.unrecoveredCostQuote === 45.2);
   assert(quote.allowed, quote.reason);
+});
+
+// The order-time re-quote overwrites the exit_policy_quote the monitor cycle wrote. The
+// database guard reads its authority out of that object, so anything the re-quote drops is
+// gone by the time the sell is checked.
+Deno.test("the order-time quote carries the approval the sell guard reads", () => {
+  const quote = quoteExecutableNetExit({
+    bids: [{ price: 11, size: 6 }, { price: 10.5, size: 6 }],
+    requestedQuantity: 10,
+    availableQuantity: 10,
+    quantityStep: 0.1,
+    buyPrincipalQuote: 100,
+    alreadyPaidFeesQuote: 0.1,
+    priorSellProceedsQuote: 0,
+    sellFeeRate: 0.001,
+    slippageSafetyRate: 0.0009,
+  });
+  assert(quote.allowed, quote.reason);
+  const merged = orderTimeExitPolicyQuote(
+    {
+      revision: "7.3.5-APPROVAL-SURVIVES-REQUOTE",
+      price: 9.1,
+      approved_action: "STOP",
+      approved_reason: "POSITIVE_NET_AFTER_180S",
+      requested_reason: "lob:post-180",
+      held_seconds: 1840,
+    },
+    { revision: "7.3.5-APPROVAL-SURVIVES-REQUOTE", executable_vwap: quote.executableVwap },
+    quote,
+  );
+  assert(merged.approved_reason === "POSITIVE_NET_AFTER_180S", String(merged.approved_reason));
+  assert(merged.approved_action === "STOP");
+  // The guard reads `price` ahead of `executable_vwap`, so the stale monitor-cycle price
+  // must not survive into the object the order is checked against.
+  assert(merged.price === quote.executableVwap, String(merged.price));
+  assert(merged.price_basis_runtime === "EXECUTABLE_VWAP");
+  // Context the guard needs for other branches is preserved.
+  assert(merged.requested_reason === "lob:post-180");
+  assert(merged.held_seconds === 1840);
+});
+
+Deno.test("a blocked re-quote does not leave an approval behind", () => {
+  const quote = quoteExecutableNetExit({
+    bids: [{ price: 9, size: 10 }],
+    requestedQuantity: 10,
+    availableQuantity: 10,
+    quantityStep: 0.1,
+    buyPrincipalQuote: 100,
+    alreadyPaidFeesQuote: 0.1,
+    priorSellProceedsQuote: 0,
+    sellFeeRate: 0.001,
+    slippageSafetyRate: 0.0009,
+  });
+  assert(!quote.allowed);
+  const merged = orderTimeExitPolicyQuote(
+    { approved_action: "STOP", approved_reason: "POSITIVE_NET_AFTER_180S" },
+    { revision: "7.3.5-APPROVAL-SURVIVES-REQUOTE" },
+    quote,
+  );
+  assert(merged.approved_action === "NONE");
+  assert(
+    merged.approved_reason === "BLOCKED_NON_POSITIVE_NET_AFTER_COSTS",
+    String(merged.approved_reason),
+  );
+});
+
+Deno.test("a quote with no executable price leaves the guard nothing to price against", () => {
+  const quote = quoteExecutableNetExit({
+    bids: [],
+    requestedQuantity: 10,
+    availableQuantity: 10,
+    quantityStep: 0.1,
+    buyPrincipalQuote: 100,
+    alreadyPaidFeesQuote: 0.1,
+    priorSellProceedsQuote: 0,
+    sellFeeRate: 0.001,
+    slippageSafetyRate: 0.0009,
+  });
+  const merged = orderTimeExitPolicyQuote({ price: 9.1 }, {}, quote);
+  // Nothing was priced, so the stale price stays untouched rather than being replaced by a
+  // zero the guard would read as missing economics. No order is submitted in this case.
+  assert(merged.price === 9.1);
+  assert(merged.approved_action === "NONE");
 });

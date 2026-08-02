@@ -48,13 +48,19 @@ jobs:
 
       - name: Validate, format, type-check and test immutable v7.3.0 policy
         run: |
-          grep -q 'const VERSION = "7.3.4-NET-POSITIVE-EXIT";' \
+          grep -q 'const VERSION = "7.3.5-APPROVAL-SURVIVES-REQUOTE";' \
             supabase/functions/market-autotrader/index.ts
-          grep -q 'ENGINE_VERSION = "7.3.4-NET-POSITIVE-EXIT"' \
+          grep -q 'ENGINE_VERSION = "7.3.5-APPROVAL-SURVIVES-REQUOTE"' \
             supabase/functions/market-scanner/engine.ts
-          grep -q 'const VERSION = "7.3.4-NET-POSITIVE-EXIT";' gateway/server.mjs
+          grep -q 'const VERSION = "7.3.5-APPROVAL-SURVIVES-REQUOTE";' gateway/server.mjs
           grep -q 'time_in_force: "FOK"' supabase/functions/market-autotrader/index.ts
           grep -q 'expectedNetProfitQuote > 0' \
+            supabase/functions/market-autotrader/executable-exit.ts
+          # The order-time re-quote must restate the approval the guard reads, or every
+          # profitable post-180 exit is rejected and the position leaves only at a loss.
+          grep -q 'orderTimeExitPolicyQuote' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'approved_reason: "POSITIVE_NET_AFTER_180S"' \
             supabase/functions/market-autotrader/executable-exit.ts
           grep -q 'ENGINE_VERSION_MISMATCH' gateway/server.mjs
           deno fmt --check \
