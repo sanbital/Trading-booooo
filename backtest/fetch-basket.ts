@@ -38,9 +38,22 @@ if (import.meta.main) {
   for await (const entry of Deno.readDir("backtest/data")) {
     if (entry.isFile && entry.name.endsWith(".json")) files.push(entry.name);
   }
-  if (files.length < 6 || success.upbit < 2 || success.binance < 2) {
+  // The guard exists so a half-collected basket never reaches calibration. It used to demand
+  // two successes from BOTH venues, which made a deliberately single-venue basket impossible
+  // to collect -- and Binance answers 451 to datacentre IPs, so a mixed basket cannot be
+  // collected from CI at all. Require the minimum only from venues the basket actually asks
+  // for, so an intentional single-venue run works while a partial one still fails closed.
+  const requested = {
+    upbit: (config.upbit || []).length,
+    binance: (config.binance || []).length,
+  };
+  const short = (ex: "upbit" | "binance") =>
+    requested[ex] > 0 && success[ex] < Math.min(2, requested[ex]);
+  const minFiles = Math.min(6, requested.upbit + requested.binance);
+  if (files.length < minFiles || short("upbit") || short("binance")) {
     console.error(
-      `수집 성공 ${files.length}개(업비트 ${success.upbit}, 바이낸스 ${success.binance})라 자동 교정을 중단합니다.`,
+      `수집 성공 ${files.length}개(업비트 ${success.upbit}/${requested.upbit}, ` +
+        `바이낸스 ${success.binance}/${requested.binance})라 자동 교정을 중단합니다.`,
     );
     Deno.exit(1);
   }

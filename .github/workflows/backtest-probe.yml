@@ -112,8 +112,41 @@ jobs:
             "
           done
 
-      - name: Walk-forward calibration (no promotion)
-        run: deno run -A backtest/calibrate.ts backtest/data/*.json
+      - name: Walk-forward calibration - ALL markets (no promotion)
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno run -A backtest/calibrate.ts backtest/data/*.json
+          cp backtest/output/calibration-report.md backtest/output/report-ALL.md
+          cp backtest/output/calibration-report.json backtest/output/report-ALL.json
+
+      - name: Walk-forward calibration - disjoint symbol groups
+        # Binance answers 451 to datacentre IPs, so cross-venue replication is unavailable.
+        # Splitting the basket into two disjoint symbol groups is a weaker substitute -- both
+        # groups share one venue and one window, so a common market shock lands on both -- but
+        # a result that appears in only one half is still worth catching. Interleaving the
+        # sorted list keeps large and small caps on both sides.
+        shell: bash
+        run: |
+          set -uo pipefail
+          mapfile -t files < <(ls backtest/data/*.json | sort)
+          a=(); b=()
+          for i in "${!files[@]}"; do
+            if [ $((i % 2)) -eq 0 ]; then a+=("${files[$i]}"); else b+=("${files[$i]}"); fi
+          done
+          echo "GROUP A: ${a[*]}"
+          echo "GROUP B: ${b[*]}"
+          for g in A B; do
+            if [ "$g" = "A" ]; then set -- "${a[@]}"; else set -- "${b[@]}"; fi
+            echo "::group::calibration $g"
+            if deno run -A backtest/calibrate.ts "$@"; then
+              cp backtest/output/calibration-report.md "backtest/output/report-$g.md"
+              cp backtest/output/calibration-report.json "backtest/output/report-$g.json"
+            else
+              echo "::warning::group $g calibration failed; the ALL result above still stands"
+            fi
+            echo "::endgroup::"
+          done
 
       - name: Confirm nothing was promoted
         if: always()
