@@ -6,6 +6,8 @@ import { fetchMarketHistory } from "./fetch-history.ts";
 if (import.meta.main) {
   const days = Number(Deno.args[0] || 180);
   const configPath = Deno.args[1] || "backtest/markets.json";
+  // Optional third argument: how many days of 5m/15m to collect. Defaults to the full span.
+  const intradayDays = Number(Deno.args[2] || days);
   const config = JSON.parse(await Deno.readTextFile(configPath)) as {
     upbit: string[];
     binance: string[];
@@ -18,7 +20,7 @@ if (import.meta.main) {
     for (const market of config[exchange] || []) {
       try {
         console.error(`[${exchange}] ${market} ${days}일 수집`);
-        const history = await fetchMarketHistory(exchange, market, days);
+        const history = await fetchMarketHistory(exchange, market, days, intradayDays);
         const path = `backtest/data/${exchange}-${market}.json`;
         await Deno.writeTextFile(path, JSON.stringify(history));
         success[exchange]++;
