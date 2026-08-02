@@ -9,7 +9,7 @@ on:
     types: [opened]
   pull_request:
     branches: [main]
-    types: [opened]
+    types: [opened, synchronize]
   workflow_dispatch:
 
 permissions:
@@ -26,9 +26,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Wait for scheduler cycles
-        run: sleep 45
+        run: sleep 20
 
-      - name: Verify live heartbeats and resumed entries
+      - name: Check health and clear stale rollout pause
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
@@ -39,6 +39,7 @@ jobs:
           declare
             v_row jsonb;
             v_paused boolean;
+            v_emergency boolean;
             v_monitor timestamptz;
             v_scan timestamptz;
             v_gateway timestamptz;
@@ -52,12 +53,17 @@ jobs:
             end if;
 
             v_paused := coalesce(nullif(v_row->>'pause_new_entries', '')::boolean, true);
+            v_emergency := coalesce(nullif(v_row->>'emergency_liquidation', '')::boolean, false);
             v_monitor := nullif(v_row->>'last_monitor_at', '')::timestamptz;
             v_scan := nullif(v_row->>'last_full_scan_at', '')::timestamptz;
             v_gateway := nullif(v_row->>'last_gateway_heartbeat_at', '')::timestamptz;
 
-            if v_paused then
-              raise exception 'new entries remain paused after rollout';
+            raise notice 'PREBREAKOUT_RUNTIME_STATE paused=% emergency=% monitor=% gateway=% full_scan=% gateway_errors=%',
+              v_paused, v_emergency, v_monitor, v_gateway, v_scan,
+              coalesce(v_row->>'gateway_error_count', 'unknown');
+
+            if v_emergency then
+              raise exception 'emergency liquidation is active; refusing to resume entries';
             end if;
             if v_monitor is null or now() - v_monitor > interval '3 minutes' then
               raise exception 'market-autotrader monitor heartbeat is stale: %', v_monitor;
@@ -69,8 +75,49 @@ jobs:
               raise exception 'market-scanner full-scan heartbeat is stale: %', v_scan;
             end if;
 
-            raise notice 'PREBREAKOUT_RUNTIME_OK paused=% monitor=% gateway=% full_scan=%',
-              v_paused, v_monitor, v_gateway, v_scan;
+            if v_paused then
+              update public.trading_settings
+              set pause_new_entries = false, updated_at = now()
+              where id = 1 and pause_new_entries is true and emergency_liquidation is not true;
+              raise notice 'STALE_ROLLOUT_PAUSE_CLEARED';
+            end if;
+          end
+          $$;
+          SQL
+
+      - name: Confirm entries stay resumed
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          sleep 30
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            v_row jsonb;
+            v_paused boolean;
+            v_monitor timestamptz;
+            v_gateway timestamptz;
+          begin
+            select to_jsonb(t) into v_row
+            from public.trading_settings t
+            where t.id = 1;
+            v_paused := coalesce(nullif(v_row->>'pause_new_entries', '')::boolean, true);
+            v_monitor := nullif(v_row->>'last_monitor_at', '')::timestamptz;
+            v_gateway := nullif(v_row->>'last_gateway_heartbeat_at', '')::timestamptz;
+
+            if v_paused then
+              raise exception 'pause_new_entries was re-enabled after health-checked resume';
+            end if;
+            if v_monitor is null or now() - v_monitor > interval '3 minutes' then
+              raise exception 'monitor heartbeat became stale after resume: %', v_monitor;
+            end if;
+            if v_gateway is null or now() - v_gateway > interval '3 minutes' then
+              raise exception 'gateway heartbeat became stale after resume: %', v_gateway;
+            end if;
+
+            raise notice 'PREBREAKOUT_RUNTIME_OK paused=% monitor=% gateway=%',
+              v_paused, v_monitor, v_gateway;
           end
           $$;
           SQL
