@@ -1,0 +1,12 @@
+{
+  "upbit": [
+    "KRW-BTC",
+    "KRW-ETH",
+    "KRW-SOL"
+  ],
+  "binance": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT"
+  ]
+}

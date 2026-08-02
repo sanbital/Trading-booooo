@@ -1,0 +1,129 @@
+name: Backtest Probe (measure only)
+
+# Measurement-only sibling of "Weekly Backtest Calibration".
+#
+# The weekly workflow fetches all 78 markets in markets.json serially, and at 450 days the
+# 5-minute series alone needs ~576 paginated requests per Upbit market. It does not finish:
+# the 2026-07-26 scheduled run was cancelled at the 90 minute timeout, and so was the
+# 2026-08-02 dispatch. This probe answers the same question on a basket small enough to
+# actually complete, with a timeout that is not the binding constraint.
+#
+# It never promotes. There is deliberately no `promote` input and no `--write-profile`
+# flag anywhere in this file, so it cannot write supabase/functions/market-scanner/
+# calibration-profile.ts and cannot change what the live scanner does. It only measures.
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Historical days to collect (minimum 350 so the 120-day warm-up leaves a real evaluation window)"
+        required: true
+        default: "400"
+        type: string
+      markets_file:
+        description: "Basket to fetch"
+        required: true
+        default: "backtest/markets-probe.json"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backtest-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    # GitHub allows 6h on hosted runners. The weekly workflow's 90m cap is what killed the
+    # previous two runs, so this one is not capped anywhere near the fetch cost.
+    timeout-minutes: 330
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Static checks and tests
+        run: |
+          deno task check
+          deno task test
+
+      - name: Validate inputs
+        shell: bash
+        env:
+          DAYS: ${{ inputs.days }}
+          MARKETS_FILE: ${{ inputs.markets_file }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$DAYS" =~ ^[0-9]+$ ]]; then
+            echo "::error::days must be an integer."
+            exit 1
+          fi
+          if [ "$DAYS" -lt 350 ]; then
+            echo "::error::At least 350 days are required so the 120-day warm-up leaves a meaningful evaluation window."
+            exit 1
+          fi
+          test -f "$MARKETS_FILE" || { echo "::error::$MARKETS_FILE not found"; exit 1; }
+          echo "Basket:"; cat "$MARKETS_FILE"
+
+      - name: Fetch probe basket
+        env:
+          DAYS: ${{ inputs.days }}
+          MARKETS_FILE: ${{ inputs.markets_file }}
+        run: deno run -A backtest/fetch-basket.ts "$DAYS" "$MARKETS_FILE"
+
+      - name: Report what actually downloaded
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A silently partial basket would make the exchange-replication check meaningless,
+          # so state the per-file candle counts before any metric is read.
+          ls -la backtest/data/ || true
+          if [ -f backtest/data/fetch-failures.txt ]; then
+            echo "::warning::fetch failures recorded"
+            cat backtest/data/fetch-failures.txt
+          fi
+          for f in backtest/data/*.json; do
+            [ -e "$f" ] || continue
+            deno eval --quiet "
+              const d = JSON.parse(await Deno.readTextFile('$f'));
+              console.log([d.exchange, d.market, 'm5=' + (d.m5?.length ?? 0),
+                'm15=' + (d.m15?.length ?? 0), 'h4=' + (d.h4?.length ?? 0),
+                'day=' + (d.day?.length ?? 0)].join('  '));
+            "
+          done
+
+      - name: Walk-forward calibration (no promotion)
+        run: deno run -A backtest/calibrate.ts backtest/data/*.json
+
+      - name: Confirm nothing was promoted
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Belt and braces: prove the measurement left the live profile untouched.
+          if ! git diff --quiet -- supabase/functions/market-scanner/calibration-profile.ts; then
+            echo "::error::calibration-profile.ts changed; a measurement run must never write it"
+            git --no-pager diff -- supabase/functions/market-scanner/calibration-profile.ts
+            exit 1
+          fi
+          echo "calibration-profile.ts unchanged."
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-probe-${{ github.run_number }}
+          path: |
+            backtest/output/
+            backtest/data/fetch-failures.txt
+          if-no-files-found: ignore
+          retention-days: 30
