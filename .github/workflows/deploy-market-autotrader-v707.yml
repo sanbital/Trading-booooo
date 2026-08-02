@@ -55,11 +55,11 @@ jobs:
             supabase/functions/market-scanner/engine.ts \
             supabase/functions/_shared/lob/entry.ts \
             gateway/server.mjs
-          grep -q 'const VERSION = "7.3.2-NO-PLANNED-STOP-TRIGGER";' \
+          grep -q 'const VERSION = "7.3.4-NET-POSITIVE-EXIT";' \
             supabase/functions/market-autotrader/index.ts
-          grep -q 'ENGINE_VERSION = "7.3.2-NO-PLANNED-STOP-TRIGGER"' \
+          grep -q 'ENGINE_VERSION = "7.3.4-NET-POSITIVE-EXIT"' \
             supabase/functions/market-scanner/engine.ts
-          grep -q 'const VERSION = "7.3.2-NO-PLANNED-STOP-TRIGGER";' gateway/server.mjs
+          grep -q 'const VERSION = "7.3.4-NET-POSITIVE-EXIT";' gateway/server.mjs
           grep -q 'quoteExecutableNetExit' \
             supabase/functions/market-autotrader/index.ts
           grep -q 'time_in_force: "FOK"' \
@@ -121,10 +121,12 @@ jobs:
           # rejects every live sell with V724_EXIT_BLOCK_MISSING_ECONOMICS.
           grep -q 'price: guardedExitPrice' \
             supabase/functions/market-autotrader/index.ts
-          grep -q 'POST180_MAX_HOLD_TIMEOUT' \
+          # After 180s the rule is positive net or minus 2 percent. No time cap, and the
+          # positive-net test subtracts real costs only.
+          ! grep -q 'POST180_MAX_HOLD_TIMEOUT' \
             supabase/functions/market-autotrader/index.ts
-          grep -q 'lob_post180_max_hold_seconds' \
-            supabase/functions/market-autotrader/index.ts
+          ! grep -q 'slippageSafetyQuote -' \
+            supabase/functions/market-autotrader/executable-exit.ts
           # The -2% stop is measured on the executable bid VWAP, never the display price.
           grep -q 'executableExitPrice' \
             supabase/functions/market-autotrader/index.ts
