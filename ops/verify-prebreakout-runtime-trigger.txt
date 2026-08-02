@@ -1,0 +1,1 @@
+Verify PREBREAKOUT-BURST-V1 production heartbeats and resumed entry state.
