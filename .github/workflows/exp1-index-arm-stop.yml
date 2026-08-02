@@ -1,0 +1,117 @@
+name: One-time EXP-1 index arm stop patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/exp1-index-arm-stop.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message == 'chore: arm EXP-1 patch runner'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Apply the two exact index.ts replacements
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("supabase/functions/market-autotrader/index.ts")
+          source = path.read_text(encoding="utf-8")
+
+          old_1 = '''        if (guardedNetReturnPct <= -2) {
+            decision = {
+              action: "STOP",
+              fraction: 1,
+              reason: "HARD_STOP_MINUS_2",
+            };
+          } else if (heldSeconds < 180) {'''
+
+          new_1 = '''        // EXP-1 (2026-08-02): -2% 가 유일한 강제매도라 모든 LOB 패자가 거기까지 끌려갔고,
+        // 실현 손절 평균이 목표 +42bp 대비 -239bp였다. 반사실 스윕(n=239)이 운영점을
+        // 30~70bp로 지목했으므로 무작위 배정 arm 폭이 실질 손절이 되고 -2% 는 그 아래
+        // 최종 백스톱으로 남는다. 폭과 해시는 public.exp_stop_arm_bps(uuid) 및
+        // market-autotrader/core.ts 오버라이드와 바이트 단위로 동일해야 한다 —
+        // 어긋나면 런타임과 DB가 서로 다른 포지션을 판정한다.
+        // DB 가드가 가격 드로다운으로 판정하므로 여기도 가격 기준(drawdownPct)을 쓴다.
+        const exp1ArmWidthsBps = [30, 50, 90];
+        const exp1ArmHash =
+          parseInt(String(position.id ?? "").replace(/-/g, "").slice(-8), 16);
+        const exp1ArmBps = exp1ArmWidthsBps[
+          (Number.isFinite(exp1ArmHash) ? exp1ArmHash : 0) % exp1ArmWidthsBps.length
+        ];
+        if (guardedNetReturnPct <= -2) {
+          decision = {
+            action: "STOP",
+            fraction: 1,
+            reason: "HARD_STOP_MINUS_2",
+          };
+        } else if (drawdownPct <= -(exp1ArmBps / 100)) {
+          decision = {
+            action: "STOP",
+            fraction: 1,
+            reason: `EXP1_ARM_STOP_${exp1ArmBps}`,
+          };
+        } else if (heldSeconds < 180) {'''
+
+          old_2 = '''        if (
+          !approvedPre180Target && !approvedPre180Reversal &&
+          !approvedPre180PlannedStop
+        ) {'''
+
+          new_2 = '''        // 두 가격 바닥은 설계상 보유시간과 무관하고 DB 가드도 자체 180초 분기보다 앞에서
+        // 통과시킨다. 이 목록에 없어서 180초 안에 -2% 를 뚫은 포지션이 그대로 유지되며
+        // 계속 밀렸다(실현 -245bp 바이낸스 / -319bp 업비트, 정책값 -200bp 대비).
+        // EXP-1 arm 손절은 대부분 180초 안에 발생하므로 이것 없이는 영영 집행되지 않는다.
+        const approvedPre180PriceFloor = decision.action === "STOP" &&
+          ((decision as any).reason === "HARD_STOP_MINUS_2" ||
+            String((decision as any).reason || "").startsWith("EXP1_ARM_STOP_"));
+        if (
+          !approvedPre180Target && !approvedPre180Reversal &&
+          !approvedPre180PlannedStop && !approvedPre180PriceFloor
+        ) {'''
+
+          if source.count(old_1) != 1:
+              raise SystemExit(f"first anchor count was {source.count(old_1)}, expected 1")
+          if source.count(old_2) != 1:
+              raise SystemExit(f"second anchor count was {source.count(old_2)}, expected 1")
+
+          source = source.replace(old_1, new_1, 1).replace(old_2, new_2, 1)
+          path.write_text(source, encoding="utf-8")
+          PY
+
+      - name: Validate source anchors
+        shell: bash
+        run: |
+          test "$(grep -c 'if (guardedNetReturnPct <= -2) {' supabase/functions/market-autotrader/index.ts)" -eq 1
+          test "$(grep -c 'approvedPre180PriceFloor' supabase/functions/market-autotrader/index.ts)" -eq 2
+          test "$(grep -c 'const exp1ArmWidthsBps = \[30, 50, 90\];' supabase/functions/market-autotrader/index.ts)" -eq 1
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Type-check market-autotrader
+        run: deno check supabase/functions/market-autotrader/index.ts
+
+      - name: Commit the patch and remove this runner
+        shell: bash
+        run: |
+          rm .github/workflows/exp1-index-arm-stop.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/market-autotrader/index.ts .github/workflows/exp1-index-arm-stop.yml
+          git commit -m "fix: enforce EXP-1 arm stops before 180s"
+          git push origin HEAD:main
+
+# staged
