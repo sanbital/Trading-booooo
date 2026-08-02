@@ -1,23 +1,23 @@
 name: One-time EXP-1 index arm stop patch
 
 on:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened]
+  push:
+    branches: [exp1-index-arm-stop-v2]
+    paths:
+      - .github/exp1-index-arm-stop-v2.trigger
 
 permissions:
   contents: write
 
 jobs:
   patch:
-    if: github.event.pull_request.title == 'EXP1 index arm stop patch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Check out PR branch
+      - name: Check out patch branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref }}
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
 
       - uses: denoland/setup-deno@v2
@@ -103,7 +103,7 @@ jobs:
           test "$(grep -c 'const exp1ArmWidthsBps = \[30, 50, 90\];' supabase/functions/market-autotrader/index.ts)" -eq 1
           deno check supabase/functions/market-autotrader/index.ts
 
-      - name: Commit patch to PR branch
+      - name: Commit patch to branch
         shell: bash
         run: |
           set -euo pipefail
@@ -111,4 +111,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add supabase/functions/market-autotrader/index.ts
           git commit -m "fix: enforce EXP-1 arm stops before 180s"
-          git push origin "HEAD:${GITHUB_HEAD_REF}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
