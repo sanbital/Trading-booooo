@@ -1,0 +1,85 @@
+name: Apply M1 Stoch Entry Gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-m1-stoch-entry-gate.yml"
+      - "scripts/apply_m1_stoch_entry_gate.py"
+      - "supabase/functions/_shared/lob/minute-entry-gate.ts"
+      - "supabase/functions/_shared/lob/minute-entry-market.ts"
+      - "supabase/functions/_shared/lob/minute-entry-gate.test.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-m1-stoch-entry-gate
+  cancel-in-progress: false
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Apply production wiring
+        run: python3 scripts/apply_m1_stoch_entry_gate.py
+
+      - name: Format changed TypeScript
+        run: |
+          deno fmt \
+            supabase/functions/_shared/lob/minute-entry-gate.ts \
+            supabase/functions/_shared/lob/minute-entry-market.ts \
+            supabase/functions/_shared/lob/minute-entry-gate.test.ts \
+            supabase/functions/_shared/lob/types.ts \
+            supabase/functions/_shared/lob/entry.ts \
+            supabase/functions/market-scanner/engine.ts \
+            supabase/functions/market-scanner/index.ts \
+            supabase/functions/market-autotrader/index.ts
+
+      - name: Unit test stochastic calculation
+        run: deno test supabase/functions/_shared/lob/minute-entry-gate.test.ts
+
+      - name: Type-check production entry paths
+        run: |
+          deno check supabase/functions/_shared/lob/minute-entry-market.ts
+          deno check supabase/functions/market-scanner/index.ts
+          deno check supabase/functions/market-autotrader/index.ts
+
+      - name: Verify fail-closed wiring
+        run: |
+          grep -q 'requireMinuteEntryGate: true' supabase/functions/market-scanner/engine.ts
+          grep -q 'const minuteEntryGates = await loadMinuteEntryGates' supabase/functions/market-scanner/index.ts
+          grep -q 'minute_entry_gate: finalMinuteEntryGate' supabase/functions/market-autotrader/index.ts
+          grep -q 'M1_PREVIOUS_CANDLE_NOT_BULLISH' supabase/functions/_shared/lob/entry.ts
+          grep -q 'M1_STOCH_K_NOT_ABOVE_D' supabase/functions/_shared/lob/entry.ts
+
+      - name: Commit production changes
+        run: |
+          if git diff --quiet; then
+            echo "Production wiring already present"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/_shared/lob/minute-entry-gate.ts \
+            supabase/functions/_shared/lob/minute-entry-market.ts \
+            supabase/functions/_shared/lob/minute-entry-gate.test.ts \
+            supabase/functions/_shared/lob/types.ts \
+            supabase/functions/_shared/lob/entry.ts \
+            supabase/functions/market-scanner/engine.ts \
+            supabase/functions/market-scanner/index.ts \
+            supabase/functions/market-autotrader/index.ts
+          git commit -m "feat: require bullish 1m candle and Stoch K above D"
+          git pull --rebase origin main
+          git push origin HEAD:main
