@@ -55,11 +55,11 @@ jobs:
             supabase/functions/market-scanner/engine.ts \
             supabase/functions/_shared/lob/entry.ts \
             gateway/server.mjs
-          grep -q 'const VERSION = "7.3.4-NET-POSITIVE-EXIT";' \
+          grep -q 'const VERSION = "7.3.5-APPROVAL-SURVIVES-REQUOTE";' \
             supabase/functions/market-autotrader/index.ts
-          grep -q 'ENGINE_VERSION = "7.3.4-NET-POSITIVE-EXIT"' \
+          grep -q 'ENGINE_VERSION = "7.3.5-APPROVAL-SURVIVES-REQUOTE"' \
             supabase/functions/market-scanner/engine.ts
-          grep -q 'const VERSION = "7.3.4-NET-POSITIVE-EXIT";' gateway/server.mjs
+          grep -q 'const VERSION = "7.3.5-APPROVAL-SURVIVES-REQUOTE";' gateway/server.mjs
           grep -q 'quoteExecutableNetExit' \
             supabase/functions/market-autotrader/index.ts
           grep -q 'time_in_force: "FOK"' \
@@ -121,6 +121,14 @@ jobs:
           # rejects every live sell with V724_EXIT_BLOCK_MISSING_ECONOMICS.
           grep -q 'price: guardedExitPrice' \
             supabase/functions/market-autotrader/index.ts
+          # The order-time re-quote replaces the exit_policy_quote the monitor cycle wrote.
+          # If it does not restate the approval, guard_lob_sell_order_v714 rejects every
+          # profitable post-180 exit with V725_POST180_PROFIT_MUST_USE_APPROVED_PATH and the
+          # position can only ever leave at a loss.
+          grep -q 'orderTimeExitPolicyQuote' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'approved_reason: "POSITIVE_NET_AFTER_180S"' \
+            supabase/functions/market-autotrader/executable-exit.ts
           # After 180s the rule is positive net or minus 2 percent. No time cap, and the
           # positive-net test subtracts real costs only.
           ! grep -q 'POST180_MAX_HOLD_TIMEOUT' \
