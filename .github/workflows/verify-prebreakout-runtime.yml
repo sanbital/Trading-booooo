@@ -1,0 +1,66 @@
+name: Verify pre-breakout runtime
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/verify-prebreakout-runtime.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Wait for scheduler cycles
+        run: sleep 45
+
+      - name: Verify live heartbeats and resumed entries
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL}"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            v_row jsonb;
+            v_paused boolean;
+            v_monitor timestamptz;
+            v_scan timestamptz;
+            v_gateway timestamptz;
+          begin
+            select to_jsonb(t) into v_row
+            from public.trading_settings t
+            where t.id = 1;
+
+            if v_row is null then
+              raise exception 'trading_settings row 1 is missing';
+            end if;
+
+            v_paused := coalesce(nullif(v_row->>'pause_new_entries', '')::boolean, true);
+            v_monitor := nullif(v_row->>'last_monitor_at', '')::timestamptz;
+            v_scan := nullif(v_row->>'last_full_scan_at', '')::timestamptz;
+            v_gateway := nullif(v_row->>'last_gateway_heartbeat_at', '')::timestamptz;
+
+            if v_paused then
+              raise exception 'new entries remain paused after rollout';
+            end if;
+            if v_monitor is null or now() - v_monitor > interval '3 minutes' then
+              raise exception 'market-autotrader monitor heartbeat is stale: %', v_monitor;
+            end if;
+            if v_gateway is null or now() - v_gateway > interval '3 minutes' then
+              raise exception 'gateway heartbeat is stale: %', v_gateway;
+            end if;
+            if v_scan is null or now() - v_scan > interval '10 minutes' then
+              raise exception 'market-scanner full-scan heartbeat is stale: %', v_scan;
+            end if;
+
+            raise notice 'PREBREAKOUT_RUNTIME_OK paused=% monitor=% gateway=% full_scan=%',
+              v_paused, v_monitor, v_gateway, v_scan;
+          end
+          $$;
+          SQL
