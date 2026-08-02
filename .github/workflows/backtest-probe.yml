@@ -25,6 +25,11 @@ on:
         required: true
         default: "backtest/markets-probe.json"
         type: string
+      intraday_days:
+        description: "Days of 5m/15m to collect. The 5m series is ~75% of all requests, so this sets the runtime; daily/4h warm-up always uses the full `days`."
+        required: true
+        default: "60"
+        type: string
 
 permissions:
   contents: read
@@ -60,6 +65,7 @@ jobs:
         env:
           DAYS: ${{ inputs.days }}
           MARKETS_FILE: ${{ inputs.markets_file }}
+          INTRADAY_DAYS: ${{ inputs.intraday_days }}
         run: |
           set -euo pipefail
           if ! [[ "$DAYS" =~ ^[0-9]+$ ]]; then
@@ -70,6 +76,10 @@ jobs:
             echo "::error::At least 350 days are required so the 120-day warm-up leaves a meaningful evaluation window."
             exit 1
           fi
+          if ! [[ "$INTRADAY_DAYS" =~ ^[0-9]+$ ]] || [ "$INTRADAY_DAYS" -lt 30 ]; then
+            echo "::error::intraday_days must be an integer >= 30."
+            exit 1
+          fi
           test -f "$MARKETS_FILE" || { echo "::error::$MARKETS_FILE not found"; exit 1; }
           echo "Basket:"; cat "$MARKETS_FILE"
 
@@ -77,7 +87,8 @@ jobs:
         env:
           DAYS: ${{ inputs.days }}
           MARKETS_FILE: ${{ inputs.markets_file }}
-        run: deno run -A backtest/fetch-basket.ts "$DAYS" "$MARKETS_FILE"
+          INTRADAY_DAYS: ${{ inputs.intraday_days }}
+        run: deno run -A backtest/fetch-basket.ts "$DAYS" "$MARKETS_FILE" "$INTRADAY_DAYS"
 
       - name: Report what actually downloaded
         if: always()

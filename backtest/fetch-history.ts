@@ -147,8 +147,16 @@ export async function fetchMarketHistory(
   exchange: "upbit" | "binance",
   market: string,
   days = 180,
+  intradayDays = days,
 ): Promise<MarketHistory> {
-  const need = { m5: days * 288, m15: days * 96, h4: days * 6, day: days + 5 };
+  // usableWindow() gates the evaluation start on 120 daily and 120 four-hour bars, but on
+  // only 60 five-minute bars. Daily and 4h are nearly free -- 400 days is 3 and 12 Upbit
+  // pages -- while the 5m series at 200 candles per page is 576 pages for the same span and
+  // dominates collection time. Fetching a shorter intraday span keeps the full warm-up and
+  // lets usableWindow shorten the evaluation window on its own, because decision times with
+  // no 5m coverage simply never become ready.
+  const span = Math.max(1, Math.min(days, intradayDays));
+  const need = { m5: span * 288, m15: span * 96, h4: days * 6, day: days + 5 };
   if (exchange === "upbit") {
     const [m5, m15, h4, dayC] = [
       await upbitCandles(market, "5", need.m5),
