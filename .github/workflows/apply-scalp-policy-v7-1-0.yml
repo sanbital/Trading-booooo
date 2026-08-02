@@ -1,6 +1,10 @@
 name: One-time EXP-1 index arm stop patch
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - .github/exp1-index-arm-stop-main.trigger
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
