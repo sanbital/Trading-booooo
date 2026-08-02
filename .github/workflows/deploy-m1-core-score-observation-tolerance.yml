@@ -1,0 +1,283 @@
+name: Deploy M1 core score observation tolerance
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy-m1-core-score-observation-tolerance
+  cancel-in-progress: false
+
+env:
+  RELEASE_VERSION: 7.3.8-M1-CORE-SCORE-OBS-TOLERANCE
+  M1_GATE_VERSION: M1-BB-CORE4-AUX-SCORE-STOCH-14-3-3-V3
+
+jobs:
+  patch-deploy-verify:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.title == '[DEPLOY] M1 core score observation tolerance'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Apply canonical source patch
+        run: python3 scripts/apply_m1_core_score_observation_tolerance.py
+
+      - name: Format and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt \
+            supabase/functions/_shared/lob/minute-entry-gate.ts \
+            supabase/functions/_shared/lob/minute-entry-gate.test.ts \
+            supabase/functions/_shared/lob/entry.ts \
+            supabase/functions/_shared/lob/entry-risk.test.ts \
+            supabase/functions/_shared/lob/types.ts \
+            supabase/functions/market-scanner/engine.ts \
+            supabase/functions/market-scanner/index.ts \
+            supabase/functions/market-autotrader/index.ts
+          deno test \
+            supabase/functions/_shared/lob/minute-entry-gate.test.ts \
+            supabase/functions/_shared/lob/entry-risk.test.ts
+          deno check supabase/functions/market-scanner/index.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          grep -q "${M1_GATE_VERSION}" supabase/functions/_shared/lob/minute-entry-gate.ts
+          grep -q 'M1_UPPER_BAND_NOT_TOUCHED' supabase/functions/_shared/lob/minute-entry-gate.ts
+          grep -q 'M1_AUXILIARY_SCORE_TOO_LOW' supabase/functions/_shared/lob/minute-entry-gate.ts
+          grep -q 'const auxiliaryPassed = auxiliaryScore >= 40' supabase/functions/_shared/lob/minute-entry-gate.ts
+          grep -q 'EFFECTIVE_OBSERVATION_MIN_MS = 13_500' supabase/functions/_shared/lob/entry.ts
+          grep -q 'const DYNAMIC_MIN_OBSERVATION_MS = 13_500' supabase/functions/market-scanner/engine.ts
+          grep -q "${RELEASE_VERSION}" supabase/functions/market-scanner/engine.ts
+          grep -q "${RELEASE_VERSION}" supabase/functions/market-autotrader/index.ts
+
+      - name: Commit canonical production source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/_shared/lob/minute-entry-gate.ts \
+            supabase/functions/_shared/lob/minute-entry-gate.test.ts \
+            supabase/functions/_shared/lob/entry.ts \
+            supabase/functions/_shared/lob/entry-risk.test.ts \
+            supabase/functions/_shared/lob/types.ts \
+            supabase/functions/market-scanner/engine.ts \
+            supabase/functions/market-scanner/index.ts \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/migrations/20260802164500_m1_core_score_observation_tolerance.sql
+          if git diff --cached --quiet; then
+            echo "Canonical source already applied"
+          else
+            git commit -m "feat: use M1 core gates with supporting score"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Safety check and pause new entries for rollout
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL}"
+          emergency=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(emergency_liquidation,false)::text from public.trading_settings where id=1")
+          [ "${emergency}" != true ] && [ "${emergency}" != t ] || {
+            echo "::error::emergency liquidation is active; refusing rollout"; exit 1;
+          }
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=true, updated_at=now() where id=1"
+
+      - name: Deploy scanner and autotrader
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for fn in market-scanner market-autotrader; do
+            supabase functions deploy "$fn" \
+              --project-ref "${SUPABASE_PROJECT_REF}" \
+              --no-verify-jwt \
+              --use-api
+          done
+          echo "DEPLOYED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
+
+      - name: Apply runtime revision
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" \
+            --set=ON_ERROR_STOP=1 \
+            --single-transaction \
+            --file supabase/migrations/20260802164500_m1_core_score_observation_tolerance.sql
+
+      - name: Open new entries after deployment
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<SQL
+          do \$\$
+          declare s public.trading_settings%rowtype;
+          begin
+            select * into s from public.trading_settings where id=1;
+            if s.emergency_liquidation then
+              raise exception 'emergency liquidation became active; entries remain closed';
+            end if;
+            if s.lob_observation_window_ms <> 15000 or s.lob_max_gainer_rank <> 10 then
+              raise exception 'runtime setting mismatch observation=% rank=%',
+                s.lob_observation_window_ms, s.lob_max_gainer_rank;
+            end if;
+            if s.lob_live_admission_revision <> '${RELEASE_VERSION}' or
+               s.lob_model_revision <> '${RELEASE_VERSION}' then
+              raise exception 'revision mismatch live=% model=%',
+                s.lob_live_admission_revision, s.lob_model_revision;
+            end if;
+            update public.trading_settings
+            set pause_new_entries=false, updated_at=now()
+            where id=1 and emergency_liquidation is not true;
+          end
+          \$\$;
+          SQL
+
+      - name: Wait for fresh production evidence
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=false
+          for attempt in $(seq 1 24); do
+            scan=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 \
+              --set=deployed_at="${DEPLOYED_AT}" -c \
+              "select id::text from public.scanner_scan_runs where created_at >= :'deployed_at'::timestamptz order by created_at desc limit 1")
+            engine_count=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 \
+              --set=deployed_at="${DEPLOYED_AT}" --set=release_version="${RELEASE_VERSION}" -c \
+              "select count(distinct exchange) from public.trading_joint_objective_snapshots where captured_at >= :'deployed_at'::timestamptz and engine_version=:'release_version'")
+            paused=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+              "select pause_new_entries::text from public.trading_settings where id=1")
+            echo "attempt=${attempt} scan=${scan:-none} engines=${engine_count} paused=${paused}"
+            if [ -n "${scan}" ] && [ "${engine_count}" -ge 2 ] && [ "${paused}" = f ]; then
+              echo "VERIFIED_SCAN_ID=${scan}" >> "${GITHUB_ENV}"
+              found=true
+              break
+            fi
+            sleep 10
+          done
+          [ "${found}" = true ] || { echo "::error::fresh production evidence not observed"; exit 1; }
+
+      - name: Verify live scanner and runtime
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 \
+            --set=scan_id="${VERIFIED_SCAN_ID}" \
+            --set=release_version="${RELEASE_VERSION}" \
+            --set=m1_gate_version="${M1_GATE_VERSION}" <<'SQL'
+          do $$
+          declare
+            s public.trading_settings%rowtype;
+            summary jsonb;
+            candidate_count integer;
+            current_gate_count integer;
+            engines integer;
+          begin
+            select * into s from public.trading_settings where id=1;
+            if s.pause_new_entries then raise exception 'new entries remain paused'; end if;
+            if s.emergency_liquidation then raise exception 'emergency liquidation active'; end if;
+            if s.last_full_scan_at < now()-interval '150 seconds' or
+               s.last_monitor_at < now()-interval '150 seconds' or
+               s.last_gateway_heartbeat_at < now()-interval '150 seconds' then
+              raise exception 'stale heartbeat scan=% monitor=% gateway=%',
+                s.last_full_scan_at, s.last_monitor_at, s.last_gateway_heartbeat_at;
+            end if;
+
+            select r.summary into summary from public.scanner_scan_runs r where r.id=:'scan_id'::uuid;
+            if summary#>>'{coverage,exchanges,upbit,dynamic_orderflow,requested_observation_seconds}' <> '15' or
+               summary#>>'{coverage,exchanges,binance,dynamic_orderflow,requested_observation_seconds}' <> '15' then
+              raise exception 'requested observation is not 15s/15s';
+            end if;
+
+            select count(*), count(*) filter (
+              where c.snapshot#>>'{lob,features,m1GateVersion}'=:'m1_gate_version'
+            ) into candidate_count, current_gate_count
+            from public.scanner_candidates c where c.scan_id=:'scan_id'::uuid;
+            if candidate_count = 0 or current_gate_count <> candidate_count then
+              raise exception 'M1 gate version mismatch candidates=% current=%',
+                candidate_count, current_gate_count;
+            end if;
+
+            select count(distinct exchange) into engines
+            from public.trading_joint_objective_snapshots
+            where captured_at >= now()-interval '5 minutes'
+              and engine_version=:'release_version';
+            if engines < 2 then raise exception 'new engine not active on both exchanges: %', engines; end if;
+
+            raise notice 'PRODUCTION_OK scan=% candidates=% gate=% engines=% entries_open=true',
+              :'scan_id', candidate_count, :'m1_gate_version', engines;
+          end
+          $$;
+
+          select jsonb_build_object(
+            'verified_at_utc', now(),
+            'scan_id', r.id,
+            'scan_status', r.status,
+            'candidate_count', (select count(*) from public.scanner_candidates c where c.scan_id=r.id),
+            'buy_count', (select count(*) from public.scanner_candidates c where c.scan_id=r.id and c.decision='BUY'),
+            'core_passed', (select count(*) from public.scanner_candidates c where c.scan_id=r.id and coalesce((c.snapshot#>>'{lob,features,m1CorePassed}')::boolean,false)),
+            'auxiliary_passed', (select count(*) from public.scanner_candidates c where c.scan_id=r.id and coalesce((c.snapshot#>>'{lob,features,m1AuxiliaryPassed}')::boolean,false)),
+            'prebreakout_passed', (select count(*) from public.scanner_candidates c where c.scan_id=r.id and coalesce((c.snapshot#>>'{lob,features,m1PreBreakout}')::boolean,false)),
+            'upbit_sufficient', r.summary#>>'{coverage,exchanges,upbit,dynamic_orderflow,sufficient_markets}',
+            'binance_sufficient', r.summary#>>'{coverage,exchanges,binance,dynamic_orderflow,sufficient_markets}'
+          ) as production_evidence
+          from public.scanner_scan_runs r where r.id=:'scan_id'::uuid;
+
+          select jsonb_build_object(
+            'pause_new_entries', pause_new_entries,
+            'emergency_liquidation', emergency_liquidation,
+            'revision', lob_live_admission_revision,
+            'observation_ms', lob_observation_window_ms,
+            'max_gainer_rank', lob_max_gainer_rank,
+            'gateway_error_count', gateway_error_count,
+            'last_full_scan_at', last_full_scan_at,
+            'last_monitor_at', last_monitor_at,
+            'last_gateway_heartbeat_at', last_gateway_heartbeat_at
+          ) as runtime_state
+          from public.trading_settings where id=1;
+          SQL
+
+      - name: Reopen entries on workflow failure when safe
+        if: failure()
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=false, updated_at=now() where id=1 and emergency_liquidation is not true"
