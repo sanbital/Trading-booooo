@@ -1,1 +1,2 @@
 Trigger PREBREAKOUT-BURST-V1 deployment and validation.
+Retry after deterministic squeeze fixture fix.
