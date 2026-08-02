@@ -1,0 +1,140 @@
+name: Inspect current scan status
+
+on:
+  issues:
+    types: [opened]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' && github.event.issue.title == '[INSPECT] current scan status') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.title == '[INSPECT] current scan status')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Inspect production scan state
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL}"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
+          \pset pager off
+          \set VERBOSITY terse
+
+          select jsonb_build_object(
+            'now_utc', now(),
+            'pause_new_entries', to_jsonb(t)->>'pause_new_entries',
+            'emergency_liquidation', to_jsonb(t)->>'emergency_liquidation',
+            'strategy', coalesce(to_jsonb(t)->>'strategy', to_jsonb(t)->>'active_strategy'),
+            'last_full_scan_at', to_jsonb(t)->>'last_full_scan_at',
+            'last_monitor_at', to_jsonb(t)->>'last_monitor_at',
+            'last_gateway_heartbeat_at', to_jsonb(t)->>'last_gateway_heartbeat_at',
+            'gateway_error_count', to_jsonb(t)->>'gateway_error_count',
+            'gateway_recovery_cycles', to_jsonb(t)->>'gateway_recovery_cycles'
+          ) as settings_snapshot
+          from public.trading_settings t
+          where t.id = 1;
+
+          select table_name
+          from information_schema.tables
+          where table_schema = 'public'
+            and table_type = 'BASE TABLE'
+            and (
+              table_name ilike '%scan%' or table_name ilike '%signal%' or
+              table_name ilike '%candidate%' or table_name ilike '%event%' or
+              table_name ilike '%decision%' or table_name ilike '%cycle%' or
+              table_name ilike '%hot%'
+            )
+          order by table_name;
+
+          do $$
+          declare
+            r record;
+            ts_col text;
+            recent_count bigint;
+            latest_at timestamptz;
+            sample_text text;
+          begin
+            for r in
+              select table_name
+              from information_schema.tables
+              where table_schema = 'public'
+                and table_type = 'BASE TABLE'
+                and (
+                  table_name ilike '%scan%' or table_name ilike '%signal%' or
+                  table_name ilike '%candidate%' or table_name ilike '%event%' or
+                  table_name ilike '%decision%' or table_name ilike '%cycle%' or
+                  table_name ilike '%hot%'
+                )
+              order by table_name
+            loop
+              select column_name into ts_col
+              from information_schema.columns
+              where table_schema = 'public'
+                and table_name = r.table_name
+                and column_name in (
+                  'created_at','updated_at','scanned_at','evaluated_at','started_at',
+                  'ended_at','measured_at','captured_at','timestamp','ts'
+                )
+              order by array_position(array[
+                'created_at','updated_at','scanned_at','evaluated_at','started_at',
+                'ended_at','measured_at','captured_at','timestamp','ts'
+              ], column_name)
+              limit 1;
+
+              if ts_col is null then
+                raise notice 'SCAN_TABLE table=% timestamp_column=NONE', r.table_name;
+                continue;
+              end if;
+
+              begin
+                execute format(
+                  'select count(*), max(%1$I)::timestamptz from public.%2$I where %1$I::timestamptz >= now() - interval ''30 minutes''',
+                  ts_col, r.table_name
+                ) into recent_count, latest_at;
+
+                execute format(
+                  'select left(coalesce(string_agg(left(jsonb_strip_nulls(to_jsonb(q))::text, 2500), E''\n''), ''''), 10000) from (select * from public.%1$I order by %2$I desc limit 3) q',
+                  r.table_name, ts_col
+                ) into sample_text;
+
+                raise notice 'SCAN_TABLE table=% ts_col=% rows_30m=% latest=%',
+                  r.table_name, ts_col, recent_count, latest_at;
+                if coalesce(sample_text, '') <> '' then
+                  raise notice 'SCAN_SAMPLE table=% data=%', r.table_name, sample_text;
+                end if;
+              exception when others then
+                raise notice 'SCAN_TABLE_ERROR table=% error=%', r.table_name, sqlerrm;
+              end;
+            end loop;
+          end
+          $$;
+
+          select 'open_positions' as metric, count(*)::text as value
+          from public.trading_positions where state = 'OPEN'
+          union all
+          select 'positions_created_30m', count(*)::text
+          from public.trading_positions where created_at >= now() - interval '30 minutes'
+          union all
+          select 'orders_created_30m', count(*)::text
+          from public.trading_orders where created_at >= now() - interval '30 minutes';
+
+          select left(jsonb_strip_nulls(to_jsonb(p))::text, 3000) as recent_position
+          from public.trading_positions p
+          order by created_at desc
+          limit 5;
+
+          select left(jsonb_strip_nulls(to_jsonb(o))::text, 3000) as recent_order
+          from public.trading_orders o
+          order by created_at desc
+          limit 5;
+          SQL
