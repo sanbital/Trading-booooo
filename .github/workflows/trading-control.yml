@@ -15,7 +15,7 @@ on:
           - resume_new_entries
           - emergency_liquidate
       confirmation:
-        description: "For LIVE type ENABLE_LIVE; for emergency type LIQUIDATE_NOW"
+        description: "For LIVE type ENABLE_LIVE; to pause type PAUSE_NOW; for emergency type LIQUIDATE_NOW"
         required: false
         type: string
 
@@ -45,6 +45,14 @@ jobs:
             echo "::error::Type LIQUIDATE_NOW in confirmation."
             exit 1
           fi
+          # The control endpoint refuses an operator pause without pause_confirmation=PAUSE_NOW.
+          # This workflow never sent it, so `pause_new_entries` failed 400 every time it was
+          # invoked -- the kill switch has never worked. The confirmation is deliberate, so it
+          # is required here and forwarded rather than hardcoded away.
+          if [ "$COMMAND" = "pause_new_entries" ] && [ "$CONFIRMATION" != "PAUSE_NOW" ]; then
+            echo "::error::Type PAUSE_NOW in confirmation."
+            exit 1
+          fi
 
       - name: Call private control endpoint
         shell: bash
@@ -52,15 +60,16 @@ jobs:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
           LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
           COMMAND: ${{ inputs.command }}
+          CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           autotrade_token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
           case "$COMMAND" in
             status) body='{"action":"status"}' ;;
             start_paper) body='{"action":"control","mode":"PAPER","pause_new_entries":false,"emergency_liquidation":false}' ;;
             start_live_limited) body='{"action":"control","mode":"LIVE_LIMITED","pause_new_entries":false,"emergency_liquidation":false}' ;;
-            pause_new_entries) body='{"action":"control","pause_new_entries":true}' ;;
+            pause_new_entries) body="{\"action\":\"control\",\"pause_new_entries\":true,\"pause_confirmation\":\"${CONFIRMATION}\",\"control_source\":\"GITHUB_ACTIONS\",\"control_reason\":\"OPERATOR_REQUEST\"}" ;;
             resume_new_entries) body='{"action":"control","pause_new_entries":false,"emergency_liquidation":false}' ;;
-            emergency_liquidate) body='{"action":"control","pause_new_entries":true,"emergency_liquidation":true}' ;;
+            emergency_liquidate) body="{\"action\":\"control\",\"pause_new_entries\":true,\"emergency_liquidation\":true,\"pause_confirmation\":\"PAUSE_NOW\",\"control_source\":\"GITHUB_ACTIONS\",\"control_reason\":\"EMERGENCY_LIQUIDATION\"}" ;;
             *) echo "unsupported command"; exit 1 ;;
           esac
           curl --fail-with-body --retry 2 --retry-delay 3 --max-time 60 \
