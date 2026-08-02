@@ -1,23 +1,22 @@
 name: One-time EXP-1 index arm stop patch
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/exp1-index-arm-stop.yml
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 jobs:
   patch:
-    if: github.event.head_commit.message == 'chore: arm EXP-1 patch runner'
+    if: github.event.pull_request.title == 'EXP1 index arm stop patch'
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
+      - name: Check out PR branch
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
 
       - name: Apply the two exact index.ts replacements
         shell: bash
@@ -104,14 +103,11 @@ jobs:
       - name: Type-check market-autotrader
         run: deno check supabase/functions/market-autotrader/index.ts
 
-      - name: Commit the patch and remove this runner
+      - name: Commit patch to PR branch
         shell: bash
         run: |
-          rm .github/workflows/exp1-index-arm-stop.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add supabase/functions/market-autotrader/index.ts .github/workflows/exp1-index-arm-stop.yml
+          git add supabase/functions/market-autotrader/index.ts
           git commit -m "fix: enforce EXP-1 arm stops before 180s"
-          git push origin HEAD:main
-
-# armed
+          git push origin HEAD:${{ github.head_ref }}
