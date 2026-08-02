@@ -1,1 +1,2 @@
 Verify PREBREAKOUT-BURST-V1 production heartbeats and resumed entry state.
+Health-check and clear only a stale rollout pause, then confirm it stays resumed.
