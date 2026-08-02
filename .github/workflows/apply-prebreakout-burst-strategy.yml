@@ -6,11 +6,12 @@ on:
     paths:
       - ".github/workflows/apply-prebreakout-burst-strategy.yml"
       - "scripts/apply_prebreakout_burst_strategy.py"
+      - "scripts/fix_prebreakout_test_fixture.py"
   issues:
     types: [opened]
   pull_request:
     branches: [main]
-    types: [opened]
+    types: [opened, synchronize]
   workflow_dispatch:
 
 permissions:
@@ -45,7 +46,10 @@ jobs:
           version: 2.109.1
 
       - name: Apply production patch
-        run: python3 scripts/apply_prebreakout_burst_strategy.py
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_prebreakout_burst_strategy.py
+          python3 scripts/fix_prebreakout_test_fixture.py
 
       - name: Format and validate
         run: |
@@ -173,6 +177,7 @@ jobs:
           SQL
 
       - name: Restore prior entry-pause state
+        if: always() && env.PREVIOUS_PAUSE_NEW_ENTRIES != ''
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
