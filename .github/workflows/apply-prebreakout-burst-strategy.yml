@@ -81,8 +81,11 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # The patcher refreshes the normal deploy workflow, but the GitHub App used by
+          # this one-shot job has no workflows scope. The production source itself is safe
+          # to commit and this job performs the deployment directly.
+          git restore .github/workflows/deploy-market-autotrader-v707.yml
           git add \
-            .github/workflows/deploy-market-autotrader-v707.yml \
             supabase/functions/_shared/lob/minute-entry-gate.ts \
             supabase/functions/_shared/lob/minute-entry-market.ts \
             supabase/functions/_shared/lob/minute-entry-gate.test.ts \
