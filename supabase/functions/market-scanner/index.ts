@@ -59,15 +59,15 @@ const BOOK_SAMPLE_COUNT = 4;
 const BOOK_SAMPLE_INTERVAL_MS = 250;
 // A complete market may finish at 50 seconds. A thin market keeps the same socket open for
 // up to 10 seconds more. This stays below the Edge request ceiling after scan setup work.
-const DEFAULT_DYNAMIC_OBSERVATION_MS = 50_000;
-const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 50_000;
-const MIN_DYNAMIC_OBSERVATION_MS = 50_000;
-const MAX_DYNAMIC_OBSERVATION_MS = 60_000;
-// Every symbol must receive its own full 50-second wall-clock observation window.
-// The global socket-open timer alone is insufficient because a symbol's first frame can arrive late.
-const REQUIRED_PER_MARKET_OBSERVATION_MS = 50_000;
-const EXTENDED_PER_MARKET_OBSERVATION_MS = 60_000;
-const DYNAMIC_STREAM_HARD_TIMEOUT_BUFFER_MS = 35_000;
+// The old 50-second wait entered after the expansion candle. Fifteen seconds is enough
+// to confirm real tape pressure while the completed 1m candle is still pre-breakout.
+const DEFAULT_DYNAMIC_OBSERVATION_MS = 15_000;
+const LOW_LIQUIDITY_DYNAMIC_OBSERVATION_MS = 20_000;
+const MIN_DYNAMIC_OBSERVATION_MS = 12_000;
+const MAX_DYNAMIC_OBSERVATION_MS = 25_000;
+const REQUIRED_PER_MARKET_OBSERVATION_MS = 15_000;
+const EXTENDED_PER_MARKET_OBSERVATION_MS = 25_000;
+const DYNAMIC_STREAM_HARD_TIMEOUT_BUFFER_MS = 20_000;
 const DYNAMIC_COVERAGE_POLL_MS = 250;
 const DYNAMIC_SUFFICIENCY_RECHECK_MS = 1_000;
 const MAX_DYNAMIC_BOOK_EVENTS = 1_200;
@@ -1502,6 +1502,21 @@ async function runLobHeatScan(
       m1_completed_bars: gate?.completedBars ?? 0,
       m1_completed_candle_open_time: gate?.completedCandleOpenTime ?? null,
       m1_completed_candle_close_time: gate?.completedCandleCloseTime ?? null,
+      m1_band_position: gate?.bandPosition ?? null,
+      m1_band_width: gate?.bandWidth ?? null,
+      m1_band_width_expansion_ratio: gate?.bandWidthExpansionRatio ?? null,
+      m1_upper_band_slope_pct: gate?.upperBandSlopePct ?? null,
+      m1_body_atr_ratio: gate?.bodyAtrRatio ?? null,
+      m1_range_atr_ratio: gate?.rangeAtrRatio ?? null,
+      m1_recent_advance_atr: gate?.recentAdvanceAtr ?? null,
+      m1_volume_ratio: gate?.volumeRatio ?? null,
+      m1_squeeze_release: gate?.squeezeRelease === true,
+      m1_pre_breakout: gate?.preBreakout === true,
+      m1_bearish_upper_band_reentry: gate?.bearishUpperBandReentry === true,
+      m1_upper_band_reclaimed: gate?.upperBandReclaimed === true,
+      m1_previous_at_upper_band: gate?.previousAtUpperBand === true,
+      m1_latest_close: gate?.latestClose ?? null,
+      m1_upper_band: gate?.upperBand ?? null,
     };
   });
   const finalists = candleGatedRows.map(heatPeriod);
@@ -1654,7 +1669,7 @@ async function runLobHeatScan(
       strategy: "TOP10_24H_GAINERS_LOB_ONLY",
       trend_role: "UNIVERSE_RANK_ONLY_NOT_ENTRY_SIGNAL",
       hard_economic_gate: "TARGET_NET_PROFIT_GT_0",
-      m1_entry_gate: "PREVIOUS_CANDLE_BULLISH_AND_STOCH_14_3_3_K_GT_D",
+      m1_entry_gate: "BB_SQUEEZE_RELEASE_PREBREAKOUT_AND_STOCH_14_3_3_K_GT_D",
       search_policy: "STRICT_TOP10_NO_BACKFILL",
       search_thresholds_relaxed: false,
       automatic_order: risk.operatorMode === "AUTOMATED",

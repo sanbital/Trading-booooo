@@ -28,14 +28,14 @@ const PLANNED_SCALP_STOP_MAX_BPS = 200;
 const LEGACY_EMERGENCY_STOP_BPS = 500;
 const ECONOMIC_GATE_EPSILON = 1e-9;
 /** Continuation families that lost money on live fills; overridable via LobEntryConfig. */
-const DEFAULT_BLOCKED_LOB_PATTERNS = ["OFI_CONTINUATION", "MOMENTUM_CONTINUATION"];
+const DEFAULT_BLOCKED_LOB_PATTERNS: string[] = [];
 /** Worst 24h-gainer rank admitted by default; overridable via LobEntryConfig. */
 const DEFAULT_MAX_GAINER_RANK = 3;
 
 export const DEFAULT_LOB_ENTRY_CONFIG: LobEntryConfig = {
   minSamples: 4,
-  // Every candidate must be judged from a full 50-second live book/tape window.
-  minObservationMs: 50_000,
+  // Confirm tape pressure quickly enough to enter before the expansion candle.
+  minObservationMs: 15_000,
   maxBookAgeMs: 5_000,
   maxSpreadBps: 60,
   minHotnessScore: 0,
@@ -132,6 +132,12 @@ export function assessLobEntryRisk(
   const supportBreakdown = status.includes("SUPPORT_BREAKDOWN");
   const dynamicInsufficient = status.includes("INSUFFICIENT") ||
     clamp(finite(features.dataQuality), 0, 1) < trapCfg.minDataQuality;
+  const buyNotional = Math.max(0, finite(features.buyNotional));
+  const sellNotional = Math.max(0, finite(features.sellNotional));
+  const buySellRatio = buyNotional > 0
+    ? buyNotional / Math.max(sellNotional, Math.max(1e-9, buyNotional * 0.05))
+    : 0;
+  const acceleration = finite(features.notionalAcceleration);
 
   const adverseFlowSignals = [
     finite(features.tradeSpeedTrend) <= -0.20 ? "TRADE_SPEED_DECLINING" : null,
@@ -142,48 +148,40 @@ export function assessLobEntryRisk(
 
   if (dynamicInsufficient) reasons.push("LOB_DYNAMIC_EVIDENCE_INSUFFICIENT");
   if (supportBreakdown) reasons.push("SUPPORT_BREAKDOWN_RISK");
-  if (pressure < 0) reasons.push("NEGATIVE_TRADE_PRESSURE");
   if (bidSpoofDetected || askSpoofDetected) reasons.push("SPOOF_WARNING");
   if (bidSpoofDetected && askSpoofDetected) reasons.push("TWO_SIDED_SPOOF_RISK");
 
-  // A very strong disappearing bid needs one confirming weak-flow sign. At the normal
-  // threshold two independent signs are required, avoiding a broad decay-only veto.
   const severeBidSpoofThreshold = Math.max(0.90, trapCfg.bidSpoofScore);
   const bidSpoofConfirmed =
     (bidSpoof >= severeBidSpoofThreshold && adverseFlowSignals.length >= 1) ||
     (bidSpoofDetected && adverseFlowSignals.length >= 2);
   if (bidSpoofConfirmed) reasons.push("BID_SPOOF_CONFIRMED_BY_WEAK_FLOW");
-
-  if (askSpoofDetected && !bidSpoofDetected && !supportBreakdown) {
-    warnings.push("ASK_SPOOF");
-  }
+  if (askSpoofDetected && !bidSpoofDetected && !supportBreakdown) warnings.push("ASK_SPOOF");
   if (bidSpoofDetected && adverseFlowSignals.length > 0) {
     warnings.push(`BID_SPOOF_ADVERSE_FLOW_${adverseFlowSignals.length}`);
   }
 
-  // A wall that is already disappearing cannot vote for its own reliability. Ask spoof
-  // may remain a bullish vote only while neither side is in a blocking spoof/support pair.
-  const persistentBidVote = features.persistentBidWall && !bidSpoofDetected;
-  const askSpoofVote = askSpoof >= 0.45 && !bidSpoofDetected && !supportBreakdown;
-  const positiveVotes = [
-    pressure >= 0.04,
-    microprice >= -0.03,
-    imbalance >= -0.12,
-    ofi >= 0.12,
-    persistentBidVote,
-    askSpoofVote,
+  // Entry is armed by the completed pre-breakout candle, but executed only when real buys
+  // are accelerating now. Resting depth alone never counts as pressure.
+  const pressureConfirmations = [
+    ofi >= 0.45,
+    micropriceBps >= 0,
+    imbalance >= 0,
+    finite(features.depthRatio) >= 0.90,
+    finite(features.tradeSpeedTrend) >= -0.05,
   ].filter(Boolean).length;
-  const flowScore = pressure * 0.42 + microprice * 0.24 + imbalance * 0.20 + ofi * 0.14;
-  const arrival = Math.max(0, finite(features.tradeArrivalRate));
-  if (!(arrival > 0 && positiveVotes >= 3 && flowScore >= -0.015)) {
-    reasons.push("LOB_FLOW_NOT_BUYABLE_NOW");
-  }
+  if (pressure < 0.10) reasons.push("BUY_PRESSURE_TOO_WEAK");
+  if (buySellRatio < 1.25) reasons.push("AGGRESSIVE_BUY_NOTIONAL_TOO_WEAK");
+  if (!(acceleration > 0)) reasons.push("BUY_FLOW_NOT_ACCELERATING");
+  if (pressureConfirmations < 3) reasons.push("BUY_PRESSURE_NOT_CONFIRMED");
+  if (!(Math.max(0, finite(features.tradeArrivalRate)) > 0)) reasons.push("NO_LIVE_BUY_TAPE");
 
+  const flowScore = pressure * 0.42 + microprice * 0.24 + imbalance * 0.20 + ofi * 0.14;
   return {
     reasons: [...new Set(reasons)],
     warnings: [...new Set(warnings)],
     adverseFlowSignals,
-    positiveVotes,
+    positiveVotes: pressureConfirmations,
     flowScore,
     bidSpoofThreshold: trapCfg.bidSpoofScore,
     askSpoofThreshold: trapCfg.askSpoofScore,
@@ -209,7 +207,7 @@ export function evaluateLobEntry(
   const cfg = { ...DEFAULT_LOB_ENTRY_CONFIG, ...overrides };
   // Current operator policy is authoritative even when an old scanner/runtime profile
   // still sends the former 1.5 RR floor or the 5% emergency boundary as a fixed stop.
-  cfg.minObservationMs = 50_000;
+  cfg.minObservationMs = 15_000;
   cfg.minEvBps = 0;
   cfg.minNetProfitBps = Math.max(
     OPERATOR_MIN_TARGET_NET_PROFIT_BPS,
@@ -316,26 +314,18 @@ export function evaluateLobEntry(
     else warnings.push(`LOB_DIAGNOSTIC_${trap.name}`);
   }
 
-  // Operator-added 1m entry gate. It is opt-in at the shared-library level so legacy
-  // research fixtures remain valid, but both production admission stages set it to true.
+  // The completed candle is deliberately the small pre-breakout candle. A large expansion
+  // candle, a late three-bar advance, or a band that is not just beginning to widen blocks.
   if (cfg.requireMinuteEntryGate === true) {
-    const k = Number(features.m1StochK);
-    const d = Number(features.m1StochD);
     if (
       features.m1GateVersion !== MINUTE_ENTRY_GATE_VERSION ||
       features.m1DataAvailable !== true
     ) {
       reasons.push("M1_CANDLE_DATA_UNAVAILABLE");
-    } else if (
-      Math.max(0, Math.floor(Number(features.m1CompletedBars) || 0)) < 18 ||
-      !Number.isFinite(k) || !Number.isFinite(d)
-    ) {
+    } else if (Math.max(0, Math.floor(Number(features.m1CompletedBars) || 0)) < 30) {
       reasons.push("M1_CANDLE_DATA_INSUFFICIENT");
-    } else {
-      if (features.m1PreviousBullish !== true) {
-        reasons.push("M1_PREVIOUS_CANDLE_NOT_BULLISH");
-      }
-      if (!(k > d)) reasons.push("M1_STOCH_K_NOT_ABOVE_D");
+    } else if (features.m1PreBreakout !== true) {
+      reasons.push("M1_PREBREAKOUT_SETUP_NOT_READY");
     }
   }
 
@@ -350,7 +340,7 @@ export function evaluateLobEntry(
     !(finite(features.gainerRank) >= 1 && finite(features.gainerRank) <= maxGainerRank)
   ) reasons.push("OUTSIDE_24H_GAINER_TOP10");
   if (features.samples < cfg.minSamples) reasons.push("INSUFFICIENT_LOB_SAMPLES");
-  if (features.observationMs < 50_000) reasons.push("INSUFFICIENT_50S_OBSERVATION");
+  if (features.observationMs < 15_000) reasons.push("INSUFFICIENT_15S_OBSERVATION");
   if (features.bookAgeMs == null || features.bookAgeMs > cfg.maxBookAgeMs) {
     reasons.push("STALE_ORDERBOOK");
   }

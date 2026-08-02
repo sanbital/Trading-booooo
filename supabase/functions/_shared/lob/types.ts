@@ -82,6 +82,21 @@ export interface LobFeatureVector {
   m1CompletedBars?: number;
   m1CompletedCandleOpenTime?: string | null;
   m1CompletedCandleCloseTime?: string | null;
+  m1BandPosition?: number | null;
+  m1BandWidth?: number | null;
+  m1BandWidthExpansionRatio?: number | null;
+  m1UpperBandSlopePct?: number | null;
+  m1BodyAtrRatio?: number | null;
+  m1RangeAtrRatio?: number | null;
+  m1RecentAdvanceAtr?: number | null;
+  m1VolumeRatio?: number | null;
+  m1SqueezeRelease?: boolean;
+  m1PreBreakout?: boolean;
+  m1BearishUpperBandReentry?: boolean;
+  m1UpperBandReclaimed?: boolean;
+  m1PreviousAtUpperBand?: boolean;
+  m1LatestClose?: number | null;
+  m1UpperBand?: number | null;
 }
 
 export interface LobPatternSignal {

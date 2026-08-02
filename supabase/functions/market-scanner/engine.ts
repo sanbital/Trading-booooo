@@ -127,6 +127,21 @@ export type UniverseRow = {
   m1_completed_bars?: number;
   m1_completed_candle_open_time?: string | null;
   m1_completed_candle_close_time?: string | null;
+  m1_band_position?: number | null;
+  m1_band_width?: number | null;
+  m1_band_width_expansion_ratio?: number | null;
+  m1_upper_band_slope_pct?: number | null;
+  m1_body_atr_ratio?: number | null;
+  m1_range_atr_ratio?: number | null;
+  m1_recent_advance_atr?: number | null;
+  m1_volume_ratio?: number | null;
+  m1_squeeze_release?: boolean;
+  m1_pre_breakout?: boolean;
+  m1_bearish_upper_band_reentry?: boolean;
+  m1_upper_band_reclaimed?: boolean;
+  m1_previous_at_upper_band?: boolean;
+  m1_latest_close?: number | null;
+  m1_upper_band?: number | null;
   recent_notional_per_second?: number;
   notional_acceleration?: number;
   trade_count_per_second?: number;
@@ -3112,6 +3127,21 @@ export function finalizeCandidate(
       m1CompletedBars: Math.max(0, Math.floor(finiteOr(period.universe.m1_completed_bars, 0))),
       m1CompletedCandleOpenTime: period.universe.m1_completed_candle_open_time ?? null,
       m1CompletedCandleCloseTime: period.universe.m1_completed_candle_close_time ?? null,
+      m1BandPosition: period.universe.m1_band_position ?? null,
+      m1BandWidth: period.universe.m1_band_width ?? null,
+      m1BandWidthExpansionRatio: period.universe.m1_band_width_expansion_ratio ?? null,
+      m1UpperBandSlopePct: period.universe.m1_upper_band_slope_pct ?? null,
+      m1BodyAtrRatio: period.universe.m1_body_atr_ratio ?? null,
+      m1RangeAtrRatio: period.universe.m1_range_atr_ratio ?? null,
+      m1RecentAdvanceAtr: period.universe.m1_recent_advance_atr ?? null,
+      m1VolumeRatio: period.universe.m1_volume_ratio ?? null,
+      m1SqueezeRelease: period.universe.m1_squeeze_release === true,
+      m1PreBreakout: period.universe.m1_pre_breakout === true,
+      m1BearishUpperBandReentry: period.universe.m1_bearish_upper_band_reentry === true,
+      m1UpperBandReclaimed: period.universe.m1_upper_band_reclaimed === true,
+      m1PreviousAtUpperBand: period.universe.m1_previous_at_upper_band === true,
+      m1LatestClose: period.universe.m1_latest_close ?? null,
+      m1UpperBand: period.universe.m1_upper_band ?? null,
     };
     const spread = Math.max(0, micro.spread_bps || 0);
     // v6.2: the learned profile scales the signal edge and can retire a veto that

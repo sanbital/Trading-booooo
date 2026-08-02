@@ -28,6 +28,7 @@ function normalizeUpbit(raw: unknown): MinuteCandle[] {
       high: Number(row.high_price),
       low: Number(row.low_price),
       close: Number(row.trade_price),
+      volume: Number(row.candle_acc_trade_volume),
     }];
   });
 }
@@ -42,6 +43,7 @@ function normalizeBinance(raw: unknown): MinuteCandle[] {
       high: Number(value[2]),
       low: Number(value[3]),
       close: Number(value[4]),
+      volume: Number(value[5]),
     }];
   });
 }
@@ -78,8 +80,8 @@ export async function loadMinuteEntryGate(
 ): Promise<MinuteEntryGate> {
   try {
     const url = exchange === "upbit"
-      ? `${UPBIT}/v1/candles/minutes/1?market=${encodeURIComponent(market)}&count=40`
-      : `${BINANCE}/api/v3/klines?symbol=${encodeURIComponent(market)}&interval=1m&limit=40`;
+      ? `${UPBIT}/v1/candles/minutes/1?market=${encodeURIComponent(market)}&count=60`
+      : `${BINANCE}/api/v3/klines?symbol=${encodeURIComponent(market)}&interval=1m&limit=60`;
     const raw = await fetchJson(url);
     return evaluateMinuteEntryGate(
       exchange === "upbit" ? normalizeUpbit(raw) : normalizeBinance(raw),

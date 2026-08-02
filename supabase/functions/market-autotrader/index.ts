@@ -1291,6 +1291,21 @@ function liveLobFeatures(scan: any, market: any): LobFeatureVector {
     m1CompletedBars: Math.max(0, Math.floor(finite(base.m1CompletedBars, 0))),
     m1CompletedCandleOpenTime: base.m1CompletedCandleOpenTime ?? null,
     m1CompletedCandleCloseTime: base.m1CompletedCandleCloseTime ?? null,
+    m1BandPosition: base.m1BandPosition ?? null,
+    m1BandWidth: base.m1BandWidth ?? null,
+    m1BandWidthExpansionRatio: base.m1BandWidthExpansionRatio ?? null,
+    m1UpperBandSlopePct: base.m1UpperBandSlopePct ?? null,
+    m1BodyAtrRatio: base.m1BodyAtrRatio ?? null,
+    m1RangeAtrRatio: base.m1RangeAtrRatio ?? null,
+    m1RecentAdvanceAtr: base.m1RecentAdvanceAtr ?? null,
+    m1VolumeRatio: base.m1VolumeRatio ?? null,
+    m1SqueezeRelease: base.m1SqueezeRelease === true,
+    m1PreBreakout: base.m1PreBreakout === true,
+    m1BearishUpperBandReentry: base.m1BearishUpperBandReentry === true,
+    m1UpperBandReclaimed: base.m1UpperBandReclaimed === true,
+    m1PreviousAtUpperBand: base.m1PreviousAtUpperBand === true,
+    m1LatestClose: base.m1LatestClose ?? null,
+    m1UpperBand: base.m1UpperBand ?? null,
   };
 }
 
@@ -7248,29 +7263,31 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision = { action: "STOP", reason: "scalp_max_single_loss" } as any;
         }
       }
-      // v7.1.4 volatility-aware LOB exit policy. This final override is the only
-      // non-emergency authority allowed to approve an executable sell.
+      // PREBREAKOUT-BURST-V1: no planned stop, no experimental arm stop, no fixed target
+      // and no time-based exit. The only loss floor is -2% of executable net. Normal exits
+      // follow the observed burst ending: bearish upper-band re-entry plus weak tape, a
+      // failed reclaim, or an actual order-book collapse.
       if (lobMode && !settings.emergency_liquidation) {
+        const BURST_POLICY_VERSION = "PREBREAKOUT-BURST-V1";
+        const requestedAction = decision.action;
+        const requestedReason = String((decision as any).reason || "");
+        const safetyRequested = requestedAction === "STOP" &&
+          (requestedReason.includes("RISK_EMERGENCY") ||
+            requestedReason.includes("RECONCILIATION_FAILURE"));
         const policyFeeRate = clamp(FEE_PCT[exchange] / 100, 0, 0.01);
         const policyQuantity = Math.max(0, finite(position.remaining_quantity));
         const policyUnrecoveredCost = exactUnrecoveredPositionCost(position);
-        const requestedAction = decision.action;
-        const requestedReason = String((decision as any).reason || "");
-        const targetRequested = requestedAction === "TARGET_1" || requestedAction === "TARGET_2";
-        const reversalRequested = requestedAction === "STOP" &&
-          (requestedReason === "lob:SIGNAL_REVERSAL" ||
-            requestedReason === "lob:LOB_INVALIDATION");
-        const reversalQualified = Boolean(position.metadata?.lob_soft_exit_qualified);
-        const post180BuyFeeQuote = heldSeconds >= 180
-          ? await paidBuyFeeQuote(position)
-          : Math.max(0, finite(position.paid_fees_quote));
-        // The -2% floor now applies at any age, so the executable quote is needed at any
-        // age too. It walks a book already in memory — no extra network call.
-        const post180Quote = quoteExecutableNetExit({
-          bids: (books[position.market]?.bids || []).map((row: any) => ({
-            price: finite(row?.price ?? row?.[0]),
-            size: finite(row?.size ?? row?.[1]),
-          })),
+        const liveBook = books[position.market];
+        const liveBids = (liveBook?.bids || []).map((row: any) => ({
+          price: finite(row?.price ?? row?.[0]),
+          size: finite(row?.size ?? row?.[1]),
+        }));
+        const liveAsks = (liveBook?.asks || []).map((row: any) => ({
+          price: finite(row?.price ?? row?.[0]),
+          size: finite(row?.size ?? row?.[1]),
+        }));
+        const executableQuote = quoteExecutableNetExit({
+          bids: liveBids,
           requestedQuantity: policyQuantity,
           availableQuantity: position.is_paper
             ? policyQuantity
@@ -7282,185 +7299,127 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           sellFeeRate: policyFeeRate,
           slippageSafetyRate: post180SlippageSafetyRate(settings),
         });
-
-        // v7.3.0: measure the terminal policy on the price an exit can actually get.
-        // Until now the -2% test ran on the display price while the exit was an unbounded
-        // market sell, so post-180 stops realised a median -312bp against a -200bp policy.
-        // The executable VWAP walks the visible bids for the full size; when the book
-        // cannot absorb it there is no better price hiding anywhere, so the display price
-        // remains the fallback and the stop still fires.
-        const executableExitPrice = post180Quote && post180Quote.executableVwap > 0
-          ? post180Quote.executableVwap
+        const executableExitPrice = executableQuote.executableVwap > 0
+          ? executableQuote.executableVwap
           : current;
-        const guardedExitPrice = executableExitPrice;
-        const guardedNetProfitQuote = guardedExitPrice * policyQuantity *
+        const guardedNetProfitQuote = executableExitPrice * policyQuantity *
             (1 - policyFeeRate) - policyUnrecoveredCost;
         const guardedNetReturnPct = policyUnrecoveredCost > 0
           ? guardedNetProfitQuote / policyUnrecoveredCost * 100
           : 0;
-        const drawdownPct = lobEntryPrice > 0 ? (guardedExitPrice / lobEntryPrice - 1) * 100 : 0;
-        // 180 seconds is not a minimum hold. It is the condition that selects which exit
-        // strategy applies: before it, a position leaves at its (fluid) target or on a
-        // confirmed book breakdown; after it, any positive executable net closes it
-        // immediately. Taking profit is available throughout.
-        //
-        // The one price-based floor spans both regimes. The scanner's planned stop used to
-        // terminate positions on touch at any age — a 29s exit at -38bp — which is neither
-        // regime's rule. It is gone; -2% of executable net is the absolute backstop.
-        //
-        // EXP-1 (2026-08-02): -2% was the ONLY force-sell, so every LOB loser rode to it and
-        // the realised stop averaged -239bp against a +42bp target. A counterfactual sweep on
-        // 239 closed positions put the operating point at 30-70bp under every execution
-        // slippage assumption tested, so the randomised arm width is now the operative stop
-        // and -2% sits below it as the backstop. Widths and hash must stay byte-identical to
-        // public.exp_stop_arm_bps(uuid) and to the market-autotrader core.ts override, or
-        // runtime and database judge different positions. The database guard tests price
-        // drawdown, so this test does too.
-        const exp1ArmWidthsBps = [30, 50, 90];
-        const exp1ArmHash = parseInt(String(position.id ?? "").replace(/-/g, "").slice(-8), 16);
-        const exp1ArmBps = exp1ArmWidthsBps[
-          (Number.isFinite(exp1ArmHash) ? exp1ArmHash : 0) % exp1ArmWidthsBps.length
+
+        const freshMinuteGate = await loadMinuteEntryGate(exchange, position.market);
+        const liveImbalance = topOfBookImbalance(liveBids, liveAsks);
+        const livePressure = finite(liveBook?.trade_flow?.pressure, 0);
+        const entryDepth = Math.max(1, finite(position.metadata?.entry_bid_depth_quote, 1));
+        const bidDepthRetention = liveBook ? bidDepthQuote(liveBook) / entryDepth : 0;
+        const bestBid = finite(liveBook?.best_bid);
+        const bestAsk = finite(liveBook?.best_ask);
+        const liveSpreadBps = bestBid > 0 ? (bestAsk / bestBid - 1) * 10_000 : 9999;
+        const entrySpreadBps = Math.max(
+          1,
+          finite(
+            position.metadata?.lob_signal?.features?.spreadBps,
+            position.metadata?.entry_spread_bps,
+          ),
+        );
+        const weaknessSignals = [
+          livePressure <= 0,
+          liveImbalance <= -0.05,
+          bidDepthRetention <= 0.70,
+          liveSpreadBps >= Math.max(10, entrySpreadBps * 1.8),
         ];
-        if (guardedNetReturnPct <= -2) {
+        const weaknessVotes = weaknessSignals.filter(Boolean).length;
+        const orderbookCollapse = (livePressure <= -0.35 && liveImbalance <= -0.20) ||
+          (bidDepthRetention <= 0.45 &&
+            liveSpreadBps >= Math.max(12, entrySpreadBps * 2));
+
+        const nowMs = Date.now();
+        const previousWatchText = String(position.metadata?.bb_exit_watch_started_at || "");
+        const previousWatchMs = Date.parse(previousWatchText);
+        let watchStartedMs = Number.isFinite(previousWatchMs) ? previousWatchMs : Number.NaN;
+        if (freshMinuteGate.upperBandReclaimed) watchStartedMs = Number.NaN;
+        else if (freshMinuteGate.bearishUpperBandReentry && !Number.isFinite(watchStartedMs)) {
+          watchStartedMs = nowMs;
+        }
+        const watchAgeSeconds = Number.isFinite(watchStartedMs)
+          ? Math.max(0, (nowMs - watchStartedMs) / 1000)
+          : 0;
+        const reentryConfirmed = freshMinuteGate.bearishUpperBandReentry && weaknessVotes >= 2;
+        const reclaimFailed = Number.isFinite(watchStartedMs) && watchAgeSeconds >= 45 &&
+          !freshMinuteGate.upperBandReclaimed && weaknessVotes >= 1;
+
+        if (safetyRequested) {
+          decision = { action: "STOP", fraction: 1, reason: requestedReason } as any;
+        } else if (guardedNetReturnPct <= -2) {
+          decision = { action: "STOP", fraction: 1, reason: "HARD_STOP_MINUS_2" } as any;
+        } else if (orderbookCollapse) {
+          decision = { action: "STOP", fraction: 1, reason: "ORDERBOOK_COLLAPSE" } as any;
+        } else if (reentryConfirmed) {
           decision = {
             action: "STOP",
             fraction: 1,
-            reason: "HARD_STOP_MINUS_2",
-          };
-        } else if (drawdownPct <= -(exp1ArmBps / 100)) {
-          decision = {
-            action: "STOP",
-            fraction: 1,
-            reason: `EXP1_ARM_STOP_${exp1ArmBps}`,
-          };
-        } else if (heldSeconds < 180) {
-          if (targetRequested) {
-            decision = {
-              action: "TARGET_1",
-              fraction: 1,
-              reason: "lob:pre-180-target",
-            };
-          } else if (reversalRequested && reversalQualified) {
-            decision = {
-              action: "STOP",
-              fraction: 1,
-              reason: requestedReason,
-            };
-          } else {
-            decision = {
-              action: "NONE",
-              fraction: 0,
-              reason: "lob:pre-180-hold-unless-target-or-qualified-reversal",
-            };
-          }
-        } else if (post180Quote?.allowed) {
-          decision = {
-            action: "STOP",
-            fraction: 1,
-            reason: "POSITIVE_NET_AFTER_180S",
-          };
+            reason: "BB_UPPER_REENTRY_CONFIRMED",
+          } as any;
+        } else if (reclaimFailed) {
+          decision = { action: "STOP", fraction: 1, reason: "BB_RECLAIM_FAILED" } as any;
         } else {
           decision = {
             action: "NONE",
             fraction: 0,
-            reason: "lob:post-180-hold-until-net-positive-or-minus2pct",
-          };
+            reason: "BURST_CONTINUES_OR_EXIT_NOT_CONFIRMED",
+          } as any;
         }
 
-        if (heldSeconds >= 180 || decision.action !== "NONE") {
-          const executableAudit = post180Quote
-            ? executableNetExitAudit(
-              position,
-              post180Quote,
-              post180BuyFeeQuote,
-              new Date().toISOString(),
-            )
-            : null;
+        const watchIso = Number.isFinite(watchStartedMs)
+          ? new Date(watchStartedMs).toISOString()
+          : null;
+        const watchChanged = watchIso !== (previousWatchText || null);
+        if (watchChanged || decision.action !== "NONE") {
+          const measuredAt = new Date(nowMs).toISOString();
+          const approvedReason = String((decision as any).reason || "");
+          const approvedAction = decision.action === "STOP" ? "STOP" : "NONE";
+          const exitPolicyQuote = decision.action === "STOP"
+            ? {
+              revision: VERSION,
+              burst_policy_version: BURST_POLICY_VERSION,
+              measured_at: measuredAt,
+              price: executableExitPrice,
+              executable_vwap: executableQuote.executableVwap,
+              sell_price: executableQuote.limitPrice,
+              approved_action: approvedAction,
+              approved_reason: approvedReason,
+              requested_action: requestedAction,
+              requested_reason: requestedReason,
+              hard_stop_net_return_pct: guardedNetReturnPct,
+              hard_stop_net_profit_quote: guardedNetProfitQuote,
+              bb_upper_reentry_confirmed: reentryConfirmed,
+              bb_reclaim_failed: reclaimFailed,
+              orderbook_collapse: orderbookCollapse,
+              bb_weakness_votes: weaknessVotes,
+              bb_exit_watch_age_seconds: watchAgeSeconds,
+              minute_entry_gate: freshMinuteGate,
+              live_pressure: livePressure,
+              live_imbalance: liveImbalance,
+              bid_depth_retention: bidDepthRetention,
+              spread_bps: liveSpreadBps,
+              held_seconds: heldSeconds,
+            }
+            : position.metadata?.exit_policy_quote;
           position = {
             ...position,
             ...(await patch("trading_positions", `id=eq.${position.id}`, {
               metadata: {
                 ...(position.metadata || {}),
-                exit_policy_quote: {
-                  ...(executableAudit || {
-                    revision: VERSION,
-                    measured_at: new Date().toISOString(),
-                  }),
-                  // guard_lob_sell_order_v714 reads exit_policy_quote.price and rejects the
-                  // sell outright when it is absent. Nothing ever wrote that key, so every
-                  // live LOB exit was failing V724_EXIT_BLOCK_MISSING_ECONOMICS. It carries
-                  // the same executable price the runtime policy just decided on, which also
-                  // keeps the database re-check in agreement with the runtime by construction.
-                  price: guardedExitPrice,
-                  price_basis_runtime: heldSeconds >= 180 && post180Quote &&
-                      post180Quote.executableVwap > 0
-                    ? "EXECUTABLE_VWAP"
-                    : "LAST_TRADE_PRICE",
-                  held_seconds: heldSeconds,
-                  hard_stop_net_profit_quote: guardedNetProfitQuote,
-                  drawdown_pct: drawdownPct,
-                  requested_action: requestedAction,
-                  requested_reason: requestedReason,
-                  reversal_qualified: reversalQualified,
-                  soft_signal_age_seconds: finite(
-                    position.metadata?.lob_soft_exit_started_at
-                      ? (Date.now() -
-                        Date.parse(String(position.metadata.lob_soft_exit_started_at))) /
-                        1000
-                      : 0,
-                  ),
-                  soft_signal_required_seconds: finite(
-                    position.metadata?.lob_soft_exit_required_seconds,
-                  ),
-                  approved_action: decision.action,
-                  approved_reason: (decision as any).reason,
-                },
+                bb_exit_watch_started_at: watchIso,
+                bb_last_minute_gate: freshMinuteGate,
+                ...(decision.action === "STOP" ? { exit_policy_quote: exitPolicyQuote } : {}),
               },
             }))[0],
           };
         }
       }
 
-      if (lobMode && heldSeconds < 180 && decision.action !== "NONE") {
-        const approvedPre180Target = decision.action === "TARGET_1" ||
-          decision.action === "TARGET_2";
-        const approvedPre180Reversal = decision.action === "STOP" &&
-          ((decision as any).reason === "lob:SIGNAL_REVERSAL" ||
-            (decision as any).reason === "lob:LOB_INVALIDATION") &&
-          Boolean(position.metadata?.lob_soft_exit_qualified);
-        const approvedPre180PlannedStop = decision.action === "STOP" &&
-          (decision as any).reason === "lob:STOP_HIT" &&
-          current <= finite(position.stop_price);
-        // The two price floors are age-independent by design and the database guard already
-        // clears both ahead of its own 180s branch. This list did not carry them, so a
-        // position that breached -2% inside 180 seconds was held anyway and kept falling —
-        // realised stops reached -245bp (binance) and -319bp (upbit) against a -200bp policy.
-        // EXP-1 arm stops fire mostly inside 180s, so without this they never execute.
-        const approvedPre180PriceFloor = decision.action === "STOP" &&
-          ((decision as any).reason === "HARD_STOP_MINUS_2" ||
-            String((decision as any).reason || "").startsWith("EXP1_ARM_STOP_"));
-        if (
-          !approvedPre180Target && !approvedPre180Reversal &&
-          !approvedPre180PlannedStop && !approvedPre180PriceFloor
-        ) {
-          await event(
-            "EXIT_BLOCKED_PRE180_POLICY",
-            `${exchange}:${position.market} exit was not an approved target, planned stop, or qualified reversal`,
-            {
-              held_seconds: heldSeconds,
-              blocked_action: decision.action,
-              blocked_reason: (decision as any).reason || null,
-              current_price: current,
-            },
-            { cycleId, positionId: position.id, level: "WARNING" },
-          );
-          decision = {
-            action: "NONE",
-            fraction: 0,
-            reason: "EXIT_BLOCKED_PRE180_POLICY",
-          } as any;
-        }
-      }
       if (decision.action === "NONE") continue;
       // v5.3: the resting sell locks the base asset. Cancel and CONFIRM before any market
       // exit; a rejected sell would leave the position open with no protection.
@@ -7468,8 +7427,10 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         const nonPriceDecisionConfirmed = String(decision.reason || "").startsWith("lob:") ||
           String(decision.reason || "").startsWith("live_hold:") ||
           String(decision.reason || "").startsWith("rotation:") ||
-          decision.reason === "POSITIVE_NET_AFTER_180S" ||
-          decision.reason === "HARD_STOP_MINUS_2";
+          decision.reason === "HARD_STOP_MINUS_2" ||
+          decision.reason === "BB_UPPER_REENTRY_CONFIRMED" ||
+          decision.reason === "BB_RECLAIM_FAILED" ||
+          decision.reason === "ORDERBOOK_COLLAPSE";
         const cancelled = await cancelRestingTakeProfit(position, cycleId);
         position = cancelled.position;
         if (!cancelled.ok) {
