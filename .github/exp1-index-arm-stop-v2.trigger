@@ -1,1 +1,2 @@
-Apply the two reviewed EXP-1 index.ts replacements, format, and run deno check.
+apply reviewed EXP-1 index arm stop patch
+triggered_at=2026-08-02T22:31:00+09:00
