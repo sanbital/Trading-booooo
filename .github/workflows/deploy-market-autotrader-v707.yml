@@ -88,3 +88,5 @@ jobs:
           for fn in market-scanner market-autotrader; do
             supabase functions deploy "$fn" --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
           done
+
+# pull-request validation trigger for PREBREAKOUT-BURST-V1
