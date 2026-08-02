@@ -1,0 +1,16 @@
+status=0
+commit=c2d340e6997bf8673dc6e9a473ab6362cec61306
+--- output ---
+PREBREAKOUT-BURST-V1 production patch applied
+--- changed files ---
+ M .github/workflows/deploy-market-autotrader-v707.yml
+ M supabase/functions/_shared/lob/entry.ts
+ M supabase/functions/_shared/lob/minute-entry-gate.test.ts
+ M supabase/functions/_shared/lob/minute-entry-gate.ts
+ M supabase/functions/_shared/lob/minute-entry-market.ts
+ M supabase/functions/_shared/lob/types.ts
+ M supabase/functions/market-autotrader/index.ts
+ M supabase/functions/market-scanner/engine.ts
+ M supabase/functions/market-scanner/index.ts
+?? prebreakout-patch-diagnostic.txt
+?? supabase/migrations/20260802151000_prebreakout_burst_entry_exit_policy.sql
