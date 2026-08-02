@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - .github/exp1-index-arm-stop-main.trigger
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
