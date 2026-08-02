@@ -122,7 +122,7 @@ import { buildTradingHeartbeatPatch, type TradingHeartbeatPatch } from "./heartb
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 
-const VERSION = "7.3.2-NO-PLANNED-STOP-TRIGGER";
+const VERSION = "7.3.4-NET-POSITIVE-EXIT";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -7264,14 +7264,6 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           ? guardedNetProfitQuote / policyUnrecoveredCost * 100
           : 0;
         const drawdownPct = lobEntryPrice > 0 ? (guardedExitPrice / lobEntryPrice - 1) * 100 : 0;
-        // The recovery bet is kept, but it is no longer open-ended. Measured over 72h it
-        // paid +27bp on 37% of attempts and cost -298bp on the rest, and the losing tail
-        // ran to a 4,479s mean hold. Recovery exits themselves clear at a 373s median, so
-        // a 900s cap preserves 78% of them while ending 64% of the runaway losses.
-        const post180MaxHoldSeconds = Math.round(
-          clamp(finite((settings as any).lob_post180_max_hold_seconds, 900), 180, 3600),
-        );
-
         // 180 seconds is not a minimum hold. It is the condition that selects which exit
         // strategy applies: before it, a position leaves at its (fluid) target or on a
         // confirmed book breakdown; after it, any positive executable net closes it
@@ -7313,12 +7305,6 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             fraction: 1,
             reason: "POSITIVE_NET_AFTER_180S",
           };
-        } else if (heldSeconds >= post180MaxHoldSeconds) {
-          decision = {
-            action: "STOP",
-            fraction: 1,
-            reason: "POST180_MAX_HOLD_TIMEOUT",
-          };
         } else {
           decision = {
             action: "NONE",
@@ -7356,7 +7342,6 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
                       post180Quote.executableVwap > 0
                     ? "EXECUTABLE_VWAP"
                     : "LAST_TRADE_PRICE",
-                  post180_max_hold_seconds: post180MaxHoldSeconds,
                   held_seconds: heldSeconds,
                   hard_stop_net_profit_quote: guardedNetProfitQuote,
                   drawdown_pct: drawdownPct,
@@ -7422,8 +7407,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           String(decision.reason || "").startsWith("live_hold:") ||
           String(decision.reason || "").startsWith("rotation:") ||
           decision.reason === "POSITIVE_NET_AFTER_180S" ||
-          decision.reason === "HARD_STOP_MINUS_2" ||
-          decision.reason === "POST180_MAX_HOLD_TIMEOUT";
+          decision.reason === "HARD_STOP_MINUS_2";
         const cancelled = await cancelRestingTakeProfit(position, cycleId);
         position = cancelled.position;
         if (!cancelled.ok) {

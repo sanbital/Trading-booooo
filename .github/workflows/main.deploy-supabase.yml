@@ -164,7 +164,9 @@ jobs:
             --file supabase/migrations/20260730055800_strict_lob_live_admission_v706.sql \
             --file supabase/migrations/20260802040000_v730_executable_stop_parity_and_post180_cap.sql \
             --file supabase/migrations/20260802050000_v731_restore_quote_fallbacks_and_planned_stop_authority.sql \
-            --file supabase/migrations/20260802060000_v732_planned_stop_is_not_an_exit_trigger.sql
+            --file supabase/migrations/20260802060000_v732_planned_stop_is_not_an_exit_trigger.sql \
+            --file supabase/migrations/20260802070000_v733_repair_post180_timeout_branch.sql \
+            --file supabase/migrations/20260802080000_v734_remove_post180_hold_cap.sql
 
       - name: Verify the sell guard survived the batch
         shell: bash
@@ -205,8 +207,17 @@ jobs:
               raise exception
                 'planned-stop authority is gated on a reason string again; risk control must not depend on a diagnostic';
             end if;
-            if position('POST180_MAX_HOLD_TIMEOUT' in v_def) = 0 then
-              raise exception 'guard is missing the bounded post-180 timeout branch';
+            if position('POST180_MAX_HOLD_TIMEOUT' in v_def) > 0 then
+              raise exception
+                'the post-180 hold carries a time cap again; after 180s only positive net or minus 2 percent may close a position';
+            end if;
+            -- A blind substitution once turned an equality test into "= 'a', 'b'", which
+            -- CREATE FUNCTION accepts because PL/pgSQL defers parsing an IF until the branch
+            -- is reached. It then failed at runtime and made the timeout unreachable.
+            if position('v_policy_revision = ''7.3.0' in v_def) > 0
+               or position('v_policy_revision = ''7.3.2' in v_def) > 0 then
+              raise exception
+                'a revision test is an equality against a comma list; it will fail when the branch is first reached';
             end if;
             raise notice 'sell guard end state verified';
           end

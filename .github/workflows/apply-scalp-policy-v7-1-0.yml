@@ -54,7 +54,7 @@ jobs:
           deploy = Path(".github/workflows/deploy-market-autotrader-v707.yml").read_text()
           guard = Path(".github/workflows/apply-scalp-policy-v7-1-0.yml").read_text()
 
-          version = "7.3.2-NO-PLANNED-STOP-TRIGGER"
+          version = "7.3.4-NET-POSITIVE-EXIT"
           assert f'const VERSION = "{version}";' in engine
           assert f'ENGINE_VERSION = "{version}"' in scanner
           assert f'const VERSION = "{version}";' in gateway

@@ -108,9 +108,14 @@ export function quoteExecutableNetExit(input: {
     : 0;
   const explicitSlippageReserve = fullDepth ? expectedGrossProceedsQuote * slippageSafetyRate : 0;
   const slippageSafetyQuote = depthToFloorReserve + explicitSlippageReserve;
+  // Net profit is what the sale actually leaves behind: proceeds less the fee that is
+  // really charged and the cost not yet recovered. The slippage reserve is a safety margin,
+  // not a cost, and subtracting it here turned "sell when net is positive" into "sell when
+  // net clears roughly 9bp" — positions sat open for hours showing a profit the policy
+  // refused to take. The reserve is still computed, and still shapes the limit price; it
+  // just no longer decides whether the position may be closed.
   const expectedNetProfitQuote = fullDepth
-    ? expectedGrossProceedsQuote - expectedSellFeeQuote - slippageSafetyQuote -
-      unrecoveredCostQuote
+    ? expectedGrossProceedsQuote - expectedSellFeeQuote - unrecoveredCostQuote
     : Number.NEGATIVE_INFINITY;
   const executableVwap = fullDepth && sellQuantity > 0
     ? expectedGrossProceedsQuote / sellQuantity
