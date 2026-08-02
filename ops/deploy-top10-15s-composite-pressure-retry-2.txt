@@ -1,0 +1,1 @@
+Retry after widening the database observation constraint to admit the canonical 15-second window.
