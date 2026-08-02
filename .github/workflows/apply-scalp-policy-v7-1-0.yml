@@ -5,9 +5,6 @@ on:
     branches: [main]
     paths:
       - .github/exp1-index-arm-stop-main.trigger
-  schedule:
-    - cron: "*/5 * * * *"
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -21,20 +18,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Check out main
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
+      - name: Fetch main without marketplace actions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REPO_DIR="$RUNNER_TEMP/exp1-repo"
+          rm -rf "$REPO_DIR"
+          git clone --depth=1 "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$REPO_DIR"
+          cd "$REPO_DIR"
+          git checkout main
+          echo "REPO_DIR=$REPO_DIR" >> "$GITHUB_ENV"
 
-      - uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.x
-
-      - name: Apply the two reviewed EXP-1 replacements
+      - name: Apply the two reviewed replacements
         shell: bash
         run: |
           set -euo pipefail
+          cd "$REPO_DIR"
           python3 - <<'PY'
           from pathlib import Path
 
@@ -122,25 +123,32 @@ jobs:
               path.write_text(source, encoding="utf-8")
           PY
 
-      - name: Format and validate
+      - name: Format, type-check, and validate anchors
         shell: bash
         run: |
           set -euo pipefail
-          deno fmt supabase/functions/market-autotrader/index.ts
+          cd "$REPO_DIR"
+          curl -fsSL https://deno.land/install.sh | sh
+          DENO="$HOME/.deno/bin/deno"
+          "$DENO" fmt supabase/functions/market-autotrader/index.ts
           test "$(grep -c 'if (guardedNetReturnPct <= -2) {' supabase/functions/market-autotrader/index.ts)" -eq 1
           test "$(grep -c 'approvedPre180PriceFloor' supabase/functions/market-autotrader/index.ts)" -eq 2
           test "$(grep -c 'const exp1ArmWidthsBps = \[30, 50, 90\];' supabase/functions/market-autotrader/index.ts)" -eq 1
-          deno check supabase/functions/market-autotrader/index.ts
+          "$DENO" check supabase/functions/market-autotrader/index.ts
 
-      - name: Restore guard workflow and commit
+      - name: Commit reviewed source patch to main
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git show 66a7103f4d47496b59896af9190c67f383ff9af1:.github/workflows/apply-scalp-policy-v7-1-0.yml > .github/workflows/apply-scalp-policy-v7-1-0.yml
-          rm -f .github/workflows/exp1-index-arm-stop.yml
+          cd "$REPO_DIR"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add supabase/functions/market-autotrader/index.ts .github/workflows/apply-scalp-policy-v7-1-0.yml
-          git add -A .github/workflows/exp1-index-arm-stop.yml
+          git add supabase/functions/market-autotrader/index.ts
+          if git diff --cached --quiet; then
+            echo "Source already patched; no commit needed."
+            exit 0
+          fi
           git commit -m "fix: enforce EXP-1 arm stops before 180s"
           git push origin HEAD:main
