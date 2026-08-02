@@ -1,0 +1,1 @@
+Verify release 7.3.8, M1 CORE4 + auxiliary score, observation tolerance, engine parity, heartbeats, and open new-entry state.
