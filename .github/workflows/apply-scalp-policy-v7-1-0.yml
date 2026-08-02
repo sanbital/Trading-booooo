@@ -1,30 +1,33 @@
 name: One-time EXP-1 index arm stop patch
 
 on:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened]
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: one-time-exp1-index-arm-stop
+  cancel-in-progress: false
+
 jobs:
   patch:
-    if: github.event.pull_request.title == 'EXP1 index arm stop patch'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - name: Check out PR branch
+      - name: Check out main
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref }}
+          ref: main
           fetch-depth: 0
 
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
 
-      - name: Apply reviewed replacements and validate
+      - name: Apply the two reviewed EXP-1 replacements
         shell: bash
         run: |
           set -euo pipefail
@@ -34,15 +37,23 @@ jobs:
           path = Path("supabase/functions/market-autotrader/index.ts")
           source = path.read_text(encoding="utf-8")
 
-          old_1 = '''        if (guardedNetReturnPct <= -2) {
-            decision = {
-              action: "STOP",
-              fraction: 1,
-              reason: "HARD_STOP_MINUS_2",
-            };
-          } else if (heldSeconds < 180) {'''
+          old_1 = '''        // The one price-based floor spans both regimes. The scanner's planned stop used to
+        // terminate positions on touch at any age — a 29s exit at -38bp — which is neither
+        // regime's rule. It is gone; -2% of executable net is the only price that forces a
+        // sell, and it is measured the same way in both.
+        if (guardedNetReturnPct <= -2) {
+          decision = {
+            action: "STOP",
+            fraction: 1,
+            reason: "HARD_STOP_MINUS_2",
+          };
+        } else if (heldSeconds < 180) {'''
 
-          new_1 = '''        // EXP-1 (2026-08-02): -2% was the only force-sell, so every LOB loser rode to it and
+          new_1 = '''        // The one price-based floor spans both regimes. The scanner's planned stop used to
+        // terminate positions on touch at any age — a 29s exit at -38bp — which is neither
+        // regime's rule. It is gone; -2% of executable net is the absolute backstop.
+        //
+        // EXP-1 (2026-08-02): -2% was the ONLY force-sell, so every LOB loser rode to it and
         // the realised stop averaged -239bp against a +42bp target. A counterfactual sweep on
         // 239 closed positions put the operating point at 30-70bp under every execution
         // slippage assumption tested, so the randomised arm width is now the operative stop
@@ -70,12 +81,18 @@ jobs:
           };
         } else if (heldSeconds < 180) {'''
 
-          old_2 = '''        if (
+          old_2 = '''        const approvedPre180PlannedStop = decision.action === "STOP" &&
+          (decision as any).reason === "lob:STOP_HIT" &&
+          current <= finite(position.stop_price);
+        if (
           !approvedPre180Target && !approvedPre180Reversal &&
           !approvedPre180PlannedStop
         ) {'''
 
-          new_2 = '''        // The two price floors are age-independent by design and the database guard already
+          new_2 = '''        const approvedPre180PlannedStop = decision.action === "STOP" &&
+          (decision as any).reason === "lob:STOP_HIT" &&
+          current <= finite(position.stop_price);
+        // The two price floors are age-independent by design and the database guard already
         // clears both ahead of its own 180s branch. This list did not carry them, so a
         // position that breached -2% inside 180 seconds was held anyway and kept falling —
         // realised stops reached -245bp (binance) and -319bp (upbit) against a -200bp policy.
@@ -88,27 +105,38 @@ jobs:
           !approvedPre180PlannedStop && !approvedPre180PriceFloor
         ) {'''
 
-          if source.count(old_1) != 1:
-              raise SystemExit(f"first anchor count was {source.count(old_1)}, expected 1")
-          if source.count(old_2) != 1:
-              raise SystemExit(f"second anchor count was {source.count(old_2)}, expected 1")
-
-          source = source.replace(old_1, new_1, 1).replace(old_2, new_2, 1)
-          path.write_text(source, encoding="utf-8")
+          already_patched = (
+              source.count("const exp1ArmWidthsBps = [30, 50, 90];") == 1
+              and source.count("approvedPre180PriceFloor") == 2
+          )
+          if not already_patched:
+              if source.count(old_1) != 1:
+                  raise SystemExit(f"first anchor count was {source.count(old_1)}, expected 1")
+              if source.count(old_2) != 1:
+                  raise SystemExit(f"second anchor count was {source.count(old_2)}, expected 1")
+              source = source.replace(old_1, new_1, 1).replace(old_2, new_2, 1)
+              path.write_text(source, encoding="utf-8")
           PY
 
+      - name: Format and validate
+        shell: bash
+        run: |
+          set -euo pipefail
           deno fmt supabase/functions/market-autotrader/index.ts
           test "$(grep -c 'if (guardedNetReturnPct <= -2) {' supabase/functions/market-autotrader/index.ts)" -eq 1
           test "$(grep -c 'approvedPre180PriceFloor' supabase/functions/market-autotrader/index.ts)" -eq 2
           test "$(grep -c 'const exp1ArmWidthsBps = \[30, 50, 90\];' supabase/functions/market-autotrader/index.ts)" -eq 1
           deno check supabase/functions/market-autotrader/index.ts
 
-      - name: Commit patch to PR branch
+      - name: Restore guard workflow and commit
         shell: bash
         run: |
           set -euo pipefail
+          git show 66a7103f4d47496b59896af9190c67f383ff9af1:.github/workflows/apply-scalp-policy-v7-1-0.yml > .github/workflows/apply-scalp-policy-v7-1-0.yml
+          rm -f .github/workflows/exp1-index-arm-stop.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add supabase/functions/market-autotrader/index.ts
+          git add supabase/functions/market-autotrader/index.ts .github/workflows/apply-scalp-policy-v7-1-0.yml
+          git add -A .github/workflows/exp1-index-arm-stop.yml
           git commit -m "fix: enforce EXP-1 arm stops before 180s"
-          git push origin "HEAD:${GITHUB_HEAD_REF}"
+          git push origin HEAD:main
