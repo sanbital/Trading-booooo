@@ -1,0 +1,185 @@
+name: Hotfix gateway engine parity v7.3.8
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/hotfix-gateway-engine-parity-v738.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hotfix-gateway-engine-parity-v738
+  cancel-in-progress: false
+
+env:
+  TARGET_VERSION: 7.3.8-M1-CORE-SCORE-OBS-TOLERANCE
+  OLD_VERSION: 7.3.5-APPROVAL-SURVIVES-REQUOTE
+
+jobs:
+  patch-test-deploy-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out canonical main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Patch only the gateway version constant
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          path = Path("gateway/server.mjs")
+          text = path.read_text()
+          old = f'const VERSION = "{os.environ["OLD_VERSION"]}";'
+          new = f'const VERSION = "{os.environ["TARGET_VERSION"]}";'
+          if new in text:
+              print("gateway source already carries the target version")
+          else:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected exactly one old gateway version constant, found {count}")
+              path.write_text(text.replace(old, new, 1))
+          PY
+          grep -Fq "const VERSION = \"${TARGET_VERSION}\";" gateway/server.mjs
+          ! grep -Fq "const VERSION = \"${OLD_VERSION}\";" gateway/server.mjs
+
+      - name: Run gateway syntax and regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check gateway/server.mjs
+          node --test gateway/server.test.mjs
+
+      - name: Persist canonical source correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- gateway/server.mjs; then
+            echo "No source commit needed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gateway/server.mjs
+          git commit -m "fix: align order gateways with engine v7.3.8"
+          git push origin HEAD:main
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Validate deployment secrets
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          for name in FLY_API_TOKEN FLY_APP_NAME FLY_BINANCE_APP_NAME LEARNING_ACCESS_TOKEN; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::GitHub repository secret ${name} is missing."
+              exit 1
+            fi
+          done
+          if [ "${#LEARNING_ACCESS_TOKEN}" -lt 32 ]; then
+            echo "::error::LEARNING_ACCESS_TOKEN must be at least 32 characters."
+            exit 1
+          fi
+
+      - name: Deploy Tokyo Upbit gateway
+        shell: bash
+        working-directory: gateway
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
+        run: |
+          set -euo pipefail
+          flyctl deploy . --remote-only -a "${FLY_APP_NAME}" --config ./fly.toml --ha=false
+          flyctl scale count 1 -a "${FLY_APP_NAME}" --yes
+          flyctl status -a "${FLY_APP_NAME}"
+
+      - name: Deploy Paris Binance gateway
+        shell: bash
+        working-directory: gateway
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+        run: |
+          set -euo pipefail
+          flyctl deploy . --remote-only -a "${FLY_BINANCE_APP_NAME}" --config ./fly.binance.toml --ha=false
+          flyctl scale count 1 -a "${FLY_BINANCE_APP_NAME}" --yes
+          flyctl status -a "${FLY_BINANCE_APP_NAME}"
+
+      - name: Verify both health endpoints report exact engine parity
+        shell: bash
+        env:
+          FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+        run: |
+          set -euo pipefail
+          for pair in "upbit:${FLY_APP_NAME}" "binance:${FLY_BINANCE_APP_NAME}"; do
+            exchange="${pair%%:*}"
+            app="${pair#*:}"
+            health="$(curl --fail-with-body --retry 15 --retry-delay 3 "https://${app}.fly.dev/health")"
+            HEALTH="$health" EXCHANGE="$exchange" node - <<'NODE'
+          const health = JSON.parse(process.env.HEALTH);
+          const exchange = process.env.EXCHANGE;
+          const target = process.env.TARGET_VERSION;
+          if (health.ok !== true) throw new Error(`${exchange}: health not ok`);
+          if (health.version !== target) {
+            throw new Error(`${exchange}: version=${health.version}, target=${target}`);
+          }
+          if (exchange === "upbit" && health.keys_configured?.upbit !== true) {
+            throw new Error("upbit credentials are not configured");
+          }
+          if (exchange === "binance" && health.keys_configured?.binance !== true) {
+            throw new Error("binance credentials are not configured");
+          }
+          console.log(`${exchange}: ${health.version} health verified`);
+          NODE
+          done
+
+      - name: Verify authenticated account reads through both gateways
+        shell: bash
+        env:
+          FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          gateway_secret="$(printf 'gateway:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
+          node gateway/smoke.mjs "https://${FLY_APP_NAME}.fly.dev" "${gateway_secret}" "upbit"
+          node gateway/smoke.mjs "https://${FLY_BINANCE_APP_NAME}.fly.dev" "${gateway_secret}" "binance"
+
+      - name: Record verified deployment evidence
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL}"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<SQL
+          insert into public.trading_events(level, code, message, details)
+          values (
+            'INFO',
+            'GATEWAY_ENGINE_PARITY_DEPLOYED',
+            'Tokyo and Paris gateways deployed with the current command engine version',
+            jsonb_build_object(
+              'engine_version', '${TARGET_VERSION}',
+              'github_sha', '${GITHUB_SHA}',
+              'verified_at', now(),
+              'health_verified', true,
+              'authenticated_account_reads_verified', true
+            )
+          );
+          SQL
