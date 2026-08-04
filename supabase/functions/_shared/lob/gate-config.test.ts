@@ -1,10 +1,24 @@
-import { buildLobGateConfig, LOB_MIN_NET_REWARD_RISK_RATIO } from "./gate-config.ts";
+import {
+  buildLobGateConfig,
+  LOB_MAX_EVIDENCE_GATED_EV_BPS,
+  LOB_MIN_NET_REWARD_RISK_RATIO,
+} from "./gate-config.ts";
+import type { FeatureAdmissionView } from "./feature-admission.ts";
 
 function assert(condition: unknown, message = "assertion failed"): asserts condition {
   if (!condition) throw new Error(message);
 }
 
 const defaults = { maxSpreadBps: 30 };
+
+const gatedEv: FeatureAdmissionView = {
+  cohort: "binance",
+  admissions: [{ key: "ev_lower_bound_bps", authority: "GATE", rho: 0.48 }],
+};
+const watchedEv: FeatureAdmissionView = {
+  cohort: "binance",
+  admissions: [{ key: "ev_lower_bound_bps", authority: "TIE_BREAK", rho: 0.24 }],
+};
 
 Deno.test("an operator cannot lower the reward-risk floor below the executor's", () => {
   // This is the divergence that produced stored BUY candidates with no trades: the scanner
@@ -50,6 +64,31 @@ Deno.test("missing settings fall back to the measured-safe gate", () => {
   assert(cfg.maxGainerRank === 3);
   assert(cfg.maxSpreadBps === 30);
   assert(cfg.minEvBps === 0, "EV has no measured relationship to outcome and stays advisory");
+});
+
+Deno.test("an EV floor requires measured authority, not just an operator setting", () => {
+  // The live review found EV uncorrelated with realized return after FDR correction, so an
+  // operator's EV floor is recorded and ignored until measurement says otherwise.
+  assert(buildLobGateConfig({ minEvBps: 3 }, defaults).minEvBps === 0);
+  assert(buildLobGateConfig({ minEvBps: 3, featureAdmission: null }, defaults).minEvBps === 0);
+  assert(
+    buildLobGateConfig({ minEvBps: 3, featureAdmission: watchedEv }, defaults).minEvBps === 0,
+    "tie-break authority orders candidates and moves no threshold",
+  );
+});
+
+Deno.test("a gate-authorised EV floor applies but stays inside its reviewed ceiling", () => {
+  assert(buildLobGateConfig({ minEvBps: 3, featureAdmission: gatedEv }, defaults).minEvBps === 3);
+  assert(
+    buildLobGateConfig({ minEvBps: 999, featureAdmission: gatedEv }, defaults).minEvBps ===
+      LOB_MAX_EVIDENCE_GATED_EV_BPS,
+    "evidence cannot import whatever value the settings row happened to hold",
+  );
+  assert(buildLobGateConfig({ minEvBps: -5, featureAdmission: gatedEv }, defaults).minEvBps === 0);
+  assert(
+    buildLobGateConfig({ featureAdmission: gatedEv }, defaults).minEvBps === 0,
+    "authority alone does not invent a floor the operator never asked for",
+  );
 });
 
 Deno.test("nonsense settings cannot widen the gate", () => {

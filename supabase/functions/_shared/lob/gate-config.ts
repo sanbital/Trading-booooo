@@ -9,6 +9,14 @@
 // with nothing in between saying why.
 //
 // Any future knob belongs here rather than at a call site.
+//
+// v7.4.0 — thresholds written in terms of a predictive feature are now evidence-gated.
+// `minEvBps` used to be pinned to zero by a comment saying EV had no measured relationship
+// to outcome, which was true but unenforceable: nothing stopped the next edit from raising
+// it again. It is now resolved from the measured admission map, so an EV floor exists
+// exactly when live data has earned one and disappears when the evidence does.
+
+import { type FeatureAdmissionView, mayHardenGate } from "./feature-admission.ts";
 
 export interface LobGateInputs {
   /** Operator reward:risk floor, from trading_settings. */
@@ -19,6 +27,13 @@ export interface LobGateInputs {
   maxBookAgeMs?: number;
   maxSpreadBps?: number;
   minNetProfitBps?: number;
+  /**
+   * Operator's requested EV floor. It applies only while `ev_lower_bound_bps` holds GATE
+   * authority for this venue; otherwise it is recorded and ignored.
+   */
+  minEvBps?: number;
+  /** Measured feature authority for the venue being gated. Absent means nothing is gated. */
+  featureAdmission?: FeatureAdmissionView | null;
 }
 
 export interface LobGateConfig {
@@ -37,6 +52,12 @@ export const LOB_MAX_NET_REWARD_RISK_RATIO = 5;
 export const LOB_MIN_STOP_TO_TARGET_RATIO = 0.75;
 export const LOB_MAX_STOP_TO_TARGET_RATIO = 5;
 export const LOB_DEFAULT_MAX_GAINER_RANK = 10;
+/**
+ * Ceiling on an evidence-gated EV floor. The first feature ever to clear significance still
+ * lands inside a range reviewed in advance, rather than inheriting whatever the settings row
+ * happened to hold at the moment the evidence arrived.
+ */
+export const LOB_MAX_EVIDENCE_GATED_EV_BPS = 5;
 
 function finite(value: unknown, fallback: number): number {
   const parsed = Number(value);
@@ -52,8 +73,11 @@ export function buildLobGateConfig(
   defaults: { maxSpreadBps: number },
 ): LobGateConfig {
   return {
-    // EV stays informational on both sides; it has no measured relationship to outcome.
-    minEvBps: 0,
+    // EV gates only while measurement says it separates outcomes. With no admission map, or
+    // with EV below GATE authority, it stays informational on both sides.
+    minEvBps: mayHardenGate(input.featureAdmission, "ev_lower_bound_bps")
+      ? clamp(finite(input.minEvBps, 0), 0, LOB_MAX_EVIDENCE_GATED_EV_BPS)
+      : 0,
     minNetProfitBps: Math.max(0, finite(input.minNetProfitBps, 0)),
     minNetRewardRiskRatio: clamp(
       Math.max(

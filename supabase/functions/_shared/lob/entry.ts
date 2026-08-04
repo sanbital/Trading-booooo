@@ -1,3 +1,4 @@
+import { mayHardenGate } from "./feature-admission.ts";
 import { scoreHotSymbol } from "./hot-symbol.ts";
 import { MINUTE_ENTRY_GATE_VERSION } from "./minute-entry-gate.ts";
 import { detectLobPatterns } from "./patterns.ts";
@@ -16,6 +17,25 @@ function clamp(value: number, low: number, high: number): number {
 function finite(value: unknown, fallback = 0): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+/**
+ * Resolve a threshold that is expressed in terms of a predictive feature.
+ *
+ * The requested value applies only while live measurement has granted that feature GATE
+ * authority on this venue, and never above the reviewed ceiling. Everything else — no
+ * admission map, an unmeasured feature, a feature whose correlation did not survive
+ * multiple-testing correction — resolves to zero, which admits the candidate and leaves the
+ * decision to the gates that are about executability rather than about signal strength.
+ */
+function evidenceGatedThreshold(
+  cfg: LobEntryConfig,
+  featureKey: string,
+  requested: number,
+  ceiling: number,
+): number {
+  if (!mayHardenGate(cfg.featureAdmission, featureKey)) return 0;
+  return clamp(finite(requested, 0), 0, ceiling);
 }
 
 // Operator policy for the high-turnover LOB scalp route.
@@ -235,7 +255,13 @@ export function evaluateLobEntry(
   // Current operator policy is authoritative even when an old scanner/runtime profile
   // still sends the former 1.5 RR floor or the 5% emergency boundary as a fixed stop.
   cfg.minObservationMs = 15_000;
-  cfg.minEvBps = 0;
+  // v7.4.0: the three signal-strength gates below are resolved from measured authority
+  // rather than pinned to zero by hand. They were zeroed because no live sample had shown
+  // EV, pattern confidence or hotness separating winners from losers — which remains true,
+  // so these still resolve to zero today. Routing them through the admission map means a
+  // future edit cannot restore a gate without evidence, and a future measurement does not
+  // need an edit to restore one.
+  cfg.minEvBps = evidenceGatedThreshold(cfg, "ev_lower_bound_bps", cfg.minEvBps, 5);
   cfg.minNetProfitBps = Math.max(
     OPERATOR_MIN_TARGET_NET_PROFIT_BPS,
     finite(cfg.minNetProfitBps, OPERATOR_MIN_TARGET_NET_PROFIT_BPS),
@@ -245,8 +271,13 @@ export function evaluateLobEntry(
     OPERATOR_MIN_NET_REWARD_RISK_RATIO,
     Math.max(0, finite(cfg.minNetRewardRiskRatio, OPERATOR_MIN_NET_REWARD_RISK_RATIO)),
   );
-  cfg.minPrimaryPatternConfidence = 0;
-  cfg.minHotnessScore = 0;
+  cfg.minPrimaryPatternConfidence = evidenceGatedThreshold(
+    cfg,
+    "confidence",
+    cfg.minPrimaryPatternConfidence,
+    0.60,
+  );
+  cfg.minHotnessScore = evidenceGatedThreshold(cfg, "hotness_score", cfg.minHotnessScore, 40);
 
   const reasons: string[] = [];
   const warnings: string[] = [];

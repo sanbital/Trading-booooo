@@ -198,6 +198,27 @@ export interface LobEntryConfig {
    * The entry path recalculates EV after applying it; it is never a bypass.
    */
   learnedStopFloorBps: number;
+  /**
+   * Measured feature authority for this venue (v7.4.0). A threshold expressed in terms of a
+   * predictive feature — EV, hotness score, pattern confidence — applies only while that
+   * feature holds GATE authority here. Absent means nothing has been measured, which is
+   * read as "gate nothing", never as "gate by default".
+   */
+  featureAdmission?: LobFeatureAdmissionPolicy | null;
+}
+
+/**
+ * Structural view of a `FeatureAdmissionPolicy`. It is restated here rather than imported so
+ * that `types.ts` stays free of module dependencies; `feature-admission.ts` owns the
+ * behaviour and its policy type satisfies this shape.
+ */
+export interface LobFeatureAdmissionPolicy {
+  cohort?: string;
+  admissions: Array<{
+    key: string;
+    authority: "NONE" | "TIE_BREAK" | "GATE";
+    rho?: number | null;
+  }>;
 }
 
 export interface LobEntryDecision {

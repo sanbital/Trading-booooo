@@ -28,6 +28,17 @@ import type { LobTrapName } from "../_shared/lob/traps.ts";
 import { estimateEvBias, type EvBiasSample } from "../_shared/lob/ev-bias.ts";
 import { proposeLobAdaptivePolicy } from "../_shared/lob/adaptive-policy.ts";
 import { verifiedOutcomeToSample } from "../_shared/lob/verified-outcome.ts";
+import {
+  analyzeTradeEvidence,
+  type EvidenceCohortReport,
+  outcomeRowToEvidenceSample,
+} from "../_shared/lob/feature-significance.ts";
+import {
+  buildFeatureAdmissionPolicy,
+  type FeatureAdmissionPolicy,
+} from "../_shared/lob/feature-admission.ts";
+
+const ENGINE_VERSION = "7.4.0-STATISTICAL-FEATURE-EVIDENCE";
 
 const SUPABASE_URL = (Deno.env.get("SUPABASE_URL") || "").replace(/\/+$/, "");
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -296,6 +307,83 @@ async function measureLiveForecastDiagnostics(settings: any): Promise<any> {
   };
 }
 
+export interface FeatureEvidenceResult {
+  reports: EvidenceCohortReport[];
+  policies: FeatureAdmissionPolicy[];
+  gateFeatures: string[];
+  totalSamples: number;
+}
+
+/**
+ * Re-derive the entry-feature significance report from the same verified outcome rows the
+ * pattern calibration uses.
+ *
+ * This is the standing version of the manual review that found no entry variable separating
+ * winners from losers. Running it every cycle is the point: a null result on twenty trades
+ * is a statement about the sample, not a permanent property of the features, and the only
+ * way to tell the difference is to keep asking as the sample grows.
+ *
+ * Nothing here changes a threshold on its own. It produces an authority map, and every
+ * feature stays at NONE until measurement promotes it.
+ */
+export function measureFeatureEvidence(rows: any[]): FeatureEvidenceResult {
+  const samples = (rows || [])
+    .map((row) => outcomeRowToEvidenceSample(row as Record<string, unknown>))
+    .filter((sample): sample is NonNullable<typeof sample> => sample !== null);
+  const reports = analyzeTradeEvidence(samples);
+  const policies = reports.map((report) => buildFeatureAdmissionPolicy(report));
+  return {
+    reports,
+    policies,
+    gateFeatures: [...new Set(policies.flatMap((policy) => policy.gateFeatures))].sort(),
+    totalSamples: samples.length,
+  };
+}
+
+/**
+ * Append the report and publish the authority map.
+ *
+ * The ledger insert and the settings write are deliberately separate and independently
+ * fault-tolerant. A rolling deploy may not have the v7.4.0 migration yet, and a missing
+ * evidence table must not stop pattern calibration or governance: absent an authority map
+ * the runtime keeps every feature at NONE, which is the safe reading of "not measured".
+ */
+async function persistFeatureEvidence(
+  evidence: FeatureEvidenceResult,
+  windowHours: number,
+): Promise<void> {
+  if (!evidence.reports.length) return;
+  await db("lob_feature_evidence", {
+    method: "POST",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify(evidence.reports.map((report, index) => ({
+      generated_at: new Date(report.generatedAtMs).toISOString(),
+      cohort: ["binance", "upbit"].includes(report.cohort) ? report.cohort : "unknown",
+      engine_version: ENGINE_VERSION,
+      window_hours: windowHours,
+      samples: report.samples,
+      wins: report.wins,
+      observation_hours: report.observationHours,
+      distinct_markets: report.distinctMarkets,
+      alpha: report.alpha,
+      min_samples: report.minSamples,
+      features: report.features,
+      groups: report.groups,
+      admission: evidence.policies[index] ?? {},
+      notes: report.notes,
+    }))),
+  }).catch(() => null);
+  await db("trading_settings?id=eq.1", {
+    method: "PATCH",
+    body: JSON.stringify({
+      lob_feature_admission: evidence.policies,
+      lob_feature_admission_measured_at: new Date().toISOString(),
+      lob_feature_admission_samples: evidence.totalSamples,
+      updated_at: new Date().toISOString(),
+    }),
+  }).catch(() => null);
+}
+
 Deno.serve(async (request: Request) => {
   if (request.method === "OPTIONS") return new Response(null, { status: 204 });
   if (!SUPABASE_URL || !SERVICE_KEY) return json({ error: "supabase env missing" }, 500);
@@ -352,6 +440,7 @@ Deno.serve(async (request: Request) => {
       .filter((sample: LobOutcomeSample | null): sample is LobOutcomeSample => sample !== null);
 
     const profile = buildLobLearningProfile(samples);
+    const featureEvidence = measureFeatureEvidence(rows || []);
 
     if (dryRun) {
       const governance = await evaluateGovernance(true);
@@ -362,9 +451,12 @@ Deno.serve(async (request: Request) => {
         online_backfilled: onlineBackfilled,
         profile,
         live_diagnostics: liveDiagnostics,
+        feature_evidence: featureEvidence,
         governance,
       });
     }
+
+    await persistFeatureEvidence(featureEvidence, windowHours);
 
     // Preserve every measurable batch as immutable challenger evidence. The old `active`
     // switch is deliberately untouched: v6.8 runtime reads only frozen policy versions.
@@ -423,6 +515,7 @@ Deno.serve(async (request: Request) => {
       profile_id: profileId,
       profile,
       live_diagnostics: liveDiagnostics,
+      feature_evidence: featureEvidence,
       governance,
       challenger,
     });
