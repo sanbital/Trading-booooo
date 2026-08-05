@@ -37,6 +37,24 @@ jobs:
       - name: Apply canonical engine patch
         run: python3 scripts/apply_half_hold_tp5_sl4_v750.py
 
+      - name: Align scanner engine revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("supabase/functions/market-scanner/engine.ts")
+          text = path.read_text()
+          old = 'export const ENGINE_VERSION = "7.3.8-M1-CORE-SCORE-OBS-TOLERANCE";'
+          new = 'export const ENGINE_VERSION = "7.5.0-HALF-HOLD-TP5-SL4";'
+          if old not in text and new not in text:
+              raise SystemExit("market-scanner ENGINE_VERSION anchor not found")
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+          print("Aligned market-scanner with v7.5.0 runtime")
+          PY
+
       - name: Set up Deno
         uses: denoland/setup-deno@v2
         with:
@@ -46,9 +64,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          deno fmt supabase/functions/market-autotrader/index.ts
+          deno fmt \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-scanner/engine.ts
           deno check supabase/functions/market-autotrader/index.ts
+          deno check supabase/functions/market-scanner/index.ts
           grep -q '7.5.0-HALF-HOLD-TP5-SL4' supabase/functions/market-autotrader/index.ts
+          grep -q '7.5.0-HALF-HOLD-TP5-SL4' supabase/functions/market-scanner/engine.ts
           grep -q 'HALF_HOLD_TAKE_PROFIT_5' supabase/functions/market-autotrader/index.ts
           grep -q 'HALF_HOLD_STOP_LOSS_4' supabase/functions/market-autotrader/index.ts
           grep -q 'PROTECTED_50_PERCENT_HOLD_ACTIVE' supabase/functions/market-autotrader/index.ts
@@ -61,12 +83,13 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add \
             supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-scanner/engine.ts \
             scripts/apply_half_hold_tp5_sl4_v750.py \
             supabase/migrations/20260805021500_half_hold_tp5_sl4_v750.sql
           if git diff --cached --quiet; then
             echo "Canonical source already applied"
           else
-            git commit -m "feat: keep 50 percent and exit half at TP5 SL4"
+            git commit -m "fix: align scanner and runtime on v7.5.0"
             git pull --rebase origin main
             git push origin HEAD:main
           fi
@@ -87,13 +110,17 @@ jobs:
             --single-transaction \
             --file supabase/migrations/20260805021500_half_hold_tp5_sl4_v750.sql
 
-      - name: Deploy market autotrader
+      - name: Deploy scanner and autotrader
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         shell: bash
         run: |
           set -euo pipefail
+          supabase functions deploy market-scanner \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
           supabase functions deploy market-autotrader \
             --project-ref "${SUPABASE_PROJECT_REF}" \
             --no-verify-jwt \
@@ -120,6 +147,7 @@ jobs:
             v_guard text;
             v_policy text;
             v_live_open integer;
+            v_paused boolean;
           begin
             select pg_get_functiondef(p.oid) into v_guard
             from pg_proc p join pg_namespace n on n.oid=p.pronamespace
@@ -145,16 +173,14 @@ jobs:
             end if;
             select count(*) into v_live_open from public.trading_positions
             where is_paper=false and state in ('OPEN','EXITING','RECONCILING');
-            raise notice 'HALF_HOLD_POLICY_OK live_open=%', v_live_open;
+            select pause_new_entries into v_paused from public.trading_settings where id=1;
+            if v_paused is not true then
+              raise exception 'new entries must remain paused until scanner/runtime parity is externally verified';
+            end if;
+            raise notice 'HALF_HOLD_POLICY_OK live_open=% pause_new_entries=%', v_live_open, v_paused;
           end
           $$;
           SQL
 
-      - name: Reopen new entries
-        env:
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
-            "update public.trading_settings set pause_new_entries=false, updated_at=now() where id=1 and emergency_liquidation is not true"
+      - name: Keep entries paused for parity verification
+        run: echo "Deployment completed; external verification will reopen entries."
