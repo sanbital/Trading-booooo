@@ -35,7 +35,17 @@ jobs:
             "update public.trading_settings set pause_new_entries=true, updated_at=now() where id=1 and emergency_liquidation is not true"
 
       - name: Apply canonical engine patch
-        run: python3 scripts/apply_half_hold_tp5_sl4_v750.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -q 'const VERSION = "7.5.0-HALF-HOLD-TP5-SL4";' supabase/functions/market-autotrader/index.ts \
+            && grep -q 'reason: "HALF_HOLD_TAKE_PROFIT_5"' supabase/functions/market-autotrader/index.ts \
+            && grep -q 'reason: "HALF_HOLD_STOP_LOSS_4"' supabase/functions/market-autotrader/index.ts \
+            && grep -q 'reason: "PROTECTED_50_PERCENT_HOLD_ACTIVE"' supabase/functions/market-autotrader/index.ts; then
+            echo "Canonical v7.5.0 autotrader source already applied"
+          else
+            python3 scripts/apply_half_hold_tp5_sl4_v750.py
+          fi
 
       - name: Align scanner engine revision
         shell: bash
