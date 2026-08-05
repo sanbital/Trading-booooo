@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 // withdrawal, transfer, margin, futures, leverage, or API-key management routes.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "7.3.8-M1-CORE-SCORE-OBS-TOLERANCE";
+const VERSION = "7.5.0-HALF-HOLD-TP5-SL4";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
