@@ -127,7 +127,7 @@ import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 import { loadMinuteEntryGate } from "../_shared/lob/minute-entry-market.ts";
 
-const VERSION = "7.3.8-M1-CORE-SCORE-OBS-TOLERANCE";
+const VERSION = "7.5.0-HALF-HOLD-TP5-SL4";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -5327,7 +5327,12 @@ async function applyExit(
 ) {
   const targetAction = action === "TARGET_1" || action === "TARGET_2";
   const positiveNetAfter180 = decisionReason === "POSITIVE_NET_AFTER_180S";
-  let quantity = targetAction && position.metadata?.lob_signal
+  const protectedHoldQuantity = Math.max(0, finite(position.initial_quantity) * 0.5);
+  const maxExitQuantity = Math.max(
+    0,
+    finite(position.remaining_quantity) - protectedHoldQuantity,
+  );
+  const desiredQuantity = targetAction && position.metadata?.lob_signal
     ? finite(position.remaining_quantity)
     : action === "TARGET_1"
     ? t1SellQuantity(
@@ -5336,12 +5341,18 @@ async function applyExit(
       position.t1_allocation_pct,
     )
     : finite(position.remaining_quantity);
-  const minNotional = positionMinNotionalQuote(position);
-  if (
-    quantity * price < minNotional || (position.remaining_quantity - quantity) * price < minNotional
-  ) quantity = position.remaining_quantity;
+  let quantity = Math.min(desiredQuantity, maxExitQuantity);
+  // Entry sizing deliberately keeps the internal Binance 90 USDT floor. Exit sizing must
+  // use the venue floor, otherwise a 50% tranche below 90 USDT is silently rewritten to a
+  // 100% liquidation. Upbit's executable floor remains 5,000 KRW.
+  const minNotional = position.exchange === "binance" ? 5 : 5000;
+  if (quantity * price < minNotional) {
+    return { action: "NONE", reason: "tradable half is below exchange minimum notional" };
+  }
   quantity = floorToStep(quantity, finite(position.quantity_step, 0.00000001));
-  if (!(quantity > 0)) return { action: "NONE", reason: "zero sell quantity" };
+  if (!(quantity > 0)) {
+    return { action: "NONE", reason: "protected 50 percent hold floor reached" };
+  }
 
   const protectedTarget = !position.is_paper && targetAction
     ? await prepareProtectedTarget(position, quantity, action, cycleId)
@@ -7267,12 +7278,11 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision = { action: "STOP", reason: "scalp_max_single_loss" } as any;
         }
       }
-      // PREBREAKOUT-BURST-V1: no planned stop, no experimental arm stop, no fixed target
-      // and no time-based exit. The only loss floor is -2% of executable net. Normal exits
-      // follow the observed burst ending: bearish upper-band re-entry plus weak tape, a
-      // failed reclaim, or an actual order-book collapse.
+      // HALF-HOLD-TP5-SL4-V1: every position is split into a permanently protected 50%
+      // tranche and one tradable 50% tranche. The tradable tranche exits only at +5% or
+      // -4%; time, reversal, order-book-collapse and planned-stop exits are disabled.
       if (lobMode && !settings.emergency_liquidation) {
-        const BURST_POLICY_VERSION = "PREBREAKOUT-BURST-V1";
+        const BURST_POLICY_VERSION = "HALF-HOLD-TP5-SL4-V1";
         const requestedAction = decision.action;
         const requestedReason = String((decision as any).reason || "");
         const safetyRequested = requestedAction === "STOP" &&
@@ -7353,25 +7363,37 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         const reclaimFailed = Number.isFinite(watchStartedMs) && watchAgeSeconds >= 45 &&
           !freshMinuteGate.upperBandReclaimed && weaknessVotes >= 1;
 
-        if (safetyRequested) {
-          decision = { action: "STOP", fraction: 1, reason: requestedReason } as any;
-        } else if (guardedNetReturnPct <= -2) {
-          decision = { action: "STOP", fraction: 1, reason: "HARD_STOP_MINUS_2" } as any;
-        } else if (orderbookCollapse) {
-          decision = { action: "STOP", fraction: 1, reason: "ORDERBOOK_COLLAPSE" } as any;
-        } else if (reentryConfirmed) {
+        const entryPrice = finite(position.average_entry_price, position.planned_entry_price);
+        const grossReturnPct = entryPrice > 0 ? (executableExitPrice / entryPrice - 1) * 100 : 0;
+        const protectedHoldQuantity = Math.max(0, finite(position.initial_quantity) * 0.5);
+        const hasTradableHalf = finite(position.remaining_quantity) - protectedHoldQuantity >
+          Math.max(1e-12, finite(position.quantity_step, 0) * 0.5);
+
+        if (!hasTradableHalf) {
+          decision = {
+            action: "NONE",
+            fraction: 0,
+            reason: "PROTECTED_50_PERCENT_HOLD_ACTIVE",
+          } as any;
+        } else if (grossReturnPct >= 5) {
           decision = {
             action: "STOP",
-            fraction: 1,
-            reason: "BB_UPPER_REENTRY_CONFIRMED",
+            fraction: 0.5,
+            reason: "HALF_HOLD_TAKE_PROFIT_5",
           } as any;
-        } else if (reclaimFailed) {
-          decision = { action: "STOP", fraction: 1, reason: "BB_RECLAIM_FAILED" } as any;
+        } else if (grossReturnPct <= -4) {
+          decision = {
+            action: "STOP",
+            fraction: 0.5,
+            reason: "HALF_HOLD_STOP_LOSS_4",
+          } as any;
         } else {
           decision = {
             action: "NONE",
             fraction: 0,
-            reason: "BURST_CONTINUES_OR_EXIT_NOT_CONFIRMED",
+            reason: safetyRequested
+              ? "HALF_HOLD_THRESHOLD_OVERRIDES_NON_PRICE_SAFETY_EXIT"
+              : "HALF_HOLD_AWAITING_TP5_OR_SL4",
           } as any;
         }
 
@@ -7432,6 +7454,8 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           String(decision.reason || "").startsWith("live_hold:") ||
           String(decision.reason || "").startsWith("rotation:") ||
           decision.reason === "HARD_STOP_MINUS_2" ||
+          decision.reason === "HALF_HOLD_TAKE_PROFIT_5" ||
+          decision.reason === "HALF_HOLD_STOP_LOSS_4" ||
           decision.reason === "BB_UPPER_REENTRY_CONFIRMED" ||
           decision.reason === "BB_RECLAIM_FAILED" ||
           decision.reason === "ORDERBOOK_COLLAPSE";
