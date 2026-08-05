@@ -1,0 +1,160 @@
+name: Deploy half-hold TP5 SL4 v7.5.0
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-half-hold-tp5-sl4-v750.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy-half-hold-tp5-sl4-v750
+  cancel-in-progress: false
+
+jobs:
+  patch-deploy-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Pause new entries
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=true, updated_at=now() where id=1 and emergency_liquidation is not true"
+
+      - name: Apply canonical engine patch
+        run: python3 scripts/apply_half_hold_tp5_sl4_v750.py
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Format and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt supabase/functions/market-autotrader/index.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          grep -q '7.5.0-HALF-HOLD-TP5-SL4' supabase/functions/market-autotrader/index.ts
+          grep -q 'HALF_HOLD_TAKE_PROFIT_5' supabase/functions/market-autotrader/index.ts
+          grep -q 'HALF_HOLD_STOP_LOSS_4' supabase/functions/market-autotrader/index.ts
+          grep -q 'PROTECTED_50_PERCENT_HOLD_ACTIVE' supabase/functions/market-autotrader/index.ts
+
+      - name: Commit canonical production source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/market-autotrader/index.ts \
+            scripts/apply_half_hold_tp5_sl4_v750.py \
+            supabase/migrations/20260805021500_half_hold_tp5_sl4_v750.sql
+          if git diff --cached --quiet; then
+            echo "Canonical source already applied"
+          else
+            git commit -m "feat: keep 50 percent and exit half at TP5 SL4"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Apply database authority
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" \
+            --set=ON_ERROR_STOP=1 \
+            --single-transaction \
+            --file supabase/migrations/20260805021500_half_hold_tp5_sl4_v750.sql
+
+      - name: Deploy market autotrader
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase functions deploy market-autotrader \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
+
+      - name: Run monitor and verify production policy
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          autotrade_token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
+          response="$(curl --fail-with-body --retry 2 --retry-delay 3 --max-time 60 -X POST \
+            -H 'content-type: application/json' \
+            -H "x-autotrade-token: ${autotrade_token}" \
+            -d '{"action":"monitor"}' \
+            "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/market-autotrader")"
+          echo "$response"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            v_guard text;
+            v_policy text;
+            v_live_open integer;
+          begin
+            select pg_get_functiondef(p.oid) into v_guard
+            from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+            where n.nspname='public' and p.proname='guard_half_hold_sell_order_v750';
+            select pg_get_functiondef(p.oid) into v_policy
+            from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+            where n.nspname='public' and p.proname='enforce_half_hold_position_policy_v750';
+            if v_guard is null or position('p.initial_quantity * 0.5' in v_guard)=0 then
+              raise exception 'half-hold sell guard missing';
+            end if;
+            if position('v_return_pct < 4.999' in v_guard)=0 or position('v_return_pct > -3.999' in v_guard)=0 then
+              raise exception 'TP5/SL4 threshold guard missing';
+            end if;
+            if v_policy is null or position('new.t1_allocation_pct := 50' in v_policy)=0 then
+              raise exception 'position half-hold policy missing';
+            end if;
+            if exists (
+              select 1 from pg_trigger t join pg_class c on c.oid=t.tgrelid
+              where not t.tgisinternal and c.relname='trading_orders'
+                and t.tgname='zz_trading_orders_lob_exit_guard_v714'
+            ) then
+              raise exception 'legacy LOB sell guard still active';
+            end if;
+            select count(*) into v_live_open from public.trading_positions
+            where is_paper=false and state in ('OPEN','EXITING','RECONCILING');
+            raise notice 'HALF_HOLD_POLICY_OK live_open=%', v_live_open;
+          end
+          $$;
+          SQL
+
+      - name: Reopen new entries
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=false, updated_at=now() where id=1 and emergency_liquidation is not true"
