@@ -1,6 +1,6 @@
 export type TradingMode = "PAUSED" | "PAPER" | "LIVE_LIMITED";
 export type Exchange = "upbit" | "binance";
-export const BINANCE_MIN_ORDER_USDT = 90;
+export const BINANCE_MIN_ORDER_USDT = 40;
 
 export type TradingSettings = {
   configured: boolean;
