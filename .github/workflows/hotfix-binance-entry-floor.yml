@@ -41,13 +41,6 @@ jobs:
                   '"BINANCE_MIN_ORDER_USDT=40"',
               ),
           }
-          legacy = Path('functions/market-autotrader/core.ts')
-          if legacy.exists():
-              replacements[legacy] = (
-                  'export const BINANCE_MIN_ORDER_USDT = 90;',
-                  'export const BINANCE_MIN_ORDER_USDT = 40;',
-              )
-
           for path, (old, new) in replacements.items():
               text = path.read_text()
               count = text.count(old)
@@ -55,6 +48,16 @@ jobs:
                   raise SystemExit(f'{path}: expected exactly one occurrence of {old!r}, found {count}')
               path.write_text(text.replace(old, new, 1))
               print(f'patched {path}')
+
+          legacy = Path('functions/market-autotrader/core.ts')
+          if legacy.exists():
+              text = legacy.read_text()
+              old = 'export const BINANCE_MIN_ORDER_USDT = 90;'
+              if text.count(old) == 1:
+                  legacy.write_text(text.replace(old, 'export const BINANCE_MIN_ORDER_USDT = 40;', 1))
+                  print(f'patched {legacy}')
+              else:
+                  print(f'skipped obsolete {legacy}: canonical declaration not present')
           PY
           grep -n 'BINANCE_MIN_ORDER_USDT = 40' supabase/functions/market-autotrader/core.ts
           grep -n 'BINANCE_MIN_ORDER_USDT=40' .github/workflows/main.deploy-supabase.yml
@@ -76,7 +79,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add supabase/functions/market-autotrader/core.ts .github/workflows/main.deploy-supabase.yml .github/workflows/hotfix-binance-entry-floor.yml
-          if [ -f functions/market-autotrader/core.ts ]; then git add functions/market-autotrader/core.ts; fi
+          if ! git diff --quiet -- functions/market-autotrader/core.ts; then git add functions/market-autotrader/core.ts; fi
           git diff --cached --check
           git commit -m 'fix: lower Binance admission floor to 40 USDT'
           git push origin HEAD:main
