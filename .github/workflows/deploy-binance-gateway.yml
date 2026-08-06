@@ -29,9 +29,12 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Check out repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@de0fac2e450470c52bcdaf6a4e8f8a515baa9
         with:
           persist-credentials: false
+
+      - name: Apply read-only Binance trade history route
+        run: node gateway/patch-trade-history.mjs
 
       - name: Test gateway
         run: |
