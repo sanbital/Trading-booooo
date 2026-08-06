@@ -98,16 +98,22 @@ Deno.test("momentum pattern remains short-lived and informational", () => {
   assert(decision.targetReturnNetBps > 0);
 });
 
-Deno.test("momentum continuation is blocked by default and reopenable by config", () => {
-  const blocked = evaluateLobEntry(momentumFeatures(), binanceCosts);
-  assertEquals(blocked.decision, "WAIT");
-  assert(blocked.reasons.includes("LOB_PATTERN_BLOCKED_MOMENTUM_CONTINUATION"));
+Deno.test("the pattern block list is opt-in and still closes a pattern on request", () => {
+  // d133f0b emptied DEFAULT_BLOCKED_LOB_PATTERNS with the pre-breakout Bollinger burst
+  // release, so the continuation patterns are tradable by default now. What this protects
+  // is the mechanism: nothing is blocked unless an operator asks, and asking works.
+  const openByDefault = evaluateLobEntry(momentumFeatures(), binanceCosts);
+  assert(
+    !openByDefault.reasons.some((reason) => reason.startsWith("LOB_PATTERN_BLOCKED_")),
+    `no pattern may be blocked by default: ${openByDefault.reasons.join(",")}`,
+  );
+  assertEquals(openByDefault.decision, "BUY");
 
-  const reopened = evaluateLobEntry(momentumFeatures(), binanceCosts, {
-    blockedPatterns: [],
+  const blocked = evaluateLobEntry(momentumFeatures(), binanceCosts, {
+    blockedPatterns: ["MOMENTUM_CONTINUATION"],
   });
-  assert(!reopened.reasons.some((reason) => reason.startsWith("LOB_PATTERN_BLOCKED_")));
-  assertEquals(reopened.decision, "BUY");
+  assert(blocked.reasons.includes("LOB_PATTERN_BLOCKED_MOMENTUM_CONTINUATION"));
+  assertEquals(blocked.decision, "WAIT");
 });
 
 Deno.test("large historical gainer context cannot change present-tense admission", () => {

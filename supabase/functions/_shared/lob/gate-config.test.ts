@@ -1,4 +1,8 @@
-import { buildLobGateConfig, LOB_MIN_NET_REWARD_RISK_RATIO } from "./gate-config.ts";
+import {
+  buildLobGateConfig,
+  LOB_DEFAULT_MAX_GAINER_RANK,
+  LOB_MIN_NET_REWARD_RISK_RATIO,
+} from "./gate-config.ts";
 
 function assert(condition: unknown, message = "assertion failed"): asserts condition {
   if (!condition) throw new Error(message);
@@ -47,7 +51,14 @@ Deno.test("both stages derive an identical gate from identical settings", () => 
 Deno.test("missing settings fall back to the measured-safe gate", () => {
   const cfg = buildLobGateConfig({}, defaults);
   assert(cfg.minNetRewardRiskRatio === LOB_MIN_NET_REWARD_RISK_RATIO);
-  assert(cfg.maxGainerRank === 3);
+  // e473f42 widened the default admission rank from 3 to 10 with the 15s Top-10 composite
+  // pressure release, and deploy-top10-15s-composite-pressure.yml pins the constant.
+  // The fallback comes from LOB_DEFAULT_MAX_GAINER_RANK, not from `defaults`.
+  assert(
+    cfg.maxGainerRank === LOB_DEFAULT_MAX_GAINER_RANK,
+    `expected the module default rank, got ${cfg.maxGainerRank}`,
+  );
+  assert(cfg.maxGainerRank === 10);
   assert(cfg.maxSpreadBps === 30);
   assert(cfg.minEvBps === 0, "EV has no measured relationship to outcome and stays advisory");
 });

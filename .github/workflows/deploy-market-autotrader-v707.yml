@@ -52,15 +52,24 @@ jobs:
           deno test supabase/functions/_shared/lob/minute-entry-gate.test.ts
           deno check supabase/functions/market-scanner/index.ts
           deno check supabase/functions/market-autotrader/index.ts
-          grep -q 'M1-BB-PREBREAKOUT-STOCH-14-3-3-V2' supabase/functions/_shared/lob/minute-entry-gate.ts
-          grep -q 'M1_CANDLE_ALREADY_EXTENDED' supabase/functions/_shared/lob/minute-entry-gate.ts
+          # This job gates the only deploy path for market-scanner and market-autotrader,
+          # so its assertions must track the policy that is actually deployed. They were
+          # pinned to PREBREAKOUT-BURST-V1, which HALF-HOLD-RESIDUAL-TP50-SL10-V2 replaced
+          # in v7.5.1; the stale strings blocked every deploy through this workflow.
+          # The M1 gate revision is read from the source instead of repeated here so a
+          # deliberate bump does not silently become a deploy outage.
+          gate_version="$(sed -n 's/.*MINUTE_ENTRY_GATE_VERSION = "\([^"]*\)".*/\1/p' \
+            supabase/functions/_shared/lob/minute-entry-gate.ts)"
+          test -n "$gate_version"
+          grep -q "$gate_version" supabase/functions/_shared/lob/minute-entry-gate.ts
+          grep -q 'M1_UPPER_BAND_NOT_TOUCHED' supabase/functions/_shared/lob/minute-entry-gate.ts
           grep -q 'BUY_PRESSURE_NOT_CONFIRMED' supabase/functions/_shared/lob/entry.ts
           grep -q 'const DEFAULT_DYNAMIC_OBSERVATION_MS = 15_000' supabase/functions/market-scanner/index.ts
-          grep -q 'PREBREAKOUT-BURST-V1: no planned stop' supabase/functions/market-autotrader/index.ts
+          grep -q 'HALF-HOLD-RESIDUAL-TP50-SL10-V2' supabase/functions/market-autotrader/index.ts
           grep -q 'BB_UPPER_REENTRY_CONFIRMED' supabase/functions/market-autotrader/index.ts
           grep -q 'BB_RECLAIM_FAILED' supabase/functions/market-autotrader/index.ts
           grep -q 'ORDERBOOK_COLLAPSE' supabase/functions/market-autotrader/index.ts
-          grep -q 'guardedNetReturnPct <= -2' supabase/functions/market-autotrader/index.ts
+          grep -q 'RESIDUAL_AWAITING_TP50_OR_SL10' supabase/functions/market-autotrader/index.ts
           ! grep -q 'const exp1ArmWidthsBps' supabase/functions/market-autotrader/index.ts
 
   deploy:

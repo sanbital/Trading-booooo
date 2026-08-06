@@ -49,6 +49,11 @@ jobs:
         run: |
           deno task check
           deno task test
+          # The engine deploy is supposed to prove the release invariants before shipping,
+          # which is what v700-deploy-validation asserts about this workflow. Only the
+          # dashboard workflow was running it, so an engine deploy could ship a build the
+          # validation would have rejected.
+          node validation/v700-deploy-validation.mjs
           node --check gateway/server.mjs
           node --test gateway/server.test.mjs
 

@@ -439,14 +439,23 @@ Deno.test("trades clustered in one phase fail the three-phase data gate", () => 
   assert(!result.sufficient);
 });
 
-Deno.test("dynamic orderflow requires a full 45-second observation window", () => {
+// The observation floor has moved with the strategy: 45s, then 15s with the Top-10
+// composite pressure release, then 13.5s with the M1 core-score tolerance release
+// (deploy-m1-core-score-observation-tolerance.yml pins the current value). What has never
+// changed is the rule itself — a window one millisecond short of the floor is not a
+// tradable observation, no matter how many frames and trades landed inside it.
+const DYNAMIC_MIN_OBSERVATION_MS = 13_500;
+
+Deno.test("dynamic orderflow refuses a window short of the observation floor", () => {
   const start = 1_800_100_000_000;
+  const frameCount = 31;
+  const spans = frameCount - 1;
   const evaluate = (intervalMs: number) => {
-    const frames = dynamicFrames("absorption").slice(0, 31).map((snapshot, index) => ({
+    const frames = dynamicFrames("absorption").slice(0, frameCount).map((snapshot, index) => ({
       ...snapshot,
       timestamp: start + index * intervalMs,
     }));
-    const flow = dynamicTrades("absorption").slice(0, 31).map((trade, index) => ({
+    const flow = dynamicTrades("absorption").slice(0, frameCount).map((trade, index) => ({
       ...trade,
       timestamp: start + index * intervalMs,
       trade_timestamp: start + index * intervalMs,
@@ -454,14 +463,17 @@ Deno.test("dynamic orderflow requires a full 45-second observation window", () =
     return computeDynamicOrderflow(frames, flow, 0.1);
   };
 
-  const short = evaluate(1_400);
-  assert(short.observation_ms < 45_000);
+  // Straddle the floor with the same frame and trade counts on both sides, so the only
+  // thing separating the two verdicts is the elapsed window.
+  const exactInterval = DYNAMIC_MIN_OBSERVATION_MS / spans;
+  const short = evaluate(exactInterval - 1);
+  assert(short.observation_ms < DYNAMIC_MIN_OBSERVATION_MS, String(short.observation_ms));
   assert(short.distinct_book_updates >= 25);
   assert(short.aligned_trade_count >= 20);
   assert(!short.sufficient);
 
-  const complete = evaluate(1_500);
-  assert(complete.observation_ms >= 45_000);
+  const complete = evaluate(exactInterval);
+  assert(complete.observation_ms >= DYNAMIC_MIN_OBSERVATION_MS, String(complete.observation_ms));
   assert(complete.distinct_book_updates >= 25);
   assert(complete.aligned_trade_count >= 20);
   assert(complete.phase_consistent);

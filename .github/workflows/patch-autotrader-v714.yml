@@ -48,11 +48,16 @@ jobs:
 
       - name: Validate, format, type-check and test immutable v7.3.0 policy
         run: |
-          grep -q 'const VERSION = "7.3.5-APPROVAL-SURVIVES-REQUOTE";' \
+          # The invariant is that the three runtimes agree, not that they sit on one
+          # particular release. Pinning the literal turned every version bump into a
+          # failing gate, so the engine is the source of truth and the other two are
+          # checked against it.
+          engine_version="$(sed -n 's/.*ENGINE_VERSION = "\([^"]*\)".*/\1/p' \
+            supabase/functions/market-scanner/engine.ts)"
+          test -n "$engine_version"
+          grep -q "const VERSION = \"${engine_version}\";" \
             supabase/functions/market-autotrader/index.ts
-          grep -q 'ENGINE_VERSION = "7.3.5-APPROVAL-SURVIVES-REQUOTE"' \
-            supabase/functions/market-scanner/engine.ts
-          grep -q 'const VERSION = "7.3.5-APPROVAL-SURVIVES-REQUOTE";' gateway/server.mjs
+          grep -q "const VERSION = \"${engine_version}\";" gateway/server.mjs
           grep -q 'time_in_force: "FOK"' supabase/functions/market-autotrader/index.ts
           grep -q 'expectedNetProfitQuote > 0' \
             supabase/functions/market-autotrader/executable-exit.ts
