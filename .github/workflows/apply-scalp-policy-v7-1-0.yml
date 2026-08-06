@@ -54,9 +54,16 @@ jobs:
           deploy = Path(".github/workflows/deploy-market-autotrader-v707.yml").read_text()
           guard = Path(".github/workflows/apply-scalp-policy-v7-1-0.yml").read_text()
 
-          version = "7.3.5-APPROVAL-SURVIVES-REQUOTE"
+          # This guard exists to stop legacy workflows rewriting the deployed policy. That
+          # is a statement about agreement between the runtimes, not about one release, so
+          # the version is read from the scanner rather than pinned — a pinned literal made
+          # the guard fail on every deliberate version bump.
+          import re
+
+          match = re.search(r'ENGINE_VERSION = "([^"]+)"', scanner)
+          assert match, "scanner does not declare ENGINE_VERSION"
+          version = match.group(1)
           assert f'const VERSION = "{version}";' in engine
-          assert f'ENGINE_VERSION = "{version}"' in scanner
           assert f'const VERSION = "{version}";' in gateway
           assert "quoteExecutableNetExit" in engine
           assert 'time_in_force: "FOK"' in engine
@@ -78,10 +85,16 @@ jobs:
 
           write_permission = "contents:" + " write"
           assert write_permission not in guard, "policy guard must remain read-only"
-          assert version in deploy
+          # The deploy workflow ships whatever is on main and carries no version stamp of
+          # its own, so requiring the current version to appear in it asserted nothing.
+          # What matters is that the deploy job stays gated behind validate and still
+          # ships both runtimes together.
+          assert "needs: validate" in deploy, "deploy must stay gated behind validate"
+          for function_name in ("market-scanner", "market-autotrader"):
+              assert function_name in deploy, f"deploy no longer ships {function_name}"
           assert "7.1.4-VOLATILITY-AWARE-EXIT" not in deploy
           assert "7.2.3-EXECUTABLE-NET-INTEGRITY" not in deploy
-          print("PASS: legacy workflows cannot rewrite v7.3.0")
+          print(f"PASS: legacy workflows cannot rewrite v{version}")
           PY
 
       - name: Type-check and test v7.3.0 runtime

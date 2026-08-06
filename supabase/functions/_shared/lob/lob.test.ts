@@ -1,4 +1,4 @@
-import { evaluateLobEntry } from "./entry.ts";
+import { EFFECTIVE_OBSERVATION_MIN_MS, evaluateLobEntry } from "./entry.ts";
 import { evaluateLobExit } from "./exit.ts";
 import type { LobFeatureVector } from "./types.ts";
 
@@ -86,16 +86,39 @@ test("stale orderbook is discarded", () => {
   assert(stale.decision === "WAIT", "stale book must wait");
 });
 
-test("a live entry requires the complete 50-second observation", () => {
-  const short = evaluateLobEntry({ ...hot, observationMs: 49999 }, costs);
-  assert(short.decision !== "BUY", "49.999 seconds must not be eligible");
+// The observation requirement was a flat 50 seconds. It is now two-tier: 15s clears
+// outright, and between EFFECTIVE_OBSERVATION_MIN_MS and 15s a window still clears if it
+// carried enough samples, trades and data quality to be worth trusting. The invariant the
+// old test protected survives — a window below the floor is never tradable — so it is
+// restated against the current rule rather than deleted.
+test("a live entry requires an effective observation window", () => {
+  const short = evaluateLobEntry(
+    { ...hot, observationMs: EFFECTIVE_OBSERVATION_MIN_MS - 1 },
+    costs,
+  );
+  assert(short.decision !== "BUY", "a window below the effective floor must not be eligible");
   assert(
-    short.reasons.includes("INSUFFICIENT_50S_OBSERVATION"),
+    short.reasons.includes("INSUFFICIENT_EFFECTIVE_OBSERVATION"),
     "short observation reason must be explicit",
   );
   assert(
-    evaluateLobEntry({ ...hot, observationMs: 50000 }, costs).decision === "BUY",
-    "50 seconds must remain eligible",
+    evaluateLobEntry({ ...hot, observationMs: 15_000 }, costs).decision === "BUY",
+    "15 seconds must clear on its own",
+  );
+});
+
+test("the sub-15s tolerance is earned by evidence, not granted by the clock", () => {
+  const window = { ...hot, observationMs: EFFECTIVE_OBSERVATION_MIN_MS };
+  assert(
+    evaluateLobEntry(window, costs).decision === "BUY",
+    "a dense sub-15s window must remain eligible",
+  );
+  // Same window, too few aligned trades to trust it.
+  const thin = evaluateLobEntry({ ...window, tradeCount: 19 }, costs);
+  assert(thin.decision !== "BUY", "a thin sub-15s window must not be eligible");
+  assert(
+    thin.reasons.includes("INSUFFICIENT_EFFECTIVE_OBSERVATION"),
+    "a thin sub-15s window must say why",
   );
 });
 

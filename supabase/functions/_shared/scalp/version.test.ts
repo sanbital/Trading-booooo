@@ -67,9 +67,18 @@ Deno.test("operator status is the authoritative dashboard version source", async
     true,
     "a cached scanner result must not downgrade the authoritative version",
   );
+  const config = await Deno.readTextFile(new URL("docs/config.js", ROOT));
+  const revision = config.match(/const DASHBOARD_REVISION = "([^"]+)"/)?.[1];
   assertEquals(
-    html.includes("config.js?v=7.2.3-r1-EXECUTABLE-NET-INTEGRITY") &&
-      html.includes("app.js?v=7.2.3-r1-EXECUTABLE-NET-INTEGRITY"),
+    typeof revision === "string" && revision.length > 0,
+    true,
+    "docs/config.js must declare a dashboard revision",
+  );
+  // The cache key is derived from the declared revision rather than pinned to a literal,
+  // so a dashboard release only has to bump one constant — and the tripwire still fires
+  // when the HTML is left behind on the previous key.
+  assertEquals(
+    html.includes(`config.js?v=${revision}`) && html.includes(`app.js?v=${revision}`),
     true,
     "dashboard cache keys must move with the dashboard release",
   );

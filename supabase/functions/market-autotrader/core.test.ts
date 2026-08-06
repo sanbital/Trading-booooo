@@ -84,11 +84,15 @@ const settings: TradingSettings = {
   suppress_cross_exchange_same_asset: true,
 };
 
-Deno.test("Binance operator minimum is fixed at 90 USDT", () => {
-  assertEquals(BINANCE_MIN_ORDER_USDT, 90);
-  assertEquals(binanceMinOrderUsdt(5), 90);
-  assertEquals(binanceMinOrderUsdt(90), 90);
+Deno.test("Binance operator minimum is the admission floor and 1000 the ceiling", () => {
+  // 2026-08-05, f937230 lowered the floor from 90 to 40 USDT and left this test behind.
+  // The value is pinned once so a further change stays deliberate; everything below is
+  // expressed against the constant so only a real behaviour change can break it.
+  assertEquals(BINANCE_MIN_ORDER_USDT, 40);
+  assertEquals(binanceMinOrderUsdt(5), BINANCE_MIN_ORDER_USDT);
+  assertEquals(binanceMinOrderUsdt(BINANCE_MIN_ORDER_USDT), BINANCE_MIN_ORDER_USDT);
   assertEquals(binanceMinOrderUsdt(125), 125);
+  assertEquals(binanceMinOrderUsdt(5000), 1000);
 });
 
 Deno.test("generic quote sizing works for KRW and USDT", () => {

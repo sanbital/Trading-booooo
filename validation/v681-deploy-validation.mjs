@@ -13,6 +13,7 @@ const core = read("supabase/functions/market-autotrader/core.ts");
 const autotrader = read("supabase/functions/market-autotrader/index.ts");
 const feeAccounting = read("supabase/functions/market-autotrader/fee-accounting.ts");
 const performance = read("supabase/functions/market-performance/index.ts");
+const settlement = read("supabase/functions/market-performance/account-settlement.ts");
 const tests = read("supabase/functions/market-autotrader/residual-accounting.test.ts");
 const engine = read("supabase/functions/market-scanner/engine.ts");
 const gateway = read("gateway/server.mjs");
@@ -67,12 +68,14 @@ check(
     autotrader.includes("calculateExitResidualAccounting"),
 );
 check(
+  // The engine's measured realized PnL still wins over the API's own recomputation. The
+  // one exception is a manual reconcile, where `manualReconcileAccounting` writes a
+  // hard-coded zero that would erase the operator's own sell from every total.
   "performance API uses authoritative corrected pnl",
   performance.includes("residual_value_quote") &&
-    (
-      performance.includes("finite(position.realized_pnl_quote, calculatedNetPnl)") ||
-      performance.includes("numeric(position.realized_pnl_quote, calculatedNetPnl)")
-    ),
+    performance.includes("ledgerRealizedPnlQuote: position.realized_pnl_quote") &&
+    settlement.includes("finite(input.ledgerRealizedPnlQuote, calculatedNetPnl)") &&
+    settlement.includes("input.closedByLedger && manualExitQuantity <= 0"),
 );
 check(
   "regression cases cover BNB and ETH",

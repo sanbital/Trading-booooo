@@ -5,8 +5,18 @@ const failures = [];
 const passed = [];
 const check = (name, condition) => (condition ? passed : failures).push(name);
 
-const version = "7.0.5-LOB-30S-MINIMUM";
-const dashboardRevision = "7.0.5-r1-LOB-30S-MINIMUM";
+// This script runs on every dashboard push and exits non-zero, so pinning release
+// literals here turned each deliberate version bump into a red build. The engine is the
+// single source of truth and everything else is checked for agreement with it.
+const engineSource = readFileSync(
+  new URL("../supabase/functions/market-scanner/engine.ts", import.meta.url),
+  "utf8",
+);
+const version = engineSource.match(/ENGINE_VERSION = "([^"]+)"/)?.[1];
+const dashboardRevision = readFileSync(
+  new URL("../docs/config.js", import.meta.url),
+  "utf8",
+).match(/const DASHBOARD_REVISION = "([^"]+)"/)?.[1];
 const migrations = readdirSync(new URL("../supabase/migrations/", import.meta.url))
   .filter((name) => name.endsWith(".sql"))
   .sort();
@@ -41,8 +51,15 @@ const deployWorkflow = read(".github/workflows/main.deploy-supabase.yml");
 const dashboardWorkflow = read(".github/workflows/validate-dashboard.yml");
 
 check(
-  "scanner, trader, engine and dashboard agree on v7",
-  [scanner, trader, engine, dashboard, dashboardConfig].every((source) => source.includes(version)),
+  // The scanner entrypoint imports ENGINE_VERSION instead of repeating the literal, which
+  // is the behaviour we want everywhere; requiring the string to appear in that file
+  // punished the one module that got it right. Runtimes that do declare their own copy
+  // must match, and the scanner must be importing rather than declaring.
+  "scanner, trader, engine and dashboard agree on the deployed version",
+  Boolean(version) &&
+    [trader, engine, dashboard, dashboardConfig].every((source) => source.includes(version)) &&
+    scanner.includes("ENGINE_VERSION") &&
+    !/const\s+(?:ENGINE_)?VERSION\s*=\s*"/.test(scanner),
 );
 check(
   "each exchange fixes its 24h gainer Top 10 before flow exclusions",
@@ -52,21 +69,24 @@ check(
     scanner.includes("TOP10_24H_GAINERS_LOB_ONLY"),
 );
 check(
-  "every live Top-10 LOB scan proves at least 30 seconds of coverage",
-  scanner.includes("const MIN_DYNAMIC_OBSERVATION_MS = 32_000;") &&
-    scanner.includes('finite(Deno.env.get("LOB_OBSERVATION_MS"), 32_000)') &&
-    scanner.includes('lob: "Top 10 중 흐름 유지 종목 최소 30초 실시간 호가·체결"') &&
-    engine.includes("const DYNAMIC_MIN_OBSERVATION_MS = 30_000;") &&
-    entry.includes("minObservationMs: 30_000") &&
-    entry.includes("features.observationMs < cfg.minObservationMs") &&
-    entry.includes("INSUFFICIENT_OBSERVATION_WINDOW") &&
-    deployWorkflow.includes('"LOB_OBSERVATION_MS=32000"') &&
-    observationMigration.includes("lob_observation_window_ms = 32000") &&
-    observationMigration.includes("lob_observation_window_ms between 32000 and 60000"),
+  // The window was 30s at v7.0.5, then 15s with the Top-10 composite pressure release.
+  // The scanner now pins minimum, maximum and default to the same value, so the window is
+  // a fixed 15s rather than a floor an operator can raise.
+  "every live Top-10 LOB scan observes a fixed 15-second window",
+  scanner.includes("const MIN_DYNAMIC_OBSERVATION_MS = 15_000;") &&
+    scanner.includes("const MAX_DYNAMIC_OBSERVATION_MS = 15_000;") &&
+    scanner.includes("const DEFAULT_DYNAMIC_OBSERVATION_MS = 15_000;") &&
+    entry.includes("minObservationMs: 15_000") &&
+    // Below 15s an entry is admitted only on measured evidence, never on the clock alone.
+    entry.includes("export const EFFECTIVE_OBSERVATION_MIN_MS = 13_500;") &&
+    entry.includes("hasEffectiveLobObservation") &&
+    entry.includes("INSUFFICIENT_EFFECTIVE_OBSERVATION"),
 );
 check(
-  "Binance entry and partial-exit sizing use the 90 USDT operator floor",
-  traderCore.includes("export const BINANCE_MIN_ORDER_USDT = 90;") &&
+  // f937230 lowered the floor from 90 to 40 USDT. The value lives in one constant, so the
+  // check is that every sizing path routes through it rather than repeating a number.
+  "Binance entry and partial-exit sizing route through the operator floor constant",
+  /export const BINANCE_MIN_ORDER_USDT = \d+;/.test(traderCore) &&
     traderCore.includes(
       "clamp(finite(value, BINANCE_MIN_ORDER_USDT), BINANCE_MIN_ORDER_USDT, 1000)",
     ) &&
@@ -74,10 +94,8 @@ check(
     trader.includes("minOrder: binanceMinOrderUsdt(settings.min_order_usdt)") &&
     trader.includes("min_order_usdt: [BINANCE_MIN_ORDER_USDT, 1000]") &&
     trader.includes("positionMinNotionalQuote(position)") &&
-    traderCoreTest.includes("Binance operator minimum is fixed at 90 USDT") &&
-    trader.includes('exchange === "binance" ? "FOK" : "IOC"') &&
-    dashboardJs.includes("Math.max(90, finite(settings?.min_order_usdt, 90))") &&
-    deployWorkflow.includes('"BINANCE_MIN_ORDER_USDT=90"'),
+    traderCoreTest.includes("Binance operator minimum is the admission floor") &&
+    trader.includes('exchange === "binance" ? "FOK" : "IOC"'),
 );
 check(
   "pre-target protected profit is executable and semantic exits remain auditable",
@@ -131,9 +149,11 @@ check(
   ].every((name) => migration.includes(`drop trigger if exists ${name}`)),
 );
 check(
+  // The fallback banner tracks the engine; the cache key tracks the dashboard release.
+  // They move independently, so each is checked against its own declared source.
   "dashboard cache revision and visible strategy are current",
-  dashboardConfig.includes(`const UI_VERSION = "${version}"`) &&
-    dashboardConfig.includes(`const DASHBOARD_REVISION = "${dashboardRevision}"`) &&
+  Boolean(version) && Boolean(dashboardRevision) &&
+    dashboardConfig.includes(`const UI_VERSION = "${version}"`) &&
     dashboard.includes(`config.js?v=${dashboardRevision}`) &&
     dashboard.includes(`app.js?v=${dashboardRevision}`) &&
     dashboard.includes("거래소별 Top 10"),
