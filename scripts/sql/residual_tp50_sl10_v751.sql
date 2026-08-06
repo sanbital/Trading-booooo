@@ -185,6 +185,13 @@ create trigger zzzzz_trading_orders_residual_exit_v751
 before insert on public.trading_orders
 for each row execute function public.guard_residual_sell_order_v751();
 
+-- trading_settings is protected by enforce_trading_settings_ops_invariants(), so the
+-- canonical invariant must move first or every settings update is rewritten to v7.5.0.
+update public.trading_ops_invariants
+set canonical_engine_revision = '7.5.1-RESIDUAL-TP50-SL10',
+    updated_at = now()
+where id = 1;
+
 update public.trading_settings
 set lob_live_admission_revision = '7.5.1-RESIDUAL-TP50-SL10',
     lob_model_revision = '7.5.1-RESIDUAL-TP50-SL10',
