@@ -1,22 +1,42 @@
-// Trading-booooo performance API v6.11.0 — performance freshness revision r2.
+// Trading-booooo performance API v6.11.0 — manual-exit reconciliation revision r6.
 // The dashboard is built only from actual LIVE fills. PostgREST is paged explicitly so
 // the default 1,000-row response cap cannot freeze the trade list at an old timestamp.
+//
+// r6 answers two operator reports. A coin the operator sold by hand kept appearing as an
+// open trade because the ledger still carried its quantity, and the realised result of
+// that sell never reached the per-exchange totals. Every open row is now reconciled
+// against the latest account balance snapshot before it is priced, and anything worth a
+// dollar or less is not a position.
 
 import { type JsonRecord as TimeJsonRecord, resolveLifecycleTimes } from "./time-integrity.ts";
 import { collectPages } from "./rest-pagination.ts";
+import {
+  baseAssetOf,
+  createBalanceAllocator,
+  dustQuoteFor,
+  type Holding,
+  resolveHolding,
+  snapshotBalanceMap,
+  snapshotIsUsable,
+} from "../_shared/position-value.ts";
+import { settleTrade } from "./account-settlement.ts";
 
 type JsonRecord = Record<string, any>;
 type Exchange = "upbit" | "binance";
 
 const VERSION = "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION";
-const PERFORMANCE_REVISION = "6.11.0-r5-SELECTIVE-READ-CACHE";
+const PERFORMANCE_REVISION = "6.11.0-r6-MANUAL-EXIT-DUST-RECONCILE";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const SERVICE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
 const DASHBOARD_TOKEN = env("DASHBOARD_ACCESS_TOKEN") || env("LEARNING_ACCESS_TOKEN");
 const DASHBOARD_ORIGIN = env("ALLOWED_ORIGINS").split(",")[0] || "*";
 const REST_PAGE_SIZE = 1000;
-const PERFORMANCE_CACHE_TTL_MS = 120_000;
+// The dashboard refreshes on a timer now, so the shared cache is short enough that a
+// scheduled refresh shows current numbers. An operator pressing 즉시 새로고침 sends
+// `force` and skips it entirely.
+const PERFORMANCE_CACHE_TTL_MS = 45_000;
+const TAKER_FEE_PCT: Record<Exchange, number> = { upbit: 0.05, binance: 0.1 };
 let performanceCache: { body: JsonRecord; cachedAt: number } | null = null;
 let performanceRefreshInFlight = false;
 
@@ -115,7 +135,17 @@ function kstDayKey(value: string | Date): string {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   const kst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
-  return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, "0")}-${String(kst.getUTCDate()).padStart(2, "0")}`;
+  return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, "0")}-${
+    String(kst.getUTCDate()).padStart(2, "0")
+  }`;
+}
+
+function durationTo(start: string | null, end: string | null): number | null {
+  if (!start || !end) return null;
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(end);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return null;
+  return Math.round((endMs - startMs) / 1000);
 }
 
 function latestSnapshots(rows: JsonRecord[]): Record<Exchange, JsonRecord | null> {
@@ -146,14 +176,14 @@ function calculateTrade(
   positionOrders: JsonRecord[],
   fillsByOrder: Map<string, JsonRecord[]>,
   snapshot: JsonRecord | null,
+  holdingFor: (position: JsonRecord, ledgerQuantity: number, price: number) => Holding,
 ): { quality: string; trade: JsonRecord | null } {
   const buys = positionOrders.filter((order) =>
     String(order.side).toUpperCase() === "BUY" && String(order.purpose).toUpperCase() === "ENTRY"
   );
   const sells = positionOrders.filter((order) => String(order.side).toUpperCase() === "SELL");
-  const fillsForOrders = (orders: JsonRecord[]) => orders.flatMap((order) =>
-    fillsByOrder.get(String(order.id || "")) || []
-  );
+  const fillsForOrders = (orders: JsonRecord[]) =>
+    orders.flatMap((order) => fillsByOrder.get(String(order.id || "")) || []);
   const entryFills = fillsForOrders(buys);
   const exitFills = fillsForOrders(sells);
   const lifecycle = resolveLifecycleTimes({
@@ -205,17 +235,30 @@ function calculateTrade(
   const residualValueQuote = position.state === "CLOSED"
     ? Math.max(0, numeric(position.residual_value_quote, residualQuantity * currentPrice))
     : 0;
-  const currentValue = position.state === "CLOSED"
-    ? residualValueQuote
-    : remainingQuantity * currentPrice;
-  const totalFees = entryFees + exitFees;
-  const grossPnl = exitFunds + currentValue - entryFunds;
-  const calculatedNetPnl = exitFunds - exitFees + currentValue - entryFunds - entryFees;
-  const netPnl = position.state === "CLOSED"
-    ? numeric(position.realized_pnl_quote, calculatedNetPnl)
-    : calculatedNetPnl;
-  const investedCost = entryFunds + entryFees;
-  const returnPct = investedCost > 0 ? netPnl / investedCost * 100 : 0;
+
+  const closedByLedger = position.state === "CLOSED";
+  const openHolding = closedByLedger ? null : holdingFor(position, remainingQuantity, currentPrice);
+  const settlement = settleTrade({
+    closedByLedger,
+    holding: openHolding,
+    recordedManualExit: position.manual_reconcile || null,
+    remainingQuantity,
+    currentPrice,
+    feePctPerSide: TAKER_FEE_PCT[position.exchange as Exchange] ?? 0.1,
+    entryFundsQuote: entryFunds,
+    entryFeesQuote: entryFees,
+    exitFundsQuote: exitFunds,
+    exitFeesQuote: exitFees,
+    residualValueQuote,
+    ledgerRealizedPnlQuote: position.realized_pnl_quote,
+  });
+  const settledByAccount = settlement.settledByAccount;
+  const heldQuantity = settlement.heldQuantity;
+  const currentValue = settlement.currentValueQuote;
+  const closeReason = position.close_reason || settlement.closeReasonHint;
+  const settledAt = settledByAccount
+    ? String(snapshot?.captured_at || new Date().toISOString())
+    : null;
 
   return {
     quality: lifecycle.quality,
@@ -224,18 +267,27 @@ function calculateTrade(
       exchange: position.exchange,
       quote_currency: position.quote_currency,
       market: position.market,
-      state: position.state,
-      close_reason: position.close_reason || null,
+      state: settledByAccount ? "ACCOUNT_SETTLED" : position.state,
+      close_reason: closeReason,
       entry_at: lifecycle.entryAt,
-      exit_at: lifecycle.exitAt,
-      duration_seconds: lifecycle.durationSeconds,
+      exit_at: lifecycle.exitAt || settledAt,
+      duration_seconds: settledByAccount && !lifecycle.exitAt
+        ? durationTo(lifecycle.entryAt, settledAt)
+        : lifecycle.durationSeconds,
       duration_quality: lifecycle.quality,
       entry_time_source: "TRADING_FILLS_MIN_EXECUTED_AT",
-      exit_time_source: position.state === "CLOSED" ? "TRADING_FILLS_MAX_EXECUTED_AT" : null,
+      exit_time_source: closedByLedger
+        ? "TRADING_FILLS_MAX_EXECUTED_AT"
+        : settledByAccount
+        ? "ACCOUNT_BALANCE_SNAPSHOT"
+        : null,
       entry_fill_count: lifecycle.entryFillCount,
       exit_fill_count: lifecycle.exitFillCount,
       entry_quantity: entryVolume,
-      remaining_quantity: remainingQuantity,
+      remaining_quantity: settledByAccount ? heldQuantity : remainingQuantity,
+      ledger_remaining_quantity: remainingQuantity,
+      held_quantity: heldQuantity,
+      held_value_quote: closedByLedger ? residualValueQuote : heldQuantity * currentPrice,
       residual_quantity: residualQuantity,
       residual_value_quote: residualValueQuote,
       accounting_version: position.accounting_version || null,
@@ -247,15 +299,23 @@ function calculateTrade(
       average_exit_price: averageExitPrice,
       current_price: currentPrice,
       entry_funds_quote: entryFunds,
-      invested_cost_quote: investedCost,
+      invested_cost_quote: settlement.investedCostQuote,
       exit_funds_quote: exitFunds,
       current_value_quote: currentValue,
-      gross_pnl_quote: grossPnl,
-      total_fees_quote: totalFees,
-      net_pnl_quote: netPnl,
-      return_pct: returnPct,
-      is_open: position.state !== "CLOSED",
-      is_closed: position.state === "CLOSED",
+      gross_pnl_quote: settlement.grossPnlQuote,
+      total_fees_quote: settlement.totalFeesQuote,
+      net_pnl_quote: settlement.netPnlQuote,
+      return_pct: settlement.returnPct,
+      is_open: !settlement.isClosed,
+      is_closed: settlement.isClosed,
+      // Everything the operator needs to see that this row was settled from the account
+      // rather than from a fill the bot placed.
+      manual_exit_quantity: settlement.manualExitQuantity,
+      manual_exit_proceeds_quote: settlement.manualExitProceedsQuote,
+      manual_exit_basis: settlement.manualExitEstimated ? "MARK_PRICE_LESS_TAKER_FEE" : null,
+      manual_exit_estimated: settlement.manualExitEstimated,
+      account_settled: settledByAccount,
+      balance_verified: Boolean(openHolding?.balanceKnown),
       lifecycle_quality: "FILL_VERIFIED",
     },
   };
@@ -381,6 +441,12 @@ function aggregate(
         )
       ).length,
     fill_time_verified_trade_count: exchangeTrades.length,
+    // Manual sells are part of the cumulative result now, and the operator can see how
+    // much of it rests on an estimate rather than on a fill the bot recorded.
+    manual_exit_trade_count: exchangeTrades.filter((trade) => trade.manual_exit_estimated).length,
+    manual_exit_proceeds_quote: sum(exchangeTrades, "manual_exit_proceeds_quote"),
+    account_settled_trade_count: exchangeTrades.filter((trade) => trade.account_settled).length,
+    dust_threshold_quote: dustQuoteFor(exchange),
     return_basis: "ACTUAL_ENTRY_COST_WEIGHTED",
     time_basis: "TRADING_FILLS_EXECUTED_AT",
   };
@@ -396,8 +462,16 @@ Deno.serve(async (request: Request) => {
     return response({ ok: false, error: "missing Supabase configuration" }, 500);
   }
 
+  // 즉시 새로고침: the operator asked for the numbers as they are right now, so the
+  // shared cache is skipped. The in-flight guard below still applies — a forced refresh
+  // never starts a second full read alongside one already running.
+  const body = await request.json().catch(() => ({} as JsonRecord));
+  const forceRefresh = body?.force === true || String(body?.action || "") === "refresh";
+
   const now = Date.now();
-  if (performanceCache && now - performanceCache.cachedAt < PERFORMANCE_CACHE_TTL_MS) {
+  if (
+    !forceRefresh && performanceCache && now - performanceCache.cachedAt < PERFORMANCE_CACHE_TTL_MS
+  ) {
     return response({
       ...performanceCache.body,
       cache_status: "HIT",
@@ -427,7 +501,7 @@ Deno.serve(async (request: Request) => {
   try {
     const [positions, orders, fills, snapshots, objectiveRows] = await Promise.all([
       dbAll(
-        "trading_positions?is_paper=eq.false&state=in.(OPEN,EXITING,CLOSED)&select=id,exchange,quote_currency,market,state,close_reason,remaining_quantity,residual_quantity,residual_value_quote,average_entry_price,realized_pnl_quote,accounting_version,fee_accounting_version,fee_accounting_quality,reserved_quote,created_at,accounting_quality:metadata->exit_residual_accounting->>quality&order=created_at.asc,id.asc",
+        "trading_positions?is_paper=eq.false&state=in.(OPEN,EXITING,CLOSED)&select=id,exchange,quote_currency,market,base_asset,state,close_reason,remaining_quantity,residual_quantity,residual_value_quote,average_entry_price,realized_pnl_quote,accounting_version,fee_accounting_version,fee_accounting_quality,reserved_quote,created_at,accounting_quality:metadata->exit_residual_accounting->>quality,manual_reconcile:metadata->manual_reconcile&order=created_at.asc,id.asc",
         10_000,
       ),
       dbAll(
@@ -439,7 +513,7 @@ Deno.serve(async (request: Request) => {
         100_000,
       ),
       dbLimited(
-        "trading_account_snapshots?select=exchange,captured_at,total_equity_quote,managed_capital_quote,prices&order=captured_at.desc&limit=10",
+        "trading_account_snapshots?select=exchange,captured_at,total_equity_quote,managed_capital_quote,prices,balances&order=captured_at.desc&limit=10",
       ),
       dbAll(
         "trading_joint_objective_snapshots?engine_version=in.(6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE,6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION)&select=id,exchange,captured_at,total_equity_quote,managed_capital_quote,filled_exposure_quote,reserved_exposure_quote,external_flow_quote,engine_version&order=captured_at.asc,id.asc",
@@ -453,12 +527,40 @@ Deno.serve(async (request: Request) => {
     const qualityCounts: Record<string, number> = {};
     const trades: JsonRecord[] = [];
 
+    // Each exchange's newest balance snapshot decides what is actually still held. A
+    // stale or empty snapshot yields no allocator, and every open row then keeps its
+    // ledger quantity — a gateway outage must never look like a wave of manual sells.
+    const balanceReadable: Record<Exchange, boolean> = { upbit: false, binance: false };
+    const allocators = new Map<Exchange, ReturnType<typeof createBalanceAllocator>>();
+    for (const exchange of ["upbit", "binance"] as Exchange[]) {
+      const snapshot = latest[exchange];
+      if (!snapshotIsUsable(snapshot)) continue;
+      balanceReadable[exchange] = true;
+      allocators.set(exchange, createBalanceAllocator(snapshotBalanceMap(snapshot?.balances)));
+    }
+    // Positions arrive oldest first, so the oldest claim on a shared asset is served
+    // first and later duplicates are the ones that read as gone.
+    const holdingFor = (position: JsonRecord, ledgerQuantity: number, price: number) => {
+      const exchange = position.exchange as Exchange;
+      const allocate = allocators.get(exchange);
+      const asset = baseAssetOf(exchange, position.market, position.base_asset);
+      return resolveHolding({
+        ledgerQuantity,
+        exchangeQuantity: allocate ? allocate(asset, ledgerQuantity) : null,
+        // A price from a snapshot already rejected as stale must not decide that a
+        // position is worthless; the entry cost basis is the conservative fallback.
+        price: allocate ? price : Math.max(0, numeric(position.average_entry_price)),
+        dustQuote: dustQuoteFor(exchange),
+      });
+    };
+
     for (const position of positions) {
       const result = calculateTrade(
         position,
         ordersByPosition.get(String(position.id || "")) || [],
         fillsByOrder,
         latest[position.exchange as Exchange],
+        holdingFor,
       );
       qualityCounts[result.quality] = (qualityCounts[result.quality] || 0) + 1;
       if (
@@ -505,6 +607,20 @@ Deno.serve(async (request: Request) => {
       },
       newest_entry_at: newestTrade?.entry_at || null,
       newest_exit_at: newestExitAt,
+      forced_refresh: forceRefresh,
+      account_reconciliation: {
+        revision: PERFORMANCE_REVISION,
+        balance_readable: balanceReadable,
+        balance_snapshot_at: {
+          upbit: latest.upbit?.captured_at || null,
+          binance: latest.binance?.captured_at || null,
+        },
+        dust_threshold_quote: {
+          upbit: dustQuoteFor("upbit"),
+          binance: dustQuoteFor("binance"),
+        },
+        settled_trade_count: trades.filter((trade) => trade.account_settled).length,
+      },
       exchanges: {
         upbit: aggregate("upbit", trades, latest.upbit, objectiveRows),
         binance: aggregate("binance", trades, latest.binance, objectiveRows),
@@ -524,6 +640,12 @@ Deno.serve(async (request: Request) => {
         pagination: "PostgREST 응답을 1,000행 단위로 끝까지 페이지 조회",
         joint_objective:
           "외부 현금흐름을 제거한 계좌 로그성장률·승률·관리자본 회전율을 각각 보존·개선하는 Pareto 계약",
+        account_settlement:
+          "장부 수량과 거래소 잔고가 다르면 차액은 수동 매도로 보고 마지막 관측가 기준으로 정산합니다",
+        dust_rule:
+          "잔여 평가액이 1달러(업비트 1,400원) 미만이면 포지션이 아니라 종료된 거래로 집계합니다",
+        manual_exit_proceeds_quote:
+          "수동 매도 추정 대금 = 사라진 수량 × 마지막 관측가 − 테이커 수수료 1회",
         excluded_states: [
           "CANCELLED_WITHOUT_FILL",
           "ENTRY_TEST_REJECTED",

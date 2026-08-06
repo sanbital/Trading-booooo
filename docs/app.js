@@ -1377,11 +1377,102 @@
     $("binance-allocation-value").disabled = $("binance-allocation-mode").value !== "FIXED";
   }
 
+  // 1달러(업비트 1,400원) 미만은 포지션이 아닙니다. 엔진이 같은 규칙을 서버에서 적용하지만,
+  // GitHub Pages는 Supabase 함수보다 먼저 배포되므로 화면도 스스로 판단할 수 있어야 합니다.
+  const POSITION_DUST_QUOTE = { upbit: 1400, binance: 1 };
+  const BALANCE_SNAPSHOT_MAX_AGE_MS = 600000;
+
+  function latestSnapshotByExchange(data) {
+    const map = new Map();
+    for (const snapshot of Array.isArray(data?.latest_accounts) ? data.latest_accounts : []) {
+      const exchange = String(snapshot?.exchange || "");
+      if (exchange && !map.has(exchange)) map.set(exchange, snapshot);
+    }
+    return map;
+  }
+
+  function accountQuantities(snapshot) {
+    const capturedAt = Date.parse(String(snapshot?.captured_at || ""));
+    const balances = Array.isArray(snapshot?.balances) ? snapshot.balances : [];
+    if (
+      !balances.length || !Number.isFinite(capturedAt) ||
+      Date.now() - capturedAt > BALANCE_SNAPSHOT_MAX_AGE_MS
+    ) return null;
+    const map = new Map();
+    for (const row of balances) {
+      const asset = String(row?.currency ?? row?.asset ?? "").toUpperCase();
+      if (!asset) continue;
+      const total = Math.max(0, finite(row?.balance ?? row?.free)) +
+        Math.max(0, finite(row?.locked));
+      map.set(asset, (map.get(asset) || 0) + total);
+    }
+    return map;
+  }
+
+  function baseAssetOf(exchange, market, fallback) {
+    const explicit = String(fallback || "").toUpperCase();
+    if (explicit) return explicit;
+    const normalized = String(market || "").toUpperCase();
+    if (exchange === "upbit") return normalized.split("-")[1] || normalized;
+    return normalized.endsWith("USDT") ? normalized.slice(0, -4) : normalized;
+  }
+
+  function livePositions(data) {
+    const rows = Array.isArray(data?.positions) ? data.positions : [];
+    const snapshots = latestSnapshotByExchange(data);
+    const unassigned = new Map();
+    for (const [exchange, snapshot] of snapshots) {
+      const quantities = accountQuantities(snapshot);
+      if (quantities) unassigned.set(exchange, quantities);
+    }
+    // 오래된 행부터 잔고를 배분해야 같은 코인의 잔고가 두 번 쓰이지 않습니다.
+    const ordered = [...rows].sort((left, right) =>
+      new Date(left.created_at || 0).getTime() - new Date(right.created_at || 0).getTime()
+    );
+    const settled = new Set();
+    for (const row of ordered) {
+      if (row.state === "ENTRY_PENDING" || finite(row.reserved_quote) > 0) continue;
+      const exchange = String(row.exchange || "");
+      const snapshot = snapshots.get(exchange);
+      const balances = unassigned.get(exchange);
+      // 오래됐다고 판단한 스냅샷의 가격으로 포지션을 없다고 볼 수는 없습니다.
+      // 그럴 때는 진입 단가를 기준으로만 판단합니다.
+      const price = Math.max(
+        0,
+        balances
+          ? finite(snapshot?.prices?.[row.market], finite(row.average_entry_price))
+          : finite(row.average_entry_price),
+      );
+      if (!(price > 0)) continue;
+      const ledgerQuantity = Math.max(0, finite(row.remaining_quantity));
+      let quantity = ledgerQuantity;
+      if (balances) {
+        const asset = baseAssetOf(exchange, row.market, row.base_asset);
+        const available = Math.max(0, balances.get(asset) || 0);
+        quantity = Math.min(ledgerQuantity, available);
+        balances.set(asset, available - quantity);
+      }
+      const floor = exchange === "upbit" ? POSITION_DUST_QUOTE.upbit : POSITION_DUST_QUOTE.binance;
+      if (quantity * price < floor) settled.add(row);
+    }
+    return {
+      rows: rows.filter((row) => !settled.has(row)),
+      settledCount: settled.size,
+    };
+  }
+
   function renderPositions(data) {
-    const rows = Array.isArray(data.positions) ? data.positions : [];
+    const live = livePositions(data);
+    const rows = live.rows;
+    const serverSettled = Array.isArray(data.settled_positions) ? data.settled_positions.length : 0;
+    const settledCount = Math.max(live.settledCount, serverSettled);
     $("open-position-count").textContent = String(rows.length);
     $("open-position-note").textContent = rows.length
-      ? `${rows.filter((row) => !row.is_paper).length}개 실거래`
+      ? `${rows.filter((row) => !row.is_paper).length}개 실거래${
+        settledCount ? ` · 정산 ${settledCount}건 제외` : ""
+      }`
+      : settledCount
+      ? `현재 보유 없음 · 정산 ${settledCount}건 제외`
       : "현재 보유 없음";
     $("positions-body").innerHTML = rows.length
       ? rows.map((row) => `

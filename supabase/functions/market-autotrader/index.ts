@@ -68,6 +68,8 @@ import {
   type ReconciliationPhase,
   reconciliationRetryDue,
 } from "../_shared/scalp/reconciliation.ts";
+import { dustQuoteFor } from "../_shared/position-value.ts";
+import { resolveDisplayPositions } from "./position-display.ts";
 import {
   normalizeStrategyProfile,
   profileHoldingCeilingMinutes,
@@ -5808,7 +5810,8 @@ async function reconcileManualReduction(
   const missing = Math.max(0, previous - actual);
   if (!(missing > Math.max(1e-10, previous * 1e-7))) return position;
   const estimatedValue = missing * Math.max(0, finite(currentPrice, position.average_entry_price));
-  const dust = position.exchange === "upbit" ? 1000 : 1;
+  // Same floor the dashboard uses: what is worth a dollar or less is not a position.
+  const dust = dustQuoteFor(position.exchange);
   const closed = actual * Math.max(0, finite(currentPrice, position.average_entry_price)) < dust;
   const entryOrder = (await db(
     `trading_orders?position_id=eq.${position.id}&purpose=eq.ENTRY&state=eq.APPLIED&select=executed_funds_quote,paid_fee_quote&order=created_at.asc&limit=1`,
@@ -8169,15 +8172,17 @@ async function status(settings: TradingSettings & JsonRecord) {
       : null,
     batch_profile: lobBatchProfiles?.[0] || null,
   };
+  const displayable = resolveDisplayPositions(positions || [], snapshots || []);
   return {
     version: VERSION,
     settings,
     accounts,
     account_stats: accountStatsByExchange,
-    positions: (positions || []).filter((row: any) =>
-      row.state === "ENTRY_PENDING" || finite(row.remaining_quantity) > 0 ||
-      finite(row.reserved_quote) > 0
-    ).map(displayPosition),
+    positions: displayable.positions.map(displayPosition),
+    // Rows the ledger still carries but the account no longer backs. They are reported
+    // rather than dropped silently so a reconciliation lag stays visible.
+    settled_positions: displayable.settled,
+    position_display_rule: displayable.rule,
     asset_locks: assetLocks || [],
     residual_inventory: residualInventory || [],
     joint_objective_snapshots: objectiveSnapshots || [],
