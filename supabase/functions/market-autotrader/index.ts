@@ -127,7 +127,7 @@ import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 import { loadMinuteEntryGate } from "../_shared/lob/minute-entry-market.ts";
 
-const VERSION = "7.5.0-HALF-HOLD-TP5-SL4";
+const VERSION = "7.5.1-RESIDUAL-TP50-SL10";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -5327,7 +5327,11 @@ async function applyExit(
 ) {
   const targetAction = action === "TARGET_1" || action === "TARGET_2";
   const positiveNetAfter180 = decisionReason === "POSITIVE_NET_AFTER_180S";
-  const protectedHoldQuantity = Math.max(0, finite(position.initial_quantity) * 0.5);
+  const residualThresholdExit = decisionReason === "RESIDUAL_TAKE_PROFIT_50" ||
+    decisionReason === "RESIDUAL_STOP_LOSS_10";
+  const protectedHoldQuantity = residualThresholdExit
+    ? 0
+    : Math.max(0, finite(position.initial_quantity) * 0.5);
   const maxExitQuantity = Math.max(
     0,
     finite(position.remaining_quantity) - protectedHoldQuantity,
@@ -5342,16 +5346,16 @@ async function applyExit(
     )
     : finite(position.remaining_quantity);
   let quantity = Math.min(desiredQuantity, maxExitQuantity);
-  // Entry sizing deliberately keeps the internal Binance 90 USDT floor. Exit sizing must
-  // use the venue floor, otherwise a 50% tranche below 90 USDT is silently rewritten to a
-  // 100% liquidation. Upbit's executable floor remains 5,000 KRW.
+  // Entry sizing deliberately keeps the internal Binance 90 USDT floor. Exit sizing uses
+  // the venue floor. A residual TP50/SL10 decision is the only non-emergency route allowed
+  // to liquidate the formerly protected half.
   const minNotional = position.exchange === "binance" ? 5 : 5000;
   if (quantity * price < minNotional) {
-    return { action: "NONE", reason: "tradable half is below exchange minimum notional" };
+    return { action: "NONE", reason: "exit quantity is below exchange minimum notional" };
   }
   quantity = floorToStep(quantity, finite(position.quantity_step, 0.00000001));
   if (!(quantity > 0)) {
-    return { action: "NONE", reason: "protected 50 percent hold floor reached" };
+    return { action: "NONE", reason: "no threshold-authorized sell quantity" };
   }
 
   const protectedTarget = !position.is_paper && targetAction
@@ -7278,11 +7282,11 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision = { action: "STOP", reason: "scalp_max_single_loss" } as any;
         }
       }
-      // HALF-HOLD-TP5-SL4-V1: every position is split into a permanently protected 50%
-      // tranche and one tradable 50% tranche. The tradable tranche exits only at +5% or
-      // -4%; time, reversal, order-book-collapse and planned-stop exits are disabled.
+      // HALF-HOLD-RESIDUAL-TP50-SL10-V2: the first 50% still exits at +5% or -4%.
+      // Once that tranche is gone, the remaining inventory exits in full only when its
+      // executable return reaches +50% or -10%. Time and signal exits remain disabled.
       if (lobMode && !settings.emergency_liquidation) {
-        const BURST_POLICY_VERSION = "HALF-HOLD-TP5-SL4-V1";
+        const BURST_POLICY_VERSION = "HALF-HOLD-RESIDUAL-TP50-SL10-V2";
         const requestedAction = decision.action;
         const requestedReason = String((decision as any).reason || "");
         const safetyRequested = requestedAction === "STOP" &&
@@ -7365,16 +7369,37 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
 
         const entryPrice = finite(position.average_entry_price, position.planned_entry_price);
         const grossReturnPct = entryPrice > 0 ? (executableExitPrice / entryPrice - 1) * 100 : 0;
+        const residualNetReturnPct = entryPrice > 0
+          ? (executableExitPrice * (1 - policyFeeRate) / entryPrice - 1) * 100
+          : 0;
         const protectedHoldQuantity = Math.max(0, finite(position.initial_quantity) * 0.5);
+        const residualTolerance = Math.max(
+          1e-12,
+          finite(position.quantity_step, 0) * 1.001,
+        );
         const hasTradableHalf = finite(position.remaining_quantity) - protectedHoldQuantity >
-          Math.max(1e-12, finite(position.quantity_step, 0) * 0.5);
+          residualTolerance;
 
         if (!hasTradableHalf) {
-          decision = {
-            action: "NONE",
-            fraction: 0,
-            reason: "PROTECTED_50_PERCENT_HOLD_ACTIVE",
-          } as any;
+          if (residualNetReturnPct >= 50) {
+            decision = {
+              action: "STOP",
+              fraction: 1,
+              reason: "RESIDUAL_TAKE_PROFIT_50",
+            } as any;
+          } else if (residualNetReturnPct <= -10) {
+            decision = {
+              action: "STOP",
+              fraction: 1,
+              reason: "RESIDUAL_STOP_LOSS_10",
+            } as any;
+          } else {
+            decision = {
+              action: "NONE",
+              fraction: 0,
+              reason: "RESIDUAL_AWAITING_TP50_OR_SL10",
+            } as any;
+          }
         } else if (grossReturnPct >= 5) {
           decision = {
             action: "STOP",
@@ -7456,6 +7481,8 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision.reason === "HARD_STOP_MINUS_2" ||
           decision.reason === "HALF_HOLD_TAKE_PROFIT_5" ||
           decision.reason === "HALF_HOLD_STOP_LOSS_4" ||
+          decision.reason === "RESIDUAL_TAKE_PROFIT_50" ||
+          decision.reason === "RESIDUAL_STOP_LOSS_10" ||
           decision.reason === "BB_UPPER_REENTRY_CONFIRMED" ||
           decision.reason === "BB_RECLAIM_FAILED" ||
           decision.reason === "ORDERBOOK_COLLAPSE";
