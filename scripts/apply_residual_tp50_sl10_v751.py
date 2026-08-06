@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 NEW_VERSION = "7.5.1-RESIDUAL-TP50-SL10"
@@ -105,42 +106,6 @@ autotrader = replace_once(
     "LOB policy comment/version",
 )
 
-old_decision = '''        const entryPrice = finite(position.average_entry_price, position.planned_entry_price);
-        const grossReturnPct = entryPrice > 0
-          ? (executableExitPrice / entryPrice - 1) * 100
-          : 0;
-        const protectedHoldQuantity = Math.max(0, finite(position.initial_quantity) * 0.5);
-        const hasTradableHalf = finite(position.remaining_quantity) - protectedHoldQuantity >
-          Math.max(1e-12, finite(position.quantity_step, 0) * 0.5);
-
-        if (!hasTradableHalf) {
-          decision = {
-            action: "NONE",
-            fraction: 0,
-            reason: "PROTECTED_50_PERCENT_HOLD_ACTIVE",
-          } as any;
-        } else if (grossReturnPct >= 5) {
-          decision = {
-            action: "STOP",
-            fraction: 0.5,
-            reason: "HALF_HOLD_TAKE_PROFIT_5",
-          } as any;
-        } else if (grossReturnPct <= -4) {
-          decision = {
-            action: "STOP",
-            fraction: 0.5,
-            reason: "HALF_HOLD_STOP_LOSS_4",
-          } as any;
-        } else {
-          decision = {
-            action: "NONE",
-            fraction: 0,
-            reason: safetyRequested
-              ? "HALF_HOLD_THRESHOLD_OVERRIDES_NON_PRICE_SAFETY_EXIT"
-              : "HALF_HOLD_AWAITING_TP5_OR_SL4",
-          } as any;
-        }
-'''
 new_decision = '''        const entryPrice = finite(position.average_entry_price, position.planned_entry_price);
         const grossReturnPct = entryPrice > 0
           ? (executableExitPrice / entryPrice - 1) * 100
@@ -197,13 +162,18 @@ new_decision = '''        const entryPrice = finite(position.average_entry_price
               : "HALF_HOLD_AWAITING_TP5_OR_SL4",
           } as any;
         }
+
 '''
-autotrader = replace_once(
-    autotrader,
-    old_decision,
-    new_decision,
-    "LOB staged exit decision",
-)
+if 'reason: "RESIDUAL_AWAITING_TP50_OR_SL10"' not in autotrader:
+    decision_pattern = re.compile(
+        r'        const entryPrice = finite\(position\.average_entry_price, position\.planned_entry_price\);\n'
+        r'.*?'
+        r'(?=        const watchIso = Number\.isFinite\(watchStartedMs\))',
+        re.DOTALL,
+    )
+    autotrader, decision_count = decision_pattern.subn(new_decision, autotrader, count=1)
+    if decision_count != 1:
+        raise SystemExit("LOB staged exit decision anchor not found")
 
 old_reason_list = '''          decision.reason === "HARD_STOP_MINUS_2" ||
           decision.reason === "HALF_HOLD_TAKE_PROFIT_5" ||
