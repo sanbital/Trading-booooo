@@ -33,6 +33,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Apply read-only Binance trade history route
+        run: node gateway/patch-trade-history.mjs
+
       - name: Test gateway
         run: |
           node --check gateway/server.mjs
