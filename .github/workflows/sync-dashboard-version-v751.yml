@@ -1,0 +1,61 @@
+name: Sync dashboard version v7.5.1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/sync-dashboard-version-v751.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-dashboard-version-v751
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Update dashboard fallback version
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("docs/index.html")
+          text = path.read_text()
+          old = "v7.3.5-APPROVAL-SURVIVES-REQUOTE"
+          new = "v7.5.1-RESIDUAL-TP50-SL10"
+          if new not in text:
+              if old not in text:
+                  raise SystemExit("dashboard fallback version anchor not found")
+              text = text.replace(old, new, 1)
+              path.write_text(text)
+          PY
+          grep -q 'v7.5.1-RESIDUAL-TP50-SL10' docs/index.html
+          git diff --check
+
+      - name: Commit dashboard version
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/index.html
+          if git diff --cached --quiet; then
+            echo "Dashboard version already current"
+          else
+            git commit -m "docs: sync dashboard to v7.5.1"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
