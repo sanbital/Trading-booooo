@@ -168,7 +168,7 @@
             <div><span>목표가</span><b>${price(row.target_1, currency)}</b></div>
             <div><span>손절가</span><b>${price(row.stop_price, currency)}</b></div>
           </div>
-          <p class="entry-position-note">평가손익은 최신 계좌 스냅샷의 현재가로 계산한 미확정 추정치입니다. 향후 매도 수수료·슬리피지는 포함하지 않습니다.</p>
+          <p class="entry-position-note">평가손익은 최신 계좌 스냅샷의 현재가 기준 미확정 추정치입니다. 이미 발생한 수수료와 예상 매도 수수료를 반영하며, 슬리피지는 제외합니다.</p>
         </article>`;
     }).join("");
   }
