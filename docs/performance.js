@@ -48,11 +48,6 @@
           <option value="BUY">매수</option>
           <option value="SELL">매도</option>
         </select>
-        <select id="binance-source-filter" aria-label="주문 출처 필터">
-          <option value="all">전체 주문</option>
-          <option value="AUTOMATED">봇 주문</option>
-          <option value="MANUAL">수동 주문</option>
-        </select>
         <button id="performance-csv-download" class="button-secondary performance-action-button" type="button">CSV 다운로드</button>
         <button id="performance-expand-toggle" class="button-secondary performance-action-button" type="button">더 보기 · 50개</button>
         <button id="performance-refresh-now" class="button-primary performance-action-button" type="button">새로고침</button>
@@ -73,13 +68,13 @@
       </article>
 
       <div class="table-wrap panel performance-table-wrap">
-        <table class="performance-table" style="min-width:1250px">
+        <table class="performance-table" style="min-width:1150px">
           <thead><tr>
             <th>체결 시각</th><th>종목</th><th>방향</th><th>체결 수량</th><th>체결가</th>
-            <th>거래대금</th><th>수수료</th><th>체결 방식</th><th>주문 ID</th><th>체결 ID</th><th>출처</th>
+            <th>거래대금</th><th>수수료</th><th>체결 방식</th><th>주문 ID</th><th>체결 ID</th>
           </tr></thead>
           <tbody id="trade-performance-body">
-            <tr><td colspan="11" class="muted">Binance 원본 데이터를 불러오는 중입니다.</td></tr>
+            <tr><td colspan="10" class="muted">Binance 원본 데이터를 불러오는 중입니다.</td></tr>
           </tbody>
         </table>
       </div>
@@ -92,12 +87,10 @@
           <button id="performance-page-next" class="button-secondary performance-page-button" type="button">다음</button>
         </nav>
       </div>
-      <p class="performance-definition">데이터 원본: Binance Spot GET /api/v3/myTrades. 표시값은 Binance 응답의 price, qty, quoteQty, commission, commissionAsset, time, orderId, trade id를 그대로 사용합니다.</p>`;
+      <p class="performance-definition">데이터 원본: Binance Spot GET /api/v3/myTrades. 표시값은 Binance 응답의 price, qty, quoteQty, commission, commissionAsset, time, orderId, trade id를 그대로 사용합니다. 한 주문이 여러 번 체결되면 Binance 체결 건수만큼 여러 줄로 보입니다.</p>`;
     positions.insertAdjacentElement("afterend", section);
 
-    ["binance-side-filter", "binance-source-filter"].forEach(id => {
-      $(id)?.addEventListener("change", () => { page = 1; renderTrades(); });
-    });
+    $("binance-side-filter")?.addEventListener("change", () => { page = 1; renderTrades(); });
     $("performance-expand-toggle")?.addEventListener("click", () => {
       expanded = !expanded;
       page = 1;
@@ -129,20 +122,16 @@
       time: Number.isFinite(Number(raw.time)) ? Number(raw.time) : Date.parse(row.executed_at || ""),
       isBuyer: raw.isBuyer ?? String(row.side).toUpperCase() === "BUY",
       isMaker: raw.isMaker ?? Boolean(row.is_maker),
-      source: row.source || "",
     };
   }
 
   function filtered() {
     const rows = Array.isArray(latestSource?.trades) ? latestSource.trades : [];
     const side = $("binance-side-filter")?.value || "all";
-    const source = $("binance-source-filter")?.value || "all";
     return rows.filter(row => {
       const trade = rawTrade(row);
       const tradeSide = trade.isBuyer ? "BUY" : "SELL";
-      if (side !== "all" && tradeSide !== side) return false;
-      if (source !== "all" && trade.source !== source) return false;
-      return true;
+      return side === "all" || tradeSide === side;
     });
   }
 
@@ -180,8 +169,7 @@
 
     body.innerHTML = visible.length ? visible.map(row => {
       const trade = rawTrade(row);
-      const side = trade.isBuyer ? "BUY" : "SELL";
-      const sideLabel = side === "BUY" ? "매수" : "매도";
+      const sideLabel = trade.isBuyer ? "매수" : "매도";
       const time = Number.isFinite(trade.time) ? new Date(trade.time).toLocaleString("ko-KR") : "—";
       return `<tr>
         <td>${time}</td>
@@ -194,9 +182,8 @@
         <td>${trade.isMaker ? "Maker" : "Taker"}</td>
         <td>${esc(trade.orderId)}</td>
         <td>${esc(trade.tradeId)}</td>
-        <td>${trade.source === "AUTOMATED" ? "봇" : trade.source === "MANUAL" ? "수동" : esc(trade.source)}</td>
       </tr>`;
-    }).join("") : `<tr><td colspan="11" class="muted">선택 조건에 해당하는 Binance 체결이 없습니다.</td></tr>`;
+    }).join("") : `<tr><td colspan="10" class="muted">선택 조건에 해당하는 Binance 체결이 없습니다.</td></tr>`;
 
     const toggle = $("performance-expand-toggle");
     if (toggle) {
@@ -227,7 +214,7 @@
   function downloadCsv() {
     const rows = filtered();
     if (!rows.length) return;
-    const headers = ["체결시각", "종목", "방향", "수량", "체결가", "거래대금", "수수료", "수수료자산", "Maker", "주문ID", "체결ID", "출처"];
+    const headers = ["체결시각", "종목", "방향", "수량", "체결가", "거래대금", "수수료", "수수료자산", "Maker", "주문ID", "체결ID"];
     const lines = [
       headers.map(csvCell).join(","),
       ...rows.map(row => {
@@ -244,7 +231,6 @@
           t.isMaker,
           t.orderId,
           t.tradeId,
-          t.source,
         ].map(csvCell).join(",");
       }),
     ];
