@@ -52,7 +52,7 @@ window.addEventListener("pageshow", applyDashboardVersion);
   document.head.appendChild(realizedScript);
 
   const entryStatusScript = document.createElement("script");
-  entryStatusScript.src = `./entry-status.js?v=1-ENTRY-DIAGNOSTICS`;
+  entryStatusScript.src = `./entry-status.js?v=2-POSITION-PNL-REASONS`;
   entryStatusScript.defer = true;
   document.head.appendChild(entryStatusScript);
 
@@ -62,7 +62,7 @@ window.addEventListener("pageshow", applyDashboardVersion);
   document.head.appendChild(dashboardFixScript);
 
   const dashboardOnlyScript = document.createElement("script");
-  dashboardOnlyScript.src = `./dashboard-only.js?v=3-MOBILE-REALIZED10-HARD`;
+  dashboardOnlyScript.src = `./dashboard-only.js?v=4-POSITION-ORDER`;
   dashboardOnlyScript.defer = true;
   document.head.appendChild(dashboardOnlyScript);
 })();
