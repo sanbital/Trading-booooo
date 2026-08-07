@@ -129,7 +129,7 @@ import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 import { loadMinuteEntryGate } from "../_shared/lob/minute-entry-market.ts";
 
-const VERSION = "7.5.1-RESIDUAL-TP50-SL10";
+const VERSION = "7.5.2-RESIDUAL-TP10-SL4";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -5234,7 +5234,9 @@ async function reconcileExhaustedPosition(
     await event(
       settled ? "EXIT_RECONCILED_FROM_FILLS" : "EXIT_RECONCILE_INCOMPLETE",
       `${position.exchange}:${position.market} ${
-        settled ? "settled from exchange fills" : "exchange reports no balance but fills do not settle the position"
+        settled
+          ? "settled from exchange fills"
+          : "exchange reports no balance but fills do not settle the position"
       }`,
       { reason, reconcile: summary, position: rows[0] ?? null },
       { cycleId, positionId: position.id, level: settled ? "INFO" : "CRITICAL" },
@@ -5374,8 +5376,8 @@ async function applyExit(
 ) {
   const targetAction = action === "TARGET_1" || action === "TARGET_2";
   const positiveNetAfter180 = decisionReason === "POSITIVE_NET_AFTER_180S";
-  const residualThresholdExit = decisionReason === "RESIDUAL_TAKE_PROFIT_50" ||
-    decisionReason === "RESIDUAL_STOP_LOSS_10";
+  const residualThresholdExit = decisionReason === "RESIDUAL_TAKE_PROFIT_10" ||
+    decisionReason === "RESIDUAL_STOP_LOSS_4";
   const protectedHoldQuantity = residualThresholdExit
     ? 0
     : Math.max(0, finite(position.initial_quantity) * 0.5);
@@ -7330,11 +7332,11 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision = { action: "STOP", reason: "scalp_max_single_loss" } as any;
         }
       }
-      // HALF-HOLD-RESIDUAL-TP50-SL10-V2: the first 50% still exits at +5% or -4%.
+      // HALF-HOLD-RESIDUAL-TP10-SL4-V3: the first 50% still exits at +5% or -4%.
       // Once that tranche is gone, the remaining inventory exits in full only when its
-      // executable return reaches +50% or -10%. Time and signal exits remain disabled.
+      // executable return reaches +10% or -4%. Time and signal exits remain disabled.
       if (lobMode && !settings.emergency_liquidation) {
-        const BURST_POLICY_VERSION = "HALF-HOLD-RESIDUAL-TP50-SL10-V2";
+        const BURST_POLICY_VERSION = "HALF-HOLD-RESIDUAL-TP10-SL4-V3";
         const requestedAction = decision.action;
         const requestedReason = String((decision as any).reason || "");
         const safetyRequested = requestedAction === "STOP" &&
@@ -7429,23 +7431,23 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           residualTolerance;
 
         if (!hasTradableHalf) {
-          if (residualNetReturnPct >= 50) {
+          if (residualNetReturnPct >= 10) {
             decision = {
               action: "STOP",
               fraction: 1,
-              reason: "RESIDUAL_TAKE_PROFIT_50",
+              reason: "RESIDUAL_TAKE_PROFIT_10",
             } as any;
-          } else if (residualNetReturnPct <= -10) {
+          } else if (residualNetReturnPct <= -4) {
             decision = {
               action: "STOP",
               fraction: 1,
-              reason: "RESIDUAL_STOP_LOSS_10",
+              reason: "RESIDUAL_STOP_LOSS_4",
             } as any;
           } else {
             decision = {
               action: "NONE",
               fraction: 0,
-              reason: "RESIDUAL_AWAITING_TP50_OR_SL10",
+              reason: "RESIDUAL_AWAITING_TP10_OR_SL4",
             } as any;
           }
         } else if (grossReturnPct >= 5) {
@@ -7529,8 +7531,8 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision.reason === "HARD_STOP_MINUS_2" ||
           decision.reason === "HALF_HOLD_TAKE_PROFIT_5" ||
           decision.reason === "HALF_HOLD_STOP_LOSS_4" ||
-          decision.reason === "RESIDUAL_TAKE_PROFIT_50" ||
-          decision.reason === "RESIDUAL_STOP_LOSS_10" ||
+          decision.reason === "RESIDUAL_TAKE_PROFIT_10" ||
+          decision.reason === "RESIDUAL_STOP_LOSS_4" ||
           decision.reason === "BB_UPPER_REENTRY_CONFIRMED" ||
           decision.reason === "BB_RECLAIM_FAILED" ||
           decision.reason === "ORDERBOOK_COLLAPSE";
