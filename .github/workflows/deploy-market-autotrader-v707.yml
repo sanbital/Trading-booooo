@@ -41,7 +41,7 @@ jobs:
         run: |
           set -euo pipefail
           # market-autotrader/index.ts is a large generated/hand-maintained runtime file.
-          # Formatting differences must not block a ledger-safety deployment; semantic
+          # Formatting-only differences must not block ledger-safety deployments; semantic
           # safety remains enforced below by deno check and the invariant assertions.
           deno fmt --check \
             supabase/functions/_shared/lob/minute-entry-gate.ts \
