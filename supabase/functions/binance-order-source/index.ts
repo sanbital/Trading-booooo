@@ -12,7 +12,7 @@ const DASHBOARD_TOKEN = ((Deno.env.get("DASHBOARD_ACCESS_TOKEN") || Deno.env.get
 const GW_URL = ((Deno.env.get("BINANCE_ORDER_GATEWAY_URL") || Deno.env.get("ORDER_GATEWAY_URL")) || "").replace(/\/$/, "");
 const GW_SECRET = (Deno.env.get("BINANCE_GATEWAY_SHARED_SECRET") || Deno.env.get("GATEWAY_SHARED_SECRET") || "").trim();
 const DASHBOARD_ORIGIN = ((Deno.env.get("ALLOWED_ORIGINS") || "").split(",")[0] || "*").trim();
-const REVISION = "1-BINANCE-ALLORDERS-RAW";
+const REVISION = "2-BINANCE-ALLORDERS-RAW";
 const enc = new TextEncoder();
 let hmacKey: CryptoKey | null = null;
 
@@ -120,15 +120,14 @@ Deno.serve(async (request: Request) => {
   }
 
   const body = await request.json().catch(() => ({} as JsonRecord));
-  const lookbackHours = Math.max(1, Math.min(168, Math.trunc(Number(body.lookback_hours || 48)) || 48));
+  const routingLookbackHours = Math.max(1, Math.min(168, Math.trunc(Number(body.routing_lookback_hours || 48)) || 48));
   const requestedLimit = Math.max(1, Math.min(500, Math.trunc(Number(body.limit || 200)) || 200));
-  const cutoffIso = new Date(Date.now() - lookbackHours * 3_600_000).toISOString();
-  const cutoffMs = Date.parse(cutoffIso);
+  const routingCutoffIso = new Date(Date.now() - routingLookbackHours * 3_600_000).toISOString();
 
   try {
     const [recentRoutingRows, snapshotRows] = await Promise.all([
       db(
-        `trading_orders?exchange=eq.binance&requested_at=gte.${encodeURIComponent(cutoffIso)}` +
+        `trading_orders?exchange=eq.binance&requested_at=gte.${encodeURIComponent(routingCutoffIso)}` +
           `&exchange_order_id=not.is.null&select=market&order=requested_at.desc&limit=1000`,
       ),
       db("trading_account_snapshots?exchange=eq.binance&select=captured_at,balances&order=captured_at.desc&limit=1"),
@@ -140,11 +139,12 @@ Deno.serve(async (request: Request) => {
 
     for (const market of markets) {
       try {
+        // Do not send a time window to Binance. allOrders returns Binance's own recent
+        // order records for the symbol; this avoids fabricating a local day boundary.
         const result = await gateway({
           exchange: "binance",
           action: "order_history",
           market,
-          start_time: cutoffMs,
           limit: 1000,
         });
         if (Array.isArray(result)) allOrders.push(...result);
@@ -153,6 +153,7 @@ Deno.serve(async (request: Request) => {
       }
     }
 
+    // Deduplication and descending display order only; order fields are untouched.
     const deduped = new Map<string, any>();
     for (const order of allOrders) {
       const symbol = String(order?.symbol || "");
