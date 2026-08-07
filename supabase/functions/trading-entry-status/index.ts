@@ -5,7 +5,7 @@ const SERVICE_KEY = (Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "").trim();
 const AUTOTRADE_TOKEN = (Deno.env.get("AUTOTRADE_ACCESS_TOKEN") || "").trim();
 const DASHBOARD_TOKEN = ((Deno.env.get("DASHBOARD_ACCESS_TOKEN") || Deno.env.get("LEARNING_ACCESS_TOKEN")) || "").trim();
 const DASHBOARD_ORIGIN = ((Deno.env.get("ALLOWED_ORIGINS") || "").split(",")[0] || "*").trim();
-const REVISION = "1-ENTRY-DECISION-STATUS";
+const REVISION = "2-ENTRY-STATUS-SETTINGS-FIX";
 
 function safeEqual(left: string, right: string): boolean {
   const a = new TextEncoder().encode(left);
@@ -57,7 +57,7 @@ Deno.serve(async (request: Request) => {
 
   try {
     const settingsRows = await db(
-      "trading_operator_settings?select=mode,pause_new_entries,withdrawal_mode,manual_intervention_required,scalp_kill_switch,last_full_scan_at,last_monitor_at,last_gateway_heartbeat_at,gateway_error_count,updated_at&order=id.asc&limit=1",
+      "trading_settings?id=eq.1&select=mode,pause_new_entries,withdrawal_mode,manual_intervention_required,scalp_kill_switch,last_full_scan_at,last_monitor_at,last_gateway_heartbeat_at,gateway_error_count,updated_at&limit=1",
     );
     const settings = settingsRows[0] || {};
     const lastScanAt = settings.last_full_scan_at || null;
