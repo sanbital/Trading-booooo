@@ -1,4 +1,4 @@
-// Trading-booooo performance API v1.0.0
+// Trading-booooo performance API v1.1.0
 // Read-only, authenticated dashboard endpoint. Computes performance only from
 // live positions backed by an APPLIED entry fill; rejected/cancelled/ghost rows
 // never count as trades.
@@ -6,7 +6,7 @@
 type JsonRecord = Record<string, any>;
 type Exchange = "upbit" | "binance";
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const SERVICE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
@@ -65,8 +65,12 @@ function dbHeaders(extra: Record<string, string> = {}): HeadersInit {
   };
 }
 
-async function db(path: string): Promise<any[]> {
-  const result = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: dbHeaders() });
+async function db(path: string, range?: { from: number; to: number }): Promise<any[]> {
+  const result = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    headers: range
+      ? dbHeaders({ range: `${range.from}-${range.to}`, "range-unit": "items" })
+      : dbHeaders(),
+  });
   const text = await result.text();
   let data: any;
   try {
@@ -76,6 +80,22 @@ async function db(path: string): Promise<any[]> {
   }
   if (!result.ok) throw new Error(`database ${result.status}: ${typeof data === "string" ? data : JSON.stringify(data)}`);
   return Array.isArray(data) ? data : [];
+}
+
+// PostgREST caps every response at db-max-rows (1000) regardless of the `limit`
+// in the query string. A bare `limit=5000` therefore returns 1000 rows and drops
+// the rest silently -- which is what hid recent orders from the ledger for days.
+// Page explicitly with Range headers so the caller actually gets what it asked for.
+const PAGE_SIZE = 1000;
+
+async function dbAll(path: string, cap = 20000): Promise<any[]> {
+  const rows: any[] = [];
+  for (let from = 0; from < cap; from += PAGE_SIZE) {
+    const page = await db(path, { from, to: from + PAGE_SIZE - 1 });
+    rows.push(...page);
+    if (page.length < PAGE_SIZE) break;
+  }
+  return rows;
 }
 
 function firstTime(...values: unknown[]): string | null {
@@ -110,19 +130,55 @@ function latestSnapshots(rows: JsonRecord[]): Record<Exchange, JsonRecord | null
   return latest;
 }
 
-function calculateTrade(position: JsonRecord, orders: JsonRecord[], snapshot: JsonRecord | null): JsonRecord | null {
+// Exchange fills are the source of truth for what actually executed. An exit placed
+// outside the bot has no trading_orders row, so an orders-only view under-reports the
+// exit and the trade looks half-open forever.
+function calculateTrade(
+  position: JsonRecord,
+  orders: JsonRecord[],
+  fills: JsonRecord[],
+  snapshot: JsonRecord | null,
+): JsonRecord | null {
   const positionOrders = orders.filter((order) => order.position_id === position.id);
   const buys = positionOrders.filter((order) => String(order.side).toUpperCase() === "BUY" && String(order.purpose).toUpperCase() === "ENTRY");
   const sells = positionOrders.filter((order) => String(order.side).toUpperCase() === "SELL");
+
+  const positionFills = fills.filter((fill) => fill.position_id === position.id);
+  // Each exchange fill stays its own row. A position that scaled out in three
+  // tranches must show three exits, never one synthesized average.
+  const exitFills = positionFills
+    .filter((fill) => String(fill.side).toUpperCase() === "SELL")
+    .sort((left, right) => new Date(left.executed_at || 0).getTime() - new Date(right.executed_at || 0).getTime())
+    .map((fill) => ({
+      exchange_trade_id: fill.exchange_trade_id ?? null,
+      exchange_order_id: fill.exchange_order_id ?? null,
+      executed_at: fill.executed_at ?? null,
+      price: finite(fill.price),
+      quantity: finite(fill.quantity),
+      quote_amount: finite(fill.quote_amount),
+      fee_quote_amount: finite(fill.fee_quote_amount),
+      realized_pnl_quote: finite(fill.realized_pnl_quote),
+      source: fill.source ?? null,
+      is_bot_order: Boolean(fill.bot_order_id),
+    }));
 
   const entryVolume = buys.reduce((sum, order) => sum + Math.max(0, finite(order.executed_volume)), 0);
   const entryFunds = buys.reduce((sum, order) => sum + Math.max(0, finite(order.executed_funds_quote)), 0);
   const entryFees = buys.reduce((sum, order) => sum + Math.max(0, finite(order.paid_fee_quote)), 0);
   if (!(entryVolume > 0 && entryFunds > 0)) return null;
 
-  const exitVolume = sells.reduce((sum, order) => sum + Math.max(0, finite(order.executed_volume)), 0);
-  const exitFunds = sells.reduce((sum, order) => sum + Math.max(0, finite(order.executed_funds_quote)), 0);
-  const exitFees = sells.reduce((sum, order) => sum + Math.max(0, finite(order.paid_fee_quote)), 0);
+  // Prefer executed fills; fall back to orders only for positions the fill sync has
+  // not reached yet.
+  const hasExitFills = exitFills.length > 0;
+  const exitVolume = hasExitFills
+    ? exitFills.reduce((sum, fill) => sum + Math.max(0, fill.quantity), 0)
+    : sells.reduce((sum, order) => sum + Math.max(0, finite(order.executed_volume)), 0);
+  const exitFunds = hasExitFills
+    ? exitFills.reduce((sum, fill) => sum + Math.max(0, fill.quote_amount), 0)
+    : sells.reduce((sum, order) => sum + Math.max(0, finite(order.executed_funds_quote)), 0);
+  const exitFees = hasExitFills
+    ? exitFills.reduce((sum, fill) => sum + Math.max(0, fill.fee_quote_amount), 0)
+    : sells.reduce((sum, order) => sum + Math.max(0, finite(order.paid_fee_quote)), 0);
   const remainingQuantity = Math.max(0, finite(position.remaining_quantity, entryVolume - exitVolume));
   const residualQuantity = position.state === "CLOSED"
     ? Math.max(0, finite(position.residual_quantity))
@@ -139,11 +195,17 @@ function calculateTrade(position: JsonRecord, orders: JsonRecord[], snapshot: Js
   const totalFees = entryFees + exitFees;
   const grossPnl = exitFunds + currentValue - entryFunds;
   const calculatedNetPnl = exitFunds - exitFees + currentValue - entryFunds - entryFees;
-  const netPnl = position.state === "CLOSED"
-    ? finite(position.realized_pnl_quote, calculatedNetPnl)
-    : calculatedNetPnl;
-  const investedCost = entryFunds + entryFees;
-  const returnPct = investedCost > 0 ? netPnl / investedCost * 100 : 0;
+  // A settled trade is a historical fact. Its realized figures were computed once
+  // from executed fills and are read back verbatim -- never recomputed here, so the
+  // number a user saw at settlement is the number they see a week later.
+  const isClosed = position.state === "CLOSED";
+  const netPnl = isClosed ? finite(position.realized_pnl_quote, calculatedNetPnl) : calculatedNetPnl;
+  const investedCost = isClosed
+    ? finite(position.realized_cost_quote, entryFunds + entryFees)
+    : entryFunds + entryFees;
+  const returnPct = isClosed
+    ? finite(position.realized_return_pct, investedCost > 0 ? netPnl / investedCost * 100 : 0)
+    : (investedCost > 0 ? netPnl / investedCost * 100 : 0);
   const averageExitPrice = exitVolume > 0 ? exitFunds / exitVolume : null;
   const entryAt = firstTime(
     buys[0]?.completed_at,
@@ -182,8 +244,13 @@ function calculateTrade(position: JsonRecord, orders: JsonRecord[], snapshot: Js
     total_fees_quote: totalFees,
     net_pnl_quote: netPnl,
     return_pct: returnPct,
+    realized_pnl_quote: finite(position.realized_pnl_quote),
+    realized_return_pct: finite(position.realized_return_pct),
+    exit_fill_count: exitFills.length,
+    exit_fills: exitFills,
+    pnl_source: isClosed ? "SETTLED_EXCHANGE_FILLS" : "MARKED_TO_MARKET",
     is_open: position.state !== "CLOSED",
-    is_closed: position.state === "CLOSED",
+    is_closed: isClosed,
   };
 }
 
@@ -242,15 +309,23 @@ Deno.serve(async (request: Request) => {
   if (!SUPABASE_URL || !SERVICE_KEY) return response({ ok: false, error: "missing Supabase configuration" }, 500);
 
   try {
-    const [positions, orders, snapshots] = await Promise.all([
+    const [positions, orders, fills, snapshots] = await Promise.all([
       db("trading_positions?is_paper=eq.false&state=in.(OPEN,EXITING,CLOSED)&select=*&order=created_at.desc&limit=1000"),
-      db("trading_orders?state=eq.APPLIED&select=*&order=requested_at.asc&limit=5000"),
+      dbAll("trading_orders?state=eq.APPLIED&select=*&order=requested_at.asc"),
+      // Explicit column list: `select=*` drags the raw_response payload of every
+      // fill into memory for no benefit.
+      dbAll(
+        "exchange_trade_fills?position_id=not.is.null" +
+          "&select=position_id,side,exchange_trade_id,exchange_order_id,executed_at,price,quantity," +
+          "quote_amount,fee_quote_amount,realized_pnl_quote,source,bot_order_id" +
+          "&order=executed_at.asc",
+      ),
       db("trading_account_snapshots?select=*&order=captured_at.desc&limit=200"),
     ]);
 
     const latest = latestSnapshots(snapshots);
     const trades = positions
-      .map((position) => calculateTrade(position, orders, latest[position.exchange as Exchange]))
+      .map((position) => calculateTrade(position, orders, fills, latest[position.exchange as Exchange]))
       // TS does not narrow through filter(Boolean); the predicate makes the null removal
       // visible to the type checker. Runtime behavior is unchanged.
       .filter((row): row is JsonRecord => Boolean(row))
@@ -269,6 +344,8 @@ Deno.serve(async (request: Request) => {
         cumulative_return_pct: "누적 순손익 / 실제 진입원가 합계",
         current_open_return_pct: "현재 열린 포지션 순손익 / 열린 포지션 실제 진입원가",
         net_pnl_quote: "청산대금-청산수수료+현재평가액-진입대금-진입수수료",
+        closed_trade_pnl: "종료된 거래는 체결 기준 realized_pnl_quote/realized_return_pct를 그대로 표시하며 현재가로 재계산하지 않습니다",
+        exit_fills: "분할 매도는 거래소 체결 단위로 각각 표시됩니다 (합성 단일 체결로 덮어쓰지 않음)",
         excluded_states: ["CANCELLED", "ENTRY_TEST_REJECTED", "ENTRY_REJECTED", "ENTRY_NOT_FILLED", "ORPHAN_ENTRY_PENDING"],
       },
     });
