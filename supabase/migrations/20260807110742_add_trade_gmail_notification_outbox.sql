@@ -28,8 +28,6 @@ alter table public.trade_notification_outbox enable row level security;
 revoke all on table public.trade_notification_outbox from public, anon, authenticated;
 grant all on table public.trade_notification_outbox to service_role;
 
-after migration;
-
 create or replace function public.enqueue_trade_notification_outbox()
 returns trigger
 language plpgsql
