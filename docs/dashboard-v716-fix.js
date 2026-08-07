@@ -58,7 +58,9 @@
     const count = document.getElementById("realized-visible-count");
 
     dataRows.forEach((row, index) => {
-      row.hidden = !realizedExpanded && index >= REALIZED_COLLAPSED_LIMIT;
+      const shouldHide = !realizedExpanded && index >= REALIZED_COLLAPSED_LIMIT;
+      row.hidden = shouldHide;
+      row.style.display = shouldHide ? "none" : "";
     });
 
     const visible = realizedExpanded ? total : Math.min(total, REALIZED_COLLAPSED_LIMIT);
@@ -66,9 +68,12 @@
       ? `최근 ${visible}건 표시 · 총 ${total}건`
       : `${total}건 표시`;
 
-    if (footer) footer.hidden = total <= REALIZED_COLLAPSED_LIMIT;
+    if (footer) {
+      footer.hidden = total <= REALIZED_COLLAPSED_LIMIT;
+      footer.style.display = total <= REALIZED_COLLAPSED_LIMIT ? "none" : "";
+    }
     if (toggle) {
-      toggle.textContent = realizedExpanded ? "접기 · 최근 10건" : `더 보기 · ${total - REALIZED_COLLAPSED_LIMIT}건`;
+      toggle.textContent = realizedExpanded ? "접기 · 최근 10건" : `더보기 · ${total - REALIZED_COLLAPSED_LIMIT}건`;
       toggle.setAttribute("aria-expanded", realizedExpanded ? "true" : "false");
     }
   }
