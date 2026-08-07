@@ -5,7 +5,7 @@ const SERVICE_KEY = (Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "").trim();
 const AUTOTRADE_TOKEN = (Deno.env.get("AUTOTRADE_ACCESS_TOKEN") || "").trim();
 const DASHBOARD_TOKEN = ((Deno.env.get("DASHBOARD_ACCESS_TOKEN") || Deno.env.get("LEARNING_ACCESS_TOKEN")) || "").trim();
 const DASHBOARD_ORIGIN = ((Deno.env.get("ALLOWED_ORIGINS") || "").split(",")[0] || "*").trim();
-const REVISION = "2-ENTRY-STATUS-SETTINGS-FIX";
+const REVISION = "3-ENTRY-STATUS-ORDER-STATE-FIX";
 
 function safeEqual(left: string, right: string): boolean {
   const a = new TextEncoder().encode(left);
@@ -68,7 +68,7 @@ Deno.serve(async (request: Request) => {
       db("trading_decisions?select=created_at,cycle_id,exchange,market,outcome,reason&order=created_at.desc&limit=1"),
       db(`trading_decisions?created_at=gte.${encodeURIComponent(scanCutoff)}&select=created_at,cycle_id,exchange,market,outcome,reason&order=created_at.desc&limit=200`),
       db(`trading_decisions?created_at=gte.${encodeURIComponent(recentCutoff)}&select=created_at,exchange,market,outcome,reason&order=created_at.desc&limit=500`),
-      db("trading_orders?select=requested_at,exchange,market,side,status,exchange_order_id&order=requested_at.desc&limit=1"),
+      db("trading_orders?select=requested_at,exchange,market,side,state,exchange_order_id&order=requested_at.desc&limit=1"),
     ]);
 
     const reasonCounts = new Map<string, number>();
