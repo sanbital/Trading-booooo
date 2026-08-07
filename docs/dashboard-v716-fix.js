@@ -57,6 +57,7 @@
     const toggle = document.getElementById("realized-collapse-toggle");
     const count = document.getElementById("realized-visible-count");
 
+    body.classList.toggle("realized-expanded", realizedExpanded);
     dataRows.forEach((row, index) => {
       const shouldHide = !realizedExpanded && index >= REALIZED_COLLAPSED_LIMIT;
       row.hidden = shouldHide;
