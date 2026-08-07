@@ -2,7 +2,7 @@
 // Publishable(또는 기존 Anon) Key는 브라우저용 공개 키입니다.
 // Service Role / Secret Key / SCAN_ACCESS_TOKEN은 절대 이 파일에 넣지 마세요.
 const UI_VERSION = "7.5.1-RESIDUAL-TP50-SL10";
-const DASHBOARD_REVISION = "7.5.4-r1-ENTRY-DIAGNOSTICS";
+const DASHBOARD_REVISION = "7.5.2-r1-LIVE-REFRESH-MANUAL-EXIT";
 
 window.TRADING_SCANNER_CONFIG = {
   uiVersion: UI_VERSION,
@@ -51,7 +51,7 @@ window.addEventListener("pageshow", applyDashboardVersion);
   document.head.appendChild(realizedScript);
 
   const entryStatusScript = document.createElement("script");
-  entryStatusScript.src = `./entry-status.js?v=${assetVersion}`;
+  entryStatusScript.src = `./entry-status.js?v=1-ENTRY-DIAGNOSTICS`;
   entryStatusScript.defer = true;
   document.head.appendChild(entryStatusScript);
 
