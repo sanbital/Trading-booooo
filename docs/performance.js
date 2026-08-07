@@ -20,10 +20,34 @@
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
-  const fmt = (value, digits = 8) => Number.isFinite(Number(value))
+  const fmt = (value, digits = 10) => Number.isFinite(Number(value))
     ? Number(value).toLocaleString("ko-KR", { maximumFractionDigits: digits })
     : "—";
+  const dtMs = value => Number.isFinite(Number(value))
+    ? new Date(Number(value)).toLocaleString("ko-KR")
+    : "—";
   const dt = value => value ? new Date(value).toLocaleString("ko-KR") : "—";
+
+  const STATUS_LABEL = {
+    NEW: "대기",
+    PARTIALLY_FILLED: "부분 체결",
+    FILLED: "체결 완료",
+    CANCELED: "취소",
+    PENDING_CANCEL: "취소 대기",
+    REJECTED: "거절",
+    EXPIRED: "만료",
+    EXPIRED_IN_MATCH: "매칭 중 만료",
+  };
+
+  const TYPE_LABEL = {
+    LIMIT: "Limit",
+    MARKET: "Market",
+    LIMIT_MAKER: "Limit Maker",
+    STOP_LOSS: "Stop Loss",
+    STOP_LOSS_LIMIT: "Stop Loss Limit",
+    TAKE_PROFIT: "Take Profit",
+    TAKE_PROFIT_LIMIT: "Take Profit Limit",
+  };
 
   function inject() {
     if ($("trade-performance-section")) return;
@@ -37,16 +61,23 @@
       <div class="section-heading performance-heading">
         <div>
           <p class="eyebrow">BINANCE SOURCE OF TRUTH</p>
-          <h2>바이낸스 실거래 내역</h2>
+          <h2>바이낸스 주문 내역</h2>
         </div>
-        <p>Binance Spot API가 내려준 실제 체결 데이터만 표시합니다. 손익·수익률·평균원가는 이 화면에서 자체 계산하지 않습니다.</p>
+        <p>Binance Spot Order History 원본을 그대로 표시합니다. 손익·수익률·평균단가를 트레이딩 부우에서 계산하지 않습니다.</p>
       </div>
 
       <div class="performance-filters">
-        <select id="binance-side-filter" aria-label="매수 매도 필터">
+        <select id="binance-side-filter" aria-label="방향 필터">
           <option value="all">전체 방향</option>
           <option value="BUY">매수</option>
           <option value="SELL">매도</option>
+        </select>
+        <select id="binance-status-filter" aria-label="상태 필터">
+          <option value="all">전체 상태</option>
+          <option value="FILLED">체결 완료</option>
+          <option value="EXPIRED">만료</option>
+          <option value="CANCELED">취소</option>
+          <option value="NEW">대기</option>
         </select>
         <button id="performance-csv-download" class="button-secondary performance-action-button" type="button">CSV 다운로드</button>
         <button id="performance-expand-toggle" class="button-secondary performance-action-button" type="button">더 보기 · 50개</button>
@@ -54,7 +85,7 @@
       </div>
 
       <div class="performance-refresh-bar">
-        <span id="performance-refresh-status" class="performance-refresh-status">Binance 원본 데이터를 불러오는 중입니다.</span>
+        <span id="performance-refresh-status" class="performance-refresh-status">Binance Order History를 불러오는 중입니다.</span>
       </div>
 
       <article class="panel performance-exchange-card" style="margin-bottom:14px">
@@ -70,68 +101,54 @@
       <div class="table-wrap panel performance-table-wrap">
         <table class="performance-table" style="min-width:1150px">
           <thead><tr>
-            <th>체결 시각</th><th>종목</th><th>방향</th><th>체결 수량</th><th>체결가</th>
-            <th>거래대금</th><th>수수료</th><th>체결 방식</th><th>주문 ID</th><th>체결 ID</th>
+            <th>주문 시각</th><th>종목</th><th>주문</th><th>수량</th><th>가격</th>
+            <th>상태</th><th>주문 ID</th><th>Client Order ID</th><th>업데이트 시각</th>
           </tr></thead>
           <tbody id="trade-performance-body">
-            <tr><td colspan="10" class="muted">Binance 원본 데이터를 불러오는 중입니다.</td></tr>
+            <tr><td colspan="9" class="muted">Binance Order History를 불러오는 중입니다.</td></tr>
           </tbody>
         </table>
       </div>
 
       <div class="performance-list-footer">
         <span id="performance-row-summary" class="performance-row-summary"></span>
-        <nav id="performance-pagination" class="performance-pagination hidden" aria-label="바이낸스 체결내역 페이지">
+        <nav id="performance-pagination" class="performance-pagination hidden" aria-label="바이낸스 주문내역 페이지">
           <button id="performance-page-prev" class="button-secondary performance-page-button" type="button">이전</button>
           <span id="performance-page-info"></span>
           <button id="performance-page-next" class="button-secondary performance-page-button" type="button">다음</button>
         </nav>
       </div>
-      <p class="performance-definition">데이터 원본: Binance Spot GET /api/v3/myTrades. 표시값은 Binance 응답의 price, qty, quoteQty, commission, commissionAsset, time, orderId, trade id를 그대로 사용합니다. 한 주문이 여러 번 체결되면 Binance 체결 건수만큼 여러 줄로 보입니다.</p>`;
+      <p class="performance-definition">데이터 원본: Binance Spot GET /api/v3/allOrders. origQty / executedQty, price, type, side, status, time, updateTime, orderId를 Binance 응답 그대로 표시합니다. 합산·손익 계산·평균단가 재계산 없음.</p>`;
     positions.insertAdjacentElement("afterend", section);
 
-    $("binance-side-filter")?.addEventListener("change", () => { page = 1; renderTrades(); });
+    ["binance-side-filter", "binance-status-filter"].forEach(id => {
+      $(id)?.addEventListener("change", () => { page = 1; renderOrders(); });
+    });
     $("performance-expand-toggle")?.addEventListener("click", () => {
       expanded = !expanded;
       page = 1;
-      renderTrades();
+      renderOrders();
     });
     $("performance-page-prev")?.addEventListener("click", () => {
       page = Math.max(1, page - 1);
-      renderTrades();
+      renderOrders();
     });
     $("performance-page-next")?.addEventListener("click", () => {
       page += 1;
-      renderTrades();
+      renderOrders();
     });
     $("performance-refresh-now")?.addEventListener("click", () => load({ force: true }));
     $("performance-csv-download")?.addEventListener("click", downloadCsv);
   }
 
-  function rawTrade(row) {
-    const raw = row?.binance && typeof row.binance === "object" ? row.binance : {};
-    return {
-      market: raw.symbol || row.market || "",
-      tradeId: raw.id ?? row.exchange_trade_id,
-      orderId: raw.orderId ?? row.exchange_order_id,
-      price: raw.price ?? row.price,
-      qty: raw.qty ?? row.quantity,
-      quoteQty: raw.quoteQty ?? row.quote_amount,
-      commission: raw.commission ?? row.fee_amount,
-      commissionAsset: raw.commissionAsset ?? row.fee_asset,
-      time: Number.isFinite(Number(raw.time)) ? Number(raw.time) : Date.parse(row.executed_at || ""),
-      isBuyer: raw.isBuyer ?? String(row.side).toUpperCase() === "BUY",
-      isMaker: raw.isMaker ?? Boolean(row.is_maker),
-    };
-  }
-
   function filtered() {
-    const rows = Array.isArray(latestSource?.trades) ? latestSource.trades : [];
+    const rows = Array.isArray(latestSource?.orders) ? latestSource.orders : [];
     const side = $("binance-side-filter")?.value || "all";
+    const status = $("binance-status-filter")?.value || "all";
     return rows.filter(row => {
-      const trade = rawTrade(row);
-      const tradeSide = trade.isBuyer ? "BUY" : "SELL";
-      return side === "all" || tradeSide === side;
+      if (side !== "all" && String(row?.side || "").toUpperCase() !== side) return false;
+      if (status !== "all" && String(row?.status || "").toUpperCase() !== status) return false;
+      return true;
     });
   }
 
@@ -157,7 +174,7 @@
       : `<div><span>잔고</span><b>표시할 자산 없음</b></div>`;
   }
 
-  function renderTrades() {
+  function renderOrders() {
     const body = $("trade-performance-body");
     if (!body || !latestSource) return;
     const rows = filtered();
@@ -167,23 +184,27 @@
     const start = expanded ? (page - 1) * PAGE : 0;
     const visible = rows.slice(start, start + size);
 
-    body.innerHTML = visible.length ? visible.map(row => {
-      const trade = rawTrade(row);
-      const sideLabel = trade.isBuyer ? "매수" : "매도";
-      const time = Number.isFinite(trade.time) ? new Date(trade.time).toLocaleString("ko-KR") : "—";
+    body.innerHTML = visible.length ? visible.map(order => {
+      const side = String(order?.side || "").toUpperCase();
+      const type = String(order?.type || "").toUpperCase();
+      const status = String(order?.status || "").toUpperCase();
+      const orderLabel = `${TYPE_LABEL[type] || type} / ${side === "BUY" ? "Buy" : side === "SELL" ? "Sell" : side}`;
+      const amount = `${esc(order?.executedQty ?? "")} / ${esc(order?.origQty ?? "")}`;
+      const price = type === "MARKET"
+        ? `${esc(order?.cummulativeQuoteQty ?? order?.cumulativeQuoteQty ?? "")} / Market`
+        : esc(order?.price ?? "");
       return `<tr>
-        <td>${time}</td>
-        <td><strong>${esc(trade.market)}</strong></td>
-        <td><strong>${sideLabel}</strong></td>
-        <td>${esc(trade.qty)}</td>
-        <td>${esc(trade.price)}</td>
-        <td>${esc(trade.quoteQty)}</td>
-        <td>${esc(trade.commission)} ${esc(trade.commissionAsset)}</td>
-        <td>${trade.isMaker ? "Maker" : "Taker"}</td>
-        <td>${esc(trade.orderId)}</td>
-        <td>${esc(trade.tradeId)}</td>
+        <td>${dtMs(order?.time)}</td>
+        <td><strong>${esc(order?.symbol)}</strong></td>
+        <td><strong>${esc(orderLabel)}</strong></td>
+        <td>${amount}</td>
+        <td>${price}</td>
+        <td><strong>${esc(STATUS_LABEL[status] || status)}</strong></td>
+        <td>${esc(order?.orderId)}</td>
+        <td>${esc(order?.clientOrderId)}</td>
+        <td>${dtMs(order?.updateTime)}</td>
       </tr>`;
-    }).join("") : `<tr><td colspan="10" class="muted">선택 조건에 해당하는 Binance 체결이 없습니다.</td></tr>`;
+    }).join("") : `<tr><td colspan="9" class="muted">선택 조건에 해당하는 Binance 주문이 없습니다.</td></tr>`;
 
     const toggle = $("performance-expand-toggle");
     if (toggle) {
@@ -192,7 +213,7 @@
     }
     const summary = $("performance-row-summary");
     if (summary) summary.textContent = expanded
-      ? `Binance 체결 ${rows.length}건 · ${rows.length ? start + 1 : 0}–${Math.min(rows.length, start + visible.length)} 표시`
+      ? `Binance 주문 ${rows.length}건 · ${rows.length ? start + 1 : 0}–${Math.min(rows.length, start + visible.length)} 표시`
       : `Binance 최신 ${Math.min(rows.length, visible.length)}건 표시 · 조회 ${rows.length}건`;
     const nav = $("performance-pagination");
     if (nav) nav.classList.toggle("hidden", !expanded || totalPages <= 1);
@@ -204,7 +225,7 @@
   function render() {
     inject();
     renderBalances();
-    renderTrades();
+    renderOrders();
   }
 
   function csvCell(value) {
@@ -214,31 +235,16 @@
   function downloadCsv() {
     const rows = filtered();
     if (!rows.length) return;
-    const headers = ["체결시각", "종목", "방향", "수량", "체결가", "거래대금", "수수료", "수수료자산", "Maker", "주문ID", "체결ID"];
+    const headers = ["symbol", "orderId", "clientOrderId", "price", "origQty", "executedQty", "cummulativeQuoteQty", "status", "timeInForce", "type", "side", "time", "updateTime"];
     const lines = [
       headers.map(csvCell).join(","),
-      ...rows.map(row => {
-        const t = rawTrade(row);
-        return [
-          Number.isFinite(t.time) ? new Date(t.time).toISOString() : "",
-          t.market,
-          t.isBuyer ? "BUY" : "SELL",
-          t.qty,
-          t.price,
-          t.quoteQty,
-          t.commission,
-          t.commissionAsset,
-          t.isMaker,
-          t.orderId,
-          t.tradeId,
-        ].map(csvCell).join(",");
-      }),
+      ...rows.map(order => headers.map(key => csvCell(order?.[key] ?? (key === "cummulativeQuoteQty" ? order?.cumulativeQuoteQty : ""))).join(",")),
     ];
     const blob = new Blob(["\uFEFF", lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `binance-mytrades-${new Date().toISOString().slice(0, 10)}.csv`;
+    anchor.download = `binance-order-history-${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
@@ -250,9 +256,9 @@
     if (!force && document.hidden) return;
     pending = true;
     const status = $("performance-refresh-status");
-    if (status) status.textContent = "Binance 원본 체결 데이터를 불러오는 중입니다.";
+    if (status) status.textContent = "Binance Order History 원본을 불러오는 중입니다.";
     try {
-      const endpoint = `${String(config.supabaseUrl || "").replace(/\/$/, "")}/functions/v1/${config.binanceSourceFunctionName || "binance-source"}`;
+      const endpoint = `${String(config.supabaseUrl || "").replace(/\/$/, "")}/functions/v1/${config.binanceOrderSourceFunctionName || "binance-order-source"}`;
       const response = await originalFetch(endpoint, {
         method: "POST",
         cache: "no-store",
@@ -261,18 +267,17 @@
           "x-autotrade-token": dashboardToken,
           ...(config.supabasePublishableKey ? { apikey: config.supabasePublishableKey } : {}),
         },
-        body: JSON.stringify({ limit: 500 }),
+        body: JSON.stringify({ lookback_hours: 48, limit: 200 }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.ok === false) throw new Error(data.error || `HTTP ${response.status}`);
       latestSource = data;
       lastLoaded = Date.now();
       render();
-      const run = data.sync_run || {};
-      const syncText = run.completed_at ? ` · 동기화 ${dt(run.completed_at)}` : "";
-      if (status) status.textContent = `Binance Spot /api/v3/myTrades 원본 · 자체 계산 없음${syncText}`;
+      const errorText = Array.isArray(data.errors) && data.errors.length ? ` · 일부 종목 조회 실패 ${data.errors.length}` : "";
+      if (status) status.textContent = `Binance Spot /api/v3/allOrders 원본 · 자체 계산 없음 · ${dt(data.generated_at)}${errorText}`;
     } catch (error) {
-      if (status) status.textContent = `Binance 원본 조회 실패: ${error?.message || error}`;
+      if (status) status.textContent = `Binance Order History 조회 실패: ${error?.message || error}`;
     } finally {
       pending = false;
     }
