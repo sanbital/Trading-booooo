@@ -27,17 +27,22 @@ export function nextReconciliationFailure(
 ): ReconciliationFailureDecision {
   const failureCount = Math.max(0, Math.floor(input.previousFailures)) + 1;
   const maxRetries = Math.max(1, Math.floor(input.maxAutomaticRetries ?? 3));
-  if (failureCount >= maxRetries) {
-    return {
-      state: "MANUAL_INTERVENTION_REQUIRED",
-      failureCount,
-      retryAtMs: null,
-      pauseNewEntries: true,
-      manualInterventionRequired: true,
-    };
-  }
   const now = Number.isFinite(input.nowMs) ? Number(input.nowMs) : Date.now();
   const base = Math.max(1000, Number(input.baseBackoffMs ?? 5000));
+
+  // A reconciliation transport/order failure is not evidence of human trading.
+  // After automatic retries are exhausted, keep the position in a technical failure
+  // state and fail closed for new entries. Explicit account-delta/manual-detection
+  // paths are solely responsible for MANUAL_INTERVENTION_REQUIRED.
+  if (failureCount >= maxRetries) {
+    return {
+      state: "RECONCILIATION_FAILED",
+      failureCount,
+      retryAtMs: now + base * 2 ** Math.min(failureCount - 1, 6),
+      pauseNewEntries: true,
+      manualInterventionRequired: false,
+    };
+  }
   return {
     state: "RECONCILIATION_FAILED",
     failureCount,
