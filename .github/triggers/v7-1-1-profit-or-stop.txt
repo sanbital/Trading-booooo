@@ -1,0 +1,1 @@
+Trigger the v7.1.1 deployment workflow: 45-second Top-10 observation, 180-second review horizon, fee-net profit exit or -5% hard stop.
