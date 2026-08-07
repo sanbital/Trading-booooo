@@ -74,5 +74,12 @@ jobs:
             -H "content-type: application/json" \
             -H "x-autotrade-token: ${autotrade_token}" \
             "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/market-performance")"
-          jq -e '.ok == true and .performance_revision == "6.11.0-r9-EXCHANGE-FILL-IMMUTABLE-UI"' <<< "$body" >/dev/null
+          # Assert against the revision the source actually declares. A pinned literal here
+          # silently rots: it still said r6 while the function shipped r8, so the 02:57
+          # deploy on 2026-08-07 succeeded and was reported red anyway, and production got
+          # manually rolled back to a stale build.
+          expected="$(sed -n 's/^const PERFORMANCE_REVISION = "\(.*\)";$/\1/p' supabase/functions/market-performance/index.ts)"
+          if [ -z "$expected" ]; then echo "::error::could not read PERFORMANCE_REVISION from source."; exit 1; fi
+          echo "expected performance_revision: ${expected}"
+          jq -e --arg expected "$expected" '.ok == true and .performance_revision == $expected' <<< "$body" >/dev/null
           jq '{ok, version, performance_revision, generated_at, source_counts, account_reconciliation}' <<< "$body"
