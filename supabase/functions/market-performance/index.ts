@@ -1,685 +1,306 @@
-// Trading-booooo performance API v6.11.0 — manual-exit reconciliation revision r6.
-// The dashboard is built only from actual LIVE fills. PostgREST is paged explicitly so
-// the default 1,000-row response cap cannot freeze the trade list at an old timestamp.
-//
-// r6 answers two operator reports. A coin the operator sold by hand kept appearing as an
-// open trade because the ledger still carried its quantity, and the realised result of
-// that sell never reached the per-exchange totals. Every open row is now reconciled
-// against the latest account balance snapshot before it is priced, and anything worth a
-// dollar or less is not a position.
+// Trading-booooo performance API v6.11.0 — actual-fill accounting revision r8.
+// Source of truth: actual trading_fills. Each SELL order becomes an immutable realised row;
+// only the unsold quantity remains an open mark-to-market row. Account balances are used
+// only to verify/cap the remaining holding, never to invent realised PnL.
 
-import { type JsonRecord as TimeJsonRecord, resolveLifecycleTimes } from "./time-integrity.ts";
 import { collectPages } from "./rest-pagination.ts";
-import {
-  baseAssetOf,
-  createBalanceAllocator,
-  dustQuoteFor,
-  type Holding,
-  resolveHolding,
-  snapshotBalanceMap,
-  snapshotIsUsable,
-} from "../_shared/position-value.ts";
-import { settleTrade } from "./account-settlement.ts";
+import { baseAssetOf, createBalanceAllocator, snapshotBalanceMap, snapshotIsUsable } from "../_shared/position-value.ts";
 
 type JsonRecord = Record<string, any>;
 type Exchange = "upbit" | "binance";
 
 const VERSION = "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION";
-const PERFORMANCE_REVISION = "6.11.0-r6-MANUAL-EXIT-DUST-RECONCILE";
+const PERFORMANCE_REVISION = "6.11.0-r8-ACTUAL-FILL-SPLIT-EXIT";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const SERVICE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
 const DASHBOARD_TOKEN = env("DASHBOARD_ACCESS_TOKEN") || env("LEARNING_ACCESS_TOKEN");
 const DASHBOARD_ORIGIN = env("ALLOWED_ORIGINS").split(",")[0] || "*";
-const REST_PAGE_SIZE = 1000;
-// The dashboard refreshes on a timer now, so the shared cache is short enough that a
-// scheduled refresh shows current numbers. An operator pressing 즉시 새로고침 sends
-// `force` and skips it entirely.
-const PERFORMANCE_CACHE_TTL_MS = 45_000;
-const TAKER_FEE_PCT: Record<Exchange, number> = { upbit: 0.05, binance: 0.1 };
-let performanceCache: { body: JsonRecord; cachedAt: number } | null = null;
-let performanceRefreshInFlight = false;
+const PAGE_SIZE = 1000;
+const CACHE_TTL_MS = 45_000;
+let cache: { body: JsonRecord; at: number } | null = null;
+let refreshing = false;
 
-function env(name: string): string {
-  return (Deno.env.get(name) || "").trim();
-}
-
-function numeric(value: unknown, fallback = 0): number {
-  if (value === null || value === undefined || value === "") return fallback;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : fallback;
-}
-
-function safeEqual(left: string, right: string): boolean {
-  const a = new TextEncoder().encode(left);
-  const b = new TextEncoder().encode(right);
-  const length = Math.max(a.length, b.length);
-  let diff = a.length ^ b.length;
-  for (let index = 0; index < length; index++) diff |= (a[index] || 0) ^ (b[index] || 0);
+function env(name: string): string { return (Deno.env.get(name) || "").trim(); }
+function num(v: unknown, fallback = 0): number { const n = Number(v); return Number.isFinite(n) ? n : fallback; }
+function safeEqual(a0: string, b0: string): boolean {
+  const a = new TextEncoder().encode(a0), b = new TextEncoder().encode(b0);
+  const len = Math.max(a.length, b.length); let diff = a.length ^ b.length;
+  for (let i = 0; i < len; i++) diff |= (a[i] || 0) ^ (b[i] || 0);
   return diff === 0;
 }
-
-function authorized(request: Request): boolean {
-  const provided = (request.headers.get("x-autotrade-token") || "").trim();
-  if (!provided) return false;
-  return (AUTOTRADE_TOKEN.length >= 32 && safeEqual(AUTOTRADE_TOKEN, provided)) ||
-    (DASHBOARD_TOKEN.length >= 32 && safeEqual(DASHBOARD_TOKEN, provided));
+function authorized(req: Request): boolean {
+  const token = (req.headers.get("x-autotrade-token") || "").trim();
+  return Boolean(token) && ((AUTOTRADE_TOKEN.length >= 32 && safeEqual(AUTOTRADE_TOKEN, token)) ||
+    (DASHBOARD_TOKEN.length >= 32 && safeEqual(DASHBOARD_TOKEN, token)));
 }
-
-const CORS_HEADERS = {
+const CORS = {
   "access-control-allow-origin": DASHBOARD_ORIGIN,
   "access-control-allow-methods": "POST, OPTIONS",
   "access-control-allow-headers": "content-type, x-autotrade-token, apikey, authorization",
-  "access-control-max-age": "86400",
 };
-
-function response(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      ...CORS_HEADERS,
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
-      pragma: "no-cache",
-      expires: "0",
-    },
-  });
+function out(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 }
-
 function dbHeaders(extra: Record<string, string> = {}): HeadersInit {
-  return {
-    apikey: SERVICE_KEY,
-    authorization: `Bearer ${SERVICE_KEY}`,
-    "content-type": "application/json",
-    "cache-control": "no-cache",
-    pragma: "no-cache",
-    ...extra,
-  };
+  return { apikey: SERVICE_KEY, authorization: `Bearer ${SERVICE_KEY}`, "content-type": "application/json", ...extra };
 }
-
-async function dbPage(path: string, from: number, to: number): Promise<any[]> {
-  const result = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    headers: dbHeaders({
-      Range: `${from}-${to}`,
-      "Range-Unit": "items",
-    }),
-    cache: "no-store",
-  });
-  const text = await result.text();
-  let data: any;
-  try {
-    data = text ? JSON.parse(text) : [];
-  } catch {
-    data = text;
-  }
-  if (!result.ok) {
-    throw new Error(
-      `database ${result.status}: ${typeof data === "string" ? data : JSON.stringify(data)}`,
-    );
-  }
+async function page(path: string, from: number, to: number): Promise<any[]> {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: dbHeaders({ Range: `${from}-${to}`, "Range-Unit": "items" }), cache: "no-store" });
+  const text = await r.text(); let data: any;
+  try { data = text ? JSON.parse(text) : []; } catch { data = text; }
+  if (!r.ok) throw new Error(`database ${r.status}: ${typeof data === "string" ? data : JSON.stringify(data)}`);
   return Array.isArray(data) ? data : [];
 }
-
-async function dbAll(path: string, maxRows: number): Promise<any[]> {
-  return collectPages(
-    (from, to) => dbPage(path, from, to),
-    { pageSize: REST_PAGE_SIZE, maxRows },
-  );
+async function all(path: string, maxRows: number): Promise<any[]> {
+  return collectPages((from, to) => page(path, from, to), { pageSize: PAGE_SIZE, maxRows });
 }
-
-async function dbLimited(path: string): Promise<any[]> {
-  return dbPage(path, 0, REST_PAGE_SIZE - 1);
-}
-
-function kstDayKey(value: string | Date): string {
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const kst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
-  return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, "0")}-${
-    String(kst.getUTCDate()).padStart(2, "0")
-  }`;
-}
-
-function durationTo(start: string | null, end: string | null): number | null {
-  if (!start || !end) return null;
-  const startMs = Date.parse(start);
-  const endMs = Date.parse(end);
-  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return null;
-  return Math.round((endMs - startMs) / 1000);
-}
-
-function latestSnapshots(rows: JsonRecord[]): Record<Exchange, JsonRecord | null> {
-  const latest: Record<Exchange, JsonRecord | null> = { upbit: null, binance: null };
-  for (const row of rows) {
-    const exchange = String(row.exchange || "") as Exchange;
-    if ((exchange === "upbit" || exchange === "binance") && !latest[exchange]) {
-      latest[exchange] = row;
-    }
-  }
-  return latest;
-}
-
+async function limited(path: string): Promise<any[]> { return page(path, 0, PAGE_SIZE - 1); }
 function groupBy<T extends JsonRecord>(rows: T[], key: string): Map<string, T[]> {
-  const grouped = new Map<string, T[]>();
-  for (const row of rows) {
-    const value = String(row[key] || "");
-    if (!value) continue;
-    const current = grouped.get(value) || [];
-    current.push(row);
-    grouped.set(value, current);
-  }
-  return grouped;
+  const m = new Map<string, T[]>();
+  for (const row of rows) { const k = String(row[key] || ""); if (!k) continue; const a = m.get(k) || []; a.push(row); m.set(k, a); }
+  return m;
 }
+function sum(rows: JsonRecord[], key: string): number { return rows.reduce((s, r) => s + Math.max(0, num(r[key])), 0); }
+function earliest(rows: JsonRecord[]): string | null {
+  const xs = rows.map(r => Date.parse(String(r.executed_at || ""))).filter(Number.isFinite); return xs.length ? new Date(Math.min(...xs)).toISOString() : null;
+}
+function latest(rows: JsonRecord[]): string | null {
+  const xs = rows.map(r => Date.parse(String(r.executed_at || ""))).filter(Number.isFinite); return xs.length ? new Date(Math.max(...xs)).toISOString() : null;
+}
+function duration(a: string | null, b: string | null): number | null {
+  if (!a || !b) return null; const x = Date.parse(a), y = Date.parse(b); return Number.isFinite(x) && Number.isFinite(y) && y >= x ? Math.round((y - x) / 1000) : null;
+}
+function latestSnapshots(rows: JsonRecord[]): Record<Exchange, JsonRecord | null> {
+  const result: Record<Exchange, JsonRecord | null> = { upbit: null, binance: null };
+  for (const row of rows) { const e = String(row.exchange) as Exchange; if ((e === "upbit" || e === "binance") && !result[e]) result[e] = row; }
+  return result;
+}
+function orderFee(order: JsonRecord, fillsByOrder: Map<string, JsonRecord[]>): number {
+  const paid = Math.max(0, num(order.paid_fee_quote));
+  return paid > 0 ? paid : sum(fillsByOrder.get(String(order.id || "")) || [], "fee_quote_estimate");
+}
+function quoteCurrency(exchange: Exchange): string { return exchange === "upbit" ? "KRW" : "USDT"; }
 
-function calculateTrade(
+function buildRows(
   position: JsonRecord,
-  positionOrders: JsonRecord[],
+  orders: JsonRecord[],
   fillsByOrder: Map<string, JsonRecord[]>,
   snapshot: JsonRecord | null,
-  holdingFor: (position: JsonRecord, ledgerQuantity: number, price: number) => Holding,
-): { quality: string; trade: JsonRecord | null } {
-  const buys = positionOrders.filter((order) =>
-    String(order.side).toUpperCase() === "BUY" && String(order.purpose).toUpperCase() === "ENTRY"
-  );
-  const sells = positionOrders.filter((order) => String(order.side).toUpperCase() === "SELL");
-  const fillsForOrders = (orders: JsonRecord[]) =>
-    orders.flatMap((order) => fillsByOrder.get(String(order.id || "")) || []);
-  const entryFills = fillsForOrders(buys);
-  const exitFills = fillsForOrders(sells);
-  const lifecycle = resolveLifecycleTimes({
-    state: position.state,
-    entryFills: entryFills as TimeJsonRecord[],
-    exitFills: exitFills as TimeJsonRecord[],
-  });
+  allocateBalance: ((asset: string, requested: number) => number) | null,
+): { rows: JsonRecord[]; quality: string } {
+  const entryOrders = orders.filter(o => String(o.side).toUpperCase() === "BUY" && String(o.purpose).toUpperCase() === "ENTRY");
+  const sellOrders = orders.filter(o => String(o.side).toUpperCase() === "SELL");
+  const entryFills = entryOrders.flatMap(o => fillsByOrder.get(String(o.id || "")) || []);
+  const entryQty = sum(entryFills, "volume"), entryFunds = sum(entryFills, "funds_quote");
+  if (!(entryQty > 0 && entryFunds > 0)) return { rows: [], quality: "ENTRY_FILL_MISSING" };
 
-  if (lifecycle.quality !== "FILL_VERIFIED") {
-    return { quality: lifecycle.quality, trade: null };
-  }
+  const entryAt = earliest(entryFills);
+  const avgEntry = entryFunds / entryQty;
+  const entryFeeTotal = entryOrders.reduce((s, o) => s + orderFee(o, fillsByOrder), 0);
+  const entryFeePerUnit = entryQty > 0 ? entryFeeTotal / entryQty : 0;
+  const rows: JsonRecord[] = [];
+  let soldQty = 0;
 
-  const feeForOrder = (order: JsonRecord) => {
-    const orderFee = Math.max(0, numeric(order.paid_fee_quote));
-    if (orderFee > 0) return orderFee;
-    return (fillsByOrder.get(String(order.id || "")) || []).reduce(
-      (sum, fill) => sum + Math.max(0, numeric(fill.fee_quote_estimate)),
-      0,
-    );
-  };
-  const sumFills = (rows: JsonRecord[], key: string) =>
-    rows.reduce((sum, fill) => sum + Math.max(0, numeric(fill[key])), 0);
-
-  // Actual fill economics are the source of truth. This also includes partially filled orders
-  // that later ended in EXCHANGE_CANCELLED, which the old APPLIED-only query omitted.
-  const entryVolume = sumFills(entryFills, "volume");
-  const entryFunds = sumFills(entryFills, "funds_quote");
-  const entryFees = buys.reduce((sum, order) => sum + feeForOrder(order), 0);
-  if (!(entryVolume > 0 && entryFunds > 0)) {
-    return { quality: "ENTRY_ECONOMICS_MISSING", trade: null };
-  }
-
-  const exitVolume = sumFills(exitFills, "volume");
-  const exitFunds = sumFills(exitFills, "funds_quote");
-  const exitFees = sells.reduce((sum, order) => sum + feeForOrder(order), 0);
-  const remainingQuantity = Math.max(
-    0,
-    numeric(position.remaining_quantity, Math.max(0, entryVolume - exitVolume)),
-  );
-  const residualQuantity = position.state === "CLOSED"
-    ? Math.max(0, numeric(position.residual_quantity))
-    : 0;
-  const snapshotPrice = numeric(snapshot?.prices?.[position.market]);
-  const averageEntryPrice = numeric(position.average_entry_price, entryFunds / entryVolume);
-  const averageExitPrice = exitVolume > 0 ? exitFunds / exitVolume : null;
-  const currentPrice = position.state === "CLOSED"
-    ? numeric(averageExitPrice, averageEntryPrice)
-    : numeric(snapshotPrice, averageEntryPrice);
-  const residualValueQuote = position.state === "CLOSED"
-    ? Math.max(0, numeric(position.residual_value_quote, residualQuantity * currentPrice))
-    : 0;
-
-  const closedByLedger = position.state === "CLOSED";
-  const openHolding = closedByLedger ? null : holdingFor(position, remainingQuantity, currentPrice);
-  const settlement = settleTrade({
-    closedByLedger,
-    holding: openHolding,
-    recordedManualExit: position.manual_reconcile || null,
-    remainingQuantity,
-    currentPrice,
-    feePctPerSide: TAKER_FEE_PCT[position.exchange as Exchange] ?? 0.1,
-    entryFundsQuote: entryFunds,
-    entryFeesQuote: entryFees,
-    exitFundsQuote: exitFunds,
-    exitFeesQuote: exitFees,
-    residualValueQuote,
-    ledgerRealizedPnlQuote: position.realized_pnl_quote,
-  });
-  const settledByAccount = settlement.settledByAccount;
-  const heldQuantity = settlement.heldQuantity;
-  const currentValue = settlement.currentValueQuote;
-  const closeReason = position.close_reason || settlement.closeReasonHint;
-  const settledAt = settledByAccount
-    ? String(snapshot?.captured_at || new Date().toISOString())
-    : null;
-
-  return {
-    quality: lifecycle.quality,
-    trade: {
-      id: position.id,
+  // One realised performance row per SELL ORDER. Multiple exchange fills belonging to the
+  // same order are aggregated so exchange matching fragmentation is not mistaken for split selling.
+  for (let idx = 0; idx < sellOrders.length; idx++) {
+    const order = sellOrders[idx];
+    const fills = fillsByOrder.get(String(order.id || "")) || [];
+    const qty = sum(fills, "volume"), proceeds = sum(fills, "funds_quote");
+    if (!(qty > 0 && proceeds > 0)) continue;
+    soldQty += qty;
+    const exitFee = orderFee(order, fillsByOrder);
+    const allocatedEntryFunds = avgEntry * qty;
+    const allocatedEntryFee = entryFeePerUnit * qty;
+    const cost = allocatedEntryFunds + allocatedEntryFee;
+    const pnl = proceeds - exitFee - cost;
+    const exitAt = latest(fills);
+    rows.push({
+      id: `${position.id}:sell:${order.id}`,
+      position_id: position.id,
+      execution_order_id: order.id,
+      row_type: "REALIZED_EXIT",
       exchange: position.exchange,
-      quote_currency: position.quote_currency,
+      quote_currency: position.quote_currency || quoteCurrency(position.exchange as Exchange),
       market: position.market,
-      state: settledByAccount ? "ACCOUNT_SETTLED" : position.state,
-      close_reason: closeReason,
-      entry_at: lifecycle.entryAt,
-      exit_at: lifecycle.exitAt || settledAt,
-      duration_seconds: settledByAccount && !lifecycle.exitAt
-        ? durationTo(lifecycle.entryAt, settledAt)
-        : lifecycle.durationSeconds,
-      duration_quality: lifecycle.quality,
-      entry_time_source: "TRADING_FILLS_MIN_EXECUTED_AT",
-      exit_time_source: closedByLedger
-        ? "TRADING_FILLS_MAX_EXECUTED_AT"
-        : settledByAccount
-        ? "ACCOUNT_BALANCE_SNAPSHOT"
-        : null,
-      entry_fill_count: lifecycle.entryFillCount,
-      exit_fill_count: lifecycle.exitFillCount,
-      entry_quantity: entryVolume,
-      remaining_quantity: settledByAccount ? heldQuantity : remainingQuantity,
-      ledger_remaining_quantity: remainingQuantity,
-      held_quantity: heldQuantity,
-      held_value_quote: closedByLedger ? residualValueQuote : heldQuantity * currentPrice,
-      residual_quantity: residualQuantity,
-      residual_value_quote: residualValueQuote,
-      accounting_version: position.accounting_version || null,
-      accounting_quality: position.accounting_quality || null,
-      fee_accounting_version: position.fee_accounting_version || null,
-      fee_accounting_quality: position.fee_accounting_quality || null,
-      reserved_quote: Math.max(0, numeric(position.reserved_quote)),
-      average_entry_price: averageEntryPrice,
-      average_exit_price: averageExitPrice,
-      current_price: currentPrice,
-      entry_funds_quote: entryFunds,
-      invested_cost_quote: settlement.investedCostQuote,
-      exit_funds_quote: exitFunds,
-      current_value_quote: currentValue,
-      gross_pnl_quote: settlement.grossPnlQuote,
-      total_fees_quote: settlement.totalFeesQuote,
-      net_pnl_quote: settlement.netPnlQuote,
-      return_pct: settlement.returnPct,
-      is_open: !settlement.isClosed,
-      is_closed: settlement.isClosed,
-      // Everything the operator needs to see that this row was settled from the account
-      // rather than from a fill the bot placed.
-      manual_exit_quantity: settlement.manualExitQuantity,
-      manual_exit_proceeds_quote: settlement.manualExitProceedsQuote,
-      manual_exit_basis: settlement.manualExitEstimated ? "MARK_PRICE_LESS_TAKER_FEE" : null,
-      manual_exit_estimated: settlement.manualExitEstimated,
-      account_settled: settledByAccount,
-      balance_verified: Boolean(openHolding?.balanceKnown),
-      lifecycle_quality: "FILL_VERIFIED",
-    },
-  };
+      state: "CLOSED",
+      is_open: false,
+      is_closed: true,
+      entry_at: entryAt,
+      exit_at: exitAt,
+      duration_seconds: duration(entryAt, exitAt),
+      quantity: qty,
+      entry_quantity: qty,
+      remaining_quantity: 0,
+      average_entry_price: avgEntry,
+      average_exit_price: proceeds / qty,
+      current_price: proceeds / qty,
+      entry_funds_quote: allocatedEntryFunds,
+      exit_funds_quote: proceeds,
+      invested_cost_quote: cost,
+      current_value_quote: 0,
+      total_fees_quote: allocatedEntryFee + exitFee,
+      net_pnl_quote: pnl,
+      gross_pnl_quote: proceeds - allocatedEntryFunds,
+      return_pct: cost > 0 ? pnl / cost * 100 : 0,
+      close_reason: order.purpose || position.close_reason || "SELL",
+      actual_fill_only: true,
+      balance_verified: true,
+      fill_count: fills.length,
+      accounting_quality: "ACTUAL_SELL_FILL",
+      fee_accounting_quality: order.paid_fee_quote && num(order.paid_fee_quote) > 0 ? "ORDER_PAID_FEE" : "FILL_FEE_ESTIMATE",
+    });
+  }
+
+  const ledgerRemaining = Math.max(0, entryQty - soldQty);
+  if (ledgerRemaining > 0 && String(position.state).toUpperCase() !== "CLOSED") {
+    const exchange = position.exchange as Exchange;
+    const asset = baseAssetOf(exchange, position.market, position.base_asset);
+    const heldQty = allocateBalance ? allocateBalance(asset, ledgerRemaining) : ledgerRemaining;
+    const mark = Math.max(0, num(snapshot?.prices?.[position.market], avgEntry));
+    // Account balance can only cap/verify the unsold amount. Missing balance never creates a
+    // synthetic sale or realised PnL row.
+    if (heldQty > 0) {
+      const allocatedEntryFunds = avgEntry * heldQty;
+      const allocatedEntryFee = entryFeePerUnit * heldQty;
+      const cost = allocatedEntryFunds + allocatedEntryFee;
+      const value = heldQty * mark;
+      const pnl = value - cost;
+      rows.push({
+        id: `${position.id}:open`,
+        position_id: position.id,
+        execution_order_id: null,
+        row_type: "OPEN_REMAINDER",
+        exchange,
+        quote_currency: position.quote_currency || quoteCurrency(exchange),
+        market: position.market,
+        state: "OPEN",
+        is_open: true,
+        is_closed: false,
+        entry_at: entryAt,
+        exit_at: null,
+        duration_seconds: entryAt ? duration(entryAt, new Date().toISOString()) : null,
+        quantity: heldQty,
+        entry_quantity: heldQty,
+        remaining_quantity: heldQty,
+        ledger_remaining_quantity: ledgerRemaining,
+        average_entry_price: avgEntry,
+        average_exit_price: null,
+        current_price: mark,
+        entry_funds_quote: allocatedEntryFunds,
+        exit_funds_quote: 0,
+        invested_cost_quote: cost,
+        current_value_quote: value,
+        total_fees_quote: allocatedEntryFee,
+        net_pnl_quote: pnl,
+        gross_pnl_quote: value - allocatedEntryFunds,
+        return_pct: cost > 0 ? pnl / cost * 100 : 0,
+        close_reason: null,
+        actual_fill_only: true,
+        balance_verified: Boolean(allocateBalance),
+        balance_discrepancy_quantity: Math.max(0, ledgerRemaining - heldQty),
+        accounting_quality: allocateBalance ? "ACTUAL_FILL_PLUS_BALANCE_VERIFIED" : "ACTUAL_FILL_LEDGER_ONLY",
+        fee_accounting_quality: "ENTRY_FEE_ALLOCATED",
+      });
+    }
+  }
+  return { rows, quality: rows.length ? "ACTUAL_FILL_VERIFIED" : "NO_PERFORMANCE_ROW" };
 }
 
-function aggregate(
-  exchange: Exchange,
-  trades: JsonRecord[],
-  snapshot: JsonRecord | null,
-  objectiveRows: JsonRecord[] = [],
-): JsonRecord {
-  const exchangeTrades = trades.filter((trade) => trade.exchange === exchange);
-  const closed = exchangeTrades.filter((trade) => trade.is_closed);
-  const open = exchangeTrades.filter((trade) => trade.is_open);
-  const todayKey = kstDayKey(new Date());
-  const todayClosed = closed.filter((trade) => kstDayKey(trade.exit_at || "") === todayKey);
-  const todayOpened = open.filter((trade) => kstDayKey(trade.entry_at || "") === todayKey);
-  const sum = (rows: JsonRecord[], key: string) =>
-    rows.reduce((total, row) => total + numeric(row[key]), 0);
-  const closedNet = sum(closed, "net_pnl_quote");
-  const openNet = sum(open, "net_pnl_quote");
-  const cumulativeNet = closedNet + openNet;
-  const investedAll = sum(exchangeTrades, "invested_cost_quote");
-  const investedOpen = sum(open, "invested_cost_quote");
-  const wins = closed.filter((trade) => numeric(trade.net_pnl_quote) > 0);
-  const losses = closed.filter((trade) => numeric(trade.net_pnl_quote) < 0);
-  const grossProfit = sum(wins, "net_pnl_quote");
-  const grossLoss = Math.abs(sum(losses, "net_pnl_quote"));
-  const holdSamples = closed
-    .map((trade) => numeric(trade.duration_seconds, Number.NaN))
-    .filter(Number.isFinite);
-  const todayNet = sum(todayClosed, "net_pnl_quote") + sum(todayOpened, "net_pnl_quote");
-  const todayInvested = sum(todayClosed, "invested_cost_quote") +
-    sum(todayOpened, "invested_cost_quote");
-  const objective = objectiveRows
-    .filter((row) => row.exchange === exchange)
-    .sort((a, b) =>
-      new Date(a.captured_at || 0).getTime() - new Date(b.captured_at || 0).getTime()
-    );
-  const firstObjective = objective[0] || null;
-  const lastObjective = objective.at(-1) || null;
-  const observationHours = firstObjective && lastObjective
-    ? Math.max(
-      0,
-      (new Date(lastObjective.captured_at).getTime() -
-        new Date(firstObjective.captured_at).getTime()) / 3_600_000,
-    )
-    : 0;
-  const startEquity = numeric(firstObjective?.total_equity_quote);
-  const endEquity = numeric(lastObjective?.total_equity_quote);
-  const rawAccountLogGrowth = startEquity > 0 && endEquity > 0
-    ? Math.log(endEquity / startEquity)
-    : 0;
-  let flowAdjustedAccountLogGrowth = 0;
-  let managedCapitalHours = 0;
-  let exposureHours = 0;
-  for (let index = 1; index < objective.length; index++) {
-    const previous = objective[index - 1];
-    const current = objective[index];
-    const previousAt = new Date(previous.captured_at || 0).getTime();
-    const currentAt = new Date(current.captured_at || 0).getTime();
-    const intervalHours = Math.max(0, (currentAt - previousAt) / 3_600_000);
-    const previousEquity = Math.max(0, numeric(previous.total_equity_quote));
-    const adjustedEndingEquity = numeric(current.total_equity_quote) -
-      numeric(current.external_flow_quote);
-    if (previousEquity > 0 && adjustedEndingEquity > 0) {
-      flowAdjustedAccountLogGrowth += Math.log(adjustedEndingEquity / previousEquity);
-    }
-    const managed = Math.max(0, numeric(previous.managed_capital_quote));
-    const exposure = Math.max(
-      0,
-      numeric(previous.filled_exposure_quote) + numeric(previous.reserved_exposure_quote),
-    );
-    managedCapitalHours += managed * intervalHours;
-    exposureHours += exposure * intervalHours;
-  }
-  const windowStartMs = firstObjective ? new Date(firstObjective.captured_at || 0).getTime() : 0;
-  const windowEndMs = lastObjective ? new Date(lastObjective.captured_at || 0).getTime() : 0;
-  const windowTrades = exchangeTrades.filter((trade) => {
-    const entryMs = new Date(trade.entry_at || 0).getTime();
-    return Number.isFinite(entryMs) && entryMs >= windowStartMs && entryMs <= windowEndMs;
-  });
-  const accountCapitalTurnoverPerHour = managedCapitalHours > 0
-    ? sum(windowTrades, "entry_funds_quote") / managedCapitalHours
-    : 0;
-
+function kstDay(v: string | null): string {
+  if (!v) return ""; const d = new Date(v); if (Number.isNaN(d.getTime())) return ""; const k = new Date(d.getTime() + 9 * 3600_000);
+  return `${k.getUTCFullYear()}-${String(k.getUTCMonth()+1).padStart(2,"0")}-${String(k.getUTCDate()).padStart(2,"0")}`;
+}
+function aggregate(exchange: Exchange, rows: JsonRecord[], snapshot: JsonRecord | null): JsonRecord {
+  const xs = rows.filter(r => r.exchange === exchange), closed = xs.filter(r => r.is_closed), open = xs.filter(r => r.is_open);
+  const s = (a: JsonRecord[], k: string) => a.reduce((z, r) => z + num(r[k]), 0);
+  const realised = s(closed, "net_pnl_quote"), unrealised = s(open, "net_pnl_quote"), total = realised + unrealised;
+  const invested = s(xs, "invested_cost_quote"), investedOpen = s(open, "invested_cost_quote");
+  const wins = closed.filter(r => num(r.net_pnl_quote) > 0), losses = closed.filter(r => num(r.net_pnl_quote) < 0);
+  const gp = s(wins, "net_pnl_quote"), gl = Math.abs(s(losses, "net_pnl_quote"));
+  const today = kstDay(new Date().toISOString());
+  const todayRows = xs.filter(r => kstDay(r.exit_at || r.entry_at) === today);
   return {
     exchange,
-    quote_currency: exchange === "upbit" ? "KRW" : "USDT",
-    current_equity_quote: numeric(snapshot?.total_equity_quote),
-    managed_capital_quote: numeric(snapshot?.managed_capital_quote),
-    realized_net_pnl_quote: closedNet,
-    open_net_pnl_quote: openNet,
-    cumulative_net_pnl_quote: cumulativeNet,
-    cumulative_return_pct: investedAll > 0 ? cumulativeNet / investedAll * 100 : 0,
-    current_open_return_pct: investedOpen > 0 ? openNet / investedOpen * 100 : 0,
-    today_net_pnl_quote: todayNet,
-    today_return_pct: todayInvested > 0 ? todayNet / todayInvested * 100 : 0,
-    total_fees_quote: sum(exchangeTrades, "total_fees_quote"),
-    trade_count: exchangeTrades.length,
+    quote_currency: quoteCurrency(exchange),
+    current_equity_quote: num(snapshot?.total_equity_quote),
+    managed_capital_quote: num(snapshot?.managed_capital_quote),
+    realized_net_pnl_quote: realised,
+    open_net_pnl_quote: unrealised,
+    cumulative_net_pnl_quote: total,
+    cumulative_return_pct: invested > 0 ? total / invested * 100 : 0,
+    current_open_return_pct: investedOpen > 0 ? unrealised / investedOpen * 100 : 0,
+    today_net_pnl_quote: s(todayRows, "net_pnl_quote"),
+    today_return_pct: s(todayRows, "invested_cost_quote") > 0 ? s(todayRows, "net_pnl_quote") / s(todayRows, "invested_cost_quote") * 100 : 0,
+    total_fees_quote: s(xs, "total_fees_quote"),
+    trade_count: xs.length,
     closed_trade_count: closed.length,
     open_trade_count: open.length,
     win_count: wins.length,
     loss_count: losses.length,
-    win_rate_pct: closed.length > 0 ? wins.length / closed.length * 100 : 0,
-    profit_factor: grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? null : 0,
-    average_return_pct: closed.length > 0 ? sum(closed, "return_pct") / closed.length : 0,
-    average_hold_seconds: holdSamples.length > 0
-      ? holdSamples.reduce((a, b) => a + b, 0) / holdSamples.length
-      : null,
-    raw_account_log_growth: rawAccountLogGrowth,
-    account_log_growth: flowAdjustedAccountLogGrowth,
-    account_log_growth_per_hour: observationHours > 0
-      ? flowAdjustedAccountLogGrowth / observationHours
-      : 0,
-    capital_utilization: managedCapitalHours > 0 ? exposureHours / managedCapitalHours : 0,
-    account_capital_turns_per_hour: accountCapitalTurnoverPerHour,
-    objective_observation_hours: observationHours,
-    fee_verified_trade_count:
-      exchangeTrades.filter((trade) =>
-        ["EXACT", "AGGREGATE_EXACT", "THIRD_ASSET_MARKED", "BASE_ASSET_ACCOUNTED"].includes(
-          String(trade.fee_accounting_quality || ""),
-        )
-      ).length,
-    fill_time_verified_trade_count: exchangeTrades.length,
-    // Manual sells are part of the cumulative result now, and the operator can see how
-    // much of it rests on an estimate rather than on a fill the bot recorded.
-    manual_exit_trade_count: exchangeTrades.filter((trade) => trade.manual_exit_estimated).length,
-    manual_exit_proceeds_quote: sum(exchangeTrades, "manual_exit_proceeds_quote"),
-    account_settled_trade_count: exchangeTrades.filter((trade) => trade.account_settled).length,
-    dust_threshold_quote: dustQuoteFor(exchange),
-    return_basis: "ACTUAL_ENTRY_COST_WEIGHTED",
-    time_basis: "TRADING_FILLS_EXECUTED_AT",
+    win_rate_pct: closed.length ? wins.length / closed.length * 100 : 0,
+    profit_factor: gl > 0 ? gp / gl : gp > 0 ? null : 0,
+    average_return_pct: closed.length ? s(closed, "return_pct") / closed.length : 0,
+    return_basis: "ACTUAL_FILL_COST_WEIGHTED",
+    source_of_truth: "TRADING_FILLS",
   };
 }
 
-Deno.serve(async (request: Request) => {
-  if (request.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: CORS_HEADERS });
-  }
-  if (request.method !== "POST") return response({ ok: false, error: "POST only" }, 405);
-  if (!authorized(request)) return response({ ok: false, error: "unauthorized" }, 401);
-  if (!SUPABASE_URL || !SERVICE_KEY) {
-    return response({ ok: false, error: "missing Supabase configuration" }, 500);
-  }
-
-  // 즉시 새로고침: the operator asked for the numbers as they are right now, so the
-  // shared cache is skipped. The in-flight guard below still applies — a forced refresh
-  // never starts a second full read alongside one already running.
-  const body = await request.json().catch(() => ({} as JsonRecord));
-  const forceRefresh = body?.force === true || String(body?.action || "") === "refresh";
-
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+  if (req.method !== "POST") return out({ ok: false, error: "POST only" }, 405);
+  if (!authorized(req)) return out({ ok: false, error: "unauthorized" }, 401);
+  const bodyReq = await req.json().catch(() => ({}));
+  const force = bodyReq?.force === true || String(bodyReq?.action || "") === "refresh";
   const now = Date.now();
-  if (
-    !forceRefresh && performanceCache && now - performanceCache.cachedAt < PERFORMANCE_CACHE_TTL_MS
-  ) {
-    return response({
-      ...performanceCache.body,
-      cache_status: "HIT",
-      cache_age_seconds: Math.floor((now - performanceCache.cachedAt) / 1000),
-      cache_ttl_seconds: PERFORMANCE_CACHE_TTL_MS / 1000,
-    });
-  }
-  if (performanceRefreshInFlight) {
-    if (performanceCache) {
-      return response({
-        ...performanceCache.body,
-        cache_status: "STALE_WHILE_REFRESH",
-        cache_age_seconds: Math.floor((now - performanceCache.cachedAt) / 1000),
-        cache_ttl_seconds: PERFORMANCE_CACHE_TTL_MS / 1000,
-      });
-    }
-    return response({
-      ok: false,
-      error: "performance refresh already in progress",
-      version: VERSION,
-      performance_revision: PERFORMANCE_REVISION,
-      retry_after_seconds: 5,
-    }, 503);
-  }
-
-  performanceRefreshInFlight = true;
+  if (!force && cache && now - cache.at < CACHE_TTL_MS) return out({ ...cache.body, cache_status: "HIT", cache_age_seconds: Math.floor((now-cache.at)/1000) });
+  if (refreshing && cache) return out({ ...cache.body, cache_status: "STALE_WHILE_REFRESH" });
+  refreshing = true;
   try {
-    const [positions, orders, fills, snapshots, objectiveRows] = await Promise.all([
-      dbAll(
-        "trading_positions?is_paper=eq.false&state=in.(OPEN,EXITING,CLOSED)&select=id,exchange,quote_currency,market,base_asset,state,close_reason,remaining_quantity,residual_quantity,residual_value_quote,average_entry_price,realized_pnl_quote,accounting_version,fee_accounting_version,fee_accounting_quality,reserved_quote,created_at,accounting_quality:metadata->exit_residual_accounting->>quality,manual_reconcile:metadata->manual_reconcile&order=created_at.asc,id.asc",
-        10_000,
-      ),
-      dbAll(
-        "trading_orders?select=id,position_id,side,purpose,paid_fee_quote,requested_at&order=requested_at.asc,id.asc",
-        50_000,
-      ),
-      dbAll(
-        "trading_fills?select=id,order_id,volume,funds_quote,fee_quote_estimate,executed_at&order=executed_at.asc,id.asc",
-        100_000,
-      ),
-      dbLimited(
-        "trading_account_snapshots?select=exchange,captured_at,total_equity_quote,managed_capital_quote,prices,balances&order=captured_at.desc&limit=10",
-      ),
-      dbAll(
-        "trading_joint_objective_snapshots?engine_version=in.(6.10.0-JOINT-COMPOUND-GROWTH-GOVERNANCE,6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION)&select=id,exchange,captured_at,total_equity_quote,managed_capital_quote,filled_exposure_quote,reserved_exposure_quote,external_flow_quote,engine_version&order=captured_at.asc,id.asc",
-        10_000,
-      ).catch(() => []),
+    const [positions, orders, fills, snapshots] = await Promise.all([
+      all("trading_positions?is_paper=eq.false&state=in.(OPEN,EXITING,CLOSED)&select=id,exchange,quote_currency,market,base_asset,state,close_reason,created_at&order=created_at.asc,id.asc", 10000),
+      all("trading_orders?select=id,position_id,side,purpose,paid_fee_quote,requested_at&order=requested_at.asc,id.asc", 50000),
+      all("trading_fills?select=id,order_id,trade_id,price,volume,funds_quote,fee_quote_estimate,executed_at&order=executed_at.asc,id.asc", 100000),
+      limited("trading_account_snapshots?select=exchange,captured_at,total_equity_quote,managed_capital_quote,prices,balances&order=captured_at.desc&limit=10"),
     ]);
-
-    const latest = latestSnapshots(snapshots);
-    const ordersByPosition = groupBy(orders, "position_id");
-    const fillsByOrder = groupBy(fills, "order_id");
-    const qualityCounts: Record<string, number> = {};
-    const trades: JsonRecord[] = [];
-
-    // Each exchange's newest balance snapshot decides what is actually still held. A
-    // stale or empty snapshot yields no allocator, and every open row then keeps its
-    // ledger quantity — a gateway outage must never look like a wave of manual sells.
-    const balanceReadable: Record<Exchange, boolean> = { upbit: false, binance: false };
+    const latestSnap = latestSnapshots(snapshots), ordersByPosition = groupBy(orders, "position_id"), fillsByOrder = groupBy(fills, "order_id");
     const allocators = new Map<Exchange, ReturnType<typeof createBalanceAllocator>>();
-    for (const exchange of ["upbit", "binance"] as Exchange[]) {
-      const snapshot = latest[exchange];
-      if (!snapshotIsUsable(snapshot)) continue;
-      balanceReadable[exchange] = true;
-      allocators.set(exchange, createBalanceAllocator(snapshotBalanceMap(snapshot?.balances)));
+    const balanceReadable: Record<Exchange, boolean> = { upbit: false, binance: false };
+    for (const e of ["upbit","binance"] as Exchange[]) {
+      if (snapshotIsUsable(latestSnap[e])) { balanceReadable[e] = true; allocators.set(e, createBalanceAllocator(snapshotBalanceMap(latestSnap[e]?.balances))); }
     }
-    // Positions arrive oldest first, so the oldest claim on a shared asset is served
-    // first and later duplicates are the ones that read as gone.
-    const holdingFor = (position: JsonRecord, ledgerQuantity: number, price: number) => {
-      const exchange = position.exchange as Exchange;
-      const allocate = allocators.get(exchange);
-      const asset = baseAssetOf(exchange, position.market, position.base_asset);
-      return resolveHolding({
-        ledgerQuantity,
-        exchangeQuantity: allocate ? allocate(asset, ledgerQuantity) : null,
-        // A price from a snapshot already rejected as stale must not decide that a
-        // position is worthless; the entry cost basis is the conservative fallback.
-        price: allocate ? price : Math.max(0, numeric(position.average_entry_price)),
-        dustQuote: dustQuoteFor(exchange),
-      });
-    };
-
-    for (const position of positions) {
-      const result = calculateTrade(
-        position,
-        ordersByPosition.get(String(position.id || "")) || [],
-        fillsByOrder,
-        latest[position.exchange as Exchange],
-        holdingFor,
-      );
-      qualityCounts[result.quality] = (qualityCounts[result.quality] || 0) + 1;
-      if (
-        result.trade &&
-        (result.trade.is_closed || result.trade.remaining_quantity > 0 ||
-          result.trade.reserved_quote > 0)
-      ) {
-        trades.push(result.trade);
-      }
+    const trades: JsonRecord[] = [], quality: Record<string, number> = {};
+    for (const p of positions) {
+      const e = p.exchange as Exchange;
+      const result = buildRows(p, ordersByPosition.get(String(p.id)) || [], fillsByOrder, latestSnap[e], allocators.get(e) || null);
+      quality[result.quality] = (quality[result.quality] || 0) + 1;
+      trades.push(...result.rows);
     }
-
-    trades.sort((left, right) =>
-      new Date(right.entry_at || 0).getTime() - new Date(left.entry_at || 0).getTime()
-    );
-    const newestTrade = trades[0] || null;
-    const newestExitAt = trades.reduce<string | null>((latestAt, trade) => {
-      if (!trade.exit_at) return latestAt;
-      if (!latestAt) return trade.exit_at;
-      return new Date(trade.exit_at).getTime() > new Date(latestAt).getTime()
-        ? trade.exit_at
-        : latestAt;
-    }, null);
-
-    console.log("market-performance snapshot", {
-      revision: PERFORMANCE_REVISION,
-      positions: positions.length,
-      orders: orders.length,
-      fills: fills.length,
-      trades: trades.length,
-      newest_entry_at: newestTrade?.entry_at || null,
-      newest_exit_at: newestExitAt,
-    });
-
-    const body: JsonRecord = {
+    trades.sort((a,b) => new Date(b.exit_at || b.entry_at || 0).getTime() - new Date(a.exit_at || a.entry_at || 0).getTime());
+    const resultBody = {
       ok: true,
       version: VERSION,
       performance_revision: PERFORMANCE_REVISION,
       generated_at: new Date().toISOString(),
-      source_counts: {
-        positions: positions.length,
-        orders: orders.length,
-        fills: fills.length,
-        trades: trades.length,
-      },
-      newest_entry_at: newestTrade?.entry_at || null,
-      newest_exit_at: newestExitAt,
-      forced_refresh: forceRefresh,
-      account_reconciliation: {
-        revision: PERFORMANCE_REVISION,
-        balance_readable: balanceReadable,
-        balance_snapshot_at: {
-          upbit: latest.upbit?.captured_at || null,
-          binance: latest.binance?.captured_at || null,
-        },
-        dust_threshold_quote: {
-          upbit: dustQuoteFor("upbit"),
-          binance: dustQuoteFor("binance"),
-        },
-        settled_trade_count: trades.filter((trade) => trade.account_settled).length,
-      },
-      exchanges: {
-        upbit: aggregate("upbit", trades, latest.upbit, objectiveRows),
-        binance: aggregate("binance", trades, latest.binance, objectiveRows),
-      },
+      source_of_truth: "trading_fills",
+      source_counts: { positions: positions.length, orders: orders.length, fills: fills.length, performance_rows: trades.length },
+      account_reconciliation: { balance_readable: balanceReadable, balance_snapshot_at: { upbit: latestSnap.upbit?.captured_at || null, binance: latestSnap.binance?.captured_at || null }, rule: "balance verifies/caps open quantity only; never estimates realised PnL" },
+      exchanges: { upbit: aggregate("upbit", trades, latestSnap.upbit), binance: aggregate("binance", trades, latestSnap.binance) },
       trades,
-      lifecycle_quality_counts: qualityCounts,
-      excluded_trade_count: Object.entries(qualityCounts)
-        .filter(([quality]) => quality !== "FILL_VERIFIED")
-        .reduce((sum, [, count]) => sum + count, 0),
+      lifecycle_quality_counts: quality,
       definitions: {
-        cumulative_return_pct: "누적 순손익 / 실제 진입원가 합계",
-        current_open_return_pct: "현재 열린 포지션 순손익 / 열린 포지션 실제 진입원가",
-        net_pnl_quote: "청산대금-청산수수료+현재평가액-진입대금-진입수수료",
-        trade_time: "ENTRY fill 최소 executed_at부터 SELL fill 최대 executed_at까지",
-        lifecycle_requirement:
-          "ENTRY fill 필수, CLOSED 포지션은 SELL fill 필수, 시간 역전 거래 제외",
-        pagination: "PostgREST 응답을 1,000행 단위로 끝까지 페이지 조회",
-        joint_objective:
-          "외부 현금흐름을 제거한 계좌 로그성장률·승률·관리자본 회전율을 각각 보존·개선하는 Pareto 계약",
-        account_settlement:
-          "장부 수량과 거래소 잔고가 다르면 차액은 수동 매도로 보고 마지막 관측가 기준으로 정산합니다",
-        dust_rule:
-          "잔여 평가액이 1달러(업비트 1,400원) 미만이면 포지션이 아니라 종료된 거래로 집계합니다",
-        manual_exit_proceeds_quote:
-          "수동 매도 추정 대금 = 사라진 수량 × 마지막 관측가 − 테이커 수수료 1회",
-        excluded_states: [
-          "CANCELLED_WITHOUT_FILL",
-          "ENTRY_TEST_REJECTED",
-          "ENTRY_REJECTED",
-          "ENTRY_NOT_FILLED",
-          "ORPHAN_ENTRY_PENDING",
-        ],
+        realised_row: "SELL order별 실제 fill 수량·대금·수수료로 확정",
+        open_row: "실제 BUY fill - 실제 SELL fill 잔량만 현재가 평가",
+        partial_exit: "분할 매도는 SELL order마다 별도 행",
+        balance_rule: "계좌 잔고는 보유수량 검증에만 사용하며 손익을 추정하지 않음",
       },
     };
-    performanceCache = { body, cachedAt: Date.now() };
-    return response({
-      ...body,
-      cache_status: "MISS",
-      cache_age_seconds: 0,
-      cache_ttl_seconds: PERFORMANCE_CACHE_TTL_MS / 1000,
-    });
+    cache = { body: resultBody, at: Date.now() };
+    return out({ ...resultBody, cache_status: "MISS", cache_age_seconds: 0 });
   } catch (error) {
-    console.error("market-performance failed", error);
-    if (performanceCache) {
-      return response({
-        ...performanceCache.body,
-        cache_status: "STALE_ON_ERROR",
-        cache_age_seconds: Math.floor((Date.now() - performanceCache.cachedAt) / 1000),
-        cache_ttl_seconds: PERFORMANCE_CACHE_TTL_MS / 1000,
-        cache_error: error instanceof Error ? error.message : String(error),
-      });
-    }
-    return response({
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-      version: VERSION,
-      performance_revision: PERFORMANCE_REVISION,
-    }, 500);
-  } finally {
-    performanceRefreshInFlight = false;
-  }
+    console.error("market-performance r8 failed", error);
+    if (cache) return out({ ...cache.body, cache_status: "STALE_ON_ERROR", cache_error: error instanceof Error ? error.message : String(error) });
+    return out({ ok: false, error: error instanceof Error ? error.message : String(error), performance_revision: PERFORMANCE_REVISION }, 500);
+  } finally { refreshing = false; }
 });
