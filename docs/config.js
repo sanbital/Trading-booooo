@@ -24,20 +24,14 @@ window.TRADING_SCANNER_CONFIG = {
 
 function applyDashboardVersion() {
   const subtitle = document.getElementById("brand-subtitle");
-  if (subtitle) {
-    subtitle.textContent = `UPBIT KRW + BINANCE USDT SPOT · v${UI_VERSION}`;
-  }
+  if (subtitle) subtitle.textContent = `UPBIT KRW + BINANCE USDT SPOT · v${UI_VERSION}`;
   document.documentElement.dataset.dashboardRevision = DASHBOARD_REVISION;
 }
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", applyDashboardVersion, { once: true });
-} else {
-  applyDashboardVersion();
-}
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", applyDashboardVersion, { once: true });
+else applyDashboardVersion();
 window.addEventListener("pageshow", applyDashboardVersion);
 
-// 성과판과 운영 화면 보정 모듈은 revision을 URL에 포함해 브라우저 캐시를 강제로 무효화합니다.
 (() => {
   const assetVersion = encodeURIComponent(DASHBOARD_REVISION);
   const stylesheet = document.createElement("link");
@@ -50,13 +44,18 @@ window.addEventListener("pageshow", applyDashboardVersion);
   performanceScript.defer = true;
   document.head.appendChild(performanceScript);
 
+  const realizedScript = document.createElement("script");
+  realizedScript.src = `./realized-performance.js?v=2-BINANCE-REALIZED-ACCOUNTING`;
+  realizedScript.defer = true;
+  document.head.appendChild(realizedScript);
+
   const dashboardFixScript = document.createElement("script");
   dashboardFixScript.src = `./dashboard-v716-fix.js?v=${assetVersion}`;
   dashboardFixScript.defer = true;
   document.head.appendChild(dashboardFixScript);
 
   const dashboardOnlyScript = document.createElement("script");
-  dashboardOnlyScript.src = `./dashboard-only.js?v=${assetVersion}`;
+  dashboardOnlyScript.src = `./dashboard-only.js?v=2-REALIZED-TOP`;
   dashboardOnlyScript.defer = true;
   document.head.appendChild(dashboardOnlyScript);
 })();
