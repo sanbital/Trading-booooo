@@ -1,0 +1,138 @@
+name: Deploy residual TP10 SL4 v7.5.2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-residual-tp10-sl4-v752.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy-residual-tp10-sl4-v752
+  cancel-in-progress: false
+
+jobs:
+  patch-deploy-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Apply residual TP10 SL4 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_residual_tp10_sl4_v752.py
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Format and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt supabase/functions/market-autotrader/index.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          grep -q 'const VERSION = "7.5.2-RESIDUAL-TP10-SL4";' supabase/functions/market-autotrader/index.ts
+          grep -q 'HALF-HOLD-RESIDUAL-TP10-SL4-V3' supabase/functions/market-autotrader/index.ts
+          grep -q 'residualNetReturnPct >= 10' supabase/functions/market-autotrader/index.ts
+          grep -q 'RESIDUAL_TAKE_PROFIT_10' supabase/functions/market-autotrader/index.ts
+          grep -q 'residualNetReturnPct <= -4' supabase/functions/market-autotrader/index.ts
+          grep -q 'RESIDUAL_STOP_LOSS_4' supabase/functions/market-autotrader/index.ts
+          if grep -q 'RESIDUAL_TAKE_PROFIT_50\|RESIDUAL_STOP_LOSS_10\|RESIDUAL_AWAITING_TP50_OR_SL10' supabase/functions/market-autotrader/index.ts; then
+            echo 'Legacy residual thresholds remain in autotrader source' >&2
+            exit 1
+          fi
+
+      - name: Commit canonical engine source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/market-autotrader/index.ts
+          if git diff --cached --quiet; then
+            echo "Canonical source already applied"
+          else
+            git commit -m "feat: residual 50 percent exits at TP10 SL4"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Deploy market autotrader
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase functions deploy market-autotrader \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
+
+      - name: Verify database authority and live runtime
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            v_guard text;
+            v_policy text;
+          begin
+            select pg_get_functiondef(p.oid) into v_guard
+            from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+            where n.nspname='public' and p.proname='guard_residual_sell_order_v751';
+            select pg_get_functiondef(p.oid) into v_policy
+            from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+            where n.nspname='public' and p.proname='enforce_residual_exit_position_policy_v751';
+            if v_guard is null or position('v_net_return_pct < 9.999' in v_guard)=0 or position('v_net_return_pct > -3.999' in v_guard)=0 then
+              raise exception 'residual TP10/SL4 guard missing';
+            end if;
+            if v_policy is null or position('residual_take_profit_pct'', 10' in v_policy)=0 or position('residual_stop_loss_pct'', -4' in v_policy)=0 then
+              raise exception 'residual TP10/SL4 position policy missing';
+            end if;
+          end
+          $$;
+          SQL
+          autotrade_token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
+          response="$(curl --fail-with-body --retry 2 --retry-delay 2 --max-time 60 -X POST \
+            -H 'content-type: application/json' \
+            -H "x-autotrade-token: ${autotrade_token}" \
+            -d '{"action":"status"}' \
+            "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/market-autotrader")"
+          echo "$response"
+          printf '%s' "$response" | grep -q '7.5.2-RESIDUAL-TP10-SL4'
+
+      - name: Run one monitor cycle
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          autotrade_token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
+          curl --fail-with-body --retry 2 --retry-delay 2 --max-time 60 -X POST \
+            -H 'content-type: application/json' \
+            -H "x-autotrade-token: ${autotrade_token}" \
+            -d '{"action":"monitor"}' \
+            "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/market-autotrader"
