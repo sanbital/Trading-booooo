@@ -14,12 +14,14 @@
   function movePrioritySections() {
     const anchor = priorityAnchor();
     const positions = $("positions-body")?.closest(".section-block");
+    const livePosition = $("current-position-estimate-section");
     const realized = $("realized-performance-section");
+    const diagnostic = $("entry-diagnostic-card");
     const runtime = $("runtime-health-section");
     const orderHistory = $("trade-performance-section");
     if (!anchor || !positions) return false;
 
-    const ordered = [positions, realized, runtime, orderHistory].filter(Boolean);
+    const ordered = [positions, livePosition, realized, diagnostic, runtime, orderHistory].filter(Boolean);
     anchor.after(...ordered);
     return Boolean(realized && runtime && orderHistory);
   }
