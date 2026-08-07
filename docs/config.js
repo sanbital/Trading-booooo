@@ -2,7 +2,7 @@
 // Publishable(또는 기존 Anon) Key는 브라우저용 공개 키입니다.
 // Service Role / Secret Key / SCAN_ACCESS_TOKEN은 절대 이 파일에 넣지 마세요.
 const UI_VERSION = "7.5.1-RESIDUAL-TP50-SL10";
-const DASHBOARD_REVISION = "7.5.2-r1-LIVE-REFRESH-MANUAL-EXIT";
+const DASHBOARD_REVISION = "7.5.4-r1-ENTRY-DIAGNOSTICS";
 
 window.TRADING_SCANNER_CONFIG = {
   uiVersion: UI_VERSION,
@@ -14,6 +14,7 @@ window.TRADING_SCANNER_CONFIG = {
   performanceFunctionName: "market-performance",
   binanceSourceFunctionName: "binance-source",
   binanceOrderSourceFunctionName: "binance-order-source",
+  entryStatusFunctionName: "trading-entry-status",
   requestTimeoutMs: 140000,
   defaultCapitalKrw: 500000,
   defaultRiskPct: 1,
@@ -48,6 +49,11 @@ window.addEventListener("pageshow", applyDashboardVersion);
   realizedScript.src = `./realized-performance.js?v=2-BINANCE-REALIZED-ACCOUNTING`;
   realizedScript.defer = true;
   document.head.appendChild(realizedScript);
+
+  const entryStatusScript = document.createElement("script");
+  entryStatusScript.src = `./entry-status.js?v=${assetVersion}`;
+  entryStatusScript.defer = true;
+  document.head.appendChild(entryStatusScript);
 
   const dashboardFixScript = document.createElement("script");
   dashboardFixScript.src = `./dashboard-v716-fix.js?v=${assetVersion}`;
