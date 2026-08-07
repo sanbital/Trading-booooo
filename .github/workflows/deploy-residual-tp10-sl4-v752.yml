@@ -1,4 +1,5 @@
 # retry after indentation-safe patch anchor fix
+# deploy reconciliation false-manual hotfix 2026-08-07
 name: Deploy residual TP10 SL4 v7.5.2
 
 on:
