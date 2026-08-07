@@ -5,9 +5,12 @@
   const originalFetch = window.fetch.bind(window);
   const $ = id => document.getElementById(id);
   let dashboardToken = "";
-  let latest = null;
+  let runtimeSource = null;
+  let performanceSource = null;
   let pending = false;
+  let lastLoaded = 0;
   let timer = null;
+  let exchangeFilter = "binance";
 
   const esc = v => String(v ?? "")
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
@@ -15,26 +18,28 @@
   const num = v => Number.isFinite(Number(v)) ? Number(v) : 0;
   const fmt = (v, d = 6) => Number.isFinite(Number(v))
     ? Number(v).toLocaleString("ko-KR", { maximumFractionDigits: d }) : "—";
-  const money = v => `${num(v) >= 0 ? "+" : ""}${fmt(v, 4)} USDT`;
+  const signed = (v, d = 4) => `${num(v) >= 0 ? "+" : ""}${fmt(v, d)}`;
+  const money = (v, currency = "USDT") => `${signed(v, currency === "KRW" ? 0 : 4)} ${currency}`;
   const pct = v => `${num(v) >= 0 ? "+" : ""}${fmt(v, 2)}%`;
-  const dt = v => v ? new Date(v).toLocaleString("ko-KR") : "—";
+  const dt = v => v ? new Date(v).toLocaleString("ko-KR", { hour12: false }) : "—";
+  const ageSec = v => {
+    const t = Date.parse(v || "");
+    return Number.isFinite(t) ? Math.max(0, Math.round((Date.now() - t) / 1000)) : Infinity;
+  };
+  const tone = v => num(v) >= 0 ? "realized-positive" : "realized-negative";
 
-  function injectStyles() {
-    if ($("realized-performance-style")) return;
-    const style = document.createElement("style");
-    style.id = "realized-performance-style";
-    style.textContent = `
-      .runtime-health-grid,.realized-summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:12px 0}
-      .runtime-health-grid>div,.realized-summary-grid>div{padding:14px;border:1px solid rgba(148,163,184,.2);border-radius:14px;background:rgba(15,23,42,.35)}
-      .runtime-health-grid span,.realized-summary-grid span{display:block;font-size:12px;color:#8fa0b4;margin-bottom:6px}.runtime-health-grid b,.realized-summary-grid b{font-size:16px}
-      .runtime-ok{color:#45e0a8}.runtime-warn{color:#f7c65f}.runtime-bad{color:#ff7187}.realized-positive{color:#45e0a8}.realized-negative{color:#ff7187}
-      @media(max-width:760px){.runtime-health-grid,.realized-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.realized-trade-table{min-width:980px}}
-    `;
-    document.head.appendChild(style);
+  function hold(seconds) {
+    if (!Number.isFinite(Number(seconds))) return "—";
+    const s = Math.max(0, Math.round(Number(seconds)));
+    if (s < 60) return `${s}초`;
+    const m = Math.floor(s / 60), r = s % 60;
+    if (m < 60) return `${m}분 ${r}초`;
+    const h = Math.floor(m / 60), rm = m % 60;
+    if (h < 24) return `${h}시간 ${rm}분`;
+    return `${Math.floor(h / 24)}일 ${h % 24}시간`;
   }
 
   function inject() {
-    injectStyles();
     const positions = $("positions-body")?.closest(".section-block");
     if (!positions) return false;
 
@@ -43,7 +48,10 @@
       runtime.id = "runtime-health-section";
       runtime.className = "section-block";
       runtime.innerHTML = `
-        <div class="section-heading"><div><p class="eyebrow">LIVE ENGINE STATUS</p><h2>자동매매 동작 상태</h2></div><p id="runtime-health-note">실시간 상태 확인 중</p></div>
+        <div class="section-heading performance-heading">
+          <div><p class="eyebrow">LIVE ENGINE STATUS</p><h2>자동매매 동작 상태</h2></div>
+          <p id="runtime-health-note">실시간 상태 확인 중</p>
+        </div>
         <article class="panel"><div id="runtime-health-grid" class="runtime-health-grid"><div><span>상태</span><b>확인 중</b></div></div></article>`;
       positions.before(runtime);
     }
@@ -53,132 +61,216 @@
       section.id = "realized-performance-section";
       section.className = "section-block";
       section.innerHTML = `
-        <div class="section-heading"><div><p class="eyebrow">BINANCE REALIZED PERFORMANCE</p><h2>거래별 성과</h2></div><p>Binance 실제 fill의 확정 원가·매도대금·실현손익을 SELL 주문별로 합산합니다.</p></div>
-        <div id="realized-summary-grid" class="realized-summary-grid"><div><span>확정손익</span><b>—</b></div></div>
-        <div class="table-wrap panel"><table class="performance-table realized-trade-table"><thead><tr>
-          <th>청산 시각</th><th>종목</th><th>수량</th><th>매수 원가</th><th>매수 평균가</th><th>매도 평균가</th><th>매도대금</th><th>수수료</th><th>확정손익</th><th>수익률</th><th>보유시간</th>
-        </tr></thead><tbody id="realized-performance-body"><tr><td colspan="11" class="muted">Binance 체결 데이터를 불러오는 중입니다.</td></tr></tbody></table></div>
-        <p id="realized-performance-source" class="performance-definition">Binance 실제 fill 기준 · 진행 중 포지션은 확정손익에 포함하지 않음</p>`;
+        <div class="section-heading performance-heading realized-heading">
+          <div>
+            <p class="eyebrow">IMMUTABLE REALIZED LEDGER</p>
+            <h2>거래별 성과</h2>
+            <div class="realized-source-badges">
+              <span class="realized-ledger-badge">체결 확정값</span>
+              <span id="realized-revision-badge" class="realized-revision-badge">revision 확인 중</span>
+            </div>
+          </div>
+          <p>CLOSED 거래는 종료 시점의 체결 원가·실현손익을 고정합니다. 분할매도는 SELL 주문별로 각각 표시합니다.</p>
+        </div>
+        <div class="performance-filters realized-filters">
+          <select id="realized-exchange-filter" aria-label="거래소 필터">
+            <option value="binance">BINANCE</option>
+            <option value="upbit">UPBIT</option>
+            <option value="all">전체</option>
+          </select>
+          <button id="realized-refresh-now" class="button-primary performance-action-button" type="button">새로고침</button>
+          <span id="realized-refresh-status" class="performance-refresh-status">체결 장부를 불러오는 중입니다.</span>
+        </div>
+        <div id="realized-summary-grid" class="realized-summary-grid"><div><span>총 확정손익</span><b>—</b></div></div>
+        <div class="table-wrap panel realized-table-wrap">
+          <table class="performance-table realized-trade-table">
+            <thead><tr>
+              <th>청산 시각</th><th>종목</th><th>매도</th><th>원가</th><th>확정손익</th><th>수익률</th><th>매도 평균가</th><th>수량</th><th>수수료</th><th>보유시간</th><th>종료 사유</th>
+            </tr></thead>
+            <tbody id="realized-performance-body"><tr><td colspan="11" class="muted">체결 데이터를 불러오는 중입니다.</td></tr></tbody>
+          </table>
+        </div>
+        <p id="realized-performance-source" class="performance-definition">시장가격이 바뀌어도 CLOSED 거래의 손익은 다시 계산하지 않습니다.</p>`;
       positions.after(section);
+      $("realized-exchange-filter")?.addEventListener("change", event => {
+        exchangeFilter = String(event.target?.value || "binance");
+        renderPerformance();
+      });
+      $("realized-refresh-now")?.addEventListener("click", () => load(true));
     }
     return true;
   }
 
-  function orderGroups(trades) {
-    const rows = Array.isArray(trades) ? trades : [];
-    const buysByPosition = new Map();
-    for (const row of rows) {
-      if (String(row.side).toUpperCase() !== "BUY" || !row.position_id) continue;
-      const t = Date.parse(row.executed_at || "");
-      if (!Number.isFinite(t)) continue;
-      const prev = buysByPosition.get(row.position_id);
-      if (!prev || t < prev) buysByPosition.set(row.position_id, t);
-    }
-
-    const groups = new Map();
-    for (const row of rows) {
-      if (String(row.side).toUpperCase() !== "SELL" || String(row.accounting_status || "") !== "ACCOUNTED") continue;
-      const key = `${row.market}:${row.exchange_order_id || row.exchange_trade_id}`;
-      const current = groups.get(key) || {
-        market: row.market, orderId: row.exchange_order_id, positionId: row.position_id,
-        quantity: 0, grossQuote: 0, cost: 0, proceeds: 0, pnl: 0, fees: 0,
-        executedAt: row.executed_at, buyAt: row.position_id ? buysByPosition.get(row.position_id) : null,
-      };
-      current.quantity += num(row.quantity);
-      current.grossQuote += num(row.quote_amount);
-      current.cost += num(row.realized_cost_quote);
-      current.proceeds += num(row.realized_proceeds_quote);
-      current.pnl += num(row.realized_pnl_quote);
-      current.fees += num(row.fee_quote_amount);
-      if (Date.parse(row.executed_at || "") > Date.parse(current.executedAt || "")) current.executedAt = row.executed_at;
-      groups.set(key, current);
-    }
-    return [...groups.values()].map(g => ({
-      ...g,
-      buyAvg: g.quantity > 0 ? g.cost / g.quantity : 0,
-      sellAvg: g.quantity > 0 ? g.grossQuote / g.quantity : 0,
-      returnPct: g.cost > 0 ? g.pnl / g.cost * 100 : 0,
-      holdingMs: g.buyAt ? Math.max(0, Date.parse(g.executedAt) - g.buyAt) : null,
-    })).sort((a,b) => Date.parse(b.executedAt) - Date.parse(a.executedAt));
-  }
-
-  function hold(ms) {
-    if (!Number.isFinite(ms)) return "—";
-    const s = Math.round(ms / 1000);
-    if (s < 60) return `${s}초`;
-    const m = Math.floor(s / 60), r = s % 60;
-    if (m < 60) return `${m}분 ${r}초`;
-    return `${Math.floor(m/60)}시간 ${m%60}분`;
+  function runtimeObject() {
+    const raw = runtimeSource || {};
+    return raw.runtime || raw.status?.runtime || raw.trading_runtime || raw;
   }
 
   function renderRuntime() {
-    const r = latest?.runtime || {};
-    const now = Date.now();
-    const scanAge = now - Date.parse(r.last_full_scan_at || "");
-    const monitorAge = now - Date.parse(r.last_monitor_at || "");
-    const gatewayAge = now - Date.parse(r.last_gateway_heartbeat_at || "");
-    const activeMode = String(r.mode || "") === "LIVE_LIMITED";
-    const allowed = !r.pause_new_entries && !r.emergency_liquidation && !r.withdrawal_mode && !r.manual_intervention_required;
-    const fresh = scanAge >= 0 && scanAge < 60000 && monitorAge >= 0 && monitorAge < 30000 && gatewayAge >= 0 && gatewayAge < 30000;
-    const running = activeMode && allowed && fresh;
+    const r = runtimeObject();
+    const mode = String(r.mode || r.trading_mode || "");
+    const pause = Boolean(r.pause_new_entries ?? r.settings?.pause_new_entries);
+    const emergency = Boolean(r.emergency_liquidation ?? r.settings?.emergency_liquidation);
+    const withdrawal = Boolean(r.withdrawal_mode ?? r.settings?.withdrawal_mode);
+    const manual = Boolean(r.manual_intervention_required ?? r.settings?.manual_intervention_required);
+    const allowed = !pause && !emergency && !withdrawal && !manual;
+    const scanAt = r.last_full_scan_at || r.last_scan_at || null;
+    const monitorAt = r.last_monitor_at || r.last_monitor_cycle_at || null;
+    const gatewayAt = r.last_gateway_heartbeat_at || r.gateway_heartbeat_at || null;
+    const fresh = ageSec(scanAt) < 90 && ageSec(monitorAt) < 60 && ageSec(gatewayAt) < 60;
+    const running = mode === "LIVE_LIMITED" && allowed && fresh;
     const stateClass = running ? "runtime-ok" : allowed ? "runtime-warn" : "runtime-bad";
-    const state = running ? "운영 중 · 진입 대기 가능" : !allowed ? "거래 중단/진입 차단" : "상태 지연 확인 필요";
+    const state = running ? "운영 중" : pause ? "신규 진입 일시정지" : !allowed ? "거래 차단" : "상태 지연 확인";
     const grid = $("runtime-health-grid");
     if (grid) grid.innerHTML = `
       <div><span>자동매매</span><b class="${stateClass}">${state}</b></div>
-      <div><span>운영 모드</span><b>${esc(r.mode || "—")}</b></div>
-      <div><span>신규 매수</span><b class="${allowed ? "runtime-ok" : "runtime-bad"}">${allowed ? "허용" : "차단"}</b></div>
-      <div><span>최근 전체 스캔</span><b>${dt(r.last_full_scan_at)}</b></div>
-      <div><span>최근 포지션 모니터</span><b>${dt(r.last_monitor_at)}</b></div>
-      <div><span>Gateway heartbeat</span><b>${dt(r.last_gateway_heartbeat_at)}</b></div>
-      <div><span>Gateway 오류</span><b>${fmt(r.gateway_error_count,0)}건</b></div>
-      <div><span>무포지션 의미</span><b>${running ? "조건 충족 종목 대기" : "상태 확인 필요"}</b></div>`;
+      <div><span>운영 모드</span><b>${esc(mode || "—")}</b></div>
+      <div><span>신규 진입</span><b class="${allowed ? "runtime-ok" : "runtime-bad"}">${allowed ? "허용" : "차단"}</b></div>
+      <div><span>활성 포지션</span><b>${fmt(r.active_positions ?? r.open_positions ?? 0, 0)}개</b></div>
+      <div><span>최근 전체 스캔</span><b>${dt(scanAt)}</b></div>
+      <div><span>최근 포지션 모니터</span><b>${dt(monitorAt)}</b></div>
+      <div><span>Gateway heartbeat</span><b>${dt(gatewayAt)}</b></div>
+      <div><span>Gateway 오류</span><b>${fmt(r.gateway_error_count ?? 0, 0)}건</b></div>`;
     const note = $("runtime-health-note");
-    if (note) note.textContent = running ? "무포지션이어도 엔진은 정상 동작 중입니다." : "최근 동작 시각과 진입 차단 설정을 확인하세요.";
+    if (note) note.textContent = pause
+      ? "신규 진입은 현재 pause 상태입니다. 기존 포지션 관리 상태와는 별개입니다."
+      : running ? "엔진 heartbeat와 모니터 사이클이 정상입니다." : "최근 동작 시각과 안전 설정을 확인하세요.";
+  }
+
+  function realizedRows() {
+    const trades = Array.isArray(performanceSource?.trades) ? performanceSource.trades : [];
+    return trades
+      .filter(row => String(row?.row_type || "") === "REALIZED_EXIT")
+      .filter(row => exchangeFilter === "all" || String(row?.exchange || "") === exchangeFilter)
+      .sort((a, b) => Date.parse(b.exit_at || 0) - Date.parse(a.exit_at || 0));
+  }
+
+  function addFallbackExitIndexes(rows) {
+    const byPosition = new Map();
+    for (const row of [...rows].sort((a, b) => Date.parse(a.exit_at || 0) - Date.parse(b.exit_at || 0))) {
+      const key = String(row.position_id || row.id || "");
+      const bucket = byPosition.get(key) || []; bucket.push(row); byPosition.set(key, bucket);
+    }
+    for (const bucket of byPosition.values()) {
+      bucket.forEach((row, index) => {
+        if (!Number(row.position_exit_count)) row.position_exit_count = bucket.length;
+        if (!Number(row.position_exit_index)) row.position_exit_index = index + 1;
+      });
+    }
+    return rows;
+  }
+
+  function aggregatePositionStats(rows) {
+    const positions = new Map();
+    for (const row of rows) {
+      if (!row.position_closed) continue;
+      const key = String(row.position_id || row.id);
+      const current = positions.get(key) || { pnl: 0, cost: 0 };
+      current.pnl += num(row.net_pnl_quote);
+      current.cost += Math.max(0, num(row.invested_cost_quote));
+      positions.set(key, current);
+    }
+    const values = [...positions.values()];
+    const wins = values.filter(v => v.pnl > 0), losses = values.filter(v => v.pnl < 0);
+    const grossWin = wins.reduce((s, v) => s + v.pnl, 0);
+    const grossLoss = Math.abs(losses.reduce((s, v) => s + v.pnl, 0));
+    return {
+      count: values.length,
+      wins: wins.length,
+      winRate: values.length ? wins.length / values.length * 100 : 0,
+      profitFactor: grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Infinity : 0,
+    };
   }
 
   function renderPerformance() {
-    const rows = orderGroups(latest?.trades);
+    if (!inject()) return;
+    const rows = addFallbackExitIndexes(realizedRows());
     const body = $("realized-performance-body");
-    if (body) body.innerHTML = rows.length ? rows.slice(0,50).map(row => {
-      const tone = row.pnl >= 0 ? "realized-positive" : "realized-negative";
-      return `<tr><td>${dt(row.executedAt)}</td><td><strong>${esc(row.market)}</strong></td><td>${fmt(row.quantity,8)}</td><td>${fmt(row.cost,4)} USDT</td><td>${fmt(row.buyAvg,8)}</td><td>${fmt(row.sellAvg,8)}</td><td>${fmt(row.proceeds,4)} USDT</td><td>${fmt(row.fees,4)} USDT</td><td class="${tone}"><strong>${money(row.pnl)}</strong></td><td class="${tone}"><strong>${pct(row.returnPct)}</strong></td><td>${hold(row.holdingMs)}</td></tr>`;
-    }).join("") : `<tr><td colspan="11" class="muted">확정된 Binance SELL 거래가 없습니다.</td></tr>`;
+    if (body) body.innerHTML = rows.length ? rows.slice(0, 100).map(row => {
+      const currency = String(row.quote_currency || (row.exchange === "upbit" ? "KRW" : "USDT"));
+      const split = Number(row.position_exit_count) > 1
+        ? `<span class="realized-split-badge">${fmt(row.position_exit_index, 0)}/${fmt(row.position_exit_count, 0)}</span>`
+        : `<span class="realized-single-badge">단일</span>`;
+      const locked = row.immutable || row.position_closed
+        ? `<span class="realized-locked" title="CLOSED 확정값">고정</span>` : "";
+      return `<tr>
+        <td data-label="청산">${dt(row.exit_at)}</td>
+        <td data-label="종목"><strong>${esc(row.market)}</strong>${locked}</td>
+        <td data-label="매도">${split}<small class="realized-fill-count">fill ${fmt(row.fill_count || 1,0)}</small></td>
+        <td data-label="원가">${fmt(row.invested_cost_quote, currency === "KRW" ? 0 : 4)} ${currency}</td>
+        <td data-label="확정손익" class="${tone(row.net_pnl_quote)}"><strong>${money(row.net_pnl_quote, currency)}</strong></td>
+        <td data-label="수익률" class="${tone(row.return_pct)}"><strong>${pct(row.return_pct)}</strong></td>
+        <td data-label="매도 평균가">${fmt(row.average_exit_price, 8)}</td>
+        <td data-label="수량">${fmt(row.quantity, 8)}</td>
+        <td data-label="수수료">${fmt(row.total_fees_quote, currency === "KRW" ? 0 : 5)} ${currency}</td>
+        <td data-label="보유시간">${hold(row.duration_seconds)}</td>
+        <td data-label="종료 사유"><span class="realized-reason">${esc(row.close_reason || "SELL")}</span></td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="11" class="muted">확정된 매도 거래가 없습니다.</td></tr>`;
 
-    const total = rows.reduce((s,r)=>s+r.pnl,0);
-    const wins = rows.filter(r=>r.pnl>0);
-    const losses = rows.filter(r=>r.pnl<0);
-    const grossWin = wins.reduce((s,r)=>s+r.pnl,0);
-    const grossLoss = Math.abs(losses.reduce((s,r)=>s+r.pnl,0));
-    const pf = grossLoss > 0 ? grossWin/grossLoss : grossWin > 0 ? Infinity : 0;
+    const exchangeSummary = exchangeFilter === "all" ? null : performanceSource?.exchanges?.[exchangeFilter];
+    const total = exchangeSummary ? num(exchangeSummary.realized_net_pnl_quote) : rows.reduce((s, r) => s + num(r.net_pnl_quote), 0);
+    const currency = exchangeFilter === "upbit" ? "KRW" : exchangeFilter === "binance" ? "USDT" : "MIXED";
+    const stats = aggregatePositionStats(rows);
+    const splitCount = rows.filter(row => Number(row.position_exit_count) > 1).length;
     const summary = $("realized-summary-grid");
     if (summary) summary.innerHTML = `
-      <div><span>총 확정손익</span><b class="${total>=0?"realized-positive":"realized-negative"}">${money(total)}</b></div>
-      <div><span>확정 SELL 주문</span><b>${rows.length}건</b></div>
-      <div><span>승률</span><b>${rows.length ? fmt(wins.length/rows.length*100,1) : "0"}%</b></div>
-      <div><span>Profit Factor</span><b>${pf===Infinity?"∞":fmt(pf,2)}</b></div>`;
+      <div><span>총 확정손익</span><b class="${tone(total)}">${currency === "MIXED" ? `${signed(total,4)} (혼합)` : money(total,currency)}</b></div>
+      <div><span>완료 포지션</span><b>${fmt(exchangeSummary?.closed_trade_count ?? stats.count,0)}건</b></div>
+      <div><span>매도 기록</span><b>${fmt(exchangeSummary?.realized_exit_count ?? rows.length,0)}건</b></div>
+      <div><span>분할매도 행</span><b>${fmt(splitCount,0)}건</b></div>
+      <div><span>승률</span><b>${fmt(exchangeSummary?.win_rate_pct ?? stats.winRate,1)}%</b></div>
+      <div><span>Profit Factor</span><b>${(exchangeSummary?.profit_factor ?? stats.profitFactor) === null || (exchangeSummary?.profit_factor ?? stats.profitFactor) === Infinity ? "∞" : fmt(exchangeSummary?.profit_factor ?? stats.profitFactor,2)}</b></div>`;
+
+    const revision = String(performanceSource?.performance_revision || "—");
+    if ($("realized-revision-badge")) $("realized-revision-badge").textContent = revision;
     const src = $("realized-performance-source");
-    if (src) src.textContent = `${latest?.data_source || "Binance myTrades"} · ${latest?.revision || ""} · ${dt(latest?.generated_at)} · realized_cost/proceeds/pnl 저장값 사용`;
+    if (src) src.textContent = `Binance: exchange_trade_fills + CLOSED 정산 장부 · ${revision} · ${dt(performanceSource?.generated_at)} · CLOSED 현재가 재계산 없음`;
   }
 
   function render() { if (!inject()) return; renderRuntime(); renderPerformance(); }
 
-  async function load(force=false) {
-    if (!dashboardToken || pending || (!force && document.hidden)) return;
-    pending = true;
-    try {
-      const endpoint = `${String(config.supabaseUrl || "").replace(/\/$/,"")}/functions/v1/${config.binanceSourceFunctionName || "binance-source"}`;
-      const response = await originalFetch(endpoint,{method:"POST",cache:"no-store",headers:{"content-type":"application/json","x-autotrade-token":dashboardToken,...(config.supabasePublishableKey?{apikey:config.supabasePublishableKey}:{})},body:JSON.stringify({limit:1000})});
-      const data = await response.json().catch(()=>({}));
-      if (!response.ok || data.ok===false) throw new Error(data.error || `HTTP ${response.status}`);
-      latest = data; render();
-    } catch (e) {
-      inject(); const n=$("runtime-health-note"); if(n)n.textContent=`상태 조회 실패: ${e?.message||e}`;
-    } finally { pending=false; }
+  async function postFunction(name, body = {}) {
+    const endpoint = `${String(config.supabaseUrl || "").replace(/\/$/, "")}/functions/v1/${name}`;
+    const response = await originalFetch(endpoint, {
+      method: "POST", cache: "no-store",
+      headers: {
+        "content-type": "application/json",
+        "x-autotrade-token": dashboardToken,
+        ...(config.supabasePublishableKey ? { apikey: config.supabasePublishableKey } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.ok === false) throw new Error(data.error || `HTTP ${response.status}`);
+    return data;
   }
 
-  window.fetch = async (input, init={}) => {
-    const response = await originalFetch(input,init);
+  async function load(force = false) {
+    if (!dashboardToken || pending || (!force && document.hidden)) return;
+    if (!force && Date.now() - lastLoaded < 12_000) return;
+    pending = true;
+    const status = $("realized-refresh-status");
+    if (status) status.textContent = "확정 체결 장부를 갱신하는 중입니다.";
+    try {
+      const [runtimeResult, perfResult] = await Promise.allSettled([
+        postFunction(config.binanceSourceFunctionName || "binance-source", { limit: 200 }),
+        postFunction(config.performanceFunctionName || "market-performance", force ? { force: true } : {}),
+      ]);
+      if (runtimeResult.status === "fulfilled") runtimeSource = runtimeResult.value;
+      if (perfResult.status === "rejected") throw perfResult.reason;
+      performanceSource = perfResult.value;
+      lastLoaded = Date.now();
+      render();
+      if (status) status.textContent = `체결 확정값 · ${dt(performanceSource?.generated_at)} · ${performanceSource?.cache_status || "LIVE"}`;
+    } catch (e) {
+      inject();
+      if (status) status.textContent = `거래별 성과 조회 실패: ${e?.message || e}`;
+    } finally { pending = false; }
+  }
+
+  window.fetch = async (input, init = {}) => {
+    const response = await originalFetch(input, init);
     try {
       const url = typeof input === "string" ? input : String(input?.url || "");
       if (url.includes(`/${config.autotraderFunctionName || "market-autotrader"}`)) {
@@ -186,7 +278,10 @@
         const captured = headers.get("x-autotrade-token");
         if (captured && captured.length >= 32) dashboardToken = captured;
         const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
-        if (body?.action === "status" && response.ok) queueMicrotask(()=>load(true));
+        if (body?.action === "status" && response.ok) {
+          response.clone().json().then(data => { runtimeSource = data; renderRuntime(); }).catch(() => {});
+          queueMicrotask(() => load(true));
+        }
       }
     } catch (_) {}
     return response;
@@ -196,11 +291,10 @@
     if (event.target?.id !== "unlock-trader") return;
     const entered = String($("trader-token")?.value || "").trim();
     if (entered.length >= 32) dashboardToken = entered;
-    setTimeout(()=>load(true),800);
+    setTimeout(() => load(true), 500);
   }, true);
-
-  document.addEventListener("visibilitychange",()=>{if(!document.hidden)load(true);});
-  window.addEventListener("pageshow",()=>setTimeout(()=>load(true),500));
-  timer=setInterval(()=>load(false),15000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) load(true); });
+  window.addEventListener("pageshow", () => setTimeout(() => load(true), 300));
+  timer = setInterval(() => load(false), 15_000);
   inject();
 })();
