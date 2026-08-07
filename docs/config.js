@@ -3,7 +3,7 @@
 // Service Role / Secret Key / SCAN_ACCESS_TOKEN은 절대 이 파일에 넣지 마세요.
 const UI_VERSION = "7.5.1-RESIDUAL-TP50-SL10";
 const DASHBOARD_REVISION = "7.5.2-r1-LIVE-REFRESH-MANUAL-EXIT";
-const PERFORMANCE_ASSET_REVISION = "7.5.2-r6-MOBILE-REALIZED10-ENFORCED";
+const PERFORMANCE_ASSET_REVISION = "7.5.2-r7-MOBILE-REALIZED10-HARD";
 
 window.TRADING_SCANNER_CONFIG = {
   uiVersion: UI_VERSION,
@@ -62,7 +62,7 @@ window.addEventListener("pageshow", applyDashboardVersion);
   document.head.appendChild(dashboardFixScript);
 
   const dashboardOnlyScript = document.createElement("script");
-  dashboardOnlyScript.src = `./dashboard-only.js?v=2-REALIZED-TOP`;
+  dashboardOnlyScript.src = `./dashboard-only.js?v=3-MOBILE-REALIZED10-HARD`;
   dashboardOnlyScript.defer = true;
   document.head.appendChild(dashboardOnlyScript);
 })();
