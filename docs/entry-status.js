@@ -11,8 +11,78 @@
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
   const dt = (value) => value ? new Date(value).toLocaleString("ko-KR") : "—";
+  const finite = (value) => {
+    if (value === null || value === undefined || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  };
+  const fmt = (value, digits = 6) => {
+    const number = finite(value);
+    return number === null ? "—" : number.toLocaleString("ko-KR", { maximumFractionDigits: digits });
+  };
+  const signed = (value, digits = 4) => {
+    const number = finite(value);
+    return number === null ? "—" : `${number >= 0 ? "+" : ""}${fmt(number, digits)}`;
+  };
+  const money = (value, currency) => `${signed(value, currency === "KRW" ? 0 : 4)} ${currency}`;
+  const percent = (value) => {
+    const number = finite(value);
+    return number === null ? "—" : `${number >= 0 ? "+" : ""}${fmt(number, 2)}%`;
+  };
+  const price = (value, currency) => {
+    const number = finite(value);
+    if (number === null) return "—";
+    const digits = currency === "KRW"
+      ? number >= 1000 ? 0 : number >= 1 ? 3 : 8
+      : number >= 1000 ? 2 : number >= 1 ? 4 : number >= 0.01 ? 6 : 8;
+    return `${number.toLocaleString("ko-KR", { maximumFractionDigits: digits })}${currency === "KRW" ? "원" : " USDT"}`;
+  };
+  const age = (value) => {
+    const time = Date.parse(value || "");
+    if (!Number.isFinite(time)) return "—";
+    const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000));
+    if (seconds < 60) return `${seconds}초`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}분`;
+    const hours = Math.floor(minutes / 60);
+    const remain = minutes % 60;
+    return `${hours}시간 ${remain}분`;
+  };
+
+  function ensureStyles() {
+    if (document.getElementById("entry-status-style")) return;
+    const link = document.createElement("link");
+    link.id = "entry-status-style";
+    link.rel = "stylesheet";
+    link.href = "./entry-status.css?v=2-POSITION-PNL-REASONS";
+    document.head.appendChild(link);
+  }
+
+  function ensurePositionCard() {
+    ensureStyles();
+    const performance = $("realized-performance-section") || $("trade-performance-section");
+    const positions = $("positions-body")?.closest(".section-block");
+    let section = $("current-position-estimate-section");
+    if (!section) {
+      section = document.createElement("section");
+      section.id = "current-position-estimate-section";
+      section.className = "section-block";
+      section.innerHTML = `
+        <div class="section-heading performance-heading">
+          <div><p class="eyebrow">LIVE OPEN POSITION</p><h2>현재 보유 포지션</h2></div>
+          <p><span id="current-position-count">확인 중</span> · <span id="current-position-updated">현재가 확인 중</span></p>
+        </div>
+        <div id="current-position-list" class="entry-position-list">
+          <article class="panel entry-position-empty">보유 포지션과 현재가를 확인하고 있습니다.</article>
+        </div>`;
+    }
+    if (performance) performance.before(section);
+    else if (positions && !section.isConnected) positions.after(section);
+    return section;
+  }
 
   function ensureCard() {
+    ensurePositionCard();
     if ($("entry-diagnostic-card")) return;
     const positions = $("positions-body")?.closest(".section-block");
     const performance = $("realized-performance-section") || $("trade-performance-section");
@@ -25,17 +95,17 @@
     section.innerHTML = `
       <div class="section-heading performance-heading">
         <div><p class="eyebrow">AUTO TRADER STATUS</p><h2>왜 지금 거래를 안 하나</h2></div>
-        <p>최근 실제 스캔과 진입 판정 로그를 기준으로 표시합니다.</p>
+        <p>최근 실제 스캔과 진입 판정 로그를 사람이 읽을 수 있는 사유로 묶어 표시합니다.</p>
       </div>
-      <article class="panel" style="padding:18px 20px;margin-bottom:14px">
-        <div style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap">
+      <article class="panel entry-status-panel">
+        <div class="entry-status-head">
           <div>
-            <div id="entry-live-state" class="state-running" style="font-size:22px;font-weight:800">확인 중</div>
-            <div id="entry-live-message" class="muted" style="margin-top:6px">최근 스캔을 확인하고 있습니다.</div>
+            <div id="entry-live-state" class="state-running entry-status-state">확인 중</div>
+            <div id="entry-live-message" class="muted entry-status-message">최근 스캔을 확인하고 있습니다.</div>
           </div>
           <button id="entry-status-refresh" class="button-secondary" type="button">상태 새로고침</button>
         </div>
-        <div class="performance-detail-grid" style="margin-top:18px">
+        <div class="performance-detail-grid entry-status-grid">
           <div><span>마지막 스캔</span><b id="entry-last-scan">—</b></div>
           <div><span>마지막 모니터</span><b id="entry-last-monitor">—</b></div>
           <div><span>이번 스캔 판정</span><b id="entry-scan-count">—</b></div>
@@ -43,46 +113,107 @@
           <div><span>마지막 주문</span><b id="entry-last-order">—</b></div>
           <div><span>게이트웨이</span><b id="entry-gateway">—</b></div>
         </div>
-        <div style="margin-top:18px">
+        <div class="entry-status-block">
           <strong>최근 30분 주요 진입 탈락 사유</strong>
-          <div id="entry-reasons" style="margin-top:10px" class="muted">확인 중</div>
+          <div id="entry-reasons" class="entry-reason-list muted">확인 중</div>
         </div>
-        <div style="margin-top:18px">
+        <div class="entry-status-block">
           <strong>가장 최근 판정</strong>
-          <div id="entry-latest-decision" style="margin-top:10px" class="muted">—</div>
+          <div id="entry-latest-decision" class="entry-latest-decision">—</div>
         </div>
       </article>`;
     anchor.insertAdjacentElement("afterend", section);
     $("entry-status-refresh")?.addEventListener("click", () => load());
   }
 
+  function renderPositions(data) {
+    ensurePositionCard();
+    const list = $("current-position-list");
+    const rows = Array.isArray(data.open_positions) ? data.open_positions : [];
+    if (!list) return;
+
+    $("current-position-count").textContent = rows.length ? `${rows.length}개 보유 중` : "보유 포지션 없음";
+    const freshest = rows.map((row) => Date.parse(row.price_captured_at || "")).filter(Number.isFinite).sort((a, b) => b - a)[0];
+    $("current-position-updated").textContent = freshest ? `현재가 ${dt(new Date(freshest).toISOString())}` : "현재가 없음";
+
+    if (!rows.length) {
+      list.innerHTML = `<article class="panel entry-position-empty">현재 보유 중인 봇 포지션이 없습니다.</article>`;
+      return;
+    }
+
+    list.innerHTML = rows.map((row) => {
+      const currency = String(row.quote_currency || (String(row.exchange).toLowerCase() === "upbit" ? "KRW" : "USDT"));
+      const pnl = finite(row.estimated_pnl_quote);
+      const pnlClass = pnl === null ? "" : pnl >= 0 ? "realized-positive" : "realized-negative";
+      const mode = row.is_paper ? "PAPER" : "LIVE";
+      return `
+        <article class="panel entry-position-card">
+          <div class="entry-position-head">
+            <div class="entry-position-market">
+              <strong>${esc(row.market || "—")}</strong>
+              <span class="entry-position-badge">${esc(String(row.exchange || "").toUpperCase())}</span>
+              <span class="entry-position-badge">${mode}</span>
+              <span class="entry-position-badge">${esc(row.state || "OPEN")}</span>
+            </div>
+            <div class="entry-position-pnl ${pnlClass}">
+              <strong>${money(row.estimated_pnl_quote, currency)}</strong>
+              <small>${percent(row.estimated_return_pct)} · 보유 ${age(row.opened_at)}</small>
+            </div>
+          </div>
+          <div class="entry-position-grid">
+            <div><span>현재가</span><b>${price(row.current_price, currency)}</b></div>
+            <div><span>평균 진입가</span><b>${price(row.entry_price, currency)}</b></div>
+            <div><span>수량</span><b>${fmt(row.quantity, 8)}</b></div>
+            <div><span>현재 평가액</span><b>${money(row.market_value_quote, currency).replace(/^\+/, "")}</b></div>
+            <div><span>목표가</span><b>${price(row.target_1, currency)}</b></div>
+            <div><span>손절가</span><b>${price(row.stop_price, currency)}</b></div>
+          </div>
+          <p class="entry-position-note">평가손익은 최신 계좌 스냅샷의 현재가로 계산한 미확정 추정치입니다. 향후 매도 수수료·슬리피지는 포함하지 않습니다.</p>
+        </article>`;
+    }).join("");
+  }
+
+  function outcomeLabel(value) {
+    const outcome = String(value || "").toUpperCase();
+    if (["ENTERED", "BUY", "ORDERED", "ACCEPTED"].includes(outcome)) return "진입 완료";
+    if (outcome === "REJECTED") return "진입 탈락";
+    if (outcome === "BLOCKED") return "진입 차단";
+    if (outcome === "SKIPPED") return "진입 건너뜀";
+    return outcome || "판정 없음";
+  }
+
   function render(data) {
     ensureCard();
+    renderPositions(data);
     const state = $("entry-live-state");
     if (!state) return;
     const blocked = data.state === "BLOCKED";
     state.textContent = blocked ? "🔴 거래 중단" : data.state === "ENTRY_FOUND" ? "🟢 진입 신호 발생" : "🟢 정상 가동 · 진입 대기";
-    state.className = blocked ? "state-paused" : "state-running";
+    state.className = `${blocked ? "state-paused" : "state-running"} entry-status-state`;
     $("entry-live-message").textContent = data.message || "—";
     $("entry-last-scan").textContent = dt(data.last_scan_at);
     $("entry-last-monitor").textContent = dt(data.last_monitor_at);
     $("entry-scan-count").textContent = `${Number(data.decisions_since_scan || 0)}건 · 승인 ${Number(data.accepted_since_scan || 0)} / 탈락 ${Number(data.rejected_since_scan || 0)}`;
-    $("entry-recent-count").textContent = `${Number(data.recent_30m_decisions || 0)}건`;
+    $("entry-recent-count").textContent = `${Number(data.recent_30m_decisions || 0)}건 · 탈락 ${Number(data.recent_30m_rejections || 0)}건`;
     $("entry-gateway").textContent = Number(data.gateway_error_count || 0) === 0
       ? `정상 · ${dt(data.last_gateway_heartbeat_at)}`
       : `오류 ${Number(data.gateway_error_count)}건`;
     const order = data.last_order;
     $("entry-last-order").textContent = order
-      ? `${dt(order.requested_at)} · ${order.market || ""} ${order.side || ""}`
+      ? `${dt(order.requested_at)} · ${order.market || ""} ${order.side || ""} · ${order.state || ""}`
       : "주문 없음";
     const reasons = Array.isArray(data.top_rejection_reasons_30m) ? data.top_rejection_reasons_30m : [];
     $("entry-reasons").innerHTML = reasons.length
-      ? reasons.map((row) => `<div class="detail-row"><span>${esc(row.reason)}</span><strong>${Number(row.count)}건</strong></div>`).join("")
-      : "최근 30분 탈락 로그 없음";
+      ? reasons.map((row) => `<div class="entry-reason-row"><span>${esc(row.reason)}${row.detail ? `<small>${esc(row.detail)}</small>` : ""}</span><strong>${Number(row.count)}건</strong></div>`).join("")
+      : `<div class="entry-reason-row"><span>최근 30분 진입 탈락 없음</span><strong>0건</strong></div>`;
     const latest = data.latest_decision;
-    $("entry-latest-decision").textContent = latest
-      ? `${dt(latest.created_at)} · ${latest.exchange?.toUpperCase?.() || ""} ${latest.market || ""} · ${latest.outcome || ""} · ${latest.reason || "사유 없음"}`
-      : "최근 판정 없음";
+    if (latest) {
+      const latestReason = latest.reason_label || latest.reason;
+      const reasonText = latestReason ? ` · ${latestReason}` : "";
+      $("entry-latest-decision").textContent = `${dt(latest.created_at)} · ${latest.exchange?.toUpperCase?.() || ""} ${latest.market || ""} · ${outcomeLabel(latest.outcome)}${reasonText}`;
+    } else {
+      $("entry-latest-decision").textContent = "최근 판정 없음";
+    }
   }
 
   async function load() {
@@ -107,7 +238,7 @@
       ensureCard();
       if ($("entry-live-state")) {
         $("entry-live-state").textContent = "상태 조회 실패";
-        $("entry-live-state").className = "state-paused";
+        $("entry-live-state").className = "state-paused entry-status-state";
       }
       if ($("entry-live-message")) $("entry-live-message").textContent = error?.message || String(error);
     } finally {
@@ -131,6 +262,7 @@
   };
 
   const start = () => {
+    ensureStyles();
     ensureCard();
     clearInterval(timer);
     timer = setInterval(load, 15000);
