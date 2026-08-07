@@ -5206,6 +5206,51 @@ async function prepareProtectedTarget(
   return { limitPrice, expectedNetProfitQuote, availableQuantity, measuredAt };
 }
 
+/**
+ * Settle a position the exchange says is already flat.
+ *
+ * Binance fills are the single source of truth. When an exit fails because the
+ * account holds none of the asset, the position was closed on the exchange and only
+ * our ledger disagrees. `reconcile_positions_from_exchange_fills` re-links the fills
+ * and recomputes realized PnL from executed prices; it never touches a position that
+ * is already CLOSED, and it is idempotent, so calling it here cannot move a settled
+ * number. Returns true when the position ended up CLOSED.
+ */
+async function reconcileExhaustedPosition(
+  position: Position,
+  cycleId: string,
+  reason: string,
+): Promise<boolean> {
+  try {
+    const result = await rpc("reconcile_positions_from_exchange_fills", {
+      p_exchange: position.exchange,
+      p_market: position.market,
+    });
+    const summary = (Array.isArray(result) ? result[0] : result) || {};
+    const rows = await db(
+      `trading_positions?id=eq.${position.id}&select=state,remaining_quantity,realized_pnl_quote,closed_at`,
+    ) as JsonRecord[];
+    const settled = String(rows[0]?.state || "") === "CLOSED";
+    await event(
+      settled ? "EXIT_RECONCILED_FROM_FILLS" : "EXIT_RECONCILE_INCOMPLETE",
+      `${position.exchange}:${position.market} ${
+        settled ? "settled from exchange fills" : "exchange reports no balance but fills do not settle the position"
+      }`,
+      { reason, reconcile: summary, position: rows[0] ?? null },
+      { cycleId, positionId: position.id, level: settled ? "INFO" : "CRITICAL" },
+    );
+    return settled;
+  } catch (error) {
+    await event(
+      "EXIT_RECONCILE_FAILED",
+      error instanceof Error ? error.message : String(error),
+      { reason },
+      { cycleId, positionId: position.id, level: "CRITICAL" },
+    );
+    return false;
+  }
+}
+
 async function sellLive(
   position: Position,
   quantity: number,
@@ -7524,13 +7569,30 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           ),
         );
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // The exchange holding none of the asset is not a transient failure: the coin
+        // is already sold, and our ledger is what is stale. Retrying the exit here just
+        // reissues a doomed order every cycle (this produced thousands of CRITICAL
+        // EXIT_ERRORs against positions that had been fully sold hours earlier).
+        // Settle the position from the exchange fills instead and move on.
+        if (/no available .* balance for exit/i.test(message)) {
+          const settled = await reconcileExhaustedPosition(position, cycleId, message);
+          actions.push({
+            exchange,
+            market: position.market,
+            action: decision.action,
+            reconciled: settled,
+            error: settled ? undefined : message,
+          });
+          continue;
+        }
         actions.push({
           exchange,
           market: position.market,
           action: decision.action,
-          error: error instanceof Error ? error.message : String(error),
+          error: message,
         });
-        await event("EXIT_ERROR", error instanceof Error ? error.message : String(error), {
+        await event("EXIT_ERROR", message, {
           decision,
         }, { cycleId, positionId: position.id, level: "CRITICAL" });
       }
