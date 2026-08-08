@@ -62,7 +62,7 @@ window.addEventListener("pageshow", applyDashboardVersion);
   document.head.appendChild(dashboardFixScript);
 
   const dashboardOnlyScript = document.createElement("script");
-  dashboardOnlyScript.src = `./dashboard-only.js?v=4-POSITION-ORDER`;
+  dashboardOnlyScript.src = `./dashboard-only.js?v=5-REALIZED-COLLAPSE-ALL-WIDTHS`;
   dashboardOnlyScript.defer = true;
   document.head.appendChild(dashboardOnlyScript);
 })();
