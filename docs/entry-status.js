@@ -112,6 +112,15 @@
     );
   }
 
+  function shouldDisplayPosition(row) {
+    const value = finite(row?.market_value_quote);
+    // Automatic positions remain visible during a temporary quote outage. A manual row,
+    // however, exists only for display and must have a priced value to clear the floor.
+    if (value === null) return row?.is_manual !== true;
+    const floor = String(row?.exchange || "").toLowerCase() === "upbit" ? 1400 : 1;
+    return value >= floor;
+  }
+
   function ensureStyles() {
     if (document.getElementById("entry-status-style")) return;
     const link = document.createElement("link");
@@ -193,7 +202,7 @@
     ensurePositionCard();
     const list = $("current-position-list");
     const automaticRows = Array.isArray(data.open_positions) ? data.open_positions : [];
-    const rows = mergePositionRows(automaticRows);
+    const rows = mergePositionRows(automaticRows).filter(shouldDisplayPosition);
     if (!list) return;
 
     $("current-position-count").textContent = rows.length ? `${rows.length}개 보유 중` : "보유 포지션 없음";

@@ -16,7 +16,7 @@ import {
 
 type JsonRecord = Record<string, any>;
 
-export const MANUAL_POSITION_IMPORT_REVISION = "7.5.2-r2-MANUAL-BUY-IMPORT";
+export const MANUAL_POSITION_IMPORT_REVISION = "7.5.2-r3-HIDE-SUB-DOLLAR";
 
 function finite(value: unknown, fallback = 0): number {
   if (value === null || value === undefined || value === "") return fallback;
@@ -182,9 +182,13 @@ export function resolveManualPositions(
       const accountAverage = exchange === "upbit"
         ? Math.max(0, finite(accountRow?.avg_buy_price))
         : 0;
-      const price = Math.max(0, finite(snapshot?.prices?.[market], accountAverage));
+      // Cost basis is not a current mark. Only a live exchange ticker may decide whether
+      // the balance clears the display floor.
+      const price = Math.max(0, finite(snapshot?.prices?.[market]));
       const valueQuote = price > 0 ? quantity * price : null;
-      if (valueQuote !== null && valueQuote < dustQuoteFor(exchange)) continue;
+      // A balance is displayable only when a fresh mark proves it clears the operator's
+      // one-dollar position floor. Unpriced/delisted dust must not become a position card.
+      if (valueQuote === null || valueQuote < dustQuoteFor(exchange)) continue;
 
       const inventory = fillInventory.get(`${exchange}:${market}`) || null;
       const fillAverage = inventory && inventory.quantity > 0
@@ -261,6 +265,8 @@ export function resolveManualPositions(
       mode: "DISPLAY_ONLY",
       excludes: ["AUTOMATIC_EXIT", "ENTRY_LIMITS", "PERFORMANCE", "LEARNING"],
       description: "거래소 잔고에서 봇 포지션과 잔여재고를 뺀 보유분만 수동 포지션으로 표시합니다",
+      hidden_balance_rule:
+        "평가액 1 USDT/1,400 KRW 미만 또는 현재가 미확인 잔고는 표시하지 않습니다",
     },
   };
 }
