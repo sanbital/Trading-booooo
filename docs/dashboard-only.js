@@ -2,7 +2,6 @@
   "use strict";
 
   const $ = id => document.getElementById(id);
-  const MOBILE_QUERY = "(max-width: 760px)";
   const REALIZED_LIMIT = 10;
   let realizedExpanded = false;
   let realizedObserver = null;
@@ -38,7 +37,7 @@
       footer.innerHTML = `
         <span id="realized-hard-limit-count" class="performance-row-summary"></span>
         <div class="performance-pagination">
-          <button id="realized-hard-limit-toggle" class="button-primary performance-action-button" type="button"></button>
+          <button id="realized-hard-limit-toggle" class="button-primary performance-action-button" type="button" aria-controls="realized-performance-body" aria-expanded="false"></button>
         </div>`;
       tableWrap.after(footer);
       $("realized-hard-limit-toggle")?.addEventListener("click", () => {
@@ -56,18 +55,16 @@
     const body = $("realized-performance-body");
     if (!body) return;
 
-    const mobile = window.matchMedia(MOBILE_QUERY).matches;
     const rows = [...body.querySelectorAll("tr")].filter(row => !row.querySelector("td[colspan]"));
-    const oldFooter = $("realized-collapse-footer");
-    if (oldFooter) oldFooter.style.display = mobile ? "none" : "";
-
     const footer = ensureRealizedFooter(body);
     const toggle = $("realized-hard-limit-toggle");
     const count = $("realized-hard-limit-count");
 
+    // 모바일 CSS(:not(.realized-expanded) 규칙)와 상태를 맞춰야 펼치기가 동작합니다.
+    body.classList.toggle("realized-expanded", realizedExpanded);
+
     rows.forEach((row, index) => {
-      const hide = mobile && !realizedExpanded && index >= REALIZED_LIMIT;
-      if (hide) {
+      if (!realizedExpanded && index >= REALIZED_LIMIT) {
         row.hidden = true;
         row.style.setProperty("display", "none", "important");
       } else {
@@ -76,11 +73,6 @@
       }
     });
 
-    if (!mobile) {
-      if (footer) footer.style.display = "none";
-      return;
-    }
-
     const visible = realizedExpanded ? rows.length : Math.min(rows.length, REALIZED_LIMIT);
     if (count) count.textContent = rows.length > REALIZED_LIMIT
       ? `최근 ${visible}건 표시 · 총 ${rows.length}건`
@@ -88,7 +80,9 @@
 
     if (footer) footer.style.display = rows.length > REALIZED_LIMIT ? "flex" : "none";
     if (toggle) {
-      toggle.textContent = realizedExpanded ? "접기 · 최근 10건" : `더보기 · ${Math.max(0, rows.length - REALIZED_LIMIT)}건`;
+      toggle.textContent = realizedExpanded
+        ? `접기 · 최근 ${REALIZED_LIMIT}건만`
+        : `전체 보기 · ${Math.max(0, rows.length - REALIZED_LIMIT)}건 더`;
       toggle.setAttribute("aria-expanded", realizedExpanded ? "true" : "false");
     }
   }
@@ -102,10 +96,6 @@
     if (!realizedObserver) {
       realizedObserver = new MutationObserver(() => enforceRealizedLimit());
       realizedObserver.observe(body, { childList: true, subtree: true });
-      window.matchMedia(MOBILE_QUERY).addEventListener?.("change", () => {
-        realizedExpanded = false;
-        enforceRealizedLimit();
-      });
     }
     enforceRealizedLimit();
   }
