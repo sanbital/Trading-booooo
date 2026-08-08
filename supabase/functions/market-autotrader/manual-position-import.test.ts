@@ -114,6 +114,35 @@ Deno.test("unassigned account balance remains visible even before fill sync", ()
   );
 });
 
+Deno.test("sub-dollar and unpriced manual balances are not displayed", () => {
+  const result = resolveManualPositions({
+    trackedPositions: [],
+    snapshots: [
+      snapshot(
+        "binance",
+        [
+          { asset: "USDT", free: 100 },
+          { asset: "DUST", free: 9.99 },
+          { asset: "ONE", free: 10 },
+        ],
+        { DUSTUSDT: 0.1, ONEUSDT: 0.1 },
+      ),
+      snapshot(
+        "upbit",
+        [
+          { currency: "KRW", balance: 100000 },
+          { currency: "APENFT", balance: 135423.99244068 },
+        ],
+        {},
+      ),
+    ],
+    nowMs: NOW,
+  });
+
+  assertEquals(result.positions.map((row) => row.id), ["manual:binance:ONEUSDT"]);
+  assertEquals(result.positions[0].metadata.manual_import.value_quote, 1);
+});
+
 Deno.test("a pending bot entry is never misclassified as a manual buy", () => {
   const result = resolveManualPositions({
     trackedPositions: [{

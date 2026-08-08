@@ -73,7 +73,7 @@ test("the dashboard HTML provides every static element required by app.js", () =
 function loadEntryStatusModel() {
   const instrumented = entryStatusSource.replace(
     /\}\)\(\);\s*$/,
-    "window.__entryStatusTest = { manualPositionCardRow, mergePositionRows }; })();",
+    "window.__entryStatusTest = { manualPositionCardRow, mergePositionRows, shouldDisplayPosition }; })();",
   );
   const window = {
     TRADING_SCANNER_CONFIG: {},
@@ -140,4 +140,15 @@ test("manual position cards have explicit manual and no-auto-management labels",
   assert.match(entryStatusSource, /row\.is_manual \? "수동매수"/);
   assert.match(entryStatusSource, /자동매도·성과·학습 대상에서 제외됩니다/);
   assert.match(entryStatusSource, /response\.clone\(\)\.json\(\)\.then\(captureManualPositions\)/);
+});
+
+test("position cards hide sub-dollar values without deleting real holdings", () => {
+  const model = loadEntryStatusModel();
+
+  assert.equal(model.shouldDisplayPosition({ exchange: "binance", market_value_quote: 0.999 }), false);
+  assert.equal(model.shouldDisplayPosition({ exchange: "binance", market_value_quote: 1 }), true);
+  assert.equal(model.shouldDisplayPosition({ exchange: "upbit", market_value_quote: 1399 }), false);
+  assert.equal(model.shouldDisplayPosition({ exchange: "upbit", market_value_quote: 1400 }), true);
+  assert.equal(model.shouldDisplayPosition({ exchange: "upbit", is_manual: true, market_value_quote: null }), false);
+  assert.equal(model.shouldDisplayPosition({ exchange: "upbit", is_manual: false, market_value_quote: null }), true);
 });
