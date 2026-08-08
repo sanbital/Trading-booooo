@@ -50,8 +50,11 @@ jobs:
             supabase/functions/_shared/lob/types.ts \
             supabase/functions/_shared/lob/entry.ts \
             supabase/functions/market-scanner/index.ts \
-            supabase/functions/market-scanner/engine.ts
+            supabase/functions/market-scanner/engine.ts \
+            supabase/functions/market-autotrader/manual-position-import.ts \
+            supabase/functions/market-autotrader/manual-position-import.test.ts
           deno test supabase/functions/_shared/lob/minute-entry-gate.test.ts
+          deno test supabase/functions/market-autotrader/manual-position-import.test.ts
           deno check supabase/functions/market-scanner/index.ts
           deno check supabase/functions/market-autotrader/index.ts
           # This job gates the only deploy path for market-scanner and market-autotrader,
