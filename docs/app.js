@@ -1426,7 +1426,7 @@
       if (quantities) unassigned.set(exchange, quantities);
     }
     // 오래된 행부터 잔고를 배분해야 같은 코인의 잔고가 두 번 쓰이지 않습니다.
-    const ordered = [...rows].sort((left, right) =>
+    const ordered = rows.filter((row) => !row.is_manual).sort((left, right) =>
       new Date(left.created_at || 0).getTime() - new Date(right.created_at || 0).getTime()
     );
     const settled = new Set();
@@ -1456,7 +1456,9 @@
       if (quantity * price < floor) settled.add(row);
     }
     return {
-      rows: rows.filter((row) => !settled.has(row)),
+      // Manual rows are already the unassigned remainder calculated from the live account
+      // by the backend. They must not compete with bot rows for the same balance again.
+      rows: rows.filter((row) => row.is_manual || !settled.has(row)),
       settledCount: settled.size,
     };
   }
@@ -1466,9 +1468,11 @@
     const rows = live.rows;
     const serverSettled = Array.isArray(data.settled_positions) ? data.settled_positions.length : 0;
     const settledCount = Math.max(live.settledCount, serverSettled);
+    const manualCount = rows.filter((row) => row.is_manual).length;
+    const liveBotCount = rows.filter((row) => !row.is_manual && !row.is_paper).length;
     $("open-position-count").textContent = String(rows.length);
     $("open-position-note").textContent = rows.length
-      ? `${rows.filter((row) => !row.is_paper).length}개 실거래${
+      ? `${liveBotCount}개 자동${manualCount ? ` · ${manualCount}개 수동` : ""}${
         settledCount ? ` · 정산 ${settledCount}건 제외` : ""
       }`
       : settledCount
@@ -1479,13 +1483,15 @@
       <tr>
         <td>${row.exchange === "upbit" ? "UPBIT" : "BINANCE"}</td>
         <td><strong>${escapeHtml(row.market)}</strong></td>
-        <td>${escapeHtml(row.state)}</td>
-        <td>${row.is_paper ? "PAPER" : "LIVE"}</td>
+        <td>${escapeHtml(row.is_manual ? "수동매수" : row.state)}</td>
+        <td>${row.is_manual ? "MANUAL" : row.is_paper ? "PAPER" : "LIVE"}</td>
         <td>${fmt(Math.max(finite(row.remaining_quantity), finite(row.reserved_quantity)), 8)}</td>
-        <td>${fmt(row.average_entry_price || row.planned_entry_price, 8)}</td>
-        <td>${fmt(row.stop_price, 8)}</td>
-        <td>${fmt(row.target_1, 8)}</td>
-        <td>${dateTime(row.max_holding_at)}</td>
+        <td>${row.is_manual && !(finite(row.average_entry_price) > 0)
+          ? "—"
+          : fmt(row.average_entry_price || row.planned_entry_price, 8)}</td>
+        <td>${row.is_manual ? "—" : fmt(row.stop_price, 8)}</td>
+        <td>${row.is_manual ? "—" : fmt(row.target_1, 8)}</td>
+        <td>${row.is_manual ? "자동관리 제외" : dateTime(row.max_holding_at)}</td>
       </tr>`).join("")
       : '<tr><td colspan="9" class="muted">열린 포지션이 없습니다.</td></tr>';
   }

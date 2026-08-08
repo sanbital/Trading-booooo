@@ -70,6 +70,7 @@ import {
 } from "../_shared/scalp/reconciliation.ts";
 import { dustQuoteFor } from "../_shared/position-value.ts";
 import { resolveDisplayPositions } from "./position-display.ts";
+import { resolveManualPositions } from "./manual-position-import.ts";
 import {
   normalizeStrategyProfile,
   profileHoldingCeilingMinutes,
@@ -8130,6 +8131,7 @@ async function status(settings: TradingSettings & JsonRecord) {
     assetLocks,
     residualInventory,
     objectiveSnapshots,
+    manualFills,
   ] = await Promise.all([
     db(
       "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*&order=created_at.desc",
@@ -8166,6 +8168,9 @@ async function status(settings: TradingSettings & JsonRecord) {
     db("trading_joint_objective_snapshots?select=*&order=captured_at.desc&limit=40").catch(
       () => [],
     ),
+    db(
+      "exchange_trade_fills?source=eq.MANUAL&position_id=is.null&select=exchange,market,side,price,quantity,quote_amount,base_asset,fee_asset,fee_amount,fee_quote_amount,source,position_id,executed_at,exchange_trade_id&order=executed_at.asc,exchange_trade_id.asc&limit=1000",
+    ).catch(() => []),
   ]);
   const accounts: JsonRecord = {};
   const accountStatsByExchange: JsonRecord = {};
@@ -8236,17 +8241,39 @@ async function status(settings: TradingSettings & JsonRecord) {
       : null,
     batch_profile: lobBatchProfiles?.[0] || null,
   };
-  const displayable = resolveDisplayPositions(positions || [], snapshots || []);
+  // The gateway portfolio fetched for this response is fresher than the persisted account
+  // snapshots loaded above. Put those live snapshots first so both manual-sale settlement
+  // and manual-buy import use the balance the operator can see on the exchange right now.
+  const liveSnapshots = (["upbit", "binance"] as Exchange[]).flatMap((exchange) => {
+    const portfolio = accounts[exchange];
+    if (!portfolio || portfolio.ok === false || !Array.isArray(portfolio.accounts)) return [];
+    return [{
+      ...portfolio,
+      exchange,
+      captured_at: new Date().toISOString(),
+      balances: portfolio.accounts,
+      prices: portfolio.prices || {},
+    }];
+  });
+  const accountSnapshots = [...liveSnapshots, ...(snapshots || [])];
+  const displayable = resolveDisplayPositions(positions || [], accountSnapshots);
+  const manual = resolveManualPositions({
+    trackedPositions: positions || [],
+    snapshots: accountSnapshots,
+    residualInventory: residualInventory || [],
+    manualFills: manualFills || [],
+  });
   return {
     version: VERSION,
     settings,
     accounts,
     account_stats: accountStatsByExchange,
-    positions: displayable.positions.map(displayPosition),
+    positions: [...displayable.positions.map(displayPosition), ...manual.positions],
     // Rows the ledger still carries but the account no longer backs. They are reported
     // rather than dropped silently so a reconciliation lag stays visible.
     settled_positions: displayable.settled,
     position_display_rule: displayable.rule,
+    manual_position_rule: manual.rule,
     asset_locks: assetLocks || [],
     residual_inventory: residualInventory || [],
     joint_objective_snapshots: objectiveSnapshots || [],
@@ -8254,7 +8281,7 @@ async function status(settings: TradingSettings & JsonRecord) {
     binance_gateway_health: binanceHealth,
     recent_orders: orders,
     recent_cycles: cycles,
-    latest_accounts: snapshots,
+    latest_accounts: accountSnapshots,
     recent_events: events,
     cash_flows: cashFlows,
     learning: {
