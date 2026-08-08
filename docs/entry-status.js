@@ -6,6 +6,8 @@
   let dashboardToken = "";
   let pending = false;
   let timer = null;
+  let manualOpenPositions = [];
+  let latestEntryStatus = null;
   const $ = (id) => document.getElementById(id);
   const esc = (value) => String(value ?? "")
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
@@ -48,6 +50,67 @@
     const remain = minutes % 60;
     return `${hours}시간 ${remain}분`;
   };
+
+  function manualPositionCardRow(row) {
+    const exchange = String(row?.exchange || "").toLowerCase();
+    const quantity = Math.max(0, finite(row?.remaining_quantity) ?? finite(row?.initial_quantity) ?? 0);
+    const entryPrice = finite(row?.average_entry_price) ?? finite(row?.planned_entry_price);
+    const manualImport = row?.metadata?.manual_import || {};
+    const currentPrice = finite(manualImport.mark_price) ?? finite(row?.current_price);
+    const observedValue = finite(manualImport.value_quote);
+    const marketValueQuote = observedValue ?? (
+      quantity > 0 && currentPrice !== null ? quantity * currentPrice : null
+    );
+    const costQuote = quantity > 0 && entryPrice !== null ? quantity * entryPrice : null;
+    const estimatedExitFee = marketValueQuote === null
+      ? null
+      : marketValueQuote * (exchange === "upbit" ? 0.0005 : 0.001);
+    const estimatedPnl = marketValueQuote !== null && costQuote !== null
+      ? marketValueQuote - costQuote - (estimatedExitFee || 0)
+      : null;
+    return {
+      id: row?.id,
+      exchange,
+      quote_currency: row?.quote_currency || (exchange === "upbit" ? "KRW" : "USDT"),
+      market: row?.market,
+      state: "MANUAL",
+      is_paper: false,
+      is_manual: true,
+      opened_at: row?.created_at || manualImport.balance_snapshot_at || null,
+      quantity,
+      entry_price: entryPrice,
+      current_price: currentPrice,
+      cost_quote: costQuote,
+      market_value_quote: marketValueQuote,
+      estimated_pnl_quote: estimatedPnl,
+      estimated_return_pct: estimatedPnl !== null && costQuote > 0
+        ? estimatedPnl / costQuote * 100
+        : null,
+      estimated_exit_fee_quote: estimatedExitFee,
+      target_1: null,
+      stop_price: null,
+      price_captured_at: manualImport.balance_snapshot_at || row?.updated_at || null,
+      cost_basis_source: manualImport.cost_basis_source || null,
+    };
+  }
+
+  function captureManualPositions(status) {
+    manualOpenPositions = (Array.isArray(status?.positions) ? status.positions : [])
+      .filter((row) => row?.is_manual === true)
+      .map(manualPositionCardRow)
+      .filter((row) => row.quantity > 0);
+    if (latestEntryStatus) renderPositions(latestEntryStatus);
+  }
+
+  function mergePositionRows(automaticRows, manualRows = manualOpenPositions) {
+    const manualIds = new Set(manualRows.map((row) => String(row.id || "")));
+    return [
+      ...automaticRows.filter((row) => !manualIds.has(String(row.id || ""))),
+      ...manualRows,
+    ].sort((left, right) =>
+      (Date.parse(right.opened_at || "") || 0) - (Date.parse(left.opened_at || "") || 0)
+    );
+  }
 
   function ensureStyles() {
     if (document.getElementById("entry-status-style")) return;
@@ -129,7 +192,8 @@
   function renderPositions(data) {
     ensurePositionCard();
     const list = $("current-position-list");
-    const rows = Array.isArray(data.open_positions) ? data.open_positions : [];
+    const automaticRows = Array.isArray(data.open_positions) ? data.open_positions : [];
+    const rows = mergePositionRows(automaticRows);
     if (!list) return;
 
     $("current-position-count").textContent = rows.length ? `${rows.length}개 보유 중` : "보유 포지션 없음";
@@ -145,7 +209,11 @@
       const currency = String(row.quote_currency || (String(row.exchange).toLowerCase() === "upbit" ? "KRW" : "USDT"));
       const pnl = finite(row.estimated_pnl_quote);
       const pnlClass = pnl === null ? "" : pnl >= 0 ? "realized-positive" : "realized-negative";
-      const mode = row.is_paper ? "PAPER" : "LIVE";
+      const mode = row.is_manual ? "MANUAL" : row.is_paper ? "PAPER" : "LIVE";
+      const state = row.is_manual ? "수동매수" : row.state || "OPEN";
+      const note = row.is_manual
+        ? "거래소 실시간 잔고에서 자동매매 포지션과 잔여재고를 제외한 수동 보유분입니다. 자동매도·성과·학습 대상에서 제외됩니다."
+        : "평가손익은 최신 계좌 스냅샷의 현재가 기준 미확정 추정치입니다. 이미 발생한 수수료와 예상 매도 수수료를 반영하며, 슬리피지는 제외합니다.";
       return `
         <article class="panel entry-position-card">
           <div class="entry-position-head">
@@ -153,7 +221,7 @@
               <strong>${esc(row.market || "—")}</strong>
               <span class="entry-position-badge">${esc(String(row.exchange || "").toUpperCase())}</span>
               <span class="entry-position-badge">${mode}</span>
-              <span class="entry-position-badge">${esc(row.state || "OPEN")}</span>
+              <span class="entry-position-badge">${esc(state)}</span>
             </div>
             <div class="entry-position-pnl ${pnlClass}">
               <strong>${money(row.estimated_pnl_quote, currency)}</strong>
@@ -168,7 +236,7 @@
             <div><span>목표가</span><b>${price(row.target_1, currency)}</b></div>
             <div><span>손절가</span><b>${price(row.stop_price, currency)}</b></div>
           </div>
-          <p class="entry-position-note">평가손익은 최신 계좌 스냅샷의 현재가 기준 미확정 추정치입니다. 이미 발생한 수수료와 예상 매도 수수료를 반영하며, 슬리피지는 제외합니다.</p>
+          <p class="entry-position-note">${note}</p>
         </article>`;
     }).join("");
   }
@@ -184,6 +252,7 @@
 
   function render(data) {
     ensureCard();
+    latestEntryStatus = data;
     renderPositions(data);
     const state = $("entry-live-state");
     if (!state) return;
@@ -255,7 +324,10 @@
         const captured = headers.get("x-autotrade-token");
         if (captured && captured.length >= 32) dashboardToken = captured;
         const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
-        if (body?.action === "status" && response.ok) queueMicrotask(load);
+        if (body?.action === "status" && response.ok) {
+          response.clone().json().then(captureManualPositions).catch(() => {});
+          queueMicrotask(load);
+        }
       }
     } catch (_) {}
     return response;
