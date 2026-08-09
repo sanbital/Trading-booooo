@@ -1,0 +1,74 @@
+name: Align v7.5.3 engine contracts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/align-engine-v753-consistency.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  align:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Align source engine revisions
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          revision = '7.5.3-RECOVERY-NET-POSITIVE'
+
+          replacements = [
+              (
+                  Path('supabase/functions/market-scanner/engine.ts'),
+                  'export const ENGINE_VERSION = "7.5.2-RESIDUAL-TP10-SL4";',
+                  f'export const ENGINE_VERSION = "{revision}";',
+              ),
+              (
+                  Path('gateway/server.mjs'),
+                  'const VERSION = "7.5.2-RESIDUAL-TP10-SL4";',
+                  f'const VERSION = "{revision}";',
+              ),
+          ]
+          for path, old, new in replacements:
+              text = path.read_text()
+              if text.count(old) != 1:
+                  raise SystemExit(f'{path}: expected exactly one old revision, found {text.count(old)}')
+              path.write_text(text.replace(old, new, 1))
+
+          workflow = Path('.github/workflows/deploy-binance-gateway.yml')
+          text = workflow.read_text()
+          pattern = r'\n\s*- name: Align gateway runtime version\n\s*run: node scripts/patch_gateway_version_v752\.mjs\n'
+          text, count = re.subn(pattern, '\n', text, count=1)
+          if count != 1:
+              raise SystemExit(f'{workflow}: stale v7.5.2 runtime patch step not found exactly once')
+          workflow.write_text(text)
+          PY
+
+          git diff --check
+          grep -F 'export const ENGINE_VERSION = "7.5.3-RECOVERY-NET-POSITIVE";' supabase/functions/market-scanner/engine.ts
+          grep -F 'const VERSION = "7.5.3-RECOVERY-NET-POSITIVE";' gateway/server.mjs
+          ! grep -F 'patch_gateway_version_v752.mjs' .github/workflows/deploy-binance-gateway.yml
+
+      - name: Commit aligned contracts
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'No changes required.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add supabase/functions/market-scanner/engine.ts gateway/server.mjs .github/workflows/deploy-binance-gateway.yml
+          git commit -m 'fix: align runtime contracts on v7.5.3'
+          git push origin HEAD:main
