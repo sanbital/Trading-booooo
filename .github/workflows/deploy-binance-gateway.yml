@@ -33,9 +33,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Align gateway runtime version
-        run: node scripts/patch_gateway_version_v752.mjs
-
       - name: Apply read-only Binance trade history route
         run: node gateway/patch-trade-history.mjs
 
