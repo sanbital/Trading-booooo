@@ -57,17 +57,10 @@ jobs:
           deno test supabase/functions/market-autotrader/manual-position-import.test.ts
           deno check supabase/functions/market-scanner/index.ts
           deno check supabase/functions/market-autotrader/index.ts
-          # This job gates the only deploy path for market-scanner and market-autotrader,
-          # so its assertions must track the policy that is actually deployed. They were
-          # pinned to PREBREAKOUT-BURST-V1, which HALF-HOLD-RESIDUAL-TP50-SL10-V2 replaced
-          # in v7.5.1, and then to that v7.5.1 string, which HALF-HOLD-RESIDUAL-TP10-SL4-V3
-          # replaced in v7.5.2. Each time, the stale string blocked every deploy through
-          # this workflow. The v7.5.2 outage is what left the scanner deployed at v7.5.1
-          # while the autotrader ran v7.5.2, and every candidate was then rejected with
-          # ENGINE_VERSION_MISMATCH. The engine-version parity check below fails the deploy
-          # on that specific drift instead of letting it reach production as a trade outage.
-          # The M1 gate revision is read from the source instead of repeated here so a
-          # deliberate bump does not silently become a deploy outage.
+          # Read the canonical engine identity from scanner source, then require exact
+          # parity in both autotrader and gateway. Policy assertions below intentionally
+          # track the currently deployed v7.5.3 recovery contract rather than a stale
+          # historical residual-policy string.
           engine_version="$(sed -n 's/.*export const ENGINE_VERSION = "\([^"]*\)".*/\1/p' \
             supabase/functions/market-scanner/engine.ts)"
           test -n "$engine_version"
@@ -81,11 +74,11 @@ jobs:
           grep -q 'M1_UPPER_BAND_NOT_TOUCHED' supabase/functions/_shared/lob/minute-entry-gate.ts
           grep -q 'BUY_PRESSURE_NOT_CONFIRMED' supabase/functions/_shared/lob/entry.ts
           grep -q 'const DEFAULT_DYNAMIC_OBSERVATION_MS = 15_000' supabase/functions/market-scanner/index.ts
-          grep -q 'HALF-HOLD-RESIDUAL-TP10-SL4-V3' supabase/functions/market-autotrader/index.ts
+          grep -q 'HALF-HOLD-RECOVERY-NET-POSITIVE-V4' supabase/functions/market-autotrader/index.ts
+          grep -q 'RECOVERY_NET_POSITIVE_EXIT' supabase/functions/market-autotrader/index.ts
           grep -q 'BB_UPPER_REENTRY_CONFIRMED' supabase/functions/market-autotrader/index.ts
           grep -q 'BB_RECLAIM_FAILED' supabase/functions/market-autotrader/index.ts
           grep -q 'ORDERBOOK_COLLAPSE' supabase/functions/market-autotrader/index.ts
-          grep -q 'RESIDUAL_AWAITING_TP10_OR_SL4' supabase/functions/market-autotrader/index.ts
           ! grep -q 'const exp1ArmWidthsBps' supabase/functions/market-autotrader/index.ts
 
   deploy:
