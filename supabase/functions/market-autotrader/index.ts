@@ -125,12 +125,13 @@ import {
   orderTimeExitPolicyQuote,
   quoteExecutableNetExit,
 } from "./executable-exit.ts";
+import { halfHoldRecoveryExitDecision } from "./recovery-exit-policy.ts";
 import { buildTradingHeartbeatPatch, type TradingHeartbeatPatch } from "./heartbeat.ts";
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 import { loadMinuteEntryGate } from "../_shared/lob/minute-entry-market.ts";
 
-const VERSION = "7.5.2-RESIDUAL-TP10-SL4";
+const VERSION = "7.5.3-RECOVERY-NET-POSITIVE";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -5087,6 +5088,7 @@ async function preparePositiveNetAfter180Exit(
   requestedQuantity: number,
   settings: TradingSettings & JsonRecord,
   cycleId: string,
+  blockedEvent = "POSITIVE_NET_AFTER_180S_BLOCKED",
 ): Promise<ProtectedPositiveNetQuote | null> {
   const [portfolio, market, buyFeeQuote] = await Promise.all([
     gateway(position.exchange, { action: "portfolio" }),
@@ -5124,7 +5126,7 @@ async function preparePositiveNetAfter180Exit(
   });
   if (!quote.allowed) {
     await event(
-      "POSITIVE_NET_AFTER_180S_BLOCKED",
+      blockedEvent,
       `${position.exchange}:${position.market} executable net was not strictly positive`,
       audit,
       { cycleId, positionId: position.id, level: "INFO" },
@@ -5377,8 +5379,10 @@ async function applyExit(
 ) {
   const targetAction = action === "TARGET_1" || action === "TARGET_2";
   const positiveNetAfter180 = decisionReason === "POSITIVE_NET_AFTER_180S";
+  const recoveryNetPositive = decisionReason === "RECOVERY_NET_POSITIVE_EXIT";
+  const positiveNetGuardedExit = positiveNetAfter180 || recoveryNetPositive;
   const residualThresholdExit = decisionReason === "RESIDUAL_TAKE_PROFIT_10" ||
-    decisionReason === "RESIDUAL_STOP_LOSS_4";
+    decisionReason === "RESIDUAL_STOP_LOSS_4" || recoveryNetPositive;
   const protectedHoldQuantity = residualThresholdExit
     ? 0
     : Math.max(0, finite(position.initial_quantity) * 0.5);
@@ -5398,7 +5402,7 @@ async function applyExit(
   let quantity = Math.min(desiredQuantity, maxExitQuantity);
   // Entry sizing deliberately keeps the internal Binance 90 USDT floor. Exit sizing uses
   // the venue floor. A residual TP50/SL10 decision is the only non-emergency route allowed
-  // to liquidate the formerly protected half.
+  // to liquidate the formerly protected half; recovery mode is the other authorized route.
   const minNotional = position.exchange === "binance" ? 5 : 5000;
   if (quantity * price < minNotional) {
     return { action: "NONE", reason: "exit quantity is below exchange minimum notional" };
@@ -5414,13 +5418,21 @@ async function applyExit(
   if (!position.is_paper && targetAction && !protectedTarget) {
     return { action: "NONE", reason: "target net guard blocked or insufficient protected depth" };
   }
-  const protectedPositiveNet = !position.is_paper && positiveNetAfter180 && settings
-    ? await preparePositiveNetAfter180Exit(position, quantity, settings, cycleId)
+  const protectedPositiveNet = !position.is_paper && positiveNetGuardedExit && settings
+    ? await preparePositiveNetAfter180Exit(
+      position,
+      quantity,
+      settings,
+      cycleId,
+      recoveryNetPositive ? "RECOVERY_NET_POSITIVE_BLOCKED" : "POSITIVE_NET_AFTER_180S_BLOCKED",
+    )
     : null;
-  if (!position.is_paper && positiveNetAfter180 && !protectedPositiveNet) {
+  if (!position.is_paper && positiveNetGuardedExit && !protectedPositiveNet) {
     return {
       action: "NONE",
-      reason: "positive-net order-time recheck blocked; position retained",
+      reason: recoveryNetPositive
+        ? "recovery net-positive order-time recheck blocked; position retained"
+        : "positive-net order-time recheck blocked; position retained",
     };
   }
   if (protectedPositiveNet) quantity = protectedPositiveNet.sellQuantity;
@@ -5457,7 +5469,9 @@ async function applyExit(
       },
     }))[0] || position;
     await event(
-      positiveNetAfter180
+      recoveryNetPositive
+        ? "RECOVERY_NET_POSITIVE_FOK_NOT_FILLED"
+        : positiveNetAfter180
         ? "POSITIVE_NET_AFTER_180S_FOK_NOT_FILLED"
         : "TARGET_PROTECTED_ORDER_NOT_FILLED",
       `${position.exchange}:${position.market} protected FOK did not fill; position retained`,
@@ -5480,10 +5494,52 @@ async function applyExit(
     breakevenAfterT1,
   );
   if (
-    (targetAction || positiveNetAfter180) && finalized?.closed &&
+    decisionReason === "HALF_HOLD_STOP_LOSS_4" &&
+    !finalized?.closed &&
+    finite(finalized?.position?.remaining_quantity) > 0
+  ) {
+    const enteredAt = new Date().toISOString();
+    const priorMetadata = finalized.position?.metadata || position.metadata || {};
+    const recoveryMetadata = {
+      ...priorMetadata,
+      recovery_exit: {
+        ...(priorMetadata.recovery_exit || {}),
+        enabled: true,
+        revision: VERSION,
+        entered_at: enteredAt,
+        trigger_reason: "HALF_HOLD_STOP_LOSS_4",
+        first_exit_price: finite(result?.fill?.averagePrice, price),
+        first_exit_quantity: finite(result?.fill?.executedVolume),
+        realized_pnl_quote_after_first_exit: finite(finalized.position?.realized_pnl_quote),
+        exit_rule: "TOTAL_NET_PNL_GT_0",
+        percentage_residual_thresholds_disabled: true,
+      },
+    };
+    const recoveryPosition = (await patch("trading_positions", `id=eq.${position.id}`, {
+      metadata: recoveryMetadata,
+    }))[0] || { ...finalized.position, metadata: recoveryMetadata };
+    await event(
+      "RECOVERY_MODE_ENTERED",
+      `${position.exchange}:${position.market} first -4% tranche filled; residual waits for positive total net`,
+      {
+        first_exit_price: recoveryMetadata.recovery_exit.first_exit_price,
+        first_exit_quantity: recoveryMetadata.recovery_exit.first_exit_quantity,
+        realized_pnl_quote_after_first_exit:
+          recoveryMetadata.recovery_exit.realized_pnl_quote_after_first_exit,
+        exit_rule: recoveryMetadata.recovery_exit.exit_rule,
+      },
+      { cycleId, positionId: position.id, orderId: result.orderRow?.id, level: "INFO" },
+    );
+    finalized = { ...finalized, position: recoveryPosition };
+    position = { ...position, ...recoveryPosition };
+  }
+  if (
+    (targetAction || positiveNetGuardedExit) && finalized?.closed &&
     finite(finalized?.position?.realized_pnl_quote) <= 0
   ) {
-    const breachReason = positiveNetAfter180
+    const breachReason = recoveryNetPositive
+      ? "RECOVERY_NET_POSITIVE_GUARD_BREACH"
+      : positiveNetAfter180
       ? "POSITIVE_NET_AFTER_180S_GUARD_BREACH"
       : "TARGET_NET_GUARD_BREACH";
     const corrected = (await patch("trading_positions", `id=eq.${position.id}`, {
@@ -5509,9 +5565,9 @@ async function applyExit(
   if (
     finalized?.closed &&
     (decisionReason === "POSITIVE_NET_AFTER_180S" ||
+      decisionReason === "RECOVERY_NET_POSITIVE_EXIT" ||
       decisionReason === "HARD_STOP_MINUS_2_AFTER_180S") &&
-    !(decisionReason === "POSITIVE_NET_AFTER_180S" &&
-      finite(finalized?.position?.realized_pnl_quote) <= 0)
+    !(positiveNetGuardedExit && finite(finalized?.position?.realized_pnl_quote) <= 0)
   ) {
     const corrected = (await patch("trading_positions", `id=eq.${position.id}`, {
       close_reason: decisionReason,
@@ -7333,11 +7389,12 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision = { action: "STOP", reason: "scalp_max_single_loss" } as any;
         }
       }
-      // HALF-HOLD-RESIDUAL-TP10-SL4-V3: the first 50% exits at +5% or -4%.
-      // Once that tranche is gone, the remaining inventory exits in full when its
-      // executable return reaches +10% or -4%. Time and signal exits remain disabled.
+      // HALF-HOLD-RECOVERY-NET-POSITIVE-V4: the first 50% exits at +5% or -4%.
+      // A +5% first exit keeps the normal +10%/-4% residual thresholds. A -4% first
+      // exit enters recovery mode and the residual exits at the first strictly positive
+      // executable TOTAL position net PnL after fees and slippage safety.
       if (lobMode && !settings.emergency_liquidation) {
-        const BURST_POLICY_VERSION = "HALF-HOLD-RESIDUAL-TP10-SL4-V3";
+        const BURST_POLICY_VERSION = "HALF-HOLD-RECOVERY-NET-POSITIVE-V4";
         const requestedAction = decision.action;
         const requestedReason = String((decision as any).reason || "");
         const safetyRequested = requestedAction === "STOP" &&
@@ -7431,47 +7488,16 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         const hasTradableHalf = finite(position.remaining_quantity) - protectedHoldQuantity >
           residualTolerance;
 
-        if (!hasTradableHalf) {
-          if (residualNetReturnPct >= 10) {
-            decision = {
-              action: "STOP",
-              fraction: 1,
-              reason: "RESIDUAL_TAKE_PROFIT_10",
-            } as any;
-          } else if (residualNetReturnPct <= -4) {
-            decision = {
-              action: "STOP",
-              fraction: 1,
-              reason: "RESIDUAL_STOP_LOSS_4",
-            } as any;
-          } else {
-            decision = {
-              action: "NONE",
-              fraction: 0,
-              reason: "RESIDUAL_AWAITING_TP10_OR_SL4",
-            } as any;
-          }
-        } else if (grossReturnPct >= 5) {
-          decision = {
-            action: "STOP",
-            fraction: 0.5,
-            reason: "HALF_HOLD_TAKE_PROFIT_5",
-          } as any;
-        } else if (grossReturnPct <= -4) {
-          decision = {
-            action: "STOP",
-            fraction: 0.5,
-            reason: "HALF_HOLD_STOP_LOSS_4",
-          } as any;
-        } else {
-          decision = {
-            action: "NONE",
-            fraction: 0,
-            reason: safetyRequested
-              ? "HALF_HOLD_THRESHOLD_OVERRIDES_NON_PRICE_SAFETY_EXIT"
-              : "HALF_HOLD_AWAITING_TP5_OR_SL4",
-          } as any;
-        }
+        const recoveryMode = position.metadata?.recovery_exit?.enabled === true;
+        decision = halfHoldRecoveryExitDecision({
+          residualStage: !hasTradableHalf,
+          recoveryMode,
+          grossReturnPct,
+          residualNetReturnPct,
+          executableNetAllowed: executableQuote.allowed,
+          expectedNetProfitQuote: finite(executableQuote.expectedNetProfitQuote),
+          safetyRequested,
+        }) as any;
 
         const watchIso = Number.isFinite(watchStartedMs)
           ? new Date(watchStartedMs).toISOString()
@@ -7493,6 +7519,11 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
               approved_reason: approvedReason,
               requested_action: requestedAction,
               requested_reason: requestedReason,
+              recovery_mode: recoveryMode,
+              executable_net_allowed: executableQuote.allowed,
+              expected_net_profit_quote: Number.isFinite(executableQuote.expectedNetProfitQuote)
+                ? executableQuote.expectedNetProfitQuote
+                : null,
               hard_stop_net_return_pct: guardedNetReturnPct,
               hard_stop_net_profit_quote: guardedNetProfitQuote,
               bb_upper_reentry_confirmed: reentryConfirmed,
@@ -7534,6 +7565,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision.reason === "HALF_HOLD_STOP_LOSS_4" ||
           decision.reason === "RESIDUAL_TAKE_PROFIT_10" ||
           decision.reason === "RESIDUAL_STOP_LOSS_4" ||
+          decision.reason === "RECOVERY_NET_POSITIVE_EXIT" ||
           decision.reason === "BB_UPPER_REENTRY_CONFIRMED" ||
           decision.reason === "BB_RECLAIM_FAILED" ||
           decision.reason === "ORDERBOOK_COLLAPSE";
