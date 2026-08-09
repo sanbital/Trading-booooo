@@ -115,6 +115,7 @@ import {
 } from "../_shared/scalp/rotation.ts";
 import { settleSpotMarketReads, validateSpotMarket } from "../_shared/spot-market.ts";
 import { boundedEvBiasPenalty } from "../_shared/lob/ev-bias.ts";
+import { fullStopLossDecision } from "./full-stop.ts";
 import {
   lobRecommendationWindowSeconds,
   recommendationAdmission,
@@ -5377,9 +5378,10 @@ async function applyExit(
 ) {
   const targetAction = action === "TARGET_1" || action === "TARGET_2";
   const positiveNetAfter180 = decisionReason === "POSITIVE_NET_AFTER_180S";
-  const residualThresholdExit = decisionReason === "RESIDUAL_TAKE_PROFIT_10" ||
+  const fullInventoryExit = decisionReason === "FULL_STOP_LOSS_4" ||
+    decisionReason === "RESIDUAL_TAKE_PROFIT_10" ||
     decisionReason === "RESIDUAL_STOP_LOSS_4";
-  const protectedHoldQuantity = residualThresholdExit
+  const protectedHoldQuantity = fullInventoryExit
     ? 0
     : Math.max(0, finite(position.initial_quantity) * 0.5);
   const maxExitQuantity = Math.max(
@@ -5398,7 +5400,8 @@ async function applyExit(
   let quantity = Math.min(desiredQuantity, maxExitQuantity);
   // Entry sizing deliberately keeps the internal Binance 90 USDT floor. Exit sizing uses
   // the venue floor. A residual TP50/SL10 decision is the only non-emergency route allowed
-  // to liquidate the formerly protected half.
+  // to liquidate the formerly protected half. FULL_STOP_LOSS_4 is always allowed
+  // to liquidate the complete remaining position on its first threshold crossing.
   const minNotional = position.exchange === "binance" ? 5 : 5000;
   if (quantity * price < minNotional) {
     return { action: "NONE", reason: "exit quantity is below exchange minimum notional" };
@@ -7333,9 +7336,9 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision = { action: "STOP", reason: "scalp_max_single_loss" } as any;
         }
       }
-      // HALF-HOLD-RESIDUAL-TP10-SL4-V3: the first 50% still exits at +5% or -4%.
-      // Once that tranche is gone, the remaining inventory exits in full only when its
-      // executable return reaches +10% or -4%. Time and signal exits remain disabled.
+      // HALF-HOLD-RESIDUAL-TP10-SL4-V3 compatibility marker. Profit still scales out
+      // 50% at +5% and the residual exits at +10%. Loss is different: the first fee-net
+      // -4% observation exits the complete remaining inventory in the same cycle.
       if (lobMode && !settings.emergency_liquidation) {
         const BURST_POLICY_VERSION = "HALF-HOLD-RESIDUAL-TP10-SL4-V3";
         const requestedAction = decision.action;
@@ -7423,6 +7426,11 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         const residualNetReturnPct = entryPrice > 0
           ? (executableExitPrice * (1 - policyFeeRate) / entryPrice - 1) * 100
           : 0;
+        const fullStopDecision = fullStopLossDecision({
+          entryPrice,
+          executableExitPrice,
+          sellFeeRate: policyFeeRate,
+        });
         const protectedHoldQuantity = Math.max(0, finite(position.initial_quantity) * 0.5);
         const residualTolerance = Math.max(
           1e-12,
@@ -7431,18 +7439,14 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         const hasTradableHalf = finite(position.remaining_quantity) - protectedHoldQuantity >
           residualTolerance;
 
-        if (!hasTradableHalf) {
+        if (fullStopDecision.action === "STOP") {
+          decision = fullStopDecision as any;
+        } else if (!hasTradableHalf) {
           if (residualNetReturnPct >= 10) {
             decision = {
               action: "STOP",
               fraction: 1,
               reason: "RESIDUAL_TAKE_PROFIT_10",
-            } as any;
-          } else if (residualNetReturnPct <= -4) {
-            decision = {
-              action: "STOP",
-              fraction: 1,
-              reason: "RESIDUAL_STOP_LOSS_4",
             } as any;
           } else {
             decision = {
@@ -7456,12 +7460,6 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             action: "STOP",
             fraction: 0.5,
             reason: "HALF_HOLD_TAKE_PROFIT_5",
-          } as any;
-        } else if (grossReturnPct <= -4) {
-          decision = {
-            action: "STOP",
-            fraction: 0.5,
-            reason: "HALF_HOLD_STOP_LOSS_4",
           } as any;
         } else {
           decision = {
@@ -7532,6 +7530,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision.reason === "HARD_STOP_MINUS_2" ||
           decision.reason === "HALF_HOLD_TAKE_PROFIT_5" ||
           decision.reason === "HALF_HOLD_STOP_LOSS_4" ||
+          decision.reason === "FULL_STOP_LOSS_4" ||
           decision.reason === "RESIDUAL_TAKE_PROFIT_10" ||
           decision.reason === "RESIDUAL_STOP_LOSS_4" ||
           decision.reason === "BB_UPPER_REENTRY_CONFIRMED" ||

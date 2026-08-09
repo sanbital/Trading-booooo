@@ -1,13 +1,18 @@
-// Trading-booooo performance API v6.11.0 — exchange-fill accounting revision r9.
+// Trading-booooo performance API v6.11.0 — exchange-fill accounting revision r10.
 // Performance only. This function never places, changes, or cancels an order.
-// Binance source of truth is exchange_trade_fills + settled trading_positions.
+// Binance source of truth is the complete exchange_trade_fills ledger.
 // Upbit keeps the existing trading_fills accounting path.
+
+import {
+  allocateBinanceExit,
+  settleBinanceFills,
+} from "./binance-settlement.ts";
 
 type JsonRecord = Record<string, any>;
 type Exchange = "upbit" | "binance";
 
 const VERSION = "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION";
-const PERFORMANCE_REVISION = "6.11.0-r9-EXCHANGE-FILL-IMMUTABLE-UI";
+const PERFORMANCE_REVISION = "6.11.0-r10-EXCHANGE-FILL-DIRECT-SETTLEMENT";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const SERVICE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
@@ -182,15 +187,6 @@ function buildUpbitRows(
   return { rows, quality: rows.length ? "TRADING_FILL_VERIFIED" : "NO_PERFORMANCE_ROW" };
 }
 
-function effectiveBuyQty(fill: JsonRecord): number {
-  const qty = Math.max(0, num(fill.quantity));
-  const feeIsBase = String(fill.fee_asset || "").toUpperCase() === String(fill.base_asset || "").toUpperCase();
-  return feeIsBase ? Math.max(0, qty - Math.max(0, num(fill.fee_amount))) : qty;
-}
-function entryFeeQuote(fill: JsonRecord): number {
-  const feeIsBase = String(fill.fee_asset || "").toUpperCase() === String(fill.base_asset || "").toUpperCase();
-  return feeIsBase ? 0 : Math.max(0, num(fill.fee_quote_amount));
-}
 function groupExitFills(fills: JsonRecord[]): JsonRecord[][] {
   const groups = new Map<string, JsonRecord[]>();
   for (const fill of fills) {
@@ -204,38 +200,29 @@ function buildBinanceRows(position: JsonRecord, fills: JsonRecord[], snapshot: J
   const sorted = [...fills].sort((a, b) => Date.parse(String(a.executed_at || 0)) - Date.parse(String(b.executed_at || 0)));
   const buys = sorted.filter(f => String(f.side).toUpperCase() === "BUY");
   const sells = sorted.filter(f => String(f.side).toUpperCase() === "SELL");
-  const entryQty = buys.reduce((s, f) => s + effectiveBuyQty(f), 0);
-  const entryFunds = buys.reduce((s, f) => s + Math.max(0, num(f.quote_amount)), 0);
-  const entryFees = buys.reduce((s, f) => s + entryFeeQuote(f), 0);
+  const settlement = settleBinanceFills(sorted);
+  const entryQty = settlement.entryQuantity;
+  const entryFunds = settlement.entryFundsQuote;
+  const entryFees = settlement.entryFeesQuote;
   if (!(entryQty > 0 && entryFunds > 0)) return { rows: [], quality: "EXCHANGE_ENTRY_FILL_MISSING" };
 
   const entryAt = earliest(buys), avgEntry = entryFunds / entryQty;
   const groups = groupExitFills(sells);
-  const soldQty = sells.reduce((s, f) => s + Math.max(0, num(f.quantity)), 0);
-  const sellFeesTotal = sells.reduce((s, f) => s + Math.max(0, num(f.fee_quote_amount)), 0);
+  const soldQty = settlement.soldQuantity;
   const closed = String(position.state).toUpperCase() === "CLOSED";
-  const settledCost = Math.max(0, num(position.realized_cost_quote, entryFunds * Math.min(1, soldQty / entryQty)));
-  const settledFees = Math.max(0, num(position.paid_fees_quote, entryFees * Math.min(1, soldQty / entryQty) + sellFeesTotal));
-  const settledPnl = num(position.realized_pnl_quote);
-  const settledReturn = num(position.realized_return_pct, settledCost > 0 ? settledPnl / settledCost * 100 : 0);
-  const settledEntryFees = Math.max(0, settledFees - sellFeesTotal);
   const rows: JsonRecord[] = [];
-  let allocatedPnl = 0;
 
   for (let idx = 0; idx < groups.length; idx++) {
     const group = groups[idx], qty = sum(group, "quantity"), proceeds = sum(group, "quote_amount"), sellFee = sum(group, "fee_quote_amount");
     if (!(qty > 0 && proceeds > 0)) continue;
-    const soldShare = soldQty > 0 ? qty / soldQty : 0;
-    const entryShare = entryQty > 0 ? qty / entryQty : 0;
-    const cost = closed ? settledCost * soldShare : entryFunds * entryShare;
-    const allocatedEntryFee = closed ? settledEntryFees * soldShare : entryFees * entryShare;
-    let pnl = proceeds - sellFee - allocatedEntryFee - cost;
-    let adjustment = 0;
-    if (closed && idx === groups.length - 1) {
-      adjustment = settledPnl - (allocatedPnl + pnl);
-      pnl += adjustment;
-    }
-    allocatedPnl += pnl;
+    const allocation = allocateBinanceExit({
+      settlement,
+      quantity: qty,
+      proceedsQuote: proceeds,
+      sellFeeQuote: sellFee,
+    });
+    const cost = allocation.costQuote;
+    const pnl = allocation.pnlQuote;
     const exitAt = latest(group);
     const orderId = group[0]?.exchange_order_id || null;
     rows.push({
@@ -246,19 +233,19 @@ function buildBinanceRows(position: JsonRecord, fills: JsonRecord[], snapshot: J
       entry_at: entryAt, exit_at: exitAt, duration_seconds: duration(entryAt, exitAt), quantity: qty,
       average_entry_price: avgEntry, average_exit_price: proceeds / qty, current_price: proceeds / qty,
       entry_funds_quote: cost, exit_funds_quote: proceeds, invested_cost_quote: cost,
-      total_fees_quote: allocatedEntryFee + sellFee, net_pnl_quote: pnl,
-      return_pct: cost > 0 ? pnl / cost * 100 : 0,
-      position_realized_pnl_quote: closed ? settledPnl : null,
-      position_realized_return_pct: closed ? settledReturn : null,
-      position_realized_cost_quote: closed ? settledCost : null,
-      settlement_adjustment_quote: adjustment,
+      total_fees_quote: allocation.totalFeesQuote, net_pnl_quote: pnl,
+      return_pct: allocation.returnPct,
+      position_realized_pnl_quote: closed ? settlement.realizedPnlQuote : null,
+      position_realized_return_pct: closed ? settlement.realizedReturnPct : null,
+      position_realized_cost_quote: closed ? settlement.realizedCostQuote : null,
+      settlement_adjustment_quote: 0,
       close_reason: position.close_reason || "EXCHANGE_FILL_RECONCILED",
       fill_count: group.length, position_exit_index: idx + 1, position_exit_count: groups.length,
       exchange_trade_ids: group.map(f => f.exchange_trade_id).filter((v: unknown) => v != null),
       actual_fill_only: true, balance_verified: true,
-      accounting_quality: closed ? "SETTLED_EXCHANGE_FILL_IMMUTABLE" : "EXCHANGE_FILL_PARTIAL_EXIT",
+      accounting_quality: closed ? "SETTLED_EXCHANGE_FILL_DIRECT" : "EXCHANGE_FILL_PARTIAL_EXIT",
       fee_accounting_quality: group.every(f => f.fee_quote_amount != null) ? "EXCHANGE_RECORDED_FEE" : "FEE_PARTIAL",
-      pnl_source: closed ? "SETTLED_POSITION_LEDGER_FROM_EXCHANGE_FILLS" : "EXCHANGE_TRADE_FILLS",
+      pnl_source: "EXCHANGE_TRADE_FILLS_DIRECT",
     });
   }
 
@@ -350,7 +337,7 @@ Deno.serve(async (req: Request) => {
     trades.sort((a,b) => new Date(b.exit_at || b.entry_at || 0).getTime() - new Date(a.exit_at || a.entry_at || 0).getTime());
     const resultBody = {
       ok: true, version: VERSION, performance_revision: PERFORMANCE_REVISION, generated_at: new Date().toISOString(),
-      source_of_truth: { binance: "exchange_trade_fills + settled trading_positions", upbit: "trading_fills" },
+      source_of_truth: { binance: "exchange_trade_fills direct settlement", upbit: "trading_fills" },
       source_counts: { positions: positions.length, orders: orders.length, trading_fills: botFills.length, exchange_trade_fills: exchangeFills.length, performance_rows: trades.length },
       account_reconciliation: {
         balance_snapshot_at: { upbit: latestSnap.upbit?.captured_at || null, binance: latestSnap.binance?.captured_at || null },
