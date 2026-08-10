@@ -176,8 +176,6 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           set -euo pipefail
-          # The current migration rebuilds guard_lob_sell_order_v714. Assert the end state
-          # after every replay so an incomplete deployment cannot weaken the sell guard.
           psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
           do $$
           declare
@@ -210,8 +208,8 @@ jobs:
               raise exception
                 'the post-180 hold carries a time cap again; after 180s only positive net or minus 2 percent may close a position';
             end if;
-            # NOTE: PL/pgSQL body validation below protects legacy v714 only; protected trailing
-            # authority is replayed immediately after v760 above.
+            -- PL/pgSQL validation below protects legacy v714 only; protected trailing
+            -- authority is replayed immediately after v760 above.
             if position('v_policy_revision = ''7.3.0' in v_def) > 0
                or position('v_policy_revision = ''7.3.2' in v_def) > 0 then
               raise exception
@@ -231,8 +229,6 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
-          # v6.2: the calibration jobs were never in this loop, so the self-correction
-          # functions the system depends on were only ever deployed by hand -- if at all.
           for fn in market-learning scalp-calibration lob-calibration; do
             supabase functions deploy "$fn" --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
           done
