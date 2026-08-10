@@ -201,3 +201,11 @@ Deno.test("futures positions are quoted and monitored on the perpetual venue", (
   );
   assert(minuteMarket.includes("BINANCE_FUTURES}/fapi/v1/klines"));
 });
+
+Deno.test("engine full-liquidation reasons release the protected half", () => {
+  assert(ENGINE.includes('decisionReason === "HALF_HOLD_STOP_LOSS_4"'));
+  assert(ENGINE.includes('decisionReason === "FUTURES_HALF_STOP_LOSS_ROE_12"'));
+  assert(ENGINE.includes('decisionReason === "RESIDUAL_PROTECTED_TRAIL_EXIT"'));
+  assert(ENGINE.includes('decisionReason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"'));
+  assert(ENGINE.includes("const protectedHoldQuantity = fullLiquidationExit"));
+});

@@ -5622,11 +5622,18 @@ async function applyExit(
   const positiveNetAfter180 = decisionReason === "POSITIVE_NET_AFTER_180S";
   const recoveryNetPositive = decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT";
   const positiveNetGuardedExit = positiveNetAfter180 || recoveryNetPositive;
-  // Every reason that is allowed to liquidate the half the first leg protected.
-  const residualThresholdExit = decisionReason === "RESIDUAL_TAKE_PROFIT_10" ||
+  // Every reason that must be allowed to liquidate the protected half.
+  // First take-profit (+5% spot / +15% futures ROE) is the only split-exit path that
+  // preserves 50%. Hard stops and residual protected-trail exits must close everything
+  // still remaining. Keep legacy residual reasons authorized for already-open positions.
+  const fullLiquidationExit = decisionReason === "HALF_HOLD_STOP_LOSS_4" ||
+    decisionReason === "FUTURES_HALF_STOP_LOSS_ROE_12" ||
+    decisionReason === "RESIDUAL_PROTECTED_TRAIL_EXIT" ||
+    decisionReason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT" ||
+    decisionReason === "RESIDUAL_TAKE_PROFIT_10" ||
     decisionReason === "RESIDUAL_STOP_LOSS_4" ||
     decisionReason === "FUTURES_RESIDUAL_TAKE_PROFIT_ROE_30" || recoveryNetPositive;
-  const protectedHoldQuantity = residualThresholdExit
+  const protectedHoldQuantity = fullLiquidationExit
     ? 0
     : Math.max(0, finite(position.initial_quantity) * 0.5);
   const maxExitQuantity = Math.max(
@@ -5743,16 +5750,38 @@ async function applyExit(
   ) {
     const enteredAt = new Date().toISOString();
     const priorMetadata = finalized.position?.metadata || position.metadata || {};
-    const recoveryMetadata = { ...priorMetadata, recovery_exit: {
-      ...(priorMetadata.recovery_exit || {}), enabled: true, revision: VERSION, entered_at: enteredAt,
-      trigger_reason: "FUTURES_HALF_STOP_LOSS_ROE_12", first_exit_price: finite(result?.fill?.averagePrice, price),
-      first_exit_quantity: finite(result?.fill?.executedVolume), realized_pnl_quote_after_first_exit: finite(finalized.position?.realized_pnl_quote),
-      exit_rule: "RESIDUAL_NET_PNL_GT_0", leverage: positionLeverage(position), percentage_residual_thresholds_disabled: true,
-    }};
-    const recoveryPosition = (await patch("trading_positions", `id=eq.${position.id}`, { metadata: recoveryMetadata }))[0] || { ...finalized.position, metadata: recoveryMetadata };
-    await event("RECOVERY_MODE_ENTERED", `${position.exchange}:${position.market} first -12% ROE tranche filled; residual waits for positive residual net`,
-      { first_exit_price: recoveryMetadata.recovery_exit.first_exit_price, first_exit_quantity: recoveryMetadata.recovery_exit.first_exit_quantity, realized_pnl_quote_after_first_exit: recoveryMetadata.recovery_exit.realized_pnl_quote_after_first_exit, exit_rule: recoveryMetadata.recovery_exit.exit_rule },
-      { cycleId, positionId: position.id, orderId: result.orderRow?.id, level: "INFO" });
+    const recoveryMetadata = {
+      ...priorMetadata,
+      recovery_exit: {
+        ...(priorMetadata.recovery_exit || {}),
+        enabled: true,
+        revision: VERSION,
+        entered_at: enteredAt,
+        trigger_reason: "FUTURES_HALF_STOP_LOSS_ROE_12",
+        first_exit_price: finite(result?.fill?.averagePrice, price),
+        first_exit_quantity: finite(result?.fill?.executedVolume),
+        realized_pnl_quote_after_first_exit: finite(finalized.position?.realized_pnl_quote),
+        exit_rule: "RESIDUAL_NET_PNL_GT_0",
+        leverage: positionLeverage(position),
+        percentage_residual_thresholds_disabled: true,
+      },
+    };
+    const recoveryPosition =
+      (await patch("trading_positions", `id=eq.${position.id}`, { metadata: recoveryMetadata }))[
+        0
+      ] || { ...finalized.position, metadata: recoveryMetadata };
+    await event(
+      "RECOVERY_MODE_ENTERED",
+      `${position.exchange}:${position.market} first -12% ROE tranche filled; residual waits for positive residual net`,
+      {
+        first_exit_price: recoveryMetadata.recovery_exit.first_exit_price,
+        first_exit_quantity: recoveryMetadata.recovery_exit.first_exit_quantity,
+        realized_pnl_quote_after_first_exit:
+          recoveryMetadata.recovery_exit.realized_pnl_quote_after_first_exit,
+        exit_rule: recoveryMetadata.recovery_exit.exit_rule,
+      },
+      { cycleId, positionId: position.id, orderId: result.orderRow?.id, level: "INFO" },
+    );
     finalized = { ...finalized, position: recoveryPosition };
     position = { ...position, ...recoveryPosition };
   }
@@ -8435,10 +8464,69 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
 function displayPosition(row: any): any {
   const lob = isLobStrategy(row?.metadata?.lob_signal?.strategy);
   if (!lob) return row;
-  const revision = String(row?.metadata?.active_exit_revision || row?.metadata?.exit_policy_revision || (row?.exchange === "binance_futures" ? "7.6.0-BINANCE-FUTURES" : "7.6.2-SPOT-SPLIT-SL4"));
-  const markedPnl = finite(row?.marked_pnl_quote, finite(row?.metadata?.live_mark?.fee_net_pnl_quote));
-  if (row?.exchange === "binance_futures") return { ...row, exit_policy: "FUTURES_SPLIT_EXIT", strategy_revision: revision, marked_pnl_quote: markedPnl, active_exit_policy: { revision, price_basis: "QUANTITY_AWARE_EXECUTABLE_BID", return_basis: "RETURN_ON_MARGIN", leverage: positionLeverage(row), first_take_profit_roe_pct: 15, first_stop_loss_roe_pct: -12, hard_stop_sell_fraction: 1, first_tranche_sell_fraction: 0.5, residual_profit_floor_roe_pct: 9, residual_trailing_drawdown_roe_pct: 4.5, residual_sell_fraction: 1, stop_price: row?.stop_price, target_1: row?.target_1, target_2: null, marked_pnl_quote: markedPnl, measured_at: row?.metadata?.live_mark?.measured_at || null }};
-  return { ...row, exit_policy: "SPOT_SPLIT_EXIT", strategy_revision: revision, stop_bps: 400, marked_pnl_quote: markedPnl, active_exit_policy: { revision, price_basis: "QUANTITY_AWARE_EXECUTABLE_BID", return_basis: "RETURN_ON_PRICE", first_take_profit_pct: 5, first_stop_loss_pct: -4, hard_stop_sell_fraction: 1, first_tranche_sell_fraction: 0.5, residual_profit_floor_pct: 3, residual_trailing_drawdown_pct: 1.5, residual_sell_fraction: 1, stop_price: row?.stop_price, target_1: row?.target_1, target_2: null, marked_pnl_quote: markedPnl, measured_at: row?.metadata?.live_mark?.measured_at || null }, historical_entry_signal: { engine_version: row?.metadata?.engine_version || null, strategy_revision: row?.metadata?.lob_signal?.strategy_revision || null, stop_bps: row?.metadata?.lob_signal?.stop_bps ?? null }};
+  const revision = String(
+    row?.metadata?.active_exit_revision || row?.metadata?.exit_policy_revision ||
+      (row?.exchange === "binance_futures" ? "7.6.0-BINANCE-FUTURES" : "7.6.2-SPOT-SPLIT-SL4"),
+  );
+  const markedPnl = finite(
+    row?.marked_pnl_quote,
+    finite(row?.metadata?.live_mark?.fee_net_pnl_quote),
+  );
+  if (row?.exchange === "binance_futures") {
+    return {
+      ...row,
+      exit_policy: "FUTURES_SPLIT_EXIT",
+      strategy_revision: revision,
+      marked_pnl_quote: markedPnl,
+      active_exit_policy: {
+        revision,
+        price_basis: "QUANTITY_AWARE_EXECUTABLE_BID",
+        return_basis: "RETURN_ON_MARGIN",
+        leverage: positionLeverage(row),
+        first_take_profit_roe_pct: 15,
+        first_stop_loss_roe_pct: -12,
+        hard_stop_sell_fraction: 1,
+        first_tranche_sell_fraction: 0.5,
+        residual_profit_floor_roe_pct: 9,
+        residual_trailing_drawdown_roe_pct: 4.5,
+        residual_sell_fraction: 1,
+        stop_price: row?.stop_price,
+        target_1: row?.target_1,
+        target_2: null,
+        marked_pnl_quote: markedPnl,
+        measured_at: row?.metadata?.live_mark?.measured_at || null,
+      },
+    };
+  }
+  return {
+    ...row,
+    exit_policy: "SPOT_SPLIT_EXIT",
+    strategy_revision: revision,
+    stop_bps: 400,
+    marked_pnl_quote: markedPnl,
+    active_exit_policy: {
+      revision,
+      price_basis: "QUANTITY_AWARE_EXECUTABLE_BID",
+      return_basis: "RETURN_ON_PRICE",
+      first_take_profit_pct: 5,
+      first_stop_loss_pct: -4,
+      hard_stop_sell_fraction: 1,
+      first_tranche_sell_fraction: 0.5,
+      residual_profit_floor_pct: 3,
+      residual_trailing_drawdown_pct: 1.5,
+      residual_sell_fraction: 1,
+      stop_price: row?.stop_price,
+      target_1: row?.target_1,
+      target_2: null,
+      marked_pnl_quote: markedPnl,
+      measured_at: row?.metadata?.live_mark?.measured_at || null,
+    },
+    historical_entry_signal: {
+      engine_version: row?.metadata?.engine_version || null,
+      strategy_revision: row?.metadata?.lob_signal?.strategy_revision || null,
+      stop_bps: row?.metadata?.lob_signal?.stop_bps ?? null,
+    },
+  };
 }
 
 async function status(settings: TradingSettings & JsonRecord) {
