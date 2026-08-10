@@ -1,0 +1,48 @@
+name: One-shot dashboard cache revision align
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-shot-dashboard-cache-index.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Align index cache keys with dashboard revision
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          cfg = Path('docs/config.js').read_text()
+          m = re.search(r'const DASHBOARD_REVISION = "([^"]+)"', cfg)
+          if not m:
+              raise SystemExit('DASHBOARD_REVISION missing')
+          rev = m.group(1)
+          p = Path('docs/index.html')
+          s = p.read_text()
+          s = re.sub(r'config\.js\?v=[^"\']+', f'config.js?v={rev}', s, count=1)
+          s = re.sub(r'app\.js\?v=[^"\']+', f'app.js?v={rev}', s, count=1)
+          p.write_text(s)
+          print(rev)
+          PY
+          node --check docs/config.js
+          node --check docs/realized-performance.js
+          node validation/v700-deploy-validation.mjs
+      - name: Commit and self-remove
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "4189824+github-actions[bot]@users.noreply.github.com"
+          git add docs/index.html
+          git rm .github/workflows/one-shot-dashboard-cache-index.yml
+          git commit -m "fix: force-load Binance combined dashboard assets"
+          git push origin HEAD:main
