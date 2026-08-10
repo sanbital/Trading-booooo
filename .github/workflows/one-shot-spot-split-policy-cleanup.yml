@@ -96,7 +96,7 @@ jobs:
 
           deno fmt supabase/functions/market-autotrader/spot-exit-policy.ts supabase/functions/market-autotrader/spot-exit-policy.test.ts supabase/functions/market-autotrader/split-stop-policy.test.ts supabase/functions/market-autotrader/futures-lane.test.ts
           deno test supabase/functions/market-autotrader/spot-exit-policy.test.ts supabase/functions/market-autotrader/split-stop-policy.test.ts
-          deno test supabase/functions/market-autotrader/futures-exit-policy.test.ts supabase/functions/market-autotrader/futures-lane.test.ts
+          deno test --allow-read supabase/functions/market-autotrader/futures-exit-policy.test.ts supabase/functions/market-autotrader/futures-lane.test.ts
           deno check supabase/functions/market-autotrader/index.ts
           ! grep -R --line-number --fixed-strings 'halfHoldRecoveryExitDecision' supabase/functions/market-autotrader
           ! grep -R --line-number --fixed-strings './recovery-exit-policy.ts' supabase/functions/market-autotrader
