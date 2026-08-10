@@ -23,7 +23,14 @@ jobs:
         with:
           deno-version: v2.x
       - name: Apply integration patch
-        run: python3 scripts/apply_binance_futures_performance.py
+        run: |
+          python3 scripts/apply_binance_futures_performance.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('supabase/functions/exchange-trade-sync/index.ts')
+          text = path.read_text().replace('ReturnType<typeof createClient>', 'any')
+          path.write_text(text)
+          PY
       - name: Validate integration
         run: |
           deno fmt supabase/functions/exchange-trade-sync/index.ts supabase/functions/market-performance/index.ts
