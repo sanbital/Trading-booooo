@@ -1,0 +1,54 @@
+name: Fix Futures Fill Accounting Status
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/fix-futures-sync-accounting-status.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  fix-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Use canonical accounting states
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('supabase/functions/exchange-trade-sync/index.ts')
+          s=p.read_text()
+          old='accounting_status: positionId ? "FUTURES_POSITION_LINKED" : "UNMATCHED",'
+          new='accounting_status: positionId ? "PENDING" : "UNMATCHED_INVENTORY",'
+          if old not in s:
+              raise SystemExit('futures accounting status marker missing')
+          p.write_text(s.replace(old,new,1))
+          PY
+          deno fmt supabase/functions/exchange-trade-sync/index.ts
+          deno check supabase/functions/exchange-trade-sync/index.ts
+          grep -q 'accounting_status: positionId ? "PENDING" : "UNMATCHED_INVENTORY"' supabase/functions/exchange-trade-sync/index.ts
+      - name: Commit corrected sync source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/exchange-trade-sync/index.ts
+          git commit -m "fix: use valid futures fill accounting states"
+          git push origin HEAD:main
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+      - name: Deploy corrected exchange sync
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          supabase functions deploy exchange-trade-sync --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt --use-api
