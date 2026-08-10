@@ -1,0 +1,171 @@
+name: One-shot protected trailing exit v7.6.1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-shot-protected-trailing-exit-v761.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-protected-trailing-exit-v761
+  cancel-in-progress: false
+
+jobs:
+  patch-test-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Pause new entries
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=true, updated_at=now() where id=1 and emergency_liquidation is not true"
+
+      - name: Apply protected trailing policy
+        run: python3 scripts/apply_protected_trailing_exit_v761.py
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Format and validate policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt \
+            supabase/functions/market-autotrader/spot-exit-policy.ts \
+            supabase/functions/market-autotrader/spot-exit-policy.test.ts \
+            supabase/functions/market-autotrader/split-stop-policy.test.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.test.ts
+          deno test \
+            supabase/functions/market-autotrader/spot-exit-policy.test.ts \
+            supabase/functions/market-autotrader/split-stop-policy.test.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.test.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          grep -q 'SPOT-PROTECTED-TRAIL-TP5-SL4-FLOOR3-TRAIL1P5-V1' supabase/functions/market-autotrader/index.ts
+          grep -q 'FUTURES-PROTECTED-TRAIL-ROE15-SL12-FLOOR9-TRAIL4P5-V1' supabase/functions/market-autotrader/index.ts
+          grep -q 'hardStopFraction: 1' supabase/functions/market-autotrader/futures-exit-policy.ts
+          grep -q 'residualProfitFloorRoePct: 9' supabase/functions/market-autotrader/futures-exit-policy.ts
+          grep -q 'residualTrailingDrawdownRoePct: 4.5' supabase/functions/market-autotrader/futures-exit-policy.ts
+          grep -q 'hardStopFraction: 1' supabase/functions/market-autotrader/spot-exit-policy.ts
+          grep -q 'residualProfitFloorPct: 3' supabase/functions/market-autotrader/spot-exit-policy.ts
+          grep -q 'residualTrailingDrawdownPct: 1.5' supabase/functions/market-autotrader/spot-exit-policy.ts
+          git diff --check
+
+      - name: Commit canonical source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "4189824+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-autotrader/spot-exit-policy.ts \
+            supabase/functions/market-autotrader/spot-exit-policy.test.ts \
+            supabase/functions/market-autotrader/split-stop-policy.test.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.test.ts \
+            supabase/migrations/20260810133000_protected_trailing_exit_v761.sql \
+            .github/workflows/deploy-market-autotrader-v707.yml \
+            .github/workflows/main.deploy-supabase.yml \
+            scripts/apply_protected_trailing_exit_v761.py
+          git rm .github/workflows/one-shot-protected-trailing-exit-v761.yml
+          git commit -m "fix: protect spot and futures residual profits"
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Apply protected trailing database authority
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" \
+            --set=ON_ERROR_STOP=1 \
+            --single-transaction \
+            --file supabase/migrations/20260810133000_protected_trailing_exit_v761.sql
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            v_guard text;
+            v_policy text;
+          begin
+            select pg_get_functiondef(p.oid) into v_guard
+            from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+            where n.nspname='public' and p.proname='guard_residual_sell_order_v751';
+            select pg_get_functiondef(p.oid) into v_policy
+            from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+            where n.nspname='public' and p.proname='enforce_residual_exit_position_policy_v751';
+            if position('FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT' in coalesce(v_guard,'')) = 0
+               or position('SPOT_PROTECTED_TRAIL_NOT_REACHED' in coalesce(v_guard,'')) = 0
+               or position('hard_stop_sell_fraction' in coalesce(v_policy,'')) = 0 then
+              raise exception 'PROTECTED_TRAILING_DB_AUTHORITY_NOT_INSTALLED';
+            end if;
+          end
+          $$;
+          SQL
+
+      - name: Deploy market autotrader
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase functions deploy market-autotrader \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
+
+      - name: Verify live function responds
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          autotrade_token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
+          curl --fail-with-body --retry 3 --retry-delay 3 --max-time 60 \
+            -X POST \
+            -H "content-type: application/json" \
+            -H "x-autotrade-token: ${autotrade_token}" \
+            -d '{"action":"status"}' \
+            "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/market-autotrader" \
+            > /tmp/status.json
+          python3 - <<'PY'
+          import json
+          payload=json.load(open('/tmp/status.json'))
+          if not isinstance(payload, dict):
+              raise SystemExit('status response is not an object')
+          print('live status ok')
+          PY
+
+      - name: Resume new entries
+        if: always()
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=false, updated_at=now() where id=1 and emergency_liquidation is not true"
