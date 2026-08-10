@@ -8,8 +8,8 @@ let source = fs.readFileSync(serverPath, "utf8");
 
 const functionMarker = 'async function openOrders(exchange, market = null) {';
 const historyFunctions = `async function tradeHistory(exchange, market, options = {}) {
-  if (exchange !== "binance") {
-    throw Object.assign(new Error("trade_history is supported only for Binance"), {
+  if (exchange !== "binance" && exchange !== "binance_futures") {
+    throw Object.assign(new Error("trade_history is supported only for Binance spot/futures"), {
       status: 400,
       code: "UNSUPPORTED_EXCHANGE",
     });
@@ -23,25 +23,29 @@ const historyFunctions = `async function tradeHistory(exchange, market, options 
       Number.isInteger(fromId) && fromId >= 0) {
     params.fromId = fromId;
   }
-  const rows = (await binanceRequest("GET", "/api/v3/myTrades", params)).data;
+  const futures = exchange === "binance_futures";
+  const rows = futures
+    ? (await futuresRequest("GET", "/fapi/v1/userTrades", params)).data
+    : (await binanceRequest("GET", "/api/v3/myTrades", params)).data;
   return (Array.isArray(rows) ? rows : []).map((row) => ({
     symbol: row?.symbol || symbol,
     id: row?.id,
     orderId: row?.orderId,
     price: row?.price,
     qty: row?.qty,
-    quoteQty: row?.quoteQty,
+    quoteQty: row?.quoteQty ?? (Number(row?.price || 0) * Number(row?.qty || 0)),
     commission: row?.commission,
     commissionAsset: row?.commissionAsset,
+    realizedPnl: row?.realizedPnl ?? null,
     time: row?.time,
-    isBuyer: row?.isBuyer,
-    isMaker: row?.isMaker,
+    isBuyer: row?.isBuyer ?? String(row?.side || "").toUpperCase() === "BUY",
+    isMaker: row?.isMaker ?? row?.maker ?? false,
   }));
 }
 
 async function orderHistory(exchange, market, options = {}) {
-  if (exchange !== "binance") {
-    throw Object.assign(new Error("order_history is supported only for Binance"), {
+  if (exchange !== "binance" && exchange !== "binance_futures") {
+    throw Object.assign(new Error("order_history is supported only for Binance spot/futures"), {
       status: 400,
       code: "UNSUPPORTED_EXCHANGE",
     });
@@ -56,8 +60,9 @@ async function orderHistory(exchange, market, options = {}) {
   if (Number.isFinite(startTime) && startTime > 0) params.startTime = Math.trunc(startTime);
   if (Number.isFinite(endTime) && endTime > 0) params.endTime = Math.trunc(endTime);
   if (Number.isInteger(orderId) && orderId >= 0) params.orderId = orderId;
-  const rows = (await binanceRequest("GET", "/api/v3/allOrders", params)).data;
-  return Array.isArray(rows) ? rows : [];
+  return exchange === "binance_futures"
+    ? ((await futuresRequest("GET", "/fapi/v1/allOrders", params)).data || [])
+    : ((await binanceRequest("GET", "/api/v3/allOrders", params)).data || []);
 }
 
 `;
@@ -68,10 +73,13 @@ if (!source.includes("async function tradeHistory(") || !source.includes("async 
   }
   if (!source.includes("async function tradeHistory(") && !source.includes("async function orderHistory(")) {
     source = source.replace(functionMarker, `${historyFunctions}${functionMarker}`);
-  } else if (!source.includes("async function orderHistory(")) {
-    const existingMarker = 'async function tradeHistory(exchange, market, options = {}) {';
-    const orderOnly = historyFunctions.slice(historyFunctions.indexOf("async function orderHistory("));
-    source = source.replace(functionMarker, `${orderOnly}${functionMarker}`);
+  } else {
+    // A prior deploy may have injected the old spot-only helper. Replace the complete
+    // injected block so deployments are idempotent and futures support cannot regress.
+    source = source.replace(
+      /async function tradeHistory\(exchange, market, options = \{\}\) \{[\s\S]*?\n\}\n\nasync function orderHistory\(exchange, market, options = \{\}\) \{[\s\S]*?\n\}\n\n(?=async function openOrders)/,
+      historyFunctions,
+    );
   }
 }
 
@@ -105,7 +113,9 @@ if (caseReplacement !== caseMarker) {
 
 if (
   !source.includes("/api/v3/myTrades") ||
+  !source.includes("/fapi/v1/userTrades") ||
   !source.includes("/api/v3/allOrders") ||
+  !source.includes("/fapi/v1/allOrders") ||
   !source.includes('case "trade_history":') ||
   !source.includes('case "order_history":')
 ) {
@@ -113,4 +123,4 @@ if (
 }
 
 fs.writeFileSync(serverPath, source);
-console.log("Applied read-only Binance trade_history and order_history gateway routes.");
+console.log("Applied read-only Binance spot/futures trade_history and order_history gateway routes.");
