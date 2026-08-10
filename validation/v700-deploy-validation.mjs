@@ -178,16 +178,8 @@ check(
   "engine deployment validates v7 and applies only the idempotent current migration",
   deployWorkflow.includes("node validation/v700-deploy-validation.mjs") &&
     deployWorkflow.includes("--single-transaction") &&
-    deployWorkflow.includes("202607290021_top10_lob_only_v700.sql") &&
-    deployWorkflow.includes("20260729230827_tp_settlement_integrity_v701.sql") &&
-    deployWorkflow.includes(
-      "20260729232553_profit_protection_constraint_integrity_v702.sql",
-    ) &&
-    deployWorkflow.includes(
-      "20260729233331_residual_balance_ledger_integrity_v703.sql",
-    ) &&
-    deployWorkflow.includes("20260730031800_exit_learning_integrity_v704.sql") &&
-    deployWorkflow.includes("20260730041336_min_lob_observation_30s_v705.sql"),
+    deployWorkflow.includes("20260810010000_binance_futures_lane_v760.sql") &&
+    !deployWorkflow.includes("--file supabase/migrations/202607"),
 );
 check(
   "TP settlement is ordered before balance reconciliation and fails closed on material overfill",

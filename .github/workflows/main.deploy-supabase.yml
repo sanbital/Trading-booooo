@@ -163,19 +163,6 @@ jobs:
           psql "${SUPABASE_DB_URL}" \
             --set=ON_ERROR_STOP=1 \
             --single-transaction \
-            --file supabase/migrations/202607290021_top10_lob_only_v700.sql \
-            --file supabase/migrations/20260729230827_tp_settlement_integrity_v701.sql \
-            --file supabase/migrations/20260729232553_profit_protection_constraint_integrity_v702.sql \
-            --file supabase/migrations/20260729233331_residual_balance_ledger_integrity_v703.sql \
-            --file supabase/migrations/20260730031800_exit_learning_integrity_v704.sql \
-            --file supabase/migrations/20260730041336_min_lob_observation_30s_v705.sql \
-            --file supabase/migrations/20260730055800_strict_lob_live_admission_v706.sql \
-            --file supabase/migrations/20260802040000_v730_executable_stop_parity_and_post180_cap.sql \
-            --file supabase/migrations/20260802050000_v731_restore_quote_fallbacks_and_planned_stop_authority.sql \
-            --file supabase/migrations/20260802060000_v732_planned_stop_is_not_an_exit_trigger.sql \
-            --file supabase/migrations/20260802070000_v733_repair_post180_timeout_branch.sql \
-            --file supabase/migrations/20260802080000_v734_remove_post180_hold_cap.sql \
-            --file supabase/migrations/20260802090000_v735_admit_requote_approval_revision.sql \
             --file supabase/migrations/20260810010000_binance_futures_lane_v760.sql
 
       - name: Verify the sell guard survived the batch
@@ -184,11 +171,8 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           set -euo pipefail
-          # The --file list is hand-maintained and ordered, and several entries rebuild
-          # guard_lob_sell_order_v714 in full. Whichever runs last wins, so a misordered or
-          # truncated list can leave a superseded guard in place and still report success —
-          # that is how the planned-stop reason gate came back once already. Assert the end
-          # state instead of trusting the order.
+          # The current migration rebuilds guard_lob_sell_order_v714. Assert the end state
+          # after every replay so an incomplete deployment cannot weaken the sell guard.
           psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
           do $$
           declare
