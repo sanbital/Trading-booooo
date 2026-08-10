@@ -1,0 +1,59 @@
+name: Deploy Binance Spot Futures Combined Performance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-binance-futures-performance-integration.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Validate integrated sources
+        run: |
+          deno check supabase/functions/exchange-trade-sync/index.ts
+          deno check supabase/functions/market-performance/index.ts
+          node --check docs/realized-performance.js
+          grep -q 'syncFuturesTrades' supabase/functions/exchange-trade-sync/index.ts
+          grep -q 'aggregateBinanceCombined' supabase/functions/market-performance/index.ts
+          grep -q 'BINANCE · 현물+선물' docs/realized-performance.js
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+      - name: Deploy exchange sync and performance
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -n "$SUPABASE_PROJECT_REF"
+          supabase functions deploy exchange-trade-sync --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt --use-api
+          supabase functions deploy market-performance --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt --use-api
+      - name: Verify combined performance API
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          autotrade_token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
+          body="$(curl --fail-with-body --retry 3 --retry-delay 3 --max-time 60 -X POST \
+            -H 'content-type: application/json' \
+            -H "x-autotrade-token: ${autotrade_token}" \
+            "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/market-performance")"
+          jq -e '.ok == true' <<< "$body" >/dev/null
+          jq -e '.exchanges.binance.venues == ["binance","binance_futures"]' <<< "$body" >/dev/null
+          jq '{ok, performance_revision, binance: .exchanges.binance, binance_spot: .exchanges.binance_spot, binance_futures: .exchanges.binance_futures}' <<< "$body"
