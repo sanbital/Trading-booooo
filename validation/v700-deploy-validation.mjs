@@ -95,7 +95,9 @@ check(
     trader.includes("min_order_usdt: [BINANCE_MIN_ORDER_USDT, 1000]") &&
     trader.includes("positionMinNotionalQuote(position)") &&
     traderCoreTest.includes("Binance operator minimum is the admission floor") &&
-    trader.includes('exchange === "binance" ? "FOK" : "IOC"'),
+    // Both Binance venues use fill-or-kill so a futures partial fill can never leave a
+    // position below the dedicated 50-USDT posted-margin floor. Upbit remains IOC.
+    trader.includes('const entryTimeInForce = exchange === "upbit" ? "IOC" : "FOK"'),
 );
 check(
   "pre-target protected profit is executable and semantic exits remain auditable",

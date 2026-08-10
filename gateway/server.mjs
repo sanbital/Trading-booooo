@@ -1975,6 +1975,7 @@ export {
   encodedQueryString,
   floorStep,
   formatStep,
+  FUTURES_MIN_ENTRY_MARGIN_USDT,
   localRateLimit,
   normalizeBinanceOrder,
   normalizeFuturesOrder,
@@ -1986,7 +1987,6 @@ export {
   validateExchange,
   validateFuturesLeverage,
   validateIdentifier,
-  FUTURES_MIN_ENTRY_MARGIN_USDT,
   validateUpbitMarket,
   VERSION,
 };
