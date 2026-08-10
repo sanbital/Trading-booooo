@@ -60,6 +60,10 @@ jobs:
           futures_test = replace_once(futures_test,
               '  assert(MIGRATION.includes("RECOVERY_TOTAL_NET_NOT_POSITIVE"));\n',
               '', 'futures test obsolete spot recovery assertion')
+          futures_test = replace_once(futures_test,
+              '  assert(ENGINE.includes(\'exit_rule: futuresFirstStop ? "RESIDUAL_NET_PNL_GT_0"\'));',
+              '  assert(ENGINE.includes(\'exit_rule: "RESIDUAL_NET_PNL_GT_0"\'));',
+              'futures recovery source assertion')
           futures_test_path.write_text(futures_test)
 
           text = index_path.read_text()
