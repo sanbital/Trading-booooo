@@ -11,13 +11,16 @@ Deno.test("v5.12 autotrader has no live EV exploration or threshold relaxation p
   assert(code.includes("scalp_rate_relaxation: 0"));
 });
 
-Deno.test("legacy SCALP preserves TIMEOUT while LOB disables clock exits", async () => {
+Deno.test("legacy SCALP preserves TIMEOUT while LOB and futures disable clock exits", async () => {
   const code = await Deno.readTextFile(
     new URL("supabase/functions/market-autotrader/index.ts", ROOT),
   );
   const calls = [...code.matchAll(/decideExit\([^;]+\);/g)].map((m) => m[0]);
   assert(calls.length >= 2);
-  assert(calls.some((call) => /,\s*!lobMode,\s*\);$/.test(call)), "LOB call must disable time exit");
+  assert(
+    calls.some((call) => /,\s*!lobMode\s*&&\s*!futuresLane,\s*\);$/.test(call)),
+    "LOB and futures calls must disable the generic time exit",
+  );
   assert(calls.some((call) => /,\s*true,\s*\);$/.test(call)), "legacy recheck keeps TIMEOUT");
 });
 

@@ -935,6 +935,9 @@ async function binanceOrderTest(payload) {
 
 const FUTURES_MIN_LEVERAGE = 1;
 const FUTURES_MAX_LEVERAGE = 20;
+// Mirrors FUTURES_MIN_ENTRY_MARGIN_USDT in the engine. This gateway-side copy is an
+// independent last line of defence if a malformed command bypasses engine sizing.
+const FUTURES_MIN_ENTRY_MARGIN_USDT = 50;
 // Mirrors DEFAULT_FUTURES_LEVERAGE in the engine's futures-exit-policy. The gateway keeps
 // its own copy so an order that arrives without one still opens at the authorised size.
 const DEFAULT_FUTURES_LEVERAGE = integerEnv(
@@ -1016,7 +1019,12 @@ async function ensureFuturesLeverage(symbol, leverage) {
   };
 }
 
-function conformFuturesOrder(payload, info, dualPositionSide) {
+function conformFuturesOrder(
+  payload,
+  info,
+  dualPositionSide,
+  leverage = DEFAULT_FUTURES_LEVERAGE,
+) {
   const side = String(payload.side || "").toUpperCase();
   const type = String(payload.type || payload.ord_type || "").toUpperCase();
   if (!["BUY", "SELL"].includes(side)) throw new Error("invalid Binance futures order side");
@@ -1056,7 +1064,16 @@ function conformFuturesOrder(payload, info, dualPositionSide) {
     if (info.min_notional > 0 && notional < info.min_notional) {
       throw new Error(`Binance futures order notional ${notional} below ${info.min_notional}`);
     }
-    if (side === "BUY") enforceBuyCaps("binance_futures", notional);
+    if (side === "BUY") {
+      const entryLeverage = validateFuturesLeverage(leverage);
+      const minimumEntryNotional = FUTURES_MIN_ENTRY_MARGIN_USDT * entryLeverage;
+      if (notional + 1e-9 < minimumEntryNotional) {
+        throw new Error(
+          `Binance futures entry requires at least ${FUTURES_MIN_ENTRY_MARGIN_USDT} USDT margin (${minimumEntryNotional} USDT notional at ${entryLeverage}x); got ${notional}`,
+        );
+      }
+      enforceBuyCaps("binance_futures", notional);
+    }
     order.price = formatStep(price, info.price_tick);
     // GTX is post-only: the exchange rejects the order outright rather than crossing, so
     // the maker cost model holds on futures exactly as LIMIT_MAKER makes it hold on spot.
@@ -1175,14 +1192,19 @@ async function binanceFuturesGetOrder(identifier, symbol) {
 async function binanceFuturesCreateOrder(payload, waitForFinalMs = 2500, leverage = null) {
   const info = await binanceFuturesExchangeInfo(payload.market);
   const dual = await futuresPositionSideDual();
-  const conformed = conformFuturesOrder(payload, info, dual);
+  const openingLeverage = String(payload?.side || "").toUpperCase() === "BUY"
+    ? validateFuturesLeverage(leverage ?? payload.leverage ?? DEFAULT_FUTURES_LEVERAGE)
+    : null;
+  const conformed = conformFuturesOrder(
+    payload,
+    info,
+    dual,
+    openingLeverage ?? DEFAULT_FUTURES_LEVERAGE,
+  );
   // Leverage is a property of the symbol, not of the order, so it must be in place before
   // the position exists. Only an opening order needs it; a reduce-only exit inherits it.
   if (conformed.order.side === "BUY") {
-    await ensureFuturesLeverage(
-      info.symbol,
-      leverage ?? payload.leverage ?? DEFAULT_FUTURES_LEVERAGE,
-    );
+    await ensureFuturesLeverage(info.symbol, openingLeverage);
   }
   let normalized;
   try {
@@ -1752,6 +1774,7 @@ async function handleCommand(command) {
           command.order || {},
           info,
           await futuresPositionSideDual(),
+          command.leverage ?? (command.order || {}).leverage ?? DEFAULT_FUTURES_LEVERAGE,
         ).order;
       }
       return exchange === "upbit"
@@ -1963,6 +1986,7 @@ export {
   validateExchange,
   validateFuturesLeverage,
   validateIdentifier,
+  FUTURES_MIN_ENTRY_MARGIN_USDT,
   validateUpbitMarket,
   VERSION,
 };

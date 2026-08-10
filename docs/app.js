@@ -1845,8 +1845,8 @@
     if (binanceMode === "FIXED" && binanceFixed < 5) {
       throw new Error("바이낸스 선택 운용금은 최소 5 USDT입니다.");
     }
-    if (futuresMode === "FIXED" && futuresFixed < 5) {
-      throw new Error("바이낸스 선물 선택 운용금은 최소 5 USDT입니다.");
+    if (futuresMode === "FIXED" && futuresFixed < 50) {
+      throw new Error("바이낸스 선물 선택 증거금은 최소 50 USDT입니다.");
     }
     allocationStatus.textContent = "저장 중";
     await request({

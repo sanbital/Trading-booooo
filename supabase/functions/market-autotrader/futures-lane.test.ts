@@ -2,13 +2,19 @@ import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.t
 import { baseAsset, isBinanceFutures, quoteCurrency } from "./core.ts";
 import { validateSpotMarket } from "../_shared/spot-market.ts";
 import { dustQuoteFor } from "../_shared/position-value.ts";
-import { DEFAULT_FUTURES_LEVERAGE, FUTURES_EXIT_APPROVED_REASONS } from "./futures-exit-policy.ts";
+import {
+  DEFAULT_FUTURES_LEVERAGE,
+  FUTURES_EXIT_APPROVED_REASONS,
+  FUTURES_MIN_ENTRY_MARGIN_USDT,
+} from "./futures-exit-policy.ts";
 
 const ROOT = new URL("../../../", import.meta.url);
 const ENGINE = await Deno.readTextFile(
   new URL("supabase/functions/market-autotrader/index.ts", ROOT),
 );
 const GATEWAY = await Deno.readTextFile(new URL("gateway/server.mjs", ROOT));
+const DASHBOARD = await Deno.readTextFile(new URL("docs/app.js", ROOT));
+const DASHBOARD_HTML = await Deno.readTextFile(new URL("docs/index.html", ROOT));
 const MIGRATION = await Deno.readTextFile(
   new URL("supabase/migrations/20260810010000_binance_futures_lane_v760.sql", ROOT),
 );
@@ -56,6 +62,36 @@ Deno.test("entry sizing commits margin and the exchange sees margin x leverage",
   assert(ENGINE.includes('leverage: exchange === "binance_futures" ? leverage : undefined'));
 });
 
+Deno.test("futures entry minimum is an isolated 50 USDT margin floor", () => {
+  assertEquals(FUTURES_MIN_ENTRY_MARGIN_USDT, 50);
+  assert(ENGINE.includes("minOrder: FUTURES_MIN_ENTRY_MARGIN_USDT"));
+  assert(ENGINE.includes("futuresEntryMinimums(leverage, rules.min_notional)"));
+  assert(ENGINE.includes('const entryTimeInForce = exchange === "upbit" ? "IOC" : "FOK"'));
+  assert(ENGINE.includes('if (exchange === "binance_futures") return false;'));
+  assert(
+    ENGINE.includes(
+      'const marginReturnMultiplier = exchange === "binance_futures" ? leverage : 1',
+    ),
+  );
+  assert(GATEWAY.includes("const FUTURES_MIN_ENTRY_MARGIN_USDT = 50"));
+  assert(GATEWAY.includes("FUTURES_MIN_ENTRY_MARGIN_USDT * entryLeverage"));
+  assert(MIGRATION.includes("FUTURES_ENTRY_MARGIN_BELOW_50_USDT"));
+  assert(MIGRATION.includes("binance_futures_allocation_usdt >= 50"));
+  assert(DASHBOARD.includes("futuresFixed < 50"));
+  assert(DASHBOARD_HTML.includes("신규 진입 증거금은 최소 50 USDT"));
+});
+
+Deno.test("spot minimum settings cannot change the futures margin floor", () => {
+  const futuresLimitsStart = ENGINE.indexOf(
+    'if (exchange === "binance_futures") {',
+    ENGINE.indexOf("function exchangeLimits"),
+  );
+  const spotLimitsStart = ENGINE.indexOf('return exchange === "upbit"', futuresLimitsStart);
+  const futuresLimits = ENGINE.slice(futuresLimitsStart, spotLimitsStart);
+  assert(futuresLimits.includes("FUTURES_MIN_ENTRY_MARGIN_USDT"));
+  assert(!futuresLimits.includes("binanceMinOrderUsdt"));
+});
+
 Deno.test("the exit thresholds are stated on the position's own leverage", () => {
   // Reading it back from settings would close a running position at a leverage it was
   // never opened with.
@@ -63,6 +99,40 @@ Deno.test("the exit thresholds are stated on the position's own leverage", () =>
   assert(ENGINE.includes("leverage: positionLeverageValue"));
   assert(ENGINE.includes("futuresSplitExitDecision({"));
   assert(ENGINE.includes("futuresRecoveryLatched({"));
+  // A global strategy change must never send an already-open futures position through
+  // the spot exit branch or make it depend on a spot minute-entry read.
+  assert(ENGINE.includes("if ((lobMode || futuresLane) && !settings.emergency_liquidation)"));
+  assert(ENGINE.includes('source: "FUTURES_EXIT_POLICY_NOT_APPLICABLE"'));
+});
+
+Deno.test("physical spot residual inventory is unreachable from the futures lane", () => {
+  assert(ENGINE.includes('if (exchange === "binance_futures") return [];'));
+  assert(
+    MIGRATION.includes("c.conrelid <> 'public.trading_residual_inventory'::regclass"),
+  );
+  assert(MIGRATION.includes("FUTURES_WAS_ADDED_TO_SPOT_RESIDUAL_INVENTORY"));
+  assert(MIGRATION.includes("if lower(coalesce(new.exchange, '')) = 'binance_futures' then"));
+});
+
+Deno.test("orders cannot cross a spot/futures position boundary", () => {
+  assert(MIGRATION.includes("ORDER_POSITION_VENUE_MISMATCH"));
+  assert(MIGRATION.includes("guard_order_position_venue_v760"));
+});
+
+Deno.test("margin accounting keeps each open position's stamped leverage", () => {
+  assert(ENGINE.includes("select=market,state,leverage,remaining_quantity"));
+  assert(
+    ENGINE.includes(
+      'const leverageDivisor = exchange === "binance_futures" ? positionLeverage(row) : 1',
+    ),
+  );
+  assert(ENGINE.includes('const capitalBaseQuote = exchange === "binance_futures"'));
+});
+
+Deno.test("futures recovery state records residual rather than whole-position recovery", () => {
+  assert(ENGINE.includes('exit_rule: futuresFirstStop ? "RESIDUAL_NET_PNL_GT_0"'));
+  assert(ENGINE.includes('decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT" ||'));
+  assert(ENGINE.includes("(entryPrice * (1 + policyFeeRate)) - 1) * 100"));
 });
 
 Deno.test("every futures exit reason is authorized end to end", () => {
@@ -76,6 +146,7 @@ Deno.test("every futures exit reason is authorized end to end", () => {
   // The two that liquidate the protected half must also clear the database guard.
   assert(MIGRATION.includes("FUTURES_RECOVERY_NET_POSITIVE_EXIT"));
   assert(MIGRATION.includes("FUTURES_RESIDUAL_ROE_NOT_REACHED"));
+  assert(MIGRATION.includes("if v_gross_roe_pct < 29.999 then"));
   assert(MIGRATION.includes("FUTURES_FIRST_TRANCHE_ROE_NOT_REACHED"));
 });
 

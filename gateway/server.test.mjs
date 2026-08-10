@@ -197,6 +197,77 @@ test("futures leverage is bounded to the gateway ceiling", () => {
   assert.throws(() => module.validateFuturesLeverage(50));
 });
 
+test("futures entries independently enforce 50 USDT of posted margin", () => {
+  assert.equal(module.FUTURES_MIN_ENTRY_MARGIN_USDT, 50);
+  assert.throws(
+    () =>
+      module.conformFuturesOrder(
+        {
+          market: "BTCUSDT",
+          side: "BUY",
+          type: "LIMIT",
+          price: 100,
+          quantity: 1.499,
+          identifier: "tb-margin-1",
+        },
+        FUTURES_INFO,
+        false,
+        3,
+      ),
+    /50 USDT margin \(150 USDT notional at 3x\)/,
+  );
+  const atThreeX = module.conformFuturesOrder(
+    {
+      market: "BTCUSDT",
+      side: "BUY",
+      type: "LIMIT",
+      price: 100,
+      quantity: 1.5,
+      identifier: "tb-margin-2",
+    },
+    FUTURES_INFO,
+    false,
+    3,
+  );
+  assert.equal(atThreeX.notional, 150);
+
+  assert.throws(
+    () =>
+      module.conformFuturesOrder(
+        {
+          market: "BTCUSDT",
+          side: "BUY",
+          type: "LIMIT",
+          price: 100,
+          quantity: 2.499,
+          identifier: "tb-margin-3",
+        },
+        FUTURES_INFO,
+        false,
+        5,
+      ),
+    /250 USDT notional at 5x/,
+  );
+});
+
+test("the 50 USDT margin floor applies only to entries, never reduce-only exits", () => {
+  const { order } = module.conformFuturesOrder(
+    {
+      market: "BTCUSDT",
+      side: "SELL",
+      type: "LIMIT",
+      price: 100,
+      quantity: 0.1,
+      identifier: "tb-margin-exit",
+    },
+    FUTURES_INFO,
+    false,
+    20,
+  );
+  assert.equal(order.reduceOnly, "true");
+  assert.equal(Number(order.price) * Number(order.quantity), 10);
+});
+
 test("a futures sell is always reduce-only in one-way mode", () => {
   const { order } = module.conformFuturesOrder(
     { market: "BTCUSDT", side: "SELL", type: "MARKET", quantity: 0.0125, identifier: "tb-x-1" },

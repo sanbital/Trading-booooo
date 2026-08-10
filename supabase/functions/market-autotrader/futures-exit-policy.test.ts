@@ -1,6 +1,8 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   DEFAULT_FUTURES_LEVERAGE,
+  FUTURES_MIN_ENTRY_MARGIN_USDT,
+  futuresEntryMinimums,
   futuresPriceReturnPctForRoe,
   futuresRecoveryLatched,
   futuresRoePct,
@@ -30,6 +32,28 @@ Deno.test("default leverage is 3x", () => {
   assertEquals(normalizeFuturesLeverage(-5), 3);
   assertEquals(normalizeFuturesLeverage(1000), 20);
   assertEquals(normalizeFuturesLeverage(5), 5);
+});
+
+Deno.test("the futures entry floor is 50 USDT of margin, not 50 USDT of notional", () => {
+  assertEquals(FUTURES_MIN_ENTRY_MARGIN_USDT, 50);
+  assertEquals(futuresEntryMinimums(3, 5), {
+    marginQuote: 50,
+    notionalQuote: 150,
+    leverage: 3,
+  });
+  assertEquals(futuresEntryMinimums(5, 5), {
+    marginQuote: 50,
+    notionalQuote: 250,
+    leverage: 5,
+  });
+});
+
+Deno.test("a higher venue notional filter raises margin without weakening either floor", () => {
+  assertEquals(futuresEntryMinimums(3, 180), {
+    marginQuote: 60,
+    notionalQuote: 180,
+    leverage: 3,
+  });
 });
 
 Deno.test("ROE is the price return multiplied by leverage", () => {
@@ -81,7 +105,7 @@ Deno.test("a -4% price move at 1x is not a stop; the same move at 3x is", () => 
 });
 
 Deno.test("clean residual takes profit at +30% ROE", () => {
-  assertEquals(decide({ residualStage: true, netReturnPct: 10 }), {
+  assertEquals(decide({ residualStage: true, grossReturnPct: 10, netReturnPct: 9.89 }), {
     action: "STOP",
     fraction: 1,
     reason: "FUTURES_RESIDUAL_TAKE_PROFIT_ROE_30",
@@ -89,11 +113,28 @@ Deno.test("clean residual takes profit at +30% ROE", () => {
 });
 
 Deno.test("clean residual below +30% ROE keeps holding", () => {
-  assertEquals(decide({ residualStage: true, netReturnPct: 9 }), {
+  assertEquals(decide({ residualStage: true, grossReturnPct: 9.99, netReturnPct: 9.88 }), {
     action: "NONE",
     fraction: 0,
     reason: "FUTURES_RESIDUAL_AWAITING_TP_ROE_30",
   });
+});
+
+Deno.test("clean residual +30% gate is not delayed by fees", () => {
+  const decision = futuresSplitExitDecision({
+    residualStage: true,
+    recoveryMode: false,
+    leverage: 3,
+    grossReturnPct: 10,
+    // Both-side fees make net ROE slightly lower, but the requested price gate is still
+    // exactly +10% at 3x.
+    netReturnPct: 9.89,
+    executableNetAllowed: true,
+    expectedNetProfitQuote: 1,
+  });
+  assertEquals(decision.roePct, 30);
+  assert(decision.netRoePct < 30);
+  assertEquals(decision.reason, "FUTURES_RESIDUAL_TAKE_PROFIT_ROE_30");
 });
 
 Deno.test("recovery residual waits while it is still underwater", () => {

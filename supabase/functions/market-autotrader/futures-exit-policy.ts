@@ -24,6 +24,8 @@
 export const DEFAULT_FUTURES_LEVERAGE = 3;
 export const MIN_FUTURES_LEVERAGE = 1;
 export const MAX_FUTURES_LEVERAGE = 20;
+/** Minimum capital actually posted for every new USDⓈ-M position. */
+export const FUTURES_MIN_ENTRY_MARGIN_USDT = 50;
 
 export const FUTURES_SPLIT_EXIT_THRESHOLDS = {
   /** Half take-profit, measured on margin. */
@@ -59,7 +61,7 @@ export type FuturesSplitExitInput = {
   leverage: number;
   /** Price return from average entry to the executable exit price, before fees, in %. */
   grossReturnPct: number;
-  /** The same return after the sell fee, in %. */
+  /** The residual's return after both entry and exit fees, in %. */
   netReturnPct: number;
   /**
    * Whether the whole remainder can actually be sold right now against visible bid depth
@@ -101,6 +103,28 @@ export function normalizeFuturesLeverage(
   const parsed = Number(value);
   const base = Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
   return Math.min(MAX_FUTURES_LEVERAGE, Math.max(MIN_FUTURES_LEVERAGE, base));
+}
+
+/**
+ * Entry floors use two different units on futures: the operator floor is margin while
+ * Binance's symbol filter is contract notional. Resolve both once so neither can be
+ * accidentally compared with a spot-order amount.
+ */
+export function futuresEntryMinimums(
+  leverage: unknown,
+  venueMinimumNotionalQuote: unknown = 0,
+): { marginQuote: number; notionalQuote: number; leverage: number } {
+  const normalizedLeverage = normalizeFuturesLeverage(leverage);
+  const venueMinimum = Math.max(0, finite(venueMinimumNotionalQuote));
+  const notionalQuote = Math.max(
+    FUTURES_MIN_ENTRY_MARGIN_USDT * normalizedLeverage,
+    venueMinimum,
+  );
+  return {
+    marginQuote: notionalQuote / normalizedLeverage,
+    notionalQuote,
+    leverage: normalizedLeverage,
+  };
 }
 
 /** Return on margin: a 4% price move on 3x margin is a 12% move on the money posted. */
@@ -159,7 +183,10 @@ export function futuresSplitExitDecision(
       };
     }
 
-    if (netRoePct >= thresholds.residualTakeProfitRoePct) {
+    // The operator's +30% gate is ROE, exactly like the first +15%/-12% gates. Keep it
+    // on gross price return so 3x remains exactly +10% on price; fees only determine
+    // whether an underwater residual has genuinely recovered to positive net PnL.
+    if (roePct >= thresholds.residualTakeProfitRoePct) {
       return {
         ...base,
         action: "STOP",

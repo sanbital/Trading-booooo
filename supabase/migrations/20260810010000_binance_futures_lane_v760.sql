@@ -75,10 +75,9 @@ alter table public.trading_positions
     (exchange = 'binance_futures' and quote_currency = 'USDT' and market like '%USDT')
   ) not valid;
 
--- Every other `exchange in ('upbit','binance')` check, wherever it lives. Rewriting the
--- rendered definition rather than enumerating table names means a table added by a future
--- migration with the same idiom is covered too, and a table using some other idiom is
--- left alone instead of being silently mangled.
+-- Every other `exchange in ('upbit','binance')` check, wherever it lives, except the spot
+-- residual-inventory ledger. A futures contract is never physical wallet dust and must
+-- remain impossible to insert there.
 do $exchange_lists$
 declare
   r record;
@@ -94,6 +93,7 @@ begin
     join pg_namespace n on n.oid = t.relnamespace
     where c.contype = 'c'
       and n.nspname = 'public'
+      and c.conrelid <> 'public.trading_residual_inventory'::regclass
   loop
     v_def := pg_get_constraintdef(r.constraint_oid);
     if v_def not like '%exchange = ANY (ARRAY[%'
@@ -149,6 +149,40 @@ begin
 end;
 $exchange_guards$;
 
+-- The old spot close trigger materialises unsold base-asset dust. On futures a remaining
+-- contract must stay attached to its position and be closed reduce-only; converting it to
+-- residual inventory could make a later position-less sweep reduce an unrelated long.
+create or replace function public.sync_position_residual_v610()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if lower(coalesce(new.exchange, '')) = 'binance_futures' then
+    return new;
+  end if;
+  if new.state = 'CLOSED' and coalesce(new.residual_quantity,0) > 0 then
+    insert into public.trading_residual_inventory(
+      position_id, exchange, asset, market, original_quantity, remaining_quantity, mark_price, value_quote, state, updated_at
+    ) values (
+      new.id, new.exchange, new.base_asset, new.market,
+      new.residual_quantity, new.residual_quantity,
+      case when new.residual_quantity > 0 then new.residual_value_quote / new.residual_quantity else 0 end,
+      new.residual_value_quote, 'AVAILABLE', now()
+    ) on conflict (position_id) do update set
+      remaining_quantity = case
+        when public.trading_residual_inventory.state in ('SWEPT','CONSUMED') then public.trading_residual_inventory.remaining_quantity
+        else excluded.remaining_quantity end,
+      mark_price = excluded.mark_price,
+      value_quote = case
+        when public.trading_residual_inventory.state in ('SWEPT','CONSUMED') then public.trading_residual_inventory.value_quote
+        else excluded.value_quote end,
+      updated_at = now();
+  end if;
+  return new;
+end;
+$$;
+
+comment on function public.sync_position_residual_v610() is
+  'v7.6.0: physical residual inventory remains spot-only; USDⓈ-M contracts stay position-bound';
+
 -- 2. Futures configuration --------------------------------------------------
 
 alter table public.trading_settings
@@ -170,6 +204,15 @@ alter table public.trading_settings
   add constraint trading_settings_binance_futures_allocation_mode_ck
   check (binance_futures_allocation_mode in ('ALL', 'FIXED'));
 
+alter table public.trading_settings
+  drop constraint if exists trading_settings_binance_futures_fixed_margin_ck;
+alter table public.trading_settings
+  add constraint trading_settings_binance_futures_fixed_margin_ck
+  check (
+    binance_futures_allocation_mode <> 'FIXED' or
+    binance_futures_allocation_usdt >= 50
+  );
+
 -- Leverage is recorded on the position, not looked up at exit time: the thresholds are
 -- stated on margin, so a running position must be closed at the leverage it was opened
 -- with even if the operator changes the setting underneath it.
@@ -184,6 +227,64 @@ alter table public.trading_positions
 
 create index if not exists trading_positions_exchange_state_idx
   on public.trading_positions (exchange, state);
+
+-- Venue identity and the minimum entry margin are checked again at the durable order
+-- boundary. Spot orders keep their existing limits; only a futures BUY/ENTRY is required
+-- to control at least 50 USDT x the leverage stamped on its own position.
+create or replace function public.guard_order_position_venue_v760()
+returns trigger
+language plpgsql
+set search_path to 'public'
+as $function$
+declare
+  p public.trading_positions%rowtype;
+  v_leverage numeric;
+  v_minimum_notional numeric;
+begin
+  if new.position_id is null then
+    return new;
+  end if;
+
+  select * into p
+  from public.trading_positions
+  where id = new.position_id;
+
+  if not found then
+    raise exception using errcode='23514', message='ORDER_POSITION_NOT_FOUND';
+  end if;
+  if lower(coalesce(new.exchange, '')) <> lower(coalesce(p.exchange, ''))
+     or upper(coalesce(new.market, '')) <> upper(coalesce(p.market, ''))
+     or upper(coalesce(new.quote_currency, '')) <> upper(coalesce(p.quote_currency, '')) then
+    raise exception using errcode='23514', message=format(
+      'ORDER_POSITION_VENUE_MISMATCH order=%s:%s:%s position=%s:%s:%s',
+      new.exchange, new.market, new.quote_currency,
+      p.exchange, p.market, p.quote_currency
+    );
+  end if;
+
+  if lower(p.exchange) = 'binance_futures'
+     and upper(coalesce(new.side, '')) = 'BUY'
+     and upper(coalesce(new.purpose, '')) = 'ENTRY' then
+    v_leverage := least(20, greatest(1, coalesce(nullif(p.leverage, 0), 3)));
+    v_minimum_notional := 50 * v_leverage;
+    if coalesce(new.requested_notional_quote, 0) + 0.00000001 < v_minimum_notional then
+      raise exception using errcode='23514', message=format(
+        'FUTURES_ENTRY_MARGIN_BELOW_50_USDT market=%s requested_notional=%s minimum_notional=%s leverage=%s',
+        p.market, new.requested_notional_quote, v_minimum_notional, v_leverage
+      );
+    end if;
+  end if;
+  return new;
+end;
+$function$;
+
+drop trigger if exists trading_orders_guard_position_venue_v760 on public.trading_orders;
+create trigger trading_orders_guard_position_venue_v760
+  before insert or update on public.trading_orders
+  for each row execute function public.guard_order_position_venue_v760();
+
+comment on function public.guard_order_position_venue_v760() is
+  'v7.6.0: order venue must equal its position; futures ENTRY requires at least 50 USDT posted margin';
 
 -- 3. Exit policy ------------------------------------------------------------
 
@@ -310,7 +411,7 @@ begin
       'non_threshold_exit_enabled', false,
       'return_basis', case
         when v_levels.futures
-        then 'EXECUTABLE_PRICE_NET_OF_EXIT_FEE_VS_ENTRY_PRICE_TIMES_LEVERAGE'
+        then 'ROE_THRESHOLDS_ON_GROSS_PRICE_RETURN; RECOVERY_ON_RESIDUAL_NET_AFTER_BOTH_FEES'
         else 'EXECUTABLE_TOTAL_NET_PNL_AFTER_FEES_AND_SLIPPAGE_SAFETY'
       end,
       'stage', case when v_residual_stage then 'RESIDUAL' else 'FIRST_TRANCHE' end,
@@ -435,10 +536,10 @@ begin
     elsif v_futures then
       -- A clean futures residual has one exit only: +30% on margin. It has no percentage
       -- stop, because a residual that goes negative latches into recovery instead.
-      if v_net_roe_pct < 29.999 then
+      if v_gross_roe_pct < 29.999 then
         raise exception using errcode='23514', message=format(
-          'FUTURES_RESIDUAL_ROE_NOT_REACHED market=%s net_roe_pct=%s leverage=%s',
-          p.market, round(v_net_roe_pct, 6), v_leverage
+          'FUTURES_RESIDUAL_ROE_NOT_REACHED market=%s gross_roe_pct=%s leverage=%s',
+          p.market, round(v_gross_roe_pct, 6), v_leverage
         );
       end if;
       v_sellable_qty := greatest(0, p.remaining_quantity);
@@ -630,6 +731,8 @@ declare
   v_model text;
   v_guard text := pg_get_functiondef('public.guard_residual_sell_order_v751()'::regprocedure);
   v_policy text := pg_get_functiondef('public.enforce_residual_exit_position_policy_v751()'::regprocedure);
+  v_entry_guard text := pg_get_functiondef('public.guard_order_position_venue_v760()'::regprocedure);
+  v_residual_sync text := pg_get_functiondef('public.sync_position_residual_v610()'::regprocedure);
   v_levels record;
 begin
   select canonical_engine_revision into v_canonical
@@ -674,6 +777,13 @@ begin
   if position('RETURN_ON_MARGIN' in v_policy) = 0 then
     raise exception 'FUTURES_POSITION_POLICY_METADATA_MISSING';
   end if;
+  if position('FUTURES_ENTRY_MARGIN_BELOW_50_USDT' in v_entry_guard) = 0
+     or position('ORDER_POSITION_VENUE_MISMATCH' in v_entry_guard) = 0 then
+    raise exception 'FUTURES_ENTRY_OR_VENUE_GUARD_INCOMPLETE';
+  end if;
+  if position('binance_futures' in v_residual_sync) = 0 then
+    raise exception 'FUTURES_RESIDUAL_INVENTORY_GUARD_MISSING';
+  end if;
 
   if not exists (
     select 1 from information_schema.columns
@@ -690,6 +800,7 @@ begin
     from pg_constraint
     where contype = 'c'
       and connamespace = 'public'::regnamespace
+      and conrelid <> 'public.trading_residual_inventory'::regclass
       and pg_get_constraintdef(oid) like '%''binance''%'
       and pg_get_constraintdef(oid) not like '%binance_futures%'
   ) then
@@ -698,9 +809,21 @@ begin
       from pg_constraint
       where contype = 'c'
         and connamespace = 'public'::regnamespace
+        and conrelid <> 'public.trading_residual_inventory'::regclass
         and pg_get_constraintdef(oid) like '%''binance''%'
         and pg_get_constraintdef(oid) not like '%binance_futures%'
     );
+  end if;
+
+  -- This is the intentional exception to the three-venue constraint sweep: futures
+  -- contracts must remain impossible in the physical spot residual ledger.
+  if exists (
+    select 1 from pg_constraint
+    where contype = 'c'
+      and conrelid = 'public.trading_residual_inventory'::regclass
+      and pg_get_constraintdef(oid) like '%binance_futures%'
+  ) then
+    raise exception 'FUTURES_WAS_ADDED_TO_SPOT_RESIDUAL_INVENTORY';
   end if;
 end;
 $verify$;
