@@ -15,6 +15,7 @@ on:
       - "supabase/migrations/**"
       - "validation/**"
       - "deno.json"
+      - ".github/workflows/main.deploy-supabase.yml"
   workflow_dispatch:
 
 permissions:

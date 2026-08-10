@@ -179,7 +179,8 @@ check(
   deployWorkflow.includes("node validation/v700-deploy-validation.mjs") &&
     deployWorkflow.includes("--single-transaction") &&
     deployWorkflow.includes("20260810010000_binance_futures_lane_v760.sql") &&
-    !deployWorkflow.includes("--file supabase/migrations/202607"),
+    !deployWorkflow.includes("--file supabase/migrations/202607") &&
+    deployWorkflow.includes('".github/workflows/main.deploy-supabase.yml"'),
 );
 check(
   "TP settlement is ordered before balance reconciliation and fails closed on material overfill",
