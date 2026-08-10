@@ -74,7 +74,7 @@
         </div>
         <div class="performance-filters realized-filters">
           <select id="realized-exchange-filter" aria-label="거래소 필터">
-            <option value="binance">BINANCE</option>
+            <option value="binance">BINANCE · 현물+선물</option>
             <option value="upbit">UPBIT</option>
             <option value="all">전체</option>
           </select>
@@ -141,7 +141,7 @@
     const trades = Array.isArray(performanceSource?.trades) ? performanceSource.trades : [];
     return trades
       .filter(row => String(row?.row_type || "") === "REALIZED_EXIT")
-      .filter(row => exchangeFilter === "all" || String(row?.exchange || "") === exchangeFilter)
+      .filter(row => exchangeFilter === "all" || (exchangeFilter === "binance" ? ["binance","binance_futures"].includes(String(row?.exchange || "")) : String(row?.exchange || "") === exchangeFilter))
       .sort((a, b) => Date.parse(b.exit_at || 0) - Date.parse(a.exit_at || 0));
   }
 
@@ -195,7 +195,7 @@
         ? `<span class="realized-locked" title="CLOSED 확정값">고정</span>` : "";
       return `<tr>
         <td data-label="청산">${dt(row.exit_at)}</td>
-        <td data-label="종목"><strong>${esc(row.market)}</strong>${locked}</td>
+        <td data-label="종목"><strong>${esc(row.market)}</strong><small class="realized-fill-count">${row.exchange === "binance_futures" ? "FUTURES" : row.exchange === "binance" ? "SPOT" : "UPBIT"}</small>${locked}</td>
         <td data-label="매도">${split}<small class="realized-fill-count">fill ${fmt(row.fill_count || 1,0)}</small></td>
         <td data-label="원가">${fmt(row.invested_cost_quote, currency === "KRW" ? 0 : 4)} ${currency}</td>
         <td data-label="확정손익" class="${tone(row.net_pnl_quote)}"><strong>${money(row.net_pnl_quote, currency)}</strong></td>
