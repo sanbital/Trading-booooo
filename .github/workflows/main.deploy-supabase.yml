@@ -213,11 +213,10 @@ jobs:
               raise exception
                 'a revision test is an equality against a comma list; it will fail when the branch is first reached';
             end if;
-            -- The runtime signs every quote with its own VERSION, and the guard admits a
-            -- decision only from a revision it knows. A deployed engine whose revision is
-            -- missing here cannot close anything at a profit.
-            if position('7.3.5-APPROVAL-SURVIVES-REQUOTE' in v_def) = 0 then
-              raise exception 'guard does not admit the deployed v7.3.5 runtime revision';
+            -- The current spot guard accepts only the pre-breakout policy marker carried
+            -- by the order-time quote. Keep the verifier aligned with that live contract.
+            if position('PREBREAKOUT-BURST-V1' in v_def) = 0 then
+              raise exception 'guard lost the deployed pre-breakout policy revision';
             end if;
             raise notice 'sell guard end state verified';
           end
