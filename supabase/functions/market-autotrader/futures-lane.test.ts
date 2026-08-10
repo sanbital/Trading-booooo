@@ -119,6 +119,17 @@ Deno.test("orders cannot cross a spot/futures position boundary", () => {
   assert(MIGRATION.includes("guard_order_position_venue_v760"));
 });
 
+Deno.test("legacy spot policy triggers are unreachable from the futures lane", () => {
+  assert(MIGRATION.includes("drop trigger if exists zz_trading_positions_exit_policy_v714"));
+  assert(MIGRATION.includes("drop trigger if exists zz_trading_orders_lob_exit_guard_v714"));
+  assertEquals(
+    MIGRATION.match(/when \(lower\(coalesce\(new\.exchange, ''\)\) <> 'binance_futures'\)/g)
+      ?.length,
+    2,
+  );
+  assert(MIGRATION.includes("SPOT_POLICY_TRIGGERS_NOT_ISOLATED_FROM_FUTURES"));
+});
+
 Deno.test("margin accounting keeps each open position's stamped leverage", () => {
   assert(ENGINE.includes("select=market,state,leverage,remaining_quantity"));
   assert(

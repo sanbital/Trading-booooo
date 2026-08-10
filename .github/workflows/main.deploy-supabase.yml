@@ -103,6 +103,9 @@ jobs:
             "GATEWAY_SHARED_SECRET=${gateway_secret}" \
             "BINANCE_ORDER_GATEWAY_URL=https://${FLY_BINANCE_APP_NAME}.fly.dev" \
             "BINANCE_GATEWAY_SHARED_SECRET=${gateway_secret}" \
+            "BINANCE_FUTURES_ORDER_GATEWAY_URL=https://${FLY_BINANCE_APP_NAME}.fly.dev" \
+            "BINANCE_FUTURES_GATEWAY_SHARED_SECRET=${gateway_secret}" \
+            "BINANCE_FUTURES_FEE_PER_SIDE_PCT=0.05" \
             "TRADING_MODE_DEFAULT=PAPER" \
             "TRADING_STRATEGY=LOB_SCALP" \
             "SCALP_PER_ORDER_PCT=100" \
@@ -172,7 +175,8 @@ jobs:
             --file supabase/migrations/20260802060000_v732_planned_stop_is_not_an_exit_trigger.sql \
             --file supabase/migrations/20260802070000_v733_repair_post180_timeout_branch.sql \
             --file supabase/migrations/20260802080000_v734_remove_post180_hold_cap.sql \
-            --file supabase/migrations/20260802090000_v735_admit_requote_approval_revision.sql
+            --file supabase/migrations/20260802090000_v735_admit_requote_approval_revision.sql \
+            --file supabase/migrations/20260810010000_binance_futures_lane_v760.sql
 
       - name: Verify the sell guard survived the batch
         shell: bash

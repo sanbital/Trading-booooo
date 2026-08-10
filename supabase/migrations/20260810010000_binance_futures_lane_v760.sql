@@ -286,6 +286,25 @@ create trigger trading_orders_guard_position_venue_v760
 comment on function public.guard_order_position_venue_v760() is
   'v7.6.0: order venue must equal its position; futures ENTRY requires at least 50 USDT posted margin';
 
+-- The legacy v7.1.4 LOB triggers are spot policy. Their functions do not understand
+-- leverage or margin ROE, and PostgreSQL would otherwise run them in addition to the
+-- v7.5.1/v7.6 residual-policy triggers. Route them at the trigger boundary so a futures
+-- row can never be rewritten or rejected by a spot-only policy, while the spot trigger
+-- functions themselves remain byte-for-byte unchanged.
+drop trigger if exists zz_trading_positions_exit_policy_v714 on public.trading_positions;
+create trigger zz_trading_positions_exit_policy_v714
+before insert or update on public.trading_positions
+for each row
+when (lower(coalesce(new.exchange, '')) <> 'binance_futures')
+execute function public.enforce_v714_volatility_aware_position_policy();
+
+drop trigger if exists zz_trading_orders_lob_exit_guard_v714 on public.trading_orders;
+create trigger zz_trading_orders_lob_exit_guard_v714
+before insert on public.trading_orders
+for each row
+when (lower(coalesce(new.exchange, '')) <> 'binance_futures')
+execute function public.guard_lob_sell_order_v714();
+
 -- 3. Exit policy ------------------------------------------------------------
 
 -- Price levels for one position, derived from its venue and leverage. Spot keeps the
@@ -733,6 +752,8 @@ declare
   v_policy text := pg_get_functiondef('public.enforce_residual_exit_position_policy_v751()'::regprocedure);
   v_entry_guard text := pg_get_functiondef('public.guard_order_position_venue_v760()'::regprocedure);
   v_residual_sync text := pg_get_functiondef('public.sync_position_residual_v610()'::regprocedure);
+  v_spot_position_trigger text;
+  v_spot_order_trigger text;
   v_levels record;
 begin
   select canonical_engine_revision into v_canonical
@@ -783,6 +804,23 @@ begin
   end if;
   if position('binance_futures' in v_residual_sync) = 0 then
     raise exception 'FUTURES_RESIDUAL_INVENTORY_GUARD_MISSING';
+  end if;
+
+  select pg_get_triggerdef(t.oid) into v_spot_position_trigger
+  from pg_trigger t
+  where t.tgrelid = 'public.trading_positions'::regclass
+    and t.tgname = 'zz_trading_positions_exit_policy_v714'
+    and not t.tgisinternal;
+  select pg_get_triggerdef(t.oid) into v_spot_order_trigger
+  from pg_trigger t
+  where t.tgrelid = 'public.trading_orders'::regclass
+    and t.tgname = 'zz_trading_orders_lob_exit_guard_v714'
+    and not t.tgisinternal;
+  if v_spot_position_trigger is null
+     or position('binance_futures' in lower(v_spot_position_trigger)) = 0
+     or v_spot_order_trigger is null
+     or position('binance_futures' in lower(v_spot_order_trigger)) = 0 then
+    raise exception 'SPOT_POLICY_TRIGGERS_NOT_ISOLATED_FROM_FUTURES';
   end if;
 
   if not exists (

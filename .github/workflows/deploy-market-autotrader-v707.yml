@@ -8,6 +8,7 @@ on:
       - "supabase/functions/market-scanner/**"
       - "supabase/functions/_shared/**"
       - "supabase/migrations/20260802151000_prebreakout_burst_entry_exit_policy.sql"
+      - "supabase/migrations/20260810010000_binance_futures_lane_v760.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
@@ -16,6 +17,7 @@ on:
       - "supabase/functions/market-autotrader/**"
       - "supabase/functions/market-scanner/**"
       - "supabase/functions/_shared/**"
+      - "supabase/migrations/20260810010000_binance_futures_lane_v760.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   workflow_dispatch:
 
@@ -79,6 +81,11 @@ jobs:
           grep -q 'BB_UPPER_REENTRY_CONFIRMED' supabase/functions/market-autotrader/index.ts
           grep -q 'BB_RECLAIM_FAILED' supabase/functions/market-autotrader/index.ts
           grep -q 'ORDERBOOK_COLLAPSE' supabase/functions/market-autotrader/index.ts
+          grep -q '7.6.0-BINANCE-FUTURES' supabase/functions/market-autotrader/index.ts
+          grep -q 'FUTURES_MIN_ENTRY_MARGIN_USDT = 50' \
+            supabase/functions/market-autotrader/futures-exit-policy.ts
+          grep -q 'SPOT_POLICY_TRIGGERS_NOT_ISOLATED_FROM_FUTURES' \
+            supabase/migrations/20260810010000_binance_futures_lane_v760.sql
           ! grep -q 'const exp1ArmWidthsBps' supabase/functions/market-autotrader/index.ts
 
   deploy:
@@ -97,6 +104,43 @@ jobs:
       - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
         with:
           version: 2.109.1
+      - name: Wait for v7.6 database schema
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          command -v psql >/dev/null
+          test -n "${SUPABASE_DB_URL}"
+          for attempt in $(seq 1 40); do
+            ready="$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select
+                exists (
+                  select 1 from information_schema.columns
+                  where table_schema = 'public'
+                    and table_name = 'trading_settings'
+                    and column_name = 'binance_futures_enabled'
+                )
+                and exists (
+                  select 1 from information_schema.columns
+                  where table_schema = 'public'
+                    and table_name = 'trading_positions'
+                    and column_name = 'leverage'
+                )
+                and exists (
+                  select 1 from public.trading_ops_invariants
+                  where id = 1
+                    and canonical_engine_revision = '7.6.0-BINANCE-FUTURES'
+                );
+            ")"
+            if [ "${ready}" = "t" ]; then
+              echo "v7.6 database schema is ready"
+              exit 0
+            fi
+            echo "Waiting for v7.6 database schema (${attempt}/40)"
+            sleep 15
+          done
+          echo "::error::v7.6 database schema was not ready before Edge Function deployment"
+          exit 1
       - name: Deploy scanner and autotrader
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}

@@ -110,7 +110,9 @@ jobs:
             "AUTOTRADE_ACCESS_TOKEN=${autotrade_token}" \
             "SCHEDULER_ENABLED=false" \
             "BINANCE_API_KEY=${BINANCE_API_KEY}" \
-            "BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}"
+            "BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}" \
+            "BINANCE_FUTURES_BASE_URL=https://fapi.binance.com" \
+            "BINANCE_FUTURES_DEFAULT_LEVERAGE=3"
           # This Paris app must never carry Upbit credentials.
           flyctl secrets unset -a "${FLY_BINANCE_APP_NAME}" \
             UPBIT_ACCESS_KEY UPBIT_SECRET_KEY UPBIT_MAX_ORDER_KRW UPBIT_MAX_DAILY_BUY_KRW || true
@@ -146,4 +148,7 @@ jobs:
           LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
         run: |
           gateway_secret="$(printf 'gateway:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
-          node gateway/smoke.mjs "https://${FLY_BINANCE_APP_NAME}.fly.dev" "${gateway_secret}" "binance"
+          node gateway/smoke.mjs \
+            "https://${FLY_BINANCE_APP_NAME}.fly.dev" \
+            "${gateway_secret}" \
+            "binance,binance_futures"
