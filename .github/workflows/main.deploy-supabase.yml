@@ -165,6 +165,10 @@ jobs:
             --set=ON_ERROR_STOP=1 \
             --single-transaction \
             --file supabase/migrations/20260810010000_binance_futures_lane_v760.sql
+          psql "${SUPABASE_DB_URL}" \
+            --set=ON_ERROR_STOP=1 \
+            --single-transaction \
+            --file supabase/migrations/20260810133000_protected_trailing_exit_v761.sql
 
       - name: Verify the sell guard survived the batch
         shell: bash
@@ -206,16 +210,13 @@ jobs:
               raise exception
                 'the post-180 hold carries a time cap again; after 180s only positive net or minus 2 percent may close a position';
             end if;
-            -- A blind substitution once turned an equality test into "= 'a', 'b'", which
-            -- CREATE FUNCTION accepts because PL/pgSQL defers parsing an IF until the branch
-            -- is reached. It then failed at runtime and made the timeout unreachable.
+            # NOTE: PL/pgSQL body validation below protects legacy v714 only; protected trailing
+            # authority is replayed immediately after v760 above.
             if position('v_policy_revision = ''7.3.0' in v_def) > 0
                or position('v_policy_revision = ''7.3.2' in v_def) > 0 then
               raise exception
                 'a revision test is an equality against a comma list; it will fail when the branch is first reached';
             end if;
-            -- The current spot guard accepts only the pre-breakout policy marker carried
-            -- by the order-time quote. Keep the verifier aligned with that live contract.
             if position('PREBREAKOUT-BURST-V1' in v_def) = 0 then
               raise exception 'guard lost the deployed pre-breakout policy revision';
             end if;
