@@ -332,7 +332,7 @@ async function syncFuturesTrades(sb: any) {
           bot_order_id: matched?.id ?? null,
           position_id: positionId,
           realized_pnl_quote: t.realizedPnl == null ? null : num(t.realizedPnl),
-          accounting_status: positionId ? "FUTURES_POSITION_LINKED" : "UNMATCHED",
+          accounting_status: positionId ? "PENDING" : "UNMATCHED_INVENTORY",
           executed_at: new Date(t.time).toISOString(),
           raw_response: t as unknown as Json,
           updated_at: new Date().toISOString(),
