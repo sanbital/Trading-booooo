@@ -13,6 +13,7 @@ import {
   clamp,
   dangerousControlError,
   decideExit,
+  entryQuantityForNotional,
   evaluateCircuit,
   type Exchange,
   finite,
@@ -2728,11 +2729,13 @@ async function enterCandidateInner(
   const strategyExposureFraction = allocationOnly
     ? clamp(finite((settings as any).scalp_max_strategy_exposure_pct, 100), 10, 100) / 100
     : 1;
-  // Quantity is floored to the exchange step after quote sizing. Fund one quantity/quote
-  // step above the operator floor so that flooring cannot turn KRW 40,000 into 39,999.x.
+  // Spot quantities are floored, so fund one quantity/quote step above the operator floor.
+  // Futures quantities are instead rounded up by entryQuantityForNotional: its 50 USDT
+  // minimum is a margin contract and must remain executable with an exact 50 allocation.
   const quantityStepCapitalQuote = Math.max(0, finite(rules.quantity_step)) * bestAsk / leverage;
-  const executableMinimumCapitalQuote = minimumEntryMarginQuote +
-    Math.max(limits.quoteStep, quantityStepCapitalQuote);
+  const executableMinimumCapitalQuote = exchange === "binance_futures"
+    ? minimumEntryMarginQuote
+    : minimumEntryMarginQuote + Math.max(limits.quoteStep, quantityStepCapitalQuote);
   // Keep the configured denominator whenever capital supports it. If fixed division would
   // make every ticket smaller than the operator floor, contract concurrency just enough to
   // permit a valid ticket without increasing total strategy exposure.
@@ -2878,7 +2881,12 @@ async function enterCandidateInner(
       reason: "depth deteriorated during sizing",
     };
   }
-  let quantity = floorToStep(sizing.notionalQuote / entryPrice, rules.quantity_step || 0.00000001);
+  let quantity = entryQuantityForNotional(
+    exchange,
+    sizing.notionalQuote,
+    entryPrice,
+    rules.quantity_step || 0.00000001,
+  );
   if (!(quantity > 0) || quantity * entryPrice < minimumEntryNotionalQuote) {
     return {
       entered: false,
@@ -2894,7 +2902,7 @@ async function enterCandidateInner(
   let scalpTarget1: number | null = null;
   let scalpTarget2: number | null = null;
   let scalpAudit: JsonRecord | null = null;
-  let decisionNotional = sizing.notionalQuote;
+  let decisionNotional = quantity * entryPrice;
   if (isLobStrategy((settings as any).strategy)) {
     const {
       lobSnapshot,
@@ -3237,6 +3245,10 @@ async function enterCandidateInner(
     const decision = scalpEntryDecision(
       {
         capitalQuote: finite(managed.managedCapitalQuote),
+        requestedCapital: exchange === "binance_futures"
+          ? finite((sizing as any).marginQuote)
+          : sizing.notionalQuote,
+        notionalPerCapital: leverage,
         requestedNotional: sizing.notionalQuote,
         day,
         pWin: scalpPWin,
@@ -3306,9 +3318,14 @@ async function enterCandidateInner(
     }
     decisionNotional = decision.notional;
     if (decision.notional < sizing.notionalQuote) {
-      quantity = floorToStep(decision.notional / entryPrice, rules.quantity_step || 0.00000001);
+      quantity = entryQuantityForNotional(
+        exchange,
+        decision.notional,
+        entryPrice,
+        rules.quantity_step || 0.00000001,
+      );
       if (
-        !(quantity > 0) || quantity * entryPrice < Math.max(limits.minOrder, rules.min_notional)
+        !(quantity > 0) || quantity * entryPrice < minimumEntryNotionalQuote
       ) {
         return {
           entered: false,
@@ -3318,6 +3335,7 @@ async function enterCandidateInner(
         };
       }
     }
+    decisionNotional = quantity * entryPrice;
     // Exits follow the scalp target/stop the EV gate was evaluated on, not the wide
     // trend plan — otherwise the position would hold to trend targets after a scalp entry.
     scalpStopPrice = tickRound(entryPrice * (1 - scalpStopPct), rules.price_tick, "down");
@@ -3435,8 +3453,8 @@ async function enterCandidateInner(
       futures: exchange === "binance_futures"
         ? {
           leverage,
-          margin_quote: finite((sizing as any).marginQuote, sizing.notionalQuote / leverage),
-          notional_quote: sizing.notionalQuote,
+          margin_quote: decisionNotional / leverage,
+          notional_quote: decisionNotional,
           exit_policy: "FUTURES_SPLIT_ROE",
           thresholds: FUTURES_SPLIT_EXIT_THRESHOLDS,
         }

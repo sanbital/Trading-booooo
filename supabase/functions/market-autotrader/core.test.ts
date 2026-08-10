@@ -6,8 +6,10 @@ import {
   binanceMinOrderUsdt,
   calculateManagedCapital,
   calculatePositionSize,
+  ceilToStep,
   dangerousControlError,
   decideExit,
+  entryQuantityForNotional,
   evaluateCircuit,
   externalQuoteIntervention,
   floorToStep,
@@ -164,6 +166,17 @@ Deno.test("invalid stop blocks sizing", () => {
 
 Deno.test("floorToStep handles Binance precision", () => {
   near(floorToStep(1.234567, 0.001), 1.234);
+});
+
+Deno.test("futures entry quantity preserves the leveraged minimum after step rounding", () => {
+  near(ceilToStep(1.234001, 0.001), 1.235);
+  near(ceilToStep(1.234, 0.001), 1.234);
+
+  const price = 0.02442;
+  const futuresQuantity = entryQuantityForNotional("binance_futures", 150, price, 0.1);
+  const spotQuantity = entryQuantityForNotional("binance", 150, price, 0.1);
+  assert(futuresQuantity * price >= 150);
+  assert(spotQuantity * price < 150);
 });
 
 Deno.test("exit priority is emergency then stop then targets then time", () => {

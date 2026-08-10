@@ -9,16 +9,16 @@
 
 import { evaluateEntryGate, type ScalpDayState, type ScalpSafetyConfig } from "./safety.ts";
 import {
-  stressSellSlippage,
-  stressSlippage,
   type CostModelConfig,
   type OrderbookLevel,
+  stressSellSlippage,
+  stressSlippage,
 } from "./cost-model.ts";
 import {
-  evaluateCandidate,
-  SHADOW_CANDIDATE_GATE,
   type CandidateEvaluation,
+  evaluateCandidate,
   type GateConfig,
+  SHADOW_CANDIDATE_GATE,
 } from "./candidate-gate.ts";
 import {
   buildBridgeOutcomeForecast,
@@ -28,6 +28,10 @@ import {
 
 export interface ScalpGateInput {
   capitalQuote: number;
+  /** Capital committed by this order. Defaults to requestedNotional for spot. */
+  requestedCapital?: number;
+  /** Contract notional controlled by one unit of capital. Defaults to 1 for spot. */
+  notionalPerCapital?: number;
   requestedNotional: number;
   day: ScalpDayState;
   pWin: number;
@@ -81,8 +85,14 @@ export function scalpEntryDecision(
   costCfg: CostModelConfig,
   gateCfg: GateConfig = SHADOW_CANDIDATE_GATE,
 ): ScalpGateResult {
+  const requestedCapital = Number.isFinite(input.requestedCapital)
+    ? Math.max(0, Number(input.requestedCapital))
+    : input.requestedNotional;
+  const notionalPerCapital = Number.isFinite(input.notionalPerCapital)
+    ? Math.max(1, Number(input.notionalPerCapital))
+    : 1;
   const safety = evaluateEntryGate(
-    { capitalQuote: input.capitalQuote, requestedNotional: input.requestedNotional, day: input.day },
+    { capitalQuote: input.capitalQuote, requestedNotional: requestedCapital, day: input.day },
     safetyCfg,
   );
   if (!safety.allow) {
@@ -99,16 +109,23 @@ export function scalpEntryDecision(
     };
   }
 
+  // Safety caps operate on managed capital (margin on futures), while depth and EV costs
+  // operate on the contract notional presented to the market.
+  const cappedNotional = Math.min(
+    input.requestedNotional,
+    safety.cappedNotional * notionalPerCapital,
+  );
+
   const entry = stressSlippage(
     input.askLevels,
-    safety.cappedNotional,
+    cappedNotional,
     input.bestAsk,
     costCfg.slippage,
   );
   if (entry.skip) {
     return {
       allow: false,
-      notional: safety.cappedNotional,
+      notional: cappedNotional,
       reason: "thin_ask_depth",
       expectedNetEdge: -1,
       evLowerBound: -1,
@@ -120,14 +137,14 @@ export function scalpEntryDecision(
   }
   const exit = stressSellSlippage(
     input.bidLevels,
-    safety.cappedNotional,
+    cappedNotional,
     input.bestBid,
     costCfg.slippage,
   );
   if (exit.skip) {
     return {
       allow: false,
-      notional: safety.cappedNotional,
+      notional: cappedNotional,
       reason: "thin_bid_depth",
       expectedNetEdge: -1,
       evLowerBound: -1,
@@ -179,7 +196,7 @@ export function scalpEntryDecision(
   );
   return {
     allow: evaluation.accepted,
-    notional: safety.cappedNotional,
+    notional: cappedNotional,
     reason: evaluation.accepted ? null : mappedReason(evaluation.rejectionReasons),
     expectedNetEdge: evaluation.evAttempt,
     evLowerBound: evaluation.evLowerBound,

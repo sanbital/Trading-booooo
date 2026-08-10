@@ -329,6 +329,34 @@ export function floorToStep(value: number, step: number): number {
   return Math.floor((value + s * 1e-10) / s) * s;
 }
 
+export function ceilToStep(value: number, step: number): number {
+  const s = finite(step);
+  if (!(s > 0)) return value;
+  return Math.ceil((value - s * 1e-10) / s) * s;
+}
+
+/**
+ * Convert quote notional into an exchange-valid entry quantity.
+ *
+ * Spot keeps the long-standing floor semantics so it never spends above its quote
+ * allocation. Futures has a separate minimum MARGIN contract: its leveraged notional
+ * must not slip below that floor merely because the quantity filter removed a fraction
+ * of one step. The extra futures exposure is bounded by one quantity step and is funded
+ * by the wallet balance outside the operator-managed allocation.
+ */
+export function entryQuantityForNotional(
+  exchange: Exchange,
+  notionalQuote: number,
+  price: number,
+  quantityStep: number,
+): number {
+  if (!(finite(price) > 0)) return 0;
+  const rawQuantity = Math.max(0, finite(notionalQuote)) / finite(price);
+  return isBinanceFutures(exchange)
+    ? ceilToStep(rawQuantity, quantityStep)
+    : floorToStep(rawQuantity, quantityStep);
+}
+
 export type ExitResidualAccountingInput = {
   remainingQuantity: number;
   soldQuantity: number;

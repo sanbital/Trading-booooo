@@ -10,8 +10,13 @@ const base = {
   capitalQuote: 1_000_000,
   requestedNotional: 500_000,
   day: { realizedPnlQuote: 0, consecutiveLosses: 0 },
-  pWin: 0.9, targetPct: 0.008, stopPct: 0.003,
-  askLevels: deepAsk, bidLevels: deepBid, bestAsk: 100.0, bestBid: 99.9,
+  pWin: 0.9,
+  targetPct: 0.008,
+  stopPct: 0.003,
+  askLevels: deepAsk,
+  bidLevels: deepBid,
+  bestAsk: 100.0,
+  bestBid: 99.9,
 };
 
 Deno.test("passes a strong forecast without an extra cap inside operator allocation", () => {
@@ -21,10 +26,27 @@ Deno.test("passes a strong forecast without an extra cap inside operator allocat
   assert((r.expectedNetEdge ?? -1) >= DEFAULT_COST_MODEL.minimumEdge);
 });
 
+Deno.test("futures safety caps margin while depth and EV see leveraged contract notional", () => {
+  const r = scalpEntryDecision(
+    {
+      ...base,
+      capitalQuote: 50,
+      requestedCapital: 50,
+      notionalPerCapital: 3,
+      requestedNotional: 150,
+    },
+    DEFAULT_SCALP_SAFETY,
+    DEFAULT_COST_MODEL,
+  );
+  assert(r.allow);
+  assertEquals(r.notional, 150);
+});
+
 Deno.test("safety halt runs FIRST — daily loss blocks before EV is considered", () => {
   const r = scalpEntryDecision(
     { ...base, day: { realizedPnlQuote: -600_000, consecutiveLosses: 0 } },
-    DEFAULT_SCALP_SAFETY, DEFAULT_COST_MODEL,
+    DEFAULT_SCALP_SAFETY,
+    DEFAULT_COST_MODEL,
   );
   assertEquals(r.allow, false);
   assertEquals(r.reason, "daily_loss_limit");
@@ -32,7 +54,11 @@ Deno.test("safety halt runs FIRST — daily loss blocks before EV is considered"
 });
 
 Deno.test("kill switch blocks everything", () => {
-  const r = scalpEntryDecision(base, { ...DEFAULT_SCALP_SAFETY, killSwitch: true }, DEFAULT_COST_MODEL);
+  const r = scalpEntryDecision(
+    base,
+    { ...DEFAULT_SCALP_SAFETY, killSwitch: true },
+    DEFAULT_COST_MODEL,
+  );
   assertEquals(r.allow, false);
   assertEquals(r.reason, "kill_switch");
 });
@@ -41,7 +67,8 @@ Deno.test("weak EV is rejected even after passing safety", () => {
   // symmetric-ish target/stop with modest pWin => negative EV after costs
   const r = scalpEntryDecision(
     { ...base, pWin: 0.55, targetPct: 0.004, stopPct: 0.003 },
-    DEFAULT_SCALP_SAFETY, DEFAULT_COST_MODEL,
+    DEFAULT_SCALP_SAFETY,
+    DEFAULT_COST_MODEL,
   );
   assertEquals(r.allow, false);
   assertEquals(r.reason, "edge_below_minimum");

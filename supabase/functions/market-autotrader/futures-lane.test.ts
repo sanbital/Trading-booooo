@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { baseAsset, isBinanceFutures, quoteCurrency } from "./core.ts";
+import { baseAsset, entryQuantityForNotional, isBinanceFutures, quoteCurrency } from "./core.ts";
 import { validateSpotMarket } from "../_shared/spot-market.ts";
 import { dustQuoteFor } from "../_shared/position-value.ts";
 import {
@@ -60,6 +60,10 @@ Deno.test("entry sizing commits margin and the exchange sees margin x leverage",
   );
   // Leverage must be applied to the symbol before an opening order exists.
   assert(ENGINE.includes('leverage: exchange === "binance_futures" ? leverage : undefined'));
+  assert(ENGINE.includes('requestedCapital: exchange === "binance_futures"'));
+  assert(ENGINE.includes("notionalPerCapital: leverage"));
+  assertEquals(entryQuantityForNotional("binance_futures", 150, 0.02442, 0.1), 6142.6);
+  assertEquals(entryQuantityForNotional("binance", 150, 0.02442, 0.1), 6142.5);
 });
 
 Deno.test("futures entry minimum is an isolated 50 USDT margin floor", () => {
@@ -71,6 +75,11 @@ Deno.test("futures entry minimum is an isolated 50 USDT margin floor", () => {
   assert(
     ENGINE.includes(
       'const marginReturnMultiplier = exchange === "binance_futures" ? leverage : 1',
+    ),
+  );
+  assert(
+    ENGINE.includes(
+      'const executableMinimumCapitalQuote = exchange === "binance_futures"',
     ),
   );
   assert(GATEWAY.includes("const FUTURES_MIN_ENTRY_MARGIN_USDT = 50"));
