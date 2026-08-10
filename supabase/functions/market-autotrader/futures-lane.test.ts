@@ -18,6 +18,9 @@ const DASHBOARD_HTML = await Deno.readTextFile(new URL("docs/index.html", ROOT))
 const MIGRATION = await Deno.readTextFile(
   new URL("supabase/migrations/20260810010000_binance_futures_lane_v760.sql", ROOT),
 );
+const PROTECTED_MIGRATION = await Deno.readTextFile(
+  new URL("supabase/migrations/20260810133000_protected_trailing_exit_v761.sql", ROOT),
+);
 
 Deno.test("binance_futures routes like a USDT venue", () => {
   assert(isBinanceFutures("binance_futures"));
@@ -107,7 +110,8 @@ Deno.test("the exit thresholds are stated on the position's own leverage", () =>
   assert(ENGINE.includes("const positionLeverageValue = positionLeverage(position)"));
   assert(ENGINE.includes("leverage: positionLeverageValue"));
   assert(ENGINE.includes("futuresSplitExitDecision({"));
-  assert(ENGINE.includes("futuresRecoveryLatched({"));
+  assert(ENGINE.includes("peakGrossReturnPct,"));
+  assert(!ENGINE.includes("futuresRecoveryLatched({"));
   // A global strategy change must never send an already-open futures position through
   // the spot exit branch or make it depend on a spot minute-entry read.
   assert(ENGINE.includes("if ((lobMode || futuresLane) && !settings.emergency_liquidation)"));
@@ -149,10 +153,11 @@ Deno.test("margin accounting keeps each open position's stamped leverage", () =>
   assert(ENGINE.includes('const capitalBaseQuote = exchange === "binance_futures"'));
 });
 
-Deno.test("futures recovery state records residual rather than whole-position recovery", () => {
-  assert(ENGINE.includes('exit_rule: "RESIDUAL_NET_PNL_GT_0"'));
-  assert(ENGINE.includes('decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT" ||'));
-  assert(ENGINE.includes("(entryPrice * (1 + policyFeeRate)) - 1) * 100"));
+Deno.test("futures residual state uses peak-aware protected trailing", () => {
+  assert(ENGINE.includes('decision.reason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"'));
+  assert(ENGINE.includes("peakGrossReturnPct,"));
+  assert(ENGINE.includes("recoveryLatchedNow = false"));
+  assert(ENGINE.includes("recoveryMode = false"));
 });
 
 Deno.test("every futures exit reason is authorized end to end", () => {
@@ -163,19 +168,18 @@ Deno.test("every futures exit reason is authorized end to end", () => {
       `${reason} is not on an engine allow list`,
     );
   }
-  // The two that liquidate the protected half must also clear the database guard.
-  assert(MIGRATION.includes("FUTURES_RECOVERY_NET_POSITIVE_EXIT"));
-  assert(MIGRATION.includes("FUTURES_RESIDUAL_ROE_NOT_REACHED"));
-  assert(MIGRATION.includes("if v_gross_roe_pct < 29.999 then"));
-  assert(MIGRATION.includes("FUTURES_FIRST_TRANCHE_ROE_NOT_REACHED"));
+  assert(PROTECTED_MIGRATION.includes("FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"));
+  assert(PROTECTED_MIGRATION.includes("FUTURES_PROTECTED_TRAIL_NOT_REACHED"));
+  assert(PROTECTED_MIGRATION.includes("v_protect_roe_pct := greatest(9, v_peak_roe_pct - 4.5)"));
+  assert(PROTECTED_MIGRATION.includes("FUTURES_FIRST_TRANCHE_THRESHOLD_NOT_REACHED"));
 });
 
-Deno.test("the spot lane's own thresholds are untouched", () => {
-  // The whole point of the futures work is that it is additive. If any of these moved,
-  // the spot lane changed behaviour and this test is the tripwire.
+Deno.test("the spot lane uses the approved protected trailing thresholds", () => {
   assert(ENGINE.includes("spotSplitExitDecision({"));
-  assert(MIGRATION.includes("v_net_return_pct < 9.999 and v_net_return_pct > -3.999"));
-  assert(MIGRATION.includes("v_gross_return_pct < 4.999 and v_gross_return_pct > -3.999"));
+  assert(ENGINE.includes('decision.reason === "RESIDUAL_PROTECTED_TRAIL_EXIT"'));
+  assert(PROTECTED_MIGRATION.includes("v_protect_pct := greatest(3, v_peak_return_pct - 1.5)"));
+  assert(PROTECTED_MIGRATION.includes("SPOT_PROTECTED_TRAIL_NOT_REACHED"));
+  assert(PROTECTED_MIGRATION.includes("v_gross_return_pct <= -3.999"));
 });
 
 Deno.test("the gateway can close a futures long and can never open a short", () => {

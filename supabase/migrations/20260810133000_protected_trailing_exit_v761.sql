@@ -273,6 +273,12 @@ comment on function public.enforce_residual_exit_position_policy_v751() is
 comment on function public.guard_residual_sell_order_v751() is
   'Protected trailing v1 durable sell guard with full hard-stop exits and peak-aware residual protection';
 
+-- v7.6.2 was a later-running spot-only trigger that rewrote +10/-4 residual fields after
+-- the unified v751 protected-trailing trigger. It must not coexist with this policy.
+drop trigger if exists zzzzzzz_trading_positions_spot_split_stop_v762 on public.trading_positions;
+comment on function public.enforce_spot_split_stop_v762() is
+  'Obsolete after protected trailing v1; trigger removed so unified v751 owns spot and futures exits.';
+
 -- Re-stamp currently open positions with the new canonical policy metadata/levels.
 update public.trading_positions
 set metadata = coalesce(metadata, '{}'::jsonb) - 'recovery_exit',

@@ -132,7 +132,6 @@ import {
   FUTURES_MIN_ENTRY_MARGIN_USDT,
   FUTURES_SPLIT_EXIT_THRESHOLDS,
   futuresEntryMinimums,
-  futuresRecoveryLatched,
   futuresSplitExitDecision,
   normalizeFuturesLeverage,
 } from "./futures-exit-policy.ts";
@@ -7887,10 +7886,8 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision.reason === "HALF_HOLD_STOP_LOSS_4" ||
           decision.reason === "FUTURES_HALF_TAKE_PROFIT_ROE_15" ||
           decision.reason === "FUTURES_HALF_STOP_LOSS_ROE_12" ||
-          decision.reason === "FUTURES_RESIDUAL_TAKE_PROFIT_ROE_30" ||
-          decision.reason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT" ||
-          decision.reason === "RESIDUAL_TAKE_PROFIT_10" ||
-          decision.reason === "RESIDUAL_STOP_LOSS_4" ||
+          decision.reason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT" ||
+          decision.reason === "RESIDUAL_PROTECTED_TRAIL_EXIT" ||
           decision.reason === "BB_UPPER_REENTRY_CONFIRMED" ||
           decision.reason === "BB_RECLAIM_FAILED" ||
           decision.reason === "ORDERBOOK_COLLAPSE";
