@@ -44,9 +44,6 @@ jobs:
       - name: Validate strategy invariants
         run: |
           set -euo pipefail
-          # market-autotrader/index.ts is a large generated/hand-maintained runtime file.
-          # Formatting-only differences must not block ledger-safety deployments; semantic
-          # safety remains enforced below by deno check and the invariant assertions.
           deno fmt --check \
             supabase/functions/_shared/lob/minute-entry-gate.ts \
             supabase/functions/_shared/lob/minute-entry-market.ts \
@@ -69,12 +66,9 @@ jobs:
             supabase/functions/market-autotrader/spot-exit-policy.test.ts \
             supabase/functions/market-autotrader/split-stop-policy.test.ts
           deno test supabase/functions/market-autotrader/futures-exit-policy.test.ts
-          deno test supabase/functions/market-autotrader/futures-lane.test.ts
+          deno test --allow-read supabase/functions/market-autotrader/futures-lane.test.ts
           deno check supabase/functions/market-scanner/index.ts
           deno check supabase/functions/market-autotrader/index.ts
-          # Read the canonical engine identity from scanner source, then require exact
-          # parity in both autotrader and gateway. Spot and futures exits remain isolated,
-          # but both use the reviewed protected-trailing structure.
           engine_version="$(sed -n 's/.*export const ENGINE_VERSION = "\([^"]*\)".*/\1/p' \
             supabase/functions/market-scanner/engine.ts)"
           test -n "$engine_version"
