@@ -9,6 +9,7 @@ on:
       - "supabase/functions/_shared/**"
       - "supabase/migrations/20260802151000_prebreakout_burst_entry_exit_policy.sql"
       - "supabase/migrations/20260810010000_binance_futures_lane_v760.sql"
+      - "supabase/migrations/20260810133000_protected_trailing_exit_v761.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
@@ -18,6 +19,7 @@ on:
       - "supabase/functions/market-scanner/**"
       - "supabase/functions/_shared/**"
       - "supabase/migrations/20260810010000_binance_futures_lane_v760.sql"
+      - "supabase/migrations/20260810133000_protected_trailing_exit_v761.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   workflow_dispatch:
 
@@ -57,18 +59,22 @@ jobs:
             supabase/functions/market-autotrader/manual-position-import.test.ts \
             supabase/functions/market-autotrader/spot-exit-policy.ts \
             supabase/functions/market-autotrader/spot-exit-policy.test.ts \
-            supabase/functions/market-autotrader/split-stop-policy.test.ts
+            supabase/functions/market-autotrader/split-stop-policy.test.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.test.ts \
+            supabase/functions/market-autotrader/futures-lane.test.ts
           deno test supabase/functions/_shared/lob/minute-entry-gate.test.ts
           deno test supabase/functions/market-autotrader/manual-position-import.test.ts
           deno test \
             supabase/functions/market-autotrader/spot-exit-policy.test.ts \
             supabase/functions/market-autotrader/split-stop-policy.test.ts
           deno test supabase/functions/market-autotrader/futures-exit-policy.test.ts
+          deno test supabase/functions/market-autotrader/futures-lane.test.ts
           deno check supabase/functions/market-scanner/index.ts
           deno check supabase/functions/market-autotrader/index.ts
           # Read the canonical engine identity from scanner source, then require exact
-          # parity in both autotrader and gateway. Spot split exits are canonical; the
-          # recovery path is futures-only and must not leak back into spot runtime/display.
+          # parity in both autotrader and gateway. Spot and futures exits remain isolated,
+          # but both use the reviewed protected-trailing structure.
           engine_version="$(sed -n 's/.*export const ENGINE_VERSION = "\([^"]*\)".*/\1/p' \
             supabase/functions/market-scanner/engine.ts)"
           test -n "$engine_version"
@@ -82,10 +88,12 @@ jobs:
           grep -q 'M1_UPPER_BAND_NOT_TOUCHED' supabase/functions/_shared/lob/minute-entry-gate.ts
           grep -q 'BUY_PRESSURE_NOT_CONFIRMED' supabase/functions/_shared/lob/entry.ts
           grep -q 'const DEFAULT_DYNAMIC_OBSERVATION_MS = 15_000' supabase/functions/market-scanner/index.ts
-          grep -q 'SPOT-SPLIT-TP5-SL4-TP10-SL4-V1' supabase/functions/market-autotrader/index.ts
+          grep -q 'SPOT-PROTECTED-TRAIL-TP5-SL4-FLOOR3-TRAIL1P5-V1' supabase/functions/market-autotrader/index.ts
           grep -q 'spotSplitExitDecision' supabase/functions/market-autotrader/index.ts
           grep -q 'first_stop_loss_pct: -4' supabase/functions/market-autotrader/index.ts
-          grep -q 'residual_stop_loss_pct: -4' supabase/functions/market-autotrader/index.ts
+          grep -q 'residual_profit_floor_pct: 3' supabase/functions/market-autotrader/index.ts
+          grep -q 'residual_trailing_drawdown_pct: 1.5' supabase/functions/market-autotrader/index.ts
+          grep -q 'decision.reason === "RESIDUAL_PROTECTED_TRAIL_EXIT"' supabase/functions/market-autotrader/index.ts
           ! grep -q '"RECOVERY_NET_POSITIVE_EXIT"' supabase/functions/market-autotrader/index.ts
           ! grep -q 'halfHoldRecoveryExitDecision' supabase/functions/market-autotrader/index.ts
           ! grep -q 'hard_stop_return_pct: -2' supabase/functions/market-autotrader/index.ts
@@ -95,11 +103,18 @@ jobs:
           grep -q 'BB_RECLAIM_FAILED' supabase/functions/market-autotrader/index.ts
           grep -q 'ORDERBOOK_COLLAPSE' supabase/functions/market-autotrader/index.ts
           grep -q '7.6.0-BINANCE-FUTURES' supabase/functions/market-autotrader/index.ts
-          grep -q 'FUTURES_RECOVERY_NET_POSITIVE_EXIT' supabase/functions/market-autotrader/index.ts
+          grep -q 'FUTURES-PROTECTED-TRAIL-ROE15-SL12-FLOOR9-TRAIL4P5-V1' supabase/functions/market-autotrader/index.ts
+          grep -q 'decision.reason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"' supabase/functions/market-autotrader/index.ts
           grep -q 'FUTURES_MIN_ENTRY_MARGIN_USDT = 50' \
+            supabase/functions/market-autotrader/futures-exit-policy.ts
+          grep -q 'residualProfitFloorRoePct: 9' \
+            supabase/functions/market-autotrader/futures-exit-policy.ts
+          grep -q 'residualTrailingDrawdownRoePct: 4.5' \
             supabase/functions/market-autotrader/futures-exit-policy.ts
           grep -q 'SPOT_POLICY_TRIGGERS_NOT_ISOLATED_FROM_FUTURES' \
             supabase/migrations/20260810010000_binance_futures_lane_v760.sql
+          grep -q 'drop trigger if exists zzzzzzz_trading_positions_spot_split_stop_v762' \
+            supabase/migrations/20260810133000_protected_trailing_exit_v761.sql
           ! grep -q 'const exp1ArmWidthsBps' supabase/functions/market-autotrader/index.ts
 
   deploy:
