@@ -567,7 +567,9 @@ footer { display: flex; justify-content: space-between; gap: 20px; width: min(12
 .compact-heading { margin-bottom: 18px; }
 .allocation-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  /* Three venues now: Upbit KRW, Binance spot, Binance USDⓈ-M. auto-fit keeps two per
+     row on a narrow desktop and three on a wide one without a second breakpoint. */
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 14px;
 }
 .allocation-card { display: grid; gap: 15px; padding: 24px; }
@@ -656,4 +658,11 @@ footer { display: flex; justify-content: space-between; gap: 20px; width: min(12
   .operator-header,
   .control-panel,
   .allocation-card { padding: 18px; }
+}
+
+.allocation-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
 }

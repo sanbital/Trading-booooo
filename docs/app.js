@@ -1347,6 +1347,15 @@
 
   function renderAccount(data, exchange) {
     const { row, managed, quote } = accountFor(data, exchange);
+    // A disabled venue is absent from the payload entirely, and the futures card is
+    // absent from older cached markup. Neither is an error worth breaking the render for.
+    if (!$(`${exchange}-equity`)) return;
+    if (!data?.accounts?.[exchange]) {
+      for (const suffix of ["equity", "available", "managed", "managed-available"]) {
+        $(`${exchange}-${suffix}`).textContent = "—";
+      }
+      return;
+    }
     $(`${exchange}-equity`).textContent = row.error
       ? "연결 오류"
       : money(row.total_equity_quote, quote);
@@ -1369,12 +1378,21 @@
     $("upbit-reserve-value").value = Number(settings.upbit_reserve_krw || 0);
     $("binance-allocation-value").value = Number(settings.binance_allocation_usdt || 0);
     $("binance-reserve-value").value = Number(settings.binance_reserve_usdt || 0);
+    $("binance-futures-enabled").checked = Boolean(settings.binance_futures_enabled);
+    $("binance-futures-leverage").value = Number(settings.binance_futures_leverage || 3);
+    $("binance-futures-allocation-mode").value = settings.binance_futures_allocation_mode || "ALL";
+    $("binance-futures-allocation-value").value = Number(
+      settings.binance_futures_allocation_usdt || 0,
+    );
+    $("binance-futures-reserve-value").value = Number(settings.binance_futures_reserve_usdt || 0);
     toggleAllocationInputs();
   }
 
   function toggleAllocationInputs() {
     $("upbit-allocation-value").disabled = $("upbit-allocation-mode").value !== "FIXED";
     $("binance-allocation-value").disabled = $("binance-allocation-mode").value !== "FIXED";
+    $("binance-futures-allocation-value").disabled =
+      $("binance-futures-allocation-mode").value !== "FIXED";
   }
 
   // 1달러(업비트 1,400원) 미만은 포지션이 아닙니다. 엔진이 같은 규칙을 서버에서 적용하지만,
@@ -1701,6 +1719,7 @@
     } 갱신`;
     renderAccount(data, "upbit");
     renderAccount(data, "binance");
+    renderAccount(data, "binance_futures");
     renderAllocations(settings);
     renderPositions(data);
     renderLearning(data);
@@ -1807,18 +1826,27 @@
     const binanceFixed = Number($("binance-allocation-value").value || 0);
     const upbitReserve = Number($("upbit-reserve-value").value || 0);
     const binanceReserve = Number($("binance-reserve-value").value || 0);
+    const futuresMode = $("binance-futures-allocation-mode").value;
+    const futuresFixed = Number($("binance-futures-allocation-value").value || 0);
+    const futuresReserve = Number($("binance-futures-reserve-value").value || 0);
+    const futuresLeverage = Number($("binance-futures-leverage").value || 3);
     if (
-      ![upbitFixed, binanceFixed, upbitReserve, binanceReserve].every((value) =>
-        Number.isFinite(value) && value >= 0
-      )
+      ![upbitFixed, binanceFixed, upbitReserve, binanceReserve, futuresFixed, futuresReserve]
+        .every((value) => Number.isFinite(value) && value >= 0)
     ) {
       throw new Error("운용금과 보호금에는 0 이상의 숫자만 입력하세요.");
+    }
+    if (!Number.isFinite(futuresLeverage) || futuresLeverage < 1 || futuresLeverage > 20) {
+      throw new Error("선물 레버리지는 1배에서 20배 사이여야 합니다.");
     }
     if (upbitMode === "FIXED" && upbitFixed < 5000) {
       throw new Error("업비트 선택 운용금은 최소 5,000 KRW입니다.");
     }
     if (binanceMode === "FIXED" && binanceFixed < 5) {
       throw new Error("바이낸스 선택 운용금은 최소 5 USDT입니다.");
+    }
+    if (futuresMode === "FIXED" && futuresFixed < 5) {
+      throw new Error("바이낸스 선물 선택 운용금은 최소 5 USDT입니다.");
     }
     allocationStatus.textContent = "저장 중";
     await request({
@@ -1831,6 +1859,11 @@
       binance_allocation_mode: binanceMode,
       binance_allocation_usdt: binanceFixed,
       binance_reserve_usdt: binanceReserve,
+      binance_futures_enabled: $("binance-futures-enabled").checked,
+      binance_futures_leverage: Math.round(futuresLeverage),
+      binance_futures_allocation_mode: futuresMode,
+      binance_futures_allocation_usdt: futuresFixed,
+      binance_futures_reserve_usdt: futuresReserve,
     });
     allocationDirty = false;
     allocationStatus.textContent = "저장 완료";
@@ -1902,7 +1935,8 @@
         allocationStatus.textContent = `저장 실패: ${error.message || error}`
       ),
   );
-  ["upbit-allocation-mode", "binance-allocation-mode"].forEach((id) =>
+  ["upbit-allocation-mode", "binance-allocation-mode", "binance-futures-allocation-mode"]
+    .forEach((id) =>
     $(id)?.addEventListener("change", () => {
       allocationDirty = true;
       toggleAllocationInputs();
@@ -1915,6 +1949,10 @@
     "upbit-reserve-value",
     "binance-allocation-value",
     "binance-reserve-value",
+    "binance-futures-enabled",
+    "binance-futures-leverage",
+    "binance-futures-allocation-value",
+    "binance-futures-reserve-value",
   ].forEach((id) => $(id)?.addEventListener("input", () => allocationDirty = true));
 
   setView("scanner");

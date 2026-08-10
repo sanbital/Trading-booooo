@@ -13,7 +13,7 @@
 // actually still hold, and is what is left worth anything? The operator's rule for the
 // second half is absolute: anything worth a dollar or less is not a position.
 
-export type Exchange = "upbit" | "binance";
+export type Exchange = "upbit" | "binance" | "binance_futures";
 
 /**
  * "1달러 이하는 그냥 없는 포지션으로 간주" — the operator's rule, expressed in each
@@ -22,6 +22,7 @@ export type Exchange = "upbit" | "binance";
 export const POSITION_DUST_QUOTE: Record<Exchange, number> = {
   upbit: 1400,
   binance: 1,
+  binance_futures: 1,
 };
 
 /**

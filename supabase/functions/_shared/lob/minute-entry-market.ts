@@ -5,10 +5,13 @@ import {
   unavailableMinuteEntryGate,
 } from "./minute-entry-gate.ts";
 
-export type MinuteEntryExchange = "upbit" | "binance";
+export type MinuteEntryExchange = "upbit" | "binance" | "binance_futures";
 
 const UPBIT = "https://api.upbit.com";
 const BINANCE = "https://api.binance.com";
+// The perpetual has its own candle series. Its 1m bars differ from spot around funding
+// and during squeezes, which is exactly when this gate matters, so it reads its own venue.
+const BINANCE_FUTURES = "https://fapi.binance.com";
 
 function utcTimestamp(value: unknown): number {
   const text = String(value || "").trim();
@@ -81,6 +84,10 @@ export async function loadMinuteEntryGate(
   try {
     const url = exchange === "upbit"
       ? `${UPBIT}/v1/candles/minutes/1?market=${encodeURIComponent(market)}&count=60`
+      : exchange === "binance_futures"
+      ? `${BINANCE_FUTURES}/fapi/v1/klines?symbol=${
+        encodeURIComponent(market)
+      }&interval=1m&limit=60`
       : `${BINANCE}/api/v3/klines?symbol=${encodeURIComponent(market)}&interval=1m&limit=60`;
     const raw = await fetchJson(url);
     return evaluateMinuteEntryGate(

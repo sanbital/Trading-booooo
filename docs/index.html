@@ -8,8 +8,8 @@
   <meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
   <title>Trading-booooo AI Trader Dashboard</title>
   <link rel="stylesheet" href="./styles.css?v=7.5.3-RECOVERY-NET-POSITIVE-r1">
-  <script src="./config.js?v=7.5.3-RECOVERY-NET-POSITIVE-r1"></script>
-  <script src="./app.js?v=7.5.3-RECOVERY-NET-POSITIVE-r1" defer></script>
+  <script src="./config.js?v=7.6.0-BINANCE-FUTURES-r1"></script>
+  <script src="./app.js?v=7.6.0-BINANCE-FUTURES-r1" defer></script>
 </head>
 <body>
   <div class="ambient ambient-a"></div>
@@ -20,7 +20,7 @@
       <span class="brand-mark">TB</span>
       <span>
         <strong>TRADING-BOOOOO</strong>
-        <small id="brand-subtitle">UPBIT KRW + BINANCE USDT SPOT · v7.5.3-RECOVERY-NET-POSITIVE</small>
+        <small id="brand-subtitle">UPBIT KRW + BINANCE USDⓈ-M 3x PERP + BINANCE USDT SPOT · v7.6.0-BINANCE-FUTURES</small>
       </span>
     </a>
     <div class="status-chip"><span class="status-dot"></span> AUTO ENGINE · 기본 PAPER</div>
@@ -262,6 +262,15 @@
               <label>운용 방식<select id="binance-allocation-mode"><option value="ALL">전액</option><option value="FIXED">선택 금액</option></select></label>
               <label>선택 운용금<input id="binance-allocation-value" type="number" min="0" step="10"><em>USDT</em></label>
               <label>보호 USDT<input id="binance-reserve-value" type="number" min="0" step="10"><em>USDT</em></label>
+            </article>
+            <article class="panel allocation-card" data-allocation-exchange="binance_futures">
+              <div class="allocation-head"><div><span>BINANCE USDⓈ-M</span><h3>선물 운용 (롱 전용)</h3></div><label class="switch-line"><input id="binance-futures-enabled" type="checkbox"> 신규 매수</label></div>
+              <div class="balance-grid"><div><span>총자산</span><strong id="binance_futures-equity">—</strong></div><div><span>주문 가능 USDT</span><strong id="binance_futures-available">—</strong></div><div><span>봇 운용 한도</span><strong id="binance_futures-managed">—</strong></div><div><span>신규 투자 가능</span><strong id="binance_futures-managed-available">—</strong></div></div>
+              <label>레버리지<input id="binance-futures-leverage" type="number" min="1" max="20" step="1"><em>배</em></label>
+              <label>운용 방식<select id="binance-futures-allocation-mode"><option value="ALL">전액</option><option value="FIXED">선택 금액</option></select></label>
+              <label>선택 운용금<input id="binance-futures-allocation-value" type="number" min="0" step="10"><em>USDT</em></label>
+              <label>보호 USDT<input id="binance-futures-reserve-value" type="number" min="0" step="10"><em>USDT</em></label>
+              <p class="allocation-note">증거금 기준 -12%면 절반 손절, +15%면 절반 익절. 남은 절반은 +30%에서 익절하되, 한 번이라도 마이너스였다면 플러스로 전환하는 즉시 전량 매도합니다.</p>
             </article>
           </div>
           <div class="allocation-save-row"><button id="save-allocation" class="button-primary" type="button">운용 사이즈 저장</button><span id="allocation-status" class="copy-status"></span></div>

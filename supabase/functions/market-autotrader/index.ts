@@ -126,12 +126,19 @@ import {
   quoteExecutableNetExit,
 } from "./executable-exit.ts";
 import { halfHoldRecoveryExitDecision } from "./recovery-exit-policy.ts";
+import {
+  DEFAULT_FUTURES_LEVERAGE,
+  FUTURES_SPLIT_EXIT_THRESHOLDS,
+  futuresRecoveryLatched,
+  futuresSplitExitDecision,
+  normalizeFuturesLeverage,
+} from "./futures-exit-policy.ts";
 import { buildTradingHeartbeatPatch, type TradingHeartbeatPatch } from "./heartbeat.ts";
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 import { loadMinuteEntryGate } from "../_shared/lob/minute-entry-market.ts";
 
-const VERSION = "7.5.3-RECOVERY-NET-POSITIVE";
+const VERSION = "7.6.0-BINANCE-FUTURES";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -145,7 +152,16 @@ const GATEWAY_SECRET = env("GATEWAY_SHARED_SECRET");
 // so existing single-gateway deployments behave exactly as before. Upbit always uses the primary.
 const BINANCE_GATEWAY_URL = env("BINANCE_ORDER_GATEWAY_URL").replace(/\/$/, "") || GATEWAY_URL;
 const BINANCE_GATEWAY_SECRET = env("BINANCE_GATEWAY_SHARED_SECRET") || GATEWAY_SECRET;
+// The futures lane may sit behind its own static-egress gateway; when unset it shares the
+// Binance gateway, which in turn falls back to the primary one.
+const BINANCE_FUTURES_GATEWAY_URL = env("BINANCE_FUTURES_ORDER_GATEWAY_URL").replace(/\/$/, "") ||
+  BINANCE_GATEWAY_URL;
+const BINANCE_FUTURES_GATEWAY_SECRET = env("BINANCE_FUTURES_GATEWAY_SHARED_SECRET") ||
+  BINANCE_GATEWAY_SECRET;
 function gatewayTarget(exchange: Exchange): { url: string; secret: string } {
+  if (exchange === "binance_futures") {
+    return { url: BINANCE_FUTURES_GATEWAY_URL, secret: BINANCE_FUTURES_GATEWAY_SECRET };
+  }
   return exchange === "binance"
     ? { url: BINANCE_GATEWAY_URL, secret: BINANCE_GATEWAY_SECRET }
     : { url: GATEWAY_URL, secret: GATEWAY_SECRET };
@@ -158,13 +174,50 @@ const LIVE_MIN_DEPTH_BUFFER = clamp(finite(env("LIVE_MIN_DEPTH_BUFFER"), 1.2), 1
 const FEE_PCT: Record<Exchange, number> = {
   upbit: clamp(finite(env("UPBIT_FEE_PER_SIDE_PCT"), 0.05), 0, 0.5),
   binance: clamp(finite(env("BINANCE_FEE_PER_SIDE_PCT"), 0.1), 0, 0.5),
+  // USDⓈ-M list taker is 0.05% per side, half the spot rate. The live rate still comes
+  // from the account at runtime; this is only the pre-first-read default.
+  binance_futures: clamp(finite(env("BINANCE_FUTURES_FEE_PER_SIDE_PCT"), 0.05), 0, 0.5),
 };
+
+/** All venues the engine can trade, in the order every per-exchange loop walks them. */
+const ALL_EXCHANGES: readonly Exchange[] = ["upbit", "binance", "binance_futures"];
+
+function exchangeEnabled(settings: TradingSettings & JsonRecord, exchange: Exchange): boolean {
+  if (exchange === "upbit") return Boolean(settings.upbit_enabled);
+  if (exchange === "binance") return Boolean(settings.binance_enabled);
+  return Boolean((settings as any).binance_futures_enabled);
+}
+
+function enabledExchanges(settings: TradingSettings & JsonRecord): Exchange[] {
+  return ALL_EXCHANGES.filter((exchange) => exchangeEnabled(settings, exchange));
+}
+
+/**
+ * Leverage the futures lane opens at. Spot venues are always 1x, so callers can multiply
+ * or divide by this unconditionally.
+ */
+function exchangeLeverage(settings: TradingSettings & JsonRecord, exchange: Exchange): number {
+  if (exchange !== "binance_futures") return 1;
+  return normalizeFuturesLeverage((settings as any).binance_futures_leverage);
+}
+
+/** Leverage a position was actually opened with, which outlives a later settings change. */
+function positionLeverage(position: JsonRecord): number {
+  if (position?.exchange !== "binance_futures") return 1;
+  return normalizeFuturesLeverage(
+    position?.leverage ?? position?.metadata?.futures?.leverage,
+  );
+}
 
 // v6.4: balance differences worth less than this are accounting noise, not a human
 // trading behind the bot's back. Expressed in the quote currency of each exchange so no
 // FX lookup sits on the safety path — a failed rate fetch must not decide whether the
 // engine halts. Defaults are ~10 USD on both sides.
-const DUST_TOLERANCE_QUOTE_DEFAULT: Record<Exchange, number> = { upbit: 14000, binance: 10 };
+const DUST_TOLERANCE_QUOTE_DEFAULT: Record<Exchange, number> = {
+  upbit: 14000,
+  binance: 10,
+  binance_futures: 10,
+};
 
 function dustToleranceQuote(settings: TradingSettings & JsonRecord, exchange: Exchange): number {
   const configured = exchange === "upbit"
@@ -452,6 +505,10 @@ function defaultSettings(): TradingSettings & JsonRecord {
     emergency_liquidation: false,
     upbit_enabled: true,
     binance_enabled: true,
+    // The futures lane ships off. Leverage makes a misconfigured deploy expensive, so it
+    // has to be switched on deliberately rather than inherited from a default.
+    binance_futures_enabled: false,
+    binance_futures_leverage: DEFAULT_FUTURES_LEVERAGE,
     max_open_positions: 4,
     max_open_positions_per_exchange: 2,
     max_daily_entries: Number.MAX_SAFE_INTEGER,
@@ -474,6 +531,11 @@ function defaultSettings(): TradingSettings & JsonRecord {
     binance_allocation_mode: "ALL",
     binance_allocation_usdt: 0,
     binance_reserve_usdt: 0,
+    // The futures wallet is a separate balance from the spot wallet, so it gets its own
+    // allocation rather than sharing the Binance spot numbers.
+    binance_futures_allocation_mode: "ALL",
+    binance_futures_allocation_usdt: 0,
+    binance_futures_reserve_usdt: 0,
     withdrawal_mode: false,
     manual_intervention_required: false,
     manual_event_reason: null,
@@ -1016,19 +1078,80 @@ async function runScanner(
     clearTimeout(timer);
   }
 }
+/**
+ * Mirror this scan's Binance spot BUY candidates onto the USDⓈ-M perpetual venue.
+ *
+ * The operator's requirement is that the futures lane's entry logic is identical to spot,
+ * so it consumes the identical signal rather than a second, subtly different scan. The
+ * mirrored row is a real `scanner_candidates` row so a futures position keeps a candidate
+ * of its own to attribute outcomes to, and so per-venue learning stays separated.
+ *
+ * Only the SIGNAL is mirrored. Everything priced at execution time — the book, the
+ * depth, the symbol filters, the fill — is read from the perpetual venue itself, because
+ * the gateway routes by exchange.
+ */
+async function mirrorBinanceFuturesCandidates(
+  scanId: string,
+  cycleId?: string,
+): Promise<number> {
+  const [spot, existing] = await Promise.all([
+    db(
+      `scanner_candidates?scan_id=eq.${scanId}&exchange=eq.binance&decision=eq.BUY&select=*`,
+    ) as Promise<JsonRecord[]>,
+    db(
+      `scanner_candidates?scan_id=eq.${scanId}&exchange=eq.binance_futures&select=market`,
+    ).catch(() => []) as Promise<JsonRecord[]>,
+  ]);
+  const already = new Set((existing || []).map((row) => String(row.market)));
+  const clones = (spot || [])
+    .filter((row) => !already.has(String(row.market)))
+    .map((row) => {
+      // Copy every column the scanner wrote so schema additions travel automatically;
+      // only identity and provenance are rewritten.
+      const { id: _id, created_at: _createdAt, ...rest } = row;
+      return {
+        ...rest,
+        exchange: "binance_futures",
+        snapshot: {
+          ...(row.snapshot && typeof row.snapshot === "object" ? row.snapshot : {}),
+          mirrored_from: { exchange: "binance", candidate_id: row.id, scan_id: scanId },
+        },
+      };
+    });
+  if (!clones.length) return 0;
+  try {
+    await insert("scanner_candidates", clones);
+    return clones.length;
+  } catch (error) {
+    // A failed mirror costs the futures lane one scan; it must never fail the spot scan
+    // that produced the signal.
+    await event(
+      "FUTURES_CANDIDATE_MIRROR_FAILED",
+      `binance_futures candidate mirror failed for scan ${scanId}`,
+      { error: error instanceof Error ? error.message : String(error), attempted: clones.length },
+      { cycleId, level: "WARNING" },
+    );
+    return 0;
+  }
+}
+
 async function loadBuyCandidates(
   scanId: string,
   settings?: TradingSettings,
   cycleId?: string,
 ): Promise<Candidate[]> {
+  if (exchangeEnabled(settings as TradingSettings & JsonRecord, "binance_futures")) {
+    await mirrorBinanceFuturesCandidates(scanId, cycleId);
+  }
   const rows = await db(
-    `scanner_candidates?scan_id=eq.${scanId}&decision=eq.BUY&exchange=in.(upbit,binance)&select=*&order=score.desc,period_score.desc`,
+    `scanner_candidates?scan_id=eq.${scanId}&decision=eq.BUY&exchange=in.(upbit,binance,binance_futures)&select=*&order=score.desc,period_score.desc`,
   ) as Candidate[];
   if (!isScalpStrategy((settings as any)?.strategy)) return rows;
   const makerByExchange = isLobStrategy((settings as any)?.strategy)
     ? {
       upbit: await loadMakerFillStats("upbit"),
       binance: await loadMakerFillStats("binance"),
+      binance_futures: await loadMakerFillStats("binance_futures"),
     }
     : null;
   const policyRuntime = isLobStrategy((settings as any)?.strategy)
@@ -1836,6 +1959,13 @@ async function applyExitAccounting(
 }
 
 function allocationConfig(settings: TradingSettings, exchange: Exchange) {
+  if (exchange === "binance_futures") {
+    return {
+      mode: (settings as any).binance_futures_allocation_mode || "ALL",
+      fixed: finite((settings as any).binance_futures_allocation_usdt),
+      reserve: finite((settings as any).binance_futures_reserve_usdt),
+    };
+  }
   return exchange === "upbit"
     ? {
       mode: settings.upbit_allocation_mode || "ALL",
@@ -1867,6 +1997,7 @@ async function managedPortfolio(settings: TradingSettings, exchange: Exchange, p
   let bookedExposure = 0;
   let botPositionValue = 0;
   let reservedExposure = 0;
+  const leverageDivisor = exchangeLeverage(settings as TradingSettings & JsonRecord, exchange);
   for (const row of active || []) {
     const entry = Math.max(0, finite(row.average_entry_price, row.planned_entry_price));
     const current = Math.max(0, finite(portfolio?.prices?.[row.market], entry));
@@ -1884,12 +2015,20 @@ async function managedPortfolio(settings: TradingSettings, exchange: Exchange, p
       residualValueQuote: row.residual_value_quote,
       estimatedExitCostPct: FEE_PCT[exchange] / 100,
     });
-    bookedExposure += ledger.totalExposureQuote;
-    reservedExposure += ledger.reservedExposureQuote;
-    botPositionValue += ledger.liquidationValueQuote;
+    // A leveraged position ties up margin, not notional. Dividing by the leverage the
+    // lane runs at converts both the committed exposure and the position's contribution
+    // to capital into the account currency the operator actually owns; on spot the
+    // divisor is 1 and this is the previous arithmetic exactly.
+    bookedExposure += ledger.totalExposureQuote / leverageDivisor;
+    reservedExposure += ledger.reservedExposureQuote / leverageDivisor;
+    botPositionValue += ledger.liquidationValueQuote / leverageDivisor;
   }
-  const capitalBaseQuote = Math.max(0, finite(portfolio.available_quote)) +
-    Math.max(0, finite(portfolio.locked_quote)) + botPositionValue + residualInventoryValue;
+  // On futures the exchange already reports margin balance including unrealised PnL, and
+  // it is authoritative; reconstructing it from position marks would double-count.
+  const capitalBaseQuote = exchange === "binance_futures"
+    ? Math.max(0, finite(portfolio.total_equity_quote))
+    : Math.max(0, finite(portfolio.available_quote)) +
+      Math.max(0, finite(portfolio.locked_quote)) + botPositionValue + residualInventoryValue;
   const config = allocationConfig(settings, exchange);
   const managed = calculateManagedCapital({
     capitalBaseQuote,
@@ -1918,6 +2057,17 @@ async function managedPortfolio(settings: TradingSettings, exchange: Exchange, p
 
 function exchangeLimits(settings: TradingSettings, exchange: Exchange) {
   const allocationControlled = isScalpStrategy((settings as any).strategy);
+  if (exchange === "binance_futures") {
+    return {
+      maxOrder: allocationControlled ? Number.MAX_SAFE_INTEGER : settings.max_order_usdt,
+      // USDⓈ-M MIN_NOTIONAL is 5 USDT on the majors, below the spot floor. The margin the
+      // engine commits is a third of that notional at 3x, so keep the spot floor for the
+      // margin decision and let the symbol filter police the notional.
+      minOrder: binanceMinOrderUsdt(settings.min_order_usdt),
+      quoteStep: 0.01,
+      dailyBuy: allocationControlled ? Number.MAX_SAFE_INTEGER : settings.max_daily_buy_usdt,
+    };
+  }
   return exchange === "upbit"
     ? {
       maxOrder: allocationControlled ? Number.MAX_SAFE_INTEGER : settings.max_order_krw,
@@ -1937,6 +2087,11 @@ function positionMinNotionalQuote(position: Position): number {
     position.min_notional_quote,
     position.exchange === "upbit" ? 5000 : BINANCE_MIN_ORDER_USDT,
   );
+  if (position.exchange === "binance_futures") {
+    // The exit sells the contract quantity, so the binding floor is the symbol's own
+    // MIN_NOTIONAL captured at entry, not the spot order minimum.
+    return Math.max(0, stored);
+  }
   return position.exchange === "binance" ? Math.max(BINANCE_MIN_ORDER_USDT, stored) : stored;
 }
 function accountQuantity(portfolio: any, asset: string, freeOnly = false): number {
@@ -2623,25 +2778,36 @@ async function enterCandidateInner(
   const maxOrder = allocationOnly
     ? Math.min(managedAvailable, riskNotional)
     : Math.min(limits.maxOrder, plan.recommended > 0 ? plan.recommended : limits.maxOrder);
+  // On spot this is 1 and everything below is unchanged. On the futures lane the
+  // allocator still decides how much CAPITAL the trade may commit, and leverage decides
+  // how much notional that capital controls: margin x leverage. Sizing the margin rather
+  // than the notional is what makes "-12% on margin" cost the operator the same fraction
+  // of the account that "-4% on price" costs a spot trade of the same allocation.
+  const leverage = exchangeLeverage(settings, exchange);
   const allocationSizing = (entryPrice: number) => {
     const minOrder = Math.max(limits.minOrder, rules.min_notional);
-    const notionalQuote = floorToStep(Math.min(managedAvailable, maxOrder), limits.quoteStep);
-    return notionalQuote >= minOrder
+    const marginQuote = floorToStep(Math.min(managedAvailable, maxOrder), limits.quoteStep);
+    const notionalQuote = floorToStep(marginQuote * leverage, limits.quoteStep);
+    return marginQuote >= minOrder && notionalQuote >= rules.min_notional
       ? {
         allowed: true,
         notionalQuote,
+        marginQuote,
+        leverage,
         quantity: notionalQuote / entryPrice,
         stopDistancePct: 0,
-        riskBudgetQuote: notionalQuote,
+        riskBudgetQuote: marginQuote,
         reason: null,
       }
       : {
         allowed: false,
         notionalQuote: 0,
+        marginQuote: 0,
+        leverage,
         quantity: 0,
         stopDistancePct: 0,
         riskBudgetQuote: 0,
-        reason: `allocated order ${notionalQuote} below minimum ${minOrder}`,
+        reason: `allocated margin ${marginQuote} below minimum ${minOrder}`,
       };
   };
   const initial = allocationOnly ? allocationSizing(bestAsk) : calculatePositionSize({
@@ -3212,6 +3378,10 @@ async function enterCandidateInner(
     market: candidate.market,
     base_asset: base,
     state: "ENTRY_PENDING",
+    // Persisted rather than re-read from settings at exit time: the thresholds are stated
+    // on margin, so a position must be closed at the leverage it was opened with even if
+    // the operator changes the setting while it is running.
+    leverage,
     reserved_quote: quantity * entryPrice,
     reserved_quantity: quantity,
     reservation_expires_at: new Date(
@@ -3229,7 +3399,13 @@ async function enterCandidateInner(
     target_2: scalpTarget2 ?? candidate.target_2,
     tick_size: rules.price_tick,
     quantity_step: rules.quantity_step,
-    min_notional_quote: Math.max(limits.minOrder, rules.min_notional),
+    // Spot records the higher of the operator floor and the venue filter, because both
+    // apply to the same number. On futures the operator floor governs the MARGIN while the
+    // venue filter governs the NOTIONAL, so the exit-side floor is the venue's alone —
+    // carrying the margin floor here would make a legitimate half-exit look like dust.
+    min_notional_quote: exchange === "binance_futures"
+      ? Math.max(1, rules.min_notional)
+      : Math.max(limits.minOrder, rules.min_notional),
     t1_allocation_pct: plan.allocation,
     exit_policy: plan.exitPolicy,
     trailing_distance_pct: plan.trailingDistancePct,
@@ -3238,6 +3414,15 @@ async function enterCandidateInner(
     metadata: {
       cycle_id: cycleId,
       sizing,
+      futures: exchange === "binance_futures"
+        ? {
+          leverage,
+          margin_quote: finite((sizing as any).marginQuote, sizing.notionalQuote / leverage),
+          notional_quote: sizing.notionalQuote,
+          exit_policy: "FUTURES_SPLIT_ROE",
+          thresholds: FUTURES_SPLIT_EXIT_THRESHOLDS,
+        }
+        : null,
       managed_allocation: managed,
       quote_at_entry: market,
       execution_depth: depth,
@@ -3452,6 +3637,9 @@ async function enterCandidateInner(
       trace.mark("order_submitted");
       const result = await gateway(exchange, {
         action: "create_order",
+        // The gateway applies this to the symbol before an opening order and ignores it
+        // on every other venue. An exit inherits the leverage the position already has.
+        leverage: exchange === "binance_futures" ? leverage : undefined,
         order: {
           market: candidate.market,
           side: "BUY",
@@ -3554,6 +3742,7 @@ async function enterCandidateInner(
     trace.mark("order_submitted");
     const result = await gateway(exchange, {
       action: "create_order",
+      leverage: exchange === "binance_futures" ? leverage : undefined,
       order: {
         market: candidate.market,
         side: "BUY",
@@ -3778,6 +3967,7 @@ async function loadMakerFillStats(exchange: Exchange): Promise<{ rested: number;
   const stats: Record<Exchange, { rested: number; filled: number }> = {
     upbit: { rested: 0, filled: 0 },
     binance: { rested: 0, filled: 0 },
+    binance_futures: { rested: 0, filled: 0 },
   };
   try {
     const since = new Date(Date.now() - 24 * 3_600_000).toISOString();
@@ -5379,10 +5569,13 @@ async function applyExit(
 ) {
   const targetAction = action === "TARGET_1" || action === "TARGET_2";
   const positiveNetAfter180 = decisionReason === "POSITIVE_NET_AFTER_180S";
-  const recoveryNetPositive = decisionReason === "RECOVERY_NET_POSITIVE_EXIT";
+  const recoveryNetPositive = decisionReason === "RECOVERY_NET_POSITIVE_EXIT" ||
+    decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT";
   const positiveNetGuardedExit = positiveNetAfter180 || recoveryNetPositive;
+  // Every reason that is allowed to liquidate the half the first leg protected.
   const residualThresholdExit = decisionReason === "RESIDUAL_TAKE_PROFIT_10" ||
-    decisionReason === "RESIDUAL_STOP_LOSS_4" || recoveryNetPositive;
+    decisionReason === "RESIDUAL_STOP_LOSS_4" ||
+    decisionReason === "FUTURES_RESIDUAL_TAKE_PROFIT_ROE_30" || recoveryNetPositive;
   const protectedHoldQuantity = residualThresholdExit
     ? 0
     : Math.max(0, finite(position.initial_quantity) * 0.5);
@@ -5403,7 +5596,7 @@ async function applyExit(
   // Entry sizing deliberately keeps the internal Binance 90 USDT floor. Exit sizing uses
   // the venue floor. A residual TP50/SL10 decision is the only non-emergency route allowed
   // to liquidate the formerly protected half; recovery mode is the other authorized route.
-  const minNotional = position.exchange === "binance" ? 5 : 5000;
+  const minNotional = position.exchange === "upbit" ? 5000 : 5;
   if (quantity * price < minNotional) {
     return { action: "NONE", reason: "exit quantity is below exchange minimum notional" };
   }
@@ -5494,7 +5687,8 @@ async function applyExit(
     breakevenAfterT1,
   );
   if (
-    decisionReason === "HALF_HOLD_STOP_LOSS_4" &&
+    (decisionReason === "HALF_HOLD_STOP_LOSS_4" ||
+      decisionReason === "FUTURES_HALF_STOP_LOSS_ROE_12") &&
     !finalized?.closed &&
     finite(finalized?.position?.remaining_quantity) > 0
   ) {
@@ -5985,6 +6179,12 @@ async function detectExternalQuoteFlow(
   settings: TradingSettings & JsonRecord,
   cycleId: string,
 ) {
+  // A cross-margin futures wallet's available balance moves with the mark price of every
+  // open position, so comparing it against booked order flow measures unrealised PnL
+  // rather than external activity. There is nothing to detect here, only noise to log.
+  if (exchange === "binance_futures") {
+    return { detected: false, delta: 0, baseline: "FUTURES_MARGIN_BALANCE_FLOATS_WITH_MARK" };
+  }
   const rows = await db(
     `trading_account_snapshots?exchange=eq.${exchange}&select=available_quote,captured_at&order=captured_at.desc&limit=1`,
   ) as any[];
@@ -6139,7 +6339,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
   const portfolioCapturedAt: Partial<Record<Exchange, string>> = {};
   const books: Record<string, any> = {};
   const unresolvedManualAssets: string[] = [];
-  for (const exchange of ["upbit", "binance"] as Exchange[]) {
+  for (const exchange of ALL_EXCHANGES) {
     const exchangePositions = open.filter((p) => p.exchange === exchange);
     const balanceTrackedPositions = tracked.filter((p) =>
       p.exchange === exchange && !p.is_paper &&
@@ -6147,11 +6347,9 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         String(p.state),
       )
     );
-    const exchangeEnabled = exchange === "upbit"
-      ? settings.upbit_enabled
-      : settings.binance_enabled;
+    const venueEnabled = exchangeEnabled(settings, exchange);
     // Disabling an exchange blocks new entries only. Existing positions must remain monitored and exit-capable.
-    if (!exchangeEnabled && exchangePositions.length === 0) continue;
+    if (!venueEnabled && exchangePositions.length === 0) continue;
     const portfolio = await gateway(exchange, { action: "portfolio" });
     portfolios[exchange] = portfolio;
     portfolioCapturedAt[exchange] = new Date().toISOString();
@@ -7488,22 +7686,83 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         const hasTradableHalf = finite(position.remaining_quantity) - protectedHoldQuantity >
           residualTolerance;
 
-        const recoveryMode = position.metadata?.recovery_exit?.enabled === true;
-        decision = halfHoldRecoveryExitDecision({
-          residualStage: !hasTradableHalf,
-          recoveryMode,
-          grossReturnPct,
-          residualNetReturnPct,
-          executableNetAllowed: executableQuote.allowed,
-          expectedNetProfitQuote: finite(executableQuote.expectedNetProfitQuote),
-          safetyRequested,
-        }) as any;
+        const futuresLane = position.exchange === "binance_futures";
+        const positionLeverageValue = positionLeverage(position);
+        let recoveryMode = position.metadata?.recovery_exit?.enabled === true;
+        let futuresAudit: JsonRecord | null = null;
+        let recoveryLatchedNow = false;
+
+        if (futuresLane) {
+          // The futures residual rule is stated about the REMAINING half's own return, so
+          // it is priced against the remainder's own principal. The whole-position quote
+          // above still governs the spot lane and stays untouched.
+          const residualPrincipalQuote = Math.max(0, policyQuantity * entryPrice);
+          const residualQuote = quoteExecutableNetExit({
+            bids: liveBids,
+            requestedQuantity: policyQuantity,
+            availableQuantity: position.is_paper
+              ? policyQuantity
+              : accountQuantity(portfolios[exchange], position.base_asset, true),
+            quantityStep: finite(position.quantity_step, 0.00000001),
+            buyPrincipalQuote: residualPrincipalQuote,
+            alreadyPaidFeesQuote: residualPrincipalQuote * policyFeeRate,
+            priorSellProceedsQuote: 0,
+            sellFeeRate: policyFeeRate,
+            slippageSafetyRate: post180SlippageSafetyRate(settings),
+          });
+          const nextRecovery = futuresRecoveryLatched({
+            residualStage: !hasTradableHalf,
+            alreadyLatched: recoveryMode,
+            netReturnPct: residualNetReturnPct,
+          });
+          recoveryLatchedNow = nextRecovery && !recoveryMode;
+          recoveryMode = nextRecovery;
+          const futuresDecision = futuresSplitExitDecision({
+            residualStage: !hasTradableHalf,
+            recoveryMode,
+            leverage: positionLeverageValue,
+            grossReturnPct,
+            netReturnPct: residualNetReturnPct,
+            executableNetAllowed: residualQuote.allowed,
+            expectedNetProfitQuote: finite(residualQuote.expectedNetProfitQuote),
+            safetyRequested,
+          });
+          decision = {
+            action: futuresDecision.action,
+            fraction: futuresDecision.fraction,
+            reason: futuresDecision.reason,
+          } as any;
+          futuresAudit = {
+            leverage: futuresDecision.leverage,
+            roe_pct: futuresDecision.roePct,
+            net_roe_pct: futuresDecision.netRoePct,
+            price_return_pct: grossReturnPct,
+            thresholds: FUTURES_SPLIT_EXIT_THRESHOLDS,
+            residual_stage: !hasTradableHalf,
+            residual_executable_net_allowed: residualQuote.allowed,
+            residual_expected_net_profit_quote:
+              Number.isFinite(residualQuote.expectedNetProfitQuote)
+                ? residualQuote.expectedNetProfitQuote
+                : null,
+            residual_principal_quote: residualPrincipalQuote,
+          };
+        } else {
+          decision = halfHoldRecoveryExitDecision({
+            residualStage: !hasTradableHalf,
+            recoveryMode,
+            grossReturnPct,
+            residualNetReturnPct,
+            executableNetAllowed: executableQuote.allowed,
+            expectedNetProfitQuote: finite(executableQuote.expectedNetProfitQuote),
+            safetyRequested,
+          }) as any;
+        }
 
         const watchIso = Number.isFinite(watchStartedMs)
           ? new Date(watchStartedMs).toISOString()
           : null;
         const watchChanged = watchIso !== (previousWatchText || null);
-        if (watchChanged || decision.action !== "NONE") {
+        if (watchChanged || recoveryLatchedNow || decision.action !== "NONE") {
           const measuredAt = new Date(nowMs).toISOString();
           const approvedReason = String((decision as any).reason || "");
           const approvedAction = decision.action === "STOP" ? "STOP" : "NONE";
@@ -7520,6 +7779,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
               requested_action: requestedAction,
               requested_reason: requestedReason,
               recovery_mode: recoveryMode,
+              futures: futuresAudit,
               executable_net_allowed: executableQuote.allowed,
               expected_net_profit_quote: Number.isFinite(executableQuote.expectedNetProfitQuote)
                 ? executableQuote.expectedNetProfitQuote
@@ -7546,6 +7806,24 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
                 ...(position.metadata || {}),
                 bb_exit_watch_started_at: watchIso,
                 bb_last_minute_gate: freshMinuteGate,
+                // The futures residual rule is a latch, not a live comparison: once the
+                // remainder has been seen underwater it leaves at the flip to positive,
+                // however long that takes. Persist it the tick it engages.
+                ...(recoveryLatchedNow
+                  ? {
+                    recovery_exit: {
+                      ...(position.metadata?.recovery_exit || {}),
+                      enabled: true,
+                      revision: VERSION,
+                      entered_at: new Date(nowMs).toISOString(),
+                      trigger_reason: "FUTURES_RESIDUAL_NEGATIVE_RETURN",
+                      exit_rule: "RESIDUAL_NET_PNL_GT_0",
+                      leverage: positionLeverageValue,
+                      residual_net_return_pct_at_latch: residualNetReturnPct,
+                      percentage_residual_thresholds_disabled: true,
+                    },
+                  }
+                  : {}),
                 ...(decision.action === "STOP" ? { exit_policy_quote: exitPolicyQuote } : {}),
               },
             }))[0],
@@ -7563,6 +7841,10 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision.reason === "HARD_STOP_MINUS_2" ||
           decision.reason === "HALF_HOLD_TAKE_PROFIT_5" ||
           decision.reason === "HALF_HOLD_STOP_LOSS_4" ||
+          decision.reason === "FUTURES_HALF_TAKE_PROFIT_ROE_15" ||
+          decision.reason === "FUTURES_HALF_STOP_LOSS_ROE_12" ||
+          decision.reason === "FUTURES_RESIDUAL_TAKE_PROFIT_ROE_30" ||
+          decision.reason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT" ||
           decision.reason === "RESIDUAL_TAKE_PROFIT_10" ||
           decision.reason === "RESIDUAL_STOP_LOSS_4" ||
           decision.reason === "RECOVERY_NET_POSITIVE_EXIT" ||
@@ -7818,9 +8100,7 @@ async function considerRotation(
 }
 
 async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord) {
-  const exchanges = (["upbit", "binance"] as Exchange[]).filter((exchange) =>
-    exchange === "upbit" ? settings.upbit_enabled : settings.binance_enabled
-  );
+  const exchanges = enabledExchanges(settings);
   const portfolios = {} as Record<Exchange, any>;
   const stats = {} as Record<Exchange, any>;
   const circuits = {} as Record<Exchange, any>;
@@ -7934,7 +8214,7 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
         settings.mode !== "LIVE_LIMITED"
       }&select=id,exchange`,
     ).catch(() => []) as any[];
-    const perExchange = (["upbit", "binance"] as Exchange[])
+    const perExchange = ALL_EXCHANGES
       .filter((x) => exchanges.includes(x))
       .map((x) => (recent || []).filter((r) => r.exchange === x).length);
     const slowest = perExchange.length ? Math.min(...perExchange) : 0;
@@ -8005,7 +8285,11 @@ async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord
   const activeMarkets = new Set(active.map((row) => `${row.exchange}:${row.market}`));
   const activeBases = new Set(active.map((row) => row.base_asset));
   const entries: any[] = [];
-  const enteredPerExchange: Record<Exchange, number> = { upbit: 0, binance: 0 };
+  const enteredPerExchange: Record<Exchange, number> = {
+    upbit: 0,
+    binance: 0,
+    binance_futures: 0,
+  };
   const rotations: any[] = [];
   const rotationBudget = (settings as any).lob_rotation_enabled === false
     ? 0
@@ -8206,12 +8490,9 @@ async function status(settings: TradingSettings & JsonRecord) {
   ]);
   const accounts: JsonRecord = {};
   const accountStatsByExchange: JsonRecord = {};
-  for (const exchange of ["upbit", "binance"] as Exchange[]) {
-    const exchangeEnabled = exchange === "upbit"
-      ? settings.upbit_enabled
-      : settings.binance_enabled;
+  for (const exchange of ALL_EXCHANGES) {
     const hasTrackedPosition = (positions || []).some((row: any) => row.exchange === exchange);
-    if (!exchangeEnabled && !hasTrackedPosition) continue;
+    if (!exchangeEnabled(settings, exchange) && !hasTrackedPosition) continue;
     try {
       accounts[exchange] = await managedPortfolio(
         settings,
@@ -8276,7 +8557,7 @@ async function status(settings: TradingSettings & JsonRecord) {
   // The gateway portfolio fetched for this response is fresher than the persisted account
   // snapshots loaded above. Put those live snapshots first so both manual-sale settlement
   // and manual-buy import use the balance the operator can see on the exchange right now.
-  const liveSnapshots = (["upbit", "binance"] as Exchange[]).flatMap((exchange) => {
+  const liveSnapshots = ALL_EXCHANGES.flatMap((exchange) => {
     const portfolio = accounts[exchange];
     if (!portfolio || portfolio.ok === false || !Array.isArray(portfolio.accounts)) return [];
     return [{
@@ -8340,6 +8621,7 @@ async function control(body: JsonRecord, settings: TradingSettings & JsonRecord)
       "emergency_liquidation",
       "upbit_enabled",
       "binance_enabled",
+      "binance_futures_enabled",
       "suppress_cross_exchange_same_asset",
       "scalp_kill_switch",
       "residual_sweep_enabled",
@@ -8363,6 +8645,10 @@ async function control(body: JsonRecord, settings: TradingSettings & JsonRecord)
       ? "FIXED"
       : "ALL";
   }
+  if (body.binance_futures_allocation_mode != null) {
+    allowed.binance_futures_allocation_mode =
+      String(body.binance_futures_allocation_mode).toUpperCase() === "FIXED" ? "FIXED" : "ALL";
+  }
   const ranges: Record<string, [number, number]> = {
     max_open_positions: [1, 20],
     max_open_positions_per_exchange: [1, 20],
@@ -8385,6 +8671,12 @@ async function control(body: JsonRecord, settings: TradingSettings & JsonRecord)
     upbit_reserve_krw: [0, 100_000_000_000],
     binance_allocation_usdt: [0, 1_000_000_000],
     binance_reserve_usdt: [0, 1_000_000_000],
+    binance_futures_allocation_usdt: [0, 1_000_000_000],
+    binance_futures_reserve_usdt: [0, 1_000_000_000],
+    // The exit thresholds are stated on margin, so leverage is the single lever that
+    // decides how far price has to move to reach them. The gateway enforces the same 20x
+    // ceiling independently.
+    binance_futures_leverage: [1, 20],
     max_daily_loss_pct: [0.2, 10],
     max_weekly_loss_pct: [0.5, 20],
     max_consecutive_losses: [1, 10],
@@ -8438,8 +8730,8 @@ Deno.serve(async (request: Request) => {
     if (action === "bootstrap") {
       settings = await ensureConfigured(settings, Boolean(body.sync_mode));
       const portfolios: JsonRecord = {};
-      for (const exchange of ["upbit", "binance"] as Exchange[]) {
-        if (exchange === "upbit" ? settings.upbit_enabled : settings.binance_enabled) {
+      for (const exchange of ALL_EXCHANGES) {
+        if (exchangeEnabled(settings, exchange)) {
           portfolios[exchange] = await gateway(exchange, { action: "portfolio" });
         }
       }

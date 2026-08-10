@@ -3,15 +3,21 @@ import crypto from "node:crypto";
 import dns from "node:dns";
 import { pathToFileURL } from "node:url";
 
-// Trading-booooo v7.2.3-EXECUTABLE-NET-INTEGRITY static-egress spot order gateway.
-// It deliberately exposes only spot account/order primitives. There are no
-// withdrawal, transfer, margin, futures, leverage, or API-key management routes.
+// Trading-booooo v7.6.0-BINANCE-FUTURES static-egress order gateway.
+//
+// It exposes spot account/order primitives plus the Binance USDⓈ-M futures primitives the
+// futures lane needs: account/positions, order create/read/cancel, and the per-symbol
+// leverage setting. There are still no withdrawal, transfer, cross-wallet transfer or
+// API-key management routes, and futures orders remain long-only: a SELL is always
+// reduce-only, so the gateway can close a long and can never open a short.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "7.5.3-RECOVERY-NET-POSITIVE";
+const VERSION = "7.6.0-BINANCE-FUTURES";
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
+const BINANCE_FUTURES_BASE = env("BINANCE_FUTURES_BASE_URL", "https://fapi.binance.com")
+  .replace(/\/$/, "");
 const UPBIT_ACCESS_KEY = env("UPBIT_ACCESS_KEY");
 const UPBIT_SECRET_KEY = env("UPBIT_SECRET_KEY");
 const BINANCE_API_KEY = env("BINANCE_API_KEY");
@@ -39,6 +45,7 @@ const nonceCache = new Map();
 const rateState = {
   upbit: { groups: new Map(), dailyKey: kstDate(), dailyBuy: 0 },
   binance: { groups: new Map(), dailyKey: utcDate(), dailyBuy: 0 },
+  binance_futures: { groups: new Map(), dailyKey: utcDate(), dailyBuy: 0 },
 };
 const schedulerState = {
   startedAt: new Date().toISOString(),
@@ -53,6 +60,11 @@ const schedulerState = {
 };
 let binanceTimeOffsetMs = 0;
 let lastBinanceTimeSyncAt = 0;
+// Per-symbol leverage the gateway has already confirmed with the exchange this process
+// lifetime. Binance rejects nothing when leverage is re-sent, but the call is signed and
+// rate limited, so it is sent once per symbol and whenever the requested value changes.
+const futuresLeverageApplied = new Map();
+let futuresDualPositionSide = null;
 
 function env(name, fallback = "") {
   return String(process.env[name] ?? fallback).trim();
@@ -324,6 +336,14 @@ async function publicUpbit(path, query = {}) {
   }
 }
 
+/**
+ * Spot and USDⓈ-M futures are two hosts behind one API key. `venue` selects the host and
+ * the local rate-guard bucket; everything else about signing is identical, including the
+ * clock offset, which both hosts share.
+ */
+function binanceHost(venue) {
+  return venue === "binance_futures" ? BINANCE_FUTURES_BASE : BINANCE_BASE;
+}
 async function syncBinanceTime(force = false) {
   if (!force && Date.now() - lastBinanceTimeSyncAt < 10 * 60_000) return binanceTimeOffsetMs;
   guardRate("binance", "rest");
@@ -339,13 +359,13 @@ async function syncBinanceTime(force = false) {
   lastBinanceTimeSyncAt = ended;
   return binanceTimeOffsetMs;
 }
-async function publicBinance(path, query = {}, timeoutMs = 10_000) {
-  guardRate("binance", "rest");
+async function publicBinance(path, query = {}, timeoutMs = 10_000, venue = "binance") {
+  guardRate(venue, "rest");
   const encoded = binanceQueryString(query);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${BINANCE_BASE}${path}${encoded ? `?${encoded}` : ""}`, {
+    const response = await fetch(`${binanceHost(venue)}${path}${encoded ? `?${encoded}` : ""}`, {
       signal: controller.signal,
       headers: { Accept: "application/json" },
     });
@@ -354,11 +374,14 @@ async function publicBinance(path, query = {}, timeoutMs = 10_000) {
     clearTimeout(timer);
   }
 }
+function publicBinanceFutures(path, query = {}, timeoutMs = 10_000) {
+  return publicBinance(path, query, timeoutMs, "binance_futures");
+}
 async function binanceRequest(
   method,
   path,
   parameters = {},
-  { timeoutMs = 10_000, retryTimestamp = true } = {},
+  { timeoutMs = 10_000, retryTimestamp = true, venue = "binance" } = {},
 ) {
   if (!BINANCE_API_KEY || !BINANCE_SECRET_KEY) {
     throw Object.assign(new Error("BINANCE_API_KEY/BINANCE_SECRET_KEY are not configured"), {
@@ -366,7 +389,7 @@ async function binanceRequest(
       code: "BINANCE_KEYS_MISSING",
     });
   }
-  guardRate("binance", "rest");
+  guardRate(venue, "rest");
   await syncBinanceTime(false);
   const signed = {
     ...parameters,
@@ -378,18 +401,25 @@ async function binanceRequest(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${BINANCE_BASE}${path}?${payload}&signature=${signature}`, {
-      method,
-      signal: controller.signal,
-      headers: { Accept: "application/json", "X-MBX-APIKEY": BINANCE_API_KEY },
-    });
+    const response = await fetch(
+      `${binanceHost(venue)}${path}?${payload}&signature=${signature}`,
+      {
+        method,
+        signal: controller.signal,
+        headers: { Accept: "application/json", "X-MBX-APIKEY": BINANCE_API_KEY },
+      },
+    );
     try {
       const parsed = await parseResponse(response, "Binance");
       return { data: parsed.data, headers: parsed.headers };
     } catch (error) {
       if (retryTimestamp && Number(error?.code) === -1021) {
         await syncBinanceTime(true);
-        return binanceRequest(method, path, parameters, { timeoutMs, retryTimestamp: false });
+        return binanceRequest(method, path, parameters, {
+          timeoutMs,
+          retryTimestamp: false,
+          venue,
+        });
       }
       throw error;
     }
@@ -397,13 +427,21 @@ async function binanceRequest(
     clearTimeout(timer);
   }
 }
+function futuresRequest(method, path, parameters = {}, options = {}) {
+  return binanceRequest(method, path, parameters, { ...options, venue: "binance_futures" });
+}
+
+const EXCHANGES = ["upbit", "binance", "binance_futures"];
 
 function validateExchange(exchange) {
   const value = String(exchange || "").toLowerCase();
-  if (value !== "upbit" && value !== "binance") {
-    throw new Error("exchange must be upbit or binance");
+  if (!EXCHANGES.includes(value)) {
+    throw new Error(`exchange must be one of ${EXCHANGES.join(", ")}`);
   }
   return value;
+}
+function isBinanceFutures(exchange) {
+  return exchange === "binance_futures";
 }
 function validateUpbitMarket(market) {
   const value = String(market || "").toUpperCase();
@@ -885,6 +923,393 @@ async function binanceOrderTest(payload) {
   const conformed = conformBinanceOrder(payload, info);
   return (await binanceRequest("POST", "/api/v3/order/test", conformed.order)).data;
 }
+
+// ---------------------------------------------------------------------------
+// Binance USDⓈ-M futures.
+//
+// The lane is long-only by construction: a BUY opens or adds to a long and a SELL is
+// always reduce-only. Nothing here can open a short, and no route touches wallet
+// transfers. Leverage is the only account-level setting the gateway writes, and only for
+// the symbol it is about to trade.
+// ---------------------------------------------------------------------------
+
+const FUTURES_MIN_LEVERAGE = 1;
+const FUTURES_MAX_LEVERAGE = 20;
+// Mirrors DEFAULT_FUTURES_LEVERAGE in the engine's futures-exit-policy. The gateway keeps
+// its own copy so an order that arrives without one still opens at the authorised size.
+const DEFAULT_FUTURES_LEVERAGE = integerEnv(
+  "BINANCE_FUTURES_DEFAULT_LEVERAGE",
+  3,
+  FUTURES_MIN_LEVERAGE,
+  FUTURES_MAX_LEVERAGE,
+);
+
+function validateFuturesLeverage(value) {
+  const leverage = Math.round(Number(value));
+  if (!Number.isFinite(leverage) || leverage < FUTURES_MIN_LEVERAGE) {
+    throw new Error("futures leverage must be a positive integer");
+  }
+  if (leverage > FUTURES_MAX_LEVERAGE) {
+    throw new Error(`futures leverage above the gateway ceiling of ${FUTURES_MAX_LEVERAGE}x`);
+  }
+  return leverage;
+}
+
+async function binanceFuturesExchangeInfo(symbol) {
+  const market = validateBinanceSymbol(symbol);
+  const data = await publicBinanceFutures("/fapi/v1/exchangeInfo");
+  const row = (Array.isArray(data?.symbols) ? data.symbols : []).find((item) =>
+    String(item?.symbol).toUpperCase() === market
+  );
+  if (!row || row.status !== "TRADING" || String(row.contractType || "PERPETUAL") !== "PERPETUAL") {
+    throw new Error(`Binance futures ${market} is not an active perpetual contract`);
+  }
+  const filters = Object.fromEntries(
+    (row.filters || []).map((filter) => [filter.filterType, filter]),
+  );
+  return {
+    symbol: market,
+    base_asset: row.baseAsset,
+    quote_asset: row.quoteAsset,
+    price_tick: Number(filters.PRICE_FILTER?.tickSize || 0),
+    quantity_step: Number(filters.LOT_SIZE?.stepSize || 0),
+    min_quantity: Number(filters.LOT_SIZE?.minQty || 0),
+    // A MARKET exit is bounded by MARKET_LOT_SIZE, which is usually tighter than LOT_SIZE.
+    max_quantity: Number(filters.LOT_SIZE?.maxQty || 0),
+    market_max_quantity: Number(filters.MARKET_LOT_SIZE?.maxQty || 0),
+    min_notional: Number(filters.MIN_NOTIONAL?.notional || 5),
+    max_notional: 0,
+    max_leverage: FUTURES_MAX_LEVERAGE,
+    raw: row,
+  };
+}
+
+/**
+ * Hedge mode and one-way mode take mutually exclusive order parameters: one-way wants
+ * `reduceOnly`, hedge mode rejects it and wants `positionSide`. Read the account setting
+ * once rather than guessing, because guessing wrong fails the exit, not the entry.
+ */
+async function futuresPositionSideDual() {
+  if (futuresDualPositionSide !== null) return futuresDualPositionSide;
+  const data = (await futuresRequest("GET", "/fapi/v1/positionSide/dual")).data;
+  futuresDualPositionSide = Boolean(data?.dualSidePosition);
+  return futuresDualPositionSide;
+}
+
+async function ensureFuturesLeverage(symbol, leverage) {
+  const market = validateBinanceSymbol(symbol);
+  const target = validateFuturesLeverage(leverage);
+  if (futuresLeverageApplied.get(market) === target) {
+    return { symbol: market, leverage: target, changed: false };
+  }
+  const data = (await futuresRequest("POST", "/fapi/v1/leverage", {
+    symbol: market,
+    leverage: target,
+  })).data;
+  const applied = Number(data?.leverage) || target;
+  futuresLeverageApplied.set(market, applied);
+  return {
+    symbol: market,
+    leverage: applied,
+    max_notional_quote: Number(data?.maxNotionalValue) || null,
+    changed: true,
+  };
+}
+
+function conformFuturesOrder(payload, info, dualPositionSide) {
+  const side = String(payload.side || "").toUpperCase();
+  const type = String(payload.type || payload.ord_type || "").toUpperCase();
+  if (!["BUY", "SELL"].includes(side)) throw new Error("invalid Binance futures order side");
+  if (!["LIMIT", "MARKET", "LIMIT_MAKER"].includes(type)) {
+    throw new Error("Binance futures order type must be LIMIT, LIMIT_MAKER or MARKET");
+  }
+  const clientOrderId = validateIdentifier(payload.identifier || payload.newClientOrderId);
+  const stepCeiling = type === "MARKET" && info.market_max_quantity > 0
+    ? info.market_max_quantity
+    : info.max_quantity;
+  let quantity = floorStep(Number(payload.quantity ?? payload.volume), info.quantity_step);
+  if (!(quantity > 0) || quantity < info.min_quantity) {
+    throw new Error("Binance futures quantity is below LOT_SIZE minimum");
+  }
+  if (stepCeiling > 0 && quantity > stepCeiling) {
+    quantity = floorStep(stepCeiling, info.quantity_step);
+  }
+  const order = {
+    symbol: info.symbol,
+    side,
+    type: type === "LIMIT_MAKER" ? "LIMIT" : type,
+    quantity: formatStep(quantity, info.quantity_step),
+    newClientOrderId: clientOrderId,
+    newOrderRespType: "RESULT",
+  };
+  // Long-only. In one-way mode a SELL must be reduce-only or a large enough sell would
+  // flip the position short; in hedge mode reduceOnly is rejected and the LONG position
+  // side carries the same guarantee.
+  if (dualPositionSide) order.positionSide = "LONG";
+  else if (side === "SELL") order.reduceOnly = "true";
+  if (type === "LIMIT" || type === "LIMIT_MAKER") {
+    const price = floorStep(Number(payload.price), info.price_tick);
+    if (!(price > 0)) {
+      throw new Error("Binance futures limit order requires a valid tick-aligned price");
+    }
+    const notional = price * quantity;
+    if (info.min_notional > 0 && notional < info.min_notional) {
+      throw new Error(`Binance futures order notional ${notional} below ${info.min_notional}`);
+    }
+    if (side === "BUY") enforceBuyCaps("binance_futures", notional);
+    order.price = formatStep(price, info.price_tick);
+    // GTX is post-only: the exchange rejects the order outright rather than crossing, so
+    // the maker cost model holds on futures exactly as LIMIT_MAKER makes it hold on spot.
+    order.timeInForce = type === "LIMIT_MAKER"
+      ? "GTX"
+      : String(payload.time_in_force || payload.timeInForce || "IOC").toUpperCase();
+  } else if (side === "BUY") {
+    throw new Error("Binance futures market orders are restricted to sells");
+  }
+  return {
+    order,
+    info,
+    notional: order.price ? Number(order.price) * Number(order.quantity) : 0,
+  };
+}
+
+function normalizeFuturesOrder(order) {
+  const fills = Array.isArray(order?.fills) ? order.fills : [];
+  const executedVolume = Number(order?.executedQty || 0);
+  // USDⓈ-M reports cumulative quote as `cumQuote`. When an UNKNOWN-status recovery read
+  // omits it, avgPrice x executedQty is exact, and the fill list is the last resort.
+  const executedFunds = Number(order?.cumQuote) > 0
+    ? Number(order.cumQuote)
+    : Number(order?.avgPrice || 0) > 0
+    ? Number(order.avgPrice) * executedVolume
+    : fills.reduce((sum, row) => sum + Number(row.price || 0) * Number(row.qty || 0), 0);
+  const commissions = fills.reduce((sum, row) => sum + Number(row.commission || 0), 0);
+  const feeAssetSet = [...new Set(fills.map((row) => row.commissionAsset).filter(Boolean))];
+  const trades = fills.map((fill, index) => ({
+    trade_id: fill.tradeId != null ? String(fill.tradeId) : `${order?.orderId || "order"}-${index}`,
+    price: Number(fill.price || 0),
+    volume: Number(fill.qty || 0),
+    funds: Number(fill.price || 0) * Number(fill.qty || 0),
+    fee: Number(fill.commission || 0),
+    fee_asset: fill.commissionAsset || null,
+    fee_quote_marked: Number(fill.feeQuoteMarked || 0),
+    fee_quote_mark_source: fill.feeQuoteMarkSource || null,
+    realized_pnl_quote: Number(fill.realizedPnl || 0),
+    executed_at: fill?.time
+      ? new Date(Number(fill.time)).toISOString()
+      : order?.updateTime
+      ? new Date(Number(order.updateTime)).toISOString()
+      : null,
+    raw: fill,
+  }));
+  const averagePrice = Number(order?.avgPrice || 0) > 0
+    ? Number(order.avgPrice)
+    : executedVolume > 0
+    ? executedFunds / executedVolume
+    : null;
+  return {
+    exchange: "binance_futures",
+    exchange_order_id: order?.orderId != null ? String(order.orderId) : null,
+    client_order_id: order?.clientOrderId || order?.origClientOrderId || null,
+    raw_status: order?.status || null,
+    status: normalizeStatus(
+      "binance_futures",
+      order?.status,
+      executedVolume,
+      Number(order?.origQty || 0),
+    ),
+    executed_volume: Number.isFinite(executedVolume) ? executedVolume : 0,
+    executed_funds: Number.isFinite(executedFunds) ? executedFunds : 0,
+    average_price: averagePrice,
+    paid_fee: Number.isFinite(commissions) ? commissions : 0,
+    fee_asset: feeAssetSet.length === 1 ? feeAssetSet[0] : feeAssetSet.length ? "MIXED" : null,
+    side: order?.side ? String(order.side).toUpperCase() : null,
+    market: order?.symbol || null,
+    requested_volume: Number(order?.origQty || 0),
+    remaining_volume: Math.max(0, Number(order?.origQty || 0) - executedVolume),
+    reduce_only: Boolean(order?.reduceOnly),
+    position_side: order?.positionSide || null,
+    realized_pnl_quote: trades.reduce((sum, row) => sum + Number(row.realized_pnl_quote || 0), 0),
+    trades,
+    raw: order,
+  };
+}
+
+async function attachFuturesFills(data, market) {
+  const executedQty = Number(data?.executedQty || 0);
+  if (!(executedQty > 0) || data?.orderId == null) return data;
+  try {
+    const trades = (await futuresRequest("GET", "/fapi/v1/userTrades", {
+      symbol: market,
+      orderId: data.orderId,
+      limit: 1000,
+    })).data;
+    const rows = (Array.isArray(trades) ? trades : []).map((trade) => ({
+      tradeId: trade?.id != null ? String(trade.id) : trade?.tradeId,
+      price: trade?.price,
+      qty: trade?.qty,
+      commission: trade?.commission,
+      commissionAsset: trade?.commissionAsset,
+      realizedPnl: trade?.realizedPnl,
+      time: trade?.time,
+    }));
+    data.fills = await markBinanceCommissionQuote(rows, market);
+  } catch (error) {
+    // Same rule as spot: order status must stay readable even when the commission detail
+    // lookup is unavailable. A later reconciliation replaces the estimate with exact fills.
+    data.fills = [];
+    data.fee_lookup_error = error?.message || String(error);
+  }
+  return data;
+}
+
+async function binanceFuturesGetOrder(identifier, symbol) {
+  const market = validateBinanceSymbol(symbol);
+  const data = (await futuresRequest("GET", "/fapi/v1/order", {
+    symbol: market,
+    origClientOrderId: validateIdentifier(identifier),
+  })).data;
+  return normalizeFuturesOrder(await attachFuturesFills(data, market));
+}
+
+async function binanceFuturesCreateOrder(payload, waitForFinalMs = 2500, leverage = null) {
+  const info = await binanceFuturesExchangeInfo(payload.market);
+  const dual = await futuresPositionSideDual();
+  const conformed = conformFuturesOrder(payload, info, dual);
+  // Leverage is a property of the symbol, not of the order, so it must be in place before
+  // the position exists. Only an opening order needs it; a reduce-only exit inherits it.
+  if (conformed.order.side === "BUY") {
+    await ensureFuturesLeverage(
+      info.symbol,
+      leverage ?? payload.leverage ?? DEFAULT_FUTURES_LEVERAGE,
+    );
+  }
+  let normalized;
+  try {
+    const raw = (await futuresRequest("POST", "/fapi/v1/order", conformed.order, {
+      timeoutMs: 12_000,
+    })).data;
+    normalized = normalizeFuturesOrder(await attachFuturesFills(raw, info.symbol));
+  } catch (error) {
+    if (
+      ["AbortError", "TypeError"].includes(error?.name) || Number(error?.status) >= 500 ||
+      Number(error?.code) === -1007
+    ) {
+      try {
+        normalized = await binanceFuturesGetOrder(conformed.order.newClientOrderId, info.symbol);
+      } catch {
+        throw error;
+      }
+    } else throw error;
+  }
+  const deadline = Date.now() + Math.max(0, Math.min(5000, Number(waitForFinalMs) || 0));
+  while (Date.now() < deadline && ["OPEN", "PARTIALLY_FILLED"].includes(normalized.status)) {
+    await sleep(250);
+    normalized = await binanceFuturesGetOrder(conformed.order.newClientOrderId, info.symbol);
+  }
+  if (conformed.order.side === "BUY" && normalized.executed_funds > 0) {
+    recordBuy("binance_futures", normalized.executed_funds);
+  }
+  return {
+    order: normalized,
+    fill: fillSummary(normalized),
+    symbol_info: info,
+    leverage: futuresLeverageApplied.get(info.symbol) || null,
+  };
+}
+
+/**
+ * The futures wallet presented in the same shape as a spot portfolio.
+ *
+ * `accounts` carries the USDT margin row plus one row per open LONG, quantity-for-quantity,
+ * so the autotrader's balance reconciliation, exit sizing and dust rules work on futures
+ * without a second code path. What the base rows are NOT is spendable inventory, so
+ * `total_equity_quote` is the exchange's own margin balance rather than a sum of those
+ * rows valued at mark — most of a leveraged notional is borrowed.
+ */
+function buildFuturesPortfolio(account, prices) {
+  const assets = Array.isArray(account?.assets) ? account.assets : [];
+  const positions = (Array.isArray(account?.positions) ? account.positions : [])
+    .filter((row) => Math.abs(Number(row?.positionAmt || 0)) > 0);
+  const usdt = assets.find((row) => String(row?.asset).toUpperCase() === "USDT") || {};
+  const walletBalance = Number(usdt.walletBalance || 0);
+  const availableBalance = Number(
+    account?.availableBalance ?? usdt.availableBalance ?? walletBalance,
+  );
+  const accounts = [{
+    currency: "USDT",
+    balance: Math.max(0, availableBalance),
+    locked: Math.max(0, walletBalance - availableBalance),
+    avg_buy_price: null,
+  }];
+  const openPositions = [];
+  for (const row of positions) {
+    const symbol = String(row?.symbol || "").toUpperCase();
+    if (!symbol.endsWith("USDT")) continue;
+    const amount = Number(row?.positionAmt || 0);
+    const currency = symbol.slice(0, -4);
+    openPositions.push({
+      market: symbol,
+      base_asset: currency,
+      side: amount > 0 ? "LONG" : "SHORT",
+      quantity: Math.abs(amount),
+      entry_price: Number(row?.entryPrice || 0),
+      leverage: Number(row?.leverage || 0) || null,
+      margin_type: row?.isolated === true ? "ISOLATED" : "CROSSED",
+      unrealized_pnl_quote: Number(row?.unrealizedProfit || 0),
+      initial_margin_quote: Number(row?.initialMargin || 0),
+      liquidation_price: Number(row?.liquidationPrice || 0) || null,
+    });
+    // A short cannot be produced by this bot, and presenting one as a positive balance
+    // would let the exit path try to "sell" it. Only longs become deliverable rows.
+    if (amount > 0) {
+      accounts.push({ currency, balance: amount, locked: 0, avg_buy_price: null });
+    }
+  }
+  return {
+    exchange: "binance_futures",
+    quote_currency: "USDT",
+    accounts,
+    prices,
+    positions: openPositions,
+    total_equity_quote: Number(
+      account?.totalMarginBalance ?? account?.totalWalletBalance ?? walletBalance,
+    ),
+    available_quote: Math.max(0, availableBalance),
+    locked_quote: Math.max(0, walletBalance - availableBalance),
+    // The margin wallet floats with the mark price of every open position, so this is the
+    // only figure that moves solely on realised events (fills, funding, transfers).
+    settled_quote: walletBalance,
+    unrealized_pnl_quote: Number(account?.totalUnrealizedProfit || 0),
+    total_initial_margin_quote: Number(account?.totalInitialMargin || 0),
+    max_withdraw_quote: Number(account?.maxWithdrawAmount || 0),
+  };
+}
+
+async function binanceFuturesPortfolio() {
+  const [account, tickers] = await Promise.all([
+    futuresRequest("GET", "/fapi/v2/account").then((row) => row.data),
+    publicBinanceFutures("/fapi/v1/ticker/price"),
+  ]);
+  const prices = Object.fromEntries(
+    (Array.isArray(tickers) ? tickers : []).map((row) => [row.symbol, Number(row.price)]),
+  );
+  return buildFuturesPortfolio(account, prices);
+}
+
+async function binanceFuturesFees(market = null) {
+  const symbol = market ? validateBinanceSymbol(market) : "BTCUSDT";
+  const data = (await futuresRequest("GET", "/fapi/v1/commissionRate", { symbol })).data;
+  const maker = Number(data?.makerCommissionRate);
+  const taker = Number(data?.takerCommissionRate);
+  return {
+    exchange: "binance_futures",
+    market: symbol,
+    maker_pct: Number.isFinite(maker) ? maker * 100 : null,
+    taker_pct: Number.isFinite(taker) ? taker * 100 : null,
+    source: "futures_commission_rate",
+  };
+}
 function fillSummary(order) {
   return {
     executedVolume: Number(order?.executed_volume || 0),
@@ -1078,11 +1503,18 @@ async function quote(exchange, market) {
       },
     };
   }
-  const [ticker, depth, trades] = await Promise.all([
-    publicBinance("/api/v3/ticker/bookTicker", { symbol }),
-    publicBinance("/api/v3/depth", { symbol, limit: 100 }),
-    publicBinance("/api/v3/trades", { symbol, limit: 100 }).catch(() => null),
-  ]);
+  const futures = isBinanceFutures(exchange);
+  const [ticker, depth, trades] = futures
+    ? await Promise.all([
+      publicBinanceFutures("/fapi/v1/ticker/bookTicker", { symbol }),
+      publicBinanceFutures("/fapi/v1/depth", { symbol, limit: 100 }),
+      publicBinanceFutures("/fapi/v1/trades", { symbol, limit: 100 }).catch(() => null),
+    ])
+    : await Promise.all([
+      publicBinance("/api/v3/ticker/bookTicker", { symbol }),
+      publicBinance("/api/v3/depth", { symbol, limit: 100 }),
+      publicBinance("/api/v3/trades", { symbol, limit: 100 }).catch(() => null),
+    ]);
   const asks = Array.isArray(depth?.asks)
     ? depth.asks.map(([price, size]) => ({ price: Number(price), size: Number(size) }))
     : [];
@@ -1127,10 +1559,19 @@ async function quote(exchange, market) {
 
 async function getOrder(exchange, identifier, market) {
   const id = validateIdentifier(identifier);
+  if (isBinanceFutures(exchange)) return binanceFuturesGetOrder(id, market);
   return exchange === "upbit" ? upbitGetOrder(id) : binanceGetOrder(id, market);
 }
 async function cancelOrder(exchange, identifier, market) {
   const id = validateIdentifier(identifier);
+  if (isBinanceFutures(exchange)) {
+    return normalizeFuturesOrder(
+      (await futuresRequest("DELETE", "/fapi/v1/order", {
+        symbol: validateBinanceSymbol(market),
+        origClientOrderId: id,
+      })).data,
+    );
+  }
   if (exchange === "upbit") {
     const cancelled = normalizeUpbitOrder(
       (await upbitRequest("DELETE", "/v1/order", { query: { identifier: id } })).data,
@@ -1162,6 +1603,7 @@ async function cancelOrder(exchange, identifier, market) {
 // direct function of cost, trading on an assumed fee rather than the account's real one
 // mis-sizes every barrier. Fail soft: on any error the caller keeps its defaults.
 async function accountFees(exchange, market = null) {
+  if (isBinanceFutures(exchange)) return binanceFuturesFees(market);
   if (exchange === "upbit") {
     const symbol = market ? validateUpbitMarket(market) : "KRW-BTC";
     const chance =
@@ -1193,6 +1635,14 @@ async function accountFees(exchange, market = null) {
 }
 
 async function openOrders(exchange, market = null) {
+  if (isBinanceFutures(exchange)) {
+    const rows = (await futuresRequest(
+      "GET",
+      "/fapi/v1/openOrders",
+      market ? { symbol: validateBinanceSymbol(market) } : {},
+    )).data;
+    return (Array.isArray(rows) ? rows : []).map(normalizeFuturesOrder);
+  }
   if (exchange === "upbit") {
     const rows = (await upbitRequest("GET", "/v1/orders/open", {
       query: {
@@ -1273,27 +1723,50 @@ function assertOrderEngineVersion(command) {
 
 async function handleCommand(command) {
   const exchange = validateExchange(command?.exchange);
+  const futures = isBinanceFutures(exchange);
   switch (String(command?.action || "")) {
     case "portfolio":
+      if (futures) return binanceFuturesPortfolio();
       return exchange === "upbit" ? upbitPortfolio() : binancePortfolio();
     case "accounts":
+      if (futures) return (await futuresRequest("GET", "/fapi/v2/account")).data;
       return exchange === "upbit"
         ? (await upbitRequest("GET", "/v1/accounts")).data
         : (await binanceRequest("GET", "/api/v3/account", { omitZeroBalances: "true" })).data;
     case "quote":
       return quote(exchange, command.market);
     case "symbol_info":
+      if (futures) return binanceFuturesExchangeInfo(command.market);
       return exchange === "binance"
         ? binanceExchangeInfo(command.market)
         : { market: validateUpbitMarket(command.market), quote_asset: "KRW" };
+    case "set_leverage":
+      if (!futures) throw new Error("leverage is only settable on binance_futures");
+      return ensureFuturesLeverage(command.market, command.leverage ?? DEFAULT_FUTURES_LEVERAGE);
     case "order_test":
+      if (futures) {
+        // USDⓈ-M has no dry-run order endpoint. Conforming the order is the equivalent
+        // check: it applies every filter the exchange would apply, without submitting.
+        const info = await binanceFuturesExchangeInfo((command.order || {}).market);
+        return conformFuturesOrder(
+          command.order || {},
+          info,
+          await futuresPositionSideDual(),
+        ).order;
+      }
       return exchange === "upbit"
         ? upbitOrderTest(command.order || {})
         : binanceOrderTest(command.order || {});
     case "create_order":
       assertOrderEngineVersion(command);
       return withOrderTiming(() =>
-        exchange === "upbit"
+        futures
+          ? binanceFuturesCreateOrder(
+            command.order || {},
+            command.wait_for_final_ms,
+            command.leverage ?? (command.order || {}).leverage ?? null,
+          )
+          : exchange === "upbit"
           ? upbitCreateOrder(command.order || {}, command.wait_for_final_ms)
           : binanceCreateOrder(command.order || {}, command.wait_for_final_ms)
       );
@@ -1399,6 +1872,9 @@ function createServer() {
           keys_configured: {
             upbit: Boolean(UPBIT_ACCESS_KEY && UPBIT_SECRET_KEY),
             binance: Boolean(BINANCE_API_KEY && BINANCE_SECRET_KEY),
+            // The futures lane shares the Binance key; the account must additionally
+            // have USDⓈ-M futures enabled for it, which only a live call can prove.
+            binance_futures: Boolean(BINANCE_API_KEY && BINANCE_SECRET_KEY),
           },
           scheduler_enabled: SCHEDULER_ENABLED,
           scheduler: schedulerState,
@@ -1467,7 +1943,9 @@ export {
   assertOrderEngineVersion,
   binanceQueryString,
   binanceTradesToFills,
+  buildFuturesPortfolio,
   buildUpbitPortfolio,
+  conformFuturesOrder,
   contextualizeError,
   createBinanceSignature,
   createUpbitJwt,
@@ -1476,12 +1954,14 @@ export {
   formatStep,
   localRateLimit,
   normalizeBinanceOrder,
+  normalizeFuturesOrder,
   normalizeUpbitOrder,
   rawQueryString,
   stepPrecision,
   upbitRateGroup,
   validateBinanceSymbol,
   validateExchange,
+  validateFuturesLeverage,
   validateIdentifier,
   validateUpbitMarket,
   VERSION,

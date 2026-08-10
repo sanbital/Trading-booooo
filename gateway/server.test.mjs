@@ -169,3 +169,163 @@ test("Upbit contextual errors identify the failing endpoint", () => {
   assert.equal(wrapped.status, 404);
   assert.equal(wrapped.code, "not_found");
 });
+
+const FUTURES_INFO = {
+  symbol: "BTCUSDT",
+  base_asset: "BTC",
+  quote_asset: "USDT",
+  price_tick: 0.1,
+  quantity_step: 0.001,
+  min_quantity: 0.001,
+  max_quantity: 1000,
+  market_max_quantity: 120,
+  min_notional: 5,
+  max_notional: 0,
+  max_leverage: 20,
+};
+
+test("binance_futures is an accepted venue", () => {
+  assert.equal(module.validateExchange("binance_futures"), "binance_futures");
+  assert.equal(module.validateExchange("BINANCE_FUTURES"), "binance_futures");
+  assert.throws(() => module.validateExchange("binance_coinm"));
+});
+
+test("futures leverage is bounded to the gateway ceiling", () => {
+  assert.equal(module.validateFuturesLeverage(3), 3);
+  assert.equal(module.validateFuturesLeverage("5"), 5);
+  assert.throws(() => module.validateFuturesLeverage(0));
+  assert.throws(() => module.validateFuturesLeverage(50));
+});
+
+test("a futures sell is always reduce-only in one-way mode", () => {
+  const { order } = module.conformFuturesOrder(
+    { market: "BTCUSDT", side: "SELL", type: "MARKET", quantity: 0.0125, identifier: "tb-x-1" },
+    FUTURES_INFO,
+    false,
+  );
+  assert.equal(order.reduceOnly, "true");
+  assert.equal(order.positionSide, undefined);
+  assert.equal(order.quantity, "0.012");
+  assert.equal(order.type, "MARKET");
+});
+
+test("hedge-mode orders carry the LONG position side instead of reduceOnly", () => {
+  const { order } = module.conformFuturesOrder(
+    { market: "BTCUSDT", side: "SELL", type: "MARKET", quantity: 0.01, identifier: "tb-x-2" },
+    FUTURES_INFO,
+    true,
+  );
+  assert.equal(order.positionSide, "LONG");
+  assert.equal(order.reduceOnly, undefined);
+});
+
+test("futures maker entries are post-only GTX limits", () => {
+  const { order } = module.conformFuturesOrder(
+    {
+      market: "BTCUSDT",
+      side: "BUY",
+      type: "LIMIT_MAKER",
+      price: 60000.07,
+      quantity: 0.01,
+      identifier: "tb-x-3",
+    },
+    FUTURES_INFO,
+    false,
+  );
+  assert.equal(order.type, "LIMIT");
+  assert.equal(order.timeInForce, "GTX");
+  assert.equal(order.price, "60000.0");
+  assert.equal(order.reduceOnly, undefined);
+});
+
+test("futures market buys stay blocked and sub-minimum notionals are rejected", () => {
+  assert.throws(
+    () =>
+      module.conformFuturesOrder(
+        { market: "BTCUSDT", side: "BUY", type: "MARKET", quantity: 0.01, identifier: "tb-x-4" },
+        FUTURES_INFO,
+        false,
+      ),
+    /restricted to sells/,
+  );
+  assert.throws(
+    () =>
+      module.conformFuturesOrder(
+        {
+          market: "BTCUSDT",
+          side: "BUY",
+          type: "LIMIT",
+          price: 100,
+          quantity: 0.001,
+          identifier: "tb-x-5",
+        },
+        FUTURES_INFO,
+        false,
+      ),
+    /below 5/,
+  );
+});
+
+test("a market exit respects MARKET_LOT_SIZE rather than LOT_SIZE", () => {
+  const { order } = module.conformFuturesOrder(
+    { market: "BTCUSDT", side: "SELL", type: "MARKET", quantity: 900, identifier: "tb-x-6" },
+    FUTURES_INFO,
+    false,
+  );
+  assert.equal(Number(order.quantity), 120);
+});
+
+test("futures order normalization reads cumQuote and realized pnl", () => {
+  const normalized = module.normalizeFuturesOrder({
+    orderId: 77,
+    clientOrderId: "tb-x-7",
+    symbol: "BTCUSDT",
+    status: "FILLED",
+    side: "SELL",
+    origQty: "0.010",
+    executedQty: "0.010",
+    cumQuote: "630.00",
+    avgPrice: "63000.0",
+    reduceOnly: true,
+    fills: [
+      { tradeId: "5", price: "63000.0", qty: "0.010", commission: "0.252", commissionAsset: "USDT", realizedPnl: "12.5", time: 1700000000000 },
+    ],
+  });
+  assert.equal(normalized.exchange, "binance_futures");
+  assert.equal(normalized.status, "FILLED");
+  assert.equal(normalized.executed_funds, 630);
+  assert.equal(normalized.average_price, 63000);
+  assert.equal(normalized.paid_fee, 0.252);
+  assert.equal(normalized.realized_pnl_quote, 12.5);
+  assert.equal(normalized.reduce_only, true);
+  assert.equal(normalized.remaining_volume, 0);
+});
+
+test("futures portfolio exposes longs as deliverable balances and shorts as nothing", () => {
+  const portfolio = module.buildFuturesPortfolio({
+    availableBalance: "800.0",
+    totalMarginBalance: "1010.0",
+    totalUnrealizedProfit: "10.0",
+    totalInitialMargin: "200.0",
+    maxWithdrawAmount: "800.0",
+    assets: [{ asset: "USDT", walletBalance: "1000.0", availableBalance: "800.0" }],
+    positions: [
+      { symbol: "BTCUSDT", positionAmt: "0.010", entryPrice: "60000", leverage: "3", unrealizedProfit: "10.0", initialMargin: "200.0", liquidationPrice: "41000" },
+      { symbol: "ETHUSDT", positionAmt: "-1.5", entryPrice: "3000", leverage: "3", unrealizedProfit: "0", initialMargin: "0" },
+      { symbol: "SOLUSDT", positionAmt: "0", entryPrice: "0", leverage: "3" },
+    ],
+  }, { BTCUSDT: 61000 });
+
+  assert.equal(portfolio.exchange, "binance_futures");
+  assert.equal(portfolio.available_quote, 800);
+  assert.equal(portfolio.locked_quote, 200);
+  assert.equal(portfolio.settled_quote, 1000);
+  // Margin balance, not the 610 USDT of notional the 3x long controls.
+  assert.equal(portfolio.total_equity_quote, 1010);
+  assert.deepEqual(
+    portfolio.accounts.map((row) => [row.currency, row.balance]),
+    [["USDT", 800], ["BTC", 0.01]],
+  );
+  assert.equal(portfolio.positions.length, 2);
+  assert.equal(portfolio.positions.find((row) => row.market === "ETHUSDT").side, "SHORT");
+});

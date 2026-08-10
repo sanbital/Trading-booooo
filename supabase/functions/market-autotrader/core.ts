@@ -1,5 +1,10 @@
 export type TradingMode = "PAUSED" | "PAPER" | "LIVE_LIMITED";
-export type Exchange = "upbit" | "binance";
+/** `binance_futures` is the Binance USDⓈ-M perpetual venue; it quotes in USDT like spot. */
+export type Exchange = "upbit" | "binance" | "binance_futures";
+
+export function isBinanceFutures(exchange: unknown): boolean {
+  return exchange === "binance_futures";
+}
 export const BINANCE_MIN_ORDER_USDT = 40;
 
 export type TradingSettings = {

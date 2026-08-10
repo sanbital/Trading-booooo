@@ -1,15 +1,22 @@
 // Trading-booooo v6.5.2-GUARD — canonical spot-market routing and failure isolation.
 //
 // A gateway route is a pair, not two independent strings:
-//   upbit   <-> KRW-BASE
-//   binance <-> BASEUSDT
+//   upbit           <-> KRW-BASE
+//   binance         <-> BASEUSDT   (spot)
+//   binance_futures <-> BASEUSDT   (USDⓈ-M perpetual)
+//
+// The two Binance venues share a symbol grammar and nothing else: they are separate
+// hosts, separate wallets and separate positions, so the routing pair still has to be
+// carried around as a pair.
 //
 // The gateway has always enforced that invariant. The scanner and autotrader did not,
 // which let one malformed database row reach the gateway and reject an entire monitor
 // Promise.all. Keep this module free of I/O so every producer and consumer can apply the
 // same check before a network request or database insert.
 
-export type SpotExchange = "upbit" | "binance";
+export type SpotExchange = "upbit" | "binance" | "binance_futures";
+
+const SPOT_EXCHANGES: readonly string[] = ["upbit", "binance", "binance_futures"];
 
 export type SpotMarketValidation =
   | { ok: true; exchange: SpotExchange; market: string }
@@ -24,12 +31,12 @@ export function validateSpotMarket(exchange: unknown, market: unknown): SpotMark
   const venue = typeof exchange === "string" ? exchange : String(exchange ?? "");
   const symbol = typeof market === "string" ? market : String(market ?? "");
 
-  if (venue !== "upbit" && venue !== "binance") {
+  if (!SPOT_EXCHANGES.includes(venue)) {
     return {
       ok: false,
       exchange: venue,
       market: symbol,
-      reason: `unsupported spot exchange "${venue || "(empty)"}"`,
+      reason: `unsupported exchange "${venue || "(empty)"}"`,
     };
   }
   if (symbol !== symbol.trim() || symbol !== symbol.toUpperCase()) {
@@ -42,6 +49,7 @@ export function validateSpotMarket(exchange: unknown, market: unknown): SpotMark
   }
 
   const valid = venue === "upbit" ? UPBIT_MARKET.test(symbol) : BINANCE_MARKET.test(symbol);
+  const canonicalVenue = venue as SpotExchange;
   if (!valid) {
     return {
       ok: false,
@@ -49,10 +57,10 @@ export function validateSpotMarket(exchange: unknown, market: unknown): SpotMark
       market: symbol,
       reason: venue === "upbit"
         ? `upbit market "${symbol || "(empty)"}" must match KRW-BASE`
-        : `binance market "${symbol || "(empty)"}" must match BASEUSDT`,
+        : `${venue} market "${symbol || "(empty)"}" must match BASEUSDT`,
     };
   }
-  return { ok: true, exchange: venue, market: symbol };
+  return { ok: true, exchange: canonicalVenue, market: symbol };
 }
 
 export type SettledSpotMarketRead<T, Q> =
