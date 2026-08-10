@@ -4,7 +4,7 @@
 -- in-process exit accountant then has cumulative proceeds but only the remaining-half cost
 -- basis, temporarily fabricating a huge profit. Rebuild a CLOSED bot position immediately
 -- from durable trading_orders/trading_fills; the later exchange_trade_fills repair remains
--- authoritative and can overwrite this marked-fee ledger with exact exchange accounting.
+-- authoritative and can overwrite this estimated-fee ledger with exact exchange accounting.
 
 create or replace function public.recompute_closed_position_from_trading_fills_v764(p_position_id uuid)
 returns boolean
@@ -71,10 +71,7 @@ begin
       paid_fees_quote = v_entry_fee + v_sell_fee,
       realized_pnl_quote = v_pnl,
       realized_return_pct = v_return,
-      fee_accounting_quality = case
-        when v_entry_fee + v_sell_fee > 0 then 'MARKED'
-        else coalesce(fee_accounting_quality, 'UNKNOWN')
-      end,
+      fee_accounting_quality = 'ESTIMATED',
       accounting_version = '7.6.4',
       metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
         'closed_split_ledger_repair', jsonb_build_object(
