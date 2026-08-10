@@ -150,7 +150,7 @@ Deno.test("margin accounting keeps each open position's stamped leverage", () =>
 });
 
 Deno.test("futures recovery state records residual rather than whole-position recovery", () => {
-  assert(ENGINE.includes('exit_rule: futuresFirstStop ? "RESIDUAL_NET_PNL_GT_0"'));
+  assert(ENGINE.includes('exit_rule: "RESIDUAL_NET_PNL_GT_0"'));
   assert(ENGINE.includes('decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT" ||'));
   assert(ENGINE.includes("(entryPrice * (1 + policyFeeRate)) - 1) * 100"));
 });
@@ -173,10 +173,9 @@ Deno.test("every futures exit reason is authorized end to end", () => {
 Deno.test("the spot lane's own thresholds are untouched", () => {
   // The whole point of the futures work is that it is additive. If any of these moved,
   // the spot lane changed behaviour and this test is the tripwire.
-  assert(ENGINE.includes("halfHoldRecoveryExitDecision({"));
+  assert(ENGINE.includes("spotSplitExitDecision({"));
   assert(MIGRATION.includes("v_net_return_pct < 9.999 and v_net_return_pct > -3.999"));
   assert(MIGRATION.includes("v_gross_return_pct < 4.999 and v_gross_return_pct > -3.999"));
-  assert(MIGRATION.includes("RECOVERY_TOTAL_NET_NOT_POSITIVE"));
 });
 
 Deno.test("the gateway can close a futures long and can never open a short", () => {
