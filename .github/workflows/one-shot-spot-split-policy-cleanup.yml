@@ -1,0 +1,199 @@
+name: One-shot spot split policy cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-shot-spot-split-policy-cleanup.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Apply canonical spot split policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('.')
+          index_path = root / 'supabase/functions/market-autotrader/index.ts'
+          old_policy_path = root / 'supabase/functions/market-autotrader/recovery-exit-policy.ts'
+          old_test_path = root / 'supabase/functions/market-autotrader/recovery-exit-policy.test.ts'
+          new_policy_path = root / 'supabase/functions/market-autotrader/spot-exit-policy.ts'
+          new_test_path = root / 'supabase/functions/market-autotrader/spot-exit-policy.test.ts'
+          deploy_path = root / '.github/workflows/deploy-market-autotrader-v707.yml'
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected 1 exact match, found {count}')
+              return text.replace(old, new, 1)
+
+          # 1) Replace the legacy recovery helper with one canonical spot split helper.
+          new_policy_path.write_text('''export const SPOT_SPLIT_EXIT_THRESHOLDS = {\n  firstTakeProfitPct: 5,\n  firstStopLossPct: -4,\n  residualTakeProfitPct: 10,\n  residualStopLossPct: -4,\n} as const;\n\nexport type SpotSplitExitInput = {\n  residualStage: boolean;\n  grossReturnPct: number;\n  residualNetReturnPct: number;\n  safetyRequested?: boolean;\n};\n\nexport type SpotSplitExitDecision = {\n  action: "STOP" | "NONE";\n  fraction: number;\n  reason: string;\n};\n\n/**\n * Canonical spot split-exit policy.\n *\n * First tranche: +5% or -4% -> sell 50%.\n * Residual tranche: +10% or -4% -> sell all remaining quantity.\n *\n * There is deliberately no spot recovery mode. A first -4% stop never changes\n * the residual thresholds. Futures recovery is implemented only in\n * futures-exit-policy.ts and must not leak into this helper.\n */\nexport function spotSplitExitDecision(\n  input: SpotSplitExitInput,\n): SpotSplitExitDecision {\n  const thresholds = SPOT_SPLIT_EXIT_THRESHOLDS;\n\n  if (input.residualStage) {\n    if (input.residualNetReturnPct >= thresholds.residualTakeProfitPct) {\n      return { action: "STOP", fraction: 1, reason: "RESIDUAL_TAKE_PROFIT_10" };\n    }\n    if (input.residualNetReturnPct <= thresholds.residualStopLossPct) {\n      return { action: "STOP", fraction: 1, reason: "RESIDUAL_STOP_LOSS_4" };\n    }\n    return { action: "NONE", fraction: 0, reason: "RESIDUAL_AWAITING_TP10_OR_SL4" };\n  }\n\n  if (input.grossReturnPct >= thresholds.firstTakeProfitPct) {\n    return { action: "STOP", fraction: 0.5, reason: "HALF_HOLD_TAKE_PROFIT_5" };\n  }\n  if (input.grossReturnPct <= thresholds.firstStopLossPct) {\n    return { action: "STOP", fraction: 0.5, reason: "HALF_HOLD_STOP_LOSS_4" };\n  }\n  return {\n    action: "NONE",\n    fraction: 0,\n    reason: input.safetyRequested\n      ? "HALF_HOLD_THRESHOLD_OVERRIDES_NON_PRICE_SAFETY_EXIT"\n      : "HALF_HOLD_AWAITING_TP5_OR_SL4",\n  };\n}\n''')
+          new_test_path.write_text('''import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";\nimport { spotSplitExitDecision } from "./spot-exit-policy.ts";\n\nfunction decide(overrides: Partial<Parameters<typeof spotSplitExitDecision>[0]> = {}) {\n  return spotSplitExitDecision({\n    residualStage: false,\n    grossReturnPct: 0,\n    residualNetReturnPct: 0,\n    safetyRequested: false,\n    ...overrides,\n  });\n}\n\nDeno.test("spot first tranche sells 50% at +5%", () => {\n  assertEquals(decide({ grossReturnPct: 5 }), {\n    action: "STOP", fraction: 0.5, reason: "HALF_HOLD_TAKE_PROFIT_5",\n  });\n});\n\nDeno.test("spot first tranche sells 50% at -4%", () => {\n  assertEquals(decide({ grossReturnPct: -4 }), {\n    action: "STOP", fraction: 0.5, reason: "HALF_HOLD_STOP_LOSS_4",\n  });\n});\n\nDeno.test("spot residual exits all at +10%", () => {\n  assertEquals(decide({ residualStage: true, residualNetReturnPct: 10 }), {\n    action: "STOP", fraction: 1, reason: "RESIDUAL_TAKE_PROFIT_10",\n  });\n});\n\nDeno.test("spot residual exits all at -4%", () => {\n  assertEquals(decide({ residualStage: true, residualNetReturnPct: -4 }), {\n    action: "STOP", fraction: 1, reason: "RESIDUAL_STOP_LOSS_4",\n  });\n});\n\nDeno.test("spot residual holds only inside -4% to +10% band", () => {\n  assertEquals(decide({ residualStage: true, residualNetReturnPct: 9.99 }).action, "NONE");\n  assertEquals(decide({ residualStage: true, residualNetReturnPct: -3.99 }).action, "NONE");\n});\n\nDeno.test("spot first tranche non-price safety does not rewrite price thresholds", () => {\n  assertEquals(decide({ grossReturnPct: -1, safetyRequested: true }), {\n    action: "NONE", fraction: 0, reason: "HALF_HOLD_THRESHOLD_OVERRIDES_NON_PRICE_SAFETY_EXIT",\n  });\n});\n''')
+          if old_policy_path.exists(): old_policy_path.unlink()
+          if old_test_path.exists(): old_test_path.unlink()
+
+          # 2) Patch the large orchestrator using exact/guarded replacements only.
+          text = index_path.read_text()
+          text = replace_once(
+              text,
+              'import { halfHoldRecoveryExitDecision } from "./recovery-exit-policy.ts";',
+              'import { spotSplitExitDecision } from "./spot-exit-policy.ts";',
+              'spot policy import',
+          )
+          text = replace_once(
+              text,
+              '  const recoveryNetPositive = decisionReason === "RECOVERY_NET_POSITIVE_EXIT" ||\n    decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT";',
+              '  const recoveryNetPositive = decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT";',
+              'spot recovery protected exit',
+          )
+
+          recovery_block = re.compile(
+              r'  if \(\n    \(decisionReason === "HALF_HOLD_STOP_LOSS_4" \|\|\n      decisionReason === "FUTURES_HALF_STOP_LOSS_ROE_12"\) &&\n    !finalized\?\.closed &&\n    finite\(finalized\?\.position\?\.remaining_quantity\) > 0\n  \) \{.*?\n  \}\n  if \(\n    \(targetAction \|\| positiveNetGuardedExit\)',
+              re.S,
+          )
+          match = recovery_block.search(text)
+          if not match:
+              raise SystemExit('futures-only recovery block: expected match not found')
+          futures_recovery = '''  if (\n    decisionReason === "FUTURES_HALF_STOP_LOSS_ROE_12" &&\n    !finalized?.closed &&\n    finite(finalized?.position?.remaining_quantity) > 0\n  ) {\n    const enteredAt = new Date().toISOString();\n    const priorMetadata = finalized.position?.metadata || position.metadata || {};\n    const recoveryMetadata = {\n      ...priorMetadata,\n      recovery_exit: {\n        ...(priorMetadata.recovery_exit || {}),\n        enabled: true,\n        revision: VERSION,\n        entered_at: enteredAt,\n        trigger_reason: "FUTURES_HALF_STOP_LOSS_ROE_12",\n        first_exit_price: finite(result?.fill?.averagePrice, price),\n        first_exit_quantity: finite(result?.fill?.executedVolume),\n        realized_pnl_quote_after_first_exit: finite(finalized.position?.realized_pnl_quote),\n        exit_rule: "RESIDUAL_NET_PNL_GT_0",\n        leverage: positionLeverage(position),\n        percentage_residual_thresholds_disabled: true,\n      },\n    };\n    const recoveryPosition = (await patch("trading_positions", `id=eq.${position.id}`, {\n      metadata: recoveryMetadata,\n    }))[0] || { ...finalized.position, metadata: recoveryMetadata };\n    await event(\n      "RECOVERY_MODE_ENTERED",\n      `${position.exchange}:${position.market} first -12% ROE tranche filled; residual waits for positive residual net`,\n      {\n        first_exit_price: recoveryMetadata.recovery_exit.first_exit_price,\n        first_exit_quantity: recoveryMetadata.recovery_exit.first_exit_quantity,\n        realized_pnl_quote_after_first_exit:\n          recoveryMetadata.recovery_exit.realized_pnl_quote_after_first_exit,\n        exit_rule: recoveryMetadata.recovery_exit.exit_rule,\n      },\n      { cycleId, positionId: position.id, orderId: result.orderRow?.id, level: "INFO" },\n    );\n    finalized = { ...finalized, position: recoveryPosition };\n    position = { ...position, ...recoveryPosition };\n  }\n  if (\n    (targetAction || positiveNetGuardedExit)'''
+          text = text[:match.start()] + futures_recovery + text[match.end():]
+
+          text = replace_once(
+              text,
+              '      decisionReason === "RECOVERY_NET_POSITIVE_EXIT" ||\n      decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT" ||',
+              '      decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT" ||',
+              'terminal spot recovery reason',
+          )
+          text = replace_once(
+              text,
+              '      // Spot LOB keeps HALF-HOLD-RECOVERY-NET-POSITIVE-V4. Futures always enters this\n      // boundary too, but its dedicated branch replaces every spot decision with the\n      // position-stamped leverage rules (+15/-12 then +30 or residual-net recovery).\n      if ((lobMode || futuresLane) && !settings.emergency_liquidation) {\n        const BURST_POLICY_VERSION = "HALF-HOLD-RECOVERY-NET-POSITIVE-V4";',
+              '      // Spot LOB has one canonical split policy: first 50% at +5%/-4%, then residual at +10%/-4%.\n      // Futures remains isolated and uses the position-stamped ROE thresholds plus futures-only recovery.\n      if ((lobMode || futuresLane) && !settings.emergency_liquidation) {\n        const activeSplitPolicyVersion = futuresLane\n          ? "FUTURES-SPLIT-ROE15-SL12-ROE30-RECOVERY-V1"\n          : "SPOT-SPLIT-TP5-SL4-TP10-SL4-V1";',
+              'canonical split policy header',
+          )
+          text = replace_once(
+              text,
+              '        let recoveryMode = position.metadata?.recovery_exit?.enabled === true;',
+              '        let recoveryMode = futuresLane && position.metadata?.recovery_exit?.enabled === true;',
+              'futures-only recovery latch',
+          )
+          text = replace_once(
+              text,
+              '''        } else {\n          decision = halfHoldRecoveryExitDecision({\n            residualStage: !hasTradableHalf,\n            recoveryMode,\n            grossReturnPct,\n            residualNetReturnPct,\n            executableNetAllowed: executableQuote.allowed,\n            expectedNetProfitQuote: finite(executableQuote.expectedNetProfitQuote),\n            safetyRequested,\n          }) as any;\n        }''',
+              '''        } else {\n          decision = spotSplitExitDecision({\n            residualStage: !hasTradableHalf,\n            grossReturnPct,\n            residualNetReturnPct,\n            safetyRequested,\n          }) as any;\n        }''',
+              'spot decision call',
+          )
+          text = replace_once(
+              text,
+              '              burst_policy_version: BURST_POLICY_VERSION,',
+              '              burst_policy_version: activeSplitPolicyVersion,',
+              'policy version audit',
+          )
+          text = replace_once(
+              text,
+              '              recovery_mode: recoveryMode,',
+              '              ...(futuresLane ? { recovery_mode: recoveryMode } : {}),',
+              'spot recovery audit field',
+          )
+          text = replace_once(
+              text,
+              '          decision.reason === "RESIDUAL_STOP_LOSS_4" ||\n          decision.reason === "RECOVERY_NET_POSITIVE_EXIT" ||\n          decision.reason === "BB_UPPER_REENTRY_CONFIRMED" ||',
+              '          decision.reason === "RESIDUAL_STOP_LOSS_4" ||\n          decision.reason === "BB_UPPER_REENTRY_CONFIRMED" ||',
+              'resting TP legacy recovery confirmation',
+          )
+
+          display_pattern = re.compile(r'function displayPosition\(row: any\): any \{.*?\n\}\n\nasync function status', re.S)
+          display_match = display_pattern.search(text)
+          if not display_match:
+              raise SystemExit('displayPosition: expected function not found')
+          new_display = '''function displayPosition(row: any): any {\n  const lob = isLobStrategy(row?.metadata?.lob_signal?.strategy);\n  if (!lob) return row;\n  const revision = String(\n    row?.metadata?.active_exit_revision ||\n      row?.metadata?.exit_policy_revision ||\n      (row?.exchange === "binance_futures"\n        ? "7.6.0-BINANCE-FUTURES"\n        : "7.6.2-SPOT-SPLIT-SL4"),\n  );\n  const markedPnl = finite(\n    row?.marked_pnl_quote,\n    finite(row?.metadata?.live_mark?.fee_net_pnl_quote),\n  );\n\n  if (row?.exchange === "binance_futures") {\n    return {\n      ...row,\n      exit_policy: "FUTURES_SPLIT_EXIT",\n      strategy_revision: revision,\n      marked_pnl_quote: markedPnl,\n      active_exit_policy: {\n        revision,\n        price_basis: "QUANTITY_AWARE_EXECUTABLE_BID",\n        return_basis: "RETURN_ON_MARGIN",\n        leverage: positionLeverage(row),\n        first_take_profit_roe_pct: 15,\n        first_stop_loss_roe_pct: -12,\n        first_tranche_sell_fraction: 0.5,\n        residual_take_profit_roe_pct: 30,\n        residual_loss_mode: "RESIDUAL_NET_POSITIVE",\n        stop_price: row?.stop_price,\n        target_1: row?.target_1,\n        target_2: row?.target_2,\n        marked_pnl_quote: markedPnl,\n        measured_at: row?.metadata?.live_mark?.measured_at || null,\n      },\n    };\n  }\n\n  return {\n    ...row,\n    exit_policy: "SPOT_SPLIT_EXIT",\n    strategy_revision: revision,\n    stop_bps: 400,\n    marked_pnl_quote: markedPnl,\n    active_exit_policy: {\n      revision,\n      price_basis: "QUANTITY_AWARE_EXECUTABLE_BID",\n      return_basis: "RETURN_ON_PRICE",\n      first_take_profit_pct: 5,\n      first_stop_loss_pct: -4,\n      first_tranche_sell_fraction: 0.5,\n      residual_take_profit_pct: 10,\n      residual_stop_loss_pct: -4,\n      residual_sell_fraction: 1,\n      stop_price: row?.stop_price,\n      target_1: row?.target_1,\n      target_2: row?.target_2,\n      marked_pnl_quote: markedPnl,\n      measured_at: row?.metadata?.live_mark?.measured_at || null,\n    },\n    historical_entry_signal: {\n      engine_version: row?.metadata?.engine_version || null,\n      strategy_revision: row?.metadata?.lob_signal?.strategy_revision || null,\n      stop_bps: row?.metadata?.lob_signal?.stop_bps ?? null,\n    },\n  };\n}\n\nasync function status'''
+          text = text[:display_match.start()] + new_display + text[display_match.end():]
+
+          # Guard against accidental retention of the removed spot recovery contract/display.
+          forbidden = [
+              'halfHoldRecoveryExitDecision',
+              './recovery-exit-policy.ts',
+              '"RECOVERY_NET_POSITIVE_EXIT"',
+              'hard_stop_return_pct: -2',
+              'hard_stop_after_seconds: 180',
+              'stop_bps: 300',
+          ]
+          for token in forbidden:
+              if token in text:
+                  raise SystemExit(f'index still contains forbidden legacy token: {token}')
+          index_path.write_text(text)
+
+          # 3) Update deployment validation so it asserts the current contract, not recovery-era strings.
+          deploy = deploy_path.read_text()
+          deploy = replace_once(
+              deploy,
+              '            supabase/functions/market-autotrader/manual-position-import.ts \\\n            supabase/functions/market-autotrader/manual-position-import.test.ts',
+              '            supabase/functions/market-autotrader/manual-position-import.ts \\\n            supabase/functions/market-autotrader/manual-position-import.test.ts \\\n            supabase/functions/market-autotrader/spot-exit-policy.ts \\\n            supabase/functions/market-autotrader/spot-exit-policy.test.ts',
+              'deploy fmt files',
+          )
+          deploy = replace_once(
+              deploy,
+              '          deno test supabase/functions/market-autotrader/manual-position-import.test.ts\n          deno check supabase/functions/market-scanner/index.ts',
+              '          deno test supabase/functions/market-autotrader/manual-position-import.test.ts\n          deno test supabase/functions/market-autotrader/spot-exit-policy.test.ts\n          deno test supabase/functions/market-autotrader/futures-exit-policy.test.ts\n          deno check supabase/functions/market-scanner/index.ts',
+              'deploy tests',
+          )
+          deploy = replace_once(
+              deploy,
+              '          # parity in both autotrader and gateway. Policy assertions below intentionally\n          # track the currently deployed v7.5.3 recovery contract rather than a stale\n          # historical residual-policy string.',
+              '          # parity in both autotrader and gateway. Policy assertions below require\n          # the canonical spot split contract and keep futures recovery isolated.',
+              'deploy policy comment',
+          )
+          deploy = replace_once(
+              deploy,
+              "          grep -q 'HALF-HOLD-RECOVERY-NET-POSITIVE-V4' supabase/functions/market-autotrader/index.ts\n          grep -q 'RECOVERY_NET_POSITIVE_EXIT' supabase/functions/market-autotrader/index.ts",
+              "          grep -q 'SPOT-SPLIT-TP5-SL4-TP10-SL4-V1' supabase/functions/market-autotrader/index.ts\n          grep -q 'spotSplitExitDecision' supabase/functions/market-autotrader/index.ts\n          test ! -e supabase/functions/market-autotrader/recovery-exit-policy.ts\n          ! grep -q '\"RECOVERY_NET_POSITIVE_EXIT\"' supabase/functions/market-autotrader/index.ts\n          ! grep -q 'hard_stop_return_pct: -2' supabase/functions/market-autotrader/index.ts\n          ! grep -q 'stop_bps: 300' supabase/functions/market-autotrader/index.ts",
+              'deploy legacy assertions',
+          )
+          deploy_path.write_text(deploy)
+          PY
+
+          deno fmt \
+            supabase/functions/market-autotrader/spot-exit-policy.ts \
+            supabase/functions/market-autotrader/spot-exit-policy.test.ts
+          deno test supabase/functions/market-autotrader/spot-exit-policy.test.ts
+          deno test supabase/functions/market-autotrader/futures-exit-policy.test.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          grep -R --line-number --fixed-strings 'recovery-exit-policy.ts' supabase .github && exit 1 || true
+          grep -R --line-number --fixed-strings '"RECOVERY_NET_POSITIVE_EXIT"' supabase/functions/market-autotrader/index.ts && exit 1 || true
+          grep -q 'SPOT-SPLIT-TP5-SL4-TP10-SL4-V1' supabase/functions/market-autotrader/index.ts
+          grep -q 'first_stop_loss_pct: -4' supabase/functions/market-autotrader/index.ts
+          ! grep -q 'hard_stop_return_pct: -2' supabase/functions/market-autotrader/index.ts
+          ! grep -q 'stop_bps: 300' supabase/functions/market-autotrader/index.ts
+
+      - name: Commit cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/one-shot-spot-split-policy-cleanup.yml
+          git add \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-autotrader/spot-exit-policy.ts \
+            supabase/functions/market-autotrader/spot-exit-policy.test.ts \
+            supabase/functions/market-autotrader/recovery-exit-policy.ts \
+            supabase/functions/market-autotrader/recovery-exit-policy.test.ts \
+            .github/workflows/deploy-market-autotrader-v707.yml || true
+          git status --short
+          git commit -m "fix: canonicalize spot split exits"
+          git push origin HEAD:main
