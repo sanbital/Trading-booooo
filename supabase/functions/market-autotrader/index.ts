@@ -7618,11 +7618,12 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision = { action: "STOP", reason: "scalp_max_single_loss" } as any;
         }
       }
-      // Spot: +5/-4 first 50%, then +10/-4 residual. Futures keeps its isolated ROE/recovery policy.
+      // Spot: -4% hard stop, +5% half TP, then +3% floor / 1.5pp trailing.
+      // Futures 3x: -12% ROE hard stop, +15% ROE half TP, then +9% floor / 4.5pp trailing.
       if ((lobMode || futuresLane) && !settings.emergency_liquidation) {
         const activeSplitPolicyVersion = futuresLane
-          ? "FUTURES-SPLIT-ROE15-SL12-ROE30-RECOVERY-V1"
-          : "SPOT-SPLIT-TP5-SL4-TP10-SL4-V1";
+          ? "FUTURES-PROTECTED-TRAIL-ROE15-SL12-FLOOR9-TRAIL4P5-V1"
+          : "SPOT-PROTECTED-TRAIL-TP5-SL4-FLOOR3-TRAIL1P5-V1";
         const requestedAction = decision.action;
         const requestedReason = String((decision as any).reason || "");
         const safetyRequested = requestedAction === "STOP" &&
@@ -7720,6 +7721,13 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           ? (executableExitPrice * (1 - policyFeeRate) /
               (entryPrice * (1 + policyFeeRate)) - 1) * 100
           : 0;
+        const peakExecutablePrice = Math.max(
+          executableExitPrice,
+          finite(position.peak_price, entryPrice),
+        );
+        const peakGrossReturnPct = entryPrice > 0
+          ? (peakExecutablePrice / entryPrice - 1) * 100
+          : grossReturnPct;
         const protectedHoldQuantity = Math.max(0, finite(position.initial_quantity) * 0.5);
         const residualTolerance = Math.max(
           1e-12,
@@ -7751,18 +7759,15 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             sellFeeRate: policyFeeRate,
             slippageSafetyRate: post180SlippageSafetyRate(settings),
           });
-          const nextRecovery = futuresRecoveryLatched({
-            residualStage: !hasTradableHalf,
-            alreadyLatched: recoveryMode,
-            netReturnPct: residualNetReturnPct,
-          });
-          recoveryLatchedNow = nextRecovery && !recoveryMode;
-          recoveryMode = nextRecovery;
+          // Protected trailing replaces the legacy negative-to-positive recovery latch.
+          recoveryLatchedNow = false;
+          recoveryMode = false;
           const futuresDecision = futuresSplitExitDecision({
             residualStage: !hasTradableHalf,
             recoveryMode,
             leverage: positionLeverageValue,
             grossReturnPct,
+            peakGrossReturnPct,
             netReturnPct: residualNetReturnPct,
             executableNetAllowed: residualQuote.allowed,
             expectedNetProfitQuote: finite(residualQuote.expectedNetProfitQuote),
@@ -7791,6 +7796,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision = spotSplitExitDecision({
             residualStage: !hasTradableHalf,
             grossReturnPct,
+            peakGrossReturnPct,
             residualNetReturnPct,
             safetyRequested,
           }) as any;
@@ -8434,8 +8440,8 @@ function displayPosition(row: any): any {
   if (!lob) return row;
   const revision = String(row?.metadata?.active_exit_revision || row?.metadata?.exit_policy_revision || (row?.exchange === "binance_futures" ? "7.6.0-BINANCE-FUTURES" : "7.6.2-SPOT-SPLIT-SL4"));
   const markedPnl = finite(row?.marked_pnl_quote, finite(row?.metadata?.live_mark?.fee_net_pnl_quote));
-  if (row?.exchange === "binance_futures") return { ...row, exit_policy: "FUTURES_SPLIT_EXIT", strategy_revision: revision, marked_pnl_quote: markedPnl, active_exit_policy: { revision, price_basis: "QUANTITY_AWARE_EXECUTABLE_BID", return_basis: "RETURN_ON_MARGIN", leverage: positionLeverage(row), first_take_profit_roe_pct: 15, first_stop_loss_roe_pct: -12, first_tranche_sell_fraction: 0.5, residual_take_profit_roe_pct: 30, residual_loss_mode: "RESIDUAL_NET_POSITIVE", stop_price: row?.stop_price, target_1: row?.target_1, target_2: row?.target_2, marked_pnl_quote: markedPnl, measured_at: row?.metadata?.live_mark?.measured_at || null }};
-  return { ...row, exit_policy: "SPOT_SPLIT_EXIT", strategy_revision: revision, stop_bps: 400, marked_pnl_quote: markedPnl, active_exit_policy: { revision, price_basis: "QUANTITY_AWARE_EXECUTABLE_BID", return_basis: "RETURN_ON_PRICE", first_take_profit_pct: 5, first_stop_loss_pct: -4, first_tranche_sell_fraction: 0.5, residual_take_profit_pct: 10, residual_stop_loss_pct: -4, residual_sell_fraction: 1, stop_price: row?.stop_price, target_1: row?.target_1, target_2: row?.target_2, marked_pnl_quote: markedPnl, measured_at: row?.metadata?.live_mark?.measured_at || null }, historical_entry_signal: { engine_version: row?.metadata?.engine_version || null, strategy_revision: row?.metadata?.lob_signal?.strategy_revision || null, stop_bps: row?.metadata?.lob_signal?.stop_bps ?? null }};
+  if (row?.exchange === "binance_futures") return { ...row, exit_policy: "FUTURES_SPLIT_EXIT", strategy_revision: revision, marked_pnl_quote: markedPnl, active_exit_policy: { revision, price_basis: "QUANTITY_AWARE_EXECUTABLE_BID", return_basis: "RETURN_ON_MARGIN", leverage: positionLeverage(row), first_take_profit_roe_pct: 15, first_stop_loss_roe_pct: -12, hard_stop_sell_fraction: 1, first_tranche_sell_fraction: 0.5, residual_profit_floor_roe_pct: 9, residual_trailing_drawdown_roe_pct: 4.5, residual_sell_fraction: 1, stop_price: row?.stop_price, target_1: row?.target_1, target_2: null, marked_pnl_quote: markedPnl, measured_at: row?.metadata?.live_mark?.measured_at || null }};
+  return { ...row, exit_policy: "SPOT_SPLIT_EXIT", strategy_revision: revision, stop_bps: 400, marked_pnl_quote: markedPnl, active_exit_policy: { revision, price_basis: "QUANTITY_AWARE_EXECUTABLE_BID", return_basis: "RETURN_ON_PRICE", first_take_profit_pct: 5, first_stop_loss_pct: -4, hard_stop_sell_fraction: 1, first_tranche_sell_fraction: 0.5, residual_profit_floor_pct: 3, residual_trailing_drawdown_pct: 1.5, residual_sell_fraction: 1, stop_price: row?.stop_price, target_1: row?.target_1, target_2: null, marked_pnl_quote: markedPnl, measured_at: row?.metadata?.live_mark?.measured_at || null }, historical_entry_signal: { engine_version: row?.metadata?.engine_version || null, strategy_revision: row?.metadata?.lob_signal?.strategy_revision || null, stop_bps: row?.metadata?.lob_signal?.stop_bps ?? null }};
 }
 
 async function status(settings: TradingSettings & JsonRecord) {

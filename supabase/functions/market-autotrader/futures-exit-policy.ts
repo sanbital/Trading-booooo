@@ -28,14 +28,18 @@ export const MAX_FUTURES_LEVERAGE = 20;
 export const FUTURES_MIN_ENTRY_MARGIN_USDT = 50;
 
 export const FUTURES_SPLIT_EXIT_THRESHOLDS = {
-  /** Half take-profit, measured on margin. */
+  /** Half take-profit, measured on margin (ROE). */
   firstTakeProfitRoePct: 15,
-  /** Half stop-loss, measured on margin. */
+  /** Hard stop, measured on margin (ROE). */
   firstStopLossRoePct: -12,
-  /** Residual take-profit for a residual that never went negative. */
-  residualTakeProfitRoePct: 30,
-  /** Fraction of the position closed by the first leg. */
-  firstExitFraction: 0.5,
+  /** Residual minimum protected ROE after the first +15% take-profit. */
+  residualProfitFloorRoePct: 9,
+  /** Residual trailing drawdown from peak ROE. */
+  residualTrailingDrawdownRoePct: 4.5,
+  /** Fraction closed at the first take-profit. */
+  firstTakeProfitFraction: 0.5,
+  /** Fraction closed at the hard stop. */
+  hardStopFraction: 1,
 } as const;
 
 export type FuturesSplitExitReason =
@@ -43,10 +47,8 @@ export type FuturesSplitExitReason =
   | "FUTURES_HALF_STOP_LOSS_ROE_12"
   | "FUTURES_HALF_AWAITING_ROE_15_OR_ROE_MINUS_12"
   | "FUTURES_HALF_THRESHOLD_OVERRIDES_NON_PRICE_SAFETY_EXIT"
-  | "FUTURES_RESIDUAL_TAKE_PROFIT_ROE_30"
-  | "FUTURES_RESIDUAL_AWAITING_TP_ROE_30"
-  | "FUTURES_RECOVERY_NET_POSITIVE_EXIT"
-  | "FUTURES_RECOVERY_AWAITING_NET_POSITIVE";
+  | "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"
+  | "FUTURES_RESIDUAL_PROTECTED_TRAIL_ACTIVE";
 
 export type FuturesSplitExitInput = {
   /** True once the tradable first half has been sold and only the residual is left. */
@@ -61,6 +63,8 @@ export type FuturesSplitExitInput = {
   leverage: number;
   /** Price return from average entry to the executable exit price, before fees, in %. */
   grossReturnPct: number;
+  /** Highest observed gross price return since entry, in %. */
+  peakGrossReturnPct: number;
   /** The residual's return after both entry and exit fees, in %. */
   netReturnPct: number;
   /**
@@ -83,6 +87,10 @@ export type FuturesSplitExitDecision = {
   roePct: number;
   /** Leverage-applied return after the sell fee. */
   netRoePct: number;
+  /** Highest observed leverage-applied gross return. */
+  peakRoePct: number;
+  /** Active residual protection threshold when in residual stage. */
+  residualProtectRoePct: number | null;
   leverage: number;
 };
 
@@ -160,48 +168,38 @@ export function futuresSplitExitDecision(
   const leverage = normalizeFuturesLeverage(input.leverage);
   const roePct = futuresRoePct(input.grossReturnPct, leverage);
   const netRoePct = futuresRoePct(input.netReturnPct, leverage);
-  const base = { roePct, netRoePct, leverage };
+  const peakGrossReturnPct = Math.max(input.grossReturnPct, finite(input.peakGrossReturnPct));
+  const peakRoePct = futuresRoePct(peakGrossReturnPct, leverage);
+  const residualProtectRoePct = input.residualStage
+    ? Math.max(
+      thresholds.residualProfitFloorRoePct,
+      peakRoePct - thresholds.residualTrailingDrawdownRoePct,
+    )
+    : null;
+  const base = { roePct, netRoePct, peakRoePct, residualProtectRoePct, leverage };
 
   if (input.residualStage) {
-    if (input.recoveryMode) {
-      // "양의 수익으로 전환과 동시에 일괄 매도" — the flip to positive is only acted on
-      // when the whole remainder is genuinely sellable at positive net right now. An
-      // unexecutable positive mark is not a profit.
-      if (input.executableNetAllowed && finite(input.expectedNetProfitQuote) > 0) {
-        return {
-          ...base,
-          action: "STOP",
-          fraction: 1,
-          reason: "FUTURES_RECOVERY_NET_POSITIVE_EXIT",
-        };
-      }
-      return {
-        ...base,
-        action: "NONE",
-        fraction: 0,
-        reason: "FUTURES_RECOVERY_AWAITING_NET_POSITIVE",
-      };
-    }
-
-    // The operator's +30% gate is ROE, exactly like the first +15%/-12% gates. Keep it
-    // on gross price return so 3x remains exactly +10% on price; fees only determine
-    // whether an underwater residual has genuinely recovered to positive net PnL.
-    if (roePct >= thresholds.residualTakeProfitRoePct) {
+    if (roePct <= finite(residualProtectRoePct, thresholds.residualProfitFloorRoePct)) {
       return {
         ...base,
         action: "STOP",
         fraction: 1,
-        reason: "FUTURES_RESIDUAL_TAKE_PROFIT_ROE_30",
+        reason: "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT",
       };
     }
-    return { ...base, action: "NONE", fraction: 0, reason: "FUTURES_RESIDUAL_AWAITING_TP_ROE_30" };
+    return {
+      ...base,
+      action: "NONE",
+      fraction: 0,
+      reason: "FUTURES_RESIDUAL_PROTECTED_TRAIL_ACTIVE",
+    };
   }
 
   if (roePct >= thresholds.firstTakeProfitRoePct) {
     return {
       ...base,
       action: "STOP",
-      fraction: thresholds.firstExitFraction,
+      fraction: thresholds.firstTakeProfitFraction,
       reason: "FUTURES_HALF_TAKE_PROFIT_ROE_15",
     };
   }
@@ -209,7 +207,7 @@ export function futuresSplitExitDecision(
     return {
       ...base,
       action: "STOP",
-      fraction: thresholds.firstExitFraction,
+      fraction: thresholds.hardStopFraction,
       reason: "FUTURES_HALF_STOP_LOSS_ROE_12",
     };
   }
@@ -227,6 +225,5 @@ export function futuresSplitExitDecision(
 export const FUTURES_EXIT_APPROVED_REASONS: readonly FuturesSplitExitReason[] = [
   "FUTURES_HALF_TAKE_PROFIT_ROE_15",
   "FUTURES_HALF_STOP_LOSS_ROE_12",
-  "FUTURES_RESIDUAL_TAKE_PROFIT_ROE_30",
-  "FUTURES_RECOVERY_NET_POSITIVE_EXIT",
+  "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT",
 ];
