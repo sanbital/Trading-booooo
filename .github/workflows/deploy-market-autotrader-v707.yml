@@ -54,15 +54,21 @@ jobs:
             supabase/functions/market-scanner/index.ts \
             supabase/functions/market-scanner/engine.ts \
             supabase/functions/market-autotrader/manual-position-import.ts \
-            supabase/functions/market-autotrader/manual-position-import.test.ts
+            supabase/functions/market-autotrader/manual-position-import.test.ts \
+            supabase/functions/market-autotrader/spot-exit-policy.ts \
+            supabase/functions/market-autotrader/spot-exit-policy.test.ts \
+            supabase/functions/market-autotrader/split-stop-policy.test.ts
           deno test supabase/functions/_shared/lob/minute-entry-gate.test.ts
           deno test supabase/functions/market-autotrader/manual-position-import.test.ts
+          deno test \
+            supabase/functions/market-autotrader/spot-exit-policy.test.ts \
+            supabase/functions/market-autotrader/split-stop-policy.test.ts
+          deno test supabase/functions/market-autotrader/futures-exit-policy.test.ts
           deno check supabase/functions/market-scanner/index.ts
           deno check supabase/functions/market-autotrader/index.ts
           # Read the canonical engine identity from scanner source, then require exact
-          # parity in both autotrader and gateway. Policy assertions below intentionally
-          # track the currently deployed v7.5.3 recovery contract rather than a stale
-          # historical residual-policy string.
+          # parity in both autotrader and gateway. Spot split exits are canonical; the
+          # recovery path is futures-only and must not leak back into spot runtime/display.
           engine_version="$(sed -n 's/.*export const ENGINE_VERSION = "\([^"]*\)".*/\1/p' \
             supabase/functions/market-scanner/engine.ts)"
           test -n "$engine_version"
@@ -76,12 +82,20 @@ jobs:
           grep -q 'M1_UPPER_BAND_NOT_TOUCHED' supabase/functions/_shared/lob/minute-entry-gate.ts
           grep -q 'BUY_PRESSURE_NOT_CONFIRMED' supabase/functions/_shared/lob/entry.ts
           grep -q 'const DEFAULT_DYNAMIC_OBSERVATION_MS = 15_000' supabase/functions/market-scanner/index.ts
-          grep -q 'HALF-HOLD-RECOVERY-NET-POSITIVE-V4' supabase/functions/market-autotrader/index.ts
-          grep -q 'RECOVERY_NET_POSITIVE_EXIT' supabase/functions/market-autotrader/index.ts
+          grep -q 'SPOT-SPLIT-TP5-SL4-TP10-SL4-V1' supabase/functions/market-autotrader/index.ts
+          grep -q 'spotSplitExitDecision' supabase/functions/market-autotrader/index.ts
+          grep -q 'first_stop_loss_pct: -4' supabase/functions/market-autotrader/index.ts
+          grep -q 'residual_stop_loss_pct: -4' supabase/functions/market-autotrader/index.ts
+          ! grep -q '"RECOVERY_NET_POSITIVE_EXIT"' supabase/functions/market-autotrader/index.ts
+          ! grep -q 'halfHoldRecoveryExitDecision' supabase/functions/market-autotrader/index.ts
+          ! grep -q 'hard_stop_return_pct: -2' supabase/functions/market-autotrader/index.ts
+          ! grep -q 'hard_stop_after_seconds: 180' supabase/functions/market-autotrader/index.ts
+          ! grep -q 'stop_bps: 300' supabase/functions/market-autotrader/index.ts
           grep -q 'BB_UPPER_REENTRY_CONFIRMED' supabase/functions/market-autotrader/index.ts
           grep -q 'BB_RECLAIM_FAILED' supabase/functions/market-autotrader/index.ts
           grep -q 'ORDERBOOK_COLLAPSE' supabase/functions/market-autotrader/index.ts
           grep -q '7.6.0-BINANCE-FUTURES' supabase/functions/market-autotrader/index.ts
+          grep -q 'FUTURES_RECOVERY_NET_POSITIVE_EXIT' supabase/functions/market-autotrader/index.ts
           grep -q 'FUTURES_MIN_ENTRY_MARGIN_USDT = 50' \
             supabase/functions/market-autotrader/futures-exit-policy.ts
           grep -q 'SPOT_POLICY_TRIGGERS_NOT_ISOLATED_FROM_FUTURES' \
