@@ -1,0 +1,82 @@
+name: Hotfix recovery exit 180m v765 r4
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/hotfix-recovery-180m-v765-r4.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hotfix-recovery-180m-v765-r4
+  cancel-in-progress: false
+
+jobs:
+  patch-test-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Apply re-quote authority fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/hotfix_recovery_180m_v765_requote.py
+          deno fmt \
+            supabase/functions/market-autotrader/executable-exit.ts \
+            supabase/functions/market-autotrader/executable-exit.test.ts \
+            supabase/functions/market-autotrader/futures-lane.test.ts
+          git diff --check
+
+      - name: Verification pass 3A - focused cross-layer
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno test supabase/functions/market-autotrader/executable-exit.test.ts
+          deno test \
+            supabase/functions/market-autotrader/spot-exit-policy.test.ts \
+            supabase/functions/market-autotrader/split-stop-policy.test.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.test.ts
+          deno test --allow-read supabase/functions/market-autotrader/futures-lane.test.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          grep -q 'priorApprovedReason' supabase/functions/market-autotrader/executable-exit.ts
+          grep -q 'executable_net_allowed: true' supabase/functions/market-autotrader/executable-exit.ts
+          grep -q 'pending_exit_reason' supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql
+          grep -q "'{exit_policy_quote,allowed}'" supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql
+
+      - name: Verification pass 3B - full repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno task check
+          deno task test
+          node validation/v700-deploy-validation.mjs
+          node --check gateway/server.mjs
+          node --test gateway/server.test.mjs
+          git diff --check
+
+      - name: Publish re-quote fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/hotfix_recovery_180m_v765_requote.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          if git diff --cached --name-only | grep -q '^.github/workflows/'; then
+            echo '::error::workflow file unexpectedly changed'
+            exit 1
+          fi
+          git commit -m "fix: preserve recovery exit authority across order re-quote"
+          git push origin HEAD:main
