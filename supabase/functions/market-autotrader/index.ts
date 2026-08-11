@@ -5621,11 +5621,10 @@ async function applyExit(
   const targetAction = action === "TARGET_1" || action === "TARGET_2";
   const positiveNetAfter180 = decisionReason === "POSITIVE_NET_AFTER_180S";
   const recoveryNetPositive = decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT";
-  const staleRecoveryNetPositive =
-    decisionReason === "STALE_RECOVERY_NET_POSITIVE_EXIT_180M" ||
+  const staleRecoveryNetPositive = decisionReason === "STALE_RECOVERY_NET_POSITIVE_EXIT_180M" ||
     decisionReason === "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M";
-  const positiveNetGuardedExit =
-    positiveNetAfter180 || recoveryNetPositive || staleRecoveryNetPositive;
+  const positiveNetGuardedExit = positiveNetAfter180 || recoveryNetPositive ||
+    staleRecoveryNetPositive;
   // Every reason that must be allowed to liquidate the protected half.
   // First take-profit (+5% spot / +15% futures ROE) is the only split-exit path that
   // preserves 50%. Hard stops and residual protected-trail exits must close everything
@@ -6942,7 +6941,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       });
       const markCostBasis = Math.max(
         1e-12,
-        finite(position.realized_cost_quote) + finite(position.paid_fees_quote),
+        liveMark.markedCostBasisQuote + finite(position.paid_fees_quote),
       );
       const lobPosition = isLobStrategy(position.metadata?.lob_signal?.strategy);
       const values: JsonRecord = {

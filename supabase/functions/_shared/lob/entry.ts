@@ -31,8 +31,11 @@ export const EFFECTIVE_OBSERVATION_MIN_MS = 13_500;
 const EFFECTIVE_OBSERVATION_MIN_SAMPLES = 20;
 const EFFECTIVE_OBSERVATION_MIN_TRADES = 20;
 const EFFECTIVE_OBSERVATION_MIN_QUALITY = 0.45;
-/** Continuation families that lost money on live fills; overridable via LobEntryConfig. */
-const DEFAULT_BLOCKED_LOB_PATTERNS: string[] = [];
+/** Continuation families that lost money on live fills; overridable via LobEntryConfig.
+ * MOMENTUM_CONTINUATION is disabled as a standalone primary pattern after live-fill review:
+ * both spot and futures samples were net-negative. Confirmation families remain available.
+ */
+const DEFAULT_BLOCKED_LOB_PATTERNS: string[] = ["MOMENTUM_CONTINUATION"];
 /** Worst 24h-gainer rank admitted by default; overridable via LobEntryConfig. */
 const DEFAULT_MAX_GAINER_RANK = 10;
 
