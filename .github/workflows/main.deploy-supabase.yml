@@ -169,6 +169,10 @@ jobs:
             --set=ON_ERROR_STOP=1 \
             --single-transaction \
             --file supabase/migrations/20260810133000_protected_trailing_exit_v761.sql
+          psql "${SUPABASE_DB_URL}" \
+            --set=ON_ERROR_STOP=1 \
+            --single-transaction \
+            --file supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql
 
       - name: Verify the sell guard survived the batch
         shell: bash
@@ -180,6 +184,7 @@ jobs:
           do $$
           declare
             v_def text;
+            v_recovery_def text;
           begin
             select pg_get_functiondef(p.oid) into v_def
             from pg_proc p
@@ -208,8 +213,6 @@ jobs:
               raise exception
                 'the post-180 hold carries a time cap again; after 180s only positive net or minus 2 percent may close a position';
             end if;
-            -- PL/pgSQL validation below protects legacy v714 only; protected trailing
-            -- authority is replayed immediately after v760 above.
             if position('v_policy_revision = ''7.3.0' in v_def) > 0
                or position('v_policy_revision = ''7.3.2' in v_def) > 0 then
               raise exception
@@ -217,6 +220,19 @@ jobs:
             end if;
             if position('PREBREAKOUT-BURST-V1' in v_def) = 0 then
               raise exception 'guard lost the deployed pre-breakout policy revision';
+            end if;
+
+            select pg_get_functiondef(p.oid) into v_recovery_def
+            from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname = 'public' and p.proname = 'guard_residual_sell_order_v751';
+            if v_recovery_def is null
+               or position('STALE_RECOVERY_NET_POSITIVE_EXIT_180M' in v_recovery_def) = 0
+               or position('FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M' in v_recovery_def) = 0
+               or position('STALE_RECOVERY_REQUIRES_POSITIVE_NET' in v_recovery_def) = 0
+               or position('pending_exit_reason' in v_recovery_def) = 0
+               or position('EMERGENCY' in v_recovery_def) = 0 then
+              raise exception 'v7.6.5 recovery sell guard missing after migration batch';
             end if;
             raise notice 'sell guard end state verified';
           end
