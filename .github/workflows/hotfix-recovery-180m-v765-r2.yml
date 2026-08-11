@@ -1,0 +1,96 @@
+name: Hotfix recovery exit 180m v765 r2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/hotfix-recovery-180m-v765-r2.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hotfix-recovery-180m-v765-r2
+  cancel-in-progress: false
+
+jobs:
+  patch-test-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Preflight current state
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f .github/hotfix_recovery_180m_v765.py
+          grep -q 'HALF_HOLD_AWAITING_TP5_OR_SL4' supabase/functions/market-autotrader/spot-exit-policy.ts
+          grep -q 'FUTURES_HALF_AWAITING_ROE_15_OR_ROE_MINUS_12' supabase/functions/market-autotrader/futures-exit-policy.ts
+          ! grep -q 'STALE_RECOVERY_NET_POSITIVE_EXIT_180M' supabase/functions/market-autotrader/index.ts
+
+      - name: Apply v765 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/hotfix_recovery_180m_v765.py
+          deno fmt \
+            supabase/functions/market-autotrader/spot-exit-policy.ts \
+            supabase/functions/market-autotrader/spot-exit-policy.test.ts \
+            supabase/functions/market-autotrader/split-stop-policy.test.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.test.ts \
+            supabase/functions/market-autotrader/futures-lane.test.ts
+          git diff --check
+
+      - name: Verification pass 1 - focused exit policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno test \
+            supabase/functions/market-autotrader/spot-exit-policy.test.ts \
+            supabase/functions/market-autotrader/split-stop-policy.test.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.test.ts
+          deno test --allow-read supabase/functions/market-autotrader/futures-lane.test.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          grep -q 'staleRecoveryAfterSeconds: 180 \* 60' supabase/functions/market-autotrader/spot-exit-policy.ts
+          grep -q 'staleRecoveryAfterSeconds: 180 \* 60' supabase/functions/market-autotrader/futures-exit-policy.ts
+          grep -q 'STALE_RECOVERY_NET_POSITIVE_EXIT_180M' supabase/functions/market-autotrader/index.ts
+          grep -q 'FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M' supabase/functions/market-autotrader/index.ts
+          grep -q 'action === "EMERGENCY"' supabase/functions/market-autotrader/index.ts
+          grep -q 'STALE_RECOVERY_REQUIRES_POSITIVE_NET' supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql
+          grep -q "upper(coalesce(new.purpose, '')) = 'EMERGENCY'" supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql
+          ! grep -q 'export function futuresRecoveryLatched' supabase/functions/market-autotrader/futures-exit-policy.ts
+
+      - name: Verification pass 2 - full repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno task check
+          deno task test
+          node validation/v700-deploy-validation.mjs
+          node --check gateway/server.mjs
+          node --test gateway/server.test.mjs
+          git diff --check
+
+      - name: Publish verified patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/hotfix_recovery_180m_v765.py \
+            .github/workflows/hotfix-recovery-180m-v765.yml \
+            .github/workflows/hotfix-recovery-180m-v765-r2.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: add 180m recovery exits and emergency liquidation bypass"
+          git push origin HEAD:main
