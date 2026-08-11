@@ -1,0 +1,941 @@
+from pathlib import Path
+
+ROOT = Path('.')
+
+
+def replace_exact(path: str, old: str, new: str, expected: int = 1) -> None:
+    p = ROOT / path
+    text = p.read_text()
+    count = text.count(old)
+    if count != expected:
+        raise SystemExit(f"{path}: expected {expected} matches, got {count}: {old[:120]!r}")
+    p.write_text(text.replace(old, new))
+
+
+def append_once(path: str, marker: str, extra: str) -> None:
+    p = ROOT / path
+    text = p.read_text()
+    if marker in text:
+        raise SystemExit(f"{path}: marker already present: {marker}")
+    p.write_text(text.rstrip() + "\n\n" + extra.strip() + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Spot policy
+# ---------------------------------------------------------------------------
+spot = '''export const SPOT_SPLIT_EXIT_THRESHOLDS = {
+  firstTakeProfitPct: 5,
+  firstStopLossPct: -4,
+  residualProfitFloorPct: 3,
+  residualTrailingDrawdownPct: 1.5,
+  firstTakeProfitFraction: 0.5,
+  hardStopFraction: 1,
+  staleRecoveryAfterSeconds: 180 * 60,
+} as const;
+
+export type SpotSplitExitInput = {
+  residualStage: boolean;
+  grossReturnPct: number;
+  peakGrossReturnPct: number;
+  residualNetReturnPct: number;
+  heldSeconds: number;
+  executableNetAllowed: boolean;
+  expectedNetProfitQuote: number;
+  safetyRequested?: boolean;
+};
+
+export type SpotSplitExitDecision = {
+  action: "STOP" | "NONE";
+  fraction: number;
+  reason: string;
+  residualProtectPct?: number;
+};
+
+/**
+ * Canonical spot policy:
+ * - hard stop: -4%, close 100%
+ * - first take-profit: +5%, close 50%
+ * - residual: protect at max(+3%, peak - 1.5 percentage points)
+ * - if +5% was not reached within 180m, keep the -4% stop but close 100% at the
+ *   first executable exit whose fees/slippage-adjusted net profit is strictly positive
+ */
+export function spotSplitExitDecision(input: SpotSplitExitInput): SpotSplitExitDecision {
+  const t = SPOT_SPLIT_EXIT_THRESHOLDS;
+  if (input.residualStage) {
+    const peakGrossReturnPct = Math.max(input.grossReturnPct, input.peakGrossReturnPct);
+    const residualProtectPct = Math.max(
+      t.residualProfitFloorPct,
+      peakGrossReturnPct - t.residualTrailingDrawdownPct,
+    );
+    if (input.grossReturnPct <= residualProtectPct) {
+      return {
+        action: "STOP",
+        fraction: 1,
+        reason: "RESIDUAL_PROTECTED_TRAIL_EXIT",
+        residualProtectPct,
+      };
+    }
+    return {
+      action: "NONE",
+      fraction: 0,
+      reason: "RESIDUAL_PROTECTED_TRAIL_ACTIVE",
+      residualProtectPct,
+    };
+  }
+  // Target and hard stop remain authoritative even after the 180m recovery clock starts.
+  if (input.grossReturnPct >= t.firstTakeProfitPct) {
+    return {
+      action: "STOP",
+      fraction: t.firstTakeProfitFraction,
+      reason: "HALF_HOLD_TAKE_PROFIT_5",
+    };
+  }
+  if (input.grossReturnPct <= t.firstStopLossPct) {
+    return {
+      action: "STOP",
+      fraction: t.hardStopFraction,
+      reason: "HALF_HOLD_STOP_LOSS_4",
+    };
+  }
+  if (Number(input.heldSeconds) >= t.staleRecoveryAfterSeconds) {
+    if (input.executableNetAllowed && Number(input.expectedNetProfitQuote) > 0) {
+      return {
+        action: "STOP",
+        fraction: 1,
+        reason: "STALE_RECOVERY_NET_POSITIVE_EXIT_180M",
+      };
+    }
+    return {
+      action: "NONE",
+      fraction: 0,
+      reason: "STALE_RECOVERY_AWAITING_POSITIVE_NET_180M",
+    };
+  }
+  return {
+    action: "NONE",
+    fraction: 0,
+    reason: input.safetyRequested
+      ? "HALF_HOLD_THRESHOLD_OVERRIDES_NON_PRICE_SAFETY_EXIT"
+      : "HALF_HOLD_AWAITING_TP5_OR_SL4",
+  };
+}
+'''
+Path('supabase/functions/market-autotrader/spot-exit-policy.ts').write_text(spot)
+
+# ---------------------------------------------------------------------------
+# Futures policy
+# ---------------------------------------------------------------------------
+replace_exact(
+    'supabase/functions/market-autotrader/futures-exit-policy.ts',
+    '  /** Fraction closed at the hard stop. */\n  hardStopFraction: 1,\n',
+    '  /** Fraction closed at the hard stop. */\n  hardStopFraction: 1,\n  /** First-tranche recovery mode starts after three hours without the +15% ROE TP. */\n  staleRecoveryAfterSeconds: 180 * 60,\n',
+)
+replace_exact(
+    'supabase/functions/market-autotrader/futures-exit-policy.ts',
+    '  | "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"\n  | "FUTURES_RESIDUAL_PROTECTED_TRAIL_ACTIVE";',
+    '  | "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"\n  | "FUTURES_RESIDUAL_PROTECTED_TRAIL_ACTIVE"\n  | "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M"\n  | "FUTURES_STALE_RECOVERY_AWAITING_POSITIVE_NET_180M";',
+)
+replace_exact(
+    'supabase/functions/market-autotrader/futures-exit-policy.ts',
+    '  /** Expected net profit of that residual sale, in quote currency. */\n  expectedNetProfitQuote: number;\n',
+    '  /** Expected net profit of that residual sale, in quote currency. */\n  expectedNetProfitQuote: number;\n  /** Position age used only for the first-tranche 180-minute recovery rule. */\n  heldSeconds: number;\n',
+)
+replace_exact(
+    'supabase/functions/market-autotrader/futures-exit-policy.ts',
+    '''  if (roePct <= thresholds.firstStopLossRoePct) {
+    return {
+      ...base,
+      action: "STOP",
+      fraction: thresholds.hardStopFraction,
+      reason: "FUTURES_HALF_STOP_LOSS_ROE_12",
+    };
+  }
+  return {
+''',
+    '''  if (roePct <= thresholds.firstStopLossRoePct) {
+    return {
+      ...base,
+      action: "STOP",
+      fraction: thresholds.hardStopFraction,
+      reason: "FUTURES_HALF_STOP_LOSS_ROE_12",
+    };
+  }
+  if (finite(input.heldSeconds) >= thresholds.staleRecoveryAfterSeconds) {
+    if (input.executableNetAllowed && finite(input.expectedNetProfitQuote) > 0) {
+      return {
+        ...base,
+        action: "STOP",
+        fraction: 1,
+        reason: "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M",
+      };
+    }
+    return {
+      ...base,
+      action: "NONE",
+      fraction: 0,
+      reason: "FUTURES_STALE_RECOVERY_AWAITING_POSITIVE_NET_180M",
+    };
+  }
+  return {
+''',
+)
+replace_exact(
+    'supabase/functions/market-autotrader/futures-exit-policy.ts',
+    '  "FUTURES_HALF_STOP_LOSS_ROE_12",\n  "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT",\n];',
+    '  "FUTURES_HALF_STOP_LOSS_ROE_12",\n  "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT",\n  "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M",\n];',
+)
+old_doc = '''//   2. Measured on margin (ROE, i.e. leverage-applied return):
+//        -12% -> stop out HALF the position
+//        +15% -> take profit on HALF the position
+//   3. The remaining half:
+//        - if it has been running at a NEGATIVE return, sell the whole remainder the
+//          moment that return flips positive;
+//        - otherwise take profit at +30% ROE.
+//
+// At 3x these ROE gates are exactly -4% / +5% / +10% on price, which is the same shape as
+// the spot half-hold policy. The policy is written in ROE rather than price so changing
+// the configured leverage moves the price gates with it instead of silently changing how
+// much of the account each rule risks.
+'''
+new_doc = '''//   2. Measured on margin (ROE, i.e. leverage-applied return):
+//        -12% -> hard stop 100%
+//        +15% -> take profit on 50%
+//   3. Remaining 50% after TP: protect at max(+9% ROE, peak ROE - 4.5pp).
+//   4. If the +15% ROE first TP has not happened within 180 minutes, keep the -12% ROE
+//      hard stop but exit 100% on the first fees/slippage-adjusted executable net profit > 0.
+//
+// At 3x the first TP/stop are +5%/-4% price moves. The policy is written in ROE so changing
+// leverage preserves the margin-risk thresholds rather than silently changing account risk.
+'''
+replace_exact('supabase/functions/market-autotrader/futures-exit-policy.ts', old_doc, new_doc)
+# Remove the obsolete negative-to-positive residual helper; protected trailing replaced it.
+old_helper = '''/**
+ * Latch for rule 3. The residual enters recovery as soon as it is seen underwater, whether
+ * that is because the first half stopped out at -12% ROE (the residual is underwater by
+ * construction at that moment) or because a residual that had taken the +15% half profit
+ * later fell back below its entry. Once latched it stays latched, so the position leaves
+ * at the flip back to positive rather than at the next threshold.
+ */
+export function futuresRecoveryLatched(input: {
+  residualStage: boolean;
+  alreadyLatched: boolean;
+  netReturnPct: number;
+}): boolean {
+  if (input.alreadyLatched) return true;
+  return Boolean(input.residualStage) && finite(input.netReturnPct) < 0;
+}
+
+'''
+replace_exact('supabase/functions/market-autotrader/futures-exit-policy.ts', old_helper, '')
+
+# ---------------------------------------------------------------------------
+# Policy tests
+# ---------------------------------------------------------------------------
+for test_path in [
+    'supabase/functions/market-autotrader/spot-exit-policy.test.ts',
+    'supabase/functions/market-autotrader/split-stop-policy.test.ts',
+]:
+    replace_exact(
+        test_path,
+        '    residualNetReturnPct: 0,\n    safetyRequested: false,\n',
+        '    residualNetReturnPct: 0,\n    heldSeconds: 0,\n    executableNetAllowed: false,\n    expectedNetProfitQuote: -1,\n    safetyRequested: false,\n',
+    )
+    append_once(
+        test_path,
+        'STALE_RECOVERY_NET_POSITIVE_EXIT_180M',
+        '''Deno.test("spot 180m recovery exits 100% only on executable positive net", () => {
+  const before = decide({
+    heldSeconds: 10_799,
+    grossReturnPct: 1,
+    executableNetAllowed: true,
+    expectedNetProfitQuote: 0.2,
+  });
+  assertEquals(before.action, "NONE");
+
+  const exit = decide({
+    heldSeconds: 10_800,
+    grossReturnPct: 1,
+    executableNetAllowed: true,
+    expectedNetProfitQuote: 0.2,
+  });
+  assertEquals(exit.action, "STOP");
+  assertEquals(exit.fraction, 1);
+  assertEquals(exit.reason, "STALE_RECOVERY_NET_POSITIVE_EXIT_180M");
+
+  const blocked = decide({
+    heldSeconds: 10_800,
+    grossReturnPct: 1,
+    executableNetAllowed: false,
+    expectedNetProfitQuote: -0.01,
+  });
+  assertEquals(blocked.action, "NONE");
+  assertEquals(blocked.reason, "STALE_RECOVERY_AWAITING_POSITIVE_NET_180M");
+});
+
+Deno.test("spot +5 target keeps precedence after 180m", () => {
+  const d = decide({
+    heldSeconds: 20_000,
+    grossReturnPct: 5,
+    executableNetAllowed: true,
+    expectedNetProfitQuote: 1,
+  });
+  assertEquals(d.fraction, 0.5);
+  assertEquals(d.reason, "HALF_HOLD_TAKE_PROFIT_5");
+});''',
+    )
+
+replace_exact(
+    'supabase/functions/market-autotrader/futures-exit-policy.test.ts',
+    '    expectedNetProfitQuote: -1,\n    safetyRequested: false,\n',
+    '    expectedNetProfitQuote: -1,\n    heldSeconds: 0,\n    safetyRequested: false,\n',
+)
+append_once(
+    'supabase/functions/market-autotrader/futures-exit-policy.test.ts',
+    'FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M',
+    '''Deno.test("futures 180m recovery exits 100% only on executable positive net", () => {
+  const before = decide({
+    heldSeconds: 10_799,
+    grossReturnPct: 0.5,
+    executableNetAllowed: true,
+    expectedNetProfitQuote: 0.2,
+  });
+  assertEquals(before.action, "NONE");
+
+  const exit = decide({
+    heldSeconds: 10_800,
+    grossReturnPct: 0.5,
+    executableNetAllowed: true,
+    expectedNetProfitQuote: 0.2,
+  });
+  assertEquals(exit.action, "STOP");
+  assertEquals(exit.fraction, 1);
+  assertEquals(exit.reason, "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M");
+
+  const blocked = decide({
+    heldSeconds: 10_800,
+    grossReturnPct: 0.5,
+    executableNetAllowed: false,
+    expectedNetProfitQuote: -0.01,
+  });
+  assertEquals(blocked.action, "NONE");
+  assertEquals(blocked.reason, "FUTURES_STALE_RECOVERY_AWAITING_POSITIVE_NET_180M");
+});
+
+Deno.test("futures +15% ROE target keeps precedence after 180m", () => {
+  const d = decide({
+    heldSeconds: 20_000,
+    grossReturnPct: 5,
+    peakGrossReturnPct: 5,
+    executableNetAllowed: true,
+    expectedNetProfitQuote: 1,
+  });
+  assertEquals(d.fraction, 0.5);
+  assertEquals(d.reason, "FUTURES_HALF_TAKE_PROFIT_ROE_15");
+});''',
+)
+
+# ---------------------------------------------------------------------------
+# Engine wiring: policy -> execution quantity -> re-quote -> TP cancel/recheck.
+# ---------------------------------------------------------------------------
+index_path = 'supabase/functions/market-autotrader/index.ts'
+replace_exact(
+    index_path,
+    '          ? "FUTURES-PROTECTED-TRAIL-ROE15-SL12-FLOOR9-TRAIL4P5-V1"\n          : "SPOT-PROTECTED-TRAIL-TP5-SL4-FLOOR3-TRAIL1P5-V1";',
+    '          ? "FUTURES-PROTECTED-TRAIL-ROE15-SL12-FLOOR9-TRAIL4P5-RECOVERY180M-V2"\n          : "SPOT-PROTECTED-TRAIL-TP5-SL4-FLOOR3-TRAIL1P5-RECOVERY180M-V2";',
+)
+replace_exact(
+    index_path,
+    '''            expectedNetProfitQuote: finite(residualQuote.expectedNetProfitQuote),
+            safetyRequested,
+          });''',
+    '''            expectedNetProfitQuote: finite(residualQuote.expectedNetProfitQuote),
+            heldSeconds,
+            safetyRequested,
+          });''',
+)
+replace_exact(
+    index_path,
+    '''            residualNetReturnPct,
+            safetyRequested,
+          }) as any;''',
+    '''            residualNetReturnPct,
+            heldSeconds,
+            executableNetAllowed: executableQuote.allowed,
+            expectedNetProfitQuote: finite(executableQuote.expectedNetProfitQuote),
+            safetyRequested,
+          }) as any;''',
+)
+replace_exact(
+    index_path,
+    '''  const positiveNetAfter180 = decisionReason === "POSITIVE_NET_AFTER_180S";
+  const recoveryNetPositive = decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT";
+  const positiveNetGuardedExit = positiveNetAfter180 || recoveryNetPositive;
+''',
+    '''  const positiveNetAfter180 = decisionReason === "POSITIVE_NET_AFTER_180S";
+  const recoveryNetPositive = decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT";
+  const staleRecoveryNetPositive =
+    decisionReason === "STALE_RECOVERY_NET_POSITIVE_EXIT_180M" ||
+    decisionReason === "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M";
+  const positiveNetGuardedExit =
+    positiveNetAfter180 || recoveryNetPositive || staleRecoveryNetPositive;
+''',
+)
+replace_exact(
+    index_path,
+    '''    decisionReason === "RESIDUAL_TAKE_PROFIT_10" ||
+    decisionReason === "RESIDUAL_STOP_LOSS_4" ||
+    decisionReason === "FUTURES_RESIDUAL_TAKE_PROFIT_ROE_30" || recoveryNetPositive;
+''',
+    '''    decisionReason === "RESIDUAL_TAKE_PROFIT_10" ||
+    decisionReason === "RESIDUAL_STOP_LOSS_4" ||
+    decisionReason === "FUTURES_RESIDUAL_TAKE_PROFIT_ROE_30" ||
+    staleRecoveryNetPositive || recoveryNetPositive || action === "EMERGENCY";
+''',
+)
+replace_exact(
+    index_path,
+    '''      recoveryNetPositive ? "RECOVERY_NET_POSITIVE_BLOCKED" : "POSITIVE_NET_AFTER_180S_BLOCKED",
+''',
+    '''      staleRecoveryNetPositive
+        ? "STALE_RECOVERY_NET_POSITIVE_BLOCKED"
+        : recoveryNetPositive
+        ? "RECOVERY_NET_POSITIVE_BLOCKED"
+        : "POSITIVE_NET_AFTER_180S_BLOCKED",
+''',
+)
+replace_exact(
+    index_path,
+    '''      reason: recoveryNetPositive
+        ? "recovery net-positive order-time recheck blocked; position retained"
+        : "positive-net order-time recheck blocked; position retained",
+''',
+    '''      reason: staleRecoveryNetPositive
+        ? "180m recovery net-positive order-time recheck blocked; position retained"
+        : recoveryNetPositive
+        ? "recovery net-positive order-time recheck blocked; position retained"
+        : "positive-net order-time recheck blocked; position retained",
+''',
+)
+replace_exact(
+    index_path,
+    '''      recoveryNetPositive
+        ? "RECOVERY_NET_POSITIVE_FOK_NOT_FILLED"
+        : positiveNetAfter180
+        ? "POSITIVE_NET_AFTER_180S_FOK_NOT_FILLED"
+        : "TARGET_PROTECTED_ORDER_NOT_FILLED",
+''',
+    '''      staleRecoveryNetPositive
+        ? "STALE_RECOVERY_NET_POSITIVE_FOK_NOT_FILLED"
+        : recoveryNetPositive
+        ? "RECOVERY_NET_POSITIVE_FOK_NOT_FILLED"
+        : positiveNetAfter180
+        ? "POSITIVE_NET_AFTER_180S_FOK_NOT_FILLED"
+        : "TARGET_PROTECTED_ORDER_NOT_FILLED",
+''',
+)
+replace_exact(
+    index_path,
+    '''    const breachReason = recoveryNetPositive
+      ? "RECOVERY_NET_POSITIVE_GUARD_BREACH"
+      : positiveNetAfter180
+      ? "POSITIVE_NET_AFTER_180S_GUARD_BREACH"
+      : "TARGET_NET_GUARD_BREACH";
+''',
+    '''    const breachReason = staleRecoveryNetPositive
+      ? "STALE_RECOVERY_NET_POSITIVE_GUARD_BREACH"
+      : recoveryNetPositive
+      ? "RECOVERY_NET_POSITIVE_GUARD_BREACH"
+      : positiveNetAfter180
+      ? "POSITIVE_NET_AFTER_180S_GUARD_BREACH"
+      : "TARGET_NET_GUARD_BREACH";
+''',
+)
+replace_exact(
+    index_path,
+    '''    (decisionReason === "POSITIVE_NET_AFTER_180S" ||
+      decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT" ||
+      decisionReason === "HARD_STOP_MINUS_2_AFTER_180S") &&
+''',
+    '''    (decisionReason === "POSITIVE_NET_AFTER_180S" ||
+      decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT" ||
+      decisionReason === "STALE_RECOVERY_NET_POSITIVE_EXIT_180M" ||
+      decisionReason === "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M" ||
+      decisionReason === "HARD_STOP_MINUS_2_AFTER_180S") &&
+''',
+)
+replace_exact(
+    index_path,
+    '''          decision.reason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT" ||
+          decision.reason === "RESIDUAL_PROTECTED_TRAIL_EXIT" ||
+''',
+    '''          decision.reason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT" ||
+          decision.reason === "RESIDUAL_PROTECTED_TRAIL_EXIT" ||
+          decision.reason === "STALE_RECOVERY_NET_POSITIVE_EXIT_180M" ||
+          decision.reason === "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M" ||
+''',
+)
+
+# ---------------------------------------------------------------------------
+# DB guard/migration. It is the independent enforcement layer.
+# ---------------------------------------------------------------------------
+migration = r'''-- Trading-booooo v7.6.5 — first-tranche 180-minute recovery exit.
+--
+-- Spot and futures share the same stale-position principle:
+--   * normal first-tranche TP/SL remain authoritative (+5/-4 price; +15/-12 ROE futures)
+--   * if the first TP has not happened after 180 minutes, do not force a loss exit
+--   * exit 100% at the first order-time executable quote whose fees/slippage-adjusted net
+--     profit is strictly positive
+--   * emergency liquidation always bypasses price thresholds and releases 100%
+
+create or replace function public.enforce_residual_exit_position_policy_v751()
+returns trigger
+language plpgsql
+set search_path to 'public'
+as $function$
+declare
+  v_entry numeric;
+  v_step numeric;
+  v_tolerance numeric;
+  v_residual_stage boolean;
+  v_levels record;
+begin
+  if new.state not in ('OPEN','EXITING') then
+    return new;
+  end if;
+  v_entry := coalesce(nullif(new.average_entry_price, 0), nullif(new.planned_entry_price, 0));
+  if coalesce(v_entry, 0) <= 0 or coalesce(new.initial_quantity, 0) <= 0 then
+    return new;
+  end if;
+  v_step := greatest(0, coalesce(new.quantity_step, 0));
+  v_tolerance := greatest(v_step * 1.001, new.initial_quantity * 0.00000001);
+  v_residual_stage := coalesce(new.remaining_quantity, new.initial_quantity) <=
+    new.initial_quantity * 0.5 + v_tolerance;
+  select * into v_levels
+  from public.position_exit_levels_v760(new.exchange, new.leverage, v_entry);
+
+  new.stop_price := v_levels.stop_price;
+  new.target_1 := v_levels.target_1;
+  new.target_2 := null;
+  new.t1_allocation_pct := 50;
+  new.t1_completed := v_residual_stage;
+  new.exit_policy := 'SCALE_OUT';
+  new.trailing_stop := null;
+  new.trailing_distance_pct := case
+    when v_levels.futures then 4.5 / v_levels.leverage
+    else 1.5
+  end;
+  new.metadata := (coalesce(new.metadata, '{}'::jsonb) - 'recovery_exit') || jsonb_build_object(
+    'exit_policy_revision', '7.6.0-BINANCE-FUTURES',
+    'exit_policy_profile', 'PROTECTED_TRAIL_RECOVERY180M_V2',
+    'half_hold_policy', jsonb_build_object(
+      'enabled', true,
+      'first_tranche_ratio', 0.5,
+      'residual_ratio', 0.5,
+      'hard_stop_sell_fraction', 1,
+      'leverage', v_levels.leverage,
+      'basis', case when v_levels.futures then 'RETURN_ON_MARGIN' else 'RETURN_ON_PRICE' end,
+      'first_take_profit_pct', v_levels.first_tp_pct,
+      'first_stop_loss_pct', v_levels.first_sl_pct,
+      'first_take_profit_roe_pct', case when v_levels.futures then 15 else null end,
+      'first_stop_loss_roe_pct', case when v_levels.futures then -12 else null end,
+      'residual_profit_floor_pct', case when v_levels.futures then 9 / v_levels.leverage else 3 end,
+      'residual_trailing_drawdown_pct', case when v_levels.futures then 4.5 / v_levels.leverage else 1.5 end,
+      'residual_profit_floor_roe_pct', case when v_levels.futures then 9 else null end,
+      'residual_trailing_drawdown_roe_pct', case when v_levels.futures then 4.5 else null end,
+      'residual_mode', 'PROTECTED_TRAILING',
+      'residual_sell_fraction', 1,
+      'stale_recovery_after_seconds', 10800,
+      'stale_recovery_rule', 'FIRST_TRANCHE_EXECUTABLE_NET_POSITIVE',
+      'stage', case when v_residual_stage then 'RESIDUAL' else 'FIRST_TRANCHE' end,
+      'enforced_at', now()
+    )
+  );
+  return new;
+end;
+$function$;
+
+create or replace function public.guard_residual_sell_order_v751()
+returns trigger
+language plpgsql
+set search_path to 'public'
+as $function$
+declare
+  p public.trading_positions%rowtype;
+  v_entry numeric;
+  v_price numeric;
+  v_quote_at timestamptz;
+  v_gross_return_pct numeric;
+  v_gross_roe_pct numeric;
+  v_peak_price numeric;
+  v_peak_return_pct numeric;
+  v_peak_roe_pct numeric;
+  v_protect_pct numeric;
+  v_protect_roe_pct numeric;
+  v_protected_qty numeric;
+  v_sellable_qty numeric;
+  v_requested_qty numeric;
+  v_step numeric;
+  v_tolerance numeric;
+  v_residual_stage boolean;
+  v_approved_reason text;
+  v_min_exit_notional numeric;
+  v_futures boolean;
+  v_leverage numeric;
+  v_held_seconds numeric;
+  v_executable_net_allowed boolean;
+  v_expected_net_profit_quote numeric;
+begin
+  if upper(coalesce(new.side, '')) <> 'SELL' or new.position_id is null then
+    return new;
+  end if;
+  select * into p from public.trading_positions where id = new.position_id for update;
+  if not found then
+    raise exception using errcode='23514', message='RESIDUAL_POLICY_POSITION_NOT_FOUND';
+  end if;
+  if p.state not in ('OPEN','EXITING') then
+    raise exception using errcode='23514', message=format(
+      'RESIDUAL_POLICY_POSITION_NOT_SELLABLE state=%s market=%s', p.state, p.market
+    );
+  end if;
+  v_entry := coalesce(nullif(p.average_entry_price, 0), nullif(p.planned_entry_price, 0));
+  if coalesce(v_entry, 0) <= 0 or coalesce(p.initial_quantity, 0) <= 0 then
+    raise exception using errcode='23514', message='RESIDUAL_POLICY_INVALID_POSITION_BASIS';
+  end if;
+  v_price := coalesce(
+    nullif(new.requested_price, 0),
+    nullif(p.metadata#>>'{exit_policy_quote,price}', '')::numeric,
+    nullif(p.metadata#>>'{exit_policy_quote,executable_vwap}', '')::numeric,
+    nullif(p.metadata#>>'{exit_policy_quote,sell_price}', '')::numeric,
+    nullif(p.metadata#>>'{live_mark,executable_price}', '')::numeric
+  );
+  v_quote_at := coalesce(
+    nullif(p.metadata#>>'{exit_policy_quote,measured_at}', '')::timestamptz,
+    nullif(p.metadata#>>'{live_mark,measured_at}', '')::timestamptz
+  );
+  if coalesce(v_price, 0) <= 0 then
+    raise exception using errcode='23514', message='RESIDUAL_POLICY_MISSING_EXECUTABLE_PRICE';
+  end if;
+  if new.requested_price is null and (v_quote_at is null or now() - v_quote_at > interval '30 seconds') then
+    raise exception using errcode='23514', message='RESIDUAL_POLICY_STALE_EXECUTABLE_PRICE';
+  end if;
+
+  v_futures := lower(coalesce(p.exchange, '')) = 'binance_futures';
+  v_leverage := case when v_futures
+    then least(20, greatest(1, coalesce(nullif(p.leverage, 0), 3))) else 1 end;
+  v_gross_return_pct := (v_price / v_entry - 1) * 100;
+  v_gross_roe_pct := v_gross_return_pct * v_leverage;
+  v_peak_price := greatest(v_price, coalesce(nullif(p.peak_price, 0), v_price));
+  v_peak_return_pct := (v_peak_price / v_entry - 1) * 100;
+  v_peak_roe_pct := v_peak_return_pct * v_leverage;
+  v_protect_pct := greatest(3, v_peak_return_pct - 1.5);
+  v_protect_roe_pct := greatest(9, v_peak_roe_pct - 4.5);
+  v_step := greatest(0, coalesce(p.quantity_step, 0));
+  v_tolerance := greatest(v_step * 1.001, p.initial_quantity * 0.00000001);
+  v_protected_qty := greatest(0, p.initial_quantity * 0.5);
+  v_residual_stage := p.remaining_quantity <= v_protected_qty + v_tolerance;
+  v_approved_reason := coalesce(
+    nullif(p.metadata#>>'{exit_policy_quote,approved_reason}', ''),
+    nullif(p.metadata->>'pending_exit_reason', ''),
+    ''
+  );
+  v_requested_qty := greatest(0, coalesce(new.requested_volume, 0));
+  v_held_seconds := greatest(0, extract(epoch from (now() - coalesce(p.opened_at, p.created_at, now()))));
+  v_executable_net_allowed := coalesce(
+    nullif(p.metadata#>>'{exit_policy_quote,executable_net_allowed}', '')::boolean,
+    false
+  );
+  v_expected_net_profit_quote := coalesce(
+    nullif(p.metadata#>>'{exit_policy_quote,expected_net_profit_quote}', '')::numeric,
+    0
+  );
+
+  if upper(coalesce(new.purpose, '')) = 'EMERGENCY' then
+    v_sellable_qty := greatest(0, p.remaining_quantity);
+  elsif v_residual_stage then
+    if v_futures then
+      if v_approved_reason <> 'FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT' then
+        raise exception using errcode='23514', message=format(
+          'FUTURES_PROTECTED_TRAIL_REASON_REQUIRED market=%s approved_reason=%s', p.market, v_approved_reason
+        );
+      end if;
+      if v_gross_roe_pct > v_protect_roe_pct + 0.001 then
+        raise exception using errcode='23514', message=format(
+          'FUTURES_PROTECTED_TRAIL_NOT_REACHED market=%s roe=%s protect_roe=%s peak_roe=%s',
+          p.market, round(v_gross_roe_pct, 6), round(v_protect_roe_pct, 6), round(v_peak_roe_pct, 6)
+        );
+      end if;
+    else
+      if v_approved_reason <> 'RESIDUAL_PROTECTED_TRAIL_EXIT' then
+        raise exception using errcode='23514', message=format(
+          'SPOT_PROTECTED_TRAIL_REASON_REQUIRED market=%s approved_reason=%s', p.market, v_approved_reason
+        );
+      end if;
+      if v_gross_return_pct > v_protect_pct + 0.001 then
+        raise exception using errcode='23514', message=format(
+          'SPOT_PROTECTED_TRAIL_NOT_REACHED market=%s return=%s protect=%s peak=%s',
+          p.market, round(v_gross_return_pct, 6), round(v_protect_pct, 6), round(v_peak_return_pct, 6)
+        );
+      end if;
+    end if;
+    v_sellable_qty := greatest(0, p.remaining_quantity);
+  elsif v_futures then
+    if v_approved_reason = 'FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M' then
+      if v_held_seconds < 10800 then
+        raise exception using errcode='23514', message=format(
+          'STALE_RECOVERY_TOO_EARLY market=%s held_seconds=%s', p.market, round(v_held_seconds, 3)
+        );
+      end if;
+      if not v_executable_net_allowed or v_expected_net_profit_quote <= 0 then
+        raise exception using errcode='23514', message=format(
+          'STALE_RECOVERY_REQUIRES_POSITIVE_NET market=%s allowed=%s expected_net=%s',
+          p.market, v_executable_net_allowed, round(v_expected_net_profit_quote, 8)
+        );
+      end if;
+      v_sellable_qty := greatest(0, p.remaining_quantity);
+    elsif v_gross_roe_pct >= 14.999 then
+      v_sellable_qty := greatest(0, p.remaining_quantity - v_protected_qty);
+    elsif v_gross_roe_pct <= -11.999 then
+      v_sellable_qty := greatest(0, p.remaining_quantity);
+    else
+      raise exception using errcode='23514', message=format(
+        'FUTURES_FIRST_TRANCHE_THRESHOLD_NOT_REACHED market=%s gross_roe_pct=%s leverage=%s',
+        p.market, round(v_gross_roe_pct, 6), v_leverage
+      );
+    end if;
+  else
+    if v_approved_reason = 'STALE_RECOVERY_NET_POSITIVE_EXIT_180M' then
+      if v_held_seconds < 10800 then
+        raise exception using errcode='23514', message=format(
+          'STALE_RECOVERY_TOO_EARLY market=%s held_seconds=%s', p.market, round(v_held_seconds, 3)
+        );
+      end if;
+      if not v_executable_net_allowed or v_expected_net_profit_quote <= 0 then
+        raise exception using errcode='23514', message=format(
+          'STALE_RECOVERY_REQUIRES_POSITIVE_NET market=%s allowed=%s expected_net=%s',
+          p.market, v_executable_net_allowed, round(v_expected_net_profit_quote, 8)
+        );
+      end if;
+      v_sellable_qty := greatest(0, p.remaining_quantity);
+    elsif v_gross_return_pct >= 4.999 then
+      v_sellable_qty := greatest(0, p.remaining_quantity - v_protected_qty);
+    elsif v_gross_return_pct <= -3.999 then
+      v_sellable_qty := greatest(0, p.remaining_quantity);
+    else
+      raise exception using errcode='23514', message=format(
+        'FIRST_TRANCHE_THRESHOLD_NOT_REACHED market=%s gross_return_pct=%s',
+        p.market, round(v_gross_return_pct, 6)
+      );
+    end if;
+  end if;
+
+  if v_step > 0 then
+    v_sellable_qty := floor((v_sellable_qty + v_step * 0.000000001) / v_step) * v_step;
+  end if;
+  new.requested_volume := least(v_requested_qty, v_sellable_qty);
+  if coalesce(new.requested_volume, 0) <= 0 then
+    raise exception using errcode='23514', message=format(
+      'RESIDUAL_POLICY_NO_AUTHORIZED_QUANTITY market=%s residual_stage=%s remaining_qty=%s',
+      p.market, v_residual_stage, p.remaining_quantity
+    );
+  end if;
+  v_min_exit_notional := case when lower(p.exchange) = 'upbit' then 5000 else 5 end;
+  if new.requested_volume * v_price < v_min_exit_notional then
+    raise exception using errcode='23514', message=format(
+      'RESIDUAL_POLICY_EXIT_BELOW_EXCHANGE_MINIMUM market=%s notional=%s minimum=%s',
+      p.market, round(new.requested_volume * v_price, 8), v_min_exit_notional
+    );
+  end if;
+  new.requested_notional_quote := new.requested_volume * v_price;
+  return new;
+end;
+$function$;
+
+comment on function public.guard_residual_sell_order_v751() is
+  'v7.6.5 protected-trailing guard with 180m first-tranche executable-net recovery and emergency bypass.';
+
+update public.trading_positions
+set metadata = metadata
+where state in ('OPEN','EXITING') and lower(coalesce(exchange,'')) in ('binance','binance_futures');
+
+do $verify$
+declare
+  v_guard text;
+  v_enforce text;
+begin
+  select pg_get_functiondef(p.oid) into v_guard
+  from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+  where n.nspname='public' and p.proname='guard_residual_sell_order_v751';
+  select pg_get_functiondef(p.oid) into v_enforce
+  from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+  where n.nspname='public' and p.proname='enforce_residual_exit_position_policy_v751';
+  if position('STALE_RECOVERY_NET_POSITIVE_EXIT_180M' in coalesce(v_guard,'')) = 0
+     or position('FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M' in coalesce(v_guard,'')) = 0
+     or position('STALE_RECOVERY_REQUIRES_POSITIVE_NET' in coalesce(v_guard,'')) = 0
+     or position('EMERGENCY' in coalesce(v_guard,'')) = 0 then
+    raise exception 'V765_GUARD_NOT_INSTALLED';
+  end if;
+  if position('stale_recovery_after_seconds' in coalesce(v_enforce,'')) = 0
+     or position('PROTECTED_TRAIL_RECOVERY180M_V2' in coalesce(v_enforce,'')) = 0 then
+    raise exception 'V765_POLICY_METADATA_NOT_INSTALLED';
+  end if;
+end;
+$verify$;
+'''
+migration_path = Path('supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql')
+if migration_path.exists():
+    raise SystemExit(f'{migration_path}: already exists')
+migration_path.write_text(migration)
+
+# ---------------------------------------------------------------------------
+# Static cross-layer tests.
+# ---------------------------------------------------------------------------
+replace_exact(
+    'supabase/functions/market-autotrader/futures-lane.test.ts',
+    '''const PROTECTED_MIGRATION = await Deno.readTextFile(
+  new URL("supabase/migrations/20260810133000_protected_trailing_exit_v761.sql", ROOT),
+);
+''',
+    '''const PROTECTED_MIGRATION = await Deno.readTextFile(
+  new URL("supabase/migrations/20260810133000_protected_trailing_exit_v761.sql", ROOT),
+);
+const RECOVERY_MIGRATION = await Deno.readTextFile(
+  new URL("supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql", ROOT),
+);
+''',
+)
+replace_exact(
+    'supabase/functions/market-autotrader/futures-lane.test.ts',
+    '''  assert(PROTECTED_MIGRATION.includes("FUTURES_FIRST_TRANCHE_THRESHOLD_NOT_REACHED"));
+});
+''',
+    '''  assert(PROTECTED_MIGRATION.includes("FUTURES_FIRST_TRANCHE_THRESHOLD_NOT_REACHED"));
+  assert(RECOVERY_MIGRATION.includes("FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M"));
+  assert(RECOVERY_MIGRATION.includes("STALE_RECOVERY_REQUIRES_POSITIVE_NET"));
+});
+''',
+)
+replace_exact(
+    'supabase/functions/market-autotrader/futures-lane.test.ts',
+    '''  assert(PROTECTED_MIGRATION.includes("v_gross_return_pct <= -3.999"));
+});
+''',
+    '''  assert(PROTECTED_MIGRATION.includes("v_gross_return_pct <= -3.999"));
+  assert(RECOVERY_MIGRATION.includes("STALE_RECOVERY_NET_POSITIVE_EXIT_180M"));
+  assert(RECOVERY_MIGRATION.includes("v_held_seconds < 10800"));
+});
+''',
+)
+replace_exact(
+    'supabase/functions/market-autotrader/futures-lane.test.ts',
+    '''  assert(ENGINE.includes('decisionReason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"'));
+  assert(ENGINE.includes("const protectedHoldQuantity = fullLiquidationExit"));
+});
+''',
+    '''  assert(ENGINE.includes('decisionReason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"'));
+  assert(ENGINE.includes('decisionReason === "STALE_RECOVERY_NET_POSITIVE_EXIT_180M"'));
+  assert(ENGINE.includes('decisionReason === "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M"'));
+  assert(ENGINE.includes('action === "EMERGENCY"'));
+  assert(ENGINE.includes("const protectedHoldQuantity = fullLiquidationExit"));
+  assert(RECOVERY_MIGRATION.includes("upper(coalesce(new.purpose, '')) = 'EMERGENCY'"));
+});
+''',
+)
+
+# ---------------------------------------------------------------------------
+# Permanent deploy workflows.
+# ---------------------------------------------------------------------------
+replace_exact(
+    '.github/workflows/deploy-market-autotrader-v707.yml',
+    '      - "supabase/migrations/20260810133000_protected_trailing_exit_v761.sql"\n      - ".github/workflows/deploy-market-autotrader-v707.yml"',
+    '      - "supabase/migrations/20260810133000_protected_trailing_exit_v761.sql"\n      - "supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql"\n      - ".github/workflows/deploy-market-autotrader-v707.yml"',
+    expected=2,
+)
+replace_exact(
+    '.github/workflows/deploy-market-autotrader-v707.yml',
+    '''          grep -q 'SPOT-PROTECTED-TRAIL-TP5-SL4-FLOOR3-TRAIL1P5-V1' supabase/functions/market-autotrader/index.ts
+''',
+    '''          grep -q 'SPOT-PROTECTED-TRAIL-TP5-SL4-FLOOR3-TRAIL1P5-RECOVERY180M-V2' supabase/functions/market-autotrader/index.ts
+          grep -q 'STALE_RECOVERY_NET_POSITIVE_EXIT_180M' supabase/functions/market-autotrader/index.ts
+          grep -q 'staleRecoveryAfterSeconds: 180 \* 60' supabase/functions/market-autotrader/spot-exit-policy.ts
+''',
+)
+replace_exact(
+    '.github/workflows/deploy-market-autotrader-v707.yml',
+    '''          ! grep -q '"RECOVERY_NET_POSITIVE_EXIT"' supabase/functions/market-autotrader/index.ts
+''',
+    '''          grep -q 'FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M' supabase/functions/market-autotrader/index.ts
+''',
+)
+replace_exact(
+    '.github/workflows/deploy-market-autotrader-v707.yml',
+    '''          grep -q 'FUTURES-PROTECTED-TRAIL-ROE15-SL12-FLOOR9-TRAIL4P5-V1' supabase/functions/market-autotrader/index.ts
+''',
+    '''          grep -q 'FUTURES-PROTECTED-TRAIL-ROE15-SL12-FLOOR9-TRAIL4P5-RECOVERY180M-V2' supabase/functions/market-autotrader/index.ts
+''',
+)
+replace_exact(
+    '.github/workflows/deploy-market-autotrader-v707.yml',
+    '''          grep -q 'drop trigger if exists zzzzzzz_trading_positions_spot_split_stop_v762' \\
+            supabase/migrations/20260810133000_protected_trailing_exit_v761.sql
+''',
+    '''          grep -q 'drop trigger if exists zzzzzzz_trading_positions_spot_split_stop_v762' \\
+            supabase/migrations/20260810133000_protected_trailing_exit_v761.sql
+          grep -q 'STALE_RECOVERY_REQUIRES_POSITIVE_NET' \\
+            supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql
+          grep -q "upper(coalesce(new.purpose, '')) = 'EMERGENCY'" \\
+            supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql
+''',
+)
+replace_exact(
+    '.github/workflows/deploy-market-autotrader-v707.yml',
+    '''                and exists (
+                  select 1 from public.trading_ops_invariants
+                  where id = 1
+                    and canonical_engine_revision = '7.6.0-BINANCE-FUTURES'
+                );
+''',
+    '''                and exists (
+                  select 1 from public.trading_ops_invariants
+                  where id = 1
+                    and canonical_engine_revision = '7.6.0-BINANCE-FUTURES'
+                )
+                and exists (
+                  select 1
+                  from pg_proc p
+                  join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public'
+                    and p.proname = 'guard_residual_sell_order_v751'
+                    and position('STALE_RECOVERY_NET_POSITIVE_EXIT_180M' in pg_get_functiondef(p.oid)) > 0
+                    and position('FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M' in pg_get_functiondef(p.oid)) > 0
+                );
+''',
+)
+replace_exact(
+    '.github/workflows/main.deploy-supabase.yml',
+    '''          psql "${SUPABASE_DB_URL}" \\
+            --set=ON_ERROR_STOP=1 \\
+            --single-transaction \\
+            --file supabase/migrations/20260810133000_protected_trailing_exit_v761.sql
+''',
+    '''          psql "${SUPABASE_DB_URL}" \\
+            --set=ON_ERROR_STOP=1 \\
+            --single-transaction \\
+            --file supabase/migrations/20260810133000_protected_trailing_exit_v761.sql
+          psql "${SUPABASE_DB_URL}" \\
+            --set=ON_ERROR_STOP=1 \\
+            --single-transaction \\
+            --file supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql
+''',
+)
+replace_exact(
+    'validation/v700-deploy-validation.mjs',
+    '''    deployWorkflow.includes("20260810010000_binance_futures_lane_v760.sql") &&
+    !deployWorkflow.includes("--file supabase/migrations/202607") &&
+''',
+    '''    deployWorkflow.includes("20260810010000_binance_futures_lane_v760.sql") &&
+    deployWorkflow.includes("20260811090700_first_tranche_recovery_exit_v765.sql") &&
+    !deployWorkflow.includes("--file supabase/migrations/202607") &&
+''',
+)
+
+print('v765 patch staged successfully')
