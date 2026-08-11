@@ -48,6 +48,9 @@ export function orderTimeExitPolicyQuote(
   quote: ExecutableNetExitQuote,
 ): ExitPolicyQuoteRecord {
   const executablePrice = quote.executableVwap > 0 ? quote.executableVwap : quote.limitPrice;
+  const priorApprovedReason = typeof priorQuote?.approved_reason === "string"
+    ? String(priorQuote.approved_reason).trim()
+    : "";
   return {
     ...(priorQuote && typeof priorQuote === "object" ? priorQuote : {}),
     ...audit,
@@ -55,8 +58,18 @@ export function orderTimeExitPolicyQuote(
       ? { price: executablePrice, price_basis_runtime: "EXECUTABLE_VWAP" }
       : {}),
     ...(quote.allowed
-      ? { approved_action: "STOP", approved_reason: "POSITIVE_NET_AFTER_180S" }
-      : { approved_action: "NONE", approved_reason: `BLOCKED_${quote.reason}` }),
+      ? {
+        approved_action: "STOP",
+        approved_reason: priorApprovedReason || "POSITIVE_NET_AFTER_180S",
+        executable_net_allowed: true,
+        expected_net_profit_quote: quote.expectedNetProfitQuote,
+      }
+      : {
+        approved_action: "NONE",
+        approved_reason: `BLOCKED_${quote.reason}`,
+        executable_net_allowed: false,
+        expected_net_profit_quote: quote.expectedNetProfitQuote,
+      }),
   };
 }
 

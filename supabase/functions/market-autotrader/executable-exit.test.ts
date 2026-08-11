@@ -177,3 +177,34 @@ Deno.test("a quote with no executable price leaves the guard nothing to price ag
   assert(merged.price === 9.1);
   assert(merged.approved_action === "NONE");
 });
+
+Deno.test("order-time quote preserves stale-recovery authority and explicit net fields", () => {
+  const quote = quoteExecutableNetExit({
+    bids: [{ price: 10.5, size: 10 }],
+    requestedQuantity: 10,
+    availableQuantity: 10,
+    quantityStep: 0.1,
+    buyPrincipalQuote: 100,
+    alreadyPaidFeesQuote: 0.1,
+    priorSellProceedsQuote: 0,
+    sellFeeRate: 0.001,
+    slippageSafetyRate: 0.0009,
+  });
+  assert(quote.allowed, quote.reason);
+  const merged = orderTimeExitPolicyQuote(
+    {
+      approved_action: "STOP",
+      approved_reason: "STALE_RECOVERY_NET_POSITIVE_EXIT_180M",
+      held_seconds: 10_900,
+    },
+    { revision: "7.6.5-RECOVERY180M" },
+    quote,
+  );
+  assert(
+    merged.approved_reason === "STALE_RECOVERY_NET_POSITIVE_EXIT_180M",
+    String(merged.approved_reason),
+  );
+  assert(merged.approved_action === "STOP");
+  assert(merged.executable_net_allowed === true);
+  assert(Number(merged.expected_net_profit_quote) > 0);
+});

@@ -177,6 +177,9 @@ Deno.test("every futures exit reason is authorized end to end", () => {
   assert(PROTECTED_MIGRATION.includes("FUTURES_FIRST_TRANCHE_THRESHOLD_NOT_REACHED"));
   assert(RECOVERY_MIGRATION.includes("FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M"));
   assert(RECOVERY_MIGRATION.includes("STALE_RECOVERY_REQUIRES_POSITIVE_NET"));
+  assert(RECOVERY_MIGRATION.includes("pending_exit_reason"));
+  assert(RECOVERY_MIGRATION.includes("executable_net_allowed"));
+  assert(RECOVERY_MIGRATION.includes("'{exit_policy_quote,allowed}'"));
 });
 
 Deno.test("the spot lane uses the approved protected trailing thresholds", () => {

@@ -153,15 +153,22 @@ begin
   v_tolerance := greatest(v_step * 1.001, p.initial_quantity * 0.00000001);
   v_protected_qty := greatest(0, p.initial_quantity * 0.5);
   v_residual_stage := p.remaining_quantity <= v_protected_qty + v_tolerance;
-  v_approved_reason := coalesce(
-    nullif(p.metadata#>>'{exit_policy_quote,approved_reason}', ''),
-    nullif(p.metadata->>'pending_exit_reason', ''),
-    ''
-  );
+  v_approved_reason := case
+    when coalesce(p.metadata->>'pending_exit_reason', '') in (
+      'STALE_RECOVERY_NET_POSITIVE_EXIT_180M',
+      'FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M'
+    ) then p.metadata->>'pending_exit_reason'
+    else coalesce(
+      nullif(p.metadata#>>'{exit_policy_quote,approved_reason}', ''),
+      nullif(p.metadata->>'pending_exit_reason', ''),
+      ''
+    )
+  end;
   v_requested_qty := greatest(0, coalesce(new.requested_volume, 0));
   v_held_seconds := greatest(0, extract(epoch from (now() - coalesce(p.opened_at, p.created_at, now()))));
   v_executable_net_allowed := coalesce(
     nullif(p.metadata#>>'{exit_policy_quote,executable_net_allowed}', '')::boolean,
+    nullif(p.metadata#>>'{exit_policy_quote,allowed}', '')::boolean,
     false
   );
   v_expected_net_profit_quote := coalesce(
