@@ -5621,7 +5621,11 @@ async function applyExit(
   const targetAction = action === "TARGET_1" || action === "TARGET_2";
   const positiveNetAfter180 = decisionReason === "POSITIVE_NET_AFTER_180S";
   const recoveryNetPositive = decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT";
-  const positiveNetGuardedExit = positiveNetAfter180 || recoveryNetPositive;
+  const staleRecoveryNetPositive =
+    decisionReason === "STALE_RECOVERY_NET_POSITIVE_EXIT_180M" ||
+    decisionReason === "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M";
+  const positiveNetGuardedExit =
+    positiveNetAfter180 || recoveryNetPositive || staleRecoveryNetPositive;
   // Every reason that must be allowed to liquidate the protected half.
   // First take-profit (+5% spot / +15% futures ROE) is the only split-exit path that
   // preserves 50%. Hard stops and residual protected-trail exits must close everything
@@ -5632,7 +5636,8 @@ async function applyExit(
     decisionReason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT" ||
     decisionReason === "RESIDUAL_TAKE_PROFIT_10" ||
     decisionReason === "RESIDUAL_STOP_LOSS_4" ||
-    decisionReason === "FUTURES_RESIDUAL_TAKE_PROFIT_ROE_30" || recoveryNetPositive;
+    decisionReason === "FUTURES_RESIDUAL_TAKE_PROFIT_ROE_30" ||
+    staleRecoveryNetPositive || recoveryNetPositive || action === "EMERGENCY";
   const protectedHoldQuantity = fullLiquidationExit
     ? 0
     : Math.max(0, finite(position.initial_quantity) * 0.5);
@@ -5674,13 +5679,19 @@ async function applyExit(
       quantity,
       settings,
       cycleId,
-      recoveryNetPositive ? "RECOVERY_NET_POSITIVE_BLOCKED" : "POSITIVE_NET_AFTER_180S_BLOCKED",
+      staleRecoveryNetPositive
+        ? "STALE_RECOVERY_NET_POSITIVE_BLOCKED"
+        : recoveryNetPositive
+        ? "RECOVERY_NET_POSITIVE_BLOCKED"
+        : "POSITIVE_NET_AFTER_180S_BLOCKED",
     )
     : null;
   if (!position.is_paper && positiveNetGuardedExit && !protectedPositiveNet) {
     return {
       action: "NONE",
-      reason: recoveryNetPositive
+      reason: staleRecoveryNetPositive
+        ? "180m recovery net-positive order-time recheck blocked; position retained"
+        : recoveryNetPositive
         ? "recovery net-positive order-time recheck blocked; position retained"
         : "positive-net order-time recheck blocked; position retained",
     };
@@ -5719,7 +5730,9 @@ async function applyExit(
       },
     }))[0] || position;
     await event(
-      recoveryNetPositive
+      staleRecoveryNetPositive
+        ? "STALE_RECOVERY_NET_POSITIVE_FOK_NOT_FILLED"
+        : recoveryNetPositive
         ? "RECOVERY_NET_POSITIVE_FOK_NOT_FILLED"
         : positiveNetAfter180
         ? "POSITIVE_NET_AFTER_180S_FOK_NOT_FILLED"
@@ -5789,7 +5802,9 @@ async function applyExit(
     (targetAction || positiveNetGuardedExit) && finalized?.closed &&
     finite(finalized?.position?.realized_pnl_quote) <= 0
   ) {
-    const breachReason = recoveryNetPositive
+    const breachReason = staleRecoveryNetPositive
+      ? "STALE_RECOVERY_NET_POSITIVE_GUARD_BREACH"
+      : recoveryNetPositive
       ? "RECOVERY_NET_POSITIVE_GUARD_BREACH"
       : positiveNetAfter180
       ? "POSITIVE_NET_AFTER_180S_GUARD_BREACH"
@@ -5818,6 +5833,8 @@ async function applyExit(
     finalized?.closed &&
     (decisionReason === "POSITIVE_NET_AFTER_180S" ||
       decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT" ||
+      decisionReason === "STALE_RECOVERY_NET_POSITIVE_EXIT_180M" ||
+      decisionReason === "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M" ||
       decisionReason === "HARD_STOP_MINUS_2_AFTER_180S") &&
     !(positiveNetGuardedExit && finite(finalized?.position?.realized_pnl_quote) <= 0)
   ) {
@@ -7650,8 +7667,8 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       // Futures 3x: -12% ROE hard stop, +15% ROE half TP, then +9% floor / 4.5pp trailing.
       if ((lobMode || futuresLane) && !settings.emergency_liquidation) {
         const activeSplitPolicyVersion = futuresLane
-          ? "FUTURES-PROTECTED-TRAIL-ROE15-SL12-FLOOR9-TRAIL4P5-V1"
-          : "SPOT-PROTECTED-TRAIL-TP5-SL4-FLOOR3-TRAIL1P5-V1";
+          ? "FUTURES-PROTECTED-TRAIL-ROE15-SL12-FLOOR9-TRAIL4P5-RECOVERY180M-V2"
+          : "SPOT-PROTECTED-TRAIL-TP5-SL4-FLOOR3-TRAIL1P5-RECOVERY180M-V2";
         const requestedAction = decision.action;
         const requestedReason = String((decision as any).reason || "");
         const safetyRequested = requestedAction === "STOP" &&
@@ -7799,6 +7816,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             netReturnPct: residualNetReturnPct,
             executableNetAllowed: residualQuote.allowed,
             expectedNetProfitQuote: finite(residualQuote.expectedNetProfitQuote),
+            heldSeconds,
             safetyRequested,
           });
           decision = {
@@ -7826,6 +7844,9 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             grossReturnPct,
             peakGrossReturnPct,
             residualNetReturnPct,
+            heldSeconds,
+            executableNetAllowed: executableQuote.allowed,
+            expectedNetProfitQuote: finite(executableQuote.expectedNetProfitQuote),
             safetyRequested,
           }) as any;
         }
@@ -7917,6 +7938,8 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision.reason === "FUTURES_HALF_STOP_LOSS_ROE_12" ||
           decision.reason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT" ||
           decision.reason === "RESIDUAL_PROTECTED_TRAIL_EXIT" ||
+          decision.reason === "STALE_RECOVERY_NET_POSITIVE_EXIT_180M" ||
+          decision.reason === "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M" ||
           decision.reason === "BB_UPPER_REENTRY_CONFIRMED" ||
           decision.reason === "BB_RECLAIM_FAILED" ||
           decision.reason === "ORDERBOOK_COLLAPSE";

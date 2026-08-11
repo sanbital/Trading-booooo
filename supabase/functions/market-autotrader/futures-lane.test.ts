@@ -21,6 +21,9 @@ const MIGRATION = await Deno.readTextFile(
 const PROTECTED_MIGRATION = await Deno.readTextFile(
   new URL("supabase/migrations/20260810133000_protected_trailing_exit_v761.sql", ROOT),
 );
+const RECOVERY_MIGRATION = await Deno.readTextFile(
+  new URL("supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql", ROOT),
+);
 
 Deno.test("binance_futures routes like a USDT venue", () => {
   assert(isBinanceFutures("binance_futures"));
@@ -172,6 +175,8 @@ Deno.test("every futures exit reason is authorized end to end", () => {
   assert(PROTECTED_MIGRATION.includes("FUTURES_PROTECTED_TRAIL_NOT_REACHED"));
   assert(PROTECTED_MIGRATION.includes("v_protect_roe_pct := greatest(9, v_peak_roe_pct - 4.5)"));
   assert(PROTECTED_MIGRATION.includes("FUTURES_FIRST_TRANCHE_THRESHOLD_NOT_REACHED"));
+  assert(RECOVERY_MIGRATION.includes("FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M"));
+  assert(RECOVERY_MIGRATION.includes("STALE_RECOVERY_REQUIRES_POSITIVE_NET"));
 });
 
 Deno.test("the spot lane uses the approved protected trailing thresholds", () => {
@@ -180,6 +185,8 @@ Deno.test("the spot lane uses the approved protected trailing thresholds", () =>
   assert(PROTECTED_MIGRATION.includes("v_protect_pct := greatest(3, v_peak_return_pct - 1.5)"));
   assert(PROTECTED_MIGRATION.includes("SPOT_PROTECTED_TRAIL_NOT_REACHED"));
   assert(PROTECTED_MIGRATION.includes("v_gross_return_pct <= -3.999"));
+  assert(RECOVERY_MIGRATION.includes("STALE_RECOVERY_NET_POSITIVE_EXIT_180M"));
+  assert(RECOVERY_MIGRATION.includes("v_held_seconds < 10800"));
 });
 
 Deno.test("the gateway can close a futures long and can never open a short", () => {
@@ -207,5 +214,9 @@ Deno.test("engine full-liquidation reasons release the protected half", () => {
   assert(ENGINE.includes('decisionReason === "FUTURES_HALF_STOP_LOSS_ROE_12"'));
   assert(ENGINE.includes('decisionReason === "RESIDUAL_PROTECTED_TRAIL_EXIT"'));
   assert(ENGINE.includes('decisionReason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"'));
+  assert(ENGINE.includes('decisionReason === "STALE_RECOVERY_NET_POSITIVE_EXIT_180M"'));
+  assert(ENGINE.includes('decisionReason === "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M"'));
+  assert(ENGINE.includes('action === "EMERGENCY"'));
   assert(ENGINE.includes("const protectedHoldQuantity = fullLiquidationExit"));
+  assert(RECOVERY_MIGRATION.includes("upper(coalesce(new.purpose, '')) = 'EMERGENCY'"));
 });

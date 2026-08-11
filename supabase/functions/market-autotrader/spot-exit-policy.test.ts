@@ -7,6 +7,9 @@ function decide(overrides: Partial<Parameters<typeof spotSplitExitDecision>[0]> 
     grossReturnPct: 0,
     peakGrossReturnPct: 0,
     residualNetReturnPct: 0,
+    heldSeconds: 0,
+    executableNetAllowed: false,
+    expectedNetProfitQuote: -1,
     safetyRequested: false,
     ...overrides,
   });
@@ -42,4 +45,44 @@ Deno.test("spot residual floor never goes below +3%", () => {
   const exit = decide({ residualStage: true, grossReturnPct: 3, peakGrossReturnPct: 4 });
   assertEquals(exit.action, "STOP");
   assertEquals(exit.residualProtectPct, 3);
+});
+
+Deno.test("spot 180m recovery exits 100% only on executable positive net", () => {
+  const before = decide({
+    heldSeconds: 10_799,
+    grossReturnPct: 1,
+    executableNetAllowed: true,
+    expectedNetProfitQuote: 0.2,
+  });
+  assertEquals(before.action, "NONE");
+
+  const exit = decide({
+    heldSeconds: 10_800,
+    grossReturnPct: 1,
+    executableNetAllowed: true,
+    expectedNetProfitQuote: 0.2,
+  });
+  assertEquals(exit.action, "STOP");
+  assertEquals(exit.fraction, 1);
+  assertEquals(exit.reason, "STALE_RECOVERY_NET_POSITIVE_EXIT_180M");
+
+  const blocked = decide({
+    heldSeconds: 10_800,
+    grossReturnPct: 1,
+    executableNetAllowed: false,
+    expectedNetProfitQuote: -0.01,
+  });
+  assertEquals(blocked.action, "NONE");
+  assertEquals(blocked.reason, "STALE_RECOVERY_AWAITING_POSITIVE_NET_180M");
+});
+
+Deno.test("spot +5 target keeps precedence after 180m", () => {
+  const d = decide({
+    heldSeconds: 20_000,
+    grossReturnPct: 5,
+    executableNetAllowed: true,
+    expectedNetProfitQuote: 1,
+  });
+  assertEquals(d.fraction, 0.5);
+  assertEquals(d.reason, "HALF_HOLD_TAKE_PROFIT_5");
 });

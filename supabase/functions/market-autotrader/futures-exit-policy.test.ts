@@ -19,6 +19,7 @@ function decide(overrides: Record<string, unknown> = {}) {
     netReturnPct: 0,
     executableNetAllowed: false,
     expectedNetProfitQuote: -1,
+    heldSeconds: 0,
     safetyRequested: false,
     ...overrides,
   });
@@ -77,4 +78,45 @@ Deno.test("futures residual protection floor is never below +9% ROE", () => {
   const d = decide({ residualStage: true, grossReturnPct: 3, peakGrossReturnPct: 4 });
   assertEquals(d.residualProtectRoePct, 9);
   assertEquals(d.action, "STOP");
+});
+
+Deno.test("futures 180m recovery exits 100% only on executable positive net", () => {
+  const before = decide({
+    heldSeconds: 10_799,
+    grossReturnPct: 0.5,
+    executableNetAllowed: true,
+    expectedNetProfitQuote: 0.2,
+  });
+  assertEquals(before.action, "NONE");
+
+  const exit = decide({
+    heldSeconds: 10_800,
+    grossReturnPct: 0.5,
+    executableNetAllowed: true,
+    expectedNetProfitQuote: 0.2,
+  });
+  assertEquals(exit.action, "STOP");
+  assertEquals(exit.fraction, 1);
+  assertEquals(exit.reason, "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M");
+
+  const blocked = decide({
+    heldSeconds: 10_800,
+    grossReturnPct: 0.5,
+    executableNetAllowed: false,
+    expectedNetProfitQuote: -0.01,
+  });
+  assertEquals(blocked.action, "NONE");
+  assertEquals(blocked.reason, "FUTURES_STALE_RECOVERY_AWAITING_POSITIVE_NET_180M");
+});
+
+Deno.test("futures +15% ROE target keeps precedence after 180m", () => {
+  const d = decide({
+    heldSeconds: 20_000,
+    grossReturnPct: 5,
+    peakGrossReturnPct: 5,
+    executableNetAllowed: true,
+    expectedNetProfitQuote: 1,
+  });
+  assertEquals(d.fraction, 0.5);
+  assertEquals(d.reason, "FUTURES_HALF_TAKE_PROFIT_ROE_15");
 });

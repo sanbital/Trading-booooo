@@ -9,17 +9,14 @@
 //
 //   1. Default leverage is 3x.
 //   2. Measured on margin (ROE, i.e. leverage-applied return):
-//        -12% -> stop out HALF the position
-//        +15% -> take profit on HALF the position
-//   3. The remaining half:
-//        - if it has been running at a NEGATIVE return, sell the whole remainder the
-//          moment that return flips positive;
-//        - otherwise take profit at +30% ROE.
+//        -12% -> hard stop 100%
+//        +15% -> take profit on 50%
+//   3. Remaining 50% after TP: protect at max(+9% ROE, peak ROE - 4.5pp).
+//   4. If the +15% ROE first TP has not happened within 180 minutes, keep the -12% ROE
+//      hard stop but exit 100% on the first fees/slippage-adjusted executable net profit > 0.
 //
-// At 3x these ROE gates are exactly -4% / +5% / +10% on price, which is the same shape as
-// the spot half-hold policy. The policy is written in ROE rather than price so changing
-// the configured leverage moves the price gates with it instead of silently changing how
-// much of the account each rule risks.
+// At 3x the first TP/stop are +5%/-4% price moves. The policy is written in ROE so changing
+// leverage preserves the margin-risk thresholds rather than silently changing account risk.
 
 export const DEFAULT_FUTURES_LEVERAGE = 3;
 export const MIN_FUTURES_LEVERAGE = 1;
@@ -40,6 +37,8 @@ export const FUTURES_SPLIT_EXIT_THRESHOLDS = {
   firstTakeProfitFraction: 0.5,
   /** Fraction closed at the hard stop. */
   hardStopFraction: 1,
+  /** First-tranche recovery mode starts after three hours without the +15% ROE TP. */
+  staleRecoveryAfterSeconds: 180 * 60,
 } as const;
 
 export type FuturesSplitExitReason =
@@ -48,7 +47,9 @@ export type FuturesSplitExitReason =
   | "FUTURES_HALF_AWAITING_ROE_15_OR_ROE_MINUS_12"
   | "FUTURES_HALF_THRESHOLD_OVERRIDES_NON_PRICE_SAFETY_EXIT"
   | "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"
-  | "FUTURES_RESIDUAL_PROTECTED_TRAIL_ACTIVE";
+  | "FUTURES_RESIDUAL_PROTECTED_TRAIL_ACTIVE"
+  | "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M"
+  | "FUTURES_STALE_RECOVERY_AWAITING_POSITIVE_NET_180M";
 
 export type FuturesSplitExitInput = {
   /** True once the tradable first half has been sold and only the residual is left. */
@@ -75,6 +76,8 @@ export type FuturesSplitExitInput = {
   executableNetAllowed: boolean;
   /** Expected net profit of that residual sale, in quote currency. */
   expectedNetProfitQuote: number;
+  /** Position age used only for the first-tranche 180-minute recovery rule. */
+  heldSeconds: number;
   /** A non-price safety request (reconciliation/risk) that the thresholds override. */
   safetyRequested?: boolean;
 };
@@ -145,22 +148,6 @@ export function futuresPriceReturnPctForRoe(roePct: number, leverage: number): n
   return finite(roePct) / normalizeFuturesLeverage(leverage);
 }
 
-/**
- * Latch for rule 3. The residual enters recovery as soon as it is seen underwater, whether
- * that is because the first half stopped out at -12% ROE (the residual is underwater by
- * construction at that moment) or because a residual that had taken the +15% half profit
- * later fell back below its entry. Once latched it stays latched, so the position leaves
- * at the flip back to positive rather than at the next threshold.
- */
-export function futuresRecoveryLatched(input: {
-  residualStage: boolean;
-  alreadyLatched: boolean;
-  netReturnPct: number;
-}): boolean {
-  if (input.alreadyLatched) return true;
-  return Boolean(input.residualStage) && finite(input.netReturnPct) < 0;
-}
-
 export function futuresSplitExitDecision(
   input: FuturesSplitExitInput,
 ): FuturesSplitExitDecision {
@@ -211,6 +198,22 @@ export function futuresSplitExitDecision(
       reason: "FUTURES_HALF_STOP_LOSS_ROE_12",
     };
   }
+  if (finite(input.heldSeconds) >= thresholds.staleRecoveryAfterSeconds) {
+    if (input.executableNetAllowed && finite(input.expectedNetProfitQuote) > 0) {
+      return {
+        ...base,
+        action: "STOP",
+        fraction: 1,
+        reason: "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M",
+      };
+    }
+    return {
+      ...base,
+      action: "NONE",
+      fraction: 0,
+      reason: "FUTURES_STALE_RECOVERY_AWAITING_POSITIVE_NET_180M",
+    };
+  }
   return {
     ...base,
     action: "NONE",
@@ -226,4 +229,5 @@ export const FUTURES_EXIT_APPROVED_REASONS: readonly FuturesSplitExitReason[] = 
   "FUTURES_HALF_TAKE_PROFIT_ROE_15",
   "FUTURES_HALF_STOP_LOSS_ROE_12",
   "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT",
+  "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M",
 ];

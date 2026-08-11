@@ -5,6 +5,7 @@ export const SPOT_SPLIT_EXIT_THRESHOLDS = {
   residualTrailingDrawdownPct: 1.5,
   firstTakeProfitFraction: 0.5,
   hardStopFraction: 1,
+  staleRecoveryAfterSeconds: 180 * 60,
 } as const;
 
 export type SpotSplitExitInput = {
@@ -12,6 +13,9 @@ export type SpotSplitExitInput = {
   grossReturnPct: number;
   peakGrossReturnPct: number;
   residualNetReturnPct: number;
+  heldSeconds: number;
+  executableNetAllowed: boolean;
+  expectedNetProfitQuote: number;
   safetyRequested?: boolean;
 };
 
@@ -27,6 +31,8 @@ export type SpotSplitExitDecision = {
  * - hard stop: -4%, close 100%
  * - first take-profit: +5%, close 50%
  * - residual: protect at max(+3%, peak - 1.5 percentage points)
+ * - if +5% was not reached within 180m, keep the -4% stop but close 100% at the
+ *   first executable exit whose fees/slippage-adjusted net profit is strictly positive
  */
 export function spotSplitExitDecision(input: SpotSplitExitInput): SpotSplitExitDecision {
   const t = SPOT_SPLIT_EXIT_THRESHOLDS;
@@ -51,6 +57,7 @@ export function spotSplitExitDecision(input: SpotSplitExitInput): SpotSplitExitD
       residualProtectPct,
     };
   }
+  // Target and hard stop remain authoritative even after the 180m recovery clock starts.
   if (input.grossReturnPct >= t.firstTakeProfitPct) {
     return {
       action: "STOP",
@@ -63,6 +70,20 @@ export function spotSplitExitDecision(input: SpotSplitExitInput): SpotSplitExitD
       action: "STOP",
       fraction: t.hardStopFraction,
       reason: "HALF_HOLD_STOP_LOSS_4",
+    };
+  }
+  if (Number(input.heldSeconds) >= t.staleRecoveryAfterSeconds) {
+    if (input.executableNetAllowed && Number(input.expectedNetProfitQuote) > 0) {
+      return {
+        action: "STOP",
+        fraction: 1,
+        reason: "STALE_RECOVERY_NET_POSITIVE_EXIT_180M",
+      };
+    }
+    return {
+      action: "NONE",
+      fraction: 0,
+      reason: "STALE_RECOVERY_AWAITING_POSITIVE_NET_180M",
     };
   }
   return {
