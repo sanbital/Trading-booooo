@@ -1,0 +1,164 @@
+name: Harden futures cost basis review 3
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/harden-pnl-cost-basis-review3.yml"
+      - "scripts/harden_pnl_cost_basis_review3.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: harden-pnl-cost-basis-review3
+  cancel-in-progress: false
+
+jobs:
+  patch-deploy-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Apply review-3 hardening
+        run: |
+          set -euo pipefail
+          python3 scripts/harden_pnl_cost_basis_review3.py
+          deno fmt \
+            supabase/functions/market-autotrader/exposure-ledger.ts \
+            supabase/functions/market-autotrader/exposure-ledger.test.ts \
+            supabase/functions/market-autotrader/index.ts
+
+      - name: Review A - full cost basis reaches every economic PnL caller
+        run: |
+          set -euo pipefail
+          test "$(grep -c 'initialQuantity: row.initial_quantity' supabase/functions/market-autotrader/index.ts)" = "3"
+          test "$(grep -c 'initialQuantity: position.initial_quantity' supabase/functions/market-autotrader/index.ts)" = "2"
+          test "$(grep -c 'buyPrincipalQuote: positionEntryCostBasis(position)' supabase/functions/market-autotrader/index.ts)" = "2"
+          grep -q 'return Math.max(persisted, derived);' supabase/functions/market-autotrader/index.ts
+          grep -q 'Math.max(persistedCostBasis, initial \* entry)' supabase/functions/market-autotrader/exposure-ledger.ts
+          grep -q 'firstTakeProfitRoePct: 15' supabase/functions/market-autotrader/futures-exit-policy.ts
+          grep -q 'firstStopLossRoePct: -12' supabase/functions/market-autotrader/futures-exit-policy.ts
+          grep -q 'residualProfitFloorRoePct: 9' supabase/functions/market-autotrader/futures-exit-policy.ts
+          grep -q 'residualTrailingDrawdownRoePct: 4.5' supabase/functions/market-autotrader/futures-exit-policy.ts
+
+      - name: Review B - restored and expanded regression tests
+        run: |
+          set -euo pipefail
+          deno fmt --check \
+            supabase/functions/market-autotrader/exposure-ledger.ts \
+            supabase/functions/market-autotrader/exposure-ledger.test.ts \
+            supabase/functions/market-autotrader/index.ts
+          deno test supabase/functions/market-autotrader/exposure-ledger.test.ts
+          deno test supabase/functions/market-autotrader/futures-exit-policy.test.ts
+          deno test supabase/functions/market-autotrader/spot-exit-policy.test.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          grep -q 'pending maker reservation consumes exposure before it fills' supabase/functions/market-autotrader/exposure-ledger.test.ts
+          grep -q 'partial fill releases only the executed reservation' supabase/functions/market-autotrader/exposure-ledger.test.ts
+          grep -q 'partial futures position keeps original principal in economic PnL' supabase/functions/market-autotrader/exposure-ledger.test.ts
+
+      - name: Commit canonical source
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/market-autotrader/exposure-ledger.ts \
+            supabase/functions/market-autotrader/exposure-ledger.test.ts \
+            supabase/functions/market-autotrader/index.ts
+          if git diff --cached --quiet; then
+            echo "Review-3 source already canonical"
+          else
+            git commit -m "fix: harden futures cost basis through partial exits"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Preserve state and pause new entries
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          previous=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
+          previous=${previous:-true}
+          echo "PREVIOUS_PAUSE_NEW_ENTRIES=${previous}" >> "${GITHUB_ENV}"
+          echo "ROLLOUT_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=true, updated_at=now() where id=1"
+
+      - name: Deploy autotrader
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy market-autotrader \
+            --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
+
+      - name: Review C - production monitor and accounting sanity
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          healthy=false
+          for attempt in $(seq 1 24); do
+            successes=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from public.trading_cycle_runs
+              where kind='MONITOR' and status='SUCCESS'
+                and started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz;")
+            failures=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from public.trading_cycle_runs
+              where status='FAILED' and started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz;")
+            bad=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from public.trading_positions
+              where exchange='binance_futures'
+                and state in ('OPEN','EXITING','RECONCILING')
+                and coalesce(initial_quantity,0)>0
+                and coalesce(average_entry_price,0)>0
+                and abs(coalesce(marked_pnl_quote,0)) > greatest(
+                  10, initial_quantity * average_entry_price * 0.25
+                );")
+            if [ "${successes}" -ge 1 ] && [ "${failures}" = "0" ] && [ "${bad}" = "0" ]; then
+              healthy=true
+              break
+            fi
+            sleep 5
+          done
+          test "${healthy}" = "true"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "
+            select market,state,leverage,
+                   round(marked_pnl_quote::numeric,6) marked_pnl,
+                   round((metadata->'live_mark'->>'fee_net_return_pct')::numeric,4) net_return_pct
+            from public.trading_positions
+            where exchange='binance_futures' and state in ('OPEN','EXITING','RECONCILING')
+            order by opened_at desc nulls last limit 5;"
+
+      - name: Restore prior entry state
+        if: always() && env.PREVIOUS_PAUSE_NEW_ENTRIES != ''
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          case "${PREVIOUS_PAUSE_NEW_ENTRIES}" in
+            true|t|1) restore=true ;;
+            false|f|0) restore=false ;;
+            *) restore=true ;;
+          esac
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=${restore}, updated_at=now() where id=1"
+          echo "Restored pause_new_entries=${restore}"
