@@ -10,6 +10,7 @@ on:
       - "supabase/migrations/20260802151000_prebreakout_burst_entry_exit_policy.sql"
       - "supabase/migrations/20260810010000_binance_futures_lane_v760.sql"
       - "supabase/migrations/20260810133000_protected_trailing_exit_v761.sql"
+      - "supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
@@ -20,6 +21,7 @@ on:
       - "supabase/functions/_shared/**"
       - "supabase/migrations/20260810010000_binance_futures_lane_v760.sql"
       - "supabase/migrations/20260810133000_protected_trailing_exit_v761.sql"
+      - "supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   workflow_dispatch:
 
@@ -54,6 +56,8 @@ jobs:
             supabase/functions/market-scanner/engine.ts \
             supabase/functions/market-autotrader/manual-position-import.ts \
             supabase/functions/market-autotrader/manual-position-import.test.ts \
+            supabase/functions/market-autotrader/executable-exit.ts \
+            supabase/functions/market-autotrader/executable-exit.test.ts \
             supabase/functions/market-autotrader/spot-exit-policy.ts \
             supabase/functions/market-autotrader/spot-exit-policy.test.ts \
             supabase/functions/market-autotrader/split-stop-policy.test.ts \
@@ -62,6 +66,7 @@ jobs:
             supabase/functions/market-autotrader/futures-lane.test.ts
           deno test supabase/functions/_shared/lob/minute-entry-gate.test.ts
           deno test supabase/functions/market-autotrader/manual-position-import.test.ts
+          deno test supabase/functions/market-autotrader/executable-exit.test.ts
           deno test \
             supabase/functions/market-autotrader/spot-exit-policy.test.ts \
             supabase/functions/market-autotrader/split-stop-policy.test.ts
@@ -82,13 +87,14 @@ jobs:
           grep -q 'M1_UPPER_BAND_NOT_TOUCHED' supabase/functions/_shared/lob/minute-entry-gate.ts
           grep -q 'BUY_PRESSURE_NOT_CONFIRMED' supabase/functions/_shared/lob/entry.ts
           grep -q 'const DEFAULT_DYNAMIC_OBSERVATION_MS = 15_000' supabase/functions/market-scanner/index.ts
-          grep -q 'SPOT-PROTECTED-TRAIL-TP5-SL4-FLOOR3-TRAIL1P5-V1' supabase/functions/market-autotrader/index.ts
+          grep -q 'SPOT-PROTECTED-TRAIL-TP5-SL4-FLOOR3-TRAIL1P5-RECOVERY180M-V2' supabase/functions/market-autotrader/index.ts
           grep -q 'spotSplitExitDecision' supabase/functions/market-autotrader/index.ts
           grep -q 'first_stop_loss_pct: -4' supabase/functions/market-autotrader/index.ts
           grep -q 'residual_profit_floor_pct: 3' supabase/functions/market-autotrader/index.ts
           grep -q 'residual_trailing_drawdown_pct: 1.5' supabase/functions/market-autotrader/index.ts
           grep -q 'decision.reason === "RESIDUAL_PROTECTED_TRAIL_EXIT"' supabase/functions/market-autotrader/index.ts
-          ! grep -q '"RECOVERY_NET_POSITIVE_EXIT"' supabase/functions/market-autotrader/index.ts
+          grep -q 'STALE_RECOVERY_NET_POSITIVE_EXIT_180M' supabase/functions/market-autotrader/index.ts
+          grep -q 'executable_net_allowed: true' supabase/functions/market-autotrader/executable-exit.ts
           ! grep -q 'halfHoldRecoveryExitDecision' supabase/functions/market-autotrader/index.ts
           ! grep -q 'hard_stop_return_pct: -2' supabase/functions/market-autotrader/index.ts
           ! grep -q 'hard_stop_after_seconds: 180' supabase/functions/market-autotrader/index.ts
@@ -97,18 +103,28 @@ jobs:
           grep -q 'BB_RECLAIM_FAILED' supabase/functions/market-autotrader/index.ts
           grep -q 'ORDERBOOK_COLLAPSE' supabase/functions/market-autotrader/index.ts
           grep -q '7.6.0-BINANCE-FUTURES' supabase/functions/market-autotrader/index.ts
-          grep -q 'FUTURES-PROTECTED-TRAIL-ROE15-SL12-FLOOR9-TRAIL4P5-V1' supabase/functions/market-autotrader/index.ts
+          grep -q 'FUTURES-PROTECTED-TRAIL-ROE15-SL12-FLOOR9-TRAIL4P5-RECOVERY180M-V2' supabase/functions/market-autotrader/index.ts
           grep -q 'decision.reason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"' supabase/functions/market-autotrader/index.ts
+          grep -q 'FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M' supabase/functions/market-autotrader/index.ts
+          grep -q 'action === "EMERGENCY"' supabase/functions/market-autotrader/index.ts
           grep -q 'FUTURES_MIN_ENTRY_MARGIN_USDT = 50' \
             supabase/functions/market-autotrader/futures-exit-policy.ts
           grep -q 'residualProfitFloorRoePct: 9' \
             supabase/functions/market-autotrader/futures-exit-policy.ts
           grep -q 'residualTrailingDrawdownRoePct: 4.5' \
             supabase/functions/market-autotrader/futures-exit-policy.ts
+          grep -q 'staleRecoveryAfterSeconds: 180 \* 60' \
+            supabase/functions/market-autotrader/futures-exit-policy.ts
           grep -q 'SPOT_POLICY_TRIGGERS_NOT_ISOLATED_FROM_FUTURES' \
             supabase/migrations/20260810010000_binance_futures_lane_v760.sql
           grep -q 'drop trigger if exists zzzzzzz_trading_positions_spot_split_stop_v762' \
             supabase/migrations/20260810133000_protected_trailing_exit_v761.sql
+          grep -q 'STALE_RECOVERY_REQUIRES_POSITIVE_NET' \
+            supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql
+          grep -q "upper(coalesce(new.purpose, '')) = 'EMERGENCY'" \
+            supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql
+          grep -q 'pending_exit_reason' \
+            supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql
           ! grep -q 'const exp1ArmWidthsBps' supabase/functions/market-autotrader/index.ts
 
   deploy:
@@ -127,7 +143,7 @@ jobs:
       - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
         with:
           version: 2.109.1
-      - name: Wait for v7.6 database schema
+      - name: Wait for v7.6.5 database schema
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
@@ -153,16 +169,28 @@ jobs:
                   select 1 from public.trading_ops_invariants
                   where id = 1
                     and canonical_engine_revision = '7.6.0-BINANCE-FUTURES'
+                )
+                and exists (
+                  select 1
+                  from pg_proc p
+                  join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public'
+                    and p.proname = 'guard_residual_sell_order_v751'
+                    and position('STALE_RECOVERY_NET_POSITIVE_EXIT_180M' in pg_get_functiondef(p.oid)) > 0
+                    and position('FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M' in pg_get_functiondef(p.oid)) > 0
+                    and position('STALE_RECOVERY_REQUIRES_POSITIVE_NET' in pg_get_functiondef(p.oid)) > 0
+                    and position('pending_exit_reason' in pg_get_functiondef(p.oid)) > 0
+                    and position('EMERGENCY' in pg_get_functiondef(p.oid)) > 0
                 );
             ")"
             if [ "${ready}" = "t" ]; then
-              echo "v7.6 database schema is ready"
+              echo "v7.6.5 database schema is ready"
               exit 0
             fi
-            echo "Waiting for v7.6 database schema (${attempt}/40)"
+            echo "Waiting for v7.6.5 database schema (${attempt}/40)"
             sleep 15
           done
-          echo "::error::v7.6 database schema was not ready before Edge Function deployment"
+          echo "::error::v7.6.5 database schema was not ready before Edge Function deployment"
           exit 1
       - name: Deploy scanner and autotrader
         env:
