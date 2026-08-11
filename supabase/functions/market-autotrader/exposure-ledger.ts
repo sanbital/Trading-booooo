@@ -65,7 +65,11 @@ export function calculateExposureLedger(row: ExposureLedgerRow): ExposureLedgerR
   // Futures OPEN rows intentionally do not book realized_cost_quote until reconciliation.
   // Their economic basis still exists: it is the filled contract quantity at average entry.
   // Spot rows already persist realized_cost_quote, so that canonical value continues to win.
-  const markedCostBasisQuote = persistedCostBasis > 0 ? persistedCostBasis : initial * entry;
+  // Persisted entry funds are canonical when present, while initial × average entry is
+  // the live fallback used by futures rows that can temporarily carry zero persisted cost.
+  // Taking the larger value also prevents a partially-exited row from ever treating only
+  // the sold slice as the cost basis of the whole economic position.
+  const markedCostBasisQuote = Math.max(persistedCostBasis, initial * entry);
   const markedNetPnlQuote = Math.max(0, finite(row.realizedProceedsQuote)) +
     liquidationValueQuote -
     markedCostBasisQuote -

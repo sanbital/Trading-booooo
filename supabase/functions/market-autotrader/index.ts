@@ -916,6 +916,7 @@ async function accountStats(
     const current = Math.max(0, finite(portfolio?.prices?.[row.market], entry));
     return sum + calculateExposureLedger({
       state: row.state,
+      initialQuantity: row.initial_quantity,
       remainingQuantity: row.remaining_quantity,
       reservedQuote: row.reserved_quote,
       reservedQuantity: row.reserved_quantity,
@@ -2004,6 +2005,7 @@ async function managedPortfolio(settings: TradingSettings, exchange: Exchange, p
     const current = Math.max(0, finite(portfolio?.prices?.[row.market], entry));
     const ledger = calculateExposureLedger({
       state: row.state,
+      initialQuantity: row.initial_quantity,
       remainingQuantity: row.remaining_quantity,
       reservedQuote: row.reserved_quote,
       reservedQuantity: row.reserved_quantity,
@@ -4248,6 +4250,7 @@ async function recordJointObjectiveSnapshot(
     const current = Math.max(0, finite(rawPortfolio?.prices?.[row.market], entry));
     return sum + calculateExposureLedger({
       state: row.state,
+      initialQuantity: row.initial_quantity,
       remainingQuantity: row.remaining_quantity,
       reservedQuote: row.reserved_quote,
       reservedQuantity: row.reserved_quantity,
@@ -5137,6 +5140,7 @@ async function snapshotAccount(
     openCost += qty * entry / leverage;
     unrealized += calculateExposureLedger({
       state: position.state,
+      initialQuantity: position.initial_quantity,
       remainingQuantity: position.remaining_quantity,
       averageEntryPrice: position.average_entry_price,
       plannedEntryPrice: position.planned_entry_price,
@@ -5259,10 +5263,20 @@ type ProtectedPositiveNetQuote = ProtectedTargetQuote & {
   audit: JsonRecord;
 };
 
+function positionEntryCostBasis(position: Position): number {
+  const persisted = Math.max(0, finite(position.realized_cost_quote));
+  const derived = Math.max(0, finite(position.initial_quantity)) *
+    Math.max(0, finite(position.average_entry_price, position.planned_entry_price));
+  // Spot normally persists exact executed funds; futures reconciliation can leave the
+  // field at zero while the live contract is already open. Never let that transient
+  // representation turn a real principal into zero cost.
+  return Math.max(persisted, derived);
+}
+
 function exactUnrecoveredPositionCost(position: Position): number {
   return Math.max(
     0,
-    finite(position.realized_cost_quote) + finite(position.paid_fees_quote) -
+    positionEntryCostBasis(position) + finite(position.paid_fees_quote) -
       finite(position.realized_proceeds_quote),
   );
 }
@@ -5346,7 +5360,7 @@ async function preparePositiveNetAfter180Exit(
     requestedQuantity,
     availableQuantity,
     quantityStep: finite(position.quantity_step, 0.00000001),
-    buyPrincipalQuote: finite(position.realized_cost_quote),
+    buyPrincipalQuote: positionEntryCostBasis(position),
     alreadyPaidFeesQuote: finite(position.paid_fees_quote),
     priorSellProceedsQuote: finite(position.realized_proceeds_quote),
     sellFeeRate: clamp(FEE_PCT[position.exchange] / 100, 0, 0.01),
@@ -6927,6 +6941,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       const trough = Math.min(current, finite(position.trough_price, position.average_entry_price));
       const liveMark = calculateExposureLedger({
         state: position.state,
+        initialQuantity: position.initial_quantity,
         remainingQuantity: position.remaining_quantity,
         reservedQuote: position.reserved_quote,
         reservedQuantity: position.reserved_quantity,
@@ -7692,7 +7707,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             ? policyQuantity
             : accountQuantity(portfolios[exchange], position.base_asset, true),
           quantityStep: finite(position.quantity_step, 0.00000001),
-          buyPrincipalQuote: finite(position.realized_cost_quote),
+          buyPrincipalQuote: positionEntryCostBasis(position),
           alreadyPaidFeesQuote: finite(position.paid_fees_quote),
           priorSellProceedsQuote: finite(position.realized_proceeds_quote),
           sellFeeRate: policyFeeRate,
