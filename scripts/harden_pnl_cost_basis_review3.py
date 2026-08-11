@@ -64,7 +64,11 @@ replace_exact(
     index,
     "      state: position.state,\n      remainingQuantity: position.remaining_quantity,",
     "      state: position.state,\n      initialQuantity: position.initial_quantity,\n      remainingQuantity: position.remaining_quantity,",
-    expected=2,
+)
+replace_exact(
+    index,
+    "        state: position.state,\n        remainingQuantity: position.remaining_quantity,",
+    "        state: position.state,\n        initialQuantity: position.initial_quantity,\n        remainingQuantity: position.remaining_quantity,",
 )
 
 test = Path("supabase/functions/market-autotrader/exposure-ledger.test.ts")
