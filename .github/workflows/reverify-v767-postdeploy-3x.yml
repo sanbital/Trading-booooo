@@ -10,6 +10,7 @@ on:
 permissions:
   contents: read
 
+# Final rerun after correcting the historical-context regression fixture.
 jobs:
   postdeploy-three-pass:
     runs-on: ubuntu-latest
@@ -25,8 +26,6 @@ jobs:
         with:
           version: 2.109.1
 
-      # PASS 1: whole repository. Kept as independent steps so the exact failing layer is
-      # observable and no long shell pipeline can mask/alter a subprocess exit status.
       - name: Pass 1A - repository diff integrity
         run: git diff --check
       - name: Pass 1B - repository typecheck
