@@ -10,6 +10,7 @@ on:
 permissions:
   contents: read
 
+# Rerun marker: momentum block regression is now independently executable.
 jobs:
   postdeploy-three-pass:
     runs-on: ubuntu-latest
