@@ -7826,6 +7826,8 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           entryPrice,
           executableExitPrice,
           protectedStopPrice: preT1ProtectedStopPrice,
+          executableNetAllowed: executableQuote.allowed,
+          executableNetProfitQuote: guardedNetProfitQuote,
         });
 
         const positionLeverageValue = positionLeverage(position);

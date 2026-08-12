@@ -18,6 +18,8 @@ export type PreT1ProfitProtectionInput = {
   entryPrice: number;
   executableExitPrice: number;
   protectedStopPrice: number;
+  executableNetAllowed: boolean;
+  executableNetProfitQuote: number;
 };
 
 /**
@@ -29,7 +31,10 @@ export function preT1ProfitProtectionHit(input: PreT1ProfitProtectionInput): boo
   const entry = Number(input.entryPrice);
   const exit = Number(input.executableExitPrice);
   const protectedStop = Number(input.protectedStopPrice);
+  const executableNetProfit = Number(input.executableNetProfitQuote);
   return input.hasTradableHalf === true &&
+    input.executableNetAllowed === true &&
+    Number.isFinite(executableNetProfit) && executableNetProfit > 0 &&
     Number.isFinite(entry) && entry > 0 &&
     Number.isFinite(exit) && exit > 0 &&
     Number.isFinite(protectedStop) && protectedStop > entry &&
