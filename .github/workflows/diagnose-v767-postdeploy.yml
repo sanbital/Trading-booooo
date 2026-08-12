@@ -17,42 +17,52 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Diff integrity
-        id: diff
+      - name: Scanner tests
+        id: scanner
         continue-on-error: true
-        run: git diff --check
-      - name: Repository typecheck
-        id: check
+        run: deno test --allow-read supabase/functions/market-scanner/*.test.ts
+      - name: Autotrader tests
+        id: autotrader
         continue-on-error: true
-        run: deno task check
-      - name: Repository tests
-        id: tests
+        run: deno test --allow-read supabase/functions/market-autotrader/*.test.ts
+      - name: Performance tests
+        id: performance
         continue-on-error: true
-        run: deno task test
-      - name: Gateway syntax
-        id: gateway_syntax
+        run: deno test --allow-read supabase/functions/market-performance/*.test.ts
+      - name: Shared root tests
+        id: shared
         continue-on-error: true
-        run: node --check gateway/server.mjs
-      - name: Gateway tests
-        id: gateway_tests
+        run: deno test --allow-read supabase/functions/_shared/*.test.ts
+      - name: Shared scalp tests
+        id: scalp
         continue-on-error: true
-        run: node --test gateway/server.test.mjs
-      - name: Report failed subcheck
+        run: deno test --allow-read supabase/functions/_shared/scalp/*.test.ts
+      - name: Shared LOB tests
+        id: lob
+        continue-on-error: true
+        run: deno test --allow-read supabase/functions/_shared/lob/*.test.ts
+      - name: Backtest tests
+        id: backtest
+        continue-on-error: true
+        run: deno test --allow-read backtest/*.test.ts
+      - name: Report failing test group
         if: always()
         env:
-          DIFF: ${{ steps.diff.outcome }}
-          CHECK: ${{ steps.check.outcome }}
-          TESTS: ${{ steps.tests.outcome }}
-          GATEWAY_SYNTAX: ${{ steps.gateway_syntax.outcome }}
-          GATEWAY_TESTS: ${{ steps.gateway_tests.outcome }}
+          SCANNER: ${{ steps.scanner.outcome }}
+          AUTOTRADER: ${{ steps.autotrader.outcome }}
+          PERFORMANCE: ${{ steps.performance.outcome }}
+          SHARED: ${{ steps.shared.outcome }}
+          SCALP: ${{ steps.scalp.outcome }}
+          LOB: ${{ steps.lob.outcome }}
+          BACKTEST: ${{ steps.backtest.outcome }}
         run: |
-          echo "diff=$DIFF check=$CHECK tests=$TESTS gateway_syntax=$GATEWAY_SYNTAX gateway_tests=$GATEWAY_TESTS"
-          for pair in "diff:$DIFF" "check:$CHECK" "tests:$TESTS" "gateway_syntax:$GATEWAY_SYNTAX" "gateway_tests:$GATEWAY_TESTS"; do
+          echo "scanner=$SCANNER autotrader=$AUTOTRADER performance=$PERFORMANCE shared=$SHARED scalp=$SCALP lob=$LOB backtest=$BACKTEST"
+          failed=0
+          for pair in "scanner:$SCANNER" "autotrader:$AUTOTRADER" "performance:$PERFORMANCE" "shared:$SHARED" "scalp:$SCALP" "lob:$LOB" "backtest:$BACKTEST"; do
             name=${pair%%:*}; outcome=${pair#*:}
-            if [ "$outcome" != "success" ]; then echo "::error::postdeploy subcheck failed: $name=$outcome"; fi
+            if [ "$outcome" != "success" ]; then
+              echo "::error::failing test group: $name=$outcome"
+              failed=1
+            fi
           done
-          test "$DIFF" = success
-          test "$CHECK" = success
-          test "$TESTS" = success
-          test "$GATEWAY_SYNTAX" = success
-          test "$GATEWAY_TESTS" = success
+          exit "$failed"
