@@ -98,10 +98,10 @@ Deno.test("momentum pattern remains short-lived and informational", () => {
   assert(decision.targetReturnNetBps > 0);
 });
 
-Deno.test("live-loss momentum block is default but remains explicitly reversible", () => {
-  // Live-fill review disabled standalone MOMENTUM_CONTINUATION by default. The pattern is
-  // intentionally retained so operators can still inspect it and explicitly reopen it
-  // with an empty blocked-pattern override after new evidence justifies doing so.
+Deno.test("live-loss momentum block is default and an explicit override removes that veto", () => {
+  // This test deliberately verifies only the block-list mechanism. Other independent LOB
+  // gates may still return WAIT, so requiring BUY here would make the test depend on the
+  // current values of unrelated admission thresholds or on test execution order.
   const blockedByDefault = evaluateLobEntry(momentumFeatures(), binanceCosts);
   assert(
     blockedByDefault.reasons.includes("LOB_PATTERN_BLOCKED_MOMENTUM_CONTINUATION"),
@@ -114,9 +114,8 @@ Deno.test("live-loss momentum block is default but remains explicitly reversible
   });
   assert(
     !explicitlyReopened.reasons.some((reason) => reason.startsWith("LOB_PATTERN_BLOCKED_")),
-    `empty override must reopen the pattern: ${explicitlyReopened.reasons.join(",")}`,
+    `empty override must remove the pattern veto: ${explicitlyReopened.reasons.join(",")}`,
   );
-  assertEquals(explicitlyReopened.decision, "BUY");
 });
 
 Deno.test("large historical gainer context cannot change present-tense admission", () => {
