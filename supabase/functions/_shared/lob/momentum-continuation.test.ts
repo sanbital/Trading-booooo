@@ -118,10 +118,12 @@ Deno.test("live-loss momentum block is default and an explicit override removes 
   );
 });
 
-Deno.test("large historical gainer context cannot change present-tense admission", () => {
-  const baseline = evaluateLobEntry(momentumFeatures({ tradePressureFast: 0.05 }), binanceCosts);
+Deno.test("large historical gainer context alone cannot change present-tense admission", () => {
+  const baseline = evaluateLobEntry(momentumFeatures(), binanceCosts);
+  // Change only the broad historical 24h context. Live tape/order-book evidence is held
+  // identical so this test actually isolates the documented non-admission input.
   const historicalSurge = evaluateLobEntry(
-    momentumFeatures({ trendContext: 0.075, tradeArrivalTrend: -0.4, tradePressureFast: 0.05 }),
+    momentumFeatures({ trendContext: 0.075 }),
     binanceCosts,
   );
   assertEquals(historicalSurge.decision, baseline.decision);
