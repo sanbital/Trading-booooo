@@ -17,42 +17,39 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Diff integrity
-        id: diff
-        continue-on-error: true
-        run: git diff --check
-      - name: Repository typecheck
-        id: check
-        continue-on-error: true
-        run: deno task check
-      - name: Repository tests
-        id: tests
-        continue-on-error: true
-        run: deno task test
-      - name: Gateway syntax
-        id: gateway_syntax
-        continue-on-error: true
-        run: node --check gateway/server.mjs
-      - name: Gateway tests
-        id: gateway_tests
-        continue-on-error: true
-        run: node --test gateway/server.test.mjs
-      - name: Report exact failure
-        if: always()
-        env:
-          DIFF: ${{ steps.diff.outcome }}
-          CHECK: ${{ steps.check.outcome }}
-          TESTS: ${{ steps.tests.outcome }}
-          GATEWAY_SYNTAX: ${{ steps.gateway_syntax.outcome }}
-          GATEWAY_TESTS: ${{ steps.gateway_tests.outcome }}
+      - name: Stress test groups three times
         run: |
-          echo "diff=$DIFF check=$CHECK tests=$TESTS gateway_syntax=$GATEWAY_SYNTAX gateway_tests=$GATEWAY_TESTS"
+          set -uo pipefail
           failed=0
-          for pair in "diff:$DIFF" "check:$CHECK" "tests:$TESTS" "gateway_syntax:$GATEWAY_SYNTAX" "gateway_tests:$GATEWAY_TESTS"; do
-            name=${pair%%:*}; outcome=${pair#*:}
-            if [ "$outcome" != "success" ]; then
-              echo "::error::$name=$outcome"
-              failed=1
-            fi
+          run_group() {
+            name="$1"; shift
+            for attempt in 1 2 3; do
+              echo "===== ${name} attempt ${attempt} ====="
+              if ! "$@"; then
+                echo "::error file=.github/workflows/diagnose-v767-postdeploy.yml,line=1::FLAKY_GROUP ${name} attempt=${attempt}"
+                failed=1
+              fi
+            done
+          }
+          run_group scanner deno test --allow-read supabase/functions/market-scanner/*.test.ts
+          run_group autotrader deno test --allow-read supabase/functions/market-autotrader/*.test.ts
+          run_group performance deno test --allow-read supabase/functions/market-performance/*.test.ts
+          run_group shared_root deno test --allow-read supabase/functions/_shared/*.test.ts
+          run_group shared_scalp deno test --allow-read supabase/functions/_shared/scalp/*.test.ts
+          run_group shared_lob deno test --allow-read supabase/functions/_shared/lob/*.test.ts
+          run_group backtest deno test --allow-read backtest/*.test.ts
+          exit "$failed"
+      - name: If LOB is suspect run each file three times
+        if: always()
+        run: |
+          set -uo pipefail
+          failed=0
+          for file in supabase/functions/_shared/lob/*.test.ts; do
+            for attempt in 1 2 3; do
+              if ! deno test --allow-read "$file"; then
+                echo "::error file=$file,line=1::FLAKY_FILE $file attempt=$attempt"
+                failed=1
+              fi
+            done
           done
           exit "$failed"
