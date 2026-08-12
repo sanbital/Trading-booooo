@@ -29,12 +29,12 @@ script_replace(
 )
 script_replace(
     "'            heldSeconds,\\n            executableNetAllowed: executableQuote.allowed,\\n            expectedNetProfitQuote: executableQuote.expectedNetProfitQuote,\\n            safetyRequested: quoteDecision.action !== \"NONE\",\\n          });'",
-    "'            heldSeconds,\\n            executableNetAllowed: executableQuote.allowed,\\n            expectedNetProfitQuote: finite(executableQuote.expectedNetProfitQuote),\\n            safetyRequested,\\n          });'",
+    "'            heldSeconds,\\n            executableNetAllowed: executableQuote.allowed,\\n            expectedNetProfitQuote: finite(executableQuote.expectedNetProfitQuote),\\n            safetyRequested,\\n          }) as any;'",
     "spot old call",
 )
 script_replace(
     "'            heldSeconds,\\n            executableNetAllowed: executableQuote.allowed,\\n            expectedNetProfitQuote: executableQuote.expectedNetProfitQuote,\\n            preT1ProfitProtectionHit: preT1ProtectionHit,\\n            safetyRequested: quoteDecision.action !== \"NONE\",\\n          });'",
-    "'            heldSeconds,\\n            executableNetAllowed: executableQuote.allowed,\\n            expectedNetProfitQuote: finite(executableQuote.expectedNetProfitQuote),\\n            preT1ProfitProtectionHit: preT1ProtectionHit,\\n            safetyRequested,\\n          });'",
+    "'            heldSeconds,\\n            executableNetAllowed: executableQuote.allowed,\\n            expectedNetProfitQuote: finite(executableQuote.expectedNetProfitQuote),\\n            preT1ProfitProtectionHit: preT1ProtectionHit,\\n            safetyRequested,\\n          }) as any;'",
     "spot new call",
 )
 script_replace(
