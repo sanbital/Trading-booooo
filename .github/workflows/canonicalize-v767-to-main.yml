@@ -1,0 +1,61 @@
+name: Canonicalize v7.6.7 source to main
+
+on:
+  push:
+    branches: [agent/spot-ofi-pre-t1-protection-v767]
+    paths:
+      - ".github/workflows/canonicalize-v767-to-main.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: canonicalize-v767-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: agent/spot-ofi-pre-t1-protection-v767
+          fetch-depth: 0
+      - name: Copy only validated runtime and regression files to main
+        run: |
+          set -euo pipefail
+          files=(
+            supabase/functions/market-autotrader/index.ts
+            supabase/functions/market-autotrader/live-guards.ts
+            supabase/functions/market-autotrader/live-guards.test.ts
+            supabase/functions/market-autotrader/spot-exit-policy.ts
+            supabase/functions/market-autotrader/spot-exit-policy.test.ts
+            supabase/functions/market-autotrader/futures-exit-policy.ts
+            supabase/functions/market-autotrader/futures-exit-policy.test.ts
+            supabase/functions/_shared/lob/momentum-continuation.test.ts
+          )
+          mkdir -p /tmp/v767
+          for f in "${files[@]}"; do
+            mkdir -p "/tmp/v767/$(dirname "$f")"
+            cp "$f" "/tmp/v767/$f"
+          done
+          git fetch origin main
+          git checkout -B main origin/main
+          for f in "${files[@]}"; do
+            mkdir -p "$(dirname "$f")"
+            cp "/tmp/v767/$f" "$f"
+          done
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${files[@]}"
+          if git diff --cached --quiet; then
+            echo "main already contains validated v7.6.7 source"
+          else
+            git commit -m "fix: block spot OFI and enforce earned profit floors"
+            git push origin HEAD:main
+          fi
+          echo "MAIN_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Show canonical main SHA
+        run: echo "canonical main=${MAIN_SHA}"
