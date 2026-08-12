@@ -17,30 +17,42 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Full test task once
-        id: full
+      - name: Diff integrity
+        id: diff
+        continue-on-error: true
+        run: git diff --check
+      - name: Repository typecheck
+        id: check
+        continue-on-error: true
+        run: deno task check
+      - name: Repository tests
+        id: tests
         continue-on-error: true
         run: deno task test
-      - name: Run every LOB test file separately
-        id: files
+      - name: Gateway syntax
+        id: gateway_syntax
+        continue-on-error: true
+        run: node --check gateway/server.mjs
+      - name: Gateway tests
+        id: gateway_tests
+        continue-on-error: true
+        run: node --test gateway/server.test.mjs
+      - name: Report exact failure
         if: always()
+        env:
+          DIFF: ${{ steps.diff.outcome }}
+          CHECK: ${{ steps.check.outcome }}
+          TESTS: ${{ steps.tests.outcome }}
+          GATEWAY_SYNTAX: ${{ steps.gateway_syntax.outcome }}
+          GATEWAY_TESTS: ${{ steps.gateway_tests.outcome }}
         run: |
-          set -uo pipefail
+          echo "diff=$DIFF check=$CHECK tests=$TESTS gateway_syntax=$GATEWAY_SYNTAX gateway_tests=$GATEWAY_TESTS"
           failed=0
-          for file in supabase/functions/_shared/lob/*.test.ts; do
-            echo "===== $file ====="
-            if ! deno test --allow-read "$file"; then
-              echo "::error file=$file,line=1::individual LOB test failed: $file"
+          for pair in "diff:$DIFF" "check:$CHECK" "tests:$TESTS" "gateway_syntax:$GATEWAY_SYNTAX" "gateway_tests:$GATEWAY_TESTS"; do
+            name=${pair%%:*}; outcome=${pair#*:}
+            if [ "$outcome" != "success" ]; then
+              echo "::error::$name=$outcome"
               failed=1
             fi
           done
           exit "$failed"
-      - name: Report full task
-        if: always()
-        env:
-          FULL: ${{ steps.full.outcome }}
-          FILES: ${{ steps.files.outcome }}
-        run: |
-          echo "full=$FULL individual_lob_files=$FILES"
-          test "$FULL" = success
-          test "$FILES" = success
