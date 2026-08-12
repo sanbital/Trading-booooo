@@ -1,0 +1,118 @@
+name: Apply LOB entry quality guard 2026-08-13
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-lob-entry-quality-guard-20260813.yml"
+      - "scripts/apply_lob_entry_quality_guard_20260813.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-lob-entry-quality-guard-20260813
+  cancel-in-progress: false
+
+jobs:
+  patch-and-triple-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Check out canonical main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Apply minimal shared-entry patch
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_lob_entry_quality_guard_20260813.py
+          deno fmt \
+            supabase/functions/_shared/lob/types.ts \
+            supabase/functions/_shared/lob/entry.ts \
+            supabase/functions/_shared/lob/entry-quality-guard.test.ts \
+            supabase/functions/market-scanner/engine.ts \
+            supabase/functions/market-autotrader/index.ts
+
+      - name: Prove patch isolation
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          expected = {
+              "supabase/functions/_shared/lob/types.ts",
+              "supabase/functions/_shared/lob/entry.ts",
+              "supabase/functions/_shared/lob/entry-quality-guard.test.ts",
+              "supabase/functions/market-scanner/engine.ts",
+              "supabase/functions/market-autotrader/index.ts",
+          }
+          tracked = set(subprocess.check_output(["git", "diff", "--name-only"], text=True).splitlines())
+          untracked = set(subprocess.check_output(
+              ["git", "ls-files", "--others", "--exclude-standard"], text=True
+          ).splitlines())
+          changed = tracked | untracked
+          if changed != expected:
+              raise SystemExit(f"unexpected patch surface: {sorted(changed)} expected={sorted(expected)}")
+          forbidden = [
+              "supabase/functions/market-autotrader/spot-exit-policy.ts",
+              "supabase/functions/market-autotrader/futures-exit-policy.ts",
+              "supabase/functions/_shared/lob/exit.ts",
+          ]
+          for path in forbidden:
+              if path in changed:
+                  raise SystemExit(f"exit/accounting isolation violated: {path}")
+          print("patch isolation OK")
+          PY
+          grep -q 'M1_BAND_WIDTH_NOT_EXPANDING' supabase/functions/_shared/lob/entry.ts
+          grep -q 'M1_LATE_EXTENSION_CHASE' supabase/functions/_shared/lob/entry.ts
+          grep -q 'change24hPct: period.universe.change_24h_pct' supabase/functions/market-scanner/engine.ts
+          grep -q 'change24hPct: finite(base.change24hPct, 0)' supabase/functions/market-autotrader/index.ts
+          grep -q 'FUTURES_MIN_ENTRY_MARGIN_USDT' supabase/functions/market-autotrader/index.ts
+          grep -q 'spotSplitExitDecision' supabase/functions/market-autotrader/index.ts
+          grep -q 'futuresSplitExitDecision' supabase/functions/market-autotrader/index.ts
+
+      - name: Full repository verification pass 1
+        run: |
+          set -euo pipefail
+          deno task check
+          deno task test
+
+      - name: Full repository verification pass 2
+        run: |
+          set -euo pipefail
+          deno task check
+          deno task test
+
+      - name: Full repository verification pass 3
+        run: |
+          set -euo pipefail
+          deno task check
+          deno task test
+
+      - name: Commit canonical production source
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/_shared/lob/types.ts \
+            supabase/functions/_shared/lob/entry.ts \
+            supabase/functions/_shared/lob/entry-quality-guard.test.ts \
+            supabase/functions/market-scanner/engine.ts \
+            supabase/functions/market-autotrader/index.ts
+          if git diff --cached --quiet; then
+            echo "Canonical source already contains the entry-quality guard"
+          else
+            git commit -m "fix: reject measured late LOB entries"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
