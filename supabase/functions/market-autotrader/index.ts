@@ -140,6 +140,7 @@ import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 import { loadMinuteEntryGate } from "../_shared/lob/minute-entry-market.ts";
 import { liveBlockedLobPatterns, preT1ProfitProtectionHit } from "./live-guards.ts";
+import { resolveFinalLobAdmission } from "./final-entry-gate.ts";
 
 const VERSION = "7.6.0-BINANCE-FUTURES";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
@@ -3555,18 +3556,32 @@ async function enterCandidateInner(
         trap: lobTrapOverrides(settings),
       },
     );
-    const finalReasons = [
-      ...new Set([
-        ...secondLobPreOrderRecheck.reasons,
-        ...finalMinuteEntryGate.reasons,
-      ]),
-    ];
-    const finalPassed = secondLobPreOrderRecheck.passed && finalMinuteEntryGate.passed;
+    // Live futures data showed the second M1 snapshot was re-vetoing opportunities that
+    // had already passed the setup gate, while the current executable LOB remained safe.
+    // Keep the fresh futures M1 read for audit only; current executable LOB safety owns the
+    // final futures veto. Spot/Upbit retain their existing hard final M1 behavior.
+    const finalAdmission = resolveFinalLobAdmission(
+      exchange,
+      secondLobPreOrderRecheck.passed,
+      secondLobPreOrderRecheck.reasons,
+      finalMinuteEntryGate.passed,
+      finalMinuteEntryGate.reasons,
+    );
+    const finalReasons = finalAdmission.blockingReasons;
+    const finalPassed = finalAdmission.passed;
     const finalAudit = {
       checked_at: secondLobPreOrderRecheck.checkedAt,
       passed: finalPassed,
       reasons: finalReasons,
       minute_entry_gate: finalMinuteEntryGate,
+      minute_entry_gate_advisory: {
+        enabled: finalAdmission.minuteGateAdvisory,
+        passed: finalMinuteEntryGate.passed,
+        reasons: finalAdmission.minuteGateAdvisoryReasons,
+        rationale: finalAdmission.minuteGateAdvisory
+          ? "FUTURES_SETUP_M1_ALREADY_CONFIRMED_FINAL_EXECUTABLE_LOB_AUTHORITATIVE"
+          : null,
+      },
       best_bid: secondLobPreOrderRecheck.bestBid,
       best_ask: secondLobPreOrderRecheck.bestAsk,
       spread_bps: secondLobPreOrderRecheck.spreadBps,
