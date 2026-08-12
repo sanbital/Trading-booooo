@@ -1,0 +1,259 @@
+name: Apply spot OFI block and pre-T1 profit protection v7.6.7
+
+on:
+  push:
+    branches: [agent/spot-ofi-pre-t1-protection-v767]
+    paths:
+      - ".github/workflows/apply-spot-ofi-pre-t1-protection-v767.yml"
+      - "scripts/apply_spot_ofi_pre_t1_protection_v767.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: spot-ofi-pre-t1-protection-v767
+  cancel-in-progress: false
+
+jobs:
+  patch-deploy-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out validated rollout branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: agent/spot-ofi-pre-t1-protection-v767
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Apply narrowly-scoped patch
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_spot_ofi_pre_t1_protection_v767.py
+          deno fmt \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-autotrader/live-guards.ts \
+            supabase/functions/market-autotrader/live-guards.test.ts \
+            supabase/functions/market-autotrader/spot-exit-policy.ts \
+            supabase/functions/market-autotrader/spot-exit-policy.test.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.test.ts
+
+      - name: Pre-deploy compile and focused regression
+        run: |
+          set -euo pipefail
+          deno fmt --check \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-autotrader/live-guards.ts \
+            supabase/functions/market-autotrader/live-guards.test.ts \
+            supabase/functions/market-autotrader/spot-exit-policy.ts \
+            supabase/functions/market-autotrader/spot-exit-policy.test.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.test.ts
+          deno test supabase/functions/market-autotrader/live-guards.test.ts
+          deno test supabase/functions/market-autotrader/spot-exit-policy.test.ts
+          deno test supabase/functions/market-autotrader/futures-exit-policy.test.ts
+          deno check supabase/functions/market-autotrader/index.ts
+
+      - name: Commit validated source on rollout branch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-autotrader/live-guards.ts \
+            supabase/functions/market-autotrader/live-guards.test.ts \
+            supabase/functions/market-autotrader/spot-exit-policy.ts \
+            supabase/functions/market-autotrader/spot-exit-policy.test.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.test.ts
+          if git diff --cached --quiet; then
+            echo "Source already patched"
+          else
+            git commit -m "fix: block spot OFI and enforce earned profit floors"
+            git push origin HEAD:agent/spot-ofi-pre-t1-protection-v767
+          fi
+          echo "VALIDATED_SOURCE_SHA=$(git rev-parse HEAD)" >> "${GITHUB_ENV}"
+
+      - name: Preserve state and pause new entries
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          previous=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
+          previous=${previous:-true}
+          echo "PREVIOUS_PAUSE_NEW_ENTRIES=${previous}" >> "${GITHUB_ENV}"
+          echo "ROLLOUT_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=true, updated_at=now() where id=1"
+
+      - name: Deploy market-autotrader
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy market-autotrader \
+            --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
+
+      # User-required post-deploy consistency test 1/3: run the repository-wide type/test
+      # suite after the actual production deploy, not merely before it.
+      - name: Post-deploy consistency 1 of 3 - whole repository
+        run: |
+          set -euo pipefail
+          git diff --check
+          deno task check
+          deno task test
+          node --check gateway/server.mjs
+          node --test gateway/server.test.mjs
+
+      # User-required post-deploy consistency test 2/3: assert all cross-module invariants,
+      # including policy precedence and the spot/futures venue split.
+      - name: Post-deploy consistency 2 of 3 - cross-code invariants
+        run: |
+          set -euo pipefail
+          deno test supabase/functions/market-autotrader/live-guards.test.ts
+          deno test supabase/functions/market-autotrader/spot-exit-policy.test.ts
+          deno test supabase/functions/market-autotrader/futures-exit-policy.test.ts
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path('.')
+          index = (root/'supabase/functions/market-autotrader/index.ts').read_text()
+          spot = (root/'supabase/functions/market-autotrader/spot-exit-policy.ts').read_text()
+          fut = (root/'supabase/functions/market-autotrader/futures-exit-policy.ts').read_text()
+          entry = (root/'supabase/functions/_shared/lob/entry.ts').read_text()
+          guards = (root/'supabase/functions/market-autotrader/live-guards.ts').read_text()
+
+          assert '["MOMENTUM_CONTINUATION", "OFI_CONTINUATION"]' in guards
+          assert 'exchange === "binance"' in guards
+          assert '["MOMENTUM_CONTINUATION"]' in guards
+          # Global default stays momentum-only so futures OFI is not silently disabled.
+          assert 'DEFAULT_BLOCKED_LOB_PATTERNS: string[] = ["MOMENTUM_CONTINUATION"]' in entry
+          assert index.count('blockedPatterns: liveBlockedLobPatterns(exchange)') >= 2
+          assert 'blockedPatterns: options.blockedPatterns' in index
+          assert 'protectedStopPrice > entry' in guards
+          assert 'preT1ProfitProtectionHit: preT1ProtectionHit' in index
+          assert 'decisionReason === "PRE_T1_PROFIT_PROTECTION_EXIT"' in index
+          assert 'decisionReason === "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT"' in index
+
+          # Existing operator thresholds must remain untouched.
+          for needle in ['firstTakeProfitPct: 5', 'firstStopLossPct: -4',
+                         'residualProfitFloorPct: 3', 'residualTrailingDrawdownPct: 1.5']:
+              assert needle in spot, needle
+          for needle in ['DEFAULT_FUTURES_LEVERAGE = 3', 'FUTURES_MIN_ENTRY_MARGIN_USDT = 50',
+                         'firstTakeProfitRoePct: 15', 'firstStopLossRoePct: -12',
+                         'residualProfitFloorRoePct: 9', 'residualTrailingDrawdownRoePct: 4.5']:
+              assert needle in fut, needle
+
+          # First TP must retain precedence over the new pre-T1 floor; hard stop follows it.
+          assert spot.index('grossReturnPct >= t.firstTakeProfitPct') < spot.index('preT1ProfitProtectionHit === true') < spot.index('grossReturnPct <= t.firstStopLossPct')
+          assert fut.index('roePct >= thresholds.firstTakeProfitRoePct') < fut.index('preT1ProfitProtectionHit === true') < fut.index('roePct <= thresholds.firstStopLossRoePct')
+          print('cross-code invariants OK')
+          PY
+          echo "evaluateLobEntry call sites across functions:"
+          grep -R --line-number --fixed-string 'evaluateLobEntry(' supabase/functions | tee /tmp/lob-entry-call-sites.txt
+          test "$(grep -c 'market-autotrader/index.ts' /tmp/lob-entry-call-sites.txt)" -ge 2
+
+      # User-required post-deploy consistency test 3/3: production runtime, accounting,
+      # exchange separation, compounding mode, and cycle health.
+      - name: Post-deploy consistency 3 of 3 - production runtime
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "${SUPABASE_PROJECT_REF}" | tee /tmp/functions.txt
+          grep -q 'market-autotrader' /tmp/functions.txt
+
+          healthy=false
+          for attempt in $(seq 1 30); do
+            successes=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from public.trading_cycle_runs
+              where kind='MONITOR' and status='SUCCESS'
+                and started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz;")
+            failures=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from public.trading_cycle_runs
+              where status='FAILED' and started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz;")
+            if [ "${successes}" -ge 1 ] && [ "${failures}" = "0" ]; then
+              healthy=true
+              break
+            fi
+            sleep 5
+          done
+          test "${healthy}" = "true"
+
+          # Configuration and exchange isolation.
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "
+            select mode,pause_new_entries,binance_futures_allocation_mode,
+                   binance_futures_leverage,binance_futures_reserve_usdt
+            from public.trading_settings where id=1;"
+          test "$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select (mode='LIVE_LIMITED' and pause_new_entries=true and binance_futures_allocation_mode='ALL' and binance_futures_leverage=3)::int from public.trading_settings where id=1")" = "1"
+          test "$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select count(*) from public.trading_positions where state in ('OPEN','EXITING','RECONCILING') and ((exchange='binance' and coalesce(leverage,1)<>1) or (exchange='binance_futures' and coalesce(leverage,0)<>3))")" = "0"
+
+          # Sane futures mark-to-market: no recurrence of the +149 USDT cost-basis bug.
+          test "$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select count(*) from public.trading_positions where exchange='binance_futures' and state in ('OPEN','EXITING','RECONCILING') and coalesce(initial_quantity,0)>0 and coalesce(average_entry_price,0)>0 and abs(coalesce(marked_pnl_quote,0)) > greatest(10, initial_quantity*average_entry_price*0.25)")" = "0"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "
+            select exchange,market,state,coalesce(leverage,1) leverage,
+                   round(coalesce(marked_pnl_quote,0)::numeric,6) marked_pnl
+            from public.trading_positions
+            where state in ('OPEN','EXITING','RECONCILING')
+            order by opened_at desc nulls last limit 10;"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "
+            select exchange,allocation_mode,round(managed_capital_quote::numeric,6) managed_capital,
+                   round(managed_available_quote::numeric,6) managed_available,captured_at
+            from public.trading_account_snapshots
+            where exchange in ('binance','binance_futures')
+            order by captured_at desc limit 4;"
+
+      - name: Restore prior entry state
+        if: always() && env.PREVIOUS_PAUSE_NEW_ENTRIES != ''
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          case "${PREVIOUS_PAUSE_NEW_ENTRIES}" in
+            true|t|1) restore=true ;;
+            false|f|0) restore=false ;;
+            *) restore=true ;;
+          esac
+          echo "RESTORED_PAUSE=${restore}" >> "${GITHUB_ENV}"
+          echo "RESTORED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=${restore}, updated_at=now() where id=1"
+
+      - name: Final post-restore health
+        if: success()
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          healthy=false
+          for attempt in $(seq 1 24); do
+            successes=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from public.trading_cycle_runs
+              where kind='MONITOR' and status='SUCCESS'
+                and started_at >= '${RESTORED_AT}'::timestamptz;")
+            failures=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from public.trading_cycle_runs
+              where status='FAILED' and started_at >= '${RESTORED_AT}'::timestamptz;")
+            if [ "${successes}" -ge 1 ] && [ "${failures}" = "0" ]; then healthy=true; break; fi
+            sleep 5
+          done
+          test "${healthy}" = "true"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "
+            select mode,pause_new_entries,binance_futures_allocation_mode,binance_futures_leverage,updated_at
+            from public.trading_settings where id=1;"
