@@ -11,7 +11,7 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e450470c52bcdaf6a4e8f8a515baa9
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: agent/spot-ofi-pre-t1-protection-v767
       - uses: denoland/setup-deno@v2
