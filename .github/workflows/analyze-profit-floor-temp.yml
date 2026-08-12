@@ -1,0 +1,180 @@
+name: Analyze profit floor temp
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    if: startsWith(github.event.issue.title, '[ANALYZE-PROFIT-FLOOR]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+    steps:
+      - name: Analyze production profit floors
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL}"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
+          \pset pager off
+          \set VERBOSITY terse
+
+          -- Current settings directly relevant to profit protection.
+          select key, value
+          from public.trading_settings t,
+               lateral jsonb_each_text(to_jsonb(t))
+          where t.id = 1
+            and (key ilike '%profit%' or key ilike '%holding%' or key ilike '%stale%')
+          order by key;
+
+          -- All live positions created after the morning strategy patch (09:29:04 KST).
+          select
+            p.id,
+            p.market,
+            p.exchange,
+            p.state,
+            p.created_at,
+            to_jsonb(p)->>'entry_price' as entry_price_col,
+            to_jsonb(p)->>'average_entry_price' as avg_entry_price_col,
+            to_jsonb(p)#>'{metadata,profit_protection}' as profit_protection,
+            to_jsonb(p)#>'{metadata,live_mark}' as live_mark,
+            to_jsonb(p)#>'{metadata,futures}' as futures_meta
+          from public.trading_positions p
+          where p.created_at >= timestamptz '2026-08-12 00:29:04+00'
+            and coalesce(p.is_paper,false) = false
+          order by p.created_at;
+
+          -- Entry/exit fills in the same period.
+          select
+            o.position_id,
+            o.market,
+            o.exchange,
+            o.side,
+            o.purpose,
+            o.state,
+            o.created_at,
+            to_jsonb(o)->>'average_fill_price' as average_fill_price,
+            to_jsonb(o)->>'executed_volume' as executed_volume,
+            to_jsonb(o)->>'executed_funds_quote' as executed_funds_quote,
+            to_jsonb(o)->>'paid_fee_quote' as paid_fee_quote
+          from public.trading_orders o
+          where o.created_at >= timestamptz '2026-08-12 00:29:04+00'
+            and o.state = 'APPLIED'
+          order by o.created_at;
+
+          -- Reconstruct each spot trade's observed path from account snapshots.
+          with entries as (
+            select
+              o.position_id,
+              max(o.market) as market,
+              max(o.exchange) as exchange,
+              min(o.created_at) filter (where o.side='BUY' and o.purpose='ENTRY') as entry_at,
+              sum(coalesce(nullif(to_jsonb(o)->>'executed_funds_quote','')::numeric,0)) filter (where o.side='BUY' and o.purpose='ENTRY')
+                / nullif(sum(coalesce(nullif(to_jsonb(o)->>'executed_volume','')::numeric,0)) filter (where o.side='BUY' and o.purpose='ENTRY'),0) as entry_price,
+              min(o.created_at) filter (where o.side='SELL') as actual_exit_at
+            from public.trading_orders o
+            where o.created_at >= timestamptz '2026-08-12 00:29:04+00'
+              and o.state='APPLIED'
+              and o.exchange in ('binance','upbit')
+            group by o.position_id
+            having min(o.created_at) filter (where o.side='BUY' and o.purpose='ENTRY') is not null
+          ), series as (
+            select
+              e.*,
+              s.captured_at,
+              nullif(s.prices->>e.market,'')::numeric as px,
+              100 * (nullif(s.prices->>e.market,'')::numeric / nullif(e.entry_price,0) - 1) as ret_pct
+            from entries e
+            join public.trading_account_snapshots s
+              on s.captured_at >= e.entry_at
+             and s.captured_at <= coalesce(e.actual_exit_at, now())
+             and nullif(s.prices->>e.market,'') is not null
+          ), activation as (
+            select position_id, min(captured_at) as activation_at
+            from series
+            where ret_pct >= 0.20
+            group by position_id
+          ), metrics as (
+            select
+              e.position_id, e.market, e.exchange, e.entry_at, e.entry_price, e.actual_exit_at,
+              max(s.ret_pct) as mfe_pct,
+              min(s.ret_pct) as mae_pct,
+              a.activation_at
+            from entries e
+            left join series s on s.position_id=e.position_id
+            left join activation a on a.position_id=e.position_id
+            group by e.position_id,e.market,e.exchange,e.entry_at,e.entry_price,e.actual_exit_at,a.activation_at
+          ), floors(floor_pct) as (
+            values (0.03::numeric),(0.10::numeric),(0.15::numeric),(0.20::numeric)
+          ), floor_hits as (
+            select
+              m.position_id,m.market,m.exchange,m.entry_at,m.entry_price,m.actual_exit_at,m.mfe_pct,m.mae_pct,m.activation_at,
+              f.floor_pct,
+              h.hit_at,
+              h.hit_ret_pct
+            from metrics m
+            cross join floors f
+            left join lateral (
+              select s.captured_at as hit_at, s.ret_pct as hit_ret_pct
+              from series s
+              where s.position_id=m.position_id
+                and m.activation_at is not null
+                and s.captured_at > m.activation_at
+                and s.ret_pct <= f.floor_pct
+              order by s.captured_at
+              limit 1
+            ) h on true
+          )
+          select * from floor_hits order by entry_at, floor_pct;
+
+          -- Aggregate comparison: number activated, protected, and observed return at first floor crossing.
+          with entries as (
+            select
+              o.position_id,
+              max(o.market) as market,
+              max(o.exchange) as exchange,
+              min(o.created_at) filter (where o.side='BUY' and o.purpose='ENTRY') as entry_at,
+              sum(coalesce(nullif(to_jsonb(o)->>'executed_funds_quote','')::numeric,0)) filter (where o.side='BUY' and o.purpose='ENTRY')
+                / nullif(sum(coalesce(nullif(to_jsonb(o)->>'executed_volume','')::numeric,0)) filter (where o.side='BUY' and o.purpose='ENTRY'),0) as entry_price,
+              min(o.created_at) filter (where o.side='SELL') as actual_exit_at
+            from public.trading_orders o
+            where o.created_at >= timestamptz '2026-08-12 00:29:04+00'
+              and o.state='APPLIED'
+              and o.exchange in ('binance','upbit')
+            group by o.position_id
+            having min(o.created_at) filter (where o.side='BUY' and o.purpose='ENTRY') is not null
+          ), series as (
+            select e.*,s.captured_at,
+              100 * (nullif(s.prices->>e.market,'')::numeric/nullif(e.entry_price,0)-1) as ret_pct
+            from entries e
+            join public.trading_account_snapshots s
+              on s.captured_at>=e.entry_at
+             and s.captured_at<=coalesce(e.actual_exit_at,now())
+             and nullif(s.prices->>e.market,'') is not null
+          ), activation as (
+            select position_id,min(captured_at) activation_at from series where ret_pct>=0.20 group by position_id
+          ), floors(floor_pct) as (values (0.03::numeric),(0.10::numeric),(0.15::numeric),(0.20::numeric)), hits as (
+            select f.floor_pct,e.position_id,a.activation_at,
+              (select s.ret_pct from series s where s.position_id=e.position_id and a.activation_at is not null and s.captured_at>a.activation_at and s.ret_pct<=f.floor_pct order by s.captured_at limit 1) hit_ret
+            from entries e cross join floors f left join activation a on a.position_id=e.position_id
+          )
+          select floor_pct,
+                 count(*) filter(where activation_at is not null) activated_trades,
+                 count(*) filter(where hit_ret is not null) floor_hit_trades,
+                 round(avg(hit_ret) filter(where hit_ret is not null),6) avg_observed_hit_return_pct,
+                 round(min(hit_ret) filter(where hit_ret is not null),6) worst_observed_hit_return_pct
+          from hits group by floor_pct order by floor_pct;
+
+          -- Explain failed exits around pre-T1 protection.
+          select id,created_at,code,level,position_id,message,details
+          from public.trading_events
+          where created_at >= timestamptz '2026-08-12 00:29:04+00'
+            and (code='EXIT_ERROR' or message ilike '%FIRST_TRANCHE_THRESHOLD_NOT_REACHED%')
+          order by created_at desc
+          limit 100;
+          SQL
