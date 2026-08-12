@@ -18,6 +18,12 @@ function finite(value: unknown, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function optionalFinite(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 // Operator policy for the high-turnover LOB scalp route.
 // The 5% account-protection boundary is an emergency exit owned by the autotrader. It must
 // never be used as the ordinary planned loss in scanner reward/risk arithmetic.
@@ -356,6 +362,35 @@ export function evaluateLobEntry(
       reasons.push("M1_CANDLE_DATA_INSUFFICIENT");
     } else if (features.m1PreBreakout !== true) {
       reasons.push("M1_PREBREAKOUT_SETUP_NOT_READY");
+    } else {
+      // 2026-08-13 live-fill review: a setup labelled pre-breakout while Bollinger width
+      // is still contracting is internally contradictory. In the prior 72h live cohort
+      // this condition appeared twice and both trades lost. Keep squeeze releases exempt.
+      const bandWidthExpansionRatio = optionalFinite(features.m1BandWidthExpansionRatio);
+      if (
+        bandWidthExpansionRatio != null && bandWidthExpansionRatio < 1 &&
+        features.m1SqueezeRelease !== true
+      ) {
+        reasons.push("M1_BAND_WIDTH_NOT_EXPANDING");
+      }
+
+      // The same review isolated a late-extension cluster without using broad trend/EMA
+      // vetoes: 24h move already >=15%, Stoch K >=88, the last three minutes advanced
+      // >=1.9 ATR, and the upper band itself is rising >=0.10%/min. All three observed
+      // trades in this exact cluster lost, while the profitable high-gainer counterexample
+      // stayed below the recent-advance threshold. Require every input so missing telemetry
+      // never fabricates an overheat rejection.
+      const change24hPct = optionalFinite(features.change24hPct);
+      const stochK = optionalFinite(features.m1StochK);
+      const recentAdvanceAtr = optionalFinite(features.m1RecentAdvanceAtr);
+      const upperBandSlopePct = optionalFinite(features.m1UpperBandSlopePct);
+      if (
+        change24hPct != null && stochK != null && recentAdvanceAtr != null &&
+        upperBandSlopePct != null && change24hPct >= 15 && stochK >= 88 &&
+        recentAdvanceAtr >= 1.9 && upperBandSlopePct >= 0.10
+      ) {
+        reasons.push("M1_LATE_EXTENSION_CHASE");
+      }
     }
   }
 

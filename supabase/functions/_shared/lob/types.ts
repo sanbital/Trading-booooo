@@ -16,6 +16,8 @@ import type { LobTrapAssessment, LobTrapConfig } from "./traps.ts";
 export interface LobFeatureVector {
   universeMode?: "TOP10_24H_GAINERS_LOB_ONLY";
   gainerRank?: number;
+  /** Scan-time 24h move used only to reject measured late-extension chase setups. */
+  change24hPct?: number;
   samples: number;
   observationMs: number;
   bookAgeMs: number | null;

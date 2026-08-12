@@ -1356,6 +1356,7 @@ function liveLobFeatures(scan: any, market: any): LobFeatureVector {
   return {
     universeMode: base.universeMode,
     gainerRank: finite(base.gainerRank, finite(scan?.gainer_rank, 99)),
+    change24hPct: finite(base.change24hPct, 0),
     samples: Math.max(1, Math.floor(finite(base.samples, tradeCount))),
     observationMs: Math.max(1, finite(base.observationMs, 15000)),
     bookAgeMs: 0,
