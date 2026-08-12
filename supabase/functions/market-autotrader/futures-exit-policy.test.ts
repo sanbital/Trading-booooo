@@ -20,6 +20,7 @@ function decide(overrides: Record<string, unknown> = {}) {
     executableNetAllowed: false,
     expectedNetProfitQuote: -1,
     heldSeconds: 0,
+    preT1ProfitProtectionHit: false,
     safetyRequested: false,
     ...overrides,
   });
@@ -117,6 +118,19 @@ Deno.test("futures +15% ROE target keeps precedence after 180m", () => {
     executableNetAllowed: true,
     expectedNetProfitQuote: 1,
   });
+  assertEquals(d.fraction, 0.5);
+  assertEquals(d.reason, "FUTURES_HALF_TAKE_PROFIT_ROE_15");
+});
+
+Deno.test("futures pre-T1 earned profit floor closes 100%", () => {
+  const d = decide({ grossReturnPct: 2.5, peakGrossReturnPct: 3, preT1ProfitProtectionHit: true });
+  assertEquals(d.action, "STOP");
+  assertEquals(d.fraction, 1);
+  assertEquals(d.reason, "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT");
+});
+
+Deno.test("futures +15% ROE target keeps precedence over pre-T1 protection", () => {
+  const d = decide({ grossReturnPct: 5.1, preT1ProfitProtectionHit: true });
   assertEquals(d.fraction, 0.5);
   assertEquals(d.reason, "FUTURES_HALF_TAKE_PROFIT_ROE_15");
 });

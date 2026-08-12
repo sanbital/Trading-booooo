@@ -44,6 +44,7 @@ export const FUTURES_SPLIT_EXIT_THRESHOLDS = {
 export type FuturesSplitExitReason =
   | "FUTURES_HALF_TAKE_PROFIT_ROE_15"
   | "FUTURES_HALF_STOP_LOSS_ROE_12"
+  | "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT"
   | "FUTURES_HALF_AWAITING_ROE_15_OR_ROE_MINUS_12"
   | "FUTURES_HALF_THRESHOLD_OVERRIDES_NON_PRICE_SAFETY_EXIT"
   | "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"
@@ -78,6 +79,8 @@ export type FuturesSplitExitInput = {
   expectedNetProfitQuote: number;
   /** Position age used only for the first-tranche 180-minute recovery rule. */
   heldSeconds: number;
+  /** True only when the engine has an earned above-entry protected stop and price hit it. */
+  preT1ProfitProtectionHit?: boolean;
   /** A non-price safety request (reconciliation/risk) that the thresholds override. */
   safetyRequested?: boolean;
 };
@@ -190,6 +193,14 @@ export function futuresSplitExitDecision(
       reason: "FUTURES_HALF_TAKE_PROFIT_ROE_15",
     };
   }
+  if (input.preT1ProfitProtectionHit === true) {
+    return {
+      ...base,
+      action: "STOP",
+      fraction: 1,
+      reason: "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT",
+    };
+  }
   if (roePct <= thresholds.firstStopLossRoePct) {
     return {
       ...base,
@@ -228,6 +239,7 @@ export function futuresSplitExitDecision(
 export const FUTURES_EXIT_APPROVED_REASONS: readonly FuturesSplitExitReason[] = [
   "FUTURES_HALF_TAKE_PROFIT_ROE_15",
   "FUTURES_HALF_STOP_LOSS_ROE_12",
+  "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT",
   "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT",
   "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M",
 ];
