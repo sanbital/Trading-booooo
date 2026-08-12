@@ -104,6 +104,7 @@ declare
   v_held_seconds numeric;
   v_executable_net_allowed boolean;
   v_expected_net_profit_quote numeric;
+  v_pre_t1_protected_stop numeric;
 begin
   if upper(coalesce(new.side, '')) <> 'SELL' or new.position_id is null then
     return new;
@@ -156,7 +157,9 @@ begin
   v_approved_reason := case
     when coalesce(p.metadata->>'pending_exit_reason', '') in (
       'STALE_RECOVERY_NET_POSITIVE_EXIT_180M',
-      'FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M'
+      'FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M',
+      'PRE_T1_PROFIT_PROTECTION_EXIT',
+      'FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT'
     ) then p.metadata->>'pending_exit_reason'
     else coalesce(
       nullif(p.metadata#>>'{exit_policy_quote,approved_reason}', ''),
@@ -173,6 +176,10 @@ begin
   );
   v_expected_net_profit_quote := coalesce(
     nullif(p.metadata#>>'{exit_policy_quote,expected_net_profit_quote}', '')::numeric,
+    0
+  );
+  v_pre_t1_protected_stop := coalesce(
+    nullif(p.metadata#>>'{profit_protection,protected_stop_price}', '')::numeric,
     0
   );
 
@@ -206,7 +213,21 @@ begin
     end if;
     v_sellable_qty := greatest(0, p.remaining_quantity);
   elsif v_futures then
-    if v_approved_reason = 'FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M' then
+    if v_approved_reason = 'FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT' then
+      if v_pre_t1_protected_stop <= v_entry then
+        raise exception using errcode='23514', message=format(
+          'FUTURES_PRE_T1_PROFIT_PROTECTION_NOT_EARNED market=%s entry=%s protected_stop=%s',
+          p.market, round(v_entry, 12), round(v_pre_t1_protected_stop, 12)
+        );
+      end if;
+      if v_price > v_pre_t1_protected_stop * 1.00001 then
+        raise exception using errcode='23514', message=format(
+          'FUTURES_PRE_T1_PROFIT_PROTECTION_NOT_HIT market=%s price=%s protected_stop=%s',
+          p.market, round(v_price, 12), round(v_pre_t1_protected_stop, 12)
+        );
+      end if;
+      v_sellable_qty := greatest(0, p.remaining_quantity);
+    elsif v_approved_reason = 'FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M' then
       if v_held_seconds < 10800 then
         raise exception using errcode='23514', message=format(
           'STALE_RECOVERY_TOO_EARLY market=%s held_seconds=%s', p.market, round(v_held_seconds, 3)
@@ -230,7 +251,21 @@ begin
       );
     end if;
   else
-    if v_approved_reason = 'STALE_RECOVERY_NET_POSITIVE_EXIT_180M' then
+    if v_approved_reason = 'PRE_T1_PROFIT_PROTECTION_EXIT' then
+      if v_pre_t1_protected_stop <= v_entry then
+        raise exception using errcode='23514', message=format(
+          'PRE_T1_PROFIT_PROTECTION_NOT_EARNED market=%s entry=%s protected_stop=%s',
+          p.market, round(v_entry, 12), round(v_pre_t1_protected_stop, 12)
+        );
+      end if;
+      if v_price > v_pre_t1_protected_stop * 1.00001 then
+        raise exception using errcode='23514', message=format(
+          'PRE_T1_PROFIT_PROTECTION_NOT_HIT market=%s price=%s protected_stop=%s',
+          p.market, round(v_price, 12), round(v_pre_t1_protected_stop, 12)
+        );
+      end if;
+      v_sellable_qty := greatest(0, p.remaining_quantity);
+    elsif v_approved_reason = 'STALE_RECOVERY_NET_POSITIVE_EXIT_180M' then
       if v_held_seconds < 10800 then
         raise exception using errcode='23514', message=format(
           'STALE_RECOVERY_TOO_EARLY market=%s held_seconds=%s', p.market, round(v_held_seconds, 3)
@@ -278,7 +313,13 @@ end;
 $function$;
 
 comment on function public.guard_residual_sell_order_v751() is
-  'v7.6.5 protected-trailing guard with 180m first-tranche executable-net recovery and emergency bypass.';
+  'v7.6.6 protected-trailing guard with earned pre-T1 profit protection, 180m recovery, and emergency bypass.';
+
+-- Live-data calibration 2026-08-12: once protection is earned, retain at least 20 bps net.
+-- The existing 6 bps trailing distance remains unchanged and can lock substantially more.
+update public.trading_settings
+set lob_profit_lock_net_bps = 20
+where id = 1 and lob_profit_lock_net_bps is distinct from 20;
 
 update public.trading_positions
 set metadata = metadata
@@ -298,12 +339,19 @@ begin
   if position('STALE_RECOVERY_NET_POSITIVE_EXIT_180M' in coalesce(v_guard,'')) = 0
      or position('FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M' in coalesce(v_guard,'')) = 0
      or position('STALE_RECOVERY_REQUIRES_POSITIVE_NET' in coalesce(v_guard,'')) = 0
+     or position('PRE_T1_PROFIT_PROTECTION_EXIT' in coalesce(v_guard,'')) = 0
+     or position('FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT' in coalesce(v_guard,'')) = 0
+     or position('PRE_T1_PROFIT_PROTECTION_NOT_EARNED' in coalesce(v_guard,'')) = 0
+     or position('PRE_T1_PROFIT_PROTECTION_NOT_HIT' in coalesce(v_guard,'')) = 0
      or position('EMERGENCY' in coalesce(v_guard,'')) = 0 then
-    raise exception 'V765_GUARD_NOT_INSTALLED';
+    raise exception 'V766_GUARD_NOT_INSTALLED';
   end if;
   if position('stale_recovery_after_seconds' in coalesce(v_enforce,'')) = 0
      or position('PROTECTED_TRAIL_RECOVERY180M_V2' in coalesce(v_enforce,'')) = 0 then
     raise exception 'V765_POLICY_METADATA_NOT_INSTALLED';
+  end if;
+  if coalesce((select lob_profit_lock_net_bps from public.trading_settings where id=1), -1) <> 20 then
+    raise exception 'V766_PROFIT_FLOOR_NOT_INSTALLED';
   end if;
 end;
 $verify$;
