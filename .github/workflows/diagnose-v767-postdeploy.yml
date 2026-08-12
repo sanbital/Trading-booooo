@@ -17,39 +17,39 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Stress test groups three times
-        run: |
-          set -uo pipefail
-          failed=0
-          run_group() {
-            name="$1"; shift
-            for attempt in 1 2 3; do
-              echo "===== ${name} attempt ${attempt} ====="
-              if ! "$@"; then
-                echo "::error file=.github/workflows/diagnose-v767-postdeploy.yml,line=1::FLAKY_GROUP ${name} attempt=${attempt}"
-                failed=1
-              fi
-            done
-          }
-          run_group scanner deno test --allow-read supabase/functions/market-scanner/*.test.ts
-          run_group autotrader deno test --allow-read supabase/functions/market-autotrader/*.test.ts
-          run_group performance deno test --allow-read supabase/functions/market-performance/*.test.ts
-          run_group shared_root deno test --allow-read supabase/functions/_shared/*.test.ts
-          run_group shared_scalp deno test --allow-read supabase/functions/_shared/scalp/*.test.ts
-          run_group shared_lob deno test --allow-read supabase/functions/_shared/lob/*.test.ts
-          run_group backtest deno test --allow-read backtest/*.test.ts
-          exit "$failed"
-      - name: If LOB is suspect run each file three times
+
+      - name: Momentum test 1 - continuation pulse
+        id: pulse
+        continue-on-error: true
+        run: deno test --allow-read supabase/functions/_shared/lob/momentum-continuation.test.ts --filter "Top-10 eligibility"
+      - name: Momentum test 2 - informational geometry
+        id: geometry
+        continue-on-error: true
+        run: deno test --allow-read supabase/functions/_shared/lob/momentum-continuation.test.ts --filter "momentum pattern remains short-lived"
+      - name: Momentum test 3 - default block override
+        id: block
+        continue-on-error: true
+        run: deno test --allow-read supabase/functions/_shared/lob/momentum-continuation.test.ts --filter "live-loss momentum block"
+      - name: Momentum test 4 - historical context
+        id: history
+        continue-on-error: true
+        run: deno test --allow-read supabase/functions/_shared/lob/momentum-continuation.test.ts --filter "large historical gainer"
+
+      - name: Report exact momentum failure
         if: always()
+        env:
+          PULSE: ${{ steps.pulse.outcome }}
+          GEOMETRY: ${{ steps.geometry.outcome }}
+          BLOCK: ${{ steps.block.outcome }}
+          HISTORY: ${{ steps.history.outcome }}
         run: |
-          set -uo pipefail
+          echo "pulse=$PULSE geometry=$GEOMETRY block=$BLOCK history=$HISTORY"
           failed=0
-          for file in supabase/functions/_shared/lob/*.test.ts; do
-            for attempt in 1 2 3; do
-              if ! deno test --allow-read "$file"; then
-                echo "::error file=$file,line=1::FLAKY_FILE $file attempt=$attempt"
-                failed=1
-              fi
-            done
+          for pair in "pulse:$PULSE" "geometry:$GEOMETRY" "block:$BLOCK" "history:$HISTORY"; do
+            name=${pair%%:*}; outcome=${pair#*:}
+            if [ "$outcome" != "success" ]; then
+              echo "::error file=supabase/functions/_shared/lob/momentum-continuation.test.ts,line=1::MOMENTUM_TEST_FAIL ${name}=${outcome}"
+              failed=1
+            fi
           done
           exit "$failed"
