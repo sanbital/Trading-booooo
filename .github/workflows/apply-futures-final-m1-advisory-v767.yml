@@ -1,0 +1,146 @@
+name: Apply futures final M1 advisory v7.6.7
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-futures-final-m1-advisory-v767.yml"
+      - "scripts/apply_futures_final_m1_advisory_v767.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-futures-final-m1-advisory-v767
+  cancel-in-progress: false
+
+jobs:
+  patch-test-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out canonical main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Apply futures-only final admission patch
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_futures_final_m1_advisory_v767.py
+          deno fmt \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-autotrader/final-entry-gate.ts \
+            supabase/functions/market-autotrader/final-entry-gate.test.ts
+
+      - name: Review policy isolation and safety invariants
+        run: |
+          set -euo pipefail
+          grep -q 'exchange === "binance_futures"' supabase/functions/market-autotrader/final-entry-gate.ts
+          grep -q 'resolveFinalLobAdmission' supabase/functions/market-autotrader/index.ts
+          grep -q 'minute_entry_gate_advisory' supabase/functions/market-autotrader/index.ts
+          grep -q 'SELL_PRESSURE_DOMINANT' supabase/functions/_shared/lob/entry.ts
+          grep -q 'BUY_PRESSURE_NOT_CONFIRMED' supabase/functions/_shared/lob/entry.ts
+          grep -q 'DEFAULT_BLOCKED_LOB_PATTERNS: string\[\] = \["MOMENTUM_CONTINUATION"\]' supabase/functions/_shared/lob/entry.ts
+          grep -q 'maxGainerRank' supabase/functions/_shared/lob/entry.ts
+
+      - name: Static checks and focused tests
+        run: |
+          set -euo pipefail
+          deno fmt --check \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-autotrader/final-entry-gate.ts \
+            supabase/functions/market-autotrader/final-entry-gate.test.ts
+          deno test supabase/functions/market-autotrader/final-entry-gate.test.ts
+          deno test supabase/functions/market-autotrader/futures-lane.test.ts
+          deno test supabase/functions/_shared/lob/entry.mission.test.ts
+          deno check supabase/functions/market-autotrader/index.ts
+
+      - name: Commit canonical production source
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-autotrader/final-entry-gate.ts \
+            supabase/functions/market-autotrader/final-entry-gate.test.ts
+          if git diff --cached --quiet; then
+            echo "Canonical source already contains futures final M1 advisory policy"
+          else
+            git commit -m "fix: make final futures M1 recheck advisory"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Preserve entry state and pause new entries during rollout
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL}"
+          previous=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
+          previous=${previous:-true}
+          echo "PREVIOUS_PAUSE_NEW_ENTRIES=${previous}" >> "${GITHUB_ENV}"
+          echo "ROLLOUT_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=true, updated_at=now() where id=1"
+
+      - name: Deploy autotrader under entry pause
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN}"
+          test -n "${SUPABASE_PROJECT_REF}"
+          supabase functions deploy market-autotrader \
+            --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
+
+      - name: Verify production monitor health
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          healthy=false
+          for attempt in $(seq 1 18); do
+            failed=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from public.trading_cycle_runs
+              where started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz
+                and status='FAILED';")
+            latest=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select coalesce(max(started_at)::text,'') from public.trading_cycle_runs
+              where kind='MONITOR' and started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz;")
+            if [ "${failed}" = "0" ] && [ -n "${latest}" ]; then
+              healthy=true
+              break
+            fi
+            sleep 5
+          done
+          test "${healthy}" = "true"
+
+      - name: Restore prior entry-pause state
+        if: always() && env.PREVIOUS_PAUSE_NEW_ENTRIES != ''
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          case "${PREVIOUS_PAUSE_NEW_ENTRIES}" in
+            true|t|1) restore=true ;;
+            false|f|0) restore=false ;;
+            *) restore=true ;;
+          esac
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=${restore}, updated_at=now() where id=1"
+          echo "Restored pause_new_entries=${restore}"
