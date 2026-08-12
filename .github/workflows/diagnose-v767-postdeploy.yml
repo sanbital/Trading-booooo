@@ -5,6 +5,7 @@ on:
     branches: [agent/spot-ofi-pre-t1-protection-v767]
     paths:
       - ".github/workflows/diagnose-v767-postdeploy.yml"
+      - "supabase/functions/_shared/lob/momentum-continuation.test.ts"
   workflow_dispatch:
 
 jobs:
@@ -18,20 +19,10 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Run momentum test file and surface exact failure
+      - name: Run momentum test file three times
         run: |
-          set +e
-          set -o pipefail
-          deno test --allow-read supabase/functions/_shared/lob/momentum-continuation.test.ts 2>&1 | tee /tmp/momentum-test.log
-          status=${PIPESTATUS[0]}
-          echo "momentum_status=$status"
-          if [ "$status" -ne 0 ]; then
-            python3 - <<'PY'
-          from pathlib import Path
-          text = Path('/tmp/momentum-test.log').read_text(errors='replace')
-          tail = '\n'.join(text.splitlines()[-80:])
-          tail = tail.replace('%','%25').replace('\r','%0D').replace('\n','%0A')
-          print(f'::error file=supabase/functions/_shared/lob/momentum-continuation.test.ts,line=1::FULL_FILE_OUTPUT {tail[:6000]}')
-          PY
-          fi
-          exit "$status"
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            echo "momentum full-file attempt ${attempt}"
+            deno test --allow-read supabase/functions/_shared/lob/momentum-continuation.test.ts
+          done
