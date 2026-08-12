@@ -1,0 +1,111 @@
+name: Deploy verified LOB entry quality guard 2026-08-13
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-lob-entry-quality-guard-20260813.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-lob-entry-quality-guard-20260813
+  cancel-in-progress: false
+
+jobs:
+  verify-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out verified main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Verify canonical guard and unchanged exit invariants
+        run: |
+          set -euo pipefail
+          grep -q 'M1_BAND_WIDTH_NOT_EXPANDING' supabase/functions/_shared/lob/entry.ts
+          grep -q 'M1_LATE_EXTENSION_CHASE' supabase/functions/_shared/lob/entry.ts
+          grep -q 'change24hPct: period.universe.change_24h_pct' supabase/functions/market-scanner/engine.ts
+          grep -q 'change24hPct: finite(base.change24hPct, 0)' supabase/functions/market-autotrader/index.ts
+          grep -q 'spotSplitExitDecision' supabase/functions/market-autotrader/index.ts
+          grep -q 'futuresSplitExitDecision' supabase/functions/market-autotrader/index.ts
+          grep -q 'FUTURES_MIN_ENTRY_MARGIN_USDT = 50' supabase/functions/market-autotrader/futures-exit-policy.ts
+          deno test supabase/functions/_shared/lob/entry-quality-guard.test.ts
+          deno check supabase/functions/market-scanner/index.ts supabase/functions/market-autotrader/index.ts
+
+      - name: Preserve entry state and pause new entries during rollout
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL}"
+          previous=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
+          previous=${previous:-true}
+          echo "PREVIOUS_PAUSE_NEW_ENTRIES=${previous}" >> "${GITHUB_ENV}"
+          echo "ROLLOUT_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=true, updated_at=now() where id=1"
+
+      - name: Deploy scanner and autotrader
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN}"
+          test -n "${SUPABASE_PROJECT_REF}"
+          for fn in market-scanner market-autotrader; do
+            supabase functions deploy "$fn" \
+              --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
+          done
+
+      - name: Verify production monitor health
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          healthy=false
+          for attempt in $(seq 1 18); do
+            failed=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from public.trading_cycle_runs
+              where started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz
+                and status='FAILED';")
+            latest=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select coalesce(max(started_at)::text,'') from public.trading_cycle_runs
+              where kind='MONITOR' and started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz;")
+            if [ "${failed}" = "0" ] && [ -n "${latest}" ]; then
+              healthy=true
+              break
+            fi
+            sleep 5
+          done
+          test "${healthy}" = "true"
+
+      - name: Restore prior entry-pause state
+        if: always() && env.PREVIOUS_PAUSE_NEW_ENTRIES != ''
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          case "${PREVIOUS_PAUSE_NEW_ENTRIES}" in
+            true|t|1) restore=true ;;
+            false|f|0) restore=false ;;
+            *) restore=true ;;
+          esac
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=${restore}, updated_at=now() where id=1"
+          echo "Restored pause_new_entries=${restore}"
