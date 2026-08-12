@@ -18,38 +18,20 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Momentum test 1 - continuation pulse
-        id: pulse
-        continue-on-error: true
-        run: deno test --allow-read supabase/functions/_shared/lob/momentum-continuation.test.ts --filter "Top-10 eligibility"
-      - name: Momentum test 2 - informational geometry
-        id: geometry
-        continue-on-error: true
-        run: deno test --allow-read supabase/functions/_shared/lob/momentum-continuation.test.ts --filter "momentum pattern remains short-lived"
-      - name: Momentum test 3 - default block override
-        id: block
-        continue-on-error: true
-        run: deno test --allow-read supabase/functions/_shared/lob/momentum-continuation.test.ts --filter "live-loss momentum block"
-      - name: Momentum test 4 - historical context
-        id: history
-        continue-on-error: true
-        run: deno test --allow-read supabase/functions/_shared/lob/momentum-continuation.test.ts --filter "large historical gainer"
-
-      - name: Report exact momentum failure
-        if: always()
-        env:
-          PULSE: ${{ steps.pulse.outcome }}
-          GEOMETRY: ${{ steps.geometry.outcome }}
-          BLOCK: ${{ steps.block.outcome }}
-          HISTORY: ${{ steps.history.outcome }}
+      - name: Run momentum test file and surface exact failure
         run: |
-          echo "pulse=$PULSE geometry=$GEOMETRY block=$BLOCK history=$HISTORY"
-          failed=0
-          for pair in "pulse:$PULSE" "geometry:$GEOMETRY" "block:$BLOCK" "history:$HISTORY"; do
-            name=${pair%%:*}; outcome=${pair#*:}
-            if [ "$outcome" != "success" ]; then
-              echo "::error file=supabase/functions/_shared/lob/momentum-continuation.test.ts,line=1::MOMENTUM_TEST_FAIL ${name}=${outcome}"
-              failed=1
-            fi
-          done
-          exit "$failed"
+          set +e
+          set -o pipefail
+          deno test --allow-read supabase/functions/_shared/lob/momentum-continuation.test.ts 2>&1 | tee /tmp/momentum-test.log
+          status=${PIPESTATUS[0]}
+          echo "momentum_status=$status"
+          if [ "$status" -ne 0 ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          text = Path('/tmp/momentum-test.log').read_text(errors='replace')
+          tail = '\n'.join(text.splitlines()[-80:])
+          tail = tail.replace('%','%25').replace('\r','%0D').replace('\n','%0A')
+          print(f'::error file=supabase/functions/_shared/lob/momentum-continuation.test.ts,line=1::FULL_FILE_OUTPUT {tail[:6000]}')
+          PY
+          fi
+          exit "$status"
