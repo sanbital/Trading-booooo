@@ -30,6 +30,7 @@ jobs:
           from pg_proc p
           join pg_namespace n on n.oid=p.pronamespace
           where n.nspname='public'
+            and p.prokind in ('f','p')
             and pg_get_functiondef(p.oid) ilike '%FIRST_TRANCHE_THRESHOLD_NOT_REACHED%';
 
           select conname, conrelid::regclass as table_name, pg_get_constraintdef(oid) as definition
@@ -37,12 +38,6 @@ jobs:
           where pg_get_constraintdef(oid) ilike '%tranche%'
              or pg_get_constraintdef(oid) ilike '%threshold%';
 
-          select schemaname, tablename, policyname, qual, with_check
-          from pg_policies
-          where coalesce(qual,'') ilike '%tranche%'
-             or coalesce(with_check,'') ilike '%tranche%';
-
-          -- Focused state for the two affected positions.
           select p.id,p.market,p.state,p.exchange,
                  to_jsonb(p)->>'average_entry_price' as average_entry_price,
                  to_jsonb(p)->>'remaining_quantity' as remaining_quantity,
