@@ -62,7 +62,7 @@ jobs:
             supabase/functions/market-autotrader/final-entry-gate.ts \
             supabase/functions/market-autotrader/final-entry-gate.test.ts
           deno test supabase/functions/market-autotrader/final-entry-gate.test.ts
-          deno test supabase/functions/market-autotrader/futures-lane.test.ts
+          deno test --allow-read supabase/functions/market-autotrader/futures-lane.test.ts
           deno test supabase/functions/_shared/lob/entry.mission.test.ts
           deno check supabase/functions/market-autotrader/index.ts
 
