@@ -10,6 +10,7 @@ function decide(overrides: Partial<Parameters<typeof spotSplitExitDecision>[0]> 
     heldSeconds: 0,
     executableNetAllowed: false,
     expectedNetProfitQuote: -1,
+    preT1ProfitProtectionHit: false,
     safetyRequested: false,
     ...overrides,
   });
@@ -83,6 +84,19 @@ Deno.test("spot +5 target keeps precedence after 180m", () => {
     executableNetAllowed: true,
     expectedNetProfitQuote: 1,
   });
+  assertEquals(d.fraction, 0.5);
+  assertEquals(d.reason, "HALF_HOLD_TAKE_PROFIT_5");
+});
+
+Deno.test("spot pre-T1 earned profit floor closes 100%", () => {
+  const d = decide({ grossReturnPct: 2, peakGrossReturnPct: 3, preT1ProfitProtectionHit: true });
+  assertEquals(d.action, "STOP");
+  assertEquals(d.fraction, 1);
+  assertEquals(d.reason, "PRE_T1_PROFIT_PROTECTION_EXIT");
+});
+
+Deno.test("spot +5 target keeps precedence over pre-T1 protection", () => {
+  const d = decide({ grossReturnPct: 5.2, preT1ProfitProtectionHit: true });
   assertEquals(d.fraction, 0.5);
   assertEquals(d.reason, "HALF_HOLD_TAKE_PROFIT_5");
 });

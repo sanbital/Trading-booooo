@@ -139,6 +139,7 @@ import { buildTradingHeartbeatPatch, type TradingHeartbeatPatch } from "./heartb
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 import { loadMinuteEntryGate } from "../_shared/lob/minute-entry-market.ts";
+import { liveBlockedLobPatterns, preT1ProfitProtectionHit } from "./live-guards.ts";
 
 const VERSION = "7.6.0-BINANCE-FUTURES";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
@@ -1459,6 +1460,7 @@ export function evaluateLobPreOrderRecheck(
     maxStopToTargetRatio: number;
     minNetRewardRiskRatio: number;
     requireMinuteEntryGate: boolean;
+    blockedPatterns?: LobPatternName[];
     trap?: Partial<LobTrapConfig>;
   },
 ): LobPreOrderRecheck {
@@ -1474,6 +1476,7 @@ export function evaluateLobPreOrderRecheck(
     maxStopToTargetRatio: options.maxStopToTargetRatio,
     minNetRewardRiskRatio: options.minNetRewardRiskRatio,
     requireMinuteEntryGate: options.requireMinuteEntryGate,
+    blockedPatterns: options.blockedPatterns,
     trap: options.trap || {},
   });
   const bestBid = finite(market?.best_bid);
@@ -2988,6 +2991,7 @@ async function enterCandidateInner(
       fixedTargetBps: fixedPlanTargetBps,
       fixedStopBps: fixedPlanStopBps,
       fixedMaxHoldingSeconds: fixedPlanMaxHoldingSeconds,
+      blockedPatterns: liveBlockedLobPatterns(exchange),
     };
     const decision = evaluateLobEntry(features, lobExecutionCosts, lobExecutionGate);
     lobSizingContext.preOrderGate = {
@@ -2998,6 +3002,7 @@ async function enterCandidateInner(
       maxStopToTargetRatio: lobExecutionGate.maxStopToTargetRatio,
       minNetRewardRiskRatio: lobExecutionGate.minNetRewardRiskRatio,
       requireMinuteEntryGate: true,
+      blockedPatterns: liveBlockedLobPatterns(exchange),
     };
     scalpAudit = {
       strategy: "LOB_SCALP",
@@ -5645,6 +5650,8 @@ async function applyExit(
   // still remaining. Keep legacy residual reasons authorized for already-open positions.
   const fullLiquidationExit = decisionReason === "HALF_HOLD_STOP_LOSS_4" ||
     decisionReason === "FUTURES_HALF_STOP_LOSS_ROE_12" ||
+    decisionReason === "PRE_T1_PROFIT_PROTECTION_EXIT" ||
+    decisionReason === "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT" ||
     decisionReason === "RESIDUAL_PROTECTED_TRAIL_EXIT" ||
     decisionReason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT" ||
     decisionReason === "RESIDUAL_TAKE_PROFIT_10" ||
@@ -7794,6 +7801,16 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         );
         const hasTradableHalf = finite(position.remaining_quantity) - protectedHoldQuantity >
           residualTolerance;
+        const preT1ProtectedStopPrice = Math.max(
+          0,
+          finite((position as any).metadata?.profit_protection?.protected_stop_price),
+        );
+        const preT1ProtectionHit = preT1ProfitProtectionHit({
+          hasTradableHalf,
+          entryPrice,
+          executableExitPrice,
+          protectedStopPrice: preT1ProtectedStopPrice,
+        });
 
         const positionLeverageValue = positionLeverage(position);
         let recoveryMode = futuresLane && position.metadata?.recovery_exit?.enabled === true;
@@ -7831,6 +7848,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             executableNetAllowed: residualQuote.allowed,
             expectedNetProfitQuote: finite(residualQuote.expectedNetProfitQuote),
             heldSeconds,
+            preT1ProfitProtectionHit: preT1ProtectionHit,
             safetyRequested,
           });
           decision = {
@@ -7861,6 +7879,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             heldSeconds,
             executableNetAllowed: executableQuote.allowed,
             expectedNetProfitQuote: finite(executableQuote.expectedNetProfitQuote),
+            preT1ProfitProtectionHit: preT1ProtectionHit,
             safetyRequested,
           }) as any;
         }
@@ -7950,6 +7969,8 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision.reason === "HALF_HOLD_STOP_LOSS_4" ||
           decision.reason === "FUTURES_HALF_TAKE_PROFIT_ROE_15" ||
           decision.reason === "FUTURES_HALF_STOP_LOSS_ROE_12" ||
+          decision.reason === "PRE_T1_PROFIT_PROTECTION_EXIT" ||
+          decision.reason === "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT" ||
           decision.reason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT" ||
           decision.reason === "RESIDUAL_PROTECTED_TRAIL_EXIT" ||
           decision.reason === "STALE_RECOVERY_NET_POSITIVE_EXIT_180M" ||

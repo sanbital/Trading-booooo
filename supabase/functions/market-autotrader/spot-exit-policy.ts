@@ -16,6 +16,8 @@ export type SpotSplitExitInput = {
   heldSeconds: number;
   executableNetAllowed: boolean;
   expectedNetProfitQuote: number;
+  /** True only when the engine has an earned above-entry protected stop and price hit it. */
+  preT1ProfitProtectionHit?: boolean;
   safetyRequested?: boolean;
 };
 
@@ -63,6 +65,13 @@ export function spotSplitExitDecision(input: SpotSplitExitInput): SpotSplitExitD
       action: "STOP",
       fraction: t.firstTakeProfitFraction,
       reason: "HALF_HOLD_TAKE_PROFIT_5",
+    };
+  }
+  if (input.preT1ProfitProtectionHit === true) {
+    return {
+      action: "STOP",
+      fraction: 1,
+      reason: "PRE_T1_PROFIT_PROTECTION_EXIT",
     };
   }
   if (input.grossReturnPct <= t.firstStopLossPct) {

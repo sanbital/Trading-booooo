@@ -98,28 +98,32 @@ Deno.test("momentum pattern remains short-lived and informational", () => {
   assert(decision.targetReturnNetBps > 0);
 });
 
-Deno.test("the pattern block list is opt-in and still closes a pattern on request", () => {
-  // d133f0b emptied DEFAULT_BLOCKED_LOB_PATTERNS with the pre-breakout Bollinger burst
-  // release, so the continuation patterns are tradable by default now. What this protects
-  // is the mechanism: nothing is blocked unless an operator asks, and asking works.
-  const openByDefault = evaluateLobEntry(momentumFeatures(), binanceCosts);
+Deno.test("live-loss momentum block is default and an explicit override removes that veto", () => {
+  // This test deliberately verifies only the block-list mechanism. Other independent LOB
+  // gates may still return WAIT, so requiring BUY here would make the test depend on the
+  // current values of unrelated admission thresholds or on test execution order.
+  const blockedByDefault = evaluateLobEntry(momentumFeatures(), binanceCosts);
   assert(
-    !openByDefault.reasons.some((reason) => reason.startsWith("LOB_PATTERN_BLOCKED_")),
-    `no pattern may be blocked by default: ${openByDefault.reasons.join(",")}`,
+    blockedByDefault.reasons.includes("LOB_PATTERN_BLOCKED_MOMENTUM_CONTINUATION"),
+    `momentum must be blocked by default: ${blockedByDefault.reasons.join(",")}`,
   );
-  assertEquals(openByDefault.decision, "BUY");
+  assertEquals(blockedByDefault.decision, "WAIT");
 
-  const blocked = evaluateLobEntry(momentumFeatures(), binanceCosts, {
-    blockedPatterns: ["MOMENTUM_CONTINUATION"],
+  const explicitlyReopened = evaluateLobEntry(momentumFeatures(), binanceCosts, {
+    blockedPatterns: [],
   });
-  assert(blocked.reasons.includes("LOB_PATTERN_BLOCKED_MOMENTUM_CONTINUATION"));
-  assertEquals(blocked.decision, "WAIT");
+  assert(
+    !explicitlyReopened.reasons.some((reason) => reason.startsWith("LOB_PATTERN_BLOCKED_")),
+    `empty override must remove the pattern veto: ${explicitlyReopened.reasons.join(",")}`,
+  );
 });
 
-Deno.test("large historical gainer context cannot change present-tense admission", () => {
-  const baseline = evaluateLobEntry(momentumFeatures({ tradePressureFast: 0.05 }), binanceCosts);
+Deno.test("large historical gainer context alone cannot change present-tense admission", () => {
+  const baseline = evaluateLobEntry(momentumFeatures(), binanceCosts);
+  // Change only the broad historical 24h context. Live tape/order-book evidence is held
+  // identical so this test actually isolates the documented non-admission input.
   const historicalSurge = evaluateLobEntry(
-    momentumFeatures({ trendContext: 0.075, tradeArrivalTrend: -0.4, tradePressureFast: 0.05 }),
+    momentumFeatures({ trendContext: 0.075 }),
     binanceCosts,
   );
   assertEquals(historicalSurge.decision, baseline.decision);
