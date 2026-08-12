@@ -1,0 +1,131 @@
+name: Reverify v7.6.7 postdeploy three times
+
+on:
+  push:
+    branches: [agent/spot-ofi-pre-t1-protection-v767]
+    paths:
+      - ".github/workflows/reverify-v767-postdeploy-3x.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postdeploy-three-pass:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: agent/spot-ofi-pre-t1-protection-v767
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Consistency pass 1 of 3 - entire repository
+        run: |
+          set -euo pipefail
+          git diff --check
+          deno task check
+          deno task test
+          node --check gateway/server.mjs
+          node --test gateway/server.test.mjs
+
+      - name: Consistency pass 2 of 3 - cross-module invariants
+        run: |
+          set -euo pipefail
+          deno test supabase/functions/market-autotrader/live-guards.test.ts
+          deno test supabase/functions/market-autotrader/spot-exit-policy.test.ts
+          deno test supabase/functions/market-autotrader/futures-exit-policy.test.ts
+          deno test --allow-read supabase/functions/_shared/lob/momentum-continuation.test.ts
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path('.')
+          index = (root/'supabase/functions/market-autotrader/index.ts').read_text()
+          spot = (root/'supabase/functions/market-autotrader/spot-exit-policy.ts').read_text()
+          fut = (root/'supabase/functions/market-autotrader/futures-exit-policy.ts').read_text()
+          entry = (root/'supabase/functions/_shared/lob/entry.ts').read_text()
+          guards = (root/'supabase/functions/market-autotrader/live-guards.ts').read_text()
+
+          # Spot-only OFI block: global default remains momentum-only so futures OFI stays eligible.
+          assert 'exchange === "binance"' in guards
+          assert '["MOMENTUM_CONTINUATION", "OFI_CONTINUATION"]' in guards
+          assert 'DEFAULT_BLOCKED_LOB_PATTERNS: string[] = ["MOMENTUM_CONTINUATION"]' in entry
+          assert index.count('blockedPatterns: liveBlockedLobPatterns(exchange)') >= 2
+          assert 'blockedPatterns: options.blockedPatterns' in index
+
+          # Profit protection must be earned above entry; cannot manufacture a new loss exit.
+          assert 'protectedStop > entry' in guards
+          assert 'preT1ProfitProtectionHit: preT1ProtectionHit' in index
+          assert 'decisionReason === "PRE_T1_PROFIT_PROTECTION_EXIT"' in index
+          assert 'decisionReason === "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT"' in index
+
+          # Existing operator thresholds stay byte-for-byte present.
+          for needle in ['firstTakeProfitPct: 5', 'firstStopLossPct: -4',
+                         'residualProfitFloorPct: 3', 'residualTrailingDrawdownPct: 1.5']:
+              assert needle in spot, needle
+          for needle in ['DEFAULT_FUTURES_LEVERAGE = 3', 'FUTURES_MIN_ENTRY_MARGIN_USDT = 50',
+                         'firstTakeProfitRoePct: 15', 'firstStopLossRoePct: -12',
+                         'residualProfitFloorRoePct: 9', 'residualTrailingDrawdownRoePct: 4.5']:
+              assert needle in fut, needle
+
+          # Existing first TP still has precedence; protection then prevents giveback; hard stop stays final loss fence.
+          assert spot.index('grossReturnPct >= t.firstTakeProfitPct') < spot.index('preT1ProfitProtectionHit === true') < spot.index('grossReturnPct <= t.firstStopLossPct')
+          assert fut.index('roePct >= thresholds.firstTakeProfitRoePct') < fut.index('preT1ProfitProtectionHit === true') < fut.index('roePct <= thresholds.firstStopLossRoePct')
+          print('cross-module invariants OK')
+          PY
+          grep -R --line-number --fixed-string 'evaluateLobEntry(' supabase/functions | tee /tmp/lob-entry-call-sites.txt
+          test "$(grep -c 'market-autotrader/index.ts' /tmp/lob-entry-call-sites.txt)" -ge 2
+
+      - name: Consistency pass 3 of 3 - production runtime and accounting
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "${SUPABASE_PROJECT_REF}" | tee /tmp/functions.txt
+          grep -q 'market-autotrader' /tmp/functions.txt
+
+          # The actual production deployment completed at 2026-08-12T00:07:44Z.
+          failures=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from public.trading_cycle_runs
+            where status='FAILED' and started_at >= '2026-08-12T00:07:44Z'::timestamptz;")
+          monitor_success=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from public.trading_cycle_runs
+            where kind='MONITOR' and status='SUCCESS' and started_at >= '2026-08-12T00:07:44Z'::timestamptz;")
+          scan_success=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from public.trading_cycle_runs
+            where kind='SCAN' and status='SUCCESS' and started_at >= '2026-08-12T00:07:44Z'::timestamptz;")
+          test "$failures" = "0"
+          test "$monitor_success" -ge 1
+          test "$scan_success" -ge 1
+
+          # Entries restored, futures still compound ALL at 3x, and venue leverage cannot cross-wire.
+          test "$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select (mode='LIVE_LIMITED' and pause_new_entries=false and binance_futures_allocation_mode='ALL' and binance_futures_leverage=3)::int from public.trading_settings where id=1")" = "1"
+          test "$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select count(*) from public.trading_positions where state in ('OPEN','EXITING','RECONCILING') and ((exchange='binance' and coalesce(leverage,1)<>1) or (exchange='binance_futures' and coalesce(leverage,0)<>3))")" = "0"
+
+          # Economic PnL sanity: prevent recurrence of the previously fixed futures cost-basis explosion.
+          test "$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select count(*) from public.trading_positions where exchange='binance_futures' and state in ('OPEN','EXITING','RECONCILING') and coalesce(initial_quantity,0)>0 and coalesce(average_entry_price,0)>0 and abs(coalesce(marked_pnl_quote,0)) > greatest(10, initial_quantity*average_entry_price*0.25)")" = "0"
+
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "
+            select mode,pause_new_entries,binance_futures_allocation_mode,binance_futures_leverage,updated_at
+            from public.trading_settings where id=1;"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "
+            select exchange,market,state,coalesce(leverage,1) leverage,
+                   round(coalesce(marked_pnl_quote,0)::numeric,6) marked_pnl
+            from public.trading_positions where state in ('OPEN','EXITING','RECONCILING')
+            order by opened_at desc nulls last limit 10;"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "
+            select exchange,allocation_mode,round(managed_capital_quote::numeric,6) managed_capital,
+                   round(managed_available_quote::numeric,6) managed_available,captured_at
+            from public.trading_account_snapshots
+            where exchange in ('binance','binance_futures')
+            order by captured_at desc limit 4;"
+          echo "postdeploy runtime: monitor_success=$monitor_success scan_success=$scan_success failures=$failures"
