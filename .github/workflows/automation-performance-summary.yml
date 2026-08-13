@@ -1,0 +1,88 @@
+name: Automation Performance Summary
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/automation-performance-summary.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  summary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Print compact post-fix trading performance
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" -P pager=off -F '|' -A -t <<'SQL'
+          with p as (
+            select *,
+              timestamp with time zone '2026-08-12 23:11:37+00' as fix_at,
+              now() as asof,
+              now() - timestamp with time zone '2026-08-12 23:11:37+00' as span
+            from public.trading_positions
+            where is_paper is false and state='CLOSED'
+          ), w as (
+            select *, case
+              when closed_at >= fix_at and closed_at <= asof then 'POST'
+              when closed_at >= fix_at-span and closed_at < fix_at then 'PRE'
+              when closed_at >= fix_at-(span*2) and closed_at < fix_at-span then 'PRIOR'
+            end win
+            from p
+          )
+          select 'AGG' as kind, win,
+            case when exchange='binance_futures' then 'FUTURES' else 'SPOT' end market_type,
+            exchange, quote_currency,
+            count(*) n,
+            count(*) filter (where realized_pnl_quote > 0) wins,
+            count(*) filter (where realized_pnl_quote < 0) losses,
+            round(sum(realized_pnl_quote)::numeric,6) pnl,
+            round(avg(realized_return_pct)::numeric,4) avg_ret_pct,
+            round(avg(realized_return_pct) filter (where realized_pnl_quote > 0)::numeric,4) avg_win_pct,
+            round(avg(realized_return_pct) filter (where realized_pnl_quote < 0)::numeric,4) avg_loss_pct,
+            count(*) filter (where upper(coalesce(close_reason,'')) like '%STOP%') stops,
+            round(avg(mfe_capture_ratio)::numeric,4) avg_mfe_capture,
+            round(avg(profit_giveback_pct)::numeric,4) avg_giveback_pct,
+            round(avg(peak_return_pct)::numeric,4) avg_peak_pct
+          from w where win is not null
+          group by win, market_type, exchange, quote_currency
+          order by case win when 'POST' then 1 when 'PRE' then 2 else 3 end, market_type, exchange;
+
+          select 'POST_TRADE' as kind,
+            case when exchange='binance_futures' then 'FUTURES' else 'SPOT' end market_type,
+            exchange,market,quote_currency,
+            to_char(opened_at at time zone 'Asia/Seoul','MM-DD HH24:MI:SS') opened_kst,
+            to_char(closed_at at time zone 'Asia/Seoul','MM-DD HH24:MI:SS') closed_kst,
+            round(realized_pnl_quote::numeric,6) pnl,
+            round(realized_return_pct::numeric,4) ret_pct,
+            close_reason,
+            round(peak_return_pct::numeric,4) peak_pct,
+            round(mfe_capture_ratio::numeric,4) mfe_capture,
+            round(profit_giveback_pct::numeric,4) giveback_pct,
+            leverage
+          from public.trading_positions
+          where is_paper is false and state='CLOSED'
+            and closed_at >= timestamp with time zone '2026-08-12 23:11:37+00'
+          order by closed_at;
+
+          select 'ANOMALY' as kind,
+            count(*) filter (where upper(coalesce(close_reason,'')) like '%PROFIT_PROTECTION%' and realized_pnl_quote <= 0) bad_profit_protection,
+            count(*) filter (where upper(coalesce(close_reason,'')) like '%PRE_T1%' and realized_pnl_quote <= 0) bad_pre_t1,
+            count(*) filter (where realized_return_pct is null or realized_pnl_quote is null) incomplete_accounting
+          from public.trading_positions
+          where is_paper is false and state='CLOSED'
+            and closed_at >= timestamp with time zone '2026-08-12 23:11:37+00';
+
+          select 'OPEN' as kind,
+            case when exchange='binance_futures' then 'FUTURES' else 'SPOT' end market_type,
+            exchange,count(*) n
+          from public.trading_positions
+          where is_paper is false and state='OPEN'
+          group by market_type,exchange order by market_type,exchange;
+          SQL
