@@ -3079,6 +3079,7 @@ export function finalizeCandidate(
       universeMode: period.universe.universe_mode,
       gainerRank: finiteOr(period.universe.gainer_rank, 99),
       change24hPct: period.universe.change_24h_pct,
+      dayRangePct: period.universe.day_range_pct,
       samples: micro.samples,
       observationMs: micro.dynamic.observation_ms,
       bookAgeMs: micro.live_book_age_ms,

@@ -135,3 +135,55 @@ Deno.test("high stochastic and advance remain allowed when upper-band slope is s
   assertEquals(decision.decision, "BUY", decision.reasons.join(","));
   assert(!decision.reasons.includes("M1_LATE_EXTENSION_CHASE"));
 });
+
+Deno.test("PROM-like extreme drawdown and range are rejected", () => {
+  const decision = evaluate({
+    change24hPct: -20.9,
+    dayRangePct: 32.4,
+    m1RecentAdvanceAtr: 0.8,
+    m1VolumeRatio: 1.0,
+  });
+  assert(decision.reasons.includes("EXTREME_24H_RANGE"));
+  assert(decision.reasons.includes("EXTREME_24H_DRAWDOWN"));
+  assert(decision.decision !== "BUY");
+});
+
+Deno.test("COTI-like event range is rejected without banning normal high gainers", () => {
+  const decision = evaluate({
+    change24hPct: 40.9,
+    dayRangePct: 62.9,
+    m1RecentAdvanceAtr: 1.2,
+    m1VolumeRatio: 1.1,
+    m1BandWidthExpansionRatio: 1.05,
+    m1SqueezeRelease: true,
+  });
+  assert(decision.reasons.includes("EXTREME_24H_RANGE"));
+  assert(decision.decision !== "BUY");
+});
+
+Deno.test("normal high gainer with controlled range remains buyable", () => {
+  const decision = evaluate({
+    change24hPct: 18.99,
+    dayRangePct: 12,
+    m1StochK: 91,
+    m1RecentAdvanceAtr: 1.2,
+    m1VolumeRatio: 1.05,
+    m1UpperBandSlopePct: 0.08,
+    m1BandWidthExpansionRatio: 1.05,
+    m1SqueezeRelease: true,
+  });
+  assertEquals(decision.decision, "BUY", decision.reasons.join(","));
+  assert(!decision.reasons.includes("EXTREME_24H_RANGE"));
+  assert(!decision.reasons.includes("M1_MOMENTUM_CHASE_VOLUME_FADE"));
+});
+
+Deno.test("volume fade after an ATR chase is rejected", () => {
+  const decision = evaluate({
+    change24hPct: 12,
+    dayRangePct: 14,
+    m1RecentAdvanceAtr: 1.6,
+    m1VolumeRatio: 0.6,
+  });
+  assert(decision.reasons.includes("M1_MOMENTUM_CHASE_VOLUME_FADE"));
+  assert(decision.decision !== "BUY");
+});

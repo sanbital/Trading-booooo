@@ -16,8 +16,10 @@ import type { LobTrapAssessment, LobTrapConfig } from "./traps.ts";
 export interface LobFeatureVector {
   universeMode?: "TOP10_24H_GAINERS_LOB_ONLY";
   gainerRank?: number;
-  /** Scan-time 24h move used only to reject measured late-extension chase setups. */
+  /** Scan-time 24h move used by event-risk and late-extension entry guards. */
   change24hPct?: number;
+  /** Venue ticker (high-low)/open range used to reject event-like hyper-volatility. */
+  dayRangePct?: number;
   samples: number;
   observationMs: number;
   bookAgeMs: number | null;

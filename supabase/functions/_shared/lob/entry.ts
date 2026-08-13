@@ -350,6 +350,32 @@ export function evaluateLobEntry(
     else warnings.push(`LOB_DIAGNOSTIC_${trap.name}`);
   }
 
+  // Extreme-mover guard from the 2026-08-13 live-fill review. PROM and COTI were not
+  // broad-market failures: each had an event-like venue range far outside the benchmark
+  // regime. Reject that failure mode without banning healthy high gainers outright.
+  // Missing telemetry never fabricates a rejection.
+  const extremeChange24hPct = optionalFinite(features.change24hPct);
+  const dayRangePct = optionalFinite(features.dayRangePct);
+  if (dayRangePct != null && dayRangePct >= 20) {
+    reasons.push("EXTREME_24H_RANGE");
+  }
+  if (extremeChange24hPct != null && extremeChange24hPct <= -15) {
+    reasons.push("EXTREME_24H_DRAWDOWN");
+  }
+
+  // Momentum-chase guard: after a >=1.5 ATR three-minute advance, a current 1m volume
+  // ratio below 0.70 means participation has already faded. Only apply it after a meaningful
+  // positive 24h move so ordinary low-volume consolidations stay eligible.
+  const chaseRecentAdvanceAtr = optionalFinite(features.m1RecentAdvanceAtr);
+  const chaseVolumeRatio = optionalFinite(features.m1VolumeRatio);
+  if (
+    extremeChange24hPct != null && extremeChange24hPct >= 10 &&
+    chaseRecentAdvanceAtr != null && chaseRecentAdvanceAtr >= 1.5 &&
+    chaseVolumeRatio != null && chaseVolumeRatio < 0.70
+  ) {
+    reasons.push("M1_MOMENTUM_CHASE_VOLUME_FADE");
+  }
+
   // The completed candle is deliberately the small pre-breakout candle. A large expansion
   // candle, a late three-bar advance, or a band that is not just beginning to widen blocks.
   if (cfg.requireMinuteEntryGate === true) {
