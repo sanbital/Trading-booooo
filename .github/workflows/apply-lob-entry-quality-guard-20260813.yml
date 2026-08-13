@@ -1,11 +1,11 @@
-name: Apply LOB entry quality guard 2026-08-13
+name: Apply extreme mover entry guard 2026-08-14
 
 on:
   push:
     branches: [main]
     paths:
       - ".github/workflows/apply-lob-entry-quality-guard-20260813.yml"
-      - "scripts/apply_lob_entry_quality_guard_20260813.py"
+      - "scripts/apply_extreme_mover_entry_guard_20260814.py"
   workflow_dispatch:
 
 permissions:
@@ -33,7 +33,7 @@ jobs:
       - name: Apply minimal shared-entry patch
         run: |
           set -euo pipefail
-          python3 scripts/apply_lob_entry_quality_guard_20260813.py
+          python3 scripts/apply_extreme_mover_entry_guard_20260814.py
           deno fmt \
             supabase/functions/_shared/lob/types.ts \
             supabase/functions/_shared/lob/entry.ts \
@@ -74,8 +74,13 @@ jobs:
           PY
           grep -q 'M1_BAND_WIDTH_NOT_EXPANDING' supabase/functions/_shared/lob/entry.ts
           grep -q 'M1_LATE_EXTENSION_CHASE' supabase/functions/_shared/lob/entry.ts
+          grep -q 'EXTREME_24H_RANGE' supabase/functions/_shared/lob/entry.ts
+          grep -q 'EXTREME_24H_DRAWDOWN' supabase/functions/_shared/lob/entry.ts
+          grep -q 'M1_MOMENTUM_CHASE_VOLUME_FADE' supabase/functions/_shared/lob/entry.ts
           grep -q 'change24hPct: period.universe.change_24h_pct' supabase/functions/market-scanner/engine.ts
+          grep -q 'dayRangePct: period.universe.day_range_pct' supabase/functions/market-scanner/engine.ts
           grep -q 'change24hPct: finite(base.change24hPct, 0)' supabase/functions/market-autotrader/index.ts
+          grep -q 'dayRangePct: finite(base.dayRangePct, 0)' supabase/functions/market-autotrader/index.ts
           grep -q 'FUTURES_MIN_ENTRY_MARGIN_USDT' supabase/functions/market-autotrader/index.ts
           grep -q 'spotSplitExitDecision' supabase/functions/market-autotrader/index.ts
           grep -q 'futuresSplitExitDecision' supabase/functions/market-autotrader/index.ts
@@ -112,7 +117,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "Canonical source already contains the entry-quality guard"
           else
-            git commit -m "fix: reject measured late LOB entries"
+            git commit -m "fix: guard extreme mover LOB entries"
             git pull --rebase origin main
             git push origin HEAD:main
           fi
