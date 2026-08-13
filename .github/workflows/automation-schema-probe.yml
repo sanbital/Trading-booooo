@@ -1,0 +1,23 @@
+name: Automation Schema Probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/automation-schema-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Print compact trading schema
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" -P pager=off -F '|' -A -t -c "select table_name||':'||string_agg(column_name,',' order by ordinal_position) from information_schema.columns where table_schema='public' and (table_name ilike '%trading%' or table_name ilike '%trade%' or table_name ilike '%position%' or table_name ilike '%fill%') group by table_name order by table_name;"
