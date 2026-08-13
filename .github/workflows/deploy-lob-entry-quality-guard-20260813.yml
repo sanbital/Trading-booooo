@@ -38,8 +38,13 @@ jobs:
           set -euo pipefail
           grep -q 'M1_BAND_WIDTH_NOT_EXPANDING' supabase/functions/_shared/lob/entry.ts
           grep -q 'M1_LATE_EXTENSION_CHASE' supabase/functions/_shared/lob/entry.ts
+          grep -q 'EXTREME_24H_RANGE' supabase/functions/_shared/lob/entry.ts
+          grep -q 'EXTREME_24H_DRAWDOWN' supabase/functions/_shared/lob/entry.ts
+          grep -q 'M1_MOMENTUM_CHASE_VOLUME_FADE' supabase/functions/_shared/lob/entry.ts
           grep -q 'change24hPct: period.universe.change_24h_pct' supabase/functions/market-scanner/engine.ts
+          grep -q 'dayRangePct: period.universe.day_range_pct' supabase/functions/market-scanner/engine.ts
           grep -q 'change24hPct: finite(base.change24hPct, 0)' supabase/functions/market-autotrader/index.ts
+          grep -q 'dayRangePct: finite(base.dayRangePct, 0)' supabase/functions/market-autotrader/index.ts
           grep -q 'spotSplitExitDecision' supabase/functions/market-autotrader/index.ts
           grep -q 'futuresSplitExitDecision' supabase/functions/market-autotrader/index.ts
           grep -q 'FUTURES_MIN_ENTRY_MARGIN_USDT = 50' supabase/functions/market-autotrader/futures-exit-policy.ts
