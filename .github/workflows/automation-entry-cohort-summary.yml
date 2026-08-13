@@ -1,0 +1,53 @@
+name: Automation Entry Cohort Summary
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/automation-entry-cohort-summary.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  summary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Entry-cohort comparison
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" -P pager=off -F '|' -A -t <<'SQL'
+          with b as (
+            select timestamp with time zone '2026-08-12 23:11:37+00' fix_at, now() as asof
+          ), p as (
+            select p.*, b.fix_at,b.asof,(b.asof-b.fix_at) span,
+              case
+                when p.opened_at >= b.fix_at and p.opened_at <= b.asof then 'POST'
+                when p.opened_at >= b.fix_at-(b.asof-b.fix_at) and p.opened_at < b.fix_at then 'PRE'
+                when p.opened_at >= b.fix_at-2*(b.asof-b.fix_at) and p.opened_at < b.fix_at-(b.asof-b.fix_at) then 'PRIOR'
+              end cohort
+            from public.trading_positions p cross join b
+            where p.is_paper is false
+          )
+          select 'COHORT',cohort,
+            case when exchange='binance_futures' then 'FUTURES' else 'SPOT' end market_type,
+            exchange,quote_currency,
+            count(*) filter(where state='CLOSED') closed_n,
+            count(*) filter(where state='OPEN') open_n,
+            count(*) filter(where state='CLOSED' and realized_pnl_quote>0) wins,
+            count(*) filter(where state='CLOSED' and realized_pnl_quote<0) losses,
+            round(sum(realized_pnl_quote) filter(where state='CLOSED')::numeric,6) pnl,
+            round(avg(realized_return_pct) filter(where state='CLOSED')::numeric,4) avg_ret_pct,
+            round(avg(realized_return_pct) filter(where state='CLOSED' and realized_pnl_quote>0)::numeric,4) avg_win_pct,
+            round(avg(realized_return_pct) filter(where state='CLOSED' and realized_pnl_quote<0)::numeric,4) avg_loss_pct,
+            count(*) filter(where state='CLOSED' and upper(coalesce(close_reason,'')) like '%STOP%') stops,
+            round(avg(mfe_capture_ratio) filter(where state='CLOSED')::numeric,4) avg_mfe_capture,
+            round(avg(profit_giveback_pct) filter(where state='CLOSED')::numeric,4) avg_giveback_pct
+          from p where cohort is not null
+          group by cohort,market_type,exchange,quote_currency
+          order by case cohort when 'POST' then 1 when 'PRE' then 2 else 3 end,market_type,exchange;
+          SQL
