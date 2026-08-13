@@ -1,0 +1,37 @@
+name: Automation Performance Probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/automation-performance-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Query trading performance data
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL}"
+          echo '=== COLUMNS ==='
+          psql "${SUPABASE_DB_URL}" -P pager=off -F $'\t' -A -c "select table_name,column_name,data_type from information_schema.columns where table_schema='public' and table_name in ('trading_positions','trading_orders','trading_fills','exchange_trade_fills','trading_position_marks','trading_cycle_runs') order by table_name,ordinal_position;"
+          echo '=== RECENT_POSITIONS ==='
+          psql "${SUPABASE_DB_URL}" -P pager=off -F $'\t' -A -c "select * from public.trading_positions where coalesce(closed_at,opened_at) >= now()-interval '36 hours' order by coalesce(closed_at,opened_at) desc limit 200;"
+          echo '=== RECENT_ORDERS ==='
+          psql "${SUPABASE_DB_URL}" -P pager=off -F $'\t' -A -c "select * from public.trading_orders where created_at >= now()-interval '36 hours' order by created_at desc limit 500;"
+          echo '=== RECENT_FILLS ==='
+          if psql "${SUPABASE_DB_URL}" -Atqc "select to_regclass('public.trading_fills') is not null" | grep -qx t; then
+            psql "${SUPABASE_DB_URL}" -P pager=off -F $'\t' -A -c "select * from public.trading_fills where executed_at >= now()-interval '36 hours' order by executed_at desc limit 1000;"
+          fi
+          echo '=== RECENT_EXCHANGE_FILLS ==='
+          if psql "${SUPABASE_DB_URL}" -Atqc "select to_regclass('public.exchange_trade_fills') is not null" | grep -qx t; then
+            psql "${SUPABASE_DB_URL}" -P pager=off -F $'\t' -A -c "select * from public.exchange_trade_fills where executed_at >= now()-interval '36 hours' order by executed_at desc limit 1000;"
+          fi
