@@ -1,0 +1,6 @@
+original_repo=sanbital/Trading-booooo
+original_branch=main
+original_commit=75b9bc9ab7663eb06335a7278158918987c67072
+bootstrap_date_kst=2026-08-14
+role=upbit_only_independent_runtime
+master_strategy=original_trading_boo
