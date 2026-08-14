@@ -2,8 +2,9 @@
 // Publishable(또는 기존 Anon) Key는 브라우저용 공개 키입니다.
 // Service Role / Secret Key / SCAN_ACCESS_TOKEN은 절대 이 파일에 넣지 마세요.
 const UI_VERSION = "7.6.0-BINANCE-FUTURES";
-const DASHBOARD_REVISION = "7.6.3-BINANCE-SPOT-FUTURES-COMBINED-r1";
+const DASHBOARD_REVISION = "7.6.4-MARKET-REGIME-LEARNING-r1";
 const PERFORMANCE_ASSET_REVISION = "7.6.3-BINANCE-SPOT-FUTURES-COMBINED-r1";
+const MARKET_REGIME_ASSET_REVISION = "1-FORWARD-VALIDATION";
 
 window.TRADING_SCANNER_CONFIG = {
   uiVersion: UI_VERSION,
@@ -12,6 +13,7 @@ window.TRADING_SCANNER_CONFIG = {
   supabasePublishableKey: "sb_publishable_FLldZQ4AurlgETbjZp6uVQ_qrSXReHX",
   functionName: "market-scanner",
   autotraderFunctionName: "market-autotrader",
+  marketRegimeFunctionName: "market-regime-observer",
   performanceFunctionName: "market-performance",
   binanceSourceFunctionName: "binance-source",
   binanceOrderSourceFunctionName: "binance-order-source",
@@ -65,4 +67,15 @@ window.addEventListener("pageshow", applyDashboardVersion);
   dashboardOnlyScript.src = `./dashboard-only.js?v=5-REALIZED-COLLAPSE-ALL-WIDTHS`;
   dashboardOnlyScript.defer = true;
   document.head.appendChild(dashboardOnlyScript);
+
+  const regimeVersion = encodeURIComponent(MARKET_REGIME_ASSET_REVISION);
+  const regimeStylesheet = document.createElement("link");
+  regimeStylesheet.rel = "stylesheet";
+  regimeStylesheet.href = `./market-regime.css?v=${regimeVersion}`;
+  document.head.appendChild(regimeStylesheet);
+
+  const regimeScript = document.createElement("script");
+  regimeScript.src = `./market-regime.js?v=${regimeVersion}`;
+  regimeScript.defer = true;
+  document.head.appendChild(regimeScript);
 })();
