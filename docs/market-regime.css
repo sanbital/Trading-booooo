@@ -1,0 +1,121 @@
+.market-regime-panel {
+  margin-top: 14px;
+  padding: 24px;
+}
+.market-regime-head,
+.market-regime-validation-head,
+.market-regime-title-row,
+.market-regime-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.market-regime-head h2 { margin: 4px 0 7px; }
+.market-regime-subtitle { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.market-regime-safety {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  border: 1px solid rgba(110, 185, 255, 0.28);
+  border-radius: 999px;
+  background: rgba(110, 185, 255, 0.08);
+  color: var(--blue);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+.market-regime-empty {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 12px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 12px;
+}
+.market-regime-overview {
+  display: grid;
+  grid-template-columns: 1.6fr repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 20px;
+}
+.market-regime-verdict,
+.market-regime-feature,
+.market-regime-accuracy article {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(4, 8, 12, 0.48);
+}
+.market-regime-verdict > span,
+.market-regime-feature > span,
+.market-regime-accuracy article > span,
+.market-regime-validation-head span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.market-regime-title-row { margin: 7px 0 5px; align-items: baseline; }
+.market-regime-title-row strong { font-size: 25px; line-height: 1.1; }
+.market-regime-title-row b { color: var(--text); font-family: var(--mono); font-size: 12px; }
+.market-regime-verdict small,
+.market-regime-feature small,
+.market-regime-accuracy small,
+.market-regime-validation-head small {
+  display: block;
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1.45;
+}
+.market-regime-feature strong {
+  display: block;
+  margin: 8px 0 5px;
+  font-family: var(--mono);
+  font-size: 18px;
+}
+.regime-strong-bull,
+.regime-bull { color: var(--green); }
+.regime-neutral { color: var(--amber); }
+.regime-risk-off { color: var(--red); }
+.market-regime-validation {
+  margin-top: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.market-regime-validation-head { align-items: flex-end; }
+.market-regime-validation-head strong { display: block; margin-top: 4px; font-size: 13px; }
+.market-regime-accuracy {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 10px;
+}
+.market-regime-accuracy strong {
+  display: block;
+  margin: 6px 0 4px;
+  font-family: var(--mono);
+  font-size: 14px;
+}
+.market-regime-footer {
+  margin-top: 12px;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.market-regime-footer strong { color: var(--blue); font-size: 10px; }
+
+@media (max-width: 1050px) {
+  .market-regime-overview { grid-template-columns: repeat(2, 1fr); }
+  .market-regime-verdict { grid-column: 1 / -1; }
+}
+@media (max-width: 620px) {
+  .market-regime-panel { padding: 18px; }
+  .market-regime-head,
+  .market-regime-validation-head,
+  .market-regime-footer { align-items: flex-start; flex-direction: column; }
+  .market-regime-overview,
+  .market-regime-accuracy { grid-template-columns: 1fr; }
+  .market-regime-verdict { grid-column: auto; }
+  .market-regime-safety { align-self: flex-start; }
+}
