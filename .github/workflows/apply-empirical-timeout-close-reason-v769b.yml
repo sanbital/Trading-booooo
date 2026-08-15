@@ -1,0 +1,174 @@
+name: Apply empirical timeout close reason v7.6.9b
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-empirical-timeout-close-reason-v769b.yml"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: apply-empirical-timeout-close-reason-v769b
+  cancel-in-progress: false
+jobs:
+  patch-test-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+      - name: Freeze new entries
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          previous_pause=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
+          echo "PREVIOUS_PAUSE_NEW_ENTRIES=${previous_pause:-true}" >> "$GITHUB_ENV"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "update public.trading_settings set pause_new_entries=true,updated_at=now() where id=1"
+          psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select absolute_max_holding_seconds from public.trading_ops_invariants where id=1" | grep -qx 600
+      - name: Patch empirical defects only
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          idx=Path('supabase/functions/market-autotrader/index.ts')
+          s=idx.read_text()
+          pairs=[
+          ('''        const configuredAbsoluteMaxHoldingSeconds = finite(\n          (settings as any).lob_absolute_max_holding_seconds,\n          600,\n        );''','''        const configuredAbsoluteMaxHoldingSeconds = finite(\n          position.metadata?.absolute_max_holding_seconds,\n          finite((settings as any).lob_absolute_max_holding_seconds, 600),\n        );'''),
+          ('''  const fullLiquidationExit = decisionReason === "HALF_HOLD_STOP_LOSS_4" ||''','''  const fullLiquidationExit = decisionReason === "HALF_HOLD_ABSOLUTE_TIMEOUT" ||\n    decisionReason === "POST180_MAX_HOLD_TIMEOUT" ||\n    decisionReason === "HALF_HOLD_STOP_LOSS_4" ||'''),
+          ('''          decision.reason === "HALF_HOLD_STOP_LOSS_4" ||''','''          decision.reason === "HALF_HOLD_ABSOLUTE_TIMEOUT" ||\n          decision.reason === "POST180_MAX_HOLD_TIMEOUT" ||\n          decision.reason === "HALF_HOLD_STOP_LOSS_4" ||''')]
+          for old,new in pairs:
+              assert old in s, old[:60]
+              s=s.replace(old,new,1)
+          idx.write_text(s)
+          src=Path('supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql').read_text()
+          start=src.index('create or replace function public.guard_residual_sell_order_v751()')
+          end=src.index('$function$;',start)+len('$function$;')
+          g=src[start:end]
+          a='  v_pre_t1_protected_stop numeric;\nbegin'
+          assert a in g
+          g=g.replace(a,'  v_pre_t1_protected_stop numeric;\n  v_absolute_max_holding_seconds numeric;\nbegin',1)
+          a="  v_held_seconds := greatest(0, extract(epoch from (now() - coalesce(p.opened_at, p.created_at, now()))));"
+          assert a in g
+          g=g.replace(a,a+"\n  v_absolute_max_holding_seconds := greatest(1, coalesce(nullif(p.metadata->>'absolute_max_holding_seconds', '')::numeric, 600));",1)
+          a="  if upper(coalesce(new.purpose, '')) = 'EMERGENCY' then\n    v_sellable_qty := greatest(0, p.remaining_quantity);\n  elsif v_residual_stage then"
+          b="  if upper(coalesce(new.purpose, '')) = 'EMERGENCY' then\n    v_sellable_qty := greatest(0, p.remaining_quantity);\n  elsif v_approved_reason in ('HALF_HOLD_ABSOLUTE_TIMEOUT', 'POST180_MAX_HOLD_TIMEOUT') then\n    if v_held_seconds + 0.001 < v_absolute_max_holding_seconds then\n      raise exception using errcode='23514', message=format('ABSOLUTE_TIMEOUT_TOO_EARLY market=%s held_seconds=%s required_seconds=%s', p.market, round(v_held_seconds,3), round(v_absolute_max_holding_seconds,3));\n    end if;\n    v_sellable_qty := greatest(0, p.remaining_quantity);\n  elsif v_residual_stage then"
+          assert a in g
+          g=g.replace(a,b,1)
+          normalize="""create or replace function public.normalize_lob_exit_reason_v704(p_raw text,p_fallback text)
+          returns text language sql immutable parallel safe as $$
+          select case
+            when upper(coalesce(p_raw,'')) in ('HALF_HOLD_ABSOLUTE_TIMEOUT','POST180_MAX_HOLD_TIMEOUT') or upper(coalesce(p_raw,'')) like '%ABSOLUTE_TIMEOUT%' then 'TIMEOUT'
+            when upper(coalesce(p_raw,'')) in ('HALF_HOLD_TAKE_PROFIT_5','FUTURES_HALF_TAKE_PROFIT_ROE_15') then 'TARGET_1'
+            when upper(coalesce(p_raw,'')) in ('RESIDUAL_TAKE_PROFIT_10','FUTURES_RESIDUAL_TAKE_PROFIT_ROE_30') then 'TARGET_2'
+            when upper(coalesce(p_raw,'')) in ('PRE_T1_PROFIT_PROTECTION_EXIT','FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT') then 'PROFIT_PROTECTION'
+            when upper(coalesce(p_raw,'')) in ('RESIDUAL_PROTECTED_TRAIL_EXIT','FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT') then 'TRAILING_PROFIT'
+            when upper(coalesce(p_raw,'')) in ('STALE_RECOVERY_NET_POSITIVE_EXIT_180M','FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M','FUTURES_RECOVERY_NET_POSITIVE_EXIT','RECOVERY_NET_POSITIVE_EXIT') then 'RECOVERY_PROFIT'
+            when upper(coalesce(p_raw,'')) in ('HALF_HOLD_STOP_LOSS_4','FUTURES_HALF_STOP_LOSS_ROE_12') or upper(coalesce(p_raw,'')) like '%MAX_SINGLE_LOSS%' then 'HARD_STOP'
+            when upper(coalesce(p_raw,'')) like '%TARGET_2%' or upper(coalesce(p_fallback,''))='TARGET_2' then 'TARGET_2'
+            when upper(coalesce(p_raw,'')) like '%TARGET_1%' or upper(coalesce(p_fallback,''))='TARGET_1' then 'TARGET_1'
+            when upper(coalesce(p_raw,'')) like '%TARGET_HIT%' then 'TARGET'
+            when upper(coalesce(p_raw,'')) like '%LOB_INVALIDATION%' then 'LOB_INVALIDATION'
+            when upper(coalesce(p_raw,'')) like '%SIGNAL_REVERSAL%' then 'SIGNAL_REVERSAL'
+            when upper(coalesce(p_raw,'')) like '%TIMEOUT%' or lower(coalesce(p_raw,'')) like '%maximum holding time%' then 'TIMEOUT'
+            when upper(coalesce(p_raw,'')) like '%LIQUIDITY_EVENT%' or lower(coalesce(p_raw,'')) like 'rotation:%' then 'LIQUIDITY_EVENT'
+            when upper(coalesce(p_raw,'')) like '%LOB_REVERSAL%' or lower(coalesce(p_raw,'')) like 'live_hold:%' then 'LOB_REVERSAL'
+            when upper(coalesce(p_raw,'')) like '%RECONCILIATION%' then 'RECONCILIATION_FAILURE'
+            when upper(coalesce(p_raw,'')) like '%EMERGENCY%' then 'RISK_EMERGENCY'
+            when upper(coalesce(p_raw,'')) like '%STOP%' or upper(coalesce(p_fallback,''))='STOP' then 'STOP'
+            else upper(coalesce(nullif(p_fallback,''),'UNKNOWN')) end
+          $$;"""
+          normalize='\n'.join(line.strip() if i in (0,1) else line[10:] if line.startswith('          ') else line for i,line in enumerate(normalize.splitlines()))
+          Path('supabase/migrations/20260816003100_empirical_timeout_close_reason_v769.sql').write_text('-- Evidence-only repair: LAUSDT exceeded pinned 600s timeout; live exit labels collapsed to STOP. No entry/TP/SL/EV changes.\n\n'+g+'\n\n'+normalize+'\n')
+          PY
+          cat > supabase/functions/market-autotrader/empirical-timeout-close-reason.test.ts <<'EOF'
+          import { assert } from "jsr:@std/assert@1";
+          const engine = Deno.readTextFileSync(new URL("./index.ts", import.meta.url));
+          const migration = Deno.readTextFileSync(new URL("../../migrations/20260816003100_empirical_timeout_close_reason_v769.sql", import.meta.url));
+          Deno.test("pinned 600s timeout can liquidate all remaining quantity", () => {
+            assert(engine.includes("position.metadata?.absolute_max_holding_seconds"));
+            assert(engine.includes('decisionReason === "HALF_HOLD_ABSOLUTE_TIMEOUT"'));
+            assert(engine.includes('decision.reason === "HALF_HOLD_ABSOLUTE_TIMEOUT"'));
+            assert(migration.includes("ABSOLUTE_TIMEOUT_TOO_EARLY"));
+          });
+          Deno.test("semantic exit labels are explicit", () => {
+            for (const x of ["HARD_STOP","PROFIT_PROTECTION","TRAILING_PROFIT","RECOVERY_PROFIT","TIMEOUT"]) assert(migration.includes(`then '${x}'`));
+            assert(!migration.includes("EV_INFORMATIONAL_ONLY"));
+          });
+          EOF
+          deno fmt supabase/functions/market-autotrader/index.ts supabase/functions/market-autotrader/empirical-timeout-close-reason.test.ts
+      - name: Verify isolation
+        run: |
+          set -euo pipefail
+          unexpected=$(git diff --name-only | grep -Ev '^(supabase/functions/market-autotrader/(index\.ts|empirical-timeout-close-reason\.test\.ts)|supabase/migrations/20260816003100_empirical_timeout_close_reason_v769\.sql)$' || true)
+          test -z "$unexpected" || { echo "$unexpected"; exit 1; }
+          grep -q 'firstTakeProfitPct: 5' supabase/functions/market-autotrader/spot-exit-policy.ts
+          grep -q 'firstStopLossPct: -4' supabase/functions/market-autotrader/spot-exit-policy.ts
+          grep -q 'firstTakeProfitRoePct: 15' supabase/functions/market-autotrader/futures-exit-policy.ts
+          grep -q 'firstStopLossRoePct: -12' supabase/functions/market-autotrader/futures-exit-policy.ts
+      - name: Full verification 1
+        run: deno task check && deno task test
+      - name: Full verification 2
+        run: deno task check && deno task test
+      - name: Full verification 3
+        run: deno task check && deno task test
+      - name: Commit canonical patch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/market-autotrader/index.ts supabase/functions/market-autotrader/empirical-timeout-close-reason.test.ts supabase/migrations/20260816003100_empirical_timeout_close_reason_v769.sql
+          git commit -m "fix: enforce empirical timeout and preserve exit reasons"
+          git pull --rebase origin main
+          git push origin HEAD:main
+      - name: Apply DB migration
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -f supabase/migrations/20260816003100_empirical_timeout_close_reason_v769.sql
+          psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select position('HALF_HOLD_ABSOLUTE_TIMEOUT' in pg_get_functiondef(p.oid))>0 and position('ABSOLUTE_TIMEOUT_TOO_EARLY' in pg_get_functiondef(p.oid))>0 from pg_proc p where p.proname='guard_residual_sell_order_v751'" | grep -qx t
+          psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select public.normalize_lob_exit_reason_v704('HALF_HOLD_STOP_LOSS_4','STOP'),public.normalize_lob_exit_reason_v704('PRE_T1_PROFIT_PROTECTION_EXIT','STOP'),public.normalize_lob_exit_reason_v704('RESIDUAL_PROTECTED_TRAIL_EXIT','STOP'),public.normalize_lob_exit_reason_v704('HALF_HOLD_ABSOLUTE_TIMEOUT','STOP')" | grep -qx 'HARD_STOP|PROFIT_PROTECTION|TRAILING_PROFIT|TIMEOUT'
+      - name: Deploy autotrader
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          echo "ROLLOUT_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+          supabase functions deploy market-autotrader --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt --use-api
+      - name: Verify production health
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          healthy=false
+          for i in $(seq 1 18); do
+            failed=$(psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_cycle_runs where started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz and status='FAILED'")
+            latest=$(psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR' and started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz")
+            if [ "$failed" = 0 ] && [ -n "$latest" ]; then healthy=true; break; fi
+            sleep 5
+          done
+          test "$healthy" = true
+      - name: Restore entry state
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          case "$PREVIOUS_PAUSE_NEW_ENTRIES" in true|t|1) x=true;; *) x=false;; esac
+          psql "$SUPABASE_DB_URL" --set=ON_ERROR_STOP=1 -c "update public.trading_settings set pause_new_entries=$x,updated_at=now() where id=1"
+      - name: Fail-safe restore entry state
+        if: failure() && env.PREVIOUS_PAUSE_NEW_ENTRIES != ''
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          case "$PREVIOUS_PAUSE_NEW_ENTRIES" in true|t|1) x=true;; *) x=false;; esac
+          psql "$SUPABASE_DB_URL" --set=ON_ERROR_STOP=1 -c "update public.trading_settings set pause_new_entries=$x,updated_at=now() where id=1"
