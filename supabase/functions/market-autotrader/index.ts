@@ -5665,7 +5665,9 @@ async function applyExit(
   // First take-profit (+5% spot / +15% futures ROE) is the only split-exit path that
   // preserves 50%. Hard stops and residual protected-trail exits must close everything
   // still remaining. Keep legacy residual reasons authorized for already-open positions.
-  const fullLiquidationExit = decisionReason === "HALF_HOLD_STOP_LOSS_4" ||
+  const fullLiquidationExit = decisionReason === "HALF_HOLD_ABSOLUTE_TIMEOUT" ||
+    decisionReason === "POST180_MAX_HOLD_TIMEOUT" ||
+    decisionReason === "HALF_HOLD_STOP_LOSS_4" ||
     decisionReason === "FUTURES_HALF_STOP_LOSS_ROE_12" ||
     decisionReason === "PRE_T1_PROFIT_PROTECTION_EXIT" ||
     decisionReason === "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT" ||
@@ -7711,8 +7713,8 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         // policy is a profit-management layer and must never override a planned STOP_HIT,
         // risk stop, reconciliation stop, or the configured absolute holding ceiling.
         const configuredAbsoluteMaxHoldingSeconds = finite(
-          (settings as any).lob_absolute_max_holding_seconds,
-          600,
+          position.metadata?.absolute_max_holding_seconds,
+          finite((settings as any).lob_absolute_max_holding_seconds, 600),
         );
         const absoluteMaxHoldingSeconds = Math.max(1, configuredAbsoluteMaxHoldingSeconds);
         if (lobMode && heldSeconds >= absoluteMaxHoldingSeconds) {
@@ -8010,6 +8012,8 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           String(decision.reason || "").startsWith("rotation:") ||
           decision.reason === "HARD_STOP_MINUS_2" ||
           decision.reason === "HALF_HOLD_TAKE_PROFIT_5" ||
+          decision.reason === "HALF_HOLD_ABSOLUTE_TIMEOUT" ||
+          decision.reason === "POST180_MAX_HOLD_TIMEOUT" ||
           decision.reason === "HALF_HOLD_STOP_LOSS_4" ||
           decision.reason === "FUTURES_HALF_TAKE_PROFIT_ROE_15" ||
           decision.reason === "FUTURES_HALF_STOP_LOSS_ROE_12" ||
