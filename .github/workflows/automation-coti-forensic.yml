@@ -23,20 +23,20 @@ jobs:
           psql "${SUPABASE_DB_URL}" -P pager=off -F '|' -A -t <<'SQL'
           select 'POS',id,exchange,market,state,average_entry_price,stop_price,target_1,target_2,peak_price,trough_price,trailing_stop,opened_at,closed_at,close_reason,realized_pnl_quote,realized_return_pct,peak_return_pct,mfe_capture_ratio,profit_giveback_pct,metadata::text
           from public.trading_positions
-          where market='ETHFIUSDT' and exchange='binance_futures' and is_paper=false and opened_at >= timestamp with time zone '2026-08-15 14:00:00+00'
+          where market='ETHFIUSDT' and exchange='binance_futures' and is_paper=false and opened_at >= timestamp with time zone '2026-08-15 12:00:00+00'
           order by opened_at desc limit 3;
 
           select 'ORD',o.id,o.position_id,o.side,o.purpose,o.order_type,o.requested_price,o.average_fill_price,o.executed_volume,o.executed_funds_quote,o.paid_fee_quote,o.requested_at,o.completed_at,o.state,o.error_code,o.raw_response::text
           from public.trading_orders o join public.trading_positions p on p.id=o.position_id
-          where p.market='ETHFIUSDT' and p.exchange='binance_futures' and p.is_paper=false and p.opened_at >= timestamp with time zone '2026-08-15 14:00:00+00'
+          where p.market='ETHFIUSDT' and p.exchange='binance_futures' and p.is_paper=false and p.opened_at >= timestamp with time zone '2026-08-15 12:00:00+00'
           order by o.created_at;
 
           select 'EVT',e.level,e.code,e.message,e.details::text,e.created_at
           from public.trading_events e join public.trading_positions p on p.id=e.position_id
-          where p.market='ETHFIUSDT' and p.exchange='binance_futures' and p.is_paper=false and p.opened_at >= timestamp with time zone '2026-08-15 14:00:00+00'
+          where p.market='ETHFIUSDT' and p.exchange='binance_futures' and p.is_paper=false and p.opened_at >= timestamp with time zone '2026-08-15 12:00:00+00'
           order by e.created_at;
 
           select 'XFILL',to_jsonb(f)::text from public.exchange_trade_fills f
-          where f.market='ETHFIUSDT' and f.created_at >= timestamp with time zone '2026-08-15 14:00:00+00'
+          where f.market='ETHFIUSDT' and f.created_at >= timestamp with time zone '2026-08-15 12:00:00+00'
           order by f.created_at;
           SQL
