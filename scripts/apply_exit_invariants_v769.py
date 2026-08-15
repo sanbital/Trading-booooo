@@ -9,9 +9,9 @@ old = '''        const requestedAction = decision.action;
           (requestedReason.includes("RISK_EMERGENCY") ||
             requestedReason.includes("RECONCILIATION_FAILURE"));
 '''
-new = '''        // v7.6.9: LOB safety exits are hard invariants. The split TP/SL policy is a
-        // profit-management layer and must never override a planned STOP_HIT, risk stop,
-        // reconciliation stop, or the configured absolute holding ceiling.
+new = '''        // v7.6.9 exit hotfix: LOB safety exits are hard invariants. The split TP/SL
+        // policy is a profit-management layer and must never override a planned STOP_HIT,
+        // risk stop, reconciliation stop, or the configured absolute holding ceiling.
         const configuredAbsoluteMaxHoldingSeconds = finite(
           (settings as any).lob_absolute_max_holding_seconds,
           600,
@@ -59,19 +59,12 @@ else:
     segment = segment.replace(needle, replacement, 1)
     source = source[:start] + segment + source[end:]
 
-# Bump the runtime engine version so production DB/log evidence can prove the patched code ran.
-source = source.replace(
-    'const VERSION = "7.6.0-BINANCE-FUTURES";',
-    'const VERSION = "7.6.9-EXIT-INVARIANTS";',
-    1,
-)
-
-# Static regression assertions: these fail the rollout before any deployment if the patch drifts.
+# Static regression assertions: fail before deployment if source layout drifts.
 assert 'reason: "HALF_HOLD_ABSOLUTE_TIMEOUT"' in source
 assert 'const safetyRequested = requestedAction === "STOP";' in source
 assert 'if (requestedAction === "STOP") {' in source
 assert '[HARD_EXIT_INVARIANT]' in source
-assert 'const VERSION = "7.6.9-EXIT-INVARIANTS";' in source
+assert 'const VERSION = "7.6.0-BINANCE-FUTURES";' in source
 
 INDEX.write_text(source)
-print("v7.6.9 exit invariants applied")
+print("exit invariants applied with shared engine version preserved")
