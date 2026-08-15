@@ -1,0 +1,25 @@
+name: Inspect timeout and close reason 20260816
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/inspect-timeout-close-reason-20260816.yml"
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 1
+      - name: Inspect source
+        run: |
+          set -euo pipefail
+          echo '=== TIMEOUT TERMS ==='
+          grep -RInE "absolute_max_holding_seconds|absolute_timeout|POST180_MAX_HOLD_TIMEOUT|max_holding_seconds|lob_post180_recovery_shadow" supabase/functions supabase/migrations | head -n 220 || true
+          echo '=== CLOSE REASON TERMS ==='
+          grep -RInE "close_reason|pending_exit_reason|approved_reason|HALF_HOLD_STOP_LOSS_4|PROFIT_PROTECTION|TRAILING_PROFIT" supabase/functions/market-autotrader supabase/migrations | head -n 320 || true
+          echo '=== RELEVANT TESTS ==='
+          grep -RInE "absolute.*timeout|close_reason|HALF_HOLD_STOP_LOSS_4" supabase/functions/market-autotrader/*test* supabase/functions/market-autotrader/**/*test* 2>/dev/null | head -n 220 || true
