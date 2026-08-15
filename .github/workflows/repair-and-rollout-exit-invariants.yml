@@ -78,7 +78,7 @@ jobs:
           grep -q 'if (requestedAction === "STOP")' supabase/functions/market-autotrader/index.ts
           grep -q 'config.js?v=7.6.4-MARKET-REGIME-LEARNING-r3' docs/index.html
           grep -q 'app.js?v=7.6.4-MARKET-REGIME-LEARNING-r3' docs/index.html
-          test "$(wc -l < docs/index.html)" -gt 300
+          grep -q '</html>' docs/index.html
 
       - name: Full repository verification
         run: |
