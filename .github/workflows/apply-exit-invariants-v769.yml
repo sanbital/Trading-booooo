@@ -61,7 +61,7 @@ jobs:
             echo "${unexpected}"
             exit 1
           fi
-          grep -q 'const VERSION = "7.6.9-EXIT-INVARIANTS"' supabase/functions/market-autotrader/index.ts
+          grep -q 'const VERSION = "7.6.0-BINANCE-FUTURES"' supabase/functions/market-autotrader/index.ts
           grep -q 'lob_absolute_max_holding_seconds' supabase/functions/market-autotrader/index.ts
           grep -q 'reason: "HALF_HOLD_ABSOLUTE_TIMEOUT"' supabase/functions/market-autotrader/index.ts
           grep -q 'const safetyRequested = requestedAction === "STOP"' supabase/functions/market-autotrader/index.ts
@@ -85,7 +85,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add supabase/functions/market-autotrader/index.ts
           if git diff --cached --quiet; then
-            echo "Canonical source already contains v7.6.9 exit invariants"
+            echo "Canonical source already contains exit invariants"
           else
             git commit -m "fix: enforce LOB hard exit invariants"
             git pull --rebase origin main
