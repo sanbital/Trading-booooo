@@ -1,0 +1,83 @@
+name: Read trading performance once 20260816
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/read-trading-performance-once-20260816.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  read-performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Query production trading performance
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL}"
+          echo '=== DB_NOW ==='
+          psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select now() at time zone 'Asia/Seoul';"
+          echo '=== LAST_24H ==='
+          psql "${SUPABASE_DB_URL}" -P pager=off --set=ON_ERROR_STOP=1 -c "
+            with p as (
+              select * from public.trading_positions
+              where opened_at >= now() - interval '24 hours' and is_paper=false
+            )
+            select exchange,
+                   count(*) filter(where state='CLOSED') closed,
+                   count(*) filter(where state='OPEN') open_now,
+                   count(*) filter(where state='CLOSED' and realized_pnl_quote>0) wins,
+                   count(*) filter(where state='CLOSED' and realized_pnl_quote<0) losses,
+                   round(sum(realized_pnl_quote) filter(where state='CLOSED')::numeric,6) realized_pnl,
+                   round(avg(realized_return_pct) filter(where state='CLOSED')::numeric,4) avg_ret_pct,
+                   round(avg(realized_return_pct) filter(where state='CLOSED' and realized_pnl_quote>0)::numeric,4) avg_win_pct,
+                   round(avg(realized_return_pct) filter(where state='CLOSED' and realized_pnl_quote<0)::numeric,4) avg_loss_pct,
+                   round(avg(mfe_capture_ratio) filter(where state='CLOSED' and realized_pnl_quote>0)::numeric,4) avg_mfe_capture,
+                   round(avg(profit_giveback_pct) filter(where state='CLOSED')::numeric,4) avg_giveback
+            from p group by exchange order by exchange;"
+          echo '=== SINCE_EXIT_FIX_2026_08_13_08_11_KST ==='
+          psql "${SUPABASE_DB_URL}" -P pager=off --set=ON_ERROR_STOP=1 -c "
+            with p as (
+              select * from public.trading_positions
+              where opened_at >= timestamptz '2026-08-12 23:11:40+00' and is_paper=false
+            )
+            select exchange,
+                   count(*) filter(where state='CLOSED') closed,
+                   count(*) filter(where state='OPEN') open_now,
+                   count(*) filter(where state='CLOSED' and realized_pnl_quote>0) wins,
+                   count(*) filter(where state='CLOSED' and realized_pnl_quote<0) losses,
+                   round(sum(realized_pnl_quote) filter(where state='CLOSED')::numeric,6) realized_pnl,
+                   round(avg(realized_return_pct) filter(where state='CLOSED')::numeric,4) avg_ret_pct,
+                   round(avg(realized_return_pct) filter(where state='CLOSED' and realized_pnl_quote>0)::numeric,4) avg_win_pct,
+                   round(avg(realized_return_pct) filter(where state='CLOSED' and realized_pnl_quote<0)::numeric,4) avg_loss_pct,
+                   round(avg(mfe_capture_ratio) filter(where state='CLOSED' and realized_pnl_quote>0)::numeric,4) avg_mfe_capture,
+                   round(avg(profit_giveback_pct) filter(where state='CLOSED')::numeric,4) avg_giveback
+            from p group by exchange order by exchange;"
+          echo '=== RECENT_CLOSED ==='
+          psql "${SUPABASE_DB_URL}" -P pager=off --set=ON_ERROR_STOP=1 -c "
+            select exchange,market,
+                   to_char(opened_at at time zone 'Asia/Seoul','MM-DD HH24:MI') opened_kst,
+                   to_char(closed_at at time zone 'Asia/Seoul','MM-DD HH24:MI') closed_kst,
+                   round(realized_pnl_quote::numeric,4) pnl,
+                   round(realized_return_pct::numeric,3) ret_pct,
+                   round(peak_return_pct::numeric,3) peak_pct,
+                   round(profit_giveback_pct::numeric,3) giveback_pct,
+                   round(mfe_capture_ratio::numeric,3) capture_ratio,
+                   close_reason
+            from public.trading_positions
+            where closed_at >= now()-interval '24 hours' and is_paper=false and state='CLOSED'
+            order by closed_at desc limit 30;"
+          echo '=== PRE_T1_LOSS_RECURRANCE ==='
+          psql "${SUPABASE_DB_URL}" -P pager=off --set=ON_ERROR_STOP=1 -c "
+            select count(*) as loss_pre_t1_after_fix,
+                   round(coalesce(sum(realized_pnl_quote),0)::numeric,6) pnl
+            from public.trading_positions
+            where closed_at >= timestamptz '2026-08-12 23:11:40+00'
+              and is_paper=false and state='CLOSED'
+              and realized_pnl_quote < 0
+              and coalesce(close_reason,'') ilike '%PRE_T1%';"
