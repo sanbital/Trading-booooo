@@ -1,0 +1,25 @@
+name: Verify empirical rollout state 20260816
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/verify-empirical-rollout-state-20260816.yml"
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify production state read-only
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          echo '=== SETTINGS ==='
+          psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c "select strategy,pause_new_entries,binance_enabled,binance_futures_enabled,binance_futures_leverage from public.trading_settings where id=1"
+          echo '=== INVARIANT ==='
+          psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c "select absolute_max_holding_seconds from public.trading_ops_invariants where id=1"
+          echo '=== NORMALIZER ==='
+          psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c "select public.normalize_lob_exit_reason_v704('HALF_HOLD_STOP_LOSS_4','STOP'),public.normalize_lob_exit_reason_v704('PRE_T1_PROFIT_PROTECTION_EXIT','STOP'),public.normalize_lob_exit_reason_v704('RESIDUAL_PROTECTED_TRAIL_EXIT','STOP'),public.normalize_lob_exit_reason_v704('HALF_HOLD_ABSOLUTE_TIMEOUT','STOP')"
+          echo '=== GUARD ==='
+          psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c "select position('ABSOLUTE_TIMEOUT_TOO_EARLY' in pg_get_functiondef(p.oid))>0 from pg_proc p where p.proname='guard_residual_sell_order_v751'"
