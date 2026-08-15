@@ -1,0 +1,24 @@
+name: Read LA detail 20260816
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/read-la-detail-20260816.yml"
+permissions:
+  contents: read
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Query LA detail read-only
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          echo '=== ORDERS ==='
+          psql "${SUPABASE_DB_URL}" -At -P pager=off -v ON_ERROR_STOP=1 -c "select to_jsonb(o) from public.trading_orders o where market='LAUSDT' and created_at >= timestamptz '2026-08-14 00:00:00+00' order by created_at;"
+          echo '=== EVENTS ==='
+          psql "${SUPABASE_DB_URL}" -At -P pager=off -v ON_ERROR_STOP=1 -c "select to_jsonb(e) from public.trading_events e where market='LAUSDT' and created_at >= timestamptz '2026-08-14 00:00:00+00' order by created_at;"
+          echo '=== DECISIONS ==='
+          psql "${SUPABASE_DB_URL}" -At -P pager=off -v ON_ERROR_STOP=1 -c "select to_jsonb(d) from public.trading_decisions d where market='LAUSDT' and created_at >= timestamptz '2026-08-14 00:00:00+00' order by created_at;"
