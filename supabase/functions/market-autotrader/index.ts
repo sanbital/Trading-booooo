@@ -7707,11 +7707,29 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         const activeSplitPolicyVersion = futuresLane
           ? "FUTURES-PROTECTED-TRAIL-ROE15-SL12-FLOOR9-TRAIL4P5-RECOVERY180M-V2"
           : "SPOT-PROTECTED-TRAIL-TP5-SL4-FLOOR3-TRAIL1P5-RECOVERY180M-V2";
+        // v7.6.9 exit hotfix: LOB safety exits are hard invariants. The split TP/SL
+        // policy is a profit-management layer and must never override a planned STOP_HIT,
+        // risk stop, reconciliation stop, or the configured absolute holding ceiling.
+        const configuredAbsoluteMaxHoldingSeconds = finite(
+          (settings as any).lob_absolute_max_holding_seconds,
+          600,
+        );
+        const absoluteMaxHoldingSeconds = Math.max(1, configuredAbsoluteMaxHoldingSeconds);
+        if (lobMode && heldSeconds >= absoluteMaxHoldingSeconds) {
+          decision = {
+            action: "STOP",
+            fraction: 1,
+            reason: "HALF_HOLD_ABSOLUTE_TIMEOUT",
+            signalValid: false,
+          } as any;
+          console.error(
+            `[HARD_EXIT_INVARIANT] ${exchange}:${position.market} held=${heldSeconds}s ` +
+              `limit=${absoluteMaxHoldingSeconds}s -> full exit`,
+          );
+        }
         const requestedAction = decision.action;
         const requestedReason = String((decision as any).reason || "");
-        const safetyRequested = requestedAction === "STOP" &&
-          (requestedReason.includes("RISK_EMERGENCY") ||
-            requestedReason.includes("RECONCILIATION_FAILURE"));
+        const safetyRequested = requestedAction === "STOP";
         const policyFeeRate = clamp(FEE_PCT[exchange] / 100, 0, 0.01);
         const policyQuantity = Math.max(0, finite(position.remaining_quantity));
         const policyUnrecoveredCost = exactUnrecoveredPositionCost(position);
@@ -7836,7 +7854,14 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         let futuresAudit: JsonRecord | null = null;
         let recoveryLatchedNow = false;
 
-        if (futuresLane) {
+        if (requestedAction === "STOP") {
+          // Preserve the upstream safety decision exactly. In particular, STOP_HIT and
+          // HALF_HOLD_ABSOLUTE_TIMEOUT must reach the executable-exit layer unchanged.
+          console.warn(
+            `[HARD_EXIT_INVARIANT] preserving ${requestedReason || "STOP"} for ` +
+              `${exchange}:${position.market}`,
+          );
+        } else if (futuresLane) {
           // The futures residual rule is stated about the REMAINING half's own return, so
           // it is priced against the remainder's own principal. The whole-position quote
           // above still governs the spot lane and stays untouched.
