@@ -1,0 +1,156 @@
+name: Repair dashboard and roll out exit invariants
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/repair-and-rollout-exit-invariants.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: exit-invariants-final-rollout
+  cancel-in-progress: false
+
+jobs:
+  repair-test-deploy-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out canonical main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Freeze new entries during rollout
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          previous_pause=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
+          echo "PREVIOUS_PAUSE_NEW_ENTRIES=${previous_pause:-true}" >> "${GITHUB_ENV}"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=true, updated_at=now() where id=1"
+
+      - name: Restore full dashboard HTML and align cache revision
+        run: |
+          set -euo pipefail
+          git show 15b1f4f17b83f7c21e538ac939b2936f0c912b0c^:docs/index.html > docs/index.html
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('docs/index.html')
+          s = p.read_text()
+          old = '<script src="./app.js?v=7.6.3-BINANCE-SPOT-FUTURES-COMBINED-r1" defer></script>'
+          new = '<script src="./app.js?v=7.6.4-MARKET-REGIME-LEARNING-r3" defer></script>'
+          if old not in s:
+              raise SystemExit('expected old app cache key not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+
+      - name: Apply hard exit invariant patch
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_exit_invariants_v769.py
+          deno fmt supabase/functions/market-autotrader/index.ts
+
+      - name: Prove patch scope and invariants
+        run: |
+          set -euo pipefail
+          unexpected=$(git diff --name-only | grep -Ev '^(supabase/functions/market-autotrader/index\.ts|docs/index\.html)$' || true)
+          if [ -n "${unexpected}" ]; then
+            echo "Unexpected modified files: ${unexpected}"
+            exit 1
+          fi
+          grep -q 'reason: "HALF_HOLD_ABSOLUTE_TIMEOUT"' supabase/functions/market-autotrader/index.ts
+          grep -q 'const safetyRequested = requestedAction === "STOP"' supabase/functions/market-autotrader/index.ts
+          grep -q 'if (requestedAction === "STOP")' supabase/functions/market-autotrader/index.ts
+          grep -q 'config.js?v=7.6.4-MARKET-REGIME-LEARNING-r3' docs/index.html
+          grep -q 'app.js?v=7.6.4-MARKET-REGIME-LEARNING-r3' docs/index.html
+          test "$(wc -l < docs/index.html)" -gt 300
+
+      - name: Full repository verification
+        run: |
+          set -euo pipefail
+          deno task check
+          deno task test
+
+      - name: Commit canonical production source
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/market-autotrader/index.ts docs/index.html
+          git commit -m "fix: enforce hard exits and repair dashboard cache revision"
+          git pull --rebase origin main
+          git push origin HEAD:main
+          echo "DEPLOY_COMMIT=$(git rev-parse HEAD)" >> "${GITHUB_ENV}"
+
+      - name: Deploy patched autotrader
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          echo "ROLLOUT_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
+          supabase functions deploy market-autotrader \
+            --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
+
+      - name: Verify production monitor health and timeout configuration
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          abs_limit=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select lob_absolute_max_holding_seconds from public.trading_settings where id=1")
+          test "${abs_limit}" = "600"
+          healthy=false
+          for attempt in $(seq 1 24); do
+            failed=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from public.trading_cycle_runs
+              where started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz and status='FAILED';")
+            latest=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select coalesce(max(started_at)::text,'') from public.trading_cycle_runs
+              where kind='MONITOR' and started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz;")
+            stale=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from public.trading_positions
+              where state in ('OPEN','PARTIAL')
+                and extract(epoch from (now()-opened_at)) > 630;")
+            if [ "${failed}" = "0" ] && [ -n "${latest}" ] && [ "${stale}" = "0" ]; then
+              healthy=true
+              break
+            fi
+            sleep 5
+          done
+          test "${healthy}" = "true"
+
+      - name: Restore entry state after successful rollout
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          case "${PREVIOUS_PAUSE_NEW_ENTRIES}" in true|t|1) restore_pause=true ;; *) restore_pause=false ;; esac
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=${restore_pause}, updated_at=now() where id=1"
+
+      - name: Fail-safe restore entry state
+        if: failure() && env.PREVIOUS_PAUSE_NEW_ENTRIES != ''
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          case "${PREVIOUS_PAUSE_NEW_ENTRIES}" in true|t|1) restore_pause=true ;; *) restore_pause=false ;; esac
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=${restore_pause}, updated_at=now() where id=1"
+          echo "Rollout failed; entry state restored."
