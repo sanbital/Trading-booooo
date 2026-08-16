@@ -1,0 +1,71 @@
+name: Automation Postpatch Perf 2351
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/automation-postpatch-perf-2351.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read-only performance query
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" -P pager=off -F '|' -A -t <<'SQL'
+          \echo '===AGG===' 
+          with params as (
+            select timestamptz '2026-08-16 10:16:42+00' as patch_ts,
+                   timestamptz '2026-08-16 14:51:57+00' as now_ts
+          ), b as (
+            select p.*,
+                   case when p.exchange='binance_futures' then 'futures' else 'spot' end as venue,
+                   case
+                     when p.opened_at >= (select patch_ts from params) then 'post_patch'
+                     when p.opened_at >= (select patch_ts from params) - ((select now_ts-patch_ts from params)) then 'immediate_pre_equal'
+                     else 'earlier_pre'
+                   end as period
+            from public.trading_positions p, params
+            where p.is_paper=false and p.state='CLOSED'
+              and p.opened_at >= params.patch_ts - interval '24 hours'
+          )
+          select venue,period,count(*) as trades,
+                 count(*) filter(where coalesce(realized_pnl_quote,0)>0) wins,
+                 count(*) filter(where coalesce(realized_pnl_quote,0)<0) losses,
+                 round(sum(coalesce(realized_pnl_quote,0))::numeric,6) pnl_usdt,
+                 round(avg(realized_return_pct)::numeric,6) avg_return_pct,
+                 round(avg(realized_return_pct) filter(where coalesce(realized_pnl_quote,0)>0)::numeric,6) avg_win_pct,
+                 round(avg(realized_return_pct) filter(where coalesce(realized_pnl_quote,0)<0)::numeric,6) avg_loss_pct,
+                 count(*) filter(where close_reason in ('HARD_STOP','STOP') or close_reason ilike '%STOP%') stop_like,
+                 round(avg(mfe_capture_ratio)::numeric,6) avg_mfe_capture_ratio,
+                 round(avg(profit_giveback_pct)::numeric,6) avg_profit_giveback_pct,
+                 min(opened_at),max(closed_at)
+          from b group by venue,period order by venue,period;
+
+          \echo '===POST_ROWS===' 
+          select exchange,market,opened_at,closed_at,close_reason,
+                 round(coalesce(realized_pnl_quote,0)::numeric,6),
+                 round(realized_return_pct::numeric,6),
+                 round(peak_return_pct::numeric,6),
+                 round(mfe_capture_ratio::numeric,6),
+                 round(profit_giveback_pct::numeric,6)
+          from public.trading_positions
+          where is_paper=false and state='CLOSED'
+            and opened_at >= timestamptz '2026-08-16 10:16:42+00'
+          order by opened_at;
+
+          \echo '===OPEN_POST===' 
+          select exchange,market,state,opened_at,average_entry_price,remaining_quantity,peak_return_pct,metadata->>'absolute_max_holding_seconds'
+          from public.trading_positions
+          where is_paper=false and state <> 'CLOSED'
+            and opened_at >= timestamptz '2026-08-16 10:16:42+00'
+          order by opened_at;
+          SQL
