@@ -1,0 +1,37 @@
+name: XAI Anomaly Readonly
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/automation-xai-anomaly-readonly.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Inspect XAI trade read-only
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" -v ON_ERROR_STOP=1 -P pager=off -F '|' -A -t <<'SQL'
+          select 'POS',id,market,exchange,opened_at,closed_at,average_entry_price,peak_price,trough_price,close_reason,realized_pnl_quote,realized_return_pct,peak_return_pct,mfe_capture_ratio,profit_giveback_pct,metadata::text
+          from public.trading_positions
+          where market='XAIUSDT' and is_paper=false and opened_at >= timestamptz '2026-08-16 19:30:00+00'
+          order by opened_at desc limit 3;
+
+          select 'ORD',o.id,o.position_id,o.side,o.purpose,o.order_type,o.requested_price,o.average_fill_price,o.executed_volume,o.executed_funds_quote,o.paid_fee_quote,o.requested_at,o.completed_at,o.state,o.error_code,o.raw_response::text
+          from public.trading_orders o join public.trading_positions p on p.id=o.position_id
+          where p.market='XAIUSDT' and p.is_paper=false and p.opened_at >= timestamptz '2026-08-16 19:30:00+00'
+          order by o.created_at;
+
+          select 'EVT',e.level,e.code,e.message,e.details::text,e.created_at
+          from public.trading_events e join public.trading_positions p on p.id=e.position_id
+          where p.market='XAIUSDT' and p.is_paper=false and p.opened_at >= timestamptz '2026-08-16 19:30:00+00'
+          order by e.created_at;
+          SQL
