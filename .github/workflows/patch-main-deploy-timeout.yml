@@ -1,0 +1,74 @@
+name: Patch Main Deploy Timeout
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/patch-main-deploy-timeout.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+      - name: Patch deploy workflow atomically
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/main.deploy-supabase.yml')
+          s = p.read_text()
+          marker = '''          psql "${SUPABASE_DB_URL}" \\
+            --set=ON_ERROR_STOP=1 \\
+            --single-transaction \\
+            --file supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql
+'''
+          addition = marker + '''          psql "${SUPABASE_DB_URL}" \\
+            --set=ON_ERROR_STOP=1 \\
+            --single-transaction \\
+            --file supabase/migrations/20260817090456_fix_timeout_reason_priority_before_first_tranche.sql
+          psql "${SUPABASE_DB_URL}" \\
+            --set=ON_ERROR_STOP=1 \\
+            --single-transaction \\
+            --file supabase/migrations/20260817090516_enforce_absolute_timeout_before_tranche_guard.sql
+'''
+          if '20260817090516_enforce_absolute_timeout_before_tranche_guard.sql' not in s:
+              if marker not in s:
+                  raise SystemExit('migration insertion marker not found')
+              s = s.replace(marker, addition, 1)
+
+          verify_marker = '''               or position('EMERGENCY' in v_recovery_def) = 0 then
+              raise exception 'v7.6.5 recovery sell guard missing after migration batch';
+            end if;
+'''
+          verify_new = '''               or position('EMERGENCY' in v_recovery_def) = 0
+               or position('POST180_MAX_HOLD_TIMEOUT' in v_recovery_def) = 0
+               or position('HALF_HOLD_ABSOLUTE_TIMEOUT' in v_recovery_def) = 0
+               or position('absolute_max_holding_seconds' in v_recovery_def) = 0
+               or position('v_approved_reason in (''HALF_HOLD_ABSOLUTE_TIMEOUT'', ''POST180_MAX_HOLD_TIMEOUT'')' in v_recovery_def) = 0 then
+              raise exception 'v7.6.5 recovery/absolute-timeout sell guard missing after migration batch';
+            end if;
+'''
+          if 'recovery/absolute-timeout sell guard missing after migration batch' not in s:
+              if verify_marker not in s:
+                  raise SystemExit('verification insertion marker not found')
+              s = s.replace(verify_marker, verify_new, 1)
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- .github/workflows/main.deploy-supabase.yml
+          if git diff --quiet; then
+            echo "No patch required"
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/main.deploy-supabase.yml
+          git commit -m "fix: make timeout guard part of primary deployment batch"
+          git push origin HEAD:main
