@@ -1,0 +1,35 @@
+name: Verify futures exit policy
+
+on:
+  pull_request:
+    paths:
+      - "supabase/functions/market-autotrader/futures-exit-policy.ts"
+      - "supabase/functions/market-autotrader/futures-exit-policy.test.ts"
+      - ".github/workflows/verify-futures-exit-policy.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-futures-exit-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out event revision
+        uses: actions/checkout@v4
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Format check
+        run: |
+          deno fmt --check \
+            supabase/functions/market-autotrader/futures-exit-policy.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.test.ts
+
+      - name: Type-check policy tests
+        run: deno check supabase/functions/market-autotrader/futures-exit-policy.test.ts
+
+      - name: Run futures exit policy regression tests
+        run: deno test supabase/functions/market-autotrader/futures-exit-policy.test.ts
