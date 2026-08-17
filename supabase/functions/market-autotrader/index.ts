@@ -7844,8 +7844,15 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           1e-12,
           finite(position.quantity_step, 0) * 1.001,
         );
-        const hasTradableHalf = finite(position.remaining_quantity) - protectedHoldQuantity >
-          residualTolerance;
+        const quantityHasTradableHalf =
+          finite(position.remaining_quantity) - protectedHoldQuantity >
+            residualTolerance;
+        // Futures residual stage is semantic, not inferred from quantity. Only an applied
+        // TARGET_1 fill may set t1_completed; timeout/stop/other partial fills must never
+        // fabricate a winning residual. Spot keeps its legacy quantity geometry.
+        const hasTradableHalf = futuresLane
+          ? position.t1_completed !== true
+          : quantityHasTradableHalf;
         const preT1ProtectedStopPrice = Math.max(
           0,
           finite((position as any).metadata?.profit_protection?.protected_stop_price),
