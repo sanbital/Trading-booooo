@@ -15,7 +15,7 @@
 //   4. If the +15% ROE first TP has not happened within 180 minutes:
 //        - if the position previously reached the empirically observed stale-loser peak
 //          boundary and has given the move back to non-positive executable net ROE,
-//          exit 100% immediately;
+//          exit 100% through the already-authorized pre-T1 profit-protection path;
 //        - otherwise retain recovery mode and exit 100% on the first fees/slippage-adjusted
 //          executable net profit > 0.
 //
@@ -61,7 +61,6 @@ export type FuturesSplitExitReason =
   | "FUTURES_HALF_THRESHOLD_OVERRIDES_NON_PRICE_SAFETY_EXIT"
   | "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"
   | "FUTURES_RESIDUAL_PROTECTED_TRAIL_ACTIVE"
-  | "FUTURES_STALE_GIVEBACK_NET_NONPOSITIVE_EXIT_180M"
   | "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M"
   | "FUTURES_STALE_RECOVERY_AWAITING_POSITIVE_NET_180M";
 
@@ -228,7 +227,8 @@ export function futuresSplitExitDecision(
     // The 180m+ winners OPEN/EDEN never reached that peak boundary. Once a position in
     // that observed loser class has also lost executable net breakeven, waiting for the
     // legacy "eventually positive" recovery turns a small giveback into the exact tail
-    // loss this guard is intended to prevent.
+    // loss this guard is intended to prevent. Reuse the existing pre-T1 protection exit
+    // authority so engine and database sell guards remain unchanged and already-audited.
     if (
       peakRoePct >= thresholds.staleGivebackMinPeakRoePct &&
       netRoePct <= 0
@@ -237,7 +237,7 @@ export function futuresSplitExitDecision(
         ...base,
         action: "STOP",
         fraction: 1,
-        reason: "FUTURES_STALE_GIVEBACK_NET_NONPOSITIVE_EXIT_180M",
+        reason: "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT",
       };
     }
     if (input.executableNetAllowed && finite(input.expectedNetProfitQuote) > 0) {
@@ -271,6 +271,5 @@ export const FUTURES_EXIT_APPROVED_REASONS: readonly FuturesSplitExitReason[] = 
   "FUTURES_HALF_STOP_LOSS_ROE_12",
   "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT",
   "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT",
-  "FUTURES_STALE_GIVEBACK_NET_NONPOSITIVE_EXIT_180M",
   "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M",
 ];
