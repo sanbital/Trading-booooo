@@ -1,0 +1,107 @@
+name: Timeout Exit Integrity
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "supabase/migrations/20260817090456_fix_timeout_reason_priority_before_first_tranche.sql"
+      - "supabase/migrations/20260817090516_enforce_absolute_timeout_before_tranche_guard.sql"
+      - ".github/workflows/timeout-exit-integrity.yml"
+  workflow_run:
+    workflows: ["Deploy Supabase Trading Engine"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: timeout-exit-integrity
+  cancel-in-progress: false
+
+jobs:
+  enforce:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Validate production database target
+        shell: bash
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from urllib.parse import urlparse
+
+          project_ref = os.environ["SUPABASE_PROJECT_REF"].strip()
+          raw = os.environ["SUPABASE_DB_URL"].strip()
+          parsed = urlparse(raw)
+          if parsed.scheme not in {"postgres", "postgresql"}:
+              raise SystemExit("SUPABASE_DB_URL must be postgres/postgresql")
+          if not parsed.hostname or not parsed.hostname.endswith(".pooler.supabase.com"):
+              raise SystemExit("SUPABASE_DB_URL must target Supabase Session pooler")
+          if parsed.port != 5432:
+              raise SystemExit("SUPABASE_DB_URL must use Session pooler port 5432")
+          if parsed.username != f"postgres.{project_ref}":
+              raise SystemExit("SUPABASE_DB_URL project/user mismatch")
+          if not parsed.password or parsed.password == "[YOUR-PASSWORD]":
+              raise SystemExit("SUPABASE_DB_URL password missing")
+          print("Production database target validated")
+          PY
+
+      - name: Re-apply absolute-timeout integrity guards
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 --single-transaction \
+            --file supabase/migrations/20260817090456_fix_timeout_reason_priority_before_first_tranche.sql
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 --single-transaction \
+            --file supabase/migrations/20260817090516_enforce_absolute_timeout_before_tranche_guard.sql
+
+      - name: Verify timeout cannot be blocked by tranche guard
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            v_def text;
+          begin
+            select pg_get_functiondef(p.oid) into v_def
+            from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname = 'public'
+              and p.proname = 'guard_residual_sell_order_v751'
+              and pg_get_function_identity_arguments(p.oid) = '';
+
+            if v_def is null then
+              raise exception 'guard_residual_sell_order_v751 missing';
+            end if;
+            if position('POST180_MAX_HOLD_TIMEOUT' in v_def) = 0 then
+              raise exception 'POST180 timeout authority missing';
+            end if;
+            if position('HALF_HOLD_ABSOLUTE_TIMEOUT' in v_def) = 0 then
+              raise exception 'absolute timeout authority missing';
+            end if;
+            if position('absolute_max_holding_seconds' in v_def) = 0 then
+              raise exception 'metadata timeout fallback missing';
+            end if;
+            if position('v_approved_reason in (''HALF_HOLD_ABSOLUTE_TIMEOUT'', ''POST180_MAX_HOLD_TIMEOUT'')' in v_def) = 0 then
+              raise exception 'timeout bypass is not ordered before tranche guards';
+            end if;
+            raise notice 'absolute-timeout exit integrity verified';
+          end
+          $$;
+          SQL
