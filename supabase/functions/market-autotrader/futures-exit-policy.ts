@@ -12,8 +12,12 @@
 //        -12% -> hard stop 100%
 //        +15% -> take profit on 50%
 //   3. Remaining 50% after TP: protect at max(+9% ROE, peak ROE - 4.5pp).
-//   4. If the +15% ROE first TP has not happened within 180 minutes, keep the -12% ROE
-//      hard stop but exit 100% on the first fees/slippage-adjusted executable net profit > 0.
+//   4. If the +15% ROE first TP has not happened within 180 minutes:
+//        - if the position previously reached the empirically observed stale-loser peak
+//          boundary and has given the move back to non-positive executable net ROE,
+//          exit 100% through the already-authorized pre-T1 profit-protection path;
+//        - otherwise retain recovery mode and exit 100% on the first fees/slippage-adjusted
+//          executable net profit > 0.
 //
 // At 3x the first TP/stop are +5%/-4% price moves. The policy is written in ROE so changing
 // leverage preserves the margin-risk thresholds rather than silently changing account risk.
@@ -37,8 +41,16 @@ export const FUTURES_SPLIT_EXIT_THRESHOLDS = {
   firstTakeProfitFraction: 0.5,
   /** Fraction closed at the hard stop. */
   hardStopFraction: 1,
-  /** First-tranche recovery mode starts after three hours without the +15% ROE TP. */
+  /** First-tranche stale handling starts after three hours without the +15% ROE TP. */
   staleRecoveryAfterSeconds: 180 * 60,
+  /**
+   * Empirical lower bound of the peak ROE among 180m+ losing LIVE futures trades in the
+   * 2026-08-11..17 sample. EPIC peaked at 2.13815789473683% ROE and CVX at
+   * 3.739167048640339%; the 180m+ winners OPEN/EDEN peaked only at
+   * 0.84388185654009% / 0.682375000633698%. No interpolation is used here: the losing
+   * sample's observed lower bound is preserved exactly.
+   */
+  staleGivebackMinPeakRoePct: 2.13815789473683,
 } as const;
 
 export type FuturesSplitExitReason =
@@ -77,7 +89,7 @@ export type FuturesSplitExitInput = {
   executableNetAllowed: boolean;
   /** Expected net profit of that residual sale, in quote currency. */
   expectedNetProfitQuote: number;
-  /** Position age used only for the first-tranche 180-minute recovery rule. */
+  /** Position age used only for the first-tranche 180-minute stale rules. */
   heldSeconds: number;
   /** True only when the engine has an earned above-entry protected stop and price hit it. */
   preT1ProfitProtectionHit?: boolean;
@@ -210,6 +222,24 @@ export function futuresSplitExitDecision(
     };
   }
   if (finite(input.heldSeconds) >= thresholds.staleRecoveryAfterSeconds) {
+    // LIVE futures evidence shows a distinct stale giveback class: the 180m+ losers
+    // EPIC/CVX had first made at least +2.13815789473683% ROE, then surrendered the move.
+    // The 180m+ winners OPEN/EDEN never reached that peak boundary. Once a position in
+    // that observed loser class has also lost executable net breakeven, waiting for the
+    // legacy "eventually positive" recovery turns a small giveback into the exact tail
+    // loss this guard is intended to prevent. Reuse the existing pre-T1 protection exit
+    // authority so engine and database sell guards remain unchanged and already-audited.
+    if (
+      peakRoePct >= thresholds.staleGivebackMinPeakRoePct &&
+      netRoePct <= 0
+    ) {
+      return {
+        ...base,
+        action: "STOP",
+        fraction: 1,
+        reason: "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT",
+      };
+    }
     if (input.executableNetAllowed && finite(input.expectedNetProfitQuote) > 0) {
       return {
         ...base,
