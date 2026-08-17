@@ -1,0 +1,43 @@
+name: Apply futures semantic T1 patch
+
+on:
+  push:
+    branches:
+      - agent/futures-3m-recovery-state-machine
+    paths:
+      - .github/scripts/patch_futures_semantic_t1.py
+      - .github/workflows/apply-futures-semantic-t1.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/futures-3m-recovery-state-machine
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Apply semantic T1 patch
+        run: python3 .github/scripts/patch_futures_semantic_t1.py
+      - name: Format and check orchestrator
+        run: |
+          deno fmt supabase/functions/market-autotrader/index.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          deno test --allow-read supabase/functions/market-autotrader/futures-lane.test.ts
+          deno test supabase/functions/market-autotrader/futures-exit-policy.test.ts
+      - name: Commit patched orchestrator
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "No generated changes"
+            exit 0
+          fi
+          git add supabase/functions/market-autotrader/index.ts
+          git commit -m "fix: derive futures residual stage from actual T1 fill"
+          git push origin HEAD:agent/futures-3m-recovery-state-machine
