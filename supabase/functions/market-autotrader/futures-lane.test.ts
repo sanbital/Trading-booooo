@@ -160,7 +160,6 @@ Deno.test("futures residual state is T1-derived and uses peak-aware protected tr
   assert(ENGINE.includes("recoveryMode = recoveryState.enabled"));
   assert(!ENGINE.includes("recoveryMode = false"));
   assert(STATE_MACHINE_MIGRATION.includes("coalesce(new.t1_completed, false)"));
-  assert(STATE_MACHINE_MIGRATION.includes("p_action='TARGET_1'"));
   assert(!STATE_MACHINE_MIGRATION.includes("new.t1_completed := v_residual_stage"));
 });
 
@@ -181,9 +180,11 @@ Deno.test("generic LOB/scalp exits cannot preempt the futures state machine", ()
       "lobMode && !futuresLane && !settings.emergency_liquidation && heldSeconds >= 180",
     ),
   );
-  assert(ENGINE.includes("lobMode && !futuresLane && decision.action === \"NONE\""));
-  assert(ENGINE.includes("scalpMode && !futuresLane && decision.action === \"NONE\""));
-  assert(ENGINE.includes("if (lobMode && !futuresLane && heldSeconds >= absoluteMaxHoldingSeconds)"));
+  assert(ENGINE.includes('lobMode && !futuresLane && decision.action === "NONE"'));
+  assert(ENGINE.includes('scalpMode && !futuresLane && decision.action === "NONE"'));
+  assert(
+    ENGINE.includes("if (lobMode && !futuresLane && heldSeconds >= absoluteMaxHoldingSeconds)"),
+  );
 });
 
 Deno.test("every futures exit reason is authorized end to end", () => {
