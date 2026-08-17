@@ -135,7 +135,7 @@ Deno.test("EPIC live sample is cut at 180m after empirical peak giveback instead
   });
   assertEquals(d.action, "STOP");
   assertEquals(d.fraction, 1);
-  assertEquals(d.reason, "FUTURES_STALE_GIVEBACK_NET_NONPOSITIVE_EXIT_180M");
+  assertEquals(d.reason, "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT");
 });
 
 Deno.test("CVX live sample is also cut after 180m giveback", () => {
@@ -149,7 +149,7 @@ Deno.test("CVX live sample is also cut after 180m giveback", () => {
     expectedNetProfitQuote: -0.01,
   });
   assertEquals(d.action, "STOP");
-  assertEquals(d.reason, "FUTURES_STALE_GIVEBACK_NET_NONPOSITIVE_EXIT_180M");
+  assertEquals(d.reason, "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT");
 });
 
 Deno.test("OPEN live winner remains in recovery because its observed peak never entered the stale-loser class", () => {
