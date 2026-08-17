@@ -17,16 +17,80 @@ jobs:
         run: |
           set -euo pipefail
           export PGOPTIONS='-c default_transaction_read_only=on'
-          {
-            echo '=== trading_positions columns ==='
-            psql "$SUPABASE_DB_URL" -X -A -F '|' -c "select column_name,data_type from information_schema.columns where table_schema='public' and table_name='trading_positions' order by ordinal_position;"
-            echo '=== trading_orders columns ==='
-            psql "$SUPABASE_DB_URL" -X -A -F '|' -c "select column_name,data_type from information_schema.columns where table_schema='public' and table_name='trading_orders' order by ordinal_position;"
-            echo '=== recent positions ==='
-            psql "$SUPABASE_DB_URL" -X -P pager=off -c "select * from public.trading_positions where coalesce(closed_at,created_at) >= timestamptz '2026-08-16 00:00:00+00' order by coalesce(closed_at,created_at) desc limit 100;"
-            echo '=== recent sell orders ==='
-            psql "$SUPABASE_DB_URL" -X -P pager=off -c "select * from public.trading_orders where created_at >= timestamptz '2026-08-16 00:00:00+00' and upper(coalesce(side,''))='SELL' order by created_at desc limit 200;"
-          } > performance-query.txt
+          psql "$SUPABASE_DB_URL" -X -A -F '|' -P pager=off > performance-query.txt <<'SQL'
+          with bounds as (
+            select timestamptz '2026-08-17 09:22:02+00' as fix_at, now() as now_at
+          ), b as (
+            select fix_at, now_at, now_at-fix_at as span,
+                   fix_at-(now_at-fix_at) as pre1_at,
+                   fix_at-2*(now_at-fix_at) as pre2_at
+            from bounds
+          ), windows as (
+            select 'POST_FIX'::text period, fix_at start_at, now_at end_at from b
+            union all select 'PREV_EQUAL', pre1_at, fix_at from b
+            union all select 'PRIOR_EQUAL', pre2_at, pre1_at from b
+          ), x as (
+            select w.period,w.start_at,w.end_at,p.*,
+                   case when lower(p.exchange)='binance_futures' then 'FUTURES' else 'SPOT' end lane,
+                   extract(epoch from (p.closed_at-p.opened_at))/60.0 hold_min
+            from windows w
+            join public.trading_positions p on p.closed_at >= w.start_at and p.closed_at < w.end_at
+            where p.is_paper=false and p.closed_at is not null
+          )
+          select 'SUMMARY' section, period, lane,
+                 count(*) trades,
+                 count(*) filter(where realized_pnl_quote>0) wins,
+                 count(*) filter(where realized_pnl_quote<0) losses,
+                 round(coalesce(sum(realized_pnl_quote),0),8) realized_pnl,
+                 round(avg(realized_return_pct),6) avg_return_pct,
+                 round(avg(realized_return_pct) filter(where realized_pnl_quote>0),6) avg_win_return_pct,
+                 round(avg(realized_return_pct) filter(where realized_pnl_quote<0),6) avg_loss_return_pct,
+                 round(avg(realized_pnl_quote) filter(where realized_pnl_quote>0),8) avg_win_pnl,
+                 round(avg(realized_pnl_quote) filter(where realized_pnl_quote<0),8) avg_loss_pnl,
+                 count(*) filter(where upper(coalesce(close_reason,'')) like '%HARD_STOP%' or upper(coalesce(close_reason,'')) like '%STOP_LOSS%') hard_stops,
+                 round(avg(mfe_capture_ratio),6) avg_mfe_capture_ratio,
+                 round(avg(profit_giveback_pct),6) avg_profit_giveback_pct,
+                 round(avg(profit_giveback_bps),3) avg_profit_giveback_bps,
+                 round(avg(hold_min),2) avg_hold_min,
+                 round(max(hold_min),2) max_hold_min
+          from x group by period,lane order by period,lane;
+
+          with b as (select timestamptz '2026-08-17 09:22:02+00' fix_at, now() now_at),
+          x as (
+            select case when lower(exchange)='binance_futures' then 'FUTURES' else 'SPOT' end lane, close_reason,count(*) n,
+                   round(sum(realized_pnl_quote),8) pnl
+            from public.trading_positions,b
+            where is_paper=false and closed_at>=fix_at and closed_at<now_at
+            group by 1,2
+          )
+          select 'POST_REASONS' section,lane,coalesce(close_reason,'NULL') close_reason,n,pnl from x order by lane,n desc;
+
+          with b as (select timestamptz '2026-08-17 09:22:02+00' fix_at, now() now_at)
+          select 'POST_DETAIL' section,
+                 case when lower(exchange)='binance_futures' then 'FUTURES' else 'SPOT' end lane,
+                 market,opened_at,closed_at,close_reason,
+                 round(realized_pnl_quote,8) pnl,
+                 round(realized_return_pct,6) return_pct,
+                 round(peak_return_pct,6) peak_return_pct,
+                 round(mfe_capture_ratio,6) mfe_capture_ratio,
+                 round(profit_giveback_pct,6) giveback_pct,
+                 round(profit_giveback_bps,3) giveback_bps,
+                 round(extract(epoch from(closed_at-opened_at))/60.0,2) hold_min
+          from public.trading_positions,b
+          where is_paper=false and closed_at>=fix_at and closed_at<now_at
+          order by closed_at;
+
+          with b as (select timestamptz '2026-08-17 09:22:02+00' fix_at, now() now_at)
+          select 'POST_SELL_ORDERS' section,
+                 case when lower(exchange)='binance_futures' then 'FUTURES' else 'SPOT' end lane,
+                 count(*) filter(where state='COMPLETED' or state='FILLED') completed_sell_orders,
+                 count(*) filter(where error_code is not null or error_message is not null) errored_sell_orders,
+                 count(*) filter(where coalesce(error_message,'') ilike '%FIRST_TRANCHE_THRESHOLD_NOT_REACHED%') first_tranche_rejects,
+                 count(*) filter(where coalesce(error_message,'') ilike '%TIMEOUT%') timeout_errors
+          from public.trading_orders,b
+          where created_at>=fix_at and created_at<now_at and upper(side)='SELL'
+          group by 1,2 order by 2;
+          SQL
       - name: Upload query result
         uses: actions/upload-artifact@v4
         with:
