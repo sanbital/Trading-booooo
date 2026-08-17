@@ -206,14 +206,24 @@ Deno.test("futures +15% ROE target keeps precedence after 180m", () => {
 });
 
 Deno.test("futures pre-T1 earned profit floor closes 100%", () => {
-  const d = decide({ grossReturnPct: 2.5, peakGrossReturnPct: 3, netReturnPct: 2.4, preT1ProfitProtectionHit: true });
+  const d = decide({
+    grossReturnPct: 2.5,
+    peakGrossReturnPct: 3,
+    netReturnPct: 2.4,
+    preT1ProfitProtectionHit: true,
+  });
   assertEquals(d.action, "STOP");
   assertEquals(d.fraction, 1);
   assertEquals(d.reason, "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT");
 });
 
 Deno.test("futures +15% ROE target keeps precedence over pre-T1 protection", () => {
-  const d = decide({ grossReturnPct: 5.1, peakGrossReturnPct: 5.1, netReturnPct: 5, preT1ProfitProtectionHit: true });
+  const d = decide({
+    grossReturnPct: 5.1,
+    peakGrossReturnPct: 5.1,
+    netReturnPct: 5,
+    preT1ProfitProtectionHit: true,
+  });
   assertEquals(d.fraction, 0.5);
   assertEquals(d.reason, "FUTURES_HALF_TAKE_PROFIT_ROE_15");
 });
