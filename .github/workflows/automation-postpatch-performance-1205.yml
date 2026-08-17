@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Read-only performance audit
+      - name: Read-only filled-position performance audit
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
@@ -38,10 +38,10 @@ jobs:
                    p.*
             from windows w
             join public.trading_positions p on p.closed_at >= w.s and p.closed_at < w.e
-            where p.is_paper=false and p.closed_at is not null
+            where p.is_paper=false and p.closed_at is not null and p.opened_at is not null
           )
           select 'AGG',label,kind,
-                 count(*) closed_positions,
+                 count(*) filled_positions,
                  count(*) filter (where coalesce(realized_pnl_quote,0)>0) wins,
                  count(*) filter (where coalesce(realized_pnl_quote,0)<0) losses,
                  round(sum(coalesce(realized_pnl_quote,0))::numeric,6) pnl_usdt,
@@ -61,16 +61,8 @@ jobs:
           with p as (
             select case when exchange='binance_futures' then 'FUTURES' else 'SPOT' end kind,*
             from public.trading_positions
-            where is_paper=false and closed_at >= timestamptz '2026-08-16 10:16:42+00'
-              and closed_at < timestamptz '2026-08-17 03:05:20+00'
-          )
-          select 'REASON',kind,coalesce(close_reason,'NULL'),count(*),round(sum(coalesce(realized_pnl_quote,0))::numeric,6)
-          from p group by kind,coalesce(close_reason,'NULL') order by kind,4 desc;
-
-          with p as (
-            select case when exchange='binance_futures' then 'FUTURES' else 'SPOT' end kind,*
-            from public.trading_positions
-            where is_paper=false and closed_at >= timestamptz '2026-08-16 10:16:42+00'
+            where is_paper=false and opened_at is not null
+              and closed_at >= timestamptz '2026-08-16 10:16:42+00'
               and closed_at < timestamptz '2026-08-17 03:05:20+00'
           )
           select 'TRADE',kind,market,opened_at,closed_at,
