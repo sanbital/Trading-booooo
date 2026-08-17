@@ -1,0 +1,35 @@
+name: Cleanup futures lane test
+
+on:
+  push:
+    branches:
+      - agent/futures-3m-recovery-state-machine
+    paths:
+      - .github/scripts/cleanup_futures_lane_test.py
+      - .github/workflows/cleanup-futures-lane-test.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/futures-3m-recovery-state-machine
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: python3 .github/scripts/cleanup_futures_lane_test.py
+      - run: deno fmt supabase/functions/market-autotrader/futures-lane.test.ts
+      - run: deno test --allow-read supabase/functions/market-autotrader/futures-lane.test.ts
+      - run: deno test supabase/functions/market-autotrader/futures-exit-policy.test.ts
+      - name: Commit cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/market-autotrader/futures-lane.test.ts
+          git commit -m "test: finalize futures 3m recovery invariants"
+          git push origin HEAD:agent/futures-3m-recovery-state-machine
