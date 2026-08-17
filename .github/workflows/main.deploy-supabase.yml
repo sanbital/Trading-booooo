@@ -7,9 +7,6 @@ on:
     paths:
       - "backtest/**"
       - "supabase/functions/market-learning/**"
-      # `deno task check/test` validates this function too. A test-only repair here must
-      # therefore rerun the engine workflow instead of leaving a previously blocked engine
-      # revision undeployed.
       - "supabase/functions/market-performance/**"
       - "supabase/config.toml"
       - "supabase/migrations/**"
@@ -50,10 +47,6 @@ jobs:
         run: |
           deno task check
           deno task test
-          # The engine deploy is supposed to prove the release invariants before shipping,
-          # which is what v700-deploy-validation asserts about this workflow. Only the
-          # dashboard workflow was running it, so an engine deploy could ship a build the
-          # validation would have rejected.
           node validation/v700-deploy-validation.mjs
           node --check gateway/server.mjs
           node --test gateway/server.test.mjs
@@ -181,6 +174,12 @@ jobs:
             --set=ON_ERROR_STOP=1 \
             --single-transaction \
             --file supabase/migrations/20260817090516_enforce_absolute_timeout_before_tranche_guard.sql
+          # This migration must be last: it intentionally replaces the legacy recovery and
+          # timeout ownership in guard_residual_sell_order_v751 / position policy.
+          psql "${SUPABASE_DB_URL}" \
+            --set=ON_ERROR_STOP=1 \
+            --single-transaction \
+            --file supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql
 
       - name: Verify the sell guard survived the batch
         shell: bash
@@ -192,7 +191,8 @@ jobs:
           do $$
           declare
             v_def text;
-            v_recovery_def text;
+            v_futures_def text;
+            v_position_def text;
           begin
             select pg_get_functiondef(p.oid) into v_def
             from pg_proc p
@@ -208,10 +208,10 @@ jobs:
             end if;
             if position('coalesce(p.stop_price, 0) > 0' in v_def) > 0 then
               raise exception
-                'the planned stop is an exit trigger again; only minus 2 percent of executable net may force a sell';
+                'the planned stop is an exit trigger again; only the canonical executable-net policy may force a generic LOB sell';
             end if;
             if position('HARD_STOP_MINUS_2' in v_def) = 0 then
-              raise exception 'guard lost the executable-net stop at minus 2 percent';
+              raise exception 'spot LOB guard lost the executable-net stop at minus 2 percent';
             end if;
             if position('lob:STOP_HIT' in v_def) > 0 then
               raise exception
@@ -219,7 +219,7 @@ jobs:
             end if;
             if position('POST180_MAX_HOLD_TIMEOUT' in v_def) > 0 then
               raise exception
-                'the post-180 hold carries a time cap again; after 180s only positive net or minus 2 percent may close a position';
+                'spot post-180 hold carries a time cap again; current spot policy must remain unchanged';
             end if;
             if position('v_policy_revision = ''7.3.0' in v_def) > 0
                or position('v_policy_revision = ''7.3.2' in v_def) > 0 then
@@ -230,21 +230,31 @@ jobs:
               raise exception 'guard lost the deployed pre-breakout policy revision';
             end if;
 
-            select pg_get_functiondef(p.oid) into v_recovery_def
+            select pg_get_functiondef(p.oid) into v_futures_def
             from pg_proc p
             join pg_namespace n on n.oid = p.pronamespace
             where n.nspname = 'public' and p.proname = 'guard_residual_sell_order_v751';
-            if v_recovery_def is null
-               or position('STALE_RECOVERY_NET_POSITIVE_EXIT_180M' in v_recovery_def) = 0
-               or position('FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M' in v_recovery_def) = 0
-               or position('STALE_RECOVERY_REQUIRES_POSITIVE_NET' in v_recovery_def) = 0
-               or position('pending_exit_reason' in v_recovery_def) = 0
-               or position('EMERGENCY' in v_recovery_def) = 0
-               or position('POST180_MAX_HOLD_TIMEOUT' in v_recovery_def) = 0
-               or position('HALF_HOLD_ABSOLUTE_TIMEOUT' in v_recovery_def) = 0
-               or position('absolute_max_holding_seconds' in v_recovery_def) = 0
-               or position('v_approved_reason in (''HALF_HOLD_ABSOLUTE_TIMEOUT'', ''POST180_MAX_HOLD_TIMEOUT'')' in v_recovery_def) = 0 then
-              raise exception 'v7.6.5 recovery/absolute-timeout sell guard missing after migration batch';
+            if v_futures_def is null
+               or position('FUTURES_RECOVERY_NET_POSITIVE_EXIT' in v_futures_def) = 0
+               or position('FUTURES_STALE_GIVEBACK_EXIT_180M' in v_futures_def) = 0
+               or position('FUTURES_RECOVERY_REQUIRES_POSITIVE_NET' in v_futures_def) = 0
+               or position('FUTURES_RECOVERY_NOT_LATCHED' in v_futures_def) = 0
+               or position('v_held_seconds < 180' in v_futures_def) = 0
+               or position('v_held_seconds < 10800' in v_futures_def) = 0
+               or position('pending_exit_reason' in v_futures_def) = 0
+               or position('EMERGENCY' in v_futures_def) = 0 then
+              raise exception 'Futures 3m recovery sell guard missing after migration batch';
+            end if;
+
+            select pg_get_functiondef(p.oid) into v_position_def
+            from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname = 'public' and p.proname = 'enforce_residual_exit_position_policy_v751';
+            if v_position_def is null
+               or position('recovery_latch_after_seconds' in v_position_def) = 0
+               or position('coalesce(new.t1_completed, false)' in v_position_def) = 0
+               or position('- ''recovery_exit''' in v_position_def) > 0 then
+              raise exception 'Futures 3m recovery position-state policy missing after migration batch';
             end if;
             raise notice 'sell guard end state verified';
           end
