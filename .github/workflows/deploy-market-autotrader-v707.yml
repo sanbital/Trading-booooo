@@ -11,6 +11,7 @@ on:
       - "supabase/migrations/20260810010000_binance_futures_lane_v760.sql"
       - "supabase/migrations/20260810133000_protected_trailing_exit_v761.sql"
       - "supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql"
+      - "supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
@@ -22,6 +23,7 @@ on:
       - "supabase/migrations/20260810010000_binance_futures_lane_v760.sql"
       - "supabase/migrations/20260810133000_protected_trailing_exit_v761.sql"
       - "supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql"
+      - "supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   workflow_dispatch:
 
@@ -103,9 +105,13 @@ jobs:
           grep -q 'BB_RECLAIM_FAILED' supabase/functions/market-autotrader/index.ts
           grep -q 'ORDERBOOK_COLLAPSE' supabase/functions/market-autotrader/index.ts
           grep -q '7.6.0-BINANCE-FUTURES' supabase/functions/market-autotrader/index.ts
-          grep -q 'FUTURES-PROTECTED-TRAIL-ROE15-SL12-FLOOR9-TRAIL4P5-RECOVERY180M-V2' supabase/functions/market-autotrader/index.ts
+          grep -q 'FUTURES-ROE15-SL12-RECOVERY3M-FLOOR9-TRAIL4P5-GIVEBACK180M-V3' supabase/functions/market-autotrader/index.ts
+          grep -q 'futuresRecoveryState({' supabase/functions/market-autotrader/index.ts
+          grep -q 'trigger_reason: "FUTURES_3M_NET_NONPOSITIVE"' supabase/functions/market-autotrader/index.ts
+          grep -q 'position.t1_completed !== true' supabase/functions/market-autotrader/index.ts
+          grep -q 'decision.reason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT"' supabase/functions/market-autotrader/index.ts
           grep -q 'decision.reason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"' supabase/functions/market-autotrader/index.ts
-          grep -q 'FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M' supabase/functions/market-autotrader/index.ts
+          grep -q 'decision.reason === "FUTURES_STALE_GIVEBACK_EXIT_180M"' supabase/functions/market-autotrader/index.ts
           grep -q 'action === "EMERGENCY"' supabase/functions/market-autotrader/index.ts
           grep -q 'FUTURES_MIN_ENTRY_MARGIN_USDT = 50' \
             supabase/functions/market-autotrader/futures-exit-policy.ts
@@ -113,7 +119,11 @@ jobs:
             supabase/functions/market-autotrader/futures-exit-policy.ts
           grep -q 'residualTrailingDrawdownRoePct: 4.5' \
             supabase/functions/market-autotrader/futures-exit-policy.ts
-          grep -q 'staleRecoveryAfterSeconds: 180 \* 60' \
+          grep -q 'recoveryLatchAfterSeconds: 180' \
+            supabase/functions/market-autotrader/futures-exit-policy.ts
+          grep -q 'staleGivebackAfterSeconds: 180 \* 60' \
+            supabase/functions/market-autotrader/futures-exit-policy.ts
+          grep -q 'staleGivebackMinPeakRoePct: 2.13815789473683' \
             supabase/functions/market-autotrader/futures-exit-policy.ts
           grep -q 'SPOT_POLICY_TRIGGERS_NOT_ISOLATED_FROM_FUTURES' \
             supabase/migrations/20260810010000_binance_futures_lane_v760.sql
@@ -121,10 +131,16 @@ jobs:
             supabase/migrations/20260810133000_protected_trailing_exit_v761.sql
           grep -q 'STALE_RECOVERY_REQUIRES_POSITIVE_NET' \
             supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql
+          grep -q 'FUTURES_RECOVERY_NET_POSITIVE_EXIT' \
+            supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql
+          grep -q 'FUTURES_STALE_GIVEBACK_EXIT_180M' \
+            supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql
+          grep -q 'recovery_latch_after_seconds' \
+            supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql
+          grep -q 'coalesce(new.t1_completed, false)' \
+            supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql
           grep -q "upper(coalesce(new.purpose, '')) = 'EMERGENCY'" \
-            supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql
-          grep -q 'pending_exit_reason' \
-            supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql
+            supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql
           ! grep -q 'const exp1ArmWidthsBps' supabase/functions/market-autotrader/index.ts
 
   deploy:
@@ -143,7 +159,7 @@ jobs:
       - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
         with:
           version: 2.109.1
-      - name: Wait for v7.6.5 database schema
+      - name: Wait for Futures 3m recovery database policy
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
@@ -176,21 +192,31 @@ jobs:
                   join pg_namespace n on n.oid = p.pronamespace
                   where n.nspname = 'public'
                     and p.proname = 'guard_residual_sell_order_v751'
-                    and position('STALE_RECOVERY_NET_POSITIVE_EXIT_180M' in pg_get_functiondef(p.oid)) > 0
-                    and position('FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M' in pg_get_functiondef(p.oid)) > 0
-                    and position('STALE_RECOVERY_REQUIRES_POSITIVE_NET' in pg_get_functiondef(p.oid)) > 0
+                    and position('FUTURES_RECOVERY_NET_POSITIVE_EXIT' in pg_get_functiondef(p.oid)) > 0
+                    and position('FUTURES_STALE_GIVEBACK_EXIT_180M' in pg_get_functiondef(p.oid)) > 0
+                    and position('FUTURES_RECOVERY_REQUIRES_POSITIVE_NET' in pg_get_functiondef(p.oid)) > 0
+                    and position('v_held_seconds < 180' in pg_get_functiondef(p.oid)) > 0
                     and position('pending_exit_reason' in pg_get_functiondef(p.oid)) > 0
                     and position('EMERGENCY' in pg_get_functiondef(p.oid)) > 0
+                )
+                and exists (
+                  select 1
+                  from pg_proc p
+                  join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public'
+                    and p.proname = 'enforce_residual_exit_position_policy_v751'
+                    and position('recovery_latch_after_seconds' in pg_get_functiondef(p.oid)) > 0
+                    and position('coalesce(new.t1_completed, false)' in pg_get_functiondef(p.oid)) > 0
                 );
             ")"
             if [ "${ready}" = "t" ]; then
-              echo "v7.6.5 database schema is ready"
+              echo "Futures 3m recovery database policy is ready"
               exit 0
             fi
-            echo "Waiting for v7.6.5 database schema (${attempt}/40)"
+            echo "Waiting for Futures 3m recovery database policy (${attempt}/40)"
             sleep 15
           done
-          echo "::error::v7.6.5 database schema was not ready before Edge Function deployment"
+          echo "::error::Futures 3m recovery database policy was not ready before Edge Function deployment"
           exit 1
       - name: Deploy scanner and autotrader
         env:
