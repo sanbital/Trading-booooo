@@ -132,6 +132,7 @@ import {
   FUTURES_MIN_ENTRY_MARGIN_USDT,
   FUTURES_SPLIT_EXIT_THRESHOLDS,
   futuresEntryMinimums,
+  futuresRecoveryState,
   futuresSplitExitDecision,
   normalizeFuturesLeverage,
 } from "./futures-exit-policy.ts";
@@ -5671,6 +5672,7 @@ async function applyExit(
     decisionReason === "FUTURES_HALF_STOP_LOSS_ROE_12" ||
     decisionReason === "PRE_T1_PROFIT_PROTECTION_EXIT" ||
     decisionReason === "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT" ||
+    decisionReason === "FUTURES_STALE_GIVEBACK_EXIT_180M" ||
     decisionReason === "RESIDUAL_PROTECTED_TRAIL_EXIT" ||
     decisionReason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT" ||
     decisionReason === "RESIDUAL_TAKE_PROFIT_10" ||
@@ -7068,7 +7070,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         !lobMode && !futuresLane,
       );
       if (
-        lobMode && !settings.emergency_liquidation && heldSeconds >= 180 &&
+        lobMode && !futuresLane && !settings.emergency_liquidation && heldSeconds >= 180 &&
         !(finite(position.stop_price) > 0 && current <= finite(position.stop_price))
       ) {
         // After 180 seconds, ordinary exits still use executable-net policy. A real
@@ -7097,7 +7099,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         );
       }
       if (
-        lobMode && decision.action === "NONE" &&
+        lobMode && !futuresLane && decision.action === "NONE" &&
         !settings.emergency_liquidation
       ) {
         const book = books[position.market];
@@ -7561,7 +7563,10 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             },
           }).catch(() => null);
         }
-      } else if (scalpMode && decision.action === "NONE" && !settings.emergency_liquidation) {
+      } else if (
+        scalpMode && !futuresLane && decision.action === "NONE" &&
+        !settings.emergency_liquidation
+      ) {
         const holdCfg = scalpHoldConfig(settings, exchange);
         const book = books[position.market];
         const liveImbalance = book
@@ -7695,7 +7700,10 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       }
       // Independent scalp backstop: no single position may lose more than the
       // operator-selected percentage, even if the normal stop failed or moved.
-      if (isScalpStrategy((settings as any).strategy) && position.average_entry_price > 0) {
+      if (
+        !futuresLane && isScalpStrategy((settings as any).strategy) &&
+        position.average_entry_price > 0
+      ) {
         const lossPct = (current - position.average_entry_price) / position.average_entry_price *
           100;
         const maxSingleLossPct = Math.abs(finite((settings as any).scalp_max_single_loss_pct, 5));
@@ -7707,7 +7715,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       // Futures 3x: -12% ROE hard stop, +15% ROE half TP, then +9% floor / 4.5pp trailing.
       if ((lobMode || futuresLane) && !settings.emergency_liquidation) {
         const activeSplitPolicyVersion = futuresLane
-          ? "FUTURES-PROTECTED-TRAIL-ROE15-SL12-FLOOR9-TRAIL4P5-RECOVERY180M-V2"
+          ? "FUTURES-ROE15-SL12-RECOVERY3M-FLOOR9-TRAIL4P5-GIVEBACK180M-V3"
           : "SPOT-PROTECTED-TRAIL-TP5-SL4-FLOOR3-TRAIL1P5-RECOVERY180M-V2";
         // v7.6.9 exit hotfix: LOB safety exits are hard invariants. The split TP/SL
         // policy is a profit-management layer and must never override a planned STOP_HIT,
@@ -7717,7 +7725,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           finite((settings as any).lob_absolute_max_holding_seconds, 600),
         );
         const absoluteMaxHoldingSeconds = Math.max(1, configuredAbsoluteMaxHoldingSeconds);
-        if (lobMode && heldSeconds >= absoluteMaxHoldingSeconds) {
+        if (lobMode && !futuresLane && heldSeconds >= absoluteMaxHoldingSeconds) {
           decision = {
             action: "STOP",
             fraction: 1,
@@ -7857,16 +7865,18 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         let recoveryLatchedNow = false;
 
         if (requestedAction === "STOP") {
-          // Preserve the upstream safety decision exactly. In particular, STOP_HIT and
-          // HALF_HOLD_ABSOLUTE_TIMEOUT must reach the executable-exit layer unchanged.
+          // Preserve only true upstream safety decisions. Generic LOB/scalp time and soft
+          // exits are excluded from Futures above, so a Futures STOP here is the planned
+          // leverage-aware hard stop, reconciliation/emergency handling, or equivalent.
           console.warn(
             `[HARD_EXIT_INVARIANT] preserving ${requestedReason || "STOP"} for ` +
               `${exchange}:${position.market}`,
           );
         } else if (futuresLane) {
-          // The futures residual rule is stated about the REMAINING half's own return, so
-          // it is priced against the remainder's own principal. The whole-position quote
-          // above still governs the spot lane and stays untouched.
+          const residualStage = !hasTradableHalf;
+          // Residual winners use their own remaining-leg economics. Pre-T1 NORMAL/RECOVERY
+          // decisions use the WHOLE position economics, including already-paid fees and any
+          // prior proceeds, because the operator rule is about recovering the whole trade.
           const residualPrincipalQuote = Math.max(0, policyQuantity * entryPrice);
           const residualQuote = quoteExecutableNetExit({
             bids: liveBids,
@@ -7881,18 +7891,31 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             sellFeeRate: policyFeeRate,
             slippageSafetyRate: post180SlippageSafetyRate(settings),
           });
-          // Protected trailing replaces the legacy negative-to-positive recovery latch.
-          recoveryLatchedNow = false;
-          recoveryMode = false;
+          const recoveryState = futuresRecoveryState({
+            residualStage,
+            alreadyLatched: recoveryMode,
+            heldSeconds,
+            netReturnPct: guardedNetReturnPct,
+          });
+          recoveryMode = recoveryState.enabled;
+          recoveryLatchedNow = recoveryState.newlyLatched;
+
+          const futuresNetReturnPct = residualStage ? residualNetReturnPct : guardedNetReturnPct;
+          const futuresExecutableNetAllowed = residualStage
+            ? residualQuote.allowed
+            : executableQuote.allowed;
+          const futuresExpectedNetProfitQuote = residualStage
+            ? finite(residualQuote.expectedNetProfitQuote)
+            : guardedNetProfitQuote;
           const futuresDecision = futuresSplitExitDecision({
-            residualStage: !hasTradableHalf,
+            residualStage,
             recoveryMode,
             leverage: positionLeverageValue,
             grossReturnPct,
             peakGrossReturnPct,
-            netReturnPct: residualNetReturnPct,
-            executableNetAllowed: residualQuote.allowed,
-            expectedNetProfitQuote: finite(residualQuote.expectedNetProfitQuote),
+            netReturnPct: futuresNetReturnPct,
+            executableNetAllowed: futuresExecutableNetAllowed,
+            expectedNetProfitQuote: futuresExpectedNetProfitQuote,
             heldSeconds,
             preT1ProfitProtectionHit: preT1ProtectionHit,
             safetyRequested,
@@ -7908,7 +7931,12 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
             net_roe_pct: futuresDecision.netRoePct,
             price_return_pct: grossReturnPct,
             thresholds: FUTURES_SPLIT_EXIT_THRESHOLDS,
-            residual_stage: !hasTradableHalf,
+            residual_stage: residualStage,
+            recovery_mode: recoveryMode,
+            recovery_latched_now: recoveryLatchedNow,
+            whole_position_net_return_pct: guardedNetReturnPct,
+            whole_position_executable_net_allowed: executableQuote.allowed,
+            whole_position_expected_net_profit_quote: guardedNetProfitQuote,
             residual_executable_net_allowed: residualQuote.allowed,
             residual_expected_net_profit_quote:
               Number.isFinite(residualQuote.expectedNetProfitQuote)
@@ -7978,21 +8006,24 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
                 ...(position.metadata || {}),
                 bb_exit_watch_started_at: watchIso,
                 bb_last_minute_gate: freshMinuteGate,
-                // The futures residual rule is a latch, not a live comparison: once the
-                // remainder has been seen underwater it leaves at the flip to positive,
-                // however long that takes. Persist it the tick it engages.
+                // RECOVERY is a permanent pre-T1 mission state. It is latched once, at the
+                // first observation at/after 180s whose WHOLE-position executable net is
+                // non-positive, and remains set until the position closes.
                 ...(recoveryLatchedNow
                   ? {
                     recovery_exit: {
                       ...(position.metadata?.recovery_exit || {}),
                       enabled: true,
+                      state: "RECOVERY",
                       revision: VERSION,
                       entered_at: new Date(nowMs).toISOString(),
-                      trigger_reason: "FUTURES_RESIDUAL_NEGATIVE_RETURN",
-                      exit_rule: "RESIDUAL_NET_PNL_GT_0",
+                      trigger_reason: "FUTURES_3M_NET_NONPOSITIVE",
+                      exit_rule: "FULL_POSITION_EXECUTABLE_NET_PNL_GT_0",
                       leverage: positionLeverageValue,
-                      residual_net_return_pct_at_latch: residualNetReturnPct,
-                      percentage_residual_thresholds_disabled: true,
+                      held_seconds_at_latch: heldSeconds,
+                      net_return_pct_at_latch: guardedNetReturnPct,
+                      net_profit_quote_at_latch: guardedNetProfitQuote,
+                      permanent_until_exit: true,
                     },
                   }
                   : {}),
@@ -8019,6 +8050,8 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision.reason === "FUTURES_HALF_STOP_LOSS_ROE_12" ||
           decision.reason === "PRE_T1_PROFIT_PROTECTION_EXIT" ||
           decision.reason === "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT" ||
+          decision.reason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT" ||
+          decision.reason === "FUTURES_STALE_GIVEBACK_EXIT_180M" ||
           decision.reason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT" ||
           decision.reason === "RESIDUAL_PROTECTED_TRAIL_EXIT" ||
           decision.reason === "STALE_RECOVERY_NET_POSITIVE_EXIT_180M" ||
