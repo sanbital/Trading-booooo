@@ -1,0 +1,250 @@
+stage=full_test
+run_id=32126595399
+sha=67df86060c74c015c4ff2aaceb6a9da8f32d93c6
+--- git status ---
+ M supabase/functions/market-autotrader/index.ts
+?? .github/late-recovery-last-failure.txt
+?? deno.lock
+?? supabase/functions/market-autotrader/late-recovery-policy.test.ts
+?? supabase/functions/market-autotrader/late-recovery-policy.ts
+--- rollout log tail ---
+high volatility buys speed, not a wider target ... [0m[32mok[0m [0m[38;5;245m(128µs)[0m
+holding times stay inside a scalp horizon ... [0m[32mok[0m [0m[38;5;245m(7ms)[0m
+the required volatility is stated rather than assumed away ... [0m[32mok[0m [0m[38;5;245m(221µs)[0m
+legacy sizing is still reachable for taker configurations ... [0m[32mok[0m [0m[38;5;245m(121µs)[0m
+the EV threshold cannot exceed what the optimum produces ... [0m[32mok[0m [0m[38;5;245m(131µs)[0m
+the threshold scales with cost rather than sitting at an absolute level ... [0m[32mok[0m [0m[38;5;245m(84µs)[0m
+legacy mode keeps the absolute threshold ... [0m[32mok[0m [0m[38;5;245m(58µs)[0m
+a signal at exactly the assumed edge can pass ... [0m[32mok[0m [0m[38;5;245m(118µs)[0m
+[0m[38;5;245mrunning 3 tests from ./supabase/functions/_shared/scalp/v512-invariants.test.ts[0m
+v5.12 autotrader has no live EV exploration or threshold relaxation path ... [0m[32mok[0m [0m[38;5;245m(10ms)[0m
+legacy SCALP preserves TIMEOUT while LOB and futures disable clock exits ... [0m[32mok[0m [0m[38;5;245m(1ms)[0m
+v5.12 migration forces PAPER and extends reconciliation states ... [0m[32mok[0m [0m[38;5;245m(210µs)[0m
+[0m[38;5;245mrunning 5 tests from ./supabase/functions/_shared/scalp/v6100-invariants.test.ts[0m
+v6.10 joint objective keeps return, win rate and turnover as separate promotion gates ... [0m[32mok[0m [0m[38;5;245m(992µs)[0m
+v6.10 accounting and exposure ledgers are wired into the runtime ... [0m[32mok[0m [0m[38;5;245m(16ms)[0m
+v6.10 migration separates fee quality and settles exploration cancellation ... [0m[32mok[0m [0m[38;5;245m(512µs)[0m
+v6.10 self-learning is bounded and cannot rewrite source or operator safety rails ... [0m[32mok[0m [0m[38;5;245m(476µs)[0m
+low-evidence ledger is telemetry and cannot become a hidden daily stop ... [0m[32mok[0m [0m[38;5;245m(242µs)[0m
+[0m[38;5;245mrunning 3 tests from ./supabase/functions/_shared/scalp/v690-invariants.test.ts[0m
+v7 keeps slot concentration safety and sizes only from current LOB evidence ... [0m[32mok[0m [0m[38;5;245m(17ms)[0m
+v6.9 migration permits only verified live outcomes to vote ... [0m[32mok[0m [0m[38;5;245m(386µs)[0m
+the current scanner and autotrader versions remain aligned ... [0m[32mok[0m [0m[38;5;245m(1ms)[0m
+[0m[38;5;245mrunning 3 tests from ./supabase/functions/_shared/scalp/version.test.ts[0m
+engine, autotrader and gateway report the same version ... [0m[32mok[0m [0m[38;5;245m(11ms)[0m
+the dashboard fallback banner is not older than the engine ... [0m[32mok[0m [0m[38;5;245m(953µs)[0m
+operator status is the authoritative dashboard version source ... [0m[32mok[0m [0m[38;5;245m(932µs)[0m
+[0m[38;5;245mrunning 2 tests from ./supabase/functions/_shared/lob/adaptive-policy.test.ts[0m
+adaptive policy clamps every self-tuned parameter inside reviewed bounds ... [0m[32mok[0m [0m[38;5;245m(618µs)[0m
+diagnostics select bounded policy families rather than source-code mutation ... [0m[32mok[0m [0m[38;5;245m(505µs)[0m
+[0m[38;5;245mrunning 9 tests from ./supabase/functions/_shared/lob/entry-quality-guard.test.ts[0m
+valid M1 pre-breakout remains buyable ... [0m[32mok[0m [0m[38;5;245m(2ms)[0m
+contracting Bollinger width cannot masquerade as pre-breakout ... [0m[32mok[0m [0m[38;5;245m(7ms)[0m
+measured late-extension chase cluster is rejected ... [0m[32mok[0m [0m[38;5;245m(360µs)[0m
+large 24h gain alone is not rejected when the 1m move is not late ... [0m[32mok[0m [0m[38;5;245m(218µs)[0m
+high stochastic and advance remain allowed when upper-band slope is shallow ... [0m[32mok[0m [0m[38;5;245m(217µs)[0m
+PROM-like extreme drawdown and range are rejected ... [0m[32mok[0m [0m[38;5;245m(177µs)[0m
+COTI-like event range is rejected without banning normal high gainers ... [0m[32mok[0m [0m[38;5;245m(195µs)[0m
+normal high gainer with controlled range remains buyable ... [0m[32mok[0m [0m[38;5;245m(141µs)[0m
+volume fade after an ATR chase is rejected ... [0m[32mok[0m [0m[38;5;245m(199µs)[0m
+[0m[38;5;245mrunning 4 tests from ./supabase/functions/_shared/lob/entry-risk.test.ts[0m
+flat notional acceleration can pass with composite live pressure ... [0m[32mok[0m [0m[38;5;245m(646µs)[0m
+acceleration alone cannot authorize an entry ... [0m[32mok[0m [0m[38;5;245m(129µs)[0m
+no live tape remains a hard rejection ... [0m[32mok[0m [0m[38;5;245m(93µs)[0m
+13.5s boundary tolerance requires substantial live samples ... [0m[32mok[0m [0m[38;5;245m(83µs)[0m
+[0m[38;5;245mrunning 4 tests from ./supabase/functions/_shared/lob/entry.mission.test.ts[0m
+a single breakout score cannot declare LONG against tape, microprice and book ... [0m[32mok[0m [0m[38;5;245m(2ms)[0m
+coherent breakout uses short-horizon target geometry ... [0m[32mok[0m [0m[38;5;245m(7ms)[0m
+target and stop are unconditional resolved probabilities ... [0m[32mok[0m [0m[38;5;245m(251µs)[0m
+busy tape does not create bullish probability when direction reverses ... [0m[32mok[0m [0m[38;5;245m(261µs)[0m
+[0m[38;5;245mrunning 3 tests from ./supabase/functions/_shared/lob/ev-bias.test.ts[0m
+EV bias remains silent until optimism is measured with enough samples ... [0m[32mok[0m [0m[38;5;245m(660µs)[0m
+confirmed optimistic EV receives a shrunk bounded penalty ... [0m[32mok[0m [0m[38;5;245m(249µs)[0m
+policy multiplier can strengthen but never unbound the EV penalty ... [0m[32mok[0m [0m[38;5;245m(159µs)[0m
+[0m[38;5;245mrunning 3 tests from ./supabase/functions/_shared/lob/evidence-sizing.test.ts[0m
+mature high-quality evidence reaches a full slot ... [0m[32mok[0m [0m[38;5;245m(590µs)[0m
+insufficient LOB evidence still trades but cannot use a full slot ... [0m[32mok[0m [0m[38;5;245m(132µs)[0m
+very low data quality is capped at the low-quality exploration size ... [0m[32mok[0m [0m[38;5;245m(87µs)[0m
+[0m[38;5;245mrunning 5 tests from ./supabase/functions/_shared/lob/gate-config.test.ts[0m
+an operator cannot lower the reward-risk floor below the executor's ... [0m[32mok[0m [0m[38;5;245m(589µs)[0m
+an operator can still tighten the reward-risk floor ... [0m[32mok[0m [0m[38;5;245m(85µs)[0m
+both stages derive an identical gate from identical settings ... [0m[32mok[0m [0m[38;5;245m(122µs)[0m
+missing settings fall back to the measured-safe gate ... [0m[32mok[0m [0m[38;5;245m(85µs)[0m
+nonsense settings cannot widen the gate ... [0m[32mok[0m [0m[38;5;245m(144µs)[0m
+[0m[38;5;245mrunning 13 tests from ./supabase/functions/_shared/lob/governance.test.ts[0m
+scan assignment is deterministic and keeps alternate traffic bounded ... [0m[32mok[0m [0m[38;5;245m(14ms)[0m
+policy metrics cannot be improved by shrinking notional or splitting orders ... [0m[32mok[0m [0m[38;5;245m(2ms)[0m
+KRW and USDT performance is normalized before aggregation ... [0m[32mok[0m [0m[38;5;245m(179µs)[0m
+normal order size is compared inside each exchange, not across currencies ... [0m[32mok[0m [0m[38;5;245m(1ms)[0m
+higher win rate and return are rejected when completed trade rate falls ... [0m[32mok[0m [0m[38;5;245m(661µs)[0m
+a strict joint improvement promotes only after every invariant passes ... [0m[32mok[0m [0m[38;5;245m(1ms)[0m
+the second live comparison confirms or rolls back a provisional champion ... [0m[32mok[0m [0m[38;5;245m(1ms)[0m
+negative expectancy can never be promoted even if it is less bad ... [0m[32mok[0m [0m[38;5;245m(783µs)[0m
+a favourable exchange-pattern mix cannot fake model improvement ... [0m[32mok[0m [0m[38;5;245m(529µs)[0m
+a safe 15 percent canary expands before it can promote ... [0m[32mok[0m [0m[38;5;245m(392µs)[0m
+shadow, backtest and unverified accounting labels can never vote ... [0m[32mok[0m [0m[38;5;245m(531µs)[0m
+v6.8 migration freezes policies, records full-size cohorts and never edits capital ... [0m[32mok[0m [0m[38;5;245m(822µs)[0m
+runtime pins entry policy and calibration cannot auto-activate raw profiles ... [0m[32mok[0m [0m[38;5;245m(2ms)[0m
+[0m[38;5;245mrunning 2 tests from ./supabase/functions/_shared/lob/joint-objective.test.ts[0m
+idle capital remains visible through account growth and utilization ... [0m[32mok[0m [0m[38;5;245m(626µs)[0m
+Pareto contract rejects return gain purchased with lower win rate ... [0m[32mok[0m [0m[38;5;245m(133µs)[0m
+[0m[38;5;245mrunning 11 tests from ./supabase/functions/_shared/lob/lob.test.ts[0m
+bearish trend cannot veto a hot LOB BUY ... [0m[32mok[0m [0m[38;5;245m(9ms)[0m
+stale orderbook is discarded ... [0m[32mok[0m [0m[38;5;245m(255µs)[0m
+a live entry requires an effective observation window ... [0m[32mok[0m [0m[38;5;245m(393µs)[0m
+the sub-15s tolerance is earned by evidence, not granted by the clock ... [0m[32mok[0m [0m[38;5;245m(303µs)[0m
+fees and slippage feed the mandatory reward-risk gate ... [0m[32mok[0m [0m[38;5;245m(231µs)[0m
+forecast optimism remains informational and cannot alter LOB admission ... [0m[32mok[0m [0m[38;5;245m(301µs)[0m
+a learned wider stop remains auditable but cannot become a hidden admission gate ... [0m[32mok[0m [0m[38;5;245m(197µs)[0m
+signal reversal is classified for monitor persistence before any sell ... [0m[32mok[0m [0m[38;5;245m(261µs)[0m
+maker-fill sell pressure needs settlement and repeated soft confirmation ... [0m[32mok[0m [0m[38;5;245m(105µs)[0m
+target hit outranks a simultaneous soft invalidation ... [0m[32mok[0m [0m[38;5;245m(126µs)[0m
+a target trail that loses the target floor disarms instead of ordering a blocked sell ... [0m[32mok[0m [0m[38;5;245m(85µs)[0m
+[0m[38;5;245mrunning 1 test from ./supabase/functions/_shared/lob/market-heat.test.ts[0m
+strict 24h Top 10 is fully observed without weakening-flow prefilter ... [0m[32mok[0m [0m[38;5;245m(1ms)[0m
+[0m[38;5;245mrunning 4 tests from ./supabase/functions/_shared/lob/minute-entry-gate.test.ts[0m
+CORE4 plus auxiliary score admits a pre-expansion upper-band touch ... [0m[32mok[0m [0m[38;5;245m(16ms)[0m
+the four primary conditions remain hard gates ... [0m[32mok[0m [0m[38;5;245m(651µs)[0m
+a completed expansion candle is rejected by the auxiliary score ... [0m[32mok[0m [0m[38;5;245m(408µs)[0m
+forming candle is excluded and insufficient history fails closed ... [0m[32mok[0m [0m[38;5;245m(593µs)[0m
+[0m[38;5;245mrunning 4 tests from ./supabase/functions/_shared/lob/momentum-continuation.test.ts[0m
+Top-10 eligibility still requires a live continuation pulse ... [0m[32mok[0m [0m[38;5;245m(1ms)[0m
+momentum pattern remains short-lived and informational ... [0m[32mok[0m [0m[38;5;245m(1ms)[0m
+live-loss momentum block is default and an explicit override removes that veto ... [0m[32mok[0m [0m[38;5;245m(8ms)[0m
+large historical gainer context alone cannot change present-tense admission ... [0m[32mok[0m [0m[38;5;245m(334µs)[0m
+[0m[38;5;245mrunning 7 tests from ./supabase/functions/_shared/lob/online.test.ts[0m
+an unseen coin inherits its exchange-pattern parent without a hard veto ... [0m[32mok[0m [0m[38;5;245m(718µs)[0m
+coin evidence is hierarchically shrunk instead of overfitting one trade ... [0m[32mok[0m [0m[38;5;245m(162µs)[0m
+adverse EV correction is silent without either market or parent evidence ... [0m[32mok[0m [0m[38;5;245m(152µs)[0m
+an unseen market inherits a partial adverse exchange-pattern correction ... [0m[32mok[0m [0m[38;5;245m(63µs)[0m
+mature fee-net market losses reduce admission EV without a trade-count cap ... [0m[32mok[0m [0m[38;5;245m(84µs)[0m
+winner adverse excursion learns a stop floor only after enough successes ... [0m[32mok[0m [0m[38;5;245m(163µs)[0m
+the prior policy confirms soft exits but never delays hard stops ... [0m[32mok[0m [0m[38;5;245m(88µs)[0m
+[0m[38;5;245mrunning 7 tests from ./supabase/functions/_shared/lob/payoff-governor.test.ts[0m
+realized payoff summary is fee-net and JSON-safe ... [0m[32mok[0m [0m[38;5;245m(659µs)[0m
+mature adverse payoff evidence ranks lower without deleting turnover ... [0m[32mok[0m [0m[38;5;245m(289µs)[0m
+thin adverse sample preserves turnover and exploration ... [0m[32mok[0m [0m[38;5;245m(104µs)[0m
+fast profitable evidence ranks higher without unbounded permission ... [0m[32mok[0m [0m[38;5;245m(93µs)[0m
+fee-thin or asymmetric entry geometry is rejected ... [0m[32mok[0m [0m[38;5;245m(197µs)[0m
+payoff shape cannot veto an otherwise positive target branch ... [0m[32mok[0m [0m[38;5;245m(66µs)[0m
+balanced fee-adjusted entry geometry passes ... [0m[32mok[0m [0m[38;5;245m(52µs)[0m
+[0m[38;5;245mrunning 3 tests from ./supabase/functions/_shared/lob/preorder.test.ts[0m
+both stable pre-order LOB snapshots pass ... [0m[32mok[0m [0m[38;5;245m(473µs)[0m
+either individual pre-order rejection cancels the pair ... [0m[32mok[0m [0m[38;5;245m(78µs)[0m
+rapid bid-depth collapse blocks only with current adverse flow ... [0m[32mok[0m [0m[38;5;245m(71µs)[0m
+[0m[38;5;245mrunning 8 tests from ./supabase/functions/_shared/lob/selection.test.ts[0m
+materially higher EV outranks legacy hotness ... [0m[32mok[0m [0m[38;5;245m(611µs)[0m
+turnover breaks ties only inside the EV uncertainty band ... [0m[32mok[0m [0m[38;5;245m(110µs)[0m
+expected resolution never exceeds the strategy holding ceiling ... [0m[32mok[0m [0m[38;5;245m(76µs)[0m
+a candidate worse on EV, win rate and turnover never outranks its dominator ... [0m[32mok[0m [0m[38;5;245m(79µs)[0m
+joint-objective ranking preserves count and prioritises the Pareto frontier ... [0m[32mok[0m [0m[38;5;245m(285µs)[0m
+live-data migration seeds calibration without adding a trade-count gate ... [0m[32mok[0m [0m[38;5;245m(625µs)[0m
+joint-objective migration keeps positive EV and repairs legacy maker reconciliation ... [0m[32mok[0m [0m[38;5;245m(9ms)[0m
+online coin learning versions every close and restores operator slot allocation ... [0m[32mok[0m [0m[38;5;245m(262µs)[0m
+[0m[38;5;245mrunning 5 tests from ./supabase/functions/_shared/lob/uncertainty.test.ts[0m
+strong corroborated evidence earns a small uncertainty haircut ... [0m[32mok[0m [0m[38;5;245m(741µs)[0m
+insufficient observations keep the full base haircut ... [0m[32mok[0m [0m[38;5;245m(113µs)[0m
+a sub-30-second window cannot earn an uncertainty discount ... [0m[32mok[0m [0m[38;5;245m(71µs)[0m
+wide spread cannot earn an uncertainty discount ... [0m[32mok[0m [0m[38;5;245m(95µs)[0m
+direction conflict cannot earn an uncertainty discount ... [0m[32mok[0m [0m[38;5;245m(178µs)[0m
+[0m[38;5;245mrunning 5 tests from ./supabase/functions/_shared/lob/v600-invariants.test.ts[0m
+v7 LOB route owns entry authority and external indicators are excluded ... [0m[32mok[0m [0m[38;5;245m(15ms)[0m
+v7 ranks Binance USDT and Upbit KRW universes independently ... [0m[32mok[0m [0m[38;5;245m(692µs)[0m
+v7 LOB route has no modeled EV, pWin or pFill hard gate ... [0m[32mok[0m [0m[38;5;245m(357µs)[0m
+v6 migration applies user-selected loss caps and no trade-count ceiling ... [0m[32mok[0m [0m[38;5;245m(268µs)[0m
+v6 LOB route does not generate legacy rate-control events ... [0m[32mok[0m [0m[38;5;245m(1ms)[0m
+[0m[38;5;245mrunning 30 tests from ./supabase/functions/_shared/lob/v620.test.ts[0m
+a clean book produces no vetoes and no confidence penalty ... [0m[32mok[0m [0m[38;5;245m(784µs)[0m
+a refilling ask wall vetoes the entry ... [0m[32mok[0m [0m[38;5;245m(162µs)[0m
+bid spoof vetoes well below the old 0.97 threshold ... [0m[32mok[0m [0m[38;5;245m(89µs)[0m
+ask spoof alone penalises but does not veto ... [0m[32mok[0m [0m[38;5;245m(92µs)[0m
+both sides spoofed vetoes ... [0m[32mok[0m [0m[38;5;245m(132µs)[0m
+chop widens the required stop instead of blocking the trade ... [0m[32mok[0m [0m[38;5;245m(154µs)[0m
+noise wider than any scalp stop is a veto ... [0m[32mok[0m [0m[38;5;245m(75µs)[0m
+an unreliable window never vetoes on absence of evidence ... [0m[32mok[0m [0m[38;5;245m(81µs)[0m
+path statistics separate a trend from chop ... [0m[32mok[0m [0m[38;5;245m(318µs)[0m
+neutral win rate is pure geometry ... [0m[32mok[0m [0m[38;5;245m(105µs)[0m
+perp symbols map from both venues ... [0m[32mok[0m [0m[38;5;245m(109µs)[0m
+missing funding data is neutral, never negative ... [0m[32mok[0m [0m[38;5;245m(174µs)[0m
+rising premium supports a long, crowded premium does not ... [0m[32mok[0m [0m[38;5;245m(168µs)[0m
+the funding edge stays inside its bound whatever the input ... [0m[32mok[0m [0m[38;5;245m(89µs)[0m
+learning corrects the signal edge, not the geometric term ... [0m[32mok[0m [0m[38;5;245m(937µs)[0m
+an unmeasured pattern is left alone rather than penalised ... [0m[32mok[0m [0m[38;5;245m(187µs)[0m
+same-day live evidence can correct a pattern below the old 0.65 floor ... [0m[32mok[0m [0m[38;5;245m(301µs)[0m
+same-day evidence ranks immediately but cannot zero the hard gate ... [0m[32mok[0m [0m[38;5;245m(768µs)[0m
+mature adverse evidence remains ranking-only and cannot delete turnover ... [0m[32mok[0m [0m[38;5;245m(706µs)[0m
+mature positive evidence may lift EV without adverse evidence deleting trades ... [0m[32mok[0m [0m[38;5;245m(831µs)[0m
+a trap that marks no worse trades loses its veto ... [0m[32mok[0m [0m[38;5;245m(532µs)[0m
+a trap that does mark worse trades keeps its veto ... [0m[32mok[0m [0m[38;5;245m(267µs)[0m
+wilson lower bound is conservative at small samples ... [0m[32mok[0m [0m[38;5;245m(73µs)[0m
+a losing streak threshold has to move with the win rate ... [0m[32mok[0m [0m[38;5;245m(116µs)[0m
+model health is judged against prediction, not against losses ... [0m[32mok[0m [0m[38;5;245m(816µs)[0m
+health stays silent until it has samples ... [0m[32mok[0m [0m[38;5;245m(94µs)[0m
+taker conversion needs a measured low fill rate AND surviving economics ... [0m[32mok[0m [0m[38;5;245m(187µs)[0m
+maker pFill is shrunk toward the exchange's realized fill rate ... [0m[32mok[0m [0m[38;5;245m(168µs)[0m
+LOB calibration reads only verified closed LIVE outcomes ... [0m[32mok[0m [0m[38;5;245m(757µs)[0m
+slots never exceed the configured ceiling and never strand capital ... [0m[32mok[0m [0m[38;5;245m(109µs)[0m
+[0m[38;5;245mrunning 5 tests from ./supabase/functions/_shared/lob/verified-outcome.test.ts[0m
+only fully verified live economic outcome becomes a learning sample ... [0m[32mok[0m [0m[38;5;245m(694µs)[0m
+estimated fee outcome cannot vote ... [0m[32mok[0m [0m[38;5;245m(88µs)[0m
+legacy attempt-EV outcome cannot vote ... [0m[32mok[0m [0m[38;5;245m(90µs)[0m
+unverified residual outcome cannot vote ... [0m[32mok[0m [0m[38;5;245m(55µs)[0m
+target hit remains a target outcome even when final net is small ... [0m[32mok[0m [0m[38;5;245m(128µs)[0m
+[0m[38;5;245mrunning 11 tests from ./supabase/functions/_shared/position-value.test.ts[0m
+the dust floor is one dollar in each quote currency ... [0m[32mok[0m [0m[38;5;245m(480µs)[0m
+base asset is read from the market when the ledger column is empty ... [0m[32mok[0m [0m[38;5;245m(98µs)[0m
+snapshot balances sum free and locked so a resting bot order is still ours ... [0m[32mok[0m [0m[38;5;245m(161µs)[0m
+a stale or empty snapshot can never declare a holding gone ... [0m[32mok[0m [0m[38;5;245m(129µs)[0m
+a manually sold position resolves to nothing and is flagged as vanished ... [0m[32mok[0m [0m[38;5;245m(200µs)[0m
+a holding worth a dollar or less is dust even when the balance agrees ... [0m[32mok[0m [0m[38;5;245m(88µs)[0m
+a live position above the floor is untouched ... [0m[32mok[0m [0m[38;5;245m(64µs)[0m
+an unreadable balance leaves the ledger quantity in place ... [0m[32mok[0m [0m[38;5;245m(60µs)[0m
+an unpriced position is never declared worthless ... [0m[32mok[0m [0m[38;5;245m(44µs)[0m
+one balance cannot be claimed twice by two positions on the same asset ... [0m[32mok[0m [0m[38;5;245m(126µs)[0m
+manual exit proceeds are marked at price less one taker fee ... [0m[32mok[0m [0m[38;5;245m(142µs)[0m
+[0m[38;5;245mrunning 5 tests from ./supabase/functions/_shared/spot-market.test.ts[0m
+spot market validation binds each exchange to its canonical symbol format ... [0m[32mok[0m [0m[38;5;245m(591µs)[0m
+one malformed market cannot reject healthy reads in the same monitor batch ... [0m[32mok[0m [0m[38;5;245m(546µs)[0m
+one quote failure is isolated while sibling quote results survive ... [0m[32mok[0m [0m[38;5;245m(155µs)[0m
+autotrader monitor wires position quotes through the isolation helper ... [0m[32mok[0m [0m[38;5;245m(9ms)[0m
+route constraints protect producer tables without blocking dirty-history deployment ... [0m[32mok[0m [0m[38;5;245m(342µs)[0m
+[0m[38;5;245mrunning 2 tests from ./backtest/calibration.test.ts[0m
+calibration builds smoothed score buckets and serializable runtime profile ... [0m[32mok[0m [0m[38;5;245m(3ms)[0m
+calibration creates stable market and horizon segments with recency weighting ... [0m[32mok[0m [0m[38;5;245m(866µs)[0m
+[0m[38;5;245mrunning 2 tests from ./backtest/metrics.test.ts[0m
+metrics use capital return and report a finite confidence interval ... [0m[32mok[0m [0m[38;5;245m(850µs)[0m
+accuracy metrics separate BUY, WAIT and rejected-signal quality ... [0m[32mok[0m [0m[38;5;245m(581µs)[0m
+[0m[38;5;245mrunning 8 tests from ./backtest/simulate.test.ts[0m
+closedUpTo excludes the still-open higher-timeframe candle ... [0m[32mok[0m [0m[38;5;245m(552µs)[0m
+fee calculation charges both entry and exit ... [0m[32mok[0m [0m[38;5;245m(94µs)[0m
+same-bar target and stop uses stop execution price ... [0m[32mok[0m [0m[38;5;245m(338µs)[0m
+a gap below the stop exits at the worse opening execution ... [0m[32mok[0m [0m[38;5;245m(86µs)[0m
+maxHoldBars is exact rather than inclusive plus one ... [0m[32mok[0m [0m[38;5;245m(148µs)[0m
+buy-and-hold uses the same requested window ... [0m[32mok[0m [0m[38;5;245m(191µs)[0m
+usable window waits for 120 completed daily candles ... [0m[32mok[0m [0m[38;5;245m(2s)[0m
+full market simulation runs both BUY and WAIT evaluators ... [0m[32mok[0m [0m[38;5;245m(9s)[0m
+
+[0m[1m[37m[41m ERRORS [0m
+
+generic LOB/scalp exits cannot preempt the futures state machine [0m[38;5;245m=> ./supabase/functions/market-autotrader/futures-lane.test.ts:177:6[0m
+[0m[1m[31merror[0m: Error: Assertion failed
+  if (!condition) throw new Error(message);
+[0m[31m                        ^[0m
+    at [0m[1m[3massert[0m ([0m[2m[38;5;245mfile:///home/runner/work/Trading-booooo/Trading-booooo/[0m[0m[36mtest-support/assert.ts[0m:[0m[33m55[0m:[0m[33m25[0m)
+    at [0m[2m[38;5;245mfile:///home/runner/work/Trading-booooo/Trading-booooo/[0m[0m[36msupabase/functions/market-autotrader/futures-lane.test.ts[0m:[0m[33m185[0m:[0m[33m3[0m
+
+generic LOB/scalp owners cannot terminate a Futures position [0m[38;5;245m=> ./supabase/functions/market-autotrader/futures-recovery-state-machine.test.ts:60:6[0m
+[0m[1m[31merror[0m: Error: Assertion failed
+  if (!condition) throw new Error(message);
+[0m[31m                        ^[0m
+    at [0m[1m[3massert[0m ([0m[2m[38;5;245mfile:///home/runner/work/Trading-booooo/Trading-booooo/[0m[0m[36mtest-support/assert.ts[0m:[0m[33m55[0m:[0m[33m25[0m)
+    at [0m[2m[38;5;245mfile:///home/runner/work/Trading-booooo/Trading-booooo/[0m[0m[36msupabase/functions/market-autotrader/futures-recovery-state-machine.test.ts[0m:[0m[33m68[0m:[0m[33m3[0m
+
+[0m[1m[37m[41m FAILURES [0m
+
+generic LOB/scalp exits cannot preempt the futures state machine [0m[38;5;245m=> ./supabase/functions/market-autotrader/futures-lane.test.ts:177:6[0m
+generic LOB/scalp owners cannot terminate a Futures position [0m[38;5;245m=> ./supabase/functions/market-autotrader/futures-recovery-state-machine.test.ts:60:6[0m
+
+[0m[31mFAILED[0m | 614 passed | 2 failed [0m[38;5;245m(15s)[0m
+
+[0m[1m[31merror[0m: Test failed
