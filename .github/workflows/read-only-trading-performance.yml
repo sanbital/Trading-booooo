@@ -1,0 +1,31 @@
+name: Read Only Trading Performance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/read-only-trading-performance.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Query production trading data read-only
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          export PGOPTIONS='-c default_transaction_read_only=on'
+          echo '=== POSITION_COLUMNS ==='
+          psql "$SUPABASE_DB_URL" -X -A -F $'\t' -v ON_ERROR_STOP=1 -c "select column_name,data_type from information_schema.columns where table_schema='public' and table_name='trading_positions' order by ordinal_position;"
+          echo '=== ORDER_COLUMNS ==='
+          psql "$SUPABASE_DB_URL" -X -A -F $'\t' -v ON_ERROR_STOP=1 -c "select column_name,data_type from information_schema.columns where table_schema='public' and table_name='trading_orders' order by ordinal_position;"
+          echo '=== POSITIONS_JSONL ==='
+          psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select to_jsonb(p)::text from public.trading_positions p where coalesce(p.closed_at,p.opened_at,p.created_at) >= timestamptz '2026-08-15 00:00:00+00' order by coalesce(p.closed_at,p.opened_at,p.created_at);"
+          echo '=== ORDERS_JSONL ==='
+          psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select to_jsonb(o)::text from public.trading_orders o where o.created_at >= timestamptz '2026-08-15 00:00:00+00' order by o.created_at;"
