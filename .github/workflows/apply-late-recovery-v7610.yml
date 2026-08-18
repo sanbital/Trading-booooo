@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/apply-late-recovery-v7610.yml"
       - "scripts/apply_late_recovery_v7610.py"
+      - "scripts/harden_late_recovery_v7610.py"
   workflow_dispatch:
 
 permissions:
@@ -16,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  patch-test-deploy-verify:
+  patch-test-commit:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -35,11 +36,7 @@ jobs:
         with:
           deno-version: v2.x
 
-      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
-        with:
-          version: 2.109.1
-
-      - name: Freeze new entries during rollout
+      - name: Freeze new entries during patch verification
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
@@ -52,11 +49,12 @@ jobs:
           psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
             "update public.trading_settings set pause_new_entries=true, updated_at=now() where id=1"
 
-      - name: Apply isolated late-recovery patch
+      - name: Apply isolated late-recovery patch and hardening
         run: |
           set -euo pipefail
           echo "ROLLOUT_STAGE=patch" >> "${GITHUB_ENV}"
           python3 scripts/apply_late_recovery_v7610.py 2>&1 | tee -a /tmp/late-recovery-rollout.log
+          python3 scripts/harden_late_recovery_v7610.py 2>&1 | tee -a /tmp/late-recovery-rollout.log
           deno fmt \
             supabase/functions/market-autotrader/index.ts \
             supabase/functions/market-autotrader/late-recovery-policy.ts \
@@ -69,7 +67,7 @@ jobs:
           echo "ROLLOUT_STAGE=isolation" >> "${GITHUB_ENV}"
           git diff --check 2>&1 | tee -a /tmp/late-recovery-rollout.log
           unexpected=$(git status --short | awk '{print $2}' | grep -Ev \
-            '^(supabase/functions/market-autotrader/index\.ts|supabase/functions/market-autotrader/late-recovery-policy\.ts|supabase/functions/market-autotrader/late-recovery-policy\.test\.ts)$' || true)
+            '^(supabase/functions/market-autotrader/index\.ts|supabase/functions/market-autotrader/late-recovery-policy\.ts|supabase/functions/market-autotrader/late-recovery-policy\.test\.ts|supabase/migrations/20260818120000_late_recovery_v7610_guard\.sql)$' || true)
           if [ -n "${unexpected}" ]; then
             echo "Unexpected modified files:" | tee -a /tmp/late-recovery-rollout.log
             echo "${unexpected}" | tee -a /tmp/late-recovery-rollout.log
@@ -82,9 +80,19 @@ jobs:
           grep -q 'LATE_RECOVERY_NET_POSITIVE_EXIT' supabase/functions/market-autotrader/index.ts
           grep -q 'LATE_RECOVERY_DRAWDOWN_33_EXIT' supabase/functions/market-autotrader/index.ts
           grep -q '7.6.10-LATE-RECOVERY-460-R33' supabase/functions/market-autotrader/index.ts
-          grep -q 'if ((lobMode || futuresLane) && heldSeconds >= absoluteMaxHoldingSeconds)' \
+          grep -q 'if (lobMode && !futuresLane && heldSeconds >= absoluteMaxHoldingSeconds)' \
             supabase/functions/market-autotrader/index.ts
-          grep -q 'POST180_MAX_HOLD_TIMEOUT' supabase/functions/market-autotrader/index.ts
+          if grep -q 'if ((lobMode || futuresLane) && heldSeconds >= absoluteMaxHoldingSeconds)' \
+            supabase/functions/market-autotrader/index.ts; then
+            echo "Futures ownership regression detected" | tee -a /tmp/late-recovery-rollout.log
+            exit 1
+          fi
+          grep -q 'prepareLateRecoveryProtectedExit' supabase/functions/market-autotrader/index.ts
+          grep -q 'LATE_RECOVERY_DRAWDOWN_33_FOK_NOT_FILLED' supabase/functions/market-autotrader/index.ts
+          grep -q 'LATE_RECOVERY_REQUIRES_LIMIT_FOK' \
+            supabase/migrations/20260818120000_late_recovery_v7610_guard.sql
+          grep -q 'LATE_RECOVERY_V7610_RESIDUAL_GUARD_SOURCE_DRIFT' \
+            supabase/migrations/20260818120000_late_recovery_v7610_guard.sql
           grep -q 'const VERSION = "7.6.0-BINANCE-FUTURES"' supabase/functions/market-autotrader/index.ts
           grep -q 'firstTakeProfitPct: 5' supabase/functions/market-autotrader/spot-exit-policy.ts
           grep -q 'firstStopLossPct: -4' supabase/functions/market-autotrader/spot-exit-policy.ts
@@ -92,11 +100,14 @@ jobs:
           grep -q 'firstStopLossRoePct: -12' supabase/functions/market-autotrader/futures-exit-policy.ts
           echo "isolation checks passed" | tee -a /tmp/late-recovery-rollout.log
 
-      - name: Targeted late-recovery tests
+      - name: Targeted late-recovery and ownership tests
         run: |
           set -euo pipefail
           echo "ROLLOUT_STAGE=targeted_test" >> "${GITHUB_ENV}"
-          deno test supabase/functions/market-autotrader/late-recovery-policy.test.ts \
+          deno test \
+            supabase/functions/market-autotrader/late-recovery-policy.test.ts \
+            supabase/functions/market-autotrader/futures-lane.test.ts \
+            supabase/functions/market-autotrader/futures-recovery-state-machine.test.ts \
             2>&1 | tee -a /tmp/late-recovery-rollout.log
 
       - name: Full repository verification
@@ -107,7 +118,7 @@ jobs:
           echo "ROLLOUT_STAGE=full_test" >> "${GITHUB_ENV}"
           deno task test 2>&1 | tee -a /tmp/late-recovery-rollout.log
 
-      - name: Commit canonical production source
+      - name: Commit canonical production source after tests
         run: |
           set -euo pipefail
           echo "ROLLOUT_STAGE=commit" >> "${GITHUB_ENV}"
@@ -116,65 +127,14 @@ jobs:
           git add \
             supabase/functions/market-autotrader/index.ts \
             supabase/functions/market-autotrader/late-recovery-policy.ts \
-            supabase/functions/market-autotrader/late-recovery-policy.test.ts
+            supabase/functions/market-autotrader/late-recovery-policy.test.ts \
+            supabase/migrations/20260818120000_late_recovery_v7610_guard.sql
           test -n "$(git diff --cached --name-only)"
-          git commit -m "feat: exit late recovery at breakeven or one-third reclaim" \
-            2>&1 | tee -a /tmp/late-recovery-rollout.log
+          git commit -m "feat: add protected late recovery exit" 2>&1 | tee -a /tmp/late-recovery-rollout.log
           git pull --rebase origin main 2>&1 | tee -a /tmp/late-recovery-rollout.log
           git push origin HEAD:main 2>&1 | tee -a /tmp/late-recovery-rollout.log
 
-      - name: Deploy patched autotrader
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-        run: |
-          set -euo pipefail
-          echo "ROLLOUT_STAGE=deploy" >> "${GITHUB_ENV}"
-          echo "ROLLOUT_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
-          supabase functions deploy market-autotrader \
-            --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api \
-            2>&1 | tee -a /tmp/late-recovery-rollout.log
-
-      - name: Verify production monitor, exit path and 600s ceiling
-        env:
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-        run: |
-          set -euo pipefail
-          echo "ROLLOUT_STAGE=production_verify" >> "${GITHUB_ENV}"
-          abs_limit=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
-            "select lob_absolute_max_holding_seconds from public.trading_settings where id=1")
-          test "${abs_limit}" = "600"
-          healthy=false
-          for attempt in $(seq 1 18); do
-            failed=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
-              select count(*) from public.trading_cycle_runs
-              where started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz and status='FAILED';")
-            latest=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
-              select coalesce(max(started_at)::text,'') from public.trading_cycle_runs
-              where kind='MONITOR' and started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz;")
-            stale=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
-              select count(*) from public.trading_positions
-              where state in ('OPEN','PARTIAL')
-                and extract(epoch from (now()-opened_at)) > 630;")
-            exit_errors=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
-              select count(*) from public.trading_events
-              where created_at >= '${ROLLOUT_STARTED_AT}'::timestamptz and code='EXIT_ERROR';")
-            stuck_exits=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
-              select count(*) from public.trading_positions
-              where state in ('EXITING','RECONCILING')
-                and coalesce(updated_at,opened_at) < now() - interval '2 minutes';")
-            echo "verify attempt=${attempt} failed=${failed} latest=${latest} stale=${stale} exit_errors=${exit_errors} stuck_exits=${stuck_exits}" \
-              | tee -a /tmp/late-recovery-rollout.log
-            if [ "${failed}" = "0" ] && [ -n "${latest}" ] && [ "${stale}" = "0" ] && \
-               [ "${exit_errors}" = "0" ] && [ "${stuck_exits}" = "0" ]; then
-              healthy=true
-              break
-            fi
-            sleep 5
-          done
-          test "${healthy}" = "true"
-
-      - name: Restore entry state after successful rollout
+      - name: Restore entry state after successful verification
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
@@ -213,7 +173,7 @@ jobs:
             echo "--- git status ---"
             git status --short || true
             echo "--- rollout log tail ---"
-            tail -n 240 /tmp/late-recovery-rollout.log 2>/dev/null || true
+            tail -n 260 /tmp/late-recovery-rollout.log 2>/dev/null || true
           } > .github/late-recovery-last-failure.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -221,4 +181,4 @@ jobs:
           git commit -m "chore: record late recovery rollout failure" || true
           git pull --rebase origin main || true
           git push origin HEAD:main || true
-          echo "Rollout failed; entry state restored and diagnostics persisted."
+          echo "Rollout verification failed; production function was not deployed by this workflow."
