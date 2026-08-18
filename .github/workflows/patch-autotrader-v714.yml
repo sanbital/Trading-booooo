@@ -1,4 +1,4 @@
-name: Validate autotrader v7.3.0 executable-stop policy
+name: Validate autotrader executable-stop policy
 
 on:
   push:
@@ -28,7 +28,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: validate-autotrader-v730-${{ github.ref }}
+  group: validate-autotrader-executable-stop-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -46,12 +46,10 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Validate, format, type-check and test immutable v7.3.0 policy
+      - name: Validate executable-stop and recovery invariants
         run: |
-          # The invariant is that the three runtimes agree, not that they sit on one
-          # particular release. Pinning the literal turned every version bump into a
-          # failing gate, so the engine is the source of truth and the other two are
-          # checked against it.
+          set -euo pipefail
+          # Runtime version parity is an invariant; no historical release literal is pinned.
           engine_version="$(sed -n 's/.*ENGINE_VERSION = "\([^"]*\)".*/\1/p' \
             supabase/functions/market-scanner/engine.ts)"
           test -n "$engine_version"
@@ -61,18 +59,28 @@ jobs:
           grep -q 'time_in_force: "FOK"' supabase/functions/market-autotrader/index.ts
           grep -q 'expectedNetProfitQuote > 0' \
             supabase/functions/market-autotrader/executable-exit.ts
-          # The order-time re-quote must restate the approval the guard reads, or every
-          # profitable post-180 exit is rejected and the position leaves only at a loss.
+
+          # The order-time re-quote must preserve the policy's semantic approval reason.
+          # POSITIVE_NET_AFTER_180S is now only the legacy/default spot reason; Futures
+          # RECOVERY carries FUTURES_RECOVERY_NET_POSITIVE_EXIT through priorApprovedReason.
           grep -q 'orderTimeExitPolicyQuote' \
             supabase/functions/market-autotrader/index.ts
-          grep -q 'approved_reason: "POSITIVE_NET_AFTER_180S"' \
+          grep -q 'priorApprovedReason || "POSITIVE_NET_AFTER_180S"' \
             supabase/functions/market-autotrader/executable-exit.ts
+          grep -q 'FUTURES_RECOVERY_NET_POSITIVE_EXIT' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'FUTURES_STALE_GIVEBACK_EXIT_180M' \
+            supabase/functions/market-autotrader/index.ts
           grep -q 'ENGINE_VERSION_MISMATCH' gateway/server.mjs
+
           deno fmt --check \
             supabase/functions/market-autotrader/index.ts \
             supabase/functions/market-autotrader/executable-exit.ts \
             supabase/functions/market-autotrader/entry-integrity.ts \
             supabase/functions/market-autotrader/heartbeat.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.ts \
+            supabase/functions/market-autotrader/futures-exit-policy.test.ts \
+            supabase/functions/market-autotrader/futures-recovery-state-machine.test.ts \
             supabase/functions/market-scanner/engine.ts \
             supabase/functions/_shared/lob/entry.ts \
             gateway/server.mjs
@@ -81,4 +89,6 @@ jobs:
             supabase/functions/market-autotrader/executable-exit.test.ts \
             supabase/functions/market-autotrader/entry-integrity.test.ts \
             supabase/functions/market-autotrader/heartbeat.test.ts
+          deno test --allow-read \
+            supabase/functions/market-autotrader/futures-recovery-state-machine.test.ts
           git diff --exit-code
