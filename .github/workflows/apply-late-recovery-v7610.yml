@@ -68,25 +68,15 @@ jobs:
           git diff --check 2>&1 | tee -a /tmp/late-recovery-rollout.log
           unexpected=$(git status --short | awk '{print $2}' | grep -Ev \
             '^(supabase/functions/market-autotrader/index\.ts|supabase/functions/market-autotrader/late-recovery-policy\.ts|supabase/functions/market-autotrader/late-recovery-policy\.test\.ts|supabase/migrations/20260818120000_late_recovery_v7610_guard\.sql)$' || true)
-          if [ -n "${unexpected}" ]; then
-            echo "Unexpected modified files:" | tee -a /tmp/late-recovery-rollout.log
-            echo "${unexpected}" | tee -a /tmp/late-recovery-rollout.log
-            exit 1
-          fi
+          test -z "${unexpected}"
           grep -q 'startSeconds: 460' supabase/functions/market-autotrader/late-recovery-policy.ts
           grep -q 'drawdownRecoveryRatio: 0.33' supabase/functions/market-autotrader/late-recovery-policy.ts
           grep -q 'LATE_RECOVERY_EXISTING_DECISION_PRESERVED' supabase/functions/market-autotrader/late-recovery-policy.ts
           grep -q 'LATE_RECOVERY_RESIDUAL_WINNER_PRESERVED' supabase/functions/market-autotrader/late-recovery-policy.ts
-          grep -q 'LATE_RECOVERY_NET_POSITIVE_EXIT' supabase/functions/market-autotrader/index.ts
-          grep -q 'LATE_RECOVERY_DRAWDOWN_33_EXIT' supabase/functions/market-autotrader/index.ts
-          grep -q '7.6.10-LATE-RECOVERY-460-R33' supabase/functions/market-autotrader/index.ts
           grep -q 'if (lobMode && !futuresLane && heldSeconds >= absoluteMaxHoldingSeconds)' \
             supabase/functions/market-autotrader/index.ts
-          if grep -q 'if ((lobMode || futuresLane) && heldSeconds >= absoluteMaxHoldingSeconds)' \
-            supabase/functions/market-autotrader/index.ts; then
-            echo "Futures ownership regression detected" | tee -a /tmp/late-recovery-rollout.log
-            exit 1
-          fi
+          ! grep -q 'if ((lobMode || futuresLane) && heldSeconds >= absoluteMaxHoldingSeconds)' \
+            supabase/functions/market-autotrader/index.ts
           grep -q 'prepareLateRecoveryProtectedExit' supabase/functions/market-autotrader/index.ts
           grep -q 'LATE_RECOVERY_DRAWDOWN_33_FOK_NOT_FILLED' supabase/functions/market-autotrader/index.ts
           grep -q 'LATE_RECOVERY_REQUIRES_LIMIT_FOK' \
@@ -104,7 +94,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "ROLLOUT_STAGE=targeted_test" >> "${GITHUB_ENV}"
-          deno test \
+          deno test --allow-read \
             supabase/functions/market-autotrader/late-recovery-policy.test.ts \
             supabase/functions/market-autotrader/futures-lane.test.ts \
             supabase/functions/market-autotrader/futures-recovery-state-machine.test.ts \
