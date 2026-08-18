@@ -24,6 +24,9 @@ const PROTECTED_MIGRATION = await Deno.readTextFile(
 const RECOVERY_MIGRATION = await Deno.readTextFile(
   new URL("supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql", ROOT),
 );
+const STATE_MACHINE_MIGRATION = await Deno.readTextFile(
+  new URL("supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql", ROOT),
+);
 
 Deno.test("binance_futures routes like a USDT venue", () => {
   assert(isBinanceFutures("binance_futures"));
@@ -34,13 +37,10 @@ Deno.test("binance_futures routes like a USDT venue", () => {
 
   const route = validateSpotMarket("binance_futures", "BTCUSDT");
   assertEquals(route.ok, true);
-  // The perpetual venue does not accept Upbit-shaped markets.
   assertEquals(validateSpotMarket("binance_futures", "KRW-BTC").ok, false);
 });
 
 Deno.test("every per-exchange loop walks all three venues", () => {
-  // A loop that still hardcodes the two spot venues would silently never monitor,
-  // reconcile or report a futures position.
   assertEquals(ENGINE.match(/\["upbit", "binance"\] as Exchange\[\]/g), null);
   assert(
     ENGINE.includes(
@@ -64,7 +64,6 @@ Deno.test("entry sizing commits margin and the exchange sees margin x leverage",
   assert(
     ENGINE.includes("const notionalQuote = floorToStep(marginQuote * leverage, limits.quoteStep)"),
   );
-  // Leverage must be applied to the symbol before an opening order exists.
   assert(ENGINE.includes('leverage: exchange === "binance_futures" ? leverage : undefined'));
   assert(ENGINE.includes('requestedCapital: exchange === "binance_futures"'));
   assert(ENGINE.includes("notionalPerCapital: leverage"));
@@ -108,15 +107,12 @@ Deno.test("spot minimum settings cannot change the futures margin floor", () => 
 });
 
 Deno.test("the exit thresholds are stated on the position's own leverage", () => {
-  // Reading it back from settings would close a running position at a leverage it was
-  // never opened with.
   assert(ENGINE.includes("const positionLeverageValue = positionLeverage(position)"));
   assert(ENGINE.includes("leverage: positionLeverageValue"));
   assert(ENGINE.includes("futuresSplitExitDecision({"));
   assert(ENGINE.includes("peakGrossReturnPct,"));
   assert(!ENGINE.includes("futuresRecoveryLatched({"));
-  // A global strategy change must never send an already-open futures position through
-  // the spot exit branch or make it depend on a spot minute-entry read.
+  assert(ENGINE.includes("futuresRecoveryState({"));
   assert(ENGINE.includes("if ((lobMode || futuresLane) && !settings.emergency_liquidation)"));
   assert(ENGINE.includes('source: "FUTURES_EXIT_POLICY_NOT_APPLICABLE"'));
 });
@@ -156,11 +152,39 @@ Deno.test("margin accounting keeps each open position's stamped leverage", () =>
   assert(ENGINE.includes('const capitalBaseQuote = exchange === "binance_futures"'));
 });
 
-Deno.test("futures residual state uses peak-aware protected trailing", () => {
+Deno.test("futures residual state is T1-derived and uses peak-aware protected trailing", () => {
   assert(ENGINE.includes('decision.reason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"'));
   assert(ENGINE.includes("peakGrossReturnPct,"));
-  assert(ENGINE.includes("recoveryLatchedNow = false"));
-  assert(ENGINE.includes("recoveryMode = false"));
+  assert(ENGINE.includes("futuresRecoveryState({"));
+  assert(ENGINE.includes("alreadyLatched: recoveryMode"));
+  assert(ENGINE.includes("recoveryMode = recoveryState.enabled"));
+  assert(!ENGINE.includes("recoveryMode = false"));
+  assert(STATE_MACHINE_MIGRATION.includes("coalesce(new.t1_completed, false)"));
+  assert(!STATE_MACHINE_MIGRATION.includes("new.t1_completed := v_residual_stage"));
+});
+
+Deno.test("futures 3m recovery state survives DB position enforcement", () => {
+  assert(ENGINE.includes('trigger_reason: "FUTURES_3M_NET_NONPOSITIVE"'));
+  assert(ENGINE.includes('exit_rule: "FULL_POSITION_EXECUTABLE_NET_PNL_GT_0"'));
+  assert(STATE_MACHINE_MIGRATION.includes("recovery_latch_after_seconds"));
+  assert(STATE_MACHINE_MIGRATION.includes("FUTURES_RECOVERY_NET_POSITIVE_EXIT"));
+  assert(STATE_MACHINE_MIGRATION.includes("FUTURES_RECOVERY_TOO_EARLY"));
+  assert(STATE_MACHINE_MIGRATION.includes("FUTURES_RECOVERY_NOT_LATCHED"));
+  assert(STATE_MACHINE_MIGRATION.includes("FUTURES_RECOVERY_REQUIRES_POSITIVE_NET"));
+  assert(!STATE_MACHINE_MIGRATION.includes("- 'recovery_exit'"));
+});
+
+Deno.test("generic LOB/scalp exits cannot preempt the futures state machine", () => {
+  assert(
+    ENGINE.includes(
+      "lobMode && !futuresLane && !settings.emergency_liquidation && heldSeconds >= 180",
+    ),
+  );
+  assert(ENGINE.includes('lobMode && !futuresLane && decision.action === "NONE"'));
+  assert(ENGINE.includes('scalpMode && !futuresLane && decision.action === "NONE"'));
+  assert(
+    ENGINE.includes("if (lobMode && !futuresLane && heldSeconds >= absoluteMaxHoldingSeconds)"),
+  );
 });
 
 Deno.test("every futures exit reason is authorized end to end", () => {
@@ -175,14 +199,14 @@ Deno.test("every futures exit reason is authorized end to end", () => {
   assert(PROTECTED_MIGRATION.includes("FUTURES_PROTECTED_TRAIL_NOT_REACHED"));
   assert(PROTECTED_MIGRATION.includes("v_protect_roe_pct := greatest(9, v_peak_roe_pct - 4.5)"));
   assert(PROTECTED_MIGRATION.includes("FUTURES_FIRST_TRANCHE_THRESHOLD_NOT_REACHED"));
-  assert(RECOVERY_MIGRATION.includes("FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M"));
-  assert(RECOVERY_MIGRATION.includes("STALE_RECOVERY_REQUIRES_POSITIVE_NET"));
-  assert(RECOVERY_MIGRATION.includes("pending_exit_reason"));
-  assert(RECOVERY_MIGRATION.includes("executable_net_allowed"));
-  assert(RECOVERY_MIGRATION.includes("'{exit_policy_quote,allowed}'"));
+  assert(STATE_MACHINE_MIGRATION.includes("FUTURES_RECOVERY_NET_POSITIVE_EXIT"));
+  assert(STATE_MACHINE_MIGRATION.includes("FUTURES_STALE_GIVEBACK_EXIT_180M"));
+  assert(STATE_MACHINE_MIGRATION.includes("FUTURES_RECOVERY_REQUIRES_POSITIVE_NET"));
+  assert(STATE_MACHINE_MIGRATION.includes("pending_exit_reason"));
+  assert(STATE_MACHINE_MIGRATION.includes("executable_net_allowed"));
 });
 
-Deno.test("the spot lane uses the approved protected trailing thresholds", () => {
+Deno.test("the spot lane keeps its existing protected trailing and stale recovery", () => {
   assert(ENGINE.includes("spotSplitExitDecision({"));
   assert(ENGINE.includes('decision.reason === "RESIDUAL_PROTECTED_TRAIL_EXIT"'));
   assert(PROTECTED_MIGRATION.includes("v_protect_pct := greatest(3, v_peak_return_pct - 1.5)"));
@@ -198,7 +222,6 @@ Deno.test("the gateway can close a futures long and can never open a short", () 
   assert(
     GATEWAY.includes('throw new Error("Binance futures market orders are restricted to sells")'),
   );
-  // No wallet movement routes were added with the futures venue.
   assert(!GATEWAY.includes("/sapi/v1/futures/transfer"));
   assert(!GATEWAY.includes("/sapi/v1/capital/withdraw"));
 });
@@ -217,9 +240,9 @@ Deno.test("engine full-liquidation reasons release the protected half", () => {
   assert(ENGINE.includes('decisionReason === "FUTURES_HALF_STOP_LOSS_ROE_12"'));
   assert(ENGINE.includes('decisionReason === "RESIDUAL_PROTECTED_TRAIL_EXIT"'));
   assert(ENGINE.includes('decisionReason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"'));
-  assert(ENGINE.includes('decisionReason === "STALE_RECOVERY_NET_POSITIVE_EXIT_180M"'));
-  assert(ENGINE.includes('decisionReason === "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M"'));
+  assert(ENGINE.includes('decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT"'));
+  assert(ENGINE.includes('decisionReason === "FUTURES_STALE_GIVEBACK_EXIT_180M"'));
   assert(ENGINE.includes('action === "EMERGENCY"'));
   assert(ENGINE.includes("const protectedHoldQuantity = fullLiquidationExit"));
-  assert(RECOVERY_MIGRATION.includes("upper(coalesce(new.purpose, '')) = 'EMERGENCY'"));
+  assert(STATE_MACHINE_MIGRATION.includes("upper(coalesce(new.purpose, '')) = 'EMERGENCY'"));
 });

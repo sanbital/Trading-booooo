@@ -5,6 +5,7 @@ import {
   FUTURES_SPLIT_EXIT_THRESHOLDS,
   futuresEntryMinimums,
   futuresPriceReturnPctForRoe,
+  futuresRecoveryState,
   futuresRoePct,
   futuresSplitExitDecision,
   normalizeFuturesLeverage,
@@ -44,11 +45,85 @@ Deno.test("3x converts -4/+5 price return to -12/+15 ROE", () => {
   assertEquals(futuresPriceReturnPctForRoe(15, 3), 5);
 });
 
+Deno.test("futures recovery and stale-giveback clocks are intentionally separate", () => {
+  assertEquals(FUTURES_SPLIT_EXIT_THRESHOLDS.recoveryLatchAfterSeconds, 180);
+  assertEquals(FUTURES_SPLIT_EXIT_THRESHOLDS.staleGivebackAfterSeconds, 10_800);
+});
+
 Deno.test("empirical stale-giveback boundary equals the observed EPIC loser lower bound", () => {
   assertEquals(FUTURES_SPLIT_EXIT_THRESHOLDS.staleGivebackMinPeakRoePct, 2.13815789473683);
 });
 
-Deno.test("futures takes 50% at +15% ROE", () => {
+Deno.test("RECOVERY does not latch before the 3-minute mission horizon", () => {
+  assertEquals(
+    futuresRecoveryState({
+      residualStage: false,
+      alreadyLatched: false,
+      heldSeconds: 179,
+      netReturnPct: -2,
+    }),
+    { enabled: false, newlyLatched: false },
+  );
+});
+
+Deno.test("RECOVERY permanently latches at 3 minutes when whole-position executable net is non-positive", () => {
+  assertEquals(
+    futuresRecoveryState({
+      residualStage: false,
+      alreadyLatched: false,
+      heldSeconds: 180,
+      netReturnPct: -0.01,
+    }),
+    { enabled: true, newlyLatched: true },
+  );
+  assertEquals(
+    futuresRecoveryState({
+      residualStage: false,
+      alreadyLatched: false,
+      heldSeconds: 180,
+      netReturnPct: 0,
+    }),
+    { enabled: true, newlyLatched: true },
+  );
+});
+
+Deno.test("positive whole-position executable net at 3 minutes stays NORMAL", () => {
+  assertEquals(
+    futuresRecoveryState({
+      residualStage: false,
+      alreadyLatched: false,
+      heldSeconds: 180,
+      netReturnPct: 0.01,
+    }),
+    { enabled: false, newlyLatched: false },
+  );
+});
+
+Deno.test("RECOVERY latch survives a later positive tick", () => {
+  assertEquals(
+    futuresRecoveryState({
+      residualStage: false,
+      alreadyLatched: true,
+      heldSeconds: 600,
+      netReturnPct: 2,
+    }),
+    { enabled: true, newlyLatched: false },
+  );
+});
+
+Deno.test("normal T1 residual is never demoted into RECOVERY", () => {
+  assertEquals(
+    futuresRecoveryState({
+      residualStage: true,
+      alreadyLatched: true,
+      heldSeconds: 20_000,
+      netReturnPct: -1,
+    }),
+    { enabled: false, newlyLatched: false },
+  );
+});
+
+Deno.test("NORMAL futures takes 50% at +15% ROE", () => {
   const d = decide({ grossReturnPct: 5, peakGrossReturnPct: 5 });
   assertEquals(d.action, "STOP");
   assertEquals(d.fraction, 0.5);
@@ -60,6 +135,87 @@ Deno.test("futures hard stop closes 100% at -12% ROE", () => {
   assertEquals(d.action, "STOP");
   assertEquals(d.fraction, 1);
   assertEquals(d.reason, "FUTURES_HALF_STOP_LOSS_ROE_12");
+});
+
+Deno.test("RECOVERY still respects the -12% ROE last-resort hard stop", () => {
+  const d = decide({
+    recoveryMode: true,
+    grossReturnPct: -4,
+    peakGrossReturnPct: 0,
+    netReturnPct: -4.1,
+  });
+  assertEquals(d.action, "STOP");
+  assertEquals(d.fraction, 1);
+  assertEquals(d.reason, "FUTURES_HALF_STOP_LOSS_ROE_12");
+});
+
+Deno.test("RECOVERY waits while executable whole-position net is not positive", () => {
+  const d = decide({
+    recoveryMode: true,
+    grossReturnPct: -0.1,
+    peakGrossReturnPct: 1,
+    netReturnPct: -0.2,
+    executableNetAllowed: false,
+    expectedNetProfitQuote: -0.01,
+  });
+  assertEquals(d.action, "NONE");
+  assertEquals(d.reason, "FUTURES_RECOVERY_AWAITING_NET_POSITIVE");
+});
+
+Deno.test("RECOVERY exits 100% on the first executable whole-position net profit", () => {
+  const d = decide({
+    recoveryMode: true,
+    grossReturnPct: 0.3,
+    peakGrossReturnPct: 1,
+    netReturnPct: 0.2,
+    executableNetAllowed: true,
+    expectedNetProfitQuote: 0.05,
+  });
+  assertEquals(d.action, "STOP");
+  assertEquals(d.fraction, 1);
+  assertEquals(d.reason, "FUTURES_RECOVERY_NET_POSITIVE_EXIT");
+});
+
+Deno.test("RECOVERY full exit takes precedence even if price jumps through +15% ROE", () => {
+  const d = decide({
+    recoveryMode: true,
+    grossReturnPct: 5.2,
+    peakGrossReturnPct: 5.2,
+    netReturnPct: 5.1,
+    executableNetAllowed: true,
+    expectedNetProfitQuote: 1,
+  });
+  assertEquals(d.action, "STOP");
+  assertEquals(d.fraction, 1);
+  assertEquals(d.reason, "FUTURES_RECOVERY_NET_POSITIVE_EXIT");
+});
+
+Deno.test("EPIC path: 3m failure latches RECOVERY and later executable breakeven exits whole", () => {
+  const entry = 0.3648;
+  const stateAt3m = futuresRecoveryState({
+    residualStage: false,
+    alreadyLatched: false,
+    heldSeconds: 180,
+    // EPIC was already below entry around the 3-minute mission horizon.
+    netReturnPct: -0.9,
+  });
+  assertEquals(stateAt3m, { enabled: true, newlyLatched: true });
+
+  // Later live executable quote recorded by the bot was about 0.36622697, above the
+  // fee-adjusted breakeven. Under the intended state machine this is the exit tick.
+  const executablePrice = 0.366226969844358;
+  const d = decide({
+    heldSeconds: 15_000,
+    recoveryMode: stateAt3m.enabled,
+    grossReturnPct: (executablePrice / entry - 1) * 100,
+    peakGrossReturnPct: (0.3674 / entry - 1) * 100,
+    netReturnPct: (executablePrice * 0.9995 / (entry * 1.0005) - 1) * 100,
+    executableNetAllowed: true,
+    expectedNetProfitQuote: 0.4,
+  });
+  assertEquals(d.action, "STOP");
+  assertEquals(d.fraction, 1);
+  assertEquals(d.reason, "FUTURES_RECOVERY_NET_POSITIVE_EXIT");
 });
 
 Deno.test("futures residual at +15% ROE peak protects at +10.5% ROE", () => {
@@ -86,98 +242,53 @@ Deno.test("futures residual protection floor is never below +9% ROE", () => {
   assertEquals(d.action, "STOP");
 });
 
-Deno.test("futures 180m recovery exits 100% only on executable positive net for low-progress stale trades", () => {
-  const before = decide({
-    heldSeconds: 10_799,
-    grossReturnPct: 0.5,
-    peakGrossReturnPct: 0.5,
-    netReturnPct: 0.4,
-    executableNetAllowed: true,
-    expectedNetProfitQuote: 0.2,
-  });
-  assertEquals(before.action, "NONE");
-
-  const exit = decide({
-    heldSeconds: 10_800,
-    grossReturnPct: 0.5,
-    peakGrossReturnPct: 0.5,
-    netReturnPct: 0.4,
-    executableNetAllowed: true,
-    expectedNetProfitQuote: 0.2,
-  });
-  assertEquals(exit.action, "STOP");
-  assertEquals(exit.fraction, 1);
-  assertEquals(exit.reason, "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M");
-
-  const blocked = decide({
-    heldSeconds: 10_800,
-    grossReturnPct: -0.5,
-    peakGrossReturnPct: 0.2,
-    netReturnPct: -0.6,
-    executableNetAllowed: false,
-    expectedNetProfitQuote: -0.01,
-  });
-  assertEquals(blocked.action, "NONE");
-  assertEquals(blocked.reason, "FUTURES_STALE_RECOVERY_AWAITING_POSITIVE_NET_180M");
-});
-
-Deno.test("EPIC live sample is cut at 180m after empirical peak giveback instead of waiting for -12% ROE", () => {
+Deno.test("EPIC stale-giveback class remains independently defended at 180m in NORMAL state", () => {
   const d = decide({
     heldSeconds: 10_800,
     leverage: 3,
-    // EPIC: entry 0.3648, 180m price ~0.3611 => about -1.014% gross price return.
     grossReturnPct: (0.3611 / 0.3648 - 1) * 100,
-    // Exact observed peak: 0.3674 / 0.3648 - 1 = +0.712719...% raw = +2.138157...% ROE.
     peakGrossReturnPct: (0.3674 / 0.3648 - 1) * 100,
     netReturnPct: (0.3611 * 0.9995 / (0.3648 * 1.0005) - 1) * 100,
-    executableNetAllowed: false,
-    expectedNetProfitQuote: -1,
   });
   assertEquals(d.action, "STOP");
   assertEquals(d.fraction, 1);
-  assertEquals(d.reason, "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT");
+  assertEquals(d.reason, "FUTURES_STALE_GIVEBACK_EXIT_180M");
 });
 
-Deno.test("CVX live sample is also cut after 180m giveback", () => {
+Deno.test("CVX live stale loser class is also cut after 180m giveback", () => {
   const d = decide({
     heldSeconds: 10_800,
     leverage: 3,
     grossReturnPct: (1.7250 / 1.7252597701149426 - 1) * 100,
     peakGrossReturnPct: (1.7467632183908046 / 1.7252597701149426 - 1) * 100,
     netReturnPct: (1.7250 * 0.9995 / (1.7252597701149426 * 1.0005) - 1) * 100,
-    executableNetAllowed: false,
-    expectedNetProfitQuote: -0.01,
   });
   assertEquals(d.action, "STOP");
-  assertEquals(d.reason, "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT");
+  assertEquals(d.reason, "FUTURES_STALE_GIVEBACK_EXIT_180M");
 });
 
-Deno.test("OPEN live winner remains in recovery because its observed peak never entered the stale-loser class", () => {
+Deno.test("OPEN live sample is not in the empirical stale-loser peak class", () => {
   const d = decide({
     heldSeconds: 10_800,
     leverage: 3,
     grossReturnPct: (0.2111 / 0.2133 - 1) * 100,
     peakGrossReturnPct: (0.2139 / 0.2133 - 1) * 100,
     netReturnPct: (0.2111 * 0.9995 / (0.2133 * 1.0005) - 1) * 100,
-    executableNetAllowed: false,
-    expectedNetProfitQuote: -0.01,
   });
   assertEquals(d.action, "NONE");
-  assertEquals(d.reason, "FUTURES_STALE_RECOVERY_AWAITING_POSITIVE_NET_180M");
+  assertEquals(d.reason, "FUTURES_HALF_AWAITING_ROE_15_OR_ROE_MINUS_12");
 });
 
-Deno.test("EDEN live winner remains in recovery because its observed peak never entered the stale-loser class", () => {
+Deno.test("EDEN live sample is not in the empirical stale-loser peak class", () => {
   const d = decide({
     heldSeconds: 10_800,
     leverage: 3,
     grossReturnPct: (0.04856 / 0.04885186054089279 - 1) * 100,
     peakGrossReturnPct: (0.04896297816878462 / 0.04885186054089279 - 1) * 100,
     netReturnPct: (0.04856 * 0.9995 / (0.04885186054089279 * 1.0005) - 1) * 100,
-    executableNetAllowed: false,
-    expectedNetProfitQuote: -0.01,
   });
   assertEquals(d.action, "NONE");
-  assertEquals(d.reason, "FUTURES_STALE_RECOVERY_AWAITING_POSITIVE_NET_180M");
+  assertEquals(d.reason, "FUTURES_HALF_AWAITING_ROE_15_OR_ROE_MINUS_12");
 });
 
 Deno.test("empirical stale-giveback guard does not fire before 180m", () => {
@@ -192,7 +303,7 @@ Deno.test("empirical stale-giveback guard does not fire before 180m", () => {
   assertEquals(d.reason, "FUTURES_HALF_AWAITING_ROE_15_OR_ROE_MINUS_12");
 });
 
-Deno.test("futures +15% ROE target keeps precedence after 180m", () => {
+Deno.test("NORMAL +15% ROE target keeps precedence after 180m", () => {
   const d = decide({
     heldSeconds: 20_000,
     grossReturnPct: 5,
@@ -205,7 +316,7 @@ Deno.test("futures +15% ROE target keeps precedence after 180m", () => {
   assertEquals(d.reason, "FUTURES_HALF_TAKE_PROFIT_ROE_15");
 });
 
-Deno.test("futures pre-T1 earned profit floor closes 100%", () => {
+Deno.test("futures pre-T1 earned profit floor closes 100% in NORMAL state", () => {
   const d = decide({
     grossReturnPct: 2.5,
     peakGrossReturnPct: 3,
@@ -217,7 +328,7 @@ Deno.test("futures pre-T1 earned profit floor closes 100%", () => {
   assertEquals(d.reason, "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT");
 });
 
-Deno.test("futures +15% ROE target keeps precedence over pre-T1 protection", () => {
+Deno.test("NORMAL +15% ROE target keeps precedence over pre-T1 protection", () => {
   const d = decide({
     grossReturnPct: 5.1,
     peakGrossReturnPct: 5.1,

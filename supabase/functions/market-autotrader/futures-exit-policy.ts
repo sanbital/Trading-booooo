@@ -1,26 +1,27 @@
 // Trading-booooo — Binance USDⓈ-M futures split-exit policy.
 //
 // The entry side of the futures lane is deliberately identical to spot: same scanner,
-// same LOB admission, same long-only direction. Only the SELL side changes, and it
-// changes because a leveraged position measures its return on the margin it posted, not
-// on the notional it controls.
+// same LOB admission, same long-only direction. The futures SELL side is expressed in
+// return on margin (ROE) so leverage changes do not silently change account risk.
 //
 // Operator specification:
 //
 //   1. Default leverage is 3x.
-//   2. Measured on margin (ROE, i.e. leverage-applied return):
-//        -12% -> hard stop 100%
-//        +15% -> take profit on 50%
-//   3. Remaining 50% after TP: protect at max(+9% ROE, peak ROE - 4.5pp).
-//   4. If the +15% ROE first TP has not happened within 180 minutes:
-//        - if the position previously reached the empirically observed stale-loser peak
-//          boundary and has given the move back to non-positive executable net ROE,
-//          exit 100% through the already-authorized pre-T1 profit-protection path;
-//        - otherwise retain recovery mode and exit 100% on the first fees/slippage-adjusted
-//          executable net profit > 0.
+//   2. First-tranche NORMAL state:
+//        -12% ROE -> hard stop 100% (last-resort loss cap)
+//        +15% ROE -> take profit on 50%
+//   3. Mission horizon is 180 seconds. If the first tranche has not completed and the
+//      WHOLE position is still non-positive on a fees/slippage-adjusted executable basis
+//      at the first observation at/after 180s, permanently latch RECOVERY.
+//   4. RECOVERY ignores the +15% half take-profit. It exits 100% at the first genuinely
+//      executable net profit > 0. If that never arrives, the -12% ROE hard stop remains.
+//   5. Remaining 50% after a NORMAL +15% take-profit is a winner and is allowed to run;
+//      protect it at max(+9% ROE, peak ROE - 4.5pp).
+//   6. A separate 180-minute empirical giveback guard remains for NORMAL first-tranche
+//      positions. It is tail-loss defense, not the RECOVERY activation clock.
 //
-// At 3x the first TP/stop are +5%/-4% price moves. The policy is written in ROE so changing
-// leverage preserves the margin-risk thresholds rather than silently changing account risk.
+// At 3x the first TP/stop are +5%/-4% price moves. The 180-second RECOVERY latch is based
+// on executable net economics, not a mark-price approximation.
 
 export const DEFAULT_FUTURES_LEVERAGE = 3;
 export const MIN_FUTURES_LEVERAGE = 1;
@@ -41,8 +42,10 @@ export const FUTURES_SPLIT_EXIT_THRESHOLDS = {
   firstTakeProfitFraction: 0.5,
   /** Fraction closed at the hard stop. */
   hardStopFraction: 1,
-  /** First-tranche stale handling starts after three hours without the +15% ROE TP. */
-  staleRecoveryAfterSeconds: 180 * 60,
+  /** Entry mission horizon: failed/non-positive first tranche becomes RECOVERY after 3m. */
+  recoveryLatchAfterSeconds: 180,
+  /** Independent empirical tail-defense clock for NORMAL first-tranche positions. */
+  staleGivebackAfterSeconds: 180 * 60,
   /**
    * Empirical lower bound of the peak ROE among 180m+ losing LIVE futures trades in the
    * 2026-08-11..17 sample. EPIC peaked at 2.13815789473683% ROE and CVX at
@@ -59,19 +62,16 @@ export type FuturesSplitExitReason =
   | "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT"
   | "FUTURES_HALF_AWAITING_ROE_15_OR_ROE_MINUS_12"
   | "FUTURES_HALF_THRESHOLD_OVERRIDES_NON_PRICE_SAFETY_EXIT"
+  | "FUTURES_RECOVERY_NET_POSITIVE_EXIT"
+  | "FUTURES_RECOVERY_AWAITING_NET_POSITIVE"
   | "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"
   | "FUTURES_RESIDUAL_PROTECTED_TRAIL_ACTIVE"
-  | "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M"
-  | "FUTURES_STALE_RECOVERY_AWAITING_POSITIVE_NET_180M";
+  | "FUTURES_STALE_GIVEBACK_EXIT_180M";
 
 export type FuturesSplitExitInput = {
-  /** True once the tradable first half has been sold and only the residual is left. */
+  /** True once the normal +15% first-tranche sale has left only the winning residual. */
   residualStage: boolean;
-  /**
-   * True once the residual has been observed at a negative return. It is latched by the
-   * engine and never cleared, so "계속 음의 수익률이었으면" is answered by the position's
-   * own history rather than by the current tick.
-   */
+  /** Permanently latched failed-mission state for a pre-T1 whole position. */
   recoveryMode: boolean;
   /** Configured leverage for this position. */
   leverage: number;
@@ -79,17 +79,13 @@ export type FuturesSplitExitInput = {
   grossReturnPct: number;
   /** Highest observed gross price return since entry, in %. */
   peakGrossReturnPct: number;
-  /** The residual's return after both entry and exit fees, in %. */
+  /** Current executable return after entry/exit fees and slippage, in %. */
   netReturnPct: number;
-  /**
-   * Whether the whole remainder can actually be sold right now against visible bid depth
-   * at strictly positive net proceeds for the RESIDUAL leg (principal = remaining
-   * quantity valued at average entry, plus its share of the entry fee).
-   */
+  /** Whether the quantity owned by this state can genuinely be sold at positive net. */
   executableNetAllowed: boolean;
-  /** Expected net profit of that residual sale, in quote currency. */
+  /** Expected net profit of that executable sale, in quote currency. */
   expectedNetProfitQuote: number;
-  /** Position age used only for the first-tranche 180-minute stale rules. */
+  /** Position age. RECOVERY latching is done separately; this is for 180m giveback only. */
   heldSeconds: number;
   /** True only when the engine has an earned above-entry protected stop and price hit it. */
   preT1ProfitProtectionHit?: boolean;
@@ -103,13 +99,18 @@ export type FuturesSplitExitDecision = {
   reason: FuturesSplitExitReason;
   /** Leverage-applied gross return, for the audit record. */
   roePct: number;
-  /** Leverage-applied return after the sell fee. */
+  /** Leverage-applied return after executable costs. */
   netRoePct: number;
   /** Highest observed leverage-applied gross return. */
   peakRoePct: number;
   /** Active residual protection threshold when in residual stage. */
   residualProtectRoePct: number | null;
   leverage: number;
+};
+
+export type FuturesRecoveryState = {
+  enabled: boolean;
+  newlyLatched: boolean;
 };
 
 function finite(value: unknown, fallback = 0): number {
@@ -163,6 +164,28 @@ export function futuresPriceReturnPctForRoe(roePct: number, leverage: number): n
   return finite(roePct) / normalizeFuturesLeverage(leverage);
 }
 
+/**
+ * Resolve the permanent pre-T1 RECOVERY latch from the position's own history.
+ *
+ * The latch is evaluated on the WHOLE position's executable net return. A position that is
+ * already in the winning residual stage is never converted to RECOVERY, because it earned
+ * T1 and should remain on protected trailing. Once RECOVERY is latched it cannot be cleared
+ * by a later positive tick; only closing the position ends it.
+ */
+export function futuresRecoveryState(input: {
+  residualStage: boolean;
+  alreadyLatched: boolean;
+  heldSeconds: number;
+  netReturnPct: number;
+}): FuturesRecoveryState {
+  if (input.residualStage) return { enabled: false, newlyLatched: false };
+  if (input.alreadyLatched) return { enabled: true, newlyLatched: false };
+  const newlyLatched =
+    finite(input.heldSeconds) >= FUTURES_SPLIT_EXIT_THRESHOLDS.recoveryLatchAfterSeconds &&
+    finite(input.netReturnPct) <= 0;
+  return { enabled: newlyLatched, newlyLatched };
+}
+
 export function futuresSplitExitDecision(
   input: FuturesSplitExitInput,
 ): FuturesSplitExitDecision {
@@ -180,6 +203,8 @@ export function futuresSplitExitDecision(
     : null;
   const base = { roePct, netRoePct, peakRoePct, residualProtectRoePct, leverage };
 
+  // A NORMAL position that already earned T1 is a winner: the residual has its own
+  // protected-trailing owner and must never be demoted into RECOVERY.
   if (input.residualStage) {
     if (roePct <= finite(residualProtectRoePct, thresholds.residualProfitFloorRoePct)) {
       return {
@@ -194,6 +219,37 @@ export function futuresSplitExitDecision(
       action: "NONE",
       fraction: 0,
       reason: "FUTURES_RESIDUAL_PROTECTED_TRAIL_ACTIVE",
+    };
+  }
+
+  // The hard stop is the final safety boundary in every pre-T1 state, including RECOVERY.
+  if (roePct <= thresholds.firstStopLossRoePct) {
+    return {
+      ...base,
+      action: "STOP",
+      fraction: thresholds.hardStopFraction,
+      reason: "FUTURES_HALF_STOP_LOSS_ROE_12",
+    };
+  }
+
+  // RECOVERY owns the whole position once the 3-minute mission failed. It intentionally
+  // takes precedence over the +15% half-TP: even a gap straight from negative to +15% is
+  // closed whole, because the position already changed mission from profit-running to
+  // capital recovery.
+  if (input.recoveryMode) {
+    if (input.executableNetAllowed && finite(input.expectedNetProfitQuote) > 0) {
+      return {
+        ...base,
+        action: "STOP",
+        fraction: 1,
+        reason: "FUTURES_RECOVERY_NET_POSITIVE_EXIT",
+      };
+    }
+    return {
+      ...base,
+      action: "NONE",
+      fraction: 0,
+      reason: "FUTURES_RECOVERY_AWAITING_NET_POSITIVE",
     };
   }
 
@@ -213,22 +269,11 @@ export function futuresSplitExitDecision(
       reason: "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT",
     };
   }
-  if (roePct <= thresholds.firstStopLossRoePct) {
-    return {
-      ...base,
-      action: "STOP",
-      fraction: thresholds.hardStopFraction,
-      reason: "FUTURES_HALF_STOP_LOSS_ROE_12",
-    };
-  }
-  if (finite(input.heldSeconds) >= thresholds.staleRecoveryAfterSeconds) {
-    // LIVE futures evidence shows a distinct stale giveback class: the 180m+ losers
-    // EPIC/CVX had first made at least +2.13815789473683% ROE, then surrendered the move.
-    // The 180m+ winners OPEN/EDEN never reached that peak boundary. Once a position in
-    // that observed loser class has also lost executable net breakeven, waiting for the
-    // legacy "eventually positive" recovery turns a small giveback into the exact tail
-    // loss this guard is intended to prevent. Reuse the existing pre-T1 protection exit
-    // authority so engine and database sell guards remain unchanged and already-audited.
+
+  // Independent 180m tail defense for NORMAL positions only. This is not RECOVERY and it
+  // does not exit every stale positive trade. It acts only on the empirically observed
+  // loser class after that class has surrendered executable breakeven.
+  if (finite(input.heldSeconds) >= thresholds.staleGivebackAfterSeconds) {
     if (
       peakRoePct >= thresholds.staleGivebackMinPeakRoePct &&
       netRoePct <= 0
@@ -237,23 +282,9 @@ export function futuresSplitExitDecision(
         ...base,
         action: "STOP",
         fraction: 1,
-        reason: "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT",
+        reason: "FUTURES_STALE_GIVEBACK_EXIT_180M",
       };
     }
-    if (input.executableNetAllowed && finite(input.expectedNetProfitQuote) > 0) {
-      return {
-        ...base,
-        action: "STOP",
-        fraction: 1,
-        reason: "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M",
-      };
-    }
-    return {
-      ...base,
-      action: "NONE",
-      fraction: 0,
-      reason: "FUTURES_STALE_RECOVERY_AWAITING_POSITIVE_NET_180M",
-    };
   }
   return {
     ...base,
@@ -270,6 +301,7 @@ export const FUTURES_EXIT_APPROVED_REASONS: readonly FuturesSplitExitReason[] = 
   "FUTURES_HALF_TAKE_PROFIT_ROE_15",
   "FUTURES_HALF_STOP_LOSS_ROE_12",
   "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT",
+  "FUTURES_RECOVERY_NET_POSITIVE_EXIT",
   "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT",
-  "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M",
+  "FUTURES_STALE_GIVEBACK_EXIT_180M",
 ];
