@@ -26,6 +26,11 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      - name: Initialize rollout diagnostics
+        run: |
+          : > /tmp/late-recovery-rollout.log
+          echo "ROLLOUT_STAGE=setup" >> "${GITHUB_ENV}"
+
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
@@ -39,6 +44,7 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           set -euo pipefail
+          echo "ROLLOUT_STAGE=freeze" >> "${GITHUB_ENV}"
           test -n "${SUPABASE_DB_URL}"
           previous_pause=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
             "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
@@ -49,21 +55,24 @@ jobs:
       - name: Apply isolated late-recovery patch
         run: |
           set -euo pipefail
-          python3 scripts/apply_late_recovery_v7610.py
+          echo "ROLLOUT_STAGE=patch" >> "${GITHUB_ENV}"
+          python3 scripts/apply_late_recovery_v7610.py 2>&1 | tee -a /tmp/late-recovery-rollout.log
           deno fmt \
             supabase/functions/market-autotrader/index.ts \
             supabase/functions/market-autotrader/late-recovery-policy.ts \
-            supabase/functions/market-autotrader/late-recovery-policy.test.ts
+            supabase/functions/market-autotrader/late-recovery-policy.test.ts \
+            2>&1 | tee -a /tmp/late-recovery-rollout.log
 
       - name: Prove patch isolation and decision ownership
         run: |
           set -euo pipefail
-          git diff --check
+          echo "ROLLOUT_STAGE=isolation" >> "${GITHUB_ENV}"
+          git diff --check 2>&1 | tee -a /tmp/late-recovery-rollout.log
           unexpected=$(git status --short | awk '{print $2}' | grep -Ev \
             '^(supabase/functions/market-autotrader/index\.ts|supabase/functions/market-autotrader/late-recovery-policy\.ts|supabase/functions/market-autotrader/late-recovery-policy\.test\.ts)$' || true)
           if [ -n "${unexpected}" ]; then
-            echo "Unexpected modified files:"
-            echo "${unexpected}"
+            echo "Unexpected modified files:" | tee -a /tmp/late-recovery-rollout.log
+            echo "${unexpected}" | tee -a /tmp/late-recovery-rollout.log
             exit 1
           fi
           grep -q 'startSeconds: 460' supabase/functions/market-autotrader/late-recovery-policy.ts
@@ -81,21 +90,27 @@ jobs:
           grep -q 'firstStopLossPct: -4' supabase/functions/market-autotrader/spot-exit-policy.ts
           grep -q 'firstTakeProfitRoePct: 15' supabase/functions/market-autotrader/futures-exit-policy.ts
           grep -q 'firstStopLossRoePct: -12' supabase/functions/market-autotrader/futures-exit-policy.ts
+          echo "isolation checks passed" | tee -a /tmp/late-recovery-rollout.log
 
       - name: Targeted late-recovery tests
         run: |
           set -euo pipefail
-          deno test supabase/functions/market-autotrader/late-recovery-policy.test.ts
+          echo "ROLLOUT_STAGE=targeted_test" >> "${GITHUB_ENV}"
+          deno test supabase/functions/market-autotrader/late-recovery-policy.test.ts \
+            2>&1 | tee -a /tmp/late-recovery-rollout.log
 
       - name: Full repository verification
         run: |
           set -euo pipefail
-          deno task check
-          deno task test
+          echo "ROLLOUT_STAGE=full_check" >> "${GITHUB_ENV}"
+          deno task check 2>&1 | tee -a /tmp/late-recovery-rollout.log
+          echo "ROLLOUT_STAGE=full_test" >> "${GITHUB_ENV}"
+          deno task test 2>&1 | tee -a /tmp/late-recovery-rollout.log
 
       - name: Commit canonical production source
         run: |
           set -euo pipefail
+          echo "ROLLOUT_STAGE=commit" >> "${GITHUB_ENV}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add \
@@ -103,9 +118,10 @@ jobs:
             supabase/functions/market-autotrader/late-recovery-policy.ts \
             supabase/functions/market-autotrader/late-recovery-policy.test.ts
           test -n "$(git diff --cached --name-only)"
-          git commit -m "feat: exit late recovery at breakeven or one-third reclaim"
-          git pull --rebase origin main
-          git push origin HEAD:main
+          git commit -m "feat: exit late recovery at breakeven or one-third reclaim" \
+            2>&1 | tee -a /tmp/late-recovery-rollout.log
+          git pull --rebase origin main 2>&1 | tee -a /tmp/late-recovery-rollout.log
+          git push origin HEAD:main 2>&1 | tee -a /tmp/late-recovery-rollout.log
 
       - name: Deploy patched autotrader
         env:
@@ -113,15 +129,18 @@ jobs:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
           set -euo pipefail
+          echo "ROLLOUT_STAGE=deploy" >> "${GITHUB_ENV}"
           echo "ROLLOUT_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
           supabase functions deploy market-autotrader \
-            --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
+            --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api \
+            2>&1 | tee -a /tmp/late-recovery-rollout.log
 
       - name: Verify production monitor, exit path and 600s ceiling
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           set -euo pipefail
+          echo "ROLLOUT_STAGE=production_verify" >> "${GITHUB_ENV}"
           abs_limit=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
             "select lob_absolute_max_holding_seconds from public.trading_settings where id=1")
           test "${abs_limit}" = "600"
@@ -144,6 +163,8 @@ jobs:
               select count(*) from public.trading_positions
               where state in ('EXITING','RECONCILING')
                 and coalesce(updated_at,opened_at) < now() - interval '2 minutes';")
+            echo "verify attempt=${attempt} failed=${failed} latest=${latest} stale=${stale} exit_errors=${exit_errors} stuck_exits=${stuck_exits}" \
+              | tee -a /tmp/late-recovery-rollout.log
             if [ "${failed}" = "0" ] && [ -n "${latest}" ] && [ "${stale}" = "0" ] && \
                [ "${exit_errors}" = "0" ] && [ "${stuck_exits}" = "0" ]; then
               healthy=true
@@ -158,11 +179,25 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           set -euo pipefail
+          echo "ROLLOUT_STAGE=restore" >> "${GITHUB_ENV}"
           case "${PREVIOUS_PAUSE_NEW_ENTRIES}" in true|t|1) restore_pause=true ;; *) restore_pause=false ;; esac
           psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
             "update public.trading_settings set pause_new_entries=${restore_pause}, updated_at=now() where id=1"
 
-      - name: Fail-safe restore entry state
+      - name: Clear previous rollout diagnostic
+        if: success()
+        run: |
+          set -euo pipefail
+          if [ -f .github/late-recovery-last-failure.txt ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git rm .github/late-recovery-last-failure.txt
+            git commit -m "chore: clear late recovery rollout diagnostic"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Fail-safe restore entry state and persist diagnostics
         if: failure() && env.PREVIOUS_PAUSE_NEW_ENTRIES != ''
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
@@ -171,4 +206,19 @@ jobs:
           case "${PREVIOUS_PAUSE_NEW_ENTRIES}" in true|t|1) restore_pause=true ;; *) restore_pause=false ;; esac
           psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
             "update public.trading_settings set pause_new_entries=${restore_pause}, updated_at=now() where id=1"
-          echo "Rollout failed; entry state restored."
+          {
+            echo "stage=${ROLLOUT_STAGE:-unknown}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "sha=${GITHUB_SHA}"
+            echo "--- git status ---"
+            git status --short || true
+            echo "--- rollout log tail ---"
+            tail -n 240 /tmp/late-recovery-rollout.log 2>/dev/null || true
+          } > .github/late-recovery-last-failure.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/late-recovery-last-failure.txt
+          git commit -m "chore: record late recovery rollout failure" || true
+          git pull --rebase origin main || true
+          git push origin HEAD:main || true
+          echo "Rollout failed; entry state restored and diagnostics persisted."
