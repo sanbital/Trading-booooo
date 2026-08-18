@@ -136,6 +136,11 @@ import {
   futuresSplitExitDecision,
   normalizeFuturesLeverage,
 } from "./futures-exit-policy.ts";
+import {
+  LATE_RECOVERY_THRESHOLDS,
+  lateRecoveryDecision,
+  updatePost180RunningTrough,
+} from "./late-recovery-policy.ts";
 import { buildTradingHeartbeatPatch, type TradingHeartbeatPatch } from "./heartbeat.ts";
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
@@ -5421,6 +5426,186 @@ async function preparePositiveNetAfter180Exit(
   };
 }
 
+async function prepareLateRecoveryProtectedExit(
+  position: Position,
+  requestedQuantity: number,
+  settings: TradingSettings & JsonRecord,
+  cycleId: string,
+  decisionReason: "LATE_RECOVERY_NET_POSITIVE_EXIT" | "LATE_RECOVERY_DRAWDOWN_33_EXIT",
+): Promise<ProtectedPositiveNetQuote | null> {
+  // Re-read the position before the order-time quote. This picks up the trough persisted
+  // by the current monitor decision and prevents a stale in-memory object from authorizing
+  // a loss exit.
+  const rows = await db(
+    `trading_positions?id=eq.${position.id}&state=eq.OPEN&select=*&limit=1`,
+  ) as Position[];
+  const freshPosition = rows[0];
+  const block = async (reason: string, audit: JsonRecord = {}) => {
+    await event(
+      "LATE_RECOVERY_ORDER_TIME_BLOCKED",
+      `${position.exchange}:${position.market} ${reason}`,
+      { decision_reason: decisionReason, ...audit },
+      { cycleId, positionId: position.id, level: "INFO" },
+    );
+    return null;
+  };
+  if (!freshPosition) return await block("position is no longer OPEN");
+
+  const openedAt = Date.parse(String(freshPosition.opened_at || freshPosition.created_at || ""));
+  const heldSeconds = Number.isFinite(openedAt) ? Math.max(0, (Date.now() - openedAt) / 1000) : 0;
+  const absoluteMaxHoldingSeconds = Math.max(
+    1,
+    finite(
+      freshPosition.metadata?.absolute_max_holding_seconds,
+      finite((settings as any).lob_absolute_max_holding_seconds, 600),
+    ),
+  );
+  if (
+    heldSeconds < LATE_RECOVERY_THRESHOLDS.startSeconds ||
+    heldSeconds >= absoluteMaxHoldingSeconds
+  ) {
+    return await block("outside 460s-to-absolute-max ownership window", {
+      held_seconds: heldSeconds,
+      absolute_max_holding_seconds: absoluteMaxHoldingSeconds,
+    });
+  }
+
+  const step = Math.max(0, finite(freshPosition.quantity_step, 0.00000001));
+  const tolerance = Math.max(step * 1.001, finite(freshPosition.initial_quantity) * 1e-8, 1e-12);
+  const residualStage = freshPosition.exchange === "binance_futures"
+    ? freshPosition.t1_completed === true
+    : finite(freshPosition.remaining_quantity) <=
+      finite(freshPosition.initial_quantity) * 0.5 + tolerance;
+  if (residualStage) {
+    return await block("earned residual winner remains owned by residual policy");
+  }
+
+  const priorLateRecovery = freshPosition.metadata?.late_recovery || {};
+  const entryPrice = Math.max(
+    0,
+    finite(freshPosition.average_entry_price, freshPosition.planned_entry_price),
+  );
+  const runningTroughPrice = Math.max(
+    0,
+    finite(priorLateRecovery.post180_running_trough_price),
+  );
+  if (!(entryPrice > 0 && runningTroughPrice > 0)) {
+    return await block("persistent post-180 trough is unavailable", {
+      entry_price: entryPrice,
+      running_trough_price: runningTroughPrice,
+    });
+  }
+
+  const [portfolio, market, buyFeeQuote] = await Promise.all([
+    gateway(freshPosition.exchange, { action: "portfolio" }),
+    marketQuote(freshPosition.exchange, freshPosition.market),
+    paidBuyFeeQuote(freshPosition),
+  ]);
+  const availableQuantity = accountQuantity(portfolio, freshPosition.base_asset, true);
+  const quote = quoteExecutableNetExit({
+    bids: (market?.bids || []).map((row: any) => ({
+      price: finite(row?.price ?? row?.[0]),
+      size: finite(row?.size ?? row?.[1]),
+    })),
+    requestedQuantity,
+    availableQuantity,
+    quantityStep: finite(freshPosition.quantity_step, 0.00000001),
+    buyPrincipalQuote: positionEntryCostBasis(freshPosition),
+    alreadyPaidFeesQuote: finite(freshPosition.paid_fees_quote),
+    priorSellProceedsQuote: finite(freshPosition.realized_proceeds_quote),
+    sellFeeRate: clamp(FEE_PCT[freshPosition.exchange] / 100, 0, 0.01),
+    slippageSafetyRate: post180SlippageSafetyRate(settings),
+  });
+  const measuredAt = new Date().toISOString();
+  const expectedQuantity = floorToStep(
+    Math.min(finite(freshPosition.remaining_quantity), requestedQuantity),
+    Math.max(1e-12, step),
+  );
+  const fullDepth = quote.sellQuantity > 0 && quote.limitPrice > 0 &&
+    Math.abs(quote.sellQuantity - expectedQuantity) <= tolerance &&
+    quote.visibleExecutableQuantity + tolerance >= quote.sellQuantity;
+  if (!fullDepth) {
+    return await block("full executable depth is unavailable", {
+      requested_quantity: requestedQuantity,
+      expected_quantity: expectedQuantity,
+      sell_quantity: quote.sellQuantity,
+      visible_executable_quantity: quote.visibleExecutableQuantity,
+    });
+  }
+
+  // Use the protected FOK LIMIT floor, not the optimistic book VWAP, for the reclaim test.
+  // If the price moves before submission, the order cannot fill below this floor.
+  const drawdown = entryPrice - runningTroughPrice;
+  const recoveryRatio = drawdown > 0
+    ? (quote.limitPrice - runningTroughPrice) / drawdown
+    : Number.NEGATIVE_INFINITY;
+  const expectedNetProfitQuote = quote.expectedNetProfitQuote;
+  const eligible = decisionReason === "LATE_RECOVERY_NET_POSITIVE_EXIT"
+    ? Number.isFinite(expectedNetProfitQuote) && expectedNetProfitQuote >= 0
+    : Number.isFinite(expectedNetProfitQuote) && expectedNetProfitQuote < 0 &&
+      drawdown > 0 && recoveryRatio >= LATE_RECOVERY_THRESHOLDS.drawdownRecoveryRatio;
+  if (!eligible) {
+    return await block("fresh FOK quote no longer satisfies late-recovery economics", {
+      expected_net_profit_quote: Number.isFinite(expectedNetProfitQuote)
+        ? expectedNetProfitQuote
+        : null,
+      entry_price: entryPrice,
+      running_trough_price: runningTroughPrice,
+      protected_limit_price: quote.limitPrice,
+      recovery_ratio: Number.isFinite(recoveryRatio) ? recoveryRatio : null,
+    });
+  }
+
+  const status = decisionReason === "LATE_RECOVERY_NET_POSITIVE_EXIT"
+    ? "LATE_RECOVERY_NET_POSITIVE"
+    : "LATE_RECOVERY_DRAWDOWN_33";
+  const baseAudit = executableNetExitAudit(freshPosition, quote, buyFeeQuote, measuredAt);
+  const audit: JsonRecord = {
+    ...(freshPosition.metadata?.exit_policy_quote || {}),
+    ...baseAudit,
+    revision: "7.6.10-LATE-RECOVERY-460-R33",
+    late_recovery_revision: "7.6.10-LATE-RECOVERY-460-R33",
+    status,
+    approval_scope: "SINGLE_FOK_ORDER",
+    approved_reason: decisionReason,
+    allowed: decisionReason === "LATE_RECOVERY_NET_POSITIVE_EXIT",
+    executable_net_allowed: decisionReason === "LATE_RECOVERY_NET_POSITIVE_EXIT",
+    full_depth: true,
+    held_seconds: heldSeconds,
+    absolute_max_holding_seconds: absoluteMaxHoldingSeconds,
+    entry_price: entryPrice,
+    running_trough_price: runningTroughPrice,
+    recovery_ratio: Number.isFinite(recoveryRatio) ? recoveryRatio : null,
+    recovery_ratio_threshold: LATE_RECOVERY_THRESHOLDS.drawdownRecoveryRatio,
+    sell_price: quote.limitPrice,
+    limit_price: quote.limitPrice,
+    sell_quantity: quote.sellQuantity,
+    expected_net_profit_quote: expectedNetProfitQuote,
+    measured_at: measuredAt,
+  };
+  await patch("trading_positions", `id=eq.${freshPosition.id}`, {
+    metadata: {
+      ...(freshPosition.metadata || {}),
+      exit_policy_quote: audit,
+      late_recovery: {
+        ...(priorLateRecovery || {}),
+        last_order_time_recheck_at: measuredAt,
+        last_order_time_limit_price: quote.limitPrice,
+        last_order_time_expected_net_profit_quote: expectedNetProfitQuote,
+        last_order_time_recovery_ratio: Number.isFinite(recoveryRatio) ? recoveryRatio : null,
+      },
+    },
+  });
+  return {
+    limitPrice: quote.limitPrice,
+    expectedNetProfitQuote,
+    availableQuantity: quote.visibleExecutableQuantity,
+    measuredAt,
+    sellQuantity: quote.sellQuantity,
+    audit,
+  };
+}
+
 async function prepareProtectedTarget(
   position: Position,
   quantity: number,
@@ -5658,6 +5843,8 @@ async function applyExit(
   const targetAction = action === "TARGET_1" || action === "TARGET_2";
   const positiveNetAfter180 = decisionReason === "POSITIVE_NET_AFTER_180S";
   const recoveryNetPositive = decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT";
+  const lateRecoveryNetPositive = decisionReason === "LATE_RECOVERY_NET_POSITIVE_EXIT";
+  const lateRecoveryDrawdown = decisionReason === "LATE_RECOVERY_DRAWDOWN_33_EXIT";
   const staleRecoveryNetPositive = decisionReason === "STALE_RECOVERY_NET_POSITIVE_EXIT_180M" ||
     decisionReason === "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M";
   const positiveNetGuardedExit = positiveNetAfter180 || recoveryNetPositive ||
@@ -5678,7 +5865,8 @@ async function applyExit(
     decisionReason === "RESIDUAL_TAKE_PROFIT_10" ||
     decisionReason === "RESIDUAL_STOP_LOSS_4" ||
     decisionReason === "FUTURES_RESIDUAL_TAKE_PROFIT_ROE_30" ||
-    staleRecoveryNetPositive || recoveryNetPositive || action === "EMERGENCY";
+    staleRecoveryNetPositive || recoveryNetPositive || lateRecoveryNetPositive ||
+    lateRecoveryDrawdown || action === "EMERGENCY";
   const protectedHoldQuantity = fullLiquidationExit
     ? 0
     : Math.max(0, finite(position.initial_quantity) * 0.5);
@@ -5722,6 +5910,8 @@ async function applyExit(
       cycleId,
       staleRecoveryNetPositive
         ? "STALE_RECOVERY_NET_POSITIVE_BLOCKED"
+        : lateRecoveryNetPositive
+        ? "LATE_RECOVERY_NET_POSITIVE_BLOCKED"
         : recoveryNetPositive
         ? "RECOVERY_NET_POSITIVE_BLOCKED"
         : "POSITIVE_NET_AFTER_180S_BLOCKED",
@@ -5732,13 +5922,38 @@ async function applyExit(
       action: "NONE",
       reason: staleRecoveryNetPositive
         ? "180m recovery net-positive order-time recheck blocked; position retained"
+        : lateRecoveryNetPositive
+        ? "late-recovery net-positive order-time recheck blocked; position retained"
         : recoveryNetPositive
         ? "recovery net-positive order-time recheck blocked; position retained"
         : "positive-net order-time recheck blocked; position retained",
     };
   }
   if (protectedPositiveNet) quantity = protectedPositiveNet.sellQuantity;
-  const protectedLimit = protectedTarget || protectedPositiveNet;
+  const protectedLateRecovery = !position.is_paper &&
+      (lateRecoveryNetPositive || lateRecoveryDrawdown) && settings
+    ? await prepareLateRecoveryProtectedExit(
+      position,
+      quantity,
+      settings,
+      cycleId,
+      lateRecoveryNetPositive
+        ? "LATE_RECOVERY_NET_POSITIVE_EXIT"
+        : "LATE_RECOVERY_DRAWDOWN_33_EXIT",
+    )
+    : null;
+  if (
+    !position.is_paper && (lateRecoveryNetPositive || lateRecoveryDrawdown) &&
+    !protectedLateRecovery
+  ) {
+    return {
+      action: "NONE",
+      reason: "late-recovery order-time FOK recheck blocked; position retained",
+    };
+  }
+  if (protectedLateRecovery) quantity = protectedLateRecovery.sellQuantity;
+  const protectedLimit = protectedTarget || protectedPositiveNet || protectedLateRecovery;
+  const protectedExitAudit = protectedLateRecovery?.audit || protectedPositiveNet?.audit || null;
 
   if (!position.is_paper) {
     position = {
@@ -5750,7 +5965,7 @@ async function applyExit(
           pending_exit_action: action,
           pending_exit_reason: decisionReason || action,
           pending_exit_at: new Date().toISOString(),
-          ...(protectedPositiveNet ? { exit_policy_quote: protectedPositiveNet.audit } : {}),
+          ...(protectedExitAudit ? { exit_policy_quote: protectedExitAudit } : {}),
         },
       }))[0],
     };
@@ -5773,6 +5988,10 @@ async function applyExit(
     await event(
       staleRecoveryNetPositive
         ? "STALE_RECOVERY_NET_POSITIVE_FOK_NOT_FILLED"
+        : lateRecoveryDrawdown
+        ? "LATE_RECOVERY_DRAWDOWN_33_FOK_NOT_FILLED"
+        : lateRecoveryNetPositive
+        ? "LATE_RECOVERY_NET_POSITIVE_FOK_NOT_FILLED"
         : recoveryNetPositive
         ? "RECOVERY_NET_POSITIVE_FOK_NOT_FILLED"
         : positiveNetAfter180
@@ -5840,11 +6059,13 @@ async function applyExit(
     position = { ...position, ...recoveryPosition };
   }
   if (
-    (targetAction || positiveNetGuardedExit) && finalized?.closed &&
+    (targetAction || positiveNetGuardedExit || lateRecoveryNetPositive) && finalized?.closed &&
     finite(finalized?.position?.realized_pnl_quote) <= 0
   ) {
     const breachReason = staleRecoveryNetPositive
       ? "STALE_RECOVERY_NET_POSITIVE_GUARD_BREACH"
+      : lateRecoveryNetPositive
+      ? "LATE_RECOVERY_NET_POSITIVE_GUARD_BREACH"
       : recoveryNetPositive
       ? "RECOVERY_NET_POSITIVE_GUARD_BREACH"
       : positiveNetAfter180
@@ -5874,10 +6095,15 @@ async function applyExit(
     finalized?.closed &&
     (decisionReason === "POSITIVE_NET_AFTER_180S" ||
       decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT" ||
+      decisionReason === "LATE_RECOVERY_NET_POSITIVE_EXIT" ||
+      decisionReason === "LATE_RECOVERY_DRAWDOWN_33_EXIT" ||
       decisionReason === "STALE_RECOVERY_NET_POSITIVE_EXIT_180M" ||
       decisionReason === "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M" ||
       decisionReason === "HARD_STOP_MINUS_2_AFTER_180S") &&
-    !(positiveNetGuardedExit && finite(finalized?.position?.realized_pnl_quote) <= 0)
+    !(
+      (positiveNetGuardedExit || lateRecoveryNetPositive) &&
+      finite(finalized?.position?.realized_pnl_quote) <= 0
+    )
   ) {
     const corrected = (await patch("trading_positions", `id=eq.${position.id}`, {
       close_reason: decisionReason,
@@ -7866,6 +8092,37 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           executableNetProfitQuote: guardedNetProfitQuote,
         });
 
+        const priorLateRecovery = position.metadata?.late_recovery || {};
+        const priorLateRecoveryTrough = Math.max(
+          0,
+          finite(priorLateRecovery.post180_running_trough_price),
+        );
+        const recentShadowTrough = Array.isArray(position.metadata?.lob_post180_shadow_history)
+          ? position.metadata.lob_post180_shadow_history.reduce((low: number, sample: any) => {
+            const samplePrice = Math.max(0, finite(sample?.price));
+            return samplePrice > 0 ? Math.min(low, samplePrice) : low;
+          }, Number.POSITIVE_INFINITY)
+          : Number.POSITIVE_INFINITY;
+        const bootstrapPost180Trough = priorLateRecoveryTrough > 0
+          ? priorLateRecoveryTrough
+          : Number.isFinite(recentShadowTrough)
+          ? Math.min(current, recentShadowTrough)
+          : current;
+        const post180RunningTrough = heldSeconds >=
+            LATE_RECOVERY_THRESHOLDS.troughTrackingStartSeconds
+          ? updatePost180RunningTrough(bootstrapPost180Trough, current)
+          : 0;
+        const lateRecoveryTrackingStartedNow = heldSeconds >=
+            LATE_RECOVERY_THRESHOLDS.troughTrackingStartSeconds &&
+          !priorLateRecovery.tracking_started_at;
+        const lateRecoveryActivatedNow = heldSeconds >= LATE_RECOVERY_THRESHOLDS.startSeconds &&
+          !priorLateRecovery.activated_at;
+        const lateRecoveryTroughChanged = heldSeconds >=
+            LATE_RECOVERY_THRESHOLDS.troughTrackingStartSeconds &&
+          (priorLateRecoveryTrough <= 0 ||
+            post180RunningTrough <
+              priorLateRecoveryTrough - Math.max(1e-12, priorLateRecoveryTrough * 1e-10));
+
         const positionLeverageValue = positionLeverage(position);
         let recoveryMode = futuresLane && position.metadata?.recovery_exit?.enabled === true;
         let futuresAudit: JsonRecord | null = null;
@@ -7965,11 +8222,59 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           }) as any;
         }
 
+        const executableDepthSufficient = policyQuantity > 0 &&
+          executableQuote.executableVwap > 0 &&
+          finite(executableQuote.visibleExecutableQuantity) +
+                Math.max(1e-12, policyQuantity * 1e-8) >= policyQuantity;
+        const lateRecovery = lateRecoveryDecision({
+          heldSeconds,
+          absoluteMaxHoldingSeconds,
+          residualStage: !hasTradableHalf,
+          existingAction: decision.action,
+          entryPrice,
+          runningTroughPrice: post180RunningTrough,
+          executablePrice: executableExitPrice,
+          executableDepthSufficient,
+          executableNetAllowed: executableQuote.allowed,
+          expectedNetProfitQuote: guardedNetProfitQuote,
+        });
+        if (lateRecovery.action === "STOP") {
+          decision = {
+            action: "STOP",
+            fraction: 1,
+            reason: lateRecovery.reason,
+          } as any;
+          if (!priorLateRecovery.triggered_at) {
+            await event(
+              "LATE_RECOVERY_EXIT_TRIGGERED",
+              `${exchange}:${position.market} ${lateRecovery.reason}`,
+              {
+                held_seconds: heldSeconds,
+                entry_price: entryPrice,
+                post180_running_trough_price: post180RunningTrough,
+                executable_price: executableExitPrice,
+                recovery_ratio: lateRecovery.recoveryRatio,
+                threshold_ratio: LATE_RECOVERY_THRESHOLDS.drawdownRecoveryRatio,
+                expected_net_profit_quote: guardedNetProfitQuote,
+                executable_net_allowed: executableQuote.allowed,
+                executable_depth_sufficient: executableDepthSufficient,
+                existing_policy_action_preserved: false,
+              },
+              { cycleId, positionId: position.id, level: "INFO" },
+            );
+          }
+        }
+        const lateRecoveryMetadataChanged = lateRecoveryTrackingStartedNow ||
+          lateRecoveryActivatedNow || lateRecoveryTroughChanged || lateRecovery.action === "STOP";
+
         const watchIso = Number.isFinite(watchStartedMs)
           ? new Date(watchStartedMs).toISOString()
           : null;
         const watchChanged = watchIso !== (previousWatchText || null);
-        if (watchChanged || recoveryLatchedNow || decision.action !== "NONE") {
+        if (
+          watchChanged || recoveryLatchedNow || lateRecoveryMetadataChanged ||
+          decision.action !== "NONE"
+        ) {
           const measuredAt = new Date(nowMs).toISOString();
           const approvedReason = String((decision as any).reason || "");
           const approvedAction = decision.action === "STOP" ? "STOP" : "NONE";
@@ -8013,6 +8318,31 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
                 ...(position.metadata || {}),
                 bb_exit_watch_started_at: watchIso,
                 bb_last_minute_gate: freshMinuteGate,
+                ...(heldSeconds >= LATE_RECOVERY_THRESHOLDS.troughTrackingStartSeconds
+                  ? {
+                    late_recovery: {
+                      ...(priorLateRecovery || {}),
+                      revision: "7.6.10-LATE-RECOVERY-460-R33",
+                      tracking_started_at: priorLateRecovery.tracking_started_at || measuredAt,
+                      post180_running_trough_price: post180RunningTrough,
+                      start_seconds: LATE_RECOVERY_THRESHOLDS.startSeconds,
+                      drawdown_recovery_ratio_threshold:
+                        LATE_RECOVERY_THRESHOLDS.drawdownRecoveryRatio,
+                      activated_at: heldSeconds >= LATE_RECOVERY_THRESHOLDS.startSeconds
+                        ? priorLateRecovery.activated_at || measuredAt
+                        : priorLateRecovery.activated_at || null,
+                      last_recovery_ratio: lateRecovery.recoveryRatio,
+                      last_executable_price: executableExitPrice,
+                      last_expected_net_profit_quote: guardedNetProfitQuote,
+                      last_executable_depth_sufficient: executableDepthSufficient,
+                      last_decision: lateRecovery.reason,
+                      triggered_at: lateRecovery.action === "STOP"
+                        ? priorLateRecovery.triggered_at || measuredAt
+                        : priorLateRecovery.triggered_at || null,
+                      checked_at: measuredAt,
+                    },
+                  }
+                  : {}),
                 // RECOVERY is a permanent pre-T1 mission state. It is latched once, at the
                 // first observation at/after 180s whose WHOLE-position executable net is
                 // non-positive, and remains set until the position closes.
@@ -8058,6 +8388,8 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
           decision.reason === "PRE_T1_PROFIT_PROTECTION_EXIT" ||
           decision.reason === "FUTURES_PRE_T1_PROFIT_PROTECTION_EXIT" ||
           decision.reason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT" ||
+          decision.reason === "LATE_RECOVERY_NET_POSITIVE_EXIT" ||
+          decision.reason === "LATE_RECOVERY_DRAWDOWN_33_EXIT" ||
           decision.reason === "FUTURES_STALE_GIVEBACK_EXIT_180M" ||
           decision.reason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT" ||
           decision.reason === "RESIDUAL_PROTECTED_TRAIL_EXIT" ||
