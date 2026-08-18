@@ -1,0 +1,184 @@
+name: Deploy late recovery v7.6.10
+
+# Production Edge Function rollout for the Late Recovery 460s/33% exit policy.
+# The database guard migration (20260818120000_late_recovery_v7610_guard) is applied
+# separately; this workflow only ships the canonical main autotrader source.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-late-recovery-v7610
+  cancel-in-progress: false
+
+jobs:
+  deploy-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out canonical main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Prove late recovery source invariants
+        run: |
+          set -euo pipefail
+          idx=supabase/functions/market-autotrader/index.ts
+          policy=supabase/functions/market-autotrader/late-recovery-policy.ts
+
+          # The engine VERSION string is deliberately unchanged by this policy revision.
+          grep -q 'const VERSION = "7.6.0-BINANCE-FUTURES"' "${idx}"
+
+          # Late Recovery must be wired in as its own module.
+          test -f "${policy}"
+          grep -q 'from "./late-recovery-policy.ts"' "${idx}"
+          grep -q 'troughTrackingStartSeconds: 180' "${policy}"
+          grep -q 'startSeconds: 460' "${policy}"
+          grep -q 'drawdownRecoveryRatio: 0.33' "${policy}"
+          grep -q '7.6.10-LATE-RECOVERY-460-R33' "${idx}"
+
+          # The generic hard timeout stays Spot-only; Futures termination remains owned by
+          # the Futures state machine. A "(lobMode || futuresLane)" timeout is the exact
+          # regression that broke the futures ownership tests during the first rollout.
+          grep -q 'if (lobMode && !futuresLane && heldSeconds >= absoluteMaxHoldingSeconds)' "${idx}"
+          if grep -q '(lobMode || futuresLane) && heldSeconds >= absoluteMaxHoldingSeconds' "${idx}"; then
+            echo "::error::generic hard timeout claimed futures ownership"
+            exit 1
+          fi
+
+          # Existing owners keep priority: Late Recovery only runs on an untouched decision
+          # and never liquidates an earned residual/T1 winner.
+          grep -q 'existingAction: decision.action' "${idx}"
+          grep -q 'LATE_RECOVERY_EXISTING_DECISION_PRESERVED' "${policy}"
+          grep -q 'LATE_RECOVERY_RESIDUAL_WINNER_PRESERVED' "${policy}"
+
+      - name: Full repository verification
+        run: |
+          set -euo pipefail
+          deno task check
+          deno task test
+
+      - name: Freeze new entries during rollout
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL}"
+          previous_pause=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
+          echo "PREVIOUS_PAUSE_NEW_ENTRIES=${previous_pause:-true}" >> "${GITHUB_ENV}"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=true, updated_at=now() where id=1"
+
+      - name: Require the late recovery database guard to be live first
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            v_lob text;
+            v_res text;
+          begin
+            select pg_get_functiondef('public.guard_lob_sell_order_v714()'::regprocedure) into v_lob;
+            select pg_get_functiondef('public.guard_residual_sell_order_v751()'::regprocedure) into v_res;
+
+            -- The engine must never be able to emit a reason the database cannot adjudicate.
+            if position('LATE_RECOVERY_NET_POSITIVE_EXIT' in v_lob) = 0
+               or position('LATE_RECOVERY_DRAWDOWN_33_EXIT' in v_lob) = 0 then
+              raise exception 'burst guard does not delegate the late recovery reasons';
+            end if;
+            if position('LATE_RECOVERY_REQUIRES_LIMIT_FOK' in v_res) = 0
+               or position('v_held_seconds < 460' in v_res) = 0
+               or position('SINGLE_FOK_ORDER' in v_res) = 0
+               or position('LATE_RECOVERY_DRAWDOWN_33_NOT_REACHED' in v_res) = 0 then
+              raise exception 'residual guard is missing the late recovery authority checks';
+            end if;
+
+            -- Pre-existing exit authorities must survive the guard rewrite.
+            if position('RESIDUAL_PROTECTED_TRAIL_EXIT' in v_res) = 0
+               or position('FUTURES_RECOVERY_NET_POSITIVE_EXIT' in v_res) = 0
+               or position('PRE_T1_PROFIT_PROTECTION_NOT_EARNED' in v_res) = 0
+               or position('HALF_HOLD_ABSOLUTE_TIMEOUT' in v_res) = 0 then
+              raise exception 'residual guard lost a pre-existing exit authority';
+            end if;
+            raise notice 'late recovery database guard verified';
+          end
+          $$;
+          SQL
+
+      - name: Deploy late recovery autotrader
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          echo "ROLLOUT_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
+          supabase functions deploy market-autotrader \
+            --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
+
+      - name: Verify production monitor health after rollout
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          abs_limit=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select lob_absolute_max_holding_seconds from public.trading_settings where id=1")
+          test "${abs_limit}" = "600"
+          healthy=false
+          for attempt in $(seq 1 24); do
+            failed=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from public.trading_cycle_runs
+              where started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz and status='FAILED';")
+            monitors=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from public.trading_cycle_runs
+              where kind='MONITOR' and status='SUCCESS'
+                and started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz;")
+            stale=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from public.trading_positions
+              where state in ('OPEN','PARTIAL')
+                and extract(epoch from (now()-opened_at)) > 630;")
+            if [ "${failed}" = "0" ] && [ "${monitors}" -ge 3 ] && [ "${stale}" = "0" ]; then
+              healthy=true
+              break
+            fi
+            sleep 5
+          done
+          if [ "${healthy}" != "true" ]; then
+            echo "::error::post-deploy monitor health check failed (failed=${failed} monitors=${monitors} stale=${stale})"
+            exit 1
+          fi
+
+      - name: Restore entry state after successful rollout
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          case "${PREVIOUS_PAUSE_NEW_ENTRIES}" in true|t|1) restore_pause=true ;; *) restore_pause=false ;; esac
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=${restore_pause}, updated_at=now() where id=1"
+
+      - name: Fail-safe restore entry state
+        if: failure() && env.PREVIOUS_PAUSE_NEW_ENTRIES != ''
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          case "${PREVIOUS_PAUSE_NEW_ENTRIES}" in true|t|1) restore_pause=true ;; *) restore_pause=false ;; esac
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=${restore_pause}, updated_at=now() where id=1"
+          echo "Rollout failed; entry state restored."
