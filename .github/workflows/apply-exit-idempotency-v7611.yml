@@ -1,11 +1,6 @@
 name: Apply exit idempotency v7.6.11
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/apply-exit-idempotency-v7611.yml"
-      - "scripts/apply_exit_idempotency_v7611.py"
   workflow_dispatch:
 
 permissions:
@@ -75,8 +70,6 @@ jobs:
               having count(*) > 1
             ) d;")
           echo "BASELINE_DUPLICATE_PENDING_SELL_POSITIONS=${baseline}" >> "${GITHUB_ENV}"
-          echo "settlement RPC is position-scoped internally; baseline duplicate-pending positions=${baseline}" \
-            | tee -a /tmp/exit-idempotency-rollout.log
 
       - name: Apply exit idempotency patch
         run: |
@@ -197,18 +190,16 @@ jobs:
           natural_exits=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
             select count(*) from public.trading_events
             where created_at >= '${ROLLOUT_STARTED_AT}'::timestamptz
-              and event_type in ('POSITION_CLOSED','PARTIAL_EXIT');")
+              and code in ('POSITION_CLOSED','PARTIAL_EXIT');")
           deferred=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
             select count(*) from public.trading_events
             where created_at >= '${ROLLOUT_STARTED_AT}'::timestamptz
-              and event_type in ('EXIT_DEFERRED_UNSETTLED_ORDER','EXIT_CLAIM_SKIPPED');")
+              and code in ('EXIT_DEFERRED_UNSETTLED_ORDER','EXIT_CLAIM_SKIPPED');")
           echo "POST_DUPLICATE_PENDING_SELL_POSITIONS=${post}" >> "${GITHUB_ENV}"
           echo "NATURAL_EXIT_EVENTS=${natural_exits}" >> "${GITHUB_ENV}"
           echo "IDEMPOTENCY_GUARD_EVENTS=${deferred}" >> "${GITHUB_ENV}"
           echo "LATEST_MONITOR=${latest}" >> "${GITHUB_ENV}"
           echo "FAILED_CYCLES=${failed}" >> "${GITHUB_ENV}"
-          echo "production monitor healthy; new duplicate pending SELL positions=0" \
-            | tee -a /tmp/exit-idempotency-rollout.log
 
       - name: Restore prior entry state after successful rollout
         env:
@@ -253,7 +244,6 @@ jobs:
           case "${PREVIOUS_PAUSE_NEW_ENTRIES}" in true|t|1) restore_pause=true ;; *) restore_pause=false ;; esac
           psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
             "update public.trading_settings set pause_new_entries=${restore_pause}, updated_at=now() where id=1"
-          echo "Rollout failed before deployment; prior production preserved and entry state restored."
 
       - name: Keep entries frozen if post-deploy verification fails
         if: failure() && env.PRODUCTION_DEPLOYED == 'true'
