@@ -20,14 +20,12 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           set -euo pipefail
-          export PGOPTIONS='-c default_transaction_read_only=on'
           psql "${SUPABASE_DB_URL}" -P pager=off -F '|' -A -t <<'SQL'
-          begin read only;
           with p as (
             select *,
-              timestamp with time zone '2026-08-19 13:34:41+00' as fix_at,
+              timestamp with time zone '2026-08-12 23:11:37+00' as fix_at,
               now() as asof,
-              now() - timestamp with time zone '2026-08-19 13:34:41+00' as span
+              now() - timestamp with time zone '2026-08-12 23:11:37+00' as span
             from public.trading_positions
             where is_paper is false and state='CLOSED'
           ), w as (
@@ -70,7 +68,7 @@ jobs:
             leverage
           from public.trading_positions
           where is_paper is false and state='CLOSED'
-            and closed_at >= timestamp with time zone '2026-08-19 13:34:41+00'
+            and closed_at >= timestamp with time zone '2026-08-12 23:11:37+00'
           order by closed_at;
 
           select 'ANOMALY' as kind,
@@ -79,7 +77,7 @@ jobs:
             count(*) filter (where realized_return_pct is null or realized_pnl_quote is null) incomplete_accounting
           from public.trading_positions
           where is_paper is false and state='CLOSED'
-            and closed_at >= timestamp with time zone '2026-08-19 13:34:41+00';
+            and closed_at >= timestamp with time zone '2026-08-12 23:11:37+00';
 
           select 'OPEN' as kind,
             case when exchange='binance_futures' then 'FUTURES' else 'SPOT' end market_type,
@@ -87,5 +85,4 @@ jobs:
           from public.trading_positions
           where is_paper is false and state='OPEN'
           group by market_type,exchange order by market_type,exchange;
-          rollback;
           SQL
