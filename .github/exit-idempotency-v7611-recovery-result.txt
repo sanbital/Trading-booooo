@@ -1,0 +1,14 @@
+status=SUCCESS_RESUMED
+resumed_at=2026-08-19T12:41:08Z
+pause_new_entries=false
+pre_resume_latest_monitor=2026-08-19 12:40:54.30144+00
+latest_monitor=2026-08-19 12:41:20.159567+00
+latest_scan=2026-08-19 12:41:16.986791+00
+failed_cycles_after_resume=0
+duplicate_pending_sell_positions=0
+natural_exit_events_since_deploy=46
+idempotency_guard_events_since_deploy=0
+orders_created_since_deploy=1
+function=   89326713-02fe-48c1-a2a6-ab03a03d4480 | market-autotrader                 | market-autotrader                 | ACTIVE | 344     | 2026-08-19 12:30:11 
+settlement_rpc_safe=true
+forced_live_trade=false
