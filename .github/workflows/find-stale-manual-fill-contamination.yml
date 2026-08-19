@@ -1,0 +1,51 @@
+name: Find stale manual fill contamination
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/find-stale-manual-fill-contamination.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Scan production DB read-only
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          {
+            echo "audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select p.id,p.exchange,p.market,p.state,p.opened_at,
+                     min(f.executed_at) stale_manual_fill_at,
+                     count(*) stale_manual_fills,
+                     sum(case when f.side='BUY' then f.quantity else 0 end) stale_manual_buy_qty,
+                     p.initial_quantity,p.remaining_quantity
+              from public.trading_positions p
+              join public.exchange_trade_fills f on f.position_id=p.id
+              where coalesce(f.source,'')='MANUAL'
+                and p.opened_at is not null
+                and f.executed_at < p.opened_at - interval '1 minute'
+                and p.state <> 'CLOSED'
+              group by p.id,p.exchange,p.market,p.state,p.opened_at,p.initial_quantity,p.remaining_quantity
+              order by p.opened_at;"
+          } > .github/stale-manual-fill-contamination.txt
+      - name: Commit result
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/stale-manual-fill-contamination.txt
+          git commit -m "chore: record stale manual fill contamination scan" || true
+          git pull --rebase origin main
+          git push origin HEAD:main
