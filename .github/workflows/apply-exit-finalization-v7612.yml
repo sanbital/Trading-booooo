@@ -1,0 +1,280 @@
+name: Apply exit finalization v7.6.12
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-exit-finalization-v7612.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-exit-finalization-v7612
+  cancel-in-progress: false
+
+jobs:
+  patch-deploy-repair-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Initialize rollout state
+        run: |
+          echo "PRODUCTION_DEPLOYED=false" >> "${GITHUB_ENV}"
+          echo "DATA_REPAIR_APPLIED=false" >> "${GITHUB_ENV}"
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Freeze new entries and prove repair preconditions
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          previous_pause=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
+          echo "PREVIOUS_PAUSE_NEW_ENTRIES=${previous_pause:-true}" >> "${GITHUB_ENV}"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=true, updated_at=now() where id=1"
+
+          contaminated=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from public.exchange_trade_fills
+            where id='55ddf00e-3f89-4df8-8e07-90af3e60cd0b'::uuid
+              and position_id='111c5f48-27bf-4c26-9819-4f4ed7714577'::uuid
+              and source='MANUAL' and executed_at < '2026-08-19T07:25:00Z'::timestamptz;")
+          repaired=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from public.trading_positions
+            where id='111c5f48-27bf-4c26-9819-4f4ed7714577'::uuid
+              and metadata->'accounting_repair'->>'revision'='7.6.12-ZRO-STALE-MANUAL-DETACH';")
+          test "${contaminated}" = "1" -o "${repaired}" = "1"
+
+          pending=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from public.trading_orders where market='ZROUSDT' and side='SELL'
+              and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED');")
+          test "${pending}" = "0"
+
+          zeros=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            with latest as (
+              select balances from public.trading_account_snapshots
+              where exchange='binance' order by captured_at desc limit 3
+            ), measured as (
+              select
+                coalesce((select coalesce(nullif(a->>'balance','')::numeric,nullif(a->>'free','')::numeric,0)
+                          from jsonb_array_elements(coalesce(balances,'[]'::jsonb)) a
+                          where upper(coalesce(a->>'currency',a->>'asset',''))='ZRO' limit 1),0) free_qty,
+                coalesce((select coalesce(nullif(a->>'locked','')::numeric,0)
+                          from jsonb_array_elements(coalesce(balances,'[]'::jsonb)) a
+                          where upper(coalesce(a->>'currency',a->>'asset',''))='ZRO' limit 1),0) locked_qty
+              from latest
+            ) select count(*) from measured where abs(free_qty)<=0.00000001 and abs(locked_qty)<=0.00000001;")
+          test "${zeros}" = "3"
+
+      - name: Patch exit finalization idempotency
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_exit_finalization_idempotency_v7612.py
+          deno fmt supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-autotrader/exit-finalization-idempotency.test.ts
+          git diff --check
+          grep -q 'Exit finalization idempotency v7.6.12' supabase/functions/market-autotrader/index.ts
+          grep -q 'if (applied.applied)' supabase/functions/market-autotrader/index.ts
+          grep -q 'EXIT_DEFERRED_UNSETTLED_ORDER' supabase/functions/market-autotrader/index.ts
+          grep -Fq '`id=eq.${position.id}&state=eq.OPEN`' supabase/functions/market-autotrader/index.ts
+          grep -Fq '`id=eq.${position.id}&state=eq.EXITING`' supabase/functions/market-autotrader/index.ts
+          grep -q 'p_fill_quantity: quantity' supabase/functions/market-autotrader/index.ts
+
+      - name: Run targeted and full regression tests
+        run: |
+          set -euo pipefail
+          deno test --allow-read \
+            supabase/functions/market-autotrader/exit-idempotency.test.ts \
+            supabase/functions/market-autotrader/exit-finalization-idempotency.test.ts
+          deno task check
+          deno task test
+
+      - name: Commit canonical source after tests
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-autotrader/exit-finalization-idempotency.test.ts
+          if ! git diff --cached --quiet; then
+            git commit -m "fix: make exit finalization events idempotent"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+          echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "${GITHUB_ENV}"
+
+      - name: Deploy market-autotrader
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          echo "DEPLOYED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
+          supabase functions deploy market-autotrader \
+            --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
+          echo "PRODUCTION_DEPLOYED=true" >> "${GITHUB_ENV}"
+
+      - name: Apply guarded ZRO accounting repair
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 \
+            -f supabase/migrations/20260819125500_zro_stale_manual_fill_repair.sql
+          echo "DATA_REPAIR_APPLIED=true" >> "${GITHUB_ENV}"
+
+      - name: Verify repaired accounting and production health
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          pos=$(psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+            select state,initial_quantity,remaining_quantity,realized_cost_quote,realized_proceeds_quote,
+                   paid_fees_quote,realized_pnl_quote,realized_return_pct,close_reason,
+                   metadata->'accounting_repair'->>'revision'
+            from public.trading_positions where id='111c5f48-27bf-4c26-9819-4f4ed7714577'::uuid;")
+          IFS='|' read -r state initial remaining cost proceeds fees pnl ret reason revision <<< "${pos}"
+          test "${state}" = "CLOSED"
+          test "${revision}" = "7.6.12-ZRO-STALE-MANUAL-DETACH"
+          awk -v x="${initial}" 'BEGIN{exit !(x>47.679999 && x<47.680001)}'
+          awk -v x="${remaining}" 'BEGIN{exit !(x>-0.00000001 && x<0.00000001)}'
+          awk -v x="${pnl}" 'BEGIN{exit !(x>-0.108 && x<-0.107)}'
+
+          detached_fill=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select (position_id is null)::text from public.exchange_trade_fills
+            where id='55ddf00e-3f89-4df8-8e07-90af3e60cd0b'::uuid;")
+          detached_order=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select (position_id is null)::text from public.trading_orders
+            where id='038e70c3-a28b-4e91-8316-eee8cc62e6a0'::uuid;")
+          test "${detached_fill}" = "true" -o "${detached_fill}" = "t"
+          test "${detached_order}" = "true" -o "${detached_order}" = "t"
+
+          stale=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*)
+            from public.trading_positions p join public.exchange_trade_fills f on f.position_id=p.id
+            where f.source='MANUAL' and p.opened_at is not null
+              and f.executed_at < p.opened_at - interval '1 minute' and p.state<>'CLOSED';")
+          test "${stale}" = "0"
+
+          dupes=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from (
+              select position_id from public.trading_orders
+              where side='SELL' and position_id is not null
+                and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED')
+              group by position_id having count(*)>1
+            ) d;")
+          test "${dupes}" = "0"
+
+          healthy=false
+          latest_monitor=''
+          failed='0'
+          for attempt in $(seq 1 20); do
+            latest_monitor=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select coalesce(max(started_at)::text,'') from public.trading_cycle_runs
+              where kind='MONITOR' and started_at >= '${DEPLOYED_AT}'::timestamptz;")
+            failed=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from public.trading_cycle_runs
+              where started_at >= '${DEPLOYED_AT}'::timestamptz and status='FAILED';")
+            if [ -n "${latest_monitor}" ] && [ "${failed}" = "0" ]; then healthy=true; break; fi
+            sleep 5
+          done
+          test "${healthy}" = "true"
+
+          replay_events=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from public.trading_events
+            where created_at >= '${DEPLOYED_AT}'::timestamptz
+              and code in ('PARTIAL_EXIT','POSITION_CLOSED')
+              and details->>'accounting_applied'='false';")
+          test "${replay_events}" = "0"
+
+          fn_line=$(supabase functions list --project-ref "${SUPABASE_PROJECT_REF}" | grep -F 'market-autotrader' | head -n 1)
+          printf '%s\n' "${fn_line}" | grep -Fq 'ACTIVE'
+
+          {
+            echo "ZRO_STATE=${state}"
+            echo "ZRO_INITIAL_QUANTITY=${initial}"
+            echo "ZRO_REALIZED_COST=${cost}"
+            echo "ZRO_REALIZED_PROCEEDS=${proceeds}"
+            echo "ZRO_FEES=${fees}"
+            echo "ZRO_PNL=${pnl}"
+            echo "ZRO_RETURN_PCT=${ret}"
+            echo "ZRO_CLOSE_REASON=${reason}"
+            echo "LATEST_MONITOR=${latest_monitor}"
+            echo "FAILED_CYCLES=${failed}"
+            echo "DUPLICATE_PENDING_SELL_POSITIONS=${dupes}"
+            echo "STALE_MANUAL_CONTAMINATION=${stale}"
+            echo "REPLAY_EXIT_EVENTS_AFTER_DEPLOY=${replay_events}"
+            echo "FUNCTION_LINE=${fn_line}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Restore prior entry state
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          case "${PREVIOUS_PAUSE_NEW_ENTRIES}" in true|t|1) restore=true ;; *) restore=false ;; esac
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=${restore}, updated_at=now() where id=1"
+          echo "FINAL_PAUSE=${restore}" >> "${GITHUB_ENV}"
+
+      - name: Persist successful v7.6.12 rollout audit
+        if: success()
+        run: |
+          set -euo pipefail
+          cat > .github/exit-finalization-v7612-result.txt <<EOF
+          status=SUCCESS
+          source_commit=${SOURCE_COMMIT}
+          deployed_at=${DEPLOYED_AT}
+          pause_new_entries=${FINAL_PAUSE}
+          zro_state=${ZRO_STATE}
+          zro_initial_quantity=${ZRO_INITIAL_QUANTITY}
+          zro_realized_cost_quote=${ZRO_REALIZED_COST}
+          zro_realized_proceeds_quote=${ZRO_REALIZED_PROCEEDS}
+          zro_paid_fees_quote=${ZRO_FEES}
+          zro_realized_pnl_quote=${ZRO_PNL}
+          zro_realized_return_pct=${ZRO_RETURN_PCT}
+          zro_close_reason=${ZRO_CLOSE_REASON}
+          stale_manual_contamination=${STALE_MANUAL_CONTAMINATION}
+          duplicate_pending_sell_positions=${DUPLICATE_PENDING_SELL_POSITIONS}
+          replay_exit_events_after_deploy=${REPLAY_EXIT_EVENTS_AFTER_DEPLOY}
+          latest_monitor=${LATEST_MONITOR}
+          failed_cycles=${FAILED_CYCLES}
+          function=${FUNCTION_LINE}
+          forced_live_trade=false
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/exit-finalization-v7612-result.txt
+          git commit -m "chore: record exit finalization v7.6.12 rollout" || true
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Restore entry state if failure happened before production change
+        if: failure() && env.PRODUCTION_DEPLOYED != 'true' && env.PREVIOUS_PAUSE_NEW_ENTRIES != ''
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          case "${PREVIOUS_PAUSE_NEW_ENTRIES}" in true|t|1) restore=true ;; *) restore=false ;; esac
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=${restore}, updated_at=now() where id=1"
+
+      - name: Keep entries frozen on post-deploy failure
+        if: failure() && env.PRODUCTION_DEPLOYED == 'true'
+        run: |
+          echo "Production changed but verification failed; pause_new_entries remains true (fail-safe)."
