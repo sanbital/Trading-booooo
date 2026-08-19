@@ -1,0 +1,16 @@
+trading_positions_check|CHECK ((((exchange = 'upbit'::text) AND (quote_currency = 'KRW'::text) AND (market ~~ 'KRW-%'::text)) OR ((exchange = 'binance'::text) AND (quote_currency = 'USDT'::text) AND (market ~~ '%USDT'::text)) OR ((exchange = 'binance_futures'::text) AND (quote_currency = 'USDT'::text) AND (market ~~ '%USDT'::text)))) NOT VALID
+trading_positions_check1|CHECK ((stop_price < COALESCE(average_entry_price, planned_entry_price)))
+trading_positions_check2|CHECK ((target_1 > COALESCE(average_entry_price, planned_entry_price)))
+trading_positions_exchange_check|CHECK ((exchange = ANY (ARRAY['upbit'::text, 'binance'::text, 'binance_futures'::text]))) NOT VALID
+trading_positions_exit_policy_check|CHECK ((exit_policy = ANY (ARRAY['FIXED_T1'::text, 'SCALE_OUT'::text, 'TRAIL_AFTER_T1'::text])))
+trading_positions_fee_accounting_quality_ck|CHECK ((fee_accounting_quality = ANY (ARRAY['EXACT'::text, 'AGGREGATE_EXACT'::text, 'THIRD_ASSET_MARKED'::text, 'BASE_ASSET_ACCOUNTED'::text, 'ESTIMATED'::text, 'MISSING'::text, 'LEGACY_UNVERIFIED'::text, 'NOT_APPLICABLE'::text])))
+trading_positions_leverage_ck|CHECK (((leverage >= (1)::numeric) AND (leverage <= (20)::numeric))) NOT VALID
+trading_positions_market_route_ck|CHECK ((((exchange = 'upbit'::text) AND (market ~ '^KRW-[A-Z0-9]{1,20}$'::text)) OR ((exchange = 'binance'::text) AND (market ~ '^[A-Z0-9]{1,24}USDT$'::text)) OR ((exchange = 'binance_futures'::text) AND (market ~ '^[A-Z0-9]{1,24}USDT$'::text)))) NOT VALID
+trading_positions_quote_currency_check|CHECK ((quote_currency = ANY (ARRAY['KRW'::text, 'USDT'::text])))
+trading_positions_remaining_quantity_check|CHECK ((remaining_quantity >= (0)::numeric))
+trading_positions_reserved_quantity_ck|CHECK ((reserved_quantity >= (0)::numeric))
+trading_positions_reserved_quote_ck|CHECK ((reserved_quote >= (0)::numeric))
+trading_positions_residual_fee_base_ck|CHECK ((residual_fee_base >= (0)::numeric))
+trading_positions_residual_quantity_ck|CHECK ((residual_quantity >= (0)::numeric))
+trading_positions_residual_value_quote_ck|CHECK ((residual_value_quote >= (0)::numeric))
+trading_positions_state_v512_ck|CHECK ((state = ANY (ARRAY['ENTRY_PENDING'::text, 'OPEN'::text, 'EXITING'::text, 'RECONCILING'::text, 'RECONCILIATION_FAILED'::text, 'MANUAL_INTERVENTION_REQUIRED'::text, 'CLOSED'::text, 'CANCELLED'::text, 'ERROR'::text])))
