@@ -1,0 +1,263 @@
+name: Apply exit idempotency v7.6.11
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-exit-idempotency-v7611.yml"
+      - "scripts/apply_exit_idempotency_v7611.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-exit-idempotency-v7611
+  cancel-in-progress: false
+
+jobs:
+  patch-test-deploy-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out canonical main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Initialize rollout state
+        run: |
+          : > /tmp/exit-idempotency-rollout.log
+          echo "ROLLOUT_STAGE=setup" >> "${GITHUB_ENV}"
+          echo "PRODUCTION_DEPLOYED=false" >> "${GITHUB_ENV}"
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Freeze new entries during rollout
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          echo "ROLLOUT_STAGE=freeze" >> "${GITHUB_ENV}"
+          test -n "${SUPABASE_DB_URL}"
+          previous_pause=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
+          echo "PREVIOUS_PAUSE_NEW_ENTRIES=${previous_pause:-true}" >> "${GITHUB_ENV}"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=true, updated_at=now() where id=1"
+
+      - name: Verify production settlement contract before changing source
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          echo "ROLLOUT_STAGE=settlement_preflight" >> "${GITHUB_ENV}"
+          fn=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select pg_get_functiondef('public.apply_trading_exit_order(uuid,text,numeric,numeric,numeric,numeric,numeric,numeric)'::regprocedure)")
+          grep -Fq 'v_allocation_ratio := v_sold / v_fill_quantity;' <<< "${fn}"
+          grep -Fq 'v_position_fill_funds := v_fill_funds_total * v_allocation_ratio;' <<< "${fn}"
+          grep -Fq 'executed_volume = v_fill_quantity' <<< "${fn}"
+          baseline=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from (
+              select position_id
+              from public.trading_orders
+              where side='SELL'
+                and position_id is not null
+                and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED')
+              group by position_id
+              having count(*) > 1
+            ) d;")
+          echo "BASELINE_DUPLICATE_PENDING_SELL_POSITIONS=${baseline}" >> "${GITHUB_ENV}"
+          echo "settlement RPC is position-scoped internally; baseline duplicate-pending positions=${baseline}" \
+            | tee -a /tmp/exit-idempotency-rollout.log
+
+      - name: Apply exit idempotency patch
+        run: |
+          set -euo pipefail
+          echo "ROLLOUT_STAGE=patch" >> "${GITHUB_ENV}"
+          python3 scripts/apply_exit_idempotency_v7611.py 2>&1 | tee -a /tmp/exit-idempotency-rollout.log
+          deno fmt \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-autotrader/exit-idempotency.test.ts \
+            2>&1 | tee -a /tmp/exit-idempotency-rollout.log
+
+      - name: Prove patch isolation and invariants
+        run: |
+          set -euo pipefail
+          echo "ROLLOUT_STAGE=isolation" >> "${GITHUB_ENV}"
+          git diff --check 2>&1 | tee -a /tmp/exit-idempotency-rollout.log
+          unexpected=$(git status --short | awk '{print $2}' | grep -Ev \
+            '^(supabase/functions/market-autotrader/index\.ts|supabase/functions/market-autotrader/exit-idempotency\.test\.ts)$' || true)
+          test -z "${unexpected}"
+          grep -q 'EXIT_DEFERRED_UNSETTLED_ORDER' supabase/functions/market-autotrader/index.ts
+          grep -q 'EXIT_CLAIM_SKIPPED' supabase/functions/market-autotrader/index.ts
+          grep -Fq '`id=eq.${position.id}&state=eq.OPEN`' supabase/functions/market-autotrader/index.ts
+          grep -Fq '`id=eq.${position.id}&state=eq.EXITING`' supabase/functions/market-autotrader/index.ts
+          grep -q 'p_fill_quantity: quantity' supabase/functions/market-autotrader/index.ts
+          grep -q 'p_fill_funds: finite(fill.executedFunds, price \* quantity)' supabase/functions/market-autotrader/index.ts
+          grep -q 'const VERSION = "7.6.0-BINANCE-FUTURES"' supabase/functions/market-autotrader/index.ts
+
+      - name: Targeted exit idempotency test
+        run: |
+          set -euo pipefail
+          echo "ROLLOUT_STAGE=targeted_test" >> "${GITHUB_ENV}"
+          deno test --allow-read \
+            supabase/functions/market-autotrader/exit-idempotency.test.ts \
+            2>&1 | tee -a /tmp/exit-idempotency-rollout.log
+
+      - name: Full repository verification
+        run: |
+          set -euo pipefail
+          echo "ROLLOUT_STAGE=full_check" >> "${GITHUB_ENV}"
+          deno task check 2>&1 | tee -a /tmp/exit-idempotency-rollout.log
+          echo "ROLLOUT_STAGE=full_test" >> "${GITHUB_ENV}"
+          deno task test 2>&1 | tee -a /tmp/exit-idempotency-rollout.log
+
+      - name: Commit canonical source only after all tests pass
+        run: |
+          set -euo pipefail
+          echo "ROLLOUT_STAGE=commit" >> "${GITHUB_ENV}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-autotrader/exit-idempotency.test.ts
+          if git diff --cached --quiet; then
+            echo "canonical source already contains exit idempotency patch"
+          else
+            git commit -m "fix: make live exits exchange-idempotent" 2>&1 | tee -a /tmp/exit-idempotency-rollout.log
+            git pull --rebase origin main 2>&1 | tee -a /tmp/exit-idempotency-rollout.log
+            git push origin HEAD:main 2>&1 | tee -a /tmp/exit-idempotency-rollout.log
+          fi
+          echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "${GITHUB_ENV}"
+
+      - name: Deploy patched market-autotrader
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          echo "ROLLOUT_STAGE=deploy" >> "${GITHUB_ENV}"
+          echo "ROLLOUT_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
+          supabase functions deploy market-autotrader \
+            --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api \
+            2>&1 | tee -a /tmp/exit-idempotency-rollout.log
+          echo "PRODUCTION_DEPLOYED=true" >> "${GITHUB_ENV}"
+
+      - name: Verify production monitor and duplicate-exit invariants
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          echo "ROLLOUT_STAGE=production_verify" >> "${GITHUB_ENV}"
+          healthy=false
+          latest=""
+          failed="0"
+          for attempt in $(seq 1 24); do
+            failed=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from public.trading_cycle_runs
+              where started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz and status='FAILED';")
+            latest=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select coalesce(max(started_at)::text,'') from public.trading_cycle_runs
+              where kind='MONITOR' and started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz;")
+            new_dupes=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from (
+                select position_id
+                from public.trading_orders
+                where side='SELL'
+                  and position_id is not null
+                  and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED')
+                group by position_id
+                having count(*) > 1 and max(created_at) >= '${ROLLOUT_STARTED_AT}'::timestamptz
+              ) d;")
+            if [ "${failed}" = "0" ] && [ -n "${latest}" ] && [ "${new_dupes}" = "0" ]; then
+              healthy=true
+              break
+            fi
+            sleep 5
+          done
+          test "${healthy}" = "true"
+          post=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from (
+              select position_id
+              from public.trading_orders
+              where side='SELL'
+                and position_id is not null
+                and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED')
+              group by position_id
+              having count(*) > 1
+            ) d;")
+          natural_exits=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from public.trading_events
+            where created_at >= '${ROLLOUT_STARTED_AT}'::timestamptz
+              and event_type in ('POSITION_CLOSED','PARTIAL_EXIT');")
+          deferred=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from public.trading_events
+            where created_at >= '${ROLLOUT_STARTED_AT}'::timestamptz
+              and event_type in ('EXIT_DEFERRED_UNSETTLED_ORDER','EXIT_CLAIM_SKIPPED');")
+          echo "POST_DUPLICATE_PENDING_SELL_POSITIONS=${post}" >> "${GITHUB_ENV}"
+          echo "NATURAL_EXIT_EVENTS=${natural_exits}" >> "${GITHUB_ENV}"
+          echo "IDEMPOTENCY_GUARD_EVENTS=${deferred}" >> "${GITHUB_ENV}"
+          echo "LATEST_MONITOR=${latest}" >> "${GITHUB_ENV}"
+          echo "FAILED_CYCLES=${failed}" >> "${GITHUB_ENV}"
+          echo "production monitor healthy; new duplicate pending SELL positions=0" \
+            | tee -a /tmp/exit-idempotency-rollout.log
+
+      - name: Restore prior entry state after successful rollout
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          echo "ROLLOUT_STAGE=restore" >> "${GITHUB_ENV}"
+          case "${PREVIOUS_PAUSE_NEW_ENTRIES}" in true|t|1) restore_pause=true ;; *) restore_pause=false ;; esac
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=${restore_pause}, updated_at=now() where id=1"
+
+      - name: Persist successful rollout audit
+        if: success()
+        run: |
+          set -euo pipefail
+          cat > .github/exit-idempotency-v7611-last-result.txt <<EOF
+          status=SUCCESS
+          source_commit=${SOURCE_COMMIT}
+          rollout_started_at=${ROLLOUT_STARTED_AT}
+          baseline_duplicate_pending_sell_positions=${BASELINE_DUPLICATE_PENDING_SELL_POSITIONS}
+          post_duplicate_pending_sell_positions=${POST_DUPLICATE_PENDING_SELL_POSITIONS}
+          natural_exit_events=${NATURAL_EXIT_EVENTS}
+          idempotency_guard_events=${IDEMPOTENCY_GUARD_EVENTS}
+          latest_monitor=${LATEST_MONITOR}
+          failed_cycles=${FAILED_CYCLES}
+          settlement_contract=v7.0.1-full-exchange-fill-internal-position-allocation
+          forced_live_trade=false
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/exit-idempotency-v7611-last-result.txt
+          git commit -m "chore: record exit idempotency rollout" || true
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Restore prior entry state when production was not changed
+        if: failure() && env.PREVIOUS_PAUSE_NEW_ENTRIES != '' && env.PRODUCTION_DEPLOYED != 'true'
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          case "${PREVIOUS_PAUSE_NEW_ENTRIES}" in true|t|1) restore_pause=true ;; *) restore_pause=false ;; esac
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=${restore_pause}, updated_at=now() where id=1"
+          echo "Rollout failed before deployment; prior production preserved and entry state restored."
+
+      - name: Keep entries frozen if post-deploy verification fails
+        if: failure() && env.PRODUCTION_DEPLOYED == 'true'
+        run: |
+          echo "Production was deployed but verification failed; pause_new_entries remains true (fail-safe)."
+          echo "stage=${ROLLOUT_STAGE:-unknown}"
+          tail -n 260 /tmp/exit-idempotency-rollout.log 2>/dev/null || true
