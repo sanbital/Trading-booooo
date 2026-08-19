@@ -1,0 +1,40 @@
+status=FAILED
+stage=zro_audit_metadata
+audited_at=2026-08-19T13:23:31Z
+main_sha=d9a6391ecfa586e915b60186e523669906859962
+pre_pause_new_entries=true
+pause_new_entries=true
+resumed=false
+futures_attribution_trigger=1
+global_engine_lease=verified
+zro_state=CLOSED
+zro_initial_quantity=47.68
+zro_remaining_quantity=0
+zro_realized_pnl_quote=-0.10753837494478435800000000000000000000
+zro_close_reason=TIMEOUT
+zro_repair_revision=unavailable
+detached_manual_fill=unavailable
+detached_manual_order=unavailable
+stale_manual_contamination=unavailable
+duplicate_pending_sell_positions=unavailable
+replay_noop_exit_events=unavailable
+failed_cycles_before_resume=unavailable
+failed_cycles_after_resume=unavailable
+latest_monitor=unavailable
+latest_scan=none
+forced_live_trade=false
+--- log ---
+preflight pause=true reason= intervention=false withdrawal=false
+UPDATE 1
+BEGIN
+psql:supabase/migrations/202608190001_fix_futures_fill_attribution_and_autotrader_global_lease.sql:18: NOTICE:  relation "ops_futures_fill_attribution_audit" already exists, skipping
+CREATE TABLE
+CREATE FUNCTION
+DROP TRIGGER
+CREATE TRIGGER
+CREATE FUNCTION
+CREATE FUNCTION
+COMMIT
+UPDATE 1
+FAILED stage=zro_audit_metadata: ZRO audit metadata did not persist
+UPDATE 1
