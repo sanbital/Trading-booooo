@@ -1,0 +1,12 @@
+audited_at=2026-08-19T12:39:12Z
+main_sha=d8952fc17dcfd726230f5e8d4d971408244fe3d7
+pause_new_entries=true
+latest_monitor=2026-08-19 12:39:04.159654+00
+failed_cycles_last_10m=0
+duplicate_pending_sell_positions=0
+orders_created_last_10m=2
+settlement_rpc_safe=true
+trading_events_columns=id,cycle_id,position_id,order_id,level,code,message,details,created_at
+function_list_rc=0
+function_list_line=   89326713-02fe-48c1-a2a6-ab03a03d4480 | market-autotrader                 | market-autotrader                 | ACTIVE | 344     | 2026-08-19 12:30:11 
+forced_live_trade=false
