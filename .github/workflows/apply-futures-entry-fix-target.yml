@@ -1,0 +1,57 @@
+name: Apply Futures Entry Fix Target
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.trading-patch-pr-trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-main:
+    if: github.event.pull_request.head.ref == 'bot/futures-entry-integrity'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Apply bounded source patch
+        run: python3 .github/scripts/apply_futures_entry_fix.py
+
+      - name: Format changed files
+        run: deno fmt supabase/functions/market-autotrader/index.ts supabase/functions/market-autotrader/futures-exit-policy.ts supabase/functions/market-autotrader/futures-exit-policy.test.ts
+
+      - name: Validate exact safety markers
+        shell: bash
+        run: |
+          grep -q 'FUTURES_SPOT_ONLY_SYMBOL_SKIPPED' supabase/functions/market-autotrader/index.ts
+          grep -q 'FUTURES_UNIVERSE_REFRESH_FAILED' supabase/functions/market-autotrader/index.ts
+          grep -q 'futuresMarginCapacity' supabase/functions/market-autotrader/index.ts
+          grep -q 'futuresAffordableEntry({' supabase/functions/market-autotrader/index.ts
+          grep -q 'walletNotionalCap' supabase/functions/market-autotrader/futures-exit-policy.ts
+
+      - name: Run focused futures tests
+        run: deno test --allow-read supabase/functions/market-autotrader/futures-exit-policy.test.ts supabase/functions/market-autotrader/futures-lane.test.ts
+
+      - name: Type-check autotrader
+        run: deno check supabase/functions/market-autotrader/index.ts
+
+      - name: Commit validated source fix to main
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/market-autotrader/index.ts \
+                  supabase/functions/market-autotrader/futures-exit-policy.ts \
+                  supabase/functions/market-autotrader/futures-exit-policy.test.ts
+          git diff --cached --check
+          git commit -m "fix: remove futures entry execution leakage"
+          git push origin HEAD:main
