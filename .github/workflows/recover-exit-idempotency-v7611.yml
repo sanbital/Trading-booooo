@@ -1,0 +1,184 @@
+name: Recover exit idempotency v7.6.11 rollout
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/recover-exit-idempotency-v7611.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: recover-exit-idempotency-v7611
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Prove current production is safe to resume
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          settings=$(psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+            select coalesce(pause_new_entries,false)::text,
+                   coalesce(manual_event_reason,''),
+                   coalesce(manual_intervention_required,false)::text,
+                   coalesce(withdrawal_mode,false)::text,
+                   coalesce(mode,'')
+            from public.trading_settings where id=1;")
+          IFS='|' read -r pause reason intervention withdrawal mode <<< "${settings}"
+          latest_monitor=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR'")
+          monitor_age=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(extract(epoch from (now()-max(started_at)))::int,999999) from public.trading_cycle_runs where kind='MONITOR'")
+          failed_since_deploy=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select count(*) from public.trading_cycle_runs where started_at >= '2026-08-19T12:30:11Z'::timestamptz and status='FAILED'")
+          dupes=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from (
+              select position_id from public.trading_orders
+              where side='SELL' and position_id is not null
+                and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED')
+              group by position_id having count(*) > 1
+            ) d;")
+          rpc_safe=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select (
+              position('v_allocation_ratio := v_sold / v_fill_quantity;' in pg_get_functiondef('public.apply_trading_exit_order(uuid,text,numeric,numeric,numeric,numeric,numeric,numeric)'::regprocedure)) > 0
+              and position('executed_volume = v_fill_quantity' in pg_get_functiondef('public.apply_trading_exit_order(uuid,text,numeric,numeric,numeric,numeric,numeric,numeric)'::regprocedure)) > 0
+            )::text;")
+          fn_line=$(supabase functions list --project-ref "${SUPABASE_PROJECT_REF}" | grep -F 'market-autotrader' | head -n 1)
+          printf '%s\n' "${fn_line}" | grep -Fq 'ACTIVE'
+          printf '%s\n' "${fn_line}" | grep -Fq '2026-08-19 12:30:11'
+          test "${pause}" = "true"
+          test -z "${reason}"
+          test "${intervention}" != "true"
+          test "${intervention}" != "t"
+          test "${withdrawal}" != "true"
+          test "${withdrawal}" != "t"
+          test "${rpc_safe}" = "true" -o "${rpc_safe}" = "t"
+          test "${failed_since_deploy}" = "0"
+          test "${dupes}" = "0"
+          test "${monitor_age}" -lt 90
+          {
+            echo "PRE_RESUME_LATEST_MONITOR=${latest_monitor}"
+            echo "PRE_RESUME_MODE=${mode}"
+            echo "FUNCTION_LINE=${fn_line}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Resume new entries after fail-safe verification
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          resumed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "RESUMED_AT=${resumed_at}" >> "${GITHUB_ENV}"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "
+            update public.trading_settings
+            set pause_new_entries=false, updated_at=now()
+            where id=1
+              and pause_new_entries=true
+              and coalesce(manual_event_reason,'')=''
+              and coalesce(manual_intervention_required,false)=false
+              and coalesce(withdrawal_mode,false)=false;"
+          state=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
+          test "${state}" = "false" -o "${state}" = "f"
+
+      - name: Verify healthy production after resume
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          healthy=false
+          latest_monitor=""
+          latest_scan=""
+          failed="0"
+          for attempt in $(seq 1 18); do
+            failed=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from public.trading_cycle_runs
+              where started_at >= '${RESUMED_AT}'::timestamptz and status='FAILED';")
+            latest_monitor=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select coalesce(max(started_at)::text,'') from public.trading_cycle_runs
+              where kind='MONITOR' and started_at >= '${RESUMED_AT}'::timestamptz;")
+            latest_scan=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select coalesce(max(started_at)::text,'') from public.trading_cycle_runs
+              where kind='SCAN' and started_at >= '${RESUMED_AT}'::timestamptz;")
+            dupes=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select count(*) from (
+                select position_id from public.trading_orders
+                where side='SELL' and position_id is not null
+                  and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED')
+                group by position_id having count(*) > 1
+              ) d;")
+            if [ "${failed}" = "0" ] && [ -n "${latest_monitor}" ] && [ "${dupes}" = "0" ]; then
+              healthy=true
+              break
+            fi
+            sleep 5
+          done
+          test "${healthy}" = "true"
+          pause=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
+          test "${pause}" = "false" -o "${pause}" = "f"
+          natural_exits=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from public.trading_events
+            where created_at >= '2026-08-19T12:30:11Z'::timestamptz
+              and code in ('POSITION_CLOSED','PARTIAL_EXIT');")
+          guard_events=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from public.trading_events
+            where created_at >= '2026-08-19T12:30:11Z'::timestamptz
+              and code in ('EXIT_DEFERRED_UNSETTLED_ORDER','EXIT_CLAIM_SKIPPED');")
+          orders_after_deploy=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from public.trading_orders
+            where created_at >= '2026-08-19T12:30:11Z'::timestamptz;")
+          cat > .github/exit-idempotency-v7611-recovery-result.txt <<EOF
+          status=SUCCESS_RESUMED
+          resumed_at=${RESUMED_AT}
+          pause_new_entries=${pause}
+          pre_resume_latest_monitor=${PRE_RESUME_LATEST_MONITOR}
+          latest_monitor=${latest_monitor}
+          latest_scan=${latest_scan:-none}
+          failed_cycles_after_resume=${failed}
+          duplicate_pending_sell_positions=0
+          natural_exit_events_since_deploy=${natural_exits}
+          idempotency_guard_events_since_deploy=${guard_events}
+          orders_created_since_deploy=${orders_after_deploy}
+          function=${FUNCTION_LINE}
+          settlement_rpc_safe=true
+          forced_live_trade=false
+          EOF
+
+      - name: Commit recovery audit
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/exit-idempotency-v7611-recovery-result.txt
+          git commit -m "chore: record exit rollout recovery" || true
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Fail safe back to entry pause if post-resume verification fails
+        if: failure() && env.RESUMED_AT != ''
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=true, updated_at=now() where id=1"
+          echo "Post-resume verification failed; new entries were frozen again."
