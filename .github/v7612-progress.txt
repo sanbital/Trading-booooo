@@ -1,0 +1,9 @@
+audited_at=2026-08-19T12:58:25Z
+pause=true
+zro=OPEN|106.47115|58.79115|-31.26382847319156707112708531338060667008|
+manual_fill_detached=false
+manual_order_detached=false
+latest_monitor=2026-08-19 12:58:24.327813+00
+failed_10m=0
+dupes=0
+function=   89326713-02fe-48c1-a2a6-ab03a03d4480 | market-autotrader                 | market-autotrader                 | ACTIVE | 346     | 2026-08-19 12:56:13 
