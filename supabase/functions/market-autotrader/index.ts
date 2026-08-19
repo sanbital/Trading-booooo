@@ -5810,19 +5810,25 @@ async function finalizeExitFill(
     breakevenAfterT1,
   );
   const updated = applied.position;
-  await event(
-    applied.closed ? "POSITION_CLOSED" : "PARTIAL_EXIT",
-    `${position.exchange}:${position.market} ${action}`,
-    {
-      price: applied.fillPrice,
-      sold_quantity: applied.quantity,
-      remaining: finite(updated?.remaining_quantity),
-      pnl_quote: finite(updated?.realized_pnl_quote),
-      quote: position.quote_currency,
-      accounting_applied: applied.applied,
-    },
-    { cycleId, positionId: position.id, orderId: result.orderRow.id },
-  );
+  // Exit finalization idempotency v7.6.12: reconciliation can rediscover an
+  // already-APPLIED exchange order. The accounting RPC is correctly idempotent, so a
+  // replay returns applied=false. Do not manufacture a fresh PARTIAL_EXIT/POSITION_CLOSED
+  // event for that no-op; those events are state-transition facts, not poll telemetry.
+  if (applied.applied) {
+    await event(
+      applied.closed ? "POSITION_CLOSED" : "PARTIAL_EXIT",
+      `${position.exchange}:${position.market} ${action}`,
+      {
+        price: applied.fillPrice,
+        sold_quantity: applied.quantity,
+        remaining: finite(updated?.remaining_quantity),
+        pnl_quote: finite(updated?.realized_pnl_quote),
+        quote: position.quote_currency,
+        accounting_applied: true,
+      },
+      { cycleId, positionId: position.id, orderId: result.orderRow.id },
+    );
+  }
   return {
     action,
     exchange: position.exchange,
