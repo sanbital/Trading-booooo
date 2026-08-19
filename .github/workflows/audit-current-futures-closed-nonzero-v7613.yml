@@ -1,0 +1,96 @@
+name: Audit current futures closed-nonzero history v7.6.13
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/audit-current-futures-closed-nonzero-v7613.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Query current production history read-only
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          {
+            echo "audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo 'SUMMARY'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select 'closed_nonzero',count(*)::text
+              from public.trading_positions
+              where exchange='binance_futures' and state='CLOSED' and abs(coalesce(remaining_quantity,0))>0.00000001;
+              select 'active_futures',count(*)::text
+              from public.trading_positions
+              where exchange='binance_futures' and state in ('OPEN','PARTIAL','EXITING','RECONCILING');
+              select 'pending_futures_sells',count(*)::text
+              from public.trading_orders o join public.trading_positions p on p.id=o.position_id
+              where p.exchange='binance_futures' and o.side='SELL'
+                and o.state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED');"
+            echo 'ROWS'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              with p as (
+                select * from public.trading_positions
+                where exchange='binance_futures' and state='CLOSED' and abs(coalesce(remaining_quantity,0))>0.00000001
+              ), f as (
+                select position_id,
+                       coalesce(sum(quantity) filter(where side='BUY'),0) buy_qty,
+                       coalesce(sum(quantity) filter(where side='SELL'),0) sell_qty,
+                       coalesce(sum(quote_amount) filter(where side='BUY'),0) buy_quote,
+                       coalesce(sum(quote_amount) filter(where side='SELL'),0) sell_quote,
+                       count(*) fill_count,
+                       count(distinct exchange_order_id) filter(where exchange_order_id is not null) exchange_order_count,
+                       min(executed_at) first_fill,max(executed_at) last_fill
+                from public.exchange_trade_fills group by position_id
+              ), o as (
+                select position_id,
+                       count(*) order_count,
+                       count(*) filter(where side='BUY' and state='APPLIED') applied_buys,
+                       count(*) filter(where side='SELL' and state='APPLIED') applied_sells,
+                       coalesce(sum(executed_volume) filter(where side='BUY' and state='APPLIED'),0) applied_buy_qty,
+                       coalesce(sum(executed_volume) filter(where side='SELL' and state='APPLIED'),0) applied_sell_qty,
+                       count(distinct exchange_order_id) filter(where exchange_order_id is not null) exchange_order_count
+                from public.trading_orders group by position_id
+              )
+              select p.id,p.market,p.opened_at,p.closed_at,p.initial_quantity,p.remaining_quantity,
+                     coalesce(p.close_reason,''),coalesce(p.accounting_version,''),
+                     coalesce(p.metadata->>'display_data_status',''),coalesce(p.metadata->>'exclude_from_learning',''),
+                     coalesce(p.metadata->>'exclude_from_performance',''),
+                     coalesce(f.buy_qty,0),coalesce(f.sell_qty,0),coalesce(f.fill_count,0),coalesce(f.exchange_order_count,0),
+                     coalesce(o.applied_buy_qty,0),coalesce(o.applied_sell_qty,0),coalesce(o.order_count,0),coalesce(o.exchange_order_count,0),
+                     coalesce(f.first_fill::text,''),coalesce(f.last_fill::text,'')
+              from p left join f on f.position_id=p.id left join o on o.position_id=p.id
+              order by p.opened_at,p.id;"
+            echo 'ACTIVE'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select id,market,state,opened_at,initial_quantity,remaining_quantity,coalesce(metadata->>'display_data_status','')
+              from public.trading_positions
+              where exchange='binance_futures' and state in ('OPEN','PARTIAL','EXITING','RECONCILING')
+              order by opened_at;"
+            echo 'ATTRIBUTION_GUARD'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select count(*) from pg_trigger
+              where tgrelid='public.exchange_trade_fills'::regclass
+                and tgname='trg_enforce_futures_fill_order_attribution' and not tgisinternal;
+              select case when pg_get_functiondef('public.acquire_trading_lease(text,uuid,integer)'::regprocedure) like '%autotrader-engine%' then 'global_lease_ok' else 'global_lease_missing' end;"
+          } > .github/current-futures-closed-nonzero-v7613.txt
+      - name: Commit audit
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/current-futures-closed-nonzero-v7613.txt
+          git commit -m "chore: record current futures closed-nonzero audit" || true
+          git pull --rebase origin main || true
+          git push origin HEAD:main || true
