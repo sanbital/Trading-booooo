@@ -1,0 +1,10 @@
+audited_at=2026-08-19T13:29:40Z
+SUMMARY
+closed_nonzero|0
+active_futures|0
+pending_futures_sells|1
+ROWS
+ACTIVE
+ATTRIBUTION_GUARD
+1
+global_lease_ok
