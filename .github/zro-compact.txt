@@ -1,0 +1,17 @@
+audited_at=2026-08-19T12:47:18Z
+POSITION
+111c5f48-27bf-4c26-9819-4f4ed7714577|EXITING|ZROUSDT|106.47115|58.79115|1.490675765219028862|71.1286560838311598970447568|39.90816|0.04333238936040717408232851338060667008|-31.26382847319156707112708531338060667008|||2026-08-19 12:47:15.896+00|STOP|HALF_HOLD_ABSOLUTE_TIMEOUT||
+ORDERS
+038e70c3-a28b-4e91-8316-eee8cc62e6a0|2025-06-29 22:04:31.726+00|BUY|ENTRY|APPLIED|manual-adopt-55ddf00e3f894df88e0790af3e60cd0b|58.85|58.85|2.02|118.877|0.118877|ZRO|2025-06-29 22:04:31.726+00|
+bd4fdb4a-7a0f-4955-82e9-e8009dda7831|2026-08-19 07:26:00.692299+00|BUY|ENTRY|APPLIED|tb-e-111c5f4827bf-mszrp9z9|47.68|47.68|0.8380000000000001|39.95584|0.029929708979718854|BNB|2026-08-19 07:27:09.125+00|
+76b87951-0409-4c5b-b211-df54a2c88384|2026-08-19 07:26:17.540435+00|SELL|STOP|APPLIED|tb-x-111c5f4827bf-mszrpmww|47.68|47.68|0.8370000000000001|39.90816|0.029929708979718854|BNB|2026-08-19 12:47:09.981+00|
+FILLS
+a91c0e6b-18f0-41d8-85dc-82754c30a1af|68889642|0.837|47.68|39.908159999999995|0.0000497|BNB|0.029929708979718854|2026-08-19 07:26:18.17+00
+RECONCILE_DETAILS
+2026-08-19 12:47:17.389386+00|EXIT_RECONCILE_INCOMPLETE|{"reason": "no available ZRO balance for exit", "position": {"state": "EXITING", "closed_at": null, "realized_pnl_quote": -31.263828473191566, "remaining_quantity": 58.79115}, "reconcile": {"market": "ZROUSDT", "exchange": "binance", "positions_closed": 0, "orphan_sell_fills": 1, "closed_position_ids": [], "positions_evaluated": 1, "fills_attributed_fifo": 0, "fills_linked_to_orders": 0, "fills_spanning_positions": 0}}
+2026-08-19 12:47:04.683215+00|EXIT_RECONCILE_INCOMPLETE|{"reason": "no available ZRO balance for exit", "position": {"state": "EXITING", "closed_at": null, "realized_pnl_quote": -31.263828473191566, "remaining_quantity": 58.79115}, "reconcile": {"market": "ZROUSDT", "exchange": "binance", "positions_closed": 0, "orphan_sell_fills": 1, "closed_position_ids": [], "positions_evaluated": 1, "fills_attributed_fifo": 0, "fills_linked_to_orders": 0, "fills_spanning_positions": 0}}
+2026-08-19 12:46:49.15467+00|EXIT_RECONCILE_INCOMPLETE|{"reason": "no available ZRO balance for exit", "position": {"state": "EXITING", "closed_at": null, "realized_pnl_quote": -31.263828473191566, "remaining_quantity": 58.79115}, "reconcile": {"market": "ZROUSDT", "exchange": "binance", "positions_closed": 0, "orphan_sell_fills": 1, "closed_position_ids": [], "positions_evaluated": 1, "fills_attributed_fifo": 0, "fills_linked_to_orders": 0, "fills_spanning_positions": 0}}
+PARTIAL_DETAILS
+2026-08-19 12:47:24.153542+00|PARTIAL_EXIT|{"price": 0.8370000000000001, "quote": "USDT", "pnl_quote": -31.263828473191566, "remaining": 58.79115, "sold_quantity": 47.68, "accounting_applied": false}
+2026-08-19 12:47:10.198328+00|PARTIAL_EXIT|{"price": 0.8370000000000001, "quote": "USDT", "pnl_quote": -31.263828473191566, "remaining": 58.79115, "sold_quantity": 47.68, "accounting_applied": false}
+2026-08-19 12:46:54.188553+00|PARTIAL_EXIT|{"price": 0.8370000000000001, "quote": "USDT", "pnl_quote": -31.263828473191566, "remaining": 58.79115, "sold_quantity": 47.68, "accounting_applied": false}
