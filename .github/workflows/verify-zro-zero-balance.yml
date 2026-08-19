@@ -1,0 +1,64 @@
+name: Verify ZRO zero balance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/verify-zro-zero-balance.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Query authenticated snapshots and fill ledger
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          POS='111c5f48-27bf-4c26-9819-4f4ed7714577'
+          {
+            echo "audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo 'LATEST_ZRO_SNAPSHOTS'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              with s as (
+                select captured_at,accounts
+                from public.trading_account_snapshots
+                where exchange='binance' order by captured_at desc limit 3
+              )
+              select captured_at,
+                     coalesce((select coalesce(nullif(a->>'balance','')::numeric,nullif(a->>'free','')::numeric,0)
+                               from jsonb_array_elements(coalesce(accounts,'[]'::jsonb)) a
+                               where upper(coalesce(a->>'currency',a->>'asset',''))='ZRO' limit 1),0) free_or_balance,
+                     coalesce((select coalesce(nullif(a->>'locked','')::numeric,0)
+                               from jsonb_array_elements(coalesce(accounts,'[]'::jsonb)) a
+                               where upper(coalesce(a->>'currency',a->>'asset',''))='ZRO' limit 1),0) locked
+              from s order by captured_at desc;"
+            echo 'EXCHANGE_FILLS_FOR_POSITION'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select executed_at,id,side,quantity,quote_amount,coalesce(fee_amount,0),coalesce(fee_asset,''),coalesce(fee_quote_amount,0),
+                     coalesce(bot_order_id::text,''),coalesce(position_id::text,''),coalesce(source,''),coalesce(accounting_status,'')
+              from public.exchange_trade_fills
+              where position_id='${POS}'::uuid or (exchange='binance' and market='ZROUSDT' and executed_at >= '2026-08-19T07:20:00Z'::timestamptz)
+              order by executed_at;"
+            echo 'PENDING_ZRO_SELLS'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select count(*) from public.trading_orders where market='ZROUSDT' and side='SELL'
+                and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED');"
+          } > .github/zro-zero-balance.txt
+      - name: Commit result
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/zro-zero-balance.txt
+          git commit -m "chore: record ZRO zero-balance verification" || true
+          git pull --rebase origin main
+          git push origin HEAD:main
