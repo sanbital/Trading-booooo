@@ -1,0 +1,92 @@
+name: Forensic futures closed nonzero
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/forensic-futures-closed-nonzero.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Query exact futures rows and database writers
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          PUMP='e295a329-e526-4918-b356-224cbe52df85'
+          EUL='82762144-bf25-4cb0-ab8f-2ef528800776'
+          {
+            echo "audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo 'POSITIONS'
+            psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select jsonb_build_object(
+                'id',id,'market',market,'state',state,'opened_at',opened_at,'closed_at',closed_at,
+                'initial_quantity',initial_quantity,'remaining_quantity',remaining_quantity,
+                'realized_cost_quote',realized_cost_quote,'realized_proceeds_quote',realized_proceeds_quote,
+                'paid_fees_quote',paid_fees_quote,'realized_pnl_quote',realized_pnl_quote,
+                'realized_return_pct',realized_return_pct,'close_reason',close_reason,
+                'accounting_version',accounting_version,'metadata',metadata
+              )::text from public.trading_positions where id in ('${PUMP}'::uuid,'${EUL}'::uuid) order by opened_at;"
+            echo 'ORDERS'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select position_id,id,created_at,side,purpose,state,identifier,requested_volume,executed_volume,
+                     average_fill_price,executed_funds_quote,paid_fee_quote,coalesce(completed_at::text,''),coalesce(error_message,'')
+              from public.trading_orders where position_id in ('${PUMP}'::uuid,'${EUL}'::uuid) order by position_id,created_at;"
+            echo 'EXCHANGE_FILLS'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select position_id,executed_at,id,side,quantity,quote_amount,fee_quote_amount,coalesce(bot_order_id::text,''),source,accounting_status
+              from public.exchange_trade_fills where position_id in ('${PUMP}'::uuid,'${EUL}'::uuid) order by position_id,executed_at;"
+            echo 'EVENTS'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select position_id,created_at,code,left(coalesce(message,''),120),details::text
+              from public.trading_events where position_id in ('${PUMP}'::uuid,'${EUL}'::uuid) order by position_id,created_at;"
+            echo 'RECENT_FUTURES_SNAPSHOTS'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select captured_at,balances::text from public.trading_account_snapshots
+              where exchange='binance_futures' order by captured_at desc limit 5;"
+            echo 'DB_WRITERS_MATCHING_MARKERS'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select n.nspname,p.proname,pg_get_function_identity_arguments(p.oid),
+                     case when pg_get_functiondef(p.oid) ilike '%EXCHANGE_FUTURES_FILL_RECONCILED%' then 'FILL_MARKER' else '' end,
+                     case when pg_get_functiondef(p.oid) ilike '%FUTURES_EXCHANGE_POSITION_ZERO%' then 'ZERO_MARKER' else '' end
+              from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+              where n.nspname='public' and (
+                pg_get_functiondef(p.oid) ilike '%EXCHANGE_FUTURES_FILL_RECONCILED%'
+                or pg_get_functiondef(p.oid) ilike '%FUTURES_EXCHANGE_POSITION_ZERO%'
+                or pg_get_functiondef(p.oid) ilike '%EXCHANGE_FUTURES_POSITION_ZERO_RECONCILED%'
+              ) order by p.proname;"
+            echo 'WRITER_DEFS'
+            psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select '-- '||p.proname||E'\n'||pg_get_functiondef(p.oid)
+              from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+              where n.nspname='public' and (
+                pg_get_functiondef(p.oid) ilike '%EXCHANGE_FUTURES_FILL_RECONCILED%'
+                or pg_get_functiondef(p.oid) ilike '%FUTURES_EXCHANGE_POSITION_ZERO%'
+                or pg_get_functiondef(p.oid) ilike '%EXCHANGE_FUTURES_POSITION_ZERO_RECONCILED%'
+              ) order by p.proname;"
+            echo 'GLOBAL_CLOSED_NONZERO_FUTURES'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select id,market,initial_quantity,remaining_quantity,close_reason,accounting_version,
+                     coalesce(metadata->>'display_data_status',''),coalesce(metadata->>'exclude_from_learning',''),updated_at
+              from public.trading_positions where exchange='binance_futures' and state='CLOSED' and remaining_quantity<>0 order by updated_at desc;"
+          } > .github/futures-closed-nonzero-forensic.txt
+      - name: Commit forensic result
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/futures-closed-nonzero-forensic.txt
+          git commit -m "chore: record futures closed-nonzero forensic" || true
+          git pull --rebase origin main || true
+          git push origin HEAD:main || true
