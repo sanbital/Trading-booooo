@@ -1,0 +1,174 @@
+name: Finalize ZRO repair and resume entries
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/finalize-zro-repair-and-resume.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: finalize-zro-repair-and-resume
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Guard, persist incident metadata, resume, verify
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          POS='111c5f48-27bf-4c26-9819-4f4ed7714577'
+          FILL='55ddf00e-3f89-4df8-8e07-90af3e60cd0b'
+          MANUAL_ORDER='038e70c3-a28b-4e91-8316-eee8cc62e6a0'
+          MUTATED=false
+          trap 'rc=$?; if [ "$rc" -ne 0 ] && [ "$MUTATED" = true ]; then psql "$SUPABASE_DB_URL" --set=ON_ERROR_STOP=1 -c "update public.trading_settings set pause_new_entries=true,updated_at=now() where id=1" || true; fi; exit "$rc"' EXIT
+
+          settings=$(psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+            select coalesce(pause_new_entries,false)::text,coalesce(manual_event_reason,''),
+                   coalesce(manual_intervention_required,false)::text,coalesce(withdrawal_mode,false)::text
+            from public.trading_settings where id=1")
+          IFS='|' read -r pause reason intervention withdrawal <<< "${settings}"
+          test "${pause}" = true -o "${pause}" = t
+          test -z "${reason}"
+          test "${intervention}" != true -a "${intervention}" != t
+          test "${withdrawal}" != true -a "${withdrawal}" != t
+
+          row=$(psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+            select state,initial_quantity,remaining_quantity,average_entry_price,realized_cost_quote,
+                   realized_proceeds_quote,paid_fees_quote,realized_pnl_quote,realized_return_pct,coalesce(close_reason,'')
+            from public.trading_positions where id='${POS}'::uuid")
+          IFS='|' read -r state initial remaining entry cost proceeds fees pnl ret close_reason <<< "${row}"
+          test "${state}" = CLOSED
+          awk -v x="${initial}" 'BEGIN{exit !(x>47.679999 && x<47.680001)}'
+          awk -v x="${remaining}" 'BEGIN{exit !(x>-0.00000001 && x<0.00000001)}'
+          awk -v x="${entry}" 'BEGIN{exit !(x>0.837999 && x<0.838001)}'
+          awk -v x="${pnl}" 'BEGIN{exit !(x>-0.108 && x<-0.107)}'
+          test "${close_reason}" = TIMEOUT
+
+          detached_fill=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select (position_id is null)::text from public.exchange_trade_fills where id='${FILL}'::uuid")
+          detached_order=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select (position_id is null)::text from public.trading_orders where id='${MANUAL_ORDER}'::uuid")
+          test "${detached_fill}" = true -o "${detached_fill}" = t
+          test "${detached_order}" = true -o "${detached_order}" = t
+
+          stale=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from public.trading_positions p join public.exchange_trade_fills f on f.position_id=p.id
+            where f.source='MANUAL' and p.opened_at is not null and f.executed_at<p.opened_at-interval '1 minute' and p.state<>'CLOSED'")
+          dupes=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from (select position_id from public.trading_orders where side='SELL' and position_id is not null
+              and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED') group by position_id having count(*)>1)d")
+          replay=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from public.trading_events where created_at>='2026-08-19T12:56:13Z'::timestamptz
+              and code in ('PARTIAL_EXIT','POSITION_CLOSED') and details->>'accounting_applied'='false'")
+          failed=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from public.trading_cycle_runs where started_at>='2026-08-19T12:56:13Z'::timestamptz and status='FAILED'")
+          test "${stale}" = 0
+          test "${dupes}" = 0
+          test "${replay}" = 0
+          test "${failed}" = 0
+
+          MUTATED=true
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "
+            update public.trading_positions
+            set metadata=(coalesce(metadata,'{}'::jsonb)
+              - 'pending_exit_action' - 'pending_exit_reason' - 'pending_exit_at')
+              || jsonb_build_object(
+                'exclude_from_learning',true,
+                'display_data_status','ACCOUNTING_REPAIRED_STALE_MANUAL_FILL',
+                'accounting_repair',jsonb_build_object(
+                  'revision','7.6.12-ZRO-STALE-MANUAL-DETACH-AUDIT',
+                  'recorded_at',now(),
+                  'reason','STALE_MANUAL_FILL_PREDATES_BOT_POSITION_AND_AUTHENTICATED_BALANCE_IS_ZERO',
+                  'detached_manual_fill_id','${FILL}',
+                  'detached_manual_order_id','${MANUAL_ORDER}',
+                  'verified_initial_quantity',47.68,
+                  'verified_remaining_quantity',0,
+                  'verified_close_reason','TIMEOUT',
+                  'verified_realized_pnl_quote',realized_pnl_quote
+                )
+              ),
+              updated_at=now()
+            where id='${POS}'::uuid and state='CLOSED' and abs(remaining_quantity)<=0.00000001
+              and abs(initial_quantity-47.68)<=0.00000001
+              and abs(realized_pnl_quote-(-0.107538374944784358))<=0.00000001")
+
+          audit=$(psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+            select coalesce(metadata->'accounting_repair'->>'revision',''),
+                   coalesce(metadata->>'display_data_status',''),coalesce(metadata->>'exclude_from_learning',''),
+                   coalesce(metadata->>'pending_exit_action',''),coalesce(metadata->>'pending_exit_reason','')
+            from public.trading_positions where id='${POS}'::uuid")
+          IFS='|' read -r revision display exclude pending_action pending_reason <<< "${audit}"
+          test "${revision}" = 7.6.12-ZRO-STALE-MANUAL-DETACH-AUDIT
+          test "${display}" = ACCOUNTING_REPAIRED_STALE_MANUAL_FILL
+          test "${exclude}" = true
+          test -z "${pending_action}"
+          test -z "${pending_reason}"
+
+          resume_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "
+            update public.trading_settings set pause_new_entries=false,updated_at=now()
+            where id=1 and pause_new_entries=true and coalesce(manual_event_reason,'')=''
+              and coalesce(manual_intervention_required,false)=false and coalesce(withdrawal_mode,false)=false"
+
+          healthy=false
+          latest_monitor=''
+          latest_scan=''
+          for attempt in $(seq 1 30); do
+            pause_now=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
+            latest_monitor=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR' and started_at>='${resume_at}'::timestamptz")
+            latest_scan=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='SCAN' and started_at>='${resume_at}'::timestamptz")
+            failed_now=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_cycle_runs where started_at>='${resume_at}'::timestamptz and status='FAILED'")
+            dupes_now=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from (select position_id from public.trading_orders where side='SELL' and position_id is not null and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED') group by position_id having count(*)>1)d")
+            if { [ "${pause_now}" = false ] || [ "${pause_now}" = f ]; } && [ -n "${latest_monitor}" ] && [ "${failed_now}" = 0 ] && [ "${dupes_now}" = 0 ]; then healthy=true; break; fi
+            sleep 5
+          done
+          test "${healthy}" = true
+
+          audit_after=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(metadata->'accounting_repair'->>'revision','') from public.trading_positions where id='${POS}'::uuid")
+          test "${audit_after}" = 7.6.12-ZRO-STALE-MANUAL-DETACH-AUDIT
+
+          cat > .github/zro-finalize-resume-result.txt <<EOF
+          status=SUCCESS
+          pause_new_entries=false
+          zro_state=${state}
+          zro_initial_quantity=${initial}
+          zro_remaining_quantity=${remaining}
+          zro_average_entry_price=${entry}
+          zro_realized_cost_quote=${cost}
+          zro_realized_proceeds_quote=${proceeds}
+          zro_paid_fees_quote=${fees}
+          zro_realized_pnl_quote=${pnl}
+          zro_realized_return_pct=${ret}
+          zro_close_reason=${close_reason}
+          zro_repair_revision=${audit_after}
+          detached_manual_fill=${detached_fill}
+          detached_manual_order=${detached_order}
+          stale_manual_contamination=${stale}
+          duplicate_pending_sell_positions=${dupes_now}
+          replay_noop_exit_events=${replay}
+          failed_cycles_before_resume=${failed}
+          latest_monitor=${latest_monitor}
+          latest_scan=${latest_scan:-none}
+          forced_live_trade=false
+          EOF
+
+      - name: Commit successful production audit
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/zro-finalize-resume-result.txt
+          git commit -m "chore: record ZRO repair finalization and resume" || true
+          git pull --rebase origin main || true
+          git push origin HEAD:main || true
