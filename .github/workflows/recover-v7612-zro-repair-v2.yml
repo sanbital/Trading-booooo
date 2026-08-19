@@ -1,0 +1,182 @@
+name: Recover v7.6.12 ZRO repair v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/recover-v7612-zro-repair-v2.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: recover-v7612-zro-repair-v2
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Verify fail-safe state and deployed function
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          grep -q 'Exit finalization idempotency v7.6.12' supabase/functions/market-autotrader/index.ts
+          grep -q 'if (applied.applied)' supabase/functions/market-autotrader/index.ts
+          grep -q 'EXIT_DEFERRED_UNSETTLED_ORDER' supabase/functions/market-autotrader/index.ts
+          fn_line=$(supabase functions list --project-ref "${SUPABASE_PROJECT_REF}" | grep -F 'market-autotrader' | head -n1)
+          printf '%s\n' "${fn_line}" | grep -Fq 'ACTIVE'
+          settings=$(psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+            select coalesce(pause_new_entries,false)::text,coalesce(manual_event_reason,''),
+                   coalesce(manual_intervention_required,false)::text,coalesce(withdrawal_mode,false)::text
+            from public.trading_settings where id=1;")
+          IFS='|' read -r pause reason intervention withdrawal <<< "${settings}"
+          test "${pause}" = "true" -o "${pause}" = "t"
+          test -z "${reason}"
+          test "${intervention}" != "true" -a "${intervention}" != "t"
+          test "${withdrawal}" != "true" -a "${withdrawal}" != "t"
+          echo "FUNCTION_LINE=${fn_line}" >> "${GITHUB_ENV}"
+
+      - name: Dry-run guarded repair
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          { echo 'BEGIN;'; cat supabase/migrations/20260819125500_zro_stale_manual_fill_repair.sql; echo 'ROLLBACK;'; } > /tmp/repair.sql
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -f /tmp/repair.sql
+
+      - name: Apply guarded repair
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -f supabase/migrations/20260819125500_zro_stale_manual_fill_repair.sql
+          echo "MUTATED=true" >> "${GITHUB_ENV}"
+          echo "REPAIR_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
+
+      - name: Verify exact repair and invariants
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          pos=$(psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+            select state,initial_quantity,remaining_quantity,planned_entry_price,average_entry_price,
+                   stop_price,target_1,realized_cost_quote,realized_proceeds_quote,paid_fees_quote,
+                   realized_pnl_quote,realized_return_pct,coalesce(close_reason,''),
+                   coalesce(metadata->'accounting_repair'->>'revision','')
+            from public.trading_positions where id='111c5f48-27bf-4c26-9819-4f4ed7714577'::uuid;")
+          IFS='|' read -r state initial remaining planned avg stop target cost proceeds fees pnl ret reason revision <<< "${pos}"
+          test "${state}" = "CLOSED"
+          test "${revision}" = "7.6.12-ZRO-STALE-MANUAL-DETACH"
+          awk -v x="${initial}" 'BEGIN{exit !(x>47.679999 && x<47.680001)}'
+          awk -v x="${remaining}" 'BEGIN{exit !(x>-0.00000001 && x<0.00000001)}'
+          awk -v s="${stop}" -v a="${avg}" -v t="${target}" 'BEGIN{exit !(s<a && t>a)}'
+          awk -v x="${pnl}" 'BEGIN{exit !(x>-0.108 && x<-0.107)}'
+
+          detached_fill=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select (position_id is null)::text from public.exchange_trade_fills where id='55ddf00e-3f89-4df8-8e07-90af3e60cd0b'::uuid")
+          detached_order=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select (position_id is null)::text from public.trading_orders where id='038e70c3-a28b-4e91-8316-eee8cc62e6a0'::uuid")
+          test "${detached_fill}" = "true" -o "${detached_fill}" = "t"
+          test "${detached_order}" = "true" -o "${detached_order}" = "t"
+
+          stale=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_positions p join public.exchange_trade_fills f on f.position_id=p.id where f.source='MANUAL' and p.opened_at is not null and f.executed_at<p.opened_at-interval '1 minute' and p.state<>'CLOSED'")
+          dupes=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from (select position_id from public.trading_orders where side='SELL' and position_id is not null and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED') group by position_id having count(*)>1)d")
+          suspicious=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "with s as (select position_id,purpose,created_at,lag(created_at) over(partition by position_id,purpose order by created_at) prev_at from public.trading_orders where side='SELL' and state='APPLIED' and created_at>='2026-08-19T12:56:13Z'::timestamptz) select count(*) from s where prev_at is not null and created_at-prev_at<=interval '5 seconds'")
+          replay=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_events where created_at>='2026-08-19T12:56:13Z'::timestamptz and code in ('PARTIAL_EXIT','POSITION_CLOSED') and details->>'accounting_applied'='false'")
+          failed=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_cycle_runs where started_at>='2026-08-19T12:56:13Z'::timestamptz and status='FAILED'")
+          test "${stale}" = "0"
+          test "${dupes}" = "0"
+          test "${suspicious}" = "0"
+          test "${replay}" = "0"
+          test "${failed}" = "0"
+          {
+            echo "ZRO_INITIAL=${initial}"
+            echo "ZRO_PLANNED=${planned}"
+            echo "ZRO_AVG=${avg}"
+            echo "ZRO_STOP=${stop}"
+            echo "ZRO_TARGET=${target}"
+            echo "ZRO_COST=${cost}"
+            echo "ZRO_PROCEEDS=${proceeds}"
+            echo "ZRO_FEES=${fees}"
+            echo "ZRO_PNL=${pnl}"
+            echo "ZRO_RETURN=${ret}"
+            echo "ZRO_REASON=${reason}"
+            echo "STALE=${stale}"
+            echo "DUPES=${dupes}"
+            echo "SUSPICIOUS=${suspicious}"
+            echo "REPLAY=${replay}"
+            echo "FAILED=${failed}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Resume entries and verify monitor
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "update public.trading_settings set pause_new_entries=false,updated_at=now() where id=1 and pause_new_entries=true and coalesce(manual_event_reason,'')='' and coalesce(manual_intervention_required,false)=false and coalesce(withdrawal_mode,false)=false"
+          resumed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          healthy=false
+          latest=''
+          for attempt in $(seq 1 20); do
+            pause=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
+            latest=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR' and started_at>='${resumed_at}'::timestamptz")
+            failed_now=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_cycle_runs where started_at>='${resumed_at}'::timestamptz and status='FAILED'")
+            if { [ "${pause}" = "false" ] || [ "${pause}" = "f" ]; } && [ -n "${latest}" ] && [ "${failed_now}" = "0" ]; then healthy=true; break; fi
+            sleep 5
+          done
+          test "${healthy}" = "true"
+          echo "LATEST_MONITOR=${latest}" >> "${GITHUB_ENV}"
+
+      - name: Persist success audit
+        run: |
+          set -euo pipefail
+          cat > .github/v7612-zro-recovery-v2-result.txt <<EOF
+          status=SUCCESS
+          repair_at=${REPAIR_AT}
+          pause_new_entries=false
+          zro_state=CLOSED
+          zro_initial_quantity=${ZRO_INITIAL}
+          zro_planned_entry_price=${ZRO_PLANNED}
+          zro_average_entry_price=${ZRO_AVG}
+          zro_stop_price=${ZRO_STOP}
+          zro_target_1=${ZRO_TARGET}
+          zro_realized_cost_quote=${ZRO_COST}
+          zro_realized_proceeds_quote=${ZRO_PROCEEDS}
+          zro_paid_fees_quote=${ZRO_FEES}
+          zro_realized_pnl_quote=${ZRO_PNL}
+          zro_realized_return_pct=${ZRO_RETURN}
+          zro_close_reason=${ZRO_REASON}
+          stale_manual_contamination=${STALE}
+          duplicate_pending_sell_positions=${DUPES}
+          suspicious_applied_sell_pairs_after_patch=${SUSPICIOUS}
+          replay_exit_events_after_patch=${REPLAY}
+          failed_cycles_since_patch=${FAILED}
+          latest_monitor=${LATEST_MONITOR}
+          function=${FUNCTION_LINE}
+          forced_live_trade=false
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/v7612-zro-recovery-v2-result.txt
+          git commit -m "chore: record v7.6.12 ZRO recovery v2" || true
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Fail safe to paused entries on post-mutation failure
+        if: failure() && env.MUTATED == 'true'
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "update public.trading_settings set pause_new_entries=true,updated_at=now() where id=1"
