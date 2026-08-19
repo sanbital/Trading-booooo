@@ -1,0 +1,50 @@
+audited_at=2026-08-19T12:59:29Z
+rc=3
+BEGIN
+psql:/tmp/zro-repair-debug.sql:224: ERROR:  new row for relation "trading_positions" violates check constraint "trading_positions_check1"
+DETAIL:  Failing row contains (111c5f48-27bf-4c26-9819-4f4ed7714577, 76313a3f-6f37-452e-ac74-10c1d24cc894, 95e2060e-094f-4965-a902-c965eb9cee3c, binance, USDT, ZROUSDT, ZRO, CLOSED, f, 0, 47.68, 0, 0.83800000000000000000, 1.490675765219028862, 1.487, 1.56520955347998030510000000000000000000, null, 0.001, 0.01, 40, 50, f, SCALE_OUT, 0.854, 0.826, null, 1.5, 1, 2026-08-19 07:36:02.000774+00, 2026-08-19 07:26:02.000774+00, 2026-08-19 07:26:18.17+00, TIMEOUT, 39.90816, 39.9558400000000000000000000, 0.05985837494478435800000000000000000000, -0.10753837494478435800000000000000000000, {"sizing": {"reason": null, "allowed": true, "leverage": 1, "qua..., 2026-08-19 07:25:59.839794+00, 2026-08-19 12:59:28.380524+00, 3b9f4cbd-7f53-492f-ac1e-87d35a0cd69c, 0, 0, 0, 7.5.4, 0, 0, null, EXACT, 6.10.0, null, 2026-08-19 07:36:02.000774+00, 1.90930787589498806700, -0.26914307131269010487578286428216751300, 2.17845094720767817187578286428216751300, 217.84509472076781718757828642821675130000, -0.14096368360002144241582833903928327831, 1).
+CONTEXT:  SQL statement "update public.trading_positions
+  set state = 'CLOSED',
+      initial_quantity = v_buy_qty,
+      remaining_quantity = 0,
+      average_entry_price = case when v_buy_qty > 0 then v_buy_quote / v_buy_qty else average_entry_price end,
+      realized_cost_quote = v_buy_quote,
+      realized_proceeds_quote = v_sell_quote,
+      paid_fees_quote = v_buy_fee + v_sell_fee,
+      realized_pnl_quote = v_pnl,
+      realized_return_pct = v_return,
+      residual_quantity = 0,
+      residual_value_quote = 0,
+      reserved_quantity = 0,
+      reserved_quote = 0,
+      reservation_expires_at = null,
+      marked_pnl_quote = null,
+      close_reason = v_original_reason,
+      closed_at = coalesce(v_last_sell, closed_at, now()),
+      fee_accounting_quality = 'EXACT',
+      accounting_version = '7.6.12-ZRO-STALE-MANUAL-DETACH',
+      metadata = coalesce(metadata,'{}'::jsonb) || jsonb_build_object(
+        'exclude_from_learning', true,
+        'display_data_status', 'ACCOUNTING_REPAIRED_STALE_MANUAL_FILL',
+        'pending_exit_action', null,
+        'pending_exit_reason', null,
+        'pending_exit_at', null,
+        'accounting_repair', jsonb_build_object(
+          'revision', '7.6.12-ZRO-STALE-MANUAL-DETACH',
+          'repaired_at', now(),
+          'reason', 'STALE_MANUAL_FILL_PREDATES_BOT_POSITION_AND_AUTHENTICATED_BALANCE_IS_ZERO',
+          'detached_manual_fill_id', v_manual_fill_id,
+          'detached_manual_order_id', v_manual_order_id,
+          'original_initial_quantity', p.initial_quantity,
+          'original_remaining_quantity', p.remaining_quantity,
+          'original_realized_pnl_quote', p.realized_pnl_quote,
+          'original_exit_reason', v_original_reason,
+          'verified_zero_snapshot_count', v_zero_snapshot_count,
+          'automated_buy_quantity', v_buy_qty,
+          'automated_sell_quantity', v_sell_qty,
+          'reconcile_result', v_reconcile
+        )
+      ),
+      updated_at = now()
+  where id = v_position_id"
+PL/pgSQL function inline_code_block line 162 at SQL statement
