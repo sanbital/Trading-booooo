@@ -5956,9 +5956,36 @@ async function applyExit(
   const protectedExitAudit = protectedLateRecovery?.audit || protectedPositiveNet?.audit || null;
 
   if (!position.is_paper) {
-    position = {
-      ...position,
-      ...(await patch("trading_positions", `id=eq.${position.id}`, {
+    // Exit idempotency v7.6.11: never submit a second exchange SELL while an earlier
+    // bot SELL for this position is still unresolved. The order ledger is durable and
+    // reconciliation owns UNKNOWN/REQUESTED orders, so retrying here would be unsafe.
+    const pendingSellOrders = await unappliedBotSellOrders(position);
+    if (pendingSellOrders.length > 0) {
+      await event(
+        "EXIT_DEFERRED_UNSETTLED_ORDER",
+        `${position.exchange}:${position.market} exit deferred because a bot SELL is still unsettled`,
+        {
+          action,
+          decision_reason: decisionReason || action,
+          pending_order_ids: pendingSellOrders.map((row) => row.id).filter(Boolean),
+          pending_order_states: pendingSellOrders.map((row) => row.state).filter(Boolean),
+        },
+        { cycleId, positionId: position.id, level: "INFO" },
+      );
+      return {
+        action: "NONE",
+        reason: "exit deferred: unresolved bot SELL already exists",
+        position,
+      };
+    }
+
+    // This conditional PATCH is the exchange-side-effect claim. Concurrent monitor
+    // invocations may both hold a stale OPEN snapshot, but only one can move OPEN to
+    // EXITING and therefore only one is allowed to reach sellLive().
+    const claimed = await patch(
+      "trading_positions",
+      `id=eq.${position.id}&state=eq.OPEN`,
+      {
         state: "EXITING",
         metadata: {
           ...(position.metadata || {}),
@@ -5967,24 +5994,42 @@ async function applyExit(
           pending_exit_at: new Date().toISOString(),
           ...(protectedExitAudit ? { exit_policy_quote: protectedExitAudit } : {}),
         },
-      }))[0],
-    };
+      },
+    );
+    if (!claimed.length) {
+      await event(
+        "EXIT_CLAIM_SKIPPED",
+        `${position.exchange}:${position.market} exit skipped because position is no longer OPEN`,
+        { action, decision_reason: decisionReason || action },
+        { cycleId, positionId: position.id, level: "INFO" },
+      );
+      return {
+        action: "NONE",
+        reason: "exit already claimed or position not open",
+        position,
+      };
+    }
+    position = { ...position, ...claimed[0] };
   }
   const result = position.is_paper
     ? await sellPaper(position, quantity, price, action, cycleId)
     : await sellLive(position, quantity, action, cycleId, protectedLimit);
 
   if (!position.is_paper && (result as any)?.noFill) {
-    const reopened = (await patch("trading_positions", `id=eq.${position.id}`, {
-      state: "OPEN",
-      metadata: {
-        ...(position.metadata || {}),
-        pending_exit_action: null,
-        pending_exit_reason: null,
-        pending_exit_at: null,
-        protected_limit_last_unfilled_at: new Date().toISOString(),
+    const reopened = (await patch(
+      "trading_positions",
+      `id=eq.${position.id}&state=eq.EXITING`,
+      {
+        state: "OPEN",
+        metadata: {
+          ...(position.metadata || {}),
+          pending_exit_action: null,
+          pending_exit_reason: null,
+          pending_exit_at: null,
+          protected_limit_last_unfilled_at: new Date().toISOString(),
+        },
       },
-    }))[0] || position;
+    ))[0] || position;
     await event(
       staleRecoveryNetPositive
         ? "STALE_RECOVERY_NET_POSITIVE_FOK_NOT_FILLED"
