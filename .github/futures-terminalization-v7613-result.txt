@@ -1,0 +1,21 @@
+status=SUCCESS
+stage=complete
+audited_at=2026-08-19T13:34:41Z
+pre_pause_new_entries=false
+pause_new_entries=false
+historical_order_state=APPLIED
+pending_futures_sells=0
+closed_nonzero_futures=0
+duplicate_pending_sell_positions=0
+futures_attribution_trigger=1
+global_engine_lease=verified
+settlement_revision=7.6.13-FUTURES-FILL-SETTLEMENT
+failed_cycles_after_restore=0
+latest_monitor=2026-08-19 13:34:36.65853+00
+latest_scan=2026-08-19 13:34:29.084259+00
+forced_live_trade=false
+--- log ---
+UPDATE 1
+CREATE FUNCTION
+DO
+UPDATE 1
