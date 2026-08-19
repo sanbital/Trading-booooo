@@ -1,0 +1,162 @@
+name: Apply futures order terminalization v7.6.13
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-futures-terminalization-v7613.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-futures-terminalization-v7613
+  cancel-in-progress: false
+
+jobs:
+  rollout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Full regression before production mutation
+        run: |
+          set -euo pipefail
+          deno task check
+          deno task test
+
+      - name: Guarded DB rollout and production verification
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set +e
+          REPORT=.github/futures-terminalization-v7613-result.txt
+          LOG=/tmp/futures-terminalization-v7613.log
+          : > "${LOG}"
+          status=FAILED
+          stage=preflight
+          mutated=false
+          restored=false
+          fail() {
+            echo "FAILED stage=${stage}: $*" | tee -a "${LOG}"
+            if [ "${mutated}" = true ]; then
+              psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "update public.trading_settings set pause_new_entries=true,updated_at=now() where id=1" >>"${LOG}" 2>&1 || true
+            fi
+          }
+
+          settings=$(psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text,coalesce(manual_event_reason,''),coalesce(manual_intervention_required,false)::text,coalesce(withdrawal_mode,false)::text from public.trading_settings where id=1" 2>>"${LOG}")
+          rc=$?
+          if [ ${rc} -ne 0 ]; then fail 'settings query failed'; stop=1; else
+            IFS='|' read -r pre_pause reason intervention withdrawal <<< "${settings}"
+            if [ -n "${reason}" ] || [ "${intervention}" = true ] || [ "${intervention}" = t ] || [ "${withdrawal}" = true ] || [ "${withdrawal}" = t ]; then fail 'manual/withdrawal safety guard active'; stop=1; fi
+          fi
+
+          if [ "${stop:-0}" != 1 ]; then
+            stage=preflight_ledger
+            pending_before=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_orders o join public.trading_positions p on p.id=o.position_id where p.exchange='binance_futures' and o.side='SELL' and o.state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED')" 2>>"${LOG}")
+            orphan_exact=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_orders o join public.trading_positions p on p.id=o.position_id where o.id='1f2ab022-67e9-4b65-b522-db2093c7fa07'::uuid and o.position_id='ad436603-09cf-4336-9197-93b819d49dd6'::uuid and o.state='EXCHANGE_DONE' and o.executed_volume=363.2 and o.exchange_order_id='7850620195' and p.state='CLOSED' and abs(coalesce(p.remaining_quantity,0))<=0.00000001" 2>>"${LOG}")
+            if [ "${pending_before}" != 1 ] || [ "${orphan_exact}" != 1 ]; then fail "unexpected futures pending ledger before repair: pending=${pending_before} exact=${orphan_exact}"; stop=1; fi
+          fi
+
+          if [ "${stop:-0}" != 1 ]; then
+            stage=freeze
+            psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "update public.trading_settings set pause_new_entries=true,updated_at=now() where id=1" >>"${LOG}" 2>&1
+            rc=$?
+            if [ ${rc} -ne 0 ]; then fail 'could not freeze entries'; stop=1; else mutated=true; fi
+          fi
+
+          if [ "${stop:-0}" != 1 ]; then
+            stage=migrate
+            psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -f supabase/migrations/20260819133200_futures_exchange_done_terminalization.sql >>"${LOG}" 2>&1
+            rc=$?
+            if [ ${rc} -ne 0 ]; then fail 'terminalization migration failed'; stop=1; fi
+          fi
+
+          if [ "${stop:-0}" != 1 ]; then
+            stage=verify
+            order_state=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select state from public.trading_orders where id='1f2ab022-67e9-4b65-b522-db2093c7fa07'::uuid" 2>>"${LOG}")
+            pending_after=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_orders o join public.trading_positions p on p.id=o.position_id where p.exchange='binance_futures' and o.side='SELL' and o.state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED')" 2>>"${LOG}")
+            closed_nonzero=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_positions where exchange='binance_futures' and state='CLOSED' and abs(coalesce(remaining_quantity,0))>0.00000001" 2>>"${LOG}")
+            dupes=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from (select position_id from public.trading_orders where side='SELL' and position_id is not null and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED') group by position_id having count(*)>1)d" 2>>"${LOG}")
+            trigger_count=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from pg_trigger where tgrelid='public.exchange_trade_fills'::regclass and tgname='trg_enforce_futures_fill_order_attribution' and not tgisinternal" 2>>"${LOG}")
+            settle_def=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select pg_get_functiondef('public.settle_futures_position_from_exchange_fills(uuid)'::regprocedure)" 2>>"${LOG}")
+            lease_def=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select pg_get_functiondef('public.acquire_trading_lease(text,uuid,integer)'::regprocedure)" 2>>"${LOG}")
+            if [ "${order_state}" != APPLIED ] || [ "${pending_after}" != 0 ] || [ "${closed_nonzero}" != 0 ] || [ "${dupes}" != 0 ] || [ "${trigger_count}" != 1 ]; then fail "post-migration invariant: state=${order_state} pending=${pending_after} closed_nonzero=${closed_nonzero} dupes=${dupes} trigger=${trigger_count}"; stop=1; fi
+            printf '%s' "${settle_def}" | grep -Fq '7.6.13-FUTURES-FILL-SETTLEMENT' || { fail 'v7.6.13 settlement function not installed'; stop=1; }
+            printf '%s' "${settle_def}" | grep -Fq "upper(coalesce(o.state, ''::text)) = 'EXCHANGE_DONE'" || printf '%s' "${settle_def}" | grep -Fq "EXCHANGE_DONE" || { fail 'EXCHANGE_DONE terminalizer not installed'; stop=1; }
+            printf '%s' "${lease_def}" | grep -Fq 'autotrader-engine' || { fail 'global engine lease missing'; stop=1; }
+          fi
+
+          latest_monitor=''
+          latest_scan=''
+          failed_after='unavailable'
+          if [ "${stop:-0}" != 1 ]; then
+            stage=restore
+            case "${pre_pause}" in true|t|1) restore_pause=true ;; *) restore_pause=false ;; esac
+            restore_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "update public.trading_settings set pause_new_entries=${restore_pause},updated_at=now() where id=1" >>"${LOG}" 2>&1
+            rc=$?
+            if [ ${rc} -ne 0 ]; then fail 'could not restore prior entry state'; stop=1; else restored=true; fi
+          fi
+
+          if [ "${stop:-0}" != 1 ]; then
+            stage=health
+            healthy=false
+            for attempt in $(seq 1 30); do
+              pause_now=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1" 2>>"${LOG}")
+              latest_monitor=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR' and started_at>='${restore_at}'::timestamptz" 2>>"${LOG}")
+              latest_scan=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='SCAN' and started_at>='${restore_at}'::timestamptz" 2>>"${LOG}")
+              failed_after=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_cycle_runs where started_at>='${restore_at}'::timestamptz and status='FAILED'" 2>>"${LOG}")
+              pending_now=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_orders o join public.trading_positions p on p.id=o.position_id where p.exchange='binance_futures' and o.side='SELL' and o.state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED')" 2>>"${LOG}")
+              dupes_now=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from (select position_id from public.trading_orders where side='SELL' and position_id is not null and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED') group by position_id having count(*)>1)d" 2>>"${LOG}")
+              expected_pause=${restore_pause}
+              pause_ok=false
+              if { [ "${expected_pause}" = false ] && { [ "${pause_now}" = false ] || [ "${pause_now}" = f ]; }; } || { [ "${expected_pause}" = true ] && { [ "${pause_now}" = true ] || [ "${pause_now}" = t ]; }; }; then pause_ok=true; fi
+              if [ "${pause_ok}" = true ] && [ -n "${latest_monitor}" ] && [ "${failed_after}" = 0 ] && [ "${pending_now}" = 0 ] && [ "${dupes_now}" = 0 ]; then healthy=true; break; fi
+              sleep 5
+            done
+            if [ "${healthy}" != true ]; then fail 'post-restore production health failed'; stop=1; fi
+          fi
+
+          if [ "${stop:-0}" != 1 ]; then status=SUCCESS; stage=complete; fi
+          final_pause=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1" 2>>"${LOG}")
+          {
+            echo "status=${status}"
+            echo "stage=${stage}"
+            echo "audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "pre_pause_new_entries=${pre_pause:-unavailable}"
+            echo "pause_new_entries=${final_pause:-unavailable}"
+            echo "historical_order_state=${order_state:-unavailable}"
+            echo "pending_futures_sells=${pending_now:-${pending_after:-unavailable}}"
+            echo "closed_nonzero_futures=${closed_nonzero:-unavailable}"
+            echo "duplicate_pending_sell_positions=${dupes_now:-${dupes:-unavailable}}"
+            echo "futures_attribution_trigger=${trigger_count:-unavailable}"
+            echo "global_engine_lease=verified"
+            echo "settlement_revision=7.6.13-FUTURES-FILL-SETTLEMENT"
+            echo "failed_cycles_after_restore=${failed_after:-unavailable}"
+            echo "latest_monitor=${latest_monitor:-unavailable}"
+            echo "latest_scan=${latest_scan:-none}"
+            echo "forced_live_trade=false"
+            echo '--- log ---'
+            tail -n 100 "${LOG}"
+          } > "${REPORT}"
+          exit 0
+
+      - name: Commit rollout result
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          test -f .github/futures-terminalization-v7613-result.txt || echo 'status=NO_REPORT' > .github/futures-terminalization-v7613-result.txt
+          git add .github/futures-terminalization-v7613-result.txt
+          git commit -m "chore: record futures terminalization v7.6.13 rollout" || true
+          git pull --rebase origin main || true
+          git push origin HEAD:main || true
