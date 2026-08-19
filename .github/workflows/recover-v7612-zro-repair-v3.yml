@@ -1,0 +1,154 @@
+name: Recover v7.6.12 ZRO repair v3
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/recover-v7612-zro-repair-v3.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Guarded recovery with fail-safe diagnostics
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set +e
+          LOG=/tmp/v7612-zro-v3.log
+          REPORT=.github/v7612-zro-recovery-v3-result.txt
+          : > "${LOG}"
+          status=FAILED
+          stage=preflight
+          mutated=false
+          resumed=false
+          fail() {
+            echo "FAILED stage=${stage}: $*" | tee -a "${LOG}"
+            if [ "${mutated}" = "true" ]; then
+              psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "update public.trading_settings set pause_new_entries=true,updated_at=now() where id=1" >>"${LOG}" 2>&1
+            fi
+          }
+
+          grep -q 'Exit finalization idempotency v7.6.12' supabase/functions/market-autotrader/index.ts || { fail 'source finalization guard missing'; goto_end=1; }
+          grep -q 'EXIT_DEFERRED_UNSETTLED_ORDER' supabase/functions/market-autotrader/index.ts || { fail 'source exchange-side-effect guard missing'; goto_end=1; }
+          if [ "${goto_end:-0}" != 1 ]; then
+            settings=$(psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text,coalesce(manual_event_reason,''),coalesce(manual_intervention_required,false)::text,coalesce(withdrawal_mode,false)::text from public.trading_settings where id=1" 2>>"${LOG}")
+            rc=$?
+            if [ ${rc} -ne 0 ]; then fail 'settings query failed'; goto_end=1; else
+              IFS='|' read -r pause reason intervention withdrawal <<< "${settings}"
+              echo "preflight pause=${pause} reason=${reason} intervention=${intervention} withdrawal=${withdrawal}" >>"${LOG}"
+              if ! { [ "${pause}" = true ] || [ "${pause}" = t ]; }; then fail 'entries are not in expected fail-safe pause'; goto_end=1; fi
+              if [ -n "${reason}" ] || [ "${intervention}" = true ] || [ "${intervention}" = t ] || [ "${withdrawal}" = true ] || [ "${withdrawal}" = t ]; then fail 'manual/withdrawal guard is active'; goto_end=1; fi
+            fi
+          fi
+
+          if [ "${goto_end:-0}" != 1 ]; then
+            stage=dry_run
+            { echo 'BEGIN;'; cat supabase/migrations/20260819125500_zro_stale_manual_fill_repair.sql; echo 'ROLLBACK;'; } > /tmp/zro-repair-v3-dry.sql
+            psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -f /tmp/zro-repair-v3-dry.sql >>"${LOG}" 2>&1
+            rc=$?
+            if [ ${rc} -ne 0 ]; then fail 'repair dry-run failed'; goto_end=1; fi
+          fi
+
+          if [ "${goto_end:-0}" != 1 ]; then
+            stage=apply
+            psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -f supabase/migrations/20260819125500_zro_stale_manual_fill_repair.sql >>"${LOG}" 2>&1
+            rc=$?
+            if [ ${rc} -ne 0 ]; then fail 'repair apply failed'; goto_end=1; else mutated=true; fi
+          fi
+
+          if [ "${goto_end:-0}" != 1 ]; then
+            stage=verify_repair
+            zro=$(psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select state,initial_quantity,remaining_quantity,planned_entry_price,average_entry_price,stop_price,target_1,realized_cost_quote,realized_proceeds_quote,paid_fees_quote,realized_pnl_quote,realized_return_pct,coalesce(close_reason,''),coalesce(metadata->'accounting_repair'->>'revision','') from public.trading_positions where id='111c5f48-27bf-4c26-9819-4f4ed7714577'::uuid" 2>>"${LOG}")
+            rc=$?
+            if [ ${rc} -ne 0 ]; then fail 'repaired position query failed'; goto_end=1; else
+              IFS='|' read -r state initial remaining planned avg stop target cost proceeds fees pnl ret reason revision <<< "${zro}"
+              echo "zro=${zro}" >>"${LOG}"
+              if [ "${state}" != CLOSED ] || [ "${revision}" != 7.6.12-ZRO-STALE-MANUAL-DETACH ]; then fail 'position was not closed with repair revision'; goto_end=1; fi
+              awk -v x="${initial}" 'BEGIN{exit !(x>47.679999 && x<47.680001)}' || { fail 'initial quantity mismatch'; goto_end=1; }
+              awk -v x="${remaining}" 'BEGIN{exit !(x>-0.00000001 && x<0.00000001)}' || { fail 'remaining quantity mismatch'; goto_end=1; }
+              awk -v s="${stop}" -v a="${avg}" -v t="${target}" 'BEGIN{exit !(s<a && t>a)}' || { fail 'exit geometry invalid'; goto_end=1; }
+              awk -v x="${pnl}" 'BEGIN{exit !(x>-0.108 && x<-0.107)}' || { fail 'realized PnL mismatch'; goto_end=1; }
+            fi
+          fi
+
+          if [ "${goto_end:-0}" != 1 ]; then
+            detached_fill=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select (position_id is null)::text from public.exchange_trade_fills where id='55ddf00e-3f89-4df8-8e07-90af3e60cd0b'::uuid" 2>>"${LOG}")
+            detached_order=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select (position_id is null)::text from public.trading_orders where id='038e70c3-a28b-4e91-8316-eee8cc62e6a0'::uuid" 2>>"${LOG}")
+            stale=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_positions p join public.exchange_trade_fills f on f.position_id=p.id where f.source='MANUAL' and p.opened_at is not null and f.executed_at<p.opened_at-interval '1 minute' and p.state<>'CLOSED'" 2>>"${LOG}")
+            dupes=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from (select position_id from public.trading_orders where side='SELL' and position_id is not null and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED') group by position_id having count(*)>1)d" 2>>"${LOG}")
+            suspicious=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "with s as (select position_id,purpose,created_at,lag(created_at) over(partition by position_id,purpose order by created_at) prev_at from public.trading_orders where side='SELL' and state='APPLIED' and created_at>='2026-08-19T12:56:13Z'::timestamptz) select count(*) from s where prev_at is not null and created_at-prev_at<=interval '5 seconds'" 2>>"${LOG}")
+            replay=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_events where created_at>='2026-08-19T12:56:13Z'::timestamptz and code in ('PARTIAL_EXIT','POSITION_CLOSED') and details->>'accounting_applied'='false'" 2>>"${LOG}")
+            failed_cycles=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_cycle_runs where started_at>='2026-08-19T12:56:13Z'::timestamptz and status='FAILED'" 2>>"${LOG}")
+            echo "invariants detached_fill=${detached_fill} detached_order=${detached_order} stale=${stale} dupes=${dupes} suspicious=${suspicious} replay=${replay} failed=${failed_cycles}" >>"${LOG}"
+            if ! { [ "${detached_fill}" = true ] || [ "${detached_fill}" = t ]; }; then fail 'manual fill not detached'; goto_end=1; fi
+            if ! { [ "${detached_order}" = true ] || [ "${detached_order}" = t ]; }; then fail 'manual order not detached'; goto_end=1; fi
+            if [ "${stale}" != 0 ] || [ "${dupes}" != 0 ] || [ "${suspicious}" != 0 ] || [ "${replay}" != 0 ] || [ "${failed_cycles}" != 0 ]; then fail 'post-repair invariants failed'; goto_end=1; fi
+          fi
+
+          if [ "${goto_end:-0}" != 1 ]; then
+            stage=resume
+            psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "update public.trading_settings set pause_new_entries=false,updated_at=now() where id=1 and pause_new_entries=true and coalesce(manual_event_reason,'')='' and coalesce(manual_intervention_required,false)=false and coalesce(withdrawal_mode,false)=false" >>"${LOG}" 2>&1
+            rc=$?
+            if [ ${rc} -ne 0 ]; then fail 'resume update failed'; goto_end=1; else resumed=true; fi
+          fi
+
+          latest_monitor=''
+          if [ "${goto_end:-0}" != 1 ]; then
+            stage=post_resume_monitor
+            resume_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            healthy=false
+            for attempt in $(seq 1 24); do
+              pause_now=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1" 2>>"${LOG}")
+              latest_monitor=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR' and started_at>='${resume_at}'::timestamptz" 2>>"${LOG}")
+              failed_now=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_cycle_runs where started_at>='${resume_at}'::timestamptz and status='FAILED'" 2>>"${LOG}")
+              if { [ "${pause_now}" = false ] || [ "${pause_now}" = f ]; } && [ -n "${latest_monitor}" ] && [ "${failed_now}" = 0 ]; then healthy=true; break; fi
+              sleep 5
+            done
+            if [ "${healthy}" != true ]; then fail 'post-resume monitor verification failed'; goto_end=1; fi
+          fi
+
+          if [ "${goto_end:-0}" != 1 ]; then status=SUCCESS; stage=complete; fi
+
+          final_pause=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1" 2>>"${LOG}")
+          {
+            echo "status=${status}"
+            echo "stage=${stage}"
+            echo "audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "pause_new_entries=${final_pause}"
+            echo "mutated=${mutated}"
+            echo "resumed=${resumed}"
+            echo "zro=${zro:-unavailable}"
+            echo "detached_fill=${detached_fill:-unavailable}"
+            echo "detached_order=${detached_order:-unavailable}"
+            echo "stale_manual_contamination=${stale:-unavailable}"
+            echo "duplicate_pending_sell_positions=${dupes:-unavailable}"
+            echo "suspicious_applied_sell_pairs_after_patch=${suspicious:-unavailable}"
+            echo "replay_exit_events_after_patch=${replay:-unavailable}"
+            echo "failed_cycles_since_patch=${failed_cycles:-unavailable}"
+            echo "latest_monitor=${latest_monitor:-unavailable}"
+            echo "forced_live_trade=false"
+            echo "--- log ---"
+            tail -n 80 "${LOG}"
+          } > "${REPORT}"
+          exit 0
+
+      - name: Commit durable recovery report
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/v7612-zro-recovery-v3-result.txt
+          git commit -m "chore: record v7.6.12 ZRO recovery v3" || true
+          git pull --rebase origin main || true
+          git push origin HEAD:main || true
