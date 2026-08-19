@@ -27,6 +27,8 @@ declare
   v_last_sell timestamptz;
   v_pnl numeric := 0;
   v_return numeric := 0;
+  v_entry numeric := 0;
+  v_geometry_anchor numeric := 0;
   v_original_reason text;
   v_reconcile jsonb;
 begin
@@ -135,6 +137,10 @@ begin
   end if;
 
   v_original_reason := coalesce(nullif(p.metadata->>'pending_exit_reason',''), p.close_reason, 'STOP');
+  v_geometry_anchor := coalesce(nullif(p.average_entry_price,0), nullif(p.planned_entry_price,0));
+  if not (v_geometry_anchor > 0) or not (p.stop_price < v_geometry_anchor) or not (p.target_1 > v_geometry_anchor) then
+    raise exception 'ZRO_REPAIR_INVALID_PREEXISTING_GEOMETRY';
+  end if;
 
   update public.exchange_trade_fills
   set position_id = null, updated_at = now()
@@ -165,6 +171,7 @@ begin
     raise exception 'ZRO_REPAIR_AUTOMATED_FILL_MISMATCH: buy %, sell %', v_buy_qty, v_sell_qty;
   end if;
 
+  v_entry := v_buy_quote / v_buy_qty;
   v_pnl := v_sell_quote - v_buy_quote - v_buy_fee - v_sell_fee;
   v_return := case when v_buy_quote > 0 then v_pnl / v_buy_quote * 100 else 0 end;
 
@@ -172,7 +179,11 @@ begin
   set state = 'CLOSED',
       initial_quantity = v_buy_qty,
       remaining_quantity = 0,
-      average_entry_price = case when v_buy_qty > 0 then v_buy_quote / v_buy_qty else average_entry_price end,
+      planned_entry_price = v_entry,
+      average_entry_price = v_entry,
+      stop_price = v_entry * (p.stop_price / v_geometry_anchor),
+      target_1 = v_entry * (p.target_1 / v_geometry_anchor),
+      target_2 = case when p.target_2 is null then null else v_entry * (p.target_2 / v_geometry_anchor) end,
       realized_cost_quote = v_buy_quote,
       realized_proceeds_quote = v_sell_quote,
       paid_fees_quote = v_buy_fee + v_sell_fee,
@@ -202,6 +213,9 @@ begin
           'detached_manual_order_id', v_manual_order_id,
           'original_initial_quantity', p.initial_quantity,
           'original_remaining_quantity', p.remaining_quantity,
+          'original_average_entry_price', p.average_entry_price,
+          'original_stop_price', p.stop_price,
+          'original_target_1', p.target_1,
           'original_realized_pnl_quote', p.realized_pnl_quote,
           'original_exit_reason', v_original_reason,
           'verified_zero_snapshot_count', v_zero_snapshot_count,
@@ -219,5 +233,8 @@ begin
   end if;
   if abs(coalesce(p.realized_pnl_quote,0) - v_pnl) > 0.00000001 then
     raise exception 'ZRO_REPAIR_POSTCONDITION_PNL_MISMATCH';
+  end if;
+  if not (p.stop_price < p.average_entry_price and p.target_1 > p.average_entry_price) then
+    raise exception 'ZRO_REPAIR_POSTCONDITION_GEOMETRY_INVALID';
   end if;
 end $$;
