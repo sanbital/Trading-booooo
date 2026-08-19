@@ -1,0 +1,32 @@
+status=FAILED
+stage=protected_metadata_update
+audited_at=2026-08-19T13:25:28Z
+pause_new_entries=true
+resumed=false
+futures_attribution_trigger=1
+zro_state=CLOSED
+zro_initial_quantity=47.68
+zro_remaining_quantity=0
+zro_realized_pnl_quote=-0.10753837494478435800000000000000000000
+zro_close_reason=TIMEOUT
+zro_repair_revision=7.6.12-ZRO-STALE-MANUAL-DETACH-AUDIT
+detached_manual_fill=true
+detached_manual_order=true
+duplicate_pending_sell_positions=0
+replay_noop_exit_events=0
+failed_cycles_before_resume=0
+failed_cycles_after_resume=unavailable
+latest_monitor=unavailable
+latest_scan=none
+forced_live_trade=false
+--- log ---
+BEGIN
+ set_config 
+------------
+ on
+(1 row)
+
+UPDATE 1
+COMMIT
+FAILED stage=protected_metadata_update: protected CLOSED metadata still did not persist
+UPDATE 1
