@@ -28,69 +28,52 @@ jobs:
         with:
           version: 2.109.1
 
-      - name: Allow rollout verifier to settle
-        run: sleep 20
-
-      - name: Read production state only
+      - name: Read production state without mutating it
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
-          set -euo pipefail
-          pause=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
-            "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
-          latest_monitor=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
-            "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR'")
-          failed_10m=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
-            "select count(*) from public.trading_cycle_runs where started_at >= now()-interval '10 minutes' and status='FAILED'")
-          dupes=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
-            select count(*) from (
-              select position_id
-              from public.trading_orders
-              where side='SELL'
-                and position_id is not null
-                and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED')
-              group by position_id
-              having count(*) > 1
-            ) d;")
-          last_exit=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -F '|' -c "
-            select coalesce(event_type,'')||'|'||coalesce(created_at::text,'')
-            from public.trading_events
-            where event_type in ('POSITION_CLOSED','PARTIAL_EXIT')
-            order by created_at desc limit 1;")
-          last_guard=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -F '|' -c "
-            select coalesce(event_type,'')||'|'||coalesce(created_at::text,'')
-            from public.trading_events
-            where event_type in ('EXIT_DEFERRED_UNSETTLED_ORDER','EXIT_CLAIM_SKIPPED')
-            order by created_at desc limit 1;")
-          fn_line=$(supabase functions list --project-ref "${SUPABASE_PROJECT_REF}" 2>/dev/null \
-            | grep -F 'market-autotrader' | head -n 1 || true)
-          rpc_safe=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
-            select (
-              position('v_allocation_ratio := v_sold / v_fill_quantity;' in pg_get_functiondef('public.apply_trading_exit_order(uuid,text,numeric,numeric,numeric,numeric,numeric,numeric)'::regprocedure)) > 0
-              and position('executed_volume = v_fill_quantity' in pg_get_functiondef('public.apply_trading_exit_order(uuid,text,numeric,numeric,numeric,numeric,numeric,numeric)'::regprocedure)) > 0
-            )::text;")
-          cat > .github/exit-idempotency-v7611-audit.txt <<EOF
-          audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          main_sha=$(git rev-parse HEAD)
-          pause_new_entries=${pause}
-          latest_monitor=${latest_monitor}
-          failed_cycles_last_10m=${failed_10m}
-          duplicate_pending_sell_positions=${dupes}
-          last_natural_exit=${last_exit:-none}
-          last_idempotency_guard_event=${last_guard:-none}
-          settlement_rpc_safe=${rpc_safe}
-          function_list_line=${fn_line:-unavailable}
-          forced_live_trade=false
-          EOF
+          set +e
+          runq() {
+            psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "$1" 2>&1
+          }
+          pause=$(runq "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
+          latest_monitor=$(runq "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR'")
+          failed_10m=$(runq "select count(*) from public.trading_cycle_runs where started_at >= now()-interval '10 minutes' and status='FAILED'")
+          dupes=$(runq "select count(*) from (select position_id from public.trading_orders where side='SELL' and position_id is not null and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED') group by position_id having count(*) > 1) d")
+          recent_orders=$(runq "select count(*) from public.trading_orders where created_at >= now()-interval '10 minutes'")
+          rpc_safe=$(runq "select (position('v_allocation_ratio := v_sold / v_fill_quantity;' in pg_get_functiondef('public.apply_trading_exit_order(uuid,text,numeric,numeric,numeric,numeric,numeric,numeric)'::regprocedure)) > 0 and position('executed_volume = v_fill_quantity' in pg_get_functiondef('public.apply_trading_exit_order(uuid,text,numeric,numeric,numeric,numeric,numeric,numeric)'::regprocedure)) > 0)::text")
+          event_columns=$(runq "select string_agg(column_name,',' order by ordinal_position) from information_schema.columns where table_schema='public' and table_name='trading_events'")
+          function_line=$(supabase functions list --project-ref "${SUPABASE_PROJECT_REF}" 2>&1 | grep -F 'market-autotrader' | head -n 1)
+          function_rc=${PIPESTATUS[0]}
+          {
+            echo "audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "main_sha=$(git rev-parse HEAD)"
+            echo "pause_new_entries=${pause}"
+            echo "latest_monitor=${latest_monitor}"
+            echo "failed_cycles_last_10m=${failed_10m}"
+            echo "duplicate_pending_sell_positions=${dupes}"
+            echo "orders_created_last_10m=${recent_orders}"
+            echo "settlement_rpc_safe=${rpc_safe}"
+            echo "trading_events_columns=${event_columns}"
+            echo "function_list_rc=${function_rc}"
+            echo "function_list_line=${function_line:-unavailable}"
+            echo "forced_live_trade=false"
+          } > .github/exit-idempotency-v7611-audit.txt
+          exit 0
 
-      - name: Commit production audit
+      - name: Commit production audit even when a read failed
+        if: always()
         run: |
           set -euo pipefail
+          test -f .github/exit-idempotency-v7611-audit.txt || {
+            echo "audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .github/exit-idempotency-v7611-audit.txt
+            echo "audit_error=read-step-did-not-produce-output" >> .github/exit-idempotency-v7611-audit.txt
+          }
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .github/exit-idempotency-v7611-audit.txt
           git commit -m "chore: audit exit idempotency production state" || true
-          git pull --rebase origin main
-          git push origin HEAD:main
+          git pull --rebase origin main || true
+          git push origin HEAD:main || true
