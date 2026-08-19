@@ -29,16 +29,16 @@ jobs:
             echo 'LATEST_ZRO_SNAPSHOTS'
             psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
               with s as (
-                select captured_at,accounts
+                select captured_at,balances
                 from public.trading_account_snapshots
                 where exchange='binance' order by captured_at desc limit 3
               )
               select captured_at,
                      coalesce((select coalesce(nullif(a->>'balance','')::numeric,nullif(a->>'free','')::numeric,0)
-                               from jsonb_array_elements(coalesce(accounts,'[]'::jsonb)) a
+                               from jsonb_array_elements(coalesce(balances,'[]'::jsonb)) a
                                where upper(coalesce(a->>'currency',a->>'asset',''))='ZRO' limit 1),0) free_or_balance,
                      coalesce((select coalesce(nullif(a->>'locked','')::numeric,0)
-                               from jsonb_array_elements(coalesce(accounts,'[]'::jsonb)) a
+                               from jsonb_array_elements(coalesce(balances,'[]'::jsonb)) a
                                where upper(coalesce(a->>'currency',a->>'asset',''))='ZRO' limit 1),0) locked
               from s order by captured_at desc;"
             echo 'EXCHANGE_FILLS_FOR_POSITION'
