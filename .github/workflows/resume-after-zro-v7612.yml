@@ -1,0 +1,120 @@
+name: Resume after verified ZRO v7.6.12
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/resume-after-zro-v7612.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: resume-after-zro-v7612
+  cancel-in-progress: false
+
+jobs:
+  resume:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Resume only after all live safety invariants pass
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          settings=$(psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text,coalesce(manual_event_reason,''),coalesce(manual_intervention_required,false)::text,coalesce(withdrawal_mode,false)::text from public.trading_settings where id=1")
+          IFS='|' read -r pause reason intervention withdrawal <<< "${settings}"
+          test "${pause}" = true -o "${pause}" = t
+          test -z "${reason}"
+          test "${intervention}" != true -a "${intervention}" != t
+          test "${withdrawal}" != true -a "${withdrawal}" != t
+
+          zro=$(psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select state,initial_quantity,remaining_quantity,realized_pnl_quote,coalesce(close_reason,''),coalesce(metadata->'accounting_repair'->>'revision',''),coalesce(metadata->>'display_data_status',''),coalesce(metadata->>'exclude_from_learning',''),coalesce(metadata->>'pending_exit_action',''),coalesce(metadata->>'pending_exit_reason','') from public.trading_positions where id='111c5f48-27bf-4c26-9819-4f4ed7714577'::uuid")
+          IFS='|' read -r zstate zinitial zremaining zpnl zreason zrevision zdisplay zexclude zpending_action zpending_reason <<< "${zro}"
+          test "${zstate}" = CLOSED
+          test "${zrevision}" = 7.6.12-ZRO-STALE-MANUAL-DETACH-AUDIT
+          test "${zdisplay}" = ACCOUNTING_REPAIRED_STALE_MANUAL_FILL
+          test "${zexclude}" = true
+          test -z "${zpending_action}"
+          test "${zpending_reason}" = TIMEOUT
+          awk -v x="${zinitial}" 'BEGIN{exit !(x>47.679999 && x<47.680001)}'
+          awk -v x="${zremaining}" 'BEGIN{exit !(x>-0.00000001 && x<0.00000001)}'
+          awk -v x="${zpnl}" 'BEGIN{exit !(x>-0.108 && x<-0.107)}'
+
+          detached_fill=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select (position_id is null)::text from public.exchange_trade_fills where id='55ddf00e-3f89-4df8-8e07-90af3e60cd0b'::uuid")
+          detached_order=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select (position_id is null)::text from public.trading_orders where id='038e70c3-a28b-4e91-8316-eee8cc62e6a0'::uuid")
+          trigger_count=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from pg_trigger where tgrelid='public.exchange_trade_fills'::regclass and tgname='trg_enforce_futures_fill_order_attribution' and not tgisinternal")
+          lease_def=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select pg_get_functiondef('public.acquire_trading_lease(text,uuid,integer)'::regprocedure)")
+          stale=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_positions p join public.exchange_trade_fills f on f.position_id=p.id where f.source='MANUAL' and p.opened_at is not null and f.executed_at<p.opened_at-interval '1 minute' and p.state<>'CLOSED'")
+          dupes=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from (select position_id from public.trading_orders where side='SELL' and position_id is not null and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED') group by position_id having count(*)>1)d")
+          replay=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_events where created_at>='2026-08-19T12:56:13Z'::timestamptz and code in ('PARTIAL_EXIT','POSITION_CLOSED') and details->>'accounting_applied'='false'")
+          failed_before=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_cycle_runs where started_at>='2026-08-19T12:56:13Z'::timestamptz and status='FAILED'")
+          test "${detached_fill}" = true -o "${detached_fill}" = t
+          test "${detached_order}" = true -o "${detached_order}" = t
+          test "${trigger_count}" = 1
+          printf '%s' "${lease_def}" | grep -Fq "'autotrader-engine'"
+          test "${stale}" = 0
+          test "${dupes}" = 0
+          test "${replay}" = 0
+          test "${failed_before}" = 0
+
+          resume_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "update public.trading_settings set pause_new_entries=false,updated_at=now() where id=1 and pause_new_entries=true and coalesce(manual_event_reason,'')='' and coalesce(manual_intervention_required,false)=false and coalesce(withdrawal_mode,false)=false"
+          trap 'psql "$SUPABASE_DB_URL" --set=ON_ERROR_STOP=1 -c "update public.trading_settings set pause_new_entries=true,updated_at=now() where id=1" || true' ERR
+
+          healthy=false
+          latest_monitor=''
+          latest_scan=''
+          failed_after='0'
+          dupes_after='0'
+          for attempt in $(seq 1 30); do
+            pause_now=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
+            latest_monitor=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR' and started_at>='${resume_at}'::timestamptz")
+            latest_scan=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='SCAN' and started_at>='${resume_at}'::timestamptz")
+            failed_after=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_cycle_runs where started_at>='${resume_at}'::timestamptz and status='FAILED'")
+            dupes_after=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from (select position_id from public.trading_orders where side='SELL' and position_id is not null and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED') group by position_id having count(*)>1)d")
+            if { [ "${pause_now}" = false ] || [ "${pause_now}" = f ]; } && [ -n "${latest_monitor}" ] && [ "${failed_after}" = 0 ] && [ "${dupes_after}" = 0 ]; then healthy=true; break; fi
+            sleep 5
+          done
+          test "${healthy}" = true
+          trap - ERR
+
+          cat > .github/resume-after-zro-v7612-result.txt <<EOF
+          status=SUCCESS
+          resumed_at=${resume_at}
+          pause_new_entries=false
+          zro_state=${zstate}
+          zro_initial_quantity=${zinitial}
+          zro_remaining_quantity=${zremaining}
+          zro_realized_pnl_quote=${zpnl}
+          zro_close_reason=${zreason}
+          zro_repair_revision=${zrevision}
+          zro_pending_exit_reason_historical=${zpending_reason}
+          detached_manual_fill=${detached_fill}
+          detached_manual_order=${detached_order}
+          futures_attribution_trigger=${trigger_count}
+          global_engine_lease=verified
+          stale_manual_contamination=${stale}
+          duplicate_pending_sell_positions=${dupes_after}
+          replay_noop_exit_events=${replay}
+          failed_cycles_before_resume=${failed_before}
+          failed_cycles_after_resume=${failed_after}
+          latest_monitor=${latest_monitor}
+          latest_scan=${latest_scan:-none}
+          forced_live_trade=false
+          EOF
+      - name: Commit result
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/resume-after-zro-v7612-result.txt
+          git commit -m "chore: record verified production resume" || true
+          git pull --rebase origin main || true
+          git push origin HEAD:main || true
