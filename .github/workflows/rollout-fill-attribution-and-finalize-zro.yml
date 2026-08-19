@@ -1,0 +1,217 @@
+name: Rollout futures attribution guard and finalize ZRO
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/rollout-fill-attribution-and-finalize-zro.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rollout-fill-attribution-and-finalize-zro
+  cancel-in-progress: false
+
+jobs:
+  rollout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Run repository regression suite before DB mutation
+        run: |
+          set -euo pipefail
+          deno task check
+          deno task test
+
+      - name: Guarded production rollout with durable result
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set +e
+          REPORT=.github/fill-attribution-zro-rollout-result.txt
+          LOG=/tmp/fill-attribution-zro-rollout.log
+          : > "${LOG}"
+          status=FAILED
+          stage=preflight
+          mutated=false
+          resumed=false
+          pre_pause=''
+          fail() {
+            echo "FAILED stage=${stage}: $*" | tee -a "${LOG}"
+            if [ "${mutated}" = true ]; then
+              psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "update public.trading_settings set pause_new_entries=true,updated_at=now() where id=1" >>"${LOG}" 2>&1 || true
+            fi
+          }
+
+          settings=$(psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text,coalesce(manual_event_reason,''),coalesce(manual_intervention_required,false)::text,coalesce(withdrawal_mode,false)::text from public.trading_settings where id=1" 2>>"${LOG}")
+          rc=$?
+          if [ ${rc} -ne 0 ]; then fail 'settings preflight failed'; stop=1; else
+            IFS='|' read -r pre_pause reason intervention withdrawal <<< "${settings}"
+            echo "preflight pause=${pre_pause} reason=${reason} intervention=${intervention} withdrawal=${withdrawal}" >>"${LOG}"
+            if [ -n "${reason}" ] || [ "${intervention}" = true ] || [ "${intervention}" = t ] || [ "${withdrawal}" = true ] || [ "${withdrawal}" = t ]; then fail 'manual or withdrawal safety guard active'; stop=1; fi
+          fi
+
+          if [ "${stop:-0}" != 1 ]; then
+            stage=freeze
+            psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "update public.trading_settings set pause_new_entries=true,updated_at=now() where id=1" >>"${LOG}" 2>&1
+            rc=$?
+            if [ ${rc} -ne 0 ]; then fail 'could not freeze entries'; stop=1; else mutated=true; fi
+          fi
+
+          if [ "${stop:-0}" != 1 ]; then
+            stage=zro_preflight
+            zro=$(psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select state,initial_quantity,remaining_quantity,average_entry_price,realized_cost_quote,realized_proceeds_quote,paid_fees_quote,realized_pnl_quote,realized_return_pct,coalesce(close_reason,'') from public.trading_positions where id='111c5f48-27bf-4c26-9819-4f4ed7714577'::uuid" 2>>"${LOG}")
+            rc=$?
+            if [ ${rc} -ne 0 ]; then fail 'ZRO position read failed'; stop=1; else
+              IFS='|' read -r zstate zinitial zremaining zentry zcost zproceeds zfees zpnl zret zreason <<< "${zro}"
+              if [ "${zstate}" != CLOSED ]; then fail 'ZRO not closed'; stop=1; fi
+              awk -v x="${zinitial}" 'BEGIN{exit !(x>47.679999 && x<47.680001)}' || { fail 'ZRO initial mismatch'; stop=1; }
+              awk -v x="${zremaining}" 'BEGIN{exit !(x>-0.00000001 && x<0.00000001)}' || { fail 'ZRO remaining mismatch'; stop=1; }
+              awk -v x="${zpnl}" 'BEGIN{exit !(x>-0.108 && x<-0.107)}' || { fail 'ZRO PnL mismatch'; stop=1; }
+            fi
+          fi
+
+          if [ "${stop:-0}" != 1 ]; then
+            stage=attribution_migration
+            psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -f supabase/migrations/202608190001_fix_futures_fill_attribution_and_autotrader_global_lease.sql >>"${LOG}" 2>&1
+            rc=$?
+            if [ ${rc} -ne 0 ]; then fail 'futures attribution/global lease migration failed'; stop=1; fi
+          fi
+
+          if [ "${stop:-0}" != 1 ]; then
+            stage=verify_db_guards
+            trigger_count=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from pg_trigger where tgrelid='public.exchange_trade_fills'::regclass and tgname='trg_enforce_futures_fill_order_attribution' and not tgisinternal" 2>>"${LOG}")
+            lease_def=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select pg_get_functiondef('public.acquire_trading_lease(text,uuid,integer)'::regprocedure)" 2>>"${LOG}")
+            attr_def=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select pg_get_functiondef('public.enforce_futures_fill_order_attribution()'::regprocedure)" 2>>"${LOG}")
+            if [ "${trigger_count}" != 1 ]; then fail 'futures attribution trigger absent'; stop=1; fi
+            printf '%s' "${lease_def}" | grep -Fq "'autotrader-engine'" || { fail 'global engine lease mapping absent'; stop=1; }
+            printf '%s' "${attr_def}" | grep -Fq "o.exchange_order_id = new.exchange_order_id" || { fail 'exact exchange-order attribution absent'; stop=1; }
+          fi
+
+          if [ "${stop:-0}" != 1 ]; then
+            stage=zro_audit_metadata
+            psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "
+              update public.trading_positions
+              set metadata=(coalesce(metadata,'{}'::jsonb)-'pending_exit_action'-'pending_exit_reason'-'pending_exit_at') || jsonb_build_object(
+                'exclude_from_learning',true,
+                'display_data_status','ACCOUNTING_REPAIRED_STALE_MANUAL_FILL',
+                'accounting_repair',jsonb_build_object(
+                  'revision','7.6.12-ZRO-STALE-MANUAL-DETACH-AUDIT',
+                  'recorded_at',now(),
+                  'reason','STALE_MANUAL_FILL_PREDATES_BOT_POSITION_AND_AUTHENTICATED_BALANCE_IS_ZERO',
+                  'detached_manual_fill_id','55ddf00e-3f89-4df8-8e07-90af3e60cd0b',
+                  'detached_manual_order_id','038e70c3-a28b-4e91-8316-eee8cc62e6a0',
+                  'verified_initial_quantity',initial_quantity,
+                  'verified_remaining_quantity',remaining_quantity,
+                  'verified_close_reason',close_reason,
+                  'verified_realized_pnl_quote',realized_pnl_quote
+                )),updated_at=now()
+              where id='111c5f48-27bf-4c26-9819-4f4ed7714577'::uuid and state='CLOSED'
+                and abs(initial_quantity-47.68)<=0.00000001 and abs(remaining_quantity)<=0.00000001
+                and abs(realized_pnl_quote-(-0.107538374944784358))<=0.00000001" >>"${LOG}" 2>&1
+            rc=$?
+            if [ ${rc} -ne 0 ]; then fail 'ZRO audit metadata update failed'; stop=1; else
+              zaudit=$(psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select coalesce(metadata->'accounting_repair'->>'revision',''),coalesce(metadata->>'display_data_status',''),coalesce(metadata->>'exclude_from_learning',''),coalesce(metadata->>'pending_exit_action',''),coalesce(metadata->>'pending_exit_reason','') from public.trading_positions where id='111c5f48-27bf-4c26-9819-4f4ed7714577'::uuid" 2>>"${LOG}")
+              IFS='|' read -r zrevision zdisplay zexclude zpending_action zpending_reason <<< "${zaudit}"
+              if [ "${zrevision}" != 7.6.12-ZRO-STALE-MANUAL-DETACH-AUDIT ] || [ "${zdisplay}" != ACCOUNTING_REPAIRED_STALE_MANUAL_FILL ] || [ "${zexclude}" != true ] || [ -n "${zpending_action}" ] || [ -n "${zpending_reason}" ]; then fail 'ZRO audit metadata did not persist'; stop=1; fi
+            fi
+          fi
+
+          if [ "${stop:-0}" != 1 ]; then
+            stage=global_invariants
+            detached_fill=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select (position_id is null)::text from public.exchange_trade_fills where id='55ddf00e-3f89-4df8-8e07-90af3e60cd0b'::uuid" 2>>"${LOG}")
+            detached_order=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select (position_id is null)::text from public.trading_orders where id='038e70c3-a28b-4e91-8316-eee8cc62e6a0'::uuid" 2>>"${LOG}")
+            stale=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_positions p join public.exchange_trade_fills f on f.position_id=p.id where f.source='MANUAL' and p.opened_at is not null and f.executed_at<p.opened_at-interval '1 minute' and p.state<>'CLOSED'" 2>>"${LOG}")
+            dupes=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from (select position_id from public.trading_orders where side='SELL' and position_id is not null and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED') group by position_id having count(*)>1)d" 2>>"${LOG}")
+            replay=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_events where created_at>='2026-08-19T12:56:13Z'::timestamptz and code in ('PARTIAL_EXIT','POSITION_CLOSED') and details->>'accounting_applied'='false'" 2>>"${LOG}")
+            failed_before=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_cycle_runs where started_at>='2026-08-19T12:56:13Z'::timestamptz and status='FAILED'" 2>>"${LOG}")
+            if ! { [ "${detached_fill}" = true ] || [ "${detached_fill}" = t ]; }; then fail 'stale manual fill reattached'; stop=1; fi
+            if ! { [ "${detached_order}" = true ] || [ "${detached_order}" = t ]; }; then fail 'stale manual order reattached'; stop=1; fi
+            if [ "${stale}" != 0 ] || [ "${dupes}" != 0 ] || [ "${replay}" != 0 ] || [ "${failed_before}" != 0 ]; then fail 'global invariant failed before resume'; stop=1; fi
+          fi
+
+          latest_monitor=''
+          latest_scan=''
+          failed_after='unavailable'
+          if [ "${stop:-0}" != 1 ]; then
+            stage=resume
+            resume_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "update public.trading_settings set pause_new_entries=false,updated_at=now() where id=1 and pause_new_entries=true and coalesce(manual_event_reason,'')='' and coalesce(manual_intervention_required,false)=false and coalesce(withdrawal_mode,false)=false" >>"${LOG}" 2>&1
+            rc=$?
+            if [ ${rc} -ne 0 ]; then fail 'resume update failed'; stop=1; else resumed=true; fi
+          fi
+
+          if [ "${stop:-0}" != 1 ]; then
+            stage=post_resume_verify
+            healthy=false
+            for attempt in $(seq 1 30); do
+              pause_now=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1" 2>>"${LOG}")
+              latest_monitor=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR' and started_at>='${resume_at}'::timestamptz" 2>>"${LOG}")
+              latest_scan=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='SCAN' and started_at>='${resume_at}'::timestamptz" 2>>"${LOG}")
+              failed_after=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_cycle_runs where started_at>='${resume_at}'::timestamptz and status='FAILED'" 2>>"${LOG}")
+              dupes_after=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from (select position_id from public.trading_orders where side='SELL' and position_id is not null and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED') group by position_id having count(*)>1)d" 2>>"${LOG}")
+              if { [ "${pause_now}" = false ] || [ "${pause_now}" = f ]; } && [ -n "${latest_monitor}" ] && [ "${failed_after}" = 0 ] && [ "${dupes_after}" = 0 ]; then healthy=true; break; fi
+              sleep 5
+            done
+            if [ "${healthy}" != true ]; then fail 'post-resume health verification failed'; stop=1; fi
+          fi
+
+          if [ "${stop:-0}" != 1 ]; then
+            zrevision_after=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(metadata->'accounting_repair'->>'revision','') from public.trading_positions where id='111c5f48-27bf-4c26-9819-4f4ed7714577'::uuid" 2>>"${LOG}")
+            if [ "${zrevision_after}" != 7.6.12-ZRO-STALE-MANUAL-DETACH-AUDIT ]; then fail 'ZRO audit metadata lost after resume'; stop=1; fi
+          fi
+
+          if [ "${stop:-0}" != 1 ]; then status=SUCCESS; stage=complete; fi
+          final_pause=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1" 2>>"${LOG}")
+          {
+            echo "status=${status}"
+            echo "stage=${stage}"
+            echo "audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "main_sha=$(git rev-parse HEAD)"
+            echo "pre_pause_new_entries=${pre_pause:-unavailable}"
+            echo "pause_new_entries=${final_pause:-unavailable}"
+            echo "resumed=${resumed}"
+            echo "futures_attribution_trigger=${trigger_count:-unavailable}"
+            echo "global_engine_lease=verified"
+            echo "zro_state=${zstate:-unavailable}"
+            echo "zro_initial_quantity=${zinitial:-unavailable}"
+            echo "zro_remaining_quantity=${zremaining:-unavailable}"
+            echo "zro_realized_pnl_quote=${zpnl:-unavailable}"
+            echo "zro_close_reason=${zreason:-unavailable}"
+            echo "zro_repair_revision=${zrevision_after:-${zrevision:-unavailable}}"
+            echo "detached_manual_fill=${detached_fill:-unavailable}"
+            echo "detached_manual_order=${detached_order:-unavailable}"
+            echo "stale_manual_contamination=${stale:-unavailable}"
+            echo "duplicate_pending_sell_positions=${dupes_after:-${dupes:-unavailable}}"
+            echo "replay_noop_exit_events=${replay:-unavailable}"
+            echo "failed_cycles_before_resume=${failed_before:-unavailable}"
+            echo "failed_cycles_after_resume=${failed_after:-unavailable}"
+            echo "latest_monitor=${latest_monitor:-unavailable}"
+            echo "latest_scan=${latest_scan:-none}"
+            echo "forced_live_trade=false"
+            echo '--- log ---'
+            tail -n 100 "${LOG}"
+          } > "${REPORT}"
+          exit 0
+
+      - name: Commit production rollout result
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          test -f .github/fill-attribution-zro-rollout-result.txt || echo 'status=NO_REPORT' > .github/fill-attribution-zro-rollout-result.txt
+          git add .github/fill-attribution-zro-rollout-result.txt
+          git commit -m "chore: record futures attribution and ZRO rollout" || true
+          git pull --rebase origin main || true
+          git push origin HEAD:main || true
