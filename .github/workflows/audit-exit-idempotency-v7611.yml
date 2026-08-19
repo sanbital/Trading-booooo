@@ -1,0 +1,96 @@
+name: Audit exit idempotency v7.6.11
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/audit-exit-idempotency-v7611.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: audit-exit-idempotency-v7611
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Allow rollout verifier to settle
+        run: sleep 20
+
+      - name: Read production state only
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          pause=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
+          latest_monitor=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR'")
+          failed_10m=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
+            "select count(*) from public.trading_cycle_runs where started_at >= now()-interval '10 minutes' and status='FAILED'")
+          dupes=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select count(*) from (
+              select position_id
+              from public.trading_orders
+              where side='SELL'
+                and position_id is not null
+                and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED')
+              group by position_id
+              having count(*) > 1
+            ) d;")
+          last_exit=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -F '|' -c "
+            select coalesce(event_type,'')||'|'||coalesce(created_at::text,'')
+            from public.trading_events
+            where event_type in ('POSITION_CLOSED','PARTIAL_EXIT')
+            order by created_at desc limit 1;")
+          last_guard=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -F '|' -c "
+            select coalesce(event_type,'')||'|'||coalesce(created_at::text,'')
+            from public.trading_events
+            where event_type in ('EXIT_DEFERRED_UNSETTLED_ORDER','EXIT_CLAIM_SKIPPED')
+            order by created_at desc limit 1;")
+          fn_line=$(supabase functions list --project-ref "${SUPABASE_PROJECT_REF}" 2>/dev/null \
+            | grep -F 'market-autotrader' | head -n 1 || true)
+          rpc_safe=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select (
+              position('v_allocation_ratio := v_sold / v_fill_quantity;' in pg_get_functiondef('public.apply_trading_exit_order(uuid,text,numeric,numeric,numeric,numeric,numeric,numeric)'::regprocedure)) > 0
+              and position('executed_volume = v_fill_quantity' in pg_get_functiondef('public.apply_trading_exit_order(uuid,text,numeric,numeric,numeric,numeric,numeric,numeric)'::regprocedure)) > 0
+            )::text;")
+          cat > .github/exit-idempotency-v7611-audit.txt <<EOF
+          audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          main_sha=$(git rev-parse HEAD)
+          pause_new_entries=${pause}
+          latest_monitor=${latest_monitor}
+          failed_cycles_last_10m=${failed_10m}
+          duplicate_pending_sell_positions=${dupes}
+          last_natural_exit=${last_exit:-none}
+          last_idempotency_guard_event=${last_guard:-none}
+          settlement_rpc_safe=${rpc_safe}
+          function_list_line=${fn_line:-unavailable}
+          forced_live_trade=false
+          EOF
+
+      - name: Commit production audit
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/exit-idempotency-v7611-audit.txt
+          git commit -m "chore: audit exit idempotency production state" || true
+          git pull --rebase origin main
+          git push origin HEAD:main
