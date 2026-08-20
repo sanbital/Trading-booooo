@@ -4,6 +4,7 @@ on:
     branches: [main]
     paths:
       - 'research/binance_24h_logic_replay.py'
+      - 'research/binance_24h_logic_replay_dbhttp.py'
       - '.github/workflows/binance-24h-logic-replay.yml'
   workflow_dispatch:
 permissions:
@@ -28,7 +29,7 @@ jobs:
             echo 'missing SUPABASE_DB_URL' > research/results/candidate24h/replay.log
             rc=2
           else
-            python research/binance_24h_logic_replay.py > research/results/candidate24h/replay.log 2>&1
+            python research/binance_24h_logic_replay_dbhttp.py > research/results/candidate24h/replay.log 2>&1
             rc=$?
           fi
           printf 'exit_code=%s\nfinished_at=%s\nsource_sha=%s\n' "$rc" "$(date -u +%FT%TZ)" "$GITHUB_SHA" > research/results/candidate24h/STATUS
