@@ -1,17 +1,51 @@
 /home/runner/work/Trading-booooo/Trading-booooo/research/binance_24h_logic_replay.py:90: UserWarning: pandas only supports SQLAlchemy connectable (engine/connection) or database string URI or sqlite3 DBAPI2 connection. Other DBAPI2 objects are not tested. Please consider using SQLAlchemy.
   d=pd.read_sql_query(q,c,params=(start,))
-Traceback (most recent call last):
-  File "/home/runner/work/Trading-booooo/Trading-booooo/research/binance_24h_logic_replay.py", line 268, in <module>
-    if __name__=='__main__':main()
-                            ^^^^^^
-  File "/home/runner/work/Trading-booooo/Trading-booooo/research/binance_24h_logic_replay.py", line 185, in main
-    universe={SPOT:active(s,SPOT),FUT:active(s,FUT)}
-                   ^^^^^^^^^^^^^^
-  File "/home/runner/work/Trading-booooo/Trading-booooo/research/binance_24h_logic_replay.py", line 46, in active
-    j=getj(s,'https://api.binance.com/api/v3/exchangeInfo')
-      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/runner/work/Trading-booooo/Trading-booooo/research/binance_24h_logic_replay.py", line 40, in getj
-    raise RuntimeError(f'{r.status_code} {url}: {r.text[:180]}')
-RuntimeError: 451 https://api.binance.com/api/v3/exchangeInfo: {
-  "code": 0,
-  "msg": "Service unavailable from a restricted location according to 'b. Eligibility' in https://www.binance.com/en/terms. Please contact customer service if you be
+fetched 10 of 54
+fetched 20 of 54
+fetched 30 of 54
+fetched 40 of 54
+fetched 50 of 54
+/home/runner/work/Trading-booooo/Trading-booooo/research/binance_24h_logic_replay.py:90: UserWarning: pandas only supports SQLAlchemy connectable (engine/connection) or database string URI or sqlite3 DBAPI2 connection. Other DBAPI2 objects are not tested. Please consider using SQLAlchemy.
+  d=pd.read_sql_query(q,c,params=(start,))
+{
+  "start": "2026-08-19T04:09:00+00:00",
+  "end": "2026-08-20T04:09:00+00:00",
+  "raw_candidate_rows_24h": 1755,
+  "dedup_episode_rows": 939,
+  "symbols_fetched": 54,
+  "spot_active_usdt": 484,
+  "futures_active_usdt_perp": 527,
+  "regime": [
+    {
+      "exchange": "binance",
+      "symbols": 484,
+      "mean_24h_pct": 4.720039256198348,
+      "median_24h_pct": 4.752000000000001,
+      "positive_share": 0.878099173553719,
+      "p10_pct": -0.07259999999999975,
+      "p90_pct": 9.9154,
+      "quote_volume_weighted_pct": 7.3184660431926725
+    },
+    {
+      "exchange": "binance_futures",
+      "symbols": 527,
+      "mean_24h_pct": 4.52007210626186,
+      "median_24h_pct": 5.015,
+      "positive_share": 0.8614800759013282,
+      "p10_pct": -1.3232,
+      "p90_pct": 10.1762,
+      "quote_volume_weighted_pct": 11.125123837537975
+    }
+  ],
+  "cost_models": {
+    "fee_only": {
+      "binance": 0.2,
+      "binance_futures": 0.1
+    },
+    "empirical_exec": {
+      "binance": 0.331663,
+      "binance_futures": 0.175643
+    }
+  },
+  "note": "Candidate episodes use first full 1m Binance bar open at/after signal; 180s dedup reduces repeated-scan overweight. 1m OHLC cannot resolve same-bar path ordering."
+}
