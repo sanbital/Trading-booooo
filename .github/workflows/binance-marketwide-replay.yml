@@ -1,0 +1,52 @@
+name: Binance Market-Wide Replay
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'research/binance_marketwide_replay.py'
+      - '.github/workflows/binance-marketwide-replay.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUNBUFFERED: '1'
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install research dependencies
+        run: python -m pip install --disable-pip-version-check numpy pandas 'psycopg[binary]' requests tabulate
+
+      - name: Run 7-day whole-Binance replay
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          test -n "$SUPABASE_DB_URL"
+          python research/binance_marketwide_replay.py --days 7 --control-step-min 30 --out research-output
+
+      - name: Publish summary
+        if: always()
+        run: |
+          if [ -f research-output/SUMMARY.md ]; then
+            cat research-output/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload research artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: binance-marketwide-replay
+          path: research-output/
+          if-no-files-found: warn
+          retention-days: 14
