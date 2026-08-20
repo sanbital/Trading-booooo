@@ -1,8 +1,9 @@
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   DEFAULT_FUTURES_LEVERAGE,
   FUTURES_MIN_ENTRY_MARGIN_USDT,
   FUTURES_SPLIT_EXIT_THRESHOLDS,
+  futuresAffordableEntry,
   futuresEntryMinimums,
   futuresPriceReturnPctForRoe,
   futuresRecoveryState,
@@ -36,6 +37,36 @@ Deno.test("default futures leverage remains 3x", () => {
 Deno.test("futures entry floor remains 50 USDT margin", () => {
   assertEquals(FUTURES_MIN_ENTRY_MARGIN_USDT, 50);
   assertEquals(futuresEntryMinimums(3, 5), { marginQuote: 50, notionalQuote: 150, leverage: 3 });
+});
+
+Deno.test("futures entry reserves live commission headroom instead of spending 100% of wallet as margin", () => {
+  const available = 66.38173576;
+  const result = futuresAffordableEntry({
+    availableMarginQuote: available,
+    requestedNotionalQuote: available * 3,
+    entryPrice: 0.5,
+    quantityStep: 0.1,
+    leverage: 3,
+    feePerSidePct: 0.05,
+  });
+  assert(result.quantity > 0);
+  assert(result.marginQuote >= FUTURES_MIN_ENTRY_MARGIN_USDT);
+  assert(result.notionalQuote < available * 3);
+  assert(result.totalWalletDebitQuote <= available + 1e-9);
+});
+
+Deno.test("futures affordable quantity floors coarse steps and never exceeds wallet capacity", () => {
+  const available = 66.38173576;
+  const result = futuresAffordableEntry({
+    availableMarginQuote: available,
+    requestedNotionalQuote: available * 3,
+    entryPrice: 60_000,
+    quantityStep: 0.001,
+    leverage: 3,
+    feePerSidePct: 0.05,
+  });
+  assertEquals(result.quantity, 0.003);
+  assert(result.totalWalletDebitQuote <= available + 1e-9);
 });
 
 Deno.test("3x converts -4/+5 price return to -12/+15 ROE", () => {

@@ -154,6 +154,67 @@ export function futuresEntryMinimums(
   };
 }
 
+export type FuturesAffordableEntryInput = {
+  availableMarginQuote: number;
+  requestedNotionalQuote: number;
+  entryPrice: number;
+  quantityStep: number;
+  leverage: number;
+  /** One-side entry commission in percentage units, e.g. 0.05 means 0.05%. */
+  feePerSidePct: number;
+};
+
+export type FuturesAffordableEntry = {
+  quantity: number;
+  notionalQuote: number;
+  marginQuote: number;
+  entryFeeQuote: number;
+  totalWalletDebitQuote: number;
+};
+
+/**
+ * Bound a USDⓈ-M entry by the wallet amount that can fund both initial margin and
+ * entry commission. Quantity is floored to the venue step, so affordability can
+ * never be broken by the generic futures round-up path.
+ */
+export function futuresAffordableEntry(
+  input: FuturesAffordableEntryInput,
+): FuturesAffordableEntry {
+  const available = Math.max(0, finite(input.availableMarginQuote));
+  const requestedNotional = Math.max(0, finite(input.requestedNotionalQuote));
+  const entryPrice = Math.max(0, finite(input.entryPrice));
+  const quantityStep = Math.max(0, finite(input.quantityStep));
+  const leverage = normalizeFuturesLeverage(input.leverage);
+  const feeRate = Math.max(0, finite(input.feePerSidePct)) / 100;
+  if (!(available > 0 && requestedNotional > 0 && entryPrice > 0)) {
+    return {
+      quantity: 0,
+      notionalQuote: 0,
+      marginQuote: 0,
+      entryFeeQuote: 0,
+      totalWalletDebitQuote: 0,
+    };
+  }
+
+  // notional/leverage + notional*entryFeeRate <= free wallet
+  const walletNotionalCap = available / (1 / leverage + feeRate);
+  const targetNotional = Math.min(requestedNotional, walletNotionalCap);
+  const rawQuantity = targetNotional / entryPrice;
+  const quantity = quantityStep > 0
+    ? Math.floor(rawQuantity / quantityStep) * quantityStep
+    : rawQuantity;
+  const notionalQuote = Math.max(0, quantity * entryPrice);
+  const marginQuote = notionalQuote / leverage;
+  const entryFeeQuote = notionalQuote * feeRate;
+  return {
+    quantity,
+    notionalQuote,
+    marginQuote,
+    entryFeeQuote,
+    totalWalletDebitQuote: marginQuote + entryFeeQuote,
+  };
+}
+
 /** Return on margin: a 4% price move on 3x margin is a 12% move on the money posted. */
 export function futuresRoePct(priceReturnPct: number, leverage: number): number {
   return finite(priceReturnPct) * normalizeFuturesLeverage(leverage);

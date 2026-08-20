@@ -131,6 +131,7 @@ import {
   DEFAULT_FUTURES_LEVERAGE,
   FUTURES_MIN_ENTRY_MARGIN_USDT,
   FUTURES_SPLIT_EXIT_THRESHOLDS,
+  futuresAffordableEntry,
   futuresEntryMinimums,
   futuresRecoveryState,
   futuresSplitExitDecision,
@@ -176,6 +177,48 @@ function gatewayTarget(exchange: Exchange): { url: string; secret: string } {
     ? { url: BINANCE_GATEWAY_URL, secret: BINANCE_GATEWAY_SECRET }
     : { url: GATEWAY_URL, secret: GATEWAY_SECRET };
 }
+const BINANCE_FUTURES_PUBLIC_URL = "https://fapi.binance.com";
+let activeFuturesSymbolCache: { expires: number; symbols: Set<string> } | null = null;
+
+/** Active USDⓈ-M perpetual membership is not the same thing as spot symbol grammar. */
+async function activeBinanceFuturesSymbols(): Promise<Set<string>> {
+  const now = Date.now();
+  if (activeFuturesSymbolCache && activeFuturesSymbolCache.expires > now) {
+    return activeFuturesSymbolCache.symbols;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8_000);
+  try {
+    const response = await fetch(`${BINANCE_FUTURES_PUBLIC_URL}/fapi/v1/exchangeInfo`, {
+      signal: controller.signal,
+      headers: { accept: "application/json" },
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`Binance futures exchangeInfo ${response.status}: ${text.slice(0, 160)}`);
+    }
+    const payload = text ? JSON.parse(text) : {};
+    const rows = Array.isArray(payload?.symbols) ? payload.symbols : [];
+    const symbols = new Set<string>(
+      rows
+        .filter((row: any) =>
+          String(row?.status || "") === "TRADING" &&
+          String(row?.contractType || "") === "PERPETUAL" &&
+          String(row?.quoteAsset || "") === "USDT"
+        )
+        .map((row: any) => String(row?.symbol || "").toUpperCase())
+        .filter(Boolean),
+    );
+    if (!symbols.size) {
+      throw new Error("Binance futures exchangeInfo returned no active USDT perpetuals");
+    }
+    activeFuturesSymbolCache = { expires: now + 5 * 60_000, symbols };
+    return symbols;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const DASHBOARD_ORIGIN = env("ALLOWED_ORIGINS").split(",")[0] || "*";
 const DEFAULT_MODE = parseMode(env("TRADING_MODE_DEFAULT") || "PAPER");
 const MAX_SCAN_SECONDS = 280;
@@ -1114,8 +1157,32 @@ async function mirrorBinanceFuturesCandidates(
     ).catch(() => []) as Promise<JsonRecord[]>,
   ]);
   const already = new Set((existing || []).map((row) => String(row.market)));
-  const clones = (spot || [])
-    .filter((row) => !already.has(String(row.market)))
+  const unmirroredSpot = (spot || []).filter((row) => !already.has(String(row.market)));
+  let activeFuturesSymbols: Set<string>;
+  try {
+    activeFuturesSymbols = await activeBinanceFuturesSymbols();
+  } catch (error) {
+    await event(
+      "FUTURES_UNIVERSE_REFRESH_FAILED",
+      "Binance futures universe unavailable; skipping futures mirror for this scan",
+      { scan_id: scanId, error: error instanceof Error ? error.message : String(error) },
+      { cycleId, level: "WARNING" },
+    );
+    return 0;
+  }
+  const skippedMarkets = unmirroredSpot
+    .map((row) => String(row.market || "").toUpperCase())
+    .filter((market) => market && !activeFuturesSymbols.has(market));
+  if (skippedMarkets.length) {
+    await event(
+      "FUTURES_SPOT_ONLY_SYMBOL_SKIPPED",
+      "Spot BUY candidates without an active USDⓈ-M perpetual were not mirrored",
+      { scan_id: scanId, markets: skippedMarkets, count: skippedMarkets.length },
+      { cycleId, level: "INFO" },
+    );
+  }
+  const clones = unmirroredSpot
+    .filter((row) => activeFuturesSymbols.has(String(row.market || "").toUpperCase()))
     .map((row) => {
       // Copy every column the scanner wrote so schema additions travel automatically;
       // only identity and provenance are rewritten.
@@ -2739,6 +2806,12 @@ async function enterCandidateInner(
   }
   const allocationOnly = isScalpStrategy((settings as any).strategy);
   const managedAvailable = finite(managed.managedAvailableQuote);
+  const futuresEntryFeePct = exchange === "binance_futures"
+    ? await liveFeePct(exchange, settings)
+    : 0;
+  const futuresMarginCapacity = exchange === "binance_futures"
+    ? managedAvailable / (1 + leverage * Math.max(0, futuresEntryFeePct) / 100)
+    : managedAvailable;
   const strategyExposureFraction = allocationOnly
     ? clamp(finite((settings as any).scalp_max_strategy_exposure_pct, 100), 10, 100) / 100
     : 1;
@@ -2816,7 +2889,10 @@ async function enterCandidateInner(
   // than the notional is what makes "-12% on margin" cost the operator the same fraction
   // of the account that "-4% on price" costs a spot trade of the same allocation.
   const allocationSizing = (entryPrice: number) => {
-    const marginQuote = floorToStep(Math.min(managedAvailable, maxOrder), limits.quoteStep);
+    const marginQuote = floorToStep(
+      Math.min(futuresMarginCapacity, maxOrder),
+      limits.quoteStep,
+    );
     const notionalQuote = floorToStep(marginQuote * leverage, limits.quoteStep);
     return marginQuote >= minimumEntryMarginQuote &&
         notionalQuote >= minimumEntryNotionalQuote
@@ -2894,12 +2970,26 @@ async function enterCandidateInner(
       reason: "depth deteriorated during sizing",
     };
   }
-  let quantity = entryQuantityForNotional(
-    exchange,
-    sizing.notionalQuote,
-    entryPrice,
-    rules.quantity_step || 0.00000001,
-  );
+  const entryQuantityStep = rules.quantity_step || 0.00000001;
+  const executableEntryQuantity = (requestedNotionalQuote: number): number => {
+    if (exchange !== "binance_futures") {
+      return entryQuantityForNotional(
+        exchange,
+        requestedNotionalQuote,
+        entryPrice,
+        entryQuantityStep,
+      );
+    }
+    return futuresAffordableEntry({
+      availableMarginQuote: managedAvailable,
+      requestedNotionalQuote,
+      entryPrice,
+      quantityStep: entryQuantityStep,
+      leverage,
+      feePerSidePct: futuresEntryFeePct,
+    }).quantity;
+  };
+  let quantity = executableEntryQuantity(sizing.notionalQuote);
   if (!(quantity > 0) || quantity * entryPrice < minimumEntryNotionalQuote) {
     return {
       entered: false,
@@ -3333,12 +3423,7 @@ async function enterCandidateInner(
     }
     decisionNotional = decision.notional;
     if (decision.notional < sizing.notionalQuote) {
-      quantity = entryQuantityForNotional(
-        exchange,
-        decision.notional,
-        entryPrice,
-        rules.quantity_step || 0.00000001,
-      );
+      quantity = executableEntryQuantity(decision.notional);
       if (
         !(quantity > 0) || quantity * entryPrice < minimumEntryNotionalQuote
       ) {
