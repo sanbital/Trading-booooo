@@ -27,13 +27,15 @@ jobs:
         run: python3 .github/scripts/apply_futures_entry_fix.py
 
       - name: Format changed files
-        run: deno fmt supabase/functions/market-autotrader/index.ts supabase/functions/market-autotrader/futures-exit-policy.ts supabase/functions/market-autotrader/futures-exit-policy.test.ts
+        run: deno fmt supabase/functions/market-autotrader/index.ts
 
       - name: Validate exact safety markers
         shell: bash
         run: |
           grep -q 'FUTURES_SPOT_ONLY_SYMBOL_SKIPPED' supabase/functions/market-autotrader/index.ts
           grep -q 'FUTURES_UNIVERSE_REFRESH_FAILED' supabase/functions/market-autotrader/index.ts
+          grep -q '/fapi/v2/ticker/price' supabase/functions/market-autotrader/index.ts
+          grep -q 'liveTickerSymbols.has(symbol)' supabase/functions/market-autotrader/index.ts
           grep -q 'futuresMarginCapacity' supabase/functions/market-autotrader/index.ts
           grep -q 'futuresAffordableEntry({' supabase/functions/market-autotrader/index.ts
           grep -q 'walletNotionalCap' supabase/functions/market-autotrader/futures-exit-policy.ts
@@ -49,9 +51,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add supabase/functions/market-autotrader/index.ts \
-                  supabase/functions/market-autotrader/futures-exit-policy.ts \
-                  supabase/functions/market-autotrader/futures-exit-policy.test.ts
+          git add supabase/functions/market-autotrader/index.ts
           git diff --cached --check
-          git commit -m "fix: remove futures entry execution leakage"
+          git commit -m "fix: require live futures ticker membership"
           git push origin HEAD:main
