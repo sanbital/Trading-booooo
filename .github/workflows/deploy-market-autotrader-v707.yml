@@ -1,5 +1,6 @@
 name: Deploy pre-breakout burst strategy
 
+# Validation marker: protected target + authenticated balance reconciliation.
 on:
   push:
     branches: [main]
