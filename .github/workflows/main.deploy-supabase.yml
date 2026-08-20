@@ -174,12 +174,21 @@ jobs:
             --set=ON_ERROR_STOP=1 \
             --single-transaction \
             --file supabase/migrations/20260817090516_enforce_absolute_timeout_before_tranche_guard.sql
-          # This migration must be last: it intentionally replaces the legacy recovery and
-          # timeout ownership in guard_residual_sell_order_v751 / position policy.
+          # The state-machine migration intentionally replaces legacy recovery ownership.
+          # Always restore the later Late Recovery branch and then the futures timeout
+          # owner after it, so deployment cannot end in the spot-only timeout variant.
           psql "${SUPABASE_DB_URL}" \
             --set=ON_ERROR_STOP=1 \
             --single-transaction \
             --file supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql
+          psql "${SUPABASE_DB_URL}" \
+            --set=ON_ERROR_STOP=1 \
+            --single-transaction \
+            --file supabase/migrations/20260820091000_restore_late_recovery_after_state_machine.sql
+          psql "${SUPABASE_DB_URL}" \
+            --set=ON_ERROR_STOP=1 \
+            --single-transaction \
+            --file supabase/migrations/20260820090000_restore_futures_absolute_timeout_guard.sql
 
       - name: Verify the sell guard survived the batch
         shell: bash
@@ -193,6 +202,10 @@ jobs:
             v_def text;
             v_futures_def text;
             v_position_def text;
+            v_bad_timeout text := $bad$
+        and not v_futures
+        and v_approved_reason in ('HALF_HOLD_ABSOLUTE_TIMEOUT', 'POST180_MAX_HOLD_TIMEOUT')
+$bad$;
           begin
             select pg_get_functiondef(p.oid) into v_def
             from pg_proc p
@@ -242,8 +255,17 @@ jobs:
                or position('v_held_seconds < 180' in v_futures_def) = 0
                or position('v_held_seconds < 10800' in v_futures_def) = 0
                or position('pending_exit_reason' in v_futures_def) = 0
-               or position('EMERGENCY' in v_futures_def) = 0 then
-              raise exception 'Futures 3m recovery sell guard missing after migration batch';
+               or position('EMERGENCY' in v_futures_def) = 0
+               or position('LATE_RECOVERY_NET_POSITIVE_EXIT' in v_futures_def) = 0
+               or position('LATE_RECOVERY_DRAWDOWN_33_EXIT' in v_futures_def) = 0
+               or position('LATE_RECOVERY_OUTSIDE_OWNER_WINDOW' in v_futures_def) = 0
+               or position('POST180_MAX_HOLD_TIMEOUT' in v_futures_def) = 0
+               or position('HALF_HOLD_ABSOLUTE_TIMEOUT' in v_futures_def) = 0
+               or position('absolute_max_holding_seconds' in v_futures_def) = 0 then
+              raise exception 'Futures recovery/late-recovery/timeout guard missing after migration batch';
+            end if;
+            if position(v_bad_timeout in v_futures_def) > 0 then
+              raise exception 'Futures absolute-timeout STOP owner is incorrectly excluded after migration batch';
             end if;
 
             select pg_get_functiondef(p.oid) into v_position_def
