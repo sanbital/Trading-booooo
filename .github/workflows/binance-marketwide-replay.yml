@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   PYTHONUNBUFFERED: '1'
@@ -40,6 +40,25 @@ jobs:
         run: |
           if [ -f research-output/SUMMARY.md ]; then
             cat research-output/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Persist compact research result
+        if: success()
+        run: |
+          mkdir -p research/results/latest
+          cp research-output/SUMMARY.md research/results/latest/SUMMARY.md
+          cp research-output/metadata.json research/results/latest/metadata.json
+          cp research-output/checkpoint_summary.csv research/results/latest/checkpoint_summary.csv
+          cp research-output/breakeven_metrics.csv research/results/latest/breakeven_metrics.csv
+          cp research-output/recovery_metrics.csv research/results/latest/recovery_metrics.csv
+          cp research-output/single_gate_metrics.csv research/results/latest/single_gate_metrics.csv
+          cp research-output/whole_market_controls.csv research/results/latest/whole_market_controls.csv
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add research/results/latest
+          if ! git diff --cached --quiet; then
+            git commit -m 'research: refresh Binance market-wide replay results'
+            git push
           fi
 
       - name: Upload research artifact
