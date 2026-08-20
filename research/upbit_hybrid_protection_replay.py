@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import argparse,csv,json,statistics
 from datetime import timedelta
-from upbit_24h_replay import parse_utc,fetch_candles,first_at_or_after,rows_between,candle_ts,aggregate,net_ret,tick_size_krw,ceil_tick,floor_tick
+from upbit_24h_replay import parse_utc,fetch_candles,first_at_or_after,rows_between,candle_ts,aggregate,net_ret,tick_size_krw,ceil_tick,floor_tick,current_fixed_sim
 
 def load(path):
   out=[]
@@ -36,7 +36,6 @@ def sim(rows,ets,entry,fee,arm_bps,horizon=600,costbuf=12,pattern=''):
       continue
     if mfe>=arm_bps and close>be and be*(1-fee)>buycost:
       protect=max(protect or 0,be);armed=True
-    # preserve current higher profit lock and peak trail stages exactly
     locknet=6 if momentum else 20
     if mfe>=max(20,costbuf+locknet+2):
       cand=entry*(1+(costbuf+locknet)/10000);cand=floor_tick(cand)
@@ -51,27 +50,31 @@ def sim(rows,ets,entry,fee,arm_bps,horizon=600,costbuf=12,pattern=''):
 
 def summ(rows):
   a=aggregate([r['net_return_pct'] for r in rows]);
-  if rows:a.update({'arm_rate':sum(r['armed'] for r in rows)/len(rows),'hit_rate':sum(r['hit'] for r in rows)/len(rows),'avg_exit_s':statistics.fmean(r['exit_s'] for r in rows)})
+  if rows:a.update({'arm_rate':sum(bool(r.get('armed')) for r in rows)/len(rows),'hit_rate':sum(bool(r.get('hit')) for r in rows)/len(rows),'avg_exit_s':statistics.fmean(float(r.get('exit_s',600)) for r in rows)})
   return a
 
 def main():
   ap=argparse.ArgumentParser();ap.add_argument('--candidates',required=True);ap.add_argument('--context',required=True);ap.add_argument('--json',required=True);ap.add_argument('--md',required=True);a=ap.parse_args()
   ctx=json.load(open(a.context));fee=float(ctx.get('buy_fee_bps',5))/10000;cost=float(ctx.get('cost_buffer_upbit_bps',12));cands=dedup(load(a.candidates))
-  arms=[10,12,14,15,16,18,20,22,25,30,35,40,50];g={str(x):[] for x in arms};details=[]
+  arms=[10,12,14,15,16,18,20,22,25,30,35,40,50];g={str(x):[] for x in arms};current=[];details=[]
   for i,c in enumerate(cands,1):
     rows=fetch_candles(c['market'],c['created_at']-timedelta(seconds=5),c['created_at']+timedelta(seconds=605),seconds=True);er=first_at_or_after(rows,c['created_at'])
     if not er:continue
-    ets=candle_ts(er);entry=float(er['trade_price']);one={'market':c['market'],'entry':entry,'arms':{}}
+    ets=candle_ts(er);entry=float(er['trade_price']);pattern=c.get('pattern','');one={'market':c['market'],'entry':entry,'arms':{}}
+    cur=current_fixed_sim(rows,ets,entry,pattern,600,fee,cost)
+    if cur: current.append({'net_return_pct':cur['net_return_pct'],'armed':bool(cur.get('protected_stop')),'hit':cur.get('exit_reason')=='PRE_T1_PROTECT','exit_s':600,'reason':cur.get('exit_reason')})
     for arm in arms:
-      r=sim(rows,ets,entry,fee,arm,600,cost,c.get('pattern',''));g[str(arm)].append(r);one['arms'][str(arm)]=r
+      r=sim(rows,ets,entry,fee,arm,600,cost,pattern);g[str(arm)].append(r);one['arms'][str(arm)]=r
     details.append(one);print(f'{i}/{len(cands)} {c["market"]}',flush=True)
-  ag={k:summ(v) for k,v in g.items()};rank=[]
-  # joint objective: maximize mean subject to p10 >= -0.10%, then positive rate, with lower trigger as final tie-breaker.
-  for k,v in ag.items():rank.append((1 if v.get('p10',-999)>=-0.10 else 0,v.get('mean',-999),v.get('positive_rate',0),-float(k),k,v))
+  ag={k:summ(v) for k,v in g.items()};curagg=summ(current);rank=[]
+  for k,v in ag.items():
+    # Prefer variants that improve both mean and p10 vs exact same-sample current.
+    ok=v.get('mean',-999)>=curagg.get('mean',-999) and v.get('p10',-999)>=curagg.get('p10',-999)
+    rank.append((1 if ok else 0,v.get('mean',-999),v.get('p10',-999),v.get('positive_rate',0),-float(k),k,v))
   rank.sort(reverse=True);best=rank[0]
-  res={'context':ctx,'raw':len(load(a.candidates)),'dedup':len(cands),'replayed':len(details),'variants':ag,'best':{'arm_bps':best[4],'metrics':best[5]},'details':details}
+  res={'context':ctx,'raw':len(load(a.candidates)),'dedup':len(cands),'replayed':len(details),'current_same_sample':curagg,'variants':ag,'best':{'arm_bps':best[5],'metrics':best[6],'dominates_current':bool(best[0])},'details':details}
   json.dump(res,open(a.json,'w',encoding='utf-8'),ensure_ascii=False,indent=2)
-  lines=['# Upbit Hybrid Protection Replay',f'- raw {res["raw"]}; dedup {res["dedup"]}; replayed {res["replayed"]}',f'- Best arm={best[4]}bps, mean={best[5].get("mean",0):.4f}%, p10={best[5].get("p10",0):.4f}%, positive={best[5].get("positive_rate",0)*100:.2f}%','','|Arm bps|N|Mean %|P10 %|P05 %|Positive %|Arm %|Hit %|','|---:|---:|---:|---:|---:|---:|---:|---:|']
+  lines=['# Upbit Hybrid Protection Replay',f'- raw {res["raw"]}; dedup {res["dedup"]}; replayed {res["replayed"]}',f'- CURRENT same-sample mean={curagg.get("mean",0):.4f}%, p10={curagg.get("p10",0):.4f}%, positive={curagg.get("positive_rate",0)*100:.2f}%',f'- Best arm={best[5]}bps, mean={best[6].get("mean",0):.4f}%, p10={best[6].get("p10",0):.4f}%, positive={best[6].get("positive_rate",0)*100:.2f}%, dominates_current={bool(best[0])}','','|Arm bps|N|Mean %|P10 %|P05 %|Positive %|Arm %|Hit %|','|---:|---:|---:|---:|---:|---:|---:|---:|']
   for arm in arms:
     v=ag[str(arm)];lines.append(f'|{arm}|{v.get("n",0)}|{v.get("mean",0):.4f}|{v.get("p10",0):.4f}|{v.get("p05",0):.4f}|{v.get("positive_rate",0)*100:.2f}|{v.get("arm_rate",0)*100:.2f}|{v.get("hit_rate",0)*100:.2f}|')
   open(a.md,'w',encoding='utf-8').write('\n'.join(lines)+'\n')
