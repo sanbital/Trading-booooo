@@ -6,6 +6,11 @@ on:
     paths:
       - "research/upbit_24h_replay.py"
       - ".github/workflows/research-upbit-24h.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "research/upbit_24h_replay.py"
+      - ".github/workflows/research-upbit-24h.yml"
   workflow_dispatch:
 
 permissions:
@@ -86,6 +91,7 @@ jobs:
             --md validation/upbit-24h-full-replay.md
           cat validation/upbit-24h-full-replay.md
       - name: Persist replay report to research branch
+        if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
           git config user.name github-actions
