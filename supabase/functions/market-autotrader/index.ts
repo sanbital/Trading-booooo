@@ -5970,10 +5970,15 @@ async function applyExit(
   const recoveryNetPositive = decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT";
   const lateRecoveryNetPositive = decisionReason === "LATE_RECOVERY_NET_POSITIVE_EXIT";
   const lateRecoveryDrawdown = decisionReason === "LATE_RECOVERY_DRAWDOWN_33_EXIT";
+  // Upbit v7.6.16: a pre-T1 economic floor is only protection if the order-time book can
+  // still execute the whole position above fee-net breakeven. Route this venue-specific
+  // reason through the same fresh-depth FOK guard used by positive-net recovery exits.
+  const upbitPreT1ProfitProtection = position.exchange === "upbit" &&
+    decisionReason === "PRE_T1_PROFIT_PROTECTION_EXIT";
   const staleRecoveryNetPositive = decisionReason === "STALE_RECOVERY_NET_POSITIVE_EXIT_180M" ||
     decisionReason === "FUTURES_STALE_RECOVERY_NET_POSITIVE_EXIT_180M";
   const positiveNetGuardedExit = positiveNetAfter180 || recoveryNetPositive ||
-    staleRecoveryNetPositive;
+    staleRecoveryNetPositive || upbitPreT1ProfitProtection;
   // Every reason that must be allowed to liquidate the protected half.
   // First take-profit (+5% spot / +15% futures ROE) is the only split-exit path that
   // preserves 50%. Hard stops and residual protected-trail exits must close everything
@@ -6033,7 +6038,9 @@ async function applyExit(
       quantity,
       settings,
       cycleId,
-      staleRecoveryNetPositive
+      upbitPreT1ProfitProtection
+        ? "UPBIT_PRE_T1_PROFIT_PROTECTION_BLOCKED"
+        : staleRecoveryNetPositive
         ? "STALE_RECOVERY_NET_POSITIVE_BLOCKED"
         : lateRecoveryNetPositive
         ? "LATE_RECOVERY_NET_POSITIVE_BLOCKED"
@@ -6045,7 +6052,9 @@ async function applyExit(
   if (!position.is_paper && positiveNetGuardedExit && !protectedPositiveNet) {
     return {
       action: "NONE",
-      reason: staleRecoveryNetPositive
+      reason: upbitPreT1ProfitProtection
+        ? "Upbit pre-T1 protection order-time positive-net recheck blocked; position retained"
+        : staleRecoveryNetPositive
         ? "180m recovery net-positive order-time recheck blocked; position retained"
         : lateRecoveryNetPositive
         ? "late-recovery net-positive order-time recheck blocked; position retained"
@@ -6156,7 +6165,9 @@ async function applyExit(
       },
     ))[0] || position;
     await event(
-      staleRecoveryNetPositive
+      upbitPreT1ProfitProtection
+        ? "UPBIT_PRE_T1_PROFIT_PROTECTION_FOK_NOT_FILLED"
+        : staleRecoveryNetPositive
         ? "STALE_RECOVERY_NET_POSITIVE_FOK_NOT_FILLED"
         : lateRecoveryDrawdown
         ? "LATE_RECOVERY_DRAWDOWN_33_FOK_NOT_FILLED"
@@ -6232,7 +6243,9 @@ async function applyExit(
     (targetAction || positiveNetGuardedExit || lateRecoveryNetPositive) && finalized?.closed &&
     finite(finalized?.position?.realized_pnl_quote) <= 0
   ) {
-    const breachReason = staleRecoveryNetPositive
+    const breachReason = upbitPreT1ProfitProtection
+      ? "UPBIT_PRE_T1_PROFIT_PROTECTION_GUARD_BREACH"
+      : staleRecoveryNetPositive
       ? "STALE_RECOVERY_NET_POSITIVE_GUARD_BREACH"
       : lateRecoveryNetPositive
       ? "LATE_RECOVERY_NET_POSITIVE_GUARD_BREACH"
@@ -6264,6 +6277,7 @@ async function applyExit(
   if (
     finalized?.closed &&
     (decisionReason === "POSITIVE_NET_AFTER_180S" ||
+      decisionReason === "PRE_T1_PROFIT_PROTECTION_EXIT" ||
       decisionReason === "FUTURES_RECOVERY_NET_POSITIVE_EXIT" ||
       decisionReason === "LATE_RECOVERY_NET_POSITIVE_EXIT" ||
       decisionReason === "LATE_RECOVERY_DRAWDOWN_33_EXIT" ||
