@@ -1,0 +1,96 @@
+name: Research Upbit KRW 24h Replay
+
+on:
+  push:
+    branches: [research/upbit-24h-20260820]
+    paths:
+      - "research/upbit_24h_replay.py"
+      - ".github/workflows/research-upbit-24h.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: research/upbit-24h-20260820
+          fetch-depth: 0
+      - name: Export production signal and execution context
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          command -v psql >/dev/null
+          mkdir -p research validation
+          psql "$SUPABASE_DB_URL" --set=ON_ERROR_STOP=1 --csv -c "
+            select id,market,created_at,entry_low,entry_high,stop_price,target_1,target_2,
+                   coalesce(snapshot#>>'{lob,pattern}','') as pattern,
+                   failed_gate_count,estimated_cost_pct
+            from public.scanner_candidates
+            where exchange='upbit' and decision='BUY'
+              and created_at >= now() - interval '24 hours'
+            order by created_at;
+          " > research/upbit_candidates_24h.csv
+          psql "$SUPABASE_DB_URL" --set=ON_ERROR_STOP=1 -At -c "
+            with buys as (
+              select sum(coalesce(executed_funds_quote,0))::numeric funds,
+                     sum(coalesce(paid_fee_quote,0))::numeric fee
+              from public.trading_orders
+              where exchange='upbit' and side='BUY'
+                and created_at >= now()-interval '30 days'
+                and state in ('APPLIED','EXCHANGE_DONE','EXCHANGE_PARTIAL_CANCELLED')
+              group by position_id
+            ), sells as (
+              select sum(coalesce(executed_funds_quote,0))::numeric funds,
+                     sum(coalesce(paid_fee_quote,0))::numeric fee
+              from public.trading_orders
+              where exchange='upbit' and side='SELL'
+                and created_at >= now()-interval '30 days'
+                and state in ('APPLIED','EXCHANGE_DONE','EXCHANGE_PARTIAL_CANCELLED')
+              group by position_id
+            ), slip as (
+              select (p.average_entry_price / nullif((c.entry_low+c.entry_high)/2.0,0)-1)*10000 bps
+              from public.trading_positions p
+              join public.scanner_candidates c on c.id=p.candidate_id
+              where p.exchange='upbit' and p.is_paper=false
+                and p.opened_at>=now()-interval '30 days'
+                and p.average_entry_price>0 and c.entry_low>0 and c.entry_high>0
+            ), cfg as (select * from public.trading_settings where id=1)
+            select json_build_object(
+              'buy_fee_bps', coalesce((select percentile_cont(.5) within group(order by fee/funds)*10000 from buys where funds>0),5),
+              'sell_fee_bps', coalesce((select percentile_cont(.5) within group(order by fee/funds)*10000 from sells where funds>0),5),
+              'entry_slippage_median_bps', coalesce((select percentile_cont(.5) within group(order by bps) from slip),0),
+              'entry_slippage_p90_bps', coalesce((select percentile_cont(.9) within group(order by bps) from slip),0),
+              'real_trades_30d', (select count(*) from public.trading_positions where exchange='upbit' and is_paper=false and opened_at>=now()-interval '30 days'),
+              'cost_buffer_upbit_bps',(select lob_profit_protect_cost_buffer_bps_upbit from cfg),
+              'breakeven_trigger_bps',(select lob_profit_protect_breakeven_trigger_bps from cfg),
+              'profit_lock_trigger_bps',(select lob_profit_lock_trigger_bps from cfg),
+              'profit_lock_net_bps',(select lob_profit_lock_net_bps from cfg),
+              'profit_trail_trigger_bps',(select lob_profit_trail_trigger_bps from cfg),
+              'profit_trail_distance_bps',(select lob_profit_trail_distance_bps from cfg),
+              'absolute_max_holding_seconds',(select lob_absolute_max_holding_seconds from cfg)
+            );
+          " > research/upbit_execution_context.json
+      - name: Run public Upbit full-market replay
+        run: |
+          set -euo pipefail
+          python research/upbit_24h_replay.py \
+            --candidates research/upbit_candidates_24h.csv \
+            --context research/upbit_execution_context.json \
+            --json validation/upbit-24h-full-replay.json \
+            --md validation/upbit-24h-full-replay.md
+          cat validation/upbit-24h-full-replay.md
+      - name: Persist replay report to research branch
+        run: |
+          set -euo pipefail
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add validation/upbit-24h-full-replay.json validation/upbit-24h-full-replay.md
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "research: persist Upbit 24h full-market replay [skip ci]"
+          git push origin HEAD:research/upbit-24h-20260820
