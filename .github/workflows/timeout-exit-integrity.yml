@@ -4,8 +4,9 @@ on:
   push:
     branches: [main]
     paths:
-      - "supabase/migrations/20260817090456_fix_timeout_reason_priority_before_first_tranche.sql"
-      - "supabase/migrations/20260817090516_enforce_absolute_timeout_before_tranche_guard.sql"
+      - "supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql"
+      - "supabase/migrations/20260820090000_restore_futures_absolute_timeout_guard.sql"
+      - "supabase/migrations/20260820091000_restore_late_recovery_after_state_machine.sql"
       - ".github/workflows/timeout-exit-integrity.yml"
   workflow_run:
     workflows: ["Deploy Supabase Trading Engine"]
@@ -57,18 +58,18 @@ jobs:
           print("Production database target validated")
           PY
 
-      - name: Re-apply absolute-timeout integrity guards
+      - name: Re-apply recovery and absolute-timeout integrity guards
         shell: bash
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           set -euo pipefail
           psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 --single-transaction \
-            --file supabase/migrations/20260817090456_fix_timeout_reason_priority_before_first_tranche.sql
+            --file supabase/migrations/20260820091000_restore_late_recovery_after_state_machine.sql
           psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 --single-transaction \
-            --file supabase/migrations/20260817090516_enforce_absolute_timeout_before_tranche_guard.sql
+            --file supabase/migrations/20260820090000_restore_futures_absolute_timeout_guard.sql
 
-      - name: Verify timeout cannot be blocked by tranche guard
+      - name: Verify recovery and timeout ownership
         shell: bash
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
@@ -78,6 +79,10 @@ jobs:
           do $$
           declare
             v_def text;
+            v_bad_timeout text := $bad$
+        and not v_futures
+        and v_approved_reason in ('HALF_HOLD_ABSOLUTE_TIMEOUT', 'POST180_MAX_HOLD_TIMEOUT')
+$bad$;
           begin
             select pg_get_functiondef(p.oid) into v_def
             from pg_proc p
@@ -89,19 +94,23 @@ jobs:
             if v_def is null then
               raise exception 'guard_residual_sell_order_v751 missing';
             end if;
-            if position('POST180_MAX_HOLD_TIMEOUT' in v_def) = 0 then
-              raise exception 'POST180 timeout authority missing';
+            if position('LATE_RECOVERY_NET_POSITIVE_EXIT' in v_def) = 0
+               or position('LATE_RECOVERY_DRAWDOWN_33_EXIT' in v_def) = 0
+               or position('LATE_RECOVERY_OUTSIDE_OWNER_WINDOW' in v_def) = 0 then
+              raise exception 'Late Recovery owner missing after state-machine replay';
             end if;
-            if position('HALF_HOLD_ABSOLUTE_TIMEOUT' in v_def) = 0 then
-              raise exception 'absolute timeout authority missing';
+            if position('POST180_MAX_HOLD_TIMEOUT' in v_def) = 0
+               or position('HALF_HOLD_ABSOLUTE_TIMEOUT' in v_def) = 0
+               or position('absolute_max_holding_seconds' in v_def) = 0 then
+              raise exception 'absolute-timeout authority or metadata fallback missing';
             end if;
-            if position('absolute_max_holding_seconds' in v_def) = 0 then
-              raise exception 'metadata timeout fallback missing';
+            if position(v_bad_timeout in v_def) > 0 then
+              raise exception 'futures are excluded from absolute-timeout STOP ownership';
             end if;
             if position('v_approved_reason in (''HALF_HOLD_ABSOLUTE_TIMEOUT'', ''POST180_MAX_HOLD_TIMEOUT'')' in v_def) = 0 then
               raise exception 'timeout bypass is not ordered before tranche guards';
             end if;
-            raise notice 'absolute-timeout exit integrity verified';
+            raise notice 'Late Recovery and futures absolute-timeout exit integrity verified';
           end
           $$;
           SQL
