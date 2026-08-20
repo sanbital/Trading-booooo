@@ -18,18 +18,27 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install --disable-pip-version-check numpy pandas 'psycopg[binary]' requests
-      - name: Run decision-relevant 24h replay
+      - name: Run decision-relevant 24h replay and capture status
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
-          test -n "$SUPABASE_DB_URL"
-          python research/binance_24h_logic_replay.py
-      - name: Persist results
-        if: success()
+          mkdir -p research/results/candidate24h
+          set +e
+          if [ -z "$SUPABASE_DB_URL" ]; then
+            echo 'missing SUPABASE_DB_URL' > research/results/candidate24h/replay.log
+            rc=2
+          else
+            python research/binance_24h_logic_replay.py > research/results/candidate24h/replay.log 2>&1
+            rc=$?
+          fi
+          printf 'exit_code=%s\nfinished_at=%s\nsource_sha=%s\n' "$rc" "$(date -u +%FT%TZ)" "$GITHUB_SHA" > research/results/candidate24h/STATUS
+          tail -n 120 research/results/candidate24h/replay.log > research/results/candidate24h/replay_tail.log || true
+          exit 0
+      - name: Persist results or diagnostic
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add research/results/candidate24h
-          git commit -m 'research: persist Binance 24h logic replay' || true
+          git commit -m 'research: persist Binance 24h logic replay status' || true
           git pull --rebase origin main
           git push
