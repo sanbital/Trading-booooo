@@ -1,6 +1,7 @@
 # Upbit Hybrid Protection Replay
 - raw 30; dedup 25; replayed 25
-- Best arm=35bps, mean=0.0958%, p10=-0.0610%, positive=84.00%
+- CURRENT same-sample mean=0.0958%, p10=-0.0610%, positive=84.00%
+- Best arm=35bps, mean=0.0958%, p10=-0.0610%, positive=84.00%, dominates_current=True
 
 |Arm bps|N|Mean %|P10 %|P05 %|Positive %|Arm %|Hit %|
 |---:|---:|---:|---:|---:|---:|---:|---:|
