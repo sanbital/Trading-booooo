@@ -1,0 +1,1 @@
+Trigger a clean redeploy of the current main market-autotrader bundle. Operational evidence showed 29 order-time rejections labeled INSUFFICIENT_50S_OBSERVATION while runtime settings and current source require 15 seconds. This trigger contains no strategy change.
