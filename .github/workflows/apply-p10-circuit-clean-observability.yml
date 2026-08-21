@@ -1,4 +1,4 @@
-name: Apply Clean P10 Circuit Observability
+name: Apply P10 Futures Leverage Exposure Fix
 
 on:
   pull_request:
@@ -6,27 +6,27 @@ on:
       - review/p10-circuit-clean-runner-base-20260821
     types: [opened, synchronize, reopened]
     paths:
-      - '.p10-circuit-clean-trigger'
+      - '.p10-leverage-fix-trigger'
 
 permissions:
   contents: write
 
 concurrency:
-  group: p10-circuit-clean-observability
+  group: p10-futures-leverage-exposure-fix
   cancel-in-progress: false
 
 jobs:
-  patch-clean-review-branch:
+  patch-fix-branch:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'review/p10-circuit-observability-clean-20260821'
+      github.event.pull_request.head.ref == 'fix/p10-futures-leverage-exposure-20260821'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - name: Check out clean review head
+      - name: Check out fix branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: review/p10-circuit-observability-clean-20260821
+          ref: fix/p10-futures-leverage-exposure-20260821
           fetch-depth: 0
 
       - name: Set up Deno
@@ -34,112 +34,43 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Apply observability-only patch
+      - name: Apply leverage exposure fix
         shell: bash
         run: |
           set -euo pipefail
           python3 <<'PY'
           from pathlib import Path
-
           path = Path('supabase/functions/market-autotrader/index.ts')
           text = path.read_text()
-
-          anchor1 = "\n".join([
-              "  const stats = {} as Record<Exchange, any>;",
-              "  const circuits = {} as Record<Exchange, any>;",
-              "  const positionSlots = clamp(finite((settings as any).scalp_position_slots, 3), 1, 20);",
-          ])
-          replacement1 = "\n".join([
-              "  const stats = {} as Record<Exchange, any>;",
-              "  const circuits = {} as Record<Exchange, any>;",
-              "  const circuitDiagnostics = {} as Record<Exchange, JsonRecord>;",
-              "  const positionSlots = clamp(finite((settings as any).scalp_position_slots, 3), 1, 20);",
-              "  const diagnosticNumber = (value: unknown): JsonRecord => {",
-              "    const isNull = value === null;",
-              "    const isEmptyString = typeof value === \"string\" && value.trim() === \"\";",
-              "    const numeric = Number(value);",
-              "    const isFiniteNumber = !isNull && !isEmptyString && Number.isFinite(numeric);",
-              "    return {",
-              "      present: value !== undefined,",
-              "      is_null: isNull,",
-              "      is_empty_string: isEmptyString,",
-              "      type: typeof value,",
-              "      finite: isFiniteNumber,",
-              "      value: isFiniteNumber ? numeric : null,",
-              "    };",
-              "  };",
-          ])
-
-          anchor2 = "\n".join([
-              "    const limits = exchangeLimits(settings, exchange);",
-              "    circuits[exchange] = evaluateCircuit({",
-          ])
-          replacement2 = "\n".join([
-              "    const limits = exchangeLimits(settings, exchange);",
-              "    const managedState = managed.managed || {};",
-              "    const managedCapitalQuote = finite(managedState.managedCapitalQuote);",
-              "    const bookedExposureQuote = finite(managedState.openCostQuote);",
-              "    circuitDiagnostics[exchange] = {",
-              "      raw_total_equity_quote: diagnosticNumber(raw?.total_equity_quote),",
-              "      raw_available_quote: diagnosticNumber(raw?.available_quote),",
-              "      raw_locked_quote: diagnosticNumber(raw?.locked_quote),",
-              "      capital_base_quote: finite(managedState.capitalBaseQuote),",
-              "      booked_exposure_quote: bookedExposureQuote,",
-              "      bot_position_value_quote: finite(managedState.botPositionValueQuote),",
-              "      reserved_exposure_quote: finite(managedState.reservedExposureQuote),",
-              "      managed_capital_quote: managedCapitalQuote,",
-              "      unallocated_within_cap_quote: Math.max(0, managedCapitalQuote - bookedExposureQuote),",
-              "      managed_available_quote: finite(managedState.managedAvailableQuote),",
-              "      circuit_min_order_quote: limits.minOrder,",
-              "    };",
-              "    circuits[exchange] = evaluateCircuit({",
-          ])
-
-          anchor3 = "\n".join([
-              "      strategy_key: P10_STRATEGY_KEY,",
-              "      circuits,",
-              "      stats,",
-          ])
-          replacement3 = "\n".join([
-              "      strategy_key: P10_STRATEGY_KEY,",
-              "      circuits,",
-              "      circuit_diagnostics: circuitDiagnostics,",
-              "      stats,",
-          ])
-
-          for name, anchor, replacement in [
-              ('scan diagnostic declaration', anchor1, replacement1),
-              ('circuit operand capture', anchor2, replacement2),
-              ('blocked event diagnostics', anchor3, replacement3),
-          ]:
-              count = text.count(anchor)
-              if count != 1:
-                  raise SystemExit(f'{name}: expected exactly one anchor, found {count}')
-              text = text.replace(anchor, replacement, 1)
-
+          old = '&select=market,state,strategy_key,position_side,leverage,initial_quantity,remaining_quantity,reserved_quote,reserved_quantity,average_entry_price,planned_entry_price,realized_cost_quote,realized_proceeds_quote,paid_fees_quote,residual_value_quote`'
+          new = '&select=exchange,market,state,strategy_key,position_side,leverage,initial_quantity,remaining_quantity,reserved_quote,reserved_quantity,average_entry_price,planned_entry_price,realized_cost_quote,realized_proceeds_quote,paid_fees_quote,residual_value_quote`'
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one managedPortfolio select anchor, found {count}')
+          text = text.replace(old, new, 1)
           path.write_text(text)
           PY
 
-      - name: Format, typecheck and verify bounded diff
+      - name: Validate fix and regression suite
         shell: bash
         run: |
           set -euo pipefail
           deno fmt supabase/functions/market-autotrader/index.ts
           deno check supabase/functions/market-autotrader/index.ts
-          grep -F 'circuit_diagnostics: circuitDiagnostics' supabase/functions/market-autotrader/index.ts
-          grep -F 'raw_total_equity_quote: diagnosticNumber' supabase/functions/market-autotrader/index.ts
-          grep -F 'booked_exposure_quote: bookedExposureQuote' supabase/functions/market-autotrader/index.ts
+          deno task check
+          deno task test
+          grep -F '&select=exchange,market,state,strategy_key,position_side,leverage' supabase/functions/market-autotrader/index.ts
           git diff --check
           test "$(git diff --name-only | tr -d '\r')" = "supabase/functions/market-autotrader/index.ts"
 
-      - name: Commit observability-only source change
+      - name: Commit source-only fix
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add supabase/functions/market-autotrader/index.ts
-          git rm .p10-circuit-clean-trigger
+          git rm .p10-leverage-fix-trigger
           git diff --cached --check
-          git commit -m 'diag: expose P10 circuit balance operands'
-          git push origin HEAD:review/p10-circuit-observability-clean-20260821
+          git commit -m 'fix: preserve futures leverage in managed exposure'
+          git push origin HEAD:fix/p10-futures-leverage-exposure-20260821
