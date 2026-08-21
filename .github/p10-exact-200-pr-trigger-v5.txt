@@ -1,2 +1,3 @@
 Trigger P10 Exact 200 Production Hotfix.
 Synchronize after workflow registration.
+Retry after default-branch workflow propagation.
