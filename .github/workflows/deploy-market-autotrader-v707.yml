@@ -6,12 +6,14 @@ on:
     paths:
       - "supabase/functions/market-autotrader/**"
       - "supabase/functions/market-scanner/**"
+      - "supabase/functions/market-v2-signal/**"
       - "supabase/functions/_shared/**"
       - "supabase/migrations/20260802151000_prebreakout_burst_entry_exit_policy.sql"
       - "supabase/migrations/20260810010000_binance_futures_lane_v760.sql"
       - "supabase/migrations/20260810133000_protected_trailing_exit_v761.sql"
       - "supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql"
       - "supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql"
+      - "supabase/migrations/20260821110000_p10_live_cutover.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
@@ -19,11 +21,13 @@ on:
     paths:
       - "supabase/functions/market-autotrader/**"
       - "supabase/functions/market-scanner/**"
+      - "supabase/functions/market-v2-signal/**"
       - "supabase/functions/_shared/**"
       - "supabase/migrations/20260810010000_binance_futures_lane_v760.sql"
       - "supabase/migrations/20260810133000_protected_trailing_exit_v761.sql"
       - "supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql"
       - "supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql"
+      - "supabase/migrations/20260821110000_p10_live_cutover.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   workflow_dispatch:
 
@@ -54,8 +58,11 @@ jobs:
             supabase/functions/_shared/lob/minute-entry-gate.test.ts \
             supabase/functions/_shared/lob/types.ts \
             supabase/functions/_shared/lob/entry.ts \
+            supabase/functions/_shared/p10-policy.ts \
+            supabase/functions/_shared/p10-policy.test.ts \
             supabase/functions/market-scanner/index.ts \
             supabase/functions/market-scanner/engine.ts \
+            supabase/functions/market-v2-signal/index.ts \
             supabase/functions/market-autotrader/manual-position-import.ts \
             supabase/functions/market-autotrader/manual-position-import.test.ts \
             supabase/functions/market-autotrader/executable-exit.ts \
@@ -74,7 +81,9 @@ jobs:
             supabase/functions/market-autotrader/split-stop-policy.test.ts
           deno test supabase/functions/market-autotrader/futures-exit-policy.test.ts
           deno test --allow-read supabase/functions/market-autotrader/futures-lane.test.ts
+          deno test supabase/functions/_shared/p10-policy.test.ts
           deno check supabase/functions/market-scanner/index.ts
+          deno check supabase/functions/market-v2-signal/index.ts
           deno check supabase/functions/market-autotrader/index.ts
           engine_version="$(sed -n 's/.*export const ENGINE_VERSION = "\([^"]*\)".*/\1/p' \
             supabase/functions/market-scanner/engine.ts)"
@@ -142,6 +151,9 @@ jobs:
           grep -q "upper(coalesce(new.purpose, '')) = 'EMERGENCY'" \
             supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql
           ! grep -q 'const exp1ArmWidthsBps' supabase/functions/market-autotrader/index.ts
+          grep -q 'P10_DONCHIAN_BREAKOUT_E10_SLOW_4R' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'P10_SLOW_4R' supabase/migrations/20260821110000_p10_live_cutover.sql
 
   deploy:
     needs: validate
@@ -207,6 +219,19 @@ jobs:
                     and p.proname = 'enforce_residual_exit_position_policy_v751'
                     and position('recovery_latch_after_seconds' in pg_get_functiondef(p.oid)) > 0
                     and position('coalesce(new.t1_completed, false)' in pg_get_functiondef(p.oid)) > 0
+                )
+                and exists (
+                  select 1 from information_schema.columns
+                  where table_schema = 'public'
+                    and table_name = 'trading_positions'
+                    and column_name = 'position_side'
+                )
+                and exists (
+                  select 1
+                  from pg_proc p
+                  join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public'
+                    and p.proname = 'apply_p10_entry_order'
                 );
             ")"
             if [ "${ready}" = "t" ]; then
@@ -224,6 +249,6 @@ jobs:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
           set -euo pipefail
-          for fn in market-scanner market-autotrader; do
+          for fn in market-scanner market-v2-signal market-autotrader; do
             supabase functions deploy "$fn" --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
           done
