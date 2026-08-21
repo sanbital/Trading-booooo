@@ -145,7 +145,7 @@ Deno.test("legacy spot policy triggers are unreachable from the futures lane", (
 Deno.test("margin accounting keeps each open position's stamped leverage", () => {
   assert(
     ENGINE.includes(
-      "select=market,state,strategy_key,position_side,leverage,initial_quantity,remaining_quantity",
+      "select=exchange,market,state,strategy_key,position_side,leverage,initial_quantity,remaining_quantity",
     ),
   );
   assert(
