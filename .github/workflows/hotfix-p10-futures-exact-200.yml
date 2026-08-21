@@ -1,0 +1,105 @@
+name: Force P10 Futures Exact 200
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/hotfix-p10-futures-exact-200.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  hotfix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Enforce exact 200 USDT margin per futures position
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          path = Path('supabase/functions/market-autotrader/index.ts')
+          text = path.read_text()
+          pattern = re.compile(r'''  if \(exchange === "binance_futures"\) \{\n    const operatorMargin = finite\(\(settings as any\)\.binance_futures_allocation_usdt, (?:50|200)\);\n(?:    .*\n){1,8}?  \}\n  const step = exchange === "upbit" \? 1000 : 0\.01;''')
+          replacement = '''  if (exchange === "binance_futures") {
+    const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 200);
+    // Operator allocation is the required margin PER futures position.
+    // Never divide it by the global spot/scalp slot count and never silently downsize.
+    if (operatorMargin > 0) {
+      return available + 1e-9 >= operatorMargin
+        ? floorToStep(operatorMargin, 0.01)
+        : 0;
+    }
+    minimum = FUTURES_MIN_ENTRY_MARGIN_USDT;
+  }
+  const step = exchange === "upbit" ? 1000 : 0.01;'''
+          new_text, n = pattern.subn(replacement, text, count=1)
+          if n != 1:
+              # Accept if the strict patch is already present.
+              if 'return available + 1e-9 >= operatorMargin' not in text or 'binance_futures_allocation_usdt, 200' not in text:
+                  raise SystemExit('P10 futures sizing block not found or ambiguous')
+              new_text = text
+          path.write_text(new_text)
+          PY
+          deno fmt supabase/functions/market-autotrader/index.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          grep -q 'binance_futures_allocation_usdt, 200' supabase/functions/market-autotrader/index.ts
+          grep -q 'return available + 1e-9 >= operatorMargin' supabase/functions/market-autotrader/index.ts
+          ! sed -n '/if (exchange === "binance_futures") {/,/const step = exchange === "upbit"/p' supabase/functions/market-autotrader/index.ts | grep -q 'capital / slots'
+
+      - name: Force production setting to 200
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
+          update public.trading_settings
+          set binance_futures_allocation_usdt = 200,
+              updated_at = now(),
+              version = coalesce(version, 0) + 1
+          where id = 1;
+          do $$
+          declare v numeric;
+          begin
+            select binance_futures_allocation_usdt into v from public.trading_settings where id = 1;
+            if v is distinct from 200::numeric then
+              raise exception 'FUTURES_MARGIN_200_NOT_APPLIED: %', v;
+            end if;
+          end $$;
+          SQL
+
+      - name: Deploy patched market-autotrader now
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy market-autotrader --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
+
+      - name: Persist source hotfix to main
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- supabase/functions/market-autotrader/index.ts; then
+            echo 'Source already contains strict 200 margin hotfix'
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add supabase/functions/market-autotrader/index.ts
+          git commit -m "Fix P10 futures to exact 200 USDT margin per position"
+          git push origin HEAD:main
