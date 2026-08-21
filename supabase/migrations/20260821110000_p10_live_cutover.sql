@@ -455,6 +455,7 @@ begin
     average_entry_price = p_fill_price,
     planned_entry_price = p_fill_price,
     stop_price = p_stop_price,
+    trailing_stop = p_stop_price,
     target_1 = p_target_1,
     target_2 = p_target_2,
     peak_price = p_fill_price,
