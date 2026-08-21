@@ -3,8 +3,6 @@ name: Force P10 Futures Exact 200
 on:
   pull_request:
     branches: [main]
-    paths:
-      - ".github/workflows/hotfix-p10-futures-exact-200.yml"
   push:
     branches: [main]
     paths:
@@ -183,4 +181,4 @@ Deno.test("P10 exact futures margin blocks a second ticket after 334 falls to 13
           supabase functions list --project-ref "${SUPABASE_PROJECT_REF}"
 
       - name: Hotfix validation marker
-        run: echo 'exact-200-slot-validated-2026-08-21-pr-run-v3'
+        run: echo 'exact-200-slot-validated-2026-08-21-no-pr-path-filter'
