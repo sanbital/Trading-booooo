@@ -34,42 +34,51 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Apply leverage exposure fix
+      - name: Apply leverage exposure fix and regression assertion
         shell: bash
         run: |
           set -euo pipefail
           python3 <<'PY'
           from pathlib import Path
-          path = Path('supabase/functions/market-autotrader/index.ts')
-          text = path.read_text()
+
+          index = Path('supabase/functions/market-autotrader/index.ts')
+          text = index.read_text()
           old = '&select=market,state,strategy_key,position_side,leverage,initial_quantity,remaining_quantity,reserved_quote,reserved_quantity,average_entry_price,planned_entry_price,realized_cost_quote,realized_proceeds_quote,paid_fees_quote,residual_value_quote`'
           new = '&select=exchange,market,state,strategy_key,position_side,leverage,initial_quantity,remaining_quantity,reserved_quote,reserved_quantity,average_entry_price,planned_entry_price,realized_cost_quote,realized_proceeds_quote,paid_fees_quote,residual_value_quote`'
-          count = text.count(old)
-          if count != 1:
-              raise SystemExit(f'expected one managedPortfolio select anchor, found {count}')
-          text = text.replace(old, new, 1)
-          path.write_text(text)
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one managedPortfolio select anchor, found {text.count(old)}')
+          index.write_text(text.replace(old, new, 1))
+
+          test = Path('supabase/functions/market-autotrader/futures-lane.test.ts')
+          text = test.read_text()
+          old_test = 'select=market,state,strategy_key,position_side,leverage,initial_quantity,remaining_quantity'
+          new_test = 'select=exchange,market,state,strategy_key,position_side,leverage,initial_quantity,remaining_quantity'
+          if text.count(old_test) != 1:
+              raise SystemExit(f'expected one leverage regression assertion, found {text.count(old_test)}')
+          test.write_text(text.replace(old_test, new_test, 1))
           PY
 
       - name: Validate fix and regression suite
         shell: bash
         run: |
           set -euo pipefail
-          deno fmt supabase/functions/market-autotrader/index.ts
+          deno fmt supabase/functions/market-autotrader/index.ts supabase/functions/market-autotrader/futures-lane.test.ts
           deno check supabase/functions/market-autotrader/index.ts
+          deno test --allow-read supabase/functions/market-autotrader/futures-lane.test.ts
           deno task check
           deno task test
           grep -F '&select=exchange,market,state,strategy_key,position_side,leverage' supabase/functions/market-autotrader/index.ts
+          grep -F 'select=exchange,market,state,strategy_key,position_side,leverage' supabase/functions/market-autotrader/futures-lane.test.ts
           git diff --check
-          test "$(git diff --name-only | tr -d '\r')" = "supabase/functions/market-autotrader/index.ts"
+          test "$(git diff --name-only | sort | tr -d '\r')" = "$(printf '%s\n%s' 'supabase/functions/market-autotrader/futures-lane.test.ts' 'supabase/functions/market-autotrader/index.ts')"
 
-      - name: Commit source-only fix
+      - name: Commit bounded fix
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add supabase/functions/market-autotrader/index.ts
+          git add supabase/functions/market-autotrader/index.ts supabase/functions/market-autotrader/futures-lane.test.ts
           git rm .p10-leverage-fix-trigger
           git diff --cached --check
           git commit -m 'fix: preserve futures leverage in managed exposure'
