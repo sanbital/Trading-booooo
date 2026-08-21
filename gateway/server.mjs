@@ -3,16 +3,21 @@ import crypto from "node:crypto";
 import dns from "node:dns";
 import { pathToFileURL } from "node:url";
 
-// Trading-booooo v7.6.0-BINANCE-FUTURES static-egress order gateway.
+// Trading-booooo v8.0.0-P10-DONCHIAN-SLOW4R static-egress order gateway.
 //
 // It exposes spot account/order primitives plus the Binance USDⓈ-M futures primitives the
 // futures lane needs: account/positions, order create/read/cancel, and the per-symbol
 // leverage setting. There are still no withdrawal, transfer, cross-wallet transfer or
-// API-key management routes, and futures orders remain long-only: a SELL is always
-// reduce-only, so the gateway can close a long and can never open a short.
+// API-key management routes. Futures intent is explicit and mechanically checked: only
+// BUY/LONG/OPEN, SELL/LONG/CLOSE, SELL/SHORT/OPEN and BUY/SHORT/CLOSE are accepted.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "7.6.0-BINANCE-FUTURES";
+const VERSION = "8.0.0-P10-DONCHIAN-SLOW4R";
+// Keep exactly one audited rollback revision during the cutover. This prevents a gateway
+// rollout from stopping the still-running engine and preserves an immediate code rollback;
+// arbitrary or older revisions remain rejected.
+const ROLLBACK_ENGINE_VERSION = "7.6.0-BINANCE-FUTURES";
+const ACCEPTED_ENGINE_VERSIONS = new Set([VERSION, ROLLBACK_ENGINE_VERSION]);
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
@@ -927,10 +932,10 @@ async function binanceOrderTest(payload) {
 // ---------------------------------------------------------------------------
 // Binance USDⓈ-M futures.
 //
-// The lane is long-only by construction: a BUY opens or adds to a long and a SELL is
-// always reduce-only. Nothing here can open a short, and no route touches wallet
-// transfers. Leverage is the only account-level setting the gateway writes, and only for
-// the symbol it is about to trade.
+// Direction and effect are separate. This prevents an exit from flipping a position and
+// prevents an entry from being accidentally marked reduce-only. Nothing here touches
+// wallet transfers. Leverage is the only account-level setting the gateway writes, and
+// only for the symbol it is about to trade.
 // ---------------------------------------------------------------------------
 
 const FUTURES_MIN_LEVERAGE = 1;
@@ -1019,6 +1024,35 @@ async function ensureFuturesLeverage(symbol, leverage) {
   };
 }
 
+function resolveFuturesIntent(payload) {
+  const side = String(payload?.side || "").toUpperCase();
+  // Backward-compatible legacy defaults preserve the old long-only command contract.
+  const positionSide = String(payload?.position_side || payload?.positionSide || "LONG")
+    .toUpperCase();
+  const effect = String(
+    payload?.position_effect || payload?.positionEffect || (side === "BUY" ? "OPEN" : "CLOSE"),
+  ).toUpperCase();
+  if (!["LONG", "SHORT"].includes(positionSide)) {
+    throw new Error("Binance futures position_side must be LONG or SHORT");
+  }
+  if (!["OPEN", "CLOSE"].includes(effect)) {
+    throw new Error("Binance futures position_effect must be OPEN or CLOSE");
+  }
+  const expectedSide = positionSide === "LONG"
+    ? effect === "OPEN" ? "BUY" : "SELL"
+    : effect === "OPEN"
+    ? "SELL"
+    : "BUY";
+  if (side !== expectedSide) {
+    throw new Error(
+      `invalid futures intent: ${
+        side || "MISSING"
+      }/${positionSide}/${effect} requires ${expectedSide}`,
+    );
+  }
+  return { side, positionSide, effect };
+}
+
 function conformFuturesOrder(
   payload,
   info,
@@ -1031,6 +1065,7 @@ function conformFuturesOrder(
   if (!["LIMIT", "MARKET", "LIMIT_MAKER"].includes(type)) {
     throw new Error("Binance futures order type must be LIMIT, LIMIT_MAKER or MARKET");
   }
+  const intent = resolveFuturesIntent(payload);
   const clientOrderId = validateIdentifier(payload.identifier || payload.newClientOrderId);
   const stepCeiling = type === "MARKET" && info.market_max_quantity > 0
     ? info.market_max_quantity
@@ -1050,11 +1085,10 @@ function conformFuturesOrder(
     newClientOrderId: clientOrderId,
     newOrderRespType: "RESULT",
   };
-  // Long-only. In one-way mode a SELL must be reduce-only or a large enough sell would
-  // flip the position short; in hedge mode reduceOnly is rejected and the LONG position
-  // side carries the same guarantee.
-  if (dualPositionSide) order.positionSide = "LONG";
-  else if (side === "SELL") order.reduceOnly = "true";
+  // Hedge mode identifies the book explicitly and rejects reduceOnly. One-way mode uses
+  // reduceOnly on every CLOSE so an oversized or replayed exit can never flip direction.
+  if (dualPositionSide) order.positionSide = intent.positionSide;
+  else if (intent.effect === "CLOSE") order.reduceOnly = "true";
   if (type === "LIMIT" || type === "LIMIT_MAKER") {
     const price = floorStep(Number(payload.price), info.price_tick);
     if (!(price > 0)) {
@@ -1064,7 +1098,7 @@ function conformFuturesOrder(
     if (info.min_notional > 0 && notional < info.min_notional) {
       throw new Error(`Binance futures order notional ${notional} below ${info.min_notional}`);
     }
-    if (side === "BUY") {
+    if (intent.effect === "OPEN") {
       const entryLeverage = validateFuturesLeverage(leverage);
       const minimumEntryNotional = FUTURES_MIN_ENTRY_MARGIN_USDT * entryLeverage;
       if (notional + 1e-9 < minimumEntryNotional) {
@@ -1080,12 +1114,13 @@ function conformFuturesOrder(
     order.timeInForce = type === "LIMIT_MAKER"
       ? "GTX"
       : String(payload.time_in_force || payload.timeInForce || "IOC").toUpperCase();
-  } else if (side === "BUY") {
-    throw new Error("Binance futures market orders are restricted to sells");
+  } else if (intent.effect === "OPEN") {
+    throw new Error("Binance futures market orders are restricted to position closes");
   }
   return {
     order,
     info,
+    intent,
     notional: order.price ? Number(order.price) * Number(order.quantity) : 0,
   };
 }
@@ -1192,7 +1227,8 @@ async function binanceFuturesGetOrder(identifier, symbol) {
 async function binanceFuturesCreateOrder(payload, waitForFinalMs = 2500, leverage = null) {
   const info = await binanceFuturesExchangeInfo(payload.market);
   const dual = await futuresPositionSideDual();
-  const openingLeverage = String(payload?.side || "").toUpperCase() === "BUY"
+  const intent = resolveFuturesIntent(payload);
+  const openingLeverage = intent.effect === "OPEN"
     ? validateFuturesLeverage(leverage ?? payload.leverage ?? DEFAULT_FUTURES_LEVERAGE)
     : null;
   const conformed = conformFuturesOrder(
@@ -1203,7 +1239,7 @@ async function binanceFuturesCreateOrder(payload, waitForFinalMs = 2500, leverag
   );
   // Leverage is a property of the symbol, not of the order, so it must be in place before
   // the position exists. Only an opening order needs it; a reduce-only exit inherits it.
-  if (conformed.order.side === "BUY") {
+  if (conformed.intent.effect === "OPEN") {
     await ensureFuturesLeverage(info.symbol, openingLeverage);
   }
   let normalized;
@@ -1229,7 +1265,9 @@ async function binanceFuturesCreateOrder(payload, waitForFinalMs = 2500, leverag
     await sleep(250);
     normalized = await binanceFuturesGetOrder(conformed.order.newClientOrderId, info.symbol);
   }
-  if (conformed.order.side === "BUY" && normalized.executed_funds > 0) {
+  normalized.position_side = conformed.intent.positionSide;
+  normalized.position_effect = conformed.intent.effect;
+  if (conformed.intent.effect === "OPEN" && normalized.executed_funds > 0) {
     recordBuy("binance_futures", normalized.executed_funds);
   }
   return {
@@ -1243,9 +1281,9 @@ async function binanceFuturesCreateOrder(payload, waitForFinalMs = 2500, leverag
 /**
  * The futures wallet presented in the same shape as a spot portfolio.
  *
- * `accounts` carries the USDT margin row plus one row per open LONG, quantity-for-quantity,
- * so the autotrader's balance reconciliation, exit sizing and dust rules work on futures
- * without a second code path. What the base rows are NOT is spendable inventory, so
+ * `accounts` carries the USDT margin row plus one compatibility row per open LONG.
+ * Direction-aware callers use `positions`, which includes both LONG and SHORT. What the
+ * base rows are NOT is spendable inventory, so
  * `total_equity_quote` is the exchange's own margin balance rather than a sum of those
  * rows valued at mark — most of a leveraged notional is borrowed.
  */
@@ -1282,8 +1320,8 @@ function buildFuturesPortfolio(account, prices) {
       initial_margin_quote: Number(row?.initialMargin || 0),
       liquidation_price: Number(row?.liquidationPrice || 0) || null,
     });
-    // A short cannot be produced by this bot, and presenting one as a positive balance
-    // would let the exit path try to "sell" it. Only longs become deliverable rows.
+    // Compatibility rows remain long-only so the legacy spot-shaped exit path cannot try
+    // to sell a short. The P10 path reads the direction-aware `positions` collection.
     if (amount > 0) {
       accounts.push({ currency, balance: amount, locked: 0, avg_buy_price: null });
     }
@@ -1734,7 +1772,7 @@ async function withOrderTiming(work) {
 
 function assertOrderEngineVersion(command) {
   const supplied = String(command?.engine_version || "");
-  if (supplied !== VERSION) {
+  if (!ACCEPTED_ENGINE_VERSIONS.has(supplied)) {
     throw Object.assign(
       new Error(`engine version mismatch: command=${supplied || "MISSING"}, gateway=${VERSION}`),
       { status: 409, code: "ENGINE_VERSION_MISMATCH" },
@@ -1892,6 +1930,7 @@ function createServer() {
         return sendJson(res, 200, {
           ok: true,
           version: VERSION,
+          accepted_engine_versions: [...ACCEPTED_ENGINE_VERSIONS],
           keys_configured: {
             upbit: Boolean(UPBIT_ACCESS_KEY && UPBIT_SECRET_KEY),
             binance: Boolean(BINANCE_API_KEY && BINANCE_SECRET_KEY),
@@ -1981,6 +2020,7 @@ export {
   normalizeFuturesOrder,
   normalizeUpbitOrder,
   rawQueryString,
+  resolveFuturesIntent,
   stepPrecision,
   upbitRateGroup,
   validateBinanceSymbol,

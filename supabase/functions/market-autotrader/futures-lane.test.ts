@@ -143,7 +143,11 @@ Deno.test("legacy spot policy triggers are unreachable from the futures lane", (
 });
 
 Deno.test("margin accounting keeps each open position's stamped leverage", () => {
-  assert(ENGINE.includes("select=market,state,leverage,remaining_quantity"));
+  assert(
+    ENGINE.includes(
+      "select=market,state,strategy_key,position_side,leverage,initial_quantity,remaining_quantity",
+    ),
+  );
   assert(
     ENGINE.includes(
       'const leverageDivisor = exchange === "binance_futures" ? positionLeverage(row) : 1',
@@ -216,11 +220,14 @@ Deno.test("the spot lane keeps its existing protected trailing and stale recover
   assert(RECOVERY_MIGRATION.includes("v_held_seconds < 10800"));
 });
 
-Deno.test("the gateway can close a futures long and can never open a short", () => {
-  assert(GATEWAY.includes('if (dualPositionSide) order.positionSide = "LONG";'));
-  assert(GATEWAY.includes('else if (side === "SELL") order.reduceOnly = "true";'));
+Deno.test("the gateway uses explicit direction and effect for futures long and short", () => {
+  assert(GATEWAY.includes("function resolveFuturesIntent(payload)"));
+  assert(GATEWAY.includes("if (dualPositionSide) order.positionSide = intent.positionSide;"));
+  assert(GATEWAY.includes('else if (intent.effect === "CLOSE") order.reduceOnly = "true";'));
   assert(
-    GATEWAY.includes('throw new Error("Binance futures market orders are restricted to sells")'),
+    GATEWAY.includes(
+      'throw new Error("Binance futures market orders are restricted to position closes")',
+    ),
   );
   assert(!GATEWAY.includes("/sapi/v1/futures/transfer"));
   assert(!GATEWAY.includes("/sapi/v1/capital/withdraw"));
