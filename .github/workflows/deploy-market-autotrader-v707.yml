@@ -15,6 +15,7 @@ on:
       - "supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql"
       - "supabase/migrations/20260821110000_p10_live_cutover.sql"
       - "supabase/migrations/20260821112500_p10_fill_stop_parity.sql"
+      - "supabase/migrations/20260821113000_p10_rpc_privilege_lockdown.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
@@ -30,6 +31,7 @@ on:
       - "supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql"
       - "supabase/migrations/20260821110000_p10_live_cutover.sql"
       - "supabase/migrations/20260821112500_p10_fill_stop_parity.sql"
+      - "supabase/migrations/20260821113000_p10_rpc_privilege_lockdown.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   workflow_dispatch:
 
@@ -160,6 +162,8 @@ jobs:
           grep -q 'P10_SLOW_4R' supabase/migrations/20260821110000_p10_live_cutover.sql
           grep -q 'trailing_stop = p_stop_price' \
             supabase/migrations/20260821112500_p10_fill_stop_parity.sql
+          grep -q 'from public, anon, authenticated' \
+            supabase/migrations/20260821113000_p10_rpc_privilege_lockdown.sql
 
   deploy:
     needs: validate
