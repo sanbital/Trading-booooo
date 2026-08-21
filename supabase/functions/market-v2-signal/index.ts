@@ -26,13 +26,14 @@ const finite = (value: unknown, fallback = 0) =>
   Number.isFinite(Number(value)) ? Number(value) : fallback;
 const sleep = (milliseconds: number) =>
   new Promise((resolve) => setTimeout(resolve, Math.max(0, milliseconds)));
-const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
-  status,
-  headers: {
-    "content-type": "application/json; charset=utf-8",
-    "cache-control": "no-store",
-  },
-});
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
 
 async function fetchJson(url: string, timeoutMs = 15_000, attempts = 3): Promise<any> {
   let lastError: unknown = new Error("request failed");
@@ -179,11 +180,15 @@ async function binanceTickers(venue: P10Venue): Promise<Ticker[]> {
     fetchJson(`${config.base}${config.exchangeInfo}`),
     fetchJson(`${config.base}${config.tickers}`),
   ]);
-  const active = new Set((Array.isArray(info?.symbols) ? info.symbols : [])
-    .filter((row: any) => row?.status === "TRADING" && row?.quoteAsset === "USDT" &&
-      (venue !== "binance_spot" || row?.isSpotTradingAllowed !== false) &&
-      (venue !== "binance_futures" || row?.contractType === "PERPETUAL"))
-    .map((row: any) => String(row?.symbol || "")));
+  const active = new Set(
+    (Array.isArray(info?.symbols) ? info.symbols : [])
+      .filter((row: any) =>
+        row?.status === "TRADING" && row?.quoteAsset === "USDT" &&
+        (venue !== "binance_spot" || row?.isSpotTradingAllowed !== false) &&
+        (venue !== "binance_futures" || row?.contractType === "PERPETUAL")
+      )
+      .map((row: any) => String(row?.symbol || "")),
+  );
   return (Array.isArray(tickers) ? tickers : [])
     .filter((row: any) => active.has(String(row?.symbol || "")))
     .map((row: any) => ({
@@ -305,17 +310,20 @@ async function runVenue(venue: P10Venue) {
   const errors: Array<{ market: string; error: string }> = [];
   try {
     const tickers = await universeTickers(venue);
-    await insertRows("v2_live_universe_snapshots", tickers.map((row) => ({
-      run_id: runId,
-      venue,
-      market: row.market,
-      last_price: row.lastPrice,
-      return_24h_pct: row.return24hPct,
-      quote_volume_24h: row.quoteVolume24h,
-      // All active markets are deep-analyzed in P10. The legacy column is retained.
-      deep_selected: true,
-      selection_rank: null,
-    })));
+    await insertRows(
+      "v2_live_universe_snapshots",
+      tickers.map((row) => ({
+        run_id: runId,
+        venue,
+        market: row.market,
+        last_price: row.lastPrice,
+        return_24h_pct: row.return24hPct,
+        quote_volume_24h: row.quoteVolume24h,
+        // All active markets are deep-analyzed in P10. The legacy column is retained.
+        deep_selected: true,
+        selection_rank: null,
+      })),
+    );
     const end = Math.floor(Date.now() / HOUR_MS) * HOUR_MS - 1;
     const benchmarkMarket = venue === "upbit_spot" ? "KRW-BTC" : "BTCUSDT";
     const benchmarkBars = await marketBars(venue, benchmarkMarket, end);
@@ -350,44 +358,46 @@ async function runVenue(venue: P10Venue) {
       bars: P10Bar[];
       signal: ReturnType<typeof detectLatestP10Signal>;
     }>;
-    const signalRows = completed.flatMap((item) => item.signal
-      ? [{
-        run_id: runId,
-        venue,
-        market: item.ticker.market,
-        config_key: P10_STRATEGY_KEY,
-        scenario_number: 10,
-        family: "DONCHIAN_BREAKOUT",
-        side: item.signal.side,
-        signal_time: new Date(item.signal.signalTime).toISOString(),
-        score: item.signal.score,
-        reference_close: item.signal.referenceClose,
-        stop_reference: item.signal.stopReference,
-        max_hold_bars: 96,
-        evidence: {
-          revision: P10_REVISION,
-          strategyKey: P10_STRATEGY_KEY,
-          atr14: item.signal.atr14,
-          benchmark: item.signal.benchmark,
-          asset: item.signal.asset,
-          ticker: {
-            return24hPct: item.ticker.return24hPct,
-            quoteVolume24h: item.ticker.quoteVolume24h,
+    const signalRows = completed.flatMap((item) =>
+      item.signal
+        ? [{
+          run_id: runId,
+          venue,
+          market: item.ticker.market,
+          config_key: P10_STRATEGY_KEY,
+          scenario_number: 10,
+          family: "DONCHIAN_BREAKOUT",
+          side: item.signal.side,
+          signal_time: new Date(item.signal.signalTime).toISOString(),
+          score: item.signal.score,
+          reference_close: item.signal.referenceClose,
+          stop_reference: item.signal.stopReference,
+          max_hold_bars: 96,
+          evidence: {
+            revision: P10_REVISION,
+            strategyKey: P10_STRATEGY_KEY,
+            atr14: item.signal.atr14,
+            benchmark: item.signal.benchmark,
+            asset: item.signal.asset,
+            ticker: {
+              return24hPct: item.ticker.return24hPct,
+              quoteVolume24h: item.ticker.quoteVolume24h,
+            },
+            nextBarEntry: true,
+            maxEntryGapAtr: 0.50,
+            stopAtr: 2.00,
+            partialAtR: 2.00,
+            partialFraction: 0.40,
+            targetR: 4.00,
+            trailAtr: 2.50,
+            breakEvenAtR: 1.50,
+            exitOnEma20: true,
+            lossTimeStopBars: 24,
+            maxHoldBars: 96,
           },
-          nextBarEntry: true,
-          maxEntryGapAtr: 0.50,
-          stopAtr: 2.00,
-          partialAtR: 2.00,
-          partialFraction: 0.40,
-          targetR: 4.00,
-          trailAtr: 2.50,
-          breakEvenAtR: 1.50,
-          exitOnEma20: true,
-          lossTimeStopBars: 24,
-          maxHoldBars: 96,
-        },
-      }]
-      : []);
+        }]
+        : []
+    );
     if (signalRows.length) await insertRows("v2_live_signals", signalRows);
     const positive24h = tickers.filter((row) => row.return24hPct > 0).length;
     await registerLiveStrategy(venue);

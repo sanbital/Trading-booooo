@@ -194,9 +194,7 @@ function rsi(closes: number[], period = 14) {
 
 export function prepareP10Bars(input: P10Bar[]): P10PreparedBar[] {
   const bars = [...input]
-    .filter((bar) =>
-      bar.time > 0 && bar.open > 0 && bar.high > 0 && bar.low > 0 && bar.close > 0
-    )
+    .filter((bar) => bar.time > 0 && bar.open > 0 && bar.high > 0 && bar.low > 0 && bar.close > 0)
     .sort((left, right) => left.time - right.time)
     .filter((bar, index, rows) => index === 0 || bar.time !== rows[index - 1].time);
   const closes = bars.map((bar) => bar.close);
@@ -206,13 +204,13 @@ export function prepareP10Bars(input: P10Bar[]): P10PreparedBar[] {
   const ema20 = ema(closes, 20);
   const ema50 = ema(closes, 50);
   const ema100 = ema(closes, 100);
-  const trueRanges = bars.map((bar, index) => index === 0
-    ? bar.high - bar.low
-    : Math.max(
+  const trueRanges = bars.map((bar, index) =>
+    index === 0 ? bar.high - bar.low : Math.max(
       bar.high - bar.low,
       Math.abs(bar.high - bars[index - 1].close),
       Math.abs(bar.low - bars[index - 1].close),
-    ));
+    )
+  );
   const atr14 = wilder(trueRanges, 14);
   const rsi14 = rsi(closes, 14);
   const efficiency24 = efficiency(closes, 24);
@@ -291,14 +289,18 @@ function p10SignalEligible(
 ) {
   const long = side === "LONG";
   const direction = long ? 1 : -1;
-  if (!p10RegimeEligible(state, side) || bar.atr14 <= 0 || previous.atr14 <= 0 ||
+  if (
+    !p10RegimeEligible(state, side) || bar.atr14 <= 0 || previous.atr14 <= 0 ||
     bar.close <= 0 || bar.high <= bar.low || bar.volumeRatio < P10_CONFIG.minVolumeRatio ||
-    bar.quoteVolumeMean20 < liquidityFloor) return false;
+    bar.quoteVolumeMean20 < liquidityFloor
+  ) return false;
   const atrPct = bar.atr14 / bar.close * 100;
   if (atrPct < 0.15 || atrPct > 6 || P10_CONFIG.stopAtr * atrPct > 5) return false;
   const directionalReturn24 = direction * bar.ret24Pct;
-  if (directionalReturn24 < P10_CONFIG.trendMinPct ||
-    directionalReturn24 > P10_CONFIG.trendMaxPct) return false;
+  if (
+    directionalReturn24 < P10_CONFIG.trendMinPct ||
+    directionalReturn24 > P10_CONFIG.trendMaxPct
+  ) return false;
   const closeLocation = (bar.close - bar.low) / (bar.high - bar.low);
   const directionalCloseLocation = long ? closeLocation : 1 - closeLocation;
   const candleDirection = long ? bar.close > bar.open : bar.close < bar.open;
@@ -306,9 +308,11 @@ function p10SignalEligible(
   const rsiDirection = long
     ? bar.rsi14 >= 48 && bar.rsi14 <= 84
     : bar.rsi14 >= 16 && bar.rsi14 <= 52;
-  if (!candleDirection || !emaDirection || !rsiDirection ||
+  if (
+    !candleDirection || !emaDirection || !rsiDirection ||
     direction * bar.ema20Slope6Pct < P10_CONFIG.minEmaSlope6Pct ||
-    directionalCloseLocation < P10_CONFIG.minCloseLocation) return false;
+    directionalCloseLocation < P10_CONFIG.minCloseLocation
+  ) return false;
   return long
     ? bar.close > bar.high72Prev + P10_CONFIG.breakoutBufferAtr * bar.atr14 &&
       previous.close <= bar.high72Prev
@@ -327,16 +331,15 @@ export function detectLatestP10Signal(
   const previous = bars[bars.length - 2];
   const state = p10BenchmarkStates(benchmarkInput).get(bar.time);
   if (!state) return null;
-  const permitted: P10Side[] = venue === "binance_futures"
-    ? ["LONG", "SHORT"]
-    : ["LONG"];
+  const permitted: P10Side[] = venue === "binance_futures" ? ["LONG", "SHORT"] : ["LONG"];
   const eligible = permitted.filter((side) =>
     p10SignalEligible(bar, previous, state, side, p10LiquidityFloor(venue))
   );
   if (!eligible.length) return null;
-  const side = eligible.sort((left, right) =>
-    p10SignalScore(bar, state, right) - p10SignalScore(bar, state, left)
-  )[0];
+  const side =
+    eligible.sort((left, right) =>
+      p10SignalScore(bar, state, right) - p10SignalScore(bar, state, left)
+    )[0];
   const closeLocation = (bar.close - bar.low) / (bar.high - bar.low);
   return {
     strategyKey: P10_STRATEGY_KEY,
@@ -367,7 +370,12 @@ export function detectLatestP10Signal(
   };
 }
 
-export function planP10Entry(side: P10Side, referenceClose: number, atr14: number, entryPrice: number): P10EntryPlan {
+export function planP10Entry(
+  side: P10Side,
+  referenceClose: number,
+  atr14: number,
+  entryPrice: number,
+): P10EntryPlan {
   const risk = P10_CONFIG.stopAtr * finite(atr14);
   const gapAtr = risk > 0 ? Math.abs(entryPrice - referenceClose) / finite(atr14) : Infinity;
   const riskPct = entryPrice > 0 ? risk / entryPrice * 100 : Infinity;
@@ -424,9 +432,7 @@ export function evaluateP10Exit(input: P10ExitInput): P10ExitDecision {
     ruleReason = emaExit ? "EMA20_CLOSE" : losingTimeExit ? "LOSS_TIME_24H" : null;
     policyBarTime = bar.time;
   }
-  const stopHit = long
-    ? input.executablePrice <= nextStop
-    : input.executablePrice >= nextStop;
+  const stopHit = long ? input.executablePrice <= nextStop : input.executablePrice >= nextStop;
   if (stopHit) {
     return { action: "STOP", reason: "STOP_FIRST", fraction: 1, nextStop, policyBarTime };
   }
@@ -436,9 +442,8 @@ export function evaluateP10Exit(input: P10ExitInput): P10ExitDecision {
   if (targetHit) {
     return { action: "TARGET_2", reason: "FINAL_4R", fraction: 1, nextStop, policyBarTime };
   }
-  const partialHit = !input.partialDone && (long
-    ? input.executablePrice >= partialTarget
-    : input.executablePrice <= partialTarget);
+  const partialHit = !input.partialDone &&
+    (long ? input.executablePrice >= partialTarget : input.executablePrice <= partialTarget);
   if (partialHit) {
     return {
       action: "TARGET_1",

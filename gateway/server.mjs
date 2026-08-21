@@ -1040,10 +1040,14 @@ function resolveFuturesIntent(payload) {
   }
   const expectedSide = positionSide === "LONG"
     ? effect === "OPEN" ? "BUY" : "SELL"
-    : effect === "OPEN" ? "SELL" : "BUY";
+    : effect === "OPEN"
+    ? "SELL"
+    : "BUY";
   if (side !== expectedSide) {
     throw new Error(
-      `invalid futures intent: ${side || "MISSING"}/${positionSide}/${effect} requires ${expectedSide}`,
+      `invalid futures intent: ${
+        side || "MISSING"
+      }/${positionSide}/${effect} requires ${expectedSide}`,
     );
   }
   return { side, positionSide, effect };

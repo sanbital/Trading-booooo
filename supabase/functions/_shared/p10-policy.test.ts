@@ -1,11 +1,11 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
-  evaluateP10Exit,
   detectLatestP10Signal,
+  evaluateP10Exit,
   P10_CONFIG,
   P10_HOUR_MS,
-  planP10Entry,
   type P10PreparedBar,
+  planP10Entry,
 } from "./p10-policy.ts";
 
 function directionalBars(direction: 1 | -1) {
