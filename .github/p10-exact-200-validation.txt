@@ -1,0 +1,3 @@
+P10 exact-200 validation passed before source commit.
+Cases A-H: exact 200 boundary/downsize/spot/upbit/slot-gate checks passed.
+validated_at=2026-08-21T11:33:31Z
