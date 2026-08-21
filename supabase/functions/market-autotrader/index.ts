@@ -1,5 +1,6 @@
-// Trading-booooo v7.6.0 — autonomous spot + long-only Binance USDⓈ-M orchestrator.
-// Private service-role function. No withdrawal, transfer, short-entry, or market-buy route exists.
+// Trading-booooo v8.0.0 — P10 Donchian breakout + slow 4R orchestration.
+// Private service-role function. No withdrawal or transfer route exists. Futures short
+// orders are accepted only through explicit, direction-safe OPEN/CLOSE intent.
 
 import {
   adjustedPlanForFill,
@@ -10,6 +11,7 @@ import {
   calculateExitResidualAccounting,
   calculateManagedCapital,
   calculatePositionSize,
+  ceilToStep,
   clamp,
   dangerousControlError,
   decideExit,
@@ -148,8 +150,21 @@ import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 import { loadMinuteEntryGate } from "../_shared/lob/minute-entry-market.ts";
 import { liveBlockedLobPatterns, preT1ProfitProtectionHit } from "./live-guards.ts";
 import { resolveFinalLobAdmission } from "./final-entry-gate.ts";
+import {
+  evaluateP10Exit,
+  P10_CONFIG,
+  P10_HOUR_MS,
+  P10_REVISION,
+  P10_STRATEGY_KEY,
+  p10RoundTripCostBps,
+  planP10Entry,
+  prepareP10Bars,
+  type P10Bar,
+  type P10Side,
+  type P10Venue,
+} from "../_shared/p10-policy.ts";
 
-const VERSION = "7.6.0-BINANCE-FUTURES";
+const VERSION = "8.0.0-P10-DONCHIAN-SLOW4R";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -394,6 +409,13 @@ function parseMode(value: string): TradingMode {
 function isLobStrategy(value: unknown): boolean {
   return String(value || "").toUpperCase() === "LOB_SCALP";
 }
+function isP10Strategy(value: unknown): boolean {
+  return String(value || "").toUpperCase() === "P10_DONCHIAN_SLOW4R";
+}
+function isP10Position(value: unknown): boolean {
+  const row = value as JsonRecord;
+  return String(row?.strategy_key || row?.metadata?.strategy_key || "") === P10_STRATEGY_KEY;
+}
 function isScalpStrategy(value: unknown): boolean {
   const normalized = String(value || "").toUpperCase();
   return normalized === "SCALP" || normalized === "LOB_SCALP";
@@ -637,7 +659,9 @@ function defaultSettings(): TradingSettings & JsonRecord {
     max_new_entries_per_scan: 20,
     suppress_cross_exchange_same_asset: true,
     // Stage 4: scalp strategy. Default "TREND" = existing behavior, fully off.
-    strategy: env("TRADING_STRATEGY") === "TREND"
+    strategy: env("TRADING_STRATEGY") === "P10_DONCHIAN_SLOW4R"
+      ? "P10_DONCHIAN_SLOW4R"
+      : env("TRADING_STRATEGY") === "TREND"
       ? "TREND"
       : env("TRADING_STRATEGY") === "SCALP"
       ? "SCALP"
@@ -945,10 +969,10 @@ async function accountStats(
     dailySeedSnapshots,
   ] = await Promise.all([
     db(
-      `trading_positions?is_paper=eq.${isPaper}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id,exchange,market,base_asset,state,remaining_quantity,reserved_quote,reserved_quantity,average_entry_price,planned_entry_price,realized_cost_quote,realized_proceeds_quote,paid_fees_quote,residual_value_quote`,
+      `trading_positions?is_paper=eq.${isPaper}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id,exchange,market,base_asset,state,strategy_key,position_side,initial_quantity,remaining_quantity,reserved_quote,reserved_quantity,average_entry_price,planned_entry_price,realized_cost_quote,realized_proceeds_quote,realized_pnl_quote,paid_fees_quote,residual_value_quote`,
     ),
     db(
-      `trading_positions?exchange=eq.${exchange}&is_paper=eq.${isPaper}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id,market,base_asset,state,remaining_quantity,reserved_quote,reserved_quantity,average_entry_price,planned_entry_price,realized_cost_quote,realized_proceeds_quote,paid_fees_quote,residual_value_quote`,
+      `trading_positions?exchange=eq.${exchange}&is_paper=eq.${isPaper}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id,market,base_asset,state,strategy_key,position_side,initial_quantity,remaining_quantity,reserved_quote,reserved_quantity,average_entry_price,planned_entry_price,realized_cost_quote,realized_proceeds_quote,realized_pnl_quote,paid_fees_quote,residual_value_quote`,
     ),
     db(
       `trading_positions?is_paper=eq.${isPaper}&created_at=gte.${
@@ -999,6 +1023,12 @@ async function accountStats(
   const markedOpenPnl = (activeExchange || []).reduce((sum: number, row: any) => {
     const entry = Math.max(0, finite(row.average_entry_price, row.planned_entry_price));
     const current = Math.max(0, finite(portfolio?.prices?.[row.market], entry));
+    if (isP10Position(row) && String(row.position_side) === "SHORT") {
+      const gross = (entry - current) * Math.max(0, finite(row.remaining_quantity));
+      const estimatedExitFee = current * Math.max(0, finite(row.remaining_quantity)) *
+        FEE_PCT[exchange] / 100;
+      return sum + gross + finite(row.realized_pnl_quote) - estimatedExitFee;
+    }
     return sum + calculateExposureLedger({
       state: row.state,
       initialQuantity: row.initial_quantity,
@@ -2098,7 +2128,7 @@ async function managedPortfolio(settings: TradingSettings, exchange: Exchange, p
   const paper = settings.mode !== "LIVE_LIMITED";
   const [active, residualRows] = await Promise.all([
     db(
-      `trading_positions?exchange=eq.${exchange}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&is_paper=eq.${paper}&select=market,state,leverage,remaining_quantity,reserved_quote,reserved_quantity,average_entry_price,planned_entry_price,realized_cost_quote,realized_proceeds_quote,paid_fees_quote,residual_value_quote`,
+      `trading_positions?exchange=eq.${exchange}&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&is_paper=eq.${paper}&select=market,state,strategy_key,position_side,leverage,initial_quantity,remaining_quantity,reserved_quote,reserved_quantity,average_entry_price,planned_entry_price,realized_cost_quote,realized_proceeds_quote,paid_fees_quote,residual_value_quote`,
     ) as Promise<any[]>,
     exchange === "binance_futures" ? Promise.resolve([]) : db(
       `trading_residual_inventory?exchange=eq.${exchange}&state=in.(AVAILABLE,RESERVED_FOR_REENTRY,SWEEP_PENDING)&select=market,remaining_quantity,value_quote`,
@@ -2116,6 +2146,16 @@ async function managedPortfolio(settings: TradingSettings, exchange: Exchange, p
   for (const row of active || []) {
     const entry = Math.max(0, finite(row.average_entry_price, row.planned_entry_price));
     const current = Math.max(0, finite(portfolio?.prices?.[row.market], entry));
+    if (isP10Position(row) && String(row.position_side) === "SHORT") {
+      const leverageDivisor = exchange === "binance_futures" ? positionLeverage(row) : 1;
+      const openNotional = Math.max(0, finite(row.remaining_quantity)) * entry;
+      const reservedNotional = Math.max(0, finite(row.reserved_quantity)) * entry;
+      bookedExposure += openNotional / leverageDivisor;
+      reservedExposure += reservedNotional / leverageDivisor;
+      // Futures capital is authoritative below; this compatibility mark is not added to it.
+      botPositionValue += openNotional / leverageDivisor;
+      continue;
+    }
     const ledger = calculateExposureLedger({
       state: row.state,
       initialQuantity: row.initial_quantity,
@@ -6783,9 +6823,17 @@ async function detectExternalQuoteFlow(
 }
 
 async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRecord) {
-  const tracked = await db(
+  const allTracked = await db(
     "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*&order=created_at.asc",
   ) as Position[];
+  // P10 has direction-aware futures accounting and hourly close-confirmed exits. Keep it
+  // out of the legacy spot-shaped reconciliation/exit loop and manage it first.
+  const p10Actions = await monitorP10Positions(
+    allTracked.filter(isP10Position),
+    settings,
+    cycleId,
+  );
+  const tracked = allTracked.filter((row) => !isP10Position(row));
   for (
     const ghost of tracked.filter((row) =>
       row.state !== "ENTRY_PENDING" && finite(row.remaining_quantity) <= 0 &&
@@ -6833,7 +6881,8 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
   // TP first — including rows whose metadata reference was lost — so account reconciliation
   // never classifies the bot's own fill as a manual sale.
   const tpCandidates = await db(
-    "trading_positions?state=in.(OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&is_paper=eq.false&select=*&order=created_at.asc",
+    `trading_positions?strategy_key=neq.${encodeURIComponent(P10_STRATEGY_KEY)}` +
+      "&state=in.(OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&is_paper=eq.false&select=*&order=created_at.asc",
   ) as Position[];
   for (const position of tpCandidates) {
     try {
@@ -6848,7 +6897,8 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
     }
   }
   const open = await db(
-    "trading_positions?state=eq.OPEN&select=*&order=created_at.asc",
+    `trading_positions?strategy_key=neq.${encodeURIComponent(P10_STRATEGY_KEY)}` +
+      "&state=eq.OPEN&select=*&order=created_at.asc",
   ) as Position[];
   const lobPolicyRuntime = isLobStrategy((settings as any).strategy)
     ? await loadLobPolicyRuntime()
@@ -6856,10 +6906,13 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
   const championPolicy = lobPolicyRuntime?.champion
     ? policyBundleByVersion(lobPolicyRuntime, finite(lobPolicyRuntime.champion.version))
     : null;
-  const actions: any[] = feeReconciliations.map((row) => ({
-    action: "FEE_RECONCILIATION",
-    ...row,
-  }));
+  const actions: any[] = [
+    ...p10Actions,
+    ...feeReconciliations.map((row) => ({
+      action: "FEE_RECONCILIATION",
+      ...row,
+    })),
+  ];
   const prices: Record<string, number> = {};
   const portfolios: Partial<Record<Exchange, any>> = {};
   const portfolioCapturedAt: Partial<Record<Exchange, string>> = {};
@@ -8830,7 +8883,1216 @@ async function considerRotation(
   return { rotated: true, reason: decision.reason, detail };
 }
 
+// =====================================================================================
+// P10 Donchian breakout live lane
+// =====================================================================================
+
+type P10SignalRow = JsonRecord & {
+  run_id: string;
+  venue: P10Venue;
+  market: string;
+  side: P10Side;
+  signal_time: string;
+  score: number;
+  reference_close: number;
+  stop_reference: number;
+  evidence: JsonRecord;
+  created_at: string;
+};
+
+const P10_ENTRY_WINDOW_MS = 20 * 60_000;
+
+function p10VenueExchange(venue: P10Venue): Exchange {
+  return venue === "upbit_spot"
+    ? "upbit"
+    : venue === "binance_spot"
+    ? "binance"
+    : "binance_futures";
+}
+
+function p10ExchangeVenue(exchange: Exchange): P10Venue {
+  return exchange === "upbit"
+    ? "upbit_spot"
+    : exchange === "binance"
+    ? "binance_spot"
+    : "binance_futures";
+}
+
+function p10EntrySide(side: P10Side) {
+  return side === "LONG" ? "BUY" : "SELL";
+}
+
+function p10ExitSide(side: P10Side) {
+  return side === "LONG" ? "SELL" : "BUY";
+}
+
+function p10OrderPurpose(action: string) {
+  if (action === "TARGET_1") return "TARGET_1";
+  if (action === "TARGET_2") return "TARGET_2";
+  if (action === "STOP") return "STOP";
+  if (action === "TIME") return "TIME_EXIT";
+  return "TRAIL";
+}
+
+async function loadP10Signals(): Promise<P10SignalRow[]> {
+  const since = new Date(Date.now() - 100 * 60_000).toISOString();
+  const rows = await db(
+    `v2_live_signals?config_key=eq.${encodeURIComponent(P10_STRATEGY_KEY)}` +
+      `&created_at=gte.${encodeURIComponent(since)}` +
+      "&select=*&order=created_at.desc,score.desc&limit=2000",
+  ) as P10SignalRow[];
+  const now = Date.now();
+  const deduped = new Map<string, P10SignalRow>();
+  for (const row of rows || []) {
+    const signalTime = Date.parse(String(row.signal_time || ""));
+    const nextBarOpen = signalTime + P10_HOUR_MS;
+    if (!Number.isFinite(signalTime) || now < nextBarOpen ||
+      now > nextBarOpen + P10_ENTRY_WINDOW_MS) continue;
+    if (row.venue !== "binance_futures" && row.side !== "LONG") continue;
+    const key = `${row.venue}:${row.market}:${row.side}:${row.signal_time}`;
+    if (!deduped.has(key)) deduped.set(key, row);
+  }
+  return [...deduped.values()].sort((left, right) => finite(right.score) - finite(left.score));
+}
+
+function p10Depth(
+  levels: any[],
+  side: P10Side,
+  boundaryPrice: number,
+  requestedNotional: number,
+) {
+  let availableFunds = 0;
+  let executionFunds = 0;
+  let volume = 0;
+  let worstPrice = 0;
+  for (const unit of Array.isArray(levels) ? levels : []) {
+    const price = finite(unit?.price ?? unit?.[0]);
+    const size = finite(unit?.size ?? unit?.[1]);
+    if (!(price > 0 && size > 0)) continue;
+    const withinBoundary = side === "LONG" ? price <= boundaryPrice : price >= boundaryPrice;
+    if (!withinBoundary) continue;
+    const capacity = price * size;
+    availableFunds += capacity;
+    const take = Math.min(capacity, Math.max(0, requestedNotional - executionFunds));
+    if (take > 0) {
+      executionFunds += take;
+      volume += take / price;
+      worstPrice = price;
+    }
+  }
+  return {
+    executable: executionFunds + 1e-8 >= requestedNotional,
+    availableFunds,
+    executionFunds,
+    volume,
+    vwap: volume > 0 ? executionFunds / volume : 0,
+    worstPrice,
+  };
+}
+
+function p10TicketCapital(
+  exchange: Exchange,
+  settings: TradingSettings & JsonRecord,
+  managed: JsonRecord,
+) {
+  const slots = clamp(finite((settings as any).scalp_position_slots, 3), 1, 20);
+  const available = Math.max(0, finite(managed.managedAvailableQuote));
+  const capital = Math.max(0, finite(managed.managedCapitalQuote));
+  let cap = capital / slots;
+  if (exchange === "binance") cap = Math.min(cap, finite(settings.max_order_usdt, 40));
+  if (exchange === "upbit") cap = Math.min(cap, finite(settings.max_order_krw, cap));
+  if (exchange === "binance_futures") {
+    const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 50);
+    if (operatorMargin > 0) cap = Math.min(cap, operatorMargin);
+  }
+  const step = exchange === "upbit" ? 1000 : 0.01;
+  return floorToStep(Math.min(available, cap), step);
+}
+
+async function rejectP10Claim(claimId: string | null, reason: string) {
+  if (!claimId) return;
+  await patch("p10_signal_claims", `id=eq.${claimId}`, {
+    status: "REJECTED",
+    reason: reason.slice(0, 500),
+  }).catch(() => null);
+}
+
+async function applyP10EntryAccounting(
+  position: Position,
+  orderRow: any,
+  gatewayOrder: any,
+  fill: any,
+  signal: P10SignalRow,
+) {
+  const grossQuantity = finite(fill.executedVolume);
+  const paidFeeBase = Math.max(
+    0,
+    finite(fill.paidFeeBase, baseAssetFee(gatewayOrder, fill, position.base_asset)),
+  );
+  const quantity = position.exchange === "binance_futures"
+    ? grossQuantity
+    : Math.max(0, grossQuantity - paidFeeBase);
+  const price = finite(fill.averagePrice);
+  const plan = planP10Entry(
+    String(position.position_side) as P10Side,
+    finite(signal.reference_close),
+    finite(signal.evidence?.atr14),
+    price,
+  );
+  if (!(quantity > 0 && price > 0 && plan.allowed)) {
+    throw new Error(`P10 filled entry has invalid accounting plan: ${plan.reason || "no fill"}`);
+  }
+  const result = await rpc("apply_p10_entry_order", {
+    p_order_id: orderRow.id,
+    p_fill_price: price,
+    p_fill_quantity: quantity,
+    p_fill_funds: finite(fill.executedFunds, price * quantity),
+    p_fill_fee_quote: finite(fill.paidFeeQuote, fill.paidFee),
+    p_stop_price: tickRound(
+      plan.stopPrice,
+      finite(position.tick_size),
+      plan.side === "LONG" ? "down" : "up",
+    ),
+    p_target_1: tickRound(
+      plan.partialTarget,
+      finite(position.tick_size),
+      plan.side === "LONG" ? "up" : "down",
+    ),
+    p_target_2: tickRound(
+      plan.finalTarget,
+      finite(position.tick_size),
+      plan.side === "LONG" ? "up" : "down",
+    ),
+    p_initial_risk: plan.initialRisk,
+  });
+  return result?.position || position;
+}
+
+async function enterP10Signal(
+  signal: P10SignalRow,
+  settings: TradingSettings & JsonRecord,
+  rawPortfolio: any,
+  cycleId: string,
+) {
+  const exchange = p10VenueExchange(signal.venue);
+  const side = String(signal.side) as P10Side;
+  if (exchange !== "binance_futures" && side !== "LONG") {
+    return { entered: false, exchange, market: signal.market, reason: "spot is LONG-only" };
+  }
+  if (settings.mode !== "LIVE_LIMITED") {
+    return {
+      entered: false,
+      exchange,
+      market: signal.market,
+      reason: "P10 cutover requires LIVE_LIMITED mode",
+    };
+  }
+  const existing = await db(
+    `trading_positions?exchange=eq.${exchange}&market=eq.${encodeURIComponent(signal.market)}` +
+      "&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id&limit=1",
+  );
+  if (existing.length) {
+    return { entered: false, exchange, market: signal.market, reason: "market already tracked" };
+  }
+  const base = baseAsset(exchange, signal.market);
+  if (settings.suppress_cross_exchange_same_asset) {
+    const activeBase = await db(
+      `trading_positions?base_asset=eq.${encodeURIComponent(base)}` +
+        "&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id&limit=1",
+    );
+    if (activeBase.length) {
+      return {
+        entered: false,
+        exchange,
+        market: signal.market,
+        reason: `base asset ${base} already exposed`,
+      };
+    }
+  }
+  const market = await marketQuote(exchange, signal.market);
+  const bestAsk = finite(market.best_ask);
+  const bestBid = finite(market.best_bid);
+  const executablePrice = side === "LONG" ? bestAsk : bestBid;
+  if (!(bestAsk > 0 && bestBid > 0 && executablePrice > 0)) {
+    return { entered: false, exchange, market: signal.market, reason: "empty orderbook" };
+  }
+  const spreadBps = (bestAsk / bestBid - 1) * 10_000;
+  if (!Number.isFinite(spreadBps) || spreadBps > LIVE_MAX_SPREAD_BPS) {
+    return {
+      entered: false,
+      exchange,
+      market: signal.market,
+      reason: `spread ${spreadBps.toFixed(2)}bp exceeds ${LIVE_MAX_SPREAD_BPS}bp`,
+    };
+  }
+  const atr14 = finite(signal.evidence?.atr14);
+  const preliminaryPlan = planP10Entry(
+    side,
+    finite(signal.reference_close),
+    atr14,
+    executablePrice,
+  );
+  if (!preliminaryPlan.allowed) {
+    return {
+      entered: false,
+      exchange,
+      market: signal.market,
+      reason: preliminaryPlan.reason,
+    };
+  }
+  if (exchange !== "binance_futures" &&
+    accountQuantity(rawPortfolio, base) * executablePrice >= (exchange === "upbit" ? 1000 : 1)) {
+    return {
+      entered: false,
+      exchange,
+      market: signal.market,
+      reason: "pre-existing account balance detected",
+    };
+  }
+  if (exchange === "binance_futures") {
+    const exchangePosition = (Array.isArray(rawPortfolio?.positions) ? rawPortfolio.positions : [])
+      .find((row: any) =>
+        String(row?.market || "").toUpperCase() === signal.market.toUpperCase() &&
+        finite(row?.quantity) > 0
+      );
+    if (exchangePosition) {
+      return {
+        entered: false,
+        exchange,
+        market: signal.market,
+        reason: `pre-existing futures ${String(exchangePosition.side || "UNKNOWN")} position detected`,
+      };
+    }
+  }
+  const syntheticCandidate = {
+    market: signal.market,
+    entry_high: executablePrice,
+    feature_vector: {},
+  } as Candidate;
+  const rules = await symbolRules(exchange, syntheticCandidate, { tick: 0 });
+  const managedPortfolioState = await managedPortfolio(settings, exchange, rawPortfolio);
+  const managed = managedPortfolioState.managed;
+  const marginQuote = p10TicketCapital(exchange, settings, managed);
+  const leverage = exchangeLeverage(settings, exchange);
+  const minimumMargin = exchange === "binance_futures"
+    ? FUTURES_MIN_ENTRY_MARGIN_USDT
+    : Math.max(exchangeLimits(settings, exchange).minOrder, rules.min_notional);
+  if (marginQuote + 1e-8 < minimumMargin) {
+    return {
+      entered: false,
+      exchange,
+      market: signal.market,
+      reason: `P10 ticket ${marginQuote} below minimum ${minimumMargin}`,
+    };
+  }
+  const requestedNotional = marginQuote * leverage;
+  const boundaryPrice = side === "LONG"
+    ? finite(signal.reference_close) + P10_CONFIG.maxEntryGapAtr * atr14
+    : finite(signal.reference_close) - P10_CONFIG.maxEntryGapAtr * atr14;
+  const levels = side === "LONG" ? market.asks : market.bids;
+  const depth = p10Depth(levels, side, boundaryPrice, requestedNotional);
+  if (!depth.executable || depth.availableFunds < requestedNotional * LIVE_MIN_DEPTH_BUFFER) {
+    return {
+      entered: false,
+      exchange,
+      market: signal.market,
+      reason: "insufficient P10 gap-capped depth",
+    };
+  }
+  // Place the limit at the strategy's gap boundary. FOK/IOC may improve the fill, but it
+  // can never cross beyond 0.50 ATR. This also leaves room to round quantity upward by one
+  // venue step so an exact operator minimum (40 USDT spot / 50 USDT futures margin) does
+  // not become untradeable after quantity flooring.
+  const limitPrice = tickRound(
+    boundaryPrice,
+    rules.price_tick,
+    side === "LONG" ? "down" : "up",
+  );
+  const finalPlan = planP10Entry(side, finite(signal.reference_close), atr14, limitPrice);
+  if (!finalPlan.allowed) {
+    return { entered: false, exchange, market: signal.market, reason: finalPlan.reason };
+  }
+  const quantity = ceilToStep(
+    requestedNotional / limitPrice,
+    rules.quantity_step || 0.00000001,
+  );
+  const orderNotional = quantity * limitPrice;
+  const actualCapital = exchange === "binance_futures"
+    ? orderNotional / leverage
+    : orderNotional;
+  const overshootAllowance = Math.max(
+    exchange === "upbit" ? 1000 : 1,
+    marginQuote * 0.05,
+  );
+  if (actualCapital > marginQuote + overshootAllowance + 1e-8) {
+    return {
+      entered: false,
+      exchange,
+      market: signal.market,
+      reason: "P10 venue quantity step exceeds the ticket overshoot limit",
+    };
+  }
+  const feePct = await liveFeePct(exchange, settings);
+  const walletDebit = exchange === "binance_futures"
+    ? actualCapital + orderNotional * feePct / 100
+    : orderNotional * (1 + feePct / 100);
+  if (walletDebit > finite(managed.managedAvailableQuote) + 1e-8) {
+    return {
+      entered: false,
+      exchange,
+      market: signal.market,
+      reason: "P10 ticket plus entry fee exceeds available managed capital",
+    };
+  }
+  if (!(quantity > 0) || orderNotional + 1e-8 < Math.max(rules.min_notional, minimumMargin * leverage)) {
+    return {
+      entered: false,
+      exchange,
+      market: signal.market,
+      reason: "P10 quantity below executable minimum",
+    };
+  }
+  const finalDepth = p10Depth(levels, side, boundaryPrice, orderNotional);
+  if (!finalDepth.executable || finalDepth.availableFunds < orderNotional * LIVE_MIN_DEPTH_BUFFER) {
+    return {
+      entered: false,
+      exchange,
+      market: signal.market,
+      reason: "P10 step-rounded quantity exceeds gap-capped depth",
+    };
+  }
+
+  const claimResult = await rpc("claim_p10_signal", {
+    p_venue: signal.venue,
+    p_market: signal.market,
+    p_signal_time: signal.signal_time,
+    p_side: side,
+    p_evidence: {
+      run_id: signal.run_id,
+      score: signal.score,
+      reference_close: signal.reference_close,
+      evidence: signal.evidence,
+      engine_version: VERSION,
+    },
+  });
+  if (claimResult?.claimed !== true) {
+    return { entered: false, exchange, market: signal.market, reason: "signal already claimed" };
+  }
+  const claimId = String(claimResult?.claim?.id || "");
+  let position: Position;
+  try {
+    position = (await insert("trading_positions", {
+      exchange,
+      quote_currency: quoteCurrency(exchange),
+      market: signal.market,
+      base_asset: base,
+      state: "ENTRY_PENDING",
+      is_paper: false,
+      strategy_key: P10_STRATEGY_KEY,
+      position_side: side,
+      leverage,
+      reserved_quote: orderNotional,
+      reserved_quantity: quantity,
+      reservation_expires_at: new Date(Date.now() + 180_000).toISOString(),
+      fee_accounting_quality: "LEGACY_UNVERIFIED",
+      fee_accounting_version: "8.0.0",
+      profile_version: 10,
+      planned_entry_price: limitPrice,
+      stop_price: tickRound(
+        finalPlan.stopPrice,
+        rules.price_tick,
+        side === "LONG" ? "down" : "up",
+      ),
+      target_1: tickRound(
+        finalPlan.partialTarget,
+        rules.price_tick,
+        side === "LONG" ? "up" : "down",
+      ),
+      target_2: tickRound(
+        finalPlan.finalTarget,
+        rules.price_tick,
+        side === "LONG" ? "up" : "down",
+      ),
+      tick_size: rules.price_tick,
+      quantity_step: rules.quantity_step,
+      min_notional_quote: Math.max(1, rules.min_notional),
+      t1_allocation_pct: P10_CONFIG.partialFraction * 100,
+      exit_policy: "P10_SLOW_4R",
+      trailing_stop: tickRound(
+        finalPlan.stopPrice,
+        rules.price_tick,
+        side === "LONG" ? "down" : "up",
+      ),
+      trailing_distance_pct: null,
+      intended_horizon_hours: P10_CONFIG.maxHoldBars,
+      max_holding_at: new Date(Date.now() + P10_CONFIG.maxHoldBars * P10_HOUR_MS).toISOString(),
+      absolute_max_holding_at: new Date(
+        Date.now() + P10_CONFIG.maxHoldBars * P10_HOUR_MS,
+      ).toISOString(),
+      metadata: {
+        strategy_key: P10_STRATEGY_KEY,
+        strategy_revision: P10_REVISION,
+        engine_version: VERSION,
+        p10_claim_id: claimId,
+        p10_signal_run_id: signal.run_id,
+        p10_signal_time: signal.signal_time,
+        p10_entry_bar_time: Date.parse(signal.signal_time) + P10_HOUR_MS,
+        p10_reference_close: finite(signal.reference_close),
+        p10_signal_atr14: atr14,
+        p10_initial_risk: finalPlan.initialRisk,
+        p10_last_policy_bar_time: Date.parse(signal.signal_time),
+        p10_partial_fraction: P10_CONFIG.partialFraction,
+        p10_signal: signal,
+        margin_quote: actualCapital,
+        notional_quote: orderNotional,
+        leverage,
+        live_spread_bps: spreadBps,
+        execution_depth: finalDepth,
+      },
+    }))[0] as Position;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await rejectP10Claim(claimId, message);
+    throw error;
+  }
+  await patch("p10_signal_claims", `id=eq.${claimId}`, {
+    position_id: position.id,
+    status: "ORDERED",
+  });
+  const identifier = uniqueId("p10e", position.id);
+  const orderSide = p10EntrySide(side);
+  const timeInForce = exchange === "upbit" ? "IOC" : "FOK";
+  const orderRow = await createOrderRecord({
+    position_id: position.id,
+    cycle_id: cycleId,
+    exchange,
+    quote_currency: quoteCurrency(exchange),
+    identifier,
+    market: signal.market,
+    side: orderSide,
+    strategy_key: P10_STRATEGY_KEY,
+    position_side: side,
+    position_effect: "OPEN",
+    purpose: "ENTRY",
+    order_type: "LIMIT",
+    time_in_force: timeInForce,
+    requested_price: limitPrice,
+    requested_volume: quantity,
+    requested_notional_quote: orderNotional,
+    state: "REQUESTED",
+  });
+  try {
+    const result = await gateway(exchange, {
+      action: "create_order",
+      leverage: exchange === "binance_futures" ? leverage : undefined,
+      order: {
+        market: signal.market,
+        side: orderSide,
+        type: "LIMIT",
+        price: limitPrice,
+        quantity,
+        time_in_force: timeInForce,
+        identifier,
+        position_side: exchange === "binance_futures" ? side : undefined,
+        position_effect: exchange === "binance_futures" ? "OPEN" : undefined,
+      },
+      wait_for_final_ms: 4000,
+    }, 20_000);
+    const updated = await updateOrderFromGateway(orderRow, result);
+    if (!(finite(updated.fill.executedVolume) > 0 && finite(updated.fill.averagePrice) > 0)) {
+      if (["OPEN", "PARTIALLY_FILLED"].includes(String(updated.order?.status))) {
+        return {
+          entered: false,
+          reserved: true,
+          pending_reconcile: true,
+          exchange,
+          market: signal.market,
+          position,
+          reason: "P10 entry order still reconciling",
+        };
+      }
+      await patch("trading_positions", `id=eq.${position.id}`, {
+        state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
+        close_reason: "P10_ENTRY_NOT_FILLED",
+        closed_at: new Date().toISOString(),
+      });
+      await rejectP10Claim(claimId, "P10 entry not filled");
+      return { entered: false, exchange, market: signal.market, reason: "P10 entry not filled" };
+    }
+    const opened = await applyP10EntryAccounting(
+      position,
+      orderRow,
+      updated.order,
+      updated.fill,
+      signal,
+    );
+    await event("P10_LIVE_ENTRY", `${exchange}:${signal.market} ${side} live entry`, {
+      strategy_key: P10_STRATEGY_KEY,
+      side,
+      exchange_order_id: updated.order?.exchange_order_id || null,
+      fill_price: updated.fill.averagePrice,
+      quantity: updated.fill.executedVolume,
+      margin_quote: actualCapital,
+      notional_quote: updated.fill.executedFunds,
+      stop_price: opened.stop_price,
+      partial_target: opened.target_1,
+      final_target: opened.target_2,
+    }, { cycleId, positionId: position.id, orderId: orderRow.id });
+    return {
+      entered: true,
+      paper: false,
+      exchange,
+      market: signal.market,
+      side,
+      position: opened,
+      exchange_order_id: updated.order?.exchange_order_id || null,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const status = Number((error as any)?.status || 0);
+    if (status >= 400 && status < 500) {
+      await patch("trading_orders", `id=eq.${orderRow.id}`, {
+        state: "REJECTED",
+        error_message: message,
+        completed_at: new Date().toISOString(),
+      });
+      await patch("trading_positions", `id=eq.${position.id}`, {
+        state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
+        close_reason: "P10_ENTRY_REJECTED",
+        closed_at: new Date().toISOString(),
+      });
+      await rejectP10Claim(claimId, message);
+      return { entered: false, exchange, market: signal.market, reason: message };
+    }
+    await patch("trading_orders", `id=eq.${orderRow.id}`, {
+      state: "UNKNOWN",
+      error_message: message,
+    });
+    await event("P10_ENTRY_RESULT_UNKNOWN", `${exchange}:${signal.market} entry requires reconciliation`, {
+      identifier,
+      side,
+      error: message,
+    }, { cycleId, positionId: position.id, orderId: orderRow.id, level: "CRITICAL" });
+    return {
+      entered: false,
+      reserved: true,
+      pending_reconcile: true,
+      exchange,
+      market: signal.market,
+      reason: "P10 entry result unknown; duplicate suppressed",
+    };
+  }
+}
+
+async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRecord) {
+  const exchanges = enabledExchanges(settings);
+  const portfolios = {} as Record<Exchange, any>;
+  const stats = {} as Record<Exchange, any>;
+  const circuits = {} as Record<Exchange, any>;
+  const positionSlots = clamp(finite((settings as any).scalp_position_slots, 3), 1, 20);
+  for (const exchange of exchanges) {
+    const raw = await gateway(exchange, { action: "portfolio" });
+    portfolios[exchange] = raw;
+    const managed = await managedPortfolio(settings, exchange, raw);
+    stats[exchange] = await accountStats(
+      exchange,
+      finite(managed.managed.managedCapitalQuote),
+      false,
+      raw,
+    );
+    const limits = exchangeLimits(settings, exchange);
+    circuits[exchange] = evaluateCircuit({
+      mode: settings.mode,
+      configured: settings.configured,
+      exchangeEnabled: true,
+      pauseNewEntries: settings.pause_new_entries || settings.withdrawal_mode ||
+        settings.manual_intervention_required,
+      pausedByOperator: Boolean(settings.pause_new_entries),
+      withdrawalMode: Boolean(settings.withdrawal_mode),
+      manualInterventionRequired: Boolean(settings.manual_intervention_required),
+      emergencyLiquidation: settings.emergency_liquidation,
+      availableQuote: finite(managed.managed.managedAvailableQuote),
+      minOrderQuote: limits.minOrder,
+      openPositionsGlobal: stats[exchange].openGlobal,
+      openPositionsExchange: stats[exchange].openExchange,
+      entriesTodayGlobal: stats[exchange].entriesTodayGlobal,
+      entriesTodayExchange: stats[exchange].entriesTodayExchange,
+      dailyBoughtQuote: stats[exchange].dailyBoughtQuote,
+      maxDailyBuyQuote: Number.MAX_SAFE_INTEGER,
+      dailyPnlPct: stats[exchange].dailyPnlPct,
+      weeklyPnlPct: stats[exchange].weeklyPnlPct,
+      consecutiveLosses: stats[exchange].consecutiveLosses,
+      settings: {
+        ...settings,
+        max_open_positions: positionSlots,
+        max_open_positions_per_exchange: Math.min(
+          positionSlots,
+          Math.max(1, finite(settings.max_open_positions_per_exchange, positionSlots)),
+        ),
+        max_daily_entries: Number.MAX_SAFE_INTEGER,
+        max_daily_entries_per_exchange: Number.MAX_SAFE_INTEGER,
+        max_daily_loss_pct: finite((settings as any).scalp_daily_loss_pct, 30),
+        max_weekly_loss_pct: Number.MAX_SAFE_INTEGER,
+        max_consecutive_losses: Number.MAX_SAFE_INTEGER,
+      },
+    });
+  }
+  if (!exchanges.some((exchange) => circuits[exchange]?.allowNewEntry)) {
+    await event("P10_ENTRY_CIRCUIT_BLOCK", "P10 new entries blocked on all exchanges", {
+      strategy_key: P10_STRATEGY_KEY,
+      circuits,
+      stats,
+    }, { cycleId, level: "WARNING" });
+    await patchTradingHeartbeat({
+      lastFullScanAt: new Date().toISOString(),
+      lastGatewayHeartbeatAt: new Date().toISOString(),
+    });
+    return { skipped: true, strategy_key: P10_STRATEGY_KEY, circuits, stats };
+  }
+
+  const signals = await loadP10Signals();
+  const active = await db(
+    "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id,exchange,market,base_asset",
+  ) as any[];
+  const activeMarkets = new Set(active.map((row) => `${row.exchange}:${row.market}`));
+  const entries: any[] = [];
+  const maxNew = Math.max(
+    0,
+    Math.min(
+      positionSlots - active.length,
+      Math.floor(finite(settings.max_new_entries_per_scan, positionSlots)),
+    ),
+  );
+  for (const signal of signals) {
+    if (entries.filter((entry) => entry.entered || entry.reserved).length >= maxNew) break;
+    const exchange = p10VenueExchange(signal.venue);
+    if (!exchanges.includes(exchange) || !circuits[exchange]?.allowNewEntry ||
+      activeMarkets.has(`${exchange}:${signal.market}`)) continue;
+    try {
+      const result = await enterP10Signal(signal, settings, portfolios[exchange], cycleId);
+      entries.push({ ...result, signal_time: signal.signal_time, score: signal.score });
+      if (result.entered || result.reserved) {
+        activeMarkets.add(`${exchange}:${signal.market}`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      entries.push({
+        entered: false,
+        exchange,
+        market: signal.market,
+        side: signal.side,
+        error: message,
+      });
+      await event("P10_ENTRY_ERROR", message, {
+        strategy_key: P10_STRATEGY_KEY,
+        venue: signal.venue,
+        market: signal.market,
+        side: signal.side,
+        signal_time: signal.signal_time,
+      }, { cycleId, level: "CRITICAL" });
+    }
+  }
+  const heartbeatAt = new Date().toISOString();
+  await patchTradingHeartbeat({
+    lastFullScanAt: heartbeatAt,
+    lastGatewayHeartbeatAt: heartbeatAt,
+    gatewayErrorCount: 0,
+  });
+  await event("P10_SCAN_SUMMARY", `${entries.filter((row) => row.entered).length} P10 entries filled`, {
+    strategy_key: P10_STRATEGY_KEY,
+    revision: P10_REVISION,
+    eligible_signals: signals.length,
+    attempted: entries.length,
+    filled: entries.filter((row) => row.entered).length,
+    reserved: entries.filter((row) => row.reserved).length,
+    rejections: entries.filter((row) => !row.entered && !row.reserved).map((row) => ({
+      exchange: row.exchange,
+      market: row.market,
+      reason: row.reason || row.error,
+    })),
+  }, { cycleId, level: entries.some((row) => row.entered || row.reserved) ? "INFO" : "WARNING" });
+  return {
+    strategy_key: P10_STRATEGY_KEY,
+    revision: P10_REVISION,
+    eligible_signals: signals.length,
+    entries,
+    circuits,
+    stats,
+  };
+}
+
+async function p10FetchJson(url: string, timeoutMs = 12_000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { accept: "application/json", "user-agent": "trading-booooo-p10-monitor/1.0" },
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`P10 market data ${response.status}: ${text.slice(0, 240)}`);
+    return text ? JSON.parse(text) : null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function p10CompletedBars(position: Position): Promise<P10Bar[]> {
+  const end = Math.floor(Date.now() / P10_HOUR_MS) * P10_HOUR_MS - 1;
+  if (position.exchange === "upbit") {
+    const to = new Date(end + 1).toISOString();
+    const payload = await p10FetchJson(
+      `https://api.upbit.com/v1/candles/minutes/60?market=${encodeURIComponent(position.market)}` +
+        `&count=140&to=${encodeURIComponent(to)}`,
+    );
+    return (Array.isArray(payload) ? payload : []).map((row: any) => ({
+      time: Date.parse(String(row?.candle_date_time_utc || "") + "Z"),
+      open: finite(row?.opening_price),
+      high: finite(row?.high_price),
+      low: finite(row?.low_price),
+      close: finite(row?.trade_price),
+      volume: finite(row?.candle_acc_trade_volume),
+      quoteVolume: finite(row?.candle_acc_trade_price),
+    }));
+  }
+  const futures = position.exchange === "binance_futures";
+  const base = futures ? "https://fapi.binance.com" : "https://api.binance.com";
+  const endpoint = futures ? "/fapi/v1/klines" : "/api/v3/klines";
+  const payload = await p10FetchJson(
+    `${base}${endpoint}?symbol=${encodeURIComponent(position.market)}` +
+      `&interval=1h&endTime=${end}&limit=140`,
+  );
+  return (Array.isArray(payload) ? payload : []).map((row: any[]) => ({
+    time: finite(row?.[0]),
+    open: finite(row?.[1]),
+    high: finite(row?.[2]),
+    low: finite(row?.[3]),
+    close: finite(row?.[4]),
+    volume: finite(row?.[5]),
+    quoteVolume: finite(row?.[7]),
+  }));
+}
+
+async function applyP10ExitAccounting(
+  position: Position,
+  orderRow: any,
+  fill: any,
+  action: string,
+  fallbackPrice: number,
+  nextStop: number,
+) {
+  const quantity = finite(fill.executedVolume);
+  const price = finite(fill.averagePrice, fallbackPrice);
+  if (!(quantity > 0 && price > 0)) throw new Error("P10 exit fill has no executable quantity");
+  return await rpc("apply_p10_exit_order", {
+    p_order_id: orderRow.id,
+    p_action: action,
+    p_fill_price: price,
+    p_fill_quantity: quantity,
+    p_fill_funds: finite(fill.executedFunds, price * quantity),
+    p_fill_fee_quote: finite(fill.paidFeeQuote, fill.paidFee),
+    p_next_stop: nextStop,
+  });
+}
+
+async function reconcileP10Order(position: Position, cycleId: string) {
+  const rows = await db(
+    `trading_orders?position_id=eq.${position.id}` +
+      "&state=in.(REQUESTED,UNKNOWN,EXCHANGE_OPEN,EXCHANGE_PARTIAL,EXCHANGE_DONE,EXCHANGE_PARTIAL_CANCELLED)" +
+      "&select=*&order=requested_at.desc&limit=1",
+  ) as any[];
+  const orderRow = rows[0];
+  if (!orderRow) return { reconciled: false, reason: "no pending P10 order" };
+  try {
+    const payload = await gateway(position.exchange, {
+      action: "get_order",
+      identifier: orderRow.identifier,
+      market: position.market,
+    });
+    const updated = await updateOrderFromGateway(orderRow, payload);
+    if (finite(updated.fill.executedVolume) > 0 && finite(updated.fill.averagePrice) > 0) {
+      if (orderRow.purpose === "ENTRY") {
+        const signal = position.metadata?.p10_signal as P10SignalRow;
+        const opened = await applyP10EntryAccounting(
+          position,
+          orderRow,
+          updated.order,
+          updated.fill,
+          signal,
+        );
+        await event("P10_ENTRY_RECONCILED", `${position.exchange}:${position.market} entry applied`, {
+          exchange_order_id: updated.order?.exchange_order_id || null,
+          side: position.position_side,
+          fill_price: updated.fill.averagePrice,
+          quantity: updated.fill.executedVolume,
+        }, { cycleId, positionId: position.id, orderId: orderRow.id });
+        return { reconciled: true, opened };
+      }
+      const action = String(
+        position.metadata?.pending_exit_action ||
+          (orderRow.purpose === "TIME_EXIT" ? "TIME" : orderRow.purpose),
+      );
+      const result = await applyP10ExitAccounting(
+        position,
+        orderRow,
+        updated.fill,
+        action,
+        finite(updated.fill.averagePrice),
+        finite(position.trailing_stop, position.stop_price),
+      );
+      await event("P10_EXIT_RECONCILED", `${position.exchange}:${position.market} exit applied`, {
+        exchange_order_id: updated.order?.exchange_order_id || null,
+        action,
+        closed: Boolean(result?.closed),
+      }, { cycleId, positionId: position.id, orderId: orderRow.id });
+      return { reconciled: true, result };
+    }
+    const terminal = ["CANCELED", "PARTIALLY_FILLED_CANCELED", "REJECTED", "EXPIRED"].includes(
+      String(updated.order?.status),
+    );
+    if (!terminal) return { reconciled: false, reason: "P10 order remains open" };
+    if (orderRow.purpose === "ENTRY") {
+      await patch("trading_positions", `id=eq.${position.id}`, {
+        state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
+        close_reason: "P10_ENTRY_TERMINAL_NO_FILL",
+        closed_at: new Date().toISOString(),
+      });
+      await rejectP10Claim(
+        String(position.metadata?.p10_claim_id || ""),
+        "P10 entry terminal without fill",
+      );
+    } else {
+      await patch("trading_positions", `id=eq.${position.id}`, {
+        state: "OPEN",
+        metadata: {
+          ...(position.metadata || {}),
+          pending_exit_action: null,
+          pending_exit_reason: null,
+          pending_exit_at: null,
+          p10_last_unfilled_exit_at: new Date().toISOString(),
+        },
+      });
+    }
+    return { reconciled: true, terminal: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await event("P10_ORDER_RECONCILIATION_FAILED", message, {
+      position_state: position.state,
+      order_id: orderRow.id,
+      identifier: orderRow.identifier,
+    }, { cycleId, positionId: position.id, orderId: orderRow.id, level: "CRITICAL" });
+    return { reconciled: false, reason: message };
+  }
+}
+
+function p10ExchangeQuantity(position: Position, portfolio: any) {
+  if (position.exchange !== "binance_futures") {
+    return accountQuantity(portfolio, position.base_asset, true);
+  }
+  const row = (Array.isArray(portfolio?.positions) ? portfolio.positions : []).find((item: any) =>
+    String(item?.market || "").toUpperCase() === String(position.market).toUpperCase() &&
+    String(item?.side || "").toUpperCase() === String(position.position_side).toUpperCase()
+  );
+  return Math.max(0, finite(row?.quantity));
+}
+
+async function executeP10Exit(
+  position: Position,
+  action: string,
+  reason: string,
+  fraction: number,
+  price: number,
+  nextStop: number,
+  portfolio: any,
+  cycleId: string,
+) {
+  const step = Math.max(0.000000000001, finite(position.quantity_step, 0.00000001));
+  const available = p10ExchangeQuantity(position, portfolio);
+  const requested = action === "TARGET_1"
+    ? Math.min(
+      finite(position.remaining_quantity),
+      finite(position.initial_quantity) * fraction,
+    )
+    : finite(position.remaining_quantity);
+  const quantity = floorToStep(Math.min(requested, available), step);
+  if (!(quantity > 0)) {
+    await event("P10_EXIT_NO_EXCHANGE_POSITION", `${position.exchange}:${position.market} no exit quantity`, {
+      action,
+      position_side: position.position_side,
+      booked_quantity: position.remaining_quantity,
+      exchange_quantity: available,
+    }, { cycleId, positionId: position.id, level: "CRITICAL" });
+    return { action: "NONE", reason: "no exchange-backed P10 exit quantity" };
+  }
+  if (quantity * price < Math.max(1, finite(position.min_notional_quote))) {
+    return { action: "NONE", reason: "P10 exit quantity below exchange minimum" };
+  }
+  const claimed = await patch("trading_positions", `id=eq.${position.id}&state=eq.OPEN`, {
+    state: "EXITING",
+    trailing_stop: nextStop,
+    metadata: {
+      ...(position.metadata || {}),
+      pending_exit_action: action,
+      pending_exit_reason: reason,
+      pending_exit_at: new Date().toISOString(),
+    },
+  });
+  if (!claimed.length) return { action: "NONE", reason: "P10 exit already claimed" };
+  position = { ...position, ...claimed[0] };
+  const side = String(position.position_side) as P10Side;
+  const orderSide = p10ExitSide(side);
+  const identifier = uniqueId("p10x", position.id);
+  const orderRow = await createOrderRecord({
+    position_id: position.id,
+    cycle_id: cycleId,
+    exchange: position.exchange,
+    quote_currency: position.quote_currency,
+    identifier,
+    market: position.market,
+    side: orderSide,
+    strategy_key: P10_STRATEGY_KEY,
+    position_side: side,
+    position_effect: "CLOSE",
+    purpose: p10OrderPurpose(action),
+    order_type: "MARKET",
+    requested_volume: quantity,
+    state: "REQUESTED",
+  });
+  try {
+    const payload = await gateway(position.exchange, {
+      action: "create_order",
+      order: {
+        market: position.market,
+        side: orderSide,
+        type: "MARKET",
+        quantity,
+        identifier,
+        position_side: position.exchange === "binance_futures" ? side : undefined,
+        position_effect: position.exchange === "binance_futures" ? "CLOSE" : undefined,
+      },
+      wait_for_final_ms: 4000,
+    }, 20_000);
+    const updated = await updateOrderFromGateway(orderRow, payload);
+    if (!(finite(updated.fill.executedVolume) > 0 && finite(updated.fill.averagePrice) > 0)) {
+      return {
+        action: "NONE",
+        pending_reconcile: true,
+        reason: "P10 market exit returned no final fill",
+      };
+    }
+    const applied = await applyP10ExitAccounting(
+      position,
+      orderRow,
+      updated.fill,
+      action,
+      price,
+      nextStop,
+    );
+    await event(
+      applied?.closed ? "P10_POSITION_CLOSED" : "P10_PARTIAL_EXIT",
+      `${position.exchange}:${position.market} ${side} ${action}`,
+      {
+        strategy_key: P10_STRATEGY_KEY,
+        reason,
+        exchange_order_id: updated.order?.exchange_order_id || null,
+        fill_price: updated.fill.averagePrice,
+        quantity: updated.fill.executedVolume,
+        remaining_quantity: applied?.position?.remaining_quantity,
+        realized_pnl_quote: applied?.position?.realized_pnl_quote,
+      },
+      { cycleId, positionId: position.id, orderId: orderRow.id },
+    );
+    return {
+      action,
+      reason,
+      closed: Boolean(applied?.closed),
+      position: applied?.position,
+      exchange_order_id: updated.order?.exchange_order_id || null,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await patch("trading_orders", `id=eq.${orderRow.id}`, {
+      state: "UNKNOWN",
+      error_message: message,
+    });
+    await event("P10_EXIT_RESULT_UNKNOWN", `${position.exchange}:${position.market} exit requires reconciliation`, {
+      action,
+      reason,
+      identifier,
+      error: message,
+    }, { cycleId, positionId: position.id, orderId: orderRow.id, level: "CRITICAL" });
+    return { action: "NONE", pending_reconcile: true, reason: message };
+  }
+}
+
+async function monitorP10Positions(
+  initial: Position[],
+  settings: TradingSettings & JsonRecord,
+  cycleId: string,
+) {
+  const actions: any[] = [];
+  for (const position of initial.filter((row) =>
+    ["ENTRY_PENDING", "EXITING", "RECONCILING", "RECONCILIATION_FAILED"].includes(row.state)
+  )) {
+    actions.push({
+      action: "P10_RECONCILE",
+      exchange: position.exchange,
+      market: position.market,
+      result: await reconcileP10Order(position, cycleId),
+    });
+  }
+  const open = await db(
+    `trading_positions?strategy_key=eq.${encodeURIComponent(P10_STRATEGY_KEY)}` +
+      "&state=eq.OPEN&select=*&order=created_at.asc",
+  ) as Position[];
+  const portfolios = new Map<Exchange, any>();
+  for (let position of open) {
+    try {
+      let portfolio = portfolios.get(position.exchange);
+      if (!portfolio) {
+        portfolio = await gateway(position.exchange, { action: "portfolio" });
+        portfolios.set(position.exchange, portfolio);
+      }
+      const exchangeQuantity = p10ExchangeQuantity(position, portfolio);
+      const tolerance = Math.max(0.000000000001, finite(position.quantity_step) * 2);
+      if (exchangeQuantity + tolerance < finite(position.remaining_quantity)) {
+        await event("P10_POSITION_QUANTITY_MISMATCH", `${position.exchange}:${position.market} quantity mismatch`, {
+          position_side: position.position_side,
+          booked_quantity: position.remaining_quantity,
+          exchange_quantity: exchangeQuantity,
+        }, { cycleId, positionId: position.id, level: "CRITICAL" });
+        actions.push({
+          action: "P10_MISMATCH",
+          exchange: position.exchange,
+          market: position.market,
+          booked_quantity: position.remaining_quantity,
+          exchange_quantity: exchangeQuantity,
+        });
+        continue;
+      }
+      const quote = await marketQuote(position.exchange, position.market);
+      const side = String(position.position_side || "LONG") as P10Side;
+      const executablePrice = side === "LONG" ? finite(quote.best_bid) : finite(quote.best_ask);
+      if (!(executablePrice > 0)) throw new Error("P10 executable quote unavailable");
+      const prepared = prepareP10Bars(await p10CompletedBars(position));
+      const latestCompletedBar = prepared.at(-1) || null;
+      const entryPrice = finite(position.average_entry_price, position.planned_entry_price);
+      const initialRisk = finite(
+        position.metadata?.p10_initial_risk,
+        Math.abs(entryPrice - finite(position.stop_price)),
+      );
+      const currentStop = side === "LONG"
+        ? Math.max(finite(position.stop_price), finite(position.trailing_stop))
+        : Math.min(
+          finite(position.stop_price),
+          finite(position.trailing_stop, position.stop_price),
+        );
+      let decision = evaluateP10Exit({
+        side,
+        entryPrice,
+        initialRisk,
+        currentStop,
+        partialDone: position.t1_completed === true,
+        executablePrice,
+        entryBarTime: finite(
+          position.metadata?.p10_entry_bar_time,
+          Date.parse(String(position.opened_at || position.created_at || "")),
+        ),
+        openedAtMs: Date.parse(String(position.opened_at || position.created_at || "")),
+        nowMs: Date.now(),
+        lastPolicyBarTime: finite(position.metadata?.p10_last_policy_bar_time),
+        latestCompletedBar,
+        roundTripCostBps: p10RoundTripCostBps(p10ExchangeVenue(position.exchange)),
+      });
+      if (settings.emergency_liquidation) {
+        decision = {
+          action: "TIME",
+          reason: "EMERGENCY_LIQUIDATION",
+          fraction: 1,
+          nextStop: decision.nextStop,
+          policyBarTime: decision.policyBarTime,
+        };
+      }
+      const nextStop = tickRound(
+        decision.nextStop,
+        finite(position.tick_size),
+        side === "LONG" ? "down" : "up",
+      );
+      const peakPrice = Math.max(finite(position.peak_price, entryPrice), executablePrice);
+      const troughPrice = Math.min(finite(position.trough_price, entryPrice), executablePrice);
+      const metadata = {
+        ...(position.metadata || {}),
+        p10_last_policy_bar_time: decision.policyBarTime,
+        p10_last_policy_checked_at: new Date().toISOString(),
+        p10_last_executable_price: executablePrice,
+        p10_last_completed_bar: latestCompletedBar
+          ? {
+            time: latestCompletedBar.time,
+            close: latestCompletedBar.close,
+            ema20: latestCompletedBar.ema20,
+            atr14: latestCompletedBar.atr14,
+          }
+          : null,
+      };
+      const refreshed = await patch("trading_positions", `id=eq.${position.id}&state=eq.OPEN`, {
+        trailing_stop: nextStop,
+        peak_price: peakPrice,
+        trough_price: troughPrice,
+        metadata,
+      });
+      if (!refreshed.length) continue;
+      position = { ...position, ...refreshed[0] };
+      if (decision.action === "NONE") {
+        actions.push({
+          action: "P10_HOLD",
+          exchange: position.exchange,
+          market: position.market,
+          side,
+          executable_price: executablePrice,
+          stop: nextStop,
+        });
+        continue;
+      }
+      actions.push(await executeP10Exit(
+        position,
+        decision.action,
+        String(decision.reason || decision.action),
+        decision.fraction,
+        executablePrice,
+        nextStop,
+        portfolio,
+        cycleId,
+      ));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      actions.push({
+        action: "P10_MONITOR_ERROR",
+        exchange: position.exchange,
+        market: position.market,
+        error: message,
+      });
+      await event("P10_MONITOR_ERROR", message, {
+        strategy_key: P10_STRATEGY_KEY,
+        position_side: position.position_side,
+      }, { cycleId, positionId: position.id, level: "CRITICAL" });
+    }
+  }
+  return actions;
+}
+
 async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord) {
+  if (isP10Strategy((settings as any).strategy)) {
+    return await p10ScanCycle(cycleId, settings);
+  }
   const exchanges = enabledExchanges(settings);
   const portfolios = {} as Record<Exchange, any>;
   const stats = {} as Record<Exchange, any>;
@@ -9390,7 +10652,9 @@ async function control(body: JsonRecord, settings: TradingSettings & JsonRecord)
   ) if (body[key] != null) allowed[key] = Boolean(body[key]);
   if (body.strategy != null) {
     const strategy = String(body.strategy).toUpperCase();
-    allowed.strategy = strategy === "TREND"
+    allowed.strategy = strategy === "P10_DONCHIAN_SLOW4R"
+      ? "P10_DONCHIAN_SLOW4R"
+      : strategy === "TREND"
       ? "TREND"
       : strategy === "SCALP"
       ? "SCALP"
