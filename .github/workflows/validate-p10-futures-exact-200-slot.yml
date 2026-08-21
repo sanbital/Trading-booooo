@@ -1,0 +1,159 @@
+name: Validate P10 Futures Exact 200 Slot
+
+on:
+  push:
+    branches:
+      - hotfix/p10-futures-exact-200-slot
+    paths:
+      - ".github/workflows/validate-p10-futures-exact-200-slot.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: hotfix/p10-futures-exact-200-slot
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Apply futures-only exact-margin helper and early return
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          policy = Path('supabase/functions/_shared/p10-policy.ts')
+          text = policy.read_text()
+          anchor = '''export function p10ExecutableTicketCapital(input: {\n'''
+          helper = '''export function p10ExactFuturesTicketCapital(\n  availableInput: number,\n  operatorMarginInput: number,\n  stepInput = 0.01,\n) {\n  const available = Math.max(0, finite(availableInput));\n  const operatorMargin = Math.max(0, finite(operatorMarginInput));\n  const step = Math.max(0.000000000001, finite(stepInput, 0.01));\n  if (!(operatorMargin > 0) || available + 1e-9 < operatorMargin) return 0;\n  const stepped = Math.floor((operatorMargin + step * 1e-9) / step) * step;\n  return Number(Math.max(0, stepped).toFixed(12));\n}\n\n'''
+          if 'export function p10ExactFuturesTicketCapital(' not in text:
+              if anchor not in text:
+                  raise SystemExit('p10 policy insertion anchor missing')
+              text = text.replace(anchor, helper + anchor, 1)
+              policy.write_text(text)
+
+          index = Path('supabase/functions/market-autotrader/index.ts')
+          text = index.read_text()
+          if 'p10ExactFuturesTicketCapital,' not in text:
+              import_anchor = '  p10ExecutableTicketCapital,\n'
+              if import_anchor not in text:
+                  raise SystemExit('p10 import anchor missing')
+              text = text.replace(import_anchor, import_anchor + '  p10ExactFuturesTicketCapital,\n', 1)
+
+          old = '''  if (exchange === "binance_futures") {\n    const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 50);\n    if (operatorMargin > 0) maximum = operatorMargin;\n    minimum = FUTURES_MIN_ENTRY_MARGIN_USDT;\n  }\n'''
+          new = '''  if (exchange === "binance_futures") {\n    const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 200);\n    if (operatorMargin > 0) {\n      return p10ExactFuturesTicketCapital(available, operatorMargin, 0.01);\n    }\n    minimum = FUTURES_MIN_ENTRY_MARGIN_USDT;\n  }\n'''
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit('P10 futures sizing block missing or ambiguous')
+          index.write_text(text)
+
+          test = Path('supabase/functions/_shared/p10-policy.test.ts')
+          text = test.read_text()
+          if 'p10ExactFuturesTicketCapital,' not in text:
+              import_anchor = '  p10ExecutableTicketCapital,\n'
+              if import_anchor not in text:
+                  raise SystemExit('p10 test import anchor missing')
+              text = text.replace(import_anchor, import_anchor + '  p10ExactFuturesTicketCapital,\n', 1)
+          marker = 'Deno.test("P10 exact futures margin is per slot and never downsizes",'
+          if marker not in text:
+              tests = r'''
+
+Deno.test("P10 exact futures margin is per slot and never downsizes", () => {
+  // A: 500 available / 10 slots still means one 200 USDT margin ticket.
+  assertEquals(p10ExactFuturesTicketCapital(500, 200), 200);
+  // B: exact boundary is executable.
+  assertEquals(p10ExactFuturesTicketCapital(200, 200), 200);
+  // C: any meaningful shortage blocks rather than downsizing.
+  assertEquals(p10ExactFuturesTicketCapital(199.99, 200), 0);
+  // D: production-like 334 available ignores capital/slot division entirely.
+  assertEquals(p10ExactFuturesTicketCapital(334, 200), 200);
+});
+
+Deno.test("P10 spot ticket capital remains capital divided by slots", () => {
+  // E: Binance spot keeps the existing generic P10 sizing path.
+  assertEquals(
+    p10ExecutableTicketCapital({
+      available: 500,
+      capital: 500,
+      slots: 10,
+      maximum: 100,
+      minimum: 10,
+      step: 0.01,
+    }),
+    50,
+  );
+  // F: Upbit keeps the same generic capital/slots behavior and KRW step.
+  assertEquals(
+    p10ExecutableTicketCapital({
+      available: 500_000,
+      capital: 500_000,
+      slots: 10,
+      maximum: 100_000,
+      minimum: 5_000,
+      step: 1_000,
+    }),
+    50_000,
+  );
+});
+
+Deno.test("P10 exact futures margin blocks the second ticket after margin falls below 200", () => {
+  // H: first ticket is 200 from 334; the remaining 134 cannot be downsized into another entry.
+  assertEquals(p10ExactFuturesTicketCapital(334, 200), 200);
+  assertEquals(p10ExactFuturesTicketCapital(134, 200), 0);
+});
+'''
+              text += tests
+          test.write_text(text)
+          PY
+
+      - name: Format, check, and regression test
+        run: |
+          set -euo pipefail
+          deno fmt supabase/functions/market-autotrader/index.ts supabase/functions/_shared/p10-policy.ts supabase/functions/_shared/p10-policy.test.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          deno check supabase/functions/_shared/p10-policy.test.ts
+          deno test supabase/functions/_shared/p10-policy.test.ts
+          deno test supabase/functions/market-autotrader/*.test.ts supabase/functions/_shared/*.test.ts
+
+      - name: Static safety assertions
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('supabase/functions/market-autotrader/index.ts').read_text()
+          start = text.index('function p10TicketCapital(')
+          end = text.index('\n}\n', start) + 3
+          block = text[start:end]
+          assert 'binance_futures_allocation_usdt, 200' in block
+          assert 'return p10ExactFuturesTicketCapital(available, operatorMargin, 0.01);' in block
+          futures = block[block.index('if (exchange === "binance_futures")'):]
+          assert 'capital / slots' not in futures
+          assert 'if (operatorMargin > 0)' in futures
+          # Current concurrency gate must remain separate from ticket sizing.
+          assert 'scalp_position_slots' in block
+          whole = text
+          assert 'positionSlots - active.length' in whole
+          assert 'max_new_entries_per_scan' in whole
+          PY
+
+      - name: Commit validated patch to branch
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add supabase/functions/market-autotrader/index.ts supabase/functions/_shared/p10-policy.ts supabase/functions/_shared/p10-policy.test.ts
+          if git diff --cached --quiet; then
+            echo 'Validated source already staged on branch'
+            exit 0
+          fi
+          git commit -m "Fix P10 futures to 200 USDT margin per slot"
+          git push origin HEAD:hotfix/p10-futures-exact-200-slot
