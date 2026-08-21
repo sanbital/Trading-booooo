@@ -145,6 +145,7 @@ import {
   updatePost180RunningTrough,
 } from "./late-recovery-policy.ts";
 import { buildTradingHeartbeatPatch, type TradingHeartbeatPatch } from "./heartbeat.ts";
+import { type LeaseGateway, runWithContendedLease } from "./lease.ts";
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 import { loadMinuteEntryGate } from "../_shared/lob/minute-entry-market.ts";
@@ -157,6 +158,7 @@ import {
   P10_REVISION,
   P10_STRATEGY_KEY,
   type P10Bar,
+  p10ExactFuturesTicketCapital,
   p10ExecutableTicketCapital,
   p10RoundTripCostBps,
   type P10Side,
@@ -272,6 +274,14 @@ async function activeBinanceFuturesSymbols(): Promise<Set<string>> {
 const DASHBOARD_ORIGIN = env("ALLOWED_ORIGINS").split(",")[0] || "*";
 const DEFAULT_MODE = parseMode(env("TRADING_MODE_DEFAULT") || "PAPER");
 const MAX_SCAN_SECONDS = 280;
+// Scan lease shape. The TTL is a renewed heartbeat, not the scan's worst-case runtime, so a
+// scan that dies mid-flight frees the shared engine lease in SCAN_LEASE_TTL_SECONDS instead
+// of holding monitor off for the whole scan budget. SCAN_LEASE_WAIT_MS spans one full monitor
+// cycle (13-15s live) so a scan can claim the gap monitor leaves instead of skipping.
+const SCAN_LEASE_TTL_SECONDS = 45;
+const SCAN_LEASE_RENEW_MS = 10_000;
+const SCAN_LEASE_WAIT_MS = 18_000;
+const SCAN_LEASE_POLL_MS = 2_000;
 const LIVE_MAX_SPREAD_BPS = clamp(finite(env("LIVE_MAX_SPREAD_BPS"), 25), 5, 50);
 const LIVE_MIN_DEPTH_BUFFER = clamp(finite(env("LIVE_MIN_DEPTH_BUFFER"), 1.2), 1, 3);
 const FEE_PCT: Record<Exchange, number> = {
@@ -937,6 +947,16 @@ async function withLeaseRetry<T>(
   }
   return null;
 }
+/**
+ * Lease gateway backed by the trading_leases RPCs. Acquiring with an owner that already holds
+ * the lease refreshes its expiry, which is what the renewal heartbeat relies on.
+ */
+const LEASE_GATEWAY: LeaseGateway = {
+  acquire: (name, owner, ttlSeconds) =>
+    rpc("acquire_trading_lease", { p_name: name, p_owner: owner, p_seconds: ttlSeconds })
+      .then((granted) => granted === true),
+  release: (name, owner) => rpc("release_trading_lease", { p_name: name, p_owner: owner }),
+};
 
 function dayBoundary(_exchange: Exchange, daysAgo = 0): string {
   const offset = 9;
@@ -9009,8 +9029,10 @@ function p10TicketCapital(
   }
   if (exchange === "upbit") maximum = finite(settings.max_order_krw, maximum);
   if (exchange === "binance_futures") {
-    const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 50);
-    if (operatorMargin > 0) maximum = operatorMargin;
+    const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 200);
+    if (operatorMargin > 0) {
+      return p10ExactFuturesTicketCapital(available, operatorMargin, 0.01);
+    }
     minimum = FUTURES_MIN_ENTRY_MARGIN_USDT;
   }
   const step = exchange === "upbit" ? 1000 : 0.01;
@@ -9196,6 +9218,27 @@ async function enterP10Signal(
   const minimumMargin = exchange === "binance_futures"
     ? FUTURES_MIN_ENTRY_MARGIN_USDT
     : Math.max(exchangeLimits(settings, exchange).minOrder, rules.min_notional);
+  // A futures slot is worth exactly the operator's configured margin. When the wallet
+  // cannot fund a whole slot the entry is skipped outright: silently downsizing the
+  // ticket would break the "1 slot = configured margin" invariant the operator sized
+  // the strategy around.
+  const configuredFuturesMargin = exchange === "binance_futures"
+    ? finite((settings as any).binance_futures_allocation_usdt, 200)
+    : 0;
+  if (exchange === "binance_futures" && configuredFuturesMargin > 0 && marginQuote <= 0) {
+    const reason = "P10_EXACT_MARGIN_INSUFFICIENT_BALANCE";
+    await event(reason, "P10 futures slot skipped; wallet cannot fund a whole slot margin", {
+      strategy_key: P10_STRATEGY_KEY,
+      exchange,
+      market: signal.market,
+      side,
+      requested_margin_usdt: configuredFuturesMargin,
+      available_margin_usdt: finite(managed.managedAvailableQuote),
+      leverage,
+      requested_notional_usdt: configuredFuturesMargin * leverage,
+    }, { cycleId, level: "WARNING" });
+    return { entered: false, exchange, market: signal.market, reason };
+  }
   if (marginQuote + 1e-8 < minimumMargin) {
     return {
       entered: false,
@@ -9280,6 +9323,28 @@ async function enterP10Signal(
       reason: "P10 step-rounded quantity exceeds gap-capped depth",
     };
   }
+
+  // Order-time sizing evidence. This is the only place where the configured slot margin,
+  // the leverage it is multiplied by and the venue-rounded result are all known, so it is
+  // the record used to prove a live fill honoured the exact-margin policy. No credentials.
+  await event("P10_ENTRY_SIZING", "P10 entry sizing resolved before order placement", {
+    strategy_key: P10_STRATEGY_KEY,
+    exchange,
+    market: signal.market,
+    side,
+    slots: clamp(finite((settings as any).scalp_position_slots, 3), 1, 20),
+    allocation_mode: exchange === "binance_futures"
+      ? String((settings as any).binance_futures_allocation_mode || "ALL")
+      : String((settings as any).binance_allocation_mode || "ALL"),
+    configured_margin_usdt: configuredFuturesMargin,
+    effective_margin_usdt: marginQuote,
+    leverage,
+    target_notional_usdt: requestedNotional,
+    rounded_notional_usdt: orderNotional,
+    rounded_margin_usdt: actualCapital,
+    quantity,
+    price: limitPrice,
+  }, { cycleId });
 
   const claimResult = await rpc("claim_p10_signal", {
     p_venue: signal.venue,
@@ -10964,9 +11029,16 @@ Deno.serve(async (request: Request) => {
     }
     if (action === "scan") {
       settings = await tryAutoResume(settings, cycleId);
-      const result = await withLease(
+      const result = await runWithContendedLease(
+        LEASE_GATEWAY,
         "autotrader-scan",
-        MAX_SCAN_SECONDS + 30,
+        () => crypto.randomUUID(),
+        {
+          ttlSeconds: SCAN_LEASE_TTL_SECONDS,
+          renewMs: SCAN_LEASE_RENEW_MS,
+          waitMs: SCAN_LEASE_WAIT_MS,
+          pollMs: SCAN_LEASE_POLL_MS,
+        },
         () => scanCycle(cycleId, settings),
       );
       if (result == null) {

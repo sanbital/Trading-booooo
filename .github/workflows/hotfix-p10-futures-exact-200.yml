@@ -71,7 +71,7 @@ jobs:
               if import_anchor not in text:
                   raise SystemExit('p10 test import anchor missing')
               text = text.replace(import_anchor, import_anchor + '  p10ExactFuturesTicketCapital,\n', 1)
-          marker = 'Deno.test("P10 exact futures margin is per slot and never downsizes"'
+          marker = 'Deno.test("P10 futures target notional is the configured margin times leverage"'
           if marker not in text:
               text += r'''
 

@@ -120,6 +120,19 @@ export interface P10ExitDecision {
 const finite = (value: unknown, fallback = 0) =>
   Number.isFinite(Number(value)) ? Number(value) : fallback;
 
+export function p10ExactFuturesTicketCapital(
+  availableInput: number,
+  operatorMarginInput: number,
+  stepInput = 0.01,
+) {
+  const available = Math.max(0, finite(availableInput));
+  const operatorMargin = Math.max(0, finite(operatorMarginInput));
+  const step = Math.max(0.000000000001, finite(stepInput, 0.01));
+  if (!(operatorMargin > 0) || available + 1e-9 < operatorMargin) return 0;
+  const stepped = Math.floor((operatorMargin + step * 1e-9) / step) * step;
+  return Number(Math.max(0, stepped).toFixed(12));
+}
+
 export function p10ExecutableTicketCapital(input: {
   available: number;
   capital: number;

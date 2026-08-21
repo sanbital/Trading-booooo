@@ -16,7 +16,7 @@ OLD_200_CAP = '''  if (exchange === "binance_futures") {\n    const operatorMarg
 
 NEW_FUTURES = '''  if (exchange === "binance_futures") {\n    const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 200);\n    if (operatorMargin > 0) {\n      return p10ExactFuturesTicketCapital(available, operatorMargin, 0.01);\n    }\n    minimum = FUTURES_MIN_ENTRY_MARGIN_USDT;\n  }\n'''
 
-TEST_MARKER = 'Deno.test("P10 exact futures margin is per slot and never downsizes"'
+TEST_MARKER = 'Deno.test("P10 futures target notional is the configured margin times leverage"'
 TESTS = r'''
 
 Deno.test("P10 exact futures margin is per slot and never downsizes", () => {

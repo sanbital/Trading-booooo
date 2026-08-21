@@ -4,6 +4,7 @@ import {
   evaluateP10Exit,
   P10_CONFIG,
   P10_HOUR_MS,
+  p10ExactFuturesTicketCapital,
   p10ExecutableTicketCapital,
   type P10PreparedBar,
   planP10Entry,
@@ -158,4 +159,78 @@ Deno.test("P10 slow exit updates trail on a completed bar and supports short par
   });
   assertEquals(short.action, "TARGET_1");
   assertEquals(short.fraction, P10_CONFIG.partialFraction);
+});
+
+// The live regression this replaces: with allocation=200, slots=10 and an ALL-mode wallet,
+// the generic ticket path sized a futures slot from capital/slots and produced 50 USDT of
+// margin -- a 150 USDT notional at 3x instead of the operator's 600.
+Deno.test("P10 futures slot margin is the configured margin, not capital divided by slots", () => {
+  const wallet = 520.37;
+  assertEquals(
+    p10ExecutableTicketCapital({
+      available: wallet,
+      capital: wallet,
+      slots: 10,
+      maximum: 200,
+      minimum: 50,
+      step: 0.01,
+    }),
+    52.03,
+  );
+  assertEquals(p10ExactFuturesTicketCapital(wallet, 200), 200);
+});
+
+Deno.test("P10 futures target notional is the configured margin times leverage", () => {
+  const margin = p10ExactFuturesTicketCapital(5_000, 200);
+  assertEquals(margin, 200);
+  assertEquals(margin * 1, 200);
+  assertEquals(margin * 3, 600);
+  assertEquals(margin * 5, 1_000);
+});
+
+Deno.test("P10 futures margin holds across wallet sizes and rounds to the 0.01 step", () => {
+  assertEquals(p10ExactFuturesTicketCapital(500, 200), 200);
+  assertEquals(p10ExactFuturesTicketCapital(200, 200), 200);
+  assertEquals(p10ExactFuturesTicketCapital(334, 200), 200);
+  assertEquals(p10ExactFuturesTicketCapital(5_000, 200), 200);
+  assertEquals(p10ExactFuturesTicketCapital(1_000, 133.339), 133.33);
+});
+
+Deno.test("P10 futures refuses a downsized ticket when the wallet cannot fund a whole slot", () => {
+  // Never shrink 200 into a smaller live order: a zero ticket makes the caller skip the entry.
+  assertEquals(p10ExactFuturesTicketCapital(199.99, 200), 0);
+  assertEquals(p10ExactFuturesTicketCapital(50, 200), 0);
+  assertEquals(p10ExactFuturesTicketCapital(0, 200), 0);
+  // 334 funds one 200 ticket; the 134 left behind funds none.
+  assertEquals(p10ExactFuturesTicketCapital(334, 200), 200);
+  assertEquals(p10ExactFuturesTicketCapital(134, 200), 0);
+  // An unset operator margin falls back to the generic path instead of forcing a ticket.
+  assertEquals(p10ExactFuturesTicketCapital(500, 0), 0);
+});
+
+Deno.test("P10 spot venues keep generic capital divided by slots sizing", () => {
+  // Binance spot unchanged by the futures-only exact margin.
+  assertEquals(
+    p10ExecutableTicketCapital({
+      available: 500,
+      capital: 500,
+      slots: 10,
+      maximum: 100,
+      minimum: 10,
+      step: 0.01,
+    }),
+    50,
+  );
+  // Upbit KRW unchanged, including its 1000 KRW step.
+  assertEquals(
+    p10ExecutableTicketCapital({
+      available: 500_000,
+      capital: 500_000,
+      slots: 10,
+      maximum: 100_000,
+      minimum: 5_000,
+      step: 1_000,
+    }),
+    50_000,
+  );
 });
