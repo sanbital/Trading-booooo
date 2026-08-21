@@ -119,6 +119,30 @@ export interface P10ExitDecision {
 
 const finite = (value: unknown, fallback = 0) =>
   Number.isFinite(Number(value)) ? Number(value) : fallback;
+
+export function p10ExecutableTicketCapital(input: {
+  available: number;
+  capital: number;
+  slots: number;
+  maximum: number;
+  minimum: number;
+  step: number;
+}) {
+  const available = Math.max(0, finite(input.available));
+  const capital = Math.max(0, finite(input.capital));
+  const slots = Math.max(1, Math.floor(finite(input.slots, 1)));
+  const maximum = Math.max(0, finite(input.maximum));
+  const minimum = Math.max(0, finite(input.minimum));
+  const step = Math.max(0.000000000001, finite(input.step, 0.01));
+  const spendable = Math.min(available, maximum);
+  const target = spendable + 1e-9 >= minimum
+    ? Math.max(capital / slots, minimum)
+    : capital / slots;
+  const stepped =
+    Math.floor((Math.min(spendable, target) + step * 1e-9) / step) * step;
+  return Number(Math.max(0, stepped).toFixed(12));
+}
+
 const mean = (values: number[]) =>
   values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 const pct = (now: number, before: number) => before > 0 ? (now / before - 1) * 100 : 0;
