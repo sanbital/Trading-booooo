@@ -44,62 +44,68 @@ jobs:
           path = Path('supabase/functions/market-autotrader/index.ts')
           text = path.read_text()
 
-          anchor1 = '''  const stats = {} as Record<Exchange, any>;
-          const circuits = {} as Record<Exchange, any>;
-          const positionSlots = clamp(finite((settings as any).scalp_position_slots, 3), 1, 20);
-          '''
-          replacement1 = '''  const stats = {} as Record<Exchange, any>;
-          const circuits = {} as Record<Exchange, any>;
-          const circuitDiagnostics = {} as Record<Exchange, JsonRecord>;
-          const positionSlots = clamp(finite((settings as any).scalp_position_slots, 3), 1, 20);
-          const diagnosticNumber = (value: unknown): JsonRecord => {
-            const isNull = value === null;
-            const isEmptyString = typeof value === "string" && value.trim() === "";
-            const numeric = Number(value);
-            const isFiniteNumber = !isNull && !isEmptyString && Number.isFinite(numeric);
-            return {
-              present: value !== undefined,
-              is_null: isNull,
-              is_empty_string: isEmptyString,
-              type: typeof value,
-              finite: isFiniteNumber,
-              value: isFiniteNumber ? numeric : null,
-            };
-          };
-          '''
+          anchor1 = "\n".join([
+              "  const stats = {} as Record<Exchange, any>;",
+              "  const circuits = {} as Record<Exchange, any>;",
+              "  const positionSlots = clamp(finite((settings as any).scalp_position_slots, 3), 1, 20);",
+          ])
+          replacement1 = "\n".join([
+              "  const stats = {} as Record<Exchange, any>;",
+              "  const circuits = {} as Record<Exchange, any>;",
+              "  const circuitDiagnostics = {} as Record<Exchange, JsonRecord>;",
+              "  const positionSlots = clamp(finite((settings as any).scalp_position_slots, 3), 1, 20);",
+              "  const diagnosticNumber = (value: unknown): JsonRecord => {",
+              "    const isNull = value === null;",
+              "    const isEmptyString = typeof value === \"string\" && value.trim() === \"\";",
+              "    const numeric = Number(value);",
+              "    const isFiniteNumber = !isNull && !isEmptyString && Number.isFinite(numeric);",
+              "    return {",
+              "      present: value !== undefined,",
+              "      is_null: isNull,",
+              "      is_empty_string: isEmptyString,",
+              "      type: typeof value,",
+              "      finite: isFiniteNumber,",
+              "      value: isFiniteNumber ? numeric : null,",
+              "    };",
+              "  };",
+          ])
 
-          anchor2 = '''    const limits = exchangeLimits(settings, exchange);
-          circuits[exchange] = evaluateCircuit({
-          '''
-          replacement2 = '''    const limits = exchangeLimits(settings, exchange);
-          const managedState = managed.managed || {};
-          const managedCapitalQuote = finite(managedState.managedCapitalQuote);
-          const bookedExposureQuote = finite(managedState.openCostQuote);
-          circuitDiagnostics[exchange] = {
-            raw_total_equity_quote: diagnosticNumber(raw?.total_equity_quote),
-            raw_available_quote: diagnosticNumber(raw?.available_quote),
-            raw_locked_quote: diagnosticNumber(raw?.locked_quote),
-            capital_base_quote: finite(managedState.capitalBaseQuote),
-            booked_exposure_quote: bookedExposureQuote,
-            bot_position_value_quote: finite(managedState.botPositionValueQuote),
-            reserved_exposure_quote: finite(managedState.reservedExposureQuote),
-            managed_capital_quote: managedCapitalQuote,
-            unallocated_within_cap_quote: Math.max(0, managedCapitalQuote - bookedExposureQuote),
-            managed_available_quote: finite(managedState.managedAvailableQuote),
-            circuit_min_order_quote: limits.minOrder,
-          };
-          circuits[exchange] = evaluateCircuit({
-          '''
+          anchor2 = "\n".join([
+              "    const limits = exchangeLimits(settings, exchange);",
+              "    circuits[exchange] = evaluateCircuit({",
+          ])
+          replacement2 = "\n".join([
+              "    const limits = exchangeLimits(settings, exchange);",
+              "    const managedState = managed.managed || {};",
+              "    const managedCapitalQuote = finite(managedState.managedCapitalQuote);",
+              "    const bookedExposureQuote = finite(managedState.openCostQuote);",
+              "    circuitDiagnostics[exchange] = {",
+              "      raw_total_equity_quote: diagnosticNumber(raw?.total_equity_quote),",
+              "      raw_available_quote: diagnosticNumber(raw?.available_quote),",
+              "      raw_locked_quote: diagnosticNumber(raw?.locked_quote),",
+              "      capital_base_quote: finite(managedState.capitalBaseQuote),",
+              "      booked_exposure_quote: bookedExposureQuote,",
+              "      bot_position_value_quote: finite(managedState.botPositionValueQuote),",
+              "      reserved_exposure_quote: finite(managedState.reservedExposureQuote),",
+              "      managed_capital_quote: managedCapitalQuote,",
+              "      unallocated_within_cap_quote: Math.max(0, managedCapitalQuote - bookedExposureQuote),",
+              "      managed_available_quote: finite(managedState.managedAvailableQuote),",
+              "      circuit_min_order_quote: limits.minOrder,",
+              "    };",
+              "    circuits[exchange] = evaluateCircuit({",
+          ])
 
-          anchor3 = '''      strategy_key: P10_STRATEGY_KEY,
-              circuits,
-              stats,
-          '''
-          replacement3 = '''      strategy_key: P10_STRATEGY_KEY,
-              circuits,
-              circuit_diagnostics: circuitDiagnostics,
-              stats,
-          '''
+          anchor3 = "\n".join([
+              "      strategy_key: P10_STRATEGY_KEY,",
+              "      circuits,",
+              "      stats,",
+          ])
+          replacement3 = "\n".join([
+              "      strategy_key: P10_STRATEGY_KEY,",
+              "      circuits,",
+              "      circuit_diagnostics: circuitDiagnostics,",
+              "      stats,",
+          ])
 
           for name, anchor, replacement in [
               ('scan diagnostic declaration', anchor1, replacement1),
@@ -124,7 +130,7 @@ jobs:
           grep -F 'raw_total_equity_quote: diagnosticNumber' supabase/functions/market-autotrader/index.ts
           grep -F 'booked_exposure_quote: bookedExposureQuote' supabase/functions/market-autotrader/index.ts
           git diff --check
-          git diff --exit-code -- supabase/functions/market-autotrader/core.ts supabase/functions/_shared/p10-policy.ts || true
+          test "$(git diff --name-only | tr -d '\r')" = "supabase/functions/market-autotrader/index.ts"
 
       - name: Commit only observability change to isolated head
         shell: bash
