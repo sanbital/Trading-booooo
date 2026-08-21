@@ -1,0 +1,69 @@
+name: Patch Dashboard Futures Return Label
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/patch-dashboard-futures-return-label.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Clarify futures return and combined equity flow labels
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('docs/realized-performance.js')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''          <div><span>Binance 계정 수익률 · 오늘</span><b class="${tone(accountCombined?.account_return_pct)}">${pct(accountCombined?.account_return_pct)}</b></div>
+          <div><span>선물 계정 수익률 · 오늘</span><b class="${tone(accountFutures?.account_return_pct)}">${pct(accountFutures?.account_return_pct)}</b></div>'''
+          new = '''          <div><span>선물 계정 수익률 · 오늘</span><b class="${tone(accountFutures?.account_return_pct)}">${pct(accountFutures?.account_return_pct)}</b></div>
+          <div><span>전체 Equity 변동률 · 오늘</span><b class="${tone(accountCombined?.account_return_pct)}">${pct(accountCombined?.account_return_pct)}</b></div>'''
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit('summary label block not found')
+
+          old_note = '계정 수익률: Binance Equity, 오늘 00:00 KST 이후 첫 스냅샷 대비 · 전략 ROI: 거래 투입 증거금 기준'
+          new_note = '선물 계정 수익률: Binance Futures Equity 기준 · 전체 Equity 변동률: 현물+선물 합산이며 자금이동 포함 · 전략 ROI: 거래 투입 증거금 기준'
+          if old_note in text:
+              text = text.replace(old_note, new_note, 1)
+          elif new_note not in text:
+              raise SystemExit('definition note not found')
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Validate dashboard module
+        shell: bash
+        run: |
+          node --check docs/realized-performance.js
+          grep -Fq '선물 계정 수익률 · 오늘' docs/realized-performance.js
+          grep -Fq '전체 Equity 변동률 · 오늘' docs/realized-performance.js
+          grep -Fq '자금이동 포함' docs/realized-performance.js
+
+      - name: Commit label correction if needed
+        shell: bash
+        run: |
+          if git diff --quiet -- docs/realized-performance.js; then
+            echo "labels already corrected"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/realized-performance.js
+          git commit -m "dashboard: distinguish futures return from equity flows"
+          git push origin HEAD:main
