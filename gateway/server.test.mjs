@@ -51,6 +51,10 @@ test("gateway blocks orders from a missing or different engine revision", () => 
     module.assertOrderEngineVersion({ engine_version: module.VERSION }),
     true,
   );
+  assert.equal(
+    module.assertOrderEngineVersion({ engine_version: "7.6.0-BINANCE-FUTURES" }),
+    true,
+  );
 });
 test("Upbit JWT has three HS512 segments", () => {
   const token = module.createUpbitJwt({ market: "KRW-BTC" });
@@ -268,7 +272,7 @@ test("the 50 USDT margin floor applies only to entries, never reduce-only exits"
   assert.equal(Number(order.price) * Number(order.quantity), 10);
 });
 
-test("a futures sell is always reduce-only in one-way mode", () => {
+test("a long close is reduce-only in one-way mode", () => {
   const { order } = module.conformFuturesOrder(
     { market: "BTCUSDT", side: "SELL", type: "MARKET", quantity: 0.0125, identifier: "tb-x-1" },
     FUTURES_INFO,
@@ -290,6 +294,64 @@ test("hedge-mode orders carry the LONG position side instead of reduceOnly", () 
   assert.equal(order.reduceOnly, undefined);
 });
 
+test("P10 short entry and close map to safe one-way and hedge-mode intents", () => {
+  const shortEntry = module.conformFuturesOrder(
+    {
+      market: "BTCUSDT",
+      side: "SELL",
+      position_side: "SHORT",
+      position_effect: "OPEN",
+      type: "LIMIT",
+      price: 60000,
+      quantity: 0.01,
+      identifier: "tb-short-open",
+    },
+    FUTURES_INFO,
+    false,
+    3,
+  );
+  assert.equal(shortEntry.order.reduceOnly, undefined);
+  assert.equal(shortEntry.intent.positionSide, "SHORT");
+  assert.equal(shortEntry.intent.effect, "OPEN");
+
+  const shortClose = module.conformFuturesOrder(
+    {
+      market: "BTCUSDT",
+      side: "BUY",
+      position_side: "SHORT",
+      position_effect: "CLOSE",
+      type: "MARKET",
+      quantity: 0.01,
+      identifier: "tb-short-close",
+    },
+    FUTURES_INFO,
+    false,
+  );
+  assert.equal(shortClose.order.reduceOnly, "true");
+
+  const hedgeShort = module.conformFuturesOrder(
+    {
+      market: "BTCUSDT",
+      side: "SELL",
+      position_side: "SHORT",
+      position_effect: "OPEN",
+      type: "LIMIT",
+      price: 60000,
+      quantity: 0.01,
+      identifier: "tb-short-hedge",
+    },
+    FUTURES_INFO,
+    true,
+    3,
+  );
+  assert.equal(hedgeShort.order.positionSide, "SHORT");
+  assert.equal(hedgeShort.order.reduceOnly, undefined);
+  assert.throws(
+    () => module.resolveFuturesIntent({ side: "BUY", position_side: "SHORT", position_effect: "OPEN" }),
+    /requires SELL/,
+  );
+});
+
 test("futures maker entries are post-only GTX limits", () => {
   const { order } = module.conformFuturesOrder(
     {
@@ -309,7 +371,7 @@ test("futures maker entries are post-only GTX limits", () => {
   assert.equal(order.reduceOnly, undefined);
 });
 
-test("futures market buys stay blocked and sub-minimum notionals are rejected", () => {
+test("futures market openings stay blocked and sub-minimum notionals are rejected", () => {
   assert.throws(
     () =>
       module.conformFuturesOrder(
@@ -317,7 +379,7 @@ test("futures market buys stay blocked and sub-minimum notionals are rejected", 
         FUTURES_INFO,
         false,
       ),
-    /restricted to sells/,
+    /restricted to position closes/,
   );
   assert.throws(
     () =>
