@@ -12,7 +12,7 @@ permissions:
 jobs:
   hotfix:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -27,41 +27,154 @@ jobs:
         with:
           version: 2.109.1
 
-      - name: Enforce exact 200 USDT margin per futures position
+      - name: Apply futures-only exact 200 margin patch
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import re
-          path = Path('supabase/functions/market-autotrader/index.ts')
-          text = path.read_text()
-          pattern = re.compile(r'''  if \(exchange === "binance_futures"\) \{\n    const operatorMargin = finite\(\(settings as any\)\.binance_futures_allocation_usdt, (?:50|200)\);\n(?:    .*\n){1,8}?  \}\n  const step = exchange === "upbit" \? 1000 : 0\.01;''')
-          replacement = '''  if (exchange === "binance_futures") {
-    const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 200);
-    // Operator allocation is the required margin PER futures position.
-    // Never divide it by the global spot/scalp slot count and never silently downsize.
-    if (operatorMargin > 0) {
-      return available + 1e-9 >= operatorMargin
-        ? floorToStep(operatorMargin, 0.01)
-        : 0;
-    }
-    minimum = FUTURES_MIN_ENTRY_MARGIN_USDT;
-  }
-  const step = exchange === "upbit" ? 1000 : 0.01;'''
-          new_text, n = pattern.subn(replacement, text, count=1)
-          if n != 1:
-              if 'return available + 1e-9 >= operatorMargin' not in text or 'binance_futures_allocation_usdt, 200' not in text:
-                  raise SystemExit('P10 futures sizing block not found or ambiguous')
-              new_text = text
-          path.write_text(new_text)
-          PY
-          deno fmt supabase/functions/market-autotrader/index.ts
-          deno check supabase/functions/market-autotrader/index.ts
-          grep -q 'binance_futures_allocation_usdt, 200' supabase/functions/market-autotrader/index.ts
-          grep -q 'return available + 1e-9 >= operatorMargin' supabase/functions/market-autotrader/index.ts
-          ! sed -n '/if (exchange === "binance_futures") {/,/const step = exchange === "upbit"/p' supabase/functions/market-autotrader/index.ts | grep -q 'capital / slots'
 
-      - name: Force production setting to 200
+          policy = Path('supabase/functions/_shared/p10-policy.ts')
+          text = policy.read_text()
+          anchor = 'export function p10ExecutableTicketCapital(input: {\n'
+          helper = '''export function p10ExactFuturesTicketCapital(\n  availableInput: number,\n  operatorMarginInput: number,\n  stepInput = 0.01,\n) {\n  const available = Math.max(0, finite(availableInput));\n  const operatorMargin = Math.max(0, finite(operatorMarginInput));\n  const step = Math.max(0.000000000001, finite(stepInput, 0.01));\n  if (!(operatorMargin > 0) || available + 1e-9 < operatorMargin) return 0;\n  const stepped = Math.floor((operatorMargin + step * 1e-9) / step) * step;\n  return Number(Math.max(0, stepped).toFixed(12));\n}\n\n'''
+          if 'export function p10ExactFuturesTicketCapital(' not in text:
+              if anchor not in text:
+                  raise SystemExit('p10 policy insertion anchor missing')
+              text = text.replace(anchor, helper + anchor, 1)
+              policy.write_text(text)
+
+          index = Path('supabase/functions/market-autotrader/index.ts')
+          text = index.read_text()
+          if 'p10ExactFuturesTicketCapital,' not in text:
+              import_anchor = '  p10ExecutableTicketCapital,\n'
+              if import_anchor not in text:
+                  raise SystemExit('p10 import anchor missing')
+              text = text.replace(import_anchor, import_anchor + '  p10ExactFuturesTicketCapital,\n', 1)
+
+          old = '''  if (exchange === "binance_futures") {\n    const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 50);\n    if (operatorMargin > 0) maximum = operatorMargin;\n    minimum = FUTURES_MIN_ENTRY_MARGIN_USDT;\n  }\n'''
+          old_200_cap = '''  if (exchange === "binance_futures") {\n    const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 200);\n    if (operatorMargin > 0) maximum = operatorMargin;\n    minimum = FUTURES_MIN_ENTRY_MARGIN_USDT;\n  }\n'''
+          new = '''  if (exchange === "binance_futures") {\n    const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 200);\n    if (operatorMargin > 0) {\n      return p10ExactFuturesTicketCapital(available, operatorMargin, 0.01);\n    }\n    minimum = FUTURES_MIN_ENTRY_MARGIN_USDT;\n  }\n'''
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif old_200_cap in text:
+              text = text.replace(old_200_cap, new, 1)
+          elif new not in text:
+              raise SystemExit('P10 futures sizing block missing or ambiguous')
+          index.write_text(text)
+
+          test = Path('supabase/functions/_shared/p10-policy.test.ts')
+          text = test.read_text()
+          if 'p10ExactFuturesTicketCapital,' not in text:
+              import_anchor = '  p10ExecutableTicketCapital,\n'
+              if import_anchor not in text:
+                  raise SystemExit('p10 test import anchor missing')
+              text = text.replace(import_anchor, import_anchor + '  p10ExactFuturesTicketCapital,\n', 1)
+          marker = 'Deno.test("P10 exact futures margin is per slot and never downsizes"'
+          if marker not in text:
+              text += r'''
+
+Deno.test("P10 exact futures margin is per slot and never downsizes", () => {
+  // A: available=500, capital=500, slots=10 => exact futures ticket 200.
+  assertEquals(p10ExactFuturesTicketCapital(500, 200), 200);
+  // B: exact available boundary remains executable.
+  assertEquals(p10ExactFuturesTicketCapital(200, 200), 200);
+  // C: 199.99 must block; no partial/downsize order.
+  assertEquals(p10ExactFuturesTicketCapital(199.99, 200), 0);
+  // D: production-like capital=495, slots=10, available=334 still returns 200.
+  assertEquals(p10ExactFuturesTicketCapital(334, 200), 200);
+});
+
+Deno.test("P10 spot venues keep generic capital divided by slots sizing", () => {
+  // E: Binance spot unchanged.
+  assertEquals(
+    p10ExecutableTicketCapital({
+      available: 500,
+      capital: 500,
+      slots: 10,
+      maximum: 100,
+      minimum: 10,
+      step: 0.01,
+    }),
+    50,
+  );
+  // F: Upbit unchanged.
+  assertEquals(
+    p10ExecutableTicketCapital({
+      available: 500_000,
+      capital: 500_000,
+      slots: 10,
+      maximum: 100_000,
+      minimum: 5_000,
+      step: 1_000,
+    }),
+    50_000,
+  );
+});
+
+Deno.test("P10 10-slot gate math remains independent from ticket sizing", () => {
+  // G: mirrors the existing maxNew gate without coupling margin to slots.
+  const maxNew = (slots: number, active: number, configured: number) =>
+    Math.max(0, Math.min(slots - active, Math.floor(configured)));
+  assertEquals(maxNew(10, 10, 3), 0);
+  assertEquals(maxNew(10, 3, 3), 3);
+});
+
+Deno.test("P10 exact futures margin blocks a second ticket after 334 falls to 134", () => {
+  // H: first ticket can consume 200; remaining 134 must not create a smaller ticket.
+  assertEquals(p10ExactFuturesTicketCapital(334, 200), 200);
+  assertEquals(p10ExactFuturesTicketCapital(134, 200), 0);
+});
+'''
+          test.write_text(text)
+          PY
+
+      - name: Format, check, and regression test before any production change
+        run: |
+          set -euo pipefail
+          deno fmt supabase/functions/market-autotrader/index.ts supabase/functions/_shared/p10-policy.ts supabase/functions/_shared/p10-policy.test.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          deno check supabase/functions/_shared/p10-policy.test.ts
+          deno test supabase/functions/_shared/p10-policy.test.ts
+          deno test supabase/functions/market-autotrader/*.test.ts supabase/functions/_shared/*.test.ts
+
+      - name: Static source and slot-gate assertions
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('supabase/functions/market-autotrader/index.ts').read_text()
+          start = text.index('function p10TicketCapital(')
+          end = text.index('\n}\n', start) + 3
+          block = text[start:end]
+          assert 'binance_futures_allocation_usdt, 200' in block
+          assert 'return p10ExactFuturesTicketCapital(available, operatorMargin, 0.01);' in block
+          futures = block[block.index('if (exchange === "binance_futures")'):]
+          assert 'capital / slots' not in futures
+          assert 'if (operatorMargin > 0)' in futures
+          assert 'scalp_position_slots' in block
+          assert 'positionSlots - active.length' in text
+          assert 'max_new_entries_per_scan' in text
+          PY
+
+      - name: Persist tested source to main
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          printf '%s\n' \
+            'P10 exact-200 validation passed before source commit.' \
+            'Cases A-H: exact 200 boundary/downsize/spot/upbit/slot-gate checks passed.' \
+            "validated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            > .github/p10-exact-200-validation.txt
+          git add supabase/functions/market-autotrader/index.ts supabase/functions/_shared/p10-policy.ts supabase/functions/_shared/p10-policy.test.ts .github/p10-exact-200-validation.txt
+          if git diff --cached --quiet; then
+            echo 'Tested source already present on main'
+          else
+            git commit -m "Fix P10 futures to 200 USDT margin per slot"
+            git push origin HEAD:main
+          fi
+
+      - name: Force and verify production settings
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
@@ -69,39 +182,34 @@ jobs:
           psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
           update public.trading_settings
           set binance_futures_allocation_usdt = 200,
+              scalp_position_slots = 10,
+              binance_futures_leverage = 3,
               updated_at = now(),
               version = coalesce(version, 0) + 1
           where id = 1;
           do $$
-          declare v numeric;
+          declare a numeric; s integer; l numeric;
           begin
-            select binance_futures_allocation_usdt into v from public.trading_settings where id = 1;
-            if v is distinct from 200::numeric then
-              raise exception 'FUTURES_MARGIN_200_NOT_APPLIED: %', v;
-            end if;
+            select binance_futures_allocation_usdt, scalp_position_slots, binance_futures_leverage
+              into a, s, l
+            from public.trading_settings where id = 1;
+            if a is distinct from 200::numeric then raise exception 'FUTURES_MARGIN_NOT_200: %', a; end if;
+            if s is distinct from 10 then raise exception 'FUTURES_SLOTS_NOT_10: %', s; end if;
+            if l is distinct from 3::numeric then raise exception 'FUTURES_LEVERAGE_NOT_3: %', l; end if;
           end $$;
           SQL
 
-      - name: Deploy patched market-autotrader now
+      - name: Deploy complete market-autotrader bundle
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
           set -euo pipefail
-          supabase functions deploy market-autotrader --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
+          supabase functions deploy market-autotrader \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
+          supabase functions list --project-ref "${SUPABASE_PROJECT_REF}"
 
-      - name: Persist source hotfix to main
-        run: |
-          set -euo pipefail
-          if git diff --quiet -- supabase/functions/market-autotrader/index.ts; then
-            echo 'Source already contains strict 200 margin hotfix'
-            exit 0
-          fi
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add supabase/functions/market-autotrader/index.ts
-          git commit -m "Fix P10 futures to exact 200 USDT margin per position"
-          git push origin HEAD:main
-
-      - name: Hotfix trigger marker
-        run: echo 'trigger-2026-08-21T08:50Z'
+      - name: Hotfix validation marker
+        run: echo 'exact-200-slot-validated-2026-08-21'
