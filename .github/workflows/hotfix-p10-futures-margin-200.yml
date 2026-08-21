@@ -1,0 +1,108 @@
+name: Hotfix P10 Futures Margin 200
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/hotfix-p10-futures-margin-200.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  hotfix:
+    if: contains(github.event.head_commit.message, 'Hotfix P10 futures margin to 200 USDT')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Set production futures operator margin to 200 USDT
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL}"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
+          update public.trading_settings
+          set binance_futures_allocation_usdt = 200,
+              updated_at = now(),
+              version = coalesce(version, 0) + 1
+          where id = 1;
+
+          do $$
+          declare v numeric;
+          begin
+            select binance_futures_allocation_usdt into v
+            from public.trading_settings where id = 1;
+            if v is distinct from 200::numeric then
+              raise exception 'FUTURES_MARGIN_200_NOT_APPLIED: %', v;
+            end if;
+          end $$;
+          SQL
+
+      - name: Make P10 futures allocation a per-position margin
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('supabase/functions/market-autotrader/index.ts')
+          text = path.read_text()
+          old = '''  if (exchange === "binance_futures") {
+    const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 50);
+    if (operatorMargin > 0) maximum = operatorMargin;
+    minimum = FUTURES_MIN_ENTRY_MARGIN_USDT;
+  }
+  const step = exchange === "upbit" ? 1000 : 0.01;
+  return p10ExecutableTicketCapital({
+    available,
+    capital,
+    slots,
+    maximum,
+    minimum,
+    step,
+  });'''
+          new = '''  if (exchange === "binance_futures") {
+    const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 200);
+    // Futures allocation is an operator-selected margin PER POSITION, not a pool to
+    // divide by the global spot/scalp slot count. Never exceed live available margin.
+    if (operatorMargin > 0) {
+      return floorToStep(Math.min(available, operatorMargin), 0.01);
+    }
+    minimum = FUTURES_MIN_ENTRY_MARGIN_USDT;
+  }
+  const step = exchange === "upbit" ? 1000 : 0.01;
+  return p10ExecutableTicketCapital({
+    available,
+    capital,
+    slots,
+    maximum,
+    minimum,
+    step,
+  });'''
+          if old not in text:
+              raise SystemExit('expected P10 futures sizing block not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Validate hotfix
+        run: |
+          set -euo pipefail
+          deno check supabase/functions/market-autotrader/index.ts
+          grep -q 'operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 200)' supabase/functions/market-autotrader/index.ts
+          grep -q 'return floorToStep(Math.min(available, operatorMargin), 0.01)' supabase/functions/market-autotrader/index.ts
+
+      - name: Persist hotfix to main
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add supabase/functions/market-autotrader/index.ts
+          git commit -m "Fix P10 futures per-position margin at 200 USDT"
+          git push origin HEAD:main
