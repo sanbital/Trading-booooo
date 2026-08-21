@@ -4,9 +4,46 @@ import {
   evaluateP10Exit,
   P10_CONFIG,
   P10_HOUR_MS,
+  p10ExecutableTicketCapital,
   type P10PreparedBar,
   planP10Entry,
 } from "./p10-policy.ts";
+
+Deno.test("P10 permits one executable minimum ticket when slot division falls below it", () => {
+  assertEquals(
+    p10ExecutableTicketCapital({
+      available: 119.90743764675331,
+      capital: 119.90743764675331,
+      slots: 3,
+      maximum: 40,
+      minimum: 40,
+      step: 0.01,
+    }),
+    40,
+  );
+  assertEquals(
+    p10ExecutableTicketCapital({
+      available: 66.65928212,
+      capital: 66.65928212,
+      slots: 3,
+      maximum: 50,
+      minimum: 50,
+      step: 0.01,
+    }),
+    50,
+  );
+  assertEquals(
+    p10ExecutableTicketCapital({
+      available: 16.65928212,
+      capital: 66.65928212,
+      slots: 3,
+      maximum: 50,
+      minimum: 50,
+      step: 0.01,
+    }),
+    16.65,
+  );
+});
 
 function directionalBars(direction: 1 | -1) {
   const bars = [];
