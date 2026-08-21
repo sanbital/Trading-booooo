@@ -50,7 +50,6 @@ jobs:
   const step = exchange === "upbit" ? 1000 : 0.01;'''
           new_text, n = pattern.subn(replacement, text, count=1)
           if n != 1:
-              # Accept if the strict patch is already present.
               if 'return available + 1e-9 >= operatorMargin' not in text or 'binance_futures_allocation_usdt, 200' not in text:
                   raise SystemExit('P10 futures sizing block not found or ambiguous')
               new_text = text
@@ -103,3 +102,6 @@ jobs:
           git add supabase/functions/market-autotrader/index.ts
           git commit -m "Fix P10 futures to exact 200 USDT margin per position"
           git push origin HEAD:main
+
+      - name: Hotfix trigger marker
+        run: echo 'trigger-2026-08-21T08:50Z'
