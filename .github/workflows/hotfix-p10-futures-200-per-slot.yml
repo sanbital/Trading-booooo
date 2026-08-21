@@ -1,0 +1,77 @@
+name: Hotfix P10 Futures 200 Per Slot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/hotfix-p10-futures-200-per-slot.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Patch P10 futures sizing
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('supabase/functions/market-autotrader/index.ts')
+          s = p.read_text()
+          old = '''  if (exchange === "binance_futures") {
+    const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 50);
+    if (operatorMargin > 0) maximum = operatorMargin;
+    minimum = FUTURES_MIN_ENTRY_MARGIN_USDT;
+  }
+  const step = exchange === "upbit" ? 1000 : 0.01;
+  return p10ExecutableTicketCapital({
+    available,
+    capital,
+    slots,
+    maximum,
+    minimum,
+    step,
+  });'''
+          new = '''  if (exchange === "binance_futures") {
+    // Operator contract: one futures slot posts exactly the configured margin.
+    // Do not divide this per-slot amount by scalp_position_slots, and never shrink
+    // a live futures order below it when free margin is insufficient.
+    const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 200);
+    if (operatorMargin <= 0) return 0;
+    if (available + 1e-9 < operatorMargin) return 0;
+    const step = 0.01;
+    return Number((Math.floor((operatorMargin + step * 1e-9) / step) * step).toFixed(12));
+  }
+  const step = exchange === "upbit" ? 1000 : 0.01;
+  return p10ExecutableTicketCapital({
+    available,
+    capital,
+    slots,
+    maximum,
+    minimum,
+    step,
+  });'''
+          if old not in s:
+              raise SystemExit('expected P10 futures sizing block not found; refusing unsafe patch')
+          p.write_text(s.replace(old, new, 1))
+
+      - name: Verify exact contract
+        shell: bash
+        run: |
+          grep -F 'one futures slot posts exactly the configured margin' supabase/functions/market-autotrader/index.ts
+          grep -F 'if (available + 1e-9 < operatorMargin) return 0;' supabase/functions/market-autotrader/index.ts
+          grep -F 'scalp_position_slots' supabase/functions/market-autotrader/index.ts >/dev/null
+
+      - name: Commit hotfix
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add supabase/functions/market-autotrader/index.ts
+          git commit -m 'fix: make P10 futures margin 200 USDT per slot'
+          git push origin HEAD:main
