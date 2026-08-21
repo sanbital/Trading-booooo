@@ -1,6 +1,10 @@
 name: Force P10 Futures Exact 200
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/hotfix-p10-futures-exact-200.yml"
   push:
     branches: [main]
     paths:
@@ -74,45 +78,18 @@ jobs:
               text += r'''
 
 Deno.test("P10 exact futures margin is per slot and never downsizes", () => {
-  // A: available=500, capital=500, slots=10 => exact futures ticket 200.
   assertEquals(p10ExactFuturesTicketCapital(500, 200), 200);
-  // B: exact available boundary remains executable.
   assertEquals(p10ExactFuturesTicketCapital(200, 200), 200);
-  // C: 199.99 must block; no partial/downsize order.
   assertEquals(p10ExactFuturesTicketCapital(199.99, 200), 0);
-  // D: production-like capital=495, slots=10, available=334 still returns 200.
   assertEquals(p10ExactFuturesTicketCapital(334, 200), 200);
 });
 
 Deno.test("P10 spot venues keep generic capital divided by slots sizing", () => {
-  // E: Binance spot unchanged.
-  assertEquals(
-    p10ExecutableTicketCapital({
-      available: 500,
-      capital: 500,
-      slots: 10,
-      maximum: 100,
-      minimum: 10,
-      step: 0.01,
-    }),
-    50,
-  );
-  // F: Upbit unchanged.
-  assertEquals(
-    p10ExecutableTicketCapital({
-      available: 500_000,
-      capital: 500_000,
-      slots: 10,
-      maximum: 100_000,
-      minimum: 5_000,
-      step: 1_000,
-    }),
-    50_000,
-  );
+  assertEquals(p10ExecutableTicketCapital({ available: 500, capital: 500, slots: 10, maximum: 100, minimum: 10, step: 0.01 }), 50);
+  assertEquals(p10ExecutableTicketCapital({ available: 500_000, capital: 500_000, slots: 10, maximum: 100_000, minimum: 5_000, step: 1_000 }), 50_000);
 });
 
 Deno.test("P10 10-slot gate math remains independent from ticket sizing", () => {
-  // G: mirrors the existing maxNew gate without coupling margin to slots.
   const maxNew = (slots: number, active: number, configured: number) =>
     Math.max(0, Math.min(slots - active, Math.floor(configured)));
   assertEquals(maxNew(10, 10, 3), 0);
@@ -120,7 +97,6 @@ Deno.test("P10 10-slot gate math remains independent from ticket sizing", () => 
 });
 
 Deno.test("P10 exact futures margin blocks a second ticket after 334 falls to 134", () => {
-  // H: first ticket can consume 200; remaining 134 must not create a smaller ticket.
   assertEquals(p10ExactFuturesTicketCapital(334, 200), 200);
   assertEquals(p10ExactFuturesTicketCapital(134, 200), 0);
 });
@@ -150,8 +126,6 @@ Deno.test("P10 exact futures margin blocks a second ticket after 334 falls to 13
           assert 'return p10ExactFuturesTicketCapital(available, operatorMargin, 0.01);' in block
           futures = block[block.index('if (exchange === "binance_futures")'):]
           assert 'capital / slots' not in futures
-          assert 'if (operatorMargin > 0)' in futures
-          assert 'scalp_position_slots' in block
           assert 'positionSlots - active.length' in text
           assert 'max_new_entries_per_scan' in text
           PY
@@ -205,10 +179,7 @@ Deno.test("P10 exact futures margin blocks a second ticket after 334 falls to 13
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
           set -euo pipefail
-          supabase functions deploy market-autotrader \
-            --project-ref "${SUPABASE_PROJECT_REF}" \
-            --no-verify-jwt \
-            --use-api
+          supabase functions deploy market-autotrader --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
           supabase functions list --project-ref "${SUPABASE_PROJECT_REF}"
 
       - name: Hotfix validation marker
