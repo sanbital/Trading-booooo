@@ -9584,7 +9584,22 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
   const portfolios = {} as Record<Exchange, any>;
   const stats = {} as Record<Exchange, any>;
   const circuits = {} as Record<Exchange, any>;
+  const circuitDiagnostics = {} as Record<Exchange, JsonRecord>;
   const positionSlots = clamp(finite((settings as any).scalp_position_slots, 3), 1, 20);
+  const diagnosticNumber = (value: unknown): JsonRecord => {
+    const isNull = value === null;
+    const isEmptyString = typeof value === "string" && value.trim() === "";
+    const numeric = Number(value);
+    const isFiniteNumber = !isNull && !isEmptyString && Number.isFinite(numeric);
+    return {
+      present: value !== undefined,
+      is_null: isNull,
+      is_empty_string: isEmptyString,
+      type: typeof value,
+      finite: isFiniteNumber,
+      value: isFiniteNumber ? numeric : null,
+    };
+  };
   for (const exchange of exchanges) {
     const raw = await gateway(exchange, { action: "portfolio" });
     portfolios[exchange] = raw;
@@ -9596,6 +9611,22 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
       raw,
     );
     const limits = exchangeLimits(settings, exchange);
+    const managedState = managed.managed || {};
+    const managedCapitalQuote = finite(managedState.managedCapitalQuote);
+    const bookedExposureQuote = finite(managedState.openCostQuote);
+    circuitDiagnostics[exchange] = {
+      raw_total_equity_quote: diagnosticNumber(raw?.total_equity_quote),
+      raw_available_quote: diagnosticNumber(raw?.available_quote),
+      raw_locked_quote: diagnosticNumber(raw?.locked_quote),
+      capital_base_quote: finite(managedState.capitalBaseQuote),
+      booked_exposure_quote: bookedExposureQuote,
+      bot_position_value_quote: finite(managedState.botPositionValueQuote),
+      reserved_exposure_quote: finite(managedState.reservedExposureQuote),
+      managed_capital_quote: managedCapitalQuote,
+      unallocated_within_cap_quote: Math.max(0, managedCapitalQuote - bookedExposureQuote),
+      managed_available_quote: finite(managedState.managedAvailableQuote),
+      circuit_min_order_quote: limits.minOrder,
+    };
     circuits[exchange] = evaluateCircuit({
       mode: settings.mode,
       configured: settings.configured,
@@ -9636,6 +9667,7 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
     await event("P10_ENTRY_CIRCUIT_BLOCK", "P10 new entries blocked on all exchanges", {
       strategy_key: P10_STRATEGY_KEY,
       circuits,
+      circuit_diagnostics: circuitDiagnostics,
       stats,
     }, { cycleId, level: "WARNING" });
     await patchTradingHeartbeat({
