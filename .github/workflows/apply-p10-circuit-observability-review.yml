@@ -1,11 +1,12 @@
 name: Apply P10 Circuit Observability Review Patch
 
 on:
-  push:
+  pull_request:
     branches:
-      - review/p10-circuit-observability-prod-safety-20260821
+      - review/p10-observability-runner-base-20260821
+    types: [opened, synchronize, reopened]
     paths:
-      - '.github/workflows/apply-p10-circuit-observability-review.yml'
+      - '.p10-observability-trigger'
 
 permissions:
   contents: write
@@ -16,10 +17,13 @@ concurrency:
 
 jobs:
   patch-review-branch:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'review/p10-circuit-observability-prod-safety-20260821'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Check out review branch
+      - name: Check out isolated review head
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: review/p10-circuit-observability-prod-safety-20260821
@@ -40,11 +44,12 @@ jobs:
           path = Path('supabase/functions/market-autotrader/index.ts')
           text = path.read_text()
 
-          anchor1 = '''  const circuits = {} as Record<Exchange, any>;
+          anchor1 = '''  const stats = {} as Record<Exchange, any>;
+          const circuits = {} as Record<Exchange, any>;
           const positionSlots = clamp(finite((settings as any).scalp_position_slots, 3), 1, 20);
-          for (const exchange of exchanges) {
           '''
-          replacement1 = '''  const circuits = {} as Record<Exchange, any>;
+          replacement1 = '''  const stats = {} as Record<Exchange, any>;
+          const circuits = {} as Record<Exchange, any>;
           const circuitDiagnostics = {} as Record<Exchange, JsonRecord>;
           const positionSlots = clamp(finite((settings as any).scalp_position_slots, 3), 1, 20);
           const diagnosticNumber = (value: unknown): JsonRecord => {
@@ -61,40 +66,39 @@ jobs:
               value: isFiniteNumber ? numeric : null,
             };
           };
-          for (const exchange of exchanges) {
           '''
 
           anchor2 = '''    const limits = exchangeLimits(settings, exchange);
-              circuits[exchange] = evaluateCircuit({
+          circuits[exchange] = evaluateCircuit({
           '''
           replacement2 = '''    const limits = exchangeLimits(settings, exchange);
-              const managedState = managed.managed || {};
-              const managedCapitalQuote = finite(managedState.managedCapitalQuote);
-              const bookedExposureQuote = finite(managedState.openCostQuote);
-              circuitDiagnostics[exchange] = {
-                raw_total_equity_quote: diagnosticNumber(raw?.total_equity_quote),
-                raw_available_quote: diagnosticNumber(raw?.available_quote),
-                raw_locked_quote: diagnosticNumber(raw?.locked_quote),
-                capital_base_quote: finite(managedState.capitalBaseQuote),
-                booked_exposure_quote: bookedExposureQuote,
-                bot_position_value_quote: finite(managedState.botPositionValueQuote),
-                reserved_exposure_quote: finite(managedState.reservedExposureQuote),
-                managed_capital_quote: managedCapitalQuote,
-                unallocated_within_cap_quote: Math.max(0, managedCapitalQuote - bookedExposureQuote),
-                managed_available_quote: finite(managedState.managedAvailableQuote),
-                circuit_min_order_quote: limits.minOrder,
-              };
-              circuits[exchange] = evaluateCircuit({
+          const managedState = managed.managed || {};
+          const managedCapitalQuote = finite(managedState.managedCapitalQuote);
+          const bookedExposureQuote = finite(managedState.openCostQuote);
+          circuitDiagnostics[exchange] = {
+            raw_total_equity_quote: diagnosticNumber(raw?.total_equity_quote),
+            raw_available_quote: diagnosticNumber(raw?.available_quote),
+            raw_locked_quote: diagnosticNumber(raw?.locked_quote),
+            capital_base_quote: finite(managedState.capitalBaseQuote),
+            booked_exposure_quote: bookedExposureQuote,
+            bot_position_value_quote: finite(managedState.botPositionValueQuote),
+            reserved_exposure_quote: finite(managedState.reservedExposureQuote),
+            managed_capital_quote: managedCapitalQuote,
+            unallocated_within_cap_quote: Math.max(0, managedCapitalQuote - bookedExposureQuote),
+            managed_available_quote: finite(managedState.managedAvailableQuote),
+            circuit_min_order_quote: limits.minOrder,
+          };
+          circuits[exchange] = evaluateCircuit({
           '''
 
           anchor3 = '''      strategy_key: P10_STRATEGY_KEY,
-                circuits,
-                stats,
+              circuits,
+              stats,
           '''
           replacement3 = '''      strategy_key: P10_STRATEGY_KEY,
-                circuits,
-                circuit_diagnostics: circuitDiagnostics,
-                stats,
+              circuits,
+              circuit_diagnostics: circuitDiagnostics,
+              stats,
           '''
 
           for name, anchor, replacement in [
@@ -110,7 +114,7 @@ jobs:
           path.write_text(text)
           PY
 
-      - name: Format and typecheck only
+      - name: Format, typecheck and verify bounded diff
         shell: bash
         run: |
           set -euo pipefail
@@ -119,16 +123,18 @@ jobs:
           grep -F 'circuit_diagnostics: circuitDiagnostics' supabase/functions/market-autotrader/index.ts
           grep -F 'raw_total_equity_quote: diagnosticNumber' supabase/functions/market-autotrader/index.ts
           grep -F 'booked_exposure_quote: bookedExposureQuote' supabase/functions/market-autotrader/index.ts
+          git diff --check
+          git diff --exit-code -- supabase/functions/market-autotrader/core.ts supabase/functions/_shared/p10-policy.ts || true
 
-      - name: Commit only reviewed observability change
+      - name: Commit only observability change to isolated head
         shell: bash
         run: |
           set -euo pipefail
-          test "${GITHUB_REF_NAME}" = "review/p10-circuit-observability-prod-safety-20260821"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add supabase/functions/market-autotrader/index.ts
           git rm .github/workflows/apply-p10-circuit-observability-review.yml
+          git rm .p10-observability-trigger
           git diff --cached --check
           git commit -m 'diag: expose P10 circuit balance operands'
           git push origin HEAD:review/p10-circuit-observability-prod-safety-20260821
