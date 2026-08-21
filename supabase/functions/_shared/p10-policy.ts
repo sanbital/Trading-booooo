@@ -135,11 +135,8 @@ export function p10ExecutableTicketCapital(input: {
   const minimum = Math.max(0, finite(input.minimum));
   const step = Math.max(0.000000000001, finite(input.step, 0.01));
   const spendable = Math.min(available, maximum);
-  const target = spendable + 1e-9 >= minimum
-    ? Math.max(capital / slots, minimum)
-    : capital / slots;
-  const stepped =
-    Math.floor((Math.min(spendable, target) + step * 1e-9) / step) * step;
+  const target = spendable + 1e-9 >= minimum ? Math.max(capital / slots, minimum) : capital / slots;
+  const stepped = Math.floor((Math.min(spendable, target) + step * 1e-9) / step) * step;
   return Number(Math.max(0, stepped).toFixed(12));
 }
 
