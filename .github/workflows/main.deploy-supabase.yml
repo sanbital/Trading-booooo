@@ -193,6 +193,10 @@ jobs:
             --set=ON_ERROR_STOP=1 \
             --single-transaction \
             --file supabase/migrations/20260821110000_p10_live_cutover.sql
+          psql "${SUPABASE_DB_URL}" \
+            --set=ON_ERROR_STOP=1 \
+            --single-transaction \
+            --file supabase/migrations/20260821112500_p10_fill_stop_parity.sql
 
       - name: Verify the sell guard survived the batch
         shell: bash
