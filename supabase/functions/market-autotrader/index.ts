@@ -157,6 +157,7 @@ import {
   P10_REVISION,
   P10_STRATEGY_KEY,
   type P10Bar,
+  p10ExecutableTicketCapital,
   p10RoundTripCostBps,
   type P10Side,
   type P10Venue,
@@ -9000,15 +9001,27 @@ function p10TicketCapital(
   const slots = clamp(finite((settings as any).scalp_position_slots, 3), 1, 20);
   const available = Math.max(0, finite(managed.managedAvailableQuote));
   const capital = Math.max(0, finite(managed.managedCapitalQuote));
-  let cap = capital / slots;
-  if (exchange === "binance") cap = Math.min(cap, finite(settings.max_order_usdt, 40));
-  if (exchange === "upbit") cap = Math.min(cap, finite(settings.max_order_krw, cap));
+  let maximum = Number.MAX_SAFE_INTEGER;
+  let minimum = finite(settings.min_order_krw, 40_000);
+  if (exchange === "binance") {
+    maximum = finite(settings.max_order_usdt, 40);
+    minimum = binanceMinOrderUsdt(settings.min_order_usdt);
+  }
+  if (exchange === "upbit") maximum = finite(settings.max_order_krw, maximum);
   if (exchange === "binance_futures") {
     const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 50);
-    if (operatorMargin > 0) cap = Math.min(cap, operatorMargin);
+    if (operatorMargin > 0) maximum = operatorMargin;
+    minimum = FUTURES_MIN_ENTRY_MARGIN_USDT;
   }
   const step = exchange === "upbit" ? 1000 : 0.01;
-  return floorToStep(Math.min(available, cap), step);
+  return p10ExecutableTicketCapital({
+    available,
+    capital,
+    slots,
+    maximum,
+    minimum,
+    step,
+  });
 }
 
 async function rejectP10Claim(claimId: string | null, reason: string) {
