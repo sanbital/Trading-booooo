@@ -1,4 +1,5 @@
 name: Patch Dashboard Futures Return Label
+# trigger: r2
 
 on:
   push:
