@@ -1,0 +1,95 @@
+name: P10 Exact 200 Production Hotfix
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: p10-exact-200-production-hotfix
+  cancel-in-progress: false
+
+jobs:
+  validate-and-deploy:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out current main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Apply exact-200 futures-only patch
+        run: |
+          set -euo pipefail
+          python3 scripts/p10_exact_200_hotfix.py
+          deno fmt supabase/functions/market-autotrader/index.ts supabase/functions/_shared/p10-policy.ts supabase/functions/_shared/p10-policy.test.ts
+          python3 scripts/p10_exact_200_hotfix.py --validate-only
+
+      - name: Typecheck and regression tests
+        run: |
+          set -euo pipefail
+          deno check supabase/functions/market-autotrader/index.ts
+          deno check supabase/functions/_shared/p10-policy.test.ts
+          deno test supabase/functions/_shared/p10-policy.test.ts
+          deno task check
+          deno task test
+
+      - name: Persist tested source to main
+        run: |
+          set -euo pipefail
+          python3 scripts/p10_exact_200_hotfix.py --validate-only
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          printf '%s\n' \
+            'P10 exact-200 validation passed.' \
+            'A-H exact margin, no-downsize, spot/upbit regression, and slot-gate tests passed.' \
+            "validated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            > .github/p10-exact-200-validation.txt
+          git add supabase/functions/market-autotrader/index.ts supabase/functions/_shared/p10-policy.ts supabase/functions/_shared/p10-policy.test.ts .github/p10-exact-200-validation.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "Fix P10 futures to 200 USDT margin per slot"
+            git push origin HEAD:main
+          fi
+
+      - name: Verify required production secrets
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL:-}"
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_PROJECT_REF:-}"
+
+      - name: Force and verify production settings
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "update public.trading_settings set binance_futures_allocation_usdt=200, scalp_position_slots=10, binance_futures_leverage=3, updated_at=now(), version=coalesce(version,0)+1 where id=1;"
+          test "$(psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -Atc "select case when binance_futures_allocation_usdt=200 and scalp_position_slots=10 and binance_futures_leverage=3 then 'OK' else 'BAD' end from public.trading_settings where id=1;")" = "OK"
+
+      - name: Deploy complete production function bundle
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy market-autotrader --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
+          supabase functions list --project-ref "${SUPABASE_PROJECT_REF}"
