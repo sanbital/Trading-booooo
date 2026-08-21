@@ -15,7 +15,7 @@ export const P10_CONFIG = Object.freeze({
   minEmaSlope6Pct: 0.10,
   maxEntryGapAtr: 0.50,
   stopAtr: 2.00,
-  targetR: 4.00,
+  targetR: 5.00,
   trailAtr: 2.50,
   breakEvenAtR: 1.50,
   partialAtR: 2.00,
@@ -474,7 +474,7 @@ export function evaluateP10Exit(input: P10ExitInput): P10ExitDecision {
     ? input.executablePrice >= finalTarget
     : input.executablePrice <= finalTarget;
   if (targetHit) {
-    return { action: "TARGET_2", reason: "FINAL_4R", fraction: 1, nextStop, policyBarTime };
+    return { action: "TARGET_2", reason: "FINAL_5R", fraction: 1, nextStop, policyBarTime };
   }
   const partialHit = !input.partialDone &&
     (long ? input.executablePrice >= partialTarget : input.executablePrice <= partialTarget);
