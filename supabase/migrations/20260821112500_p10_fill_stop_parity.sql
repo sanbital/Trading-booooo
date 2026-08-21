@@ -111,6 +111,9 @@ begin
 end;
 $function$;
 
+revoke all on function public.apply_p10_entry_order(
+  uuid, numeric, numeric, numeric, numeric, numeric, numeric, numeric, numeric
+) from public, anon, authenticated;
 grant execute on function public.apply_p10_entry_order(
   uuid, numeric, numeric, numeric, numeric, numeric, numeric, numeric, numeric
 ) to service_role;
