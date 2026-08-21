@@ -101,7 +101,7 @@ jobs:
             "BINANCE_FUTURES_GATEWAY_SHARED_SECRET=${gateway_secret}" \
             "BINANCE_FUTURES_FEE_PER_SIDE_PCT=0.05" \
             "TRADING_MODE_DEFAULT=PAPER" \
-            "TRADING_STRATEGY=LOB_SCALP" \
+            "TRADING_STRATEGY=P10_DONCHIAN_SLOW4R" \
             "SCALP_PER_ORDER_PCT=100" \
             "SCALP_DAILY_LOSS_PCT=30" \
             "SCALP_MAX_SINGLE_LOSS_PCT=5" \
@@ -189,6 +189,10 @@ jobs:
             --set=ON_ERROR_STOP=1 \
             --single-transaction \
             --file supabase/migrations/20260820090000_restore_futures_absolute_timeout_guard.sql
+          psql "${SUPABASE_DB_URL}" \
+            --set=ON_ERROR_STOP=1 \
+            --single-transaction \
+            --file supabase/migrations/20260821110000_p10_live_cutover.sql
 
       - name: Verify the sell guard survived the batch
         shell: bash
@@ -203,9 +207,9 @@ jobs:
             v_futures_def text;
             v_position_def text;
             v_bad_timeout text := $bad$
-        and not v_futures
-        and v_approved_reason in ('HALF_HOLD_ABSOLUTE_TIMEOUT', 'POST180_MAX_HOLD_TIMEOUT')
-$bad$;
+            and not v_futures
+            and v_approved_reason in ('HALF_HOLD_ABSOLUTE_TIMEOUT', 'POST180_MAX_HOLD_TIMEOUT')
+          $bad$;
           begin
             select pg_get_functiondef(p.oid) into v_def
             from pg_proc p
