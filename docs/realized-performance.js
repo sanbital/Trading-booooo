@@ -7,6 +7,7 @@
   let dashboardToken = "";
   let runtimeSource = null;
   let performanceSource = null;
+  let accountSource = null;
   let pending = false;
   let lastLoaded = 0;
   let timer = null;
@@ -16,11 +17,13 @@
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
   const num = v => Number.isFinite(Number(v)) ? Number(v) : 0;
-  const fmt = (v, d = 6) => Number.isFinite(Number(v))
+  const fmt = (v, d = 6) => Number.isFinite(Number(v)) && v !== null
     ? Number(v).toLocaleString("ko-KR", { maximumFractionDigits: d }) : "—";
   const signed = (v, d = 4) => `${num(v) >= 0 ? "+" : ""}${fmt(v, d)}`;
-  const money = (v, currency = "USDT") => `${signed(v, currency === "KRW" ? 0 : 4)} ${currency}`;
-  const pct = v => `${num(v) >= 0 ? "+" : ""}${fmt(v, 2)}%`;
+  const money = (v, currency = "USDT") => Number.isFinite(Number(v)) && v !== null
+    ? `${signed(v, currency === "KRW" ? 0 : 4)} ${currency}` : "—";
+  const pct = v => Number.isFinite(Number(v)) && v !== null
+    ? `${Number(v) >= 0 ? "+" : ""}${fmt(v, 2)}%` : "—";
   const dt = v => v ? new Date(v).toLocaleString("ko-KR", { hour12: false }) : "—";
   const ageSec = v => {
     const t = Date.parse(v || "");
@@ -70,7 +73,7 @@
               <span id="realized-revision-badge" class="realized-revision-badge">revision 확인 중</span>
             </div>
           </div>
-          <p>CLOSED 거래는 종료 시점의 체결 원가·실현손익을 고정합니다. 분할매도는 SELL 주문별로 각각 표시합니다.</p>
+          <p>계정 수익률은 Binance Equity 기준, 전략 ROI는 실제 거래 투입 증거금 기준으로 분리 표시합니다.</p>
         </div>
         <div class="performance-filters realized-filters">
           <select id="realized-exchange-filter" aria-label="거래소 필터">
@@ -85,12 +88,12 @@
         <div class="table-wrap panel realized-table-wrap">
           <table class="performance-table realized-trade-table">
             <thead><tr>
-              <th>청산 시각</th><th>종목</th><th>매도</th><th>원가</th><th>확정손익</th><th>수익률</th><th>매도 평균가</th><th>수량</th><th>수수료</th><th>보유시간</th><th>종료 사유</th>
+              <th>청산 시각</th><th>종목</th><th>매도</th><th>원가</th><th>확정손익</th><th>전략 ROI</th><th>매도 평균가</th><th>수량</th><th>수수료</th><th>보유시간</th><th>종료 사유</th>
             </tr></thead>
             <tbody id="realized-performance-body"><tr><td colspan="11" class="muted">체결 데이터를 불러오는 중입니다.</td></tr></tbody>
           </table>
         </div>
-        <p id="realized-performance-source" class="performance-definition">시장가격이 바뀌어도 CLOSED 거래의 손익은 다시 계산하지 않습니다.</p>`;
+        <p id="realized-performance-source" class="performance-definition">계정 수익률과 전략 ROI는 서로 다른 분모를 사용합니다.</p>`;
       positions.after(section);
       $("realized-exchange-filter")?.addEventListener("change", event => {
         exchangeFilter = String(event.target?.value || "binance");
@@ -199,7 +202,7 @@
         <td data-label="매도">${split}<small class="realized-fill-count">fill ${fmt(row.fill_count || 1,0)}</small></td>
         <td data-label="원가">${fmt(row.invested_cost_quote, currency === "KRW" ? 0 : 4)} ${currency}</td>
         <td data-label="확정손익" class="${tone(row.net_pnl_quote)}"><strong>${money(row.net_pnl_quote, currency)}</strong></td>
-        <td data-label="수익률" class="${tone(row.return_pct)}"><strong>${pct(row.return_pct)}</strong></td>
+        <td data-label="전략 ROI" class="${tone(row.return_pct)}"><strong>${pct(row.return_pct)}</strong></td>
         <td data-label="매도 평균가">${fmt(row.average_exit_price, 8)}</td>
         <td data-label="수량">${fmt(row.quantity, 8)}</td>
         <td data-label="수수료">${fmt(row.total_fees_quote, currency === "KRW" ? 0 : 5)} ${currency}</td>
@@ -213,19 +216,38 @@
     const currency = exchangeFilter === "upbit" ? "KRW" : exchangeFilter === "binance" ? "USDT" : "MIXED";
     const stats = aggregatePositionStats(rows);
     const splitCount = rows.filter(row => Number(row.position_exit_count) > 1).length;
+    const accountCombined = accountSource?.venues?.binance || null;
+    const accountFutures = accountSource?.venues?.binance_futures || null;
     const summary = $("realized-summary-grid");
-    if (summary) summary.innerHTML = `
-      <div><span>총 확정손익</span><b class="${tone(total)}">${currency === "MIXED" ? `${signed(total,4)} (혼합)` : money(total,currency)}</b></div>
-      <div><span>완료 포지션</span><b>${fmt(exchangeSummary?.closed_trade_count ?? stats.count,0)}건</b></div>
-      <div><span>매도 기록</span><b>${fmt(exchangeSummary?.realized_exit_count ?? rows.length,0)}건</b></div>
-      <div><span>분할매도 행</span><b>${fmt(splitCount,0)}건</b></div>
-      <div><span>승률</span><b>${fmt(exchangeSummary?.win_rate_pct ?? stats.winRate,1)}%</b></div>
-      <div><span>Profit Factor</span><b>${(exchangeSummary?.profit_factor ?? stats.profitFactor) === null || (exchangeSummary?.profit_factor ?? stats.profitFactor) === Infinity ? "∞" : fmt(exchangeSummary?.profit_factor ?? stats.profitFactor,2)}</b></div>`;
+    if (summary) {
+      if (exchangeFilter === "binance") {
+        summary.innerHTML = `
+          <div><span>Binance 계정 수익률 · 오늘</span><b class="${tone(accountCombined?.account_return_pct)}">${pct(accountCombined?.account_return_pct)}</b></div>
+          <div><span>선물 계정 수익률 · 오늘</span><b class="${tone(accountFutures?.account_return_pct)}">${pct(accountFutures?.account_return_pct)}</b></div>
+          <div><span>전략 ROI · 누적</span><b class="${tone(exchangeSummary?.cumulative_return_pct)}">${pct(exchangeSummary?.cumulative_return_pct)}</b></div>
+          <div><span>실현 순손익</span><b class="${tone(exchangeSummary?.realized_net_pnl_quote)}">${money(exchangeSummary?.realized_net_pnl_quote,"USDT")}</b></div>
+          <div><span>미실현 손익</span><b class="${tone(exchangeSummary?.open_net_pnl_quote)}">${money(exchangeSummary?.open_net_pnl_quote,"USDT")}</b></div>
+          <div><span>현재 Binance Equity</span><b>${fmt(accountCombined?.current_equity_quote,4)} USDT</b></div>
+          <div><span>완료 포지션</span><b>${fmt(exchangeSummary?.closed_trade_count ?? stats.count,0)}건</b></div>
+          <div><span>승률</span><b>${fmt(exchangeSummary?.win_rate_pct ?? stats.winRate,1)}%</b></div>`;
+      } else {
+        summary.innerHTML = `
+          <div><span>총 확정손익</span><b class="${tone(total)}">${currency === "MIXED" ? `${signed(total,4)} (혼합)` : money(total,currency)}</b></div>
+          <div><span>전략 ROI · 누적</span><b>${pct(exchangeSummary?.cumulative_return_pct)}</b></div>
+          <div><span>완료 포지션</span><b>${fmt(exchangeSummary?.closed_trade_count ?? stats.count,0)}건</b></div>
+          <div><span>매도 기록</span><b>${fmt(exchangeSummary?.realized_exit_count ?? rows.length,0)}건</b></div>
+          <div><span>분할매도 행</span><b>${fmt(splitCount,0)}건</b></div>
+          <div><span>승률</span><b>${fmt(exchangeSummary?.win_rate_pct ?? stats.winRate,1)}%</b></div>
+          <div><span>Profit Factor</span><b>${(exchangeSummary?.profit_factor ?? stats.profitFactor) === null || (exchangeSummary?.profit_factor ?? stats.profitFactor) === Infinity ? "∞" : fmt(exchangeSummary?.profit_factor ?? stats.profitFactor,2)}</b></div>`;
+      }
+    }
 
     const revision = String(performanceSource?.performance_revision || "—");
     if ($("realized-revision-badge")) $("realized-revision-badge").textContent = revision;
     const src = $("realized-performance-source");
-    if (src) src.textContent = `Binance: exchange_trade_fills + CLOSED 정산 장부 · ${revision} · ${dt(performanceSource?.generated_at)} · CLOSED 현재가 재계산 없음`;
+    if (src) src.textContent = exchangeFilter === "binance"
+      ? `계정 수익률: Binance Equity, 오늘 00:00 KST 이후 첫 스냅샷 대비 · 전략 ROI: 거래 투입 증거금 기준 · ${revision} · ${dt(performanceSource?.generated_at)}`
+      : `체결 확정 장부 · 전략 ROI: 실제 거래원가 기준 · ${revision} · ${dt(performanceSource?.generated_at)}`;
   }
 
   function render() { if (!inject()) return; renderRuntime(); renderPerformance(); }
@@ -251,18 +273,21 @@
     if (!force && Date.now() - lastLoaded < 12_000) return;
     pending = true;
     const status = $("realized-refresh-status");
-    if (status) status.textContent = "확정 체결 장부를 갱신하는 중입니다.";
+    if (status) status.textContent = "계정 Equity와 확정 체결 장부를 갱신하는 중입니다.";
     try {
-      const [runtimeResult, perfResult] = await Promise.allSettled([
+      const [runtimeResult, perfResult, accountResult] = await Promise.allSettled([
         postFunction(config.binanceSourceFunctionName || "binance-source", { limit: 200 }),
         postFunction(config.performanceFunctionName || "market-performance", force ? { force: true } : {}),
+        postFunction(config.accountPerformanceFunctionName || "account-performance", {}),
       ]);
       if (runtimeResult.status === "fulfilled") runtimeSource = runtimeResult.value;
       if (perfResult.status === "rejected") throw perfResult.reason;
       performanceSource = perfResult.value;
+      accountSource = accountResult.status === "fulfilled" ? accountResult.value : null;
       lastLoaded = Date.now();
       render();
-      if (status) status.textContent = `체결 확정값 · ${dt(performanceSource?.generated_at)} · ${performanceSource?.cache_status || "LIVE"}`;
+      const accountNote = accountSource?.venues?.binance_futures?.valid ? " · Binance Equity 연결" : " · 계정 Equity 조회 확인 필요";
+      if (status) status.textContent = `체결 확정값 · ${dt(performanceSource?.generated_at)} · ${performanceSource?.cache_status || "LIVE"}${accountNote}`;
     } catch (e) {
       inject();
       if (status) status.textContent = `거래별 성과 조회 실패: ${e?.message || e}`;
