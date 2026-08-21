@@ -76,13 +76,13 @@ Deno.test("P10 detects completed-bar long breakouts and keeps spot long-only", (
   assertEquals(detectLatestP10Signal("binance_futures", bear, bear)?.side, "SHORT");
 });
 
-Deno.test("P10 entry uses 2 ATR stop, 2R partial, 4R final and rejects late gaps", () => {
+Deno.test("P10 entry uses 2 ATR stop, 2R partial, 5R final and rejects late gaps", () => {
   const plan = planP10Entry("LONG", 100, 1, 100.25);
   assert(plan.allowed);
   assertEquals(plan.initialRisk, 2);
   assertEquals(plan.stopPrice, 98.25);
   assertEquals(plan.partialTarget, 104.25);
-  assertEquals(plan.finalTarget, 108.25);
+  assertEquals(plan.finalTarget, 110.25);
   assertEquals(planP10Entry("LONG", 100, 1, 100.51).allowed, false);
 });
 
