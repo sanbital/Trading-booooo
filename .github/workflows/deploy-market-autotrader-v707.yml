@@ -14,6 +14,7 @@ on:
       - "supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql"
       - "supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql"
       - "supabase/migrations/20260821110000_p10_live_cutover.sql"
+      - "supabase/migrations/20260821112500_p10_fill_stop_parity.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
@@ -28,6 +29,7 @@ on:
       - "supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql"
       - "supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql"
       - "supabase/migrations/20260821110000_p10_live_cutover.sql"
+      - "supabase/migrations/20260821112500_p10_fill_stop_parity.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   workflow_dispatch:
 
@@ -156,6 +158,8 @@ jobs:
           grep -q 'P10_DONCHIAN_BREAKOUT_E10_SLOW_4R' \
             supabase/functions/_shared/p10-policy.ts
           grep -q 'P10_SLOW_4R' supabase/migrations/20260821110000_p10_live_cutover.sql
+          grep -q 'trailing_stop = p_stop_price' \
+            supabase/migrations/20260821112500_p10_fill_stop_parity.sql
 
   deploy:
     needs: validate
@@ -234,6 +238,7 @@ jobs:
                   join pg_namespace n on n.oid = p.pronamespace
                   where n.nspname = 'public'
                     and p.proname = 'apply_p10_entry_order'
+                    and position('trailing_stop = p_stop_price' in pg_get_functiondef(p.oid)) > 0
                 );
             ")"
             if [ "${ready}" = "t" ]; then
