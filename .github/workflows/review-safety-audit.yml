@@ -1,0 +1,70 @@
+name: Review Workflow Safety Audit
+
+on:
+  pull_request:
+    branches:
+      - review/p10-observability-runner-base-20260821
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.review-safety-audit-trigger'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out review head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: review/p10-circuit-observability-prod-safety-20260821
+          fetch-depth: 0
+
+      - name: Install pinned actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSLo actionlint.tar.gz https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz' | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          ./actionlint -version
+
+      - name: Parse every workflow with actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./actionlint -color
+
+      - name: Enumerate PR-triggered privileged workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          risky = []
+          for p in sorted(Path('.github/workflows').glob('*.y*ml')):
+              text = p.read_text()
+              pr_trigger = 'pull_request:' in text or 'pull_request_target:' in text
+              if not pr_trigger:
+                  continue
+              signals = []
+              checks = {
+                  'production deploy': 'supabase functions deploy' in text,
+                  'database write capability': 'SUPABASE_DB_URL' in text or 'psql ' in text,
+                  'content write permission': 'contents: write' in text,
+                  'direct main push': 'git push origin HEAD:main' in text or 'git push origin main' in text,
+                  'pull_request_target': 'pull_request_target:' in text,
+              }
+              signals = [name for name, hit in checks.items() if hit]
+              if signals:
+                  risky.append((str(p), signals))
+
+          print('PR_TRIGGERED_PRIVILEGED_WORKFLOWS')
+          if not risky:
+              print('NONE')
+          for path, signals in risky:
+              print(f'{path}: {", ".join(signals)}')
+          PY
