@@ -151,8 +151,10 @@ jobs:
           grep -q "upper(coalesce(new.purpose, '')) = 'EMERGENCY'" \
             supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql
           ! grep -q 'const exp1ArmWidthsBps' supabase/functions/market-autotrader/index.ts
-          grep -q 'P10_DONCHIAN_BREAKOUT_E10_SLOW_4R' \
+          grep -q 'P10_STRATEGY_KEY' \
             supabase/functions/market-autotrader/index.ts
+          grep -q 'P10_DONCHIAN_BREAKOUT_E10_SLOW_4R' \
+            supabase/functions/_shared/p10-policy.ts
           grep -q 'P10_SLOW_4R' supabase/migrations/20260821110000_p10_live_cutover.sql
 
   deploy:
