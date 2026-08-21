@@ -1,0 +1,46 @@
+name: Format P10 cutover branch
+
+on:
+  push:
+    branches:
+      - codex/p10-live-cutover-20260821
+    paths:
+      - ".github/workflows/format-p10-cutover.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: codex/p10-live-cutover-20260821
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.5
+      - name: Format P10 sources
+        run: |
+          set -euo pipefail
+          deno fmt \
+            gateway/server.mjs \
+            supabase/functions/_shared/p10-policy.ts \
+            supabase/functions/_shared/p10-policy.test.ts \
+            supabase/functions/market-v2-signal/index.ts \
+            supabase/functions/market-autotrader/index.ts
+          if git diff --quiet; then
+            echo "Sources already formatted"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            gateway/server.mjs \
+            supabase/functions/_shared/p10-policy.ts \
+            supabase/functions/_shared/p10-policy.test.ts \
+            supabase/functions/market-v2-signal/index.ts \
+            supabase/functions/market-autotrader/index.ts
+          git commit -m "style: format P10 cutover sources"
+          git push origin HEAD:codex/p10-live-cutover-20260821
