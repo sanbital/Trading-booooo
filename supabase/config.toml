@@ -11,5 +11,9 @@ verify_jwt = false
 [functions.market-autotrader]
 verify_jwt = false
 
+[functions.market-v2-signal]
+# Internal token validation is implemented inside the function because pg_cron invokes it.
+verify_jwt = false
+
 [functions.scalp-calibration]
 verify_jwt = false
