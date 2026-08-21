@@ -83,8 +83,10 @@ jobs:
           deno fmt supabase/functions/market-autotrader/index.ts supabase/functions/_shared/p10-policy.ts supabase/functions/_shared/p10-policy.test.ts
           deno check supabase/functions/market-autotrader/index.ts
           deno check supabase/functions/_shared/p10-policy.test.ts
-          deno test supabase/functions/_shared/p10-policy.test.ts
-          deno test supabase/functions/market-autotrader/*.test.ts supabase/functions/_shared/*.test.ts
+          # The repo tasks carry --allow-read. The bare `deno test` calls that used to stand
+          # here denied every Deno.readTextFile and failed nine tests on permissions alone.
+          deno task check
+          deno task test
 
       - name: Static source and slot-gate assertions
         run: |
