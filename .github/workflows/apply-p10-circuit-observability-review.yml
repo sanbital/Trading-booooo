@@ -1,4 +1,4 @@
-name: Apply P10 Circuit Observability Review Patch
+name: Review Workflow Safety Audit
 
 on:
   pull_request:
@@ -6,17 +6,17 @@ on:
       - review/p10-observability-runner-base-20260821
     types: [opened, synchronize, reopened]
     paths:
-      - '.p10-observability-trigger'
+      - '.review-safety-audit-trigger'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: p10-circuit-observability-review
+  group: workflow-safety-audit-review
   cancel-in-progress: false
 
 jobs:
-  patch-review-branch:
+  audit:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.head.ref == 'review/p10-circuit-observability-prod-safety-20260821'
@@ -29,118 +29,47 @@ jobs:
           ref: review/p10-circuit-observability-prod-safety-20260821
           fetch-depth: 0
 
-      - name: Set up Deno
-        uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.x
+      - name: Install pinned actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSLo actionlint.tar.gz https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz' | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          ./actionlint -version
 
-      - name: Apply observability-only patch
+      - name: Parse every workflow with actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./actionlint -color
+
+      - name: Enumerate PR-triggered privileged workflows
         shell: bash
         run: |
           set -euo pipefail
           python3 <<'PY'
           from pathlib import Path
 
-          path = Path('supabase/functions/market-autotrader/index.ts')
-          text = path.read_text()
+          risky = []
+          for p in sorted(Path('.github/workflows').glob('*.y*ml')):
+              text = p.read_text()
+              if 'pull_request:' not in text and 'pull_request_target:' not in text:
+                  continue
+              checks = {
+                  'production deploy': 'supabase functions deploy' in text,
+                  'database write capability': 'SUPABASE_DB_URL' in text or 'psql ' in text,
+                  'content write permission': 'contents: write' in text,
+                  'direct main push': 'git push origin HEAD:main' in text or 'git push origin main' in text,
+                  'pull_request_target': 'pull_request_target:' in text,
+              }
+              signals = [name for name, hit in checks.items() if hit]
+              if signals:
+                  risky.append((str(p), signals))
 
-          anchor1 = "\n".join([
-              "  const stats = {} as Record<Exchange, any>;",
-              "  const circuits = {} as Record<Exchange, any>;",
-              "  const positionSlots = clamp(finite((settings as any).scalp_position_slots, 3), 1, 20);",
-          ])
-          replacement1 = "\n".join([
-              "  const stats = {} as Record<Exchange, any>;",
-              "  const circuits = {} as Record<Exchange, any>;",
-              "  const circuitDiagnostics = {} as Record<Exchange, JsonRecord>;",
-              "  const positionSlots = clamp(finite((settings as any).scalp_position_slots, 3), 1, 20);",
-              "  const diagnosticNumber = (value: unknown): JsonRecord => {",
-              "    const isNull = value === null;",
-              "    const isEmptyString = typeof value === \"string\" && value.trim() === \"\";",
-              "    const numeric = Number(value);",
-              "    const isFiniteNumber = !isNull && !isEmptyString && Number.isFinite(numeric);",
-              "    return {",
-              "      present: value !== undefined,",
-              "      is_null: isNull,",
-              "      is_empty_string: isEmptyString,",
-              "      type: typeof value,",
-              "      finite: isFiniteNumber,",
-              "      value: isFiniteNumber ? numeric : null,",
-              "    };",
-              "  };",
-          ])
-
-          anchor2 = "\n".join([
-              "    const limits = exchangeLimits(settings, exchange);",
-              "    circuits[exchange] = evaluateCircuit({",
-          ])
-          replacement2 = "\n".join([
-              "    const limits = exchangeLimits(settings, exchange);",
-              "    const managedState = managed.managed || {};",
-              "    const managedCapitalQuote = finite(managedState.managedCapitalQuote);",
-              "    const bookedExposureQuote = finite(managedState.openCostQuote);",
-              "    circuitDiagnostics[exchange] = {",
-              "      raw_total_equity_quote: diagnosticNumber(raw?.total_equity_quote),",
-              "      raw_available_quote: diagnosticNumber(raw?.available_quote),",
-              "      raw_locked_quote: diagnosticNumber(raw?.locked_quote),",
-              "      capital_base_quote: finite(managedState.capitalBaseQuote),",
-              "      booked_exposure_quote: bookedExposureQuote,",
-              "      bot_position_value_quote: finite(managedState.botPositionValueQuote),",
-              "      reserved_exposure_quote: finite(managedState.reservedExposureQuote),",
-              "      managed_capital_quote: managedCapitalQuote,",
-              "      unallocated_within_cap_quote: Math.max(0, managedCapitalQuote - bookedExposureQuote),",
-              "      managed_available_quote: finite(managedState.managedAvailableQuote),",
-              "      circuit_min_order_quote: limits.minOrder,",
-              "    };",
-              "    circuits[exchange] = evaluateCircuit({",
-          ])
-
-          anchor3 = "\n".join([
-              "      strategy_key: P10_STRATEGY_KEY,",
-              "      circuits,",
-              "      stats,",
-          ])
-          replacement3 = "\n".join([
-              "      strategy_key: P10_STRATEGY_KEY,",
-              "      circuits,",
-              "      circuit_diagnostics: circuitDiagnostics,",
-              "      stats,",
-          ])
-
-          for name, anchor, replacement in [
-              ('scan diagnostic declaration', anchor1, replacement1),
-              ('circuit operand capture', anchor2, replacement2),
-              ('blocked event diagnostics', anchor3, replacement3),
-          ]:
-              count = text.count(anchor)
-              if count != 1:
-                  raise SystemExit(f'{name}: expected exactly one anchor, found {count}')
-              text = text.replace(anchor, replacement, 1)
-
-          path.write_text(text)
+          print('PR_TRIGGERED_PRIVILEGED_WORKFLOWS')
+          if not risky:
+              print('NONE')
+          for path, signals in risky:
+              print(f'{path}: {", ".join(signals)}')
           PY
-
-      - name: Format, typecheck and verify bounded diff
-        shell: bash
-        run: |
-          set -euo pipefail
-          deno fmt supabase/functions/market-autotrader/index.ts
-          deno check supabase/functions/market-autotrader/index.ts
-          grep -F 'circuit_diagnostics: circuitDiagnostics' supabase/functions/market-autotrader/index.ts
-          grep -F 'raw_total_equity_quote: diagnosticNumber' supabase/functions/market-autotrader/index.ts
-          grep -F 'booked_exposure_quote: bookedExposureQuote' supabase/functions/market-autotrader/index.ts
-          git diff --check
-          test "$(git diff --name-only | tr -d '\r')" = "supabase/functions/market-autotrader/index.ts"
-
-      - name: Commit only observability change to isolated head
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add supabase/functions/market-autotrader/index.ts
-          git rm .github/workflows/apply-p10-circuit-observability-review.yml
-          git rm .p10-observability-trigger
-          git diff --cached --check
-          git commit -m 'diag: expose P10 circuit balance operands'
-          git push origin HEAD:review/p10-circuit-observability-prod-safety-20260821
