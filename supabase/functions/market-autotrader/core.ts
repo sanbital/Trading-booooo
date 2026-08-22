@@ -145,6 +145,12 @@ export type CircuitInput = {
   dailyPnlPct: number;
   weeklyPnlPct: number;
   consecutiveLosses: number;
+  /**
+   * Message used when availableQuote falls short of minOrderQuote. The futures lane sizes a
+   * slot in posted margin rather than order notional, and "insufficient available quote
+   * balance" sent operators looking at the wrong number. Defaults to the legacy wording.
+   */
+  minOrderReason?: string;
   settings: TradingSettings;
 };
 
@@ -534,7 +540,7 @@ export function evaluateCircuit(input: CircuitInput): CircuitResult {
     reasons.push("exchange daily buy notional limit reached");
   }
   if (input.availableQuote < input.minOrderQuote) {
-    reasons.push("insufficient available quote balance");
+    reasons.push(input.minOrderReason || "insufficient available quote balance");
   }
   if (input.dailyPnlPct <= -Math.abs(input.settings.max_daily_loss_pct)) {
     reasons.push("daily loss limit reached");

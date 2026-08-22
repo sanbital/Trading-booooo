@@ -33,6 +33,12 @@ import {
   type TradingSettings,
 } from "./core.ts";
 import { calculateExposureLedger, reservationAfterFill } from "./exposure-ledger.ts";
+import { resolveMarkPrice, sumOpenPositionPnl } from "./pnl-accounting.ts";
+import { detectEquityCapitalFlow } from "./capital-flow.ts";
+import {
+  evaluateEntryMarginGate,
+  INSUFFICIENT_FUTURES_MARGIN_REASON,
+} from "./entry-margin-gate.ts";
 import { residualSweepDecision } from "./residual-ledger.ts";
 import { allocateNormalizedTradeFees, resolveFeeQuote } from "./fee-accounting.ts";
 import { scalpEntryDecision } from "../_shared/scalp/scalp-gate.ts";
@@ -145,7 +151,7 @@ import {
   updatePost180RunningTrough,
 } from "./late-recovery-policy.ts";
 import { buildTradingHeartbeatPatch, type TradingHeartbeatPatch } from "./heartbeat.ts";
-import { type LeaseGateway, runWithContendedLease } from "./lease.ts";
+import { type LeaseGateway, runWithContendedLease, runWithRenewedLease } from "./lease.ts";
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 import { loadMinuteEntryGate } from "../_shared/lob/minute-entry-market.ts";
@@ -282,6 +288,21 @@ const SCAN_LEASE_TTL_SECONDS = 45;
 const SCAN_LEASE_RENEW_MS = 10_000;
 const SCAN_LEASE_WAIT_MS = 18_000;
 const SCAN_LEASE_POLL_MS = 2_000;
+// Monitor lease shape. The old fixed 90s TTL was never renewed, so a monitor invocation the
+// runtime killed mid-flight held the shared engine lease for a further 90 seconds with
+// nobody watching stops — which is exactly the 98s gap the live cadence measurements found.
+// A short renewed heartbeat keeps a live monitor's hold indefinite (renewal by the same
+// owner refreshes the row, so two monitors still can never overlap) while capping what a
+// dead one can cost to one TTL. The RPC floors the TTL at 10s.
+// Six renewal opportunities per TTL, so several consecutive failed heartbeats still cannot
+// hand the lease to a second monitor while the first is alive.
+const MONITOR_LEASE_TTL_SECONDS = 30;
+const MONITOR_LEASE_RENEW_MS = 5_000;
+// Balance snapshots, external cash-flow detection and the joint-objective record are
+// bookkeeping, not stop safety. At a 2s monitor tick they were three large writes and a
+// baseline comparison per cycle; at this interval they stay far inside the 120s window
+// detectExternalQuoteFlow needs for a usable baseline while leaving the hot path free.
+const ACCOUNT_ACCOUNTING_INTERVAL_MS = 10_000;
 const LIVE_MAX_SPREAD_BPS = clamp(finite(env("LIVE_MAX_SPREAD_BPS"), 25), 5, 50);
 const LIVE_MIN_DEPTH_BUFFER = clamp(finite(env("LIVE_MIN_DEPTH_BUFFER"), 1.2), 1, 3);
 const FEE_PCT: Record<Exchange, number> = {
@@ -1066,6 +1087,24 @@ async function accountStats(
       estimatedExitCostPct: FEE_PCT[exchange] / 100,
     }).markedNetPnlQuote;
   }, 0);
+  // markedOpenPnlQuote keeps its established meaning — the lifecycle value of every open
+  // row, partial realized included — because the daily/weekly loss rails are calibrated
+  // against it. The pure mark-to-market figure is reported beside it so a reader can tell
+  // the two apart instead of inferring which one a field holds.
+  const openPnlTotals = sumOpenPositionPnl(
+    (activeExchange || []).map((row: any) => ({
+      positionSide: row.position_side,
+      remainingQuantity: row.remaining_quantity,
+      averageEntryPrice: row.average_entry_price,
+      plannedEntryPrice: row.planned_entry_price,
+      markPrice: resolveMarkPrice(
+        [portfolio?.prices?.[row.market]],
+        finite(row.average_entry_price, row.planned_entry_price),
+      ),
+      realizedPnlQuote: row.realized_pnl_quote,
+      estimatedExitCostPct: FEE_PCT[exchange] / 100,
+    })),
+  );
   const dailyEconomic = daily + markedOpenPnl;
   const weeklyEconomic = weekly + markedOpenPnl;
   const dailySeedEquityQuote = Math.max(
@@ -1092,6 +1131,9 @@ async function accountStats(
     weeklyPnlQuote: weeklyEconomic,
     realizedDailyPnlQuote: daily,
     markedOpenPnlQuote: markedOpenPnl,
+    pureUnrealizedOpenPnlQuote: openPnlTotals.pureUnrealizedPnlQuote,
+    realizedOnOpenPositionsQuote: openPnlTotals.realizedPnlQuote,
+    lifecycleOpenPnlQuote: openPnlTotals.lifecyclePnlQuote,
     dailySeedEquityQuote,
     dailyPnlPct: dailySeedEquityQuote > 0 ? dailyEconomic / dailySeedEquityQuote * 100 : 0,
     weeklyPnlPct: equityQuote > 0 ? weeklyEconomic / equityQuote * 100 : 0,
@@ -4304,13 +4346,37 @@ async function liveFeePct(exchange: Exchange, settings: TradingSettings): Promis
 // Returning an empty Map on failure was indistinguishable from "we hold no orders",
 // so one failed open_orders call made every bot-placed resting sell look like a user
 // lock — the exact false positive that halted LTC.
+/**
+ * One open-order read per exchange per cycle.
+ *
+ * The lock reconciliation and the bot-lock attribution below both needed this list and each
+ * fetched it separately, so every monitor tick spent two gateway round trips per venue on
+ * the same answer. `null` still means "unreadable", which is not the same claim as "no open
+ * orders" and must never be collapsed into one.
+ */
+async function fetchOpenOrders(exchange: Exchange): Promise<any[] | null> {
+  try {
+    const rows = await gateway(exchange, { action: "open_orders" });
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return null;
+  }
+}
+
 async function botLockedQuantities(
   exchange: Exchange,
   positions: Position[],
+  openOrders: any[] | null,
 ): Promise<Map<string, number> | null> {
   const locked = new Map<string, number>();
+  if (openOrders === null) {
+    // Unreadable open orders must not be treated as evidence of anything. `null` says
+    // "unknown"; an empty Map would say "we definitely hold no orders", which is a claim
+    // we cannot make when the request failed.
+    return null;
+  }
   try {
-    const rows = await gateway(exchange, { action: "open_orders" });
+    const rows = openOrders;
     const ours = new Set(
       ((await db(
         `trading_orders?exchange=eq.${exchange}&state=in.(REQUESTED,ACCEPTED,OPEN,PARTIAL,APPLIED)&select=identifier`,
@@ -4497,20 +4563,16 @@ async function recordJointObjectiveSnapshot(
   }))[0];
 }
 
-async function openOrderAssets(exchange: Exchange): Promise<Set<string> | null> {
-  try {
-    const rows = await gateway(exchange, { action: "open_orders" });
-    const assets = new Set<string>();
-    for (const row of Array.isArray(rows) ? rows : []) {
-      const raw = row?.raw || {};
-      const market = String(row?.market ?? raw.market ?? raw.symbol ?? "");
-      const asset = baseAsset(exchange, market);
-      if (asset) assets.add(asset.toUpperCase());
-    }
-    return assets;
-  } catch {
-    return null;
+function openOrderAssets(exchange: Exchange, openOrders: any[] | null): Set<string> | null {
+  if (openOrders === null) return null;
+  const assets = new Set<string>();
+  for (const row of openOrders) {
+    const raw = row?.raw || {};
+    const market = String(row?.market ?? raw.market ?? raw.symbol ?? "");
+    const asset = baseAsset(exchange, market);
+    if (asset) assets.add(asset.toUpperCase());
   }
+  return assets;
 }
 
 async function reconcilePersistedAssetLocks(
@@ -5336,40 +5398,40 @@ async function snapshotAccount(
   capturedAt?: string,
 ) {
   let openCost = 0;
-  let unrealized = 0;
+  let botPositionValue = 0;
   const paper = settings.mode !== "LIVE_LIMITED";
-  for (
-    const position of positions.filter((row) => row.exchange === exchange && row.is_paper === paper)
-  ) {
-    const qty = finite(position.remaining_quantity);
+  const owned = positions.filter((row) => row.exchange === exchange && row.is_paper === paper);
+  // The monitor only collects live quotes for the markets it exit-checks, so a lane whose
+  // positions are all handled elsewhere (P10 futures) arrived here with an empty price map
+  // and every mark silently fell back to the entry price. The venue portfolio already
+  // carries a full price table and is what managedPortfolio and the SCAN diagnostics read;
+  // consulting it second is what keeps snapshot, SCAN and dashboard on one set of marks.
+  const markFor = (position: Position) =>
+    resolveMarkPrice(
+      [prices[position.market], portfolio?.prices?.[position.market]],
+      finite(position.average_entry_price, position.planned_entry_price),
+    );
+  const totals = sumOpenPositionPnl(owned.map((position) => ({
+    positionSide: position.position_side,
+    remainingQuantity: position.remaining_quantity,
+    averageEntryPrice: position.average_entry_price,
+    plannedEntryPrice: position.planned_entry_price,
+    markPrice: markFor(position),
+    realizedPnlQuote: position.realized_pnl_quote,
+    estimatedExitCostPct: FEE_PCT[exchange] / 100,
+  })));
+  for (const position of owned) {
+    const qty = Math.max(0, finite(position.remaining_quantity));
     const entry = finite(position.average_entry_price);
-    const current = finite(prices[position.market], entry);
     const leverage = position.exchange === "binance_futures" ? positionLeverage(position) : 1;
     openCost += qty * entry / leverage;
-    unrealized += calculateExposureLedger({
-      state: position.state,
-      initialQuantity: position.initial_quantity,
-      remainingQuantity: position.remaining_quantity,
-      averageEntryPrice: position.average_entry_price,
-      plannedEntryPrice: position.planned_entry_price,
-      currentPrice: current,
-      realizedCostQuote: position.realized_cost_quote,
-      realizedProceedsQuote: position.realized_proceeds_quote,
-      paidFeesQuote: position.paid_fees_quote,
-      residualValueQuote: position.residual_value_quote,
-      estimatedExitCostPct: FEE_PCT[exchange] / 100,
-    }).markedNetPnlQuote;
+    botPositionValue += qty * Math.max(0, markFor(position)) / leverage;
   }
-  const botPositionValue = positions
-    .filter((row) => row.exchange === exchange && row.is_paper === paper)
-    .reduce(
-      (sum, position) =>
-        sum +
-        Math.max(0, finite(position.remaining_quantity)) *
-          Math.max(0, finite(prices[position.market], position.average_entry_price)) /
-          (position.exchange === "binance_futures" ? positionLeverage(position) : 1),
-      0,
-    );
+  // bot_unrealized_pnl_quote is the mark-to-market value of what is STILL OPEN and nothing
+  // else. Partial take-profit money already booked on these rows belongs to realized PnL;
+  // the two summed together is the lifecycle figure recorded beside it.
+  const unrealized = totals.pureUnrealizedPnlQuote;
+  const lifecycle = totals.lifecyclePnlQuote;
   // Futures margin balance already includes every open position's unrealised PnL. Adding
   // marked contract notional here would inflate account capital by roughly the leverage.
   const capitalBaseQuote = exchange === "binance_futures"
@@ -5400,6 +5462,7 @@ async function snapshotAccount(
       locked_quote: finite(portfolio.locked_quote),
       bot_open_cost_quote: openCost,
       bot_unrealized_pnl_quote: unrealized,
+      bot_open_lifecycle_pnl_quote: lifecycle,
       capital_base_quote: managed.capitalBaseQuote,
       managed_capital_quote: managed.managedCapitalQuote,
       managed_available_quote: managed.managedAvailableQuote,
@@ -6765,6 +6828,7 @@ async function detectExternalQuoteFlow(
   portfolio: any,
   settings: TradingSettings & JsonRecord,
   cycleId: string,
+  lastSnapshot?: any,
 ) {
   // A cross-margin futures wallet's available balance moves with the mark price of every
   // open position, so comparing it against booked order flow measures unrealised PnL
@@ -6772,10 +6836,9 @@ async function detectExternalQuoteFlow(
   if (exchange === "binance_futures") {
     return { detected: false, delta: 0, baseline: "FUTURES_MARGIN_BALANCE_FLOATS_WITH_MARK" };
   }
-  const rows = await db(
+  const last = lastSnapshot ?? (await db(
     `trading_account_snapshots?exchange=eq.${exchange}&select=available_quote,captured_at&order=captured_at.desc&limit=1`,
-  ) as any[];
-  const last = rows?.[0];
+  ) as any[])?.[0];
   if (!last) return { detected: false, delta: 0, baseline: "INITIAL" };
   const since = String(last.captured_at || "");
   const snapshotAt = new Date(since).getTime();
@@ -6843,16 +6906,121 @@ async function detectExternalQuoteFlow(
   return { detected: true, delta: externalDelta, flow_type: flowType, paused: false };
 }
 
+/**
+ * Capital movement on a cross-margin futures wallet.
+ *
+ * `detectExternalQuoteFlow` cannot see this venue: its available balance floats with every
+ * mark, so comparing it against booked order flow measures unrealised PnL. Equity can be
+ * compared, though, once the PnL the bot itself booked is subtracted — and that is now a
+ * number this engine computes honestly. Anything left over is a deposit, a withdrawal or an
+ * internal transfer, and the operator was seeing those (67 → 619 USDT in a day) reported as
+ * a return. Record-only, exactly like the spot detector: a transfer is a fact to report,
+ * never a reason to halt trading.
+ */
+async function detectFuturesEquityCapitalFlow(
+  exchange: Exchange,
+  portfolio: any,
+  lastSnapshot: any,
+  currentUnrealizedQuote: number,
+  cycleId: string,
+) {
+  if (exchange !== "binance_futures" || !lastSnapshot) return null;
+  // The baseline must have been written by an engine that already stored pure unrealised
+  // PnL. A snapshot from before this deploy carries the old lifecycle-shaped number, and
+  // differencing the two would book the accounting correction itself as a withdrawal. The
+  // lifecycle column only exists from this version on, so its presence is the version test;
+  // detection arms itself one snapshot after deploy.
+  if (lastSnapshot.bot_open_lifecycle_pnl_quote == null) return null;
+  const since = String(lastSnapshot.captured_at || "");
+  const snapshotAt = Date.parse(since);
+  // A gap wide enough to have missed exits and marks cannot be attributed; the next
+  // snapshot re-establishes the baseline.
+  if (!Number.isFinite(snapshotAt) || Date.now() - snapshotAt > 120_000) return null;
+  const closedSince = await db(
+    `trading_positions?exchange=eq.${exchange}&state=eq.CLOSED&closed_at=gte.${
+      encodeURIComponent(since)
+    }&select=realized_pnl_quote`,
+  ).catch(() => []) as any[];
+  const realizedSince = (closedSince || []).reduce(
+    (sum, row) => sum + finite(row.realized_pnl_quote),
+    0,
+  );
+  const previousEquity = finite(lastSnapshot.total_equity_quote);
+  // Realized exits and the change in mark-to-market on what is still open are the only two
+  // ways this strategy can move the wallet.
+  const botPnl = realizedSince +
+    (finite(currentUnrealizedQuote) - finite(lastSnapshot.bot_unrealized_pnl_quote));
+  const flow = detectEquityCapitalFlow({
+    previousEquityQuote: previousEquity,
+    currentEquityQuote: finite(portfolio?.total_equity_quote),
+    botPnlQuote: botPnl,
+    // Funding, exact taker fees and mark-versus-quote skew all land inside this band on a
+    // book of ten 600 USDT slots. A real transfer is orders of magnitude larger.
+    thresholdQuote: Math.max(25, Math.abs(previousEquity) * 0.01),
+  });
+  if (!flow.detected || !flow.flowType) return flow;
+  await insert("trading_cash_flows", {
+    exchange,
+    quote_currency: quoteCurrency(exchange),
+    flow_type: flow.flowType,
+    amount_quote: Math.abs(flow.externalDeltaQuote),
+    details: {
+      basis: "FUTURES_EQUITY_DELTA_VS_BOT_PNL",
+      previous_equity_quote: previousEquity,
+      expected_equity_quote: flow.expectedEquityQuote,
+      current_equity_quote: finite(portfolio?.total_equity_quote),
+      bot_pnl_quote: botPnl,
+      realized_since_quote: realizedSince,
+      previous_unrealized_quote: finite(lastSnapshot.bot_unrealized_pnl_quote),
+      current_unrealized_quote: finite(currentUnrealizedQuote),
+      previous_snapshot_at: since,
+      detection_mode: "RECORD_ONLY",
+      engine_version: VERSION,
+    },
+  }).catch(() => null);
+  await event(
+    flow.flowType,
+    `${exchange} equity moved beyond booked trading PnL; recorded as capital flow`,
+    {
+      external_delta_quote: flow.externalDeltaQuote,
+      previous: previousEquity,
+      expected: flow.expectedEquityQuote,
+      current: finite(portfolio?.total_equity_quote),
+      basis: "FUTURES_EQUITY_DELTA_VS_BOT_PNL",
+      auto_pause: false,
+    },
+    { cycleId, level: "WARNING" },
+  ).catch(() => null);
+  return flow;
+}
+
 async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRecord) {
-  const allTracked = await db(
-    "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*&order=created_at.asc",
-  ) as Position[];
+  // The scheduler calls monitor every 2s but the measured cadence between SUCCESSful runs
+  // was 18-20s, because each cycle spent its time on bookkeeping rather than on stops.
+  // These phase timings ride along in trading_cycle_runs.summary so the effective cadence
+  // is a measurement rather than an assumption.
+  const cycleStartedAt = Date.now();
+  const timings: Record<string, number> = {};
+  const timed = async <T>(phase: string, work: () => Promise<T>): Promise<T> => {
+    const started = Date.now();
+    try {
+      return await work();
+    } finally {
+      timings[phase] = (timings[phase] || 0) + (Date.now() - started);
+    }
+  };
+  const allTracked = await timed(
+    "load_tracked",
+    () =>
+      db(
+        "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*&order=created_at.asc",
+      ) as Promise<Position[]>,
+  );
   // P10 has direction-aware futures accounting and hourly close-confirmed exits. Keep it
   // out of the legacy spot-shaped reconciliation/exit loop and manage it first.
-  const p10Actions = await monitorP10Positions(
-    allTracked.filter(isP10Position),
-    settings,
-    cycleId,
+  const p10Actions = await timed(
+    "p10_positions",
+    () => monitorP10Positions(allTracked.filter(isP10Position), settings, cycleId),
   );
   const tracked = allTracked.filter((row) => !isP10Position(row));
   for (
@@ -6897,7 +7065,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         p.metadata?.reconciliation_phase === "EXIT")
     )
   ) await reconcileExitPending(position, cycleId);
-  const feeReconciliations = await reconcileFeeLedger(cycleId);
+  const feeReconciliations = await timed("fee_ledger", () => reconcileFeeLedger(cycleId));
   // Exchange balances move before our position ledger does. Resolve every durable resting
   // TP first — including rows whose metadata reference was lost — so account reconciliation
   // never classifies the bot's own fill as a manual sale.
@@ -6939,7 +7107,47 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
   const portfolioCapturedAt: Partial<Record<Exchange, string>> = {};
   const books: Record<string, any> = {};
   const unresolvedManualAssets: string[] = [];
-  for (const exchange of ALL_EXCHANGES) {
+  // Every venue's portfolio used to be fetched one after another inside the loop below, so
+  // three gateway round trips were serialised into the stop-monitoring path for no reason —
+  // they do not depend on each other. Reading them together also means the three snapshots
+  // describe the same instant. A venue with nothing open and nothing enabled is still
+  // skipped, exactly as before.
+  const monitoredExchanges = ALL_EXCHANGES.filter((exchange) =>
+    exchangeEnabled(settings, exchange) || open.some((p) => p.exchange === exchange)
+  );
+  const prefetched = await timed(
+    "portfolios",
+    () =>
+      Promise.all(monitoredExchanges.map(async (exchange) => {
+        const [portfolio, lastSnapshot] = await Promise.all([
+          gateway(exchange, { action: "portfolio" }),
+          (db(
+            `trading_account_snapshots?exchange=eq.${exchange}` +
+              "&select=available_quote,total_equity_quote,bot_unrealized_pnl_quote," +
+              "bot_open_lifecycle_pnl_quote,captured_at" +
+              "&order=captured_at.desc&limit=1",
+          ).catch(() => [])) as Promise<any[]>,
+        ]);
+        return {
+          exchange,
+          portfolio,
+          capturedAt: new Date().toISOString(),
+          lastSnapshot: lastSnapshot?.[0] || null,
+        };
+      })),
+  );
+  const prefetchedByExchange = new Map(prefetched.map((row) => [row.exchange, row]));
+  // Balance snapshots and cash-flow detection are bookkeeping. Running them on every 2s
+  // tick wrote three large price blobs per cycle and re-compared the same baseline; running
+  // them on a fixed interval keeps the baseline far inside the 120s freshness window that
+  // detectExternalQuoteFlow requires while leaving the hot path to stops and exits.
+  const accountingDueByExchange = new Map(prefetched.map((row) => {
+    const capturedAt = Date.parse(String(row.lastSnapshot?.captured_at || ""));
+    const due = !Number.isFinite(capturedAt) ||
+      Date.now() - capturedAt >= ACCOUNT_ACCOUNTING_INTERVAL_MS;
+    return [row.exchange, due];
+  }));
+  for (const exchange of monitoredExchanges) {
     const exchangePositions = open.filter((p) => p.exchange === exchange);
     const balanceTrackedPositions = tracked.filter((p) =>
       p.exchange === exchange && !p.is_paper &&
@@ -6947,13 +7155,19 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         String(p.state),
       )
     );
-    const venueEnabled = exchangeEnabled(settings, exchange);
-    // Disabling an exchange blocks new entries only. Existing positions must remain monitored and exit-capable.
-    if (!venueEnabled && exchangePositions.length === 0) continue;
-    const portfolio = await gateway(exchange, { action: "portfolio" });
+    const prefetchedVenue = prefetchedByExchange.get(exchange);
+    if (!prefetchedVenue) continue;
+    const portfolio = prefetchedVenue.portfolio;
+    const lastSnapshot = prefetchedVenue.lastSnapshot;
+    const accountingDue = accountingDueByExchange.get(exchange) === true;
     portfolios[exchange] = portfolio;
-    portfolioCapturedAt[exchange] = new Date().toISOString();
-    await detectExternalQuoteFlow(exchange, portfolio, settings, cycleId);
+    portfolioCapturedAt[exchange] = prefetchedVenue.capturedAt;
+    if (accountingDue) {
+      await timed(
+        "external_flow",
+        () => detectExternalQuoteFlow(exchange, portfolio, settings, cycleId, lastSnapshot),
+      );
+    }
     const totalByAsset = new Map<string, number>();
     const freeByAsset = new Map<string, number>();
     for (const account of portfolio.accounts || []) {
@@ -6999,26 +7213,51 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
     //      actually LEFT the account is, and even then the pause is scoped to that asset
     //      unless the pattern is systemic (several assets at once => wrong account, key
     //      change, or exchange-side problem).
-    const botLockedResult = await botLockedQuantities(exchange, balanceTrackedPositions);
+    const trackedExchangePositions = tracked.filter((p) => p.exchange === exchange);
+    // Both consumers of the open-order list — bot-lock attribution and persisted asset-lock
+    // reconciliation — have nothing to say when there is neither a balance-tracked position
+    // nor a LOCKED asset on this venue, and each of them used to spend its own gateway round
+    // trip finding that out. Read the list once, and only when something depends on it.
+    const persistedLockCount = (await db(
+      `trading_asset_locks?exchange=eq.${exchange}&state=eq.LOCKED&select=asset&limit=1`,
+    ).catch(() => []) as any[]).length;
+    const openOrdersMatter = balanceTrackedPositions.length > 0 || persistedLockCount > 0;
+    const openOrders = openOrdersMatter
+      ? await timed("open_orders", () => fetchOpenOrders(exchange))
+      : [];
+    const botLockedResult = await botLockedQuantities(
+      exchange,
+      balanceTrackedPositions,
+      openOrders,
+    );
     // v6.4: when the open-order book is unreadable we cannot attribute a lock to anyone.
     // Suppress the locked-balance branch entirely rather than blaming the user for it.
     const botLockedKnown = botLockedResult !== null;
     const botLockedByAsset = botLockedResult ?? new Map<string, number>();
-    const allOpenOrderAssets = await openOrderAssets(exchange);
-    const trackedExchangePositions = tracked.filter((p) => p.exchange === exchange);
-    await recordJointObjectiveSnapshot(
-      exchange,
-      settings,
-      portfolio,
-      trackedExchangePositions,
-    ).catch(() => null);
-    await reconcilePersistedAssetLocks(
-      exchange,
-      portfolio,
-      trackedExchangePositions,
-      allOpenOrderAssets,
-      cycleId,
-    );
+    const allOpenOrderAssets = openOrderAssets(exchange, openOrders);
+    // recordJointObjectiveSnapshot rate-limits itself to one row a minute, but it re-derives
+    // the whole managed portfolio to decide that. Only ask when the accounting phase is due.
+    if (accountingDue) {
+      await timed(
+        "joint_objective",
+        () =>
+          recordJointObjectiveSnapshot(
+            exchange,
+            settings,
+            portfolio,
+            trackedExchangePositions,
+          ).catch(() => null),
+      );
+    }
+    if (persistedLockCount > 0) {
+      await reconcilePersistedAssetLocks(
+        exchange,
+        portfolio,
+        trackedExchangePositions,
+        allOpenOrderAssets,
+        cycleId,
+      );
+    }
     if (!botLockedKnown) {
       await event(
         "BOT_LOCK_UNKNOWN",
@@ -8720,30 +8959,74 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       }
     }
   }
-  const stillOpen = await db("trading_positions?state=eq.OPEN&select=*") as Position[];
-  for (const exchange of Object.keys(portfolios) as Exchange[]) {
-    await snapshotAccount(
-      exchange,
-      portfolios[exchange],
-      stillOpen,
-      prices,
-      settings,
-      portfolioCapturedAt[exchange],
-    );
-  }
+  const snapshotExchanges = (Object.keys(portfolios) as Exchange[])
+    .filter((exchange) => accountingDueByExchange.get(exchange) === true);
+  const stillOpen = snapshotExchanges.length
+    ? await db("trading_positions?state=eq.OPEN&select=*") as Position[]
+    : [];
+  await timed("account_snapshots", async () => {
+    for (const exchange of snapshotExchanges) {
+      const paper = settings.mode !== "LIVE_LIMITED";
+      const portfolio = portfolios[exchange];
+      // The same marks the snapshot is about to record, so the capital-flow test and the
+      // stored unrealised figure cannot disagree about what the book was worth.
+      const currentUnrealized = sumOpenPositionPnl(
+        stillOpen
+          .filter((row) => row.exchange === exchange && row.is_paper === paper)
+          .map((row) => ({
+            positionSide: row.position_side,
+            remainingQuantity: row.remaining_quantity,
+            averageEntryPrice: row.average_entry_price,
+            plannedEntryPrice: row.planned_entry_price,
+            markPrice: resolveMarkPrice(
+              [prices[row.market], portfolio?.prices?.[row.market]],
+              finite(row.average_entry_price, row.planned_entry_price),
+            ),
+            realizedPnlQuote: row.realized_pnl_quote,
+          })),
+      ).pureUnrealizedPnlQuote;
+      await detectFuturesEquityCapitalFlow(
+        exchange,
+        portfolio,
+        prefetchedByExchange.get(exchange)?.lastSnapshot,
+        currentUnrealized,
+        cycleId,
+      ).catch(() => null);
+      await snapshotAccount(
+        exchange,
+        portfolio,
+        stillOpen,
+        prices,
+        settings,
+        portfolioCapturedAt[exchange],
+      );
+    }
+  });
   const monitorHeartbeatAt = new Date().toISOString();
   await patchTradingHeartbeat({
     lastMonitorAt: monitorHeartbeatAt,
     lastGatewayHeartbeatAt: monitorHeartbeatAt,
     gatewayErrorCount: 0,
   });
-  if (settings.emergency_liquidation && stillOpen.length === 0) {
-    await patch("trading_settings", "id=eq.1", {
-      emergency_liquidation: false,
-      pause_new_entries: true,
-    });
+  if (settings.emergency_liquidation) {
+    const remaining = snapshotExchanges.length
+      ? stillOpen
+      : await db("trading_positions?state=eq.OPEN&select=id") as Position[];
+    if (remaining.length === 0) {
+      await patch("trading_settings", "id=eq.1", {
+        emergency_liquidation: false,
+        pause_new_entries: true,
+      });
+    }
   }
-  return { positions: open.length, actions, unresolved_manual_assets: unresolvedManualAssets };
+  return {
+    positions: open.length,
+    actions,
+    unresolved_manual_assets: unresolvedManualAssets,
+    duration_ms: Date.now() - cycleStartedAt,
+    timings_ms: timings,
+    accounting_exchanges: snapshotExchanges,
+  };
 }
 
 // =====================================================================================
@@ -9044,6 +9327,31 @@ function p10TicketCapital(
     minimum,
     step,
   });
+}
+
+/**
+ * Capital one new entry must be able to post, in the same units the wallet reports.
+ *
+ * This is the SCAN gate's half of the contract `p10TicketCapital` implements on the order
+ * side: futures ask for the operator's configured margin per slot (200 USDT, ≈600 USDT of
+ * notional at 3x), spot venues ask for the venue's minimum order. Both halves read the same
+ * setting, so the gate cannot advertise a slot the engine would refuse to size — the
+ * regression tests in entry-margin-gate.test.ts pin them to each other.
+ */
+function requiredCapitalForNextEntry(
+  exchange: Exchange,
+  settings: TradingSettings & JsonRecord,
+): number {
+  const limits = exchangeLimits(settings, exchange);
+  if (exchange !== "binance_futures") return Math.max(0, finite(limits.minOrder));
+  const operatorMargin = Math.max(
+    0,
+    finite((settings as any).binance_futures_allocation_usdt, 200),
+  );
+  // p10ExactFuturesTicketCapital posts exactly this margin and returns 0 below it, with no
+  // buffer of its own; matching that keeps the two thresholds identical rather than merely
+  // similar. FUTURES_MIN_ENTRY_MARGIN_USDT stays the floor when no allocation is set.
+  return operatorMargin > 0 ? operatorMargin : Math.max(0, finite(limits.minOrder));
 }
 
 async function rejectP10Claim(claimId: string | null, reason: string) {
@@ -9614,6 +9922,20 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
     const managedState = managed.managed || {};
     const managedCapitalQuote = finite(managedState.managedCapitalQuote);
     const bookedExposureQuote = finite(managedState.openCostQuote);
+    // What one new slot actually costs, taken from the helper the order path sizes with
+    // rather than from the venue's minimum-order floor. On futures those are not the same
+    // number — a slot is 200 USDT of posted margin (≈600 USDT notional at 3x) while the
+    // floor is the venue minimum — and gating on the floor is what let SCAN advertise
+    // allowNewEntry=true with 105 USDT of usable margin against a 200 USDT ticket.
+    const availableCapitalQuote = finite(managedState.managedAvailableQuote);
+    const ticketCapitalQuote = p10TicketCapital(exchange, settings, managedState);
+    const requiredCapitalQuote = requiredCapitalForNextEntry(exchange, settings);
+    const marginGate = evaluateEntryMarginGate({
+      availableQuote: availableCapitalQuote,
+      requiredQuote: requiredCapitalQuote,
+      openPositions: stats[exchange].openGlobal,
+      maxPositions: positionSlots,
+    });
     circuitDiagnostics[exchange] = {
       raw_total_equity_quote: diagnosticNumber(raw?.total_equity_quote),
       raw_available_quote: diagnosticNumber(raw?.available_quote),
@@ -9624,8 +9946,21 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
       reserved_exposure_quote: finite(managedState.reservedExposureQuote),
       managed_capital_quote: managedCapitalQuote,
       unallocated_within_cap_quote: Math.max(0, managedCapitalQuote - bookedExposureQuote),
-      managed_available_quote: finite(managedState.managedAvailableQuote),
-      circuit_min_order_quote: limits.minOrder,
+      managed_available_quote: availableCapitalQuote,
+      circuit_min_order_quote: requiredCapitalQuote,
+      venue_min_order_quote: limits.minOrder,
+      available_margin_quote: marginGate.availableQuote,
+      required_margin_quote: marginGate.requiredAvailableQuote,
+      margin_shortfall_quote: marginGate.shortfallQuote,
+      // The engine's own answer for this wallet: zero means it could not size a ticket.
+      // The gate above must never be open while this is zero.
+      sizing_ticket_capital_quote: ticketCapitalQuote,
+      free_position_slots: marginGate.freeSlots,
+      entry_margin_gate_reason: marginGate.reason,
+      pure_unrealized_open_pnl_quote: finite(stats[exchange].pureUnrealizedOpenPnlQuote),
+      realized_on_open_positions_quote: finite(stats[exchange].realizedOnOpenPositionsQuote),
+      lifecycle_open_pnl_quote: finite(stats[exchange].lifecycleOpenPnlQuote),
+      marked_open_pnl_quote: finite(stats[exchange].markedOpenPnlQuote),
     };
     circuits[exchange] = evaluateCircuit({
       mode: settings.mode,
@@ -9637,8 +9972,11 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
       withdrawalMode: Boolean(settings.withdrawal_mode),
       manualInterventionRequired: Boolean(settings.manual_intervention_required),
       emergencyLiquidation: settings.emergency_liquidation,
-      availableQuote: finite(managed.managed.managedAvailableQuote),
-      minOrderQuote: limits.minOrder,
+      availableQuote: availableCapitalQuote,
+      minOrderQuote: requiredCapitalQuote,
+      minOrderReason: exchange === "binance_futures"
+        ? INSUFFICIENT_FUTURES_MARGIN_REASON
+        : undefined,
       openPositionsGlobal: stats[exchange].openGlobal,
       openPositionsExchange: stats[exchange].openExchange,
       entriesTodayGlobal: stats[exchange].entriesTodayGlobal,
@@ -9771,7 +10109,41 @@ async function p10FetchJson(url: string, timeoutMs = 12_000) {
   }
 }
 
+/**
+ * Completed hourly bars per market, keyed by the hour they belong to.
+ *
+ * `p10CompletedBars` asks for everything that closed before the current hour opened, so its
+ * answer cannot change until the hour rolls over: refetching 140 candles per position on
+ * every 2s monitor tick bought nothing and cost two external round trips per cycle. An entry
+ * is only stored once the newest bar is the one the bucket expects, so a fetch that raced
+ * the venue's own bar close is retried next cycle instead of being pinned for an hour.
+ */
+const p10BarCache = new Map<string, { bucket: number; bars: P10Bar[] }>();
+
 async function p10CompletedBars(position: Position): Promise<P10Bar[]> {
+  const bucket = Math.floor(Date.now() / P10_HOUR_MS);
+  const cacheKey = `${position.exchange}:${position.market}`;
+  const cached = p10BarCache.get(cacheKey);
+  if (cached && cached.bucket === bucket) return cached.bars;
+  const bars = await p10FetchCompletedBars(position);
+  // Upbit returns candles newest-first and Binance oldest-first, so read the newest by time
+  // rather than by position.
+  const newestBarTime = bars.reduce((newest, bar) => Math.max(newest, finite(bar.time)), 0);
+  const expectedLastBarTime = (bucket - 1) * P10_HOUR_MS;
+  if (newestBarTime === expectedLastBarTime) {
+    p10BarCache.set(cacheKey, { bucket, bars });
+    // The engine follows a handful of positions; this only bounds a leak across a long-lived
+    // isolate that has rotated through many markets.
+    if (p10BarCache.size > 64) {
+      for (const [key, entry] of p10BarCache) {
+        if (entry.bucket < bucket) p10BarCache.delete(key);
+      }
+    }
+  }
+  return bars;
+}
+
+async function p10FetchCompletedBars(position: Position): Promise<P10Bar[]> {
   const end = Math.floor(Date.now() / P10_HOUR_MS) * P10_HOUR_MS - 1;
   if (position.exchange === "upbit") {
     const to = new Date(end + 1).toISOString();
@@ -10099,14 +10471,41 @@ async function monitorP10Positions(
     `trading_positions?strategy_key=eq.${encodeURIComponent(P10_STRATEGY_KEY)}` +
       "&state=eq.OPEN&select=*&order=created_at.asc",
   ) as Position[];
-  const portfolios = new Map<Exchange, any>();
+  // Every venue portfolio, every executable quote and every hourly bar set this cycle needs,
+  // read together instead of one after another down the loop. Each position's decision still
+  // uses only its own market's data, and a read that fails is re-thrown inside that
+  // position's own try block so the per-position error handling below is unchanged — the
+  // stop check for the tenth position simply no longer waits on nine round trips first.
+  const venues = [...new Set(open.map((row) => row.exchange))];
+  const settled = <T>(work: Promise<T>) =>
+    work.then((value) => ({ ok: true as const, value })).catch((error) => ({
+      ok: false as const,
+      error: error instanceof Error ? error : new Error(String(error)),
+    }));
+  const [portfolioReads, quoteReads, barReads] = await Promise.all([
+    Promise.all(
+      venues.map(async (venue) =>
+        [venue, await settled(gateway(venue, { action: "portfolio" }))] as const
+      ),
+    ),
+    Promise.all(
+      open.map(async (row) =>
+        [row.id, await settled(marketQuote(row.exchange, row.market))] as const
+      ),
+    ),
+    Promise.all(open.map(async (row) => [row.id, await settled(p10CompletedBars(row))] as const)),
+  ]);
+  const portfolios = new Map(portfolioReads);
+  const quotes = new Map(quoteReads);
+  const bars = new Map(barReads);
+  const unwrap = <T>(read: { ok: true; value: T } | { ok: false; error: Error } | undefined): T => {
+    if (!read) throw new Error("P10 monitor read missing");
+    if (!read.ok) throw read.error;
+    return read.value;
+  };
   for (let position of open) {
     try {
-      let portfolio = portfolios.get(position.exchange);
-      if (!portfolio) {
-        portfolio = await gateway(position.exchange, { action: "portfolio" });
-        portfolios.set(position.exchange, portfolio);
-      }
+      const portfolio = unwrap(portfolios.get(position.exchange));
       const exchangeQuantity = p10ExchangeQuantity(position, portfolio);
       const tolerance = Math.max(0.000000000001, finite(position.quantity_step) * 2);
       if (exchangeQuantity + tolerance < finite(position.remaining_quantity)) {
@@ -10129,11 +10528,11 @@ async function monitorP10Positions(
         });
         continue;
       }
-      const quote = await marketQuote(position.exchange, position.market);
+      const quote = unwrap(quotes.get(position.id));
       const side = String(position.position_side || "LONG") as P10Side;
       const executablePrice = side === "LONG" ? finite(quote.best_bid) : finite(quote.best_ask);
       if (!(executablePrice > 0)) throw new Error("P10 executable quote unavailable");
-      const prepared = prepareP10Bars(await p10CompletedBars(position));
+      const prepared = prepareP10Bars(unwrap(bars.get(position.id)));
       const latestCompletedBar = prepared.at(-1) || null;
       const entryPrice = finite(position.average_entry_price, position.planned_entry_price);
       const initialRisk = finite(
@@ -11047,9 +11446,11 @@ Deno.serve(async (request: Request) => {
       return response({ ok: true, cycle_id: cycleId, settings, reconciliation, scan_now: true });
     }
     if (action === "monitor") {
-      const result = await withLease(
+      const result = await runWithRenewedLease(
+        LEASE_GATEWAY,
         "autotrader-monitor",
-        90,
+        crypto.randomUUID(),
+        { ttlSeconds: MONITOR_LEASE_TTL_SECONDS, renewMs: MONITOR_LEASE_RENEW_MS },
         () => monitorCycle(cycleId, settings),
       );
       if (result == null) {

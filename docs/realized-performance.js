@@ -222,8 +222,9 @@
     if (summary) {
       if (exchangeFilter === "binance") {
         summary.innerHTML = `
-          <div><span>선물 계정 수익률 · 오늘</span><b class="${tone(accountFutures?.account_return_pct)}">${pct(accountFutures?.account_return_pct)}</b></div>
-          <div><span>전체 Equity 변동률 · 오늘</span><b class="${tone(accountCombined?.account_return_pct)}">${pct(accountCombined?.account_return_pct)}</b></div>
+          <div><span>선물 매매 수익률 · 오늘</span><b class="${tone(accountFutures?.trading_return_pct)}">${pct(accountFutures?.trading_return_pct)}</b></div>
+          <div><span>전체 Equity 변동률 · 오늘 (자금이동 포함)</span><b class="${tone(accountCombined?.account_return_pct)}">${pct(accountCombined?.account_return_pct)}</b></div>
+          <div><span>자금 입출금 · 오늘</span><b>${money(accountCombined?.capital_flow_quote,"USDT")}</b></div>
           <div><span>전략 ROI · 누적</span><b class="${tone(exchangeSummary?.cumulative_return_pct)}">${pct(exchangeSummary?.cumulative_return_pct)}</b></div>
           <div><span>실현 순손익</span><b class="${tone(exchangeSummary?.realized_net_pnl_quote)}">${money(exchangeSummary?.realized_net_pnl_quote,"USDT")}</b></div>
           <div><span>미실현 손익</span><b class="${tone(exchangeSummary?.open_net_pnl_quote)}">${money(exchangeSummary?.open_net_pnl_quote,"USDT")}</b></div>
@@ -246,7 +247,7 @@
     if ($("realized-revision-badge")) $("realized-revision-badge").textContent = revision;
     const src = $("realized-performance-source");
     if (src) src.textContent = exchangeFilter === "binance"
-      ? `선물 계정 수익률: Binance Futures Equity 기준 · 전체 Equity 변동률: 현물+선물 합산이며 자금이동 포함 · 전략 ROI: 거래 투입 증거금 기준 · ${revision} · ${dt(performanceSource?.generated_at)}`
+      ? `선물 매매 수익률: Equity 변동에서 입출금·이체를 제거한 실제 매매 손익 기준 · 전체 Equity 변동률: 현물+선물 합산이며 자금이동 포함이라 수익률이 아님 · 전략 ROI: 거래 투입 증거금 기준 · ${revision} · ${dt(performanceSource?.generated_at)}`
       : `체결 확정 장부 · 전략 ROI: 실제 거래원가 기준 · ${revision} · ${dt(performanceSource?.generated_at)}`;
   }
 

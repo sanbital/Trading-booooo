@@ -1,5 +1,12 @@
 // Trading-booooo read-only account equity performance API.
 // Dashboard/accounting only. This function never places, changes, or cancels orders.
+//
+// Equity change is not a return. Over one recent day the futures wallet went 67 → 619 USDT
+// because capital was transferred in, and reporting that delta over the starting equity put
+// a four-figure percentage on the dashboard that no trade produced. The engine records every
+// detected deposit, withdrawal and transfer in `trading_cash_flows`, so this API now reports
+// the equity change with that movement removed — `trading_*` — beside the raw equity figures,
+// which keep their existing field names for compatibility.
 
 const SUPABASE_URL = (Deno.env.get("SUPABASE_URL") || "").trim().replace(/\/$/, "");
 const SERVICE_KEY = (Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "").trim();
@@ -47,11 +54,25 @@ function out(body: unknown, status = 200): Response {
   });
 }
 
+import { netCapitalFlowQuote, tradingReturn } from "../market-autotrader/capital-flow.ts";
+
 function kstDayStartIso(nowMs = Date.now()): string {
   const offset = 9 * 60 * 60 * 1000;
   const day = 24 * 60 * 60 * 1000;
   const startUtc = Math.floor((nowMs + offset) / day) * day - offset;
   return new Date(startUtc).toISOString();
+}
+
+async function cashFlows(exchange: string, startIso: string) {
+  const url = `${SUPABASE_URL}/rest/v1/trading_cash_flows?exchange=eq.${exchange}` +
+    `&detected_at=gte.${encodeURIComponent(startIso)}&select=flow_type,amount_quote`;
+  const response = await fetch(url, {
+    headers: { apikey: SERVICE_KEY, authorization: `Bearer ${SERVICE_KEY}` },
+    cache: "no-store",
+  });
+  const data = await response.json().catch(() => []);
+  if (!response.ok) return [];
+  return Array.isArray(data) ? data : [];
 }
 
 async function snapshot(exchange: "binance" | "binance_futures", order: "asc" | "desc", startIso?: string) {
@@ -66,12 +87,20 @@ async function snapshot(exchange: "binance" | "binance_futures", order: "asc" | 
   return Array.isArray(data) ? (data[0] || null) : null;
 }
 
-function metric(exchange: string, start: any, current: any) {
+function metric(exchange: string, start: any, current: any, flowRows: unknown[] = []) {
   const startEquity = num(start?.total_equity_quote);
   const currentEquity = num(current?.total_equity_quote);
   const valid = startEquity != null && startEquity > 0 && currentEquity != null;
+  const flow = netCapitalFlowQuote(flowRows as any[]);
   const change = valid ? currentEquity! - startEquity! : null;
   const pct = valid ? change! / startEquity! * 100 : null;
+  const traded = valid
+    ? tradingReturn({
+      startEquityQuote: startEquity!,
+      currentEquityQuote: currentEquity!,
+      netCapitalFlowQuote: flow,
+    })
+    : null;
   return {
     exchange,
     start_snapshot_at: start?.captured_at || null,
@@ -79,7 +108,13 @@ function metric(exchange: string, start: any, current: any) {
     start_equity_quote: round(startEquity),
     current_equity_quote: round(currentEquity),
     equity_change_quote: round(change),
+    // Raw equity movement, deposits and withdrawals included. Kept under its original name
+    // so existing readers do not break; it is a balance delta, not a strategy result.
     account_return_pct: round(pct, 4),
+    capital_flow_quote: round(valid ? flow : null),
+    trading_pnl_quote: round(traded?.tradingPnlQuote ?? null),
+    trading_return_pct: round(traded?.tradingReturnPct ?? null, 4),
+    capital_flow_detected: valid && Math.abs(flow) > 0,
     valid,
   };
 }
@@ -90,19 +125,30 @@ Deno.serve(async (req: Request) => {
   if (!authorized(req)) return out({ ok: false, error: "unauthorized" }, 401);
   try {
     const dayStart = kstDayStartIso();
-    const [spotStart, spotCurrent, futuresStart, futuresCurrent] = await Promise.all([
-      snapshot("binance", "asc", dayStart),
-      snapshot("binance", "desc"),
-      snapshot("binance_futures", "asc", dayStart),
-      snapshot("binance_futures", "desc"),
-    ]);
-    const spot = metric("binance", spotStart, spotCurrent);
-    const futures = metric("binance_futures", futuresStart, futuresCurrent);
+    const [spotStart, spotCurrent, futuresStart, futuresCurrent, spotFlows, futuresFlows] =
+      await Promise.all([
+        snapshot("binance", "asc", dayStart),
+        snapshot("binance", "desc"),
+        snapshot("binance_futures", "asc", dayStart),
+        snapshot("binance_futures", "desc"),
+        cashFlows("binance", dayStart),
+        cashFlows("binance_futures", dayStart),
+      ]);
+    const spot = metric("binance", spotStart, spotCurrent, spotFlows);
+    const futures = metric("binance_futures", futuresStart, futuresCurrent, futuresFlows);
     const combinedValid = spot.valid && futures.valid;
     const combinedStart = combinedValid ? Number(spot.start_equity_quote) + Number(futures.start_equity_quote) : null;
     const combinedCurrent = combinedValid ? Number(spot.current_equity_quote) + Number(futures.current_equity_quote) : null;
     const combinedChange = combinedValid ? combinedCurrent! - combinedStart! : null;
     const combinedPct = combinedValid && combinedStart! > 0 ? combinedChange! / combinedStart! * 100 : null;
+    const combinedFlow = netCapitalFlowQuote([...spotFlows, ...futuresFlows] as any[]);
+    const combinedTraded = combinedValid
+      ? tradingReturn({
+        startEquityQuote: combinedStart!,
+        currentEquityQuote: combinedCurrent!,
+        netCapitalFlowQuote: combinedFlow,
+      })
+      : null;
     return out({
       ok: true,
       generated_at: new Date().toISOString(),
@@ -120,12 +166,19 @@ Deno.serve(async (req: Request) => {
           current_equity_quote: round(combinedCurrent),
           equity_change_quote: round(combinedChange),
           account_return_pct: round(combinedPct, 4),
+          capital_flow_quote: round(combinedValid ? combinedFlow : null),
+          trading_pnl_quote: round(combinedTraded?.tradingPnlQuote ?? null),
+          trading_return_pct: round(combinedTraded?.tradingReturnPct ?? null, 4),
+          capital_flow_detected: combinedValid && Math.abs(combinedFlow) > 0,
           valid: combinedValid,
         },
       },
       definitions: {
-        account_return_pct: "(current equity - first equity snapshot at/after 00:00 KST) / start equity * 100",
-        note: "Account equity change can include funding, deposits, withdrawals, and transfers; it is intentionally separate from strategy ROI.",
+        account_return_pct: "(current equity - first equity snapshot at/after 00:00 KST) / start equity * 100. Balance movement, NOT a trading return: deposits, withdrawals and internal transfers are included in it.",
+        capital_flow_quote: "net deposits minus withdrawals recorded in trading_cash_flows over the same window",
+        trading_pnl_quote: "equity change with capital movement removed: realized plus unrealized trading result",
+        trading_return_pct: "trading_pnl_quote / (start equity + capital added during the window) * 100",
+        note: "Use trading_return_pct for strategy performance. account_return_pct answers a different question — how much the account balance moved — and a deposit will move it without a single trade.",
       },
     });
   } catch (error) {

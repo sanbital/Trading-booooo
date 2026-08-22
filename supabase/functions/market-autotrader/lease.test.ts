@@ -134,3 +134,74 @@ Deno.test("the renewal heartbeat refreshes the same owner's expiry while work ru
   await new Promise((resolve) => setTimeout(resolve, 30));
   assertEquals(acquires.length, settled);
 });
+
+// The monitor holds `autotrader-engine` through the same RPC the scan uses. It used to take
+// a flat 90s TTL and never renew it, which meant a monitor the runtime killed mid-cycle
+// blocked stop monitoring for a further 90 seconds — the 98s cadence gap seen in production.
+// A short renewed TTL has to keep both guarantees at once: a live monitor is never
+// overlapped, and a dead one frees the lease within one TTL.
+const monitorOptions = { ttlSeconds: 30, renewMs: 5_000 };
+
+Deno.test("a second monitor cannot run while the first still holds the lease", async () => {
+  const clock = { now: 0 };
+  const { gateway, rows } = fakeLeases(clock);
+  let concurrent = 0;
+  let peak = 0;
+  let overlapped = 0;
+  const run = (owner: string) =>
+    runWithRenewedLease(gateway, "autotrader-monitor", owner, monitorOptions, async () => {
+      concurrent++;
+      peak = Math.max(peak, concurrent);
+      if (concurrent > 1) overlapped++;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      concurrent--;
+      return { exits: 1 };
+    });
+  const [first, second] = await Promise.all([run("monitor-a"), run("monitor-b")]);
+  // Exactly one cycle ran; the other skipped rather than issuing a duplicate exit.
+  assertEquals([first, second].filter((result) => result !== null).length, 1);
+  assertEquals(peak, 1);
+  assertEquals(overlapped, 0);
+  assertEquals(rows.has("autotrader-monitor"), false);
+});
+
+Deno.test("a monitor cycle longer than its TTL still excludes the next one", async () => {
+  const clock = { now: 0 };
+  const { gateway } = fakeLeases(clock);
+  let intruderRan = false;
+  const result = await runWithRenewedLease(
+    gateway,
+    "autotrader-monitor",
+    "monitor-a",
+    { ...monitorOptions, renewMs: 5 },
+    async () => {
+      // Well past the 30s TTL: only the renewal heartbeat can be keeping the lease alive.
+      clock.now = 45_000;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      const intruder = await runWithRenewedLease(
+        gateway,
+        "autotrader-monitor",
+        "monitor-b",
+        monitorOptions,
+        () => {
+          intruderRan = true;
+          return Promise.resolve({ exits: 1 });
+        },
+      );
+      assertEquals(intruder, null);
+      return { exits: 1 };
+    },
+  );
+  assertEquals(result, { exits: 1 });
+  assertEquals(intruderRan, false);
+});
+
+Deno.test("a monitor that died frees the engine lease in one short TTL, not ninety seconds", async () => {
+  const clock = { now: 0 };
+  const { gateway, rows } = fakeLeases(clock);
+  rows.set("autotrader-monitor", { owner: "killed-mid-cycle", expiresAt: 30_000 });
+  assertEquals(await gateway.acquire("autotrader-monitor", "monitor-next", 30), false);
+  // The old 90s TTL would still have been holding here.
+  clock.now = 30_001;
+  assertEquals(await gateway.acquire("autotrader-monitor", "monitor-next", 30), true);
+});
