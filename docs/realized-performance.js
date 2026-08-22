@@ -73,7 +73,7 @@
               <span id="realized-revision-badge" class="realized-revision-badge">revision 확인 중</span>
             </div>
           </div>
-          <p>계정 수익률은 Binance Equity 기준, 전략 ROI는 실제 거래 투입 증거금 기준으로 분리 표시합니다.</p>
+          <p>계정 수익률은 검증된 체결 손익 기준이며 입·출금·내부이체를 제외합니다. 전략 ROI는 실제 거래 투입 증거금 기준입니다.</p>
         </div>
         <div class="performance-filters realized-filters">
           <select id="realized-exchange-filter" aria-label="거래소 필터">
@@ -223,7 +223,7 @@
       if (exchangeFilter === "binance") {
         summary.innerHTML = `
           <div><span>선물 계정 수익률 · 오늘</span><b class="${tone(accountFutures?.account_return_pct)}">${pct(accountFutures?.account_return_pct)}</b></div>
-          <div><span>전체 Equity 변동률 · 오늘</span><b class="${tone(accountCombined?.account_return_pct)}">${pct(accountCombined?.account_return_pct)}</b></div>
+          <div><span>전체 계정 수익률 · 오늘</span><b class="${tone(accountCombined?.account_return_pct)}">${pct(accountCombined?.account_return_pct)}</b></div>
           <div><span>전략 ROI · 누적</span><b class="${tone(exchangeSummary?.cumulative_return_pct)}">${pct(exchangeSummary?.cumulative_return_pct)}</b></div>
           <div><span>실현 순손익</span><b class="${tone(exchangeSummary?.realized_net_pnl_quote)}">${money(exchangeSummary?.realized_net_pnl_quote,"USDT")}</b></div>
           <div><span>미실현 손익</span><b class="${tone(exchangeSummary?.open_net_pnl_quote)}">${money(exchangeSummary?.open_net_pnl_quote,"USDT")}</b></div>
@@ -246,7 +246,7 @@
     if ($("realized-revision-badge")) $("realized-revision-badge").textContent = revision;
     const src = $("realized-performance-source");
     if (src) src.textContent = exchangeFilter === "binance"
-      ? `선물 계정 수익률: Binance Futures Equity 기준 · 전체 Equity 변동률: 현물+선물 합산이며 자금이동 포함 · 전략 ROI: 거래 투입 증거금 기준 · ${revision} · ${dt(performanceSource?.generated_at)}`
+      ? `계정 수익률: 검증된 당일 체결 손익 / 당일 시작 운용자본 · 입·출금·내부이체 제외 · 현재 Equity는 잔고 확인용 · 전략 ROI: 거래 투입 증거금 기준 · ${revision} · ${dt(performanceSource?.generated_at)}`
       : `체결 확정 장부 · 전략 ROI: 실제 거래원가 기준 · ${revision} · ${dt(performanceSource?.generated_at)}`;
   }
 
@@ -286,7 +286,7 @@
       accountSource = accountResult.status === "fulfilled" ? accountResult.value : null;
       lastLoaded = Date.now();
       render();
-      const accountNote = accountSource?.venues?.binance_futures?.valid ? " · Binance Equity 연결" : " · 계정 Equity 조회 확인 필요";
+      const accountNote = accountSource?.venues?.binance_futures?.valid ? " · Binance 성과 연결" : " · 계정 성과 조회 확인 필요";
       if (status) status.textContent = `체결 확정값 · ${dt(performanceSource?.generated_at)} · ${performanceSource?.cache_status || "LIVE"}${accountNote}`;
     } catch (e) {
       inject();
