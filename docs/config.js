@@ -54,7 +54,7 @@ window.addEventListener("pageshow", applyDashboardVersion);
   document.head.appendChild(realizedScript);
 
   const entryStatusScript = document.createElement("script");
-  entryStatusScript.src = `./entry-status.js?v=4-HIDE-SUB-DOLLAR`;
+  entryStatusScript.src = `./entry-status.js?v=5-SCAN-DECISION-COPY`;
   entryStatusScript.defer = true;
   document.head.appendChild(entryStatusScript);
 
