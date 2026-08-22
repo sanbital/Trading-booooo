@@ -1,0 +1,22 @@
+name: Trigger external position hotfix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "HOTFIX_EXTERNAL_RECONCILE_TRIGGER"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch patch workflow
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run hotfix-external-position-reconcile.yml --ref main
