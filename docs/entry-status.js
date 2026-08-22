@@ -167,7 +167,7 @@
     section.innerHTML = `
       <div class="section-heading performance-heading">
         <div><p class="eyebrow">AUTO TRADER STATUS</p><h2>왜 지금 거래를 안 하나</h2></div>
-        <p>최근 실제 스캔과 진입 판정 로그를 사람이 읽을 수 있는 사유로 묶어 표시합니다.</p>
+        <p>최근 스캔 상태와 실제 진입 판정 로그를 분리해 표시합니다. 판정 로그가 없어도 스캔·모니터 시각이 최신이면 엔진은 정상 동작 중입니다.</p>
       </div>
       <article class="panel entry-status-panel">
         <div class="entry-status-head">
@@ -180,17 +180,17 @@
         <div class="performance-detail-grid entry-status-grid">
           <div><span>마지막 스캔</span><b id="entry-last-scan">—</b></div>
           <div><span>마지막 모니터</span><b id="entry-last-monitor">—</b></div>
-          <div><span>이번 스캔 판정</span><b id="entry-scan-count">—</b></div>
-          <div><span>최근 30분 판정</span><b id="entry-recent-count">—</b></div>
+          <div><span>최근 스캔 진입 판정</span><b id="entry-scan-count">—</b></div>
+          <div><span>최근 30분 실제 진입 판정</span><b id="entry-recent-count">—</b></div>
           <div><span>마지막 주문</span><b id="entry-last-order">—</b></div>
           <div><span>게이트웨이</span><b id="entry-gateway">—</b></div>
         </div>
         <div class="entry-status-block">
-          <strong>최근 30분 주요 진입 탈락 사유</strong>
+          <strong>최근 30분 실제 진입 탈락 사유</strong>
           <div id="entry-reasons" class="entry-reason-list muted">확인 중</div>
         </div>
         <div class="entry-status-block">
-          <strong>가장 최근 판정</strong>
+          <strong>최근 실제 진입 판정</strong>
           <div id="entry-latest-decision" class="entry-latest-decision">—</div>
         </div>
       </article>`;
@@ -283,14 +283,14 @@
     const reasons = Array.isArray(data.top_rejection_reasons_30m) ? data.top_rejection_reasons_30m : [];
     $("entry-reasons").innerHTML = reasons.length
       ? reasons.map((row) => `<div class="entry-reason-row"><span>${esc(row.reason)}${row.detail ? `<small>${esc(row.detail)}</small>` : ""}</span><strong>${Number(row.count)}건</strong></div>`).join("")
-      : `<div class="entry-reason-row"><span>최근 30분 진입 탈락 없음</span><strong>0건</strong></div>`;
+      : `<div class="entry-reason-row"><span>최근 30분 실제 진입 판정 없음</span><strong>0건</strong></div>`;
     const latest = data.latest_decision;
     if (latest) {
       const latestReason = latest.reason_label || latest.reason;
       const reasonText = latestReason ? ` · ${latestReason}` : "";
       $("entry-latest-decision").textContent = `${dt(latest.created_at)} · ${latest.exchange?.toUpperCase?.() || ""} ${latest.market || ""} · ${outcomeLabel(latest.outcome)}${reasonText}`;
     } else {
-      $("entry-latest-decision").textContent = "최근 판정 없음";
+      $("entry-latest-decision").textContent = "최근 실제 진입 판정 없음";
     }
   }
 
