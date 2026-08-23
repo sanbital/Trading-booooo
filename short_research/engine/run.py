@@ -18,7 +18,59 @@ KST = timezone(timedelta(hours=9))
 HOUR_MS = 3_600_000
 
 
+# Frozen dataset boundaries, fixed by the study spec and not derived from the data.
+FROZEN = dict(
+    warmup_start_utc="2026-07-24T00:00:00Z",
+    primary_start_utc="2026-08-22T07:45:00Z",
+    primary_end_utc="2026-08-23T07:45:00Z",
+)
+
+
+def _ms(iso: str) -> int:
+    return int(datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ")
+               .replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+
+def last_closed_signal_bar(boundary_ms: int) -> int:
+    """open_time of the newest bar fully closed at `boundary_ms`.
+
+    A bar with open_time T closes at T+1h, so it is usable only when T + 1h <= boundary.
+    This matches production's own cutoff, endTime = floor(now/1h)*1h - 1: at 07:45 that is
+    06:59:59.999, whose newest kline has open_time 06:00. The 07:00-08:00 bar is still
+    forming and must not be read.
+    """
+    return ((boundary_ms - HOUR_MS) // HOUR_MS) * HOUR_MS
+
+
+def first_signal_bar_after(boundary_ms: int) -> int:
+    """open_time of the first bar whose CLOSE lands strictly after `boundary_ms`.
+
+    A bar becomes actionable only when it closes, so a window that opens at 07:45 starts
+    with the bar closing at 08:00 -- open_time 07:00.
+    """
+    return (boundary_ms // HOUR_MS) * HOUR_MS
+
+
+def frozen_windows() -> dict[str, tuple[int, int]]:
+    """Signal-bar open_time bounds for each evaluation window.
+
+    The bounds constrain the SIGNAL bar, not the exit: a trade opened inside a window runs
+    to its own exit, and one still open when the data ends is closed at the last bar and
+    tagged DATASET_END so truncation stays visible.
+    """
+    end = last_closed_signal_bar(_ms(FROZEN["primary_end_utc"]))
+    start = first_signal_bar_after(_ms(FROZEN["primary_start_utc"]))
+    d = 24 * HOUR_MS
+    return {
+        "primary_24h": (start, end),
+        "prior_24h":   (start - d, end - d),
+        "recent_72h":  (start - 2 * d, end),
+        "recent_7d":   (start - 6 * d, end),
+    }
+
+
 def windows(primary_end_ms: int) -> dict[str, tuple[int, int]]:
+    """Data-derived fallback, used only when the frozen boundaries are overridden."""
     d = 24 * HOUR_MS
     return {
         "primary_24h": (primary_end_ms - d, primary_end_ms),
@@ -116,15 +168,14 @@ def run(dataset_dir: str, outdir: str, capital: float, primary_end_ms: int | Non
             prepared[b] = I.prepare_bars(d["bars"][b])
     ctx = build_context(prepared, ["BTCUSDT", "ETHUSDT"], d["funding"])
 
-    if primary_end_ms is None:
-        primary_end_ms = max(p[-1].time for p in prepared.values() if p)
-    W = windows(primary_end_ms)
-    print("PRIMARY window UTC:",
-          datetime.fromtimestamp(W["primary_24h"][0] / 1000, timezone.utc), "->",
-          datetime.fromtimestamp(W["primary_24h"][1] / 1000, timezone.utc))
-    print("PRIMARY window KST:",
-          datetime.fromtimestamp(W["primary_24h"][0] / 1000, KST), "->",
-          datetime.fromtimestamp(W["primary_24h"][1] / 1000, KST))
+    W = frozen_windows() if primary_end_ms is None else windows(primary_end_ms)
+    for label, (a, b) in W.items():
+        n = (b - a) // HOUR_MS + 1
+        print(f"  {label:12s} signal bars {n:4d}  "
+              f"UTC {datetime.fromtimestamp(a/1000, timezone.utc):%Y-%m-%d %H:%M} -> "
+              f"{datetime.fromtimestamp(b/1000, timezone.utc):%Y-%m-%d %H:%M}  |  "
+              f"KST {datetime.fromtimestamp(a/1000, KST):%Y-%m-%d %H:%M} -> "
+              f"{datetime.fromtimestamp(b/1000, KST):%Y-%m-%d %H:%M}")
 
     defs = json.loads((pathlib.Path(__file__).parents[1] / "strategy_definitions.json").read_text())
     sizing = dict(margin_per_slot=60.0, leverage=3, max_positions=10,

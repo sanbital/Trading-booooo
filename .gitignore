@@ -1,2 +1,6 @@
 short_research/synthetic_dataset/
 short_research/results/
+__pycache__/
+*.pyc
+short_research/engine/parity/ts_*.json
+short_research/engine/parity/_v2signal_pure.ts

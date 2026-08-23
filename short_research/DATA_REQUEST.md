@@ -20,22 +20,39 @@ binance_dataset/
     mark_prices.parquet      (optional)
 ```
 
-## Period
+## Period — FIXED
 
 - **Interval:** `1h`
-- **Coverage:** the most recent **30 days** ending at the collection timestamp, for every symbol.
-- Why 30 days and not 24 hours: the study runs PRIMARY (last 24h), PRIOR 24h, 72h and 7d from
-  one frozen dataset, and production's longest lookbacks are EMA100, a 72-bar Donchian channel
-  and a 72-bar return, with a hard `min_history_bars = 106` and a benchmark regime that only
-  starts at bar index 100. 7 days of test window plus a safe warm-up is ~570 bars; 30 days
-  (~720 bars) covers it with margin.
+- **Warm-up / data start:** `2026-07-24 00:00:00 UTC`
+- **Frozen PRIMARY:** `2026-08-22 07:45:00 UTC` → `2026-08-23 07:45:00 UTC`
+- **Only candles completed at the PRIMARY end are used.** A bar with `open_time = T` closes at
+  `T + 1h`, so at 07:45 the newest usable bar is `open_time 2026-08-23 06:00:00 UTC`. This is
+  exactly production's own cutoff, `endTime = floor(now/1h)*1h - 1` = `06:59:59.999`, and the
+  engine asserts the two agree.
+- Derived signal-bar windows (all from this one dataset):
+
+  | window | signal bars | UTC |
+  |---|---|---|
+  | PRIMARY 24h | 24 | 2026-08-22 07:00 → 2026-08-23 06:00 |
+  | PRIOR 24h | 24 | 2026-08-21 07:00 → 2026-08-22 06:00 |
+  | 72h | 72 | 2026-08-20 07:00 → 2026-08-23 06:00 |
+  | 7d | 168 | 2026-08-16 07:00 → 2026-08-23 06:00 |
+
+- The ~29 days from the warm-up start covers every production lookback with margin: EMA100, a
+  72-bar Donchian channel, a 72-bar return, `min_history_bars = 106`, and a benchmark regime
+  that only begins at bar index 100. Production itself fetches 200 bars per symbol.
 - All timestamps **UTC, milliseconds since epoch**.
 
 ## Universe
 
-From `GET /fapi/v1/exchangeInfo`, take **every** symbol — do not pre-filter. Record for each
-whether it is `contractType == PERPETUAL`, `status == TRADING`, `quoteAsset == USDT`. The
-research side applies the production eligibility rules itself; the collector only reports.
+From `GET /fapi/v1/exchangeInfo`, take **every** symbol — do not pre-filter, and deliver the
+whole `TRADING` + `PERPETUAL` universe. Record for each symbol whether it is
+`contractType == PERPETUAL`, `status == TRADING`, `quoteAsset == USDT`.
+
+**The collector does not decide `production_eligible`.** That column may be left blank. The
+research side applies the eligibility extracted from the deployed source
+(`status == TRADING`, `quoteAsset == USDT`, `contractType == PERPETUAL`, `lastPrice > 0`,
+and the venue liquidity floor) to the full perpetual universe itself.
 
 ## Files
 
@@ -115,7 +132,7 @@ mismatch.
 Place the directory in the repo (or hand over the path) and the frozen S01..S50 run starts
 immediately against
 `short_research/strategy_definitions.json`
-(SHA-256 `4607b5c1538baa72b4fc03801c3908331b238487ff0533c6f937f09847635a30`),
+(SHA-256 `ccf2b46cb6b282a32e5031e89d2bf6bb99c8af4b87c2a29726ebc1c9e26a1088`),
 which was written and hashed before any market data was seen and will not be edited.
 
 ```

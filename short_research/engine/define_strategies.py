@@ -1,5 +1,15 @@
 """Emit the frozen S01..S50 SHORT strategy definitions.
 
+BASELINE CORRECTION (before any market data was loaded):
+The live entry strategy on binance_futures is I46_HYBRID_SCORE_L1 (revision I46-LIVE-1.0.0),
+not P10. P10 was retired for the Binance venues on 2026-08-22 -- v2_live_signals carries an
+explicit `P10_DONCHIAN_BREAKOUT_RETIRED_20260822` config_key at the cutover, and
+v2_strategy_registry now records binance_futures as strategy_key I46_HYBRID_SCORE_L1 with
+execution_config_key P10_DONCHIAN_BREAKOUT_E10_SLOW_4R. P10 survives only as the exit and
+execution policy. So a "production symmetric SHORT" mirrors I46 entry + P10 exit, which is
+what S01 now is. The retired P10-symmetric SHORT is kept as S02 so the two can be compared
+directly, and it replaces a definition that had been an exact duplicate of S25.
+
 Written and hashed BEFORE any market data is loaded. The definitions are executable
 specs: run_strategy() in backtest.py dispatches on the enum fields here, so a
 definition cannot silently drift from what was actually run.
@@ -91,13 +101,20 @@ X = []
 A = X.append
 
 # ---- Family A: Donchian breakdown lineage -------------------------------------
-A(S("S01","Production symmetric SHORT","DONCHIAN_BREAKDOWN",
-    "Exact mirror of the live P10 LONG; the only variant with production parity.",
-    "Inherits every LONG gate, including ones tuned on long-side behaviour."))
-A(S("S02","Breakdown, regime-free","DONCHIAN_BREAKDOWN",
-    "Isolates how much the BTC regime gate costs in signal count.",
-    "Removes the only market-wide guard; exposed to broad-market squeezes.",
-    **R("NONE")))
+A(S("S01","Production symmetric SHORT (I46 entry + P10 exit)","I46_LIVE",
+    "Exact mirror of what binance_futures actually runs today; the only variant with "
+    "true production parity.",
+    "Inherits an 8-condition hybrid score tuned on long-side behaviour, and its gates are "
+    "materially looser than P10's, so it will fire far more often.",
+    entry={"rule":"I46_HYBRID_SCORE","params":{"min_score":5},
+           "timing":"NEXT_BAR_OPEN","trigger_price":"NEXT_BAR_OPEN"},
+    regime={"mode":"I46_BUILTIN","params":{"benchmark":"BTCUSDT",
+                                           "ret24_min_directional":-0.50,
+                                           "ret72_min_directional":-2.0}}))
+A(S("S02","Retired P10 symmetric SHORT","DONCHIAN_BREAKDOWN",
+    "The previous production entry, retired on 2026-08-22; the reference the Donchian "
+    "family is built on and the direct comparison against S01.",
+    "No longer what production runs, and its gates are strict enough that it may barely fire."))
 A(S("S03","Breakdown, strict BEAR regime","DONCHIAN_BREAKDOWN",
     "Only trades confirmed benchmark downtrends.",
     "Very few signals; may miss the fastest legs down.",
@@ -194,10 +211,12 @@ A(S("S20","Breakdown, no volume gate","VOLUME",
     **F(min_volume_ratio=0.0)))
 
 # ---- Family E: regime gating ---------------------------------------------------
-A(S("S21","BTC bearish regime required","REGIME",
-    "Aligns every short with the dominant market driver.",
-    "BTC can be flat while alts break down.",
-    **R("BENCHMARK_BEAR_ONLY", benchmark="BTCUSDT")))
+A(S("S21","BTC bearish by magnitude","REGIME",
+    "Demands the benchmark actually be down a set amount, not merely labelled BEAR, so a "
+    "flat-but-technically-bearish tape does not qualify.",
+    "Adds a second threshold on top of a categorical gate; can sit out shallow slides that "
+    "still trend.",
+    **R("BENCHMARK_BEAR_MAGNITUDE", benchmark="BTCUSDT", ret24_max_pct=-1.0)))
 A(S("S22","ETH bearish regime required","REGIME",
     "ETH leads alt risk appetite more closely than BTC.",
     "Adds a second data dependency for little diversification.",
@@ -238,7 +257,20 @@ A(S("S30","Top-quartile liquidity only","LIQUIDITY",
     **F(min_quote_volume_percentile=75)))
 
 # ---- Exit families: entry pinned to S01 ----------------------------------------
+I46_ENTRY = {"rule":"I46_HYBRID_SCORE","params":{"min_score":5},
+             "timing":"NEXT_BAR_OPEN","trigger_price":"NEXT_BAR_OPEN",
+             "max_entry_gap_atr":0.50,"max_initial_risk_pct":5.0}
+I46_REGIME = {"mode":"I46_BUILTIN","params":{"benchmark":"BTCUSDT",
+                                             "ret24_min_directional":-0.50,
+                                             "ret72_min_directional":-2.0}}
+
+
 def E(sid, name, strength, risk, **patch):
+    """Exit variants pin the entry to S01 -- the LIVE I46 entry -- so an exit effect is
+    attributable rather than confounded with a different trade population, and so the
+    result is directly actionable on the entry production actually uses."""
+    patch.setdefault("entry", I46_ENTRY)
+    patch.setdefault("regime", I46_REGIME)
     return S(sid, name, "EXIT_VARIANT", strength, risk, **patch)
 
 A(E("S31","Fixed 1R target","Highest hit rate; fastest capital turnover.",
@@ -341,10 +373,19 @@ doc = {
     "side": "SHORT",
     "venue": "binance_futures",
     "derived_from": {
-        "strategy_key": "P10_DONCHIAN_BREAKOUT_E10_SLOW_4R",
-        "revision": "P10-LIVE-1.0.0",
-        "deployed_edge_function_version": 360,
-        "ezbr_sha256": "c0f59c6de0e751f8943d32348289e40ae8a29690b3d291998f0fd52a58b9d0de",
+        "live_entry_strategy_key": "I46_HYBRID_SCORE_L1",
+        "live_entry_revision": "I46-LIVE-1.0.0",
+        "live_exit_execution_config_key": "P10_DONCHIAN_BREAKOUT_E10_SLOW_4R",
+        "live_exit_policy": "P10_PRODUCTION_FIXED_5R_STOP2ATR_TRAIL2P5_"
+                            "PARTIAL2R40_BE1P5_EMA20_LOSS24_MAX96",
+        "retired_entry_strategy_key": "P10_DONCHIAN_BREAKOUT_E10_SLOW_4R",
+        "retired_on": "2026-08-22",
+        "signal_producer": {"edge_function": "market-v2-signal", "version": 8,
+                            "ezbr_sha256": "567427c0686080d0574858c81470582049e0f33f"
+                                           "b607c6afcc8e"},
+        "executor": {"edge_function": "market-autotrader", "version": 360,
+                     "ezbr_sha256": "c0f59c6de0e751f8943d32348289e40ae8a29690b3d29"
+                                    "1998f0fd52a58b9d0de"},
     },
     "shared_execution_assumptions": {
         "margin_per_slot_usdt": 60, "leverage": 3,

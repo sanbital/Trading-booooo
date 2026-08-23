@@ -119,6 +119,14 @@ class PreparedBar(Bar):
     quote_volume_mean20: float = 0.0
     atr_pct: float = 0.0
     close_location: float = 0.0
+    # I46 additions (market-v2-signal prepare()): shorter momentum legs, the 3-bar EMA
+    # slope and the bar range in ATR units. Present on every bar so one prepared series
+    # feeds both the P10 and the I46 gates.
+    ret3_pct: float = 0.0
+    ret6_pct: float = 0.0
+    ret12_pct: float = 0.0
+    ema20_slope3_pct: float = 0.0
+    range_atr: float = 0.0
 
 
 def prepare_bars(rows: Sequence[Bar]) -> list[PreparedBar]:
@@ -170,9 +178,14 @@ def prepare_bars(rows: Sequence[Bar]) -> list[PreparedBar]:
             low72_prev=l72[i - 1] if i > 0 else b.low,
             volume_ratio=(vols[i] / v20[i]) if v20[i] > 0 else 0.0,
             quote_volume_mean20=v20[i],
+            ret3_pct=pct(b.close, bars[i - 3].close) if i >= 3 else 0.0,
+            ret6_pct=pct(b.close, bars[i - 6].close) if i >= 6 else 0.0,
+            ret12_pct=pct(b.close, bars[i - 12].close) if i >= 12 else 0.0,
+            ema20_slope3_pct=pct(e20[i], e20[i - 3]) if i >= 3 else 0.0,
         )
         p.atr_pct = (p.atr14 / b.close * 100.0) if b.close > 0 else 0.0
         p.close_location = ((b.close - b.low) / rng) if rng > 0 else 0.0
+        p.range_atr = (rng / atr14[i]) if atr14[i] > 0 else 0.0
         out.append(p)
     return out
 

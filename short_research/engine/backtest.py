@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .indicators import PreparedBar, pct
-from .gates import regime_eligible, P10_CONFIG
+from .gates import regime_eligible, P10_CONFIG, i46_check
 
 HOUR_MS = 3_600_000
 
@@ -213,6 +213,10 @@ def entry_triggered(spec: dict, bars: list[PreparedBar], i: int) -> tuple[bool, 
         lvl = b.low72_prev
         return (was_squeezed and expanding and b.close < lvl and prev.close >= lvl), None
 
+    if rule == "I46_HYBRID_SCORE":
+        # handled by the I46 gate stack in generate_signals, not by a structural trigger
+        return False, None
+
     raise ValueError(f"unknown entry rule {rule}")
 
 
@@ -227,11 +231,21 @@ def regime_ok(spec: dict, bar_time: int, ctx: dict) -> bool:
     if mode == "BENCHMARK_BEAR_ONLY":
         st = ctx["benchmarks"].get(p.get("benchmark", "BTCUSDT"), {}).get(bar_time)
         return bool(st) and st.regime == "BEAR"
+    if mode == "BENCHMARK_BEAR_MAGNITUDE":
+        # categorical BEAR is not enough: the benchmark must also be down by a set amount,
+        # which is a different question from "is the trend labelled bearish".
+        st = ctx["benchmarks"].get(p.get("benchmark", "BTCUSDT"), {}).get(bar_time)
+        return (bool(st) and st.regime == "BEAR"
+                and st.ret24_pct <= p.get("ret24_max_pct", -1.0))
     if mode == "DUAL_BENCHMARK_BEAR":
         for name in p.get("benchmarks", []):
             st = ctx["benchmarks"].get(name, {}).get(bar_time)
             if not st or st.regime != "BEAR":
                 return False
+        return True
+    if mode == "I46_BUILTIN":
+        # I46 applies its own benchmark tolerance inside i46_check; there is no separate
+        # regime gate to evaluate here.
         return True
     if mode == "BREADTH_BEAR":
         share_up = ctx["breadth"].get(bar_time)
@@ -289,17 +303,63 @@ def filters_ok(spec: dict, bars: list[PreparedBar], i: int, symbol: str, ctx: di
     return True
 
 
+EXTRA_GUARD_KEYS = ("overextension_max_abs_ret24_pct", "extreme_mover_rank_guard",
+                    "funding_rate_min", "min_quote_volume_percentile")
+
+
+def _extra_guards_ok(spec: dict, bar: PreparedBar, symbol: str, ctx: dict) -> bool:
+    """Guards that can ride on top of a self-contained gate stack such as I46."""
+    f = spec["filters"]
+    ov = f.get("overextension_max_abs_ret24_pct")
+    if ov is not None and abs(bar.ret24_pct) > ov:
+        return False
+    rk = f.get("extreme_mover_rank_guard")
+    if rk is not None:
+        rank = ctx.get("decliner_rank", {}).get((bar.time, symbol))
+        if rank is not None and rank <= rk:
+            return False
+    fr = f.get("funding_rate_min")
+    if fr is not None:
+        rate = ctx.get("funding_at", {}).get((symbol, bar.time))
+        if rate is None or rate < fr:
+            return False
+    qp = f.get("min_quote_volume_percentile")
+    if qp is not None:
+        v = ctx.get("liquidity_percentile", {}).get((bar.time, symbol))
+        if v is None or v < qp:
+            return False
+    return True
+
+
 def generate_signals(spec: dict, symbol: str, bars: list[PreparedBar], ctx: dict,
                      window: tuple[int, int]) -> list[dict]:
     """All signal bars for one symbol. `window` bounds the SIGNAL bar time, not the exit."""
     out = []
     start, end = window
+    is_i46 = spec["entry"]["rule"] == "I46_HYBRID_SCORE"
+    floor = spec["filters"].get("liquidity_floor_quote_mean20", 500_000.0)
+    btc = ctx["benchmarks"].get("BTCUSDT", {})
     for i in range(1, len(bars)):
         b = bars[i]
         if b.time < start or b.time > end:
             continue
         if i + 1 < spec.get("min_history_bars", 106):
             continue
+
+        if is_i46:
+            # I46 carries its own benchmark tolerance and gate stack, so the P10 filter
+            # block is not applied on top of it -- only guards the definition adds.
+            state = btc.get(b.time)
+            if state is None:
+                continue
+            chk = i46_check(b, bars[i - 1], state, "SHORT", floor)
+            if not chk or not _extra_guards_ok(spec, b, symbol, ctx):
+                continue
+            out.append(dict(symbol=symbol, index=i, signal_time=b.time,
+                            reference_close=b.close, atr14=b.atr14, trigger_price=None,
+                            score=chk["rel24"]))
+            continue
+
         if not regime_ok(spec, b.time, ctx):
             continue
         if not filters_ok(spec, bars, i, symbol, ctx):

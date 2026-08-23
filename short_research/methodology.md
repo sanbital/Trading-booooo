@@ -6,13 +6,23 @@ Settled in this session, from production sources and live data:
 
 - Production source secured and hash-verified (deployed `market-autotrader` v360,
   `ezbr_sha256 c0f59c6d…`, 52 files, byte-identical to repo commit `ae4379c`).
-- Production LONG (P10) extracted in full — see `production_long_spec.json`.
-- The Python replay engine is **bit-exact** with the deployed policy module: 5,200 indicator
-  comparisons and 300 benchmark-regime states with zero deviation, and 885 per-bar signal
-  verdicts with zero mismatches (`engine/parity/`).
+- Production entry extracted in full — see `production_spec.json`. **Correction:** an earlier
+  pass in this session reported P10 as the live entry for `binance_futures`. It is not. P10 was
+  retired for the Binance venues on 2026-08-22 (`v2_live_signals` carries an explicit
+  `P10_DONCHIAN_BREAKOUT_RETIRED_20260822` config_key at the cutover, and `v2_strategy_registry`
+  now records `binance_futures` as `I46_HYBRID_SCORE_L1`, revision `I46-LIVE-1.0.0`). The live
+  model is **I46 entry + P10 exit**. The error came from reading only `p10-policy.ts` inside
+  `market-autotrader`; the signal producer is `market-v2-signal`, whose `runVenue` dispatches
+  `i46 ? detectI46 : detectP10` with `i46 = venue !== "upbit_spot"`.
+- The Python replay engine is **bit-exact** with both deployed strategies: 5,200 indicator
+  comparisons and 300 benchmark-regime states with zero deviation, 885 per-bar P10 verdicts
+  with zero mismatches, and 1,180 per-bar I46+P10 verdicts with zero mismatches
+  (`engine/parity/`). The I46 harness runs the repo's own `market-v2-signal` source with only
+  its Deno entrypoint stripped, so the gate functions under test are the deployed ones.
 - S01..S50 defined and frozen **before** any market data was loaded, hashed to
-  `4607b5c1538baa72b4fc03801c3908331b238487ff0533c6f937f09847635a30`.
-- Engine, portfolio replay, metrics and leakage tests written and passing (15 tests).
+  `ccf2b46cb6b282a32e5031e89d2bf6bb99c8af4b87c2a29726ebc1c9e26a1088`. S01 mirrors the live I46 entry with the P10 exit; S02 is the retired
+  P10-symmetric SHORT, kept so the two can be compared directly.
+- Engine, portfolio replay, metrics and leakage tests written and passing (22 tests).
 
 Pending external input: the Binance OHLCV/funding dataset (`DATA_REQUEST.md`). The research
 environment cannot reach `fapi.binance.com`; the organisation egress proxy answers 403 to
@@ -23,7 +33,12 @@ it is finished.
 
 ## Freeze discipline
 
-The 50 definitions were written from the production LONG spec alone. No PRIMARY result informed
+The freeze forbids letting a *result* reshape a hypothesis. It does not require preserving a
+factual error about what production runs, and the correction above was made while the dataset
+was still absent — no market data had been loaded, so no result could have motivated it. The
+hash was recomputed and the old one is recorded in git history.
+
+The 50 definitions were written from the production spec alone. No PRIMARY result informed
 them, because no market data existed when they were hashed. After the dataset arrives, the
 definitions are not edited: no strategy is retuned, dropped for being unprofitable, or added.
 A strategy that throws is a code fix followed by a re-run of the *same* definition;
@@ -80,7 +95,9 @@ signal and asserts the entry decision is unchanged.
 ## Windows
 
 All four run from one frozen dataset, so nothing is re-collected between them:
-PRIMARY = last 24h, PRIOR = the 24h before it, plus 72h and 7d. The window bounds the *signal*
+PRIMARY is fixed at 2026-08-22 07:45Z → 2026-08-23 07:45Z, which under the closed-candle rule
+resolves to signal bars 2026-08-22 07:00 → 2026-08-23 06:00 (24 bars); PRIOR is the 24h before
+it, plus 72h and 7d. The window bounds the *signal*
 bar, not the exit; a trade opened inside the window is allowed to run to its own exit, and a
 trade still open at the end of the data is closed at the last bar and tagged `DATASET_END` so
 truncation is visible rather than hidden.

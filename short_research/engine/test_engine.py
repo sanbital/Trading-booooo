@@ -284,5 +284,70 @@ class TestDefinitionsFrozen(unittest.TestCase):
                 self.fail(f"{s['strategy_id']}: {e}")
 
 
+class TestFrozenWindows(unittest.TestCase):
+    def test_cutoff_equals_production_rule(self):
+        from short_research.engine.run import last_closed_signal_bar, _ms, HOUR_MS
+        b = _ms("2026-08-23T07:45:00Z")
+        prod_end = (b // HOUR_MS) * HOUR_MS - 1     # production: floor(now/1h)*1h - 1
+        last = last_closed_signal_bar(b)
+        self.assertEqual(last + HOUR_MS - 1, prod_end)
+
+    def test_window_bar_counts(self):
+        from short_research.engine.run import frozen_windows, HOUR_MS
+        W = frozen_windows()
+        for name, expect in (("primary_24h", 24), ("prior_24h", 24),
+                             ("recent_72h", 72), ("recent_7d", 168)):
+            a, b = W[name]
+            self.assertEqual((b - a) // HOUR_MS + 1, expect, name)
+
+    def test_primary_and_prior_do_not_overlap(self):
+        from short_research.engine.run import frozen_windows
+        W = frozen_windows()
+        self.assertLess(W["prior_24h"][1], W["primary_24h"][0])
+
+
+class TestBaselineIsLiveStrategy(unittest.TestCase):
+    def test_no_two_definitions_are_identical(self):
+        import collections
+        key = lambda s: json.dumps({k: v for k, v in s.items() if k not in
+            ("strategy_id", "name", "family", "expected_strength", "expected_risk")},
+            sort_keys=True)
+        seen = collections.defaultdict(list)
+        for s in DEFS["strategies"]:
+            seen[key(s)].append(s["strategy_id"])
+        dups = [v for v in seen.values() if len(v) > 1]
+        self.assertEqual(dups, [], f"identical definitions: {dups}")
+
+    def test_s01_mirrors_the_live_entry(self):
+        """S01 must mirror what binance_futures actually runs: I46 entry, not retired P10."""
+        s01 = SPECS["S01"]
+        self.assertEqual(s01["entry"]["rule"], "I46_HYBRID_SCORE")
+        self.assertEqual(s01["side"], "SHORT")
+        self.assertEqual(DEFS["derived_from"]["live_entry_strategy_key"],
+                         "I46_HYBRID_SCORE_L1")
+        self.assertEqual(DEFS["derived_from"]["retired_entry_strategy_key"],
+                         "P10_DONCHIAN_BREAKOUT_E10_SLOW_4R")
+        self.assertEqual(SPECS["S02"]["entry"]["rule"], "DONCHIAN_BREAKDOWN")
+
+    def test_exit_variants_pin_to_the_live_entry(self):
+        for i in range(31, 51):
+            s = SPECS[f"S{i:02d}"]
+            self.assertEqual(s["entry"]["rule"], "I46_HYBRID_SCORE",
+                             f"S{i:02d} must vary the exit, not the entry")
+
+    def test_i46_is_looser_than_p10(self):
+        """Sanity check the ported gates: I46 must admit strictly more SHORT bars."""
+        from short_research.engine.gates import detect_latest_i46, detect_latest_signal
+        rows = synth(seed=44, direction=-1)
+        bench = synth(seed=33, base=50000, drift=-0.0012, vol=0.004, break_at=0)
+        states = I.benchmark_states(bench)
+        i46 = p10 = 0
+        for k in range(106, len(rows)):
+            prep = I.prepare_bars(rows[:k + 1])
+            i46 += 1 if detect_latest_i46("binance_futures", prep, states) else 0
+            p10 += 1 if detect_latest_signal("binance_futures", prep, states) else 0
+        self.assertGreater(i46, p10, "I46 should fire more often than P10")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

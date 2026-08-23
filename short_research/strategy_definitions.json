@@ -1,9 +1,21 @@
 {
   "derived_from": {
-    "deployed_edge_function_version": 360,
-    "ezbr_sha256": "c0f59c6de0e751f8943d32348289e40ae8a29690b3d291998f0fd52a58b9d0de",
-    "revision": "P10-LIVE-1.0.0",
-    "strategy_key": "P10_DONCHIAN_BREAKOUT_E10_SLOW_4R"
+    "executor": {
+      "edge_function": "market-autotrader",
+      "ezbr_sha256": "c0f59c6de0e751f8943d32348289e40ae8a29690b3d291998f0fd52a58b9d0de",
+      "version": 360
+    },
+    "live_entry_revision": "I46-LIVE-1.0.0",
+    "live_entry_strategy_key": "I46_HYBRID_SCORE_L1",
+    "live_exit_execution_config_key": "P10_DONCHIAN_BREAKOUT_E10_SLOW_4R",
+    "live_exit_policy": "P10_PRODUCTION_FIXED_5R_STOP2ATR_TRAIL2P5_PARTIAL2R40_BE1P5_EMA20_LOSS24_MAX96",
+    "retired_entry_strategy_key": "P10_DONCHIAN_BREAKOUT_E10_SLOW_4R",
+    "retired_on": "2026-08-22",
+    "signal_producer": {
+      "edge_function": "market-v2-signal",
+      "ezbr_sha256": "567427c0686080d0574858c81470582049e0f33fb607c6afcc8e",
+      "version": 8
+    }
   },
   "frozen": true,
   "frozen_before_any_market_data_loaded": true,
@@ -35,17 +47,15 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
-      "expected_risk": "Inherits every LONG gate, including ones tuned on long-side behaviour.",
-      "expected_strength": "Exact mirror of the live P10 LONG; the only variant with production parity.",
-      "family": "DONCHIAN_BREAKDOWN",
+      "expected_risk": "Inherits an 8-condition hybrid score tuned on long-side behaviour, and its gates are materially looser than P10's, so it will fire far more often.",
+      "expected_strength": "Exact mirror of what binance_futures actually runs today; the only variant with true production parity.",
+      "family": "I46_LIVE",
       "filters": {
         "atr_pct_range": [
           0.15,
@@ -73,19 +83,18 @@
       "loss_time_stop_bars": 24,
       "max_holding_bars": 96,
       "min_history_bars": 106,
-      "name": "Production symmetric SHORT",
+      "name": "Production symmetric SHORT (I46 entry + P10 exit)",
       "partial_exit": {
         "at_r": 2.0,
         "enabled": true,
         "fraction": 0.4
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -134,8 +143,8 @@
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
-      "expected_risk": "Removes the only market-wide guard; exposed to broad-market squeezes.",
-      "expected_strength": "Isolates how much the BTC regime gate costs in signal count.",
+      "expected_risk": "No longer what production runs, and its gates are strict enough that it may barely fire.",
+      "expected_strength": "The previous production entry, retired on 2026-08-22; the reference the Donchian family is built on and the direct comparison against S01.",
       "family": "DONCHIAN_BREAKDOWN",
       "filters": {
         "atr_pct_range": [
@@ -164,15 +173,20 @@
       "loss_time_stop_bars": 24,
       "max_holding_bars": 96,
       "min_history_bars": 106,
-      "name": "Breakdown, regime-free",
+      "name": "Retired P10 symmetric SHORT",
       "partial_exit": {
         "at_r": 2.0,
         "enabled": true,
         "fraction": 0.4
       },
       "regime": {
-        "mode": "NONE",
-        "params": {}
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
       },
       "rule_exits": {
         "donchian_reclaim_n": null,
@@ -1850,8 +1864,8 @@
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
-      "expected_risk": "BTC can be flat while alts break down.",
-      "expected_strength": "Aligns every short with the dominant market driver.",
+      "expected_risk": "Adds a second threshold on top of a categorical gate; can sit out shallow slides that still trend.",
+      "expected_strength": "Demands the benchmark actually be down a set amount, not merely labelled BEAR, so a flat-but-technically-bearish tape does not qualify.",
       "family": "REGIME",
       "filters": {
         "atr_pct_range": [
@@ -1880,16 +1894,17 @@
       "loss_time_stop_bars": 24,
       "max_holding_bars": 96,
       "min_history_bars": 106,
-      "name": "BTC bearish regime required",
+      "name": "BTC bearish by magnitude",
       "partial_exit": {
         "at_r": 2.0,
         "enabled": true,
         "fraction": 0.4
       },
       "regime": {
-        "mode": "BENCHMARK_BEAR_ONLY",
+        "mode": "BENCHMARK_BEAR_MAGNITUDE",
         "params": {
-          "benchmark": "BTCUSDT"
+          "benchmark": "BTCUSDT",
+          "ret24_max_pct": -1.0
         }
       },
       "rule_exits": {
@@ -2739,11 +2754,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -2784,12 +2797,11 @@
         "fraction": 0.0
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -2830,11 +2842,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -2875,12 +2885,11 @@
         "fraction": 0.0
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -2921,11 +2930,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -2966,12 +2973,11 @@
         "fraction": 0.0
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -3012,11 +3018,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -3057,12 +3061,11 @@
         "fraction": 0.0
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -3103,11 +3106,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -3148,12 +3149,11 @@
         "fraction": 0.0
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -3194,11 +3194,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -3239,12 +3237,11 @@
         "fraction": 0.4
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -3286,11 +3283,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -3331,12 +3326,11 @@
         "fraction": 0.0
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -3377,11 +3371,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -3422,12 +3414,11 @@
         "fraction": 0.0
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -3468,11 +3459,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -3513,12 +3502,11 @@
         "fraction": 0.4
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -3561,11 +3549,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -3606,12 +3592,11 @@
         "fraction": 0.4
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -3652,11 +3637,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -3697,12 +3680,11 @@
         "fraction": 0.4
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -3743,11 +3725,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -3788,12 +3768,11 @@
         "fraction": 0.5
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -3834,11 +3813,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -3879,12 +3856,11 @@
         "fraction": 0.3
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -3925,11 +3901,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -3970,12 +3944,11 @@
         "fraction": 0.0
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -4016,11 +3989,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -4061,12 +4032,11 @@
         "fraction": 0.4
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -4107,11 +4077,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -4152,12 +4120,11 @@
         "fraction": 0.4
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -4198,11 +4165,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -4243,12 +4208,11 @@
         "fraction": 0.4
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -4289,11 +4253,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -4334,12 +4296,11 @@
         "fraction": 0.4
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -4380,11 +4341,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -4425,12 +4384,11 @@
         "fraction": 0.4
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
@@ -4474,11 +4432,9 @@
         "max_entry_gap_atr": 0.5,
         "max_initial_risk_pct": 5.0,
         "params": {
-          "buffer_atr": 0.1,
-          "n": 72,
-          "require_prior_inside": true
+          "min_score": 5
         },
-        "rule": "DONCHIAN_BREAKDOWN",
+        "rule": "I46_HYBRID_SCORE",
         "timing": "NEXT_BAR_OPEN",
         "trigger_price": "NEXT_BAR_OPEN"
       },
@@ -4519,12 +4475,11 @@
         "fraction": 0.4
       },
       "regime": {
-        "mode": "SYMMETRIC_P10",
+        "mode": "I46_BUILTIN",
         "params": {
           "benchmark": "BTCUSDT",
-          "not_regime": "BULL",
-          "ret24_max_pct": -0.1,
-          "ret72_max_pct": 0.0
+          "ret24_min_directional": -0.5,
+          "ret72_min_directional": -2.0
         }
       },
       "rule_exits": {
