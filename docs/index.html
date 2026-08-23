@@ -8,10 +8,10 @@
   <meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
   <title>Trading-booooo AI Trader Dashboard</title>
   <link rel="stylesheet" href="./styles.css?v=7.5.3-RECOVERY-NET-POSITIVE-r1">
-  <link rel="stylesheet" href="./performance.css?v=20260821-account-return-r1">
-  <script src="./config.js?v=7.6.4-ENTRY-STATUS-COPY-r1"></script>
-  <script src="./app.js?v=7.6.4-MARKET-REGIME-LEARNING-r3" defer></script>
-  <script src="./realized-performance.js?v=20260821-account-return-r1" defer></script>
+  <link rel="stylesheet" href="./performance.css?v=8.0.0-LONG-SHORT-DIRECTION-r1">
+  <script src="./config.js?v=8.0.0-LONG-SHORT-DIRECTION-r1"></script>
+  <script src="./app.js?v=8.0.0-LONG-SHORT-DIRECTION-r1" defer></script>
+  <script src="./realized-performance.js?v=8.0.0-LONG-SHORT-DIRECTION-r1" defer></script>
 </head>
 <body>
   <div class="ambient ambient-a"></div>
@@ -223,7 +223,7 @@
           <article class="panel summary-card"><span>운용 모드</span><strong id="trader-mode">—</strong><small id="trader-mode-note">—</small></article>
           <article class="panel summary-card"><span>전략</span><strong id="trader-strategy">—</strong><small id="trader-strategy-note">—</small></article>
           <article class="panel summary-card"><span>스캘핑 손실 제한</span><strong id="scalp-risk">—</strong><small id="scalp-risk-note">—</small></article>
-          <article class="panel summary-card"><span>신규 매수</span><strong id="entry-state">—</strong><small id="entry-state-note">—</small></article>
+          <article class="panel summary-card"><span>신규 진입</span><strong id="entry-state">—</strong><small id="entry-state-note">—</small></article>
           <article class="panel summary-card"><span>게이트웨이</span><strong id="gateway-state">—</strong><small id="gateway-heartbeat">—</small></article>
           <article class="panel summary-card"><span>열린 포지션</span><strong id="open-position-count">—</strong><small id="open-position-note">—</small></article>
         </section>
@@ -231,10 +231,10 @@
         <section class="panel control-panel">
           <div class="section-heading compact-heading">
             <div><p class="eyebrow">OPERATOR CONTROL</p><h2>운용 제어</h2></div>
-            <p>재개 버튼은 대기시간 없이 즉시 신규 매수를 열고 바로 통합 스캔을 시작합니다.</p>
+            <p>재개 버튼은 대기시간 없이 즉시 신규 진입을 열고 바로 통합 스캔을 시작합니다.</p>
           </div>
           <div class="control-buttons">
-            <button id="pause-entries" class="button-secondary" type="button">신규 매수 중지</button>
+            <button id="pause-entries" class="button-secondary" type="button">신규 진입 중지</button>
             <button id="resume-now" class="button-primary" type="button">즉시 재개 + 지금 스캔</button>
             <button id="withdrawal-mode" class="button-secondary" type="button">출금 모드 시작</button>
             <button id="reconcile-now" class="button-secondary" type="button">계좌 즉시 대조</button>
@@ -266,7 +266,7 @@
               <label>보호 USDT<input id="binance-reserve-value" type="number" min="0" step="10"><em>USDT</em></label>
             </article>
             <article class="panel allocation-card" data-allocation-exchange="binance_futures">
-              <div class="allocation-head"><div><span>BINANCE USDⓈ-M</span><h3>선물 운용 (롱 전용)</h3></div><label class="switch-line"><input id="binance-futures-enabled" type="checkbox"> 신규 매수</label></div>
+              <div class="allocation-head"><div><span>BINANCE USDⓈ-M</span><h3>선물 운용 (롱·숏)</h3></div><label class="switch-line"><input id="binance-futures-enabled" type="checkbox"> 신규 진입</label></div>
               <div class="balance-grid"><div><span>총자산</span><strong id="binance_futures-equity">—</strong></div><div><span>주문 가능 USDT</span><strong id="binance_futures-available">—</strong></div><div><span>봇 운용 한도</span><strong id="binance_futures-managed">—</strong></div><div><span>신규 투자 가능</span><strong id="binance_futures-managed-available">—</strong></div></div>
               <label>레버리지<input id="binance-futures-leverage" type="number" min="1" max="20" step="1"><em>배</em></label>
               <label>운용 방식<select id="binance-futures-allocation-mode"><option value="ALL">전액</option><option value="FIXED">선택 금액</option></select></label>
@@ -279,7 +279,7 @@
         </section>
 
         <section class="section-block">
-          <div class="section-heading"><div><p class="eyebrow">OPEN POSITIONS</p><h2>현재 포지션</h2></div><p>수동 매도·출금이 감지되면 장부를 실제 잔고로 맞추고 신규 매수를 자동 중지합니다.</p></div>
+          <div class="section-heading"><div><p class="eyebrow">OPEN POSITIONS</p><h2>현재 포지션</h2></div><p>수동 매도·출금이 감지되면 장부를 실제 잔고로 맞추고 신규 진입을 자동 중지합니다.</p></div>
           <div class="table-wrap panel"><table><thead><tr><th>거래소</th><th>종목</th><th>상태</th><th>모드</th><th>수량</th><th>평균 진입</th><th>손절</th><th>목표1</th><th>보유 종료</th></tr></thead><tbody id="positions-body"></tbody></table></div>
         </section>
 

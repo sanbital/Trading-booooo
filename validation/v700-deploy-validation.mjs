@@ -49,6 +49,9 @@ const observationMigration = read(
 );
 const deployWorkflow = read(".github/workflows/main.deploy-supabase.yml");
 const dashboardWorkflow = read(".github/workflows/validate-dashboard.yml");
+const directionAwareSettlementMigration = read(
+  "supabase/migrations/20260823223251_direction_aware_futures_fill_settlement.sql",
+);
 
 check(
   // The scanner entrypoint imports ENGINE_VERSION instead of repeating the literal, which
@@ -181,6 +184,28 @@ check(
     deployWorkflow.includes("20260810010000_binance_futures_lane_v760.sql") &&
     !deployWorkflow.includes("--file supabase/migrations/202607") &&
     deployWorkflow.includes('".github/workflows/main.deploy-supabase.yml"'),
+);
+check(
+  "futures fill reconciliation preserves LONG and settles SHORT by canonical direction",
+  directionAwareSettlementMigration.includes("set search_path = ''") &&
+    directionAwareSettlementMigration.includes("when v_position_side = 'SHORT' then 'SELL' else 'BUY'") &&
+    directionAwareSettlementMigration.includes("when v_position_side = 'SHORT' then 'BUY' else 'SELL'") &&
+    directionAwareSettlementMigration.includes("'reason', 'P10_ACCOUNTING_OWNER'") &&
+    directionAwareSettlementMigration.includes("v_exited := least(v_entry_qty, v_exit_qty)") &&
+    directionAwareSettlementMigration.includes(
+      "v_realized_entry_quote - v_realized_exit_quote",
+    ) &&
+    directionAwareSettlementMigration.includes(
+      "v_realized_exit_quote - v_realized_entry_quote",
+    ) &&
+    directionAwareSettlementMigration.includes(
+      "upper(coalesce(o.position_effect, '')) = 'CLOSE'",
+    ) &&
+    directionAwareSettlementMigration.includes("from public, anon, authenticated") &&
+    directionAwareSettlementMigration.includes("to service_role") &&
+    deployWorkflow.includes(
+      "20260823223251_direction_aware_futures_fill_settlement.sql",
+    ),
 );
 check(
   "TP settlement is ordered before balance reconciliation and fails closed on material overfill",

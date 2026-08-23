@@ -12,7 +12,7 @@
     ).replace(/^v/i, "");
     const subtitle = document.getElementById("brand-subtitle");
     if (subtitle) {
-      subtitle.textContent = `UPBIT KRW + BINANCE USDT SPOT · v${version}`;
+      subtitle.textContent = `UPBIT KRW + BINANCE USDT SPOT + USDⓈ-M LONG/SHORT · v${version}`;
     }
   };
 })();
@@ -1435,11 +1435,27 @@
     return normalized.endsWith("USDT") ? normalized.slice(0, -4) : normalized;
   }
 
+  function positionDirection(row) {
+    return String(row?.position_side ?? row?.positionSide ?? "LONG").toUpperCase() === "SHORT"
+      ? "SHORT"
+      : "LONG";
+  }
+
+  function positionDirectionBadge(row) {
+    const direction = positionDirection(row);
+    const tone = direction === "SHORT" ? "position-side-short" : "position-side-long";
+    return `<span class="position-side-badge ${tone}" title="포지션 방향" aria-label="포지션 방향 ${direction}">${direction}</span>`;
+  }
+
   function livePositions(data) {
     const rows = Array.isArray(data?.positions) ? data.positions : [];
     const snapshots = latestSnapshotByExchange(data);
     const unassigned = new Map();
     for (const [exchange, snapshot] of snapshots) {
+      // Futures exposure is a signed derivative position, not a spot base-asset balance.
+      // The compatibility balance list intentionally has no SHORT base inventory, so using
+      // it here would incorrectly settle and hide every genuine futures SHORT.
+      if (exchange === "binance_futures") continue;
       const quantities = accountQuantities(snapshot);
       if (quantities) unassigned.set(exchange, quantities);
     }
@@ -1499,8 +1515,8 @@
     $("positions-body").innerHTML = rows.length
       ? rows.map((row) => `
       <tr>
-        <td>${row.exchange === "upbit" ? "UPBIT" : "BINANCE"}</td>
-        <td><strong>${escapeHtml(row.market)}</strong></td>
+        <td>${row.exchange === "upbit" ? "UPBIT" : row.exchange === "binance_futures" ? "BINANCE FUTURES" : "BINANCE"}</td>
+        <td><strong>${escapeHtml(row.market)}</strong>${positionDirectionBadge(row)}</td>
         <td>${escapeHtml(row.is_manual ? "수동매수" : row.state)}</td>
         <td>${row.is_manual ? "MANUAL" : row.is_paper ? "PAPER" : "LIVE"}</td>
         <td>${fmt(Math.max(finite(row.remaining_quantity), finite(row.reserved_quantity)), 8)}</td>
@@ -1727,7 +1743,7 @@
     const alerts = [];
     if (settings.withdrawal_mode) {
       alerts.push(
-        "출금 모드입니다. 신규 매수는 중지되어 있으며 출금 완료 후 ‘즉시 재개 + 지금 스캔’을 누르세요.",
+        "출금 모드입니다. 신규 진입은 중지되어 있으며 출금 완료 후 ‘즉시 재개 + 지금 스캔’을 누르세요.",
       );
     }
     if (
@@ -1884,9 +1900,9 @@
     () => loadStatus(false).catch((error) => controlStatus.textContent = error.message),
   );
   $("pause-entries")?.addEventListener("click", async () => {
-    const confirmation = prompt("신규 매수를 중지하려면 PAUSE_NOW를 입력하세요.");
+    const confirmation = prompt("신규 진입을 중지하려면 PAUSE_NOW를 입력하세요.");
     if (confirmation !== "PAUSE_NOW") return;
-    await runAction("신규 매수 중지", {
+    await runAction("신규 진입 중지", {
       action: "control",
       pause_new_entries: true,
       pause_confirmation: confirmation,
@@ -1896,7 +1912,7 @@
   });
   $("resume-now")?.addEventListener("click", resumeNow);
   $("withdrawal-mode")?.addEventListener("click", async () => {
-    if (!confirm("출금 모드를 시작하면 신규 매수가 즉시 중지됩니다. 계속할까요?")) return;
+    if (!confirm("출금 모드를 시작하면 신규 진입이 즉시 중지됩니다. 계속할까요?")) return;
     await runAction("출금 모드", { action: "withdrawal_mode" });
   });
   $("reconcile-now")?.addEventListener(

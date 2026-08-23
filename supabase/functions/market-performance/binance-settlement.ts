@@ -8,13 +8,22 @@ export type BinanceSettlementFill = {
   base_asset?: unknown;
 };
 
+export type BinancePositionSide = "LONG" | "SHORT";
+
 export type BinanceFillSettlement = {
+  positionSide: BinancePositionSide;
+  entrySide: "BUY" | "SELL";
+  exitSide: "BUY" | "SELL";
   entryQuantity: number;
   entryFundsQuote: number;
   entryFeesQuote: number;
+  exitQuantity: number;
+  exitFraction: number;
+  /** @deprecated Use exitQuantity. Kept for existing LONG callers. */
   soldQuantity: number;
   exitFundsQuote: number;
   exitFeesQuote: number;
+  /** @deprecated Use exitFraction. Kept for existing LONG callers. */
   soldFraction: number;
   realizedCostQuote: number;
   totalFeesQuote: number;
@@ -44,29 +53,76 @@ export function binanceEntryFeeQuote(fill: BinanceSettlementFill): number {
   return feeIsBase ? 0 : nonnegative(fill.fee_quote_amount);
 }
 
-export function settleBinanceFills(fills: BinanceSettlementFill[]): BinanceFillSettlement {
-  const buys = fills.filter((fill) => String(fill.side || "").toUpperCase() === "BUY");
-  const sells = fills.filter((fill) => String(fill.side || "").toUpperCase() === "SELL");
-  const entryQuantity = buys.reduce((sum, fill) => sum + effectiveBinanceBuyQuantity(fill), 0);
-  const entryFundsQuote = buys.reduce((sum, fill) => sum + nonnegative(fill.quote_amount), 0);
-  const entryFeesQuote = buys.reduce((sum, fill) => sum + binanceEntryFeeQuote(fill), 0);
-  const soldQuantity = sells.reduce((sum, fill) => sum + nonnegative(fill.quantity), 0);
-  const exitFundsQuote = sells.reduce((sum, fill) => sum + nonnegative(fill.quote_amount), 0);
-  const exitFeesQuote = sells.reduce((sum, fill) => sum + nonnegative(fill.fee_quote_amount), 0);
-  const soldFraction = entryQuantity > 0 ? Math.min(1, soldQuantity / entryQuantity) : 0;
-  const realizedCostQuote = entryFundsQuote * soldFraction;
-  const totalFeesQuote = entryFeesQuote * soldFraction + exitFeesQuote;
-  const realizedPnlQuote = exitFundsQuote - realizedCostQuote - totalFeesQuote;
+function normalizePositionSide(positionSide: unknown): BinancePositionSide {
+  return String(positionSide || "").toUpperCase() === "SHORT" ? "SHORT" : "LONG";
+}
+
+export function settleBinanceFills(
+  fills: BinanceSettlementFill[],
+  requestedPositionSide: BinancePositionSide = "LONG",
+): BinanceFillSettlement {
+  const positionSide = normalizePositionSide(requestedPositionSide);
+  const entrySide = positionSide === "SHORT" ? "SELL" : "BUY";
+  const exitSide = positionSide === "SHORT" ? "BUY" : "SELL";
+  const entryFills = fills.filter((fill) =>
+    String(fill.side || "").toUpperCase() === entrySide
+  );
+  const exitFills = fills.filter((fill) =>
+    String(fill.side || "").toUpperCase() === exitSide
+  );
+  // Spot BUY fees paid in the base asset reduce the received inventory. Futures SHORT
+  // entries are SELL contracts, so their quantity is never reduced by a base-asset fee.
+  const entryQuantity = entryFills.reduce(
+    (sum, fill) =>
+      sum + (positionSide === "LONG"
+        ? effectiveBinanceBuyQuantity(fill)
+        : nonnegative(fill.quantity)),
+    0,
+  );
+  const entryFundsQuote = entryFills.reduce(
+    (sum, fill) => sum + nonnegative(fill.quote_amount),
+    0,
+  );
+  const entryFeesQuote = entryFills.reduce(
+    (sum, fill) =>
+      sum + (positionSide === "LONG"
+        ? binanceEntryFeeQuote(fill)
+        : nonnegative(fill.fee_quote_amount)),
+    0,
+  );
+  const exitQuantity = exitFills.reduce(
+    (sum, fill) => sum + nonnegative(fill.quantity),
+    0,
+  );
+  const exitFundsQuote = exitFills.reduce(
+    (sum, fill) => sum + nonnegative(fill.quote_amount),
+    0,
+  );
+  const exitFeesQuote = exitFills.reduce(
+    (sum, fill) => sum + nonnegative(fill.fee_quote_amount),
+    0,
+  );
+  const exitFraction = entryQuantity > 0 ? Math.min(1, exitQuantity / entryQuantity) : 0;
+  const realizedCostQuote = entryFundsQuote * exitFraction;
+  const totalFeesQuote = entryFeesQuote * exitFraction + exitFeesQuote;
+  const realizedPnlQuote = (positionSide === "SHORT"
+    ? realizedCostQuote - exitFundsQuote
+    : exitFundsQuote - realizedCostQuote) - totalFeesQuote;
   const realizedReturnPct = realizedCostQuote > 0 ? realizedPnlQuote / realizedCostQuote * 100 : 0;
 
   return {
+    positionSide,
+    entrySide,
+    exitSide,
     entryQuantity,
     entryFundsQuote,
     entryFeesQuote,
-    soldQuantity,
+    exitQuantity,
+    exitFraction,
+    soldQuantity: exitQuantity,
     exitFundsQuote,
     exitFeesQuote,
-    soldFraction,
+    soldFraction: exitFraction,
     realizedCostQuote,
     totalFeesQuote,
     realizedPnlQuote,
@@ -77,8 +133,13 @@ export function settleBinanceFills(fills: BinanceSettlementFill[]): BinanceFillS
 export function allocateBinanceExit(input: {
   settlement: BinanceFillSettlement;
   quantity: number;
-  proceedsQuote: number;
-  sellFeeQuote: number;
+  /** LONG exit proceeds; legacy alias for exitFundsQuote. */
+  proceedsQuote?: number;
+  /** LONG sell fee; legacy alias for exitFeeQuote. */
+  sellFeeQuote?: number;
+  /** Direction-neutral exit notional (proceeds for LONG, buyback cost for SHORT). */
+  exitFundsQuote?: number;
+  exitFeeQuote?: number;
 }): {
   costQuote: number;
   entryFeeQuote: number;
@@ -92,9 +153,12 @@ export function allocateBinanceExit(input: {
     : 0;
   const costQuote = input.settlement.entryFundsQuote * entryShare;
   const entryFeeQuote = input.settlement.entryFeesQuote * entryShare;
-  const sellFeeQuote = nonnegative(input.sellFeeQuote);
-  const totalFeesQuote = entryFeeQuote + sellFeeQuote;
-  const pnlQuote = nonnegative(input.proceedsQuote) - costQuote - totalFeesQuote;
+  const exitFeeQuote = nonnegative(input.exitFeeQuote ?? input.sellFeeQuote);
+  const exitFundsQuote = nonnegative(input.exitFundsQuote ?? input.proceedsQuote);
+  const totalFeesQuote = entryFeeQuote + exitFeeQuote;
+  const pnlQuote = (input.settlement.positionSide === "SHORT"
+    ? costQuote - exitFundsQuote
+    : exitFundsQuote - costQuote) - totalFeesQuote;
 
   return {
     costQuote,
