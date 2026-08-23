@@ -1,0 +1,4558 @@
+{
+  "derived_from": {
+    "deployed_edge_function_version": 360,
+    "ezbr_sha256": "c0f59c6de0e751f8943d32348289e40ae8a29690b3d291998f0fd52a58b9d0de",
+    "revision": "P10-LIVE-1.0.0",
+    "strategy_key": "P10_DONCHIAN_BREAKOUT_E10_SLOW_4R"
+  },
+  "frozen": true,
+  "frozen_before_any_market_data_loaded": true,
+  "schema_version": "1.0.0",
+  "shared_execution_assumptions": {
+    "entry_timing_default": "NEXT_BAR_OPEN",
+    "funding_applied": true,
+    "leverage": 3,
+    "margin_per_slot_usdt": 60,
+    "max_new_entries_per_scan": 3,
+    "max_open_positions_per_exchange": 10,
+    "same_bar_stop_and_target_rule": "STOP_FIRST",
+    "shared_slot_pool_with_long": true,
+    "slippage_bps_per_side": 5,
+    "taker_fee_pct_per_side": 0.05
+  },
+  "side": "SHORT",
+  "strategies": [
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Inherits every LONG gate, including ones tuned on long-side behaviour.",
+      "expected_strength": "Exact mirror of the live P10 LONG; the only variant with production parity.",
+      "family": "DONCHIAN_BREAKDOWN",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Production symmetric SHORT",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S01",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Removes the only market-wide guard; exposed to broad-market squeezes.",
+      "expected_strength": "Isolates how much the BTC regime gate costs in signal count.",
+      "family": "DONCHIAN_BREAKDOWN",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Breakdown, regime-free",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "NONE",
+        "params": {}
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S02",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Very few signals; may miss the fastest legs down.",
+      "expected_strength": "Only trades confirmed benchmark downtrends.",
+      "family": "DONCHIAN_BREAKDOWN",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Breakdown, strict BEAR regime",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "BENCHMARK_BEAR_ONLY",
+        "params": {
+          "benchmark": "BTCUSDT"
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S03",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.0,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "More marginal breaks that reclaim immediately.",
+      "expected_strength": "Earlier fills at the channel edge.",
+      "family": "DONCHIAN_BREAKDOWN",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Breakdown, no ATR buffer",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S04",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN_INTRABAR",
+        "timing": "INTRABAR_TRIGGER",
+        "trigger_price": "CHANNEL_LEVEL"
+      },
+      "expected_risk": "No close confirmation; highest wick-fill risk.",
+      "expected_strength": "Captures the move without waiting for the hourly close.",
+      "family": "DONCHIAN_BREAKDOWN",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Intrabar breakdown trigger",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S05",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "confirm_closes": 2,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN_CONFIRMED",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Enters later and further from the stop reference.",
+      "expected_strength": "Two consecutive closes below the channel filter out one-bar fakeouts.",
+      "family": "DONCHIAN_BREAKDOWN",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Breakdown, two-close confirmation",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S06",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "n": 72,
+          "reject_tolerance_atr": 0.25,
+          "retest_window_bars": 6
+        },
+        "rule": "BREAKDOWN_RETEST_REJECT",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Many breakdowns never retest; low fill rate.",
+      "expected_strength": "Enters on the pullback, so the stop sits much closer.",
+      "family": "RETEST",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Breakdown retest rejection",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S07",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "n": 72,
+          "reclaim_window_bars": 8
+        },
+        "rule": "FAILED_RECLAIM_DONCHIAN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Depends on a specific two-stage pattern; sparse.",
+      "expected_strength": "Trades trapped longs after a failed recovery of the broken channel.",
+      "family": "FAILED_RECLAIM",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Failed Donchian reclaim",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S08",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "ema": 20,
+          "reclaim_window_bars": 6
+        },
+        "rule": "FAILED_RECLAIM_EMA",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "EMA20 is noisy on 1h; many shallow failures.",
+      "expected_strength": "Cleanest continuation pattern in an established downtrend.",
+      "family": "FAILED_RECLAIM",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Failed EMA20 reclaim",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S09",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "ema": 50,
+          "reclaim_window_bars": 8
+        },
+        "rule": "FAILED_RECLAIM_EMA",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Entry far below the swing high; wide stop.",
+      "expected_strength": "Slower, higher-conviction rejection level.",
+      "family": "FAILED_RECLAIM",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Failed EMA50 reclaim",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S10",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "min_lower_highs": 2,
+          "swing_lookback": 12
+        },
+        "rule": "LOWER_HIGH_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Swing detection is lagging and parameter sensitive.",
+      "expected_strength": "Uses swing structure rather than a fixed channel.",
+      "family": "STRUCTURE",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Lower-high structural breakdown",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S11",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "require_ema_stack": true,
+          "ret24_max_pct": -3.0
+        },
+        "rule": "MOMENTUM_CONTINUATION",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "No structural trigger; weakest entry precision.",
+      "expected_strength": "Does not need a channel break, so it fires in grinding downtrends.",
+      "family": "MOMENTUM",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Momentum continuation, no breakout",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S12",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "min_separation_pct": 0.15,
+          "require_close_below": 100
+        },
+        "rule": "EMA_STACK_BEARISH",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Alignment is a lagging condition; late entries.",
+      "expected_strength": "Trades only fully aligned downtrends (ema20<ema50<ema100).",
+      "family": "EMA_STRUCTURE",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Bearish EMA stack",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S13",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "max_pullback_atr": 1.0,
+          "pullback_ema": 20,
+          "trend_ema": 100
+        },
+        "rule": "EMA_PULLBACK_SHORT",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Counter-move entries can be run over in a squeeze.",
+      "expected_strength": "Sells rallies into resistance rather than chasing lows.",
+      "family": "EMA_STRUCTURE",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Below-EMA100 pullback short",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S14",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "rsi_falling_bars": 3,
+          "rsi_max": 40
+        },
+        "rule": "RSI_MOMENTUM",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "RSI thresholds are regime dependent and can whipsaw.",
+      "expected_strength": "Pure momentum state; independent of price structure.",
+      "family": "MOMENTUM",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          0,
+          40
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "RSI momentum regime",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S15",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "High volume bars are often already extended.",
+      "expected_strength": "Requires real participation behind the break.",
+      "family": "VOLUME",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 2.5,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Volume-expansion breakdown",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S16",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "expansion_atr_ratio": 1.3,
+          "n": 72,
+          "squeeze_lookback": 48,
+          "squeeze_pct": 30
+        },
+        "rule": "SQUEEZE_EXPANSION_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Compression detection is sensitive to the percentile window.",
+      "expected_strength": "Targets breaks out of compression, the classic high-payoff setup.",
+      "family": "VOLATILITY",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Squeeze then expansion",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S17",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "High ATR also means wider stops and larger losses.",
+      "expected_strength": "Concentrates on names that actually move enough to pay costs.",
+      "family": "VOLATILITY",
+      "filters": {
+        "atr_pct_range": [
+          1.5,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "High-ATR regime only",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S18",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Moves may not clear fees and funding.",
+      "expected_strength": "Tight stops keep per-trade risk small.",
+      "family": "VOLATILITY",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          1.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Low-ATR regime only",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S19",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Admits illiquid, low-participation breaks.",
+      "expected_strength": "Isolates the value of the production volume filter.",
+      "family": "VOLUME",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 0.0,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Breakdown, no volume gate",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S20",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "BTC can be flat while alts break down.",
+      "expected_strength": "Aligns every short with the dominant market driver.",
+      "family": "REGIME",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "BTC bearish regime required",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "BENCHMARK_BEAR_ONLY",
+        "params": {
+          "benchmark": "BTCUSDT"
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S21",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Adds a second data dependency for little diversification.",
+      "expected_strength": "ETH leads alt risk appetite more closely than BTC.",
+      "family": "REGIME",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "ETH bearish regime required",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "BENCHMARK_BEAR_ONLY",
+        "params": {
+          "benchmark": "ETHUSDT"
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S22",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Very restrictive; may produce almost no trades.",
+      "expected_strength": "Strongest available market-wide confirmation.",
+      "family": "REGIME",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "BTC and ETH both bearish",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "DUAL_BENCHMARK_BEAR",
+        "params": {
+          "benchmarks": [
+            "BTCUSDT",
+            "ETHUSDT"
+          ]
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S23",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Breadth is slow and can stay bearish through a bottom.",
+      "expected_strength": "Uses the whole universe rather than one proxy asset.",
+      "family": "REGIME",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Bearish breadth gate",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "BREADTH_BEAR",
+        "params": {
+          "lookback_bars": 1,
+          "max_share_up": 0.4
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S24",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "No market guard at all; worst-case squeeze exposure.",
+      "expected_strength": "Maximum signal count; measures the pure entry edge.",
+      "family": "REGIME",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Regime-agnostic breakdown",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "NONE",
+        "params": {}
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S25",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Filters out the strongest trends along with the exhausted ones.",
+      "expected_strength": "Refuses to sell what has already collapsed.",
+      "family": "GUARD",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": 15.0,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Overextension guard",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S26",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Requires a cross-sectional rank each bar.",
+      "expected_strength": "Avoids the top decliners where bounces are violent.",
+      "family": "GUARD",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": 10,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Extreme-mover guard",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S27",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Positive funding also marks crowded-long squeezes.",
+      "expected_strength": "Shorts are paid to hold; funding becomes a tailwind.",
+      "family": "FUNDING",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": 0.0,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Positive funding only",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S28",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Rare; very few qualifying symbol-bars.",
+      "expected_strength": "Targets the most crowded longs, where unwinds are largest.",
+      "family": "FUNDING",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": 0.0005,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Extreme positive funding",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S29",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Large caps trend less cleanly than small caps.",
+      "expected_strength": "Best fills and lowest realised slippage.",
+      "family": "LIQUIDITY",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": 75,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Top-quartile liquidity only",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S30",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Cuts every large winner; payoff ratio below 1.",
+      "expected_strength": "Highest hit rate; fastest capital turnover.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Fixed 1R target",
+      "partial_exit": {
+        "at_r": null,
+        "enabled": false,
+        "fraction": 0.0
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S31",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 1.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": null,
+        "method": "NONE",
+        "mult": null
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Still caps the tail that pays for the losers.",
+      "expected_strength": "Balances hit rate against payoff.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Fixed 2R target",
+      "partial_exit": {
+        "at_r": null,
+        "enabled": false,
+        "fraction": 0.0
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S32",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 2.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": null,
+        "method": "NONE",
+        "mult": null
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Fewer targets reached inside the 96-bar cap.",
+      "expected_strength": "Keeps a meaningful tail with a defined exit.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Fixed 3R target",
+      "partial_exit": {
+        "at_r": null,
+        "enabled": false,
+        "fraction": 0.0
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S33",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 3.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": null,
+        "method": "NONE",
+        "mult": null
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Low hit rate; heavy dependence on rare winners.",
+      "expected_strength": "Closest fixed target to the production 5R.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Fixed 4R target",
+      "partial_exit": {
+        "at_r": null,
+        "enabled": false,
+        "fraction": 0.0
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S34",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 4.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": null,
+        "method": "NONE",
+        "mult": null
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Gives back open profit on every reversal.",
+      "expected_strength": "Lets winners run with no fixed cap.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "ATR trailing only",
+      "partial_exit": {
+        "at_r": null,
+        "enabled": false,
+        "fraction": 0.0
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S35",
+      "take_profit": {
+        "method": "NONE",
+        "r": null
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Reclaim can lag far behind the low.",
+      "expected_strength": "Exits on structural failure, not a fixed level.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Donchian reclaim exit",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": 20,
+        "ema_reclaim": null,
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S36",
+      "take_profit": {
+        "method": "NONE",
+        "r": null
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "ALWAYS",
+        "method": "DONCHIAN",
+        "mult": null,
+        "n": 20
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "No stop discipline beyond the initial ATR stop.",
+      "expected_strength": "Simplest trend-following exit.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "EMA20 reclaim exit only",
+      "partial_exit": {
+        "at_r": null,
+        "enabled": false,
+        "fraction": 0.0
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S37",
+      "take_profit": {
+        "method": "NONE",
+        "r": null
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": null,
+        "method": "NONE",
+        "mult": null
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Very late exits; large give-back.",
+      "expected_strength": "Holds through noise for the larger move.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "EMA50 reclaim exit only",
+      "partial_exit": {
+        "at_r": null,
+        "enabled": false,
+        "fraction": 0.0
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA50",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S38",
+      "take_profit": {
+        "method": "NONE",
+        "r": null
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": null,
+        "method": "NONE",
+        "mult": null
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Swing highs can be far away, forcing tiny size.",
+      "expected_strength": "Stop sits at real structure, not a volatility guess.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Swing-high stop",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "buffer_atr": 0.25,
+        "lookback": 12,
+        "method": "SWING_HIGH",
+        "mult": 2.0
+      },
+      "strategy_id": "S39",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Stopped out by ordinary noise.",
+      "expected_strength": "Small per-trade loss; more trades per unit risk.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Tight 1.0 ATR stop",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 1.0
+      },
+      "strategy_id": "S40",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Each loss is large; needs a high payoff to compensate.",
+      "expected_strength": "Survives noise and holds the trend.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Wide 3.0 ATR stop",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 3.0
+      },
+      "strategy_id": "S41",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Halves the position before the move develops.",
+      "expected_strength": "Banks cost recovery early.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Partial 50% at 1R",
+      "partial_exit": {
+        "at_r": 1.0,
+        "enabled": true,
+        "fraction": 0.5
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S42",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Little protection if the move stalls before 3R.",
+      "expected_strength": "Keeps most of the position for the tail.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Partial 30% at 3R",
+      "partial_exit": {
+        "at_r": 3.0,
+        "enabled": true,
+        "fraction": 0.3
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S43",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Full give-back on any trade that reverses before target.",
+      "expected_strength": "Maximum exposure to the winning tail.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "No partial, pure runner to 5R",
+      "partial_exit": {
+        "at_r": null,
+        "enabled": false,
+        "fraction": 0.0
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S44",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Cuts trends that need more than half a day.",
+      "expected_strength": "Frees slots fast; high capital velocity.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 12,
+      "max_holding_bars": 12,
+      "min_history_bars": 106,
+      "name": "Time stop at 12 bars",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S45",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Slots occupied by dead trades.",
+      "expected_strength": "Gives the thesis two full days.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 48,
+      "min_history_bars": 106,
+      "name": "Time stop at 48 bars",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S46",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "RSI can recross repeatedly in chop.",
+      "expected_strength": "Exits when the driving momentum is gone.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Momentum-reversal exit",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": null,
+        "momentum_reversal_rsi_above": 50,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S47",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "One benchmark flip closes every position at once.",
+      "expected_strength": "Closes the book when the market flips.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Regime-reversal exit",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": true
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S48",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "ATR",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.5,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Extra parameter; can loosen exactly when it should tighten.",
+      "expected_strength": "Trail adapts to the current ATR regime.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Volatility-scaled trailing",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": null,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S49",
+      "take_profit": {
+        "method": "NONE",
+        "r": null
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "atr_percentile_lookback": 48,
+        "high_vol_mult": 3.5,
+        "low_vol_mult": 1.5,
+        "method": "VOL_SCALED",
+        "mult": 2.5
+      },
+      "venue": "binance_futures"
+    },
+    {
+      "breakeven": {
+        "at_r": 1.0,
+        "cost_stress_multiple": 1.5,
+        "enabled": true
+      },
+      "conflict_rule": "SKIP_IF_OPPOSITE_SIDE_OPEN",
+      "cooldown_bars": 0,
+      "current_candle_excluded": true,
+      "entry": {
+        "max_entry_gap_atr": 0.5,
+        "max_initial_risk_pct": 5.0,
+        "params": {
+          "buffer_atr": 0.1,
+          "n": 72,
+          "require_prior_inside": true
+        },
+        "rule": "DONCHIAN_BREAKDOWN",
+        "timing": "NEXT_BAR_OPEN",
+        "trigger_price": "NEXT_BAR_OPEN"
+      },
+      "expected_risk": "Most complex; hardest to attribute and most overfit-prone.",
+      "expected_strength": "Combines every protective mechanism under test.",
+      "family": "EXIT_VARIANT",
+      "filters": {
+        "atr_pct_range": [
+          0.15,
+          6.0
+        ],
+        "extreme_mover_rank_guard": null,
+        "funding_rate_min": null,
+        "liquidity_floor_quote_mean20": 500000,
+        "min_close_location": 0.74,
+        "min_ema_slope6_pct": 0.1,
+        "min_quote_volume_percentile": null,
+        "min_volume_ratio": 1.6,
+        "overextension_max_abs_ret24_pct": null,
+        "require_bearish_candle": true,
+        "require_ema20_below_ema50": true,
+        "ret24_pct_range": [
+          -20.0,
+          -1.2
+        ],
+        "rsi14_range": [
+          16,
+          52
+        ]
+      },
+      "loss_time_stop_bars": 24,
+      "max_holding_bars": 96,
+      "min_history_bars": 106,
+      "name": "Mixed exit stack",
+      "partial_exit": {
+        "at_r": 2.0,
+        "enabled": true,
+        "fraction": 0.4
+      },
+      "regime": {
+        "mode": "SYMMETRIC_P10",
+        "params": {
+          "benchmark": "BTCUSDT",
+          "not_regime": "BULL",
+          "ret24_max_pct": -0.1,
+          "ret72_max_pct": 0.0
+        }
+      },
+      "rule_exits": {
+        "donchian_reclaim_n": 20,
+        "ema_reclaim": "EMA20",
+        "momentum_reversal_rsi_above": null,
+        "regime_reversal": false
+      },
+      "same_symbol_rule": "ONE_ACTIVE_POSITION_PER_SYMBOL",
+      "side": "SHORT",
+      "stop": {
+        "method": "ATR",
+        "mult": 2.0
+      },
+      "strategy_id": "S50",
+      "take_profit": {
+        "method": "R_MULTIPLE",
+        "r": 5.0
+      },
+      "timeframe": "1h",
+      "trailing": {
+        "activation": "FAVORABLE_CLOSE_R_GT_0",
+        "method": "DONCHIAN",
+        "mult": null,
+        "n": 20
+      },
+      "venue": "binance_futures"
+    }
+  ],
+  "venue": "binance_futures"
+}

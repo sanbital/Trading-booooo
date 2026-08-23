@@ -1,0 +1,33 @@
+{
+  "dataset_version": "SYNTHETIC-0",
+  "source": "synthetic generator (NOT market data)",
+  "exchange": "binance",
+  "market_type": "USDM_FUTURES",
+  "primary_start_utc": 1754910000000,
+  "primary_end_utc": 1754996400000,
+  "warmup_start_utc": 1752840000000,
+  "candle_interval": "1h",
+  "perpetual_symbol_count": 42,
+  "eligible_symbol_count": 42,
+  "successful_symbol_count": 42,
+  "failed_symbol_count": 0,
+  "candle_count": 25200,
+  "funding_record_count": 3150,
+  "files": [
+    {
+      "filename": "candles.parquet",
+      "row_count": 25200,
+      "sha256": "370f3f706b9ddf6558f72e443d068f84ca8f87d8f56491a959ca2886022922a0"
+    },
+    {
+      "filename": "funding.parquet",
+      "row_count": 3150,
+      "sha256": "88d608603718bf7c447d24b215114b3337e809cdc689dd6268c1235921fddbea"
+    },
+    {
+      "filename": "exchange_info.json",
+      "row_count": 42,
+      "sha256": "e023444e997fef584591098e800344ac7f447639bd1f48bc7ef2fc48f68eafb2"
+    }
+  ]
+}

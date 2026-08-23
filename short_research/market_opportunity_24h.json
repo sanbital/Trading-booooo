@@ -1,0 +1,35 @@
+{
+  "source": "production v2_live_universe_snapshots (market-v2-signal run, venue=binance_futures)",
+  "note": "24h ticker returns for the full live futures universe; NOT OHLCV candles",
+  "snapshot_at_utc": "2026-08-23 09:04:00.737264+00",
+  "universe": 527,
+  "up": 83,
+  "down": 444,
+  "flat": 0,
+  "down_buckets": {
+    "<=-1%": 404,
+    "<=-3%": 281,
+    "<=-5%": 145,
+    "<=-10%": 18,
+    "<=-15%": 4,
+    "<=-20%": 4
+  },
+  "up_buckets": {
+    ">=+1%": 59,
+    ">=+3%": 35,
+    ">=+5%": 19,
+    ">=+10%": 8,
+    ">=+15%": 3,
+    ">=+20%": 2
+  },
+  "mean": -2.9773,
+  "median": -3.303,
+  "p25": -5.195,
+  "p75": -1.265,
+  "min": -36.572,
+  "max": 51.868,
+  "above_liquidity_floor_500k": 525,
+  "btc_ret24": -0.768,
+  "eth_ret24": -0.236,
+  "production_short_signals_in_this_window": 0
+}
