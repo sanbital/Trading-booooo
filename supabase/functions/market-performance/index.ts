@@ -1,15 +1,19 @@
-// Trading-booooo performance API v6.11.0 — exchange-fill accounting revision r10.
+// Trading-booooo performance API v6.11.0 — direction-aware exchange-fill revision r11.
 // Performance only. This function never places, changes, or cancels an order.
 // Binance source of truth is the complete exchange_trade_fills ledger.
 // Upbit keeps the existing trading_fills accounting path.
 
-import { allocateBinanceExit, settleBinanceFills } from "./binance-settlement.ts";
+import {
+  allocateBinanceExit,
+  type BinancePositionSide,
+  settleBinanceFills,
+} from "./binance-settlement.ts";
 
 type JsonRecord = Record<string, any>;
 type Exchange = "upbit" | "binance" | "binance_futures";
 
 const VERSION = "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION";
-const PERFORMANCE_REVISION = "6.11.0-r10-EXCHANGE-FILL-DIRECT-SETTLEMENT";
+const PERFORMANCE_REVISION = "6.11.0-r11-DIRECTION-AWARE-EXCHANGE-FILLS";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const SERVICE_KEY = env("SUPABASE_SERVICE_ROLE_KEY");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
@@ -173,6 +177,10 @@ function markPrice(snapshot: JsonRecord | null, market: string, fallback: number
   return mark > 0 ? mark : fallback;
 }
 
+function canonicalPositionSide(position: JsonRecord): BinancePositionSide {
+  return String(position?.position_side || "").toUpperCase() === "SHORT" ? "SHORT" : "LONG";
+}
+
 // Existing bot-fill path retained for Upbit. No trading decisions are made here.
 function buildUpbitRows(
   position: JsonRecord,
@@ -180,6 +188,7 @@ function buildUpbitRows(
   fillsByOrder: Map<string, JsonRecord[]>,
   snapshot: JsonRecord | null,
 ): { rows: JsonRecord[]; quality: string } {
+  const positionSide = canonicalPositionSide(position);
   const entryOrders = orders.filter((o) =>
     String(o.side).toUpperCase() === "BUY" && String(o.purpose).toUpperCase() === "ENTRY"
   );
@@ -211,6 +220,7 @@ function buildUpbitRows(
       execution_order_id: order.id,
       row_type: "REALIZED_EXIT",
       exchange: "upbit",
+      position_side: positionSide,
       quote_currency: position.quote_currency || "KRW",
       market: position.market,
       state: "CLOSED",
@@ -253,6 +263,7 @@ function buildUpbitRows(
         execution_order_id: null,
         row_type: "OPEN_REMAINDER",
         exchange: "upbit",
+        position_side: positionSide,
         quote_currency: position.quote_currency || "KRW",
         market: position.market,
         state: "OPEN",
@@ -304,13 +315,16 @@ function buildBinanceRows(
   snapshot: JsonRecord | null,
 ): { rows: JsonRecord[]; quality: string } {
   const venue = String(position.exchange) === "binance_futures" ? "binance_futures" : "binance";
+  const positionSide = canonicalPositionSide(position);
   const leverage = venue === "binance_futures" ? Math.max(1, num(position.leverage, 3)) : 1;
   const sorted = [...fills].sort((a, b) =>
     Date.parse(String(a.executed_at || 0)) - Date.parse(String(b.executed_at || 0))
   );
-  const buys = sorted.filter((f) => String(f.side).toUpperCase() === "BUY");
-  const sells = sorted.filter((f) => String(f.side).toUpperCase() === "SELL");
-  const settlement = settleBinanceFills(sorted);
+  const entrySide = positionSide === "SHORT" ? "SELL" : "BUY";
+  const exitSide = positionSide === "SHORT" ? "BUY" : "SELL";
+  const entryFills = sorted.filter((f) => String(f.side).toUpperCase() === entrySide);
+  const exitFills = sorted.filter((f) => String(f.side).toUpperCase() === exitSide);
+  const settlement = settleBinanceFills(sorted, positionSide);
   const entryQty = settlement.entryQuantity;
   const entryFunds = settlement.entryFundsQuote;
   const entryFees = settlement.entryFeesQuote;
@@ -318,35 +332,40 @@ function buildBinanceRows(
     return { rows: [], quality: "EXCHANGE_ENTRY_FILL_MISSING" };
   }
 
-  const entryAt = earliest(buys), avgEntry = entryFunds / entryQty;
-  const groups = groupExitFills(sells);
-  const soldQty = settlement.soldQuantity;
+  const entryAt = earliest(entryFills), avgEntry = entryFunds / entryQty;
+  const groups = groupExitFills(exitFills);
+  const exitedQty = settlement.exitQuantity;
   const closed = String(position.state).toUpperCase() === "CLOSED";
   const rows: JsonRecord[] = [];
 
   for (let idx = 0; idx < groups.length; idx++) {
     const group = groups[idx],
       qty = sum(group, "quantity"),
-      proceeds = sum(group, "quote_amount"),
-      sellFee = sum(group, "fee_quote_amount");
-    if (!(qty > 0 && proceeds > 0)) continue;
+      exitFunds = sum(group, "quote_amount"),
+      exitFee = sum(group, "fee_quote_amount");
+    if (!(qty > 0 && exitFunds > 0)) continue;
     const allocation = allocateBinanceExit({
       settlement,
       quantity: qty,
-      proceedsQuote: proceeds,
-      sellFeeQuote: sellFee,
+      exitFundsQuote: exitFunds,
+      exitFeeQuote: exitFee,
     });
     const cost = allocation.costQuote;
     const pnl = allocation.pnlQuote;
     const exitAt = latest(group);
     const orderId = group[0]?.exchange_order_id || null;
     rows.push({
-      id: `${position.id}:exchange-sell:${orderId || group[0]?.exchange_trade_id || idx}`,
+      id: `${position.id}:exchange-${exitSide.toLowerCase()}:${
+        orderId || group[0]?.exchange_trade_id || idx
+      }`,
       position_id: position.id,
       execution_order_id: group[0]?.bot_order_id || null,
       exchange_order_id: orderId,
       row_type: "REALIZED_EXIT",
       exchange: venue,
+      position_side: positionSide,
+      entry_side: entrySide,
+      exit_side: exitSide,
       quote_currency: position.quote_currency || "USDT",
       market: position.market,
       state: "CLOSED",
@@ -360,10 +379,10 @@ function buildBinanceRows(
       duration_seconds: duration(entryAt, exitAt),
       quantity: qty,
       average_entry_price: avgEntry,
-      average_exit_price: proceeds / qty,
-      current_price: proceeds / qty,
+      average_exit_price: exitFunds / qty,
+      current_price: exitFunds / qty,
       entry_funds_quote: cost,
-      exit_funds_quote: proceeds,
+      exit_funds_quote: exitFunds,
       invested_cost_quote: venue === "binance_futures" ? cost / leverage : cost,
       total_fees_quote: allocation.totalFeesQuote,
       net_pnl_quote: pnl,
@@ -389,21 +408,34 @@ function buildBinanceRows(
     });
   }
 
-  const ledgerRemaining = Math.max(0, entryQty - soldQty);
+  const ledgerRemaining = Math.max(0, entryQty - exitedQty);
   if (!closed && ledgerRemaining > 0) {
-    const held = snapshotBalance(snapshot, baseAsset(position));
-    const qty = held == null ? ledgerRemaining : Math.min(ledgerRemaining, held);
+    // Spot can be capped by deliverable base balance. A futures SHORT has no positive
+    // base-asset balance, so treating that absence as zero would erase the open short.
+    const held = positionSide === "SHORT" ? null : snapshotBalance(snapshot, baseAsset(position));
+    const recordedRemaining = position.remaining_quantity == null
+      ? ledgerRemaining
+      : Math.max(0, num(position.remaining_quantity));
+    const qty = positionSide === "SHORT"
+      ? Math.min(ledgerRemaining, recordedRemaining)
+      : held == null
+      ? ledgerRemaining
+      : Math.min(ledgerRemaining, held);
     if (qty > 0) {
       const mark = markPrice(snapshot, position.market, avgEntry),
         cost = avgEntry * qty,
         fee = entryQty > 0 ? entryFees * qty / entryQty : 0;
-      const value = qty * mark, pnl = value - cost - fee;
+      const value = qty * mark;
+      const pnl = (positionSide === "SHORT" ? cost - value : value - cost) - fee;
       rows.push({
         id: `${position.id}:open`,
         position_id: position.id,
         execution_order_id: null,
         row_type: "OPEN_REMAINDER",
         exchange: venue,
+        position_side: positionSide,
+        entry_side: entrySide,
+        exit_side: exitSide,
         quote_currency: position.quote_currency || "USDT",
         market: position.market,
         state: "OPEN",
@@ -430,9 +462,11 @@ function buildBinanceRows(
         return_pct: cost > 0
           ? pnl / (venue === "binance_futures" ? cost / leverage : cost) * 100
           : 0,
-        balance_verified: held != null,
-        balance_discrepancy_quantity: held == null ? null : Math.max(0, ledgerRemaining - held),
-        accounting_quality: held == null
+        balance_verified: positionSide === "LONG" && held != null,
+        balance_discrepancy_quantity: positionSide === "LONG" && held != null
+          ? Math.max(0, ledgerRemaining - held)
+          : null,
+        accounting_quality: positionSide === "SHORT" || held == null
           ? "EXCHANGE_FILL_LEDGER_ONLY"
           : "EXCHANGE_FILL_PLUS_BALANCE_VERIFIED",
         pnl_source: "MARK_TO_MARKET",
@@ -589,7 +623,7 @@ Deno.serve(async (req: Request) => {
   try {
     const [positions, orders, botFills, exchangeFills, snapshots] = await Promise.all([
       all(
-        "trading_positions?is_paper=eq.false&state=in.(OPEN,EXITING,CLOSED)&select=id,exchange,quote_currency,market,base_asset,state,close_reason,opened_at,closed_at,realized_proceeds_quote,realized_cost_quote,paid_fees_quote,realized_pnl_quote,realized_return_pct,remaining_quantity,leverage,created_at&order=created_at.asc,id.asc",
+        "trading_positions?is_paper=eq.false&state=in.(OPEN,EXITING,CLOSED)&select=id,exchange,quote_currency,market,base_asset,state,position_side,close_reason,opened_at,closed_at,realized_proceeds_quote,realized_cost_quote,paid_fees_quote,realized_pnl_quote,realized_return_pct,remaining_quantity,leverage,created_at&order=created_at.asc,id.asc",
         10000,
       ),
       all(
@@ -672,8 +706,8 @@ Deno.serve(async (req: Request) => {
       definitions: {
         closed_trade: "CLOSED 포지션의 확정 손익/수익률은 trading_positions 정산값을 고정 사용",
         binance_exit:
-          "Binance 현물·선물 SELL은 exchange_trade_fills를 exchange_order_id별로 묶어 각각 표시",
-        split_exit: "한 주문 내부의 거래소 fill 분할은 합산하고, 별도 SELL 주문은 별도 행으로 표시",
+          "Binance 청산은 position_side에 따라 LONG=SELL, SHORT=BUY fill을 exchange_order_id별로 묶어 표시",
+        split_exit: "한 주문 내부의 거래소 fill 분할은 합산하고, 별도 청산 주문은 별도 행으로 표시",
         open_row: "실제 BUY/SELL fill 잔량만 현재가 평가",
         immutable: "CLOSED 행은 현재가·현재잔고로 재계산하지 않음",
       },
@@ -681,7 +715,7 @@ Deno.serve(async (req: Request) => {
     cache = { body: resultBody, at: Date.now() };
     return out({ ...resultBody, cache_status: "MISS", cache_age_seconds: 0 });
   } catch (error) {
-    console.error("market-performance r9 failed", error);
+    console.error("market-performance r11 failed", error);
     if (cache) {
       return out({
         ...cache.body,

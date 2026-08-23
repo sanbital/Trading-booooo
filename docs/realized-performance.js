@@ -30,6 +30,10 @@
     return Number.isFinite(t) ? Math.max(0, Math.round((Date.now() - t) / 1000)) : Infinity;
   };
   const tone = v => num(v) >= 0 ? "realized-positive" : "realized-negative";
+  const positionDirection = row =>
+    String(row?.position_side ?? row?.positionSide ?? "LONG").toUpperCase() === "SHORT"
+      ? "SHORT"
+      : "LONG";
 
   function hold(seconds) {
     if (!Number.isFinite(Number(seconds))) return "—";
@@ -88,7 +92,7 @@
         <div class="table-wrap panel realized-table-wrap">
           <table class="performance-table realized-trade-table">
             <thead><tr>
-              <th>청산 시각</th><th>종목</th><th>매도</th><th>원가</th><th>확정손익</th><th>전략 ROI</th><th>매도 평균가</th><th>수량</th><th>수수료</th><th>보유시간</th><th>종료 사유</th>
+              <th>청산 시각</th><th>종목</th><th>청산</th><th>원가</th><th>확정손익</th><th>전략 ROI</th><th>청산 평균가</th><th>수량</th><th>수수료</th><th>보유시간</th><th>종료 사유</th>
             </tr></thead>
             <tbody id="realized-performance-body"><tr><td colspan="11" class="muted">체결 데이터를 불러오는 중입니다.</td></tr></tbody>
           </table>
@@ -196,20 +200,22 @@
         : `<span class="realized-single-badge">단일</span>`;
       const locked = row.immutable || row.position_closed
         ? `<span class="realized-locked" title="CLOSED 확정값">고정</span>` : "";
+      const direction = positionDirection(row);
+      const directionTone = direction === "SHORT" ? "position-side-short" : "position-side-long";
       return `<tr>
         <td data-label="청산">${dt(row.exit_at)}</td>
-        <td data-label="종목"><strong>${esc(row.market)}</strong><small class="realized-fill-count">${row.exchange === "binance_futures" ? "FUTURES" : row.exchange === "binance" ? "SPOT" : "UPBIT"}</small>${locked}</td>
-        <td data-label="매도">${split}<small class="realized-fill-count">fill ${fmt(row.fill_count || 1,0)}</small></td>
+        <td data-label="종목"><strong>${esc(row.market)}</strong><span class="position-side-badge ${directionTone}" title="포지션 방향" aria-label="포지션 방향 ${direction}">${direction}</span><small class="realized-fill-count">${row.exchange === "binance_futures" ? "FUTURES" : row.exchange === "binance" ? "SPOT" : "UPBIT"}</small>${locked}</td>
+        <td data-label="청산">${split}<small class="realized-fill-count">fill ${fmt(row.fill_count || 1,0)}</small></td>
         <td data-label="원가">${fmt(row.invested_cost_quote, currency === "KRW" ? 0 : 4)} ${currency}</td>
         <td data-label="확정손익" class="${tone(row.net_pnl_quote)}"><strong>${money(row.net_pnl_quote, currency)}</strong></td>
         <td data-label="전략 ROI" class="${tone(row.return_pct)}"><strong>${pct(row.return_pct)}</strong></td>
-        <td data-label="매도 평균가">${fmt(row.average_exit_price, 8)}</td>
+        <td data-label="청산 평균가">${fmt(row.average_exit_price, 8)}</td>
         <td data-label="수량">${fmt(row.quantity, 8)}</td>
         <td data-label="수수료">${fmt(row.total_fees_quote, currency === "KRW" ? 0 : 5)} ${currency}</td>
         <td data-label="보유시간">${hold(row.duration_seconds)}</td>
         <td data-label="종료 사유"><span class="realized-reason">${esc(row.close_reason || "SELL")}</span></td>
       </tr>`;
-    }).join("") : `<tr><td colspan="11" class="muted">확정된 매도 거래가 없습니다.</td></tr>`;
+    }).join("") : `<tr><td colspan="11" class="muted">확정된 청산 거래가 없습니다.</td></tr>`;
 
     const exchangeSummary = exchangeFilter === "all" ? null : performanceSource?.exchanges?.[exchangeFilter];
     const total = exchangeSummary ? num(exchangeSummary.realized_net_pnl_quote) : rows.reduce((s, r) => s + num(r.net_pnl_quote), 0);
@@ -235,8 +241,8 @@
           <div><span>총 확정손익</span><b class="${tone(total)}">${currency === "MIXED" ? `${signed(total,4)} (혼합)` : money(total,currency)}</b></div>
           <div><span>전략 ROI · 누적</span><b>${pct(exchangeSummary?.cumulative_return_pct)}</b></div>
           <div><span>완료 포지션</span><b>${fmt(exchangeSummary?.closed_trade_count ?? stats.count,0)}건</b></div>
-          <div><span>매도 기록</span><b>${fmt(exchangeSummary?.realized_exit_count ?? rows.length,0)}건</b></div>
-          <div><span>분할매도 행</span><b>${fmt(splitCount,0)}건</b></div>
+          <div><span>청산 기록</span><b>${fmt(exchangeSummary?.realized_exit_count ?? rows.length,0)}건</b></div>
+          <div><span>분할청산 행</span><b>${fmt(splitCount,0)}건</b></div>
           <div><span>승률</span><b>${fmt(exchangeSummary?.win_rate_pct ?? stats.winRate,1)}%</b></div>
           <div><span>Profit Factor</span><b>${(exchangeSummary?.profit_factor ?? stats.profitFactor) === null || (exchangeSummary?.profit_factor ?? stats.profitFactor) === Infinity ? "∞" : fmt(exchangeSummary?.profit_factor ?? stats.profitFactor,2)}</b></div>`;
       }

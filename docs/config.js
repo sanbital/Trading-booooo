@@ -1,9 +1,9 @@
 // 배포 전에 아래 두 값만 본인 Supabase 프로젝트 값으로 교체하세요.
 // Publishable(또는 기존 Anon) Key는 브라우저용 공개 키입니다.
 // Service Role / Secret Key / SCAN_ACCESS_TOKEN은 절대 이 파일에 넣지 마세요.
-const UI_VERSION = "7.6.0-BINANCE-FUTURES";
-const DASHBOARD_REVISION = "7.6.4-ENTRY-STATUS-COPY-r1";
-const PERFORMANCE_ASSET_REVISION = "7.6.3-BINANCE-SPOT-FUTURES-COMBINED-r1";
+const UI_VERSION = "8.0.0-P10-DONCHIAN-SLOW4R";
+const DASHBOARD_REVISION = "8.0.0-LONG-SHORT-DIRECTION-r1";
+const PERFORMANCE_ASSET_REVISION = "8.0.0-LONG-SHORT-DIRECTION-r1";
 const MARKET_REGIME_ASSET_REVISION = "3-R60-D12-FORECAST-r1";
 
 window.TRADING_SCANNER_CONFIG = {
@@ -28,7 +28,9 @@ window.TRADING_SCANNER_CONFIG = {
 
 function applyDashboardVersion() {
   const subtitle = document.getElementById("brand-subtitle");
-  if (subtitle) subtitle.textContent = `UPBIT KRW + BINANCE USDT SPOT · v${UI_VERSION}`;
+  if (subtitle) {
+    subtitle.textContent = `UPBIT KRW + BINANCE USDT SPOT + USDⓈ-M LONG/SHORT · v${UI_VERSION}`;
+  }
   document.documentElement.dataset.dashboardRevision = DASHBOARD_REVISION;
 }
 
@@ -54,7 +56,7 @@ window.addEventListener("pageshow", applyDashboardVersion);
   document.head.appendChild(realizedScript);
 
   const entryStatusScript = document.createElement("script");
-  entryStatusScript.src = `./entry-status.js?v=5-SCAN-DECISION-COPY`;
+  entryStatusScript.src = `./entry-status.js?v=${assetVersion}`;
   entryStatusScript.defer = true;
   document.head.appendChild(entryStatusScript);
 

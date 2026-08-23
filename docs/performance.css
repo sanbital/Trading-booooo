@@ -44,6 +44,9 @@
 .realized-heading>div{min-width:0}
 .realized-source-badges{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}
 .realized-ledger-badge,.realized-revision-badge,.realized-split-badge,.realized-single-badge,.realized-locked{display:inline-flex;align-items:center;border-radius:999px;font-family:var(--mono,monospace);font-size:.7rem;font-weight:700;line-height:1;padding:5px 8px}
+.position-side-badge{display:inline-flex;align-items:center;margin-left:7px;padding:4px 7px;border-radius:999px;font-family:var(--mono,monospace);font-size:.66rem;font-weight:800;line-height:1;vertical-align:middle}
+.position-side-long{border:1px solid rgba(66,230,164,.3);background:rgba(66,230,164,.13);color:#42e6a4}
+.position-side-short{border:1px solid rgba(255,107,131,.32);background:rgba(255,107,131,.13);color:#ff6b83}
 .realized-ledger-badge{background:rgba(66,230,164,.12);color:#42e6a4;border:1px solid rgba(66,230,164,.24)}
 .realized-revision-badge{max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:rgba(148,163,184,.1);color:#aebccc;border:1px solid rgba(148,163,184,.16)}
 .realized-split-badge{background:rgba(96,165,250,.13);color:#9bc8ff;border:1px solid rgba(96,165,250,.24)}

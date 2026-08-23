@@ -6,6 +6,11 @@ import { readFile } from "node:fs/promises";
 const source = await readFile(new URL("./app.js", import.meta.url), "utf8");
 const html = await readFile(new URL("./index.html", import.meta.url), "utf8");
 const entryStatusSource = await readFile(new URL("./entry-status.js", import.meta.url), "utf8");
+const realizedPerformanceSource = await readFile(
+  new URL("./realized-performance.js", import.meta.url),
+  "utf8",
+);
+const performanceCss = await readFile(new URL("./performance.css", import.meta.url), "utf8");
 const helperEnd = source.indexOf("})();");
 
 if (helperEnd < 0) {
@@ -73,7 +78,7 @@ test("the dashboard HTML provides every static element required by app.js", () =
 function loadEntryStatusModel() {
   const instrumented = entryStatusSource.replace(
     /\}\)\(\);\s*$/,
-    "window.__entryStatusTest = { manualPositionCardRow, mergePositionRows, shouldDisplayPosition }; })();",
+    "window.__entryStatusTest = { manualPositionCardRow, mergePositionRows, shouldDisplayPosition, positionDirection }; })();",
   );
   const window = {
     TRADING_SCANNER_CONFIG: {},
@@ -131,8 +136,29 @@ test("manual autotrader holdings are converted and merged into position cards", 
   assert.equal(rows[0].id, manual.id);
   assert.equal(rows[0].is_manual, true);
   assert.equal(rows[0].state, "MANUAL");
+  assert.equal(rows[0].position_side, "LONG");
   assert.equal(rows[0].market_value_quote, 1100);
   assert.equal(rows[0].estimated_pnl_quote, 98.9);
+});
+
+test("position direction uses the canonical side and never infers from BUY or SELL", () => {
+  const model = loadEntryStatusModel();
+
+  assert.equal(model.positionDirection({ position_side: "SHORT", side: "BUY" }), "SHORT");
+  assert.equal(model.positionDirection({ position_side: "LONG", side: "SELL" }), "LONG");
+  assert.equal(model.positionDirection({ positionSide: "short" }), "SHORT");
+  assert.equal(model.positionDirection({ side: "SELL" }), "LONG");
+  assert.match(entryStatusSource, /position-side-badge \$\{directionTone\}/);
+});
+
+test("all position and realized-trade surfaces render LONG and SHORT badges", () => {
+  assert.match(source, /function positionDirectionBadge\(row\)/);
+  assert.match(source, /exchange === "binance_futures"\) continue/);
+  assert.match(realizedPerformanceSource, /row\?\.position_side/);
+  assert.match(realizedPerformanceSource, /position-side-badge \$\{directionTone\}/);
+  assert.match(performanceCss, /\.position-side-long\{/);
+  assert.match(performanceCss, /\.position-side-short\{/);
+  assert.match(html, /선물 운용 \(롱·숏\)/);
 });
 
 test("manual position cards have explicit manual and no-auto-management labels", () => {

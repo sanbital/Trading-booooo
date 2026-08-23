@@ -51,6 +51,12 @@
     return `${hours}시간 ${remain}분`;
   };
 
+  function positionDirection(row) {
+    return String(row?.position_side ?? row?.positionSide ?? "LONG").toUpperCase() === "SHORT"
+      ? "SHORT"
+      : "LONG";
+  }
+
   function manualPositionCardRow(row) {
     const exchange = String(row?.exchange || "").toLowerCase();
     const quantity = Math.max(0, finite(row?.remaining_quantity) ?? finite(row?.initial_quantity) ?? 0);
@@ -74,6 +80,7 @@
       quote_currency: row?.quote_currency || (exchange === "upbit" ? "KRW" : "USDT"),
       market: row?.market,
       state: "MANUAL",
+      position_side: positionDirection(row),
       is_paper: false,
       is_manual: true,
       opened_at: row?.created_at || manualImport.balance_snapshot_at || null,
@@ -126,7 +133,7 @@
     const link = document.createElement("link");
     link.id = "entry-status-style";
     link.rel = "stylesheet";
-    link.href = "./entry-status.css?v=2-POSITION-PNL-REASONS";
+    link.href = "./entry-status.css?v=3-LONG-SHORT-DIRECTION";
     document.head.appendChild(link);
   }
 
@@ -220,6 +227,8 @@
       const pnlClass = pnl === null ? "" : pnl >= 0 ? "realized-positive" : "realized-negative";
       const mode = row.is_manual ? "MANUAL" : row.is_paper ? "PAPER" : "LIVE";
       const state = row.is_manual ? "수동매수" : row.state || "OPEN";
+      const direction = positionDirection(row);
+      const directionTone = direction === "SHORT" ? "position-side-short" : "position-side-long";
       const note = row.is_manual
         ? "거래소 실시간 잔고에서 자동매매 포지션과 잔여재고를 제외한 수동 보유분입니다. 자동매도·성과·학습 대상에서 제외됩니다."
         : "평가손익은 최신 계좌 스냅샷의 현재가 기준 미확정 추정치입니다. 이미 발생한 수수료와 예상 매도 수수료를 반영하며, 슬리피지는 제외합니다.";
@@ -228,6 +237,7 @@
           <div class="entry-position-head">
             <div class="entry-position-market">
               <strong>${esc(row.market || "—")}</strong>
+              <span class="position-side-badge ${directionTone}" title="포지션 방향" aria-label="포지션 방향 ${direction}">${direction}</span>
               <span class="entry-position-badge">${esc(String(row.exchange || "").toUpperCase())}</span>
               <span class="entry-position-badge">${mode}</span>
               <span class="entry-position-badge">${esc(state)}</span>
