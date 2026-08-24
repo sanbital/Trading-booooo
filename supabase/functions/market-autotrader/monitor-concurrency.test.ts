@@ -1,5 +1,9 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { mapConcurrentOrdered, P10_MONITOR_POSITION_CONCURRENCY } from "./monitor-concurrency.ts";
+import {
+  mapConcurrentOrdered,
+  P10_MONITOR_POSITION_CONCURRENCY,
+  P10_SCAN_PORTFOLIO_CONCURRENCY,
+} from "./monitor-concurrency.ts";
 
 Deno.test("position monitor bounds independent checks and preserves input order", async () => {
   const started: number[] = [];
@@ -75,4 +79,31 @@ Deno.test("P10 open-position lane handles three slots in one bounded wave", asyn
   assertEquals(peak, 3);
   releases.forEach((release) => release.resolve());
   assertEquals(await result, [0, 1, 2]);
+});
+
+Deno.test("P10 scan portfolio reads use one bounded three-venue wave", async () => {
+  let active = 0;
+  let peak = 0;
+  const releases = Array.from({ length: 3 }, () => Promise.withResolvers<void>());
+  const allStarted = Promise.withResolvers<void>();
+  let started = 0;
+  const result = mapConcurrentOrdered(
+    ["upbit", "binance", "binance_futures"],
+    async (exchange, index) => {
+      active += 1;
+      started += 1;
+      peak = Math.max(peak, active);
+      if (started === 3) allStarted.resolve();
+      await releases[index].promise;
+      active -= 1;
+      return exchange;
+    },
+    P10_SCAN_PORTFOLIO_CONCURRENCY,
+  );
+  await allStarted.promise;
+  assertEquals(peak, 3);
+  releases[2].resolve();
+  releases[0].resolve();
+  releases[1].resolve();
+  assertEquals(await result, ["upbit", "binance", "binance_futures"]);
 });

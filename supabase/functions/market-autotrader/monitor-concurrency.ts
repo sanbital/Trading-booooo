@@ -6,6 +6,7 @@
  * next made the effective safety cadence grow linearly with the number of open positions.
  */
 export const P10_MONITOR_POSITION_CONCURRENCY = 3;
+export const P10_SCAN_PORTFOLIO_CONCURRENCY = 3;
 
 export async function mapConcurrentOrdered<T, R>(
   items: readonly T[],

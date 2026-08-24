@@ -149,6 +149,7 @@ import { type LeaseGateway, runWithContendedLease } from "./lease.ts";
 import {
   mapConcurrentOrdered,
   P10_MONITOR_POSITION_CONCURRENCY,
+  P10_SCAN_PORTFOLIO_CONCURRENCY,
 } from "./monitor-concurrency.ts";
 import { shouldLoadCompletedPolicyBar } from "./p10-monitor-cadence.ts";
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
@@ -9836,10 +9837,21 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
       value: isFiniteNumber ? numeric : null,
     };
   };
-  for (const exchange of exchanges) {
-    const raw = await gateway(exchange, { action: "portfolio" });
+  // Fan out only the three independent, read-only venue portfolio calls.  The DB-heavy
+  // managed/account-stat/circuit pipeline below intentionally remains ordered, avoiding a
+  // burst of roughly thirty PostgREST reads that would contend with the two-second risk lane.
+  const portfolioLoads = await mapConcurrentOrdered(
+    exchanges,
+    async (exchange) => {
+      const raw = await gateway(exchange, { action: "portfolio" });
+      return { exchange, raw, capturedAt: new Date().toISOString() };
+    },
+    P10_SCAN_PORTFOLIO_CONCURRENCY,
+  );
+  for (const { exchange, raw, capturedAt } of portfolioLoads) {
     portfolios[exchange] = raw;
-    portfolioCapturedAt[exchange] = new Date().toISOString();
+    // Snapshot age belongs to the exchange response, not to its later ordered processing.
+    portfolioCapturedAt[exchange] = capturedAt;
     const managed = await managedPortfolio(settings, exchange, raw);
     stats[exchange] = await accountStats(
       exchange,
