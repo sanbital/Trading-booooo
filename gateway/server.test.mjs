@@ -35,6 +35,16 @@ test("gateway restricts identifiers and spot markets", () => {
   assert.throws(() => module.validateIdentifier("manual-order"));
 });
 
+test("monitor cadence waits only for the unspent interval", () => {
+  assert.equal(module.monitorCadenceDelayMs(1_000, 2_200, 2_000), 800);
+  assert.equal(module.monitorCadenceDelayMs(1_000, 3_000, 2_000), 0);
+  assert.equal(module.monitorCadenceDelayMs(1_000, 3_350, 2_000), 0);
+});
+
+test("monitor cadence tolerates a non-monotonic wall clock", () => {
+  assert.equal(module.monitorCadenceDelayMs(2_000, 1_900, 2_000), 2_000);
+});
+
 test("gateway blocks orders from a missing or different engine revision", () => {
   assert.throws(
     () => module.assertOrderEngineVersion({}),

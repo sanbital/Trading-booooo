@@ -2069,6 +2069,23 @@ async function schedulerTick(kind) {
     schedulerState[key] = false;
   }
 }
+
+function monitorCadenceDelayMs(startedAtMs, nowMs, intervalMs = MONITOR_INTERVAL_MS) {
+  const elapsedMs = Math.max(0, nowMs - startedAtMs);
+  return Math.max(0, intervalMs - elapsedMs);
+}
+
+function scheduleMonitorLoop(delayMs = MONITOR_INTERVAL_MS) {
+  const timer = setTimeout(async () => {
+    const startedAtMs = Date.now();
+    await schedulerTick("monitor");
+    // Keep one monitor request in flight, but do not discard an entire cadence slot
+    // when the response finishes just after its two-second boundary. A slow cycle is
+    // followed immediately; a fast cycle waits only for the remainder of the interval.
+    scheduleMonitorLoop(monitorCadenceDelayMs(startedAtMs, Date.now()));
+  }, delayMs);
+  timer.unref();
+}
 async function discoverEgressIp() {
   try {
     const response = await fetch("https://api4.ipify.org?format=json");
@@ -2140,13 +2157,12 @@ export async function startServer() {
     syncBinanceTime(true).catch((error) => console.warn("Binance time sync failed", error.message));
   }
   if (SCHEDULER_ENABLED) {
-    setTimeout(() => schedulerTick("monitor"), 2_000).unref();
+    scheduleMonitorLoop();
     // v6.2: the first scan used to wait 20 seconds after boot, so every deploy and every
     // machine restart bought roughly two scan cycles of nothing. The heat sample is
     // self-contained within a single scan -- it takes its own three snapshots -- so there
     // is no warm-up state that the delay was protecting.
     setTimeout(() => schedulerTick("scan"), COLD_START_SCAN_MS).unref();
-    setInterval(() => schedulerTick("monitor"), MONITOR_INTERVAL_MS).unref();
     setInterval(() => schedulerTick("scan"), SCAN_INTERVAL_MS).unref();
     setInterval(discoverEgressIp, 6 * 60 * 60 * 1000).unref();
     setInterval(() => syncBinanceTime(true).catch(() => null), 30 * 60_000).unref();
@@ -2177,6 +2193,7 @@ export {
   formatStep,
   FUTURES_MIN_ENTRY_MARGIN_USDT,
   localRateLimit,
+  monitorCadenceDelayMs,
   normalizeBinanceOrder,
   normalizeFuturesOrder,
   normalizeP10QuoteBatch,
