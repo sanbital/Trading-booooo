@@ -193,6 +193,13 @@ jobs:
             --set=ON_ERROR_STOP=1 \
             --single-transaction \
             --file supabase/migrations/20260821110000_p10_live_cutover.sql
+          # The live-cutover migration carries the base P10 exit RPC. Always replay
+          # the market-risk overlay after it so one-time defensive partial exits keep
+          # their durable marker instead of repeating on every monitor cycle.
+          psql "${SUPABASE_DB_URL}" \
+            --set=ON_ERROR_STOP=1 \
+            --single-transaction \
+            --file supabase/migrations/20260824013500_p10_market_risk_overlay.sql
           psql "${SUPABASE_DB_URL}" \
             --set=ON_ERROR_STOP=1 \
             --single-transaction \
@@ -210,6 +217,7 @@ jobs:
             v_def text;
             v_futures_def text;
             v_position_def text;
+            v_p10_exit_def text;
             v_bad_timeout text := $bad$
             and not v_futures
             and v_approved_reason in ('HALF_HOLD_ABSOLUTE_TIMEOUT', 'POST180_MAX_HOLD_TIMEOUT')
@@ -285,6 +293,28 @@ jobs:
                or position('coalesce(new.t1_completed, false)' in v_position_def) = 0
                or position('- ''recovery_exit''' in v_position_def) > 0 then
               raise exception 'Futures 3m recovery position-state policy missing after migration batch';
+            end if;
+
+            select pg_get_functiondef(p.oid) into v_p10_exit_def
+            from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname = 'public' and p.proname = 'apply_p10_exit_order';
+            if v_p10_exit_def is null
+               or position('p10_market_risk_partial_at' in v_p10_exit_def) = 0
+               or position('p10_market_risk_exit_at' in v_p10_exit_def) = 0 then
+              raise exception 'P10 market-risk exit markers missing after migration batch';
+            end if;
+            if exists (
+                 select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                 where n.nspname = 'public'
+                   and p.proname = 'apply_p10_exit_order'
+                   and (
+                     has_function_privilege('anon', p.oid, 'EXECUTE')
+                     or has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                     or not has_function_privilege('service_role', p.oid, 'EXECUTE')
+                   )
+               ) then
+              raise exception 'P10 exit RPC privileges are unsafe after migration batch';
             end if;
             raise notice 'sell guard end state verified';
           end
