@@ -146,7 +146,7 @@ import {
 } from "./late-recovery-policy.ts";
 import { buildTradingHeartbeatPatch, type TradingHeartbeatPatch } from "./heartbeat.ts";
 import { type LeaseGateway, runWithContendedLease } from "./lease.ts";
-import { mapConcurrentOrdered } from "./monitor-concurrency.ts";
+import {\n  mapConcurrentOrdered,\n  P10_MONITOR_POSITION_CONCURRENCY,\n} from "./monitor-concurrency.ts";
 import { shouldLoadCompletedPolicyBar } from "./p10-monitor-cadence.ts";
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
@@ -10836,7 +10836,7 @@ async function monitorP10Positions(
       }, { cycleId, positionId: position.id, level: "CRITICAL" });
       return action;
     }
-  });
+  }, P10_MONITOR_POSITION_CONCURRENCY);
   const [reconciliation, monitoredActions] = await Promise.all([
     reconciliationPromise,
     monitoredActionsPromise,

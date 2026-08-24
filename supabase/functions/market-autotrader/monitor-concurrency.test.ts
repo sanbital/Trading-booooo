@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { mapConcurrentOrdered } from "./monitor-concurrency.ts";
+import { mapConcurrentOrdered, P10_MONITOR_POSITION_CONCURRENCY } from "./monitor-concurrency.ts";
 
 Deno.test("position monitor bounds independent checks and preserves input order", async () => {
   const started: number[] = [];
@@ -50,4 +50,29 @@ Deno.test("position monitor never exceeds an explicit concurrency limit", async 
   );
   assertEquals(peak, 2);
   assertEquals(result, ["row-0", "row-1", "row-2", "row-3", "row-4"]);
+});
+
+Deno.test("P10 open-position lane handles three slots in one bounded wave", async () => {
+  let active = 0;
+  let peak = 0;
+  const releases = Array.from({ length: 3 }, () => Promise.withResolvers<void>());
+  const allStarted = Promise.withResolvers<void>();
+  let started = 0;
+  const result = mapConcurrentOrdered(
+    [0, 1, 2],
+    async (value) => {
+      active += 1;
+      started += 1;
+      peak = Math.max(peak, active);
+      if (started === 3) allStarted.resolve();
+      await releases[value].promise;
+      active -= 1;
+      return value;
+    },
+    P10_MONITOR_POSITION_CONCURRENCY,
+  );
+  await allStarted.promise;
+  assertEquals(peak, 3);
+  releases.forEach((release) => release.resolve());
+  assertEquals(await result, [0, 1, 2]);
 });
