@@ -328,16 +328,31 @@ async function upbitRequest(method, path, { query = {}, body = null, timeoutMs =
     clearTimeout(timer);
   }
 }
-async function publicUpbit(path, query = {}) {
+async function publicUpbit(path, query = {}, timeoutMs = 10_000) {
   guardRate("upbit", upbitRateGroup("GET", path, true));
   const encoded = encodedQueryString(query);
-  const response = await fetch(`${UPBIT_BASE}${path}${encoded ? `?${encoded}` : ""}`, {
-    headers: { Accept: "application/json" },
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return (await parseResponse(response, "Upbit public")).data;
+    const response = await fetch(`${UPBIT_BASE}${path}${encoded ? `?${encoded}` : ""}`, {
+      signal: controller.signal,
+      headers: { Accept: "application/json" },
+    });
+    try {
+      return (await parseResponse(response, "Upbit public")).data;
+    } catch (error) {
+      throw contextualizeError(error, `Upbit public GET ${path}`);
+    }
   } catch (error) {
-    throw contextualizeError(error, `Upbit public GET ${path}`);
+    if (error?.name === "AbortError") {
+      throw Object.assign(new Error(`Upbit public GET ${path} timed out`), {
+        status: 504,
+        code: "UPBIT_PUBLIC_TIMEOUT",
+      });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -353,16 +368,23 @@ async function syncBinanceTime(force = false) {
   if (!force && Date.now() - lastBinanceTimeSyncAt < 10 * 60_000) return binanceTimeOffsetMs;
   guardRate("binance", "rest");
   const started = Date.now();
-  const response = await fetch(`${BINANCE_BASE}/api/v3/time`, {
-    headers: { Accept: "application/json" },
-  });
-  const data = (await parseResponse(response, "Binance time")).data;
-  const ended = Date.now();
-  const serverTime = Number(data?.serverTime);
-  if (!Number.isFinite(serverTime)) throw new Error("Binance time response is invalid");
-  binanceTimeOffsetMs = serverTime - Math.round((started + ended) / 2);
-  lastBinanceTimeSyncAt = ended;
-  return binanceTimeOffsetMs;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1_500);
+  try {
+    const response = await fetch(`${BINANCE_BASE}/api/v3/time`, {
+      signal: controller.signal,
+      headers: { Accept: "application/json" },
+    });
+    const data = (await parseResponse(response, "Binance time")).data;
+    const ended = Date.now();
+    const serverTime = Number(data?.serverTime);
+    if (!Number.isFinite(serverTime)) throw new Error("Binance time response is invalid");
+    binanceTimeOffsetMs = serverTime - Math.round((started + ended) / 2);
+    lastBinanceTimeSyncAt = ended;
+    return binanceTimeOffsetMs;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 async function publicBinance(path, query = {}, timeoutMs = 10_000, venue = "binance") {
   guardRate(venue, "rest");
@@ -1357,6 +1379,49 @@ async function binanceFuturesPortfolio() {
   return buildFuturesPortfolio(account, prices);
 }
 
+/**
+ * Minimal authenticated holdings for the P10 two-second risk lane. Quantity/direction
+ * proof needs one signed account call; valuation tickers and full equity snapshots remain
+ * on the slow scan lane.
+ */
+async function p10Portfolio(exchange) {
+  if (exchange === "upbit") {
+    const accounts = (await upbitRequest("GET", "/v1/accounts", { timeoutMs: 1_500 })).data;
+    return {
+      exchange,
+      quote_currency: "KRW",
+      accounts: Array.isArray(accounts) ? accounts : [],
+      positions: [],
+      mode: "P10_POSITION_PROOF",
+    };
+  }
+  if (exchange === "binance") {
+    const account = (await binanceRequest(
+      "GET",
+      "/api/v3/account",
+      { omitZeroBalances: "true" },
+      { timeoutMs: 1_500 },
+    )).data;
+    return {
+      exchange,
+      quote_currency: "USDT",
+      accounts: Array.isArray(account?.balances) ? account.balances : [],
+      positions: [],
+      mode: "P10_POSITION_PROOF",
+    };
+  }
+  const account = (await futuresRequest(
+    "GET",
+    "/fapi/v2/account",
+    {},
+    { timeoutMs: 1_500 },
+  )).data;
+  return {
+    ...buildFuturesPortfolio(account, {}),
+    mode: "P10_POSITION_PROOF",
+  };
+}
+
 async function binanceFuturesFees(market = null) {
   const symbol = market ? validateBinanceSymbol(market) : "BTCUSDT";
   const data = (await futuresRequest("GET", "/fapi/v1/commissionRate", { symbol })).data;
@@ -1514,6 +1579,94 @@ const EMPTY_FLOW = {
   last_trade_at: null,
   half_life_ms: TRADE_FLOW_HALF_LIFE_MS,
 };
+
+/**
+ * Normalize a P10 risk-lane quote batch from a single exchange response.
+ *
+ * P10 exits use only the immediately executable best bid/ask. The legacy `quote` action
+ * intentionally keeps depth and trade-flow data for other strategies, but paying for three
+ * public endpoints per held P10 market made a two-second risk loop impossible. This path
+ * returns the same top-level quote contract from one venue request and leaves the legacy
+ * action unchanged.
+ */
+function normalizeP10QuoteBatch(exchange, markets, payload, requestedAtMs, receivedAtMs) {
+  const symbols = [...new Set(validateMarkets(exchange, markets))];
+  if (symbols.length > 20) throw new Error("P10 quote batch is limited to 20 markets");
+  const rows = Array.isArray(payload) ? payload : payload ? [payload] : [];
+  const byMarket = new Map(
+    rows.map((row) => [
+      String(exchange === "upbit" ? row?.market : row?.symbol || "").toUpperCase(),
+      row,
+    ]),
+  );
+  return symbols.map((market) => {
+    const row = byMarket.get(market);
+    const unit = exchange === "upbit" && Array.isArray(row?.orderbook_units)
+      ? row.orderbook_units[0]
+      : null;
+    const bestAsk = Number(exchange === "upbit" ? unit?.ask_price : row?.askPrice);
+    const bestBid = Number(exchange === "upbit" ? unit?.bid_price : row?.bidPrice);
+    if (!(bestAsk > 0 && bestBid > 0 && bestAsk >= bestBid)) {
+      return {
+        exchange,
+        market,
+        error: `P10 top-of-book unavailable for ${exchange}:${market}`,
+        code: "P10_QUOTE_MISSING",
+      };
+    }
+    const askSize = Number(exchange === "upbit" ? unit?.ask_size : row?.askQty);
+    const bidSize = Number(exchange === "upbit" ? unit?.bid_size : row?.bidQty);
+    return {
+      exchange,
+      market,
+      current: (bestAsk + bestBid) / 2,
+      best_ask: bestAsk,
+      best_bid: bestBid,
+      asks: [{ price: bestAsk, size: Number.isFinite(askSize) ? askSize : 0 }],
+      bids: [{ price: bestBid, size: Number.isFinite(bidSize) ? bidSize : 0 }],
+      trade_flow: null,
+      trade_flow_available: false,
+      raw: { top_of_book: row },
+      timing: {
+        requested_at_ms: requestedAtMs,
+        received_at_ms: receivedAtMs,
+        gateway_elapsed_ms: Math.max(0, receivedAtMs - requestedAtMs),
+        book_captured_at_ms: exchange === "upbit"
+          ? Number(row?.timestamp) || null
+          : Number(row?.time) || null,
+        source: (exchange === "upbit" ? Number(row?.timestamp) : Number(row?.time))
+          ? "EXCHANGE"
+          : "GATEWAY_RECEIPT",
+        mode: "P10_TOP_OF_BOOK_BATCH",
+        batch_size: symbols.length,
+      },
+    };
+  });
+}
+
+async function p10Quotes(exchange, markets) {
+  const symbols = [...new Set(validateMarkets(exchange, markets))];
+  if (symbols.length > 20) throw new Error("P10 quote batch is limited to 20 markets");
+  const requestedAtMs = Date.now();
+  const payload = exchange === "upbit"
+    ? await publicUpbit(
+      "/v1/orderbook",
+      { markets: symbols.join(","), count: 1 },
+      1_500,
+    )
+    : isBinanceFutures(exchange)
+    ? await publicBinanceFutures(
+      "/fapi/v1/ticker/bookTicker",
+      symbols.length === 1 ? { symbol: symbols[0] } : {},
+      1_500,
+    )
+    : await publicBinance(
+      "/api/v3/ticker/bookTicker",
+      { symbols: JSON.stringify(symbols) },
+      1_500,
+    );
+  return normalizeP10QuoteBatch(exchange, symbols, payload, requestedAtMs, Date.now());
+}
 
 async function quote(exchange, market) {
   const symbol = validateMarket(exchange, market);
@@ -1788,6 +1941,8 @@ async function handleCommand(command) {
     case "portfolio":
       if (futures) return binanceFuturesPortfolio();
       return exchange === "upbit" ? upbitPortfolio() : binancePortfolio();
+    case "p10_portfolio":
+      return p10Portfolio(exchange);
     case "accounts":
       if (futures) return (await futuresRequest("GET", "/fapi/v2/account")).data;
       return exchange === "upbit"
@@ -1795,6 +1950,8 @@ async function handleCommand(command) {
         : (await binanceRequest("GET", "/api/v3/account", { omitZeroBalances: "true" })).data;
     case "quote":
       return quote(exchange, command.market);
+    case "p10_quotes":
+      return p10Quotes(exchange, command.markets);
     case "symbol_info":
       if (futures) return binanceFuturesExchangeInfo(command.market);
       return exchange === "binance"
@@ -1944,6 +2101,10 @@ function createServer() {
             scan_seconds: SCAN_INTERVAL_MS / 1000,
             monitor_seconds: MONITOR_INTERVAL_MS / 1000,
           },
+          capabilities: {
+            p10_top_of_book_batch: true,
+            p10_position_proof: true,
+          },
           limits: {
             source: "operator_allocation",
             hidden_monetary_caps: false,
@@ -2018,8 +2179,11 @@ export {
   localRateLimit,
   normalizeBinanceOrder,
   normalizeFuturesOrder,
+  normalizeP10QuoteBatch,
+  p10Portfolio,
   normalizeUpbitOrder,
   rawQueryString,
+  p10Quotes,
   resolveFuturesIntent,
   stepPrecision,
   upbitRateGroup,

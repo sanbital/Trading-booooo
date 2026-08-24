@@ -150,6 +150,159 @@ test("Upbit local rate guards follow API groups with headroom", () => {
   assert.equal(module.localRateLimit("upbit", "exchange-default"), 25);
 });
 
+test("P10 Binance Futures quote batches preserve requested order and executable sides", () => {
+  const quotes = module.normalizeP10QuoteBatch(
+    "binance_futures",
+    ["ETCUSDT", "1000BONKUSDT", "ETCUSDT"],
+    [
+      { symbol: "1000BONKUSDT", bidPrice: "0.0123", bidQty: "200", askPrice: "0.0124", askQty: "100" },
+      { symbol: "ETCUSDT", bidPrice: "23.67", bidQty: "4", askPrice: "23.68", askQty: "5" },
+    ],
+    100,
+    125,
+  );
+  assert.deepEqual(quotes.map((row) => row.market), ["ETCUSDT", "1000BONKUSDT"]);
+  assert.equal(quotes[0].best_bid, 23.67);
+  assert.equal(quotes[0].best_ask, 23.68);
+  assert.equal(quotes[1].timing.mode, "P10_TOP_OF_BOOK_BATCH");
+  assert.equal(quotes[1].timing.batch_size, 2);
+});
+
+test("P10 Upbit quote batches use exchange-stamped top of book", () => {
+  const [quote] = module.normalizeP10QuoteBatch(
+    "upbit",
+    ["KRW-BTC"],
+    [{
+      market: "KRW-BTC",
+      timestamp: 123456,
+      orderbook_units: [{ ask_price: 101, bid_price: 99, ask_size: 2, bid_size: 3 }],
+    }],
+    100,
+    120,
+  );
+  assert.equal(quote.current, 100);
+  assert.equal(quote.best_ask, 101);
+  assert.equal(quote.best_bid, 99);
+  assert.equal(quote.timing.book_captured_at_ms, 123456);
+  assert.equal(quote.timing.source, "EXCHANGE");
+});
+
+test("P10 quote batches fail closed when one requested market is missing", () => {
+  const [quote] = module.normalizeP10QuoteBatch("binance", ["BTCUSDT"], [], 0, 1);
+  assert.equal(quote.market, "BTCUSDT");
+  assert.equal(quote.code, "P10_QUOTE_MISSING");
+  assert.match(quote.error, /top-of-book unavailable/);
+  const [crossed] = module.normalizeP10QuoteBatch(
+    "binance_futures",
+    ["BTCUSDT"],
+    [{ symbol: "BTCUSDT", bidPrice: "101", askPrice: "100" }],
+    0,
+    1,
+  );
+  assert.equal(crossed.code, "P10_QUOTE_MISSING");
+});
+
+test("P10 Upbit batch sends two markets with top-of-book depth in one call", async (t) => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push({ url: String(input), signal: init?.signal });
+    return new Response(JSON.stringify([
+      { market: "KRW-BTC", timestamp: 10, orderbook_units: [{ bid_price: 99, ask_price: 100 }] },
+      { market: "KRW-ETH", timestamp: 11, orderbook_units: [{ bid_price: 49, ask_price: 50 }] },
+    ]), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const quotes = await module.p10Quotes("upbit", ["KRW-BTC", "KRW-ETH"]);
+  assert.equal(calls.length, 1);
+  const request = new URL(calls[0].url);
+  assert.equal(request.pathname, "/v1/orderbook");
+  assert.equal(request.searchParams.get("markets"), "KRW-BTC,KRW-ETH");
+  assert.equal(request.searchParams.get("count"), "1");
+  assert.ok(calls[0].signal instanceof AbortSignal);
+  assert.deepEqual(quotes.map((row) => row.market), ["KRW-BTC", "KRW-ETH"]);
+});
+
+test("P10 spot batch requests only the selected symbols in one public call", async (t) => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push({ url: String(input), signal: init?.signal });
+    return new Response(JSON.stringify([
+      { symbol: "BTCUSDT", bidPrice: "100", bidQty: "1", askPrice: "101", askQty: "2" },
+      { symbol: "ETHUSDT", bidPrice: "50", bidQty: "3", askPrice: "51", askQty: "4" },
+    ]), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const quotes = await module.p10Quotes("binance", ["BTCUSDT", "ETHUSDT"]);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /\/api\/v3\/ticker\/bookTicker\?/);
+  assert.match(decodeURIComponent(calls[0].url), /symbols=\["BTCUSDT","ETHUSDT"\]/);
+  assert.ok(calls[0].signal instanceof AbortSignal);
+  assert.deepEqual(quotes.map((row) => row.market), ["BTCUSDT", "ETHUSDT"]);
+});
+
+test("P10 Futures multi-market batch uses one all-book request and filters locally", async (t) => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push({ url: String(input), signal: init?.signal });
+    return new Response(JSON.stringify([
+      { symbol: "BTCUSDT", bidPrice: "100", bidQty: "1", askPrice: "101", askQty: "2" },
+      { symbol: "ETCUSDT", bidPrice: "20", bidQty: "3", askPrice: "21", askQty: "4" },
+      { symbol: "UNREQUESTEDUSDT", bidPrice: "1", bidQty: "1", askPrice: "2", askQty: "1" },
+    ]), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const quotes = await module.p10Quotes("binance_futures", ["BTCUSDT", "ETCUSDT"]);
+  assert.equal(calls.length, 1);
+  assert.equal(new URL(calls[0].url).pathname, "/fapi/v1/ticker/bookTicker");
+  assert.equal(new URL(calls[0].url).search, "");
+  assert.ok(calls[0].signal instanceof AbortSignal);
+  assert.deepEqual(quotes.map((row) => row.market), ["BTCUSDT", "ETCUSDT"]);
+});
+
+test("P10 Futures position proof uses one bounded signed account request after time sync", async (t) => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push({ url: String(input), signal: init?.signal });
+    const url = new URL(String(input));
+    if (url.pathname === "/api/v3/time") {
+      return new Response(JSON.stringify({ serverTime: Date.now() }), { status: 200 });
+    }
+    assert.equal(url.pathname, "/fapi/v2/account");
+    return new Response(JSON.stringify({
+      availableBalance: "100",
+      totalMarginBalance: "101",
+      assets: [{ asset: "USDT", walletBalance: "100", availableBalance: "99" }],
+      positions: [{
+        symbol: "ETCUSDT",
+        positionAmt: "-2",
+        entryPrice: "20",
+        leverage: "3",
+        unrealizedProfit: "1",
+      }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const portfolio = await module.p10Portfolio("binance_futures");
+  assert.ok(calls.length === 1 || calls.length === 2);
+  assert.ok(calls.every((call) => call.signal instanceof AbortSignal));
+  assert.equal(portfolio.mode, "P10_POSITION_PROOF");
+  assert.deepEqual(portfolio.positions.map((row) => [row.market, row.side, row.quantity]), [
+    ["ETCUSDT", "SHORT", 2],
+  ]);
+});
+
 test("Upbit portfolio ignores unpriced or delisted balances without failing the account", () => {
   const portfolio = module.buildUpbitPortfolio([
     { currency: "KRW", balance: "100000", locked: "5000" },
