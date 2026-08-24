@@ -1,4 +1,4 @@
-// Trading-booooo v8.0.0 — P10 Donchian breakout + slow 4R orchestration.
+// Trading-booooo v8.0.0 — existing P10/I46 LONG + S096 RSI-momentum SHORT orchestration.
 // Private service-role function. No withdrawal or transfer route exists. Futures short
 // orders are accepted only through explicit, direction-safe OPEN/CLOSE intent.
 
@@ -166,7 +166,34 @@ import {
   planP10Entry,
   prepareP10Bars,
 } from "../_shared/p10-policy.ts";
+import {
+  applyP10MarketRiskOverlay,
+  evaluateP10MarketRisk,
+  P10_MARKET_RISK_CONFIG,
+  p10RequestedExitQuantity,
+  type P10MarketRiskObservation,
+} from "../_shared/p10-market-risk.ts";
+import {
+  FUTURES_SHORT_LIVE_ENV,
+  futuresShortEntryBlockReason,
+  futuresShortLiveEnabled,
+} from "../_shared/futures-short-safety.ts";
+import {
+  evaluateS37ShortExit,
+  S37_SHORT_REVISION,
+  S37_SHORT_STRATEGY_KEY,
+} from "../_shared/s37-short-policy.ts";
+import {
+  evaluateS096ShortExit,
+  isS096SignalEvidence,
+  planS096ShortEntry,
+  resolveFixedShortCurrentStop,
+  S096_SHORT_CONFIG,
+  S096_SHORT_REVISION,
+  S096_SHORT_STRATEGY_KEY,
+} from "../_shared/s096-short-policy.ts";
 
+// Order-gateway/scanner protocol version. Strategy identity is stored separately in metadata.
 const VERSION = "8.0.0-P10-DONCHIAN-SLOW4R";
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
@@ -176,6 +203,10 @@ const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
 const DASHBOARD_TOKEN = env("DASHBOARD_ACCESS_TOKEN") || env("LEARNING_ACCESS_TOKEN");
 const GATEWAY_URL = env("ORDER_GATEWAY_URL").replace(/\/$/, "");
 const GATEWAY_SECRET = env("GATEWAY_SHARED_SECRET");
+// Deliberately independent of signal generation and trading_settings.  Until an
+// operator explicitly provisions this exact env flag, research/shadow SHORT signals
+// cannot cross the executor into a live futures SELL.
+const FUTURES_SHORT_LIVE_FLAG = env(FUTURES_SHORT_LIVE_ENV);
 // Optional exchange-split: route Binance orders to a dedicated gateway (e.g. Paris/cdg).
 // When BINANCE_ORDER_GATEWAY_URL is unset, Binance falls back to the primary gateway,
 // so existing single-gateway deployments behave exactly as before. Upbit always uses the primary.
@@ -8923,6 +8954,27 @@ type P10SignalRow = JsonRecord & {
 
 const P10_ENTRY_WINDOW_MS = 20 * 60_000;
 
+function isS096ShortSignal(signal: P10SignalRow): boolean {
+  return signal.venue === "binance_futures" && signal.side === "SHORT" &&
+    isS096SignalEvidence(signal.evidence);
+}
+
+function combinedEntryPlan(signal: P10SignalRow, entryPrice: number) {
+  if (isS096ShortSignal(signal)) {
+    return planS096ShortEntry(
+      finite(signal.reference_close),
+      finite(signal.evidence?.atr14),
+      entryPrice,
+    );
+  }
+  return planP10Entry(
+    String(signal.side) as P10Side,
+    finite(signal.reference_close),
+    finite(signal.evidence?.atr14),
+    entryPrice,
+  );
+}
+
 function p10VenueExchange(venue: P10Venue): Exchange {
   return venue === "upbit_spot"
     ? "upbit"
@@ -8972,10 +9024,18 @@ async function loadP10Signals(): Promise<P10SignalRow[]> {
       now > nextBarOpen + P10_ENTRY_WINDOW_MS
     ) continue;
     if (row.venue !== "binance_futures" && row.side !== "LONG") continue;
+    // Fail closed: legacy/research SHORT rows under the shared execution config must
+    // never become live entries. Only the exact S096 strategy+revision is executable.
+    if (row.side === "SHORT" && !isS096ShortSignal(row)) continue;
     const key = `${row.venue}:${row.market}:${row.side}:${row.signal_time}`;
     if (!deduped.has(key)) deduped.set(key, row);
   }
-  return [...deduped.values()].sort((left, right) => finite(right.score) - finite(left.score));
+  return [...deduped.values()].sort((left, right) => {
+    // S096 and I46 scores are not calibrated to the same scale. Preserve the pre-existing
+    // LONG lane's priority, then rank each side by its own research score.
+    if (left.side !== right.side) return left.side === "LONG" ? -1 : 1;
+    return finite(right.score) - finite(left.score);
+  });
 }
 
 function p10Depth(
@@ -9070,12 +9130,7 @@ async function applyP10EntryAccounting(
     ? grossQuantity
     : Math.max(0, grossQuantity - paidFeeBase);
   const price = finite(fill.averagePrice);
-  const plan = planP10Entry(
-    String(position.position_side) as P10Side,
-    finite(signal.reference_close),
-    finite(signal.evidence?.atr14),
-    price,
-  );
+  const plan = combinedEntryPlan(signal, price);
   if (!(quantity > 0 && price > 0 && plan.allowed)) {
     throw new Error(`P10 filled entry has invalid accounting plan: ${plan.reason || "no fill"}`);
   }
@@ -9113,6 +9168,16 @@ async function enterP10Signal(
 ) {
   const exchange = p10VenueExchange(signal.venue);
   const side = String(signal.side) as P10Side;
+  const shortLiveOptIn = futuresShortLiveEnabled(FUTURES_SHORT_LIVE_FLAG) ||
+    (settings as any).binance_futures_short_enabled === true;
+  const shortBlock = futuresShortEntryBlockReason(
+    exchange,
+    side,
+    shortLiveOptIn ? "true" : "false",
+  );
+  if (shortBlock) {
+    return { entered: false, exchange, market: signal.market, reason: shortBlock };
+  }
   if (exchange !== "binance_futures" && side !== "LONG") {
     return { entered: false, exchange, market: signal.market, reason: "spot is LONG-only" };
   }
@@ -9163,12 +9228,7 @@ async function enterP10Signal(
     };
   }
   const atr14 = finite(signal.evidence?.atr14);
-  const preliminaryPlan = planP10Entry(
-    side,
-    finite(signal.reference_close),
-    atr14,
-    executablePrice,
-  );
+  const preliminaryPlan = combinedEntryPlan(signal, executablePrice);
   if (!preliminaryPlan.allowed) {
     return {
       entered: false,
@@ -9248,9 +9308,12 @@ async function enterP10Signal(
     };
   }
   const requestedNotional = marginQuote * leverage;
+  const maxEntryGapAtr = isS096ShortSignal(signal)
+    ? S096_SHORT_CONFIG.maxEntryGapAtr
+    : P10_CONFIG.maxEntryGapAtr;
   const boundaryPrice = side === "LONG"
-    ? finite(signal.reference_close) + P10_CONFIG.maxEntryGapAtr * atr14
-    : finite(signal.reference_close) - P10_CONFIG.maxEntryGapAtr * atr14;
+    ? finite(signal.reference_close) + maxEntryGapAtr * atr14
+    : finite(signal.reference_close) - maxEntryGapAtr * atr14;
   const levels = side === "LONG" ? market.asks : market.bids;
   const depth = p10Depth(levels, side, boundaryPrice, requestedNotional);
   if (!depth.executable || depth.availableFunds < requestedNotional * LIVE_MIN_DEPTH_BUFFER) {
@@ -9270,7 +9333,7 @@ async function enterP10Signal(
     rules.price_tick,
     side === "LONG" ? "down" : "up",
   );
-  const finalPlan = planP10Entry(side, finite(signal.reference_close), atr14, limitPrice);
+  const finalPlan = combinedEntryPlan(signal, limitPrice);
   if (!finalPlan.allowed) {
     return { entered: false, exchange, market: signal.market, reason: finalPlan.reason };
   }
@@ -9400,7 +9463,7 @@ async function enterP10Signal(
       tick_size: rules.price_tick,
       quantity_step: rules.quantity_step,
       min_notional_quote: Math.max(1, rules.min_notional),
-      t1_allocation_pct: P10_CONFIG.partialFraction * 100,
+      t1_allocation_pct: isS096ShortSignal(signal) ? 100 : P10_CONFIG.partialFraction * 100,
       exit_policy: "P10_SLOW_4R",
       trailing_stop: tickRound(
         finalPlan.stopPrice,
@@ -9415,7 +9478,11 @@ async function enterP10Signal(
       ).toISOString(),
       metadata: {
         strategy_key: P10_STRATEGY_KEY,
-        strategy_revision: P10_REVISION,
+        strategy_revision: isS096ShortSignal(signal) ? S096_SHORT_REVISION : P10_REVISION,
+        entry_strategy_key: isS096ShortSignal(signal)
+          ? S096_SHORT_STRATEGY_KEY
+          : String(signal.evidence?.entry_strategy_key || P10_STRATEGY_KEY),
+        directional_exit_policy: isS096ShortSignal(signal) ? "S096_FIXED_1P5R" : "P10_SLOW_4R",
         engine_version: VERSION,
         p10_claim_id: claimId,
         p10_signal_run_id: signal.run_id,
@@ -9425,7 +9492,7 @@ async function enterP10Signal(
         p10_signal_atr14: atr14,
         p10_initial_risk: finalPlan.initialRisk,
         p10_last_policy_bar_time: Date.parse(signal.signal_time),
-        p10_partial_fraction: P10_CONFIG.partialFraction,
+        p10_partial_fraction: isS096ShortSignal(signal) ? 1 : P10_CONFIG.partialFraction,
         p10_signal: signal,
         margin_quote: actualCapital,
         notional_quote: orderNotional,
@@ -9807,6 +9874,35 @@ async function p10CompletedBars(position: Position): Promise<P10Bar[]> {
   }));
 }
 
+async function loadP10MarketRiskObservations(): Promise<{
+  observations: P10MarketRiskObservation[];
+  error: string | null;
+}> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1_000);
+  const since = new Date(Date.now() - P10_MARKET_RISK_CONFIG.historyMaxAgeMs).toISOString();
+  try {
+    const observations = await db(
+      `market_regime_observations?model_revision=eq.${
+        encodeURIComponent(P10_MARKET_RISK_CONFIG.modelRevision)
+      }` +
+        "&trading_influence=eq.true" +
+        `&observed_at=gte.${encodeURIComponent(since)}` +
+        "&select=id,observation_bucket,observed_at,model_revision,predicted_regime,bull_score,confidence,sample_size,trading_influence,features" +
+        "&order=observed_at.desc&limit=8",
+      { signal: controller.signal },
+    ) as P10MarketRiskObservation[];
+    return { observations: Array.isArray(observations) ? observations : [], error: null };
+  } catch (error) {
+    return {
+      observations: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function applyP10ExitAccounting(
   position: Position,
   orderRow: any,
@@ -9950,12 +10046,12 @@ async function executeP10Exit(
 ) {
   const step = Math.max(0.000000000001, finite(position.quantity_step, 0.00000001));
   const available = p10ExchangeQuantity(position, portfolio);
-  const requested = action === "TARGET_1"
-    ? Math.min(
-      finite(position.remaining_quantity),
-      finite(position.initial_quantity) * fraction,
-    )
-    : finite(position.remaining_quantity);
+  const requested = p10RequestedExitQuantity({
+    action,
+    initialQuantity: position.initial_quantity,
+    remainingQuantity: position.remaining_quantity,
+    fraction,
+  });
   const quantity = floorToStep(Math.min(requested, available), step);
   if (!(quantity > 0)) {
     await event(
@@ -10035,8 +10131,15 @@ async function executeP10Exit(
       price,
       nextStop,
     );
+    const exitEventCode = action === "MARKET_RISK_PARTIAL"
+      ? "P10_MARKET_PARTIAL_EXIT"
+      : action === "MARKET_RISK_EXIT"
+      ? "P10_MARKET_FULL_EXIT"
+      : applied?.closed
+      ? "P10_POSITION_CLOSED"
+      : "P10_PARTIAL_EXIT";
     await event(
-      applied?.closed ? "P10_POSITION_CLOSED" : "P10_PARTIAL_EXIT",
+      exitEventCode,
       `${position.exchange}:${position.market} ${side} ${action}`,
       {
         strategy_key: P10_STRATEGY_KEY,
@@ -10046,6 +10149,9 @@ async function executeP10Exit(
         quantity: updated.fill.executedVolume,
         remaining_quantity: applied?.position?.remaining_quantity,
         realized_pnl_quote: applied?.position?.realized_pnl_quote,
+        market_overlay: action.startsWith("MARKET_RISK")
+          ? position.metadata?.p10_market_overlay || null
+          : null,
       },
       { cycleId, positionId: position.id, orderId: orderRow.id },
     );
@@ -10055,6 +10161,9 @@ async function executeP10Exit(
       closed: Boolean(applied?.closed),
       position: applied?.position,
       exchange_order_id: updated.order?.exchange_order_id || null,
+      market_overlay: action.startsWith("MARKET_RISK")
+        ? position.metadata?.p10_market_overlay || null
+        : null,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -10095,6 +10204,10 @@ async function monitorP10Positions(
       result: await reconcileP10Order(position, cycleId),
     });
   }
+  // One bounded read per monitor cycle. Every open P10/I46/S37/S096 position evaluates
+  // the same immutable snapshot; a timeout disables only the overlay, never base exits.
+  const marketRiskContext = await loadP10MarketRiskObservations();
+  const marketRiskNow = Date.now();
   const open = await db(
     `trading_positions?strategy_key=eq.${encodeURIComponent(P10_STRATEGY_KEY)}` +
       "&state=eq.OPEN&select=*&order=created_at.asc",
@@ -10131,38 +10244,93 @@ async function monitorP10Positions(
       }
       const quote = await marketQuote(position.exchange, position.market);
       const side = String(position.position_side || "LONG") as P10Side;
+      const s37Position = side === "SHORT" &&
+        position.metadata?.entry_strategy_key === S37_SHORT_STRATEGY_KEY &&
+        position.metadata?.strategy_revision === S37_SHORT_REVISION;
+      const s096Position = side === "SHORT" &&
+        position.metadata?.entry_strategy_key === S096_SHORT_STRATEGY_KEY &&
+        position.metadata?.strategy_revision === S096_SHORT_REVISION;
       const executablePrice = side === "LONG" ? finite(quote.best_bid) : finite(quote.best_ask);
       if (!(executablePrice > 0)) throw new Error("P10 executable quote unavailable");
-      const prepared = prepareP10Bars(await p10CompletedBars(position));
-      const latestCompletedBar = prepared.at(-1) || null;
+      // Fixed S37/S096 exits only need the executable quote. A candle API outage must not
+      // prevent their stop, target or time exit from being evaluated.
+      let latestCompletedBar = null as ReturnType<typeof prepareP10Bars>[number] | null;
+      let completedBarError: string | null = null;
+      if (!s37Position && !s096Position) {
+        try {
+          latestCompletedBar = prepareP10Bars(await p10CompletedBars(position)).at(-1) || null;
+        } catch (error) {
+          // Quote-driven STOP/TARGET/TIME must remain live when a public candle API fails.
+          completedBarError = error instanceof Error ? error.message : String(error);
+        }
+      }
       const entryPrice = finite(position.average_entry_price, position.planned_entry_price);
       const initialRisk = finite(
         position.metadata?.p10_initial_risk,
         Math.abs(entryPrice - finite(position.stop_price)),
       );
-      const currentStop = side === "LONG"
+      const currentStop = s37Position || s096Position
+        ? resolveFixedShortCurrentStop(position.stop_price, position.trailing_stop)
+        : side === "LONG"
         ? Math.max(finite(position.stop_price), finite(position.trailing_stop))
         : Math.min(
           finite(position.stop_price),
           finite(position.trailing_stop, position.stop_price),
         );
-      let decision = evaluateP10Exit({
+      let decision: {
+        action: string;
+        reason: string | null;
+        fraction: number;
+        nextStop: number;
+        policyBarTime: number;
+      } = s37Position
+        ? evaluateS37ShortExit({
+          entryPrice,
+          initialRisk,
+          currentStop,
+          executablePrice,
+          openedAtMs: Date.parse(String(position.opened_at || position.created_at || "")),
+          nowMs: Date.now(),
+          lastPolicyBarTime: finite(position.metadata?.p10_last_policy_bar_time),
+          latestCompletedBarTime: latestCompletedBar?.time,
+        })
+        : s096Position
+        ? evaluateS096ShortExit({
+          entryPrice,
+          initialRisk,
+          currentStop,
+          executablePrice,
+          openedAtMs: Date.parse(String(position.opened_at || position.created_at || "")),
+          nowMs: Date.now(),
+          lastPolicyBarTime: finite(position.metadata?.p10_last_policy_bar_time),
+          latestCompletedBarTime: latestCompletedBar?.time,
+        })
+        : evaluateP10Exit({
+          side,
+          entryPrice,
+          initialRisk,
+          currentStop,
+          partialDone: position.t1_completed === true,
+          executablePrice,
+          entryBarTime: finite(
+            position.metadata?.p10_entry_bar_time,
+            Date.parse(String(position.opened_at || position.created_at || "")),
+          ),
+          openedAtMs: Date.parse(String(position.opened_at || position.created_at || "")),
+          nowMs: Date.now(),
+          lastPolicyBarTime: finite(position.metadata?.p10_last_policy_bar_time),
+          latestCompletedBar,
+          roundTripCostBps: p10RoundTripCostBps(p10ExchangeVenue(position.exchange)),
+        });
+      const baseAction = decision.action;
+      const marketRiskDecision = evaluateP10MarketRisk({
         side,
-        entryPrice,
-        initialRisk,
-        currentStop,
-        partialDone: position.t1_completed === true,
-        executablePrice,
-        entryBarTime: finite(
-          position.metadata?.p10_entry_bar_time,
-          Date.parse(String(position.opened_at || position.created_at || "")),
-        ),
-        openedAtMs: Date.parse(String(position.opened_at || position.created_at || "")),
-        nowMs: Date.now(),
-        lastPolicyBarTime: finite(position.metadata?.p10_last_policy_bar_time),
-        latestCompletedBar,
-        roundTripCostBps: p10RoundTripCostBps(p10ExchangeVenue(position.exchange)),
+        observations: marketRiskContext.observations,
+        nowMs: marketRiskNow,
+        partialAlreadyDone: Boolean(position.metadata?.p10_market_risk_partial_at),
+        sourceError: marketRiskContext.error,
       });
+      decision = applyP10MarketRiskOverlay(decision, marketRiskDecision);
       if (settings.emergency_liquidation) {
         decision = {
           action: "TIME",
@@ -10184,6 +10352,15 @@ async function monitorP10Positions(
         p10_last_policy_bar_time: decision.policyBarTime,
         p10_last_policy_checked_at: new Date().toISOString(),
         p10_last_executable_price: executablePrice,
+        p10_completed_bar_error: completedBarError,
+        p10_market_overlay: {
+          ...marketRiskDecision.audit,
+          side,
+          decision: marketRiskDecision.action,
+          base_action: baseAction,
+          applied_action: decision.action,
+          partial_already_done: Boolean(position.metadata?.p10_market_risk_partial_at),
+        },
         p10_last_completed_bar: latestCompletedBar
           ? {
             time: latestCompletedBar.time,
@@ -10209,6 +10386,7 @@ async function monitorP10Positions(
           side,
           executable_price: executablePrice,
           stop: nextStop,
+          market_overlay: metadata.p10_market_overlay,
         });
         continue;
       }

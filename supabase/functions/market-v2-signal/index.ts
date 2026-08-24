@@ -1,5 +1,13 @@
 // @ts-nocheck
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import {
+  S096_RESEARCH_PROTOCOL,
+  S096_RESEARCH_REGISTRY_SHA256,
+  S096_SHORT_CONFIG,
+  S096_SHORT_REVISION,
+  S096_SHORT_STRATEGY_KEY,
+  selectCombinedLongS096Candidate,
+} from "../_shared/s096-short-policy.ts";
 
 const NAME = "market-v2-signal";
 const P10_KEY = "P10_DONCHIAN_BREAKOUT_E10_SLOW_4R";
@@ -15,61 +23,727 @@ const FUT = "https://fapi.binance.com";
 const env = (n) => (Deno.env.get(n) || "").trim();
 const finite = (v, f = 0) => Number.isFinite(Number(v)) ? Number(v) : f;
 const sleep = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
-const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type":"application/json; charset=utf-8", "cache-control":"no-store" } });
-const mean = (xs) => xs.length ? xs.reduce((a,b)=>a+b,0)/xs.length : 0;
-const pct = (a,b) => b > 0 ? (a/b - 1) * 100 : 0;
+const json = (body, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
+const mean = (xs) => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
+const pct = (a, b) => b > 0 ? (a / b - 1) * 100 : 0;
 
 async function fetchJson(url, timeoutMs = 15000, attempts = 3) {
   let last = new Error("request failed");
-  for (let i=0;i<attempts;i++) {
-    const c = new AbortController(); const t=setTimeout(()=>c.abort(),timeoutMs);
+  for (let i = 0; i < attempts; i++) {
+    const c = new AbortController();
+    const t = setTimeout(() => c.abort(), timeoutMs);
     try {
-      const r=await fetch(url,{signal:c.signal,headers:{accept:"application/json","user-agent":"trading-booooo-i46-live/1.0"}});
-      const text=await r.text();
-      if(r.ok) return text?JSON.parse(text):null;
-      last=new Error(`HTTP ${r.status}: ${text.slice(0,240)}`);
-      if(![418,429].includes(r.status)&&r.status<500) throw last;
-    } catch(e) { last=e; if(i+1>=attempts) throw e; }
-    finally { clearTimeout(t); }
-    await sleep(500*2**i);
+      const r = await fetch(url, {
+        signal: c.signal,
+        headers: { accept: "application/json", "user-agent": "trading-booooo-i46-live/1.0" },
+      });
+      const text = await r.text();
+      if (r.ok) return text ? JSON.parse(text) : null;
+      last = new Error(`HTTP ${r.status}: ${text.slice(0, 240)}`);
+      if (![418, 429].includes(r.status) && r.status < 500) throw last;
+    } catch (e) {
+      last = e;
+      if (i + 1 >= attempts) throw e;
+    } finally {
+      clearTimeout(t);
+    }
+    await sleep(500 * 2 ** i);
   }
   throw last;
 }
-function serviceHeaders(extra={}) { const key=env("SUPABASE_SERVICE_ROLE_KEY"); if(!key) throw new Error("service role unavailable"); return {apikey:key,authorization:`Bearer ${key}`,"content-type":"application/json",accept:"application/json",...extra}; }
-async function rest(path, init={}) { const base=env("SUPABASE_URL"); if(!base) throw new Error("SUPABASE_URL unavailable"); const r=await fetch(`${base}/rest/v1/${path}`,{...init,headers:serviceHeaders(init.headers||{})}); const text=await r.text(); if(!r.ok) throw new Error(`REST ${r.status}: ${text.slice(0,500)}`); return text?JSON.parse(text):null; }
-async function authorize(req) { const supplied=(req.headers.get("x-v2-signal-token")||"").trim(); const rows=await rest("edge_internal_tokens?name=eq.market-v2-signal&select=token&limit=1"); const expected=String(rows?.[0]?.token||""); if(!supplied||supplied.length!==expected.length)return false; let d=0; for(let i=0;i<expected.length;i++)d|=supplied.charCodeAt(i)^expected.charCodeAt(i); return d===0; }
-async function insertReturning(table,row){const r=await rest(table,{method:"POST",headers:{prefer:"return=representation"},body:JSON.stringify(row)});return r?.[0];}
-async function insertRows(table,rows){for(let i=0;i<rows.length;i+=250)await rest(table,{method:"POST",headers:{prefer:"return=minimal"},body:JSON.stringify(rows.slice(i,i+250))});}
-async function patchRun(id,body){const r=await rest(`v2_live_signal_runs?id=eq.${encodeURIComponent(id)}`,{method:"PATCH",headers:{prefer:"return=representation"},body:JSON.stringify(body)});return r?.[0];}
+function serviceHeaders(extra = {}) {
+  const key = env("SUPABASE_SERVICE_ROLE_KEY");
+  if (!key) throw new Error("service role unavailable");
+  return {
+    apikey: key,
+    authorization: `Bearer ${key}`,
+    "content-type": "application/json",
+    accept: "application/json",
+    ...extra,
+  };
+}
+async function rest(path, init = {}) {
+  const base = env("SUPABASE_URL");
+  if (!base) throw new Error("SUPABASE_URL unavailable");
+  const r = await fetch(`${base}/rest/v1/${path}`, {
+    ...init,
+    headers: serviceHeaders(init.headers || {}),
+  });
+  const text = await r.text();
+  if (!r.ok) throw new Error(`REST ${r.status}: ${text.slice(0, 500)}`);
+  return text ? JSON.parse(text) : null;
+}
+async function authorize(req) {
+  const supplied = (req.headers.get("x-v2-signal-token") || "").trim();
+  const rows = await rest("edge_internal_tokens?name=eq.market-v2-signal&select=token&limit=1");
+  const expected = String(rows?.[0]?.token || "");
+  if (!supplied || supplied.length !== expected.length) return false;
+  let d = 0;
+  for (let i = 0; i < expected.length; i++) d |= supplied.charCodeAt(i) ^ expected.charCodeAt(i);
+  return d === 0;
+}
+async function insertReturning(table, row) {
+  const r = await rest(table, {
+    method: "POST",
+    headers: { prefer: "return=representation" },
+    body: JSON.stringify(row),
+  });
+  return r?.[0];
+}
+function normalizeSignalRow(row) {
+  if (row?.side !== "SHORT") return row;
+  return {
+    ...row,
+    scenario_number: 96,
+    family: "RSI_MOMENTUM",
+    evidence: {
+      ...(row.evidence || {}),
+      entry_strategy_key: S096_SHORT_STRATEGY_KEY,
+      entry_strategy_revision: S096_SHORT_REVISION,
+      research_protocol: S096_RESEARCH_PROTOCOL,
+      research_registry_sha256: S096_RESEARCH_REGISTRY_SHA256,
+      deployment_basis: "OPERATOR_APPROVED_EXPLORATORY_CUTOVER",
+      primary_trade_count: 0,
+      stopAtr: S096_SHORT_CONFIG.stopAtr,
+      partialAtR: null,
+      partialFraction: 0,
+      targetR: S096_SHORT_CONFIG.targetR,
+      trailAtr: null,
+      breakEvenAtR: null,
+      exitOnEma20: false,
+      lossTimeStopBars: 96,
+      maxHoldBars: S096_SHORT_CONFIG.maxHoldBars,
+    },
+  };
+}
+async function insertRows(table, rows) {
+  const payload = table === "v2_live_signals" ? rows.map(normalizeSignalRow) : rows;
+  for (let i = 0; i < payload.length; i += 250) {
+    await rest(table, {
+      method: "POST",
+      headers: { prefer: "return=minimal" },
+      body: JSON.stringify(payload.slice(i, i + 250)),
+    });
+  }
+}
+async function patchRun(id, body) {
+  const r = await rest(`v2_live_signal_runs?id=eq.${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { prefer: "return=representation" },
+    body: JSON.stringify(body),
+  });
+  return r?.[0];
+}
 
-let nextUpbit=0; let upbitGate=Promise.resolve();
-async function upbitFetch(url){const slot=upbitGate.then(async()=>{const wait=Math.max(0,nextUpbit-Date.now());if(wait)await sleep(wait);nextUpbit=Date.now()+200;});upbitGate=slot.catch(()=>{});await slot;return fetchJson(url);}
-function binCfg(v){const f=v==="binance_futures";return{base:f?FUT:SPOT,info:f?"/fapi/v1/exchangeInfo":"/api/v3/exchangeInfo",tick:f?"/fapi/v1/ticker/24hr":"/api/v3/ticker/24hr",kl:f?"/fapi/v1/klines":"/api/v3/klines"};}
-async function binTickers(v){const c=binCfg(v);const [info,tickers]=await Promise.all([fetchJson(c.base+c.info),fetchJson(c.base+c.tick)]);const active=new Set((info?.symbols||[]).filter(x=>x?.status==="TRADING"&&x?.quoteAsset==="USDT"&&(v!=="binance_spot"||x?.isSpotTradingAllowed!==false)&&(v!=="binance_futures"||x?.contractType==="PERPETUAL")).map(x=>String(x.symbol)));return (Array.isArray(tickers)?tickers:[]).filter(x=>active.has(String(x.symbol))).map(x=>({market:String(x.symbol),lastPrice:finite(x.lastPrice),return24hPct:finite(x.priceChangePercent),quoteVolume24h:finite(x.quoteVolume)})).filter(x=>x.market&&x.lastPrice>0).sort((a,b)=>a.market.localeCompare(b.market));}
-async function upbitTickers(){const rows=await upbitFetch(`${UPBIT}/v1/market/all?isDetails=true`);const markets=(rows||[]).map(x=>String(x.market||"")).filter(x=>x.startsWith("KRW-")).sort();const out=[];for(let i=0;i<markets.length;i+=80){const chunk=markets.slice(i,i+80);const ts=await upbitFetch(`${UPBIT}/v1/ticker?markets=${encodeURIComponent(chunk.join(","))}`);for(const x of ts||[])out.push({market:String(x.market||""),lastPrice:finite(x.trade_price),return24hPct:finite(x.signed_change_rate)*100,quoteVolume24h:finite(x.acc_trade_price_24h)});}return out.filter(x=>x.market&&x.lastPrice>0).sort((a,b)=>a.market.localeCompare(b.market));}
-const universeTickers=(v)=>v==="upbit_spot"?upbitTickers():binTickers(v);
-function binBar(r){return{time:finite(r?.[0]),open:finite(r?.[1]),high:finite(r?.[2]),low:finite(r?.[3]),close:finite(r?.[4]),volume:finite(r?.[5]),quoteVolume:finite(r?.[7])};}
-function upBar(r){return{time:Date.parse(String(r?.candle_date_time_utc||"")+"Z"),open:finite(r?.opening_price),high:finite(r?.high_price),low:finite(r?.low_price),close:finite(r?.trade_price),volume:finite(r?.candle_acc_trade_volume),quoteVolume:finite(r?.candle_acc_trade_price)};}
-function dedupe(rows){const m=new Map();for(const b of rows)if(b.time>0&&b.close>0)m.set(b.time,b);return[...m.values()].sort((a,b)=>a.time-b.time);}
-async function marketBars(v,market,end){if(v==="upbit_spot"){const payload=await upbitFetch(`${UPBIT}/v1/candles/minutes/60?market=${encodeURIComponent(market)}&count=${HISTORY}&to=${encodeURIComponent(new Date(end+1).toISOString())}`);return dedupe((payload||[]).map(upBar));}const c=binCfg(v);const payload=await fetchJson(`${c.base}${c.kl}?symbol=${encodeURIComponent(market)}&interval=1h&endTime=${end}&limit=${HISTORY}`);return dedupe((payload||[]).map(binBar));}
-async function concurrent(items,n,fn){const out=new Array(items.length);let cur=0;await Promise.all(Array.from({length:Math.min(n,items.length)},async()=>{while(true){const i=cur++;if(i>=items.length)return;out[i]=await fn(items[i]);}}));return out;}
+let nextUpbit = 0;
+let upbitGate = Promise.resolve();
+async function upbitFetch(url) {
+  const slot = upbitGate.then(async () => {
+    const wait = Math.max(0, nextUpbit - Date.now());
+    if (wait) await sleep(wait);
+    nextUpbit = Date.now() + 200;
+  });
+  upbitGate = slot.catch(() => {});
+  await slot;
+  return fetchJson(url);
+}
+function binCfg(v) {
+  const f = v === "binance_futures";
+  return {
+    base: f ? FUT : SPOT,
+    info: f ? "/fapi/v1/exchangeInfo" : "/api/v3/exchangeInfo",
+    tick: f ? "/fapi/v1/ticker/24hr" : "/api/v3/ticker/24hr",
+    kl: f ? "/fapi/v1/klines" : "/api/v3/klines",
+  };
+}
+async function binTickers(v) {
+  const c = binCfg(v);
+  const [info, tickers] = await Promise.all([
+    fetchJson(c.base + c.info),
+    fetchJson(c.base + c.tick),
+  ]);
+  const active = new Set(
+    (info?.symbols || []).filter((x) =>
+      x?.status === "TRADING" && x?.quoteAsset === "USDT" &&
+      (v !== "binance_spot" || x?.isSpotTradingAllowed !== false) &&
+      (v !== "binance_futures" || x?.contractType === "PERPETUAL")
+    ).map((x) => String(x.symbol)),
+  );
+  return (Array.isArray(tickers) ? tickers : []).filter((x) => active.has(String(x.symbol))).map(
+    (x) => ({
+      market: String(x.symbol),
+      lastPrice: finite(x.lastPrice),
+      return24hPct: finite(x.priceChangePercent),
+      quoteVolume24h: finite(x.quoteVolume),
+    }),
+  ).filter((x) => x.market && x.lastPrice > 0).sort((a, b) => a.market.localeCompare(b.market));
+}
+async function upbitTickers() {
+  const rows = await upbitFetch(`${UPBIT}/v1/market/all?isDetails=true`);
+  const markets = (rows || []).map((x) => String(x.market || "")).filter((x) =>
+    x.startsWith("KRW-")
+  ).sort();
+  const out = [];
+  for (let i = 0; i < markets.length; i += 80) {
+    const chunk = markets.slice(i, i + 80);
+    const ts = await upbitFetch(
+      `${UPBIT}/v1/ticker?markets=${encodeURIComponent(chunk.join(","))}`,
+    );
+    for (const x of ts || []) {
+      out.push({
+        market: String(x.market || ""),
+        lastPrice: finite(x.trade_price),
+        return24hPct: finite(x.signed_change_rate) * 100,
+        quoteVolume24h: finite(x.acc_trade_price_24h),
+      });
+    }
+  }
+  return out.filter((x) => x.market && x.lastPrice > 0).sort((a, b) =>
+    a.market.localeCompare(b.market)
+  );
+}
+const universeTickers = (v) => v === "upbit_spot" ? upbitTickers() : binTickers(v);
+function binBar(r) {
+  return {
+    time: finite(r?.[0]),
+    open: finite(r?.[1]),
+    high: finite(r?.[2]),
+    low: finite(r?.[3]),
+    close: finite(r?.[4]),
+    volume: finite(r?.[5]),
+    quoteVolume: finite(r?.[7]),
+  };
+}
+function upBar(r) {
+  return {
+    time: Date.parse(String(r?.candle_date_time_utc || "") + "Z"),
+    open: finite(r?.opening_price),
+    high: finite(r?.high_price),
+    low: finite(r?.low_price),
+    close: finite(r?.trade_price),
+    volume: finite(r?.candle_acc_trade_volume),
+    quoteVolume: finite(r?.candle_acc_trade_price),
+  };
+}
+function dedupe(rows) {
+  const m = new Map();
+  for (const b of rows) if (b.time > 0 && b.close > 0) m.set(b.time, b);
+  return [...m.values()].sort((a, b) => a.time - b.time);
+}
+async function marketBars(v, market, end) {
+  if (v === "upbit_spot") {
+    const payload = await upbitFetch(
+      `${UPBIT}/v1/candles/minutes/60?market=${encodeURIComponent(market)}&count=${HISTORY}&to=${
+        encodeURIComponent(new Date(end + 1).toISOString())
+      }`,
+    );
+    return dedupe((payload || []).map(upBar));
+  }
+  const c = binCfg(v);
+  const payload = await fetchJson(
+    `${c.base}${c.kl}?symbol=${
+      encodeURIComponent(market)
+    }&interval=1h&endTime=${end}&limit=${HISTORY}`,
+  );
+  return dedupe((payload || []).map(binBar));
+}
+async function concurrent(items, n, fn) {
+  const out = new Array(items.length);
+  let cur = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
+    while (true) {
+      const i = cur++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i]);
+    }
+  }));
+  return out;
+}
 
-function ema(xs,n){const o=new Array(xs.length).fill(NaN);if(!xs.length)return o;const a=2/(n+1);let v=xs[0];o[0]=v;for(let i=1;i<xs.length;i++){v=xs[i]*a+v*(1-a);o[i]=v;}return o;}
-function wilder(xs,n){const o=new Array(xs.length).fill(NaN);if(!xs.length)return o;let v=xs[0];o[0]=v;for(let i=1;i<xs.length;i++){v=(v*(n-1)+xs[i])/n;o[i]=v;}return o;}
-function rolling(xs,n,kind){const o=new Array(xs.length).fill(NaN);for(let i=0;i<xs.length;i++){const s=xs.slice(Math.max(0,i-n+1),i+1);o[i]=kind==="max"?Math.max(...s):kind==="min"?Math.min(...s):mean(s);}return o;}
-function efficiency(xs,n){const o=new Array(xs.length).fill(0);for(let i=n;i<xs.length;i++){let path=0;for(let j=i-n+1;j<=i;j++)path+=Math.abs(xs[j]-xs[j-1]);o[i]=path?Math.min(1,Math.abs(xs[i]-xs[i-n])/path):0;}return o;}
-function rsi(xs,n=14){const g=new Array(xs.length).fill(0),l=new Array(xs.length).fill(0);for(let i=1;i<xs.length;i++){const d=xs[i]-xs[i-1];g[i]=Math.max(d,0);l[i]=Math.max(-d,0);}const ag=wilder(g,n),al=wilder(l,n);return xs.map((_,i)=>al[i]===0?(ag[i]===0?50:100):100-100/(1+ag[i]/al[i]));}
-function prepare(input){const a=[...input].filter(b=>b.time>0&&b.open>0&&b.high>0&&b.low>0&&b.close>0).sort((x,y)=>x.time-y.time).filter((b,i,r)=>i===0||b.time!==r[i-1].time);const c=a.map(b=>b.close),hi=a.map(b=>b.high),lo=a.map(b=>b.low),q=a.map(b=>Math.max(0,b.quoteVolume||b.volume));const e20=ema(c,20),e50=ema(c,50),e100=ema(c,100);const tr=a.map((b,i)=>i===0?b.high-b.low:Math.max(b.high-b.low,Math.abs(b.high-a[i-1].close),Math.abs(b.low-a[i-1].close)));const atr=wilder(tr,14),rr=rsi(c),ef=efficiency(c,24),vm=rolling(q,20,"mean"),h72=rolling(hi,72,"max"),l72=rolling(lo,72,"min");return a.map((b,i)=>({...b,ema20:e20[i],ema50:e50[i],ema100:e100[i],ema20Slope3Pct:i>=3?pct(e20[i],e20[i-3]):0,ema20Slope6Pct:i>=6?pct(e20[i],e20[i-6]):0,atr14:atr[i],rsi14:rr[i],ret3Pct:i>=3?pct(b.close,a[i-3].close):0,ret6Pct:i>=6?pct(b.close,a[i-6].close):0,ret12Pct:i>=12?pct(b.close,a[i-12].close):0,ret24Pct:i>=24?pct(b.close,a[i-24].close):0,ret72Pct:i>=72?pct(b.close,a[i-72].close):0,efficiency24:ef[i],volumeRatio:vm[i]>0?q[i]/vm[i]:0,quoteVolumeMean20:vm[i],rangeAtr:atr[i]>0?(b.high-b.low)/atr[i]:0,high72Prev:i>0?h72[i-1]:b.high,low72Prev:i>0?l72[i-1]:b.low}));}
-function bench(input){const a=prepare(input),m=new Map();for(let i=100;i<a.length;i++){const b=a[i],sep=pct(b.ema20,b.ema50);const bull=b.close>b.ema20&&b.ema20>b.ema50&&b.ema50>b.ema100&&sep>=.15&&b.ret24Pct>=.2&&b.ret72Pct>=.5;const bear=b.close<b.ema20&&b.ema20<b.ema50&&b.ema50<b.ema100&&sep<=-.15&&b.ret24Pct<=-.2&&b.ret72Pct<=-.5;m.set(b.time,{regime:bull?"BULL":bear?"BEAR":"RANGE",ret24Pct:b.ret24Pct,ret72Pct:b.ret72Pct});}return m;}
-function floor(v){return v==="upbit_spot"?100000000:v==="binance_futures"?500000:100000;}
+function ema(xs, n) {
+  const o = new Array(xs.length).fill(NaN);
+  if (!xs.length) return o;
+  const a = 2 / (n + 1);
+  let v = xs[0];
+  o[0] = v;
+  for (let i = 1; i < xs.length; i++) {
+    v = xs[i] * a + v * (1 - a);
+    o[i] = v;
+  }
+  return o;
+}
+function wilder(xs, n) {
+  const o = new Array(xs.length).fill(NaN);
+  if (!xs.length) return o;
+  let v = xs[0];
+  o[0] = v;
+  for (let i = 1; i < xs.length; i++) {
+    v = (v * (n - 1) + xs[i]) / n;
+    o[i] = v;
+  }
+  return o;
+}
+function rolling(xs, n, kind) {
+  const o = new Array(xs.length).fill(NaN);
+  for (let i = 0; i < xs.length; i++) {
+    const s = xs.slice(Math.max(0, i - n + 1), i + 1);
+    o[i] = kind === "max" ? Math.max(...s) : kind === "min" ? Math.min(...s) : mean(s);
+  }
+  return o;
+}
+function efficiency(xs, n) {
+  const o = new Array(xs.length).fill(0);
+  for (let i = n; i < xs.length; i++) {
+    let path = 0;
+    for (let j = i - n + 1; j <= i; j++) path += Math.abs(xs[j] - xs[j - 1]);
+    o[i] = path ? Math.min(1, Math.abs(xs[i] - xs[i - n]) / path) : 0;
+  }
+  return o;
+}
+function rsi(xs, n = 14) {
+  const g = new Array(xs.length).fill(0), l = new Array(xs.length).fill(0);
+  for (let i = 1; i < xs.length; i++) {
+    const d = xs[i] - xs[i - 1];
+    g[i] = Math.max(d, 0);
+    l[i] = Math.max(-d, 0);
+  }
+  const ag = wilder(g, n), al = wilder(l, n);
+  return xs.map((_, i) => al[i] === 0 ? (ag[i] === 0 ? 50 : 100) : 100 - 100 / (1 + ag[i] / al[i]));
+}
+function prepare(input) {
+  const a = [...input].filter((b) =>
+    b.time > 0 && b.open > 0 && b.high > 0 && b.low > 0 && b.close > 0
+  ).sort((x, y) => x.time - y.time).filter((b, i, r) => i === 0 || b.time !== r[i - 1].time);
+  const c = a.map((b) => b.close),
+    hi = a.map((b) => b.high),
+    lo = a.map((b) => b.low),
+    q = a.map((b) => Math.max(0, b.quoteVolume || b.volume));
+  const e20 = ema(c, 20), e50 = ema(c, 50), e100 = ema(c, 100);
+  const tr = a.map((b, i) =>
+    i === 0 ? b.high - b.low : Math.max(
+      b.high - b.low,
+      Math.abs(b.high - a[i - 1].close),
+      Math.abs(b.low - a[i - 1].close),
+    )
+  );
+  const atr = wilder(tr, 14),
+    rr = rsi(c),
+    ef = efficiency(c, 24),
+    vm = rolling(q, 20, "mean"),
+    h72 = rolling(hi, 72, "max"),
+    l72 = rolling(lo, 72, "min");
+  return a.map((b, i) => ({
+    ...b,
+    ema20: e20[i],
+    ema50: e50[i],
+    ema100: e100[i],
+    ema20Slope3Pct: i >= 3 ? pct(e20[i], e20[i - 3]) : 0,
+    ema20Slope6Pct: i >= 6 ? pct(e20[i], e20[i - 6]) : 0,
+    atr14: atr[i],
+    rsi14: rr[i],
+    ret3Pct: i >= 3 ? pct(b.close, a[i - 3].close) : 0,
+    ret6Pct: i >= 6 ? pct(b.close, a[i - 6].close) : 0,
+    ret12Pct: i >= 12 ? pct(b.close, a[i - 12].close) : 0,
+    ret24Pct: i >= 24 ? pct(b.close, a[i - 24].close) : 0,
+    ret72Pct: i >= 72 ? pct(b.close, a[i - 72].close) : 0,
+    efficiency24: ef[i],
+    volumeRatio: vm[i] > 0 ? q[i] / vm[i] : 0,
+    quoteVolumeMean20: vm[i],
+    rangeAtr: atr[i] > 0 ? (b.high - b.low) / atr[i] : 0,
+    high72Prev: i > 0 ? h72[i - 1] : b.high,
+    low72Prev: i > 0 ? l72[i - 1] : b.low,
+  }));
+}
+function bench(input) {
+  const a = prepare(input), m = new Map();
+  for (let i = 100; i < a.length; i++) {
+    const b = a[i], sep = pct(b.ema20, b.ema50);
+    const bull = b.close > b.ema20 && b.ema20 > b.ema50 && b.ema50 > b.ema100 && sep >= .15 &&
+      b.ret24Pct >= .2 && b.ret72Pct >= .5;
+    const bear = b.close < b.ema20 && b.ema20 < b.ema50 && b.ema50 < b.ema100 && sep <= -.15 &&
+      b.ret24Pct <= -.2 && b.ret72Pct <= -.5;
+    m.set(b.time, {
+      regime: bull ? "BULL" : bear ? "BEAR" : "RANGE",
+      ret24Pct: b.ret24Pct,
+      ret72Pct: b.ret72Pct,
+    });
+  }
+  return m;
+}
+function floor(v) {
+  return v === "upbit_spot" ? 100000000 : v === "binance_futures" ? 500000 : 100000;
+}
 
-function p10Eligible(b,p,s,side,v){const long=side==="LONG",d=long?1:-1;const regime=long?(s.regime!=="BEAR"&&s.ret24Pct>=.10&&s.ret72Pct>=0):(s.regime!=="BULL"&&s.ret24Pct<=-.10&&s.ret72Pct<=0);if(!regime||b.atr14<=0||p.atr14<=0||b.close<=0||b.high<=b.low||b.volumeRatio<1.6||b.quoteVolumeMean20<floor(v))return false;const ap=b.atr14/b.close*100;if(ap<.15||ap>6||2*ap>5)return false;const r=d*b.ret24Pct;if(r<1.2||r>20)return false;const cl=(b.close-b.low)/(b.high-b.low),dl=long?cl:1-cl;const candle=long?b.close>b.open:b.close<b.open,edir=long?b.ema20>b.ema50:b.ema20<b.ema50,rdir=long?(b.rsi14>=48&&b.rsi14<=84):(b.rsi14>=16&&b.rsi14<=52);if(!candle||!edir||!rdir||d*b.ema20Slope6Pct<.10||dl<.74)return false;return long?(b.close>b.high72Prev+.10*b.atr14&&p.close<=b.high72Prev):(b.close<b.low72Prev-.10*b.atr14&&p.close>=b.low72Prev);}
-function p10Score(b,s,side){const d=side==="LONG"?1:-1;return d*b.ret24Pct+d*(b.ret24Pct-s.ret24Pct)+b.volumeRatio*.25+b.efficiency24;}
-function detectP10(v,input,benchmark){const a=prepare(input);if(a.length<106)return null;const b=a.at(-1),p=a.at(-2),s=bench(benchmark).get(b.time);if(!s)return null;const permitted=v==="binance_futures"?["LONG","SHORT"]:["LONG"];const eligible=permitted.filter(side=>p10Eligible(b,p,s,side,v));if(!eligible.length)return null;eligible.sort((l,r)=>p10Score(b,s,r)-p10Score(b,s,l));const side=eligible[0],cl=(b.close-b.low)/(b.high-b.low),d=side==="LONG"?1:-1;return{side,signalTime:b.time,referenceClose:b.close,atr14:b.atr14,score:p10Score(b,s,side),stopReference:b.close-d*2*b.atr14,benchmark:s,asset:{ret24Pct:b.ret24Pct,ret72Pct:b.ret72Pct,ema20:b.ema20,ema50:b.ema50,ema20Slope6Pct:b.ema20Slope6Pct,rsi14:b.rsi14,volumeRatio:b.volumeRatio,quoteVolumeMean20:b.quoteVolumeMean20,closeLocation:cl,high72Prev:b.high72Prev,low72Prev:b.low72Prev}};}
-function i46Check(b,p,s,side,v){const long=side==="LONG",d=long?1:-1;if(d*s.ret24Pct<-.50||d*s.ret72Pct<-2||b.atr14<=0||p.atr14<=0||b.high<=b.low||b.quoteVolumeMean20<floor(v))return null;const ap=b.atr14/b.close*100;if(ap<.15||ap>6||2*ap>5)return null;const r24=d*b.ret24Pct,cl=(b.close-b.low)/(b.high-b.low),dl=long?cl:1-cl;if(b.volumeRatio<1||r24<.2||r24>20||dl<.58||d*b.ema20Slope6Pct<0)return null;if(!(long?b.close>b.open:b.close<b.open)||!(long?b.ema20>b.ema50:b.ema20<b.ema50)||!(long?(b.rsi14>=46&&b.rsi14<=86):(b.rsi14>=14&&b.rsi14<=54)))return null;const rel24=d*(b.ret24Pct-s.ret24Pct),m3=d*b.ret3Pct,m6=d*b.ret6Pct,m12=d*b.ret12Pct,s3=d*b.ema20Slope3Pct;let score=0;if(m3>=.15)score++;if(m6>=.30)score++;if(m12>=.50)score++;if(b.volumeRatio>=1.20)score++;if(b.rangeAtr>=.80)score++;if(b.efficiency24>=.10)score++;if(rel24>=0)score++;if(s3>=.02)score++;return score>=5?{score,rel24,dl,m3,m6,m12,s3}:null;}
-function detectI46(v,input,benchmark){if(v==="upbit_spot")return null;const a=prepare(input);if(a.length<106)return null;const b=a.at(-1),p=a.at(-2),s=bench(benchmark).get(b.time);if(!s)return null;const permitted=v==="binance_futures"?["LONG","SHORT"]:["LONG"];const xs=permitted.map(side=>({side,check:i46Check(b,p,s,side,v)})).filter(x=>x.check);if(!xs.length)return null;if(xs.length>1)xs.sort((x,y)=>y.check.rel24-x.check.rel24);const x=xs[0],side=x.side,d=side==="LONG"?1:-1,cl=(b.close-b.low)/(b.high-b.low);return{side,signalTime:b.time,referenceClose:b.close,atr14:b.atr14,score:x.check.score,stopReference:b.close-d*2*b.atr14,benchmark:s,asset:{ret3Pct:b.ret3Pct,ret6Pct:b.ret6Pct,ret12Pct:b.ret12Pct,ret24Pct:b.ret24Pct,ret72Pct:b.ret72Pct,ema20:b.ema20,ema50:b.ema50,ema20Slope3Pct:b.ema20Slope3Pct,ema20Slope6Pct:b.ema20Slope6Pct,rsi14:b.rsi14,volumeRatio:b.volumeRatio,quoteVolumeMean20:b.quoteVolumeMean20,rangeAtr:b.rangeAtr,efficiency24:b.efficiency24,relativeRet24Pct:x.check.rel24,closeLocation:cl,directionalCloseLocation:x.check.dl,hybridScore:x.check.score}};}
+function p10Eligible(b, p, s, side, v) {
+  const long = side === "LONG", d = long ? 1 : -1;
+  const regime = long
+    ? (s.regime !== "BEAR" && s.ret24Pct >= .10 && s.ret72Pct >= 0)
+    : (s.regime !== "BULL" && s.ret24Pct <= -.10 && s.ret72Pct <= 0);
+  if (
+    !regime || b.atr14 <= 0 || p.atr14 <= 0 || b.close <= 0 || b.high <= b.low ||
+    b.volumeRatio < 1.6 || b.quoteVolumeMean20 < floor(v)
+  ) return false;
+  const ap = b.atr14 / b.close * 100;
+  if (ap < .15 || ap > 6 || 2 * ap > 5) return false;
+  const r = d * b.ret24Pct;
+  if (r < 1.2 || r > 20) return false;
+  const cl = (b.close - b.low) / (b.high - b.low), dl = long ? cl : 1 - cl;
+  const candle = long ? b.close > b.open : b.close < b.open,
+    edir = long ? b.ema20 > b.ema50 : b.ema20 < b.ema50,
+    rdir = long ? (b.rsi14 >= 48 && b.rsi14 <= 84) : (b.rsi14 >= 16 && b.rsi14 <= 52);
+  if (!candle || !edir || !rdir || d * b.ema20Slope6Pct < .10 || dl < .74) return false;
+  return long
+    ? (b.close > b.high72Prev + .10 * b.atr14 && p.close <= b.high72Prev)
+    : (b.close < b.low72Prev - .10 * b.atr14 && p.close >= b.low72Prev);
+}
+function p10Score(b, s, side) {
+  const d = side === "LONG" ? 1 : -1;
+  return d * b.ret24Pct + d * (b.ret24Pct - s.ret24Pct) + b.volumeRatio * .25 + b.efficiency24;
+}
+function detectP10(v, input, benchmark) {
+  const a = prepare(input);
+  if (a.length < 106) return null;
+  const b = a.at(-1), p = a.at(-2), s = bench(benchmark).get(b.time);
+  if (!s) return null;
+  const permitted = v === "binance_futures" ? ["LONG", "SHORT"] : ["LONG"];
+  const eligible = permitted.filter((side) => p10Eligible(b, p, s, side, v));
+  if (!eligible.length) return null;
+  eligible.sort((l, r) => p10Score(b, s, r) - p10Score(b, s, l));
+  const side = eligible[0], cl = (b.close - b.low) / (b.high - b.low), d = side === "LONG" ? 1 : -1;
+  return {
+    side,
+    signalTime: b.time,
+    referenceClose: b.close,
+    atr14: b.atr14,
+    score: p10Score(b, s, side),
+    stopReference: b.close - d * 2 * b.atr14,
+    benchmark: s,
+    asset: {
+      ret24Pct: b.ret24Pct,
+      ret72Pct: b.ret72Pct,
+      ema20: b.ema20,
+      ema50: b.ema50,
+      ema20Slope6Pct: b.ema20Slope6Pct,
+      rsi14: b.rsi14,
+      volumeRatio: b.volumeRatio,
+      quoteVolumeMean20: b.quoteVolumeMean20,
+      closeLocation: cl,
+      high72Prev: b.high72Prev,
+      low72Prev: b.low72Prev,
+    },
+  };
+}
+function i46AssetCheck(b, p, s, side, v) {
+  const long = side === "LONG", d = long ? 1 : -1;
+  if (b.atr14 <= 0 || p.atr14 <= 0 || b.high <= b.low || b.quoteVolumeMean20 < floor(v)) {
+    return null;
+  }
+  const ap = b.atr14 / b.close * 100;
+  if (ap < .15 || ap > 6 || 2 * ap > 5) return null;
+  const r24 = d * b.ret24Pct, cl = (b.close - b.low) / (b.high - b.low), dl = long ? cl : 1 - cl;
+  if (b.volumeRatio < 1 || r24 < .2 || r24 > 20 || dl < .58 || d * b.ema20Slope6Pct < 0) {
+    return null;
+  }
+  if (
+    !(long ? b.close > b.open : b.close < b.open) ||
+    !(long ? b.ema20 > b.ema50 : b.ema20 < b.ema50) ||
+    !(long ? (b.rsi14 >= 46 && b.rsi14 <= 86) : (b.rsi14 >= 14 && b.rsi14 <= 54))
+  ) return null;
+  const rel24 = d * (b.ret24Pct - s.ret24Pct),
+    m3 = d * b.ret3Pct,
+    m6 = d * b.ret6Pct,
+    m12 = d * b.ret12Pct,
+    s3 = d * b.ema20Slope3Pct;
+  let score = 0;
+  if (m3 >= .15) score++;
+  if (m6 >= .30) score++;
+  if (m12 >= .50) score++;
+  if (b.volumeRatio >= 1.20) score++;
+  if (b.rangeAtr >= .80) score++;
+  if (b.efficiency24 >= .10) score++;
+  if (rel24 >= 0) score++;
+  if (s3 >= .02) score++;
+  return score >= 5 ? { score, rel24, dl, m3, m6, m12, s3 } : null;
+}
+function i46Check(b, p, s, side, v) {
+  const d = side === "LONG" ? 1 : -1;
+  if (d * s.ret24Pct < -.50 || d * s.ret72Pct < -2) return null;
+  return i46AssetCheck(b, p, s, side, v);
+}
+function detectI46(v, input, benchmark) {
+  if (v === "upbit_spot") return null;
+  const a = prepare(input);
+  if (a.length < 106) return null;
+  const b = a.at(-1), p = a.at(-2), s = bench(benchmark).get(b.time);
+  if (!s) return null;
+  // Preserve the existing LONG lane verbatim and only evaluate S096 when it has no
+  // signal. I46 and S096 scores have different scales and must never compete.
+  const longCheck = i46Check(b, p, s, "LONG", v);
+  const x = selectCombinedLongS096Candidate({
+    venue: v,
+    bars: a,
+    btcRet24Pct: s.ret24Pct,
+    longCheck,
+    longStrategyKey: I46_KEY,
+    longStrategyRevision: I46_REV,
+    longStopAtr: 2,
+  });
+  if (!x) return null;
+  const side = x.side,
+    d = side === "LONG" ? 1 : -1,
+    cl = (b.close - b.low) / (b.high - b.low),
+    stopAtr = x.stopAtr;
+  return {
+    side,
+    strategyKey: x.strategyKey,
+    strategyRevision: x.strategyRevision,
+    signalTime: b.time,
+    referenceClose: b.close,
+    atr14: b.atr14,
+    score: x.check.score,
+    stopReference: b.close - d * stopAtr * b.atr14,
+    benchmark: s,
+    asset: {
+      ret3Pct: b.ret3Pct,
+      ret6Pct: b.ret6Pct,
+      ret12Pct: b.ret12Pct,
+      ret24Pct: b.ret24Pct,
+      ret72Pct: b.ret72Pct,
+      ema20: b.ema20,
+      ema50: b.ema50,
+      ema20Slope3Pct: b.ema20Slope3Pct,
+      ema20Slope6Pct: b.ema20Slope6Pct,
+      rsi14: b.rsi14,
+      volumeRatio: b.volumeRatio,
+      quoteVolumeMean20: b.quoteVolumeMean20,
+      rangeAtr: b.rangeAtr,
+      efficiency24: b.efficiency24,
+      relativeRet24Pct: x.check.rel24,
+      closeLocation: cl,
+      directionalCloseLocation: x.check.dl,
+      hybridScore: x.check.score,
+      rsiPath: x.check.rsiPath || null,
+      atrPct: x.check.atrPct || b.atr14 / b.close * 100,
+    },
+  };
+}
 
-async function register(venue){const i46=venue!=="upbit_spot";await rest("v2_strategy_registry?on_conflict=venue",{method:"POST",headers:{prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify({venue,revision:i46?I46_REV:P10_REV,mode:"LIVE_LIMITED",cutover_eligible:true,evidence:i46?{strategy_key:I46_KEY,execution_config_key:P10_KEY,research_revision:RESEARCH_REV,data_scope:"ALL_ACTIVE_BINANCE_USDT_MARKETS",execution:"NEXT_BAR_OPEN_GAP_CAPPED",exit_policy:"P10_PRODUCTION_FIXED_5R_STOP2ATR_TRAIL2P5_PARTIAL2R40_BE1P5_EMA20_LOSS24_MAX96"}:{strategy_key:P10_KEY,data_scope:"ALL_ACTIVE_MARKETS",execution:"NEXT_BAR_OPEN_GAP_CAPPED"},updated_at:new Date().toISOString()})});}
-async function runVenue(venue){const i46=venue!=="upbit_spot",rev=i46?I46_REV:P10_REV;const run=await insertReturning("v2_live_signal_runs",{revision:rev,venue,mode:"LIVE_LIMITED",status:"RUNNING",metadata:{strategy_key:i46?I46_KEY:P10_KEY,execution_config_key:P10_KEY}});const id=String(run?.id||"");if(!id)throw new Error("failed to create signal run");const errors=[];try{const tickers=await universeTickers(venue);await insertRows("v2_live_universe_snapshots",tickers.map(x=>({run_id:id,venue,market:x.market,last_price:x.lastPrice,return_24h_pct:x.return24hPct,quote_volume_24h:x.quoteVolume24h,deep_selected:true,selection_rank:null})));const end=Math.floor(Date.now()/HOUR)*HOUR-1,benchmarkMarket=venue==="upbit_spot"?"KRW-BTC":"BTCUSDT",benchmarkBars=await marketBars(venue,benchmarkMarket,end);if(benchmarkBars.length<106)throw new Error(`benchmark history insufficient: ${benchmarkBars.length}`);const analyzed=await concurrent(tickers,venue==="upbit_spot"?4:12,async ticker=>{try{const bars=ticker.market===benchmarkMarket?benchmarkBars:await marketBars(venue,ticker.market,end);if(bars.length<106)throw new Error(`history insufficient: ${bars.length}`);return{ticker,signal:i46?detectI46(venue,bars,benchmarkBars):detectP10(venue,bars,benchmarkBars)};}catch(e){errors.push({market:ticker.market,error:e instanceof Error?e.message:String(e)});return null;}});const completed=analyzed.filter(Boolean);const signalRows=completed.flatMap(item=>item.signal?[{run_id:id,venue,market:item.ticker.market,config_key:P10_KEY,scenario_number:i46?46:10,family:i46?"HYBRID_SCORE":"DONCHIAN_BREAKOUT",side:item.signal.side,signal_time:new Date(item.signal.signalTime).toISOString(),score:item.signal.score,reference_close:item.signal.referenceClose,stop_reference:item.signal.stopReference,max_hold_bars:96,evidence:{revision:rev,entry_strategy_key:i46?I46_KEY:P10_KEY,execution_config_key:P10_KEY,research_revision:i46?RESEARCH_REV:null,atr14:item.signal.atr14,benchmark:item.signal.benchmark,asset:item.signal.asset,nextBarEntry:true,maxEntryGapAtr:.50,stopAtr:2,partialAtR:2,partialFraction:.40,targetR:5,trailAtr:2.5,breakEvenAtR:1.5,exitOnEma20:true,lossTimeStopBars:24,maxHoldBars:96}}]:[]);if(signalRows.length)await insertRows("v2_live_signals",signalRows);await register(venue);const positive=tickers.filter(x=>x.return24hPct>0).length;return await patchRun(id,{status:"COMPLETED",total_markets:tickers.length,universe_scanned:tickers.length,deep_analyzed:completed.length,positive_24h:positive,positive_share_24h:tickers.length?positive/tickers.length:0,signal_count:signalRows.length,error_count:errors.length,completed_at:new Date().toISOString(),metadata:{strategy_key:i46?I46_KEY:P10_KEY,execution_config_key:P10_KEY,revision:rev,entry_family:i46?"HYBRID_SCORE":"DONCHIAN_BREAKOUT",independentVenueScan:true,currentCandleExcluded:true,fullUniverseHistory:true,allActiveMarketsEvaluated:true,errors:errors.slice(0,50),orderWrites:0}});}catch(e){await patchRun(id,{status:"FAILED",error_count:Math.max(1,errors.length),completed_at:new Date().toISOString(),metadata:{strategy_key:i46?I46_KEY:P10_KEY,errors:[...errors,{market:"_RUN_",error:e instanceof Error?e.message:String(e)}].slice(0,50)}}).catch(()=>{});throw e;}}
-async function status(){return rest("v2_live_signal_runs?select=*&order=started_at.desc&limit=12");}
-Deno.serve(async(req)=>{if(req.method==="OPTIONS")return new Response(null,{status:204});try{if(!await authorize(req))return json({ok:false,error:"unauthorized"},401);const body=req.method==="POST"?await req.json().catch(()=>({})):{};const action=String(body?.action||"status");if(action==="status")return json({ok:true,name:NAME,binance_revision:I46_REV,upbit_revision:P10_REV,runs:await status()});if(action!=="run")return json({ok:false,error:"invalid action"},400);const venue=String(body?.venue||"");if(!["upbit_spot","binance_spot","binance_futures"].includes(venue))return json({ok:false,error:"invalid venue"},400);const result=await runVenue(venue);return json({ok:true,name:NAME,revision:venue==="upbit_spot"?P10_REV:I46_REV,entry_strategy_key:venue==="upbit_spot"?P10_KEY:I46_KEY,execution_config_key:P10_KEY,run:result});}catch(e){return json({ok:false,name:NAME,error:e instanceof Error?e.message:String(e)},500);}});
+async function register(venue) {
+  const i46 = venue !== "upbit_spot";
+  await rest("v2_strategy_registry?on_conflict=venue", {
+    method: "POST",
+    headers: { prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify({
+      venue,
+      revision: i46 ? I46_REV : P10_REV,
+      mode: "LIVE_LIMITED",
+      cutover_eligible: true,
+      evidence: i46
+        ? {
+          strategy_key: I46_KEY,
+          short_strategy_key: venue === "binance_futures" ? S096_SHORT_STRATEGY_KEY : null,
+          short_strategy_revision: venue === "binance_futures" ? S096_SHORT_REVISION : null,
+          execution_config_key: P10_KEY,
+          research_revision: RESEARCH_REV,
+          short_research_protocol: venue === "binance_futures" ? S096_RESEARCH_PROTOCOL : null,
+          short_research_registry_sha256: venue === "binance_futures"
+            ? S096_RESEARCH_REGISTRY_SHA256
+            : null,
+          data_scope: "ALL_ACTIVE_BINANCE_USDT_MARKETS",
+          execution: "NEXT_BAR_OPEN_GAP_CAPPED",
+          long_exit_policy:
+            "P10_PRODUCTION_FIXED_5R_STOP2ATR_TRAIL2P5_PARTIAL2R40_BE1P5_EMA20_LOSS24_MAX96",
+          short_exit_policy: venue === "binance_futures"
+            ? "S096_FIXED_1P5R_STOP1P25ATR_MAX96"
+            : null,
+        }
+        : {
+          strategy_key: P10_KEY,
+          data_scope: "ALL_ACTIVE_MARKETS",
+          execution: "NEXT_BAR_OPEN_GAP_CAPPED",
+        },
+      updated_at: new Date().toISOString(),
+    }),
+  });
+}
+async function runVenue(venue) {
+  const i46 = venue !== "upbit_spot", rev = i46 ? I46_REV : P10_REV;
+  const run = await insertReturning("v2_live_signal_runs", {
+    revision: rev,
+    venue,
+    mode: "LIVE_LIMITED",
+    status: "RUNNING",
+    metadata: {
+      strategy_key: i46 ? I46_KEY : P10_KEY,
+      short_strategy_key: venue === "binance_futures" ? S096_SHORT_STRATEGY_KEY : null,
+      short_strategy_revision: venue === "binance_futures" ? S096_SHORT_REVISION : null,
+      execution_config_key: P10_KEY,
+    },
+  });
+  const id = String(run?.id || "");
+  if (!id) throw new Error("failed to create signal run");
+  const errors = [];
+  try {
+    const tickers = await universeTickers(venue);
+    await insertRows(
+      "v2_live_universe_snapshots",
+      tickers.map((x) => ({
+        run_id: id,
+        venue,
+        market: x.market,
+        last_price: x.lastPrice,
+        return_24h_pct: x.return24hPct,
+        quote_volume_24h: x.quoteVolume24h,
+        deep_selected: true,
+        selection_rank: null,
+      })),
+    );
+    const end = Math.floor(Date.now() / HOUR) * HOUR - 1,
+      benchmarkMarket = venue === "upbit_spot" ? "KRW-BTC" : "BTCUSDT",
+      benchmarkBars = await marketBars(venue, benchmarkMarket, end);
+    if (benchmarkBars.length < 106) {
+      throw new Error(`benchmark history insufficient: ${benchmarkBars.length}`);
+    }
+    const analyzed = await concurrent(tickers, venue === "upbit_spot" ? 4 : 12, async (ticker) => {
+      try {
+        const bars = ticker.market === benchmarkMarket
+          ? benchmarkBars
+          : await marketBars(venue, ticker.market, end);
+        if (bars.length < 106) throw new Error(`history insufficient: ${bars.length}`);
+        return {
+          ticker,
+          signal: i46
+            ? detectI46(venue, bars, benchmarkBars)
+            : detectP10(venue, bars, benchmarkBars),
+        };
+      } catch (e) {
+        errors.push({ market: ticker.market, error: e instanceof Error ? e.message : String(e) });
+        return null;
+      }
+    });
+    const completed = analyzed.filter(Boolean);
+    const signalRows = completed.flatMap((item) =>
+      item.signal
+        ? [{
+          run_id: id,
+          venue,
+          market: item.ticker.market,
+          config_key: P10_KEY,
+          scenario_number: i46 ? 46 : 10,
+          family: i46 ? "HYBRID_SCORE" : "DONCHIAN_BREAKOUT",
+          side: item.signal.side,
+          signal_time: new Date(item.signal.signalTime).toISOString(),
+          score: item.signal.score,
+          reference_close: item.signal.referenceClose,
+          stop_reference: item.signal.stopReference,
+          max_hold_bars: 96,
+          evidence: {
+            revision: rev,
+            entry_strategy_key: i46 ? I46_KEY : P10_KEY,
+            execution_config_key: P10_KEY,
+            research_revision: i46 ? RESEARCH_REV : null,
+            atr14: item.signal.atr14,
+            benchmark: item.signal.benchmark,
+            asset: item.signal.asset,
+            nextBarEntry: true,
+            maxEntryGapAtr: .50,
+            stopAtr: 2,
+            partialAtR: 2,
+            partialFraction: .40,
+            targetR: 5,
+            trailAtr: 2.5,
+            breakEvenAtR: 1.5,
+            exitOnEma20: true,
+            lossTimeStopBars: 24,
+            maxHoldBars: 96,
+          },
+        }]
+        : []
+    );
+    if (signalRows.length) await insertRows("v2_live_signals", signalRows);
+    await register(venue);
+    const positive = tickers.filter((x) => x.return24hPct > 0).length;
+    return await patchRun(id, {
+      status: "COMPLETED",
+      total_markets: tickers.length,
+      universe_scanned: tickers.length,
+      deep_analyzed: completed.length,
+      positive_24h: positive,
+      positive_share_24h: tickers.length ? positive / tickers.length : 0,
+      signal_count: signalRows.length,
+      error_count: errors.length,
+      completed_at: new Date().toISOString(),
+      metadata: {
+        strategy_key: i46 ? I46_KEY : P10_KEY,
+        execution_config_key: P10_KEY,
+        revision: rev,
+        entry_family: i46 ? "HYBRID_SCORE" : "DONCHIAN_BREAKOUT",
+        short_entry_family: venue === "binance_futures" ? "RSI_MOMENTUM" : null,
+        short_strategy_key: venue === "binance_futures" ? S096_SHORT_STRATEGY_KEY : null,
+        short_strategy_revision: venue === "binance_futures" ? S096_SHORT_REVISION : null,
+        independentVenueScan: true,
+        currentCandleExcluded: true,
+        fullUniverseHistory: true,
+        allActiveMarketsEvaluated: true,
+        errors: errors.slice(0, 50),
+        orderWrites: 0,
+      },
+    });
+  } catch (e) {
+    await patchRun(id, {
+      status: "FAILED",
+      error_count: Math.max(1, errors.length),
+      completed_at: new Date().toISOString(),
+      metadata: {
+        strategy_key: i46 ? I46_KEY : P10_KEY,
+        errors: [...errors, { market: "_RUN_", error: e instanceof Error ? e.message : String(e) }]
+          .slice(0, 50),
+      },
+    }).catch(() => {});
+    throw e;
+  }
+}
+async function status() {
+  return rest("v2_live_signal_runs?select=*&order=started_at.desc&limit=12");
+}
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response(null, { status: 204 });
+  try {
+    if (!await authorize(req)) return json({ ok: false, error: "unauthorized" }, 401);
+    const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
+    const action = String(body?.action || "status");
+    if (action === "status") {
+      return json({
+        ok: true,
+        name: NAME,
+        binance_revision: I46_REV,
+        binance_futures_short_revision: S096_SHORT_REVISION,
+        binance_futures_short_strategy_key: S096_SHORT_STRATEGY_KEY,
+        upbit_revision: P10_REV,
+        runs: await status(),
+      });
+    }
+    if (action !== "run") return json({ ok: false, error: "invalid action" }, 400);
+    const venue = String(body?.venue || "");
+    if (!["upbit_spot", "binance_spot", "binance_futures"].includes(venue)) {
+      return json({ ok: false, error: "invalid venue" }, 400);
+    }
+    const result = await runVenue(venue);
+    return json({
+      ok: true,
+      name: NAME,
+      revision: venue === "upbit_spot" ? P10_REV : I46_REV,
+      entry_strategy_key: venue === "upbit_spot" ? P10_KEY : I46_KEY,
+      short_entry_strategy_key: venue === "binance_futures" ? S096_SHORT_STRATEGY_KEY : null,
+      short_entry_strategy_revision: venue === "binance_futures" ? S096_SHORT_REVISION : null,
+      execution_config_key: P10_KEY,
+      run: result,
+    });
+  } catch (e) {
+    return json({ ok: false, name: NAME, error: e instanceof Error ? e.message : String(e) }, 500);
+  }
+});

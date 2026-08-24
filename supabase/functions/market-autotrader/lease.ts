@@ -1,18 +1,24 @@
 /**
  * Coordination policy for the DB leases that serialise autotrader cycles.
  *
- * acquire_trading_lease folds `autotrader-scan` and `autotrader-monitor` onto one
- * `autotrader-engine` row, so scan and monitor contend for a single lease. Monitor runs a
- * 13-15s cycle every 2s, which leaves a scan that gives up after one failed acquisition
- * almost no chance of ever running. The helpers here hold the acquire/wait/renew decisions
- * so they can be tested without a database; the caller supplies the RPC calls.
+ * Until 20260823090000, acquire_trading_lease folded `autotrader-scan` and
+ * `autotrader-monitor` onto one `autotrader-engine` row, so scan and monitor contended for a
+ * single lease and only ever blocked each other -- over a 12h window on P10-LIVE-1.0.0,
+ * 252/252 scan skips overlapped a monitor success and 5117/5182 monitor skips started inside
+ * a scan success, while zero skips of either kind overlapped another run of their own kind.
+ * That migration gave each cycle its own lease row, so each is still serialised against
+ * itself while the cross-blocking is gone. Duplicate entries stay blocked by DB constraints
+ * rather than by this lease (see the migration for the full list).
+ *
+ * The helpers here hold the acquire/wait/renew decisions so they can be tested without a
+ * database; the caller supplies the RPC calls. The contended-lease path is kept because a
+ * lease is still a lease: a cycle that overruns its own interval must not start twice.
  */
 export interface LeaseGateway {
   /** Resolves true when this owner holds the lease. Renewing with the same owner refreshes it. */
   acquire(name: string, owner: string, ttlSeconds: number): Promise<boolean>;
   release(name: string, owner: string): Promise<unknown>;
 }
-
 export interface RenewedLeaseOptions {
   ttlSeconds: number;
   renewMs: number;

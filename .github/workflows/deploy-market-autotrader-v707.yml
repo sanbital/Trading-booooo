@@ -7,6 +7,7 @@ on:
       - "supabase/functions/market-autotrader/**"
       - "supabase/functions/market-scanner/**"
       - "supabase/functions/market-v2-signal/**"
+      - "supabase/functions/market-regime-observer/**"
       - "supabase/functions/_shared/**"
       - "supabase/migrations/20260802151000_prebreakout_burst_entry_exit_policy.sql"
       - "supabase/migrations/20260810010000_binance_futures_lane_v760.sql"
@@ -14,6 +15,9 @@ on:
       - "supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql"
       - "supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql"
       - "supabase/migrations/20260821110000_p10_live_cutover.sql"
+      - "supabase/migrations/20260823213500_enable_s37_combined_long_short.sql"
+      - "supabase/migrations/20260823220000_document_s096_short_cutover.sql"
+      - "supabase/migrations/20260824013500_p10_market_risk_overlay.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
@@ -22,12 +26,16 @@ on:
       - "supabase/functions/market-autotrader/**"
       - "supabase/functions/market-scanner/**"
       - "supabase/functions/market-v2-signal/**"
+      - "supabase/functions/market-regime-observer/**"
       - "supabase/functions/_shared/**"
       - "supabase/migrations/20260810010000_binance_futures_lane_v760.sql"
       - "supabase/migrations/20260810133000_protected_trailing_exit_v761.sql"
       - "supabase/migrations/20260811090700_first_tranche_recovery_exit_v765.sql"
       - "supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql"
       - "supabase/migrations/20260821110000_p10_live_cutover.sql"
+      - "supabase/migrations/20260823213500_enable_s37_combined_long_short.sql"
+      - "supabase/migrations/20260823220000_document_s096_short_cutover.sql"
+      - "supabase/migrations/20260824013500_p10_market_risk_overlay.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   workflow_dispatch:
 
@@ -60,6 +68,14 @@ jobs:
             supabase/functions/_shared/lob/entry.ts \
             supabase/functions/_shared/p10-policy.ts \
             supabase/functions/_shared/p10-policy.test.ts \
+            supabase/functions/_shared/futures-short-safety.ts \
+            supabase/functions/_shared/futures-short-safety.test.ts \
+            supabase/functions/_shared/s37-short-policy.ts \
+            supabase/functions/_shared/s37-short-policy.test.ts \
+            supabase/functions/_shared/s096-short-policy.ts \
+            supabase/functions/_shared/s096-short-policy.test.ts \
+            supabase/functions/_shared/p10-market-risk.ts \
+            supabase/functions/_shared/p10-market-risk.test.ts \
             supabase/functions/market-scanner/index.ts \
             supabase/functions/market-scanner/engine.ts \
             supabase/functions/market-v2-signal/index.ts \
@@ -72,7 +88,8 @@ jobs:
             supabase/functions/market-autotrader/split-stop-policy.test.ts \
             supabase/functions/market-autotrader/futures-exit-policy.ts \
             supabase/functions/market-autotrader/futures-exit-policy.test.ts \
-            supabase/functions/market-autotrader/futures-lane.test.ts
+            supabase/functions/market-autotrader/futures-lane.test.ts \
+            supabase/functions/market-autotrader/combined-long-s096-short.test.ts
           deno test supabase/functions/_shared/lob/minute-entry-gate.test.ts
           deno test supabase/functions/market-autotrader/manual-position-import.test.ts
           deno test supabase/functions/market-autotrader/executable-exit.test.ts
@@ -82,8 +99,16 @@ jobs:
           deno test supabase/functions/market-autotrader/futures-exit-policy.test.ts
           deno test --allow-read supabase/functions/market-autotrader/futures-lane.test.ts
           deno test supabase/functions/_shared/p10-policy.test.ts
+          deno test --allow-read \
+            supabase/functions/_shared/futures-short-safety.test.ts \
+            supabase/functions/_shared/s37-short-policy.test.ts \
+            supabase/functions/_shared/s096-short-policy.test.ts
+          deno test supabase/functions/_shared/p10-market-risk.test.ts
+          deno test --allow-read \
+            supabase/functions/market-autotrader/combined-long-s096-short.test.ts
           deno check supabase/functions/market-scanner/index.ts
           deno check supabase/functions/market-v2-signal/index.ts
+          deno check supabase/functions/market-regime-observer/index.ts
           deno check supabase/functions/market-autotrader/index.ts
           engine_version="$(sed -n 's/.*export const ENGINE_VERSION = "\([^"]*\)".*/\1/p' \
             supabase/functions/market-scanner/engine.ts)"
@@ -156,6 +181,14 @@ jobs:
           grep -q 'P10_DONCHIAN_BREAKOUT_E10_SLOW_4R' \
             supabase/functions/_shared/p10-policy.ts
           grep -q 'P10_SLOW_4R' supabase/migrations/20260821110000_p10_live_cutover.sql
+          grep -q 'binance_futures_short_enabled' \
+            supabase/migrations/20260823213500_enable_s37_combined_long_short.sql
+          grep -q 'S096_SHORT_REVERSAL_V1' \
+            supabase/migrations/20260823220000_document_s096_short_cutover.sql
+          grep -q 'p10_market_risk_partial_at' \
+            supabase/migrations/20260824013500_p10_market_risk_overlay.sql
+          grep -q 'p10_market_risk_exit_at' \
+            supabase/migrations/20260824013500_p10_market_risk_overlay.sql
 
   deploy:
     needs: validate
@@ -173,7 +206,7 @@ jobs:
       - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
         with:
           version: 2.109.1
-      - name: Wait for Futures 3m recovery database policy
+      - name: Wait for production database policy
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
@@ -234,23 +267,45 @@ jobs:
                   join pg_namespace n on n.oid = p.pronamespace
                   where n.nspname = 'public'
                     and p.proname = 'apply_p10_entry_order'
+                )
+                and exists (
+                  select 1 from information_schema.columns
+                  where table_schema = 'public'
+                    and table_name = 'trading_settings'
+                    and column_name = 'binance_futures_short_enabled'
+                )
+                and not exists (
+                  select 1 from pg_constraint
+                  where conrelid = 'public.market_regime_observations'::regclass
+                    and conname = 'market_regime_observations_trading_influence_check'
+                )
+                and exists (
+                  select 1
+                  from pg_proc p
+                  join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public'
+                    and p.proname = 'apply_p10_exit_order'
+                    and position('p10_market_risk_partial_at' in pg_get_functiondef(p.oid)) > 0
+                    and position('p10_market_risk_exit_at' in pg_get_functiondef(p.oid)) > 0
                 );
             ")"
             if [ "${ready}" = "t" ]; then
-              echo "Futures 3m recovery database policy is ready"
+              echo "Production database policy is ready"
               exit 0
             fi
-            echo "Waiting for Futures 3m recovery database policy (${attempt}/40)"
+            echo "Waiting for production database policy (${attempt}/40)"
             sleep 15
           done
-          echo "::error::Futures 3m recovery database policy was not ready before Edge Function deployment"
+          echo "::error::Production database policy was not ready before Edge Function deployment"
           exit 1
-      - name: Deploy scanner and autotrader
+      - name: Deploy market executor and producers
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
           set -euo pipefail
-          for fn in market-scanner market-v2-signal market-autotrader; do
+          # Consumer/executor first: no producer can emit a newly executable revision
+          # before the exact whitelist and exit-risk handling are live.
+          for fn in market-autotrader market-regime-observer market-v2-signal market-scanner; do
             supabase functions deploy "$fn" --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
           done
