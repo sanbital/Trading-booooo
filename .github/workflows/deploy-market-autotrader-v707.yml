@@ -275,6 +275,13 @@ jobs:
                     and canonical_engine_revision = '7.6.0-BINANCE-FUTURES'
                 )
                 and exists (
+                  select 1 from information_schema.columns
+                  where table_schema = 'public'
+                    and table_name = 'trading_settings'
+                    and column_name = 'emergency_liquidation_started_at'
+                    and data_type = 'timestamp with time zone'
+                )
+                and exists (
                   select 1
                   from pg_proc p
                   join pg_namespace n on n.oid = p.pronamespace
@@ -409,6 +416,8 @@ jobs:
                       'trading.emergency_liquidation_clearance'
                       in pg_get_functiondef(p.oid)
                     ) > 0
+                    and not has_function_privilege('anon', p.oid, 'EXECUTE')
+                    and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
                 )
                 and exists (
                   select 1
@@ -429,6 +438,8 @@ jobs:
                     and position('ENTRY_PENDING' in pg_get_functiondef(p.oid)) > 0
                     and position('RECONCILIATION_FAILED' in pg_get_functiondef(p.oid)) > 0
                     and position('v_pending_close_orders' in pg_get_functiondef(p.oid)) > 0
+                    and position('emergency_liquidation_started_at' in pg_get_functiondef(p.oid)) > 0
+                    and position('o.requested_at' in pg_get_functiondef(p.oid)) > 0
                     and not has_function_privilege('anon', p.oid, 'EXECUTE')
                     and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
                     and has_function_privilege('service_role', p.oid, 'EXECUTE')
@@ -450,6 +461,8 @@ jobs:
                     and position('FOR SHARE' in upper(pg_get_functiondef(p.oid))) > 0
                     and position('pause_new_entries' in pg_get_functiondef(p.oid)) > 0
                     and position('emergency_liquidation' in pg_get_functiondef(p.oid)) > 0
+                    and not has_function_privilege('anon', p.oid, 'EXECUTE')
+                    and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
                 )
                 and exists (
                   select 1

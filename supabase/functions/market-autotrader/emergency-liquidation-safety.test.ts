@@ -32,6 +32,11 @@ Deno.test("database rejects raw emergency toggles and exposes one confirmed tran
   assert(migration.includes("create or replace function public.complete_emergency_liquidation"));
   assert(migration.includes("coalesce(p_confirmation, '') <> 'LIQUIDATE_NOW'"));
   assert(migration.includes("pause_lock_reason = 'EMERGENCY_LIQUIDATION'"));
+  assert(migration.includes("emergency_liquidation_started_at timestamptz"));
+  assert(migration.includes("when emergency_liquidation is true"));
+  assert(migration.includes("then emergency_liquidation_started_at"));
+  assert(migration.includes("EMERGENCY_EPISODE_MARKER_MISSING"));
+  assert(migration.includes("emergency_liquidation_started_at = null"));
   for (
     const state of [
       "ENTRY_PENDING",
@@ -43,11 +48,25 @@ Deno.test("database rejects raw emergency toggles and exposes one confirmed tran
     ]
   ) assert(migration.includes(`'${state}'`));
   assert(migration.includes("v_pending_close_orders"));
+  assert(migration.includes("left join public.trading_positions p on p.id = o.position_id"));
+  assert(
+    migration.includes(
+      "o.requested_at >= v_settings.emergency_liquidation_started_at",
+    ),
+  );
   assert(migration.includes("create or replace function public.guard_p10_live_entry_settings"));
   assert(migration.includes("for share"));
   assert(migration.includes("P10 live entry blocked by current trading settings"));
   assert(migration.includes("trg_guard_p10_live_entry_settings"));
   assert(migration.includes("from public, anon, authenticated"));
+  assert(
+    migration.includes(
+      "revoke all on function public.guard_emergency_liquidation_transition()",
+    ),
+  );
+  assert(
+    migration.includes("revoke all on function public.guard_p10_live_entry_settings()"),
+  );
 });
 
 Deno.test("GitHub emergency control forwards the explicit confirmation", async () => {

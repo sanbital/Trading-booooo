@@ -355,6 +355,8 @@ jobs:
                or position('ENTRY_PENDING' in v_emergency_complete_def) = 0
                or position('RECONCILIATION_FAILED' in v_emergency_complete_def) = 0
                or position('v_pending_close_orders' in v_emergency_complete_def) = 0
+               or position('emergency_liquidation_started_at' in v_emergency_complete_def) = 0
+               or position('o.requested_at' in v_emergency_complete_def) = 0
                or v_p10_entry_guard_def is null
                or position('FOR SHARE' in upper(v_p10_entry_guard_def)) = 0
                or position('pause_new_entries' in v_p10_entry_guard_def) = 0
@@ -381,6 +383,16 @@ jobs:
                ) then
               raise exception 'confirmed emergency liquidation guard missing after migration batch';
             end if;
+            if not exists (
+                 select 1
+                 from information_schema.columns
+                 where table_schema = 'public'
+                   and table_name = 'trading_settings'
+                   and column_name = 'emergency_liquidation_started_at'
+                   and data_type = 'timestamp with time zone'
+               ) then
+              raise exception 'Emergency liquidation episode marker is missing';
+            end if;
             if exists (
                  select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
                  where n.nspname = 'public'
@@ -395,6 +407,20 @@ jobs:
                    )
                ) then
               raise exception 'Emergency liquidation RPC privileges are unsafe after migration batch';
+            end if;
+            if exists (
+                 select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                 where n.nspname = 'public'
+                   and p.proname in (
+                     'guard_emergency_liquidation_transition',
+                     'guard_p10_live_entry_settings'
+                   )
+                   and (
+                     has_function_privilege('anon', p.oid, 'EXECUTE')
+                     or has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                   )
+               ) then
+              raise exception 'Emergency trigger helper privileges are unsafe after migration batch';
             end if;
             raise notice 'sell guard end state verified';
           end
