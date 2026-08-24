@@ -6986,6 +6986,33 @@ async function detectExternalQuoteFlow(
   return { detected: true, delta: externalDelta, flow_type: flowType, paused: false };
 }
 
+async function tryCompleteEmergencyLiquidation(cycleId: string) {
+  try {
+    const result = await rpc("complete_emergency_liquidation", {});
+    if (result?.completed === true && result?.already_cleared !== true) {
+      await event(
+        "EMERGENCY_LIQUIDATION_COMPLETED",
+        "all tracked positions and close orders are durably settled; entries remain locked",
+        {
+          active_positions: finite(result?.active_positions),
+          pending_close_orders: finite(result?.pending_close_orders),
+        },
+        { cycleId, level: "CRITICAL" },
+      );
+    }
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await event(
+      "EMERGENCY_LIQUIDATION_COMPLETION_FAILED",
+      message,
+      {},
+      { cycleId, level: "CRITICAL" },
+    );
+    return { completed: false, error: message };
+  }
+}
+
 async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRecord) {
   const monitorStartedAt = performance.now();
   const allTracked = await db(
@@ -7019,23 +7046,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
       lastGatewayHeartbeatAt: monitorHeartbeatAt,
       gatewayErrorCount: 0,
     });
-    if (settings.emergency_liquidation && p10Result.openPositions === 0) {
-      await patch("trading_settings", "id=eq.1", {
-        emergency_liquidation: false,
-        pause_new_entries: true,
-      });
-    } else if (settings.emergency_liquidation) {
-      const remainingP10 = await db(
-        `trading_positions?strategy_key=eq.${encodeURIComponent(P10_STRATEGY_KEY)}` +
-          "&state=eq.OPEN&select=id&limit=1",
-      ) as any[];
-      if (remainingP10.length === 0) {
-        await patch("trading_settings", "id=eq.1", {
-          emergency_liquidation: false,
-          pause_new_entries: true,
-        });
-      }
-    }
+    if (settings.emergency_liquidation) await tryCompleteEmergencyLiquidation(cycleId);
     return {
       positions: p10Result.openPositions,
       actions: p10Actions,
@@ -8937,12 +8948,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
     lastGatewayHeartbeatAt: monitorHeartbeatAt,
     gatewayErrorCount: 0,
   });
-  if (settings.emergency_liquidation && stillOpen.length === 0) {
-    await patch("trading_settings", "id=eq.1", {
-      emergency_liquidation: false,
-      pause_new_entries: true,
-    });
-  }
+  if (settings.emergency_liquidation) await tryCompleteEmergencyLiquidation(cycleId);
   return { positions: open.length, actions, unresolved_manual_assets: unresolvedManualAssets };
 }
 
@@ -9173,6 +9179,7 @@ function p10OrderPurpose(action: string) {
   if (action === "TARGET_2") return "TARGET_2";
   if (action === "STOP") return "STOP";
   if (action === "TIME") return "TIME_EXIT";
+  if (action === "EMERGENCY") return "EMERGENCY";
   return "TRAIL";
 }
 
@@ -10769,7 +10776,7 @@ async function monitorP10Positions(
       decision = applyP10MarketRiskOverlay(decision, marketRiskDecision);
       if (settings.emergency_liquidation) {
         decision = {
-          action: "TIME",
+          action: "EMERGENCY",
           reason: "EMERGENCY_LIQUIDATION",
           fraction: 1,
           nextStop: decision.nextStop,
@@ -11414,12 +11421,25 @@ async function status(settings: TradingSettings & JsonRecord) {
 }
 async function control(body: JsonRecord, settings: TradingSettings & JsonRecord) {
   const allowed: JsonRecord = {};
+  const emergencyRequested = body.emergency_liquidation === true;
   const safetyError = dangerousControlError({
     mode: body.mode,
     emergencyLiquidation: body.emergency_liquidation,
     confirmation: body.confirmation,
   });
   if (safetyError) throw new Error(safetyError);
+  if (body.emergency_liquidation === false && settings.emergency_liquidation === true) {
+    throw new Error(
+      "active emergency liquidation can only be cleared after durable reconciliation",
+    );
+  }
+  if (emergencyRequested) {
+    const confirmed = await rpc("request_emergency_liquidation", {
+      p_confirmation: String(body.confirmation || ""),
+      p_source: String(body.control_source || "API"),
+    });
+    return { ...settings, ...(confirmed || {}) } as TradingSettings & JsonRecord;
+  }
   if (body.mode != null) allowed.mode = parseMode(String(body.mode));
   for (
     const key of [
@@ -11573,8 +11593,12 @@ Deno.serve(async (request: Request) => {
       return response({ ok: true, cycle_id: cycleId, ...result });
     }
     if (action === "control") {
+      const emergencyRequest = body.emergency_liquidation === true;
       const operatorPause = body.pause_new_entries === true && settings.pause_new_entries !== true;
-      if (operatorPause && String(body.pause_confirmation || "") !== "PAUSE_NOW") {
+      if (
+        operatorPause && !emergencyRequest &&
+        String(body.pause_confirmation || "") !== "PAUSE_NOW"
+      ) {
         await finishCycle(cycleId, "FAILED", {}, "pause confirmation required");
         return response({
           ok: false,
@@ -11589,6 +11613,17 @@ Deno.serve(async (request: Request) => {
           reason: String(body.control_reason || "OPERATOR_REQUEST"),
           user_agent: request.headers.get("user-agent") || null,
         }, { cycleId, level: "WARNING" });
+      }
+      if (emergencyRequest) {
+        await event(
+          "EMERGENCY_LIQUIDATION_REQUESTED",
+          "confirmed emergency liquidation requested",
+          {
+            source: String(body.control_source || "API"),
+            user_agent: request.headers.get("user-agent") || null,
+          },
+          { cycleId, level: "CRITICAL" },
+        );
       }
       await finishCycle(cycleId, "SUCCESS", { settings });
       return response({ ok: true, cycle_id: cycleId, settings });
@@ -11658,6 +11693,28 @@ Deno.serve(async (request: Request) => {
       if (resumeError) {
         await finishCycle(cycleId, "SKIPPED", { reason: resumeError, reconciliation });
         return response({ ok: false, error: resumeError, cycle_id: cycleId, reconciliation }, 409);
+      }
+      if (settings.emergency_liquidation) {
+        const completion = await rpc("complete_emergency_liquidation", {});
+        if (completion?.completed !== true) {
+          const error = "emergency liquidation still has unsettled positions or close orders";
+          await finishCycle(cycleId, "SKIPPED", {
+            reason: error,
+            reconciliation,
+            emergency_completion: completion,
+          });
+          return response({
+            ok: false,
+            error,
+            cycle_id: cycleId,
+            reconciliation,
+            emergency_completion: completion,
+          }, 409);
+        }
+        settings = {
+          ...settings,
+          ...(completion?.settings || {}),
+        } as TradingSettings & JsonRecord;
       }
       settings = (await patch("trading_settings", "id=eq.1", {
         pause_new_entries: false,

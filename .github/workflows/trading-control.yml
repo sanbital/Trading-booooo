@@ -68,8 +68,8 @@ jobs:
             start_paper) body='{"action":"control","mode":"PAPER","pause_new_entries":false,"emergency_liquidation":false}' ;;
             start_live_limited) body='{"action":"control","mode":"LIVE_LIMITED","pause_new_entries":false,"emergency_liquidation":false}' ;;
             pause_new_entries) body="{\"action\":\"control\",\"pause_new_entries\":true,\"pause_confirmation\":\"${CONFIRMATION}\",\"control_source\":\"GITHUB_ACTIONS\",\"control_reason\":\"OPERATOR_REQUEST\"}" ;;
-            resume_new_entries) body='{"action":"control","pause_new_entries":false,"emergency_liquidation":false}' ;;
-            emergency_liquidate) body="{\"action\":\"control\",\"pause_new_entries\":true,\"emergency_liquidation\":true,\"pause_confirmation\":\"PAUSE_NOW\",\"control_source\":\"GITHUB_ACTIONS\",\"control_reason\":\"EMERGENCY_LIQUIDATION\"}" ;;
+            resume_new_entries) body='{"action":"resume"}' ;;
+            emergency_liquidate) body="{\"action\":\"control\",\"pause_new_entries\":true,\"emergency_liquidation\":true,\"confirmation\":\"${CONFIRMATION}\",\"control_source\":\"GITHUB_ACTIONS\",\"control_reason\":\"EMERGENCY_LIQUIDATION\"}" ;;
             *) echo "unsupported command"; exit 1 ;;
           esac
           curl --fail-with-body --retry 2 --retry-delay 3 --max-time 60 \

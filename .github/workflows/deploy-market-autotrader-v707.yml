@@ -19,6 +19,7 @@ on:
       - "supabase/migrations/20260823220000_document_s096_short_cutover.sql"
       - "supabase/migrations/20260824013500_p10_market_risk_overlay.sql"
       - "supabase/migrations/20260824031619_direction_aware_futures_snapshot_reconcile.sql"
+      - "supabase/migrations/20260824054500_confirm_emergency_liquidation.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
@@ -38,6 +39,7 @@ on:
       - "supabase/migrations/20260823220000_document_s096_short_cutover.sql"
       - "supabase/migrations/20260824013500_p10_market_risk_overlay.sql"
       - "supabase/migrations/20260824031619_direction_aware_futures_snapshot_reconcile.sql"
+      - "supabase/migrations/20260824054500_confirm_emergency_liquidation.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   workflow_dispatch:
 
@@ -96,6 +98,7 @@ jobs:
             supabase/functions/market-autotrader/monitor-concurrency.test.ts \
             supabase/functions/market-autotrader/p10-monitor-cadence.ts \
             supabase/functions/market-autotrader/p10-monitor-cadence.test.ts \
+            supabase/functions/market-autotrader/emergency-liquidation-safety.test.ts \
             supabase/functions/market-autotrader/futures-lane.test.ts \
             supabase/functions/market-autotrader/combined-long-s096-short.test.ts
           deno test supabase/functions/_shared/lob/minute-entry-gate.test.ts
@@ -109,6 +112,8 @@ jobs:
             supabase/functions/market-autotrader/futures-snapshot-reconcile.test.ts
           deno test supabase/functions/market-autotrader/monitor-concurrency.test.ts
           deno test supabase/functions/market-autotrader/p10-monitor-cadence.test.ts
+          deno test --allow-read \
+            supabase/functions/market-autotrader/emergency-liquidation-safety.test.ts
           deno test --allow-read supabase/functions/market-autotrader/futures-lane.test.ts
           deno test supabase/functions/_shared/p10-policy.test.ts
           deno test --allow-read \
@@ -389,6 +394,70 @@ jobs:
                       'reconcile_futures_zero_positions_from_snapshots'
                       in pg_get_triggerdef(t.oid)
                     ) > 0
+                )
+                and exists (
+                  select 1
+                  from pg_proc p
+                  join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public'
+                    and p.proname = 'guard_emergency_liquidation_transition'
+                    and position(
+                      'trading.emergency_liquidation_confirmation'
+                      in pg_get_functiondef(p.oid)
+                    ) > 0
+                    and position(
+                      'trading.emergency_liquidation_clearance'
+                      in pg_get_functiondef(p.oid)
+                    ) > 0
+                )
+                and exists (
+                  select 1
+                  from pg_proc p
+                  join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public'
+                    and p.proname = 'request_emergency_liquidation'
+                    and not has_function_privilege('anon', p.oid, 'EXECUTE')
+                    and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                    and has_function_privilege('service_role', p.oid, 'EXECUTE')
+                )
+                and exists (
+                  select 1
+                  from pg_proc p
+                  join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public'
+                    and p.proname = 'complete_emergency_liquidation'
+                    and position('ENTRY_PENDING' in pg_get_functiondef(p.oid)) > 0
+                    and position('RECONCILIATION_FAILED' in pg_get_functiondef(p.oid)) > 0
+                    and position('v_pending_close_orders' in pg_get_functiondef(p.oid)) > 0
+                    and not has_function_privilege('anon', p.oid, 'EXECUTE')
+                    and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                    and has_function_privilege('service_role', p.oid, 'EXECUTE')
+                )
+                and exists (
+                  select 1
+                  from pg_trigger t
+                  where t.tgrelid = 'public.trading_settings'::regclass
+                    and t.tgname = 'trg_guard_emergency_liquidation_transition'
+                    and not t.tgisinternal
+                    and t.tgenabled <> 'D'
+                )
+                and exists (
+                  select 1
+                  from pg_proc p
+                  join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public'
+                    and p.proname = 'guard_p10_live_entry_settings'
+                    and position('FOR SHARE' in upper(pg_get_functiondef(p.oid))) > 0
+                    and position('pause_new_entries' in pg_get_functiondef(p.oid)) > 0
+                    and position('emergency_liquidation' in pg_get_functiondef(p.oid)) > 0
+                )
+                and exists (
+                  select 1
+                  from pg_trigger t
+                  where t.tgrelid = 'public.trading_positions'::regclass
+                    and t.tgname = 'trg_guard_p10_live_entry_settings'
+                    and not t.tgisinternal
+                    and t.tgenabled <> 'D'
                 );
             ")"
             if [ "${ready}" = "t" ]; then
