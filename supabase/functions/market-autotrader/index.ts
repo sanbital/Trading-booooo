@@ -170,8 +170,8 @@ import {
   applyP10MarketRiskOverlay,
   evaluateP10MarketRisk,
   P10_MARKET_RISK_CONFIG,
-  p10RequestedExitQuantity,
   type P10MarketRiskObservation,
+  p10RequestedExitQuantity,
 } from "../_shared/p10-market-risk.ts";
 import {
   FUTURES_SHORT_LIVE_ENV,

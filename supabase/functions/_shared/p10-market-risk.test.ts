@@ -3,8 +3,8 @@ import {
   applyP10MarketRiskOverlay,
   evaluateP10MarketRisk,
   P10_MARKET_RISK_CONFIG,
-  p10RequestedExitQuantity,
   type P10MarketRiskObservation,
+  p10RequestedExitQuantity,
 } from "./p10-market-risk.ts";
 
 const NOW = Date.parse("2026-08-24T02:00:00.000Z");
@@ -200,22 +200,31 @@ Deno.test("existing P10 exits outrank market overlay", () => {
 });
 
 Deno.test("market partial sizes from remaining quantity and preserves the P10 T1 basis", () => {
-  assertEquals(p10RequestedExitQuantity({
-    action: "MARKET_RISK_PARTIAL",
-    initialQuantity: 100,
-    remainingQuantity: 60,
-    fraction: 0.5,
-  }), 30);
-  assertEquals(p10RequestedExitQuantity({
-    action: "TARGET_1",
-    initialQuantity: 100,
-    remainingQuantity: 60,
-    fraction: 0.4,
-  }), 40);
-  assertEquals(p10RequestedExitQuantity({
-    action: "MARKET_RISK_EXIT",
-    initialQuantity: 100,
-    remainingQuantity: 60,
-    fraction: 1,
-  }), 60);
+  assertEquals(
+    p10RequestedExitQuantity({
+      action: "MARKET_RISK_PARTIAL",
+      initialQuantity: 100,
+      remainingQuantity: 60,
+      fraction: 0.5,
+    }),
+    30,
+  );
+  assertEquals(
+    p10RequestedExitQuantity({
+      action: "TARGET_1",
+      initialQuantity: 100,
+      remainingQuantity: 60,
+      fraction: 0.4,
+    }),
+    40,
+  );
+  assertEquals(
+    p10RequestedExitQuantity({
+      action: "MARKET_RISK_EXIT",
+      initialQuantity: 100,
+      remainingQuantity: 60,
+      fraction: 1,
+    }),
+    60,
+  );
 });

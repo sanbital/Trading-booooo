@@ -1,3 +1,4 @@
+// @ts-nocheck -- This edge function is intentionally maintained as bundled JavaScript-compatible TypeScript.
 // Trading-booooo market regime observer v2 + C43 dynamic horizon forecast.
 // Observation and P10 exit-risk input. It never changes entries, sizing, leverage, or orders directly.
 

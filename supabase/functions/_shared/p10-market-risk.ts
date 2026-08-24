@@ -397,11 +397,13 @@ export function evaluateP10MarketRisk(input: {
 export function applyP10MarketRiskOverlay<T extends BaseExitDecision>(
   base: T,
   marketRisk: P10MarketRiskDecision,
-): T | (Omit<T, "action" | "reason" | "fraction"> & {
-  action: P10MarketRiskAction;
-  reason: string;
-  fraction: number;
-}) {
+):
+  | T
+  | (Omit<T, "action" | "reason" | "fraction"> & {
+    action: P10MarketRiskAction;
+    reason: string;
+    fraction: number;
+  }) {
   if (base.action !== "NONE" || marketRisk.action === "NONE") return base;
   return {
     ...base,

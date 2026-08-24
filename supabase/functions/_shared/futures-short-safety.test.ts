@@ -1,7 +1,4 @@
-import {
-  futuresShortEntryBlockReason,
-  futuresShortLiveEnabled,
-} from "./futures-short-safety.ts";
+import { futuresShortEntryBlockReason, futuresShortLiveEnabled } from "./futures-short-safety.ts";
 import { assert, assertEquals } from "../../../test-support/assert.ts";
 
 Deno.test("futures SHORT live entry is default-off and exact-opt-in only", () => {

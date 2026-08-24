@@ -61,7 +61,8 @@ Deno.test("executor accepts exact S096 only and retains both fixed SHORT exits",
   assert(source.includes('if (left.side !== right.side) return left.side === "LONG" ? -1 : 1;'));
   assert(source.includes("directional_exit_policy: isS096ShortSignal(signal)"));
   assert(source.includes('? "S096_FIXED_1P5R"'));
-  assert(source.includes("const latestCompletedBar = s37Position || s096Position"));
+  assert(source.includes("if (!s37Position && !s096Position)"));
+  assert(source.includes("let latestCompletedBar = null"));
   assert(source.includes("? resolveFixedShortCurrentStop(position.stop_price"));
 });
 

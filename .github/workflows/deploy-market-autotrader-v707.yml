@@ -183,7 +183,7 @@ jobs:
           grep -q 'P10_SLOW_4R' supabase/migrations/20260821110000_p10_live_cutover.sql
           grep -q 'binance_futures_short_enabled' \
             supabase/migrations/20260823213500_enable_s37_combined_long_short.sql
-          grep -q 'S096_SHORT_REVERSAL_V1' \
+          grep -q 'S096-LIVE-1.0.0' \
             supabase/migrations/20260823220000_document_s096_short_cutover.sql
           grep -q 'p10_market_risk_partial_at' \
             supabase/migrations/20260824013500_p10_market_risk_overlay.sql

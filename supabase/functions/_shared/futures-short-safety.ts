@@ -15,7 +15,5 @@ export function futuresShortEntryBlockReason(
   liveFlagValue: unknown,
 ): string | null {
   if (exchange !== "binance_futures" || side !== "SHORT") return null;
-  return futuresShortLiveEnabled(liveFlagValue)
-    ? null
-    : "BINANCE_FUTURES_SHORT_LIVE_DISABLED";
+  return futuresShortLiveEnabled(liveFlagValue) ? null : "BINANCE_FUTURES_SHORT_LIVE_DISABLED";
 }
