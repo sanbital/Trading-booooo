@@ -179,6 +179,10 @@ import {
   futuresShortLiveEnabled,
 } from "../_shared/futures-short-safety.ts";
 import {
+  authenticatedFuturesSnapshot,
+  FUTURES_POSITION_SNAPSHOT_REVISION,
+} from "./futures-snapshot.ts";
+import {
   evaluateS37ShortExit,
   S37_SHORT_REVISION,
   S37_SHORT_STRATEGY_KEY,
@@ -5416,6 +5420,7 @@ async function snapshotAccount(
     fixedAllocationQuote: config.fixed,
     reserveQuote: config.reserve,
   });
+  const futuresSnapshot = authenticatedFuturesSnapshot(exchange, portfolio);
   await db("trading_account_snapshots", {
     method: "POST",
     headers: { Prefer: "return=minimal" },
@@ -5437,6 +5442,9 @@ async function snapshotAccount(
       protected_reserve_quote: managed.protectedReserveQuote,
       allocation_mode: managed.allocationMode,
       balances: portfolio.accounts || [],
+      positions: futuresSnapshot.positions,
+      positions_complete: futuresSnapshot.complete,
+      positions_revision: futuresSnapshot.complete ? FUTURES_POSITION_SNAPSHOT_REVISION : null,
       prices: { ...(portfolio.prices || {}), ...prices },
     }),
   });
