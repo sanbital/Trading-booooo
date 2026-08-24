@@ -61,9 +61,23 @@ Deno.test("executor accepts exact S096 only and retains both fixed SHORT exits",
   assert(source.includes('if (left.side !== right.side) return left.side === "LONG" ? -1 : 1;'));
   assert(source.includes("directional_exit_policy: isS096ShortSignal(signal)"));
   assert(source.includes('? "S096_FIXED_1P5R"'));
-  assert(source.includes("if (!s37Position && !s096Position)"));
-  assert(source.includes("let latestCompletedBar = null"));
+  assert(source.includes("!s37Position && !s096Position && shouldLoadCompletedPolicyBar"));
+  assert(source.includes("latest: null as ReturnType<typeof prepareP10Bars>[number] | null"));
   assert(source.includes("? resolveFixedShortCurrentStop(position.stop_price"));
+});
+
+Deno.test("P10 risk monitoring is concurrent and isolated from slow reconciliation", async () => {
+  const source = await Deno.readTextFile(
+    new URL("supabase/functions/market-autotrader/index.ts", ROOT),
+  );
+  assert(source.includes("mapConcurrentOrdered(open"));
+  assert(source.includes('monitor_path: "P10_FAST_2S"'));
+  assert(source.includes('action: "p10_quotes"'));
+  assert(source.includes('action: "p10_portfolio"'));
+  assert(source.includes("const p10SlowMaintenanceOwnedByScan = isP10Strategy"));
+  assert(source.includes("if (!p10SlowMaintenanceOwnedByScan)"));
+  assert(source.includes('owner: "P10_SCAN"'));
+  assert(source.includes("P10_SLOW_MAINTENANCE_BATCH_FAILED"));
 });
 
 Deno.test("legacy S37 and new S096 exits remain separately executable", () => {

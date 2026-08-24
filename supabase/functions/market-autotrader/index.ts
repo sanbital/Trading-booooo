@@ -146,6 +146,8 @@ import {
 } from "./late-recovery-policy.ts";
 import { buildTradingHeartbeatPatch, type TradingHeartbeatPatch } from "./heartbeat.ts";
 import { type LeaseGateway, runWithContendedLease } from "./lease.ts";
+import { mapConcurrentOrdered } from "./monitor-concurrency.ts";
+import { shouldLoadCompletedPolicyBar } from "./p10-monitor-cadence.ts";
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 import { loadMinuteEntryGate } from "../_shared/lob/minute-entry-market.ts";
@@ -199,6 +201,7 @@ import {
 
 // Order-gateway/scanner protocol version. Strategy identity is stored separately in metadata.
 const VERSION = "8.0.0-P10-DONCHIAN-SLOW4R";
+const P10_FAST_GATEWAY_TIMEOUT_MS = 1_900;
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
@@ -1780,6 +1783,103 @@ function candidatePlan(candidate: Candidate, settings?: TradingSettings) {
 }
 async function marketQuote(exchange: Exchange, market: string) {
   return gateway(exchange, { action: "quote", market });
+}
+
+type P10QuoteLoad = { ok: true; value: any } | { ok: false; error: string };
+
+async function p10PositionPortfolio(exchange: Exchange): Promise<any> {
+  try {
+    return await gateway(
+      exchange,
+      { action: "p10_portfolio" },
+      P10_FAST_GATEWAY_TIMEOUT_MS,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const status = Number((error as any)?.status || 0);
+    if (!(status === 400 && /unsupported.+action/i.test(message))) throw error;
+    return await gateway(
+      exchange,
+      { action: "portfolio" },
+      P10_FAST_GATEWAY_TIMEOUT_MS,
+    );
+  }
+}
+
+async function p10MarketQuoteBatch(
+  exchange: Exchange,
+  markets: readonly string[],
+): Promise<Map<string, P10QuoteLoad>> {
+  const requested = [...new Set(markets.map((market) => String(market).toUpperCase()))];
+  const result = new Map<string, P10QuoteLoad>();
+  if (!requested.length) return result;
+  try {
+    const rows = await gateway(
+      exchange,
+      { action: "p10_quotes", markets: requested },
+      P10_FAST_GATEWAY_TIMEOUT_MS,
+    );
+    if (!Array.isArray(rows)) throw new Error("P10 quote batch response is not an array");
+    for (const row of rows) {
+      const market = String(row?.market || "").toUpperCase();
+      if (!requested.includes(market)) continue;
+      if (!(finite(row?.best_bid) > 0 && finite(row?.best_ask) > 0)) {
+        result.set(market, {
+          ok: false,
+          error: String(
+            row?.error || `P10 executable quote unavailable for ${exchange}:${market}`,
+          ),
+        });
+        continue;
+      }
+      result.set(market, { ok: true, value: row });
+    }
+    for (const market of requested) {
+      if (!result.has(market)) {
+        result.set(market, {
+          ok: false,
+          error: `P10 quote batch omitted ${exchange}:${market}`,
+        });
+      }
+    }
+    return result;
+  } catch (error) {
+    // A rolling gateway rollback must not blind exits. Fall back to the legacy full quote
+    // contract only when the additive action is genuinely unsupported. A timeout, 429 or
+    // venue failure must end this attempt quickly so the next two-second tick can retry;
+    // fanning out after such a failure would amplify the exact outage we are containing.
+    const message = error instanceof Error ? error.message : String(error);
+    const status = Number((error as any)?.status || 0);
+    if (!(status === 400 && /unsupported.+action/i.test(message))) {
+      for (const market of requested) result.set(market, { ok: false, error: message });
+      return result;
+    }
+    const rows = await mapConcurrentOrdered(requested, async (market) => {
+      try {
+        return {
+          market,
+          load: {
+            ok: true as const,
+            value: await gateway(
+              exchange,
+              { action: "quote", market },
+              P10_FAST_GATEWAY_TIMEOUT_MS,
+            ),
+          },
+        };
+      } catch (error) {
+        return {
+          market,
+          load: {
+            ok: false as const,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+    }, 2);
+    for (const row of rows) result.set(row.market, row.load);
+    return result;
+  }
 }
 function waitMs(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, milliseconds)));
@@ -6883,17 +6983,68 @@ async function detectExternalQuoteFlow(
 }
 
 async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRecord) {
+  const monitorStartedAt = performance.now();
   const allTracked = await db(
     "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*&order=created_at.asc",
   ) as Position[];
+  const positionsLoadedAt = performance.now();
   // P10 has direction-aware futures accounting and hourly close-confirmed exits. Keep it
   // out of the legacy spot-shaped reconciliation/exit loop and manage it first.
-  const p10Actions = await monitorP10Positions(
+  const p10Result = await monitorP10Positions(
     allTracked.filter(isP10Position),
     settings,
     cycleId,
   );
+  const p10Actions = p10Result.actions;
   const tracked = allTracked.filter((row) => !isP10Position(row));
+  // P10 strategy has a fixed slow-maintenance owner: the SCAN lane. This remains true
+  // during mixed/legacy transitions, so a position closing between two independent lease
+  // reads can never hand residual sales or asset-lock counters to both lanes at once.
+  const p10SlowMaintenanceOwnedByScan = isP10Strategy((settings as any).strategy);
+
+  // P10's two-second lane owns price/market-risk decisions only.  Fee repair, idle-account
+  // telemetry and legacy balance reconciliation run on the existing 12-second SCAN lane.
+  // Before this split, an otherwise empty P10 monitor still fetched every enabled spot and
+  // futures account, queried open orders twice and wrote telemetry after the risk decision.
+  // The scheduler correctly ticked every two seconds but discarded each tick while that
+  // 8-12 second request was in flight.
+  if (isP10Strategy((settings as any).strategy) && tracked.length === 0) {
+    const monitorHeartbeatAt = new Date().toISOString();
+    await patchTradingHeartbeat({
+      lastMonitorAt: monitorHeartbeatAt,
+      lastGatewayHeartbeatAt: monitorHeartbeatAt,
+      gatewayErrorCount: 0,
+    });
+    if (settings.emergency_liquidation && p10Result.openPositions === 0) {
+      await patch("trading_settings", "id=eq.1", {
+        emergency_liquidation: false,
+        pause_new_entries: true,
+      });
+    } else if (settings.emergency_liquidation) {
+      const remainingP10 = await db(
+        `trading_positions?strategy_key=eq.${encodeURIComponent(P10_STRATEGY_KEY)}` +
+          "&state=eq.OPEN&select=id&limit=1",
+      ) as any[];
+      if (remainingP10.length === 0) {
+        await patch("trading_settings", "id=eq.1", {
+          emergency_liquidation: false,
+          pause_new_entries: true,
+        });
+      }
+    }
+    return {
+      positions: p10Result.openPositions,
+      actions: p10Actions,
+      unresolved_manual_assets: [],
+      monitor_path: "P10_FAST_2S",
+      timings_ms: {
+        load_positions: Math.round(positionsLoadedAt - monitorStartedAt),
+        p10: p10Result.timingsMs,
+        total: Math.round(performance.now() - monitorStartedAt),
+      },
+    };
+  }
+
   for (
     const ghost of tracked.filter((row) =>
       row.state !== "ENTRY_PENDING" && finite(row.remaining_quantity) <= 0 &&
@@ -6936,7 +7087,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         p.metadata?.reconciliation_phase === "EXIT")
     )
   ) await reconcileExitPending(position, cycleId);
-  const feeReconciliations = await reconcileFeeLedger(cycleId);
+  const feeReconciliations = p10SlowMaintenanceOwnedByScan ? [] : await reconcileFeeLedger(cycleId);
   // Exchange balances move before our position ledger does. Resolve every durable resting
   // TP first — including rows whose metadata reference was lost — so account reconciliation
   // never classifies the bot's own fill as a manual sale.
@@ -6992,7 +7143,9 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
     const portfolio = await gateway(exchange, { action: "portfolio" });
     portfolios[exchange] = portfolio;
     portfolioCapturedAt[exchange] = new Date().toISOString();
-    await detectExternalQuoteFlow(exchange, portfolio, settings, cycleId);
+    if (!p10SlowMaintenanceOwnedByScan) {
+      await detectExternalQuoteFlow(exchange, portfolio, settings, cycleId);
+    }
     const totalByAsset = new Map<string, number>();
     const freeByAsset = new Map<string, number>();
     for (const account of portfolio.accounts || []) {
@@ -7045,19 +7198,21 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
     const botLockedByAsset = botLockedResult ?? new Map<string, number>();
     const allOpenOrderAssets = await openOrderAssets(exchange);
     const trackedExchangePositions = tracked.filter((p) => p.exchange === exchange);
-    await recordJointObjectiveSnapshot(
-      exchange,
-      settings,
-      portfolio,
-      trackedExchangePositions,
-    ).catch(() => null);
-    await reconcilePersistedAssetLocks(
-      exchange,
-      portfolio,
-      trackedExchangePositions,
-      allOpenOrderAssets,
-      cycleId,
-    );
+    if (!p10SlowMaintenanceOwnedByScan) {
+      await recordJointObjectiveSnapshot(
+        exchange,
+        settings,
+        portfolio,
+        trackedExchangePositions,
+      ).catch(() => null);
+      await reconcilePersistedAssetLocks(
+        exchange,
+        portfolio,
+        trackedExchangePositions,
+        allOpenOrderAssets,
+        cycleId,
+      );
+    }
     if (!botLockedKnown) {
       await event(
         "BOT_LOCK_UNKNOWN",
@@ -7386,7 +7541,7 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
         { cycleId, level: vanishedAssets.size ? "CRITICAL" : "WARNING" },
       );
     }
-    const residualSweeps = await sweepResidualInventory(
+    const residualSweeps = p10SlowMaintenanceOwnedByScan ? [] : await sweepResidualInventory(
       exchange,
       settings,
       trackedExchangePositions,
@@ -8760,15 +8915,17 @@ async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRec
     }
   }
   const stillOpen = await db("trading_positions?state=eq.OPEN&select=*") as Position[];
-  for (const exchange of Object.keys(portfolios) as Exchange[]) {
-    await snapshotAccount(
-      exchange,
-      portfolios[exchange],
-      stillOpen,
-      prices,
-      settings,
-      portfolioCapturedAt[exchange],
-    );
+  if (!p10SlowMaintenanceOwnedByScan) {
+    for (const exchange of Object.keys(portfolios) as Exchange[]) {
+      await snapshotAccount(
+        exchange,
+        portfolios[exchange],
+        stillOpen,
+        prices,
+        settings,
+        portfolioCapturedAt[exchange],
+      );
+    }
   }
   const monitorHeartbeatAt = new Date().toISOString();
   await patchTradingHeartbeat({
@@ -9657,6 +9814,7 @@ async function enterP10Signal(
 async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRecord) {
   const exchanges = enabledExchanges(settings);
   const portfolios = {} as Record<Exchange, any>;
+  const portfolioCapturedAt = {} as Record<Exchange, string>;
   const stats = {} as Record<Exchange, any>;
   const circuits = {} as Record<Exchange, any>;
   const circuitDiagnostics = {} as Record<Exchange, JsonRecord>;
@@ -9678,6 +9836,7 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
   for (const exchange of exchanges) {
     const raw = await gateway(exchange, { action: "portfolio" });
     portfolios[exchange] = raw;
+    portfolioCapturedAt[exchange] = new Date().toISOString();
     const managed = await managedPortfolio(settings, exchange, raw);
     stats[exchange] = await accountStats(
       exchange,
@@ -9738,6 +9897,168 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
       },
     });
   }
+
+  // Slow/account-wide maintenance belongs to the 12-second scan lane, not the 2-second
+  // stop/target lane.  Snapshots retain idle-account telemetry and the authenticated
+  // direction-aware Futures proof used by zero reconciliation.  A telemetry failure never
+  // suppresses entry or exit decisions; it is recorded once for operator visibility.
+  const maintenanceStartedAt = performance.now();
+  const maintenancePositions = await db(
+    "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*",
+  ) as Position[];
+  const snapshotPositions = maintenancePositions.filter((position) => position.state === "OPEN");
+  const legacyMaintenancePositions = maintenancePositions.filter((position) =>
+    !isP10Position(position)
+  );
+  let feeReconciliations: any[] = [];
+  let snapshotErrors: Array<{ exchange: Exchange; error: string }> = [];
+  let jointSnapshots = 0;
+  let lockVenuesChecked = 0;
+  const residualSweeps: any[] = [];
+  const maintenanceErrors: Array<{ stage: string; exchange?: Exchange; error: string }> = [];
+
+  // P10 SCAN is the fixed owner even while a legacy position is still being managed by the
+  // monitor. Owner selection never depends on a racy position-count snapshot.
+  {
+    try {
+      feeReconciliations = await reconcileFeeLedger(cycleId);
+    } catch (error) {
+      maintenanceErrors.push({
+        stage: "FEE_RECONCILIATION",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // External-flow comparison must finish before the current snapshots become the next
+    // baseline. Venue failures remain isolated and never block entry/exit decisions.
+    const flowResults = await Promise.allSettled(
+      exchanges.map((exchange) =>
+        detectExternalQuoteFlow(exchange, portfolios[exchange], settings, cycleId)
+      ),
+    );
+    flowResults.forEach((result, index) => {
+      if (result.status === "rejected") {
+        maintenanceErrors.push({
+          stage: "EXTERNAL_QUOTE_FLOW",
+          exchange: exchanges[index],
+          error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        });
+      }
+    });
+
+    const snapshotResults = await Promise.allSettled(
+      exchanges.map((exchange) =>
+        snapshotAccount(
+          exchange,
+          portfolios[exchange],
+          snapshotPositions,
+          portfolios[exchange]?.prices || {},
+          settings,
+          portfolioCapturedAt[exchange],
+        )
+      ),
+    );
+    snapshotErrors = snapshotResults.flatMap((result, index) =>
+      result.status === "rejected"
+        ? [{
+          exchange: exchanges[index],
+          error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        }]
+        : []
+    );
+    maintenanceErrors.push(...snapshotErrors.map((row) => ({
+      stage: "ACCOUNT_SNAPSHOT",
+      ...row,
+    })));
+
+    const jointResults = await Promise.allSettled(
+      exchanges.map((exchange) =>
+        recordJointObjectiveSnapshot(
+          exchange,
+          settings,
+          portfolios[exchange],
+          legacyMaintenancePositions.filter((position) => position.exchange === exchange),
+        )
+      ),
+    );
+    jointSnapshots =
+      jointResults.filter((result) => result.status === "fulfilled" && result.value).length;
+    jointResults.forEach((result, index) => {
+      if (result.status === "rejected") {
+        maintenanceErrors.push({
+          stage: "JOINT_OBJECTIVE_SNAPSHOT",
+          exchange: exchanges[index],
+          error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        });
+      }
+    });
+
+    let lockedRows: any[] | null = null;
+    try {
+      lockedRows = await db("trading_asset_locks?state=eq.LOCKED&select=exchange") as any[];
+    } catch (error) {
+      maintenanceErrors.push({
+        stage: "ASSET_LOCK_DISCOVERY",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    const lockedExchanges = new Set(
+      (lockedRows || []).map((row) => String(row.exchange) as Exchange),
+    );
+    const residualSweepEnabled = (settings as any).residual_sweep_enabled !== false;
+    const orderBookVenues = exchanges.filter((exchange) =>
+      lockedRows === null || lockedExchanges.has(exchange) ||
+      (residualSweepEnabled && exchange !== "binance_futures")
+    );
+    const lockResults = await Promise.allSettled(
+      orderBookVenues.map(async (exchange) => {
+        const activeExchangePositions = maintenancePositions.filter((position) =>
+          position.exchange === exchange
+        );
+        // One authenticated open-order snapshot is shared by lock cleanup and residual
+        // policy. `null` means unknown and suppresses both destructive conclusions.
+        const orderAssets = await openOrderAssets(exchange);
+        await reconcilePersistedAssetLocks(
+          exchange,
+          portfolios[exchange],
+          activeExchangePositions,
+          orderAssets,
+          cycleId,
+        );
+        const sweeps = await sweepResidualInventory(
+          exchange,
+          settings,
+          activeExchangePositions,
+          orderAssets,
+          cycleId,
+        );
+        return { exchange, sweeps };
+      }),
+    );
+    lockVenuesChecked = orderBookVenues.length;
+    lockResults.forEach((result, index) => {
+      if (result.status === "fulfilled") {
+        residualSweeps.push(...result.value.sweeps);
+      } else {
+        maintenanceErrors.push({
+          stage: "ASSET_LOCK_RESIDUAL",
+          exchange: orderBookVenues[index],
+          error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        });
+      }
+    });
+  }
+
+  if (maintenanceErrors.length) {
+    await event(
+      "P10_SLOW_MAINTENANCE_BATCH_FAILED",
+      "one or more P10 slow-maintenance stages failed",
+      { errors: maintenanceErrors },
+      { cycleId, level: "WARNING" },
+    );
+  }
+  const maintenanceMs = Math.round(performance.now() - maintenanceStartedAt);
+
   if (!exchanges.some((exchange) => circuits[exchange]?.allowNewEntry)) {
     await event("P10_ENTRY_CIRCUIT_BLOCK", "P10 new entries blocked on all exchanges", {
       strategy_key: P10_STRATEGY_KEY,
@@ -9749,7 +10070,22 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
       lastFullScanAt: new Date().toISOString(),
       lastGatewayHeartbeatAt: new Date().toISOString(),
     });
-    return { skipped: true, strategy_key: P10_STRATEGY_KEY, circuits, stats };
+    return {
+      skipped: true,
+      strategy_key: P10_STRATEGY_KEY,
+      circuits,
+      stats,
+      maintenance: {
+        owner: "P10_SCAN",
+        fee_reconciliations: feeReconciliations.length,
+        snapshot_errors: snapshotErrors,
+        joint_snapshots: jointSnapshots,
+        lock_venues_checked: lockVenuesChecked,
+        residual_sweeps: residualSweeps.length,
+        errors: maintenanceErrors,
+        duration_ms: maintenanceMs,
+      },
+    };
   }
 
   const signals = await loadP10Signals();
@@ -9827,6 +10163,16 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
     entries,
     circuits,
     stats,
+    maintenance: {
+      owner: "P10_SCAN",
+      fee_reconciliations: feeReconciliations.length,
+      snapshot_errors: snapshotErrors,
+      joint_snapshots: jointSnapshots,
+      lock_venues_checked: lockVenuesChecked,
+      residual_sweeps: residualSweeps.length,
+      errors: maintenanceErrors,
+      duration_ms: maintenanceMs,
+    },
   };
 }
 
@@ -9853,6 +10199,7 @@ async function p10CompletedBars(position: Position): Promise<P10Bar[]> {
     const payload = await p10FetchJson(
       `https://api.upbit.com/v1/candles/minutes/60?market=${encodeURIComponent(position.market)}` +
         `&count=140&to=${encodeURIComponent(to)}`,
+      1_500,
     );
     return (Array.isArray(payload) ? payload : []).map((row: any) => ({
       time: Date.parse(String(row?.candle_date_time_utc || "") + "Z"),
@@ -9870,6 +10217,7 @@ async function p10CompletedBars(position: Position): Promise<P10Bar[]> {
   const payload = await p10FetchJson(
     `${base}${endpoint}?symbol=${encodeURIComponent(position.market)}` +
       `&interval=1h&endTime=${end}&limit=140`,
+    1_500,
   );
   return (Array.isArray(payload) ? payload : []).map((row: any[]) => ({
     time: finite(row?.[0]),
@@ -9946,7 +10294,7 @@ async function reconcileP10Order(position: Position, cycleId: string) {
       action: "get_order",
       identifier: orderRow.identifier,
       market: position.market,
-    });
+    }, P10_FAST_GATEWAY_TIMEOUT_MS);
     const updated = await updateOrderFromGateway(orderRow, payload);
     if (finite(updated.fill.executedVolume) > 0 && finite(updated.fill.averagePrice) > 0) {
       if (orderRow.purpose === "ENTRY") {
@@ -10199,35 +10547,119 @@ async function monitorP10Positions(
   settings: TradingSettings & JsonRecord,
   cycleId: string,
 ) {
-  const actions: any[] = [];
-  for (
-    const position of initial.filter((row) =>
-      ["ENTRY_PENDING", "EXITING", "RECONCILING", "RECONCILIATION_FAILED"].includes(row.state)
-    )
-  ) {
-    actions.push({
-      action: "P10_RECONCILE",
-      exchange: position.exchange,
-      market: position.market,
-      result: await reconcileP10Order(position, cycleId),
-    });
+  const startedAt = performance.now();
+  const pending = initial.filter((row) =>
+    ["ENTRY_PENDING", "EXITING", "RECONCILING", "RECONCILIATION_FAILED"].includes(row.state)
+  );
+
+  // Start immutable/shared reads immediately.  The old loop waited for every position's
+  // portfolio, quote and PATCH before it even priced the next market, so three holdings
+  // turned a 2-second scheduler into a 10-12 second effective safety cadence.
+  const marketRiskPromise = loadP10MarketRiskObservations();
+  type PortfolioLoad =
+    | { ok: true; value: any }
+    | { ok: false; error: string };
+  const portfolioPromises = new Map<Exchange, Promise<PortfolioLoad>>();
+  const ensurePortfolio = (exchange: Exchange): Promise<PortfolioLoad> => {
+    const existing = portfolioPromises.get(exchange);
+    if (existing) return existing;
+    const loading = p10PositionPortfolio(exchange)
+      .then((value) => ({ ok: true as const, value }))
+      .catch((error) => ({
+        ok: false as const,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    portfolioPromises.set(exchange, loading);
+    return loading;
+  };
+  for (const exchange of new Set(initial.map((row) => row.exchange))) {
+    ensurePortfolio(exchange);
   }
+
+  // Pending orders belong to different positions and their durable DB/exchange identifiers
+  // make reconciliation idempotent.  Run them together instead of serialising one market's
+  // network latency in front of every other market.
+  const reconciliationPromise = mapConcurrentOrdered(pending, async (position) => ({
+    action: "P10_RECONCILE",
+    exchange: position.exchange,
+    market: position.market,
+    result: await reconcileP10Order(position, cycleId),
+  })).then((actions) => ({ actions, finishedAt: performance.now() }));
+
   // One bounded read per monitor cycle. Every open P10/I46/S37/S096 position evaluates
   // the same immutable snapshot; a timeout disables only the overlay, never base exits.
-  const marketRiskContext = await loadP10MarketRiskObservations();
+  const [marketRiskContext, open] = await Promise.all([
+    marketRiskPromise,
+    db(
+      `trading_positions?strategy_key=eq.${encodeURIComponent(P10_STRATEGY_KEY)}` +
+        "&state=eq.OPEN&select=*&order=created_at.asc",
+    ) as Promise<Position[]>,
+  ]);
   const marketRiskNow = Date.now();
-  const open = await db(
-    `trading_positions?strategy_key=eq.${encodeURIComponent(P10_STRATEGY_KEY)}` +
-      "&state=eq.OPEN&select=*&order=created_at.asc",
-  ) as Position[];
-  const portfolios = new Map<Exchange, any>();
-  for (let position of open) {
+  for (const exchange of new Set(open.map((row) => row.exchange))) ensurePortfolio(exchange);
+  const quoteBatchPromises = new Map<Exchange, Promise<Map<string, P10QuoteLoad>>>();
+  const ensureQuoteBatch = (exchange: Exchange) => {
+    const existing = quoteBatchPromises.get(exchange);
+    if (existing) return existing;
+    const loading = p10MarketQuoteBatch(
+      exchange,
+      open.filter((row) => row.exchange === exchange).map((row) => row.market),
+    );
+    quoteBatchPromises.set(exchange, loading);
+    return loading;
+  };
+  for (const exchange of new Set(open.map((row) => row.exchange))) ensureQuoteBatch(exchange);
+  const sharedReadsFinishedAt = performance.now();
+
+  const monitoredActionsPromise = mapConcurrentOrdered(open, async (originalPosition) => {
+    let position = originalPosition;
     try {
-      let portfolio = portfolios.get(position.exchange);
-      if (!portfolio) {
-        portfolio = await gateway(position.exchange, { action: "portfolio" });
-        portfolios.set(position.exchange, portfolio);
-      }
+      const side = String(position.position_side || "LONG") as P10Side;
+      const s37Position = side === "SHORT" &&
+        position.metadata?.entry_strategy_key === S37_SHORT_STRATEGY_KEY &&
+        position.metadata?.strategy_revision === S37_SHORT_REVISION;
+      const s096Position = side === "SHORT" &&
+        position.metadata?.entry_strategy_key === S096_SHORT_STRATEGY_KEY &&
+        position.metadata?.strategy_revision === S096_SHORT_REVISION;
+      const completedBarPromise = (async () => {
+        const shouldLoad = !s37Position && !s096Position && shouldLoadCompletedPolicyBar(
+          finite(position.metadata?.p10_last_policy_bar_time),
+          Date.now(),
+          P10_HOUR_MS,
+        );
+        if (!shouldLoad) {
+          return {
+            latest: null as ReturnType<typeof prepareP10Bars>[number] | null,
+            error: null as string | null,
+            fetched: false,
+          };
+        }
+        try {
+          return {
+            latest: prepareP10Bars(await p10CompletedBars(position)).at(-1) || null,
+            error: null,
+            fetched: true,
+          };
+        } catch (error) {
+          // Quote-driven STOP/TARGET/TIME must remain live when a public candle API fails.
+          return {
+            latest: null,
+            error: error instanceof Error ? error.message : String(error),
+            fetched: true,
+          };
+        }
+      })();
+      const [portfolioLoad, quoteBatch, completedBar] = await Promise.all([
+        ensurePortfolio(position.exchange),
+        ensureQuoteBatch(position.exchange),
+        completedBarPromise,
+      ]);
+      if (!portfolioLoad.ok) throw new Error(portfolioLoad.error);
+      const quoteLoad = quoteBatch.get(String(position.market).toUpperCase());
+      if (!quoteLoad) throw new Error("P10 quote batch omitted held market");
+      if (!quoteLoad.ok) throw new Error(quoteLoad.error);
+      const quote = quoteLoad.value;
+      const portfolio = portfolioLoad.value;
       const exchangeQuantity = p10ExchangeQuantity(position, portfolio);
       const tolerance = Math.max(0.000000000001, finite(position.quantity_step) * 2);
       if (exchangeQuantity + tolerance < finite(position.remaining_quantity)) {
@@ -10241,37 +10673,18 @@ async function monitorP10Positions(
           },
           { cycleId, positionId: position.id, level: "CRITICAL" },
         );
-        actions.push({
+        return {
           action: "P10_MISMATCH",
           exchange: position.exchange,
           market: position.market,
           booked_quantity: position.remaining_quantity,
           exchange_quantity: exchangeQuantity,
-        });
-        continue;
+        };
       }
-      const quote = await marketQuote(position.exchange, position.market);
-      const side = String(position.position_side || "LONG") as P10Side;
-      const s37Position = side === "SHORT" &&
-        position.metadata?.entry_strategy_key === S37_SHORT_STRATEGY_KEY &&
-        position.metadata?.strategy_revision === S37_SHORT_REVISION;
-      const s096Position = side === "SHORT" &&
-        position.metadata?.entry_strategy_key === S096_SHORT_STRATEGY_KEY &&
-        position.metadata?.strategy_revision === S096_SHORT_REVISION;
       const executablePrice = side === "LONG" ? finite(quote.best_bid) : finite(quote.best_ask);
       if (!(executablePrice > 0)) throw new Error("P10 executable quote unavailable");
-      // Fixed S37/S096 exits only need the executable quote. A candle API outage must not
-      // prevent their stop, target or time exit from being evaluated.
-      let latestCompletedBar = null as ReturnType<typeof prepareP10Bars>[number] | null;
-      let completedBarError: string | null = null;
-      if (!s37Position && !s096Position) {
-        try {
-          latestCompletedBar = prepareP10Bars(await p10CompletedBars(position)).at(-1) || null;
-        } catch (error) {
-          // Quote-driven STOP/TARGET/TIME must remain live when a public candle API fails.
-          completedBarError = error instanceof Error ? error.message : String(error);
-        }
-      }
+      const latestCompletedBar = completedBar.latest;
+      const completedBarError = completedBar.error;
       const entryPrice = finite(position.average_entry_price, position.planned_entry_price);
       const initialRisk = finite(
         position.metadata?.p10_initial_risk,
@@ -10360,7 +10773,9 @@ async function monitorP10Positions(
         p10_last_policy_bar_time: decision.policyBarTime,
         p10_last_policy_checked_at: new Date().toISOString(),
         p10_last_executable_price: executablePrice,
-        p10_completed_bar_error: completedBarError,
+        p10_completed_bar_error: completedBar.fetched
+          ? completedBarError
+          : position.metadata?.p10_completed_bar_error || null,
         p10_market_overlay: {
           ...marketRiskDecision.audit,
           side,
@@ -10376,7 +10791,7 @@ async function monitorP10Positions(
             ema20: latestCompletedBar.ema20,
             atr14: latestCompletedBar.atr14,
           }
-          : null,
+          : position.metadata?.p10_last_completed_bar || null,
       };
       const refreshed = await patch("trading_positions", `id=eq.${position.id}&state=eq.OPEN`, {
         trailing_stop: nextStop,
@@ -10384,10 +10799,10 @@ async function monitorP10Positions(
         trough_price: troughPrice,
         metadata,
       });
-      if (!refreshed.length) continue;
+      if (!refreshed.length) return null;
       position = { ...position, ...refreshed[0] };
       if (decision.action === "NONE") {
-        actions.push({
+        return {
           action: "P10_HOLD",
           exchange: position.exchange,
           market: position.market,
@@ -10395,36 +10810,51 @@ async function monitorP10Positions(
           executable_price: executablePrice,
           stop: nextStop,
           market_overlay: metadata.p10_market_overlay,
-        });
-        continue;
+        };
       }
-      actions.push(
-        await executeP10Exit(
-          position,
-          decision.action,
-          String(decision.reason || decision.action),
-          decision.fraction,
-          executablePrice,
-          nextStop,
-          portfolio,
-          cycleId,
-        ),
+      return await executeP10Exit(
+        position,
+        decision.action,
+        String(decision.reason || decision.action),
+        decision.fraction,
+        executablePrice,
+        nextStop,
+        portfolio,
+        cycleId,
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      actions.push({
+      const action = {
         action: "P10_MONITOR_ERROR",
         exchange: position.exchange,
         market: position.market,
         error: message,
-      });
+      };
       await event("P10_MONITOR_ERROR", message, {
         strategy_key: P10_STRATEGY_KEY,
         position_side: position.position_side,
       }, { cycleId, positionId: position.id, level: "CRITICAL" });
+      return action;
     }
-  }
-  return actions;
+  });
+  const [reconciliation, monitoredActions] = await Promise.all([
+    reconciliationPromise,
+    monitoredActionsPromise,
+  ]);
+  const finishedAt = performance.now();
+  return {
+    actions: [
+      ...reconciliation.actions,
+      ...monitoredActions.filter((action) => action !== null),
+    ],
+    openPositions: open.length,
+    timingsMs: {
+      reconcile: Math.round(reconciliation.finishedAt - startedAt),
+      shared_reads: Math.round(sharedReadsFinishedAt - startedAt),
+      position_batch: Math.round(finishedAt - sharedReadsFinishedAt),
+      total: Math.round(finishedAt - startedAt),
+    },
+  };
 }
 
 async function scanCycle(cycleId: string, settings: TradingSettings & JsonRecord) {

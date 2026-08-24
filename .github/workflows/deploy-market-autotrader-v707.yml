@@ -92,6 +92,10 @@ jobs:
             supabase/functions/market-autotrader/futures-exit-policy.test.ts \
             supabase/functions/market-autotrader/futures-snapshot.ts \
             supabase/functions/market-autotrader/futures-snapshot-reconcile.test.ts \
+            supabase/functions/market-autotrader/monitor-concurrency.ts \
+            supabase/functions/market-autotrader/monitor-concurrency.test.ts \
+            supabase/functions/market-autotrader/p10-monitor-cadence.ts \
+            supabase/functions/market-autotrader/p10-monitor-cadence.test.ts \
             supabase/functions/market-autotrader/futures-lane.test.ts \
             supabase/functions/market-autotrader/combined-long-s096-short.test.ts
           deno test supabase/functions/_shared/lob/minute-entry-gate.test.ts
@@ -103,6 +107,8 @@ jobs:
           deno test supabase/functions/market-autotrader/futures-exit-policy.test.ts
           deno test --allow-read \
             supabase/functions/market-autotrader/futures-snapshot-reconcile.test.ts
+          deno test supabase/functions/market-autotrader/monitor-concurrency.test.ts
+          deno test supabase/functions/market-autotrader/p10-monitor-cadence.test.ts
           deno test --allow-read supabase/functions/market-autotrader/futures-lane.test.ts
           deno test supabase/functions/_shared/p10-policy.test.ts
           deno test --allow-read \
@@ -200,6 +206,16 @@ jobs:
           grep -q 'positions_complete: futuresSnapshot.complete' \
             supabase/functions/market-autotrader/index.ts
           grep -q 'positions_revision: futuresSnapshot.complete' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'monitor_path: "P10_FAST_2S"' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'mapConcurrentOrdered(open' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'action: "p10_quotes"' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'action: "p10_portfolio"' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'P10_SLOW_MAINTENANCE_BATCH_FAILED' \
             supabase/functions/market-autotrader/index.ts
           grep -q '8.0.1-DIRECTION-AWARE-FUTURES-ZERO-SNAPSHOT-RECONCILE' \
             supabase/migrations/20260824031619_direction_aware_futures_snapshot_reconcile.sql
