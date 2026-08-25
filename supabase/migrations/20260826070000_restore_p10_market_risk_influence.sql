@@ -21,24 +21,48 @@ begin
     return new;
   end if;
 
-  if new.model_revision = 'MARKET-REGIME-OBSERVER-v2-C01-FULLMARKET'
-     and coalesce(new.features ->> 'source', '') =
-       'MARKET-REGIME-OBSERVER-v2-C01-D3X2-T10-G0-C43-FULLMARKET'
-     and coalesce(new.features ->> 'trading_influence', 'false') = 'true'
-     and coalesce(new.features -> 'momentum_phase' ->> 'model_revision', '') =
-       'C43-DYNAMIC-HORIZON-FORECAST-v1'
-     and coalesce(new.features -> 'momentum_phase' ->> 'trading_influence', 'false') = 'true'
-     and coalesce(new.sample_size, 0) >= 240
-     and case
-       when jsonb_typeof(new.features -> 'conditional_forecast' -> 'horizons') = 'array'
-       then jsonb_array_length(new.features -> 'conditional_forecast' -> 'horizons') >= 3
-       else false
-     end
-  then
+  if new.model_revision is distinct from 'MARKET-REGIME-OBSERVER-v2-C01-FULLMARKET' then
+    new.trading_influence := false;
     return new;
   end if;
 
-  new.trading_influence := false;
+  if coalesce(new.features ->> 'source', '') <>
+     'MARKET-REGIME-OBSERVER-v2-C01-D3X2-T10-G0-C43-FULLMARKET' then
+    new.trading_influence := false;
+    return new;
+  end if;
+
+  if coalesce(new.features ->> 'trading_influence', 'false') <> 'true' then
+    new.trading_influence := false;
+    return new;
+  end if;
+
+  if coalesce(new.features -> 'momentum_phase' ->> 'model_revision', '') <>
+     'C43-DYNAMIC-HORIZON-FORECAST-v1' then
+    new.trading_influence := false;
+    return new;
+  end if;
+
+  if coalesce(new.features -> 'momentum_phase' ->> 'trading_influence', 'false') <> 'true' then
+    new.trading_influence := false;
+    return new;
+  end if;
+
+  if coalesce(new.sample_size, 0) < 240 then
+    new.trading_influence := false;
+    return new;
+  end if;
+
+  if coalesce(jsonb_typeof(new.features -> 'conditional_forecast' -> 'horizons'), '') <> 'array' then
+    new.trading_influence := false;
+    return new;
+  end if;
+
+  if jsonb_array_length(new.features -> 'conditional_forecast' -> 'horizons') < 3 then
+    new.trading_influence := false;
+    return new;
+  end if;
+
   return new;
 end;
 $$;
@@ -61,8 +85,4 @@ where observed_at >= now() - interval '14 minutes'
     'C43-DYNAMIC-HORIZON-FORECAST-v1'
   and coalesce(features -> 'momentum_phase' ->> 'trading_influence', 'false') = 'true'
   and coalesce(sample_size, 0) >= 240
-  and case
-    when jsonb_typeof(features -> 'conditional_forecast' -> 'horizons') = 'array'
-    then jsonb_array_length(features -> 'conditional_forecast' -> 'horizons') >= 3
-    else false
-  end;
+  and jsonb_typeof(features -> 'conditional_forecast' -> 'horizons') = 'array';
