@@ -25,6 +25,23 @@ export const S096_SHORT_CONFIG = Object.freeze({
   rsiFallingBars: 3,
 });
 
+/**
+ * Binance Futures live admission overlay derived from production fills.
+ *
+ * This deliberately sits outside the frozen I46/S096 research definitions. It is a
+ * fail-closed execution-quality gate: the research signal may still be measured exactly,
+ * while live routing refuses low-persistence chase entries that dominated recent losses.
+ */
+export const BINANCE_FUTURES_LIVE_QUALITY_GUARD = Object.freeze({
+  longMinRelativeRet24Pct: 2.0,
+  longMinEfficiency24: 0.25,
+  longMinVolumeRatio: 1.20,
+  longMinDirectionalCloseLocation: 0.74,
+  shortMinEfficiency24: 0.35,
+  shortMinVolumeRatio: 1.30,
+  shortMinDirectionalCloseLocation: 0.25,
+});
+
 export type S096PreparedBar = {
   open: number;
   high: number;
@@ -64,6 +81,35 @@ export type CombinedSignalCandidate<TLongCheck> =
 
 const finite = (value: unknown, fallback = 0) =>
   Number.isFinite(Number(value)) ? Number(value) : fallback;
+
+function futuresLongLiveQuality<TLongCheck>(
+  check: TLongCheck,
+  latest: S096PreparedBar | undefined,
+): boolean {
+  if (!latest || !check || typeof check !== "object") return false;
+  const evidence = check as Record<string, unknown>;
+  return finite(evidence.rel24, Number.NEGATIVE_INFINITY) >=
+      BINANCE_FUTURES_LIVE_QUALITY_GUARD.longMinRelativeRet24Pct &&
+    finite(latest.efficiency24, Number.NEGATIVE_INFINITY) >=
+      BINANCE_FUTURES_LIVE_QUALITY_GUARD.longMinEfficiency24 &&
+    finite(latest.volumeRatio, Number.NEGATIVE_INFINITY) >=
+      BINANCE_FUTURES_LIVE_QUALITY_GUARD.longMinVolumeRatio &&
+    finite(evidence.dl, Number.NEGATIVE_INFINITY) >=
+      BINANCE_FUTURES_LIVE_QUALITY_GUARD.longMinDirectionalCloseLocation;
+}
+
+function futuresShortLiveQuality(
+  check: S096SignalCheck,
+  latest: S096PreparedBar | undefined,
+): boolean {
+  if (!latest) return false;
+  return finite(latest.efficiency24, Number.NEGATIVE_INFINITY) >=
+      BINANCE_FUTURES_LIVE_QUALITY_GUARD.shortMinEfficiency24 &&
+    finite(latest.volumeRatio, Number.NEGATIVE_INFINITY) >=
+      BINANCE_FUTURES_LIVE_QUALITY_GUARD.shortMinVolumeRatio &&
+    finite(check.dl, Number.NEGATIVE_INFINITY) >=
+      BINANCE_FUTURES_LIVE_QUALITY_GUARD.shortMinDirectionalCloseLocation;
+}
 
 /** Exact S096 signal-bar gate from the frozen 101-strategy research registry. */
 export function checkS096ShortSignal(
@@ -125,6 +171,9 @@ export function checkS096ShortSignal(
 /**
  * Keeps the existing I46 LONG candidate authoritative and introduces S096 only as the
  * Binance Futures fallback. The two research score scales are intentionally never compared.
+ *
+ * Binance Futures adds a production-fill quality overlay before either research signal can
+ * be routed live. Binance spot preserves the existing I46 behavior.
  */
 export function selectCombinedLongS096Candidate<TLongCheck>(input: {
   venue: string;
@@ -135,7 +184,11 @@ export function selectCombinedLongS096Candidate<TLongCheck>(input: {
   longStrategyRevision: string;
   longStopAtr: number;
 }): CombinedSignalCandidate<TLongCheck> | null {
-  if (input.longCheck) {
+  const latest = input.bars.at(-1);
+  if (
+    input.longCheck &&
+    (input.venue !== "binance_futures" || futuresLongLiveQuality(input.longCheck, latest))
+  ) {
     return {
       side: "LONG",
       check: input.longCheck as NonNullable<TLongCheck>,
@@ -146,7 +199,7 @@ export function selectCombinedLongS096Candidate<TLongCheck>(input: {
   }
   if (input.venue !== "binance_futures") return null;
   const shortCheck = checkS096ShortSignal(input.bars, input.btcRet24Pct);
-  return shortCheck
+  return shortCheck && futuresShortLiveQuality(shortCheck, latest)
     ? {
       side: "SHORT",
       check: shortCheck,
