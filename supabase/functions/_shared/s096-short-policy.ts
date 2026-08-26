@@ -28,15 +28,13 @@ export const S096_SHORT_CONFIG = Object.freeze({
   rsiFallingBars: 3,
 });
 
-// Live execution-quality overlay. Research identity stays frozen while production rejects
-// capitulation chasing that has shown negative realized expectancy in live fills.
+// Source-level anti-chase guard that can be evaluated from the hourly bar array without
+// changing the frozen research identity. The order-time DB guard adds RSI/24h/close-location
+// and full-market multi-horizon protection before any exchange order can be created.
 export const S096_LIVE_ENTRY_QUALITY_CONFIG = Object.freeze({
   minRet3Pct: -5.0,
   minRet6Pct: -8.0,
   minRet12Pct: -12.0,
-  minRet24Pct: -12.0,
-  minRsi14: 30.0,
-  minCloseLocation: 0.15,
 });
 
 export type S096PreparedBar = {
@@ -80,11 +78,7 @@ const finite = (value: unknown, fallback = 0) =>
   Number.isFinite(Number(value)) ? Number(value) : fallback;
 const pct = (now: number, before: number) => before > 0 ? (now / before - 1) * 100 : 0;
 
-/**
- * Applies the frozen S096 signal-bar rules plus a production anti-chase overlay.
- * The prior 14-RSI lower bound repeatedly admitted assets after most of the decline had
- * already happened; live entries now require room for continuation instead of selling capitulation.
- */
+/** Frozen S096 signal-bar gate plus a live short-horizon anti-chase overlay. */
 export function checkS096ShortSignal(
   bars: readonly S096PreparedBar[],
   btcRet24Pct: number,
@@ -133,16 +127,13 @@ export function checkS096ShortSignal(
   const ret3Pct = pct(b.close, bars.at(-4)!.close);
   const ret6Pct = pct(b.close, bars.at(-7)!.close);
   const ret12Pct = pct(b.close, bars.at(-13)!.close);
-  const closeLocation = (b.close - b.low) / (b.high - b.low);
   if (
     ret3Pct < S096_LIVE_ENTRY_QUALITY_CONFIG.minRet3Pct ||
     ret6Pct < S096_LIVE_ENTRY_QUALITY_CONFIG.minRet6Pct ||
-    ret12Pct < S096_LIVE_ENTRY_QUALITY_CONFIG.minRet12Pct ||
-    b.ret24Pct < S096_LIVE_ENTRY_QUALITY_CONFIG.minRet24Pct ||
-    b.rsi14 < S096_LIVE_ENTRY_QUALITY_CONFIG.minRsi14 ||
-    closeLocation < S096_LIVE_ENTRY_QUALITY_CONFIG.minCloseLocation
+    ret12Pct < S096_LIVE_ENTRY_QUALITY_CONFIG.minRet12Pct
   ) return null;
 
+  const closeLocation = (b.close - b.low) / (b.high - b.low);
   return {
     score: -b.ret24Pct + b.volumeRatio * 0.25 + finite(b.efficiency24),
     rel24: btcRet24Pct - b.ret24Pct,
