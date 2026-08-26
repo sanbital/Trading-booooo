@@ -543,8 +543,7 @@ function classifyAcceptedFuturesOrderReconciliation(acceptedOrder, lookupError =
   const reportedAveragePrice = Number.isFinite(rawAveragePrice) && rawAveragePrice > 0
     ? rawAveragePrice
     : normalizedAveragePrice;
-  const hasAcceptanceEvidence =
-    Boolean(order.exchange_order_id) ||
+  const hasAcceptanceEvidence = Boolean(order.exchange_order_id) ||
     Boolean(raw.orderId) ||
     Boolean(order.client_order_id) ||
     Boolean(raw.clientOrderId) ||
@@ -1281,9 +1280,10 @@ function normalizeFuturesOrder(order, quantityStep = 0) {
       Math.max(1, Math.abs(executedVolume), Math.abs(fillExecutedVolume)),
   );
   const normalizedQuantityStep = Number(quantityStep);
-  const fillCoverageTolerance = Number.isFinite(normalizedQuantityStep) && normalizedQuantityStep > 0
-    ? Math.max(numericQuantityTolerance, normalizedQuantityStep / 2)
-    : numericQuantityTolerance;
+  const fillCoverageTolerance =
+    Number.isFinite(normalizedQuantityStep) && normalizedQuantityStep > 0
+      ? Math.max(numericQuantityTolerance, normalizedQuantityStep / 2)
+      : numericQuantityTolerance;
   const fillsCoverExecution = executedVolume > 0 && fillExecutedVolume > 0 &&
     Math.abs(fillExecutedVolume - executedVolume) <= fillCoverageTolerance;
   // USDⓈ-M reports cumulative quote as `cumQuote`. When an UNKNOWN-status recovery read
@@ -1303,12 +1303,12 @@ function normalizeFuturesOrder(order, quantityStep = 0) {
     const price = Number(fill?.price || 0);
     const volume = Number(fill?.qty || 0);
     return {
-      trade_id: fill.tradeId != null ? String(fill.tradeId) : `${order?.orderId || "order"}-${index}`,
+      trade_id: fill.tradeId != null
+        ? String(fill.tradeId)
+        : `${order?.orderId || "order"}-${index}`,
       price,
       volume,
-      funds: Number.isFinite(quoteQuantity) && quoteQuantity >= 0
-        ? quoteQuantity
-        : price * volume,
+      funds: Number.isFinite(quoteQuantity) && quoteQuantity >= 0 ? quoteQuantity : price * volume,
       fee: Number(fill.commission || 0),
       fee_asset: fill.commissionAsset || null,
       fee_quote_marked: Number(fill.feeQuoteMarked || 0),
@@ -1384,7 +1384,12 @@ async function attachFuturesFills(data, market) {
   return data;
 }
 
-async function binanceFuturesGetOrder(identifier, symbol, exchangeOrderId = null, quantityStep = 0) {
+async function binanceFuturesGetOrder(
+  identifier,
+  symbol,
+  exchangeOrderId = null,
+  quantityStep = 0,
+) {
   const market = validateBinanceSymbol(symbol);
   const clientOrderId = validateIdentifier(identifier);
   let data;
@@ -2438,11 +2443,11 @@ export {
   normalizeBinanceOrder,
   normalizeFuturesOrder,
   normalizeP10QuoteBatch,
-  p10Portfolio,
   normalizeUpbitOrder,
-  rawQueryString,
+  p10Portfolio,
   p10Quotes,
   PREVIOUS_ENGINE_VERSION,
+  rawQueryString,
   resolveFuturesIntent,
   stepPrecision,
   upbitRateGroup,
