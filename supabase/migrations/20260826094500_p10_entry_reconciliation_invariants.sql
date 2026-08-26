@@ -158,12 +158,42 @@ declare
   v_reason text := coalesce(nullif(btrim(p_reason), ''), 'P10_ENTRY_RECONCILIATION_REQUIRED');
   v_next_lock text;
   v_next_manual_reason text;
+  v_recent_futures_close boolean := false;
 begin
   select * into v_before
   from public.trading_settings
   where id = 1
   for update;
   if not found then raise exception 'trading settings row 1 not found'; end if;
+
+  -- Binance may briefly report the just-closed directional exposure after the
+  -- durable CLOSED row has committed. This scan is already fail-closed: the caller
+  -- returns SKIPPED whenever unmatched exposure is observed. Defer only the global
+  -- latch for this short close-propagation window; a persistent exposure is seen on
+  -- the next fresh scan and then latches normally.
+  if v_reason = 'P10_UNTRACKED_FUTURES_EXPOSURE'
+     and coalesce(v_before.pause_new_entries, false) is false then
+    select exists (
+      select 1
+      from public.trading_positions p
+      where p.exchange = 'binance_futures'
+        and coalesce(p.is_paper, false) is false
+        and p.state = 'CLOSED'
+        and upper(coalesce(p.position_side, '')) in ('LONG', 'SHORT')
+        and p.closed_at is not null
+        and p.closed_at >= clock_timestamp() - interval '5 seconds'
+    ) into v_recent_futures_close;
+
+    if v_recent_futures_close then
+      return jsonb_build_object(
+        'changed', false,
+        'deferred', true,
+        'defer_reason', 'RECENT_FUTURES_CLOSE_GRACE',
+        'grace_seconds', 5,
+        'settings', to_jsonb(v_before)
+      );
+    end if;
+  end if;
 
   v_next_lock := case
     when v_before.pause_lock_reason is null or v_before.pause_lock_reason like 'P10_%'
