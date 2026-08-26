@@ -1,0 +1,4 @@
+Production redeploy trigger
+Requested: 2026-08-27 07:19 KST
+Target workflow: deploy-market-autotrader-v707.yml
+Purpose: deploy and verify current main Edge Functions without changing trading logic.
