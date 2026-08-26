@@ -1,5 +1,6 @@
 name: Patch P10 untracked close race canonical source
 
+# One-shot canonical replay repair; remove after the source commit lands.
 on:
   push:
     branches: [main]
