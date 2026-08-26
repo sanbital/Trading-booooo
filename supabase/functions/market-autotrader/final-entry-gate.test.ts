@@ -4,7 +4,7 @@ function assert(condition: unknown, message = "assertion failed"): asserts condi
   if (!condition) throw new Error(message);
 }
 
-Deno.test("futures final M1 failure is advisory when executable LOB still passes", () => {
+Deno.test("futures final M1 failure is a hard veto even when executable LOB passes", () => {
   const result = resolveFinalLobAdmission(
     "binance_futures",
     true,
@@ -12,10 +12,11 @@ Deno.test("futures final M1 failure is advisory when executable LOB still passes
     false,
     ["M1_PREVIOUS_CANDLE_NOT_BULLISH", "M1_STOCH_K_NOT_ABOVE_D"],
   );
-  assert(result.passed);
-  assert(result.blockingReasons.length === 0);
-  assert(result.minuteGateAdvisory);
-  assert(result.minuteGateAdvisoryReasons.length === 2);
+  assert(!result.passed);
+  assert(result.blockingReasons.includes("M1_PREVIOUS_CANDLE_NOT_BULLISH"));
+  assert(result.blockingReasons.includes("M1_STOCH_K_NOT_ABOVE_D"));
+  assert(!result.minuteGateAdvisory);
+  assert(result.minuteGateAdvisoryReasons.length === 0);
 });
 
 Deno.test("futures current LOB safety veto remains authoritative", () => {
@@ -31,7 +32,7 @@ Deno.test("futures current LOB safety veto remains authoritative", () => {
   assert(result.blockingReasons.includes("BUY_PRESSURE_NOT_CONFIRMED"));
 });
 
-Deno.test("futures M1 does not hide a simultaneous executable depth veto", () => {
+Deno.test("futures simultaneous M1 and executable depth failures are both preserved", () => {
   const result = resolveFinalLobAdmission(
     "binance_futures",
     false,
@@ -40,12 +41,13 @@ Deno.test("futures M1 does not hide a simultaneous executable depth veto", () =>
     ["M1_PREVIOUS_CANDLE_NOT_BULLISH"],
   );
   assert(!result.passed);
-  assert(result.blockingReasons.length === 1);
-  assert(result.blockingReasons[0] === "PREORDER_ASK_DEPTH_DROPPED");
-  assert(result.minuteGateAdvisoryReasons[0] === "M1_PREVIOUS_CANDLE_NOT_BULLISH");
+  assert(result.blockingReasons.length === 2);
+  assert(result.blockingReasons.includes("PREORDER_ASK_DEPTH_DROPPED"));
+  assert(result.blockingReasons.includes("M1_PREVIOUS_CANDLE_NOT_BULLISH"));
+  assert(result.minuteGateAdvisoryReasons.length === 0);
 });
 
-Deno.test("spot keeps the existing hard final M1 gate", () => {
+Deno.test("spot keeps the hard final M1 gate", () => {
   const result = resolveFinalLobAdmission(
     "binance",
     true,
