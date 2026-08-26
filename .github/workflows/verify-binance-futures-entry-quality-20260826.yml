@@ -40,5 +40,5 @@ jobs:
 
       - name: Run regression tests
         run: |
-          deno test supabase/functions/_shared/s096-short-policy.test.ts
+          deno test --allow-read supabase/functions/_shared/s096-short-policy.test.ts
           deno test supabase/functions/market-autotrader/final-entry-gate.test.ts
