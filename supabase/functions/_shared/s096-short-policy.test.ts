@@ -158,6 +158,9 @@ Deno.test("production-valid research signals are blocked when live quality is we
   assertEquals(weakShort, null);
 
   const bars = liveEligibleBars();
+  // Isolate the LONG live guard: this fixture must not be eligible for the S096 fallback.
+  bars.at(-1)!.ret24Pct = 2;
+  bars.at(-1)!.rsi14 = 60;
   const weakLong = selectCombinedLongS096Candidate({
     venue: "binance_futures",
     bars,
