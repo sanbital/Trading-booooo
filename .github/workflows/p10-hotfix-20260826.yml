@@ -18,7 +18,7 @@ jobs:
           ref: fix/p10-entry-timing-20260826
           fetch-depth: 0
 
-      - name: Patch autotrader timeout handling and I46 anti-chase
+      - name: Patch autotrader monitor handling and I46 anti-chase
         shell: python
         run: |
           from pathlib import Path
@@ -27,87 +27,94 @@ jobs:
           autotrader = Path('supabase/functions/market-autotrader/index.ts')
           text = autotrader.read_text()
 
-          replacements = [
-              ('const VERSION = "8.0.1-P10-ENTRY-RECONCILIATION";',
-               'const VERSION = "8.0.2-P10-ENTRY-MARKET-GUARD";'),
-              ('const timer = setTimeout(() => controller.abort(), 1_000);',
-               'const timer = setTimeout(() => controller.abort(), 3_000);'),
-          ]
-          for old, new in replacements:
-              if old not in text:
-                  raise SystemExit(f'missing autotrader patch anchor: {old}')
-              text = text.replace(old, new, 1)
+          if 'const VERSION = "8.0.1-P10-ENTRY-RECONCILIATION";' in text:
+              text = text.replace(
+                  'const VERSION = "8.0.1-P10-ENTRY-RECONCILIATION";',
+                  'const VERSION = "8.0.2-P10-ENTRY-MARKET-GUARD";',
+                  1,
+              )
+          elif 'const VERSION = "8.0.2-P10-ENTRY-MARKET-GUARD";' not in text:
+              raise SystemExit('missing version patch anchor')
 
-          monitor_pattern = re.compile(
-              r'''(?P<indent>\s*)\} catch \(error\) \{\n'''
-              r'''(?P=indent)  const message = error instanceof Error \? error\.message : String\(error\);\n'''
-              r'''(?P=indent)  const action = \{\n'''
-              r'''(?P=indent)    action: "P10_MONITOR_ERROR",\n'''
-              r'''(?P=indent)    exchange: position\.exchange,\n'''
-              r'''(?P=indent)    market: position\.market,\n'''
-              r'''(?P=indent)    error: message,\n'''
-              r'''(?P=indent)  \};\n'''
-              r'''(?P=indent)  await event\("P10_MONITOR_ERROR", message, \{\n'''
-              r'''(?P=indent)    strategy_key: P10_STRATEGY_KEY,\n'''
-              r'''(?P=indent)    position_side: position\.position_side,\n'''
-              r'''(?P=indent)  \}, \{ cycleId, positionId: position\.id, level: "CRITICAL" \}\);\n'''
-              r'''(?P=indent)  return action;\n'''
-              r'''(?P=indent)\}''',
-          )
-          match = monitor_pattern.search(text)
-          if not match:
-              raise SystemExit('missing P10 monitor catch patch anchor')
-          ind = match.group('indent')
-          replacement = (
-              f'{ind}}} catch (error) {{\n'
-              f'{ind}  const message = error instanceof Error ? error.message : String(error);\n'
-              f'{ind}  const abortLike = String((error as any)?.name || "") === "AbortError" ||\n'
-              f'{ind}    /signal has been aborted|aborterror|\\baborted\\b/i.test(message);\n'
-              f'{ind}  if (abortLike) {{\n'
-              f'{ind}    const action = {{\n'
-              f'{ind}      action: "P10_MONITOR_DEFERRED",\n'
-              f'{ind}      exchange: position.exchange,\n'
-              f'{ind}      market: position.market,\n'
-              f'{ind}      error: message,\n'
-              f'{ind}    }};\n'
-              f'{ind}    await event("P10_MONITOR_DEFERRED", "transient monitor fetch timeout", {{\n'
-              f'{ind}      strategy_key: P10_STRATEGY_KEY,\n'
-              f'{ind}      position_side: position.position_side,\n'
-              f'{ind}      error: message,\n'
-              f'{ind}    }}, {{ cycleId, positionId: position.id, level: "WARNING" }});\n'
-              f'{ind}    return action;\n'
-              f'{ind}  }}\n'
-              f'{ind}  const action = {{\n'
-              f'{ind}    action: "P10_MONITOR_ERROR",\n'
-              f'{ind}    exchange: position.exchange,\n'
-              f'{ind}    market: position.market,\n'
-              f'{ind}    error: message,\n'
-              f'{ind}  }};\n'
-              f'{ind}  await event("P10_MONITOR_ERROR", message, {{\n'
-              f'{ind}    strategy_key: P10_STRATEGY_KEY,\n'
-              f'{ind}    position_side: position.position_side,\n'
-              f'{ind}  }}, {{ cycleId, positionId: position.id, level: "CRITICAL" }});\n'
-              f'{ind}  return action;\n'
-              f'{ind}}}'
-          )
-          text = text[:match.start()] + replacement + text[match.end():]
+          market_timeout = 'const timer = setTimeout(() => controller.abort(), 1_000);'
+          if market_timeout in text:
+              text = text.replace(
+                  market_timeout,
+                  'const timer = setTimeout(() => controller.abort(), 3_000);',
+                  1,
+              )
+
+          if 'action: "P10_MONITOR_DEFERRED"' not in text:
+              monitor_pattern = re.compile(
+                  r'''(?P<indent>\s*)\} catch \(error\) \{\n'''
+                  r'''(?P=indent)  const message = error instanceof Error \? error\.message : String\(error\);\n'''
+                  r'''(?P=indent)  const action = \{\n'''
+                  r'''(?P=indent)    action: "P10_MONITOR_ERROR",\n'''
+                  r'''(?P=indent)    exchange: position\.exchange,\n'''
+                  r'''(?P=indent)    market: position\.market,\n'''
+                  r'''(?P=indent)    error: message,\n'''
+                  r'''(?P=indent)  \};\n'''
+                  r'''(?P=indent)  await event\("P10_MONITOR_ERROR", message, \{\n'''
+                  r'''(?P=indent)    strategy_key: P10_STRATEGY_KEY,\n'''
+                  r'''(?P=indent)    position_side: position\.position_side,\n'''
+                  r'''(?P=indent)  \}, \{ cycleId, positionId: position\.id, level: "CRITICAL" \}\);\n'''
+                  r'''(?P=indent)  return action;\n'''
+                  r'''(?P=indent)\}''',
+              )
+              match = monitor_pattern.search(text)
+              if not match:
+                  raise SystemExit('missing P10 monitor catch patch anchor')
+              ind = match.group('indent')
+              replacement = (
+                  f'{ind}}} catch (error) {{\n'
+                  f'{ind}  const message = error instanceof Error ? error.message : String(error);\n'
+                  f'{ind}  const abortLike = String((error as any)?.name || "") === "AbortError" ||\n'
+                  f'{ind}    /signal has been aborted|aborterror|\\baborted\\b/i.test(message);\n'
+                  f'{ind}  if (abortLike) {{\n'
+                  f'{ind}    const action = {{\n'
+                  f'{ind}      action: "P10_MONITOR_DEFERRED",\n'
+                  f'{ind}      exchange: position.exchange,\n'
+                  f'{ind}      market: position.market,\n'
+                  f'{ind}      error: message,\n'
+                  f'{ind}    }};\n'
+                  f'{ind}    await event("P10_MONITOR_DEFERRED", "transient monitor fetch timeout", {{\n'
+                  f'{ind}      strategy_key: P10_STRATEGY_KEY,\n'
+                  f'{ind}      position_side: position.position_side,\n'
+                  f'{ind}      error: message,\n'
+                  f'{ind}    }}, {{ cycleId, positionId: position.id, level: "WARNING" }});\n'
+                  f'{ind}    return action;\n'
+                  f'{ind}  }}\n'
+                  f'{ind}  const action = {{\n'
+                  f'{ind}    action: "P10_MONITOR_ERROR",\n'
+                  f'{ind}    exchange: position.exchange,\n'
+                  f'{ind}    market: position.market,\n'
+                  f'{ind}    error: message,\n'
+                  f'{ind}  }};\n'
+                  f'{ind}  await event("P10_MONITOR_ERROR", message, {{\n'
+                  f'{ind}    strategy_key: P10_STRATEGY_KEY,\n'
+                  f'{ind}    position_side: position.position_side,\n'
+                  f'{ind}  }}, {{ cycleId, positionId: position.id, level: "CRITICAL" }});\n'
+                  f'{ind}  return action;\n'
+                  f'{ind}}}'
+              )
+              text = text[:match.start()] + replacement + text[match.end():]
+
           autotrader.write_text(text)
 
           signal = Path('supabase/functions/market-v2-signal/index.ts')
           text = signal.read_text()
-          anchor = '''  if (b.volumeRatio < 1 || r24 < .2 || r24 > 20 || dl < .58 || d * b.ema20Slope6Pct < 0) {
-            return null;
-          }'''
-          # Normalize indentation from source rather than relying on YAML whitespace.
-          anchor = anchor.replace('            return null;', '    return null;').replace('          }', '  }')
-          replacement = anchor + '''
-          if (long && (
-            b.rsi14 > 68 || b.ret3Pct > 4.5 || b.ret6Pct > 7 || b.ret12Pct > 10 || cl > .92
-          )) return null;'''
-          replacement = replacement.replace('          if (long', '  if (long').replace('            b.rsi14', '    b.rsi14').replace('          ))', '  ))')
-          if anchor not in text:
-              raise SystemExit('missing I46 anti-chase patch anchor')
-          text = text.replace(anchor, replacement, 1)
+          anti_chase = 'b.rsi14 > 68 || b.ret3Pct > 4.5 || b.ret6Pct > 7 || b.ret12Pct > 10 || cl > .92'
+          if anti_chase not in text:
+              pattern = re.compile(
+                  r'(if \(b\.volumeRatio < 1 \|\| r24 < \.2 \|\| r24 > 20 \|\| dl < \.58 \|\| d \* b\.ema20Slope6Pct < 0\) \{\s*return null;\s*\})'
+              )
+              text, count = pattern.subn(
+                  r'''\1\n  if (long && (\n    b.rsi14 > 68 || b.ret3Pct > 4.5 || b.ret6Pct > 7 || b.ret12Pct > 10 || cl > .92\n  )) return null;''',
+                  text,
+                  count=1,
+              )
+              if count != 1:
+                  raise SystemExit('missing I46 anti-chase patch anchor')
           signal.write_text(text)
 
       - uses: denoland/setup-deno@v1
