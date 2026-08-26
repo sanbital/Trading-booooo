@@ -1,0 +1,70 @@
+name: Patch P10 untracked close race canonical source
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/patch-p10-untracked-close-race.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: patch-p10-untracked-close-race
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Patch canonical reconciliation replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("supabase/migrations/20260826094500_p10_entry_reconciliation_invariants.sql")
+          text = path.read_text()
+          marker = "RECENT_FUTURES_CLOSE_GRACE"
+          if marker in text:
+              print("canonical replay already contains close-race grace")
+              raise SystemExit(0)
+
+          decl = "  v_next_manual_reason text;\nbegin\n"
+          if text.count(decl) != 1:
+              raise SystemExit(f"expected exactly one latch declaration anchor, found {text.count(decl)}")
+          text = text.replace(
+              decl,
+              "  v_next_manual_reason text;\n  v_recent_futures_close boolean := false;\nbegin\n",
+              1,
+          )
+
+          anchor = "  v_next_lock := case\n"
+          if text.count(anchor) != 1:
+              raise SystemExit(f"expected exactly one latch body anchor, found {text.count(anchor)}")
+          guard = """  -- Binance may briefly report the just-closed directional exposure after the\n  -- durable CLOSED row has committed. This scan is already fail-closed: the caller\n  -- returns SKIPPED whenever unmatched exposure is observed. Defer only the global\n  -- latch for this short close-propagation window; a persistent exposure is seen on\n  -- the next fresh scan and then latches normally.\n  if v_reason = 'P10_UNTRACKED_FUTURES_EXPOSURE'\n     and coalesce(v_before.pause_new_entries, false) is false then\n    select exists (\n      select 1\n      from public.trading_positions p\n      where p.exchange = 'binance_futures'\n        and coalesce(p.is_paper, false) is false\n        and p.state = 'CLOSED'\n        and upper(coalesce(p.position_side, '')) in ('LONG', 'SHORT')\n        and p.closed_at is not null\n        and p.closed_at >= clock_timestamp() - interval '5 seconds'\n    ) into v_recent_futures_close;\n\n    if v_recent_futures_close then\n      return jsonb_build_object(\n        'changed', false,\n        'deferred', true,\n        'defer_reason', 'RECENT_FUTURES_CLOSE_GRACE',\n        'grace_seconds', 5,\n        'settings', to_jsonb(v_before)\n      );\n    end if;\n  end if;\n\n"""
+          text = text.replace(anchor, guard + anchor, 1)
+          path.write_text(text)
+          PY
+          git diff --check
+          grep -n "RECENT_FUTURES_CLOSE_GRACE" supabase/migrations/20260826094500_p10_entry_reconciliation_invariants.sql
+
+      - name: Commit canonical replay fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- supabase/migrations/20260826094500_p10_entry_reconciliation_invariants.sql; then
+            echo "No canonical source change needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/migrations/20260826094500_p10_entry_reconciliation_invariants.sql
+          git commit -m "fix: preserve P10 close-race grace on replay"
+          git push origin HEAD:main
