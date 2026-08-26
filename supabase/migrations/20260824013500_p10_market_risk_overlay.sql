@@ -165,3 +165,134 @@ revoke all on function public.apply_p10_exit_order(
 grant execute on function public.apply_p10_exit_order(
   uuid, text, numeric, numeric, numeric, numeric, numeric
 ) to service_role;
+
+-- Durable P10 market-regime live-influence safety gate.
+--
+-- Keep this definition in the replayed overlay migration rather than the two
+-- 2026-08-26 incident-recovery migrations, because those recovery files contain
+-- a bounded one-time backfill and must not run on every normal deployment.
+create or replace function public.guard_unvalidated_market_regime_influence()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if new.trading_influence is not true then
+    return new;
+  end if;
+
+  if new.model_revision is distinct from 'MARKET-REGIME-OBSERVER-v2-C01-FULLMARKET' then
+    new.trading_influence := false;
+    return new;
+  end if;
+
+  if coalesce(new.features ->> 'source', '') <>
+     'BINANCE_SPOT_FUTURES_UPBIT_FULL_ACTIVE_UNIVERSE' then
+    new.trading_influence := false;
+    return new;
+  end if;
+
+  if coalesce(new.features ->> 'trading_influence', 'false') <> 'true' then
+    new.trading_influence := false;
+    return new;
+  end if;
+
+  if coalesce(new.features -> 'momentum_phase' ->> 'model_revision', '') <>
+     'C43-DYNAMIC-HORIZON-FORECAST-v1' then
+    new.trading_influence := false;
+    return new;
+  end if;
+
+  if coalesce(new.features -> 'conditional_forecast' ->> 'model_revision', '') <>
+     'C43-DYNAMIC-HORIZON-FORECAST-v1' then
+    new.trading_influence := false;
+    return new;
+  end if;
+
+  if coalesce(new.features ->> 'forecast_candidate_id', '') <>
+     'C43_PHASE_TREE_PERSISTENCE_STRUCT_PERSIST' then
+    new.trading_influence := false;
+    return new;
+  end if;
+
+  if coalesce(new.features -> 'momentum_phase' ->> 'trading_influence', 'false') <> 'true' then
+    new.trading_influence := false;
+    return new;
+  end if;
+
+  if coalesce(new.sample_size, 0) < 240 then
+    new.trading_influence := false;
+    return new;
+  end if;
+
+  if coalesce(jsonb_typeof(new.features -> 'conditional_forecast' -> 'horizons'), '') <> 'array' then
+    new.trading_influence := false;
+    return new;
+  end if;
+
+  if jsonb_array_length(new.features -> 'conditional_forecast' -> 'horizons') < 3 then
+    new.trading_influence := false;
+    return new;
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.guard_unvalidated_market_regime_influence() is
+  'DB safety gate for P10 market-regime live influence. Allows only FULLMARKET observations from the full active universe with the C43 production forecast/candidate and sufficient sample size; all other producers are forced false.';
+
+drop trigger if exists trg_guard_unvalidated_market_regime_influence
+  on public.market_regime_observations;
+
+create trigger trg_guard_unvalidated_market_regime_influence
+before insert or update of model_revision, trading_influence
+on public.market_regime_observations
+for each row
+execute function public.guard_unvalidated_market_regime_influence();
+
+-- Fail the deployment if a future edit regresses the exact P10 production
+-- provenance or leaves the trigger missing/disabled. These are policy identity
+-- constants, not operator-tunable thresholds.
+do $$
+declare
+  v_guard_def text;
+  v_trigger_def text;
+begin
+  select pg_get_functiondef(p.oid)
+    into v_guard_def
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public'
+    and p.proname = 'guard_unvalidated_market_regime_influence';
+
+  if v_guard_def is null
+     or position('MARKET-REGIME-OBSERVER-v2-C01-FULLMARKET' in v_guard_def) = 0
+     or position('BINANCE_SPOT_FUTURES_UPBIT_FULL_ACTIVE_UNIVERSE' in v_guard_def) = 0
+     or position('C43-DYNAMIC-HORIZON-FORECAST-v1' in v_guard_def) = 0
+     or position('C43_PHASE_TREE_PERSISTENCE_STRUCT_PERSIST' in v_guard_def) = 0
+     or position('coalesce(new.sample_size, 0) < 240' in v_guard_def) = 0
+     or position('jsonb_array_length(new.features -> ''conditional_forecast'' -> ''horizons'') < 3' in v_guard_def) = 0
+     or position('MARKET-REGIME-OBSERVER-v2-C01-D3X2-T10-G0-C43-FULLMARKET' in v_guard_def) > 0 then
+    raise exception 'P10 market-risk influence guard is not the approved FULLMARKET+C43 definition';
+  end if;
+
+  select pg_get_triggerdef(t.oid, true)
+    into v_trigger_def
+  from pg_trigger t
+  join pg_class c on c.oid = t.tgrelid
+  join pg_namespace n on n.oid = c.relnamespace
+  join pg_proc p on p.oid = t.tgfoid
+  where n.nspname = 'public'
+    and c.relname = 'market_regime_observations'
+    and t.tgname = 'trg_guard_unvalidated_market_regime_influence'
+    and p.proname = 'guard_unvalidated_market_regime_influence'
+    and t.tgenabled <> 'D'
+    and not t.tgisinternal;
+
+  if v_trigger_def is null
+     or position('BEFORE INSERT OR UPDATE OF model_revision, trading_influence' in v_trigger_def) = 0 then
+    raise exception 'P10 market-risk influence trigger is missing, disabled, or malformed';
+  end if;
+end
+$$;
