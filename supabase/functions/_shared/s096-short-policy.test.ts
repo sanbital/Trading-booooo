@@ -4,6 +4,7 @@ import {
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  BINANCE_FUTURES_LIVE_QUALITY_GUARD,
   checkS096ShortSignal,
   evaluateS096ShortExit,
   isS096SignalEvidence,
@@ -36,6 +37,13 @@ function eligibleBars(): S096PreparedBar[] {
   bars[103].rsi14 = 42;
   bars[104].rsi14 = 41;
   bars[105].rsi14 = 40;
+  return bars;
+}
+
+function liveEligibleBars(): S096PreparedBar[] {
+  const bars = eligibleBars();
+  bars.at(-1)!.volumeRatio = 1.4;
+  bars.at(-1)!.efficiency24 = 0.4;
   return bars;
 }
 
@@ -80,10 +88,20 @@ Deno.test("S096 accepts the exact boundary fixture and freezes research score", 
   assertEquals(check.rsiPath, [40, 41, 42, 43]);
 });
 
-Deno.test("combined producer route emits S096 only on futures and never displaces LONG", () => {
+Deno.test("futures live quality guard thresholds are fail-closed and explicit", () => {
+  assertEquals(BINANCE_FUTURES_LIVE_QUALITY_GUARD.longMinRelativeRet24Pct, 2);
+  assertEquals(BINANCE_FUTURES_LIVE_QUALITY_GUARD.longMinEfficiency24, 0.25);
+  assertEquals(BINANCE_FUTURES_LIVE_QUALITY_GUARD.longMinVolumeRatio, 1.2);
+  assertEquals(BINANCE_FUTURES_LIVE_QUALITY_GUARD.longMinDirectionalCloseLocation, 0.74);
+  assertEquals(BINANCE_FUTURES_LIVE_QUALITY_GUARD.shortMinEfficiency24, 0.35);
+  assertEquals(BINANCE_FUTURES_LIVE_QUALITY_GUARD.shortMinVolumeRatio, 1.3);
+  assertEquals(BINANCE_FUTURES_LIVE_QUALITY_GUARD.shortMinDirectionalCloseLocation, 0.25);
+});
+
+Deno.test("combined producer route emits S096 only on futures and never displaces qualified LONG", () => {
   const short = selectCombinedLongS096Candidate({
     venue: "binance_futures",
-    bars: eligibleBars(),
+    bars: liveEligibleBars(),
     btcRet24Pct: 0,
     longCheck: null,
     longStrategyKey: "I46_HYBRID_SCORE_L1",
@@ -95,7 +113,6 @@ Deno.test("combined producer route emits S096 only on futures and never displace
   assertEquals(short.strategyKey, S096_SHORT_STRATEGY_KEY);
   assertEquals(short.strategyRevision, S096_SHORT_REVISION);
   assertEquals(short.stopAtr, 1.25);
-  assertEquals(short.check.score, 2.45);
 
   assertEquals(
     selectCombinedLongS096Candidate({
@@ -110,10 +127,10 @@ Deno.test("combined producer route emits S096 only on futures and never displace
     null,
   );
 
-  const longCheck = { score: 7, rel24: 1.2, dl: 0.8 };
+  const longCheck = { score: 7, rel24: 3.0, dl: 0.8 };
   const long = selectCombinedLongS096Candidate({
     venue: "binance_futures",
-    bars: eligibleBars(),
+    bars: liveEligibleBars(),
     btcRet24Pct: 0,
     longCheck,
     longStrategyKey: "I46_HYBRID_SCORE_L1",
@@ -128,7 +145,32 @@ Deno.test("combined producer route emits S096 only on futures and never displace
   assertEquals(long.stopAtr, 2);
 });
 
-Deno.test("frozen ETHUSDT research trade remains an executable S096 producer fixture", () => {
+Deno.test("production-valid research signals are blocked when live quality is weak", () => {
+  const weakShort = selectCombinedLongS096Candidate({
+    venue: "binance_futures",
+    bars: eligibleBars(),
+    btcRet24Pct: 0,
+    longCheck: null,
+    longStrategyKey: "I46_HYBRID_SCORE_L1",
+    longStrategyRevision: "I46-LIVE-1.0.0",
+    longStopAtr: 2,
+  });
+  assertEquals(weakShort, null);
+
+  const bars = liveEligibleBars();
+  const weakLong = selectCombinedLongS096Candidate({
+    venue: "binance_futures",
+    bars,
+    btcRet24Pct: 0,
+    longCheck: { score: 7, rel24: 1.99, dl: 0.9 },
+    longStrategyKey: "I46_HYBRID_SCORE_L1",
+    longStrategyRevision: "I46-LIVE-1.0.0",
+    longStopAtr: 2,
+  });
+  assertEquals(weakLong, null);
+});
+
+Deno.test("frozen ETHUSDT research trade remains executable when it also passes live quality", () => {
   const bars = eligibleBars();
   const rsi = [35.71407603383541, 34.32973995516818, 33.44738047933154, 26.66214572217369];
   for (let offset = 0; offset < rsi.length; offset++) {
@@ -195,7 +237,7 @@ Deno.test("S096 signal gate fails closed when any exact condition is broken", as
   }
 });
 
-Deno.test("S096 inclusive numeric boundaries remain eligible", () => {
+Deno.test("S096 inclusive numeric boundaries remain research-eligible", () => {
   for (
     const mutate of [
       (bars: S096PreparedBar[]) => bars.at(-1)!.atr14 = 0.15,
@@ -224,8 +266,6 @@ Deno.test("S096 entry is a 1.25 ATR stop and full 1.5R target", () => {
 });
 
 Deno.test("fixed SHORT exits ignore a stale pre-fill trailing stop", () => {
-  // A SELL FOK may fill above its limit. The entry RPC updates stop_price from the
-  // actual fill but leaves trailing_stop at its pre-fill value.
   assertEquals(resolveFixedShortCurrentStop(102.5, 101.5), 102.5);
 });
 
