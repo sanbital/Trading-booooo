@@ -8,6 +8,7 @@ export const S096_RESEARCH_PROTOCOL = "SHORT_V4_S37_PLUS_100_AUDITED_FINAL_REPLA
 export const S096_RESEARCH_REGISTRY_SHA256 =
   "7710581b06e91eef4dcdf2008f03e82a76c13406d3095811c50341f2d4598598";
 
+// Frozen research definition. Do not mutate these fields to tune production behavior.
 export const S096_SHORT_CONFIG = Object.freeze({
   stopAtr: 1.25,
   targetR: 1.5,
@@ -19,18 +20,23 @@ export const S096_SHORT_CONFIG = Object.freeze({
   minQuoteVolumeMean20: 500_000,
   minAtrPct: 0.15,
   maxAtrPct: 6.0,
-  // Production anti-chase bounds. Directional trend remains required, but an already
-  // capitulated asset must rebound/re-form before it can become a fresh SHORT candidate.
+  minRet24Pct: -20.0,
+  maxRet24Pct: -0.2,
+  minRsi14: 14.0,
+  maxRsi14: 40.0,
+  maxBtcRet24Pct: 0.0,
+  rsiFallingBars: 3,
+});
+
+// Live execution-quality overlay. Research identity stays frozen while production rejects
+// capitulation chasing that has shown negative realized expectancy in live fills.
+export const S096_LIVE_ENTRY_QUALITY_CONFIG = Object.freeze({
   minRet3Pct: -5.0,
   minRet6Pct: -8.0,
   minRet12Pct: -12.0,
   minRet24Pct: -12.0,
-  maxRet24Pct: -0.2,
   minRsi14: 30.0,
-  maxRsi14: 40.0,
   minCloseLocation: 0.15,
-  maxBtcRet24Pct: 0.0,
-  rsiFallingBars: 3,
 });
 
 export type S096PreparedBar = {
@@ -75,9 +81,9 @@ const finite = (value: unknown, fallback = 0) =>
 const pct = (now: number, before: number) => before > 0 ? (now / before - 1) * 100 : 0;
 
 /**
- * S096 keeps the audited research shape but adds production execution-quality guards.
+ * Applies the frozen S096 signal-bar rules plus a production anti-chase overlay.
  * The prior 14-RSI lower bound repeatedly admitted assets after most of the decline had
- * already happened; the new bounds require room for continuation instead of selling capitulation.
+ * already happened; live entries now require room for continuation instead of selling capitulation.
  */
 export function checkS096ShortSignal(
   bars: readonly S096PreparedBar[],
@@ -112,14 +118,7 @@ export function checkS096ShortSignal(
     return null;
   }
   if (S096_SHORT_CONFIG.stopAtr * atrPct > S096_SHORT_CONFIG.maxInitialRiskPct) return null;
-
-  const ret3Pct = pct(b.close, bars.at(-4)!.close);
-  const ret6Pct = pct(b.close, bars.at(-7)!.close);
-  const ret12Pct = pct(b.close, bars.at(-13)!.close);
   if (
-    ret3Pct < S096_SHORT_CONFIG.minRet3Pct ||
-    ret6Pct < S096_SHORT_CONFIG.minRet6Pct ||
-    ret12Pct < S096_SHORT_CONFIG.minRet12Pct ||
     b.ret24Pct < S096_SHORT_CONFIG.minRet24Pct ||
     b.ret24Pct > S096_SHORT_CONFIG.maxRet24Pct
   ) return null;
@@ -131,8 +130,19 @@ export function checkS096ShortSignal(
     return null;
   }
 
+  const ret3Pct = pct(b.close, bars.at(-4)!.close);
+  const ret6Pct = pct(b.close, bars.at(-7)!.close);
+  const ret12Pct = pct(b.close, bars.at(-13)!.close);
   const closeLocation = (b.close - b.low) / (b.high - b.low);
-  if (closeLocation < S096_SHORT_CONFIG.minCloseLocation) return null;
+  if (
+    ret3Pct < S096_LIVE_ENTRY_QUALITY_CONFIG.minRet3Pct ||
+    ret6Pct < S096_LIVE_ENTRY_QUALITY_CONFIG.minRet6Pct ||
+    ret12Pct < S096_LIVE_ENTRY_QUALITY_CONFIG.minRet12Pct ||
+    b.ret24Pct < S096_LIVE_ENTRY_QUALITY_CONFIG.minRet24Pct ||
+    b.rsi14 < S096_LIVE_ENTRY_QUALITY_CONFIG.minRsi14 ||
+    closeLocation < S096_LIVE_ENTRY_QUALITY_CONFIG.minCloseLocation
+  ) return null;
+
   return {
     score: -b.ret24Pct + b.volumeRatio * 0.25 + finite(b.efficiency24),
     rel24: btcRet24Pct - b.ret24Pct,
@@ -231,7 +241,6 @@ export function evaluateS096ShortExit(input: {
     finite(input.lastPolicyBarTime),
     finite(input.latestCompletedBarTime),
   );
-  // Stop-first matches the research engine's conservative same-bar collision rule.
   if (input.executablePrice >= input.currentStop) {
     return {
       action: "STOP",
