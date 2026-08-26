@@ -1,0 +1,133 @@
+name: P10 hotfix 2026-08-26
+
+on:
+  push:
+    branches:
+      - fix/p10-entry-timing-20260826
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: ${{ !contains(github.event.head_commit.message, '[p10-hotfix-generated]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/p10-entry-timing-20260826
+          fetch-depth: 0
+
+      - name: Patch autotrader timeout handling and I46 anti-chase
+        shell: python
+        run: |
+          from pathlib import Path
+
+          autotrader = Path('supabase/functions/market-autotrader/index.ts')
+          text = autotrader.read_text()
+
+          replacements = [
+              ('const VERSION = "8.0.1-P10-ENTRY-RECONCILIATION";',
+               'const VERSION = "8.0.2-P10-ENTRY-MARKET-GUARD";'),
+              ('async function p10FetchJson(url: string, timeoutMs = 3_500)',
+               'async function p10FetchJson(url: string, timeoutMs = 5_000)'),
+              ('p10FetchJson(url, 1_500)', 'p10FetchJson(url, 3_500)'),
+              ('const timer = setTimeout(() => controller.abort(), 1_000);',
+               'const timer = setTimeout(() => controller.abort(), 3_000);'),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'missing autotrader patch anchor: {old}')
+              text = text.replace(old, new)
+
+          old_catch = '''    } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              const action = {
+                action: "P10_MONITOR_ERROR",
+                exchange: position.exchange,
+                market: position.market,
+                error: message,
+              };
+              await event("P10_MONITOR_ERROR", message, {
+                strategy_key: P10_STRATEGY_KEY,
+                position_side: position.position_side,
+              }, { cycleId, positionId: position.id, level: "CRITICAL" });
+              return action;
+            }'''
+          new_catch = '''    } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              const abortLike = String((error as any)?.name || "") === "AbortError" ||
+                /signal has been aborted|aborterror|\\baborted\\b/i.test(message);
+              if (abortLike) {
+                const action = {
+                  action: "P10_MONITOR_DEFERRED",
+                  exchange: position.exchange,
+                  market: position.market,
+                  error: message,
+                };
+                await event("P10_MONITOR_DEFERRED", "transient monitor fetch timeout", {
+                  strategy_key: P10_STRATEGY_KEY,
+                  position_side: position.position_side,
+                  error: message,
+                }, { cycleId, positionId: position.id, level: "WARNING" });
+                return action;
+              }
+              const action = {
+                action: "P10_MONITOR_ERROR",
+                exchange: position.exchange,
+                market: position.market,
+                error: message,
+              };
+              await event("P10_MONITOR_ERROR", message, {
+                strategy_key: P10_STRATEGY_KEY,
+                position_side: position.position_side,
+              }, { cycleId, positionId: position.id, level: "CRITICAL" });
+              return action;
+            }'''
+          if old_catch not in text:
+              raise SystemExit('missing P10 monitor catch patch anchor')
+          text = text.replace(old_catch, new_catch, 1)
+          autotrader.write_text(text)
+
+          signal = Path('supabase/functions/market-v2-signal/index.ts')
+          text = signal.read_text()
+          anchor = '''  if (b.volumeRatio < 1 || r24 < .2 || r24 > 20 || dl < .58 || d * b.ema20Slope6Pct < 0) {
+            return null;
+          }
+          if ('''
+          replacement = '''  if (b.volumeRatio < 1 || r24 < .2 || r24 > 20 || dl < .58 || d * b.ema20Slope6Pct < 0) {
+            return null;
+          }
+          if (long && (
+            b.rsi14 > 68 || b.ret3Pct > 4.5 || b.ret6Pct > 7 || b.ret12Pct > 10 || cl > .92
+          )) return null;
+          if ('''
+          if anchor not in text:
+              raise SystemExit('missing I46 anti-chase patch anchor')
+          text = text.replace(anchor, replacement, 1)
+          signal.write_text(text)
+
+      - uses: denoland/setup-deno@v1
+        with:
+          deno-version: v2.x
+
+      - name: Run focused P10 tests
+        run: |
+          deno test --allow-read \
+            supabase/functions/_shared/p10-market-risk.test.ts \
+            supabase/functions/_shared/p10-market-risk-breadth.test.ts \
+            supabase/functions/_shared/s096-short-policy.test.ts \
+            supabase/functions/_shared/s096-live-antichase.test.ts \
+            supabase/functions/market-autotrader/monitor-concurrency.test.ts
+
+      - name: Commit generated source patches
+        run: |
+          if git diff --quiet; then
+            echo "No generated patch changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/market-autotrader/index.ts supabase/functions/market-v2-signal/index.ts
+          git commit -m "fix: [p10-hotfix-generated] harden entry timing and monitor timeouts"
+          git push origin HEAD:fix/p10-entry-timing-20260826
