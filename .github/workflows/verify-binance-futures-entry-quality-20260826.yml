@@ -1,0 +1,44 @@
+name: Verify Binance futures entry quality
+
+on:
+  pull_request:
+    paths:
+      - "supabase/functions/_shared/s096-short-policy.ts"
+      - "supabase/functions/_shared/s096-short-policy.test.ts"
+      - "supabase/functions/market-autotrader/final-entry-gate.ts"
+      - "supabase/functions/market-autotrader/final-entry-gate.test.ts"
+      - ".github/workflows/verify-binance-futures-entry-quality-20260826.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-entry-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out event revision
+        uses: actions/checkout@v4
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Format check
+        run: |
+          deno fmt --check \
+            supabase/functions/_shared/s096-short-policy.ts \
+            supabase/functions/_shared/s096-short-policy.test.ts \
+            supabase/functions/market-autotrader/final-entry-gate.ts \
+            supabase/functions/market-autotrader/final-entry-gate.test.ts
+
+      - name: Type-check regression tests
+        run: |
+          deno check supabase/functions/_shared/s096-short-policy.test.ts
+          deno check supabase/functions/market-autotrader/final-entry-gate.test.ts
+
+      - name: Run regression tests
+        run: |
+          deno test supabase/functions/_shared/s096-short-policy.test.ts
+          deno test supabase/functions/market-autotrader/final-entry-gate.test.ts
