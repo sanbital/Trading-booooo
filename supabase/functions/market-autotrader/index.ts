@@ -210,7 +210,7 @@ import {
 } from "../_shared/s096-short-policy.ts";
 
 // Order-gateway/scanner protocol version. Strategy identity is stored separately in metadata.
-const VERSION = "8.0.1-P10-ENTRY-RECONCILIATION";
+const VERSION = "8.0.2-P10-ENTRY-MARKET-GUARD";
 // Keep create-order commands compatible with the still-running v8.0.0 gateway during the
 // rolling deploy. The new gateway accepts both protocol revisions; a later release can
 // advance this only after every gateway reports v8.0.1.
@@ -10431,7 +10431,7 @@ async function loadP10MarketRiskObservations(): Promise<{
   error: string | null;
 }> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 1_000);
+  const timer = setTimeout(() => controller.abort(), 3_000);
   const since = new Date(Date.now() - P10_MARKET_RISK_CONFIG.historyMaxAgeMs).toISOString();
   try {
     const observations = await db(
@@ -11547,6 +11547,22 @@ async function monitorP10Positions(
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const abortLike = String((error as any)?.name || "") === "AbortError" ||
+        /signal has been aborted|aborterror|\baborted\b/i.test(message);
+      if (abortLike) {
+        const action = {
+          action: "P10_MONITOR_DEFERRED",
+          exchange: position.exchange,
+          market: position.market,
+          error: message,
+        };
+        await event("P10_MONITOR_DEFERRED", "transient monitor fetch timeout", {
+          strategy_key: P10_STRATEGY_KEY,
+          position_side: position.position_side,
+          error: message,
+        }, { cycleId, positionId: position.id, level: "WARNING" });
+        return action;
+      }
       const action = {
         action: "P10_MONITOR_ERROR",
         exchange: position.exchange,

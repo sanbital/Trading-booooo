@@ -448,6 +448,9 @@ function i46AssetCheck(b, p, s, side, v) {
   if (b.volumeRatio < 1 || r24 < .2 || r24 > 20 || dl < .58 || d * b.ema20Slope6Pct < 0) {
     return null;
   }
+  if (long && (
+    b.rsi14 > 68 || b.ret3Pct > 4.5 || b.ret6Pct > 7 || b.ret12Pct > 10 || cl > .92
+  )) return null;
   if (
     !(long ? b.close > b.open : b.close < b.open) ||
     !(long ? b.ema20 > b.ema50 : b.ema20 < b.ema50) ||
