@@ -11,7 +11,7 @@ export type P10MarketRiskStatus =
   | "CRITICAL_PERSIST"
   | "RECOVERED";
 
-export const P10_MARKET_RISK_REVISION = "P10-MARKET-RISK-1.0.0";
+export const P10_MARKET_RISK_REVISION = "P10-MARKET-RISK-1.1.0-BREADTH";
 
 export const P10_MARKET_RISK_CONFIG = Object.freeze({
   modelRevision: "MARKET-REGIME-OBSERVER-v2-C01-FULLMARKET",
@@ -30,6 +30,18 @@ export const P10_MARKET_RISK_CONFIG = Object.freeze({
   shortAdverseAtOrAbove: 58,
   shortExtremeAtOrAbove: 62,
   shortRecoveryAtOrBelow: 54,
+  // Current 30m futures breadth is an execution-time risk input, not merely telemetry.
+  // Require breadth and its clipped mean to agree so a tiny broad drift does not force exits.
+  longBreadthAdverseAtOrBelow: 0.30,
+  longBreadthAdverseMeanAtOrBelowPct: -0.20,
+  longBreadthExtremeAtOrBelow: 0.18,
+  longBreadthExtremeMeanAtOrBelowPct: -0.35,
+  longBreadthRecoveryAtOrAbove: 0.40,
+  shortBreadthAdverseAtOrAbove: 0.70,
+  shortBreadthAdverseMeanAtOrAbovePct: 0.20,
+  shortBreadthExtremeAtOrAbove: 0.82,
+  shortBreadthExtremeMeanAtOrAbovePct: 0.35,
+  shortBreadthRecoveryAtOrBelow: 0.60,
   partialConfirmations: 2,
   persistentConfirmations: 4,
   partialFraction: 0.50,
@@ -64,6 +76,8 @@ export interface P10MarketRiskAudit {
     confidence: number;
     sample_size: number;
     phase: string | null;
+    futures_positive_fraction_30m: number | null;
+    futures_clipped_mean_pct_30m: number | null;
   } | null;
   source_error: string | null;
 }
@@ -101,6 +115,17 @@ const finite = (value: unknown, fallback = Number.NaN) => {
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function futuresBreadth30(row: NormalizedObservation) {
+  const breadth30 = record(row.features.breadth_30m);
+  const futures = record(breadth30.binance_futures);
+  const positiveFraction = finite(futures.positive_fraction);
+  const clippedMeanPct = finite(futures.clipped_mean_pct);
+  return {
+    positiveFraction: Number.isFinite(positiveFraction) ? positiveFraction : null,
+    clippedMeanPct: Number.isFinite(clippedMeanPct) ? clippedMeanPct : null,
+  };
 }
 
 function normalizeObservation(
@@ -160,25 +185,55 @@ function normalizeObservations(
     });
 }
 
+function isBreadthAdverse(row: NormalizedObservation, side: P10MarketRiskSide) {
+  const breadth = futuresBreadth30(row);
+  if (breadth.positiveFraction === null || breadth.clippedMeanPct === null) return false;
+  return side === "LONG"
+    ? breadth.positiveFraction <= P10_MARKET_RISK_CONFIG.longBreadthAdverseAtOrBelow &&
+      breadth.clippedMeanPct <= P10_MARKET_RISK_CONFIG.longBreadthAdverseMeanAtOrBelowPct
+    : breadth.positiveFraction >= P10_MARKET_RISK_CONFIG.shortBreadthAdverseAtOrAbove &&
+      breadth.clippedMeanPct >= P10_MARKET_RISK_CONFIG.shortBreadthAdverseMeanAtOrAbovePct;
+}
+
+function isBreadthExtreme(row: NormalizedObservation, side: P10MarketRiskSide) {
+  const breadth = futuresBreadth30(row);
+  if (breadth.positiveFraction === null || breadth.clippedMeanPct === null) return false;
+  return side === "LONG"
+    ? breadth.positiveFraction <= P10_MARKET_RISK_CONFIG.longBreadthExtremeAtOrBelow &&
+      breadth.clippedMeanPct <= P10_MARKET_RISK_CONFIG.longBreadthExtremeMeanAtOrBelowPct
+    : breadth.positiveFraction >= P10_MARKET_RISK_CONFIG.shortBreadthExtremeAtOrAbove &&
+      breadth.clippedMeanPct >= P10_MARKET_RISK_CONFIG.shortBreadthExtremeMeanAtOrAbovePct;
+}
+
 function isAdverse(row: NormalizedObservation, side: P10MarketRiskSide) {
   if (row.confidence < P10_MARKET_RISK_CONFIG.minimumConfidence) return false;
-  return side === "LONG"
+  const structural = side === "LONG"
     ? row.regime === "RISK_OFF" && row.bullScore < P10_MARKET_RISK_CONFIG.longAdverseBelow
     : (row.regime === "BULL" || row.regime === "STRONG_BULL") &&
       row.bullScore >= P10_MARKET_RISK_CONFIG.shortAdverseAtOrAbove;
+  return structural || isBreadthAdverse(row, side);
 }
 
 function isExtreme(row: NormalizedObservation, side: P10MarketRiskSide) {
   if (row.confidence < P10_MARKET_RISK_CONFIG.extremeConfidence) return false;
-  return side === "LONG"
+  const structural = side === "LONG"
     ? row.bullScore <= P10_MARKET_RISK_CONFIG.longExtremeAtOrBelow
     : row.bullScore >= P10_MARKET_RISK_CONFIG.shortExtremeAtOrAbove;
+  return structural || isBreadthExtreme(row, side);
 }
 
 function isRecovered(row: NormalizedObservation, side: P10MarketRiskSide) {
-  return side === "LONG"
-    ? row.bullScore >= P10_MARKET_RISK_CONFIG.longRecoveryAtOrAbove
-    : row.bullScore <= P10_MARKET_RISK_CONFIG.shortRecoveryAtOrBelow;
+  const breadth = futuresBreadth30(row);
+  if (side === "LONG") {
+    const breadthRecovered = breadth.positiveFraction === null ||
+      breadth.positiveFraction >= P10_MARKET_RISK_CONFIG.longBreadthRecoveryAtOrAbove;
+    return row.bullScore >= P10_MARKET_RISK_CONFIG.longRecoveryAtOrAbove &&
+      breadthRecovered && !isBreadthAdverse(row, side);
+  }
+  const breadthRecovered = breadth.positiveFraction === null ||
+    breadth.positiveFraction <= P10_MARKET_RISK_CONFIG.shortBreadthRecoveryAtOrBelow;
+  return row.bullScore <= P10_MARKET_RISK_CONFIG.shortRecoveryAtOrBelow &&
+    breadthRecovered && !isBreadthAdverse(row, side);
 }
 
 function contiguousCount(
@@ -220,7 +275,7 @@ function hasConfirmedLongHorizonAdverse(
   return forecastRows(row).some((forecast) => {
     const horizon = finite(forecast.horizon_minutes);
     const confidence = String(forecast.confidence || "").toUpperCase();
-    const probability = finite(forecast.probability);
+    const probability = finite(forecast.probability ?? forecast.direction_probability);
     return (horizon === 120 || horizon === 360) &&
       String(forecast.direction || "").toUpperCase() === direction &&
       (confidence === "MEDIUM" || confidence === "HIGH") &&
@@ -240,6 +295,7 @@ function makeDecision(
 ): P10MarketRiskDecision {
   const latest = rows[0] || null;
   const phase = latest ? record(latest.features.momentum_phase) : {};
+  const breadth = latest ? futuresBreadth30(latest) : null;
   return {
     action,
     reason,
@@ -261,6 +317,8 @@ function makeDecision(
           confidence: latest.confidence,
           sample_size: latest.sampleSize,
           phase: typeof phase.phase === "string" ? phase.phase : null,
+          futures_positive_fraction_30m: breadth?.positiveFraction ?? null,
+          futures_clipped_mean_pct_30m: breadth?.clippedMeanPct ?? null,
         }
         : null,
       source_error: sourceError ? sourceError.slice(0, 240) : null,
