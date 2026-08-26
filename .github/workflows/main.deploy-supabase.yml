@@ -193,6 +193,12 @@ jobs:
             --set=ON_ERROR_STOP=1 \
             --single-transaction \
             --file supabase/migrations/20260821110000_p10_live_cutover.sql
+          # Restore the monotonic entry contract immediately after the base cutover RPC;
+          # no later migration in this replay window may expose the legacy cancel-on-unknown path.
+          psql "${SUPABASE_DB_URL}" \
+            --set=ON_ERROR_STOP=1 \
+            --single-transaction \
+            --file supabase/migrations/20260826094500_p10_entry_reconciliation_invariants.sql
           # The live-cutover migration carries the base P10 exit RPC. Always replay
           # the market-risk overlay after it so one-time defensive partial exits keep
           # their durable marker instead of repeating on every monitor cycle.

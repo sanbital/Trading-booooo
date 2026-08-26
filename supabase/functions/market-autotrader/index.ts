@@ -152,6 +152,12 @@ import {
   P10_SCAN_PORTFOLIO_CONCURRENCY,
 } from "./monitor-concurrency.ts";
 import { shouldLoadCompletedPolicyBar } from "./p10-monitor-cadence.ts";
+import {
+  p10EntryFailureDisposition,
+  p10EntryOrderDisposition,
+  summarizeP10LinkedEntryFills,
+  untrackedFuturesExposures,
+} from "./p10-entry-reconciliation.ts";
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 import { loadMinuteEntryGate } from "../_shared/lob/minute-entry-market.ts";
@@ -204,7 +210,11 @@ import {
 } from "../_shared/s096-short-policy.ts";
 
 // Order-gateway/scanner protocol version. Strategy identity is stored separately in metadata.
-const VERSION = "8.0.0-P10-DONCHIAN-SLOW4R";
+const VERSION = "8.0.1-P10-ENTRY-RECONCILIATION";
+// Keep create-order commands compatible with the still-running v8.0.0 gateway during the
+// rolling deploy. The new gateway accepts both protocol revisions; a later release can
+// advance this only after every gateway reports v8.0.1.
+const ORDER_GATEWAY_PROTOCOL_VERSION = "8.0.0-P10-DONCHIAN-SLOW4R";
 const P10_FAST_GATEWAY_TIMEOUT_MS = 1_900;
 // Must match BOT_IDENTIFIER_PREFIX in gateway/server.mjs and the prefix used by uniqueId().
 const BOT_ORDER_PREFIX = "tb-";
@@ -646,7 +656,7 @@ async function gatewayOnce(
 
 async function gateway(exchange: Exchange, command: JsonRecord, timeoutMs = 15_000): Promise<any> {
   const versionedCommand = String(command?.action || "") === "create_order"
-    ? { ...command, engine_version: VERSION }
+    ? { ...command, engine_version: ORDER_GATEWAY_PROTOCOL_VERSION }
     : command;
   try {
     return await gatewayOnce(exchange, versionedCommand, timeoutMs);
@@ -6692,6 +6702,7 @@ async function reconcileEntryPending(
       action: "get_order",
       identifier: orderRow.identifier,
       market: position.market,
+      exchange_order_id: orderRow.exchange_order_id || null,
     });
     const updated = await updateOrderFromGateway(orderRow, order);
     if (finite(updated.fill.executedVolume) > 0 && finite(updated.fill.averagePrice) > 0) {
@@ -7015,14 +7026,30 @@ async function tryCompleteEmergencyLiquidation(cycleId: string) {
 
 async function monitorCycle(cycleId: string, settings: TradingSettings & JsonRecord) {
   const monitorStartedAt = performance.now();
-  const allTracked = await db(
-    "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*&order=created_at.asc",
-  ) as Position[];
+  const recoverySince = new Date(Date.now() - 7 * 24 * 60 * 60_000).toISOString();
+  const [allTracked, terminalRecoveryRows] = await Promise.all([
+    db(
+      "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*&order=created_at.asc",
+    ) as Promise<Position[]>,
+    db(
+      `trading_positions?strategy_key=eq.${encodeURIComponent(P10_STRATEGY_KEY)}` +
+        "&is_paper=eq.false&state=in.(CANCELLED,ERROR)" +
+        "&trading_orders.purpose=eq.ENTRY&trading_orders.executed_volume=gt.0" +
+        `&created_at=gte.${encodeURIComponent(recoverySince)}` +
+        "&select=*,trading_orders!inner(id)&order=created_at.asc&limit=100",
+    ).catch(() => []) as Promise<Position[]>,
+  ]);
   const positionsLoadedAt = performance.now();
   // P10 has direction-aware futures accounting and hourly close-confirmed exits. Keep it
   // out of the legacy spot-shaped reconciliation/exit loop and manage it first.
   const p10Result = await monitorP10Positions(
-    allTracked.filter(isP10Position),
+    [
+      ...allTracked.filter(isP10Position),
+      ...(terminalRecoveryRows || []).filter((row) =>
+        !row.metadata?.p10_entry_terminal_verified_at &&
+        !allTracked.some((active) => active.id === row.id)
+      ),
+    ],
     settings,
     cycleId,
   );
@@ -9333,7 +9360,11 @@ async function applyP10EntryAccounting(
     ),
     p_initial_risk: plan.initialRisk,
   });
-  return result?.position || position;
+  return {
+    applied: result?.applied === true,
+    position: result?.position || position,
+    order: result?.order || orderRow,
+  };
 }
 
 async function enterP10Signal(
@@ -9726,48 +9757,83 @@ async function enterP10Signal(
       wait_for_final_ms: 4000,
     }, 20_000);
     const updated = await updateOrderFromGateway(orderRow, result);
-    if (!(finite(updated.fill.executedVolume) > 0 && finite(updated.fill.averagePrice) > 0)) {
-      if (["OPEN", "PARTIALLY_FILLED"].includes(String(updated.order?.status))) {
-        return {
-          entered: false,
-          reserved: true,
-          pending_reconcile: true,
-          exchange,
-          market: signal.market,
-          position,
-          reason: "P10 entry order still reconciling",
-        };
+    const entryDisposition = p10EntryOrderDisposition({
+      status: updated.order?.status,
+      executedVolume: updated.fill.executedVolume,
+      averagePrice: updated.fill.averagePrice,
+    });
+    if (entryDisposition !== "APPLY") {
+      // A definitive zero-fill FOK/IOC still gets one fill+position cross-check and
+      // suppresses the rest of this scan, but it is not a global incident by itself.
+      // Unknown or positive-but-incomplete execution evidence is globally latched.
+      if (entryDisposition === "RECONCILE") {
+        await latchP10EntrySafety("P10_ENTRY_RECONCILIATION_REQUIRED");
       }
-      await patch("trading_positions", `id=eq.${position.id}`, {
-        state: "CANCELLED",
-        reserved_quote: 0,
-        reserved_quantity: 0,
-        reservation_expires_at: null,
-        close_reason: "P10_ENTRY_NOT_FILLED",
-        closed_at: new Date().toISOString(),
+      const reconciled = await patch("trading_positions", `id=eq.${position.id}`, {
+        state: "RECONCILING",
+        metadata: {
+          ...(position.metadata || {}),
+          reconciliation_phase: "ENTRY",
+          p10_entry_reconciliation_started_at: new Date().toISOString(),
+          p10_entry_last_order_status: String(updated.order?.status || "UNKNOWN"),
+          p10_entry_known_executed_volume: finite(updated.fill.executedVolume),
+          p10_entry_accounting_detail_pending: true,
+          p10_entry_terminal_zero_fill_candidate: entryDisposition === "NOT_FILLED",
+        },
       });
-      await rejectP10Claim(claimId, "P10 entry not filled");
-      return { entered: false, exchange, market: signal.market, reason: "P10 entry not filled" };
+      await event(
+        entryDisposition === "NOT_FILLED"
+          ? "P10_ENTRY_TERMINAL_VERIFYING"
+          : "P10_ENTRY_RECONCILING",
+        `${exchange}:${signal.market} entry requires fill and position reconciliation`,
+        {
+          identifier,
+          side,
+          order_status: updated.order?.status || null,
+          executed_volume: finite(updated.fill.executedVolume),
+          average_price: finite(updated.fill.averagePrice),
+        },
+        { cycleId, positionId: position.id, orderId: orderRow.id, level: "WARNING" },
+      );
+      return {
+        entered: false,
+        reserved: true,
+        pending_reconcile: true,
+        exchange,
+        market: signal.market,
+        position: { ...position, ...(reconciled[0] || {}) },
+        reason: "P10 entry order still reconciling",
+      };
     }
-    const opened = await applyP10EntryAccounting(
+    const accounting = await applyP10EntryAccounting(
       position,
       orderRow,
       updated.order,
       updated.fill,
       signal,
     );
-    await event("P10_LIVE_ENTRY", `${exchange}:${signal.market} ${side} live entry`, {
-      strategy_key: P10_STRATEGY_KEY,
-      side,
-      exchange_order_id: updated.order?.exchange_order_id || null,
-      fill_price: updated.fill.averagePrice,
-      quantity: updated.fill.executedVolume,
-      margin_quote: actualCapital,
-      notional_quote: updated.fill.executedFunds,
-      stop_price: opened.stop_price,
-      partial_target: opened.target_1,
-      final_target: opened.target_2,
-    }, { cycleId, positionId: position.id, orderId: orderRow.id });
+    const opened = accounting.position;
+    if (!accounting.applied && !["OPEN", "EXITING", "CLOSED"].includes(opened.state)) {
+      throw new Error("P10 entry accounting did not reach a managed lifecycle state");
+    }
+    // The accounting RPC is the commit boundary. Audit/event delivery is ancillary and
+    // must never route a committed OPEN position through the uncertainty catch below.
+    try {
+      await event("P10_LIVE_ENTRY", `${exchange}:${signal.market} ${side} live entry`, {
+        strategy_key: P10_STRATEGY_KEY,
+        side,
+        exchange_order_id: updated.order?.exchange_order_id || null,
+        fill_price: updated.fill.averagePrice,
+        quantity: updated.fill.executedVolume,
+        margin_quote: actualCapital,
+        notional_quote: updated.fill.executedFunds,
+        stop_price: opened.stop_price,
+        partial_target: opened.target_1,
+        final_target: opened.target_2,
+      }, { cycleId, positionId: position.id, orderId: orderRow.id });
+    } catch (eventError) {
+      console.error("P10_LIVE_ENTRY_EVENT_FAILED", eventError);
+    }
     return {
       entered: true,
       paper: false,
@@ -9780,7 +9846,12 @@ async function enterP10Signal(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const status = Number((error as any)?.status || 0);
-    if (status >= 400 && status < 500) {
+    const failureDisposition = p10EntryFailureDisposition({
+      status,
+      code: (error as any)?.code,
+      message,
+    });
+    if (failureDisposition === "REJECTED") {
       await patch("trading_orders", `id=eq.${orderRow.id}`, {
         state: "REJECTED",
         error_message: message,
@@ -9797,10 +9868,25 @@ async function enterP10Signal(
       await rejectP10Claim(claimId, message);
       return { entered: false, exchange, market: signal.market, reason: message };
     }
-    await patch("trading_orders", `id=eq.${orderRow.id}`, {
+    await latchP10EntrySafety("P10_ENTRY_RECONCILIATION_REQUIRED");
+    await patch("trading_orders", `id=eq.${orderRow.id}&state=neq.APPLIED`, {
       state: "UNKNOWN",
       error_message: message,
     });
+    const reconciling = await patch(
+      "trading_positions",
+      `id=eq.${position.id}&state=in.(ENTRY_PENDING,RECONCILING,RECONCILIATION_FAILED)`,
+      {
+        state: "RECONCILING",
+        metadata: {
+          ...(position.metadata || {}),
+          reconciliation_phase: "ENTRY",
+          p10_entry_reconciliation_started_at: new Date().toISOString(),
+          p10_entry_last_error: message,
+          p10_entry_last_error_code: (error as any)?.code || null,
+        },
+      },
+    );
     await event(
       "P10_ENTRY_RESULT_UNKNOWN",
       `${exchange}:${signal.market} entry requires reconciliation`,
@@ -9817,6 +9903,7 @@ async function enterP10Signal(
       pending_reconcile: true,
       exchange,
       market: signal.market,
+      position: { ...position, ...(reconciling[0] || {}) },
       reason: "P10 entry result unknown; duplicate suppressed",
     };
   }
@@ -9847,18 +9934,35 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
   // Fan out only the three independent, read-only venue portfolio calls.  The DB-heavy
   // managed/account-stat/circuit pipeline below intentionally remains ordered, avoiding a
   // burst of roughly thirty PostgREST reads that would contend with the two-second risk lane.
+  const portfolioExchanges = exchanges.includes("binance_futures")
+    ? exchanges
+    : [...exchanges, "binance_futures" as Exchange];
   const portfolioLoads = await mapConcurrentOrdered(
-    exchanges,
+    portfolioExchanges,
     async (exchange) => {
-      const raw = await gateway(exchange, { action: "portfolio" });
-      return { exchange, raw, capturedAt: new Date().toISOString() };
+      try {
+        const raw = await gateway(exchange, { action: "portfolio" });
+        return { exchange, raw, capturedAt: new Date().toISOString(), error: null };
+      } catch (error) {
+        if (exchanges.includes(exchange)) throw error;
+        return {
+          exchange,
+          raw: null,
+          capturedAt: new Date().toISOString(),
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
     },
     P10_SCAN_PORTFOLIO_CONCURRENCY,
   );
-  for (const { exchange, raw, capturedAt } of portfolioLoads) {
+  let futuresObservationError: string | null = null;
+  for (const { exchange, raw, capturedAt, error } of portfolioLoads) {
+    if (exchange === "binance_futures" && error) futuresObservationError = error;
+    if (error) continue;
     portfolios[exchange] = raw;
     // Snapshot age belongs to the exchange response, not to its later ordered processing.
     portfolioCapturedAt[exchange] = capturedAt;
+    if (!exchanges.includes(exchange)) continue;
     const managed = await managedPortfolio(settings, exchange, raw);
     stats[exchange] = await accountStats(
       exchange,
@@ -9928,6 +10032,63 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
   const maintenancePositions = await db(
     "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*",
   ) as Position[];
+  if (futuresObservationError) {
+    const safetyReason = "P10_FUTURES_EXPOSURE_OBSERVATION_FAILED";
+    const newlyLatched = await latchP10EntrySafety(safetyReason);
+    if (newlyLatched) {
+      await event(
+        safetyReason,
+        "Binance Futures exposure could not be verified; entries are paused",
+        { error: futuresObservationError, strategy_key: P10_STRATEGY_KEY },
+        { cycleId, level: "CRITICAL" },
+      );
+    }
+    await patchTradingHeartbeat({ lastFullScanAt: new Date().toISOString() });
+    return {
+      skipped: true,
+      strategy_key: P10_STRATEGY_KEY,
+      reason: safetyReason,
+      error: futuresObservationError,
+    };
+  }
+  const futuresPortfolio = portfolios.binance_futures;
+  const untrackedFutures = futuresPortfolio
+    ? untrackedFuturesExposures(
+      Array.isArray(futuresPortfolio.positions) ? futuresPortfolio.positions : [],
+      maintenancePositions
+        .filter((position) => position.exchange === "binance_futures" && !position.is_paper)
+        .map((position) => ({
+          market: position.market,
+          side: position.position_side,
+          quantity: Math.max(
+            finite(position.remaining_quantity),
+            finite((position as any).reserved_quantity),
+          ),
+        })),
+    )
+    : [];
+  if (untrackedFutures.length) {
+    const safetyReason = "P10_UNTRACKED_FUTURES_EXPOSURE";
+    const newlyLatched = await latchP10EntrySafety(safetyReason);
+    if (newlyLatched) {
+      await event(
+        safetyReason,
+        "Binance Futures exposure has no active directional database position",
+        { exposures: untrackedFutures, strategy_key: P10_STRATEGY_KEY },
+        { cycleId, level: "CRITICAL" },
+      );
+    }
+    await patchTradingHeartbeat({
+      lastFullScanAt: new Date().toISOString(),
+      lastGatewayHeartbeatAt: new Date().toISOString(),
+    });
+    return {
+      skipped: true,
+      strategy_key: P10_STRATEGY_KEY,
+      reason: safetyReason,
+      untracked_futures_exposures: untrackedFutures,
+    };
+  }
   const snapshotPositions = maintenancePositions.filter((position) => position.state === "OPEN");
   const legacyMaintenancePositions = maintenancePositions.filter((position) =>
     !isP10Position(position)
@@ -10136,8 +10297,18 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
       if (result.entered || result.reserved) {
         activeMarkets.add(`${exchange}:${signal.market}`);
       }
+      if (result.pending_reconcile) break;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      try {
+        await latchP10EntrySafety("P10_ENTRY_RECONCILIATION_REQUIRED");
+      } catch (latchError) {
+        throw new Error(
+          `P10 entry failed and safety latch could not be persisted: ${message}; ${
+            latchError instanceof Error ? latchError.message : String(latchError)
+          }`,
+        );
+      }
       entries.push({
         entered: false,
         exchange,
@@ -10152,6 +10323,9 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
         side: signal.side,
         signal_time: signal.signal_time,
       }, { cycleId, level: "CRITICAL" });
+      // Any exception after a P10 claim/order attempt is fail-closed for this scan. The
+      // next cycle can continue only after durable state and the global latch are visible.
+      break;
     }
   }
   const heartbeatAt = new Date().toISOString();
@@ -10303,44 +10477,565 @@ async function applyP10ExitAccounting(
   });
 }
 
+async function latchP10EntrySafety(reason: string) {
+  const result = await rpc("latch_p10_entry_safety", { p_reason: reason });
+  return result?.changed === true;
+}
+
+async function loadP10LinkedEntryFills(position: Position, orderRow: any) {
+  const exchangeOrderId = String(orderRow.exchange_order_id || "");
+  const identifier = String(orderRow.identifier || "");
+  const select =
+    "id,exchange,market,bot_order_id,exchange_order_id,client_order_id,side,price,quantity,quote_amount,fee_quote_amount,fee_amount,fee_asset,executed_at,exchange_trade_id,raw_response";
+  const scope = `exchange=eq.${encodeURIComponent(position.exchange)}` +
+    `&market=eq.${encodeURIComponent(position.market)}`;
+  const identityQueries = [
+    `exchange_trade_fills?${scope}&bot_order_id=eq.${orderRow.id}&select=${select}`,
+    ...(exchangeOrderId
+      ? [
+        `exchange_trade_fills?${scope}` +
+        `&exchange_order_id=eq.${encodeURIComponent(exchangeOrderId)}` +
+        `&select=${select}`,
+      ]
+      : []),
+    ...(identifier
+      ? [
+        `exchange_trade_fills?${scope}` +
+        `&client_order_id=eq.${encodeURIComponent(identifier)}` +
+        `&select=${select}`,
+      ]
+      : []),
+  ];
+  const [identityResults, positionRows] = await Promise.all([
+    Promise.all(identityQueries.map((path) => db(path) as Promise<any[]>)),
+    db(
+      `exchange_trade_fills?position_id=eq.${position.id}&select=${select}` +
+        "&order=executed_at.asc,exchange_trade_id.asc&limit=1000",
+    ) as Promise<any[]>,
+  ]);
+  const linkedByTradeId = new Map<string, any>();
+  for (const row of identityResults.flat()) {
+    if (
+      String(row.exchange || "") !== String(position.exchange) ||
+      String(row.market || "").toUpperCase() !== String(position.market).toUpperCase()
+    ) {
+      throw new Error("linked entry fill escaped its exchange/market scope");
+    }
+    const key = row.id
+      ? `id:${row.id}`
+      : `trade:${row.exchange_trade_id}:${row.executed_at}:${row.price}:${row.quantity}`;
+    linkedByTradeId.set(key, row);
+  }
+  const linked = [...linkedByTradeId.values()].sort((a, b) =>
+    String(a.executed_at || "").localeCompare(String(b.executed_at || "")) ||
+    String(a.exchange_trade_id || "").localeCompare(String(b.exchange_trade_id || ""))
+  );
+  const entrySide = p10EntrySide(String(position.position_side || "LONG") as P10Side);
+  return {
+    rows: linked,
+    opposingRows: (positionRows || []).filter((row) =>
+      String(row.side || "").toUpperCase() !== entrySide && finite(row.quantity) > 0
+    ),
+    summary: summarizeP10LinkedEntryFills(linked, entrySide),
+  };
+}
+
+async function p10EntryExposureProof(position: Position, expectedQuantity: number) {
+  const portfolio = await p10PositionPortfolio(position.exchange);
+  const exchangeQuantity = p10ExchangeQuantity(position, portfolio);
+  const exchangePosition = position.exchange === "binance_futures"
+    ? (Array.isArray(portfolio?.positions) ? portfolio.positions : []).find((item: any) =>
+      String(item?.market || "").toUpperCase() === String(position.market).toUpperCase() &&
+      String(item?.side || "").toUpperCase() === String(position.position_side).toUpperCase()
+    )
+    : null;
+  const tolerance = Math.max(0.000000000001, finite(position.quantity_step) / 2);
+  return {
+    exchangeQuantity,
+    entryPrice: Math.max(0, finite(exchangePosition?.entry_price)),
+    tolerance,
+    matches: expectedQuantity > 0 && Math.abs(exchangeQuantity - expectedQuantity) <= tolerance,
+  };
+}
+
+async function p10TerminalEntryRecoveryBlockReason(
+  position: Position,
+  orderRow: any,
+  durable: Awaited<ReturnType<typeof loadP10LinkedEntryFills>>,
+  exposure: Awaited<ReturnType<typeof p10EntryExposureProof>>,
+) {
+  const hasTerminalHistory = ["CANCELLED", "ERROR"].includes(position.state) ||
+    ["CANCELLED", "ERROR"].includes(
+      String(position.metadata?.p10_entry_previous_terminal_state || ""),
+    );
+  if (!hasTerminalHistory) return null;
+  if (position.exchange !== "binance_futures") {
+    return "automatic terminal recovery is restricted to direction-aware futures evidence";
+  }
+  if (!durable.summary.valid) return "terminal recovery requires durable entry fills";
+  if (durable.opposingRows.length) return "linked opposing fills exist after the entry";
+
+  const siblings = await db(
+    `trading_positions?exchange=eq.${position.exchange}` +
+      `&market=eq.${encodeURIComponent(position.market)}` +
+      `&id=neq.${position.id}` +
+      "&state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)" +
+      "&select=id&limit=1",
+  ) as any[];
+  if (siblings.length) return `active sibling position ${siblings[0].id} exists`;
+
+  if (!(exposure.entryPrice > 0)) return "live futures entry price is unavailable";
+  const priceTolerance = Math.max(
+    finite(position.tick_size) * 1.01,
+    durable.summary.averagePrice * 0.000001,
+  );
+  if (Math.abs(exposure.entryPrice - durable.summary.averagePrice) > priceTolerance) {
+    return "live entry price does not match the durable fill VWAP";
+  }
+
+  const executedAt = durable.summary.executedAt;
+  if (!executedAt) return "durable entry fill time is unavailable";
+  const opposingSide = p10ExitSide(String(position.position_side || "LONG") as P10Side);
+  const laterOpposing = await db(
+    `exchange_trade_fills?exchange=eq.${position.exchange}` +
+      `&market=eq.${encodeURIComponent(position.market)}` +
+      `&side=eq.${opposingSide}` +
+      `&executed_at=gte.${encodeURIComponent(executedAt)}` +
+      "&select=id&limit=1",
+  ) as any[];
+  if (laterOpposing.length) return "later opposing market fill breaks terminal entry lineage";
+
+  const orderId = String(orderRow.exchange_order_id || "");
+  if (!orderId && !String(orderRow.identifier || "")) {
+    return "entry order has no durable exchange identifier";
+  }
+  return null;
+}
+
+async function markP10EntryReconciling(
+  position: Position,
+  orderRow: any,
+  cycleId: string,
+  reason: string,
+  evidence: JsonRecord = {},
+) {
+  const safetyReason = "P10_ENTRY_RECONCILIATION_REQUIRED";
+  const newlyLatched = await latchP10EntrySafety(safetyReason);
+  const now = new Date().toISOString();
+  const rows = await patch(
+    "trading_positions",
+    `id=eq.${position.id}&state=in.(ENTRY_PENDING,RECONCILING,RECONCILIATION_FAILED,CANCELLED,ERROR)`,
+    {
+      state: "RECONCILING",
+      closed_at: null,
+      close_reason: null,
+      metadata: {
+        ...(position.metadata || {}),
+        reconciliation_phase: "ENTRY",
+        p10_entry_reconciliation_started_at:
+          position.metadata?.p10_entry_reconciliation_started_at ||
+          now,
+        p10_entry_reconciliation_checked_at: now,
+        p10_entry_reconciliation_reason: reason,
+        p10_entry_previous_terminal_state: ["CANCELLED", "ERROR"].includes(position.state)
+          ? position.state
+          : position.metadata?.p10_entry_previous_terminal_state || null,
+        p10_entry_previous_close_reason: position.close_reason ||
+          position.metadata?.p10_entry_previous_close_reason || null,
+        ...evidence,
+      },
+    },
+  );
+  if (newlyLatched || position.metadata?.p10_entry_reconciliation_reason !== reason) {
+    await event(
+      "P10_ENTRY_RECONCILIATION_REQUIRED",
+      `${position.exchange}:${position.market} entry remains uncertain; entries are paused`,
+      { reason, safety_newly_latched: newlyLatched, ...evidence },
+      { cycleId, positionId: position.id, orderId: orderRow.id, level: "CRITICAL" },
+    );
+  }
+  if (rows[0]) return rows[0];
+  const current = await db(`trading_positions?id=eq.${position.id}&select=*&limit=1`).catch(
+    () => [],
+  );
+  return current?.[0] || position;
+}
+
+async function applyP10RecoveredEntry(
+  position: Position,
+  orderRow: any,
+  gatewayOrder: any,
+  fill: {
+    executedVolume: number;
+    executedFunds: number;
+    averagePrice: number;
+    paidFeeQuote: number;
+    feeAsset?: string | null;
+    feeQuoteComplete?: boolean;
+    executedAt?: string | null;
+  },
+  linkedRows: any[],
+  cycleId: string,
+  source: "ORDER" | "EXCHANGE_FILLS",
+) {
+  const signal = position.metadata?.p10_signal as P10SignalRow;
+  const accounting = await applyP10EntryAccounting(
+    position,
+    orderRow,
+    gatewayOrder,
+    fill,
+    signal,
+  );
+  const opened = accounting.position;
+  if (!accounting.applied && !["OPEN", "EXITING", "CLOSED"].includes(opened.state)) {
+    throw new Error("P10 recovered entry accounting did not reach a managed lifecycle state");
+  }
+  // Once the RPC commits, lifecycle state is monotonic and belongs to the RPC alone.
+  // Every write below is ancillary and isolated so an audit/ledger outage cannot demote
+  // an OPEN position or resurrect one that already advanced to EXITING/CLOSED.
+  const ancillaryErrors: Array<{ stage: string; error: string }> = [];
+  const ancillary = async (stage: string, operation: () => Promise<unknown>) => {
+    try {
+      await operation();
+    } catch (error) {
+      ancillaryErrors.push({
+        stage,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+  if (linkedRows.length) {
+    const normalizedRows = linkedRows.map((row: any) => ({
+      order_id: orderRow.id,
+      trade_id: String(row.exchange_trade_id),
+      price: finite(row.price),
+      volume: finite(row.quantity),
+      funds_quote: row.quote_amount == null
+        ? finite(row.price) * finite(row.quantity)
+        : finite(row.quote_amount),
+      fee_amount: Math.max(0, finite(row.fee_amount)),
+      fee_asset: row.fee_asset || null,
+      fee_quote_estimate: row.fee_quote_amount != null
+        ? Math.max(0, finite(row.fee_quote_amount))
+        : ["USDT", "USDC", "BUSD", "FDUSD"].includes(
+            String(row.fee_asset || "").toUpperCase(),
+          )
+        ? Math.max(0, finite(row.fee_amount))
+        : 0,
+      executed_at: row.executed_at || null,
+      raw: row.raw_response || row,
+    }));
+    await ancillary("TRADING_FILLS", () =>
+      db("trading_fills?on_conflict=order_id,trade_id", {
+        method: "POST",
+        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify(normalizedRows),
+      }));
+  }
+  if (!accounting.applied && ["EXITING", "CLOSED"].includes(opened.state)) {
+    if (ancillaryErrors.length) {
+      console.error("P10_ENTRY_LEDGER_BACKFILL_FAILED_AFTER_LIFECYCLE_ADVANCE", ancillaryErrors);
+    }
+    return opened;
+  }
+  const recoveredAt = new Date().toISOString();
+  let refreshed: any[] = [];
+  await ancillary("POSITION_DETAIL", async () => {
+    refreshed = await patch("trading_positions", `id=eq.${position.id}&state=eq.OPEN`, {
+      opened_at: fill.executedAt || opened.opened_at || recoveredAt,
+      metadata: {
+        ...(opened.metadata || position.metadata || {}),
+        reconciliation_phase: null,
+        p10_entry_accounting_detail_pending: false,
+        p10_entry_recovered_at: recoveredAt,
+        p10_entry_recovery_source: source,
+        p10_entry_recovery_fill_count: linkedRows.length,
+        p10_entry_previous_terminal_state: ["CANCELLED", "ERROR"].includes(position.state)
+          ? position.state
+          : position.metadata?.p10_entry_previous_terminal_state || null,
+        p10_entry_previous_close_reason: position.close_reason ||
+          position.metadata?.p10_entry_previous_close_reason || null,
+      },
+    });
+  });
+  await ancillary(
+    "ORDER_DETAIL",
+    () =>
+      patch("trading_orders", `id=eq.${orderRow.id}&state=eq.APPLIED`, {
+        executed_volume: fill.executedVolume,
+        average_fill_price: fill.averagePrice,
+        executed_funds_quote: fill.executedFunds,
+        paid_fee_quote: fill.paidFeeQuote,
+        fee_asset: fill.feeAsset || orderRow.fee_asset || null,
+        fee_accounting_quality: linkedRows.length
+          ? fill.feeQuoteComplete === false ? "MISSING" : "EXACT"
+          : orderRow.fee_accounting_quality,
+        fee_quote_source: linkedRows.length
+          ? fill.feeQuoteComplete === false ? "MISSING" : "PER_FILL_QUOTE"
+          : orderRow.fee_quote_source,
+        fee_reconciled_at: linkedRows.length && fill.feeQuoteComplete !== false
+          ? recoveredAt
+          : orderRow.fee_reconciled_at,
+        fee_reconcile_next_at: linkedRows.length && fill.feeQuoteComplete === false
+          ? new Date(Date.now() + 60_000).toISOString()
+          : orderRow.fee_reconcile_next_at,
+        completed_at: orderRow.completed_at || recoveredAt,
+      }),
+  );
+  const claimId = String(position.metadata?.p10_claim_id || "");
+  if (claimId) {
+    await ancillary("SIGNAL_CLAIM", () =>
+      patch("p10_signal_claims", `id=eq.${claimId}`, {
+        status: "FILLED",
+        position_id: position.id,
+        reason: null,
+      }));
+  }
+  await ancillary("RECOVERY_EVENT", () =>
+    event(
+      position.state === "CANCELLED" || position.state === "ERROR"
+        ? "P10_ENTRY_RECOVERED_FROM_EXCHANGE_FILLS"
+        : "P10_ENTRY_RECONCILED",
+      `${position.exchange}:${position.market} entry applied from ${source.toLowerCase()} evidence`,
+      {
+        source,
+        exchange_order_id: gatewayOrder?.exchange_order_id || orderRow.exchange_order_id || null,
+        side: position.position_side,
+        fill_price: fill.averagePrice,
+        quantity: fill.executedVolume,
+        fill_count: linkedRows.length,
+      },
+      { cycleId, positionId: position.id, orderId: orderRow.id },
+    ));
+  if (ancillaryErrors.length) {
+    console.error("P10_ENTRY_RECOVERY_ANCILLARY_FAILED", ancillaryErrors);
+    await event(
+      "P10_ENTRY_RECOVERY_ANCILLARY_FAILED",
+      `${position.exchange}:${position.market} entry is managed but ancillary recovery writes failed`,
+      { source, errors: ancillaryErrors },
+      { cycleId, positionId: position.id, orderId: orderRow.id, level: "WARNING" },
+    ).catch(() => null);
+  }
+  const current = refreshed[0] || (await db(
+    `trading_positions?id=eq.${position.id}&select=*&limit=1`,
+  ).catch(() => []))?.[0];
+  const recovered = current || opened;
+  return recovered;
+}
+
 async function reconcileP10Order(position: Position, cycleId: string) {
+  const currentlyTerminal = ["CANCELLED", "ERROR"].includes(position.state);
+  const reconcilingEntry = ["ENTRY_PENDING", "RECONCILING", "RECONCILIATION_FAILED"].includes(
+    position.state,
+  ) && (position.state === "ENTRY_PENDING" || position.metadata?.reconciliation_phase === "ENTRY");
+  const entryReconciliation = currentlyTerminal || reconcilingEntry;
+  const recoveringTerminal = currentlyTerminal ||
+    (entryReconciliation && ["CANCELLED", "ERROR"].includes(
+      String(position.metadata?.p10_entry_previous_terminal_state || ""),
+    ));
+  const states = entryReconciliation
+    ? "REQUESTED,UNKNOWN,EXCHANGE_OPEN,EXCHANGE_PARTIAL,EXCHANGE_DONE,EXCHANGE_PARTIAL_CANCELLED,EXCHANGE_CANCELLED,REJECTED,APPLIED"
+    : "REQUESTED,UNKNOWN,EXCHANGE_OPEN,EXCHANGE_PARTIAL,EXCHANGE_DONE,EXCHANGE_PARTIAL_CANCELLED,EXCHANGE_CANCELLED";
   const rows = await db(
     `trading_orders?position_id=eq.${position.id}` +
-      "&state=in.(REQUESTED,UNKNOWN,EXCHANGE_OPEN,EXCHANGE_PARTIAL,EXCHANGE_DONE,EXCHANGE_PARTIAL_CANCELLED)" +
+      `&state=in.(${states})` +
+      (entryReconciliation ? "&purpose=eq.ENTRY" : "") +
       "&select=*&order=requested_at.desc&limit=1",
   ) as any[];
   const orderRow = rows[0];
   if (!orderRow) return { reconciled: false, reason: "no pending P10 order" };
   try {
+    if (orderRow.purpose === "ENTRY") {
+      const durable = await loadP10LinkedEntryFills(position, orderRow);
+      if (durable.summary.valid) {
+        const exposure = await p10EntryExposureProof(position, durable.summary.executedVolume);
+        const lineageBlock = await p10TerminalEntryRecoveryBlockReason(
+          position,
+          orderRow,
+          durable,
+          exposure,
+        );
+        if (exposure.matches && !lineageBlock) {
+          const opened = await applyP10RecoveredEntry(
+            position,
+            orderRow,
+            orderRow.raw_response || {},
+            {
+              executedVolume: durable.summary.executedVolume,
+              executedFunds: durable.summary.executedFunds,
+              averagePrice: durable.summary.averagePrice,
+              paidFeeQuote: durable.summary.paidFeeQuote,
+              feeAsset: durable.summary.feeAsset,
+              feeQuoteComplete: durable.summary.feeQuoteComplete,
+              executedAt: durable.summary.executedAt,
+            },
+            durable.rows,
+            cycleId,
+            "EXCHANGE_FILLS",
+          );
+          return { reconciled: true, opened, source: "EXCHANGE_FILLS" };
+        }
+        const reconciling = await markP10EntryReconciling(
+          position,
+          orderRow,
+          cycleId,
+          lineageBlock || "durable entry fills do not match the live directional position",
+          {
+            durable_fill_quantity: durable.summary.executedVolume,
+            exchange_quantity: exposure.exchangeQuantity,
+            exchange_entry_price: exposure.entryPrice,
+            lineage_block_reason: lineageBlock,
+          },
+        );
+        return {
+          reconciled: false,
+          reconciling,
+          reason: lineageBlock || "entry exposure mismatch",
+        };
+      }
+
+      const persistedDisposition = p10EntryOrderDisposition({
+        status: orderRow.raw_response?.status || orderRow.state,
+        executedVolume: orderRow.executed_volume,
+        averagePrice: orderRow.average_fill_price,
+      });
+      if (persistedDisposition === "APPLY") {
+        const quantity = finite(orderRow.executed_volume);
+        const exposure = await p10EntryExposureProof(position, quantity);
+        if (exposure.matches && !recoveringTerminal) {
+          const opened = await applyP10RecoveredEntry(
+            position,
+            orderRow,
+            orderRow.raw_response || {},
+            {
+              executedVolume: quantity,
+              executedFunds: finite(
+                orderRow.executed_funds_quote,
+                quantity * finite(orderRow.average_fill_price),
+              ),
+              averagePrice: finite(orderRow.average_fill_price),
+              paidFeeQuote: finite(orderRow.paid_fee_quote),
+              feeAsset: orderRow.fee_asset || null,
+              executedAt: orderRow.completed_at || null,
+            },
+            [],
+            cycleId,
+            "ORDER",
+          );
+          return { reconciled: true, opened, source: "ORDER" };
+        }
+      }
+    }
+
     const payload = await gateway(position.exchange, {
       action: "get_order",
       identifier: orderRow.identifier,
       market: position.market,
+      exchange_order_id: orderRow.exchange_order_id || null,
     }, P10_FAST_GATEWAY_TIMEOUT_MS);
     const updated = await updateOrderFromGateway(orderRow, payload);
-    if (finite(updated.fill.executedVolume) > 0 && finite(updated.fill.averagePrice) > 0) {
-      if (orderRow.purpose === "ENTRY") {
-        const signal = position.metadata?.p10_signal as P10SignalRow;
-        const opened = await applyP10EntryAccounting(
+    if (orderRow.purpose === "ENTRY") {
+      const disposition = p10EntryOrderDisposition({
+        status: updated.order?.status,
+        executedVolume: updated.fill.executedVolume,
+        averagePrice: updated.fill.averagePrice,
+      });
+      if (disposition === "APPLY") {
+        const quantity = finite(updated.fill.executedVolume);
+        const exposure = await p10EntryExposureProof(position, quantity);
+        if (exposure.matches && !recoveringTerminal) {
+          const opened = await applyP10RecoveredEntry(
+            position,
+            orderRow,
+            updated.order,
+            {
+              executedVolume: quantity,
+              executedFunds: finite(
+                updated.fill.executedFunds,
+                quantity * finite(updated.fill.averagePrice),
+              ),
+              averagePrice: finite(updated.fill.averagePrice),
+              paidFeeQuote: finite(updated.fill.paidFeeQuote, updated.fill.paidFee),
+              feeAsset: updated.fill.feeAsset || updated.order?.fee_asset || null,
+              executedAt: updated.order?.completed_at || null,
+            },
+            [],
+            cycleId,
+            "ORDER",
+          );
+          return { reconciled: true, opened, source: "ORDER" };
+        }
+        const reconciling = await markP10EntryReconciling(
           position,
           orderRow,
-          updated.order,
-          updated.fill,
-          signal,
-        );
-        await event(
-          "P10_ENTRY_RECONCILED",
-          `${position.exchange}:${position.market} entry applied`,
+          cycleId,
+          "order execution does not match the live directional position",
           {
-            exchange_order_id: updated.order?.exchange_order_id || null,
-            side: position.position_side,
-            fill_price: updated.fill.averagePrice,
-            quantity: updated.fill.executedVolume,
+            order_executed_quantity: quantity,
+            exchange_quantity: exposure.exchangeQuantity,
+            exchange_entry_price: exposure.entryPrice,
+            terminal_recovery_requires_durable_fills: recoveringTerminal,
           },
-          { cycleId, positionId: position.id, orderId: orderRow.id },
         );
-        return { reconciled: true, opened };
+        return { reconciled: false, reconciling, reason: "entry exposure mismatch" };
       }
+      if (disposition === "RECONCILE") {
+        const exposure = await p10EntryExposureProof(position, finite(updated.fill.executedVolume));
+        const reconciling = await markP10EntryReconciling(
+          position,
+          orderRow,
+          cycleId,
+          "order status or accounting detail remains uncertain",
+          {
+            order_status: String(updated.order?.status || "UNKNOWN"),
+            order_executed_quantity: finite(updated.fill.executedVolume),
+            order_average_price: finite(updated.fill.averagePrice),
+            exchange_quantity: exposure.exchangeQuantity,
+          },
+        );
+        return { reconciled: false, reconciling, reason: "entry remains uncertain" };
+      }
+
+      const durable = await loadP10LinkedEntryFills(position, orderRow);
+      const exposure = await p10EntryExposureProof(position, 0);
+      if (durable.summary.executedVolume > 0 || exposure.exchangeQuantity > exposure.tolerance) {
+        const reconciling = await markP10EntryReconciling(
+          position,
+          orderRow,
+          cycleId,
+          "terminal zero-fill status conflicts with fill or position evidence",
+          {
+            order_status: String(updated.order?.status || "UNKNOWN"),
+            durable_fill_quantity: durable.summary.executedVolume,
+            exchange_quantity: exposure.exchangeQuantity,
+          },
+        );
+        return { reconciled: false, reconciling, reason: "terminal evidence conflict" };
+      }
+      const now = new Date().toISOString();
+      await patch("trading_positions", `id=eq.${position.id}`, {
+        state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
+        close_reason: "P10_ENTRY_TERMINAL_NO_FILL",
+        closed_at: position.closed_at || now,
+        metadata: {
+          ...(position.metadata || {}),
+          reconciliation_phase: null,
+          p10_entry_terminal_verified_at: now,
+          p10_entry_terminal_verified_status: String(updated.order?.status || "UNKNOWN"),
+          p10_entry_terminal_verified_exchange_quantity: exposure.exchangeQuantity,
+        },
+      });
+      await rejectP10Claim(
+        String(position.metadata?.p10_claim_id || ""),
+        "P10 entry terminal without fill",
+      );
+      return { reconciled: true, terminal: true };
+    }
+
+    if (finite(updated.fill.executedVolume) > 0 && finite(updated.fill.averagePrice) > 0) {
       const action = String(
         position.metadata?.pending_exit_action ||
           (orderRow.purpose === "TIME_EXIT" ? "TIME" : orderRow.purpose),
@@ -10364,34 +11059,25 @@ async function reconcileP10Order(position: Position, cycleId: string) {
       String(updated.order?.status),
     );
     if (!terminal) return { reconciled: false, reason: "P10 order remains open" };
-    if (orderRow.purpose === "ENTRY") {
-      await patch("trading_positions", `id=eq.${position.id}`, {
-        state: "CANCELLED",
-        reserved_quote: 0,
-        reserved_quantity: 0,
-        reservation_expires_at: null,
-        close_reason: "P10_ENTRY_TERMINAL_NO_FILL",
-        closed_at: new Date().toISOString(),
-      });
-      await rejectP10Claim(
-        String(position.metadata?.p10_claim_id || ""),
-        "P10 entry terminal without fill",
-      );
-    } else {
-      await patch("trading_positions", `id=eq.${position.id}`, {
-        state: "OPEN",
-        metadata: {
-          ...(position.metadata || {}),
-          pending_exit_action: null,
-          pending_exit_reason: null,
-          pending_exit_at: null,
-          p10_last_unfilled_exit_at: new Date().toISOString(),
-        },
-      });
-    }
+    await patch("trading_positions", `id=eq.${position.id}`, {
+      state: "OPEN",
+      metadata: {
+        ...(position.metadata || {}),
+        pending_exit_action: null,
+        pending_exit_reason: null,
+        pending_exit_at: null,
+        p10_last_unfilled_exit_at: new Date().toISOString(),
+      },
+    });
     return { reconciled: true, terminal: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (orderRow.purpose === "ENTRY") {
+      await markP10EntryReconciling(position, orderRow, cycleId, message, {
+        reconciliation_error_code: (error as any)?.code || null,
+        reconciliation_error_status: (error as any)?.status || null,
+      }).catch(() => null);
+    }
     await event("P10_ORDER_RECONCILIATION_FAILED", message, {
       position_state: position.state,
       order_id: orderRow.id,
@@ -10571,7 +11257,14 @@ async function monitorP10Positions(
 ) {
   const startedAt = performance.now();
   const pending = initial.filter((row) =>
-    ["ENTRY_PENDING", "EXITING", "RECONCILING", "RECONCILIATION_FAILED"].includes(row.state)
+    [
+      "ENTRY_PENDING",
+      "EXITING",
+      "RECONCILING",
+      "RECONCILIATION_FAILED",
+      "CANCELLED",
+      "ERROR",
+    ].includes(row.state)
   );
 
   // Start immutable/shared reads immediately.  The old loop waited for every position's
@@ -10684,24 +11377,27 @@ async function monitorP10Positions(
       const portfolio = portfolioLoad.value;
       const exchangeQuantity = p10ExchangeQuantity(position, portfolio);
       const tolerance = Math.max(0.000000000001, finite(position.quantity_step) * 2);
-      if (exchangeQuantity + tolerance < finite(position.remaining_quantity)) {
-        await event(
-          "P10_POSITION_QUANTITY_MISMATCH",
-          `${position.exchange}:${position.market} quantity mismatch`,
-          {
-            position_side: position.position_side,
-            booked_quantity: position.remaining_quantity,
-            exchange_quantity: exchangeQuantity,
-          },
-          { cycleId, positionId: position.id, level: "CRITICAL" },
-        );
-        return {
-          action: "P10_MISMATCH",
-          exchange: position.exchange,
-          market: position.market,
-          booked_quantity: position.remaining_quantity,
-          exchange_quantity: exchangeQuantity,
-        };
+      const quantityMismatch = exchangeQuantity + tolerance < finite(position.remaining_quantity);
+      if (quantityMismatch) {
+        const newlyLatched = await latchP10EntrySafety("P10_POSITION_QUANTITY_MISMATCH");
+        if (
+          newlyLatched ||
+          finite(position.metadata?.p10_last_mismatch_exchange_quantity, -1) !== exchangeQuantity ||
+          finite(position.metadata?.p10_last_mismatch_booked_quantity, -1) !==
+            finite(position.remaining_quantity)
+        ) {
+          await event(
+            "P10_POSITION_QUANTITY_MISMATCH",
+            `${position.exchange}:${position.market} quantity mismatch`,
+            {
+              position_side: position.position_side,
+              booked_quantity: position.remaining_quantity,
+              exchange_quantity: exchangeQuantity,
+              safety_newly_latched: newlyLatched,
+            },
+            { cycleId, positionId: position.id, level: "CRITICAL" },
+          );
+        }
       }
       const executablePrice = side === "LONG" ? finite(quote.best_bid) : finite(quote.best_ask);
       if (!(executablePrice > 0)) throw new Error("P10 executable quote unavailable");
@@ -10792,6 +11488,11 @@ async function monitorP10Positions(
       const troughPrice = Math.min(finite(position.trough_price, entryPrice), executablePrice);
       const metadata = {
         ...(position.metadata || {}),
+        p10_last_mismatch_booked_quantity: quantityMismatch
+          ? finite(position.remaining_quantity)
+          : null,
+        p10_last_mismatch_exchange_quantity: quantityMismatch ? exchangeQuantity : null,
+        p10_last_mismatch_checked_at: quantityMismatch ? new Date().toISOString() : null,
         p10_last_policy_bar_time: decision.policyBarTime,
         p10_last_policy_checked_at: new Date().toISOString(),
         p10_last_executable_price: executablePrice,
@@ -11681,9 +12382,76 @@ Deno.serve(async (request: Request) => {
         }, 409);
       }
       const activeAfterReconcile = await db(
-        "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id&limit=1",
+        "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)" +
+          "&select=id,exchange,market,position_side,remaining_quantity,reserved_quantity,quantity_step,is_paper,state,strategy_key&limit=1000",
+      ) as any[];
+      const unresolvedEntryRows = activeAfterReconcile.filter((row) =>
+        [
+          "ENTRY_PENDING",
+          "RECONCILING",
+          "RECONCILIATION_FAILED",
+          "MANUAL_INTERVENTION_REQUIRED",
+        ].includes(String(row.state))
       );
-      const resumeError = resumeSafetyError({
+      let futuresResumeError: string | null = null;
+      let untrackedFuturesAtResume: ReturnType<typeof untrackedFuturesExposures> = [];
+      let futuresQuantityMismatches: Array<{
+        market: string;
+        side: string;
+        booked_quantity: number;
+        exchange_quantity: number;
+      }> = [];
+      try {
+        const futuresPortfolio = await p10PositionPortfolio("binance_futures");
+        const exchangePositions = Array.isArray(futuresPortfolio?.positions)
+          ? futuresPortfolio.positions
+          : [];
+        untrackedFuturesAtResume = untrackedFuturesExposures(
+          exchangePositions,
+          activeAfterReconcile
+            .filter((row) => row.exchange === "binance_futures" && !row.is_paper)
+            .map((row) => ({
+              market: row.market,
+              side: row.position_side,
+              quantity: Math.max(finite(row.remaining_quantity), finite(row.reserved_quantity)),
+            })),
+        );
+        futuresQuantityMismatches = activeAfterReconcile
+          .filter((row) => row.exchange === "binance_futures" && !row.is_paper)
+          .flatMap((row) => {
+            const exchangeQuantity = exchangePositions
+              .filter((item: any) =>
+                String(item?.market || "").toUpperCase() === String(row.market).toUpperCase() &&
+                String(item?.side || "").toUpperCase() ===
+                  String(row.position_side).toUpperCase()
+              )
+              .reduce((sum: number, item: any) => sum + Math.max(0, finite(item?.quantity)), 0);
+            const bookedQuantity = Math.max(
+              finite(row.remaining_quantity),
+              finite(row.reserved_quantity),
+            );
+            const tolerance = Math.max(0.000000000001, finite(row.quantity_step) * 2);
+            if (Math.abs(exchangeQuantity - bookedQuantity) <= tolerance) return [];
+            return [{
+              market: String(row.market),
+              side: String(row.position_side),
+              booked_quantity: bookedQuantity,
+              exchange_quantity: exchangeQuantity,
+            }];
+          });
+      } catch (error) {
+        futuresResumeError = `Binance Futures exposure verification failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+      }
+      const p10ResumeError = unresolvedEntryRows.length
+        ? "entry reconciliation is still unresolved; resume is blocked"
+        : futuresResumeError
+        ? futuresResumeError
+        : untrackedFuturesAtResume.length || futuresQuantityMismatches.length
+        ? "Binance Futures and database quantities do not match; resume is blocked"
+        : null;
+      const resumeError = p10ResumeError || resumeSafetyError({
         emergencyLiquidation: Boolean(settings.emergency_liquidation),
         activePositionCount: activeAfterReconcile.length,
         unresolvedManualCount: Array.isArray((reconciliation as any).unresolved_manual_assets)
@@ -11691,8 +12459,20 @@ Deno.serve(async (request: Request) => {
           : 0,
       });
       if (resumeError) {
-        await finishCycle(cycleId, "SKIPPED", { reason: resumeError, reconciliation });
-        return response({ ok: false, error: resumeError, cycle_id: cycleId, reconciliation }, 409);
+        const safety = {
+          unresolved_entry_positions: unresolvedEntryRows.map((row) => row.id),
+          untracked_futures_exposures: untrackedFuturesAtResume,
+          futures_quantity_mismatches: futuresQuantityMismatches,
+          futures_verification_error: futuresResumeError,
+        };
+        await finishCycle(cycleId, "SKIPPED", { reason: resumeError, reconciliation, safety });
+        return response({
+          ok: false,
+          error: resumeError,
+          cycle_id: cycleId,
+          reconciliation,
+          safety,
+        }, 409);
       }
       if (settings.emergency_liquidation) {
         const completion = await rpc("complete_emergency_liquidation", {});
@@ -11716,15 +12496,39 @@ Deno.serve(async (request: Request) => {
           ...(completion?.settings || {}),
         } as TradingSettings & JsonRecord;
       }
-      settings = (await patch("trading_settings", "id=eq.1", {
-        pause_new_entries: false,
-        withdrawal_mode: false,
-        manual_intervention_required: false,
-        manual_event_reason: null,
-        emergency_liquidation: false,
-        last_resume_at: new Date().toISOString(),
-        version: finite(settings.version) + 1,
-      }))[0];
+      const latestSettings = (await db(
+        "trading_settings?id=eq.1&select=*&limit=1",
+      ))?.[0] as TradingSettings & JsonRecord;
+      const resumeResult = await rpc("resume_p10_safely", {
+        p_expected_version: latestSettings?.version == null
+          ? null
+          : Math.floor(finite(latestSettings.version)),
+        p_expected_lock_reason: latestSettings?.pause_lock_reason ?? null,
+        p_expected_manual_reason: latestSettings?.manual_event_reason ?? null,
+        p_external_futures_clear: !futuresResumeError &&
+          !untrackedFuturesAtResume.length && !futuresQuantityMismatches.length,
+        p_unresolved_manual_count: Array.isArray(
+            (reconciliation as any).unresolved_manual_assets,
+          )
+          ? (reconciliation as any).unresolved_manual_assets.length
+          : 0,
+      });
+      if (resumeResult?.resumed !== true) {
+        const error = `safe resume refused: ${resumeResult?.reason || "UNKNOWN"}`;
+        await finishCycle(cycleId, "SKIPPED", {
+          reason: error,
+          reconciliation,
+          resume_result: resumeResult,
+        });
+        return response({
+          ok: false,
+          error,
+          cycle_id: cycleId,
+          reconciliation,
+          resume_result: resumeResult,
+        }, 409);
+      }
+      settings = resumeResult.settings as TradingSettings & JsonRecord;
       await event(
         "TRADING_RESUMED_NOW",
         "new entries resumed immediately by operator after successful reconciliation",

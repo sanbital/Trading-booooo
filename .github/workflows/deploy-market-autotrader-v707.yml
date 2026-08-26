@@ -20,6 +20,7 @@ on:
       - "supabase/migrations/20260824013500_p10_market_risk_overlay.sql"
       - "supabase/migrations/20260824031619_direction_aware_futures_snapshot_reconcile.sql"
       - "supabase/migrations/20260824054500_confirm_emergency_liquidation.sql"
+      - "supabase/migrations/20260826094500_p10_entry_reconciliation_invariants.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
@@ -40,6 +41,7 @@ on:
       - "supabase/migrations/20260824013500_p10_market_risk_overlay.sql"
       - "supabase/migrations/20260824031619_direction_aware_futures_snapshot_reconcile.sql"
       - "supabase/migrations/20260824054500_confirm_emergency_liquidation.sql"
+      - "supabase/migrations/20260826094500_p10_entry_reconciliation_invariants.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   workflow_dispatch:
 
@@ -98,6 +100,8 @@ jobs:
             supabase/functions/market-autotrader/monitor-concurrency.test.ts \
             supabase/functions/market-autotrader/p10-monitor-cadence.ts \
             supabase/functions/market-autotrader/p10-monitor-cadence.test.ts \
+            supabase/functions/market-autotrader/p10-entry-reconciliation.ts \
+            supabase/functions/market-autotrader/p10-entry-reconciliation.test.ts \
             supabase/functions/market-autotrader/emergency-liquidation-safety.test.ts \
             supabase/functions/market-autotrader/futures-lane.test.ts \
             supabase/functions/market-autotrader/combined-long-s096-short.test.ts
@@ -112,6 +116,7 @@ jobs:
             supabase/functions/market-autotrader/futures-snapshot-reconcile.test.ts
           deno test supabase/functions/market-autotrader/monitor-concurrency.test.ts
           deno test supabase/functions/market-autotrader/p10-monitor-cadence.test.ts
+          deno test supabase/functions/market-autotrader/p10-entry-reconciliation.test.ts
           deno test --allow-read \
             supabase/functions/market-autotrader/emergency-liquidation-safety.test.ts
           deno test --allow-read supabase/functions/market-autotrader/futures-lane.test.ts
@@ -133,6 +138,10 @@ jobs:
           grep -q "const VERSION = \"${engine_version}\";" \
             supabase/functions/market-autotrader/index.ts
           grep -q "const VERSION = \"${engine_version}\";" gateway/server.mjs
+          grep -q 'ORDER_GATEWAY_PROTOCOL_VERSION = "8.0.0-P10-DONCHIAN-SLOW4R"' \
+            supabase/functions/market-autotrader/index.ts
+          grep -q 'PREVIOUS_ENGINE_VERSION = "8.0.0-P10-DONCHIAN-SLOW4R"' \
+            gateway/server.mjs
           gate_version="$(sed -n 's/.*MINUTE_ENTRY_GATE_VERSION = "\([^"]*\)".*/\1/p' \
             supabase/functions/_shared/lob/minute-entry-gate.ts)"
           test -n "$gate_version"
@@ -226,6 +235,8 @@ jobs:
             supabase/migrations/20260824031619_direction_aware_futures_snapshot_reconcile.sql
           grep -q '1-DIRECTIONAL-FUTURES-POSITIONS' \
             supabase/migrations/20260824031619_direction_aware_futures_snapshot_reconcile.sql
+          grep -q 'guard_p10_terminal_state_with_entry_execution' \
+            supabase/migrations/20260826094500_p10_entry_reconciliation_invariants.sql
           grep -q "set search_path = ''" \
             supabase/migrations/20260824031619_direction_aware_futures_snapshot_reconcile.sql
           grep -q 'from public, anon, authenticated' \
@@ -280,6 +291,18 @@ jobs:
                     and table_name = 'trading_settings'
                     and column_name = 'emergency_liquidation_started_at'
                     and data_type = 'timestamp with time zone'
+                )
+                and exists (
+                  select 1
+                  from pg_proc p
+                  join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public'
+                    and p.proname = 'latch_p10_entry_safety'
+                    and position('FOR UPDATE' in upper(pg_get_functiondef(p.oid))) > 0
+                    and position('TEMP_SAFETY_' in pg_get_functiondef(p.oid)) > 0
+                    and not has_function_privilege('anon', p.oid, 'EXECUTE')
+                    and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                    and has_function_privilege('service_role', p.oid, 'EXECUTE')
                 )
                 and exists (
                   select 1
@@ -471,6 +494,82 @@ jobs:
                     and t.tgname = 'trg_guard_p10_live_entry_settings'
                     and not t.tgisinternal
                     and t.tgenabled <> 'D'
+                )
+                and exists (
+                  select 1
+                  from pg_proc p
+                  join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public'
+                    and p.proname = 'stage_p10_executed_entry_reconciliation'
+                    and position('P10_ENTRY_EXECUTION_MONOTONIC_V2' in pg_get_functiondef(p.oid)) > 0
+                    and position('TRADING_FILLS' in upper(pg_get_functiondef(p.oid))) > 0
+                    and position('FOR UPDATE' in upper(pg_get_functiondef(p.oid))) > 0
+                    and not has_function_privilege('anon', p.oid, 'EXECUTE')
+                    and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                )
+                and exists (
+                  select 1
+                  from pg_proc p
+                  join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public'
+                    and p.proname = 'guard_p10_terminal_state_with_entry_execution'
+                    and position('TRADING_FILLS' in upper(pg_get_functiondef(p.oid))) > 0
+                    and not has_function_privilege('anon', p.oid, 'EXECUTE')
+                    and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                )
+                and exists (
+                  select 1 from pg_trigger t
+                  where t.tgrelid = 'public.trading_positions'::regclass
+                    and t.tgname = 'trg_guard_p10_terminal_state_with_entry_execution'
+                    and t.tgfoid = 'public.guard_p10_terminal_state_with_entry_execution()'::regprocedure
+                    and not t.tgisinternal and t.tgenabled <> 'D'
+                )
+                and exists (
+                  select 1 from pg_trigger t
+                  where t.tgrelid = 'public.trading_orders'::regclass
+                    and t.tgname = 'aaa_stage_p10_executed_order_reconciliation'
+                    and t.tgfoid = 'public.stage_p10_executed_entry_reconciliation()'::regprocedure
+                    and position('BEFORE' in pg_get_triggerdef(t.oid)) > 0
+                    and not t.tgisinternal and t.tgenabled <> 'D'
+                )
+                and exists (
+                  select 1 from pg_trigger t
+                  where t.tgrelid = 'public.exchange_trade_fills'::regclass
+                    and t.tgname = 'aaa_stage_p10_entry_fill_reconciliation'
+                    and t.tgfoid = 'public.stage_p10_executed_entry_reconciliation()'::regprocedure
+                    and position('BEFORE' in pg_get_triggerdef(t.oid)) > 0
+                    and not t.tgisinternal and t.tgenabled <> 'D'
+                )
+                and exists (
+                  select 1 from pg_trigger t
+                  where t.tgrelid = 'public.trading_fills'::regclass
+                    and t.tgname = 'aaa_stage_p10_trading_fill_reconciliation'
+                    and t.tgfoid = 'public.stage_p10_executed_entry_reconciliation()'::regprocedure
+                    and position('BEFORE' in pg_get_triggerdef(t.oid)) > 0
+                    and not t.tgisinternal and t.tgenabled <> 'D'
+                )
+                and exists (
+                  select 1
+                  from pg_proc p
+                  join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public'
+                    and p.proname = 'apply_p10_entry_order'
+                    and position('CLOSED_AT = NULL' in upper(pg_get_functiondef(p.oid))) > 0
+                    and position('RECONCILIATION_FAILED' in upper(pg_get_functiondef(p.oid))) > 0
+                    and position('IS NOT IN ENTRY RECONCILIATION' in upper(pg_get_functiondef(p.oid))) > 0
+                )
+                and exists (
+                  select 1
+                  from pg_proc p
+                  join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public'
+                    and p.proname = 'resume_p10_safely'
+                    and p.prosecdef
+                    and position('TERMINAL_ENTRY_EXECUTION_EXISTS' in pg_get_functiondef(p.oid)) > 0
+                    and position('FOR UPDATE' in upper(pg_get_functiondef(p.oid))) > 0
+                    and not has_function_privilege('anon', p.oid, 'EXECUTE')
+                    and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                    and has_function_privilege('service_role', p.oid, 'EXECUTE')
                 );
             ")"
             if [ "${ready}" = "t" ]; then

@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import dns from "node:dns";
 import { pathToFileURL } from "node:url";
 
-// Trading-booooo v8.0.0-P10-DONCHIAN-SLOW4R static-egress order gateway.
+// Trading-booooo v8.0.1-P10-ENTRY-RECONCILIATION static-egress order gateway.
 //
 // It exposes spot account/order primitives plus the Binance USDⓈ-M futures primitives the
 // futures lane needs: account/positions, order create/read/cancel, and the per-symbol
@@ -12,12 +12,12 @@ import { pathToFileURL } from "node:url";
 // BUY/LONG/OPEN, SELL/LONG/CLOSE, SELL/SHORT/OPEN and BUY/SHORT/CLOSE are accepted.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "8.0.0-P10-DONCHIAN-SLOW4R";
-// Keep exactly one audited rollback revision during the cutover. This prevents a gateway
-// rollout from stopping the still-running engine and preserves an immediate code rollback;
-// arbitrary or older revisions remain rejected.
-const ROLLBACK_ENGINE_VERSION = "7.6.0-BINANCE-FUTURES";
-const ACCEPTED_ENGINE_VERSIONS = new Set([VERSION, ROLLBACK_ENGINE_VERSION]);
+const VERSION = "8.0.1-P10-ENTRY-RECONCILIATION";
+// Keep exactly one audited previous protocol revision during the rolling cutover. Both the
+// old engine/new gateway and new engine/old gateway therefore remain order-compatible;
+// arbitrary or older revisions stay rejected.
+const PREVIOUS_ENGINE_VERSION = "8.0.0-P10-DONCHIAN-SLOW4R";
+const ACCEPTED_ENGINE_VERSIONS = new Set([VERSION, PREVIOUS_ENGINE_VERSION]);
 const PORT = integerEnv("PORT", 8080, 1, 65535);
 const UPBIT_BASE = env("UPBIT_BASE_URL", "https://api.upbit.com").replace(/\/$/, "");
 const BINANCE_BASE = env("BINANCE_BASE_URL", "https://api.binance.com").replace(/\/$/, "");
@@ -494,6 +494,11 @@ function validateIdentifier(identifier) {
   ) throw new Error("invalid bot order identifier");
   return value;
 }
+function validateFuturesOrderId(orderId) {
+  const value = String(orderId ?? "").trim();
+  if (!/^\d{1,20}$/.test(value)) throw new Error("invalid Binance Futures order ID");
+  return value;
+}
 function validateMarkets(exchange, markets) {
   const rows = Array.isArray(markets)
     ? markets.map(String)
@@ -520,6 +525,112 @@ function normalizeStatus(exchange, rawStatus, executedQty = 0, originalQty = 0) 
   if (status === "NEW" || status === "PENDING_NEW") return "OPEN";
   if (originalQty > 0 && executedQty >= originalQty) return "FILLED";
   return "UNKNOWN";
+}
+
+/**
+ * Classify evidence after Binance has acknowledged an order. This helper is deliberately
+ * pure: a later read failure can make the final state unknown, but cannot erase the POST.
+ */
+function classifyAcceptedFuturesOrderReconciliation(acceptedOrder, lookupError = null) {
+  const order = acceptedOrder && typeof acceptedOrder === "object" ? acceptedOrder : {};
+  const raw = order.raw && typeof order.raw === "object" ? order.raw : order;
+  const executedVolume = Number(raw.executedQty ?? order.executed_volume ?? order.executedQty ?? 0);
+  const rawStatus = String(order.raw_status ?? raw.status ?? order.status ?? "").toUpperCase();
+  const rawAveragePrice = Object.prototype.hasOwnProperty.call(raw, "avgPrice")
+    ? Number(raw.avgPrice)
+    : Number.NaN;
+  const normalizedAveragePrice = Number(order.average_price ?? order.avgPrice ?? 0);
+  const reportedAveragePrice = Number.isFinite(rawAveragePrice) && rawAveragePrice > 0
+    ? rawAveragePrice
+    : normalizedAveragePrice;
+  const hasAcceptanceEvidence =
+    Boolean(order.exchange_order_id) ||
+    Boolean(raw.orderId) ||
+    Boolean(order.client_order_id) ||
+    Boolean(raw.clientOrderId) ||
+    (Number.isFinite(executedVolume) && executedVolume > 0) ||
+    ["NEW", "PENDING_NEW", "PARTIALLY_FILLED", "FILLED"].includes(rawStatus);
+
+  if (!hasAcceptanceEvidence) return { pending: false, reason: null, scope: null };
+
+  if (lookupError) {
+    const code = Number(lookupError?.code);
+    const status = Number(lookupError?.status);
+    const name = String(lookupError?.name || "");
+    const message = String(lookupError?.message || lookupError || "");
+    if (code === -2013 || /order does not exist/i.test(message)) {
+      return {
+        pending: true,
+        reason: "POST_ACCEPTED_ORDER_NOT_YET_VISIBLE",
+        scope: "ORDER_STATUS",
+      };
+    }
+    if (
+      name === "AbortError" || [-1006, -1007].includes(code) ||
+      [408, 409, 425, 429].includes(status) ||
+      /timed?\s*out|timeout/i.test(message)
+    ) {
+      return {
+        pending: true,
+        reason: "POST_ACCEPTED_ORDER_LOOKUP_TIMEOUT",
+        scope: "ORDER_STATUS",
+      };
+    }
+    if (name === "TypeError") {
+      return {
+        pending: true,
+        reason: "POST_ACCEPTED_ORDER_LOOKUP_NETWORK_ERROR",
+        scope: "ORDER_STATUS",
+      };
+    }
+    if (Number.isFinite(status) && status >= 500) {
+      return {
+        pending: true,
+        reason: "POST_ACCEPTED_ORDER_LOOKUP_SERVER_ERROR",
+        scope: "ORDER_STATUS",
+      };
+    }
+    // This error came from a read after the POST already supplied an order/client ID or
+    // execution evidence. Even a deterministic lookup/configuration error cannot negate
+    // that acceptance; surface it for reconciliation instead of converting it to rejection.
+    return {
+      pending: true,
+      reason: "POST_ACCEPTED_ORDER_LOOKUP_FAILED",
+      scope: "ORDER_STATUS",
+    };
+  }
+
+  if (
+    rawStatus === "FILLED" &&
+    Number.isFinite(executedVolume) &&
+    executedVolume > 0 &&
+    !(Number.isFinite(reportedAveragePrice) && reportedAveragePrice > 0)
+  ) {
+    return {
+      pending: true,
+      reason: "FILLED_ORDER_DETAILS_INCOMPLETE",
+      scope: "FILL_DETAILS",
+    };
+  }
+
+  return { pending: false, reason: null, scope: null };
+}
+
+function markAcceptedFuturesOrderForReconciliation(order, decision, error = null) {
+  return {
+    ...order,
+    reconciliation_pending: true,
+    reconciliation_reason: decision.reason,
+    reconciliation_scope: decision.scope,
+    reconciliation_error: error
+      ? {
+        name: error?.name || null,
+        code: error?.code ?? null,
+        status: error?.status ?? null,
+        message: error?.message || String(error),
+      }
+      : null,
+  };
 }
 function normalizeUpbitOrder(order) {
   const trades = Array.isArray(order?.trades) ? order.trades : [];
@@ -1147,35 +1258,70 @@ function conformFuturesOrder(
   };
 }
 
-function normalizeFuturesOrder(order) {
+function normalizeFuturesOrder(order, quantityStep = 0) {
   const fills = Array.isArray(order?.fills) ? order.fills : [];
-  const executedVolume = Number(order?.executedQty || 0);
+  const rawExecutedVolume = Number(order?.executedQty || 0);
+  const executedVolume = Number.isFinite(rawExecutedVolume) ? rawExecutedVolume : 0;
+  const fillExecutedVolume = fills.reduce((sum, row) => {
+    const quantity = Number(row?.qty || 0);
+    return Number.isFinite(quantity) && quantity > 0 ? sum + quantity : sum;
+  }, 0);
+  const fillExecutedFunds = fills.reduce((sum, row) => {
+    const quoteQuantity = row?.quoteQty == null ? NaN : Number(row.quoteQty);
+    if (Number.isFinite(quoteQuantity) && quoteQuantity >= 0) return sum + quoteQuantity;
+    const price = Number(row?.price || 0);
+    const quantity = Number(row?.qty || 0);
+    return Number.isFinite(price) && Number.isFinite(quantity) && price > 0 && quantity > 0
+      ? sum + price * quantity
+      : sum;
+  }, 0);
+  const numericQuantityTolerance = Math.max(
+    1e-12,
+    Number.EPSILON * 32 * Math.max(1, fills.length) *
+      Math.max(1, Math.abs(executedVolume), Math.abs(fillExecutedVolume)),
+  );
+  const normalizedQuantityStep = Number(quantityStep);
+  const fillCoverageTolerance = Number.isFinite(normalizedQuantityStep) && normalizedQuantityStep > 0
+    ? Math.max(numericQuantityTolerance, normalizedQuantityStep / 2)
+    : numericQuantityTolerance;
+  const fillsCoverExecution = executedVolume > 0 && fillExecutedVolume > 0 &&
+    Math.abs(fillExecutedVolume - executedVolume) <= fillCoverageTolerance;
   // USDⓈ-M reports cumulative quote as `cumQuote`. When an UNKNOWN-status recovery read
-  // omits it, avgPrice x executedQty is exact, and the fill list is the last resort.
+  // omits it, avgPrice x executedQty is exact. /userTrades can be temporarily incomplete,
+  // so its quote total is evidence only when its quantities cover the reported execution.
   const executedFunds = Number(order?.cumQuote) > 0
     ? Number(order.cumQuote)
     : Number(order?.avgPrice || 0) > 0
     ? Number(order.avgPrice) * executedVolume
-    : fills.reduce((sum, row) => sum + Number(row.price || 0) * Number(row.qty || 0), 0);
+    : fillsCoverExecution
+    ? fillExecutedFunds
+    : 0;
   const commissions = fills.reduce((sum, row) => sum + Number(row.commission || 0), 0);
   const feeAssetSet = [...new Set(fills.map((row) => row.commissionAsset).filter(Boolean))];
-  const trades = fills.map((fill, index) => ({
-    trade_id: fill.tradeId != null ? String(fill.tradeId) : `${order?.orderId || "order"}-${index}`,
-    price: Number(fill.price || 0),
-    volume: Number(fill.qty || 0),
-    funds: Number(fill.price || 0) * Number(fill.qty || 0),
-    fee: Number(fill.commission || 0),
-    fee_asset: fill.commissionAsset || null,
-    fee_quote_marked: Number(fill.feeQuoteMarked || 0),
-    fee_quote_mark_source: fill.feeQuoteMarkSource || null,
-    realized_pnl_quote: Number(fill.realizedPnl || 0),
-    executed_at: fill?.time
-      ? new Date(Number(fill.time)).toISOString()
-      : order?.updateTime
-      ? new Date(Number(order.updateTime)).toISOString()
-      : null,
-    raw: fill,
-  }));
+  const trades = fills.map((fill, index) => {
+    const quoteQuantity = fill?.quoteQty == null ? NaN : Number(fill.quoteQty);
+    const price = Number(fill?.price || 0);
+    const volume = Number(fill?.qty || 0);
+    return {
+      trade_id: fill.tradeId != null ? String(fill.tradeId) : `${order?.orderId || "order"}-${index}`,
+      price,
+      volume,
+      funds: Number.isFinite(quoteQuantity) && quoteQuantity >= 0
+        ? quoteQuantity
+        : price * volume,
+      fee: Number(fill.commission || 0),
+      fee_asset: fill.commissionAsset || null,
+      fee_quote_marked: Number(fill.feeQuoteMarked || 0),
+      fee_quote_mark_source: fill.feeQuoteMarkSource || null,
+      realized_pnl_quote: Number(fill.realizedPnl || 0),
+      executed_at: fill?.time
+        ? new Date(Number(fill.time)).toISOString()
+        : order?.updateTime
+        ? new Date(Number(order.updateTime)).toISOString()
+        : null,
+      raw: fill,
+    };
+  });
   const averagePrice = Number(order?.avgPrice || 0) > 0
     ? Number(order.avgPrice)
     : executedVolume > 0
@@ -1222,6 +1368,7 @@ async function attachFuturesFills(data, market) {
       tradeId: trade?.id != null ? String(trade.id) : trade?.tradeId,
       price: trade?.price,
       qty: trade?.qty,
+      quoteQty: trade?.quoteQty,
       commission: trade?.commission,
       commissionAsset: trade?.commissionAsset,
       realizedPnl: trade?.realizedPnl,
@@ -1237,13 +1384,33 @@ async function attachFuturesFills(data, market) {
   return data;
 }
 
-async function binanceFuturesGetOrder(identifier, symbol) {
+async function binanceFuturesGetOrder(identifier, symbol, exchangeOrderId = null, quantityStep = 0) {
   const market = validateBinanceSymbol(symbol);
-  const data = (await futuresRequest("GET", "/fapi/v1/order", {
-    symbol: market,
-    origClientOrderId: validateIdentifier(identifier),
-  })).data;
-  return normalizeFuturesOrder(await attachFuturesFills(data, market));
+  const clientOrderId = validateIdentifier(identifier);
+  let data;
+  if (exchangeOrderId != null && String(exchangeOrderId).trim()) {
+    try {
+      data = (await futuresRequest("GET", "/fapi/v1/order", {
+        symbol: market,
+        orderId: validateFuturesOrderId(exchangeOrderId),
+      })).data;
+    } catch (error) {
+      if (Number(error?.code) !== -2013 && !/order does not exist/i.test(error?.message || "")) {
+        throw error;
+      }
+    }
+  }
+  if (!data) {
+    data = (await futuresRequest("GET", "/fapi/v1/order", {
+      symbol: market,
+      origClientOrderId: clientOrderId,
+    })).data;
+  }
+  const normalized = normalizeFuturesOrder(await attachFuturesFills(data, market), quantityStep);
+  const reconciliation = classifyAcceptedFuturesOrderReconciliation(normalized);
+  return reconciliation.pending
+    ? markAcceptedFuturesOrderForReconciliation(normalized, reconciliation)
+    : normalized;
 }
 
 async function binanceFuturesCreateOrder(payload, waitForFinalMs = 2500, leverage = null) {
@@ -1265,27 +1432,94 @@ async function binanceFuturesCreateOrder(payload, waitForFinalMs = 2500, leverag
     await ensureFuturesLeverage(info.symbol, openingLeverage);
   }
   let normalized;
+  let rawAcknowledgement;
   try {
-    const raw = (await futuresRequest("POST", "/fapi/v1/order", conformed.order, {
+    rawAcknowledgement = (await futuresRequest("POST", "/fapi/v1/order", conformed.order, {
       timeoutMs: 12_000,
     })).data;
-    normalized = normalizeFuturesOrder(await attachFuturesFills(raw, info.symbol));
   } catch (error) {
     if (
       ["AbortError", "TypeError"].includes(error?.name) || Number(error?.status) >= 500 ||
       Number(error?.code) === -1007
     ) {
       try {
-        normalized = await binanceFuturesGetOrder(conformed.order.newClientOrderId, info.symbol);
+        normalized = await binanceFuturesGetOrder(
+          conformed.order.newClientOrderId,
+          info.symbol,
+          null,
+          info.quantity_step,
+        );
       } catch {
         throw error;
       }
     } else throw error;
   }
+  if (rawAcknowledgement !== undefined) {
+    // Crossing this line means Binance accepted the POST and returned an acknowledgement.
+    // Preserve it before optional /userTrades enrichment: a failure in that later read must
+    // never be mistaken for an UNKNOWN POST or discard the exchange/client order IDs.
+    const acknowledged = normalizeFuturesOrder(rawAcknowledgement, info.quantity_step);
+    normalized = acknowledged;
+    try {
+      const enrichedRaw = await attachFuturesFills({ ...rawAcknowledgement }, info.symbol);
+      normalized = normalizeFuturesOrder(enrichedRaw, info.quantity_step);
+      if (enrichedRaw?.fee_lookup_error) {
+        const enrichmentError = Object.assign(new Error(enrichedRaw.fee_lookup_error), {
+          code: "FUTURES_FILL_ENRICHMENT_FAILED",
+        });
+        normalized = markAcceptedFuturesOrderForReconciliation(
+          normalized,
+          {
+            pending: true,
+            reason: "POST_ACCEPTED_FILL_ENRICHMENT_FAILED",
+            scope: "FILL_DETAILS",
+          },
+          enrichmentError,
+        );
+      }
+    } catch (error) {
+      normalized = markAcceptedFuturesOrderForReconciliation(
+        acknowledged,
+        {
+          pending: true,
+          reason: "POST_ACCEPTED_FILL_ENRICHMENT_FAILED",
+          scope: "FILL_DETAILS",
+        },
+        error,
+      );
+    }
+  }
+  const initialReconciliation = classifyAcceptedFuturesOrderReconciliation(normalized);
+  if (initialReconciliation.pending && normalized.reconciliation_pending !== true) {
+    normalized = markAcceptedFuturesOrderForReconciliation(normalized, initialReconciliation);
+  }
   const deadline = Date.now() + Math.max(0, Math.min(5000, Number(waitForFinalMs) || 0));
-  while (Date.now() < deadline && ["OPEN", "PARTIALLY_FILLED"].includes(normalized.status)) {
+  while (
+    normalized.reconciliation_pending !== true &&
+    Date.now() < deadline &&
+    ["OPEN", "PARTIALLY_FILLED"].includes(normalized.status)
+  ) {
     await sleep(250);
-    normalized = await binanceFuturesGetOrder(conformed.order.newClientOrderId, info.symbol);
+    try {
+      normalized = await binanceFuturesGetOrder(
+        conformed.order.newClientOrderId,
+        info.symbol,
+        normalized?.exchange_order_id,
+        info.quantity_step,
+      );
+      const reconciliation = classifyAcceptedFuturesOrderReconciliation(normalized);
+      if (reconciliation.pending) {
+        normalized = markAcceptedFuturesOrderForReconciliation(normalized, reconciliation);
+        break;
+      }
+    } catch (error) {
+      const reconciliation = classifyAcceptedFuturesOrderReconciliation(normalized, error);
+      if (!reconciliation.pending) throw error;
+      // Keep the last exchange-acknowledged object (including any executed quantity). The
+      // failed GET contributes uncertainty metadata only; it is not a zero-fill response.
+      normalized = markAcceptedFuturesOrderForReconciliation(normalized, reconciliation, error);
+      break;
+    }
   }
   normalized.position_side = conformed.intent.positionSide;
   normalized.position_effect = conformed.intent.effect;
@@ -1297,6 +1531,9 @@ async function binanceFuturesCreateOrder(payload, waitForFinalMs = 2500, leverag
     fill: fillSummary(normalized),
     symbol_info: info,
     leverage: futuresLeverageApplied.get(info.symbol) || null,
+    reconciliation_pending: normalized.reconciliation_pending === true,
+    reconciliation_reason: normalized.reconciliation_reason || null,
+    reconciliation_scope: normalized.reconciliation_scope || null,
   };
 }
 
@@ -1770,9 +2007,11 @@ async function quote(exchange, market) {
   };
 }
 
-async function getOrder(exchange, identifier, market) {
+async function getOrder(exchange, identifier, market, exchangeOrderId = null) {
   const id = validateIdentifier(identifier);
-  if (isBinanceFutures(exchange)) return binanceFuturesGetOrder(id, market);
+  if (isBinanceFutures(exchange)) {
+    return binanceFuturesGetOrder(id, market, exchangeOrderId);
+  }
   return exchange === "upbit" ? upbitGetOrder(id) : binanceGetOrder(id, market);
 }
 async function cancelOrder(exchange, identifier, market) {
@@ -1989,7 +2228,7 @@ async function handleCommand(command) {
           : binanceCreateOrder(command.order || {}, command.wait_for_final_ms)
       );
     case "get_order":
-      return getOrder(exchange, command.identifier, command.market);
+      return getOrder(exchange, command.identifier, command.market, command.exchange_order_id);
     case "cancel_order":
       return cancelOrder(exchange, command.identifier, command.market);
     case "open_orders":
@@ -2180,10 +2419,12 @@ if (isMain) {
 
 export {
   assertOrderEngineVersion,
+  binanceFuturesCreateOrder,
   binanceQueryString,
   binanceTradesToFills,
   buildFuturesPortfolio,
   buildUpbitPortfolio,
+  classifyAcceptedFuturesOrderReconciliation,
   conformFuturesOrder,
   contextualizeError,
   createBinanceSignature,
@@ -2201,12 +2442,14 @@ export {
   normalizeUpbitOrder,
   rawQueryString,
   p10Quotes,
+  PREVIOUS_ENGINE_VERSION,
   resolveFuturesIntent,
   stepPrecision,
   upbitRateGroup,
   validateBinanceSymbol,
   validateExchange,
   validateFuturesLeverage,
+  validateFuturesOrderId,
   validateIdentifier,
   validateUpbitMarket,
   VERSION,

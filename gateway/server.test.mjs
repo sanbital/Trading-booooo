@@ -33,6 +33,8 @@ test("gateway restricts identifiers and spot markets", () => {
   assert.throws(() => module.validateBinanceSymbol("BTCUSDC"));
   assert.equal(module.validateIdentifier("tb-e-abc"), "tb-e-abc");
   assert.throws(() => module.validateIdentifier("manual-order"));
+  assert.equal(module.validateFuturesOrderId("4260258773"), "4260258773");
+  assert.throws(() => module.validateFuturesOrderId("4.260e9"));
 });
 
 test("monitor cadence waits only for the unspent interval", () => {
@@ -62,7 +64,7 @@ test("gateway blocks orders from a missing or different engine revision", () => 
     true,
   );
   assert.equal(
-    module.assertOrderEngineVersion({ engine_version: "7.6.0-BINANCE-FUTURES" }),
+    module.assertOrderEngineVersion({ engine_version: module.PREVIOUS_ENGINE_VERSION }),
     true,
   );
 });
@@ -595,6 +597,283 @@ test("futures order normalization reads cumQuote and realized pnl", () => {
   assert.equal(normalized.realized_pnl_quote, 12.5);
   assert.equal(normalized.reduce_only, true);
   assert.equal(normalized.remaining_volume, 0);
+});
+
+test("an accepted futures POST followed by Binance -2013 remains pending reconciliation", () => {
+  const accepted = module.normalizeFuturesOrder({
+    orderId: 441,
+    clientOrderId: "tb-p10e-xpl",
+    symbol: "XPLUSDT",
+    status: "NEW",
+    side: "SELL",
+    origQty: "2016",
+    executedQty: "0",
+    avgPrice: "0",
+  });
+  const notVisible = Object.assign(new Error("Order does not exist."), {
+    code: -2013,
+    status: 400,
+  });
+
+  assert.deepEqual(
+    module.classifyAcceptedFuturesOrderReconciliation(accepted, notVisible),
+    {
+      pending: true,
+      reason: "POST_ACCEPTED_ORDER_NOT_YET_VISIBLE",
+      scope: "ORDER_STATUS",
+    },
+  );
+  assert.equal(accepted.exchange_order_id, "441");
+  assert.equal(accepted.client_order_id, "tb-p10e-xpl");
+});
+
+test("accepted futures orders treat lookup timeout and 5xx as uncertain, not unfilled", () => {
+  const accepted = module.normalizeFuturesOrder({
+    orderId: 442,
+    clientOrderId: "tb-p10e-timeout",
+    symbol: "XPLUSDT",
+    status: "PARTIALLY_FILLED",
+    side: "SELL",
+    origQty: "2016",
+    executedQty: "100",
+    avgPrice: "0.62",
+  });
+  const timeout = Object.assign(new Error("futures order lookup timed out"), {
+    name: "AbortError",
+  });
+  const unavailable = Object.assign(new Error("Binance 503"), { status: 503 });
+
+  assert.deepEqual(
+    module.classifyAcceptedFuturesOrderReconciliation(accepted, timeout),
+    {
+      pending: true,
+      reason: "POST_ACCEPTED_ORDER_LOOKUP_TIMEOUT",
+      scope: "ORDER_STATUS",
+    },
+  );
+  assert.deepEqual(
+    module.classifyAcceptedFuturesOrderReconciliation(accepted, unavailable),
+    {
+      pending: true,
+      reason: "POST_ACCEPTED_ORDER_LOOKUP_SERVER_ERROR",
+      scope: "ORDER_STATUS",
+    },
+  );
+});
+
+test("any lookup failure after futures acceptance remains reconciliation pending", () => {
+  const accepted = module.normalizeFuturesOrder({
+    orderId: 443,
+    clientOrderId: "tb-p10e-rejected",
+    symbol: "XPLUSDT",
+    status: "NEW",
+    side: "SELL",
+    origQty: "2016",
+    executedQty: "0",
+    avgPrice: "0",
+  });
+  const rejected = Object.assign(new Error("Margin is insufficient."), {
+    code: -2019,
+    status: 400,
+  });
+
+  assert.deepEqual(
+    module.classifyAcceptedFuturesOrderReconciliation(accepted, rejected),
+    {
+      pending: true,
+      reason: "POST_ACCEPTED_ORDER_LOOKUP_FAILED",
+      scope: "ORDER_STATUS",
+    },
+  );
+  assert.deepEqual(
+    module.classifyAcceptedFuturesOrderReconciliation({}, rejected),
+    { pending: false, reason: null, scope: null },
+  );
+});
+
+test("FILLED futures quantity requires reconciliation only when no price evidence exists", () => {
+  const quoteBacked = module.normalizeFuturesOrder({
+    orderId: 444,
+    clientOrderId: "tb-p10e-filled",
+    symbol: "XPLUSDT",
+    status: "FILLED",
+    side: "SELL",
+    origQty: "2016",
+    executedQty: "2016",
+    cumQuote: "1260",
+    avgPrice: "0",
+  });
+  const incomplete = module.normalizeFuturesOrder({
+    ...quoteBacked.raw,
+    cumQuote: "0",
+  });
+  const complete = module.normalizeFuturesOrder({
+    ...incomplete.raw,
+    avgPrice: "0.625",
+  });
+
+  assert.equal(incomplete.executed_volume, 2016);
+  assert.equal(incomplete.average_price, 0);
+  assert.deepEqual(
+    module.classifyAcceptedFuturesOrderReconciliation(incomplete),
+    {
+      pending: true,
+      reason: "FILLED_ORDER_DETAILS_INCOMPLETE",
+      scope: "FILL_DETAILS",
+    },
+  );
+  assert.ok(quoteBacked.average_price > 0);
+  assert.deepEqual(
+    module.classifyAcceptedFuturesOrderReconciliation(quoteBacked),
+    { pending: false, reason: null, scope: null },
+  );
+  assert.deepEqual(
+    module.classifyAcceptedFuturesOrderReconciliation(complete),
+    { pending: false, reason: null, scope: null },
+  );
+});
+
+test("partial futures userTrades never manufacture a FILLED VWAP", () => {
+  const partial = module.normalizeFuturesOrder({
+    orderId: 445,
+    clientOrderId: "tb-p10e-partial",
+    symbol: "XPLUSDT",
+    status: "FILLED",
+    side: "SELL",
+    origQty: "2016",
+    executedQty: "2016",
+    cumQuote: "0",
+    avgPrice: "0",
+    fills: [{
+      tradeId: "1",
+      price: "0.08937",
+      qty: "370",
+      quoteQty: "33.0669",
+      commission: "0.01",
+      commissionAsset: "USDT",
+    }],
+  }, 1);
+  const complete = module.normalizeFuturesOrder({
+    orderId: 446,
+    clientOrderId: "tb-p10e-complete",
+    symbol: "XPLUSDT",
+    status: "FILLED",
+    side: "SELL",
+    origQty: "3",
+    executedQty: "3",
+    cumQuote: "0",
+    avgPrice: "0",
+    fills: [{
+      tradeId: "2",
+      price: "0.33333333",
+      qty: "3",
+      quoteQty: "1.00000000",
+      commission: "0.001",
+      commissionAsset: "USDT",
+    }],
+  }, 1);
+
+  assert.equal(partial.executed_volume, 2016);
+  assert.equal(partial.executed_funds, 0);
+  assert.equal(partial.average_price, 0);
+  assert.equal(partial.trades[0].funds, 33.0669);
+  assert.deepEqual(
+    module.classifyAcceptedFuturesOrderReconciliation(partial),
+    {
+      pending: true,
+      reason: "FILLED_ORDER_DETAILS_INCOMPLETE",
+      scope: "FILL_DETAILS",
+    },
+  );
+
+  assert.equal(complete.executed_funds, 1);
+  assert.equal(complete.average_price, 1 / 3);
+  assert.equal(complete.trades[0].funds, 1);
+  assert.deepEqual(
+    module.classifyAcceptedFuturesOrderReconciliation(complete),
+    { pending: false, reason: null, scope: null },
+  );
+});
+
+test("failed futures fill enrichment preserves the successful POST acknowledgement", async (t) => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (input, init = {}) => {
+    const url = new URL(String(input));
+    calls.push({ method: init.method || "GET", pathname: url.pathname });
+    if (url.pathname === "/api/v3/time") {
+      return new Response(JSON.stringify({ serverTime: Date.now() }), { status: 200 });
+    }
+    if (url.pathname === "/fapi/v1/exchangeInfo") {
+      return new Response(JSON.stringify({
+        symbols: [{
+          symbol: "XPLUSDT",
+          status: "TRADING",
+          contractType: "PERPETUAL",
+          baseAsset: "XPL",
+          quoteAsset: "USDT",
+          filters: [
+            { filterType: "PRICE_FILTER", tickSize: "0.00001" },
+            { filterType: "LOT_SIZE", stepSize: "1", minQty: "1", maxQty: "1000000" },
+            { filterType: "MARKET_LOT_SIZE", stepSize: "1", minQty: "1", maxQty: "1000000" },
+            { filterType: "MIN_NOTIONAL", notional: "5" },
+          ],
+        }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.pathname === "/fapi/v1/positionSide/dual") {
+      return new Response(JSON.stringify({ dualSidePosition: false }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.pathname === "/fapi/v1/order" && init.method === "POST") {
+      return new Response(JSON.stringify({
+        orderId: 991,
+        clientOrderId: "tb-p10e-ack-kept",
+        symbol: "XPLUSDT",
+        status: "FILLED",
+        side: "SELL",
+        origQty: "2016",
+        executedQty: "2016",
+        cumQuote: "180.16992",
+        avgPrice: "0.08937",
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.pathname === "/fapi/v1/userTrades") {
+      return new Response(JSON.stringify({ code: -2013, msg: "Order does not exist." }), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected request: ${init.method || "GET"} ${url.pathname}`);
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const result = await module.binanceFuturesCreateOrder({
+    market: "XPLUSDT",
+    identifier: "tb-p10e-ack-kept",
+    side: "SELL",
+    type: "MARKET",
+    quantity: 2016,
+    position_side: "LONG",
+    position_effect: "CLOSE",
+  }, 0);
+
+  assert.equal(result.order.exchange_order_id, "991");
+  assert.equal(result.order.client_order_id, "tb-p10e-ack-kept");
+  assert.equal(result.order.executed_volume, 2016);
+  assert.equal(result.order.status, "FILLED");
+  assert.equal(result.reconciliation_pending, true);
+  assert.equal(result.reconciliation_reason, "POST_ACCEPTED_FILL_ENRICHMENT_FAILED");
+  assert.equal(result.reconciliation_scope, "FILL_DETAILS");
+  assert.equal(result.order.reconciliation_error.code, "FUTURES_FILL_ENRICHMENT_FAILED");
+  assert.equal(
+    calls.some((call) => call.pathname === "/fapi/v1/order" && call.method === "GET"),
+    false,
+  );
 });
 
 test("futures portfolio exposes longs as deliverable balances and shorts as nothing", () => {
