@@ -1,7 +1,9 @@
 import type { P10ExitDecision } from "./p10-policy.ts";
 
 export const S096_SHORT_STRATEGY_KEY = "S096_RSI_MOMENTUM_FAST";
+// Keep the strategy identity stable so already-open S096 positions remain on the fixed SHORT exit path.
 export const S096_SHORT_REVISION = "S096-LIVE-1.0.0";
+export const S096_ENTRY_QUALITY_REVISION = "S096-ANTICHASE-20260826";
 export const S096_RESEARCH_PROTOCOL = "SHORT_V4_S37_PLUS_100_AUDITED_FINAL_REPLAY";
 export const S096_RESEARCH_REGISTRY_SHA256 =
   "7710581b06e91eef4dcdf2008f03e82a76c13406d3095811c50341f2d4598598";
@@ -17,10 +19,16 @@ export const S096_SHORT_CONFIG = Object.freeze({
   minQuoteVolumeMean20: 500_000,
   minAtrPct: 0.15,
   maxAtrPct: 6.0,
-  minRet24Pct: -20.0,
+  // Production anti-chase bounds. Directional trend remains required, but an already
+  // capitulated asset must rebound/re-form before it can become a fresh SHORT candidate.
+  minRet3Pct: -5.0,
+  minRet6Pct: -8.0,
+  minRet12Pct: -12.0,
+  minRet24Pct: -12.0,
   maxRet24Pct: -0.2,
-  minRsi14: 14.0,
+  minRsi14: 30.0,
   maxRsi14: 40.0,
+  minCloseLocation: 0.15,
   maxBtcRet24Pct: 0.0,
   rsiFallingBars: 3,
 });
@@ -64,8 +72,13 @@ export type CombinedSignalCandidate<TLongCheck> =
 
 const finite = (value: unknown, fallback = 0) =>
   Number.isFinite(Number(value)) ? Number(value) : fallback;
+const pct = (now: number, before: number) => before > 0 ? (now / before - 1) * 100 : 0;
 
-/** Exact S096 signal-bar gate from the frozen 101-strategy research registry. */
+/**
+ * S096 keeps the audited research shape but adds production execution-quality guards.
+ * The prior 14-RSI lower bound repeatedly admitted assets after most of the decline had
+ * already happened; the new bounds require room for continuation instead of selling capitulation.
+ */
 export function checkS096ShortSignal(
   bars: readonly S096PreparedBar[],
   btcRet24Pct: number,
@@ -98,10 +111,15 @@ export function checkS096ShortSignal(
   if (atrPct < S096_SHORT_CONFIG.minAtrPct || atrPct > S096_SHORT_CONFIG.maxAtrPct) {
     return null;
   }
-  // This is the research engine's structural 5% initial-risk guard. With a 1.25 ATR
-  // stop it makes the effective ATR% ceiling 4%, even though the declared filter is 6%.
   if (S096_SHORT_CONFIG.stopAtr * atrPct > S096_SHORT_CONFIG.maxInitialRiskPct) return null;
+
+  const ret3Pct = pct(b.close, bars.at(-4)!.close);
+  const ret6Pct = pct(b.close, bars.at(-7)!.close);
+  const ret12Pct = pct(b.close, bars.at(-13)!.close);
   if (
+    ret3Pct < S096_SHORT_CONFIG.minRet3Pct ||
+    ret6Pct < S096_SHORT_CONFIG.minRet6Pct ||
+    ret12Pct < S096_SHORT_CONFIG.minRet12Pct ||
     b.ret24Pct < S096_SHORT_CONFIG.minRet24Pct ||
     b.ret24Pct > S096_SHORT_CONFIG.maxRet24Pct
   ) return null;
@@ -114,6 +132,7 @@ export function checkS096ShortSignal(
   }
 
   const closeLocation = (b.close - b.low) / (b.high - b.low);
+  if (closeLocation < S096_SHORT_CONFIG.minCloseLocation) return null;
   return {
     score: -b.ret24Pct + b.volumeRatio * 0.25 + finite(b.efficiency24),
     rel24: btcRet24Pct - b.ret24Pct,
@@ -122,6 +141,7 @@ export function checkS096ShortSignal(
     rsiPath,
   };
 }
+
 /**
  * Keeps the existing I46 LONG candidate authoritative and introduces S096 only as the
  * Binance Futures fallback. The two research score scales are intentionally never compared.
