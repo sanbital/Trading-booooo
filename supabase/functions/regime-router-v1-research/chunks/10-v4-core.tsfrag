@@ -1,0 +1,140 @@
+
+const V4_REVISION = "REGIME_ROUTER_V4_CONFIRMATION_15M_45D_WF";
+
+function v4Candidates(): Candidate[] {
+  const out: Candidate[] = [];
+  // RANGE: long only after a broad washout has clearly turned, while the asset is still below
+  // its mean anchors. Require enough room back to VWAP/day-open so cost does not dominate.
+  for (const low of [0.28, 0.34, 0.40])
+    for (const rebound of [0.10, 0.14])
+      for (const stopAtr of [0.60, 0.70])
+        out.push({
+          name: `V4_RANGE_CONFIRM_L${low}_D${rebound}_S${stopAtr}`,
+          regime: "RANGE",
+          side: "LONG",
+          kind: "V4_RANGE_CONFIRM",
+          p: { low, rebound, stopAtr, stoch: 28, adx: 21, sep: 0.72, targetAtr: 0.85, maxHold: 6, qv: 15_000_000 },
+        });
+
+  // BEAR: never chase the first drop. Wait for a rebound into EMA20, then require an actual
+  // downside re-break plus market-breadth rollover before opening a short. Holds are deliberately short.
+  for (const relWeak of [0.003, 0.006, 0.010])
+    for (const stopAtr of [0.52, 0.62])
+      for (const targetR of [0.55, 0.70])
+        out.push({
+          name: `V4_BEAR_REBREAK_W${relWeak}_S${stopAtr}_T${targetR}`,
+          regime: "BEAR",
+          side: "SHORT",
+          kind: "V4_BEAR_REBREAK",
+          p: { relWeak, stopAtr, targetR, stoch: 62, maxHold: 3, timeStop: 1, qv: 15_000_000 },
+        });
+  return out;
+}
+
+function v4Signal(d: Prepared[], i: number, c: Candidate, metrics: any): { ok: boolean; targetHint?: number } {
+  if (i < 100 || i + 1 >= d.length) return { ok: false };
+  const r = d[i], p = d[i - 1], p2 = d[i - 2], P = c.p;
+  const ph = v3Phase(metrics, r.time);
+  if (!ph || !v3Common(r, ph, P)) return { ok: false };
+  const atr = r.atr;
+  const rel24 = r.ret24 - ph.btc24;
+  const emaSlope = (r.ema20 - d[i - 4].ema20) / atr;
+  const bullish = r.close > r.open && r.close > p.close;
+  const bearish = r.close < r.open && r.close < p.close;
+
+  if (c.kind === "V4_RANGE_CONFIRM") {
+    const stochCross = p.stochK <= p.stochD && r.stochK > r.stochD && Math.min(p.stochK, r.stochK) <= P.stoch;
+    const breadthTurn = ph.min8 <= P.low && ph.delta2 >= P.rebound && ph.delta4 > 0 && ph.b30 >= 0.40 && ph.b30 <= 0.64;
+    const breadthNotHot = ph.mean30 >= -0.0005 && ph.mean30 <= 0.0018;
+    const trendless = r.adx <= P.adx && r.sepAtr <= P.sep;
+    const belowMean = r.close < r.vwap96 || r.close < r.dayOpen;
+    const localWashout = p.low <= p.bbLower || p2.low <= p2.bbLower || p.stochK <= 20;
+    const reclaim = r.close > p.high || (r.close > r.bbMid && p.close <= p.bbMid);
+    const notBroken = r.close >= r.low20Prev - 0.03 * atr;
+    const quality = rel24 >= -0.005 && rel24 <= 0.08 && r.rsi > p.rsi && r.rsi >= 34 && r.rsi <= 57 && r.volRatio >= 0.80;
+    if (!(stochCross && breadthTurn && breadthNotHot && trendless && belowMean && localWashout && reclaim && notBroken && quality && bullish)) return { ok: false };
+    const anchors = [r.vwap96, r.dayOpen, r.bbMid].filter((x) => Number.isFinite(x) && x > r.close);
+    if (!anchors.length) return { ok: false };
+    const target = Math.min(Math.min(...anchors), r.close + 1.15 * atr);
+    if (target - r.close < P.targetAtr * atr) return { ok: false };
+    return { ok: true, targetHint: target };
+  }
+
+  if (c.kind === "V4_BEAR_REBREAK") {
+    const stochRoll = p.stochK >= p.stochD && r.stochK < r.stochD && Math.max(p.stochK, r.stochK) >= P.stoch;
+    const marketRoll = ph.max8 >= 0.54 && (ph.max8 - ph.b30) >= 0.10 && ph.delta2 <= -0.06 && ph.delta4 < -0.04 && ph.mean30 < 0;
+    const trendDown = r.ema20 < r.ema50 && emaSlope < -0.03;
+    const weak = rel24 <= -P.relWeak;
+    const reboundHigh = Math.max(d[i - 1].high, d[i - 2].high, d[i - 3].high, d[i - 4].high);
+    const reboundLow = Math.min(d[i - 4].low, d[i - 3].low);
+    const reboundSize = (reboundHigh - reboundLow) / atr;
+    const touchedMean = reboundHigh >= r.ema20 - 0.20 * atr;
+    const rebreak = r.close < p.low && r.close < p2.close && r.close < r.ema20 - 0.10 * atr;
+    const momentum = r.rsi < p.rsi && r.rsi >= 32 && r.rsi <= 57 && r.volRatio >= 0.85;
+    return { ok: marketRoll && trendDown && weak && reboundSize >= 0.55 && touchedMean && stochRoll && rebreak && momentum && bearish };
+  }
+  return { ok: false };
+}
+
+function simulateV4(prep: Prepared[], metrics: any, c: Candidate): Record<V3Split, Trade[]> {
+  const out: Record<V3Split, Trade[]> = { TRAIN: [], VALIDATION: [], TEST: [] };
+  let i = 100, cool = 0;
+  while (i < prep.length - 1) {
+    if (i < cool || regimeAt(metrics, prep[i].time) !== c.regime) { i++; continue; }
+    const sig = v4Signal(prep, i, c, metrics);
+    if (!sig.ok) { i++; continue; }
+    const e = i + 1, entry = prep[e].open, atr0 = prep[i].atr, P = c.p;
+    if (!(entry > 0 && atr0 > 0)) { i++; continue; }
+    const risk = P.stopAtr * atr0;
+    let activeStop = c.side === "LONG" ? entry - risk : entry + risk;
+    const target = c.kind === "V4_RANGE_CONFIRM" ? finite(sig.targetHint) : entry - P.targetR * risk;
+    let best = entry, worst = entry, exit = entry, reason = "MAX_HOLD";
+    let exitJ = Math.min(prep.length - 1, e + P.maxHold - 1);
+    let breadthPeak = v3Breadth(metrics, prep[i].time), breadthLow = breadthPeak;
+
+    for (let h = 0; h < P.maxHold; h++) {
+      const j = e + h; if (j >= prep.length) break;
+      const b = prep[j], curBreadth = v3Breadth(metrics, b.time);
+      if (Number.isFinite(curBreadth)) { breadthPeak = Math.max(breadthPeak, curBreadth); breadthLow = Math.min(breadthLow, curBreadth); }
+      if (c.side === "LONG") {
+        if (b.low <= activeStop) { exit = activeStop; reason = "STOP"; exitJ = j; worst = Math.min(worst, b.low); break; }
+        if (b.high >= target) { exit = target; reason = "TARGET"; exitJ = j; best = Math.max(best, b.high); break; }
+        best = Math.max(best, b.high); worst = Math.min(worst, b.low);
+        const mfeP = best - entry;
+        if (mfeP >= 0.50 * risk) activeStop = Math.max(activeStop, entry + 0.10 * risk);
+        if (j > e) {
+          const pb = prep[j - 1], ph = v3Phase(metrics, b.time);
+          const cycleTurn = pb.stochK >= pb.stochD && b.stochK < pb.stochK && Math.max(pb.stochK, b.stochK) >= 68;
+          const breadthTurn = !!ph && (breadthPeak - ph.b30 >= 0.07 || ph.delta2 <= -0.05);
+          if ((cycleTurn || breadthTurn) && b.close > entry) { exit = b.close; reason = "CYCLE_EXIT"; exitJ = j; break; }
+        }
+      } else {
+        if (b.high >= activeStop) { exit = activeStop; reason = "STOP"; exitJ = j; worst = Math.max(worst, b.high); break; }
+        if (b.low <= target) { exit = target; reason = "TARGET"; exitJ = j; best = Math.min(best, b.low); break; }
+        best = Math.min(best, b.low); worst = Math.max(worst, b.high);
+        const mfeP = entry - best;
+        if (mfeP >= 0.35 * risk) activeStop = Math.min(activeStop, entry - 0.08 * risk);
+        if (h + 1 >= P.timeStop && mfeP < 0.18 * risk) { exit = b.close; reason = "FAST_TIME_STOP"; exitJ = j; break; }
+        if (j > e) {
+          const pb = prep[j - 1], ph = v3Phase(metrics, b.time);
+          const cycleBounce = pb.stochK <= pb.stochD && b.stochK > pb.stochK && Math.min(pb.stochK, b.stochK) <= 26;
+          const breadthBounce = !!ph && ph.b30 - breadthLow >= 0.06;
+          if (cycleBounce || breadthBounce) { exit = b.close; reason = "BOUNCE_EXIT"; exitJ = j; break; }
+        }
+      }
+      exit = b.close;
+    }
+    if (reason === "MAX_HOLD") exit = prep[exitJ].close;
+    let gross = 0, mfe = 0, mae = 0;
+    if (c.side === "LONG") {
+      gross = (exit / entry - 1) * 10000; mfe = (best / entry - 1) * 10000; mae = (worst / entry - 1) * 10000;
+    } else {
+      gross = (entry - exit) / entry * 10000; mfe = (entry - best) / entry * 10000; mae = -(worst - entry) / entry * 10000;
+    }
+    const tr: Trade = { gross, net: gross - BASE_COST_BPS, stress: gross - STRESS_COST_BPS, mfe, mae, giveback: Math.max(0, mfe - gross), capture: mfe > 1e-9 && gross > 0 ? Math.min(2, gross / mfe) : null, hold: exitJ - e + 1, reason };
+    out[v3SplitFor(prep[e].time, metrics)].push(tr);
+    cool = exitJ + (c.regime === "BEAR" ? 1 : 1);
+    i = Math.max(i + 1, exitJ + 1);
+  }
+  return out;
+}
