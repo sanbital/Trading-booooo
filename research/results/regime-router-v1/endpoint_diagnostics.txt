@@ -1,0 +1,8 @@
+https://fapi.binance.com status=451 body={
+  "code": 0,
+  "msg": "Service unavailable from a restricted location according to 'b. Eligibility' in https://www.binance.com/en/terms. Please contact customer service if you believe you received this message in error."
+}
+https://fapi1.binance.com status=202 body=
+https://fapi2.binance.com status=202 body=
+https://fapi3.binance.com status=202 body=
+https://fapi4.binance.com status=202 body=

@@ -1,0 +1,15 @@
+Traceback (most recent call last):
+  File "/tmp/regime_router_backtest_v1.py", line 761, in <module>
+    main()
+  File "/tmp/regime_router_backtest_v1.py", line 674, in main
+    universe=get_universe()
+             ^^^^^^^^^^^^^^
+  File "/tmp/regime_router_backtest_v1.py", line 78, in get_universe
+    info = http_json("/fapi/v1/exchangeInfo")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/regime_router_backtest_v1.py", line 74, in http_json
+    raise RuntimeError(f"failed {url}: {last}")
+RuntimeError: failed https://fapi.binance.com/fapi/v1/exchangeInfo: HTTP 451: {
+  "code": 0,
+  "msg": "Service unavailable from a restricted location according to 'b. Eligibility' in https://www.binance.com/en/terms. Please contact customer service if you believe you received this message in error."
+}
