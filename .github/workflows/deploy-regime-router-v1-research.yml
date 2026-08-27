@@ -1,0 +1,59 @@
+name: Deploy isolated Regime Router V1 research
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'research/regime_router_v1/deploy-trigger.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regime-router-v1-research-deploy
+  cancel-in-progress: false
+
+jobs:
+  validate-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Assemble and validate isolated research function
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p supabase/functions/regime-router-v1-research
+          cat supabase/functions/regime-router-v1-research/chunks/*.tsfrag > supabase/functions/regime-router-v1-research/index.ts
+          deno check supabase/functions/regime-router-v1-research/index.ts
+          grep -q 'REGIME_ROUTER_V1_15M_30D_OOS' supabase/functions/regime-router-v1-research/index.ts
+          grep -q 'RANGE_STOCH_VWAP_STRICT' supabase/functions/regime-router-v1-research/index.ts
+          grep -q 'BEAR_EMA20_STOCH_FAIL' supabase/functions/regime-router-v1-research/index.ts
+          grep -q 'BULL_BREAKOUT_LOCK' supabase/functions/regime-router-v1-research/index.ts
+          test "$(wc -c < supabase/functions/regime-router-v1-research/index.ts)" -gt 25000
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Deploy research-only Edge Function
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_PROJECT_REF:-}"
+          supabase functions deploy regime-router-v1-research \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
