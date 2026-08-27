@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+import argparse
+import concurrent.futures as cf
+import json
+import math
+import os
+import statistics
+import threading
+import time
+from dataclasses import dataclass, asdict
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
+import requests
+
+FAPI = "https://fapi.binance.com"
+INTERVAL = "15m"
+BAR_MS = 15 * 60 * 1000
+BASE_COST_BPS = 14.0
+STRESS_COST_BPS = 23.0
+MIN_QV_24H = 5_000_000.0
+EXTREME_24H_ABS = 0.20
+
+class RateLimiter:
+    def __init__(self, rate_per_sec: float):
+        self.interval = 1.0 / max(rate_per_sec, 0.1)
+        self.lock = threading.Lock()
+        self.next_at = 0.0
+
+    def wait(self):
+        with self.lock:
+            now = time.monotonic()
+            if now < self.next_at:
+                time.sleep(self.next_at - now)
+                now = time.monotonic()
+            self.next_at = now + self.interval
+
+limiter = RateLimiter(5.0)
+thread_local = threading.local()
+
+def session() -> requests.Session:
+    if not hasattr(thread_local, "session"):
+        s = requests.Session()
+        s.headers.update({"User-Agent": "Trading-booooo-regime-router-backtest/1.0"})
+        thread_local.session = s
+    return thread_local.session
+
+
+def http_json(path: str, params=None, retries: int = 7):
+    url = FAPI + path
+    last = None
+    for attempt in range(retries):
+        limiter.wait()
+        try:
+            r = session().get(url, params=params, timeout=25)
+            if r.status_code == 200:
+                return r.json()
+            if r.status_code in (418, 429):
+                wait = min(60.0, 2.0 ** attempt + 1.0)
+                time.sleep(wait)
+                last = RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
+                continue
+            if 500 <= r.status_code < 600:
+                time.sleep(min(20.0, 1.5 ** attempt))
+                last = RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
+                continue
+            raise RuntimeError(f"HTTP {r.status_code}: {r.text[:300]}")
+        except Exception as e:
+            last = e
+            time.sleep(min(20.0, 1.5 ** attempt))
+    raise RuntimeError(f"failed {url}: {last}")
+
+
+def get_universe() -> List[str]:
+    info = http_json("/fapi/v1/exchangeInfo")
+    symbols = []
+    for s in info.get("symbols", []):
+        if s.get("status") != "TRADING":
+            continue
+        if s.get("contractType") != "PERPETUAL":
+            continue
+        if s.get("quoteAsset") != "USDT":
+            continue
+        symbol = s.get("symbol")
+        if symbol and symbol.endswith("USDT"):
+            symbols.append(symbol)
+    return sorted(set(symbols))
+
+
+def fetch_symbol(symbol: str, start_ms: int, end_ms: int) -> Tuple[str, Optional[pd.DataFrame], Optional[str]]:
+    rows = []
+    cursor = start_ms
+    try:
+        while cursor < end_ms:
+            data = http_json(
+                "/fapi/v1/klines",
+                {"symbol": symbol, "interval": INTERVAL, "startTime": cursor, "endTime": end_ms, "limit": 1000},
+            )
+            if not data:
+                break
+            rows.extend(data)
+            last_open = int(data[-1][0])
+            nxt = last_open + BAR_MS
+            if nxt <= cursor:
+                break
+            cursor = nxt
+            if len(data) < 1000:
+                break
+        if not rows:
+            return symbol, None, "no data"
+        # Binance kline fields: open_time, o,h,l,c,volume,close_time,quote_volume,...
+        arr = []
+        seen = set()
+        for x in rows:
+            t = int(x[0])
+            if t in seen:
+                continue
+            seen.add(t)
+            arr.append((
+                t, float(x[1]), float(x[2]), float(x[3]), float(x[4]), float(x[5]), float(x[7])
+            ))
+        df = pd.DataFrame(arr, columns=["open_time", "open", "high", "low", "close", "volume", "quote_volume"])
+        df["time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
+        df = df.set_index("time").sort_index()
+        df = df[~df.index.duplicated(keep="last")]
+        if len(df) < 300:
+            return symbol, None, f"insufficient bars {len(df)}"
+        return symbol, df, None
+    except Exception as e:
+        return symbol, None, str(e)
+
+
+def wilder_ewm(s: pd.Series, n: int) -> pd.Series:
+    return s.ewm(alpha=1.0/n, adjust=False, min_periods=n).mean()
+
+
+def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    d = df.copy()
+    prev_close = d["close"].shift(1)
+    tr = pd.concat([
+        d["high"] - d["low"],
+        (d["high"] - prev_close).abs(),
+        (d["low"] - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    d["atr"] = wilder_ewm(tr, 14)
+
+    delta = d["close"].diff()
+    gain = delta.clip(lower=0)
+    loss = (-delta).clip(lower=0)
+    avg_gain = wilder_ewm(gain, 14)
+    avg_loss = wilder_ewm(loss, 14)
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    d["rsi"] = 100 - 100 / (1 + rs)
+    d.loc[(avg_loss == 0) & (avg_gain > 0), "rsi"] = 100
+    d.loc[(avg_gain == 0) & (avg_loss > 0), "rsi"] = 0
+
+    d["ema20"] = d["close"].ewm(span=20, adjust=False, min_periods=20).mean()
+    d["ema50"] = d["close"].ewm(span=50, adjust=False, min_periods=50).mean()
+
+    hh = d["high"].rolling(14, min_periods=14).max()
+    ll = d["low"].rolling(14, min_periods=14).min()
+    rng = (hh - ll).replace(0, np.nan)
+    d["stoch_k"] = 100 * (d["close"] - ll) / rng
+    d["stoch_d"] = d["stoch_k"].rolling(3, min_periods=3).mean()
+
+    up = d["high"].diff()
+    down = -d["low"].diff()
+    plus_dm = pd.Series(np.where((up > down) & (up > 0), up, 0.0), index=d.index)
+    minus_dm = pd.Series(np.where((down > up) & (down > 0), down, 0.0), index=d.index)
+    atr14 = wilder_ewm(tr, 14)
+    plus_di = 100 * wilder_ewm(plus_dm, 14) / atr14.replace(0, np.nan)
+    minus_di = 100 * wilder_ewm(minus_dm, 14) / atr14.replace(0, np.nan)
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    d["adx"] = wilder_ewm(dx, 14)
+
+    typical = (d["high"] + d["low"] + d["close"]) / 3.0
+    pv = typical * d["volume"]
+    d["vwap96"] = pv.rolling(96, min_periods=32).sum() / d["volume"].rolling(96, min_periods=32).sum().replace(0, np.nan)
+    utc_day = d.index.floor("D")
+    d["day_open"] = d["open"].groupby(utc_day).transform("first")
+
+    d["qv24"] = d["quote_volume"].rolling(96, min_periods=32).sum()
+    d["vol_ratio"] = d["volume"] / d["volume"].rolling(20, min_periods=10).mean().replace(0, np.nan)
+    d["ret24"] = d["close"] / d["close"].shift(96) - 1.0
+    d["ret4"] = d["close"] / d["close"].shift(4) - 1.0
+    d["high20_prev"] = d["high"].rolling(20, min_periods=20).max().shift(1)
+    d["low20_prev"] = d["low"].rolling(20, min_periods=20).min().shift(1)
