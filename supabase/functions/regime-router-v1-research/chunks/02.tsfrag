@@ -1,0 +1,40 @@
+>x.quoteVolume);
+  const e20=ema(c,20),e50=ema(c,50),rsi=rsiSeries(c,14);
+  const tr=b.map((x,i)=>i===0?x.high-x.low:Math.max(x.high-x.low,Math.abs(x.high-b[i-1].close),Math.abs(x.low-b[i-1].close)));
+  const atr=wilder(tr,14);
+  const plus=new Array(n).fill(0),minus=new Array(n).fill(0);
+  for(let i=1;i<n;i++){const up=h[i]-h[i-1],dn=lo[i-1]-lo[i];if(up>dn&&up>0)plus[i]=up;if(dn>up&&dn>0)minus[i]=dn;}
+  const plusSm=wilder(plus,14),minusSm=wilder(minus,14),dx=new Array(n).fill(NaN);
+  for(let i=0;i<n;i++){const p=atr[i]>0?100*plusSm[i]/atr[i]:0,m=atr[i]>0?100*minusSm[i]/atr[i]:0;dx[i]=(p+m)>0?100*Math.abs(p-m)/(p+m):0;}
+  const adx=wilder(dx.map(x=>Number.isFinite(x)?x:0),14);
+  const k=new Array(n).fill(NaN),d=new Array(n).fill(NaN),bbWidth=new Array(n).fill(NaN),bbAvg=new Array(n).fill(NaN);
+  let pvSum=0,volSum=0,qvSum=0,vol20Sum=0; const pvQueue:number[]=[],volQueue:number[]=[],qvQueue:number[]=[],vol20Queue:number[]=[];
+  const out:Prepared[]=[]; let day="",dayOpen=0;
+  for(let i=0;i<n;i++){
+    const hh=rollingMax(h,14,i),ll=rollingMin(lo,14,i);k[i]=hh>ll?100*(c[i]-ll)/(hh-ll):50;d[i]=i>=2?(k[i]+k[i-1]+k[i-2])/3:NaN;
+    const mid=rollingMean(c,20,i),sd=rollingStd(c,20,i);const upper=mid+2*sd,lower=mid-2*sd;bbWidth[i]=mid>0?4*sd/mid:NaN;bbAvg[i]=rollingMean(bbWidth,96,i);
+    const tp=(h[i]+lo[i]+c[i])/3,pv=tp*vol[i];pvQueue.push(pv);volQueue.push(vol[i]);pvSum+=pv;volSum+=vol[i];if(pvQueue.length>96){pvSum-=pvQueue.shift()!;volSum-=volQueue.shift()!;}
+    qvQueue.push(qv[i]);qvSum+=qv[i];if(qvQueue.length>96)qvSum-=qvQueue.shift()!;
+    vol20Queue.push(vol[i]);vol20Sum+=vol[i];if(vol20Queue.length>20)vol20Sum-=vol20Queue.shift()!;
+    const thisDay=new Date(b[i].time).toISOString().slice(0,10);if(thisDay!==day){day=thisDay;dayOpen=b[i].open;}
+    out.push({...b[i],atr:atr[i],rsi:rsi[i],ema20:e20[i],ema50:e50[i],stochK:k[i],stochD:d[i],adx:adx[i],vwap96:volSum>0?pvSum/volSum:NaN,dayOpen,qv24:qvSum,volRatio:vol20Queue.length?vol[i]/(vol20Sum/vol20Queue.length):0,ret24:i>=96?c[i]/c[i-96]-1:NaN,ret4:i>=4?c[i]/c[i-4]-1:NaN,high20Prev:i>0?rollingMax(h,20,i-1):NaN,low20Prev:i>0?rollingMin(lo,20,i-1):NaN,high8Prev:i>0?rollingMax(h,8,i-1):NaN,low8Prev:i>0?rollingMin(lo,8,i-1):NaN,low5Prev:i>0?rollingMin(lo,5,i-1):NaN,sepAtr:atr[i]>0?Math.abs(e20[i]-e50[i])/atr[i]:NaN,bbMid:mid,bbUpper:upper,bbLower:lower,bbCompression:Number.isFinite(bbAvg[i])&&bbAvg[i]>0?bbWidth[i]/bbAvg[i]:NaN});
+  }
+  return out;
+}
+
+function regimeAt(metrics:any,time:number):Regime|"UNKNOWN"{
+  const start=finite(metrics?.grid_start_ms), codes=String(metrics?.regime_codes||"");if(!start||!codes)return "UNKNOWN";
+  const i=Math.round((time-start)/BAR_MS);if(i<0||i>=codes.length)return "UNKNOWN";const x=codes[i];return x==="B"?"BULL":x==="S"?"BEAR":x==="R"?"RANGE":"UNKNOWN";
+}
+
+function entrySignal(d:Prepared[],i:number,cand:Candidate):{ok:boolean,targetHint?:number}{
+  if(i<100||i+1>=d.length)return {ok:false};const r=d[i],p=d[i-1],atr=r.atr;if(![atr,r.rsi,r.ema20,r.ema50,r.stochK,r.stochD,r.qv24,r.ret24].every(Number.isFinite)||atr<=0||r.qv24<MIN_QV_24H||Math.abs(r.ret24)>EXTREME_24H_ABS)return {ok:false};const P=cand.p;
+  if(cand.kind==="BULL_BREAKOUT")return {ok:r.close>r.ema20&&r.ema20>r.ema50&&r.close>r.high20Prev&&r.rsi>=P.rsiLo&&r.rsi<=P.rsiHi&&r.stochK<92&&r.volRatio>=0.85&&(r.close-r.ema20)<=P.distAtr*atr};
+  if(cand.kind==="BULL_COMPRESSION")return {ok:r.close>r.ema20&&r.ema20>r.ema50&&p.bbCompression<=0.75&&r.close>r.bbUpper&&r.rsi>=P.rsiLo&&r.rsi<=P.rsiHi&&r.volRatio>=1.0&&(r.close-r.ema20)<=P.distAtr*atr};
+  if(cand.kind==="BULL_MOMENTUM"){const move=(r.close-d[i-4].close)/atr;return {ok:r.close>r.ema20&&r.ema20>r.ema50&&move>=0.9&&r.rsi>=P.rsiLo&&r.rsi<=P.rsiHi&&r.volRatio>=1.15&&(r.close-r.ema20)<=P.distAtr*atr&&r.stochK<95};}
+  if(cand.kind==="RANGE_CYCLE"||cand.kind==="RANGE_BB"){
+    const cross=p.stochK<=p.stochD&&r.stochK>r.stochD&&Math.min(p.stochK,r.stochK)<=P.stoch;const trendless=r.adx<=P.adx&&r.sepAtr<=P.sep;const below=r.close<r.vwap96||r.close<r.dayOpen;const noBreak=r.close>=r.low20Prev-0.2*atr;const extra=cand.kind!=="RANGE_BB"||r.close<=r.bbLower+0.15*atr;
+    if(!(cross&&r.rsi>p.rsi&&trendless&&below&&noBreak&&extra&&r.rsi>=P.rsiLo&&r.rsi<=P.rsiHi))return {ok:false};const anchors=[r.vwap96,r.dayOpen,r.bbMid].filter(x=>Number.isFinite(x)&&x>r.close);if(!anchors.length)return {ok:false};const target=Math.min(...anchors);if(target-r.close<P.minTargetAtr*atr)return {ok:false};return {ok:true,targetHint:target};
+  }
+  if(cand.kind==="BEAR_REBOUND"||cand.kind==="BEAR_VWAP"){
+    const cross=p.stochK>=p.stochD&&r.stochK<r.stochD&&Math.max(p.stochK,r.stochK)>=P.stoch;const roll=r.rsi<p.rsi&&r.rsi>=P.rsiLo&&r.rsi<=P.rsiHi;const rebound=(r.close-r.low8Prev)/atr;const candle=r.close<r.open&&r.close<p.close;const chase=(r.cl
