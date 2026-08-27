@@ -175,7 +175,7 @@ jobs:
           grep -q 'decision.reason === "FUTURES_RESIDUAL_PROTECTED_TRAIL_EXIT"' supabase/functions/market-autotrader/index.ts
           grep -q 'decision.reason === "FUTURES_STALE_GIVEBACK_EXIT_180M"' supabase/functions/market-autotrader/index.ts
           grep -q 'action === "EMERGENCY"' supabase/functions/market-autotrader/index.ts
-          grep -q 'FUTURES_MIN_ENTRY_MARGIN_USDT = 50' \
+          grep -q 'FUTURES_MIN_ENTRY_MARGIN_USDT = 40' \
             supabase/functions/market-autotrader/futures-exit-policy.ts
           grep -q 'residualProfitFloorRoePct: 9' \
             supabase/functions/market-autotrader/futures-exit-policy.ts
