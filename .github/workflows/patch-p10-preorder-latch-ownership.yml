@@ -77,8 +77,7 @@ jobs:
             supabase/functions/market-autotrader/p10-entry-reconciliation.test.ts \
             supabase/functions/market-autotrader/p10-entry-latch-ownership.test.ts \
             supabase/migrations/20260826094500_p10_entry_reconciliation_invariants.sql \
-            supabase/migrations/20260827001000_p10_entry_latch_evidence_guard.sql \
-            .github/workflows/deploy-market-autotrader-v707.yml
+            supabase/migrations/20260827001000_p10_entry_latch_evidence_guard.sql
           if git diff --cached --quiet; then
             echo "No changes required."
             exit 0
