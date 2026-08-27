@@ -32,11 +32,21 @@ jobs:
           set -euo pipefail
           mkdir -p supabase/functions/regime-router-v1-research
           cat supabase/functions/regime-router-v1-research/chunks/*.tsfrag > supabase/functions/regime-router-v1-research/index.ts
+          # Existing research schema permits TRAIN/VALIDATION/TEST/RECENT72 only.
+          # Internal IS/OOS names remain in-memory; persistence maps IS->TRAIN, OOS->TEST.
+          sed -i \
+            -e 's/split:"SHARD"/split:"TRAIN"/g' \
+            -e 's/metricRow(job,f.market,c,"IS"/metricRow(job,f.market,c,"TRAIN"/g' \
+            -e 's/metricRow(job,f.market,c,"OOS"/metricRow(job,f.market,c,"TEST"/g' \
+            -e 's/split=eq.OOS/split=eq.TEST/g' \
+            supabase/functions/regime-router-v1-research/index.ts
           deno check supabase/functions/regime-router-v1-research/index.ts
           grep -q 'REGIME_ROUTER_V1_15M_30D_OOS' supabase/functions/regime-router-v1-research/index.ts
           grep -q 'RANGE_STOCH_VWAP_STRICT' supabase/functions/regime-router-v1-research/index.ts
           grep -q 'BEAR_EMA20_STOCH_FAIL' supabase/functions/regime-router-v1-research/index.ts
           grep -q 'BULL_BREAKOUT_LOCK' supabase/functions/regime-router-v1-research/index.ts
+          grep -q 'split:"TRAIN"' supabase/functions/regime-router-v1-research/index.ts
+          grep -q '"TEST",summarize(sim.OOS)' supabase/functions/regime-router-v1-research/index.ts
           test "$(wc -c < supabase/functions/regime-router-v1-research/index.ts)" -gt 25000
 
       - name: Install Supabase CLI
