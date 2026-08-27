@@ -1,4 +1,4 @@
-name: Run isolated Regime Router V2 job
+name: Run isolated Regime Router V3 job
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: regime-router-v2-job
+  group: regime-router-v3-job
   cancel-in-progress: false
 
 jobs:
@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      JOB_ID: 3ff86266-81fe-4dc9-acf3-741e994b3724
+      JOB_ID: a3c860b8-4aef-45ca-aaaa-66c4b0f8241d
       EDGE_URL: https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/regime-router-v1-research
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
     steps:
@@ -34,7 +34,7 @@ jobs:
           test -n "${SUPABASE_DB_URL:-}"
           psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 -c 'select 1' | grep -qx '1'
 
-      - name: Finalize regime labels and run OOS shards
+      - name: Complete breadth, finalize, and backtest V3
         shell: bash
         run: |
           set -euo pipefail
@@ -74,45 +74,91 @@ jobs:
           PY
           }
 
-          call_action "{\"action\":\"finalize\",\"job_id\":\"${JOB_ID}\"}"
           for shard in $(seq 0 24); do
-            echo "=== backtest shard ${shard}/24 ===" | tee -a "$TRACE"
-            call_action "{\"action\":\"backtest_shard\",\"job_id\":\"${JOB_ID}\",\"shard_index\":${shard},\"shard_count\":25}"
+            done=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 -v shard="$shard" -v job="$JOB_ID" <<'SQL'
+          select count(*) from v2_research_market_results
+          where job_id=:'job'::uuid
+            and config_key='BREADTH_SHARD_V3'
+            and (parameters->>'shard')::int=:'shard'::int;
+          SQL
+          )
+            if [ "$done" = "0" ]; then
+              echo "=== breadth shard ${shard}/24 ===" | tee -a "$TRACE"
+              call_action "{\"action\":\"breadth_shard_v3\",\"job_id\":\"${JOB_ID}\",\"shard_index\":${shard},\"shard_count\":25}"
+            fi
           done
-          call_action "{\"action\":\"complete\",\"job_id\":\"${JOB_ID}\"}"
 
-      - name: Write aggregate validation report
+          call_action "{\"action\":\"finalize_v3\",\"job_id\":\"${JOB_ID}\"}"
+          for shard in $(seq 0 24); do
+            echo "=== V3 backtest shard ${shard}/24 ===" | tee -a "$TRACE"
+            call_action "{\"action\":\"backtest_shard_v3\",\"job_id\":\"${JOB_ID}\",\"shard_index\":${shard},\"shard_count\":25}"
+          done
+          call_action "{\"action\":\"complete_v3\",\"job_id\":\"${JOB_ID}\"}"
+
+      - name: Write V3 aggregate and walk-forward selection
         shell: bash
         run: |
           set -euo pipefail
           OUT="research/results/regime-router-v1/job-${JOB_ID}-aggregate.tsv"
           psql "$SUPABASE_DB_URL" -XAt -F $'\t' -v ON_ERROR_STOP=1 > "$OUT" <<SQL
-          select
-            regime, config_key, split,
-            sum(trades)::bigint as trades,
-            sum(wins)::bigint as wins,
-            round((sum(wins)::numeric/nullif(sum(trades)::numeric,0)*100),2) as win_pct,
-            round(sum(net_bps)::numeric,2) as net_bps,
-            round(sum(stress_net_bps)::numeric,2) as stress_net_bps,
-            round((sum(gross_profit_bps)::numeric/nullif(sum(gross_loss_bps)::numeric,0)),4) as profit_factor,
-            round((sum(mean_net_bps*trades)::numeric/nullif(sum(trades)::numeric,0)),3) as mean_net_bps,
-            round((sum(average_mfe_bps*trades)::numeric/nullif(sum(trades)::numeric,0)),3) as avg_mfe_bps,
-            round((sum(average_mae_bps*trades)::numeric/nullif(sum(trades)::numeric,0)),3) as avg_mae_bps,
-            round((sum(average_hold_bars*trades)::numeric/nullif(sum(trades)::numeric,0)),3) as avg_hold_bars,
-            round((sum(stop_hits)::numeric/nullif(sum(trades)::numeric,0)*100),2) as stop_pct,
-            round((sum(coalesce((parameters->>'capture_sum')::double precision,0))::numeric/nullif(sum(coalesce((parameters->>'capture_count')::int,0))::numeric,0)),4) as mfe_capture,
-            round((sum(coalesce((parameters->>'giveback_sum_bps')::double precision,0))::numeric/nullif(sum(trades)::numeric,0)),3) as avg_giveback_bps,
-            round(avg(max_drawdown_bps)::numeric,2) as avg_market_maxdd_bps,
-            round(max(max_drawdown_bps)::numeric,2) as worst_market_maxdd_bps
+          select regime, config_key, split,
+            sum(trades)::bigint,
+            sum(wins)::bigint,
+            round(sum(wins)::numeric/nullif(sum(trades)::numeric,0)*100,2),
+            round(sum(net_bps)::numeric,2),
+            round(sum(stress_net_bps)::numeric,2),
+            round(sum(gross_profit_bps)::numeric/nullif(sum(gross_loss_bps)::numeric,0),4),
+            round(sum(mean_net_bps*trades)::numeric/nullif(sum(trades)::numeric,0),3),
+            round(sum(average_mfe_bps*trades)::numeric/nullif(sum(trades)::numeric,0),3),
+            round(sum(average_mae_bps*trades)::numeric/nullif(sum(trades)::numeric,0),3),
+            round(sum(average_hold_bars*trades)::numeric/nullif(sum(trades)::numeric,0),3),
+            round(sum(stop_hits)::numeric/nullif(sum(trades)::numeric,0)*100,2),
+            round(sum(coalesce((parameters->>'capture_sum')::double precision,0))::numeric/nullif(sum(coalesce((parameters->>'capture_count')::int,0))::numeric,0),4),
+            round(sum(coalesce((parameters->>'giveback_sum_bps')::double precision,0))::numeric/nullif(sum(trades)::numeric,0),3),
+            round(avg(max_drawdown_bps)::numeric,2),
+            round(max(max_drawdown_bps)::numeric,2)
           from v2_research_market_results
-          where job_id='${JOB_ID}'
-            and config_key <> 'BREADTH_SHARD'
+          where job_id='${JOB_ID}' and config_key<>'BREADTH_SHARD_V3'
           group by regime,config_key,split
           order by regime,split,config_key;
           SQL
           cat "$OUT"
 
-      - name: Commit immutable research trace
+          SEL="research/results/regime-router-v1/job-${JOB_ID}-selection.tsv"
+          psql "$SUPABASE_DB_URL" -XAt -F $'\t' -v ON_ERROR_STOP=1 > "$SEL" <<SQL
+          with a as (
+            select regime,config_key,split,
+              sum(trades)::bigint trades,
+              sum(stress_net_bps)::double precision stress,
+              sum(gross_profit_bps)::double precision gp,
+              sum(gross_loss_bps)::double precision gl
+            from v2_research_market_results
+            where job_id='${JOB_ID}' and config_key<>'BREADTH_SHARD_V3'
+            group by regime,config_key,split
+          ), p as (
+            select regime,config_key,
+              max(trades) filter(where split='TRAIN') train_trades,
+              max(stress) filter(where split='TRAIN') train_stress,
+              max(case when gl>0 then gp/gl end) filter(where split='TRAIN') train_pf,
+              max(trades) filter(where split='VALIDATION') val_trades,
+              max(stress) filter(where split='VALIDATION') val_stress,
+              max(case when gl>0 then gp/gl end) filter(where split='VALIDATION') val_pf,
+              max(trades) filter(where split='TEST') test_trades,
+              max(stress) filter(where split='TEST') test_stress,
+              max(case when gl>0 then gp/gl end) filter(where split='TEST') test_pf
+            from a group by regime,config_key
+          )
+          select regime,config_key,train_trades,round(train_stress::numeric,2),round(train_pf::numeric,4),
+            val_trades,round(val_stress::numeric,2),round(val_pf::numeric,4),
+            test_trades,round(test_stress::numeric,2),round(test_pf::numeric,4)
+          from p
+          where train_trades>=40 and val_trades>=15 and train_stress>0 and train_pf>1 and val_stress>0 and val_pf>1
+          order by regime, least(train_stress/nullif(train_trades,0),val_stress/nullif(val_trades,0)) desc;
+          SQL
+          echo '=== WALK-FORWARD ELIGIBLE ==='
+          cat "$SEL"
+
+      - name: Commit immutable V3 research trace
         shell: bash
         run: |
           set -euo pipefail
@@ -120,6 +166,6 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add research/results/regime-router-v1
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m "research: record regime router v2 OOS job ${JOB_ID}"
+          git commit -m "research: record regime router v3 walk-forward job ${JOB_ID}"
           git pull --rebase origin main
           git push origin HEAD:main
