@@ -1,0 +1,190 @@
+def backtest_candidate(symbol: str, d: pd.DataFrame, regime: pd.Series, c: Candidate, split_ts: pd.Timestamp) -> List[Trade]:
+    aligned_regime = regime.reindex(d.index, method="ffill")
+    trades: List[Trade] = []
+    i = 100
+    cooldown_until = -1
+    while i < len(d)-1:
+        if i < cooldown_until or aligned_regime.iloc[i] != c.regime:
+            i += 1
+            continue
+        ok, extra = entry_signal(d, i, c)
+        if not ok:
+            i += 1
+            continue
+        e = i + 1
+        entry = float(d.iloc[e].open)
+        atr0 = float(d.iloc[i].atr)
+        if not (entry > 0 and atr0 > 0):
+            i += 1
+            continue
+        side = c.side
+        if side == "LONG":
+            direction = 1.0
+        else:
+            direction = -1.0
+
+        if c.kind.startswith("BULL_"):
+            risk = c.params["stop_atr"]*atr0
+            stop = entry - risk
+            target = None
+            max_hold = int(c.params["max_hold"])
+        elif c.kind in ("RANGE_CYCLE", "RANGE_BB"):
+            risk = c.params["stop_atr"]*atr0
+            local_low = float(d.iloc[i].low5_prev) if not pd.isna(d.iloc[i].low5_prev) else entry-risk
+            stop = max(local_low - 0.10*atr0, entry - 1.3*atr0)
+            if entry-stop < 0.45*atr0:
+                stop = entry - 0.8*atr0
+            risk = entry-stop
+            target = max(entry + 0.25*atr0, float(extra["target_hint"]))
+            max_hold = int(c.params["max_hold"])
+        elif c.kind in ("BEAR_REBOUND", "BEAR_VWAP"):
+            risk = c.params["stop_atr"]*atr0
+            swing_high = float(d.iloc[i].high8_prev) if not pd.isna(d.iloc[i].high8_prev) else entry+risk
+            stop = min(swing_high + 0.10*atr0, entry + 1.25*atr0)
+            if stop-entry < 0.40*atr0:
+                stop = entry + 0.75*atr0
+            risk = stop-entry
+            target = entry - c.params["target_r"]*risk
+            max_hold = int(c.params["max_hold"])
+        elif c.kind == "BASE_RANGE":
+            risk = c.params["stop_atr"]*atr0
+            stop = entry-risk
+            target = entry + c.params["target_r"]*risk
+            max_hold = int(c.params["max_hold"])
+        elif c.kind == "BASE_BEAR":
+            risk = c.params["stop_atr"]*atr0
+            stop = entry+risk
+            target = entry-c.params["target_r"]*risk
+            max_hold = int(c.params["max_hold"])
+        else:
+            i += 1
+            continue
+
+        best = entry
+        worst = entry
+        exit_price = None
+        exit_reason = None
+        exit_j = None
+        active_stop = stop
+        for h in range(max_hold):
+            j = e+h
+            if j >= len(d):
+                break
+            bar = d.iloc[j]
+            high, low, close = float(bar.high), float(bar.low), float(bar.close)
+            # Conservative intrabar ordering: adverse stop before favorable target.
+            if side == "LONG":
+                if low <= active_stop:
+                    exit_price = active_stop
+                    exit_reason = "STOP"
+                    exit_j = j
+                    worst = min(worst, low)
+                    break
+                if target is not None and high >= target:
+                    exit_price = target
+                    exit_reason = "TARGET"
+                    exit_j = j
+                    best = max(best, high)
+                    break
+                best = max(best, high)
+                worst = min(worst, low)
+            else:
+                if high >= active_stop:
+                    exit_price = active_stop
+                    exit_reason = "STOP"
+                    exit_j = j
+                    worst = max(worst, high)
+                    break
+                if target is not None and low <= target:
+                    exit_price = target
+                    exit_reason = "TARGET"
+                    exit_j = j
+                    best = min(best, low)
+                    break
+                best = min(best, low)
+                worst = max(worst, high)
+
+            # End-of-bar tactical exits / locks.
+            if c.kind.startswith("BULL_"):
+                mfe_price = best-entry
+                if mfe_price >= risk:
+                    active_stop = max(active_stop, entry + 0.05*risk)
+                    atrj = float(bar.atr) if not pd.isna(bar.atr) else atr0
+                    if mfe_price >= 2*risk:
+                        active_stop = max(active_stop, best - 1.8*atrj)
+                    else:
+                        active_stop = max(active_stop, best - 2.4*atrj)
+                if h >= 8 and not pd.isna(bar.ema20) and close < float(bar.ema20):
+                    exit_price = close
+                    exit_reason = "EMA20_EXIT"
+                    exit_j = j
+                    break
+            elif c.kind in ("RANGE_CYCLE", "RANGE_BB"):
+                if j > e:
+                    pb = d.iloc[j-1]
+                    cycle_down = (pb.stoch_k >= pb.stoch_d) and (bar.stoch_k < bar.stoch_d) and max(pb.stoch_k, bar.stoch_k) >= 75
+                    if cycle_down and close > entry:
+                        exit_price = close
+                        exit_reason = "CYCLE_TURN"
+                        exit_j = j
+                        break
+            elif c.kind in ("BEAR_REBOUND", "BEAR_VWAP"):
+                mfe_price = entry-best
+                if mfe_price >= 0.60*risk:
+                    active_stop = min(active_stop, entry - 0.03*risk)
+                ts = int(c.params["time_stop"])
+                if h+1 >= ts and mfe_price < 0.25*risk:
+                    exit_price = close
+                    exit_reason = "FAST_TIME_STOP"
+                    exit_j = j
+                    break
+                if j > e:
+                    pb = d.iloc[j-1]
+                    cycle_up = (pb.stoch_k <= pb.stoch_d) and (bar.stoch_k > bar.stoch_d) and min(pb.stoch_k, bar.stoch_k) <= 25
+                    if cycle_up:
+                        exit_price = close
+                        exit_reason = "CYCLE_REBOUND"
+                        exit_j = j
+                        break
+
+        if exit_price is None:
+            j = min(e+max_hold-1, len(d)-1)
+            exit_j = j
+            exit_price = float(d.iloc[j].close)
+            exit_reason = "MAX_HOLD"
+
+        if side == "LONG":
+            gross = (exit_price/entry - 1.0)*10000.0
+            mfe = (best/entry - 1.0)*10000.0
+            mae = (worst/entry - 1.0)*10000.0
+        else:
+            gross = (entry-exit_price)/entry*10000.0  # linear USDT-margined futures return on entry notional
+            # excursion measured symmetrically relative to entry for interpretability
+            mfe = (entry-best)/entry*10000.0
+            mae = -(worst-entry)/entry*10000.0
+        net = gross - BASE_COST_BPS
+        stress = gross - STRESS_COST_BPS
+        giveback = max(0.0, mfe-gross)
+        capture = gross/mfe if mfe > 1e-9 else None
+        sig_t = d.index[i]
+        tr = Trade(
+            candidate=c.name, regime=c.regime, symbol=symbol, side=side,
+            signal_time=sig_t.isoformat(), entry_time=d.index[e].isoformat(), exit_time=d.index[exit_j].isoformat(),
+            entry_price=entry, exit_price=float(exit_price), gross_bps=float(gross), net_bps=float(net), stress_net_bps=float(stress),
+            mfe_bps=float(mfe), mae_bps=float(mae), giveback_bps=float(giveback), capture_ratio=None if capture is None else float(capture),
+            hold_bars=int(exit_j-e+1), exit_reason=str(exit_reason), stop_hit=(exit_reason=="STOP"),
+            split="OOS" if d.index[e] >= split_ts else "IS"
+        )
+        trades.append(tr)
+        cooldown_until = exit_j + (2 if c.regime == "BEAR" else 1)
+        i = max(i+1, exit_j+1)
+    return trades
+
+
+def metrics(trades: List[Trade]) -> dict:
+    if not trades:
+        return {"trades":0,"wins":0,"losses":0,"win_rate":None,"gross_bps":0.0,"net_bps":0.0,"stress_net_bps":0.0,"mean_net_bps":None,"median_net_bps":None,"profit_factor":None,"max_drawdown_bps":0.0,"avg_mfe_bps":None,"avg_mae_bps":None,"avg_hold_bars":None,"stop_rate":None,"mfe_capture_mean":None,"mfe_capture_median":None,"profit_giveback_mean_bps":None}
+    net = np.array([t.net_bps for t in trades], float)
+    stress = np.array([t.stress_net_bps for t in trades], float)
+    gross = np.array([t.gross_bps for t in trades], float)
+    wins = int((net>0).sum())
