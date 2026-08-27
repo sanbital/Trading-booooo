@@ -155,6 +155,7 @@ import { shouldLoadCompletedPolicyBar } from "./p10-monitor-cadence.ts";
 import {
   p10EntryFailureDisposition,
   p10EntryOrderDisposition,
+  p10PreOrderEntryDisposition,
   summarizeP10LinkedEntryFills,
   untrackedFuturesExposures,
 } from "./p10-entry-reconciliation.ts";
@@ -9709,8 +9710,30 @@ async function enterP10Signal(
       },
     }))[0] as Position;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await rejectP10Claim(claimId, message);
+    const disposition = p10PreOrderEntryDisposition(error);
+    await rejectP10Claim(claimId, disposition.reason);
+    if (disposition.kind === "POLICY_BLOCK") {
+      try {
+        await event("P10_ENTRY_POLICY_BLOCK", disposition.reason, {
+          strategy_key: P10_STRATEGY_KEY,
+          venue: signal.venue,
+          market: signal.market,
+          side,
+          signal_time: signal.signal_time,
+          order_submitted: false,
+        }, { cycleId, level: "INFO" });
+      } catch (eventError) {
+        console.error("P10_ENTRY_POLICY_BLOCK_EVENT_FAILED", eventError);
+      }
+      return {
+        entered: false,
+        exchange,
+        market: signal.market,
+        side,
+        policy_blocked: true,
+        reason: disposition.reason,
+      };
+    }
     throw error;
   }
   await patch("p10_signal_claims", `id=eq.${claimId}`, {
@@ -10299,32 +10322,53 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
       }
       if (result.pending_reconcile) break;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      try {
-        await latchP10EntrySafety("P10_ENTRY_RECONCILIATION_REQUIRED");
-      } catch (latchError) {
-        throw new Error(
-          `P10 entry failed and safety latch could not be persisted: ${message}; ${
-            latchError instanceof Error ? latchError.message : String(latchError)
-          }`,
-        );
+      const disposition = p10PreOrderEntryDisposition(error);
+      if (disposition.kind === "POLICY_BLOCK") {
+        entries.push({
+          entered: false,
+          exchange,
+          market: signal.market,
+          side: signal.side,
+          policy_blocked: true,
+          reason: disposition.reason,
+        });
+        try {
+          await event("P10_ENTRY_POLICY_BLOCK", disposition.reason, {
+            strategy_key: P10_STRATEGY_KEY,
+            venue: signal.venue,
+            market: signal.market,
+            side: signal.side,
+            signal_time: signal.signal_time,
+            order_submitted: false,
+            caught_at: "P10_SCAN",
+          }, { cycleId, level: "INFO" });
+        } catch (eventError) {
+          console.error("P10_ENTRY_POLICY_BLOCK_EVENT_FAILED", eventError);
+        }
+        continue;
       }
       entries.push({
         entered: false,
         exchange,
         market: signal.market,
         side: signal.side,
-        error: message,
+        pre_order_error: true,
+        error: disposition.reason,
       });
-      await event("P10_ENTRY_ERROR", message, {
-        strategy_key: P10_STRATEGY_KEY,
-        venue: signal.venue,
-        market: signal.market,
-        side: signal.side,
-        signal_time: signal.signal_time,
-      }, { cycleId, level: "CRITICAL" });
-      // Any exception after a P10 claim/order attempt is fail-closed for this scan. The
-      // next cycle can continue only after durable state and the global latch are visible.
+      try {
+        await event("P10_ENTRY_PREORDER_ERROR", disposition.reason, {
+          strategy_key: P10_STRATEGY_KEY,
+          venue: signal.venue,
+          market: signal.market,
+          side: signal.side,
+          signal_time: signal.signal_time,
+          order_submitted: false,
+        }, { cycleId, level: "CRITICAL" });
+      } catch (eventError) {
+        console.error("P10_ENTRY_PREORDER_ERROR_EVENT_FAILED", eventError);
+      }
+      // Only enterP10Signal owns post-submit reconciliation. This catch has no durable
+      // proof that an exchange order was sent, so it must never globally latch entries.
       break;
     }
   }
@@ -10334,6 +10378,8 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
     lastGatewayHeartbeatAt: heartbeatAt,
     gatewayErrorCount: 0,
   });
+  const routinePolicyOnly = entries.length > 0 &&
+    entries.every((row) => row.policy_blocked === true || row.reason === "signal already claimed");
   await event(
     "P10_SCAN_SUMMARY",
     `${entries.filter((row) => row.entered).length} P10 entries filled`,
@@ -10350,7 +10396,12 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
         reason: row.reason || row.error,
       })),
     },
-    { cycleId, level: entries.some((row) => row.entered || row.reserved) ? "INFO" : "WARNING" },
+    {
+      cycleId,
+      level: entries.some((row) => row.entered || row.reserved) || routinePolicyOnly
+        ? "INFO"
+        : "WARNING",
+    },
   );
   return {
     strategy_key: P10_STRATEGY_KEY,

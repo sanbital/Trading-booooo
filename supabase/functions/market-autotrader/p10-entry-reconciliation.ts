@@ -11,6 +11,24 @@ const finite = (value: unknown, fallback = 0) => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+export type P10PreOrderEntryDisposition =
+  | { kind: "POLICY_BLOCK"; reason: string }
+  | { kind: "PREORDER_ERROR"; reason: string };
+
+const P10_ENTRY_BLOCK_PATTERN = /P10_ENTRY_BLOCKED:[A-Z0-9_.:+-]+/i;
+
+/**
+ * A database policy rejection happens before any exchange order is submitted. It must
+ * never be promoted into entry-result uncertainty or a global reconciliation latch.
+ */
+export function p10PreOrderEntryDisposition(error: unknown): P10PreOrderEntryDisposition {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const match = message.match(P10_ENTRY_BLOCK_PATTERN);
+  return match
+    ? { kind: "POLICY_BLOCK", reason: match[0] }
+    : { kind: "PREORDER_ERROR", reason: message };
+}
+
 /**
  * Entry evidence is monotonic: once any execution is known, missing price detail or a
  * later lookup error can only require reconciliation. It can never prove "not filled".

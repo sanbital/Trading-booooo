@@ -1,6 +1,7 @@
 import {
   p10EntryFailureDisposition,
   p10EntryOrderDisposition,
+  p10PreOrderEntryDisposition,
   summarizeP10LinkedEntryFills,
   untrackedFuturesExposures,
 } from "./p10-entry-reconciliation.ts";
@@ -150,5 +151,44 @@ Deno.test("exchange quantity above the tracked directional quantity is reported"
       tracked_quantity: 2000,
       unmatched_quantity: 16,
     }],
+  );
+});
+
+Deno.test("pre-order anti-chase DB rejection is a routine policy block", () => {
+  assertEquals(
+    p10PreOrderEntryDisposition(
+      'database 400: {"code":"P0001","message":"P10_ENTRY_BLOCKED:LONG_OVERBOUGHT_RSI:70.69"}',
+    ),
+    { kind: "POLICY_BLOCK", reason: "P10_ENTRY_BLOCKED:LONG_OVERBOUGHT_RSI:70.69" },
+  );
+});
+
+Deno.test("all canonical P10 entry-block reasons classify without enumerating each guard", () => {
+  assertEquals(
+    p10PreOrderEntryDisposition(
+      "P10_ENTRY_BLOCKED:SHORT_OPPOSING_MARKET_FORECAST:STRONG_BULL",
+    ),
+    {
+      kind: "POLICY_BLOCK",
+      reason: "P10_ENTRY_BLOCKED:SHORT_OPPOSING_MARKET_FORECAST:STRONG_BULL",
+    },
+  );
+  assertEquals(
+    p10PreOrderEntryDisposition("P10_ENTRY_BLOCKED:MARKET_OBSERVATION_UNAVAILABLE"),
+    { kind: "POLICY_BLOCK", reason: "P10_ENTRY_BLOCKED:MARKET_OBSERVATION_UNAVAILABLE" },
+  );
+});
+
+Deno.test("ordinary pre-order failure is not mislabeled as policy or reconciliation", () => {
+  assertEquals(
+    p10PreOrderEntryDisposition("database 500: connection unavailable"),
+    { kind: "PREORDER_ERROR", reason: "database 500: connection unavailable" },
+  );
+});
+
+Deno.test("post-submit lookup ambiguity is not a pre-order policy block", () => {
+  assertEquals(
+    p10PreOrderEntryDisposition("Order does not exist."),
+    { kind: "PREORDER_ERROR", reason: "Order does not exist." },
   );
 });
