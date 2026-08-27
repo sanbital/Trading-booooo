@@ -1074,7 +1074,7 @@ const FUTURES_MIN_LEVERAGE = 1;
 const FUTURES_MAX_LEVERAGE = 20;
 // Mirrors FUTURES_MIN_ENTRY_MARGIN_USDT in the engine. This gateway-side copy is an
 // independent last line of defence if a malformed command bypasses engine sizing.
-const FUTURES_MIN_ENTRY_MARGIN_USDT = 50;
+const FUTURES_MIN_ENTRY_MARGIN_USDT = 40;
 // Mirrors DEFAULT_FUTURES_LEVERAGE in the engine's futures-exit-policy. The gateway keeps
 // its own copy so an order that arrives without one still opens at the authorised size.
 const DEFAULT_FUTURES_LEVERAGE = integerEnv(

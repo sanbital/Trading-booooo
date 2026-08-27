@@ -21,6 +21,7 @@ on:
       - "supabase/migrations/20260824031619_direction_aware_futures_snapshot_reconcile.sql"
       - "supabase/migrations/20260824054500_confirm_emergency_liquidation.sql"
       - "supabase/migrations/20260826094500_p10_entry_reconciliation_invariants.sql"
+      - "supabase/migrations/20260827104008_binance_futures_margin_40_usdt.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
@@ -42,6 +43,7 @@ on:
       - "supabase/migrations/20260824031619_direction_aware_futures_snapshot_reconcile.sql"
       - "supabase/migrations/20260824054500_confirm_emergency_liquidation.sql"
       - "supabase/migrations/20260826094500_p10_entry_reconciliation_invariants.sql"
+      - "supabase/migrations/20260827104008_binance_futures_margin_40_usdt.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   workflow_dispatch:
 
@@ -581,6 +583,47 @@ jobs:
           done
           echo "::error::Production database policy was not ready before Edge Function deployment"
           exit 1
+
+      - name: Wait for 40-USDT futures entry policy
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 40); do
+            ready="$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select
+                exists (
+                  select 1
+                  from pg_constraint c
+                  where c.conrelid = 'public.trading_settings'::regclass
+                    and c.conname = 'trading_settings_binance_futures_fixed_margin_ck'
+                    and position(
+                      'binance_futures_allocation_usdt >= (40)'
+                      in pg_get_constraintdef(c.oid)
+                    ) > 0
+                )
+                and exists (
+                  select 1
+                  from pg_proc p
+                  join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public'
+                    and p.proname = 'guard_order_position_venue_v760'
+                    and position(
+                      'FUTURES_ENTRY_MARGIN_BELOW_40_USDT'
+                      in pg_get_functiondef(p.oid)
+                    ) > 0
+                );
+            ")"
+            if [ "${ready}" = "t" ]; then
+              echo "40-USDT futures entry policy is ready"
+              exit 0
+            fi
+            echo "Waiting for 40-USDT futures entry policy (${attempt}/40)"
+            sleep 15
+          done
+          echo "::error::40-USDT futures entry policy was not ready before Edge deployment"
+          exit 1
+
       - name: Deploy market executor and producers
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}

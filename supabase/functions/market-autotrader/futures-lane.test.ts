@@ -18,6 +18,9 @@ const DASHBOARD_HTML = await Deno.readTextFile(new URL("docs/index.html", ROOT))
 const MIGRATION = await Deno.readTextFile(
   new URL("supabase/migrations/20260810010000_binance_futures_lane_v760.sql", ROOT),
 );
+const MARGIN_40_MIGRATION = await Deno.readTextFile(
+  new URL("supabase/migrations/20260827104008_binance_futures_margin_40_usdt.sql", ROOT),
+);
 const PROTECTED_MIGRATION = await Deno.readTextFile(
   new URL("supabase/migrations/20260810133000_protected_trailing_exit_v761.sql", ROOT),
 );
@@ -71,8 +74,8 @@ Deno.test("entry sizing commits margin and the exchange sees margin x leverage",
   assertEquals(entryQuantityForNotional("binance", 150, 0.02442, 0.1), 6142.5);
 });
 
-Deno.test("futures entry minimum is an isolated 50 USDT margin floor", () => {
-  assertEquals(FUTURES_MIN_ENTRY_MARGIN_USDT, 50);
+Deno.test("futures entry minimum is an isolated 40 USDT margin floor", () => {
+  assertEquals(FUTURES_MIN_ENTRY_MARGIN_USDT, 40);
   assert(ENGINE.includes("minOrder: FUTURES_MIN_ENTRY_MARGIN_USDT"));
   assert(ENGINE.includes("futuresEntryMinimums(leverage, rules.min_notional)"));
   assert(ENGINE.includes('const entryTimeInForce = exchange === "upbit" ? "IOC" : "FOK"'));
@@ -87,12 +90,12 @@ Deno.test("futures entry minimum is an isolated 50 USDT margin floor", () => {
       'const executableMinimumCapitalQuote = exchange === "binance_futures"',
     ),
   );
-  assert(GATEWAY.includes("const FUTURES_MIN_ENTRY_MARGIN_USDT = 50"));
+  assert(GATEWAY.includes("const FUTURES_MIN_ENTRY_MARGIN_USDT = 40"));
   assert(GATEWAY.includes("FUTURES_MIN_ENTRY_MARGIN_USDT * entryLeverage"));
-  assert(MIGRATION.includes("FUTURES_ENTRY_MARGIN_BELOW_50_USDT"));
-  assert(MIGRATION.includes("binance_futures_allocation_usdt >= 50"));
-  assert(DASHBOARD.includes("futuresFixed < 50"));
-  assert(DASHBOARD_HTML.includes("신규 진입 증거금은 최소 50 USDT"));
+  assert(MARGIN_40_MIGRATION.includes("FUTURES_ENTRY_MARGIN_BELOW_40_USDT"));
+  assert(MARGIN_40_MIGRATION.includes("binance_futures_allocation_usdt >= 40"));
+  assert(DASHBOARD.includes("futuresFixed < 40"));
+  assert(DASHBOARD_HTML.includes("신규 진입 증거금은 최소 40 USDT"));
 });
 
 Deno.test("spot minimum settings cannot change the futures margin floor", () => {

@@ -34,9 +34,9 @@ Deno.test("default futures leverage remains 3x", () => {
   assertEquals(normalizeFuturesLeverage(undefined), 3);
 });
 
-Deno.test("futures entry floor remains 50 USDT margin", () => {
-  assertEquals(FUTURES_MIN_ENTRY_MARGIN_USDT, 50);
-  assertEquals(futuresEntryMinimums(3, 5), { marginQuote: 50, notionalQuote: 150, leverage: 3 });
+Deno.test("futures entry floor remains 40 USDT margin", () => {
+  assertEquals(FUTURES_MIN_ENTRY_MARGIN_USDT, 40);
+  assertEquals(futuresEntryMinimums(3, 5), { marginQuote: 40, notionalQuote: 120, leverage: 3 });
 });
 
 Deno.test("futures entry reserves live commission headroom instead of spending 100% of wallet as margin", () => {

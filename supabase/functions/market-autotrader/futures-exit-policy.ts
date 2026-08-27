@@ -27,7 +27,7 @@ export const DEFAULT_FUTURES_LEVERAGE = 3;
 export const MIN_FUTURES_LEVERAGE = 1;
 export const MAX_FUTURES_LEVERAGE = 20;
 /** Minimum capital actually posted for every new USDⓈ-M position. */
-export const FUTURES_MIN_ENTRY_MARGIN_USDT = 50;
+export const FUTURES_MIN_ENTRY_MARGIN_USDT = 40;
 
 export const FUTURES_SPLIT_EXIT_THRESHOLDS = {
   /** Half take-profit, measured on margin (ROE). */

@@ -214,6 +214,12 @@ jobs:
             --set=ON_ERROR_STOP=1 \
             --single-transaction \
             --file supabase/migrations/20260824054500_confirm_emergency_liquidation.sql
+          # The legacy futures-lane migration above restores the historical 50-USDT floor.
+          # Always replay the operator-approved 40-USDT override last.
+          psql "${SUPABASE_DB_URL}" \
+            --set=ON_ERROR_STOP=1 \
+            --single-transaction \
+            --file supabase/migrations/20260827104008_binance_futures_margin_40_usdt.sql
 
       - name: Verify the sell guard survived the batch
         shell: bash

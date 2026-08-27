@@ -366,8 +366,8 @@ test("futures leverage is bounded to the gateway ceiling", () => {
   assert.throws(() => module.validateFuturesLeverage(50));
 });
 
-test("futures entries independently enforce 50 USDT of posted margin", () => {
-  assert.equal(module.FUTURES_MIN_ENTRY_MARGIN_USDT, 50);
+test("futures entries independently enforce 40 USDT of posted margin", () => {
+  assert.equal(module.FUTURES_MIN_ENTRY_MARGIN_USDT, 40);
   assert.throws(
     () =>
       module.conformFuturesOrder(
@@ -376,14 +376,14 @@ test("futures entries independently enforce 50 USDT of posted margin", () => {
           side: "BUY",
           type: "LIMIT",
           price: 100,
-          quantity: 1.499,
+          quantity: 1.199,
           identifier: "tb-margin-1",
         },
         FUTURES_INFO,
         false,
         3,
       ),
-    /50 USDT margin \(150 USDT notional at 3x\)/,
+    /40 USDT margin \(120 USDT notional at 3x\)/,
   );
   const atThreeX = module.conformFuturesOrder(
     {
@@ -391,14 +391,14 @@ test("futures entries independently enforce 50 USDT of posted margin", () => {
       side: "BUY",
       type: "LIMIT",
       price: 100,
-      quantity: 1.5,
+      quantity: 1.2,
       identifier: "tb-margin-2",
     },
     FUTURES_INFO,
     false,
     3,
   );
-  assert.equal(atThreeX.notional, 150);
+  assert.equal(atThreeX.notional, 120);
 
   assert.throws(
     () =>
@@ -408,18 +408,18 @@ test("futures entries independently enforce 50 USDT of posted margin", () => {
           side: "BUY",
           type: "LIMIT",
           price: 100,
-          quantity: 2.499,
+          quantity: 1.999,
           identifier: "tb-margin-3",
         },
         FUTURES_INFO,
         false,
         5,
       ),
-    /250 USDT notional at 5x/,
+    /200 USDT notional at 5x/,
   );
 });
 
-test("the 50 USDT margin floor applies only to entries, never reduce-only exits", () => {
+test("the 40 USDT margin floor applies only to entries, never reduce-only exits", () => {
   const { order } = module.conformFuturesOrder(
     {
       market: "BTCUSDT",

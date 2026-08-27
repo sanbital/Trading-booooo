@@ -2397,7 +2397,7 @@ function exchangeLimits(settings: TradingSettings, exchange: Exchange) {
     return {
       maxOrder: allocationControlled ? Number.MAX_SAFE_INTEGER : settings.max_order_usdt,
       // This is CAPITAL (posted margin), not contract notional and not the configurable
-      // Binance spot floor. At the default 3x the corresponding position is 150 USDT.
+      // Binance spot floor. At the default 3x the corresponding position is 120 USDT.
       minOrder: FUTURES_MIN_ENTRY_MARGIN_USDT,
       quoteStep: 0.01,
       dailyBuy: allocationControlled ? Number.MAX_SAFE_INTEGER : settings.max_daily_buy_usdt,
@@ -3043,7 +3043,7 @@ async function enterCandidateInner(
   const futuresMinimums = exchange === "binance_futures"
     ? futuresEntryMinimums(leverage, rules.min_notional)
     : null;
-  // Spot compares one notional floor. Futures keeps the operator's 50 USDT MARGIN floor
+  // Spot compares one notional floor. Futures keeps the operator's 40 USDT MARGIN floor
   // separate from Binance's symbol NOTIONAL filter.
   const minimumEntryMarginQuote = futuresMinimums?.marginQuote ??
     Math.max(limits.minOrder, rules.min_notional);
@@ -3071,8 +3071,8 @@ async function enterCandidateInner(
     ? clamp(finite((settings as any).scalp_max_strategy_exposure_pct, 100), 10, 100) / 100
     : 1;
   // Spot quantities are floored, so fund one quantity/quote step above the operator floor.
-  // Futures quantities are instead rounded up by entryQuantityForNotional: its 50 USDT
-  // minimum is a margin contract and must remain executable with an exact 50 allocation.
+  // Futures quantities are instead rounded up by entryQuantityForNotional: its 40 USDT
+  // minimum is a margin contract and must remain executable with an exact 40 allocation.
   const quantityStepCapitalQuote = Math.max(0, finite(rules.quantity_step)) * bestAsk / leverage;
   const executableMinimumCapitalQuote = exchange === "binance_futures"
     ? minimumEntryMarginQuote
@@ -4118,7 +4118,7 @@ async function enterCandidateInner(
   }
 
   // Both Binance venues use FOK so a partial fill cannot create a live position below
-  // its operator floor (50 USDT of margin on futures). Upbit keeps its proven IOC path.
+  // its operator floor (40 USDT of margin on futures). Upbit keeps its proven IOC path.
   const entryTimeInForce = exchange === "upbit" ? "IOC" : "FOK";
   // v7.2.4: skip the exchange order_test round trip. Precision, minimum notional,
   // depth, spread and executable-price checks have already run locally; the real order
@@ -5241,7 +5241,7 @@ async function cancelRestingTakeProfit(
 // so the order is simply abandoned when it goes stale or the book walks away.
 
 function makerEntryEnabled(settings: TradingSettings, exchange: Exchange): boolean {
-  // A resting futures BUY can partially fill below 50 USDT of posted margin. Futures
+  // A resting futures BUY can partially fill below 40 USDT of posted margin. Futures
   // entries therefore use the atomic FOK path; spot maker behavior is unchanged.
   if (exchange === "binance_futures") return false;
   return isScalpStrategy((settings as any).strategy) &&
@@ -9544,7 +9544,7 @@ async function enterP10Signal(
   }
   // Place the limit at the strategy's gap boundary. FOK/IOC may improve the fill, but it
   // can never cross beyond 0.50 ATR. This also leaves room to round quantity upward by one
-  // venue step so an exact operator minimum (40 USDT spot / 50 USDT futures margin) does
+  // venue step so an exact operator minimum (40 USDT spot / 40 USDT futures margin) does
   // not become untradeable after quantity flooring.
   const limitPrice = tickRound(
     boundaryPrice,
