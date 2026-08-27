@@ -1,0 +1,189 @@
+    d["high8_prev"] = d["high"].rolling(8, min_periods=4).max().shift(1)
+    d["low8_prev"] = d["low"].rolling(8, min_periods=4).min().shift(1)
+    d["low5_prev"] = d["low"].rolling(5, min_periods=3).min().shift(1)
+    d["sep_atr"] = (d["ema20"] - d["ema50"]).abs() / d["atr"].replace(0, np.nan)
+
+    mid = d["close"].rolling(20, min_periods=20).mean()
+    sd = d["close"].rolling(20, min_periods=20).std(ddof=0)
+    d["bb_mid"] = mid
+    d["bb_upper"] = mid + 2*sd
+    d["bb_lower"] = mid - 2*sd
+    d["bb_width"] = (4*sd) / mid.replace(0, np.nan)
+    d["bb_width_q30"] = d["bb_width"].rolling(96, min_periods=48).quantile(0.30)
+    return d
+
+
+def compute_regime(data: Dict[str, pd.DataFrame]) -> pd.Series:
+    close = pd.concat({s: df["close"] for s, df in data.items()}, axis=1).sort_index()
+    r6 = close / close.shift(24) - 1.0
+    r24 = close / close.shift(96) - 1.0
+    valid6 = r6.notna().sum(axis=1)
+    valid24 = r24.notna().sum(axis=1)
+    b6 = (r6 > 0).sum(axis=1) / valid6.replace(0, np.nan)
+    b24 = (r24 > 0).sum(axis=1) / valid24.replace(0, np.nan)
+    med6 = r6.median(axis=1, skipna=True)
+    med24 = r24.median(axis=1, skipna=True)
+    if "BTCUSDT" in close.columns:
+        btc6 = r6["BTCUSDT"]
+        btc24 = r24["BTCUSDT"]
+    else:
+        btc6 = med6
+        btc24 = med24
+
+    sufficient = (valid24 >= max(50, int(len(data)*0.25)))
+    bull_raw = sufficient & (b24 >= 0.58) & (b6 >= 0.55) & (med24 > 0) & (btc24 > 0) & (btc6 > -0.01)
+    bear_raw = sufficient & (b24 <= 0.42) & (b6 <= 0.45) & (med24 < 0) & (btc24 < 0) & (btc6 < 0.01)
+
+    bull_persist = bull_raw.rolling(4, min_periods=4).sum() >= 3
+    bear_persist = bear_raw.rolling(4, min_periods=4).sum() >= 3
+    regime = pd.Series("RANGE", index=close.index, dtype="object")
+    regime.loc[~sufficient] = "UNKNOWN"
+    regime.loc[bull_persist] = "BULL"
+    regime.loc[bear_persist] = "BEAR"
+    # If both somehow true due data quirks, neutralize.
+    regime.loc[bull_persist & bear_persist] = "RANGE"
+    return regime
+
+@dataclass
+class Candidate:
+    name: str
+    regime: str
+    side: str
+    kind: str
+    params: dict
+
+@dataclass
+class Trade:
+    candidate: str
+    regime: str
+    symbol: str
+    side: str
+    signal_time: str
+    entry_time: str
+    exit_time: str
+    entry_price: float
+    exit_price: float
+    gross_bps: float
+    net_bps: float
+    stress_net_bps: float
+    mfe_bps: float
+    mae_bps: float
+    giveback_bps: float
+    capture_ratio: Optional[float]
+    hold_bars: int
+    exit_reason: str
+    stop_hit: bool
+    split: str = ""
+
+
+def candidates() -> List[Candidate]:
+    return [
+        Candidate("BULL_BREAKOUT_LOCK", "BULL", "LONG", "BULL_BREAKOUT", {"stop_atr":1.6,"max_hold":192,"rsi_lo":55,"rsi_hi":78,"dist_atr":1.8}),
+        Candidate("BULL_COMPRESSION_LOCK", "BULL", "LONG", "BULL_COMPRESSION", {"stop_atr":1.5,"max_hold":160,"rsi_lo":52,"rsi_hi":80,"dist_atr":1.8}),
+        Candidate("BULL_MOMENTUM_LOCK", "BULL", "LONG", "BULL_MOMENTUM", {"stop_atr":1.6,"max_hold":160,"rsi_lo":57,"rsi_hi":82,"dist_atr":2.0}),
+        Candidate("RANGE_STOCH_VWAP_STRICT", "RANGE", "LONG", "RANGE_CYCLE", {"adx":20,"sep":0.65,"stoch":22,"rsi_lo":35,"rsi_hi":52,"stop_atr":1.0,"max_hold":8,"min_target_atr":0.35}),
+        Candidate("RANGE_STOCH_OPEN_MODERATE", "RANGE", "LONG", "RANGE_CYCLE", {"adx":24,"sep":0.90,"stoch":30,"rsi_lo":32,"rsi_hi":55,"stop_atr":1.15,"max_hold":12,"min_target_atr":0.30}),
+        Candidate("RANGE_BB_STOCH", "RANGE", "LONG", "RANGE_BB", {"adx":25,"sep":1.0,"stoch":32,"rsi_lo":30,"rsi_hi":55,"stop_atr":1.15,"max_hold":12,"min_target_atr":0.30}),
+        Candidate("BEAR_EMA20_STOCH_FAIL", "BEAR", "SHORT", "BEAR_REBOUND", {"stoch":75,"rsi_lo":43,"rsi_hi":60,"touch_atr":0.45,"rebound_atr":0.8,"stop_atr":0.90,"target_r":1.0,"max_hold":6,"time_stop":3}),
+        Candidate("BEAR_REBOUND_RSI_ROLLOVER", "BEAR", "SHORT", "BEAR_REBOUND", {"stoch":65,"rsi_lo":42,"rsi_hi":62,"touch_atr":0.60,"rebound_atr":0.65,"stop_atr":1.0,"target_r":1.2,"max_hold":8,"time_stop":4}),
+        Candidate("BEAR_VWAP_REJECT_FAST", "BEAR", "SHORT", "BEAR_VWAP", {"stoch":65,"rsi_lo":42,"rsi_hi":60,"touch_atr":0.55,"rebound_atr":0.6,"stop_atr":0.85,"target_r":0.9,"max_hold":5,"time_stop":3}),
+        Candidate("BASE_RANGE_REVERSAL_PROXY", "RANGE", "LONG", "BASE_RANGE", {"stop_atr":1.4,"target_r":1.4,"max_hold":16}),
+        Candidate("BASE_BEAR_BREAKDOWN_PROXY", "BEAR", "SHORT", "BASE_BEAR", {"stop_atr":1.5,"target_r":2.0,"max_hold":12}),
+    ]
+
+
+def entry_signal(d: pd.DataFrame, i: int, c: Candidate) -> Tuple[bool, dict]:
+    if i < 100 or i + 1 >= len(d):
+        return False, {}
+    r = d.iloc[i]
+    p = d.iloc[i-1]
+    vals = [r.get("atr"), r.get("rsi"), r.get("ema20"), r.get("ema50"), r.get("stoch_k"), r.get("stoch_d"), r.get("qv24"), r.get("ret24")]
+    if any(pd.isna(x) for x in vals):
+        return False, {}
+    atr = float(r.atr)
+    if not atr > 0:
+        return False, {}
+    if float(r.qv24) < MIN_QV_24H:
+        return False, {}
+    if abs(float(r.ret24)) > EXTREME_24H_ABS:
+        return False, {}
+
+    if c.kind == "BULL_BREAKOUT":
+        if pd.isna(r.high20_prev): return False, {}
+        ok = (
+            r.close > r.ema20 > r.ema50 and r.close > r.high20_prev and
+            c.params["rsi_lo"] <= r.rsi <= c.params["rsi_hi"] and
+            r.stoch_k < 92 and r.vol_ratio >= 0.85 and
+            (r.close - r.ema20) <= c.params["dist_atr"]*atr
+        )
+        return bool(ok), {}
+
+    if c.kind == "BULL_COMPRESSION":
+        if pd.isna(p.bb_width) or pd.isna(p.bb_width_q30) or pd.isna(r.bb_upper): return False, {}
+        ok = (
+            r.close > r.ema20 > r.ema50 and
+            p.bb_width <= p.bb_width_q30 and r.close > r.bb_upper and
+            c.params["rsi_lo"] <= r.rsi <= c.params["rsi_hi"] and
+            r.vol_ratio >= 1.0 and (r.close-r.ema20) <= c.params["dist_atr"]*atr
+        )
+        return bool(ok), {}
+
+    if c.kind == "BULL_MOMENTUM":
+        if pd.isna(r.ret4): return False, {}
+        move_atr = (r.close - d.iloc[i-4].close) / atr
+        ok = (
+            r.close > r.ema20 > r.ema50 and move_atr >= 0.9 and
+            c.params["rsi_lo"] <= r.rsi <= c.params["rsi_hi"] and
+            r.vol_ratio >= 1.15 and (r.close-r.ema20) <= c.params["dist_atr"]*atr and
+            r.stoch_k < 95
+        )
+        return bool(ok), {}
+
+    if c.kind in ("RANGE_CYCLE", "RANGE_BB"):
+        cross_up = (p.stoch_k <= p.stoch_d) and (r.stoch_k > r.stoch_d) and (min(p.stoch_k, r.stoch_k) <= c.params["stoch"])
+        rising_rsi = r.rsi > p.rsi
+        trendless = r.adx <= c.params["adx"] and r.sep_atr <= c.params["sep"]
+        below_anchor = r.close < r.vwap96 or r.close < r.day_open
+        no_breakdown = pd.isna(r.low20_prev) or r.close >= r.low20_prev - 0.2*atr
+        extra = True
+        if c.kind == "RANGE_BB":
+            extra = (not pd.isna(r.bb_lower)) and r.close <= r.bb_lower + 0.15*atr
+        ok = cross_up and rising_rsi and trendless and below_anchor and no_breakdown and extra and c.params["rsi_lo"] <= r.rsi <= c.params["rsi_hi"]
+        if not ok:
+            return False, {}
+        anchors = [float(x) for x in [r.vwap96, r.day_open, r.bb_mid] if not pd.isna(x) and float(x) > float(r.close)]
+        if not anchors:
+            return False, {}
+        target = min(anchors)
+        if target - r.close < c.params["min_target_atr"]*atr:
+            return False, {}
+        return True, {"target_hint": target}
+
+    if c.kind in ("BEAR_REBOUND", "BEAR_VWAP"):
+        cross_down = (p.stoch_k >= p.stoch_d) and (r.stoch_k < r.stoch_d) and (max(p.stoch_k, r.stoch_k) >= c.params["stoch"])
+        rsi_roll = r.rsi < p.rsi and c.params["rsi_lo"] <= r.rsi <= c.params["rsi_hi"]
+        trend = r.ema20 < r.ema50
+        rebound = (r.close - r.low8_prev) / atr if not pd.isna(r.low8_prev) else 0.0
+        bearish_candle = r.close < r.open and r.close < p.close
+        chase_guard = (r.close - p.close) / atr > -0.8
+        if c.kind == "BEAR_REBOUND":
+            touch = r.close >= r.ema20 - c.params["touch_atr"]*atr and r.close <= r.ema50 + 0.15*atr
+        else:
+            anchor = r.vwap96
+            touch = (not pd.isna(anchor)) and r.close >= anchor - c.params["touch_atr"]*atr and r.close <= r.ema50 + 0.25*atr
+        ok = cross_down and rsi_roll and trend and rebound >= c.params["rebound_atr"] and bearish_candle and chase_guard and touch
+        return bool(ok), {}
+
+    if c.kind == "BASE_RANGE":
+        # simple oversold oscillator reversal proxy for the previous range idea
+        cross_up = (p.stoch_k <= p.stoch_d) and (r.stoch_k > r.stoch_d) and p.stoch_k < 20
+        ok = cross_up and r.rsi < 45
+        return bool(ok), {}
+
+    if c.kind == "BASE_BEAR":
+        if pd.isna(r.low20_prev): return False, {}
+        ok = r.ema20 < r.ema50 and r.close < r.low20_prev and r.rsi < 45
+        return bool(ok), {}
+
+    return False, {}
+
