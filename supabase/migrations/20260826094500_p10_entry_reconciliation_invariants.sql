@@ -195,9 +195,10 @@ begin
     end if;
   end if;
 
-  -- Defense in depth: reconciliation means an exchange submission may have an unknown
-  -- result. A pre-order policy/validation failure has no durable entry order and cannot
-  -- pause every venue. Persistent post-submit ambiguity still latches exactly as before.
+  -- Defense in depth: reconciliation means a current exchange submission may have an
+  -- unknown result. Historical CLOSED/APPLIED fills are not current uncertainty and must
+  -- never authorize a fresh global latch. A newly discovered late fill on a terminal row
+  -- remains valid evidence for five minutes so its trigger can stage reconciliation.
   if v_reason = 'P10_ENTRY_RECONCILIATION_REQUIRED'
      and not exists (
        select 1
@@ -217,14 +218,24 @@ begin
                'EXCHANGE_DONE', 'EXCHANGE_PARTIAL_CANCELLED'
              )
            )
-           or coalesce(o.executed_volume, 0) > 0
-           or exists (
-             select 1 from public.exchange_trade_fills f
-             where f.bot_order_id = o.id and coalesce(f.quantity, 0) > 0
-           )
-           or exists (
-             select 1 from public.trading_fills f
-             where f.order_id = o.id and coalesce(f.volume, 0) > 0
+           or (
+             p.state in ('CANCELLED', 'ERROR')
+             and (
+               (coalesce(o.executed_volume, 0) > 0
+                and o.updated_at >= clock_timestamp() - interval '5 minutes')
+               or exists (
+                 select 1 from public.exchange_trade_fills f
+                 where f.bot_order_id = o.id
+                   and coalesce(f.quantity, 0) > 0
+                   and f.created_at >= clock_timestamp() - interval '5 minutes'
+               )
+               or exists (
+                 select 1 from public.trading_fills f
+                 where f.order_id = o.id
+                   and coalesce(f.volume, 0) > 0
+                   and f.executed_at >= clock_timestamp() - interval '5 minutes'
+               )
+             )
            )
          )
      ) then

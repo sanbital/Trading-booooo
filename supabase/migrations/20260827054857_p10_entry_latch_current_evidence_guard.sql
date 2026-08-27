@@ -1,5 +1,5 @@
--- P10 reconciliation latch ownership hardening.
--- Canonical replay carries the same definition so later deploys cannot regress it.
+-- Restrict the reconciliation latch to current post-submit uncertainty.
+-- Historical CLOSED/APPLIED executions are not evidence for a new global pause.
 
 create or replace function public.latch_p10_entry_safety(p_reason text)
 returns jsonb
@@ -138,3 +138,4 @@ begin
   );
 end;
 $function$;
+
