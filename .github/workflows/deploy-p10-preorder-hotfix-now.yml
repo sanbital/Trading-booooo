@@ -1,0 +1,71 @@
+name: Deploy P10 pre-order ownership hotfix now
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-p10-preorder-hotfix-now.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-p10-preorder-hotfix-now
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out current main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Re-verify P10 ownership fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt --check \
+            supabase/functions/market-autotrader/p10-entry-reconciliation.ts \
+            supabase/functions/market-autotrader/p10-entry-reconciliation.test.ts \
+            supabase/functions/market-autotrader/p10-entry-latch-ownership.test.ts \
+            supabase/functions/market-autotrader/index.ts
+          deno test supabase/functions/market-autotrader/p10-entry-reconciliation.test.ts
+          deno test --allow-read supabase/functions/market-autotrader/p10-entry-latch-ownership.test.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          grep -q 'P10_ENTRY_POLICY_BLOCK' supabase/functions/market-autotrader/index.ts
+          grep -q 'P10_ENTRY_PREORDER_ERROR' supabase/functions/market-autotrader/index.ts
+          grep -q 'NO_ENTRY_RECONCILIATION_EVIDENCE' supabase/migrations/20260826094500_p10_entry_reconciliation_invariants.sql
+          grep -q 'RECENT_FUTURES_CLOSE_GRACE' supabase/migrations/20260826094500_p10_entry_reconciliation_invariants.sql
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Validate production secrets
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_PROJECT_REF:-}"
+
+      - name: Deploy market-autotrader to production
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy market-autotrader \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
