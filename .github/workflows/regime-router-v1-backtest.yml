@@ -35,14 +35,32 @@ jobs:
               research/regime_router_v1/part4.pyfrag > /tmp/regime_router_backtest_v1.py
           python -m py_compile /tmp/regime_router_backtest_v1.py
 
+      - name: Diagnose Binance public endpoints
+        run: |
+          mkdir -p research/results/regime-router-v1
+          : > research/results/regime-router-v1/endpoint_diagnostics.txt
+          for host in https://fapi.binance.com https://fapi1.binance.com https://fapi2.binance.com https://fapi3.binance.com https://fapi4.binance.com; do
+            code=$(curl -L -sS --connect-timeout 8 --max-time 15 -o /tmp/binance-body -w '%{http_code}' "$host/fapi/v1/time" || true)
+            body=$(head -c 300 /tmp/binance-body 2>/dev/null || true)
+            printf '%s status=%s body=%s\n' "$host" "$code" "$body" >> research/results/regime-router-v1/endpoint_diagnostics.txt
+          done
+          cat research/results/regime-router-v1/endpoint_diagnostics.txt
+
       - name: Run Binance full-market backtest
         run: |
+          mkdir -p research/results/regime-router-v1
+          set +e
           python /tmp/regime_router_backtest_v1.py \
             --days 30 \
             --workers 8 \
-            --out-dir research/results/regime-router-v1
+            --out-dir research/results/regime-router-v1 \
+            2>&1 | tee research/results/regime-router-v1/run.log
+          status=${PIPESTATUS[0]}
+          echo "$status" > research/results/regime-router-v1/exit_status.txt
+          echo "backtest_exit_status=$status"
+          exit 0
 
-      - name: Commit backtest results
+      - name: Commit backtest results and diagnostics
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
