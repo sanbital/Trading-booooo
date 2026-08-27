@@ -1,1 +1,1 @@
-deploy=2026-08-28-regime-router-v1-r3
+deploy=2026-08-28-regime-router-v2-r1
