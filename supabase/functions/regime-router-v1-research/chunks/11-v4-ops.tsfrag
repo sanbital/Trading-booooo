@@ -1,0 +1,30 @@
+
+function v4MetricRow(job:any,market:string,c:Candidate,split:V3Split,m:any,barCount:number,first:number,last:number){return {job_id:job.id,revision:V4_REVISION,venue:"binance_futures",market,config_key:c.name,family:c.kind,side:c.side,regime:c.regime,split,bars:barCount,first_bar_at:first?new Date(first).toISOString():null,last_bar_at:last?new Date(last).toISOString():null,trades:m.trades,wins:m.wins,losses:m.losses,win_rate:m.winRate,gross_profit_bps:m.gp,gross_loss_bps:m.gl,net_bps:m.net,stress_net_bps:m.stress,mean_net_bps:m.mean,median_net_bps:m.median,profit_factor:m.pf,max_drawdown_bps:m.maxDD,average_mfe_bps:m.avgMfe,average_mae_bps:m.avgMae,average_hold_bars:m.avgHold,target_hits:m.targetHits,stop_hits:m.stopHits,time_exits:m.timeExits,parameters:{...c,capture_sum:m.captureSum,capture_count:m.captureCount,giveback_sum_bps:m.givebackSum,router_revision:V4_REVISION},updated_at:new Date().toISOString()};}
+
+async function backtestShardV4(body:any){
+  const job=await loadJob(String(body.job_id||""));
+  if(!job.metrics?.breadth30) throw new Error("V3 breadth metrics required");
+  const shardCount=Math.max(1,Math.round(finite(body.shard_count,25))),shard=Math.round(finite(body.shard_index,-1));
+  if(shard<0||shard>=shardCount) throw new Error("bad shard");
+  const markets=(job.config.markets as string[]).filter((_:string,i:number)=>i%shardCount===shard),start=Date.parse(job.window_start),end=Date.parse(job.window_end);
+  const fetched=await mapConcurrent(markets,4,async market=>{try{return {market,ok:true as const,b:await bars(market,start,end)}}catch(e){return {market,ok:false as const,error:e instanceof Error?e.message:String(e)}}});
+  const rows:any[]=[];let success=0,failed=0;
+  for(const f of fetched){
+    if(!f.ok||f.b.length<300){failed++;continue;}
+    success++;const p=prepare(f.b);
+    for(const c of v4Candidates()){
+      const sim=simulateV4(p,job.metrics,c);
+      for(const split of ["TRAIN","VALIDATION","TEST"] as V3Split[]) rows.push(v4MetricRow(job,f.market,c,split,summarize(sim[split]),p.length,p[0]?.time||0,p.at(-1)?.time||0));
+    }
+  }
+  if(rows.length) await upsertRows("v2_research_market_results",rows,"job_id,market,config_key,split");
+  return json({ok:true,revision:V4_REVISION,job_id:job.id,shard,markets:markets.length,success,failed,result_rows:rows.length});
+}
+
+async function statusV4(body:any){
+  const job=await loadJob(String(body.job_id||""));
+  const rows=await rest(`v2_research_market_results?job_id=eq.${encodeURIComponent(job.id)}&revision=eq.${encodeURIComponent(V4_REVISION)}&select=market,config_key&limit=50000`);
+  const markets=new Set((rows||[]).map((x:any)=>x.market));
+  const configs=new Set((rows||[]).map((x:any)=>x.config_key));
+  return json({ok:true,revision:V4_REVISION,job_id:job.id,markets:markets.size,configs:configs.size,rows:(rows||[]).length});
+}
