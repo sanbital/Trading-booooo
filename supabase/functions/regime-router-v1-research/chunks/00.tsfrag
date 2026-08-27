@@ -1,0 +1,91 @@
+declare const Deno: any;
+
+const NAME = "regime-router-v1-research";
+const REVISION = "REGIME_ROUTER_V1_15M_30D_OOS";
+const BINANCE = "https://fapi.binance.com";
+const BAR_MS = 15 * 60_000;
+const BASE_COST_BPS = 14;
+const STRESS_COST_BPS = 23;
+const MIN_QV_24H = 5_000_000;
+const EXTREME_24H_ABS = 0.20;
+
+type Bar = { time:number; open:number; high:number; low:number; close:number; volume:number; quoteVolume:number };
+type Side = "LONG" | "SHORT";
+type Regime = "BULL" | "RANGE" | "BEAR";
+type Candidate = { name:string; regime:Regime; side:Side; kind:string; p:Record<string,number> };
+type Trade = { gross:number; net:number; stress:number; mfe:number; mae:number; giveback:number; capture:number|null; hold:number; reason:string };
+type Prepared = Bar & {
+  atr:number; rsi:number; ema20:number; ema50:number; stochK:number; stochD:number; adx:number;
+  vwap96:number; dayOpen:number; qv24:number; volRatio:number; ret24:number; ret4:number;
+  high20Prev:number; low20Prev:number; high8Prev:number; low8Prev:number; low5Prev:number;
+  sepAtr:number; bbMid:number; bbUpper:number; bbLower:number; bbCompression:number;
+};
+
+const env = (name:string) => String(Deno.env.get(name) || "").trim();
+const finite = (v:any, fallback=0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
+const sleep = (ms:number) => new Promise(r => setTimeout(r, ms));
+const json = (body:any, status=200) => new Response(JSON.stringify(body), { status, headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"} });
+
+async function fetchJson(url:string, timeoutMs=20_000, attempts=6):Promise<any> {
+  let last:any = new Error("fetch failed");
+  for (let a=0; a<attempts; a++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const r = await fetch(url, { signal:controller.signal, headers:{accept:"application/json","user-agent":"trading-booooo-regime-router-v1/1.0"} });
+      const text = await r.text();
+      if (r.ok) return text ? JSON.parse(text) : null;
+      last = new Error(`HTTP ${r.status}: ${text.slice(0,300)}`);
+      if (![418,429].includes(r.status) && r.status < 500) throw last;
+      if (a+1 < attempts) await sleep(Math.min(12_000, 500*2**a));
+    } catch (e) {
+      last=e;
+      if (a+1 < attempts) await sleep(Math.min(8_000, 400*2**a));
+    } finally { clearTimeout(timer); }
+  }
+  throw last;
+}
+
+function serviceHeaders(extra:Record<string,string>={}) {
+  const key=env("SUPABASE_SERVICE_ROLE_KEY");
+  if (!key) throw new Error("SUPABASE_SERVICE_ROLE_KEY unavailable");
+  return {apikey:key,authorization:`Bearer ${key}`,"content-type":"application/json",accept:"application/json",...extra};
+}
+async function rest(path:string, init:RequestInit={}):Promise<any> {
+  const url=env("SUPABASE_URL");
+  if (!url) throw new Error("SUPABASE_URL unavailable");
+  const r=await fetch(`${url}/rest/v1/${path}`, {...init, headers:serviceHeaders((init.headers||{}) as Record<string,string>)});
+  const text=await r.text();
+  if (!r.ok) throw new Error(`REST ${r.status}: ${text.slice(0,600)}`);
+  return text?JSON.parse(text):null;
+}
+async function authorize(req:Request) {
+  const supplied=(req.headers.get("x-v2-research-token")||"").trim();
+  const rows=await rest("edge_internal_tokens?name=eq.market-v2-research&select=token&limit=1");
+  const expected=String(rows?.[0]?.token||"");
+  if (!supplied || supplied.length!==expected.length) return false;
+  let diff=0; for(let i=0;i<expected.length;i++) diff|=supplied.charCodeAt(i)^expected.charCodeAt(i);
+  return diff===0;
+}
+async function upsertRows(table:string, rows:any[], conflict:string) {
+  for(let i=0;i<rows.length;i+=200) {
+    await rest(`${table}?on_conflict=${encodeURIComponent(conflict)}`, {method:"POST",headers:{prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify(rows.slice(i,i+200))});
+  }
+}
+async function insertJob(row:any) {
+  const rows=await rest("v2_research_jobs",{method:"POST",headers:{prefer:"return=representation"},body:JSON.stringify(row)});
+  return rows?.[0];
+}
+async function loadJob(id:string) {
+  const rows=await rest(`v2_research_jobs?id=eq.${encodeURIComponent(id)}&select=*&limit=1`);
+  if(!rows?.[0]) throw new Error("job not found"); return rows[0];
+}
+async function patchJob(id:string, body:any) {
+  const rows=await rest(`v2_research_jobs?id=eq.${encodeURIComponent(id)}`,{method:"PATCH",headers:{prefer:"return=representation"},body:JSON.stringify({...body,updated_at:new Date().toISOString()})});
+  return rows?.[0];
+}
+
+async function universe():Promise<string[]> {
+  const data=await fetchJson(`${BINANCE}/fapi/v1/exchangeInfo`);
+  return (Array.isArray(data?.symbols)?data.symbols:[])
+    .filter((x:any)=>x?.status==="TRADING"&&x?.contractType==="PERPETUAL"&&x?.quoteAs
