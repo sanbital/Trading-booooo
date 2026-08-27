@@ -1,0 +1,125 @@
+name: Run isolated Regime Router V1 job
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'research/regime_router_v1/job-trigger.txt'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: regime-router-v1-job
+  cancel-in-progress: false
+
+jobs:
+  run-research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      JOB_ID: fae2e2ec-6600-440e-904b-b17044088c99
+      EDGE_URL: https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/regime-router-v1-research
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify database connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL:-}"
+          psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 -c 'select 1' | grep -qx '1'
+
+      - name: Finalize regime labels and run OOS shards
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p research/results/regime-router-v1
+          TRACE="research/results/regime-router-v1/job-${JOB_ID}.log"
+          : > "$TRACE"
+
+          call_action() {
+            local payload="$1"
+            local out status content
+            out=$(psql "$SUPABASE_DB_URL" -XAt -F $'\t' -v ON_ERROR_STOP=1 -v payload="$payload" -v edge_url="$EDGE_URL" <<'SQL'
+          with tok as (
+            select token from edge_internal_tokens where name='market-v2-research' limit 1
+          ), call as (
+            select extensions.http((
+              'POST'::extensions.http_method,
+              :'edge_url'::varchar,
+              array[extensions.http_header('x-v2-research-token'::varchar,tok.token::varchar)]::extensions.http_header[],
+              'application/json'::varchar,
+              :'payload'::varchar
+            )::extensions.http_request) as resp
+            from tok
+          )
+          select (resp).status, (resp).content from call;
+          SQL
+          )
+            status=$(printf '%s' "$out" | head -n1 | cut -f1)
+            content=$(printf '%s' "$out" | head -n1 | cut -f2-)
+            printf '%s\t%s\n' "$status" "$content" | tee -a "$TRACE"
+            test "$status" = "200"
+            CONTENT="$content" python - <<'PY'
+          import json, os, sys
+          x=json.loads(os.environ['CONTENT'])
+          if not x.get('ok'):
+              print(x, file=sys.stderr)
+              raise SystemExit(1)
+          PY
+          }
+
+          call_action "{\"action\":\"finalize\",\"job_id\":\"${JOB_ID}\"}"
+          for shard in $(seq 0 24); do
+            echo "=== backtest shard ${shard}/24 ===" | tee -a "$TRACE"
+            call_action "{\"action\":\"backtest_shard\",\"job_id\":\"${JOB_ID}\",\"shard_index\":${shard},\"shard_count\":25}"
+          done
+          call_action "{\"action\":\"complete\",\"job_id\":\"${JOB_ID}\"}"
+
+      - name: Write aggregate validation report
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="research/results/regime-router-v1/job-${JOB_ID}-aggregate.tsv"
+          psql "$SUPABASE_DB_URL" -XAt -F $'\t' -v ON_ERROR_STOP=1 > "$OUT" <<SQL
+          select
+            regime, config_key, split,
+            sum(trades)::bigint as trades,
+            sum(wins)::bigint as wins,
+            round((sum(wins)::numeric/nullif(sum(trades),0)*100),2) as win_pct,
+            round(sum(net_bps)::numeric,2) as net_bps,
+            round(sum(stress_net_bps)::numeric,2) as stress_net_bps,
+            round((sum(gross_profit_bps)::numeric/nullif(sum(gross_loss_bps),0)),4) as profit_factor,
+            round((sum(mean_net_bps*trades)::numeric/nullif(sum(trades),0)),3) as mean_net_bps,
+            round((sum(average_mfe_bps*trades)::numeric/nullif(sum(trades),0)),3) as avg_mfe_bps,
+            round((sum(average_mae_bps*trades)::numeric/nullif(sum(trades),0)),3) as avg_mae_bps,
+            round((sum(average_hold_bars*trades)::numeric/nullif(sum(trades),0)),3) as avg_hold_bars,
+            round((sum(stop_hits)::numeric/nullif(sum(trades),0)*100),2) as stop_pct,
+            round((sum(coalesce((parameters->>'capture_sum')::double precision,0))::numeric/nullif(sum(coalesce((parameters->>'capture_count')::int,0)),0)),4) as mfe_capture,
+            round((sum(coalesce((parameters->>'giveback_sum_bps')::double precision,0))::numeric/nullif(sum(trades),0)),3) as avg_giveback_bps,
+            round(avg(max_drawdown_bps)::numeric,2) as avg_market_maxdd_bps,
+            round(max(max_drawdown_bps)::numeric,2) as worst_market_maxdd_bps
+          from v2_research_market_results
+          where job_id='${JOB_ID}'
+            and config_key <> 'BREADTH_SHARD'
+          group by regime,config_key,split
+          order by regime,split,config_key;
+          SQL
+          cat "$OUT"
+
+      - name: Commit immutable research trace
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add research/results/regime-router-v1
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "research: record regime router v1 OOS job ${JOB_ID}"
+          git pull --rebase origin main
+          git push origin HEAD:main
