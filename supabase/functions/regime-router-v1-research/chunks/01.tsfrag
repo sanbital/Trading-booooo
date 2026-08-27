@@ -1,0 +1,46 @@
+set==="USDT")
+    .map((x:any)=>String(x.symbol||"" )).filter(Boolean).sort();
+}
+function toBar(x:any[]):Bar { return {time:finite(x?.[0]),open:finite(x?.[1]),high:finite(x?.[2]),low:finite(x?.[3]),close:finite(x?.[4]),volume:finite(x?.[5]),quoteVolume:finite(x?.[7])}; }
+async function bars(market:string,start:number,end:number):Promise<Bar[]> {
+  const out:Bar[]=[]; let cursor=start;
+  for(let page=0; cursor<=end && page<6; page++) {
+    const u=`${BINANCE}/fapi/v1/klines?symbol=${encodeURIComponent(market)}&interval=15m&startTime=${cursor}&endTime=${end}&limit=1000`;
+    const payload=await fetchJson(u);
+    const rows=(Array.isArray(payload)?payload:[]).map(toBar).filter((b:Bar)=>b.time>=start&&b.time<=end&&b.close>0);
+    if(!rows.length) break; out.push(...rows);
+    const next=rows[rows.length-1].time+BAR_MS; if(next<=cursor)break; cursor=next; if(rows.length<1000)break;
+  }
+  const m=new Map<number,Bar>(); for(const b of out)m.set(b.time,b); return [...m.values()].sort((a,b)=>a.time-b.time);
+}
+async function mapConcurrent<T,R>(items:T[], concurrency:number, fn:(v:T)=>Promise<R>):Promise<R[]> {
+  const res=new Array<R>(items.length); let cursor=0;
+  const workers=Array.from({length:Math.min(concurrency,items.length)},async()=>{while(true){const i=cursor++;if(i>=items.length)return;res[i]=await fn(items[i]);}});
+  await Promise.all(workers); return res;
+}
+
+function candidates():Candidate[]{return [
+  {name:"BULL_BREAKOUT_LOCK",regime:"BULL",side:"LONG",kind:"BULL_BREAKOUT",p:{stopAtr:1.6,maxHold:192,rsiLo:55,rsiHi:78,distAtr:1.8}},
+  {name:"BULL_COMPRESSION_LOCK",regime:"BULL",side:"LONG",kind:"BULL_COMPRESSION",p:{stopAtr:1.5,maxHold:160,rsiLo:52,rsiHi:80,distAtr:1.8}},
+  {name:"BULL_MOMENTUM_LOCK",regime:"BULL",side:"LONG",kind:"BULL_MOMENTUM",p:{stopAtr:1.6,maxHold:160,rsiLo:57,rsiHi:82,distAtr:2.0}},
+  {name:"RANGE_STOCH_VWAP_STRICT",regime:"RANGE",side:"LONG",kind:"RANGE_CYCLE",p:{adx:20,sep:0.65,stoch:22,rsiLo:35,rsiHi:52,stopAtr:1.0,maxHold:8,minTargetAtr:0.35}},
+  {name:"RANGE_STOCH_OPEN_MODERATE",regime:"RANGE",side:"LONG",kind:"RANGE_CYCLE",p:{adx:24,sep:0.90,stoch:30,rsiLo:32,rsiHi:55,stopAtr:1.15,maxHold:12,minTargetAtr:0.30}},
+  {name:"RANGE_BB_STOCH",regime:"RANGE",side:"LONG",kind:"RANGE_BB",p:{adx:25,sep:1.0,stoch:32,rsiLo:30,rsiHi:55,stopAtr:1.15,maxHold:12,minTargetAtr:0.30}},
+  {name:"BEAR_EMA20_STOCH_FAIL",regime:"BEAR",side:"SHORT",kind:"BEAR_REBOUND",p:{stoch:75,rsiLo:43,rsiHi:60,touchAtr:0.45,reboundAtr:0.8,stopAtr:0.90,targetR:1.0,maxHold:6,timeStop:3}},
+  {name:"BEAR_REBOUND_RSI_ROLLOVER",regime:"BEAR",side:"SHORT",kind:"BEAR_REBOUND",p:{stoch:65,rsiLo:42,rsiHi:62,touchAtr:0.60,reboundAtr:0.65,stopAtr:1.0,targetR:1.2,maxHold:8,timeStop:4}},
+  {name:"BEAR_VWAP_REJECT_FAST",regime:"BEAR",side:"SHORT",kind:"BEAR_VWAP",p:{stoch:65,rsiLo:42,rsiHi:60,touchAtr:0.55,reboundAtr:0.6,stopAtr:0.85,targetR:0.9,maxHold:5,timeStop:3}},
+  {name:"BASE_RANGE_REVERSAL_PROXY",regime:"RANGE",side:"LONG",kind:"BASE_RANGE",p:{stopAtr:1.4,targetR:1.4,maxHold:16}},
+  {name:"BASE_BEAR_BREAKDOWN_PROXY",regime:"BEAR",side:"SHORT",kind:"BASE_BEAR",p:{stopAtr:1.5,targetR:2.0,maxHold:12}},
+]}
+
+function ema(xs:number[],period:number){const out=new Array(xs.length).fill(NaN);if(!xs.length)return out;const a=2/(period+1);let v=xs[0];out[0]=v;for(let i=1;i<xs.length;i++){v=xs[i]*a+v*(1-a);out[i]=v;}return out;}
+function wilder(xs:number[],period:number){const out=new Array(xs.length).fill(NaN);if(!xs.length)return out;let v=xs[0];out[0]=v;for(let i=1;i<xs.length;i++){v=(v*(period-1)+xs[i])/period;out[i]=v;}return out;}
+function rollingMax(xs:number[],n:number,i:number){let v=-Infinity;for(let j=Math.max(0,i-n+1);j<=i;j++)v=Math.max(v,xs[j]);return v;}
+function rollingMin(xs:number[],n:number,i:number){let v=Infinity;for(let j=Math.max(0,i-n+1);j<=i;j++)v=Math.min(v,xs[j]);return v;}
+function rollingMean(xs:number[],n:number,i:number){let s=0,c=0;for(let j=Math.max(0,i-n+1);j<=i;j++){if(Number.isFinite(xs[j])){s+=xs[j];c++;}}return c?s/c:NaN;}
+function rollingStd(xs:number[],n:number,i:number){const m=rollingMean(xs,n,i);if(!Number.isFinite(m))return NaN;let s=0,c=0;for(let j=Math.max(0,i-n+1);j<=i;j++){if(Number.isFinite(xs[j])){s+=(xs[j]-m)**2;c++;}}return c?Math.sqrt(s/c):NaN;}
+function rsiSeries(closes:number[],n=14){const g=new Array(closes.length).fill(0),l=new Array(closes.length).fill(0);for(let i=1;i<closes.length;i++){const d=closes[i]-closes[i-1];g[i]=Math.max(d,0);l[i]=Math.max(-d,0);}const ag=wilder(g,n),al=wilder(l,n);return closes.map((_,i)=>al[i]===0?(ag[i]===0?50:100):100-100/(1+ag[i]/al[i]));}
+
+function prepare(input:Bar[]):Prepared[]{
+  const b=[...input].sort((a,b)=>a.time-b.time);const n=b.length;
+  const c=b.map(x=>x.close),h=b.map(x=>x.high),lo=b.map(x=>x.low),vol=b.map(x=>x.volume),qv=b.map(x=
