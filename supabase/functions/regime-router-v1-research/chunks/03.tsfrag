@@ -1,0 +1,28 @@
+ose-p.close)/atr>-0.8;const touch=cand.kind==="BEAR_REBOUND"?(r.close>=r.ema20-P.touchAtr*atr&&r.close<=r.ema50+0.15*atr):(r.close>=r.vwap96-P.touchAtr*atr&&r.close<=r.ema50+0.25*atr);return {ok:cross&&roll&&r.ema20<r.ema50&&rebound>=P.reboundAtr&&candle&&chase&&touch};
+  }
+  if(cand.kind==="BASE_RANGE")return {ok:p.stochK<=p.stochD&&r.stochK>r.stochD&&p.stochK<20&&r.rsi<45};
+  if(cand.kind==="BASE_BEAR")return {ok:r.ema20<r.ema50&&r.close<r.low20Prev&&r.rsi<45};return {ok:false};
+}
+
+function simulateMarket(prep:Prepared[], metrics:any, cand:Candidate, splitTime:number):{IS:Trade[];OOS:Trade[]}{
+  const out={IS:[] as Trade[],OOS:[] as Trade[]};let i=100,cool=0;
+  while(i<prep.length-1){if(i<cool||regimeAt(metrics,prep[i].time)!==cand.regime){i++;continue;}const sig=entrySignal(prep,i,cand);if(!sig.ok){i++;continue;}const e=i+1,entry=prep[e].open,atr0=prep[i].atr,P=cand.p;if(!(entry>0&&atr0>0)){i++;continue;}let stop=0,target:number|null=null,maxHold=0,risk=0;
+    if(cand.kind.startsWith("BULL_")){risk=P.stopAtr*atr0;stop=entry-risk;maxHold=P.maxHold;}
+    else if(cand.kind==="RANGE_CYCLE"||cand.kind==="RANGE_BB"){risk=P.stopAtr*atr0;stop=Math.max(prep[i].low5Prev-0.1*atr0,entry-1.3*atr0);if(entry-stop<0.45*atr0)stop=entry-0.8*atr0;risk=entry-stop;target=Math.max(entry+0.25*atr0,finite(sig.targetHint));maxHold=P.maxHold;}
+    else if(cand.kind==="BEAR_REBOUND"||cand.kind==="BEAR_VWAP"){risk=P.stopAtr*atr0;stop=Math.min(prep[i].high8Prev+0.1*atr0,entry+1.25*atr0);if(stop-entry<0.4*atr0)stop=entry+0.75*atr0;risk=stop-entry;target=entry-P.targetR*risk;maxHold=P.maxHold;}
+    else if(cand.kind==="BASE_RANGE"){risk=P.stopAtr*atr0;stop=entry-risk;target=entry+P.targetR*risk;maxHold=P.maxHold;}
+    else {risk=P.stopAtr*atr0;stop=entry+risk;target=entry-P.targetR*risk;maxHold=P.maxHold;}
+    let best=entry,worst=entry,exit=entry,reason="MAX_HOLD",exitJ=Math.min(prep.length-1,e+maxHold-1),activeStop=stop;
+    for(let h=0;h<maxHold;h++){const j=e+h;if(j>=prep.length)break;const b=prep[j];
+      if(cand.side==="LONG"){if(b.low<=activeStop){exit=activeStop;reason="STOP";exitJ=j;worst=Math.min(worst,b.low);break;}if(target!==null&&b.high>=target){exit=target;reason="TARGET";exitJ=j;best=Math.max(best,b.high);break;}best=Math.max(best,b.high);worst=Math.min(worst,b.low);}else{if(b.high>=activeStop){exit=activeStop;reason="STOP";exitJ=j;worst=Math.max(worst,b.high);break;}if(target!==null&&b.low<=target){exit=target;reason="TARGET";exitJ=j;best=Math.min(best,b.low);break;}best=Math.min(best,b.low);worst=Math.max(worst,b.high);}
+      if(cand.kind.startsWith("BULL_")){const mfeP=best-entry;if(mfeP>=risk){activeStop=Math.max(activeStop,entry+0.05*risk);activeStop=Math.max(activeStop,best-(mfeP>=2*risk?1.8:2.4)*b.atr);}if(h>=8&&b.close<b.ema20){exit=b.close;reason="EMA20_EXIT";exitJ=j;break;}}
+      else if(cand.kind==="RANGE_CYCLE"||cand.kind==="RANGE_BB"){if(j>e){const pb=prep[j-1],turn=pb.stochK>=pb.stochD&&b.stochK<b.stochD&&Math.max(pb.stochK,b.stochK)>=75;if(turn&&b.close>entry){exit=b.close;reason="CYCLE_TURN";exitJ=j;break;}}}
+      else if(cand.kind==="BEAR_REBOUND"||cand.kind==="BEAR_VWAP"){const mfeP=entry-best;if(mfeP>=0.6*risk)activeStop=Math.min(activeStop,entry-0.03*risk);if(h+1>=P.timeStop&&mfeP<0.25*risk){exit=b.close;reason="FAST_TIME_STOP";exitJ=j;break;}if(j>e){const pb=prep[j-1],turn=pb.stochK<=pb.stochD&&b.stochK> b.stochD&&Math.min(pb.stochK,b.stochK)<=25;if(turn){exit=b.close;reason="CYCLE_REBOUND";exitJ=j;break;}}}
+      exit=b.close;
+    }
+    if(reason==="MAX_HOLD")exit=prep[exitJ].close;let gross=0,mfe=0,mae=0;if(cand.side==="LONG"){gross=(exit/entry-1)*10000;mfe=(best/entry-1)*10000;mae=(worst/entry-1)*10000;}else{gross=(entry-exit)/entry*10000;mfe=(entry-best)/entry*10000;mae=-(worst-entry)/entry*10000;}const tr:Trade={gross,net:gross-BASE_COST_BPS,stress:gross-STRESS_COST_BPS,mfe,mae,giveback:Math.max(0,mfe-gross),capture:mfe>1e-9?gross/mfe:null,hold:exitJ-e+1,reason};(prep[e].time>=splitTime?out.OOS:out.IS).push(tr);cool=exitJ+(cand.regime==="BEAR"?2:1);i=Math.max(i+1,exitJ+1);
+  }
+  return out;
+}
+
+function summarize(ts:Trade[]){const nets=ts.map(t=>t.net),stress=ts.map(t=>t.stress);const wins=nets.filter(x=>x>0).length,gp=nets.filter(x=>x>0).reduce((a,b)=>a+b,0),gl=Math.abs(nets.filter(x=>x<0).reduce((a,b)=>a+b,0));let eq=0,peak=0,dd=0;for(const x of nets){eq+=x;peak=Math.max(peak,eq);dd=Math.max(dd,peak-eq);}const captures=ts.map(t=>t.capture).filter((x):x is number=>x!==null&&Number.isFinite(x));const sorted=[...nets].sort((a,b)=>a-b);const median=sorted.length?(sorted.length%2?sorted[(sorted.length-1)/2]:(sorted[sorted.length/2-1]+sorted[sorted.length/2])/2):0;return {trades:ts.length,wins,losses:ts.length-wins,winRate:ts.length?wins/ts.length:0,gp,gl,net:nets.reduce((a,b)=>a+b,0),stress:stress
