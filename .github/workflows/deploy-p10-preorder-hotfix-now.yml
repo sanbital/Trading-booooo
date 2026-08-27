@@ -69,3 +69,5 @@ jobs:
             --project-ref "${SUPABASE_PROJECT_REF}" \
             --no-verify-jwt \
             --use-api
+
+# trigger: 2026-08-27-p10-preorder-ownership
