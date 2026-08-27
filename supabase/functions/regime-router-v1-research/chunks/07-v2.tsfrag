@@ -1,0 +1,41 @@
+
+// V2 robustness grid: structural full-market regime stays unchanged; tactical entry/exit is tightened per regime.
+function candidatesV2():Candidate[]{
+  const out:Candidate[]=[];
+  for(const moveAtr of [0.75,1.0,1.25]) for(const volMin of [1.0,1.25]) for(const rsiLo of [55,60]) out.push({name:`V2_BULL_MOM_M${moveAtr}_V${volMin}_R${rsiLo}`,regime:"BULL",side:"LONG",kind:"V2_BULL_MOM",p:{moveAtr,volMin,rsiLo,rsiHi:82,distAtr:1.8,stopAtr:1.4,maxHold:64}});
+  for(const compression of [0.65,0.80]) for(const volMin of [1.1,1.4]) out.push({name:`V2_BULL_COMP_C${compression}_V${volMin}`,regime:"BULL",side:"LONG",kind:"V2_BULL_COMP",p:{compression,volMin,rsiLo:52,rsiHi:80,distAtr:1.6,stopAtr:1.3,maxHold:64}});
+  for(const stoch of [15,25]) for(const adx of [18,22]) for(const minTargetAtr of [0.6,0.9]) out.push({name:`V2_RANGE_CYCLE_S${stoch}_A${adx}_T${minTargetAtr}`,regime:"RANGE",side:"LONG",kind:"V2_RANGE",p:{stoch,adx,sep:adx===18?0.60:0.85,rsiLo:32,rsiHi:54,minTargetAtr,stopAtr:minTargetAtr>=0.9?0.75:0.85,targetCapAtr:1.25,maxHold:8}});
+  for(const stoch of [70,80]) for(const rebound4 of [0.30,0.60]) for(const targetR of [0.65,0.90]) out.push({name:`V2_BEAR_FAIL_S${stoch}_RB${rebound4}_T${targetR}`,regime:"BEAR",side:"SHORT",kind:"V2_BEAR_FAIL",p:{stoch,rebound4,targetR,rsiLo:44,rsiHi:64,touchAtr:0.50,stopAtr:0.75,maxHold:5,timeStop:3}});
+  return out;
+}
+
+function entrySignalV2(d:Prepared[],i:number,cand:Candidate):{ok:boolean,targetHint?:number}{
+  if(i<100||i+1>=d.length)return {ok:false};const r=d[i],p=d[i-1],P=cand.p,atr=r.atr;if(![atr,r.rsi,r.ema20,r.ema50,r.stochK,r.stochD,r.qv24,r.ret24,r.volRatio].every(Number.isFinite)||atr<=0||r.qv24<MIN_QV_24H||Math.abs(r.ret24)>EXTREME_24H_ABS)return {ok:false};
+  const emaSlope=(r.ema20-d[i-4].ema20)/atr,ret4Atr=(r.close-d[i-4].close)/atr,reversalUp=r.close>r.open&&r.close>p.close,reversalDown=r.close<r.open&&r.close<p.close;
+  if(cand.kind==="V2_BULL_MOM")return {ok:r.close>r.ema20&&r.ema20>r.ema50&&emaSlope>0.10&&ret4Atr>=P.moveAtr&&r.rsi>=P.rsiLo&&r.rsi<=P.rsiHi&&r.volRatio>=P.volMin&&(r.close-r.ema20)<=P.distAtr*atr&&r.stochK<94&&reversalUp};
+  if(cand.kind==="V2_BULL_COMP")return {ok:r.close>r.ema20&&r.ema20>r.ema50&&emaSlope>0.05&&p.bbCompression<=P.compression&&r.close>r.bbUpper&&r.rsi>=P.rsiLo&&r.rsi<=P.rsiHi&&r.volRatio>=P.volMin&&(r.close-r.ema20)<=P.distAtr*atr&&reversalUp};
+  if(cand.kind==="V2_RANGE"){
+    const cross=p.stochK<=p.stochD&&r.stochK>r.stochD&&Math.min(p.stochK,r.stochK)<=P.stoch;const trendless=r.adx<=P.adx&&r.sepAtr<=P.sep;const pullback=ret4Atr>=-1.4&&ret4Atr<=0.35;const below=r.close<r.vwap96||r.close<r.dayOpen;const noBreak=r.close>=r.low20Prev-0.05*atr;if(!(cross&&trendless&&pullback&&below&&noBreak&&reversalUp&&r.rsi>p.rsi&&r.rsi>=P.rsiLo&&r.rsi<=P.rsiHi&&r.volRatio>=0.7))return {ok:false};const anchors=[r.vwap96,r.dayOpen,r.bbMid].filter(x=>Number.isFinite(x)&&x>r.close);if(!anchors.length)return {ok:false};const target=Math.min(Math.min(...anchors),r.close+P.targetCapAtr*atr);if(target-r.close<P.minTargetAtr*atr)return {ok:false};return {ok:true,targetHint:target};
+  }
+  if(cand.kind==="V2_BEAR_FAIL"){
+    const cross=p.stochK>=p.stochD&&r.stochK<p.stochD&&Math.max(p.stochK,r.stochK)>=P.stoch;const roll=r.rsi<p.rsi&&r.rsi>=P.rsiLo&&r.rsi<=P.rsiHi;const touch=r.close>=r.ema20-P.touchAtr*atr&&r.close<=r.ema50+0.10*atr;return {ok:r.ema20<r.ema50&&emaSlope<-0.05&&ret4Atr>=P.rebound4&&cross&&roll&&touch&&reversalDown&&r.volRatio>=0.7};
+  }
+  return {ok:false};
+}
+
+function simulateMarketV2(prep:Prepared[],metrics:any,cand:Candidate,splitTime:number):{IS:Trade[];OOS:Trade[]}{
+  const out={IS:[] as Trade[],OOS:[] as Trade[]};let i=100,cool=0;
+  while(i<prep.length-1){if(i<cool||regimeAt(metrics,prep[i].time)!==cand.regime){i++;continue;}const sig=entrySignalV2(prep,i,cand);if(!sig.ok){i++;continue;}const e=i+1,entry=prep[e].open,atr0=prep[i].atr,P=cand.p;if(!(entry>0&&atr0>0)){i++;continue;}let risk=P.stopAtr*atr0,stop=cand.side==="LONG"?entry-risk:entry+risk,target:number|null=null;
+    if(cand.kind==="V2_RANGE")target=finite(sig.targetHint);else if(cand.kind==="V2_BEAR_FAIL")target=entry-P.targetR*risk;
+    let activeStop=stop,best=entry,worst=entry,exit=entry,reason="MAX_HOLD",exitJ=Math.min(prep.length-1,e+P.maxHold-1);
+    for(let h=0;h<P.maxHold;h++){const j=e+h;if(j>=prep.length)break;const b=prep[j];
+      if(cand.side==="LONG"){if(b.low<=activeStop){exit=activeStop;reason="STOP";exitJ=j;worst=Math.min(worst,b.low);break;}if(target!==null&&b.high>=target){exit=target;reason="TARGET";exitJ=j;best=Math.max(best,b.high);break;}best=Math.max(best,b.high);worst=Math.min(worst,b.low);}else{if(b.high>=activeStop){exit=activeStop;reason="STOP";exitJ=j;worst=Math.max(worst,b.high);break;}if(target!==null&&b.low<=target){exit=target;reason="TARGET";exitJ=j;best=Math.min(best,b.low);break;}best=Math.min(best,b.low);worst=Math.max(worst,b.high);}
+      if(cand.kind==="V2_BULL_MOM"||cand.kind==="V2_BULL_COMP"){const mfeP=best-entry;if(mfeP>=0.8*risk)activeStop=Math.max(activeStop,entry+0.10*risk);if(mfeP>=1.5*risk)activeStop=Math.max(activeStop,best-1.5*b.atr);if(mfeP>=2.5*risk)activeStop=Math.max(activeStop,best-1.15*b.atr);if(h>=4&&b.close<b.ema20){exit=b.close;reason="EMA20_EXIT";exitJ=j;break;}}
+      else if(cand.kind==="V2_RANGE"){const mfeP=best-entry;if(mfeP>=0.45*risk)activeStop=Math.max(activeStop,entry+0.18*risk);if(j>e){const pb=prep[j-1],turn=pb.stochK>=pb.stochD&&b.stochK<pb.stochK&&Math.max(pb.stochK,b.stochK)>=72;if(turn&&b.close>entry){exit=b.close;reason="CYCLE_TURN";exitJ=j;break;}}}
+      else {const mfeP=entry-best;if(mfeP>=0.40*risk)activeStop=Math.min(activeStop,entry-0.15*risk);if(h+1>=P.timeStop&&mfeP<0.20*risk){exit=b.close;reason="FAST_TIME_STOP";exitJ=j;break;}if(j>e){const pb=prep[j-1],turn=pb.stochK<=pb.stochD&&b.stochK>pb.stochK&&Math.min(pb.stochK,b.stochK)<=28;if(turn){exit=b.close;reason="CYCLE_REBOUND";exitJ=j;break;}}}
+      exit=b.close;
+    }
+    if(reason==="MAX_HOLD")exit=prep[exitJ].close;let gross=0,mfe=0,mae=0;if(cand.side==="LONG"){gross=(exit/entry-1)*10000;mfe=(best/entry-1)*10000;mae=(worst/entry-1)*10000;}else{gross=(entry-exit)/entry*10000;mfe=(entry-best)/entry*10000;mae=-(worst-entry)/entry*10000;}const net=gross-BASE_COST_BPS;const tr:Trade={gross,net,stress:gross-STRESS_COST_BPS,mfe,mae,giveback:Math.max(0,mfe-gross),capture:mfe>1e-9&&gross>0?Math.min(2,gross/mfe):null,hold:exitJ-e+1,reason};(prep[e].time>=splitTime?out.OOS:out.IS).push(tr);cool=exitJ+(cand.regime==="BEAR"?2:1);i=Math.max(i+1,exitJ+1);
+  }
+  return out;
+}
