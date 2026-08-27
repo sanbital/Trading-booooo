@@ -1,0 +1,2 @@
+Deploy marker for commit 11bb70c20bd5199b6eab6172c55f7101dec22753.
+Purpose: deploy pre-order policy-block/reconciliation ownership separation and DB latch evidence guard.
