@@ -1,0 +1,52 @@
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","regime_counts":{"BULL":473,"RANGE":1871,"BEAR":441,"UNKNOWN":96},"split_time":"2026-08-18T22:30:00.000Z"}
+=== backtest shard 0/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":0,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 1/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":1,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 2/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":2,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 3/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":3,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 4/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":4,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 5/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":5,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 6/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":6,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 7/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":7,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 8/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":8,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 9/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":9,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 10/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":10,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 11/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":11,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 12/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":12,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 13/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":13,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 14/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":14,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 15/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":15,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 16/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":16,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 17/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":17,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 18/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":18,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 19/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":19,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 20/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":20,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 21/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":21,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 22/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":22,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 23/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":23,"markets":21,"success":21,"failed":0,"result_rows":1344}
+=== backtest shard 24/24 ===
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","shard":24,"markets":20,"success":20,"failed":0,"result_rows":1280}
+200	{"ok":true,"job_id":"3ff86266-81fe-4dc9-acf3-741e994b3724","status":"COMPLETE","processed_markets":32}
