@@ -1,0 +1,192 @@
+    losses = int((net<=0).sum())
+    gp = float(net[net>0].sum())
+    gl = float(-net[net<0].sum())
+    pf = gp/gl if gl>0 else (float("inf") if gp>0 else None)
+    # Trade-sequence drawdown in bps; sequence sorted globally by exit time before this call when needed.
+    eq = np.cumsum(net)
+    peak = np.maximum.accumulate(np.r_[0.0, eq])
+    dd = peak[1:] - eq
+    maxdd = float(np.max(dd)) if len(dd) else 0.0
+    caps = np.array([t.capture_ratio for t in trades if t.capture_ratio is not None and math.isfinite(t.capture_ratio)], float)
+    return {
+        "trades":len(trades), "wins":wins,"losses":losses,"win_rate":wins/len(trades),
+        "gross_bps":float(gross.sum()),"net_bps":float(net.sum()),"stress_net_bps":float(stress.sum()),
+        "mean_net_bps":float(net.mean()),"median_net_bps":float(np.median(net)),"profit_factor":pf,"max_drawdown_bps":maxdd,
+        "avg_mfe_bps":float(np.mean([t.mfe_bps for t in trades])),"avg_mae_bps":float(np.mean([t.mae_bps for t in trades])),
+        "avg_hold_bars":float(np.mean([t.hold_bars for t in trades])),"stop_rate":float(np.mean([t.stop_hit for t in trades])),
+        "mfe_capture_mean":float(caps.mean()) if len(caps) else None,"mfe_capture_median":float(np.median(caps)) if len(caps) else None,
+        "profit_giveback_mean_bps":float(np.mean([t.giveback_bps for t in trades])),
+    }
+
+
+def finite_fmt(v, digits=2):
+    if v is None or (isinstance(v,float) and not math.isfinite(v)):
+        return "-"
+    return f"{v:.{digits}f}"
+
+
+def select_candidate(cands: List[Candidate], all_trades: Dict[str,List[Trade]], regime_name: str) -> Tuple[Optional[str], List[Tuple[str,dict]]]:
+    scored=[]
+    for c in cands:
+        if c.regime!=regime_name or c.name.startswith("BASE_"):
+            continue
+        ts=sorted([t for t in all_trades[c.name] if t.split=="IS"], key=lambda x:x.exit_time)
+        m=metrics(ts)
+        pf=m.get("profit_factor")
+        eligible=(m["trades"]>=30 and pf is not None and math.isfinite(pf) and pf>1.0 and m["stress_net_bps"]>0)
+        score=(m["stress_net_bps"]-0.50*m["max_drawdown_bps"]) if eligible else -1e18
+        scored.append((c.name,m,score,eligible))
+    scored.sort(key=lambda x:x[2], reverse=True)
+    winner=scored[0][0] if scored and scored[0][3] else None
+    return winner, [(x[0],x[1]) for x in scored]
+
+
+def markdown_report(meta, cands, all_trades, winners, rankings, split_ts):
+    lines=[]
+    lines.append("# Regime Router Backtest V1")
+    lines.append("")
+    lines.append(f"- Generated: {meta['generated_at']}")
+    lines.append(f"- Binance USDT perpetual universe: **{meta['universe_total']}** symbols; usable data: **{meta['usable_symbols']}**")
+    lines.append(f"- Window: **{meta['start']} → {meta['end']}** (15m); IS/OOS split: **70/30**, OOS begins {split_ts.isoformat()}")
+    lines.append(f"- Costs: base round-trip **{BASE_COST_BPS:.0f} bps**, stress **{STRESS_COST_BPS:.0f} bps**; entry liquidity gate: rolling 24h quote volume ≥ ${MIN_QV_24H:,.0f}")
+    lines.append("- Structural routing uses contemporaneously observable full-universe 6h/24h breadth + median return + BTC trend; signals execute next bar open (no future regime labels).")
+    lines.append("")
+    lines.append("## IS selection and OOS validation")
+    lines.append("")
+    lines.append("| Regime | IS-selected candidate | OOS trades | OOS win% | OOS net bps | OOS stress bps | OOS PF | Max DD bps | MFE capture | Giveback bps | Stop% | Avg hold (15m bars) |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    for reg in ["BULL","RANGE","BEAR"]:
+        w=winners.get(reg)
+        if not w:
+            lines.append(f"| {reg} | **NO ELIGIBLE MODEL** | 0 | - | - | - | - | - | - | - | - | - |")
+            continue
+        ts=sorted([t for t in all_trades[w] if t.split=="OOS"], key=lambda x:x.exit_time)
+        m=metrics(ts)
+        lines.append(f"| {reg} | {w} | {m['trades']} | {finite_fmt((m['win_rate'] or 0)*100,1)} | {finite_fmt(m['net_bps'])} | {finite_fmt(m['stress_net_bps'])} | {finite_fmt(m['profit_factor'])} | {finite_fmt(m['max_drawdown_bps'])} | {finite_fmt(m['mfe_capture_mean'])} | {finite_fmt(m['profit_giveback_mean_bps'])} | {finite_fmt((m['stop_rate'] or 0)*100,1)} | {finite_fmt(m['avg_hold_bars'],1)} |")
+    lines.append("")
+    lines.append("## Candidate detail (OOS)")
+    lines.append("")
+    lines.append("| Regime | Candidate | Trades | Win% | Net bps | Stress bps | PF | Mean bps/trade | Max DD | MFE | MAE | Capture | Giveback |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    for c in cands:
+        ts=sorted([t for t in all_trades[c.name] if t.split=="OOS"], key=lambda x:x.exit_time)
+        m=metrics(ts)
+        lines.append(f"| {c.regime} | {c.name} | {m['trades']} | {finite_fmt((m['win_rate'] or 0)*100,1)} | {finite_fmt(m['net_bps'])} | {finite_fmt(m['stress_net_bps'])} | {finite_fmt(m['profit_factor'])} | {finite_fmt(m['mean_net_bps'])} | {finite_fmt(m['max_drawdown_bps'])} | {finite_fmt(m['avg_mfe_bps'])} | {finite_fmt(m['avg_mae_bps'])} | {finite_fmt(m['mfe_capture_mean'])} | {finite_fmt(m['profit_giveback_mean_bps'])} |")
+    lines.append("")
+    lines.append("## Stored 90-day research references (different window; context only)")
+    lines.append("")
+    lines.append("| Regime/reference | Trades | PF | Net bps | Stress bps |")
+    lines.append("|---|---:|---:|---:|---:|")
+    lines.append("| BULL LONG Donchian | 5,148 | 1.132 | +99,742 | +53,410 |")
+    lines.append("| BULL LONG Momentum | 5,216 | 1.131 | +94,625 | +47,681 |")
+    lines.append("| BULL LONG Compression | 2,964 | 1.187 | +74,484 | +47,808 |")
+    lines.append("| RANGE LONG reversal | 544 | 0.713 | -7,076 | -11,972 |")
+    lines.append("| BEAR SHORT best legacy family (Momentum Accel.) | 6,277 | 0.872 | -122,629 | -179,122 |")
+    lines.append("")
+    lines.append("## Selection rule")
+    lines.append("")
+    lines.append("Candidates are selected **only on IS** when IS has ≥30 trades, PF>1.0, and positive stress net bps. Ranking score = stress net bps − 0.5×max drawdown. OOS is untouched until after selection. A regime with no eligible IS model is explicitly left **NO TRADE** rather than forcing a losing strategy.")
+    return "\n".join(lines)+"\n"
+
+
+def main():
+    ap=argparse.ArgumentParser()
+    ap.add_argument("--days",type=int,default=30)
+    ap.add_argument("--workers",type=int,default=8)
+    ap.add_argument("--out-dir",default="research/results/regime-router-v1")
+    args=ap.parse_args()
+    end_dt=datetime.now(timezone.utc).replace(second=0,microsecond=0)
+    # floor to closed 15m bar start and exclude the currently forming bar
+    minute=(end_dt.minute//15)*15
+    end_dt=end_dt.replace(minute=minute)-timedelta(minutes=15)
+    start_dt=end_dt-timedelta(days=args.days)
+    start_ms=int(start_dt.timestamp()*1000)
+    end_ms=int((end_dt+timedelta(minutes=15)).timestamp()*1000)-1
+    universe=get_universe()
+    print(f"Universe: {len(universe)} USDT perpetual symbols; fetching {args.days}d 15m", flush=True)
+    raw: Dict[str,pd.DataFrame]={}
+    errors={}
+    done=0
+    with cf.ThreadPoolExecutor(max_workers=args.workers) as ex:
+        futs={ex.submit(fetch_symbol,s,start_ms,end_ms):s for s in universe}
+        for fut in cf.as_completed(futs):
+            s,df,err=fut.result()
+            done+=1
+            if df is not None:
+                raw[s]=df
+            else:
+                errors[s]=err
+            if done%25==0 or done==len(universe):
+                print(f"Fetched {done}/{len(universe)}; usable={len(raw)} errors={len(errors)}", flush=True)
+    if len(raw)<100:
+        raise RuntimeError(f"only {len(raw)} usable symbols; refusing under-sampled backtest")
+    print("Computing indicators", flush=True)
+    data={s:add_indicators(df) for s,df in raw.items()}
+    regime=compute_regime(data)
+    valid_times=regime[regime!="UNKNOWN"].index
+    if len(valid_times)<100:
+        raise RuntimeError("insufficient valid regime history")
+    split_ts=valid_times[int(len(valid_times)*0.70)]
+    cands=candidates()
+    all_trades={c.name:[] for c in cands}
+    for n,(s,d) in enumerate(data.items(),1):
+        for c in cands:
+            all_trades[c.name].extend(backtest_candidate(s,d,regime,c,split_ts))
+        if n%25==0 or n==len(data):
+            print(f"Backtested {n}/{len(data)} symbols", flush=True)
+    winners={}
+    rankings={}
+    for reg in ["BULL","RANGE","BEAR"]:
+        w,rank=select_candidate(cands,all_trades,reg)
+        winners[reg]=w
+        rankings[reg]=rank
+    meta={
+        "generated_at":datetime.now(timezone.utc).isoformat(),"universe_total":len(universe),"usable_symbols":len(data),
+        "start":start_dt.isoformat(),"end":end_dt.isoformat(),"days":args.days,"interval":INTERVAL,
+        "errors":errors,"cost_bps":BASE_COST_BPS,"stress_cost_bps":STRESS_COST_BPS,"min_qv_24h":MIN_QV_24H,
+        "regime_counts":{str(k): int(v) for k,v in regime.value_counts().to_dict().items()},
+    }
+    summary={"meta":meta,"split_ts":split_ts.isoformat(),"winners":winners,"candidates":{},"rankings":{}}
+    for c in cands:
+        summary["candidates"][c.name]={
+            "config":asdict(c),
+            "IS":metrics(sorted([t for t in all_trades[c.name] if t.split=="IS"], key=lambda x:x.exit_time)),
+            "OOS":metrics(sorted([t for t in all_trades[c.name] if t.split=="OOS"], key=lambda x:x.exit_time)),
+            "ALL":metrics(sorted(all_trades[c.name], key=lambda x:x.exit_time)),
+        }
+    for reg,rank in rankings.items():
+        summary["rankings"][reg]=[{"candidate":name,"IS":m} for name,m in rank]
+    # Combined selected-router OOS trade stream (no portfolio cap; aggregate edge diagnostic).
+    selected_oos=[]
+    for reg,w in winners.items():
+        if w:
+            selected_oos.extend([t for t in all_trades[w] if t.split=="OOS"])
+    selected_oos.sort(key=lambda x:x.exit_time)
+    summary["router_oos"]=metrics(selected_oos)
+
+    out=Path(args.out_dir)
+    out.mkdir(parents=True,exist_ok=True)
+    def json_clean(x):
+        if isinstance(x, dict):
+            return {str(k): json_clean(v) for k,v in x.items()}
+        if isinstance(x, list):
+            return [json_clean(v) for v in x]
+        if isinstance(x, (np.integer,)):
+            return int(x)
+        if isinstance(x, (np.floating, float)):
+            return float(x) if math.isfinite(float(x)) else None
+        return x
+    (out/"summary.json").write_text(json.dumps(json_clean(summary),ensure_ascii=False,indent=2,allow_nan=False),encoding="utf-8")
+    md=markdown_report(meta,cands,all_trades,winners,rankings,split_ts)
+    (out/"summary.md").write_text(md,encoding="utf-8")
+    # compact CSV of candidate metrics
+    rows=[]
+    for c in cands:
+        for split in ["IS","OOS","ALL"]:
+            m=summary["candidates"][c.name][split]
+            rows.append({"regime":c.regime,"candidate":c.name,"split":split,**m})
+    pd.DataFrame(rows).to_csv(out/"candidate_metrics.csv",index=False)
+    print(md, flush=True)
+
+if __name__=="__main__":
+    main()
