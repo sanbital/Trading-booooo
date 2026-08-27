@@ -1,0 +1,58 @@
+
+const V3_REVISION = "REGIME_ROUTER_V3_BREADTH_PHASE_15M_45D_WF";
+type V3Split = "TRAIN" | "VALIDATION" | "TEST";
+type V3Phase = { idx:number; b30:number; b30m2:number; b30m4:number; delta2:number; delta4:number; min8:number; max8:number; mean30:number; btc24:number };
+
+function v3Candidates():Candidate[]{
+  const out:Candidate[]=[];
+  for(const bmin of [0.52,0.58,0.64]) for(const dmin of [-0.04,0.00]) out.push({name:`V3_BULL_MOM_B${bmin}_D${dmin}`,regime:"BULL",side:"LONG",kind:"V3_BULL_MOM",p:{bmin,dmin,rel:0.002,moveAtr:0.45,stopAtr:1.5,maxHold:64,qv:20_000_000}});
+  for(const low of [0.30,0.36,0.42]) for(const rebound of [0.08,0.12]) for(const targetAtr of [0.60,0.85]) out.push({name:`V3_RANGE_UP_L${low}_D${rebound}_T${targetAtr}`,regime:"RANGE",side:"LONG",kind:"V3_RANGE_UP",p:{low,rebound,targetAtr,stoch:32,adx:23,sep:0.85,stopAtr:0.75,maxHold:8,qv:10_000_000}});
+  for(const peak of [0.56,0.62,0.68]) for(const drop of [0.08,0.12]) for(const delta of [0.05,0.09]) out.push({name:`V3_BEAR_ROLL_P${peak}_D${drop}_V${delta}`,regime:"BEAR",side:"SHORT",kind:"V3_BEAR_ROLL",p:{peak,drop,delta,rel:0.002,stoch:58,stopAtr:0.72,targetR:0.85,maxHold:4,timeStop:2,qv:10_000_000}});
+  return out;
+}
+function v3Index(metrics:any,time:number){const start=finite(metrics?.grid_start_ms);if(!start)return -1;return Math.round((time-start)/BAR_MS);}
+function v3Phase(metrics:any,time:number):V3Phase|null{
+  const idx=v3Index(metrics,time),a=metrics?.breadth30||[],m=metrics?.mean30||[],btc=metrics?.btc24||[];
+  if(idx<8||idx>=a.length||!Number.isFinite(Number(a[idx])))return null;
+  const b30=finite(a[idx],NaN),b30m2=finite(a[idx-2],NaN),b30m4=finite(a[idx-4],NaN);if(![b30,b30m2,b30m4].every(Number.isFinite))return null;
+  let min8=Infinity,max8=-Infinity;for(let j=idx-7;j<=idx;j++){const x=finite(a[j],NaN);if(Number.isFinite(x)){min8=Math.min(min8,x);max8=Math.max(max8,x)}}
+  return {idx,b30,b30m2,b30m4,delta2:b30-b30m2,delta4:b30-b30m4,min8,max8,mean30:finite(m[idx]),btc24:finite(btc[idx])};
+}
+function v3Common(r:Prepared,phase:V3Phase,p:Record<string,number>){return Number.isFinite(r.atr)&&r.atr>0&&Number.isFinite(r.rsi)&&Number.isFinite(r.ema20)&&Number.isFinite(r.ema50)&&Number.isFinite(r.stochK)&&Number.isFinite(r.stochD)&&r.qv24>=p.qv&&Math.abs(r.ret24)<=EXTREME_24H_ABS&&Number.isFinite(phase.btc24);}
+function v3Signal(d:Prepared[],i:number,c:Candidate,metrics:any):{ok:boolean,targetHint?:number}{
+  if(i<100||i+1>=d.length)return {ok:false};const r=d[i],p=d[i-1],P=c.p,ph=v3Phase(metrics,r.time);if(!ph||!v3Common(r,ph,P))return {ok:false};const atr=r.atr,rel24=r.ret24-ph.btc24,emaSlope=(r.ema20-d[i-4].ema20)/atr,move4=(r.close-d[i-4].close)/atr;const bullish=r.close>r.open&&r.close>p.close,bearish=r.close<r.open&&r.close<p.close;
+  if(c.kind==="V3_BULL_MOM"){
+    const prevHigh=Math.max(d[i-1].high,d[i-2].high,d[i-3].high,d[i-4].high);
+    return {ok:ph.b30>=P.bmin&&ph.delta2>=P.dmin&&ph.mean30>=-0.0005&&r.close>r.ema20&&r.ema20>r.ema50&&emaSlope>0.05&&move4>=P.moveAtr&&rel24>=P.rel&&r.rsi>=54&&r.rsi<=80&&r.stochK<92&&r.volRatio>=1.0&&bullish&&r.close>=prevHigh};
+  }
+  if(c.kind==="V3_RANGE_UP"){
+    const cross=p.stochK<=p.stochD&&r.stochK>r.stochD&&Math.min(p.stochK,r.stochK)<=P.stoch;
+    const marketTurn=ph.min8<=P.low&&ph.delta2>=P.rebound&&ph.b30>=0.42&&ph.b30<=0.72&&ph.mean30>-0.0010;
+    const trendless=r.adx<=P.adx&&r.sepAtr<=P.sep;const below=r.close<r.vwap96||r.close<r.dayOpen;const noBreak=r.close>=r.low20Prev-0.05*atr;const notWeak=rel24>=-0.02;
+    if(!(marketTurn&&cross&&trendless&&below&&noBreak&&notWeak&&bullish&&r.rsi>p.rsi&&r.rsi>=32&&r.rsi<=56&&r.volRatio>=0.65))return {ok:false};
+    const anchors=[r.vwap96,r.dayOpen,r.bbMid].filter(x=>Number.isFinite(x)&&x>r.close);if(!anchors.length)return {ok:false};const target=Math.min(Math.min(...anchors),r.close+1.25*atr);if(target-r.close<P.targetAtr*atr)return {ok:false};return {ok:true,targetHint:target};
+  }
+  if(c.kind==="V3_BEAR_ROLL"){
+    const cross=p.stochK>=p.stochD&&r.stochK<p.stochD&&Math.max(p.stochK,r.stochK)>=P.stoch;
+    const marketRoll=ph.max8>=P.peak&&(ph.max8-ph.b30)>=P.drop&&ph.delta2<=-P.delta&&ph.mean30<=0.0010;
+    const weak=rel24<=-P.rel;const recentHigh=Math.max(d[i-1].high,d[i-2].high,d[i-3].high,d[i-4].high);const rebound=(recentHigh-d[i-4].low)/atr;
+    const touch=recentHigh>=r.ema20-0.45*atr;return {ok:marketRoll&&r.ema20<r.ema50&&emaSlope<0.02&&weak&&rebound>=0.45&&touch&&cross&&r.rsi<p.rsi&&r.rsi>=34&&r.rsi<=60&&bearish&&r.volRatio>=0.65};
+  }
+  return {ok:false};
+}
+function v3SplitFor(time:number,metrics:any):V3Split{const a=finite(metrics?.split1_time_ms),b=finite(metrics?.split2_time_ms);return time<a?"TRAIN":time<b?"VALIDATION":"TEST";}
+function v3Breadth(metrics:any,time:number){const ph=v3Phase(metrics,time);return ph?.b30??NaN;}
+function simulateV3(prep:Prepared[],metrics:any,c:Candidate):Record<V3Split,Trade[]>{
+  const out:{TRAIN:Trade[];VALIDATION:Trade[];TEST:Trade[]}={TRAIN:[],VALIDATION:[],TEST:[]};let i=100,cool=0;
+  while(i<prep.length-1){if(i<cool||regimeAt(metrics,prep[i].time)!==c.regime){i++;continue;}const sig=v3Signal(prep,i,c,metrics);if(!sig.ok){i++;continue;}const e=i+1,entry=prep[e].open,atr0=prep[i].atr,P=c.p;if(!(entry>0&&atr0>0)){i++;continue;}let risk=P.stopAtr*atr0,stop=c.side==="LONG"?entry-risk:entry+risk,target:number|null=null;if(c.kind==="V3_RANGE_UP")target=finite(sig.targetHint);if(c.kind==="V3_BEAR_ROLL")target=entry-P.targetR*risk;let activeStop=stop,best=entry,worst=entry,exit=entry,reason="MAX_HOLD",exitJ=Math.min(prep.length-1,e+P.maxHold-1);let breadthPeak=v3Breadth(metrics,prep[i].time),breadthLow=breadthPeak;
+    for(let h=0;h<P.maxHold;h++){const j=e+h;if(j>=prep.length)break;const b=prep[j],curBreadth=v3Breadth(metrics,b.time);if(Number.isFinite(curBreadth)){breadthPeak=Math.max(breadthPeak,curBreadth);breadthLow=Math.min(breadthLow,curBreadth)}
+      if(c.side==="LONG"){if(b.low<=activeStop){exit=activeStop;reason="STOP";exitJ=j;worst=Math.min(worst,b.low);break;}if(target!==null&&b.high>=target){exit=target;reason="TARGET";exitJ=j;best=Math.max(best,b.high);break;}best=Math.max(best,b.high);worst=Math.min(worst,b.low);}else{if(b.high>=activeStop){exit=activeStop;reason="STOP";exitJ=j;worst=Math.max(worst,b.high);break;}if(target!==null&&b.low<=target){exit=target;reason="TARGET";exitJ=j;best=Math.min(best,b.low);break;}best=Math.min(best,b.low);worst=Math.max(worst,b.high);}
+      if(c.kind==="V3_BULL_MOM"){const mfeP=best-entry;if(mfeP>=risk)activeStop=Math.max(activeStop,entry+0.08*risk);if(mfeP>=2*risk)activeStop=Math.max(activeStop,best-1.8*b.atr);if(mfeP>=3*risk)activeStop=Math.max(activeStop,best-1.25*b.atr);const ph=v3Phase(metrics,b.time);if(h>=4&&((b.close<b.ema20)||(ph&&breadthPeak-ph.b30>=0.14&&b.close>entry))){exit=b.close;reason="RULE";exitJ=j;break;}}
+      else if(c.kind==="V3_RANGE_UP"){const mfeP=best-entry;if(mfeP>=0.55*risk)activeStop=Math.max(activeStop,entry+0.12*risk);const ph=v3Phase(metrics,b.time);if(j>e){const pb=prep[j-1],cycle=pb.stochK>=pb.stochD&&b.stochK<pb.stochK&&Math.max(pb.stochK,b.stochK)>=70;const marketTurn=ph&&(breadthPeak-ph.b30>=0.08||ph.delta2<=-0.05);if((cycle||marketTurn)&&b.close>entry){exit=b.close;reason="RULE";exitJ=j;break;}}}
+      else {const mfeP=entry-best;if(mfeP>=0.45*risk)activeStop=Math.min(activeStop,entry-0.12*risk);const ph=v3Phase(metrics,b.time);if(h+1>=P.timeStop&&mfeP<0.20*risk){exit=b.close;reason="TIME";exitJ=j;break;}if(j>e){const pb=prep[j-1],cycle=pb.stochK<=pb.stochD&&b.stochK>pb.stochK&&Math.min(pb.stochK,b.stochK)<=30;const marketBounce=ph&&ph.b30-breadthLow>=0.08;if(cycle||marketBounce){exit=b.close;reason="RULE";exitJ=j;break;}}}
+      exit=b.close;
+    }
+    if(reason==="MAX_HOLD")exit=prep[exitJ].close;let gross=0,mfe=0,mae=0;if(c.side==="LONG"){gross=(exit/entry-1)*10000;mfe=(best/entry-1)*10000;mae=(worst/entry-1)*10000;}else{gross=(entry-exit)/entry*10000;mfe=(entry-best)/entry*10000;mae=-(worst-entry)/entry*10000;}const tr:Trade={gross,net:gross-BASE_COST_BPS,stress:gross-STRESS_COST_BPS,mfe,mae,giveback:Math.max(0,mfe-gross),capture:mfe>1e-9&&gross>0?Math.min(2,gross/mfe):null,hold:exitJ-e+1,reason};out[v3SplitFor(prep[e].time,metrics)].push(tr);cool=exitJ+(c.regime==="BEAR"?2:1);i=Math.max(i+1,exitJ+1);
+  }
+  return out;
+}
