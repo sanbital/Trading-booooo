@@ -2040,7 +2040,14 @@ async function updateOrderFromGateway(orderRow: any, payload: any) {
     fill,
     baseAsset(orderRow.exchange as Exchange, orderRow.market),
   );
-  const rows = await patch("trading_orders", `id=eq.${orderRow.id}`, {
+  // A second monitor can hold a pre-APPLIED snapshot while the scan commits the same
+  // fill.  Make the PostgREST predicate observe the current database state so that stale
+  // EXCHANGE_DONE evidence cannot demote the already committed APPLIED row.  Fee refreshes
+  // that intentionally start from APPLIED remain writable.
+  const orderFilter = String(orderRow.state || "").toUpperCase() === "APPLIED"
+    ? `id=eq.${orderRow.id}&state=eq.APPLIED`
+    : `id=eq.${orderRow.id}&state=neq.APPLIED`;
+  const rows = await patch("trading_orders", orderFilter, {
     exchange_order_id: order?.exchange_order_id || null,
     state: normalizedOrderState(orderRow.state, order?.status),
     executed_volume: progress.executedVolume,
@@ -2075,8 +2082,11 @@ async function updateOrderFromGateway(orderRow: any, payload: any) {
     },
   });
   await storeFills(orderRow, order);
+  const currentRow = rows[0] || (await db(
+    `trading_orders?id=eq.${orderRow.id}&select=*&limit=1`,
+  ).catch(() => []))?.[0] || orderRow;
   return {
-    row: rows[0] || orderRow,
+    row: currentRow,
     order,
     fill: { ...fill, paidFeeQuote: feeQuote, paidFeeBase },
   };

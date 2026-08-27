@@ -62,6 +62,34 @@ begin
         'order', to_jsonb(v_order)
       );
     end if;
+    -- A concurrent monitor can persist stale EXCHANGE_DONE state after this exact entry
+    -- already crossed the accounting commit boundary.  The position-owned commit marker
+    -- is durable proof that this same order was applied, so restore the monotonic order
+    -- state instead of treating the replay as a new uncertain submission.
+    if v_position.state in ('OPEN', 'EXITING', 'CLOSED')
+       and coalesce(v_position.metadata->>'last_applied_order_id', '') = p_order_id::text then
+      update public.trading_orders set
+        state = 'APPLIED',
+        completed_at = coalesce(completed_at, v_now),
+        updated_at = v_now
+      where id = p_order_id
+      returning * into v_order;
+
+      update public.p10_signal_claims set
+        status = 'FILLED',
+        position_id = v_position.id,
+        reason = null,
+        updated_at = v_now
+      where position_id = v_position.id or
+        id::text = coalesce(v_position.metadata->>'p10_claim_id', '');
+
+      return jsonb_build_object(
+        'applied', false,
+        'position', to_jsonb(v_position),
+        'order', to_jsonb(v_order),
+        'reasserted', true
+      );
+    end if;
     raise exception 'position % state % is not eligible for P10 entry application',
       v_position.id, v_position.state;
   end if;

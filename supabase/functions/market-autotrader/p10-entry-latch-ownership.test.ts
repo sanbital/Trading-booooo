@@ -48,3 +48,19 @@ Deno.test("database latch ignores historical closed entry fills", () => {
     false,
   );
 });
+
+Deno.test("gateway refresh cannot demote an entry already committed as APPLIED", () => {
+  const updateStart = source.indexOf("async function updateOrderFromGateway(");
+  const updateEnd = source.indexOf("async function applyEntryAccounting(", updateStart);
+  assert(updateStart >= 0 && updateEnd > updateStart);
+  const updateSource = source.slice(updateStart, updateEnd);
+  assert(updateSource.includes("&state=neq.APPLIED"));
+  assert(updateSource.includes("&state=eq.APPLIED"));
+  assert(updateSource.includes("const currentRow = rows[0]"));
+});
+
+Deno.test("P10 entry apply replays reassert the durable position-owned commit", () => {
+  assert(canonicalSql.includes("v_position.metadata->>'last_applied_order_id'"));
+  assert(canonicalSql.includes("'reasserted', true"));
+  assert(canonicalSql.includes("state = 'APPLIED'"));
+});
