@@ -1,0 +1,82 @@
+name: Run Regime Router V4 full-market backtest
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'research/regime_router_v1/v4-job-trigger.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regime-router-v4-job
+  cancel-in-progress: false
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      JOB_ID: a3c860b8-4aef-45ca-aaaa-66c4b0f8241d
+      EDGE_URL: https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/regime-router-v1-research
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run V4 shards
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL:-}"
+          call_action() {
+            local payload="$1"
+            local out status content
+            out=$(psql "$SUPABASE_DB_URL" -XAt -F $'\t' -v ON_ERROR_STOP=1 -v payload="$payload" -v edge_url="$EDGE_URL" <<'SQL'
+          with tok as (select token from edge_internal_tokens where name='market-v2-research' limit 1), call as (
+            select extensions.http((
+              'POST'::extensions.http_method, :'edge_url'::varchar,
+              array[extensions.http_header('x-v2-research-token'::varchar,tok.token::varchar)]::extensions.http_header[],
+              'application/json'::varchar, :'payload'::varchar
+            )::extensions.http_request) resp from tok
+          ) select (resp).status,(resp).content from call;
+          SQL
+          )
+            status=$(printf '%s' "$out" | head -n1 | cut -f1)
+            content=$(printf '%s' "$out" | head -n1 | cut -f2-)
+            echo "$status $content"
+            test "$status" = "200"
+          }
+          for shard in $(seq 0 24); do
+            echo "=== V4 shard $shard/24 ==="
+            call_action "{\"action\":\"backtest_shard_v4\",\"job_id\":\"${JOB_ID}\",\"shard_index\":${shard},\"shard_count\":25}"
+          done
+          call_action "{\"action\":\"status_v4\",\"job_id\":\"${JOB_ID}\"}"
+
+      - name: Print walk-forward results
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" -XAt -F $'\t' -v ON_ERROR_STOP=1 <<'SQL'
+          with a as (
+            select regime,config_key,split,sum(trades)::bigint trades,sum(wins)::bigint wins,
+              sum(net_bps)::double precision net,sum(stress_net_bps)::double precision stress,
+              sum(gross_profit_bps)::double precision gp,sum(gross_loss_bps)::double precision gl
+            from v2_research_market_results
+            where job_id='a3c860b8-4aef-45ca-aaaa-66c4b0f8241d'
+              and revision='REGIME_ROUTER_V4_CONFIRMATION_15M_45D_WF'
+            group by regime,config_key,split
+          ), p as (
+            select regime,config_key,
+              max(trades) filter(where split='TRAIN') train_trades,
+              max(stress) filter(where split='TRAIN') train_stress,
+              max(case when gl>0 then gp/gl end) filter(where split='TRAIN') train_pf,
+              max(trades) filter(where split='VALIDATION') val_trades,
+              max(stress) filter(where split='VALIDATION') val_stress,
+              max(case when gl>0 then gp/gl end) filter(where split='VALIDATION') val_pf,
+              max(trades) filter(where split='TEST') test_trades,
+              max(stress) filter(where split='TEST') test_stress,
+              max(case when gl>0 then gp/gl end) filter(where split='TEST') test_pf
+            from a group by regime,config_key
+          )
+          select * from p order by regime, least(coalesce(train_stress,-1e99)/greatest(train_trades,1),coalesce(val_stress,-1e99)/greatest(val_trades,1)) desc;
+          SQL
