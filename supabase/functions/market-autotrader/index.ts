@@ -155,6 +155,7 @@ import { shouldLoadCompletedPolicyBar } from "./p10-monitor-cadence.ts";
 import {
   p10EntryFailureDisposition,
   p10EntryOrderDisposition,
+  p10PendingReservationExpired,
   p10PreOrderEntryDisposition,
   summarizeP10LinkedEntryFills,
   untrackedFuturesExposures,
@@ -211,7 +212,7 @@ import {
 } from "../_shared/s096-short-policy.ts";
 
 // Order-gateway/scanner protocol version. Strategy identity is stored separately in metadata.
-const VERSION = "8.0.1-P10-ENTRY-RECONCILIATION";
+const VERSION = "8.0.2-P10-ORPHAN-ENTRY-SELF-HEAL";
 // Keep create-order commands compatible with the still-running v8.0.0 gateway during the
 // rolling deploy. The new gateway accepts both protocol revisions; a later release can
 // advance this only after every gateway reports v8.0.1.
@@ -9753,25 +9754,74 @@ async function enterP10Signal(
   const identifier = uniqueId("p10e", position.id);
   const orderSide = p10EntrySide(side);
   const timeInForce = exchange === "upbit" ? "IOC" : "FOK";
-  const orderRow = await createOrderRecord({
-    position_id: position.id,
-    cycle_id: cycleId,
-    exchange,
-    quote_currency: quoteCurrency(exchange),
-    identifier,
-    market: signal.market,
-    side: orderSide,
-    strategy_key: P10_STRATEGY_KEY,
-    position_side: side,
-    position_effect: "OPEN",
-    purpose: "ENTRY",
-    order_type: "LIMIT",
-    time_in_force: timeInForce,
-    requested_price: limitPrice,
-    requested_volume: quantity,
-    requested_notional_quote: orderNotional,
-    state: "REQUESTED",
-  });
+  let orderRow: any;
+  try {
+    orderRow = await createOrderRecord({
+      position_id: position.id,
+      cycle_id: cycleId,
+      exchange,
+      quote_currency: quoteCurrency(exchange),
+      identifier,
+      market: signal.market,
+      side: orderSide,
+      strategy_key: P10_STRATEGY_KEY,
+      position_side: side,
+      position_effect: "OPEN",
+      purpose: "ENTRY",
+      order_type: "LIMIT",
+      time_in_force: timeInForce,
+      requested_price: limitPrice,
+      requested_volume: quantity,
+      requested_notional_quote: orderNotional,
+      state: "REQUESTED",
+    });
+  } catch (error) {
+    // createOrderRecord is before gateway(create_order), so this path proves that this
+    // attempt did not submit an exchange order. Release only this still-pending row.
+    const errorMessage = error instanceof Error
+      ? error.message
+      : String(error ?? "unknown P10 order-record failure");
+    const failedAt = new Date().toISOString();
+    await patch("trading_positions", `id=eq.${position.id}&state=eq.ENTRY_PENDING`, {
+      state: "CANCELLED",
+      reserved_quote: 0,
+      reserved_quantity: 0,
+      reservation_expires_at: null,
+      close_reason: "P10_ENTRY_ORDER_RECORD_FAILED",
+      closed_at: failedAt,
+      metadata: {
+        ...(position.metadata || {}),
+        p10_entry_order_record_failed_at: failedAt,
+        p10_entry_order_record_error: errorMessage,
+        p10_entry_order_submitted: false,
+      },
+    }).catch((cleanupError) =>
+      console.error("P10_ENTRY_ORDER_RECORD_CLEANUP_FAILED", cleanupError)
+    );
+    await rejectP10Claim(claimId, `P10_ENTRY_ORDER_RECORD_FAILED:${errorMessage}`)
+      .catch((claimError) =>
+        console.error("P10_ENTRY_ORDER_RECORD_CLAIM_REJECT_FAILED", claimError)
+      );
+    await event("P10_ENTRY_ORDER_RECORD_FAILED", errorMessage, {
+      strategy_key: P10_STRATEGY_KEY,
+      exchange,
+      market: signal.market,
+      side,
+      position_id: position.id,
+      order_submitted: false,
+    }, { cycleId, positionId: position.id, level: "WARNING" })
+      .catch((eventError) =>
+        console.error("P10_ENTRY_ORDER_RECORD_FAILURE_EVENT_FAILED", eventError)
+      );
+    return {
+      entered: false,
+      exchange,
+      market: signal.market,
+      side,
+      pre_order_error: true,
+      reason: "P10_ENTRY_ORDER_RECORD_FAILED",
+    };
+  }
   try {
     const result = await gateway(exchange, {
       action: "create_order",
@@ -10904,7 +10954,131 @@ async function reconcileP10Order(position: Position, cycleId: string) {
       "&select=*&order=requested_at.desc&limit=1",
   ) as any[];
   const orderRow = rows[0];
-  if (!orderRow) return { reconciled: false, reason: "no pending P10 order" };
+  if (!orderRow) {
+    if (
+      !entryReconciliation || position.state !== "ENTRY_PENDING" ||
+      !p10PendingReservationExpired({
+        state: position.state,
+        reservationExpiresAt: position.reservation_expires_at,
+        createdAt: position.created_at,
+        nowMs: Date.now(),
+      })
+    ) {
+      return { reconciled: false, reason: "no pending P10 order" };
+    }
+
+    // Missing from the normal reconciliation-state query is not sufficient evidence to
+    // release capital. Prove there is no ENTRY order row in any state first.
+    const anyEntryOrders = await db(
+      `trading_orders?position_id=eq.${position.id}&purpose=eq.ENTRY&select=id,state&limit=1`,
+    ) as any[];
+    if (anyEntryOrders.length) {
+      await latchP10EntrySafety("P10_ENTRY_RECONCILIATION_REQUIRED");
+      await event(
+        "P10_ORPHAN_ENTRY_ORDER_STATE_MISMATCH",
+        `${position.exchange}:${position.market} has an entry order outside the reconciliation state set`,
+        {
+          order_id: anyEntryOrders[0]?.id || null,
+          order_state: anyEntryOrders[0]?.state || null,
+          reservation_released: false,
+        },
+        { cycleId, positionId: position.id, level: "CRITICAL" },
+      ).catch(() => null);
+      return { reconciled: false, reason: "P10 entry order exists outside reconcilable states" };
+    }
+
+    // Prove zero directional exchange exposure before releasing the reservation. A failed
+    // proof or a live position is fail-closed and latches new P10 entries for reconciliation.
+    let exposure: Awaited<ReturnType<typeof p10EntryExposureProof>>;
+    try {
+      exposure = await p10EntryExposureProof(position, 0);
+    } catch (error) {
+      await latchP10EntrySafety("P10_ENTRY_RECONCILIATION_REQUIRED");
+      await event(
+        "P10_ORPHAN_ENTRY_EXPOSURE_PROOF_FAILED",
+        `${position.exchange}:${position.market} exchange exposure could not be proven before orphan cleanup`,
+        {
+          error: error instanceof Error ? error.message : String(error),
+          reservation_released: false,
+        },
+        { cycleId, positionId: position.id, level: "CRITICAL" },
+      ).catch(() => null);
+      return { reconciled: false, reason: "P10 orphan exchange exposure proof failed" };
+    }
+
+    if (exposure.exchangeQuantity > exposure.tolerance) {
+      await latchP10EntrySafety("P10_ENTRY_RECONCILIATION_REQUIRED");
+      const detectedAt = new Date().toISOString();
+      const flagged = await patch(
+        "trading_positions",
+        `id=eq.${position.id}&state=eq.ENTRY_PENDING`,
+        {
+          state: "RECONCILIATION_FAILED",
+          metadata: {
+            ...(position.metadata || {}),
+            reconciliation_phase: "ENTRY",
+            p10_entry_accounting_detail_pending: true,
+            p10_orphan_entry_exposure_detected_at: detectedAt,
+            p10_orphan_entry_exchange_quantity: exposure.exchangeQuantity,
+            p10_orphan_entry_exposure_tolerance: exposure.tolerance,
+          },
+        },
+      );
+      await event(
+        "P10_ORPHAN_ENTRY_LIVE_EXPOSURE",
+        `${position.exchange}:${position.market} orphan pending retained because live exposure exists`,
+        {
+          exchange_quantity: exposure.exchangeQuantity,
+          tolerance: exposure.tolerance,
+          reservation_released: false,
+        },
+        { cycleId, positionId: position.id, level: "CRITICAL" },
+      ).catch(() => null);
+      return {
+        reconciled: false,
+        reason: "P10 orphan entry has live exchange exposure",
+        position: flagged[0] || position,
+      };
+    }
+
+    const cancelledAt = new Date().toISOString();
+    const cancelled = await patch(
+      "trading_positions",
+      `id=eq.${position.id}&state=eq.ENTRY_PENDING`,
+      {
+        state: "CANCELLED",
+        reserved_quote: 0,
+        reserved_quantity: 0,
+        reservation_expires_at: null,
+        close_reason: "P10_ORPHAN_ENTRY_EXPIRED",
+        closed_at: cancelledAt,
+        metadata: {
+          ...(position.metadata || {}),
+          p10_orphan_entry_cancelled_at: cancelledAt,
+          p10_orphan_entry_zero_exposure_proven: true,
+        },
+      },
+    );
+    if (!cancelled.length) {
+      return { reconciled: false, reason: "P10 orphan entry changed concurrently" };
+    }
+    const claimId = String(position.metadata?.p10_claim_id || "");
+    if (claimId) {
+      await rejectP10Claim(claimId, "P10_ORPHAN_ENTRY_EXPIRED").catch(() => null);
+    }
+    await event(
+      "P10_ORPHAN_ENTRY_CANCELLED",
+      `${position.exchange}:${position.market} expired orphan pending reservation released`,
+      {
+        order_row_count: 0,
+        exchange_quantity: exposure.exchangeQuantity,
+        tolerance: exposure.tolerance,
+        reservation_released: true,
+      },
+      { cycleId, positionId: position.id, level: "WARNING" },
+    ).catch(() => null);
+    return { reconciled: true, cancelled: cancelled[0], source: "ORPHAN_ENTRY_EXPIRED" };
+  }
   try {
     if (orderRow.purpose === "ENTRY") {
       const durable = await loadP10LinkedEntryFills(position, orderRow);

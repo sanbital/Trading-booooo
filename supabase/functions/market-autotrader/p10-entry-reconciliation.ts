@@ -177,6 +177,33 @@ export function summarizeP10LinkedEntryFills(
   };
 }
 
+export type P10PendingReservationClock = {
+  state: unknown;
+  reservationExpiresAt: unknown;
+  createdAt?: unknown;
+  nowMs: number;
+  fallbackTtlMs?: number;
+};
+
+/**
+ * Expiry is only a cleanup eligibility signal. Callers must still prove that no
+ * order/exchange exposure exists before releasing a live reservation.
+ */
+export function p10PendingReservationExpired(input: P10PendingReservationClock): boolean {
+  if (String(input.state || "").toUpperCase() !== "ENTRY_PENDING") return false;
+  if (!Number.isFinite(input.nowMs)) return false;
+
+  const explicitExpiry = Date.parse(String(input.reservationExpiresAt || ""));
+  if (Number.isFinite(explicitExpiry)) return explicitExpiry <= input.nowMs;
+
+  const createdAt = Date.parse(String(input.createdAt || ""));
+  if (!Number.isFinite(createdAt)) return false;
+  const fallbackTtlMs = Number.isFinite(Number(input.fallbackTtlMs))
+    ? Math.max(1_000, Number(input.fallbackTtlMs))
+    : 180_000;
+  return createdAt + fallbackTtlMs <= input.nowMs;
+}
+
 export type FuturesExposure = { market: unknown; side: unknown; quantity: unknown };
 
 export function untrackedFuturesExposures(

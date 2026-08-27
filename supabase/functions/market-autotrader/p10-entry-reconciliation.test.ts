@@ -1,6 +1,7 @@
 import {
   p10EntryFailureDisposition,
   p10EntryOrderDisposition,
+  p10PendingReservationExpired,
   p10PreOrderEntryDisposition,
   summarizeP10LinkedEntryFills,
   untrackedFuturesExposures,
@@ -190,5 +191,50 @@ Deno.test("post-submit lookup ambiguity is not a pre-order policy block", () => 
   assertEquals(
     p10PreOrderEntryDisposition("Order does not exist."),
     { kind: "PREORDER_ERROR", reason: "Order does not exist." },
+  );
+});
+
+Deno.test("P10 pending reservation expiry uses the explicit boundary", () => {
+  const expiry = Date.parse("2026-08-27T14:07:09.000Z");
+  const base = {
+    state: "ENTRY_PENDING",
+    reservationExpiresAt: "2026-08-27T14:07:09.000Z",
+  };
+  assertEquals(p10PendingReservationExpired({ ...base, nowMs: expiry - 1 }), false);
+  assertEquals(p10PendingReservationExpired({ ...base, nowMs: expiry }), true);
+  assertEquals(p10PendingReservationExpired({ ...base, nowMs: expiry + 1 }), true);
+});
+
+Deno.test("P10 pending reservation expiry falls back to creation time for legacy rows", () => {
+  const createdAt = "2026-08-27T14:04:09.000Z";
+  assertEquals(
+    p10PendingReservationExpired({
+      state: "ENTRY_PENDING",
+      reservationExpiresAt: null,
+      createdAt,
+      nowMs: Date.parse("2026-08-27T14:07:09.000Z"),
+    }),
+    true,
+  );
+  assertEquals(
+    p10PendingReservationExpired({
+      state: "OPEN",
+      reservationExpiresAt: "2020-01-01T00:00:00.000Z",
+      createdAt,
+      nowMs: Date.parse("2026-08-27T14:07:09.000Z"),
+    }),
+    false,
+  );
+});
+
+Deno.test("P10 pending reservation without any trustworthy clock stays fail-closed", () => {
+  assertEquals(
+    p10PendingReservationExpired({
+      state: "ENTRY_PENDING",
+      reservationExpiresAt: null,
+      createdAt: null,
+      nowMs: Date.now(),
+    }),
+    false,
   );
 });
