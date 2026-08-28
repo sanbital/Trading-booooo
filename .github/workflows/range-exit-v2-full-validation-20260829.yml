@@ -56,10 +56,11 @@ jobs:
           JOB_ID = os.environ['JOB_ID']
           EDGE_URL = os.environ['EDGE_URL']
           TOKEN = os.environ['RESEARCH_TOKEN'].strip()
-          # Each region below has completed a real breadth_shard_v5 call with zero failed markets.
+          # Every region below completed a real 120d breadth_shard_v5 call with zero failed markets.
           REGIONS = [
               'ap-northeast-2','ap-south-1','sa-east-1','eu-central-1','ap-southeast-2',
-              'eu-west-1','ap-southeast-1','ap-northeast-1',
+              'eu-west-1','ap-southeast-1','ap-northeast-1','ca-central-1','eu-west-2',
+              'eu-west-3','ap-southeast-3','af-south-1',
           ]
 
           def request(payload, region, attempts=5):
@@ -97,7 +98,7 @@ jobs:
                   time.sleep(min(30, 2 ** attempt))
               raise RuntimeError(last or 'edge request failed')
 
-          def parallel_stage(label, action, count, count_field, workers=8):
+          def parallel_stage(label, action, count, count_field, workers=13):
               print(f'::{label}:: start count={count} workers={workers}', flush=True)
               completed = 0
               failures = []
@@ -123,14 +124,14 @@ jobs:
                   raise RuntimeError(f'{label} failed: {failures[:5]}')
 
           # Idempotent research stages overwrite any partial/failed shard from an earlier cancelled run.
-          parallel_stage('breadth', 'breadth_shard_v5', 100, 'shard_index', workers=8)
-          parallel_stage('finalize-chunks', 'finalize_chunk_v5', 12, 'chunk_index', workers=8)
+          parallel_stage('breadth', 'breadth_shard_v5', 100, 'shard_index', workers=13)
+          parallel_stage('finalize-chunks', 'finalize_chunk_v5', 12, 'chunk_index', workers=12)
           final = request({'action':'finalize_v5','job_id':JOB_ID}, REGIONS[0])
           print('::finalize::', json.dumps({k:final.get(k) for k in ['structural_points','folds','finalized_chunk_rows']}), flush=True)
 
-          # Exactly one worker per verified region; no same-region Binance stacking.
-          parallel_stage('backtest', 'backtest_shard_v5', 600, 'shard_index', workers=8)
-          parallel_stage('rollup', 'backtest_rollup_v5', 60, 'rollup_index', workers=8)
+          # Exactly one worker per verified Edge region; no same-region Binance stacking.
+          parallel_stage('backtest', 'backtest_shard_v5', 600, 'shard_index', workers=13)
+          parallel_stage('rollup', 'backtest_rollup_v5', 60, 'rollup_index', workers=13)
 
           status = request({'action':'status_v5','job_id':JOB_ID,'assert_complete':True}, REGIONS[0])
           reports = status.get('validation_reports') or []
