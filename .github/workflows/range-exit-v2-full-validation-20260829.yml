@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: range-exit-v2-full-validation-20260829
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   JOB_ID: "768fe8db-d2fb-4961-92f4-ba4770b28fc2"
@@ -56,7 +56,10 @@ jobs:
           JOB_ID = os.environ['JOB_ID']
           EDGE_URL = os.environ['EDGE_URL']
           TOKEN = os.environ['RESEARCH_TOKEN'].strip()
-          REGIONS = ['ap-northeast-2','ap-south-1','sa-east-1','eu-central-1','ap-southeast-2']
+          REGIONS = [
+              'ap-northeast-2','ap-south-1','sa-east-1','eu-central-1','ap-southeast-2',
+              'us-east-1','us-west-1','eu-west-1','ap-southeast-1','ap-northeast-1',
+          ]
 
           def request(payload, region, attempts=5):
               raw = json.dumps(payload, separators=(',', ':')).encode()
@@ -93,7 +96,7 @@ jobs:
                   time.sleep(min(30, 2 ** attempt))
               raise RuntimeError(last or 'edge request failed')
 
-          def parallel_stage(label, action, count, count_field, workers=5):
+          def parallel_stage(label, action, count, count_field, workers=10):
               print(f'::{label}:: start count={count} workers={workers}', flush=True)
               completed = 0
               failures = []
@@ -118,16 +121,16 @@ jobs:
               if failures:
                   raise RuntimeError(f'{label} failed: {failures[:5]}')
 
-          # All operations are idempotent, so rerunning already-completed shards is safe.
-          parallel_stage('breadth', 'breadth_shard_v5', 100, 'shard_index', workers=5)
-          parallel_stage('finalize-chunks', 'finalize_chunk_v5', 12, 'chunk_index', workers=5)
+          # Idempotent research stages: safe to resume after a cancelled/partial run.
+          parallel_stage('breadth', 'breadth_shard_v5', 100, 'shard_index', workers=10)
+          parallel_stage('finalize-chunks', 'finalize_chunk_v5', 12, 'chunk_index', workers=10)
           final = request({'action':'finalize_v5','job_id':JOB_ID}, REGIONS[0])
           print('::finalize::', json.dumps({k:final.get(k) for k in ['structural_points','folds','finalized_chunk_rows']}), flush=True)
 
-          # One worker per Edge region keeps Binance kline request-weight within the existing
-          # 175ms per-isolate pacing envelope while still expanding beyond the old 205-market sample.
-          parallel_stage('backtest', 'backtest_shard_v5', 600, 'shard_index', workers=5)
-          parallel_stage('rollup', 'backtest_rollup_v5', 60, 'rollup_index', workers=5)
+          # Exactly one worker per verified Edge region. This raises throughput by adding
+          # independent regions rather than stacking Binance traffic inside one region.
+          parallel_stage('backtest', 'backtest_shard_v5', 600, 'shard_index', workers=10)
+          parallel_stage('rollup', 'backtest_rollup_v5', 60, 'rollup_index', workers=10)
 
           status = request({'action':'status_v5','job_id':JOB_ID,'assert_complete':True}, REGIONS[0])
           reports = status.get('validation_reports') or []
