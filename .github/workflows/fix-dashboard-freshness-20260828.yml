@@ -1,0 +1,100 @@
+name: Fix dashboard freshness 20260828
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-dashboard-freshness-20260828.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fix-dashboard-freshness-20260828
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Patch dashboard freshness wiring
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          REV = '8.0.1-DASHBOARD-FRESHNESS-r2'
+
+          config_path = Path('docs/config.js')
+          config = config_path.read_text(encoding='utf-8')
+          config = config.replace(
+              'const DASHBOARD_REVISION = "8.0.0-LONG-SHORT-DIRECTION-r1";',
+              f'const DASHBOARD_REVISION = "{REV}";'
+          )
+          config = config.replace(
+              'const PERFORMANCE_ASSET_REVISION = "8.0.0-LONG-SHORT-DIRECTION-r1";',
+              f'const PERFORMANCE_ASSET_REVISION = "{REV}";'
+          )
+          config = config.replace(
+              './dashboard-only.js?v=5-REALIZED-COLLAPSE-ALL-WIDTHS',
+              './dashboard-only.js?v=6-DASHBOARD-FRESHNESS'
+          )
+          config_path.write_text(config, encoding='utf-8')
+
+          index_path = Path('docs/index.html')
+          html = index_path.read_text(encoding='utf-8')
+          html = html.replace(
+              './performance.css?v=8.0.0-LONG-SHORT-DIRECTION-r1',
+              f'./performance.css?v={REV}'
+          )
+          html = html.replace(
+              './config.js?v=8.0.0-LONG-SHORT-DIRECTION-r1',
+              f'./config.js?v={REV}'
+          )
+          html = html.replace(
+              './app.js?v=8.0.0-LONG-SHORT-DIRECTION-r1',
+              f'./app.js?v={REV}'
+          )
+          html = html.replace(
+              '  <script src="./realized-performance.js?v=8.0.0-LONG-SHORT-DIRECTION-r1" defer></script>\n',
+              ''
+          )
+          index_path.write_text(html, encoding='utf-8')
+          PY
+
+      - name: Validate dashboard wiring
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check docs/realized-performance.js
+          node --check docs/config.js
+          grep -Fq 'const PERFORMANCE_ASSET_REVISION = "8.0.1-DASHBOARD-FRESHNESS-r2";' docs/config.js
+          grep -Fq './config.js?v=8.0.1-DASHBOARD-FRESHNESS-r2' docs/index.html
+          grep -Fq './performance.css?v=8.0.1-DASHBOARD-FRESHNESS-r2' docs/index.html
+          grep -Fq 'let exchangeFilter = "binance";' docs/realized-performance.js
+          if grep -Fq '<script src="./realized-performance.js' docs/index.html; then
+            echo '::error::realized-performance.js is still directly loaded by index.html'
+            exit 1
+          fi
+
+      - name: Commit dashboard patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- docs/index.html docs/config.js; then
+            echo 'dashboard freshness patch already applied'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/index.html docs/config.js
+          git commit -m 'fix: refresh dashboard performance assets'
+          git push origin HEAD:main
