@@ -1,0 +1,238 @@
+name: Patch P10 entry regime shadow v1
+
+on:
+  push:
+    branches:
+      - "research/p10-entry-regime-shadow-v1"
+    paths:
+      - ".github/workflows/patch-p10-entry-regime-shadow-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out research branch
+        uses: actions/checkout@v4
+        with:
+          ref: research/p10-entry-regime-shadow-v1
+          fetch-depth: 0
+
+      - name: Patch market-autotrader shadow wiring
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("supabase/functions/market-autotrader/index.ts")
+          text = path.read_text()
+
+          import_needle = '''import {
+            applyP10MarketRiskOverlay,
+            evaluateP10MarketRisk,
+            P10_MARKET_RISK_CONFIG,
+            type P10MarketRiskObservation,
+            p10RequestedExitQuantity,
+          } from "../_shared/p10-market-risk.ts";
+          '''
+          import_replacement = import_needle + '''import {
+            evaluateP10EntryRegime,
+            P10_ENTRY_REGIME_REVISION,
+          } from "../_shared/p10-entry-market-regime.ts";
+          '''
+          if import_needle not in text:
+              raise SystemExit("p10 market-risk import anchor not found")
+          text = text.replace(import_needle, import_replacement, 1)
+
+          signature_needle = '''async function enterP10Signal(
+            signal: P10SignalRow,
+            settings: TradingSettings & JsonRecord,
+            rawPortfolio: any,
+            cycleId: string,
+          ) {
+          '''
+          signature_replacement = '''async function enterP10Signal(
+            signal: P10SignalRow,
+            settings: TradingSettings & JsonRecord,
+            rawPortfolio: any,
+            cycleId: string,
+            entryRegimeContext: {
+              observations: P10MarketRiskObservation[];
+              error: string | null;
+            },
+          ) {
+          '''
+          if signature_needle not in text:
+              raise SystemExit("enterP10Signal signature anchor not found")
+          text = text.replace(signature_needle, signature_replacement, 1)
+
+          sizing_marker = '''  // Order-time sizing evidence. This is the only place where the configured slot margin,
+          '''
+          shadow_block = '''  // Full-market entry regime v1 is deliberately shadow-only. It evaluates only candidates
+            // that already passed every existing P10/S096 execution gate and cannot block or resize
+            // the live order. The decision is persisted as audit evidence for cohort replay.
+            let entryRegimeShadow: any;
+            try {
+              entryRegimeShadow = evaluateP10EntryRegime({
+                side,
+                observations: entryRegimeContext.observations,
+                nowMs: Date.now(),
+                sourceError: entryRegimeContext.error,
+              });
+            } catch (error) {
+              entryRegimeShadow = {
+                verdict: "UNAVAILABLE",
+                reason: "ENTRY_REGIME_SHADOW_EVALUATION_ERROR",
+                audit: {
+                  revision: P10_ENTRY_REGIME_REVISION,
+                  mode: "SHADOW",
+                  checked_at: new Date().toISOString(),
+                  side,
+                  source_error: error instanceof Error ? error.message : String(error),
+                  latest: null,
+                },
+              };
+            }
+            try {
+              await event("P10_ENTRY_REGIME_SHADOW", "P10 full-market entry regime evaluated", {
+                strategy_key: P10_STRATEGY_KEY,
+                revision: P10_ENTRY_REGIME_REVISION,
+                exchange,
+                venue: signal.venue,
+                market: signal.market,
+                side,
+                signal_time: signal.signal_time,
+                verdict: entryRegimeShadow.verdict,
+                reason: entryRegimeShadow.reason,
+                audit: entryRegimeShadow.audit,
+                enforcement: "SHADOW_ONLY",
+                live_effect: false,
+                order_blocked: false,
+                size_multiplier: 1,
+              }, { cycleId, level: "INFO" });
+            } catch (eventError) {
+              console.error("P10_ENTRY_REGIME_SHADOW_EVENT_FAILED", eventError);
+            }
+
+          '''
+          if sizing_marker not in text:
+              raise SystemExit("P10 sizing marker not found")
+          text = text.replace(sizing_marker, shadow_block + sizing_marker, 1)
+
+          sizing_anchor = '''    quantity,
+            price: limitPrice,
+          }, { cycleId });
+          '''
+          sizing_replacement = '''    quantity,
+            price: limitPrice,
+            entry_regime_shadow: {
+              revision: P10_ENTRY_REGIME_REVISION,
+              verdict: entryRegimeShadow.verdict,
+              reason: entryRegimeShadow.reason,
+              live_effect: false,
+            },
+          }, { cycleId });
+          '''
+          if sizing_anchor not in text:
+              raise SystemExit("P10 sizing event anchor not found")
+          text = text.replace(sizing_anchor, sizing_replacement, 1)
+
+          claim_anchor = '''      evidence: signal.evidence,
+                engine_version: VERSION,
+              },
+          '''
+          claim_replacement = '''      evidence: signal.evidence,
+                engine_version: VERSION,
+                entry_regime_shadow: {
+                  revision: P10_ENTRY_REGIME_REVISION,
+                  verdict: entryRegimeShadow.verdict,
+                  reason: entryRegimeShadow.reason,
+                  audit: entryRegimeShadow.audit,
+                  live_effect: false,
+                },
+              },
+          '''
+          if claim_anchor not in text:
+              raise SystemExit("P10 claim evidence anchor not found")
+          text = text.replace(claim_anchor, claim_replacement, 1)
+
+          signals_anchor = '''  const signals = await loadP10Signals();
+            const active = await db(
+          '''
+          signals_replacement = '''  const signals = await loadP10Signals();
+            // One full-market snapshot is shared by every candidate in this scan. Loader failures
+            // are carried into the shadow audit and never suppress an existing P10 entry.
+            const entryRegimeContext = await loadP10MarketRiskObservations();
+            const active = await db(
+          '''
+          if signals_anchor not in text:
+              raise SystemExit("P10 signal-load anchor not found")
+          text = text.replace(signals_anchor, signals_replacement, 1)
+
+          call_anchor = '''      const result = await enterP10Signal(signal, settings, portfolios[exchange], cycleId);
+          '''
+          call_replacement = '''      const result = await enterP10Signal(
+                signal,
+                settings,
+                portfolios[exchange],
+                cycleId,
+                entryRegimeContext,
+              );
+          '''
+          if call_anchor not in text:
+              raise SystemExit("enterP10Signal call anchor not found")
+          text = text.replace(call_anchor, call_replacement, 1)
+
+          path.write_text(text)
+          PY
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Format shadow files
+        run: |
+          deno fmt \
+            supabase/functions/_shared/p10-entry-market-regime.ts \
+            supabase/functions/_shared/p10-entry-market-regime.test.ts \
+            supabase/functions/market-autotrader/index.ts
+
+      - name: Verify shadow evaluator
+        run: |
+          deno check supabase/functions/_shared/p10-entry-market-regime.test.ts
+          deno test supabase/functions/_shared/p10-entry-market-regime.test.ts
+
+      - name: Verify market-autotrader type graph
+        run: deno check supabase/functions/market-autotrader/index.ts
+
+      - name: Verify shadow-only invariants
+        shell: bash
+        run: |
+          grep -q 'P10-ENTRY-REGIME-1.0.0-SHADOW' supabase/functions/_shared/p10-entry-market-regime.ts
+          grep -q 'enforcement: "SHADOW_ONLY"' supabase/functions/market-autotrader/index.ts
+          grep -q 'live_effect: false' supabase/functions/market-autotrader/index.ts
+          grep -q 'order_blocked: false' supabase/functions/market-autotrader/index.ts
+          if grep -q 'entryRegimeShadow.verdict === "BLOCK"' supabase/functions/market-autotrader/index.ts; then
+            echo "Shadow evaluator unexpectedly affects live admission"
+            exit 1
+          fi
+
+      - name: Commit research wiring
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No patch required"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/_shared/p10-entry-market-regime.ts \
+            supabase/functions/_shared/p10-entry-market-regime.test.ts \
+            supabase/functions/market-autotrader/index.ts
+          git commit -m "research: wire P10 full-market entry regime shadow"
+          git push origin HEAD:research/p10-entry-regime-shadow-v1
