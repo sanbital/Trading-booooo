@@ -17,4 +17,7 @@ jobs:
       - name: Dispatch apply workflow
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run apply-range-exit-v2-research-20260829.yml --ref main
+        run: >-
+          gh workflow run apply-range-exit-v2-research-20260829.yml
+          --repo sanbital/Trading-booooo
+          --ref main
