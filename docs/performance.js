@@ -14,6 +14,11 @@
   const COLLAPSED = 12;
   const PAGE = 50;
   const $ = id => document.getElementById(id);
+  function syncDashboardToken() {
+    const entered = String($("trader-token")?.value || "").trim();
+    if (entered.length >= 32) dashboardToken = entered;
+    return dashboardToken;
+  }
   const esc = value => String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -157,6 +162,7 @@
   }
 
   async function load({ force = false } = {}) {
+    syncDashboardToken();
     if (!dashboardToken || pending) return;
     if (!force && document.hidden) return;
     pending = true;
@@ -195,6 +201,14 @@
   };
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", inject, { once: true }); else inject();
-  setInterval(() => { if (dashboardToken && !document.hidden && Date.now() - lastLoaded >= REFRESH_MS) load(); }, 5000);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && dashboardToken) load({ force: true }); });
+  setInterval(() => {
+    syncDashboardToken();
+    if (dashboardToken && !document.hidden && Date.now() - lastLoaded >= REFRESH_MS) load();
+  }, 5000);
+  document.addEventListener("click", event => {
+    if (event.target?.id !== "unlock-trader") return;
+    syncDashboardToken();
+    setTimeout(() => load({ force: true }), 500);
+  }, true);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) load({ force: true }); });
 })();

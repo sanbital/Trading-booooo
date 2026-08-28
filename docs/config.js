@@ -2,8 +2,8 @@
 // Publishable(또는 기존 Anon) Key는 브라우저용 공개 키입니다.
 // Service Role / Secret Key / SCAN_ACCESS_TOKEN은 절대 이 파일에 넣지 마세요.
 const UI_VERSION = "8.0.1-P10-ENTRY-RECONCILIATION";
-const DASHBOARD_REVISION = "8.0.1-DASHBOARD-FRESHNESS-r2";
-const PERFORMANCE_ASSET_REVISION = "8.0.1-DASHBOARD-FRESHNESS-r2";
+const DASHBOARD_REVISION = "8.0.2-DASHBOARD-TOKEN-SYNC-r1";
+const PERFORMANCE_ASSET_REVISION = "8.0.2-DASHBOARD-TOKEN-SYNC-r1";
 const MARKET_REGIME_ASSET_REVISION = "3-R60-D12-FORECAST-r1";
 
 window.TRADING_SCANNER_CONFIG = {
@@ -15,6 +15,7 @@ window.TRADING_SCANNER_CONFIG = {
   autotraderFunctionName: "market-autotrader",
   marketRegimeFunctionName: "market-regime-observer",
   performanceFunctionName: "market-performance",
+  accountPerformanceFunctionName: "account-performance",
   binanceSourceFunctionName: "binance-source",
   binanceOrderSourceFunctionName: "binance-order-source",
   entryStatusFunctionName: "trading-entry-status",
@@ -66,7 +67,7 @@ window.addEventListener("pageshow", applyDashboardVersion);
   document.head.appendChild(dashboardFixScript);
 
   const dashboardOnlyScript = document.createElement("script");
-  dashboardOnlyScript.src = `./dashboard-only.js?v=6-DASHBOARD-FRESHNESS`;
+  dashboardOnlyScript.src = `./dashboard-only.js?v=7-DASHBOARD-TOKEN-SYNC`;
   dashboardOnlyScript.defer = true;
   document.head.appendChild(dashboardOnlyScript);
 

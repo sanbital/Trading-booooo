@@ -13,6 +13,12 @@
   let timer = null;
   let exchangeFilter = "binance";
 
+  function syncDashboardToken() {
+    const entered = String($("trader-token")?.value || "").trim();
+    if (entered.length >= 32) dashboardToken = entered;
+    return dashboardToken;
+  }
+
   const esc = v => String(v ?? "")
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
@@ -275,6 +281,7 @@
   }
 
   async function load(force = false) {
+    syncDashboardToken();
     if (!dashboardToken || pending || (!force && document.hidden)) return;
     if (!force && Date.now() - lastLoaded < 12_000) return;
     pending = true;
@@ -324,8 +331,12 @@
     if (entered.length >= 32) dashboardToken = entered;
     setTimeout(() => load(true), 500);
   }, true);
+  document.addEventListener("input", event => {
+    if (event.target?.id === "trader-token") syncDashboardToken();
+  }, true);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) load(true); });
   window.addEventListener("pageshow", () => setTimeout(() => load(true), 300));
   timer = setInterval(() => load(false), 15_000);
+  syncDashboardToken();
   inject();
 })();
