@@ -12,6 +12,7 @@ permissions:
   contents: read
 
 concurrency:
+  # Serializes source attestation, deployment, and the later region-routed research run.
   group: regime-router-v5-research
   cancel-in-progress: false
 

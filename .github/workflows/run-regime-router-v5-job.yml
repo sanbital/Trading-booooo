@@ -38,6 +38,7 @@ jobs:
       source_sha: ${{ steps.meta.outputs.source_sha }}
       implementation_sha256: ${{ steps.meta.outputs.implementation_sha256 }}
       total_markets: ${{ steps.start.outputs.total_markets }}
+      edge_region: ${{ steps.start.outputs.edge_region }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -148,14 +149,34 @@ jobs:
             --arg implementation_sha256 "$IMPLEMENTATION_SHA256" \
             '{action:"start_v5",source_sha:$source_sha,implementation_sha256:$implementation_sha256}')
           printf '%s\n' "$payload" > "$TRACE_DIR/request.json"
-          http_status=$(curl --silent --show-error \
-            --connect-timeout 20 --max-time 400 \
-            --output "$TRACE_DIR/response.json" --write-out '%{http_code}' \
-            --header 'content-type: application/json' \
-            --header "x-v2-research-token: $token" \
-            --data-binary "$payload" "$EDGE_URL")
-          printf '%s\n' "$http_status" > "$TRACE_DIR/http-status.txt"
-          test "$http_status" = "200"
+          edge_region=''
+          for candidate_region in \
+            ap-northeast-2 ap-south-1 sa-east-1 eu-central-1 ap-southeast-2; do
+            candidate_response="$TRACE_DIR/response-$candidate_region.json"
+            candidate_headers="$TRACE_DIR/response-headers-$candidate_region.txt"
+            http_status=$(curl --silent --show-error \
+              --connect-timeout 20 --max-time 400 \
+              --output "$candidate_response" --write-out '%{http_code}' \
+              --dump-header "$candidate_headers" \
+              --header 'content-type: application/json' \
+              --header "x-region: $candidate_region" \
+              --header "x-v2-research-token: $token" \
+              --data-binary "$payload" "$EDGE_URL")
+            printf '%s\n' "$http_status" > "$TRACE_DIR/http-status-$candidate_region.txt"
+            actual_region=$(tr -d '\r' < "$candidate_headers" \
+              | awk -F': ' 'tolower($1) == "x-sb-edge-region" { print $2 }')
+            test "$actual_region" = "$candidate_region"
+            if [ "$http_status" = "200" ]; then
+              edge_region="$candidate_region"
+              cp "$candidate_response" "$TRACE_DIR/response.json"
+              cp "$candidate_headers" "$TRACE_DIR/response-headers.txt"
+              printf '%s\n' "$http_status" > "$TRACE_DIR/http-status.txt"
+              break
+            fi
+            jq -e '.ok == false and (.error | startswith("Binance HTTP 451:"))' \
+              "$candidate_response" >/dev/null
+          done
+          test -n "$edge_region"
           jq -e \
             --arg revision "$REVISION" \
             --arg source_sha "$SOURCE_SHA" \
@@ -258,8 +279,11 @@ jobs:
             "$TRACE_DIR/database-identity.json" >/dev/null
 
           sha256sum "$TRACE_DIR"/* > "$TRACE_DIR/SHA256SUMS"
-          printf 'job_id=%s\n' "$job_id" >> "$GITHUB_OUTPUT"
-          printf 'total_markets=%s\n' "$total_markets" >> "$GITHUB_OUTPUT"
+          {
+            printf 'job_id=%s\n' "$job_id"
+            printf 'total_markets=%s\n' "$total_markets"
+            printf 'edge_region=%s\n' "$edge_region"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload start trace
         if: always()
@@ -386,6 +410,7 @@ jobs:
       REVISION: ${{ needs.start.outputs.revision }}
       SOURCE_SHA: ${{ needs.start.outputs.source_sha }}
       IMPLEMENTATION_SHA256: ${{ needs.start.outputs.implementation_sha256 }}
+      EDGE_REGION: ${{ needs.start.outputs.edge_region }}
     steps:
       - name: Run breadth shard ${{ matrix.shard }}
         shell: bash
@@ -407,11 +432,16 @@ jobs:
           status=$(curl --silent --show-error \
             --connect-timeout 20 --max-time 400 --retry 2 --retry-all-errors \
             --output "$trace_dir/response.json" --write-out '%{http_code}' \
+            --dump-header "$trace_dir/response-headers.txt" \
             --header 'content-type: application/json' \
+            --header "x-region: $EDGE_REGION" \
             --header "x-v2-research-token: $token" \
             --data-binary "$payload" "$EDGE_URL")
           printf '%s\n' "$status" > "$trace_dir/http-status.txt"
           test "$status" = "200"
+          actual_region=$(tr -d '\r' < "$trace_dir/response-headers.txt" \
+            | awk -F': ' 'tolower($1) == "x-sb-edge-region" { print $2 }')
+          test "$actual_region" = "$EDGE_REGION"
           jq -e \
             --arg job "$JOB_ID" --arg revision "$REVISION" \
             --arg source_sha "$SOURCE_SHA" --arg implementation_sha256 "$IMPLEMENTATION_SHA256" \
@@ -448,6 +478,7 @@ jobs:
       REVISION: ${{ needs.start.outputs.revision }}
       SOURCE_SHA: ${{ needs.start.outputs.source_sha }}
       IMPLEMENTATION_SHA256: ${{ needs.start.outputs.implementation_sha256 }}
+      EDGE_REGION: ${{ needs.start.outputs.edge_region }}
     steps:
       - name: Finalize structural time chunk ${{ matrix.chunk }}
         shell: bash
@@ -469,11 +500,16 @@ jobs:
           status=$(curl --silent --show-error \
             --connect-timeout 20 --max-time 400 --retry 2 --retry-all-errors \
             --output "$trace_dir/response.json" --write-out '%{http_code}' \
+            --dump-header "$trace_dir/response-headers.txt" \
             --header 'content-type: application/json' \
+            --header "x-region: $EDGE_REGION" \
             --header "x-v2-research-token: $token" \
             --data-binary "$payload" "$EDGE_URL")
           printf '%s\n' "$status" > "$trace_dir/http-status.txt"
           test "$status" = "200"
+          actual_region=$(tr -d '\r' < "$trace_dir/response-headers.txt" \
+            | awk -F': ' 'tolower($1) == "x-sb-edge-region" { print $2 }')
+          test "$actual_region" = "$EDGE_REGION"
           jq -e \
             --arg job "$JOB_ID" --arg revision "$REVISION" \
             --arg source_sha "$SOURCE_SHA" --arg implementation_sha256 "$IMPLEMENTATION_SHA256" \
@@ -506,6 +542,7 @@ jobs:
       REVISION: ${{ needs.start.outputs.revision }}
       SOURCE_SHA: ${{ needs.start.outputs.source_sha }}
       IMPLEMENTATION_SHA256: ${{ needs.start.outputs.implementation_sha256 }}
+      EDGE_REGION: ${{ needs.start.outputs.edge_region }}
     steps:
       - name: Finalize structural breadth
         shell: bash
@@ -524,11 +561,16 @@ jobs:
           status=$(curl --silent --show-error \
             --connect-timeout 20 --max-time 400 --retry 2 --retry-all-errors \
             --output "$trace_dir/response.json" --write-out '%{http_code}' \
+            --dump-header "$trace_dir/response-headers.txt" \
             --header 'content-type: application/json' \
+            --header "x-region: $EDGE_REGION" \
             --header "x-v2-research-token: $token" \
             --data-binary "$payload" "$EDGE_URL")
           printf '%s\n' "$status" > "$trace_dir/http-status.txt"
           test "$status" = "200"
+          actual_region=$(tr -d '\r' < "$trace_dir/response-headers.txt" \
+            | awk -F': ' 'tolower($1) == "x-sb-edge-region" { print $2 }')
+          test "$actual_region" = "$EDGE_REGION"
           jq -e --arg job "$JOB_ID" --arg revision "$REVISION" \
             --arg source_sha "$SOURCE_SHA" --arg implementation_sha256 "$IMPLEMENTATION_SHA256" \
             '.ok == true and .action == "finalize_v5" and
@@ -765,6 +807,7 @@ jobs:
       REVISION: ${{ needs.start.outputs.revision }}
       SOURCE_SHA: ${{ needs.start.outputs.source_sha }}
       IMPLEMENTATION_SHA256: ${{ needs.start.outputs.implementation_sha256 }}
+      EDGE_REGION: ${{ needs.start.outputs.edge_region }}
     steps:
       - name: Run three all-fold logical shards from worker ${{ matrix.shard }}
         shell: bash
@@ -788,11 +831,16 @@ jobs:
             status=$(curl --silent --show-error \
               --connect-timeout 20 --max-time 400 --retry 2 --retry-all-errors \
               --output "$trace_dir/response.json" --write-out '%{http_code}' \
+              --dump-header "$trace_dir/response-headers.txt" \
               --header 'content-type: application/json' \
+              --header "x-region: $EDGE_REGION" \
               --header "x-v2-research-token: $token" \
               --data-binary "$payload" "$EDGE_URL")
             printf '%s\n' "$status" > "$trace_dir/http-status.txt"
             test "$status" = "200"
+            actual_region=$(tr -d '\r' < "$trace_dir/response-headers.txt" \
+              | awk -F': ' 'tolower($1) == "x-sb-edge-region" { print $2 }')
+            test "$actual_region" = "$EDGE_REGION"
             jq -e \
               --arg job "$JOB_ID" --arg revision "$REVISION" \
               --arg source_sha "$SOURCE_SHA" --arg implementation_sha256 "$IMPLEMENTATION_SHA256" \
@@ -893,6 +941,7 @@ jobs:
       REVISION: ${{ needs.start.outputs.revision }}
       SOURCE_SHA: ${{ needs.start.outputs.source_sha }}
       IMPLEMENTATION_SHA256: ${{ needs.start.outputs.implementation_sha256 }}
+      EDGE_REGION: ${{ needs.start.outputs.edge_region }}
     steps:
       - name: Roll up checkpoint page ${{ matrix.rollup }}
         shell: bash
@@ -914,11 +963,16 @@ jobs:
           status=$(curl --silent --show-error \
             --connect-timeout 20 --max-time 400 --retry 2 --retry-all-errors \
             --output "$trace_dir/response.json" --write-out '%{http_code}' \
+            --dump-header "$trace_dir/response-headers.txt" \
             --header 'content-type: application/json' \
+            --header "x-region: $EDGE_REGION" \
             --header "x-v2-research-token: $token" \
             --data-binary "$payload" "$EDGE_URL")
           printf '%s\n' "$status" > "$trace_dir/http-status.txt"
           test "$status" = "200"
+          actual_region=$(tr -d '\r' < "$trace_dir/response-headers.txt" \
+            | awk -F': ' 'tolower($1) == "x-sb-edge-region" { print $2 }')
+          test "$actual_region" = "$EDGE_REGION"
           jq -e \
             --arg job "$JOB_ID" --arg revision "$REVISION" \
             --arg source_sha "$SOURCE_SHA" --arg implementation_sha256 "$IMPLEMENTATION_SHA256" \
@@ -955,6 +1009,7 @@ jobs:
       IMPLEMENTATION_SHA256: ${{ needs.start.outputs.implementation_sha256 }}
       REGISTRY_SHA256: ${{ needs.start.outputs.registry_sha256 }}
       TOTAL_MARKETS: ${{ needs.start.outputs.total_markets }}
+      EDGE_REGION: ${{ needs.start.outputs.edge_region }}
     steps:
       - name: Download all immutable stage traces
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -981,11 +1036,16 @@ jobs:
           status=$(curl --silent --show-error \
             --connect-timeout 20 --max-time 400 --retry 2 --retry-all-errors \
             --output "$trace_dir/status-response.json" --write-out '%{http_code}' \
+            --dump-header "$trace_dir/status-response-headers.txt" \
             --header 'content-type: application/json' \
+            --header "x-region: $EDGE_REGION" \
             --header "x-v2-research-token: $token" \
             --data-binary "$payload" "$EDGE_URL")
           printf '%s\n' "$status" > "$trace_dir/status-http-status.txt"
           test "$status" = "200"
+          actual_region=$(tr -d '\r' < "$trace_dir/status-response-headers.txt" \
+            | awk -F': ' 'tolower($1) == "x-sb-edge-region" { print $2 }')
+          test "$actual_region" = "$EDGE_REGION"
 
           expected_rows=$((TOTAL_MARKETS * EXPECTED_CANDIDATES * EXPECTED_FOLDS * EXPECTED_SPLITS))
           expected_per_split=$((TOTAL_MARKETS * EXPECTED_CANDIDATES * EXPECTED_FOLDS))
