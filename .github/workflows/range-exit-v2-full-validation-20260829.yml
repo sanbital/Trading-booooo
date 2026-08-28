@@ -1,0 +1,158 @@
+name: RANGE Exit V2 Full Validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "research/regime_router_v5/range-exit-v2-full-trigger.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: range-exit-v2-full-validation-20260829
+  cancel-in-progress: false
+
+env:
+  JOB_ID: "768fe8db-d2fb-4961-92f4-ba4770b28fc2"
+  EDGE_URL: "https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/regime-router-v5-research"
+  SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Load private research token
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL:-}"
+          token=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 <<'SQL'
+          select token from edge_internal_tokens where name = 'market-v2-research';
+          SQL
+          )
+          test "$(printf '%s\n' "$token" | sed '/^$/d' | wc -l)" = "1"
+          {
+            echo 'RESEARCH_TOKEN<<EOF'
+            echo "$token"
+            echo EOF
+          } >> "$GITHUB_ENV"
+
+      - name: Complete full-universe research replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import concurrent.futures
+          import json
+          import os
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+
+          JOB_ID = os.environ['JOB_ID']
+          EDGE_URL = os.environ['EDGE_URL']
+          TOKEN = os.environ['RESEARCH_TOKEN'].strip()
+          REGIONS = ['ap-northeast-2','ap-south-1','sa-east-1','eu-central-1','ap-southeast-2']
+
+          def request(payload, region, attempts=5):
+              raw = json.dumps(payload, separators=(',', ':')).encode()
+              last = None
+              for attempt in range(attempts):
+                  req = urllib.request.Request(
+                      EDGE_URL,
+                      data=raw,
+                      method='POST',
+                      headers={
+                          'content-type':'application/json',
+                          'x-v2-research-token':TOKEN,
+                          'x-region':region,
+                      },
+                  )
+                  try:
+                      with urllib.request.urlopen(req, timeout=430) as resp:
+                          body = resp.read().decode()
+                          status = resp.status
+                  except urllib.error.HTTPError as exc:
+                      status = exc.code
+                      body = exc.read().decode(errors='replace')
+                  except Exception as exc:
+                      last = f'{type(exc).__name__}: {exc}'
+                      time.sleep(min(20, 2 ** attempt))
+                      continue
+                  try:
+                      parsed = json.loads(body)
+                  except Exception:
+                      parsed = {'ok':False,'error':body[:500]}
+                  if status == 200 and parsed.get('ok') is True:
+                      return parsed
+                  last = f'HTTP {status}: {body[:800]}'
+                  time.sleep(min(30, 2 ** attempt))
+              raise RuntimeError(last or 'edge request failed')
+
+          def parallel_stage(label, action, count, count_field, workers=5):
+              print(f'::{label}:: start count={count} workers={workers}', flush=True)
+              completed = 0
+              failures = []
+              def one(index):
+                  payload = {'action':action, 'job_id':JOB_ID, count_field:index}
+                  if action == 'breadth_shard_v5': payload['shard_count'] = 100
+                  elif action == 'finalize_chunk_v5': payload['chunk_count'] = 12
+                  elif action == 'backtest_shard_v5': payload['shard_count'] = 600
+                  elif action == 'backtest_rollup_v5': payload['rollup_count'] = 60
+                  return index, request(payload, REGIONS[index % len(REGIONS)])
+              with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                  futures = [pool.submit(one, i) for i in range(count)]
+                  for future in concurrent.futures.as_completed(futures):
+                      try:
+                          index, result = future.result()
+                          completed += 1
+                          if completed % max(1, count // 10) == 0 or completed == count:
+                              print(f'::{label}:: {completed}/{count}', flush=True)
+                      except Exception as exc:
+                          failures.append(str(exc))
+                          print(f'::{label}:: failure {exc}', file=sys.stderr, flush=True)
+              if failures:
+                  raise RuntimeError(f'{label} failed: {failures[:5]}')
+
+          # All operations are idempotent, so rerunning already-completed shards is safe.
+          parallel_stage('breadth', 'breadth_shard_v5', 100, 'shard_index', workers=5)
+          parallel_stage('finalize-chunks', 'finalize_chunk_v5', 12, 'chunk_index', workers=5)
+          final = request({'action':'finalize_v5','job_id':JOB_ID}, REGIONS[0])
+          print('::finalize::', json.dumps({k:final.get(k) for k in ['structural_points','folds','finalized_chunk_rows']}), flush=True)
+
+          # One worker per Edge region keeps Binance kline request-weight within the existing
+          # 175ms per-isolate pacing envelope while still expanding beyond the old 205-market sample.
+          parallel_stage('backtest', 'backtest_shard_v5', 600, 'shard_index', workers=5)
+          parallel_stage('rollup', 'backtest_rollup_v5', 60, 'rollup_index', workers=5)
+
+          status = request({'action':'status_v5','job_id':JOB_ID,'assert_complete':True}, REGIONS[0])
+          reports = status.get('validation_reports') or []
+          range_reports = [r for r in reports if str(r.get('family','')).upper() == 'RANGE_CYCLE']
+          metrics = status.get('full_market_fold_metrics') or []
+          range_metrics = [m for m in metrics if str(m.get('family','')).upper() == 'RANGE_CYCLE']
+          summary = {
+              'ok': status.get('ok'),
+              'complete': status.get('complete'),
+              'status': status.get('status'),
+              'observed': status.get('observed'),
+              'checkpoint_failures': status.get('checkpoint_failures'),
+              'range_validation_reports': range_reports,
+              'range_full_market_fold_metrics': range_metrics,
+          }
+          print('RANGE_EXIT_V2_FINAL=' + json.dumps(summary, separators=(',', ':')), flush=True)
+          with open('/tmp/range-exit-v2-final.json','w') as f:
+              json.dump(status, f)
+          PY
+
+      - name: Upload final result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: range-exit-v2-full-validation-result
+          path: /tmp/range-exit-v2-final.json
+          if-no-files-found: warn
+          retention-days: 30
