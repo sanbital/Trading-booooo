@@ -445,6 +445,54 @@ function object(value: unknown, name: string): JsonObject {
   return value as JsonObject;
 }
 
+/**
+ * PostgreSQL jsonb preserves array order but deliberately does not preserve
+ * object-key insertion order. Compare persisted JSON by value so a round trip
+ * cannot invalidate an immutable config, while still rejecting extra/missing
+ * keys, reordered arrays, non-finite numbers, and changed values.
+ */
+function storedJsonValuesEqual(left: unknown, right: unknown): boolean {
+  if (left === null || right === null) return left === right;
+  if (typeof left !== typeof right) return false;
+  if (typeof left === "number" && typeof right === "number") {
+    return Number.isFinite(left) && Number.isFinite(right) && left === right;
+  }
+  if (
+    (typeof left === "string" && typeof right === "string") ||
+    (typeof left === "boolean" && typeof right === "boolean")
+  ) return left === right;
+  if (typeof left !== "object" || typeof right !== "object") return false;
+
+  const leftIsArray = Array.isArray(left);
+  const rightIsArray = Array.isArray(right);
+  if (leftIsArray !== rightIsArray) return false;
+  if (leftIsArray && rightIsArray) {
+    if (left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index++) {
+      if (
+        !Object.hasOwn(left, index) || !Object.hasOwn(right, index) ||
+        !storedJsonValuesEqual(left[index], right[index])
+      ) return false;
+    }
+    return Object.keys(left).length === left.length && Object.keys(right).length === right.length;
+  }
+
+  const leftObject = left as JsonObject;
+  const rightObject = right as JsonObject;
+  const leftPrototype = Object.getPrototypeOf(leftObject);
+  const rightPrototype = Object.getPrototypeOf(rightObject);
+  if (
+    (leftPrototype !== Object.prototype && leftPrototype !== null) ||
+    (rightPrototype !== Object.prototype && rightPrototype !== null)
+  ) return false;
+  const leftKeys = Object.keys(leftObject).sort();
+  const rightKeys = Object.keys(rightObject).sort();
+  return leftKeys.length === rightKeys.length &&
+    leftKeys.every((key, index) =>
+      key === rightKeys[index] && storedJsonValuesEqual(leftObject[key], rightObject[key])
+    );
+}
+
 function jobConfig(job: V5ResearchJobRow): JsonObject {
   return object(job.config, "job.config");
 }
@@ -2049,7 +2097,7 @@ export async function finalizeV5(
     throw new Error("V5 candidate registry identity does not match the current runtime");
   }
   const folds = buildRollingFolds(geometry.start, geometry.endExclusive);
-  if (JSON.stringify(config.folds) !== JSON.stringify(folds)) {
+  if (!storedJsonValuesEqual(config.folds, folds)) {
     throw new Error("V5 configured rolling folds do not match the frozen grid");
   }
   if (
@@ -2083,7 +2131,7 @@ export async function finalizeV5(
       Number(metrics.finalized_chunk_rows) !== finalizedChunkRows ||
       metrics.test_used_for_selection !== false ||
       !Number.isFinite(Date.parse(String(metrics.finalized_at || ""))) ||
-      JSON.stringify(metrics.folds) !== JSON.stringify(folds)
+      !storedJsonValuesEqual(metrics.folds, folds)
     ) {
       throw new Error("V5 persisted structural finalization metadata is malformed or mixed");
     }
@@ -2680,17 +2728,15 @@ export async function statusV5(
   if (Number(config.checkpoints_per_rollup) !== V5_CHECKPOINTS_PER_ROLLUP) {
     mismatches.push("checkpoints_per_rollup");
   }
-  if (
-    JSON.stringify(config.production_review_risk_gate) !==
-      JSON.stringify(V5_PRODUCTION_REVIEW_RISK_GATE)
-  ) mismatches.push("production_review_risk_gate");
+  if (!storedJsonValuesEqual(config.production_review_risk_gate, V5_PRODUCTION_REVIEW_RISK_GATE)) {
+    mismatches.push("production_review_risk_gate");
+  }
   if (geometry.length !== V5_FOLD_POLICY.lookbackDays * DAY_MS / BAR_MS) mismatches.push("grid");
   const expectedRegistryHash = await sha256(CANDIDATE_REGISTRY_HASH_INPUT);
   if (config.candidate_registry_sha256 !== expectedRegistryHash) mismatches.push("registry_hash");
   try {
-    const configuredFolds = config.folds as FoldDefinition[];
     const expectedFolds = buildRollingFolds(geometry.start, geometry.endExclusive);
-    if (JSON.stringify(configuredFolds) !== JSON.stringify(expectedFolds)) mismatches.push("folds");
+    if (!storedJsonValuesEqual(config.folds, expectedFolds)) mismatches.push("folds");
     const compact = compactFromJob(job);
     if (
       compact.gridLength !== geometry.length || compact.gridStartMs !== geometry.start ||

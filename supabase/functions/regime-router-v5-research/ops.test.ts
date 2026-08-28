@@ -777,6 +777,65 @@ Deno.test("finalize_v5 requires all finalized chunks in exact chronological iden
   );
 });
 
+Deno.test("finalize_v5 compares JSONB-reordered fold objects by value", async () => {
+  const start = Date.UTC(2026, 0, 1);
+  const endExclusive = start + V5_FOLD_POLICY.lookbackDays * DAY_MS;
+  const universe: UniverseMarket[] = [{
+    symbol: "BTCUSDT",
+    quoteAsset: "USDT",
+    marginAsset: "USDT",
+    onboardDate: Date.UTC(2020, 0, 1),
+  }];
+  const registryHash = await sha256(CANDIDATE_REGISTRY_HASH_INPUT);
+  const job = structuralPhaseJob(
+    "89898989-8989-4989-8989-898989898989",
+    universe,
+    start,
+    registryHash,
+  );
+  const expectedFolds = buildRollingFolds(start, endExclusive);
+  const jsonbReorderedFolds = expectedFolds.map((fold) => ({
+    id: fold.id,
+    testEnd: fold.testEnd,
+    trainEnd: fold.trainEnd,
+    testStart: fold.testStart,
+    trainStart: fold.trainStart,
+    embargoBars: fold.embargoBars,
+    validationEnd: fold.validationEnd,
+    validationStart: fold.validationStart,
+  }));
+  assert(
+    JSON.stringify(jsonbReorderedFolds) !== JSON.stringify(expectedFolds),
+    "fixture must model a jsonb object-key reorder",
+  );
+  (job.config as Record<string, unknown>).folds = jsonbReorderedFolds;
+  const rows = await structuralFinalizedRows(universe, start);
+  const overrides = {
+    now: () => new Date(endExclusive),
+    loadJob: async () => job,
+    runtimeIdentity: TEST_RUNTIME_IDENTITY,
+    updateJob: async (_jobId: string, update: UpdateV5ResearchJobInput) => ({
+      ...job,
+      status: update.status ?? job.status,
+      metrics: { ...job.metrics, ...(update.metrics || {}) },
+    }),
+    rawStore: {
+      select: async () => rows,
+      upsert: async () => {},
+      exactCount: async () => V5_TIME_CHUNKS,
+    },
+  };
+
+  const result = await finalizeV5({ job_id: job.id }, overrides);
+  assertEquals(result.structural_points, V5_FOLD_POLICY.lookbackDays * DAY_MS / BAR_MS);
+
+  jsonbReorderedFolds[0].testEnd += BAR_MS;
+  await assertRejectsWith(
+    () => finalizeV5({ job_id: job.id }, overrides),
+    "configured rolling folds do not match the frozen grid",
+  );
+});
+
 Deno.test("finalize_v5 lost-response retries revalidate and never mutate finalized jobs", async () => {
   const start = Date.UTC(2026, 0, 1);
   const universe: UniverseMarket[] = [{
@@ -832,6 +891,23 @@ Deno.test("finalize_v5 lost-response retries revalidate and never mutate finaliz
 
   // Model a response that was lost after updateJob committed BACKTEST_V5.
   const first = await finalizeV5({ job_id: currentJob.id }, overrides);
+  const persistedFolds = currentJob.metrics.folds as ReturnType<typeof buildRollingFolds>;
+  currentJob = {
+    ...currentJob,
+    metrics: {
+      ...currentJob.metrics,
+      folds: persistedFolds.map((fold) => ({
+        id: fold.id,
+        testEnd: fold.testEnd,
+        trainEnd: fold.trainEnd,
+        testStart: fold.testStart,
+        trainStart: fold.trainStart,
+        embargoBars: fold.embargoBars,
+        validationEnd: fold.validationEnd,
+        validationStart: fold.validationStart,
+      })),
+    },
+  };
   const committedAfterFirst = structuredClone(currentJob);
   const retry = await finalizeV5({ job_id: currentJob.id }, overrides);
   assertEquals(retry, first);
@@ -1307,6 +1383,33 @@ Deno.test("status pages all sixty bounded rollups and verifies the exact frozen 
   const registryHash = await sha256(CANDIDATE_REGISTRY_HASH_INPUT);
   const frozenCandidates = candidates();
   const folds = buildRollingFolds(start, endExclusive);
+  const jsonbReorderedFolds = folds.map((fold) => ({
+    id: fold.id,
+    testEnd: fold.testEnd,
+    trainEnd: fold.trainEnd,
+    testStart: fold.testStart,
+    trainStart: fold.trainStart,
+    embargoBars: fold.embargoBars,
+    validationEnd: fold.validationEnd,
+    validationStart: fold.validationStart,
+  }));
+  const jsonbReorderedRiskGate = {
+    minimumMfeCapture: V5_PRODUCTION_REVIEW_RISK_GATE.minimumMfeCapture,
+    minimumStressToMdd: V5_PRODUCTION_REVIEW_RISK_GATE.minimumStressToMdd,
+    maximumGivebackToMfe: V5_PRODUCTION_REVIEW_RISK_GATE.maximumGivebackToMfe,
+    minimumUniqueSignalDays: {
+      TRAIN: V5_PRODUCTION_REVIEW_RISK_GATE.minimumUniqueSignalDays.TRAIN,
+      FINAL_TEST: V5_PRODUCTION_REVIEW_RISK_GATE.minimumUniqueSignalDays.FINAL_TEST,
+      VALIDATION: V5_PRODUCTION_REVIEW_RISK_GATE.minimumUniqueSignalDays.VALIDATION,
+    },
+    minimumProfitableTimeChunks: V5_PRODUCTION_REVIEW_RISK_GATE.minimumProfitableTimeChunks,
+    maximumPositiveTimeChunkShare: V5_PRODUCTION_REVIEW_RISK_GATE.maximumPositiveTimeChunkShare,
+  };
+  assert(JSON.stringify(jsonbReorderedFolds) !== JSON.stringify(folds));
+  assert(
+    JSON.stringify(jsonbReorderedRiskGate) !==
+      JSON.stringify(V5_PRODUCTION_REVIEW_RISK_GATE),
+  );
   const universe: UniverseMarket[] = Array.from({ length: 500 }, (_, index) => ({
     symbol: `M${String(index).padStart(3, "0")}USDT`,
     quoteAsset: "USDT",
@@ -1349,8 +1452,8 @@ Deno.test("status pages all sixty bounded rollups and verifies the exact frozen 
       backtest_shard_count: V5_BACKTEST_SHARDS,
       backtest_rollup_shard_count: V5_BACKTEST_ROLLUP_SHARDS,
       checkpoints_per_rollup: V5_CHECKPOINTS_PER_ROLLUP,
-      production_review_risk_gate: V5_PRODUCTION_REVIEW_RISK_GATE,
-      folds,
+      production_review_risk_gate: jsonbReorderedRiskGate,
+      folds: jsonbReorderedFolds,
     },
     metrics: { phase: "BACKTEST_V5", structural_series: compact },
     error: null,
