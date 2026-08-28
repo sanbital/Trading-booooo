@@ -1,0 +1,89 @@
+name: RANGE Exit V2 Rollup Final
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "research/regime_router_v5/range-exit-v2-rollup-trigger.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  JOB_ID: "768fe8db-d2fb-4961-92f4-ba4770b28fc2"
+  EDGE_URL: "https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/regime-router-v5-research"
+  SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+
+jobs:
+  rollup-final:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Load token and assert 600 clean checkpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          token=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 <<'SQL'
+          select token from edge_internal_tokens where name='market-v2-research';
+          SQL
+          )
+          stats=$(psql "$SUPABASE_DB_URL" -XAt -F '|' -v ON_ERROR_STOP=1 -v job="$JOB_ID" <<'SQL'
+          select count(*),
+                 count(*) filter (where jsonb_array_length(coalesce(parameters->'failed_markets','[]'::jsonb)) > 0)
+          from v2_research_market_results
+          where job_id=:'job'::uuid
+            and family='BACKTEST_CHECKPOINT_V5';
+          SQL
+          )
+          test "$stats" = '600|0'
+          {
+            echo 'RESEARCH_TOKEN<<EOF'
+            echo "$token"
+            echo EOF
+          } >> "$GITHUB_ENV"
+
+      - name: Roll up all checkpoint pages and finalize status
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import concurrent.futures, json, os, time, urllib.error, urllib.request
+          JOB_ID=os.environ['JOB_ID']; EDGE_URL=os.environ['EDGE_URL']; TOKEN=os.environ['RESEARCH_TOKEN'].strip()
+          REGIONS=['ap-northeast-2','ap-south-1','sa-east-1','eu-central-1','ap-southeast-2','eu-west-1','ap-southeast-1','ap-northeast-1','ca-central-1','eu-west-2','eu-west-3']
+          def call(payload, region, attempts=7):
+              data=json.dumps(payload,separators=(',',':')).encode(); last=''
+              for attempt in range(attempts):
+                  req=urllib.request.Request(EDGE_URL,data=data,method='POST',headers={'content-type':'application/json','x-v2-research-token':TOKEN,'x-region':region})
+                  try:
+                      with urllib.request.urlopen(req,timeout=430) as resp:
+                          body=resp.read().decode(); code=resp.status
+                  except urllib.error.HTTPError as exc:
+                      code=exc.code; body=exc.read().decode(errors='replace')
+                  except Exception as exc:
+                      last=f'{type(exc).__name__}: {exc}'; time.sleep(min(10,2**attempt)); continue
+                  try: parsed=json.loads(body)
+                  except Exception: parsed={'ok':False,'error':body[:500]}
+                  if code==200 and parsed.get('ok') is True: return parsed
+                  last=f'HTTP {code}: {body[:500]}'; time.sleep(min(10,2**attempt))
+              raise RuntimeError(last)
+          def one(i):
+              return i, call({'action':'backtest_rollup_v5','job_id':JOB_ID,'rollup_index':i,'rollup_count':60},REGIONS[i%len(REGIONS)])
+          done=0
+          with concurrent.futures.ThreadPoolExecutor(max_workers=30) as pool:
+              futures=[pool.submit(one,i) for i in range(60)]
+              for f in concurrent.futures.as_completed(futures):
+                  i,_=f.result(); done+=1
+                  if done%10==0 or done==60: print(f'rollup {done}/60',flush=True)
+          status=call({'action':'status_v5','job_id':JOB_ID,'assert_complete':True},REGIONS[0])
+          print('FINAL_STATUS='+json.dumps(status,separators=(',',':')),flush=True)
+          with open('/tmp/range-exit-v2-final.json','w') as fp: json.dump(status,fp)
+          PY
+
+      - name: Upload final result
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: range-exit-v2-rollup-final-result
+          path: /tmp/range-exit-v2-final.json
+          if-no-files-found: error
+          retention-days: 30
