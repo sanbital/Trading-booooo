@@ -17,57 +17,160 @@ concurrency:
 jobs:
   patch:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
-      - name: Patch dashboard freshness wiring
+      - name: Patch dashboard token sync
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
 
-          REV = '8.0.1-DASHBOARD-FRESHNESS-r2'
+          REV = '8.0.2-DASHBOARD-TOKEN-SYNC-r1'
 
+          def replace_required(text, old, new, label):
+              if old not in text:
+                  if new in text:
+                      return text
+                  raise SystemExit(f'missing expected pattern: {label}')
+              return text.replace(old, new, 1)
+
+          # Cache-bust all performance assets and make the account performance endpoint explicit.
           config_path = Path('docs/config.js')
           config = config_path.read_text(encoding='utf-8')
-          config = config.replace(
-              'const DASHBOARD_REVISION = "8.0.0-LONG-SHORT-DIRECTION-r1";',
-              f'const DASHBOARD_REVISION = "{REV}";'
+          config = replace_required(
+              config,
+              'const DASHBOARD_REVISION = "8.0.1-DASHBOARD-FRESHNESS-r2";',
+              f'const DASHBOARD_REVISION = "{REV}";',
+              'dashboard revision',
           )
-          config = config.replace(
-              'const PERFORMANCE_ASSET_REVISION = "8.0.0-LONG-SHORT-DIRECTION-r1";',
-              f'const PERFORMANCE_ASSET_REVISION = "{REV}";'
+          config = replace_required(
+              config,
+              'const PERFORMANCE_ASSET_REVISION = "8.0.1-DASHBOARD-FRESHNESS-r2";',
+              f'const PERFORMANCE_ASSET_REVISION = "{REV}";',
+              'performance asset revision',
           )
+          if 'accountPerformanceFunctionName:' not in config:
+              config = replace_required(
+                  config,
+                  '  performanceFunctionName: "market-performance",\n',
+                  '  performanceFunctionName: "market-performance",\n  accountPerformanceFunctionName: "account-performance",\n',
+                  'account performance config',
+              )
           config = config.replace(
-              './dashboard-only.js?v=5-REALIZED-COLLAPSE-ALL-WIDTHS',
-              './dashboard-only.js?v=6-DASHBOARD-FRESHNESS'
+              './dashboard-only.js?v=6-DASHBOARD-FRESHNESS',
+              './dashboard-only.js?v=7-DASHBOARD-TOKEN-SYNC',
           )
           config_path.write_text(config, encoding='utf-8')
 
           index_path = Path('docs/index.html')
           html = index_path.read_text(encoding='utf-8')
-          html = html.replace(
-              './performance.css?v=8.0.0-LONG-SHORT-DIRECTION-r1',
-              f'./performance.css?v={REV}'
+          html = replace_required(
+              html,
+              './performance.css?v=8.0.1-DASHBOARD-FRESHNESS-r2',
+              f'./performance.css?v={REV}',
+              'performance css cache key',
           )
-          html = html.replace(
-              './config.js?v=8.0.0-LONG-SHORT-DIRECTION-r1',
-              f'./config.js?v={REV}'
+          html = replace_required(
+              html,
+              './config.js?v=8.0.1-DASHBOARD-FRESHNESS-r2',
+              f'./config.js?v={REV}',
+              'config cache key',
           )
-          html = html.replace(
-              './app.js?v=8.0.0-LONG-SHORT-DIRECTION-r1',
-              f'./app.js?v={REV}'
-          )
-          html = html.replace(
-              '  <script src="./realized-performance.js?v=8.0.0-LONG-SHORT-DIRECTION-r1" defer></script>\n',
-              ''
+          html = replace_required(
+              html,
+              './app.js?v=8.0.1-DASHBOARD-FRESHNESS-r2',
+              f'./app.js?v={REV}',
+              'app cache key',
           )
           index_path.write_text(html, encoding='utf-8')
+
+          # realized-performance.js used to depend on racing window.fetch wrappers.
+          # Read the visible dashboard token directly before every refresh instead.
+          realized_path = Path('docs/realized-performance.js')
+          realized = realized_path.read_text(encoding='utf-8')
+          marker = 'function syncDashboardToken()'
+          if marker not in realized:
+              realized = replace_required(
+                  realized,
+                  '  let exchangeFilter = "binance";\n\n',
+                  '  let exchangeFilter = "binance";\n\n'
+                  '  function syncDashboardToken() {\n'
+                  '    const entered = String($("trader-token")?.value || "").trim();\n'
+                  '    if (entered.length >= 32) dashboardToken = entered;\n'
+                  '    return dashboardToken;\n'
+                  '  }\n\n',
+                  'realized token helper',
+              )
+          realized = replace_required(
+              realized,
+              '  async function load(force = false) {\n    if (!dashboardToken || pending || (!force && document.hidden)) return;\n',
+              '  async function load(force = false) {\n    syncDashboardToken();\n    if (!dashboardToken || pending || (!force && document.hidden)) return;\n',
+              'realized load token sync',
+          )
+          if 'event.target?.id === "trader-token"' not in realized:
+              realized = replace_required(
+                  realized,
+                  '  document.addEventListener("visibilitychange", () => { if (!document.hidden) load(true); });\n',
+                  '  document.addEventListener("input", event => {\n'
+                  '    if (event.target?.id === "trader-token") syncDashboardToken();\n'
+                  '  }, true);\n'
+                  '  document.addEventListener("visibilitychange", () => { if (!document.hidden) load(true); });\n',
+                  'realized token input listener',
+              )
+          if '  syncDashboardToken();\n  inject();\n})();' not in realized:
+              realized = replace_required(
+                  realized,
+                  '  timer = setInterval(() => load(false), 15_000);\n  inject();\n})();\n',
+                  '  timer = setInterval(() => load(false), 15_000);\n  syncDashboardToken();\n  inject();\n})();\n',
+                  'realized initial token sync',
+              )
+          realized_path.write_text(realized, encoding='utf-8')
+
+          # performance.js had the same race. Make its polling self-heal from the input value.
+          perf_path = Path('docs/performance.js')
+          perf = perf_path.read_text(encoding='utf-8')
+          if marker not in perf:
+              perf = replace_required(
+                  perf,
+                  '  const $ = id => document.getElementById(id);\n',
+                  '  const $ = id => document.getElementById(id);\n'
+                  '  function syncDashboardToken() {\n'
+                  '    const entered = String($("trader-token")?.value || "").trim();\n'
+                  '    if (entered.length >= 32) dashboardToken = entered;\n'
+                  '    return dashboardToken;\n'
+                  '  }\n',
+                  'order history token helper',
+              )
+          perf = replace_required(
+              perf,
+              '  async function load({ force = false } = {}) {\n    if (!dashboardToken || pending) return;\n',
+              '  async function load({ force = false } = {}) {\n    syncDashboardToken();\n    if (!dashboardToken || pending) return;\n',
+              'order history load token sync',
+          )
+          perf = replace_required(
+              perf,
+              '  setInterval(() => { if (dashboardToken && !document.hidden && Date.now() - lastLoaded >= REFRESH_MS) load(); }, 5000);\n',
+              '  setInterval(() => {\n    syncDashboardToken();\n    if (dashboardToken && !document.hidden && Date.now() - lastLoaded >= REFRESH_MS) load();\n  }, 5000);\n',
+              'order history polling token sync',
+          )
+          perf = replace_required(
+              perf,
+              '  document.addEventListener("visibilitychange", () => { if (!document.hidden && dashboardToken) load({ force: true }); });\n',
+              '  document.addEventListener("click", event => {\n'
+              '    if (event.target?.id !== "unlock-trader") return;\n'
+              '    syncDashboardToken();\n'
+              '    setTimeout(() => load({ force: true }), 500);\n'
+              '  }, true);\n'
+              '  document.addEventListener("visibilitychange", () => { if (!document.hidden) load({ force: true }); });\n',
+              'order history unlock listener',
+          )
+          perf_path.write_text(perf, encoding='utf-8')
           PY
 
       - name: Validate dashboard wiring
@@ -75,26 +178,57 @@ jobs:
         run: |
           set -euo pipefail
           node --check docs/realized-performance.js
+          node --check docs/performance.js
           node --check docs/config.js
-          grep -Fq 'const PERFORMANCE_ASSET_REVISION = "8.0.1-DASHBOARD-FRESHNESS-r2";' docs/config.js
-          grep -Fq './config.js?v=8.0.1-DASHBOARD-FRESHNESS-r2' docs/index.html
-          grep -Fq './performance.css?v=8.0.1-DASHBOARD-FRESHNESS-r2' docs/index.html
-          grep -Fq 'let exchangeFilter = "binance";' docs/realized-performance.js
+          grep -Fq 'const PERFORMANCE_ASSET_REVISION = "8.0.2-DASHBOARD-TOKEN-SYNC-r1";' docs/config.js
+          grep -Fq './config.js?v=8.0.2-DASHBOARD-TOKEN-SYNC-r1' docs/index.html
+          grep -Fq 'function syncDashboardToken()' docs/realized-performance.js
+          grep -Fq 'syncDashboardToken();' docs/realized-performance.js
+          grep -Fq 'function syncDashboardToken()' docs/performance.js
+          grep -Fq 'accountPerformanceFunctionName: "account-performance"' docs/config.js
           if grep -Fq '<script src="./realized-performance.js' docs/index.html; then
             echo '::error::realized-performance.js is still directly loaded by index.html'
             exit 1
           fi
 
-      - name: Commit dashboard patch
+      - name: Validate live performance backend is newer than 2026-08-20
+        shell: bash
+        env:
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LEARNING_ACCESS_TOKEN:-}" ]; then
+            echo '::error::LEARNING_ACCESS_TOKEN is missing'
+            exit 1
+          fi
+          token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
+          response="$(curl --fail-with-body --silent --show-error \
+            -X POST 'https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/market-performance' \
+            -H 'content-type: application/json' \
+            -H "x-autotrade-token: ${token}" \
+            --data '{"force":true}')"
+          printf '%s' "$response" | jq -e '.ok == true' >/dev/null
+          latest="$(printf '%s' "$response" | jq -r '[.trades[] | select(.row_type == "REALIZED_EXIT" and (.exchange == "binance" or .exchange == "binance_futures")) | .exit_at] | max // empty')"
+          if [ -z "$latest" ]; then
+            echo '::error::No Binance realized exits returned by market-performance'
+            exit 1
+          fi
+          echo "Latest Binance realized exit from live API: $latest"
+          if [[ "$latest" < '2026-08-21T00:00:00' ]]; then
+            echo "::error::Live performance API is stale: $latest"
+            exit 1
+          fi
+
+      - name: Commit dashboard token-sync patch
         shell: bash
         run: |
           set -euo pipefail
-          if git diff --quiet -- docs/index.html docs/config.js; then
-            echo 'dashboard freshness patch already applied'
+          if git diff --quiet -- docs/index.html docs/config.js docs/realized-performance.js docs/performance.js; then
+            echo 'dashboard token-sync patch already applied'
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add docs/index.html docs/config.js
-          git commit -m 'fix: refresh dashboard performance assets'
+          git add docs/index.html docs/config.js docs/realized-performance.js docs/performance.js
+          git commit -m 'fix: make dashboard performance refresh token-safe'
           git push origin HEAD:main
