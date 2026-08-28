@@ -104,10 +104,12 @@ jobs:
           printf '%s\n' "$deploy_sha" > "$trace_dir/source-sha.txt"
           printf '%s\n' "$implementation_sha256" > "$trace_dir/implementation-sha256.txt"
           printf '%s\n' "$registry_sha256" > "$trace_dir/candidate-registry-sha256.txt"
-          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
-          printf 'registry_sha256=%s\n' "$registry_sha256" >> "$GITHUB_OUTPUT"
-          printf 'source_sha=%s\n' "$deploy_sha" >> "$GITHUB_OUTPUT"
-          printf 'implementation_sha256=%s\n' "$implementation_sha256" >> "$GITHUB_OUTPUT"
+          {
+            printf 'revision=%s\n' "$revision"
+            printf 'registry_sha256=%s\n' "$registry_sha256"
+            printf 'source_sha=%s\n' "$deploy_sha"
+            printf 'implementation_sha256=%s\n' "$implementation_sha256"
+          } >> "$GITHUB_OUTPUT"
           printf 'TRACE_DIR=%s\n' "$trace_dir" >> "$GITHUB_ENV"
 
       - name: Check V5 rolling-fold contract
