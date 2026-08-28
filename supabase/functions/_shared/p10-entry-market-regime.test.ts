@@ -1,12 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import {
-  evaluateP10EntryRegime,
-  P10_ENTRY_REGIME_REVISION,
-} from "./p10-entry-market-regime.ts";
-import {
-  P10_MARKET_RISK_CONFIG,
-  type P10MarketRiskObservation,
-} from "./p10-market-risk.ts";
+import { evaluateP10EntryRegime, P10_ENTRY_REGIME_REVISION } from "./p10-entry-market-regime.ts";
+import { P10_MARKET_RISK_CONFIG, type P10MarketRiskObservation } from "./p10-market-risk.ts";
 
 const NOW = Date.parse("2026-08-28T09:31:30.669Z");
 
@@ -104,12 +98,14 @@ Deno.test("P10 entry regime shadow blocks SHORT in BULL regimes", () => {
 });
 
 Deno.test("P10 entry regime shadow vetoes SHORT during capitulation/rebound phases", () => {
-  for (const phase of [
-    "CAPITULATION_REBOUND",
-    "REBOUND_CONFIRMED",
-    "RECOVERY_CONTINUATION",
-    "IMPULSE_CONTINUATION",
-  ]) {
+  for (
+    const phase of [
+      "CAPITULATION_REBOUND",
+      "REBOUND_CONFIRMED",
+      "RECOVERY_CONTINUATION",
+      "IMPULSE_CONTINUATION",
+    ]
+  ) {
     const result = evaluateP10EntryRegime({
       side: "SHORT",
       observations: [observation({ regime: "RISK_OFF", score: 35, phase })],

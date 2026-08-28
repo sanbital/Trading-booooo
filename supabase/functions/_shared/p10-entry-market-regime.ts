@@ -1,7 +1,4 @@
-import {
-  P10_MARKET_RISK_CONFIG,
-  type P10MarketRiskObservation,
-} from "./p10-market-risk.ts";
+import { P10_MARKET_RISK_CONFIG, type P10MarketRiskObservation } from "./p10-market-risk.ts";
 import type { P10Side } from "./p10-policy.ts";
 
 export const P10_ENTRY_REGIME_REVISION = "P10-ENTRY-REGIME-1.0.0-SHADOW";

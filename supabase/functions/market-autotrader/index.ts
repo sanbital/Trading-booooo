@@ -188,6 +188,10 @@ import {
   p10RequestedExitQuantity,
 } from "../_shared/p10-market-risk.ts";
 import {
+  evaluateP10EntryRegime,
+  P10_ENTRY_REGIME_REVISION,
+} from "../_shared/p10-entry-market-regime.ts";
+import {
   FUTURES_SHORT_LIVE_ENV,
   futuresShortEntryBlockReason,
   futuresShortLiveEnabled,
@@ -9384,6 +9388,10 @@ async function enterP10Signal(
   settings: TradingSettings & JsonRecord,
   rawPortfolio: any,
   cycleId: string,
+  entryRegimeContext: {
+    observations: P10MarketRiskObservation[];
+    error: string | null;
+  },
 ) {
   const exchange = p10VenueExchange(signal.venue);
   const side = String(signal.side) as P10Side;
@@ -9606,6 +9614,52 @@ async function enterP10Signal(
     };
   }
 
+  // Full-market entry regime v1 is deliberately shadow-only. It evaluates only candidates
+  // that already passed every existing P10/S096 execution gate and cannot block or resize
+  // the live order. The decision is persisted as audit evidence for cohort replay.
+  let entryRegimeShadow: any;
+  try {
+    entryRegimeShadow = evaluateP10EntryRegime({
+      side,
+      observations: entryRegimeContext.observations,
+      nowMs: Date.now(),
+      sourceError: entryRegimeContext.error,
+    });
+  } catch (error) {
+    entryRegimeShadow = {
+      verdict: "UNAVAILABLE",
+      reason: "ENTRY_REGIME_SHADOW_EVALUATION_ERROR",
+      audit: {
+        revision: P10_ENTRY_REGIME_REVISION,
+        mode: "SHADOW",
+        checked_at: new Date().toISOString(),
+        side,
+        source_error: error instanceof Error ? error.message : String(error),
+        latest: null,
+      },
+    };
+  }
+  try {
+    await event("P10_ENTRY_REGIME_SHADOW", "P10 full-market entry regime evaluated", {
+      strategy_key: P10_STRATEGY_KEY,
+      revision: P10_ENTRY_REGIME_REVISION,
+      exchange,
+      venue: signal.venue,
+      market: signal.market,
+      side,
+      signal_time: signal.signal_time,
+      verdict: entryRegimeShadow.verdict,
+      reason: entryRegimeShadow.reason,
+      audit: entryRegimeShadow.audit,
+      enforcement: "SHADOW_ONLY",
+      live_effect: false,
+      order_blocked: false,
+      size_multiplier: 1,
+    }, { cycleId, level: "INFO" });
+  } catch (eventError) {
+    console.error("P10_ENTRY_REGIME_SHADOW_EVENT_FAILED", eventError);
+  }
+
   // Order-time sizing evidence. This is the only place where the configured slot margin,
   // the leverage it is multiplied by and the venue-rounded result are all known, so it is
   // the record used to prove a live fill honoured the exact-margin policy. No credentials.
@@ -9639,6 +9693,13 @@ async function enterP10Signal(
       reference_close: signal.reference_close,
       evidence: signal.evidence,
       engine_version: VERSION,
+      entry_regime_shadow: {
+        revision: P10_ENTRY_REGIME_REVISION,
+        verdict: entryRegimeShadow.verdict,
+        reason: entryRegimeShadow.reason,
+        audit: entryRegimeShadow.audit,
+        live_effect: false,
+      },
     },
   });
   if (claimResult?.claimed !== true) {
@@ -10355,6 +10416,9 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
   }
 
   const signals = await loadP10Signals();
+  // One full-market snapshot is shared by every candidate in this scan. Loader failures
+  // are carried into the shadow audit and never suppress an existing P10 entry.
+  const entryRegimeContext = await loadP10MarketRiskObservations();
   const active = await db(
     "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id,exchange,market,base_asset",
   ) as any[];
@@ -10375,7 +10439,13 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
       activeMarkets.has(`${exchange}:${signal.market}`)
     ) continue;
     try {
-      const result = await enterP10Signal(signal, settings, portfolios[exchange], cycleId);
+      const result = await enterP10Signal(
+      signal,
+      settings,
+      portfolios[exchange],
+      cycleId,
+      entryRegimeContext,
+    );
       entries.push({ ...result, signal_time: signal.signal_time, score: signal.score });
       if (result.entered || result.reserved) {
         activeMarkets.add(`${exchange}:${signal.market}`);
