@@ -122,24 +122,6 @@ jobs:
               raise SystemExit("P10 sizing marker not found")
           text = text.replace(sizing_marker, shadow_block + sizing_marker, 1)
 
-          sizing_anchor = '''    quantity,
-            price: limitPrice,
-          }, { cycleId });
-          '''
-          sizing_replacement = '''    quantity,
-            price: limitPrice,
-            entry_regime_shadow: {
-              revision: P10_ENTRY_REGIME_REVISION,
-              verdict: entryRegimeShadow.verdict,
-              reason: entryRegimeShadow.reason,
-              live_effect: false,
-            },
-          }, { cycleId });
-          '''
-          if sizing_anchor not in text:
-              raise SystemExit("P10 sizing event anchor not found")
-          text = text.replace(sizing_anchor, sizing_replacement, 1)
-
           claim_anchor = '''      evidence: signal.evidence,
                 engine_version: VERSION,
               },
@@ -194,12 +176,11 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Format shadow files
+      - name: Format shadow evaluator files
         run: |
           deno fmt \
             supabase/functions/_shared/p10-entry-market-regime.ts \
-            supabase/functions/_shared/p10-entry-market-regime.test.ts \
-            supabase/functions/market-autotrader/index.ts
+            supabase/functions/_shared/p10-entry-market-regime.test.ts
 
       - name: Verify shadow evaluator
         run: |
@@ -216,6 +197,7 @@ jobs:
           grep -q 'enforcement: "SHADOW_ONLY"' supabase/functions/market-autotrader/index.ts
           grep -q 'live_effect: false' supabase/functions/market-autotrader/index.ts
           grep -q 'order_blocked: false' supabase/functions/market-autotrader/index.ts
+          grep -q 'entry_regime_shadow' supabase/functions/market-autotrader/index.ts
           if grep -q 'entryRegimeShadow.verdict === "BLOCK"' supabase/functions/market-autotrader/index.ts; then
             echo "Shadow evaluator unexpectedly affects live admission"
             exit 1
