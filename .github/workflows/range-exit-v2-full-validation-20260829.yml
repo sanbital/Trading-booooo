@@ -67,11 +67,10 @@ jobs:
           EDGE_URL = os.environ['EDGE_URL']
           TOKEN = os.environ['RESEARCH_TOKEN'].strip()
           PHASE = os.environ['JOB_PHASE'].strip()
-          # Every region below completed a real 120d breadth_shard_v5 call with zero failed markets.
+          # Each region below has completed live Binance research calls without 451 failures.
           REGIONS = [
               'ap-northeast-2','ap-south-1','sa-east-1','eu-central-1','ap-southeast-2',
-              'eu-west-1','ap-southeast-1','ap-northeast-1','ca-central-1','eu-west-2',
-              'eu-west-3','ap-southeast-3','af-south-1',
+              'eu-west-1','ap-southeast-1','ap-northeast-1','ca-central-1','eu-west-2','eu-west-3',
           ]
 
           def request(payload, region, attempts=5, require_ok=True):
@@ -109,7 +108,7 @@ jobs:
                   time.sleep(min(30, 2 ** attempt))
               raise RuntimeError(last or 'edge request failed')
 
-          def parallel_stage(label, action, count, count_field, workers=13):
+          def parallel_stage(label, action, count, count_field, workers=11):
               print(f'::{label}:: start count={count} workers={workers}', flush=True)
               completed = 0
               failures = []
@@ -135,17 +134,16 @@ jobs:
                   raise RuntimeError(f'{label} failed: {failures[:5]}')
 
           if PHASE == 'STRUCTURAL_BREADTH_V5':
-              parallel_stage('breadth', 'breadth_shard_v5', 100, 'shard_index', workers=13)
-              parallel_stage('finalize-chunks', 'finalize_chunk_v5', 12, 'chunk_index', workers=12)
+              parallel_stage('breadth', 'breadth_shard_v5', 100, 'shard_index', workers=11)
+              parallel_stage('finalize-chunks', 'finalize_chunk_v5', 12, 'chunk_index', workers=11)
               final = request({'action':'finalize_v5','job_id':JOB_ID}, REGIONS[0])
               print('::finalize::', json.dumps({k:final.get(k) for k in ['structural_points','folds','finalized_chunk_rows']}), flush=True)
           else:
               print(f'::resume:: structural phase already complete ({PHASE})', flush=True)
 
           if PHASE != 'COMPLETE_V5':
-              # One worker per verified Edge region; completed checkpoints are idempotently replaced.
-              parallel_stage('backtest', 'backtest_shard_v5', 600, 'shard_index', workers=13)
-              parallel_stage('rollup', 'backtest_rollup_v5', 60, 'rollup_index', workers=13)
+              parallel_stage('backtest', 'backtest_shard_v5', 600, 'shard_index', workers=11)
+              parallel_stage('rollup', 'backtest_rollup_v5', 60, 'rollup_index', workers=11)
 
           status = request({'action':'status_v5','job_id':JOB_ID,'assert_complete':True}, REGIONS[0])
           reports = status.get('validation_reports') or []
