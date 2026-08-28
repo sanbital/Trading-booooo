@@ -1,0 +1,177 @@
+name: Continue RANGE Exit V2 full-universe validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "research/regime_router_v5/range-exit-v2-full-trigger.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: range-exit-v2-full-universe-20260829
+  cancel-in-progress: false
+
+env:
+  EDGE_URL: https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/regime-router-v5-research
+  SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+  JOB_ID: 768fe8db-d2fb-4961-92f4-ba4770b28fc2
+  EXPECTED_REVISION: REGIME_ROUTER_V5_STRUCTURAL_TACTICAL_RANGE_EXIT_V2_15M_120D_RSWF
+  EDGE_REGION: ap-northeast-2
+
+jobs:
+  full-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Checkout source identity
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Verify immutable job identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL:-}"
+          row=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 -v job="$JOB_ID" <<'SQL'
+          select jsonb_build_object(
+            'revision', revision,
+            'markets', total_markets,
+            'registry', config->>'candidate_registry_revision',
+            'source_sha', config->>'source_sha',
+            'implementation_sha256', config->>'implementation_sha256',
+            'phase', metrics->>'phase'
+          )::text
+          from v2_research_jobs where id=:'job'::uuid;
+          SQL
+          )
+          jq -e --arg revision "$EXPECTED_REVISION" \
+            '.revision==$revision and .markets==567 and
+             .registry=="V5_PRECOMMITTED_NEIGHBOURHOOD_20260829_RANGE_EXIT_V2_A" and
+             .source_sha=="96d00bbb1c992cefdf3cb7fbccc1e276c160032d" and
+             .implementation_sha256=="0ec1b27242e2c7e41f39ed42889bd8ff94e440665545e54ca0771b45ebeedbb8" and
+             .phase=="STRUCTURAL_BREADTH_V5"' <<<"$row" >/dev/null
+
+      - name: Run full 567-market replay sequentially
+        shell: bash
+        run: |
+          set -euo pipefail
+          token=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 <<'SQL'
+          select token from edge_internal_tokens where name='market-v2-research';
+          SQL
+          )
+          test -n "$token"
+
+          call_edge() {
+            local payload="$1"
+            local label="$2"
+            local out="$RUNNER_TEMP/${label//[^A-Za-z0-9_.-]/_}.json"
+            local status
+            status=$(curl --silent --show-error --fail-with-body \
+              --connect-timeout 20 --max-time 180 \
+              --retry 2 --retry-delay 2 --retry-all-errors \
+              --output "$out" --write-out '%{http_code}' \
+              --header 'content-type: application/json' \
+              --header "x-region: $EDGE_REGION" \
+              --header "x-v2-research-token: $token" \
+              --data-binary "$payload" "$EDGE_URL")
+            test "$status" = 200
+            jq -e --arg revision "$EXPECTED_REVISION" --arg job "$JOB_ID" \
+              '.ok==true and .revision==$revision and .job_id==$job' "$out" >/dev/null
+            printf '%s %s\n' "$label" "$(jq -c '{action,elapsed_ms,failed_markets:(.failed_markets // [])}' "$out")"
+          }
+
+          echo '=== STRUCTURAL BREADTH 100 SHARDS ==='
+          for shard in $(seq 0 99); do
+            payload=$(jq -cn --arg job "$JOB_ID" --argjson shard "$shard" \
+              '{action:"breadth_shard_v5",job_id:$job,shard_index:$shard,shard_count:100}')
+            call_edge "$payload" "breadth-$shard"
+          done
+
+          partials=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 -v job="$JOB_ID" <<'SQL'
+          select count(*) from v2_research_market_results
+          where job_id=:'job'::uuid and family='STRUCTURAL_PARTIAL_V5';
+          SQL
+          )
+          test "$partials" = 1200
+
+          echo '=== FINALIZE 12 STRUCTURAL CHUNKS ==='
+          for chunk in $(seq 0 11); do
+            payload=$(jq -cn --arg job "$JOB_ID" --argjson chunk "$chunk" \
+              '{action:"finalize_chunk_v5",job_id:$job,chunk_index:$chunk,chunk_count:12}')
+            call_edge "$payload" "finalize-chunk-$chunk"
+          done
+
+          payload=$(jq -cn --arg job "$JOB_ID" '{action:"finalize_v5",job_id:$job}')
+          call_edge "$payload" 'finalize-v5'
+
+          phase=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 -v job="$JOB_ID" <<'SQL'
+          select metrics->>'phase' from v2_research_jobs where id=:'job'::uuid;
+          SQL
+          )
+          test "$phase" = BACKTEST_V5
+
+          echo '=== BACKTEST 600 LOGICAL SHARDS ==='
+          for shard in $(seq 0 599); do
+            payload=$(jq -cn --arg job "$JOB_ID" --argjson shard "$shard" \
+              '{action:"backtest_shard_v5",job_id:$job,shard_index:$shard,shard_count:600}')
+            call_edge "$payload" "backtest-$shard"
+          done
+
+          checkpoints=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 -v job="$JOB_ID" <<'SQL'
+          select count(*) from v2_research_market_results
+          where job_id=:'job'::uuid and family='BACKTEST_CHECKPOINT_V5';
+          SQL
+          )
+          test "$checkpoints" = 600
+
+          echo '=== ROLLUP 60 SHARDS ==='
+          for rollup in $(seq 0 59); do
+            payload=$(jq -cn --arg job "$JOB_ID" --argjson rollup "$rollup" \
+              '{action:"backtest_rollup_v5",job_id:$job,rollup_index:$rollup,rollup_count:60}')
+            call_edge "$payload" "rollup-$rollup"
+          done
+
+          payload=$(jq -cn --arg job "$JOB_ID" '{action:"status_v5",job_id:$job,assert_complete:true}')
+          call_edge "$payload" 'status-v5'
+          cp "$RUNNER_TEMP/status-v5.json" "$RUNNER_TEMP/final-status.json"
+
+      - name: Publish validation summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 -v job="$JOB_ID" <<'SQL'
+          select jsonb_build_object(
+            'status', status,
+            'phase', metrics->>'phase',
+            'processed_markets', processed_markets,
+            'failed_markets', failed_markets,
+            'robust_candidates', metrics->'robust_candidates',
+            'no_robust_edge_found', metrics->'no_robust_edge_found'
+          )::text from v2_research_jobs where id=:'job'::uuid;
+          SQL
+          )
+          checkpoints=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 -v job="$JOB_ID" <<'SQL'
+          select count(*) from v2_research_market_results
+          where job_id=:'job'::uuid and family='BACKTEST_CHECKPOINT_V5';
+          SQL
+          )
+          rollups=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 -v job="$JOB_ID" <<'SQL'
+          select count(*) from v2_research_market_results
+          where job_id=:'job'::uuid and family='BACKTEST_ROLLUP_V5';
+          SQL
+          )
+          {
+            echo '## RANGE Exit V2 full-universe validation'
+            echo
+            echo "- Job: $JOB_ID"
+            echo "- Revision: $EXPECTED_REVISION"
+            echo "- Status: $status"
+            echo "- Checkpoints: $checkpoints / 600"
+            echo "- Rollups: $rollups / 60"
+          } >> "$GITHUB_STEP_SUMMARY"
