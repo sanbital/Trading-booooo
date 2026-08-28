@@ -1,5 +1,5 @@
 revision=REGIME_ROUTER_V5_STRUCTURAL_TACTICAL_15M_120D_RSWF
-deploy_sha=5cd37e25404b8b9534b62475432c51b2d285fdf6
+deploy_sha=95def12f45dd2d5e0705a229f5f5e716bf7f0542
 implementation_sha256=887374d2f9330422c1d6bd3d031f5a332f955c5b7ab5ffe1523b0fa259424d25
 deployed_function=regime-router-v5-research
-requested_at=2026-08-28T02:10:45Z
+requested_at=2026-08-28T02:26:04Z
