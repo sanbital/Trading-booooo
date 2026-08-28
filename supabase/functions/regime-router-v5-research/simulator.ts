@@ -275,6 +275,173 @@ function targetFor(
   return Number.isFinite(hinted) && hinted < entry ? hinted : entry - policy.targetR * risk;
 }
 
+function rangeExitV2Enabled(candidate: Candidate): boolean {
+  if (candidate.family !== "RANGE_CYCLE") return false;
+  const p = candidate.parameters;
+  return finite(p.partialTakeAtr, 0) > 0 &&
+    finite(p.partialTakeFraction, 0) > 0 &&
+    finite(p.noResponseBars, 0) > 0;
+}
+
+/**
+ * RANGE Exit V2 changes realization only. The caller has already passed
+ * the exact V5 RANGE signal, next-open entry, target-room, cost, and stop
+ * gates used by the baseline simulator, so the entry cohort is unchanged.
+ *
+ * Rules are causal and conservative:
+ * - 60% partial at +0.45 signal ATR;
+ * - residual stop solves the exact whole-position base-cost break-even;
+ * - if same-bar partial/protected-stop order is ambiguous, stop wins;
+ * - no partial response within three completed 15m bars -> next-open TIME_STOP;
+ * - original anchor target, cycle/regime exit, initial stop and max hold remain.
+ */
+function simulateRangeExitV2(
+  input: SimulationInput,
+  signalIndex: number,
+  split: TradeSplit,
+  decision: SignalDecision,
+  tacticalAt: (index: number) => TacticalContext,
+  policy: HoldingPolicy,
+  baseCostBps: number,
+  stressCostBps: number,
+  entryIndex: number,
+  entry: number,
+  signalAtr: number,
+  target: number,
+  initialStop: number,
+): SimulatedTrade | null {
+  const bars = input.bars;
+  const candidate = input.candidate;
+  const p = candidate.parameters;
+  const partialTakeAtr = Math.max(0.05, finite(p.partialTakeAtr, 0.45));
+  const partialFraction = Math.max(
+    0.05,
+    Math.min(0.95, finite(p.partialTakeFraction, 0.60)),
+  );
+  const noResponseBars = boundedInteger(
+    p.noResponseBars,
+    3,
+    1,
+    policy.maxHoldBars,
+  );
+  const partialTarget = entry + partialTakeAtr * signalAtr;
+  if (!(partialTarget > entry) || !(partialTarget < target)) return null;
+
+  let stop = initialStop;
+  let best = entry;
+  let worst = entry;
+  let pendingReason: string | null = null;
+  let partialTaken = false;
+  let remainingFraction = 1;
+  let realizedGrossBps = 0;
+
+  const includePoint = (price: number) => {
+    best = Math.max(best, price);
+    worst = Math.min(worst, price);
+  };
+
+  const takePartial = () => {
+    if (partialTaken) return;
+    includePoint(partialTarget);
+    const partialGrossBps = (partialTarget / entry - 1) * 10_000;
+    realizedGrossBps += partialFraction * partialGrossBps;
+    remainingFraction = 1 - partialFraction;
+    partialTaken = true;
+    if (finite(p.portfolioBreakEvenAfterPartial, 1) > 0 && remainingFraction > 0) {
+      const requiredResidualGrossBps = Math.max(
+        0,
+        (baseCostBps - realizedGrossBps) / remainingFraction,
+      );
+      stop = Math.max(
+        stop,
+        entry * (1 + requiredResidualGrossBps / 10_000),
+      );
+    }
+  };
+
+  const finish = (
+    exitIndex: number,
+    exit: number,
+    reason: string,
+    atOpen: boolean,
+  ): SimulatedTrade => {
+    includePoint(exit);
+    const residualGrossBps = (exit / entry - 1) * 10_000;
+    const grossBps = realizedGrossBps + remainingFraction * residualGrossBps;
+    const netBps = grossBps - baseCostBps;
+    const stressNetBps = grossBps - stressCostBps;
+    const mfeBps = Math.max(0, (best / entry - 1) * 10_000);
+    const maeBps = Math.max(0, (1 - worst / entry) * 10_000);
+    const holdBars = Math.max(1, exitIndex - entryIndex + (atOpen ? 0 : 1));
+    return {
+      exitIndex,
+      trade: {
+        market: input.market,
+        candidate: candidate.name,
+        family: candidate.family,
+        state: decision.state,
+        fold: input.fold.id,
+        split,
+        side: candidate.side,
+        signalTime: bars[signalIndex].time,
+        entryTime: bars[entryIndex].time,
+        exitTime: bars[exitIndex].time,
+        grossBps,
+        netBps,
+        stressNetBps,
+        mfeBps,
+        maeBps,
+        mfeCapture: mfeBps > 1e-9 ? netBps / mfeBps : null,
+        givebackBps: Math.max(0, mfeBps - netBps),
+        holdBars,
+        exitReason: reason,
+      },
+    };
+  };
+
+  for (let j = entryIndex; j <= entryIndex + policy.maxHoldBars; j++) {
+    const bar = bars[j];
+    if (!bar) return null;
+    if (pendingReason) return finish(j, bar.open, pendingReason, true);
+    if (bar.open <= stop) return finish(j, bar.open, "STOP_GAP", true);
+
+    if (!partialTaken && bar.open >= target) {
+      takePartial();
+      return finish(j, target, "TARGET", true);
+    }
+    if (!partialTaken && bar.open >= partialTarget) takePartial();
+    if (partialTaken && bar.open >= target) return finish(j, target, "TARGET", true);
+    includePoint(bar.open);
+
+    if (bar.low <= stop) return finish(j, stop, "STOP", false);
+
+    if (!partialTaken && bar.high >= partialTarget) {
+      takePartial();
+      if (bar.low <= stop) return finish(j, stop, "STOP", false);
+      if (bar.high >= target) return finish(j, target, "TARGET", false);
+      includePoint(bar.high);
+      includePoint(bar.low);
+    } else {
+      if (partialTaken && bar.high >= target) {
+        return finish(j, target, "TARGET", false);
+      }
+      includePoint(bar.high);
+      includePoint(bar.low);
+    }
+
+    const tactical = tacticalAt(j);
+    pendingReason = closeGeneratedExit(candidate, tactical, bar);
+    const heldBars = j - entryIndex + 1;
+    if (!pendingReason && !partialTaken && heldBars >= noResponseBars) {
+      pendingReason = "TIME_STOP";
+    }
+    if (!pendingReason && heldBars >= policy.maxHoldBars) {
+      pendingReason = "MAX_HOLD";
+    }
+  }
+  return null;
+}
+
 function simulateOne(
   input: SimulationInput,
   signalIndex: number,
@@ -336,6 +503,24 @@ function simulateOne(
     if (!(entry > signalBar.ema20)) return null;
     const emaChaseAtr = (entry - signalBar.ema20) / signalAtr;
     if (emaChaseAtr > finite(candidate.parameters.maxEmaDistanceAtr, 2.1)) return null;
+  }
+
+  if (candidate.family === "RANGE_CYCLE" && rangeExitV2Enabled(candidate)) {
+    return simulateRangeExitV2(
+      input,
+      signalIndex,
+      split,
+      decision,
+      tacticalAt,
+      policy,
+      baseCostBps,
+      stressCostBps,
+      entryIndex,
+      entry,
+      signalAtr,
+      target!,
+      stop,
+    );
   }
 
   let best = entry;

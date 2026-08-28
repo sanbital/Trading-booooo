@@ -699,3 +699,50 @@ Deno.test("default tactical classifier fails closed when aligned tactical arrays
     "default tactical classifier requires",
   );
 });
+
+Deno.test("RANGE Exit V2 partial take locks portfolio base-cost break-even", () => {
+  const points = Array.from({ length: 9 }, (_, index) => bar(index));
+  points[2] = bar(2, { open: 100, high: 100.50, low: 99.80, close: 100.20 });
+  const strategy = candidate("RANGE_CYCLE", {
+    initialStopAtr: 1,
+    maxHoldBars: 4,
+    partialTakeAtr: 0.45,
+    partialTakeFraction: 0.60,
+    noResponseBars: 3,
+    portfolioBreakEvenAfterPartial: 1,
+  });
+  const trades = run(
+    points,
+    strategy,
+    dependencies("RANGE_UP_CYCLE", () => "RANGE_UP_CYCLE", 99, 102),
+  );
+  assertEquals(trades.length, 1);
+  assertEquals(trades[0].exitReason, "STOP");
+  assertAlmostEquals(trades[0].grossBps, 27, 1e-6);
+  assertAlmostEquals(trades[0].netBps, 13, 1e-6);
+});
+
+Deno.test("RANGE Exit V2 exits next open after three bars without partial response", () => {
+  const points = Array.from({ length: 10 }, (_, index) => bar(index));
+  points[2] = bar(2, { open: 100, high: 100.20, low: 99.80, close: 100.05 });
+  points[3] = bar(3, { open: 100.05, high: 100.30, low: 99.90, close: 100.10 });
+  points[4] = bar(4, { open: 100.10, high: 100.40, low: 99.90, close: 100.20 });
+  points[5] = bar(5, { open: 100.15, high: 100.30, low: 100.00, close: 100.10 });
+  const strategy = candidate("RANGE_CYCLE", {
+    initialStopAtr: 1,
+    maxHoldBars: 4,
+    partialTakeAtr: 0.45,
+    partialTakeFraction: 0.60,
+    noResponseBars: 3,
+    portfolioBreakEvenAfterPartial: 1,
+  });
+  const trades = run(
+    points,
+    strategy,
+    dependencies("RANGE_UP_CYCLE", () => "RANGE_UP_CYCLE", 99, 102),
+  );
+  assertEquals(trades.length, 1);
+  assertEquals(trades[0].exitReason, "TIME_STOP");
+  assertEquals(trades[0].exitTime, points[5].time);
+  assertEquals(trades[0].holdBars, 3);
+});

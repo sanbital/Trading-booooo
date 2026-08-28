@@ -43,7 +43,11 @@ import {
   V5_TIME_CHUNK_BARS,
   V5_TIME_CHUNKS,
 } from "./ops.ts";
-import { CANDIDATE_REGISTRY_HASH_INPUT, candidates } from "./strategies.ts";
+import {
+  CANDIDATE_REGISTRY_HASH_INPUT,
+  candidates,
+  V5_CANDIDATE_REGISTRY_REVISION,
+} from "./strategies.ts";
 import { createStructuralAccumulator, type StructuralSnapshot } from "./structural.ts";
 import {
   type Bar,
@@ -467,7 +471,7 @@ function structuralPhaseJob(
       breadth_time_chunks: V5_TIME_CHUNKS,
       structural_finalize_chunk_count: V5_TIME_CHUNKS,
       folds: buildRollingFolds(start, endExclusive),
-      candidate_registry_revision: "V5_PRECOMMITTED_NEIGHBOURHOOD_20260828_A",
+      candidate_registry_revision: V5_CANDIDATE_REGISTRY_REVISION,
       candidate_registry_sha256: registryHash,
       source_sha: TEST_SOURCE_SHA,
       implementation_sha256: TEST_IMPLEMENTATION_SHA256,

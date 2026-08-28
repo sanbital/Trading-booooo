@@ -1,4 +1,4 @@
-export const V5_REVISION = "REGIME_ROUTER_V5_STRUCTURAL_TACTICAL_15M_120D_RSWF";
+export const V5_REVISION = "REGIME_ROUTER_V5_STRUCTURAL_TACTICAL_RANGE_EXIT_V2_15M_120D_RSWF";
 // Deployment replaces these two exact placeholders in its ephemeral build
 // artifact.  A checkout is deliberately not runnable with the default runtime
 // identity, so an unstamped or partially stamped deployment fails closed.

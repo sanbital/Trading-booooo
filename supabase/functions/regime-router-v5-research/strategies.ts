@@ -13,7 +13,8 @@ import { FIFTEEN_MINUTE_BARS_7D } from "./indicators.ts";
  * read.  Each family changes one primary entry threshold around a baseline;
  * exits stay fixed inside the family so a neighbourhood check remains useful.
  */
-export const V5_CANDIDATE_REGISTRY_REVISION = "V5_PRECOMMITTED_NEIGHBOURHOOD_20260828_A";
+export const V5_CANDIDATE_REGISTRY_REVISION =
+  "V5_PRECOMMITTED_NEIGHBOURHOOD_20260829_RANGE_EXIT_V2_A";
 
 const BULL_EXIT = {
   breakEvenAtR: 0.8,
@@ -29,6 +30,12 @@ const RANGE_EXIT = {
   maxHoldBars: 4,
   profitLockAtR: 0.45,
   profitLockR: 0.18,
+  // RANGE Exit V2 is pre-committed before the new full-universe replay.
+  // Entry logic is unchanged; only post-entry realization is altered.
+  partialTakeAtr: 0.45,
+  partialTakeFraction: 0.60,
+  noResponseBars: 3,
+  portfolioBreakEvenAfterPartial: 1,
 };
 
 const BEAR_EXIT = {
