@@ -1,0 +1,475 @@
+name: Apply RANGE Exit V2 research R2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "research/regime_router_v5/range-exit-v2-r2-trigger.txt"
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: apply-range-exit-v2-r2-20260829
+  cancel-in-progress: false
+
+jobs:
+  patch-deploy-dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          fetch-depth: 2
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: v2.x
+
+      - name: Patch isolated V5 research logic
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path('supabase/functions/regime-router-v5-research')
+          types = root / 'types.ts'
+          strategies = root / 'strategies.ts'
+          simulator = root / 'simulator.ts'
+          simulator_test = root / 'simulator.test.ts'
+          deploy_workflow = Path('.github/workflows/deploy-regime-router-v5-research.yml')
+          run_workflow = Path('.github/workflows/run-regime-router-v5-job.yml')
+
+          old_revision = 'REGIME_ROUTER_V5_STRUCTURAL_TACTICAL_15M_120D_RSWF'
+          new_revision = 'REGIME_ROUTER_V5_STRUCTURAL_TACTICAL_RANGE_EXIT_V2_15M_120D_RSWF'
+          old_registry = 'V5_PRECOMMITTED_NEIGHBOURHOOD_20260828_A'
+          new_registry = 'V5_PRECOMMITTED_NEIGHBOURHOOD_20260829_RANGE_EXIT_V2_A'
+
+          def replace_required(path: Path, old: str, new: str, minimum: int = 1):
+              text = path.read_text()
+              count = text.count(old)
+              if count < minimum:
+                  raise SystemExit(f'{path}: expected at least {minimum} occurrences of {old!r}, got {count}')
+              path.write_text(text.replace(old, new))
+              print(f'{path}: replaced {count} occurrence(s)')
+
+          replace_required(types, old_revision, new_revision, 1)
+          replace_required(strategies, old_registry, new_registry, 1)
+          replace_required(deploy_workflow, old_revision, new_revision, 1)
+          replace_required(run_workflow, old_registry, new_registry, 1)
+
+          text = strategies.read_text()
+          old_range_exit = '''const RANGE_EXIT = {
+            initialStopAtr: 0.8,
+            maxHoldBars: 4,
+            profitLockAtR: 0.45,
+            profitLockR: 0.18,
+          };'''
+          new_range_exit = '''const RANGE_EXIT = {
+            initialStopAtr: 0.8,
+            maxHoldBars: 4,
+            profitLockAtR: 0.45,
+            profitLockR: 0.18,
+            // RANGE Exit V2 is pre-committed before the new full-universe replay.
+            // Entry logic is unchanged; only post-entry realization is altered.
+            partialTakeAtr: 0.45,
+            partialTakeFraction: 0.60,
+            noResponseBars: 3,
+            portfolioBreakEvenAfterPartial: 1,
+          };'''
+          if old_range_exit not in text:
+              raise SystemExit('strategies.ts: RANGE_EXIT baseline block not found')
+          strategies.write_text(text.replace(old_range_exit, new_range_exit, 1))
+
+          helper = r'''
+          function rangeExitV2Enabled(candidate: Candidate): boolean {
+            if (candidate.family !== "RANGE_CYCLE") return false;
+            const p = candidate.parameters;
+            return finite(p.partialTakeAtr, 0) > 0 &&
+              finite(p.partialTakeFraction, 0) > 0 &&
+              finite(p.noResponseBars, 0) > 0;
+          }
+
+          /**
+           * RANGE Exit V2 changes realization only. The caller has already passed
+           * the exact V5 RANGE signal, next-open entry, target-room, cost, and stop
+           * gates used by the baseline simulator, so the entry cohort is unchanged.
+           *
+           * Rules are causal and conservative:
+           * - 60% partial at +0.45 signal ATR;
+           * - residual stop solves the exact whole-position base-cost break-even;
+           * - if same-bar partial/protected-stop order is ambiguous, stop wins;
+           * - no partial response within three completed 15m bars -> next-open TIME_STOP;
+           * - original anchor target, cycle/regime exit, initial stop and max hold remain.
+           */
+          function simulateRangeExitV2(
+            input: SimulationInput,
+            signalIndex: number,
+            split: TradeSplit,
+            decision: SignalDecision,
+            tacticalAt: (index: number) => TacticalContext,
+            policy: HoldingPolicy,
+            baseCostBps: number,
+            stressCostBps: number,
+            entryIndex: number,
+            entry: number,
+            signalAtr: number,
+            target: number,
+            initialStop: number,
+          ): SimulatedTrade | null {
+            const bars = input.bars;
+            const candidate = input.candidate;
+            const p = candidate.parameters;
+            const partialTakeAtr = Math.max(0.05, finite(p.partialTakeAtr, 0.45));
+            const partialFraction = Math.max(
+              0.05,
+              Math.min(0.95, finite(p.partialTakeFraction, 0.60)),
+            );
+            const noResponseBars = boundedInteger(
+              p.noResponseBars,
+              3,
+              1,
+              policy.maxHoldBars,
+            );
+            const partialTarget = entry + partialTakeAtr * signalAtr;
+            if (!(partialTarget > entry) || !(partialTarget < target)) return null;
+
+            let stop = initialStop;
+            let best = entry;
+            let worst = entry;
+            let pendingReason: string | null = null;
+            let partialTaken = false;
+            let remainingFraction = 1;
+            let realizedGrossBps = 0;
+
+            const includePoint = (price: number) => {
+              best = Math.max(best, price);
+              worst = Math.min(worst, price);
+            };
+
+            const takePartial = () => {
+              if (partialTaken) return;
+              includePoint(partialTarget);
+              const partialGrossBps = (partialTarget / entry - 1) * 10_000;
+              realizedGrossBps += partialFraction * partialGrossBps;
+              remainingFraction = 1 - partialFraction;
+              partialTaken = true;
+              if (finite(p.portfolioBreakEvenAfterPartial, 1) > 0 && remainingFraction > 0) {
+                const requiredResidualGrossBps = Math.max(
+                  0,
+                  (baseCostBps - realizedGrossBps) / remainingFraction,
+                );
+                stop = Math.max(
+                  stop,
+                  entry * (1 + requiredResidualGrossBps / 10_000),
+                );
+              }
+            };
+
+            const finish = (
+              exitIndex: number,
+              exit: number,
+              reason: string,
+              atOpen: boolean,
+            ): SimulatedTrade => {
+              includePoint(exit);
+              const residualGrossBps = (exit / entry - 1) * 10_000;
+              const grossBps = realizedGrossBps + remainingFraction * residualGrossBps;
+              const netBps = grossBps - baseCostBps;
+              const stressNetBps = grossBps - stressCostBps;
+              const mfeBps = Math.max(0, (best / entry - 1) * 10_000);
+              const maeBps = Math.max(0, (1 - worst / entry) * 10_000);
+              const holdBars = Math.max(1, exitIndex - entryIndex + (atOpen ? 0 : 1));
+              return {
+                exitIndex,
+                trade: {
+                  market: input.market,
+                  candidate: candidate.name,
+                  family: candidate.family,
+                  state: decision.state,
+                  fold: input.fold.id,
+                  split,
+                  side: candidate.side,
+                  signalTime: bars[signalIndex].time,
+                  entryTime: bars[entryIndex].time,
+                  exitTime: bars[exitIndex].time,
+                  grossBps,
+                  netBps,
+                  stressNetBps,
+                  mfeBps,
+                  maeBps,
+                  mfeCapture: mfeBps > 1e-9 ? netBps / mfeBps : null,
+                  givebackBps: Math.max(0, mfeBps - netBps),
+                  holdBars,
+                  exitReason: reason,
+                },
+              };
+            };
+
+            for (let j = entryIndex; j <= entryIndex + policy.maxHoldBars; j++) {
+              const bar = bars[j];
+              if (!bar) return null;
+              if (pendingReason) return finish(j, bar.open, pendingReason, true);
+              if (bar.open <= stop) return finish(j, bar.open, "STOP_GAP", true);
+
+              if (!partialTaken && bar.open >= target) {
+                takePartial();
+                return finish(j, target, "TARGET", true);
+              }
+              if (!partialTaken && bar.open >= partialTarget) takePartial();
+              if (partialTaken && bar.open >= target) return finish(j, target, "TARGET", true);
+              includePoint(bar.open);
+
+              if (bar.low <= stop) return finish(j, stop, "STOP", false);
+
+              if (!partialTaken && bar.high >= partialTarget) {
+                takePartial();
+                if (bar.low <= stop) return finish(j, stop, "STOP", false);
+                if (bar.high >= target) return finish(j, target, "TARGET", false);
+                includePoint(bar.high);
+                includePoint(bar.low);
+              } else {
+                if (partialTaken && bar.high >= target) {
+                  return finish(j, target, "TARGET", false);
+                }
+                includePoint(bar.high);
+                includePoint(bar.low);
+              }
+
+              const tactical = tacticalAt(j);
+              pendingReason = closeGeneratedExit(candidate, tactical, bar);
+              const heldBars = j - entryIndex + 1;
+              if (!pendingReason && !partialTaken && heldBars >= noResponseBars) {
+                pendingReason = "TIME_STOP";
+              }
+              if (!pendingReason && heldBars >= policy.maxHoldBars) {
+                pendingReason = "MAX_HOLD";
+              }
+            }
+            return null;
+          }
+
+          '''
+
+          text = simulator.read_text()
+          dispatch_marker = '''  let best = entry;
+            let worst = entry;
+            let pendingReason: string | null = null;
+          '''
+          dispatch = '''  if (candidate.family === "RANGE_CYCLE" && rangeExitV2Enabled(candidate)) {
+              return simulateRangeExitV2(
+                input,
+                signalIndex,
+                split,
+                decision,
+                tacticalAt,
+                policy,
+                baseCostBps,
+                stressCostBps,
+                entryIndex,
+                entry,
+                signalAtr,
+                target!,
+                stop,
+              );
+            }
+
+            let best = entry;
+            let worst = entry;
+            let pendingReason: string | null = null;
+          '''
+          if text.count(dispatch_marker) != 1:
+              raise SystemExit(f'simulator.ts: expected one original exit-state marker, got {text.count(dispatch_marker)}')
+          text = text.replace(dispatch_marker, dispatch, 1)
+
+          marker = 'function simulateOne(\n'
+          if text.count(marker) != 1:
+              raise SystemExit(f'simulator.ts: expected one simulateOne marker, got {text.count(marker)}')
+          if 'function simulateRangeExitV2(' in text:
+              raise SystemExit('simulator.ts: RANGE Exit V2 helper already present')
+          simulator.write_text(text.replace(marker, helper + marker, 1))
+
+          test_marker = 'RANGE Exit V2 partial take locks portfolio base-cost break-even'
+          test_text = simulator_test.read_text()
+          if test_marker in test_text:
+              raise SystemExit('simulator.test.ts: RANGE Exit V2 tests already present')
+          test_text += r'''
+
+          Deno.test("RANGE Exit V2 partial take locks portfolio base-cost break-even", () => {
+            const points = Array.from({ length: 9 }, (_, index) => bar(index));
+            points[2] = bar(2, { open: 100, high: 100.50, low: 99.80, close: 100.20 });
+            const strategy = candidate("RANGE_CYCLE", {
+              initialStopAtr: 1,
+              maxHoldBars: 4,
+              partialTakeAtr: 0.45,
+              partialTakeFraction: 0.60,
+              noResponseBars: 3,
+              portfolioBreakEvenAfterPartial: 1,
+            });
+            const trades = run(
+              points,
+              strategy,
+              dependencies("RANGE_UP_CYCLE", () => "RANGE_UP_CYCLE", 99, 102),
+            );
+            assertEquals(trades.length, 1);
+            assertEquals(trades[0].exitReason, "STOP");
+            assertAlmostEquals(trades[0].grossBps, 27, 1e-6);
+            assertAlmostEquals(trades[0].netBps, 13, 1e-6);
+          });
+
+          Deno.test("RANGE Exit V2 exits next open after three bars without partial response", () => {
+            const points = Array.from({ length: 10 }, (_, index) => bar(index));
+            points[2] = bar(2, { open: 100, high: 100.20, low: 99.80, close: 100.05 });
+            points[3] = bar(3, { open: 100.05, high: 100.30, low: 99.90, close: 100.10 });
+            points[4] = bar(4, { open: 100.10, high: 100.40, low: 99.90, close: 100.20 });
+            points[5] = bar(5, { open: 100.15, high: 100.30, low: 100.00, close: 100.10 });
+            const strategy = candidate("RANGE_CYCLE", {
+              initialStopAtr: 1,
+              maxHoldBars: 4,
+              partialTakeAtr: 0.45,
+              partialTakeFraction: 0.60,
+              noResponseBars: 3,
+              portfolioBreakEvenAfterPartial: 1,
+            });
+            const trades = run(
+              points,
+              strategy,
+              dependencies("RANGE_UP_CYCLE", () => "RANGE_UP_CYCLE", 99, 102),
+            );
+            assertEquals(trades.length, 1);
+            assertEquals(trades[0].exitReason, "TIME_STOP");
+            assertEquals(trades[0].exitTime, points[5].time);
+            assertEquals(trades[0].holdBars, 3);
+          });
+          '''
+          simulator_test.write_text(test_text)
+          PY
+
+          deno fmt \
+            supabase/functions/regime-router-v5-research/types.ts \
+            supabase/functions/regime-router-v5-research/strategies.ts \
+            supabase/functions/regime-router-v5-research/simulator.ts \
+            supabase/functions/regime-router-v5-research/simulator.test.ts
+
+      - name: Validate research-only V2
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno check supabase/functions/regime-router-v5-research/*.ts
+          deno test supabase/functions/regime-router-v5-research/*.test.ts
+          grep -Fq 'REGIME_ROUTER_V5_STRUCTURAL_TACTICAL_RANGE_EXIT_V2_15M_120D_RSWF' \
+            supabase/functions/regime-router-v5-research/types.ts
+          grep -Fq 'partialTakeAtr: 0.45' supabase/functions/regime-router-v5-research/strategies.ts
+          grep -Fq 'partialTakeFraction: 0.60' supabase/functions/regime-router-v5-research/strategies.ts
+          grep -Fq 'noResponseBars: 3' supabase/functions/regime-router-v5-research/strategies.ts
+          if find supabase/functions/regime-router-v5-research \
+            -type f -name '*.ts' ! -name '*.test.ts' -print0 \
+            | xargs -0 grep -n -E \
+              'market-autotrader|market-v2-signal|trading_settings|orders|exchange_orders|/fapi/v1/order|order-gateway|positionRisk|/fapi/v[12]/position|exchange_positions'; then
+            echo 'RANGE Exit V2 research references a production path' >&2
+            exit 1
+          fi
+
+      - name: Commit research revision
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            supabase/functions/regime-router-v5-research/types.ts \
+            supabase/functions/regime-router-v5-research/strategies.ts \
+            supabase/functions/regime-router-v5-research/simulator.ts \
+            supabase/functions/regime-router-v5-research/simulator.test.ts \
+            .github/workflows/deploy-regime-router-v5-research.yml \
+            .github/workflows/run-regime-router-v5-job.yml
+          git diff --cached --check
+          git commit -m 'research: add range exit v2 partial realization'
+          patch_sha=$(git rev-parse HEAD)
+          git push origin HEAD:main
+          printf 'patch_sha=%s\n' "$patch_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Compute immutable implementation identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_dir='supabase/functions/regime-router-v5-research'
+          manifest="$RUNNER_TEMP/v5-range-exit-v2-manifest.bin"
+          : > "$manifest"
+          while IFS= read -r -d '' source_file; do
+            file_sha256=$(sha256sum "$source_file" | awk '{print $1}')
+            printf '%s  %s\0' "$file_sha256" "$source_file" >> "$manifest"
+          done < <(
+            git ls-files -z -- "$source_dir" \
+              | grep -zE '\.ts$' \
+              | grep -zvE '\.test\.ts$' \
+              | LC_ALL=C sort -z
+          )
+          implementation_sha256=$(sha256sum "$manifest" | awk '{print $1}')
+          [[ "$implementation_sha256" =~ ^[0-9a-f]{64}$ ]]
+          printf 'implementation_sha256=%s\n' "$implementation_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Deploy stamped research-only V2
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          PATCH_SHA: ${{ steps.commit.outputs.patch_sha }}
+          IMPLEMENTATION_SHA256: ${{ steps.identity.outputs.implementation_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = 'etaajwpernzrcdrifdnw'
+          source_file='supabase/functions/regime-router-v5-research/types.ts'
+          test "$(grep -Foh '__V5_BUILD_SOURCE_SHA__' "$source_file" | wc -l)" = '1'
+          test "$(grep -Foh '__V5_IMPLEMENTATION_SHA256__' "$source_file" | wc -l)" = '1'
+          sed -i \
+            -e "s/__V5_BUILD_SOURCE_SHA__/$PATCH_SHA/" \
+            -e "s/__V5_IMPLEMENTATION_SHA256__/$IMPLEMENTATION_SHA256/" \
+            "$source_file"
+          deno check supabase/functions/regime-router-v5-research/*.ts
+          supabase functions deploy regime-router-v5-research \
+            --project-ref "$SUPABASE_PROJECT_REF" \
+            --no-verify-jwt \
+            --use-api
+          git checkout -- "$source_file"
+          test -z "$(git status --porcelain)"
+
+      - name: Create attested full-universe trigger commit
+        id: trigger
+        shell: bash
+        env:
+          PATCH_SHA: ${{ steps.commit.outputs.patch_sha }}
+          IMPLEMENTATION_SHA256: ${{ steps.identity.outputs.implementation_sha256 }}
+        run: |
+          set -euo pipefail
+          trigger='research/regime_router_v5/job-trigger.txt'
+          printf 'deploy_sha=%s\nimplementation_sha256=%s\n' \
+            "$PATCH_SHA" "$IMPLEMENTATION_SHA256" > "$trigger"
+          git add "$trigger"
+          git diff --cached --check
+          git commit -m 'research: trigger range exit v2 full-universe replay'
+          trigger_sha=$(git rev-parse HEAD)
+          test "$(git rev-parse HEAD^)" = "$PATCH_SHA"
+          git push origin HEAD:main
+          printf 'trigger_sha=%s\n' "$trigger_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch 567-market 120-day replay
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh workflow run run-regime-router-v5-job.yml
+          --repo sanbital/Trading-booooo
+          --ref main
