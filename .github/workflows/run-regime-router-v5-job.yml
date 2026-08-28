@@ -1,0 +1,1455 @@
+name: Run Regime Router V5 rolling research job
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "research/regime_router_v5/job-trigger.txt"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regime-router-v5-research
+  cancel-in-progress: false
+
+env:
+  EDGE_URL: https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/regime-router-v5-research
+  SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+  EXPECTED_CANDIDATES: "19"
+  EXPECTED_NEIGHBOR_GROUPS: "7"
+  EXPECTED_FOLDS: "4"
+  EXPECTED_SPLITS: "3"
+  BREADTH_SHARDS: "100"
+  STRUCTURAL_FINALIZE_CHUNKS: "12"
+  BACKTEST_SHARDS: "600"
+  BACKTEST_ROLLUP_SHARDS: "60"
+
+jobs:
+  start:
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      job_id: ${{ steps.start.outputs.job_id }}
+      revision: ${{ steps.meta.outputs.revision }}
+      registry_sha256: ${{ steps.meta.outputs.registry_sha256 }}
+      source_sha: ${{ steps.meta.outputs.source_sha }}
+      implementation_sha256: ${{ steps.meta.outputs.implementation_sha256 }}
+      total_markets: ${{ steps.start.outputs.total_markets }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: v2.x
+
+      - name: Initialize immutable trace identity
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$EDGE_URL" = \
+            "https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/regime-router-v5-research"
+          test -n "${SUPABASE_DB_URL:-}"
+          trigger_file='research/regime_router_v5/job-trigger.txt'
+          test -f "$trigger_file"
+          deploy_sha=$(sed -nE 's/^deploy_sha=([0-9a-f]{40})$/\1/p' "$trigger_file")
+          implementation_sha256=$(sed -nE \
+            's/^implementation_sha256=([0-9a-f]{64})$/\1/p' "$trigger_file")
+          test "$(printf '%s\n' "$deploy_sha" | sed '/^$/d' | wc -l)" = '1'
+          test "$(printf '%s\n' "$implementation_sha256" | sed '/^$/d' | wc -l)" = '1'
+          [[ "$deploy_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$implementation_sha256" =~ ^[0-9a-f]{64}$ ]]
+          parent_sha=$(git rev-parse "${GITHUB_SHA}^")
+          test "$deploy_sha" = "$parent_sha"
+          test "$(git rev-list --parents -n 1 "$GITHUB_SHA" | wc -w)" = '2'
+
+          source_dir='supabase/functions/regime-router-v5-research'
+          manifest="$RUNNER_TEMP/v5-implementation-manifest.bin"
+          : > "$manifest"
+          source_count=0
+          while IFS= read -r -d '' source_file; do
+            file_sha256=$(sha256sum "$source_file" | awk '{print $1}')
+            printf '%s  %s\0' "$file_sha256" "$source_file" >> "$manifest"
+            source_count=$((source_count + 1))
+          done < <(
+            git ls-files -z -- "$source_dir" \
+              | grep -zE '\.ts$' \
+              | grep -zvE '\.test\.ts$' \
+              | LC_ALL=C sort -z
+          )
+          test "$source_count" -gt 0
+          checkout_implementation_sha256=$(sha256sum "$manifest" | awk '{print $1}')
+          test "$checkout_implementation_sha256" = "$implementation_sha256"
+          test "$(grep -Foh '__V5_BUILD_SOURCE_SHA__' "$source_dir/types.ts" | wc -l)" = '1'
+          test "$(grep -Foh '__V5_IMPLEMENTATION_SHA256__' "$source_dir/types.ts" | wc -l)" = '1'
+          revision=$(sed -nE 's/^export const V5_REVISION = "([^"]+)";$/\1/p' \
+            supabase/functions/regime-router-v5-research/types.ts)
+          test "$(printf '%s\n' "$revision" | sed '/^$/d' | wc -l)" = "1"
+          [[ "$revision" =~ ^REGIME_ROUTER_V5_[A-Z0-9_]+$ ]]
+          registry_sha256=$(deno eval --quiet \
+            'import { CANDIDATE_REGISTRY_HASH_INPUT } from "./supabase/functions/regime-router-v5-research/strategies.ts";
+             const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(CANDIDATE_REGISTRY_HASH_INPUT));
+             console.log([...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join(""));')
+          [[ "$registry_sha256" =~ ^[0-9a-f]{64}$ ]]
+          trace_dir="$RUNNER_TEMP/v5-trace/start"
+          mkdir -p "$trace_dir"
+          printf '%s\n' "$revision" > "$trace_dir/revision.txt"
+          cp "$manifest" "$trace_dir/implementation-manifest.bin"
+          printf '%s\n' "$deploy_sha" > "$trace_dir/source-sha.txt"
+          printf '%s\n' "$implementation_sha256" > "$trace_dir/implementation-sha256.txt"
+          printf '%s\n' "$registry_sha256" > "$trace_dir/candidate-registry-sha256.txt"
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+          printf 'registry_sha256=%s\n' "$registry_sha256" >> "$GITHUB_OUTPUT"
+          printf 'source_sha=%s\n' "$deploy_sha" >> "$GITHUB_OUTPUT"
+          printf 'implementation_sha256=%s\n' "$implementation_sha256" >> "$GITHUB_OUTPUT"
+          printf 'TRACE_DIR=%s\n' "$trace_dir" >> "$GITHUB_ENV"
+
+      - name: Check V5 rolling-fold contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt --check \
+            supabase/functions/regime-router-v5-research/folds.ts \
+            supabase/functions/regime-router-v5-research/folds.test.ts
+          deno check \
+            supabase/functions/regime-router-v5-research/index.ts \
+            supabase/functions/regime-router-v5-research/ops.ts \
+            supabase/functions/regime-router-v5-research/folds.test.ts
+          deno test supabase/functions/regime-router-v5-research/*.test.ts
+
+      - name: Start a new immutable V5 job
+        id: start
+        shell: bash
+        env:
+          REVISION: ${{ steps.meta.outputs.revision }}
+          SOURCE_SHA: ${{ steps.meta.outputs.source_sha }}
+          IMPLEMENTATION_SHA256: ${{ steps.meta.outputs.implementation_sha256 }}
+        run: |
+          set -euo pipefail
+          token=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 <<'SQL'
+          select token
+          from edge_internal_tokens
+          where name = 'market-v2-research';
+          SQL
+          )
+          test "$(printf '%s\n' "$token" | sed '/^$/d' | wc -l)" = "1"
+          test -n "$token"
+
+          payload=$(jq -cn \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg implementation_sha256 "$IMPLEMENTATION_SHA256" \
+            '{action:"start_v5",source_sha:$source_sha,implementation_sha256:$implementation_sha256}')
+          printf '%s\n' "$payload" > "$TRACE_DIR/request.json"
+          http_status=$(curl --silent --show-error \
+            --connect-timeout 20 --max-time 400 \
+            --output "$TRACE_DIR/response.json" --write-out '%{http_code}' \
+            --header 'content-type: application/json' \
+            --header "x-v2-research-token: $token" \
+            --data-binary "$payload" "$EDGE_URL")
+          printf '%s\n' "$http_status" > "$TRACE_DIR/http-status.txt"
+          test "$http_status" = "200"
+          jq -e \
+            --arg revision "$REVISION" \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg implementation_sha256 "$IMPLEMENTATION_SHA256" \
+            --argjson candidates "$EXPECTED_CANDIDATES" \
+            --argjson breadth "$BREADTH_SHARDS" \
+            --argjson backtest "$BACKTEST_SHARDS" \
+            --argjson rollups "$BACKTEST_ROLLUP_SHARDS" \
+            '.ok == true and .action == "start_v5" and .revision == $revision and
+             .source_sha == $source_sha and .implementation_sha256 == $implementation_sha256 and
+             .total_markets >= 500 and .candidates == $candidates and .folds == 4 and
+             .breadth_shards == $breadth and .backtest_shards == $backtest and
+             .breadth_time_chunks == 12 and
+             .structural_finalize_chunks == 12 and
+             .backtest_rollup_shards == $rollups and
+             .checkpoints_per_rollup == 10 and
+             .lookback_days == 120 and .grid_length == 11520 and
+             .universe_policy == "CURRENT_ACTIVE_PERPETUAL_SNAPSHOT_AT_JOB_START" and
+             .includes_historically_delisted_contracts == false and .research_only == true' \
+            "$TRACE_DIR/response.json" >/dev/null
+
+          job_id=$(jq -er '.job_id' "$TRACE_DIR/response.json")
+          total_markets=$(jq -er '.total_markets' "$TRACE_DIR/response.json")
+          [[ "$job_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]]
+
+          psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 \
+            -v job="$job_id" -v revision="$REVISION" > "$TRACE_DIR/database-identity.json" <<'SQL'
+          select jsonb_build_object(
+            'id', id,
+            'revision', revision,
+            'row_status', status,
+            'venue', venue,
+            'total_markets', total_markets,
+            'config_market_count', jsonb_array_length(config->'markets'),
+            'candidate_count', (config->>'candidate_count')::int,
+            'fold_count', jsonb_array_length(config->'folds'),
+            'breadth_shards', (config->>'breadth_shard_count')::int,
+            'breadth_time_chunks', (config->>'breadth_time_chunks')::int,
+            'structural_finalize_chunks', (config->>'structural_finalize_chunk_count')::int,
+            'backtest_shards', (config->>'backtest_shard_count')::int,
+            'backtest_rollup_shards', (config->>'backtest_rollup_shard_count')::int,
+            'checkpoints_per_rollup', (config->>'checkpoints_per_rollup')::int,
+            'base_cost_bps', (config->>'base_cost_bps')::int,
+            'stress_cost_bps', (config->>'stress_cost_bps')::int,
+            'grid_length', (config->>'grid_length')::int,
+            'grid_start_matches', (config->>'grid_start_ms')::bigint =
+              (extract(epoch from window_start) * 1000)::bigint,
+            'grid_end_matches', (config->>'grid_end_ms')::bigint =
+              (extract(epoch from window_end) * 1000)::bigint,
+            'exclusive_end_matches', (config->>'window_end_exclusive_ms')::bigint =
+              (extract(epoch from window_end) * 1000)::bigint + 900000,
+            'router_revision', config->>'router_revision',
+            'candidate_registry_revision', config->>'candidate_registry_revision',
+            'candidate_registry_sha256', config->>'candidate_registry_sha256',
+            'source_sha', config->>'source_sha',
+            'implementation_sha256', config->>'implementation_sha256',
+            'universe_policy', config->>'universe_policy',
+            'universe_snapshot_at', config->>'universe_snapshot_at',
+            'includes_historically_delisted_contracts',
+              (config->>'includes_historically_delisted_contracts')::boolean,
+            'actual_bar_interval', config->>'actual_bar_interval',
+            'source', config->>'source',
+            'research_only', (config->>'research_only')::boolean,
+            'production_connected', (config->>'production_connected')::boolean,
+            'window_start', window_start,
+            'window_end', window_end,
+            'window_end_exclusive_ms', (config->>'window_end_exclusive_ms')::bigint
+          )::text
+          from v2_research_jobs
+          where id = :'job'::uuid and revision = :'revision';
+          SQL
+          jq -e \
+            --arg job "$job_id" \
+            --arg revision "$REVISION" \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg implementation_sha256 "$IMPLEMENTATION_SHA256" \
+            --arg registry_sha "${{ steps.meta.outputs.registry_sha256 }}" \
+            --argjson markets "$total_markets" \
+            --argjson candidates "$EXPECTED_CANDIDATES" \
+            '.id == $job and .revision == $revision and .venue == "binance_futures" and
+             .row_status == "PENDING" and
+             .total_markets == $markets and .config_market_count == $markets and
+             .candidate_count == $candidates and .fold_count == 4 and
+             .breadth_shards == 100 and .breadth_time_chunks == 12 and
+             .structural_finalize_chunks == 12 and
+             .backtest_shards == 600 and
+             .backtest_rollup_shards == 60 and .checkpoints_per_rollup == 10 and
+             .base_cost_bps == 14 and .stress_cost_bps == 23 and .grid_length == 11520 and
+             .grid_start_matches == true and .grid_end_matches == true and
+             .exclusive_end_matches == true and .router_revision == $revision and
+             .candidate_registry_revision == "V5_PRECOMMITTED_NEIGHBOURHOOD_20260828_A" and
+             .candidate_registry_sha256 == $registry_sha and
+             .source_sha == $source_sha and .implementation_sha256 == $implementation_sha256 and
+             .universe_policy == "CURRENT_ACTIVE_PERPETUAL_SNAPSHOT_AT_JOB_START" and
+             (.universe_snapshot_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$")) and
+             .includes_historically_delisted_contracts == false and
+             .actual_bar_interval == "15m" and
+             .source == "BINANCE_USDM_ACTIVE_PERPETUAL_FULL_UNIVERSE" and
+             .research_only == true and .production_connected == false' \
+            "$TRACE_DIR/database-identity.json" >/dev/null
+
+          sha256sum "$TRACE_DIR"/* > "$TRACE_DIR/SHA256SUMS"
+          printf 'job_id=%s\n' "$job_id" >> "$GITHUB_OUTPUT"
+          printf 'total_markets=%s\n' "$total_markets" >> "$GITHUB_OUTPUT"
+
+      - name: Upload start trace
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v5-${{ github.run_id }}-${{ github.run_attempt }}-${{ steps.start.outputs.job_id }}-start
+          path: ${{ runner.temp }}/v5-trace
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 90
+
+  breadth:
+    needs: start
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        shard: [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          65,
+          66,
+          67,
+          68,
+          69,
+          70,
+          71,
+          72,
+          73,
+          74,
+          75,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83,
+          84,
+          85,
+          86,
+          87,
+          88,
+          89,
+          90,
+          91,
+          92,
+          93,
+          94,
+          95,
+          96,
+          97,
+          98,
+          99,
+        ]
+    env:
+      JOB_ID: ${{ needs.start.outputs.job_id }}
+      REVISION: ${{ needs.start.outputs.revision }}
+      SOURCE_SHA: ${{ needs.start.outputs.source_sha }}
+      IMPLEMENTATION_SHA256: ${{ needs.start.outputs.implementation_sha256 }}
+    steps:
+      - name: Run breadth shard ${{ matrix.shard }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trace_dir="$RUNNER_TEMP/v5-trace/breadth/$(printf '%03d' '${{ matrix.shard }}')"
+          mkdir -p "$trace_dir"
+          token=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 <<'SQL'
+          select token from edge_internal_tokens where name = 'market-v2-research';
+          SQL
+          )
+          test "$(printf '%s\n' "$token" | sed '/^$/d' | wc -l)" = "1"
+          payload=$(jq -cn \
+            --arg job_id "$JOB_ID" \
+            --argjson shard_index '${{ matrix.shard }}' \
+            --argjson shard_count "$BREADTH_SHARDS" \
+            '{action:"breadth_shard_v5",job_id:$job_id,shard_index:$shard_index,shard_count:$shard_count}')
+          printf '%s\n' "$payload" > "$trace_dir/request.json"
+          status=$(curl --silent --show-error \
+            --connect-timeout 20 --max-time 400 --retry 2 --retry-all-errors \
+            --output "$trace_dir/response.json" --write-out '%{http_code}' \
+            --header 'content-type: application/json' \
+            --header "x-v2-research-token: $token" \
+            --data-binary "$payload" "$EDGE_URL")
+          printf '%s\n' "$status" > "$trace_dir/http-status.txt"
+          test "$status" = "200"
+          jq -e \
+            --arg job "$JOB_ID" --arg revision "$REVISION" \
+            --arg source_sha "$SOURCE_SHA" --arg implementation_sha256 "$IMPLEMENTATION_SHA256" \
+            --argjson shard '${{ matrix.shard }}' \
+            '.ok == true and .action == "breadth_shard_v5" and
+             .job_id == $job and .revision == $revision and
+             .source_sha == $source_sha and .implementation_sha256 == $implementation_sha256 and
+             .shard_index == $shard and .shard_count == 100 and
+             .failed_markets == [] and .partial_rows == 12' \
+            "$trace_dir/response.json" >/dev/null
+          sha256sum "$trace_dir"/* > "$trace_dir/SHA256SUMS"
+
+      - name: Upload breadth shard trace
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v5-${{ github.run_id }}-${{ github.run_attempt }}-${{ needs.start.outputs.job_id }}-breadth-${{ matrix.shard }}
+          path: ${{ runner.temp }}/v5-trace
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 90
+
+  finalize-chunks:
+    needs: [start, breadth]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        chunk: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    env:
+      JOB_ID: ${{ needs.start.outputs.job_id }}
+      REVISION: ${{ needs.start.outputs.revision }}
+      SOURCE_SHA: ${{ needs.start.outputs.source_sha }}
+      IMPLEMENTATION_SHA256: ${{ needs.start.outputs.implementation_sha256 }}
+    steps:
+      - name: Finalize structural time chunk ${{ matrix.chunk }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trace_dir="$RUNNER_TEMP/v5-trace/finalize-chunk/$(printf '%02d' '${{ matrix.chunk }}')"
+          mkdir -p "$trace_dir"
+          token=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 <<'SQL'
+          select token from edge_internal_tokens where name = 'market-v2-research';
+          SQL
+          )
+          test "$(printf '%s\n' "$token" | sed '/^$/d' | wc -l)" = "1"
+          payload=$(jq -cn \
+            --arg job_id "$JOB_ID" \
+            --argjson chunk_index '${{ matrix.chunk }}' \
+            --argjson chunk_count "$STRUCTURAL_FINALIZE_CHUNKS" \
+            '{action:"finalize_chunk_v5",job_id:$job_id,chunk_index:$chunk_index,chunk_count:$chunk_count}')
+          printf '%s\n' "$payload" > "$trace_dir/request.json"
+          status=$(curl --silent --show-error \
+            --connect-timeout 20 --max-time 400 --retry 2 --retry-all-errors \
+            --output "$trace_dir/response.json" --write-out '%{http_code}' \
+            --header 'content-type: application/json' \
+            --header "x-v2-research-token: $token" \
+            --data-binary "$payload" "$EDGE_URL")
+          printf '%s\n' "$status" > "$trace_dir/http-status.txt"
+          test "$status" = "200"
+          jq -e \
+            --arg job "$JOB_ID" --arg revision "$REVISION" \
+            --arg source_sha "$SOURCE_SHA" --arg implementation_sha256 "$IMPLEMENTATION_SHA256" \
+            --argjson chunk '${{ matrix.chunk }}' \
+            '.ok == true and .action == "finalize_chunk_v5" and
+             .job_id == $job and .revision == $revision and
+             .source_sha == $source_sha and .implementation_sha256 == $implementation_sha256 and
+             .chunk_index == $chunk and .chunk_count == 12 and
+             .partial_rows == 100 and .structural_snapshots == 960 and
+             .raw_accumulators_in_finalized_chunk == false' \
+            "$trace_dir/response.json" >/dev/null
+          sha256sum "$trace_dir"/* > "$trace_dir/SHA256SUMS"
+
+      - name: Upload finalized structural chunk trace
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v5-${{ github.run_id }}-${{ github.run_attempt }}-${{ needs.start.outputs.job_id }}-finalize-chunk-${{ matrix.chunk }}
+          path: ${{ runner.temp }}/v5-trace
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 90
+
+  finalize:
+    needs: [start, finalize-chunks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      JOB_ID: ${{ needs.start.outputs.job_id }}
+      REVISION: ${{ needs.start.outputs.revision }}
+      SOURCE_SHA: ${{ needs.start.outputs.source_sha }}
+      IMPLEMENTATION_SHA256: ${{ needs.start.outputs.implementation_sha256 }}
+    steps:
+      - name: Finalize structural breadth
+        shell: bash
+        run: |
+          set -euo pipefail
+          trace_dir="$RUNNER_TEMP/v5-trace/finalize"
+          mkdir -p "$trace_dir"
+          token=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 <<'SQL'
+          select token from edge_internal_tokens where name = 'market-v2-research';
+          SQL
+          )
+          test "$(printf '%s\n' "$token" | sed '/^$/d' | wc -l)" = "1"
+          payload=$(jq -cn --arg job_id "$JOB_ID" \
+            '{action:"finalize_v5",job_id:$job_id}')
+          printf '%s\n' "$payload" > "$trace_dir/request.json"
+          status=$(curl --silent --show-error \
+            --connect-timeout 20 --max-time 400 --retry 2 --retry-all-errors \
+            --output "$trace_dir/response.json" --write-out '%{http_code}' \
+            --header 'content-type: application/json' \
+            --header "x-v2-research-token: $token" \
+            --data-binary "$payload" "$EDGE_URL")
+          printf '%s\n' "$status" > "$trace_dir/http-status.txt"
+          test "$status" = "200"
+          jq -e --arg job "$JOB_ID" --arg revision "$REVISION" \
+            --arg source_sha "$SOURCE_SHA" --arg implementation_sha256 "$IMPLEMENTATION_SHA256" \
+            '.ok == true and .action == "finalize_v5" and
+             .job_id == $job and .revision == $revision and
+             .source_sha == $source_sha and .implementation_sha256 == $implementation_sha256 and
+             .structural_points == 11520 and .folds == 4 and
+             .finalized_chunk_rows == 12 and
+             .compact_schema == 1 and .raw_accumulators_in_job_metrics == false' \
+            "$trace_dir/response.json" >/dev/null
+          sha256sum "$trace_dir"/* > "$trace_dir/SHA256SUMS"
+
+      - name: Upload finalize trace
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v5-${{ github.run_id }}-${{ github.run_attempt }}-${{ needs.start.outputs.job_id }}-finalize
+          path: ${{ runner.temp }}/v5-trace
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 90
+
+  backtest:
+    needs: [start, finalize]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        shard: [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          65,
+          66,
+          67,
+          68,
+          69,
+          70,
+          71,
+          72,
+          73,
+          74,
+          75,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83,
+          84,
+          85,
+          86,
+          87,
+          88,
+          89,
+          90,
+          91,
+          92,
+          93,
+          94,
+          95,
+          96,
+          97,
+          98,
+          99,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109,
+          110,
+          111,
+          112,
+          113,
+          114,
+          115,
+          116,
+          117,
+          118,
+          119,
+          120,
+          121,
+          122,
+          123,
+          124,
+          125,
+          126,
+          127,
+          128,
+          129,
+          130,
+          131,
+          132,
+          133,
+          134,
+          135,
+          136,
+          137,
+          138,
+          139,
+          140,
+          141,
+          142,
+          143,
+          144,
+          145,
+          146,
+          147,
+          148,
+          149,
+          150,
+          151,
+          152,
+          153,
+          154,
+          155,
+          156,
+          157,
+          158,
+          159,
+          160,
+          161,
+          162,
+          163,
+          164,
+          165,
+          166,
+          167,
+          168,
+          169,
+          170,
+          171,
+          172,
+          173,
+          174,
+          175,
+          176,
+          177,
+          178,
+          179,
+          180,
+          181,
+          182,
+          183,
+          184,
+          185,
+          186,
+          187,
+          188,
+          189,
+          190,
+          191,
+          192,
+          193,
+          194,
+          195,
+          196,
+          197,
+          198,
+          199,
+        ]
+    env:
+      JOB_ID: ${{ needs.start.outputs.job_id }}
+      REVISION: ${{ needs.start.outputs.revision }}
+      SOURCE_SHA: ${{ needs.start.outputs.source_sha }}
+      IMPLEMENTATION_SHA256: ${{ needs.start.outputs.implementation_sha256 }}
+    steps:
+      - name: Run three all-fold logical shards from worker ${{ matrix.shard }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          token=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 <<'SQL'
+          select token from edge_internal_tokens where name = 'market-v2-research';
+          SQL
+          )
+          test "$(printf '%s\n' "$token" | sed '/^$/d' | wc -l)" = "1"
+          worker='${{ matrix.shard }}'
+          for logical_shard in "$worker" "$((worker + 200))" "$((worker + 400))"; do
+            trace_dir="$RUNNER_TEMP/v5-trace/backtest/$(printf '%03d' "$logical_shard")"
+            mkdir -p "$trace_dir"
+            payload=$(jq -cn \
+              --arg job_id "$JOB_ID" \
+              --argjson shard_index "$logical_shard" \
+              --argjson shard_count "$BACKTEST_SHARDS" \
+              '{action:"backtest_shard_v5",job_id:$job_id,shard_index:$shard_index,shard_count:$shard_count}')
+            printf '%s\n' "$payload" > "$trace_dir/request.json"
+            status=$(curl --silent --show-error \
+              --connect-timeout 20 --max-time 400 --retry 2 --retry-all-errors \
+              --output "$trace_dir/response.json" --write-out '%{http_code}' \
+              --header 'content-type: application/json' \
+              --header "x-v2-research-token: $token" \
+              --data-binary "$payload" "$EDGE_URL")
+            printf '%s\n' "$status" > "$trace_dir/http-status.txt"
+            test "$status" = "200"
+            jq -e \
+              --arg job "$JOB_ID" --arg revision "$REVISION" \
+              --arg source_sha "$SOURCE_SHA" --arg implementation_sha256 "$IMPLEMENTATION_SHA256" \
+              --argjson shard "$logical_shard" \
+              --argjson candidates "$EXPECTED_CANDIDATES" \
+              '.ok == true and .action == "backtest_shard_v5" and
+               .job_id == $job and .revision == $revision and
+               .source_sha == $source_sha and .implementation_sha256 == $implementation_sha256 and
+               .shard_index == $shard and .shard_count == 600 and
+               .failed_markets == [] and .successful_markets == .assigned_markets and
+               .result_rows == (.successful_markets * $candidates * 4 * 3)' \
+              "$trace_dir/response.json" >/dev/null
+            sha256sum "$trace_dir"/* > "$trace_dir/SHA256SUMS"
+          done
+
+      - name: Upload backtest shard trace
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v5-${{ github.run_id }}-${{ github.run_attempt }}-${{ needs.start.outputs.job_id }}-backtest-${{ matrix.shard }}
+          path: ${{ runner.temp }}/v5-trace
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 90
+
+  rollup:
+    needs: [start, backtest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        rollup: [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59,
+        ]
+    env:
+      JOB_ID: ${{ needs.start.outputs.job_id }}
+      REVISION: ${{ needs.start.outputs.revision }}
+      SOURCE_SHA: ${{ needs.start.outputs.source_sha }}
+      IMPLEMENTATION_SHA256: ${{ needs.start.outputs.implementation_sha256 }}
+    steps:
+      - name: Roll up checkpoint page ${{ matrix.rollup }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trace_dir="$RUNNER_TEMP/v5-trace/rollup/$(printf '%03d' '${{ matrix.rollup }}')"
+          mkdir -p "$trace_dir"
+          token=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 <<'SQL'
+          select token from edge_internal_tokens where name = 'market-v2-research';
+          SQL
+          )
+          test "$(printf '%s\n' "$token" | sed '/^$/d' | wc -l)" = "1"
+          payload=$(jq -cn \
+            --arg job_id "$JOB_ID" \
+            --argjson rollup_index '${{ matrix.rollup }}' \
+            --argjson rollup_count "$BACKTEST_ROLLUP_SHARDS" \
+            '{action:"backtest_rollup_v5",job_id:$job_id,rollup_index:$rollup_index,rollup_count:$rollup_count}')
+          printf '%s\n' "$payload" > "$trace_dir/request.json"
+          status=$(curl --silent --show-error \
+            --connect-timeout 20 --max-time 400 --retry 2 --retry-all-errors \
+            --output "$trace_dir/response.json" --write-out '%{http_code}' \
+            --header 'content-type: application/json' \
+            --header "x-v2-research-token: $token" \
+            --data-binary "$payload" "$EDGE_URL")
+          printf '%s\n' "$status" > "$trace_dir/http-status.txt"
+          test "$status" = "200"
+          jq -e \
+            --arg job "$JOB_ID" --arg revision "$REVISION" \
+            --arg source_sha "$SOURCE_SHA" --arg implementation_sha256 "$IMPLEMENTATION_SHA256" \
+            --argjson rollup '${{ matrix.rollup }}' \
+            --argjson candidates "$EXPECTED_CANDIDATES" \
+            '.ok == true and .action == "backtest_rollup_v5" and
+             .job_id == $job and .revision == $revision and
+             .source_sha == $source_sha and .implementation_sha256 == $implementation_sha256 and
+             .rollup_index == $rollup and .rollup_count == 60 and
+             .checkpoint_shards == 10 and .failed_markets == [] and
+             .successful_markets == .assigned_markets and
+             .aggregate_groups == ($candidates * 4 * 3)' \
+            "$trace_dir/response.json" >/dev/null
+          sha256sum "$trace_dir"/* > "$trace_dir/SHA256SUMS"
+
+      - name: Upload rollup trace
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v5-${{ github.run_id }}-${{ github.run_attempt }}-${{ needs.start.outputs.job_id }}-rollup-${{ matrix.rollup }}
+          path: ${{ runner.temp }}/v5-trace
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 90
+
+  complete-and-report:
+    needs: [start, rollup]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      JOB_ID: ${{ needs.start.outputs.job_id }}
+      REVISION: ${{ needs.start.outputs.revision }}
+      SOURCE_SHA: ${{ needs.start.outputs.source_sha }}
+      IMPLEMENTATION_SHA256: ${{ needs.start.outputs.implementation_sha256 }}
+      REGISTRY_SHA256: ${{ needs.start.outputs.registry_sha256 }}
+      TOTAL_MARKETS: ${{ needs.start.outputs.total_markets }}
+    steps:
+      - name: Download all immutable stage traces
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: v5-${{ github.run_id }}-${{ github.run_attempt }}-${{ needs.start.outputs.job_id }}-*
+          path: ${{ runner.temp }}/v5-sealed-trace
+          merge-multiple: true
+
+      - name: Assert complete job and exact metric matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          trace_dir="$RUNNER_TEMP/v5-sealed-trace/final"
+          mkdir -p "$trace_dir"
+          printf 'FINAL_TRACE_DIR=%s\n' "$trace_dir" >> "$GITHUB_ENV"
+          token=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 <<'SQL'
+          select token from edge_internal_tokens where name = 'market-v2-research';
+          SQL
+          )
+          test "$(printf '%s\n' "$token" | sed '/^$/d' | wc -l)" = "1"
+          payload=$(jq -cn --arg job_id "$JOB_ID" \
+            '{action:"status_v5",job_id:$job_id,assert_complete:true}')
+          printf '%s\n' "$payload" > "$trace_dir/status-request.json"
+          status=$(curl --silent --show-error \
+            --connect-timeout 20 --max-time 400 --retry 2 --retry-all-errors \
+            --output "$trace_dir/status-response.json" --write-out '%{http_code}' \
+            --header 'content-type: application/json' \
+            --header "x-v2-research-token: $token" \
+            --data-binary "$payload" "$EDGE_URL")
+          printf '%s\n' "$status" > "$trace_dir/status-http-status.txt"
+          test "$status" = "200"
+
+          expected_rows=$((TOTAL_MARKETS * EXPECTED_CANDIDATES * EXPECTED_FOLDS * EXPECTED_SPLITS))
+          expected_per_split=$((TOTAL_MARKETS * EXPECTED_CANDIDATES * EXPECTED_FOLDS))
+          expected_per_fold=$((TOTAL_MARKETS * EXPECTED_CANDIDATES * EXPECTED_SPLITS))
+          expected_per_candidate=$((TOTAL_MARKETS * EXPECTED_FOLDS * EXPECTED_SPLITS))
+          jq -e \
+            --arg job "$JOB_ID" --arg revision "$REVISION" \
+            --arg source_sha "$SOURCE_SHA" --arg implementation_sha256 "$IMPLEMENTATION_SHA256" \
+            --argjson markets "$TOTAL_MARKETS" \
+            --argjson candidates "$EXPECTED_CANDIDATES" \
+            --argjson rows "$expected_rows" \
+            --argjson per_split "$expected_per_split" \
+            --argjson per_fold "$expected_per_fold" \
+            --argjson per_candidate "$expected_per_candidate" \
+            '.ok == true and .complete == true and .status == "COMPLETE" and
+             .action == "status_v5" and .job_id == $job and .revision == $revision and
+             .source_sha == $source_sha and .implementation_sha256 == $implementation_sha256 and
+             .expected == {markets:$markets,candidates:$candidates,folds:4,splits:3,rows:$rows} and
+             .observed == .expected and .checkpoint_rows == 600 and
+             .checkpoint_shards == 600 and .backtest_rollup_rows == 60 and
+             .backtest_rollup_shards == 60 and
+             .checkpoint_markets == $markets and .checkpoint_failures == 0 and
+             .structural_partial_rows == 1200 and
+             .structural_finalized_chunk_rows == 12 and .mismatches == [] and
+             .split_rows == {TRAIN:$per_split,VALIDATION:$per_split,TEST:$per_split} and
+             .fold_rows == {"1":$per_fold,"2":$per_fold,"3":$per_fold,"4":$per_fold} and
+             (.candidate_rows | length) == $candidates and
+             all(.candidate_rows[]; . == $per_candidate) and
+             (.validation_reports | length) == $candidates and
+             (.full_market_fold_metrics | length) == ($candidates * 4 * 3) and
+             all(.validation_reports[]; .testUsedForSelection == false and
+               .finalHistoricalTestFold == 4) and
+             .research_only == true and .production_connected == false' \
+            "$trace_dir/status-response.json" >/dev/null
+
+          psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 \
+            -v job="$JOB_ID" -v revision="$REVISION" > "$trace_dir/job-final.json" <<'SQL'
+          select jsonb_build_object(
+            'row_count', count(*),
+            'id', min(id::text),
+            'revision', min(revision),
+            'status', min(status),
+            'total_markets', min(total_markets),
+            'processed_markets', min(processed_markets),
+            'failed_markets', min(failed_markets),
+            'config_market_count', min(jsonb_array_length(config->'markets')),
+            'candidate_count', min((config->>'candidate_count')::int),
+            'breadth_shards', min((config->>'breadth_shard_count')::int),
+            'breadth_time_chunks', min((config->>'breadth_time_chunks')::int),
+            'structural_finalize_chunks',
+              min((config->>'structural_finalize_chunk_count')::int),
+            'backtest_shards', min((config->>'backtest_shard_count')::int),
+            'backtest_rollup_shards', min((config->>'backtest_rollup_shard_count')::int),
+            'checkpoints_per_rollup', min((config->>'checkpoints_per_rollup')::int),
+            'base_cost_bps', min((config->>'base_cost_bps')::int),
+            'stress_cost_bps', min((config->>'stress_cost_bps')::int),
+            'grid_length', min((config->>'grid_length')::int),
+            'fold_count', min(jsonb_array_length(config->'folds')),
+            'router_revision', min(config->>'router_revision'),
+            'candidate_registry_revision', min(config->>'candidate_registry_revision'),
+            'candidate_registry_sha256', min(config->>'candidate_registry_sha256'),
+            'source_sha', min(config->>'source_sha'),
+            'implementation_sha256', min(config->>'implementation_sha256'),
+            'universe_policy', min(config->>'universe_policy'),
+            'universe_snapshot_at', min(config->>'universe_snapshot_at'),
+            'includes_historically_delisted_contracts',
+              bool_or((config->>'includes_historically_delisted_contracts')::boolean),
+            'actual_bar_interval', min(config->>'actual_bar_interval'),
+            'source', min(config->>'source'),
+            'research_only', bool_and((config->>'research_only')::boolean),
+            'production_connected', bool_or((config->>'production_connected')::boolean)
+          )::text
+          from v2_research_jobs
+          where id = :'job'::uuid and revision = :'revision';
+          SQL
+          jq -e \
+            --arg job "$JOB_ID" --arg revision "$REVISION" --arg source_sha "$SOURCE_SHA" \
+            --arg implementation_sha256 "$IMPLEMENTATION_SHA256" \
+            --arg registry_sha "$REGISTRY_SHA256" \
+            --argjson markets "$TOTAL_MARKETS" --argjson candidates "$EXPECTED_CANDIDATES" \
+            '.row_count == 1 and .id == $job and .revision == $revision and
+             .status == "COMPLETE" and .total_markets == $markets and
+             .processed_markets == $markets and .failed_markets == 0 and
+             .config_market_count == $markets and .candidate_count == $candidates and
+             .breadth_shards == 100 and .breadth_time_chunks == 12 and
+             .structural_finalize_chunks == 12 and
+             .backtest_shards == 600 and
+             .backtest_rollup_shards == 60 and .checkpoints_per_rollup == 10 and
+             .base_cost_bps == 14 and .stress_cost_bps == 23 and .grid_length == 11520 and
+             .fold_count == 4 and .router_revision == $revision and
+             .candidate_registry_revision == "V5_PRECOMMITTED_NEIGHBOURHOOD_20260828_A" and
+             .candidate_registry_sha256 == $registry_sha and
+             .source_sha == $source_sha and .implementation_sha256 == $implementation_sha256 and
+             .universe_policy == "CURRENT_ACTIVE_PERPETUAL_SNAPSHOT_AT_JOB_START" and
+             (.universe_snapshot_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$")) and
+             .includes_historically_delisted_contracts == false and
+             .actual_bar_interval == "15m" and
+             .source == "BINANCE_USDM_ACTIVE_PERPETUAL_FULL_UNIVERSE" and
+             .research_only == true and .production_connected == false' \
+            "$trace_dir/job-final.json" >/dev/null
+
+          psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 \
+            -v job="$JOB_ID" -v revision="$REVISION" > "$trace_dir/completeness.json" <<'SQL'
+          with candidate_rows as (
+            select
+              market,
+              parameters->>'candidate_name' as candidate,
+              parameters->>'neighbor_group' as neighbor_group,
+              parameters->>'fold' as fold_text,
+              split
+            from v2_research_market_results
+            where job_id = :'job'::uuid
+              and revision = :'revision'
+              and family in (
+                'DONCHIAN_BREAKOUT', 'MOMENTUM_ACCELERATION',
+                'COMPRESSION_BREAKOUT', 'RANGE_CYCLE', 'BEAR_REBREAK'
+              )
+          ), valid_rows as (
+            select market, candidate, neighbor_group, fold_text::int as fold, split
+            from candidate_rows
+            where candidate is not null
+              and neighbor_group is not null
+              and fold_text ~ '^[1-4]$'
+              and split in ('TRAIN', 'VALIDATION', 'TEST')
+          ), cells as (
+            select market, candidate, fold, split, count(*) as copies
+            from valid_rows
+            group by market, candidate, fold, split
+          )
+          select jsonb_build_object(
+            'candidate_rows', (select count(*) from candidate_rows),
+            'valid_rows', (select count(*) from valid_rows),
+            'markets', (select count(distinct market) from valid_rows),
+            'candidates', (select count(distinct candidate) from valid_rows),
+            'neighbor_groups', (select count(distinct neighbor_group) from valid_rows),
+            'folds', (select jsonb_agg(fold order by fold) from (select distinct fold from valid_rows) f),
+            'splits', (select jsonb_agg(split order by split) from (select distinct split from valid_rows) s),
+            'malformed_rows', (select count(*) from candidate_rows) - (select count(*) from valid_rows),
+            'non_singleton_cells', (select count(*) from cells where copies <> 1)
+          )::text;
+          SQL
+          jq -e \
+            --argjson rows "$expected_rows" --argjson markets "$TOTAL_MARKETS" \
+            --argjson candidates "$EXPECTED_CANDIDATES" \
+            --argjson neighbor_groups "$EXPECTED_NEIGHBOR_GROUPS" \
+            '.candidate_rows == $rows and .valid_rows == $rows and
+             .markets == $markets and .candidates == $candidates and
+             .neighbor_groups == $neighbor_groups and .folds == [1,2,3,4] and
+             .splits == ["TEST","TRAIN","VALIDATION"] and
+             .malformed_rows == 0 and .non_singleton_cells == 0' \
+            "$trace_dir/completeness.json" >/dev/null
+
+      - name: Write TRAIN-VALIDATION selection and locked OOS reports
+        shell: bash
+        run: |
+          set -euo pipefail
+          trace_dir="$FINAL_TRACE_DIR"
+          psql "$SUPABASE_DB_URL" -X --csv -P csv_fieldsep=$'\t' -v ON_ERROR_STOP=1 \
+            -v job="$JOB_ID" -v revision="$REVISION" > "$trace_dir/aggregate.tsv" <<'SQL'
+          select
+            parameters->>'candidate_name' as candidate,
+            parameters->>'neighbor_group' as neighbor_group,
+            (parameters->>'fold')::int as fold,
+            split,
+            count(distinct market) as markets,
+            sum(trades)::bigint as trades,
+            sum(wins)::bigint as wins,
+            round(sum(wins)::numeric / nullif(sum(trades), 0) * 100, 2) as win_rate_pct,
+            round(sum(net_bps)::numeric, 3) as net_bps,
+            round(sum(stress_net_bps)::numeric, 3) as stress_net_bps,
+            round(sum(gross_profit_bps)::numeric / nullif(sum(gross_loss_bps), 0), 5) as profit_factor,
+            round(avg(max_drawdown_bps)::numeric, 3) as average_market_mdd_bps,
+            round(max(max_drawdown_bps)::numeric, 3) as worst_market_mdd_bps,
+            round(sum(average_mfe_bps * trades)::numeric / nullif(sum(trades), 0), 3) as average_mfe_bps,
+            round(sum(average_mae_bps * trades)::numeric / nullif(sum(trades), 0), 3) as average_mae_bps,
+            round(sum(average_hold_bars * trades)::numeric / nullif(sum(trades), 0), 3) as average_hold_bars,
+            round(sum(stop_hits)::numeric / nullif(sum(trades), 0) * 100, 2) as stop_frequency_pct,
+            round(sum(time_exits)::numeric / nullif(sum(trades), 0) * 100, 2) as time_stop_frequency_pct,
+            round(
+              sum((parameters->>'mfe_capture_ratio')::double precision * trades)::numeric /
+                nullif(sum(trades) filter (where parameters->>'mfe_capture_ratio' is not null), 0),
+              5
+            ) as market_row_trade_weighted_mfe_capture_ratio_approx,
+            round(
+              sum((parameters->>'profit_giveback_bps')::double precision * trades)::numeric /
+                nullif(sum(trades), 0),
+              3
+            ) as profit_giveback_bps
+          from v2_research_market_results
+          where job_id = :'job'::uuid
+            and revision = :'revision'
+            and parameters ? 'candidate_name'
+            and (parameters->>'fold') ~ '^[1-4]$'
+            and split in ('TRAIN', 'VALIDATION', 'TEST')
+          group by candidate, neighbor_group, fold, split
+          order by candidate, fold, split;
+          SQL
+
+          psql "$SUPABASE_DB_URL" -X --csv -P csv_fieldsep=$'\t' -v ON_ERROR_STOP=1 \
+            -v job="$JOB_ID" -v revision="$REVISION" > "$trace_dir/selection-train-validation-only.tsv" <<'SQL'
+          with selection_rows as (
+            select
+              parameters->>'candidate_name' as candidate,
+              parameters->>'neighbor_group' as neighbor_group,
+              (parameters->>'fold')::int as fold,
+              split,
+              sum(trades)::bigint as trades,
+              sum(stress_net_bps)::double precision as stress,
+              sum(gross_profit_bps)::double precision as gross_profit,
+              sum(gross_loss_bps)::double precision as gross_loss
+            from v2_research_market_results
+            where job_id = :'job'::uuid
+              and revision = :'revision'
+              and parameters ? 'candidate_name'
+              and (parameters->>'fold') ~ '^[1-4]$'
+              and split in ('TRAIN', 'VALIDATION')
+            group by candidate, neighbor_group, fold, split
+          ), pivoted as (
+            select
+              candidate, neighbor_group, fold,
+              max(trades) filter (where split = 'TRAIN') as train_trades,
+              max(stress) filter (where split = 'TRAIN') as train_stress,
+              max(gross_profit / nullif(gross_loss, 0)) filter (where split = 'TRAIN') as train_pf,
+              max(trades) filter (where split = 'VALIDATION') as validation_trades,
+              max(stress) filter (where split = 'VALIDATION') as validation_stress,
+              max(gross_profit / nullif(gross_loss, 0)) filter (where split = 'VALIDATION') as validation_pf
+            from selection_rows
+            group by candidate, neighbor_group, fold
+          ), base_gate as (
+            select *,
+              coalesce(train_trades >= 40 and train_pf > 1 and train_stress > 0, false) as train_pass,
+              coalesce(validation_trades >= 15 and validation_pf > 1 and validation_stress > 0, false) as validation_pass,
+              coalesce(
+                train_trades >= 40 and train_pf > 1 and train_stress > 0 and
+                validation_trades >= 15 and validation_pf > 1 and validation_stress > 0,
+                false
+              ) as base_pass
+            from pivoted
+          ), neighborhood as (
+            select neighbor_group, fold, count(*) as candidates,
+              count(*) filter (where base_pass) as passes
+            from base_gate
+            group by neighbor_group, fold
+          ), fold_gate as (
+            select b.*,
+              n.candidates as neighborhood_candidates,
+              n.passes - case when b.base_pass then 1 else 0 end as other_passing_neighbors,
+              n.passes::double precision / nullif(n.candidates, 0) as neighborhood_pass_rate,
+              n.candidates >= 2 and
+                n.passes - case when b.base_pass then 1 else 0 end >= 1 and
+                n.passes::double precision / nullif(n.candidates, 0) >= 0.5
+                as neighborhood_robust
+            from base_gate b
+            join neighborhood n using (neighbor_group, fold)
+          )
+          select
+            candidate,
+            neighbor_group,
+            count(*) = 4 as all_four_folds_present,
+            bool_and(train_pass and validation_pass and neighborhood_robust) as selection_eligible,
+            round(min(least(
+              train_stress / nullif(train_trades, 0),
+              validation_stress / nullif(validation_trades, 0)
+            ))::numeric, 6) as selection_score_train_validation_only,
+            jsonb_agg(jsonb_build_object(
+              'fold', fold,
+              'train_trades', train_trades,
+              'train_pf', train_pf,
+              'train_stress', train_stress,
+              'train_pass', train_pass,
+              'validation_trades', validation_trades,
+              'validation_pf', validation_pf,
+              'validation_stress', validation_stress,
+              'validation_pass', validation_pass,
+              'neighborhood_candidates', neighborhood_candidates,
+              'other_passing_neighbors', other_passing_neighbors,
+              'neighborhood_pass_rate', neighborhood_pass_rate,
+              'neighborhood_robust', neighborhood_robust
+            ) order by fold) as fold_gates,
+            false as test_used_for_selection
+          from fold_gate
+          group by candidate, neighbor_group
+          order by selection_eligible desc, selection_score_train_validation_only desc, candidate;
+          SQL
+
+          psql "$SUPABASE_DB_URL" -X --csv -P csv_fieldsep=$'\t' -v ON_ERROR_STOP=1 \
+            -v job="$JOB_ID" -v revision="$REVISION" > "$trace_dir/historical-test-research-only.tsv" <<'SQL'
+          select
+            parameters->>'candidate_name' as candidate,
+            parameters->>'neighbor_group' as neighbor_group,
+            (parameters->>'fold')::int as fold,
+            sum(trades)::bigint as test_trades,
+            round(sum(stress_net_bps)::numeric, 3) as test_stress_net_bps,
+            round(sum(gross_profit_bps)::numeric / nullif(sum(gross_loss_bps), 0), 5) as test_profit_factor,
+            sum(trades) >= 15 as test_sample_sufficient,
+            coalesce(
+              sum(trades) >= 15 and
+              sum(gross_profit_bps) / nullif(sum(gross_loss_bps), 0) > 1 and
+              sum(stress_net_bps) > 0,
+              false
+            ) as historical_test_pass,
+            case
+              when (parameters->>'fold')::int = 4
+                then 'RESEARCH_ONLY_FINAL_HISTORICAL_TEST_NOT_USED_FOR_SELECTION'
+              else 'DIAGNOSTIC_TEST_OVERLAPS_LATER_VALIDATION_NOT_USED_FOR_SELECTION'
+            end as test_role,
+            (parameters->>'fold')::int = 4 as independent_final_oos
+          from v2_research_market_results
+          where job_id = :'job'::uuid
+            and revision = :'revision'
+            and parameters ? 'candidate_name'
+            and (parameters->>'fold') ~ '^[1-4]$'
+            and split = 'TEST'
+          group by candidate, neighbor_group, fold
+          order by candidate, fold;
+          SQL
+
+          TRACE_DIR="$trace_dir" python3 - <<'PY'
+          import csv
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["TRACE_DIR"])
+          status = json.loads((root / "status-response.json").read_text(encoding="utf-8"))
+          with (root / "selection-train-validation-only.tsv").open(newline="", encoding="utf-8") as f:
+              selection = {
+                  row["candidate"]: row["selection_eligible"].lower() in {"t", "true"}
+                  for row in csv.DictReader(f, delimiter="\t")
+              }
+
+          fields = [
+              "candidate", "neighbor_group", "selection_eligible_train_validation",
+              "selection_score_train_validation_only", "fold4_historical_test_pass",
+              "selection_failures", "fold4_test_failures", "concentration_pass",
+              "concentration_failures", "risk_quality_pass",
+              "risk_quality_failures", "unique_occurrence_pass",
+              "unique_occurrence_failures", "production_review_eligible",
+              "all_production_review_failures", "test_used_for_selection",
+              "eligibility_source", "label",
+          ]
+          with (root / "production-review-fold4.tsv").open("w", newline="", encoding="utf-8") as f:
+              writer = csv.DictWriter(f, fieldnames=fields, delimiter="\t")
+              writer.writeheader()
+              for report in status["validation_reports"]:
+                  candidate = report["candidate"]
+                  selected = bool(report["selectionEligible"])
+                  if selection.get(candidate) != selected:
+                      raise SystemExit(f"selection SQL/status disagreement for {candidate}")
+                  final_gate = next(
+                      gate for gate in report["foldGates"]
+                      if gate["fold"] == report["finalHistoricalTestFold"]
+                  )
+                  selection_failures = [
+                      f"F{gate['fold']}_{failure}"
+                      for gate in report["foldGates"]
+                      for failure in gate["selectionFailures"]
+                  ]
+                  final_test_failures = final_gate["historicalTestFailures"]
+                  concentration_failures = (
+                      [] if report["concentrationPass"] else ["CONCENTRATION_GATE_FAILED"]
+                  )
+                  all_failures = (
+                      selection_failures + final_test_failures + concentration_failures +
+                      report["riskQualityFailures"] + report["uniqueOccurrenceFailures"]
+                  )
+                  writer.writerow({
+                      "candidate": candidate,
+                      "neighbor_group": report["neighborGroup"],
+                      "selection_eligible_train_validation": str(selected).lower(),
+                      "selection_score_train_validation_only": report["selectionScore"],
+                      "fold4_historical_test_pass": str(report["historicalTestPass"]).lower(),
+                      "selection_failures": ";".join(selection_failures),
+                      "fold4_test_failures": ";".join(final_test_failures),
+                      "concentration_pass": str(report["concentrationPass"]).lower(),
+                      "concentration_failures": ";".join(concentration_failures),
+                      "risk_quality_pass": str(report["riskQualityPass"]).lower(),
+                      "risk_quality_failures": ";".join(report["riskQualityFailures"]),
+                      "unique_occurrence_pass": str(report["uniqueOccurrencePass"]).lower(),
+                      "unique_occurrence_failures": ";".join(report["uniqueOccurrenceFailures"]),
+                      "production_review_eligible": str(report["productionReviewEligible"]).lower(),
+                      "all_production_review_failures": ";".join(all_failures),
+                      "test_used_for_selection": str(report["testUsedForSelection"]).lower(),
+                      "eligibility_source": "STATUS_V5_VALIDATION_REPORTS",
+                      "label": "REVIEW_ELIGIBLE_RESEARCH_ONLY_NOT_PRODUCTION_APPROVAL",
+                  })
+
+          metric_fields = [
+              "candidate", "family", "state", "neighbor_group", "fold", "split",
+              "trades", "wins", "losses", "win_rate", "gross_pnl_bps", "net_pnl_bps",
+              "stress_net_pnl_bps", "profit_factor", "average_return_bps",
+              "equal_notional_signal_mdd_bps", "allocation_assumption", "average_mfe_bps",
+              "average_mae_bps", "mfe_capture_ratio", "profit_giveback_bps",
+              "average_hold_bars", "stop_hit_rate", "target_hit_rate", "time_stop_rate",
+              "max_hold_count", "other_exit_count", "unique_signal_days", "unique_exit_bars",
+              "regime_frequency",
+              "profitable_time_chunks", "top_positive_time_chunk_share", "concentration_pass",
+              "exit_reason_counts_json", "time_chunk_net_bps_json",
+          ]
+          with (root / "full-market-equal-notional-metrics.tsv").open(
+              "w", newline="", encoding="utf-8"
+          ) as f:
+              writer = csv.DictWriter(f, fieldnames=metric_fields, delimiter="\t")
+              writer.writeheader()
+              for metric in status["full_market_fold_metrics"]:
+                  row = {key: metric.get(key) for key in metric_fields}
+                  row["exit_reason_counts_json"] = json.dumps(
+                      metric["exit_reason_counts"], sort_keys=True, separators=(",", ":")
+                  )
+                  row["time_chunk_net_bps_json"] = json.dumps(
+                      metric["time_chunk_net_bps"], separators=(",", ":")
+                  )
+                  writer.writerow(row)
+
+          (root / "full-market-metric-method.json").write_text(
+              json.dumps({
+                  "source": "status_v5.full_market_fold_metrics",
+                  "mdd_field": "equal_notional_signal_mdd_bps",
+                  "mdd_method": "EXIT_TIME_NET_DELTA_MERGE_ACROSS_ALL_MARKETS",
+                  "allocation_assumption":
+                      "EQUAL_NOTIONAL_PER_SIGNAL_NO_CAPITAL_OR_CONCURRENCY_CAP",
+                  "is_portfolio_capital_curve_mdd": False,
+                  "capture_field": "mfe_capture_ratio",
+              }, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          jq -n \
+            --arg source_sha "$SOURCE_SHA" --arg implementation_sha256 "$IMPLEMENTATION_SHA256" \
+            --arg revision "$REVISION" --arg job_id "$JOB_ID" \
+            --argjson markets "$TOTAL_MARKETS" --argjson candidates "$EXPECTED_CANDIDATES" \
+            '{source_sha:$source_sha,implementation_sha256:$implementation_sha256,
+              revision:$revision,job_id:$job_id,research_only:true,
+              production_deploy:false,selection_uses_test:false,
+              universe:{policy:"CURRENT_ACTIVE_PERPETUAL_SNAPSHOT_AT_JOB_START",
+                includes_historically_delisted_contracts:false,
+                historical_scope:"CURRENT_SURVIVOR_UNIVERSE_NOT_POINT_IN_TIME_DELISTED_UNIVERSE"},
+              expected:{markets:$markets,candidates:$candidates,folds:4,splits:3},
+              fold_policy_days:{window:120,offset:15,train:45,embargo1:1,validation:14,embargo2:1,test:14},
+              selection_gates:{train_trades_min:40,validation_trades_min:15,
+                train_and_validation_pf_strictly_above:1,stress_net_bps_strictly_above:0,
+                neighborhood_min_candidates:2,neighborhood_min_other_passes:1,
+                neighborhood_min_pass_rate:0.5},
+              final_oos:{fold:4,test_trades_min:15,pf_strictly_above:1,
+                stress_net_bps_strictly_above:0,
+                label:"RESEARCH_ONLY_FINAL_HISTORICAL_TEST_NOT_USED_FOR_SELECTION"}}' \
+            > "$trace_dir/policy.json"
+
+      - name: Seal combined trace manifest
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/v5-sealed-trace"
+          mkdir -p "$root"
+          find "$root" -type f ! -name SHA256SUMS.sealed -print0 \
+            | sort -z \
+            | xargs -0 -r sha256sum > "$root/SHA256SUMS.sealed"
+
+      - name: Upload sealed V5 research trace
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v5-${{ github.run_id }}-${{ github.run_attempt }}-${{ needs.start.outputs.job_id }}-sealed
+          path: ${{ runner.temp }}/v5-sealed-trace
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 90

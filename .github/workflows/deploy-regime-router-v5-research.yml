@@ -1,0 +1,126 @@
+name: Deploy isolated Regime Router V5 research
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "supabase/functions/regime-router-v5-research/**"
+      - ".github/workflows/deploy-regime-router-v5-research.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regime-router-v5-research
+  cancel-in-progress: false
+
+jobs:
+  validate-deploy:
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: v2.x
+
+      - name: Validate isolated research function
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f supabase/functions/regime-router-v5-research/index.ts
+          deno fmt --check supabase/functions/regime-router-v5-research
+          deno check supabase/functions/regime-router-v5-research/*.ts
+          deno test supabase/functions/regime-router-v5-research/*.test.ts
+          grep -q 'REGIME_ROUTER_V5_STRUCTURAL_TACTICAL_15M_120D_RSWF' \
+            supabase/functions/regime-router-v5-research/types.ts
+          if find supabase/functions/regime-router-v5-research \
+            -type f -name '*.ts' ! -name '*.test.ts' -print0 \
+            | xargs -0 grep -n -E \
+              'market-autotrader|market-v2-signal|trading_settings|orders|exchange_orders|/fapi/v1/order|order-gateway|positionRisk|/fapi/v[12]/position|exchange_positions'; then
+            echo 'V5 research function references a production path' >&2
+            exit 1
+          fi
+
+      - name: Build and stamp immutable runtime identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_dir='supabase/functions/regime-router-v5-research'
+          manifest="$RUNNER_TEMP/v5-implementation-manifest.bin"
+          : > "$manifest"
+          source_count=0
+          while IFS= read -r -d '' source_file; do
+            file_sha256=$(sha256sum "$source_file" | awk '{print $1}')
+            printf '%s  %s\0' "$file_sha256" "$source_file" >> "$manifest"
+            source_count=$((source_count + 1))
+          done < <(
+            git ls-files -z -- "$source_dir" \
+              | grep -zE '\.ts$' \
+              | grep -zvE '\.test\.ts$' \
+              | LC_ALL=C sort -z
+          )
+          test "$source_count" -gt 0
+          implementation_sha256=$(sha256sum "$manifest" | awk '{print $1}')
+          [[ "$implementation_sha256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(grep -Foh '__V5_BUILD_SOURCE_SHA__' "$source_dir/types.ts" | wc -l)" = '1'
+          test "$(grep -Foh '__V5_IMPLEMENTATION_SHA256__' "$source_dir/types.ts" | wc -l)" = '1'
+          sed -i \
+            -e "s/__V5_BUILD_SOURCE_SHA__/$GITHUB_SHA/" \
+            -e "s/__V5_IMPLEMENTATION_SHA256__/$implementation_sha256/" \
+            "$source_dir/types.ts"
+          ! grep -R -F -n --include='*.ts' --exclude='*.test.ts' \
+            -e '__V5_BUILD_SOURCE_SHA__' \
+            -e '__V5_IMPLEMENTATION_SHA256__' \
+            "$source_dir"
+          grep -Fq "export const V5_BUILD_SOURCE_SHA = \"$GITHUB_SHA\";" "$source_dir/types.ts"
+          grep -Fq \
+            "export const V5_IMPLEMENTATION_SHA256 = \"$implementation_sha256\";" \
+            "$source_dir/types.ts"
+          deno check "$source_dir"/*.ts
+          attestation_dir="$RUNNER_TEMP/v5-deploy-attestation"
+          mkdir -p "$attestation_dir"
+          cp "$manifest" "$attestation_dir/implementation-manifest.bin"
+          printf '%s\n' "$GITHUB_SHA" > "$attestation_dir/source-sha.txt"
+          printf '%s\n' "$implementation_sha256" > "$attestation_dir/implementation-sha256.txt"
+          sha256sum "$attestation_dir"/* > "$attestation_dir/SHA256SUMS"
+          printf 'implementation_sha256=%s\n' "$implementation_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Deploy research-only Edge Function
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_PROJECT_REF:-}"
+          test "$SUPABASE_PROJECT_REF" = 'etaajwpernzrcdrifdnw'
+          supabase functions deploy regime-router-v5-research \
+            --project-ref "$SUPABASE_PROJECT_REF" \
+            --no-verify-jwt \
+            --use-api
+
+      - name: Upload deployment attestation
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v5-deploy-${{ github.sha }}-${{ steps.identity.outputs.implementation_sha256 }}
+          path: ${{ runner.temp }}/v5-deploy-attestation
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 90
