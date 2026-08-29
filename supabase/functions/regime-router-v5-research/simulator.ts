@@ -153,8 +153,11 @@ function assertInput(input: SimulationInput, requireTacticalInputs: boolean): vo
   if (input.candidate.family === "BEAR_REBREAK" && input.candidate.side !== "SHORT") {
     throw new Error("BEAR_REBREAK candidates must be SHORT");
   }
-  if (input.candidate.family !== "BEAR_REBREAK" && input.candidate.side !== "LONG") {
-    throw new Error("BULL and RANGE candidates must be LONG");
+  if (
+    input.candidate.family !== "BEAR_REBREAK" && input.candidate.family !== "RANGE_CYCLE" &&
+    input.candidate.side !== "LONG"
+  ) {
+    throw new Error("BULL candidates must be LONG");
   }
 }
 
@@ -182,7 +185,9 @@ function updatedStop(
 
   if (candidate.family === "RANGE_CYCLE") {
     if (r >= finite(p.profitLockAtR, 0.55)) {
-      stop = Math.max(stop, entry + finite(p.profitLockR, 0.08) * risk);
+      stop = candidate.side === "LONG"
+        ? Math.max(stop, entry + finite(p.profitLockR, 0.08) * risk)
+        : Math.min(stop, entry - finite(p.profitLockR, 0.08) * risk);
     }
     return stop;
   }
@@ -234,12 +239,13 @@ function closeGeneratedExit(
   }
   if (candidate.family === "RANGE_CYCLE") {
     if (tactical.structural !== "RANGE") return "REGIME_EXIT";
-    // UP_CYCLE is a cross event, not a state that must repeat every bar. A
-    // subsequent NEUTRAL bar therefore remains held; only an observed rollover
-    // (or deceleration if a classifier emits it) closes the cycle early.
-    return tactical.phase === "ROLL_OVER" || tactical.phase === "DECELERATING"
-      ? "CYCLE_EXIT"
-      : null;
+    if (candidate.side === "LONG") {
+      return tactical.phase === "ROLL_OVER" || tactical.phase === "DOWN_CYCLE" ||
+          tactical.phase === "DECELERATING"
+        ? "CYCLE_EXIT"
+        : null;
+    }
+    return tactical.phase === "UP_CYCLE" || tactical.phase === "REBOUND" ? "CYCLE_EXIT" : null;
   }
   if (
     tactical.structural !== "BEAR" || tactical.state === "BEAR_REBOUND" ||
@@ -259,9 +265,11 @@ function targetFor(
 ): number | null {
   const hinted = Number(decision.targetHint);
   if (candidate.family === "RANGE_CYCLE") {
-    // A next-open gap through the mean-reversion anchor destroys the location
-    // edge. Do not silently replace that anchor with a newly invented 1R target.
-    return Number.isFinite(hinted) && hinted > entry ? hinted : null;
+    // A next-open gap through the mean-reversion anchor destroys the location edge.
+    if (!Number.isFinite(hinted)) return null;
+    return candidate.side === "LONG"
+      ? (hinted > entry ? hinted : null)
+      : (hinted < entry ? hinted : null);
   }
   if (policy.targetR === null) return null;
   if (candidate.family === "BEAR_REBREAK" && Number.isFinite(hinted)) {
@@ -313,19 +321,21 @@ function simulateRangeExitV2(
   const bars = input.bars;
   const candidate = input.candidate;
   const p = candidate.parameters;
-  const partialTakeAtr = Math.max(0.05, finite(p.partialTakeAtr, 0.45));
-  const partialFraction = Math.max(
-    0.05,
-    Math.min(0.95, finite(p.partialTakeFraction, 0.60)),
-  );
-  const noResponseBars = boundedInteger(
-    p.noResponseBars,
-    3,
-    1,
-    policy.maxHoldBars,
-  );
-  const partialTarget = entry + partialTakeAtr * signalAtr;
-  if (!(partialTarget > entry) || !(partialTarget < target)) return null;
+  const isLong = candidate.side === "LONG";
+  const partialTakeAtr = Math.max(0.05, finite(p.partialTakeAtr, 0.25));
+  const partialFraction = Math.max(0.05, Math.min(0.95, finite(p.partialTakeFraction, 0.70)));
+  const noResponseBars = boundedInteger(p.noResponseBars, 2, 1, policy.maxHoldBars);
+  const breakBuffer = Math.max(0, finite(p.rangeBreakBufferAtr, 0.10));
+  const partialTarget = isLong
+    ? entry + partialTakeAtr * signalAtr
+    : entry - partialTakeAtr * signalAtr;
+  if (
+    isLong
+      ? !(partialTarget > entry && partialTarget < target)
+      : !(partialTarget < entry && partialTarget > target)
+  ) {
+    return null;
+  }
 
   let stop = initialStop;
   let best = entry;
@@ -336,14 +346,22 @@ function simulateRangeExitV2(
   let realizedGrossBps = 0;
 
   const includePoint = (price: number) => {
-    best = Math.max(best, price);
-    worst = Math.min(worst, price);
+    if (isLong) {
+      best = Math.max(best, price);
+      worst = Math.min(worst, price);
+    } else {
+      best = Math.min(best, price);
+      worst = Math.max(worst, price);
+    }
   };
+
+  const grossAt = (price: number) =>
+    isLong ? (price / entry - 1) * 10_000 : (entry - price) / entry * 10_000;
 
   const takePartial = () => {
     if (partialTaken) return;
     includePoint(partialTarget);
-    const partialGrossBps = (partialTarget / entry - 1) * 10_000;
+    const partialGrossBps = grossAt(partialTarget);
     realizedGrossBps += partialFraction * partialGrossBps;
     remainingFraction = 1 - partialFraction;
     partialTaken = true;
@@ -352,10 +370,10 @@ function simulateRangeExitV2(
         0,
         (baseCostBps - realizedGrossBps) / remainingFraction,
       );
-      stop = Math.max(
-        stop,
-        entry * (1 + requiredResidualGrossBps / 10_000),
-      );
+      const protectedStop = isLong
+        ? entry * (1 + requiredResidualGrossBps / 10_000)
+        : entry * (1 - requiredResidualGrossBps / 10_000);
+      stop = isLong ? Math.max(stop, protectedStop) : Math.min(stop, protectedStop);
     }
   };
 
@@ -366,12 +384,16 @@ function simulateRangeExitV2(
     atOpen: boolean,
   ): SimulatedTrade => {
     includePoint(exit);
-    const residualGrossBps = (exit / entry - 1) * 10_000;
+    const residualGrossBps = grossAt(exit);
     const grossBps = realizedGrossBps + remainingFraction * residualGrossBps;
     const netBps = grossBps - baseCostBps;
     const stressNetBps = grossBps - stressCostBps;
-    const mfeBps = Math.max(0, (best / entry - 1) * 10_000);
-    const maeBps = Math.max(0, (1 - worst / entry) * 10_000);
+    const mfeBps = isLong
+      ? Math.max(0, (best / entry - 1) * 10_000)
+      : Math.max(0, (entry - best) / entry * 10_000);
+    const maeBps = isLong
+      ? Math.max(0, (1 - worst / entry) * 10_000)
+      : Math.max(0, (worst / entry - 1) * 10_000);
     const holdBars = Math.max(1, exitIndex - entryIndex + (atOpen ? 0 : 1));
     return {
       exitIndex,
@@ -403,41 +425,45 @@ function simulateRangeExitV2(
     const bar = bars[j];
     if (!bar) return null;
     if (pendingReason) return finish(j, bar.open, pendingReason, true);
-    if (bar.open <= stop) return finish(j, bar.open, "STOP_GAP", true);
 
-    if (!partialTaken && bar.open >= target) {
+    const stopGap = isLong ? bar.open <= stop : bar.open >= stop;
+    if (stopGap) return finish(j, bar.open, "STOP_GAP", true);
+    const targetGap = isLong ? bar.open >= target : bar.open <= target;
+    const partialGap = isLong ? bar.open >= partialTarget : bar.open <= partialTarget;
+    if (!partialTaken && targetGap) {
       takePartial();
       return finish(j, target, "TARGET", true);
     }
-    if (!partialTaken && bar.open >= partialTarget) takePartial();
-    if (partialTaken && bar.open >= target) return finish(j, target, "TARGET", true);
+    if (!partialTaken && partialGap) takePartial();
+    if (partialTaken && targetGap) return finish(j, target, "TARGET", true);
     includePoint(bar.open);
 
-    if (bar.low <= stop) return finish(j, stop, "STOP", false);
+    const stopTouched = isLong ? bar.low <= stop : bar.high >= stop;
+    if (stopTouched) return finish(j, stop, "STOP", false);
 
-    if (!partialTaken && bar.high >= partialTarget) {
+    const partialTouched = isLong ? bar.high >= partialTarget : bar.low <= partialTarget;
+    if (!partialTaken && partialTouched) {
       takePartial();
-      if (bar.low <= stop) return finish(j, stop, "STOP", false);
-      if (bar.high >= target) return finish(j, target, "TARGET", false);
-      includePoint(bar.high);
-      includePoint(bar.low);
-    } else {
-      if (partialTaken && bar.high >= target) {
-        return finish(j, target, "TARGET", false);
-      }
-      includePoint(bar.high);
-      includePoint(bar.low);
+      const protectedStopTouched = isLong ? bar.low <= stop : bar.high >= stop;
+      if (protectedStopTouched) return finish(j, stop, "STOP", false);
+      const targetTouchedAfterPartial = isLong ? bar.high >= target : bar.low <= target;
+      if (targetTouchedAfterPartial) return finish(j, target, "TARGET", false);
+    } else if (partialTaken) {
+      const targetTouched = isLong ? bar.high >= target : bar.low <= target;
+      if (targetTouched) return finish(j, target, "TARGET", false);
     }
+    includePoint(bar.high);
+    includePoint(bar.low);
 
-    const tactical = tacticalAt(j);
-    pendingReason = closeGeneratedExit(candidate, tactical, bar);
+    const rangeBroken = isLong
+      ? Number.isFinite(bar.low20Prev) && bar.close < bar.low20Prev - breakBuffer * bar.atr
+      : Number.isFinite(bar.high20Prev) && bar.close > bar.high20Prev + breakBuffer * bar.atr;
+    pendingReason = rangeBroken
+      ? "RANGE_BREAK_EXIT"
+      : closeGeneratedExit(candidate, tacticalAt(j), bar);
     const heldBars = j - entryIndex + 1;
-    if (!pendingReason && !partialTaken && heldBars >= noResponseBars) {
-      pendingReason = "TIME_STOP";
-    }
-    if (!pendingReason && heldBars >= policy.maxHoldBars) {
-      pendingReason = "MAX_HOLD";
-    }
+    if (!pendingReason && !partialTaken && heldBars >= noResponseBars) pendingReason = "TIME_STOP";
+    if (!pendingReason && heldBars >= policy.maxHoldBars) pendingReason = "MAX_HOLD";
   }
   return null;
 }
@@ -484,8 +510,8 @@ function simulateOne(
   if (candidate.family === "RANGE_CYCLE" && target === null) return null;
   const signalBar = bars[signalIndex];
   if (candidate.family === "RANGE_CYCLE") {
-    const targetRoom = target! - entry;
-    const targetBps = (target! / entry - 1) * 10_000;
+    const targetRoom = candidate.side === "LONG" ? target! - entry : entry - target!;
+    const targetBps = targetRoom / entry * 10_000;
     if (
       targetRoom < finite(candidate.parameters.minTargetAtr, 0.75) * signalAtr ||
       targetBps < baseCostBps * finite(candidate.parameters.costMultiple, 4)

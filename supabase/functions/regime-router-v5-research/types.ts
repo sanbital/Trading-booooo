@@ -1,4 +1,4 @@
-export const V5_REVISION = "REGIME_ROUTER_V5_STRUCTURAL_TACTICAL_RANGE_EXIT_V2_15M_120D_RSWF";
+export const V5_REVISION = "REGIME_ROUTER_V6_RANGE_EDGE_SCORE_15M_120D_RSWF";
 // Deployment replaces these two exact placeholders in its ephemeral build
 // artifact.  A checkout is deliberately not runnable with the default runtime
 // identity, so an unstamped or partially stamped deployment fails closed.
@@ -17,6 +17,7 @@ export type TacticalPhase =
   | "DECELERATING"
   | "PULLBACK"
   | "UP_CYCLE"
+  | "DOWN_CYCLE"
   | "REBOUND"
   | "ROLL_OVER"
   | "REBREAK"
@@ -25,6 +26,7 @@ export type RouterState =
   | "BULL_TREND"
   | "BULL_DECELERATING"
   | "RANGE_UP_CYCLE"
+  | "RANGE_DOWN_CYCLE"
   | "BEAR_REBOUND"
   | "BEAR_REBREAK"
   | "NO_TRADE";

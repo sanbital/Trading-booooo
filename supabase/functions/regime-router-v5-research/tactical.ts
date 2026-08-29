@@ -30,6 +30,7 @@ export function mapRouterState(structural: StructuralRegime, phase: TacticalPhas
   if (structural === "BULL" && phase === "ACCELERATING") return "BULL_TREND";
   if (structural === "BULL" && phase === "DECELERATING") return "BULL_DECELERATING";
   if (structural === "RANGE" && phase === "UP_CYCLE") return "RANGE_UP_CYCLE";
+  if (structural === "RANGE" && phase === "DOWN_CYCLE") return "RANGE_DOWN_CYCLE";
   if (structural === "BEAR" && phase === "REBOUND") return "BEAR_REBOUND";
   if (structural === "BEAR" && phase === "REBREAK") return "BEAR_REBREAK";
   return "NO_TRADE";
@@ -51,6 +52,8 @@ function fiveMinuteSupports(phase: TacticalPhase, point: FiveMinutePoint): boole
       return point.rsiSlope < 0 && point.stochK < point.stochD;
     case "UP_CYCLE":
       return point.rsiSlope > 0 && point.stochK > point.stochD && point.ret3Atr >= 0;
+    case "DOWN_CYCLE":
+      return point.rsiSlope < 0 && point.stochK < point.stochD && point.ret3Atr <= 0;
     case "REBOUND":
       return point.ret3Atr > 0 && point.rsiSlope > 0 && point.stochK >= point.stochD;
     case "ROLL_OVER":
@@ -138,29 +141,48 @@ function classifyRange(
   breadthVelocity: number,
   reasons: string[],
 ): TacticalPhase {
-  const stochasticCross = previous.stochK <= previous.stochD && current.stochK > current.stochD;
-  const dynamicWashout = previous.stochPercentile7d <= 0.20 || current.stochPercentile7d <= 0.25;
+  const emaSeparationAtr = current.atr > 0
+    ? Math.abs(current.ema20 - current.ema50) / current.atr
+    : Number.POSITIVE_INFINITY;
+  const trendless = current.adx <= 25 && emaSeparationAtr <= 0.90;
+
+  const stochasticCrossUp = previous.stochK <= previous.stochD && current.stochK > current.stochD;
+  const lowerWashout = previous.stochPercentile7d <= 0.25 || current.stochPercentile7d <= 0.30;
   const belowMean = current.close < current.vwap96 || current.close < current.dayOpen ||
     current.close < current.rangeMid20Prev;
-  const trendless = current.adx <= 24 &&
-    Math.abs(current.ema20 - current.ema50) <= 0.85 * current.atr;
   const cycleUp = current.rsiSlope2 > 0 && current.close > current.open &&
-    current.close > previous.close && breadthVelocity >= 0.015;
-  const notBroken = !finite(current.low20Prev) ||
-    current.close >= current.low20Prev - 0.10 * current.atr;
+    current.close > previous.close && breadthVelocity >= -0.005;
+  const lowerNotBroken = !finite(current.low20Prev) ||
+    current.close >= current.low20Prev - 0.12 * current.atr;
 
   if (
-    stochasticCross && dynamicWashout && belowMean && trendless && cycleUp && notBroken &&
-    localBreadth <= 0.72
+    trendless && stochasticCrossUp && lowerWashout && belowMean && cycleUp && lowerNotBroken &&
+    localBreadth <= 0.78
   ) {
-    reasons.push("range washout turned into an upward cycle below mean anchors");
+    reasons.push("range lower-side cycle turned upward; candidate scoring decides admission");
     return "UP_CYCLE";
   }
 
-  const rollOver = previous.stochK >= previous.stochD && current.stochK < current.stochD &&
-    current.rsiSlope2 <= 0;
+  const stochasticCrossDown = previous.stochK >= previous.stochD && current.stochK < current.stochD;
+  const upperWashout = previous.stochPercentile7d >= 0.75 || current.stochPercentile7d >= 0.70;
+  const aboveMean = current.close > current.vwap96 || current.close > current.dayOpen ||
+    current.close > current.rangeMid20Prev;
+  const cycleDown = current.rsiSlope2 < 0 && current.close < current.open &&
+    current.close < previous.close && breadthVelocity <= 0.005;
+  const upperNotBroken = !finite(current.high20Prev) ||
+    current.close <= current.high20Prev + 0.12 * current.atr;
+
+  if (
+    trendless && stochasticCrossDown && upperWashout && aboveMean && cycleDown && upperNotBroken &&
+    localBreadth >= 0.22
+  ) {
+    reasons.push("range upper-side cycle turned downward; candidate scoring decides admission");
+    return "DOWN_CYCLE";
+  }
+
+  const rollOver = stochasticCrossDown && current.rsiSlope2 <= 0;
   if (rollOver) {
-    reasons.push("range cycle rolled over; no long entry");
+    reasons.push("range cycle rolled over");
     return "ROLL_OVER";
   }
 
@@ -171,7 +193,7 @@ function classifyRange(
     return "DECELERATING";
   }
 
-  reasons.push("range has no confirmed upward cycle");
+  reasons.push("range has no causal edge-cycle timing");
   return "NEUTRAL";
 }
 

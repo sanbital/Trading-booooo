@@ -353,7 +353,7 @@ Deno.test("start_v5 freezes a new 120d, 100/600-shard, four-fold full-universe j
   assertEquals(captured.config?.backtest_rollup_shard_count, V5_BACKTEST_ROLLUP_SHARDS);
   assertEquals(captured.config?.checkpoints_per_rollup, V5_CHECKPOINTS_PER_ROLLUP);
   assertEquals((captured.config?.folds as unknown[]).length, 4);
-  assertEquals(captured.config?.candidate_count, 19);
+  assertEquals(captured.config?.candidate_count, candidates().length);
   assertEquals(captured.config?.source_sha, sourceSha);
   assertEquals(captured.config?.implementation_sha256, TEST_IMPLEMENTATION_SHA256);
   assertEquals(captured.config?.universe_policy, "CURRENT_ACTIVE_PERPETUAL_SNAPSHOT_AT_JOB_START");
@@ -1285,7 +1285,7 @@ Deno.test("new-listing shard/rollup retries are idempotent and COMPLETE phase is
   assertEquals(shardResult.ok, true);
   assertEquals(shardRetry, shardResult);
   assertEquals(fetchCalls, 0);
-  assertEquals(resultRows[0].length, 19 * 4 * 3);
+  assertEquals(resultRows[0].length, candidates().length * 4 * 3);
   assertEquals(resultRows[1], resultRows[0]);
   assert(resultRows[0].every((row) => row.metrics.trades === 0));
   assert(
@@ -1331,8 +1331,8 @@ Deno.test("new-listing shard/rollup retries are idempotent and COMPLETE phase is
   const rollup = rollupRow.parameters as Record<string, unknown>;
   assertEquals(rollup.shard_indices, Array.from({ length: 10 }, (_, index) => index));
   assertEquals((rollup.assigned_markets as unknown[]).length, 10);
-  assertEquals(rollup.result_rows, 10 * 19 * 4 * 3);
-  assertEquals((rollup.aggregates as unknown[]).length, 19 * 4 * 3);
+  assertEquals(rollup.result_rows, 10 * candidates().length * 4 * 3);
+  assertEquals((rollup.aggregates as unknown[]).length, candidates().length * 4 * 3);
 
   const completeJob: V5ResearchJobRow = {
     ...job,

@@ -13,8 +13,7 @@ import { FIFTEEN_MINUTE_BARS_7D } from "./indicators.ts";
  * read.  Each family changes one primary entry threshold around a baseline;
  * exits stay fixed inside the family so a neighbourhood check remains useful.
  */
-export const V5_CANDIDATE_REGISTRY_REVISION =
-  "V5_PRECOMMITTED_NEIGHBOURHOOD_20260829_RANGE_EXIT_V2_A";
+export const V5_CANDIDATE_REGISTRY_REVISION = "V6_PRECOMMITTED_RANGE_EDGE_SCORE_20260829_A";
 
 const BULL_EXIT = {
   breakEvenAtR: 0.8,
@@ -26,16 +25,16 @@ const BULL_EXIT = {
 };
 
 const RANGE_EXIT = {
-  initialStopAtr: 0.8,
+  initialStopAtr: 0.65,
   maxHoldBars: 4,
-  profitLockAtR: 0.45,
-  profitLockR: 0.18,
-  // RANGE Exit V2 is pre-committed before the new full-universe replay.
-  // Entry logic is unchanged; only post-entry realization is altered.
-  partialTakeAtr: 0.45,
-  partialTakeFraction: 0.60,
-  noResponseBars: 3,
+  profitLockAtR: 0.35,
+  profitLockR: 0.10,
+  // V6 realizes the small mean-reversion edge before the observed giveback.
+  partialTakeAtr: 0.25,
+  partialTakeFraction: 0.70,
+  noResponseBars: 2,
   portfolioBreakEvenAfterPartial: 1,
+  rangeBreakBufferAtr: 0.10,
 };
 
 const BEAR_EXIT = {
@@ -73,19 +72,24 @@ const RANGE_BASE = {
   ...COMMON,
   ...RANGE_EXIT,
   maxAbsRet24: 0.25,
-  maxAdx: 22,
-  maxEmaSeparationAtr: 0.55,
-  minAtrPercentile: 0.08,
-  maxAtrPercentile: 0.92,
-  maxStochPercentile: 0.15,
-  maxRsiPercentile: 0.55,
-  minRsiSlope: 0,
-  minBreadthVelocity: 0.005,
-  maxLocalBreadth: 0.6,
-  minVolumeRatio: 0.65,
-  maxSwingBreakAtr: 0.15,
-  minTargetAtr: 0.75,
-  costMultiple: 4,
+  maxAdx: 23,
+  maxEmaSeparationAtr: 0.70,
+  minAtrPercentile: 0.10,
+  maxAtrPercentile: 0.90,
+  minRangeWidthAtr: 1.80,
+  maxRangeWidthAtr: 6.00,
+  maxRsiPercentile: 0.45,
+  minRsiPercentile: 0.55,
+  minBreadthVelocity: -0.005,
+  maxBreadthVelocity: 0.005,
+  minVolumeRatio: 0.55,
+  recoveryVolumeRatio: 0.90,
+  bandTouchToleranceAtr: 0.12,
+  maxSwingBreakAtr: 0.12,
+  minTargetAtr: 0.65,
+  costMultiple: 3,
+  partialCostMultiple: 1.25,
+  minConfirmationScore: 3,
 };
 
 const BEAR_BASE = {
@@ -173,24 +177,24 @@ const PRECOMMITTED_GRID: Candidate[] = [
       },
     )
   ),
-  ...[0.12, 0.15, 0.18].map((maxStochPercentile) =>
+  ...[0.20, 0.25, 0.30].map((maxRangePosition) =>
     makeCandidate(
-      `V5_RANGE_STOCH_P${String(Math.round(maxStochPercentile * 100)).padStart(2, "0")}`,
+      `V6_RANGE_LONG_EDGE_P${String(Math.round(maxRangePosition * 100)).padStart(2, "0")}`,
       "RANGE_CYCLE",
       "LONG",
       "RANGE_UP_CYCLE",
-      "RANGE_STOCH_PERCENTILE",
-      { ...RANGE_BASE, maxStochPercentile },
+      "RANGE_LONG_EDGE_LOCATION",
+      { ...RANGE_BASE, maxRangePosition },
     )
   ),
-  ...[0.6, 0.9].map((minTargetAtr) =>
+  ...[0.80, 0.75, 0.70].map((minRangePosition) =>
     makeCandidate(
-      `V5_RANGE_TARGET_A${String(Math.round(minTargetAtr * 100)).padStart(2, "0")}`,
+      `V6_RANGE_SHORT_EDGE_P${String(Math.round(minRangePosition * 100)).padStart(2, "0")}`,
       "RANGE_CYCLE",
-      "LONG",
-      "RANGE_UP_CYCLE",
-      "RANGE_TARGET_ROOM",
-      { ...RANGE_BASE, minTargetAtr },
+      "SHORT",
+      "RANGE_DOWN_CYCLE",
+      "RANGE_SHORT_EDGE_LOCATION",
+      { ...RANGE_BASE, minRangePosition },
     )
   ),
   ...[0, 0.05, 0.1].map((minRebreakAtr) =>
@@ -334,7 +338,7 @@ function commonFailures(
   // context for diagnostics, but do not silently replace those baselines with
   // a new mandatory 5m filter.  The unvalidated RANGE/BEAR families remain
   // confirmation-gated.
-  if (expected !== "BULL" && !tactical.fiveMinuteConfirmed) {
+  if (expected === "BEAR" && !tactical.fiveMinuteConfirmed) {
     failures.push("FIVE_MINUTE_CONFIRMATION_REQUIRED");
   }
   if (structural.validMarkets < parameter(candidate, "minValidMarkets")) {
@@ -430,6 +434,13 @@ function nearestTargetAbove(current: PreparedBar): number | null {
   return anchors[0] ?? null;
 }
 
+function nearestTargetBelow(current: PreparedBar): number | null {
+  const anchors = [current.vwap96, current.dayOpen, current.bbMid, current.rangeMid20Prev]
+    .filter((value) => finite(value) && value < current.close)
+    .sort((a, b) => b - a);
+  return anchors[0] ?? null;
+}
+
 function rangeDecision(
   bars: readonly PreparedBar[],
   index: number,
@@ -441,11 +452,13 @@ function rangeDecision(
   const previous = bars[index - 1];
   if (!previous) return reject(candidate, tactical, ["COMPLETED_PRIOR_BAR_REQUIRED"]);
   const failures = commonFailures(current, index, candidate, tactical, structural);
-  if (candidate.side !== "LONG" || candidate.family !== "RANGE_CYCLE") {
-    failures.push("RANGE_LONG_FAMILY_REQUIRED");
-  }
-  if (tactical.phase !== "UP_CYCLE" || tactical.state !== "RANGE_UP_CYCLE") {
-    failures.push("RANGE_UP_CYCLE_ONLY");
+  if (candidate.family !== "RANGE_CYCLE") failures.push("RANGE_FAMILY_REQUIRED");
+
+  const isLong = candidate.side === "LONG";
+  const expectedPhase = isLong ? "UP_CYCLE" : "DOWN_CYCLE";
+  const expectedState = isLong ? "RANGE_UP_CYCLE" : "RANGE_DOWN_CYCLE";
+  if (tactical.phase !== expectedPhase || tactical.state !== expectedState) {
+    failures.push(isLong ? "RANGE_UP_CYCLE_ONLY" : "RANGE_DOWN_CYCLE_ONLY");
   }
 
   const emaSeparationAtr = Math.abs(current.ema20 - current.ema50) / current.atr;
@@ -458,54 +471,99 @@ function rangeDecision(
     current.atrPercentile7d > parameter(candidate, "maxAtrPercentile")
   ) failures.push("ATR_PERCENTILE_OUTSIDE_WINDOW");
 
-  const dynamicWashout = current.stochPercentile7d <= parameter(candidate, "maxStochPercentile");
-  const crossedUp = previous.stochK <= previous.stochD && current.stochK > current.stochD;
-  if (!dynamicWashout || !crossedUp) failures.push("DYNAMIC_STOCH_UP_CROSS_REQUIRED");
+  const rangeWidth = current.high20Prev - current.low20Prev;
+  const rangeWidthAtr = rangeWidth / current.atr;
   if (
-    current.rsiSlope2 <= parameter(candidate, "minRsiSlope") ||
-    current.rsiPercentile7d > parameter(candidate, "maxRsiPercentile")
-  ) failures.push("DYNAMIC_RSI_TURN_REQUIRED");
-
-  const belowMeanAnchor = current.close < current.vwap96 ||
-    current.close < current.dayOpen ||
-    current.close < current.rangeMid20Prev;
-  if (!belowMeanAnchor) failures.push("BELOW_MEAN_REVERSION_ANCHOR_REQUIRED");
-  if (current.close >= current.high20Prev) failures.push("RANGE_BREAKOUT_EXCLUDED");
-  if (current.close <= current.open || current.close <= previous.close) {
-    failures.push("BULLISH_REVERSAL_CANDLE_REQUIRED");
+    !(rangeWidth > 0) || rangeWidthAtr < parameter(candidate, "minRangeWidthAtr") ||
+    rangeWidthAtr > parameter(candidate, "maxRangeWidthAtr")
+  ) {
+    failures.push("RANGE_WIDTH_OUTSIDE_EDGE_WINDOW");
   }
-  if (
-    tactical.breadthVelocity < parameter(candidate, "minBreadthVelocity") ||
-    tactical.localBreadth > parameter(candidate, "maxLocalBreadth")
-  ) failures.push("LOCAL_BREADTH_TURN_REQUIRED");
-  if (current.ret2 <= previous.ret2) failures.push("SELL_PRESSURE_NOT_EASING");
+  const rangePosition = rangeWidth > 0 ? (current.close - current.low20Prev) / rangeWidth : 0.5;
+  if (isLong) {
+    if (rangePosition > parameter(candidate, "maxRangePosition")) {
+      failures.push("LONG_NOT_AT_RANGE_LOWER_EDGE");
+    }
+  } else if (rangePosition < parameter(candidate, "minRangePosition")) {
+    failures.push("SHORT_NOT_AT_RANGE_UPPER_EDGE");
+  }
+
+  const stochTurn = isLong
+    ? previous.stochK <= previous.stochD && current.stochK > current.stochD
+    : previous.stochK >= previous.stochD && current.stochK < current.stochD;
+  const rsiTurn = isLong
+    ? current.rsiSlope2 > 0 && current.rsiPercentile7d <= parameter(candidate, "maxRsiPercentile")
+    : current.rsiSlope2 < 0 && current.rsiPercentile7d >= parameter(candidate, "minRsiPercentile");
+  const tolerance = parameter(candidate, "bandTouchToleranceAtr") * current.atr;
+  const bandReclaim = isLong
+    ? current.low <= current.bbLower + tolerance && current.close > current.bbLower
+    : current.high >= current.bbUpper - tolerance && current.close < current.bbUpper;
+  const reversalCandle = isLong
+    ? current.close > current.open && current.close > previous.close
+    : current.close < current.open && current.close < previous.close;
+  const breadthTurn = isLong
+    ? tactical.breadthVelocity >= parameter(candidate, "minBreadthVelocity") &&
+      tactical.localBreadth <= 0.72
+    : tactical.breadthVelocity <= parameter(candidate, "maxBreadthVelocity") &&
+      tactical.localBreadth >= 0.28;
+  const volumeRecovery = current.volumeRatio >= parameter(candidate, "recoveryVolumeRatio");
+
+  const score = Number(stochTurn) + Number(rsiTurn) + Number(bandReclaim) +
+    Number(reversalCandle) + Number(breadthTurn || volumeRecovery) +
+    Number(tactical.fiveMinuteConfirmed);
+  const requiredScore = parameter(candidate, "minConfirmationScore") +
+    (tactical.fiveMinuteConfirmed ? 0 : 1);
+  if (!stochTurn || score < requiredScore) {
+    failures.push(`RANGE_REVERSAL_SCORE_${score}_BELOW_${requiredScore}`);
+  }
+
   if (current.volumeRatio < parameter(candidate, "minVolumeRatio")) {
     failures.push("RANGE_VOLUME_TOO_LOW");
   }
-
   const maxSwingBreakAtr = parameter(candidate, "maxSwingBreakAtr");
-  if (
-    current.low < current.low20Prev - maxSwingBreakAtr * current.atr ||
-    current.close < current.low8Prev - maxSwingBreakAtr * current.atr
-  ) failures.push("STRONG_SWING_LOW_BREAK_EXCLUDED");
+  if (isLong) {
+    if (
+      current.low < current.low20Prev - maxSwingBreakAtr * current.atr ||
+      current.close < current.low8Prev - maxSwingBreakAtr * current.atr
+    ) failures.push("STRONG_RANGE_LOW_BREAK_EXCLUDED");
+  } else if (
+    current.high > current.high20Prev + maxSwingBreakAtr * current.atr ||
+    current.close > current.high8Prev + maxSwingBreakAtr * current.atr
+  ) failures.push("STRONG_RANGE_HIGH_BREAK_EXCLUDED");
 
-  const target = nearestTargetAbove(current);
+  const target = isLong ? nearestTargetAbove(current) : nearestTargetBelow(current);
   if (target === null) {
     failures.push("NO_REALIZABLE_MEAN_REVERSION_TARGET");
   } else {
-    const moveAtr = (target - current.close) / current.atr;
-    const moveBps = (target / current.close - 1) * 10_000;
+    const move = isLong ? target - current.close : current.close - target;
+    const moveAtr = move / current.atr;
+    const moveBps = move / current.close * 10_000;
     if (
       moveAtr < parameter(candidate, "minTargetAtr") ||
       moveBps < BASE_COST_BPS * parameter(candidate, "costMultiple")
     ) failures.push("TARGET_ROOM_BELOW_ATR_OR_COST_GATE");
   }
 
+  const partialMoveBps = parameter(candidate, "partialTakeAtr") * current.atr / current.close *
+    10_000;
+  if (partialMoveBps < BASE_COST_BPS * parameter(candidate, "partialCostMultiple")) {
+    failures.push("PARTIAL_REALIZATION_BELOW_COST_GATE");
+  }
+
   if (failures.length) return reject(candidate, tactical, failures);
+  const stop = isLong
+    ? current.close - parameter(candidate, "initialStopAtr") * current.atr
+    : current.close + parameter(candidate, "initialStopAtr") * current.atr;
   return accept(
     tactical,
-    ["STRUCTURAL_RANGE", "TACTICAL_UP_CYCLE", "DYNAMIC_PERCENTILE", "COST_GATE"],
-    current.close - parameter(candidate, "initialStopAtr") * current.atr,
+    [
+      "STRUCTURAL_RANGE",
+      isLong ? "LOWER_EDGE" : "UPPER_EDGE",
+      `REVERSAL_SCORE_${score}`,
+      tactical.fiveMinuteConfirmed ? "FIVE_MINUTE_CONFIRM" : "FIFTEEN_MINUTE_STRONG_CONFIRM",
+      "COST_GATE",
+    ],
+    stop,
     target ?? undefined,
   );
 }
