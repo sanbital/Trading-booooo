@@ -1,0 +1,50 @@
+name: Verify and Deploy P10 Regime Transition
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "supabase/functions/_shared/p10-market-risk.ts"
+      - "supabase/functions/_shared/p10-market-risk.test.ts"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Verify transition router
+        run: |
+          set -euo pipefail
+          deno fmt --check supabase/functions/_shared/p10-market-risk.ts supabase/functions/_shared/p10-market-risk.test.ts
+          deno test supabase/functions/_shared/p10-market-risk.test.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          grep -q 'P10-MARKET-RISK-1.1.0-REGIME-TRANSITION' supabase/functions/_shared/p10-market-risk.ts
+          grep -q 'REGIME_TRANSITION_BULL_TO_RANGE_DEFENSIVE' supabase/functions/_shared/p10-market-risk.ts
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Deploy market-autotrader
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_PROJECT_REF:-}"
+          supabase functions deploy market-autotrader --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
