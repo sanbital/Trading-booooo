@@ -1,1 +1,1 @@
-resume job 5261a817-70ef-4e9c-9902-2c8a5506dc91 missing shards at 2026-08-29T12:52:00Z
+resume job 5261a817-70ef-4e9c-9902-2c8a5506dc91 missing shards; retry without status pre-scan at 2026-08-29T12:56:00Z
