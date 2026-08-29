@@ -11,7 +11,7 @@ export type P10MarketRiskStatus =
   | "CRITICAL_PERSIST"
   | "RECOVERED";
 
-export const P10_MARKET_RISK_REVISION = "P10-MARKET-RISK-1.0.0";
+export const P10_MARKET_RISK_REVISION = "P10-MARKET-RISK-1.1.0-REGIME-TRANSITION";
 
 export const P10_MARKET_RISK_CONFIG = Object.freeze({
   modelRevision: "MARKET-REGIME-OBSERVER-v2-C01-FULLMARKET",
@@ -33,6 +33,11 @@ export const P10_MARKET_RISK_CONFIG = Object.freeze({
   partialConfirmations: 2,
   persistentConfirmations: 4,
   partialFraction: 0.50,
+  transitionMinimumConfidence: 0.60,
+  transitionFastConfidence: 0.70,
+  transitionPartialConfirmations: 2,
+  transitionExitConfirmations: 4,
+  transitionPartialFraction: 0.50,
 });
 
 export interface P10MarketRiskObservation {
@@ -93,6 +98,8 @@ type BaseExitDecision = {
   nextStop: number;
   policyBarTime: number;
 };
+
+type P10StructuralState = "BULL" | "RANGE" | "BEAR";
 
 const finite = (value: unknown, fallback = Number.NaN) => {
   const number = Number(value);
@@ -268,6 +275,227 @@ function makeDecision(
   };
 }
 
+function structuralState(row: NormalizedObservation): P10StructuralState {
+  if (row.regime === "BULL" || row.regime === "STRONG_BULL") return "BULL";
+  return row.regime === "RISK_OFF" ? "BEAR" : "RANGE";
+}
+
+function phaseName(row: NormalizedObservation): string {
+  return String(record(row.features.momentum_phase).phase || "").toUpperCase();
+}
+
+function confirmedStateCount(
+  rows: readonly NormalizedObservation[],
+  state: P10StructuralState,
+) {
+  return contiguousCount(
+    rows,
+    (row) => row.confidence >= P10_MARKET_RISK_CONFIG.transitionMinimumConfidence &&
+      structuralState(row) === state,
+  );
+}
+
+function priorDifferentState(
+  rows: readonly NormalizedObservation[],
+  state: P10StructuralState,
+  confirmedCount: number,
+): P10StructuralState | null {
+  for (let index = Math.max(1, confirmedCount); index < rows.length; index++) {
+    const older = structuralState(rows[index]);
+    if (older !== state) return older;
+  }
+  return null;
+}
+
+function evaluateRegimeTransition(input: {
+  side: P10MarketRiskSide;
+  rows: readonly NormalizedObservation[];
+  nowMs: number;
+  partialAlreadyDone: boolean;
+  sourceError: string | null;
+}): P10MarketRiskDecision | null {
+  const latest = input.rows[0];
+  if (!latest || latest.confidence < P10_MARKET_RISK_CONFIG.transitionMinimumConfidence) {
+    return null;
+  }
+  const latestState = structuralState(latest);
+  const confirmationCount = confirmedStateCount(input.rows, latestState);
+  const origin = priorDifferentState(input.rows, latestState, confirmationCount);
+  const favorableState: P10StructuralState = input.side === "LONG" ? "BULL" : "BEAR";
+  const oppositeState: P10StructuralState = input.side === "LONG" ? "BEAR" : "BULL";
+
+  if (origin !== null && latestState === oppositeState) {
+    const fast = latest.confidence >= P10_MARKET_RISK_CONFIG.transitionFastConfidence &&
+      hasConfirmedLongHorizonAdverse(latest, input.side);
+    if (fast) {
+      return makeDecision(
+        "MARKET_RISK_EXIT",
+        `REGIME_TRANSITION_${origin}_TO_${oppositeState}_FAST_EXIT`,
+        1,
+        "CRITICAL_FAST",
+        Math.max(1, confirmationCount),
+        input.rows,
+        input.nowMs,
+        input.sourceError,
+      );
+    }
+    if (confirmationCount >= P10_MARKET_RISK_CONFIG.transitionPartialConfirmations) {
+      return makeDecision(
+        "MARKET_RISK_EXIT",
+        `REGIME_TRANSITION_${origin}_TO_${oppositeState}_EXIT`,
+        1,
+        "CRITICAL_PERSIST",
+        confirmationCount,
+        input.rows,
+        input.nowMs,
+        input.sourceError,
+      );
+    }
+    return makeDecision(
+      "NONE",
+      `REGIME_TRANSITION_${origin}_TO_${oppositeState}_WATCH`,
+      0,
+      "WATCH",
+      confirmationCount,
+      input.rows,
+      input.nowMs,
+      input.sourceError,
+    );
+  }
+
+  if (latestState === "RANGE" && origin === favorableState) {
+    if (confirmationCount >= P10_MARKET_RISK_CONFIG.transitionExitConfirmations) {
+      return makeDecision(
+        "MARKET_RISK_EXIT",
+        `REGIME_TRANSITION_${favorableState}_TO_RANGE_PERSIST_EXIT`,
+        1,
+        "CRITICAL_PERSIST",
+        confirmationCount,
+        input.rows,
+        input.nowMs,
+        input.sourceError,
+      );
+    }
+    if (confirmationCount >= P10_MARKET_RISK_CONFIG.transitionPartialConfirmations) {
+      if (input.partialAlreadyDone) {
+        return makeDecision(
+          "NONE",
+          `REGIME_TRANSITION_${favorableState}_TO_RANGE_ALREADY_REDUCED`,
+          0,
+          "DEFENSIVE",
+          confirmationCount,
+          input.rows,
+          input.nowMs,
+          input.sourceError,
+        );
+      }
+      return makeDecision(
+        "MARKET_RISK_PARTIAL",
+        `REGIME_TRANSITION_${favorableState}_TO_RANGE_DEFENSIVE`,
+        P10_MARKET_RISK_CONFIG.transitionPartialFraction,
+        "DEFENSIVE",
+        confirmationCount,
+        input.rows,
+        input.nowMs,
+        input.sourceError,
+      );
+    }
+    return makeDecision(
+      "NONE",
+      `REGIME_TRANSITION_${favorableState}_TO_RANGE_WATCH`,
+      0,
+      "WATCH",
+      confirmationCount,
+      input.rows,
+      input.nowMs,
+      input.sourceError,
+    );
+  }
+
+  if (
+    latestState === favorableState && origin === "RANGE" && input.partialAlreadyDone &&
+    confirmationCount >= 2
+  ) {
+    return makeDecision(
+      "NONE",
+      `REGIME_TRANSITION_RANGE_TO_${favorableState}_RECOVERED`,
+      0,
+      "RECOVERED",
+      confirmationCount,
+      input.rows,
+      input.nowMs,
+      input.sourceError,
+    );
+  }
+
+  if (input.side === "LONG" && latestState === "BULL") {
+    const decelerationCount = contiguousCount(
+      input.rows,
+      (row) => row.confidence >= P10_MARKET_RISK_CONFIG.transitionMinimumConfidence &&
+        structuralState(row) === "BULL" &&
+        (phaseName(row).includes("DECELERAT") || phaseName(row).includes("ROLLING_OVER")),
+    );
+    if (decelerationCount >= 2 && !input.partialAlreadyDone) {
+      return makeDecision(
+        "MARKET_RISK_PARTIAL",
+        "REGIME_TRANSITION_BULL_DECELERATING_DEFENSIVE",
+        P10_MARKET_RISK_CONFIG.transitionPartialFraction,
+        "DEFENSIVE",
+        decelerationCount,
+        input.rows,
+        input.nowMs,
+        input.sourceError,
+      );
+    }
+    if (decelerationCount === 1) {
+      return makeDecision(
+        "NONE",
+        "REGIME_TRANSITION_BULL_DECELERATING_WATCH",
+        0,
+        "WATCH",
+        1,
+        input.rows,
+        input.nowMs,
+        input.sourceError,
+      );
+    }
+  }
+
+  if (input.side === "SHORT" && latestState === "BEAR") {
+    const reboundCount = contiguousCount(
+      input.rows,
+      (row) => row.confidence >= P10_MARKET_RISK_CONFIG.transitionMinimumConfidence &&
+        structuralState(row) === "BEAR" && phaseName(row).includes("REBOUND"),
+    );
+    if (reboundCount >= 2 && !input.partialAlreadyDone) {
+      return makeDecision(
+        "MARKET_RISK_PARTIAL",
+        "REGIME_TRANSITION_BEAR_REBOUND_DEFENSIVE",
+        P10_MARKET_RISK_CONFIG.transitionPartialFraction,
+        "DEFENSIVE",
+        reboundCount,
+        input.rows,
+        input.nowMs,
+        input.sourceError,
+      );
+    }
+    if (reboundCount === 1) {
+      return makeDecision(
+        "NONE",
+        "REGIME_TRANSITION_BEAR_REBOUND_WATCH",
+        0,
+        "WATCH",
+        1,
+        input.rows,
+        input.nowMs,
+        input.sourceError,
+      );
+    }
+  }
+
+  return null;
+}
+
 export function evaluateP10MarketRisk(input: {
   side: P10MarketRiskSide;
   observations: readonly P10MarketRiskObservation[];
@@ -301,6 +529,15 @@ export function evaluateP10MarketRisk(input: {
       sourceError,
     );
   }
+
+  const transitionDecision = evaluateRegimeTransition({
+    side: input.side,
+    rows,
+    nowMs: input.nowMs,
+    partialAlreadyDone: input.partialAlreadyDone,
+    sourceError,
+  });
+  if (transitionDecision) return transitionDecision;
 
   const confirmationCount = contiguousCount(
     rows,
@@ -404,7 +641,9 @@ export function applyP10MarketRiskOverlay<T extends BaseExitDecision>(
     reason: string;
     fraction: number;
   }) {
-  if (base.action !== "NONE" || marketRisk.action === "NONE") return base;
+  if (marketRisk.action === "NONE") return base;
+  if (base.action === "STOP" || base.action === "EMERGENCY") return base;
+  if (marketRisk.action !== "MARKET_RISK_EXIT" && base.action !== "NONE") return base;
   return {
     ...base,
     action: marketRisk.action,
