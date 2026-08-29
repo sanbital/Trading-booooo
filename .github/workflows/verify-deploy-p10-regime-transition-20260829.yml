@@ -30,10 +30,12 @@ jobs:
         run: |
           set -euo pipefail
           deno fmt supabase/functions/_shared/p10-market-risk.ts supabase/functions/_shared/p10-market-risk.test.ts
+          deno check supabase/functions/_shared/p10-market-risk.ts
           deno test supabase/functions/_shared/p10-market-risk.test.ts
-          deno check supabase/functions/market-autotrader/index.ts
           grep -q 'P10-MARKET-RISK-1.1.0-REGIME-TRANSITION' supabase/functions/_shared/p10-market-risk.ts
           grep -q 'REGIME_TRANSITION_BULL_TO_RANGE_DEFENSIVE' supabase/functions/_shared/p10-market-risk.ts
+          grep -q 'evaluateP10MarketRisk' supabase/functions/market-autotrader/index.ts
+          grep -q 'applyP10MarketRiskOverlay' supabase/functions/market-autotrader/index.ts
 
       - name: Install Supabase CLI
         uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
