@@ -120,17 +120,16 @@ jobs:
               if failures:
                   raise RuntimeError(f'{label} failures: {failures}')
 
-          initial = request({'action': 'status_v5', 'job_id': job_id}, regions[0], attempts=3)
-          if initial.get('complete') is True:
-              final = initial
-          else:
-              run_parallel('backtest-resume', missing, 'backtest_shard_v5', 'shard_index', 2)
-              run_parallel('rollup', list(range(60)), 'backtest_rollup_v5', 'rollup_index', 3)
-              final = request(
-                  {'action': 'status_v5', 'job_id': job_id, 'assert_complete': True},
-                  regions[0],
-                  attempts=5,
-              )
+          # status_v5 scans the still-incomplete result matrix and can exceed the
+          # database statement timeout. The frozen missing-set came from a direct
+          # checkpoint query, and every write below is idempotent.
+          run_parallel('backtest-resume', missing, 'backtest_shard_v5', 'shard_index', 1)
+          run_parallel('rollup', list(range(60)), 'backtest_rollup_v5', 'rollup_index', 2)
+          final = request(
+              {'action': 'status_v5', 'job_id': job_id, 'assert_complete': True},
+              regions[0],
+              attempts=5,
+          )
 
           with open('/tmp/range-v6-resume-final.json', 'w') as output:
               json.dump(final, output)
