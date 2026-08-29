@@ -26,6 +26,7 @@ jobs:
           set -euo pipefail
           python scripts/research_range_v6_patch.py
           python scripts/research_range_v6_fix1.py
+          python scripts/research_range_v6_fix2_tests.py
 
       - name: Set up Deno
         uses: denoland/setup-deno@v2
