@@ -1,0 +1,6 @@
+revision=REGIME_ROUTER_V7_RANGE_SWEEP_RECLAIM_15M_120D_RSWF
+hypothesis=deep range-edge liquidity sweep plus completed-bar reclaim with structural stop and next-open RR gate
+selection=train_validation_only
+test_used_for_selection=false
+bull_long_changed=false
+created_at_kst=2026-08-29T22:00:00+09:00
