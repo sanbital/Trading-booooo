@@ -1,0 +1,501 @@
+name: Apply P10 Regime Transition Exit Router
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "research/p10-regime-transition-router-trigger.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: p10-regime-transition-router-20260829
+  cancel-in-progress: false
+
+jobs:
+  patch-test-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Apply bounded transition-router patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          python3 - <<'PY'
+          from pathlib import Path
+
+          risk_path = Path('supabase/functions/_shared/p10-market-risk.ts')
+          test_path = Path('supabase/functions/_shared/p10-market-risk.test.ts')
+          index_path = Path('supabase/functions/market-autotrader/index.ts')
+
+          risk = risk_path.read_text()
+          old = 'export const P10_MARKET_RISK_REVISION = "P10-MARKET-RISK-1.0.0";'
+          new = 'export const P10_MARKET_RISK_REVISION = "P10-MARKET-RISK-1.1.0-REGIME-TRANSITION";'
+          assert risk.count(old) == 1
+          risk = risk.replace(old, new)
+
+          old = '  partialFraction: 0.50,\n});'
+          new = '''  partialFraction: 0.50,
+  transitionMinimumConfidence: 0.60,
+  transitionFastConfidence: 0.70,
+  transitionPartialConfirmations: 2,
+  transitionExitConfirmations: 4,
+  transitionPartialFraction: 0.50,
+});'''
+          assert risk.count(old) == 1
+          risk = risk.replace(old, new)
+
+          marker = 'export function evaluateP10MarketRisk(input: {'
+          assert risk.count(marker) == 1
+          helper = r'''
+type P10StructuralState = "BULL" | "RANGE" | "BEAR";
+
+function structuralState(row: NormalizedObservation): P10StructuralState {
+  if (row.regime === "BULL" || row.regime === "STRONG_BULL") return "BULL";
+  return row.regime === "RISK_OFF" ? "BEAR" : "RANGE";
+}
+
+function phaseName(row: NormalizedObservation): string {
+  const phase = record(row.features.momentum_phase);
+  return String(phase.phase || "").toUpperCase();
+}
+
+function confirmedStateCount(
+  rows: readonly NormalizedObservation[],
+  state: P10StructuralState,
+): number {
+  return contiguousCount(
+    rows,
+    (row) => row.confidence >= P10_MARKET_RISK_CONFIG.transitionMinimumConfidence &&
+      structuralState(row) === state,
+  );
+}
+
+function priorDifferentState(
+  rows: readonly NormalizedObservation[],
+  state: P10StructuralState,
+  confirmedCount: number,
+): P10StructuralState | null {
+  for (let index = Math.max(1, confirmedCount); index < rows.length; index++) {
+    const older = structuralState(rows[index]);
+    if (older !== state) return older;
+  }
+  return null;
+}
+
+function evaluateRegimeTransition(input: {
+  side: P10MarketRiskSide;
+  rows: readonly NormalizedObservation[];
+  nowMs: number;
+  partialAlreadyDone: boolean;
+  sourceError: string | null;
+}): P10MarketRiskDecision | null {
+  const latest = input.rows[0];
+  if (!latest || latest.confidence < P10_MARKET_RISK_CONFIG.transitionMinimumConfidence) {
+    return null;
+  }
+  const latestState = structuralState(latest);
+  const confirmationCount = confirmedStateCount(input.rows, latestState);
+  const origin = priorDifferentState(input.rows, latestState, confirmationCount);
+  const favorableState: P10StructuralState = input.side === "LONG" ? "BULL" : "BEAR";
+  const oppositeState: P10StructuralState = input.side === "LONG" ? "BEAR" : "BULL";
+
+  // A structural flip directly against the held side invalidates the original thesis.
+  // Two distinct observations are enough for a normal exit. A high-confidence flip
+  // with a confirming 2h/6h forecast exits immediately on the first observation.
+  if (latestState === oppositeState) {
+    const fast = latest.confidence >= P10_MARKET_RISK_CONFIG.transitionFastConfidence &&
+      hasConfirmedLongHorizonAdverse(latest, input.side);
+    if (fast) {
+      return makeDecision(
+        "MARKET_RISK_EXIT",
+        `REGIME_TRANSITION_${origin ?? "UNKNOWN"}_TO_${oppositeState}_FAST_EXIT`,
+        1,
+        "CRITICAL_FAST",
+        Math.max(1, confirmationCount),
+        input.rows,
+        input.nowMs,
+        input.sourceError,
+      );
+    }
+    if (confirmationCount >= P10_MARKET_RISK_CONFIG.transitionPartialConfirmations) {
+      return makeDecision(
+        "MARKET_RISK_EXIT",
+        `REGIME_TRANSITION_${origin ?? "UNKNOWN"}_TO_${oppositeState}_EXIT`,
+        1,
+        "CRITICAL_PERSIST",
+        confirmationCount,
+        input.rows,
+        input.nowMs,
+        input.sourceError,
+      );
+    }
+    return makeDecision(
+      "NONE",
+      `REGIME_TRANSITION_${origin ?? "UNKNOWN"}_TO_${oppositeState}_WATCH`,
+      0,
+      "WATCH",
+      confirmationCount,
+      input.rows,
+      input.nowMs,
+      input.sourceError,
+    );
+  }
+
+  // Trend -> RANGE: protect first, then abandon the stale trend thesis if the
+  // range persists. This uses distinct observer timestamps through contiguousCount.
+  if (latestState === "RANGE" && origin === favorableState) {
+    if (confirmationCount >= P10_MARKET_RISK_CONFIG.transitionExitConfirmations) {
+      return makeDecision(
+        "MARKET_RISK_EXIT",
+        `REGIME_TRANSITION_${favorableState}_TO_RANGE_PERSIST_EXIT`,
+        1,
+        "CRITICAL_PERSIST",
+        confirmationCount,
+        input.rows,
+        input.nowMs,
+        input.sourceError,
+      );
+    }
+    if (confirmationCount >= P10_MARKET_RISK_CONFIG.transitionPartialConfirmations) {
+      if (input.partialAlreadyDone) {
+        return makeDecision(
+          "NONE",
+          `REGIME_TRANSITION_${favorableState}_TO_RANGE_ALREADY_REDUCED`,
+          0,
+          "DEFENSIVE",
+          confirmationCount,
+          input.rows,
+          input.nowMs,
+          input.sourceError,
+        );
+      }
+      return makeDecision(
+        "MARKET_RISK_PARTIAL",
+        `REGIME_TRANSITION_${favorableState}_TO_RANGE_DEFENSIVE`,
+        P10_MARKET_RISK_CONFIG.transitionPartialFraction,
+        "DEFENSIVE",
+        confirmationCount,
+        input.rows,
+        input.nowMs,
+        input.sourceError,
+      );
+    }
+    return makeDecision(
+      "NONE",
+      `REGIME_TRANSITION_${favorableState}_TO_RANGE_WATCH`,
+      0,
+      "WATCH",
+      confirmationCount,
+      input.rows,
+      input.nowMs,
+      input.sourceError,
+    );
+  }
+
+  // A RANGE defensive reduction can be promoted back to the original trend
+  // management once two fresh observations confirm the favorable structural state.
+  if (latestState === favorableState && input.partialAlreadyDone && confirmationCount >= 2) {
+    return makeDecision(
+      "NONE",
+      `REGIME_TRANSITION_RANGE_TO_${favorableState}_RECOVERED`,
+      0,
+      "RECOVERED",
+      confirmationCount,
+      input.rows,
+      input.nowMs,
+      input.sourceError,
+    );
+  }
+
+  // Shorts need an extra tactical guard: a BEAR regime can still be in a violent
+  // rebound. Two distinct rebound observations reduce exposure without declaring
+  // the structural bear trend over.
+  if (input.side === "SHORT" && latestState === "BEAR") {
+    const reboundCount = contiguousCount(
+      input.rows,
+      (row) => row.confidence >= P10_MARKET_RISK_CONFIG.transitionMinimumConfidence &&
+        structuralState(row) === "BEAR" && phaseName(row).includes("REBOUND"),
+    );
+    if (reboundCount >= 2) {
+      if (input.partialAlreadyDone) {
+        return makeDecision(
+          "NONE",
+          "REGIME_TRANSITION_BEAR_REBOUND_ALREADY_REDUCED",
+          0,
+          "DEFENSIVE",
+          reboundCount,
+          input.rows,
+          input.nowMs,
+          input.sourceError,
+        );
+      }
+      return makeDecision(
+        "MARKET_RISK_PARTIAL",
+        "REGIME_TRANSITION_BEAR_REBOUND_DEFENSIVE",
+        P10_MARKET_RISK_CONFIG.transitionPartialFraction,
+        "DEFENSIVE",
+        reboundCount,
+        input.rows,
+        input.nowMs,
+        input.sourceError,
+      );
+    }
+    if (reboundCount === 1) {
+      return makeDecision(
+        "NONE",
+        "REGIME_TRANSITION_BEAR_REBOUND_WATCH",
+        0,
+        "WATCH",
+        1,
+        input.rows,
+        input.nowMs,
+        input.sourceError,
+      );
+    }
+  }
+
+  return null;
+}
+
+'''
+          risk = risk.replace(marker, helper + marker)
+
+          marker = '''  const confirmationCount = contiguousCount(
+    rows,
+    (row) => isAdverse(row, input.side),
+  );'''
+          assert risk.count(marker) == 1
+          replacement = '''  const transitionDecision = evaluateRegimeTransition({
+    side: input.side,
+    rows,
+    nowMs: input.nowMs,
+    partialAlreadyDone: input.partialAlreadyDone,
+    sourceError,
+  });
+  if (transitionDecision) return transitionDecision;
+
+  const confirmationCount = contiguousCount(
+    rows,
+    (row) => isAdverse(row, input.side),
+  );'''
+          risk = risk.replace(marker, replacement)
+
+          old = '''  if (base.action !== "NONE" || marketRisk.action === "NONE") return base;
+  return {
+    ...base,
+    action: marketRisk.action,
+    reason: marketRisk.reason,
+    fraction: marketRisk.fraction,
+  };'''
+          new = '''  if (marketRisk.action === "NONE") return base;
+  // Hard price/emergency exits remain first. A structural full-exit outranks
+  // softer strategy exits such as TARGET_1 so a broken market thesis cannot linger.
+  if (base.action === "STOP" || base.action === "EMERGENCY") return base;
+  if (marketRisk.action !== "MARKET_RISK_EXIT" && base.action !== "NONE") return base;
+  return {
+    ...base,
+    action: marketRisk.action,
+    reason: marketRisk.reason,
+    fraction: marketRisk.fraction,
+  };'''
+          assert risk.count(old) == 1
+          risk = risk.replace(old, new)
+          risk_path.write_text(risk)
+
+          test = test_path.read_text()
+          old = '''    direction120?: string;
+    probability120?: number;
+  } = {},'''
+          new = '''    direction120?: string;
+    probability120?: number;
+    phase?: string;
+  } = {},'''
+          assert test.count(old) == 1
+          test = test.replace(old, new)
+          old = '      momentum_phase: { phase: "ROLLING_OVER" },'
+          new = '      momentum_phase: { phase: input.phase || "ROLLING_OVER" },'
+          assert test.count(old) == 1
+          test = test.replace(old, new)
+          test += r'''
+
+Deno.test("P10 regime transition BULL to RANGE watches, reduces, then exits if persistent", () => {
+  const watch = evaluateP10MarketRisk({
+    side: "LONG",
+    observations: [
+      observation(1, { regime: "NEUTRAL", score: 50 }),
+      observation(6, { regime: "BULL", score: 62 }),
+    ],
+    nowMs: NOW,
+    partialAlreadyDone: false,
+  });
+  assertEquals(watch.action, "NONE");
+  assertEquals(watch.audit.status, "WATCH");
+
+  const reduce = evaluateP10MarketRisk({
+    side: "LONG",
+    observations: [
+      observation(1, { regime: "NEUTRAL", score: 50 }),
+      observation(6, { regime: "NEUTRAL", score: 49 }),
+      observation(11, { regime: "BULL", score: 61 }),
+    ],
+    nowMs: NOW,
+    partialAlreadyDone: false,
+  });
+  assertEquals(reduce.action, "MARKET_RISK_PARTIAL");
+  assertEquals(reduce.fraction, 0.5);
+  assertEquals(reduce.reason, "REGIME_TRANSITION_BULL_TO_RANGE_DEFENSIVE");
+
+  const exit = evaluateP10MarketRisk({
+    side: "LONG",
+    observations: [
+      observation(1, { regime: "NEUTRAL", score: 48 }),
+      observation(6, { regime: "NEUTRAL", score: 49 }),
+      observation(11, { regime: "NEUTRAL", score: 50 }),
+      observation(16, { regime: "NEUTRAL", score: 51 }),
+      observation(21, { regime: "BULL", score: 62 }),
+    ],
+    nowMs: NOW,
+    partialAlreadyDone: true,
+  });
+  assertEquals(exit.action, "MARKET_RISK_EXIT");
+  assertEquals(exit.reason, "REGIME_TRANSITION_BULL_TO_RANGE_PERSIST_EXIT");
+});
+
+Deno.test("P10 regime transition exits LONG immediately on high-confidence BEAR flip with 2h confirmation", () => {
+  const decision = evaluateP10MarketRisk({
+    side: "LONG",
+    observations: [
+      observation(1, {
+        regime: "RISK_OFF",
+        score: 35,
+        confidence: 0.76,
+        direction120: "DOWN",
+        probability120: 0.62,
+      }),
+      observation(6, { regime: "BULL", score: 63 }),
+    ],
+    nowMs: NOW,
+    partialAlreadyDone: false,
+  });
+  assertEquals(decision.action, "MARKET_RISK_EXIT");
+  assertEquals(decision.audit.status, "CRITICAL_FAST");
+});
+
+Deno.test("P10 regime transition applies BEAR to RANGE defense and tactical rebound defense to SHORT", () => {
+  const range = evaluateP10MarketRisk({
+    side: "SHORT",
+    observations: [
+      observation(1, { regime: "NEUTRAL", score: 49 }),
+      observation(6, { regime: "NEUTRAL", score: 48 }),
+      observation(11, { regime: "RISK_OFF", score: 37 }),
+    ],
+    nowMs: NOW,
+    partialAlreadyDone: false,
+  });
+  assertEquals(range.action, "MARKET_RISK_PARTIAL");
+  assertEquals(range.reason, "REGIME_TRANSITION_BEAR_TO_RANGE_DEFENSIVE");
+
+  const rebound = evaluateP10MarketRisk({
+    side: "SHORT",
+    observations: [
+      observation(1, { regime: "RISK_OFF", score: 38, phase: "CAPITULATION_REBOUND" }),
+      observation(6, { regime: "RISK_OFF", score: 39, phase: "REBOUND_CONFIRMED" }),
+    ],
+    nowMs: NOW,
+    partialAlreadyDone: false,
+  });
+  assertEquals(rebound.action, "MARKET_RISK_PARTIAL");
+  assertEquals(rebound.reason, "REGIME_TRANSITION_BEAR_REBOUND_DEFENSIVE");
+});
+
+Deno.test("structural market exit outranks a softer strategy target but not a hard stop", () => {
+  const marketRisk = evaluateP10MarketRisk({
+    side: "LONG",
+    observations: [
+      observation(1, { regime: "RISK_OFF", score: 36 }),
+      observation(6, { regime: "RISK_OFF", score: 37 }),
+    ],
+    nowMs: NOW,
+    partialAlreadyDone: false,
+  });
+  const target = {
+    action: "TARGET_1",
+    reason: "BASE_TARGET",
+    fraction: 0.5,
+    nextStop: 100,
+    policyBarTime: NOW,
+  };
+  assertEquals(applyP10MarketRiskOverlay(target, marketRisk).action, "MARKET_RISK_EXIT");
+  const stop = { ...target, action: "STOP", reason: "HARD_STOP" };
+  assertEquals(applyP10MarketRiskOverlay(stop, marketRisk), stop);
+});
+'''
+          test_path.write_text(test)
+
+          index = index_path.read_text()
+          old = 'const VERSION = "8.0.2-P10-ORPHAN-ENTRY-SELF-HEAL";'
+          new = 'const VERSION = "8.0.3-P10-REGIME-TRANSITION-ROUTER";'
+          assert index.count(old) == 1
+          index_path.write_text(index.replace(old, new))
+          PY
+
+      - name: Format and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt \
+            supabase/functions/_shared/p10-market-risk.ts \
+            supabase/functions/_shared/p10-market-risk.test.ts \
+            supabase/functions/market-autotrader/index.ts
+          git diff --check
+          deno test supabase/functions/_shared/p10-market-risk.test.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          grep -q 'P10-MARKET-RISK-1.1.0-REGIME-TRANSITION' supabase/functions/_shared/p10-market-risk.ts
+          grep -q 'REGIME_TRANSITION_BULL_TO_RANGE_DEFENSIVE' supabase/functions/_shared/p10-market-risk.ts
+          grep -q '8.0.3-P10-REGIME-TRANSITION-ROUTER' supabase/functions/market-autotrader/index.ts
+
+      - name: Commit validated router
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/_shared/p10-market-risk.ts \
+            supabase/functions/_shared/p10-market-risk.test.ts \
+            supabase/functions/market-autotrader/index.ts
+          git commit -m "feat: route held P10 positions through regime transitions"
+          git push origin HEAD:main
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Deploy market-autotrader
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_PROJECT_REF:-}"
+          supabase functions deploy market-autotrader \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
