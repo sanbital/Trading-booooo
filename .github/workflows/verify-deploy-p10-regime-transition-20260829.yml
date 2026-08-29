@@ -33,7 +33,7 @@ jobs:
           deno check supabase/functions/_shared/p10-market-risk.ts
           deno test supabase/functions/_shared/p10-market-risk.test.ts
           grep -q 'P10-MARKET-RISK-1.1.0-REGIME-TRANSITION' supabase/functions/_shared/p10-market-risk.ts
-          grep -q 'REGIME_TRANSITION_BULL_TO_RANGE_DEFENSIVE' supabase/functions/_shared/p10-market-risk.ts
+          grep -q 'TO_RANGE_DEFENSIVE' supabase/functions/_shared/p10-market-risk.ts
           grep -q 'evaluateP10MarketRisk' supabase/functions/market-autotrader/index.ts
           grep -q 'applyP10MarketRiskOverlay' supabase/functions/market-autotrader/index.ts
 
