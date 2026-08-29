@@ -1,3 +1,3 @@
-trigger=2026-08-29T16:08:00+09:00
+trigger=2026-08-29T16:11:00+09:00
 revision=REGIME_ROUTER_V6_RANGE_EDGE_SCORE_15M_120D_RSWF
-attempt=3
+attempt=4
