@@ -8,60 +8,87 @@ on:
       - ops/range-v6-positive-edge-trigger.txt
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: range-v6-positive-edge-research
+  cancel-in-progress: false
 
 jobs:
-  patch-test-deploy:
+  validate-stamp-deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout research branch
+      - name: Checkout tested research branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: research/range-v6-positive-edge-20260829
           fetch-depth: 0
-
-      - name: Apply precommitted RANGE V6 patch
-        run: |
-          set -euo pipefail
-          python scripts/research_range_v6_patch.py
-          python scripts/research_range_v6_fix1.py
-          python scripts/research_range_v6_fix2_tests.py
+          persist-credentials: false
 
       - name: Set up Deno
         uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
 
-      - name: Format and test full V5/V6 research engine
+      - name: Validate RANGE V6 source
         run: |
           set -euo pipefail
-          deno fmt supabase/functions/regime-router-v5-research
-          deno test supabase/functions/regime-router-v5-research/*.test.ts
-          deno check supabase/functions/regime-router-v5-research/index.ts
-          grep -q 'REGIME_ROUTER_V6_RANGE_EDGE_SCORE_15M_120D_RSWF' supabase/functions/regime-router-v5-research/types.ts
-          grep -q 'V6_RANGE_SHORT_EDGE' supabase/functions/regime-router-v5-research/strategies.ts
-          grep -q 'RANGE_DOWN_CYCLE' supabase/functions/regime-router-v5-research/tactical.ts
-
-      - name: Commit tested research revision
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add supabase/functions/regime-router-v5-research
-          if git diff --cached --quiet; then
-            echo 'No research changes to commit'
-          else
-            git commit -m 'research: implement RANGE V6 scored two-sided mean reversion'
-            git push origin HEAD:research/range-v6-positive-edge-20260829
+          source_dir='supabase/functions/regime-router-v5-research'
+          deno fmt --check "$source_dir"
+          deno check "$source_dir"/*.ts
+          deno test "$source_dir"/*.test.ts
+          grep -q 'REGIME_ROUTER_V6_RANGE_EDGE_SCORE_15M_120D_RSWF' "$source_dir/types.ts"
+          grep -q 'V6_RANGE_SHORT_EDGE' "$source_dir/strategies.ts"
+          grep -q 'RANGE_DOWN_CYCLE' "$source_dir/tactical.ts"
+          if find "$source_dir" -type f -name '*.ts' ! -name '*.test.ts' -print0 \
+            | xargs -0 grep -n -E 'market-autotrader|market-v2-signal|trading_settings|orders|exchange_orders|/fapi/v1/order|order-gateway|positionRisk|/fapi/v[12]/position|exchange_positions'; then
+            echo 'RANGE V6 research references a production path' >&2
+            exit 1
           fi
+
+      - name: Build and stamp immutable runtime identity
+        id: identity
+        run: |
+          set -euo pipefail
+          source_dir='supabase/functions/regime-router-v5-research'
+          manifest="$RUNNER_TEMP/v6-implementation-manifest.bin"
+          : > "$manifest"
+          source_count=0
+          while IFS= read -r -d '' source_file; do
+            file_sha256=$(sha256sum "$source_file" | awk '{print $1}')
+            printf '%s  %s\0' "$file_sha256" "$source_file" >> "$manifest"
+            source_count=$((source_count + 1))
+          done < <(
+            git ls-files -z -- "$source_dir" \
+              | grep -zE '\.ts$' \
+              | grep -zvE '\.test\.ts$' \
+              | LC_ALL=C sort -z
+          )
+          test "$source_count" -gt 0
+          implementation_sha256=$(sha256sum "$manifest" | awk '{print $1}')
+          [[ "$implementation_sha256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(grep -Foh '__V5_BUILD_SOURCE_SHA__' "$source_dir/types.ts" | wc -l)" = '1'
+          test "$(grep -Foh '__V5_IMPLEMENTATION_SHA256__' "$source_dir/types.ts" | wc -l)" = '1'
+          sed -i \
+            -e "s/__V5_BUILD_SOURCE_SHA__/$GITHUB_SHA/" \
+            -e "s/__V5_IMPLEMENTATION_SHA256__/$implementation_sha256/" \
+            "$source_dir/types.ts"
+          ! grep -R -F -n --include='*.ts' --exclude='*.test.ts' \
+            -e '__V5_BUILD_SOURCE_SHA__' \
+            -e '__V5_IMPLEMENTATION_SHA256__' \
+            "$source_dir"
+          deno check "$source_dir"/*.ts
+          echo "source_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "implementation_sha256=$implementation_sha256" >> "$GITHUB_OUTPUT"
 
       - name: Install Supabase CLI
         uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
         with:
           version: 2.109.1
 
-      - name: Deploy research function only
+      - name: Deploy stamped research function only
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
@@ -69,4 +96,10 @@ jobs:
           set -euo pipefail
           test -n "${SUPABASE_ACCESS_TOKEN:-}"
           test -n "${SUPABASE_PROJECT_REF:-}"
-          supabase functions deploy regime-router-v5-research --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
+          test "$SUPABASE_PROJECT_REF" = 'etaajwpernzrcdrifdnw'
+          supabase functions deploy regime-router-v5-research \
+            --project-ref "$SUPABASE_PROJECT_REF" \
+            --no-verify-jwt \
+            --use-api
+          echo "deployed_source_sha=${{ steps.identity.outputs.source_sha }}"
+          echo "deployed_implementation_sha256=${{ steps.identity.outputs.implementation_sha256 }}"
