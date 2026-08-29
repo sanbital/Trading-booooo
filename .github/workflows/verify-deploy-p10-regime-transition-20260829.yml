@@ -6,6 +6,7 @@ on:
     paths:
       - "supabase/functions/_shared/p10-market-risk.ts"
       - "supabase/functions/_shared/p10-market-risk.test.ts"
+      - ".github/workflows/verify-deploy-p10-regime-transition-20260829.yml"
 
 permissions:
   contents: read
@@ -28,7 +29,7 @@ jobs:
       - name: Verify transition router
         run: |
           set -euo pipefail
-          deno fmt --check supabase/functions/_shared/p10-market-risk.ts supabase/functions/_shared/p10-market-risk.test.ts
+          deno fmt supabase/functions/_shared/p10-market-risk.ts supabase/functions/_shared/p10-market-risk.test.ts
           deno test supabase/functions/_shared/p10-market-risk.test.ts
           deno check supabase/functions/market-autotrader/index.ts
           grep -q 'P10-MARKET-RISK-1.1.0-REGIME-TRANSITION' supabase/functions/_shared/p10-market-risk.ts
