@@ -1,0 +1,137 @@
+name: Automation Post Regime Performance 20260829
+
+on:
+  push:
+    branches: [automation-perf-20260829-1208]
+    paths:
+      - '.github/workflows/automation-post-regime-performance-20260829.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  summary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read-only production performance query
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL}"
+          psql "${SUPABASE_DB_URL}" -v ON_ERROR_STOP=1 -P pager=off -F '|' -A -t <<'SQL'
+          begin transaction read only;
+          \echo ===ASOF===
+          select now(), timestamp with time zone '2026-08-29 00:40:09+00' as fix_at,
+                 now()-timestamp with time zone '2026-08-29 00:40:09+00' as span;
+
+          \echo ===ENTRY_COHORT===
+          with b as (
+            select timestamp with time zone '2026-08-29 00:40:09+00' fix_at, now() as asof,
+                   now()-timestamp with time zone '2026-08-29 00:40:09+00' span
+          ), p as (
+            select p.*,
+              case
+                when p.opened_at >= b.fix_at and p.opened_at <= b.asof then 'POST'
+                when p.opened_at >= b.fix_at-b.span and p.opened_at < b.fix_at then 'PRE'
+                when p.opened_at >= b.fix_at-2*b.span and p.opened_at < b.fix_at-b.span then 'PRIOR'
+              end cohort
+            from public.trading_positions p cross join b
+            where p.is_paper is false
+          )
+          select cohort,
+            case when exchange='binance_futures' then 'FUTURES' else 'SPOT' end market_type,
+            exchange, quote_currency,
+            count(*) as positions,
+            count(*) filter(where state='CLOSED') closed_n,
+            count(*) filter(where state='OPEN') open_n,
+            count(*) filter(where state='CLOSED' and realized_pnl_quote>0) wins,
+            count(*) filter(where state='CLOSED' and realized_pnl_quote<0) losses,
+            count(*) filter(where state='CLOSED' and realized_pnl_quote=0) flats,
+            round(sum(realized_pnl_quote) filter(where state='CLOSED')::numeric,6) pnl,
+            round(avg(realized_return_pct) filter(where state='CLOSED')::numeric,4) avg_ret_pct,
+            round(avg(realized_pnl_quote) filter(where state='CLOSED' and realized_pnl_quote>0)::numeric,6) avg_win_pnl,
+            round(avg(realized_pnl_quote) filter(where state='CLOSED' and realized_pnl_quote<0)::numeric,6) avg_loss_pnl,
+            round(avg(realized_return_pct) filter(where state='CLOSED' and realized_pnl_quote>0)::numeric,4) avg_win_ret_pct,
+            round(avg(realized_return_pct) filter(where state='CLOSED' and realized_pnl_quote<0)::numeric,4) avg_loss_ret_pct,
+            count(*) filter(where state='CLOSED' and upper(coalesce(close_reason,'')) like '%STOP%') stops,
+            round((100.0*count(*) filter(where state='CLOSED' and upper(coalesce(close_reason,'')) like '%STOP%')/nullif(count(*) filter(where state='CLOSED'),0))::numeric,2) stop_pct,
+            round(avg(mfe_capture_ratio) filter(where state='CLOSED')::numeric,4) avg_mfe_capture,
+            round(avg(profit_giveback_pct) filter(where state='CLOSED')::numeric,4) avg_giveback_pct
+          from p where cohort is not null
+          group by cohort, market_type, exchange, quote_currency
+          order by case cohort when 'POST' then 1 when 'PRE' then 2 else 3 end, market_type, exchange;
+
+          \echo ===CLOSE_WINDOW===
+          with b as (
+            select timestamp with time zone '2026-08-29 00:40:09+00' fix_at, now() as asof,
+                   now()-timestamp with time zone '2026-08-29 00:40:09+00' span
+          ), p as (
+            select p.*,
+              case
+                when p.closed_at >= b.fix_at and p.closed_at <= b.asof then 'POST'
+                when p.closed_at >= b.fix_at-b.span and p.closed_at < b.fix_at then 'PRE'
+                when p.closed_at >= b.fix_at-2*b.span and p.closed_at < b.fix_at-b.span then 'PRIOR'
+              end win
+            from public.trading_positions p cross join b
+            where p.is_paper is false and p.state='CLOSED'
+          )
+          select win,
+            case when exchange='binance_futures' then 'FUTURES' else 'SPOT' end market_type,
+            exchange, quote_currency, count(*) n,
+            count(*) filter(where realized_pnl_quote>0) wins,
+            count(*) filter(where realized_pnl_quote<0) losses,
+            round(sum(realized_pnl_quote)::numeric,6) pnl,
+            round(avg(realized_return_pct)::numeric,4) avg_ret_pct,
+            round(avg(realized_pnl_quote) filter(where realized_pnl_quote>0)::numeric,6) avg_win_pnl,
+            round(avg(realized_pnl_quote) filter(where realized_pnl_quote<0)::numeric,6) avg_loss_pnl,
+            count(*) filter(where upper(coalesce(close_reason,'')) like '%STOP%') stops,
+            round(avg(mfe_capture_ratio)::numeric,4) avg_mfe_capture,
+            round(avg(profit_giveback_pct)::numeric,4) avg_giveback_pct
+          from p where win is not null
+          group by win, market_type, exchange, quote_currency
+          order by case win when 'POST' then 1 when 'PRE' then 2 else 3 end, market_type, exchange;
+
+          \echo ===FILL_COUNTS===
+          with b as (
+            select timestamp with time zone '2026-08-29 00:40:09+00' fix_at, now() as asof,
+                   now()-timestamp with time zone '2026-08-29 00:40:09+00' span
+          ), f as (
+            select f.executed_at, to_jsonb(f) j,
+              case
+                when f.executed_at >= b.fix_at and f.executed_at <= b.asof then 'POST'
+                when f.executed_at >= b.fix_at-b.span and f.executed_at < b.fix_at then 'PRE'
+                when f.executed_at >= b.fix_at-2*b.span and f.executed_at < b.fix_at-b.span then 'PRIOR'
+              end win
+            from public.exchange_trade_fills f cross join b
+            where f.executed_at >= b.fix_at-2*b.span and f.executed_at <= b.asof
+          )
+          select win,
+            case when lower(coalesce(j->>'exchange',j->>'venue','')) like '%futures%' then 'FUTURES' else 'SPOT' end market_type,
+            coalesce(j->>'exchange',j->>'venue','') exchange,
+            count(*) fill_rows,
+            count(distinct nullif(j->>'position_id','')) positions
+          from f where win is not null
+          group by win, market_type, exchange
+          order by case win when 'POST' then 1 when 'PRE' then 2 else 3 end, market_type, exchange;
+
+          \echo ===POST_POSITIONS===
+          select row_to_json(p) from public.trading_positions p
+          where p.is_paper is false and p.opened_at >= timestamp with time zone '2026-08-29 00:40:09+00'
+          order by p.opened_at;
+
+          \echo ===POST_FILLS===
+          select row_to_json(f) from public.exchange_trade_fills f
+          where f.executed_at >= timestamp with time zone '2026-08-29 00:40:09+00'
+          order by f.executed_at;
+
+          \echo ===REGIME_GATE_SAMPLE===
+          select row_to_json(g) from public.p10_entry_regime_gate_attempts g limit 80;
+
+          \echo ===RECENT_CLAIMS===
+          select row_to_json(c) from public.p10_signal_claims c
+          where c.signal_time >= timestamp with time zone '2026-08-28 21:40:09+00'
+          order by c.signal_time desc limit 80;
+          rollback;
+          SQL
