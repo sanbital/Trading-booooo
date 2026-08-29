@@ -1,0 +1,230 @@
+name: RANGE V6 Full Universe Validation
+
+on:
+  push:
+    branches:
+      - research/range-v6-positive-edge-20260829
+    paths:
+      - ops/range-v6-full-validation-trigger.txt
+
+permissions:
+  contents: read
+
+concurrency:
+  group: range-v6-full-universe-validation
+  cancel-in-progress: false
+
+env:
+  EDGE_URL: https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/regime-router-v5-research
+  SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+  DEPLOY_SHA: 5c955a3a168e20670fd17d92d0213314b2610229
+  EXPECTED_REVISION: REGIME_ROUTER_V6_RANGE_EDGE_SCORE_15M_120D_RSWF
+  EXPECTED_CANDIDATES: "20"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout tested V6 branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: research/range-v6-positive-edge-20260829
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify deployed implementation identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL:-}"
+          source_dir='supabase/functions/regime-router-v5-research'
+          git diff --quiet "$DEPLOY_SHA" HEAD -- "$source_dir"
+          manifest="$RUNNER_TEMP/v6-implementation-manifest.bin"
+          : > "$manifest"
+          while IFS= read -r -d '' source_file; do
+            file_sha256=$(sha256sum "$source_file" | awk '{print $1}')
+            printf '%s  %s\0' "$file_sha256" "$source_file" >> "$manifest"
+          done < <(
+            git ls-files -z -- "$source_dir" \
+              | grep -zE '\.ts$' \
+              | grep -zvE '\.test\.ts$' \
+              | LC_ALL=C sort -z
+          )
+          implementation_sha256=$(sha256sum "$manifest" | awk '{print $1}')
+          [[ "$implementation_sha256" =~ ^[0-9a-f]{64}$ ]]
+          echo "implementation_sha256=$implementation_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Start and complete 567-market V6 replay
+        shell: bash
+        env:
+          IMPLEMENTATION_SHA256: ${{ steps.identity.outputs.implementation_sha256 }}
+        run: |
+          set -euo pipefail
+          token=$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 <<'SQL'
+          select token from edge_internal_tokens where name = 'market-v2-research';
+          SQL
+          )
+          test "$(printf '%s\n' "$token" | sed '/^$/d' | wc -l)" = "1"
+          export RESEARCH_TOKEN="$token"
+
+          python3 - <<'PY'
+          import concurrent.futures
+          import json
+          import os
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+
+          EDGE_URL = os.environ['EDGE_URL']
+          TOKEN = os.environ['RESEARCH_TOKEN'].strip()
+          DEPLOY_SHA = os.environ['DEPLOY_SHA']
+          IMPLEMENTATION_SHA256 = os.environ['IMPLEMENTATION_SHA256']
+          EXPECTED_REVISION = os.environ['EXPECTED_REVISION']
+          EXPECTED_CANDIDATES = int(os.environ['EXPECTED_CANDIDATES'])
+          REGIONS = [
+              'ap-northeast-2','ap-south-1','sa-east-1','eu-central-1','ap-southeast-2',
+              'eu-west-1','ap-southeast-1','ap-northeast-1','ca-central-1','eu-west-2','eu-west-3',
+          ]
+
+          def request(payload, region, attempts=5):
+              raw = json.dumps(payload, separators=(',', ':')).encode()
+              last = None
+              for attempt in range(attempts):
+                  req = urllib.request.Request(
+                      EDGE_URL, data=raw, method='POST',
+                      headers={
+                          'content-type':'application/json',
+                          'x-v2-research-token':TOKEN,
+                          'x-region':region,
+                      },
+                  )
+                  try:
+                      with urllib.request.urlopen(req, timeout=430) as resp:
+                          body = resp.read().decode()
+                          status = resp.status
+                  except urllib.error.HTTPError as exc:
+                      status = exc.code
+                      body = exc.read().decode(errors='replace')
+                  except Exception as exc:
+                      last = f'{type(exc).__name__}: {exc}'
+                      time.sleep(min(20, 2 ** attempt))
+                      continue
+                  try:
+                      parsed = json.loads(body)
+                  except Exception:
+                      parsed = {'ok':False,'error':body[:1000]}
+                  if status == 200 and parsed.get('ok') is True:
+                      return parsed
+                  last = f'HTTP {status}: {body[:1200]}'
+                  time.sleep(min(30, 2 ** attempt))
+              raise RuntimeError(last or 'edge request failed')
+
+          start_payload = {
+              'action':'start_v5',
+              'source_sha':DEPLOY_SHA,
+              'implementation_sha256':IMPLEMENTATION_SHA256,
+          }
+          start = None
+          start_region = None
+          errors = []
+          for region in REGIONS:
+              try:
+                  candidate = request(start_payload, region, attempts=2)
+                  if candidate.get('revision') != EXPECTED_REVISION:
+                      raise RuntimeError(f"revision mismatch {candidate.get('revision')}")
+                  if int(candidate.get('candidates', -1)) != EXPECTED_CANDIDATES:
+                      raise RuntimeError(f"candidate mismatch {candidate.get('candidates')}")
+                  if int(candidate.get('total_markets', 0)) < 500:
+                      raise RuntimeError(f"market count too small {candidate.get('total_markets')}")
+                  if candidate.get('source_sha') != DEPLOY_SHA:
+                      raise RuntimeError('source sha mismatch')
+                  if candidate.get('implementation_sha256') != IMPLEMENTATION_SHA256:
+                      raise RuntimeError('implementation hash mismatch')
+                  start = candidate
+                  start_region = region
+                  break
+              except Exception as exc:
+                  errors.append(f'{region}:{exc}')
+          if start is None:
+              raise RuntimeError('start_v5 failed across safe regions: ' + ' | '.join(errors))
+
+          job_id = start['job_id']
+          print('V6_JOB_START=' + json.dumps({
+              'job_id':job_id,
+              'region':start_region,
+              'revision':start.get('revision'),
+              'markets':start.get('total_markets'),
+              'candidates':start.get('candidates'),
+              'folds':start.get('folds'),
+              'lookback_days':start.get('lookback_days'),
+              'source_sha':start.get('source_sha'),
+              'implementation_sha256':start.get('implementation_sha256'),
+          }, separators=(',', ':')), flush=True)
+
+          with open('/tmp/range-v6-job-id.txt','w') as f:
+              f.write(job_id)
+
+          def parallel_stage(label, action, count, field, workers=11):
+              print(f'::{label}:: start {count} shards with {workers} safe regions', flush=True)
+              failures = []
+              done = 0
+              def one(index):
+                  payload = {'action':action, 'job_id':job_id, field:index}
+                  if action == 'breadth_shard_v5': payload['shard_count'] = 100
+                  elif action == 'finalize_chunk_v5': payload['chunk_count'] = 12
+                  elif action == 'backtest_shard_v5': payload['shard_count'] = 600
+                  elif action == 'backtest_rollup_v5': payload['rollup_count'] = 60
+                  return request(payload, REGIONS[index % len(REGIONS)])
+              with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                  futures = {pool.submit(one, i): i for i in range(count)}
+                  for future in concurrent.futures.as_completed(futures):
+                      index = futures[future]
+                      try:
+                          future.result()
+                          done += 1
+                          if done % max(1, count // 10) == 0 or done == count:
+                              print(f'::{label}:: {done}/{count}', flush=True)
+                      except Exception as exc:
+                          failures.append((index, str(exc)))
+                          print(f'::{label}:: shard {index} failed: {exc}', file=sys.stderr, flush=True)
+              if failures:
+                  raise RuntimeError(f'{label} failures: {failures[:10]}')
+
+          parallel_stage('breadth', 'breadth_shard_v5', 100, 'shard_index')
+          parallel_stage('structural-finalize', 'finalize_chunk_v5', 12, 'chunk_index')
+          request({'action':'finalize_v5','job_id':job_id}, REGIONS[0])
+          parallel_stage('backtest', 'backtest_shard_v5', 600, 'shard_index')
+          parallel_stage('rollup', 'backtest_rollup_v5', 60, 'rollup_index')
+          status = request({'action':'status_v5','job_id':job_id,'assert_complete':True}, REGIONS[0])
+          with open('/tmp/range-v6-final.json','w') as f:
+              json.dump(status, f)
+          reports = status.get('validation_reports') or []
+          range_reports = [r for r in reports if str(r.get('family','')).upper() == 'RANGE_CYCLE']
+          metrics = status.get('full_market_fold_metrics') or []
+          range_metrics = [m for m in metrics if str(m.get('family','')).upper() == 'RANGE_CYCLE']
+          robust = [r for r in (status.get('robust_candidates') or []) if 'RANGE' in str(r)]
+          print('RANGE_V6_FINAL=' + json.dumps({
+              'job_id':job_id,
+              'ok':status.get('ok'),
+              'complete':status.get('complete'),
+              'status':status.get('status'),
+              'checkpoint_failures':status.get('checkpoint_failures'),
+              'robust_range_candidates':robust,
+              'range_validation_reports':range_reports,
+              'range_full_market_fold_metrics':range_metrics,
+          }, separators=(',', ':')), flush=True)
+          PY
+
+      - name: Upload V6 final result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: range-v6-full-validation-result
+          path: |
+            /tmp/range-v6-job-id.txt
+            /tmp/range-v6-final.json
+          if-no-files-found: warn
+          retention-days: 30
