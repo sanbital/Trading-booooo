@@ -8,6 +8,8 @@ p = ROOT / 'ops.test.ts'
 s = p.read_text()
 s = s.replace('assertEquals(captured.config?.candidate_count, 19);', 'assertEquals(captured.config?.candidate_count, candidates().length);')
 s = s.replace('assertEquals(resultRows[0].length, 19 * 4 * 3);', 'assertEquals(resultRows[0].length, candidates().length * 4 * 3);')
+s = s.replace('assertEquals(rollup.result_rows, 10 * 19 * 4 * 3);', 'assertEquals(rollup.result_rows, 10 * candidates().length * 4 * 3);')
+s = s.replace('assertEquals((rollup.aggregates as unknown[]).length, 19 * 4 * 3);', 'assertEquals((rollup.aggregates as unknown[]).length, candidates().length * 4 * 3);')
 p.write_text(s)
 
 # strategies.test.ts: assert the new exact registry and replace the obsolete long-only RANGE test.
