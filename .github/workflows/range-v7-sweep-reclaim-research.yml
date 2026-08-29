@@ -1,0 +1,381 @@
+name: RANGE V7 Sweep Reclaim Research
+
+on:
+  push:
+    branches:
+      - research/range-v7-sweep-reclaim-20260829
+    paths:
+      - ops/range-v7-sweep-reclaim-trigger.txt
+
+permissions:
+  contents: read
+
+concurrency:
+  group: range-v7-sweep-reclaim-research
+  cancel-in-progress: false
+
+jobs:
+  validate-stamp-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout frozen V6 lineage
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: research/range-v7-sweep-reclaim-20260829
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Apply pre-committed RANGE V7 causal patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          source_dir = Path('supabase/functions/regime-router-v5-research')
+          types_path = source_dir / 'types.ts'
+          strategies_path = source_dir / 'strategies.ts'
+          simulator_path = source_dir / 'simulator.ts'
+
+          def replace_once(text, pattern, replacement, label):
+              updated, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one replacement, got {count}')
+              return updated
+
+          types = types_path.read_text()
+          old_revision = 'REGIME_ROUTER_V6_RANGE_EDGE_SCORE_15M_120D_RSWF'
+          new_revision = 'REGIME_ROUTER_V7_RANGE_SWEEP_RECLAIM_15M_120D_RSWF'
+          if types.count(old_revision) != 1:
+              raise SystemExit('unexpected V6 revision marker count')
+          types = types.replace(old_revision, new_revision)
+          types_path.write_text(types)
+
+          strategies = strategies_path.read_text()
+          old_registry = 'V6_PRECOMMITTED_RANGE_EDGE_SCORE_20260829_A'
+          new_registry = 'V7_PRECOMMITTED_RANGE_SWEEP_RECLAIM_20260829_A'
+          if strategies.count(old_registry) != 1:
+              raise SystemExit('unexpected V6 registry marker count')
+          strategies = strategies.replace(old_registry, new_registry)
+
+          strategies = replace_once(
+              strategies,
+              r'const RANGE_EXIT = \{.*?\n\};\n\nconst BEAR_EXIT',
+              '''const RANGE_EXIT = {
+            // V7 removes V6's +0.25 ATR / 70% partial realization. The edge must
+            // survive on full-position payoff with a structure-defined stop.
+            initialStopAtr: 0.40,
+            maxHoldBars: 4,
+            profitLockAtR: 100,
+            profitLockR: 0,
+          };
+
+          const BEAR_EXIT''',
+              'RANGE_EXIT',
+          )
+
+          strategies = replace_once(
+              strategies,
+              r'const RANGE_BASE = \{.*?\n\};\n\nconst BEAR_BASE',
+              '''const RANGE_BASE = {
+            ...COMMON,
+            ...RANGE_EXIT,
+            maxAbsRet24: 0.25,
+            maxAdx: 23,
+            maxEmaSeparationAtr: 0.70,
+            minAtrPercentile: 0.10,
+            maxAtrPercentile: 0.90,
+            minRangeWidthAtr: 1.80,
+            maxRangeWidthAtr: 6.00,
+            minVolumeRatio: 0.55,
+            maxRangePosition: 0.25,
+            minRangePosition: 0.75,
+            minReclaimAtr: 0.05,
+            stopBufferAtr: 0.10,
+            maxSignalRiskAtr: 0.40,
+            maxOuterBreakAtr: 0.15,
+            minTargetAtr: 0.60,
+            costMultiple: 3,
+            minRewardRisk: 1.50,
+          };
+
+          const BEAR_BASE''',
+              'RANGE_BASE',
+          )
+
+          strategies = replace_once(
+              strategies,
+              r'  \.\.\.\[0\.20, 0\.25, 0\.30\]\.map\(\(maxRangePosition\).*?(?=  \.\.\.\[0, 0\.05, 0\.1\]\.map)',
+              '''  ...[0, 0.05, 0.10].map((minSweepDepthAtr) =>
+            makeCandidate(
+              `V7_RANGE_SWEEP_LONG_D${String(Math.round(minSweepDepthAtr * 100)).padStart(2, "0")}`,
+              "RANGE_CYCLE",
+              "LONG",
+              "RANGE_UP_CYCLE",
+              "RANGE_LONG_SWEEP_DEPTH",
+              { ...RANGE_BASE, minSweepDepthAtr },
+            )
+          ),
+            ...[0, 0.05, 0.10].map((minSweepDepthAtr) =>
+            makeCandidate(
+              `V7_RANGE_SWEEP_SHORT_D${String(Math.round(minSweepDepthAtr * 100)).padStart(2, "0")}`,
+              "RANGE_CYCLE",
+              "SHORT",
+              "RANGE_DOWN_CYCLE",
+              "RANGE_SHORT_SWEEP_DEPTH",
+              { ...RANGE_BASE, minSweepDepthAtr },
+            )
+          ),
+          ''',
+              'RANGE candidate grid',
+          )
+
+          range_decision = r'''function rangeDecision(
+            bars: readonly PreparedBar[],
+            index: number,
+            candidate: Candidate,
+            tactical: TacticalContext,
+            structural: StructuralPoint,
+          ): SignalDecision {
+            const current = bars[index];
+            const previous = bars[index - 1];
+            if (!previous) return reject(candidate, tactical, ["COMPLETED_PRIOR_BAR_REQUIRED"]);
+            const failures = commonFailures(current, index, candidate, tactical, structural);
+            if (candidate.family !== "RANGE_CYCLE") failures.push("RANGE_FAMILY_REQUIRED");
+
+            const isLong = candidate.side === "LONG";
+            const expectedPhase = isLong ? "UP_CYCLE" : "DOWN_CYCLE";
+            const expectedState = isLong ? "RANGE_UP_CYCLE" : "RANGE_DOWN_CYCLE";
+            if (tactical.phase !== expectedPhase || tactical.state !== expectedState) {
+              failures.push(isLong ? "RANGE_UP_CYCLE_ONLY" : "RANGE_DOWN_CYCLE_ONLY");
+            }
+
+            const emaSeparationAtr = Math.abs(current.ema20 - current.ema50) / current.atr;
+            if (
+              current.adx > parameter(candidate, "maxAdx") ||
+              emaSeparationAtr > parameter(candidate, "maxEmaSeparationAtr")
+            ) failures.push("TRENDLESS_STRUCTURE_REQUIRED");
+            if (
+              current.atrPercentile7d < parameter(candidate, "minAtrPercentile") ||
+              current.atrPercentile7d > parameter(candidate, "maxAtrPercentile")
+            ) failures.push("ATR_PERCENTILE_OUTSIDE_WINDOW");
+
+            const rangeWidth = current.high20Prev - current.low20Prev;
+            const rangeWidthAtr = rangeWidth / current.atr;
+            if (
+              !(rangeWidth > 0) || rangeWidthAtr < parameter(candidate, "minRangeWidthAtr") ||
+              rangeWidthAtr > parameter(candidate, "maxRangeWidthAtr")
+            ) failures.push("RANGE_WIDTH_OUTSIDE_EDGE_WINDOW");
+
+            const rangePosition = rangeWidth > 0 ? (current.close - current.low20Prev) / rangeWidth : 0.5;
+            if (isLong) {
+              if (rangePosition > parameter(candidate, "maxRangePosition")) {
+                failures.push("LONG_NOT_AT_RANGE_LOWER_EDGE");
+              }
+            } else if (rangePosition < parameter(candidate, "minRangePosition")) {
+              failures.push("SHORT_NOT_AT_RANGE_UPPER_EDGE");
+            }
+
+            const sweepDepth = parameter(candidate, "minSweepDepthAtr") * current.atr;
+            const reclaim = parameter(candidate, "minReclaimAtr") * current.atr;
+            const outerBreak = parameter(candidate, "maxOuterBreakAtr") * current.atr;
+            if (isLong) {
+              if (!finite(current.low8Prev) || current.low > current.low8Prev - sweepDepth) {
+                failures.push("PRIOR_LOW_LIQUIDITY_SWEEP_REQUIRED");
+              }
+              if (!finite(current.low8Prev) || current.close < current.low8Prev + reclaim) {
+                failures.push("COMPLETED_LOW_RECLAIM_REQUIRED");
+              }
+              if (current.low < current.low20Prev - outerBreak || current.close <= current.low20Prev) {
+                failures.push("RANGE_BREAK_NOT_SWEEP_EXCLUDED");
+              }
+              if (!(current.close > current.open && current.close > previous.close)) {
+                failures.push("BULLISH_RECLAIM_CLOSE_REQUIRED");
+              }
+            } else {
+              if (!finite(current.high8Prev) || current.high < current.high8Prev + sweepDepth) {
+                failures.push("PRIOR_HIGH_LIQUIDITY_SWEEP_REQUIRED");
+              }
+              if (!finite(current.high8Prev) || current.close > current.high8Prev - reclaim) {
+                failures.push("COMPLETED_HIGH_RECLAIM_REQUIRED");
+              }
+              if (current.high > current.high20Prev + outerBreak || current.close >= current.high20Prev) {
+                failures.push("RANGE_BREAK_NOT_SWEEP_EXCLUDED");
+              }
+              if (!(current.close < current.open && current.close < previous.close)) {
+                failures.push("BEARISH_RECLAIM_CLOSE_REQUIRED");
+              }
+            }
+
+            if (current.volumeRatio < parameter(candidate, "minVolumeRatio")) {
+              failures.push("RANGE_VOLUME_TOO_LOW");
+            }
+
+            const stop = isLong
+              ? current.low - parameter(candidate, "stopBufferAtr") * current.atr
+              : current.high + parameter(candidate, "stopBufferAtr") * current.atr;
+            const signalRisk = Math.abs(current.close - stop);
+            if (signalRisk > parameter(candidate, "maxSignalRiskAtr") * current.atr) {
+              failures.push("SWEEP_STOP_TOO_WIDE");
+            }
+
+            const target = isLong ? nearestTargetAbove(current) : nearestTargetBelow(current);
+            if (target === null) {
+              failures.push("NO_REALIZABLE_MEAN_REVERSION_TARGET");
+            } else {
+              const move = isLong ? target - current.close : current.close - target;
+              const moveAtr = move / current.atr;
+              const moveBps = move / current.close * 10_000;
+              const rewardRisk = signalRisk > 0 ? move / signalRisk : 0;
+              if (
+                moveAtr < parameter(candidate, "minTargetAtr") ||
+                moveBps < BASE_COST_BPS * parameter(candidate, "costMultiple") ||
+                rewardRisk < parameter(candidate, "minRewardRisk")
+              ) failures.push("TARGET_ROOM_OR_REWARD_RISK_GATE_FAILED");
+            }
+
+            if (failures.length) return reject(candidate, tactical, failures);
+            return accept(
+              tactical,
+              [
+                "STRUCTURAL_RANGE",
+                isLong ? "LOW_SWEEP_RECLAIM" : "HIGH_SWEEP_RECLAIM",
+                "STRUCTURAL_STOP",
+                "NEXT_OPEN_RR_GATE",
+                "COST_GATE",
+              ],
+              stop,
+              target ?? undefined,
+            );
+          }
+
+          function bearDecision('''
+          strategies = replace_once(
+              strategies,
+              r'function rangeDecision\(.*?\n\}\n\nfunction bearDecision\(',
+              range_decision,
+              'rangeDecision',
+          )
+          strategies_path.write_text(strategies)
+
+          simulator = simulator_path.read_text()
+          simulator = replace_once(
+              simulator,
+              r'''if \(candidate\.family === "RANGE_CYCLE"\) \{\n    const targetRoom = candidate\.side === "LONG" \? target! - entry : entry - target!;\n    const targetBps = targetRoom / entry \* 10_000;\n    if \(\n      targetRoom < finite\(candidate\.parameters\.minTargetAtr, 0\.75\) \* signalAtr \|\|\n      targetBps < baseCostBps \* finite\(candidate\.parameters\.costMultiple, 4\)\n    \) return null;\n  \}''',
+              '''if (candidate.family === "RANGE_CYCLE") {
+            const targetRoom = candidate.side === "LONG" ? target! - entry : entry - target!;
+            const targetBps = targetRoom / entry * 10_000;
+            const rewardRisk = targetRoom / risk;
+            if (
+              targetRoom < finite(candidate.parameters.minTargetAtr, 0.75) * signalAtr ||
+              targetBps < baseCostBps * finite(candidate.parameters.costMultiple, 4) ||
+              rewardRisk < finite(candidate.parameters.minRewardRisk, 1.5)
+            ) return null;
+          }''',
+              'next-open RANGE RR gate',
+          )
+          simulator_path.write_text(simulator)
+          PY
+
+      - name: Validate isolated RANGE V7 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_dir='supabase/functions/regime-router-v5-research'
+          deno fmt "$source_dir"
+          deno check "$source_dir"/*.ts
+          find "$source_dir" -type f -name '*.test.ts' ! -name 'strategies.test.ts' -print0 \
+            | xargs -0 deno test
+          deno test "$source_dir/strategies.test.ts" \
+            --filter 'production candidates|BULL'
+          deno eval --quiet '
+            import { candidates, V5_CANDIDATE_REGISTRY_REVISION } from "./supabase/functions/regime-router-v5-research/strategies.ts";
+            const grid = candidates();
+            if (grid.length !== 20) throw new Error(`candidate count ${grid.length}`);
+            if (V5_CANDIDATE_REGISTRY_REVISION !== "V7_PRECOMMITTED_RANGE_SWEEP_RECLAIM_20260829_A") throw new Error("registry revision");
+            const range = grid.filter((c) => c.family === "RANGE_CYCLE");
+            if (range.length !== 6) throw new Error(`range count ${range.length}`);
+            for (const n of ["V7_RANGE_SWEEP_LONG_D00","V7_RANGE_SWEEP_LONG_D05","V7_RANGE_SWEEP_LONG_D10","V7_RANGE_SWEEP_SHORT_D00","V7_RANGE_SWEEP_SHORT_D05","V7_RANGE_SWEEP_SHORT_D10"]) {
+              if (!range.some((c) => c.name === n)) throw new Error(`missing ${n}`);
+            }
+            const bull = grid.filter((c) => ["DONCHIAN_BREAKOUT","MOMENTUM_ACCELERATION","COMPRESSION_BREAKOUT"].includes(c.family));
+            if (bull.length !== 9) throw new Error(`bull count ${bull.length}`);
+            const d = bull.find((c) => c.name.includes("DONCHIAN_B080"));
+            const m = bull.find((c) => c.name.includes("MOMENTUM_M60"));
+            const p = bull.find((c) => c.name.includes("COMPRESSION_P18"));
+            if (d?.parameters.maxHoldBars !== 192 || d?.parameters.initialStopAtr !== 1.6) throw new Error("BULL Donchian changed");
+            if (m?.parameters.maxHoldBars !== 160 || m?.parameters.initialStopAtr !== 1.6) throw new Error("BULL momentum changed");
+            if (p?.parameters.maxHoldBars !== 160 || p?.parameters.initialStopAtr !== 1.5) throw new Error("BULL compression changed");
+          '
+          grep -q 'REGIME_ROUTER_V7_RANGE_SWEEP_RECLAIM_15M_120D_RSWF' "$source_dir/types.ts"
+          grep -q 'V7_RANGE_SWEEP_LONG_D05' "$source_dir/strategies.ts"
+          if find "$source_dir" -type f -name '*.ts' ! -name '*.test.ts' -print0 \
+            | xargs -0 grep -n -E 'market-autotrader|market-v2-signal|trading_settings|orders|exchange_orders|/fapi/v1/order|order-gateway|positionRisk|/fapi/v[12]/position|exchange_positions'; then
+            echo 'RANGE V7 research references a production path' >&2
+            exit 1
+          fi
+
+      - name: Build and stamp immutable runtime identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_dir='supabase/functions/regime-router-v5-research'
+          manifest="$RUNNER_TEMP/v7-implementation-manifest.bin"
+          : > "$manifest"
+          source_count=0
+          while IFS= read -r -d '' source_file; do
+            file_sha256=$(sha256sum "$source_file" | awk '{print $1}')
+            printf '%s  %s\0' "$file_sha256" "$source_file" >> "$manifest"
+            source_count=$((source_count + 1))
+          done < <(
+            git ls-files -z -- "$source_dir" \
+              | grep -zE '\.ts$' \
+              | grep -zvE '\.test\.ts$' \
+              | LC_ALL=C sort -z
+          )
+          test "$source_count" -gt 0
+          implementation_sha256=$(sha256sum "$manifest" | awk '{print $1}')
+          [[ "$implementation_sha256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(grep -Foh '__V5_BUILD_SOURCE_SHA__' "$source_dir/types.ts" | wc -l)" = '1'
+          test "$(grep -Foh '__V5_IMPLEMENTATION_SHA256__' "$source_dir/types.ts" | wc -l)" = '1'
+          sed -i \
+            -e "s/__V5_BUILD_SOURCE_SHA__/$GITHUB_SHA/" \
+            -e "s/__V5_IMPLEMENTATION_SHA256__/$implementation_sha256/" \
+            "$source_dir/types.ts"
+          ! grep -R -F -n --include='*.ts' --exclude='*.test.ts' \
+            -e '__V5_BUILD_SOURCE_SHA__' \
+            -e '__V5_IMPLEMENTATION_SHA256__' \
+            "$source_dir"
+          deno check "$source_dir"/*.ts
+          echo "source_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "implementation_sha256=$implementation_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Deploy stamped research function only
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_PROJECT_REF:-}"
+          test "$SUPABASE_PROJECT_REF" = 'etaajwpernzrcdrifdnw'
+          supabase functions deploy regime-router-v5-research \
+            --project-ref "$SUPABASE_PROJECT_REF" \
+            --no-verify-jwt \
+            --use-api
+          echo "deployed_source_sha=${{ steps.identity.outputs.source_sha }}"
+          echo "deployed_implementation_sha256=${{ steps.identity.outputs.implementation_sha256 }}"
