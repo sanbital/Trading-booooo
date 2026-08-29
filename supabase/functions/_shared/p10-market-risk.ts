@@ -290,7 +290,8 @@ function confirmedStateCount(
 ) {
   return contiguousCount(
     rows,
-    (row) => row.confidence >= P10_MARKET_RISK_CONFIG.transitionMinimumConfidence &&
+    (row) =>
+      row.confidence >= P10_MARKET_RISK_CONFIG.transitionMinimumConfidence &&
       structuralState(row) === state,
   );
 }
@@ -431,7 +432,8 @@ function evaluateRegimeTransition(input: {
   if (input.side === "LONG" && latestState === "BULL") {
     const decelerationCount = contiguousCount(
       input.rows,
-      (row) => row.confidence >= P10_MARKET_RISK_CONFIG.transitionMinimumConfidence &&
+      (row) =>
+        row.confidence >= P10_MARKET_RISK_CONFIG.transitionMinimumConfidence &&
         structuralState(row) === "BULL" &&
         (phaseName(row).includes("DECELERAT") || phaseName(row).includes("ROLLING_OVER")),
     );
@@ -464,7 +466,8 @@ function evaluateRegimeTransition(input: {
   if (input.side === "SHORT" && latestState === "BEAR") {
     const reboundCount = contiguousCount(
       input.rows,
-      (row) => row.confidence >= P10_MARKET_RISK_CONFIG.transitionMinimumConfidence &&
+      (row) =>
+        row.confidence >= P10_MARKET_RISK_CONFIG.transitionMinimumConfidence &&
         structuralState(row) === "BEAR" && phaseName(row).includes("REBOUND"),
     );
     if (reboundCount >= 2 && !input.partialAlreadyDone) {
