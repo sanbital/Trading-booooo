@@ -220,6 +220,16 @@ jobs:
             --set=ON_ERROR_STOP=1 \
             --single-transaction \
             --file supabase/migrations/20260827104008_binance_futures_margin_40_usdt.sql
+          # Replay the complete entry-router chain atomically. No intermediate v1/v2
+          # admission function can become externally visible before v3 is restored last.
+          psql "${SUPABASE_DB_URL}" \
+            --set=ON_ERROR_STOP=1 \
+            --single-transaction \
+            --file supabase/migrations/20260829003817_p10_entry_regime_gate_v1.sql \
+            --file supabase/migrations/20260829003849_p10_entry_regime_gate_v1_1_range_isolation.sql \
+            --file supabase/migrations/20260829103548_fix_p10_futures_margin_floor_follow_40_allocation.sql \
+            --file supabase/migrations/20260829114656_p10_production_regime_router_v2_validated_long_only.sql \
+            --file supabase/migrations/20260829120027_p10_production_regime_router_v3_validation_registry.sql
 
       - name: Verify the sell guard survived the batch
         shell: bash
@@ -433,6 +443,52 @@ jobs:
                    )
                ) then
               raise exception 'Emergency trigger helper privileges are unsafe after migration batch';
+            end if;
+            if (
+                 select count(*)
+                 from public.p10_regime_router_validations
+                 where router_revision = 'P10-PRODUCTION-REGIME-ROUTER-v3'
+                   and validation_status = 'REJECTED_NO_ROBUST_EDGE'
+                   and research_job_id is not null
+                   and validation_metrics->>'no_robust_edge_found' = 'true'
+                   and validation_metrics->'robust_candidates' = '[]'::jsonb
+                   and validation_metrics->>'funding_accounted' = 'false'
+               ) <> 1
+               or (
+                 select count(*)
+                 from public.p10_regime_router_lanes
+                 where router_revision = 'P10-PRODUCTION-REGIME-ROUTER-v3'
+               ) <> 5
+               or exists (
+                 select 1
+                 from public.p10_regime_router_lanes
+                 where router_revision = 'P10-PRODUCTION-REGIME-ROUTER-v3'
+                   and router_state in ('RANGE_UP_CYCLE', 'BEAR_REBOUND', 'BEAR_REBREAK')
+                   and entry_enabled
+               )
+               or not exists (
+                 select 1
+                 from pg_proc p
+                 join pg_namespace n on n.oid = p.pronamespace
+                 where n.nspname = 'public'
+                   and p.proname = 'claim_p10_signal'
+                   and position('P10-PRODUCTION-REGIME-ROUTER-v3' in pg_get_functiondef(p.oid)) > 0
+                   and not has_function_privilege('anon', p.oid, 'EXECUTE')
+                   and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                   and has_function_privilege('service_role', p.oid, 'EXECUTE')
+               )
+               or not exists (
+                 select 1
+                 from pg_proc p
+                 join pg_namespace n on n.oid = p.pronamespace
+                 where n.nspname = 'public'
+                   and p.proname = 'resolve_p10_production_regime_route_v3'
+                   and position('NO_TRADE' in pg_get_functiondef(p.oid)) > 0
+                   and not has_function_privilege('anon', p.oid, 'EXECUTE')
+                   and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                   and has_function_privilege('service_role', p.oid, 'EXECUTE')
+               ) then
+              raise exception 'P10 production regime router v3 registry or ACL is unsafe';
             end if;
             raise notice 'sell guard end state verified';
           end

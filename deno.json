@@ -14,12 +14,13 @@
       "supabase/functions/market-autotrader/**/*.ts",
       "supabase/functions/market-performance/**/*.ts",
       "supabase/functions/lob-calibration/**/*.ts",
-      "supabase/functions/market-v2-signal/**/*.ts"
+      "supabase/functions/market-v2-signal/**/*.ts",
+      "supabase/functions/regime-router-v5-research/**/*.ts"
     ]
   },
   "tasks": {
-    "check": "deno check supabase/functions/market-scanner/index.ts supabase/functions/market-learning/index.ts supabase/functions/market-autotrader/index.ts supabase/functions/market-performance/index.ts supabase/functions/lob-calibration/index.ts supabase/functions/market-v2-signal/index.ts backtest/run.ts backtest/calibrate.ts",
-    "test": "deno test --allow-read supabase/functions/market-scanner/*.test.ts supabase/functions/market-autotrader/*.test.ts supabase/functions/market-performance/*.test.ts supabase/functions/_shared/*.test.ts supabase/functions/_shared/scalp/*.test.ts supabase/functions/_shared/lob/*.test.ts backtest/*.test.ts",
+    "check": "deno check supabase/functions/market-scanner/index.ts supabase/functions/market-learning/index.ts supabase/functions/market-autotrader/index.ts supabase/functions/market-performance/index.ts supabase/functions/lob-calibration/index.ts supabase/functions/market-v2-signal/index.ts supabase/functions/regime-router-v5-research/*.ts backtest/run.ts backtest/calibrate.ts",
+    "test": "deno test --allow-read supabase/functions/market-scanner/*.test.ts supabase/functions/market-autotrader/*.test.ts supabase/functions/market-performance/*.test.ts supabase/functions/regime-router-v5-research/*.test.ts supabase/functions/_shared/*.test.ts supabase/functions/_shared/scalp/*.test.ts supabase/functions/_shared/lob/*.test.ts backtest/*.test.ts",
     "backtest": "deno run -A backtest/run.ts",
     "calibrate": "deno run -A backtest/calibrate.ts --write-profile"
   }
