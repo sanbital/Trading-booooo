@@ -1,7 +1,7 @@
 // 배포 전에 아래 두 값만 본인 Supabase 프로젝트 값으로 교체하세요.
 // Publishable(또는 기존 Anon) Key는 브라우저용 공개 키입니다.
 // Service Role / Secret Key / SCAN_ACCESS_TOKEN은 절대 이 파일에 넣지 마세요.
-const UI_VERSION = "8.0.1-P10-ENTRY-RECONCILIATION";
+const UI_VERSION = "8.0.3-P10-REGIME-ROUTER-V3-SAFE-EXIT";
 const DASHBOARD_REVISION = "8.0.2-DASHBOARD-TOKEN-SYNC-r1";
 const PERFORMANCE_ASSET_REVISION = "8.0.2-DASHBOARD-TOKEN-SYNC-r1";
 const MARKET_REGIME_ASSET_REVISION = "3-R60-D12-FORECAST-r1";

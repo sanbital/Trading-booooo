@@ -21,7 +21,7 @@ import {
   sigmaFromAtrPct,
 } from "../_shared/scalp/geometry.ts";
 
-export const ENGINE_VERSION = "8.0.1-P10-ENTRY-RECONCILIATION";
+export const ENGINE_VERSION = "8.0.3-P10-REGIME-ROUTER-V3-SAFE-EXIT";
 export const CALIBRATED_PARAMETERS = ACTIVE_CALIBRATION_PROFILE.parameters;
 export const MIN_KRW_TURNOVER_24H = 500_000_000;
 export const MIN_ACTIONABLE_TURNOVER_24H = 1_000_000_000;

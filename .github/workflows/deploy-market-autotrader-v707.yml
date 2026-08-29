@@ -22,6 +22,7 @@ on:
       - "supabase/migrations/20260824054500_confirm_emergency_liquidation.sql"
       - "supabase/migrations/20260826094500_p10_entry_reconciliation_invariants.sql"
       - "supabase/migrations/20260827104008_binance_futures_margin_40_usdt.sql"
+      - "supabase/migrations/20260829120027_p10_production_regime_router_v3_validation_registry.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   pull_request:
     branches: [main]
@@ -44,6 +45,7 @@ on:
       - "supabase/migrations/20260824054500_confirm_emergency_liquidation.sql"
       - "supabase/migrations/20260826094500_p10_entry_reconciliation_invariants.sql"
       - "supabase/migrations/20260827104008_binance_futures_margin_40_usdt.sql"
+      - "supabase/migrations/20260829120027_p10_production_regime_router_v3_validation_registry.sql"
       - ".github/workflows/deploy-market-autotrader-v707.yml"
   workflow_dispatch:
 
@@ -102,8 +104,14 @@ jobs:
             supabase/functions/market-autotrader/monitor-concurrency.test.ts \
             supabase/functions/market-autotrader/p10-monitor-cadence.ts \
             supabase/functions/market-autotrader/p10-monitor-cadence.test.ts \
+            supabase/functions/market-autotrader/index.ts \
             supabase/functions/market-autotrader/p10-entry-reconciliation.ts \
             supabase/functions/market-autotrader/p10-entry-reconciliation.test.ts \
+            supabase/functions/market-autotrader/p10-exit-reconciliation.ts \
+            supabase/functions/market-autotrader/p10-exit-durable-reconciliation.test.ts \
+            supabase/functions/market-autotrader/p10-exit-preflight.ts \
+            supabase/functions/market-autotrader/p10-exit-preflight.test.ts \
+            supabase/functions/market-autotrader/p10-regime-router-v3.test.ts \
             supabase/functions/market-autotrader/emergency-liquidation-safety.test.ts \
             supabase/functions/market-autotrader/futures-lane.test.ts \
             supabase/functions/market-autotrader/combined-long-s096-short.test.ts
@@ -119,6 +127,10 @@ jobs:
           deno test supabase/functions/market-autotrader/monitor-concurrency.test.ts
           deno test supabase/functions/market-autotrader/p10-monitor-cadence.test.ts
           deno test supabase/functions/market-autotrader/p10-entry-reconciliation.test.ts
+          deno test --allow-read \
+            supabase/functions/market-autotrader/p10-exit-durable-reconciliation.test.ts \
+            supabase/functions/market-autotrader/p10-exit-preflight.test.ts \
+            supabase/functions/market-autotrader/p10-regime-router-v3.test.ts
           deno test --allow-read \
             supabase/functions/market-autotrader/emergency-liquidation-safety.test.ts
           deno test --allow-read supabase/functions/market-autotrader/futures-lane.test.ts
@@ -573,7 +585,7 @@ jobs:
                     and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
                     and has_function_privilege('service_role', p.oid, 'EXECUTE')
                 );
-            ")"
+            ")" || ready="f"
             if [ "${ready}" = "t" ]; then
               echo "Production database policy is ready"
               exit 0
@@ -622,6 +634,70 @@ jobs:
             sleep 15
           done
           echo "::error::40-USDT futures entry policy was not ready before Edge deployment"
+          exit 1
+
+      - name: Wait for production Regime Router v3
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 40); do
+            ready="$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select
+                (
+                  select count(*) = 1
+                  from public.p10_regime_router_validations
+                  where router_revision = 'P10-PRODUCTION-REGIME-ROUTER-v3'
+                    and validation_status = 'REJECTED_NO_ROBUST_EDGE'
+                    and research_job_id is not null
+                    and validation_metrics->>'research_job_link_status' = 'EXACT_UNIQUE_JOB_MATCH'
+                    and validation_metrics->>'no_robust_edge_found' = 'true'
+                    and validation_metrics->'robust_candidates' = '[]'::jsonb
+                )
+                and (
+                  select count(*) = 5 and count(*) filter (where entry_enabled) = 2
+                  from public.p10_regime_router_lanes
+                  where router_revision = 'P10-PRODUCTION-REGIME-ROUTER-v3'
+                )
+                and not exists (
+                  select 1
+                  from public.p10_regime_router_lanes
+                  where router_revision = 'P10-PRODUCTION-REGIME-ROUTER-v3'
+                    and router_state in ('RANGE_UP_CYCLE', 'BEAR_REBOUND', 'BEAR_REBREAK')
+                    and entry_enabled
+                )
+                and exists (
+                  select 1
+                  from pg_proc p
+                  join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public'
+                    and p.proname = 'claim_p10_signal'
+                    and position('P10-PRODUCTION-REGIME-ROUTER-v3' in pg_get_functiondef(p.oid)) > 0
+                    and not has_function_privilege('anon', p.oid, 'EXECUTE')
+                    and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                    and has_function_privilege('service_role', p.oid, 'EXECUTE')
+                )
+                and exists (
+                  select 1
+                  from pg_proc p
+                  join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname = 'public'
+                    and p.proname = 'resolve_p10_production_regime_route_v3'
+                    and position('NO_TRADE' in pg_get_functiondef(p.oid)) > 0
+                    and position('MISSING_MARKET_V5_15M_AND_COMPLETED_5M_CONFIRMATION' in pg_get_functiondef(p.oid)) > 0
+                    and not has_function_privilege('anon', p.oid, 'EXECUTE')
+                    and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                    and has_function_privilege('service_role', p.oid, 'EXECUTE')
+                );
+            ")" || ready="f"
+            if [ "${ready}" = "t" ]; then
+              echo "Production Regime Router v3 is ready"
+              exit 0
+            fi
+            echo "Waiting for production Regime Router v3 (${attempt}/40)"
+            sleep 15
+          done
+          echo "::error::Production Regime Router v3 was not ready before Edge deployment"
           exit 1
 
       - name: Deploy market executor and producers

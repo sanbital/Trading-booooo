@@ -153,13 +153,20 @@ import {
 } from "./monitor-concurrency.ts";
 import { shouldLoadCompletedPolicyBar } from "./p10-monitor-cadence.ts";
 import {
+  dedupeP10LinkedFills,
+  p10DurableFillScopeError,
   p10EntryFailureDisposition,
   p10EntryOrderDisposition,
   p10PendingReservationExpired,
   p10PreOrderEntryDisposition,
-  summarizeP10LinkedEntryFills,
+  summarizeP10LinkedFills,
   untrackedFuturesExposures,
 } from "./p10-entry-reconciliation.ts";
+import {
+  p10DurableExitQuantityComplete,
+  settleP10ExitBeforeOrderLookup,
+} from "./p10-exit-reconciliation.ts";
+import { p10ExitOrderRecordFailureMetadata, prepareP10ExitOrder } from "./p10-exit-preflight.ts";
 import { assessCandidateIntegrity } from "./entry-integrity.ts";
 import { buildLobGateConfig } from "../_shared/lob/gate-config.ts";
 import { loadMinuteEntryGate } from "../_shared/lob/minute-entry-market.ts";
@@ -212,7 +219,7 @@ import {
 } from "../_shared/s096-short-policy.ts";
 
 // Order-gateway/scanner protocol version. Strategy identity is stored separately in metadata.
-const VERSION = "8.0.2-P10-ORPHAN-ENTRY-SELF-HEAL";
+const VERSION = "8.0.3-P10-REGIME-ROUTER-V3-SAFE-EXIT";
 // Keep create-order commands compatible with the still-running v8.0.0 gateway during the
 // rolling deploy. The new gateway accepts both protocol revisions; a later release can
 // advance this only after every gateway reports v8.0.1.
@@ -9641,10 +9648,39 @@ async function enterP10Signal(
       engine_version: VERSION,
     },
   });
+  const regimeRoute = claimResult?.regime_route && typeof claimResult.regime_route === "object"
+    ? claimResult.regime_route
+    : {};
   if (claimResult?.claimed !== true) {
-    return { entered: false, exchange, market: signal.market, reason: "signal already claimed" };
+    const blocked = claimResult?.blocked === true;
+    return {
+      entered: false,
+      exchange,
+      market: signal.market,
+      side,
+      policy_blocked: blocked,
+      claim_blocked: blocked,
+      reason: String(
+        claimResult?.reason ||
+          (blocked ? "P10_REGIME_ROUTE_BLOCKED" : "P10_SIGNAL_ALREADY_CLAIMED"),
+      ),
+      regime_route: regimeRoute,
+    };
   }
   const claimId = String(claimResult?.claim?.id || "");
+  const routedStrategy = String(regimeRoute?.strategy_key || "");
+  if (routedStrategy && routedStrategy !== P10_STRATEGY_KEY) {
+    await rejectP10Claim(claimId, "P10_ROUTE_STRATEGY_MISMATCH");
+    return {
+      entered: false,
+      exchange,
+      market: signal.market,
+      side,
+      policy_blocked: true,
+      reason: "P10_ROUTE_STRATEGY_MISMATCH",
+      regime_route: regimeRoute,
+    };
+  }
   let position: Position;
   try {
     position = (await insert("trading_positions", {
@@ -9704,6 +9740,16 @@ async function enterP10Signal(
         directional_exit_policy: isS096ShortSignal(signal) ? "S096_FIXED_1P5R" : "P10_SLOW_4R",
         engine_version: VERSION,
         p10_claim_id: claimId,
+        p10_regime_route: regimeRoute,
+        p10_router_revision: regimeRoute?.policy_revision || null,
+        p10_router_state: regimeRoute?.state || null,
+        p10_router_candidate_state: regimeRoute?.candidate_state || null,
+        p10_entry_structural_regime: regimeRoute?.structural_regime || regimeRoute?.regime || null,
+        p10_entry_tactical_phase: regimeRoute?.observer_phase || regimeRoute?.phase || null,
+        p10_entry_route_state_verified: regimeRoute?.state_verified === true,
+        p10_entry_route_observation_id: regimeRoute?.gate?.observation_id || null,
+        p10_entry_route_observed_at: regimeRoute?.gate?.observed_at || null,
+        p10_entry_router_research_job_id: regimeRoute?.validation?.research_job_id || null,
         p10_signal_run_id: signal.run_id,
         p10_signal_time: signal.signal_time,
         p10_entry_bar_time: Date.parse(signal.signal_time) + P10_HOUR_MS,
@@ -10593,11 +10639,16 @@ async function latchP10EntrySafety(reason: string) {
   return result?.changed === true;
 }
 
-async function loadP10LinkedEntryFills(position: Position, orderRow: any) {
+async function loadP10LinkedFills(
+  position: Position,
+  orderRow: any,
+  expectedSide: "BUY" | "SELL",
+  phase: "entry" | "exit",
+) {
   const exchangeOrderId = String(orderRow.exchange_order_id || "");
   const identifier = String(orderRow.identifier || "");
   const select =
-    "id,exchange,market,bot_order_id,exchange_order_id,client_order_id,side,price,quantity,quote_amount,fee_quote_amount,fee_amount,fee_asset,executed_at,exchange_trade_id,raw_response";
+    "id,exchange,market,position_id,bot_order_id,exchange_order_id,client_order_id,side,price,quantity,quote_amount,fee_quote_amount,fee_amount,fee_asset,executed_at,exchange_trade_id,raw_response";
   const scope = `exchange=eq.${encodeURIComponent(position.exchange)}` +
     `&market=eq.${encodeURIComponent(position.market)}`;
   const identityQueries = [
@@ -10617,38 +10668,53 @@ async function loadP10LinkedEntryFills(position: Position, orderRow: any) {
       ]
       : []),
   ];
-  const [identityResults, positionRows] = await Promise.all([
-    Promise.all(identityQueries.map((path) => db(path) as Promise<any[]>)),
-    db(
-      `exchange_trade_fills?position_id=eq.${position.id}&select=${select}` +
-        "&order=executed_at.asc,exchange_trade_id.asc&limit=1000",
-    ) as Promise<any[]>,
-  ]);
-  const linkedByTradeId = new Map<string, any>();
+  const identityResults = await Promise.all(
+    identityQueries.map((path) => db(path) as Promise<any[]>),
+  );
+  const identityRows = identityResults.flat();
   for (const row of identityResults.flat()) {
-    if (
-      String(row.exchange || "") !== String(position.exchange) ||
-      String(row.market || "").toUpperCase() !== String(position.market).toUpperCase()
-    ) {
-      throw new Error("linked entry fill escaped its exchange/market scope");
-    }
-    const key = row.id
-      ? `id:${row.id}`
-      : `trade:${row.exchange_trade_id}:${row.executed_at}:${row.price}:${row.quantity}`;
-    linkedByTradeId.set(key, row);
+    const scopeError = p10DurableFillScopeError(row, {
+      exchange: position.exchange,
+      market: position.market,
+      positionId: position.id,
+      orderId: orderRow.id,
+      exchangeOrderId,
+      clientOrderId: identifier,
+    });
+    if (scopeError) throw new Error(`linked ${phase} fill rejected: ${scopeError}`);
   }
-  const linked = [...linkedByTradeId.values()].sort((a, b) =>
+  const deduped = dedupeP10LinkedFills(identityRows);
+  if (!deduped.valid) throw new Error(deduped.reason || "durable fill deduplication failed");
+  const linked = deduped.rows.sort((a, b) =>
     String(a.executed_at || "").localeCompare(String(b.executed_at || "")) ||
     String(a.exchange_trade_id || "").localeCompare(String(b.exchange_trade_id || ""))
   );
-  const entrySide = p10EntrySide(String(position.position_side || "LONG") as P10Side);
   return {
     rows: linked,
+    summary: summarizeP10LinkedFills(linked, expectedSide, phase),
+  };
+}
+
+async function loadP10LinkedEntryFills(position: Position, orderRow: any) {
+  const entrySide = p10EntrySide(String(position.position_side || "LONG") as P10Side);
+  const [durable, positionRows] = await Promise.all([
+    loadP10LinkedFills(position, orderRow, entrySide, "entry"),
+    db(
+      `exchange_trade_fills?position_id=eq.${position.id}` +
+        "&select=side,quantity&order=executed_at.asc,exchange_trade_id.asc&limit=1000",
+    ) as Promise<any[]>,
+  ]);
+  return {
+    ...durable,
     opposingRows: (positionRows || []).filter((row) =>
       String(row.side || "").toUpperCase() !== entrySide && finite(row.quantity) > 0
     ),
-    summary: summarizeP10LinkedEntryFills(linked, entrySide),
   };
+}
+
+async function loadP10LinkedExitFills(position: Position, orderRow: any) {
+  const exitSide = p10ExitSide(String(position.position_side || "LONG") as P10Side);
+  return await loadP10LinkedFills(position, orderRow, exitSide, "exit");
 }
 
 async function p10EntryExposureProof(position: Position, expectedQuantity: number) {
@@ -11162,12 +11228,78 @@ async function reconcileP10Order(position: Position, cycleId: string) {
       }
     }
 
-    const payload = await gateway(position.exchange, {
-      action: "get_order",
-      identifier: orderRow.identifier,
-      market: position.market,
-      exchange_order_id: orderRow.exchange_order_id || null,
-    }, P10_FAST_GATEWAY_TIMEOUT_MS);
+    let payload: any;
+    if (orderRow.purpose !== "ENTRY") {
+      const action = String(
+        position.metadata?.pending_exit_action ||
+          (orderRow.purpose === "TIME_EXIT" ? "TIME" : orderRow.purpose),
+      );
+      const exitEvidence = await settleP10ExitBeforeOrderLookup({
+        loadDurableFills: () => loadP10LinkedExitFills(position, orderRow),
+        canApplyDurableFills: (durable) =>
+          durable.summary.feeQuoteComplete !== false &&
+          p10DurableExitQuantityComplete({
+            durableExecutedVolume: durable.summary.executedVolume,
+            requestedVolume: orderRow.requested_volume,
+            persistedExecutedVolume: orderRow.executed_volume,
+            orderState: orderRow.state,
+            quantityStep: position.quantity_step,
+          }),
+        applyDurableFills: async (durable) => {
+          const result = await applyP10ExitAccounting(
+            position,
+            orderRow,
+            {
+              executedVolume: durable.summary.executedVolume,
+              executedFunds: durable.summary.executedFunds,
+              averagePrice: durable.summary.averagePrice,
+              paidFeeQuote: durable.summary.paidFeeQuote,
+            },
+            action,
+            durable.summary.averagePrice,
+            finite(position.trailing_stop, position.stop_price),
+          );
+          return { result, durable, action };
+        },
+        lookupOrder: () =>
+          gateway(position.exchange, {
+            action: "get_order",
+            identifier: orderRow.identifier,
+            market: position.market,
+            exchange_order_id: orderRow.exchange_order_id || null,
+          }, P10_FAST_GATEWAY_TIMEOUT_MS),
+      });
+      if (exitEvidence.source === "DURABLE_FILLS") {
+        const settlement = exitEvidence.applied;
+        await event(
+          "P10_EXIT_RECONCILED_FROM_EXCHANGE_FILLS",
+          `${position.exchange}:${position.market} exit applied from durable fills`,
+          {
+            exchange_order_id: orderRow.exchange_order_id || null,
+            client_order_id: orderRow.identifier || null,
+            action: settlement.action,
+            fill_count: settlement.durable.rows.length,
+            fill_quantity: settlement.durable.summary.executedVolume,
+            fill_price: settlement.durable.summary.averagePrice,
+            closed: Boolean(settlement.result?.closed),
+          },
+          { cycleId, positionId: position.id, orderId: orderRow.id },
+        );
+        return {
+          reconciled: true,
+          result: settlement.result,
+          source: "EXCHANGE_FILLS",
+        };
+      }
+      payload = exitEvidence.payload;
+    } else {
+      payload = await gateway(position.exchange, {
+        action: "get_order",
+        identifier: orderRow.identifier,
+        market: position.market,
+        exchange_order_id: orderRow.exchange_order_id || null,
+      }, P10_FAST_GATEWAY_TIMEOUT_MS);
+    }
     const updated = await updateOrderFromGateway(orderRow, payload);
     if (orderRow.purpose === "ENTRY") {
       const disposition = p10EntryOrderDisposition({
@@ -11369,6 +11501,8 @@ async function executeP10Exit(
   if (quantity * price < Math.max(1, finite(position.min_notional_quote))) {
     return { action: "NONE", reason: "P10 exit quantity below exchange minimum" };
   }
+  const identifier = uniqueId("p10x", position.id);
+  const pendingExitAt = new Date().toISOString();
   const claimed = await patch("trading_positions", `id=eq.${position.id}&state=eq.OPEN`, {
     state: "EXITING",
     trailing_stop: nextStop,
@@ -11376,30 +11510,81 @@ async function executeP10Exit(
       ...(position.metadata || {}),
       pending_exit_action: action,
       pending_exit_reason: reason,
-      pending_exit_at: new Date().toISOString(),
+      pending_exit_at: pendingExitAt,
     },
   });
   if (!claimed.length) return { action: "NONE", reason: "P10 exit already claimed" };
   position = { ...position, ...claimed[0] };
   const side = String(position.position_side) as P10Side;
   const orderSide = p10ExitSide(side);
-  const identifier = uniqueId("p10x", position.id);
-  const orderRow = await createOrderRecord({
-    position_id: position.id,
-    cycle_id: cycleId,
-    exchange: position.exchange,
-    quote_currency: position.quote_currency,
-    identifier,
-    market: position.market,
-    side: orderSide,
-    strategy_key: P10_STRATEGY_KEY,
-    position_side: side,
-    position_effect: "CLOSE",
-    purpose: p10OrderPurpose(action),
-    order_type: "MARKET",
-    requested_volume: quantity,
-    state: "REQUESTED",
+  const preGatewayOrder = await prepareP10ExitOrder({
+    createOrderRecord: async () => {
+      const orderRow = await createOrderRecord({
+        position_id: position.id,
+        cycle_id: cycleId,
+        exchange: position.exchange,
+        quote_currency: position.quote_currency,
+        identifier,
+        market: position.market,
+        side: orderSide,
+        strategy_key: P10_STRATEGY_KEY,
+        position_side: side,
+        position_effect: "CLOSE",
+        purpose: p10OrderPurpose(action),
+        order_type: "MARKET",
+        requested_volume: quantity,
+        state: "REQUESTED",
+      });
+      if (!orderRow?.id) throw new Error("P10 exit order record insert returned no row");
+      return orderRow;
+    },
+    restoreOpen: async (failure) => {
+      const restored = await patch(
+        "trading_positions",
+        `id=eq.${position.id}&state=eq.EXITING&metadata->>pending_exit_at=eq.${
+          encodeURIComponent(pendingExitAt)
+        }`,
+        {
+          state: "OPEN",
+          metadata: p10ExitOrderRecordFailureMetadata(position.metadata, {
+            ...failure,
+            identifier,
+          }),
+        },
+      );
+      return restored.length === 1;
+    },
   });
+  if (!preGatewayOrder.ok) {
+    await event(
+      "P10_EXIT_PREORDER_ERROR",
+      `${position.exchange}:${position.market} exit order record failed before exchange submission`,
+      {
+        action,
+        reason,
+        identifier,
+        error: preGatewayOrder.error,
+        failed_at: preGatewayOrder.failedAt,
+        exchange_submission_attempted: false,
+        position_restored_open: preGatewayOrder.restoredOpen,
+        restore_error: preGatewayOrder.restoreError,
+      },
+      {
+        cycleId,
+        positionId: position.id,
+        level: preGatewayOrder.restoredOpen ? "WARNING" : "CRITICAL",
+      },
+    );
+    return {
+      action: "NONE",
+      pending_reconcile: !preGatewayOrder.restoredOpen,
+      pre_order_error: true,
+      exchange_submission_attempted: false,
+      position_restored_open: preGatewayOrder.restoredOpen,
+      reason: preGatewayOrder.error,
+    };
+  }
+  const orderRow = preGatewayOrder.orderRow;
   try {
     const payload = await gateway(position.exchange, {
       action: "create_order",

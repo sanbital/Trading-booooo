@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import dns from "node:dns";
 import { pathToFileURL } from "node:url";
 
-// Trading-booooo v8.0.1-P10-ENTRY-RECONCILIATION static-egress order gateway.
+// Trading-booooo v8.0.3-P10-REGIME-ROUTER-V3-SAFE-EXIT static-egress order gateway.
 //
 // It exposes spot account/order primitives plus the Binance USDⓈ-M futures primitives the
 // futures lane needs: account/positions, order create/read/cancel, and the per-symbol
@@ -12,7 +12,7 @@ import { pathToFileURL } from "node:url";
 // BUY/LONG/OPEN, SELL/LONG/CLOSE, SELL/SHORT/OPEN and BUY/SHORT/CLOSE are accepted.
 dns.setDefaultResultOrder("ipv4first");
 
-const VERSION = "8.0.1-P10-ENTRY-RECONCILIATION";
+const VERSION = "8.0.3-P10-REGIME-ROUTER-V3-SAFE-EXIT";
 // Keep exactly one audited previous protocol revision during the rolling cutover. Both the
 // old engine/new gateway and new engine/old gateway therefore remain order-compatible;
 // arbitrary or older revisions stay rejected.

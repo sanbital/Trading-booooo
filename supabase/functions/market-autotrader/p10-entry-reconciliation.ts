@@ -83,6 +83,13 @@ export function p10EntryFailureDisposition(
 }
 
 export type P10LinkedFill = {
+  id?: unknown;
+  exchange?: unknown;
+  market?: unknown;
+  position_id?: unknown;
+  bot_order_id?: unknown;
+  exchange_order_id?: unknown;
+  client_order_id?: unknown;
   side: unknown;
   price: unknown;
   quantity: unknown;
@@ -107,10 +114,118 @@ export type P10LinkedFillSummary = {
   executedAt: string | null;
 };
 
-/** Build the exact entry fill used by late recovery from the durable exchange ledger. */
-export function summarizeP10LinkedEntryFills(
+export type P10DurableFillScope = {
+  exchange: unknown;
+  market: unknown;
+  positionId: unknown;
+  orderId: unknown;
+  exchangeOrderId?: unknown;
+  clientOrderId?: unknown;
+};
+
+/** Every durable row must belong to this exact position/order lineage. */
+export function p10DurableFillScopeError(
+  row: P10LinkedFill,
+  scope: P10DurableFillScope,
+): string | null {
+  if (
+    String(row.exchange || "").toLowerCase() !== String(scope.exchange || "").toLowerCase() ||
+    String(row.market || "").toUpperCase() !== String(scope.market || "").toUpperCase()
+  ) {
+    return "durable fill escaped its exchange/market scope";
+  }
+
+  const positionId = String(row.position_id || "");
+  if (positionId && positionId !== String(scope.positionId || "")) {
+    return "durable fill is linked to another position";
+  }
+
+  const orderId = String(scope.orderId || "");
+  const exchangeOrderId = String(scope.exchangeOrderId || "");
+  const clientOrderId = String(scope.clientOrderId || "");
+  const rowOrderId = String(row.bot_order_id || "");
+  const rowExchangeOrderId = String(row.exchange_order_id || "");
+  const rowClientOrderId = String(row.client_order_id || "");
+  if (rowOrderId && rowOrderId !== orderId) {
+    return "durable fill has a conflicting bot order identity";
+  }
+  if (exchangeOrderId && rowExchangeOrderId && rowExchangeOrderId !== exchangeOrderId) {
+    return "durable fill has a conflicting exchange order identity";
+  }
+  if (clientOrderId && rowClientOrderId && rowClientOrderId !== clientOrderId) {
+    return "durable fill has a conflicting client order identity";
+  }
+  if (
+    rowOrderId !== orderId &&
+    (!exchangeOrderId || rowExchangeOrderId !== exchangeOrderId) &&
+    (!clientOrderId || rowClientOrderId !== clientOrderId)
+  ) {
+    return "durable fill does not match the pending order identity";
+  }
+  return null;
+}
+
+function durableFillKey(row: P10LinkedFill): string {
+  const tradeId = String(row.exchange_trade_id || "");
+  if (tradeId) {
+    return "trade:" + String(row.exchange || "").toLowerCase() + ":" +
+      String(row.market || "").toUpperCase() + ":" + tradeId;
+  }
+  const id = String(row.id || "");
+  if (id) return "id:" + id;
+  return "fill:" + JSON.stringify([
+    row.bot_order_id,
+    row.exchange_order_id,
+    row.client_order_id,
+    row.side,
+    row.price,
+    row.quantity,
+    row.quote_amount,
+    row.fee_quote_amount,
+    row.fee_amount,
+    row.fee_asset,
+    row.executed_at,
+  ]);
+}
+
+function durableFillEconomics(row: P10LinkedFill): string {
+  return JSON.stringify([
+    String(row.side || "").toUpperCase(),
+    finite(row.price, Number.NaN),
+    finite(row.quantity, Number.NaN),
+    row.quote_amount == null ? null : finite(row.quote_amount, Number.NaN),
+    row.fee_quote_amount == null ? null : finite(row.fee_quote_amount, Number.NaN),
+    row.fee_amount == null ? null : finite(row.fee_amount, Number.NaN),
+    String(row.fee_asset || "").toUpperCase(),
+    String(row.executed_at || ""),
+  ]);
+}
+
+export function dedupeP10LinkedFills(
+  rows: readonly P10LinkedFill[],
+): { valid: boolean; reason: string | null; rows: P10LinkedFill[] } {
+  const unique = new Map<string, { row: P10LinkedFill; economics: string }>();
+  for (const row of rows) {
+    const key = durableFillKey(row);
+    const economics = durableFillEconomics(row);
+    const prior = unique.get(key);
+    if (prior && prior.economics !== economics) {
+      return {
+        valid: false,
+        reason: "duplicate durable trade identity has conflicting economics",
+        rows: [],
+      };
+    }
+    if (!prior) unique.set(key, { row, economics });
+  }
+  return { valid: true, reason: null, rows: [...unique.values()].map(({ row }) => row) };
+}
+
+/** Build an exact direction-aware fill from the durable exchange ledger. */
+export function summarizeP10LinkedFills(
   rows: readonly P10LinkedFill[],
   expectedSide: "BUY" | "SELL",
+  phase: "entry" | "exit",
 ): P10LinkedFillSummary {
   let executedVolume = 0;
   let executedFunds = 0;
@@ -141,7 +256,7 @@ export function summarizeP10LinkedEntryFills(
     if (side !== expectedSide || !(quantity > 0 && price > 0 && quote > 0) || fee < 0) {
       return {
         valid: false,
-        reason: "linked fill has invalid entry direction or economics",
+        reason: "linked fill has invalid " + phase + " direction or economics",
         count: rows.length,
         executedVolume: 0,
         executedFunds: 0,
@@ -165,7 +280,7 @@ export function summarizeP10LinkedEntryFills(
   const averagePrice = executedVolume > 0 ? executedFunds / executedVolume : 0;
   return {
     valid: rows.length > 0 && executedVolume > 0 && executedFunds > 0 && averagePrice > 0,
-    reason: rows.length ? null : "no linked entry fills",
+    reason: rows.length ? null : "no linked " + phase + " fills",
     count: rows.length,
     executedVolume,
     executedFunds,
@@ -175,6 +290,14 @@ export function summarizeP10LinkedEntryFills(
     feeQuoteComplete,
     executedAt,
   };
+}
+
+/** Preserve the established entry API while sharing the exact fill arithmetic with exits. */
+export function summarizeP10LinkedEntryFills(
+  rows: readonly P10LinkedFill[],
+  expectedSide: "BUY" | "SELL",
+): P10LinkedFillSummary {
+  return summarizeP10LinkedFills(rows, expectedSide, "entry");
 }
 
 export type P10PendingReservationClock = {
