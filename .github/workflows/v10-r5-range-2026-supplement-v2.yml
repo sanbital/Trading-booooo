@@ -1,0 +1,83 @@
+name: V10 R5 RANGE 2026 Supplemental OOS V2
+
+on:
+  push:
+    branches: [v10-continuation-20260830]
+    paths:
+      - 'research/v10_continuation/supplement-v2-trigger.txt'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: v10-r5-range-2026-supplement-v2-one-shot
+  cancel-in-progress: false
+
+jobs:
+  one-shot-supplement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Audit cache and prior workflow access before data read
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/caches?ref=refs/heads/${GITHUB_REF_NAME}&per_page=100" > cache-audit-raw.json
+          python - <<'PY'
+          import json,os
+          raw=json.load(open('cache-audit-raw.json'))
+          rows=[{'id':x.get('id'),'key':x.get('key'),'created_at':x.get('created_at'),'last_accessed_at':x.get('last_accessed_at'),'size_in_bytes':x.get('size_in_bytes')} for x in raw.get('actions_caches',[])]
+          prior=[x for x in rows if 'range-2026-supplement' in str(x.get('key','')).lower()]
+          out={'repository':os.environ['GITHUB_REPOSITORY'],'branch':os.environ['GITHUB_REF_NAME'],'current_run_id':os.environ['GITHUB_RUN_ID'],'matching_prior_cache_rows':prior,'all_cache_rows':rows}
+          json.dump(out,open('cache-audit.json','w'),sort_keys=True,indent=2)
+          if prior:
+              raise SystemExit('prior supplement cache found; fail closed')
+          PY
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/v10-r5-range-2026-supplement-v2.yml/runs?status=completed&per_page=100" > prior-runs-raw.json || true
+          python - <<'PY'
+          import json,os
+          try: raw=json.load(open('prior-runs-raw.json'))
+          except Exception: raw={'workflow_runs':[]}
+          prior=[{'id':x.get('id'),'conclusion':x.get('conclusion'),'head_sha':x.get('head_sha'),'created_at':x.get('created_at')} for x in raw.get('workflow_runs',[]) if str(x.get('id'))!=os.environ['GITHUB_RUN_ID']]
+          json.dump({'prior_completed_runs':prior},open('prior-run-audit.json','w'),sort_keys=True,indent=2)
+          if any(x.get('conclusion')=='success' for x in prior):
+              raise SystemExit('successful prior supplemental run exists; one-shot access blocked')
+          PY
+      - name: Verify immutable lock and run unit tests
+        working-directory: research/v10_continuation
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -v
+          python - <<'PY'
+          import hashlib,json,pathlib
+          lock=json.loads(pathlib.Path('r5-range-2026-supplement-superseding-lock.json').read_text())
+          for key,path_key in [('runner_sha256','runner_path'),('policy_sha256','policy_path')]:
+              path=pathlib.Path('../../')/lock[path_key]
+              actual=hashlib.sha256(path.read_bytes()).hexdigest()
+              assert actual==lock[key],(key,actual,lock[key])
+          assert lock['test_accessed_before_lock'] is False
+          assert lock['locked_gates']['maximum_asset_exposure_share']==0.25
+          print('immutable lock verified')
+          PY
+      - name: Execute exactly locked supplemental OOS
+        run: python research/v10_continuation/run_r5_range_2026_supplement_v2.py
+      - name: Upload result, source hashes, and access audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v10-r5-range-2026-supplement-v2-result
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            research/v10_continuation/r5-range-2026-supplement-v2-result.json
+            research/v10_continuation/r5-range-2026-supplement-v2-data-manifest.json
+            cache-audit.json
+            prior-run-audit.json

@@ -1,0 +1,148 @@
+{
+  "access_audit_scope": [
+    "complete branch history",
+    "known GitHub Actions logs",
+    "known artifacts",
+    "workflow path audit"
+  ],
+  "audit_prerequisite": {
+    "artifact_digest": "sha256:2747313cb8fe103179d09daa3cf0566e542e28145f5d2f0675332746be1cea14",
+    "artifact_id": 9734047854,
+    "commit_sha": "21d1955bba787c7f298161f4ac403504aeea4bbb",
+    "workflow_run_id": 33318021548
+  },
+  "automatic_live_release_allowed": false,
+  "candidate": {
+    "cycle_h": 12,
+    "family": "CYCLE_RESID_MR",
+    "hold_h": 24,
+    "key": "R4_RANGE_CYCLE_RESID_MR_0021",
+    "lane": "RANGE",
+    "lookback_h": 72,
+    "sign_req": true,
+    "threshold": 0.05
+  },
+  "candidate_payload_sha256": "868db85d505533855723a4ed2d9379f600fdc0b448b75f902b408cc42ddfda44",
+  "combined_sequential_oos_rule": {
+    "maximum_conservative_combined_asset_share": 0.25,
+    "minimum_combined_mean_stress_bps": 20,
+    "minimum_combined_trades": 26,
+    "neighbor_share_must_pass": true,
+    "original_segment": {
+      "maximum_observed_asset_count": 2,
+      "released": false,
+      "stress_bps": 969.273,
+      "stress_pf": 2.7845,
+      "trades": 6
+    },
+    "supplement_must_pass_every_gate": true
+  },
+  "cost_model": {
+    "base_bps_per_leg": 14,
+    "funding": "not modeled; passing result cannot authorize live release",
+    "stress_bps_per_leg": 23
+  },
+  "data_source_plan": {
+    "checksum_policy": "verify every .CHECKSUM and record every ZIP SHA256",
+    "daily_archives": "2026-08-01 through 2026-08-23",
+    "exchange": "Binance USD-M Futures",
+    "interval": "15m",
+    "missing_data_policy": "fail closed",
+    "monthly_archives": "2026-01 through 2026-07",
+    "publication_lag_policy": "only static archive files; no REST latest-bar reconstruction",
+    "source": "data.binance.vision"
+  },
+  "evaluation_window": [
+    "2026-01-01T00:00:00+00:00",
+    "2026-08-24T00:00:00+00:00"
+  ],
+  "failure_if_any_gate_fails": "PERMANENTLY_REJECT_CURRENT_R4_R5_RANGE_MECHANISM",
+  "immutable_after_commit": true,
+  "locked_candidate_key": "R4_RANGE_CYCLE_RESID_MR_0021",
+  "locked_gates": {
+    "maximum_asset_exposure_share": 0.25,
+    "minimum_loo_median_mean_stress_bps": 15,
+    "minimum_loo_positive_share": 0.9,
+    "minimum_mean_stress_bps": 20,
+    "minimum_positive_quarters": 3,
+    "minimum_stress_pf": 1.15,
+    "minimum_threshold_neighbor_pass_share": 0.75,
+    "minimum_trades": 20,
+    "positive_halves_required": true
+  },
+  "neighbor_gate": {
+    "maximum_asset_exposure_share": 0.25,
+    "minimum_mean_stress_bps": 15,
+    "minimum_positive_quarters": 3,
+    "minimum_stress_pf": 1.1,
+    "minimum_trades": 16,
+    "positive_halves_required": true
+  },
+  "original_final_test_verdict_changed": false,
+  "parameter_mutation_allowed": false,
+  "policy_path": "research/v10_continuation/supplement_v2_policy.py",
+  "policy_sha256": "445ce1fa53c9864a0d2f4f521209505d5a7f834e763e6877e3868bcf6cd521c9",
+  "promotion_if_passed": "ELIGIBLE_FOR_CONTROLLED_SHADOW_CANARY_REVIEW_ONLY",
+  "revision": "V10_R5_RANGE_2026_SUPPLEMENT_SUPERSEDING_LOCK_20260830",
+  "runner_path": "research/v10_continuation/run_r5_range_2026_supplement_v2.py",
+  "runner_sha256": "aca204903da758f0b550a1f3cafce84d18e3452dc3b67261e7ad3510f13fe80b",
+  "schema_version": 1,
+  "strategy_behavior": {
+    "asset_exposure_cap": 0.25,
+    "completed_bar_semantics": "signal on completed 15m bar at minute=0 and UTC hour modulo 24=0",
+    "concurrency_rules": "at most one lane event per scheduled timestamp; 24h schedule prevents overlap",
+    "cooldown": "24h",
+    "cost_model": {
+      "base_bps_per_leg": 14,
+      "stress_bps_per_leg": 23
+    },
+    "entry_price_convention": "next 15m bar open",
+    "exit_formula": "fixed 24h holding exit at close of final 15m bar",
+    "family": "CYCLE_RESID_MR",
+    "funding_treatment": "not modeled; remains a live-release blocker",
+    "hold_hours": 24,
+    "lane": "RANGE",
+    "parameters": {
+      "cycle_h": 12,
+      "lookback_h": 72,
+      "sign_req": true,
+      "threshold": 0.05
+    },
+    "ranking_rules": "one extreme residual among at least 12 available non-BTC assets",
+    "resampling": "none; signal evaluated hourly on completed 15m bars",
+    "source_interval": "15m",
+    "structural_regime_rule": "BTC RANGE iff abs(ret24)<=0.02 and efficiency24<=0.35 and breadth_positive_share in [0.30,0.70]",
+    "tactical_entry_formula": "if BTC 12h return>=0 short max 72h asset-minus-BTC residual; if BTC 12h return<0 long min residual; abs residual>=0.05 and selected asset raw 72h return sign matches cycle side",
+    "universe": [
+      "ETH",
+      "XRP",
+      "SOL",
+      "DOGE",
+      "ADA",
+      "AVAX",
+      "LINK",
+      "BCH",
+      "DOT",
+      "TRX",
+      "NEAR",
+      "APT",
+      "SUI",
+      "ETC",
+      "XLM",
+      "ATOM",
+      "UNI",
+      "ARB",
+      "OP",
+      "SEI"
+    ]
+  },
+  "strategy_behavioral_fingerprint": "6e87e3d357da45dae046e50b8ceb643761f99bde38c1499f49b3fbb2d44f7704",
+  "supersedes_without_modifying": "research/v10_continuation/r5-range-2026-supplement-lock.json",
+  "test_accessed_before_lock": false,
+  "threshold_neighbors": [
+    0.04,
+    0.045,
+    0.055,
+    0.06
+  ]
+}
