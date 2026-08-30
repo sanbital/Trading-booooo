@@ -1,0 +1,110 @@
+{
+  "cost_model": {
+    "base_round_trip_bps": 18,
+    "funding": "not yet modeled; candidate cannot be live-released until historical funding parity is added",
+    "stress_round_trip_bps": 21
+  },
+  "data": {
+    "checksum_required": true,
+    "completed_bar_only": true,
+    "entry_price": "next 15m bar open",
+    "exchange": "Binance USD-M Futures",
+    "missing_data": "fail closed",
+    "source": "data.binance.vision monthly 15m klines"
+  },
+  "data_manifest_required": true,
+  "final_holdout": {
+    "accessed_before_lock": false,
+    "must_not_be_loaded_by_discovery_runner": true,
+    "purpose": "candidate-identity-locked final blocked holdout only",
+    "window": [
+      "2022-01-01T00:00:00+00:00",
+      "2023-01-01T00:00:00+00:00"
+    ]
+  },
+  "final_holdout_gates": {
+    "funding_adjusted_positive_required_before_release": true,
+    "maximum_asset_exposure_share": 0.25,
+    "minimum_distinct_assets": 6,
+    "minimum_loo_positive_share": 0.9,
+    "minimum_stress_pf": 1.1,
+    "minimum_trades": 30,
+    "must_be_locked_after_candidate_selection": true,
+    "positive_halves": true,
+    "positive_subwindows": 3
+  },
+  "immutable_after_commit": true,
+  "mechanisms": {
+    "BEAR": [
+      "breadth-confirmed failed rebound followed by completed-bar 4h-low rebreak",
+      "cross-sectional relative weakness followed by tactical rebound failure and rebreak"
+    ],
+    "RANGE": [
+      "beta-neutral 8h/12h/24h residual ensemble with completed-hour reconvergence",
+      "beta-neutral residual ensemble with opposing taker-flow confirmation"
+    ]
+  },
+  "release_policy": {
+    "automatic_live_release": false,
+    "golden_fixture_parity_required": true,
+    "research_to_production_shared_spec_required": true,
+    "shadow_then_one_lane_canary": true
+  },
+  "research_windows": [
+    [
+      "2023-01-01T00:00:00+00:00",
+      "2024-01-01T00:00:00+00:00"
+    ],
+    [
+      "2024-01-01T00:00:00+00:00",
+      "2025-01-01T00:00:00+00:00"
+    ],
+    [
+      "2025-01-01T00:00:00+00:00",
+      "2025-10-08T00:00:00+00:00"
+    ]
+  ],
+  "revision": "V10_R7_BLOCKED_PROTOCOL_LOCK_20260831",
+  "runner_path": "research/v10_continuation/run_r7.py",
+  "runner_sha256": "978e5d82c9b53f3e0ace688a6cc02e1eb1b52e012c0b440bacf59ede584daf40",
+  "schema_version": 1,
+  "selection_gates": {
+    "maximum_asset_exposure_share": 0.25,
+    "maximum_top_event_absolute_pnl_share": 0.25,
+    "maximum_top_positive_month_share": 0.55,
+    "minimum_distinct_assets_each_period": 6,
+    "minimum_distinct_assets_each_subwindow": 2,
+    "minimum_events_each_subwindow": 3,
+    "minimum_local_parameter_variants": 4,
+    "minimum_loo_median_mean_stress_bps_each_period": 5,
+    "minimum_loo_positive_share_each_period": 0.9,
+    "minimum_parameter_neighbor_pass_share": 0.75,
+    "minimum_stress_pf_each_period": 1.1,
+    "minimum_total_trades": 90,
+    "minimum_trades_2023": 32,
+    "minimum_trades_2024": 32,
+    "minimum_trades_2025_pretest": 24,
+    "positive_after_stress_in_every_period": true,
+    "positive_halves_each_period": true,
+    "positive_subwindows_each_period": 3
+  },
+  "test_accessed_before_lock": false,
+  "universe": [
+    "BTC",
+    "ETH",
+    "XRP",
+    "SOL",
+    "DOGE",
+    "ADA",
+    "AVAX",
+    "LINK",
+    "BCH",
+    "DOT",
+    "TRX",
+    "NEAR",
+    "ETC",
+    "XLM",
+    "ATOM",
+    "UNI"
+  ]
+}

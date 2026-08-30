@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "revision": "V10_R5_RANGE_2026_SUPPLEMENT_V2_ARTIFACT_AUDIT_20260831",
+  "window": ["2026-01-01T00:00:00+00:00", "2026-08-24T00:00:00+00:00"],
+  "workflow_run_id": 33338592568,
+  "job_id": 99329898898,
+  "commit_sha": "f3cd0072eab4716417270a792a501693c8fc367b",
+  "artifact_id": 9739810384,
+  "artifact_digest": "sha256:a4101049f51e87b2d8124e71e31fd321e80e49fb806f5e891eeccce06f9b0d9f",
+  "result_file_sha256": "dc20798a6de6696b0797445ab2f5956a8795ca3a7364ae9d58efa8a8d255ef4e",
+  "data_manifest_file_sha256": "53aec0af11e648d60bb5815b67dbfce5656729e08712efa6873e97a444deb9aa",
+  "data_manifest_canonical_sha256": "a446e04ad948e5220ae3b1b143d41e7d0d6b759c2b407819e38786dd5599013e",
+  "strategy_behavioral_fingerprint": "6e87e3d357da45dae046e50b8ceb643761f99bde38c1499f49b3fbb2d44f7704",
+  "infrastructure_conclusion": "SUCCESS",
+  "statistical_conclusion": "FAILED_ALL_RELEASE_ELIGIBILITY",
+  "decision": "PERMANENTLY_REJECT_CURRENT_R4_R5_RANGE_MECHANISM",
+  "released": false,
+  "metrics": {
+    "trades": 19,
+    "stress_bps": -899.331,
+    "mean_stress_bps": -47.333,
+    "stress_pf": 0.7409,
+    "positive_quarters": 2,
+    "first_half_stress_bps": 554.819,
+    "second_half_stress_bps": -1454.15,
+    "max_asset_exposure_share": 0.1579,
+    "loo_positive_share": 0.05,
+    "loo_median_mean_stress_bps": -47.333,
+    "threshold_neighbor_pass_share": 0.0
+  },
+  "original_final_test_verdict_changed": false,
+  "automatic_live_release_allowed": false
+}

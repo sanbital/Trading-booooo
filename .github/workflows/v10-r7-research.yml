@@ -1,0 +1,87 @@
+name: V10 R7 New Mechanism Research
+
+on:
+  push:
+    branches: [v10-continuation-20260830]
+    paths:
+      - 'research/v10_continuation/run_r7.py'
+      - 'research/v10_continuation/r7-protocol-lock.json'
+      - '.github/workflows/v10-r7-research.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v10-r7-new-mechanism-research
+  cancel-in-progress: false
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/cache@v4
+        with:
+          path: v10-cache-r3
+          key: v10-r3-binance-usdm-15m-2023-2025-v1
+      - name: Verify sealed R7 protocol and discovery isolation
+        run: |
+          python - <<'PY'
+          import hashlib, json, pathlib
+          root=pathlib.Path('research/v10_continuation')
+          protocol=json.loads((root/'r7-protocol-lock.json').read_text())
+          source=(root/'run_r7.py').read_text()
+          assert protocol['immutable_after_commit'] is True
+          assert protocol['test_accessed_before_lock'] is False
+          assert protocol['final_holdout']['accessed_before_lock'] is False
+          assert 'loader.load_period(P22' not in source
+          assert protocol['selection_gates']['maximum_asset_exposure_share']==0.25
+          assert protocol['cost_model']['base_round_trip_bps']==18
+          assert protocol['cost_model']['stress_round_trip_bps']==21
+          actual=hashlib.sha256((root/'run_r7.py').read_bytes()).hexdigest()
+          assert actual==protocol['runner_sha256'], (actual,protocol['runner_sha256'])
+          print('R7 protocol sealed; 2022 holdout isolated')
+          PY
+      - name: Syntax check
+        run: python -m py_compile research/v10_continuation/run_r7.py
+      - name: Run R7 RANGE and BEAR discovery
+        run: python research/v10_continuation/run_r7.py
+      - name: Record immutable source-data hashes
+        run: |
+          python - <<'PY'
+          import hashlib,json,pathlib,os
+          files=[]
+          root=pathlib.Path('v10-cache-r3')
+          for path in sorted(root.rglob('*.zip')):
+              h=hashlib.sha256(path.read_bytes()).hexdigest()
+              files.append({'path':str(path),'bytes':path.stat().st_size,'sha256':h})
+          manifest={
+              'schema_version':1,
+              'source':'Binance Data Vision USD-M monthly 15m klines',
+              'github_sha':os.environ.get('GITHUB_SHA'),
+              'workflow_run_id':os.environ.get('GITHUB_RUN_ID'),
+              'files':files,
+              'file_count':len(files),
+              'manifest_sha256':hashlib.sha256(json.dumps(files,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
+          }
+          pathlib.Path('research/v10_continuation/r7-data-manifest.json').write_text(json.dumps(manifest,sort_keys=True,indent=2)+'\n')
+          assert files, 'no source archives found'
+          print(f"recorded {len(files)} verified source archives")
+          PY
+      - name: Upload R7 result and source manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v10-r7-result
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            research/v10_continuation/r7-result.json
+            research/v10_continuation/r7-data-manifest.json
+            research/v10_continuation/r7-protocol-lock.json
