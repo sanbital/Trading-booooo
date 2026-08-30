@@ -13,6 +13,11 @@ const ACL_FINALIZATION_MIGRATION = new URL(
 const aclFinalizationMigration = await Deno.readTextFile(
   ACL_FINALIZATION_MIGRATION,
 );
+const CLAIM_DRIFT_MIGRATION = new URL(
+  "supabase/migrations/20260830060500_v10_claim_drift_reconciliation.sql",
+  ROOT,
+);
+const claimDriftMigration = await Deno.readTextFile(CLAIM_DRIFT_MIGRATION);
 
 function section(start: string, end: string): string {
   const from = migration.indexOf(start);
@@ -20,6 +25,15 @@ function section(start: string, end: string): string {
   assert(from >= 0, `missing section start: ${start}`);
   assert(to > from, `missing section end: ${end}`);
   return migration.slice(from, to);
+}
+
+function sqlFunctionDefinition(source: string, start: string): string {
+  const from = source.indexOf(start);
+  assert(from >= 0, `missing SQL function: ${start}`);
+  const terminator = "$function$;";
+  const to = source.indexOf(terminator, from);
+  assert(to > from, `unterminated SQL function: ${start}`);
+  return source.slice(from, to + terminator.length);
 }
 
 Deno.test("V10 release constants and implementation hashes are one immutable patch block", () => {
@@ -121,6 +135,70 @@ Deno.test("V10 legacy resolver ACL finalization is reproducible and exhaustive",
   assert(aclFinalizationMigration.includes("legacy resolver EXECUTE privilege remains"));
   assert(aclFinalizationMigration.includes("p10_v10_acl_repair_audit"));
   assert(aclFinalizationMigration.includes("before truncate"));
+});
+
+Deno.test("V10 claim drift reconciliation restores canonical fail-closed wiring", async () => {
+  const match = claimDriftMigration.match(
+    /v_implementation_sha256 constant text :=\s*'([0-9a-f]{64})';/,
+  );
+  assert(match, "missing claim drift implementation SHA-256 literal");
+  const normalized = claimDriftMigration.replace(match[1], "0".repeat(64));
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(normalized),
+  );
+  const actual = Array.from(new Uint8Array(digest))
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+  assertEquals(match[1], actual);
+
+  assert(
+    claimDriftMigration.includes("P10-V10-CLAIM-DRIFT-RECONCILIATION-20260830"),
+  );
+  assert(
+    claimDriftMigration.includes("resolve_p10_production_regime_route_v10("),
+  );
+  assert(claimDriftMigration.includes("V10_ROUTER_ERROR_FAIL_CLOSED"));
+  assert(claimDriftMigration.includes("if v_decision <> 'PASS' then"));
+  assert(claimDriftMigration.includes("V10 claim/wrapper canonical definition assertion"));
+  assert(claimDriftMigration.includes("p10_v10_claim_drift_repairs"));
+  assert(claimDriftMigration.includes("before truncate"));
+
+  for (
+    const signature of [
+      "create or replace function public.resolve_p10_production_regime_route(",
+      "create or replace function public.claim_p10_signal(",
+    ]
+  ) {
+    assertEquals(
+      sqlFunctionDefinition(claimDriftMigration, signature),
+      sqlFunctionDefinition(migration, signature),
+      `${signature} must remain byte-identical to the immutable V10 definition`,
+    );
+  }
+});
+
+Deno.test("post-V10 migrations cannot silently redefine production claim wiring", async () => {
+  const migrationDirectory = new URL("supabase/migrations/", ROOT);
+  const allowed = new Set([
+    "20260830060500_v10_claim_drift_reconciliation.sql",
+  ]);
+
+  for await (const entry of Deno.readDir(migrationDirectory)) {
+    if (!entry.isFile || !entry.name.endsWith(".sql")) continue;
+    if (entry.name <= "20260830054000_v10_production_regime_router_fail_closed.sql") {
+      continue;
+    }
+    const source = await Deno.readTextFile(new URL(entry.name, migrationDirectory));
+    const redefinesWiring =
+      source.includes("create or replace function public.claim_p10_signal(") ||
+      source.includes(
+        "create or replace function public.resolve_p10_production_regime_route(",
+      );
+    if (redefinesWiring) {
+      assert(allowed.has(entry.name), `unapproved post-V10 wiring migration: ${entry.name}`);
+    }
+  }
 });
 
 Deno.test("V10 registry preserves only two existing BULL lanes and makes every non-BULL state CASH", () => {
