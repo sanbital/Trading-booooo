@@ -6,6 +6,13 @@ const MIGRATION = new URL(
   ROOT,
 );
 const migration = await Deno.readTextFile(MIGRATION);
+const ACL_FINALIZATION_MIGRATION = new URL(
+  "supabase/migrations/20260830055500_v10_legacy_resolver_acl_finalization.sql",
+  ROOT,
+);
+const aclFinalizationMigration = await Deno.readTextFile(
+  ACL_FINALIZATION_MIGRATION,
+);
 
 function section(start: string, end: string): string {
   const from = migration.indexOf(start);
@@ -84,6 +91,36 @@ Deno.test("V10 migration implementation digest reproduces after self-normalizati
     .map((value) => value.toString(16).padStart(2, "0"))
     .join("");
   assertEquals(match[1], actual);
+});
+
+Deno.test("V10 legacy resolver ACL finalization is reproducible and exhaustive", async () => {
+  const match = aclFinalizationMigration.match(
+    /v_implementation_sha256 constant text :=\s*'([0-9a-f]{64})';/,
+  );
+  assert(match, "missing ACL finalization implementation SHA-256 literal");
+  const normalized = aclFinalizationMigration.replace(match[1], "0".repeat(64));
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(normalized),
+  );
+  const actual = Array.from(new Uint8Array(digest))
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+  assertEquals(match[1], actual);
+
+  assert(
+    aclFinalizationMigration.includes(
+      "P10-V10-LEGACY-RESOLVER-ACL-FINAL-20260830",
+    ),
+  );
+  assert(
+    aclFinalizationMigration.includes(
+      "revoke execute on function %s from public, anon, authenticated, service_role",
+    ),
+  );
+  assert(aclFinalizationMigration.includes("legacy resolver EXECUTE privilege remains"));
+  assert(aclFinalizationMigration.includes("p10_v10_acl_repair_audit"));
+  assert(aclFinalizationMigration.includes("before truncate"));
 });
 
 Deno.test("V10 registry preserves only two existing BULL lanes and makes every non-BULL state CASH", () => {
