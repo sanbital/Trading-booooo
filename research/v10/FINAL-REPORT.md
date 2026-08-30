@@ -140,10 +140,14 @@ recorded rather than hidden.
 
 None. Candidate set `[]`; candidate is `null`; final TEST access timestamp is `null`.
 
-The candidate-lock SHA-256 is
-`d7da8d3e6703b2981f174d09e8b900f0753638ee7ed0296111a444455c9a6554`.
-The discovery-results embedded SHA-256 is
-`b1b0c1c9d376a2e223545ef5c56395d8e960c7272daa4b641bc031c07fada51f`.
+The canonical/embedded candidate-lock SHA-256 is
+`d7da8d3e6703b2981f174d09e8b900f0753638ee7ed0296111a444455c9a6554`;
+the raw `candidate-lock.json` file SHA-256 is
+`f0609617792c25d96aba6688c2b5ed3509d06f582e62b835d5cd6dd450d2e142`.
+The canonical/embedded discovery-results SHA-256 is
+`b1b0c1c9d376a2e223545ef5c56395d8e960c7272daa4b641bc031c07fada51f`;
+the raw file SHA-256 is
+`2b7f0ca3912e7a74f7f0e5356a1c7da0f1807447aa88e608bc2cb79c4ae24146`.
 
 Not opening TEST is the frozen protocol's required terminal outcome when no validation
 candidate exists. Opening it “for completeness” would contaminate the only untouched
@@ -256,7 +260,7 @@ profit improvement.
 | Base V10 production commit | `0e37d82262c813a1de3e91dd7cbce85c3b20aa76` |
 | Legacy ACL finalization commit | `54f4b80479a4531fac6d8569c3c8833b124259e4` |
 | Claim-drift reconciliation source commit | `b0a9965bf0896d71d41fadd90348651e17bb5c21` |
-| Candidate registry hash | `d7da8d3e6703b2981f174d09e8b900f0753638ee7ed0296111a444455c9a6554` |
+| Canonical candidate registry hash | `d7da8d3e6703b2981f174d09e8b900f0753638ee7ed0296111a444455c9a6554` |
 | Base router migration implementation SHA-256 | `06c338e0831517f9ef980adfde3ebc26192696adde848177164239bdc7b0b454` |
 | ACL migration implementation SHA-256 | `00e01bcec89f659a379119dffacb72525e5f1e0a9bd07f6feecc0d218e1aa0a8` |
 | Reconciliation migration implementation SHA-256 | `703903378a6174dcc533caf780044cd68868c1ac899f1409fde2227f83dd026b` |
