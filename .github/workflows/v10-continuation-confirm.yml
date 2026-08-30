@@ -1,0 +1,32 @@
+name: V10 RANGE BEAR Independent Confirmation
+
+on:
+  push:
+    branches:
+      - v10-continuation-20260830
+    paths:
+      - 'research/v10_continuation/run_confirm.py'
+      - '.github/workflows/v10-continuation-confirm.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  confirm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: v10-cache-confirm
+          key: v10-confirm-binance-usdm-15m-2024-2025-v1
+      - name: Run independent 2024 confirmation plus unique 2025 replay
+        run: python research/v10_continuation/run_confirm.py
+      - name: Upload confirmation result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v10-confirm-result
+          path: research/v10_continuation/confirm-result.json
+          if-no-files-found: ignore
