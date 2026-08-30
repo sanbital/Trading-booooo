@@ -21,12 +21,12 @@ jobs:
         with:
           path: v10-cache-r3
           key: v10-r3-binance-usdm-15m-2023-2025-v1
-      - name: Run R5 three-period research only
-        run: python research/v10_continuation/run_r5.py
-      - name: Upload R5 result
+      - name: Run R6 breadth and RANGE plateau research only
+        run: python research/v10_continuation/run_r6.py
+      - name: Upload R6 result
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: v10-r5-result
-          path: research/v10_continuation/r5-result.json
+          name: v10-r6-result
+          path: research/v10_continuation/r6-result.json
           if-no-files-found: error
