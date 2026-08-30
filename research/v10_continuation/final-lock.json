@@ -1,0 +1,31 @@
+{
+  "revision": "V10_R6_RANGE_FINAL_LOCK_20260830",
+  "created_from": "V10_R6_BREADTH_AND_RANGE_PLATEAU_20260830",
+  "test_accessed_before_lock": false,
+  "final_test_window": [
+    "2025-11-02T00:00:00+00:00",
+    "2026-01-01T00:00:00+00:00"
+  ],
+  "selection_note": "RANGE candidate locked after positive 2023/2024/2025 research-validation, threshold robustness at 5.0-5.5%, positive 11h neighboring-cycle research surface, and true leave-one-asset-out robustness. No final-test observations were used in selection.",
+  "lanes": {
+    "RANGE": {
+      "candidate_key": "R6_RANGE_CYCLE_RESID_MR_0016",
+      "candidate": {
+        "cycle_h": 12,
+        "family": "CYCLE_RESID_MR",
+        "hold_h": 24,
+        "key": "R6_RANGE_CYCLE_RESID_MR_0016",
+        "lane": "RANGE",
+        "lookback_h": 72,
+        "threshold": 0.05
+      },
+      "candidate_sha256": "d32a8d21c86ec21f0af8ead9dd1d7741f2fddf2034885b23090fef690ffb0bf5",
+      "pretest_validation_passed": true,
+      "pretest_summary": {
+        "2023": {"trades": 15, "mean_stress_bps": 36.598, "stress_pf": 1.1974, "positive_subwindows": 2, "loo_positive_share": 0.95},
+        "2024": {"trades": 51, "mean_stress_bps": 95.281, "stress_pf": 1.5144, "positive_subwindows": 3, "loo_positive_share": 1.0},
+        "2025": {"trades": 28, "mean_stress_bps": 71.308, "stress_pf": 1.6237, "positive_subwindows": 4, "loo_positive_share": 1.0}
+      }
+    }
+  }
+}
