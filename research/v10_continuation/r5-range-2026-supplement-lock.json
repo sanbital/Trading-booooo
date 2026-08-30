@@ -1,0 +1,29 @@
+{
+  "revision": "V10_R5_RANGE_2026_SUPPLEMENT_LOCK_20260830",
+  "purpose": "Additional fixed-candidate evidence after the sealed final TEST failed only the preregistered sample-count gate (6 < 8). This does not alter or overwrite that final TEST verdict.",
+  "locked_candidate_key": "R4_RANGE_CYCLE_RESID_MR_0021",
+  "locked_candidate_sha256": "868db85d505533855723a4ed2d9379f600fdc0b448b75f902b408cc42ddfda44",
+  "candidate": {
+    "cycle_h": 12,
+    "family": "CYCLE_RESID_MR",
+    "hold_h": 24,
+    "key": "R4_RANGE_CYCLE_RESID_MR_0021",
+    "lane": "RANGE",
+    "lookback_h": 72,
+    "sign_req": true,
+    "threshold": 0.05
+  },
+  "evaluation_window": ["2026-01-01T00:00:00+00:00", "2026-08-01T00:00:00+00:00"],
+  "gates_preregistered_before_outcome": {
+    "positive_stress_bps": true,
+    "stress_pf_min": 1.05,
+    "trades_min": 8,
+    "both_halves_positive": true,
+    "positive_quarters_min": 2,
+    "max_asset_exposure_share_max": 0.40,
+    "loo_positive_share_min": 0.60,
+    "loo_median_mean_stress_bps_positive": true
+  },
+  "parameter_mutation_allowed": false,
+  "original_final_test_verdict_must_remain_unchanged": true
+}
