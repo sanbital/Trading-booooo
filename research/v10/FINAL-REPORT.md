@@ -339,11 +339,13 @@ constructor, and exit key remained compatible. Active revisions after the DB cut
 - Local production parity and security suite: 15/15 Deno tests passed, including exact
   migration hashes, live function-definition parity, the post-V10 redefinition tripwire,
   and static signal-to-order call-chain checks.
-- Final 04:13 UTC checkpoint: `LIVE_LIMITED`, new entries unpaused, emergency liquidation
-  false, Binance spot/futures enabled and trade-ready, futures sizing 40 USDT margin at
-  3x, maximum three new entries per scan, cross-exchange same-asset suppression enabled,
-  zero active positions, and zero claims or orders since the smoke timestamp. The most
-  recent live RANGE attempt remained an audited V10 BLOCK.
+- Final 04:21 UTC checkpoint, after unrelated migrations through
+  `20260830041628_mf_test2_result_and_live_collection`: `LIVE_LIMITED`, new entries
+  unpaused, emergency liquidation false, Binance spot/futures enabled and trade-ready,
+  futures sizing 40 USDT margin at 3x, maximum three new entries per scan,
+  cross-exchange same-asset suppression enabled, zero active positions, and zero claims
+  or orders since the smoke timestamp. The exact four function hashes and ACLs still
+  matched; the most recent live RANGE attempt remained an audited V10 BLOCK.
 
 ### Remaining limitations and safety boundary
 
