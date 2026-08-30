@@ -21,12 +21,25 @@ jobs:
         with:
           path: v10-cache-continuation
           key: v10-cont-binance-usdm-15m-2025-v1
-      - name: Run sealed discovery or locked test
+      - uses: actions/cache@v4
+        with:
+          path: v10-cache-r3
+          key: v10-r3-binance-usdm-15m-2023-2025-v1
+      - name: Run sealed discovery
         run: python research/v10_continuation/run.py
-      - name: Upload result
+      - name: Run R5 three-period tactical validation
+        run: python research/v10_continuation/run_r5.py
+      - name: Upload discovery result
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: v10-continuation-result
           path: research/v10_continuation/result.json
+          if-no-files-found: ignore
+      - name: Upload R5 result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v10-r5-result
+          path: research/v10_continuation/r5-result.json
           if-no-files-found: ignore
