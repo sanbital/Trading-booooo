@@ -33,7 +33,7 @@ def main():
     specs=lock.get('lanes',{})
     if not specs: raise RuntimeError('no locked candidates')
     for lane,s in specs.items():
-        if not s.get('independent_confirmation_passed'): raise RuntimeError(f'{lane} not independently confirmed')
+        if not s.get('pretest_validation_passed'): raise RuntimeError(f'{lane} pretest validation not certified')
         key=s['candidate_key']; c=BY.get(key)
         if c is None or c['lane']!=lane: raise RuntimeError(f'{lane} candidate mismatch')
         if c!=s['candidate']: raise RuntimeError(f'{lane} candidate payload mismatch')
