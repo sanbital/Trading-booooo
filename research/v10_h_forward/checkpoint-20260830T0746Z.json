@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "checkpoint_at": "2026-08-30T07:46:00Z",
+  "mode": "NO_CAPITAL",
+  "lineage": "V10-H-RANGE-FORWARD",
+  "g_lineage_policy": "RETIRED_DO_NOT_LOOSEN_OR_REUSE",
+  "binance_forward_data_checkpoint": {
+    "collector_revision": "V10_USDM_FORWARD_COLLECTOR_R1",
+    "feature_version": "V10_USDM_POINT_IN_TIME_V1",
+    "complete_runs_at_2026_08_30T0732Z": 53,
+    "snapshots_at_2026_08_30T0732Z": 424,
+    "distinct_symbols": 8,
+    "errors": 0,
+    "first_bucket": "2026-08-30T05:56:00Z",
+    "last_bucket_at_count": "2026-08-30T07:32:00Z"
+  },
+  "costs_bps": {"base_round_trip": 14, "stress_round_trip": 23},
+  "candidates": [
+    {
+      "key": "V10_H_MICRO_VOL_EXP_A",
+      "status": "FROZEN_SPARSE_NEGATIVE_AFTER_COST",
+      "signals": 2,
+      "labeled_15m": 2,
+      "labeled_30m": 2,
+      "longs": 2,
+      "shorts": 0,
+      "mean_gross_15m_bps": 6.022,
+      "mean_base_15m_bps": -7.978,
+      "mean_stress_15m_bps": -16.978,
+      "mean_gross_30m_bps": 10.919,
+      "mean_base_30m_bps": -3.081,
+      "mean_stress_30m_bps": -12.081
+    },
+    {
+      "key": "V10_H_MICRO_VOL_EXP_B",
+      "status": "FROZEN_SPARSE_NEGATIVE_AFTER_COST",
+      "signals": 5,
+      "labeled_15m": 4,
+      "labeled_30m": 4,
+      "longs": 4,
+      "shorts": 1,
+      "mean_gross_15m_bps": 7.490,
+      "mean_base_15m_bps": -6.510,
+      "mean_stress_15m_bps": -15.510,
+      "mean_gross_30m_bps": 11.153,
+      "mean_base_30m_bps": -2.847,
+      "mean_stress_30m_bps": -11.847
+    },
+    {
+      "key": "V10_H_FAILED_IMPACT_FADE_C",
+      "status": "FROZEN_PROMISING_BUT_ONE_EVENT_CLUSTER",
+      "signals": 3,
+      "labeled_30m": 2,
+      "labeled_60m": 2,
+      "longs": 3,
+      "shorts": 0,
+      "mean_gross_30m_bps": 31.611,
+      "mean_base_30m_bps": 17.611,
+      "mean_stress_30m_bps": 8.611,
+      "mean_gross_60m_bps": 34.678,
+      "mean_base_60m_bps": 20.678,
+      "mean_stress_60m_bps": 11.678,
+      "event_notes": [
+        "LINKUSDT 2026-08-30T06:05:00Z",
+        "LINKUSDT 2026-08-30T06:11:00Z",
+        "XRPUSDT 2026-08-30T07:26:00Z unlabeled at checkpoint"
+      ]
+    },
+    {
+      "key": "V10_H_FAILED_IMPACT_FADE_D",
+      "status": "FROZEN_PROMISING_BUT_NOT_VALIDATED",
+      "signals": 5,
+      "labeled_30m": 4,
+      "labeled_60m": 4,
+      "longs": 5,
+      "shorts": 0,
+      "mean_gross_30m_bps": 32.815,
+      "mean_base_30m_bps": 18.815,
+      "mean_stress_30m_bps": 9.815,
+      "mean_gross_60m_bps": 29.948,
+      "mean_base_60m_bps": 15.948,
+      "mean_stress_60m_bps": 6.948
+    },
+    {
+      "key": "V10_H_CROWDING_UNWIND_E",
+      "status": "FROZEN_ZERO_SIGNALS",
+      "signals": 0
+    },
+    {
+      "key": "V10_H_CROWDING_UNWIND_F",
+      "status": "FROZEN_SINGLE_MARKET_EPISODE",
+      "signals": 1,
+      "labeled_30m": 1,
+      "labeled_60m": 1,
+      "longs": 1,
+      "shorts": 0,
+      "mean_gross_30m_bps": 41.611,
+      "mean_base_30m_bps": 27.611,
+      "mean_stress_30m_bps": 18.611,
+      "mean_gross_60m_bps": 36.589,
+      "mean_base_60m_bps": 22.589,
+      "mean_stress_60m_bps": 13.589,
+      "event_notes": ["XRPUSDT 2026-08-30T06:08:00Z; same broad market episode as LINK absorption signals"]
+    }
+  ],
+  "promotion_decision": "NO_PROMOTION_YET",
+  "reason": "Positive H-C/D/F observations are concentrated in one broad market shock and are not independent validation evidence.",
+  "next_mechanism": "SIMULTANEOUS_BINANCE_USDM_UPBIT_KRW_CROSSVENUE_FLOW_AND_VOLATILITY"
+}
