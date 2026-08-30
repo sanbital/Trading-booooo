@@ -14,6 +14,7 @@ permissions:
 
 jobs:
   final-test:
+    # The candidate and parameters are sealed in final-lock-r5-range.json.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
