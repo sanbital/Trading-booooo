@@ -1,0 +1,33 @@
+name: V10 R5 RANGE Final Test
+
+on:
+  push:
+    branches:
+      - v10-continuation-20260830
+    paths:
+      - 'research/v10_continuation/final-lock-r5-range.json'
+      - 'research/v10_continuation/run_r5_range_final_test.py'
+      - '.github/workflows/v10-r5-range-final-test.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  final-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: v10-cache-final-r5
+          key: v10-r5-binance-usdm-15m-final-2025-11-02-2026-01-01-v1
+      - name: Run immutable locked RANGE final TEST once
+        run: python research/v10_continuation/run_r5_range_final_test.py
+      - name: Upload final TEST result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v10-r5-range-final-test-result
+          path: research/v10_continuation/r5-range-final-test-result.json
+          if-no-files-found: error
