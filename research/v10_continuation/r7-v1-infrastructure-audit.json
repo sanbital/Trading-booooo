@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "revision": "V10_R7_V1_INFRASTRUCTURE_AUDIT_20260831",
+  "workflow_run_id": 33339322841,
+  "job_id": 99331956567,
+  "commit_sha": "c3da03e38c828f75cfb6fadea6a464954444bed7",
+  "workflow": ".github/workflows/v10-r7-research.yml",
+  "infrastructure_conclusion": "FAILED_BEFORE_RESEARCH",
+  "statistical_conclusion": "NOT_EVALUATED",
+  "market_data_loaded": false,
+  "holdout_accessed": false,
+  "failure_step": "Verify sealed R7 protocol and discovery isolation",
+  "locked_runner_sha256": "978e5d82c9b53f3e0ace688a6cc02e1eb1b52e012c0b440bacf59ede584daf40",
+  "actual_runner_sha256": "5b8d97649d24afcadfd637f18dd63b656935336c43be88a923af7fb25ede509f",
+  "source_syntax_defect": "results[candidate[\"key\"] = {",
+  "superseding_protocol": "V10_R7_BLOCKED_PROTOCOL_LOCK_V2_20260831",
+  "historical_files_mutated": false
+}
