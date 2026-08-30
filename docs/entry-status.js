@@ -133,7 +133,7 @@
     const link = document.createElement("link");
     link.id = "entry-status-style";
     link.rel = "stylesheet";
-    link.href = "./entry-status.css?v=3-LONG-SHORT-DIRECTION";
+    link.href = "./entry-status.css?v=4-SCAN-STAGE-FUNNEL";
     document.head.appendChild(link);
   }
 
@@ -174,7 +174,7 @@
     section.innerHTML = `
       <div class="section-heading performance-heading">
         <div><p class="eyebrow">AUTO TRADER STATUS</p><h2>왜 지금 거래를 안 하나</h2></div>
-        <p>최근 스캔 상태와 실제 진입 판정 로그를 분리해 표시합니다. 판정 로그가 없어도 스캔·모니터 시각이 최신이면 엔진은 정상 동작 중입니다.</p>
+        <p>진입 판정은 두 단계입니다. <b>스캔 단계</b>에서 호가·체결 조건을 통과한 종목만 <b>주문 단계</b>로 넘어갑니다. 스캔 단계에서 전부 탈락하면 주문 단계 건수는 0이 되므로, 두 단계의 건수와 사유를 각각 표시합니다.</p>
       </div>
       <article class="panel entry-status-panel">
         <div class="entry-status-head">
@@ -187,13 +187,23 @@
         <div class="performance-detail-grid entry-status-grid">
           <div><span>마지막 스캔</span><b id="entry-last-scan">—</b></div>
           <div><span>마지막 모니터</span><b id="entry-last-monitor">—</b></div>
-          <div><span>최근 스캔 진입 판정</span><b id="entry-scan-count">—</b></div>
-          <div><span>최근 30분 실제 진입 판정</span><b id="entry-recent-count">—</b></div>
+          <div><span>이번 스캔 종목 판정</span><b id="entry-scan-stage-count">—</b></div>
+          <div><span>최근 30분 스캔 판정</span><b id="entry-scan-stage-30m">—</b></div>
+          <div><span>이번 스캔 주문 판정</span><b id="entry-scan-count">—</b></div>
+          <div><span>최근 30분 주문 판정</span><b id="entry-recent-count">—</b></div>
           <div><span>마지막 주문</span><b id="entry-last-order">—</b></div>
           <div><span>게이트웨이</span><b id="entry-gateway">—</b></div>
         </div>
         <div class="entry-status-block">
-          <strong>최근 30분 실제 진입 탈락 사유</strong>
+          <strong>이번 스캔 탈락 사유 <small class="entry-stage-note">스캔 단계 · 호가/체결 게이트</small></strong>
+          <div id="entry-scan-reasons" class="entry-reason-list muted">확인 중</div>
+        </div>
+        <div class="entry-status-block">
+          <strong>최근 30분 스캔 탈락 사유 <small class="entry-stage-note">스캔 단계 누적</small></strong>
+          <div id="entry-scan-reasons-30m" class="entry-reason-list muted">확인 중</div>
+        </div>
+        <div class="entry-status-block">
+          <strong>최근 30분 주문 단계 탈락 사유 <small class="entry-stage-note">스캔 통과 후 주문 직전 재검증</small></strong>
           <div id="entry-reasons" class="entry-reason-list muted">확인 중</div>
         </div>
         <div class="entry-status-block">
@@ -269,6 +279,67 @@
     return outcome || "판정 없음";
   }
 
+  function reasonRows(reasons) {
+    return reasons
+      .map((row) =>
+        `<div class="entry-reason-row"><span>${esc(row.reason)}${
+          row.detail ? `<small>${esc(row.detail)}</small>` : ""
+        }</span><strong>${Number(row.count)}건</strong></div>`
+      )
+      .join("");
+  }
+
+  function emptyReasonRow(text, count = "0건") {
+    return `<div class="entry-reason-row"><span>${esc(text)}</span><strong>${esc(count)}</strong></div>`;
+  }
+
+  // A scan-stage block must never render a bare "0건": that is exactly the display that
+  // made a fully-working engine look dead. Every branch says which stage produced the
+  // number, so a zero is always attributable.
+  function renderScanStage(elementId, stage, scope) {
+    const target = $(elementId);
+    if (!target) return;
+    if (!stage) {
+      target.innerHTML = emptyReasonRow(`${scope} 스캔 판정 기록을 불러오지 못했습니다`, "조회 실패");
+      return;
+    }
+    if (!stage.observed) {
+      target.innerHTML = emptyReasonRow(
+        `${scope} 판정 대상 종목이 선별되지 않았습니다 (상승률·거래대금 1차 필터 단계에서 전량 제외)`,
+      );
+      return;
+    }
+    if (!stage.rejected) {
+      target.innerHTML = emptyReasonRow(
+        `${scope} 관측 ${stage.observed}종목 전부 스캔 조건 통과 · 스캔 단계 탈락 없음`,
+      );
+      return;
+    }
+    if (!stage.reasons_available) {
+      target.innerHTML = emptyReasonRow(
+        `${scope} 스캔 탈락 ${stage.rejected}건 · 사유 상세를 불러오지 못했습니다`,
+        `${stage.rejected}건`,
+      );
+      return;
+    }
+    const reasons = Array.isArray(stage.top_reasons) ? stage.top_reasons : [];
+    const note = stage.reason_sample_truncated
+      ? `<div class="entry-reason-note">탈락 ${Number(stage.rejected)}건 중 최근 ${
+        Number(stage.reason_sample_size)
+      }건을 표본으로 집계했습니다. 한 종목이 여러 게이트에 걸리면 각 사유에 중복 집계됩니다.</div>`
+      : `<div class="entry-reason-note">탈락 ${Number(stage.rejected)}건 기준. 한 종목이 여러 게이트에 걸리면 각 사유에 중복 집계됩니다.</div>`;
+    target.innerHTML = (reasons.length
+      ? reasonRows(reasons)
+      : emptyReasonRow(`${scope} 스캔 탈락 ${stage.rejected}건 · 게이트 사유가 기록되지 않았습니다`, `${stage.rejected}건`)) +
+      note;
+  }
+
+  function stageCountText(stage) {
+    if (!stage) return "조회 실패";
+    if (!stage.observed) return "0종목 · 선별 없음";
+    return `${stage.observed}종목 · 통과 ${stage.buy} / 탈락 ${stage.rejected}`;
+  }
+
   function render(data) {
     ensureCard();
     latestEntryStatus = data;
@@ -281,8 +352,14 @@
     $("entry-live-message").textContent = data.message || "—";
     $("entry-last-scan").textContent = dt(data.last_scan_at);
     $("entry-last-monitor").textContent = dt(data.last_monitor_at);
+    const scanStage = data.scan_stage || null;
+    const scanStage30m = data.scan_stage_30m || null;
+    $("entry-scan-stage-count").textContent = stageCountText(scanStage);
+    $("entry-scan-stage-30m").textContent = stageCountText(scanStage30m);
     $("entry-scan-count").textContent = `${Number(data.decisions_since_scan || 0)}건 · 승인 ${Number(data.accepted_since_scan || 0)} / 탈락 ${Number(data.rejected_since_scan || 0)}`;
     $("entry-recent-count").textContent = `${Number(data.recent_30m_decisions || 0)}건 · 탈락 ${Number(data.recent_30m_rejections || 0)}건`;
+    renderScanStage("entry-scan-reasons", scanStage, "이번 스캔");
+    renderScanStage("entry-scan-reasons-30m", scanStage30m, "최근 30분");
     $("entry-gateway").textContent = Number(data.gateway_error_count || 0) === 0
       ? `정상 · ${dt(data.last_gateway_heartbeat_at)}`
       : `오류 ${Number(data.gateway_error_count)}건`;
@@ -291,9 +368,14 @@
       ? `${dt(order.requested_at)} · ${order.market || ""} ${order.side || ""} · ${order.state || ""}`
       : "주문 없음";
     const reasons = Array.isArray(data.top_rejection_reasons_30m) ? data.top_rejection_reasons_30m : [];
+    const scanRejected30m = Number(scanStage30m?.rejected || 0);
     $("entry-reasons").innerHTML = reasons.length
-      ? reasons.map((row) => `<div class="entry-reason-row"><span>${esc(row.reason)}${row.detail ? `<small>${esc(row.detail)}</small>` : ""}</span><strong>${Number(row.count)}건</strong></div>`).join("")
-      : `<div class="entry-reason-row"><span>최근 30분 실제 진입 판정 없음</span><strong>0건</strong></div>`;
+      ? reasonRows(reasons)
+      : emptyReasonRow(
+        scanRejected30m
+          ? `최근 30분 주문 단계까지 올라온 후보 없음 · 스캔 단계에서 ${scanRejected30m}건이 먼저 탈락했습니다 (사유는 위 항목 참고)`
+          : "최근 30분 주문 단계 진입 판정 없음",
+      );
     const latest = data.latest_decision;
     if (latest) {
       const latestReason = latest.reason_label || latest.reason;

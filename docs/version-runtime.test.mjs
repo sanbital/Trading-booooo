@@ -168,6 +168,22 @@ test("manual position cards have explicit manual and no-auto-management labels",
   assert.match(entryStatusSource, /response\.clone\(\)\.json\(\)\.then\(captureManualPositions\)/);
 });
 
+test("the autotrader status card separates the scan stage from the order stage", () => {
+  // The order-path ledger (`trading_decisions`) is empty by construction on a scan where
+  // every book was refused before an order was ever attempted. Showing only that ledger
+  // made a working engine read as "0건 · 탈락 0건" with no reasons at all.
+  for (const id of ["entry-scan-stage-count", "entry-scan-stage-30m", "entry-scan-reasons", "entry-scan-reasons-30m"]) {
+    assert.match(entryStatusSource, new RegExp(`id="${id}"`), `${id} is missing from the status card`);
+  }
+  assert.match(entryStatusSource, /data\.scan_stage \|\| null/);
+  assert.match(entryStatusSource, /data\.scan_stage_30m \|\| null/);
+  assert.match(entryStatusSource, /renderScanStage\("entry-scan-reasons", scanStage, "이번 스캔"\)/);
+  assert.match(entryStatusSource, /renderScanStage\("entry-scan-reasons-30m", scanStage30m, "최근 30분"\)/);
+  // An empty order stage must point at the scan stage rather than printing a bare zero.
+  assert.match(entryStatusSource, /스캔 단계에서 \$\{scanRejected30m\}건이 먼저 탈락했습니다/);
+  assert.match(entryStatusSource, /상승률·거래대금 1차 필터 단계에서 전량 제외/);
+});
+
 test("position cards hide sub-dollar values without deleting real holdings", () => {
   const model = loadEntryStatusModel();
 

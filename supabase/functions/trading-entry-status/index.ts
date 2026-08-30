@@ -1,3 +1,10 @@
+import {
+  type ScanCandidateRow,
+  SCAN_REASON_SAMPLE_LIMIT,
+  type ScanStageSummary,
+  summarizeScanStage,
+} from "./scan-stage.ts";
+
 type JsonRecord = Record<string, any>;
 
 type VenuePrice = {
@@ -15,7 +22,7 @@ const SERVICE_KEY = (Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "").trim();
 const AUTOTRADE_TOKEN = (Deno.env.get("AUTOTRADE_ACCESS_TOKEN") || "").trim();
 const DASHBOARD_TOKEN = ((Deno.env.get("DASHBOARD_ACCESS_TOKEN") || Deno.env.get("LEARNING_ACCESS_TOKEN")) || "").trim();
 const DASHBOARD_ORIGIN = ((Deno.env.get("ALLOWED_ORIGINS") || "").split(",")[0] || "*").trim();
-const REVISION = "5-VENUE-NATIVE-OPEN-POSITION-METRICS";
+const REVISION = "6-SCAN-STAGE-REJECTION-FUNNEL";
 const ACCEPTED_OUTCOMES = new Set(["ACCEPTED", "ORDERED", "ENTERED", "BUY"]);
 const VENUE_TIMEOUT_MS = 5000;
 
@@ -67,6 +74,35 @@ async function db(path: string): Promise<any[]> {
   return Array.isArray(data) ? data : [];
 }
 
+/**
+ * Exact row count without transferring the rows.
+ *
+ * The scan-stage funnel counts thousands of rows per 30 minutes. Fetching them to call
+ * `.length` would make the dashboard the heaviest reader in the system, and capping the
+ * fetch would silently report fewer rejections than actually happened -- which is the
+ * exact failure this whole card exists to remove.
+ */
+async function dbCount(path: string): Promise<number> {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    headers: {
+      apikey: SERVICE_KEY,
+      authorization: `Bearer ${SERVICE_KEY}`,
+      "cache-control": "no-cache",
+      "range-unit": "items",
+      range: "0-0",
+      prefer: "count=exact",
+    },
+    cache: "no-store",
+  });
+  if (!response.ok && response.status !== 206) {
+    throw new Error(`database ${response.status}: ${await response.text()}`);
+  }
+  await response.body?.cancel().catch(() => null);
+  const total = (response.headers.get("content-range") || "").split("/")[1];
+  const parsed = Number(total);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function finite(value: unknown, fallback = 0): number {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -99,6 +135,40 @@ function classifyRejection(reasonValue: unknown): { reason: string; detail: stri
   if (upper.includes("PRESSURE")) return { reason: "호가 압력 조건 미달", detail: "매수 우위가 진입 기준만큼 강하지 않았습니다." };
   const compact = raw.replace(/^LOB (final pre-order check|recheck):\s*/i, "").replaceAll("_", " ");
   return { reason: "기타 진입 조건 미달", detail: compact ? compact.slice(0, 120) : "세부 진입 조건을 통과하지 못했습니다." };
+}
+
+// =====================================================================================
+// Scan-stage rejections
+// =====================================================================================
+//
+// `trading_decisions` only receives a row once a candidate has already been stored as a
+// BUY and handed to the order path. On a scan where the order book refuses every book,
+// nothing is written there at all -- so the dashboard truthfully reported "0건 · 탈락 0건"
+// while the engine had, in fact, refused every market it looked at. That reads as a broken
+// dashboard and hides the only evidence that matters: WHICH gate is doing the refusing.
+//
+// The evidence already exists. The scanner persists every finalist to `scanner_candidates`
+// with its decision and, in `feature_vector.failed_gates`, the exact gate keys it failed.
+// This reads that ledger so the scan stage of the funnel is reported alongside the order
+// stage instead of being invisible behind a zero.
+
+/**
+ * One stage of the scan funnel: how many books the scanner actually judged, how many it
+ * passed, and which gates refused the rest.
+ *
+ * `filter` is a PostgREST predicate that scopes the window (one scan id, or a time range).
+ */
+async function loadScanStage(filter: string): Promise<ScanStageSummary> {
+  const base = `scanner_candidates?${filter}`;
+  const [observed, buy, sample] = await Promise.all([
+    dbCount(`${base}&select=id`),
+    dbCount(`${base}&decision=eq.BUY&select=id`),
+    db(
+      `${base}&decision=neq.BUY&select=created_at,exchange,market,decision,failed_gate_count,` +
+        `failed_gates:feature_vector->failed_gates&order=created_at.desc&limit=${SCAN_REASON_SAMPLE_LIMIT}`,
+    ).catch(() => null),
+  ]);
+  return summarizeScanStage(observed, buy, sample as ScanCandidateRow[] | null);
 }
 
 async function fetchJson(url: string): Promise<any> {
@@ -361,13 +431,26 @@ Deno.serve(async (request: Request) => {
       : new Date(Date.now() - 120_000).toISOString();
     const recentCutoff = new Date(Date.now() - 30 * 60_000).toISOString();
 
-    const [latestDecisionRows, scanDecisionRows, recentDecisionRows, lastOrderRows, openPositionRows, snapshotRows] = await Promise.all([
+    const [latestDecisionRows, scanDecisionRows, recentDecisionRows, lastOrderRows, openPositionRows, snapshotRows, scanRunRows] = await Promise.all([
       db("trading_decisions?select=created_at,cycle_id,exchange,market,outcome,reason&order=created_at.desc&limit=1"),
       db(`trading_decisions?created_at=gte.${encodeURIComponent(scanCutoff)}&select=created_at,cycle_id,exchange,market,outcome,reason&order=created_at.desc&limit=200`),
       db(`trading_decisions?created_at=gte.${encodeURIComponent(recentCutoff)}&select=created_at,exchange,market,outcome,reason&order=created_at.desc&limit=500`),
       db("trading_orders?select=requested_at,exchange,market,side,state,exchange_order_id&order=requested_at.desc&limit=1"),
       db("trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id,exchange,quote_currency,market,state,is_paper,initial_quantity,remaining_quantity,reserved_quantity,average_entry_price,planned_entry_price,paid_fees_quote,target_1,stop_price,t1_completed,opened_at,leverage,position_side&order=opened_at.desc&limit=30"),
       db("trading_account_snapshots?select=exchange,captured_at,prices,bot_unrealized_pnl_quote&order=captured_at.desc&limit=12"),
+      db("scanner_scan_runs?select=id,created_at,status,mode&order=created_at.desc&limit=1").catch(() => []),
+    ]);
+
+    const latestScanRun = scanRunRows[0] || null;
+    const latestScanId = String(latestScanRun?.id || "");
+    // The scan stage is read best-effort. It is diagnostics on top of a status card that
+    // must keep rendering: a scanner-ledger outage should degrade this section, not blank
+    // the whole panel the way a thrown error would.
+    const [lastScanStage, recentScanStage] = await Promise.all([
+      latestScanId
+        ? loadScanStage(`scan_id=eq.${encodeURIComponent(latestScanId)}`).catch(() => null)
+        : Promise.resolve(null),
+      loadScanStage(`created_at=gte.${encodeURIComponent(recentCutoff)}`).catch(() => null),
     ]);
 
     const venuePrices = await loadVenuePrices(openPositionRows);
@@ -402,6 +485,24 @@ Deno.serve(async (request: Request) => {
     } else if (scanDecisionRows.length) {
       state = "REJECTED_WAITING";
       message = `이번 스캔 후보 ${scanDecisionRows.length}건 중 ${rejectedSinceScan.length}건 조건 미충족`;
+    } else if (lastScanStage && lastScanStage.buy > 0) {
+      // The scanner passed books this scan, yet none of them reached the order path. That
+      // is a capacity or exposure filter (slots, capital, an already-open market), not a
+      // signal problem, and it deserves a different sentence from "no candidate".
+      state = "CAPACITY_WAITING";
+      message = `이번 스캔 통과 ${lastScanStage.buy}종목이 주문 단계로 넘어가지 않았습니다 ` +
+        "(슬롯·가용자금·중복 보유 제한 확인 필요)";
+    } else if (lastScanStage && lastScanStage.observed > 0) {
+      // Nothing reached the order path, but the scanner did judge markets this scan. The
+      // old code fell through to "조건 충족 종목 없음" with every counter at zero, which
+      // read as a dead engine. Name the stage that actually stopped the entries.
+      state = "SCAN_REJECTED_WAITING";
+      const topReason = lastScanStage.top_reasons[0];
+      message = `이번 스캔 관측 ${lastScanStage.observed}종목 전부 호가 조건 미충족` +
+        (topReason ? ` · 최다 사유 ${topReason.reason} ${topReason.count}건` : "");
+    } else if (lastScanStage) {
+      state = "NO_SCAN_UNIVERSE";
+      message = "이번 스캔에서 판정 대상 종목이 하나도 선별되지 않았습니다 (상승률·거래대금 1차 필터 단계)";
     }
 
     const latestDecision = latestDecisionRows[0] || null;
@@ -431,6 +532,13 @@ Deno.serve(async (request: Request) => {
       recent_30m_decisions: recentDecisionRows.length,
       recent_30m_rejections: rejectedRecentRows.length,
       top_rejection_reasons_30m: topReasons,
+      // The scan stage. `trading_decisions` starts at the order path, so on a scan where
+      // every book is refused by the order-book gates it stays empty by construction --
+      // these fields are the counts and reasons that used to be lost behind that zero.
+      last_scan_id: latestScanId || null,
+      last_scan_run_status: latestScanRun?.status || null,
+      scan_stage: lastScanStage,
+      scan_stage_30m: recentScanStage,
       last_order: lastOrderRows[0] || null,
       open_positions: buildOpenPositions(openPositionRows, snapshotRows, venuePrices),
       controls: {

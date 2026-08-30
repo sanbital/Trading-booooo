@@ -13,3 +13,8 @@ verify_jwt = false
 
 [functions.scalp-calibration]
 verify_jwt = false
+
+# 대시보드 상태 조회 전용. Supabase Auth 대신 함수 내부에서
+# x-autotrade-token 헤더를 검증합니다.
+[functions.trading-entry-status]
+verify_jwt = false
