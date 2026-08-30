@@ -25,21 +25,25 @@ jobs:
         with:
           path: v10-cache-r3
           key: v10-r3-binance-usdm-15m-2023-2025-v1
-      - name: Run sealed discovery
-        run: python research/v10_continuation/run.py
-      - name: Run R5 three-period tactical validation
-        run: python research/v10_continuation/run_r5.py
-      - name: Upload discovery result
+      - uses: actions/cache@v4
+        with:
+          path: v10-cache-final-r5
+          key: v10-r5-binance-usdm-15m-final-2025-11-02-2026-01-01-v1
+      - name: Run sealed research or immutable final test
+        run: |
+          if [ -f research/v10_continuation/final-lock-r5-range.json ]; then
+            python research/v10_continuation/run_r5_range_final_test.py
+          else
+            python research/v10_continuation/run.py
+            python research/v10_continuation/run_r5.py
+          fi
+      - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: v10-continuation-result
-          path: research/v10_continuation/result.json
-          if-no-files-found: ignore
-      - name: Upload R5 result
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: v10-r5-result
-          path: research/v10_continuation/r5-result.json
+          path: |
+            research/v10_continuation/result.json
+            research/v10_continuation/r5-result.json
+            research/v10_continuation/r5-range-final-test-result.json
           if-no-files-found: ignore
