@@ -1,0 +1,79 @@
+{
+  "revision": "REGIME_ROUTER_V10_INDEPENDENT_RANGE_BEAR_15M_365D_20260830",
+  "registered_at": "2026-08-30T03:30:00Z",
+  "objective": "Discover independent RANGE/BEAR alpha without using V9 TEST results for selection; preserve the existing I46 BULL LONG lane and treat CASH as a competing action.",
+  "v9_test_reuse_for_selection": false,
+  "data": {
+    "start_inclusive": "2025-01-01T00:00:00Z",
+    "end_exclusive": "2026-01-01T00:00:00Z",
+    "interval": "15m",
+    "binance_source": "data.binance.vision USD-M klines",
+    "upbit_source": "api.upbit.com KRW minute candles",
+    "point_in_time_rule": "Only completed candles; signal on close of bar t; entry at Binance Futures bar t+1 open.",
+    "survivorship_limit": "Current common Binance/Upbit universe is used because historical Upbit membership is unavailable; reported as a limitation.",
+    "assets": ["BTC", "ETH", "XRP", "SOL", "DOGE", "ADA", "AVAX", "LINK", "BCH", "DOT", "TRX", "NEAR", "APT", "SUI", "ETC", "XLM", "ATOM", "UNI", "ARB", "OP", "SEI"]
+  },
+  "split_protocol": {
+    "folds": 4,
+    "train_days": 120,
+    "validation_days": 40,
+    "fold_step_days": 40,
+    "embargo_bars": 16,
+    "candidate_selection_end_day": 280,
+    "unused_pretest_days": 25,
+    "final_test_days": 60,
+    "test_access_rule": "The test runner refuses to run until candidate-lock.json exists and its SHA-256 is recorded. TEST is evaluated once for the locked candidate set."
+  },
+  "structural_regime": {
+    "inputs": ["BTC 24h return", "BTC EMA72h", "BTC 24h trend efficiency", "cross-sectional 24h positive breadth"],
+    "strong_bear": "btc_ret_24h <= -3%, btc_close < btc_ema_72h, breadth_24h <= 30%",
+    "bear": "btc_ret_24h <= -1%, btc_close < btc_ema_72h, breadth_24h <= 45%",
+    "range": "abs(btc_ret_24h) <= 2%, trend_efficiency_24h <= 35%, breadth_24h in [30%,70%]",
+    "other": "NO V10 non-BULL entry"
+  },
+  "execution": {
+    "base_round_trip_cost_bps": 14,
+    "stress_round_trip_cost_bps": 23,
+    "entry": "next completed 15m Binance Futures candle open",
+    "exit": "ATR bracket with conservative STOP_FIRST intrabar ordering, otherwise locked time exit",
+    "stop_atr": 1.25,
+    "target_atr": 1.75,
+    "minimum_barrier_bps": 35,
+    "maximum_barrier_bps": 250,
+    "funding": "No funding event charge for holds <=4h; candidates crossing an 8h event are ineligible for promotion unless separately accounted.",
+    "max_holding_bars": 16,
+    "portfolio_max_concurrent_positions": 3,
+    "duplicate_asset_positions": false,
+    "portfolio_signal_priority": "For simultaneous eligible signals, sort by the candidate's dimensionless absolute trigger-excess strength descending, then asset ascending, then candidate key ascending; admit at most three and never admit a duplicate asset."
+  },
+  "hypothesis_families": [
+    "UPBIT_LEAD_CONTINUATION",
+    "UPBIT_BINANCE_DIVERGENCE_CONVERGENCE",
+    "KOREAN_VOLUME_SHOCK_TRANSMISSION",
+    "CROSS_SECTIONAL_KOREAN_RESIDUAL_RANK",
+    "CROSS_EXCHANGE_BREADTH_PROPAGATION",
+    "CROSS_EXCHANGE_FLOW_DISAGREEMENT",
+    "KOREAN_FLOW_CONDITIONAL_VOLATILITY_BREAKOUT",
+    "INTRADAY_SEASONALITY_CONDITIONAL_TRANSMISSION",
+    "RANGE_VWAP_VOL_NORMALIZED_REVERSAL",
+    "BEAR_WEAK_REBOUND_FAILURE_SHORT",
+    "BEAR_VOLUME_CAPITULATION_RECOVERY_LONG",
+    "BINANCE_BETA_RESIDUAL_CROSS_SECTIONAL_CONTINUATION"
+  ],
+  "promotion_gates": {
+    "validation_min_trades": 80,
+    "validation_min_signal_days": 20,
+    "validation_positive_stress_folds": 3,
+    "validation_min_stress_profit_factor": 1.05,
+    "validation_min_mean_stress_bps_per_trade": 1.0,
+    "validation_max_single_market_trade_share": 0.35,
+    "neighbour_requirement": "At least one pre-registered neighbouring configuration has positive aggregate validation stress and at least two positive stress folds.",
+    "candidate_selection_priority": "Among candidates passing every validation gate, lock exactly one: highest aggregate validation stress bps, then lowest stress max drawdown, then candidate key ascending.",
+    "test_min_trades": 20,
+    "test_positive_stress": true,
+    "test_min_stress_profit_factor": 1.0,
+    "test_max_single_market_trade_share": 0.40,
+    "portfolio_requirement": "Adding the lane to CASH for the same non-BULL timestamps must increase stress P&L without increasing max drawdown by more than the stress P&L gain.",
+    "abstention": "If no candidate passes every gate, RANGE/BEAR remain NO_TRADE."
+  }
+}

@@ -1,0 +1,388 @@
+{
+  "schema_version": 1,
+  "revision": "REGIME_ROUTER_V10_INDEPENDENT_RANGE_BEAR_15M_365D_20260830",
+  "registered_at": "2026-08-30T03:30:00Z",
+  "preregistration_revision": "REGIME_ROUTER_V10_INDEPENDENT_RANGE_BEAR_15M_365D_20260830",
+  "data_cut": {
+    "start_inclusive": "2025-01-01T00:00:00Z",
+    "end_exclusive": "2026-01-01T00:00:00Z",
+    "interval": "15m"
+  },
+  "execution_inherited_from_preregistration": true,
+  "selection_policy": "Evaluate every enabled candidate on TRAIN and four chronological VALIDATION folds only. Do not access TEST until an eligible candidate is locked.",
+  "economic_scope": "Independent cross-exchange transmission plus preregistered RANGE VWAP reversal, BEAR rebound-failure/capitulation, and Binance-only BTC/ETH beta-residual mechanisms. No V9 standalone taker-flow, standalone funding, simple OI-threshold, or previously observed TEST-tuned lineage is present.",
+  "lock": {
+    "algorithm": "sha256",
+    "canonicalization": "UTF-8 JSON, sorted keys, compact separators; omit the top-level lock object",
+    "payload_scope": "entire candidate-universe object except top-level lock",
+    "sha256": "c0e9519cc36af561adc72b75faa08900f8b7301b6bc72e92023846b14ee5a910"
+  },
+  "candidates": [
+    {
+      "key": "V10_UPBIT_LEAD_A",
+      "family": "UPBIT_LEAD_CONTINUATION",
+      "neighbor_group": "V10_UPBIT_LEAD",
+      "enabled": true,
+      "regimes": ["RANGE", "BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "A completed Korean 15-minute move that Binance has only partly incorporated continues into the next Binance bar.",
+      "parameters": {
+        "upbit_horizon_bars": 1,
+        "min_upbit_move_bps": 12.0,
+        "max_binance_follow_ratio": 0.5,
+        "min_upbit_quote_volume_z": 0.0
+      }
+    },
+    {
+      "key": "V10_UPBIT_LEAD_B",
+      "family": "UPBIT_LEAD_CONTINUATION",
+      "neighbor_group": "V10_UPBIT_LEAD",
+      "enabled": true,
+      "regimes": ["RANGE", "BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "A larger Korean move with modestly abnormal volume continues when Binance remains a partial follower.",
+      "parameters": {
+        "upbit_horizon_bars": 1,
+        "min_upbit_move_bps": 18.0,
+        "max_binance_follow_ratio": 0.65,
+        "min_upbit_quote_volume_z": 0.25
+      }
+    },
+    {
+      "key": "V10_DIVERGENCE_CONVERGENCE_A",
+      "family": "UPBIT_BINANCE_DIVERGENCE_CONVERGENCE",
+      "neighbor_group": "V10_DIVERGENCE_CONVERGENCE",
+      "enabled": true,
+      "regimes": ["RANGE", "BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "A four-bar KRW-market return residual leads a subsequent Binance move toward the completed Upbit move.",
+      "parameters": {
+        "horizon_bars": 4,
+        "min_divergence_bps": 20.0,
+        "min_upbit_absolute_move_bps": 4.0,
+        "max_divergence_bps": 180.0
+      }
+    },
+    {
+      "key": "V10_DIVERGENCE_CONVERGENCE_B",
+      "family": "UPBIT_BINANCE_DIVERGENCE_CONVERGENCE",
+      "neighbor_group": "V10_DIVERGENCE_CONVERGENCE",
+      "enabled": true,
+      "regimes": ["RANGE", "BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "Only wider four-bar Korean/Binance residuals are followed, with an extreme-gap guard against stale or broken markets.",
+      "parameters": {
+        "horizon_bars": 4,
+        "min_divergence_bps": 30.0,
+        "min_upbit_absolute_move_bps": 8.0,
+        "max_divergence_bps": 160.0
+      }
+    },
+    {
+      "key": "V10_KOREAN_VOLUME_SHOCK_A",
+      "family": "KOREAN_VOLUME_SHOCK_TRANSMISSION",
+      "neighbor_group": "V10_KOREAN_VOLUME_SHOCK",
+      "enabled": true,
+      "regimes": ["RANGE", "BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "An abnormal completed Upbit quote-volume candle transmits its signed price move to a Binance market that has not fully followed.",
+      "parameters": {
+        "min_upbit_quote_volume_z": 1.5,
+        "min_upbit_move_bps": 10.0,
+        "max_binance_follow_ratio": 0.75
+      }
+    },
+    {
+      "key": "V10_KOREAN_VOLUME_SHOCK_B",
+      "family": "KOREAN_VOLUME_SHOCK_TRANSMISSION",
+      "neighbor_group": "V10_KOREAN_VOLUME_SHOCK",
+      "enabled": true,
+      "regimes": ["RANGE", "BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "A stricter Korean volume and price shock is followed while Binance has incorporated less than the full move.",
+      "parameters": {
+        "min_upbit_quote_volume_z": 2.0,
+        "min_upbit_move_bps": 15.0,
+        "max_binance_follow_ratio": 0.9
+      }
+    },
+    {
+      "key": "V10_KOREAN_RESIDUAL_RANK_A",
+      "family": "CROSS_SECTIONAL_KOREAN_RESIDUAL_RANK",
+      "neighbor_group": "V10_KOREAN_RESIDUAL_RANK",
+      "enabled": true,
+      "regimes": ["RANGE", "BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "The strongest and weakest simultaneous Upbit-minus-Binance residual ranks transmit cross-sectionally into Binance.",
+      "parameters": {
+        "tail_fraction": 0.15,
+        "min_absolute_residual_bps": 12.0,
+        "minimum_ranked_assets": 10
+      }
+    },
+    {
+      "key": "V10_KOREAN_RESIDUAL_RANK_B",
+      "family": "CROSS_SECTIONAL_KOREAN_RESIDUAL_RANK",
+      "neighbor_group": "V10_KOREAN_RESIDUAL_RANK",
+      "enabled": true,
+      "regimes": ["RANGE", "BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "A wider cross-sectional tail with a larger minimum Korean residual tests local robustness of ranked transmission.",
+      "parameters": {
+        "tail_fraction": 0.2,
+        "min_absolute_residual_bps": 20.0,
+        "minimum_ranked_assets": 10
+      }
+    },
+    {
+      "key": "V10_CROSS_EXCHANGE_BREADTH_A",
+      "family": "CROSS_EXCHANGE_BREADTH_PROPAGATION",
+      "neighbor_group": "V10_CROSS_EXCHANGE_BREADTH",
+      "enabled": true,
+      "regimes": ["RANGE", "BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "A broad, rapidly changing Korean-market move propagates to Binance assets whose current move remains small.",
+      "parameters": {
+        "upper_breadth": 0.65,
+        "lower_breadth": 0.35,
+        "min_four_bar_breadth_change": 0.1,
+        "max_binance_absolute_move_bps": 15.0,
+        "minimum_breadth_assets": 10
+      }
+    },
+    {
+      "key": "V10_CROSS_EXCHANGE_BREADTH_B",
+      "family": "CROSS_EXCHANGE_BREADTH_PROPAGATION",
+      "neighbor_group": "V10_CROSS_EXCHANGE_BREADTH",
+      "enabled": true,
+      "regimes": ["RANGE", "BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "Only more extreme Korean breadth changes propagate to Binance laggards.",
+      "parameters": {
+        "upper_breadth": 0.7,
+        "lower_breadth": 0.3,
+        "min_four_bar_breadth_change": 0.15,
+        "max_binance_absolute_move_bps": 20.0,
+        "minimum_breadth_assets": 10
+      }
+    },
+    {
+      "key": "V10_FLOW_DISAGREEMENT_A",
+      "family": "CROSS_EXCHANGE_FLOW_DISAGREEMENT",
+      "neighbor_group": "V10_FLOW_DISAGREEMENT",
+      "enabled": true,
+      "regimes": ["RANGE", "BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "When signed Korean candle flow disagrees with completed Binance taker flow, Binance subsequently resolves toward the Korean move.",
+      "parameters": {
+        "min_upbit_move_bps": 10.0,
+        "min_upbit_quote_volume_z": 0.5,
+        "min_opposite_binance_taker_imbalance": 0.2,
+        "max_binance_absolute_move_bps": 30.0
+      }
+    },
+    {
+      "key": "V10_FLOW_DISAGREEMENT_B",
+      "family": "CROSS_EXCHANGE_FLOW_DISAGREEMENT",
+      "neighbor_group": "V10_FLOW_DISAGREEMENT",
+      "enabled": true,
+      "regimes": ["RANGE", "BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "A stricter Korean-volume-confirmed disagreement isolates larger cross-exchange flow dislocations.",
+      "parameters": {
+        "min_upbit_move_bps": 15.0,
+        "min_upbit_quote_volume_z": 1.0,
+        "min_opposite_binance_taker_imbalance": 0.3,
+        "max_binance_absolute_move_bps": 40.0
+      }
+    },
+    {
+      "key": "V10_KOREAN_FLOW_VOL_BREAKOUT_A",
+      "family": "KOREAN_FLOW_CONDITIONAL_VOLATILITY_BREAKOUT",
+      "neighbor_group": "V10_KOREAN_FLOW_VOL_BREAKOUT",
+      "enabled": true,
+      "regimes": ["RANGE", "BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "A Binance move emerging from prior compression continues only when the completed Korean move confirms its direction.",
+      "parameters": {
+        "max_prior_rv16_to_rv96": 0.7,
+        "min_breakout_atr": 0.6,
+        "min_upbit_confirmation_bps": 8.0,
+        "min_upbit_quote_volume_z": 0.0
+      }
+    },
+    {
+      "key": "V10_KOREAN_FLOW_VOL_BREAKOUT_B",
+      "family": "KOREAN_FLOW_CONDITIONAL_VOLATILITY_BREAKOUT",
+      "neighbor_group": "V10_KOREAN_FLOW_VOL_BREAKOUT",
+      "enabled": true,
+      "regimes": ["RANGE", "BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "Stronger prior compression, breakout magnitude, and Korean-flow confirmation test breakout robustness.",
+      "parameters": {
+        "max_prior_rv16_to_rv96": 0.6,
+        "min_breakout_atr": 0.8,
+        "min_upbit_confirmation_bps": 12.0,
+        "min_upbit_quote_volume_z": 0.5
+      }
+    },
+    {
+      "key": "V10_INTRADAY_KST_TRANSMISSION_A",
+      "family": "INTRADAY_SEASONALITY_CONDITIONAL_TRANSMISSION",
+      "neighbor_group": "V10_INTRADAY_KST_TRANSMISSION",
+      "enabled": true,
+      "regimes": ["RANGE", "BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "Upbit lead transmission is concentrated during 09:00-17:59 KST, fixed before validation.",
+      "parameters": {
+        "utc_hours": [0, 1, 2, 3, 4, 5, 6, 7, 8],
+        "min_upbit_move_bps": 10.0,
+        "max_binance_follow_ratio": 0.6,
+        "min_upbit_quote_volume_z": 0.0
+      }
+    },
+    {
+      "key": "V10_INTRADAY_KST_TRANSMISSION_B",
+      "family": "INTRADAY_SEASONALITY_CONDITIONAL_TRANSMISSION",
+      "neighbor_group": "V10_INTRADAY_KST_TRANSMISSION",
+      "enabled": true,
+      "regimes": ["RANGE", "BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "A stricter move and volume threshold in the same fixed KST session tests local robustness without changing the clock window.",
+      "parameters": {
+        "utc_hours": [0, 1, 2, 3, 4, 5, 6, 7, 8],
+        "min_upbit_move_bps": 15.0,
+        "max_binance_follow_ratio": 0.75,
+        "min_upbit_quote_volume_z": 0.25
+      }
+    },
+    {
+      "key": "V10_RANGE_VWAP_REVERSAL_A",
+      "family": "RANGE_VWAP_VOL_NORMALIZED_REVERSAL",
+      "neighbor_group": "V10_RANGE_VWAP_REVERSAL",
+      "enabled": true,
+      "regimes": ["RANGE"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "A completed RANGE-market displacement from a 16-bar volume-weighted price, confirmed by a same-direction four-bar overextension, mean-reverts after normalization by completed-bar ATR.",
+      "parameters": {
+        "vwap_window_bars": 16,
+        "min_abs_vwap_deviation_atr": 0.9,
+        "min_abs_four_bar_move_atr": 0.75,
+        "max_trend_efficiency24h": 0.25
+      }
+    },
+    {
+      "key": "V10_RANGE_VWAP_REVERSAL_B",
+      "family": "RANGE_VWAP_VOL_NORMALIZED_REVERSAL",
+      "neighbor_group": "V10_RANGE_VWAP_REVERSAL",
+      "enabled": true,
+      "regimes": ["RANGE"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "A neighboring stricter completed-bar VWAP/ATR displacement tests whether RANGE reversal survives a larger overextension without changing its mechanism.",
+      "parameters": {
+        "vwap_window_bars": 16,
+        "min_abs_vwap_deviation_atr": 1.2,
+        "min_abs_four_bar_move_atr": 1.0,
+        "max_trend_efficiency24h": 0.3
+      }
+    },
+    {
+      "key": "V10_BEAR_REBOUND_FAILURE_A",
+      "family": "BEAR_WEAK_REBOUND_FAILURE_SHORT",
+      "neighbor_group": "V10_BEAR_REBOUND_FAILURE",
+      "enabled": true,
+      "regimes": ["BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["SHORT"],
+      "hypothesis": "In a structural BEAR, a bounded completed four-bar rebound followed by an ATR-sized sell candle closing near its low marks rebound failure and renewed downside continuation.",
+      "parameters": {
+        "rebound_lookback_bars": 4,
+        "min_prior_rebound_atr": 0.35,
+        "max_prior_rebound_atr": 1.75,
+        "min_renewed_sell_atr": 0.4,
+        "max_close_location": 0.35
+      }
+    },
+    {
+      "key": "V10_BEAR_REBOUND_FAILURE_B",
+      "family": "BEAR_WEAK_REBOUND_FAILURE_SHORT",
+      "neighbor_group": "V10_BEAR_REBOUND_FAILURE",
+      "enabled": true,
+      "regimes": ["BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["SHORT"],
+      "hypothesis": "A neighboring stricter rebound and renewed-sell threshold tests BEAR continuation stability while retaining the same completed-bar failure pattern.",
+      "parameters": {
+        "rebound_lookback_bars": 4,
+        "min_prior_rebound_atr": 0.5,
+        "max_prior_rebound_atr": 1.5,
+        "min_renewed_sell_atr": 0.55,
+        "max_close_location": 0.25
+      }
+    },
+    {
+      "key": "V10_BEAR_CAPITULATION_RECOVERY_A",
+      "family": "BEAR_VOLUME_CAPITULATION_RECOVERY_LONG",
+      "neighbor_group": "V10_BEAR_CAPITULATION_RECOVERY",
+      "enabled": true,
+      "regimes": ["BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG"],
+      "hypothesis": "A completed abnormal-volume downside shock followed by a separate completed recovery candle in a structural BEAR indicates seller exhaustion rather than attempting to catch the crash bar itself.",
+      "parameters": {
+        "min_prior_drop_atr": 0.8,
+        "min_prior_quote_volume_z": 1.5,
+        "min_recovery_atr": 0.25,
+        "min_recovery_fraction": 0.25,
+        "max_recovery_fraction": 1.25,
+        "min_recovery_close_location": 0.6
+      }
+    },
+    {
+      "key": "V10_BEAR_CAPITULATION_RECOVERY_B",
+      "family": "BEAR_VOLUME_CAPITULATION_RECOVERY_LONG",
+      "neighbor_group": "V10_BEAR_CAPITULATION_RECOVERY",
+      "enabled": true,
+      "regimes": ["BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG"],
+      "hypothesis": "A neighboring stricter shock-volume and recovery confirmation tests whether the BEAR exhaustion mechanism is robust after costs.",
+      "parameters": {
+        "min_prior_drop_atr": 1.0,
+        "min_prior_quote_volume_z": 2.0,
+        "min_recovery_atr": 0.35,
+        "min_recovery_fraction": 0.35,
+        "max_recovery_fraction": 1.1,
+        "min_recovery_close_location": 0.7
+      }
+    },
+    {
+      "key": "V10_BINANCE_BETA_RESIDUAL_A",
+      "family": "BINANCE_BETA_RESIDUAL_CROSS_SECTIONAL_CONTINUATION",
+      "neighbor_group": "V10_BINANCE_BETA_RESIDUAL",
+      "enabled": true,
+      "regimes": ["RANGE", "BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "A four-bar move unexplained by BTC and ETH betas estimated on the prior non-overlapping 96 completed bars persists cross-sectionally in the strongest and weakest residual tails.",
+      "parameters": {
+        "residual_horizon_bars": 4,
+        "beta_estimation_bars": 96,
+        "tail_fraction": 0.15,
+        "min_absolute_residual_bps": 15.0,
+        "minimum_ranked_assets": 10
+      }
+    },
+    {
+      "key": "V10_BINANCE_BETA_RESIDUAL_B",
+      "family": "BINANCE_BETA_RESIDUAL_CROSS_SECTIONAL_CONTINUATION",
+      "neighbor_group": "V10_BINANCE_BETA_RESIDUAL",
+      "enabled": true,
+      "regimes": ["RANGE", "BEAR", "STRONG_BEAR"],
+      "allowed_sides": ["LONG", "SHORT"],
+      "hypothesis": "A neighboring wider residual threshold and tail tests local robustness of Binance-only BTC/ETH beta-residual continuation.",
+      "parameters": {
+        "residual_horizon_bars": 4,
+        "beta_estimation_bars": 96,
+        "tail_fraction": 0.2,
+        "min_absolute_residual_bps": 25.0,
+        "minimum_ranked_assets": 10
+      }
+    }
+  ]
+}

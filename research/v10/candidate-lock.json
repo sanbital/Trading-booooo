@@ -1,0 +1,38 @@
+{
+  "candidate": null,
+  "candidate_key": null,
+  "candidate_lock_sha256": "d7da8d3e6703b2981f174d09e8b900f0753638ee7ed0296111a444455c9a6554",
+  "candidate_set": [],
+  "candidate_universe_sha256": "c0e9519cc36af561adc72b75faa08900f8b7301b6bc72e92023846b14ee5a910",
+  "decision": "NO_TRADE_NO_VALIDATION_EDGE",
+  "discovery_report_sha256": "b1b0c1c9d376a2e223545ef5c56395d8e960c7272daa4b641bc031c07fada51f",
+  "execution": {
+    "base_round_trip_cost_bps": 14,
+    "duplicate_asset_positions": false,
+    "entry": "next completed 15m Binance Futures candle open",
+    "exit": "ATR bracket with conservative STOP_FIRST intrabar ordering, otherwise locked time exit",
+    "funding": "No funding event charge for holds <=4h; candidates crossing an 8h event are ineligible for promotion unless separately accounted.",
+    "max_holding_bars": 16,
+    "maximum_barrier_bps": 250,
+    "minimum_barrier_bps": 35,
+    "portfolio_max_concurrent_positions": 3,
+    "portfolio_signal_priority": "For simultaneous eligible signals, sort by the candidate's dimensionless absolute trigger-excess strength descending, then asset ascending, then candidate key ascending; admit at most three and never admit a duplicate asset.",
+    "stop_atr": 1.25,
+    "stress_round_trip_cost_bps": 23,
+    "target_atr": 1.75
+  },
+  "final_test_access_required": false,
+  "locked_at": "2026-08-30T03:41:47.192683Z",
+  "locked_validation_gates": null,
+  "locked_validation_metrics": null,
+  "one_shot_test_required": false,
+  "preregistration_sha256": "eed3db7ad923bc2fa8a3198c88efd8dc31024d55b6b04a9ce7dd709be0605579",
+  "revision": "REGIME_ROUTER_V10_INDEPENDENT_RANGE_BEAR_15M_365D_20260830",
+  "runner_sha256": "7c2659d83c2c4a21485c23b5401488d9c6edf6e4ee9c10fec6a92662296ff4f1",
+  "schema_version": 1,
+  "test_access_timestamp": null,
+  "test_window": {
+    "end_exclusive": "2026-01-01T00:00:00Z",
+    "start_inclusive": "2025-11-02T00:00:00Z"
+  }
+}
