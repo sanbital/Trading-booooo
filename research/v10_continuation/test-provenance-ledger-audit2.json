@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "revision": "V10_GLOBAL_TEST_PROVENANCE_LEDGER_20260831_AUDIT2",
+  "append_only": true,
+  "previous_ledger": {
+    "path": "research/v10_continuation/test-provenance-ledger.json",
+    "blob_sha": "445d096f632b9334569c7405504cb03385b87ace",
+    "revision": "V10_GLOBAL_TEST_PROVENANCE_LEDGER_20260830_AUDIT1"
+  },
+  "append_sequence": 2,
+  "events": [
+    {
+      "event": "WINDOW_ACCESSED_AND_PERMANENTLY_CONSUMED",
+      "window": [
+        "2026-01-01T00:00:00+00:00",
+        "2026-08-24T00:00:00+00:00"
+      ],
+      "accessed_at_utc": "2026-08-30T22:14:23Z",
+      "workflow_run_id": 33338592568,
+      "job_id": 99329898898,
+      "commit_sha": "f3cd0072eab4716417270a792a501693c8fc367b",
+      "artifact_id": 9739810384,
+      "artifact_digest": "sha256:a4101049f51e87b2d8124e71e31fd321e80e49fb806f5e891eeccce06f9b0d9f",
+      "result_file_sha256": "dc20798a6de6696b0797445ab2f5956a8795ca3a7364ae9d58efa8a8d255ef4e",
+      "data_manifest_canonical_sha256": "a446e04ad948e5220ae3b1b143d41e7d0d6b759c2b407819e38786dd5599013e",
+      "strategy_behavioral_fingerprint": "6e87e3d357da45dae046e50b8ceb643761f99bde38c1499f49b3fbb2d44f7704",
+      "candidate_key": "R4_RANGE_CYCLE_RESID_MR_0021",
+      "used_for_selection": false,
+      "released": false,
+      "statistical_decision": "PERMANENTLY_REJECTED",
+      "metrics": {
+        "trades": 19,
+        "stress_bps": -899.331,
+        "mean_stress_bps": -47.333,
+        "stress_pf": 0.7409,
+        "positive_quarters": 2,
+        "first_half_stress_bps": 554.819,
+        "second_half_stress_bps": -1454.15,
+        "max_asset_exposure_share": 0.1579,
+        "loo_positive_share": 0.05,
+        "loo_median_mean_stress_bps": -47.333,
+        "threshold_neighbor_pass_share": 0.0
+      },
+      "supersedes_prior_state": "RESERVED_UNTOUCHED_PENDING_APPEND_ONLY_VALID_LOCK",
+      "new_state": "PERMANENTLY_CONSUMED_SUPPLEMENTAL_OOS"
+    },
+    {
+      "event": "WINDOW_RESERVED_UNTOUCHED_FOR_R7_FINAL_ONLY",
+      "window": [
+        "2022-01-01T00:00:00+00:00",
+        "2023-01-01T00:00:00+00:00"
+      ],
+      "reserved_by_protocol": "V10_R7_BLOCKED_PROTOCOL_LOCK_V3_20260831",
+      "protocol_commit": "c2fba0d0d0646aad970f816c5f1c3e06e487a075",
+      "accessed": false,
+      "eligible_as_untouched_final": true,
+      "access_condition": "Only after an exact RANGE or BEAR candidate identity, fingerprint, funding treatment, source manifest, and final gates are committed in an immutable lane-specific lock.",
+      "state": "RESERVED_UNTOUCHED_R7_FINAL_HOLDOUT"
+    }
+  ]
+}
