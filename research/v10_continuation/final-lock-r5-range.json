@@ -1,0 +1,28 @@
+{
+  "revision": "V10_R5_RANGE_FINAL_LOCK_20260830",
+  "test_accessed_before_lock": false,
+  "final_test_window": ["2025-11-02T00:00:00+00:00", "2026-01-01T00:00:00+00:00"],
+  "candidate_key": "R4_RANGE_CYCLE_RESID_MR_0021",
+  "candidate_sha256": "868db85d505533855723a4ed2d9379f600fdc0b448b75f902b408cc42ddfda44",
+  "candidate": {
+    "cycle_h": 12,
+    "family": "CYCLE_RESID_MR",
+    "hold_h": 24,
+    "key": "R4_RANGE_CYCLE_RESID_MR_0021",
+    "lane": "RANGE",
+    "lookback_h": 72,
+    "sign_req": true,
+    "threshold": 0.05
+  },
+  "independent_confirmation_passed": true,
+  "confirmation_revision": "V10_R5_RANGE_CONFIRM_20260830",
+  "confirmation": {
+    "trades": 15,
+    "mean_stress_bps": 36.598,
+    "stress_pf": 1.1974,
+    "first_half_stress_bps": 251.646,
+    "second_half_stress_bps": 297.319,
+    "loo_positive_share": 0.95,
+    "loo_median_mean_stress_bps": 36.598
+  }
+}
