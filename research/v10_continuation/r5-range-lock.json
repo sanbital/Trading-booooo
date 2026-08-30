@@ -1,0 +1,28 @@
+{
+  "revision": "V10_R5_RANGE_LOCK_20260830",
+  "locked_at_source_commit": "ded8692a164ba924e8fce1237828e399164f57f9",
+  "selection_rule": "Among R4 RANGE candidates passing all 2024/2025 basic gates and both 2024/2025 leave-one-asset-out gates, maximize the minimum of 2024 and 2025 mean_stress_bps; break ties by stricter sign_req then minimum stress PF.",
+  "candidate_key": "R4_RANGE_CYCLE_RESID_MR_0021",
+  "candidate": {
+    "lane": "RANGE",
+    "family": "CYCLE_RESID_MR",
+    "lookback_h": 72,
+    "cycle_h": 12,
+    "threshold": 0.05,
+    "sign_req": true,
+    "hold_h": 24
+  },
+  "prelock_evidence": {
+    "y2024_mean_stress_bps": 109.454,
+    "y2024_stress_pf": 1.5924,
+    "y2024_trades": 48,
+    "y2024_loo_positive_share": 1.0,
+    "y2025_mean_stress_bps": 71.308,
+    "y2025_stress_pf": 1.6237,
+    "y2025_trades": 28,
+    "y2025_loo_positive_share": 1.0
+  },
+  "confirmation_window": "R3_D23S_to_R3_D23E",
+  "final_test_accessed": false,
+  "final_test_window": ["2025-11-02T00:00:00+00:00", "2026-01-01T00:00:00+00:00"]
+}
