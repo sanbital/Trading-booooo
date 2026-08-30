@@ -1,0 +1,33 @@
+name: V10 Cross-Sectional RANGE BEAR Research
+
+on:
+  push:
+    branches:
+      - v10-continuation-20260830
+    paths:
+      - 'research/v10_continuation/run_xs.py'
+      - 'research/v10_continuation/xs-candidate-lock.json'
+      - '.github/workflows/v10-continuation-xs.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  research-xs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: v10-cache-continuation
+          key: v10-cont-binance-usdm-15m-2025-v1
+      - name: Run sealed XS discovery or locked test
+        run: python research/v10_continuation/run_xs.py
+      - name: Upload XS result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v10-xs-result
+          path: research/v10_continuation/xs-result.json
+          if-no-files-found: ignore
