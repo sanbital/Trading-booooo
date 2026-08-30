@@ -1,0 +1,70 @@
+{
+  "audit_type": "append_only_superseding_record",
+  "corrected_gates": {
+    "eligible": false,
+    "exact_candidate_behavior_parity": false,
+    "max_asset_exposure_at_most_0_25": false,
+    "minimum_sample": false,
+    "pf_at_least_1_10": true,
+    "positive_after_stress": true,
+    "positive_halves": true,
+    "positive_required_subwindows": true,
+    "untouched_test_before_lock": false
+  },
+  "findings": [
+    {
+      "effect": "R6 is repeat access, not independent final confirmation.",
+      "finding": "R6 evaluated the same 2025-11-02 through 2026-01-01 window after R5 had already accessed it.",
+      "id": "GLOBAL_TEST_ALREADY_CONSUMED",
+      "severity": "BLOCKING"
+    },
+    {
+      "effect": "R6 is not exact implementation parity with R4/R5 despite identical observed six trades.",
+      "finding": "R5 explicitly enforced sign_req=true; R6 omitted sign_req and the R6 signal code does not enforce the sign condition.",
+      "id": "CANDIDATE_BEHAVIOR_DRIFT",
+      "severity": "BLOCKING"
+    },
+    {
+      "corrected_gate": false,
+      "finding": "R5 and R6 final runners compared exposure to 0.40. The continuation release cap is 0.25.",
+      "historical_reported_gate": true,
+      "id": "ASSET_EXPOSURE_GATE_WRONG_CAP",
+      "observed": 0.3333,
+      "severity": "BLOCKING"
+    },
+    {
+      "finding": "The final result had six trades, below the historical locked minimum of eight and below the continuation event-density standard.",
+      "id": "SAMPLE_GATE_FAILED",
+      "severity": "BLOCKING"
+    },
+    {
+      "effect": "Infrastructure identity and statistical revision identity were conflated.",
+      "finding": "The R6 workflow emitted an artifact named v10-r3-final-test-result and used run_r3_final_test.py while declaring an R6 revision.",
+      "id": "RUNNER_IDENTITY_DRIFT",
+      "severity": "HIGH"
+    }
+  ],
+  "historical_files_modified": false,
+  "historical_lock_commit": "c276484b8db93dbb3ea5812fa28199d9201b18e8",
+  "historical_lock_file": "research/v10_continuation/final-lock.json",
+  "historical_result_artifact_id": 9733053210,
+  "historical_result_run_id": 33314659660,
+  "independent_evidence_credit": false,
+  "observed_result": {
+    "max_asset_exposure_share": 0.3333,
+    "max_drawdown_bps": -543.152,
+    "mean_stress_bps": 161.545,
+    "stress_bps": 969.273,
+    "stress_pf": 2.7845,
+    "test_window": [
+      "2025-11-02T00:00:00+00:00",
+      "2026-01-01T00:00:00+00:00"
+    ],
+    "top_asset": "OP",
+    "trades": 6,
+    "wins": 5
+  },
+  "release_decision": "NOT_RELEASED",
+  "revision": "V10_R6_FINAL_LOCK_SUPERSEDING_AUDIT_20260830",
+  "schema_version": 1
+}

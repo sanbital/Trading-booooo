@@ -1,0 +1,162 @@
+{
+  "append_only": true,
+  "branch_at_audit": "v10-continuation-20260830",
+  "created_at_utc": "2026-08-30T14:00:00Z",
+  "head_at_audit": "c276484b8db93dbb3ea5812fa28199d9201b18e8",
+  "repository": "sanbital/Trading-booooo",
+  "revision": "V10_GLOBAL_TEST_PROVENANCE_LEDGER_20260830_AUDIT1",
+  "rules": {
+    "historical_lock_files_are_never_rewritten": true,
+    "repeat_access_is_not_independent_confirmation": true,
+    "unknown_or_unreliable_access_state_fails_closed": true,
+    "untouched_means": "No candidate, parameter, gate, implementation, report, workflow, local artifact, or cache has evaluated the window before an immutable lock."
+  },
+  "schema_version": 1,
+  "windows": [
+    {
+      "eligible_as_untouched_final": false,
+      "first_known_access": {
+        "commit_sha": "056e79b52fd7e94705d59652849cee62fa98e843",
+        "purpose": "R3 preselected-winner confirmation",
+        "revision": "V10_R3_MECHANISMS_20260830",
+        "workflow_run_id": 33313685179
+      },
+      "state": "CONSUMED_CONFIRMATION_AND_SELECTION",
+      "subsequent_uses": [
+        "R4 holdout confirmation",
+        "R5 independent RANGE confirmation",
+        "R5/R6 three-period selection"
+      ],
+      "window": [
+        "2023-09-01T00:00:00+00:00",
+        "2024-01-01T00:00:00+00:00"
+      ]
+    },
+    {
+      "eligible_as_untouched_final": false,
+      "first_known_access": {
+        "commit_sha": "e99eb1fdc1ac75fb39172ac67b6d4d89096e5584",
+        "purpose": "candidate discovery and independent confirmation",
+        "revision": "V10_INDEPENDENT_CONFIRM_20260830",
+        "workflow_run_id": 33313212136
+      },
+      "state": "CONSUMED_DISCOVERY_SELECTION_CONFIRMATION",
+      "window": [
+        "2024-01-01T00:00:00+00:00",
+        "2025-10-08T00:00:00+00:00"
+      ]
+    },
+    {
+      "actual_result": {
+        "corrected_asset_exposure_gate_cap": 0.25,
+        "corrected_asset_exposure_gate_pass": false,
+        "max_asset_exposure_share": 0.3333,
+        "max_drawdown_bps": -543.152,
+        "mean_stress_bps": 161.545,
+        "stress_bps": 969.273,
+        "stress_pf": 2.7845,
+        "top_asset": "OP",
+        "trades": 6,
+        "wins": 5
+      },
+      "eligible_as_untouched_final": false,
+      "first_access": {
+        "accessed_at_utc": "2026-08-30T13:27:00Z",
+        "artifact_digest": "sha256:bcb6d6a200e5deec1e203263640d25ce6d5dc239cea86156d69a7c90d82793f6",
+        "artifact_id": 9732925002,
+        "candidate_behavior": {
+          "cycle_h": 12,
+          "family": "CYCLE_RESID_MR",
+          "hold_h": 24,
+          "lookback_h": 72,
+          "sign_req": true,
+          "threshold": 0.05
+        },
+        "candidate_key": "R4_RANGE_CYCLE_RESID_MR_0021",
+        "commit_sha": "66f4396d7fd3845e414bb9bfc1e51dfd78613978",
+        "failed_gates": [
+          "sample under historical lock",
+          "asset exposure under corrected global cap"
+        ],
+        "job_id": 99264528316,
+        "released": false,
+        "result_file_sha256": "ed33127a4d37f410fca88aabf47ce6b3590b1847dd1ea3d265727cf73b524b72",
+        "revision": "V10_R5_RANGE_FINAL_TEST_20260830",
+        "statistical_decision": "INELIGIBLE",
+        "used_as_final_test": true,
+        "used_for_selection": false,
+        "workflow_run_id": 33314216508
+      },
+      "notes": [
+        "The handoff cited a 2025-10-08 start, but the committed locks, runners, logs, and artifacts use 2025-11-02.",
+        "R5 and R6 workflow success only means the code ran; neither strategy was statistically released."
+      ],
+      "repeat_accesses": [
+        {
+          "accessed_at_utc": "2026-08-30T13:37:00Z",
+          "artifact_digest": "sha256:7ef14f7c4b8b865ef199fccf48063b8a56ae22da819d67cf410a68db9a48cca8",
+          "artifact_id": 9733053210,
+          "candidate_behavior": {
+            "cycle_h": 12,
+            "family": "CYCLE_RESID_MR",
+            "hold_h": 24,
+            "lookback_h": 72,
+            "sign_req": false,
+            "threshold": 0.05
+          },
+          "candidate_key": "R6_RANGE_CYCLE_RESID_MR_0016",
+          "commit_sha": "c276484b8db93dbb3ea5812fa28199d9201b18e8",
+          "independent_evidence": false,
+          "job_id": 99265738108,
+          "observed_trade_set_fingerprint": "458d0fe9ecb35c642dd710b843b7255265bda0325893abc2e8667bf44c4f6d6a",
+          "reason": "Repeated evaluation after R5 had already consumed the window.",
+          "released": false,
+          "result_file_sha256": "f7563f7dc135583e04cfd1f939922466889d9bc864e3309814b647ea473cac64",
+          "revision": "V10_R6_LOCKED_FINAL_TEST_20260830",
+          "same_observed_trade_set_as_first_access": true,
+          "statistical_decision": "INELIGIBLE",
+          "workflow_run_id": 33314659660
+        }
+      ],
+      "state": "PERMANENTLY_CONSUMED_FINAL_TEST",
+      "window": [
+        "2025-11-02T00:00:00+00:00",
+        "2026-01-01T00:00:00+00:00"
+      ]
+    },
+    {
+      "decision": "DO_NOT_EXECUTE_UNDER_HISTORICAL_LOCK",
+      "eligible_for_access_only_after_append_only_superseding_preregistration": true,
+      "historical_lock_commit": "2e6046cc9c8c63ac0c7dd8cddb883a41c0e6fcb6",
+      "historical_lock_problems": [
+        "Window ends 2026-08-01 rather than the handoff 2026-08-24.",
+        "Asset exposure cap is 0.40 rather than the non-negotiable 0.25.",
+        "Minimum trades, PF, subwindow, LOO, and neighborhood gates are weaker than the continuation directive.",
+        "No source-data manifest/hash, workflow-run binding, or artifact-digest binding is predeclared."
+      ],
+      "runner_commit": "87943b6dded2fe2fa6ae50825e7bf2b95e26f23f",
+      "runner_execution_found": false,
+      "search_scope": [
+        "complete branch history",
+        "workflow directory",
+        "push-triggered Actions for lock and runner commits",
+        "known artifacts"
+      ],
+      "state": "NO_EXECUTION_FOUND_BUT_HISTORICAL_LOCK_NONCOMPLIANT",
+      "window": [
+        "2026-01-01T00:00:00+00:00",
+        "2026-08-01T00:00:00+00:00"
+      ]
+    },
+    {
+      "caveat": "Any local or external access not represented in repository history or Actions would invalidate this state and must be appended before execution.",
+      "decision": "RESERVED_UNTOUCHED_PENDING_APPEND_ONLY_VALID_LOCK",
+      "eligible_as_untouched_final": true,
+      "state": "NO_EXECUTION_FOUND_IN_REPOSITORY_OR_ACTIONS_AUDIT",
+      "window": [
+        "2026-01-01T00:00:00+00:00",
+        "2026-08-24T00:00:00+00:00"
+      ]
+    }
+  ]
+}

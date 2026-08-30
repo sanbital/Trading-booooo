@@ -1,0 +1,64 @@
+name: V10 Audit Freeze
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [v10-continuation-20260830]
+    paths:
+      - 'research/v10_continuation/test-provenance-ledger.json'
+      - 'research/v10_continuation/r6-final-lock-audit.json'
+      - 'research/v10_continuation/audit-evidence-table.json'
+      - 'research/v10_continuation/V10_AUDIT.md'
+      - 'research/v10_continuation/validation_gates.py'
+      - 'research/v10_continuation/strategy_fingerprint.py'
+      - 'research/v10_continuation/tests/**'
+      - '.github/workflows/v10-audit-freeze.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run fail-closed audit tests
+        working-directory: research/v10_continuation
+        run: python -m unittest discover -s tests -v
+      - name: Validate append-only audit JSON
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('research/v10_continuation')
+          ledger=json.loads((root/'test-provenance-ledger.json').read_text())
+          audit=json.loads((root/'r6-final-lock-audit.json').read_text())
+          evidence=json.loads((root/'audit-evidence-table.json').read_text())
+          assert ledger['append_only'] is True
+          consumed=[w for w in ledger['windows'] if w['state']=='PERMANENTLY_CONSUMED_FINAL_TEST']
+          assert len(consumed)==1
+          assert consumed[0]['actual_result']['max_asset_exposure_share']==0.3333
+          assert consumed[0]['actual_result']['corrected_asset_exposure_gate_pass'] is False
+          supplement=[w for w in ledger['windows'] if w['window'][1]=='2026-08-01T00:00:00+00:00']
+          assert len(supplement)==1 and supplement[0]['decision']=='DO_NOT_EXECUTE_UNDER_HISTORICAL_LOCK'
+          assert audit['release_decision']=='NOT_RELEASED'
+          assert audit['corrected_gates']['eligible'] is False
+          assert evidence['global_findings']['production_v10_continuation_release_present'] is False
+          print('audit freeze validated')
+          PY
+      - name: Upload immutable audit evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v10-audit-freeze
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            research/v10_continuation/test-provenance-ledger.json
+            research/v10_continuation/r6-final-lock-audit.json
+            research/v10_continuation/audit-evidence-table.json
+            research/v10_continuation/V10_AUDIT.md
+            research/v10_continuation/tests/fixtures/r5_r6_consumed_test.json

@@ -1,0 +1,29 @@
+{
+  "expected_cap": "0.25",
+  "expected_corrected": {
+    "R5": {
+      "asset_exposure_gate": false,
+      "sample_gate": false
+    },
+    "R6": {
+      "asset_exposure_gate": false,
+      "sample_gate": false
+    }
+  },
+  "historical_results": {
+    "R5": {
+      "historical_reported_asset_gate": true,
+      "max_asset_exposure_share": "0.3333",
+      "trades": 6
+    },
+    "R6": {
+      "historical_reported_asset_gate": true,
+      "max_asset_exposure_share": "0.3333",
+      "trades": 6
+    }
+  },
+  "window": [
+    "2025-11-02T00:00:00+00:00",
+    "2026-01-01T00:00:00+00:00"
+  ]
+}
