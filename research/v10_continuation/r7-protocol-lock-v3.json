@@ -1,0 +1,144 @@
+{
+  "schema_version": 3,
+  "revision": "V10_R7_BLOCKED_PROTOCOL_LOCK_V3_20260831",
+  "supersedes": "V10_R7_BLOCKED_PROTOCOL_LOCK_V2_20260831",
+  "supersession_reason": "The V2 workflow passed protocol, source-hash and syntax verification but stopped before any market-data evaluation because Python dataclass resolution requires dynamically executed classes to belong to a registered sys.modules module. V3 preserves V1/V2 and adds only that runtime-module registration correction.",
+  "test_accessed_before_lock": false,
+  "immutable_after_commit": true,
+  "runner_path": "research/v10_continuation/run_r7_v3.py",
+  "runner_sha256": "920d837f38cba462ba25f7717a830816c3d667bb8b7ad15c0bc200e72bb18ca9",
+  "source_runner_path": "research/v10_continuation/run_r7.py",
+  "source_runner_sha256": "5b8d97649d24afcadfd637f18dd63b656935336c43be88a923af7fb25ede509f",
+  "audited_transform": {
+    "count_required": 1,
+    "from": "results[candidate[\"key\"] = {",
+    "to": "results[candidate[\"key\"]] = {"
+  },
+  "runtime_correction": {
+    "type": "register_dynamic_module_in_sys_modules",
+    "module_name": "v10_r7_audited_source_v3",
+    "statistical_logic_changed": false,
+    "candidate_universe_changed": false,
+    "gates_changed": false
+  },
+  "prior_attempts": [
+    {
+      "revision": "V10_R7_V1",
+      "workflow_run_id": 33339322841,
+      "job_id": 99331956567,
+      "market_data_accessed": false,
+      "holdout_accessed": false,
+      "failure": "runner_sha256_mismatch_before_syntax_check"
+    },
+    {
+      "revision": "V10_R7_V2",
+      "workflow_run_id": 33339574482,
+      "job_id": 99332633582,
+      "market_data_accessed": false,
+      "holdout_accessed": false,
+      "failure": "dynamic_module_not_registered_for_dataclass_resolution"
+    }
+  ],
+  "research_windows": [
+    [
+      "2023-01-01T00:00:00+00:00",
+      "2024-01-01T00:00:00+00:00"
+    ],
+    [
+      "2024-01-01T00:00:00+00:00",
+      "2025-01-01T00:00:00+00:00"
+    ],
+    [
+      "2025-01-01T00:00:00+00:00",
+      "2025-10-08T00:00:00+00:00"
+    ]
+  ],
+  "final_holdout": {
+    "window": [
+      "2022-01-01T00:00:00+00:00",
+      "2023-01-01T00:00:00+00:00"
+    ],
+    "accessed_before_lock": false,
+    "must_not_be_loaded_by_discovery_runner": true,
+    "purpose": "candidate-identity-locked final blocked holdout only"
+  },
+  "universe": [
+    "BTC",
+    "ETH",
+    "XRP",
+    "SOL",
+    "DOGE",
+    "ADA",
+    "AVAX",
+    "LINK",
+    "BCH",
+    "DOT",
+    "TRX",
+    "NEAR",
+    "ETC",
+    "XLM",
+    "ATOM",
+    "UNI"
+  ],
+  "data": {
+    "exchange": "Binance USD-M Futures",
+    "source": "data.binance.vision monthly 15m klines",
+    "completed_bar_only": true,
+    "entry_price": "next 15m bar open",
+    "missing_data": "fail closed",
+    "checksum_required": true
+  },
+  "cost_model": {
+    "base_round_trip_bps": 18,
+    "stress_round_trip_bps": 21,
+    "funding": "not yet modeled; candidate cannot be live-released until historical funding parity is added"
+  },
+  "mechanisms": {
+    "RANGE": [
+      "beta-neutral 8h/12h/24h residual ensemble with completed-hour reconvergence",
+      "beta-neutral residual ensemble with opposing taker-flow confirmation"
+    ],
+    "BEAR": [
+      "breadth-confirmed failed rebound followed by completed-bar 4h-low rebreak",
+      "cross-sectional relative weakness followed by tactical rebound failure and rebreak"
+    ]
+  },
+  "selection_gates": {
+    "positive_after_stress_in_every_period": true,
+    "minimum_stress_pf_each_period": 1.1,
+    "minimum_trades_2023": 32,
+    "minimum_trades_2024": 32,
+    "minimum_trades_2025_pretest": 24,
+    "positive_subwindows_each_period": 3,
+    "positive_halves_each_period": true,
+    "maximum_asset_exposure_share": 0.25,
+    "minimum_distinct_assets_each_period": 6,
+    "minimum_events_each_subwindow": 3,
+    "minimum_distinct_assets_each_subwindow": 2,
+    "maximum_top_event_absolute_pnl_share": 0.25,
+    "maximum_top_positive_month_share": 0.55,
+    "minimum_total_trades": 90,
+    "minimum_loo_positive_share_each_period": 0.9,
+    "minimum_loo_median_mean_stress_bps_each_period": 5,
+    "minimum_local_parameter_variants": 4,
+    "minimum_parameter_neighbor_pass_share": 0.75
+  },
+  "final_holdout_gates": {
+    "minimum_trades": 30,
+    "minimum_stress_pf": 1.1,
+    "positive_subwindows": 3,
+    "positive_halves": true,
+    "maximum_asset_exposure_share": 0.25,
+    "minimum_distinct_assets": 6,
+    "minimum_loo_positive_share": 0.9,
+    "funding_adjusted_positive_required_before_release": true,
+    "must_be_locked_after_candidate_selection": true
+  },
+  "release_policy": {
+    "automatic_live_release": false,
+    "research_to_production_shared_spec_required": true,
+    "golden_fixture_parity_required": true,
+    "shadow_then_one_lane_canary": true
+  },
+  "data_manifest_required": true
+}

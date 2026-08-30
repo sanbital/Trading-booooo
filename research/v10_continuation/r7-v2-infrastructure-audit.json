@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "revision": "V10_R7_V2_INFRASTRUCTURE_AUDIT_20260831",
+  "workflow_run_id": 33339574482,
+  "job_id": 99332633582,
+  "commit_sha": "89e51055e67ff1dde32381091373a9bd9b1dd31b",
+  "workflow": ".github/workflows/v10-r7-research-v2.yml",
+  "infrastructure_conclusion": "FAILED_BEFORE_MARKET_DATA_EVALUATION",
+  "statistical_conclusion": "NOT_EVALUATED",
+  "market_data_accessed": false,
+  "holdout_accessed": false,
+  "protocol_verification_passed": true,
+  "syntax_verification_passed": true,
+  "failure": {
+    "type": "PYTHON_DYNAMIC_MODULE_REGISTRATION",
+    "exception": "AttributeError: 'NoneType' object has no attribute '__dict__'",
+    "location": "dataclasses._is_type resolving a class created by exec",
+    "cause": "The exec namespace used a synthetic __name__ that was not registered in sys.modules.",
+    "statistical_logic_impacted": false
+  },
+  "superseding_protocol": "V10_R7_BLOCKED_PROTOCOL_LOCK_V3_20260831",
+  "historical_files_mutated": false
+}
