@@ -1,0 +1,46 @@
+{
+  "revision": "V10_LANES_TRANSITION_EXIT_PROTOCOL_1_0_0",
+  "created_at": "2026-08-31T19:15:00+09:00",
+  "purpose": "Test whether an open V10 LONG position should exit early after a completed-bar structural regime downgrade instead of retaining its entry-lane fixed time exit.",
+  "engine_entry_revision": "V10-LANES-3.0.0",
+  "universe": ["ETHUSDT","XRPUSDT","SOLUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT","LINKUSDT","BCHUSDT","DOTUSDT","TRXUSDT","NEARUSDT","ETCUSDT","XLMUSDT","ATOMUSDT","UNIUSDT"],
+  "bars": "15m completed bars only",
+  "entry": "next 15m open after the signal bar",
+  "baseline_exit": {"BULL": "12h time exit", "RANGE": "6h time exit", "BEAR": "24h time exit"},
+  "cost_bps_round_trip": 21,
+  "router": {
+    "BEAR": "btc72 < -0.05",
+    "RANGE": "-0.05 <= btc72 <= 0.04",
+    "BUFFER_CASH": "0.04 < btc72 <= 0.05",
+    "BULL": "btc72 > 0.05"
+  },
+  "policies": {
+    "FIXED": "retain original time exit",
+    "DOWNGRADE_1": "BULL exits after one completed bar outside BULL; RANGE exits after one completed BEAR bar",
+    "DOWNGRADE_2": "same downgrade must persist for two consecutive completed bars",
+    "DOWNGRADE_4": "same downgrade must persist for four consecutive completed bars",
+    "DEEP_1": "BULL or RANGE exits only after one completed BEAR bar",
+    "DEEP_2": "BULL or RANGE exits only after two consecutive completed BEAR bars",
+    "DEEP_4": "BULL or RANGE exits only after four consecutive completed BEAR bars"
+  },
+  "transition_execution": "market exit at the next 15m bar open after confirmation; if no confirmed transition occurs before the fixed exit, use the fixed exit",
+  "entry_set": "identical V10-LANES-3.0.0 entry events for the same-entry comparison; a second sequential portfolio simulation must reapply cooldown, symbol exclusivity and global capacity using each policy's actual exit time",
+  "development_period": ["2021-01-01T00:00:00Z", "2025-01-01T00:00:00Z"],
+  "confirmation_period": ["2025-01-01T00:00:00Z", "2026-09-01T00:00:00Z"],
+  "adoption_rule": {
+    "lane_scope": ["BULL", "RANGE"],
+    "must_improve_transition_subset_mean_bps": true,
+    "must_not_reduce_overall_profit_factor_below_95_percent_of_fixed": true,
+    "must_not_reduce_total_net_bps_below_90_percent_of_fixed": true,
+    "must_improve_max_drawdown_by_at_least_10_percent_or_improve_worst_year_mean_by_at_least_5_bps": true,
+    "must_have_no_negative_full_calendar_year_where_fixed_was_positive": true,
+    "confirmation_must_preserve_positive_total_delta_or_improve_drawdown_without_pf_deterioration": true,
+    "fail_closed": true
+  },
+  "notes": [
+    "A regime upgrade is not an adverse exit trigger because every V10 lane is LONG.",
+    "BEAR positions retain their tested time exit in this protocol; recovery from BEAR is directionally favorable to a LONG position.",
+    "No stop-loss, take-profit or parameter changes are permitted in this comparison."
+  ],
+  "status": "LOCKED_BEFORE_TRANSITION_OUTCOME_QUERY"
+}
