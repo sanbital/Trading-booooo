@@ -1,0 +1,52 @@
+{
+  "revision": "V10_LANES_REGIME_HANDOFF_EXIT_R3_PROTOCOL_1_0_0",
+  "created_at": "2026-08-31T20:05:00+09:00",
+  "parent_findings": [
+    "Unconditional transition exits reduced BULL and RANGE expectancy.",
+    "Loss-conditioned transition exits did not pass the locked cross-year adoption gates."
+  ],
+  "hypothesis": "An existing LONG should inherit the destination lane's exit horizon only when the same asset satisfies the destination lane's completed-bar entry conditions at the confirmed transition. This preserves a valid position instead of blindly retaining the origin exit or crystallizing a mean-reversion loss.",
+  "confirmation_bars": [1,4],
+  "destination_rules": {
+    "RANGE": {
+      "router": "-0.05 <= btc72 <= 0.04",
+      "entry": "atr_ratio >= 1.65 and bb_pos <= -1.05 and quote_volume_24h >= 50000000",
+      "hold_hours_from_handoff_signal": 6
+    },
+    "BEAR": {
+      "router": "btc72 < -0.05",
+      "entry": "-0.20 <= btc30d <= -0.10 and atr_ratio >= 1.60 and bb_pos <= -0.90 and bb_pos_1h_ago > -0.90 and quote_volume_24h >= 50000000",
+      "hold_hours_from_handoff_signal": 24
+    }
+  },
+  "origin_transitions": {
+    "BULL": ["RANGE","BEAR"],
+    "RANGE": ["BEAR"],
+    "BEAR": []
+  },
+  "policies": {
+    "HANDOFF_KEEP_1": "At first completed destination-regime bar: if destination entry is eligible, replace exit horizon with destination horizon; otherwise keep original fixed exit.",
+    "HANDOFF_KEEP_4": "Same after four consecutive destination-regime completed bars.",
+    "HANDOFF_EXIT_1": "If eligible, hand off; if ineligible, exit at next 15m open.",
+    "HANDOFF_EXIT_4": "Same after four consecutive destination-regime completed bars."
+  },
+  "execution": {
+    "transition_detection": "completed 15m bars only",
+    "handoff_or_exit_execution": "next 15m open",
+    "handoff_exit_price": "close of the bar at handoff signal plus destination hold hours",
+    "round_trip_cost_bps": 21,
+    "no_additional_switch_fee": true,
+    "no_position_size_increase": true
+  },
+  "adoption_gates": {
+    "overall_total_net_bps_at_least_fixed": true,
+    "overall_profit_factor_at_least_fixed": true,
+    "max_drawdown_improvement_at_least_10_percent": true,
+    "all_calendar_year_means_positive": true,
+    "positive_total_delta_in_at_least_five_of_six_years": true,
+    "destination_handoff_subsets_positive": true,
+    "fail_closed": true
+  },
+  "deployment_constraint": "Historical data are consumed; a passing handoff policy remains shadow-only until forward parity and live reconciliation are observed.",
+  "status": "LOCKED_BEFORE_R3_OUTCOME_QUERY"
+}
