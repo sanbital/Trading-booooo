@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "revision": "V10_REGIME_SPECIFIC_EXITS_R8_20260831",
+  "status": "SEALED_BEFORE_R8_OUTCOME_EVALUATION",
+  "supersedes": "V10_REGIME_SPECIFIC_EXITS_R7_20260831_FOR_BEAR_ONLY",
+  "scope": "BEAR exit lane only; BULL and RANGE retain their R7 eligible candidate sets pending the combined final lock.",
+  "evidence_before_lock": {
+    "R7_raw_passes": 15,
+    "R7_plateau_passes": 0,
+    "target_observation": "BB-recovery targets 1.70 and 1.75 repeatedly passed, while high-profit trailing arm/giveback dimensions changed little economically but fragmented the multidimensional plateau.",
+    "mechanism_decision": "Remove the nonessential profit-trail axis. Preserve the completed-4h recovery-failure checkpoint and full-position BB-recovery realization."
+  },
+  "immutable_common": {
+    "entry_events": "v10_research.regime_transition_base_events_v1",
+    "entry_identity_unchanged": true,
+    "bars": "public.claude_r19_k15",
+    "features": "v10_research.lanes_v4_features",
+    "bar_interval": "15m completed",
+    "state_exit_execution": "next 15m open",
+    "leverage": 3,
+    "entry_margin_usdt": 40,
+    "entry_notional_usdt": 120,
+    "full_exit_cost_bps": 21,
+    "split_exit": false,
+    "profit_trail": null,
+    "catastrophe_stop": null,
+    "completed_recovery_failure_checkpoint_h": 4,
+    "absolute_max_hold_h": 24,
+    "absolute_max_hold_role": "final countertrend risk ceiling only",
+    "final_holdout": {
+      "window": ["2020-01-01T00:00:00Z", "2021-01-01T00:00:00Z"],
+      "accessed_before_candidate_lock": false,
+      "one_shot": true,
+      "point_in_time_symbol_availability": true,
+      "minimum_distinct_symbols": 8
+    }
+  },
+  "candidate_grid": {
+    "family": "FULL_COUNTERTREND_RESOLUTION",
+    "failure_h": [4],
+    "failure_max_return": [-0.0175,-0.0200,-0.0225],
+    "failure_max_bb_improvement": [0.35,0.40,0.45],
+    "target_bb_improvement": [1.66,1.68,1.70,1.72,1.74,1.76,1.78,1.80,1.82,1.84,1.86],
+    "max_hold_h": [24],
+    "economic_role": "At the first completed 4h checkpoint, abandon a rebound that remains at least 1.75%–2.25% below entry and has recovered no more than 0.35–0.45 BB-position units. Otherwise hold only until a 1.66–1.86 BB-position recovery completes, with 24h as the absolute ceiling."
+  },
+  "validation_periods": {
+    "development": ["2021-01-01T00:00:00Z", "2024-01-01T00:00:00Z"],
+    "confirmation": ["2024-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
+    "recent": ["2026-01-01T00:00:00Z", "2026-09-01T00:00:00Z"],
+    "selection_may_not_use_final_holdout": true
+  },
+  "gates": {
+    "2021_mean_net_bps": ">= 0",
+    "2021_profit_factor": ">= 1.0",
+    "positive_2022_through_2026": true,
+    "minimum_overall_profit_factor": 1.10,
+    "minimum_expectancy_retention": 0.80,
+    "minimum_drawdown_improvement_pct": 10,
+    "minimum_positive_half_year_blocks": 9,
+    "maximum_symbol_trade_share": 0.25,
+    "maximum_positive_month_pnl_share": 0.35,
+    "minimum_loo_positive_fraction": 0.90,
+    "minimum_loo_median_mean_bps": 5,
+    "maximum_absolute_time_backstop_rate": 0.70,
+    "minimum_state_exit_rate": 0.30,
+    "minimum_local_neighbor_pass_share": 0.75,
+    "minimum_local_variants": 8
+  },
+  "neighborhood": {
+    "included_self": true,
+    "definition": "Chebyshev distance <= 1 across the ordinal failure-return, failure-BB, and recovery-target axes.",
+    "minimum_variants": 8,
+    "minimum_raw_pass_share": 0.75
+  },
+  "selection_rule": "Select only from a connected local plateau satisfying every gate. Rank by highest worst-calendar mean net bps, then expectancy retention, then drawdown improvement, then lower max-hold rate, then lexicographic key.",
+  "release_requirement": "After R8 selection, lock one BULL, RANGE, and BEAR candidate with a complete shared entry+exit fingerprint before the untouched 2020 holdout is accessed."
+}
