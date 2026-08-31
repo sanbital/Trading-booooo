@@ -1,0 +1,29 @@
+{
+  "revision": "V10_LANES_TRANSITION_EXIT_R2_PROTOCOL_1_0_0",
+  "parent_protocol": "V10_LANES_TRANSITION_EXIT_PROTOCOL_1_0_0",
+  "created_at": "2026-08-31T19:42:00+09:00",
+  "reason": "Unconditional regime-transition exits crystallized mean-reversion losses. R2 tests an adverse-transition circuit that exits only when the position remains materially underwater at the executable next-open price.",
+  "entry_set": "identical V10-LANES-3.0.0 entry events",
+  "base_transition_triggers": ["DEEP_1","DEEP_2","DEEP_4","DOWNGRADE_4"],
+  "loss_thresholds_net_bps": [0,-50,-100,-150,-200,-300],
+  "rule": "Use the transition next-open exit only when the selected transition trigger is confirmed and the executable transition-exit net return is less than or equal to the locked loss threshold; otherwise retain the original lane time exit.",
+  "scope": {
+    "BULL": ["DEEP_1","DEEP_2","DEEP_4","DOWNGRADE_4"],
+    "RANGE": ["DEEP_1","DEEP_2","DEEP_4"],
+    "BEAR": ["FIXED"]
+  },
+  "cost_bps_round_trip": 21,
+  "evaluation": {
+    "calendar_years": [2021,2022,2023,2024,2025,2026],
+    "require_positive_mean_each_year_where_fixed_is_positive": true,
+    "require_overall_total_net_bps_at_least_fixed": true,
+    "require_overall_profit_factor_at_least_fixed": true,
+    "require_max_drawdown_improvement_at_least_10_percent": true,
+    "require_transition_subset_mean_delta_positive": true,
+    "require_positive_delta_in_at_least_five_of_six_years": true,
+    "threshold_plateau": "selected threshold and at least one adjacent threshold must pass",
+    "fail_closed": true
+  },
+  "deployment_constraint": "Even if R2 passes historical gates, enable first in shadow because all historical years are now consumed for exit-policy development.",
+  "status": "LOCKED_BEFORE_R2_OUTCOME_QUERY"
+}
