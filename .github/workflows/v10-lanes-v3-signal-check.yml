@@ -1,0 +1,27 @@
+name: V10 Lanes V3 Signal Generator Check
+
+on:
+  push:
+    branches: [v10-continuation-20260830]
+    paths:
+      - 'supabase/functions/v10-lane-signal-generator/**'
+      - 'supabase/functions/_shared/v10_lanes_v3.ts'
+      - '.github/workflows/v10-lanes-v3-signal-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Format check
+        run: deno fmt --check supabase/functions/v10-lane-signal-generator/index.ts
+      - name: Type check
+        run: deno check supabase/functions/v10-lane-signal-generator/index.ts
