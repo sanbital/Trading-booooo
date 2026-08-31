@@ -1,0 +1,34 @@
+name: V10 Lanes V3 Parity
+
+on:
+  push:
+    branches: [v10-continuation-20260830]
+    paths:
+      - 'supabase/functions/_shared/v10_lanes_v3.ts'
+      - 'supabase/functions/_shared/v10_lanes_v3.test.ts'
+      - 'supabase/functions/_shared/v10_lanes.golden.v3.json'
+      - '.github/workflows/v10-lanes-v3-parity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v10-lanes-v3-parity-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Format check
+        run: deno fmt --check supabase/functions/_shared/v10_lanes_v3.ts supabase/functions/_shared/v10_lanes_v3.test.ts
+      - name: Type check
+        run: deno check supabase/functions/_shared/v10_lanes_v3.ts supabase/functions/_shared/v10_lanes_v3.test.ts
+      - name: Golden and leakage tests
+        run: deno test --allow-read supabase/functions/_shared/v10_lanes_v3.test.ts
