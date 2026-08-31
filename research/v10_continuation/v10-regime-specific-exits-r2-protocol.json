@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "revision": "V10_REGIME_SPECIFIC_EXITS_R2_20260831",
+  "supersedes": "V10_REGIME_SPECIFIC_EXITS_R1_20260831",
+  "status": "SEALED_BEFORE_R2_OUTCOME_EVALUATION",
+  "r1_finding": "Fixed stop/target replacements destroyed BULL and RANGE expectancy and did not repair BEAR 2021. R2 preserves the validated horizon only as a maximum-hold backstop and replaces primary exits with lane-specific state transitions.",
+  "unchanged_entry_events": "v10_research.regime_transition_base_events_v1",
+  "common_execution": {
+    "bar": "15m completed",
+    "entry": "existing next-open entry",
+    "leverage": 3,
+    "margin_usdt": 40,
+    "notional_usdt": 120,
+    "single_exit_cost_bps": 21,
+    "split_exit_cost_bps": 24,
+    "completed_bar_exit": "next 15m open",
+    "catastrophe_stop": "exchange-native stop-market with 5 bps adverse slippage",
+    "same_bar_ordering": "catastrophe stop first; then fixed threshold partial/target; state exits use completed close",
+    "maximum_hold": {"BULL":12,"RANGE":6,"BEAR":24},
+    "maximum_hold_role": "emergency backstop only"
+  },
+  "state_features": {
+    "price_return": "completed close / entry price - 1",
+    "bb_improvement": "current 20h Bollinger position minus signal-bar Bollinger position",
+    "route": "completed-bar structural route",
+    "checkpoint": "first completed bar at or after the configured elapsed time",
+    "peak_return": "highest price return observed after entry"
+  },
+  "candidate_grid": {
+    "BULL": [
+      {"key":"BULL_R2_01","family":"PARTIAL_CONTINUATION","cat_stop_roe":-24,"failure_h":2,"failure_max_return":0,"failure_max_bb_improvement":0,"t1_roe":10,"t1_fraction":0.5,"residual_floor_roe":3,"trail_giveback_roe":6,"max_hold_h":12},
+      {"key":"BULL_R2_02","family":"PARTIAL_CONTINUATION","cat_stop_roe":-30,"failure_h":4,"failure_max_return":0,"failure_max_bb_improvement":0,"t1_roe":12,"t1_fraction":0.5,"residual_floor_roe":6,"trail_giveback_roe":6,"max_hold_h":12},
+      {"key":"BULL_R2_03","family":"PARTIAL_CONTINUATION","cat_stop_roe":-24,"failure_h":2,"failure_max_return":-0.005,"failure_max_bb_improvement":0.10,"t1_roe":12,"t1_fraction":0.5,"residual_floor_roe":6,"trail_giveback_roe":4.5,"max_hold_h":12},
+      {"key":"BULL_R2_04","family":"PARTIAL_CONTINUATION","cat_stop_roe":-30,"failure_h":4,"failure_max_return":-0.005,"failure_max_bb_improvement":0.10,"t1_roe":15,"t1_fraction":0.5,"residual_floor_roe":6,"trail_giveback_roe":6,"max_hold_h":12},
+      {"key":"BULL_R2_05","family":"PROFIT_TRAIL_FULL","cat_stop_roe":-24,"failure_h":2,"failure_max_return":0,"failure_max_bb_improvement":0,"trail_arm_roe":12,"trail_giveback_roe":6,"max_hold_h":12},
+      {"key":"BULL_R2_06","family":"PARTIAL_CONTINUATION","cat_stop_roe":null,"failure_h":2,"failure_max_return":0,"failure_max_bb_improvement":0,"t1_roe":12,"t1_fraction":0.5,"residual_floor_roe":6,"trail_giveback_roe":6,"max_hold_h":12},
+      {"key":"BULL_R2_07","family":"PARTIAL_CONTINUATION","cat_stop_roe":-30,"failure_h":null,"t1_roe":12,"t1_fraction":0.5,"residual_floor_roe":6,"trail_giveback_roe":6,"max_hold_h":12}
+    ],
+    "RANGE": [
+      {"key":"RANGE_R2_01","family":"FULL_MEAN_STATE","cat_stop_roe":-18,"failure_h":1,"failure_max_return":0,"failure_max_bb_improvement":0.25,"target_bb_improvement":0.75,"max_hold_h":6},
+      {"key":"RANGE_R2_02","family":"FULL_MEAN_STATE","cat_stop_roe":-24,"failure_h":2,"failure_max_return":0,"failure_max_bb_improvement":0.25,"target_bb_improvement":1.00,"max_hold_h":6},
+      {"key":"RANGE_R2_03","family":"FULL_MEAN_STATE","cat_stop_roe":-18,"failure_h":1,"failure_max_return":-0.005,"failure_max_bb_improvement":0.25,"target_bb_improvement":0.75,"max_hold_h":6},
+      {"key":"RANGE_R2_04","family":"FULL_MEAN_STATE","cat_stop_roe":null,"failure_h":1,"failure_max_return":0,"failure_max_bb_improvement":0.25,"target_bb_improvement":0.75,"max_hold_h":6},
+      {"key":"RANGE_R2_05","family":"SPLIT_MEAN_STATE","cat_stop_roe":-24,"failure_h":2,"failure_max_return":0,"failure_max_bb_improvement":0.25,"t1_bb_improvement":0.50,"t1_fraction":0.5,"residual_target_bb_improvement":1.00,"residual_floor_roe":0,"max_hold_h":6},
+      {"key":"RANGE_R2_06","family":"PROFIT_TRAIL_FULL","cat_stop_roe":-24,"failure_h":1,"failure_max_return":0,"failure_max_bb_improvement":0.25,"trail_arm_roe":6,"trail_giveback_roe":3,"max_hold_h":6},
+      {"key":"RANGE_R2_07","family":"FULL_MEAN_STATE","cat_stop_roe":-24,"failure_h":2,"failure_max_return":-0.005,"failure_max_bb_improvement":0.35,"target_bb_improvement":0.75,"max_hold_h":6}
+    ],
+    "BEAR": [
+      {"key":"BEAR_R2_01","family":"FULL_COUNTERTREND_STATE","cat_stop_roe":-30,"failure_h":1,"failure_max_return":0,"failure_max_bb_improvement":0.25,"target_bb_improvement":0.75,"max_hold_h":24},
+      {"key":"BEAR_R2_02","family":"FULL_COUNTERTREND_STATE","cat_stop_roe":-30,"failure_h":2,"failure_max_return":0,"failure_max_bb_improvement":0.25,"target_bb_improvement":1.00,"max_hold_h":24},
+      {"key":"BEAR_R2_03","family":"FULL_COUNTERTREND_STATE","cat_stop_roe":-36,"failure_h":2,"failure_max_return":-0.01,"failure_max_bb_improvement":0.35,"full_tp_roe":15,"max_hold_h":24},
+      {"key":"BEAR_R2_04","family":"FULL_COUNTERTREND_STATE","cat_stop_roe":null,"failure_h":1,"failure_max_return":0,"failure_max_bb_improvement":0.25,"target_bb_improvement":0.75,"max_hold_h":24},
+      {"key":"BEAR_R2_05","family":"FULL_COUNTERTREND_STATE","cat_stop_roe":-36,"failure_h":2,"failure_max_return":0,"failure_max_bb_improvement":0.25,"target_bb_improvement":0.75,"max_hold_h":24},
+      {"key":"BEAR_R2_06","family":"SPLIT_COUNTERTREND_STATE","cat_stop_roe":-36,"failure_h":2,"failure_max_return":0,"failure_max_bb_improvement":0.25,"t1_bb_improvement":0.50,"t1_fraction":0.5,"residual_target_bb_improvement":1.00,"residual_floor_roe":3,"max_hold_h":24},
+      {"key":"BEAR_R2_07","family":"PROFIT_TRAIL_FULL","cat_stop_roe":-36,"failure_h":2,"failure_max_return":0,"failure_max_bb_improvement":0.25,"trail_arm_roe":15,"trail_giveback_roe":6,"max_hold_h":24}
+    ]
+  },
+  "validation": {
+    "development": ["2021-01-01","2024-01-01"],
+    "confirmation": ["2024-01-01","2026-01-01"],
+    "recent": ["2026-01-01","2026-09-01"],
+    "baseline": "same entries with fixed BULL 12h / RANGE 6h / BEAR 24h",
+    "required": [
+      "positive every calendar period or material improvement over a baseline-negative period",
+      "overall PF >= 1.10",
+      "LOO positive fraction >= 0.90",
+      "LOO median mean >= 5 bps",
+      "max symbol share <= 0.25",
+      "max positive month share <= 0.35",
+      "max drawdown <= baseline drawdown",
+      "at least 9 positive half-year blocks of 12",
+      "no confirmation-period collapse"
+    ],
+    "selection_rule": "Choose the simplest lane-specific state machine that preserves at least 90% of baseline total expectancy while improving max drawdown by at least 10%; if none qualifies, preserve the baseline profit logic and retain only a separately validated failure or catastrophe override.",
+    "final_holdout": "2020 point-in-time available universe, one shot after candidate lock"
+  }
+}
