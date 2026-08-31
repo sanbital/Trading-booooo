@@ -1,0 +1,76 @@
+name: V10 Lanes Exit Parity Attestation
+
+on:
+  push:
+    branches: [v10-continuation-20260830]
+    paths:
+      - 'research/v10_continuation/v10-lanes-exit-parity-trigger.txt'
+
+permissions:
+  contents: write
+
+jobs:
+  attest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: v10-continuation-20260830
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Verify identity and run deterministic tests
+        run: |
+          python - <<'PY'
+          import hashlib,json,pathlib
+          root=pathlib.Path('.')
+          result=json.loads((root/'research/v10_continuation/v10-lanes-exit-r1-result.json').read_text())
+          lock=json.loads((root/'research/v10_continuation/v10-lanes-exit-r1-lock.json').read_text())
+          config=(root/'supabase/functions/_shared/v10_lane_exit_config.ts').read_text()
+          assert result['all_lanes_passed'] is True
+          assert set(result['selected'])=={'BULL','RANGE','BEAR'}
+          assert lock['spec_sha256'] in config
+          for lane,row in result['selected'].items():
+              assert row['policy']['key'] in config
+          print('IDENTITY_PARITY_PASS')
+          PY
+          deno check supabase/functions/_shared/v10_lane_exit.ts
+          deno test --allow-none supabase/functions/_shared/v10_lane_exit.test.ts
+      - name: Write append-only parity attestation
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,pathlib,datetime
+          root=pathlib.Path('.')
+          files=[
+            'research/v10_continuation/v10-lanes-exit-r1-protocol.json',
+            'research/v10_continuation/v10-lanes-exit-r1-result.json',
+            'research/v10_continuation/v10-lanes-exit-r1-lock.json',
+            'supabase/functions/_shared/v10_lane_exit_config.ts',
+            'supabase/functions/_shared/v10_lane_exit.ts',
+            'supabase/functions/_shared/v10_lane_exit.test.ts',
+          ]
+          result=json.loads((root/files[1]).read_text())
+          attestation={
+            'schema_version':1,
+            'revision':'V10-LANES-EXIT-R1-PARITY-ATTESTATION-20260831',
+            'github_sha':os.environ['GITHUB_SHA'],
+            'workflow_run_id':os.environ['GITHUB_RUN_ID'],
+            'recorded_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'all_lanes_selected':True,
+            'selected_keys':{lane:row['policy']['key'] for lane,row in result['selected'].items()},
+            'identity_parity':True,
+            'typescript_check':True,
+            'deterministic_state_machine_tests':True,
+            'production_integrated':False,
+            'files':{path:hashlib.sha256((root/path).read_bytes()).hexdigest() for path in files},
+          }
+          out=root/'research/v10_continuation/v10-lanes-exit-r1-parity.json'
+          out.write_text(json.dumps(attestation,sort_keys=True,indent=2)+'\n')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add research/v10_continuation/v10-lanes-exit-r1-parity.json
+          git commit -m 'test: attest V10 regime-specific exit parity'
+          git push origin HEAD:v10-continuation-20260830

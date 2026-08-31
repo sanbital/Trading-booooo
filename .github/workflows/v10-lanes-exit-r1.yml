@@ -1,0 +1,84 @@
+name: V10 Lanes Regime-Specific Exit R1
+
+on:
+  push:
+    branches: [v10-continuation-20260830]
+    paths:
+      - 'research/v10_continuation/v10-lanes-exit-r1-trigger.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v10-lanes-exit-r1
+  cancel-in-progress: false
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: v10-continuation-20260830
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/cache@v4
+        with:
+          path: v10-exit-cache
+          key: v10-usdm-15m-exit-r1-202011-202608-v1
+      - name: Verify locked protocol and runner syntax
+        run: |
+          python -m py_compile research/v10_continuation/run_v10_lane_exit_r1.py
+          python - <<'PY'
+          import json, pathlib
+          root=pathlib.Path('research/v10_continuation')
+          p=json.loads((root/'v10-lanes-exit-r1-protocol.json').read_text())
+          assert p['revision']=='V10-LANES-EXIT-R1-PROTOCOL-20260831'
+          assert p['common_execution_semantics']['regime_change_only_exit'] is False
+          assert p['entry_engine']['round_trip_cost_bps']==21
+          assert p['validation_design']['capacity']['production_max_concurrent']==2
+          assert p['release_rule'].startswith('No production integration')
+          print('EXIT_R1_PROTOCOL_SEALED')
+          PY
+      - name: Run regime-specific exit research
+        id: research
+        run: |
+          python research/v10_continuation/run_v10_lane_exit_r1.py | tee /tmp/v10-exit-r1-summary.json
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, pathlib
+          r=json.loads(pathlib.Path('research/v10_continuation/v10-lanes-exit-r1-result.json').read_text())
+          print('all_passed='+str(bool(r['all_lanes_passed'])).lower())
+          print('selected_count='+str(len(r['selected'])))
+          PY
+      - name: Upload complete research artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v10-lanes-exit-r1-result
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            research/v10_continuation/v10-lanes-exit-r1-protocol.json
+            research/v10_continuation/v10-lanes-exit-r1-result.json
+            research/v10_continuation/v10-lanes-exit-r1-lock.json
+            supabase/functions/_shared/v10_lane_exit_config.ts
+            /tmp/v10-exit-r1-summary.json
+      - name: Commit immutable selected policies and generated config
+        if: steps.research.outputs.all_passed == 'true'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add research/v10_continuation/v10-lanes-exit-r1-result.json \
+                  research/v10_continuation/v10-lanes-exit-r1-lock.json \
+                  supabase/functions/_shared/v10_lane_exit_config.ts
+          git commit -m 'research: lock validated regime-specific V10 exits'
+          git push origin HEAD:v10-continuation-20260830
+      - name: Fail closed when any lane has no validated exit
+        if: steps.research.outputs.all_passed != 'true'
+        run: |
+          echo 'At least one lane failed the immutable exit gates. No config was promoted.'
+          exit 1
