@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "revision": "V10-LANES-V4-RESEARCH-PROTOCOL-20260831",
+  "created_after_consumed_holdout": {
+    "window": ["2021-01-01T00:00:00Z", "2022-01-01T00:00:00Z"],
+    "result_sha256": "8d55ad22c476c9bc39e9ea809513214d55594058336071dff7ed2a80fe61cec3",
+    "bull_v3": "REJECTED_SECOND_HALF_AND_MONTH_CONCENTRATION",
+    "bear_v3": "REJECTED_NEGATIVE_RETURN_PF_AND_LOO"
+  },
+  "research_window": ["2021-01-01T00:00:00Z", "2026-08-31T00:15:00Z"],
+  "untouched_final_holdout": {
+    "window": ["2020-01-01T00:00:00Z", "2021-01-01T00:00:00Z"],
+    "accessed_before_lock": false,
+    "point_in_time_symbol_availability": true,
+    "minimum_distinct_symbols": 8,
+    "one_shot": true,
+    "no_parameter_changes_after_access": true
+  },
+  "common_execution": {
+    "bar_interval": "15m completed bars only",
+    "entry": "next 15m open",
+    "round_trip_cost_bps": 21,
+    "liquidity_floor_quote_volume_24h_usdt": 50000000,
+    "cooldown_equals_hold": true,
+    "max_concurrent_total": 10,
+    "max_one_position_per_symbol": true,
+    "selection_order": "signal timestamp then symbol ascending",
+    "fixed_stop": null,
+    "fixed_target": null
+  },
+  "candidate_families": {
+    "BULL_BUYER_ABSORPTION": {
+      "fixed": {
+        "btc72_min_exclusive": 0.05,
+        "asset_ret24_min": -0.02,
+        "quote_volume_24h_min": 50000000
+      },
+      "grid": {
+        "atr_ratio_min": [1.5, 1.65, 1.8],
+        "bb_pos_max": [-0.1, -0.2, -0.3, -0.4],
+        "taker_imbalance_min": [-0.05, 0.0, 0.05],
+        "hold_hours": [6, 12]
+      },
+      "economic_mechanism": "High-volatility pullback inside a structural bull market only when completed-bar taker flow shows buyer absorption."
+    },
+    "BEAR_CONFIRMED_RECOVERY": {
+      "fixed": {
+        "btc72_max_exclusive": -0.05,
+        "asset_ret24_max": -0.04,
+        "asset_ret1h_min_exclusive": 0.0,
+        "current_bb_pos_max": 0.0,
+        "quote_volume_24h_min": 50000000
+      },
+      "grid": {
+        "btc24_max": [-0.01, -0.03, -0.05],
+        "prior_bb_pos_max": [-0.8, -1.0, -1.2],
+        "bb_recovery_delta_min": [0.25, 0.5, 0.75],
+        "atr_ratio_min": [1.5, 1.75, 2.0],
+        "taker_imbalance_min": [-0.05, 0.0],
+        "hold_hours": [6, 12, 24]
+      },
+      "economic_mechanism": "Long only after a completed-bar recovery from a prior extreme downside displacement during a broad BTC selloff; never buy the first downside break."
+    }
+  },
+  "research_gates": {
+    "positive_after_costs_each_calendar_period": true,
+    "minimum_profit_factor_each_full_year": 1.1,
+    "minimum_trades_each_full_year": 15,
+    "minimum_trades_2026_partial": 8,
+    "positive_first_and_second_half_each_full_year": true,
+    "maximum_symbol_trade_share": 0.25,
+    "maximum_positive_month_pnl_share": 0.35,
+    "minimum_distinct_symbols": 8,
+    "minimum_loo_positive_fraction": 0.9,
+    "minimum_loo_median_mean_bps": 5,
+    "minimum_parameter_neighbor_pass_share": 0.75,
+    "minimum_local_neighbors": 4
+  },
+  "final_holdout_gates": {
+    "minimum_trades": 20,
+    "mean_net_bps_positive": true,
+    "minimum_profit_factor": 1.1,
+    "positive_first_and_second_half": true,
+    "maximum_symbol_trade_share": 0.25,
+    "maximum_positive_month_pnl_share": 0.35,
+    "minimum_distinct_symbols": 8,
+    "minimum_loo_positive_fraction": 0.9,
+    "minimum_loo_median_mean_bps": 5
+  },
+  "range_lane": {
+    "fingerprint": "RANGE_V10_LANES_3_0_0",
+    "status": "FROZEN_VALIDATED_NO_RETUNING",
+    "conditions": "-5% <= BTC72 <= +4%, ATR ratio >=1.65, BB position <=-1.05, 24h quote volume >=50M, LONG, 6h"
+  },
+  "selection_rule": "Within each lane, select the robust candidate with the highest worst-calendar-period mean net bps, then worst-calendar-period PF, then total trades, then lexicographic key. Final holdout remains unopened until a single candidate per lane and full behavioral fingerprint are committed."
+}
