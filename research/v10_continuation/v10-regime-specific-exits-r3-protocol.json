@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "revision": "V10_REGIME_SPECIFIC_EXITS_R3_20260831",
+  "status": "SEALED_BEFORE_R3_OUTCOME_EVALUATION",
+  "supersedes": "V10_REGIME_SPECIFIC_EXITS_R2_20260831",
+  "finding": "Broad early-failure exits improved some stability but destroyed too much expectancy. R3 leaves ordinary adverse excursions untouched, arms protection only after a meaningful favorable excursion, and tests only rare thesis-failure overrides.",
+  "common": {
+    "entry_events": "v10_research.regime_transition_base_events_v1",
+    "completed_bar": "15m",
+    "leverage": 3,
+    "margin_usdt": 40,
+    "notional_usdt": 120,
+    "full_exit_cost_bps": 21,
+    "split_exit_cost_bps": 24,
+    "maximum_hold_h": {"BULL":12,"RANGE":6,"BEAR":24},
+    "catastrophe_stop": null,
+    "profit_trail_floor": "entry price for full-position trailing; configured positive ROE floor for residual trailing",
+    "same_bar_order": "previous-bar trail first, then current-bar arm/partial; current high cannot retroactively tighten current low",
+    "maximum_hold_role": "last-resort backstop"
+  },
+  "grids": {
+    "BULL_FULL_TRAIL": {
+      "trail_arm_roe": [15,18,24],
+      "trail_giveback_roe": [6,9,12],
+      "failure": null
+    },
+    "BULL_PARTIAL": {
+      "t1_roe": [18,24],
+      "t1_fraction": [0.5],
+      "residual_floor_roe": [6,9],
+      "trail_giveback_roe": [9,12],
+      "failure": null
+    },
+    "BULL_SELECTIVE_FAILURE": [
+      {"trail_arm_roe":18,"trail_giveback_roe":9,"failure_h":4,"failure_max_return":-0.02,"failure_max_bb_improvement":-0.10},
+      {"trail_arm_roe":18,"trail_giveback_roe":9,"failure_h":6,"failure_max_return":-0.03,"failure_max_bb_improvement":-0.10},
+      {"t1_roe":18,"t1_fraction":0.5,"residual_floor_roe":6,"trail_giveback_roe":9,"failure_h":4,"failure_max_return":-0.02,"failure_max_bb_improvement":-0.10}
+    ],
+    "RANGE_FULL_TRAIL": {
+      "trail_arm_roe": [6,9,12],
+      "trail_giveback_roe": [3,4.5,6],
+      "failure": null
+    },
+    "RANGE_PARTIAL": {
+      "t1_roe": [9,12],
+      "t1_fraction": [0.5],
+      "residual_floor_roe": [3,6],
+      "trail_giveback_roe": [4.5,6],
+      "failure": null
+    },
+    "RANGE_SELECTIVE_FAILURE": [
+      {"trail_arm_roe":9,"trail_giveback_roe":4.5,"failure_h":2,"failure_max_return":-0.02,"failure_max_bb_improvement":0.0},
+      {"trail_arm_roe":9,"trail_giveback_roe":4.5,"failure_h":3,"failure_max_return":-0.03,"failure_max_bb_improvement":0.0},
+      {"t1_roe":9,"t1_fraction":0.5,"residual_floor_roe":3,"trail_giveback_roe":4.5,"failure_h":2,"failure_max_return":-0.02,"failure_max_bb_improvement":0.0}
+    ],
+    "BEAR_FULL_TRAIL": {
+      "trail_arm_roe": [15,18,24],
+      "trail_giveback_roe": [6,9,12],
+      "failure": null
+    },
+    "BEAR_PARTIAL": {
+      "t1_roe": [18,24,30],
+      "t1_fraction": [0.5],
+      "residual_floor_roe": [9,12],
+      "trail_giveback_roe": [9,12],
+      "failure": null
+    },
+    "BEAR_SELECTIVE_FAILURE": [
+      {"trail_arm_roe":18,"trail_giveback_roe":9,"failure_h":4,"failure_max_return":-0.03,"failure_max_bb_improvement":0.10},
+      {"trail_arm_roe":24,"trail_giveback_roe":12,"failure_h":6,"failure_max_return":-0.05,"failure_max_bb_improvement":0.0},
+      {"t1_roe":24,"t1_fraction":0.5,"residual_floor_roe":9,"trail_giveback_roe":12,"failure_h":4,"failure_max_return":-0.03,"failure_max_bb_improvement":0.10}
+    ]
+  },
+  "selection": {
+    "baseline": "same entry events and original fixed maximum horizon",
+    "minimum_expectancy_retention": 0.80,
+    "minimum_drawdown_improvement_pct": 10,
+    "alternative_pass": "expectancy >= baseline with max drawdown no worse than 5%",
+    "positive_calendar_periods": "all 2021-2026",
+    "minimum_overall_pf": 1.10,
+    "minimum_loo_positive_fraction": 0.90,
+    "minimum_loo_median_bps": 5,
+    "maximum_symbol_share": 0.25,
+    "maximum_positive_month_share": 0.35,
+    "minimum_positive_half_year_blocks": 9,
+    "parameter_plateau_required": true,
+    "final_holdout": "2020 point-in-time available universe after one candidate per lane is locked"
+  }
+}
