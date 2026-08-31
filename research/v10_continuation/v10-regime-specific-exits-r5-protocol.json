@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "revision": "V10_REGIME_SPECIFIC_EXITS_R5_20260831",
+  "status": "SEALED_BEFORE_R5_OUTCOME_EVALUATION",
+  "supersedes": "V10_REGIME_SPECIFIC_EXITS_R4_20260831",
+  "selected_centers_from_r4": {
+    "BULL": {"candidate":"BULL_R4_FT_A24_G4P5","trail_arm_roe":24,"trail_giveback_roe":4.5,"expectancy_retention":0.946,"drawdown_improvement_pct":12.152},
+    "RANGE": {"candidate":"RANGE_R4_FT_A18_G1P5","trail_arm_roe":18,"trail_giveback_roe":1.5,"expectancy_retention":0.9173,"drawdown_improvement_pct":4.625},
+    "BEAR": {"candidate":"BEAR_R4_FAIL_H4_R0P02_B0P40","failure_h":4,"failure_max_return":-0.02,"failure_max_bb_improvement":0.40,"expectancy_retention":0.904,"drawdown_improvement_pct":26.48,"plateau_passed":false}
+  },
+  "common": {
+    "entry_set_frozen": true,
+    "entry_events": "v10_research.regime_transition_base_events_v1",
+    "bar": "15m completed",
+    "completed_bar_exit": "next 15m open",
+    "leverage": 3,
+    "margin_usdt": 40,
+    "notional_usdt": 120,
+    "full_exit_cost_bps": 21,
+    "split_exit_cost_bps": 24,
+    "maximum_hold_h": {"BULL":12,"RANGE":6,"BEAR":24},
+    "current_high_not_used_for_current_low_trail": true,
+    "final_holdout_2020_accessed": false
+  },
+  "grids": {
+    "BULL_SMALL_PARTIAL": {
+      "family":"PARTIAL_CONTINUATION",
+      "t1_roe":[21,24,27,30],
+      "t1_fraction":[0.25,0.3333333333],
+      "residual_floor_roe":[3,6,9],
+      "trail_giveback_roe":[4.5,6,7.5],
+      "failure_h":null,
+      "cat_stop_roe":null,
+      "max_hold_h":12
+    },
+    "BULL_RARE_FAILURE_OVERLAY": {
+      "family":"PROFIT_TRAIL_FULL",
+      "trail_arm_roe":24,
+      "trail_giveback_roe":4.5,
+      "failure_h":[6,8,10],
+      "failure_max_return":[-0.03,-0.04,-0.05],
+      "failure_max_bb_improvement":[-0.20,-0.10,0],
+      "cat_stop_roe":null,
+      "max_hold_h":12
+    },
+    "RANGE_RARE_FAILURE_OVERLAY": {
+      "family":"PROFIT_TRAIL_FULL",
+      "trail_arm_roe":18,
+      "trail_giveback_roe":1.5,
+      "failure_h":[3,4,5],
+      "failure_max_return":[-0.03,-0.04,-0.05],
+      "failure_max_bb_improvement":[-0.10,0,0.10],
+      "cat_stop_roe":null,
+      "max_hold_h":6
+    },
+    "BEAR_FAILURE_LOCAL": {
+      "family":"FAILURE_ONLY",
+      "failure_h":[3,3.5,4,4.5,5],
+      "failure_max_return":[-0.015,-0.0175,-0.02,-0.0225,-0.025],
+      "failure_max_bb_improvement":[0.30,0.35,0.40,0.45,0.50],
+      "cat_stop_roe":null,
+      "max_hold_h":24
+    },
+    "BEAR_FAILURE_PLUS_HIGH_PROFIT_TRAIL": {
+      "family":"PROFIT_TRAIL_FULL",
+      "failure_h":4,
+      "failure_max_return":-0.02,
+      "failure_max_bb_improvement":0.40,
+      "trail_arm_roe":[30,36,42,48],
+      "trail_giveback_roe":[12,18,24],
+      "cat_stop_roe":null,
+      "max_hold_h":24
+    }
+  },
+  "gates": {
+    "BULL": {
+      "all_six_periods_positive":true,
+      "minimum_overall_pf":1.10,
+      "minimum_expectancy_retention":0.90,
+      "minimum_drawdown_improvement_pct":10,
+      "minimum_positive_half_years":9,
+      "maximum_symbol_share":0.25,
+      "maximum_positive_month_share":0.35,
+      "minimum_loo_positive_fraction":0.90,
+      "minimum_loo_median_bps":5,
+      "overlay_must_not_underperform_r4_center_on_both_retention_and_drawdown":true
+    },
+    "RANGE": {
+      "all_six_periods_positive":true,
+      "minimum_overall_pf":1.10,
+      "minimum_expectancy_retention":0.85,
+      "minimum_drawdown_improvement_pct":4.0,
+      "minimum_positive_half_years":9,
+      "maximum_symbol_share":0.25,
+      "maximum_positive_month_share":0.35,
+      "minimum_loo_positive_fraction":0.90,
+      "minimum_loo_median_bps":5,
+      "rare_failure_overlay_must_improve_drawdown_beyond_4_625_pct_or_raise_worst_year_mean":true
+    },
+    "BEAR": {
+      "2021_mean_net_bps":">=0",
+      "2021_profit_factor":">=1.0",
+      "positive_2022_through_2026":true,
+      "minimum_overall_pf":1.10,
+      "minimum_expectancy_retention":0.80,
+      "minimum_drawdown_improvement_pct":10,
+      "minimum_positive_half_years":9,
+      "maximum_symbol_share":0.25,
+      "maximum_positive_month_share":0.35,
+      "minimum_loo_positive_fraction":0.90,
+      "minimum_loo_median_bps":5,
+      "minimum_local_neighbor_pass_share":0.75,
+      "minimum_local_variants":8
+    }
+  },
+  "neighborhood": {
+    "included_self":true,
+    "BEAR_FAILURE_LOCAL":"Chebyshev distance <=1 across the ordinal failure_h, failure_max_return, and failure_max_bb_improvement axes.",
+    "BULL_SMALL_PARTIAL":"Chebyshev distance <=1 across t1_roe, fraction, residual_floor_roe, and trail_giveback_roe.",
+    "failure_overlays":"Used for comparative risk selection; a standalone plateau is not required unless selected instead of the frozen R4 center."
+  },
+  "selection": "BULL prefers a small partial only if it matches or exceeds the R4 full-trail risk/return gates; otherwise retain the R4 full trail. RANGE retains the R4 center unless a rare failure overlay improves risk without sacrificing the lane gates. BEAR requires a connected local failure plateau; a profit trail may be added only if the combined candidate still passes every BEAR gate.",
+  "release": "No final release before one candidate per lane is fingerprinted in the shared exit engine and the untouched 2020 holdout is executed once."
+}
