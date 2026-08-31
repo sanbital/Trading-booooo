@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "revision": "V10_REGIME_SPECIFIC_EXITS_R4_NEIGHBORHOOD_20260831",
+  "parent_protocol": "V10_REGIME_SPECIFIC_EXITS_R4_20260831",
+  "created_before_r4_metric_readout": true,
+  "candidate_outcomes_inspected_before_definition": false,
+  "definition": {
+    "included_self": true,
+    "BULL": "All BULL_R4 candidates whose trail_arm_roe ordinal index differs by at most one and whose trail_giveback_roe ordinal index differs by at most one.",
+    "RANGE": "All RANGE_R4 candidates whose trail_arm_roe ordinal index differs by at most one and whose trail_giveback_roe ordinal index differs by at most one.",
+    "BEAR": "All BEAR_R4 failure-only candidates whose failure_h, failure_max_return, and failure_max_bb_improvement ordinal indices each differ by at most one.",
+    "minimum_local_variants": 4,
+    "minimum_raw_gate_pass_share": 0.75,
+    "pass_basis": "raw lane gate before plateau; no result may count itself as a pass unless it independently passes every non-plateau gate"
+  }
+}
