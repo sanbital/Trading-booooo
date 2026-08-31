@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "revision": "V10_REGIME_SPECIFIC_EXITS_R7_20260831",
+  "status": "SEALED_BEFORE_R7_OUTCOME_EVALUATION",
+  "supersedes": "V10_REGIME_SPECIFIC_EXITS_R6_20260831",
+  "objective": "Finalize one robust, economically distinct exit state machine for BULL, RANGE, and BEAR without using the untouched 2020 holdout for selection.",
+  "evidence_before_lock": {
+    "BULL": "A 25% partial at +24% ROE with a +3% residual floor and 6% ROE prior-peak giveback slightly dominated the full-position trail center while preserving six positive calendar periods.",
+    "RANGE": "A full-position trail armed at +18% ROE with 1.5% ROE giveback preserved 91.7% of fixed-horizon expectancy and improved drawdown 4.6%. R7 tests an earlier BB-resolution exit while retaining the same 6h risk ceiling.",
+    "BEAR": "A fixed completed-4h recovery-failure checkpoint plus BB-recovery target around 1.75 and a high-profit trail produced six positive periods, 80%+ expectancy retention, 30% drawdown improvement, and 70%+ strategic exits, but the coarse target grid did not establish a plateau."
+  },
+  "immutable_common": {
+    "entry_events": "v10_research.regime_transition_base_events_v1",
+    "entry_identity_unchanged": true,
+    "bars": "public.claude_r19_k15",
+    "features": "v10_research.lanes_v4_features",
+    "bar_interval": "15m completed",
+    "state_exit_execution": "next 15m open",
+    "same_bar_order": "previous-bar protection first; current high cannot tighten a stop against current low",
+    "leverage": 3,
+    "entry_margin_usdt": 40,
+    "entry_notional_usdt": 120,
+    "full_exit_cost_bps": 21,
+    "split_exit_cost_bps": 24,
+    "final_holdout": {
+      "window": ["2020-01-01T00:00:00Z", "2021-01-01T00:00:00Z"],
+      "accessed_before_candidate_lock": false,
+      "one_shot": true,
+      "point_in_time_symbol_availability": true,
+      "minimum_distinct_symbols": 8
+    }
+  },
+  "candidate_grids": {
+    "BULL_PARTIAL_LOCAL": {
+      "family": "PARTIAL_CONTINUATION",
+      "t1_roe": [22.5,24,25.5],
+      "t1_fraction": [0.20,0.25,0.30],
+      "residual_floor_roe": [0,3,6],
+      "trail_giveback_roe": [5.25,6,6.75],
+      "failure_h": null,
+      "cat_stop_roe": null,
+      "max_hold_h": 12,
+      "economic_role": "Take a small first profit in a structural bull market, then retain most exposure with an earned residual floor and prior-peak protection."
+    },
+    "RANGE_RESOLUTION_LOCAL": {
+      "family": "PROFIT_TRAIL_FULL",
+      "trail_arm_roe": [16.5,18,19.5],
+      "trail_giveback_roe": [0.75,1.5,2.25],
+      "target_bb_improvement": [0.60,0.70,0.80,0.90,1.00],
+      "failure_h": null,
+      "cat_stop_roe": null,
+      "max_hold_h": 6,
+      "economic_role": "Exit the full position when the range displacement has substantially mean-reverted, or protect an earned profit; 6h remains only the unresolved-range ceiling."
+    },
+    "RANGE_TRAIL_LOCAL_CONTROL": {
+      "family": "PROFIT_TRAIL_FULL",
+      "trail_arm_roe": [16.5,18,19.5],
+      "trail_giveback_roe": [0.75,1.5,2.25],
+      "target_bb_improvement": null,
+      "failure_h": null,
+      "cat_stop_roe": null,
+      "max_hold_h": 6,
+      "economic_role": "Local control surface around the validated R4 profit-protection center."
+    },
+    "BEAR_RECOVERY_LOCAL": {
+      "family": "PROFIT_TRAIL_FULL",
+      "failure_h": 4,
+      "failure_max_return": -0.02,
+      "failure_max_bb_improvement": 0.40,
+      "target_bb_improvement": [1.60,1.65,1.70,1.75,1.80,1.85,1.90],
+      "trail_arm_roe": [42,48,54],
+      "trail_giveback_roe": [18,24,30],
+      "cat_stop_roe": null,
+      "max_hold_h": 24,
+      "economic_role": "Countertrend rebound: abandon a failed completed-4h recovery, realize a large BB reconvergence, or protect an unusually large profit; 24h is the final countertrend ceiling."
+    }
+  },
+  "validation_periods": {
+    "development": ["2021-01-01T00:00:00Z", "2024-01-01T00:00:00Z"],
+    "confirmation": ["2024-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
+    "recent": ["2026-01-01T00:00:00Z", "2026-09-01T00:00:00Z"],
+    "selection_may_not_use_final_holdout": true
+  },
+  "lane_gates": {
+    "BULL": {
+      "positive_each_calendar_period": true,
+      "minimum_overall_profit_factor": 1.10,
+      "minimum_expectancy_retention": 0.93,
+      "minimum_drawdown_improvement_pct": 10,
+      "minimum_positive_half_year_blocks": 9,
+      "maximum_symbol_trade_share": 0.25,
+      "maximum_positive_month_pnl_share": 0.35,
+      "minimum_loo_positive_fraction": 0.90,
+      "minimum_loo_median_mean_bps": 5,
+      "minimum_t1_event_rate": 0.10,
+      "minimum_local_neighbor_pass_share": 0.75,
+      "minimum_local_variants": 8
+    },
+    "RANGE": {
+      "positive_each_calendar_period": true,
+      "minimum_overall_profit_factor": 1.10,
+      "minimum_expectancy_retention": 0.85,
+      "maximum_drawdown_worsening_pct": 5,
+      "minimum_positive_half_year_blocks": 9,
+      "maximum_symbol_trade_share": 0.25,
+      "maximum_positive_month_pnl_share": 0.35,
+      "minimum_loo_positive_fraction": 0.90,
+      "minimum_loo_median_mean_bps": 5,
+      "maximum_absolute_time_backstop_rate": 0.70,
+      "minimum_state_or_profit_exit_rate": 0.30,
+      "minimum_local_neighbor_pass_share": 0.75,
+      "minimum_local_variants": 8
+    },
+    "BEAR": {
+      "2021_mean_net_bps": ">= 0",
+      "2021_profit_factor": ">= 1.0",
+      "positive_2022_through_2026": true,
+      "minimum_overall_profit_factor": 1.10,
+      "minimum_expectancy_retention": 0.80,
+      "minimum_drawdown_improvement_pct": 10,
+      "minimum_positive_half_year_blocks": 9,
+      "maximum_symbol_trade_share": 0.25,
+      "maximum_positive_month_pnl_share": 0.35,
+      "minimum_loo_positive_fraction": 0.90,
+      "minimum_loo_median_mean_bps": 5,
+      "maximum_absolute_time_backstop_rate": 0.70,
+      "minimum_state_or_profit_exit_rate": 0.30,
+      "minimum_local_neighbor_pass_share": 0.75,
+      "minimum_local_variants": 8
+    }
+  },
+  "neighborhood": {
+    "included_self": true,
+    "BULL": "Chebyshev distance <= 1 across T1 ROE, partial fraction, residual floor, and trail giveback ordinal axes.",
+    "RANGE": "Chebyshev distance <= 1 across target BB improvement, trail arm, and trail giveback ordinal axes; controls without a state target are evaluated as a separate surface.",
+    "BEAR": "Chebyshev distance <= 1 across BB recovery target, trail arm, and trail giveback ordinal axes. The completed 4h failure checkpoint is fixed as a market-structure mechanism."
+  },
+  "selection_rule": "Select only from a connected local plateau passing every lane gate. Prefer the simplest lane-specific state machine, then highest worst-calendar mean, then expectancy retention, then drawdown improvement, then lower time-backstop rate, then candidate key.",
+  "release_requirements": {
+    "one_candidate_per_lane_locked_before_2020_access": true,
+    "single_shared_entry_exit_module": true,
+    "golden_fixture_parity": true,
+    "complete_entry_exit_fingerprint": true,
+    "no_live_release_before_one_shot_2020_holdout": true
+  }
+}
