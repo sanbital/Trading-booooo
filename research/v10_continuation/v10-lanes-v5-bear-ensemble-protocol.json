@@ -1,0 +1,191 @@
+{
+  "schema_version": 1,
+  "revision": "V10-LANES-V5-BEAR-DUAL-TRIGGER-PROTOCOL-20260831",
+  "branch": "v10-continuation-20260830",
+  "parent_research_commit": "c7cbe83268803cc725130835d2ec7572e158b091",
+  "decision_context": {
+    "bull": "Preserve the existing production BULL LONG lineage. No V3/V4 replacement candidate passed the immutable stability gates.",
+    "range": "Freeze RANGE_V10_LANES_3_0_0. Do not retune after its untouched validation evidence.",
+    "bear_v3": "Rejected on the immutable 2021 holdout: 24 trades, -97.343766 bps/trade, PF 0.787073, negative second half and zero positive LOO share.",
+    "bear_v4": "Confirmed-recovery family was economically strong and diversified but the best local surface had only 9-13 events in 2023. V5 may add density only through a separately motivated funding-capitulation trigger; V4 thresholds are not loosened to manufacture trades."
+  },
+  "research_window": [
+    "2021-01-01T00:00:00Z",
+    "2026-08-31T00:15:00Z"
+  ],
+  "final_holdout": {
+    "window": [
+      "2020-01-01T00:00:00Z",
+      "2021-01-01T00:00:00Z"
+    ],
+    "accessed_before_protocol": false,
+    "one_shot": true,
+    "no_parameter_change_after_candidate_lock": true,
+    "point_in_time_symbol_availability": true,
+    "minimum_distinct_symbols": 8,
+    "warmup_data_may_precede_2020_but_outcomes_may_not"
+      : true
+  },
+  "data": {
+    "venue": "BINANCE_USDS_M_PERPETUAL",
+    "bar_interval": "15m",
+    "bars": "completed bars only",
+    "entry": "next 15m bar open",
+    "funding": "most recent publication strictly before the signal bar and no older than 12 hours",
+    "funding_publication_delay": "strictly prior timestamp; equal timestamp is not visible",
+    "missing_or_stale_data": "CASH",
+    "quote_volume_24h_min_usdt": 50000000,
+    "universe": [
+      "ETHUSDT",
+      "XRPUSDT",
+      "SOLUSDT",
+      "DOGEUSDT",
+      "ADAUSDT",
+      "AVAXUSDT",
+      "LINKUSDT",
+      "BCHUSDT",
+      "DOTUSDT",
+      "TRXUSDT",
+      "NEARUSDT",
+      "ETCUSDT",
+      "XLMUSDT",
+      "ATOMUSDT",
+      "UNIUSDT"
+    ]
+  },
+  "execution": {
+    "side": "LONG",
+    "round_trip_cost_bps": 21,
+    "fixed_stop": null,
+    "fixed_target": null,
+    "max_concurrent_total": 10,
+    "max_one_position_per_symbol": true,
+    "notional_usdt_per_position": 8,
+    "maximum_aggregate_notional_usdt": 80,
+    "leverage": 3,
+    "same_symbol_same_timestamp_deduplication": "TRIGGER_A_CONFIRMED_RECOVERY takes precedence over TRIGGER_B_FUNDING_CAPITULATION",
+    "same_timestamp_order": [
+      "trigger priority ascending",
+      "trigger score descending",
+      "symbol ascending"
+    ],
+    "active_position_block": true,
+    "cooldown": "equal to the executed trigger holding period, measured from entry timestamp",
+    "outcome_informed_ranking": false
+  },
+  "trigger_a_confirmed_recovery": {
+    "economic_mechanism": "After broad BTC downside, buy only after an asset has already printed a completed-bar recovery from a prior extreme lower-band displacement.",
+    "priority": 1,
+    "hold_hours": 24,
+    "fixed": {
+      "btc72_max_exclusive": -0.05,
+      "asset_ret24_max": -0.04,
+      "asset_ret1h_min_exclusive": 0.0,
+      "current_bb_pos_max": 0.0,
+      "quote_volume_24h_min_usdt": 50000000
+    },
+    "grid": {
+      "btc24_max": [
+        -0.03,
+        -0.05
+      ],
+      "prior_bb_pos_max": [
+        -0.8,
+        -1.0
+      ],
+      "bb_recovery_delta_min": [
+        0.25,
+        0.5
+      ],
+      "atr_ratio_min": [
+        1.75,
+        2.0
+      ],
+      "taker_imbalance_min": [
+        -0.05,
+        0.0
+      ]
+    },
+    "score": "100*(bb_pos-bb_pos_1h_ago) + 100*asset_ret1h + 10*max(taker_imbalance,0) + atr_ratio"
+  },
+  "trigger_b_funding_capitulation": {
+    "economic_mechanism": "During broad BTC downside, buy a short-duration capitulation only when the asset is deeply below BTC, funding is non-positive or more negative, volatility is expanded and the completed bar is at an extreme lower-band displacement.",
+    "priority": 2,
+    "hold_hours": 6,
+    "fixed": {
+      "btc72_max_exclusive": -0.05,
+      "quote_volume_24h_min_usdt": 50000000
+    },
+    "grid": {
+      "funding_rate_max": [
+        0.0,
+        -0.0001
+      ],
+      "asset_minus_btc_ret24_max": [
+        -0.04,
+        -0.06
+      ],
+      "btc24_max": [
+        -0.03,
+        -0.05
+      ],
+      "bb_pos_max": [
+        -0.5,
+        -0.8
+      ],
+      "atr_ratio_min": [
+        1.5,
+        1.8
+      ]
+    },
+    "score": "100*(-asset_minus_btc_ret24) + 100*(-btc24) + 100*(-bb_pos) + 10000*max(-funding_rate,0) + atr_ratio"
+  },
+  "ensemble": {
+    "candidate_count": 512,
+    "construction": "Cartesian product of 16 Trigger A variants and 32 Trigger B variants. Each component remains an independent strategy identity inside one BEAR lane ensemble.",
+    "no_oracle_switching": true,
+    "candidate_identity_includes": [
+      "both trigger parameter objects",
+      "trigger priority",
+      "score formulas",
+      "holding periods",
+      "cooldowns",
+      "portfolio capacity",
+      "universe",
+      "data timing",
+      "cost model"
+    ]
+  },
+  "research_gates": {
+    "positive_after_costs_each_calendar_period": true,
+    "minimum_profit_factor_each_full_year": 1.1,
+    "minimum_trades_each_full_year": 15,
+    "minimum_trades_2026_partial": 8,
+    "positive_first_and_second_half_each_full_year": true,
+    "maximum_symbol_trade_share": 0.25,
+    "maximum_positive_month_pnl_share": 0.35,
+    "minimum_distinct_symbols": 8,
+    "minimum_loo_positive_fraction": 0.9,
+    "minimum_loo_median_mean_bps": 5,
+    "minimum_parameter_neighbor_pass_share": 0.75,
+    "minimum_local_neighbors": 8,
+    "minimum_trigger_b_event_share": 0.1,
+    "maximum_trigger_b_event_share": 0.75,
+    "both_triggers_must_contribute_positive_total_net_bps": true
+  },
+  "final_holdout_gates": {
+    "minimum_trades": 20,
+    "mean_net_bps_positive": true,
+    "minimum_profit_factor": 1.1,
+    "positive_first_and_second_half": true,
+    "maximum_symbol_trade_share": 0.25,
+    "maximum_positive_month_pnl_share": 0.35,
+    "minimum_distinct_symbols": 8,
+    "minimum_loo_positive_fraction": 0.9,
+    "minimum_loo_median_mean_bps": 5,
+    "both_triggers_must_have_at_least_one_event": true,
+    "automatic_unrestricted_live_release": false
+  },
+  "selection_rule": "Among candidates passing every research and plateau gate, maximize worst calendar-period mean net bps, then worst full-year PF, then minimum full-year trade count, then total trade count, then candidate fingerprint lexicographically. Commit exactly one behavioral fingerprint before the 2020 holdout is accessed.",
+  "status": "SEALED_BEFORE_V5_ENSEMBLE_EVALUATION"
+}
