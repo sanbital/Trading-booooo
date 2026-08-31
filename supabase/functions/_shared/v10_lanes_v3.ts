@@ -128,20 +128,24 @@ function assertBar(bar: LaneBar, index: number): void {
   if (!Number.isInteger(bar.openTime) || bar.openTime < 0) {
     throw new LaneDataError(`INVALID_OPEN_TIME_${index}`);
   }
-  for (const [name, value] of Object.entries({
-    open: bar.open,
-    high: bar.high,
-    low: bar.low,
-    close: bar.close,
-    quoteVolume: bar.quoteVolume,
-  })) {
+  for (
+    const [name, value] of Object.entries({
+      open: bar.open,
+      high: bar.high,
+      low: bar.low,
+      close: bar.close,
+      quoteVolume: bar.quoteVolume,
+    })
+  ) {
     if (!finite(value)) throw new LaneDataError(`INVALID_${name.toUpperCase()}_${index}`);
   }
   if (bar.open <= 0 || bar.high <= 0 || bar.low <= 0 || bar.close <= 0) {
     throw new LaneDataError(`NON_POSITIVE_PRICE_${index}`);
   }
-  if (bar.high < Math.max(bar.open, bar.close, bar.low) ||
-    bar.low > Math.min(bar.open, bar.close, bar.high)) {
+  if (
+    bar.high < Math.max(bar.open, bar.close, bar.low) ||
+    bar.low > Math.min(bar.open, bar.close, bar.high)
+  ) {
     throw new LaneDataError(`INVALID_OHLC_${index}`);
   }
   if (bar.quoteVolume < 0) throw new LaneDataError(`NEGATIVE_QUOTE_VOLUME_${index}`);
@@ -271,15 +275,17 @@ export function computeLaneFeatures(
     quoteVolume24h += assetBars[index - offset].quoteVolume;
   }
 
-  for (const [name, value] of Object.entries({
-    atr,
-    atrBaseline,
-    atrRatio,
-    bbPos,
-    bbPos1hAgo,
-    assetRet24h,
-    quoteVolume24h,
-  })) requireFinite(name, value);
+  for (
+    const [name, value] of Object.entries({
+      atr,
+      atrBaseline,
+      atrRatio,
+      bbPos,
+      bbPos1hAgo,
+      assetRet24h,
+      quoteVolume24h,
+    })
+  ) requireFinite(name, value);
 
   return {
     symbol,
@@ -298,7 +304,9 @@ export function computeLaneFeatures(
   };
 }
 
-export function routeLane(input: Pick<LaneFeatures, "btc72" | "continuityOk" | "dataFresh">): V10Lane {
+export function routeLane(
+  input: Pick<LaneFeatures, "btc72" | "continuityOk" | "dataFresh">,
+): V10Lane {
   if (!input.continuityOk || !input.dataFresh || !finite(input.btc72)) return "CASH";
   if (input.btc72 < -0.05) return "BEAR";
   if (input.btc72 <= 0.04) return "RANGE";
@@ -308,7 +316,16 @@ export function routeLane(input: Pick<LaneFeatures, "btc72" | "continuityOk" | "
 
 function rejected(features: LaneFeatures, lane: V10Lane, reason: string): LaneDecision {
   if (lane === "CASH") {
-    return { lane, eligible: false, side: null, fingerprint: null, holdHours: null, cooldownHours: null, reason, features };
+    return {
+      lane,
+      eligible: false,
+      side: null,
+      fingerprint: null,
+      holdHours: null,
+      cooldownHours: null,
+      reason,
+      features,
+    };
   }
   const config = LANE_CONFIG[lane];
   return {
@@ -326,7 +343,9 @@ function rejected(features: LaneFeatures, lane: V10Lane, reason: string): LaneDe
 export function evaluateLane(features: LaneFeatures): LaneDecision {
   const lane = routeLane(features);
   if (lane === "CASH") return rejected(features, lane, "STRUCTURAL_CASH_OR_DATA_FAIL_CLOSED");
-  if (features.quoteVolume24h < MIN_QUOTE_VOLUME_24H) return rejected(features, lane, "LIQUIDITY_BELOW_50M");
+  if (features.quoteVolume24h < MIN_QUOTE_VOLUME_24H) {
+    return rejected(features, lane, "LIQUIDITY_BELOW_50M");
+  }
 
   if (lane === "BULL") {
     if (features.atrRatio < 1.65) return rejected(features, lane, "BULL_ATR_RATIO");
@@ -336,10 +355,14 @@ export function evaluateLane(features: LaneFeatures): LaneDecision {
     if (features.atrRatio < 1.65) return rejected(features, lane, "RANGE_ATR_RATIO");
     if (features.bbPos > -1.05) return rejected(features, lane, "RANGE_BB_POSITION");
   } else {
-    if (features.btc30d < -0.20 || features.btc30d > -0.10) return rejected(features, lane, "BEAR_BTC_30D_WINDOW");
+    if (features.btc30d < -0.20 || features.btc30d > -0.10) {
+      return rejected(features, lane, "BEAR_BTC_30D_WINDOW");
+    }
     if (features.atrRatio < 1.60) return rejected(features, lane, "BEAR_ATR_RATIO");
     if (features.bbPos > -0.90) return rejected(features, lane, "BEAR_BB_POSITION");
-    if (features.bbPos1hAgo <= -0.90) return rejected(features, lane, "BEAR_NOT_FRESH_DOWNSIDE_BREAK");
+    if (features.bbPos1hAgo <= -0.90) {
+      return rejected(features, lane, "BEAR_NOT_FRESH_DOWNSIDE_BREAK");
+    }
   }
 
   const config = LANE_CONFIG[lane];
