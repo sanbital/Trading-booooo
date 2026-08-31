@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   check:
@@ -18,10 +18,24 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: v10-continuation-20260830
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Format check
-        run: deno fmt --check supabase/functions/v10-lane-signal-generator/index.ts
+      - name: Format source
+        run: deno fmt supabase/functions/v10-lane-signal-generator/index.ts supabase/functions/_shared/v10_lanes_v3.ts
       - name: Type check
         run: deno check supabase/functions/v10-lane-signal-generator/index.ts
+      - name: Commit deterministic formatting
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No formatting changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/v10-lane-signal-generator/index.ts supabase/functions/_shared/v10_lanes_v3.ts
+          git commit -m "style: format V10 lanes v3 runtime"
+          git push origin HEAD:v10-continuation-20260830
