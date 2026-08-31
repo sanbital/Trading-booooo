@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "revision": "V10_REGIME_SPECIFIC_EXITS_R2_CLARIFICATION_20260831",
+  "parent_protocol": "V10_REGIME_SPECIFIC_EXITS_R2_20260831",
+  "created_before_r2_outcome_evaluation": true,
+  "statistical_candidate_grid_changed": false,
+  "clarifications": {
+    "PROFIT_TRAIL_FULL": "After the arm threshold is first touched, the full-position protective stop becomes max(entry_price, prior_peak_price * (1 - trail_giveback_roe/300)). It is active from the next 15m bar. Current-bar high cannot retroactively tighten a stop against the current-bar low.",
+    "PARTIAL_CONTINUATION": "After T1, the residual stop is max(entry-derived residual floor, prior_peak-derived trail). It is active from the next 15m bar.",
+    "SPLIT_MEAN_STATE_AND_SPLIT_COUNTERTREND_STATE": "After the completed-bar T1 trigger executes at the next open, residual floor protection is active from that execution bar and the residual BB-improvement target is evaluated on subsequent completed bars.",
+    "FAILURE_CHECKPOINT": "Evaluate once, at the first completed bar whose close time is at or after failure_h. A candidate that passes this checkpoint is not repeatedly failed later by the same checkpoint rule.",
+    "MAX_HOLD": "Exit at the open exactly max_hold_h after entry if no earlier strategic or risk exit occurred."
+  }
+}
