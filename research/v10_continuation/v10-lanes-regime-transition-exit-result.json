@@ -1,0 +1,55 @@
+{
+  "revision": "V10_LANES_REGIME_TRANSITION_EXIT_RESULT_1_0_0",
+  "created_at": "2026-08-31T20:20:00+09:00",
+  "source_protocols": [
+    "V10_LANES_TRANSITION_EXIT_PROTOCOL_1_0_0",
+    "V10_LANES_TRANSITION_EXIT_R2_PROTOCOL_1_0_0",
+    "V10_LANES_REGIME_HANDOFF_EXIT_R3_PROTOCOL_1_0_0"
+  ],
+  "data": {
+    "period": ["2021-01-01T00:00:00Z", "2026-09-01T00:00:00Z"],
+    "bar": "15m completed bars",
+    "events": 1818,
+    "universe_size": 15,
+    "cost_bps": 21,
+    "route_rows": 198529,
+    "route_parity_mismatches": 0
+  },
+  "baseline": {
+    "BULL": {"trades": 673, "mean_bps": 92.55, "profit_factor": 1.867, "total_bps": 62287.6, "max_drawdown_bps": -8256.8},
+    "RANGE": {"trades": 984, "mean_bps": 84.82, "profit_factor": 1.926, "total_bps": 83462.3, "max_drawdown_bps": -5442.2},
+    "BEAR": {"trades": 161, "mean_bps": 354.71, "profit_factor": 3.262, "total_bps": 57107.9, "max_drawdown_bps": -4915.1}
+  },
+  "unconditional_transition_exit": {
+    "BULL_DOWNGRADE_1": {"early_exits": 262, "mean_bps": 51.70, "profit_factor": 1.502, "total_bps": 34794.6, "max_drawdown_bps": -9661.6, "transition_subset_mean_delta_bps": -104.94},
+    "BULL_DOWNGRADE_4": {"early_exits": 210, "mean_bps": 72.70, "profit_factor": 1.688, "total_bps": 48925.3, "max_drawdown_bps": -11825.6, "transition_subset_mean_delta_bps": -63.63},
+    "RANGE_TO_BEAR_1": {"early_exits": 137, "mean_bps": 76.70, "profit_factor": 1.837, "total_bps": 75471.4, "max_drawdown_bps": -7684.6, "transition_subset_mean_delta_bps": -58.33},
+    "RANGE_TO_BEAR_4": {"early_exits": 66, "mean_bps": 85.42, "profit_factor": 1.962, "total_bps": 84053.9, "max_drawdown_bps": -5478.9, "transition_subset_mean_delta_bps": 8.96, "confirmation_2025_2026_total_delta_bps": -245.8, "confirmation_transition_mean_delta_bps": -40.96}
+  },
+  "loss_conditioned_transition_exit": {
+    "thresholds_bps": [0, -50, -100, -150, -200, -300],
+    "strict_passes": 0,
+    "best_range_observation": {"trigger": "DEEP_4", "threshold_bps": -150, "total_delta_bps": 1205.0, "drawdown_improvement_pct": 7.52, "positive_delta_years": 2, "decision": "REJECTED_NOT_TIME_ROBUST"},
+    "best_bull_observation": {"trigger": "DEEP_4", "affected_events": 1, "total_delta_bps": 3.7, "drawdown_improvement_pct": 0.0, "decision": "REJECTED_NO_SAMPLE_OR_RISK_IMPROVEMENT"}
+  },
+  "destination_lane_handoff": {
+    "strict_passes": 0,
+    "BULL_HANDOFF_KEEP_4": {"handoffs": 27, "total_delta_bps": -1540.3, "profit_factor": 1.828, "drawdown_improvement_pct": 10.70, "positive_delta_years": 1, "decision": "REJECTED_EXPECTANCY_LOSS"},
+    "RANGE_HANDOFF_EXIT_4": {"handoffs": 1, "forced_exits": 65, "total_delta_bps": 3040.8, "profit_factor": 1.990, "drawdown_improvement_pct": -0.67, "positive_delta_years": 3, "decision": "REJECTED_NOT_TIME_ROBUST"}
+  },
+  "conclusion": {
+    "BULL": "RETAIN_FIXED_12H_EXIT",
+    "RANGE": "RETAIN_FIXED_6H_EXIT",
+    "BEAR": "RETAIN_FIXED_24H_EXIT",
+    "new_entries": "ROUTE_IMMEDIATELY_TO_CURRENT_REGIME",
+    "open_positions": "DO_NOT_FORCE_EXIT_OR_CHANGE_CLOCK_FROM_REGIME_LABEL_ALONE",
+    "hard_risk_overrides": ["stale_data", "exchange_health", "reconciliation_failure", "margin_risk", "daily_loss_circuit", "global_kill_switch"],
+    "reason": "The V10 entries are LONG mean-reversion events. Structural regime boundary crossings tend to occur during the same selloff that created the entry; unconditional exits crystallized losses before the measured rebound. No transition, loss-conditioned, or lane-handoff overlay passed the precommitted cross-year gates."
+  },
+  "production_decision": {
+    "change_live_exit_math": false,
+    "add_transition_observability": true,
+    "shadow_counterfactual_only": true,
+    "current_production_state": "ROLLED_BACK_AND_DISABLED"
+  }
+}
