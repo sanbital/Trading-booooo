@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "revision": "V10_REGIME_SPECIFIC_EXITS_R6_20260831",
+  "status": "SEALED_BEFORE_R6_OUTCOME_EVALUATION",
+  "supersedes": "V10_REGIME_SPECIFIC_EXITS_R5_20260831",
+  "objective": "Make elapsed time a state-review checkpoint and absolute emergency ceiling rather than the ordinary primary exit.",
+  "selected_inputs": {
+    "BULL": "25% partial at +24% ROE, residual floor +3% ROE, prior-peak giveback 6% ROE",
+    "RANGE": "full-position profit trail armed at +18% ROE with 1.5% ROE giveback",
+    "BEAR": "one-time completed 4h recovery-failure check: price return <= -2% and BB improvement <= 0.40"
+  },
+  "common": {
+    "entry_events": "v10_research.regime_transition_base_events_v1",
+    "entry_identity_unchanged": true,
+    "bar": "15m completed",
+    "state_exit_execution": "next 15m open",
+    "leverage": 3,
+    "margin_usdt": 40,
+    "notional_usdt": 120,
+    "full_exit_cost_bps": 21,
+    "split_exit_cost_bps": 24,
+    "current_bar_high_cannot_retroactively_tighten_current_bar_low": true,
+    "final_holdout_2020_accessed": false
+  },
+  "candidate_grids": {
+    "BULL_CONDITIONAL_EXTENSION": {
+      "family": "PARTIAL_CONTINUATION",
+      "t1_roe": 24,
+      "t1_fraction": 0.25,
+      "residual_floor_roe": 3,
+      "trail_giveback_roe": 6,
+      "review_h": 12,
+      "review_exit_max_return": [-0.01,0,0.01],
+      "review_exit_max_bb_improvement": [0,0.10,0.20],
+      "absolute_max_h": 24,
+      "meaning": "At the completed 12h review, exit only if both return and BB recovery remain below the configured thresholds; otherwise extend under residual/profit protection to the 24h emergency ceiling."
+    },
+    "RANGE_RESOLUTION_OR_FAILURE": {
+      "family": "PROFIT_TRAIL_FULL",
+      "trail_arm_roe": 18,
+      "trail_giveback_roe": 1.5,
+      "state_target_bb_improvement": [0.75,1.00,1.25,1.50],
+      "review_h": 6,
+      "review_exit_max_return": [-0.02,-0.01,0],
+      "review_exit_max_bb_improvement": [0.25,0.50,0.75],
+      "absolute_max_h": 12,
+      "meaning": "Exit earlier when mean reversion is objectively completed; at 6h exit a failed recovery; only unresolved middle states extend to 12h."
+    },
+    "BEAR_RECOVERY_RESOLUTION": {
+      "family": "PROFIT_TRAIL_FULL",
+      "failure_h": 4,
+      "failure_max_return": -0.02,
+      "failure_max_bb_improvement": 0.40,
+      "state_target_bb_improvement": [1.25,1.50,1.75,2.00],
+      "trail_arm_roe": [36,42,48],
+      "trail_giveback_roe": [18,24],
+      "absolute_max_h": 24,
+      "meaning": "Countertrend recovery either fails at the completed 4h checkpoint, resolves through a large BB recovery, or enters a high-profit trail; 24h is only the final countertrend risk ceiling."
+    }
+  },
+  "gates": {
+    "all_calendar_periods_positive": true,
+    "minimum_overall_profit_factor": 1.10,
+    "minimum_expectancy_retention": {"BULL":0.90,"RANGE":0.80,"BEAR":0.80},
+    "maximum_drawdown_worsening_pct": 5,
+    "minimum_positive_half_year_blocks": 9,
+    "maximum_symbol_share": 0.25,
+    "maximum_positive_month_share": 0.35,
+    "minimum_loo_positive_fraction": 0.90,
+    "minimum_loo_median_mean_bps": 5,
+    "maximum_absolute_time_backstop_rate": 0.70,
+    "minimum_state_or_profit_exit_rate": 0.30,
+    "BEAR_2021_mean_net_bps": ">=0",
+    "BEAR_2021_profit_factor": ">=1.0",
+    "minimum_local_neighbor_pass_share": 0.75,
+    "minimum_local_variants": 4
+  },
+  "neighborhood": {
+    "included_self": true,
+    "BULL": "Chebyshev distance <=1 across review return and BB-improvement thresholds.",
+    "RANGE": "Chebyshev distance <=1 across state target, review return, and review BB-improvement thresholds.",
+    "BEAR": "Chebyshev distance <=1 across state target, profit-trail arm, and profit-trail giveback thresholds. The 4h failure checkpoint is a fixed completed 4h market-structure mechanism, not a tunable duration axis."
+  },
+  "selection": "Choose the simplest connected plateau passing every gate. Rank by worst-calendar mean net bps, then expectation retention, then drawdown, then lowest absolute-time-backstop rate, then key.",
+  "release": "Lock one candidate per lane and a complete entry+exit fingerprint before opening the point-in-time 2020 holdout."
+}
