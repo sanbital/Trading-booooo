@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "revision": "V10-LANES-V5-PROTOCOL-ARITHMETIC-AUDIT-20260831",
+  "protocol_commit": "cad7060b305ea950616026886fa14655aa850b7d",
+  "protocol_path": "research/v10_continuation/v10-lanes-v5-bear-ensemble-protocol.json",
+  "issue": "The derived ensemble candidate_count field was written as 512 although the explicitly sealed grids contain 32 Trigger A variants and 32 Trigger B variants.",
+  "correct_count": {
+    "trigger_a_components": 32,
+    "trigger_b_components": 32,
+    "ensemble_candidates": 1024
+  },
+  "behavioral_change": false,
+  "parameter_change": false,
+  "gate_change": false,
+  "selection_rule_change": false,
+  "evidence_access_before_audit": {
+    "component_params_inserted": true,
+    "ensemble_params_inserted": true,
+    "component_raw_events_created": false,
+    "portfolio_events_created": false,
+    "candidate_metrics_created": false,
+    "final_holdout_accessed": false
+  },
+  "resolution": "Treat the explicit grid arrays as authoritative and evaluate all 1024 Cartesian-product ensembles. Preserve the original protocol file unchanged.",
+  "status": "SUPERSEDING_ARITHMETIC_AUDIT_ONLY"
+}
