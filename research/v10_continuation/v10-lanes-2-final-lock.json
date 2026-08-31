@@ -1,0 +1,116 @@
+{
+  "revision": "V10-LANES-2.0.0-FINAL-LOCK-20260831",
+  "locked_at": "2026-08-31T03:31:00Z",
+  "implementation_commit": "6a9f9631a1979f2c07cda92f483ab7f95aeb2249",
+  "implementation_path": "supabase/functions/_shared/v10_lanes.ts",
+  "golden_fixture_path": "supabase/functions/_shared/v10_lanes.golden.json",
+  "test_accessed_before_lock": false,
+  "final_holdout": {
+    "window": ["2022-01-01T00:00:00Z", "2023-01-01T00:00:00Z"],
+    "status": "NOT_YET_ACCESSED",
+    "one_shot": true
+  },
+  "universe": ["ETHUSDT","XRPUSDT","SOLUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT","LINKUSDT","BCHUSDT","DOTUSDT","TRXUSDT","NEARUSDT","ETCUSDT","XLMUSDT","ATOMUSDT","UNIUSDT"],
+  "execution": {
+    "bar": "15m completed only",
+    "entry": "next 15m open",
+    "round_trip_cost_bps": 21,
+    "liquidity_24h_quote_usdt_min": 50000000,
+    "sma_hours": 20,
+    "atr_hours": 14,
+    "atr_baseline_hours": 720,
+    "atr_baseline_excludes_current": true
+  },
+  "structural_router": {
+    "BEAR": "BTC72 < -0.05",
+    "RANGE": "-0.05 <= BTC72 <= 0.04",
+    "BULL": "BTC72 > 0.04",
+    "missing_or_stale": "CASH"
+  },
+  "lanes": {
+    "BULL": {
+      "fingerprint": "BULL_V10_LANES_2_0_0",
+      "side": "LONG",
+      "entry": "ATR_ratio>=1.60 AND BB_pos<=-0.20 AND asset_24h_return>=-0.02",
+      "hold_hours": 12,
+      "cooldown_hours": 12,
+      "preholdout": {
+        "total_trades": 484,
+        "mean_net_bps": 98.0,
+        "pf": 2.25,
+        "max_symbol_share": 0.085,
+        "max_month_pnl_share": 0.199,
+        "loo_positive_share": 1.0,
+        "loo_median_mean_bps": 98.2,
+        "loo_worst_mean_bps": 88.9,
+        "loo_worst_pf": 2.11,
+        "annual": {
+          "2023": {"trades":187,"mean_net_bps":114.5,"pf":3.06},
+          "2024": {"trades":210,"mean_net_bps":95.4,"pf":1.93},
+          "2025": {"trades":45,"mean_net_bps":74.8,"pf":2.10},
+          "2026": {"trades":42,"mean_net_bps":61.9,"pf":1.89}
+        },
+        "local_plateau_pass_share": 1.0
+      }
+    },
+    "RANGE": {
+      "fingerprint": "RANGE_V10_LANES_2_0_0",
+      "side": "LONG",
+      "entry": "ATR_ratio>=1.65 AND BB_pos<=-1.05",
+      "hold_hours": 6,
+      "cooldown_hours": 6,
+      "preholdout": {
+        "total_trades": 692,
+        "mean_net_bps": 75.4,
+        "pf": 2.03,
+        "max_symbol_share": 0.091,
+        "max_month_pnl_share": 0.179,
+        "loo_positive_share": 1.0,
+        "loo_median_mean_bps": 74.5,
+        "loo_worst_mean_bps": 70.3,
+        "loo_worst_pf": 1.94,
+        "annual": {
+          "2023": {"trades":272,"mean_net_bps":72.3,"pf":2.29},
+          "2024": {"trades":218,"mean_net_bps":100.2,"pf":1.96},
+          "2025": {"trades":157,"mean_net_bps":52.5,"pf":1.75},
+          "2026": {"trades":45,"mean_net_bps":54.2,"pf":2.39}
+        },
+        "local_plateau_pass_share": 1.0
+      }
+    },
+    "BEAR": {
+      "fingerprint": "BEAR_V10_LANES_2_0_0",
+      "side": "LONG",
+      "entry": "ATR_ratio>=1.70 AND BB_pos<=-1.30",
+      "hold_hours": 24,
+      "cooldown_hours": 24,
+      "preholdout": {
+        "total_trades": 192,
+        "mean_net_bps": 417.2,
+        "pf": 4.09,
+        "max_symbol_share": 0.120,
+        "max_month_pnl_share": 0.210,
+        "loo_positive_share": 1.0,
+        "loo_median_mean_bps": 416.5,
+        "loo_worst_mean_bps": 393.2,
+        "loo_worst_pf": 3.84,
+        "annual": {
+          "2023": {"trades":43,"mean_net_bps":584.4,"pf":33.55},
+          "2024": {"trades":75,"mean_net_bps":503.0,"pf":14.98},
+          "2025": {"trades":33,"mean_net_bps":349.8,"pf":1.79},
+          "2026": {"trades":41,"mean_net_bps":139.1,"pf":1.73}
+        },
+        "local_plateau_pass_share": 1.0
+      }
+    }
+  },
+  "final_holdout_gates": {
+    "positive_net": true,
+    "pf_min": 1.10,
+    "minimum_trades": 20,
+    "maximum_symbol_share": 0.25,
+    "loo_positive_share_min": 0.90,
+    "loo_median_mean_bps_min": 5,
+    "positive_halves": true
+  }
+}
