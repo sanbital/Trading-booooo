@@ -1,0 +1,53 @@
+name: V10 Lanes Exit Python-TypeScript Parity
+
+on:
+  push:
+    branches: [v10-continuation-20260830]
+    paths:
+      - 'research/v10_continuation/v10-lanes-exit-r1-lock.json'
+      - 'research/v10_continuation/v10-lanes-exit-r1-result.json'
+      - 'supabase/functions/_shared/v10_lane_exit_config.ts'
+      - 'supabase/functions/_shared/v10_lane_exit.ts'
+      - 'supabase/functions/_shared/v10_lane_exit.test.ts'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v10-continuation-20260830
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Verify selected identities and immutable hashes
+        run: |
+          python - <<'PY'
+          import hashlib,json,pathlib,re
+          root=pathlib.Path('.')
+          result_path=root/'research/v10_continuation/v10-lanes-exit-r1-result.json'
+          lock_path=root/'research/v10_continuation/v10-lanes-exit-r1-lock.json'
+          config_path=root/'supabase/functions/_shared/v10_lane_exit_config.ts'
+          assert result_path.exists() and lock_path.exists(), 'selected exit artifact missing'
+          result=json.loads(result_path.read_text())
+          lock=json.loads(lock_path.read_text())
+          config=config_path.read_text()
+          assert result['all_lanes_passed'] is True
+          assert set(result['selected'])=={'BULL','RANGE','BEAR'}
+          assert lock['release_status']=='RESEARCH_SELECTED_PENDING_TYPESCRIPT_GOLDEN_PARITY_AND_PRODUCTION_INTEGRATION'
+          assert lock['entry_engine_revision']=='V10-LANES-3.0.0'
+          assert lock['exit_engine_revision']=='V10-LANES-EXIT-R1.0.0'
+          assert lock['spec_sha256'] in config
+          for lane,row in result['selected'].items():
+              assert row['policy']['key'] in config, (lane,row['policy']['key'])
+          print('V10_EXIT_SELECTED_IDENTITY_PARITY_PASS')
+          PY
+      - name: Type check and run deterministic state-machine tests
+        run: |
+          deno check supabase/functions/_shared/v10_lane_exit.ts
+          deno test --allow-none supabase/functions/_shared/v10_lane_exit.test.ts
