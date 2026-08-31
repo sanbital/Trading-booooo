@@ -1,0 +1,157 @@
+{
+  "base_commit": "005965dfe43dc520f7f57dbe7f2b31224c2f74ce",
+  "branch": "v10-continuation-20260830",
+  "data": {
+    "bar_interval": "15m",
+    "benchmark": "BTCUSDT",
+    "continuity": "All required lag, rolling-window, entry, and exit timestamps must be exactly 15-minute contiguous; otherwise the row is ineligible.",
+    "source_table": "public.claude_r19_k15",
+    "universe": [
+      "ETHUSDT",
+      "XRPUSDT",
+      "SOLUSDT",
+      "DOGEUSDT",
+      "ADAUSDT",
+      "AVAXUSDT",
+      "LINKUSDT",
+      "BCHUSDT",
+      "DOTUSDT",
+      "TRXUSDT",
+      "NEARUSDT",
+      "ETCUSDT",
+      "XLMUSDT",
+      "ATOMUSDT",
+      "UNIUSDT"
+    ],
+    "venue": "BINANCE_USDS_M_PERPETUAL"
+  },
+  "execution": {
+    "cost_bps": 21,
+    "fixed_stop": null,
+    "fixed_target": null,
+    "leverage": 3,
+    "max_aggregate_notional_usdt": 80,
+    "max_concurrent_total": 10,
+    "notional_usdt_per_position": 8,
+    "selection": "All eligible symbols subject to deterministic symbol order and global capacity; no outcome-informed ranking."
+  },
+  "features": {
+    "asset_ret_24h": "close_t/close_t_minus_96_bars - 1",
+    "atr_14h": "avg(true_range, rows 55 preceding through current)",
+    "atr_30d_prior_mean": "avg(atr_14h, rows 2880 preceding through 1 preceding)",
+    "atr_ratio": "atr_14h/atr_30d_prior_mean",
+    "bb_pos_1h_ago": "bb_pos_20h at t-4 bars",
+    "bb_pos_20h": "(close_t - avg(close, rows 79 preceding through current))/(2*stddev_samp(close, rows 79 preceding through current))",
+    "btc_ret_30d": "BTC_close_t/BTC_close_t_minus_2880_bars - 1",
+    "btc_ret_72h": "BTC_close_t/BTC_close_t_minus_288_bars - 1",
+    "entry": "Open of the next 15-minute bar at t+15m.",
+    "exit_12h": "close at t+48 bars",
+    "exit_24h": "close at t+96 bars",
+    "exit_6h": "close at t+24 bars",
+    "net_bps": "(exit_close/entry_open - 1)*10000 - 21",
+    "quote_volume_24h": "sum(quote_volume, rows 95 preceding through current)",
+    "signal_bar": "Completed 15-minute bar at t.",
+    "true_range": "greatest(high-low, abs(high-prev_close), abs(low-prev_close))"
+  },
+  "holdout": {
+    "bear_revalidation_required": true,
+    "bull_revalidation_required": true,
+    "end_exclusive": "2022-01-01T00:00:00Z",
+    "one_shot": true,
+    "parameter_tuning_after_open": false,
+    "range_revalidation_required": false,
+    "start": "2021-01-01T00:00:00Z",
+    "warmup_start": "2020-12-01T00:00:00Z"
+  },
+  "holdout_gates": {
+    "applies_to": [
+      "BULL",
+      "BEAR"
+    ],
+    "decision": "A lane passes only if every gate passes. A failed lane remains live-disabled with no holdout retuning.",
+    "first_half_mean_net_bps": "> 0",
+    "leave_one_symbol_out_median_mean_net_bps": ">= 5",
+    "leave_one_symbol_out_positive_fraction": ">= 0.90",
+    "maximum_single_month_positive_pnl_share": "<= 0.35",
+    "maximum_single_symbol_trade_share": "<= 0.25",
+    "mean_net_bps": "> 0",
+    "minimum_trades": 20,
+    "profit_factor": ">= 1.10",
+    "second_half_mean_net_bps": "> 0"
+  },
+  "lanes": {
+    "BEAR": {
+      "conditions": {
+        "atr_ratio": ">= 1.60",
+        "bb_pos_1h_ago": "> -0.90",
+        "bb_pos_20h": "<= -0.90",
+        "btc_ret_30d": "between -0.20 and -0.10 inclusive",
+        "btc_ret_72h": "< -0.05",
+        "quote_volume_24h_usdt": ">= 50000000"
+      },
+      "cooldown_hours": 24,
+      "fingerprint": "BEAR_V10_LANES_3_0_0",
+      "hold_hours": 24,
+      "side": "LONG"
+    },
+    "BULL": {
+      "conditions": {
+        "asset_ret_24h": ">= -0.02",
+        "atr_ratio": ">= 1.65",
+        "bb_pos_20h": "<= -0.20",
+        "btc_ret_72h": "> 0.05",
+        "quote_volume_24h_usdt": ">= 50000000"
+      },
+      "cooldown_hours": 12,
+      "fingerprint": "BULL_V10_LANES_3_0_0",
+      "hold_hours": 12,
+      "side": "LONG"
+    },
+    "RANGE": {
+      "conditions": {
+        "atr_ratio": ">= 1.65",
+        "bb_pos_20h": "<= -1.05",
+        "btc_ret_72h": "between -0.05 and 0.04 inclusive",
+        "quote_volume_24h_usdt": ">= 50000000"
+      },
+      "cooldown_hours": 6,
+      "fingerprint": "RANGE_V10_LANES_3_0_0",
+      "hold_hours": 6,
+      "side": "LONG"
+    }
+  },
+  "lock_revision": "V10-LANES-3-2021-HOLDOUT-LOCK-1.0.0",
+  "pre_holdout_evidence": {
+    "BEAR": {
+      "all_calendar_years_positive": true,
+      "all_half_years_positive": true,
+      "period": "2022-01-01..2026-08-31",
+      "trades": 146
+    },
+    "BULL": {
+      "all_calendar_years_positive": true,
+      "mean_net_bps": 98.6,
+      "period": "2022-01-01..2026-08-31",
+      "profit_factor": 2.31,
+      "trades": 589
+    },
+    "RANGE": {
+      "untouched_2022_loo_positive_fraction": 1.0,
+      "untouched_2022_mean_net_bps": 25.9,
+      "untouched_2022_profit_factor": 1.2,
+      "untouched_2022_trades": 72
+    }
+  },
+  "purpose": "Immutable preregistration before first outcome-bearing access to the 2021 holdout.",
+  "repository": "sanbital/Trading-booooo",
+  "router": {
+    "BEAR": "btc_ret_72h < -0.05",
+    "BUFFER_CASH": "0.04 < btc_ret_72h <= 0.05",
+    "BULL": "btc_ret_72h > 0.05",
+    "RANGE": "-0.05 <= btc_ret_72h <= 0.04",
+    "missing_stale_gap": "CASH"
+  },
+  "sealed_at": "2026-08-31T14:08:39+09:00",
+  "spec_sha256": "9a41b270a1f11a6649bb5ca9510b0b53a48998979e8c4def5aed274262c6a27f",
+  "status": "SEALED_NOT_OPENED"
+}
