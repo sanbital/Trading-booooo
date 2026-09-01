@@ -1,0 +1,7 @@
+V10 regime transition exit production deploy trigger
+2026-09-01 KST
+- completed 15m bars only
+- two consecutive adverse bars or one strong BEAR_REBREAK
+- transition full exit has priority over lane-internal exits
+- UNKNOWN blocks new entries but does not force-close
+- exit path remains CLOSE_LONG only
