@@ -146,12 +146,11 @@ async function fetchClosedBars(symbol: string, signalOpenTime: number): Promise<
 
 Deno.serve(async (request) => {
   const invocationId = crypto.randomUUID();
-  const cronSecret = Deno.env.get("V10_LANE_CRON_SECRET");
-  if (!cronSecret) {
-    return response(503, { ok: false, invocationId, error: "V10_LANE_CRON_SECRET_MISSING" });
-  }
-  if (request.headers.get("x-v10-cron-secret") !== cronSecret) {
-    return response(401, { ok: false, invocationId, error: "UNAUTHORIZED" });
+  // verify_jwt=true rejects unsigned callers before this handler. Retain a
+  // handler-level presence check so any future platform configuration drift fails closed.
+  const authorization = request.headers.get("authorization") ?? "";
+  if (!authorization.toLowerCase().startsWith("bearer ")) {
+    return response(401, { ok: false, invocationId, error: "AUTHORIZATION_REQUIRED" });
   }
   if (request.method !== "POST") {
     return response(405, { ok: false, invocationId, error: "METHOD_NOT_ALLOWED" });
@@ -194,7 +193,7 @@ Deno.serve(async (request) => {
 
     const { data: flags, error: flagsError } = await supabase
       .from("v10_lane_flags")
-      .select("lane,shadow_enabled,live_enabled,max_concurrent,notional_usdt");
+      .select("lane,shadow_enabled,live_enabled,max_concurrent,notional_usdt,validated,engine_revision,spec_sha256");
     if (flagsError) throw new Error(`FLAGS_READ_FAILED:${flagsError.message}`);
     const flagByLane = new Map((flags ?? []).map((row) => [String(row.lane), row]));
 
@@ -204,7 +203,11 @@ Deno.serve(async (request) => {
       .select("fingerprint,lane,revision")
       .in("fingerprint", fingerprints);
     if (versionsError) throw new Error(`VERSIONS_READ_FAILED:${versionsError.message}`);
-    const registered = new Set((versions ?? []).map((row) => String(row.fingerprint)));
+    const registered = new Set(
+      (versions ?? [])
+        .filter((row) => String(row.revision) === V10_LANES_REVISION)
+        .map((row) => String(row.fingerprint)),
+    );
 
     const evaluated: LaneDecision[] = [];
     const dataErrors: Record<string, string> = {};
@@ -254,7 +257,13 @@ Deno.serve(async (request) => {
         fingerprint: config.fingerprint,
       });
     }
-    if (!flag || (!flag.shadow_enabled && !flag.live_enabled)) {
+    if (
+      !flag ||
+      flag.validated !== true ||
+      flag.engine_revision !== V10_LANES_REVISION ||
+      flag.spec_sha256 !== V10_LANES_SPEC_SHA256 ||
+      (!flag.shadow_enabled && !flag.live_enabled)
+    ) {
       return response(200, {
         ok: true,
         invocationId,

@@ -1,0 +1,31 @@
+{
+  "revision": "V10-LANES-3.0.0",
+  "specSha256": "9a41b270a1f11a6649bb5ca9510b0b53a48998979e8c4def5aed274262c6a27f",
+  "fixtures": [
+    {
+      "name": "range_mean_reversion",
+      "features": {"symbol":"UNIUSDT","signalBarAt":1,"btc72":0.04,"btc30d":0.0,"atr":1.65,"atrBaseline":1.0,"atrRatio":1.65,"bbPos":-1.05,"bbPos1hAgo":-0.5,"assetRet24h":0.0,"quoteVolume24h":80000000,"continuityOk":true,"dataFresh":true},
+      "expected": {"lane":"RANGE","eligible":true,"fingerprint":"RANGE_V10_LANES_3_0_0","side":"LONG","holdHours":6,"cooldownHours":6,"reason":"RANGE_ELIGIBLE"}
+    },
+    {
+      "name": "bull_pullback",
+      "features": {"symbol":"ETHUSDT","signalBarAt":2,"btc72":0.051,"btc30d":0.1,"atr":1.65,"atrBaseline":1.0,"atrRatio":1.65,"bbPos":-0.2,"bbPos1hAgo":0.0,"assetRet24h":-0.02,"quoteVolume24h":80000000,"continuityOk":true,"dataFresh":true},
+      "expected": {"lane":"BULL","eligible":true,"fingerprint":"BULL_V10_LANES_3_0_0","side":"LONG","holdHours":12,"cooldownHours":12,"reason":"BULL_ELIGIBLE"}
+    },
+    {
+      "name": "bear_fresh_break",
+      "features": {"symbol":"SOLUSDT","signalBarAt":3,"btc72":-0.051,"btc30d":-0.15,"atr":1.6,"atrBaseline":1.0,"atrRatio":1.6,"bbPos":-0.9,"bbPos1hAgo":-0.89,"assetRet24h":-0.08,"quoteVolume24h":80000000,"continuityOk":true,"dataFresh":true},
+      "expected": {"lane":"BEAR","eligible":true,"fingerprint":"BEAR_V10_LANES_3_0_0","side":"LONG","holdHours":24,"cooldownHours":24,"reason":"BEAR_ELIGIBLE"}
+    },
+    {
+      "name": "structural_buffer_is_cash",
+      "features": {"symbol":"ADAUSDT","signalBarAt":4,"btc72":0.045,"btc30d":0.0,"atr":2.0,"atrBaseline":1.0,"atrRatio":2.0,"bbPos":-2.0,"bbPos1hAgo":-1.0,"assetRet24h":0.0,"quoteVolume24h":80000000,"continuityOk":true,"dataFresh":true},
+      "expected": {"lane":"CASH","eligible":false,"fingerprint":null,"side":null,"holdHours":null,"cooldownHours":null,"reason":"STRUCTURAL_CASH_OR_DATA_FAIL_CLOSED"}
+    },
+    {
+      "name": "stale_data_fails_closed",
+      "features": {"symbol":"XRPUSDT","signalBarAt":5,"btc72":0.0,"btc30d":0.0,"atr":2.0,"atrBaseline":1.0,"atrRatio":2.0,"bbPos":-2.0,"bbPos1hAgo":-1.0,"assetRet24h":0.0,"quoteVolume24h":80000000,"continuityOk":true,"dataFresh":false},
+      "expected": {"lane":"CASH","eligible":false,"fingerprint":null,"side":null,"holdHours":null,"cooldownHours":null,"reason":"STRUCTURAL_CASH_OR_DATA_FAIL_CLOSED"}
+    }
+  ]
+}
