@@ -40,6 +40,15 @@ function response(status: number, body: Record<string, unknown>): Response {
   });
 }
 
+function constantTimeEqual(left: string, right: string): boolean {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return difference === 0;
+}
+
 function stable(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
@@ -146,16 +155,11 @@ async function fetchClosedBars(symbol: string, signalOpenTime: number): Promise<
 
 Deno.serve(async (request) => {
   const invocationId = crypto.randomUUID();
-  const cronSecret = Deno.env.get("V10_LANE_CRON_SECRET");
-  if (!cronSecret) {
-    return response(503, { ok: false, invocationId, error: "V10_LANE_CRON_SECRET_MISSING" });
-  }
-  if (request.headers.get("x-v10-cron-secret") !== cronSecret) {
-    return response(401, { ok: false, invocationId, error: "UNAUTHORIZED" });
-  }
   if (request.method !== "POST") {
     return response(405, { ok: false, invocationId, error: "METHOD_NOT_ALLOWED" });
   }
+  const requestBody = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const diagnosticOnly = requestBody.mode === "diagnostic";
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -166,12 +170,26 @@ Deno.serve(async (request) => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  const providedToken = request.headers.get("x-v10-lane-token") ?? "";
+  const { data: tokenRow, error: tokenError } = await supabase
+    .from("edge_internal_tokens")
+    .select("token")
+    .eq("name", "v10-lane-signal-generator")
+    .maybeSingle();
+  const expectedToken = String(tokenRow?.token ?? "");
+  if (
+    tokenError || !providedToken || !expectedToken ||
+    !constantTimeEqual(providedToken, expectedToken)
+  ) {
+    return response(401, { ok: false, invocationId, error: "UNAUTHORIZED" });
+  }
+
   try {
     const now = Date.now();
     const currentOpenTime = Math.floor(now / BAR_MS) * BAR_MS;
     const signalOpenTime = currentOpenTime - BAR_MS;
     const completedAt = signalOpenTime + BAR_MS;
-    if (now - completedAt > MAX_DATA_AGE_MS) {
+    if (!diagnosticOnly && now - completedAt > MAX_DATA_AGE_MS) {
       return response(409, {
         ok: false,
         invocationId,
@@ -194,7 +212,7 @@ Deno.serve(async (request) => {
 
     const { data: flags, error: flagsError } = await supabase
       .from("v10_lane_flags")
-      .select("lane,shadow_enabled,live_enabled,max_concurrent,notional_usdt");
+      .select("lane,shadow_enabled,live_enabled,max_concurrent,notional_usdt,validated,engine_revision,spec_sha256");
     if (flagsError) throw new Error(`FLAGS_READ_FAILED:${flagsError.message}`);
     const flagByLane = new Map((flags ?? []).map((row) => [String(row.lane), row]));
 
@@ -204,7 +222,11 @@ Deno.serve(async (request) => {
       .select("fingerprint,lane,revision")
       .in("fingerprint", fingerprints);
     if (versionsError) throw new Error(`VERSIONS_READ_FAILED:${versionsError.message}`);
-    const registered = new Set((versions ?? []).map((row) => String(row.fingerprint)));
+    const registered = new Set(
+      (versions ?? [])
+        .filter((row) => String(row.revision) === V10_LANES_REVISION)
+        .map((row) => String(row.fingerprint)),
+    );
 
     const evaluated: LaneDecision[] = [];
     const dataErrors: Record<string, string> = {};
@@ -230,6 +252,22 @@ Deno.serve(async (request) => {
         : btcContext.btc72 > 0.05
         ? "BULL"
         : "CASH");
+    if (diagnosticOnly) {
+      return response(200, {
+        ok: true,
+        diagnostic: true,
+        invocationId,
+        engine: V10_LANES_REVISION,
+        specSha256: V10_LANES_SPEC_SHA256,
+        route,
+        signalOpenTime,
+        completedAt,
+        dataAgeMs: now - completedAt,
+        evaluated: evaluated.length,
+        eligible: evaluated.filter((decision) => decision.eligible).length,
+        dataErrors,
+      });
+    }
     if (route === "CASH") {
       return response(200, {
         ok: true,
@@ -254,7 +292,13 @@ Deno.serve(async (request) => {
         fingerprint: config.fingerprint,
       });
     }
-    if (!flag || (!flag.shadow_enabled && !flag.live_enabled)) {
+    if (
+      !flag ||
+      flag.validated !== true ||
+      flag.engine_revision !== V10_LANES_REVISION ||
+      flag.spec_sha256 !== V10_LANES_SPEC_SHA256 ||
+      (!flag.shadow_enabled && !flag.live_enabled)
+    ) {
       return response(200, {
         ok: true,
         invocationId,
