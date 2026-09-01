@@ -49,9 +49,9 @@ export interface V10ExitPolicy {
   };
 }
 
-export const V10_EXIT_ENGINE_REVISION = "V10-LANES-EXIT-RUNTIME-1.0.0";
+export const V10_EXIT_ENGINE_REVISION = "V10-LANES-EXIT-RUNTIME-1.1.0";
 export const V10_EXIT_SPEC_SHA256 =
-  "f6480355e2e0c987afe1af7a8b66dc61d5fd35b1fa165d1ad940f3b5b331741d";
+  "1aa96472956500b17e27d8b923a1dd883643a728b74c5f096d8f780a27307c4b";
 export const V10_EXIT_BAR_INTERVAL_MINUTES = 15;
 export const V10_EXIT_BAR_INTERVAL_MS = V10_EXIT_BAR_INTERVAL_MINUTES * 60_000;
 export const V10_EXIT_DEFAULT_LEVERAGE = 3;
@@ -67,7 +67,7 @@ export const V10_EXIT_LIVE_ORDER_ROUTING_COMPILED = false;
 export const V10_EXIT_POLICIES: Readonly<Record<V10Lane, V10ExitPolicy>> = {
   BULL: {
     lane: "BULL",
-    key: "BULL_R7_SP_T22P5_Q0P30_F0_G6P75",
+    key: "BULL_R7_SP_T22P5_Q0P30_F0_G6P75__RT110",
     family: "PARTIAL_CONTINUATION",
     researchRevision: "V10_REGIME_SPECIFIC_EXITS_R7_20260831",
     validated: true,
@@ -94,7 +94,7 @@ export const V10_EXIT_POLICIES: Readonly<Record<V10Lane, V10ExitPolicy>> = {
   },
   RANGE: {
     lane: "RANGE",
-    key: "RANGE_R7_STATE_T1P00_A18_G0P75",
+    key: "RANGE_R7_STATE_T1P00_A18_G0P75__RT110",
     family: "FULL_STATE_TARGET",
     researchRevision: "V10_REGIME_SPECIFIC_EXITS_R7_20260831",
     validated: true,
@@ -120,7 +120,7 @@ export const V10_EXIT_POLICIES: Readonly<Record<V10Lane, V10ExitPolicy>> = {
   },
   BEAR: {
     lane: "BEAR",
-    key: "BEAR_R8_STATE_T1P76_R0P0200_B0P40",
+    key: "BEAR_R8_STATE_T1P76_R0P0200_B0P40__RT110",
     family: "STATE_RECOVERY",
     researchRevision: "V10_REGIME_SPECIFIC_EXITS_R8_20260831",
     validated: false,
