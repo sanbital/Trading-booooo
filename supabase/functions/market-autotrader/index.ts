@@ -10161,6 +10161,9 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
   const maintenancePositions = await db(
     "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*",
   ) as Position[];
+  const v10MaintenancePositions = await db(
+    "v10_lane_positions?state=in.(OPEN,CLOSE_SUBMITTED,RECONCILIATION_FAILED)&select=symbol,side,quantity,remaining_quantity",
+  ) as Array<{ symbol: string; side: string; quantity: number; remaining_quantity: number }>;
   if (futuresObservationError) {
     const safetyReason = "P10_FUTURES_EXPOSURE_OBSERVATION_FAILED";
     const newlyLatched = await latchP10EntrySafety(safetyReason);
@@ -10184,16 +10187,26 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
   const untrackedFutures = futuresPortfolio
     ? untrackedFuturesExposures(
       Array.isArray(futuresPortfolio.positions) ? futuresPortfolio.positions : [],
-      maintenancePositions
-        .filter((position) => position.exchange === "binance_futures" && !position.is_paper)
-        .map((position) => ({
-          market: position.market,
-          side: position.position_side,
+      [
+        ...maintenancePositions
+          .filter((position) => position.exchange === "binance_futures" && !position.is_paper)
+          .map((position) => ({
+            market: position.market,
+            side: position.position_side,
+            quantity: Math.max(
+              finite(position.remaining_quantity),
+              finite((position as any).reserved_quantity),
+            ),
+          })),
+        ...v10MaintenancePositions.map((position) => ({
+          market: position.symbol,
+          side: position.side,
           quantity: Math.max(
             finite(position.remaining_quantity),
-            finite((position as any).reserved_quantity),
+            finite(position.quantity),
           ),
         })),
+      ],
     )
     : [];
   if (untrackedFutures.length) {
@@ -12805,6 +12818,9 @@ Deno.serve(async (request: Request) => {
         "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)" +
           "&select=id,exchange,market,position_side,remaining_quantity,reserved_quantity,quantity_step,is_paper,state,strategy_key&limit=1000",
       ) as any[];
+      const v10ActiveAfterReconcile = await db(
+        "v10_lane_positions?state=in.(OPEN,CLOSE_SUBMITTED,RECONCILIATION_FAILED)&select=symbol,side,quantity,remaining_quantity",
+      ) as Array<{ symbol: string; side: string; quantity: number; remaining_quantity: number }>;
       const unresolvedEntryRows = activeAfterReconcile.filter((row) =>
         [
           "ENTRY_PENDING",
@@ -12828,13 +12844,23 @@ Deno.serve(async (request: Request) => {
           : [];
         untrackedFuturesAtResume = untrackedFuturesExposures(
           exchangePositions,
-          activeAfterReconcile
-            .filter((row) => row.exchange === "binance_futures" && !row.is_paper)
-            .map((row) => ({
-              market: row.market,
-              side: row.position_side,
-              quantity: Math.max(finite(row.remaining_quantity), finite(row.reserved_quantity)),
+          [
+            ...activeAfterReconcile
+              .filter((row) => row.exchange === "binance_futures" && !row.is_paper)
+              .map((row) => ({
+                market: row.market,
+                side: row.position_side,
+                quantity: Math.max(
+                  finite(row.remaining_quantity),
+                  finite(row.reserved_quantity),
+                ),
+              })),
+            ...v10ActiveAfterReconcile.map((row) => ({
+              market: row.symbol,
+              side: row.side,
+              quantity: Math.max(finite(row.remaining_quantity), finite(row.quantity)),
             })),
+          ],
         );
         futuresQuantityMismatches = activeAfterReconcile
           .filter((row) => row.exchange === "binance_futures" && !row.is_paper)
