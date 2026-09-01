@@ -2,6 +2,8 @@
 // Trading-booooo market regime observer v2 + C43 dynamic horizon forecast.
 // Observation and P10 exit-risk input. It never changes entries, sizing, leverage, or orders directly.
 
+import { committedRegimeOf, instantaneousRegimeOf, REGIME_BANDS, REGIME_DWELL } from "../_shared/regime-hysteresis.ts";
+
 const MODEL_REVISION = "MARKET-REGIME-OBSERVER-v2-C01-FULLMARKET";
 const STRUCTURAL_CANDIDATE_ID = "C01_LEGACY_SHAPE_V1";
 const FORECAST_CANDIDATE_ID = "C43_PHASE_TREE_PERSISTENCE_STRUCT_PERSIST";
@@ -28,7 +30,6 @@ function mean(xs) { const a = xs.filter(Number.isFinite); return a.length ? a.re
 function stddev(xs) { const a = xs.filter(Number.isFinite); if (!a.length) return 0; const m = mean(a); return Math.sqrt(mean(a.map((x) => (x - m) ** 2))); }
 function returnPct(n, p) { return n > 0 && p > 0 ? (n / p - 1) * 100 : 0; }
 function momentumScore(r, f) { return clamp(50 + (r / Math.max(0.01, f)) * 50); }
-function regimeOf(s) { return s >= 72 ? "STRONG_BULL" : s >= 58 ? "BULL" : s >= 42 ? "NEUTRAL" : "RISK_OFF"; }
 function actualRegime(s) { return s >= 75 ? "STRONG_BULL" : s >= 60 ? "BULL" : s >= 40 ? "NEUTRAL" : "RISK_OFF"; }
 function ordinal(r) { return ({ RISK_OFF: 0, NEUTRAL: 1, BULL: 2, STRONG_BULL: 3 })[r] ?? 1; }
 function direction(r) { return r === "RISK_OFF" ? -1 : r === "NEUTRAL" ? 0 : 1; }
@@ -95,6 +96,10 @@ function compareVenue(base, now, prefix, h) {
   for (const [k, p] of Object.entries(base || {})) { if (!k.startsWith(prefix)) continue; const n = finite(now[k]); if (p > 0 && n > 0) raw.push(returnPct(n, p)); }
   const pos = raw.length ? raw.filter((x) => x > 0).length / raw.length : 0.5, gain = raw.length ? raw.filter((x) => x >= tail).length / raw.length : 0, loss = raw.length ? raw.filter((x) => x <= -tail).length / raw.length : 0, clipped = raw.length ? mean(raw.map((x) => Math.max(-clip, Math.min(clip, x)))) : 0;
   return { sample_size: raw.length, positive_fraction: pos, clipped_mean_pct: clipped, gain_tail_fraction: gain, loss_tail_fraction: loss, score: h === 30 ? clamp(0.52 * pos * 100 + 0.33 * momentumScore(clipped, 1.2) + 0.15 * clamp(50 + (gain - loss) * 90)) : null };
+}
+async function recentRegimeState() {
+  const rows = await db(`market_regime_observations?model_revision=eq.${encodeURIComponent(MODEL_REVISION)}&select=observed_at,predicted_regime,bull_score&order=observed_at.desc&limit=${REGIME_DWELL}`).catch(() => []);
+  return { regime: rows?.[0]?.predicted_regime ?? null, scores: (rows || []).map((r) => finite(r.bull_score)) };
 }
 async function priorV2(nowMs) {
   const earliest = new Date(nowMs - 35 * 60000).toISOString(), latest = new Date(nowMs - 25 * 60000).toISOString();
@@ -196,7 +201,7 @@ async function c43Overlay(observedAt, currentB30, currentB24, structuralScore, b
 
 async function collectSnapshot() {
   const observedAt = new Date().toISOString(), nowMs = Date.parse(observedAt);
-  const [bs, bf, up, bench, prior] = await Promise.all([binanceTickers("binance_spot"), binanceTickers("binance_futures"), upbitTickers(), benchmarkScore(), priorV2(nowMs)]);
+  const [bs, bf, up, bench, prior, recentRegime] = await Promise.all([binanceTickers("binance_spot"), binanceTickers("binance_futures"), upbitTickers(), benchmarkScore(), priorV2(nowMs), recentRegimeState()]);
   if (bs.length < 100 || bf.length < 100 || up.length < 40) throw new Error(`universe too small spot=${bs.length} futures=${bf.length} upbit=${up.length}`);
   const maps = { ...priceMap("binance_spot", bs), ...priceMap("binance_futures", bf), ...priceMap("upbit_spot", up) }, b24 = { binance_spot: breadthFromReturns(bs.map((x) => x.ret24), 1440), binance_futures: breadthFromReturns(bf.map((x) => x.ret24), 1440), upbit_spot: breadthFromReturns(up.map((x) => x.ret24), 1440) }, g1440 = mean(Object.values(b24).map((x) => x.score));
   let b30 = null, g30 = 50, fallback = null;
@@ -208,7 +213,8 @@ async function collectSnapshot() {
   const raw = 0.50 * bench.score + 0.30 * g30 + 0.20 * g1440, bullScore = clamp(50 + (raw - 50) * 0.88), components = [bench.score, g30, g1440], nearest = Math.min(Math.abs(bullScore - 42), Math.abs(bullScore - 58), Math.abs(bullScore - 72), 20), agreement = 1 - clamp(stddev(components) / 35, 0, 1), confidence = clamp((0.45 + 0.35 * (nearest / 20) + 0.20 * agreement) * (b30 ? 1 : 0.82), 0.35, 0.95);
   const overlay = await c43Overlay(observedAt, b30, b24, bullScore, bench.rows);
   const tradingInfluence = Boolean(b30);
-  return { observedAt, allPrices: maps, benchmarkPrices: benchmarkPriceMap(bs, bf, up), sampleSize: bs.length + bf.length + up.length, bullScore, confidence, regime: regimeOf(bullScore), features: { candidate_id: STRUCTURAL_CANDIDATE_ID, forecast_candidate_id: FORECAST_CANDIDATE_ID, evidence_run_id: RESEARCH_RUN_ID, source: "BINANCE_SPOT_FUTURES_UPBIT_FULL_ACTIVE_UNIVERSE", universe: { binance_spot: bs.length, binance_futures: bf.length, upbit_spot: up.length, total: bs.length + bf.length + up.length }, benchmark: { score: bench.score, markets: bench.rows }, breadth_30m: b30, breadth_30m_fallback: b30 ? null : { score: g30, research_bucket: fallback?.bucket || null }, breadth_24h: b24, component_scores: { benchmark: bench.score, breadth_30m: g30, breadth_24h: g1440, raw }, weights: { benchmark: 0.50, breadth_30m: 0.30, breadth_24h: 0.20, sensitivity: 0.88 }, thresholds: { risk_off_below: 42, bull: 58, strong_bull: 72 }, training_ground_truth_thresholds: { risk_off_below: 40, bull: 60, strong_bull: 75 }, momentum_phase: { ...overlay, trading_influence: tradingInfluence }, conditional_forecast: overlay.forecast, trading_influence: tradingInfluence } };
+  const instantaneousRegime = instantaneousRegimeOf(bullScore), committedRegime = committedRegimeOf(bullScore, recentRegime.regime, recentRegime.scores);
+  return { observedAt, allPrices: maps, benchmarkPrices: benchmarkPriceMap(bs, bf, up), sampleSize: bs.length + bf.length + up.length, bullScore, confidence, regime: committedRegime, features: { candidate_id: STRUCTURAL_CANDIDATE_ID, forecast_candidate_id: FORECAST_CANDIDATE_ID, evidence_run_id: RESEARCH_RUN_ID, source: "BINANCE_SPOT_FUTURES_UPBIT_FULL_ACTIVE_UNIVERSE", universe: { binance_spot: bs.length, binance_futures: bf.length, upbit_spot: up.length, total: bs.length + bf.length + up.length }, benchmark: { score: bench.score, markets: bench.rows }, breadth_30m: b30, breadth_30m_fallback: b30 ? null : { score: g30, research_bucket: fallback?.bucket || null }, breadth_24h: b24, component_scores: { benchmark: bench.score, breadth_30m: g30, breadth_24h: g1440, raw }, weights: { benchmark: 0.50, breadth_30m: 0.30, breadth_24h: 0.20, sensitivity: 0.88 }, thresholds: { risk_off_below: 42, bull: 58, strong_bull: 72 }, training_ground_truth_thresholds: { risk_off_below: 40, bull: 60, strong_bull: 75 }, regime_hysteresis: { bands: REGIME_BANDS, dwell: REGIME_DWELL, instantaneous_regime: instantaneousRegime, committed_regime: committedRegime, prior_regime: recentRegime.regime, prior_scores: recentRegime.scores }, momentum_phase: { ...overlay, trading_influence: tradingInfluence }, conditional_forecast: overlay.forecast, trading_influence: tradingInfluence } };
 }
 
 async function persistObservation(s) {

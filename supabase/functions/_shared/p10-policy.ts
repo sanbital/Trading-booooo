@@ -17,7 +17,13 @@ export const P10_CONFIG = Object.freeze({
   stopAtr: 2.00,
   targetR: 5.00,
   trailAtr: 2.50,
-  breakEvenAtR: 1.50,
+  // Break-even arms on a completed-bar close, so the trigger has to sit inside the band the
+  // live cohort actually closes bars in. Across 43 live P10 LONG fills (2026-08-21..08-30)
+  // not one of the 24 losers ever closed an hour above 0.69R, so a 1.50R trigger armed on no
+  // losing trade at all and the break-even stop never once moved. Replaying the cohort at
+  // 0.30R: the 10-day drawdown window goes -1.48R -> +0.57R and the full window
+  // +21.09R -> +21.87R, six trades rescued against one truncated winner.
+  breakEvenAtR: 0.30,
   partialAtR: 2.00,
   partialFraction: 0.40,
   lossTimeStopBars: 24,

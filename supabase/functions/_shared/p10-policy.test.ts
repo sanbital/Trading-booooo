@@ -234,3 +234,56 @@ Deno.test("P10 spot venues keep generic capital divided by slots sizing", () => 
     50_000,
   );
 });
+
+// The break-even trigger has to arm inside the band real bars close in. In the 2026-08-21..08-30
+// live cohort not one of the 24 P10 LONG losers ever closed an hour above 0.69R, so the previous
+// 1.50R trigger armed on no losing trade at all and the break-even stop was unreachable code.
+Deno.test("P10 break-even arms inside the band live losing bars actually close in", () => {
+  const bar = (closeR: number) => ({
+    time: P10_HOUR_MS,
+    open: 100,
+    high: 100 + 2 * closeR,
+    low: 99,
+    close: 100 + 2 * closeR,
+    volume: 1,
+    quoteVolume: 100,
+    ema20: 90,
+    ema50: 89,
+    ema100: 88,
+    ema20Slope6Pct: 1,
+    // Wide enough that the 2.5-ATR trail stays below the initial stop and cannot be mistaken
+    // for the break-even lift this test is measuring.
+    atr14: 2,
+    rsi14: 60,
+    ret24Pct: 2,
+    ret72Pct: 4,
+    efficiency24: 0.5,
+    high72Prev: 103,
+    low72Prev: 90,
+    volumeRatio: 2,
+    quoteVolumeMean20: 100,
+  } satisfies P10PreparedBar);
+  const evaluate = (closeR: number) =>
+    evaluateP10Exit({
+      side: "LONG",
+      entryPrice: 100,
+      initialRisk: 2,
+      currentStop: 98,
+      partialDone: false,
+      executablePrice: 100 + 2 * closeR,
+      entryBarTime: 0,
+      openedAtMs: 0,
+      nowMs: 2 * P10_HOUR_MS,
+      lastPolicyBarTime: 0,
+      latestCompletedBar: bar(closeR),
+      roundTripCostBps: 20,
+    });
+
+  assert(P10_CONFIG.breakEvenAtR <= 0.30);
+  // A bar closing past the trigger lifts the stop to break-even, above the entry price.
+  assert(evaluate(P10_CONFIG.breakEvenAtR + 0.01).nextStop > 100);
+  // A bar closing just short of it leaves the initial stop where it was.
+  assertEquals(evaluate(P10_CONFIG.breakEvenAtR - 0.01).nextStop, 98);
+  // The peak the median live loser reached would still not have armed the old 1.50R trigger.
+  assertEquals(evaluate(0.69).nextStop > 100, P10_CONFIG.breakEvenAtR <= 0.69);
+});

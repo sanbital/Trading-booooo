@@ -22,7 +22,10 @@ Deno.test("combined policy preserves LONG and gives S096 its exact SHORT geometr
   assertEquals(P10_CONFIG.targetR, 5);
   assertEquals(P10_CONFIG.partialAtR, 2);
   assertEquals(P10_CONFIG.partialFraction, 0.4);
-  assertEquals(P10_CONFIG.breakEvenAtR, 1.5);
+  // Lowered from 1.50R after the 2026-08-21..08-30 live cohort showed no losing LONG ever
+  // closed an hour above 0.69R, which left the break-even stop unreachable. Target geometry
+  // above is deliberately unchanged: the same cohort still pays for the 5R tail.
+  assertEquals(P10_CONFIG.breakEvenAtR, 0.3);
   assertEquals(P10_CONFIG.trailAtr, 2.5);
   assertEquals(long.stopPrice, 96);
   assertEquals(long.partialTarget, 108);
