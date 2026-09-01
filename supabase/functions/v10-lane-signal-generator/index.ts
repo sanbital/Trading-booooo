@@ -318,7 +318,7 @@ Deno.serve(async (request) => {
       flag.live_enabled &&
       (
         executionBridge?.live_enabled !== true ||
-        executionBridge?.engine_revision !== "V10-LANE-EXECUTOR-1.0.0" ||
+        executionBridge?.engine_revision !== "V10-LANE-EXECUTOR-1.2.0" ||
         executionBridge?.signal_revision !== V10_LANES_REVISION ||
         executionBridge?.signal_spec_sha256 !== V10_LANES_SPEC_SHA256
       )
