@@ -1,0 +1,5 @@
+V10 regime transition exit deployment R4
+2026-09-01 KST
+- behavioral tests remain 12/12 passing
+- integration source gate is now formatter-invariant
+- deployment stays gated behind CLOSE-only and transition-before-lane-exit checks
