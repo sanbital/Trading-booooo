@@ -1,0 +1,556 @@
+name: Apply V10 Regime Transition Exit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "research/v10-regime-transition-exit-trigger.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v10-regime-transition-exit-20260901
+  cancel-in-progress: false
+
+jobs:
+  patch-test-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Apply bounded V10 transition-exit patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          python3 - <<'PY'
+          from pathlib import Path
+
+          helper_path = Path('supabase/functions/_shared/v10_regime_transition.ts')
+          test_path = Path('supabase/functions/_shared/v10_regime_transition.test.ts')
+          index_path = Path('supabase/functions/v10-lane-executor/index.ts')
+
+          helper_path.write_text(r'''import { P10_MARKET_RISK_CONFIG } from "./p10-market-risk.ts";
+          import {
+            V10_EXIT_BAR_INTERVAL_MS,
+            type V10Lane,
+          } from "./v10_lane_exit_config.ts";
+
+          export const V10_REGIME_TRANSITION_REVISION =
+            "V10-REGIME-TRANSITION-EXIT-1.0.0";
+          // One-way risk reduction switch only. It does not enable entries or any lane.
+          export const V10_REGIME_TRANSITION_LIVE_EXIT_COMPILED = true;
+
+          export type V10RegimeSignal =
+            | "BULL_TREND"
+            | "BULL_DECELERATING"
+            | "RANGE"
+            | "BEAR_REBREAK"
+            | "UNKNOWN";
+
+          export interface V10RegimeSnapshot {
+            signal: V10RegimeSignal;
+            valid: boolean;
+            strong: boolean;
+            blockNewEntries: boolean;
+            observationId: string | null;
+            observedAt: string | null;
+            confidence: number | null;
+            bullScore: number | null;
+            reason: string;
+          }
+
+          export interface V10RegimeTransitionState {
+            lastCompletedBarOpenMs: number | null;
+            lastSignal: V10RegimeSignal;
+            consecutiveDangerCount: number;
+          }
+
+          export interface V10RegimeTransitionDirective {
+            forceFullExit: boolean;
+            blockNewEntries: boolean;
+            nextState: V10RegimeTransitionState;
+            reason: string;
+            diagnostics: Record<string, unknown>;
+          }
+
+          type Row = Record<string, unknown>;
+
+          function record(value: unknown): Row {
+            return value && typeof value === "object" && !Array.isArray(value)
+              ? value as Row
+              : {};
+          }
+
+          function finite(value: unknown, fallback = Number.NaN): number {
+            const parsed = typeof value === "number" ? value : Number(value);
+            return Number.isFinite(parsed) ? parsed : fallback;
+          }
+
+          function forecastRows(features: Row): Row[] {
+            const conditional = record(features.conditional_forecast);
+            const phase = record(features.momentum_phase);
+            const phaseForecast = record(phase.forecast);
+            const raw = Array.isArray(conditional.horizons)
+              ? conditional.horizons
+              : Array.isArray(phaseForecast.horizons)
+              ? phaseForecast.horizons
+              : [];
+            return raw.map(record);
+          }
+
+          function hasLongHorizonDown(features: Row): boolean {
+            return forecastRows(features).some((forecast) => {
+              const horizon = finite(forecast.horizon_minutes);
+              const confidence = String(forecast.confidence || "").toUpperCase();
+              const probability = finite(forecast.probability);
+              return (horizon === 120 || horizon === 360) &&
+                String(forecast.direction || "").toUpperCase() === "DOWN" &&
+                (confidence === "MEDIUM" || confidence === "HIGH") &&
+                probability >= 0.55;
+            });
+          }
+
+          function normalizedObservation(rows: readonly Row[], atMs: number): {
+            row: Row;
+            observedAtMs: number;
+            regime: string;
+            bullScore: number;
+            confidence: number;
+            features: Row;
+          } | null {
+            const ordered = [...rows].sort((a, b) =>
+              Date.parse(String(b.observed_at || "")) - Date.parse(String(a.observed_at || ""))
+            );
+            for (const row of ordered) {
+              if (row.trading_influence !== true) continue;
+              if (row.model_revision !== P10_MARKET_RISK_CONFIG.modelRevision) continue;
+              const observedAtMs = Date.parse(String(row.observed_at || ""));
+              if (!Number.isFinite(observedAtMs) || observedAtMs > atMs) continue;
+              if (atMs - observedAtMs > P10_MARKET_RISK_CONFIG.latestMaxAgeMs) continue;
+              const features = record(row.features);
+              if (features.source !== P10_MARKET_RISK_CONFIG.source) continue;
+              const breadth30 = record(features.breadth_30m);
+              const spot = record(breadth30.binance_spot);
+              const futures = record(breadth30.binance_futures);
+              const upbit = record(breadth30.upbit_spot);
+              if (
+                finite(spot.sample_size, 0) < 80 ||
+                finite(futures.sample_size, 0) < 80 ||
+                finite(upbit.sample_size, 0) < 40
+              ) continue;
+              const bullScore = finite(row.bull_score);
+              const confidence = finite(row.confidence);
+              const sampleSize = finite(row.sample_size, 0);
+              const regime = String(row.predicted_regime || "").toUpperCase();
+              if (!(bullScore >= 0 && bullScore <= 100)) continue;
+              if (!(confidence >= P10_MARKET_RISK_CONFIG.minimumConfidence && confidence <= 1)) continue;
+              if (sampleSize < P10_MARKET_RISK_CONFIG.minimumSampleSize) continue;
+              if (!["RISK_OFF", "NEUTRAL", "BULL", "STRONG_BULL"].includes(regime)) continue;
+              return { row, observedAtMs, regime, bullScore, confidence, features };
+            }
+            return null;
+          }
+
+          export function buildV10RegimeSnapshot(
+            rows: readonly Row[],
+            completedAtMs: number,
+            sourceError: string | null = null,
+          ): V10RegimeSnapshot {
+            if (sourceError) {
+              return {
+                signal: "UNKNOWN", valid: false, strong: false, blockNewEntries: true,
+                observationId: null, observedAt: null, confidence: null, bullScore: null,
+                reason: `REGIME_SOURCE_ERROR:${sourceError}`,
+              };
+            }
+            const normalized = normalizedObservation(rows, completedAtMs);
+            if (!normalized) {
+              return {
+                signal: "UNKNOWN", valid: false, strong: false, blockNewEntries: true,
+                observationId: null, observedAt: null, confidence: null, bullScore: null,
+                reason: "REGIME_OBSERVATION_INVALID_OR_STALE",
+              };
+            }
+            const adverseForecast = hasLongHorizonDown(normalized.features);
+            let signal: V10RegimeSignal;
+            if (normalized.regime === "RISK_OFF") signal = "BEAR_REBREAK";
+            else if (normalized.regime === "NEUTRAL") signal = "RANGE";
+            else signal = adverseForecast ? "BULL_DECELERATING" : "BULL_TREND";
+            const strong = signal === "BEAR_REBREAK" && (
+              (normalized.bullScore <= P10_MARKET_RISK_CONFIG.longExtremeAtOrBelow &&
+                normalized.confidence >= P10_MARKET_RISK_CONFIG.extremeConfidence) ||
+              (normalized.confidence >= P10_MARKET_RISK_CONFIG.transitionFastConfidence && adverseForecast)
+            );
+            return {
+              signal,
+              valid: true,
+              strong,
+              blockNewEntries: false,
+              observationId: String(
+                normalized.row.id || normalized.row.observation_bucket || normalized.row.observed_at || "",
+              ) || null,
+              observedAt: new Date(normalized.observedAtMs).toISOString(),
+              confidence: normalized.confidence,
+              bullScore: normalized.bullScore,
+              reason: `REGIME_${signal}${strong ? "_STRONG" : ""}`,
+            };
+          }
+
+          function initialState(): V10RegimeTransitionState {
+            return { lastCompletedBarOpenMs: null, lastSignal: "UNKNOWN", consecutiveDangerCount: 0 };
+          }
+
+          function normalizeState(value: unknown): V10RegimeTransitionState {
+            const row = record(value);
+            const last = finite(row.lastCompletedBarOpenMs, Number.NaN);
+            const signal = String(row.lastSignal || "UNKNOWN") as V10RegimeSignal;
+            const count = Math.max(0, Math.floor(finite(row.consecutiveDangerCount, 0)));
+            return {
+              lastCompletedBarOpenMs: Number.isFinite(last) ? last : null,
+              lastSignal: ["BULL_TREND", "BULL_DECELERATING", "RANGE", "BEAR_REBREAK", "UNKNOWN"].includes(signal)
+                ? signal : "UNKNOWN",
+              consecutiveDangerCount: count,
+            };
+          }
+
+          function dangerousForLane(lane: V10Lane, signal: V10RegimeSignal): boolean {
+            if (signal === "BEAR_REBREAK") return true;
+            return lane === "BULL" && signal === "BULL_DECELERATING";
+          }
+
+          export function evaluateV10RegimeTransition(input: {
+            lane: V10Lane;
+            previousState?: unknown;
+            completedBarOpenMs: number;
+            snapshot: V10RegimeSnapshot;
+          }): V10RegimeTransitionDirective {
+            const previous = input.previousState === undefined ? initialState() : normalizeState(input.previousState);
+            if (
+              previous.lastCompletedBarOpenMs !== null &&
+              input.completedBarOpenMs <= previous.lastCompletedBarOpenMs
+            ) {
+              return {
+                forceFullExit: false,
+                blockNewEntries: input.snapshot.blockNewEntries,
+                nextState: previous,
+                reason: "REGIME_DUPLICATE_OR_STALE_BAR",
+                diagnostics: { snapshot: input.snapshot, transitionRevision: V10_REGIME_TRANSITION_REVISION },
+              };
+            }
+            if (!input.snapshot.valid || input.snapshot.signal === "UNKNOWN") {
+              const nextState = {
+                lastCompletedBarOpenMs: input.completedBarOpenMs,
+                lastSignal: "UNKNOWN" as const,
+                consecutiveDangerCount: 0,
+              };
+              return {
+                forceFullExit: false,
+                blockNewEntries: true,
+                nextState,
+                reason: "REGIME_UNKNOWN_ENTRY_BLOCK_ONLY",
+                diagnostics: { snapshot: input.snapshot, transitionRevision: V10_REGIME_TRANSITION_REVISION },
+              };
+            }
+            const dangerous = dangerousForLane(input.lane, input.snapshot.signal);
+            const consecutiveBar = previous.lastCompletedBarOpenMs !== null &&
+              input.completedBarOpenMs - previous.lastCompletedBarOpenMs === V10_EXIT_BAR_INTERVAL_MS;
+            const count = dangerous
+              ? (consecutiveBar && previous.consecutiveDangerCount > 0
+                ? previous.consecutiveDangerCount + 1
+                : 1)
+              : 0;
+            const forceFullExit = dangerous && (input.snapshot.strong || count >= 2);
+            const nextState = {
+              lastCompletedBarOpenMs: input.completedBarOpenMs,
+              lastSignal: input.snapshot.signal,
+              consecutiveDangerCount: count,
+            };
+            return {
+              forceFullExit,
+              blockNewEntries: input.snapshot.blockNewEntries,
+              nextState,
+              reason: forceFullExit
+                ? `REGIME_TRANSITION_EXIT_${input.lane}_${input.snapshot.signal}`
+                : dangerous
+                ? `REGIME_TRANSITION_WATCH_${input.lane}_${input.snapshot.signal}_${count}`
+                : `REGIME_TRANSITION_HOLD_${input.lane}_${input.snapshot.signal}`,
+              diagnostics: {
+                snapshot: input.snapshot,
+                consecutiveDangerCount: count,
+                transitionRevision: V10_REGIME_TRANSITION_REVISION,
+              },
+            };
+          }
+          ''')
+
+          test_path.write_text(r'''import {
+            buildV10RegimeSnapshot,
+            evaluateV10RegimeTransition,
+          } from "./v10_regime_transition.ts";
+
+          function assert(condition: unknown, message: string): asserts condition {
+            if (!condition) throw new Error(message);
+          }
+
+          const BASE = Date.parse("2026-09-01T06:00:00Z");
+          function row(overrides: Record<string, unknown> = {}) {
+            return {
+              id: crypto.randomUUID(),
+              observed_at: new Date(BASE - 60_000).toISOString(),
+              model_revision: "MARKET-REGIME-OBSERVER-v2-C01-FULLMARKET",
+              predicted_regime: "RISK_OFF",
+              bull_score: 41,
+              confidence: 0.66,
+              sample_size: 300,
+              trading_influence: true,
+              features: {
+                source: "BINANCE_SPOT_FUTURES_UPBIT_FULL_ACTIVE_UNIVERSE",
+                breadth_30m: {
+                  binance_spot: { sample_size: 100 },
+                  binance_futures: { sample_size: 100 },
+                  upbit_spot: { sample_size: 50 },
+                },
+                conditional_forecast: { horizons: [] },
+              },
+              ...overrides,
+            };
+          }
+
+          Deno.test("UNKNOWN blocks entry but does not force exit", () => {
+            const snapshot = buildV10RegimeSnapshot([], BASE);
+            assert(snapshot.signal === "UNKNOWN", "expected UNKNOWN");
+            assert(snapshot.blockNewEntries, "UNKNOWN must block entries");
+            const directive = evaluateV10RegimeTransition({
+              lane: "RANGE", completedBarOpenMs: BASE - 900_000, snapshot,
+            });
+            assert(!directive.forceFullExit, "UNKNOWN must not force-close a held position");
+          });
+
+          Deno.test("BEAR_REBREAK requires two distinct consecutive 15m bars", () => {
+            const snapshot = buildV10RegimeSnapshot([row()], BASE);
+            assert(snapshot.signal === "BEAR_REBREAK", "expected BEAR_REBREAK");
+            assert(!snapshot.strong, "ordinary risk-off must not be strong");
+            const first = evaluateV10RegimeTransition({
+              lane: "RANGE", completedBarOpenMs: BASE - 900_000, snapshot,
+            });
+            assert(!first.forceFullExit && first.nextState.consecutiveDangerCount === 1, "first bar is watch");
+            const duplicate = evaluateV10RegimeTransition({
+              lane: "RANGE", previousState: first.nextState,
+              completedBarOpenMs: BASE - 900_000, snapshot,
+            });
+            assert(!duplicate.forceFullExit && duplicate.nextState.consecutiveDangerCount === 1, "same bar cannot double count");
+            const second = evaluateV10RegimeTransition({
+              lane: "RANGE", previousState: first.nextState,
+              completedBarOpenMs: BASE, snapshot,
+            });
+            assert(second.forceFullExit && second.nextState.consecutiveDangerCount === 2, "second consecutive bar exits");
+          });
+
+          Deno.test("strong single BEAR_REBREAK exits immediately", () => {
+            const strongRow = row({
+              bull_score: 37,
+              confidence: 0.72,
+              features: {
+                source: "BINANCE_SPOT_FUTURES_UPBIT_FULL_ACTIVE_UNIVERSE",
+                breadth_30m: {
+                  binance_spot: { sample_size: 100 },
+                  binance_futures: { sample_size: 100 },
+                  upbit_spot: { sample_size: 50 },
+                },
+                conditional_forecast: { horizons: [
+                  { horizon_minutes: 120, direction: "DOWN", confidence: "HIGH", probability: 0.70 },
+                ] },
+              },
+            });
+            const snapshot = buildV10RegimeSnapshot([strongRow], BASE);
+            assert(snapshot.strong, "expected strong transition");
+            const directive = evaluateV10RegimeTransition({
+              lane: "BULL", completedBarOpenMs: BASE - 900_000, snapshot,
+            });
+            assert(directive.forceFullExit, "strong single transition must exit");
+          });
+
+          Deno.test("BULL_DECELERATING exits BULL only after two bars", () => {
+            const decel = row({
+              predicted_regime: "BULL",
+              bull_score: 57,
+              confidence: 0.68,
+              features: {
+                source: "BINANCE_SPOT_FUTURES_UPBIT_FULL_ACTIVE_UNIVERSE",
+                breadth_30m: {
+                  binance_spot: { sample_size: 100 },
+                  binance_futures: { sample_size: 100 },
+                  upbit_spot: { sample_size: 50 },
+                },
+                conditional_forecast: { horizons: [
+                  { horizon_minutes: 360, direction: "DOWN", confidence: "MEDIUM", probability: 0.60 },
+                ] },
+              },
+            });
+            const snapshot = buildV10RegimeSnapshot([decel], BASE);
+            assert(snapshot.signal === "BULL_DECELERATING", "expected decelerating");
+            const first = evaluateV10RegimeTransition({
+              lane: "BULL", completedBarOpenMs: BASE - 900_000, snapshot,
+            });
+            const second = evaluateV10RegimeTransition({
+              lane: "BULL", previousState: first.nextState, completedBarOpenMs: BASE, snapshot,
+            });
+            assert(!first.forceFullExit && second.forceFullExit, "BULL deceleration needs two bars");
+            const rangeLane = evaluateV10RegimeTransition({
+              lane: "RANGE", completedBarOpenMs: BASE - 900_000, snapshot,
+            });
+            assert(!rangeLane.forceFullExit, "BULL deceleration must not force RANGE exit");
+          });
+
+          Deno.test("future observer row is never used for an earlier completed bar", () => {
+            const future = row({ observed_at: new Date(BASE + 1).toISOString() });
+            const snapshot = buildV10RegimeSnapshot([future], BASE);
+            assert(snapshot.signal === "UNKNOWN", "future data must be rejected");
+          });
+          ''')
+
+          index = index_path.read_text()
+
+          old = '''} from "../_shared/v10_lane_exit_config.ts";\nimport {\n  finite,'''
+          new = '''} from "../_shared/v10_lane_exit_config.ts";\nimport { P10_MARKET_RISK_CONFIG } from "../_shared/p10-market-risk.ts";\nimport {\n  buildV10RegimeSnapshot,\n  evaluateV10RegimeTransition,\n  V10_REGIME_TRANSITION_LIVE_EXIT_COMPILED,\n  V10_REGIME_TRANSITION_REVISION,\n} from "../_shared/v10_regime_transition.ts";\nimport {\n  finite,'''
+          assert index.count(old) == 1
+          index = index.replace(old, new)
+
+          marker = '''async function evaluateLiveExits(db: DbClient): Promise<JsonRecord> {'''
+          assert index.count(marker) == 1
+          loader = r'''async function loadV10RegimeSource(db: DbClient): Promise<{
+            rows: JsonRecord[];
+            sourceError: string | null;
+          }> {
+            const since = new Date(Date.now() - P10_MARKET_RISK_CONFIG.historyMaxAgeMs).toISOString();
+            const { data, error } = await db.from("market_regime_observations")
+              .select("id,observation_bucket,observed_at,model_revision,predicted_regime,bull_score,confidence,sample_size,trading_influence,features")
+              .eq("model_revision", P10_MARKET_RISK_CONFIG.modelRevision)
+              .eq("trading_influence", true)
+              .gte("observed_at", since)
+              .order("observed_at", { ascending: false })
+              .limit(16);
+            return {
+              rows: (data || []) as JsonRecord[],
+              sourceError: error ? error.message : null,
+            };
+          }
+
+          function latestCompleted15mCloseMs(nowMs = Date.now()): number {
+            return Math.floor(nowMs / V10_EXIT_BAR_INTERVAL_MS) * V10_EXIT_BAR_INTERVAL_MS;
+          }
+
+          async function evaluateLiveExits(
+            db: DbClient,
+            regimeSource: { rows: JsonRecord[]; sourceError: string | null },
+          ): Promise<JsonRecord> {'''
+          index = index.replace(marker, loader)
+
+          old = '''  if (!positions?.length) return { evaluatedPositions: 0, decisions: 0 };'''
+          new = '''  if (!positions?.length) {
+            return { evaluatedPositions: 0, decisions: 0, regimeTransitionExitTriggered: false };
+          }'''
+          assert index.count(old) == 1
+          index = index.replace(old, new)
+
+          old = '''  const signalMap = new Map((signals || []).map((row: any) => [row.id, row.features || {}]));\n  let decisions = 0;'''
+          new = '''  const signalMap = new Map((signals || []).map((row: any) => [row.id, row.features || {}]));\n  let decisions = 0;\n  let regimeTransitionExitTriggered = false;'''
+          assert index.count(old) == 1
+          index = index.replace(old, new)
+
+          old = '''    for (const bar of bars) {\n      const stateBefore = state;\n      const result = evaluateV10ExitBar({\n        lane: position.lane,\n        entryPrice,\n        openedAtMs,\n        leverage: position.leverage,\n        state,\n      }, bar, { liveMode: true });\n      state = result.nextState;'''
+          new = '''    for (const bar of bars) {\n      const stateBefore = state;\n      const regimeSnapshot = buildV10RegimeSnapshot(\n        regimeSource.rows,\n        bar.openTimeMs + V10_EXIT_BAR_INTERVAL_MS,\n        regimeSource.sourceError,\n      );\n      const transition = evaluateV10RegimeTransition({\n        lane: position.lane,\n        previousState: (state as JsonRecord).regimeTransition,\n        completedBarOpenMs: bar.openTimeMs,\n        snapshot: regimeSnapshot,\n      });\n      const transitionState = {\n        ...state,\n        regimeTransition: transition.nextState,\n      } as V10ExitState & JsonRecord;\n      const transitionExit = V10_REGIME_TRANSITION_LIVE_EXIT_COMPILED && transition.forceFullExit;\n      const result: any = transitionExit\n        ? {\n          action: "FULL_NEXT_OPEN",\n          reason: "REGIME_TRANSITION_EXIT",\n          fraction: transitionState.remainingFraction,\n          triggerPrice: null,\n          executeAtNextOpen: true,\n          nextState: {\n            ...transitionState,\n            terminal: true,\n            lastEvaluatedBarOpenMs: bar.openTimeMs,\n          },\n          diagnostics: {\n            ...transition.diagnostics,\n            transitionReason: transition.reason,\n            transitionLiveExitCompiled: V10_REGIME_TRANSITION_LIVE_EXIT_COMPILED,\n          },\n        }\n        : evaluateV10ExitBar({\n          lane: position.lane,\n          entryPrice,\n          openedAtMs,\n          leverage: position.leverage,\n          state: transitionState,\n        }, bar, { liveMode: true });\n      if (transitionExit) regimeTransitionExitTriggered = true;\n      state = result.nextState;'''
+          assert index.count(old) == 1
+          index = index.replace(old, new)
+
+          old = '''  return { evaluatedPositions: positions.length, decisions };\n}'''
+          new = '''  return { evaluatedPositions: positions.length, decisions, regimeTransitionExitTriggered };\n}'''
+          assert index.count(old) == 1
+          index = index.replace(old, new)
+
+          old = '''  const reconciliations = await reconcileSubmittedIntents(db);\n  const exitEvaluation = await evaluateLiveExits(db);\n  const exits = await processExitDecisions(db);\n\n  const { data: claimed, error: claimError } = await db.rpc("claim_v10_lane_signal_v3");\n  if (claimError) throw new Error(`V10_SIGNAL_CLAIM_FAILED:${claimError.message}`);\n  const signal = Array.isArray(claimed) ? claimed[0] as ClaimedSignal | undefined : undefined;\n  let entry: JsonRecord | null = null;\n  if (signal) entry = await executeClaimedEntry(db, signal);'''
+          new = '''  const reconciliations = await reconcileSubmittedIntents(db);\n  const regimeSource = await loadV10RegimeSource(db);\n  const currentRegime = buildV10RegimeSnapshot(\n    regimeSource.rows, latestCompleted15mCloseMs(), regimeSource.sourceError,\n  );\n  const exitEvaluation = await evaluateLiveExits(db, regimeSource);\n  const exits = await processExitDecisions(db);\n\n  let entry: JsonRecord | null = null;\n  if (currentRegime.blockNewEntries) {\n    entry = { entered: false, reason: "V10_REGIME_UNKNOWN_ENTRY_BLOCK" };\n  } else if (exitEvaluation.regimeTransitionExitTriggered) {\n    entry = { entered: false, reason: "V10_REGIME_TRANSITION_REENTRY_COOLDOWN" };\n  } else {\n    const { data: claimed, error: claimError } = await db.rpc("claim_v10_lane_signal_v3");\n    if (claimError) throw new Error(`V10_SIGNAL_CLAIM_FAILED:${claimError.message}`);\n    const signal = Array.isArray(claimed) ? claimed[0] as ClaimedSignal | undefined : undefined;\n    if (signal) entry = await executeClaimedEntry(db, signal);\n  }'''
+          assert index.count(old) == 1
+          index = index.replace(old, new)
+
+          old = '''    exitEvaluation,\n    exits,\n    entry,'''
+          new = '''    exitEvaluation,\n    exits,\n    entry,\n    regime: { ...currentRegime, transitionRevision: V10_REGIME_TRANSITION_REVISION },'''
+          assert index.count(old) == 1
+          index = index.replace(old, new)
+
+          index_path.write_text(index)
+          PY
+
+          deno fmt \
+            supabase/functions/_shared/v10_regime_transition.ts \
+            supabase/functions/_shared/v10_regime_transition.test.ts \
+            supabase/functions/v10-lane-executor/index.ts
+          deno test supabase/functions/_shared/v10_regime_transition.test.ts
+          deno test supabase/functions/_shared/v10_lane_exit.test.ts
+          deno check supabase/functions/v10-lane-executor/index.ts
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('supabase/functions/v10-lane-executor/index.ts').read_text()
+          transition = source.index('const transition = evaluateV10RegimeTransition')
+          lane_exit = source.index('evaluateV10ExitBar({', transition)
+          assert transition < lane_exit
+          assert 'reason: "REGIME_TRANSITION_EXIT"' in source
+          assert 'position_effect: "CLOSE"' in source
+          assert 'V10_REGIME_UNKNOWN_ENTRY_BLOCK' in source
+          assert 'V10_REGIME_TRANSITION_REENTRY_COOLDOWN' in source
+          PY
+
+      - name: Commit verified production source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/_shared/v10_regime_transition.ts \
+            supabase/functions/_shared/v10_regime_transition.test.ts \
+            supabase/functions/v10-lane-executor/index.ts
+          git diff --cached --exit-code && { echo "No patch produced"; exit 1; } || true
+          git commit -m "Deploy V10 regime transition exit"
+          git push origin HEAD:main
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Validate production deploy secrets
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_PROJECT_REF:-}"
+
+      - name: Deploy V10 lane executor to production
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy v10-lane-executor \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
+          supabase functions list --project-ref "${SUPABASE_PROJECT_REF}" | tee /tmp/functions.txt
+          grep -q "v10-lane-executor" /tmp/functions.txt
