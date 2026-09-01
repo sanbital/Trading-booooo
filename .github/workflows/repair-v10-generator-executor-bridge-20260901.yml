@@ -52,7 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           deno check supabase/functions/v10-lane-signal-generator/index.ts
-          deno test supabase/functions/_shared/v10_lanes_v3.test.ts
+          deno test --allow-read supabase/functions/_shared/v10_lanes_v3.test.ts
 
       - name: Commit source repair
         shell: bash
