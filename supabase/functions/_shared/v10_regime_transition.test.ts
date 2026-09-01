@@ -1,4 +1,5 @@
 import { buildV10RegimeSnapshot, evaluateV10RegimeTransition } from "./v10_regime_transition.ts";
+import { P10_MARKET_RISK_CONFIG } from "./p10-market-risk.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -9,7 +10,7 @@ function row(overrides: Record<string, unknown> = {}) {
   return {
     id: crypto.randomUUID(),
     observed_at: new Date(BASE - 60_000).toISOString(),
-    model_revision: "MARKET-REGIME-OBSERVER-v2-C01-FULLMARKET",
+    model_revision: P10_MARKET_RISK_CONFIG.modelRevision,
     predicted_regime: "RISK_OFF",
     bull_score: 41,
     confidence: 0.66,
