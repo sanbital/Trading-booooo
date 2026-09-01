@@ -1,0 +1,5 @@
+V10 regime transition exit deployment R3
+2026-09-01 KST
+- behavioral tests: 12/12 passing on prior attempts
+- source gate updated to tolerate deno fmt line wrapping
+- production deployment remains gated behind tests and CLOSE-only verification
