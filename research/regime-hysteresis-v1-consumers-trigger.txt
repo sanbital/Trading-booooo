@@ -1,0 +1,1 @@
+Deploy market-autotrader and v10-lane-executor from verified main after the new hysteresis observer revision produced a valid trading-influence row and the V11 evaluator cutover was verified fail-closed.
