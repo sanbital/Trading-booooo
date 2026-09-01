@@ -9,7 +9,7 @@
 
 ## Repairs in this revision
 
-- Generator authentication now relies on the platform-validated service-role JWT and fails closed if the Authorization header is absent.
+- Generator authentication uses a dedicated 256-bit internal token looked up at runtime; unsigned public requests fail closed.
 - Strategy registry rows must match the exact engine revision.
 - Signal generation runs at the next 15-minute bar open instead of one minute late.
 - CLOSE_LONG idempotency is keyed by exit decision; multiple split exits from one entry signal are no longer blocked by a signal-level unique constraint.

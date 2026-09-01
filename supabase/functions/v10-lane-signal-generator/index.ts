@@ -40,6 +40,15 @@ function response(status: number, body: Record<string, unknown>): Response {
   });
 }
 
+function constantTimeEqual(left: string, right: string): boolean {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return difference === 0;
+}
+
 function stable(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
@@ -146,12 +155,6 @@ async function fetchClosedBars(symbol: string, signalOpenTime: number): Promise<
 
 Deno.serve(async (request) => {
   const invocationId = crypto.randomUUID();
-  // verify_jwt=true rejects unsigned callers before this handler. Retain a
-  // handler-level presence check so any future platform configuration drift fails closed.
-  const authorization = request.headers.get("authorization") ?? "";
-  if (!authorization.toLowerCase().startsWith("bearer ")) {
-    return response(401, { ok: false, invocationId, error: "AUTHORIZATION_REQUIRED" });
-  }
   if (request.method !== "POST") {
     return response(405, { ok: false, invocationId, error: "METHOD_NOT_ALLOWED" });
   }
@@ -164,6 +167,20 @@ Deno.serve(async (request) => {
   const supabase = createClient(supabaseUrl, serviceRole, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  const providedToken = request.headers.get("x-v10-lane-token") ?? "";
+  const { data: tokenRow, error: tokenError } = await supabase
+    .from("edge_internal_tokens")
+    .select("token")
+    .eq("name", "v10-lane-signal-generator")
+    .maybeSingle();
+  const expectedToken = String(tokenRow?.token ?? "");
+  if (
+    tokenError || !providedToken || !expectedToken ||
+    !constantTimeEqual(providedToken, expectedToken)
+  ) {
+    return response(401, { ok: false, invocationId, error: "UNAUTHORIZED" });
+  }
 
   try {
     const now = Date.now();
