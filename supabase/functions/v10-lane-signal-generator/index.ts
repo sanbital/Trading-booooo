@@ -215,6 +215,12 @@ Deno.serve(async (request) => {
       .select("lane,shadow_enabled,live_enabled,max_concurrent,notional_usdt,validated,engine_revision,spec_sha256");
     if (flagsError) throw new Error(`FLAGS_READ_FAILED:${flagsError.message}`);
     const flagByLane = new Map((flags ?? []).map((row) => [String(row.lane), row]));
+    const { data: executionBridge, error: bridgeError } = await supabase
+      .from("v10_lane_executor_runtime")
+      .select("live_enabled,engine_revision,signal_revision,signal_spec_sha256")
+      .eq("singleton", true)
+      .maybeSingle();
+    if (bridgeError) throw new Error(`EXECUTION_BRIDGE_READ_FAILED:${bridgeError.message}`);
 
     const fingerprints = Object.values(LANE_CONFIG).map((config) => config.fingerprint);
     const { data: versions, error: versionsError } = await supabase
@@ -308,7 +314,15 @@ Deno.serve(async (request) => {
         fingerprint: config.fingerprint,
       });
     }
-    if (flag.live_enabled && Deno.env.get("V10_LANE_EXECUTION_BRIDGE_ENABLED") !== "true") {
+    if (
+      flag.live_enabled &&
+      (
+        executionBridge?.live_enabled !== true ||
+        executionBridge?.engine_revision !== "V10-LANE-EXECUTOR-1.0.0" ||
+        executionBridge?.signal_revision !== V10_LANES_REVISION ||
+        executionBridge?.signal_spec_sha256 !== V10_LANES_SPEC_SHA256
+      )
+    ) {
       return response(503, {
         ok: false,
         invocationId,
