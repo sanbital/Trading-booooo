@@ -1,0 +1,103 @@
+name: Repair V10 Generator Executor Bridge
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "research/v10-generator-bridge-repair-trigger.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v10-generator-bridge-repair-20260901
+  cancel-in-progress: false
+
+jobs:
+  repair-test-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Repair generator executor bridge identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE=supabase/functions/v10-lane-signal-generator/index.ts
+          grep -Fq 'executionBridge?.engine_revision !== "V10-LANE-EXECUTOR-1.0.0"' "$FILE"
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('supabase/functions/v10-lane-signal-generator/index.ts')
+          s=p.read_text()
+          old='executionBridge?.engine_revision !== "V10-LANE-EXECUTOR-1.0.0"'
+          new='executionBridge?.engine_revision !== "V10-LANE-EXECUTOR-1.2.0"'
+          assert s.count(old)==1, s.count(old)
+          p.write_text(s.replace(old,new))
+          PY
+          grep -Fq 'executionBridge?.engine_revision !== "V10-LANE-EXECUTOR-1.2.0"' "$FILE"
+          ! grep -Fq 'executionBridge?.engine_revision !== "V10-LANE-EXECUTOR-1.0.0"' "$FILE"
+
+      - name: Validate V10 lane source
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno check supabase/functions/v10-lane-signal-generator/index.ts
+          deno test supabase/functions/_shared/v10_lanes_v3.test.ts
+
+      - name: Commit source repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add supabase/functions/v10-lane-signal-generator/index.ts
+          git diff --cached --quiet && exit 1
+          git commit -m "Align V10 signal generator with executor 1.2"
+          git push origin HEAD:main
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Validate production deploy secrets
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_PROJECT_REF:-}"
+
+      - name: Deploy repaired signal generator only
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy v10-lane-signal-generator \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
+
+      - name: Verify function active
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "${SUPABASE_PROJECT_REF}" | tee /tmp/functions.txt
+          grep -q "v10-lane-signal-generator" /tmp/functions.txt
