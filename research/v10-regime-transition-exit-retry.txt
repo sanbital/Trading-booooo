@@ -1,0 +1,3 @@
+V10 regime transition exit retry
+2026-09-01 KST
+Reason: new transition tests 5/5 and existing exit tests 7/7 passed; remove incompatible standalone Deno typecheck of untyped Supabase client and retain behavioral/static gates before deployment.
