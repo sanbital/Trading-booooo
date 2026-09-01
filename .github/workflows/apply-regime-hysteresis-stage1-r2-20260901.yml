@@ -1,0 +1,243 @@
+name: Apply Regime Hysteresis Stage1 R2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "research/regime-hysteresis-v1-stage1-r2-trigger.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: regime-hysteresis-v1-stage1-r2-20260901
+  cancel-in-progress: false
+
+jobs:
+  patch-test-deploy-observer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Patch observer and coordinated consumer revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          git fetch origin refs/heads/claude/trading-logic-fixes-2zes46:refs/remotes/origin/claude/trading-logic-fixes-2zes46
+          git show origin/claude/trading-logic-fixes-2zes46:supabase/functions/_shared/regime-hysteresis.ts > supabase/functions/_shared/regime-hysteresis.ts
+          git show origin/claude/trading-logic-fixes-2zes46:supabase/functions/_shared/regime-hysteresis.test.ts > supabase/functions/_shared/regime-hysteresis.test.ts
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          OLD = "MARKET-REGIME-OBSERVER-v2-C01-FULLMARKET"
+          NEW = "MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET"
+          obs_path = Path("supabase/functions/market-regime-observer/index.ts")
+          obs = obs_path.read_text()
+
+          old_decl = f'const MODEL_REVISION = "{OLD}";'
+          assert obs.count(old_decl) == 1, obs.count(old_decl)
+          obs = obs.replace(
+              old_decl,
+              'import { committedRegimeOf, instantaneousRegimeOf, REGIME_BANDS, REGIME_DWELL } from "../_shared/regime-hysteresis.ts";\n\n'
+              f'const MODEL_REVISION = "{NEW}";\n'
+              f'const PREDECESSOR_MODEL_REVISION = "{OLD}";',
+          )
+
+          prior_marker = "async function priorV2(nowMs) {"
+          assert prior_marker in obs
+          continuity = r'''function modelHistoryFilter() {
+            return `model_revision=in.(${MODEL_REVISION},${PREDECESSOR_MODEL_REVISION})`;
+          }
+          async function recentRegimeState() {
+            const selection = "observed_at,model_revision,predicted_regime,bull_score";
+            let rows = await db(`market_regime_observations?model_revision=eq.${encodeURIComponent(MODEL_REVISION)}&select=${selection}&order=observed_at.desc&limit=${REGIME_DWELL}`).catch(() => []);
+            let seededFromPredecessor = false;
+            if (!rows?.length) {
+              rows = await db(`market_regime_observations?model_revision=eq.${encodeURIComponent(PREDECESSOR_MODEL_REVISION)}&select=${selection}&order=observed_at.desc&limit=${REGIME_DWELL}`).catch(() => []);
+              seededFromPredecessor = Boolean(rows?.length);
+            }
+            return {
+              regime: rows?.[0]?.predicted_regime ?? null,
+              scores: (rows || []).map((row) => finite(row.bull_score)),
+              sourceRevision: rows?.[0]?.model_revision ?? null,
+              seededFromPredecessor,
+            };
+          }
+          '''
+          obs = obs.replace(prior_marker, continuity + prior_marker, 1)
+
+          def patch_async_function(source: str, name: str, old: str, new: str) -> str:
+              start = source.index(f"async function {name}")
+              next_start = source.find("\nasync function ", start + 1)
+              if next_start < 0:
+                  next_start = len(source)
+              block = source[start:next_start]
+              assert old in block, (name, old)
+              block = block.replace(old, new)
+              return source[:start] + block + source[next_start:]
+
+          old_filter = 'model_revision=eq.${encodeURIComponent(MODEL_REVISION)}'
+          obs = patch_async_function(obs, "priorV2", old_filter, '${modelHistoryFilter()}')
+          obs = patch_async_function(obs, "c43Overlay", old_filter, '${modelHistoryFilter()}')
+
+          old_collect = 'const [bs, bf, up, bench, prior] = await Promise.all([binanceTickers("binance_spot"), binanceTickers("binance_futures"), upbitTickers(), benchmarkScore(), priorV2(nowMs)]);'
+          new_collect = 'const [bs, bf, up, bench, prior, recentRegime] = await Promise.all([binanceTickers("binance_spot"), binanceTickers("binance_futures"), upbitTickers(), benchmarkScore(), priorV2(nowMs), recentRegimeState()]);'
+          assert old_collect in obs
+          obs = obs.replace(old_collect, new_collect, 1)
+
+          trading_line = '  const tradingInfluence = Boolean(b30);\n'
+          assert trading_line in obs
+          obs = obs.replace(
+              trading_line,
+              trading_line + '  const instantaneousRegime = instantaneousRegimeOf(bullScore), committedRegime = committedRegimeOf(bullScore, recentRegime.regime, recentRegime.scores);\n',
+              1,
+          )
+          assert 'regime: regimeOf(bullScore)' in obs
+          obs = obs.replace('regime: regimeOf(bullScore)', 'regime: committedRegime', 1)
+
+          feature_marker = 'training_ground_truth_thresholds: { risk_off_below: 40, bull: 60, strong_bull: 75 }, momentum_phase:'
+          assert feature_marker in obs
+          obs = obs.replace(
+              feature_marker,
+              'training_ground_truth_thresholds: { risk_off_below: 40, bull: 60, strong_bull: 75 }, regime_hysteresis: { bands: REGIME_BANDS, dwell: REGIME_DWELL, instantaneous_regime: instantaneousRegime, committed_regime: committedRegime, prior_regime: recentRegime.regime, prior_scores: recentRegime.scores, prior_model_revision: recentRegime.sourceRevision, seeded_from_predecessor: recentRegime.seededFromPredecessor }, momentum_phase:',
+              1,
+          )
+          obs_path.write_text(obs)
+
+          risk_path = Path("supabase/functions/_shared/p10-market-risk.ts")
+          risk = risk_path.read_text()
+          assert risk.count(f'modelRevision: "{OLD}"') == 1
+          risk = risk.replace(
+              'export const P10_MARKET_RISK_REVISION = "P10-MARKET-RISK-1.1.0-REGIME-TRANSITION";',
+              'export const P10_MARKET_RISK_REVISION = "P10-MARKET-RISK-1.2.0-HYSTERESIS-CUTOVER";',
+              1,
+          )
+          risk = risk.replace(f'modelRevision: "{OLD}"', f'modelRevision: "{NEW}"', 1)
+          risk_path.write_text(risk)
+
+          transition_test_path = Path("supabase/functions/_shared/v10_regime_transition.test.ts")
+          transition_test = transition_test_path.read_text()
+          transition_import = 'import { buildV10RegimeSnapshot, evaluateV10RegimeTransition } from "./v10_regime_transition.ts";'
+          assert transition_import in transition_test
+          transition_test = transition_test.replace(
+              transition_import,
+              transition_import + '\nimport { P10_MARKET_RISK_CONFIG } from "./p10-market-risk.ts";',
+              1,
+          )
+          assert transition_test.count(f'model_revision: "{OLD}"') == 1
+          transition_test = transition_test.replace(
+              f'model_revision: "{OLD}"',
+              'model_revision: P10_MARKET_RISK_CONFIG.modelRevision',
+              1,
+          )
+          transition_test_path.write_text(transition_test)
+
+          helper_path = Path("supabase/functions/_shared/regime-hysteresis.ts")
+          helper = helper_path.read_text()
+          helper = helper.replace(
+              "/** `up` is the training ground truth threshold, `down` the predicted threshold. */",
+              "/** Boundary-specific promotion/demotion thresholds retained from the two existing threshold sets. */",
+          )
+          helper_path.write_text(helper)
+          PY
+
+          deno fmt \
+            supabase/functions/_shared/regime-hysteresis.ts \
+            supabase/functions/_shared/regime-hysteresis.test.ts \
+            supabase/functions/_shared/p10-market-risk.ts \
+            supabase/functions/_shared/v10_regime_transition.test.ts \
+            supabase/functions/market-regime-observer/index.ts
+
+          deno test supabase/functions/_shared/regime-hysteresis.test.ts
+          deno test supabase/functions/_shared/p10-market-risk.test.ts
+          deno test supabase/functions/_shared/v10_regime_transition.test.ts
+          deno test supabase/functions/_shared/v10_lane_exit.test.ts
+          deno check supabase/functions/_shared/regime-hysteresis.ts
+          deno check supabase/functions/_shared/p10-market-risk.ts
+          deno check supabase/functions/market-regime-observer/index.ts
+
+          python3 - <<'PY'
+          from pathlib import Path
+          NEW = "MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET"
+          OLD = "MARKET-REGIME-OBSERVER-v2-C01-FULLMARKET"
+          obs = Path("supabase/functions/market-regime-observer/index.ts").read_text()
+          risk = Path("supabase/functions/_shared/p10-market-risk.ts").read_text()
+          helper = Path("supabase/functions/_shared/regime-hysteresis.ts").read_text()
+          transition_test = Path("supabase/functions/_shared/v10_regime_transition.test.ts").read_text()
+          for token in (
+              f'const MODEL_REVISION = "{NEW}"',
+              f'const PREDECESSOR_MODEL_REVISION = "{OLD}"',
+              "committedRegimeOf",
+              "recentRegimeState",
+              "modelHistoryFilter",
+              "seeded_from_predecessor",
+              "regime_hysteresis",
+          ):
+              assert token in obs, token
+          assert obs.count("${modelHistoryFilter()}") == 2
+          assert f'modelRevision: "{NEW}"' in risk
+          assert "P10-MARKET-RISK-1.2.0-HYSTERESIS-CUTOVER" in risk
+          assert "P10_MARKET_RISK_CONFIG.modelRevision" in transition_test
+          assert f'model_revision: "{OLD}"' not in transition_test
+          assert "REGIME_DWELL = 2" in helper
+          assert "{ level: 1, up: 42, down: 40 }" in helper
+          assert "{ level: 2, up: 60, down: 58 }" in helper
+          assert "{ level: 3, up: 75, down: 72 }" in helper
+          PY
+
+      - name: Commit verified source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/_shared/regime-hysteresis.ts \
+            supabase/functions/_shared/regime-hysteresis.test.ts \
+            supabase/functions/_shared/p10-market-risk.ts \
+            supabase/functions/_shared/v10_regime_transition.test.ts \
+            supabase/functions/market-regime-observer/index.ts
+          git diff --cached --exit-code && { echo "No patch produced"; exit 1; } || true
+          git commit -m "Deploy regime hysteresis observer revision"
+          git push origin HEAD:main
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Validate production deploy secrets
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_PROJECT_REF:-}"
+
+      - name: Deploy hysteresis observer to production
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy market-regime-observer \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
+          supabase functions list --project-ref "${SUPABASE_PROJECT_REF}" | tee /tmp/functions.txt
+          grep -q "market-regime-observer" /tmp/functions.txt
