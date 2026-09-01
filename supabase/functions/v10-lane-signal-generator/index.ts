@@ -158,6 +158,8 @@ Deno.serve(async (request) => {
   if (request.method !== "POST") {
     return response(405, { ok: false, invocationId, error: "METHOD_NOT_ALLOWED" });
   }
+  const requestBody = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const diagnosticOnly = requestBody.mode === "diagnostic";
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -187,7 +189,7 @@ Deno.serve(async (request) => {
     const currentOpenTime = Math.floor(now / BAR_MS) * BAR_MS;
     const signalOpenTime = currentOpenTime - BAR_MS;
     const completedAt = signalOpenTime + BAR_MS;
-    if (now - completedAt > MAX_DATA_AGE_MS) {
+    if (!diagnosticOnly && now - completedAt > MAX_DATA_AGE_MS) {
       return response(409, {
         ok: false,
         invocationId,
@@ -250,6 +252,22 @@ Deno.serve(async (request) => {
         : btcContext.btc72 > 0.05
         ? "BULL"
         : "CASH");
+    if (diagnosticOnly) {
+      return response(200, {
+        ok: true,
+        diagnostic: true,
+        invocationId,
+        engine: V10_LANES_REVISION,
+        specSha256: V10_LANES_SPEC_SHA256,
+        route,
+        signalOpenTime,
+        completedAt,
+        dataAgeMs: now - completedAt,
+        evaluated: evaluated.length,
+        eligible: evaluated.filter((decision) => decision.eligible).length,
+        dataErrors,
+      });
+    }
     if (route === "CASH") {
       return response(200, {
         ok: true,
