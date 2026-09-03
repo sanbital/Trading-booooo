@@ -2,7 +2,7 @@
   "use strict";
 
   const config = window.TRADING_SCANNER_CONFIG || {};
-  const $ = (id) => document.getElementById(id);
+  const $ = id => document.getElementById(id);
   const originalFetch = window.fetch.bind(window);
   let capturedToken = "";
   let busy = false;
@@ -11,21 +11,20 @@
   let timer = null;
   let authWaitTimer = null;
 
-  function tokenFromHash() {
-    const raw = window.location.hash.replace(/^#/, "").trim();
-    if (!raw) return "";
-    const params = new URLSearchParams(raw);
-    return (params.get("access") || params.get("token") || (!raw.includes("=") ? raw : "")).trim();
-  }
-
   function tokenFromInput() {
     return String($("trader-token")?.value || "").trim();
   }
 
+  function bridgedToken() {
+    return String(window.__TRADING_DASHBOARD_AUTH__?.token || "").trim();
+  }
+
   function accessToken() {
-    if (capturedToken.length >= 32) return capturedToken;
+    const bridged = bridgedToken();
+    if (bridged.length >= 32) return bridged;
     const input = tokenFromInput();
     if (input.length >= 32) return input;
+    if (capturedToken.length >= 32) return capturedToken;
     return "";
   }
 
@@ -168,11 +167,16 @@
     const response = await originalFetch(endpoint(), {
       method: "POST",
       cache: "no-store",
-      headers: { "content-type": "application/json", "x-autotrade-token": token },
+      headers: {
+        "content-type": "application/json",
+        "x-autotrade-token": token,
+        ...(config.supabasePublishableKey ? { apikey: config.supabasePublishableKey } : {}),
+      },
       body: JSON.stringify({ action, refresh }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
+      if (response.status === 401) capturedToken = "";
       const reason = Array.isArray(data?.blockers) && data.blockers.length
         ? data.blockers.join(" · ")
         : data?.error || `HTTP ${response.status}`;
@@ -184,18 +188,26 @@
   async function load(refresh = false) {
     if (busy) return;
     if (accessToken().length < 32) {
-      showLocal("버튼을 누르면 현재 대시보드 인증을 자동으로 이어받아 운용을 재개합니다.", "운용 재개 대기");
+      showLocal("기존 대시보드 운영 인증을 연결하는 중입니다.", "운용 재개 대기");
+      requestDashboardToken();
       return;
     }
     try {
       const data = await callControl("status", refresh);
       render(data);
     } catch (error) {
+      if (String(error instanceof Error ? error.message : error) === "UNAUTHORIZED") {
+        showLocal("기존 대시보드 운영 인증을 다시 연결하는 중입니다.", "인증 재연결");
+        requestDashboardToken();
+        return;
+      }
       showLocal(error instanceof Error ? error.message : String(error), "상태 확인 실패");
     }
   }
 
   function requestDashboardToken() {
+    const bridged = bridgedToken();
+    if (rememberToken(bridged)) return true;
     const input = tokenFromInput();
     if (rememberToken(input)) return true;
     const refresh = $("refresh-trader");
@@ -204,7 +216,7 @@
       return true;
     }
     const unlock = $("unlock-trader");
-    if (unlock && !unlock.disabled && tokenFromInput().length >= 32) {
+    if (unlock && !unlock.disabled && input.length >= 32) {
       unlock.click();
       return true;
     }
@@ -213,10 +225,12 @@
 
   async function executeIntent(action) {
     if (busy) return;
+    rememberToken(bridgedToken());
+    rememberToken(tokenFromInput());
     const token = accessToken();
     if (token.length < 32) {
       pendingIntent = action;
-      showLocal("대시보드 인증 연결 중…", "운용 재개 준비");
+      showLocal("대시보드 운영 인증 연결 중…", "운용 재개 준비");
       const actionButton = $("v15-range-control-action");
       if (actionButton) {
         actionButton.disabled = true;
@@ -231,7 +245,7 @@
           actionButton.disabled = false;
           actionButton.textContent = "V15 RANGE 운용 재개";
         }
-        showLocal("대시보드 인증을 찾지 못했습니다. 페이지를 새로고침한 뒤 버튼을 다시 누르세요.", "인증 연결 실패");
+        showLocal("대시보드 운영 인증을 찾지 못했습니다. 페이지를 새로고침한 뒤 버튼을 다시 누르세요.", "인증 연결 실패");
       }, 6000);
       return;
     }
@@ -250,7 +264,14 @@
       render(data?.state || data);
     } catch (error) {
       busy = false;
-      showLocal(error instanceof Error ? error.message : String(error), "변경 실패");
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === "UNAUTHORIZED") {
+        pendingIntent = action;
+        showLocal("운영 인증 재연결 중…", "인증 재연결");
+        requestDashboardToken();
+        return;
+      }
+      showLocal(message, "변경 실패");
       await load(true);
     }
   }
@@ -263,6 +284,8 @@
 
   function captureDashboardToken(input, init) {
     try {
+      const url = typeof input === "string" ? input : String(input?.url || "");
+      if (!url.includes(`/${config.autotraderFunctionName || "market-autotrader"}`)) return;
       const headers = new Headers(init?.headers || (typeof input !== "string" ? input?.headers : undefined));
       const token = String(headers.get("x-autotrade-token") || "").trim();
       if (!rememberToken(token)) return;
@@ -280,6 +303,17 @@
     return originalFetch(input, init);
   };
 
+  window.addEventListener("trading-dashboard-auth", event => {
+    const token = String(event?.detail?.token || "").trim();
+    if (!rememberToken(token)) return;
+    if (pendingIntent) {
+      const action = pendingIntent;
+      queueMicrotask(() => executeIntent(action));
+    } else {
+      queueMicrotask(() => load(true));
+    }
+  });
+
   function captureLoginInput() {
     if (!rememberToken(tokenFromInput())) return;
     queueMicrotask(() => load(true));
@@ -288,25 +322,23 @@
   function boot() {
     ensureCard();
     $("unlock-trader")?.addEventListener("click", captureLoginInput, true);
-    $("trader-token")?.addEventListener("keydown", (event) => {
+    $("trader-token")?.addEventListener("keydown", event => {
       if (event.key === "Enter") captureLoginInput();
     }, true);
 
-    if (accessToken().length >= 32) {
-      load(true);
-    } else {
-      const consoleView = $("trader-console");
-      if (consoleView && !consoleView.classList.contains("hidden")) {
-        setTimeout(() => requestDashboardToken(), 250);
-      } else {
-        showLocal("버튼을 누르면 현재 대시보드 인증을 자동으로 이어받아 운용을 재개합니다.", "운용 재개 대기");
-      }
+    rememberToken(bridgedToken());
+    rememberToken(tokenFromInput());
+    if (accessToken().length >= 32) load(true);
+    else {
+      showLocal("기존 대시보드 운영 인증을 연결하는 중입니다.", "운용 재개 대기");
+      setTimeout(() => requestDashboardToken(), 250);
     }
 
     clearInterval(timer);
     timer = setInterval(() => {
       if (accessToken().length >= 32 && !busy) load(false);
-    }, 30_000);
+      else requestDashboardToken();
+    }, 15_000);
   }
 
   if (document.readyState === "loading") {
