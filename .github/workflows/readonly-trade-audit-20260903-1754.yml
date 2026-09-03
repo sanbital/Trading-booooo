@@ -1,0 +1,190 @@
+name: readonly-trade-audit-20260903-1754
+
+on:
+  push:
+    branches:
+      - automation-readonly-trade-audit-20260903-1754
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read production trade records without writes
+        env:
+          DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At <<'SQL'
+          begin transaction read only;
+
+          select 'META|' || jsonb_build_object(
+            'db_now', now(),
+            'kst_day_start_utc', '2026-09-02 15:00:00+00'::timestamptz,
+            'v13_range_cut_utc', '2026-09-03 03:22:25.869+00'::timestamptz,
+            'v14_bear_cut_utc', '2026-09-03 05:58:31.544+00'::timestamptz,
+            'latest_cut_utc', '2026-09-03 05:58:31.544+00'::timestamptz
+          )::text;
+
+          select 'RUNTIME_V11|' || to_jsonb(r)::text from public.v11_long_regime_runtime r limit 1;
+          select 'RUNTIME_RANGE|' || to_jsonb(r)::text from public.v12_range_live_runtime r limit 1;
+          select 'RUNTIME_BEAR|' || to_jsonb(r)::text from public.v14_bear_live_runtime r limit 1;
+
+          with x as (
+            select p.*,
+              p.realized_pnl_usdt / nullif(p.entry_price*p.original_quantity/3.0,0) * 100.0 as ret_pct,
+              (p.peak_price/p.entry_price-1.0)*3.0*100.0 as mfe_pct
+            from public.v11_long_regime_positions p
+            where p.state='CLOSED' and p.entry_at >= '2026-09-03 05:58:31.544+00'::timestamptz
+          )
+          select 'FUT_POST_LATEST|' || jsonb_build_object(
+            'trades',count(*),'wins',count(*) filter(where realized_pnl_usdt>0),'losses',count(*) filter(where realized_pnl_usdt<0),'breakeven',count(*) filter(where realized_pnl_usdt=0),
+            'realized_pnl_usdt',round(coalesce(sum(realized_pnl_usdt),0)::numeric,8),
+            'avg_return_pct',round(avg(ret_pct)::numeric,6),
+            'avg_win_usdt',round(avg(realized_pnl_usdt) filter(where realized_pnl_usdt>0)::numeric,8),
+            'avg_loss_usdt',round(avg(realized_pnl_usdt) filter(where realized_pnl_usdt<0)::numeric,8),
+            'stop_freq_pct',round((100.0*count(*) filter(where upper(coalesce(exit_reason,'')) like '%STOP%')/nullif(count(*),0))::numeric,4),
+            'avg_mfe_pct',round(avg(mfe_pct)::numeric,6),
+            'mfe_recovery_pct',round((100.0*sum(ret_pct)/nullif(sum(mfe_pct),0))::numeric,4),
+            'profit_giveback_bps',round(avg((mfe_pct-ret_pct)*100.0)::numeric,4),
+            'first_entry_at',min(entry_at),'last_closed_at',max(closed_at)
+          )::text from x;
+
+          with pc as (
+            select count(*)::int n from public.v11_long_regime_positions where state='CLOSED' and entry_at >= '2026-09-03 05:58:31.544+00'::timestamptz
+          ), prev as (
+            select p.* from public.v11_long_regime_positions p
+            where p.state='CLOSED' and p.entry_at < '2026-09-03 05:58:31.544+00'::timestamptz
+            order by p.entry_at desc limit (select n from pc)
+          ), x as (
+            select p.*,p.realized_pnl_usdt/nullif(p.entry_price*p.original_quantity/3.0,0)*100.0 ret_pct,(p.peak_price/p.entry_price-1.0)*3.0*100.0 mfe_pct from prev p
+          )
+          select 'FUT_PRE_SAME_N|' || jsonb_build_object(
+            'trades',count(*),'wins',count(*) filter(where realized_pnl_usdt>0),'losses',count(*) filter(where realized_pnl_usdt<0),
+            'realized_pnl_usdt',round(coalesce(sum(realized_pnl_usdt),0)::numeric,8),'avg_return_pct',round(avg(ret_pct)::numeric,6),
+            'avg_win_usdt',round(avg(realized_pnl_usdt) filter(where realized_pnl_usdt>0)::numeric,8),'avg_loss_usdt',round(avg(realized_pnl_usdt) filter(where realized_pnl_usdt<0)::numeric,8),
+            'stop_freq_pct',round((100.0*count(*) filter(where upper(coalesce(exit_reason,'')) like '%STOP%')/nullif(count(*),0))::numeric,4),
+            'avg_mfe_pct',round(avg(mfe_pct)::numeric,6),'mfe_recovery_pct',round((100.0*sum(ret_pct)/nullif(sum(mfe_pct),0))::numeric,4),
+            'profit_giveback_bps',round(avg((mfe_pct-ret_pct)*100.0)::numeric,4),'first_entry_at',min(entry_at),'last_closed_at',max(closed_at)
+          )::text from x;
+
+          with x as (
+            select p.*,p.realized_pnl_usdt/nullif(p.entry_price*p.original_quantity/3.0,0)*100.0 ret_pct,(p.peak_price/p.entry_price-1.0)*3.0*100.0 mfe_pct
+            from public.v11_long_regime_positions p
+            where p.state='CLOSED' and p.entry_at >= '2026-09-02 15:00:00+00'::timestamptz and p.entry_at < '2026-09-03 05:58:31.544+00'::timestamptz
+          )
+          select 'FUT_TODAY_PRE_LATEST|' || jsonb_build_object(
+            'trades',count(*),'wins',count(*) filter(where realized_pnl_usdt>0),'losses',count(*) filter(where realized_pnl_usdt<0),
+            'realized_pnl_usdt',round(coalesce(sum(realized_pnl_usdt),0)::numeric,8),'avg_return_pct',round(avg(ret_pct)::numeric,6),
+            'avg_win_usdt',round(avg(realized_pnl_usdt) filter(where realized_pnl_usdt>0)::numeric,8),'avg_loss_usdt',round(avg(realized_pnl_usdt) filter(where realized_pnl_usdt<0)::numeric,8),
+            'stop_freq_pct',round((100.0*count(*) filter(where upper(coalesce(exit_reason,'')) like '%STOP%')/nullif(count(*),0))::numeric,4),
+            'avg_mfe_pct',round(avg(mfe_pct)::numeric,6),'mfe_recovery_pct',round((100.0*sum(ret_pct)/nullif(sum(mfe_pct),0))::numeric,4),
+            'profit_giveback_bps',round(avg((mfe_pct-ret_pct)*100.0)::numeric,4)
+          )::text from x;
+
+          with x as (
+            select p.*,p.realized_pnl_usdt/nullif(p.entry_price*p.original_quantity/3.0,0)*100.0 ret_pct,(p.peak_price/p.entry_price-1.0)*3.0*100.0 mfe_pct
+            from public.v11_long_regime_positions p where p.state='CLOSED' and p.revision='V13-RANGE-ACTIVE-EXIT-1.0.0'
+          )
+          select 'FUT_V13_RANGE|' || jsonb_build_object(
+            'trades',count(*),'wins',count(*) filter(where realized_pnl_usdt>0),'losses',count(*) filter(where realized_pnl_usdt<0),
+            'realized_pnl_usdt',round(coalesce(sum(realized_pnl_usdt),0)::numeric,8),'avg_return_pct',round(avg(ret_pct)::numeric,6),
+            'avg_win_usdt',round(avg(realized_pnl_usdt) filter(where realized_pnl_usdt>0)::numeric,8),'avg_loss_usdt',round(avg(realized_pnl_usdt) filter(where realized_pnl_usdt<0)::numeric,8),
+            'stop_freq_pct',round((100.0*count(*) filter(where upper(coalesce(exit_reason,'')) like '%STOP%')/nullif(count(*),0))::numeric,4),
+            'avg_mfe_pct',round(avg(mfe_pct)::numeric,6),'mfe_recovery_pct',round((100.0*sum(ret_pct)/nullif(sum(mfe_pct),0))::numeric,4),
+            'profit_giveback_bps',round(avg((mfe_pct-ret_pct)*100.0)::numeric,4),'first_entry_at',min(entry_at),'last_closed_at',max(closed_at)
+          )::text from x;
+
+          with pc as (
+            select count(*)::int n from public.v11_long_regime_positions where state='CLOSED' and revision='V13-RANGE-ACTIVE-EXIT-1.0.0'
+          ), prev as (
+            select p.* from public.v11_long_regime_positions p where p.state='CLOSED' and p.entry_lane='RANGE' and p.entry_at < '2026-09-03 03:22:25.869+00'::timestamptz
+            order by p.entry_at desc limit (select n from pc)
+          ), x as (
+            select p.*,p.realized_pnl_usdt/nullif(p.entry_price*p.original_quantity/3.0,0)*100.0 ret_pct,(p.peak_price/p.entry_price-1.0)*3.0*100.0 mfe_pct from prev p
+          )
+          select 'FUT_V13_PRE_SAME_N|' || jsonb_build_object(
+            'trades',count(*),'wins',count(*) filter(where realized_pnl_usdt>0),'losses',count(*) filter(where realized_pnl_usdt<0),'realized_pnl_usdt',round(coalesce(sum(realized_pnl_usdt),0)::numeric,8),
+            'avg_return_pct',round(avg(ret_pct)::numeric,6),'avg_win_usdt',round(avg(realized_pnl_usdt) filter(where realized_pnl_usdt>0)::numeric,8),'avg_loss_usdt',round(avg(realized_pnl_usdt) filter(where realized_pnl_usdt<0)::numeric,8),
+            'stop_freq_pct',round((100.0*count(*) filter(where upper(coalesce(exit_reason,'')) like '%STOP%')/nullif(count(*),0))::numeric,4),'avg_mfe_pct',round(avg(mfe_pct)::numeric,6),
+            'mfe_recovery_pct',round((100.0*sum(ret_pct)/nullif(sum(mfe_pct),0))::numeric,4),'profit_giveback_bps',round(avg((mfe_pct-ret_pct)*100.0)::numeric,4)
+          )::text from x;
+
+          with x as (
+            select p.*,p.realized_pnl_usdt/nullif(p.entry_price*p.original_quantity/3.0,0)*100.0 ret_pct,(p.peak_price/p.entry_price-1.0)*3.0*100.0 mfe_pct
+            from public.v11_long_regime_positions p where p.state='CLOSED' and p.revision='V14-BEAR-CS-PROOF-1.0.0'
+          )
+          select 'FUT_V14_BEAR|' || jsonb_build_object(
+            'trades',count(*),'wins',count(*) filter(where realized_pnl_usdt>0),'losses',count(*) filter(where realized_pnl_usdt<0),
+            'realized_pnl_usdt',round(coalesce(sum(realized_pnl_usdt),0)::numeric,8),'avg_return_pct',round(avg(ret_pct)::numeric,6),
+            'avg_win_usdt',round(avg(realized_pnl_usdt) filter(where realized_pnl_usdt>0)::numeric,8),'avg_loss_usdt',round(avg(realized_pnl_usdt) filter(where realized_pnl_usdt<0)::numeric,8),
+            'stop_freq_pct',round((100.0*count(*) filter(where upper(coalesce(exit_reason,'')) like '%STOP%')/nullif(count(*),0))::numeric,4),
+            'avg_mfe_pct',round(avg(mfe_pct)::numeric,6),'mfe_recovery_pct',round((100.0*sum(ret_pct)/nullif(sum(mfe_pct),0))::numeric,4),
+            'profit_giveback_bps',round(avg((mfe_pct-ret_pct)*100.0)::numeric,4),'first_entry_at',min(entry_at),'last_closed_at',max(closed_at)
+          )::text from x;
+
+          with pc as (
+            select count(*)::int n from public.v11_long_regime_positions where state='CLOSED' and revision='V14-BEAR-CS-PROOF-1.0.0'
+          ), prev as (
+            select p.* from public.v11_long_regime_positions p where p.state='CLOSED' and p.entry_lane='BEAR' and p.entry_at < '2026-09-03 05:58:31.544+00'::timestamptz
+            order by p.entry_at desc limit (select n from pc)
+          ), x as (
+            select p.*,p.realized_pnl_usdt/nullif(p.entry_price*p.original_quantity/3.0,0)*100.0 ret_pct,(p.peak_price/p.entry_price-1.0)*3.0*100.0 mfe_pct from prev p
+          )
+          select 'FUT_V14_PRE_SAME_N|' || jsonb_build_object(
+            'trades',count(*),'wins',count(*) filter(where realized_pnl_usdt>0),'losses',count(*) filter(where realized_pnl_usdt<0),'realized_pnl_usdt',round(coalesce(sum(realized_pnl_usdt),0)::numeric,8),
+            'avg_return_pct',round(avg(ret_pct)::numeric,6),'avg_win_usdt',round(avg(realized_pnl_usdt) filter(where realized_pnl_usdt>0)::numeric,8),'avg_loss_usdt',round(avg(realized_pnl_usdt) filter(where realized_pnl_usdt<0)::numeric,8),
+            'stop_freq_pct',round((100.0*count(*) filter(where upper(coalesce(exit_reason,'')) like '%STOP%')/nullif(count(*),0))::numeric,4),'avg_mfe_pct',round(avg(mfe_pct)::numeric,6),
+            'mfe_recovery_pct',round((100.0*sum(ret_pct)/nullif(sum(mfe_pct),0))::numeric,4),'profit_giveback_bps',round(avg((mfe_pct-ret_pct)*100.0)::numeric,4)
+          )::text from x;
+
+          select 'FUT_FILLS_POST|' || jsonb_build_object(
+            'filled_orders',count(*) filter(where state='FILLED'),
+            'entry_fills',count(*) filter(where state='FILLED' and intent='OPEN_LONG'),
+            'exit_fills',count(*) filter(where state='FILLED' and intent in ('CLOSE_LONG','PARTIAL_CLOSE')),
+            'reconciliation_failed',count(*) filter(where state='RECONCILIATION_FAILED')
+          )::text
+          from public.v11_long_regime_orders where created_at >= '2026-09-03 05:58:31.544+00'::timestamptz;
+
+          select 'FUT_OPEN|' || jsonb_build_object('open_count',count(*),'positions',coalesce(jsonb_agg(jsonb_build_object('symbol',symbol,'revision',revision,'lane',active_lane,'entry_at',entry_at)) filter(where state='OPEN'),'[]'::jsonb))::text
+          from public.v11_long_regime_positions where state='OPEN';
+
+          with x as (
+            select p.* from public.trading_positions p
+            where p.is_paper=false and p.state='CLOSED' and lower(p.exchange::text) in ('binance','upbit') and p.opened_at >= '2026-09-03 05:58:31.544+00'::timestamptz
+          )
+          select 'SPOT_POST|' || jsonb_build_object(
+            'trades',count(*),'wins',count(*) filter(where realized_pnl_quote>0),'losses',count(*) filter(where realized_pnl_quote<0),
+            'realized_pnl_quote',round(coalesce(sum(realized_pnl_quote),0)::numeric,8),'avg_return_pct',round(avg(realized_return_pct)::numeric,6),
+            'avg_win_quote',round(avg(realized_pnl_quote) filter(where realized_pnl_quote>0)::numeric,8),'avg_loss_quote',round(avg(realized_pnl_quote) filter(where realized_pnl_quote<0)::numeric,8),
+            'stop_freq_pct',round((100.0*count(*) filter(where upper(coalesce(close_reason,'')) like '%STOP%')/nullif(count(*),0))::numeric,4),
+            'mfe_recovery_ratio_stored',round(avg(mfe_capture_ratio)::numeric,6),'profit_giveback_bps_stored',round(avg(profit_giveback_bps)::numeric,4)
+          )::text from x;
+
+          with pc as (
+            select count(*)::int n from public.trading_positions p where p.is_paper=false and p.state='CLOSED' and lower(p.exchange::text) in ('binance','upbit') and p.opened_at >= '2026-09-03 05:58:31.544+00'::timestamptz
+          ), x as (
+            select p.* from public.trading_positions p where p.is_paper=false and p.state='CLOSED' and lower(p.exchange::text) in ('binance','upbit') and p.opened_at < '2026-09-03 05:58:31.544+00'::timestamptz order by p.opened_at desc limit (select n from pc)
+          )
+          select 'SPOT_PRE_SAME_N|' || jsonb_build_object(
+            'trades',count(*),'wins',count(*) filter(where realized_pnl_quote>0),'losses',count(*) filter(where realized_pnl_quote<0),
+            'realized_pnl_quote',round(coalesce(sum(realized_pnl_quote),0)::numeric,8),'avg_return_pct',round(avg(realized_return_pct)::numeric,6),
+            'avg_win_quote',round(avg(realized_pnl_quote) filter(where realized_pnl_quote>0)::numeric,8),'avg_loss_quote',round(avg(realized_pnl_quote) filter(where realized_pnl_quote<0)::numeric,8),
+            'stop_freq_pct',round((100.0*count(*) filter(where upper(coalesce(close_reason,'')) like '%STOP%')/nullif(count(*),0))::numeric,4),
+            'mfe_recovery_ratio_stored',round(avg(mfe_capture_ratio)::numeric,6),'profit_giveback_bps_stored',round(avg(profit_giveback_bps)::numeric,4)
+          )::text from x;
+
+          select 'SPOT_FILLS_POST|' || jsonb_build_object('fills',count(*),'buys',count(*) filter(where upper(side::text)='BUY'),'sells',count(*) filter(where upper(side::text)='SELL'))::text
+          from public.exchange_trade_fills
+          where executed_at >= '2026-09-03 05:58:31.544+00'::timestamptz and lower(account_scope::text)='spot' and upper(source::text)='AUTOMATED';
+
+          select 'LATEST_FUTURES_ROWS|' || coalesce(jsonb_agg(x order by entry_at),'[]'::jsonb)::text from (
+            select id,revision,entry_lane,active_lane,symbol,state,entry_at,closed_at,entry_price,exit_price,exit_reason,realized_pnl_usdt,peak_price,original_quantity,remaining_quantity
+            from public.v11_long_regime_positions where entry_at >= '2026-09-03 03:22:25.869+00'::timestamptz order by entry_at
+          ) x;
+
+          rollback;
+          SQL
