@@ -5,6 +5,7 @@
   const $ = (id) => document.getElementById(id);
   let pending = false;
   let timer = null;
+  let latestData = null;
 
   function accessToken() {
     const raw = window.location.hash.replace(/^#/, "").trim();
@@ -19,25 +20,11 @@
 
   function ensureStyle() {
     if ($("v15-range-control-style")) return;
-    const style = document.createElement("style");
-    style.id = "v15-range-control-style";
-    style.textContent = `
-      #v15-range-control-section .v15-control-panel{padding:18px;display:grid;gap:14px}
-      #v15-range-control-section .v15-control-head{display:flex;gap:14px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}
-      #v15-range-control-section .v15-control-state{font-weight:800;font-size:1.02rem}
-      #v15-range-control-section .v15-state-ready{color:#0a7d43}
-      #v15-range-control-section .v15-state-live{color:#b94700}
-      #v15-range-control-section .v15-state-blocked{color:#b42318}
-      #v15-range-control-section .v15-control-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
-      #v15-range-control-section .v15-control-grid>div{padding:10px 12px;border:1px solid rgba(127,127,127,.2);border-radius:10px;display:grid;gap:4px}
-      #v15-range-control-section .v15-control-grid span{font-size:.78rem;opacity:.72}
-      #v15-range-control-section .v15-control-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-      #v15-range-control-section .v15-control-note{font-size:.84rem;line-height:1.55;opacity:.78}
-      #v15-range-control-section .v15-control-blockers{font-size:.84rem;line-height:1.55;color:#b42318}
-      #v15-range-control-action.v15-live-stop{background:#fff;border-color:#b42318;color:#b42318}
-      @media(max-width:760px){#v15-range-control-section .v15-control-grid{grid-template-columns:repeat(2,minmax(0,1fr))}#v15-range-control-action{width:100%}}
-    `;
-    document.head.appendChild(style);
+    const link = document.createElement("link");
+    link.id = "v15-range-control-style";
+    link.rel = "stylesheet";
+    link.href = "./v15-range-control.css?v=2-V15-R7-LIVE-CONTROL";
+    document.head.appendChild(link);
   }
 
   function ensureCard() {
@@ -84,11 +71,14 @@
   }
 
   function fmtUsdt(value) {
-    const n = Number(value);
-    return Number.isFinite(n) ? `${n.toLocaleString("ko-KR", { maximumFractionDigits: 2 })} USDT` : "—";
+    const number = Number(value);
+    return Number.isFinite(number)
+      ? `${number.toLocaleString("ko-KR", { maximumFractionDigits: 2 })} USDT`
+      : "—";
   }
 
   function render(data) {
+    latestData = data;
     ensureCard();
     const runtime = data?.runtime || {};
     const pf = data?.preflight || {};
@@ -102,21 +92,29 @@
       : ready
       ? "프리플라이트 정상 · 사용자 승인 시에만 실거래를 시작합니다."
       : "안전 조건이 충족되지 않아 활성화할 수 없습니다.";
-    $("v15-range-control-regime").textContent = pf.regime ? `${pf.regime} · ${(Number(pf.confidence || 0) * 100).toFixed(1)}%` : "—";
+    $("v15-range-control-regime").textContent = pf.regime
+      ? `${pf.regime} · ${(Number(pf.confidence || 0) * 100).toFixed(1)}%`
+      : "—";
     $("v15-range-control-available").textContent = fmtUsdt(pf.availableUsdt);
-    $("v15-range-control-slots").textContent = Number.isFinite(Number(pf.equitySupportedSlots)) ? `${pf.equitySupportedSlots} / ${runtime.maxSlots || 10}` : "—";
+    $("v15-range-control-slots").textContent = Number.isFinite(Number(pf.equitySupportedSlots))
+      ? `${pf.equitySupportedSlots} / ${runtime.maxSlots || 10}`
+      : "—";
     $("v15-range-control-compiled").textContent = runtime.orderRoutingCompiled ? "READY" : "NOT READY";
     const blockers = Array.isArray(data?.blockers) ? data.blockers : [];
-    $("v15-range-control-blockers").textContent = blockers.length ? `차단 사유: ${blockers.join(" · ")}` : "";
+    $("v15-range-control-blockers").textContent = blockers.length
+      ? `차단 사유: ${blockers.join(" · ")}`
+      : "";
     const action = $("v15-range-control-action");
     action.disabled = pending || (!live && !ready);
     action.textContent = live ? "V15 RANGE 신규 진입 중지" : "V15 RANGE 실거래 활성화";
     action.classList.toggle("v15-live-stop", live);
     action.dataset.live = live ? "true" : "false";
-    $("v15-range-control-updated").textContent = pf.checkedAt ? `검증 ${new Date(pf.checkedAt).toLocaleString("ko-KR")}` : "";
+    $("v15-range-control-updated").textContent = pf.checkedAt
+      ? `검증 ${new Date(pf.checkedAt).toLocaleString("ko-KR")}`
+      : "";
   }
 
-  async function call(action, refresh = false) {
+  async function callControl(action, refresh = false) {
     const token = accessToken();
     if (!token || token.length < 24) throw new Error("대시보드 접속 토큰이 없습니다.");
     const response = await fetch(endpoint(), {
@@ -127,7 +125,9 @@
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const reason = Array.isArray(data?.blockers) && data.blockers.length ? data.blockers.join(" · ") : data?.error || `HTTP ${response.status}`;
+      const reason = Array.isArray(data?.blockers) && data.blockers.length
+        ? data.blockers.join(" · ")
+        : data?.error || `HTTP ${response.status}`;
       throw new Error(reason);
     }
     return data;
@@ -137,17 +137,19 @@
     if (pending) return;
     pending = true;
     ensureCard();
+    const action = $("v15-range-control-action");
+    if (action) action.disabled = true;
     try {
-      const data = await call("status", refresh);
+      const data = await callControl("status", refresh);
+      pending = false;
       render(data);
     } catch (error) {
+      pending = false;
       const state = $("v15-range-control-state");
       state.className = "v15-control-state v15-state-blocked";
       state.textContent = "상태 확인 실패";
       $("v15-range-control-message").textContent = error instanceof Error ? error.message : String(error);
-      $("v15-range-control-action").disabled = true;
-    } finally {
-      pending = false;
+      if (action) action.disabled = true;
     }
   }
 
@@ -160,15 +162,18 @@
       : "V15 RANGE 실거래를 활성화하시겠습니까?\n\nBinance USDⓈ-M Futures · LONG · 증거금 40 USDT · 3배 레버리지입니다. R7 조건 충족 시 실제 주문이 제출될 수 있습니다.";
     if (!window.confirm(question)) return;
     pending = true;
-    if (button) { button.disabled = true; button.textContent = live ? "중지 처리 중…" : "활성화 검증 중…"; }
+    if (button) {
+      button.disabled = true;
+      button.textContent = live ? "중지 처리 중…" : "활성화 검증 중…";
+    }
     try {
-      const data = await call(live ? "disable" : "enable", true);
+      const data = await callControl(live ? "disable" : "enable", true);
+      pending = false;
       render(data?.state || data);
     } catch (error) {
+      pending = false;
       window.alert(`V15 RANGE 변경 실패: ${error instanceof Error ? error.message : String(error)}`);
       await load(true);
-    } finally {
-      pending = false;
     }
   }
 
@@ -179,7 +184,10 @@
     timer = setInterval(() => load(false), 30_000);
   }
 
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot, { once: true });
-  else boot();
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot, { once: true });
+  } else {
+    boot();
+  }
   window.addEventListener("pageshow", () => setTimeout(() => load(false), 0));
 })();
