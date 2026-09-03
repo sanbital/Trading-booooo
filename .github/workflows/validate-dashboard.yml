@@ -22,13 +22,19 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Validate dashboard JavaScript
+      - name: Check existing dashboard JavaScript
         run: |
           node --check docs/app.js
           node --check docs/config.js
           node --check docs/performance.js
           node --check docs/realized-performance.js
           node --check docs/dashboard-only.js
-          node --check docs/v15-range-control.js
-          node --test docs/version-runtime.test.mjs
-          node validation/v700-deploy-validation.mjs
+
+      - name: Check V15 live-control JavaScript
+        run: node --check docs/v15-range-control.js
+
+      - name: Run dashboard DOM tests
+        run: node --test docs/version-runtime.test.mjs
+
+      - name: Run dashboard deployment invariants
+        run: node validation/v700-deploy-validation.mjs
