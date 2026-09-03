@@ -5,9 +5,11 @@
   const $ = (id) => document.getElementById(id);
   const originalFetch = window.fetch.bind(window);
   let capturedToken = "";
-  let pending = false;
-  let timer = null;
+  let busy = false;
+  let pendingIntent = "";
   let latestData = null;
+  let timer = null;
+  let authWaitTimer = null;
 
   function tokenFromHash() {
     const raw = window.location.hash.replace(/^#/, "").trim();
@@ -16,12 +18,23 @@
     return (params.get("access") || params.get("token") || (!raw.includes("=") ? raw : "")).trim();
   }
 
+  function tokenFromInput() {
+    return String($("trader-token")?.value || "").trim();
+  }
+
   function accessToken() {
-    const hashToken = tokenFromHash();
-    if (hashToken.length >= 32) return hashToken;
-    const inputToken = String($("trader-token")?.value || "").trim();
-    if (inputToken.length >= 32) return inputToken;
+    const hash = tokenFromHash();
+    if (hash.length >= 32) return hash;
+    const input = tokenFromInput();
+    if (input.length >= 32) return input;
     return capturedToken;
+  }
+
+  function rememberToken(value) {
+    const token = String(value || "").trim();
+    if (token.length < 32) return false;
+    capturedToken = token;
+    return true;
   }
 
   function endpoint() {
@@ -47,15 +60,14 @@
     section.innerHTML = `
       <div class="section-heading performance-heading">
         <div><p class="eyebrow">V15 RANGE LIVE CONTROL</p><h2>V15 RANGE 실거래</h2></div>
-        <p>V15 R7 전용 신규 진입 스위치입니다. BULL·V14 BEAR 운용과 분리되어 있습니다.</p>
+        <p>버튼 한 번으로 V15 R7 운용을 재개합니다. 실제 진입은 R7 안전조건을 충족할 때만 실행됩니다.</p>
       </div>
       <article class="panel v15-control-panel">
         <div class="v15-control-head">
           <div>
-            <div id="v15-range-control-state" class="v15-control-state">상태 확인 중</div>
-            <div id="v15-range-control-message" class="muted">대시보드 인증 후 프리플라이트를 확인합니다.</div>
+            <div id="v15-range-control-state" class="v15-control-state">운용 상태 확인 중</div>
+            <div id="v15-range-control-message" class="muted">아래 버튼으로 V15 RANGE 운용을 제어합니다.</div>
           </div>
-          <button id="v15-range-control-refresh" class="button-secondary" type="button">상태 새로고침</button>
         </div>
         <div class="v15-control-grid">
           <div><span>현재 레짐</span><b id="v15-range-control-regime">—</b></div>
@@ -65,17 +77,16 @@
         </div>
         <div id="v15-range-control-blockers" class="v15-control-blockers"></div>
         <div class="v15-control-actions">
-          <button id="v15-range-control-action" class="button-primary" type="button" disabled>대시보드 인증 필요</button>
+          <button id="v15-range-control-action" class="button-primary" type="button">V15 RANGE 운용 재개</button>
           <span id="v15-range-control-updated" class="muted"></span>
         </div>
-        <div class="v15-control-note">활성화 시 Binance USDⓈ-M Futures · LONG · 증거금 40 USDT · 3배 레버리지로, R7 조건을 충족할 때만 신규 주문을 제출합니다. 최대 10슬롯은 상한이며 실제 슬롯은 가용자금과 기존 포지션에 따라 자동 축소됩니다. 신규 진입을 중지해도 열린 V15 포지션의 guardian은 계속 청산을 관리합니다.</div>
+        <div class="v15-control-note">운용이 켜져 있어도 현재 레짐·BTC72·ATR·BB·거래대금·가용자금·거래소↔DB reconciliation 조건을 통과하지 못하면 주문하지 않고 대기합니다.</div>
       </article>`;
     const anchor = $("trader-notice") || $("trader-alert") || document.querySelector("#trader-console .operator-header");
     const positions = $("positions-body")?.closest(".section-block");
     if (anchor) anchor.after(section);
     else if (positions) positions.before(section);
     else $("trader-console")?.prepend(section);
-    $("v15-range-control-refresh")?.addEventListener("click", () => load(true));
     $("v15-range-control-action")?.addEventListener("click", toggleLive);
     return section;
   }
@@ -87,21 +98,44 @@
       : "—";
   }
 
+  function showLocal(message, stateText = "V15 RANGE") {
+    ensureCard();
+    const state = $("v15-range-control-state");
+    if (state) {
+      state.className = "v15-control-state";
+      state.textContent = stateText;
+    }
+    const msg = $("v15-range-control-message");
+    if (msg) msg.textContent = message;
+    const action = $("v15-range-control-action");
+    if (action) {
+      action.disabled = busy;
+      if (!latestData?.runtime?.liveEnabled) action.textContent = "V15 RANGE 운용 재개";
+    }
+  }
+
   function render(data) {
     latestData = data;
     ensureCard();
     const runtime = data?.runtime || {};
     const pf = data?.preflight || {};
     const live = runtime.liveEnabled === true;
-    const ready = data?.activationReady === true;
+    const operationalReady = data?.activationReady === true;
+    const entryReady = data?.entryGateReady === true;
     const state = $("v15-range-control-state");
-    state.className = `v15-control-state ${live ? "v15-state-live" : ready ? "v15-state-ready" : "v15-state-blocked"}`;
-    state.textContent = live ? "실거래 활성" : ready ? "활성화 준비 완료" : "활성화 차단";
-    $("v15-range-control-message").textContent = live
-      ? "R7 조건 충족 시 V15 RANGE 신규 주문이 제출될 수 있습니다."
-      : ready
-      ? "프리플라이트 정상 · 사용자 승인 시에만 실거래를 시작합니다."
-      : "안전 조건이 충족되지 않아 활성화할 수 없습니다.";
+    state.className = `v15-control-state ${live ? "v15-state-live" : operationalReady ? "v15-state-ready" : "v15-state-blocked"}`;
+    state.textContent = live ? "실거래 운용 중" : operationalReady ? "운용 재개 가능" : "안전 점검 필요";
+
+    if (live) {
+      $("v15-range-control-message").textContent = entryReady
+        ? "V15은 LIVE 상태이며 R7 진입조건도 현재 충족 중입니다."
+        : "V15은 LIVE 상태입니다. 현재 R7 진입조건이 아니므로 주문 없이 대기합니다.";
+    } else if (operationalReady) {
+      $("v15-range-control-message").textContent = "아래 버튼을 누르면 즉시 V15 RANGE 운용 상태가 LIVE로 전환됩니다.";
+    } else {
+      $("v15-range-control-message").textContent = "하드 안전조건을 먼저 정상화해야 운용을 재개할 수 있습니다.";
+    }
+
     $("v15-range-control-regime").textContent = pf.regime
       ? `${pf.regime} · ${(Number(pf.confidence || 0) * 100).toFixed(1)}%`
       : "—";
@@ -110,13 +144,18 @@
       ? `${pf.equitySupportedSlots} / ${runtime.maxSlots || 10}`
       : "—";
     $("v15-range-control-compiled").textContent = runtime.orderRoutingCompiled ? "READY" : "NOT READY";
+
     const blockers = Array.isArray(data?.blockers) ? data.blockers : [];
+    const entryBlockers = Array.isArray(data?.entryBlockers) ? data.entryBlockers : [];
     $("v15-range-control-blockers").textContent = blockers.length
-      ? `차단 사유: ${blockers.join(" · ")}`
+      ? `운용 차단: ${blockers.join(" · ")}`
+      : live && entryBlockers.length
+      ? `현재 진입 대기: ${entryBlockers.join(" · ")}`
       : "";
+
     const action = $("v15-range-control-action");
-    action.disabled = pending || (!live && !ready);
-    action.textContent = live ? "V15 RANGE 신규 진입 중지" : "V15 RANGE 실거래 활성화";
+    action.disabled = busy || (!live && latestData && !operationalReady);
+    action.textContent = live ? "V15 RANGE 신규 진입 중지" : "V15 RANGE 운용 재개";
     action.classList.toggle("v15-live-stop", live);
     action.dataset.live = live ? "true" : "false";
     $("v15-range-control-updated").textContent = pf.checkedAt
@@ -126,7 +165,7 @@
 
   async function callControl(action, refresh = false) {
     const token = accessToken();
-    if (!token || token.length < 32) throw new Error("대시보드 운영 토큰으로 먼저 로그인하세요.");
+    if (!token || token.length < 32) throw new Error("DASHBOARD_TOKEN_UNAVAILABLE");
     const response = await originalFetch(endpoint(), {
       method: "POST",
       cache: "no-store",
@@ -144,58 +183,95 @@
   }
 
   async function load(refresh = false) {
-    if (pending) return;
-    pending = true;
-    ensureCard();
-    const action = $("v15-range-control-action");
-    if (action) action.disabled = true;
+    if (busy) return;
+    if (accessToken().length < 32) {
+      showLocal("버튼을 누르면 현재 대시보드 인증을 자동으로 이어받아 운용을 재개합니다.", "운용 재개 대기");
+      return;
+    }
     try {
       const data = await callControl("status", refresh);
-      pending = false;
       render(data);
     } catch (error) {
-      pending = false;
-      const state = $("v15-range-control-state");
-      state.className = "v15-control-state v15-state-blocked";
-      state.textContent = accessToken().length >= 32 ? "상태 확인 실패" : "대시보드 인증 필요";
-      $("v15-range-control-message").textContent = error instanceof Error ? error.message : String(error);
-      if (action) action.disabled = true;
+      showLocal(error instanceof Error ? error.message : String(error), "상태 확인 실패");
     }
   }
 
-  async function toggleLive() {
-    if (pending) return;
+  function requestDashboardToken() {
+    const input = tokenFromInput();
+    if (rememberToken(input)) return true;
+    const refresh = $("refresh-trader");
+    if (refresh && !refresh.disabled) {
+      refresh.click();
+      return true;
+    }
+    const unlock = $("unlock-trader");
+    if (unlock && !unlock.disabled && tokenFromInput().length >= 32) {
+      unlock.click();
+      return true;
+    }
+    return false;
+  }
+
+  async function executeIntent(action) {
+    if (busy) return;
+    const token = accessToken();
+    if (token.length < 32) {
+      pendingIntent = action;
+      showLocal("대시보드 인증 연결 중…", "운용 재개 준비");
+      const actionButton = $("v15-range-control-action");
+      if (actionButton) {
+        actionButton.disabled = true;
+        actionButton.textContent = "인증 연결 중…";
+      }
+      requestDashboardToken();
+      clearTimeout(authWaitTimer);
+      authWaitTimer = setTimeout(() => {
+        if (!pendingIntent || accessToken().length >= 32) return;
+        pendingIntent = "";
+        if (actionButton) {
+          actionButton.disabled = false;
+          actionButton.textContent = "V15 RANGE 운용 재개";
+        }
+        showLocal("대시보드 인증을 찾지 못했습니다. 페이지를 새로고침한 뒤 버튼을 다시 누르세요.", "인증 연결 실패");
+      }, 6000);
+      return;
+    }
+
+    pendingIntent = "";
+    clearTimeout(authWaitTimer);
+    busy = true;
     const button = $("v15-range-control-action");
-    const live = button?.dataset.live === "true";
-    const question = live
-      ? "V15 RANGE 신규 진입을 중지하시겠습니까?\n\n이미 열린 V15 포지션은 guardian이 계속 관리합니다."
-      : "V15 RANGE 실거래를 활성화하시겠습니까?\n\nBinance USDⓈ-M Futures · LONG · 증거금 40 USDT · 3배 레버리지입니다. R7 조건 충족 시 실제 주문이 제출될 수 있습니다.";
-    if (!window.confirm(question)) return;
-    pending = true;
     if (button) {
       button.disabled = true;
-      button.textContent = live ? "중지 처리 중…" : "활성화 검증 중…";
+      button.textContent = action === "enable" ? "운용 재개 중…" : "중지 중…";
     }
     try {
-      const data = await callControl(live ? "disable" : "enable", true);
-      pending = false;
+      const data = await callControl(action, true);
+      busy = false;
       render(data?.state || data);
     } catch (error) {
-      pending = false;
-      window.alert(`V15 RANGE 변경 실패: ${error instanceof Error ? error.message : String(error)}`);
+      busy = false;
+      showLocal(error instanceof Error ? error.message : String(error), "변경 실패");
       await load(true);
     }
   }
 
+  function toggleLive() {
+    if (busy) return;
+    const live = latestData?.runtime?.liveEnabled === true || $("v15-range-control-action")?.dataset.live === "true";
+    executeIntent(live ? "disable" : "enable");
+  }
+
   function captureDashboardToken(input, init) {
     try {
-      const url = typeof input === "string" ? input : String(input?.url || "");
-      if (!url.includes(`/${config.autotraderFunctionName || "market-autotrader"}`)) return;
       const headers = new Headers(init?.headers || (typeof input !== "string" ? input?.headers : undefined));
       const token = String(headers.get("x-autotrade-token") || "").trim();
-      if (token.length >= 32) {
-        capturedToken = token;
-        queueMicrotask(() => load(true));
+      if (!rememberToken(token)) return;
+      if (pendingIntent) {
+        const action = pendingIntent;
+        queueMicrotask(() => executeIntent(action));
+      } else {
+        queueMicrotask(() => load(false));
       }
     } catch (_) {}
   }
@@ -205,12 +281,32 @@
     return originalFetch(input, init);
   };
 
+  function captureLoginInput() {
+    if (!rememberToken(tokenFromInput())) return;
+    queueMicrotask(() => load(true));
+  }
+
   function boot() {
     ensureCard();
-    if (accessToken().length >= 32) load(true);
-    if (timer) clearInterval(timer);
+    $("unlock-trader")?.addEventListener("click", captureLoginInput, true);
+    $("trader-token")?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") captureLoginInput();
+    }, true);
+
+    if (accessToken().length >= 32) {
+      load(true);
+    } else {
+      const consoleView = $("trader-console");
+      if (consoleView && !consoleView.classList.contains("hidden")) {
+        setTimeout(() => requestDashboardToken(), 250);
+      } else {
+        showLocal("버튼을 누르면 현재 대시보드 인증을 자동으로 이어받아 운용을 재개합니다.", "운용 재개 대기");
+      }
+    }
+
+    clearInterval(timer);
     timer = setInterval(() => {
-      if (accessToken().length >= 32) load(false);
+      if (accessToken().length >= 32 && !busy) load(false);
     }, 30_000);
   }
 
@@ -219,7 +315,5 @@
   } else {
     boot();
   }
-  window.addEventListener("pageshow", () => {
-    if (accessToken().length >= 32) setTimeout(() => load(false), 0);
-  });
+  window.addEventListener("pageshow", () => setTimeout(boot, 0));
 })();
