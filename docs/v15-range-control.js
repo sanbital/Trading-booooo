@@ -3,15 +3,25 @@
 
   const config = window.TRADING_SCANNER_CONFIG || {};
   const $ = (id) => document.getElementById(id);
+  const originalFetch = window.fetch.bind(window);
+  let capturedToken = "";
   let pending = false;
   let timer = null;
   let latestData = null;
 
-  function accessToken() {
+  function tokenFromHash() {
     const raw = window.location.hash.replace(/^#/, "").trim();
     if (!raw) return "";
     const params = new URLSearchParams(raw);
     return (params.get("access") || params.get("token") || (!raw.includes("=") ? raw : "")).trim();
+  }
+
+  function accessToken() {
+    const hashToken = tokenFromHash();
+    if (hashToken.length >= 32) return hashToken;
+    const inputToken = String($("trader-token")?.value || "").trim();
+    if (inputToken.length >= 32) return inputToken;
+    return capturedToken;
   }
 
   function endpoint() {
@@ -43,7 +53,7 @@
         <div class="v15-control-head">
           <div>
             <div id="v15-range-control-state" class="v15-control-state">상태 확인 중</div>
-            <div id="v15-range-control-message" class="muted">프리플라이트를 확인하고 있습니다.</div>
+            <div id="v15-range-control-message" class="muted">대시보드 인증 후 프리플라이트를 확인합니다.</div>
           </div>
           <button id="v15-range-control-refresh" class="button-secondary" type="button">상태 새로고침</button>
         </div>
@@ -55,7 +65,7 @@
         </div>
         <div id="v15-range-control-blockers" class="v15-control-blockers"></div>
         <div class="v15-control-actions">
-          <button id="v15-range-control-action" class="button-primary" type="button" disabled>상태 확인 중</button>
+          <button id="v15-range-control-action" class="button-primary" type="button" disabled>대시보드 인증 필요</button>
           <span id="v15-range-control-updated" class="muted"></span>
         </div>
         <div class="v15-control-note">활성화 시 Binance USDⓈ-M Futures · LONG · 증거금 40 USDT · 3배 레버리지로, R7 조건을 충족할 때만 신규 주문을 제출합니다. 최대 10슬롯은 상한이며 실제 슬롯은 가용자금과 기존 포지션에 따라 자동 축소됩니다. 신규 진입을 중지해도 열린 V15 포지션의 guardian은 계속 청산을 관리합니다.</div>
@@ -116,8 +126,8 @@
 
   async function callControl(action, refresh = false) {
     const token = accessToken();
-    if (!token || token.length < 24) throw new Error("대시보드 접속 토큰이 없습니다.");
-    const response = await fetch(endpoint(), {
+    if (!token || token.length < 32) throw new Error("대시보드 운영 토큰으로 먼저 로그인하세요.");
+    const response = await originalFetch(endpoint(), {
       method: "POST",
       cache: "no-store",
       headers: { "content-type": "application/json", "x-autotrade-token": token },
@@ -147,7 +157,7 @@
       pending = false;
       const state = $("v15-range-control-state");
       state.className = "v15-control-state v15-state-blocked";
-      state.textContent = "상태 확인 실패";
+      state.textContent = accessToken().length >= 32 ? "상태 확인 실패" : "대시보드 인증 필요";
       $("v15-range-control-message").textContent = error instanceof Error ? error.message : String(error);
       if (action) action.disabled = true;
     }
@@ -177,11 +187,31 @@
     }
   }
 
+  function captureDashboardToken(input, init) {
+    try {
+      const url = typeof input === "string" ? input : String(input?.url || "");
+      if (!url.includes(`/${config.autotraderFunctionName || "market-autotrader"}`)) return;
+      const headers = new Headers(init?.headers || (typeof input !== "string" ? input?.headers : undefined));
+      const token = String(headers.get("x-autotrade-token") || "").trim();
+      if (token.length >= 32) {
+        capturedToken = token;
+        queueMicrotask(() => load(true));
+      }
+    } catch (_) {}
+  }
+
+  window.fetch = async (input, init) => {
+    captureDashboardToken(input, init);
+    return originalFetch(input, init);
+  };
+
   function boot() {
     ensureCard();
-    load(true);
+    if (accessToken().length >= 32) load(true);
     if (timer) clearInterval(timer);
-    timer = setInterval(() => load(false), 30_000);
+    timer = setInterval(() => {
+      if (accessToken().length >= 32) load(false);
+    }, 30_000);
   }
 
   if (document.readyState === "loading") {
@@ -189,5 +219,7 @@
   } else {
     boot();
   }
-  window.addEventListener("pageshow", () => setTimeout(() => load(false), 0));
+  window.addEventListener("pageshow", () => {
+    if (accessToken().length >= 32) setTimeout(() => load(false), 0);
+  });
 })();
