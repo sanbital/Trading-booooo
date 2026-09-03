@@ -1,0 +1,76 @@
+#v15-range-control-section .v15-control-panel {
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+#v15-range-control-section .v15-control-head {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+#v15-range-control-section .v15-control-state {
+  font-weight: 800;
+  font-size: 1.02rem;
+}
+
+#v15-range-control-section .v15-state-ready { color: #0a7d43; }
+#v15-range-control-section .v15-state-live { color: #b94700; }
+#v15-range-control-section .v15-state-blocked { color: #b42318; }
+
+#v15-range-control-section .v15-control-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+#v15-range-control-section .v15-control-grid > div {
+  padding: 10px 12px;
+  border: 1px solid rgba(127, 127, 127, 0.2);
+  border-radius: 10px;
+  display: grid;
+  gap: 4px;
+}
+
+#v15-range-control-section .v15-control-grid span {
+  font-size: 0.78rem;
+  opacity: 0.72;
+}
+
+#v15-range-control-section .v15-control-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+#v15-range-control-section .v15-control-note {
+  font-size: 0.84rem;
+  line-height: 1.55;
+  opacity: 0.78;
+}
+
+#v15-range-control-section .v15-control-blockers {
+  font-size: 0.84rem;
+  line-height: 1.55;
+  color: #b42318;
+}
+
+#v15-range-control-action.v15-live-stop {
+  background: #fff;
+  border-color: #b42318;
+  color: #b42318;
+}
+
+@media (max-width: 760px) {
+  #v15-range-control-section .v15-control-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #v15-range-control-action {
+    width: 100%;
+  }
+}
