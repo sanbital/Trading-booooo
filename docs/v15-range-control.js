@@ -23,11 +23,10 @@
   }
 
   function accessToken() {
-    const hash = tokenFromHash();
-    if (hash.length >= 32) return hash;
+    if (capturedToken.length >= 32) return capturedToken;
     const input = tokenFromInput();
     if (input.length >= 32) return input;
-    return capturedToken;
+    return "";
   }
 
   function rememberToken(value) {
