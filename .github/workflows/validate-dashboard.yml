@@ -29,5 +29,6 @@ jobs:
           node --check docs/performance.js
           node --check docs/realized-performance.js
           node --check docs/dashboard-only.js
+          node --check docs/v15-range-control.js
           node --test docs/version-runtime.test.mjs
           node validation/v700-deploy-validation.mjs
