@@ -10,7 +10,7 @@
     if (document.getElementById("v15-range-control-script")) return;
     const script = document.createElement("script");
     script.id = "v15-range-control-script";
-    script.src = "./v15-range-control.js?v=4-V15-R7-LIVE-CONTROL";
+    script.src = "./v15-range-control.js?v=5-V15-R7-LIVE-CONTROL";
     script.defer = true;
     document.head.appendChild(script);
   }
