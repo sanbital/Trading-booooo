@@ -6,12 +6,22 @@
   let realizedExpanded = false;
   let realizedObserver = null;
 
+  function loadV15ControlModule() {
+    if (document.getElementById("v15-range-control-script")) return;
+    const script = document.createElement("script");
+    script.id = "v15-range-control-script";
+    script.src = "./v15-range-control.js?v=1-V15-R7-LIVE-CONTROL";
+    script.defer = true;
+    document.head.appendChild(script);
+  }
+
   function priorityAnchor() {
     return $("trader-notice") || $("trader-alert") || document.querySelector("#trader-console .operator-header");
   }
 
   function movePrioritySections() {
     const anchor = priorityAnchor();
+    const v15Control = $("v15-range-control-section");
     const positions = $("positions-body")?.closest(".section-block");
     const livePosition = $("current-position-estimate-section");
     const realized = $("realized-performance-section");
@@ -20,7 +30,7 @@
     const orderHistory = $("trade-performance-section");
     if (!anchor || !positions) return false;
 
-    const ordered = [positions, livePosition, realized, diagnostic, runtime, orderHistory].filter(Boolean);
+    const ordered = [v15Control, positions, livePosition, realized, diagnostic, runtime, orderHistory].filter(Boolean);
     anchor.after(...ordered);
     return Boolean(realized && runtime && orderHistory);
   }
@@ -101,6 +111,8 @@
   }
 
   function activateDashboardOnly() {
+    loadV15ControlModule();
+
     const traderButton = document.querySelector('[data-view="trader"]');
     if (traderButton) traderButton.click();
 
