@@ -17,3 +17,7 @@ verify_jwt = false
 
 [functions.scalp-calibration]
 verify_jwt = false
+
+[functions.trade-notification-mailer]
+# DB trigger sends a random Vault-held x-trade-notification-token.
+verify_jwt = false
