@@ -335,6 +335,8 @@ async function activeBinanceFuturesSymbols(): Promise<Set<string>> {
 const DASHBOARD_ORIGIN = env("ALLOWED_ORIGINS").split(",")[0] || "*";
 const DEFAULT_MODE = parseMode(env("TRADING_MODE_DEFAULT") || "PAPER");
 const MAX_SCAN_SECONDS = 280;
+const MIN_MONITOR_INTERVAL_SECONDS = 10;
+const MIN_FULL_SCAN_INTERVAL_SECONDS = 60;
 // Scan lease shape. The TTL is a renewed heartbeat, not the scan's worst-case runtime, so a
 // scan that dies mid-flight frees the shared engine lease in SCAN_LEASE_TTL_SECONDS instead
 // of holding monitor off for the whole scan budget. SCAN_LEASE_WAIT_MS spans one full monitor
@@ -565,6 +567,23 @@ async function db(path: string, init: RequestInit = {}): Promise<any> {
 }
 async function rpc(name: string, body: JsonRecord): Promise<any> {
   return db(`rpc/${name}`, { method: "POST", body: JSON.stringify(body) });
+}
+async function tryAcquireExecutionGate(
+  gateKey: string,
+  minSeconds: number,
+): Promise<{ acquired: boolean; error?: string }> {
+  try {
+    const acquired = await rpc("try_acquire_autotrader_execution_gate", {
+      p_gate_key: gateKey,
+      p_min_seconds: minSeconds,
+    });
+    return { acquired: acquired === true };
+  } catch (error) {
+    return {
+      acquired: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 async function patch(table: string, filter: string, values: JsonRecord): Promise<any[]> {
   return db(`${table}?${filter}`, {
@@ -12648,8 +12667,8 @@ async function control(body: JsonRecord, settings: TradingSettings & JsonRecord)
     scalp_max_consecutive_losses: [1, 50],
     scalp_max_holding_minutes: [0.1, 5],
     entry_ttl_seconds: [5, 900],
-    full_scan_interval_seconds: [10, 3600],
-    monitor_interval_seconds: [5, 300],
+    full_scan_interval_seconds: [60, 3600],
+    monitor_interval_seconds: [10, 300],
     max_new_entries_per_scan: [1, 20],
     lob_max_holding_seconds: [1, 300],
     lob_absolute_max_holding_seconds: [1, 300],
@@ -12698,6 +12717,34 @@ Deno.serve(async (request: Request) => {
     let settings = await loadSettings();
     if (!settings.configured) settings = await ensureConfigured(settings);
     if (action === "status") return response({ ok: true, ...(await status(settings)) });
+
+    if (action === "scan" || action === "monitor") {
+      const minIntervalSeconds = action === "monitor"
+        ? Math.max(
+          MIN_MONITOR_INTERVAL_SECONDS,
+          finite(settings.monitor_interval_seconds, MIN_MONITOR_INTERVAL_SECONDS),
+        )
+        : Math.max(
+          MIN_FULL_SCAN_INTERVAL_SECONDS,
+          finite(settings.full_scan_interval_seconds, MIN_FULL_SCAN_INTERVAL_SECONDS),
+        );
+      const boundedMinIntervalSeconds = Math.floor(minIntervalSeconds);
+      const executionGate = await tryAcquireExecutionGate(
+        `market-autotrader:${action}`,
+        boundedMinIntervalSeconds,
+      );
+      if (!executionGate.acquired) {
+        return response({
+          ok: true,
+          status: "SKIPPED",
+          action,
+          reason: executionGate.error
+            ? "EXECUTION_GATE_ERROR"
+            : `${action.toUpperCase()}_THROTTLED`,
+          min_interval_seconds: boundedMinIntervalSeconds,
+        });
+      }
+    }
     const kind: CycleKind = action === "scan"
       ? "SCAN"
       : action === "monitor"
