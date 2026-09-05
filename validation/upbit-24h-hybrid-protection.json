@@ -1,0 +1,2992 @@
+{
+  "context": {
+    "buy_fee_bps": 5,
+    "cost_buffer_upbit_bps": 12
+  },
+  "raw": 30,
+  "dedup": 25,
+  "replayed": 25,
+  "current_same_sample": {
+    "n": 25,
+    "mean": 0.09577240918612873,
+    "median": 0.128916068884255,
+    "p05": -0.41963018490754445,
+    "p10": -0.06102792759463901,
+    "p90": 0.25669747627080414,
+    "p95": 0.34183144250446307,
+    "min": -0.8312003907955834,
+    "max": 0.4179649806433261,
+    "positive_rate": 0.84,
+    "arm_rate": 0.76,
+    "hit_rate": 0.76,
+    "avg_exit_s": 600.0
+  },
+  "variants": {
+    "10": {
+      "n": 25,
+      "mean": 0.02333596842607699,
+      "median": 0.014679980721066244,
+      "p05": -0.40016913621111694,
+      "p10": -0.0007496981116794627,
+      "p90": 0.22801803122084247,
+      "p95": 0.26019272229930385,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.88,
+      "arm_rate": 0.84,
+      "hit_rate": 0.88,
+      "avg_exit_s": 169.84
+    },
+    "12": {
+      "n": 25,
+      "mean": 0.02333596842607699,
+      "median": 0.014679980721066244,
+      "p05": -0.40016913621111694,
+      "p10": -0.0007496981116794627,
+      "p90": 0.22801803122084247,
+      "p95": 0.26019272229930385,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.88,
+      "arm_rate": 0.84,
+      "hit_rate": 0.88,
+      "avg_exit_s": 169.84
+    },
+    "14": {
+      "n": 25,
+      "mean": 0.02333596842607699,
+      "median": 0.014679980721066244,
+      "p05": -0.40016913621111694,
+      "p10": -0.0007496981116794627,
+      "p90": 0.22801803122084247,
+      "p95": 0.26019272229930385,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.88,
+      "arm_rate": 0.84,
+      "hit_rate": 0.88,
+      "avg_exit_s": 171.48
+    },
+    "15": {
+      "n": 25,
+      "mean": 0.02333596842607699,
+      "median": 0.014679980721066244,
+      "p05": -0.40016913621111694,
+      "p10": -0.0007496981116794627,
+      "p90": 0.22801803122084247,
+      "p95": 0.26019272229930385,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.88,
+      "arm_rate": 0.84,
+      "hit_rate": 0.88,
+      "avg_exit_s": 171.48
+    },
+    "16": {
+      "n": 25,
+      "mean": 0.02333596842607699,
+      "median": 0.014679980721066244,
+      "p05": -0.40016913621111694,
+      "p10": -0.0007496981116794627,
+      "p90": 0.22801803122084247,
+      "p95": 0.26019272229930385,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.88,
+      "arm_rate": 0.84,
+      "hit_rate": 0.88,
+      "avg_exit_s": 171.48
+    },
+    "18": {
+      "n": 25,
+      "mean": 0.03969660043958845,
+      "median": 0.053742359589459276,
+      "p05": -0.40016913621111694,
+      "p10": -0.0007496981116794627,
+      "p90": 0.24380991513223815,
+      "p95": 0.26067308690991714,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.88,
+      "arm_rate": 0.84,
+      "hit_rate": 0.88,
+      "avg_exit_s": 177.52
+    },
+    "20": {
+      "n": 25,
+      "mean": 0.03969660043958845,
+      "median": 0.053742359589459276,
+      "p05": -0.40016913621111694,
+      "p10": -0.0007496981116794627,
+      "p90": 0.24380991513223815,
+      "p95": 0.26067308690991714,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.88,
+      "arm_rate": 0.84,
+      "hit_rate": 0.88,
+      "avg_exit_s": 177.52
+    },
+    "22": {
+      "n": 25,
+      "mean": 0.05227383298381838,
+      "median": 0.08961363720418891,
+      "p05": -0.41963018490754445,
+      "p10": -0.06102792759463901,
+      "p90": 0.24380991513223815,
+      "p95": 0.26067308690991714,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.84,
+      "arm_rate": 0.8,
+      "hit_rate": 0.8,
+      "avg_exit_s": 222.68
+    },
+    "25": {
+      "n": 25,
+      "mean": 0.08347701841997512,
+      "median": 0.128916068884255,
+      "p05": -0.41963018490754445,
+      "p10": -0.06102792759463901,
+      "p90": 0.24443838346735358,
+      "p95": 0.26067308690991714,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.84,
+      "arm_rate": 0.76,
+      "hit_rate": 0.76,
+      "avg_exit_s": 271.08
+    },
+    "30": {
+      "n": 25,
+      "mean": 0.08347701841997512,
+      "median": 0.128916068884255,
+      "p05": -0.41963018490754445,
+      "p10": -0.06102792759463901,
+      "p90": 0.24443838346735358,
+      "p95": 0.26067308690991714,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.84,
+      "arm_rate": 0.76,
+      "hit_rate": 0.76,
+      "avg_exit_s": 271.08
+    },
+    "35": {
+      "n": 25,
+      "mean": 0.09577240918612961,
+      "median": 0.128916068884255,
+      "p05": -0.41963018490754445,
+      "p10": -0.06102792759463901,
+      "p90": 0.25669747627080414,
+      "p95": 0.34183144250446307,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.84,
+      "arm_rate": 0.52,
+      "hit_rate": 0.76,
+      "avg_exit_s": 272.64
+    },
+    "40": {
+      "n": 25,
+      "mean": 0.09577240918612961,
+      "median": 0.128916068884255,
+      "p05": -0.41963018490754445,
+      "p10": -0.06102792759463901,
+      "p90": 0.25669747627080414,
+      "p95": 0.34183144250446307,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.84,
+      "arm_rate": 0.36,
+      "hit_rate": 0.76,
+      "avg_exit_s": 272.64
+    },
+    "50": {
+      "n": 25,
+      "mean": 0.09577240918612961,
+      "median": 0.128916068884255,
+      "p05": -0.41963018490754445,
+      "p10": -0.06102792759463901,
+      "p90": 0.25669747627080414,
+      "p95": 0.34183144250446307,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.84,
+      "arm_rate": 0.08,
+      "hit_rate": 0.76,
+      "avg_exit_s": 272.64
+    }
+  },
+  "best": {
+    "arm_bps": "35",
+    "metrics": {
+      "n": 25,
+      "mean": 0.09577240918612961,
+      "median": 0.128916068884255,
+      "p05": -0.41963018490754445,
+      "p10": -0.06102792759463901,
+      "p90": 0.25669747627080414,
+      "p95": 0.34183144250446307,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.84,
+      "arm_rate": 0.52,
+      "hit_rate": 0.76,
+      "avg_exit_s": 272.64
+    },
+    "dominates_current": true
+  },
+  "details": [
+    {
+      "market": "KRW-ONG",
+      "entry": 84.7,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.13594147436317705,
+          "armed": true,
+          "hit": true,
+          "exit_s": 64.0,
+          "reason": "PROTECT",
+          "be": 84.9
+        },
+        "12": {
+          "net_return_pct": 0.13594147436317705,
+          "armed": true,
+          "hit": true,
+          "exit_s": 64.0,
+          "reason": "PROTECT",
+          "be": 84.9
+        },
+        "14": {
+          "net_return_pct": 0.13594147436317705,
+          "armed": true,
+          "hit": true,
+          "exit_s": 64.0,
+          "reason": "PROTECT",
+          "be": 84.9
+        },
+        "15": {
+          "net_return_pct": 0.13594147436317705,
+          "armed": true,
+          "hit": true,
+          "exit_s": 64.0,
+          "reason": "PROTECT",
+          "be": 84.9
+        },
+        "16": {
+          "net_return_pct": 0.13594147436317705,
+          "armed": true,
+          "hit": true,
+          "exit_s": 64.0,
+          "reason": "PROTECT",
+          "be": 84.9
+        },
+        "18": {
+          "net_return_pct": 0.13594147436317705,
+          "armed": true,
+          "hit": true,
+          "exit_s": 64.0,
+          "reason": "PROTECT",
+          "be": 84.9
+        },
+        "20": {
+          "net_return_pct": 0.13594147436317705,
+          "armed": true,
+          "hit": true,
+          "exit_s": 64.0,
+          "reason": "PROTECT",
+          "be": 84.9
+        },
+        "22": {
+          "net_return_pct": 0.13594147436317705,
+          "armed": true,
+          "hit": true,
+          "exit_s": 64.0,
+          "reason": "PROTECT",
+          "be": 84.9
+        },
+        "25": {
+          "net_return_pct": 0.13594147436317705,
+          "armed": true,
+          "hit": true,
+          "exit_s": 64.0,
+          "reason": "PROTECT",
+          "be": 84.9
+        },
+        "30": {
+          "net_return_pct": 0.13594147436317705,
+          "armed": true,
+          "hit": true,
+          "exit_s": 64.0,
+          "reason": "PROTECT",
+          "be": 84.9
+        },
+        "35": {
+          "net_return_pct": 0.13594147436317705,
+          "armed": true,
+          "hit": true,
+          "exit_s": 64.0,
+          "reason": "PROTECT",
+          "be": 84.9
+        },
+        "40": {
+          "net_return_pct": 0.13594147436317705,
+          "armed": false,
+          "hit": true,
+          "exit_s": 64.0,
+          "reason": "PROTECT",
+          "be": 84.9
+        },
+        "50": {
+          "net_return_pct": 0.13594147436317705,
+          "armed": false,
+          "hit": true,
+          "exit_s": 64.0,
+          "reason": "PROTECT",
+          "be": 84.9
+        }
+      }
+    },
+    {
+      "market": "KRW-EUL",
+      "entry": 1751.0,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.24236882130039827,
+          "armed": true,
+          "hit": true,
+          "exit_s": 25.0,
+          "reason": "PROTECT",
+          "be": 1753.0
+        },
+        "12": {
+          "net_return_pct": 0.24236882130039827,
+          "armed": true,
+          "hit": true,
+          "exit_s": 25.0,
+          "reason": "PROTECT",
+          "be": 1753.0
+        },
+        "14": {
+          "net_return_pct": 0.24236882130039827,
+          "armed": true,
+          "hit": true,
+          "exit_s": 25.0,
+          "reason": "PROTECT",
+          "be": 1753.0
+        },
+        "15": {
+          "net_return_pct": 0.24236882130039827,
+          "armed": true,
+          "hit": true,
+          "exit_s": 25.0,
+          "reason": "PROTECT",
+          "be": 1753.0
+        },
+        "16": {
+          "net_return_pct": 0.24236882130039827,
+          "armed": true,
+          "hit": true,
+          "exit_s": 25.0,
+          "reason": "PROTECT",
+          "be": 1753.0
+        },
+        "18": {
+          "net_return_pct": 0.24236882130039827,
+          "armed": true,
+          "hit": true,
+          "exit_s": 25.0,
+          "reason": "PROTECT",
+          "be": 1753.0
+        },
+        "20": {
+          "net_return_pct": 0.24236882130039827,
+          "armed": true,
+          "hit": true,
+          "exit_s": 25.0,
+          "reason": "PROTECT",
+          "be": 1753.0
+        },
+        "22": {
+          "net_return_pct": 0.24236882130039827,
+          "armed": true,
+          "hit": true,
+          "exit_s": 25.0,
+          "reason": "PROTECT",
+          "be": 1753.0
+        },
+        "25": {
+          "net_return_pct": 0.24236882130039827,
+          "armed": true,
+          "hit": true,
+          "exit_s": 25.0,
+          "reason": "PROTECT",
+          "be": 1753.0
+        },
+        "30": {
+          "net_return_pct": 0.24236882130039827,
+          "armed": true,
+          "hit": true,
+          "exit_s": 25.0,
+          "reason": "PROTECT",
+          "be": 1753.0
+        },
+        "35": {
+          "net_return_pct": 0.24236882130039827,
+          "armed": true,
+          "hit": true,
+          "exit_s": 25.0,
+          "reason": "PROTECT",
+          "be": 1753.0
+        },
+        "40": {
+          "net_return_pct": 0.24236882130039827,
+          "armed": true,
+          "hit": true,
+          "exit_s": 25.0,
+          "reason": "PROTECT",
+          "be": 1753.0
+        },
+        "50": {
+          "net_return_pct": 0.24236882130039827,
+          "armed": false,
+          "hit": true,
+          "exit_s": 25.0,
+          "reason": "PROTECT",
+          "be": 1753.0
+        }
+      }
+    },
+    {
+      "market": "KRW-EUL",
+      "entry": 1776.0,
+      "arms": {
+        "10": {
+          "net_return_pct": -0.8312003907955834,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1778.0
+        },
+        "12": {
+          "net_return_pct": -0.8312003907955834,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1778.0
+        },
+        "14": {
+          "net_return_pct": -0.8312003907955834,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1778.0
+        },
+        "15": {
+          "net_return_pct": -0.8312003907955834,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1778.0
+        },
+        "16": {
+          "net_return_pct": -0.8312003907955834,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1778.0
+        },
+        "18": {
+          "net_return_pct": -0.8312003907955834,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1778.0
+        },
+        "20": {
+          "net_return_pct": -0.8312003907955834,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1778.0
+        },
+        "22": {
+          "net_return_pct": -0.8312003907955834,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1778.0
+        },
+        "25": {
+          "net_return_pct": -0.8312003907955834,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1778.0
+        },
+        "30": {
+          "net_return_pct": -0.8312003907955834,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1778.0
+        },
+        "35": {
+          "net_return_pct": -0.8312003907955834,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1778.0
+        },
+        "40": {
+          "net_return_pct": -0.8312003907955834,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1778.0
+        },
+        "50": {
+          "net_return_pct": -0.8312003907955834,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1778.0
+        }
+      }
+    },
+    {
+      "market": "KRW-EUL",
+      "entry": 1736.0,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.4179649806433261,
+          "armed": true,
+          "hit": true,
+          "exit_s": 39.0,
+          "reason": "PROTECT",
+          "be": 1738.0
+        },
+        "12": {
+          "net_return_pct": 0.4179649806433261,
+          "armed": true,
+          "hit": true,
+          "exit_s": 39.0,
+          "reason": "PROTECT",
+          "be": 1738.0
+        },
+        "14": {
+          "net_return_pct": 0.4179649806433261,
+          "armed": true,
+          "hit": true,
+          "exit_s": 39.0,
+          "reason": "PROTECT",
+          "be": 1738.0
+        },
+        "15": {
+          "net_return_pct": 0.4179649806433261,
+          "armed": true,
+          "hit": true,
+          "exit_s": 39.0,
+          "reason": "PROTECT",
+          "be": 1738.0
+        },
+        "16": {
+          "net_return_pct": 0.4179649806433261,
+          "armed": true,
+          "hit": true,
+          "exit_s": 39.0,
+          "reason": "PROTECT",
+          "be": 1738.0
+        },
+        "18": {
+          "net_return_pct": 0.4179649806433261,
+          "armed": true,
+          "hit": true,
+          "exit_s": 39.0,
+          "reason": "PROTECT",
+          "be": 1738.0
+        },
+        "20": {
+          "net_return_pct": 0.4179649806433261,
+          "armed": true,
+          "hit": true,
+          "exit_s": 39.0,
+          "reason": "PROTECT",
+          "be": 1738.0
+        },
+        "22": {
+          "net_return_pct": 0.4179649806433261,
+          "armed": true,
+          "hit": true,
+          "exit_s": 39.0,
+          "reason": "PROTECT",
+          "be": 1738.0
+        },
+        "25": {
+          "net_return_pct": 0.4179649806433261,
+          "armed": true,
+          "hit": true,
+          "exit_s": 39.0,
+          "reason": "PROTECT",
+          "be": 1738.0
+        },
+        "30": {
+          "net_return_pct": 0.4179649806433261,
+          "armed": true,
+          "hit": true,
+          "exit_s": 39.0,
+          "reason": "PROTECT",
+          "be": 1738.0
+        },
+        "35": {
+          "net_return_pct": 0.4179649806433261,
+          "armed": true,
+          "hit": true,
+          "exit_s": 39.0,
+          "reason": "PROTECT",
+          "be": 1738.0
+        },
+        "40": {
+          "net_return_pct": 0.4179649806433261,
+          "armed": true,
+          "hit": true,
+          "exit_s": 39.0,
+          "reason": "PROTECT",
+          "be": 1738.0
+        },
+        "50": {
+          "net_return_pct": 0.4179649806433261,
+          "armed": true,
+          "hit": true,
+          "exit_s": 39.0,
+          "reason": "PROTECT",
+          "be": 1738.0
+        }
+      }
+    },
+    {
+      "market": "KRW-ONG",
+      "entry": 86.6,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.015408000387817644,
+          "armed": true,
+          "hit": true,
+          "exit_s": 55.0,
+          "reason": "PROTECT",
+          "be": 86.7
+        },
+        "12": {
+          "net_return_pct": 0.015408000387817644,
+          "armed": true,
+          "hit": true,
+          "exit_s": 55.0,
+          "reason": "PROTECT",
+          "be": 86.7
+        },
+        "14": {
+          "net_return_pct": 0.015408000387817644,
+          "armed": true,
+          "hit": true,
+          "exit_s": 55.0,
+          "reason": "PROTECT",
+          "be": 86.7
+        },
+        "15": {
+          "net_return_pct": 0.015408000387817644,
+          "armed": true,
+          "hit": true,
+          "exit_s": 55.0,
+          "reason": "PROTECT",
+          "be": 86.7
+        },
+        "16": {
+          "net_return_pct": 0.015408000387817644,
+          "armed": true,
+          "hit": true,
+          "exit_s": 55.0,
+          "reason": "PROTECT",
+          "be": 86.7
+        },
+        "18": {
+          "net_return_pct": 0.015408000387817644,
+          "armed": true,
+          "hit": true,
+          "exit_s": 55.0,
+          "reason": "PROTECT",
+          "be": 86.7
+        },
+        "20": {
+          "net_return_pct": 0.015408000387817644,
+          "armed": true,
+          "hit": true,
+          "exit_s": 55.0,
+          "reason": "PROTECT",
+          "be": 86.7
+        },
+        "22": {
+          "net_return_pct": 0.015408000387817644,
+          "armed": true,
+          "hit": true,
+          "exit_s": 55.0,
+          "reason": "PROTECT",
+          "be": 86.7
+        },
+        "25": {
+          "net_return_pct": 0.015408000387817644,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 86.7
+        },
+        "30": {
+          "net_return_pct": 0.015408000387817644,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 86.7
+        },
+        "35": {
+          "net_return_pct": 0.015408000387817644,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 86.7
+        },
+        "40": {
+          "net_return_pct": 0.015408000387817644,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 86.7
+        },
+        "50": {
+          "net_return_pct": 0.015408000387817644,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 86.7
+        }
+      }
+    },
+    {
+      "market": "KRW-ONG",
+      "entry": 87.3,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.014483021948374919,
+          "armed": true,
+          "hit": true,
+          "exit_s": 67.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "12": {
+          "net_return_pct": 0.014483021948374919,
+          "armed": true,
+          "hit": true,
+          "exit_s": 67.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "14": {
+          "net_return_pct": 0.014483021948374919,
+          "armed": true,
+          "hit": true,
+          "exit_s": 67.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "15": {
+          "net_return_pct": 0.014483021948374919,
+          "armed": true,
+          "hit": true,
+          "exit_s": 67.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "16": {
+          "net_return_pct": 0.014483021948374919,
+          "armed": true,
+          "hit": true,
+          "exit_s": 67.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "18": {
+          "net_return_pct": 0.014483021948374919,
+          "armed": true,
+          "hit": true,
+          "exit_s": 67.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "20": {
+          "net_return_pct": 0.014483021948374919,
+          "armed": true,
+          "hit": true,
+          "exit_s": 67.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "22": {
+          "net_return_pct": 0.014483021948374919,
+          "armed": true,
+          "hit": true,
+          "exit_s": 67.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "25": {
+          "net_return_pct": 0.128916068884255,
+          "armed": true,
+          "hit": true,
+          "exit_s": 134.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "30": {
+          "net_return_pct": 0.128916068884255,
+          "armed": true,
+          "hit": true,
+          "exit_s": 134.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "35": {
+          "net_return_pct": 0.128916068884255,
+          "armed": false,
+          "hit": true,
+          "exit_s": 134.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "40": {
+          "net_return_pct": 0.128916068884255,
+          "armed": false,
+          "hit": true,
+          "exit_s": 134.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "50": {
+          "net_return_pct": 0.128916068884255,
+          "armed": false,
+          "hit": true,
+          "exit_s": 134.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        }
+      }
+    },
+    {
+      "market": "KRW-ONG",
+      "entry": 88.1,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.01344390233941617,
+          "armed": true,
+          "hit": true,
+          "exit_s": 221.0,
+          "reason": "PROTECT",
+          "be": 88.2
+        },
+        "12": {
+          "net_return_pct": 0.01344390233941617,
+          "armed": true,
+          "hit": true,
+          "exit_s": 221.0,
+          "reason": "PROTECT",
+          "be": 88.2
+        },
+        "14": {
+          "net_return_pct": 0.01344390233941617,
+          "armed": true,
+          "hit": true,
+          "exit_s": 221.0,
+          "reason": "PROTECT",
+          "be": 88.2
+        },
+        "15": {
+          "net_return_pct": 0.01344390233941617,
+          "armed": true,
+          "hit": true,
+          "exit_s": 221.0,
+          "reason": "PROTECT",
+          "be": 88.2
+        },
+        "16": {
+          "net_return_pct": 0.01344390233941617,
+          "armed": true,
+          "hit": true,
+          "exit_s": 221.0,
+          "reason": "PROTECT",
+          "be": 88.2
+        },
+        "18": {
+          "net_return_pct": 0.01344390233941617,
+          "armed": true,
+          "hit": true,
+          "exit_s": 221.0,
+          "reason": "PROTECT",
+          "be": 88.2
+        },
+        "20": {
+          "net_return_pct": 0.01344390233941617,
+          "armed": true,
+          "hit": true,
+          "exit_s": 221.0,
+          "reason": "PROTECT",
+          "be": 88.2
+        },
+        "22": {
+          "net_return_pct": 0.01344390233941617,
+          "armed": true,
+          "hit": true,
+          "exit_s": 221.0,
+          "reason": "PROTECT",
+          "be": 88.2
+        },
+        "25": {
+          "net_return_pct": 0.1268378296663375,
+          "armed": true,
+          "hit": true,
+          "exit_s": 296.0,
+          "reason": "PROTECT",
+          "be": 88.2
+        },
+        "30": {
+          "net_return_pct": 0.1268378296663375,
+          "armed": true,
+          "hit": true,
+          "exit_s": 296.0,
+          "reason": "PROTECT",
+          "be": 88.2
+        },
+        "35": {
+          "net_return_pct": 0.1268378296663375,
+          "armed": false,
+          "hit": true,
+          "exit_s": 296.0,
+          "reason": "PROTECT",
+          "be": 88.2
+        },
+        "40": {
+          "net_return_pct": 0.1268378296663375,
+          "armed": false,
+          "hit": true,
+          "exit_s": 296.0,
+          "reason": "PROTECT",
+          "be": 88.2
+        },
+        "50": {
+          "net_return_pct": 0.1268378296663375,
+          "armed": false,
+          "hit": true,
+          "exit_s": 296.0,
+          "reason": "PROTECT",
+          "be": 88.2
+        }
+      }
+    },
+    {
+      "market": "KRW-EUL",
+      "entry": 1743.0,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.014679980721066244,
+          "armed": true,
+          "hit": true,
+          "exit_s": 337.0,
+          "reason": "PROTECT",
+          "be": 1745.0
+        },
+        "12": {
+          "net_return_pct": 0.014679980721066244,
+          "armed": true,
+          "hit": true,
+          "exit_s": 337.0,
+          "reason": "PROTECT",
+          "be": 1745.0
+        },
+        "14": {
+          "net_return_pct": 0.014679980721066244,
+          "armed": true,
+          "hit": true,
+          "exit_s": 337.0,
+          "reason": "PROTECT",
+          "be": 1745.0
+        },
+        "15": {
+          "net_return_pct": 0.014679980721066244,
+          "armed": true,
+          "hit": true,
+          "exit_s": 337.0,
+          "reason": "PROTECT",
+          "be": 1745.0
+        },
+        "16": {
+          "net_return_pct": 0.014679980721066244,
+          "armed": true,
+          "hit": true,
+          "exit_s": 337.0,
+          "reason": "PROTECT",
+          "be": 1745.0
+        },
+        "18": {
+          "net_return_pct": 0.014679980721066244,
+          "armed": true,
+          "hit": true,
+          "exit_s": 337.0,
+          "reason": "PROTECT",
+          "be": 1745.0
+        },
+        "20": {
+          "net_return_pct": 0.014679980721066244,
+          "armed": true,
+          "hit": true,
+          "exit_s": 337.0,
+          "reason": "PROTECT",
+          "be": 1745.0
+        },
+        "22": {
+          "net_return_pct": 0.014679980721066244,
+          "armed": true,
+          "hit": true,
+          "exit_s": 337.0,
+          "reason": "PROTECT",
+          "be": 1745.0
+        },
+        "25": {
+          "net_return_pct": 0.24393999213818685,
+          "armed": true,
+          "hit": true,
+          "exit_s": 470.0,
+          "reason": "PROTECT",
+          "be": 1745.0
+        },
+        "30": {
+          "net_return_pct": 0.24393999213818685,
+          "armed": true,
+          "hit": true,
+          "exit_s": 470.0,
+          "reason": "PROTECT",
+          "be": 1745.0
+        },
+        "35": {
+          "net_return_pct": 0.24393999213818685,
+          "armed": true,
+          "hit": true,
+          "exit_s": 470.0,
+          "reason": "PROTECT",
+          "be": 1745.0
+        },
+        "40": {
+          "net_return_pct": 0.24393999213818685,
+          "armed": true,
+          "hit": true,
+          "exit_s": 470.0,
+          "reason": "PROTECT",
+          "be": 1745.0
+        },
+        "50": {
+          "net_return_pct": 0.24393999213818685,
+          "armed": false,
+          "hit": true,
+          "exit_s": 470.0,
+          "reason": "PROTECT",
+          "be": 1745.0
+        }
+      }
+    },
+    {
+      "market": "KRW-RE",
+      "entry": 650.0,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.053742359589459276,
+          "armed": true,
+          "hit": true,
+          "exit_s": 9.0,
+          "reason": "PROTECT",
+          "be": 651.0
+        },
+        "12": {
+          "net_return_pct": 0.053742359589459276,
+          "armed": true,
+          "hit": true,
+          "exit_s": 9.0,
+          "reason": "PROTECT",
+          "be": 651.0
+        },
+        "14": {
+          "net_return_pct": 0.053742359589459276,
+          "armed": true,
+          "hit": true,
+          "exit_s": 9.0,
+          "reason": "PROTECT",
+          "be": 651.0
+        },
+        "15": {
+          "net_return_pct": 0.053742359589459276,
+          "armed": true,
+          "hit": true,
+          "exit_s": 9.0,
+          "reason": "PROTECT",
+          "be": 651.0
+        },
+        "16": {
+          "net_return_pct": 0.053742359589459276,
+          "armed": true,
+          "hit": true,
+          "exit_s": 9.0,
+          "reason": "PROTECT",
+          "be": 651.0
+        },
+        "18": {
+          "net_return_pct": 0.053742359589459276,
+          "armed": true,
+          "hit": true,
+          "exit_s": 9.0,
+          "reason": "PROTECT",
+          "be": 651.0
+        },
+        "20": {
+          "net_return_pct": 0.053742359589459276,
+          "armed": true,
+          "hit": true,
+          "exit_s": 9.0,
+          "reason": "PROTECT",
+          "be": 651.0
+        },
+        "22": {
+          "net_return_pct": 0.053742359589459276,
+          "armed": true,
+          "hit": true,
+          "exit_s": 9.0,
+          "reason": "PROTECT",
+          "be": 651.0
+        },
+        "25": {
+          "net_return_pct": 0.053742359589459276,
+          "armed": true,
+          "hit": true,
+          "exit_s": 9.0,
+          "reason": "PROTECT",
+          "be": 651.0
+        },
+        "30": {
+          "net_return_pct": 0.053742359589459276,
+          "armed": true,
+          "hit": true,
+          "exit_s": 9.0,
+          "reason": "PROTECT",
+          "be": 651.0
+        },
+        "35": {
+          "net_return_pct": 0.36112712874332153,
+          "armed": true,
+          "hit": true,
+          "exit_s": 48.0,
+          "reason": "PROTECT",
+          "be": 651.0
+        },
+        "40": {
+          "net_return_pct": 0.36112712874332153,
+          "armed": true,
+          "hit": true,
+          "exit_s": 48.0,
+          "reason": "PROTECT",
+          "be": 651.0
+        },
+        "50": {
+          "net_return_pct": 0.36112712874332153,
+          "armed": true,
+          "hit": true,
+          "exit_s": 48.0,
+          "reason": "PROTECT",
+          "be": 651.0
+        }
+      }
+    },
+    {
+      "market": "KRW-EUL",
+      "entry": 1750.0,
+      "arms": {
+        "10": {
+          "net_return_pct": -0.4995502248875572,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1752.0
+        },
+        "12": {
+          "net_return_pct": -0.4995502248875572,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1752.0
+        },
+        "14": {
+          "net_return_pct": -0.4995502248875572,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1752.0
+        },
+        "15": {
+          "net_return_pct": -0.4995502248875572,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1752.0
+        },
+        "16": {
+          "net_return_pct": -0.4995502248875572,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1752.0
+        },
+        "18": {
+          "net_return_pct": -0.4995502248875572,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1752.0
+        },
+        "20": {
+          "net_return_pct": -0.4995502248875572,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1752.0
+        },
+        "22": {
+          "net_return_pct": -0.4995502248875572,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1752.0
+        },
+        "25": {
+          "net_return_pct": -0.4995502248875572,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1752.0
+        },
+        "30": {
+          "net_return_pct": -0.4995502248875572,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1752.0
+        },
+        "35": {
+          "net_return_pct": -0.4995502248875572,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1752.0
+        },
+        "40": {
+          "net_return_pct": -0.4995502248875572,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1752.0
+        },
+        "50": {
+          "net_return_pct": -0.4995502248875572,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 1752.0
+        }
+      }
+    },
+    {
+      "market": "KRW-ETH",
+      "entry": 2867000.0,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.004584383776018441,
+          "armed": true,
+          "hit": true,
+          "exit_s": 346.0,
+          "reason": "PROTECT",
+          "be": 2870000.0
+        },
+        "12": {
+          "net_return_pct": 0.004584383776018441,
+          "armed": true,
+          "hit": true,
+          "exit_s": 346.0,
+          "reason": "PROTECT",
+          "be": 2870000.0
+        },
+        "14": {
+          "net_return_pct": 0.004584383776018441,
+          "armed": true,
+          "hit": true,
+          "exit_s": 363.0,
+          "reason": "PROTECT",
+          "be": 2870000.0
+        },
+        "15": {
+          "net_return_pct": 0.004584383776018441,
+          "armed": true,
+          "hit": true,
+          "exit_s": 363.0,
+          "reason": "PROTECT",
+          "be": 2870000.0
+        },
+        "16": {
+          "net_return_pct": 0.004584383776018441,
+          "armed": true,
+          "hit": true,
+          "exit_s": 363.0,
+          "reason": "PROTECT",
+          "be": 2870000.0
+        },
+        "18": {
+          "net_return_pct": 0.004584383776018441,
+          "armed": true,
+          "hit": true,
+          "exit_s": 376.0,
+          "reason": "PROTECT",
+          "be": 2870000.0
+        },
+        "20": {
+          "net_return_pct": 0.004584383776018441,
+          "armed": true,
+          "hit": true,
+          "exit_s": 376.0,
+          "reason": "PROTECT",
+          "be": 2870000.0
+        },
+        "22": {
+          "net_return_pct": 0.21365320130308785,
+          "armed": true,
+          "hit": true,
+          "exit_s": 548.0,
+          "reason": "PROTECT",
+          "be": 2870000.0
+        },
+        "25": {
+          "net_return_pct": 0.21365320130308785,
+          "armed": true,
+          "hit": true,
+          "exit_s": 548.0,
+          "reason": "PROTECT",
+          "be": 2870000.0
+        },
+        "30": {
+          "net_return_pct": 0.21365320130308785,
+          "armed": true,
+          "hit": true,
+          "exit_s": 548.0,
+          "reason": "PROTECT",
+          "be": 2870000.0
+        },
+        "35": {
+          "net_return_pct": 0.21365320130308785,
+          "armed": false,
+          "hit": true,
+          "exit_s": 548.0,
+          "reason": "PROTECT",
+          "be": 2870000.0
+        },
+        "40": {
+          "net_return_pct": 0.21365320130308785,
+          "armed": false,
+          "hit": true,
+          "exit_s": 548.0,
+          "reason": "PROTECT",
+          "be": 2870000.0
+        },
+        "50": {
+          "net_return_pct": 0.21365320130308785,
+          "armed": false,
+          "hit": true,
+          "exit_s": 548.0,
+          "reason": "PROTECT",
+          "be": 2870000.0
+        }
+      }
+    },
+    {
+      "market": "KRW-ETH",
+      "entry": 2874000.0,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.004329776656564199,
+          "armed": true,
+          "hit": true,
+          "exit_s": 225.0,
+          "reason": "PROTECT",
+          "be": 2877000.0
+        },
+        "12": {
+          "net_return_pct": 0.004329776656564199,
+          "armed": true,
+          "hit": true,
+          "exit_s": 225.0,
+          "reason": "PROTECT",
+          "be": 2877000.0
+        },
+        "14": {
+          "net_return_pct": 0.004329776656564199,
+          "armed": true,
+          "hit": true,
+          "exit_s": 249.0,
+          "reason": "PROTECT",
+          "be": 2877000.0
+        },
+        "15": {
+          "net_return_pct": 0.004329776656564199,
+          "armed": true,
+          "hit": true,
+          "exit_s": 249.0,
+          "reason": "PROTECT",
+          "be": 2877000.0
+        },
+        "16": {
+          "net_return_pct": 0.004329776656564199,
+          "armed": true,
+          "hit": true,
+          "exit_s": 249.0,
+          "reason": "PROTECT",
+          "be": 2877000.0
+        },
+        "18": {
+          "net_return_pct": 0.004329776656564199,
+          "armed": true,
+          "hit": true,
+          "exit_s": 249.0,
+          "reason": "PROTECT",
+          "be": 2877000.0
+        },
+        "20": {
+          "net_return_pct": 0.004329776656564199,
+          "armed": true,
+          "hit": true,
+          "exit_s": 249.0,
+          "reason": "PROTECT",
+          "be": 2877000.0
+        },
+        "22": {
+          "net_return_pct": 0.004329776656564199,
+          "armed": true,
+          "hit": true,
+          "exit_s": 249.0,
+          "reason": "PROTECT",
+          "be": 2877000.0
+        },
+        "25": {
+          "net_return_pct": 0.2128893799446807,
+          "armed": true,
+          "hit": true,
+          "exit_s": 442.0,
+          "reason": "PROTECT",
+          "be": 2877000.0
+        },
+        "30": {
+          "net_return_pct": 0.2128893799446807,
+          "armed": true,
+          "hit": true,
+          "exit_s": 442.0,
+          "reason": "PROTECT",
+          "be": 2877000.0
+        },
+        "35": {
+          "net_return_pct": 0.2128893799446807,
+          "armed": false,
+          "hit": true,
+          "exit_s": 442.0,
+          "reason": "PROTECT",
+          "be": 2877000.0
+        },
+        "40": {
+          "net_return_pct": 0.2128893799446807,
+          "armed": false,
+          "hit": true,
+          "exit_s": 442.0,
+          "reason": "PROTECT",
+          "be": 2877000.0
+        },
+        "50": {
+          "net_return_pct": 0.2128893799446807,
+          "armed": false,
+          "hit": true,
+          "exit_s": 442.0,
+          "reason": "PROTECT",
+          "be": 2877000.0
+        }
+      }
+    },
+    {
+      "market": "KRW-ETH",
+      "entry": 2890000.0,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.003752449034988281,
+          "armed": true,
+          "hit": true,
+          "exit_s": 75.0,
+          "reason": "PROTECT",
+          "be": 2893000.0
+        },
+        "12": {
+          "net_return_pct": 0.003752449034988281,
+          "armed": true,
+          "hit": true,
+          "exit_s": 75.0,
+          "reason": "PROTECT",
+          "be": 2893000.0
+        },
+        "14": {
+          "net_return_pct": 0.003752449034988281,
+          "armed": true,
+          "hit": true,
+          "exit_s": 75.0,
+          "reason": "PROTECT",
+          "be": 2893000.0
+        },
+        "15": {
+          "net_return_pct": 0.003752449034988281,
+          "armed": true,
+          "hit": true,
+          "exit_s": 75.0,
+          "reason": "PROTECT",
+          "be": 2893000.0
+        },
+        "16": {
+          "net_return_pct": 0.003752449034988281,
+          "armed": true,
+          "hit": true,
+          "exit_s": 75.0,
+          "reason": "PROTECT",
+          "be": 2893000.0
+        },
+        "18": {
+          "net_return_pct": 0.003752449034988281,
+          "armed": true,
+          "hit": true,
+          "exit_s": 195.0,
+          "reason": "PROTECT",
+          "be": 2893000.0
+        },
+        "20": {
+          "net_return_pct": 0.003752449034988281,
+          "armed": true,
+          "hit": true,
+          "exit_s": 195.0,
+          "reason": "PROTECT",
+          "be": 2893000.0
+        },
+        "22": {
+          "net_return_pct": 0.21115739707999737,
+          "armed": true,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 2893000.0
+        },
+        "25": {
+          "net_return_pct": 0.21115739707999737,
+          "armed": true,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 2893000.0
+        },
+        "30": {
+          "net_return_pct": 0.21115739707999737,
+          "armed": true,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 2893000.0
+        },
+        "35": {
+          "net_return_pct": 0.21115739707999737,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 2893000.0
+        },
+        "40": {
+          "net_return_pct": 0.21115739707999737,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 2893000.0
+        },
+        "50": {
+          "net_return_pct": 0.21115739707999737,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 2893000.0
+        }
+      }
+    },
+    {
+      "market": "KRW-ETH",
+      "entry": 2898000.0,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.0034661758147924715,
+          "armed": true,
+          "hit": true,
+          "exit_s": 117.0,
+          "reason": "PROTECT",
+          "be": 2901000.0
+        },
+        "12": {
+          "net_return_pct": 0.0034661758147924715,
+          "armed": true,
+          "hit": true,
+          "exit_s": 117.0,
+          "reason": "PROTECT",
+          "be": 2901000.0
+        },
+        "14": {
+          "net_return_pct": 0.0034661758147924715,
+          "armed": true,
+          "hit": true,
+          "exit_s": 117.0,
+          "reason": "PROTECT",
+          "be": 2901000.0
+        },
+        "15": {
+          "net_return_pct": 0.0034661758147924715,
+          "armed": true,
+          "hit": true,
+          "exit_s": 117.0,
+          "reason": "PROTECT",
+          "be": 2901000.0
+        },
+        "16": {
+          "net_return_pct": 0.0034661758147924715,
+          "armed": true,
+          "hit": true,
+          "exit_s": 117.0,
+          "reason": "PROTECT",
+          "be": 2901000.0
+        },
+        "18": {
+          "net_return_pct": 0.24477064435346474,
+          "armed": true,
+          "hit": true,
+          "exit_s": 128.0,
+          "reason": "PROTECT",
+          "be": 2901000.0
+        },
+        "20": {
+          "net_return_pct": 0.24477064435346474,
+          "armed": true,
+          "hit": true,
+          "exit_s": 128.0,
+          "reason": "PROTECT",
+          "be": 2901000.0
+        },
+        "22": {
+          "net_return_pct": 0.24477064435346474,
+          "armed": true,
+          "hit": true,
+          "exit_s": 128.0,
+          "reason": "PROTECT",
+          "be": 2901000.0
+        },
+        "25": {
+          "net_return_pct": 0.24477064435346474,
+          "armed": true,
+          "hit": true,
+          "exit_s": 128.0,
+          "reason": "PROTECT",
+          "be": 2901000.0
+        },
+        "30": {
+          "net_return_pct": 0.24477064435346474,
+          "armed": true,
+          "hit": true,
+          "exit_s": 128.0,
+          "reason": "PROTECT",
+          "be": 2901000.0
+        },
+        "35": {
+          "net_return_pct": 0.24477064435346474,
+          "armed": true,
+          "hit": true,
+          "exit_s": 128.0,
+          "reason": "PROTECT",
+          "be": 2901000.0
+        },
+        "40": {
+          "net_return_pct": 0.24477064435346474,
+          "armed": true,
+          "hit": true,
+          "exit_s": 128.0,
+          "reason": "PROTECT",
+          "be": 2901000.0
+        },
+        "50": {
+          "net_return_pct": 0.24477064435346474,
+          "armed": false,
+          "hit": true,
+          "exit_s": 128.0,
+          "reason": "PROTECT",
+          "be": 2901000.0
+        }
+      }
+    },
+    {
+      "market": "KRW-ETH",
+      "entry": 3080000.0,
+      "arms": {
+        "10": {
+          "net_return_pct": -0.0026447815053565193,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 3084000.0
+        },
+        "12": {
+          "net_return_pct": -0.0026447815053565193,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 3084000.0
+        },
+        "14": {
+          "net_return_pct": -0.0026447815053565193,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 3084000.0
+        },
+        "15": {
+          "net_return_pct": -0.0026447815053565193,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 3084000.0
+        },
+        "16": {
+          "net_return_pct": -0.0026447815053565193,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 3084000.0
+        },
+        "18": {
+          "net_return_pct": -0.0026447815053565193,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 3084000.0
+        },
+        "20": {
+          "net_return_pct": -0.0026447815053565193,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 3084000.0
+        },
+        "22": {
+          "net_return_pct": -0.0026447815053565193,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 3084000.0
+        },
+        "25": {
+          "net_return_pct": -0.0026447815053565193,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 3084000.0
+        },
+        "30": {
+          "net_return_pct": -0.0026447815053565193,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 3084000.0
+        },
+        "35": {
+          "net_return_pct": -0.0026447815053565193,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 3084000.0
+        },
+        "40": {
+          "net_return_pct": -0.0026447815053565193,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 3084000.0
+        },
+        "50": {
+          "net_return_pct": -0.0026447815053565193,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 3084000.0
+        }
+      }
+    },
+    {
+      "market": "KRW-WLD",
+      "entry": 498.0,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.1006524850024837,
+          "armed": true,
+          "hit": true,
+          "exit_s": 204.0,
+          "reason": "PROTECT",
+          "be": 499.0
+        },
+        "12": {
+          "net_return_pct": 0.1006524850024837,
+          "armed": true,
+          "hit": true,
+          "exit_s": 204.0,
+          "reason": "PROTECT",
+          "be": 499.0
+        },
+        "14": {
+          "net_return_pct": 0.1006524850024837,
+          "armed": true,
+          "hit": true,
+          "exit_s": 204.0,
+          "reason": "PROTECT",
+          "be": 499.0
+        },
+        "15": {
+          "net_return_pct": 0.1006524850024837,
+          "armed": true,
+          "hit": true,
+          "exit_s": 204.0,
+          "reason": "PROTECT",
+          "be": 499.0
+        },
+        "16": {
+          "net_return_pct": 0.1006524850024837,
+          "armed": true,
+          "hit": true,
+          "exit_s": 204.0,
+          "reason": "PROTECT",
+          "be": 499.0
+        },
+        "18": {
+          "net_return_pct": 0.1006524850024837,
+          "armed": true,
+          "hit": true,
+          "exit_s": 204.0,
+          "reason": "PROTECT",
+          "be": 499.0
+        },
+        "20": {
+          "net_return_pct": 0.1006524850024837,
+          "armed": true,
+          "hit": true,
+          "exit_s": 204.0,
+          "reason": "PROTECT",
+          "be": 499.0
+        },
+        "22": {
+          "net_return_pct": 0.1006524850024837,
+          "armed": true,
+          "hit": true,
+          "exit_s": 204.0,
+          "reason": "PROTECT",
+          "be": 499.0
+        },
+        "25": {
+          "net_return_pct": 0.1006524850024837,
+          "armed": true,
+          "hit": true,
+          "exit_s": 204.0,
+          "reason": "PROTECT",
+          "be": 499.0
+        },
+        "30": {
+          "net_return_pct": 0.1006524850024837,
+          "armed": true,
+          "hit": true,
+          "exit_s": 204.0,
+          "reason": "PROTECT",
+          "be": 499.0
+        },
+        "35": {
+          "net_return_pct": 0.1006524850024837,
+          "armed": true,
+          "hit": true,
+          "exit_s": 204.0,
+          "reason": "PROTECT",
+          "be": 499.0
+        },
+        "40": {
+          "net_return_pct": 0.1006524850024837,
+          "armed": true,
+          "hit": true,
+          "exit_s": 204.0,
+          "reason": "PROTECT",
+          "be": 499.0
+        },
+        "50": {
+          "net_return_pct": 0.1006524850024837,
+          "armed": false,
+          "hit": true,
+          "exit_s": 204.0,
+          "reason": "PROTECT",
+          "be": 499.0
+        }
+      }
+    },
+    {
+      "market": "KRW-PRL",
+      "entry": 447.0,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.12354001969931971,
+          "armed": true,
+          "hit": true,
+          "exit_s": 6.0,
+          "reason": "PROTECT",
+          "be": 448.0
+        },
+        "12": {
+          "net_return_pct": 0.12354001969931971,
+          "armed": true,
+          "hit": true,
+          "exit_s": 6.0,
+          "reason": "PROTECT",
+          "be": 448.0
+        },
+        "14": {
+          "net_return_pct": 0.12354001969931971,
+          "armed": true,
+          "hit": true,
+          "exit_s": 6.0,
+          "reason": "PROTECT",
+          "be": 448.0
+        },
+        "15": {
+          "net_return_pct": 0.12354001969931971,
+          "armed": true,
+          "hit": true,
+          "exit_s": 6.0,
+          "reason": "PROTECT",
+          "be": 448.0
+        },
+        "16": {
+          "net_return_pct": 0.12354001969931971,
+          "armed": true,
+          "hit": true,
+          "exit_s": 6.0,
+          "reason": "PROTECT",
+          "be": 448.0
+        },
+        "18": {
+          "net_return_pct": 0.12354001969931971,
+          "armed": true,
+          "hit": true,
+          "exit_s": 6.0,
+          "reason": "PROTECT",
+          "be": 448.0
+        },
+        "20": {
+          "net_return_pct": 0.12354001969931971,
+          "armed": true,
+          "hit": true,
+          "exit_s": 6.0,
+          "reason": "PROTECT",
+          "be": 448.0
+        },
+        "22": {
+          "net_return_pct": 0.12354001969931971,
+          "armed": true,
+          "hit": true,
+          "exit_s": 6.0,
+          "reason": "PROTECT",
+          "be": 448.0
+        },
+        "25": {
+          "net_return_pct": 0.12354001969931971,
+          "armed": true,
+          "hit": true,
+          "exit_s": 6.0,
+          "reason": "PROTECT",
+          "be": 448.0
+        },
+        "30": {
+          "net_return_pct": 0.12354001969931971,
+          "armed": true,
+          "hit": true,
+          "exit_s": 6.0,
+          "reason": "PROTECT",
+          "be": 448.0
+        },
+        "35": {
+          "net_return_pct": 0.12354001969931971,
+          "armed": true,
+          "hit": true,
+          "exit_s": 6.0,
+          "reason": "PROTECT",
+          "be": 448.0
+        },
+        "40": {
+          "net_return_pct": 0.12354001969931971,
+          "armed": true,
+          "hit": true,
+          "exit_s": 6.0,
+          "reason": "PROTECT",
+          "be": 448.0
+        },
+        "50": {
+          "net_return_pct": 0.12354001969931971,
+          "armed": false,
+          "hit": true,
+          "exit_s": 6.0,
+          "reason": "PROTECT",
+          "be": 448.0
+        }
+      }
+    },
+    {
+      "market": "KRW-XEC",
+      "entry": 0.00978,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.2064918461015086,
+          "armed": true,
+          "hit": true,
+          "exit_s": 10.0,
+          "reason": "PROTECT",
+          "be": 0.00979
+        },
+        "12": {
+          "net_return_pct": 0.2064918461015086,
+          "armed": true,
+          "hit": true,
+          "exit_s": 10.0,
+          "reason": "PROTECT",
+          "be": 0.00979
+        },
+        "14": {
+          "net_return_pct": 0.2064918461015086,
+          "armed": true,
+          "hit": true,
+          "exit_s": 10.0,
+          "reason": "PROTECT",
+          "be": 0.00979
+        },
+        "15": {
+          "net_return_pct": 0.2064918461015086,
+          "armed": true,
+          "hit": true,
+          "exit_s": 10.0,
+          "reason": "PROTECT",
+          "be": 0.00979
+        },
+        "16": {
+          "net_return_pct": 0.2064918461015086,
+          "armed": true,
+          "hit": true,
+          "exit_s": 10.0,
+          "reason": "PROTECT",
+          "be": 0.00979
+        },
+        "18": {
+          "net_return_pct": 0.2064918461015086,
+          "armed": true,
+          "hit": true,
+          "exit_s": 10.0,
+          "reason": "PROTECT",
+          "be": 0.00979
+        },
+        "20": {
+          "net_return_pct": 0.2064918461015086,
+          "armed": true,
+          "hit": true,
+          "exit_s": 10.0,
+          "reason": "PROTECT",
+          "be": 0.00979
+        },
+        "22": {
+          "net_return_pct": 0.2064918461015086,
+          "armed": true,
+          "hit": true,
+          "exit_s": 10.0,
+          "reason": "PROTECT",
+          "be": 0.00979
+        },
+        "25": {
+          "net_return_pct": 0.2064918461015086,
+          "armed": true,
+          "hit": true,
+          "exit_s": 10.0,
+          "reason": "PROTECT",
+          "be": 0.00979
+        },
+        "30": {
+          "net_return_pct": 0.2064918461015086,
+          "armed": true,
+          "hit": true,
+          "exit_s": 10.0,
+          "reason": "PROTECT",
+          "be": 0.00979
+        },
+        "35": {
+          "net_return_pct": 0.2064918461015086,
+          "armed": true,
+          "hit": true,
+          "exit_s": 10.0,
+          "reason": "PROTECT",
+          "be": 0.00979
+        },
+        "40": {
+          "net_return_pct": 0.2064918461015086,
+          "armed": true,
+          "hit": true,
+          "exit_s": 10.0,
+          "reason": "PROTECT",
+          "be": 0.00979
+        },
+        "50": {
+          "net_return_pct": 0.2064918461015086,
+          "armed": false,
+          "hit": true,
+          "exit_s": 10.0,
+          "reason": "PROTECT",
+          "be": 0.00979
+        }
+      }
+    },
+    {
+      "market": "KRW-XEC",
+      "entry": 0.00979,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.0020929269788361182,
+          "armed": true,
+          "hit": true,
+          "exit_s": 48.0,
+          "reason": "PROTECT",
+          "be": 0.009800000000000001
+        },
+        "12": {
+          "net_return_pct": 0.0020929269788361182,
+          "armed": true,
+          "hit": true,
+          "exit_s": 48.0,
+          "reason": "PROTECT",
+          "be": 0.009800000000000001
+        },
+        "14": {
+          "net_return_pct": 0.0020929269788361182,
+          "armed": true,
+          "hit": true,
+          "exit_s": 48.0,
+          "reason": "PROTECT",
+          "be": 0.009800000000000001
+        },
+        "15": {
+          "net_return_pct": 0.0020929269788361182,
+          "armed": true,
+          "hit": true,
+          "exit_s": 48.0,
+          "reason": "PROTECT",
+          "be": 0.009800000000000001
+        },
+        "16": {
+          "net_return_pct": 0.0020929269788361182,
+          "armed": true,
+          "hit": true,
+          "exit_s": 48.0,
+          "reason": "PROTECT",
+          "be": 0.009800000000000001
+        },
+        "18": {
+          "net_return_pct": 0.0020929269788361182,
+          "armed": true,
+          "hit": true,
+          "exit_s": 48.0,
+          "reason": "PROTECT",
+          "be": 0.009800000000000001
+        },
+        "20": {
+          "net_return_pct": 0.0020929269788361182,
+          "armed": true,
+          "hit": true,
+          "exit_s": 48.0,
+          "reason": "PROTECT",
+          "be": 0.009800000000000001
+        },
+        "22": {
+          "net_return_pct": -0.09995002498749406,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 0.009800000000000001
+        },
+        "25": {
+          "net_return_pct": -0.09995002498749406,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 0.009800000000000001
+        },
+        "30": {
+          "net_return_pct": -0.09995002498749406,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 0.009800000000000001
+        },
+        "35": {
+          "net_return_pct": -0.09995002498749406,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 0.009800000000000001
+        },
+        "40": {
+          "net_return_pct": -0.09995002498749406,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 0.009800000000000001
+        },
+        "50": {
+          "net_return_pct": -0.09995002498749406,
+          "armed": false,
+          "hit": false,
+          "exit_s": 600,
+          "reason": "TIMEOUT",
+          "be": 0.009800000000000001
+        }
+      }
+    },
+    {
+      "market": "KRW-EUL",
+      "entry": 1787.0,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.011857529545267198,
+          "armed": true,
+          "hit": true,
+          "exit_s": 72.0,
+          "reason": "PROTECT",
+          "be": 1789.0
+        },
+        "12": {
+          "net_return_pct": 0.011857529545267198,
+          "armed": true,
+          "hit": true,
+          "exit_s": 72.0,
+          "reason": "PROTECT",
+          "be": 1789.0
+        },
+        "14": {
+          "net_return_pct": 0.011857529545267198,
+          "armed": true,
+          "hit": true,
+          "exit_s": 72.0,
+          "reason": "PROTECT",
+          "be": 1789.0
+        },
+        "15": {
+          "net_return_pct": 0.011857529545267198,
+          "armed": true,
+          "hit": true,
+          "exit_s": 72.0,
+          "reason": "PROTECT",
+          "be": 1789.0
+        },
+        "16": {
+          "net_return_pct": 0.011857529545267198,
+          "armed": true,
+          "hit": true,
+          "exit_s": 72.0,
+          "reason": "PROTECT",
+          "be": 1789.0
+        },
+        "18": {
+          "net_return_pct": 0.17956886134438133,
+          "armed": true,
+          "hit": true,
+          "exit_s": 79.0,
+          "reason": "PROTECT",
+          "be": 1789.0
+        },
+        "20": {
+          "net_return_pct": 0.17956886134438133,
+          "armed": true,
+          "hit": true,
+          "exit_s": 79.0,
+          "reason": "PROTECT",
+          "be": 1789.0
+        },
+        "22": {
+          "net_return_pct": 0.17956886134438133,
+          "armed": true,
+          "hit": true,
+          "exit_s": 79.0,
+          "reason": "PROTECT",
+          "be": 1789.0
+        },
+        "25": {
+          "net_return_pct": 0.17956886134438133,
+          "armed": true,
+          "hit": true,
+          "exit_s": 79.0,
+          "reason": "PROTECT",
+          "be": 1789.0
+        },
+        "30": {
+          "net_return_pct": 0.17956886134438133,
+          "armed": true,
+          "hit": true,
+          "exit_s": 79.0,
+          "reason": "PROTECT",
+          "be": 1789.0
+        },
+        "35": {
+          "net_return_pct": 0.17956886134438133,
+          "armed": true,
+          "hit": true,
+          "exit_s": 79.0,
+          "reason": "PROTECT",
+          "be": 1789.0
+        },
+        "40": {
+          "net_return_pct": 0.17956886134438133,
+          "armed": false,
+          "hit": true,
+          "exit_s": 79.0,
+          "reason": "PROTECT",
+          "be": 1789.0
+        },
+        "50": {
+          "net_return_pct": 0.17956886134438133,
+          "armed": false,
+          "hit": true,
+          "exit_s": 79.0,
+          "reason": "PROTECT",
+          "be": 1789.0
+        }
+      }
+    },
+    {
+      "market": "KRW-BSV",
+      "entry": 21920.0,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.2646486975490303,
+          "armed": true,
+          "hit": true,
+          "exit_s": 145.0,
+          "reason": "PROTECT",
+          "be": 21950.0
+        },
+        "12": {
+          "net_return_pct": 0.2646486975490303,
+          "armed": true,
+          "hit": true,
+          "exit_s": 145.0,
+          "reason": "PROTECT",
+          "be": 21950.0
+        },
+        "14": {
+          "net_return_pct": 0.2646486975490303,
+          "armed": true,
+          "hit": true,
+          "exit_s": 145.0,
+          "reason": "PROTECT",
+          "be": 21950.0
+        },
+        "15": {
+          "net_return_pct": 0.2646486975490303,
+          "armed": true,
+          "hit": true,
+          "exit_s": 145.0,
+          "reason": "PROTECT",
+          "be": 21950.0
+        },
+        "16": {
+          "net_return_pct": 0.2646486975490303,
+          "armed": true,
+          "hit": true,
+          "exit_s": 145.0,
+          "reason": "PROTECT",
+          "be": 21950.0
+        },
+        "18": {
+          "net_return_pct": 0.2646486975490303,
+          "armed": true,
+          "hit": true,
+          "exit_s": 145.0,
+          "reason": "PROTECT",
+          "be": 21950.0
+        },
+        "20": {
+          "net_return_pct": 0.2646486975490303,
+          "armed": true,
+          "hit": true,
+          "exit_s": 145.0,
+          "reason": "PROTECT",
+          "be": 21950.0
+        },
+        "22": {
+          "net_return_pct": 0.2646486975490303,
+          "armed": true,
+          "hit": true,
+          "exit_s": 145.0,
+          "reason": "PROTECT",
+          "be": 21950.0
+        },
+        "25": {
+          "net_return_pct": 0.2646486975490303,
+          "armed": true,
+          "hit": true,
+          "exit_s": 145.0,
+          "reason": "PROTECT",
+          "be": 21950.0
+        },
+        "30": {
+          "net_return_pct": 0.2646486975490303,
+          "armed": true,
+          "hit": true,
+          "exit_s": 145.0,
+          "reason": "PROTECT",
+          "be": 21950.0
+        },
+        "35": {
+          "net_return_pct": 0.2646486975490303,
+          "armed": true,
+          "hit": true,
+          "exit_s": 145.0,
+          "reason": "PROTECT",
+          "be": 21950.0
+        },
+        "40": {
+          "net_return_pct": 0.2646486975490303,
+          "armed": true,
+          "hit": true,
+          "exit_s": 145.0,
+          "reason": "PROTECT",
+          "be": 21950.0
+        },
+        "50": {
+          "net_return_pct": 0.2646486975490303,
+          "armed": false,
+          "hit": true,
+          "exit_s": 145.0,
+          "reason": "PROTECT",
+          "be": 21950.0
+        }
+      }
+    },
+    {
+      "market": "KRW-TREE",
+      "entry": 53.1,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.0881856623477395,
+          "armed": false,
+          "hit": true,
+          "exit_s": 4.0,
+          "reason": "PROTECT",
+          "be": 53.2
+        },
+        "12": {
+          "net_return_pct": 0.0881856623477395,
+          "armed": false,
+          "hit": true,
+          "exit_s": 4.0,
+          "reason": "PROTECT",
+          "be": 53.2
+        },
+        "14": {
+          "net_return_pct": 0.0881856623477395,
+          "armed": false,
+          "hit": true,
+          "exit_s": 4.0,
+          "reason": "PROTECT",
+          "be": 53.2
+        },
+        "15": {
+          "net_return_pct": 0.0881856623477395,
+          "armed": false,
+          "hit": true,
+          "exit_s": 4.0,
+          "reason": "PROTECT",
+          "be": 53.2
+        },
+        "16": {
+          "net_return_pct": 0.0881856623477395,
+          "armed": false,
+          "hit": true,
+          "exit_s": 4.0,
+          "reason": "PROTECT",
+          "be": 53.2
+        },
+        "18": {
+          "net_return_pct": 0.0881856623477395,
+          "armed": false,
+          "hit": true,
+          "exit_s": 4.0,
+          "reason": "PROTECT",
+          "be": 53.2
+        },
+        "20": {
+          "net_return_pct": 0.0881856623477395,
+          "armed": false,
+          "hit": true,
+          "exit_s": 4.0,
+          "reason": "PROTECT",
+          "be": 53.2
+        },
+        "22": {
+          "net_return_pct": 0.0881856623477395,
+          "armed": false,
+          "hit": true,
+          "exit_s": 4.0,
+          "reason": "PROTECT",
+          "be": 53.2
+        },
+        "25": {
+          "net_return_pct": 0.0881856623477395,
+          "armed": false,
+          "hit": true,
+          "exit_s": 4.0,
+          "reason": "PROTECT",
+          "be": 53.2
+        },
+        "30": {
+          "net_return_pct": 0.0881856623477395,
+          "armed": false,
+          "hit": true,
+          "exit_s": 4.0,
+          "reason": "PROTECT",
+          "be": 53.2
+        },
+        "35": {
+          "net_return_pct": 0.0881856623477395,
+          "armed": false,
+          "hit": true,
+          "exit_s": 4.0,
+          "reason": "PROTECT",
+          "be": 53.2
+        },
+        "40": {
+          "net_return_pct": 0.0881856623477395,
+          "armed": false,
+          "hit": true,
+          "exit_s": 4.0,
+          "reason": "PROTECT",
+          "be": 53.2
+        },
+        "50": {
+          "net_return_pct": 0.0881856623477395,
+          "armed": false,
+          "hit": true,
+          "exit_s": 4.0,
+          "reason": "PROTECT",
+          "be": 53.2
+        }
+      }
+    },
+    {
+      "market": "KRW-TREE",
+      "entry": 52.3,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.09106345488827383,
+          "armed": true,
+          "hit": true,
+          "exit_s": 184.0,
+          "reason": "PROTECT",
+          "be": 52.400000000000006
+        },
+        "12": {
+          "net_return_pct": 0.09106345488827383,
+          "armed": true,
+          "hit": true,
+          "exit_s": 184.0,
+          "reason": "PROTECT",
+          "be": 52.400000000000006
+        },
+        "14": {
+          "net_return_pct": 0.09106345488827383,
+          "armed": true,
+          "hit": true,
+          "exit_s": 184.0,
+          "reason": "PROTECT",
+          "be": 52.400000000000006
+        },
+        "15": {
+          "net_return_pct": 0.09106345488827383,
+          "armed": true,
+          "hit": true,
+          "exit_s": 184.0,
+          "reason": "PROTECT",
+          "be": 52.400000000000006
+        },
+        "16": {
+          "net_return_pct": 0.09106345488827383,
+          "armed": true,
+          "hit": true,
+          "exit_s": 184.0,
+          "reason": "PROTECT",
+          "be": 52.400000000000006
+        },
+        "18": {
+          "net_return_pct": 0.09106345488827383,
+          "armed": true,
+          "hit": true,
+          "exit_s": 184.0,
+          "reason": "PROTECT",
+          "be": 52.400000000000006
+        },
+        "20": {
+          "net_return_pct": 0.09106345488827383,
+          "armed": true,
+          "hit": true,
+          "exit_s": 184.0,
+          "reason": "PROTECT",
+          "be": 52.400000000000006
+        },
+        "22": {
+          "net_return_pct": 0.09106345488827383,
+          "armed": true,
+          "hit": true,
+          "exit_s": 184.0,
+          "reason": "PROTECT",
+          "be": 52.400000000000006
+        },
+        "25": {
+          "net_return_pct": 0.09106345488827383,
+          "armed": true,
+          "hit": true,
+          "exit_s": 184.0,
+          "reason": "PROTECT",
+          "be": 52.400000000000006
+        },
+        "30": {
+          "net_return_pct": 0.09106345488827383,
+          "armed": true,
+          "hit": true,
+          "exit_s": 184.0,
+          "reason": "PROTECT",
+          "be": 52.400000000000006
+        },
+        "35": {
+          "net_return_pct": 0.09106345488827383,
+          "armed": true,
+          "hit": true,
+          "exit_s": 184.0,
+          "reason": "PROTECT",
+          "be": 52.400000000000006
+        },
+        "40": {
+          "net_return_pct": 0.09106345488827383,
+          "armed": false,
+          "hit": true,
+          "exit_s": 184.0,
+          "reason": "PROTECT",
+          "be": 52.400000000000006
+        },
+        "50": {
+          "net_return_pct": 0.09106345488827383,
+          "armed": false,
+          "hit": true,
+          "exit_s": 184.0,
+          "reason": "PROTECT",
+          "be": 52.400000000000006
+        }
+      }
+    },
+    {
+      "market": "KRW-TREE",
+      "entry": 52.7,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.08961363720418891,
+          "armed": true,
+          "hit": true,
+          "exit_s": 85.0,
+          "reason": "PROTECT",
+          "be": 52.800000000000004
+        },
+        "12": {
+          "net_return_pct": 0.08961363720418891,
+          "armed": true,
+          "hit": true,
+          "exit_s": 85.0,
+          "reason": "PROTECT",
+          "be": 52.800000000000004
+        },
+        "14": {
+          "net_return_pct": 0.08961363720418891,
+          "armed": true,
+          "hit": true,
+          "exit_s": 85.0,
+          "reason": "PROTECT",
+          "be": 52.800000000000004
+        },
+        "15": {
+          "net_return_pct": 0.08961363720418891,
+          "armed": true,
+          "hit": true,
+          "exit_s": 85.0,
+          "reason": "PROTECT",
+          "be": 52.800000000000004
+        },
+        "16": {
+          "net_return_pct": 0.08961363720418891,
+          "armed": true,
+          "hit": true,
+          "exit_s": 85.0,
+          "reason": "PROTECT",
+          "be": 52.800000000000004
+        },
+        "18": {
+          "net_return_pct": 0.08961363720418891,
+          "armed": true,
+          "hit": true,
+          "exit_s": 85.0,
+          "reason": "PROTECT",
+          "be": 52.800000000000004
+        },
+        "20": {
+          "net_return_pct": 0.08961363720418891,
+          "armed": true,
+          "hit": true,
+          "exit_s": 85.0,
+          "reason": "PROTECT",
+          "be": 52.800000000000004
+        },
+        "22": {
+          "net_return_pct": 0.08961363720418891,
+          "armed": true,
+          "hit": true,
+          "exit_s": 85.0,
+          "reason": "PROTECT",
+          "be": 52.800000000000004
+        },
+        "25": {
+          "net_return_pct": 0.08961363720418891,
+          "armed": true,
+          "hit": true,
+          "exit_s": 85.0,
+          "reason": "PROTECT",
+          "be": 52.800000000000004
+        },
+        "30": {
+          "net_return_pct": 0.08961363720418891,
+          "armed": true,
+          "hit": true,
+          "exit_s": 85.0,
+          "reason": "PROTECT",
+          "be": 52.800000000000004
+        },
+        "35": {
+          "net_return_pct": 0.08961363720418891,
+          "armed": true,
+          "hit": true,
+          "exit_s": 85.0,
+          "reason": "PROTECT",
+          "be": 52.800000000000004
+        },
+        "40": {
+          "net_return_pct": 0.08961363720418891,
+          "armed": false,
+          "hit": true,
+          "exit_s": 85.0,
+          "reason": "PROTECT",
+          "be": 52.800000000000004
+        },
+        "50": {
+          "net_return_pct": 0.08961363720418891,
+          "armed": false,
+          "hit": true,
+          "exit_s": 85.0,
+          "reason": "PROTECT",
+          "be": 52.800000000000004
+        }
+      }
+    },
+    {
+      "market": "KRW-ONG",
+      "entry": 87.3,
+      "arms": {
+        "10": {
+          "net_return_pct": 0.014483021948374919,
+          "armed": true,
+          "hit": true,
+          "exit_s": 108.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "12": {
+          "net_return_pct": 0.014483021948374919,
+          "armed": true,
+          "hit": true,
+          "exit_s": 108.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "14": {
+          "net_return_pct": 0.014483021948374919,
+          "armed": true,
+          "hit": true,
+          "exit_s": 108.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "15": {
+          "net_return_pct": 0.014483021948374919,
+          "armed": true,
+          "hit": true,
+          "exit_s": 108.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "16": {
+          "net_return_pct": 0.014483021948374919,
+          "armed": true,
+          "hit": true,
+          "exit_s": 108.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "18": {
+          "net_return_pct": 0.014483021948374919,
+          "armed": true,
+          "hit": true,
+          "exit_s": 108.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "20": {
+          "net_return_pct": 0.014483021948374919,
+          "armed": true,
+          "hit": true,
+          "exit_s": 108.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "22": {
+          "net_return_pct": 0.014483021948374919,
+          "armed": true,
+          "hit": true,
+          "exit_s": 108.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "25": {
+          "net_return_pct": 0.128916068884255,
+          "armed": true,
+          "hit": true,
+          "exit_s": 305.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "30": {
+          "net_return_pct": 0.128916068884255,
+          "armed": true,
+          "hit": true,
+          "exit_s": 305.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "35": {
+          "net_return_pct": 0.128916068884255,
+          "armed": false,
+          "hit": true,
+          "exit_s": 305.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "40": {
+          "net_return_pct": 0.128916068884255,
+          "armed": false,
+          "hit": true,
+          "exit_s": 305.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        },
+        "50": {
+          "net_return_pct": 0.128916068884255,
+          "armed": false,
+          "hit": true,
+          "exit_s": 305.0,
+          "reason": "PROTECT",
+          "be": 87.4
+        }
+      }
+    }
+  ]
+}
