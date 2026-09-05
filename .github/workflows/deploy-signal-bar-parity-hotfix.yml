@@ -1,0 +1,48 @@
+name: Deploy signal-bar parity hotfix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-signal-bar-parity-hotfix.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-signal-bar-parity-hotfix
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Validate deployment secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_PROJECT_REF:-}"
+
+      - name: Deploy signal-time parity functions
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase functions deploy v10-lane-signal-generator --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+          supabase functions deploy v14-bear-live --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+          supabase functions deploy v14-bear-final-candidate-audit --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+          supabase functions deploy v15-range-r7-preflight --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+          supabase functions deploy v15-range-live --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
