@@ -1,5 +1,6 @@
 name: Deploy signal-bar parity hotfix
 
+# Triggered after the workflow exists on main.
 on:
   push:
     branches: [main]
