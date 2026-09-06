@@ -1,0 +1,577 @@
+// @ts-nocheck
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
+import {
+  Bar,
+  Member,
+  executionPrice,
+  exitDecision,
+  microDecision,
+  netLegPnl,
+  regimeModifier,
+  stageOne,
+  summarizeTemporalBooks,
+} from "./policy.ts";
+
+const REVISION = "V16-MOMENTUM-CONTINUATION-SHADOW-1.1.2";
+const OBSERVER_REVISION = "MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET";
+const BASES = [
+  "https://fapi.binance.com",
+  "https://fapi1.binance.com",
+  "https://fapi2.binance.com",
+];
+const BAR5 = 5 * 60_000;
+const INTENDED_NOTIONAL_USDT = 120;
+const STAGE1_CONCURRENCY = 24;
+const MICRO_CONCURRENCY = 8;
+const MICRO_SHORTLIST_LIMIT = 50;
+const MAX_SHADOW_POSITIONS = 10;
+const BOOK_SAMPLE_COUNT = 3;
+const BOOK_SAMPLE_INTERVAL_MS = 250;
+const ENTRY_SCORE_MIN = 65;
+const MAX_ENTRY_SPREAD_BPS = 8;
+const MAX_ENTRY_SLIPPAGE_BPS = 8;
+
+const env = (n: string) => (Deno.env.get(n) || "").trim();
+const num = (v: any, d = Number.NaN) => Number.isFinite(Number(v)) ? Number(v) : d;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
+
+function eq(a: string, b: string) {
+  if (a.length !== b.length) return false;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
+function reply(status: number, body: any) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+async function fetchJson(path: string, timeout = 12_000) {
+  let last = "UNKNOWN";
+  for (const base of BASES) {
+    try {
+      const r = await fetch(base + path, {
+        headers: { accept: "application/json", "user-agent": "Trading-booooo-v16-shadow/1.1.2" },
+        signal: AbortSignal.timeout(timeout),
+      });
+      const text = await r.text();
+      if (r.ok) return text ? JSON.parse(text) : null;
+      last = `${base}:${r.status}:${text.slice(0, 180)}`;
+    } catch (e) {
+      last = `${base}:${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+  throw new Error(`BINANCE_FETCH_FAILED:${last}`);
+}
+async function mapLimit<T, U>(items: T[], limit: number, fn: (x: T) => Promise<U>) {
+  const out = new Array<U>(items.length);
+  let cursor = 0;
+  async function worker() {
+    for (;;) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return out;
+}
+
+async function discoverUniverse(): Promise<Member[]> {
+  const [info, tickers] = await Promise.all([
+    fetchJson("/fapi/v1/exchangeInfo"),
+    fetchJson("/fapi/v1/ticker/24hr"),
+  ]);
+  const active = new Set(
+    (info?.symbols || []).filter((x: any) =>
+      x?.status === "TRADING" && x?.quoteAsset === "USDT" && x?.contractType === "PERPETUAL"
+    ).map((x: any) => String(x.symbol || "").toUpperCase()).filter(Boolean),
+  );
+  return (Array.isArray(tickers) ? tickers : []).map((x: any) => ({
+    symbol: String(x?.symbol || "").toUpperCase(),
+    qv24: num(x?.quoteVolume, 0),
+    r24: num(x?.priceChangePercent, 0) / 100,
+    last: num(x?.lastPrice, 0),
+  })).filter((x: Member) => active.has(x.symbol) && x.last > 0)
+    .sort((a: Member, b: Member) => a.symbol.localeCompare(b.symbol));
+}
+function parseBar(r: any[]): Bar {
+  return {
+    t: num(r[0]), o: num(r[1]), h: num(r[2]), l: num(r[3]), c: num(r[4]),
+    q: num(r[7], 0), tbq: num(r[10], 0),
+  };
+}
+async function bars(symbol: string, interval: "5m" | "15m", limit: number, endTime: number) {
+  const raw = await fetchJson(
+    `/fapi/v1/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}&endTime=${endTime}`,
+  );
+  return (Array.isArray(raw) ? raw : []).map(parseBar).filter((b: Bar) =>
+    b.t > 0 && b.c > 0 && b.h > 0 && b.l > 0
+  );
+}
+async function oiContext(symbol: string) {
+  const raw = await fetchJson(
+    `/futures/data/openInterestHist?symbol=${encodeURIComponent(symbol)}&period=5m&limit=6`,
+  ).catch(() => []);
+  const rows = Array.isArray(raw) ? raw : [];
+  const oiNow = rows.length ? num(rows.at(-1)?.sumOpenInterest) : Number.NaN;
+  const oiPrev15 = rows.length >= 4 ? num(rows.at(-4)?.sumOpenInterest) : Number.NaN;
+  return {
+    oiNow,
+    oiDelta15: oiNow > 0 && oiPrev15 > 0 ? oiNow / oiPrev15 - 1 : Number.NaN,
+  };
+}
+async function temporalBook(symbol: string) {
+  const books: any[] = [];
+  for (let i = 0; i < BOOK_SAMPLE_COUNT; i++) {
+    books.push(
+      await fetchJson(`/fapi/v1/depth?symbol=${encodeURIComponent(symbol)}&limit=100`)
+        .catch(() => ({ bids: [], asks: [] })),
+    );
+    if (i + 1 < BOOK_SAMPLE_COUNT) await sleep(BOOK_SAMPLE_INTERVAL_MS);
+  }
+  return summarizeTemporalBooks(books, INTENDED_NOTIONAL_USDT);
+}
+async function enrich(c: any, endTime: number) {
+  const [m15, oi, book] = await Promise.all([
+    bars(c.symbol, "15m", 40, endTime),
+    oiContext(c.symbol),
+    temporalBook(c.symbol),
+  ]);
+  const m15Ret60 = m15.length >= 5 ? m15.at(-1)!.c / m15.at(-5)!.c - 1 : Number.NaN;
+  const d = microDecision(
+    c,
+    oi.oiDelta15,
+    book,
+    m15Ret60,
+    ENTRY_SCORE_MIN,
+    MAX_ENTRY_SPREAD_BPS,
+    MAX_ENTRY_SLIPPAGE_BPS,
+  );
+  return {
+    ...c,
+    ...d,
+    microstructure: {
+      ...d.microstructure,
+      oiNow: oi.oiNow,
+      intendedNotionalUsdt: INTENDED_NOTIONAL_USDT,
+    },
+  };
+}
+function feeBpsPerSide() {
+  return Math.max(0, num(env("BINANCE_FUTURES_FEE_PER_SIDE_PCT"), .05) * 100);
+}
+
+async function evaluatePosition(db: any, pos: any, regime: string, modifier: string, endTime: number) {
+  const [a, oi, book] = await Promise.all([
+    bars(pos.symbol, "5m", 80, endTime),
+    oiContext(pos.symbol),
+    temporalBook(pos.symbol),
+  ]);
+  const currentBar = a.at(-1);
+  if (!currentBar) return { symbol: pos.symbol, action: "WAIT", reason: "NO_COMPLETED_BAR" };
+
+  // A bar is eligible only when the whole 5m candle began after the actual shadow entry.
+  // Example: entry 12:16:48 -> first eligible candle opens 12:20 and closes 12:25.
+  const openedAt = Date.parse(String(pos.opened_at));
+  const firstEligibleBarOpen = Math.ceil(openedAt / BAR5) * BAR5;
+  if (currentBar.t < firstEligibleBarOpen) {
+    return {
+      symbol: pos.symbol,
+      action: "WAIT",
+      reason: "NO_FULL_POST_ENTRY_BAR",
+      currentBarAt: new Date(currentBar.t).toISOString(),
+      firstEligibleBarAt: new Date(firstEligibleBarOpen).toISOString(),
+    };
+  }
+
+  const barIso = new Date(currentBar.t).toISOString();
+  const d = exitDecision(pos, a, oi.oiDelta15, book, modifier, Date.now());
+
+  // Atomic per-position/per-bar claim. A duplicate cron/manual invocation can calculate,
+  // but only one process may mutate lifecycle state for a completed bar.
+  const claim = await db.from("v16_momentum_shadow_positions")
+    .update({ last_evaluated_bar_at: barIso })
+    .eq("id", pos.id)
+    .eq("state", "OPEN")
+    .lt("last_evaluated_bar_at", barIso)
+    .select("id")
+    .maybeSingle();
+  if (claim.error) throw new Error(`BAR_CLAIM:${pos.symbol}:${claim.error.message}`);
+  if (!claim.data) {
+    return { symbol: pos.symbol, action: "WAIT", reason: "BAR_ALREADY_EVALUATED", barAt: barIso };
+  }
+
+  const entry = num(pos.entry_price);
+  const notional = num(pos.intended_notional_usdt, INTENDED_NOTIONAL_USDT);
+  const nowIso = new Date().toISOString();
+  const exitPx = executionPrice(d.cur.c, book, "SELL");
+  let partialNet = num(pos.partial_net_pnl_usdt, 0);
+  let remaining = num(pos.remaining_fraction, 1);
+  const metadata = {
+    ...(pos.metadata || {}),
+    lastEvaluatedBarAt: barIso,
+    lastComponents: d.components,
+    lastBook: book,
+    lastFlow: d.flow,
+  };
+
+  if (d.action === "DE_RISK") {
+    const frac = Math.min(.5, remaining);
+    const leg = netLegPnl(entry, exitPx, notional, frac, feeBpsPerSide());
+    partialNet += leg.net;
+    remaining = Math.max(0, remaining - frac);
+    const u = await db.from("v16_momentum_shadow_positions").update({
+      peak_price: d.peak,
+      trough_price: d.trough,
+      current_price: d.cur.c,
+      mfe_pct: d.mfe,
+      mae_pct: d.mae,
+      remaining_fraction: remaining,
+      de_risk_at: nowIso,
+      de_risk_price: exitPx,
+      de_risk_fraction: frac,
+      de_risk_reason: d.reason,
+      partial_net_pnl_usdt: partialNet,
+      last_exit_score: d.exitScore,
+      last_evaluated_at: nowIso,
+      metadata,
+    }).eq("id", pos.id);
+    if (u.error) throw new Error(u.error.message);
+  } else if (d.action === "EXIT") {
+    const leg = netLegPnl(entry, exitPx, notional, remaining, feeBpsPerSide());
+    const netPnl = partialNet + leg.net;
+    const grossReturn = exitPx / entry - 1;
+    const u = await db.from("v16_momentum_shadow_positions").update({
+      state: "CLOSED",
+      peak_price: d.peak,
+      trough_price: d.trough,
+      current_price: d.cur.c,
+      mfe_pct: d.mfe,
+      mae_pct: d.mae,
+      remaining_fraction: 0,
+      exit_at: nowIso,
+      exit_price: exitPx,
+      exit_reason: d.reason,
+      gross_return_pct: grossReturn,
+      net_return_pct: netPnl / notional,
+      net_pnl_usdt: netPnl,
+      last_exit_score: d.exitScore,
+      last_evaluated_at: nowIso,
+      metadata: {
+        ...metadata,
+        peakProfitCaptureRatio: d.mfe > 0 ? grossReturn / d.mfe : null,
+      },
+    }).eq("id", pos.id);
+    if (u.error) throw new Error(u.error.message);
+  } else {
+    const u = await db.from("v16_momentum_shadow_positions").update({
+      peak_price: d.peak,
+      trough_price: d.trough,
+      current_price: d.cur.c,
+      mfe_pct: d.mfe,
+      mae_pct: d.mae,
+      last_exit_score: d.exitScore,
+      last_evaluated_at: nowIso,
+      metadata,
+    }).eq("id", pos.id);
+    if (u.error) throw new Error(u.error.message);
+  }
+
+  const ev = await db.from("v16_momentum_shadow_position_events").upsert({
+    position_id: pos.id,
+    bar_at: barIso,
+    price: d.cur.c,
+    peak_price: d.peak,
+    trough_price: d.trough,
+    return_pct: d.currentReturn,
+    mfe_pct: d.mfe,
+    mae_pct: d.mae,
+    exit_score: d.exitScore,
+    action: d.action,
+    regime,
+    regime_modifier: modifier,
+    components: d.components,
+    flow: d.flow,
+    book,
+  }, { onConflict: "position_id,bar_at", ignoreDuplicates: true });
+  if (ev.error) throw new Error(ev.error.message);
+
+  return {
+    symbol: pos.symbol,
+    action: d.action,
+    reason: d.reason,
+    barAt: barIso,
+    exitScore: d.exitScore,
+    currentReturn: d.currentReturn,
+    mfe: d.mfe,
+    mae: d.mae,
+    remainingFraction: d.action === "DE_RISK" ? remaining : d.action === "EXIT" ? 0 : remaining,
+  };
+}
+
+async function openShadowPosition(db: any, c: any, regime: string, modifier: string) {
+  const book = c.microstructure || {};
+  const reference = num(c.referenceClose);
+  const entryPrice = executionPrice(reference, book, "BUY");
+  const atr = num(c.metrics?.atr14);
+  const pullbackLow = num(c.metrics?.pullbackLow);
+  const stopByAtr = Number.isFinite(atr) && atr > 0 ? entryPrice - 2.2 * atr : entryPrice * .97;
+  const stopByStructure = Number.isFinite(pullbackLow) && pullbackLow > 0
+    ? pullbackLow * .997
+    : stopByAtr;
+  const initialStop = Math.max(0, Math.max(stopByAtr, stopByStructure));
+  const nowIso = new Date().toISOString();
+  const row = {
+    revision: REVISION,
+    symbol: c.symbol,
+    state: "OPEN",
+    opened_at: nowIso,
+    entry_signal_bar_at: new Date(c.signalBarAt).toISOString(),
+    entry_price: entryPrice,
+    entry_reference_price: reference,
+    entry_score: c.qualityScore,
+    entry_regime: regime,
+    entry_regime_modifier: modifier,
+    intended_notional_usdt: INTENDED_NOTIONAL_USDT,
+    entry_expected_slippage_bps: num(book.maxBuySlippageBps, 0),
+    entry_atr: Number.isFinite(atr) ? atr : null,
+    initial_stop_price: initialStop,
+    peak_price: entryPrice,
+    trough_price: entryPrice,
+    current_price: entryPrice,
+    last_evaluated_at: nowIso,
+    metadata: {
+      shadowOnly: true,
+      liveOrdersSubmitted: 0,
+      entryClass: c.entryClass,
+      entryMetrics: c.metrics,
+      entryMicrostructure: book,
+      feeBpsPerSide: feeBpsPerSide(),
+      lifecycleBarPolicy: "FIRST_FULLY_POST_ENTRY_5M_BAR",
+    },
+  };
+  const q = await db.from("v16_momentum_shadow_positions").insert(row)
+    .select("id,symbol,opened_at,entry_price").maybeSingle();
+  if (q.error) {
+    if (/duplicate key|unique/i.test(q.error.message || "")) {
+      return { opened: false, symbol: c.symbol, reason: "ALREADY_OPEN" };
+    }
+    throw new Error(`POSITION_OPEN:${c.symbol}:${q.error.message}`);
+  }
+  return { opened: true, ...q.data };
+}
+
+Deno.serve(async (req) => {
+  if (req.method !== "POST") return reply(405, { ok: false, error: "POST_ONLY" });
+  const U = env("SUPABASE_URL"), K = env("SUPABASE_SERVICE_ROLE_KEY");
+  if (!U || !K) return reply(500, { ok: false, error: "SUPABASE_ENV_MISSING" });
+  const db = createClient(U, K, { auth: { persistSession: false, autoRefreshToken: false } });
+  const got = (req.headers.get("x-v16-shadow-token") || "").trim();
+  const tok = await db.from("edge_internal_tokens").select("token")
+    .eq("name", "v16-momentum-shadow").maybeSingle();
+  const expected = String(tok.data?.token || "").trim();
+  if (tok.error || !got || !expected || !eq(got, expected)) {
+    return reply(401, { ok: false, error: "UNAUTHORIZED" });
+  }
+
+  const now = Date.now();
+  const currentOpen = Math.floor(now / BAR5) * BAR5;
+  const endTime = currentOpen - 1;
+
+  try {
+    const [members, obs, openQ] = await Promise.all([
+      discoverUniverse(),
+      db.from("market_regime_observations")
+        .select("observed_at,predicted_regime,confidence,bull_score")
+        .eq("model_revision", OBSERVER_REVISION)
+        .eq("trading_influence", true)
+        .order("observed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      db.from("v16_momentum_shadow_positions").select("*")
+        .eq("state", "OPEN").eq("revision", REVISION).order("opened_at", { ascending: true }),
+    ]);
+    if (openQ.error) throw new Error(`OPEN_POSITIONS:${openQ.error.message}`);
+
+    const regime = String(obs.data?.predicted_regime || "UNKNOWN").toUpperCase();
+    const modifier = regimeModifier(regime);
+    const lifecycle = await mapLimit(openQ.data || [], 4, async (pos: any) => {
+      try {
+        return await evaluatePosition(db, pos, regime, modifier, endTime);
+      } catch (e) {
+        return { symbol: pos.symbol, action: "ERROR", reason: e instanceof Error ? e.message : String(e) };
+      }
+    });
+
+    const still = await db.from("v16_momentum_shadow_positions").select("id,symbol")
+      .eq("state", "OPEN").eq("revision", REVISION).order("opened_at", { ascending: true });
+    if (still.error) throw new Error(`OPEN_RECHECK:${still.error.message}`);
+    const openSymbols = new Set((still.data || []).map((x: any) => String(x.symbol)));
+    let freeSlots = Math.max(0, MAX_SHADOW_POSITIONS - openSymbols.size);
+
+    const scanned = await mapLimit(members, STAGE1_CONCURRENCY, async (member) => {
+      try {
+        return { candidate: stageOne(member, await bars(member.symbol, "5m", 120, endTime)), error: null };
+      } catch (e) {
+        return { candidate: null, error: `${member.symbol}:${e instanceof Error ? e.message : String(e)}` };
+      }
+    });
+    const stage1 = scanned.map((x) => x.candidate).filter(Boolean)
+      .sort((a: any, b: any) => b.score - a.score || a.symbol.localeCompare(b.symbol));
+    const reclaims = stage1.filter((x: any) => x.state === "BREAKOUT_RECLAIM");
+    const directs = stage1.filter((x: any) => x.state === "DIRECT_BREAKOUT");
+    const seen = new Set<string>();
+    const shortlist: any[] = [];
+    for (const c of [...reclaims, ...directs, ...stage1]) {
+      if (seen.has(c.symbol)) continue;
+      seen.add(c.symbol);
+      shortlist.push(c);
+      if (shortlist.length >= MICRO_SHORTLIST_LIMIT) break;
+    }
+
+    const enriched = await mapLimit(shortlist, MICRO_CONCURRENCY, async (c: any) => {
+      try {
+        const m = await enrich(c, endTime);
+        const state = m.microConfirm && ["BREAKOUT_RECLAIM", "DIRECT_BREAKOUT"].includes(c.state)
+          ? "MICRO_CONFIRM"
+          : c.state;
+        return { ...m, originalState: c.state, state, microError: null };
+      } catch (e) {
+        return {
+          ...c,
+          originalState: c.state,
+          microConfirm: false,
+          qualityScore: c.score,
+          entryClass: "WATCH_ONLY",
+          entryReady: false,
+          microstructure: {},
+          microError: e instanceof Error ? e.message : String(e),
+        };
+      }
+    });
+
+    const errors = scanned.map((x) => x.error).filter(Boolean);
+    const run = await db.from("v16_momentum_shadow_runs").insert({
+      revision: REVISION,
+      regime,
+      regime_modifier: modifier,
+      universe_count: members.length,
+      stage1_count: stage1.length,
+      candidate_count: enriched.length,
+      data_error_count: errors.length,
+      summary: {
+        shadowOnly: true,
+        liveOrdersSubmitted: 0,
+        regimeIsEntryGate: false,
+        opportunityAuthority: "ASSET_LOCAL_5M_15M",
+        intendedNotionalUsdt: INTENDED_NOTIONAL_USDT,
+        observerObservedAt: obs.data?.observed_at || null,
+        observerConfidence: obs.data?.confidence ?? null,
+        openBefore: (openQ.data || []).length,
+        lifecycle,
+        entryReadyCount: enriched.filter((x: any) => x.entryReady).length,
+        topStates: enriched.slice(0, 15).map((x: any) => ({
+          symbol: x.symbol,
+          state: x.state,
+          originalState: x.originalState,
+          score: x.qualityScore,
+          microConfirm: x.microConfirm,
+          entryReady: x.entryReady,
+        })),
+        errorSample: errors.slice(0, 20),
+      },
+    }).select("id,run_at").single();
+    if (run.error || !run.data) throw new Error(`RUN_WRITE:${run.error?.message || "missing"}`);
+
+    if (enriched.length) {
+      const rows = enriched.map((x: any) => ({
+        run_id: run.data.id,
+        observed_at: run.data.run_at,
+        signal_bar_at: new Date(x.signalBarAt).toISOString(),
+        symbol: x.symbol,
+        state: x.state,
+        opportunity_score: x.score,
+        micro_confirm: !!x.microConfirm,
+        entry_ready: !!x.entryReady,
+        entry_quality_score: x.qualityScore,
+        entry_class: x.entryClass,
+        regime,
+        regime_modifier: modifier,
+        metrics: {
+          ...x.metrics,
+          originalState: x.originalState,
+          referenceClose: x.referenceClose,
+          microError: x.microError || null,
+        },
+        microstructure: x.microstructure || {},
+      }));
+      const w = await db.from("v16_momentum_shadow_candidates").insert(rows);
+      if (w.error) throw new Error(`CANDIDATE_WRITE:${w.error.message}`);
+    }
+
+    const opened: any[] = [];
+    if (freeSlots > 0) {
+      const ready = enriched.filter((x: any) => x.entryReady && !openSymbols.has(x.symbol))
+        .sort((a: any, b: any) => b.qualityScore - a.qualityScore || a.symbol.localeCompare(b.symbol));
+      for (const c of ready) {
+        if (freeSlots <= 0) break;
+        const r = await openShadowPosition(db, c, regime, modifier);
+        opened.push(r);
+        if (r.opened) {
+          freeSlots--;
+          openSymbols.add(c.symbol);
+        }
+      }
+    }
+
+    return reply(200, {
+      ok: true,
+      revision: REVISION,
+      shadowOnly: true,
+      liveOrdersSubmitted: 0,
+      regime,
+      regimeModifier: modifier,
+      regimeIsEntryGate: false,
+      universe: members.length,
+      stage1: stage1.length,
+      microShortlist: enriched.length,
+      entryReady: enriched.filter((x: any) => x.entryReady).length,
+      shadowOpenBefore: (openQ.data || []).length,
+      lifecycle,
+      opened,
+      shadowFreeSlotsAfter: freeSlots,
+      dataErrors: errors.length,
+      topCandidates: enriched.slice(0, 20).map((x: any) => ({
+        symbol: x.symbol,
+        originalState: x.originalState,
+        state: x.state,
+        stageScore: Number(x.score.toFixed(2)),
+        qualityScore: Number(x.qualityScore.toFixed(2)),
+        microConfirm: !!x.microConfirm,
+        entryReady: !!x.entryReady,
+        entryClass: x.entryClass,
+        impulseReturn: x.metrics.impulseReturn,
+        ret15: x.metrics.ret15,
+        ret60: x.metrics.ret60,
+        pullbackDepth: x.metrics.pullbackDepth,
+        pullbackDepthAtr: x.metrics.pullbackDepthAtr,
+        breakoutBps: x.metrics.breakoutBps,
+        takerBuyShare: x.metrics.takerBuyShare,
+        spreadBps: x.microstructure?.maxSpreadBps ?? null,
+        expectedBuySlippageBps: x.microstructure?.maxBuySlippageBps ?? null,
+        oiDelta15: x.microstructure?.oiDelta15 ?? null,
+        depthImbalance10: x.microstructure?.medianImbalance10 ?? null,
+        temporalBookConfirm: x.microstructure?.temporalBookConfirm ?? null,
+      })),
+    });
+  } catch (e) {
+    return reply(500, {
+      ok: false,
+      revision: REVISION,
+      shadowOnly: true,
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+});
