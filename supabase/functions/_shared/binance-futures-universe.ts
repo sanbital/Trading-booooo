@@ -1,5 +1,7 @@
 // Dynamic Binance USDⓈ-M perpetual universe discovery.
-// Research/shadow rollout 2026-09-06. No fixed symbol list and no top-N cap.
+// Research/shadow rollout 2026-09-06. No fixed symbol list, no top-N cap,
+// and no arbitrary quote-volume floor at discovery time. Executability is a
+// downstream microstructure decision (spread/depth/expected slippage).
 
 export type FuturesUniverseMember = {
   symbol: string;
@@ -26,7 +28,7 @@ async function fetchJson(path: string): Promise<any> {
       const response = await fetch(`${base}${path}`, {
         headers: {
           accept: "application/json",
-          "user-agent": "Trading-booooo-dynamic-futures-universe/1.0",
+          "user-agent": "Trading-booooo-dynamic-futures-universe/1.1",
         },
         signal: AbortSignal.timeout(12_000),
       });
@@ -41,7 +43,7 @@ async function fetchJson(path: string): Promise<any> {
 }
 
 export async function discoverBinanceUsdtPerpetualUniverse(
-  minQuoteVolume24h = 50_000_000,
+  minQuoteVolume24h = 0,
 ): Promise<FuturesUniverseMember[]> {
   const [exchangeInfo, ticker24h] = await Promise.all([
     fetchJson("/fapi/v1/exchangeInfo"),
