@@ -10177,12 +10177,78 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
   // direction-aware Futures proof used by zero reconciliation.  A telemetry failure never
   // suppresses entry or exit decisions; it is recorded once for operator visibility.
   const maintenanceStartedAt = performance.now();
-  const maintenancePositions = await db(
-    "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*",
-  ) as Position[];
-  const v10MaintenancePositions = await db(
-    "v10_lane_positions?state=in.(OPEN,CLOSE_SUBMITTED,RECONCILIATION_FAILED)&select=symbol,side,quantity,remaining_quantity",
-  ) as Array<{ symbol: string; side: string; quantity: number; remaining_quantity: number }>;
+  const [maintenancePositions, v10MaintenancePositions, v11MaintenancePositions] = await Promise
+    .all([
+      db(
+        "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=*",
+      ) as Promise<Position[]>,
+      db(
+        "v10_lane_positions?state=in.(OPEN,CLOSE_SUBMITTED,RECONCILIATION_FAILED)&select=symbol,side,quantity,remaining_quantity",
+      ) as Promise<
+        Array<{ symbol: string; side: string; quantity: number; remaining_quantity: number }>
+      >,
+      db(
+        "v11_long_regime_positions?state=eq.OPEN&select=symbol,side,original_quantity,remaining_quantity",
+      ) as Promise<
+        Array<
+          { symbol: string; side: string; original_quantity: number; remaining_quantity: number }
+        >
+      >,
+    ]);
+  const snapshotPositions = maintenancePositions.filter((position) => position.state === "OPEN");
+  const legacyMaintenancePositions = maintenancePositions.filter((position) =>
+    !isP10Position(position)
+  );
+  let feeReconciliations: any[] = [];
+  let snapshotErrors: Array<{ exchange: Exchange; error: string }> = [];
+  let jointSnapshots = 0;
+  let lockVenuesChecked = 0;
+  const residualSweeps: any[] = [];
+  const maintenanceErrors: Array<{ stage: string; exchange?: Exchange; error: string }> = [];
+
+  // Account truth must be persisted before any reconciliation gate returns. An external
+  // exposure is exactly when operators and downstream preflights need the authenticated
+  // snapshot most; starving this write turns one mismatch into a permanent UNKNOWN state.
+  // Preserve external-flow ordering by comparing against the previous baseline first.
+  const flowResults = await Promise.allSettled(
+    exchanges.map((exchange) =>
+      detectExternalQuoteFlow(exchange, portfolios[exchange], settings, cycleId)
+    ),
+  );
+  flowResults.forEach((result, index) => {
+    if (result.status === "rejected") {
+      maintenanceErrors.push({
+        stage: "EXTERNAL_QUOTE_FLOW",
+        exchange: exchanges[index],
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      });
+    }
+  });
+
+  const snapshotResults = await Promise.allSettled(
+    portfolioExchanges.map((exchange) =>
+      snapshotAccount(
+        exchange,
+        portfolios[exchange],
+        snapshotPositions,
+        portfolios[exchange]?.prices || {},
+        settings,
+        portfolioCapturedAt[exchange],
+      )
+    ),
+  );
+  snapshotErrors = snapshotResults.flatMap((result, index) =>
+    result.status === "rejected"
+      ? [{
+        exchange: portfolioExchanges[index],
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      }]
+      : []
+  );
+  maintenanceErrors.push(...snapshotErrors.map((row) => ({
+    stage: "ACCOUNT_SNAPSHOT",
+    ...row,
+  })));
   if (futuresObservationError) {
     const safetyReason = "P10_FUTURES_EXPOSURE_OBSERVATION_FAILED";
     const newlyLatched = await latchP10EntrySafety(safetyReason);
@@ -10200,6 +10266,7 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
       strategy_key: P10_STRATEGY_KEY,
       reason: safetyReason,
       error: futuresObservationError,
+      snapshot_errors: snapshotErrors,
     };
   }
   const futuresPortfolio = portfolios.binance_futures;
@@ -10225,6 +10292,14 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
             finite(position.quantity),
           ),
         })),
+        ...v11MaintenancePositions.map((position) => ({
+          market: position.symbol,
+          side: position.side,
+          quantity: Math.max(
+            finite(position.remaining_quantity),
+            finite(position.original_quantity),
+          ),
+        })),
       ],
     )
     : [];
@@ -10248,18 +10323,9 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
       strategy_key: P10_STRATEGY_KEY,
       reason: safetyReason,
       untracked_futures_exposures: untrackedFutures,
+      snapshot_errors: snapshotErrors,
     };
   }
-  const snapshotPositions = maintenancePositions.filter((position) => position.state === "OPEN");
-  const legacyMaintenancePositions = maintenancePositions.filter((position) =>
-    !isP10Position(position)
-  );
-  let feeReconciliations: any[] = [];
-  let snapshotErrors: Array<{ exchange: Exchange; error: string }> = [];
-  let jointSnapshots = 0;
-  let lockVenuesChecked = 0;
-  const residualSweeps: any[] = [];
-  const maintenanceErrors: Array<{ stage: string; exchange?: Exchange; error: string }> = [];
 
   // P10 SCAN is the fixed owner even while a legacy position is still being managed by the
   // monitor. Owner selection never depends on a racy position-count snapshot.
@@ -10272,48 +10338,6 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
         error: error instanceof Error ? error.message : String(error),
       });
     }
-
-    // External-flow comparison must finish before the current snapshots become the next
-    // baseline. Venue failures remain isolated and never block entry/exit decisions.
-    const flowResults = await Promise.allSettled(
-      exchanges.map((exchange) =>
-        detectExternalQuoteFlow(exchange, portfolios[exchange], settings, cycleId)
-      ),
-    );
-    flowResults.forEach((result, index) => {
-      if (result.status === "rejected") {
-        maintenanceErrors.push({
-          stage: "EXTERNAL_QUOTE_FLOW",
-          exchange: exchanges[index],
-          error: result.reason instanceof Error ? result.reason.message : String(result.reason),
-        });
-      }
-    });
-
-    const snapshotResults = await Promise.allSettled(
-      exchanges.map((exchange) =>
-        snapshotAccount(
-          exchange,
-          portfolios[exchange],
-          snapshotPositions,
-          portfolios[exchange]?.prices || {},
-          settings,
-          portfolioCapturedAt[exchange],
-        )
-      ),
-    );
-    snapshotErrors = snapshotResults.flatMap((result, index) =>
-      result.status === "rejected"
-        ? [{
-          exchange: exchanges[index],
-          error: result.reason instanceof Error ? result.reason.message : String(result.reason),
-        }]
-        : []
-    );
-    maintenanceErrors.push(...snapshotErrors.map((row) => ({
-      stage: "ACCOUNT_SNAPSHOT",
-      ...row,
-    })));
 
     const jointResults = await Promise.allSettled(
       exchanges.map((exchange) =>

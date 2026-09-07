@@ -17,6 +17,7 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { combineSyncCounters, futuresMarketUniverse } from "./futures-sync.ts";
 
 type Json = Record<string, unknown>;
 type Trade = {
@@ -248,7 +249,7 @@ function futuresPositionForTrade(positions: any[], market: string, tradeTime: nu
 }
 
 async function syncFuturesTrades(sb: any) {
-  const [orders, posRes, stateRes] = await Promise.all([
+  const [orders, posRes, stateRes, portfolioObservation] = await Promise.all([
     loadFuturesOrders(sb),
     sb.from("trading_positions")
       .select("id,market,base_asset,state,opened_at,closed_at,created_at,leverage")
@@ -261,6 +262,12 @@ async function syncFuturesTrades(sb: any) {
       .eq("exchange", "binance_futures")
       .eq("account_scope", "futures")
       .limit(1000),
+    gateway({ exchange: "binance_futures", action: "portfolio" })
+      .then((portfolio) => ({ portfolio, error: null as string | null }))
+      .catch((error) => ({
+        portfolio: null,
+        error: error instanceof Error ? error.message : String(error),
+      })),
   ]);
   if (posRes.error) throw new Error(`FUTURES_POSITIONS:${posRes.error.message}`);
   if (stateRes.error) throw new Error(`FUTURES_SYNC_STATE:${stateRes.error.message}`);
@@ -277,14 +284,27 @@ async function syncFuturesTrades(sb: any) {
       lastTradeAt: row.last_trade_at ? String(row.last_trade_at) : null,
     });
   }
-  const markets = [
-    ...new Set([
-      ...orders.map((o) => String(o.market || "")),
-      ...positions.map((p: any) => String(p.market || "")),
-    ].filter((m) => m.endsWith(QUOTE))),
-  ];
-  let seen = 0, upserted = 0, settled = 0;
+  const portfolioPositions = Array.isArray((portfolioObservation.portfolio as any)?.positions)
+    ? (portfolioObservation.portfolio as any).positions
+    : [];
+  const markets = futuresMarketUniverse({
+    portfolioPositions,
+    orders,
+    positions,
+    syncStates: stateRes.data ?? [],
+    quote: QUOTE,
+  });
+  let seen = 0, upserted = 0, settled = 0, succeeded = 0;
+  let automated = 0, manual = 0, unmatched = 0;
   const errors: Array<{ market: string; error: string }> = [];
+  if (portfolioObservation.error) {
+    errors.push({
+      market: "__PORTFOLIO__",
+      error: `FUTURES_PORTFOLIO:${portfolioObservation.error}`.slice(0, 500),
+    });
+  } else if (!Array.isArray((portfolioObservation.portfolio as any)?.positions)) {
+    errors.push({ market: "__PORTFOLIO__", error: "FUTURES_PORTFOLIO:POSITIONS_MISSING" });
+  }
   for (const market of markets) {
     try {
       const state = stateMap.get(market);
@@ -310,6 +330,9 @@ async function syncFuturesTrades(sb: any) {
           ? null
           : futuresPositionForTrade(positions, market, Number(t.time));
         const positionId = matched?.position_id ?? fallbackPosition?.id ?? null;
+        if (matched) automated++;
+        else manual++;
+        if (!positionId) unmatched++;
         if (positionId) affected.add(String(positionId));
         rows.push({
           exchange: "binance_futures",
@@ -369,11 +392,28 @@ async function syncFuturesTrades(sb: any) {
         updated_at: new Date().toISOString(),
       }, { onConflict: "exchange,account_scope,market" });
       if (st.error) throw new Error(`FUTURES_STATE:${st.error.message}`);
+      succeeded++;
     } catch (e) {
       errors.push({ market, error: (e instanceof Error ? e.message : String(e)).slice(0, 500) });
     }
   }
-  return { markets: markets.length, seen, upserted, settled, errors };
+  return {
+    markets: markets.length,
+    succeeded,
+    seen,
+    upserted,
+    settled,
+    automated,
+    manual,
+    unmatched,
+    portfolio_markets: [
+      ...new Set(
+        portfolioPositions.map((row: any) => String(row?.market ?? row?.symbol ?? "").toUpperCase())
+          .filter(Boolean),
+      ),
+    ],
+    errors,
+  };
 }
 
 Deno.serve(async (req: Request) => {
@@ -395,7 +435,7 @@ Deno.serve(async (req: Request) => {
   try {
     const acquired = await sb.rpc("acquire_exchange_trade_sync_lease", {
       p_owner: owner,
-      p_ttl_seconds: 110,
+      p_ttl_seconds: 360,
     });
     if (acquired.error) throw new Error(`LEASE:${acquired.error.message}`);
     lease = acquired.data === true;
@@ -610,9 +650,14 @@ Deno.serve(async (req: Request) => {
 
       const futuresSync = await syncFuturesTrades(sb).catch((e) => ({
         markets: 0,
+        succeeded: 0,
         seen: 0,
         upserted: 0,
         settled: 0,
+        automated: 0,
+        manual: 0,
+        unmatched: 0,
+        portfolio_markets: [],
         errors: [{ market: "__FUTURES__", error: e instanceof Error ? e.message : String(e) }],
       }));
       if (futuresSync.errors.length) {
@@ -620,6 +665,18 @@ Deno.serve(async (req: Request) => {
           errors.push({ market: `FUTURES:${row.market}`, error: row.error });
         }
       }
+      const totals = combineSyncCounters(
+        {
+          markets: markets.length,
+          succeeded,
+          seen,
+          upserted,
+          automated,
+          manual,
+          unmatched,
+        },
+        futuresSync,
+      );
       let refreshed = 0;
       if (upserted > 0) {
         const refresh = await sb.rpc("refresh_real_trade_scorecards", {
@@ -630,30 +687,56 @@ Deno.serve(async (req: Request) => {
           errors.push({ market: "__SCORECARD__", error: refresh.error.message.slice(0, 500) });
         } else refreshed = num(refresh.data);
       }
+      let futuresRefreshed = 0;
+      if (futuresSync.upserted > 0) {
+        const refresh = await sb.rpc("refresh_real_trade_scorecards", {
+          p_exchange: "binance_futures",
+          p_lookback: "8 days",
+        });
+        if (refresh.error) {
+          errors.push({
+            market: "__FUTURES_SCORECARD__",
+            error: refresh.error.message.slice(0, 500),
+          });
+        } else futuresRefreshed = num(refresh.data);
+      }
 
-      const status = errors.length === 0 ? "SUCCESS" : succeeded > 0 ? "PARTIAL" : "ERROR";
+      const status = errors.length === 0 ? "SUCCESS" : totals.succeeded > 0 ? "PARTIAL" : "ERROR";
       await sb.from("exchange_trade_sync_runs").update({
         completed_at: new Date().toISOString(),
         status,
-        markets_succeeded: succeeded,
-        fills_seen: seen,
-        fills_upserted: upserted,
-        automated_fills: automated,
-        manual_fills: manual,
-        unmatched_fills: unmatched,
+        markets_requested: totals.markets,
+        markets_succeeded: totals.succeeded,
+        fills_seen: totals.seen,
+        fills_upserted: totals.upserted,
+        automated_fills: totals.automated,
+        manual_fills: totals.manual,
+        unmatched_fills: totals.unmatched,
         error_message: errors.length
           ? errors.slice(0, 5).map((e) => `${e.market}:${e.error}`).join(" | ")
           : null,
         details: {
           errors: errors.slice(0, 25),
-          scorecards_refreshed: refreshed,
+          scorecards_refreshed: refreshed + futuresRefreshed,
+          spot_scorecards_refreshed: refreshed,
+          futures_scorecards_refreshed: futuresRefreshed,
           selection,
           candidate_markets: candidates.length,
           unsynced_markets: unsynced.length,
           orders_loaded: orders.length,
           positions_closed: positionsClosed,
           fills_relinked: fillsRelinked,
+          spot_sync: {
+            markets: markets.length,
+            succeeded,
+            seen,
+            upserted,
+            automated,
+            manual,
+            unmatched,
+          },
           futures_sync: futuresSync,
+          totals,
           source: "binance-static-ip-gateway",
         },
       }).eq("id", runId);
@@ -663,17 +746,17 @@ Deno.serve(async (req: Request) => {
         status,
         run_id: runId,
         selection,
-        markets_requested: markets.length,
-        markets_succeeded: succeeded,
-        fills_seen: seen,
-        fills_upserted: upserted,
-        automated_fills: automated,
-        manual_fills: manual,
-        unmatched_fills: unmatched,
+        markets_requested: totals.markets,
+        markets_succeeded: totals.succeeded,
+        fills_seen: totals.seen,
+        fills_upserted: totals.upserted,
+        automated_fills: totals.automated,
+        manual_fills: totals.manual,
+        unmatched_fills: totals.unmatched,
         orders_loaded: orders.length,
         positions_closed: positionsClosed,
         fills_relinked: fillsRelinked,
-        scorecards_refreshed: refreshed,
+        scorecards_refreshed: refreshed + futuresRefreshed,
         futures_sync: futuresSync,
         errors: errors.slice(0, 10),
       });
