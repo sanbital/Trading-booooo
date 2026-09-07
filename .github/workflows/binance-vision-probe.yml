@@ -1,0 +1,21 @@
+name: Binance Vision Probe
+on:
+  push:
+    branches: [research/leader-momentum-v17]
+    paths: [.github/workflows/binance-vision-probe.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe official Binance archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL='https://data.binance.vision/data/futures/um/daily/klines/IOSTUSDT/15m/IOSTUSDT-15m-2026-09-07.zip'
+          curl -fL --retry 3 --retry-delay 1 -o /tmp/iost.zip "$URL"
+          unzip -l /tmp/iost.zip
+          unzip -p /tmp/iost.zip | head -n 3
