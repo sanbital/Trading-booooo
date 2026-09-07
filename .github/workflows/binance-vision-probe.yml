@@ -11,11 +11,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Probe official Binance archive
+      - name: Probe official Binance archive and symbol listing
         shell: bash
         run: |
           set -euo pipefail
           URL='https://data.binance.vision/data/futures/um/daily/klines/IOSTUSDT/15m/IOSTUSDT-15m-2026-09-06.zip'
           curl -fL --retry 3 --retry-delay 1 -o /tmp/iost.zip "$URL"
           unzip -l /tmp/iost.zip
-          unzip -p /tmp/iost.zip | head -n 3
+          echo '--- listing probe ---'
+          curl -fLsS 'https://s3-ap-northeast-1.amazonaws.com/data.binance.vision?delimiter=%2F&prefix=data%2Ffutures%2Fum%2Fdaily%2Fklines%2F' | head -c 5000
+          echo
