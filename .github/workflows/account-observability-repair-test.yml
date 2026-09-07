@@ -1,0 +1,53 @@
+name: Account observability repair (isolated tests)
+on:
+  push:
+    branches: [fix/20260908-account-observability]
+    paths:
+      - .github/workflows/account-observability-repair-test.yml
+      - tests/account-observability/**
+      - scripts/account-observability/**
+      - supabase/migrations/20260908*.sql
+      - supabase/functions/account-observability-collector/**
+permissions:
+  contents: read
+jobs:
+  isolated-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: isolated-test-only
+          POSTGRES_DB: observability_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U test -d observability_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Source audit (no production credentials)
+        run: |
+          mkdir -p repair-artifacts
+          git rev-parse HEAD > repair-artifacts/commit.txt
+          git archive --format=tar HEAD | gzip > repair-artifacts/source.tar.gz
+          grep -n -C 12 'trading_account_snapshots\|V11_EXCLUSIVE\|circuit_open' supabase/functions/market-autotrader/index.ts > repair-artifacts/snapshot-writer-locations.txt || true
+          grep -n -A 16 '^on:\|^on :' .github/workflows/* > repair-artifacts/workflow-triggers.txt || true
+      - name: Run regression fixtures when present
+        env:
+          TEST_DATABASE_URL: postgresql://test:isolated-test-only@localhost:5432/observability_test
+        run: |
+          if [ -f tests/account-observability/run.sh ]; then
+            bash tests/account-observability/run.sh 2>&1 | tee repair-artifacts/test-results.txt
+          else
+            echo 'SOURCE_AUDIT_ONLY; regression fixtures not added yet' | tee repair-artifacts/test-results.txt
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: account-observability-repair-${{ github.sha }}
+          path: repair-artifacts/
+          retention-days: 1
