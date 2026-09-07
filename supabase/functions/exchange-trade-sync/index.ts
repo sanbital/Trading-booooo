@@ -17,7 +17,12 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { combineSyncCounters, futuresMarketUniverse } from "./futures-sync.ts";
+import {
+  combineSyncCounters,
+  exactFuturesOrderHistory,
+  futuresMarketUniverse,
+  futuresOrderDiagnosticRequest,
+} from "./futures-sync.ts";
 
 type Json = Record<string, unknown>;
 type Trade = {
@@ -429,6 +434,35 @@ Deno.serve(async (req: Request) => {
     p_token: req.headers.get("x-sync-token") ?? "",
   });
   if (verifyError || verified !== true) return reply(401, { ok: false, error: "UNAUTHORIZED" });
+
+  const body = await req.json().catch(() => ({} as Json));
+  if (String(body.mode ?? "").trim().toLowerCase() === "order_history_diagnostic") {
+    const parsed = futuresOrderDiagnosticRequest(body);
+    if (!parsed.ok) return reply(400, { ok: false, error: parsed.error });
+    try {
+      const rows = await gateway({
+        exchange: "binance_futures",
+        action: "order_history",
+        market: parsed.value.market,
+        order_id: parsed.value.orderId,
+        limit: 10,
+      });
+      return reply(200, {
+        ok: true,
+        mode: "READ_ONLY_ORDER_HISTORY",
+        market: parsed.value.market,
+        order_id: parsed.value.orderId,
+        live_orders_submitted: 0,
+        orders: exactFuturesOrderHistory(rows, parsed.value.orderId),
+      });
+    } catch (e) {
+      return reply(502, {
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+        live_orders_submitted: 0,
+      });
+    }
+  }
 
   const owner = crypto.randomUUID();
   let lease = false, runId: string | undefined;

@@ -1,5 +1,10 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { combineSyncCounters, futuresMarketUniverse } from "./futures-sync.ts";
+import {
+  combineSyncCounters,
+  exactFuturesOrderHistory,
+  futuresMarketUniverse,
+  futuresOrderDiagnosticRequest,
+} from "./futures-sync.ts";
 
 const syncSource = await Deno.readTextFile(new URL("./index.ts", import.meta.url));
 
@@ -45,4 +50,56 @@ Deno.test("futures-only ingestion refreshes the futures scorecard contract", () 
   assertEquals(syncSource.includes('p_exchange: "binance_futures"'), true);
   assertEquals(syncSource.includes("spot_sync:"), true);
   assertEquals(syncSource.includes("totals,"), true);
+});
+
+Deno.test("read-only order diagnostic accepts only a strict USDT market and numeric order id", () => {
+  assertEquals(
+    futuresOrderDiagnosticRequest({ market: "magmausdt", order_id: "1444776244" }),
+    { ok: true, value: { market: "MAGMAUSDT", orderId: "1444776244" } },
+  );
+  assertEquals(
+    futuresOrderDiagnosticRequest({ market: "MAGMAUSDT;DROP", order_id: "1444776244" }),
+    { ok: false, error: "INVALID_FUTURES_MARKET" },
+  );
+  assertEquals(
+    futuresOrderDiagnosticRequest({ market: "MAGMAUSDT", order_id: "all" }),
+    { ok: false, error: "INVALID_FUTURES_ORDER_ID" },
+  );
+});
+
+Deno.test("order diagnostic returns only the exact order and a fixed safe field set", () => {
+  assertEquals(
+    exactFuturesOrderHistory([
+      { orderId: 1, clientOrderId: "other", apiKey: "must-not-leak" },
+      {
+        symbol: "MAGMAUSDT",
+        orderId: 1444776244,
+        clientOrderId: "origin-proof",
+        side: "BUY",
+        status: "FILLED",
+        executedQty: "1029",
+        secret: "must-not-leak",
+      },
+    ], "1444776244"),
+    [{
+      symbol: "MAGMAUSDT",
+      orderId: 1444776244,
+      clientOrderId: "origin-proof",
+      side: "BUY",
+      positionSide: null,
+      type: null,
+      origType: null,
+      status: "FILLED",
+      timeInForce: null,
+      price: null,
+      avgPrice: null,
+      origQty: null,
+      executedQty: "1029",
+      cumQuote: null,
+      reduceOnly: null,
+      closePosition: null,
+      time: null,
+      updateTime: null,
+    }],
+  );
 });
