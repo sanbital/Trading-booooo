@@ -15,7 +15,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          URL='https://data.binance.vision/data/futures/um/daily/klines/IOSTUSDT/15m/IOSTUSDT-15m-2026-09-07.zip'
+          URL='https://data.binance.vision/data/futures/um/daily/klines/IOSTUSDT/15m/IOSTUSDT-15m-2026-09-06.zip'
           curl -fL --retry 3 --retry-delay 1 -o /tmp/iost.zip "$URL"
           unzip -l /tmp/iost.zip
           unzip -p /tmp/iost.zip | head -n 3
