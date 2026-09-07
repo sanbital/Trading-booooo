@@ -1,0 +1,37 @@
+name: Leader Momentum V17 Binance Research
+
+on:
+  push:
+    branches: [research/leader-momentum-v17]
+    paths:
+      - research/leader_momentum_v17_binance.py
+      - .github/workflows/leader-momentum-v17-binance-research.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install research dependencies
+        run: python -m pip install --disable-pip-version-check -q pandas numpy requests
+      - name: Run Binance public-market study
+        env:
+          LOOKBACK_DAYS: '28'
+          ROUND_TRIP_COST_BPS: '21'
+        run: |
+          mkdir -p research_artifacts
+          python research/leader_momentum_v17_binance.py | tee research_artifacts/run.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: leader-momentum-v17-${{ github.sha }}
+          path: research_artifacts/
+          retention-days: 2
