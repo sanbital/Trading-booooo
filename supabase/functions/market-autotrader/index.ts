@@ -10183,6 +10183,37 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
   const v10MaintenancePositions = await db(
     "v10_lane_positions?state=in.(OPEN,CLOSE_SUBMITTED,RECONCILIATION_FAILED)&select=symbol,side,quantity,remaining_quantity",
   ) as Array<{ symbol: string; side: string; quantity: number; remaining_quantity: number }>;
+  // BEGIN BLOCKED_ACCOUNT_TELEMETRY_20260908
+  // The entry safety latch runs before this helper. Only observations are saved.
+  // Do not invoke fee repair, auto-adoption, residual sweeps or any order route here.
+  const persistBlockedAccountSnapshots = async () => {
+    const results = await Promise.allSettled(portfolioExchanges.map(async (exchange) => {
+      const portfolio = portfolios[exchange];
+      const capturedAt = portfolioCapturedAt[exchange];
+      if (!portfolio || !capturedAt || !Number.isFinite(Date.parse(capturedAt))) {
+        throw new Error("ACCOUNT_OBSERVATION_MISSING");
+      }
+      for (const key of ["total_equity_quote", "available_quote", "locked_quote"]) {
+        const value = portfolio[key];
+        if (value == null || typeof value === "boolean" || String(value).trim() === "" || !Number.isFinite(Number(value))) {
+          throw new Error(`ACCOUNT_FIELD_INVALID:${key}`);
+        }
+      }
+      if (!Array.isArray(portfolio.accounts)) throw new Error("ACCOUNT_BALANCES_MISSING");
+      if (exchange === "binance_futures" && !authenticatedFuturesSnapshot(exchange, portfolio).complete) {
+        throw new Error("FUTURES_POSITIONS_INCOMPLETE");
+      }
+      await snapshotAccount(
+        exchange, portfolio,
+        maintenancePositions.filter((position) => position.state === "OPEN"),
+        portfolio.prices || {}, settings, capturedAt,
+      );
+    }));
+    return results.flatMap((result, index) => result.status === "rejected"
+      ? [{ exchange: portfolioExchanges[index], error: String(result.reason?.message || result.reason).slice(0, 500) }]
+      : []);
+  };
+  // END BLOCKED_ACCOUNT_TELEMETRY_20260908
   if (futuresObservationError) {
     const safetyReason = "P10_FUTURES_EXPOSURE_OBSERVATION_FAILED";
     const newlyLatched = await latchP10EntrySafety(safetyReason);
@@ -10195,11 +10226,13 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
       );
     }
     await patchTradingHeartbeat({ lastFullScanAt: new Date().toISOString() });
+    const blockedSnapshotErrors = await persistBlockedAccountSnapshots();
     return {
       skipped: true,
       strategy_key: P10_STRATEGY_KEY,
       reason: safetyReason,
       error: futuresObservationError,
+      snapshot_errors: blockedSnapshotErrors,
     };
   }
   const futuresPortfolio = portfolios.binance_futures;
@@ -10243,11 +10276,13 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
       lastFullScanAt: new Date().toISOString(),
       lastGatewayHeartbeatAt: new Date().toISOString(),
     });
+    const blockedSnapshotErrors = await persistBlockedAccountSnapshots();
     return {
       skipped: true,
       strategy_key: P10_STRATEGY_KEY,
       reason: safetyReason,
       untracked_futures_exposures: untrackedFutures,
+      snapshot_errors: blockedSnapshotErrors,
     };
   }
   const snapshotPositions = maintenancePositions.filter((position) => position.state === "OPEN");
