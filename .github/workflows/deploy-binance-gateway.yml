@@ -36,10 +36,37 @@ jobs:
       - name: Apply read-only Binance trade history route
         run: node gateway/patch-trade-history.mjs
 
+      - name: Stage the exit engine into the image
+        run: node gateway/stage-engine.mjs
+
       - name: Test gateway
         run: |
           node --check gateway/server.mjs
           node --test gateway/server.test.mjs
+          node --test gateway/v17-shadow-worker.test.mjs
+          node --test gateway/v17-shadow-host.test.mjs
+
+      - name: Verify the image can actually boot from the files it copies
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The 2026-09-08 outage was an import the image did not contain: server.mjs
+          # parsed fine and the tests passed because the file existed in the repo. Build
+          # the exact COPY set and boot it before shipping.
+          stage="$(mktemp -d)"
+          grep '^COPY ' gateway/Dockerfile | awk '{print $2}' | while read -r f; do
+            cp "gateway/$f" "$stage/" || { echo "::error::Dockerfile copies gateway/$f, which does not exist."; exit 1; }
+          done
+          ( cd "$stage" && PORT=8099 V17_SHADOW_ENABLED=true node server.mjs > boot.log 2>&1 & )
+          for _ in $(seq 1 20); do
+            if curl -fsS --max-time 2 http://127.0.0.1:8099/health >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          cat "$stage/boot.log" || true
+          pkill -f "node server.mjs" || true
+          if [ "${ok:-0}" != "1" ]; then echo "::error::the image contents do not boot."; exit 1; fi
+          grep -q "V17 exit shadow armed" "$stage/boot.log" \
+            || { echo "::error::shadow could not load its staged engine."; exit 1; }
 
       - name: Install flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
@@ -117,7 +144,8 @@ jobs:
             "BINANCE_API_KEY=${BINANCE_API_KEY}" \
             "BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}" \
             "BINANCE_FUTURES_BASE_URL=https://fapi.binance.com" \
-            "BINANCE_FUTURES_DEFAULT_LEVERAGE=3"
+            "BINANCE_FUTURES_DEFAULT_LEVERAGE=3" \
+            "V17_SHADOW_ENABLED=true"
           # This Paris app must never carry Upbit credentials.
           flyctl secrets unset --stage -a "${FLY_BINANCE_APP_NAME}" \
             UPBIT_ACCESS_KEY UPBIT_SECRET_KEY UPBIT_MAX_ORDER_KRW UPBIT_MAX_DAILY_BUY_KRW || true

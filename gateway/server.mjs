@@ -2184,9 +2184,40 @@ const v17StopCommand = createV17StopCommands({
   assertVersion: assertOrderEngineVersion,
   positionSideDual: futuresPositionSideDual,
 });
+// Exit shadow (decision-only, no order path). Off unless V17_SHADOW_ENABLED is set.
+// The engine it needs is staged into the image at deploy time, so it is loaded lazily
+// and any failure disables the shadow rather than taking the gateway down: an unresolved
+// import at startup is exactly what caused the 2026-09-08 outage.
+const V17_SHADOW_ENABLED = boolEnv("V17_SHADOW_ENABLED", false);
+let v17Shadow = null;
+if (V17_SHADOW_ENABLED) {
+  (async () => {
+    try {
+      const [{ createShadowHost }, { createShadowWorker }, engine] = await Promise.all([
+        import("./v17-shadow-host.mjs"),
+        import("./v17-shadow-worker.mjs"),
+        import("./leader-exit-r4.mjs"),
+      ]);
+      v17Shadow = createShadowHost({ createShadowWorker, engine });
+      console.log("V17 exit shadow armed");
+    } catch (error) {
+      console.error("V17_SHADOW_DISABLED", String(error?.message ?? error));
+    }
+  })();
+}
+
 async function handleCommand(command) {
   const exchange = validateExchange(command?.exchange);
   const futures = isBinanceFutures(exchange);
+  if (command?.action === "v17_shadow_positions") {
+    if (!futures) throw Error("V17_FUTURES_ONLY");
+    if (!v17Shadow) return { shadow: "DISABLED", accepted: 0 };
+    return v17Shadow.setPositions(command.positions ?? []);
+  }
+  if (command?.action === "v17_shadow_status") {
+    if (!v17Shadow) return { shadow: "DISABLED" };
+    return v17Shadow.status();
+  }
   if (String(command?.action || " ").startsWith("v17_")) {
     if (!futures) throw Error("V17_FUTURES_ONLY");
     return v17StopCommand(command.action, command);

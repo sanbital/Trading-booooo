@@ -1,0 +1,4 @@
+
+# Staged into the image by gateway/stage-engine.mjs; never commit a second copy.
+gateway/leader-exit-r3.mjs
+gateway/leader-exit-r4.mjs
