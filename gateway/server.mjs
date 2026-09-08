@@ -1,4 +1,4 @@
-import {createV17StopCommands} from './v17-stop-commands.mjs';
+import { createV17StopCommands } from "./v17-stop-commands.mjs";
 import http from "node:http";
 import crypto from "node:crypto";
 import dns from "node:dns";
@@ -2179,16 +2179,17 @@ function assertOrderEngineVersion(command) {
   return true;
 }
 
-const v17StopCommand=createV17StopCommands({
-  request:async(method,path,params)=>(await futuresRequest(method,path,params)).data,
-  assertVersion:assertOrderEngineVersion,positionSideDual:futuresPositionSideDual
+const v17StopCommand = createV17StopCommands({
+  request: async (method, path, params) => (await futuresRequest(method, path, params)).data,
+  assertVersion: assertOrderEngineVersion,
+  positionSideDual: futuresPositionSideDual,
 });
 async function handleCommand(command) {
   const exchange = validateExchange(command?.exchange);
   const futures = isBinanceFutures(exchange);
-  if(String(command?.action||" ").startsWith("v17_")){
-    if(!futures)throw Error("V17_FUTURES_ONLY");
-    return v17StopCommand(command.action,command);
+  if (String(command?.action || " ").startsWith("v17_")) {
+    if (!futures) throw Error("V17_FUTURES_ONLY");
+    return v17StopCommand(command.action, command);
   }
   switch (String(command?.action || "")) {
     case "portfolio":
