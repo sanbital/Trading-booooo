@@ -82,7 +82,16 @@ async function manageLeader(db,p){
       detectedAtMs-timing.received_at_ms>3000||timing.received_at_ms-detectedAtMs>1000)
     throw new Error("V17_EXIT_QUOTE_INVALID_OR_STALE");
   // Preserve the existing policy. Today's nine trades do not validate a new default.
-  const policy={...POLICY,...rec(meta.leaderExitPolicy)};
+  // Cost-breakeven and profit-lock protection from the V17 exit review. These raise the
+  // stop only; they can never lower it. Both are evaluated per tick with no confirmation
+  // window, so they work on the current one-minute cadence.
+  // costBreakeven() throws on a non-finite entry fee or quantity, which would abort this
+  // whole evaluation and leave the position unmanaged. Degrade to the baseline stop
+  // instead: a weaker stop still protects, no stop at all does not.
+  const costUsable=Number.isFinite(Number(p.entry_fee_usdt))&&Number(p.entry_fee_usdt)>=0&&
+    Number(p.original_quantity)>0;
+  if(!costUsable)console.error("V17_EXIT_COST_INPUTS_UNUSABLE",p.id);
+  const policy={...POLICY,...(costUsable?EXIT_REVIEW_CANDIDATE:{}),...rec(meta.leaderExitPolicy)};
   const state=nextExitReviewed({entryPrice:Number(p.entry_price),entryAt:Date.parse(p.entry_at),
     entryFee:Number(p.entry_fee_usdt),quantity:Number(p.original_quantity),
     peakPrice:Number(p.peak_price),stopPrice:Number(p.hard_stop_price),
