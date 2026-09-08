@@ -1,0 +1,5657 @@
+[
+  {
+    "client_order_id": "tb-v11e-413cfdc237b04e388eb623a6",
+    "created_at": "2026-09-08 02:26:03.381689+00",
+    "exchange_order_id": "13422415168",
+    "id": "eea2286e-4ae6-4d3d-b208-f1f38c50aeea",
+    "intent": "OPEN_LONG",
+    "position_id": "88556a19-5878-4372-9df2-0e6e7a22e433",
+    "reason": "V17_LEADER_ENTRY_IOC",
+    "reject_reason": null,
+    "request_payload": {
+      "action": "create_order",
+      "entry_gap_atr": 0.3419872600349035,
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "ioc_bps": 2.9999999999996696,
+      "leverage": 3,
+      "max_slots": 10,
+      "order": {
+        "identifier": "tb-v11e-413cfdc237b04e388eb623a6",
+        "market": "INJUSDT",
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "price": 6.6489941,
+        "quantity": 18.1,
+        "side": "BUY",
+        "time_in_force": "IOC",
+        "type": "LIMIT"
+      },
+      "quantity_step": 0.1,
+      "sized_margin_usdt": 40.10356666666667,
+      "sized_notional_usdt": 120.31070000000001,
+      "spread_bps": 1.5046644598259995,
+      "target_margin_usdt": 40,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "18.1",
+    "response_payload": {
+      "fill": {
+        "averagePrice": 6.648,
+        "executedFunds": 120.3288,
+        "executedVolume": 18.1,
+        "feeAsset": "USDT",
+        "paidFee": 0.0601644
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": 6.648,
+        "client_order_id": "tb-v11e-413cfdc237b04e388eb623a6",
+        "exchange": "binance_futures",
+        "exchange_order_id": "13422415168",
+        "executed_funds": 120.3288,
+        "executed_volume": 18.1,
+        "fee_asset": "USDT",
+        "market": "INJUSDT",
+        "paid_fee": 0.0601644,
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11e-413cfdc237b04e388eb623a6",
+          "closePosition": false,
+          "cumQty": "18.1",
+          "executedQty": "18.1",
+          "fills": [
+            {
+              "commission": "0.04387680",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0438768,
+              "price": "6.648000",
+              "qty": "13.2",
+              "quoteQty": "87.7536000",
+              "realizedPnl": "0",
+              "time": 1788834364612,
+              "tradeId": "777483755"
+            },
+            {
+              "commission": "0.01628760",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0162876,
+              "price": "6.648000",
+              "qty": "4.9",
+              "quoteQty": "32.5752000",
+              "realizedPnl": "0",
+              "time": 1788834364612,
+              "tradeId": "777483756"
+            }
+          ],
+          "goodTillDate": 0,
+          "orderId": 13422415168,
+          "origQty": "18.1",
+          "origType": "LIMIT",
+          "positionSide": "BOTH",
+          "price": "6.648000",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": false,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "BUY",
+          "status": "FILLED",
+          "stopPrice": "0.000000",
+          "symbol": "INJUSDT",
+          "timeInForce": "IOC",
+          "type": "LIMIT",
+          "updateTime": 1788834364612,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "FILLED",
+        "realized_pnl_quote": 0,
+        "reduce_only": false,
+        "remaining_volume": 0,
+        "requested_volume": 18.1,
+        "side": "BUY",
+        "status": "FILLED",
+        "trades": [
+          {
+            "executed_at": "2026-09-08T02:26:04.612Z",
+            "fee": 0.0438768,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.0438768,
+            "funds": 87.7536,
+            "price": 6.648,
+            "raw": {
+              "commission": "0.04387680",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0438768,
+              "price": "6.648000",
+              "qty": "13.2",
+              "quoteQty": "87.7536000",
+              "realizedPnl": "0",
+              "time": 1788834364612,
+              "tradeId": "777483755"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "777483755",
+            "volume": 13.2
+          },
+          {
+            "executed_at": "2026-09-08T02:26:04.612Z",
+            "fee": 0.0162876,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.0162876,
+            "funds": 32.5752,
+            "price": 6.648,
+            "raw": {
+              "commission": "0.01628760",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0162876,
+              "price": "6.648000",
+              "qty": "4.9",
+              "quoteQty": "32.5752000",
+              "realizedPnl": "0",
+              "time": 1788834364612,
+              "tradeId": "777483756"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "777483756",
+            "volume": 4.9
+          }
+        ]
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "INJ",
+        "market_max_quantity": 40000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 500000,
+        "min_notional": 5,
+        "min_quantity": 0.1,
+        "price_tick": 0.001,
+        "quantity_step": 0.1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "INJ",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "2000",
+              "minPrice": "0.001000",
+              "tickSize": "0.001000"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "500000",
+              "minQty": "0.1",
+              "stepSize": "0.1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "40000",
+              "minQty": "0.1",
+              "stepSize": "0.1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.9000",
+              "multiplierUp": "1.1000"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.015000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.10",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1660633200000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "INJUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 6,
+          "quantityPrecision": 1,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "INJUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1000",
+          "underlyingSubType": [
+            "DeFi"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "INJUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788834364958,
+        "round_trip_ms": 1386,
+        "submitted_at_ms": 1788834363572
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "413cfdc2-37b0-4e38-8eb6-23a69c28b115",
+    "state": "FILLED",
+    "symbol": "INJUSDT",
+    "updated_at": "2026-09-08 02:26:05.14+00"
+  },
+  {
+    "client_order_id": "tb-v11x-88556a19587843729df20e6e",
+    "created_at": "2026-09-08 02:58:03.200043+00",
+    "exchange_order_id": "13422993333",
+    "id": "383ead30-382d-4b5e-b48a-14f4e4c93138",
+    "intent": "CLOSE_LONG",
+    "position_id": "88556a19-5878-4372-9df2-0e6e7a22e433",
+    "reason": "V17_HARD_STOP",
+    "reject_reason": null,
+    "request_payload": {
+      "action": "create_order",
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "fraction": 1,
+      "order": {
+        "identifier": "tb-v11x-88556a19587843729df20e6e",
+        "market": "INJUSDT",
+        "position_effect": "CLOSE",
+        "position_side": "LONG",
+        "quantity": 18.1,
+        "side": "SELL",
+        "type": "MARKET"
+      },
+      "quantity_step": 0.1,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "18.1",
+    "response_payload": {
+      "fill": {
+        "averagePrice": 6.475,
+        "executedFunds": 117.1975,
+        "executedVolume": 18.1,
+        "feeAsset": "USDT",
+        "paidFee": 0.05859875
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": 6.475,
+        "client_order_id": "tb-v11x-88556a19587843729df20e6e",
+        "exchange": "binance_futures",
+        "exchange_order_id": "13422993333",
+        "executed_funds": 117.1975,
+        "executed_volume": 18.1,
+        "fee_asset": "USDT",
+        "market": "INJUSDT",
+        "paid_fee": 0.05859875,
+        "position_effect": "CLOSE",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11x-88556a19587843729df20e6e",
+          "closePosition": false,
+          "cumQty": "18.1",
+          "executedQty": "18.1",
+          "fills": [
+            {
+              "commission": "0.05859875",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.05859875,
+              "price": "6.475000",
+              "qty": "18.1",
+              "quoteQty": "117.1975000",
+              "realizedPnl": "-3.13130000",
+              "time": 1788836283792,
+              "tradeId": "777564560"
+            }
+          ],
+          "goodTillDate": 0,
+          "orderId": 13422993333,
+          "origQty": "18.1",
+          "origType": "MARKET",
+          "positionSide": "BOTH",
+          "price": "0.000000",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": true,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "SELL",
+          "status": "FILLED",
+          "stopPrice": "0.000000",
+          "symbol": "INJUSDT",
+          "timeInForce": "GTC",
+          "type": "MARKET",
+          "updateTime": 1788836283792,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "FILLED",
+        "realized_pnl_quote": -3.1313,
+        "reduce_only": true,
+        "remaining_volume": 0,
+        "requested_volume": 18.1,
+        "side": "SELL",
+        "status": "FILLED",
+        "trades": [
+          {
+            "executed_at": "2026-09-08T02:58:03.792Z",
+            "fee": 0.05859875,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.05859875,
+            "funds": 117.1975,
+            "price": 6.475,
+            "raw": {
+              "commission": "0.05859875",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.05859875,
+              "price": "6.475000",
+              "qty": "18.1",
+              "quoteQty": "117.1975000",
+              "realizedPnl": "-3.13130000",
+              "time": 1788836283792,
+              "tradeId": "777564560"
+            },
+            "realized_pnl_quote": -3.1313,
+            "trade_id": "777564560",
+            "volume": 18.1
+          }
+        ]
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "INJ",
+        "market_max_quantity": 40000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 500000,
+        "min_notional": 5,
+        "min_quantity": 0.1,
+        "price_tick": 0.001,
+        "quantity_step": 0.1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "INJ",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "2000",
+              "minPrice": "0.001000",
+              "tickSize": "0.001000"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "500000",
+              "minQty": "0.1",
+              "stepSize": "0.1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "40000",
+              "minQty": "0.1",
+              "stepSize": "0.1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.9000",
+              "multiplierUp": "1.1000"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.015000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.10",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1660633200000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "INJUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 6,
+          "quantityPrecision": 1,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "INJUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1000",
+          "underlyingSubType": [
+            "DeFi"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "INJUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788836284137,
+        "round_trip_ms": 753,
+        "submitted_at_ms": 1788836283384
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "413cfdc2-37b0-4e38-8eb6-23a69c28b115",
+    "state": "FILLED",
+    "symbol": "INJUSDT",
+    "updated_at": "2026-09-08 02:58:04.265+00"
+  },
+  {
+    "client_order_id": "tb-v11e-f9557902e5924509bd7181e9",
+    "created_at": "2026-09-08 03:01:02.742065+00",
+    "exchange_order_id": "1805003627",
+    "id": "9bc89e48-34a7-4a41-81c3-09fd02001531",
+    "intent": "OPEN_LONG",
+    "position_id": "83f4df49-26c5-4e94-8700-f36303f6c0ef",
+    "reason": "V17_LEADER_ENTRY_IOC",
+    "reject_reason": null,
+    "request_payload": {
+      "action": "create_order",
+      "entry_gap_atr": 0.11900765656028633,
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "ioc_bps": 8.792522588754181,
+      "leverage": 3,
+      "max_slots": 10,
+      "order": {
+        "identifier": "tb-v11e-f9557902e5924509bd7181e9",
+        "market": "SOPHUSDT",
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "price": 0.007423521414004079,
+        "quantity": 16181,
+        "side": "BUY",
+        "time_in_force": "IOC",
+        "type": "LIMIT"
+      },
+      "quantity_step": 1,
+      "sized_margin_usdt": 40.00482566666667,
+      "sized_notional_usdt": 120.014477,
+      "spread_bps": 5.395926075812962,
+      "target_margin_usdt": 40,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "16181",
+    "response_payload": {
+      "fill": {
+        "averagePrice": 0.007400631543167913,
+        "executedFunds": 119.749619,
+        "executedVolume": 16181,
+        "feeAsset": "USDT",
+        "paidFee": 0.0598748
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": 0.007400631543167913,
+        "client_order_id": "tb-v11e-f9557902e5924509bd7181e9",
+        "exchange": "binance_futures",
+        "exchange_order_id": "1805003627",
+        "executed_funds": 119.749619,
+        "executed_volume": 16181,
+        "fee_asset": "USDT",
+        "market": "SOPHUSDT",
+        "paid_fee": 0.0598748,
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11e-f9557902e5924509bd7181e9",
+          "closePosition": false,
+          "cumQty": "16181",
+          "executedQty": "16181",
+          "fills": [
+            {
+              "commission": "0.01922890",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0192289,
+              "price": "0.0074000",
+              "qty": "5197",
+              "quoteQty": "38.4578000",
+              "realizedPnl": "0",
+              "time": 1788836463515,
+              "tradeId": "126424322"
+            },
+            {
+              "commission": "0.00283050",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0028305,
+              "price": "0.0074000",
+              "qty": "765",
+              "quoteQty": "5.6610000",
+              "realizedPnl": "0",
+              "time": 1788836463515,
+              "tradeId": "126424323"
+            },
+            {
+              "commission": "0.03781540",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0378154,
+              "price": "0.0074010",
+              "qty": "10219",
+              "quoteQty": "75.6308190",
+              "realizedPnl": "0",
+              "time": 1788836463515,
+              "tradeId": "126424324"
+            }
+          ],
+          "goodTillDate": 0,
+          "orderId": 1805003627,
+          "origQty": "16181",
+          "origType": "LIMIT",
+          "positionSide": "BOTH",
+          "price": "0.0074230",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": false,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "BUY",
+          "status": "FILLED",
+          "stopPrice": "0.0000000",
+          "symbol": "SOPHUSDT",
+          "timeInForce": "IOC",
+          "type": "LIMIT",
+          "updateTime": 1788836463515,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "FILLED",
+        "realized_pnl_quote": 0,
+        "reduce_only": false,
+        "remaining_volume": 0,
+        "requested_volume": 16181,
+        "side": "BUY",
+        "status": "FILLED",
+        "trades": [
+          {
+            "executed_at": "2026-09-08T03:01:03.515Z",
+            "fee": 0.0192289,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.0192289,
+            "funds": 38.4578,
+            "price": 0.0074,
+            "raw": {
+              "commission": "0.01922890",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0192289,
+              "price": "0.0074000",
+              "qty": "5197",
+              "quoteQty": "38.4578000",
+              "realizedPnl": "0",
+              "time": 1788836463515,
+              "tradeId": "126424322"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "126424322",
+            "volume": 5197
+          },
+          {
+            "executed_at": "2026-09-08T03:01:03.515Z",
+            "fee": 0.0028305,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.0028305,
+            "funds": 5.661,
+            "price": 0.0074,
+            "raw": {
+              "commission": "0.00283050",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0028305,
+              "price": "0.0074000",
+              "qty": "765",
+              "quoteQty": "5.6610000",
+              "realizedPnl": "0",
+              "time": 1788836463515,
+              "tradeId": "126424323"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "126424323",
+            "volume": 765
+          },
+          {
+            "executed_at": "2026-09-08T03:01:03.515Z",
+            "fee": 0.0378154,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.0378154,
+            "funds": 75.630819,
+            "price": 0.007401,
+            "raw": {
+              "commission": "0.03781540",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0378154,
+              "price": "0.0074010",
+              "qty": "10219",
+              "quoteQty": "75.6308190",
+              "realizedPnl": "0",
+              "time": 1788836463515,
+              "tradeId": "126424324"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "126424324",
+            "volume": 10219
+          }
+        ]
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "SOPH",
+        "market_max_quantity": 11000000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 70000000,
+        "min_notional": 5,
+        "min_quantity": 1,
+        "price_tick": 0.000001,
+        "quantity_step": 1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "SOPH",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "200",
+              "minPrice": "0.0000010",
+              "tickSize": "0.0000010"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "70000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "11000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.015000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1748437200000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "SOPHUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 7,
+          "quantityPrecision": 0,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "SOPHUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "Layer-2"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "SOPHUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788836463861,
+        "round_trip_ms": 947,
+        "submitted_at_ms": 1788836462914
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "f9557902-e592-4509-bd71-81e9c07b4b7a",
+    "state": "FILLED",
+    "symbol": "SOPHUSDT",
+    "updated_at": "2026-09-08 03:01:04.058+00"
+  },
+  {
+    "client_order_id": "tb-v11x-83f4df4926c54e948700f363",
+    "created_at": "2026-09-08 03:43:03.379066+00",
+    "exchange_order_id": "1806854438",
+    "id": "b927a3d5-12de-48be-9980-452cd0a1e826",
+    "intent": "CLOSE_LONG",
+    "position_id": "83f4df49-26c5-4e94-8700-f36303f6c0ef",
+    "reason": "V17_TRAILING_STOP",
+    "reject_reason": null,
+    "request_payload": {
+      "action": "create_order",
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "fraction": 1,
+      "order": {
+        "identifier": "tb-v11x-83f4df4926c54e948700f363",
+        "market": "SOPHUSDT",
+        "position_effect": "CLOSE",
+        "position_side": "LONG",
+        "quantity": 16181,
+        "side": "SELL",
+        "type": "MARKET"
+      },
+      "quantity_step": 1,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "16181",
+    "response_payload": {
+      "fill": {
+        "averagePrice": 0.0076890000000000005,
+        "executedFunds": 124.415709,
+        "executedVolume": 16181,
+        "feeAsset": "USDT",
+        "paidFee": 0.06220785
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": 0.0076890000000000005,
+        "client_order_id": "tb-v11x-83f4df4926c54e948700f363",
+        "exchange": "binance_futures",
+        "exchange_order_id": "1806854438",
+        "executed_funds": 124.415709,
+        "executed_volume": 16181,
+        "fee_asset": "USDT",
+        "market": "SOPHUSDT",
+        "paid_fee": 0.06220785,
+        "position_effect": "CLOSE",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11x-83f4df4926c54e948700f363",
+          "closePosition": false,
+          "cumQty": "16181",
+          "executedQty": "16181",
+          "fills": [
+            {
+              "commission": "0.06220785",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.06220785,
+              "price": "0.0076890",
+              "qty": "16181",
+              "quoteQty": "124.4157090",
+              "realizedPnl": "4.66609000",
+              "time": 1788838983951,
+              "tradeId": "126731757"
+            }
+          ],
+          "goodTillDate": 0,
+          "orderId": 1806854438,
+          "origQty": "16181",
+          "origType": "MARKET",
+          "positionSide": "BOTH",
+          "price": "0.0000000",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": true,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "SELL",
+          "status": "FILLED",
+          "stopPrice": "0.0000000",
+          "symbol": "SOPHUSDT",
+          "timeInForce": "GTC",
+          "type": "MARKET",
+          "updateTime": 1788838983951,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "FILLED",
+        "realized_pnl_quote": 4.66609,
+        "reduce_only": true,
+        "remaining_volume": 0,
+        "requested_volume": 16181,
+        "side": "SELL",
+        "status": "FILLED",
+        "trades": [
+          {
+            "executed_at": "2026-09-08T03:43:03.951Z",
+            "fee": 0.06220785,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.06220785,
+            "funds": 124.415709,
+            "price": 0.007689,
+            "raw": {
+              "commission": "0.06220785",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.06220785,
+              "price": "0.0076890",
+              "qty": "16181",
+              "quoteQty": "124.4157090",
+              "realizedPnl": "4.66609000",
+              "time": 1788838983951,
+              "tradeId": "126731757"
+            },
+            "realized_pnl_quote": 4.66609,
+            "trade_id": "126731757",
+            "volume": 16181
+          }
+        ]
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "SOPH",
+        "market_max_quantity": 11000000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 70000000,
+        "min_notional": 5,
+        "min_quantity": 1,
+        "price_tick": 0.000001,
+        "quantity_step": 1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "SOPH",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "200",
+              "minPrice": "0.0000010",
+              "tickSize": "0.0000010"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "70000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "11000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.015000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1748437200000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "SOPHUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 7,
+          "quantityPrecision": 0,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "SOPHUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "Layer-2"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "SOPHUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788838984298,
+        "round_trip_ms": 742,
+        "submitted_at_ms": 1788838983556
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "f9557902-e592-4509-bd71-81e9c07b4b7a",
+    "state": "FILLED",
+    "symbol": "SOPHUSDT",
+    "updated_at": "2026-09-08 03:43:04.419+00"
+  },
+  {
+    "client_order_id": "tb-v11e-58eb299474ad4f2db0985240",
+    "created_at": "2026-09-08 03:46:03.291004+00",
+    "exchange_order_id": "8682541254",
+    "id": "8dfe4fe1-39f0-4035-b917-d55092810ced",
+    "intent": "OPEN_LONG",
+    "position_id": "2f084a77-a0ca-4c1c-b467-e4be50862ec6",
+    "reason": "V17_LEADER_ENTRY_IOC",
+    "reject_reason": null,
+    "request_payload": {
+      "action": "create_order",
+      "entry_gap_atr": 0.10863903855122181,
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "ioc_bps": 9.819889974114204,
+      "leverage": 3,
+      "max_slots": 10,
+      "order": {
+        "identifier": "tb-v11e-58eb299474ad4f2db0985240",
+        "market": "IOSTUSDT",
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "price": 0.0011407190746614499,
+        "quantity": 105302,
+        "side": "BUY",
+        "time_in_force": "IOC",
+        "type": "LIMIT"
+      },
+      "quantity_step": 1,
+      "sized_margin_usdt": 40.000719733333334,
+      "sized_notional_usdt": 120.0021592,
+      "spread_bps": 1.755309812181416,
+      "target_margin_usdt": 40,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "105302",
+    "response_payload": {
+      "fill": {
+        "averagePrice": 0.0011393413221021443,
+        "executedFunds": 119.9749199,
+        "executedVolume": 105302,
+        "feeAsset": "USDT",
+        "paidFee": 0.059987450000000005
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": 0.0011393413221021443,
+        "client_order_id": "tb-v11e-58eb299474ad4f2db0985240",
+        "exchange": "binance_futures",
+        "exchange_order_id": "8682541254",
+        "executed_funds": 119.9749199,
+        "executed_volume": 105302,
+        "fee_asset": "USDT",
+        "market": "IOSTUSDT",
+        "paid_fee": 0.059987450000000005,
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11e-58eb299474ad4f2db0985240",
+          "closePosition": false,
+          "cumQty": "105302",
+          "executedQty": "105302",
+          "fills": [
+            {
+              "commission": "0.00357455",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.00357455,
+              "price": "0.00113930",
+              "qty": "6275",
+              "quoteQty": "7.14910750",
+              "realizedPnl": "0",
+              "time": 1788839164935,
+              "tradeId": "293467211"
+            },
+            {
+              "commission": "0.03162355",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.03162355,
+              "price": "0.00113930",
+              "qty": "55514",
+              "quoteQty": "63.24710020",
+              "realizedPnl": "0",
+              "time": 1788839164935,
+              "tradeId": "293467212"
+            },
+            {
+              "commission": "0.02478935",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.02478935,
+              "price": "0.00113940",
+              "qty": "43513",
+              "quoteQty": "49.57871220",
+              "realizedPnl": "0",
+              "time": 1788839164935,
+              "tradeId": "293467213"
+            }
+          ],
+          "goodTillDate": 0,
+          "orderId": 8682541254,
+          "origQty": "105302",
+          "origType": "LIMIT",
+          "positionSide": "BOTH",
+          "price": "0.00114070",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": false,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "BUY",
+          "status": "FILLED",
+          "stopPrice": "0.00000000",
+          "symbol": "IOSTUSDT",
+          "timeInForce": "IOC",
+          "type": "LIMIT",
+          "updateTime": 1788839164935,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "FILLED",
+        "realized_pnl_quote": 0,
+        "reduce_only": false,
+        "remaining_volume": 0,
+        "requested_volume": 105302,
+        "side": "BUY",
+        "status": "FILLED",
+        "trades": [
+          {
+            "executed_at": "2026-09-08T03:46:04.935Z",
+            "fee": 0.00357455,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.00357455,
+            "funds": 7.1491075,
+            "price": 0.0011393,
+            "raw": {
+              "commission": "0.00357455",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.00357455,
+              "price": "0.00113930",
+              "qty": "6275",
+              "quoteQty": "7.14910750",
+              "realizedPnl": "0",
+              "time": 1788839164935,
+              "tradeId": "293467211"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "293467211",
+            "volume": 6275
+          },
+          {
+            "executed_at": "2026-09-08T03:46:04.935Z",
+            "fee": 0.03162355,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.03162355,
+            "funds": 63.2471002,
+            "price": 0.0011393,
+            "raw": {
+              "commission": "0.03162355",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.03162355,
+              "price": "0.00113930",
+              "qty": "55514",
+              "quoteQty": "63.24710020",
+              "realizedPnl": "0",
+              "time": 1788839164935,
+              "tradeId": "293467212"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "293467212",
+            "volume": 55514
+          },
+          {
+            "executed_at": "2026-09-08T03:46:04.935Z",
+            "fee": 0.02478935,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.02478935,
+            "funds": 49.5787122,
+            "price": 0.0011394,
+            "raw": {
+              "commission": "0.02478935",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.02478935,
+              "price": "0.00113940",
+              "qty": "43513",
+              "quoteQty": "49.57871220",
+              "realizedPnl": "0",
+              "time": 1788839164935,
+              "tradeId": "293467213"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "293467213",
+            "volume": 43513
+          }
+        ]
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "IOST",
+        "market_max_quantity": 100000000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 900000000,
+        "min_notional": 5,
+        "min_quantity": 1,
+        "price_tick": 1e-7,
+        "quantity_step": 1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "IOST",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "1",
+              "minPrice": "0.00000010",
+              "tickSize": "0.00000010"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "900000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "100000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.015000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1582272300000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "IOSTUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 8,
+          "quantityPrecision": 0,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "IOSTUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "Layer-1"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "IOSTUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788839165277,
+        "round_trip_ms": 1803,
+        "submitted_at_ms": 1788839163474
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "58eb2994-74ad-4f2d-b098-524000f936ca",
+    "state": "FILLED",
+    "symbol": "IOSTUSDT",
+    "updated_at": "2026-09-08 03:46:05.457+00"
+  },
+  {
+    "client_order_id": "tb-v11x-2f084a77a0ca4c1cb467e4be",
+    "created_at": "2026-09-08 03:56:03.131737+00",
+    "exchange_order_id": "8683299342",
+    "id": "ab9de0e2-dc3d-482c-9eee-759b4bece944",
+    "intent": "CLOSE_LONG",
+    "position_id": "2f084a77-a0ca-4c1c-b467-e4be50862ec6",
+    "reason": "V17_HARD_STOP",
+    "reject_reason": null,
+    "request_payload": {
+      "action": "create_order",
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "fraction": 1,
+      "order": {
+        "identifier": "tb-v11x-2f084a77a0ca4c1cb467e4be",
+        "market": "IOSTUSDT",
+        "position_effect": "CLOSE",
+        "position_side": "LONG",
+        "quantity": 105302,
+        "side": "SELL",
+        "type": "MARKET"
+      },
+      "quantity_step": 1,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "105302",
+    "response_payload": {
+      "fill": {
+        "averagePrice": 0.0010991240318322538,
+        "executedFunds": 115.73995879999998,
+        "executedVolume": 105302,
+        "feeAsset": "USDT",
+        "paidFee": 0.05786996999999999
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": 0.0010991240318322538,
+        "client_order_id": "tb-v11x-2f084a77a0ca4c1cb467e4be",
+        "exchange": "binance_futures",
+        "exchange_order_id": "8683299342",
+        "executed_funds": 115.73995879999998,
+        "executed_volume": 105302,
+        "fee_asset": "USDT",
+        "market": "IOSTUSDT",
+        "paid_fee": 0.05786996999999999,
+        "position_effect": "CLOSE",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11x-2f084a77a0ca4c1cb467e4be",
+          "closePosition": false,
+          "cumQty": "105302",
+          "executedQty": "105302",
+          "fills": [
+            {
+              "commission": "0.02392956",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.02392956,
+              "price": "0.00109930",
+              "qty": "43536",
+              "quoteQty": "47.85912480",
+              "realizedPnl": "-1.74323899",
+              "time": 1788839763706,
+              "tradeId": "293563292"
+            },
+            {
+              "commission": "0.03394041",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.03394041,
+              "price": "0.00109900",
+              "qty": "61766",
+              "quoteQty": "67.88083400",
+              "realizedPnl": "-2.49172210",
+              "time": 1788839763706,
+              "tradeId": "293563293"
+            }
+          ],
+          "goodTillDate": 0,
+          "orderId": 8683299342,
+          "origQty": "105302",
+          "origType": "MARKET",
+          "positionSide": "BOTH",
+          "price": "0.00000000",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": true,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "SELL",
+          "status": "FILLED",
+          "stopPrice": "0.00000000",
+          "symbol": "IOSTUSDT",
+          "timeInForce": "GTC",
+          "type": "MARKET",
+          "updateTime": 1788839763706,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "FILLED",
+        "realized_pnl_quote": -4.2349610900000005,
+        "reduce_only": true,
+        "remaining_volume": 0,
+        "requested_volume": 105302,
+        "side": "SELL",
+        "status": "FILLED",
+        "trades": [
+          {
+            "executed_at": "2026-09-08T03:56:03.706Z",
+            "fee": 0.02392956,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.02392956,
+            "funds": 47.8591248,
+            "price": 0.0010993,
+            "raw": {
+              "commission": "0.02392956",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.02392956,
+              "price": "0.00109930",
+              "qty": "43536",
+              "quoteQty": "47.85912480",
+              "realizedPnl": "-1.74323899",
+              "time": 1788839763706,
+              "tradeId": "293563292"
+            },
+            "realized_pnl_quote": -1.74323899,
+            "trade_id": "293563292",
+            "volume": 43536
+          },
+          {
+            "executed_at": "2026-09-08T03:56:03.706Z",
+            "fee": 0.03394041,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.03394041,
+            "funds": 67.880834,
+            "price": 0.001099,
+            "raw": {
+              "commission": "0.03394041",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.03394041,
+              "price": "0.00109900",
+              "qty": "61766",
+              "quoteQty": "67.88083400",
+              "realizedPnl": "-2.49172210",
+              "time": 1788839763706,
+              "tradeId": "293563293"
+            },
+            "realized_pnl_quote": -2.4917221,
+            "trade_id": "293563293",
+            "volume": 61766
+          }
+        ]
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "IOST",
+        "market_max_quantity": 100000000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 900000000,
+        "min_notional": 5,
+        "min_quantity": 1,
+        "price_tick": 1e-7,
+        "quantity_step": 1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "IOST",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "1",
+              "minPrice": "0.00000010",
+              "tickSize": "0.00000010"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "900000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "100000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.015000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1582272300000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "IOSTUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 8,
+          "quantityPrecision": 0,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "IOSTUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "Layer-1"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "IOSTUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788839764049,
+        "round_trip_ms": 735,
+        "submitted_at_ms": 1788839763314
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "58eb2994-74ad-4f2d-b098-524000f936ca",
+    "state": "FILLED",
+    "symbol": "IOSTUSDT",
+    "updated_at": "2026-09-08 03:56:04.172+00"
+  },
+  {
+    "client_order_id": "tb-v11e-a9d453c547864263bbb55339",
+    "created_at": "2026-09-08 04:01:03.239356+00",
+    "exchange_order_id": "1562951563",
+    "id": "0bff2c81-e6cb-401c-a7ba-af11b6393636",
+    "intent": "OPEN_LONG",
+    "position_id": "8af6af51-bb20-4b8b-ac6b-eaeb50d53a98",
+    "reason": "V17_LEADER_ENTRY_IOC",
+    "reject_reason": null,
+    "request_payload": {
+      "action": "create_order",
+      "entry_gap_atr": 0.22440026720108014,
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "ioc_bps": 2.9999999999996696,
+      "leverage": 3,
+      "max_slots": 10,
+      "order": {
+        "identifier": "tb-v11e-a9d453c547864263bbb55339",
+        "market": "AEROUSDT",
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "price": 0.6686005199999999,
+        "quantity": 179.7,
+        "side": "BUY",
+        "time_in_force": "IOC",
+        "type": "LIMIT"
+      },
+      "quantity_step": 0.1,
+      "sized_margin_usdt": 40.03715999999999,
+      "sized_notional_usdt": 120.11147999999999,
+      "spread_bps": 2.993115833582749,
+      "target_margin_usdt": 40,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "179.7",
+    "response_payload": {
+      "fill": {
+        "averagePrice": 0.6668000000000001,
+        "executedFunds": 119.82396,
+        "executedVolume": 179.7,
+        "feeAsset": "USDT",
+        "paidFee": 0.05991198
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": 0.6668000000000001,
+        "client_order_id": "tb-v11e-a9d453c547864263bbb55339",
+        "exchange": "binance_futures",
+        "exchange_order_id": "1562951563",
+        "executed_funds": 119.82396,
+        "executed_volume": 179.7,
+        "fee_asset": "USDT",
+        "market": "AEROUSDT",
+        "paid_fee": 0.05991198,
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11e-a9d453c547864263bbb55339",
+          "closePosition": false,
+          "cumQty": "179.7",
+          "executedQty": "179.7",
+          "fills": [
+            {
+              "commission": "0.01053544",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.01053544,
+              "price": "0.6668000",
+              "qty": "31.6",
+              "quoteQty": "21.07088000",
+              "realizedPnl": "0",
+              "time": 1788840064453,
+              "tradeId": "118457104"
+            },
+            {
+              "commission": "0.04937654",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.04937654,
+              "price": "0.6668000",
+              "qty": "148.1",
+              "quoteQty": "98.75308000",
+              "realizedPnl": "0",
+              "time": 1788840064453,
+              "tradeId": "118457105"
+            }
+          ],
+          "goodTillDate": 0,
+          "orderId": 1562951563,
+          "origQty": "179.7",
+          "origType": "LIMIT",
+          "positionSide": "BOTH",
+          "price": "0.6686000",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": false,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "BUY",
+          "status": "FILLED",
+          "stopPrice": "0.0000000",
+          "symbol": "AEROUSDT",
+          "timeInForce": "IOC",
+          "type": "LIMIT",
+          "updateTime": 1788840064453,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "FILLED",
+        "realized_pnl_quote": 0,
+        "reduce_only": false,
+        "remaining_volume": 0,
+        "requested_volume": 179.7,
+        "side": "BUY",
+        "status": "FILLED",
+        "trades": [
+          {
+            "executed_at": "2026-09-08T04:01:04.453Z",
+            "fee": 0.01053544,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.01053544,
+            "funds": 21.07088,
+            "price": 0.6668,
+            "raw": {
+              "commission": "0.01053544",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.01053544,
+              "price": "0.6668000",
+              "qty": "31.6",
+              "quoteQty": "21.07088000",
+              "realizedPnl": "0",
+              "time": 1788840064453,
+              "tradeId": "118457104"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "118457104",
+            "volume": 31.6
+          },
+          {
+            "executed_at": "2026-09-08T04:01:04.453Z",
+            "fee": 0.04937654,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.04937654,
+            "funds": 98.75308,
+            "price": 0.6668,
+            "raw": {
+              "commission": "0.04937654",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.04937654,
+              "price": "0.6668000",
+              "qty": "148.1",
+              "quoteQty": "98.75308000",
+              "realizedPnl": "0",
+              "time": 1788840064453,
+              "tradeId": "118457105"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "118457105",
+            "volume": 148.1
+          }
+        ]
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "AERO",
+        "market_max_quantity": 300000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 2000000,
+        "min_notional": 5,
+        "min_quantity": 0.1,
+        "price_tick": 0.0001,
+        "quantity_step": 0.1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "AERO",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "200",
+              "minPrice": "0.0001000",
+              "tickSize": "0.0001000"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "2000000",
+              "minQty": "0.1",
+              "stepSize": "0.1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "300000",
+              "minQty": "0.1",
+              "stepSize": "0.1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.020000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1733321700000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "AEROUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 7,
+          "quantityPrecision": 1,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "AEROUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "DeFi"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "AEROUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788840064798,
+        "round_trip_ms": 1385,
+        "submitted_at_ms": 1788840063413
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "a9d453c5-4786-4263-bbb5-533960e75f6a",
+    "state": "FILLED",
+    "symbol": "AEROUSDT",
+    "updated_at": "2026-09-08 04:01:04.983+00"
+  },
+  {
+    "client_order_id": "tb-v11x-8af6af51bb204b8bac6beaeb",
+    "created_at": "2026-09-08 05:01:02.87538+00",
+    "exchange_order_id": "1563433192",
+    "id": "4600e20d-53b5-47d6-a40c-7e3f2974604d",
+    "intent": "CLOSE_LONG",
+    "position_id": "8af6af51-bb20-4b8b-ac6b-eaeb50d53a98",
+    "reason": "V17_HARD_STOP",
+    "reject_reason": null,
+    "request_payload": {
+      "action": "create_order",
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "fraction": 1,
+      "order": {
+        "identifier": "tb-v11x-8af6af51bb204b8bac6beaeb",
+        "market": "AEROUSDT",
+        "position_effect": "CLOSE",
+        "position_side": "LONG",
+        "quantity": 179.7,
+        "side": "SELL",
+        "type": "MARKET"
+      },
+      "quantity_step": 0.1,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "179.7",
+    "response_payload": {
+      "fill": {
+        "averagePrice": 0.6461,
+        "executedFunds": 116.10417,
+        "executedVolume": 179.7,
+        "feeAsset": "USDT",
+        "paidFee": 0.05805208
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": 0.6461,
+        "client_order_id": "tb-v11x-8af6af51bb204b8bac6beaeb",
+        "exchange": "binance_futures",
+        "exchange_order_id": "1563433192",
+        "executed_funds": 116.10417,
+        "executed_volume": 179.7,
+        "fee_asset": "USDT",
+        "market": "AEROUSDT",
+        "paid_fee": 0.05805208,
+        "position_effect": "CLOSE",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11x-8af6af51bb204b8bac6beaeb",
+          "closePosition": false,
+          "cumQty": "179.7",
+          "executedQty": "179.7",
+          "fills": [
+            {
+              "commission": "0.05805208",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.05805208,
+              "price": "0.6461000",
+              "qty": "179.7",
+              "quoteQty": "116.10417000",
+              "realizedPnl": "-3.71979000",
+              "time": 1788843663471,
+              "tradeId": "118508389"
+            }
+          ],
+          "goodTillDate": 0,
+          "orderId": 1563433192,
+          "origQty": "179.7",
+          "origType": "MARKET",
+          "positionSide": "BOTH",
+          "price": "0.0000000",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": true,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "SELL",
+          "status": "FILLED",
+          "stopPrice": "0.0000000",
+          "symbol": "AEROUSDT",
+          "timeInForce": "GTC",
+          "type": "MARKET",
+          "updateTime": 1788843663471,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "FILLED",
+        "realized_pnl_quote": -3.71979,
+        "reduce_only": true,
+        "remaining_volume": 0,
+        "requested_volume": 179.7,
+        "side": "SELL",
+        "status": "FILLED",
+        "trades": [
+          {
+            "executed_at": "2026-09-08T05:01:03.471Z",
+            "fee": 0.05805208,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.05805208,
+            "funds": 116.10417,
+            "price": 0.6461,
+            "raw": {
+              "commission": "0.05805208",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.05805208,
+              "price": "0.6461000",
+              "qty": "179.7",
+              "quoteQty": "116.10417000",
+              "realizedPnl": "-3.71979000",
+              "time": 1788843663471,
+              "tradeId": "118508389"
+            },
+            "realized_pnl_quote": -3.71979,
+            "trade_id": "118508389",
+            "volume": 179.7
+          }
+        ]
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "AERO",
+        "market_max_quantity": 300000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 2000000,
+        "min_notional": 5,
+        "min_quantity": 0.1,
+        "price_tick": 0.0001,
+        "quantity_step": 0.1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "AERO",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "200",
+              "minPrice": "0.0001000",
+              "tickSize": "0.0001000"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "2000000",
+              "minQty": "0.1",
+              "stepSize": "0.1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "300000",
+              "minQty": "0.1",
+              "stepSize": "0.1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.020000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1733321700000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "AEROUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 7,
+          "quantityPrecision": 1,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "AEROUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "DeFi"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "AEROUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788843663812,
+        "round_trip_ms": 737,
+        "submitted_at_ms": 1788843663075
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "a9d453c5-4786-4263-bbb5-533960e75f6a",
+    "state": "FILLED",
+    "symbol": "AEROUSDT",
+    "updated_at": "2026-09-08 05:01:03.93+00"
+  },
+  {
+    "client_order_id": "tb-v11e-5784dbc37ca34d1687432a3f",
+    "created_at": "2026-09-08 05:05:03.959817+00",
+    "exchange_order_id": "1814942449",
+    "id": "240162ba-5302-427c-8b77-2e20f05f05bf",
+    "intent": "OPEN_LONG",
+    "position_id": "49e3d344-76a2-4994-a344-01aa1b003406",
+    "reason": "V17_LEADER_ENTRY_IOC",
+    "reject_reason": null,
+    "request_payload": {
+      "action": "create_order",
+      "entry_gap_atr": 0.02603199419472217,
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "ioc_bps": 8.738398524865687,
+      "leverage": 3,
+      "max_slots": 10,
+      "order": {
+        "identifier": "tb-v11e-5784dbc37ca34d1687432a3f",
+        "market": "SOPHUSDT",
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "price": 0.010095814422592032,
+        "quantity": 11898,
+        "side": "BUY",
+        "time_in_force": "IOC",
+        "type": "LIMIT"
+      },
+      "quantity_step": 1,
+      "sized_margin_usdt": 40.005042,
+      "sized_notional_usdt": 120.01512600000001,
+      "spread_bps": 1.983143282102695,
+      "target_margin_usdt": 40,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "11898",
+    "response_payload": {
+      "fill": {
+        "averagePrice": 0.010060999999999999,
+        "executedFunds": 119.705778,
+        "executedVolume": 11898,
+        "feeAsset": "USDT",
+        "paidFee": 0.05985288
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": 0.010060999999999999,
+        "client_order_id": "tb-v11e-5784dbc37ca34d1687432a3f",
+        "exchange": "binance_futures",
+        "exchange_order_id": "1814942449",
+        "executed_funds": 119.705778,
+        "executed_volume": 11898,
+        "fee_asset": "USDT",
+        "market": "SOPHUSDT",
+        "paid_fee": 0.05985288,
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11e-5784dbc37ca34d1687432a3f",
+          "closePosition": false,
+          "cumQty": "11898",
+          "executedQty": "11898",
+          "fills": [
+            {
+              "commission": "0.01388418",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.01388418,
+              "price": "0.0100610",
+              "qty": "2760",
+              "quoteQty": "27.7683600",
+              "realizedPnl": "0",
+              "time": 1788843904722,
+              "tradeId": "128014609"
+            },
+            {
+              "commission": "0.04596870",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0459687,
+              "price": "0.0100610",
+              "qty": "9138",
+              "quoteQty": "91.9374180",
+              "realizedPnl": "0",
+              "time": 1788843904722,
+              "tradeId": "128014610"
+            }
+          ],
+          "goodTillDate": 0,
+          "orderId": 1814942449,
+          "origQty": "11898",
+          "origType": "LIMIT",
+          "positionSide": "BOTH",
+          "price": "0.0100950",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": false,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "BUY",
+          "status": "FILLED",
+          "stopPrice": "0.0000000",
+          "symbol": "SOPHUSDT",
+          "timeInForce": "IOC",
+          "type": "LIMIT",
+          "updateTime": 1788843904722,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "FILLED",
+        "realized_pnl_quote": 0,
+        "reduce_only": false,
+        "remaining_volume": 0,
+        "requested_volume": 11898,
+        "side": "BUY",
+        "status": "FILLED",
+        "trades": [
+          {
+            "executed_at": "2026-09-08T05:05:04.722Z",
+            "fee": 0.01388418,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.01388418,
+            "funds": 27.76836,
+            "price": 0.010061,
+            "raw": {
+              "commission": "0.01388418",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.01388418,
+              "price": "0.0100610",
+              "qty": "2760",
+              "quoteQty": "27.7683600",
+              "realizedPnl": "0",
+              "time": 1788843904722,
+              "tradeId": "128014609"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "128014609",
+            "volume": 2760
+          },
+          {
+            "executed_at": "2026-09-08T05:05:04.722Z",
+            "fee": 0.0459687,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.0459687,
+            "funds": 91.937418,
+            "price": 0.010061,
+            "raw": {
+              "commission": "0.04596870",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0459687,
+              "price": "0.0100610",
+              "qty": "9138",
+              "quoteQty": "91.9374180",
+              "realizedPnl": "0",
+              "time": 1788843904722,
+              "tradeId": "128014610"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "128014610",
+            "volume": 9138
+          }
+        ]
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "SOPH",
+        "market_max_quantity": 11000000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 70000000,
+        "min_notional": 5,
+        "min_quantity": 1,
+        "price_tick": 0.000001,
+        "quantity_step": 1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "SOPH",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "200",
+              "minPrice": "0.0000010",
+              "tickSize": "0.0000010"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "70000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "11000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.015000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1748437200000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "SOPHUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 7,
+          "quantityPrecision": 0,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "SOPHUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "Layer-2"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "SOPHUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788843905076,
+        "round_trip_ms": 921,
+        "submitted_at_ms": 1788843904155
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "5784dbc3-7ca3-4d16-8743-2a3fa56b1beb",
+    "state": "FILLED",
+    "symbol": "SOPHUSDT",
+    "updated_at": "2026-09-08 05:05:05.257+00"
+  },
+  {
+    "client_order_id": "tb-v11x-49e3d34476a24994a34401aa",
+    "created_at": "2026-09-08 05:20:03.951194+00",
+    "exchange_order_id": "1816992572",
+    "id": "4cd7e632-0b75-464c-b610-b713f6200049",
+    "intent": "CLOSE_LONG",
+    "position_id": "49e3d344-76a2-4994-a344-01aa1b003406",
+    "reason": "V17_TRAILING_STOP",
+    "reject_reason": null,
+    "request_payload": {
+      "action": "create_order",
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "fraction": 1,
+      "order": {
+        "identifier": "tb-v11x-49e3d34476a24994a34401aa",
+        "market": "SOPHUSDT",
+        "position_effect": "CLOSE",
+        "position_side": "LONG",
+        "quantity": 11898,
+        "side": "SELL",
+        "type": "MARKET"
+      },
+      "quantity_step": 1,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "11898",
+    "response_payload": {
+      "fill": {
+        "averagePrice": 0.010683,
+        "executedFunds": 127.10633399999999,
+        "executedVolume": 11898,
+        "feeAsset": "USDT",
+        "paidFee": 0.06355316
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": 0.010683,
+        "client_order_id": "tb-v11x-49e3d34476a24994a34401aa",
+        "exchange": "binance_futures",
+        "exchange_order_id": "1816992572",
+        "executed_funds": 127.10633399999999,
+        "executed_volume": 11898,
+        "fee_asset": "USDT",
+        "market": "SOPHUSDT",
+        "paid_fee": 0.06355316,
+        "position_effect": "CLOSE",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11x-49e3d34476a24994a34401aa",
+          "closePosition": false,
+          "cumQty": "11898",
+          "executedQty": "11898",
+          "fills": [
+            {
+              "commission": "0.04673812",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.04673812,
+              "price": "0.0106830",
+              "qty": "8750",
+              "quoteQty": "93.4762500",
+              "realizedPnl": "5.44250000",
+              "time": 1788844804568,
+              "tradeId": "128340442"
+            },
+            {
+              "commission": "0.01681504",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.01681504,
+              "price": "0.0106830",
+              "qty": "3148",
+              "quoteQty": "33.6300840",
+              "realizedPnl": "1.95805600",
+              "time": 1788844804568,
+              "tradeId": "128340443"
+            }
+          ],
+          "goodTillDate": 0,
+          "orderId": 1816992572,
+          "origQty": "11898",
+          "origType": "MARKET",
+          "positionSide": "BOTH",
+          "price": "0.0000000",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": true,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "SELL",
+          "status": "FILLED",
+          "stopPrice": "0.0000000",
+          "symbol": "SOPHUSDT",
+          "timeInForce": "GTC",
+          "type": "MARKET",
+          "updateTime": 1788844804568,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "FILLED",
+        "realized_pnl_quote": 7.400556,
+        "reduce_only": true,
+        "remaining_volume": 0,
+        "requested_volume": 11898,
+        "side": "SELL",
+        "status": "FILLED",
+        "trades": [
+          {
+            "executed_at": "2026-09-08T05:20:04.568Z",
+            "fee": 0.04673812,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.04673812,
+            "funds": 93.47625,
+            "price": 0.010683,
+            "raw": {
+              "commission": "0.04673812",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.04673812,
+              "price": "0.0106830",
+              "qty": "8750",
+              "quoteQty": "93.4762500",
+              "realizedPnl": "5.44250000",
+              "time": 1788844804568,
+              "tradeId": "128340442"
+            },
+            "realized_pnl_quote": 5.4425,
+            "trade_id": "128340442",
+            "volume": 8750
+          },
+          {
+            "executed_at": "2026-09-08T05:20:04.568Z",
+            "fee": 0.01681504,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.01681504,
+            "funds": 33.630084,
+            "price": 0.010683,
+            "raw": {
+              "commission": "0.01681504",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.01681504,
+              "price": "0.0106830",
+              "qty": "3148",
+              "quoteQty": "33.6300840",
+              "realizedPnl": "1.95805600",
+              "time": 1788844804568,
+              "tradeId": "128340443"
+            },
+            "realized_pnl_quote": 1.958056,
+            "trade_id": "128340443",
+            "volume": 3148
+          }
+        ]
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "SOPH",
+        "market_max_quantity": 11000000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 70000000,
+        "min_notional": 5,
+        "min_quantity": 1,
+        "price_tick": 0.000001,
+        "quantity_step": 1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "SOPH",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "200",
+              "minPrice": "0.0000010",
+              "tickSize": "0.0000010"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "70000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "11000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.015000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1748437200000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "SOPHUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 7,
+          "quantityPrecision": 0,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "SOPHUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "Layer-2"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "SOPHUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788844804912,
+        "round_trip_ms": 760,
+        "submitted_at_ms": 1788844804152
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "5784dbc3-7ca3-4d16-8743-2a3fa56b1beb",
+    "state": "FILLED",
+    "symbol": "SOPHUSDT",
+    "updated_at": "2026-09-08 05:20:05.033+00"
+  },
+  {
+    "client_order_id": "tb-v11e-38af0b9636c049f8a671a7b3",
+    "created_at": "2026-09-08 05:31:02.860378+00",
+    "exchange_order_id": "1818273382",
+    "id": "77078cd3-5a72-4763-b9c0-535b85a07aee",
+    "intent": "OPEN_LONG",
+    "position_id": null,
+    "reason": "V17_LEADER_ENTRY_IOC",
+    "reject_reason": "IOC_NO_FILL:CANCELED",
+    "request_payload": {
+      "action": "create_order",
+      "entry_gap_atr": 0.10300931675457771,
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "ioc_bps": 8.267235332657386,
+      "leverage": 3,
+      "max_slots": 10,
+      "order": {
+        "identifier": "tb-v11e-38af0b9636c049f8a671a7b3",
+        "market": "SOPHUSDT",
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "price": 0.011366389099167299,
+        "quantity": 10568,
+        "side": "BUY",
+        "time_in_force": "IOC",
+        "type": "LIMIT"
+      },
+      "quantity_step": 1,
+      "sized_margin_usdt": 40.006925333333335,
+      "sized_notional_usdt": 120.02077600000001,
+      "spread_bps": 4.4045102184653295,
+      "target_margin_usdt": 40,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "10568",
+    "response_payload": {
+      "fill": {
+        "averagePrice": null,
+        "executedFunds": 0,
+        "executedVolume": 0,
+        "feeAsset": null,
+        "paidFee": 0
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": null,
+        "client_order_id": "tb-v11e-38af0b9636c049f8a671a7b3",
+        "exchange": "binance_futures",
+        "exchange_order_id": "1818273382",
+        "executed_funds": 0,
+        "executed_volume": 0,
+        "fee_asset": null,
+        "market": "SOPHUSDT",
+        "paid_fee": 0,
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11e-38af0b9636c049f8a671a7b3",
+          "closePosition": false,
+          "cumQty": "0",
+          "executedQty": "0",
+          "goodTillDate": 0,
+          "orderId": 1818273382,
+          "origQty": "10568",
+          "origType": "LIMIT",
+          "positionSide": "BOTH",
+          "price": "0.0113660",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": false,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "BUY",
+          "status": "EXPIRED",
+          "stopPrice": "0.0000000",
+          "symbol": "SOPHUSDT",
+          "timeInForce": "IOC",
+          "type": "LIMIT",
+          "updateTime": 1788845463415,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "EXPIRED",
+        "realized_pnl_quote": 0,
+        "reduce_only": false,
+        "remaining_volume": 10568,
+        "requested_volume": 10568,
+        "side": "BUY",
+        "status": "CANCELED",
+        "trades": []
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "SOPH",
+        "market_max_quantity": 11000000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 70000000,
+        "min_notional": 5,
+        "min_quantity": 1,
+        "price_tick": 0.000001,
+        "quantity_step": 1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "SOPH",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "200",
+              "minPrice": "0.0000010",
+              "tickSize": "0.0000010"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "70000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "11000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.015000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1748437200000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "SOPHUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 7,
+          "quantityPrecision": 0,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "SOPHUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "Layer-2"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "SOPHUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788845463526,
+        "round_trip_ms": 492,
+        "submitted_at_ms": 1788845463034
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "38af0b96-36c0-49f8-a671-a7b3c47f6b17",
+    "state": "REJECTED",
+    "symbol": "SOPHUSDT",
+    "updated_at": "2026-09-08 05:31:03.638+00"
+  },
+  {
+    "client_order_id": "tb-v11e-da15b079fae148a88039211d",
+    "created_at": "2026-09-08 06:16:02.730131+00",
+    "exchange_order_id": "1742103103",
+    "id": "acc45381-2388-4e46-82c7-dda57dc83e29",
+    "intent": "OPEN_LONG",
+    "position_id": "61cae170-54e9-4453-8e95-cd55127bbd8e",
+    "reason": "V17_LEADER_ENTRY_IOC",
+    "reject_reason": null,
+    "request_payload": {
+      "action": "create_order",
+      "entry_gap_atr": 0.2905021346111928,
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "ioc_bps": 2.9999999999996696,
+      "leverage": 3,
+      "max_slots": 10,
+      "order": {
+        "identifier": "tb-v11e-da15b079fae148a88039211d",
+        "market": "USELESSUSDT",
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "price": 0.25100527899999997,
+        "quantity": 479,
+        "side": "BUY",
+        "time_in_force": "IOC",
+        "type": "LIMIT"
+      },
+      "quantity_step": 1,
+      "sized_margin_usdt": 40.06515666666667,
+      "sized_notional_usdt": 120.19547,
+      "spread_bps": 3.5879445064579407,
+      "target_margin_usdt": 40,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "479",
+    "response_payload": {
+      "fill": {
+        "averagePrice": 0.2503072860125261,
+        "executedFunds": 119.89719,
+        "executedVolume": 479,
+        "feeAsset": "USDT",
+        "paidFee": 0.059948589999999996
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": 0.2503072860125261,
+        "client_order_id": "tb-v11e-da15b079fae148a88039211d",
+        "exchange": "binance_futures",
+        "exchange_order_id": "1742103103",
+        "executed_funds": 119.89719,
+        "executed_volume": 479,
+        "fee_asset": "USDT",
+        "market": "USELESSUSDT",
+        "paid_fee": 0.059948589999999996,
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11e-da15b079fae148a88039211d",
+          "closePosition": false,
+          "cumQty": "479",
+          "executedQty": "479",
+          "fills": [
+            {
+              "commission": "0.01626950",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0162695,
+              "price": "0.2503000",
+              "qty": "130",
+              "quoteQty": "32.5390000",
+              "realizedPnl": "0",
+              "time": 1788848164425,
+              "tradeId": "145454842"
+            },
+            {
+              "commission": "0.04367909",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.04367909,
+              "price": "0.2503100",
+              "qty": "349",
+              "quoteQty": "87.3581900",
+              "realizedPnl": "0",
+              "time": 1788848164425,
+              "tradeId": "145454843"
+            }
+          ],
+          "goodTillDate": 0,
+          "orderId": 1742103103,
+          "origQty": "479",
+          "origType": "LIMIT",
+          "positionSide": "BOTH",
+          "price": "0.2510000",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": false,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "BUY",
+          "status": "FILLED",
+          "stopPrice": "0.0000000",
+          "symbol": "USELESSUSDT",
+          "timeInForce": "IOC",
+          "type": "LIMIT",
+          "updateTime": 1788848164425,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "FILLED",
+        "realized_pnl_quote": 0,
+        "reduce_only": false,
+        "remaining_volume": 0,
+        "requested_volume": 479,
+        "side": "BUY",
+        "status": "FILLED",
+        "trades": [
+          {
+            "executed_at": "2026-09-08T06:16:04.425Z",
+            "fee": 0.0162695,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.0162695,
+            "funds": 32.539,
+            "price": 0.2503,
+            "raw": {
+              "commission": "0.01626950",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0162695,
+              "price": "0.2503000",
+              "qty": "130",
+              "quoteQty": "32.5390000",
+              "realizedPnl": "0",
+              "time": 1788848164425,
+              "tradeId": "145454842"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "145454842",
+            "volume": 130
+          },
+          {
+            "executed_at": "2026-09-08T06:16:04.425Z",
+            "fee": 0.04367909,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.04367909,
+            "funds": 87.35819,
+            "price": 0.25031,
+            "raw": {
+              "commission": "0.04367909",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.04367909,
+              "price": "0.2503100",
+              "qty": "349",
+              "quoteQty": "87.3581900",
+              "realizedPnl": "0",
+              "time": 1788848164425,
+              "tradeId": "145454843"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "145454843",
+            "volume": 349
+          }
+        ]
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "USELESS",
+        "market_max_quantity": 2000000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 8000000,
+        "min_notional": 5,
+        "min_quantity": 1,
+        "price_tick": 0.00001,
+        "quantity_step": 1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "USELESS",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "200",
+              "minPrice": "0.0000100",
+              "tickSize": "0.0000100"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "8000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "2000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.020000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1755260100000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "USELESSUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 7,
+          "quantityPrecision": 0,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "USELESSUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "Meme"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "USELESSUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788848164765,
+        "round_trip_ms": 1857,
+        "submitted_at_ms": 1788848162908
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "da15b079-fae1-48a8-8039-211de8e27cc6",
+    "state": "FILLED",
+    "symbol": "USELESSUSDT",
+    "updated_at": "2026-09-08 06:16:04.956+00"
+  },
+  {
+    "client_order_id": "tb-v11x-61cae17054e944538e95cd55",
+    "created_at": "2026-09-08 06:32:02.985746+00",
+    "exchange_order_id": "1743085320",
+    "id": "68861e26-87b0-44b2-b7a7-d20fbc52f14b",
+    "intent": "CLOSE_LONG",
+    "position_id": "61cae170-54e9-4453-8e95-cd55127bbd8e",
+    "reason": "V17_HARD_STOP",
+    "reject_reason": null,
+    "request_payload": {
+      "action": "create_order",
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "fraction": 1,
+      "order": {
+        "identifier": "tb-v11x-61cae17054e944538e95cd55",
+        "market": "USELESSUSDT",
+        "position_effect": "CLOSE",
+        "position_side": "LONG",
+        "quantity": 479,
+        "side": "SELL",
+        "type": "MARKET"
+      },
+      "quantity_step": 1,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "479",
+    "response_payload": {
+      "fill": {
+        "averagePrice": 0.2432377661795407,
+        "executedFunds": 116.51089,
+        "executedVolume": 479,
+        "feeAsset": "USDT",
+        "paidFee": 0.05825543
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": 0.2432377661795407,
+        "client_order_id": "tb-v11x-61cae17054e944538e95cd55",
+        "exchange": "binance_futures",
+        "exchange_order_id": "1743085320",
+        "executed_funds": 116.51089,
+        "executed_volume": 479,
+        "fee_asset": "USDT",
+        "market": "USELESSUSDT",
+        "paid_fee": 0.05825543,
+        "position_effect": "CLOSE",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11x-61cae17054e944538e95cd55",
+          "closePosition": false,
+          "cumQty": "479",
+          "executedQty": "479",
+          "fills": [
+            {
+              "commission": "0.01690517",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.01690517,
+              "price": "0.2432400",
+              "qty": "139",
+              "quoteQty": "33.8103600",
+              "realizedPnl": "-0.98235275",
+              "time": 1788849123558,
+              "tradeId": "145579767"
+            },
+            {
+              "commission": "0.02833746",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.02833746,
+              "price": "0.2432400",
+              "qty": "233",
+              "quoteQty": "56.6749200",
+              "realizedPnl": "-1.64667764",
+              "time": 1788849123558,
+              "tradeId": "145579768"
+            },
+            {
+              "commission": "0.01301280",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0130128,
+              "price": "0.2432300",
+              "qty": "107",
+              "quoteQty": "26.0256100",
+              "realizedPnl": "-0.75726960",
+              "time": 1788849123558,
+              "tradeId": "145579769"
+            }
+          ],
+          "goodTillDate": 0,
+          "orderId": 1743085320,
+          "origQty": "479",
+          "origType": "MARKET",
+          "positionSide": "BOTH",
+          "price": "0.0000000",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": true,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "SELL",
+          "status": "FILLED",
+          "stopPrice": "0.0000000",
+          "symbol": "USELESSUSDT",
+          "timeInForce": "GTC",
+          "type": "MARKET",
+          "updateTime": 1788849123558,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "FILLED",
+        "realized_pnl_quote": -3.38629999,
+        "reduce_only": true,
+        "remaining_volume": 0,
+        "requested_volume": 479,
+        "side": "SELL",
+        "status": "FILLED",
+        "trades": [
+          {
+            "executed_at": "2026-09-08T06:32:03.558Z",
+            "fee": 0.01690517,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.01690517,
+            "funds": 33.81036,
+            "price": 0.24324,
+            "raw": {
+              "commission": "0.01690517",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.01690517,
+              "price": "0.2432400",
+              "qty": "139",
+              "quoteQty": "33.8103600",
+              "realizedPnl": "-0.98235275",
+              "time": 1788849123558,
+              "tradeId": "145579767"
+            },
+            "realized_pnl_quote": -0.98235275,
+            "trade_id": "145579767",
+            "volume": 139
+          },
+          {
+            "executed_at": "2026-09-08T06:32:03.558Z",
+            "fee": 0.02833746,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.02833746,
+            "funds": 56.67492,
+            "price": 0.24324,
+            "raw": {
+              "commission": "0.02833746",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.02833746,
+              "price": "0.2432400",
+              "qty": "233",
+              "quoteQty": "56.6749200",
+              "realizedPnl": "-1.64667764",
+              "time": 1788849123558,
+              "tradeId": "145579768"
+            },
+            "realized_pnl_quote": -1.64667764,
+            "trade_id": "145579768",
+            "volume": 233
+          },
+          {
+            "executed_at": "2026-09-08T06:32:03.558Z",
+            "fee": 0.0130128,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.0130128,
+            "funds": 26.02561,
+            "price": 0.24323,
+            "raw": {
+              "commission": "0.01301280",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0130128,
+              "price": "0.2432300",
+              "qty": "107",
+              "quoteQty": "26.0256100",
+              "realizedPnl": "-0.75726960",
+              "time": 1788849123558,
+              "tradeId": "145579769"
+            },
+            "realized_pnl_quote": -0.7572696,
+            "trade_id": "145579769",
+            "volume": 107
+          }
+        ]
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "USELESS",
+        "market_max_quantity": 2000000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 8000000,
+        "min_notional": 5,
+        "min_quantity": 1,
+        "price_tick": 0.00001,
+        "quantity_step": 1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "USELESS",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "200",
+              "minPrice": "0.0000100",
+              "tickSize": "0.0000100"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "8000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "2000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.020000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1755260100000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "USELESSUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 7,
+          "quantityPrecision": 0,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "USELESSUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "Meme"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "USELESSUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788849123905,
+        "round_trip_ms": 730,
+        "submitted_at_ms": 1788849123175
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "da15b079-fae1-48a8-8039-211de8e27cc6",
+    "state": "FILLED",
+    "symbol": "USELESSUSDT",
+    "updated_at": "2026-09-08 06:32:04.025+00"
+  },
+  {
+    "client_order_id": "tb-v11e-b0ef31e9ae5e48ba8bc3cb74",
+    "created_at": "2026-09-08 07:11:03.125906+00",
+    "exchange_order_id": "2572981769",
+    "id": "8391b4c9-b2f0-4cbd-8d76-f702eb655fec",
+    "intent": "OPEN_LONG",
+    "position_id": "a5ab1fa0-1a90-4c8d-b73c-745ae5630c57",
+    "reason": "V17_LEADER_ENTRY_IOC",
+    "reject_reason": null,
+    "request_payload": {
+      "action": "create_order",
+      "entry_gap_atr": 0.04941190621429029,
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "ioc_bps": 7.017908663218275,
+      "leverage": 3,
+      "max_slots": 10,
+      "order": {
+        "identifier": "tb-v11e-b0ef31e9ae5e48ba8bc3cb74",
+        "market": "AKEUSDT",
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "price": 0.01897330595482546,
+        "quantity": 6331,
+        "side": "BUY",
+        "time_in_force": "IOC",
+        "type": "LIMIT"
+      },
+      "quantity_step": 1,
+      "sized_margin_usdt": 40.01192,
+      "sized_notional_usdt": 120.03576000000001,
+      "spread_bps": 2.637826431022283,
+      "target_margin_usdt": 40,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "6331",
+    "response_payload": {
+      "fill": {
+        "averagePrice": 0.01895052440372769,
+        "executedFunds": 119.97577000000001,
+        "executedVolume": 6331,
+        "feeAsset": "USDT",
+        "paidFee": 0.05998787
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": 0.01895052440372769,
+        "client_order_id": "tb-v11e-b0ef31e9ae5e48ba8bc3cb74",
+        "exchange": "binance_futures",
+        "exchange_order_id": "2572981769",
+        "executed_funds": 119.97577000000001,
+        "executed_volume": 6331,
+        "fee_asset": "USDT",
+        "market": "AKEUSDT",
+        "paid_fee": 0.05998787,
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11e-b0ef31e9ae5e48ba8bc3cb74",
+          "closePosition": false,
+          "cumQty": "6331",
+          "executedQty": "6331",
+          "fills": [
+            {
+              "commission": "0.02852922",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.02852922,
+              "price": "0.0189500",
+              "qty": "3011",
+              "quoteQty": "57.0584500",
+              "realizedPnl": "0",
+              "time": 1788851464368,
+              "tradeId": "329752380"
+            },
+            {
+              "commission": "0.02854968",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.02854968,
+              "price": "0.0189510",
+              "qty": "3013",
+              "quoteQty": "57.0993630",
+              "realizedPnl": "0",
+              "time": 1788851464368,
+              "tradeId": "329752381"
+            },
+            {
+              "commission": "0.00290897",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.00290897,
+              "price": "0.0189510",
+              "qty": "307",
+              "quoteQty": "5.8179570",
+              "realizedPnl": "0",
+              "time": 1788851464368,
+              "tradeId": "329752382"
+            }
+          ],
+          "goodTillDate": 0,
+          "orderId": 2572981769,
+          "origQty": "6331",
+          "origType": "LIMIT",
+          "positionSide": "BOTH",
+          "price": "0.0189730",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": false,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "BUY",
+          "status": "FILLED",
+          "stopPrice": "0.0000000",
+          "symbol": "AKEUSDT",
+          "timeInForce": "IOC",
+          "type": "LIMIT",
+          "updateTime": 1788851464368,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "FILLED",
+        "realized_pnl_quote": 0,
+        "reduce_only": false,
+        "remaining_volume": 0,
+        "requested_volume": 6331,
+        "side": "BUY",
+        "status": "FILLED",
+        "trades": [
+          {
+            "executed_at": "2026-09-08T07:11:04.368Z",
+            "fee": 0.02852922,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.02852922,
+            "funds": 57.05845,
+            "price": 0.01895,
+            "raw": {
+              "commission": "0.02852922",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.02852922,
+              "price": "0.0189500",
+              "qty": "3011",
+              "quoteQty": "57.0584500",
+              "realizedPnl": "0",
+              "time": 1788851464368,
+              "tradeId": "329752380"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "329752380",
+            "volume": 3011
+          },
+          {
+            "executed_at": "2026-09-08T07:11:04.368Z",
+            "fee": 0.02854968,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.02854968,
+            "funds": 57.099363,
+            "price": 0.018951,
+            "raw": {
+              "commission": "0.02854968",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.02854968,
+              "price": "0.0189510",
+              "qty": "3013",
+              "quoteQty": "57.0993630",
+              "realizedPnl": "0",
+              "time": 1788851464368,
+              "tradeId": "329752381"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "329752381",
+            "volume": 3013
+          },
+          {
+            "executed_at": "2026-09-08T07:11:04.368Z",
+            "fee": 0.00290897,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.00290897,
+            "funds": 5.817957,
+            "price": 0.018951,
+            "raw": {
+              "commission": "0.00290897",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.00290897,
+              "price": "0.0189510",
+              "qty": "307",
+              "quoteQty": "5.8179570",
+              "realizedPnl": "0",
+              "time": 1788851464368,
+              "tradeId": "329752382"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "329752382",
+            "volume": 307
+          }
+        ]
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "AKE",
+        "market_max_quantity": 40000000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 90000000,
+        "min_notional": 5,
+        "min_quantity": 1,
+        "price_tick": 0.000001,
+        "quantity_step": 1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "AKE",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "200",
+              "minPrice": "0.0000010",
+              "tickSize": "0.0000010"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "90000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "40000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.020000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1758889800000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "AKEUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 7,
+          "quantityPrecision": 0,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "AKEUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "Alpha"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "AKEUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788851464715,
+        "round_trip_ms": 1411,
+        "submitted_at_ms": 1788851463304
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "b0ef31e9-ae5e-48ba-8bc3-cb7482bea411",
+    "state": "FILLED",
+    "symbol": "AKEUSDT",
+    "updated_at": "2026-09-08 07:11:04.896+00"
+  },
+  {
+    "client_order_id": "tb-v11x-a5ab1fa01a904c8db73c745a",
+    "created_at": "2026-09-08 07:35:02.891237+00",
+    "exchange_order_id": "2573605623",
+    "id": "5cbc651d-9087-45a3-bc40-cc3b745ad7cf",
+    "intent": "CLOSE_LONG",
+    "position_id": "a5ab1fa0-1a90-4c8d-b73c-745ae5630c57",
+    "reason": "V17_HARD_STOP",
+    "reject_reason": null,
+    "request_payload": {
+      "action": "create_order",
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "fraction": 1,
+      "order": {
+        "identifier": "tb-v11x-a5ab1fa01a904c8db73c745a",
+        "market": "AKEUSDT",
+        "position_effect": "CLOSE",
+        "position_side": "LONG",
+        "quantity": 6331,
+        "side": "SELL",
+        "type": "MARKET"
+      },
+      "quantity_step": 1,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "6331",
+    "response_payload": {
+      "fill": {
+        "averagePrice": 0.018281,
+        "executedFunds": 115.737011,
+        "executedVolume": 6331,
+        "feeAsset": "USDT",
+        "paidFee": 0.0578685
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": 0.018281,
+        "client_order_id": "tb-v11x-a5ab1fa01a904c8db73c745a",
+        "exchange": "binance_futures",
+        "exchange_order_id": "2573605623",
+        "executed_funds": 115.737011,
+        "executed_volume": 6331,
+        "fee_asset": "USDT",
+        "market": "AKEUSDT",
+        "paid_fee": 0.0578685,
+        "position_effect": "CLOSE",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11x-a5ab1fa01a904c8db73c745a",
+          "closePosition": false,
+          "cumQty": "6331",
+          "executedQty": "6331",
+          "fills": [
+            {
+              "commission": "0.04999853",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.04999853,
+              "price": "0.0182810",
+              "qty": "5470",
+              "quoteQty": "99.9970700",
+              "realizedPnl": "-3.66229848",
+              "time": 1788852903473,
+              "tradeId": "329828821"
+            },
+            {
+              "commission": "0.00786997",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.00786997,
+              "price": "0.0182810",
+              "qty": "861",
+              "quoteQty": "15.7399410",
+              "realizedPnl": "-0.57646051",
+              "time": 1788852903473,
+              "tradeId": "329828822"
+            }
+          ],
+          "goodTillDate": 0,
+          "orderId": 2573605623,
+          "origQty": "6331",
+          "origType": "MARKET",
+          "positionSide": "BOTH",
+          "price": "0.0000000",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": true,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "SELL",
+          "status": "FILLED",
+          "stopPrice": "0.0000000",
+          "symbol": "AKEUSDT",
+          "timeInForce": "GTC",
+          "type": "MARKET",
+          "updateTime": 1788852903473,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "FILLED",
+        "realized_pnl_quote": -4.23875899,
+        "reduce_only": true,
+        "remaining_volume": 0,
+        "requested_volume": 6331,
+        "side": "SELL",
+        "status": "FILLED",
+        "trades": [
+          {
+            "executed_at": "2026-09-08T07:35:03.473Z",
+            "fee": 0.04999853,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.04999853,
+            "funds": 99.99707,
+            "price": 0.018281,
+            "raw": {
+              "commission": "0.04999853",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.04999853,
+              "price": "0.0182810",
+              "qty": "5470",
+              "quoteQty": "99.9970700",
+              "realizedPnl": "-3.66229848",
+              "time": 1788852903473,
+              "tradeId": "329828821"
+            },
+            "realized_pnl_quote": -3.66229848,
+            "trade_id": "329828821",
+            "volume": 5470
+          },
+          {
+            "executed_at": "2026-09-08T07:35:03.473Z",
+            "fee": 0.00786997,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.00786997,
+            "funds": 15.739941,
+            "price": 0.018281,
+            "raw": {
+              "commission": "0.00786997",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.00786997,
+              "price": "0.0182810",
+              "qty": "861",
+              "quoteQty": "15.7399410",
+              "realizedPnl": "-0.57646051",
+              "time": 1788852903473,
+              "tradeId": "329828822"
+            },
+            "realized_pnl_quote": -0.57646051,
+            "trade_id": "329828822",
+            "volume": 861
+          }
+        ]
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "AKE",
+        "market_max_quantity": 40000000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 90000000,
+        "min_notional": 5,
+        "min_quantity": 1,
+        "price_tick": 0.000001,
+        "quantity_step": 1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "AKE",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "200",
+              "minPrice": "0.0000010",
+              "tickSize": "0.0000010"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "90000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "40000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.020000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1758889800000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "AKEUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 7,
+          "quantityPrecision": 0,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "AKEUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "Alpha"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "AKEUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788852903819,
+        "round_trip_ms": 749,
+        "submitted_at_ms": 1788852903070
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "b0ef31e9-ae5e-48ba-8bc3-cb7482bea411",
+    "state": "FILLED",
+    "symbol": "AKEUSDT",
+    "updated_at": "2026-09-08 07:35:03.939+00"
+  },
+  {
+    "client_order_id": "tb-v11e-956be08ce1664a03a8fda17f",
+    "created_at": "2026-09-08 07:40:04.562229+00",
+    "exchange_order_id": "1686910026",
+    "id": "b43d05e9-0ef4-4357-ac07-a93566488ba0",
+    "intent": "OPEN_LONG",
+    "position_id": null,
+    "reason": "V17_LEADER_ENTRY_IOC",
+    "reject_reason": "IOC_NO_FILL:CANCELED",
+    "request_payload": {
+      "action": "create_order",
+      "entry_gap_atr": 0.013038057280449437,
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "ioc_bps": 5.0241679804585715,
+      "leverage": 3,
+      "max_slots": 10,
+      "order": {
+        "identifier": "tb-v11e-956be08ce1664a03a8fda17f",
+        "market": "FORMUSDT",
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "price": 0.38109137055837566,
+        "quantity": 315.2,
+        "side": "BUY",
+        "time_in_force": "IOC",
+        "type": "LIMIT"
+      },
+      "quantity_step": 0.1,
+      "sized_margin_usdt": 40.019893333333336,
+      "sized_notional_usdt": 120.05968,
+      "spread_bps": 2.6260504201669477,
+      "target_margin_usdt": 40,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "315.2",
+    "response_payload": {
+      "fill": {
+        "averagePrice": null,
+        "executedFunds": 0,
+        "executedVolume": 0,
+        "feeAsset": null,
+        "paidFee": 0
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": null,
+        "client_order_id": "tb-v11e-956be08ce1664a03a8fda17f",
+        "exchange": "binance_futures",
+        "exchange_order_id": "1686910026",
+        "executed_funds": 0,
+        "executed_volume": 0,
+        "fee_asset": null,
+        "market": "FORMUSDT",
+        "paid_fee": 0,
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11e-956be08ce1664a03a8fda17f",
+          "closePosition": false,
+          "cumQty": "0.0",
+          "executedQty": "0.0",
+          "goodTillDate": 0,
+          "orderId": 1686910026,
+          "origQty": "315.2",
+          "origType": "LIMIT",
+          "positionSide": "BOTH",
+          "price": "0.381000",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": false,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "BUY",
+          "status": "EXPIRED",
+          "stopPrice": "0.000000",
+          "symbol": "FORMUSDT",
+          "timeInForce": "IOC",
+          "type": "LIMIT",
+          "updateTime": 1788853205589,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "EXPIRED",
+        "realized_pnl_quote": 0,
+        "reduce_only": false,
+        "remaining_volume": 315.2,
+        "requested_volume": 315.2,
+        "side": "BUY",
+        "status": "CANCELED",
+        "trades": []
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "FORM",
+        "market_max_quantity": 300000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 3000000,
+        "min_notional": 5,
+        "min_quantity": 0.1,
+        "price_tick": 0.0001,
+        "quantity_step": 0.1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "FORM",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "200",
+              "minPrice": "0.000100",
+              "tickSize": "0.000100"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "3000000",
+              "minQty": "0.1",
+              "stepSize": "0.1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "300000",
+              "minQty": "0.1",
+              "stepSize": "0.1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.025000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1742371200000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "FORMUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 6,
+          "quantityPrecision": 1,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "FORMUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "Gaming"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "FORMUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788853205703,
+        "round_trip_ms": 934,
+        "submitted_at_ms": 1788853204769
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "956be08c-e166-4a03-a8fd-a17fa560655c",
+    "state": "REJECTED",
+    "symbol": "FORMUSDT",
+    "updated_at": "2026-09-08 07:40:05.816+00"
+  },
+  {
+    "client_order_id": "tb-v11e-cde16d169f1a484ab5f18189",
+    "created_at": "2026-09-08 07:45:05.558997+00",
+    "exchange_order_id": "1687154449",
+    "id": "3b9b9f0b-1759-4a9b-a1c2-c49c0609f738",
+    "intent": "OPEN_LONG",
+    "position_id": "b9501639-d5b1-4d4d-8478-d432f8f862ca",
+    "reason": "V17_LEADER_ENTRY_IOC",
+    "reject_reason": null,
+    "request_payload": {
+      "action": "create_order",
+      "entry_gap_atr": 0.08211274921091585,
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "ioc_bps": 6.12262748185044,
+      "leverage": 3,
+      "max_slots": 10,
+      "order": {
+        "identifier": "tb-v11e-cde16d169f1a484ab5f18189",
+        "market": "FORMUSDT",
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "price": 0.3887378640776699,
+        "quantity": 309,
+        "side": "BUY",
+        "time_in_force": "IOC",
+        "type": "LIMIT"
+      },
+      "quantity_step": 0.1,
+      "sized_margin_usdt": 40.0155,
+      "sized_notional_usdt": 120.04650000000001,
+      "spread_bps": 5.150656708732271,
+      "target_margin_usdt": 40,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "309",
+    "response_payload": {
+      "fill": {
+        "averagePrice": 0.38866016181229773,
+        "executedFunds": 120.09599,
+        "executedVolume": 309,
+        "feeAsset": "USDT",
+        "paidFee": 0.06004799
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": 0.38866016181229773,
+        "client_order_id": "tb-v11e-cde16d169f1a484ab5f18189",
+        "exchange": "binance_futures",
+        "exchange_order_id": "1687154449",
+        "executed_funds": 120.09599,
+        "executed_volume": 309,
+        "fee_asset": "USDT",
+        "market": "FORMUSDT",
+        "paid_fee": 0.06004799,
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11e-cde16d169f1a484ab5f18189",
+          "closePosition": false,
+          "cumQty": "309.0",
+          "executedQty": "309.0",
+          "fills": [
+            {
+              "commission": "0.02391833",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.02391833,
+              "price": "0.388600",
+              "qty": "123.1",
+              "quoteQty": "47.8366600",
+              "realizedPnl": "0",
+              "time": 1788853506132,
+              "tradeId": "151023836"
+            },
+            {
+              "commission": "0.03612966",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.03612966,
+              "price": "0.388700",
+              "qty": "185.9",
+              "quoteQty": "72.2593300",
+              "realizedPnl": "0",
+              "time": 1788853506132,
+              "tradeId": "151023837"
+            }
+          ],
+          "goodTillDate": 0,
+          "orderId": 1687154449,
+          "origQty": "309.0",
+          "origType": "LIMIT",
+          "positionSide": "BOTH",
+          "price": "0.388700",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": false,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "BUY",
+          "status": "FILLED",
+          "stopPrice": "0.000000",
+          "symbol": "FORMUSDT",
+          "timeInForce": "IOC",
+          "type": "LIMIT",
+          "updateTime": 1788853506132,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "FILLED",
+        "realized_pnl_quote": 0,
+        "reduce_only": false,
+        "remaining_volume": 0,
+        "requested_volume": 309,
+        "side": "BUY",
+        "status": "FILLED",
+        "trades": [
+          {
+            "executed_at": "2026-09-08T07:45:06.132Z",
+            "fee": 0.02391833,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.02391833,
+            "funds": 47.83666,
+            "price": 0.3886,
+            "raw": {
+              "commission": "0.02391833",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.02391833,
+              "price": "0.388600",
+              "qty": "123.1",
+              "quoteQty": "47.8366600",
+              "realizedPnl": "0",
+              "time": 1788853506132,
+              "tradeId": "151023836"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "151023836",
+            "volume": 123.1
+          },
+          {
+            "executed_at": "2026-09-08T07:45:06.132Z",
+            "fee": 0.03612966,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.03612966,
+            "funds": 72.25933,
+            "price": 0.3887,
+            "raw": {
+              "commission": "0.03612966",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.03612966,
+              "price": "0.388700",
+              "qty": "185.9",
+              "quoteQty": "72.2593300",
+              "realizedPnl": "0",
+              "time": 1788853506132,
+              "tradeId": "151023837"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "151023837",
+            "volume": 185.9
+          }
+        ]
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "FORM",
+        "market_max_quantity": 300000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 3000000,
+        "min_notional": 5,
+        "min_quantity": 0.1,
+        "price_tick": 0.0001,
+        "quantity_step": 0.1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "FORM",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "200",
+              "minPrice": "0.000100",
+              "tickSize": "0.000100"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "3000000",
+              "minQty": "0.1",
+              "stepSize": "0.1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "300000",
+              "minQty": "0.1",
+              "stepSize": "0.1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.025000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1742371200000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "FORMUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 6,
+          "quantityPrecision": 1,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "FORMUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "Gaming"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "FORMUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788853506473,
+        "round_trip_ms": 739,
+        "submitted_at_ms": 1788853505734
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "cde16d16-9f1a-484a-b5f1-818953cc036d",
+    "state": "FILLED",
+    "symbol": "FORMUSDT",
+    "updated_at": "2026-09-08 07:45:06.667+00"
+  },
+  {
+    "client_order_id": "tb-v11x-b9501639d5b14d4d8478d432",
+    "created_at": "2026-09-08 07:52:12.819045+00",
+    "exchange_order_id": "1687472953",
+    "id": "21a9dda2-9eeb-4de0-b023-6500a599b784",
+    "intent": "CLOSE_LONG",
+    "position_id": "b9501639-d5b1-4d4d-8478-d432f8f862ca",
+    "reason": "V17_HARD_STOP",
+    "reject_reason": null,
+    "request_payload": {
+      "action": "create_order",
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "fraction": 1,
+      "order": {
+        "identifier": "tb-v11x-b9501639d5b14d4d8478d432",
+        "market": "FORMUSDT",
+        "position_effect": "CLOSE",
+        "position_side": "LONG",
+        "quantity": 309,
+        "side": "SELL",
+        "type": "MARKET"
+      },
+      "quantity_step": 0.1,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "309",
+    "response_payload": {
+      "fill": {
+        "averagePrice": 0.3702,
+        "executedFunds": 114.39179999999999,
+        "executedVolume": 309,
+        "feeAsset": "USDT",
+        "paidFee": 0.057195899999999994
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": 0.3702,
+        "client_order_id": "tb-v11x-b9501639d5b14d4d8478d432",
+        "exchange": "binance_futures",
+        "exchange_order_id": "1687472953",
+        "executed_funds": 114.39179999999999,
+        "executed_volume": 309,
+        "fee_asset": "USDT",
+        "market": "FORMUSDT",
+        "paid_fee": 0.057195899999999994,
+        "position_effect": "CLOSE",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11x-b9501639d5b14d4d8478d432",
+          "closePosition": false,
+          "cumQty": "309.0",
+          "executedQty": "309.0",
+          "fills": [
+            {
+              "commission": "0.02582145",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.02582145,
+              "price": "0.370200",
+              "qty": "139.5",
+              "quoteQty": "51.6429000",
+              "realizedPnl": "-2.57519257",
+              "time": 1788853933415,
+              "tradeId": "151073026"
+            },
+            {
+              "commission": "0.03137445",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.03137445,
+              "price": "0.370200",
+              "qty": "169.5",
+              "quoteQty": "62.7489000",
+              "realizedPnl": "-3.12899742",
+              "time": 1788853933415,
+              "tradeId": "151073027"
+            }
+          ],
+          "goodTillDate": 0,
+          "orderId": 1687472953,
+          "origQty": "309.0",
+          "origType": "MARKET",
+          "positionSide": "BOTH",
+          "price": "0.000000",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": true,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "SELL",
+          "status": "FILLED",
+          "stopPrice": "0.000000",
+          "symbol": "FORMUSDT",
+          "timeInForce": "GTC",
+          "type": "MARKET",
+          "updateTime": 1788853933415,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "FILLED",
+        "realized_pnl_quote": -5.70418999,
+        "reduce_only": true,
+        "remaining_volume": 0,
+        "requested_volume": 309,
+        "side": "SELL",
+        "status": "FILLED",
+        "trades": [
+          {
+            "executed_at": "2026-09-08T07:52:13.415Z",
+            "fee": 0.02582145,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.02582145,
+            "funds": 51.6429,
+            "price": 0.3702,
+            "raw": {
+              "commission": "0.02582145",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.02582145,
+              "price": "0.370200",
+              "qty": "139.5",
+              "quoteQty": "51.6429000",
+              "realizedPnl": "-2.57519257",
+              "time": 1788853933415,
+              "tradeId": "151073026"
+            },
+            "realized_pnl_quote": -2.57519257,
+            "trade_id": "151073026",
+            "volume": 139.5
+          },
+          {
+            "executed_at": "2026-09-08T07:52:13.415Z",
+            "fee": 0.03137445,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.03137445,
+            "funds": 62.7489,
+            "price": 0.3702,
+            "raw": {
+              "commission": "0.03137445",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.03137445,
+              "price": "0.370200",
+              "qty": "169.5",
+              "quoteQty": "62.7489000",
+              "realizedPnl": "-3.12899742",
+              "time": 1788853933415,
+              "tradeId": "151073027"
+            },
+            "realized_pnl_quote": -3.12899742,
+            "trade_id": "151073027",
+            "volume": 169.5
+          }
+        ]
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "FORM",
+        "market_max_quantity": 300000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 3000000,
+        "min_notional": 5,
+        "min_quantity": 0.1,
+        "price_tick": 0.0001,
+        "quantity_step": 0.1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "FORM",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "200",
+              "minPrice": "0.000100",
+              "tickSize": "0.000100"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "3000000",
+              "minQty": "0.1",
+              "stepSize": "0.1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "300000",
+              "minQty": "0.1",
+              "stepSize": "0.1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.025000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1742371200000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "FORMUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 6,
+          "quantityPrecision": 1,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "FORMUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "Gaming"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "FORMUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788853933760,
+        "round_trip_ms": 741,
+        "submitted_at_ms": 1788853933019
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "cde16d16-9f1a-484a-b5f1-818953cc036d",
+    "state": "FILLED",
+    "symbol": "FORMUSDT",
+    "updated_at": "2026-09-08 07:52:13.879+00"
+  },
+  {
+    "client_order_id": "tb-v11e-e94151292b15450a835f84d3",
+    "created_at": "2026-09-08 08:05:05.529485+00",
+    "exchange_order_id": "2244505668",
+    "id": "02a61600-f4d8-4818-bfd0-4ed367b48bc7",
+    "intent": "OPEN_LONG",
+    "position_id": null,
+    "reason": "V17_LEADER_ENTRY_IOC",
+    "reject_reason": "IOC_NO_FILL:CANCELED",
+    "request_payload": {
+      "action": "create_order",
+      "entry_gap_atr": 0.3773197050093995,
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "ioc_bps": 9.778450236967995,
+      "leverage": 3,
+      "max_slots": 10,
+      "order": {
+        "identifier": "tb-v11e-e94151292b15450a835f84d3",
+        "market": "1000CATUSDT",
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "price": 0.002338284245975356,
+        "quantity": 51371,
+        "side": "BUY",
+        "time_in_force": "IOC",
+        "type": "LIMIT"
+      },
+      "quantity_step": 1,
+      "sized_margin_usdt": 40.000885333333336,
+      "sized_notional_usdt": 120.002656,
+      "spread_bps": 4.282655246252709,
+      "target_margin_usdt": 40,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "51371",
+    "response_payload": {
+      "fill": {
+        "averagePrice": null,
+        "executedFunds": 0,
+        "executedVolume": 0,
+        "feeAsset": null,
+        "paidFee": 0
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": null,
+        "client_order_id": "tb-v11e-e94151292b15450a835f84d3",
+        "exchange": "binance_futures",
+        "exchange_order_id": "2244505668",
+        "executed_funds": 0,
+        "executed_volume": 0,
+        "fee_asset": null,
+        "market": "1000CATUSDT",
+        "paid_fee": 0,
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11e-e94151292b15450a835f84d3",
+          "closePosition": false,
+          "cumQty": "0",
+          "executedQty": "0",
+          "goodTillDate": 0,
+          "orderId": 2244505668,
+          "origQty": "51371",
+          "origType": "LIMIT",
+          "positionSide": "BOTH",
+          "price": "0.0023380",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": false,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "BUY",
+          "status": "EXPIRED",
+          "stopPrice": "0.0000000",
+          "symbol": "1000CATUSDT",
+          "timeInForce": "IOC",
+          "type": "LIMIT",
+          "updateTime": 1788854706351,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "EXPIRED",
+        "realized_pnl_quote": 0,
+        "reduce_only": false,
+        "remaining_volume": 51371,
+        "requested_volume": 51371,
+        "side": "BUY",
+        "status": "CANCELED",
+        "trades": []
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "1000CAT",
+        "market_max_quantity": 40000000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 400000000,
+        "min_notional": 5,
+        "min_quantity": 1,
+        "price_tick": 0.000001,
+        "quantity_step": 1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "1000CAT",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "200",
+              "minPrice": "0.0000100",
+              "tickSize": "0.0000010"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "400000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "40000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.015000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1729513800000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "1000CATUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 7,
+          "quantityPrecision": 0,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "1000CATUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "Meme"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "1000CATUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788854706463,
+        "round_trip_ms": 752,
+        "submitted_at_ms": 1788854705711
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "e9415129-2b15-450a-835f-84d3866c73dd",
+    "state": "REJECTED",
+    "symbol": "1000CATUSDT",
+    "updated_at": "2026-09-08 08:05:06.577+00"
+  },
+  {
+    "client_order_id": "tb-v11e-6858dbc828244385b638d2ba",
+    "created_at": "2026-09-08 09:05:05.998755+00",
+    "exchange_order_id": "1434349804",
+    "id": "887dfef0-fa75-4c47-9255-3436a600b6d1",
+    "intent": "OPEN_LONG",
+    "position_id": "9745f184-84e6-4d17-9636-ceb7ee116d3e",
+    "reason": "V17_LEADER_ENTRY_IOC",
+    "reject_reason": null,
+    "request_payload": {
+      "action": "create_order",
+      "entry_gap_atr": 0.010717110803018607,
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "ioc_bps": 3.8759605994531654,
+      "leverage": 3,
+      "max_slots": 10,
+      "order": {
+        "identifier": "tb-v11e-6858dbc828244385b638d2ba",
+        "market": "BTRUSDT",
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "price": 0.051910112359550564,
+        "quantity": 2314,
+        "side": "BUY",
+        "time_in_force": "IOC",
+        "type": "LIMIT"
+      },
+      "quantity_step": 1,
+      "sized_margin_usdt": 40.02448666666667,
+      "sized_notional_usdt": 120.07346,
+      "spread_bps": 3.855793329476942,
+      "target_margin_usdt": 40,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "2314",
+    "response_payload": {
+      "fill": {
+        "averagePrice": 0.051897839239412276,
+        "executedFunds": 120.0916,
+        "executedVolume": 2314,
+        "feeAsset": "USDT",
+        "paidFee": 0.060045799999999996
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": 0.051897839239412276,
+        "client_order_id": "tb-v11e-6858dbc828244385b638d2ba",
+        "exchange": "binance_futures",
+        "exchange_order_id": "1434349804",
+        "executed_funds": 120.0916,
+        "executed_volume": 2314,
+        "fee_asset": "USDT",
+        "market": "BTRUSDT",
+        "paid_fee": 0.060045799999999996,
+        "position_effect": "OPEN",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11e-6858dbc828244385b638d2ba",
+          "closePosition": false,
+          "cumQty": "2314",
+          "executedQty": "2314",
+          "fills": [
+            {
+              "commission": "0.01297250",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0129725,
+              "price": "0.0518900",
+              "qty": "500",
+              "quoteQty": "25.9450000",
+              "realizedPnl": "0",
+              "time": 1788858307664,
+              "tradeId": "175771741"
+            },
+            {
+              "commission": "0.03256725",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.03256725,
+              "price": "0.0519000",
+              "qty": "1255",
+              "quoteQty": "65.1345000",
+              "realizedPnl": "0",
+              "time": 1788858307664,
+              "tradeId": "175771742"
+            },
+            {
+              "commission": "0.01450605",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.01450605,
+              "price": "0.0519000",
+              "qty": "559",
+              "quoteQty": "29.0121000",
+              "realizedPnl": "0",
+              "time": 1788858307664,
+              "tradeId": "175771743"
+            }
+          ],
+          "goodTillDate": 0,
+          "orderId": 1434349804,
+          "origQty": "2314",
+          "origType": "LIMIT",
+          "positionSide": "BOTH",
+          "price": "0.0519100",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": false,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "BUY",
+          "status": "FILLED",
+          "stopPrice": "0.0000000",
+          "symbol": "BTRUSDT",
+          "timeInForce": "IOC",
+          "type": "LIMIT",
+          "updateTime": 1788858307664,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "FILLED",
+        "realized_pnl_quote": 0,
+        "reduce_only": false,
+        "remaining_volume": 0,
+        "requested_volume": 2314,
+        "side": "BUY",
+        "status": "FILLED",
+        "trades": [
+          {
+            "executed_at": "2026-09-08T09:05:07.664Z",
+            "fee": 0.0129725,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.0129725,
+            "funds": 25.945,
+            "price": 0.05189,
+            "raw": {
+              "commission": "0.01297250",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0129725,
+              "price": "0.0518900",
+              "qty": "500",
+              "quoteQty": "25.9450000",
+              "realizedPnl": "0",
+              "time": 1788858307664,
+              "tradeId": "175771741"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "175771741",
+            "volume": 500
+          },
+          {
+            "executed_at": "2026-09-08T09:05:07.664Z",
+            "fee": 0.03256725,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.03256725,
+            "funds": 65.1345,
+            "price": 0.0519,
+            "raw": {
+              "commission": "0.03256725",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.03256725,
+              "price": "0.0519000",
+              "qty": "1255",
+              "quoteQty": "65.1345000",
+              "realizedPnl": "0",
+              "time": 1788858307664,
+              "tradeId": "175771742"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "175771742",
+            "volume": 1255
+          },
+          {
+            "executed_at": "2026-09-08T09:05:07.664Z",
+            "fee": 0.01450605,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.01450605,
+            "funds": 29.0121,
+            "price": 0.0519,
+            "raw": {
+              "commission": "0.01450605",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.01450605,
+              "price": "0.0519000",
+              "qty": "559",
+              "quoteQty": "29.0121000",
+              "realizedPnl": "0",
+              "time": 1788858307664,
+              "tradeId": "175771743"
+            },
+            "realized_pnl_quote": 0,
+            "trade_id": "175771743",
+            "volume": 559
+          }
+        ]
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "BTR",
+        "market_max_quantity": 3000000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 10000000,
+        "min_notional": 5,
+        "min_quantity": 1,
+        "price_tick": 0.00001,
+        "quantity_step": 1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "BTR",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "200",
+              "minPrice": "0.0001000",
+              "tickSize": "0.0000100"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "10000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "3000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.020000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1756290600000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "BTRUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 7,
+          "quantityPrecision": 0,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "BTRUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "Layer-2"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "BTRUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788858308002,
+        "round_trip_ms": 1824,
+        "submitted_at_ms": 1788858306178
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "6858dbc8-2824-4385-b638-d2ba707fdc80",
+    "state": "FILLED",
+    "symbol": "BTRUSDT",
+    "updated_at": "2026-09-08 09:05:08.184+00"
+  },
+  {
+    "client_order_id": "tb-v11x-9745f18484e64d179636ceb7",
+    "created_at": "2026-09-08 09:31:03.00888+00",
+    "exchange_order_id": "1434875576",
+    "id": "8d2253a0-23a9-4a17-b7d1-3c165931b3f3",
+    "intent": "CLOSE_LONG",
+    "position_id": "9745f184-84e6-4d17-9636-ceb7ee116d3e",
+    "reason": "V17_TRAILING_STOP",
+    "reject_reason": null,
+    "request_payload": {
+      "action": "create_order",
+      "executor_patch": "V17-LEADER-PRODUCTION-INTEGRATION-1",
+      "fraction": 1,
+      "order": {
+        "identifier": "tb-v11x-9745f18484e64d179636ceb7",
+        "market": "BTRUSDT",
+        "position_effect": "CLOSE",
+        "position_side": "LONG",
+        "quantity": 2314,
+        "side": "SELL",
+        "type": "MARKET"
+      },
+      "quantity_step": 1,
+      "wait_for_final_ms": 4000
+    },
+    "requested_quantity": "2314",
+    "response_payload": {
+      "fill": {
+        "averagePrice": 0.05280624891961971,
+        "executedFunds": 122.19366,
+        "executedVolume": 2314,
+        "feeAsset": "USDT",
+        "paidFee": 0.06109682
+      },
+      "leverage": 3,
+      "order": {
+        "average_price": 0.05280624891961971,
+        "client_order_id": "tb-v11x-9745f18484e64d179636ceb7",
+        "exchange": "binance_futures",
+        "exchange_order_id": "1434875576",
+        "executed_funds": 122.19366,
+        "executed_volume": 2314,
+        "fee_asset": "USDT",
+        "market": "BTRUSDT",
+        "paid_fee": 0.06109682,
+        "position_effect": "CLOSE",
+        "position_side": "LONG",
+        "raw": {
+          "clientOrderId": "tb-v11x-9745f18484e64d179636ceb7",
+          "closePosition": false,
+          "cumQty": "2314",
+          "executedQty": "2314",
+          "fills": [
+            {
+              "commission": "0.01320250",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0132025,
+              "price": "0.0528100",
+              "qty": "500",
+              "quoteQty": "26.4050000",
+              "realizedPnl": "0.45608038",
+              "time": 1788859864021,
+              "tradeId": "175816790"
+            },
+            {
+              "commission": "0.02497913",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.02497913,
+              "price": "0.0528100",
+              "qty": "946",
+              "quoteQty": "49.9582600",
+              "realizedPnl": "0.86290407",
+              "time": 1788859864021,
+              "tradeId": "175816791"
+            },
+            {
+              "commission": "0.00250799",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.00250799,
+              "price": "0.0528000",
+              "qty": "95",
+              "quoteQty": "5.0160000",
+              "realizedPnl": "0.08570527",
+              "time": 1788859864021,
+              "tradeId": "175816792"
+            },
+            {
+              "commission": "0.02040720",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0204072,
+              "price": "0.0528000",
+              "qty": "773",
+              "quoteQty": "40.8144000",
+              "realizedPnl": "0.69737026",
+              "time": 1788859864021,
+              "tradeId": "175816793"
+            }
+          ],
+          "goodTillDate": 0,
+          "orderId": 1434875576,
+          "origQty": "2314",
+          "origType": "MARKET",
+          "positionSide": "BOTH",
+          "price": "0.0000000",
+          "priceMatch": "NONE",
+          "priceProtect": false,
+          "reduceOnly": true,
+          "selfTradePreventionMode": "EXPIRE_MAKER",
+          "side": "SELL",
+          "status": "FILLED",
+          "stopPrice": "0.0000000",
+          "symbol": "BTRUSDT",
+          "timeInForce": "GTC",
+          "type": "MARKET",
+          "updateTime": 1788859864021,
+          "workingType": "CONTRACT_PRICE"
+        },
+        "raw_status": "FILLED",
+        "realized_pnl_quote": 2.10205998,
+        "reduce_only": true,
+        "remaining_volume": 0,
+        "requested_volume": 2314,
+        "side": "SELL",
+        "status": "FILLED",
+        "trades": [
+          {
+            "executed_at": "2026-09-08T09:31:04.021Z",
+            "fee": 0.0132025,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.0132025,
+            "funds": 26.405,
+            "price": 0.05281,
+            "raw": {
+              "commission": "0.01320250",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0132025,
+              "price": "0.0528100",
+              "qty": "500",
+              "quoteQty": "26.4050000",
+              "realizedPnl": "0.45608038",
+              "time": 1788859864021,
+              "tradeId": "175816790"
+            },
+            "realized_pnl_quote": 0.45608038,
+            "trade_id": "175816790",
+            "volume": 500
+          },
+          {
+            "executed_at": "2026-09-08T09:31:04.021Z",
+            "fee": 0.02497913,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.02497913,
+            "funds": 49.95826,
+            "price": 0.05281,
+            "raw": {
+              "commission": "0.02497913",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.02497913,
+              "price": "0.0528100",
+              "qty": "946",
+              "quoteQty": "49.9582600",
+              "realizedPnl": "0.86290407",
+              "time": 1788859864021,
+              "tradeId": "175816791"
+            },
+            "realized_pnl_quote": 0.86290407,
+            "trade_id": "175816791",
+            "volume": 946
+          },
+          {
+            "executed_at": "2026-09-08T09:31:04.021Z",
+            "fee": 0.00250799,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.00250799,
+            "funds": 5.016,
+            "price": 0.0528,
+            "raw": {
+              "commission": "0.00250799",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.00250799,
+              "price": "0.0528000",
+              "qty": "95",
+              "quoteQty": "5.0160000",
+              "realizedPnl": "0.08570527",
+              "time": 1788859864021,
+              "tradeId": "175816792"
+            },
+            "realized_pnl_quote": 0.08570527,
+            "trade_id": "175816792",
+            "volume": 95
+          },
+          {
+            "executed_at": "2026-09-08T09:31:04.021Z",
+            "fee": 0.0204072,
+            "fee_asset": "USDT",
+            "fee_quote_mark_source": "QUOTE_ASSET_EXACT",
+            "fee_quote_marked": 0.0204072,
+            "funds": 40.8144,
+            "price": 0.0528,
+            "raw": {
+              "commission": "0.02040720",
+              "commissionAsset": "USDT",
+              "feeQuoteMarkSource": "QUOTE_ASSET_EXACT",
+              "feeQuoteMarked": 0.0204072,
+              "price": "0.0528000",
+              "qty": "773",
+              "quoteQty": "40.8144000",
+              "realizedPnl": "0.69737026",
+              "time": 1788859864021,
+              "tradeId": "175816793"
+            },
+            "realized_pnl_quote": 0.69737026,
+            "trade_id": "175816793",
+            "volume": 773
+          }
+        ]
+      },
+      "reconciliation_pending": false,
+      "reconciliation_reason": null,
+      "reconciliation_scope": null,
+      "symbol_info": {
+        "base_asset": "BTR",
+        "market_max_quantity": 3000000,
+        "max_leverage": 20,
+        "max_notional": 0,
+        "max_quantity": 10000000,
+        "min_notional": 5,
+        "min_quantity": 1,
+        "price_tick": 0.00001,
+        "quantity_step": 1,
+        "quote_asset": "USDT",
+        "raw": {
+          "baseAsset": "BTR",
+          "baseAssetPrecision": 8,
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "maxPrice": "200",
+              "minPrice": "0.0001000",
+              "tickSize": "0.0000100"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "10000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "3000000",
+              "minQty": "1",
+              "stepSize": "1"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "filterType": "MIN_NOTIONAL",
+              "notional": "5"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDecimal": "4",
+              "multiplierDown": "0.8500",
+              "multiplierUp": "1.1500"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "liquidationFee": "0.020000",
+          "maintMarginPercent": "2.5000",
+          "marginAsset": "USDT",
+          "marketTakeBound": "0.15",
+          "maxMoveOrderLimit": 10000,
+          "onboardDate": 1756290600000,
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "pair": "BTRUSDT",
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ],
+          "pricePrecision": 7,
+          "quantityPrecision": 0,
+          "quoteAsset": "USDT",
+          "quotePrecision": 8,
+          "requiredMarginPercent": "5.0000",
+          "status": "TRADING",
+          "symbol": "BTRUSDT",
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "triggerProtect": "0.1500",
+          "underlyingSubType": [
+            "Layer-2"
+          ],
+          "underlyingType": "COIN"
+        },
+        "symbol": "BTRUSDT"
+      },
+      "timing": {
+        "acked_at_ms": 1788859864813,
+        "round_trip_ms": 1598,
+        "submitted_at_ms": 1788859863215
+      }
+    },
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "signal_id": "6858dbc8-2824-4385-b638-d2ba707fdc80",
+    "state": "FILLED",
+    "symbol": "BTRUSDT",
+    "updated_at": "2026-09-08 09:31:04.934+00"
+  }
+]
