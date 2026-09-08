@@ -123,6 +123,26 @@ export function createShadowHost({
     status() {
       return { positions: positions.length, tracked: worker.snapshot() };
     },
+    /** Aggregate counters for /health. Deliberately carries no symbols, prices or
+     * quantities: /health is unauthenticated, and this only needs to answer "is the
+     * shadow observing, and is the feed dense enough for a 10s confirmation". */
+    summary() {
+      const t = worker.snapshot();
+      const sum = (f) => t.reduce((n, x) => n + (x.coverage[f] ?? 0), 0);
+      return {
+        enabled: true,
+        positions: positions.length,
+        tracked: t.length,
+        skipped: t.filter((x) => x.skipped).length,
+        ticks: sum("ticks"),
+        bars: sum("bars"),
+        gaps_over_window: sum("gapsOverWindow"),
+        max_gap_ms: t.reduce((n, x) => Math.max(n, x.coverage.maxGapMs ?? 0), 0),
+        confirmations_started: sum("confirmationsStarted"),
+        confirmations_completed: sum("confirmationsCompleted"),
+        confirmations_reset: sum("confirmationsReset"),
+      };
+    },
     stop() {
       worker.stop();
       for (const s of sockets) s.close();

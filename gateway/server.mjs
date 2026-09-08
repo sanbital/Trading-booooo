@@ -2407,6 +2407,12 @@ function createServer() {
             p10_top_of_book_batch: true,
             p10_position_proof: true,
           },
+          // Counters only, never symbols or sizes: this endpoint is unauthenticated and
+          // the numbers exist to answer whether the shadow is observing and whether the
+          // feed is dense enough for a ten-second confirmation.
+          v17_shadow: v17Shadow
+            ? v17Shadow.summary()
+            : { enabled: V17_SHADOW_ENABLED, loaded: false },
           limits: {
             source: "operator_allocation",
             hidden_monetary_caps: false,

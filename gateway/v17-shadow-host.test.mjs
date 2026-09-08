@@ -115,7 +115,7 @@ test("stopping does not schedule further reconnects", async () => {
 
 test("the host adds no order capability of its own", () => {
   const { h } = host();
-  assert.deepEqual(Object.keys(h).sort(), ["setPositions", "status", "stop"]);
+  assert.deepEqual(Object.keys(h).sort(), ["setPositions", "status", "stop", "summary"]);
   const src = readFileSync(new URL("./v17-shadow-host.mjs", import.meta.url), "utf8");
   for (const forbidden of ["fetch(", "reduceOnly", "apiKey", "signature", "/fapi/"]) {
     assert.ok(!src.includes(forbidden), `shadow host must not reference ${forbidden}`);
@@ -135,4 +135,24 @@ test("the staged engine list covers leader-exit-r4 and its own import", () => {
   for (const dep of imports) {
     assert.ok(STAGED_ENGINE_FILES.includes(dep), `leader-exit-r4 imports ${dep}, which is not staged`);
   }
+});
+
+test("the health summary reports coverage without leaking positions", async () => {
+  let now = ENTRY_AT;
+  const { h, created } = host({ clock: () => now });
+  await h.setPositions([pos]);
+  for (let i = 1; i <= 12; i++) {
+    now = ENTRY_AT + i * 1000 + 5;
+    created[0].deliver({ data: { e: "aggTrade", s: "FORMUSDT", p: "97", T: ENTRY_AT + i * 1000, a: 900 + i } });
+  }
+  const s = h.summary();
+  assert.equal(s.enabled, true);
+  assert.equal(s.positions, 1);
+  assert.equal(s.tracked, 1);
+  assert.equal(s.ticks, 12);
+  assert.equal(s.confirmations_completed, 1);
+  // /health is unauthenticated, so the summary must not carry holdings.
+  const flat = JSON.stringify(s);
+  assert.ok(!flat.includes("FORMUSDT"), "summary must not name symbols");
+  assert.ok(!flat.includes("97"), "summary must not carry prices");
 });
