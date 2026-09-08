@@ -104,7 +104,12 @@ jobs:
         run: |
           gateway_secret="$(printf 'gateway:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
           autotrade_token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
-          flyctl secrets set -a "${FLY_BINANCE_APP_NAME}" \
+          # --stage writes the secrets without restarting the machine. Restarting here
+          # would boot the CURRENT image and wait for its health check, so whenever that
+          # image is unhealthy this step times out and the deploy below never runs --
+          # exactly the state that cannot be repaired by deploying a fixed image. The
+          # staged values are applied by the flyctl deploy in the next step.
+          flyctl secrets set --stage -a "${FLY_BINANCE_APP_NAME}" \
             "GATEWAY_SHARED_SECRET=${gateway_secret}" \
             "SUPABASE_URL=https://${SUPABASE_PROJECT_REF}.supabase.co" \
             "AUTOTRADE_ACCESS_TOKEN=${autotrade_token}" \
@@ -114,7 +119,7 @@ jobs:
             "BINANCE_FUTURES_BASE_URL=https://fapi.binance.com" \
             "BINANCE_FUTURES_DEFAULT_LEVERAGE=3"
           # This Paris app must never carry Upbit credentials.
-          flyctl secrets unset -a "${FLY_BINANCE_APP_NAME}" \
+          flyctl secrets unset --stage -a "${FLY_BINANCE_APP_NAME}" \
             UPBIT_ACCESS_KEY UPBIT_SECRET_KEY UPBIT_MAX_ORDER_KRW UPBIT_MAX_DAILY_BUY_KRW || true
 
       - name: Deploy one always-on Binance gateway Machine
