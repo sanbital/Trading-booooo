@@ -1,0 +1,102 @@
+name: Deploy V17 Exit Reliability
+
+# Ships the V17 exit-reliability patch to the production v10-lane-executor:
+# batched top-of-book quote with a staleness gate, close-before-audit ordering,
+# and deterministic exit attempt identifiers. The R3/R4 review modules ride along
+# as unreferenced files; nothing imports them from the live path.
+#
+# The Binance gateway half of this change (v17_create_stop / v17_cancel_stop)
+# is deployed by deploy-binance-gateway.yml, which already fires on any push to
+# main touching gateway/**. Do not deploy the gateway from here as well.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "research/v17-exit-reliability-deploy-trigger.txt"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-v17-exit-reliability-20260908
+  cancel-in-progress: false
+
+jobs:
+  verify-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Confirm the reviewed exit candidate is still inert
+        shell: bash
+        run: |
+          set -euo pipefail
+          # nextExitReviewed only departs from the baseline when the effective policy
+          # carries an arm threshold. POLICY must not carry one, or every open V17
+          # position silently changes exit behaviour on deploy.
+          for key in breakEvenArmPct profitLockArmPct profitLockCapture; do
+            if grep -Fq "$key" supabase/functions/_shared/leader-momentum-v17.mjs; then
+              echo "::error::POLICY now carries $key; the unvalidated exit candidate would activate in production."
+              exit 1
+            fi
+          done
+          # The live path must call the reviewed wrapper, not the R3/R4 research modules.
+          grep -Fq 'nextExitReviewed' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'V17-EXIT-RELIABILITY-REVIEW-2' supabase/functions/v10-lane-executor/index.ts
+          for mod in leader-exit-r3 leader-exit-r4; do
+            if grep -Fq "$mod" supabase/functions/v10-lane-executor/index.ts; then
+              echo "::error::executor imports $mod; R3/R4 are review-only and are not wired for live orders."
+              exit 1
+            fi
+          done
+
+      - name: Run the V17 exit test suite against production sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test test-support/v17-exit/*.test.mjs
+          node --check gateway/server.mjs
+          node --test gateway/server.test.mjs
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Validate production deploy secrets
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_PROJECT_REF:-}"
+
+      - name: Deploy v10-lane-executor only
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy v10-lane-executor \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
+
+      - name: Verify function is active
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "${SUPABASE_PROJECT_REF}" | tee /tmp/functions.txt
+          grep -q "v10-lane-executor" /tmp/functions.txt
