@@ -32,16 +32,22 @@ export function nextExitReviewed(position,bid,now,config={}) {
       config.profitLockCapture>=1 || (be!==null && lock<be))) throw Error('INVALID_PROFIT_LOCK');
   const entry=Number(position.entryPrice), tick=position.priceTick??0;
   if(!Number.isFinite(tick)||tick<0) throw Error('INVALID_PRICE_TICK');
-  let stop=base.stopPrice, reason=base.reason, protectionStage='BASELINE';
   const bePrice=costBreakeven(entry,Number(position.entryFee),Number(position.quantity),
       config.estimatedExitFeeRate,config.exitSlippageBudgetPct);
-  if(be!==null && base.observedMfe+1e-12>=be && bePrice>stop) {
-    stop=bePrice;protectionStage='COST_BREAKEVEN';
-  }
+  // The caller persists the raised stop and feeds it back as the baseline stop on the
+  // next tick, so "did this level improve on the incoming stop" cannot identify which
+  // rule is holding the line: after one tick the protection level merely EQUALS it and
+  // the exit gets attributed to the trailing stop instead. Pick the binding level by
+  // height and let a protection level win an exact tie, which keeps provenance stable
+  // across ticks. Ordering matters: later entries win ties.
+  const levels=[{stage:'BASELINE',price:base.stopPrice}];
+  if(be!==null && base.observedMfe+1e-12>=be) levels.push({stage:'COST_BREAKEVEN',price:bePrice});
   if(lock!==null && base.observedMfe+1e-12>=lock) {
-    const lockPrice=entry+(base.peakPrice-entry)*config.profitLockCapture;
-    if(lockPrice>stop){stop=lockPrice;protectionStage='PROFIT_LOCK';}
+    levels.push({stage:'PROFIT_LOCK',price:entry+(base.peakPrice-entry)*config.profitLockCapture});
   }
+  const binding=levels.reduce((best,x)=>x.price>=best.price?x:best);
+  let stop=binding.price, reason=base.reason;
+  const protectionStage=binding.stage;
   // A protective SELL trigger rounds upward: rounding must not increase allowed loss.
   if(tick>0) stop=Math.ceil(stop/tick-1e-10)*tick;
   if(bid<=stop) {

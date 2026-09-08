@@ -56,6 +56,11 @@ jobs:
           grep -Fq 'costUsable' supabase/functions/v10-lane-executor/index.ts \
             || { echo "::error::missing the unusable-cost fallback; a bad row would leave a position unmanaged."; exit 1; }
 
+          # The exchange-resident stop must stay opt-in. Enabling it starts submitting
+          # real STOP_MARKET orders, which is an operator decision, not a deploy effect.
+          grep -Fq 'const NATIVE_STOP_ENABLED=env("V17_NATIVE_STOP")==="true";' supabase/functions/v10-lane-executor/index.ts \
+            || { echo "::error::the native stop flag is missing or no longer defaults off."; exit 1; }
+
           # R3/R4 stay out of the live path. Their exits need a confirmation clock that a
           # one-minute cron cannot feed: maxEvidenceGapMs is 3s, so every tick resets
           # breachSince and the 10s confirmation never completes, which would silently
