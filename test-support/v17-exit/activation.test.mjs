@@ -83,3 +83,47 @@ test('the candidate carries the inputs costBreakeven needs', () => {
   }
   assert.ok(C.profitLockArmPct >= C.breakEvenArmPct, 'profit lock must arm at or above breakeven');
 });
+
+// Provenance has to survive the round trip through hard_stop_price. The executor
+// persists the raised stop and hands it back as the baseline stop next tick, so a
+// "did this level improve on the incoming stop" test silently reattributes every
+// protection exit to the trailing stop from the second tick onward. These reproduce
+// the two live exits (GPS 2026-09-09 03:46, DOGS 01:13) that were logged as
+// V17_TRAILING_STOP while the stop price was in fact the profit lock.
+test('a protection stop keeps its provenance after being persisted and fed back', () => {
+  const at = 1788883984443;
+  const gps = nextExitReviewed(
+    { entryPrice: 0.011728622691292875, entryAt: at - 3_600_000, entryFee: 0.06000947,
+      quantity: 10233, peakPrice: 0.012024,
+      stopPrice: 0.011876311345646437, lastHighAt: at - 60_000 },
+    0.011837, at, ACTIVE);
+  assert.equal(gps.protectionStage, 'PROFIT_LOCK');
+  assert.equal(gps.reason, 'V17_PROFIT_LOCK');
+  // MFE 2.518% never reached trailArmPct 3%, so a trailing attribution is impossible.
+  assert.ok(gps.observedMfe < POLICY.trailArmPct);
+  assert.equal(gps.stopPrice, 0.011876311345646437, 'the level itself must not move');
+});
+
+test('a genuinely binding trailing stop is still reported as trailing', () => {
+  const at = 1788878524644;
+  const vvv = nextExitReviewed(
+    { entryPrice: 20.88251388888889, entryAt: at - 3_600_000, entryFee: 0.06014164,
+      quantity: 5.76, peakPrice: 22.952, stopPrice: 22.60772, lastHighAt: at - 60_000 },
+    22.597, at, ACTIVE);
+  assert.equal(vvv.protectionStage, 'BASELINE');
+  assert.equal(vvv.reason, 'V17_TRAILING_STOP');
+  assert.equal(vvv.stopPrice, 22.60772);
+});
+
+test('the binding level is the highest one, whichever rule produced it', () => {
+  const at = 2_000_000_000_000;
+  const base = { entryPrice: 100, entryAt: at - 600_000, entryFee: 0.06, quantity: 10,
+                 lastHighAt: at - 60_000 };
+  // peak +4% => lock 102, trail 104*0.985 = 102.44 -> trail is higher and must win
+  const trailWins = nextExitReviewed({ ...base, peakPrice: 104, stopPrice: 102.44 }, 103, at, ACTIVE);
+  assert.equal(trailWins.protectionStage, 'BASELINE');
+  // peak +3.03% => lock 101.515, trail 103.03*0.985 = 101.484 -> lock is higher
+  const lockWins = nextExitReviewed({ ...base, peakPrice: 103.03, stopPrice: 101.4846 }, 102, at, ACTIVE);
+  assert.equal(lockWins.protectionStage, 'PROFIT_LOCK');
+  assert.ok(lockWins.stopPrice > 101.4846);
+});
