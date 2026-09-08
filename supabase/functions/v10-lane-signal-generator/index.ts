@@ -20,12 +20,13 @@ export async function generate(db,{diagnostic=false,scan=scanMarket,now=Date.now
       requestWeight:result.weight,scanDurationMs:result.scanDurationMs}});
   if(logged.error)throw Error(`SCAN_AUDIT_WRITE:${logged.error.message}`);
   if(result.blocked)return {ok:true,inserted:0,skipped:result.blocked,...result};
-  const [control,runtime,positions]=await Promise.all([
+  const [control,runtime,positions,manual]=await Promise.all([
     db.from('v17_operator_control').select('entry_enabled,legacy_entries_retired').eq('singleton',true).single(),
     db.from('v11_long_regime_runtime').select('revision,live_enabled,circuit_open,circuit_reason').eq('singleton',true).single(),
     db.from('v11_long_regime_positions').select('symbol,state').eq('state','OPEN'),
+    db.from('trading_asset_locks').select('asset,metadata').eq('exchange','binance_futures').eq('state','LOCKED'),
   ]);
-  for(const [name,r] of [['CONTROL',control],['RUNTIME',runtime],['POSITIONS',positions]])
+  for(const [name,r] of [['CONTROL',control],['RUNTIME',runtime],['POSITIONS',positions],['MANUAL',manual]])
     if(r.error)throw Error(`${name}_READ:${r.error.message}`);
   if(control.data?.entry_enabled!==true||control.data?.legacy_entries_retired!==true)
     return {ok:true,inserted:0,skipped:'OPERATOR_CUTOVER_NOT_ENABLED',...result};
@@ -33,6 +34,7 @@ export async function generate(db,{diagnostic=false,scan=scanMarket,now=Date.now
   if(runtime.data.live_enabled!==true||runtime.data.circuit_open===true)
     return {ok:true,inserted:0,skipped:'RUNTIME_NOT_LIVE',circuitReason:runtime.data.circuit_reason,...result};
   const held=new Set((positions.data||[]).map(p=>String(p.symbol).toUpperCase()));
+  for(const x of manual.data||[])if(x?.metadata?.v17ManualPosition===true)held.add(`${String(x.asset||'').toUpperCase()}USDT`);
   const capacity=Math.max(0,POLICY.maxSlots-held.size),inserted=[];
   if(!capacity)return {ok:true,inserted:0,skipped:'SLOT_FULL',...result};
   for(const f of result.candidates){
