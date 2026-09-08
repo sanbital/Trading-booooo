@@ -7,6 +7,14 @@ export const POLICY = Object.freeze({
   rankLimit: 10, minDayReturn: .03, min30mReturn: .0075,
   min60mReturn: .015, minVolumeRatio: 1.1, minQuoteVolume24h: 5_000_000,
   min5mReturn: .002, stopPct: .025, trailArmPct: .03, trailGapPct: .015,
+  // Cost cap: once a trade has shown lockArmPct of profit it may no longer become a full
+  // stopPct loss. Measured on the 2026-09-08 live session, where 5 of 6 losers reached
+  // positive MFE but never the .03 trail arm, so nothing protected them.
+  lockArmPct: .02, lockGivebackPct: .004,
+  // No-progress: a momentum entry that has produced no momentum is closed near cost rather
+  // than held to the hard stop. Same session: three losers chopped inside +/-1% for 20-60
+  // minutes and then gapped through the stop in a single 60s monitor interval.
+  noProgressMs: 20*60_000, noProgressMfePct: .015,
   staleMs: 45*60_000, maxHoldMs: 6*60*60_000, maxEntryAgeMs: 120_000,
   maxEntryDriftPct: .01, cooldownMs: 30*60_000, maxSlots: 10,
   minCoverage: .98, marginUsdt: 40, leverage: 3,
@@ -93,7 +101,9 @@ export function confirm5(f,bars,cutoff,p=POLICY) {
     return5m:r5,confirmationReturn15m:r15,stopPct:p.stopPct,
     // stopAtr is legacy-schema compatibility; the executor uses stopPct for V17.
     stopAtr:b.c*p.stopPct/f.atr,bbPos:0,exitPolicy:{stopPct:p.stopPct,
-      trailArmPct:p.trailArmPct,trailGapPct:p.trailGapPct,staleMs:p.staleMs,maxHoldMs:p.maxHoldMs},
+      trailArmPct:p.trailArmPct,trailGapPct:p.trailGapPct,lockArmPct:p.lockArmPct,
+      lockGivebackPct:p.lockGivebackPct,noProgressMs:p.noProgressMs,
+      noProgressMfePct:p.noProgressMfePct,staleMs:p.staleMs,maxHoldMs:p.maxHoldMs},
     maxHoldHours:p.maxHoldMs/3600_000,method:'KST_TOP10_15M_THEN_CLOSED_5M_ACCELERATION',
     rankBasis:'KST_DAY_CLOSED_15M',parametersValidatedByBacktest:false};
 }
@@ -108,19 +118,31 @@ export function entryFresh(features,now,price,p=POLICY) {
 export function nextExit(position,bid,now,p=POLICY) {
   const entry=num(position.entryPrice),at=num(position.entryAt),oldPeak=num(position.peakPrice??entry);
   const highAt=num(position.lastHighAt??at),oldStop=num(position.stopPrice??entry*(1-p.stopPct));
-  if(![entry,at,oldPeak,highAt,oldStop,bid,now,p.stopPct,p.trailArmPct,p.trailGapPct,p.staleMs,p.maxHoldMs].every(Number.isFinite)||
+  if(![entry,at,oldPeak,highAt,oldStop,bid,now,p.stopPct,p.trailArmPct,p.trailGapPct,p.staleMs,p.maxHoldMs,
+      p.lockArmPct,p.lockGivebackPct,p.noProgressMs,p.noProgressMfePct].every(Number.isFinite)||
     entry<=0||bid<=0||at>now||highAt<at||highAt>now||oldPeak<entry||oldStop<=0||
-    !(p.stopPct>0&&p.stopPct<1&&p.trailArmPct>0&&p.trailGapPct>0&&p.trailGapPct<1&&p.staleMs>0&&p.maxHoldMs>0))
+    !(p.stopPct>0&&p.stopPct<1&&p.trailArmPct>0&&p.trailGapPct>0&&p.trailGapPct<1&&p.staleMs>0&&p.maxHoldMs>0)||
+    // The cost cap must sit strictly between the hard stop and the trail arm, otherwise the
+    // tiers reorder and a looser floor could be selected over a tighter one.
+    !(p.lockArmPct>0&&p.lockArmPct<=p.trailArmPct&&p.lockGivebackPct>=0&&p.lockGivebackPct<p.stopPct&&
+      p.noProgressMs>0&&p.noProgressMs<p.maxHoldMs&&p.noProgressMfePct>0))
     throw Error('INVALID_EXIT_STATE');
-  const peakPrice=Math.max(oldPeak,bid),lastHighAt=bid>oldPeak?now:highAt;
-  const armed=peakPrice/entry-1>=p.trailArmPct;
-  const stopPrice=Math.max(oldStop,entry*(1-p.stopPct),armed?peakPrice*(1-p.trailGapPct):0);
+  const peakPrice=Math.max(oldPeak,bid),lastHighAt=bid>oldPeak?now:highAt,mfe=peakPrice/entry-1;
+  const armed=mfe>=p.trailArmPct,locked=mfe>=p.lockArmPct;
+  // Three ratcheting floors. oldStop is included so a floor can only ever rise.
+  const hardFloor=entry*(1-p.stopPct),lockFloor=locked?entry*(1-p.lockGivebackPct):0,
+    trailFloor=armed?peakPrice*(1-p.trailGapPct):0,eps=entry*1e-12;
+  const stopPrice=Math.max(oldStop,hardFloor,lockFloor,trailFloor);
   let reason=null;
-  if(bid<=stopPrice) reason=stopPrice>entry*(1-p.stopPct)+entry*1e-12?'V17_TRAILING_STOP':'V17_HARD_STOP';
+  if(bid<=stopPrice) reason=stopPrice>Math.max(hardFloor,lockFloor)+eps?'V17_TRAILING_STOP'
+    :stopPrice>hardFloor+eps?'V17_COST_CAP_STOP':'V17_HARD_STOP';
+  // A momentum entry that never produced momentum is closed near cost. Requires the position
+  // to be red now, so a trade that is quietly working is never cut on the clock alone.
+  else if(now-at>=p.noProgressMs&&mfe<p.noProgressMfePct&&bid<entry) reason='V17_NO_PROGRESS';
   else if(now-at>=p.maxHoldMs) reason='V17_MAX_HOLD';
   else if(now-lastHighAt>=p.staleMs) reason='V17_MOMENTUM_STALE';
   return {action:reason?'CLOSE':'HOLD',reason,peakPrice,lastHighAt,stopPrice,
-    observedMfe:peakPrice/entry-1,priceReturn:bid/entry-1,armed};
+    observedMfe:mfe,priceReturn:bid/entry-1,armed,locked};
 }
 export function portfolioMatches(dbPositions,portfolio) {
   if(!portfolio||!Array.isArray(portfolio.positions)||portfolio.positions_complete===false)
