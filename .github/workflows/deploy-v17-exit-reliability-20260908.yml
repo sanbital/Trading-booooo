@@ -33,25 +33,37 @@ jobs:
           ref: main
           persist-credentials: false
 
-      - name: Confirm the reviewed exit candidate is still inert
+      - name: Check the exit protection wiring
         shell: bash
         run: |
           set -euo pipefail
-          # nextExitReviewed only departs from the baseline when the effective policy
-          # carries an arm threshold. POLICY must not carry one, or every open V17
-          # position silently changes exit behaviour on deploy.
-          for key in breakEvenArmPct profitLockArmPct profitLockCapture; do
-            if grep -Fq "$key" supabase/functions/_shared/leader-momentum-v17.mjs; then
-              echo "::error::POLICY now carries $key; the unvalidated exit candidate would activate in production."
-              exit 1
-            fi
-          done
-          # The live path must call the reviewed wrapper, not the R3/R4 research modules.
+          # Cost-breakeven / profit-lock protection is ACTIVE: the executor spreads
+          # EXIT_REVIEW_CANDIDATE into the effective policy. Both thresholds are applied
+          # per tick with no confirmation window, so they work on the one-minute cron.
           grep -Fq 'nextExitReviewed' supabase/functions/v10-lane-executor/index.ts
           grep -Fq 'V17-EXIT-RELIABILITY-REVIEW-2' supabase/functions/v10-lane-executor/index.ts
+          grep -Eq 'const policy=\{\.\.\.POLICY,.*EXIT_REVIEW_CANDIDATE' supabase/functions/v10-lane-executor/index.ts \
+            || { echo "::error::EXIT_REVIEW_CANDIDATE no longer reaches the effective policy; profit protection would be off."; exit 1; }
+
+          # costBreakeven() needs both cost inputs; without them it throws and the whole
+          # exit evaluation aborts, leaving the position with no stop at all.
+          for key in estimatedExitFeeRate exitSlippageBudgetPct breakEvenArmPct profitLockArmPct profitLockCapture; do
+            grep -Fq "$key" supabase/functions/_shared/leader-exit-review.mjs \
+              || { echo "::error::EXIT_REVIEW_CANDIDATE lost $key; the breakeven math cannot run."; exit 1; }
+          done
+          # A row with an unusable fee/quantity must fall back to the baseline stop
+          # rather than abort the evaluation.
+          grep -Fq 'costUsable' supabase/functions/v10-lane-executor/index.ts \
+            || { echo "::error::missing the unusable-cost fallback; a bad row would leave a position unmanaged."; exit 1; }
+
+          # R3/R4 stay out of the live path. Their exits need a confirmation clock that a
+          # one-minute cron cannot feed: maxEvidenceGapMs is 3s, so every tick resets
+          # breachSince and the 10s confirmation never completes, which would silently
+          # remove the soft stop and all profit protection. Wiring them requires a
+          # sub-second event host first.
           for mod in leader-exit-r3 leader-exit-r4; do
             if grep -Fq "$mod" supabase/functions/v10-lane-executor/index.ts; then
-              echo "::error::executor imports $mod; R3/R4 are review-only and are not wired for live orders."
+              echo "::error::executor imports $mod; its confirmation clock cannot run on the one-minute cron."
               exit 1
             fi
           done
