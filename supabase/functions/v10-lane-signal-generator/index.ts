@@ -1,41 +1,70 @@
 // @ts-nocheck
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
-
-const REVISION = "V11-LONG-REGIME-1.0.1";
-const PATCH = "SIGNAL-BAR-TIME-PARITY-V3";
-const MAX_SLOTS = 3;
-const OBSERVER_REVISION = "MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET";
-const OBSERVER_SOURCE = "BINANCE_SPOT_FUTURES_UPBIT_FULL_ACTIVE_UNIVERSE";
-const BAR_MS = 15 * 60_000;
-const ATR_BARS = 56;
-const ATR_BASE_BARS = 2880;
-const BB_BARS = 80;
-const RET24_BARS = 96;
-const QV24_BARS = 96;
-const BTC72_BARS = 288;
-const REQUIRED_BARS = ATR_BASE_BARS + ATR_BARS + 2;
-const MIN_QV24 = 50_000_000;
-const MAX_ENTRY_WINDOW_MS = 5 * 60_000;
-const OBSERVER_MAX_AGE_MS = 12 * 60_000;
-const BINANCE_BASES = ["https://fapi.binance.com", "https://fapi1.binance.com", "https://fapi2.binance.com"];
-const UNIVERSE = ["ETHUSDT","XRPUSDT","SOLUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT","LINKUSDT","BCHUSDT","DOTUSDT","TRXUSDT","NEARUSDT","ETCUSDT","XLMUSDT","ATOMUSDT","UNIUSDT"];
-const LANE_CONFIG = { BULL:{cooldownHours:12,maxHoldHours:12,stopAtr:3.5,targetDelta:null}, RANGE:{cooldownHours:6,maxHoldHours:6,stopAtr:3.0,targetDelta:.75}, BEAR:{cooldownHours:2,maxHoldHours:2,stopAtr:2.5,targetDelta:.75} };
-function reply(status,body){return new Response(JSON.stringify(body),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}})}
-function finite(v,d=Number.NaN){const n=Number(v);return Number.isFinite(n)?n:d}
-function record(v){return v&&typeof v==="object"&&!Array.isArray(v)?v:{}}
-function constantTimeEqual(a,b){if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0}
-function mean(xs){return xs.reduce((s,x)=>s+x,0)/xs.length}
-function sampleStd(xs){if(xs.length<2)return Number.NaN;const m=mean(xs);return Math.sqrt(xs.reduce((s,x)=>s+(x-m)**2,0)/(xs.length-1))}
-function routeFromBtc72(v){return v<-.05?"BEAR":v<=.04?"RANGE":v>.05?"BULL":"CASH"}
-function observerRoute(v){const r=String(v||"").toUpperCase();return r==="RISK_OFF"?"BEAR":r==="NEUTRAL"?"RANGE":(r==="BULL"||r==="STRONG_BULL")?"BULL":"CASH"}
-async function fetchJson(path){let last="UNKNOWN";for(const base of BINANCE_BASES){try{const r=await fetch(`${base}${path}`,{headers:{"user-agent":"Trading-booooo-v11-long-regime/1.0.1"},signal:AbortSignal.timeout(15_000)}),text=await r.text();if(r.ok)return text?JSON.parse(text):null;last=`${base}:${r.status}:${text.slice(0,180)}`;if(![418,429].includes(r.status)&&r.status<500)break}catch(e){last=`${base}:${e instanceof Error?e.message:String(e)}`}}throw new Error(`BINANCE_FETCH_FAILED:${last}`)}
-function parseBar(row){if(!Array.isArray(row)||row.length<11)throw new Error("INVALID_KLINE");const b={openTime:finite(row[0]),open:finite(row[1]),high:finite(row[2]),low:finite(row[3]),close:finite(row[4]),closeTime:finite(row[6]),quoteVolume:finite(row[7]),takerBuyQuote:finite(row[10])};if(!Object.values(b).every(Number.isFinite)||!(b.open>0&&b.high>0&&b.low>0&&b.close>0&&b.quoteVolume>=0))throw new Error("INVALID_KLINE_VALUES");return b}
-async function fetchHistory(symbol,signalOpenTime){const byTime=new Map();let endTime=signalOpenTime+BAR_MS-1;for(let page=0;page<3&&byTime.size<REQUIRED_BARS;page++){const p=new URLSearchParams({symbol,interval:"15m",limit:"1500",endTime:String(endTime)}),raw=await fetchJson(`/fapi/v1/klines?${p}`);if(!Array.isArray(raw)||!raw.length)throw new Error(`EMPTY_KLINES:${symbol}`);for(const row of raw){const b=parseBar(row);if(b.openTime<=signalOpenTime)byTime.set(b.openTime,b)}endTime=Math.min(...raw.map(r=>finite(r[0])))-1}const bars=[...byTime.values()].sort((a,b)=>a.openTime-b.openTime);if(bars.length<REQUIRED_BARS)throw new Error(`INSUFFICIENT_HISTORY:${symbol}:${bars.length}`);if(bars.at(-1)?.openTime!==signalOpenTime)throw new Error(`LATEST_COMPLETED_BAR_MISSING:${symbol}`);return bars.slice(-Math.max(REQUIRED_BARS,3000))}
-async function mapLimit(items,limit,fn){const out=new Array(items.length);let cursor=0;async function worker(){while(true){const i=cursor++;if(i>=items.length)return;out[i]=await fn(items[i])}}await Promise.all(Array.from({length:Math.min(limit,items.length)},()=>worker()));return out}
-function buildAtr(bars){const tr=new Array(bars.length).fill(Number.NaN);for(let i=1;i<bars.length;i++)tr[i]=Math.max(bars[i].high-bars[i].low,Math.abs(bars[i].high-bars[i-1].close),Math.abs(bars[i].low-bars[i-1].close));const atr=new Array(bars.length).fill(Number.NaN);let rolling=0,count=0;for(let i=0;i<bars.length;i++){if(Number.isFinite(tr[i])){rolling+=tr[i];count++}const out=i-ATR_BARS;if(out>=0&&Number.isFinite(tr[out])){rolling-=tr[out];count--}if(count===ATR_BARS)atr[i]=rolling/ATR_BARS}return atr}
-function bbAt(bars,i){const xs=bars.slice(i-BB_BARS+1,i+1).map(b=>b.close);if(xs.length!==BB_BARS)return Number.NaN;const sd=sampleStd(xs);return sd>0?(bars[i].close-mean(xs))/(2*sd):Number.NaN}
-function computeFeatures(symbol,bars){const i=bars.length-1,atrs=buildAtr(bars),atr=atrs[i],base=atrs.slice(i-ATR_BASE_BARS,i);if(base.length!==ATR_BASE_BARS||base.some(x=>!Number.isFinite(x)))throw new Error(`ATR_BASE_INCOMPLETE:${symbol}`);const atrBaseline=mean(base),atrRatio=atr/atrBaseline,bbPos=bbAt(bars,i),r24=bars[i].close/bars[i-RET24_BARS].close-1;let qv24=0;for(let k=0;k<QV24_BARS;k++)qv24+=bars[i-k].quoteVolume;const takerImb=bars[i].quoteVolume>0?2*bars[i].takerBuyQuote/bars[i].quoteVolume-1:0,values={atr,atrBaseline,atrRatio,bbPos,r24,qv24,takerImb};if(Object.values(values).some(x=>!Number.isFinite(x)))throw new Error(`NON_FINITE_FEATURE:${symbol}`);return{symbol,signalBarAt:bars[i].openTime,referenceClose:bars[i].close,...values}}
-function btcConfirmedRoute(bars){const i=bars.length-1;if(i<BTC72_BARS+1)return{route:"CASH",current:null,previous:null};const cur=bars[i].close/bars[i-BTC72_BARS].close-1,prev=bars[i-1].close/bars[i-1-BTC72_BARS].close-1,rc=routeFromBtc72(cur),rp=routeFromBtc72(prev);return{route:rc===rp?rc:"CASH",current:cur,previous:prev,currentRaw:rc,previousRaw:rp}}
-function eligible(lane,f){if(f.qv24<MIN_QV24)return{ok:false,reason:"LIQUIDITY_BELOW_50M"};if(lane==="BULL"){if(f.atrRatio<1.65)return{ok:false,reason:"BULL_ATR_RATIO"};if(f.bbPos>-.20)return{ok:false,reason:"BULL_PULLBACK_DEPTH"};if(f.r24<-.02)return{ok:false,reason:"BULL_ASSET_24H"}}else if(lane==="RANGE"){if(f.atrRatio<1.60)return{ok:false,reason:"RANGE_ATR_RATIO"};if(f.bbPos>-1.05)return{ok:false,reason:"RANGE_BB_DEPTH"}}else if(lane==="BEAR"){if(f.atrRatio<1.60)return{ok:false,reason:"BEAR_ATR_RATIO"};if(f.bbPos>-1.15)return{ok:false,reason:"BEAR_BB_DEPTH"};if(f.takerImb>0)return{ok:false,reason:"BEAR_SELL_PRESSURE_REQUIRED"}}else return{ok:false,reason:"NO_ACTIVE_REGIME"};return{ok:true,reason:`${lane}_ELIGIBLE`}}
-function observerHealthy(row,asOfMs){if(!row)return{ok:false,reason:"OBSERVER_MISSING"};const ts=Date.parse(String(row.observed_at||"")),age=asOfMs-ts;if(!Number.isFinite(ts)||age<0||age>OBSERVER_MAX_AGE_MS)return{ok:false,reason:"OBSERVER_STALE"};if(finite(row.sample_size,0)<240)return{ok:false,reason:"OBSERVER_SAMPLE_SMALL"};const ft=record(row.features);if(ft.source!==OBSERVER_SOURCE)return{ok:false,reason:"OBSERVER_SOURCE_MISMATCH"};const b30=record(ft.breadth_30m),bs=record(b30.binance_spot),bf=record(b30.binance_futures),up=record(b30.upbit_spot);if(finite(bs.sample_size,0)<80||finite(bf.sample_size,0)<80||finite(up.sample_size,0)<40)return{ok:false,reason:"OBSERVER_BREADTH_INCOMPLETE"};return{ok:true,reason:"OK",ageMs:age}}
-Deno.serve(async(req)=>{if(req.method!=="POST")return reply(405,{ok:false,error:"POST_ONLY"});const url=(Deno.env.get("SUPABASE_URL")||"").trim(),key=(Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")||"").trim();if(!url||!key)return reply(500,{ok:false,error:"SUPABASE_ENV_MISSING"});const db=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}}),supplied=(req.headers.get("x-v10-lane-token")||"").trim(),{data:tokenRow,error:tokenError}=await db.from("edge_internal_tokens").select("token").eq("name","v10-lane-signal-generator").maybeSingle(),expected=String(tokenRow?.token||"").trim();if(tokenError||!supplied||!expected||!constantTimeEqual(supplied,expected))return reply(401,{ok:false,error:"UNAUTHORIZED"});const body=await req.json().catch(()=>({})),mode=String(body?.mode||"run").toLowerCase(),diagnostic=mode==="diagnostic"||mode==="preflight";try{const now=Date.now(),currentOpen=Math.floor(now/BAR_MS)*BAR_MS,signalOpen=currentOpen-BAR_MS,signalClose=currentOpen,dataAge=now-signalClose;if(!diagnostic&&dataAge>MAX_ENTRY_WINDOW_MS)return reply(200,{ok:true,revision:REVISION,patch:PATCH,skipped:"OUTSIDE_ENTRY_WINDOW",dataAgeMs:dataAge});const signalCloseIso=new Date(signalClose).toISOString();const[{data:runtime,error:runtimeErr},{data:obs,error:obsErr},{data:openPos,error:openErr}]=await Promise.all([db.from("v11_long_regime_runtime").select("*").eq("singleton",true).single(),db.from("market_regime_observations").select("id,observed_at,predicted_regime,bull_score,confidence,sample_size,features,trading_influence,model_revision").eq("model_revision",OBSERVER_REVISION).eq("trading_influence",true).lte("observed_at",signalCloseIso).order("observed_at",{ascending:false}).limit(1).maybeSingle(),db.from("v11_long_regime_positions").select("id,symbol,state,active_lane").eq("state","OPEN").limit(MAX_SLOTS+1)]);if(runtimeErr||!runtime)throw new Error(`RUNTIME_READ:${runtimeErr?.message||"missing"}`);if(obsErr)throw new Error(`OBSERVER_READ:${obsErr.message}`);if(openErr)throw new Error(`POSITION_READ:${openErr.message}`);const open=openPos||[];if(open.length>MAX_SLOTS)throw new Error(`V11_SLOT_OVERFLOW:${open.length}`);const rows=await mapLimit(["BTCUSDT",...UNIVERSE],4,async s=>[s,await fetchHistory(s,signalOpen)]),by=new Map(rows),btcBars=by.get("BTCUSDT");if(!btcBars)throw new Error("BTC_HISTORY_MISSING");const btc=btcConfirmedRoute(btcBars),oHealth=observerHealthy(obs,signalClose),oRoute=oHealth.ok?observerRoute(obs?.predicted_regime):"CASH",route=oHealth.ok?oRoute:"CASH",evaluated=[],reasons={};for(const symbol of UNIVERSE){try{const f=computeFeatures(symbol,by.get(symbol)),ev=eligible(route,f);evaluated.push({...f,eligible:ev.ok,reason:ev.reason});reasons[ev.reason]=(reasons[ev.reason]||0)+1}catch(e){const r=`DATA_ERROR:${e instanceof Error?e.message:String(e)}`;reasons[r]=(reasons[r]||0)+1}}const openSymbols=new Set(open.map(x=>String(x.symbol).toUpperCase())),candidates=evaluated.filter(x=>x.eligible&&!openSymbols.has(String(x.symbol).toUpperCase())).sort((a,b)=>a.bbPos-b.bbPos||b.atrRatio-a.atrRatio||a.symbol.localeCompare(b.symbol)),status={revision:REVISION,patch:PATCH,signalBarCloseAt:signalCloseIso,route,routeAuthority:"OBSERVER_AS_OF_SIGNAL_BAR_CLOSE",observerRoute:oRoute,btcRoute:btc.route,btc72:btc.current,btc72Prev:btc.previous,observer:{id:obs?.id||null,observedAt:obs?.observed_at||null,predicted:obs?.predicted_regime||null,bullScore:obs?.bull_score??null,confidence:obs?.confidence??null,health:oHealth},evaluated:evaluated.length,eligible:candidates.length,reasons,openPositions:open,maxSlots:MAX_SLOTS,dataAgeMs:dataAge};if(diagnostic)return reply(200,{ok:true,diagnostic:true,...status,topCandidates:candidates.slice(0,5)});if(runtime.revision!==REVISION)return reply(409,{ok:false,error:"RUNTIME_REVISION_MISMATCH",runtime:runtime.revision,expected:REVISION});if(runtime.live_enabled!==true||runtime.circuit_open===true)return reply(200,{ok:true,skipped:"V11_RUNTIME_NOT_LIVE",runtime:{live_enabled:runtime.live_enabled,circuit_open:runtime.circuit_open,circuit_reason:runtime.circuit_reason},...status});if(open.length>=MAX_SLOTS)return reply(200,{ok:true,skipped:"V11_SLOT_FULL",...status});if(route==="CASH"||!candidates.length)return reply(200,{ok:true,inserted:0,...status});const cfg=LANE_CONFIG[route];let c=null;for(const candidate of candidates){const since=new Date(signalOpen-cfg.cooldownHours*3600_000).toISOString(),{data:recent,error:recentErr}=await db.from("v11_long_regime_signals").select("id,status,signal_bar_at").eq("revision",REVISION).eq("lane",route).eq("symbol",candidate.symbol).gte("signal_bar_at",since).order("signal_bar_at",{ascending:false}).limit(1);if(recentErr)throw new Error(`COOLDOWN_READ:${recentErr.message}`);if(!recent?.length){c=candidate;break}}if(!c)return reply(200,{ok:true,inserted:0,skipped:"COOLDOWN",...status});const features={referenceClose:c.referenceClose,atr:c.atr,atrBaseline:c.atrBaseline,atrRatio:c.atrRatio,bbPos:c.bbPos,r24:c.r24,qv24:c.qv24,takerImb:c.takerImb,btc72:btc.current,btc72Prev:btc.previous,btcRouteDiagnostic:btc.route,routeAuthority:"OBSERVER_AS_OF_SIGNAL_BAR_CLOSE",observerId:obs?.id||null,observerObservedAt:obs?.observed_at||null,observerRegime:obs?.predicted_regime||null,observerBullScore:obs?.bull_score??null,observerConfidence:obs?.confidence??null,signalBarCloseAt:signalCloseIso,stopAtr:cfg.stopAtr,targetDelta:cfg.targetDelta,maxHoldHours:cfg.maxHoldHours,cooldownHours:cfg.cooldownHours,entryGapAtrMax:.5,roundTripResearchCostBps:21,maxSlots:MAX_SLOTS,method:"15M_OBSERVER_AUTHORITY_SIGNAL_CLOSE_V11_1_0_1"},{data:inserted,error:insErr}=await db.from("v11_long_regime_signals").upsert({revision:REVISION,lane:route,symbol:c.symbol,side:"LONG",signal_bar_at:new Date(signalOpen).toISOString(),entry_bar_at:new Date(currentOpen).toISOString(),features,status:"NEW",updated_at:new Date().toISOString()},{onConflict:"revision,lane,symbol,signal_bar_at",ignoreDuplicates:true}).select("id,lane,symbol,status,signal_bar_at,entry_bar_at");if(insErr)throw new Error(`SIGNAL_WRITE:${insErr.message}`);await db.from("v11_long_regime_runtime").update({last_success_at:new Date().toISOString(),last_error:null,updated_at:new Date().toISOString()}).eq("singleton",true);return reply(200,{ok:true,inserted:inserted?.length||0,signal:inserted?.[0]||null,...status})}catch(e){const msg=e instanceof Error?e.message:String(e);try{await db.from("v11_long_regime_runtime").update({last_error:msg.slice(0,1000),updated_at:new Date().toISOString()}).eq("singleton",true)}catch{}return reply(500,{ok:false,revision:REVISION,patch:PATCH,error:msg})}});
+import {createClient} from 'https://esm.sh/@supabase/supabase-js@2.57.4';
+import {scanMarket} from '../_shared/leader-market-v17.mjs';
+import {POLICY,STRATEGY,entryFresh} from '../_shared/leader-momentum-v17.mjs';
+// Existing v11 tables/token/cron remain compatible. BULL is a storage lane only;
+// all trading decisions for features.strategy=STRATEGY are regime-independent.
+const REVISION='V11-LONG-REGIME-1.0.1';
+const PATCH='V17-LEADER-PRODUCTION-INTEGRATION-1';
+const reply=(s,b)=>new Response(JSON.stringify(b),{status:s,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
+function equal(a,b){if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0;}
+export async function generate(db,{diagnostic=false,scan=scanMarket,now=Date.now}={}){
+  const result=await scan({now:now()});
+  if(diagnostic)return {ok:true,diagnostic:true,patch:PATCH,strategy:STRATEGY,...result};
+  const stamp=new Date(now()).toISOString();
+  const logged=await db.from('v17_market_scan_runs').insert({captured_at:stamp,strategy:STRATEGY,
+    signal_close_at:new Date(result.cut15).toISOString(),expected_symbols:result.expected,
+    evaluated_symbols:result.evaluated,coverage:result.coverage,details:{
+      blocked:result.blocked,reasons:result.reasons,top10:result.top10,
+      errors:result.errors,excluded:result.excluded,confirmationErrors:result.confirmationErrors,
+      requestWeight:result.weight,scanDurationMs:result.scanDurationMs}});
+  if(logged.error)throw Error(`SCAN_AUDIT_WRITE:${logged.error.message}`);
+  if(result.blocked)return {ok:true,inserted:0,skipped:result.blocked,...result};
+  const [control,runtime,positions]=await Promise.all([
+    db.from('v17_operator_control').select('entry_enabled,legacy_entries_retired').eq('singleton',true).single(),
+    db.from('v11_long_regime_runtime').select('revision,live_enabled,circuit_open,circuit_reason').eq('singleton',true).single(),
+    db.from('v11_long_regime_positions').select('symbol,state').eq('state','OPEN'),
+  ]);
+  for(const [name,r] of [['CONTROL',control],['RUNTIME',runtime],['POSITIONS',positions]])
+    if(r.error)throw Error(`${name}_READ:${r.error.message}`);
+  if(control.data?.entry_enabled!==true||control.data?.legacy_entries_retired!==true)
+    return {ok:true,inserted:0,skipped:'OPERATOR_CUTOVER_NOT_ENABLED',...result};
+  if(runtime.data?.revision!==REVISION)throw Error('RUNTIME_REVISION_MISMATCH');
+  if(runtime.data.live_enabled!==true||runtime.data.circuit_open===true)
+    return {ok:true,inserted:0,skipped:'RUNTIME_NOT_LIVE',circuitReason:runtime.data.circuit_reason,...result};
+  const held=new Set((positions.data||[]).map(p=>String(p.symbol).toUpperCase()));
+  const capacity=Math.max(0,POLICY.maxSlots-held.size),inserted=[];
+  if(!capacity)return {ok:true,inserted:0,skipped:'SLOT_FULL',...result};
+  for(const f of result.candidates){
+    if(inserted.length>=capacity)break;
+    if(held.has(f.symbol)||entryFresh(f,now(),f.referenceClose))continue;
+    const recent=await db.from('v11_long_regime_signals').select('id').eq('symbol',f.symbol)
+      .gte('signal_bar_at',new Date(now()-POLICY.cooldownMs).toISOString())
+      .in('status',['NEW','CLAIMED','ORDERED','FILLED','CLOSED']).limit(1);
+    if(recent.error)throw Error(`COOLDOWN_READ:${recent.error.message}`);
+    if(recent.data?.length)continue;
+    const write=await db.from('v11_long_regime_signals').upsert({revision:REVISION,lane:'BULL',
+      symbol:f.symbol,side:'LONG',signal_bar_at:new Date(f.signal5Open).toISOString(),
+      entry_bar_at:new Date(f.signal5Close).toISOString(),features:{...f,storageLaneOnly:'BULL',
+        routeAuthority:STRATEGY,maxSlots:POLICY.maxSlots,targetMarginUsdt:POLICY.marginUsdt,
+        leverage:POLICY.leverage},status:'NEW',updated_at:stamp},
+      {onConflict:'revision,lane,symbol,signal_bar_at',ignoreDuplicates:true}).select('id,symbol');
+    if(write.error)throw Error(`SIGNAL_WRITE:${write.error.message}`);
+    inserted.push(...(write.data||[]));
+  }
+  return {ok:true,strategy:STRATEGY,patch:PATCH,inserted:inserted.length,signals:inserted,...result};
+}
+Deno.serve(async req=>{
+  if(req.method!=='POST')return reply(405,{ok:false,error:'POST_ONLY'});
+  const url=Deno.env.get('SUPABASE_URL')||'',key=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')||'';
+  if(!url||!key)return reply(500,{ok:false,error:'SUPABASE_ENV_MISSING'});
+  const db=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
+  const token=await db.from('edge_internal_tokens').select('token').eq('name','v10-lane-signal-generator').maybeSingle();
+  const supplied=(req.headers.get('x-v10-lane-token')||'').trim(),expected=String(token.data?.token||'');
+  if(token.error||!supplied||!expected||!equal(supplied,expected))return reply(401,{ok:false,error:'UNAUTHORIZED'});
+  let body;try{body=await req.json();}catch{return reply(400,{ok:false,error:'INVALID_JSON'});}
+  const mode=String(body?.mode||'run').toLowerCase();
+  if(!['run','preflight','diagnostic'].includes(mode))return reply(400,{ok:false,error:'INVALID_MODE'});
+  try{return reply(200,await generate(db,{diagnostic:mode!=='run'}));}
+  catch(e){return reply(503,{ok:false,patch:PATCH,error:e instanceof Error?e.message:String(e)});}
+});
