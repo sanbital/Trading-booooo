@@ -56,7 +56,18 @@ jobs:
           # EXIT_REVIEW_CANDIDATE into the effective policy. Both thresholds are applied
           # per tick with no confirmation window, so they work on the one-minute cron.
           grep -Fq 'nextExitReviewed' supabase/functions/v10-lane-executor/index.ts
-          grep -Fq 'V17-ENTRY-QUEUE-1' supabase/functions/v10-lane-executor/index.ts
+          # The build being shipped is named by the last line of the deploy trigger, and the
+          # executor's PATCH must agree with it -- so a trigger bump can never ship a stale
+          # build, and a PATCH bump can never ship without a trigger. This used to be a
+          # hardcoded version string, which went stale on every patch and then failed with
+          # no message at all, because a bare grep under `set -e` prints nothing.
+          patch_src="$(grep -o 'PATCH="[^"]*"' supabase/functions/v10-lane-executor/index.ts | head -1 | sed 's/^PATCH="//; s/"$//')"
+          patch_want="$(grep -v '^[[:space:]]*$' research/v17-exit-reliability-deploy-trigger.txt | tail -n1 | awk '{print $NF}')"
+          if [ -z "${patch_src}" ] || [ "${patch_src}" != "${patch_want}" ]; then
+            echo "::error::executor PATCH '${patch_src}' does not match the deploy trigger '${patch_want}'"
+            exit 1
+          fi
+          echo "deploying executor build ${patch_src}"
           grep -Eq 'const policy=\{\.\.\.POLICY,.*EXIT_REVIEW_CANDIDATE' supabase/functions/v10-lane-executor/index.ts \
             || { echo "::error::EXIT_REVIEW_CANDIDATE no longer reaches the effective policy; profit protection would be off."; exit 1; }
 
