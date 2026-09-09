@@ -182,6 +182,13 @@ Deno.test("post-V10 migrations cannot silently redefine production claim wiring"
   const migrationDirectory = new URL("supabase/migrations/", ROOT);
   const allowed = new Set([
     "20260830060500_v10_claim_drift_reconciliation.sql",
+    // The V11 cutover. This is the migration that made the P10 claim router fail closed so
+    // the V11/V17 lane owns entries, which is the state the account has actually traded in
+    // since 2026-09-02 (v17_operator_control.legacy_entries_retired = true, and the router
+    // is applied in production as 20260901124152). The guard did its job -- it caught a
+    // wiring change that had never been recorded here -- so this records the approval
+    // rather than weakening the check.
+    "20260901124152_cutover_p10_live_claim_router_to_v11_fail_closed.sql",
   ]);
 
   for await (const entry of Deno.readDir(migrationDirectory)) {

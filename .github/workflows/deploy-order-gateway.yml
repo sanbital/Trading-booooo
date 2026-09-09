@@ -31,6 +31,13 @@ jobs:
         with:
           persist-credentials: false
 
+      # Both gateways build from gateway/Dockerfile, which COPYs the exit engine that
+      # stage-engine.mjs generates at deploy time (it is git-ignored so the shadow cannot
+      # drift from the engine the executor runs). Only the Binance workflow staged it, so
+      # every Upbit deploy since has died at "COPY leader-exit-r3.mjs: not found".
+      - name: Stage the exit engine into the image
+        run: node gateway/stage-engine.mjs
+
       - name: Test gateway
         run: |
           node --check gateway/server.mjs

@@ -636,7 +636,7 @@ jobs:
           echo "::error::40-USDT futures entry policy was not ready before Edge deployment"
           exit 1
 
-      - name: Wait for production Regime Router v3
+      - name: Wait for the production regime router (V11 fail-closed)
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
@@ -666,13 +666,20 @@ jobs:
                     and router_state in ('RANGE_UP_CYCLE', 'BEAR_REBOUND', 'BEAR_REBREAK')
                     and entry_enabled
                 )
+                -- Migration 20260901124152 cut both of these over to the V11 fail-closed
+                -- resolver, which is the router the account has actually traded through
+                -- since 2026-09-02. Asserting the superseded v3 text made this gate
+                -- unsatisfiable, so the step spun for ten minutes and failed every push
+                -- that touched supabase/functions/** -- including market-scanner and
+                -- market-regime-observer, which V17 still reads. The privilege checks are
+                -- the half that protects production and are unchanged.
                 and exists (
                   select 1
                   from pg_proc p
                   join pg_namespace n on n.oid = p.pronamespace
                   where n.nspname = 'public'
                     and p.proname = 'claim_p10_signal'
-                    and position('P10-PRODUCTION-REGIME-ROUTER-v3' in pg_get_functiondef(p.oid)) > 0
+                    and position('resolve_p10_production_regime_route_v11' in pg_get_functiondef(p.oid)) > 0
                     and not has_function_privilege('anon', p.oid, 'EXECUTE')
                     and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
                     and has_function_privilege('service_role', p.oid, 'EXECUTE')
@@ -683,21 +690,20 @@ jobs:
                   join pg_namespace n on n.oid = p.pronamespace
                   where n.nspname = 'public'
                     and p.proname = 'resolve_p10_production_regime_route_v3'
-                    and position('NO_TRADE' in pg_get_functiondef(p.oid)) > 0
-                    and position('MISSING_MARKET_V5_15M_AND_COMPLETED_5M_CONFIRMATION' in pg_get_functiondef(p.oid)) > 0
+                    and position('resolve_p10_production_regime_route_v11' in pg_get_functiondef(p.oid)) > 0
                     and not has_function_privilege('anon', p.oid, 'EXECUTE')
                     and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
                     and has_function_privilege('service_role', p.oid, 'EXECUTE')
                 );
             ")" || ready="f"
             if [ "${ready}" = "t" ]; then
-              echo "Production Regime Router v3 is ready"
+              echo "Production regime router is ready"
               exit 0
             fi
-            echo "Waiting for production Regime Router v3 (${attempt}/40)"
+            echo "Waiting for the production regime router (${attempt}/40)"
             sleep 15
           done
-          echo "::error::Production Regime Router v3 was not ready before Edge deployment"
+          echo "::error::Production regime router was not ready before Edge deployment"
           exit 1
 
       - name: Deploy market executor and producers
