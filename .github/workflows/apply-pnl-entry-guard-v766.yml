@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - ".github/workflows/apply-pnl-entry-guard-v766.yml"
+      # Its own file is deliberately not listed: that re-armed a production mutation
+      # every time anyone edited this workflow.
       - "scripts/apply_pnl_entry_guard_v766.py"
   workflow_dispatch:
 
@@ -124,7 +125,7 @@ jobs:
           # Existing positions are monitored while new entries are paused. Wait until at
           # least one post-rollout monitor cycle refreshes their marked PnL.
           refreshed=false
-          for attempt in $(seq 1 24); do
+          for _ in $(seq 1 24); do
             latest_monitor=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
               "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR' and started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz")
             bad_futures=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "

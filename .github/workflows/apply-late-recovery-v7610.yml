@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - ".github/workflows/apply-late-recovery-v7610.yml"
+      # Its own file is deliberately not listed: that re-armed a production mutation
+      # every time anyone edited this workflow.
       - "scripts/apply_late_recovery_v7610.py"
       - "scripts/harden_late_recovery_v7610.py"
   workflow_dispatch:
@@ -75,8 +76,9 @@ jobs:
           grep -q 'LATE_RECOVERY_RESIDUAL_WINNER_PRESERVED' supabase/functions/market-autotrader/late-recovery-policy.ts
           grep -q 'if (lobMode && !futuresLane && heldSeconds >= absoluteMaxHoldingSeconds)' \
             supabase/functions/market-autotrader/index.ts
-          ! grep -q 'if ((lobMode || futuresLane) && heldSeconds >= absoluteMaxHoldingSeconds)' \
+          if grep -q 'if ((lobMode || futuresLane) && heldSeconds >= absoluteMaxHoldingSeconds)' \
             supabase/functions/market-autotrader/index.ts
+          then echo "::error::futures must not share the LOB absolute-timeout branch"; exit 1; fi
           grep -q 'prepareLateRecoveryProtectedExit' supabase/functions/market-autotrader/index.ts
           grep -q 'LATE_RECOVERY_DRAWDOWN_33_FOK_NOT_FILLED' supabase/functions/market-autotrader/index.ts
           grep -q 'LATE_RECOVERY_REQUIRES_LIMIT_FOK' \

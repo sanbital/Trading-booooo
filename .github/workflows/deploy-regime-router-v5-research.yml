@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - "supabase/functions/regime-router-v5-research/**"
-      - ".github/workflows/deploy-regime-router-v5-research.yml"
+      # Its own file is deliberately not listed: editing this workflow should not deploy.
   workflow_dispatch:
 
 permissions:
@@ -79,10 +79,11 @@ jobs:
             -e "s/__V5_BUILD_SOURCE_SHA__/$GITHUB_SHA/" \
             -e "s/__V5_IMPLEMENTATION_SHA256__/$implementation_sha256/" \
             "$source_dir/types.ts"
-          ! grep -R -F -n --include='*.ts' --exclude='*.test.ts' \
+          if grep -R -F -n --include='*.ts' --exclude='*.test.ts' \
             -e '__V5_BUILD_SOURCE_SHA__' \
             -e '__V5_IMPLEMENTATION_SHA256__' \
             "$source_dir"
+          then echo "::error::build placeholders were not substituted"; exit 1; fi
           grep -Fq "export const V5_BUILD_SOURCE_SHA = \"$GITHUB_SHA\";" "$source_dir/types.ts"
           grep -Fq \
             "export const V5_IMPLEMENTATION_SHA256 = \"$implementation_sha256\";" \

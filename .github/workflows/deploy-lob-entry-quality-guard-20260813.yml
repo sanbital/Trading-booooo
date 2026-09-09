@@ -1,10 +1,8 @@
 name: Deploy verified LOB entry quality guard 2026-08-13
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/deploy-lob-entry-quality-guard-20260813.yml"
+  # This one-shot armed itself on a push to its own file, so any later edit -- a lint
+  # fix included -- re-ran a production mutation. Dispatch it deliberately instead.
   workflow_dispatch:
 
 permissions:
@@ -84,7 +82,7 @@ jobs:
         run: |
           set -euo pipefail
           healthy=false
-          for attempt in $(seq 1 18); do
+          for _ in $(seq 1 18); do
             failed=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
               select count(*) from public.trading_cycle_runs
               where started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz

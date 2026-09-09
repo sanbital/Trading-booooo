@@ -63,8 +63,8 @@ jobs:
           grep -q 'MAX_DYNAMIC_OBSERVATION_MS = 15_000;' supabase/functions/market-scanner/index.ts
           grep -q 'COMPOSITE-PRESSURE-V1' supabase/functions/_shared/lob/entry.ts
           grep -q 'BUY_FLOW_NOT_ACCELERATING_OPTIONAL_VOTE' supabase/functions/_shared/lob/entry.ts
-          ! grep -q 'reasons.push("BUY_FLOW_NOT_ACCELERATING")' supabase/functions/_shared/lob/entry.ts
-          ! grep -q 'dynamic.observation_ms >= 50_000' supabase/functions/market-scanner/index.ts
+          if grep -q 'reasons.push("BUY_FLOW_NOT_ACCELERATING")' supabase/functions/_shared/lob/entry.ts; then echo "::error::the hard buy-flow veto must be a vote now"; exit 1; fi
+          if grep -q 'dynamic.observation_ms >= 50_000' supabase/functions/market-scanner/index.ts; then echo "::error::the 50s observation floor must be gone"; exit 1; fi
           grep -q "${RELEASE_VERSION}" supabase/functions/market-scanner/engine.ts
           grep -q "${RELEASE_VERSION}" supabase/functions/market-autotrader/index.ts
 

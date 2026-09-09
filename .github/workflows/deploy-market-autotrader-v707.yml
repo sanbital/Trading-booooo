@@ -23,7 +23,7 @@ on:
       - "supabase/migrations/20260826094500_p10_entry_reconciliation_invariants.sql"
       - "supabase/migrations/20260827104008_binance_futures_margin_40_usdt.sql"
       - "supabase/migrations/20260829120027_p10_production_regime_router_v3_validation_registry.sql"
-      - ".github/workflows/deploy-market-autotrader-v707.yml"
+      # Its own file is deliberately not listed: editing this workflow should not deploy.
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
@@ -171,10 +171,10 @@ jobs:
           grep -q 'decision.reason === "RESIDUAL_PROTECTED_TRAIL_EXIT"' supabase/functions/market-autotrader/index.ts
           grep -q 'STALE_RECOVERY_NET_POSITIVE_EXIT_180M' supabase/functions/market-autotrader/index.ts
           grep -q 'executable_net_allowed: true' supabase/functions/market-autotrader/executable-exit.ts
-          ! grep -q 'halfHoldRecoveryExitDecision' supabase/functions/market-autotrader/index.ts
-          ! grep -q 'hard_stop_return_pct: -2' supabase/functions/market-autotrader/index.ts
-          ! grep -q 'hard_stop_after_seconds: 180' supabase/functions/market-autotrader/index.ts
-          ! grep -q 'stop_bps: 300' supabase/functions/market-autotrader/index.ts
+          if grep -q 'halfHoldRecoveryExitDecision' supabase/functions/market-autotrader/index.ts; then echo "::error::half-hold recovery exit must be gone"; exit 1; fi
+          if grep -q 'hard_stop_return_pct: -2' supabase/functions/market-autotrader/index.ts; then echo "::error::the -2% hard stop must be gone"; exit 1; fi
+          if grep -q 'hard_stop_after_seconds: 180' supabase/functions/market-autotrader/index.ts; then echo "::error::the 180s hard stop must be gone"; exit 1; fi
+          if grep -q 'stop_bps: 300' supabase/functions/market-autotrader/index.ts; then echo "::error::the 300bps stop must be gone"; exit 1; fi
           grep -q 'BB_UPPER_REENTRY_CONFIRMED' supabase/functions/market-autotrader/index.ts
           grep -q 'BB_RECLAIM_FAILED' supabase/functions/market-autotrader/index.ts
           grep -q 'ORDERBOOK_COLLAPSE' supabase/functions/market-autotrader/index.ts
@@ -215,7 +215,7 @@ jobs:
             supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql
           grep -q "upper(coalesce(new.purpose, '')) = 'EMERGENCY'" \
             supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql
-          ! grep -q 'const exp1ArmWidthsBps' supabase/functions/market-autotrader/index.ts
+          if grep -q 'const exp1ArmWidthsBps' supabase/functions/market-autotrader/index.ts; then echo "::error::exp1 arm widths must be gone"; exit 1; fi
           grep -q 'P10_STRATEGY_KEY' \
             supabase/functions/market-autotrader/index.ts
           grep -q 'P10_DONCHIAN_BREAKOUT_E10_SLOW_4R' \

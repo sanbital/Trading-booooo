@@ -1,10 +1,8 @@
 name: Apply exit finalization v7.6.12
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/apply-exit-finalization-v7612.yml"
+  # This one-shot armed itself on a push to its own file, so any later edit -- a lint
+  # fix included -- re-ran a production mutation. Dispatch it deliberately instead.
   workflow_dispatch:
 
 permissions:
@@ -90,7 +88,9 @@ jobs:
           grep -q 'Exit finalization idempotency v7.6.12' supabase/functions/market-autotrader/index.ts
           grep -q 'if (applied.applied)' supabase/functions/market-autotrader/index.ts
           grep -q 'EXIT_DEFERRED_UNSETTLED_ORDER' supabase/functions/market-autotrader/index.ts
+          # shellcheck disable=SC2016  # searching the source for a literal ${...}, not expanding it
           grep -Fq '`id=eq.${position.id}&state=eq.OPEN`' supabase/functions/market-autotrader/index.ts
+          # shellcheck disable=SC2016  # searching the source for a literal ${...}, not expanding it
           grep -Fq '`id=eq.${position.id}&state=eq.EXITING`' supabase/functions/market-autotrader/index.ts
           grep -q 'p_fill_quantity: quantity' supabase/functions/market-autotrader/index.ts
 
@@ -184,7 +184,7 @@ jobs:
           healthy=false
           latest_monitor=''
           failed='0'
-          for attempt in $(seq 1 20); do
+          for _ in $(seq 1 20); do
             latest_monitor=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
               select coalesce(max(started_at)::text,'') from public.trading_cycle_runs
               where kind='MONITOR' and started_at >= '${DEPLOYED_AT}'::timestamptz;")

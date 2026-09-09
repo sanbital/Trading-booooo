@@ -102,9 +102,9 @@ jobs:
           test -n "${SUPABASE_DB_URL}"
           emergency=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c \
             "select coalesce(emergency_liquidation,false)::text from public.trading_settings where id=1")
-          [ "${emergency}" != true ] && [ "${emergency}" != t ] || {
-            echo "::error::emergency liquidation is active; refusing rollout"; exit 1;
-          }
+          if [ "${emergency}" = true ] || [ "${emergency}" = t ]; then
+            echo "::error::emergency liquidation is active; refusing rollout"; exit 1
+          fi
           psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
             "update public.trading_settings set pause_new_entries=true, updated_at=now() where id=1"
 

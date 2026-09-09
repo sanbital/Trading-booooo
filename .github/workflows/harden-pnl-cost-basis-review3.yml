@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - ".github/workflows/harden-pnl-cost-basis-review3.yml"
+      # Its own file is deliberately not listed: that re-armed a production mutation
+      # every time anyone edited this workflow.
       - "scripts/harden_pnl_cost_basis_review3.py"
   workflow_dispatch:
 
@@ -116,7 +117,7 @@ jobs:
         run: |
           set -euo pipefail
           healthy=false
-          for attempt in $(seq 1 24); do
+          for _ in $(seq 1 24); do
             successes=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
               select count(*) from public.trading_cycle_runs
               where kind='MONITOR' and status='SUCCESS'

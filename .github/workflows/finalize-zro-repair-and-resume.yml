@@ -1,10 +1,8 @@
 name: Finalize ZRO repair and resume entries
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/finalize-zro-repair-and-resume.yml"
+  # This one-shot armed itself on a push to its own file, so any later edit -- a lint
+  # fix included -- re-ran a production mutation. Dispatch it deliberately instead.
   workflow_dispatch:
 
 permissions:
@@ -49,6 +47,7 @@ jobs:
             select state,initial_quantity,remaining_quantity,average_entry_price,realized_cost_quote,
                    realized_proceeds_quote,paid_fees_quote,realized_pnl_quote,realized_return_pct,coalesce(close_reason,'')
             from public.trading_positions where id='${POS}'::uuid")
+          # shellcheck disable=SC2034  # placeholders: these name the SQL select list, not every column is read
           IFS='|' read -r state initial remaining entry cost proceeds fees pnl ret close_reason <<< "${row}"
           test "${state}" = CLOSED
           awk -v x="${initial}" 'BEGIN{exit !(x>47.679999 && x<47.680001)}'
@@ -101,7 +100,7 @@ jobs:
               updated_at=now()
             where id='${POS}'::uuid and state='CLOSED' and abs(remaining_quantity)<=0.00000001
               and abs(initial_quantity-47.68)<=0.00000001
-              and abs(realized_pnl_quote-(-0.107538374944784358))<=0.00000001")
+              and abs(realized_pnl_quote-(-0.107538374944784358))<=0.00000001)"
 
           audit=$(psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
             select coalesce(metadata->'accounting_repair'->>'revision',''),
@@ -124,7 +123,7 @@ jobs:
           healthy=false
           latest_monitor=''
           latest_scan=''
-          for attempt in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             pause_now=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
             latest_monitor=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR' and started_at>='${resume_at}'::timestamptz")
             latest_scan=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='SCAN' and started_at>='${resume_at}'::timestamptz")

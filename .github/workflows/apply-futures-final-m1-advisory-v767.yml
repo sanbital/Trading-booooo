@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - ".github/workflows/apply-futures-final-m1-advisory-v767.yml"
+      # Its own file is deliberately not listed: that re-armed a production mutation
+      # every time anyone edited this workflow.
       - "scripts/apply_futures_final_m1_advisory_v767.py"
   workflow_dispatch:
 
@@ -114,7 +115,7 @@ jobs:
         run: |
           set -euo pipefail
           healthy=false
-          for attempt in $(seq 1 18); do
+          for _ in $(seq 1 18); do
             failed=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
               select count(*) from public.trading_cycle_runs
               where started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz

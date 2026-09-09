@@ -91,7 +91,9 @@ jobs:
           test -z "${unexpected}"
           grep -q 'EXIT_DEFERRED_UNSETTLED_ORDER' supabase/functions/market-autotrader/index.ts
           grep -q 'EXIT_CLAIM_SKIPPED' supabase/functions/market-autotrader/index.ts
+          # shellcheck disable=SC2016  # searching the source for a literal ${...}, not expanding it
           grep -Fq '`id=eq.${position.id}&state=eq.OPEN`' supabase/functions/market-autotrader/index.ts
+          # shellcheck disable=SC2016  # searching the source for a literal ${...}, not expanding it
           grep -Fq '`id=eq.${position.id}&state=eq.EXITING`' supabase/functions/market-autotrader/index.ts
           grep -q 'p_fill_quantity: quantity' supabase/functions/market-autotrader/index.ts
           grep -q 'p_fill_funds: finite(fill.executedFunds, price \* quantity)' supabase/functions/market-autotrader/index.ts
@@ -153,7 +155,7 @@ jobs:
           healthy=false
           latest=""
           failed="0"
-          for attempt in $(seq 1 24); do
+          for _ in $(seq 1 24); do
             failed=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
               select count(*) from public.trading_cycle_runs
               where started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz and status='FAILED';")
@@ -195,11 +197,13 @@ jobs:
             select count(*) from public.trading_events
             where created_at >= '${ROLLOUT_STARTED_AT}'::timestamptz
               and code in ('EXIT_DEFERRED_UNSETTLED_ORDER','EXIT_CLAIM_SKIPPED');")
-          echo "POST_DUPLICATE_PENDING_SELL_POSITIONS=${post}" >> "${GITHUB_ENV}"
-          echo "NATURAL_EXIT_EVENTS=${natural_exits}" >> "${GITHUB_ENV}"
-          echo "IDEMPOTENCY_GUARD_EVENTS=${deferred}" >> "${GITHUB_ENV}"
-          echo "LATEST_MONITOR=${latest}" >> "${GITHUB_ENV}"
-          echo "FAILED_CYCLES=${failed}" >> "${GITHUB_ENV}"
+          {
+            echo "POST_DUPLICATE_PENDING_SELL_POSITIONS=${post}"
+            echo "NATURAL_EXIT_EVENTS=${natural_exits}"
+            echo "IDEMPOTENCY_GUARD_EVENTS=${deferred}"
+            echo "LATEST_MONITOR=${latest}"
+            echo "FAILED_CYCLES=${failed}"
+          } >> "${GITHUB_ENV}"
 
       - name: Restore prior entry state after successful rollout
         env:

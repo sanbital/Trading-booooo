@@ -12,7 +12,7 @@ on:
     branches: [main]
     paths:
       - "gateway/**"
-      - ".github/workflows/deploy-order-gateway.yml"
+      # Its own file is deliberately not listed: editing this workflow should not deploy.
 
 permissions:
   contents: read
@@ -88,9 +88,11 @@ jobs:
           if [ -n "${UPBIT_ACCESS_KEY:-}" ] && [ -n "${UPBIT_SECRET_KEY:-}" ]; then has_upbit=true; fi
           scheduler=false
           if [ "$setup" != "true" ] && [ "$has_upbit" = true ]; then scheduler=true; fi
-          echo "setup_only=$setup" >> "$GITHUB_OUTPUT"
-          echo "scheduler=$scheduler" >> "$GITHUB_OUTPUT"
-          echo "has_upbit=$has_upbit" >> "$GITHUB_OUTPUT"
+          {
+            echo "setup_only=$setup"
+            echo "scheduler=$scheduler"
+            echo "has_upbit=$has_upbit"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Configure Upbit-only gateway secrets
         shell: bash

@@ -1,10 +1,9 @@
 name: Hotfix P10 Futures 200 Per Slot
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/hotfix-p10-futures-200-per-slot.yml'
+  # This one-shot armed itself on a push to its own file, so any later edit -- a lint
+  # fix included -- re-ran a production mutation. Dispatch it deliberately instead.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -24,38 +23,38 @@ jobs:
           p = Path('supabase/functions/market-autotrader/index.ts')
           s = p.read_text()
           old = '''  if (exchange === "binance_futures") {
-    const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 50);
-    if (operatorMargin > 0) maximum = operatorMargin;
-    minimum = FUTURES_MIN_ENTRY_MARGIN_USDT;
-  }
-  const step = exchange === "upbit" ? 1000 : 0.01;
-  return p10ExecutableTicketCapital({
-    available,
-    capital,
-    slots,
-    maximum,
-    minimum,
-    step,
-  });'''
+              const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 50);
+              if (operatorMargin > 0) maximum = operatorMargin;
+              minimum = FUTURES_MIN_ENTRY_MARGIN_USDT;
+            }
+            const step = exchange === "upbit" ? 1000 : 0.01;
+            return p10ExecutableTicketCapital({
+              available,
+              capital,
+              slots,
+              maximum,
+              minimum,
+              step,
+            });'''
           new = '''  if (exchange === "binance_futures") {
-    // Operator contract: one futures slot posts exactly the configured margin.
-    // Do not divide this per-slot amount by scalp_position_slots, and never shrink
-    // a live futures order below it when free margin is insufficient.
-    const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 200);
-    if (operatorMargin <= 0) return 0;
-    if (available + 1e-9 < operatorMargin) return 0;
-    const step = 0.01;
-    return Number((Math.floor((operatorMargin + step * 1e-9) / step) * step).toFixed(12));
-  }
-  const step = exchange === "upbit" ? 1000 : 0.01;
-  return p10ExecutableTicketCapital({
-    available,
-    capital,
-    slots,
-    maximum,
-    minimum,
-    step,
-  });'''
+              // Operator contract: one futures slot posts exactly the configured margin.
+              // Do not divide this per-slot amount by scalp_position_slots, and never shrink
+              // a live futures order below it when free margin is insufficient.
+              const operatorMargin = finite((settings as any).binance_futures_allocation_usdt, 200);
+              if (operatorMargin <= 0) return 0;
+              if (available + 1e-9 < operatorMargin) return 0;
+              const step = 0.01;
+              return Number((Math.floor((operatorMargin + step * 1e-9) / step) * step).toFixed(12));
+            }
+            const step = exchange === "upbit" ? 1000 : 0.01;
+            return p10ExecutableTicketCapital({
+              available,
+              capital,
+              slots,
+              maximum,
+              minimum,
+              step,
+            });'''
           if old not in s:
               raise SystemExit('expected P10 futures sizing block not found; refusing unsafe patch')
           p.write_text(s.replace(old, new, 1))

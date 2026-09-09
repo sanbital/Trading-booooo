@@ -1,9 +1,9 @@
 name: Synchronize v6.12.4 release version
 
 on:
-  push:
-    paths:
-      - ".github/workflows/sync-version-6124.yml"
+  # This one-shot armed itself on a push to its own file -- on any branch -- so any later
+  # edit re-ran a version rewrite that commits to main. Dispatch it deliberately instead.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -73,8 +73,9 @@ jobs:
       - name: Verify no stale public version remains
         shell: bash
         run: |
-          ! grep -n "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION" \
+          if grep -n "6.11.0-CONTINUOUS-ADAPTIVE-EXECUTION" \
             supabase/functions/market-autotrader/index.ts docs/index.html docs/config.js
+          then echo "::error::the 6.11.0 version string is still present"; exit 1; fi
           grep -n "6.12.4-MISSION-CALIBRATED-LOB" \
             supabase/functions/market-autotrader/index.ts docs/index.html docs/config.js
 

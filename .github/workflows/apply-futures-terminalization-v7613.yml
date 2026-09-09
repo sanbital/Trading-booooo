@@ -1,10 +1,8 @@
 name: Apply futures order terminalization v7.6.13
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/apply-futures-terminalization-v7613.yml"
+  # This one-shot armed itself on a push to its own file, so any later edit -- a lint
+  # fix included -- re-ran a production mutation. Dispatch it deliberately instead.
   workflow_dispatch:
 
 permissions:
@@ -104,13 +102,14 @@ jobs:
             restore_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
             psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c "update public.trading_settings set pause_new_entries=${restore_pause},updated_at=now() where id=1" >>"${LOG}" 2>&1
             rc=$?
+            # shellcheck disable=SC2034  # restored is an audit breadcrumb, not read back
             if [ ${rc} -ne 0 ]; then fail 'could not restore prior entry state'; stop=1; else restored=true; fi
           fi
 
           if [ "${stop:-0}" != 1 ]; then
             stage=health
             healthy=false
-            for attempt in $(seq 1 30); do
+            for _ in $(seq 1 30); do
               pause_now=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1" 2>>"${LOG}")
               latest_monitor=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR' and started_at>='${restore_at}'::timestamptz" 2>>"${LOG}")
               latest_scan=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='SCAN' and started_at>='${restore_at}'::timestamptz" 2>>"${LOG}")

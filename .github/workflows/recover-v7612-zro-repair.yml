@@ -1,10 +1,8 @@
 name: Recover v7.6.12 ZRO repair rollout
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/recover-v7612-zro-repair.yml"
+  # This one-shot armed itself on a push to its own file, so any later edit -- a lint
+  # fix included -- re-ran a production mutation. Dispatch it deliberately instead.
   workflow_dispatch:
 
 permissions:
@@ -170,7 +168,7 @@ jobs:
           resumed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           healthy=false
           latest=''
-          for attempt in $(seq 1 20); do
+          for _ in $(seq 1 20); do
             pause=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
             latest=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR' and started_at>='${resumed_at}'::timestamptz")
             failed_now=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_cycle_runs where started_at>='${resumed_at}'::timestamptz and status='FAILED'")

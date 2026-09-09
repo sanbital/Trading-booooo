@@ -209,7 +209,7 @@ jobs:
             supabase/functions/_shared/p10-market-risk.ts \
             supabase/functions/_shared/v10_regime_transition.test.ts \
             supabase/functions/market-regime-observer/index.ts
-          git diff --cached --exit-code && { echo "No patch produced"; exit 1; } || true
+          if git diff --cached --exit-code; then echo "No patch produced"; exit 1; fi
           git commit -m "Deploy regime hysteresis observer revision"
           git push origin HEAD:main
 

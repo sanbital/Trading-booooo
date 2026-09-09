@@ -129,7 +129,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          mapfile -t files < <(ls backtest/data/*.json | sort)
+          mapfile -t files < <(find backtest/data -maxdepth 1 -name '*.json' | sort)
           a=(); b=()
           for i in "${!files[@]}"; do
             if [ $((i % 2)) -eq 0 ]; then a+=("${files[$i]}"); else b+=("${files[$i]}"); fi

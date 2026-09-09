@@ -93,7 +93,7 @@ jobs:
             supabase/functions/_shared/v10_regime_transition.ts \
             supabase/functions/_shared/v10_regime_transition.test.ts \
             supabase/functions/v10-lane-executor/index.ts
-          git diff --cached --exit-code && { echo "No patch produced"; exit 1; } || true
+          if git diff --cached --exit-code; then echo "No patch produced"; exit 1; fi
           git commit -m "Deploy V10 regime transition exit"
           git push origin HEAD:main
 

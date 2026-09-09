@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - ".github/workflows/apply-exit-invariants-v769.yml"
+      # Its own file is deliberately not listed: that re-armed a production mutation
+      # every time anyone edited this workflow.
       - "scripts/apply_exit_invariants_v769.py"
   workflow_dispatch:
 
@@ -111,7 +112,7 @@ jobs:
             "select lob_absolute_max_holding_seconds from public.trading_settings where id=1")
           test "${abs_limit}" = "600"
           healthy=false
-          for attempt in $(seq 1 18); do
+          for _ in $(seq 1 18); do
             failed=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
               select count(*) from public.trading_cycle_runs
               where started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz and status='FAILED';")

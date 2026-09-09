@@ -140,7 +140,7 @@ jobs:
             "select lob_absolute_max_holding_seconds from public.trading_settings where id=1")
           test "${abs_limit}" = "600"
           healthy=false
-          for attempt in $(seq 1 24); do
+          for _ in $(seq 1 24); do
             failed=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
               select count(*) from public.trading_cycle_runs
               where started_at >= '${ROLLOUT_STARTED_AT}'::timestamptz and status='FAILED';")

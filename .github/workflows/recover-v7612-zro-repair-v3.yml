@@ -1,10 +1,8 @@
 name: Recover v7.6.12 ZRO repair v3
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/recover-v7612-zro-repair-v3.yml"
+  # This one-shot armed itself on a push to its own file, so any later edit -- a lint
+  # fix included -- re-ran a production mutation. Dispatch it deliberately instead.
   workflow_dispatch:
 
 permissions:
@@ -72,6 +70,7 @@ jobs:
             zro=$(psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select state,initial_quantity,remaining_quantity,planned_entry_price,average_entry_price,stop_price,target_1,realized_cost_quote,realized_proceeds_quote,paid_fees_quote,realized_pnl_quote,realized_return_pct,coalesce(close_reason,''),coalesce(metadata->'accounting_repair'->>'revision','') from public.trading_positions where id='111c5f48-27bf-4c26-9819-4f4ed7714577'::uuid" 2>>"${LOG}")
             rc=$?
             if [ ${rc} -ne 0 ]; then fail 'repaired position query failed'; goto_end=1; else
+              # shellcheck disable=SC2034  # placeholders: these name the SQL select list, not every column is read
               IFS='|' read -r state initial remaining planned avg stop target cost proceeds fees pnl ret reason revision <<< "${zro}"
               echo "zro=${zro}" >>"${LOG}"
               if [ "${state}" != CLOSED ] || [ "${revision}" != 7.6.12-ZRO-STALE-MANUAL-DETACH ]; then fail 'position was not closed with repair revision'; goto_end=1; fi
@@ -108,7 +107,7 @@ jobs:
             stage=post_resume_monitor
             resume_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
             healthy=false
-            for attempt in $(seq 1 24); do
+            for _ in $(seq 1 24); do
               pause_now=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1" 2>>"${LOG}")
               latest_monitor=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR' and started_at>='${resume_at}'::timestamptz" 2>>"${LOG}")
               failed_now=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.trading_cycle_runs where started_at>='${resume_at}'::timestamptz and status='FAILED'" 2>>"${LOG}")

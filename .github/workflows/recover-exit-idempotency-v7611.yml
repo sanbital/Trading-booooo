@@ -1,10 +1,8 @@
 name: Recover exit idempotency v7.6.11 rollout
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/recover-exit-idempotency-v7611.yml"
+  # This one-shot armed itself on a push to its own file, so any later edit -- a lint
+  # fix included -- re-ran a production mutation. Dispatch it deliberately instead.
   workflow_dispatch:
 
 permissions:
@@ -108,7 +106,7 @@ jobs:
           latest_monitor=""
           latest_scan=""
           failed="0"
-          for attempt in $(seq 1 18); do
+          for _ in $(seq 1 18); do
             failed=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
               select count(*) from public.trading_cycle_runs
               where started_at >= '${RESUMED_AT}'::timestamptz and status='FAILED';")

@@ -1,10 +1,8 @@
 name: Resume after verified ZRO v7.6.12
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/resume-after-zro-v7612.yml"
+  # This one-shot armed itself on a push to its own file, so any later edit -- a lint
+  # fix included -- re-ran a production mutation. Dispatch it deliberately instead.
   workflow_dispatch:
 
 permissions:
@@ -73,7 +71,7 @@ jobs:
           latest_scan=''
           failed_after='0'
           dupes_after='0'
-          for attempt in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             pause_now=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")
             latest_monitor=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR' and started_at>='${resume_at}'::timestamptz")
             latest_scan=$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='SCAN' and started_at>='${resume_at}'::timestamptz")

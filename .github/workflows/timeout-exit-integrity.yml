@@ -7,7 +7,8 @@ on:
       - "supabase/migrations/20260818083500_futures_recovery_3m_state_machine.sql"
       - "supabase/migrations/20260820090000_restore_futures_absolute_timeout_guard.sql"
       - "supabase/migrations/20260820091000_restore_late_recovery_after_state_machine.sql"
-      - ".github/workflows/timeout-exit-integrity.yml"
+      # Its own file is deliberately not listed: editing this workflow should not re-apply
+      # migrations to production. The migration paths and the workflow_run hook still do.
   workflow_run:
     workflows: ["Deploy Supabase Trading Engine"]
     types: [completed]
@@ -79,10 +80,7 @@ jobs:
           do $$
           declare
             v_def text;
-            v_bad_timeout text := $bad$
-        and not v_futures
-        and v_approved_reason in ('HALF_HOLD_ABSOLUTE_TIMEOUT', 'POST180_MAX_HOLD_TIMEOUT')
-$bad$;
+            v_bad_timeout text := E'\n        and not v_futures\n        and v_approved_reason in (''HALF_HOLD_ABSOLUTE_TIMEOUT'', ''POST180_MAX_HOLD_TIMEOUT'')\n';
           begin
             select pg_get_functiondef(p.oid) into v_def
             from pg_proc p
