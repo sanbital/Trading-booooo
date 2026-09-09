@@ -478,10 +478,21 @@ function validateUpbitMarket(market) {
   }
   return value;
 }
+// Binance lists USDT perpetuals whose symbol is not ASCII -- 牛来USDT, 哈基米USDT and
+// friends. They are ordinary symbols to the exchange, and binanceQueryString percent-
+// encodes them into the same payload that is signed, so the transport handles them
+// correctly. An [A-Z0-9] allow-list rejected them here and nowhere else, which silently
+// made the strongest movers of a session untradeable: the V17 scanner ranks them (see
+// activeSymbols in leader-momentum-v17.mjs, which excludes only whitespace and URL
+// delimiters) and then every order was refused at the gateway.
+//
+// The class is still an allow-list, now of Unicode letters and digits. Everything that
+// could reach the query string or the path -- whitespace, / ? # & = %, quotes, control
+// characters, combining marks, emoji -- remains excluded.
 function validateBinanceSymbol(symbol) {
   const value = String(symbol || "").toUpperCase();
-  if (!/^[A-Z0-9]{2,24}USDT$/.test(value)) {
-    throw new Error("only Binance USDT spot symbols are allowed");
+  if (!/^[\p{L}\p{N}]{2,24}USDT$/u.test(value)) {
+    throw new Error("only Binance USDT symbols are allowed");
   }
   return value;
 }

@@ -1,7 +1,7 @@
 /** Signed transport is injected by the host. No requests are made on import. */
 export function createV17StopCommands({request,assertVersion,positionSideDual}) {
  const identity=(c)=>{
-  if(!/^tb-v17s-[a-f0-9]{27}$/.test(String(c.clientAlgoId))||!/^([A-Z0-9]+)USDT$/.test(String(c.symbol)))
+  if(!/^tb-v17s-[a-f0-9]{27}$/.test(String(c.clientAlgoId))||!/^([\p{L}\p{N}]+)USDT$/u.test(String(c.symbol)))
    throw Error('INVALID_V17_STOP_IDENTITY');
  };
  async function query(c){

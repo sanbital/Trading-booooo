@@ -56,7 +56,7 @@ jobs:
           # EXIT_REVIEW_CANDIDATE into the effective policy. Both thresholds are applied
           # per tick with no confirmation window, so they work on the one-minute cron.
           grep -Fq 'nextExitReviewed' supabase/functions/v10-lane-executor/index.ts
-          grep -Fq 'V17-EXIT-R5-LOSS-TAIL-1' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'V17-ENTRY-BLOCKERS-1' supabase/functions/v10-lane-executor/index.ts
           grep -Eq 'const policy=\{\.\.\.POLICY,.*EXIT_REVIEW_CANDIDATE' supabase/functions/v10-lane-executor/index.ts \
             || { echo "::error::EXIT_REVIEW_CANDIDATE no longer reaches the effective policy; profit protection would be off."; exit 1; }
 

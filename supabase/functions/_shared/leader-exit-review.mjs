@@ -140,7 +140,7 @@ export async function exitAttemptId(positionId,attemptId,prefix='v11x') {
 export function protectiveStopSpec({symbol,positionId,ownedQuantity,exchangeQuantity,
   manualSymbols=[],positionMode,stopPrice,priceTick,quantityStep,clientAlgoId}) {
   if(positionMode!=='ONE_WAY') throw Error('POSITION_MODE_NOT_SUPPORTED');
-  if(!/^[A-Z0-9]+USDT$/.test(symbol)||!positionId||!/^tb-[.A-Za-z0-9_:/-]{1,33}$/.test(clientAlgoId))
+  if(!/^[\p{L}\p{N}]+USDT$/u.test(symbol)||!positionId||!/^tb-[.A-Za-z0-9_:/-]{1,33}$/.test(clientAlgoId))
     throw Error('INVALID_PROTECTION_IDENTITY');
   if(manualSymbols.map(String).map(x=>x.toUpperCase()).includes(symbol)) throw Error('MANUAL_SYMBOL_CONFLICT');
   if(![ownedQuantity,exchangeQuantity,stopPrice,priceTick,quantityStep].every(Number.isFinite)||
