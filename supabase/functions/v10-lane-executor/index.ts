@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 import {POLICY, STRATEGY, entryFresh, nextExit, portfolioMatches as leaderPortfolioMatches} from "../_shared/leader-momentum-v17.mjs";
 import {nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5, exitAttemptId, classifyExitResponse} from "../_shared/leader-exit-review.mjs";
 import {createGatewayProtection} from "../_shared/leader-protection-adapter.mjs";
-const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V17-ENTRY-BLOCKERS-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
+const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V17-QUOTE-RETRY-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 const MARGIN=40,LEV=3,NOTIONAL=MARGIN*LEV,MAX_SLOTS=10,NOTIONAL_BUFFER_USDT=.12,MAX_MARGIN_BUFFER_USDT=.25,ENTRY_CASH_BUFFER_USDT=.10,SNAP_MAX=90000,SIGNAL_MAX=300000,SPREAD_MAX=25,MAX_GAP_ATR=.5,IOC_BASE_BPS=3,IOC_MAX_BPS=12,BULL_MAX_MS=30*86400000,T1_PRICE=.075,PARTIAL=.30,TRAIL=.0225;
 function res(s,b){return new Response(JSON.stringify(b),{status:s,headers:{"content-type":"application/json","cache-control":"no-store"}})}function N(v,d=0){const x=Number(v);return Number.isFinite(x)?x:d}function rec(v){return v&&typeof v==="object"&&!Array.isArray(v)?v:{}}function eq(a,b){if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0}function dec(s){return Math.min(12,Math.max(0,Math.ceil(-Math.log10(s))+2))}function floorStep(v,s){if(!(v>0&&s>0))return 0;return Number((Math.floor((v+s*1e-9)/s)*s).toFixed(dec(s)))}function ceilStep(v,s){if(!(v>0&&s>0))return 0;return Number((Math.ceil((v-s*1e-9)/s)*s).toFixed(dec(s)))}function addStep(v,s){return Number((v+s).toFixed(dec(s)))}function cid(p,x){return`tb-${p}-${String(x).toLowerCase().replace(/[^a-z0-9]/g,"").slice(0,24)}`.slice(0,36)}function terminal(z){return z.qty<=0&&["CANCELED","CANCELLED","REJECTED","EXPIRED","PARTIALLY_FILLED_CANCELED"].includes(z.status)}
 const env=n=>(Deno.env.get(n)||"").trim(),GW=env("BINANCE_FUTURES_ORDER_GATEWAY_URL").replace(/\/$/,"")||env("BINANCE_ORDER_GATEWAY_URL").replace(/\/$/,"")||env("ORDER_GATEWAY_URL").replace(/\/$/,""),SEC=env("BINANCE_FUTURES_GATEWAY_SHARED_SECRET")||env("BINANCE_GATEWAY_SHARED_SECRET")||env("GATEWAY_SHARED_SECRET");
@@ -100,7 +100,7 @@ async function reconcileNativeFills(db,open){
   return again.data||[];
 }
 async function run(db){const rt=await db.from("v11_long_regime_runtime").select("*").eq("singleton",true).single();if(rt.error||!rt.data)throw new Error("RUNTIME");if(rt.data.revision!==REVISION)throw new Error(`REVISION_MISMATCH:${rt.data.revision}`);if(rt.data.live_enabled!==true||rt.data.circuit_open===true)return{ok:true,revision:REVISION,patch:PATCH,skipped:"RUNTIME_NOT_LIVE",runtime:rt.data};const op=await db.from("v11_long_regime_positions").select("*").eq("state","OPEN").order("entry_at",{ascending:true}).limit(MAX_SLOTS+1);if(op.error)throw new Error(`POSITIONS:${op.error.message}`);if((op.data||[]).length>MAX_SLOTS){await circuit(db,`V11_SLOT_OVERFLOW:${op.data.length}`);throw new Error("V11_SLOT_OVERFLOW")}let allOpen=op.data||[],m=allOpen.some(p=>p.active_lane==="BULL"&&rec(p.metadata).executionMode!==STRATEGY)?await market(db).catch(e=>({route:"CASH",observer:null,error:String(e)})):{route:"MOMENTUM",observer:null},[pf,manual]=await Promise.all([gateway({action:"p10_portfolio"}),manualPositionAllowances(db)]),pm=portfolioMatches(allOpen,pf,manual);if(!pm.ok){const reconciled=await reconcileNativeFills(db,allOpen);if(reconciled){allOpen=reconciled;pm=portfolioMatches(allOpen,pf,manual)}}if(!pm.ok){await circuit(db,`BULL_EXCHANGE_MISMATCH:${pm.reason}:${pm.ext.map(sym).join(",")}`);throw new Error("EXCHANGE_MISMATCH")}await pushShadowPositions(db,allOpen).catch(e=>console.error("V17_SHADOW_PUSH_FAILED",String(e)));
-  const ctx={manualSymbols:manual.map(x=>x.symbol),exchangeQuantity:new Map((pm.ext||[]).map(x=>[String(x.symbol||"").toUpperCase(),N(x.absoluteQuantity)]))};
+  const ctx={manualSymbols:manual.map(x=>x.symbol),exchangeQuantity:new Map((pm.ext||[]).map(x=>[String(x.symbol||"").toUpperCase(),N(x.absoluteQuantity)])),quoteRetryBudget:{remaining:3}};
   const actions=[];for(const p of allOpen.filter(x=>x.active_lane==="BULL")){try{const action=await manageBull(db,p,m,ctx);actions.push({id:p.id,symbol:p.symbol,action})}catch(e){actions.push({id:p.id,symbol:p.symbol,error:String(e instanceof Error?e.message:e)});await circuit(db,`V17_POSITION_MANAGEMENT_FAILED:${p.symbol}`)}}const refreshed=await db.from("v11_long_regime_positions").select("*").eq("state","OPEN").order("entry_at",{ascending:true}).limit(MAX_SLOTS+1);if(refreshed.error)throw new Error(`POSITIONS_REFRESH:${refreshed.error.message}`);const openNow=refreshed.data||[];if(openNow.length>MAX_SLOTS){await circuit(db,`V11_SLOT_OVERFLOW:${openNow.length}`);throw new Error("V11_SLOT_OVERFLOW")}let entry={entered:false,reason:actions.some(x=>x.error)?"V17_EXIT_RECOVERY_REQUIRED":"V17_NO_ENTRY"};if(!actions.some(x=>x.error)&&openNow.length<MAX_SLOTS){const since=new Date(Date.now()-SIGNAL_MAX).toISOString(),sg=await db.from("v11_long_regime_signals").select("*").eq("revision",REVISION).eq("status","NEW").eq("lane","BULL").eq("features->>strategy",STRATEGY).gte("entry_bar_at",since).order("entry_bar_at",{ascending:false}).limit(10);if(sg.error)throw new Error(`SIGNALS:${sg.error.message}`);const openSymbols=new Set(openNow.map(x=>String(x.symbol).toUpperCase())),s=(sg.data||[]).find(x=>!openSymbols.has(String(x.symbol).toUpperCase()));if(!s)entry={entered:false,reason:"NO_FRESH_BULL_SIGNAL"};else{const cl=await db.from("v11_long_regime_signals").update({status:"CLAIMED",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","NEW").select("*").maybeSingle();if(cl.error)throw new Error(`CLAIM:${cl.error.message}`);if(!cl.data)entry={entered:false,reason:"CLAIM_RACE"};else{try{entry=await openBull(db,cl.data,openNow,manual);if(entry?.releaseClaim===true)await db.from("v11_long_regime_signals").update({status:"NEW",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","CLAIMED");}catch(e){const msg=e instanceof Error?e.message:String(e),pending=await db.from("v11_long_regime_orders").select("id").eq("signal_id",s.id).eq("state","RECONCILIATION_FAILED").limit(1);if(!pending.data?.length)await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",s.id);throw e}}}}else if(openNow.length>=MAX_SLOTS)entry={entered:false,reason:"V11_SLOT_FULL"};const now=new Date().toISOString();await db.from("v11_long_regime_runtime").update({last_success_at:actions.some(x=>x.error)?rt.data.last_success_at:now,last_error:actions.some(x=>x.error)?actions.filter(x=>x.error).map(x=>`${x.symbol}:${x.error}`).join(";").slice(0,1000):null,last_entry_at:entry.entered?now:rt.data.last_entry_at,last_exit_at:actions.some(x=>x.action?.action==="CLOSE")?now:rt.data.last_exit_at,updated_at:now}).eq("singleton",true);return{ok:true,revision:REVISION,patch:PATCH,maxSlots:MAX_SLOTS,marketState:m,managed:actions,openPositions:openNow.map(x=>({id:x.id,symbol:x.symbol,activeLane:x.active_lane})),entry}}
 
 async function requireLeaderEntryControls(db){
@@ -115,14 +115,42 @@ async function requireLeaderEntryControls(db){
   if(!x||x.mode!=="LIVE_LIMITED"||x.pause_new_entries||x.withdrawal_mode||x.manual_intervention_required||x.scalp_kill_switch)throw new Error("V17_ENTRY_KILL_SWITCH");
   if(!Number.isFinite(Number(x.binance_futures_allocation_usdt))||Math.abs(Number(x.binance_futures_allocation_usdt)-MARGIN)>1e-9)throw new Error("V17_MARGIN_CONFIG_MISMATCH");
 }
+// One transport hiccup on the top-of-book read used to halt the whole strategy: any throw
+// out of manageBull opens the circuit breaker, and on 2026-09-09 a single 3s timeout
+// ("The signal has been aborted") stopped V17 for 21 minutes. Halting does not even protect
+// the position it failed on -- an open circuit makes run() return early, so exits stop being
+// managed too, and only the exchange-resident stop is still working. So retry once.
+//
+// This retry is safe ONLY because it is scoped to the quote read, which is the first thing
+// manageLeader does: no decision has been taken, no row written and no order sent, so a
+// second attempt cannot duplicate anything. It must never be widened to cover the exit
+// dispatch below, where a retry could close a position twice.
+//
+// The budget is per run, not per position, so a systemic gateway outage costs one extra
+// round trip in total rather than one per open position.
+async function leaderQuote(p,ctx){
+  const read=async(timeoutMs)=>{
+    const quotes=await gateway({action:"p10_quotes",markets:[p.symbol]},timeoutMs);
+    const q=Array.isArray(quotes)?quotes.find(x=>x.market===p.symbol):null;
+    const bid=Number(q?.best_bid),ask=Number(q?.best_ask);
+    const detectedAtMs=Date.now(),timing=q?.timing||{};
+    if(q?.error||!(bid>0&&ask>=bid)||!Number.isFinite(timing.received_at_ms)||
+        detectedAtMs-timing.received_at_ms>3000||timing.received_at_ms-detectedAtMs>1000)
+      throw new Error("V17_EXIT_QUOTE_INVALID_OR_STALE");
+    return {bid,ask,detectedAtMs,timing};
+  };
+  try{return await read(3000)}
+  catch(first){
+    const budget=ctx?.quoteRetryBudget;
+    if(!budget||!(budget.remaining>0))throw first;
+    budget.remaining-=1;
+    console.error("V17_EXIT_QUOTE_RETRY",p.symbol,String(first instanceof Error?first.message:first));
+    return await read(2500);
+  }
+}
 async function manageLeader(db,p,ctx){
-  const quotes=await gateway({action:"p10_quotes",markets:[p.symbol]},3000);
-  const q=Array.isArray(quotes)?quotes.find(x=>x.market===p.symbol):null;
-  const bid=Number(q?.best_bid),ask=Number(q?.best_ask),meta=rec(p.metadata);
-  const detectedAtMs=Date.now(),timing=q?.timing||{};
-  if(q?.error||!(bid>0&&ask>=bid)||!Number.isFinite(timing.received_at_ms)||
-      detectedAtMs-timing.received_at_ms>3000||timing.received_at_ms-detectedAtMs>1000)
-    throw new Error("V17_EXIT_QUOTE_INVALID_OR_STALE");
+  const {bid,ask,detectedAtMs,timing}=await leaderQuote(p,ctx);
+  const meta=rec(p.metadata);
   // Preserve the existing policy. Today's nine trades do not validate a new default.
   // Cost-breakeven and profit-lock protection from the V17 exit review. These raise the
   // stop only; they can never lower it. Both are evaluated per tick with no confirmation

@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import {POLICY} from '../../supabase/functions/_shared/leader-momentum-v17.mjs';
 import {nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5} from '../../supabase/functions/_shared/leader-exit-review.mjs';
 const source=readFileSync(new URL('../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
-const code=source.slice(source.indexOf('async function manageLeader('),source.indexOf('const leaseOwners='));
+const code=source.slice(source.indexOf('async function leaderQuote('),source.indexOf('const leaseOwners='));
 const make=(stale=false)=>{
  const events=[],now=Date.now();
  const ctx={Date,Number,Array,Error,POLICY,nextExitReviewed,EXIT_REVIEW_CANDIDATE,EXIT_REVIEW_R5,console,rec:x=>x??{},STRATEGY:'LEADER_MOMENTUM_V17',

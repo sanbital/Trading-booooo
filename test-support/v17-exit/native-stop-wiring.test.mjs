@@ -16,7 +16,7 @@ import { nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5 }
 
 const source = readFileSync(
   new URL('../../supabase/functions/v10-lane-executor/index.ts', import.meta.url), 'utf8');
-const code = source.slice(source.indexOf('async function manageLeader('),
+const code = source.slice(source.indexOf('async function leaderQuote('),
                           source.indexOf('const leaseOwners='));
 
 function harness({ enabled = false, bid = 99, ensure, symbolInfoFails = false } = {}) {

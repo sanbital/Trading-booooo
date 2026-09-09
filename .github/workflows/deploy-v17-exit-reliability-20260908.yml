@@ -56,7 +56,7 @@ jobs:
           # EXIT_REVIEW_CANDIDATE into the effective policy. Both thresholds are applied
           # per tick with no confirmation window, so they work on the one-minute cron.
           grep -Fq 'nextExitReviewed' supabase/functions/v10-lane-executor/index.ts
-          grep -Fq 'V17-ENTRY-BLOCKERS-1' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'V17-QUOTE-RETRY-1' supabase/functions/v10-lane-executor/index.ts
           grep -Eq 'const policy=\{\.\.\.POLICY,.*EXIT_REVIEW_CANDIDATE' supabase/functions/v10-lane-executor/index.ts \
             || { echo "::error::EXIT_REVIEW_CANDIDATE no longer reaches the effective policy; profit protection would be off."; exit 1; }
 
@@ -69,6 +69,19 @@ jobs:
             || { echo "::error::new positions are not stamped with the R5 policy version; the cutover would never start."; exit 1; }
           grep -Eq 'const r5=meta\.leaderExitPolicyVersion===EXIT_REVIEW_R5\.policyVersion;' supabase/functions/v10-lane-executor/index.ts \
             || { echo "::error::the per-position R5 gate is missing; open positions could have their stop moved by a deploy."; exit 1; }
+          # The quote retry must stay scoped to the top-of-book read. Widening it over the
+          # exit dispatch would let a retry close a position twice.
+          grep -Fq 'async function leaderQuote(' supabase/functions/v10-lane-executor/index.ts \
+            || { echo "::error::the retrying quote read is gone; one gateway timeout would halt the strategy again."; exit 1; }
+          python3 - <<'PY'
+import sys
+src = open('supabase/functions/v10-lane-executor/index.ts').read()
+quote = src[src.index('async function leaderQuote('):src.index('async function manageLeader(')]
+for bad in ('closePos', 'create_order', 'syncNativeStop'):
+    if bad in quote:
+        print(f"::error::leaderQuote contains {bad}; a retry there could act twice"); sys.exit(1)
+PY
+
           for key in riskCutArmPct riskCutLevelPct failCutAfterMs policyVersion; do
             grep -Fq "$key" supabase/functions/_shared/leader-exit-review.mjs \
               || { echo "::error::EXIT_REVIEW_R5 lost $key; the risk cut cannot arm."; exit 1; }
