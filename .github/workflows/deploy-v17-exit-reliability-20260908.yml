@@ -73,14 +73,14 @@ jobs:
           # exit dispatch would let a retry close a position twice.
           grep -Fq 'async function leaderQuote(' supabase/functions/v10-lane-executor/index.ts \
             || { echo "::error::the retrying quote read is gone; one gateway timeout would halt the strategy again."; exit 1; }
-          python3 - <<'PY'
-import sys
-src = open('supabase/functions/v10-lane-executor/index.ts').read()
-quote = src[src.index('async function leaderQuote('):src.index('async function manageLeader(')]
-for bad in ('closePos', 'create_order', 'syncNativeStop'):
-    if bad in quote:
-        print(f"::error::leaderQuote contains {bad}; a retry there could act twice"); sys.exit(1)
-PY
+          awk '/async function leaderQuote\(/,/async function manageLeader\(/' \
+            supabase/functions/v10-lane-executor/index.ts > /tmp/leader-quote.txt
+          for bad in closePos create_order syncNativeStop; do
+            if grep -Fq "$bad" /tmp/leader-quote.txt; then
+              echo "::error::leaderQuote contains $bad; a retry there could act twice"
+              exit 1
+            fi
+          done
 
           for key in riskCutArmPct riskCutLevelPct failCutAfterMs policyVersion; do
             grep -Fq "$key" supabase/functions/_shared/leader-exit-review.mjs \
