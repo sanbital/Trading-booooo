@@ -27,11 +27,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Check out main
+      # The push trigger only fires on main, so for that path this is still main. A
+      # workflow_dispatch deploys the ref it was dispatched on, which is what makes it
+      # possible to ship a reviewed branch without first moving main. Whatever ref that
+      # is gets echoed below, so production never runs code whose origin is unrecorded.
+      - name: Check out the ref being deployed
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: main
+          ref: ${{ github.ref }}
           persist-credentials: false
+
+      - name: Record what is being deployed
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ref:   ${GITHUB_REF}"
+          echo "sha:   ${GITHUB_SHA}"
+          echo "event: ${GITHUB_EVENT_NAME}"
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::warning::Deploying production from ${GITHUB_REF}, not main. Fast-forward main to ${GITHUB_SHA}, or the next main-triggered deploy will silently revert this."
+          fi
 
       - name: Check the exit protection wiring
         shell: bash
