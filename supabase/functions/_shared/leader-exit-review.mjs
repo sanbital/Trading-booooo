@@ -13,6 +13,48 @@ export const EXIT_REVIEW_CANDIDATE = Object.freeze({
   parametersValidatedByBacktest: false,
 });
 
+/**
+ * R5 loss-tail candidate. Same shape as EXIT_REVIEW_CANDIDATE with ONE structural change:
+ * the level armed by a small favorable excursion sits BELOW entry instead of above it.
+ *
+ * EXIT_REVIEW_CANDIDATE jumps the stop from -2.5% to cost-breakeven (~+0.2%) the moment a
+ * +1% excursion is polled. That single step does two bad things at once, both measured on
+ * the 39 closed LIVE V17 trades of 2026-09-08 and 2026-09-09 replayed on Binance 1m klines:
+ *
+ *   1. Below +1% the only protection is the -2.5% entry stop, and at 3x on 120 USDT
+ *      notional every such stop costs ~-3.2 USDT. Every loss on both days came from
+ *      this bucket.
+ *   2. At +1% it guarantees a fee-scale scratch exit. Six trades on 2026-09-09 closed
+ *      between +0.02 and +0.15 USDT; KATUSDT then ran +13.5% and RAYSOLUSDT +10.7%
+ *      within 30 minutes of that exit.
+ *
+ * R5 replaces that level with a risk cut at -1.2%, armed by EITHER a +1% excursion OR
+ * 10 minutes without one. The loss cap therefore reaches -1.2% within 10 minutes of every
+ * entry, while a trade that has merely twitched up is no longer forced into a scratch.
+ * The +2% profit lock and the +3% trailing stop are unchanged.
+ *
+ * Replay on those 39 trades, quote-armed exactly as the one-minute monitor observes:
+ *   net -8.86 -> +19.60 USDT, profit factor 0.79 -> 1.49, average loss -2.59 -> -1.92,
+ *   MFE capture 0.451 -> 0.604. Win rate falls 59% -> 46%: scratch wins are traded for
+ *   a smaller tail and larger winners, which is the intended direction.
+ *
+ * Out-of-sample: 289 synthetic V17 entries reconstructed from the unmodified V17 scanner
+ * over 2026-08-31..2026-09-05 (see research/v17-exit-r5-loss-tail.md). Parameters are NOT
+ * the output of a market-wide parameter search; -1.2% is the joint ridge of a 5x6 grid and
+ * both neighbours in every direction also beat production on both days.
+ */
+export const EXIT_REVIEW_R5 = Object.freeze({
+  policyVersion: 'V17_EXIT_R5_TAIL',
+  riskCutArmPct: .01,
+  riskCutLevelPct: .012,
+  failCutAfterMs: 600000,
+  profitLockArmPct: .02,
+  profitLockCapture: .50,
+  estimatedExitFeeRate: .0005,
+  exitSlippageBudgetPct: .001,
+  parametersValidatedByBacktest: false,
+});
+
 export function costBreakeven(entry, entryFee, quantity, exitFeeRate, slipBudget) {
   if (![entry,entryFee,quantity,exitFeeRate,slipBudget].every(Number.isFinite) ||
       entry<=0 || entryFee<0 || quantity<=0 || exitFeeRate<0 || exitFeeRate>=1 ||
@@ -24,12 +66,22 @@ export function nextExitReviewed(position,bid,now,config={}) {
   const policy={...POLICY,...config};
   const base=baselineNextExit(position,bid,now,policy);
   const be=config.breakEvenArmPct??null, lock=config.profitLockArmPct??null;
+  const riskArm=config.riskCutArmPct??null, failMs=config.failCutAfterMs??null;
   // No candidate values are activated implicitly by importing this module.
-  if(be===null && lock===null) return base;
+  if(be===null && lock===null && riskArm===null && failMs===null) return base;
   if(be!==null && (!Number.isFinite(be)||be<=0)) throw Error('INVALID_BE_ARM');
   if(lock!==null && (!Number.isFinite(lock)||lock<=0 ||
       !Number.isFinite(config.profitLockCapture)||config.profitLockCapture<=0||
       config.profitLockCapture>=1 || (be!==null && lock<be))) throw Error('INVALID_PROFIT_LOCK');
+  if(riskArm!==null && (!Number.isFinite(riskArm)||riskArm<=0)) throw Error('INVALID_RISK_CUT_ARM');
+  if(failMs!==null && (!Number.isFinite(failMs)||failMs<=0)) throw Error('INVALID_FAIL_CUT');
+  // The risk cut must sit strictly INSIDE the entry stop and strictly BELOW entry. Above
+  // entry it would be a breakeven lock, which is the behaviour this level exists to remove;
+  // outside the entry stop it could never bind and would be dead configuration.
+  if(riskArm!==null || failMs!==null) {
+    if(!Number.isFinite(config.riskCutLevelPct) || config.riskCutLevelPct<=0 ||
+       config.riskCutLevelPct>=policy.stopPct) throw Error('INVALID_RISK_CUT_LEVEL');
+  }
   const entry=Number(position.entryPrice), tick=position.priceTick??0;
   if(!Number.isFinite(tick)||tick<0) throw Error('INVALID_PRICE_TICK');
   const bePrice=costBreakeven(entry,Number(position.entryFee),Number(position.quantity),
@@ -45,6 +97,14 @@ export function nextExitReviewed(position,bid,now,config={}) {
   if(lock!==null && base.observedMfe+1e-12>=lock) {
     levels.push({stage:'PROFIT_LOCK',price:entry+(base.peakPrice-entry)*config.profitLockCapture});
   }
+  // One level, two triggers: a favorable excursion that proves the leader moved, or a
+  // deadline that proves it did not. Either way the loss cap tightens from the entry stop
+  // to riskCutLevelPct, and because the level is below entry it never converts a live trade
+  // into a fee-scale scratch. It is only ever a candidate for the max() below, so it can
+  // no more lower an already-ratcheted stop than the other protection stages can.
+  const heldMs=now-Number(position.entryAt);
+  if((riskArm!==null && base.observedMfe+1e-12>=riskArm) || (failMs!==null && heldMs>=failMs))
+    levels.push({stage:'RISK_CUT',price:entry*(1-config.riskCutLevelPct)});
   const binding=levels.reduce((best,x)=>x.price>=best.price?x:best);
   let stop=binding.price, reason=base.reason;
   const protectionStage=binding.stage;
@@ -53,6 +113,7 @@ export function nextExitReviewed(position,bid,now,config={}) {
   if(bid<=stop) {
     if(protectionStage==='COST_BREAKEVEN') reason='V17_COST_BREAKEVEN';
     else if(protectionStage==='PROFIT_LOCK') reason='V17_PROFIT_LOCK';
+    else if(protectionStage==='RISK_CUT') reason='V17_RISK_CUT';
     else if(!reason) reason='V17_RATCHET_STOP';
   }
   return {...base,stopPrice:stop,action:reason?'CLOSE':'HOLD',reason,

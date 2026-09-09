@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 import {POLICY} from '../../supabase/functions/_shared/leader-momentum-v17.mjs';
-import {nextExitReviewed, EXIT_REVIEW_CANDIDATE} from '../../supabase/functions/_shared/leader-exit-review.mjs';
+import {nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5} from '../../supabase/functions/_shared/leader-exit-review.mjs';
 const source=readFileSync(new URL('../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
 const code=source.slice(source.indexOf('async function manageLeader('),source.indexOf('const leaseOwners='));
 const make=(stale=false)=>{
  const events=[],now=Date.now();
- const ctx={Date,Number,Array,Error,POLICY,nextExitReviewed,EXIT_REVIEW_CANDIDATE,console,rec:x=>x??{},STRATEGY:'LEADER_MOMENTUM_V17',
+ const ctx={Date,Number,Array,Error,POLICY,nextExitReviewed,EXIT_REVIEW_CANDIDATE,EXIT_REVIEW_R5,console,rec:x=>x??{},STRATEGY:'LEADER_MOMENTUM_V17',
   // native stop is opt-in; these tests cover the default-off software path
   NATIVE_STOP_ENABLED:false,createGatewayProtection:()=>{throw Error('must not be constructed when disabled')},verifyExecutionLease:async()=>{},N:x=>Number(x)||0,
   gateway:async c=>{assert.equal(c.action,'p10_quotes');events.push('quote');return [{market:'FORMUSDT',best_bid:96,best_ask:96.1,timing:{received_at_ms:now-(stale?10000:0),requested_at_ms:now-20}}]},

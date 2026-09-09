@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { POLICY } from '../../supabase/functions/_shared/leader-momentum-v17.mjs';
-import { nextExitReviewed, EXIT_REVIEW_CANDIDATE }
+import { nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5 }
   from '../../supabase/functions/_shared/leader-exit-review.mjs';
 
 const source = readFileSync(
@@ -22,7 +22,7 @@ const code = source.slice(source.indexOf('async function manageLeader('),
 function harness({ enabled = false, bid = 99, ensure, symbolInfoFails = false } = {}) {
   const now = Date.now(), calls = [], ensured = [];
   const ctx = {
-    Date, Number, Array, Error, console, POLICY, nextExitReviewed, EXIT_REVIEW_CANDIDATE,
+    Date, Number, Array, Error, console, POLICY, nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5,
     STRATEGY: 'LEADER_MOMENTUM_V17', rec: (x) => x ?? {}, N: (x) => Number(x) || 0,
     NATIVE_STOP_ENABLED: enabled,
     verifyExecutionLease: async () => {},
