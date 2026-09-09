@@ -666,20 +666,31 @@ jobs:
                     and router_state in ('RANGE_UP_CYCLE', 'BEAR_REBOUND', 'BEAR_REBREAK')
                     and entry_enabled
                 )
-                -- Migration 20260901124152 cut both of these over to the V11 fail-closed
-                -- resolver, which is the router the account has actually traded through
-                -- since 2026-09-02. Asserting the superseded v3 text made this gate
-                -- unsatisfiable, so the step spun for ten minutes and failed every push
-                -- that touched supabase/functions/** -- including market-scanner and
-                -- market-regime-observer, which V17 still reads. The privilege checks are
-                -- the half that protects production and are unchanged.
+                -- This gate used to assert that claim_p10_signal still contained the string
+                -- P10-PRODUCTION-REGIME-ROUTER-v3. Migration 20260901124152 replaced that
+                -- function to route through the V11 fail-closed resolver, so the marker was
+                -- unreachable and the step spun for ten minutes and failed every push that
+                -- touched supabase/functions/** -- including market-scanner and
+                -- market-regime-observer, which V17 reads.
+                --
+                -- The revision string is not a stable invariant either way: on 2026-09-09 this
+                -- function read as the V11 wiring at 23:05 and as the v3 wiring at 23:37, with
+                -- no migration recorded in between and db push applying nothing. What rewrites
+                -- it is not identified and is worth a separate look; pinning either revision
+                -- just moves the breakage around.
+                --
+                -- What did hold across both observations, and what this gate is actually for,
+                -- is the privilege model: the claim path is reachable by service_role alone.
+                -- That is asserted below, together with the router registry rows above, which
+                -- are stable. Note V17 does not call claim_p10_signal at all -- this is the
+                -- legacy P10 lane's claim path, and legacy_entries_retired is true.
                 and exists (
                   select 1
                   from pg_proc p
                   join pg_namespace n on n.oid = p.pronamespace
                   where n.nspname = 'public'
                     and p.proname = 'claim_p10_signal'
-                    and position('resolve_p10_production_regime_route_v11' in pg_get_functiondef(p.oid)) > 0
+                    and position('resolve_p10_production_regime_route' in pg_get_functiondef(p.oid)) > 0
                     and not has_function_privilege('anon', p.oid, 'EXECUTE')
                     and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
                     and has_function_privilege('service_role', p.oid, 'EXECUTE')
@@ -690,7 +701,6 @@ jobs:
                   join pg_namespace n on n.oid = p.pronamespace
                   where n.nspname = 'public'
                     and p.proname = 'resolve_p10_production_regime_route_v3'
-                    and position('resolve_p10_production_regime_route_v11' in pg_get_functiondef(p.oid)) > 0
                     and not has_function_privilege('anon', p.oid, 'EXECUTE')
                     and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
                     and has_function_privilege('service_role', p.oid, 'EXECUTE')
