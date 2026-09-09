@@ -56,7 +56,7 @@ jobs:
           # EXIT_REVIEW_CANDIDATE into the effective policy. Both thresholds are applied
           # per tick with no confirmation window, so they work on the one-minute cron.
           grep -Fq 'nextExitReviewed' supabase/functions/v10-lane-executor/index.ts
-          grep -Fq 'V17-QUOTE-RETRY-1' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'V17-ENTRY-QUEUE-1' supabase/functions/v10-lane-executor/index.ts
           grep -Eq 'const policy=\{\.\.\.POLICY,.*EXIT_REVIEW_CANDIDATE' supabase/functions/v10-lane-executor/index.ts \
             || { echo "::error::EXIT_REVIEW_CANDIDATE no longer reaches the effective policy; profit protection would be off."; exit 1; }
 
@@ -81,6 +81,21 @@ jobs:
               exit 1
             fi
           done
+
+          # The entry queue may price several candidates in one run, but never after an order
+          # has left the process -- at that point whether a position exists is unknowable, so a
+          # second entry could double the account's exposure.
+          grep -Fq 'if(attempt.dispatched)throw e;' supabase/functions/v10-lane-executor/index.ts \
+            || { echo "::error::the dispatched guard is gone; the entry queue could open a second position."; exit 1; }
+          awk '/if\(attempt\.dispatched\)throw e;/{d=NR} /ENTRY_SKIP_SYMBOL_SCOPED\.test\(msg\)/{s=NR} END{if(!d||!s||s<d){print "::error::the dispatched guard must precede the symbol-scoped allowance"; exit 1}}' \
+            supabase/functions/v10-lane-executor/index.ts
+          # openBull must be the only place that marks dispatch, and it must sit on the order call.
+          grep -Fq 'attempt.dispatched=true;const raw=await gateway(rp)' supabase/functions/v10-lane-executor/index.ts \
+            || { echo "::error::the dispatch mark is not on the order call."; exit 1; }
+          if [ "$(grep -c 'attempt\.dispatched=true' supabase/functions/v10-lane-executor/index.ts)" != "1" ]; then
+            echo "::error::dispatch is marked in more than one place; closePos shares the same line and has no attempt in scope"
+            exit 1
+          fi
 
           for key in riskCutArmPct riskCutLevelPct failCutAfterMs policyVersion; do
             grep -Fq "$key" supabase/functions/_shared/leader-exit-review.mjs \

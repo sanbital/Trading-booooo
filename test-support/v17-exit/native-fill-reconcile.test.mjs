@@ -61,6 +61,8 @@ function harness({ enabled, position = POSITION, refreshCloses = true }) {
     Date, Number, Array, Error, console, JSON, Set, Map, Promise, crypto,
     POLICY, STRATEGY, leaderPortfolioMatches,
     REVISION: 'V11-LONG-REGIME-1.0.1', PATCH: 'p', MAX_SLOTS: 10, SIGNAL_MAX: 300000,
+    // run() now works a bounded entry queue rather than a single candidate
+    ENTRY_ATTEMPTS_PER_RUN: 3, ENTRY_SKIP_SYMBOL_SCOPED: /^(SIGNAL_STALE_OR_FUTURE|ENTRY_DRIFT)/,
     NATIVE_STOP_ENABLED: enabled,
     N: (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d),
     rec: (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {}),
