@@ -10183,6 +10183,16 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
   const v10MaintenancePositions = await db(
     "v10_lane_positions?state=in.(OPEN,CLOSE_SUBMITTED,RECONCILIATION_FAILED)&select=symbol,side,quantity,remaining_quantity",
   ) as Array<{ symbol: string; side: string; quantity: number; remaining_quantity: number }>;
+  // The V11/V17 leader lane keeps its positions in v11_long_regime_positions. v10_lane_positions
+  // is an empty table now, so without this the untracked-exposure sweep below sees every V17
+  // position as unexplained Binance exposure and latches pause_new_entries -- which V17 itself
+  // honours, so the lane that is actually trading stops itself. Seen on 2026-09-09: EGLDUSDT
+  // 23.3 tripped it four minutes after V17 opened it.
+  const v17MaintenancePositions = await db(
+    "v11_long_regime_positions?state=neq.CLOSED&select=symbol,side,original_quantity,remaining_quantity",
+  ) as Array<
+    { symbol: string; side: string; original_quantity: number; remaining_quantity: number }
+  >;
   if (futuresObservationError) {
     const safetyReason = "P10_FUTURES_EXPOSURE_OBSERVATION_FAILED";
     const newlyLatched = await latchP10EntrySafety(safetyReason);
@@ -10223,6 +10233,14 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
           quantity: Math.max(
             finite(position.remaining_quantity),
             finite(position.quantity),
+          ),
+        })),
+        ...v17MaintenancePositions.map((position) => ({
+          market: position.symbol,
+          side: position.side,
+          quantity: Math.max(
+            finite(position.remaining_quantity),
+            finite(position.original_quantity),
           ),
         })),
       ],
