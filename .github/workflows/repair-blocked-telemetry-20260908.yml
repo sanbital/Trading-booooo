@@ -1,0 +1,123 @@
+name: Repair blocked-scan telemetry (branch only)
+on:
+  push:
+    branches: [repair/20260908-telemetry-isolation]
+    paths: [.github/workflows/repair-blocked-telemetry-20260908.yml]
+permissions:
+  contents: write
+concurrency:
+  group: repair-blocked-telemetry-20260908
+  cancel-in-progress: false
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: repair/20260908-telemetry-isolation
+      - name: Apply source-locked telemetry-only patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          p=Path('supabase/functions/market-autotrader/index.ts')
+          raw=p.read_bytes(); s=raw.decode(); original=s
+          marker='BLOCKED_ACCOUNT_TELEMETRY_20260908'
+          if marker in s:
+              raise SystemExit('Already patched; no second patch needed')
+          blob=hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()
+          assert blob=='a3de50c71021e07e046762ce84496c75773b81fd', ('Source drift; inspect before patching',blob)
+          helper='''  // BEGIN BLOCKED_ACCOUNT_TELEMETRY_20260908
+            // The entry safety latch runs before this helper. Only observations are saved.
+            // Do not invoke fee repair, auto-adoption, residual sweeps or any order route here.
+            const persistBlockedAccountSnapshots = async () => {
+              const results = await Promise.allSettled(portfolioExchanges.map(async (exchange) => {
+                const portfolio = portfolios[exchange];
+                const capturedAt = portfolioCapturedAt[exchange];
+                if (!portfolio || !capturedAt || !Number.isFinite(Date.parse(capturedAt))) {
+                  throw new Error("ACCOUNT_OBSERVATION_MISSING");
+                }
+                for (const key of ["total_equity_quote", "available_quote", "locked_quote"]) {
+                  const value = portfolio[key];
+                  if (value == null || typeof value === "boolean" || String(value).trim() === "" || !Number.isFinite(Number(value))) {
+                    throw new Error(`ACCOUNT_FIELD_INVALID:${key}`);
+                  }
+                }
+                if (!Array.isArray(portfolio.accounts)) throw new Error("ACCOUNT_BALANCES_MISSING");
+                if (exchange === "binance_futures" && !authenticatedFuturesSnapshot(exchange, portfolio).complete) {
+                  throw new Error("FUTURES_POSITIONS_INCOMPLETE");
+                }
+                await snapshotAccount(
+                  exchange, portfolio,
+                  maintenancePositions.filter((position) => position.state === "OPEN"),
+                  portfolio.prices || {}, settings, capturedAt,
+                );
+              }));
+              return results.flatMap((result, index) => result.status === "rejected"
+                ? [{ exchange: portfolioExchanges[index], error: String(result.reason?.message || result.reason).slice(0, 500) }]
+                : []);
+            };
+            // END BLOCKED_ACCOUNT_TELEMETRY_20260908
+          '''
+          anchor='  if (futuresObservationError) {'
+          assert s.count(anchor)==1
+          s=s.replace(anchor,helper+anchor,1)
+          pairs=[]
+          for field in ['error: futuresObservationError','untracked_futures_exposures: untrackedFutures']:
+              old='''    return {
+                skipped: true,
+                strategy_key: P10_STRATEGY_KEY,
+                reason: safetyReason,
+                FIELD,
+              };'''.replace('FIELD',field)
+              new=old.replace('    return {','    const blockedSnapshotErrors = await persistBlockedAccountSnapshots();\n    return {',1).replace('      '+field+',','      '+field+',\n      snapshot_errors: blockedSnapshotErrors,',1)
+              assert s.count(old)==1,field
+              s=s.replace(old,new,1); pairs.append((old,new))
+          check=s.replace(helper,'',1)
+          for old,new in pairs: check=check.replace(new,old,1)
+          assert check==original,'Unexpected change outside telemetry insertions'
+          p.write_text(s)
+          Path('/tmp/blocked-helper.js').write_text(helper)
+          print('Source lock and exact inverse-patch check passed. No order or gate condition changed.')
+          PY
+      - name: Test the actual inserted helper without credentials or network
+        shell: bash
+        run: |
+          mkdir -p tests/repairs
+          cat > tests/repairs/blocked-account-telemetry.test.mjs <<'JS'
+          import {test} from 'node:test';
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const source=readFileSync('supabase/functions/market-autotrader/index.ts','utf8');
+          const helper=source.split('// BEGIN BLOCKED_ACCOUNT_TELEMETRY_20260908')[1].split('// END BLOCKED_ACCOUNT_TELEMETRY_20260908')[0];
+          const factory=new Function('portfolioExchanges','portfolios','portfolioCapturedAt','maintenancePositions','settings','snapshotAccount','authenticatedFuturesSnapshot',helper+'\nreturn persistBlockedAccountSnapshots;');
+          const at='2026-01-01T00:00:00.000Z';
+          const raw=()=>({total_equity_quote:100,available_quote:60,locked_quote:40,accounts:[],positions:[]});
+          function setup(portfolios,{writer,positions=[]}={}) {
+            const calls=[];const settings=Object.freeze({pause_new_entries:true,mode:'LIVE_LIMITED'});
+            const venues=Object.keys(portfolios);
+            const fn=factory(venues,portfolios,Object.fromEntries(venues.map(x=>[x,at])),positions,settings,async(...args)=>{calls.push(args);if(writer)await writer(...args);},(_exchange,p)=>({complete:Array.isArray(p.positions)&&p.positions.every(x=>x.market&&['LONG','SHORT'].includes(x.side)&&x.quantity>0)}));
+            return {fn,calls,settings};
+          }
+          test('paused scans still save valid account observations',async()=>{const x=setup({binance:raw(),binance_futures:raw()});assert.deepEqual(await x.fn(),[]);assert.equal(x.calls.length,2);assert.equal(x.settings.pause_new_entries,true);});
+          test('untracked futures exposure is retained, never converted to zero',async()=>{const p=raw();p.positions=[{market:'TESTUSDT',side:'LONG',quantity:7}];const x=setup({binance_futures:p});await x.fn();assert.equal(x.calls[0][1].positions[0].quantity,7);});
+          test('missing portfolio cannot generate a zero-account snapshot',async()=>{const x=setup({binance_futures:null});assert.equal((await x.fn()).length,1);assert.equal(x.calls.length,0);});
+          test('a malformed futures position blocks only its own snapshot',async()=>{const p=raw();p.positions=[{market:'TESTUSDT',side:'LONG',quantity:0}];const x=setup({binance:raw(),binance_futures:p});assert.equal((await x.fn()).length,1);assert.equal(x.calls.length,1);assert.equal(x.calls[0][0],'binance');});
+          test('valid empty position list is accepted',async()=>{const x=setup({binance_futures:raw()});assert.deepEqual(await x.fn(),[]);assert.deepEqual(x.calls[0][1].positions,[]);});
+          test('snapshot failure is reported rather than escaping the entry safety branch',async()=>{const x=setup({binance:raw(),binance_futures:raw()},{writer:async(e)=>{if(e==='binance_futures')throw Error('WRITE_FAILED');}});const errors=await x.fn();assert.equal(errors.length,1);assert.equal(errors[0].error,'WRITE_FAILED');assert.equal(x.calls.length,2);});
+          test('original capture time and open-position subset are preserved',async()=>{const x=setup({binance_futures:raw()},{positions:[{state:'OPEN',id:1},{state:'CLOSED',id:2}]});await x.fn();assert.equal(x.calls[0][5],at);assert.deepEqual(x.calls[0][2],[{state:'OPEN',id:1}]);});
+          test('missing monetary values are not fabricated as zero',async()=>{for(const bad of [null,'',false,NaN]){const p=raw();p.available_quote=bad;const x=setup({binance_futures:p});assert.equal((await x.fn()).length,1);assert.equal(x.calls.length,0);}});
+          test('both entry safety branches keep their latch and return',()=>{for(const [begin,end] of [['  if (futuresObservationError) {','  const futuresPortfolio ='],['  if (untrackedFutures.length) {','  const snapshotPositions =']]){const b=source.split(begin)[1].split(end)[0];assert.ok(b.indexOf('await latchP10EntrySafety')<b.indexOf('await persistBlockedAccountSnapshots'));assert.ok(b.includes('skipped: true'));assert.ok(b.includes('reason: safetyReason'));assert.equal((b.match(/await persistBlockedAccountSnapshots/g)||[]).length,1);assert.ok(!b.includes('create_order'));}});
+          JS
+          node --test tests/repairs/blocked-account-telemetry.test.mjs
+      - name: Commit only the tested branch patch (no deployment)
+        shell: bash
+        run: |
+          test "$(git branch --show-current)" = 'repair/20260908-telemetry-isolation'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add supabase/functions/market-autotrader/index.ts tests/repairs/blocked-account-telemetry.test.mjs
+          git commit -m 'fix(telemetry): preserve account observations on blocked scans without changing entry guards'
+          git push origin HEAD:repair/20260908-telemetry-isolation
