@@ -45,6 +45,7 @@ jobs:
           node --test gateway/server.test.mjs
           node --test gateway/v17-shadow-worker.test.mjs
           node --test gateway/v17-shadow-host.test.mjs
+          node --test gateway/v18-fast-protection-host.test.mjs
 
       - name: Verify the image can actually boot from the files it copies
         shell: bash

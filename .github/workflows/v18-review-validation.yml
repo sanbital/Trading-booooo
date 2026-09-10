@@ -1,0 +1,20 @@
+name: V18 Review Validation
+on:
+  push:
+    branches: [codex/v18-operational-hardening-20260910]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test test-support/v17-exit/*.test.mjs
+      - run: node --test gateway/server.test.mjs gateway/v17-shadow-worker.test.mjs gateway/v17-shadow-host.test.mjs gateway/v18-fast-protection-host.test.mjs
+      - run: node research/v18/verify-image.mjs

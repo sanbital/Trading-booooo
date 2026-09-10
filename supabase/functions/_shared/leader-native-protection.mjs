@@ -60,7 +60,9 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
           throw Error('NATIVE_FILL_QUANTITY_MISMATCH');
         if(dq>0||df!==0||dc!==0) {
           next.position.remainingQuantity=Math.max(0,next.position.remainingQuantity-dq);
-          next.position.realizedPnl+=df-next.position.entryPrice*dq-dc;
+          const delta=df-next.position.entryPrice*dq-dc;
+          if(next.position.realizedPnl!==null)next.position.realizedPnl+=delta;
+          if(next.position.knownExitPnl!==null&&next.position.knownExitPnl!==undefined)next.position.knownExitPnl+=delta;
           next.position.exitPrice=q>0?funds/q:next.position.exitPrice;
           next.position.lastFillAt=Number(fill.lastFillAt);
           next.position.state=next.position.remainingQuantity<=1e-10?'CLOSED':'OPEN';
@@ -113,6 +115,12 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
         state=await cancelRemembered(state,other.clientId);
       return finishReplacement(state,current.clientId,request);
     }
+    // A valid old stop stays in place while small/rapid improvements accumulate.
+    // Initial protection, quantity changes and a crossed stop are never throttled.
+    if(current&&request.lastPrice>request.stopPrice&&
+       (clock()-(current.ackAt??0)<(request.minUpdateIntervalMs??0)||
+        (request.stopPrice/current.spec.params.triggerPrice-1)*10000<(request.minImprovementBps??0)))
+      return {status:'PROTECTED',state,clientId:current.clientId,updateDeferred:true};
     const generation=(state.protection.generation??0)+1;
     const clientId=await exitAttemptId(id,String(generation),'v17s');
     const spec=protectiveStopSpec({...request,stopPrice:Math.max(request.stopPrice,...outstanding.map(x=>x.spec.params.triggerPrice)),symbol:p.symbol,positionId:id,

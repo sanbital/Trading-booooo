@@ -10,7 +10,7 @@
  */
 import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const gatewayDir = dirname(fileURLToPath(import.meta.url));
 const sharedDir = join(gatewayDir, "..", "supabase", "functions", "_shared");
@@ -30,7 +30,7 @@ export function stageEngine({ from = sharedDir, to = gatewayDir } = {}) {
   return staged;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   for (const { name, bytes } of stageEngine()) {
     console.log(`Staged ${name} into the gateway image (${bytes} bytes).`);
   }

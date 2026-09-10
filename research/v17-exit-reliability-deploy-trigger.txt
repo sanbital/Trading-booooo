@@ -5,3 +5,4 @@ V17 exit reliability deploy trigger
 2026-09-09 V17-QUOTE-RETRY-1
 2026-09-09 V17-ENTRY-QUEUE-1
 2026-09-09 V17-EXIT-SETTLE-1
+V18 reviewed candidate V18-OPS-HARDENING-1

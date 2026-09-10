@@ -148,6 +148,7 @@ jobs:
           node --test test-support/v17-exit/*.test.mjs
           node --check gateway/server.mjs
           node --test gateway/server.test.mjs
+          node --test gateway/v18-fast-protection-host.test.mjs
 
       - name: Install Supabase CLI
         uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
@@ -163,6 +164,12 @@ jobs:
           set -euo pipefail
           test -n "${SUPABASE_ACCESS_TOKEN:-}"
           test -n "${SUPABASE_PROJECT_REF:-}"
+
+      - name: Verify V18 accounting schema prerequisite
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: node research/v18/preflight-schema.mjs
 
       - name: Deploy v10-lane-executor only
         shell: bash

@@ -1,4 +1,5 @@
 import { createV17StopCommands } from "./v17-stop-commands.mjs";
+import { createFastProtectionHost } from "./v18-fast-protection-host.mjs";
 import http from "node:http";
 import crypto from "node:crypto";
 import dns from "node:dns";
@@ -30,6 +31,9 @@ const BINANCE_API_KEY = env("BINANCE_API_KEY");
 const BINANCE_SECRET_KEY = env("BINANCE_SECRET_KEY");
 const SHARED_SECRET = env("GATEWAY_SHARED_SECRET");
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
+const FAST_PROTECTION_ENABLED=boolEnv("V18_FAST_PROTECTION_ENABLED",false);
+const FAST_EXECUTOR_TOKEN=env("V18_EXECUTOR_TOKEN");
+let fastProtection=null;
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
 const SCHEDULER_ENABLED = boolEnv("SCHEDULER_ENABLED", true);
 const SCAN_INTERVAL_MS = integerEnv("AUTO_SCAN_INTERVAL_SECONDS", 12, 8, 3600) * 1000;
@@ -2424,6 +2428,7 @@ function createServer() {
           v17_shadow: v17Shadow
             ? v17Shadow.summary()
             : { enabled: V17_SHADOW_ENABLED, loaded: false },
+          v18_fast_protection: fastProtection?.status()??{enabled:false,configured:FAST_PROTECTION_ENABLED},
           limits: {
             source: "operator_allocation",
             hidden_monetary_caps: false,
@@ -2454,6 +2459,23 @@ export async function startServer() {
   const server = createServer();
   await new Promise((resolve) => server.listen(PORT, "0.0.0.0", resolve));
   console.log(`Trading-booooo multi-exchange gateway v${VERSION} listening on ${PORT}`);
+  if(FAST_PROTECTION_ENABLED){
+    if(!SUPABASE_URL||!FAST_EXECUTOR_TOKEN)throw Error("V18_FAST_PROTECTION_CONFIG_MISSING");
+    fastProtection=createFastProtectionHost({
+      intervalMs:integerEnv("V18_PROTECTION_INTERVAL_MS",2000,2000,30000),
+      invoke:async(body,signal)=>{
+        const response=await fetch(`${SUPABASE_URL}/functions/v1/v10-lane-executor`,{
+          // The previous executor rejects this header. A rollback must never turn
+          // an unknown management mode into its default entry-enabled run().
+          method:"POST",headers:{"content-type":"application/json","x-v18-protection-token":FAST_EXECUTOR_TOKEN},
+          body:JSON.stringify(body),signal});
+        if(!response.ok)throw Error("V18_EXECUTOR_UNAVAILABLE");
+        return response.json();
+      },
+      report:state=>{if(state.lastFailureAt>=(state.lastSuccessAt??0))console.error("V18_FAST_PROTECTION_DEGRADED",JSON.stringify(state));},
+    });
+    fastProtection.start();server.once("close",()=>fastProtection?.stop());
+  }
   await discoverEgressIp();
   if (BINANCE_API_KEY && BINANCE_SECRET_KEY) {
     syncBinanceTime(true).catch((error) => console.warn("Binance time sync failed", error.message));

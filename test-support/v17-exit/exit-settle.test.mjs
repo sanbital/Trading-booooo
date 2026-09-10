@@ -14,6 +14,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
+import {executorHarness} from './executor-harness.mjs';
+import {memoryDb} from './memory-db.mjs';
 
 const source = readFileSync(
   new URL('../../supabase/functions/v10-lane-executor/index.ts', import.meta.url), 'utf8');
@@ -118,29 +120,34 @@ test('settleExitFill only ever reads', () => {
   }
 });
 
-test('a full FILLED exit closes the books instead of opening the circuit', () => {
-  // Halting stops exit management for every OTHER open position too, so an exit whose
-  // only unknown is its price must not trip the breaker.
-  const exit = source.slice(source.indexOf('async function closePos('),
-                            source.indexOf('async function manageBull('));
-  assert.match(exit, /const flat=z\.status==="FILLED"&&z\.qty\+1e-9>=amount/,
-    'flatness is decided by the exchange saying FILLED for the whole quantity');
-  const flat = exit.indexOf('const flat=');
-  const trip = exit.indexOf('if(!flat){await circuit(');
-  assert.ok(trip > flat, 'the circuit is only tripped when the position state is ambiguous');
-  assert.match(exit, /exitAccountingPending:true/, 'the position is flagged for reconciliation');
-  assert.match(exit, /state:"CLOSED"/);
+test('a full FILLED exit books quantity and pending money without opening the circuit', async () => {
+  const p={...POSITION,updated_at:new Date().toISOString(),entry_fee_usdt:.06007886,metadata:{knownExitPnlUsdt:0}};
+  const db=memoryDb({v11_long_regime_positions:[p],v11_long_regime_signals:[{id:p.signal_id}],v11_long_regime_runtime:[{singleton:true,circuit_open:false}]});
+  const calls=[],h=executorHarness({gateway:async c=>{
+   calls.push(c.action);
+   if(c.action==='p10_portfolio')return {positions:[{market:p.symbol,side:'LONG',quantity:449}]};
+   if(c.action==='symbol_info')return {quantity_step:1};
+   return ACK_NO_DETAILS;
+  }});
+  const out=await h.closePos(db,p,1,'V17_MOMENTUM_STALE');
+  assert.equal(out.closed,true);assert.equal(out.accountingPending,true);
+  assert.equal(db.tables.v11_long_regime_positions[0].realized_pnl_usdt,null);
+  assert.equal(db.tables.v11_long_regime_orders[0].exchange_order_id,'1474132504');
+  assert.equal(db.tables.v11_long_regime_runtime[0].circuit_open,false);
+  assert.equal(calls.filter(c=>c==='create_order').length,1);
 });
 
-test('the exchange order id is persisted on every path', () => {
-  // The attribution trigger joins fills on exchange_order_id. Dropping it is what left
-  // MAGMA's seven SELLs as UNMATCHED_INVENTORY with no v17_position_id.
-  const exit = source.slice(source.indexOf('async function closePos('),
-                            source.indexOf('async function manageBull('));
-  const paths = exit.match(/exchange_order_id:/g) || [];
-  assert.ok(paths.length >= 2, `expected the id on the success and no-fill paths, saw ${paths.length}`);
-  assert.match(exit, /if\(z\?\.exchangeOrderId\)patch\.exchange_order_id=z\.exchangeOrderId/,
-    'the outer catch must persist it too');
+test('a post-fill position write conflict preserves the exchange receipt for recovery', async () => {
+  const p={...POSITION,updated_at:new Date().toISOString(),entry_fee_usdt:.06007886,metadata:{knownExitPnlUsdt:0}};
+  const db=memoryDb({v11_long_regime_positions:[p],v11_long_regime_runtime:[{singleton:true,circuit_open:false}]});
+  let creates=0;const h=executorHarness({gateway:async c=>{
+   if(c.action==='p10_portfolio')return {positions:[{market:p.symbol,side:'LONG',quantity:449}]};
+   if(c.action==='symbol_info')return {quantity_step:1};
+   creates++;db.tables.v11_long_regime_positions[0].updated_at='2026-09-10T20:00:00Z';return SETTLED;
+  }});
+  await assert.rejects(()=>h.closePos(db,p,1,'V17_MOMENTUM_STALE'),/CAS/);
+  const o=db.tables.v11_long_regime_orders[0];assert.equal(o.exchange_order_id,'1474132504');
+  assert.deepEqual(o.response_payload,SETTLED);assert.equal(o.state,'RECONCILIATION_FAILED');assert.equal(creates,1);
 });
 
 test('the settle window fits inside the one-minute cadence', () => {

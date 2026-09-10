@@ -1,5 +1,7 @@
 import {createNativeProtection} from './leader-native-protection.mjs';
-/** Existing position row is the atomic accounting/receipt journal. No migration. */
+import {knownExitPnl} from './leader-settlement.mjs';
+/** Existing position row is the atomic accounting/receipt journal.
+ * V18 allows nullable accounting until exchange receipts become complete. */
 export function createPositionProtectionStore(db) {
  const snapshots=new Map();
  return {
@@ -10,7 +12,8 @@ export function createPositionProtectionStore(db) {
    return {version:stored.version??0,position:{id:r.id,symbol:r.symbol,side:r.side,
     strategy:metadata.executionMode,manual:metadata.v17ManualPosition===true,
     remainingQuantity:Number(r.remaining_quantity),entryPrice:Number(r.entry_price),
-    realizedPnl:Number(r.realized_pnl_usdt),exitPrice:r.exit_price,state:r.state,
+    realizedPnl:r.realized_pnl_usdt===null?null:Number(r.realized_pnl_usdt),
+    knownExitPnl:knownExitPnl(r),exitPrice:r.exit_price,state:r.state,
     closedAt:r.closed_at?Date.parse(r.closed_at):null},
     protection:{generation:0,orders:[],health:'NONE',...stored}};
   },
@@ -19,12 +22,18 @@ export function createPositionProtectionStore(db) {
    const p=next.position,now=new Date(Math.max(Date.now(),Date.parse(old.updated_at)+1)).toISOString(),patch={
     remaining_quantity:p.remainingQuantity,realized_pnl_usdt:p.realizedPnl,
     state:p.state,exit_price:p.exitPrice,closed_at:p.closedAt?new Date(p.closedAt).toISOString():null,
-    exit_reason:p.state==='CLOSED'?'V17_NATIVE_STOP':old.exit_reason,
-    metadata:{...old.metadata,exitProtection:{...next.protection,version:next.version}},updated_at:now};
+    exit_reason:p.state==='CLOSED'&&old.state!=='CLOSED'?'V17_NATIVE_STOP':old.exit_reason,
+    metadata:{...old.metadata,knownExitPnlUsdt:p.knownExitPnl,exitProtection:{...next.protection,version:next.version}},updated_at:now};
    const {data,error}=await db.from('v11_long_regime_positions').update(patch)
     .eq('id',id).eq('updated_at',old.updated_at).select('*').maybeSingle();
    if(error)throw Error('V17_PROTECTION_POSITION_WRITE');if(!data)return false;
-   snapshots.set(id,data);return true;
+   snapshots.set(id,data);
+   if(old.state==='OPEN'&&p.state==='CLOSED'&&old.signal_id){
+    const linked=await db.from('v11_long_regime_signals').update({status:'CLOSED',updated_at:now})
+      .eq('id',old.signal_id).eq('position_id',id);
+    if(linked.error)throw Error('V18_NATIVE_SIGNAL_CLOSE_PENDING');
+   }
+   return true;
   }
  };
 }

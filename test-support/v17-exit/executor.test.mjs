@@ -3,20 +3,22 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 import {exitAttemptId,classifyExitResponse} from '../../supabase/functions/_shared/leader-exit-review.mjs';
+import {exitExecutionPatch} from '../../supabase/functions/_shared/leader-settlement.mjs';
+import {executionPending} from '../../supabase/functions/_shared/leader-operations.mjs';
 test('patched executor records terminal partial fill, then sends a distinct residual close',async()=>{
  const src=readFileSync(new URL('../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
  const a=src.indexOf('async function closePos('),b=src.indexOf('async function ',a+20);
  const code=src.slice(a,b);
- let p={id:'b9501639-d5b1-4d4d-8478-d432f8f862ca',symbol:'FORMUSDT',remaining_quantity:10,entry_price:100,realized_pnl_usdt:0,metadata:{},peak_price:101};
+ let p={id:'b9501639-d5b1-4d4d-8478-d432f8f862ca',symbol:'FORMUSDT',remaining_quantity:10,entry_price:100,entry_fee_usdt:0,realized_pnl_usdt:0,metadata:{knownExitPnlUsdt:0},peak_price:101};
  let createCount=0,intentCount=0;const submitted=[],savedOrders=[];
  const db={from(table){let patch,operation='';return {
   insert(data){operation='insert';patch=data;return this},update(data){operation='update';patch=data;return this},
-  eq(){return this},select(){return this},
+  eq(){return this},select(){return this},in(){return this},limit:async()=>({data:[]}),
   async single(){if(table==='v11_long_regime_orders')return {data:{id:'intent-'+(++intentCount),...patch}};
    if(table==='v11_long_regime_positions'){p={...p,...patch};return {data:p}};throw Error('unexpected table')},
   then(resolve,reject){if(table==='v11_long_regime_orders'&&operation==='update')savedOrders.push(patch);return Promise.resolve({data:null}).then(resolve,reject)}
  }}};
- const ctx={crypto,Date,Number,Math,Error,Promise,exitAttemptId,classifyExitResponse,
+ const ctx={crypto,Date,Number,Math,Error,Promise,exitAttemptId,classifyExitResponse,exitExecutionPatch,executionPending,NATIVE_STOP_ENABLED:false,
   N:(v,d=0)=>Number.isFinite(+v)?+v:d,rec:v=>v??{},floorStep:(q,s)=>Math.floor(q/s)*s,
   active:pf=>pf.positions,sym:x=>x.symbol,
   portfolioMatches:(ps,pf)=>({ok:ps[0].remaining_quantity===pf.positions[0].quantity,reason:'OK'}),
