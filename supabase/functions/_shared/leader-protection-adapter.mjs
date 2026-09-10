@@ -19,7 +19,7 @@ export function createPositionProtectionStore(db) {
    const p=next.position,now=new Date(Math.max(Date.now(),Date.parse(old.updated_at)+1)).toISOString(),patch={
     remaining_quantity:p.remainingQuantity,realized_pnl_usdt:p.realizedPnl,
     state:p.state,exit_price:p.exitPrice,closed_at:p.closedAt?new Date(p.closedAt).toISOString():null,
-    exit_reason:p.state==='CLOSED'?'V17_NATIVE_STOP':old.exit_reason,
+    exit_reason:p.state==='CLOSED'&&old.state!=='CLOSED'?'V17_NATIVE_STOP':old.exit_reason,
     metadata:{...old.metadata,exitProtection:{...next.protection,version:next.version}},updated_at:now};
    const {data,error}=await db.from('v11_long_regime_positions').update(patch)
     .eq('id',id).eq('updated_at',old.updated_at).select('*').maybeSingle();

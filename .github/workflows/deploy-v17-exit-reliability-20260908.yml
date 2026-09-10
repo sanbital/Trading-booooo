@@ -145,7 +145,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --test test-support/v17-exit/*.test.mjs
+          node --test test-support/v17-exit/*.test.mjs research/v18/*.test.mjs
           node --check gateway/server.mjs
           node --test gateway/server.test.mjs
 

@@ -110,8 +110,10 @@ test('the re-read is bounded and keeps the ack when it never resolves', async ()
 });
 
 test('settleExitFill only ever reads', () => {
-  const fn = code.slice(code.indexOf('async function settleExitFill('),
-                        code.indexOf('async function closePos('));
+  const start = code.indexOf('async function settleExitFill(');
+  const end = code.indexOf('\n}', start) + 2;
+  assert.ok(end > start, 'the complete settle function must be extracted');
+  const fn = code.slice(start, end);
   assert.match(fn, /action:"get_order"/);
   for (const forbidden of ['create_order', 'closePos', 'v17_cancel_stop', 'p10_portfolio']) {
     assert.ok(!fn.includes(forbidden), `settleExitFill must not contain ${forbidden}`);

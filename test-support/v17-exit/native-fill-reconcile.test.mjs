@@ -15,7 +15,7 @@ import { POLICY, STRATEGY, portfolioMatches as leaderPortfolioMatches }
 
 const source = readFileSync(
   new URL('../../supabase/functions/v10-lane-executor/index.ts', import.meta.url), 'utf8');
-const code = source.slice(source.indexOf('async function reconcileNativeFills('),
+const code = source.slice(source.indexOf('async function reconcileCandidates('),
                           source.indexOf('async function requireLeaderEntryControls('));
 
 const POSITION = {
@@ -31,7 +31,7 @@ const POSITION = {
 // The exchange reports nothing: the resting stop already closed the position.
 const EMPTY_PORTFOLIO = { positions: [], positions_complete: true };
 
-function harness({ enabled, position = POSITION, refreshCloses = true }) {
+function harness({ enabled, position = POSITION, refreshCloses = true, blocked = false, live = true }) {
   const calls = [];
   let open = [position];
   const db = {
@@ -46,7 +46,7 @@ function harness({ enabled, position = POSITION, refreshCloses = true }) {
           return { data: [] };
         },
         single: async () => ({ data: {
-          revision: 'V11-LONG-REGIME-1.0.1', live_enabled: true, circuit_open: false } }),
+          revision: 'V11-LONG-REGIME-1.0.1', live_enabled: live, circuit_open: blocked } }),
         maybeSingle: async () => ({ data: null }),
         update: () => ({ ...chain, eq: () => ({ ...chain, select: () => chain }) }),
         then: undefined,
@@ -68,6 +68,8 @@ function harness({ enabled, position = POSITION, refreshCloses = true }) {
     rec: (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {}),
     sym: (p) => String(p?.market ?? p?.symbol ?? '').toUpperCase(),
     qty: (p) => Math.abs(Number(p?.quantity ?? p?.positionAmt ?? 0)),
+    active: (p) => (Array.isArray(p?.positions) ? p.positions : [])
+      .filter((x) => Math.abs(Number(x?.quantity ?? x?.positionAmt ?? 0)) > 1e-12),
     portfolioMatches: (dbp, pf) => leaderPortfolioMatches(dbp, pf),
     manualPositionAllowances: async () => [],
     market: async () => ({ route: 'MOMENTUM', observer: null }),
@@ -135,4 +137,111 @@ test('if reconciliation does not explain the divergence the guard still fires', 
   await assert.rejects(() => h.ctx.run(h.db), /EXCHANGE_MISMATCH/);
   assert.ok(h.calls.includes('reconcile'), 'it tries');
   assert.ok(h.calls.some((c) => c.startsWith('circuit')), 'and then still refuses to trade');
+});
+
+test('an open circuit can book a native fill without entering or managing positions', async () => {
+  const h = harness({ enabled: true, blocked: true });
+  // Scoping the work needs one read-only portfolio snapshot. Every command that could
+  // submit, cancel or amend an order stays forbidden while the circuit is open.
+  h.ctx.gateway = async (c) => {
+    if (c.action === 'p10_portfolio') return EMPTY_PORTFOLIO;
+    throw Error(`no trading commands in reconciliation-only mode: ${c.action}`);
+  };
+  h.ctx.openBull = async () => { throw Error('entry forbidden'); };
+  const out = await h.ctx.run(h.db);
+  assert.equal(out.skipped, 'CIRCUIT_OPEN_RECONCILE_ONLY');
+  assert.equal(out.runtime.circuit_open, true);
+  assert.equal(out.reconciliationOnly, true);
+  assert.deepEqual(Array.from(out.reconciledClosed), ['pos-1']);
+  assert.deepEqual(Array.from(out.reconciliationFailures), []);
+  assert.ok(h.calls.includes('reconcile'));
+  assert.ok(!h.calls.includes('manage'));
+});
+
+test('a position the exchange still fully backs is not refreshed while blocked', async () => {
+  // EGLD's stop is ACTIVE and can never go terminal, so refreshing it every tick spends
+  // the run's budget ahead of the position whose mismatch is actually holding the halt.
+  const h = harness({ enabled: true, blocked: true });
+  h.ctx.gateway = async (c) => {
+    if (c.action === 'p10_portfolio')
+      return { positions: [{ market: 'EGLDUSDT', quantity: 24.4 }], positions_complete: true };
+    throw Error(`no trading commands: ${c.action}`);
+  };
+  const out = await h.ctx.run(h.db);
+  assert.ok(!h.calls.includes('reconcile'), 'a fully backed position needs no native fill booked');
+  assert.deepEqual(out.reconciledClosed, []);
+  assert.deepEqual(out.reconciliationPending, []);
+});
+
+test('a short position is still reconciled while blocked', async () => {
+  // A partial native fill leaves the exchange holding less than the database does.
+  const h = harness({ enabled: true, blocked: true, refreshCloses: false });
+  h.ctx.gateway = async (c) => {
+    if (c.action === 'p10_portfolio')
+      return { positions: [{ market: 'EGLDUSDT', quantity: 10 }], positions_complete: true };
+    throw Error(`no trading commands: ${c.action}`);
+  };
+  const out = await h.ctx.run(h.db);
+  assert.ok(h.calls.includes('reconcile'));
+  assert.deepEqual(out.reconciliationPending, ['pos-1'], 'still short: the operator must see it pending');
+});
+
+test('an unusable portfolio read falls back to refreshing every candidate', async () => {
+  for (const portfolio of [
+    async () => { throw Error('gateway timeout'); },
+    async () => ({ positions: [], positions_complete: false }),
+    async () => ({}),
+  ]) {
+    const h = harness({ enabled: true, blocked: true });
+    h.ctx.gateway = async (c) => {
+      if (c.action === 'p10_portfolio') return portfolio();
+      throw Error(`no trading commands: ${c.action}`);
+    };
+    const out = await h.ctx.run(h.db);
+    assert.ok(h.calls.includes('reconcile'),
+      'an unreadable portfolio must never silently skip the recovery');
+    assert.deepEqual(Array.from(out.reconciledClosed), ['pos-1']);
+  }
+});
+
+test('a reconciliation failure is reported, never reported as success', async () => {
+  const h = harness({ enabled: true, blocked: true });
+  h.ctx.gateway = async (c) => {
+    if (c.action === 'p10_portfolio') return EMPTY_PORTFOLIO;
+    throw Error(`no trading commands: ${c.action}`);
+  };
+  h.ctx.createGatewayProtection = () => ({
+    refresh: async () => { h.calls.push('reconcile'); throw Error('V17_FILL_NOT_BOUND_TO_STOP'); },
+  });
+  const out = await h.ctx.run(h.db);
+  assert.ok(h.calls.includes('reconcile'));
+  assert.deepEqual(out.reconciledClosed, [], 'a failed read closes nothing');
+  assert.deepEqual(out.reconciliationPending, ['pos-1']);
+  assert.equal(out.reconciliationFailures.length, 1);
+  assert.equal(out.reconciliationFailures[0].positionId, 'pos-1');
+  assert.match(out.reconciliationFailures[0].error, /V17_FILL_NOT_BOUND_TO_STOP/);
+});
+
+test('an unexplained open position remains blocked and is not labeled reconciled', async () => {
+  const h = harness({ enabled: true, blocked: true, refreshCloses: false });
+  const out = await h.ctx.run(h.db);
+  assert.equal(out.skipped, 'CIRCUIT_OPEN_RECONCILE_ONLY');
+  assert.equal(out.runtime.circuit_open, true);
+  assert.equal(out.reconciledClosed.length, 0);
+  assert.ok(!h.calls.includes('manage'));
+});
+
+test('live disabled still performs no reconciliation', async () => {
+  const h = harness({ enabled: true, blocked: true, live: false });
+  const out = await h.ctx.run(h.db);
+  assert.equal(out.skipped, 'RUNTIME_NOT_LIVE');
+  assert.deepEqual(h.calls, []);
+});
+
+test('disabled native protection leaves blocked positions untouched', async () => {
+  const h = harness({ enabled: false, blocked: true });
+  const out = await h.ctx.run(h.db);
+  assert.equal(out.runtime.circuit_open, true);
+  assert.equal(out.reconciledClosed.length, 0);
+  assert.ok(!h.calls.includes('reconcile'));
 });

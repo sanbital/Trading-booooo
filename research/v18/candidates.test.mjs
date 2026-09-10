@@ -1,0 +1,17 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {nextCandidate,CANDIDATES,canReenterAfterLoss,exitReadiness} from './exit-candidates.mjs';
+const p=()=>({entryPrice:100,entryAt:0,entryFee:.06,quantity:1.2,peakPrice:100,lastHighAt:0,stopPrice:97.5});
+test('all policies retain hard protection after a gap',()=>{for(const c of Object.values(CANDIDATES)){const r=nextCandidate(p(),95,60000,c);assert.equal(r.action,'CLOSE');assert.ok(r.stopPrice>=97.5);}});
+test('A does not force a one percent scratch',()=>{assert.ok(nextCandidate(p(),101.1,60000,CANDIDATES.A_LADDER).stopPrice<100);});
+test('cost break-even covers both fees and stated slippage budget',()=>{const r=nextCandidate(p(),101.6,60000,CANDIDATES.A_LADDER);const net=(r.stopPrice*.999-100)*1.2-r.stopPrice*.999*1.2*.0005-.06;assert.ok(net>=-1e-10);});
+test('strong trend never loosens acknowledged stop',()=>{const r=nextCandidate({...p(),peakPrice:110,stopPrice:108.5},110,120000,CANDIDATES.B_TREND,{closedAt:120000,return5m:.02,return15m:.04,volumeRatio:2,atrPct:.03});assert.ok(r.stopPrice>=108.5);});
+test('early failure ignores missing or future indicators',()=>{for(const closedAt of [undefined,999999]){const r=nextCandidate(p(),98.7,180000,CANDIDATES.C_COMBINED,{closedAt,return1m:-.01,return5m:-.02});assert.notEqual(r.reason,'V18_EARLY_FAILURE');}});
+test('early failure requires failed momentum and loss together',()=>{const r=nextCandidate(p(),98.7,180000,CANDIDATES.C_COMBINED,{closedAt:180000,return1m:-.005,return5m:-.01});assert.equal(r.reason,'V18_EARLY_FAILURE');});
+test('early failure preserves a trade with demonstrated one percent excursion',()=>{const r=nextCandidate({...p(),peakPrice:101.2},98.9,180000,CANDIDATES.C_COMBINED,{closedAt:180000,return1m:-.005,return5m:-.01});assert.notEqual(r.reason,'V18_EARLY_FAILURE');});
+test('ATR stop is clipped inside catastrophic cap',()=>{for(const atrPct of [.001,.02,.2]){const r=nextCandidate(p(),100,60000,CANDIDATES.ATR_STOP,{atrPct});assert.ok(r.stopPrice>=97.5&&r.stopPrice<=98.5);}});
+test('unknown candidates and invalid price fail explicitly',()=>{assert.throws(()=>nextCandidate(p(),100,60000,{kind:'X'}));assert.throws(()=>nextCandidate(p(),NaN,60000,CANDIDATES.A_LADDER));});
+test('partial exit never claims flat or retries the order',()=>{assert.deepEqual(exitReadiness({requested:196,filled:93,status:'FILLED',knownFee:1,knownPrice:1}),{flat:false,accountingReady:false,resubmit:false,action:'RECONCILE_ORDER'});});
+test('FILLED without fees or price is accounting pending',()=>{const x=exitReadiness({requested:93,filled:93,status:'FILLED',knownFee:null,knownPrice:0});assert.equal(x.flat,true);assert.equal(x.accountingReady,false);assert.equal(x.resubmit,false);});
+test('overfill is not silently ignored',()=>{assert.throws(()=>exitReadiness({requested:93,filled:196,status:'FILLED'}));});
+test('normal entries and later renewed opportunities remain allowed',()=>{assert.equal(canReenterAfterLoss({lastNet:1}).allowed,true);assert.equal(canReenterAfterLoss({lastNet:-1,lastExitAt:0,now:1800000}).allowed,true);});
+test('rapid loss re-entry requires a new closed signal and renewed evidence',()=>{const x={lastNet:-1,lastExitAt:60000,now:120000,signalClose:120000,price:103,lastFailureHigh:102,volumeRatio:1.3,rank:2,exitRank:4};assert.equal(canReenterAfterLoss(x).allowed,true);assert.equal(canReenterAfterLoss({...x,signalClose:60000}).allowed,false);});
