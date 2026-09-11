@@ -1,0 +1,46 @@
+name: V18 PostgreSQL and PostgREST deployment gate
+on:
+  push:
+    branches: [release/v18-ops-isolation-3]
+    paths: [.github/workflows/v18-postgres-deployment-gate.yml]
+permissions:
+  contents: read
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Isolated PostgreSQL and production trigger/RLS definitions
+        run: |
+          set -euo pipefail
+          docker run -d --name v18-pg -p 127.0.0.1:55432:5432 -e POSTGRES_PASSWORD=local_gate_only postgres:17
+          for attempt in $(seq 1 30); do
+            if docker exec v18-pg pg_isready -U postgres; then break; fi
+            sleep 1
+          done
+          mkdir -p release-evidence
+          node test-support/v18-ops/postgrest-gate.mjs setup > release-evidence/postgres-setup.log 2>&1
+      - name: Real PostgREST authentication and concurrent lease fencing
+        shell: bash
+        run: |
+          set -euo pipefail
+          export V18_TEST_JWT_SECRET="$(openssl rand -hex 32)"
+          docker run -d --name v18-rest --network host -e PGRST_DB_URI=postgresql://authenticator:local_auth_only@127.0.0.1:55432/postgres -e PGRST_DB_SCHEMAS=public -e PGRST_DB_ANON_ROLE=anon -e PGRST_SERVER_PORT=53000 -e PGRST_JWT_SECRET="$V18_TEST_JWT_SECRET" postgrest/postgrest:v14.18
+          for attempt in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:53000/ >/dev/null; then break; fi
+            sleep 1
+          done
+          node test-support/v18-ops/postgrest-gate.mjs | tee release-evidence/postgrest-gate.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v18-postgres-gate
+          path: release-evidence/
+          retention-days: 30
