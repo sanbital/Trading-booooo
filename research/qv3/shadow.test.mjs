@@ -15,7 +15,7 @@ function fixture({circuit=true,missing=false,duplicate=false,dbFail=false,market
   if(u.hostname==='etaajwpernzrcdrifdnw.supabase.co'){
    const table=u.pathname.split('/').at(-1);
    assert.ok(Object.hasOwn(tables,table));
-   if(init.method==='POST'){assert.equal(table,'v18_strategy_shadow_runs');const row=JSON.parse(init.body);writes.push(row);if(dbFail)return new Response('{}',{status:503});result=duplicate?[]:[row];}
+   if(init.method==='POST'){assert.equal(table,'v18_strategy_shadow_runs');const row=JSON.parse(init.body);assert.equal(row.payload.readOnlyTrading,true);assert.equal(row.payload.executionEnabled,false);assert.equal(row.payload.version,row.policy_version);writes.push(row);if(dbFail)return new Response('{}',{status:503});result=duplicate?[]:[row];}
    else{assert.equal(init.method,'GET');result=tables[table];}
   }else{
    assert.equal(u.hostname,'fapi.binance.com');assert.equal(init.method,'GET');

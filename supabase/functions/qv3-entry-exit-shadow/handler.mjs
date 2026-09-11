@@ -97,7 +97,7 @@ export function createHandler({url,key,fetchFn=fetch,now=Date.now}){
           exitDecisions.push({positionId:p.id,symbol:p.symbol,...assessment,raw,baselineManagement:'LIVE_EXECUTOR_REMAINS_AUTHORITATIVE'});
         }catch(e){dataProblems.push(`${p.symbol}:${e.message}`);}
       }
-      const payload={ok:true,version:SHADOW_VERSION,ruleVersion:QV3_VERSION,variant:'ENTRY_EXIT_TWO',executionEnabled:false,livePromotion:false,
+      const payload={ok:true,version:SHADOW_VERSION,ruleVersion:QV3_VERSION,variant:'ENTRY_EXIT_TWO',readOnlyTrading:true,executionEnabled:false,livePromotion:false,
         asOf:iso(asOf),finishedAt:iso(now()),shadowStart:iso(SHADOW_START),evaluationState:dataProblems.length?'DATA_UNAVAILABLE':'EVALUATED',dataProblems,
         sourceScanId:scan?.id??null,entryDecisions,exitDecisions,states,liveBlocks,runtime:r,
         clock:{exchangeMs:asOf,localBefore,localAfter,offsetEstimateMs:asOf-(localBefore+localAfter)/2},
