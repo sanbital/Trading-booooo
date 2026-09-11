@@ -8,7 +8,15 @@ const ref=process.env.SUPABASE_PROJECT_REF;
 if(ref!=='etaajwpernzrcdrifdnw'||!process.env.SUPABASE_DB_URL||!process.env.SUPABASE_ACCESS_TOKEN)throw Error('RECOVERY_CONFIG');
 const metadata=await fetch(`https://api.supabase.com/v1/projects/${ref}/functions/v10-lane-executor`,{headers:{Authorization:`Bearer ${process.env.SUPABASE_ACCESS_TOKEN}`},signal:AbortSignal.timeout(5000)}).then(async r=>{if(!r.ok)throw Error(`FUNCTION_READ_${r.status}`);return r.json()});
 if(metadata.version!==34||metadata.status!=='ACTIVE'||metadata.verify_jwt!==false)throw Error('REVIEWED_EXECUTOR_VERSION_CHANGED');
-const env={...process.env,PGDATABASE:process.env.SUPABASE_DB_URL,PGCONNECT_TIMEOUT:'3'};
+// libpq does not expand a connection URI supplied through PGDATABASE defaults.
+// Supply parsed fields through environment variables so child-process errors cannot
+// echo the credential-bearing URI in command arguments.
+let dbUri;try{dbUri=new URL(process.env.SUPABASE_DB_URL)}catch{throw Error('DB_URI_INVALID')}
+if(!['postgres:','postgresql:'].includes(dbUri.protocol))throw Error('DB_URI_PROTOCOL');
+const env={...process.env,PGHOST:dbUri.hostname,PGPORT:dbUri.port||'5432',PGUSER:decodeURIComponent(dbUri.username),
+  PGPASSWORD:decodeURIComponent(dbUri.password),PGDATABASE:decodeURIComponent(dbUri.pathname.slice(1)),PGCONNECT_TIMEOUT:'3'};
+for(const [param,key] of [['sslmode','PGSSLMODE'],['sslrootcert','PGSSLROOTCERT'],['channel_binding','PGCHANNELBINDING'],['options','PGOPTIONS']])
+  if(dbUri.searchParams.has(param))env[key]=dbUri.searchParams.get(param);
 function query(s){return execFileSync('psql',['-X','-q','-A','-t','-v','ON_ERROR_STOP=1'],{env,input:s,encoding:'utf8',timeout:10000}).trim();}
 const snapshot=JSON.parse(query(`begin read only;
 select jsonb_build_object('observed_at',clock_timestamp(),'runtime',(select to_jsonb(r) from v11_long_regime_runtime r where singleton),
