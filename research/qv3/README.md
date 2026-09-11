@@ -1,0 +1,50 @@
+# QV3 ENTRY_EXIT_TWO integration
+
+Baseline: remote v10-lane-executor v35, source e008db827227bbd75fd8a4d7e6b26dcec2d77500.
+All nine fetched executor files match that source byte for byte.
+
+`leader-qv3-rules.mjs` is the supplied research module with only its import path
+changed. Operational calls select ENTRY_EXIT_TWO exclusively. The runtime adapter
+adds completed-candle continuity, duplicate/OHLC checks, explicit ownership, and a
+position-specific persisted favorable-close proof. It does not change thresholds.
+
+The live integration is staged behind `QV3_LIVE_CUTOVER=null`. HTTP bodies and
+environment variables cannot activate it. Do not change this until all gates in
+the original protocol pass. This build has no live promotion approval by evidence.
+Only new entries bearing the matching cutover stamp could use QV3. Recovery takes
+that stamp from the original order intent. Existing positions keep their policy.
+
+Baseline stops, deadlines, and native protection execute before the optional QV3
+exit check. Candidate exits reuse closePos, persisted intent identities, settlement,
+lease fencing and protection cleanup. Ambiguous dispatches remain reconciliation
+work; they are never blindly resubmitted.
+
+The separate `qv3-entry-exit-shadow` function cannot import/call live orders. It
+uses public market GETs and reads existing scan/ownership/control tables. Its only
+write target is v18_strategy_shadow_runs under QV3_ENTRY_EXIT_TWO_SHADOW_1. No DB
+schema change is needed. Authentication uses the existing diagnostic token.
+`qv3-ops-status` exposes only fixed authenticated read commands: p10_portfolio,
+v18_open_orders and symbol_info for 4USDT, plus sanitized gateway health metadata.
+
+Tests:
+
+```sh
+node --test research/qv3/*.test.mjs test-support/v18-ops/run-race.test.mjs test-support/v18-ops/settlement.test.mjs test-support/v18-ops/runtime-observability.test.mjs
+node --test gateway/server.test.mjs
+PGLITE_MODULE=/absolute/path/to/@electric-sql/pglite/dist/index.js node --test test-support/v18-ops/postgres.test.mjs
+node research/qv3/replay-selected.mjs /absolute/path/to/unmodified/evidence
+```
+
+The selected replay reproduces only BASELINE and ENTRY_EXIT_TWO from the fixed
+archive window. It does not search other candidates, bootstrap again, reconstruct
+cash/slots/replacement entries, or establish independent profitability.
+
+Blocked evidence includes fewer than 100 post-update trades, zero independent
+validation trades (30 required over 3 windows), 17 baseline errors above 0.25 USDT,
+missing account replay/funding and negative absolute stress PnL. The original 99%
+familywise descriptive interval crosses zero. Passing engineering tests does not
+resolve those failures. Original protocol and its hash remain unchanged.
+
+Rollback: the live executor is not part of this shadow deployment; v35 remains the
+live rollback reference. Stop only the qv3-entry-exit-shadow-observe cron job to end
+collection. Preserve analytics evidence and all live settings/position rows.

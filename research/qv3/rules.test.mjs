@@ -1,0 +1,10 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {entryGate,exitSignal,exitDecision} from './rules.mjs';
+const b=(t,o,h,l,c)=>[t,o,h,l,c,1,t+59999];
+const down=[b(0,106,108,104,105),b(60000,105,107,102,103),b(120000,103,104,100,101)];
+test('entry cannot see the unfinished third bar',()=>{assert.equal(entryGate(down,150000,'ENTRY').reject,false);assert.equal(entryGate(down,180000,'ENTRY').reject,true);});
+test('missing latest candle does not synthesize an entry rejection',()=>assert.equal(entryGate(down,240000,'ENTRY').unavailable,true));
+test('future profit cannot arm an earlier exit',()=>{const xs=[b(60000,100,100,99,99.5),b(120000,99.5,104,99,103)];assert.equal(exitSignal({entryAt:0,entryPrice:100},xs,120000,'EXIT_ONE'),false);});
+test('high-only excursion cannot arm close-based profit condition',()=>assert.equal(exitSignal({entryAt:0,entryPrice:100},[b(60000,100,104,99,99.5)],120000,'EXIT_ONE'),false));
+test('two bearish bars wait for the second close',()=>{const xs=[b(60000,100,103,99,102),b(120000,102,103,100,101),b(180000,101,102,99,100)];assert.equal(exitSignal({entryAt:0,entryPrice:100},xs,180000,'EXIT_TWO'),false);assert.equal(exitSignal({entryAt:0,entryPrice:100},xs,240000,'EXIT_TWO'),true);});
+test('manual and unknown ownership preserved',()=>{for(const ownership of ['MANUAL','UNKNOWN'])assert.equal(exitDecision({ownership},1,1).action,'PRESERVE');});
+test('existing stop and quantity state never mutated by candidate',()=>{const p={entryPrice:100,entryAt:0,entryFee:.05,quantity:1,peakPrice:105,stopPrice:103,lastHighAt:120000};const before=JSON.stringify(p);const d=exitDecision(p,102,180000,'EXIT_TWO',down);assert.equal(d.action,'CLOSE');assert.ok(d.stopPrice>=103);assert.equal(JSON.stringify(p),before);});

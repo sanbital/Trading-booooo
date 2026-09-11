@@ -10,6 +10,7 @@ import {protectNewLeaderPosition} from '../../supabase/functions/_shared/leader-
 import {createGatewayProtection} from '../../supabase/functions/_shared/leader-protection-adapter.mjs';
 import * as ops from '../../supabase/functions/_shared/leader-ops-isolation.mjs';
 import * as entrySettlement from '../../supabase/functions/_shared/leader-entry-settlement.mjs';
+import * as qv3 from '../../supabase/functions/_shared/leader-qv3-runtime.mjs';
 import * as settlement from '../../supabase/functions/_shared/leader-exit-settlement.mjs';
 export const BASE='bce9e95210829b5ae561f667dd1b499772977ec1';
 const root=new URL('../../',import.meta.url);
@@ -32,7 +33,7 @@ export function position(symbol='SAGAUSDT',quantity=7067.3,price=.01699){
 export function entryOrder(p){return {id:'order-'+p.id,signal_id:p.signal_id,position_id:p.id,symbol:p.symbol,intent:'OPEN_LONG',state:'FILLED',
  exchange_order_id:p.metadata.entryOrderId,client_order_id:'entry-client-'+p.id,requested_quantity:p.original_quantity,
  request_payload:{order:{side:'BUY',position_side:'LONG',position_effect:'OPEN'}},created_at:p.entry_at,updated_at:p.entry_at};}
-export function harness({positions=[],baseline=false,circuit=false,manual=[],settings={},signal=true,now=Date.parse('2026-09-10T16:16:00Z'),hook=()=>{}}={}) {
+export function harness({positions=[],baseline=false,circuit=false,manual=[],settings={},signal=true,now=Date.parse('2026-09-10T16:16:00Z'),hook=()=>{},qv3Cutover=null,qv3Fetch=null}={}) {
  const state={now,portfolioCount:0,lease:true,leaseOwner:null,quotes:{},stopFills:{},software:{},calls:[],writes:[],circuits:[],hook,
   exchange:positions.map(p=>({market:p.symbol,side:p.side,quantity:p.remaining_quantity})),
   tables:{v11_long_regime_positions:clone(positions),v11_long_regime_orders:positions.map(entryOrder),v11_long_regime_decisions:[],
@@ -113,7 +114,7 @@ export function harness({positions=[],baseline=false,circuit=false,manual=[],set
  source=source.replace(/^import .*;\n/gm,'').replace('const exchangeGateway=gateway;','const exchangeGateway=__gateway;');source=source.slice(0,source.indexOf('Deno.serve'));
  // Only exchange/DB/time boundaries are replaced. run/manage/open/close are actual source.
  source+='\ngateway=__gateway;this.runCycle=()=>runWithLease(__db);this.open=(...args)=>openBull(__db,...args);this.close=(...args)=>closePos(__db,...args);this.manage=(...args)=>manageLeader(__db,...args);this.setLease=()=>leaseOwners.set(__db,"test-owner");';
- const ctx={...momentum,...review,...ops,...settlement,...entrySettlement,leaderPortfolioMatches:momentum.portfolioMatches,protectNewLeaderPosition,createGatewayProtection:baseline?baselineAdapter.createGatewayProtection:createGatewayProtection,
+ const ctx={...momentum,...review,...ops,...settlement,...entrySettlement,...qv3,QV3_LIVE_CUTOVER:qv3Cutover,qv3Candles:(symbol,at,start)=>qv3.qv3Candles(symbol,at,start,qv3Fetch??(()=>{throw Error("NETWORK_FORBIDDEN")})),leaderPortfolioMatches:momentum.portfolioMatches,protectNewLeaderPosition,createGatewayProtection:baseline?baselineAdapter.createGatewayProtection:createGatewayProtection,
   Date:Clock,console,crypto,Map,Set,WeakMap,AbortController,TextEncoder,Response,Headers,fetch:()=>{throw Error('NETWORK_FORBIDDEN')},setTimeout,clearTimeout,
   Deno:{env:{get:k=>k==='V17_NATIVE_STOP'?'true':''}},__gateway:gateway,__db:db};
  vm.createContext(ctx);vm.runInContext(source,ctx);ctx.setLease();

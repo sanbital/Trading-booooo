@@ -1,0 +1,18 @@
+{
+  "generated_at": "2026-09-11T13:47:25.875554+00:00",
+  "code_sha256": {
+    "rules.test.mjs": "0e22c2c02fdc35e21e27034ae8863b8bf1d388848f463714158f12963f900225",
+    "actual-overlay.mjs": "5edb89dd030dbfee2080b64597a8df8f8910ba5086cd55b22bba81b78786e3e3",
+    "rules.mjs": "09a42853cc53817720a5d6d0204b9a3ceb28630a64f97491b14bf68b60864ce6",
+    "replay.mjs": "fceaf10b46065adf41579dbbefbe197e7ef38938830e1f1e38e1cbac81427dbf"
+  },
+  "protocol_sha256": "40edde803ad6e55da509799399971e47391f3adfb048a1a01d7b582c82ae672e",
+  "baseline_traces_identical_to_prior_all_six_conditions": true,
+  "entry_candle_unavailable": 0,
+  "new_tests_passed": 7,
+  "baseline_decisions": {
+    "decisions": 991,
+    "stopMismatches": 0,
+    "actionMismatches": 0
+  }
+}

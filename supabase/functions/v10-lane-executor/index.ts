@@ -7,6 +7,7 @@ import {createGatewayProtection} from "../_shared/leader-protection-adapter.mjs"
 import {classifyPortfolio, freshPortfolio, ownedEntry, riskOrders, classifyFailure, operatorAllowsRecovery, recoveryEvidence, confirmedLiveProtection, createBudget, boundedMap} from "../_shared/leader-ops-isolation.mjs";
 import {entryReceipt,entryExposureMatches} from "../_shared/leader-entry-settlement.mjs";
 import {applyExitReceipt} from "../_shared/leader-exit-settlement.mjs";
+import {QV3_LIVE_CUTOVER,QV3_VERSION,qv3Entry,qv3Exit,qv3Scope,qv3Stamp,qv3Candles} from "../_shared/leader-qv3-runtime.mjs";
 const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V18-OPS-ISOLATION-3",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 // Bounded so a bar of refusals cannot stretch the run past the one-minute cadence.
 const ENTRY_ATTEMPTS_PER_RUN=3;
@@ -167,7 +168,19 @@ if(sized.amount*limitPrice/LEV>MARGIN+MAX_MARGIN_BUFFER_USDT+1e-9)throw new Erro
 await requireLeaderEntryControls(db);
 const finalCheck=await readOpsPair(db);if(!finalCheck.match.ok){await handleEntryMismatch(db,finalCheck.match);return{entered:false,reason:"PORTFOLIO_RECHECK_REQUIRED",releaseClaim:true}}
 if(finalCheck.positions.some(p=>p.symbol===s.symbol)||finalCheck.positions.length>=MAX_SLOTS)return{entered:false,reason:"PORTFOLIO_CHANGED",releaseClaim:true};
-await verifyExecutionLease(db);const id=cid("v11e",s.id),rp={action:"create_order",leverage:LEV,order:{market:s.symbol,side:"BUY",type:"LIMIT",price:limitPrice,time_in_force:"IOC",quantity:sized.amount,identifier:id,position_side:"LONG",position_effect:"OPEN"},wait_for_final_ms:4000},oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,intent:"OPEN_LONG",reason:"V17_LEADER_ENTRY_IOC",client_order_id:id,requested_quantity:sized.amount,state:"PLANNED",request_payload:{...rp,quantity_step:step,target_margin_usdt:MARGIN,sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,executor_patch:PATCH}}).select("*").single();if(oi.error)throw new Error(`ORDER_INTENT:${oi.error.message}`);try{await verifyExecutionLease(db);attempt.dispatched=true;const raw=await gateway(rp),z=fill(raw);if(z.qty>0&&z.avg>0){const pos={data:await settleKnownEntry(db,oi.data,raw,gateway)},stop=pos.data.hard_stop_price;const entryProtection=await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position:pos.data,manualSymbols:manualRows.map(x=>x.symbol),readPortfolio:()=>gateway({action:"p10_portfolio"},5000),manage:ctx=>manageLeader(db,pos.data,{...ctx,gateway})});return{entered:true,positionId:pos.data.id,symbol:s.symbol,entryPrice:z.avg,quantity:z.qty,stopPrice:stop,hardDeadline:pos.data.hard_deadline,iocBps,sizedMarginUsdt:sized.sizedMargin,entryProtection}}if(terminal(z)){await settleKnownEntry(db,oi.data,raw,gateway);return{entered:false,reason:`IOC_NO_FILL:${z.status}`}}await db.from("v11_long_regime_orders").update({state:"RECONCILIATION_FAILED",exchange_order_id:z.exchangeOrderId,response_payload:raw,reject_reason:`IOC_PENDING:${z.status}`,updated_at:new Date().toISOString()}).eq("id",oi.data.id);await db.from("v11_long_regime_signals").update({status:"ORDERED",updated_at:new Date().toISOString()}).eq("id",s.id);await circuit(db,`BULL_ENTRY_AMBIGUOUS:${z.status}`,"KNOWN_ORDER_PENDING_RECONCILIATION",{orderId:oi.data.id,clientOrderId:id});throw new Error(`IOC_PENDING:${z.status}`)}catch(e){if(classifyFailure(e).fatal)throw e;await verifyExecutionLease(db);const msg=e instanceof Error?e.message:String(e),explicit=false;await db.from("v11_long_regime_orders").update({state:explicit?"REJECTED":"RECONCILIATION_FAILED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",oi.data.id);if(explicit){await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",s.id);return{entered:false,reason:msg}}await db.from("v11_long_regime_signals").update({status:"ORDERED",updated_at:new Date().toISOString()}).eq("id",s.id);await circuit(db,`BULL_ENTRY_AMBIGUOUS:${msg}`,"KNOWN_ORDER_PENDING_RECONCILIATION",{orderId:oi.data.id,clientOrderId:id,error:msg});throw e}}
+// Disabled until every frozen promotion gate passes. No request/env can turn it on.
+if(QV3_LIVE_CUTOVER!==null){
+  let result;
+  try{const at=Date.now(),bars=await qv3Candles(s.symbol,at,Math.floor(at/60000)*60000-180000);result=qv3Entry(bars,Date.now());}
+  catch(e){result={available:false,wouldBlock:true,reason:String(e.message??e)};}
+  if(!result.available||result.wouldBlock){
+    await audit(db,null,"BULL","BULL","ENTRY_DEFER",result.reason,{signalId:s.id,symbol:s.symbol,qv3:result});
+    return {entered:false,reason:result.reason,releaseClaim:true};
+  }
+  await requireLeaderEntryControls(db);
+  const freshness=entryFresh(f,Date.now(),limitPrice);if(freshness)throw Error(freshness);
+}
+await verifyExecutionLease(db);const id=cid("v11e",s.id),rp={action:"create_order",leverage:LEV,order:{market:s.symbol,side:"BUY",type:"LIMIT",price:limitPrice,time_in_force:"IOC",quantity:sized.amount,identifier:id,position_side:"LONG",position_effect:"OPEN"},wait_for_final_ms:4000},oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,intent:"OPEN_LONG",reason:"V17_LEADER_ENTRY_IOC",client_order_id:id,requested_quantity:sized.amount,state:"PLANNED",request_payload:{...rp,quantity_step:step,target_margin_usdt:MARGIN,sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,executor_patch:PATCH,qv3:QV3_LIVE_CUTOVER===null?null:{version:QV3_VERSION,activation:QV3_LIVE_CUTOVER}}}).select("*").single();if(oi.error)throw new Error(`ORDER_INTENT:${oi.error.message}`);try{await verifyExecutionLease(db);attempt.dispatched=true;const raw=await gateway(rp),z=fill(raw);if(z.qty>0&&z.avg>0){const pos={data:await settleKnownEntry(db,oi.data,raw,gateway)},stop=pos.data.hard_stop_price;const entryProtection=await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position:pos.data,manualSymbols:manualRows.map(x=>x.symbol),readPortfolio:()=>gateway({action:"p10_portfolio"},5000),manage:ctx=>manageLeader(db,pos.data,{...ctx,gateway})});return{entered:true,positionId:pos.data.id,symbol:s.symbol,entryPrice:z.avg,quantity:z.qty,stopPrice:stop,hardDeadline:pos.data.hard_deadline,iocBps,sizedMarginUsdt:sized.sizedMargin,entryProtection}}if(terminal(z)){await settleKnownEntry(db,oi.data,raw,gateway);return{entered:false,reason:`IOC_NO_FILL:${z.status}`}}await db.from("v11_long_regime_orders").update({state:"RECONCILIATION_FAILED",exchange_order_id:z.exchangeOrderId,response_payload:raw,reject_reason:`IOC_PENDING:${z.status}`,updated_at:new Date().toISOString()}).eq("id",oi.data.id);await db.from("v11_long_regime_signals").update({status:"ORDERED",updated_at:new Date().toISOString()}).eq("id",s.id);await circuit(db,`BULL_ENTRY_AMBIGUOUS:${z.status}`,"KNOWN_ORDER_PENDING_RECONCILIATION",{orderId:oi.data.id,clientOrderId:id});throw new Error(`IOC_PENDING:${z.status}`)}catch(e){if(classifyFailure(e).fatal)throw e;await verifyExecutionLease(db);const msg=e instanceof Error?e.message:String(e),explicit=false;await db.from("v11_long_regime_orders").update({state:explicit?"REJECTED":"RECONCILIATION_FAILED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",oi.data.id);if(explicit){await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",s.id);return{entered:false,reason:msg}}await db.from("v11_long_regime_signals").update({status:"ORDERED",updated_at:new Date().toISOString()}).eq("id",s.id);await circuit(db,`BULL_ENTRY_AMBIGUOUS:${msg}`,"KNOWN_ORDER_PENDING_RECONCILIATION",{orderId:oi.data.id,clientOrderId:id,error:msg});throw e}}
 // Best-effort feed for the decision-only exit shadow. It must never be able to affect
 // trading: every failure is swallowed, and the gateway ignores it unless the shadow is
 // enabled there. quantity_step lives on the opening order, not on the position row.
@@ -213,7 +226,7 @@ async function settleKnownEntry(db,intent,raw,gw=opsGateway(db)) {
     if(manual.some(x=>x.symbol===s.symbol)||!entryExposureMatches(pf,s.symbol,receipt.quantity))throw Error("ENTRY_EXPOSURE_UNPROVEN");
     const sized={sizedMargin:receipt.quantity*receipt.price/LEV};
     await verifyExecutionLease(db);
-    const stopPct=Number(f.exitPolicy?.stopPct);if(!(stopPct>0&&stopPct<1))throw new Error("STOP_POLICY_INVALID");const stop=z.avg*(1-stopPct);if(!(stop>0&&stop<z.avg))throw new Error("STOP_INVALID");const now=new Date(),pos=await db.from("v11_long_regime_positions").insert({signal_id:s.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:s.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,leaderExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,leaderLastHighAt:now.toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFeatures:f}}).select("*").single();
+    const stopPct=Number(f.exitPolicy?.stopPct);if(!(stopPct>0&&stopPct<1))throw new Error("STOP_POLICY_INVALID");const stop=z.avg*(1-stopPct);if(!(stop>0&&stop<z.avg))throw new Error("STOP_INVALID");const now=new Date(),pos=await db.from("v11_long_regime_positions").insert({signal_id:s.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:s.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{qv3:intent.request_payload?.qv3?.version===QV3_VERSION&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,leaderExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,leaderLastHighAt:now.toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFeatures:f}}).select("*").single();
     if(pos.error)throw Error(`POSITION:${pos.error.message}`);position=pos.data;
   }
   await verifyExecutionLease(db);
@@ -530,8 +543,47 @@ async function manageLeader(db,p,ctx){
   // Only after the ratcheted stop is durable: the exchange order must never protect a
   // level the database does not already hold.
   const nativeStop=await syncNativeStop("HOLD");
+  // Existing stop/deadline decisions and resident protection run first. QV3 failures
+  // leave that protection intact. Current build has no live cutover.
+  const qv3=await qv3AfterProtection(db,write.data,ctx);
+  if(qv3?.result){
+    await audit(db,p,"BULL","BULL","FULL_CLOSE","QV3_TWO_BEARISH_CLOSED",{...details,qv3:qv3.assessment})
+      .catch(e=>console.error("QV3_AUDIT_FAILED",String(e)));
+    const retired=await syncNativeStop("CLOSE");
+    return {action:"CLOSE",reason:"QV3_TWO_BEARISH_CLOSED",result:qv3.result,nativeStop:retired};
+  }
+  if(qv3)details.qv3=qv3;
   await audit(db,p,"BULL","BULL","HOLD","V17_MOMENTUM_HOLD",{...details,nativeStop});
   return {action:"HOLD",strategy:STRATEGY,bid,...state,nativeStop};
+}
+async function qv3AfterProtection(db,p,ctx){
+  if(QV3_LIVE_CUTOVER===null)return null;
+  let closeAttempted=false;
+  const shape=row=>({id:row.id,entryAt:Date.parse(row.entry_at),entryPrice:Number(row.entry_price),
+    side:row.side,state:row.state,ownership:rec(row.metadata).v17ManualPosition===true?"MANUAL":"AUTO",qv3:rec(row.metadata).qv3});
+  if(!qv3Scope(shape(p),QV3_LIVE_CUTOVER))return null;
+  try{
+    await verifyExecutionLease(db);
+    const current=await db.from("v11_long_regime_positions").select("*").eq("id",p.id).single();
+    if(current.error||!current.data)throw Error("QV3_POSITION_READ");
+    p=current.data;
+    if(!qv3Scope(shape(p),QV3_LIVE_CUTOVER)||!ownedEntry(p,await readOpsOrders(db,[p])))return {reason:"QV3_PRESERVE_OWNERSHIP_CHANGED"};
+    const at=Date.now(),prior=rec(p.metadata).qv3State;
+    const start=prior?.favorableCandle?Math.floor(at/60000)*60000-120000:Math.ceil(Date.parse(p.entry_at)/60000)*60000;
+    const bars=await qv3Candles(p.symbol,at,start);
+    const assessment=qv3Exit(shape(p),bars,Date.now(),prior);
+    if(!assessment.available)return assessment;
+    await verifyExecutionLease(db);
+    const saved=await db.from("v11_long_regime_positions").update({metadata:{...rec(p.metadata),qv3State:assessment.state},
+      updated_at:new Date(Math.max(Date.now(),Date.parse(p.updated_at)+1)).toISOString()})
+      .eq("id",p.id).eq("state","OPEN").eq("updated_at",p.updated_at).select("*").maybeSingle();
+    if(saved.error||!saved.data)throw Error("QV3_STATE_CAS_CONFLICT");
+    if(assessment.wouldClose){closeAttempted=true;return {assessment,result:await closePos(db,saved.data,1,"QV3_TWO_BEARISH_CLOSED",ctx)};}
+    return assessment;
+  }catch(e){
+    if(closeAttempted||classifyFailure(e).fatal)throw e;
+    return {available:false,reason:String(e.message??e),executionEnabled:false};
+  }
 }
 const exchangeGateway=gateway;
 const leaseOwners=new WeakMap(),cycleBudgets=new WeakMap();

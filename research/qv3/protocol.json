@@ -1,0 +1,123 @@
+{
+  "protocol": "QV3_STRUCTURE_20260911",
+  "frozen_at": "2026-09-11T13:44:38.701474+00:00",
+  "baseline_source": "e008db827227bbd75fd8a4d7e6b26dcec2d77500",
+  "baseline_edge_version": 35,
+  "baseline_bundle_sha256": "672cc946cbfc12a99297588ad054c2fcccc0b01301a01b5ad391606931e98e6a",
+  "latest_deployment_registered": "2026-09-11T10:46:21.359Z",
+  "prior_remote_execution_observation": "2026-09-11T10:47:06.962Z",
+  "current_source_reverified": "2026-09-11T12:43:28Z",
+  "start": "2026-09-09T12:41:39.488451Z",
+  "cutoff": "2026-09-11T12:41:39.488451Z",
+  "split": "2026-09-10T12:41:39.488451Z",
+  "data_role": "Same frozen 48h as prior comparison; entirely observed development data",
+  "independent_validation_trades": 0,
+  "prior_candidate_commit": "0529c4a05be89b1b7a2b5ba7e0250576f032b158",
+  "prior_failed_candidates": [
+    "FAST_FAIL",
+    "EARLY_LOCK",
+    "VOL_TRAIL",
+    "COMBINED"
+  ],
+  "previous_search_count": "Earlier 4 exit candidates, QV2 7 combinations, plus the trade-level QV3 examples already inspected; full older research count unknown",
+  "new_components": {
+    "ENTRY_WEAK": "last 3 completed 1m highs and closes strictly decrease; last 2 bearish",
+    "EXIT_ONE": "since entry a fully post-entry completed close exceeded entry by 0.2%; latest completed bar bearish",
+    "EXIT_TWO": "same favorable-close prerequisite; latest 2 completed bars bearish and descending closes"
+  },
+  "variants": [
+    "BASELINE",
+    "ENTRY",
+    "EXIT_ONE",
+    "EXIT_TWO",
+    "ENTRY_EXIT_ONE",
+    "ENTRY_EXIT_TWO"
+  ],
+  "max_parameter_trials": 1,
+  "max_nonbaseline_combinations": 5,
+  "adaptive_parameter_search_allowed": false,
+  "execution_scenarios": {
+    "normal": {
+      "price_impact": 0.001,
+      "exit_fee_rate": 0.0005,
+      "fee_factor": 1,
+      "software_delay_ms": 0
+    },
+    "cost_stress": {
+      "price_impact": 0.002,
+      "exit_fee_rate": 0.0005,
+      "fee_factor": 2,
+      "software_delay_ms": 0
+    },
+    "delay_stress": {
+      "price_impact": 0.002,
+      "exit_fee_rate": 0.0005,
+      "fee_factor": 2,
+      "software_delay_ms": 60000
+    }
+  },
+  "bar_order_bounds": [
+    "SKIP_ENTRY_BAR",
+    "ADVERSE_ENTRY_BAR"
+  ],
+  "post_exit_minutes": [
+    5,
+    15,
+    30
+  ],
+  "funding": "UNKNOWN_NOT_ZERO",
+  "actual_slippage": "Already embedded in fills, never deduct again",
+  "execution_model": "Conditional on the same historical entries; no replacement signals, no full cash/slot replay; sampled 1m quotes and stop levels; not an account backtest",
+  "promotion_gates_preserved": {
+    "minimum_post_update_closed_trades": 100,
+    "minimum_chronological_validation_trades": 30,
+    "minimum_validation_windows": 3,
+    "baseline_net_pnl_absolute_error_per_trade_max_usdt": 0.25,
+    "positive_validation_net_expectancy_required": true,
+    "validation_net_improvement_required": true,
+    "no_worse_max_drawdown_required": true,
+    "no_worse_worst_trade_required": true,
+    "minimum_opportunity_retention": 0.7,
+    "cost_delay_stress_outperformance_required": true,
+    "point_in_time_account_slot_cash_replay_required": true,
+    "funding_coverage_required": true
+  },
+  "additional_gates": {
+    "each_24h_delta_nonnegative": true,
+    "latest_deployment_delta_nonnegative": true,
+    "positive_net_under_stress": true,
+    "familywise_bootstrap_confidence": 0.99
+  },
+  "risk": {
+    "margin_usdt": 40,
+    "leverage": 3,
+    "max_slots": 10,
+    "initial_stop_price_pct": 0.025,
+    "max_hold_ms": 21600000,
+    "never_lower_stored_stop": true,
+    "never_reset_peak_or_partial_state": true,
+    "manual_or_unknown_positions": "PRESERVE"
+  },
+  "classification": {
+    "SUPERIOR": "Every preserved and additional gate passes using independently validated account replay",
+    "INFERIOR": "Robustness or performance gate worsens versus current baseline; research-only result if fidelity fails",
+    "DEFER": "Insufficient sample, missing costs, missing account replay, fidelity failure or unstable result"
+  },
+  "stop_rule": "No live promotion on failed fidelity or evidence gates. Preserve all failures. Diagnostic calculations may expose failure patterns but cannot establish account superiority.",
+  "deployment": "No live orders, controls, circuit changes or strategy deployment by this research run",
+  "existing_positions": "No candidate application; pure offline module only",
+  "parameters": {
+    "favorable_close_pct": 0.002,
+    "entry_bars": 3,
+    "exit_bars": [
+      1,
+      2
+    ]
+  },
+  "notes": "Main comparison simulates baseline and candidates on same 1m timeline; secondary actual-bid overlay keeps real exit if no earlier candidate trigger, NOT a baseline replay.",
+  "inputs_sha256": {
+    "episodes.json": "b4df9ccbdd08cbcac7d9cb0d2a23f4dc6038aa50c1c74c63067191fcf6f1ecae",
+    "candles.json": "8af6da253ab3f934f4d28fb98996597f70082199a5394f1cc52274a363e6d922",
+    "decisions.json": "1b9fadf82a21ab3a639d38ad02ff0b22c1be00d598725ed8b411704557c461b9"
+  }
+}
