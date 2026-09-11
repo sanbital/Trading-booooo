@@ -1,0 +1,17 @@
+{
+  "model": "V18_PAPER_ACCOUNTS_1",
+  "frozenAt": "2026-09-11T12:01:23Z",
+  "prospectiveStart": "FIRST_OBSERVATION_WITH_V18_PAPER_MARKET_1",
+  "initialState": "FLAT_HYPOTHETICAL_100_USDT_EACH_VARIANT_NOT_REAL_ACCOUNT",
+  "settings": {"initialBalance": 100, "marginUsdt": 40, "leverage": 3, "maxSlots": 10},
+  "scenarios": {
+    "normal": {"feeRate": 0.0005, "entrySlippageBps": 0, "exitSlippageBps": 0, "latencyMs": 0},
+    "cost_stress": {"feeRate": 0.001, "entrySlippageBps": 2, "exitSlippageBps": 20, "latencyMs": 0},
+    "cost_and_delay": {"feeRate": 0.001, "entrySlippageBps": 2, "exitSlippageBps": 20, "latencyMs": 60000}
+  },
+  "rules": "Keep all frozen strategy variants. No new parameter selection.",
+  "executionAssumption": "First observed L1 at or after due time; IOC limit and visible volume; pending exit persists until filled.",
+  "fundingVerified": false,
+  "livePromotion": false,
+  "promotionGates": "Original evidence/promotion-gates.json remains unchanged; this model does not satisfy native execution or funding fidelity."
+}

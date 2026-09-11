@@ -492,7 +492,7 @@ function validateUpbitMarket(market) {
 // characters, combining marks, emoji -- remains excluded.
 function validateBinanceSymbol(symbol) {
   const value = String(symbol || "").toUpperCase();
-  if (!/^[\p{L}\p{N}]{2,24}USDT$/u.test(value)) {
+  if (!/^[\p{L}\p{N}]{1,24}USDT$/u.test(value)) {
     throw new Error("only Binance USDT symbols are allowed");
   }
   return value;

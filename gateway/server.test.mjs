@@ -43,6 +43,13 @@ test("monitor cadence waits only for the unspent interval", () => {
   assert.equal(module.monitorCadenceDelayMs(1_000, 3_350, 2_000), 0);
 });
 
+test("valid one-character Binance bases reach the exchange without allowing query delimiters", () => {
+  for (const symbol of ["4USDT", "XUSDT", "牛USDT", "BTCUSDT", "哈基米USDT"])
+    assert.equal(module.validateBinanceSymbol(symbol), symbol);
+  for (const symbol of ["USDT", "4USDC", "4/USDT", "4&USDT", "4?USDT", "4 USDT", "4%USDT", "4\nUSDT"])
+    assert.throws(() => module.validateBinanceSymbol(symbol));
+});
+
 test("monitor cadence tolerates a non-monotonic wall clock", () => {
   assert.equal(module.monitorCadenceDelayMs(2_000, 1_900, 2_000), 2_000);
 });
