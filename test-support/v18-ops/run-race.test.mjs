@@ -49,6 +49,23 @@ test('04 flat recoverable incident clears only after three fresh independent cyc
  assert.equal(h.state.tables.v11_long_regime_runtime[0].circuit_open,false);
  assert.ok(!h.state.calls.some(c=>c.action==='create_order'));
 });
+test('14 production recovery lock timeout preserves completed SAGA protection and next-cycle recovery',async()=>{
+ let fail=true;
+ const h=harness({positions:[saga()],circuit:true,signal:false,hook:({type,name})=>{
+  if(type==='rpc'&&name==='v18_recovery_observation'&&fail){fail=false;throw Error('RECOVERY_CAS:canceling statement due to lock timeout');}
+ }});
+ h.state.quotes.SAGAUSDT=.0185;
+ await assert.rejects(()=>h.ctx.runCycle(),/lock timeout/);
+ assert.equal(row(h,'SAGAUSDT').peak_price,.0185);
+ assert.ok(row(h,'SAGAUSDT').hard_stop_price>.01656525);
+ const runtime=h.state.tables.v11_long_regime_runtime[0];
+ assert.equal(runtime.circuit_open,true);
+ assert.ok(runtime.last_cycle_completed_at);
+ assert.equal(runtime.protection_health,'PROTECTED');
+ assert.ok(!h.state.calls.some(c=>c.action==='create_order'));
+ for(let n=0;n<3;n++){h.advance();await h.ctx.runCycle();}
+ assert.equal(runtime.circuit_open,false);
+});
 test('05 pause, kill, withdrawal and manual intervention preserve operator controls',async()=>{
  for(const flag of ['pause_new_entries','scalp_kill_switch','withdrawal_mode','manual_intervention_required']){
   const h=harness({circuit:true,signal:false,settings:{[flag]:true}});
