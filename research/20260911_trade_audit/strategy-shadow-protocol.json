@@ -1,0 +1,45 @@
+{
+  "version": "V18_STRATEGY_SHADOW_1",
+  "frozenAt": "2026-09-11T11:19:42.867438Z",
+  "seenDataCutoff": "2026-09-11T11:19:42.867438Z",
+  "prospectiveValidationStart": "FIRST_SUCCESSFUL_REMOTE_SHADOW_RUN_AFTER_DEPLOYMENT",
+  "baseline": "V17_EXIT_R5_TAIL",
+  "candidates": {
+    "REPEAT_STOP_2": {
+      "stopLossCountKstDay": 2
+    },
+    "SPIKE_3PCT": {
+      "maxClosed5mReturn": 0.03
+    },
+    "COMBINED": {
+      "stopLossCountKstDay": 2,
+      "maxClosed5mReturn": 0.03
+    },
+    "LOCK_1P5": {
+      "profitLockArmPct": 0.015,
+      "profitLockCapture": 0.5
+    }
+  },
+  "sensitivityNotSelection": {
+    "stopLossCountKstDay": [
+      1,
+      3
+    ],
+    "maxClosed5mReturn": [
+      0.02,
+      0.04
+    ]
+  },
+  "parameterRationale": {
+    "repeat": "Two net negative stop closures in one KST day is an unvalidated risk hypothesis; not fitted or authorized as live risk limit.",
+    "spike": "A single completed 5m move reaching the existing 3% trail activation magnitude is an unvalidated chase hypothesis.",
+    "lock": "Previously evaluated candidate: arm existing 50% peak capture at 1.5% rather than 2%; no loosening of any existing stop."
+  },
+  "knownDataRole": "ALL_SEEN_DATA_EXPLORATORY_NOT_HOLDOUT",
+  "promotionGatesFile": "evidence/promotion-gates.json",
+  "livePromotion": false,
+  "fundingVerified": false,
+  "orderExecution": false,
+  "partialExitChanges": false,
+  "leverageChanges": false
+}

@@ -1,0 +1,39 @@
+name: V18 strategy shadow regression
+on:
+  push:
+    branches: [review/v18-trade-audit-20260911]
+    paths:
+      - .github/workflows/v18-strategy-shadow.yml
+      - supabase/functions/_shared/leader-strategy-shadow.mjs
+      - supabase/functions/v18-strategy-shadow/**
+      - supabase/migrations/20260911112129_v18_strategy_shadow_observations.sql
+      - test-support/v18-ops/strategy-shadow*.test.mjs
+      - research/20260911_trade_audit/**
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix test-support/v18-ops --ignore-scripts --no-audit --no-fund
+      - name: Full required regression including isolated shadow and RLS
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PGLITE_MODULE="$PWD/test-support/v18-ops/node_modules/@electric-sql/pglite/dist/index.js"
+          node --test --test-concurrency=1 --test-reporter=tap test-support/v17-exit/*.test.mjs research/v18/*.test.mjs test-support/v18-ops/*.test.mjs gateway/*.test.mjs > regression.tap
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: strategy-shadow-regression-${{ github.sha }}
+          path: regression.tap
+          retention-days: 30
