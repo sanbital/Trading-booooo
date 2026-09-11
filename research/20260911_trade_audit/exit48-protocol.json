@@ -1,0 +1,69 @@
+{
+  "frozenAt": "2026-09-11T12:13:56Z",
+  "cutoff": "2026-09-11T12:11:25.984451Z",
+  "start": "2026-09-09T12:11:25.984451Z",
+  "role": "RETROSPECTIVE_DEVELOPMENT_AND_ROBUSTNESS_NOT_UNTOUCHED_HOLDOUT",
+  "baseline": "V17_EXIT_R5_TAIL",
+  "variants": {
+    "BASELINE": {},
+    "FAST_FAIL": {
+      "earlyAfterMs": 300000,
+      "maxMfe": 0.005,
+      "adverseReturn": -0.006,
+      "riskCutLevel": 0.012
+    },
+    "EARLY_LOCK": {
+      "profitLockArmPct": 0.015,
+      "profitLockCapture": 0.5
+    },
+    "VOL_TRAIL": {
+      "risingCloses": 3,
+      "atrBars": 14,
+      "atrMultiple": 2,
+      "minGap": 0.015,
+      "maxGap": 0.025
+    },
+    "COMBINED": {
+      "components": [
+        "FAST_FAIL",
+        "EARLY_LOCK",
+        "VOL_TRAIL"
+      ]
+    }
+  },
+  "rationale": {
+    "loss": "Recent losers rarely reach +1%. Advance existing -1.2% protection from 10m to 5m only when MFE stays below half the +1% arm and current loss exceeds half the -1.2% cut. Preserve the initial stop.",
+    "profit": "Arm existing half-peak lock at +1.5% (previous hypothesis), and only widen future trailing proposals during three rising completed closes to twice ATR, capped at the original 2.5% risk width. Never loosen a stored stop.",
+    "thresholds": "Engineering hypotheses derived from current rule scales; not optimized or validated."
+  },
+  "comparisons": [
+    "all 59 executed entries",
+    "operational-patch cohorts",
+    "first and second 24h chronological slices",
+    "one-component ablations",
+    "1m entry-bar adverse/skip bounds",
+    "normal 10bp / stress20bp price impact and doubled fees",
+    "60-second software delay"
+  ],
+  "passCriteria": {
+    "positiveNet": true,
+    "netImprovement": true,
+    "noWorseDrawdown": true,
+    "noWorseWorstTrade": true,
+    "stressImprovement": true,
+    "noFidelityClaimAboveMeanAbsoluteErrorUSDT": 0.25,
+    "livePromotion": false
+  },
+  "risks": [
+    "Seen data cannot establish out-of-sample validity",
+    "Executed-entry replay cannot reconstruct unexecuted historical opportunities",
+    "Funding unverified",
+    "Intraminute execution order uncertain"
+  ],
+  "postExitObservationMinutes": [
+    5,
+    15,
+    30
+  ],
+  "riskChanges": false
+}
