@@ -339,7 +339,7 @@ async function run(db) {
   const cycleStarted=new Date().toISOString();await verifyExecutionLease(db);
   const started=await db.from("v11_long_regime_runtime").update({last_cycle_started_at:cycleStarted}).eq("singleton",true);
   if(started.error)throw Error("HEARTBEAT_START_WRITE");
-  let managed=[],reconciliation=[],entry={entered:false,reason:"NOT_EVALUATED"},recovery=null,health="NOT_EVALUATED",fatal=null,pendingAge=null;
+  let managed=[],reconciliation=[],entry={entered:false,reason:"NOT_EVALUATED"},recovery=null,health="NOT_EVALUATED",fatal=null,pendingAge=null,entryEvaluationCompleted=false;
   try{
     const c=await opsControls(db);
     if(c.runtime.revision!==REVISION)throw Error("REVISION_MISMATCH");
@@ -377,7 +377,7 @@ async function run(db) {
       const controls=await opsControls(db);
       if(controls.runtime.circuit_open)entry.reason="CIRCUIT_OPEN_MANAGEMENT_ACTIVE";
       else if(!operatorAllowsRecovery(controls.runtime,controls.control,controls.settings))entry.reason="OPERATOR_ENTRY_BLOCK";
-      else entry=await runEntryQueue(db,pair.positions,pair.manual);
+      else {entry=await runEntryQueue(db,pair.positions,pair.manual);entryEvaluationCompleted=true;}
     }
     return {ok:true,revision:REVISION,patch:PATCH,managed,reconciliation,entry,recovery,protectionHealth:health};
   }catch(e){fatal=e;entry.reason=String(e.message??e);throw e;}
@@ -386,6 +386,13 @@ async function run(db) {
     if(!fatal||!classifyFailure(fatal).fatal){
       await verifyExecutionLease(db,true);const now=new Date().toISOString(),patch={last_cycle_completed_at:now,
         entry_block_reason:entry.entered?null:entry.reason,protection_health:health,reconciliation_pending_age:pendingAge,updated_at:now};
+      // A completed HTTP request is not a successful trading cycle. Advance the legacy
+      // success clock only after real entry evaluation and clean management/reconciliation.
+      // This is telemetry only: it must never clear a circuit or change operator controls.
+      if(!fatal&&entryEvaluationCompleted&&["FLAT","PROTECTED","SOFTWARE_ONLY"].includes(health)&&
+          managed.every(x=>!x.error&&!x.skipped)&&reconciliation.every(x=>!x.error)){
+        patch.last_success_at=now;patch.last_error=null;
+      }else if(fatal){patch.last_error=String(fatal.message??fatal).slice(0,500);}
       if(managed.length&&managed.every(x=>x.action&&!x.error&&!x.skipped)&&["PROTECTED","FLAT"].includes(health))patch.last_management_success_at=now;
       if(reconciliation.length&&reconciliation.every(x=>!x.error))patch.last_reconciliation_success_at=now;
       if(entry.entered)patch.last_entry_at=now;
