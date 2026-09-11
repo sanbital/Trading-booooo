@@ -7,7 +7,7 @@ const phase=process.argv[2],app=process.env.FLY_BINANCE_APP_NAME;
 assert.ok(['before','after'].includes(phase));assert.equal(app,'trading-booooo');
 const machine='1850353b930168',root='release-evidence';mkdirSync(root,{recursive:true});
 const save=(name,data)=>writeFileSync(`${root}/${name}.json`,JSON.stringify(data,null,2));
-function run(cmd,args,extra={}){try{return execFileSync(cmd,args,{encoding:'utf8',timeout:45000,stdio:['pipe','pipe','pipe'],...extra}).trim();}catch{throw Error(`${cmd}_FAILED`);}}
+function run(cmd,args,extra={}){try{return execFileSync(cmd,args,{encoding:'utf8',timeout:45000,stdio:['pipe','pipe','pipe'],...extra}).trim();}catch(e){let message=String(e.stderr||'').slice(0,3000);for(const v of Object.values(process.env).filter(v=>v&&v.length>8))message=message.split(v).join('[REDACTED]');console.error(JSON.stringify({command:cmd,operation:args.slice(0,2),status:e.status,message}));throw Error(`${cmd}_FAILED`);}}
 const uri=new URL(process.env.SUPABASE_DB_URL);
 assert.ok(['postgres:','postgresql:'].includes(uri.protocol));
 const env={...process.env,PGHOST:uri.hostname,PGPORT:uri.port||'5432',PGUSER:decodeURIComponent(uri.username),PGPASSWORD:decodeURIComponent(uri.password),PGDATABASE:decodeURIComponent(uri.pathname.slice(1)),PGCONNECT_TIMEOUT:'5',PGOPTIONS:'-c default_transaction_read_only=on -c statement_timeout=10000'};
@@ -38,7 +38,7 @@ const hashes=Object.fromEntries(files.map(name=>{let content=readFileSync(`gatew
 const output=run('flyctl',['ssh','console','--app',app,'--machine',machine,'--quiet','--command',`sha256sum ${files.map(x=>'/app/'+x).join(' ')}`]);
 const remote=Object.fromEntries(output.split('\n').map(x=>x.match(/^([a-f0-9]{64})\s+\/app\/(\S+)$/)).filter(Boolean).map(x=>[x[2],x[1]]));
 save(`hashes-${phase}`,{expected:hashes,remote});assert.deepEqual(remote,hashes,'REMOTE_SOURCE_MISMATCH');
-const status=JSON.parse(run('flyctl',['machine','status',machine,'--app',app,'--json']));
+const status=JSON.parse(run('flyctl',['machine','list','--app',app,'--json'])).find(x=>x.id===machine);assert.ok(status,'EXPECTED_MACHINE_MISSING');
 save(`machine-${phase}`,{id:status.id,state:status.state,region:status.region,image:status.config?.image??status.image_ref,instanceId:status.instance_id});
 if(phase==='before'){assert.equal(symbol.status,400);assert.equal(symbol.error,'only Binance USDT symbols are allowed');}
 else{assert.equal(symbol.status,200);assert.equal(symbol.ok,true);assert.equal(symbol.result.symbol,'4USDT');const b=JSON.parse(readFileSync(`${root}/controls-before.json`));assert.equal(db.incident,b.incident);assert.equal(db.lock,b.lock);}
