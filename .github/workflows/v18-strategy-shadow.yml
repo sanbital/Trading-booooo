@@ -30,7 +30,7 @@ jobs:
         run: |
           set -euo pipefail
           export PGLITE_MODULE="$PWD/test-support/v18-ops/node_modules/@electric-sql/pglite/dist/index.js"
-          node --test --test-concurrency=1 --test-reporter=tap test-support/v17-exit/*.test.mjs research/v18/*.test.mjs test-support/v18-ops/*.test.mjs gateway/*.test.mjs > regression.tap
+          node --test --test-concurrency=1 --test-reporter=tap test-support/v17-exit/*.test.mjs research/v18/*.test.mjs test-support/v18-ops/*.test.mjs gateway/*.test.mjs | tee regression.tap
       - uses: actions/upload-artifact@v4
         if: always()
         with:
