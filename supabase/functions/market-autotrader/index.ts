@@ -152,6 +152,7 @@ import {
   P10_SCAN_PORTFOLIO_CONCURRENCY,
 } from "./monitor-concurrency.ts";
 import { shouldLoadCompletedPolicyBar } from "./p10-monitor-cadence.ts";
+import { observeV17EntrySettlement } from "./v17-entry-settlement-observation.mjs";
 import {
   dedupeP10LinkedFills,
   p10DurableFillScopeError,
@@ -10247,6 +10248,23 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
     )
     : [];
   if (untrackedFutures.length) {
+    // A live V17 IOC can fill before its position row is committed. Verify the
+    // exact persisted order against the exchange, then defer this scan to V17's
+    // existing reconciler. Never clear settings, suppress unknown exposure, or
+    // treat the pending order as permission to open another position.
+    const v17PendingEntries = await db(
+      "v11_long_regime_orders?state=eq.DISPATCHED&intent=eq.OPEN_LONG&select=id,symbol,intent,state,position_id,client_order_id,exchange_order_id,requested_quantity,request_payload,created_at",
+    ) as any[];
+    const settlementObservation = await observeV17EntrySettlement({
+      exposures: untrackedFutures,
+      orders: v17PendingEntries,
+      observation: futuresPortfolio?.observation,
+      queryOrder: (command: JsonRecord) => gateway("binance_futures", command, 5000),
+    });
+    if (settlementObservation.defer) {
+      await patchTradingHeartbeat({ lastFullScanAt: new Date().toISOString() });
+      return { skipped: true, strategy_key: P10_STRATEGY_KEY, reason: settlementObservation.reason, settlementObservation };
+    }
     const safetyReason = "P10_UNTRACKED_FUTURES_EXPOSURE";
     const newlyLatched = await latchP10EntrySafety(safetyReason);
     if (newlyLatched) {
