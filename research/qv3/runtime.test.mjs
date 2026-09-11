@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {qv3Entry,qv3Exit,qv3Stamp,qv3Scope,QV3_LIVE_CUTOVER} from '../../supabase/functions/_shared/leader-qv3-runtime.mjs';
+import {qv3Entry,qv3Exit,qv3Stamp,qv3Scope,QV3_ACTIVATION_BASIS,QV3_LIVE_CUTOVER} from '../../supabase/functions/_shared/leader-qv3-runtime.mjs';
 import {entryGate,exitSignal} from '../../supabase/functions/_shared/leader-qv3-rules.mjs';
 const b=(t,o,h,l,c)=>[t,o,h,l,c,1,t+59999];
 const xs=[b(0,100,101,99,100.5),b(60000,100.5,100.6,100,100.4),b(120000,100.4,100.5,100,100.3)];
 const p={id:'p1',entryAt:0,entryPrice:100,ownership:'AUTO',side:'LONG',state:'OPEN'};
-test('frozen build cannot activate QV3 through environment',()=>assert.equal(QV3_LIVE_CUTOVER,null));
+test('operator override has one immutable cutover and audit basis',()=>{
+ assert.equal(QV3_LIVE_CUTOVER,Date.parse('2026-09-11T15:20:00.000Z'));
+ assert.equal(QV3_ACTIVATION_BASIS,'OPERATOR_OVERRIDE_PROTOCOL_DEFER_20260911');
+});
 test('only exact chosen entry condition; unfinished/future bars ignored',()=>{
  assert.equal(qv3Entry(xs,180000).wouldBlock,true);assert.equal(qv3Entry(xs,179999).available,false);
  assert.deepEqual(qv3Entry([...xs,b(180000,200,220,150,210)],180000),qv3Entry(xs,180000));
@@ -38,7 +41,9 @@ test('manual external unknown and closed positions never create QV3 exit',()=>{
 });
 test('activation stamp is per position and cannot admit pre-cutover positions',()=>{
  assert.equal(qv3Stamp(60000,0),null);assert.equal(qv3Scope(p,0),false);
- assert.equal(qv3Scope({...p,qv3:qv3Stamp(0,0)},0),true);
+ const stamp=qv3Stamp(0,0);assert.equal(stamp.basis,QV3_ACTIVATION_BASIS);
+ assert.equal(qv3Scope({...p,qv3:stamp},0),true);
+ assert.equal(qv3Scope({...p,qv3:{...stamp,basis:'UNVERIFIED'}},0),false);
  assert.equal(qv3Scope({...p,qv3:qv3Stamp(0,0)},1),false);
 });
 test('assessment never mutates peak, stop, partial status or remaining quantity',()=>{

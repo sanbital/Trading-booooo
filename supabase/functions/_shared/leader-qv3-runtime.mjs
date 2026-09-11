@@ -1,8 +1,10 @@
 import {entryGate,exitSignal} from './leader-qv3-rules.mjs';
 export const QV3_VERSION='QV3_ENTRY_EXIT_TWO_1';
 export const QV3_VARIANT='ENTRY_EXIT_TWO';
-// Evidence gates in research/qv3/protocol.json are not met. No env or HTTP override.
-export const QV3_LIVE_CUTOVER=null;
+// The research protocol remains DEFER. This fixed cutover records the operator's
+// explicit live override; no environment or HTTP request can move it.
+export const QV3_ACTIVATION_BASIS='OPERATOR_OVERRIDE_PROTOCOL_DEFER_20260911';
+export const QV3_LIVE_CUTOVER=Date.parse('2026-09-11T15:20:00.000Z');
 const MINUTE=60000;
 const unavailable=reason=>({available:false,reason,executionEnabled:false});
 export function validCandle(b){
@@ -35,12 +37,12 @@ export function qv3Entry(bars,now){
 }
 export function qv3Stamp(activation,entryAt){
   return Number.isSafeInteger(activation)&&Number.isSafeInteger(entryAt)&&entryAt>=activation
-    ?{version:QV3_VERSION,activation,entryAt}:null;
+    ?{version:QV3_VERSION,activation,entryAt,basis:QV3_ACTIVATION_BASIS}:null;
 }
 export function qv3Scope(p,activation){
   const s=p.qv3;
   return p.ownership==='AUTO'&&p.side==='LONG'&&p.state==='OPEN'&&
-    Number.isSafeInteger(activation)&&s?.version===QV3_VERSION&&s.activation===activation&&
+    Number.isSafeInteger(activation)&&s?.version===QV3_VERSION&&s.basis===QV3_ACTIVATION_BASIS&&s.activation===activation&&
     s.entryAt===p.entryAt&&p.entryAt>=activation&&Number.isFinite(p.entryPrice)&&p.entryPrice>0;
 }
 /** State contains an observed completed candle, not a peak/high or a leveraged return.

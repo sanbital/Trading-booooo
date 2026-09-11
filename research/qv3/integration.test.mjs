@@ -14,13 +14,13 @@ function fillOrder(h){h.state.createOrder=(cmd,state)=>{
  const result={order:{exchange_order_id:raw.orderId,client_order_id:raw.clientOrderId,market:p.symbol,side:'SELL',position_side:'BOTH',reduce_only:true,requested_volume:quantity,executed_volume:quantity,raw_status:'FILLED',status:'FILLED',average_price:price,raw}};
  state.software[cmd.order.identifier]=result;return result;
 };}
-test('actual executor frozen gate adds no market requests or QV3 orders',async()=>{
+test('explicit null harness override adds no market requests or QV3 orders',async()=>{
  const h=harness({positions:[pos()],now,signal:false,qv3Fetch:()=>{throw Error('MUST_NOT_CALL')}});
- const r=await h.ctx.runCycle();assert.equal(r.managed[0].action.action,'HOLD');assert.equal(h.state.calls.filter(x=>x.action==='create_order').length,0);
+ const r=await h.ctx.runCycle();assert.equal(r.qv3Runtime.active,false);assert.equal(r.managed[0].action.action,'HOLD');assert.equal(h.state.calls.filter(x=>x.action==='create_order').length,0);
 });
 test('actual manage/close/settlement integration of two bearish candles; no duplicate close',async()=>{
  const h=harness({positions:[pos()],now,signal:false,qv3Cutover:base,qv3Fetch:data});h.state.quotes.SAGAUSDT=100.3;fillOrder(h);
- const r=await h.ctx.runCycle();assert.equal(r.managed[0].action.reason,'QV3_TWO_BEARISH_CLOSED');
+ const r=await h.ctx.runCycle();assert.equal(r.qv3Runtime.active,true);assert.equal(r.managed[0].action.reason,'QV3_TWO_BEARISH_CLOSED');
  assert.equal(h.state.tables.v11_long_regime_positions[0].state,'CLOSED');
  await h.ctx.runCycle();assert.equal(h.state.calls.filter(x=>x.action==='create_order'&&x.order.side==='SELL').length,1);
 });
@@ -75,6 +75,8 @@ test('partial entry and delayed receipt preserve QV3 activation stamp and actual
  };
  const r=await h.ctx.runCycle();assert.equal(r.entry.entered,true);const p=h.state.tables.v11_long_regime_positions[0];
  assert.equal(p.metadata.qv3.activation,base);assert.equal(p.metadata.qv3.entryAt,now);assert.equal(p.remaining_quantity,93);
+ assert.equal(p.metadata.qv3.basis,'OPERATOR_OVERRIDE_PROTOCOL_DEFER_20260911');
+ assert.equal(h.state.tables.v11_long_regime_orders.find(o=>o.intent==='OPEN_LONG').request_payload.qv3.basis,'OPERATOR_OVERRIDE_PROTOCOL_DEFER_20260911');
  assert.ok(h.state.calls.some(x=>x.action==='v17_create_stop'&&x.params.quantity===93));
 });
 test('native fill racing after candidate state persistence never submits an extra exit',async()=>{

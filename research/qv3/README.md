@@ -8,9 +8,12 @@ changed. Operational calls select ENTRY_EXIT_TWO exclusively. The runtime adapte
 adds completed-candle continuity, duplicate/OHLC checks, explicit ownership, and a
 position-specific persisted favorable-close proof. It does not change thresholds.
 
-The live integration is staged behind `QV3_LIVE_CUTOVER=null`. HTTP bodies and
-environment variables cannot activate it. Do not change this until all gates in
-the original protocol pass. This build has no live promotion approval by evidence.
+The original protocol remains classified `DEFER`; its failed evidence gates are not
+rewritten as passing. At the operator's explicit direction, the live integration has
+a fixed `QV3_LIVE_CUTOVER=2026-09-11T15:20:00.000Z` and an immutable
+`OPERATOR_OVERRIDE_PROTOCOL_DEFER_20260911` audit basis. HTTP bodies and environment
+variables cannot move or broaden the cutover. This is an operator override, not an
+evidence-based live-promotion approval.
 Only new entries bearing the matching cutover stamp could use QV3. Recovery takes
 that stamp from the original order intent. Existing positions keep their policy.
 
