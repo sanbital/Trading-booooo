@@ -1,0 +1,93 @@
+name: Gateway one-character symbol maintenance
+on:
+  push:
+    branches: [fix/gateway-symbol-and-recovery-20260911]
+    paths: [.github/workflows/gateway-symbol-maintenance.yml]
+permissions:
+  contents: read
+concurrency:
+  group: deploy-binance-order-gateway
+  cancel-in-progress: false
+jobs:
+  gateway-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify exact source and test gateway
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          mkdir -p release-evidence
+          git rev-parse HEAD > release-evidence/release-sha.txt
+          node --test gateway/*.test.mjs | tee release-evidence/tests.tap
+          node gateway/patch-trade-history.mjs
+          node gateway/stage-engine.mjs
+          node --check gateway/server.mjs
+          docker build -t gateway-symbol-verified gateway
+          docker run -d --name gateway-symbol-boot -p 127.0.0.1:8099:8080 -e SCHEDULER_ENABLED=false gateway-symbol-verified
+          trap 'docker rm -f gateway-symbol-boot >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 20); do
+            if curl -fsS --max-time 2 http://127.0.0.1:8099/health > release-evidence/docker-health.json; then break; fi
+            sleep 1
+          done
+          node -e "const h=require('./release-evidence/docker-health.json');if(h.ops_patch!=='V18-OPS-ISOLATION-3'||h.scheduler_enabled!==false)throw Error('BOOT_GATE')"
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+      - name: Confirm remote source and paused flat account before maintenance
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          flyctl ssh console --help > /dev/null
+          flyctl machine status --help > /dev/null
+          flyctl deploy --help > /dev/null
+          node ops/gateway-symbol-release.mjs before
+      - name: Deploy Binance gateway only with unchanged entry controls
+        id: deploy
+        continue-on-error: true
+        working-directory: gateway
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+        run: flyctl deploy . --remote-only -a "$FLY_BINANCE_APP_NAME" --config ./fly.binance.toml --ha=false
+      - name: Confirm exact remote source and signed symbol metadata
+        id: verify
+        if: steps.deploy.outcome == 'success'
+        continue-on-error: true
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: node ops/gateway-symbol-release.mjs after
+      - name: Restore verified prior image if deployment or verification failed
+        if: steps.deploy.outcome == 'failure' || steps.verify.outcome == 'failure'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          node --input-type=module <<'JS'
+          import {readFileSync} from 'node:fs';
+          import {execFileSync} from 'node:child_process';
+          const b=JSON.parse(readFileSync('release-evidence/machine-before.json'));
+          if(typeof b.image!=='string'||!b.image.startsWith('registry.fly.io/trading-booooo:'))throw Error('ROLLBACK_IMAGE_MISSING');
+          execFileSync('flyctl',['deploy','gateway','--image',b.image,'--app','trading-booooo','--config','gateway/fly.binance.toml','--ha=false'],{stdio:'inherit'});
+          JS
+          node ops/gateway-symbol-release.mjs before
+          exit 1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gateway-symbol-maintenance-evidence
+          path: release-evidence/
+          retention-days: 30
