@@ -24,7 +24,8 @@ function harness({ enabled = false, bid = 99, ensure, symbolInfoFails = false } 
   const ctx = {
     Date, Number, Array, Error, console, POLICY, nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5,
     STRATEGY: 'LEADER_MOMENTUM_V17', rec: (x) => x ?? {}, N: (x) => Number(x) || 0,
-    NATIVE_STOP_ENABLED: enabled,classifyFailure:()=>({fatal:false}),
+    NATIVE_STOP_ENABLED: enabled, QV3_LIVE_CUTOVER: null,
+    classifyFailure:()=>({fatal:false}),
     verifyExecutionLease: async () => {},
     createGatewayProtection: () => {
       calls.push('construct');
