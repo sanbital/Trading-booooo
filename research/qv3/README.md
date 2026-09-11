@@ -48,6 +48,12 @@ missing account replay/funding and negative absolute stress PnL. The original 99
 familywise descriptive interval crosses zero. Passing engineering tests does not
 resolve those failures. Original protocol and its hash remain unchanged.
 
-Rollback: the live executor is not part of this shadow deployment; v35 remains the
-live rollback reference. Stop only the qv3-entry-exit-shadow-observe cron job to end
-collection. Preserve analytics evidence and all live settings/position rows.
+Live deployment: `v10-lane-executor` v36 contains the fixed-cutover QV3 integration.
+Its rollback reference is v35 at source
+`e008db827227bbd75fd8a4d7e6b26dcec2d77500`; do not redeploy an older gateway,
+market-autotrader, main, or release bundle. A rollback must preserve every live
+position/order row and resident protection, restore only the executor's exact v35
+files, verify the remote source and exchange/DB reconciliation, and then use the
+normal recovery gates before allowing new entries. The independent
+`qv3-entry-exit-shadow` collector can be stopped separately without changing live
+execution or deleting its evidence.
