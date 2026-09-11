@@ -22,7 +22,7 @@ if(process.argv[2]==='setup'){
   s+=read('./lease-rpcs.sql');
   s+=`insert into v17_execution_lease values(true,null,'-infinity');insert into v11_long_regime_runtime(singleton,revision,live_enabled,circuit_open) values(true,'V11-LONG-REGIME-1.0.1',true,false);insert into v17_operator_control(singleton,entry_enabled,legacy_entries_retired) values(true,true,true);insert into trading_settings(id,mode,pause_new_entries,withdrawal_mode,manual_intervention_required,scalp_kill_switch,emergency_liquidation) values(1,'LIVE_LIMITED',false,false,false,false,false);`;
   sql(s);
-  const migration=read('../../supabase/migrations/20260910231833_v18_ops_isolation.sql');
+  const migration=read('../../supabase/migrations/20260911000759_v18_ops_isolation.sql');
   sql(migration);sql(migration);
   console.log('PASS PostgreSQL migration twice with captured production trigger definitions, RLS and table grants');
   process.exit(0);

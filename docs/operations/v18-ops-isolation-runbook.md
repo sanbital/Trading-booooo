@@ -111,7 +111,7 @@ node --test gateway/*.test.mjs
 
 ```sh
 psql "$SUPABASE_DB_URL" --no-psqlrc --set=ON_ERROR_STOP=1 \
-  --file=supabase/migrations/20260910231833_v18_ops_isolation.sql
+  --file=supabase/migrations/20260911000759_v18_ops_isolation.sql
 ```
 
 `supabase db push`로 미적용 전체 이력을 실행하지 않는다. migration 이력 등록이 필요하면 실행한 SQL과 기존 이력을 대조한 뒤 해당 version 등록만 별도 검토한다.

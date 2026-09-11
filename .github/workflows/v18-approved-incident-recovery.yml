@@ -1,0 +1,36 @@
+name: V18 approved TAC incident recovery
+on:
+  push:
+    branches: [release/v18-ops-isolation-3]
+    paths: [.github/workflows/v18-approved-incident-recovery.yml]
+permissions:
+  contents: read
+concurrency:
+  group: v18-approved-tac-recovery
+  cancel-in-progress: false
+jobs:
+  recover-exact-incident:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Fresh evidence and exact legacy incident CAS
+        env:
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: node ops/v18-approved-recovery.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v18-approved-recovery-evidence
+          path: release-evidence/
+          retention-days: 30
