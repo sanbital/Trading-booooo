@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/v18-strategy-shadow.yml
       - supabase/functions/_shared/leader-strategy-shadow.mjs
+      - supabase/functions/_shared/leader-paper-market.mjs
       - supabase/functions/v18-strategy-shadow/**
       - supabase/migrations/20260911112129_v18_strategy_shadow_observations.sql
       - test-support/v18-ops/strategy-shadow*.test.mjs

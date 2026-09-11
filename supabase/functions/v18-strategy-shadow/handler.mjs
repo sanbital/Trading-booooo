@@ -1,5 +1,6 @@
 import {POLICY,M5,M15,STRATEGY,kstDayStart,entryReason,parseBars,confirm5} from '../_shared/leader-momentum-v17.mjs';
 import {SHADOW_VERSION,VARIANTS,evaluateEntry,evaluateExit} from '../_shared/leader-strategy-shadow.mjs';
+import {paperMarket} from '../_shared/leader-paper-market.mjs';
 export const PROJECT_REF='etaajwpernzrcdrifdnw';
 const reply=(status,data)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json','cache-control':'no-store'}});
 const equal=(a,b)=>{if(!a||a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0;};
@@ -31,12 +32,13 @@ export function createHandler({url,key,fetchFn=fetch,now=Date.now,log=()=>{}}){
     throw Error('HISTORY_PAGE_CAP');
   }
   async function market(path,params={}){
-    if(!['/fapi/v1/time','/fapi/v1/klines'].includes(path))throw Error('PUBLIC_READ_NOT_ALLOWED');
+    if(!['/fapi/v1/time','/fapi/v1/klines','/fapi/v1/ticker/bookTicker','/fapi/v1/exchangeInfo'].includes(path))throw Error('PUBLIC_READ_NOT_ALLOWED');
     const r=await fetchFn('https://fapi.binance.com'+path+'?'+new URLSearchParams(params),
       {method:'GET',signal:AbortSignal.timeout(5000)});
     if(!r.ok)throw Error(`PUBLIC_MARKET_${r.status}`); // no retries or alternate hosts
     const used=Number(r.headers.get('x-mbx-used-weight-1m'));
-    if(Number.isFinite(used)&&used>=2100)throw Error('PUBLIC_WEIGHT_HIGH');
+    // Binance explicitly documents bookTicker's weight header as inaccurate.
+    if(path!=='/fapi/v1/ticker/bookTicker'&&Number.isFinite(used)&&used>=2100)throw Error('PUBLIC_WEIGHT_HIGH');
     return r.json();
   }
   return async request=>{
@@ -108,14 +110,18 @@ export function createHandler({url,key,fetchFn=fetch,now=Date.now,log=()=>{}}){
         for(const variant of ['BASELINE','LOCK_1P5'])exitDecisions.push({positionId:p.id,symbol:p.symbol,
           sourceDecisionId:d.id,quoteAgeMs:asOf-Date.parse(d.decided_at),...evaluateExit(state,bid,asOf,variant)});
       }
-      const payload={ok:true,version:SHADOW_VERSION,readOnlyTrading:true,executionEnabled:false,projectRef:PROJECT_REF,
+      // All-symbol books retain price paths after a hypothetical position leaves the top 10.
+      // Symbol filters are recorded at observation time, never backfilled from today's rules.
+      const [books,info]=await Promise.all([market('/fapi/v1/ticker/bookTicker'),market('/fapi/v1/exchangeInfo')]);
+      const observedMarket=paperMarket(books,info,(scan?.details?.top10??[]).map(x=>x.symbol),now());
+      const payload={ok:true,version:SHADOW_VERSION,collectorVersion:'V18_MARKET_OBSERVER_2',readOnlyTrading:true,executionEnabled:false,projectRef:PROJECT_REF,
         asOf:iso(asOf),finishedAt:iso(now()),durationMs:now()-started,
         evaluationState:dataProblems.length?'DATA_UNAVAILABLE':'EVALUATED',dataProblems,
         entryDecisions,baseRejections,exitDecisions,
-        source:{scan,confirmations,history,positions},
+        source:{scan,confirmations,history,positions,market:observedMarket},
         livePromotion:false,fundingVerified:false,
-        limitations:['Feature eligibility is not an order approval','No independently evolving shadow positions',
-          'No cash or slot opportunity replay','Exit decisions use recorded live state and sampled bids']};
+        limitations:['Feature eligibility is not an order approval','Use the independent offline paper-account replay for account comparisons',
+          'L1 snapshots do not guarantee fills, intraminute stops or funding coverage','Exit decisions here still use recorded live state and sampled bids']};
       const saved=await rest('v18_strategy_shadow_runs',{on_conflict:'policy_version,slot_at'},
         {policy_version:SHADOW_VERSION,slot_at:iso(Math.floor(asOf/60000)*60000),observed_at:iso(asOf),payload});
       log({event:'V18_STRATEGY_SHADOW_EVALUATION',version:SHADOW_VERSION,asOf:payload.asOf,

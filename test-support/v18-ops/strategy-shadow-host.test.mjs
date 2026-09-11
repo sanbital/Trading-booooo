@@ -37,6 +37,9 @@ function fixture(options={}){
     assert.equal(u.origin,'https://fapi.binance.com');assert.equal(method,'GET');
     assert.equal(init.headers,undefined,'no credentials on public market reads');
     if(u.pathname==='/fapi/v1/time')return answer({serverTime:at+(options.clockSkew||0)});
+    if(u.pathname==='/fapi/v1/ticker/bookTicker')return answer(options.bookFail?{}:[{symbol:'METUSDT',bidPrice:'107',askPrice:'107.01',bidQty:'5',askQty:'2',time:at}]);
+    if(u.pathname==='/fapi/v1/exchangeInfo')return answer({symbols:[{symbol:'METUSDT',status:'TRADING',contractType:'PERPETUAL',quoteAsset:'USDT',underlyingType:'COIN',
+      filters:[{filterType:'LOT_SIZE',stepSize:'1'},{filterType:'PRICE_FILTER',tickSize:'.01'},{filterType:'MIN_NOTIONAL',notional:'5'}]}]});
     assert.equal(u.pathname,'/fapi/v1/klines');
     if(options.marketError)return answer({},options.marketError);
     assert.equal(u.searchParams.get('endTime'),String(cut5-1));
@@ -62,8 +65,15 @@ test('fresh full scan evaluates 5 variants independently of all live entry contr
   assert.equal(r.status,200);assert.equal(d.evaluationState,'EVALUATED');assert.equal(d.entryDecisions.length,5);
   assert.equal(d.entryDecisions.find(x=>x.variant==='SPIKE_3PCT').verdict,'WOULD_FILTER');
   assert.equal(d.executionEnabled,false);assert.equal(d.persistedNew,true);
+  assert.equal(d.collectorVersion,'V18_MARKET_OBSERVER_2');
+  assert.equal(d.source.market.quotes[0].askQty,2);
+  assert.equal(d.source.market.rules.METUSDT.step,1);
   assert.ok(x.calls.every(x=>!/(gateway|runtime|operator_control|trading_settings|regime_orders|regime_signals)/.test(x.url)));
   assert.ok(!JSON.stringify(x.logs).includes('TEST_SERVICE_KEY'));
+});
+test('malformed public book cannot become a saved executable paper observation',async()=>{
+  const x=fixture({bookFail:true}),r=await x.handler(request());
+  assert.equal(r.status,503);assert.ok(!x.calls.some(c=>c.method==='POST'));
 });
 test('stale or incomplete scan is saved as unavailable, never a successful strategy evaluation',async()=>{
   for(const opts of [{stale:true},{coverage:.5}]){
