@@ -35,7 +35,7 @@ function make({quoteResults, budget = 3}) {
     closePos: async () => ({closed: true}),
     audit: async () => {},
   };
-  vm.createContext(ctx);
+  ctx.classifyFailure=()=>({fatal:false});vm.createContext(ctx);
   vm.runInContext(code + ';this.manage=manageLeader;', ctx);
   const p = {id: 'p', symbol: 'FORMUSDT', entry_price: 100, original_quantity: 1, entry_fee_usdt: .05,
     peak_price: 100, hard_stop_price: 97.5, entry_at: new Date(now - 60000).toISOString(), metadata: {}};

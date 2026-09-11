@@ -24,7 +24,7 @@ function harness({ enabled = false, bid = 99, ensure, symbolInfoFails = false } 
   const ctx = {
     Date, Number, Array, Error, console, POLICY, nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5,
     STRATEGY: 'LEADER_MOMENTUM_V17', rec: (x) => x ?? {}, N: (x) => Number(x) || 0,
-    NATIVE_STOP_ENABLED: enabled,
+    NATIVE_STOP_ENABLED: enabled,classifyFailure:()=>({fatal:false}),
     verifyExecutionLease: async () => {},
     createGatewayProtection: () => {
       calls.push('construct');
@@ -53,12 +53,12 @@ function harness({ enabled = false, bid = 99, ensure, symbolInfoFails = false } 
   };
   vm.createContext(ctx);
   vm.runInContext(code + ';this.manage=manageLeader;', ctx);
-  const db = { from: () => ({ update: () => ({ eq: () => ({ eq: () => ({
-    select: () => ({ single: async () => { calls.push('write'); return { data: { ok: true } }; } }) }) }) }) }) };
+  const builder={update(){return this},eq(){return this},select(){return this},async single(){calls.push('write');return{data:{ok:true}}}};
+  const db={from:()=>builder};
   const position = {
     id: 'pos-1', symbol: 'DOGSUSDT', entry_price: 100, original_quantity: 1000,
     entry_fee_usdt: 0.06, peak_price: 103.03, hard_stop_price: 101.4846,
-    entry_at: new Date(now - 600_000).toISOString(), metadata: {},
+    entry_at: new Date(now - 600_000).toISOString(), updated_at: new Date(now - 600_000).toISOString(), metadata: {},
   };
   const context = { manualSymbols: [], exchangeQuantity: new Map([['DOGSUSDT', 1000]]) };
   return { ctx, db, position, context, calls, ensured };

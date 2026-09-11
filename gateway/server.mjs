@@ -13,6 +13,7 @@ import { pathToFileURL } from "node:url";
 // BUY/LONG/OPEN, SELL/LONG/CLOSE, SELL/SHORT/OPEN and BUY/SHORT/CLOSE are accepted.
 dns.setDefaultResultOrder("ipv4first");
 
+const OPS_PATCH = "V18-OPS-ISOLATION-3";
 const VERSION = "8.0.3-P10-REGIME-ROUTER-V3-SAFE-EXIT";
 // Keep exactly one audited previous protocol revision during the rolling cutover. Both the
 // old engine/new gateway and new engine/old gateway therefore remain order-compatible;
@@ -1664,6 +1665,7 @@ async function p10Portfolio(exchange) {
       mode: "P10_POSITION_PROOF",
     };
   }
+  const requestedAt=Date.now();
   const account = (await futuresRequest(
     "GET",
     "/fapi/v2/account",
@@ -1673,6 +1675,10 @@ async function p10Portfolio(exchange) {
   return {
     ...buildFuturesPortfolio(account, {}),
     mode: "P10_POSITION_PROOF",
+    account_scope: "futures",
+    positions_complete: Array.isArray(account?.positions)&&Array.isArray(account?.assets)&&
+      account.positions.every(p=>p.positionAmt!=null&&String(p.positionAmt).trim()!==""&&Number.isFinite(Number(p.positionAmt))&&p.symbol&&(Number(p.positionAmt)===0||String(p.symbol).endsWith("USDT"))),
+    observation:{id:crypto.randomUUID(),source:"BINANCE_ACCOUNT_REST",requested_at_ms:requestedAt,received_at_ms:Date.now()},
   };
 }
 
@@ -2237,6 +2243,13 @@ async function handleCommand(command) {
     case "portfolio":
       if (futures) return binanceFuturesPortfolio();
       return exchange === "upbit" ? upbitPortfolio() : binancePortfolio();
+    case "v18_open_orders": {
+      if(!futures)throw Error("V18_FUTURES_ONLY");
+      const [orders,algos]=await Promise.all([
+        futuresRequest("GET","/fapi/v1/openOrders",{},{timeoutMs:2000}).then(r=>r.data),
+        futuresRequest("GET","/fapi/v1/openAlgoOrders",{},{timeoutMs:2000}).then(r=>r.data)]);
+      return {complete:Array.isArray(orders)&&Array.isArray(algos),orders,algos,observed_at_ms:Date.now(),ops_patch:OPS_PATCH};
+    }
     case "p10_portfolio":
       return p10Portfolio(exchange);
     case "accounts":
@@ -2400,6 +2413,7 @@ function createServer() {
         return sendJson(res, 200, {
           ok: true,
           version: VERSION,
+          ops_patch: OPS_PATCH,
           accepted_engine_versions: [...ACCEPTED_ENGINE_VERSIONS],
           keys_configured: {
             upbit: Boolean(UPBIT_ACCESS_KEY && UPBIT_SECRET_KEY),

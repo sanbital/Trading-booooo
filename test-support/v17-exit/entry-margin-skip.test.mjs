@@ -37,6 +37,7 @@ function make({available}) {
     ceilStep: (v, s) => Math.ceil(v / s) * s, addStep: (v, s) => v + s,
     floorStep: (v, s) => Math.floor(v / s) * s,
     cid: () => 'tb-v11e-x', terminal: () => false, fill: () => ({qty: 0, avg: 0, status: 'NEW'}),
+    classifyPortfolio:()=>({ok:true}),readOpsOrders:async()=>[],opsGateway:()=>ctx.gateway,
     portfolioMatches: () => ({ok: true, ext: []}),
     manualPositionAllowances: async () => [],
     requireLeaderEntryControls: async () => {},
@@ -50,6 +51,7 @@ function make({available}) {
       throw Error(`no order may be placed: ${c.action}`);
     },
   };
+  Object.assign(ctx,{classifyPortfolio:()=>({ok:true}),readOpsOrders:async()=>[],opsGateway:()=>ctx.gateway});
   vm.createContext(ctx);
   vm.runInContext(code + ';this.openBull=openBull;', ctx);
   return {ctx, signal: {id: 's1', symbol: 'FORMUSDT', features}};

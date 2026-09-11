@@ -1,0 +1,77 @@
+name: V18 selective Binance gateway release
+on:
+  push:
+    branches: [release/v18-ops-isolation-3]
+    paths: [.github/workflows/v18-selective-gateway-release.yml]
+permissions:
+  contents: read
+concurrency:
+  group: deploy-binance-order-gateway
+  cancel-in-progress: false
+jobs:
+  verify-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate exact source and run operational regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/release/v18-ops-isolation-3
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          mkdir -p release-evidence
+          git rev-parse HEAD > release-evidence/release-sha.txt
+          npm ci --prefix test-support/v18-ops --ignore-scripts
+          export PGLITE_MODULE="$PWD/test-support/v18-ops/node_modules/@electric-sql/pglite/dist/index.js"
+          node --test --test-reporter=tap test-support/v17-exit/*.test.mjs research/v18/*.test.mjs test-support/v18-ops/*.test.mjs gateway/*.test.mjs | tee release-evidence/tests.tap
+          npm exec --yes --package=deno@2.5.6 -- deno check supabase/functions/v10-lane-executor/index.ts
+          node gateway/patch-trade-history.mjs
+          node gateway/stage-engine.mjs
+          sha256sum gateway/*.mjs > release-evidence/staged-gateway-sha256.txt
+      - name: Build and boot the real Docker image without trading credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build -t v18-verified-gateway gateway
+          docker run -d --name v18-boot -p 127.0.0.1:8099:8080 -e V17_SHADOW_ENABLED=true v18-verified-gateway
+          trap 'docker rm -f v18-boot >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 20); do
+            if curl -fsS --max-time 2 http://127.0.0.1:8099/health > release-evidence/docker-health.json; then break; fi
+            sleep 1
+          done
+          docker logs v18-boot > release-evidence/docker-boot.log 2>&1
+          node -e "const h=require('./release-evidence/docker-health.json');if(h.ops_patch!=='V18-OPS-ISOLATION-3')throw Error('wrong patch')"
+          grep -q 'V17 exit shadow armed' release-evidence/docker-boot.log
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+      - name: Deploy only the existing Binance app
+        working-directory: gateway
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          test -n "$FLY_BINANCE_APP_NAME"
+          flyctl status -a "$FLY_BINANCE_APP_NAME" --json > ../release-evidence/fly-before.json
+          flyctl deploy . --remote-only -a "$FLY_BINANCE_APP_NAME" --config ./fly.binance.toml --ha=false
+          flyctl status -a "$FLY_BINANCE_APP_NAME" --json > ../release-evidence/fly-after.json
+      - name: Confirm production patch and signed read-only account contracts
+        env:
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        run: node ops/v18-gateway-read.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v18-gateway-release-evidence
+          path: release-evidence/
+          retention-days: 30

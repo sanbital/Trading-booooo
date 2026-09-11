@@ -47,7 +47,8 @@ test('openBull marks dispatch at the order call, not earlier or later', () => {
   }
   // and the post-fill validations must come after, so they can never be treated as skippable
   for (const post of ['STOP_POLICY_INVALID', 'STOP_INVALID']) {
-    assert.ok(open.indexOf(post) > flag, `${post} must sit after dispatch`);
+    const settle=source.slice(source.indexOf('async function settleKnownEntry('),source.indexOf('async function readOpsPositions('));
+    assert.ok(open.indexOf('settleKnownEntry(db,oi.data,raw,gateway)')>flag&&settle.includes(post), `${post} is checked in post-dispatch settlement`);
   }
 });
 
@@ -138,7 +139,7 @@ function harness({outcomes}) {
     db: {from: table},
   };
   vm.createContext(ctx);
-  const loop = source.slice(source.indexOf('const openSymbols=new Set(openNow'), source.indexOf('}else if(openNow.length>=MAX_SLOTS)'));
+  const loop = source.slice(source.indexOf('const openSymbols=new Set(openNow'), source.indexOf('\nreturn entry;\n}',source.indexOf('async function runEntryQueue')));
   vm.runInContext(`this.go=async function(){let entry={entered:false,reason:"V17_NO_ENTRY"};const sg={data:sgRows,error:null};${loop};return {entry,seen}}`, ctx);
   return ctx;
 }

@@ -12,7 +12,7 @@ test('cancel cannot touch an unbound symbol or a manual client ID',async()=>{
 test('fill accounting requires complete exchange trades, with actual fees',async()=>{
  let qty='2';const handle=createV17StopCommands({assertVersion:()=>{},positionSideDual:async()=>false,
   request:async(m,p)=>p.endsWith('algoOrder')?{symbol,clientAlgoId,actualOrderId:1}:p.endsWith('/order')?
-   {executedQty:'2',cumQuote:'194',status:'FILLED'}:[{id:1,orderId:1,symbol,side:'SELL',qty,price:'97',commission:'.097',commissionAsset:'USDT',time:100}]});
+   {orderId:1,symbol,side:'SELL',positionSide:'BOTH',reduceOnly:true,origQty:'2',executedQty:'2',cumQuote:'194',status:'FILLED'}:[{id:1,orderId:1,symbol,side:'SELL',qty,price:'97',commission:'.097',commissionAsset:'USDT',time:100}]});
  assert.equal((await handle('v17_stop_fill',{symbol,clientAlgoId,actualOrderId:1})).exact,true);
  qty='1';assert.equal((await handle('v17_stop_fill',{symbol,clientAlgoId,actualOrderId:1})).exact,false);
 });

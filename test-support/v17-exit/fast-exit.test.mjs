@@ -10,7 +10,7 @@ const make=(stale=false)=>{
  const events=[],now=Date.now();
  const ctx={Date,Number,Array,Error,POLICY,nextExitReviewed,EXIT_REVIEW_CANDIDATE,EXIT_REVIEW_R5,console,rec:x=>x??{},STRATEGY:'LEADER_MOMENTUM_V17',
   // native stop is opt-in; these tests cover the default-off software path
-  NATIVE_STOP_ENABLED:false,createGatewayProtection:()=>{throw Error('must not be constructed when disabled')},verifyExecutionLease:async()=>{},N:x=>Number(x)||0,
+  NATIVE_STOP_ENABLED:false,classifyFailure:()=>({fatal:false}),createGatewayProtection:()=>{throw Error('must not be constructed when disabled')},verifyExecutionLease:async()=>{},N:x=>Number(x)||0,
   gateway:async c=>{assert.equal(c.action,'p10_quotes');events.push('quote');return [{market:'FORMUSDT',best_bid:96,best_ask:96.1,timing:{received_at_ms:now-(stale?10000:0),requested_at_ms:now-20}}]},
   closePos:async(db,p)=>{events.push('close');assert.ok(p.metadata.exitTelemetry.detectedAtMs);return {closed:true}},
   audit:async()=>{events.push('audit');throw Error('audit unavailable')}};

@@ -3,6 +3,7 @@
  * The host serializes operations using its existing execution lease and persists
  * position accounting + receipts in the SAME compare-and-swap transaction.
  */
+import {freshPortfolio,sameQuantity} from './leader-ops-isolation.mjs';
 import {exitAttemptId,protectiveStopSpec} from './leader-exit-review.mjs';
 const FINAL=new Set(['CANCELED','CANCELLED','EXPIRED','REJECTED','FINISHED']);
 const copy=x=>structuredClone(x);
@@ -49,8 +50,28 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
       item.algoId=String(ack.algoId);item.status=String(ack.algoStatus);item.lastQueryAt=clock();item.lastQueryError=null;
       const actual=String(ack.actualOrderId??'');
       if(actual && actual!=='0') {
+        // Save binding BEFORE fetching trades, so fill-first arrival can be retried.
+        item.actualOrderId=actual;
+        state=await save(state,next);next=copy(state);item=next.protection.orders.find(x=>x.clientId===remembered.clientId);
         const fill=await exchange.getFill(actual,next.position.symbol);
         if(!fill||fill.exact!==true) {
+          const e=fill?.orderEvidence;
+          if(e&&String(e.orderId)===actual&&e.clientAlgoId===item.clientId&&e.symbol===next.position.symbol&&
+            e.side==='SELL'&&e.positionSide==='BOTH'&&String(e.reduceOnly)==='true'&&
+            sameQuantity(e.requestedQuantity,item.spec.params.quantity)&&e.status==='FILLED'&&
+            Number.isFinite(e.quantity)&&e.quantity>=0&&e.quantity<=item.spec.params.quantity) {
+            const delta=e.quantity-(item.appliedQuantity??0),pf=await exchange.readPortfolio();
+            const rows=pf?.positions?.filter(x=>(x.market??x.symbol)===next.position.symbol)??[];
+            const held=rows.length===0?0:rows.length===1&&rows[0].side==='LONG'?Number(rows[0].quantity):NaN;
+            if(freshPortfolio(pf,clock())&&delta>=0&&delta<=next.position.remainingQuantity&&sameQuantity(held,next.position.remainingQuantity-delta)) {
+              next.position.settledPnl??=next.position.realizedPnl;
+              next.position.remainingQuantity-=delta;next.position.state=held===0?'CLOSED':'OPEN';
+              if(held===0&&Number.isFinite(e.lastAt))next.position.closedAt=e.lastAt;
+              next.position.accountingPending=true;next.position.realizedPnl=null;
+              item.accountedQuantity??=item.appliedQuantity??0;
+              item.appliedQuantity=e.quantity;item.accountingPending=true;
+            }
+          }
           next.protection.health='FILL_ACCOUNTING_PENDING';state=await save(state,next);continue;
         }
         const q=finite(Number(fill.quantity),'INVALID_FILL_QTY'),funds=finite(Number(fill.funds),'INVALID_FILL_FUNDS'),fee=finite(Number(fill.fee),'INVALID_FILL_FEE');
@@ -58,14 +79,20 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
         const dq=q-(item.appliedQuantity??0),df=funds-(item.appliedFunds??0),dc=fee-(item.appliedFee??0);
         if(dq< -1e-10||df< -1e-10||dq>next.position.remainingQuantity+1e-8)
           throw Error('NATIVE_FILL_QUANTITY_MISMATCH');
-        if(dq>0||df!==0||dc!==0) {
+        if(dq>0||df!==0||dc!==0||item.accountingPending) {
           next.position.remainingQuantity=Math.max(0,next.position.remainingQuantity-dq);
-          next.position.realizedPnl+=df-next.position.entryPrice*dq-dc;
+          const accountingQty=q-(item.accountedQuantity??item.appliedQuantity??0);
+          const base=next.position.settledPnl??next.position.realizedPnl;
+          if(!Number.isFinite(base))throw Error('NATIVE_PRIOR_ACCOUNTING_UNKNOWN');
+          next.position.settledPnl=base+df-next.position.entryPrice*accountingQty-dc;
+          item.accountedQuantity=q;item.accountingPending=false;
+          next.position.accountingPending=next.position.entryAccountingPending||next.position.softwareAccountingPending||next.protection.orders.some(o=>o.accountingPending===true);
+          next.position.realizedPnl=next.position.accountingPending?null:next.position.settledPnl;
           next.position.exitPrice=q>0?funds/q:next.position.exitPrice;
           next.position.lastFillAt=Number(fill.lastFillAt);
           next.position.state=next.position.remainingQuantity<=1e-10?'CLOSED':'OPEN';
           if(next.position.state==='CLOSED')next.position.closedAt=Number(fill.lastFillAt);
-          item.appliedQuantity=q;item.appliedFunds=funds;item.appliedFee=fee;
+          item.appliedQuantity=q;item.appliedFunds=funds;item.appliedFee=fee;item.tradeIds=fill.tradeIds??[];
         }
         item.actualOrderId=actual;item.fillStatus=fill.status;
         // An algo being triggered is not the same as the market order being filled.

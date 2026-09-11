@@ -310,6 +310,11 @@ test("P10 Futures position proof uses one bounded signed account request after t
   assert.ok(calls.length === 1 || calls.length === 2);
   assert.ok(calls.every((call) => call.signal instanceof AbortSignal));
   assert.equal(portfolio.mode, "P10_POSITION_PROOF");
+  assert.equal(portfolio.account_scope,"futures");
+  assert.equal(portfolio.positions_complete,true);
+  assert.equal(portfolio.observation.source,"BINANCE_ACCOUNT_REST");
+  assert.ok(portfolio.observation.id);
+  assert.ok(portfolio.observation.received_at_ms>=portfolio.observation.requested_at_ms);
   assert.deepEqual(portfolio.positions.map((row) => [row.market, row.side, row.quantity]), [
     ["ETCUSDT", "SHORT", 2],
   ]);
