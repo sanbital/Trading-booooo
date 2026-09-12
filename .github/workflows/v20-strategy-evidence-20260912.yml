@@ -1,5 +1,5 @@
 name: Collect V20 strategy evidence read-only
-# Run 4 follows a psql client-copy variable-scope correction.
+# Run 5 repairs COPY encoding and removes the one failed run that exposed a row.
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
 
 permissions:
   contents: read
-  actions: read
+  actions: write
 
 concurrency:
   group: collect-v20-strategy-evidence
@@ -33,6 +33,14 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Remove exposed failed-run log
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --method DELETE "/repos/$GITHUB_REPOSITORY/actions/runs/34695703853"
 
       - name: Prove immutable production basis and research-only scope
         shell: bash
@@ -119,7 +127,7 @@ jobs:
             --file=research/20260912_v20/export-evidence.sql >/dev/null
           node --input-type=module <<'NODE'
           import {readFileSync} from 'node:fs';
-          const rows=(path)=>{const x=readFileSync(path,'utf8').trim();return x?x.split('\n').map(JSON.parse):[]};
+          const rows=(path)=>{const x=readFileSync(path,'utf8').trim();return x?x.split('\n').map((line,index)=>{try{return JSON.parse(line)}catch{throw Error(`INVALID_JSONL:${path}:${index+1}`)}}):[]};
           const positions=rows('evidence/positions.jsonl');
           const cutoff=Date.parse(process.env.ANALYSIS_CUTOFF);
           const eligible=positions.filter((p)=>Date.parse(p.entry_at)<=cutoff);
