@@ -1,4 +1,5 @@
 name: Collect V20 strategy evidence read-only
+# Run 2 follows a preflight-only README whitespace correction.
 
 on:
   push:
