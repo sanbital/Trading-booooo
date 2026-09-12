@@ -148,7 +148,7 @@ jobs:
         run: |
           set -euo pipefail
           installed="$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
-            "select count(*) from supabase_migrations.schema_migrations where version='20260912085904')"
+            "select count(*) from supabase_migrations.schema_migrations where version='20260912085904'")"
           if [ "$installed" = 0 ]; then
             {
               sed '/^begin;$/d;/^commit;$/d' supabase/migrations/20260912085904_v18_db_only_reconciliation.sql
