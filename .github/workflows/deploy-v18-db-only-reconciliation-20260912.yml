@@ -46,6 +46,7 @@ jobs:
               supabase/functions/_shared/leader-ops-isolation.mjs|\
               supabase/functions/v10-lane-executor/index.ts|\
               supabase/migrations/20260912085904_v18_db_only_reconciliation.sql|\
+              supabase/migrations/20260912093558_v18_db_only_recovery_exit_scope.sql|\
               test-support/v17-exit/native-protection.test.mjs|\
               test-support/v18-ops/chz-db-only-reconciliation.test.mjs|\
               test-support/v18-ops/harness.mjs|\
@@ -54,7 +55,7 @@ jobs:
             esac
             count=$((count+1))
           done < <(git diff --name-only "$PRODUCTION_BASIS" "$GITHUB_SHA")
-          test "$count" -eq 10
+          test "$count" -eq 11
           git diff --check "$PRODUCTION_BASIS" "$GITHUB_SHA"
           git diff --exit-code "$PRODUCTION_BASIS" "$GITHUB_SHA" -- \
             supabase/functions/_shared/leader-qv3-runtime.mjs \
@@ -75,6 +76,7 @@ jobs:
             supabase/functions/_shared/leader-native-protection.mjs \
             supabase/functions/_shared/leader-ops-isolation.mjs \
             supabase/migrations/20260912085904_v18_db_only_reconciliation.sql \
+            supabase/migrations/20260912093558_v18_db_only_recovery_exit_scope.sql \
             > release-evidence/source-sha256.txt
 
       - uses: actions/setup-node@v4
@@ -120,12 +122,16 @@ jobs:
           rows=json.load(open('release-evidence/functions-before.json'))
           if isinstance(rows,dict): rows=rows.get('functions',[])
           row=next((x for x in rows if x.get('slug')=='v10-lane-executor'),None)
-          assert row and row.get('status')=='ACTIVE' and int(row.get('version'))==36
+          assert row and row.get('status')=='ACTIVE'
           assert row.get('verify_jwt') is False
-          assert row.get('ezbr_sha256')=='7142356f821bfb76804d5c59f6b6ada8c99eecb6ae6b30bcad1c135e24718773'
+          old='7142356f821bfb76804d5c59f6b6ada8c99eecb6ae6b30bcad1c135e24718773'
+          new='e54fe83dc3241aeedf0b3b251d7d035415e01a9d61c29f353fb62db063931d6a'
+          version=int(row.get('version'))
+          assert (version==36 and row.get('ezbr_sha256')==old) or (version==37 and row.get('ezbr_sha256')==new)
+          open('release-evidence/executor-deploy-needed.txt','w').write('1\n' if version==36 else '0\n')
           PY
           psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
-            "select jsonb_build_object('migration_count',(select count(*) from supabase_migrations.schema_migrations where version='20260912085904'),'migration_name',(select max(name) from supabase_migrations.schema_migrations where version='20260912085904'),'settlement_rpc',to_regprocedure('public.v18_settle_db_only_exit(uuid,uuid,bigint,uuid,jsonb)') is not null,'backlog_rpc',to_regprocedure('public.v18_closed_protection_backlog(integer)') is not null,'owner_trigger',exists(select 1 from pg_trigger where tgrelid='public.exchange_trade_fills'::regclass and tgname='zz_v18_reconciled_fill_owner' and not tgisinternal),'anon_execute',case when to_regprocedure('public.v18_settle_db_only_exit(uuid,uuid,bigint,uuid,jsonb)') is null then false else has_function_privilege('anon','public.v18_settle_db_only_exit(uuid,uuid,bigint,uuid,jsonb)','execute') end)" \
+            "select jsonb_build_object('migration_count',(select count(*) from supabase_migrations.schema_migrations where version='20260912085904'),'migration_name',(select max(name) from supabase_migrations.schema_migrations where version='20260912085904'),'scope_count',(select count(*) from supabase_migrations.schema_migrations where version='20260912093558'),'scope_name',(select max(name) from supabase_migrations.schema_migrations where version='20260912093558'),'settlement_rpc',to_regprocedure('public.v18_settle_db_only_exit(uuid,uuid,bigint,uuid,jsonb)') is not null,'backlog_rpc',to_regprocedure('public.v18_closed_protection_backlog(integer)') is not null,'owner_trigger',exists(select 1 from pg_trigger where tgrelid='public.exchange_trade_fills'::regclass and tgname='zz_v18_reconciled_fill_owner' and not tgisinternal),'anon_execute',case when to_regprocedure('public.v18_settle_db_only_exit(uuid,uuid,bigint,uuid,jsonb)') is null then false else has_function_privilege('anon','public.v18_settle_db_only_exit(uuid,uuid,bigint,uuid,jsonb)','execute') end)" \
             > release-evidence/database-before.json
           python - <<'PY'
           import json
@@ -136,6 +142,8 @@ jobs:
           else:
               assert x['migration_name']=='v18_db_only_reconciliation'
               assert x['settlement_rpc'] and x['backlog_rpc'] and x['owner_trigger'] and not x['anon_execute']
+          assert x['scope_count'] in (0,1)
+          assert (x['scope_count']==0 and x['scope_name'] is None) or (x['scope_count']==1 and x['scope_name']=='v18_db_only_recovery_exit_scope')
           PY
           psql "$SUPABASE_DB_URL" -XAt -F '|' --set=ON_ERROR_STOP=1 -c \
             "select entry_enabled,legacy_entries_retired,mode,pause_new_entries,withdrawal_mode,manual_intervention_required,scalp_kill_switch,emergency_liquidation,coalesce(pause_lock_reason,'') from public.v17_operator_control cross join public.trading_settings where singleton and id=1" \
@@ -157,13 +165,24 @@ jobs:
           else
             test "$installed" = 1
           fi
+          scope_installed="$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select count(*) from supabase_migrations.schema_migrations where version='20260912093558'")"
+          if [ "$scope_installed" = 0 ]; then
+            {
+              sed '/^begin;$/d;/^commit;$/d' supabase/migrations/20260912093558_v18_db_only_recovery_exit_scope.sql
+              printf '%s\n' "insert into supabase_migrations.schema_migrations(version,name) values ('20260912093558','v18_db_only_recovery_exit_scope');"
+            } | psql "$SUPABASE_DB_URL" -X --set=ON_ERROR_STOP=1 --single-transaction --file=-
+          else
+            test "$scope_installed" = 1
+          fi
           psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
-            "select jsonb_build_object('migration_count',(select count(*) from supabase_migrations.schema_migrations where version='20260912085904'),'migration_name',(select max(name) from supabase_migrations.schema_migrations where version='20260912085904'),'settlement_rpc',to_regprocedure('public.v18_settle_db_only_exit(uuid,uuid,bigint,uuid,jsonb)') is not null,'backlog_rpc',to_regprocedure('public.v18_closed_protection_backlog(integer)') is not null,'owner_trigger',exists(select 1 from pg_trigger where tgrelid='public.exchange_trade_fills'::regclass and tgname='zz_v18_reconciled_fill_owner' and not tgisinternal),'anon_execute',has_function_privilege('anon','public.v18_settle_db_only_exit(uuid,uuid,bigint,uuid,jsonb)','execute'),'authenticated_execute',has_function_privilege('authenticated','public.v18_settle_db_only_exit(uuid,uuid,bigint,uuid,jsonb)','execute'),'service_execute',has_function_privilege('service_role','public.v18_settle_db_only_exit(uuid,uuid,bigint,uuid,jsonb)','execute'))" \
+            "select jsonb_build_object('migration_count',(select count(*) from supabase_migrations.schema_migrations where version='20260912085904'),'migration_name',(select max(name) from supabase_migrations.schema_migrations where version='20260912085904'),'scope_count',(select count(*) from supabase_migrations.schema_migrations where version='20260912093558'),'scope_name',(select max(name) from supabase_migrations.schema_migrations where version='20260912093558'),'scope_marker',position('V18_RECOVERY_EXIT_FILL_SCOPE_1' in pg_get_functiondef('public.v18_recovery_observation(uuid,uuid,bigint,jsonb)'::regprocedure))>0,'settlement_rpc',to_regprocedure('public.v18_settle_db_only_exit(uuid,uuid,bigint,uuid,jsonb)') is not null,'backlog_rpc',to_regprocedure('public.v18_closed_protection_backlog(integer)') is not null,'owner_trigger',exists(select 1 from pg_trigger where tgrelid='public.exchange_trade_fills'::regclass and tgname='zz_v18_reconciled_fill_owner' and not tgisinternal),'anon_execute',has_function_privilege('anon','public.v18_settle_db_only_exit(uuid,uuid,bigint,uuid,jsonb)','execute'),'authenticated_execute',has_function_privilege('authenticated','public.v18_settle_db_only_exit(uuid,uuid,bigint,uuid,jsonb)','execute'),'service_execute',has_function_privilege('service_role','public.v18_settle_db_only_exit(uuid,uuid,bigint,uuid,jsonb)','execute'))" \
             > release-evidence/database-after.json
           python - <<'PY'
           import json
           x=json.load(open('release-evidence/database-after.json'))
           assert x['migration_count']==1 and x['migration_name']=='v18_db_only_reconciliation'
+          assert x['scope_count']==1 and x['scope_name']=='v18_db_only_recovery_exit_scope' and x['scope_marker']
           assert x['settlement_rpc'] and x['backlog_rpc'] and x['owner_trigger']
           assert not x['anon_execute'] and not x['authenticated_execute'] and x['service_execute']
           PY
@@ -175,10 +194,12 @@ jobs:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
           set -euo pipefail
-          supabase functions deploy v10-lane-executor \
-            --project-ref "$SUPABASE_PROJECT_REF" \
-            --no-verify-jwt \
-            --use-api
+          if grep -qx 1 release-evidence/executor-deploy-needed.txt; then
+            supabase functions deploy v10-lane-executor \
+              --project-ref "$SUPABASE_PROJECT_REF" \
+              --no-verify-jwt \
+              --use-api
+          fi
 
       - name: Verify active production version and unchanged operator controls
         shell: bash
@@ -196,7 +217,7 @@ jobs:
           row=next((x for x in rows if x.get('slug')=='v10-lane-executor'),None)
           assert row and row.get('status')=='ACTIVE' and int(row.get('version'))==37
           assert row.get('verify_jwt') is False
-          assert row.get('ezbr_sha256')!='7142356f821bfb76804d5c59f6b6ada8c99eecb6ae6b30bcad1c135e24718773'
+          assert row.get('ezbr_sha256')=='e54fe83dc3241aeedf0b3b251d7d035415e01a9d61c29f353fb62db063931d6a'
           PY
           psql "$SUPABASE_DB_URL" -XAt -F '|' --set=ON_ERROR_STOP=1 -c \
             "select entry_enabled,legacy_entries_retired,mode,pause_new_entries,withdrawal_mode,manual_intervention_required,scalp_kill_switch,emergency_liquidation,coalesce(pause_lock_reason,'') from public.v17_operator_control cross join public.trading_settings where singleton and id=1" \

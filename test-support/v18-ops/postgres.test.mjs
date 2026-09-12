@@ -8,6 +8,7 @@ const {PGlite}=await import(pathToFileURL(dependency).href);
 const schema=JSON.parse(readFileSync(new URL('./schema-columns.json',import.meta.url),'utf8'));
 const migration=readFileSync(new URL('../../supabase/migrations/'+readdirSync(new URL('../../supabase/migrations/',import.meta.url)).find(x=>x.endsWith('_v18_ops_isolation.sql')),import.meta.url),'utf8');
 const dbOnlyMigration=readFileSync(new URL('../../supabase/migrations/'+readdirSync(new URL('../../supabase/migrations/',import.meta.url)).find(x=>x.endsWith('_v18_db_only_reconciliation.sql')),import.meta.url),'utf8');
+const recoveryScopeMigration=readFileSync(new URL('../../supabase/migrations/'+readdirSync(new URL('../../supabase/migrations/',import.meta.url)).find(x=>x.endsWith('_v18_db_only_recovery_exit_scope.sql')),import.meta.url),'utf8');
 const OWNER='11111111-1111-4111-8111-111111111111';
 async function setup(){
  const pg=new PGlite();await pg.exec('create role anon; create role authenticated; create role service_role;');
@@ -24,6 +25,7 @@ async function setup(){
  await pg.exec(readFileSync(new URL('./lease-rpcs.sql',import.meta.url),'utf8'));
  await pg.exec(migration);
  await pg.exec(dbOnlyMigration);
+ await pg.exec(recoveryScopeMigration);
  await pg.exec(`create trigger v11_long_regime_slot_cap_trg before insert or update of state on v11_long_regime_positions for each row execute function v11_long_regime_enforce_slot_cap();`);
  await pg.exec(`create trigger original_fill_attribution before insert or update of exchange_order_id,bot_order_id,position_id on exchange_trade_fills for each row execute function enforce_futures_fill_order_attribution();
  create unique index fill_identity on exchange_trade_fills(exchange,account_scope,market,exchange_trade_id);`);
@@ -38,7 +40,7 @@ async function observe(pg,id,generation=1,obs='new-'+Math.random()){
  return (await pg.query('select v18_recovery_observation($1,$2,$3,$4) result',[OWNER,id,generation,evidence])).rows[0].result;
 }
 test('SQL migrations apply twice; RLS and invoker RPC grants exclude anon/authenticated',async()=>{
- const pg=await setup();await pg.exec(migration);await pg.exec(dbOnlyMigration);
+ const pg=await setup();await pg.exec(migration);await pg.exec(dbOnlyMigration);await pg.exec(recoveryScopeMigration);
  const r=await pg.query("select has_function_privilege('anon','public.v18_record_incident(uuid,text,text,jsonb)','execute') anon, has_function_privilege('authenticated','public.v18_recovery_observation(uuid,uuid,bigint,jsonb)','execute') authenticated, relrowsecurity rls from pg_class where relname='v18_ops_incidents'");
  assert.deepEqual(r.rows[0],{anon:false,authenticated:false,rls:true});await pg.close();
 });
@@ -128,7 +130,7 @@ test('SQL sanitized stale-stop settlement is atomic, exact, idempotent, and alon
  await pg.query("insert into v11_long_regime_signals(id,position_id,status,symbol) values($1,$2,'FILLED','CASEUSDT')",[signal,target]);
  await pg.query("insert into v11_long_regime_orders(id,signal_id,position_id,symbol,intent,state,exchange_order_id,client_order_id,request_payload,created_at,updated_at) values('55555555-5555-4555-8555-555555555555',$1,$2,'CASEUSDT','OPEN_LONG','FILLED',$3,'tb-v11e-case',$4,$5,$5)",
   [signal,target,entryOrder,{order:{side:'BUY',position_side:'LONG',position_effect:'OPEN'}},entryAt]);
- await pg.query("insert into exchange_trade_fills(exchange,account_scope,market,exchange_trade_id,exchange_order_id,side,price,quantity,quote_amount,fee_quote_amount,realized_pnl_quote,accounting_status,source,executed_at) values ('binance_futures','futures','CASEUSDT',700000002,$1,'SELL',.01503,40,.6012,.0003006,-.0124,'UNMATCHED_INVENTORY','UNCLASSIFIED',$2),('binance_futures','futures','CASEUSDT',700000003,$1,'SELL',.01503,60,.9018,.0004509,-.0186,'UNMATCHED_INVENTORY','UNCLASSIFIED',$2)",[exitOrder,exitAt]);
+ await pg.query("insert into exchange_trade_fills(exchange,account_scope,market,exchange_trade_id,exchange_order_id,side,price,quantity,quote_amount,fee_quote_amount,realized_pnl_quote,accounting_status,source,executed_at,v17_position_id) values ('binance_futures','futures','CASEUSDT',700000001,$1,'BUY',.01534,100,1.534,.000767,0,'PENDING','AUTOMATED',$2,$3),('binance_futures','futures','CASEUSDT',700000002,$4,'SELL',.01503,40,.6012,.0003006,-.0124,'UNMATCHED_INVENTORY','UNCLASSIFIED',$5,null),('binance_futures','futures','CASEUSDT',700000003,$4,'SELL',.01503,60,.9018,.0004509,-.0186,'UNMATCHED_INVENTORY','UNCLASSIFIED',$5,null)",[entryOrder,entryAt,target,exitOrder,exitAt]);
  const id=await incident(pg,'UNEXPLAINED_EXPOSURE'),updated=(await pg.query('select updated_at from v11_long_regime_positions where id=$1',[target])).rows[0].updated_at;
  await pg.query("select set_config('request.headers',$1,false)",[JSON.stringify({'x-v18-execution-owner':OWNER})]);
  const evidence={version:'V18-DB-ONLY-EVIDENCE-1',classification:'VERIFIED_STALE_NATIVE_STOP',exchange:'binance_futures',accountScope:'futures',
@@ -144,8 +146,10 @@ test('SQL sanitized stale-stop settlement is atomic, exact, idempotent, and alon
  assert.equal(position.state,'CLOSED');assert.equal(position.remaining_quantity,'0');assert.equal(Number(position.exit_price),.01503);
  assert.equal(position.exit_reason,'STALE_NATIVE_STOP_CROSS_LIFECYCLE');assert.equal(Number(position.realized_pnl_usdt),-.0325185);
  assert.equal(position.metadata.qv3.version,'QV3_ENTRY_EXIT_TWO_1');
- const fills=(await pg.query('select v17_position_id,accounting_status,source from exchange_trade_fills order by exchange_trade_id')).rows;
+ const fills=(await pg.query("select v17_position_id,accounting_status,source from exchange_trade_fills where side='SELL' order by exchange_trade_id")).rows;
  assert.deepEqual(fills,[{v17_position_id:target,accounting_status:'ACCOUNTED',source:'AUTOMATED'},{v17_position_id:target,accounting_status:'ACCOUNTED',source:'AUTOMATED'}]);
+ assert.deepEqual((await pg.query("select v17_position_id,accounting_status from exchange_trade_fills where side='BUY'")).rows[0],
+  {v17_position_id:target,accounting_status:'PENDING'});
  assert.equal(Number((await pg.query('select realized_pnl_usdt from v11_long_regime_positions where id=$1',[source])).rows[0].realized_pnl_usdt),-1.1);
  const replay=(await pg.query('select v18_settle_db_only_exit($1,$2,1,$3,$4) result',[OWNER,id,target,evidence])).rows[0].result;
  assert.equal(replay.idempotent,true);assert.equal((await pg.query("select count(*) n from exchange_trade_fills where accounting_status='ACCOUNTED'")).rows[0].n,2);
