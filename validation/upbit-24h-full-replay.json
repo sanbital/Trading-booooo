@@ -1,0 +1,5129 @@
+{
+  "generated_at": "2026-08-20T06:27:03Z",
+  "window_start": "2026-08-19T06:27:03Z",
+  "window_end": "2026-08-20T06:27:03Z",
+  "krw_market_count": 283,
+  "execution_context": {
+    "buy_fee_bps": 5,
+    "sell_fee_bps": 5,
+    "entry_slippage_median_bps": -0.105578974695097,
+    "entry_slippage_p90_bps": 12.6529537287554,
+    "real_trades_30d": 294,
+    "cost_buffer_upbit_bps": 12,
+    "breakeven_trigger_bps": 20,
+    "profit_lock_trigger_bps": 20,
+    "profit_lock_net_bps": 20,
+    "profit_trail_trigger_bps": 23,
+    "profit_trail_distance_bps": 6,
+    "absolute_max_holding_seconds": 600
+  },
+  "market_24h": {
+    "return_pct": {
+      "n": 283,
+      "mean": 4.600047170574368,
+      "median": 4.678362573099393,
+      "p05": -1.3528990694345064,
+      "p10": -0.3247317477317187,
+      "p90": 9.059259259259266,
+      "p95": 11.761378818918654,
+      "min": -36.378466557911906,
+      "max": 33.33333333333333,
+      "positive_rate": 0.8939929328621908
+    },
+    "range_pct": {
+      "n": 283,
+      "mean": 8.838630353708968,
+      "median": 7.489994282447121,
+      "p05": 3.421584850156263,
+      "p10": 4.446243814664874,
+      "p90": 13.686188537425627,
+      "p95": 17.257535431442225,
+      "min": 1.8208302986161717,
+      "max": 58.974358974358964,
+      "positive_rate": 1.0
+    },
+    "trade_krw_total": 1562881524740.8289,
+    "markets_with_data": 283
+  },
+  "broad_30m_entries": {
+    "180": {
+      "n": 7819,
+      "mean": -0.09060362982342539,
+      "median": -0.09995002498749406,
+      "p05": -0.6343660270732165,
+      "p10": -0.40523907513982255,
+      "p90": 0.25380387067498666,
+      "p95": 0.45830714362863706,
+      "min": -4.857095261892863,
+      "max": 8.91880448664557,
+      "positive_rate": 0.21741910730272412
+    },
+    "300": {
+      "n": 7819,
+      "mean": -0.07768849647705571,
+      "median": -0.09995002498749406,
+      "p05": -0.7529983924952742,
+      "p10": -0.509376459311317,
+      "p90": 0.3863000293316253,
+      "p95": 0.6355104656260879,
+      "min": -6.010435296821037,
+      "max": 9.612554833694276,
+      "positive_rate": 0.27202967131346717
+    },
+    "600": {
+      "n": 7819,
+      "mean": -0.06027261702327017,
+      "median": -0.09995002498749406,
+      "p05": -0.9308927483590135,
+      "p10": -0.6551046837885343,
+      "p90": 0.5900361927033245,
+      "p95": 0.8382193738755165,
+      "min": -5.849593189017,
+      "max": 12.192777094988028,
+      "positive_rate": 0.3339301700984781
+    },
+    "900": {
+      "n": 7819,
+      "mean": -0.07380149631310676,
+      "median": -0.09995002498749406,
+      "p05": -1.0023662962895241,
+      "p10": -0.770420159047982,
+      "p90": 0.63460916600524,
+      "p95": 0.8990504747626216,
+      "min": -5.768037966832162,
+      "max": 13.577873108506399,
+      "positive_rate": 0.35017265634991684
+    }
+  },
+  "broad_600_mfe": {
+    "n": 7819,
+    "mean": 0.32060825322907066,
+    "median": 0.13210039630118242,
+    "p05": 0.0,
+    "p10": 0.0,
+    "p90": 0.8849557522123908,
+    "p95": 1.17647058823529,
+    "min": 0.0,
+    "max": 13.518197573656842,
+    "positive_rate": 0.5753932727970329
+  },
+  "broad_600_mae": {
+    "n": 7819,
+    "mean": -0.2910603545636561,
+    "median": -0.12468827930174342,
+    "p05": -1.0102031436712888,
+    "p10": -0.8196721311475419,
+    "p90": 0.0,
+    "p95": 0.0,
+    "min": -9.196141479099673,
+    "max": 0.0,
+    "positive_rate": 0.0
+  },
+  "scanner_buy_raw_count": 28,
+  "scanner_buy_dedup_count": 23,
+  "scanner_episode_count": 23,
+  "candidate_current_fixed_600": {
+    "n": 23,
+    "mean": 0.09459915319846844,
+    "median": 0.13594147436317705,
+    "p05": -0.4595902048975508,
+    "p10": -0.08048897629106654,
+    "p90": 0.2606730869099172,
+    "p95": 0.3514792856238923,
+    "min": -0.8312003907955834,
+    "max": 0.4179649806433261,
+    "positive_rate": 0.8260869565217391
+  },
+  "candidate_dynamic_variants_600": {
+    "DYN_S0_T0": {
+      "n": 23,
+      "mean": 0.020839241369537433,
+      "median": 0.014679980721066244,
+      "p05": -0.44985968054933706,
+      "p10": -0.001697239808517991,
+      "p90": 0.23519342626062037,
+      "p95": 0.26242070992416705,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.8695652173913043
+    },
+    "DYN_S0_T1": {
+      "n": 23,
+      "mean": 0.050623235571643714,
+      "median": 0.0881856623477395,
+      "p05": -0.4595902048975508,
+      "p10": -0.08048897629106654,
+      "p90": 0.2601927222993039,
+      "p95": 0.3514792856238923,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.8260869565217391
+    },
+    "DYN_S1_T0": {
+      "n": 23,
+      "mean": 0.022430604113500622,
+      "median": 0.03908971053792065,
+      "p05": -0.4595902048975508,
+      "p10": -0.08048897629106654,
+      "p90": 0.23519342626062037,
+      "p95": 0.26242070992416705,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.8260869565217391
+    },
+    "DYN_S1_T1": {
+      "n": 23,
+      "mean": 0.05665124840109663,
+      "median": 0.0881856623477395,
+      "p05": -0.4595902048975508,
+      "p10": -0.08048897629106654,
+      "p90": 0.2601927222993039,
+      "p95": 0.3514792856238923,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.8260869565217391
+    },
+    "DYN_S2_T0": {
+      "n": 23,
+      "mean": 0.03725868039104197,
+      "median": 0.07199498357535195,
+      "p05": -0.4595902048975508,
+      "p10": -0.08048897629106654,
+      "p90": 0.23519342626062037,
+      "p95": 0.26242070992416705,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.8260869565217391
+    },
+    "DYN_S2_T1": {
+      "n": 23,
+      "mean": 0.06898831636177424,
+      "median": 0.1006524850024837,
+      "p05": -0.4595902048975508,
+      "p10": -0.08048897629106654,
+      "p90": 0.2605069564668616,
+      "p95": 0.3514792856238923,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.8260869565217391
+    },
+    "DYN_S3_T0": {
+      "n": 23,
+      "mean": 0.03725868039104197,
+      "median": 0.07199498357535195,
+      "p05": -0.4595902048975508,
+      "p10": -0.08048897629106654,
+      "p90": 0.23519342626062037,
+      "p95": 0.26242070992416705,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.8260869565217391
+    },
+    "DYN_S3_T1": {
+      "n": 23,
+      "mean": 0.06898831636177424,
+      "median": 0.1006524850024837,
+      "p05": -0.4595902048975508,
+      "p10": -0.08048897629106654,
+      "p90": 0.2605069564668616,
+      "p95": 0.3514792856238923,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.8260869565217391
+    },
+    "DYN_S5_T0": {
+      "n": 23,
+      "mean": 0.04328669322049489,
+      "median": 0.07427398961836751,
+      "p05": -0.4595902048975508,
+      "p10": -0.08048897629106654,
+      "p90": 0.23519342626062037,
+      "p95": 0.26242070992416705,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.8260869565217391
+    },
+    "DYN_S5_T1": {
+      "n": 23,
+      "mean": 0.07952513240959835,
+      "median": 0.12354001969931971,
+      "p05": -0.4595902048975508,
+      "p10": -0.08048897629106654,
+      "p90": 0.2605069564668616,
+      "p95": 0.3514792856238923,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.8260869565217391
+    },
+    "DYN_S8_T0": {
+      "n": 23,
+      "mean": 0.07952513240959933,
+      "median": 0.12354001969931971,
+      "p05": -0.4595902048975508,
+      "p10": -0.08048897629106654,
+      "p90": 0.2605069564668616,
+      "p95": 0.3514792856238923,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.8260869565217391
+    },
+    "DYN_S8_T1": {
+      "n": 23,
+      "mean": 0.08554069857730652,
+      "median": 0.13594147436317705,
+      "p05": -0.4595902048975508,
+      "p10": -0.08048897629106654,
+      "p90": 0.2606730869099172,
+      "p95": 0.3514792856238923,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.8260869565217391
+    },
+    "DYN_S10_T0": {
+      "n": 23,
+      "mean": 0.07952513240959835,
+      "median": 0.12354001969931971,
+      "p05": -0.4595902048975508,
+      "p10": -0.08048897629106654,
+      "p90": 0.2605069564668616,
+      "p95": 0.3514792856238923,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.8260869565217391
+    },
+    "DYN_S10_T1": {
+      "n": 23,
+      "mean": 0.08554069857730652,
+      "median": 0.13594147436317705,
+      "p05": -0.4595902048975508,
+      "p10": -0.08048897629106654,
+      "p90": 0.2606730869099172,
+      "p95": 0.3514792856238923,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.8260869565217391
+    }
+  },
+  "best_dynamic_variant": {
+    "name": "DYN_S8_T1",
+    "metrics": {
+      "n": 23,
+      "mean": 0.08554069857730652,
+      "median": 0.13594147436317705,
+      "p05": -0.4595902048975508,
+      "p10": -0.08048897629106654,
+      "p90": 0.2606730869099172,
+      "p95": 0.3514792856238923,
+      "min": -0.8312003907955834,
+      "max": 0.4179649806433261,
+      "positive_rate": 0.8260869565217391
+    }
+  },
+  "candidate_entry_delay_600": {
+    "0": {
+      "n": 23,
+      "mean": -0.021228710999183872,
+      "median": 0.053742359589459276,
+      "p05": -0.8503635359751638,
+      "p10": -0.8053118236279544,
+      "p90": 0.6486127669379416,
+      "p95": 0.7466727711105279,
+      "min": -1.4408902931084655,
+      "max": 0.857121621670931,
+      "positive_rate": 0.5652173913043478
+    },
+    "30": {
+      "n": 23,
+      "mean": -0.24866431369294348,
+      "median": -0.0351009175710737,
+      "p05": -1.1621677534177433,
+      "p10": -0.6940229373231022,
+      "p90": 0.4026719043735527,
+      "p95": 0.4814984760140105,
+      "min": -4.4815311642424245,
+      "max": 0.7010813035635666,
+      "positive_rate": 0.4782608695652174
+    },
+    "60": {
+      "n": 23,
+      "mean": -0.2516857584049712,
+      "median": -0.09995002498748295,
+      "p05": -0.9230837770710976,
+      "p10": -0.5860379618277767,
+      "p90": 0.2825801520943605,
+      "p95": 0.4045832272623515,
+      "min": -4.253343787624786,
+      "max": 0.9275933461840857,
+      "positive_rate": 0.391304347826087
+    },
+    "120": {
+      "n": 23,
+      "mean": -0.1479960365443101,
+      "median": 0.03899302087482237,
+      "p05": -0.9390843104857394,
+      "p10": -0.7535198344066685,
+      "p90": 0.4065181438774612,
+      "p95": 0.481410752050213,
+      "min": -2.536536609743889,
+      "max": 0.8144669084222178,
+      "positive_rate": 0.5217391304347826
+    }
+  },
+  "candidate_2s_adverse_bps": {
+    "n": 1030,
+    "mean": 16.49613419545613,
+    "median": 11.477762781484934,
+    "p05": 3.434065934065922,
+    "p10": 3.455305658899843,
+    "p90": 33.294564800026684,
+    "p95": 44.019402811665095,
+    "min": 3.242542153047978,
+    "max": 92.16589861751112,
+    "positive_rate": 1.0
+  },
+  "episodes": [
+    {
+      "market": "KRW-ONG",
+      "signal_at": "2026-08-19T07:04:55Z",
+      "pattern": "OFI_CONTINUATION",
+      "entry_price": 84.7,
+      "candidate_mid": 84.625,
+      "raw_600": {
+        "gross_terminal_pct": 0.5903187721369552,
+        "net_terminal_pct": 0.48977872338920037,
+        "mfe_pct": 0.7083825265643329,
+        "mae_pct": -0.11806375442739991,
+        "terminal_price": 85.2
+      },
+      "current": {
+        "net_return_pct": 0.13594147436317705,
+        "exit_reason": "PRE_T1_PROTECT",
+        "exit_price": 84.9,
+        "protected_stop": 84.9
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.13594147436317705,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 84.9,
+          "protected_stop": 84.9,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.13594147436317705,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 84.9,
+          "protected_stop": 84.9,
+          "armed": false
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.13594147436317705,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 84.9,
+          "protected_stop": 84.9,
+          "armed": true
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.13594147436317705,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 84.9,
+          "protected_stop": 84.9,
+          "armed": false
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.13594147436317705,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 84.9,
+          "protected_stop": 84.9,
+          "armed": true
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.13594147436317705,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 84.9,
+          "protected_stop": 84.9,
+          "armed": false
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.13594147436317705,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 84.9,
+          "protected_stop": 84.9,
+          "armed": true
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.13594147436317705,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 84.9,
+          "protected_stop": 84.9,
+          "armed": false
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.13594147436317705,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 84.9,
+          "protected_stop": 84.9,
+          "armed": true
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.13594147436317705,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 84.9,
+          "protected_stop": 84.9,
+          "armed": false
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.13594147436317705,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 84.9,
+          "protected_stop": 84.9,
+          "armed": true
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.13594147436317705,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 84.9,
+          "protected_stop": 84.9,
+          "armed": false
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.13594147436317705,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 84.9,
+          "protected_stop": 84.9,
+          "armed": true
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.13594147436317705,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 84.9,
+          "protected_stop": 84.9,
+          "armed": false
+        }
+      }
+    },
+    {
+      "market": "KRW-EUL",
+      "signal_at": "2026-08-19T07:12:43Z",
+      "pattern": "OFI_CONTINUATION",
+      "entry_price": 1751.0,
+      "candidate_mid": 1750.75,
+      "raw_600": {
+        "gross_terminal_pct": 0.8566533409480215,
+        "net_terminal_pct": 0.7558470907321979,
+        "mfe_pct": 1.59908623643632,
+        "mae_pct": -0.05711022272987254,
+        "terminal_price": 1766.0
+      },
+      "current": {
+        "net_return_pct": 0.24236882130039827,
+        "exit_reason": "PRE_T1_PROTECT",
+        "exit_price": 1757.0,
+        "protected_stop": 1757.0
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.24236882130039827,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1757.0,
+          "protected_stop": 1757.0,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.24236882130039827,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1757.0,
+          "protected_stop": 1757.0,
+          "armed": true
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.24236882130039827,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1757.0,
+          "protected_stop": 1757.0,
+          "armed": true
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.24236882130039827,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1757.0,
+          "protected_stop": 1757.0,
+          "armed": true
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.24236882130039827,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1757.0,
+          "protected_stop": 1757.0,
+          "armed": true
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.24236882130039827,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1757.0,
+          "protected_stop": 1757.0,
+          "armed": true
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.24236882130039827,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1757.0,
+          "protected_stop": 1757.0,
+          "armed": true
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.24236882130039827,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1757.0,
+          "protected_stop": 1757.0,
+          "armed": true
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.24236882130039827,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1757.0,
+          "protected_stop": 1757.0,
+          "armed": true
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.24236882130039827,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1757.0,
+          "protected_stop": 1757.0,
+          "armed": true
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.24236882130039827,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1757.0,
+          "protected_stop": 1757.0,
+          "armed": true
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.24236882130039827,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1757.0,
+          "protected_stop": 1757.0,
+          "armed": true
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.24236882130039827,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1757.0,
+          "protected_stop": 1757.0,
+          "armed": true
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.24236882130039827,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1757.0,
+          "protected_stop": 1757.0,
+          "armed": true
+        }
+      }
+    },
+    {
+      "market": "KRW-EUL",
+      "signal_at": "2026-08-19T07:18:07Z",
+      "pattern": "SWEEP_RECLAIM",
+      "entry_price": 1776.0,
+      "candidate_mid": 1774.75,
+      "raw_600": {
+        "gross_terminal_pct": -0.7319819819819773,
+        "net_terminal_pct": -0.8312003907955834,
+        "mfe_pct": 0.05630630630630851,
+        "mae_pct": -1.4639639639639657,
+        "terminal_price": 1763.0
+      },
+      "current": {
+        "net_return_pct": -0.8312003907955834,
+        "exit_reason": "TIMEOUT",
+        "exit_price": 1763.0,
+        "protected_stop": null
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": -0.8312003907955834,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1763.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": -0.8312003907955834,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1763.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": -0.8312003907955834,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1763.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": -0.8312003907955834,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1763.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": -0.8312003907955834,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1763.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": -0.8312003907955834,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1763.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": -0.8312003907955834,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1763.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": -0.8312003907955834,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1763.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": -0.8312003907955834,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1763.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": -0.8312003907955834,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1763.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": -0.8312003907955834,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1763.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": -0.8312003907955834,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1763.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": -0.8312003907955834,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1763.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": -0.8312003907955834,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1763.0,
+          "protected_stop": null,
+          "armed": false
+        }
+      }
+    },
+    {
+      "market": "KRW-EUL",
+      "signal_at": "2026-08-19T08:26:04Z",
+      "pattern": "OFI_CONTINUATION",
+      "entry_price": 1736.0,
+      "candidate_mid": 1735.75,
+      "raw_600": {
+        "gross_terminal_pct": -0.2880184331797264,
+        "net_terminal_pct": -0.38768058367129044,
+        "mfe_pct": 0.6336405529953959,
+        "mae_pct": -0.691244239631339,
+        "terminal_price": 1731.0
+      },
+      "current": {
+        "net_return_pct": 0.4179649806433261,
+        "exit_reason": "PRE_T1_PROTECT",
+        "exit_price": 1745.0,
+        "protected_stop": 1745.0
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.4179649806433261,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1745.0,
+          "protected_stop": 1745.0,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.4179649806433261,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1745.0,
+          "protected_stop": 1745.0,
+          "armed": true
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.4179649806433261,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1745.0,
+          "protected_stop": 1745.0,
+          "armed": true
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.4179649806433261,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1745.0,
+          "protected_stop": 1745.0,
+          "armed": true
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.4179649806433261,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1745.0,
+          "protected_stop": 1745.0,
+          "armed": true
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.4179649806433261,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1745.0,
+          "protected_stop": 1745.0,
+          "armed": true
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.4179649806433261,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1745.0,
+          "protected_stop": 1745.0,
+          "armed": true
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.4179649806433261,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1745.0,
+          "protected_stop": 1745.0,
+          "armed": true
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.4179649806433261,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1745.0,
+          "protected_stop": 1745.0,
+          "armed": true
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.4179649806433261,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1745.0,
+          "protected_stop": 1745.0,
+          "armed": true
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.4179649806433261,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1745.0,
+          "protected_stop": 1745.0,
+          "armed": true
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.4179649806433261,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1745.0,
+          "protected_stop": 1745.0,
+          "armed": true
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.4179649806433261,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1745.0,
+          "protected_stop": 1745.0,
+          "armed": true
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.4179649806433261,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1745.0,
+          "protected_stop": 1745.0,
+          "armed": true
+        }
+      }
+    },
+    {
+      "market": "KRW-ONG",
+      "signal_at": "2026-08-19T09:18:28Z",
+      "pattern": "OFI_CONTINUATION",
+      "entry_price": 86.6,
+      "candidate_mid": 86.575,
+      "raw_600": {
+        "gross_terminal_pct": 0.11547344110856006,
+        "net_terminal_pct": 0.015408000387817644,
+        "mfe_pct": 0.23094688221709792,
+        "mae_pct": -0.6928406466512604,
+        "terminal_price": 86.7
+      },
+      "current": {
+        "net_return_pct": 0.015408000387817644,
+        "exit_reason": "TIMEOUT",
+        "exit_price": 86.7,
+        "protected_stop": null
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.015408000387817644,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 86.7,
+          "protected_stop": 86.7,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.015408000387817644,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 86.7,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.015408000387817644,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 86.7,
+          "protected_stop": 86.7,
+          "armed": true
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.015408000387817644,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 86.7,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.015408000387817644,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 86.7,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.015408000387817644,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 86.7,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.015408000387817644,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 86.7,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.015408000387817644,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 86.7,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.015408000387817644,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 86.7,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.015408000387817644,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 86.7,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.015408000387817644,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 86.7,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.015408000387817644,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 86.7,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.015408000387817644,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 86.7,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.015408000387817644,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 86.7,
+          "protected_stop": null,
+          "armed": false
+        }
+      }
+    },
+    {
+      "market": "KRW-ONG",
+      "signal_at": "2026-08-19T09:44:44Z",
+      "pattern": "SWEEP_RECLAIM",
+      "entry_price": 87.3,
+      "candidate_mid": 87.125,
+      "raw_600": {
+        "gross_terminal_pct": 0.6872852233677174,
+        "net_terminal_pct": 0.5866482566277087,
+        "mfe_pct": 1.3745704467353903,
+        "mae_pct": -0.22909507445589838,
+        "terminal_price": 87.9
+      },
+      "current": {
+        "net_return_pct": 0.128916068884255,
+        "exit_reason": "PRE_T1_PROTECT",
+        "exit_price": 87.5,
+        "protected_stop": 87.5
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.014483021948374919,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 87.4,
+          "protected_stop": 87.4,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.128916068884255,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 87.5,
+          "protected_stop": 87.5,
+          "armed": true
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.014483021948374919,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 87.4,
+          "protected_stop": 87.4,
+          "armed": true
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.128916068884255,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 87.5,
+          "protected_stop": 87.5,
+          "armed": true
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.128916068884255,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 87.5,
+          "protected_stop": 87.5,
+          "armed": true
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.128916068884255,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 87.5,
+          "protected_stop": 87.5,
+          "armed": false
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.128916068884255,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 87.5,
+          "protected_stop": 87.5,
+          "armed": true
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.128916068884255,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 87.5,
+          "protected_stop": 87.5,
+          "armed": false
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.128916068884255,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 87.5,
+          "protected_stop": 87.5,
+          "armed": true
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.128916068884255,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 87.5,
+          "protected_stop": 87.5,
+          "armed": false
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.128916068884255,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 87.5,
+          "protected_stop": 87.5,
+          "armed": true
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.128916068884255,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 87.5,
+          "protected_stop": 87.5,
+          "armed": false
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.128916068884255,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 87.5,
+          "protected_stop": 87.5,
+          "armed": true
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.128916068884255,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 87.5,
+          "protected_stop": 87.5,
+          "armed": false
+        }
+      }
+    },
+    {
+      "market": "KRW-ONG",
+      "signal_at": "2026-08-19T09:48:17Z",
+      "pattern": "REPLENISHMENT_ICEBERG",
+      "entry_price": 88.1,
+      "candidate_mid": 88.275,
+      "raw_600": {
+        "gross_terminal_pct": -0.11350737797956034,
+        "net_terminal_pct": -0.21334395231441539,
+        "mfe_pct": 0.4540295119182858,
+        "mae_pct": -0.5675368898978461,
+        "terminal_price": 88.0
+      },
+      "current": {
+        "net_return_pct": 0.1268378296663375,
+        "exit_reason": "PRE_T1_PROTECT",
+        "exit_price": 88.30000000000001,
+        "protected_stop": 88.30000000000001
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.01344390233941617,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 88.2,
+          "protected_stop": 88.2,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.1268378296663375,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 88.30000000000001,
+          "protected_stop": 88.30000000000001,
+          "armed": false
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.01344390233941617,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 88.2,
+          "protected_stop": 88.2,
+          "armed": true
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.1268378296663375,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 88.30000000000001,
+          "protected_stop": 88.30000000000001,
+          "armed": false
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.1268378296663375,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 88.30000000000001,
+          "protected_stop": 88.30000000000001,
+          "armed": false
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.1268378296663375,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 88.30000000000001,
+          "protected_stop": 88.30000000000001,
+          "armed": false
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.1268378296663375,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 88.30000000000001,
+          "protected_stop": 88.30000000000001,
+          "armed": false
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.1268378296663375,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 88.30000000000001,
+          "protected_stop": 88.30000000000001,
+          "armed": false
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.1268378296663375,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 88.30000000000001,
+          "protected_stop": 88.30000000000001,
+          "armed": false
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.1268378296663375,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 88.30000000000001,
+          "protected_stop": 88.30000000000001,
+          "armed": false
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.1268378296663375,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 88.30000000000001,
+          "protected_stop": 88.30000000000001,
+          "armed": false
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.1268378296663375,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 88.30000000000001,
+          "protected_stop": 88.30000000000001,
+          "armed": false
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.1268378296663375,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 88.30000000000001,
+          "protected_stop": 88.30000000000001,
+          "armed": false
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.1268378296663375,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 88.30000000000001,
+          "protected_stop": 88.30000000000001,
+          "armed": false
+        }
+      }
+    },
+    {
+      "market": "KRW-EUL",
+      "signal_at": "2026-08-19T11:24:41Z",
+      "pattern": "OFI_CONTINUATION",
+      "entry_price": 1743.0,
+      "candidate_mid": 1743.75,
+      "raw_600": {
+        "gross_terminal_pct": 0.40160642570281624,
+        "net_terminal_pct": 0.30125499499247255,
+        "mfe_pct": 0.5163511187607606,
+        "mae_pct": -0.344234079173833,
+        "terminal_price": 1750.0
+      },
+      "current": {
+        "net_return_pct": 0.24393999213818685,
+        "exit_reason": "PRE_T1_PROTECT",
+        "exit_price": 1749.0,
+        "protected_stop": 1749.0
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.014679980721066244,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1745.0,
+          "protected_stop": 1745.0,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.07199498357535195,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1746.0,
+          "protected_stop": 1746.0,
+          "armed": true
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.014679980721066244,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1745.0,
+          "protected_stop": 1745.0,
+          "armed": true
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.07199498357535195,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1746.0,
+          "protected_stop": 1746.0,
+          "armed": true
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.07199498357535195,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1746.0,
+          "protected_stop": 1746.0,
+          "armed": true
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.24393999213818685,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1749.0,
+          "protected_stop": 1749.0,
+          "armed": true
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.07199498357535195,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1746.0,
+          "protected_stop": 1746.0,
+          "armed": true
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.24393999213818685,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1749.0,
+          "protected_stop": 1749.0,
+          "armed": true
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.07199498357535195,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1746.0,
+          "protected_stop": 1746.0,
+          "armed": true
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.24393999213818685,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1749.0,
+          "protected_stop": 1749.0,
+          "armed": true
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.24393999213818685,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1749.0,
+          "protected_stop": 1749.0,
+          "armed": true
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.24393999213818685,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1749.0,
+          "protected_stop": 1749.0,
+          "armed": true
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.24393999213818685,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1749.0,
+          "protected_stop": 1749.0,
+          "armed": true
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.24393999213818685,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1749.0,
+          "protected_stop": 1749.0,
+          "armed": true
+        }
+      }
+    },
+    {
+      "market": "KRW-RE",
+      "signal_at": "2026-08-19T16:12:17Z",
+      "pattern": "SWEEP_RECLAIM",
+      "entry_price": 650.0,
+      "candidate_mid": 651.25,
+      "raw_600": {
+        "gross_terminal_pct": 0.15384615384614886,
+        "net_terminal_pct": 0.053742359589459276,
+        "mfe_pct": 1.6923076923076819,
+        "mae_pct": 0.0,
+        "terminal_price": 651.0
+      },
+      "current": {
+        "net_return_pct": 0.36112712874332153,
+        "exit_reason": "PRE_T1_PROTECT",
+        "exit_price": 653.0,
+        "protected_stop": 653.0
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.053742359589459276,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 651.0,
+          "protected_stop": 651.0,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.36112712874332153,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 653.0,
+          "protected_stop": 653.0,
+          "armed": true
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.053742359589459276,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 651.0,
+          "protected_stop": 651.0,
+          "armed": true
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.36112712874332153,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 653.0,
+          "protected_stop": 653.0,
+          "armed": true
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.053742359589459276,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 651.0,
+          "protected_stop": 651.0,
+          "armed": true
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.36112712874332153,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 653.0,
+          "protected_stop": 653.0,
+          "armed": true
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.053742359589459276,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 651.0,
+          "protected_stop": 651.0,
+          "armed": true
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.36112712874332153,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 653.0,
+          "protected_stop": 653.0,
+          "armed": true
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.053742359589459276,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 651.0,
+          "protected_stop": 651.0,
+          "armed": true
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.36112712874332153,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 653.0,
+          "protected_stop": 653.0,
+          "armed": true
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.36112712874332153,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 653.0,
+          "protected_stop": 653.0,
+          "armed": true
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.36112712874332153,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 653.0,
+          "protected_stop": 653.0,
+          "armed": true
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.36112712874332153,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 653.0,
+          "protected_stop": 653.0,
+          "armed": true
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.36112712874332153,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 653.0,
+          "protected_stop": 653.0,
+          "armed": true
+        }
+      }
+    },
+    {
+      "market": "KRW-EUL",
+      "signal_at": "2026-08-19T17:24:41Z",
+      "pattern": "SWEEP_RECLAIM",
+      "entry_price": 1750.0,
+      "candidate_mid": 1749.25,
+      "raw_600": {
+        "gross_terminal_pct": -0.40000000000000036,
+        "net_terminal_pct": -0.4995502248875572,
+        "mfe_pct": 0.0,
+        "mae_pct": -0.45714285714285596,
+        "terminal_price": 1743.0
+      },
+      "current": {
+        "net_return_pct": -0.4995502248875572,
+        "exit_reason": "TIMEOUT",
+        "exit_price": 1743.0,
+        "protected_stop": null
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": -0.4995502248875572,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1743.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": -0.4995502248875572,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1743.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": -0.4995502248875572,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1743.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": -0.4995502248875572,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1743.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": -0.4995502248875572,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1743.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": -0.4995502248875572,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1743.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": -0.4995502248875572,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1743.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": -0.4995502248875572,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1743.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": -0.4995502248875572,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1743.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": -0.4995502248875572,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1743.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": -0.4995502248875572,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1743.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": -0.4995502248875572,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1743.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": -0.4995502248875572,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1743.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": -0.4995502248875572,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 1743.0,
+          "protected_stop": null,
+          "armed": false
+        }
+      }
+    },
+    {
+      "market": "KRW-ETH",
+      "signal_at": "2026-08-19T17:36:45Z",
+      "pattern": "OFI_CONTINUATION",
+      "entry_price": 2867000.0,
+      "candidate_mid": 2867750.0,
+      "raw_600": {
+        "gross_terminal_pct": 0.3139169863969338,
+        "net_terminal_pct": 0.21365320130308785,
+        "mfe_pct": 0.34879665155214123,
+        "mae_pct": -0.13951866062086316,
+        "terminal_price": 2876000.0
+      },
+      "current": {
+        "net_return_pct": 0.21365320130308785,
+        "exit_reason": "PRE_T1_PROTECT",
+        "exit_price": 2876000.0,
+        "protected_stop": 2876000.0
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.004584383776018441,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2870000.0,
+          "protected_stop": 2870000.0,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.039429186697192975,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2871000.0,
+          "protected_stop": 2871000.0,
+          "armed": true
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.039429186697192975,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2871000.0,
+          "protected_stop": 2871000.0,
+          "armed": true
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.07427398961836751,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2872000.0,
+          "protected_stop": 2872000.0,
+          "armed": true
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.039429186697192975,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2871000.0,
+          "protected_stop": 2871000.0,
+          "armed": true
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.07427398961836751,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2872000.0,
+          "protected_stop": 2872000.0,
+          "armed": true
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.039429186697192975,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2871000.0,
+          "protected_stop": 2871000.0,
+          "armed": true
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.07427398961836751,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2872000.0,
+          "protected_stop": 2872000.0,
+          "armed": true
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.07427398961836751,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2872000.0,
+          "protected_stop": 2872000.0,
+          "armed": true
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.10911879253954204,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2873000.0,
+          "protected_stop": 2873000.0,
+          "armed": true
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.10911879253954204,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2873000.0,
+          "protected_stop": 2873000.0,
+          "armed": true
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.14396359546073878,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2874000.0,
+          "protected_stop": 2874000.0,
+          "armed": true
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.10911879253954204,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2873000.0,
+          "protected_stop": 2873000.0,
+          "armed": true
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.14396359546073878,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2874000.0,
+          "protected_stop": 2874000.0,
+          "armed": true
+        }
+      }
+    },
+    {
+      "market": "KRW-ETH",
+      "signal_at": "2026-08-19T17:44:45Z",
+      "pattern": "SWEEP_RECLAIM",
+      "entry_price": 2874000.0,
+      "candidate_mid": 2873750.0,
+      "raw_600": {
+        "gross_terminal_pct": 0.2435629784272697,
+        "net_terminal_pct": 0.1433695121819678,
+        "mfe_pct": 0.3479471120389599,
+        "mae_pct": -0.03479471120390043,
+        "terminal_price": 2881000.0
+      },
+      "current": {
+        "net_return_pct": 0.2128893799446807,
+        "exit_reason": "PRE_T1_PROTECT",
+        "exit_price": 2883000.0,
+        "protected_stop": 2883000.0
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.004329776656564199,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2877000.0,
+          "protected_stop": 2877000.0,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.03908971053792065,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2878000.0,
+          "protected_stop": 2878000.0,
+          "armed": true
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.03908971053792065,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2878000.0,
+          "protected_stop": 2878000.0,
+          "armed": true
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.0738496444192549,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2879000.0,
+          "protected_stop": 2879000.0,
+          "armed": true
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.03908971053792065,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2878000.0,
+          "protected_stop": 2878000.0,
+          "armed": true
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.0738496444192549,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2879000.0,
+          "protected_stop": 2879000.0,
+          "armed": true
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.03908971053792065,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2878000.0,
+          "protected_stop": 2878000.0,
+          "armed": true
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.0738496444192549,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2879000.0,
+          "protected_stop": 2879000.0,
+          "armed": true
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.0738496444192549,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2879000.0,
+          "protected_stop": 2879000.0,
+          "armed": true
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.10860957830061135,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2880000.0,
+          "protected_stop": 2880000.0,
+          "armed": true
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.10860957830061135,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2880000.0,
+          "protected_stop": 2880000.0,
+          "armed": true
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.1433695121819678,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2881000.0,
+          "protected_stop": 2881000.0,
+          "armed": true
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.10860957830061135,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2880000.0,
+          "protected_stop": 2880000.0,
+          "armed": true
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.1433695121819678,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2881000.0,
+          "protected_stop": 2881000.0,
+          "armed": true
+        }
+      }
+    },
+    {
+      "market": "KRW-ETH",
+      "signal_at": "2026-08-19T19:56:41Z",
+      "pattern": "OFI_CONTINUATION",
+      "entry_price": 2890000.0,
+      "candidate_mid": 2893750.0,
+      "raw_600": {
+        "gross_terminal_pct": 0.31141868512110094,
+        "net_terminal_pct": 0.21115739707999737,
+        "mfe_pct": 0.31141868512110094,
+        "mae_pct": 0.0,
+        "terminal_price": 2899000.0
+      },
+      "current": {
+        "net_return_pct": 0.21115739707999737,
+        "exit_reason": "TIMEOUT",
+        "exit_price": 2899000.0,
+        "protected_stop": null
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.003752449034988281,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2893000.0,
+          "protected_stop": 2893000.0,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.03831994037584163,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2894000.0,
+          "protected_stop": 2894000.0,
+          "armed": true
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.03831994037584163,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2894000.0,
+          "protected_stop": 2894000.0,
+          "armed": true
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.07288743171667278,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2895000.0,
+          "protected_stop": 2895000.0,
+          "armed": true
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.03831994037584163,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2894000.0,
+          "protected_stop": 2894000.0,
+          "armed": true
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.07288743171667278,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2895000.0,
+          "protected_stop": 2895000.0,
+          "armed": true
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.03831994037584163,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2894000.0,
+          "protected_stop": 2894000.0,
+          "armed": true
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.07288743171667278,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2895000.0,
+          "protected_stop": 2895000.0,
+          "armed": true
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.07288743171667278,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2895000.0,
+          "protected_stop": 2895000.0,
+          "armed": true
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.21115739707999737,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 2899000.0,
+          "protected_stop": 2896000.0,
+          "armed": true
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.21115739707999737,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 2899000.0,
+          "protected_stop": 2896000.0,
+          "armed": true
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.14202241439833507,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2897000.0,
+          "protected_stop": 2897000.0,
+          "armed": true
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.21115739707999737,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 2899000.0,
+          "protected_stop": 2896000.0,
+          "armed": true
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.14202241439833507,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2897000.0,
+          "protected_stop": 2897000.0,
+          "armed": true
+        }
+      }
+    },
+    {
+      "market": "KRW-ETH",
+      "signal_at": "2026-08-19T20:05:06Z",
+      "pattern": "OFI_CONTINUATION",
+      "entry_price": 2898000.0,
+      "candidate_mid": 2897750.0,
+      "raw_600": {
+        "gross_terminal_pct": 0.3450655624568588,
+        "net_terminal_pct": 0.24477064435346474,
+        "mfe_pct": 0.5175983436852993,
+        "mae_pct": -0.03450655624568366,
+        "terminal_price": 2908000.0
+      },
+      "current": {
+        "net_return_pct": 0.24477064435346474,
+        "exit_reason": "PRE_T1_PROTECT",
+        "exit_price": 2908000.0,
+        "protected_stop": 2908000.0
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.0034661758147924715,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2901000.0,
+          "protected_stop": 2901000.0,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.03793824274889168,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2902000.0,
+          "protected_stop": 2902000.0,
+          "armed": true
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.03793824274889168,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2902000.0,
+          "protected_stop": 2902000.0,
+          "armed": true
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.07241030968296869,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2903000.0,
+          "protected_stop": 2903000.0,
+          "armed": true
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.03793824274889168,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2902000.0,
+          "protected_stop": 2902000.0,
+          "armed": true
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.07241030968296869,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2903000.0,
+          "protected_stop": 2903000.0,
+          "armed": true
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.03793824274889168,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2902000.0,
+          "protected_stop": 2902000.0,
+          "armed": true
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.07241030968296869,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2903000.0,
+          "protected_stop": 2903000.0,
+          "armed": true
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.07241030968296869,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2903000.0,
+          "protected_stop": 2903000.0,
+          "armed": true
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.1068823766170679,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2904000.0,
+          "protected_stop": 2904000.0,
+          "armed": true
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.1068823766170679,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2904000.0,
+          "protected_stop": 2904000.0,
+          "armed": true
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.24477064435346474,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2908000.0,
+          "protected_stop": 2908000.0,
+          "armed": true
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.1068823766170679,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2904000.0,
+          "protected_stop": 2904000.0,
+          "armed": true
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.24477064435346474,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 2908000.0,
+          "protected_stop": 2908000.0,
+          "armed": true
+        }
+      }
+    },
+    {
+      "market": "KRW-ETH",
+      "signal_at": "2026-08-19T23:12:18Z",
+      "pattern": "OFI_CONTINUATION",
+      "entry_price": 3080000.0,
+      "candidate_mid": 3079750.0,
+      "raw_600": {
+        "gross_terminal_pct": 0.09740259740260715,
+        "net_terminal_pct": -0.0026447815053565193,
+        "mfe_pct": 0.12987012987013546,
+        "mae_pct": -0.2272727272727315,
+        "terminal_price": 3083000.0
+      },
+      "current": {
+        "net_return_pct": -0.0026447815053565193,
+        "exit_reason": "TIMEOUT",
+        "exit_price": 3083000.0,
+        "protected_stop": null
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": -0.0026447815053565193,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 3083000.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": -0.0026447815053565193,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 3083000.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": -0.0026447815053565193,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 3083000.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": -0.0026447815053565193,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 3083000.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": -0.0026447815053565193,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 3083000.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": -0.0026447815053565193,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 3083000.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": -0.0026447815053565193,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 3083000.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": -0.0026447815053565193,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 3083000.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": -0.0026447815053565193,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 3083000.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": -0.0026447815053565193,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 3083000.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": -0.0026447815053565193,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 3083000.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": -0.0026447815053565193,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 3083000.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": -0.0026447815053565193,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 3083000.0,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": -0.0026447815053565193,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 3083000.0,
+          "protected_stop": null,
+          "armed": false
+        }
+      }
+    },
+    {
+      "market": "KRW-WLD",
+      "signal_at": "2026-08-19T23:38:46Z",
+      "pattern": "OFI_CONTINUATION",
+      "entry_price": 498.0,
+      "candidate_mid": 498.75,
+      "raw_600": {
+        "gross_terminal_pct": -0.6024096385542133,
+        "net_terminal_pct": -0.7017575549574384,
+        "mfe_pct": 0.6024096385542244,
+        "mae_pct": -0.6024096385542133,
+        "terminal_price": 495.0
+      },
+      "current": {
+        "net_return_pct": 0.1006524850024837,
+        "exit_reason": "PRE_T1_PROTECT",
+        "exit_price": 499.0,
+        "protected_stop": 499.0
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.1006524850024837,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 499.0,
+          "protected_stop": 499.0,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.1006524850024837,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 499.0,
+          "protected_stop": 499.0,
+          "armed": false
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.1006524850024837,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 499.0,
+          "protected_stop": 499.0,
+          "armed": true
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.1006524850024837,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 499.0,
+          "protected_stop": 499.0,
+          "armed": false
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.1006524850024837,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 499.0,
+          "protected_stop": 499.0,
+          "armed": true
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.1006524850024837,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 499.0,
+          "protected_stop": 499.0,
+          "armed": false
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.1006524850024837,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 499.0,
+          "protected_stop": 499.0,
+          "armed": true
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.1006524850024837,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 499.0,
+          "protected_stop": 499.0,
+          "armed": false
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.1006524850024837,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 499.0,
+          "protected_stop": 499.0,
+          "armed": true
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.1006524850024837,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 499.0,
+          "protected_stop": 499.0,
+          "armed": false
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.1006524850024837,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 499.0,
+          "protected_stop": 499.0,
+          "armed": true
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.1006524850024837,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 499.0,
+          "protected_stop": 499.0,
+          "armed": false
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.1006524850024837,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 499.0,
+          "protected_stop": 499.0,
+          "armed": true
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.1006524850024837,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 499.0,
+          "protected_stop": 499.0,
+          "armed": false
+        }
+      }
+    },
+    {
+      "market": "KRW-PRL",
+      "signal_at": "2026-08-20T00:10:58Z",
+      "pattern": "OFI_CONTINUATION",
+      "entry_price": 447.0,
+      "candidate_mid": 446.75,
+      "raw_600": {
+        "gross_terminal_pct": -1.342281879194629,
+        "net_terminal_pct": -1.4408902931084655,
+        "mfe_pct": 2.237136465324374,
+        "mae_pct": -1.5659955257270708,
+        "terminal_price": 441.0
+      },
+      "current": {
+        "net_return_pct": 0.12354001969931971,
+        "exit_reason": "PRE_T1_PROTECT",
+        "exit_price": 448.0,
+        "protected_stop": 448.0
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.12354001969931971,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 448.0,
+          "protected_stop": 448.0,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.12354001969931971,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 448.0,
+          "protected_stop": 448.0,
+          "armed": false
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.12354001969931971,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 448.0,
+          "protected_stop": 448.0,
+          "armed": true
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.12354001969931971,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 448.0,
+          "protected_stop": 448.0,
+          "armed": false
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.12354001969931971,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 448.0,
+          "protected_stop": 448.0,
+          "armed": true
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.12354001969931971,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 448.0,
+          "protected_stop": 448.0,
+          "armed": false
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.12354001969931971,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 448.0,
+          "protected_stop": 448.0,
+          "armed": true
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.12354001969931971,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 448.0,
+          "protected_stop": 448.0,
+          "armed": false
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.12354001969931971,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 448.0,
+          "protected_stop": 448.0,
+          "armed": true
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.12354001969931971,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 448.0,
+          "protected_stop": 448.0,
+          "armed": false
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.12354001969931971,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 448.0,
+          "protected_stop": 448.0,
+          "armed": true
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.12354001969931971,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 448.0,
+          "protected_stop": 448.0,
+          "armed": false
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.12354001969931971,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 448.0,
+          "protected_stop": 448.0,
+          "armed": true
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.12354001969931971,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 448.0,
+          "protected_stop": 448.0,
+          "armed": false
+        }
+      }
+    },
+    {
+      "market": "KRW-XEC",
+      "signal_at": "2026-08-20T00:54:20Z",
+      "pattern": "QUEUE_DEPLETION_BREAKOUT",
+      "entry_price": 0.00978,
+      "candidate_mid": 0.009792499999999999,
+      "raw_600": {
+        "gross_terminal_pct": 0.2044989775050965,
+        "net_terminal_pct": 0.10434455573851142,
+        "mfe_pct": 1.635991820040883,
+        "mae_pct": -0.613496932515345,
+        "terminal_price": 0.0098
+      },
+      "current": {
+        "net_return_pct": 0.2064918461015086,
+        "exit_reason": "PRE_T1_PROTECT",
+        "exit_price": 0.009810000000000001,
+        "protected_stop": 0.009810000000000001
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.2064918461015086,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 0.009810000000000001,
+          "protected_stop": 0.009810000000000001,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.2064918461015086,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 0.009810000000000001,
+          "protected_stop": 0.009810000000000001,
+          "armed": true
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.2064918461015086,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 0.009810000000000001,
+          "protected_stop": 0.009810000000000001,
+          "armed": true
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.2064918461015086,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 0.009810000000000001,
+          "protected_stop": 0.009810000000000001,
+          "armed": true
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.2064918461015086,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 0.009810000000000001,
+          "protected_stop": 0.009810000000000001,
+          "armed": true
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.2064918461015086,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 0.009810000000000001,
+          "protected_stop": 0.009810000000000001,
+          "armed": true
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.2064918461015086,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 0.009810000000000001,
+          "protected_stop": 0.009810000000000001,
+          "armed": true
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.2064918461015086,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 0.009810000000000001,
+          "protected_stop": 0.009810000000000001,
+          "armed": true
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.2064918461015086,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 0.009810000000000001,
+          "protected_stop": 0.009810000000000001,
+          "armed": true
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.2064918461015086,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 0.009810000000000001,
+          "protected_stop": 0.009810000000000001,
+          "armed": true
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.2064918461015086,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 0.009810000000000001,
+          "protected_stop": 0.009810000000000001,
+          "armed": true
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.2064918461015086,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 0.009810000000000001,
+          "protected_stop": 0.009810000000000001,
+          "armed": true
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.2064918461015086,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 0.009810000000000001,
+          "protected_stop": 0.009810000000000001,
+          "armed": true
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.2064918461015086,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 0.009810000000000001,
+          "protected_stop": 0.009810000000000001,
+          "armed": true
+        }
+      }
+    },
+    {
+      "market": "KRW-XEC",
+      "signal_at": "2026-08-20T01:49:30Z",
+      "pattern": "OFI_CONTINUATION",
+      "entry_price": 0.00979,
+      "candidate_mid": 0.009792499999999999,
+      "raw_600": {
+        "gross_terminal_pct": 0.0,
+        "net_terminal_pct": -0.09995002498749406,
+        "mfe_pct": 0.20429009193052572,
+        "mae_pct": -0.7150153217569066,
+        "terminal_price": 0.00979
+      },
+      "current": {
+        "net_return_pct": -0.09995002498749406,
+        "exit_reason": "TIMEOUT",
+        "exit_price": 0.00979,
+        "protected_stop": null
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.0020929269788361182,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 0.009800000000000001,
+          "protected_stop": 0.009800000000000001,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": -0.09995002498749406,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 0.00979,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": -0.09995002498749406,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 0.00979,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": -0.09995002498749406,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 0.00979,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": -0.09995002498749406,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 0.00979,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": -0.09995002498749406,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 0.00979,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": -0.09995002498749406,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 0.00979,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": -0.09995002498749406,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 0.00979,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": -0.09995002498749406,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 0.00979,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": -0.09995002498749406,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 0.00979,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": -0.09995002498749406,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 0.00979,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": -0.09995002498749406,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 0.00979,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": -0.09995002498749406,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 0.00979,
+          "protected_stop": null,
+          "armed": false
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": -0.09995002498749406,
+          "exit_reason": "TIMEOUT",
+          "exit_price": 0.00979,
+          "protected_stop": null,
+          "armed": false
+        }
+      }
+    },
+    {
+      "market": "KRW-EUL",
+      "signal_at": "2026-08-20T02:25:42Z",
+      "pattern": "ABSORPTION_REVERSAL",
+      "entry_price": 1787.0,
+      "candidate_mid": 1785.75,
+      "raw_600": {
+        "gross_terminal_pct": 0.0,
+        "net_terminal_pct": -0.09995002498749406,
+        "mfe_pct": 0.8953553441522155,
+        "mae_pct": -0.3357582540570836,
+        "terminal_price": 1787.0
+      },
+      "current": {
+        "net_return_pct": 0.17956886134438133,
+        "exit_reason": "PRE_T1_PROTECT",
+        "exit_price": 1792.0,
+        "protected_stop": 1792.0
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.011857529545267198,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1789.0,
+          "protected_stop": 1789.0,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.06776130681163117,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1790.0,
+          "protected_stop": 1790.0,
+          "armed": true
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.011857529545267198,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1789.0,
+          "protected_stop": 1789.0,
+          "armed": true
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.06776130681163117,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1790.0,
+          "protected_stop": 1790.0,
+          "armed": true
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.06776130681163117,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1790.0,
+          "protected_stop": 1790.0,
+          "armed": true
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.17956886134438133,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1792.0,
+          "protected_stop": 1792.0,
+          "armed": true
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.06776130681163117,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1790.0,
+          "protected_stop": 1790.0,
+          "armed": true
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.17956886134438133,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1792.0,
+          "protected_stop": 1792.0,
+          "armed": true
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.06776130681163117,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1790.0,
+          "protected_stop": 1790.0,
+          "armed": true
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.17956886134438133,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1792.0,
+          "protected_stop": 1792.0,
+          "armed": true
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.17956886134438133,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1792.0,
+          "protected_stop": 1792.0,
+          "armed": true
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.17956886134438133,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1792.0,
+          "protected_stop": 1792.0,
+          "armed": true
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.17956886134438133,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1792.0,
+          "protected_stop": 1792.0,
+          "armed": true
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.17956886134438133,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 1792.0,
+          "protected_stop": 1792.0,
+          "armed": true
+        }
+      }
+    },
+    {
+      "market": "KRW-BSV",
+      "signal_at": "2026-08-20T03:15:24Z",
+      "pattern": "SWEEP_RECLAIM",
+      "entry_price": 21920.0,
+      "candidate_mid": 21917.5,
+      "raw_600": {
+        "gross_terminal_pct": 0.9580291970803012,
+        "net_terminal_pct": 0.857121621670931,
+        "mfe_pct": 1.1861313868613221,
+        "mae_pct": 0.0,
+        "terminal_price": 22130.0
+      },
+      "current": {
+        "net_return_pct": 0.2646486975490303,
+        "exit_reason": "PRE_T1_PROTECT",
+        "exit_price": 22000.0,
+        "protected_stop": 22000.0
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.2646486975490303,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 22000.0,
+          "protected_stop": 22000.0,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.2646486975490303,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 22000.0,
+          "protected_stop": 22000.0,
+          "armed": true
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.2646486975490303,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 22000.0,
+          "protected_stop": 22000.0,
+          "armed": true
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.2646486975490303,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 22000.0,
+          "protected_stop": 22000.0,
+          "armed": true
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.2646486975490303,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 22000.0,
+          "protected_stop": 22000.0,
+          "armed": true
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.2646486975490303,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 22000.0,
+          "protected_stop": 22000.0,
+          "armed": true
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.2646486975490303,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 22000.0,
+          "protected_stop": 22000.0,
+          "armed": true
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.2646486975490303,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 22000.0,
+          "protected_stop": 22000.0,
+          "armed": true
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.2646486975490303,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 22000.0,
+          "protected_stop": 22000.0,
+          "armed": true
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.2646486975490303,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 22000.0,
+          "protected_stop": 22000.0,
+          "armed": true
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.2646486975490303,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 22000.0,
+          "protected_stop": 22000.0,
+          "armed": true
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.2646486975490303,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 22000.0,
+          "protected_stop": 22000.0,
+          "armed": true
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.2646486975490303,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 22000.0,
+          "protected_stop": 22000.0,
+          "armed": true
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.2646486975490303,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 22000.0,
+          "protected_stop": 22000.0,
+          "armed": true
+        }
+      }
+    },
+    {
+      "market": "KRW-TREE",
+      "signal_at": "2026-08-20T04:14:54Z",
+      "pattern": "OFI_CONTINUATION",
+      "entry_price": 53.1,
+      "candidate_mid": 53.175,
+      "raw_600": {
+        "gross_terminal_pct": -0.7532956685499026,
+        "net_terminal_pct": -0.8524927743284505,
+        "mfe_pct": 0.37664783427493465,
+        "mae_pct": -2.0715630885122405,
+        "terminal_price": 52.7
+      },
+      "current": {
+        "net_return_pct": 0.0881856623477395,
+        "exit_reason": "PRE_T1_PROTECT",
+        "exit_price": 53.199999999999996,
+        "protected_stop": 53.199999999999996
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.0881856623477395,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 53.199999999999996,
+          "protected_stop": 53.199999999999996,
+          "armed": false
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.0881856623477395,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 53.199999999999996,
+          "protected_stop": 53.199999999999996,
+          "armed": false
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.0881856623477395,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 53.199999999999996,
+          "protected_stop": 53.199999999999996,
+          "armed": false
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.0881856623477395,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 53.199999999999996,
+          "protected_stop": 53.199999999999996,
+          "armed": false
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.0881856623477395,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 53.199999999999996,
+          "protected_stop": 53.199999999999996,
+          "armed": false
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.0881856623477395,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 53.199999999999996,
+          "protected_stop": 53.199999999999996,
+          "armed": false
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.0881856623477395,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 53.199999999999996,
+          "protected_stop": 53.199999999999996,
+          "armed": false
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.0881856623477395,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 53.199999999999996,
+          "protected_stop": 53.199999999999996,
+          "armed": false
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.0881856623477395,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 53.199999999999996,
+          "protected_stop": 53.199999999999996,
+          "armed": false
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.0881856623477395,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 53.199999999999996,
+          "protected_stop": 53.199999999999996,
+          "armed": false
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.0881856623477395,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 53.199999999999996,
+          "protected_stop": 53.199999999999996,
+          "armed": false
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.0881856623477395,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 53.199999999999996,
+          "protected_stop": 53.199999999999996,
+          "armed": false
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.0881856623477395,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 53.199999999999996,
+          "protected_stop": 53.199999999999996,
+          "armed": false
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.0881856623477395,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 53.199999999999996,
+          "protected_stop": 53.199999999999996,
+          "armed": false
+        }
+      }
+    },
+    {
+      "market": "KRW-TREE",
+      "signal_at": "2026-08-20T05:30:07Z",
+      "pattern": "OFI_CONTINUATION",
+      "entry_price": 52.3,
+      "candidate_mid": 52.325,
+      "raw_600": {
+        "gross_terminal_pct": 0.7648183556405508,
+        "net_terminal_pct": 0.6641038945154998,
+        "mfe_pct": 0.9560229445506607,
+        "mae_pct": -0.3824091778202643,
+        "terminal_price": 52.7
+      },
+      "current": {
+        "net_return_pct": 0.09106345488825163,
+        "exit_reason": "PRE_T1_PROTECT",
+        "exit_price": 52.4,
+        "protected_stop": 52.4
+      },
+      "variants": {
+        "DYN_S0_T0": {
+          "net_return_pct": 0.09106345488827383,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 52.400000000000006,
+          "protected_stop": 52.400000000000006,
+          "armed": true
+        },
+        "DYN_S0_T1": {
+          "net_return_pct": 0.09106345488825163,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 52.4,
+          "protected_stop": 52.4,
+          "armed": false
+        },
+        "DYN_S1_T0": {
+          "net_return_pct": 0.09106345488827383,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 52.400000000000006,
+          "protected_stop": 52.400000000000006,
+          "armed": true
+        },
+        "DYN_S1_T1": {
+          "net_return_pct": 0.09106345488825163,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 52.4,
+          "protected_stop": 52.4,
+          "armed": false
+        },
+        "DYN_S2_T0": {
+          "net_return_pct": 0.09106345488827383,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 52.400000000000006,
+          "protected_stop": 52.400000000000006,
+          "armed": true
+        },
+        "DYN_S2_T1": {
+          "net_return_pct": 0.09106345488825163,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 52.4,
+          "protected_stop": 52.4,
+          "armed": false
+        },
+        "DYN_S3_T0": {
+          "net_return_pct": 0.09106345488827383,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 52.400000000000006,
+          "protected_stop": 52.400000000000006,
+          "armed": true
+        },
+        "DYN_S3_T1": {
+          "net_return_pct": 0.09106345488825163,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 52.4,
+          "protected_stop": 52.4,
+          "armed": false
+        },
+        "DYN_S5_T0": {
+          "net_return_pct": 0.09106345488827383,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 52.400000000000006,
+          "protected_stop": 52.400000000000006,
+          "armed": true
+        },
+        "DYN_S5_T1": {
+          "net_return_pct": 0.09106345488825163,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 52.4,
+          "protected_stop": 52.4,
+          "armed": false
+        },
+        "DYN_S8_T0": {
+          "net_return_pct": 0.09106345488827383,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 52.400000000000006,
+          "protected_stop": 52.400000000000006,
+          "armed": true
+        },
+        "DYN_S8_T1": {
+          "net_return_pct": 0.09106345488825163,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 52.4,
+          "protected_stop": 52.4,
+          "armed": false
+        },
+        "DYN_S10_T0": {
+          "net_return_pct": 0.09106345488825163,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 52.4,
+          "protected_stop": 52.4,
+          "armed": false
+        },
+        "DYN_S10_T1": {
+          "net_return_pct": 0.09106345488825163,
+          "exit_reason": "UPBIT_EXECUTABLE_BE",
+          "exit_price": 52.4,
+          "protected_stop": 52.4,
+          "armed": false
+        }
+      }
+    }
+  ],
+  "market_stats": [
+    {
+      "market": "KRW-USDT",
+      "return_pct": -1.2884753042233354,
+      "range_pct": 2.4193548387096753,
+      "trade_krw": 326315685491.04333,
+      "candles": 1440
+    },
+    {
+      "market": "KRW-ETH",
+      "return_pct": 16.29213483146068,
+      "range_pct": 19.34758155230596,
+      "trade_krw": 224022968607.30878,
+      "candles": 1440
+    },
+    {
+      "market": "KRW-BTC",
+      "return_pct": 6.872523264615515,
+      "range_pct": 7.432719151312117,
+      "trade_krw": 193814058203.79227,
+      "candles": 1440
+    },
+    {
+      "market": "KRW-XRP",
+      "return_pct": 9.000000000000007,
+      "range_pct": 11.103151862464177,
+      "trade_krw": 175474921684.7273,
+      "candles": 1440
+    },
+    {
+      "market": "KRW-GRVT",
+      "return_pct": -3.0952380952380953,
+      "range_pct": 16.50246305418719,
+      "trade_krw": 61791916884.352615,
+      "candles": 1410
+    },
+    {
+      "market": "KRW-SOL",
+      "return_pct": 9.488372093023244,
+      "range_pct": 10.997204100652368,
+      "trade_krw": 36923280523.919365,
+      "candles": 1407
+    },
+    {
+      "market": "KRW-TREE",
+      "return_pct": 12.231759656652352,
+      "range_pct": 42.95010845986986,
+      "trade_krw": 33775052284.76518,
+      "candles": 1113
+    },
+    {
+      "market": "KRW-PRL",
+      "return_pct": -36.378466557911906,
+      "range_pct": 58.974358974358964,
+      "trade_krw": 30510103886.974693,
+      "candles": 1426
+    },
+    {
+      "market": "KRW-RE",
+      "return_pct": 31.066176470588225,
+      "range_pct": 40.25735294117647,
+      "trade_krw": 23677145107.83817,
+      "candles": 1353
+    },
+    {
+      "market": "KRW-DOS",
+      "return_pct": -7.563025210084029,
+      "range_pct": 17.125382262996936,
+      "trade_krw": 23204646957.088757,
+      "candles": 1419
+    },
+    {
+      "market": "KRW-TRUMP",
+      "return_pct": 16.32756866734486,
+      "range_pct": 31.724845995893226,
+      "trade_krw": 21647125258.819603,
+      "candles": 883
+    },
+    {
+      "market": "KRW-DOGE",
+      "return_pct": 5.316973415132931,
+      "range_pct": 7.802874743326482,
+      "trade_krw": 19641003100.40505,
+      "candles": 1361
+    },
+    {
+      "market": "KRW-ONDO",
+      "return_pct": 5.530973451327426,
+      "range_pct": 8.000000000000007,
+      "trade_krw": 19193465994.30268,
+      "candles": 1343
+    },
+    {
+      "market": "KRW-WLD",
+      "return_pct": 12.72727272727272,
+      "range_pct": 15.681818181818175,
+      "trade_krw": 17685522128.134777,
+      "candles": 1276
+    },
+    {
+      "market": "KRW-XLM",
+      "return_pct": 5.936073059360725,
+      "range_pct": 9.677419354838701,
+      "trade_krw": 15262566069.58099,
+      "candles": 1317
+    },
+    {
+      "market": "KRW-CAP",
+      "return_pct": 0.7314524555903867,
+      "range_pct": 13.28976034858389,
+      "trade_krw": 14370818186.83442,
+      "candles": 1380
+    },
+    {
+      "market": "KRW-ONG",
+      "return_pct": 2.3724792408066353,
+      "range_pct": 10.617283950617274,
+      "trade_krw": 13055864550.152946,
+      "candles": 1312
+    },
+    {
+      "market": "KRW-ADA",
+      "return_pct": 3.2520325203251987,
+      "range_pct": 9.12863070539418,
+      "trade_krw": 11711122706.300535,
+      "candles": 1116
+    },
+    {
+      "market": "KRW-LINK",
+      "return_pct": 7.1322436849925674,
+      "range_pct": 10.895522388059709,
+      "trade_krw": 10312055848.505644,
+      "candles": 1255
+    },
+    {
+      "market": "KRW-HOME",
+      "return_pct": -1.6355140186915973,
+      "range_pct": 9.622411693057241,
+      "trade_krw": 10142733326.347563,
+      "candles": 1302
+    },
+    {
+      "market": "KRW-SUI",
+      "return_pct": 5.786026200873362,
+      "range_pct": 9.030837004405278,
+      "trade_krw": 9685504644.924503,
+      "candles": 1140
+    },
+    {
+      "market": "KRW-XEC",
+      "return_pct": 12.296983758700698,
+      "range_pct": 17.578579743888234,
+      "trade_krw": 9552265275.469604,
+      "candles": 711
+    },
+    {
+      "market": "KRW-RED",
+      "return_pct": 33.33333333333333,
+      "range_pct": 38.01652892561984,
+      "trade_krw": 9288157004.303253,
+      "candles": 981
+    },
+    {
+      "market": "KRW-LA",
+      "return_pct": 0.25673940949935137,
+      "range_pct": 6.964520367936933,
+      "trade_krw": 7597537844.346896,
+      "candles": 1326
+    },
+    {
+      "market": "KRW-MET2",
+      "return_pct": 19.599999999999994,
+      "range_pct": 31.355932203389834,
+      "trade_krw": 7296121556.094251,
+      "candles": 641
+    },
+    {
+      "market": "KRW-ENA",
+      "return_pct": 7.6271186440677985,
+      "range_pct": 12.93103448275863,
+      "trade_krw": 6609316299.328444,
+      "candles": 748
+    },
+    {
+      "market": "KRW-EUL",
+      "return_pct": 2.474108170310707,
+      "range_pct": 9.123434704830057,
+      "trade_krw": 6545914159.229771,
+      "candles": 1233
+    },
+    {
+      "market": "KRW-SHIB",
+      "return_pct": 5.448717948717952,
+      "range_pct": 7.443365695792892,
+      "trade_krw": 6434315357.143135,
+      "candles": 1260
+    },
+    {
+      "market": "KRW-PUMP",
+      "return_pct": 5.995203836930463,
+      "range_pct": 13.300492610837434,
+      "trade_krw": 5311020638.483281,
+      "candles": 878
+    },
+    {
+      "market": "KRW-PROM",
+      "return_pct": -5.802423797282408,
+      "range_pct": 14.191033138401554,
+      "trade_krw": 5064579658.335611,
+      "candles": 1189
+    },
+    {
+      "market": "KRW-BCH",
+      "return_pct": 3.279266572637507,
+      "range_pct": 5.063739376770537,
+      "trade_krw": 4938995509.08637,
+      "candles": 894
+    },
+    {
+      "market": "KRW-KAITO",
+      "return_pct": 0.21141649048626032,
+      "range_pct": 5.555555555555558,
+      "trade_krw": 4938125433.19767,
+      "candles": 1172
+    },
+    {
+      "market": "KRW-USDC",
+      "return_pct": -1.2875536480686733,
+      "range_pct": 2.56598240469208,
+      "trade_krw": 4404780261.969223,
+      "candles": 926
+    },
+    {
+      "market": "KRW-PENGU",
+      "return_pct": 3.9627039627039506,
+      "range_pct": 6.081871345029244,
+      "trade_krw": 4273331416.7385592,
+      "candles": 913
+    },
+    {
+      "market": "KRW-AVAX",
+      "return_pct": 5.070422535211261,
+      "range_pct": 7.489994282447121,
+      "trade_krw": 4255395879.071728,
+      "candles": 1014
+    },
+    {
+      "market": "KRW-CFG",
+      "return_pct": -7.614213197969544,
+      "range_pct": 10.497237569060779,
+      "trade_krw": 4243500138.5331254,
+      "candles": 970
+    },
+    {
+      "market": "KRW-HBAR",
+      "return_pct": 4.656084656084669,
+      "range_pct": 5.882352941176472,
+      "trade_krw": 4229330890.3310695,
+      "candles": 887
+    },
+    {
+      "market": "KRW-BSV",
+      "return_pct": 9.609609609609615,
+      "range_pct": 16.036308623298034,
+      "trade_krw": 4215577604.086516,
+      "candles": 683
+    },
+    {
+      "market": "KRW-VIRTUAL",
+      "return_pct": 5.771643663739012,
+      "range_pct": 8.070617906683486,
+      "trade_krw": 4184128884.469724,
+      "candles": 891
+    },
+    {
+      "market": "KRW-TRX",
+      "return_pct": -1.2875536480686733,
+      "range_pct": 2.8634361233480066,
+      "trade_krw": 4106331302.078637,
+      "candles": 1155
+    },
+    {
+      "market": "KRW-SLX",
+      "return_pct": 0.3370786516853963,
+      "range_pct": 6.5517241379310365,
+      "trade_krw": 4089988080.191931,
+      "candles": 1151
+    },
+    {
+      "market": "KRW-BIO",
+      "return_pct": 17.999999999999993,
+      "range_pct": 20.231213872832377,
+      "trade_krw": 3922904556.694274,
+      "candles": 886
+    },
+    {
+      "market": "KRW-ETC",
+      "return_pct": 6.74486803519061,
+      "range_pct": 8.515671200473097,
+      "trade_krw": 3908449003.7105865,
+      "candles": 988
+    },
+    {
+      "market": "KRW-ELF",
+      "return_pct": -11.49553571428571,
+      "range_pct": 17.806451612903217,
+      "trade_krw": 3516547174.8388023,
+      "candles": 1081
+    },
+    {
+      "market": "KRW-NEAR",
+      "return_pct": 6.431442608307281,
+      "range_pct": 8.808988764044944,
+      "trade_krw": 3366856047.9775224,
+      "candles": 975
+    },
+    {
+      "market": "KRW-MMT",
+      "return_pct": 8.733624454148469,
+      "range_pct": 14.666666666666671,
+      "trade_krw": 3189378761.341856,
+      "candles": 888
+    },
+    {
+      "market": "KRW-CHIP",
+      "return_pct": 13.4453781512605,
+      "range_pct": 17.847025495750724,
+      "trade_krw": 2832719566.3821287,
+      "candles": 948
+    },
+    {
+      "market": "KRW-ALGO",
+      "return_pct": 6.422018348623859,
+      "range_pct": 6.422018348623859,
+      "trade_krw": 2804895596.059546,
+      "candles": 566
+    },
+    {
+      "market": "KRW-SIGN",
+      "return_pct": 4.891304347826098,
+      "range_pct": 12.568306010928975,
+      "trade_krw": 2779642738.5597234,
+      "candles": 737
+    },
+    {
+      "market": "KRW-ARB",
+      "return_pct": 14.150943396226424,
+      "range_pct": 18.0952380952381,
+      "trade_krw": 2590649295.721632,
+      "candles": 628
+    },
+    {
+      "market": "KRW-PEPE",
+      "return_pct": 11.325966850828717,
+      "range_pct": 14.245810055865915,
+      "trade_krw": 2448794044.6913476,
+      "candles": 749
+    },
+    {
+      "market": "KRW-QUID",
+      "return_pct": 6.135629709364898,
+      "range_pct": 11.479028697571758,
+      "trade_krw": 2414635833.6637273,
+      "candles": 883
+    },
+    {
+      "market": "KRW-UNI",
+      "return_pct": 7.503762631692101,
+      "range_pct": 12.195656942311906,
+      "trade_krw": 2361426312.7216964,
+      "candles": 845
+    },
+    {
+      "market": "KRW-PIEVERSE",
+      "return_pct": 7.634228187919456,
+      "range_pct": 12.467976088812982,
+      "trade_krw": 2210054043.0158176,
+      "candles": 869
+    },
+    {
+      "market": "KRW-SAHARA",
+      "return_pct": 6.999999999999984,
+      "range_pct": 8.108108108108114,
+      "trade_krw": 2175700246.9891253,
+      "candles": 648
+    },
+    {
+      "market": "KRW-WLFI",
+      "return_pct": 0.7125890736342066,
+      "range_pct": 4.468599033816423,
+      "trade_krw": 2111164836.4977696,
+      "candles": 603
+    },
+    {
+      "market": "KRW-ENS",
+      "return_pct": 7.86516853932584,
+      "range_pct": 10.808270676691723,
+      "trade_krw": 1932369145.4391327,
+      "candles": 747
+    },
+    {
+      "market": "KRW-BONK",
+      "return_pct": 3.5608308605341144,
+      "range_pct": 12.688821752265845,
+      "trade_krw": 1911502149.5969205,
+      "candles": 774
+    },
+    {
+      "market": "KRW-SEI",
+      "return_pct": 5.56586270871986,
+      "range_pct": 7.116104868913875,
+      "trade_krw": 1861430362.086368,
+      "candles": 680
+    },
+    {
+      "market": "KRW-POL",
+      "return_pct": -2.608695652173909,
+      "range_pct": 3.603603603603611,
+      "trade_krw": 1807820698.730594,
+      "candles": 606
+    },
+    {
+      "market": "KRW-ZRO",
+      "return_pct": 8.06310254163014,
+      "range_pct": 8.588957055214719,
+      "trade_krw": 1783656608.0742207,
+      "candles": 755
+    },
+    {
+      "market": "KRW-AAVE",
+      "return_pct": 8.660130718954239,
+      "range_pct": 9.484873262469339,
+      "trade_krw": 1758413832.768802,
+      "candles": 653
+    },
+    {
+      "market": "KRW-ESP",
+      "return_pct": 10.784313725490202,
+      "range_pct": 10.784313725490202,
+      "trade_krw": 1742180476.9665215,
+      "candles": 631
+    },
+    {
+      "market": "KRW-XPL",
+      "return_pct": 6.666666666666665,
+      "range_pct": 8.571428571428562,
+      "trade_krw": 1727004869.6689749,
+      "candles": 482
+    },
+    {
+      "market": "KRW-MON",
+      "return_pct": 14.76510067114094,
+      "range_pct": 15.100671140939582,
+      "trade_krw": 1720608015.0908782,
+      "candles": 457
+    },
+    {
+      "market": "KRW-STX",
+      "return_pct": 11.44578313253013,
+      "range_pct": 12.72727272727272,
+      "trade_krw": 1655067003.3978593,
+      "candles": 664
+    },
+    {
+      "market": "KRW-ENSO",
+      "return_pct": 2.780269058295959,
+      "range_pct": 7.51811594202898,
+      "trade_krw": 1646637999.4950325,
+      "candles": 666
+    },
+    {
+      "market": "KRW-PLUME",
+      "return_pct": 4.678362573099393,
+      "range_pct": 7.647058823529407,
+      "trade_krw": 1636017230.113667,
+      "candles": 518
+    },
+    {
+      "market": "KRW-SAND",
+      "return_pct": 4.8417132216014735,
+      "range_pct": 6.915887850467306,
+      "trade_krw": 1613165510.4104404,
+      "candles": 653
+    },
+    {
+      "market": "KRW-ONT",
+      "return_pct": 1.6483516483516425,
+      "range_pct": 5.23364485981308,
+      "trade_krw": 1475297639.0125916,
+      "candles": 664
+    },
+    {
+      "market": "KRW-ARX",
+      "return_pct": -3.7267080745341574,
+      "range_pct": 7.14285714285714,
+      "trade_krw": 1462969357.9221683,
+      "candles": 603
+    },
+    {
+      "market": "KRW-RVN",
+      "return_pct": -4.885057471264364,
+      "range_pct": 6.422018348623859,
+      "trade_krw": 1432308831.9364333,
+      "candles": 701
+    },
+    {
+      "market": "KRW-MOVE",
+      "return_pct": 2.291917973462021,
+      "range_pct": 7.011070110701079,
+      "trade_krw": 1428835725.9955008,
+      "candles": 898
+    },
+    {
+      "market": "KRW-HOLO",
+      "return_pct": 6.821106821106815,
+      "range_pct": 7.881136950904377,
+      "trade_krw": 1417239973.1016946,
+      "candles": 808
+    },
+    {
+      "market": "KRW-FIL",
+      "return_pct": 4.514672686230248,
+      "range_pct": 8.759954493742894,
+      "trade_krw": 1408018470.4634738,
+      "candles": 643
+    },
+    {
+      "market": "KRW-ICX",
+      "return_pct": -10.204081632653061,
+      "range_pct": 19.354838709677423,
+      "trade_krw": 1385713563.9444182,
+      "candles": 294
+    },
+    {
+      "market": "KRW-TAO",
+      "return_pct": 6.3015753938484576,
+      "range_pct": 7.816610296880877,
+      "trade_krw": 1383323519.699581,
+      "candles": 580
+    },
+    {
+      "market": "KRW-ZBT",
+      "return_pct": 0.952380952380949,
+      "range_pct": 4.854368932038833,
+      "trade_krw": 1327734675.6732492,
+      "candles": 625
+    },
+    {
+      "market": "KRW-STORJ",
+      "return_pct": -1.0489510489510523,
+      "range_pct": 16.216216216216228,
+      "trade_krw": 1263039175.2521229,
+      "candles": 635
+    },
+    {
+      "market": "KRW-SNT",
+      "return_pct": -1.6460905349794275,
+      "range_pct": 4.815864022662897,
+      "trade_krw": 1229259250.5562356,
+      "candles": 777
+    },
+    {
+      "market": "KRW-HYPER",
+      "return_pct": 2.631578947368407,
+      "range_pct": 8.304498269896188,
+      "trade_krw": 1220162237.7101405,
+      "candles": 457
+    },
+    {
+      "market": "KRW-DATA",
+      "return_pct": 1.6597510373443924,
+      "range_pct": 6.302521008403361,
+      "trade_krw": 1218418871.7085977,
+      "candles": 695
+    },
+    {
+      "market": "KRW-CTC",
+      "return_pct": 9.454949944382651,
+      "range_pct": 14.82720178372352,
+      "trade_krw": 1143463178.0495915,
+      "candles": 548
+    },
+    {
+      "market": "KRW-TT",
+      "return_pct": -1.4388489208633115,
+      "range_pct": 4.691358024691339,
+      "trade_krw": 1101603723.9063885,
+      "candles": 658
+    },
+    {
+      "market": "KRW-ATOM",
+      "return_pct": 3.145611364789458,
+      "range_pct": 6.814661848218906,
+      "trade_krw": 1085247573.1667407,
+      "candles": 550
+    },
+    {
+      "market": "KRW-ME",
+      "return_pct": 2.9556650246305383,
+      "range_pct": 6.439393939393923,
+      "trade_krw": 1049736126.8703982,
+      "candles": 540
+    },
+    {
+      "market": "KRW-MORPHO",
+      "return_pct": 6.0924369747899165,
+      "range_pct": 12.272565108811984,
+      "trade_krw": 1041140066.0910792,
+      "candles": 419
+    },
+    {
+      "market": "KRW-META2",
+      "return_pct": 5.24667188723571,
+      "range_pct": 23.095051060487037,
+      "trade_krw": 1030131326.4841524,
+      "candles": 522
+    },
+    {
+      "market": "KRW-INJ",
+      "return_pct": 9.85432733504712,
+      "range_pct": 11.16838487972509,
+      "trade_krw": 1029145641.2568738,
+      "candles": 517
+    },
+    {
+      "market": "KRW-ZAMA",
+      "return_pct": 10.683012259194392,
+      "range_pct": 13.859649122807038,
+      "trade_krw": 1002918184.3055612,
+      "candles": 443
+    },
+    {
+      "market": "KRW-AXS",
+      "return_pct": 5.214465937762824,
+      "range_pct": 6.768189509306266,
+      "trade_krw": 962452275.5643024,
+      "candles": 651
+    },
+    {
+      "market": "KRW-COW",
+      "return_pct": 2.0689655172413834,
+      "range_pct": 6.206896551724128,
+      "trade_krw": 935594917.6841129,
+      "candles": 487
+    },
+    {
+      "market": "KRW-VVV",
+      "return_pct": 2.2928608650338633,
+      "range_pct": 7.262277951933127,
+      "trade_krw": 934561348.2002876,
+      "candles": 547
+    },
+    {
+      "market": "KRW-SOON",
+      "return_pct": -1.0869565217391353,
+      "range_pct": 6.593406593406592,
+      "trade_krw": 928053841.5674276,
+      "candles": 463
+    },
+    {
+      "market": "KRW-IRYS",
+      "return_pct": 6.111111111111112,
+      "range_pct": 9.550561797752799,
+      "trade_krw": 917610938.6747252,
+      "candles": 613
+    },
+    {
+      "market": "KRW-MEGA",
+      "return_pct": 6.194690265486713,
+      "range_pct": 13.043478260869556,
+      "trade_krw": 917303935.0852147,
+      "candles": 489
+    },
+    {
+      "market": "KRW-0G",
+      "return_pct": 7.253886010362698,
+      "range_pct": 9.895833333333325,
+      "trade_krw": 916523517.4953609,
+      "candles": 509
+    },
+    {
+      "market": "KRW-AKT",
+      "return_pct": 6.35400907715582,
+      "range_pct": 8.497723823975711,
+      "trade_krw": 901294372.1254356,
+      "candles": 493
+    },
+    {
+      "market": "KRW-PENDLE",
+      "return_pct": 11.557512383048984,
+      "range_pct": 17.27221911682504,
+      "trade_krw": 889184568.4351714,
+      "candles": 549
+    },
+    {
+      "market": "KRW-MIRA",
+      "return_pct": 4.554079696394675,
+      "range_pct": 6.909788867562372,
+      "trade_krw": 877269489.0339022,
+      "candles": 588
+    },
+    {
+      "market": "KRW-DOT",
+      "return_pct": 2.5447690857681504,
+      "range_pct": 4.154863078375826,
+      "trade_krw": 875029303.0994339,
+      "candles": 522
+    },
+    {
+      "market": "KRW-G",
+      "return_pct": 3.2846715328467058,
+      "range_pct": 8.317580340264662,
+      "trade_krw": 849300989.2692138,
+      "candles": 543
+    },
+    {
+      "market": "KRW-NEWT",
+      "return_pct": 4.809619238476959,
+      "range_pct": 12.550607287449388,
+      "trade_krw": 840954788.9669396,
+      "candles": 372
+    },
+    {
+      "market": "KRW-APT",
+      "return_pct": 3.4946236559139754,
+      "range_pct": 6.258503401360538,
+      "trade_krw": 836431323.244988,
+      "candles": 593
+    },
+    {
+      "market": "KRW-ELSA",
+      "return_pct": 5.670103092783507,
+      "range_pct": 6.540447504302915,
+      "trade_krw": 829837863.5996921,
+      "candles": 616
+    },
+    {
+      "market": "KRW-SOPH",
+      "return_pct": 4.094827586206895,
+      "range_pct": 6.986899563318794,
+      "trade_krw": 818582099.5324789,
+      "candles": 539
+    },
+    {
+      "market": "KRW-O",
+      "return_pct": -1.1940298507462699,
+      "range_pct": 5.837173579109067,
+      "trade_krw": 812196742.8280907,
+      "candles": 509
+    },
+    {
+      "market": "KRW-CC",
+      "return_pct": 11.20000000000001,
+      "range_pct": 13.709677419354849,
+      "trade_krw": 805966978.5946945,
+      "candles": 397
+    },
+    {
+      "market": "KRW-CRO",
+      "return_pct": 6.875000000000009,
+      "range_pct": 8.450704225352101,
+      "trade_krw": 792433179.5602463,
+      "candles": 519
+    },
+    {
+      "market": "KRW-BERA",
+      "return_pct": 3.398058252427183,
+      "range_pct": 6.341463414634152,
+      "trade_krw": 790969062.63775,
+      "candles": 369
+    },
+    {
+      "market": "KRW-GEOD",
+      "return_pct": 7.167235494880542,
+      "range_pct": 11.702127659574458,
+      "trade_krw": 765935596.1558388,
+      "candles": 588
+    },
+    {
+      "market": "KRW-JUP",
+      "return_pct": 5.957446808510647,
+      "range_pct": 9.482758620689658,
+      "trade_krw": 748034410.7280014,
+      "candles": 376
+    },
+    {
+      "market": "KRW-AVNT",
+      "return_pct": 3.3613445378151363,
+      "range_pct": 8.62068965517242,
+      "trade_krw": 743603470.1530824,
+      "candles": 402
+    },
+    {
+      "market": "KRW-GAS",
+      "return_pct": 4.663608562691124,
+      "range_pct": 5.525709900230247,
+      "trade_krw": 731137442.3502519,
+      "candles": 516
+    },
+    {
+      "market": "KRW-UP2",
+      "return_pct": 1.5827338129496216,
+      "range_pct": 10.271903323262844,
+      "trade_krw": 723108216.7983361,
+      "candles": 643
+    },
+    {
+      "market": "KRW-2Z",
+      "return_pct": 11.773700305810376,
+      "range_pct": 12.962962962962976,
+      "trade_krw": 705669276.3183073,
+      "candles": 583
+    },
+    {
+      "market": "KRW-ID",
+      "return_pct": 4.973821989528782,
+      "range_pct": 6.33245382585752,
+      "trade_krw": 700845156.7426901,
+      "candles": 470
+    },
+    {
+      "market": "KRW-JTO",
+      "return_pct": 2.617801047120416,
+      "range_pct": 5.921052631578938,
+      "trade_krw": 694231268.6866196,
+      "candles": 565
+    },
+    {
+      "market": "KRW-RENDER",
+      "return_pct": 6.632653061224492,
+      "range_pct": 9.034090909090908,
+      "trade_krw": 671212789.1360344,
+      "candles": 484
+    },
+    {
+      "market": "KRW-OPG",
+      "return_pct": -0.7194244604316502,
+      "range_pct": 4.444444444444451,
+      "trade_krw": 661543861.1941171,
+      "candles": 367
+    },
+    {
+      "market": "KRW-ERA",
+      "return_pct": 1.153846153846172,
+      "range_pct": 6.33245382585752,
+      "trade_krw": 653925790.7958986,
+      "candles": 546
+    },
+    {
+      "market": "KRW-IN",
+      "return_pct": 1.388888888888884,
+      "range_pct": 4.964539007092195,
+      "trade_krw": 647028783.4197491,
+      "candles": 477
+    },
+    {
+      "market": "KRW-RLUSD",
+      "return_pct": -1.3600572655690812,
+      "range_pct": 2.564102564102555,
+      "trade_krw": 594754535.7753998,
+      "candles": 242
+    },
+    {
+      "market": "KRW-KITE",
+      "return_pct": 4.761904761904767,
+      "range_pct": 6.349206349206349,
+      "trade_krw": 593761902.9645452,
+      "candles": 366
+    },
+    {
+      "market": "KRW-CHZ",
+      "return_pct": 6.626506024096379,
+      "range_pct": 8.484848484848474,
+      "trade_krw": 592787152.3554876,
+      "candles": 356
+    },
+    {
+      "market": "KRW-SOMI",
+      "return_pct": 5.555555555555558,
+      "range_pct": 8.800000000000008,
+      "trade_krw": 590168460.5798445,
+      "candles": 265
+    },
+    {
+      "market": "KRW-ETHFI",
+      "return_pct": 4.424778761061954,
+      "range_pct": 9.253731343283578,
+      "trade_krw": 582315117.724944,
+      "candles": 334
+    },
+    {
+      "market": "KRW-ATH",
+      "return_pct": 5.725190839694649,
+      "range_pct": 8.061420345489445,
+      "trade_krw": 549089920.508321,
+      "candles": 368
+    },
+    {
+      "market": "KRW-IMX",
+      "return_pct": 5.185185185185182,
+      "range_pct": 10.687022900763354,
+      "trade_krw": 548700259.9010694,
+      "candles": 348
+    },
+    {
+      "market": "KRW-B3",
+      "return_pct": 4.504504504504481,
+      "range_pct": 6.498194945848357,
+      "trade_krw": 546434335.2669874,
+      "candles": 547
+    },
+    {
+      "market": "KRW-CYBER",
+      "return_pct": 3.4653465346534684,
+      "range_pct": 10.91370558375635,
+      "trade_krw": 546245031.272692,
+      "candles": 387
+    },
+    {
+      "market": "KRW-COMP",
+      "return_pct": 5.36723163841808,
+      "range_pct": 8.993839835728945,
+      "trade_krw": 539393968.5983638,
+      "candles": 419
+    },
+    {
+      "market": "KRW-VET",
+      "return_pct": 8.943089430894302,
+      "range_pct": 11.092985318107672,
+      "trade_krw": 530890084.73572576,
+      "candles": 429
+    },
+    {
+      "market": "KRW-BARD",
+      "return_pct": 4.166666666666674,
+      "range_pct": 7.746478873239426,
+      "trade_krw": 528710048.0675111,
+      "candles": 322
+    },
+    {
+      "market": "KRW-LAYER",
+      "return_pct": 5.27577937649879,
+      "range_pct": 6.009615384615374,
+      "trade_krw": 528364677.6065766,
+      "candles": 396
+    },
+    {
+      "market": "KRW-XAUT",
+      "return_pct": 2.051282051282044,
+      "range_pct": 2.598477325388937,
+      "trade_krw": 518759432.58313,
+      "candles": 323
+    },
+    {
+      "market": "KRW-BSB",
+      "return_pct": 1.1976047904191711,
+      "range_pct": 6.060606060606055,
+      "trade_krw": 498757687.43210465,
+      "candles": 237
+    },
+    {
+      "market": "KRW-ICP",
+      "return_pct": 3.1818181818181746,
+      "range_pct": 9.275265957446809,
+      "trade_krw": 476845927.79803777,
+      "candles": 304
+    },
+    {
+      "market": "KRW-PYTH",
+      "return_pct": 9.07407407407408,
+      "range_pct": 11.531190926275992,
+      "trade_krw": 470536326.449556,
+      "candles": 383
+    },
+    {
+      "market": "KRW-ZK",
+      "return_pct": 11.650485436893199,
+      "range_pct": 13.592233009708732,
+      "trade_krw": 465547034.96789604,
+      "candles": 304
+    },
+    {
+      "market": "KRW-MNT",
+      "return_pct": 10.596026490066235,
+      "range_pct": 11.920529801324498,
+      "trade_krw": 460030165.87388945,
+      "candles": 240
+    },
+    {
+      "market": "KRW-DRV",
+      "return_pct": 3.100775193798455,
+      "range_pct": 8.800000000000008,
+      "trade_krw": 453384299.7150851,
+      "candles": 327
+    },
+    {
+      "market": "KRW-DEEP",
+      "return_pct": 1.0638297872340496,
+      "range_pct": 11.23595505617978,
+      "trade_krw": 448650396.3264113,
+      "candles": 319
+    },
+    {
+      "market": "KRW-OPEN",
+      "return_pct": 6.2801932367149815,
+      "range_pct": 7.7669902912621325,
+      "trade_krw": 446076956.09909964,
+      "candles": 413
+    },
+    {
+      "market": "KRW-WAL",
+      "return_pct": 4.794520547945202,
+      "range_pct": 7.638888888888884,
+      "trade_krw": 442183880.44047993,
+      "candles": 350
+    },
+    {
+      "market": "KRW-AERO",
+      "return_pct": 15.232974910394258,
+      "range_pct": 15.79892280071813,
+      "trade_krw": 440454040.2175953,
+      "candles": 303
+    },
+    {
+      "market": "KRW-JST",
+      "return_pct": -3.3333333333333326,
+      "range_pct": 6.382978723404253,
+      "trade_krw": 438668579.71442497,
+      "candles": 245
+    },
+    {
+      "market": "KRW-DOOD",
+      "return_pct": 5.063291139240489,
+      "range_pct": 7.594936708860756,
+      "trade_krw": 436646112.37379897,
+      "candles": 281
+    },
+    {
+      "market": "KRW-FLOCK",
+      "return_pct": 7.1246819338422585,
+      "range_pct": 8.740359897172233,
+      "trade_krw": 432437290.2783238,
+      "candles": 324
+    },
+    {
+      "market": "KRW-VANA",
+      "return_pct": 2.842809364548504,
+      "range_pct": 5.391743892165124,
+      "trade_krw": 428791510.7563267,
+      "candles": 351
+    },
+    {
+      "market": "KRW-OP",
+      "return_pct": 8.849557522123884,
+      "range_pct": 10.619469026548668,
+      "trade_krw": 428536738.29232,
+      "candles": 238
+    },
+    {
+      "market": "KRW-NEO",
+      "return_pct": 5.143338954468812,
+      "range_pct": 6.7344345616264345,
+      "trade_krw": 415101441.6382488,
+      "candles": 401
+    },
+    {
+      "market": "KRW-MED",
+      "return_pct": 1.1363636363636465,
+      "range_pct": 7.558139534883734,
+      "trade_krw": 410796138.3605383,
+      "candles": 441
+    },
+    {
+      "market": "KRW-AWE",
+      "return_pct": 6.495098039215708,
+      "range_pct": 7.14285714285714,
+      "trade_krw": 407136800.2332207,
+      "candles": 328
+    },
+    {
+      "market": "KRW-BTT",
+      "return_pct": 2.1857923497267784,
+      "range_pct": 3.8461538461538547,
+      "trade_krw": 397009038.0708518,
+      "candles": 631
+    },
+    {
+      "market": "KRW-KMNO",
+      "return_pct": 6.153846153846154,
+      "range_pct": 8.914728682170537,
+      "trade_krw": 375859666.5036405,
+      "candles": 302
+    },
+    {
+      "market": "KRW-BLEND",
+      "return_pct": 6.227106227106227,
+      "range_pct": 8.058608058608051,
+      "trade_krw": 371130879.40165895,
+      "candles": 246
+    },
+    {
+      "market": "KRW-IOTA",
+      "return_pct": 4.282655246252687,
+      "range_pct": 8.478260869565224,
+      "trade_krw": 362478401.5096089,
+      "candles": 482
+    },
+    {
+      "market": "KRW-WAVES",
+      "return_pct": 4.980842911877392,
+      "range_pct": 6.563706563706573,
+      "trade_krw": 359387996.23041344,
+      "candles": 362
+    },
+    {
+      "market": "KRW-BIRB",
+      "return_pct": 6.5902578796561695,
+      "range_pct": 7.913669064748197,
+      "trade_krw": 357808827.0346715,
+      "candles": 352
+    },
+    {
+      "market": "KRW-ZKP",
+      "return_pct": 1.642335766423364,
+      "range_pct": 5.390334572490718,
+      "trade_krw": 349754578.87735057,
+      "candles": 296
+    },
+    {
+      "market": "KRW-ZETA",
+      "return_pct": 6.400000000000006,
+      "range_pct": 8.000000000000007,
+      "trade_krw": 348223618.6686102,
+      "candles": 310
+    },
+    {
+      "market": "KRW-KAVA",
+      "return_pct": -0.35211267605632646,
+      "range_pct": 2.6690391459074814,
+      "trade_krw": 343656082.0463186,
+      "candles": 311
+    },
+    {
+      "market": "KRW-BOUNTY",
+      "return_pct": 1.4598540145985384,
+      "range_pct": 7.352941176470584,
+      "trade_krw": 343186732.1083142,
+      "candles": 289
+    },
+    {
+      "market": "KRW-TRUST",
+      "return_pct": 4.123711340206171,
+      "range_pct": 5.760709010339715,
+      "trade_krw": 341518614.0044928,
+      "candles": 278
+    },
+    {
+      "market": "KRW-ANKR",
+      "return_pct": 3.8793103448276023,
+      "range_pct": 8.459869848156165,
+      "trade_krw": 339971016.51311636,
+      "candles": 247
+    },
+    {
+      "market": "KRW-GMT",
+      "return_pct": 6.682867557715655,
+      "range_pct": 8.394160583941602,
+      "trade_krw": 336406593.1353117,
+      "candles": 437
+    },
+    {
+      "market": "KRW-BLAST",
+      "return_pct": 4.615384615384621,
+      "range_pct": 6.25,
+      "trade_krw": 330046709.0371113,
+      "candles": 314
+    },
+    {
+      "market": "KRW-SENT",
+      "return_pct": -0.5952380952381042,
+      "range_pct": 6.172839506172845,
+      "trade_krw": 325863727.423272,
+      "candles": 185
+    },
+    {
+      "market": "KRW-ZIL",
+      "return_pct": 1.320132013201314,
+      "range_pct": 3.322259136212624,
+      "trade_krw": 323704178.3190482,
+      "candles": 416
+    },
+    {
+      "market": "KRW-FF",
+      "return_pct": 1.2345679012345734,
+      "range_pct": 2.7180067950169917,
+      "trade_krw": 322411110.3979443,
+      "candles": 263
+    },
+    {
+      "market": "KRW-MEW",
+      "return_pct": 7.674943566591419,
+      "range_pct": 9.75056689342404,
+      "trade_krw": 318909517.4639213,
+      "candles": 410
+    },
+    {
+      "market": "KRW-SYRUP",
+      "return_pct": 3.1818181818181746,
+      "range_pct": 6.392694063926951,
+      "trade_krw": 311545297.84726614,
+      "candles": 247
+    },
+    {
+      "market": "KRW-ARDR",
+      "return_pct": 2.008032128514059,
+      "range_pct": 4.453441295546567,
+      "trade_krw": 310317030.46803296,
+      "candles": 309
+    },
+    {
+      "market": "KRW-BIGTIME",
+      "return_pct": 3.797468354430378,
+      "range_pct": 5.766526019690565,
+      "trade_krw": 308561538.5094521,
+      "candles": 371
+    },
+    {
+      "market": "KRW-MANTRA",
+      "return_pct": 6.718749999999996,
+      "range_pct": 7.2213500784929385,
+      "trade_krw": 301411152.2539843,
+      "candles": 358
+    },
+    {
+      "market": "KRW-LSK",
+      "return_pct": 0.9009009009008917,
+      "range_pct": 2.7027027027026973,
+      "trade_krw": 299808850.844201,
+      "candles": 268
+    },
+    {
+      "market": "KRW-MOODENG",
+      "return_pct": 7.975460122699385,
+      "range_pct": 10.040983606557386,
+      "trade_krw": 299684927.0003274,
+      "candles": 227
+    },
+    {
+      "market": "KRW-PROVE",
+      "return_pct": 2.7906976744185963,
+      "range_pct": 4.651162790697683,
+      "trade_krw": 291244486.6773726,
+      "candles": 183
+    },
+    {
+      "market": "KRW-SPK",
+      "return_pct": 10.382513661202175,
+      "range_pct": 11.602209944751362,
+      "trade_krw": 286673126.21016645,
+      "candles": 311
+    },
+    {
+      "market": "KRW-TRAC",
+      "return_pct": 4.494382022471921,
+      "range_pct": 12.71676300578035,
+      "trade_krw": 283154803.5142373,
+      "candles": 283
+    },
+    {
+      "market": "KRW-AZTEC",
+      "return_pct": 8.23529411764705,
+      "range_pct": 11.309523809523792,
+      "trade_krw": 280007343.9156506,
+      "candles": 195
+    },
+    {
+      "market": "KRW-SONIC",
+      "return_pct": 6.1475409836065475,
+      "range_pct": 8.298755186721984,
+      "trade_krw": 278843182.1044662,
+      "candles": 252
+    },
+    {
+      "market": "KRW-AXL",
+      "return_pct": 7.676348547717837,
+      "range_pct": 9.147609147609149,
+      "trade_krw": 277697990.35018784,
+      "candles": 346
+    },
+    {
+      "market": "KRW-SPX",
+      "return_pct": 12.527964205816545,
+      "range_pct": 14.798206278026903,
+      "trade_krw": 267622786.1770127,
+      "candles": 257
+    },
+    {
+      "market": "KRW-QTUM",
+      "return_pct": 4.311251314405884,
+      "range_pct": 5.496828752642702,
+      "trade_krw": 267264372.72709274,
+      "candles": 331
+    },
+    {
+      "market": "KRW-GRT",
+      "return_pct": 3.2432432432432545,
+      "range_pct": 6.593406593406592,
+      "trade_krw": 264391592.42744175,
+      "candles": 346
+    },
+    {
+      "market": "KRW-GLM",
+      "return_pct": 4.166666666666674,
+      "range_pct": 6.72268907563025,
+      "trade_krw": 261003158.8099748,
+      "candles": 180
+    },
+    {
+      "market": "KRW-POLYX",
+      "return_pct": 6.666666666666665,
+      "range_pct": 8.740359897172233,
+      "trade_krw": 257863947.3746153,
+      "candles": 332
+    },
+    {
+      "market": "KRW-THETA",
+      "return_pct": 5.583756345177671,
+      "range_pct": 8.247422680412363,
+      "trade_krw": 253916577.1354099,
+      "candles": 181
+    },
+    {
+      "market": "KRW-ORCA",
+      "return_pct": 4.149659863945576,
+      "range_pct": 4.632152588555849,
+      "trade_krw": 252701408.74492002,
+      "candles": 257
+    },
+    {
+      "market": "KRW-KAT",
+      "return_pct": 4.957264957264962,
+      "range_pct": 8.089500860585218,
+      "trade_krw": 251743134.9772117,
+      "candles": 334
+    },
+    {
+      "market": "KRW-A",
+      "return_pct": 6.117647058823539,
+      "range_pct": 10.09501187648456,
+      "trade_krw": 250763941.65849552,
+      "candles": 353
+    },
+    {
+      "market": "KRW-ZRX",
+      "return_pct": 3.8461538461538547,
+      "range_pct": 6.796116504854366,
+      "trade_krw": 250381261.42842904,
+      "candles": 202
+    },
+    {
+      "market": "KRW-MANA",
+      "return_pct": 3.374578177727794,
+      "range_pct": 5.675368898978439,
+      "trade_krw": 249285474.5345569,
+      "candles": 353
+    },
+    {
+      "market": "KRW-W",
+      "return_pct": 4.424778761061954,
+      "range_pct": 8.03571428571428,
+      "trade_krw": 248689473.0284388,
+      "candles": 223
+    },
+    {
+      "market": "KRW-MASK",
+      "return_pct": 0.3875968992248069,
+      "range_pct": 4.365079365079372,
+      "trade_krw": 244622282.62048495,
+      "candles": 250
+    },
+    {
+      "market": "KRW-RAY",
+      "return_pct": 6.876456876456882,
+      "range_pct": 7.863849765258224,
+      "trade_krw": 244366938.55079883,
+      "candles": 275
+    },
+    {
+      "market": "KRW-T",
+      "return_pct": 5.3215077605321515,
+      "range_pct": 5.790645879732725,
+      "trade_krw": 238543533.0506999,
+      "candles": 273
+    },
+    {
+      "market": "KRW-EDGE",
+      "return_pct": 1.261467889908241,
+      "range_pct": 3.233256351039282,
+      "trade_krw": 236540724.49717987,
+      "candles": 290
+    },
+    {
+      "market": "KRW-NXPC",
+      "return_pct": -1.0309278350515427,
+      "range_pct": 4.982206405693956,
+      "trade_krw": 235945434.72902933,
+      "candles": 318
+    },
+    {
+      "market": "KRW-TOSHI",
+      "return_pct": 7.299270072992692,
+      "range_pct": 9.62962962962961,
+      "trade_krw": 234963232.01352423,
+      "candles": 231
+    },
+    {
+      "market": "KRW-GAME2",
+      "return_pct": 4.580152671755711,
+      "range_pct": 5.027322404371581,
+      "trade_krw": 229562868.2003685,
+      "candles": 249
+    },
+    {
+      "market": "KRW-HIVE",
+      "return_pct": 5.534351145038174,
+      "range_pct": 6.488549618320616,
+      "trade_krw": 222477223.3453906,
+      "candles": 252
+    },
+    {
+      "market": "KRW-ZORA",
+      "return_pct": 6.382978723404253,
+      "range_pct": 8.103975535168196,
+      "trade_krw": 222180840.32002795,
+      "candles": 301
+    },
+    {
+      "market": "KRW-ANIME",
+      "return_pct": 3.92749244712991,
+      "range_pct": 6.382978723404253,
+      "trade_krw": 221247604.08165786,
+      "candles": 229
+    },
+    {
+      "market": "KRW-API3",
+      "return_pct": 4.868913857677892,
+      "range_pct": 6.015037593984962,
+      "trade_krw": 217850232.00238326,
+      "candles": 247
+    },
+    {
+      "market": "KRW-AGLD",
+      "return_pct": 2.7906976744185963,
+      "range_pct": 5.687203791469186,
+      "trade_krw": 216794319.69538578,
+      "candles": 195
+    },
+    {
+      "market": "KRW-1INCH",
+      "return_pct": 3.4482758620689724,
+      "range_pct": 6.08695652173914,
+      "trade_krw": 215917234.84932396,
+      "candles": 200
+    },
+    {
+      "market": "KRW-CARV",
+      "return_pct": 6.499999999999995,
+      "range_pct": 8.499999999999996,
+      "trade_krw": 215840375.9242388,
+      "candles": 190
+    },
+    {
+      "market": "KRW-F",
+      "return_pct": 4.904632152588562,
+      "range_pct": 7.756232686980624,
+      "trade_krw": 215532857.66884148,
+      "candles": 254
+    },
+    {
+      "market": "KRW-ALT",
+      "return_pct": 2.937576499388017,
+      "range_pct": 4.674046740467386,
+      "trade_krw": 212303644.0287415,
+      "candles": 169
+    },
+    {
+      "market": "KRW-LINEA",
+      "return_pct": 5.862068965517242,
+      "range_pct": 6.5517241379310365,
+      "trade_krw": 209864943.79398945,
+      "candles": 213
+    },
+    {
+      "market": "KRW-BABY",
+      "return_pct": 8.571428571428562,
+      "range_pct": 12.318840579710134,
+      "trade_krw": 208928846.50798067,
+      "candles": 183
+    },
+    {
+      "market": "KRW-MBL",
+      "return_pct": 2.668360864040653,
+      "range_pct": 4.961832061068683,
+      "trade_krw": 208584095.97571248,
+      "candles": 237
+    },
+    {
+      "market": "KRW-MINA",
+      "return_pct": 8.540925266903908,
+      "range_pct": 9.31899641577061,
+      "trade_krw": 205858221.74142978,
+      "candles": 272
+    },
+    {
+      "market": "KRW-POWR",
+      "return_pct": 2.519379844961245,
+      "range_pct": 5.742574257425748,
+      "trade_krw": 204932069.21597075,
+      "candles": 260
+    },
+    {
+      "market": "KRW-BORA",
+      "return_pct": 3.90625,
+      "range_pct": 5.928853754940722,
+      "trade_krw": 204759716.11003315,
+      "candles": 281
+    },
+    {
+      "market": "KRW-TIA",
+      "return_pct": 6.730769230769229,
+      "range_pct": 10.817307692307686,
+      "trade_krw": 203794975.84437293,
+      "candles": 243
+    },
+    {
+      "market": "KRW-SC",
+      "return_pct": 3.8277511961722466,
+      "range_pct": 5.483870967741944,
+      "trade_krw": 200564929.62358934,
+      "candles": 276
+    },
+    {
+      "market": "KRW-STEEM",
+      "return_pct": 6.079664570230614,
+      "range_pct": 6.512605042016806,
+      "trade_krw": 200548409.48289052,
+      "candles": 339
+    },
+    {
+      "market": "KRW-PUNDIX",
+      "return_pct": 4.90196078431373,
+      "range_pct": 6.930693069306937,
+      "trade_krw": 197263698.02947584,
+      "candles": 160
+    },
+    {
+      "market": "KRW-AI",
+      "return_pct": 3.284671532846728,
+      "range_pct": 8.029197080291972,
+      "trade_krw": 193316189.52987823,
+      "candles": 216
+    },
+    {
+      "market": "KRW-ARK",
+      "return_pct": 4.132231404958686,
+      "range_pct": 5.785123966942152,
+      "trade_krw": 193020607.59908402,
+      "candles": 179
+    },
+    {
+      "market": "KRW-TAIKO",
+      "return_pct": 4.771784232365128,
+      "range_pct": 5.809128630705396,
+      "trade_krw": 192202337.4766933,
+      "candles": 235
+    },
+    {
+      "market": "KRW-WAXP",
+      "return_pct": 6.720977596741351,
+      "range_pct": 7.802874743326482,
+      "trade_krw": 191105901.19234186,
+      "candles": 267
+    },
+    {
+      "market": "KRW-PROS",
+      "return_pct": 0.7393715341959428,
+      "range_pct": 4.43622920517559,
+      "trade_krw": 178202490.6527233,
+      "candles": 242
+    },
+    {
+      "market": "KRW-BLUR",
+      "return_pct": 4.371584699453557,
+      "range_pct": 5.494505494505497,
+      "trade_krw": 176458379.07196087,
+      "candles": 215
+    },
+    {
+      "market": "KRW-POKT",
+      "return_pct": 2.393906420021774,
+      "range_pct": 6.516853932584277,
+      "trade_krw": 175512259.40030164,
+      "candles": 281
+    },
+    {
+      "market": "KRW-CELO",
+      "return_pct": 6.041923551171391,
+      "range_pct": 7.160493827160486,
+      "trade_krw": 174008569.34260798,
+      "candles": 220
+    },
+    {
+      "market": "KRW-XTZ",
+      "return_pct": 5.3380782918149405,
+      "range_pct": 9.025270758122739,
+      "trade_krw": 169619297.32660976,
+      "candles": 215
+    },
+    {
+      "market": "KRW-WET",
+      "return_pct": 2.1450459652706755,
+      "range_pct": 4.123711340206193,
+      "trade_krw": 166919578.00136015,
+      "candles": 198
+    },
+    {
+      "market": "KRW-ZKC",
+      "return_pct": 4.7337278106508895,
+      "range_pct": 6.336633663366342,
+      "trade_krw": 166403948.41980487,
+      "candles": 224
+    },
+    {
+      "market": "KRW-DKA",
+      "return_pct": 3.6231884057971175,
+      "range_pct": 6.633906633906617,
+      "trade_krw": 166080149.55278444,
+      "candles": 236
+    },
+    {
+      "market": "KRW-HUNT",
+      "return_pct": 0.952380952380949,
+      "range_pct": 6.930693069306937,
+      "trade_krw": 165252123.05696946,
+      "candles": 185
+    },
+    {
+      "market": "KRW-STRAX",
+      "return_pct": 1.7241379310344973,
+      "range_pct": 4.347826086956519,
+      "trade_krw": 162780186.08888334,
+      "candles": 214
+    },
+    {
+      "market": "KRW-USD1",
+      "return_pct": -1.2866333095067906,
+      "range_pct": 2.6412325752017685,
+      "trade_krw": 157841166.069261,
+      "candles": 276
+    },
+    {
+      "market": "KRW-YGG",
+      "return_pct": 0.36496350364965124,
+      "range_pct": 3.6764705882353033,
+      "trade_krw": 156774559.0062309,
+      "candles": 195
+    },
+    {
+      "market": "KRW-SKR",
+      "return_pct": 2.6831785345717174,
+      "range_pct": 5.8091286307053736,
+      "trade_krw": 154504379.14474472,
+      "candles": 177
+    },
+    {
+      "market": "KRW-BEAM",
+      "return_pct": 6.6298342541436295,
+      "range_pct": 7.182320441988943,
+      "trade_krw": 152095728.3147894,
+      "candles": 169
+    },
+    {
+      "market": "KRW-BREV",
+      "return_pct": 4.869762174405423,
+      "range_pct": 6.704545454545463,
+      "trade_krw": 150831720.15610835,
+      "candles": 212
+    },
+    {
+      "market": "KRW-SUPER",
+      "return_pct": 5.000000000000004,
+      "range_pct": 6.72268907563025,
+      "trade_krw": 150227964.58467507,
+      "candles": 124
+    },
+    {
+      "market": "KRW-WCT",
+      "return_pct": 5.756929637526653,
+      "range_pct": 7.939914163090123,
+      "trade_krw": 149613958.27475157,
+      "candles": 217
+    },
+    {
+      "market": "KRW-SUN",
+      "return_pct": -0.8368200836820106,
+      "range_pct": 2.5751072961373245,
+      "trade_krw": 145700875.015512,
+      "candles": 176
+    },
+    {
+      "market": "KRW-ARKM",
+      "return_pct": 4.132231404958686,
+      "range_pct": 9.243697478991585,
+      "trade_krw": 145019127.54230294,
+      "candles": 154
+    },
+    {
+      "market": "KRW-SKY",
+      "return_pct": 5.4707379134860235,
+      "range_pct": 8.962868117797695,
+      "trade_krw": 144330048.9848992,
+      "candles": 265
+    },
+    {
+      "market": "KRW-AUCTION",
+      "return_pct": 3.0532359081419713,
+      "range_pct": 4.137208693375238,
+      "trade_krw": 143186350.76250756,
+      "candles": 236
+    },
+    {
+      "market": "KRW-MLK",
+      "return_pct": 1.1627906976744207,
+      "range_pct": 3.7735849056603765,
+      "trade_krw": 142857501.75004458,
+      "candles": 259
+    },
+    {
+      "market": "KRW-BAT",
+      "return_pct": 4.379562043795615,
+      "range_pct": 7.002457002456985,
+      "trade_krw": 142251262.26944864,
+      "candles": 161
+    },
+    {
+      "market": "KRW-KNC",
+      "return_pct": 4.285714285714293,
+      "range_pct": 5.755395683453246,
+      "trade_krw": 140403130.91546908,
+      "candles": 137
+    },
+    {
+      "market": "KRW-CPOOL",
+      "return_pct": 7.657657657657646,
+      "range_pct": 9.459459459459474,
+      "trade_krw": 138873712.42198688,
+      "candles": 257
+    },
+    {
+      "market": "KRW-ORBS",
+      "return_pct": 3.203342618384397,
+      "range_pct": 4.788732394366213,
+      "trade_krw": 135766712.71943444,
+      "candles": 320
+    },
+    {
+      "market": "KRW-ASTR",
+      "return_pct": 5.1696284329563635,
+      "range_pct": 6.655844155844148,
+      "trade_krw": 128232305.24688764,
+      "candles": 265
+    },
+    {
+      "market": "KRW-SAFE",
+      "return_pct": 5.217391304347818,
+      "range_pct": 6.956521739130439,
+      "trade_krw": 126559441.87027419,
+      "candles": 136
+    },
+    {
+      "market": "KRW-IO",
+      "return_pct": 6.91823899371069,
+      "range_pct": 8.917197452229297,
+      "trade_krw": 124015874.34580433,
+      "candles": 135
+    },
+    {
+      "market": "KRW-CKB",
+      "return_pct": 5.3097345132743445,
+      "range_pct": 6.249999999999978,
+      "trade_krw": 120689688.1077428,
+      "candles": 147
+    },
+    {
+      "market": "KRW-CVC",
+      "return_pct": 6.578947368421062,
+      "range_pct": 7.456140350877183,
+      "trade_krw": 118302512.01601306,
+      "candles": 223
+    },
+    {
+      "market": "KRW-MOC",
+      "return_pct": 5.741626794258381,
+      "range_pct": 8.292682926829276,
+      "trade_krw": 114084057.92096262,
+      "candles": 168
+    },
+    {
+      "market": "KRW-MOCA",
+      "return_pct": 3.960396039603964,
+      "range_pct": 6.999999999999984,
+      "trade_krw": 108125812.4055549,
+      "candles": 155
+    },
+    {
+      "market": "KRW-EGLD",
+      "return_pct": 2.217005738132505,
+      "range_pct": 3.2958409625948315,
+      "trade_krw": 107316014.71844043,
+      "candles": 156
+    },
+    {
+      "market": "KRW-IQ",
+      "return_pct": 2.184466019417486,
+      "range_pct": 4.126213592233019,
+      "trade_krw": 104964813.74618267,
+      "candles": 171
+    },
+    {
+      "market": "KRW-XCN",
+      "return_pct": 4.466501240694787,
+      "range_pct": 7.8085642317380355,
+      "trade_krw": 102667280.04616065,
+      "candles": 199
+    },
+    {
+      "market": "KRW-META",
+      "return_pct": 0.3351955307262733,
+      "range_pct": 3.4013605442176686,
+      "trade_krw": 102045660.40837407,
+      "candles": 111
+    },
+    {
+      "market": "KRW-CFX",
+      "return_pct": 5.429071803852903,
+      "range_pct": 7.381370826010558,
+      "trade_krw": 99095672.49027659,
+      "candles": 138
+    },
+    {
+      "market": "KRW-TOKAMAK",
+      "return_pct": 3.6111111111111205,
+      "range_pct": 6.741573033707859,
+      "trade_krw": 97239559.29051837,
+      "candles": 231
+    },
+    {
+      "market": "KRW-LPT",
+      "return_pct": 4.2347247428917045,
+      "range_pct": 5.65693430656935,
+      "trade_krw": 93877551.94999026,
+      "candles": 148
+    },
+    {
+      "market": "KRW-MTL",
+      "return_pct": 6.2745098039215685,
+      "range_pct": 7.086614173228356,
+      "trade_krw": 87689697.61293633,
+      "candles": 198
+    },
+    {
+      "market": "KRW-IOST",
+      "return_pct": 4.059539918809207,
+      "range_pct": 6.130790190735702,
+      "trade_krw": 80226712.42099197,
+      "candles": 224
+    },
+    {
+      "market": "KRW-MVL",
+      "return_pct": 1.9607843137254832,
+      "range_pct": 7.000000000000006,
+      "trade_krw": 74612769.81518187,
+      "candles": 135
+    },
+    {
+      "market": "KRW-WIF",
+      "return_pct": 6.842105263157894,
+      "range_pct": 7.9365079365079305,
+      "trade_krw": 72590590.48907527,
+      "candles": 78
+    },
+    {
+      "market": "KRW-KERNEL",
+      "return_pct": 4.6875,
+      "range_pct": 6.711409395973145,
+      "trade_krw": 67857696.6428546,
+      "candles": 141
+    },
+    {
+      "market": "KRW-TFUEL",
+      "return_pct": 3.960396039603964,
+      "range_pct": 4.950495049504955,
+      "trade_krw": 67661298.69647391,
+      "candles": 110
+    },
+    {
+      "market": "KRW-FCT2",
+      "return_pct": 0.8313539192399189,
+      "range_pct": 6.829268292682933,
+      "trade_krw": 63939256.42706992,
+      "candles": 136
+    },
+    {
+      "market": "KRW-CBK",
+      "return_pct": 4.225352112676051,
+      "range_pct": 6.161137440758302,
+      "trade_krw": 61789740.79240044,
+      "candles": 139
+    },
+    {
+      "market": "KRW-ORDER",
+      "return_pct": 6.806282722513068,
+      "range_pct": 8.398950131233573,
+      "trade_krw": 61179141.772748314,
+      "candles": 187
+    },
+    {
+      "market": "KRW-FLUID",
+      "return_pct": 5.456852791878175,
+      "range_pct": 8.726114649681538,
+      "trade_krw": 58402999.32122246,
+      "candles": 132
+    },
+    {
+      "market": "KRW-USDG",
+      "return_pct": -1.002865329512892,
+      "range_pct": 6.686701728024036,
+      "trade_krw": 54993544.279197104,
+      "candles": 112
+    },
+    {
+      "market": "KRW-QKC",
+      "return_pct": 2.9520295202952074,
+      "range_pct": 4.074074074074074,
+      "trade_krw": 49683363.16140216,
+      "candles": 101
+    },
+    {
+      "market": "KRW-HP",
+      "return_pct": 1.9883040935672502,
+      "range_pct": 5.005959475566146,
+      "trade_krw": 47810511.10418503,
+      "candles": 137
+    },
+    {
+      "market": "KRW-VTHO",
+      "return_pct": 6.308411214953269,
+      "range_pct": 7.025761124121788,
+      "trade_krw": 42390034.15727814,
+      "candles": 175
+    },
+    {
+      "market": "KRW-AHT",
+      "return_pct": 3.539823008849563,
+      "range_pct": 5.3097345132743445,
+      "trade_krw": 31963764.63045159,
+      "candles": 97
+    },
+    {
+      "market": "KRW-USDS",
+      "return_pct": -0.21520803443328962,
+      "range_pct": 1.8208302986161717,
+      "trade_krw": 19490095.81305755,
+      "candles": 35
+    },
+    {
+      "market": "KRW-USDE",
+      "return_pct": -1.003584229390686,
+      "range_pct": 3.840472673559825,
+      "trade_krw": 18716102.11051449,
+      "candles": 56
+    }
+  ]
+}
