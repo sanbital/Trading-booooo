@@ -15,4 +15,3 @@ A separate candidate lock must be committed after development-only diagnosis and
 before any validation-window result is opened. A strategy release is prohibited
 unless every preserved gate passes. Observability or implementation-defect fixes,
 if any, must remain a separate diff and cannot be described as strategy superiority.
-
