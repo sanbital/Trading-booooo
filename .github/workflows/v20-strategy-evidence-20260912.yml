@@ -1,5 +1,5 @@
 name: Collect V20 strategy evidence read-only
-# Run 3 follows a read-only session-probe compatibility correction.
+# Run 4 follows a psql client-copy variable-scope correction.
 
 on:
   push:
