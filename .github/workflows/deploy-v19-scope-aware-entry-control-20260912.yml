@@ -283,14 +283,15 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import json,os,subprocess,time
+          import datetime,json,os,subprocess,time
           deployed_at=open('release-evidence/deployed-at.txt').read().strip()
+          datetime.datetime.fromisoformat(deployed_at)
           query=r"""
           select jsonb_build_object(
             'observed_at',clock_timestamp(),
             'cycle_started_at',r.last_cycle_started_at,
             'cycle_completed_at',r.last_cycle_completed_at,
-            'eligible',r.last_cycle_started_at>:'deployed_at'::timestamptz and r.last_cycle_completed_at>=r.last_cycle_started_at,
+            'eligible',r.last_cycle_started_at>__DEPLOYED_AT__ and r.last_cycle_completed_at>=r.last_cycle_started_at,
             'entry_block_reason',r.entry_block_reason,
             'protection_health',r.protection_health,
             'circuit_open',r.circuit_open,
@@ -301,14 +302,15 @@ jobs:
             'active_account_incident_count',(select count(*) from public.v18_ops_incidents where control_scope in ('ACCOUNT_ENTRY_HOLD','ACCOUNT_RISK_BLOCK') and status in ('OPEN','VERIFYING')),
             'pending_exposure_order_count',(select count(*) from public.v11_long_regime_orders where state in ('PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED') and coalesce(response_payload->>'v18ExposureFinal','false')<>'true'),
             'pending_accounting_order_count',(select count(*) from public.v11_long_regime_orders where state in ('RECONCILIATION_PENDING','RECONCILIATION_FAILED') and response_payload->>'v18ExposureFinal'='true'),
-            'new_order_count',(select count(*) from public.v11_long_regime_orders where created_at>=:'deployed_at'::timestamptz),
-            'new_fill_count',(select count(*) from public.exchange_trade_fills where executed_at>=:'deployed_at'::timestamptz),
+            'new_order_count',(select count(*) from public.v11_long_regime_orders where created_at>=__DEPLOYED_AT__),
+            'new_fill_count',(select count(*) from public.exchange_trade_fills where executed_at>=__DEPLOYED_AT__),
             'duplicate_active_client_ids',(select count(*) from (select client_order_id from public.v11_long_regime_orders where state in ('PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED') and client_order_id is not null group by client_order_id having count(*)>1) d)
           ) from public.v11_long_regime_runtime r where singleton;
           """
+          deployed_literal="'"+deployed_at.replace("'","''")+"'::timestamptz"
+          query=query.replace('__DEPLOYED_AT__',deployed_literal)
           def read_state():
-              command=['psql',os.environ['SUPABASE_DB_URL'],'-XAt','--set=ON_ERROR_STOP=1',
-                       '--set','deployed_at='+deployed_at,'-c',query]
+              command=['psql',os.environ['SUPABASE_DB_URL'],'-XAt','--set=ON_ERROR_STOP=1','-c',query]
               return json.loads(subprocess.check_output(command,text=True).strip())
           seen=set(); observations=[]
           deadline=time.time()+300
