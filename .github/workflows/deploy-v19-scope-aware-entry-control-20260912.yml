@@ -154,8 +154,9 @@ jobs:
           PY
           if grep -qx verify-existing release-evidence/deploy-mode.txt; then
             mkdir -p release-evidence/preexisting-source
-            (cd release-evidence/preexisting-source && supabase functions download v10-lane-executor \
-              --project-ref "$SUPABASE_PROJECT_REF" --use-api)
+            supabase functions download v10-lane-executor \
+              --project-ref "$SUPABASE_PROJECT_REF" --use-api \
+              --workdir "$PWD/release-evidence/preexisting-source"
             node test-support/v19-ops/verify-downloaded-function.mjs \
               release-evidence/preexisting-source . > release-evidence/preexisting-source-verification.json
           fi
@@ -264,8 +265,9 @@ jobs:
           open('release-evidence/production-hash.txt','w').write(after['ezbr_sha256']+'\n')
           PY
           mkdir -p release-evidence/production-source
-          (cd release-evidence/production-source && supabase functions download v10-lane-executor \
-            --project-ref "$SUPABASE_PROJECT_REF" --use-api)
+          supabase functions download v10-lane-executor \
+            --project-ref "$SUPABASE_PROJECT_REF" --use-api \
+            --workdir "$PWD/release-evidence/production-source"
           node test-support/v19-ops/verify-downloaded-function.mjs \
             release-evidence/production-source . > release-evidence/production-source-verification.json
           psql "$SUPABASE_DB_URL" -XAt -F '|' --set=ON_ERROR_STOP=1 -c \
@@ -349,8 +351,9 @@ jobs:
           assert int(final['version'])==int(after['version']) and final.get('ezbr_sha256')==after.get('ezbr_sha256'), 'production source changed during cycle observation'
           PY
           mkdir -p release-evidence/final-production-source
-          (cd release-evidence/final-production-source && supabase functions download v10-lane-executor \
-            --project-ref "$SUPABASE_PROJECT_REF" --use-api)
+          supabase functions download v10-lane-executor \
+            --project-ref "$SUPABASE_PROJECT_REF" --use-api \
+            --workdir "$PWD/release-evidence/final-production-source"
           node test-support/v19-ops/verify-downloaded-function.mjs \
             release-evidence/final-production-source . > release-evidence/final-source-verification.json
 
