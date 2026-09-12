@@ -10,6 +10,20 @@ const copy=x=>structuredClone(x);
 const finite=(x,name)=>{if(!Number.isFinite(x))throw Error(name);return x;};
 const eq=(a,b)=>Math.abs(a-b)<=Math.max(1e-10,Math.abs(b)*1e-8);
 
+// Persist what is actually known, rather than leaving the last successful label in
+// place forever.  In particular, a terminal REJECTED order is not PROTECTED.
+function protectionHealth(state) {
+  const orders=state.protection?.orders??[],closed=state.position.remainingQuantity<=1e-10||state.position.state==='CLOSED';
+  if(orders.some(o=>o.crossLifecycleExecution===true))return 'CROSS_LIFECYCLE_EXECUTION';
+  if(orders.some(o=>o.lastQueryError||o.accountingPending===true||(!o.terminal&&!['ACTIVE','NEW'].includes(o.status))))
+    return 'RECONCILIATION_PENDING';
+  if(closed)return orders.some(o=>!o.terminal)?'RECONCILIATION_PENDING':'POSITION_CLOSED';
+  if(orders.some(o=>o.terminal&&o.status==='REJECTED'))return 'REJECTED';
+  const active=orders.filter(o=>!o.terminal&&['ACTIVE','NEW'].includes(o.status));
+  if(active.some(o=>eq(Number(o.spec?.params?.quantity),state.position.remainingQuantity)))return 'PROTECTED';
+  return orders.length?'TERMINAL_NO_PROTECTION':'UNPROTECTED';
+}
+
 export function createNativeProtection({store,exchange,clock=Date.now}) {
   async function save(previous,next) {
     next.version=previous.version+1;
@@ -26,15 +40,25 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
   }
   function validAck(order,ack) {
     const requested=order.spec.params;
+    const terminal=FINAL.has(String(ack.algoStatus)),actual=String(ack.actualOrderId??'');
+    // Binance may cap a reduce-only stop to the live one-way quantity when it triggers.
+    // Submission ACKs must remain exact; only a terminal ACK already bound to an
+    // actual order may report a smaller positive quantity.
+    const ackQuantity=Number(ack.quantity),quantityOk=eq(ackQuantity,requested.quantity)||
+      (terminal&&actual&&actual!=='0'&&ackQuantity>0&&ackQuantity<=requested.quantity);
     if(String(ack.clientAlgoId)!==requested.clientAlgoId||ack.symbol!==requested.symbol||
        ack.side!=='SELL'||ack.positionSide!=='BOTH'||String(ack.reduceOnly)!=='true'||
        (ack.orderType??ack.type)!=='STOP_MARKET'||
-       !eq(Number(ack.quantity),requested.quantity)||!eq(Number(ack.triggerPrice),requested.triggerPrice))
+       !quantityOk||!eq(Number(ack.triggerPrice),requested.triggerPrice))
       throw Error('NATIVE_STOP_ACK_MISMATCH');
     if(!ack.algoId||!ack.algoStatus)throw Error('NATIVE_STOP_ACK_INCOMPLETE');
   }
   async function refresh(id) {
     let state=await store.load(id);owned(state);
+    const initialHealth=protectionHealth(state);
+    if(state.protection.health!==initialHealth){
+      const normalized=copy(state);normalized.protection.health=initialHealth;state=await save(state,normalized);
+    }
     for(const remembered of [...state.protection.orders]) {
       if(remembered.terminal)continue;
       let ack;
@@ -43,7 +67,7 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
         const next=copy(state),item=next.protection.orders.find(x=>x.clientId===remembered.clientId);
         item.lastQueryError=String(error?.message??error);item.lastQueryAt=clock();
         // A lookup failure is NOT evidence that an uncertain submission was absent.
-        next.protection.health='RECONCILIATION_PENDING';state=await save(state,next);continue;
+        next.protection.health=protectionHealth(next);state=await save(state,next);continue;
       }
       validAck(remembered,ack);
       let next=copy(state),item=next.protection.orders.find(x=>x.clientId===remembered.clientId);
@@ -54,6 +78,35 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
         item.actualOrderId=actual;
         state=await save(state,next);next=copy(state);item=next.protection.orders.find(x=>x.clientId===remembered.clientId);
         const fill=await exchange.getFill(actual,next.position.symbol);
+        // A stop can survive a software close and execute against a later position in
+        // the same one-way account.  Never debit that fill from the already-closed
+        // source lifecycle.  Preserve the exact receipt so DB-only reconciliation can
+        // prove the later lifecycle separately.
+        if(next.position.remainingQuantity<=1e-10||next.position.state==='CLOSED'){
+          if(fill?.exact===true){
+            const q=finite(Number(fill.quantity),'INVALID_FILL_QTY'),funds=finite(Number(fill.funds),'INVALID_FILL_FUNDS'),
+              fee=finite(Number(fill.fee),'INVALID_FILL_FEE');
+            if(q<0||funds<0||q>item.spec.params.quantity+1e-8)throw Error('INVALID_NATIVE_FILL');
+            item.observedQuantity=q;item.observedFunds=funds;item.observedFee=fee;
+            item.tradeIds=fill.tradeIds??[];item.lastFillAt=Number(fill.lastFillAt);item.fillStatus=fill.status;
+            if(q>(item.appliedQuantity??0)+1e-10){
+              item.crossLifecycleExecution=true;item.accountingAppliedToSource=false;
+            }else if(item.accountingPending===true){
+              const accountingQty=q-(item.accountedQuantity??0),base=next.position.settledPnl;
+              if(!Number.isFinite(base)||accountingQty<0)throw Error('NATIVE_PRIOR_ACCOUNTING_UNKNOWN');
+              next.position.settledPnl=base+funds-(item.appliedFunds??0)-next.position.entryPrice*accountingQty-fee+(item.appliedFee??0);
+              item.accountedQuantity=q;item.appliedQuantity=q;item.appliedFunds=funds;item.appliedFee=fee;
+              item.accountingPending=false;next.position.accountingPending=next.position.entryAccountingPending||
+                next.position.softwareAccountingPending||next.protection.orders.some(o=>o!==item&&o.accountingPending===true);
+              next.position.realizedPnl=next.position.accountingPending?null:next.position.settledPnl;
+              next.position.exitPrice=q>0?funds/q:next.position.exitPrice;next.position.lastFillAt=Number(fill.lastFillAt);
+            }
+            item.terminal=FINAL.has(item.status)&&['FILLED','EXPIRED','CANCELED','CANCELLED','REJECTED'].includes(fill.status);
+            next.protection.health=protectionHealth(next);state=await save(state,next);continue;
+          }
+          item.accountingAppliedToSource=false;item.crossLifecycleEvidencePending=true;
+          next.protection.health='RECONCILIATION_PENDING';state=await save(state,next);continue;
+        }
         if(!fill||fill.exact!==true) {
           const e=fill?.orderEvidence;
           if(e&&String(e.orderId)===actual&&e.clientAlgoId===item.clientId&&e.symbol===next.position.symbol&&
@@ -99,6 +152,7 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
         item.terminal=FINAL.has(item.status)&&['FILLED','EXPIRED','CANCELED','CANCELLED','REJECTED'].includes(fill.status);
       } else item.terminal=FINAL.has(item.status)&&item.status!=='FINISHED';
       if(item.status==='NEW')item.status='ACTIVE';
+      next.protection.health=protectionHealth(next);
       state=await save(state,next);
     }
     return state;

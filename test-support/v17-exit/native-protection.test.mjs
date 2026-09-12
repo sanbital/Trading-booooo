@@ -75,6 +75,22 @@ test('triggered algo without reconciled fill never marks position closed',async(
  assert.equal((await f.api().ensure('position-1',f.request)).status,'RECONCILIATION_PENDING');
  assert.equal(f.state().position.remainingQuantity,10);
 });
+test('terminal rejection replaces a stale PROTECTED label with REJECTED',async()=>{
+ const f=fixture(),r=await f.api().ensure('position-1',f.request),o=f.orders.get(r.clientId);
+ o.algoStatus='REJECTED';await f.api().refresh('position-1');
+ assert.equal(f.state().protection.orders[0].terminal,true);assert.equal(f.state().protection.health,'REJECTED');
+ assert.equal(f.state().position.state,'OPEN');
+});
+test('a stop executing after its source lifecycle closed is quarantined, never charged to that source',async()=>{
+ const f=fixture(),r=await f.api().ensure('position-1',f.request),before=await f.store.load('position-1');
+ const closed=structuredClone(before);closed.position.state='CLOSED';closed.position.remainingQuantity=0;closed.position.realizedPnl=-3;
+ assert.equal(await f.store.compareAndSwap('position-1',before.version,closed),true);
+ const o=f.orders.get(r.clientId);o.algoStatus='FINISHED';o.actualOrderId='late-fill';o.quantity=7;
+ f.fills.set('late-fill',{exact:true,quantity:7,funds:679,fee:.35,lastFillAt:2000,status:'FILLED',tradeIds:['late-1']});
+ await f.api().refresh('position-1');const state=f.state(),journal=state.protection.orders[0];
+ assert.equal(state.position.realizedPnl,-3);assert.equal(journal.crossLifecycleExecution,true);
+ assert.equal(journal.accountingAppliedToSource,false);assert.equal(state.protection.health,'CROSS_LIFECYCLE_EXECUTION');
+});
 test('manual symbols and ownership drift are rejected even with an existing stop',async()=>{
  const f=fixture();await f.api().ensure('position-1',f.request);
  await assert.rejects(()=>f.api().ensure('position-1',{...f.request,manualSymbols:['FORMUSDT']}),/MANUAL_SYMBOL/);

@@ -12,6 +12,7 @@ import * as ops from '../../supabase/functions/_shared/leader-ops-isolation.mjs'
 import * as entrySettlement from '../../supabase/functions/_shared/leader-entry-settlement.mjs';
 import * as qv3 from '../../supabase/functions/_shared/leader-qv3-runtime.mjs';
 import * as settlement from '../../supabase/functions/_shared/leader-exit-settlement.mjs';
+import * as dbOnly from '../../supabase/functions/_shared/leader-db-only-reconciliation.mjs';
 export const BASE='bce9e95210829b5ae561f667dd1b499772977ec1';
 const root=new URL('../../',import.meta.url);
 const baselineDir=mkdtempSync(join(tmpdir(),'v18-baseline-'));
@@ -34,7 +35,7 @@ export function entryOrder(p){return {id:'order-'+p.id,signal_id:p.signal_id,pos
  exchange_order_id:p.metadata.entryOrderId,client_order_id:'entry-client-'+p.id,requested_quantity:p.original_quantity,
  request_payload:{order:{side:'BUY',position_side:'LONG',position_effect:'OPEN'}},created_at:p.entry_at,updated_at:p.entry_at};}
 export function harness({positions=[],baseline=false,circuit=false,manual=[],settings={},signal=true,now=Date.parse('2026-09-10T16:16:00Z'),hook=()=>{},qv3Cutover=null,qv3Fetch=null}={}) {
- const state={now,portfolioCount:0,lease:true,leaseOwner:null,quotes:{},stopFills:{},software:{},calls:[],writes:[],circuits:[],hook,
+ const state={now,portfolioCount:0,lease:true,leaseOwner:null,quotes:{},stopFills:{},software:{},tradeHistory:{},orderHistory:{},calls:[],writes:[],circuits:[],hook,
   exchange:positions.map(p=>({market:p.symbol,side:p.side,quantity:p.remaining_quantity})),
   tables:{v11_long_regime_positions:clone(positions),v11_long_regime_orders:positions.map(entryOrder),v11_long_regime_decisions:[],
    v11_long_regime_runtime:[{singleton:true,revision:'V11-LONG-REGIME-1.0.1',live_enabled:true,circuit_open:circuit,
@@ -44,6 +45,7 @@ export function harness({positions=[],baseline=false,circuit=false,manual=[],set
    trading_asset_locks:manual.map(x=>({exchange:'binance_futures',asset:x.symbol.replace(/USDT$/,''),state:'LOCKED',metadata:{v17ManualPosition:true,...x}})),
    v11_long_regime_signals:signal?[{id:'soph-signal',symbol:'SOPHUSDT',side:'LONG',status:'NEW',lane:'BULL',revision:'V11-LONG-REGIME-1.0.1',entry_bar_at:new Date(now-60000).toISOString(),features:{strategy:momentum.STRATEGY,rank:1,signal5Close:now-60000,referenceClose:.004,atr:.0001,exitPolicy:{stopPct:.025,trailArmPct:.05,trailGapPct:.0225,maxHoldMs:momentum.POLICY.maxHoldMs,staleMs:momentum.POLICY.staleMs}}}]:[],
    trading_account_snapshots:[{exchange:'binance_futures',captured_at:new Date(now).toISOString(),positions_complete:true,available_quote:108,positions:[]}],
+   exchange_trade_fills:[],v18_ops_incidents:circuit?[{id:'incident-1',generation:1,kind:'KNOWN_EXIT_PENDING_RECONCILIATION',reason:null,resolution_evidence:null}]:[],
   },incidents:new Map(),seq:0};
  // Inject the clock at the host/module boundary; no production algorithm is replaced.
  Date.now=()=>state.now;
@@ -70,10 +72,37 @@ export function harness({positions=[],baseline=false,circuit=false,manual=[],set
   if(name==='v17_acquire_execution_lease'){if(state.leaseOwner)return{data:false};state.leaseOwner=args.p_owner;return{data:state.lease};}
   if(name==='v17_release_execution_lease'){if(state.leaseOwner===args.p_owner)state.leaseOwner=null;return{data:true};}
   if(!state.lease)throw Error('V18_EXECUTION_FENCED');
+  if(name==='v18_closed_protection_backlog'){
+   const all=state.tables.v11_long_regime_positions.filter(p=>p.state==='CLOSED'&&(p.metadata?.exitAccountingPending===true||
+    p.metadata?.exitProtection?.orders?.some(o=>o.terminal!==true))).sort((a,b)=>String(a.updated_at).localeCompare(String(b.updated_at)));
+   return{data:{rows:clone(all.slice(0,args.p_limit)),complete:all.length<=args.p_limit}};
+  }
   const r=state.tables.v11_long_regime_runtime[0];
   if(name==='v18_record_incident'){
    if(!r.circuit_open||r.circuit_reason!==args.p_reason||r.incident_kind!==args.p_kind){r.incident_generation++;r.incident_id='incident-'+r.incident_generation;}
-   Object.assign(r,{circuit_open:true,circuit_reason:args.p_reason,incident_kind:args.p_kind});state.circuits.push(clone(r));return{data:r.incident_id};
+   Object.assign(r,{circuit_open:true,circuit_reason:args.p_reason,incident_kind:args.p_kind});
+   let incident=state.tables.v18_ops_incidents.find(x=>x.id===r.incident_id);
+   if(!incident){incident={id:r.incident_id,generation:r.incident_generation,kind:args.p_kind,reason:args.p_reason,resolution_evidence:null};state.tables.v18_ops_incidents.push(incident);}
+   else Object.assign(incident,{kind:args.p_kind,reason:args.p_reason});
+   state.circuits.push(clone(r));return{data:r.incident_id};
+  }
+  if(name==='v18_settle_db_only_exit'){
+   if(r.incident_id!==args.p_incident_id||r.incident_generation!==args.p_generation)return{data:{settled:false,reason:'INCIDENT_CAS_MISS'}};
+   const p=state.tables.v11_long_regime_positions.find(x=>x.id===args.p_position_id),e=args.p_evidence;
+   if(!p||p.state!=='OPEN'||p.updated_at!==e.targetUpdatedAt)return{data:{settled:false,reason:'POSITION_CAS_MISS'}};
+   const prior=Number(p.metadata.v18SettledPnl??p.realized_pnl_usdt),net=prior+Number(e.grossPnl)-Number(e.exitFee);
+   Object.assign(p,{state:'CLOSED',remaining_quantity:0,exit_price:e.exitPrice,closed_at:e.closedAt,
+    exit_reason:e.classification==='VERIFIED_STALE_NATIVE_STOP'?'STALE_NATIVE_STOP_CROSS_LIFECYCLE':'RECONCILED_EXIT',realized_pnl_usdt:net,updated_at:new Clock().toISOString()});
+   const recoveryEligible=e.classification!=='VERIFIED_EXTERNAL_OR_UNATTRIBUTED_CLOSE',evidenceKey=[e.classification,p.id,e.exchangeOrderId,JSON.stringify(e.tradeIds)].join(':');
+   p.metadata={...p.metadata,v18SettledPnl:net,exitAccountingPending:false,exitProtection:{...p.metadata.exitProtection,health:'POSITION_CLOSED'},
+    v18ExternalExit:{...e,status:'SETTLED',evidenceKey,incidentId:r.incident_id,generation:r.incident_generation,recoveryEligible,accountingComplete:true,strategyExit:recoveryEligible}};
+   for(const f of state.tables.exchange_trade_fills.filter(f=>String(f.exchange_order_id)===String(e.exchangeOrderId))){Object.assign(f,{v17_position_id:p.id,
+    v17_order_id:e.laneOrderId,client_order_id:e.clientOrderId,source:recoveryEligible?'AUTOMATED':'UNCLASSIFIED',accounting_status:'ACCOUNTED'});}
+   const source=state.tables.v11_long_regime_positions.find(x=>x.id===e.sourcePositionId);
+   if(source&&source.id!==p.id){const o=source.metadata.exitProtection.orders.find(x=>x.clientId===e.clientOrderId);Object.assign(o,{actualOrderId:e.exchangeOrderId,status:'FINISHED',terminal:true,crossLifecycleExecution:true,accountingAppliedToSource:false,crossLifecycleTargetPositionId:p.id});source.metadata.exitProtection.health='CROSS_LIFECYCLE_EXECUTION';}
+   const signal=state.tables.v11_long_regime_signals.find(x=>x.id===p.signal_id);if(signal)signal.status='CLOSED';
+   const incident=state.tables.v18_ops_incidents.find(x=>x.id===r.incident_id);incident.resolution_evidence={...(incident.resolution_evidence??{}),settlement:{status:'SETTLED',incidentId:r.incident_id,generation:r.incident_generation,positionId:p.id,recoveryEligible,accountingComplete:true,evidenceKey}};
+   return{data:{settled:true,positionId:p.id,classification:e.classification,recoveryEligible,realizedPnlUsdt:net}};
   }
   if(name==='v18_recovery_observation'){
    if(r.incident_id!==args.p_incident_id||r.incident_generation!==args.p_generation)return{data:{resolved:false,reason:'INCIDENT_CAS_MISS'}};
@@ -96,13 +125,15 @@ export function harness({positions=[],baseline=false,circuit=false,manual=[],set
    return{market:m,best_bid:state.quotes[m]??p.entry_price,best_ask:(state.quotes[m]??p.entry_price)*1.0001,timing:{requested_at_ms:state.now,received_at_ms:state.now}};});
   if(cmd.action==='quote')return state.entryQuote??{best_bid:.004,best_ask:.004001};
   if(cmd.action==='v17_query_stop'){
-   const p=state.tables.v11_long_regime_positions.find(p=>p.symbol===cmd.symbol),o=p.metadata.exitProtection.orders.find(o=>o.clientId===cmd.clientAlgoId);
-   const f=state.stopFills[cmd.symbol];return{...o.spec.params,algoId:'algo-'+o.clientId,algoStatus:f?'FINISHED':state.cancelled?.has(cmd.clientAlgoId)?'CANCELED':'NEW',actualOrderId:f?.orderId??null};
+   const p=state.tables.v11_long_regime_positions.find(p=>p.symbol===cmd.symbol&&p.metadata?.exitProtection?.orders?.some(o=>o.clientId===cmd.clientAlgoId)),o=p.metadata.exitProtection.orders.find(o=>o.clientId===cmd.clientAlgoId);
+   const f=state.stopFills[cmd.symbol];return{...o.spec.params,algoId:o.algoId??'algo-'+o.clientId,algoStatus:f?'FINISHED':state.cancelled?.has(cmd.clientAlgoId)?'CANCELED':'NEW',actualOrderId:f?.orderId??null};
   }
   if(cmd.action==='v17_stop_fill')return clone(state.stopFills[cmd.symbol]);
   if(cmd.action==='v17_create_stop')return{...cmd.params,algoId:'algo-'+cmd.params.clientAlgoId,algoStatus:'NEW'};
   if(cmd.action==='v17_cancel_stop'){(state.cancelled??=new Set()).add(cmd.clientAlgoId);return{};}
   if(cmd.action==='get_order'){const r=state.software[cmd.identifier];if(r instanceof Error)throw r;if(!r)throw Error('ORDER_READ_PENDING');return clone(r);}
+  if(cmd.action==='trade_history')return clone(state.tradeHistory[cmd.market]??[]);
+  if(cmd.action==='order_history')return clone(state.orderHistory[cmd.market]??[]);
   if(cmd.action==='create_order'){
    if(state.createOrder){return state.createOrder(cmd,state);}
    throw Error('UNEXPECTED_ORDER_DISPATCH:'+cmd.order.side);
@@ -114,7 +145,7 @@ export function harness({positions=[],baseline=false,circuit=false,manual=[],set
  source=source.replace(/^import .*;\n/gm,'').replace('const exchangeGateway=gateway;','const exchangeGateway=__gateway;');source=source.slice(0,source.indexOf('Deno.serve'));
  // Only exchange/DB/time boundaries are replaced. run/manage/open/close are actual source.
  source+='\ngateway=__gateway;this.runCycle=()=>runWithLease(__db);this.open=(...args)=>openBull(__db,...args);this.close=(...args)=>closePos(__db,...args);this.manage=(...args)=>manageLeader(__db,...args);this.setLease=()=>leaseOwners.set(__db,"test-owner");';
- const ctx={...momentum,...review,...ops,...settlement,...entrySettlement,...qv3,QV3_LIVE_CUTOVER:qv3Cutover,qv3Candles:(symbol,at,start)=>qv3.qv3Candles(symbol,at,start,qv3Fetch??(()=>{throw Error("NETWORK_FORBIDDEN")})),leaderPortfolioMatches:momentum.portfolioMatches,protectNewLeaderPosition,createGatewayProtection:baseline?baselineAdapter.createGatewayProtection:createGatewayProtection,
+ const ctx={...momentum,...review,...ops,...settlement,...entrySettlement,...dbOnly,...qv3,QV3_LIVE_CUTOVER:qv3Cutover,qv3Candles:(symbol,at,start)=>qv3.qv3Candles(symbol,at,start,qv3Fetch??(()=>{throw Error("NETWORK_FORBIDDEN")})),leaderPortfolioMatches:momentum.portfolioMatches,protectNewLeaderPosition,createGatewayProtection:baseline?baselineAdapter.createGatewayProtection:createGatewayProtection,
   Date:Clock,console,crypto,Map,Set,WeakMap,AbortController,TextEncoder,Response,Headers,fetch:()=>{throw Error('NETWORK_FORBIDDEN')},setTimeout,clearTimeout,
   Deno:{env:{get:k=>k==='V17_NATIVE_STOP'?'true':''}},__gateway:gateway,__db:db};
  vm.createContext(ctx);vm.runInContext(source,ctx);ctx.setLease();

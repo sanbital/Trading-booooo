@@ -1,0 +1,190 @@
+name: Deploy V18 DB-only reconciliation
+
+on:
+  push:
+    branches: [release/v18-db-only-reconciliation-1]
+    paths:
+      - ".github/workflows/deploy-v18-db-only-reconciliation-20260912.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-v10-lane-executor
+  cancel-in-progress: false
+
+jobs:
+  verify-migrate-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Prove the production basis and isolated diff
+        shell: bash
+        env:
+          PRODUCTION_BASIS: 98131bbfe3854545d07037e39fd52a3ce87a7ccd
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/release/v18-db-only-reconciliation-1
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^)" = "$PRODUCTION_BASIS"
+          count=0
+          while IFS= read -r path; do
+            case "$path" in
+              .github/workflows/deploy-v18-db-only-reconciliation-20260912.yml|\
+              supabase/functions/_shared/leader-db-only-reconciliation.mjs|\
+              supabase/functions/_shared/leader-native-protection.mjs|\
+              supabase/functions/_shared/leader-ops-isolation.mjs|\
+              supabase/functions/v10-lane-executor/index.ts|\
+              supabase/migrations/20260912085904_v18_db_only_reconciliation.sql|\
+              test-support/v17-exit/native-protection.test.mjs|\
+              test-support/v18-ops/chz-db-only-reconciliation.test.mjs|\
+              test-support/v18-ops/harness.mjs|\
+              test-support/v18-ops/postgres.test.mjs) ;;
+              *) echo "::error::Unexpected release path: $path"; exit 1 ;;
+            esac
+            count=$((count+1))
+          done < <(git diff --name-only "$PRODUCTION_BASIS" "$GITHUB_SHA")
+          test "$count" -eq 10
+          git diff --check "$PRODUCTION_BASIS" "$GITHUB_SHA"
+          git diff --exit-code "$PRODUCTION_BASIS" "$GITHUB_SHA" -- \
+            supabase/functions/_shared/leader-qv3-runtime.mjs \
+            supabase/functions/_shared/leader-qv3-rules.mjs
+          grep -Fq 'QV3_ENTRY_EXIT_TWO_1' supabase/functions/_shared/leader-qv3-runtime.mjs
+          grep -Fq 'const MARGIN=40,LEV=3' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'MAX_SLOTS=10' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'PATCH="V18-DB-ONLY-RECONCILIATION-1"' supabase/functions/v10-lane-executor/index.ts
+          if git diff --name-only "$PRODUCTION_BASIS" "$GITHUB_SHA" -- gateway | grep -q .; then
+            echo "::error::Gateway changes are outside this release"
+            exit 1
+          fi
+          mkdir -p release-evidence
+          git rev-parse HEAD > release-evidence/release-sha.txt
+          sha256sum \
+            supabase/functions/v10-lane-executor/index.ts \
+            supabase/functions/_shared/leader-db-only-reconciliation.mjs \
+            supabase/functions/_shared/leader-native-protection.mjs \
+            supabase/functions/_shared/leader-ops-isolation.mjs \
+            supabase/migrations/20260912085904_v18_db_only_reconciliation.sql \
+            > release-evidence/source-sha256.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run complete operational and strategy regression suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --prefix test-support/v18-ops --ignore-scripts
+          export PGLITE_MODULE="$PWD/test-support/v18-ops/node_modules/@electric-sql/pglite/dist/index.js"
+          node --test --test-reporter=tap \
+            test-support/v17-exit/*.test.mjs \
+            research/v18/*.test.mjs \
+            test-support/v18-ops/*.test.mjs \
+            gateway/*.test.mjs | tee release-evidence/tests.tap
+          node --check supabase/functions/v10-lane-executor/index.ts
+
+      - name: Type-check the deployable Edge Function graph
+        shell: bash
+        run: npm exec --yes --package=deno@2.5.6 -- deno check supabase/functions/v10-lane-executor/index.ts
+
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Validate production preconditions
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
+          test -n "${SUPABASE_DB_URL:-}"
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-before.json
+          python - <<'PY'
+          import json
+          rows=json.load(open('release-evidence/functions-before.json'))
+          if isinstance(rows,dict): rows=rows.get('functions',[])
+          row=next((x for x in rows if x.get('slug')=='v10-lane-executor'),None)
+          assert row and row.get('status')=='ACTIVE' and int(row.get('version'))==36
+          assert row.get('verify_jwt') is False
+          assert row.get('ezbr_sha256')=='7142356f821bfb76804d5c59f6b6ada8c99eecb6ae6b30bcad1c135e24718773'
+          PY
+          state="$(psql "$SUPABASE_DB_URL" -XAt -F '|' --set=ON_ERROR_STOP=1 -c \
+            "select (to_regprocedure('public.v18_settle_db_only_exit(uuid,uuid,bigint,uuid,jsonb)') is null)::text,count(*) from supabase_migrations.schema_migrations where version='20260912085904'")"
+          test "$state" = "true|0"
+          psql "$SUPABASE_DB_URL" -XAt -F '|' --set=ON_ERROR_STOP=1 -c \
+            "select entry_enabled,legacy_entries_retired,mode,pause_new_entries,withdrawal_mode,manual_intervention_required,scalp_kill_switch,emergency_liquidation,coalesce(pause_lock_reason,'') from public.v17_operator_control cross join public.trading_settings where singleton and id=1" \
+            > release-evidence/operator-before.txt
+
+      - name: Apply only the compatible reconciliation migration
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          {
+            sed '/^begin;$/d;/^commit;$/d' supabase/migrations/20260912085904_v18_db_only_reconciliation.sql
+            printf '%s\n' "insert into supabase_migrations.schema_migrations(version,name) values ('20260912085904','v18_db_only_reconciliation');"
+          } | psql "$SUPABASE_DB_URL" -X --set=ON_ERROR_STOP=1 --single-transaction --file=-
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select jsonb_build_object('migration_count',(select count(*) from supabase_migrations.schema_migrations where version='20260912085904'),'settlement_rpc',to_regprocedure('public.v18_settle_db_only_exit(uuid,uuid,bigint,uuid,jsonb)') is not null,'backlog_rpc',to_regprocedure('public.v18_closed_protection_backlog(integer)') is not null,'owner_trigger',exists(select 1 from pg_trigger where tgrelid='public.exchange_trade_fills'::regclass and tgname='zz_v18_reconciled_fill_owner' and not tgisinternal),'anon_execute',has_function_privilege('anon','public.v18_settle_db_only_exit(uuid,uuid,bigint,uuid,jsonb)','execute'))" \
+            > release-evidence/database-after.json
+          grep -Fq '"migration_count" : 1' release-evidence/database-after.json
+          grep -Fq '"settlement_rpc" : true' release-evidence/database-after.json
+          grep -Fq '"backlog_rpc" : true' release-evidence/database-after.json
+          grep -Fq '"owner_trigger" : true' release-evidence/database-after.json
+          grep -Fq '"anon_execute" : false' release-evidence/database-after.json
+
+      - name: Deploy v10-lane-executor only
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy v10-lane-executor \
+            --project-ref "$SUPABASE_PROJECT_REF" \
+            --no-verify-jwt \
+            --use-api
+
+      - name: Verify active production version and unchanged operator controls
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-after.json
+          python - <<'PY'
+          import json
+          rows=json.load(open('release-evidence/functions-after.json'))
+          if isinstance(rows,dict): rows=rows.get('functions',[])
+          row=next((x for x in rows if x.get('slug')=='v10-lane-executor'),None)
+          assert row and row.get('status')=='ACTIVE' and int(row.get('version'))==37
+          assert row.get('verify_jwt') is False
+          assert row.get('ezbr_sha256')!='7142356f821bfb76804d5c59f6b6ada8c99eecb6ae6b30bcad1c135e24718773'
+          PY
+          psql "$SUPABASE_DB_URL" -XAt -F '|' --set=ON_ERROR_STOP=1 -c \
+            "select entry_enabled,legacy_entries_retired,mode,pause_new_entries,withdrawal_mode,manual_intervention_required,scalp_kill_switch,emergency_liquidation,coalesce(pause_lock_reason,'') from public.v17_operator_control cross join public.trading_settings where singleton and id=1" \
+            > release-evidence/operator-after.txt
+          cmp release-evidence/operator-before.txt release-evidence/operator-after.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v18-db-only-reconciliation-release
+          path: release-evidence/
+          retention-days: 30

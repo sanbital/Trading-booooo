@@ -1,5 +1,5 @@
 /** Operational isolation only. No strategy parameters, startup or exchange side effects. */
-export const OPS_PATCH = 'V18-OPS-ISOLATION-3';
+export const OPS_PATCH = 'V18-DB-ONLY-RECONCILIATION-1';
 export const SCOPE = Object.freeze({exchange:'binance_futures',account_scope:'futures'});
 export const RECOVERABLE = new Set(['KNOWN_EXIT_PENDING_RECONCILIATION','KNOWN_ORDER_PENDING_RECONCILIATION','INCOMPLETE_OR_STALE_SNAPSHOT','TRANSIENT_DEPENDENCY','ACCOUNTING_DETAILS_PENDING','DB_CAS_CONFLICT']);
 export const sameQuantity = (a,b) => Number.isFinite(a)&&Number.isFinite(b)&&Math.abs(a-b)<=Math.max(1e-10,Math.abs(b)*1e-8);
@@ -89,11 +89,19 @@ export function operatorAllowsRecovery(rt,control,settings) {
     settings?.mode==='LIVE_LIMITED'&&!['pause_new_entries','withdrawal_mode','manual_intervention_required',
       'scalp_kill_switch','emergency_liquidation'].some(k=>settings[k]!==false)&&settings.pause_lock_reason==null;
 }
-export function recoveryEvidence({runtime,classification,orders,control,settings,protectedIds,now=Date.now()}) {
-  const eligible=runtime.circuit_open===true&&RECOVERABLE.has(runtime.incident_kind)&&runtime.incident_id&&
+export function recoveryEvidence({runtime,classification,orders,control,settings,protectedIds,incidentResolution=null,now=Date.now()}) {
+  // UNEXPLAINED_EXPOSURE is intentionally not generally recoverable.  Only the exact
+  // incident whose lease-fenced settlement stored verified bot/native evidence may
+  // enter the ordinary three-observation recovery gate.
+  const settled=incidentResolution?.settlement;
+  const explained=runtime?.incident_kind==='UNEXPLAINED_EXPOSURE'&&settled?.status==='SETTLED'&&
+    settled?.recoveryEligible===true&&settled?.incidentId===runtime?.incident_id&&
+    Number(settled?.generation)===Number(runtime?.incident_generation)&&settled?.accountingComplete===true;
+  const eligible=runtime.circuit_open===true&&(RECOVERABLE.has(runtime.incident_kind)||explained)&&runtime.incident_id&&
     classification.ok&&operatorAllowsRecovery(runtime,control,settings)&&riskOrders(orders).length===0&&
     classification.safe.every(p=>protectedIds.has(p.id));
   return {eligible:!!eligible,incidentId:runtime.incident_id,generation:runtime.incident_generation,
+    reconciledIncident:explained===true,
     observation:classification.snapshot,checkedAt:now,
     positions:classification.safe.map(p=>({id:p.id,updated_at:p.updated_at,quantity:p.remaining_quantity}))};
 }

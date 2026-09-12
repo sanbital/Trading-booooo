@@ -7,8 +7,9 @@ import {createGatewayProtection} from "../_shared/leader-protection-adapter.mjs"
 import {classifyPortfolio, freshPortfolio, ownedEntry, riskOrders, classifyFailure, operatorAllowsRecovery, recoveryEvidence, confirmedLiveProtection, createBudget, boundedMap} from "../_shared/leader-ops-isolation.mjs";
 import {entryReceipt,entryExposureMatches} from "../_shared/leader-entry-settlement.mjs";
 import {applyExitReceipt} from "../_shared/leader-exit-settlement.mjs";
+import {analyzeDbOnlyExit} from "../_shared/leader-db-only-reconciliation.mjs";
 import {QV3_ACTIVATION_BASIS,QV3_LIVE_CUTOVER,QV3_VERSION,qv3Entry,qv3Exit,qv3Scope,qv3Stamp,qv3Candles} from "../_shared/leader-qv3-runtime.mjs";
-const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V18-OPS-ISOLATION-3",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
+const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V18-DB-ONLY-RECONCILIATION-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 // Bounded so a bar of refusals cannot stretch the run past the one-minute cadence.
 const ENTRY_ATTEMPTS_PER_RUN=3;
 // Pre-dispatch refusals scoped to one symbol. Never includes STOP_POLICY_INVALID or
@@ -261,7 +262,7 @@ async function readOpsPair(db,gw=opsGateway(db)) {
 function opsGateway(db){return scopedGateway(db,cycleBudgets.get(db)??createBudget({ms:55000,calls:160}));}
 function scopedGateway(db,budget) {
   return async(cmd,timeout=20000)=>{
-    const cycle=cycleBudgets.get(db),cost=cmd.action==="v17_stop_fill"?3:cmd.action==="v18_open_orders"?2:1;
+    const cycle=cycleBudgets.get(db),cost=cmd.action==="v17_stop_fill"?3:["v18_open_orders","trade_history","order_history"].includes(cmd.action)?2:1;
     const left=Math.min(budget.take(cost),cycle&&cycle!==budget?cycle.take(cost):Infinity);
     await verifyExecutionLease(db);
     const write=["create_order","v17_create_stop","v17_cancel_stop"].includes(cmd.action);
@@ -269,6 +270,56 @@ function scopedGateway(db,budget) {
     await verifyExecutionLease(db);return result;
   };
 }
+async function readClosedProtectionBacklog(db,limit=100) {
+  const r=await db.rpc("v18_closed_protection_backlog",{p_limit:limit});
+  if(r.error)throw Error("CLOSED_PROTECTION_READ");
+  if(!Array.isArray(r.data?.rows)||typeof r.data?.complete!=="boolean")throw Error("CLOSED_PROTECTION_RESPONSE");
+  return {rows:r.data.rows,complete:r.data.complete};
+}
+async function reconcileDbOnlyPosition(db,p,gw) {
+  const start=new Date(Date.parse(p.entry_at)-5000).toISOString(),startMs=Date.parse(start),endMs=Date.now();
+  const [fills,lifecycles,laneOrders,accountTrades,orderHistory,portfolio,openOrders]=await Promise.all([
+    db.from("exchange_trade_fills").select("exchange,account_scope,market,exchange_trade_id,exchange_order_id,client_order_id,side,price,quantity,quote_amount,fee_quote_amount,realized_pnl_quote,accounting_status,executed_at,v17_order_id,v17_position_id,source")
+      .eq("exchange","binance_futures").eq("account_scope","futures").eq("market",p.symbol).eq("side","SELL")
+      .gte("executed_at",start).order("executed_at",{ascending:true}).limit(1001),
+    db.from("v11_long_regime_positions").select("*").eq("symbol",p.symbol).order("entry_at",{ascending:true}).limit(101),
+    db.from("v11_long_regime_orders").select("*").eq("position_id",p.id).order("created_at",{ascending:true}).limit(101),
+    gw({action:"trade_history",market:p.symbol,limit:1000},5000),
+    gw({action:"order_history",market:p.symbol,start_time:startMs,end_time:endMs,limit:1000},5000),
+    gw({action:"p10_portfolio"},5000),gw({action:"v18_open_orders"},5000)
+  ]);
+  if(fills.error||lifecycles.error||laneOrders.error)throw Error("DB_ONLY_EVIDENCE_READ");
+  const trades=Array.isArray(accountTrades)?accountTrades:[],orders=Array.isArray(orderHistory)?orderHistory:[];
+  const after=trades.filter(x=>x?.isBuyer===false&&Number(x?.time)>Date.parse(p.entry_at));
+  const ids=[...new Set(after.map(x=>String(x?.orderId??"")).filter(Boolean))];
+  const exact=ids.length===1?orders.find(x=>String(x?.orderId??"")===ids[0]):null;
+  let algo=null;
+  if(exact?.clientOrderId){
+    const owners=(lifecycles.data??[]).flatMap(position=>(position.metadata?.exitProtection?.orders??[])
+      .filter(o=>String(o?.clientId??o?.spec?.params?.clientAlgoId??"")===String(exact.clientOrderId)).map(order=>({position,order})));
+    if(owners.length===1){
+      try{algo=await gw({action:"v17_query_stop",symbol:p.symbol,clientAlgoId:String(exact.clientOrderId)},5000);}
+      catch(e){return {outcome:"UNRESOLVED",inspectionPerformed:true,evidenceSecured:false,quantityResolved:false,
+        attributionComplete:false,accountingComplete:false,reason:`NATIVE_ALGO_QUERY:${String(e.message??e)}`};}
+    }
+  }
+  const complete=(fills.data??[]).length<1001&&(lifecycles.data??[]).length<101&&(laneOrders.data??[]).length<101;
+  const proof=analyzeDbOnlyExit({position:p,lifecyclePositions:lifecycles.data,laneOrders:laneOrders.data,
+    ledgerFills:fills.data,accountTrades:trades,orderHistory:orders,algo,portfolio,openOrders,
+    tradeHistoryComplete:complete&&trades.length<1000,orderHistoryComplete:complete&&orders.length<1000});
+  if(!proof.settlementPermitted)return proof;
+  const controls=await opsControls(db);
+  await verifyExecutionLease(db);
+  const settled=await db.rpc("v18_settle_db_only_exit",{p_owner:leaseOwners.get(db),
+    p_incident_id:controls.runtime.incident_id,p_generation:controls.runtime.incident_generation,
+    p_position_id:p.id,p_evidence:proof.evidence});
+  if(settled.error)throw Error(`DB_ONLY_SETTLEMENT:${settled.error.message}`);
+  if(settled.data?.settled!==true)return {...proof,outcome:"UNRESOLVED",accountingComplete:false,
+    reason:settled.data?.reason??"SETTLEMENT_REJECTED"};
+  return {...proof,outcome:"RESOLVED",accountingComplete:true,settlement:sortedRecord(settled.data),
+    executedQuantity:proof.evidence.quantity};
+}
+function sortedRecord(x){return rec(x);}
 async function recordMismatch(db,match) {
   if(match.ok)return;
   const recoverable=match.issues.every(x=>x.kind==="QUANTITY_MISMATCH"&&x.knownExitPending||["KNOWN_EXIT_PENDING_RECONCILIATION","INCOMPLETE_OR_STALE_SNAPSHOT","UNKNOWN_ORDER_OUTCOME"].includes(x.kind)&& (x.kind!=="UNKNOWN_ORDER_OUTCOME"||x.orderId));
@@ -279,24 +330,47 @@ async function reconcileOps(db,pair,budget=createBudget({ms:8000,calls:18})) {
   const gw=scopedGateway(db,budget),results=[];
   // Management has already had its turn. Work only three oldest affected items per cycle.
   const ids=new Set(pair.match.issues.map(i=>i.positionId).filter(Boolean));
-  const closedPending=await db.from("v11_long_regime_positions").select("*").eq("state","CLOSED")
-    .eq("metadata->>exitAccountingPending","true").order("updated_at",{ascending:true}).limit(3);
-  if(closedPending.error)throw Error("PENDING_ACCOUNTING_READ");
-  const candidates=[...pair.positions.filter(p=>ids.has(p.id)),...(closedPending.data??[])].sort((a,b)=>Date.parse(a.metadata?.v18ReconcileAt??a.updated_at)-Date.parse(b.metadata?.v18ReconcileAt??b.updated_at)).slice(0,3);
-  for(const p of candidates){
+  const closedPending=await readClosedProtectionBacklog(db);
+  const byAge=(a,b)=>Date.parse(a.metadata?.v18ReconcileAt??a.updated_at)-Date.parse(b.metadata?.v18ReconcileAt??b.updated_at),
+    affected=pair.positions.filter(p=>ids.has(p.id)).sort(byAge),closed=closedPending.rows.sort(byAge);
+  // An observed live mismatch gets the first turn; closed-stop cleanup uses the
+  // remaining bounded slots and cannot starve the incident that raised the circuit.
+  const candidates=[...affected.slice(0,2),...closed.slice(0,Math.max(0,3-Math.min(2,affected.length)))];
+  for(const candidate of candidates){
     if(budget.remaining()<500)break;
     try{
+      let p=candidate;
       // Persist progress/fairness with CAS before any exchange read; failure never changes exposure.
       await verifyExecutionLease(db);
       const touched=await db.from("v11_long_regime_positions").update({metadata:{...p.metadata,v18ReconcileAt:new Date().toISOString()},updated_at:new Date(Math.max(Date.now(),Date.parse(p.updated_at)+1)).toISOString()}).eq("id",p.id).eq("updated_at",p.updated_at).select("*").maybeSingle();
       if(touched.error||!touched.data)throw Error("RECONCILE_CAS_CONFLICT");
-      if((p.metadata?.exitProtection?.orders??[]).some(o=>!o.terminal)){
-        const refreshed=await createGatewayProtection(db,gw,()=>verifyExecutionLease(db)).refresh(p.id);
-        if(refreshed.position.remainingQuantity<N(p.remaining_quantity))results.push({positionId:p.id,executedQuantity:N(p.remaining_quantity)-refreshed.position.remainingQuantity});
-        if(refreshed.protection.orders.some(o=>!o.terminal&&(o.lastQueryError||o.accountingPending)))throw Error("NATIVE_RECONCILIATION_PENDING");
+      p=touched.data;
+      if((p.metadata?.exitProtection?.orders??[]).length){
+        const manager=createGatewayProtection(db,gw,()=>verifyExecutionLease(db));
+        const refreshed=p.state==="CLOSED"?await manager.ensure(p.id,{stopPrice:1,priceTick:1,quantityStep:1,
+          exchangeQuantity:0,positionMode:"ONE_WAY",manualSymbols:[]}):await manager.refresh(p.id);
+        const state=refreshed.state??refreshed;
+        if(state.position.remainingQuantity<N(p.remaining_quantity))results.push({positionId:p.id,outcome:"RESOLVED",
+          inspectionPerformed:true,evidenceSecured:true,quantityResolved:true,attributionComplete:true,
+          accountingComplete:state.position.accountingPending!==true,executedQuantity:N(p.remaining_quantity)-state.position.remainingQuantity});
+        if(state.protection.orders.some(o=>!o.terminal&&(o.lastQueryError||o.accountingPending)))throw Error("NATIVE_RECONCILIATION_PENDING");
+        if(p.state!=="CLOSED"&&state.position.state==="CLOSED")continue;
+        if(p.state==="CLOSED"){
+          const done=state.protection.orders.every(o=>o.terminal===true);
+          results.push({positionId:p.id,operation:"CLOSED_PROTECTION_CLEANUP",outcome:done?"RESOLVED":"UNRESOLVED",
+            inspectionPerformed:true,evidenceSecured:done,quantityResolved:true,attributionComplete:true,
+            accountingComplete:true,protectionHealth:state.protection.health});
+          continue;
+        }
+        const latest=await db.from("v11_long_regime_positions").select("*").eq("id",p.id).single();
+        if(latest.error||!latest.data)throw Error("RECONCILE_POSITION_REFRESH");p=latest.data;
       }
-      results.push({positionId:p.id,checked:true});
-    }catch(e){if(classifyFailure(e).fatal)throw e;results.push({positionId:p.id,error:String(e.message??e)});}
+      const issue=pair.match.issues.find(i=>i.positionId===p.id);
+      if(issue?.kind==="DB_ONLY_POSITION"||issue?.kind==="KNOWN_EXIT_PENDING_RECONCILIATION"||issue?.kind==="QUANTITY_MISMATCH")
+        results.push({positionId:p.id,...await reconcileDbOnlyPosition(db,p,gw)});
+      else results.push({positionId:p.id,outcome:"UNRESOLVED",inspectionPerformed:true,evidenceSecured:false,
+        quantityResolved:false,attributionComplete:false,accountingComplete:false,reason:"NO_SETTLEMENT_EVIDENCE_PATH"});
+    }catch(e){if(classifyFailure(e).fatal)throw e;results.push({positionId:candidate.id,error:String(e.message??e)});}
   }
   for(const o of pair.orders.filter(o=>["PLANNED","DISPATCHED","RECONCILIATION_PENDING","RECONCILIATION_FAILED"].includes(o.state)).slice(0,3)){
     if(budget.remaining()<500)break;
@@ -308,12 +382,14 @@ async function reconcileOps(db,pair,budget=createBudget({ms:8000,calls:18})) {
       if(o.intent==="OPEN_LONG") {
         const pos=await settleKnownEntry(db,o,raw,gw);
         if(pos?.state==="OPEN")await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position:pos,manualSymbols:pair.manual.map(x=>x.symbol),readPortfolio:()=>gw({action:"p10_portfolio"}),manage:ctx=>manageLeader(db,pos,{...ctx,gateway:gw})});
-        results.push({orderId:o.id,settled:true});continue;
+        results.push({orderId:o.id,outcome:"RESOLVED",inspectionPerformed:true,evidenceSecured:true,
+          quantityResolved:true,attributionComplete:true,accountingComplete:true,settled:true});continue;
       }
       const row=await db.from("v11_long_regime_positions").select("*").eq("id",o.position_id).single();
       if(row.error||!row.data)throw Error("RECONCILE_POSITION_READ");
       await applyExitReceipt(db,row.data,o,raw,await gw({action:"p10_portfolio"}),{verifyLease:()=>verifyExecutionLease(db)});
-      results.push({orderId:o.id,settled:true});
+      results.push({orderId:o.id,outcome:"RESOLVED",inspectionPerformed:true,evidenceSecured:true,
+        quantityResolved:true,attributionComplete:true,accountingComplete:true,settled:true});
     }catch(e){if(classifyFailure(e).fatal)throw e;results.push({orderId:o.id,error:String(e.message??e)});}
   }
   return results;
@@ -335,7 +411,13 @@ async function opsControls(db) {
   return {runtime:runtime.data,control:control.data,settings:settings.data};
 }
 async function attemptOpsRecovery(db,pair,protectedIds) {
-  const c=await opsControls(db),evidence=recoveryEvidence({...c,classification:pair.match,orders:pair.orders,protectedIds});
+  const c=await opsControls(db);
+  let incidentResolution=null;
+  if(c.runtime.incident_id){
+    const ir=await db.from("v18_ops_incidents").select("id,generation,resolution_evidence").eq("id",c.runtime.incident_id).maybeSingle();
+    if(ir.error)throw Error("INCIDENT_EVIDENCE_READ");incidentResolution=ir.data?.resolution_evidence??null;
+  }
+  const evidence=recoveryEvidence({...c,classification:pair.match,orders:pair.orders,protectedIds,incidentResolution});
   if(!evidence.eligible)return {resolved:false,reason:"EVIDENCE_INCOMPLETE"};
   // The gateway independently fetches all ordinary AND algo orders; ACTIVE owned stops
   // are allowed. Unknown entry/close/algo orders are not a clean recovery observation.
@@ -371,7 +453,9 @@ async function run(db) {
       // Revalidate ownership and actual residual immediately before each position's work.
       const check=await readOpsPair(db,gw),fresh=check.match.safe.find(x=>x.id===p.id);
       if(!fresh)return {id:p.id,symbol:p.symbol,skipped:"OWNERSHIP_CHANGED"};
-      const action=await manageBull(db,fresh,{route:"MOMENTUM"},{gateway:gw,manualSymbols:check.manual.map(x=>x.symbol),exchangeQuantity:new Map([[p.symbol,N(fresh.remaining_quantity)]]),quoteRetryBudget:{remaining:1}});
+      const action=await manageBull(db,fresh,{route:"MOMENTUM"},{gateway:gw,
+        cleanupGateway:scopedGateway(db,createBudget({ms:7000,calls:10})),manualSymbols:check.manual.map(x=>x.symbol),
+        exchangeQuantity:new Map([[p.symbol,N(fresh.remaining_quantity)]]),quoteRetryBudget:{remaining:1}});
       if(action.nativeStop?.status==="PROTECTED")protectedIds.add(p.id);
       return {id:p.id,symbol:p.symbol,action};
     });
@@ -384,6 +468,9 @@ async function run(db) {
     pendingAge=Math.max(0,...pair.orders.filter(o=>["PLANNED","DISPATCHED","RECONCILIATION_PENDING","RECONCILIATION_FAILED"].includes(o.state)).map(o=>(Date.now()-Date.parse(o.created_at))/1000),...pair.match.issues.filter(i=>i.positionId).map(i=>(Date.now()-Date.parse(pair.positions.find(p=>p.id===i.positionId)?.last_evaluated_at))/1000));
     reconciliation=await reconcileOps(db,pair);
     pair=await readOpsPair(db);
+    health=managed.some(x=>x.error||x.skipped)?"DEGRADED":!pair.match.ok?"DEGRADED":pair.positions.length===0?"FLAT":
+      pair.positions.every(p=>protectedIds.has(p.id)||(p.metadata?.exitProtection?.health==="PROTECTED"&&
+        (p.metadata?.exitProtection?.orders??[]).some(o=>o.terminal!==true&&["ACTIVE","NEW"].includes(o.status))))?"PROTECTED":"SOFTWARE_ONLY";
     await recordMismatch(db,pair.match);
     if(managed.some(x=>x.error))entry.reason="POSITION_MANAGEMENT_DEGRADED";
     else if(NATIVE_STOP_ENABLED&&pair.positions.length&&health!=="PROTECTED")entry.reason="PROTECTION_DEGRADED";
@@ -393,7 +480,11 @@ async function run(db) {
       const controls=await opsControls(db);
       if(controls.runtime.circuit_open)entry.reason="CIRCUIT_OPEN_MANAGEMENT_ACTIVE";
       else if(!operatorAllowsRecovery(controls.runtime,controls.control,controls.settings))entry.reason="OPERATOR_ENTRY_BLOCK";
-      else {entry=await runEntryQueue(db,pair.positions,pair.manual);entryEvaluationCompleted=true;}
+      else {
+        const backlog=await readClosedProtectionBacklog(db,1000);
+        entry=await runEntryQueue(db,pair.positions,pair.manual,new Set(backlog.rows.map(p=>String(p.symbol).toUpperCase())),backlog.complete);
+        entryEvaluationCompleted=true;
+      }
     }
     return {ok:true,revision:REVISION,patch:PATCH,qv3Runtime:{version:QV3_VERSION,basis:QV3_ACTIVATION_BASIS,
       activation:QV3_LIVE_CUTOVER,active:Number.isSafeInteger(QV3_LIVE_CUTOVER)&&Date.now()>=QV3_LIVE_CUTOVER},
@@ -412,19 +503,22 @@ async function run(db) {
         patch.last_success_at=now;patch.last_error=null;
       }else if(fatal){patch.last_error=String(fatal.message??fatal).slice(0,500);}
       if(managed.length&&managed.every(x=>x.action&&!x.error&&!x.skipped)&&["PROTECTED","FLAT"].includes(health))patch.last_management_success_at=now;
-      if(reconciliation.length&&reconciliation.every(x=>!x.error))patch.last_reconciliation_success_at=now;
+      if(reconciliation.some(x=>x.outcome==="RESOLVED"&&x.evidenceSecured===true&&x.quantityResolved===true&&
+          x.attributionComplete===true&&x.accountingComplete===true)&&reconciliation.every(x=>!x.error&&x.outcome!=="UNRESOLVED"))
+        patch.last_reconciliation_success_at=now;
       if(entry.entered)patch.last_entry_at=now;
       if(managed.some(x=>x.action?.result?.executedQuantity>0||x.action?.result?.nativeReconciled)||reconciliation.some(x=>x.executedQuantity>0))patch.last_exit_at=now;
       const wr=await db.from("v11_long_regime_runtime").update(patch).eq("singleton",true);if(wr.error)throw Error("HEARTBEAT_WRITE");
     }
   }
 }
-async function runEntryQueue(db,openNow,manual) {
+async function runEntryQueue(db,openNow,manual,blockedSymbols=new Set(),backlogComplete=true) {
   let entry={entered:false,reason:"V17_NO_ENTRY"};
+  if(!backlogComplete)return{entered:false,reason:"CLOSED_PROTECTION_BACKLOG_INCOMPLETE"};
   if(openNow.length>=MAX_SLOTS)return{entered:false,reason:"V11_SLOT_FULL"};
   const since=new Date(Date.now()-SIGNAL_MAX).toISOString(),sg=await db.from("v11_long_regime_signals").select("*").eq("revision",REVISION).eq("status","NEW").eq("lane","BULL").eq("features->>strategy",STRATEGY).gte("entry_bar_at",since).order("entry_bar_at",{ascending:false}).limit(10);
   if(sg.error)throw Error(`SIGNALS:${sg.error.message}`);
-const openSymbols=new Set(openNow.map(x=>String(x.symbol).toUpperCase()));const queue=(sg.data||[]).filter(x=>!openSymbols.has(String(x.symbol).toUpperCase())).sort((a,b)=>Date.parse(b.entry_bar_at)-Date.parse(a.entry_bar_at)||N(rec(a.features).rank,999)-N(rec(b.features).rank,999));if(!queue.length)entry={entered:false,reason:"NO_FRESH_BULL_SIGNAL"};for(const s of queue.slice(0,ENTRY_ATTEMPTS_PER_RUN)){const cl=await db.from("v11_long_regime_signals").update({status:"CLAIMED",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","NEW").select("*").maybeSingle();if(cl.error)throw new Error(`CLAIM:${cl.error.message}`);if(!cl.data){entry={entered:false,reason:"CLAIM_RACE"};continue}const attempt={dispatched:false};try{entry=await openBull(db,cl.data,openNow,manual,attempt);if(entry?.releaseClaim===true){await db.from("v11_long_regime_signals").update({status:"NEW",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","CLAIMED");break}if(entry?.entered===true)break;}catch(e){const msg=e instanceof Error?e.message:String(e),pending=await db.from("v11_long_regime_orders").select("id").eq("signal_id",s.id).eq("state","RECONCILIATION_FAILED").limit(1);if(!pending.data?.length)await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",s.id);if(attempt.dispatched)throw e;if(!ENTRY_SKIP_SYMBOL_SCOPED.test(msg))throw e;entry={entered:false,reason:msg};}}
+const openSymbols=new Set(openNow.map(x=>String(x.symbol).toUpperCase())),closedProtectionSymbols=typeof blockedSymbols==="undefined"?new Set():blockedSymbols,eligible=(sg.data||[]).filter(x=>!openSymbols.has(String(x.symbol).toUpperCase())),queue=eligible.filter(x=>!closedProtectionSymbols.has(String(x.symbol).toUpperCase())).sort((a,b)=>Date.parse(b.entry_bar_at)-Date.parse(a.entry_bar_at)||N(rec(a.features).rank,999)-N(rec(b.features).rank,999));if(!queue.length)entry={entered:false,reason:eligible.length?"STALE_PROTECTION_SYMBOL_LOCKED":"NO_FRESH_BULL_SIGNAL"};for(const s of queue.slice(0,ENTRY_ATTEMPTS_PER_RUN)){const cl=await db.from("v11_long_regime_signals").update({status:"CLAIMED",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","NEW").select("*").maybeSingle();if(cl.error)throw new Error(`CLAIM:${cl.error.message}`);if(!cl.data){entry={entered:false,reason:"CLAIM_RACE"};continue}const attempt={dispatched:false};try{entry=await openBull(db,cl.data,openNow,manual,attempt);if(entry?.releaseClaim===true){await db.from("v11_long_regime_signals").update({status:"NEW",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","CLAIMED");break}if(entry?.entered===true)break;}catch(e){const msg=e instanceof Error?e.message:String(e),pending=await db.from("v11_long_regime_orders").select("id").eq("signal_id",s.id).eq("state","RECONCILIATION_FAILED").limit(1);if(!pending.data?.length)await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",s.id);if(attempt.dispatched)throw e;if(!ENTRY_SKIP_SYMBOL_SCOPED.test(msg))throw e;entry={entered:false,reason:msg};}}
 return entry;
 }
 
@@ -514,10 +608,15 @@ async function manageLeader(db,p,ctx){
     const exchangeQuantity=ctx?.exchangeQuantity?.get(String(p.symbol).toUpperCase());
     if(!(exchangeQuantity>0)&&reason!=="CLOSE")return {status:"NO_EXCHANGE_QUANTITY"};
     try{
-      const info=await gateway({action:"symbol_info",market:p.symbol},5000);
-      const out=await createGatewayProtection(db,gateway,()=>verifyExecutionLease(db))
+      // Closing is followed by a small, dedicated cleanup allowance.  It still shares
+      // the cycle lease/fence, but cannot be starved by the position's quote/QV3 budget.
+      // No symbol-info read is needed once the position is closed; ensure() only
+      // refreshes and cancels the exact remembered stop identity.
+      const cleanup=reason==="CLOSE"?(ctx?.cleanupGateway??gateway):gateway;
+      const info=reason==="CLOSE"?{price_tick:1,quantity_step:1}:await cleanup({action:"symbol_info",market:p.symbol},5000);
+      const out=await createGatewayProtection(db,cleanup,()=>verifyExecutionLease(db))
         .ensure(p.id,{stopPrice:state.stopPrice,priceTick:N(info?.price_tick??info?.tick_size),
-          quantityStep:N(info?.quantity_step??info?.step_size),exchangeQuantity,
+          quantityStep:N(info?.quantity_step??info?.step_size),exchangeQuantity:exchangeQuantity??0,
           positionMode:"ONE_WAY",manualSymbols:ctx?.manualSymbols??[],lastPrice:bid});
       const ackAt=Math.max(0,...(out.state?.protection?.orders??[]).filter(o=>!o.terminal).map(o=>Number(o.lastQueryAt??o.ackAt??0)));
       return {status:out.status,softwareMonitorRequired:out.softwareMonitorRequired===true,stopAcknowledgementAgeMs:ackAt?Math.max(0,Date.now()-ackAt):null};
