@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
+import {readFileSync} from 'node:fs';
 import {analyzeDbOnlyExit} from '../../supabase/functions/_shared/leader-db-only-reconciliation.mjs';
 import {harness,position} from './harness.mjs';
 
@@ -117,7 +118,13 @@ test('14 incomplete/stale account evidence cannot become a successful reconcilia
   assert.equal(analyze(f,{portfolio:stale}).reason,'FRESH_FLAT_UNPROVEN');
   assert.equal(analyze(f,{tradeHistoryComplete:false}).reason,'HISTORY_INCOMPLETE');
 });
-test('15 QV3 implementation and rules are byte-identical to the production-v36 basis',()=>{
-  const cwd=new URL('../../',import.meta.url);execFileSync('git',['diff','--exit-code','98131bbfe3854545d07037e39fd52a3ce87a7ccd','--',
-    'supabase/functions/_shared/leader-qv3-runtime.mjs','supabase/functions/_shared/leader-qv3-rules.mjs'],{cwd});
+test('15 QV3 policy rules and exit decision remain byte-identical; V20 adds audit evidence only',()=>{
+  const cwd=new URL('../../',import.meta.url),basis='98131bbfe3854545d07037e39fd52a3ce87a7ccd';
+  execFileSync('git',['diff','--exit-code',basis,'--','supabase/functions/_shared/leader-qv3-rules.mjs'],{cwd});
+  const current=readFileSync(new URL('../../supabase/functions/_shared/leader-qv3-runtime.mjs',import.meta.url),'utf8');
+  const prior=execFileSync('git',['show',`${basis}:supabase/functions/_shared/leader-qv3-runtime.mjs`],{cwd,encoding:'utf8'});
+  const exitDecision=source=>source.slice(source.indexOf('export function qv3Exit('),source.indexOf('/** Public GET only.',source.indexOf('export function qv3Exit(')));
+  assert.equal(exitDecision(current),exitDecision(prior));
+  assert.match(current,/QV3_INPUT_EVIDENCE_VERSION='QV3_INPUT_EVIDENCE_1'/);
+  assert.match(current,/export function qv3AuditEvidence\(/);
 });

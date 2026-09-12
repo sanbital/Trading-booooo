@@ -1,6 +1,7 @@
 import {entryGate,exitSignal} from './leader-qv3-rules.mjs';
 export const QV3_VERSION='QV3_ENTRY_EXIT_TWO_1';
 export const QV3_VARIANT='ENTRY_EXIT_TWO';
+export const QV3_INPUT_EVIDENCE_VERSION='QV3_INPUT_EVIDENCE_1';
 // The research protocol remains DEFER. This fixed cutover records the operator's
 // explicit live override; no environment or HTTP request can move it.
 export const QV3_ACTIVATION_BASIS='OPERATOR_OVERRIDE_PROTOCOL_DEFER_20260911';
@@ -44,6 +45,32 @@ export function qv3Scope(p,activation){
   return p.ownership==='AUTO'&&p.side==='LONG'&&p.state==='OPEN'&&
     Number.isSafeInteger(activation)&&s?.version===QV3_VERSION&&s.basis===QV3_ACTIVATION_BASIS&&s.activation===activation&&
     s.entryAt===p.entryAt&&p.entryAt>=activation&&Number.isFinite(p.entryPrice)&&p.entryPrice>0;
+}
+/**
+ * Capture the exact two most recent completed rows from the already-fetched QV3
+ * market response. This function is audit-only: it performs no fetch, never mutates
+ * the input, and always returns a serializable value instead of affecting a decision.
+ */
+export function qv3AuditEvidence(bars,now,through=null,requestedAt=null){
+  const empty={version:QV3_INPUT_EVIDENCE_VERSION,source:'BINANCE_FAPI_PUBLIC_1M_KLINES_LIVE_RESPONSE',
+    status:'INVALID_INPUT',requestedAtMs:Number.isSafeInteger(requestedAt)?requestedAt:null,
+    responseParsedAtMs:Number.isSafeInteger(now)?now:null,evaluatedAtMs:Number.isSafeInteger(now)?now:null,
+    requestToEvaluationMs:Number.isSafeInteger(requestedAt)&&Number.isSafeInteger(now)&&now>=requestedAt?now-requestedAt:null,
+    through:Number.isSafeInteger(through)?through:null,
+    responseRows:Array.isArray(bars)?bars.length:null,validCompletedRows:0,invalidRows:0,tail:[]};
+  try{
+    if(!Array.isArray(bars)||!Number.isSafeInteger(now))return empty;
+    const cutoff=Number.isSafeInteger(through)?through:Math.floor(now/MINUTE)*MINUTE-1;
+    const completed=[];let invalidRows=0;
+    for(const row of bars){
+      if(!validCandle(row)){invalidRows++;continue;}
+      if(Number(row[6])>cutoff)continue;
+      completed.push({openTimeMs:Number(row[0]),open:String(row[1]),high:String(row[2]),low:String(row[3]),
+        close:String(row[4]),volume:String(row[5]),closeTimeMs:Number(row[6])});
+    }
+    completed.sort((a,b)=>a.openTimeMs-b.openTimeMs);
+    return {...empty,status:'CAPTURED',through:cutoff,validCompletedRows:completed.length,invalidRows,tail:completed.slice(-2)};
+  }catch{return {...empty,status:'CAPTURE_FAILED'};}
 }
 /** State contains an observed completed candle, not a peak/high or a leveraged return.
  * A restart validates that proof against this position; it never trusts a bare boolean.

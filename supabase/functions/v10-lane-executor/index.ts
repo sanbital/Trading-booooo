@@ -9,8 +9,8 @@ import {entryReceipt,entryExposureMatches} from "../_shared/leader-entry-settlem
 import {applyExitReceipt} from "../_shared/leader-exit-settlement.mjs";
 import {analyzeDbOnlyExit} from "../_shared/leader-db-only-reconciliation.mjs";
 import {ENTRY_CONTROL_VERSION,CONTROL_SCOPE,evaluateEntryDecision,symbolRecoveryEvidence} from "../_shared/leader-entry-control.mjs";
-import {QV3_ACTIVATION_BASIS,QV3_LIVE_CUTOVER,QV3_VERSION,qv3Entry,qv3Exit,qv3Scope,qv3Stamp,qv3Candles} from "../_shared/leader-qv3-runtime.mjs";
-const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V19-SCOPE-AWARE-ENTRY-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
+import {QV3_ACTIVATION_BASIS,QV3_LIVE_CUTOVER,QV3_VERSION,qv3Entry,qv3Exit,qv3Scope,qv3Stamp,qv3Candles,qv3AuditEvidence} from "../_shared/leader-qv3-runtime.mjs";
+const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V20-QV3-EVIDENCE-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 // Bounded so a bar of refusals cannot stretch the run past the one-minute cadence.
 const ENTRY_ATTEMPTS_PER_RUN=3;
 // Pre-dispatch refusals scoped to one symbol. Never includes STOP_POLICY_INVALID or
@@ -806,16 +806,17 @@ async function qv3AfterProtection(db,p,ctx){
     if(!qv3Scope(shape(p),QV3_LIVE_CUTOVER)||!ownedEntry(p,await readOpsOrders(db,[p])))return {reason:"QV3_PRESERVE_OWNERSHIP_CHANGED"};
     const at=Date.now(),prior=rec(p.metadata).qv3State;
     const start=prior?.favorableCandle?Math.floor(at/60000)*60000-120000:Math.ceil(Date.parse(p.entry_at)/60000)*60000;
-    const bars=await qv3Candles(p.symbol,at,start);
-    const assessment=qv3Exit(shape(p),bars,Date.now(),prior);
-    if(!assessment.available)return assessment;
+    const bars=await qv3Candles(p.symbol,at,start),evaluatedAt=Date.now();
+    const assessment=qv3Exit(shape(p),bars,evaluatedAt,prior);
+    const auditedAssessment={...assessment,inputEvidence:qv3AuditEvidence(bars,evaluatedAt,assessment.through,at)};
+    if(!assessment.available)return auditedAssessment;
     await verifyExecutionLease(db);
     const saved=await db.from("v11_long_regime_positions").update({metadata:{...rec(p.metadata),qv3State:assessment.state},
       updated_at:new Date(Math.max(Date.now(),Date.parse(p.updated_at)+1)).toISOString()})
       .eq("id",p.id).eq("state","OPEN").eq("updated_at",p.updated_at).select("*").maybeSingle();
     if(saved.error||!saved.data)throw Error("QV3_STATE_CAS_CONFLICT");
-    if(assessment.wouldClose){closeAttempted=true;return {assessment,result:await closePos(db,saved.data,1,"QV3_TWO_BEARISH_CLOSED",ctx)};}
-    return assessment;
+    if(assessment.wouldClose){closeAttempted=true;return {assessment:auditedAssessment,result:await closePos(db,saved.data,1,"QV3_TWO_BEARISH_CLOSED",ctx)};}
+    return auditedAssessment;
   }catch(e){
     if(closeAttempted||classifyFailure(e).fatal)throw e;
     return {available:false,reason:String(e.message??e),executionEnabled:false};

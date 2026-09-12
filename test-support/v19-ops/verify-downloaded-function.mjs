@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
 import {readdirSync,readFileSync,statSync} from 'node:fs';
 import {join,relative,resolve,sep} from 'node:path';
 
 const downloadRoot=resolve(process.argv[2]??'');
 const repositoryRoot=resolve(process.argv[3]??'.');
+const expectedRef=process.argv[4]??null;
 assert.ok(process.argv[2], 'download root is required');
 
 const expected=[
@@ -37,7 +39,10 @@ for(const suffix of expected){
   const normalized=suffix.split('/').join(sep),matches=files.filter(path=>path.endsWith(normalized));
   assert.equal(matches.length,1,`expected one downloaded ${suffix}, got ${matches.length}`);
   const local=join(repositoryRoot,'supabase',suffix);
-  assert.deepEqual(readFileSync(matches[0]),readFileSync(local),`production source mismatch: ${suffix}`);
+  const expectedBytes=expectedRef
+    ?execFileSync('git',['show',`${expectedRef}:supabase/${suffix}`],{cwd:repositoryRoot})
+    :readFileSync(local);
+  assert.deepEqual(readFileSync(matches[0]),expectedBytes,`production source mismatch: ${suffix}`);
   compared.push({source:suffix,downloaded:relative(downloadRoot,matches[0])});
 }
-console.log(JSON.stringify({verified:true,fileCount:compared.length,files:compared},null,2));
+console.log(JSON.stringify({verified:true,fileCount:compared.length,expectedRef,files:compared},null,2));
