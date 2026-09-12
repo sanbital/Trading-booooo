@@ -22,6 +22,10 @@ test('actual manage/close/settlement integration of two bearish candles; no dupl
  const h=harness({positions:[pos()],now,signal:false,qv3Cutover:base,qv3Fetch:data});h.state.quotes.SAGAUSDT=100.3;fillOrder(h);
  const r=await h.ctx.runCycle();assert.equal(r.qv3Runtime.active,true);assert.equal(r.managed[0].action.reason,'QV3_TWO_BEARISH_CLOSED');
  assert.equal(h.state.tables.v11_long_regime_positions[0].state,'CLOSED');
+ const audit=h.state.tables.v11_long_regime_decisions.find(row=>row.reason==='QV3_TWO_BEARISH_CLOSED');
+ assert.equal(audit.details.executorPatch,'V20-QV3-EVIDENCE-1');assert.equal(audit.details.qv3.inputEvidence.status,'CAPTURED');
+ assert.deepEqual(audit.details.qv3.inputEvidence.tail.map(row=>row.openTimeMs),[base+60000,base+120000]);
+ assert.equal(Object.hasOwn(h.state.tables.v11_long_regime_positions[0].metadata.qv3State,'inputEvidence'),false);
  await h.ctx.runCycle();assert.equal(h.state.calls.filter(x=>x.action==='create_order'&&x.order.side==='SELL').length,1);
 });
 test('existing unstamped positions keep baseline even with prospective cutover',async()=>{

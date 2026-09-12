@@ -1,0 +1,351 @@
+# Behavior-neutral release: persist the exact live QV3 candle tail used by each
+# assessment. Strategy QV3_ENTRY_EXIT_TWO_1 and every order/risk control stay fixed.
+name: Deploy V20 QV3 audit evidence
+
+on:
+  push:
+    branches: [release/v20-qv3-evidence-1]
+    paths:
+      - ".github/workflows/deploy-v20-qv3-evidence-20260912.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: deploy-v10-lane-executor
+  cancel-in-progress: false
+
+jobs:
+  verify-deploy-observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prove production basis and behavior-neutral scope
+        shell: bash
+        env:
+          PRODUCTION_BASIS: d5424b54ca25dff364cde96692f7bf9abdc6f77b
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/release/v20-qv3-evidence-1
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$PRODUCTION_BASIS" "$GITHUB_SHA"
+          git diff --check "$PRODUCTION_BASIS" "$GITHUB_SHA"
+          while IFS= read -r path; do
+            case "$path" in
+              .github/workflows/deploy-v20-qv3-evidence-20260912.yml|\
+              research/qv3/evidence-regression.test.mjs|\
+              research/qv3/integration.test.mjs|\
+              research/qv3/runtime.test.mjs|\
+              supabase/functions/_shared/leader-qv3-runtime.mjs|\
+              supabase/functions/v10-lane-executor/index.ts|\
+              test-support/v18-ops/db-only-reconciliation.test.mjs|\
+              test-support/v19-ops/scope-aware-entry-control.test.mjs|\
+              test-support/v19-ops/verify-downloaded-function.mjs) ;;
+              *) echo "::error::Unexpected release path: $path"; exit 1 ;;
+            esac
+          done < <(git diff --name-only "$PRODUCTION_BASIS" "$GITHUB_SHA")
+          git diff --exit-code "$PRODUCTION_BASIS" "$GITHUB_SHA" -- \
+            gateway \
+            supabase/migrations \
+            supabase/functions/v10-lane-signal-generator \
+            supabase/functions/_shared/leader-momentum-v17.mjs \
+            supabase/functions/_shared/leader-exit-review.mjs \
+            supabase/functions/_shared/leader-entry-protection.mjs \
+            supabase/functions/_shared/leader-protection-adapter.mjs \
+            supabase/functions/_shared/leader-ops-isolation.mjs \
+            supabase/functions/_shared/leader-native-protection.mjs \
+            supabase/functions/_shared/leader-entry-settlement.mjs \
+            supabase/functions/_shared/leader-exit-settlement.mjs \
+            supabase/functions/_shared/leader-db-only-reconciliation.mjs \
+            supabase/functions/_shared/leader-entry-control.mjs \
+            supabase/functions/_shared/leader-fill-evidence.mjs \
+            supabase/functions/_shared/leader-qv3-rules.mjs
+          grep -Fq "export const QV3_VERSION='QV3_ENTRY_EXIT_TWO_1'" supabase/functions/_shared/leader-qv3-runtime.mjs
+          grep -Fq "export const QV3_INPUT_EVIDENCE_VERSION='QV3_INPUT_EVIDENCE_1'" supabase/functions/_shared/leader-qv3-runtime.mjs
+          grep -Fq 'PATCH="V20-QV3-EVIDENCE-1"' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq "export const ENTRY_CONTROL_VERSION='V19-SCOPE-AWARE-ENTRY-1'" supabase/functions/_shared/leader-entry-control.mjs
+          grep -Fq "policyVersion: 'V17_EXIT_R5_TAIL'" supabase/functions/_shared/leader-exit-review.mjs
+          if rg -n 'C1_UNARMED|C2_FRESH_BID|C3_C1_PLUS_C2' \
+            supabase/functions/v10-lane-executor supabase/functions/_shared; then
+            echo "::error::Rejected strategy candidate reached deployable source"
+            exit 1
+          fi
+          if rg -ni 'chzusdt|\bchz\b' supabase/functions/v10-lane-executor supabase/functions/_shared/leader-qv3-runtime.mjs; then
+            echo "::error::Release logic must remain symbol-agnostic"
+            exit 1
+          fi
+          mkdir -p release-evidence
+          git rev-parse HEAD > release-evidence/release-sha.txt
+          git diff --name-status "$PRODUCTION_BASIS" "$GITHUB_SHA" > release-evidence/changed-files.txt
+          git diff "$PRODUCTION_BASIS" "$GITHUB_SHA" -- \
+            supabase/functions/v10-lane-executor/index.ts \
+            supabase/functions/_shared/leader-qv3-runtime.mjs > release-evidence/runtime.diff
+          sha256sum \
+            supabase/functions/v10-lane-executor/index.ts \
+            supabase/functions/_shared/leader-{momentum-v17,exit-review,entry-protection,protection-adapter,ops-isolation,native-protection,entry-settlement,exit-settlement,db-only-reconciliation,entry-control,fill-evidence,qv3-runtime,qv3-rules}.mjs \
+            > release-evidence/source-sha256.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run complete operational, DB, strategy and gateway regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --prefix test-support/v18-ops --ignore-scripts
+          export PGLITE_MODULE="$PWD/test-support/v18-ops/node_modules/@electric-sql/pglite/dist/index.js"
+          node --test --test-reporter=tap \
+            docs/version-runtime.test.mjs \
+            gateway/*.test.mjs \
+            research/qv3/*.test.mjs \
+            research/v18/*.test.mjs \
+            test-support/v17-exit/*.test.mjs \
+            test-support/v18-ops/*.test.mjs \
+            test-support/v19-ops/*.test.mjs | tee release-evidence/tests.tap
+          grep -q '^# tests 395$' release-evidence/tests.tap
+          grep -q '^# pass 395$' release-evidence/tests.tap
+          grep -q '^# fail 0$' release-evidence/tests.tap
+          node --check supabase/functions/v10-lane-executor/index.ts
+          node --check supabase/functions/_shared/leader-qv3-runtime.mjs
+          node --check test-support/v19-ops/verify-downloaded-function.mjs
+
+      - name: Type-check the exact deployable Edge Function graph
+        shell: bash
+        run: npm exec --yes --package=deno@2.5.6 -- deno check supabase/functions/v10-lane-executor/index.ts
+
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Validate exact production v38 and capture controls
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
+          test -n "${SUPABASE_DB_URL:-}"
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-before.json
+          python - <<'PY'
+          import json
+          rows=json.load(open('release-evidence/functions-before.json'))
+          rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
+          row=next(x for x in rows if x.get('slug')=='v10-lane-executor')
+          assert row.get('status')=='ACTIVE' and row.get('verify_jwt') is False
+          assert int(row['version'])==38
+          assert row.get('ezbr_sha256')=='1935db015d2d527718c3abfca9dac57e0fb99b16b7fb23b81ea4236552d9d547'
+          PY
+          mkdir -p release-evidence/production-v38-source
+          supabase functions download v10-lane-executor \
+            --project-ref "$SUPABASE_PROJECT_REF" --use-api \
+            --workdir "$PWD/release-evidence/production-v38-source"
+          node test-support/v19-ops/verify-downloaded-function.mjs \
+            release-evidence/production-v38-source . d5424b54ca25dff364cde96692f7bf9abdc6f77b \
+            > release-evidence/production-v38-source-verification.json
+          psql "$SUPABASE_DB_URL" -XAt -F '|' --set=ON_ERROR_STOP=1 -c \
+            "select entry_enabled,legacy_entries_retired,mode,pause_new_entries,withdrawal_mode,manual_intervention_required,scalp_kill_switch,emergency_liquidation,coalesce(pause_lock_reason,''),binance_futures_allocation_usdt from public.v17_operator_control cross join public.trading_settings where singleton and id=1" \
+            > release-evidence/operator-before.txt
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(jsonb_agg(jsonb_build_object('id',id,'hard_stop_price',hard_stop_price,'entry_at',entry_at,'exit_policy',metadata->>'leaderExitPolicyVersion','qv3',metadata->'qv3','qv3_state',metadata->'qv3State') order by entry_at),'[]'::jsonb) from public.v11_long_regime_positions where state='OPEN'" \
+            > release-evidence/open-positions-before.json
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select jsonb_build_object('observed_at',clock_timestamp(),'runtime',to_jsonb(r),'pending_orders',(select count(*) from public.v11_long_regime_orders where state in ('PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED')),'active_incidents',(select count(*) from public.v18_ops_incidents where status in ('OPEN','VERIFYING'))) from public.v11_long_regime_runtime r where singleton" \
+            > release-evidence/runtime-before.json
+
+      - name: Recheck serialization and deploy v10-lane-executor only
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-immediate-predeploy.json
+          python - <<'PY'
+          import json
+          def one(path):
+              rows=json.load(open(path)); rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
+              return next(x for x in rows if x.get('slug')=='v10-lane-executor')
+          before=one('release-evidence/functions-before.json')
+          current=one('release-evidence/functions-immediate-predeploy.json')
+          assert current.get('status')=='ACTIVE' and current.get('verify_jwt') is False
+          assert int(current['version'])==int(before['version']) and current.get('ezbr_sha256')==before.get('ezbr_sha256'), 'concurrent function deployment detected'
+          PY
+          supabase functions deploy v10-lane-executor \
+            --project-ref "$SUPABASE_PROJECT_REF" \
+            --no-verify-jwt \
+            --use-api
+
+      - name: Verify production v39 source and preserved controls
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-after.json
+          python - <<'PY'
+          import json
+          def one(path):
+              rows=json.load(open(path)); rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
+              return next(x for x in rows if x.get('slug')=='v10-lane-executor')
+          before=one('release-evidence/functions-before.json'); after=one('release-evidence/functions-after.json')
+          assert after.get('status')=='ACTIVE' and after.get('verify_jwt') is False
+          assert int(after['version'])==39 and int(after['version'])==int(before['version'])+1
+          assert after.get('ezbr_sha256')!=before.get('ezbr_sha256')
+          assert isinstance(after.get('ezbr_sha256'),str) and len(after['ezbr_sha256'])==64
+          open('release-evidence/production-version.txt','w').write(str(after['version'])+'\n')
+          open('release-evidence/production-hash.txt','w').write(after['ezbr_sha256']+'\n')
+          PY
+          mkdir -p release-evidence/production-v39-source
+          supabase functions download v10-lane-executor \
+            --project-ref "$SUPABASE_PROJECT_REF" --use-api \
+            --workdir "$PWD/release-evidence/production-v39-source"
+          node test-support/v19-ops/verify-downloaded-function.mjs \
+            release-evidence/production-v39-source . > release-evidence/production-v39-source-verification.json
+          psql "$SUPABASE_DB_URL" -XAt -F '|' --set=ON_ERROR_STOP=1 -c \
+            "select entry_enabled,legacy_entries_retired,mode,pause_new_entries,withdrawal_mode,manual_intervention_required,scalp_kill_switch,emergency_liquidation,coalesce(pause_lock_reason,''),binance_futures_allocation_usdt from public.v17_operator_control cross join public.trading_settings where singleton and id=1" \
+            > release-evidence/operator-after.txt
+          cmp release-evidence/operator-before.txt release-evidence/operator-after.txt
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c 'select clock_timestamp()' > release-evidence/deployed-at.txt
+
+      - name: Observe three genuine scheduler cycles
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import datetime,json,os,subprocess,time
+          deployed_at=open('release-evidence/deployed-at.txt').read().strip()
+          datetime.datetime.fromisoformat(deployed_at)
+          deployed_literal="'"+deployed_at.replace("'","''")+"'::timestamptz"
+          query=r"""
+          select jsonb_build_object(
+            'observed_at',clock_timestamp(),
+            'cycle_started_at',r.last_cycle_started_at,
+            'cycle_completed_at',r.last_cycle_completed_at,
+            'cycle_ms',round(extract(epoch from (r.last_cycle_completed_at-r.last_cycle_started_at))*1000),
+            'eligible',r.last_cycle_started_at>__DEPLOYED_AT__ and r.last_cycle_completed_at>=r.last_cycle_started_at,
+            'entry_block_reason',r.entry_block_reason,
+            'protection_health',r.protection_health,
+            'circuit_open',r.circuit_open,
+            'incident_generation',r.incident_generation,
+            'incident_kind',r.incident_kind,
+            'open_position_count',(select count(*) from public.v11_long_regime_positions where state='OPEN'),
+            'protected_open_count',(select count(*) from public.v11_long_regime_positions where state='OPEN' and metadata->'exitProtection'->>'health' in ('PROTECTED','SOFTWARE_ONLY')),
+            'new_signal_count',(select count(*) from public.v11_long_regime_signals where created_at>=__DEPLOYED_AT__),
+            'new_decision_count',(select count(*) from public.v11_long_regime_decisions where decided_at>=__DEPLOYED_AT__),
+            'qv3_evidence_count',(select count(*) from public.v11_long_regime_decisions where decided_at>=__DEPLOYED_AT__ and details->'qv3'->'inputEvidence'->>'version'='QV3_INPUT_EVIDENCE_1'),
+            'new_order_count',(select count(*) from public.v11_long_regime_orders where created_at>=__DEPLOYED_AT__),
+            'new_fill_count',(select count(*) from public.exchange_trade_fills where executed_at>=__DEPLOYED_AT__),
+            'pending_order_count',(select count(*) from public.v11_long_regime_orders where state in ('PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED')),
+            'duplicate_active_client_ids',(select count(*) from (select client_order_id from public.v11_long_regime_orders where state in ('PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED') and client_order_id is not null group by client_order_id having count(*)>1) duplicate_ids),
+            'active_symbol_quarantine_count',(select count(*) from public.v18_ops_incidents where control_scope='SYMBOL_QUARANTINE' and status in ('OPEN','VERIFYING')),
+            'active_account_incident_count',(select count(*) from public.v18_ops_incidents where control_scope in ('ACCOUNT_ENTRY_HOLD','ACCOUNT_RISK_BLOCK') and status in ('OPEN','VERIFYING')),
+            'api_budget_exhaustion_count',(
+              (select count(*) from public.v18_ops_incidents where opened_at>=__DEPLOYED_AT__ and reason like '%V18_API_BUDGET_EXHAUSTED%')+
+              (select count(*) from public.v11_long_regime_decisions where decided_at>=__DEPLOYED_AT__ and details::text like '%V18_API_BUDGET_EXHAUSTED%')),
+            'latest_signals',(select coalesce(jsonb_agg(x),'[]'::jsonb) from (select id,symbol,signal_bar_at,entry_bar_at,status,reject_reason,features->>'strategy' strategy from public.v11_long_regime_signals where created_at>=__DEPLOYED_AT__ order by created_at desc limit 5) x),
+            'latest_decisions',(select coalesce(jsonb_agg(x),'[]'::jsonb) from (select id,position_id,decided_at,action,reason,details->>'executorPatch' executor_patch,details->'qv3'->'inputEvidence'->>'status' qv3_evidence_status from public.v11_long_regime_decisions where decided_at>=__DEPLOYED_AT__ order by decided_at desc limit 5) x)
+          ) from public.v11_long_regime_runtime r where singleton;
+          """.replace('__DEPLOYED_AT__',deployed_literal)
+          def read_state():
+              command=['psql',os.environ['SUPABASE_DB_URL'],'-XAt','--set=ON_ERROR_STOP=1','-c',query]
+              return json.loads(subprocess.check_output(command,text=True).strip())
+          seen=set(); observations=[]; deadline=time.time()+300
+          while time.time()<deadline and len(observations)<3:
+              state=read_state(); completed=state.get('cycle_completed_at')
+              if state.get('eligible') and completed and completed not in seen:
+                  assert state.get('cycle_ms') is not None and 0<=state['cycle_ms']<=60000, state
+                  assert state.get('duplicate_active_client_ids')==0, state
+                  assert state.get('api_budget_exhaustion_count')==0, state
+                  assert state.get('protection_health') in ('FLAT','PROTECTED','SOFTWARE_ONLY','DEGRADED'), state
+                  seen.add(completed); observations.append(state)
+              if len(observations)<3: time.sleep(10)
+          with open('release-evidence/post-deploy-cycles.jsonl','w') as file:
+              for row in observations: file.write(json.dumps(row,sort_keys=True)+'\n')
+          assert len(observations)==3, f'only {len(observations)} post-deploy cycles observed'
+          summary={'cycle_count':3,'first':observations[0]['cycle_completed_at'],'last':observations[-1]['cycle_completed_at'],
+                   'cycle_ms':[row['cycle_ms'] for row in observations],
+                   'final_entry_block_reason':observations[-1]['entry_block_reason'],
+                   'final_protection_health':observations[-1]['protection_health'],
+                   'new_signal_count':observations[-1]['new_signal_count'],
+                   'new_decision_count':observations[-1]['new_decision_count'],
+                   'qv3_evidence_count':observations[-1]['qv3_evidence_count'],
+                   'new_order_count':observations[-1]['new_order_count'],
+                   'new_fill_count':observations[-1]['new_fill_count'],
+                   'api_budget_exhaustion_count':observations[-1]['api_budget_exhaustion_count'],
+                   'final_circuit_open':observations[-1]['circuit_open']}
+          open('release-evidence/post-deploy-summary.json','w').write(json.dumps(summary,indent=2,sort_keys=True)+'\n')
+          print(json.dumps(summary,sort_keys=True))
+          PY
+
+      - name: Verify position policy preservation and any genuine executions
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          deployed_at="$(cat release-evidence/deployed-at.txt)"
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -v deployed_at="$deployed_at" -c \
+            "select coalesce(jsonb_agg(jsonb_build_object('position_id',p.id,'symbol',p.symbol,'signal_id',p.signal_id,'entry_at',p.entry_at,'state',p.state,'entry_order_id',p.metadata->>'entryOrderId','exit_order_id',p.metadata->>'lastExitOrderId','exit_policy',p.metadata->>'leaderExitPolicyVersion','qv3_policy',p.metadata->'qv3'->>'version','executor_patch',p.metadata->>'executorPatch','protection_health',p.metadata->'exitProtection'->>'health','fills',(select coalesce(jsonb_agg(jsonb_build_object('trade_id',f.exchange_trade_id,'order_id',f.exchange_order_id,'side',f.side,'quantity',f.quantity,'price',f.price,'executed_at',f.executed_at,'accounting_status',f.accounting_status) order by f.executed_at),'[]'::jsonb) from public.exchange_trade_fills f where f.v17_position_id=p.id)) order by p.entry_at),'[]'::jsonb) from public.v11_long_regime_positions p where p.entry_at>=:'deployed_at'::timestamptz" \
+            > release-evidence/genuine-executions.json
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(jsonb_agg(jsonb_build_object('id',id,'hard_stop_price',hard_stop_price,'entry_at',entry_at,'exit_policy',metadata->>'leaderExitPolicyVersion','qv3',metadata->'qv3','qv3_state',metadata->'qv3State') order by entry_at),'[]'::jsonb) from public.v11_long_regime_positions where state='OPEN'" \
+            > release-evidence/open-positions-after.json
+          python - <<'PY'
+          import json
+          before={row['id']:row for row in json.load(open('release-evidence/open-positions-before.json'))}
+          after={row['id']:row for row in json.load(open('release-evidence/open-positions-after.json'))}
+          for pid,old in before.items():
+              new=after.get(pid)
+              if new is None: continue
+              assert new['entry_at']==old['entry_at'] and new['exit_policy']==old['exit_policy'] and new['qv3']==old['qv3']
+              assert float(new['hard_stop_price'])+1e-12>=float(old['hard_stop_price'])
+              assert 'inputEvidence' not in (new.get('qv3_state') or {})
+          PY
+
+      - name: Confirm production source stayed fixed during observation
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-final.json
+          python - <<'PY'
+          import json
+          def one(path):
+              rows=json.load(open(path)); rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
+              return next(x for x in rows if x.get('slug')=='v10-lane-executor')
+          after=one('release-evidence/functions-after.json'); final=one('release-evidence/functions-final.json')
+          assert int(final['version'])==int(after['version']) and final.get('ezbr_sha256')==after.get('ezbr_sha256'), 'production source changed during observation'
+          PY
+          mkdir -p release-evidence/final-production-source
+          supabase functions download v10-lane-executor \
+            --project-ref "$SUPABASE_PROJECT_REF" --use-api \
+            --workdir "$PWD/release-evidence/final-production-source"
+          node test-support/v19-ops/verify-downloaded-function.mjs \
+            release-evidence/final-production-source . > release-evidence/final-source-verification.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v20-qv3-audit-evidence-release
+          path: release-evidence/
+          retention-days: 30
