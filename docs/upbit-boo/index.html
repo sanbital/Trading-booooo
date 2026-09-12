@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+  <title>Upbit Boo AI Trader Dashboard</title>
+</head>
+<body>
+<script>
+(async () => {
+  const source = await fetch('./source-index.html', { cache: 'no-store' });
+  if (!source.ok) throw new Error(`dashboard snapshot load failed: ${source.status}`);
+  let html = await source.text();
+  html = html
+    .replaceAll('https://etaajwpernzrcdrifdnw.supabase.co', 'https://yjhwsfmvtonnhdsfkary.supabase.co')
+    .replace('<title>Trading-booooo AI Trader Dashboard</title>', '<title>Upbit Boo AI Trader Dashboard</title>')
+    .replace('</body>', '<script src="./upbit-identity.js" defer><\/script></body>');
+  document.open();
+  document.write(html);
+  document.close();
+})().catch((error) => {
+  document.body.innerHTML = `<pre style="white-space:pre-wrap;font-family:system-ui;padding:24px">Upbit Boo dashboard failed to load.\n${String(error?.message || error)}</pre>`;
+});
+</script>
+</body>
+</html>
