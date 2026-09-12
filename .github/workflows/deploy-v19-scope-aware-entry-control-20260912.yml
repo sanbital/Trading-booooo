@@ -1,3 +1,4 @@
+# Release trigger: V19 scope-aware entry control.
 name: Deploy V19 scope-aware entry control
 
 on:
