@@ -1,0 +1,181 @@
+{
+  "lock": "V20_LOSS_PRESERVATION_CANDIDATES_20260912",
+  "locked_at_utc": "2026-09-12T13:31:56Z",
+  "outcome_access_state": "DEVELOPMENT_LEDGER_AGGREGATES_SEEN;_CANDIDATE_REPLAY_NOT_RUN;_VALIDATION_CANDIDATE_OUTCOMES_NOT_OPENED",
+  "production_baseline": {
+    "release_commit": "d5424b54ca25dff364cde96692f7bf9abdc6f77b",
+    "function": "v10-lane-executor",
+    "function_version": 38,
+    "bundle_sha256": "1935db015d2d527718c3abfca9dac57e0fb99b16b7fb23b81ea4236552d9d547",
+    "patch": "V19-SCOPE-AWARE-ENTRY-1",
+    "strategy": "QV3_ENTRY_EXIT_TWO_1",
+    "initial_stop_price_return": -0.025,
+    "risk_cut_arm_mfe": 0.01,
+    "risk_cut_price_return": -0.012,
+    "risk_cut_deadline_ms": 600000,
+    "profit_lock_arm_mfe": 0.02,
+    "trail_arm_mfe": 0.03
+  },
+  "sealed_inputs": {
+    "evidence_workflow_run_id": 34695837055,
+    "evidence_artifact_sha256": "29e03a6d7949cc6d4828ce04c6bdc7783d95b7d14e75c71208b57b2851ec8df7",
+    "evidence_protocol_sha256": "830a005527eb6972e84f24fa878482aa811863b69b607caf17840c273d8493ab",
+    "analysis_protocol_sha256": "830a005527eb6972e84f24fa878482aa811863b69b607caf17840c273d8493ab",
+    "development_expected_trades": 80,
+    "validation_expected_trades": 46,
+    "validation_status": "PARTIALLY_OBSERVED_BEFORE_LOCK: aggregate outcomes and selected examples were already known; candidate outcomes remain unopened"
+  },
+  "common_definitions": {
+    "direction": "LONG_ONLY",
+    "ownership": "AUTO_ONLY",
+    "completed_candle": "Binance 1m candle with close_time_ms < evaluation_at_ms; valid OHLC; exact contiguous minute; duplicates or gaps make the candidate unavailable",
+    "first_post_entry_minute": "ceil(entry_at_ms / 60000) * 60000",
+    "baseline_favorable_close": "a completed post-entry 1m close strictly greater than entry_price * 1.002",
+    "bearish_two": "the latest two contiguous completed post-entry 1m candles both close below open and the second close is strictly below the first close",
+    "unavailable_action": "PRESERVE_BASELINE",
+    "position_policy": "only positions stamped at entry with a future adopted strategy version could use an adopted rule; existing OPEN positions retain their entry-time policy",
+    "no_mutation": "no candidate may lower an existing stop, reset peak/partial state, bypass ownership, lease, fencing, circuit, scope, quantity, native-stop generation, settlement, or idempotency guards"
+  },
+  "candidates": [
+    {
+      "id": "C1_UNARMED_TWO_BEARISH_BELOW_ENTRY",
+      "kind": "EXIT_POLICY",
+      "problem": "losses that never form QV3's favorable-close proof can fall through to the initial hard stop",
+      "available_information": [
+        "entry price and entry timestamp",
+        "validated completed 1m OHLC candles available at evaluation time",
+        "persisted QV3 favorable-close proof"
+      ],
+      "transition": "While QV3 remains unarmed, close when bearish_two is true and both candle closes are strictly below entry price. Do not close on one candle, a gap, a duplicate, an incomplete candle, or any pre-entry candle.",
+      "difference_from_baseline": "Baseline requires a favorable completed close above +0.2% before the same two-bearish structure can close. C1 covers only the unarmed failure state and adds the both-below-entry constraint.",
+      "expected_side_effect": "normal two-minute pullbacks below entry may be exited before recovery",
+      "winner_preservation_target": "no existing winner becomes a modeled loser and at least 90% of actual large-winner net value is retained"
+    },
+    {
+      "id": "C2_FRESH_BID_ARM_TWO_BEARISH",
+      "kind": "EXIT_POLICY",
+      "problem": "an executable favorable bid can occur without a completed candle close, leaving QV3 unarmed before a reversal",
+      "available_information": [
+        "entry price and entry timestamp",
+        "current executable bid already read by the position manager",
+        "quote request, receive, exchange-book, and detection timestamps",
+        "validated completed 1m OHLC candles"
+      ],
+      "fresh_bid_proof": {
+        "price": "bid strictly greater than entry_price * 1.002",
+        "quote_round_trip_ms": "0 through 1000 inclusive",
+        "exchange_book_age_at_detection_ms": "0 through 3000 inclusive",
+        "quote_receive_age_at_detection_ms": "0 through 1000 inclusive",
+        "missing_or_invalid_timing": "does not arm"
+      },
+      "transition": "Persist a position-bound fresh-bid proof. Once either the baseline favorable-close proof or fresh-bid proof exists, close only when bearish_two is true.",
+      "difference_from_baseline": "Only the arming proof is broadened; the two completed bearish descending candles and every execution guard remain unchanged.",
+      "expected_side_effect": "a brief executable bid excursion can arm protection and later cut a trade that would have resumed upward",
+      "winner_preservation_target": "no existing winner becomes a modeled loser and at least 90% of actual large-winner net value is retained"
+    },
+    {
+      "id": "C3_C1_PLUS_C2",
+      "kind": "EXIT_POLICY_COMBINATION",
+      "problem": "combined coverage of never-favorable early failures and transient-favorable reversals",
+      "transition": "Apply the union of C1 and C2; at the first qualifying evaluation, emit one close intent through the existing idempotent close path.",
+      "eligibility": "C3 is evaluated regardless of individual results but can be selected only if both component mechanics reproduce correctly and C3 independently passes every gate.",
+      "expected_side_effect": "inherits both components' early-exit risk",
+      "winner_preservation_target": "no existing winner becomes a modeled loser and at least 90% of actual large-winner net value is retained"
+    }
+  ],
+  "explicitly_not_candidates": [
+    {
+      "area": "reentry",
+      "reason": "the seven development reentries included four winners, every reentry used a new signal and newer completed signal bar, and the two after-loss reentries had already recovered above the prior entry; a blanket cooldown repeats the previously failed REPEAT_STOP_2 family"
+    },
+    {
+      "area": "entry_filter",
+      "reason": "rank and momentum feature distributions did not cleanly separate losses, and validation-time pre-entry raw candles are incomplete; SPIKE_3PCT and LOCK_1P5 remain failed"
+    },
+    {
+      "area": "execution_ordering",
+      "reason": "development close-decision-to-fill latency had zero observations above 10 seconds; native protection ordering is not changed without validation evidence of starvation"
+    },
+    {
+      "area": "stop_width_or_size",
+      "reason": "initial stop widening, averaging down, leverage, margin, account capital, and slot-limit changes are prohibited"
+    }
+  ],
+  "replay": {
+    "development_candles": "checksum-verified Binance Vision futures 1m candles, labeled post-hoc and never represented as bot-observed input",
+    "development_evaluation_clock": "actual recorded position-management decision timestamps and fresh bid observations",
+    "validation_candles": "raw candles stored by QV3 shadow at each historical evaluation",
+    "validation_evaluation_clock": "actual recorded position-management decision timestamps; never evaluate before the candle close",
+    "same_entry_overlay": "fix actual entry time, quantity, entry fills, and entry fees; if a candidate triggers before actual exit, model a full remaining-quantity exit at the contemporaneous executable bid after scenario impact and fee; otherwise retain the actual signed-fill result",
+    "normal": {
+      "price_impact_return": -0.001,
+      "exit_fee_rate": 0.0005,
+      "software_delay_ms": 0
+    },
+    "cost_stress": {
+      "price_impact_return": -0.002,
+      "exit_fee_rate": 0.001,
+      "software_delay_ms": 0
+    },
+    "delay_stress": {
+      "price_impact_return": -0.002,
+      "exit_fee_rate": 0.001,
+      "software_delay_ms": 60000,
+      "execution_price": "first actual fresh observed bid at or after trigger + 60000ms and before the actual exit; otherwise retain actual exit"
+    },
+    "intrabar_rule": "candidate signals use completed closes only; candle high is never used as an arming input; no assumption that a stop and high inside one candle occurred in a favorable order",
+    "result_labels": [
+      "ACTUAL_SIGNED_FILL",
+      "BASELINE_DECISION_REPLAY",
+      "CANDIDATE_COUNTERFACTUAL"
+    ]
+  },
+  "gates_fixed_before_results": {
+    "data": {
+      "development_candle_position_coverage_min": 0.98,
+      "validation_raw_candle_position_coverage": 1,
+      "funding_attribution_required_for_promotion": true,
+      "point_in_time_cash_slot_replay_required_for_promotion": true
+    },
+    "fidelity": {
+      "baseline_decision_match_rate_min": 0.99,
+      "baseline_net_pnl_absolute_error_per_trade_max_usdt": 0.25,
+      "mismatch_must_be_explained": true
+    },
+    "sample": {
+      "minimum_post_update_closed_trades": 100,
+      "minimum_validation_trades": 30,
+      "minimum_validation_windows": 3
+    },
+    "performance": {
+      "development_net_delta_nonnegative": true,
+      "validation_net_delta_positive": true,
+      "validation_expectancy_delta_positive": true,
+      "each_validation_window_net_delta_nonnegative": true,
+      "validation_worst_trade_not_worse": true,
+      "validation_closed_trade_drawdown_not_worse": true,
+      "existing_winner_to_loss_count_max": 0,
+      "large_winner_value_retention_min": 0.9,
+      "opportunity_retention_min": 0.7,
+      "cost_and_delay_stress_outperformance_required": true,
+      "leave_one_trade_out_delta_positive_required": true,
+      "single_symbol_removal_direction_stable_required": true
+    },
+    "promotion": "SUPERIOR only when every data, fidelity, sample, performance, operational-regression, and production-integration gate passes; otherwise DEFER or INFERIOR, with no strategy deployment"
+  },
+  "trial_budget": {
+    "candidate_rules": 3,
+    "parameter_sets_per_candidate": 1,
+    "adaptive_tuning_after_validation": false,
+    "failed_families_remain_failed": [
+      "FAST_FAIL",
+      "EARLY_LOCK",
+      "VOL_TRAIL",
+      "COMBINED_OLD",
+      "REPEAT_STOP_2",
+      "SPIKE_3PCT",
+      "COMBINED_ENTRY_OLD",
+      "LOCK_1P5"
+    ]
+  }
+}
