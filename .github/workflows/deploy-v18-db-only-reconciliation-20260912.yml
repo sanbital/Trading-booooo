@@ -22,7 +22,9 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 2
+          # The operational harness replays both the pre-V18 and production-v36
+          # baselines, so the release gate needs those immutable commits available.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Prove the production basis and isolated diff
@@ -33,7 +35,8 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/release/v18-db-only-reconciliation-1
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD^)" = "$PRODUCTION_BASIS"
+          git merge-base --is-ancestor "$PRODUCTION_BASIS" "$GITHUB_SHA"
+          test "$(git rev-list --merges --count "$PRODUCTION_BASIS".."$GITHUB_SHA")" -eq 0
           count=0
           while IFS= read -r path; do
             case "$path" in
