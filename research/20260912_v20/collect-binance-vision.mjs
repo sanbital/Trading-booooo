@@ -14,7 +14,7 @@ if (!evidenceDir || !outputDir) {
 
 const protocol = JSON.parse(readFileSync(`${evidenceDir}/protocol.json`, 'utf8'));
 const developmentEnd = Date.parse(protocol.development.end_utc);
-const analysisStart = Date.parse(protocol.time_boundaries.analysis_start_utc);
+const analysisStart = Date.parse(protocol.time_boundaries.cumulative_start_utc);
 const rawPositions = gunzipSync(readFileSync(`${evidenceDir}/positions.jsonl.gz`)).toString('utf8').trim();
 const positions = rawPositions ? rawPositions.split('\n').map(JSON.parse) : [];
 const development = positions.filter((position) => Date.parse(position.entry_at) < developmentEnd);
@@ -131,7 +131,7 @@ const summary = {
   source: 'BINANCE_VISION_FUTURES_UM_DAILY_KLINES_POST_HOC',
   execution_input: false,
   retrieved_at: new Date().toISOString(),
-  analysis_start_utc: protocol.time_boundaries.analysis_start_utc,
+  analysis_start_utc: protocol.time_boundaries.cumulative_start_utc,
   development_end_utc: protocol.development.end_utc,
   development_positions: development.length,
   required_symbols: requiredSymbols.size,
