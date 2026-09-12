@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { gzipSync, gunzipSync } from 'node:zlib';
 
+// These official static candles are evaluation evidence, never live bot observations.
 const evidenceDir = process.argv[2];
 const outputDir = process.argv[3];
 if (!evidenceDir || !outputDir) {
