@@ -1,0 +1,178 @@
+name: Collect V20 strategy evidence read-only
+
+on:
+  push:
+    branches: [research/v20-loss-preservation-20260912]
+    paths:
+      - ".github/workflows/v20-strategy-evidence-20260912.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: collect-v20-strategy-evidence
+  cancel-in-progress: false
+
+jobs:
+  export-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PRODUCTION_RELEASE_SHA: d5424b54ca25dff364cde96692f7bf9abdc6f77b
+      PRODUCTION_FUNCTION_VERSION: "38"
+      PRODUCTION_BUNDLE_SHA256: 1935db015d2d527718c3abfca9dac57e0fb99b16b7fb23b81ea4236552d9d547
+      ANALYSIS_START: "2026-09-08T23:44:06Z"
+      ANALYSIS_CUTOFF: "2026-09-12T12:54:14.867543Z"
+    steps:
+      - name: Check out the exact evidence commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prove immutable production basis and research-only scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/research/v20-loss-preservation-20260912
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$PRODUCTION_RELEASE_SHA" "$GITHUB_SHA"
+          git diff --check "$PRODUCTION_RELEASE_SHA" "$GITHUB_SHA"
+          while IFS= read -r path; do
+            case "$path" in
+              .github/workflows/v20-strategy-evidence-20260912.yml|research/20260912_v20/*) ;;
+              *) echo "::error::Non-research path differs from production release: $path"; exit 1 ;;
+            esac
+          done < <(git diff --name-only "$PRODUCTION_RELEASE_SHA" "$GITHUB_SHA")
+          git diff --exit-code "$PRODUCTION_RELEASE_SHA" "$GITHUB_SHA" -- \
+            supabase/functions gateway supabase/migrations ops test-support
+          grep -Fq 'PATCH="V19-SCOPE-AWARE-ENTRY-1"' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'QV3_ENTRY_EXIT_TWO_1' supabase/functions/_shared/leader-qv3-runtime.mjs
+          grep -Fq 'V17_EXIT_R5_TAIL' supabase/functions/_shared/leader-exit-review.mjs
+          mkdir -p evidence production-download
+          cp research/20260912_v20/protocol.json evidence/protocol.json
+          git rev-parse HEAD > evidence/evidence-commit.txt
+          git rev-parse "$PRODUCTION_RELEASE_SHA" > evidence/production-release-commit.txt
+          git diff --name-status "$PRODUCTION_RELEASE_SHA" "$GITHUB_SHA" > evidence/research-diff-scope.txt
+          sha256sum \
+            supabase/functions/v10-lane-executor/index.ts \
+            supabase/functions/_shared/leader-{momentum-v17,exit-review,entry-protection,protection-adapter,ops-isolation,entry-control,native-protection,fill-evidence,entry-settlement,exit-settlement,db-only-reconciliation,qv3-runtime,qv3-rules}.mjs \
+            > evidence/local-production-source-sha256.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Validate evidence programs
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check research/20260912_v20/collect-evidence.mjs
+          python -m json.tool research/20260912_v20/protocol.json >/dev/null
+
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Verify and download active production source
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > evidence/functions-before.json
+          node --input-type=module <<'NODE'
+          import {readFileSync,writeFileSync} from 'node:fs';
+          const rows=JSON.parse(readFileSync('evidence/functions-before.json','utf8'));
+          const list=Array.isArray(rows)?rows:rows.functions;
+          const fn=list.find((row)=>row.slug==='v10-lane-executor');
+          if(!fn||fn.status!=='ACTIVE'||fn.verify_jwt!==false)throw Error('FUNCTION_NOT_ACTIVE_OR_AUTH_CHANGED');
+          if(Number(fn.version)!==Number(process.env.PRODUCTION_FUNCTION_VERSION))throw Error(`FUNCTION_VERSION_CHANGED:${fn.version}`);
+          if(fn.ezbr_sha256!==process.env.PRODUCTION_BUNDLE_SHA256)throw Error(`FUNCTION_BUNDLE_CHANGED:${fn.ezbr_sha256}`);
+          writeFileSync('evidence/production-function-before.json',JSON.stringify({slug:fn.slug,status:fn.status,version:fn.version,verify_jwt:fn.verify_jwt,ezbr_sha256:fn.ezbr_sha256,updated_at:fn.updated_at})+'\n');
+          NODE
+          supabase functions download v10-lane-executor \
+            --project-ref "$SUPABASE_PROJECT_REF" --use-api \
+            --workdir "$PWD/production-download"
+          node test-support/v19-ops/verify-downloaded-function.mjs \
+            production-download . > evidence/production-source-parity.json
+
+      - name: Export one read-only repeatable-read snapshot
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PGOPTIONS: "-c default_transaction_read_only=on -c statement_timeout=120000"
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL:-}"
+          test "$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c 'show default_transaction_read_only')" = on
+          psql "$SUPABASE_DB_URL" -X --set=ON_ERROR_STOP=1 \
+            --set=analysis_start="$ANALYSIS_START" \
+            --set=analysis_cutoff="$ANALYSIS_CUTOFF" \
+            --file=research/20260912_v20/export-evidence.sql >/dev/null
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const rows=(path)=>{const x=readFileSync(path,'utf8').trim();return x?x.split('\n').map(JSON.parse):[]};
+          const positions=rows('evidence/positions.jsonl');
+          const cutoff=Date.parse(process.env.ANALYSIS_CUTOFF);
+          const eligible=positions.filter((p)=>Date.parse(p.entry_at)<=cutoff);
+          const closed=eligible.filter((p)=>p.state==='CLOSED'&&Date.parse(p.closed_at)<=cutoff);
+          const open=eligible.filter((p)=>p.state==='OPEN');
+          if(eligible.length!==126||closed.length!==126||open.length!==0){
+            throw Error(`FROZEN_POSITION_COUNT_MISMATCH:${eligible.length}:${closed.length}:${open.length}`);
+          }
+          const qv3=closed.filter((p)=>p.metadata?.qv3?.version==='QV3_ENTRY_EXIT_TWO_1');
+          if(qv3.length!==46)throw Error(`QV3_STAMP_COUNT_MISMATCH:${qv3.length}`);
+          console.log(JSON.stringify({eligible:eligible.length,closed:closed.length,open:open.length,qv3Stamped:qv3.length}));
+          NODE
+
+      - name: Collect signed exchange and public market evidence
+        shell: bash
+        env:
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          node research/20260912_v20/collect-evidence.mjs evidence research/20260912_v20/protocol.json
+
+      - name: Recheck production did not change during collection
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > evidence/functions-after.json
+          node --input-type=module <<'NODE'
+          import {readFileSync,writeFileSync} from 'node:fs';
+          function one(path){const x=JSON.parse(readFileSync(path,'utf8'));return (Array.isArray(x)?x:x.functions).find((row)=>row.slug==='v10-lane-executor')}
+          const before=one('evidence/functions-before.json'),after=one('evidence/functions-after.json');
+          for(const key of ['version','ezbr_sha256','verify_jwt','status'])if(after?.[key]!==before?.[key])throw Error(`CONCURRENT_PRODUCTION_CHANGE:${key}`);
+          writeFileSync('evidence/production-function-after.json',JSON.stringify({slug:after.slug,status:after.status,version:after.version,verify_jwt:after.verify_jwt,ezbr_sha256:after.ezbr_sha256,updated_at:after.updated_at})+'\n');
+          NODE
+          rm evidence/functions-before.json evidence/functions-after.json
+
+      - name: Seal evidence manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          gzip -9 evidence/*.jsonl
+          find evidence -type f ! -name manifest.sha256 -print0 | sort -z | xargs -0 sha256sum > evidence/manifest.sha256
+          sha256sum --check evidence/manifest.sha256 >/dev/null
+          du -sh evidence
+
+      - name: Upload restricted short-lived evidence package
+        uses: actions/upload-artifact@v4
+        with:
+          name: v20-strategy-evidence-${{ github.run_id }}
+          path: evidence
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
