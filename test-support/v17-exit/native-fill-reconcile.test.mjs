@@ -11,7 +11,8 @@ test('blocked native fill settles while an independently owned symbol stays mana
 test('unknown DB-only exposure stays open and isolated, never forced closed',async()=>{
  const p=position();p.metadata.exitProtection.orders=[];const h=harness({positions:[p],signal:false});h.state.exchange=[];
  await h.ctx.runCycle();assert.equal(h.state.tables.v11_long_regime_positions[0].state,'OPEN');
- assert.equal(h.state.tables.v11_long_regime_runtime[0].incident_kind,'UNEXPLAINED_EXPOSURE');
+ assert.equal(h.state.tables.v11_long_regime_runtime[0].circuit_open,false);
+ assert.ok(h.state.tables.v18_ops_incidents.some(x=>x.symbol==='SAGAUSDT'&&x.kind==='DB_ONLY_POSITION'&&x.control_scope==='SYMBOL_QUARANTINE'));
 });
 test('read failure is reported as pending, not as successful accounting',async()=>{
  const p=position(),h=harness({positions:[p],signal:false});h.state.exchange=[];

@@ -5,6 +5,7 @@
  */
 import {freshPortfolio,sameQuantity} from './leader-ops-isolation.mjs';
 import {exitAttemptId,protectiveStopSpec} from './leader-exit-review.mjs';
+import {cumulativeFillDelta} from './leader-fill-evidence.mjs';
 const FINAL=new Set(['CANCELED','CANCELLED','EXPIRED','REJECTED','FINISHED']);
 const copy=x=>structuredClone(x);
 const finite=(x,name)=>{if(!Number.isFinite(x))throw Error(name);return x;};
@@ -60,7 +61,11 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
       const normalized=copy(state);normalized.protection.health=initialHealth;state=await save(state,normalized);
     }
     for(const remembered of [...state.protection.orders]) {
-      if(remembered.terminal)continue;
+      // Terminal exchange state does not imply that trade attribution and fees were
+      // settled.  Re-query only the small persisted pending set, never all history.
+      const crossLifecycleUnresolved=remembered.crossLifecycleEvidencePending===true&&
+        !remembered.crossLifecycleTargetPositionId;
+      if(remembered.terminal&&remembered.accountingPending!==true&&!crossLifecycleUnresolved)continue;
       let ack;
       try{ack=await exchange.queryStop(remembered.spec.params.clientAlgoId,remembered.spec.params.symbol);}
       catch(error){
@@ -129,9 +134,12 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
         }
         const q=finite(Number(fill.quantity),'INVALID_FILL_QTY'),funds=finite(Number(fill.funds),'INVALID_FILL_FUNDS'),fee=finite(Number(fill.fee),'INVALID_FILL_FEE');
         if(q<0||funds<0||q>item.spec.params.quantity+1e-8)throw Error('INVALID_NATIVE_FILL');
-        const dq=q-(item.appliedQuantity??0),df=funds-(item.appliedFunds??0),dc=fee-(item.appliedFee??0);
-        if(dq< -1e-10||df< -1e-10||dq>next.position.remainingQuantity+1e-8)
-          throw Error('NATIVE_FILL_QUANTITY_MISMATCH');
+        let delta;
+        try{delta=cumulativeFillDelta({previousQuantity:item.appliedQuantity??0,previousFunds:item.appliedFunds??0,
+          previousFee:item.appliedFee??0,quantity:q,funds,fee,maxQuantity:item.spec.params.quantity,
+          maxDelta:next.position.remainingQuantity});}
+        catch{throw Error('NATIVE_FILL_QUANTITY_MISMATCH');}
+        const dq=delta.quantity,df=delta.funds,dc=delta.fee;
         if(dq>0||df!==0||dc!==0||item.accountingPending) {
           next.position.remainingQuantity=Math.max(0,next.position.remainingQuantity-dq);
           const accountingQty=q-(item.accountedQuantity??item.appliedQuantity??0);

@@ -8,6 +8,7 @@
  * the exact algo identity must all agree.
  */
 import {freshPortfolio,sameQuantity} from './leader-ops-isolation.mjs';
+import {dedupeEvidence} from './leader-fill-evidence.mjs';
 
 export const DB_ONLY_EVIDENCE_VERSION='V18-DB-ONLY-EVIDENCE-1';
 export const AUTO_RECOVERABLE_EXIT_CLASSES=new Set([
@@ -36,13 +37,9 @@ const unresolved=(reason,stage='EVIDENCE')=>({
   settlementPermitted:false,recoveryEligible:false,reason,stage
 });
 function uniqueTrades(rows){
-  const out=new Map();
-  for(const x of rows){
-    const key=tradeId(x),fingerprint=[orderId(x),tradeSide(x),qty(x),price(x),quote(x),fee(x),tradeTime(x)].join('|');
-    if(out.has(key)&&out.get(key).fingerprint!==fingerprint)return null;
-    out.set(key,{row:x,fingerprint});
-  }
-  return [...out.values()].map(x=>x.row);
+  const result=dedupeEvidence(rows,{identity:tradeId,
+    fingerprint:x=>[orderId(x),tradeSide(x),qty(x),price(x),quote(x),fee(x),tradeTime(x)].join('|')});
+  return result.exact?result.rows:null;
 }
 
 function exactOrder(rows,id){

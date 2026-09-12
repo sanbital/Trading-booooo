@@ -8,8 +8,9 @@ import {classifyPortfolio, freshPortfolio, ownedEntry, riskOrders, classifyFailu
 import {entryReceipt,entryExposureMatches} from "../_shared/leader-entry-settlement.mjs";
 import {applyExitReceipt} from "../_shared/leader-exit-settlement.mjs";
 import {analyzeDbOnlyExit} from "../_shared/leader-db-only-reconciliation.mjs";
+import {ENTRY_CONTROL_VERSION,CONTROL_SCOPE,evaluateEntryDecision,symbolRecoveryEvidence} from "../_shared/leader-entry-control.mjs";
 import {QV3_ACTIVATION_BASIS,QV3_LIVE_CUTOVER,QV3_VERSION,qv3Entry,qv3Exit,qv3Scope,qv3Stamp,qv3Candles} from "../_shared/leader-qv3-runtime.mjs";
-const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V18-DB-ONLY-RECONCILIATION-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
+const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V19-SCOPE-AWARE-ENTRY-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 // Bounded so a bar of refusals cannot stretch the run past the one-minute cadence.
 const ENTRY_ATTEMPTS_PER_RUN=3;
 // Pre-dispatch refusals scoped to one symbol. Never includes STOP_POLICY_INVALID or
@@ -30,11 +31,20 @@ async function auth(db,req){const p=(req.headers.get("x-v10-executor-token")||""
 function route(v){const x=String(v||"").toUpperCase();return x==="RISK_OFF"?"BEAR":x==="NEUTRAL"?"RANGE":x==="BULL"||x==="STRONG_BULL"?"BULL":"CASH"}
 async function market(db){const o=await db.from("market_regime_observations").select("id,observed_at,predicted_regime,bull_score,confidence").eq("model_revision",OBSERVER_REVISION).eq("trading_influence",true).order("observed_at",{ascending:false}).limit(1).maybeSingle();if(o.error)throw new Error(`OBSERVER:${o.error.message}`);const age=o.data?Date.now()-Date.parse(o.data.observed_at):Infinity;return{route:age<=12*60000?route(o.data?.predicted_regime):"CASH",ageMs:age,observer:o.data||null}}
 async function snap(db){const s=await db.from("trading_account_snapshots").select("captured_at,available_quote,positions,positions_complete").eq("exchange","binance_futures").order("captured_at",{ascending:false}).limit(1).maybeSingle();if(s.error||!s.data)throw new Error("SNAPSHOT_MISSING");const age=Date.now()-Date.parse(s.data.captured_at);if(s.data.positions_complete!==true||!Number.isFinite(age)||age<0||age>SNAP_MAX)throw new Error(`SNAPSHOT_INVALID:${age}`);return{...s.data,ageMs:age}}
-async function circuit(db,reason,kind="UNKNOWN_ORDER_OUTCOME",evidence={}){
+async function incident(db,{reason,kind="UNKNOWN_ORDER_OUTCOME",controlScope=CONTROL_SCOPE.ACCOUNT_RISK_BLOCK,
+  symbol=null,state={},evidence={}}){
   await verifyExecutionLease(db);
-  const r=await db.rpc("v18_record_incident",{p_owner:leaseOwners.get(db),p_kind:kind,
-    p_reason:String(reason).slice(0,500),p_evidence:evidence});
+  const r=await db.rpc("v19_record_incident",{p_owner:leaseOwners.get(db),p_kind:kind,
+    p_reason:String(reason).slice(0,500),p_control_scope:controlScope,p_symbol:symbol,
+    p_state:state,p_evidence:evidence,p_evidence_version:ENTRY_CONTROL_VERSION});
   if(r.error)throw Error(`INCIDENT_WRITE:${r.error.message}`);
+  return r.data;
+}
+async function circuit(db,reason,kind="UNKNOWN_ORDER_OUTCOME",evidence={}){
+  const hold=["KNOWN_ORDER_PENDING_RECONCILIATION","INCOMPLETE_OR_STALE_SNAPSHOT","TRANSIENT_DEPENDENCY","DB_CAS_CONFLICT"].includes(kind);
+  return incident(db,{reason,kind,controlScope:hold?CONTROL_SCOPE.ACCOUNT_ENTRY_HOLD:CONTROL_SCOPE.ACCOUNT_RISK_BLOCK,
+    state:{exposureState:"UNKNOWN",accountingState:"ATTRIBUTION_INVESTIGATING",orderSource:evidence?.orderId?"BOT":"UNKNOWN",
+      recheck:["QUERY_SAME_ORDER_IDENTITY","FRESH_COMPLETE_ACCOUNT_SNAPSHOT","FRESH_COMPLETE_OPEN_ORDERS"]},evidence});
 }
 async function audit(db,p,b,a,action,reason,details={}){await db.from("v11_long_regime_decisions").insert({revision:REVISION,position_id:p?.id||null,observed_regime:details.marketRoute||null,active_lane_before:b||null,active_lane_after:a||null,action,reason,details:{...details,executorPatch:PATCH}})}
 async function manualPositionAllowances(db){
@@ -155,20 +165,28 @@ if(rec(p.metadata).executionMode===STRATEGY)return await manageLeader(db,p,ctx);
 const q=await gateway({action:"quote",market:p.symbol}),bid=N(q?.best_bid);if(!(bid>0))throw new Error("QUOTE_INVALID");const now=new Date().toISOString(),entry=N(p.entry_price),peak=Math.max(N(p.peak_price,entry),bid),peakWrite=await db.from("v11_long_regime_positions").update({peak_price:peak,last_evaluated_at:now,updated_at:now}).eq("id",p.id).select("*").single();if(peakWrite.error)throw new Error(`BULL_PEAK_WRITE:${peakWrite.error.message}`);p=peakWrite.data;const stop=N(p.hard_stop_price),deadline=Date.parse(p.hard_deadline);if(Number.isFinite(deadline)&&Date.now()>=deadline){await audit(db,p,"BULL","BULL","FULL_CLOSE","BULL_30D_SAFETY_DEADLINE",{marketRoute:m.route,bid,peak});return{action:"CLOSE",reason:"BULL_30D_SAFETY_DEADLINE",result:await closePos(db,p,1,"BULL_30D_SAFETY_DEADLINE")}}if(bid<=stop){await audit(db,p,"BULL","BULL","FULL_CLOSE","BULL_HARD_STOP",{marketRoute:m.route,bid,stop,peak});return{action:"CLOSE",reason:"BULL_HARD_STOP",result:await closePos(db,p,1,"BULL_HARD_STOP")}}if(m.route==="RANGE"||m.route==="BEAR"){const r=`REGIME_BULL_TO_${m.route}_REALIZE`;await audit(db,p,"BULL",m.route,"FULL_CLOSE",r,{marketRoute:m.route,bid,peak});return{action:"CLOSE",reason:r,result:await closePos(db,p,1,r)}}const t1=entry*(1+T1_PRICE);if(!p.t1_completed&&bid>=t1){await audit(db,p,"BULL","BULL","PARTIAL_CLOSE","BULL_T1",{marketRoute:m.route,bid,t1,peak});const frac=Math.min(1,N(p.original_quantity)*PARTIAL/Math.max(1e-12,N(p.remaining_quantity))),r=await closePos(db,p,frac,"BULL_T1");if(r?.position&&!r.closed){const ns=Math.max(N(r.position.hard_stop_price),entry),up=await db.from("v11_long_regime_positions").update({hard_stop_price:ns,peak_price:peak,last_evaluated_at:now,updated_at:now}).eq("id",p.id);if(up.error)throw new Error(`T1_PROTECT:${up.error.message}`)}return{action:"PARTIAL",reason:"BULL_T1",result:r}}let newStop=stop;if(p.t1_completed)newStop=Math.max(stop,entry,peak*(1-TRAIL));if(newStop>stop){const up=await db.from("v11_long_regime_positions").update({hard_stop_price:newStop,peak_price:peak,last_evaluated_at:now,updated_at:now}).eq("id",p.id);if(up.error)throw new Error(`BULL_TRAIL_WRITE:${up.error.message}`)}if(p.t1_completed&&bid<=newStop){await audit(db,p,"BULL","BULL","FULL_CLOSE","BULL_TRAIL_PROTECTION",{marketRoute:m.route,bid,newStop,peak});return{action:"CLOSE",reason:"BULL_TRAIL_PROTECTION",result:await closePos(db,{...p,hard_stop_price:newStop,peak_price:peak},1,"BULL_TRAIL_PROTECTION")}}await audit(db,p,"BULL","BULL","HOLD","BULL_TREND_HOLD",{marketRoute:m.route,bid,t1,t1Completed:p.t1_completed,peak,newStop,deadline:p.hard_deadline});return{action:"HOLD",lane:"BULL",bid,t1,peak,newStop,deadline:p.hard_deadline}}
 // `attempt` is an out-param: openBull sets dispatched=true at the instant an order
 // leaves this process. run() uses it to decide whether a failure is safe to move past.
-async function openBull(db,s,openPositions,manual=null,attempt={}){
+async function openBull(db,s,openPositions,manual=null,attempt={},managementFailures=[]){
 const gateway=opsGateway(db);
 await requireLeaderEntryControls(db);
 const exitPolicy=rec(s.features?.exitPolicy);
 if(!Object.values(exitPolicy).every(v=>Number.isFinite(Number(v)))||!(Number(exitPolicy.stopPct)>0&&Number(exitPolicy.stopPct)<1&&Number(exitPolicy.trailArmPct)>0&&Number(exitPolicy.trailGapPct)>0&&Number(exitPolicy.trailGapPct)<1&&Number(exitPolicy.maxHoldMs)===POLICY.maxHoldMs&&Number(exitPolicy.staleMs)>0))throw new Error("V17_EXIT_POLICY_INVALID");
 const initialFresh=entryFresh(rec(s.features),Date.now(),Number(s.features?.referenceClose));
 if(initialFresh)throw new Error(initialFresh);
-const[sn,pf,q,i,manualRows]=await Promise.all([snap(db),gateway({action:"p10_portfolio"}),gateway({action:"quote",market:s.symbol}),gateway({action:"symbol_info",market:s.symbol}),manual?Promise.resolve(manual):manualPositionAllowances(db)]),pm=classifyPortfolio(openPositions,pf,{manual:manualRows,orders:await readOpsOrders(db,openPositions)});if(!pm.ok){await handleEntryMismatch(db,pm);return{entered:false,reason:"PORTFOLIO_RECHECK_REQUIRED",releaseClaim:true}}if(manualRows.some(x=>x.symbol===String(s.symbol).toUpperCase()))throw new Error("MANUAL_SYMBOL_LOCKED");if(openPositions.length>=MAX_SLOTS)return{entered:false,reason:"V11_SLOT_FULL"};if(openPositions.some(p=>String(p.symbol).toUpperCase()===String(s.symbol).toUpperCase()))return{entered:false,reason:"DUPLICATE_SYMBOL_OPEN"};const bid=N(q?.best_bid),ask=N(q?.best_ask),sp=bid>0&&ask>0?(ask/bid-1)*10000:999;if(!(bid>0&&ask>0&&sp<=SPREAD_MAX))throw new Error(`ENTRY_SPREAD:${sp}`);const f=rec(s.features),ref=N(f.referenceClose),atr=N(f.atr);if(!(atr>0&&ref>0))throw new Error("ENTRY_FEATURES_INVALID");const step=N(i?.quantity_step??i?.step_size),min=Math.max(1,N(i?.min_notional,5)),sized=sizeEntry(ask,step);if(sized.sizedNotional<min)throw new Error("QTY_INVALID");const live=N(pf?.available_quote,NaN),avail=Math.min(N(sn.available_quote),live);if(!Number.isFinite(live))throw new Error("ENTRY_AVAILABLE_BALANCE_UNREADABLE");if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true};const gatePrice=(NOTIONAL+NOTIONAL_BUFFER_USDT)/sized.amount,limitPrice=Math.max(ask*(1+IOC_BASE_BPS/10000),gatePrice),iocBps=(limitPrice/ask-1)*10000;if(iocBps>IOC_MAX_BPS)throw new Error(`ENTRY_GRANULARITY_BPS:${iocBps.toFixed(3)}`);const gap=Math.abs(limitPrice-ref)/atr;
+const[sn,q,i,rawInitialPair,initialOrders]=await Promise.all([snap(db),gateway({action:"quote",market:s.symbol}),
+  gateway({action:"symbol_info",market:s.symbol}),readOpsPair(db,gateway),gateway({action:"v18_open_orders"},5000)]),
+  initialPair=await withCandidateOrders(db,rawInitialPair,s.symbol),manualRows=initialPair.manual;
+await recordMismatch(db,initialPair.match);
+const initialDecision=await decideEntry(db,initialPair,s.symbol,initialOrders,{managementFailures});
+await persistDecisionRisk(db,initialPair,initialDecision);
+if(!initialDecision.allowed){return{entered:false,
+  reason:`ENTRY_CONTROL:${initialDecision.scope}:${initialDecision.reasons.join(",")}`,releaseClaim:true,entryDecision:initialDecision}}
+if(manualRows.some(x=>x.symbol===String(s.symbol).toUpperCase()))throw new Error("MANUAL_SYMBOL_LOCKED");
+if(active(initialPair.pf).length>=MAX_SLOTS)return{entered:false,reason:"V11_SLOT_FULL"};
+if(initialPair.positions.some(p=>String(p.symbol).toUpperCase()===String(s.symbol).toUpperCase()))return{entered:false,reason:"DUPLICATE_SYMBOL_OPEN"};
+const pf=initialPair.pf,bid=N(q?.best_bid),ask=N(q?.best_ask),sp=bid>0&&ask>0?(ask/bid-1)*10000:999;if(!(bid>0&&ask>0&&sp<=SPREAD_MAX))throw new Error(`ENTRY_SPREAD:${sp}`);const f=rec(s.features),ref=N(f.referenceClose),atr=N(f.atr);if(!(atr>0&&ref>0))throw new Error("ENTRY_FEATURES_INVALID");const step=N(i?.quantity_step??i?.step_size),min=Math.max(1,N(i?.min_notional,5)),sized=sizeEntry(ask,step);if(sized.sizedNotional<min)throw new Error("QTY_INVALID");const live=N(pf?.available_quote,NaN),avail=Math.min(N(sn.available_quote),live);if(!Number.isFinite(live))throw new Error("ENTRY_AVAILABLE_BALANCE_UNREADABLE");if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true};const gatePrice=(NOTIONAL+NOTIONAL_BUFFER_USDT)/sized.amount,limitPrice=Math.max(ask*(1+IOC_BASE_BPS/10000),gatePrice),iocBps=(limitPrice/ask-1)*10000;if(iocBps>IOC_MAX_BPS)throw new Error(`ENTRY_GRANULARITY_BPS:${iocBps.toFixed(3)}`);const gap=Math.abs(limitPrice-ref)/atr;
 const finalFresh=entryFresh(f,Date.now(),limitPrice);if(finalFresh)throw new Error(finalFresh);
 if(sized.amount*limitPrice/LEV>MARGIN+MAX_MARGIN_BUFFER_USDT+1e-9)throw new Error("V17_LIMIT_PRICE_MARGIN_OVERFLOW");
 // V17 replaces pullback-specific ATR gap gating with a price-drift/age guard.
-await requireLeaderEntryControls(db);
-const finalCheck=await readOpsPair(db);if(!finalCheck.match.ok){await handleEntryMismatch(db,finalCheck.match);return{entered:false,reason:"PORTFOLIO_RECHECK_REQUIRED",releaseClaim:true}}
-if(finalCheck.positions.some(p=>p.symbol===s.symbol)||finalCheck.positions.length>=MAX_SLOTS)return{entered:false,reason:"PORTFOLIO_CHANGED",releaseClaim:true};
 // Fixed operator-authorized cutover. No request/env can move or broaden it.
 const qv3Active=Number.isSafeInteger(QV3_LIVE_CUTOVER)&&Date.now()>=QV3_LIVE_CUTOVER;
 if(qv3Active){
@@ -184,7 +202,17 @@ if(qv3Active){
   await requireLeaderEntryControls(db);
   const freshness=entryFresh(f,Date.now(),limitPrice);if(freshness)throw Error(freshness);
 }
-await verifyExecutionLease(db);const id=cid("v11e",s.id),rp={action:"create_order",leverage:LEV,order:{market:s.symbol,side:"BUY",type:"LIMIT",price:limitPrice,time_in_force:"IOC",quantity:sized.amount,identifier:id,position_side:"LONG",position_effect:"OPEN"},wait_for_final_ms:4000},oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,intent:"OPEN_LONG",reason:"V17_LEADER_ENTRY_IOC",client_order_id:id,requested_quantity:sized.amount,state:"PLANNED",request_payload:{...rp,quantity_step:step,target_margin_usdt:MARGIN,sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,executor_patch:PATCH,qv3:qv3Active?{version:QV3_VERSION,activation:QV3_LIVE_CUTOVER,basis:QV3_ACTIVATION_BASIS}:null}}).select("*").single();if(oi.error)throw new Error(`ORDER_INTENT:${oi.error.message}`);try{await verifyExecutionLease(db);attempt.dispatched=true;const raw=await gateway(rp),z=fill(raw);if(z.qty>0&&z.avg>0){const pos={data:await settleKnownEntry(db,oi.data,raw,gateway)},stop=pos.data.hard_stop_price;const entryProtection=await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position:pos.data,manualSymbols:manualRows.map(x=>x.symbol),readPortfolio:()=>gateway({action:"p10_portfolio"},5000),manage:ctx=>manageLeader(db,pos.data,{...ctx,gateway})});return{entered:true,positionId:pos.data.id,symbol:s.symbol,entryPrice:z.avg,quantity:z.qty,stopPrice:stop,hardDeadline:pos.data.hard_deadline,iocBps,sizedMarginUsdt:sized.sizedMargin,entryProtection,qv3:attempt.qv3}}if(terminal(z)){await settleKnownEntry(db,oi.data,raw,gateway);return{entered:false,reason:`IOC_NO_FILL:${z.status}`,qv3:attempt.qv3}}await db.from("v11_long_regime_orders").update({state:"RECONCILIATION_FAILED",exchange_order_id:z.exchangeOrderId,response_payload:raw,reject_reason:`IOC_PENDING:${z.status}`,updated_at:new Date().toISOString()}).eq("id",oi.data.id);await db.from("v11_long_regime_signals").update({status:"ORDERED",updated_at:new Date().toISOString()}).eq("id",s.id);await circuit(db,`BULL_ENTRY_AMBIGUOUS:${z.status}`,"KNOWN_ORDER_PENDING_RECONCILIATION",{orderId:oi.data.id,clientOrderId:id});throw new Error(`IOC_PENDING:${z.status}`)}catch(e){if(classifyFailure(e).fatal)throw e;await verifyExecutionLease(db);const msg=e instanceof Error?e.message:String(e),explicit=false;await db.from("v11_long_regime_orders").update({state:explicit?"REJECTED":"RECONCILIATION_FAILED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",oi.data.id);if(explicit){await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",s.id);return{entered:false,reason:msg,qv3:attempt.qv3}}await db.from("v11_long_regime_signals").update({status:"ORDERED",updated_at:new Date().toISOString()}).eq("id",s.id);await circuit(db,`BULL_ENTRY_AMBIGUOUS:${msg}`,"KNOWN_ORDER_PENDING_RECONCILIATION",{orderId:oi.data.id,clientOrderId:id,error:msg});throw e}}
+// Final gateway check uses a new account observation and a new complete ordinary +
+// conditional order observation.  No intent exists yet, so a denial cannot duplicate
+// or strand an order identity.
+await requireLeaderEntryControls(db);
+const[rawFinalCheck,finalOrders]=await Promise.all([readOpsPair(db),gateway({action:"v18_open_orders"},5000)]),
+  finalCheck=await withCandidateOrders(db,rawFinalCheck,s.symbol),finalDecision=await decideEntry(db,finalCheck,s.symbol,finalOrders,{proposedMargin:sized.sizedMargin,cashBuffer:ENTRY_CASH_BUFFER_USDT,managementFailures});
+await recordMismatch(db,finalCheck.match);await persistDecisionRisk(db,finalCheck,finalDecision);
+if(!finalDecision.allowed){return{entered:false,
+  reason:`ENTRY_CONTROL:${finalDecision.scope}:${finalDecision.reasons.join(",")}`,releaseClaim:true,entryDecision:finalDecision}}
+if(finalCheck.positions.some(p=>p.symbol===s.symbol)||active(finalCheck.pf).length>=MAX_SLOTS)return{entered:false,reason:"PORTFOLIO_CHANGED",releaseClaim:true};
+await verifyExecutionLease(db);const id=cid("v11e",s.id),rp={action:"create_order",leverage:LEV,order:{market:s.symbol,side:"BUY",type:"LIMIT",price:limitPrice,time_in_force:"IOC",quantity:sized.amount,identifier:id,position_side:"LONG",position_effect:"OPEN"},wait_for_final_ms:4000},oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,intent:"OPEN_LONG",reason:"V17_LEADER_ENTRY_IOC",client_order_id:id,requested_quantity:sized.amount,state:"PLANNED",request_payload:{...rp,quantity_step:step,target_margin_usdt:MARGIN,sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,executor_patch:PATCH,entry_control:finalDecision.evidence,qv3:qv3Active?{version:QV3_VERSION,activation:QV3_LIVE_CUTOVER,basis:QV3_ACTIVATION_BASIS}:null}}).select("*").single();if(oi.error)throw new Error(`ORDER_INTENT:${oi.error.message}`);try{await verifyExecutionLease(db);attempt.dispatched=true;const raw=await gateway(rp),z=fill(raw);if(z.qty>0&&z.avg>0){const pos={data:await settleKnownEntry(db,oi.data,raw,gateway)},stop=pos.data.hard_stop_price;const entryProtection=await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position:pos.data,manualSymbols:manualRows.map(x=>x.symbol),readPortfolio:()=>gateway({action:"p10_portfolio"},5000),manage:ctx=>manageLeader(db,pos.data,{...ctx,gateway})});return{entered:true,positionId:pos.data.id,symbol:s.symbol,entryPrice:z.avg,quantity:z.qty,stopPrice:stop,hardDeadline:pos.data.hard_deadline,iocBps,sizedMarginUsdt:sized.sizedMargin,entryProtection,entryDecision:finalDecision,qv3:attempt.qv3}}if(terminal(z)){await settleKnownEntry(db,oi.data,raw,gateway);return{entered:false,reason:`IOC_NO_FILL:${z.status}`,entryDecision:finalDecision,qv3:attempt.qv3}}await db.from("v11_long_regime_orders").update({state:"RECONCILIATION_FAILED",exchange_order_id:z.exchangeOrderId,response_payload:raw,reject_reason:`IOC_PENDING:${z.status}`,updated_at:new Date().toISOString()}).eq("id",oi.data.id);await db.from("v11_long_regime_signals").update({status:"ORDERED",updated_at:new Date().toISOString()}).eq("id",s.id);throw new Error(`IOC_PENDING:${z.status}`)}catch(e){if(classifyFailure(e).fatal)throw e;await verifyExecutionLease(db);const msg=e instanceof Error?e.message:String(e),explicit=false;await db.from("v11_long_regime_orders").update({state:explicit?"REJECTED":"RECONCILIATION_FAILED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",oi.data.id);if(explicit){await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",s.id);return{entered:false,reason:msg,qv3:attempt.qv3}}await db.from("v11_long_regime_signals").update({status:"ORDERED",updated_at:new Date().toISOString()}).eq("id",s.id);await circuit(db,`BULL_ENTRY_AMBIGUOUS:${msg}`,"KNOWN_ORDER_PENDING_RECONCILIATION",{orderId:oi.data.id,clientOrderId:id,error:msg});throw e}}
 // Best-effort feed for the decision-only exit shadow. It must never be able to affect
 // trading: every failure is swallowed, and the gateway ignores it unless the shadow is
 // enabled there. quantity_step lives on the opening order, not on the position row.
@@ -242,8 +270,8 @@ async function settleKnownEntry(db,intent,raw,gw=opsGateway(db)) {
   return position;
 }
 async function readOpsPositions(db) {
-  const r=await db.from("v11_long_regime_positions").select("*").eq("state","OPEN").order("entry_at",{ascending:true}).limit(MAX_SLOTS+1);
-  if(r.error)throw Error(`POSITIONS:${r.error.message}`);return r.data??[];
+  const r=await db.from("v11_long_regime_positions").select("*").eq("state","OPEN").order("entry_at",{ascending:true}).limit(101);
+  if(r.error)throw Error(`POSITIONS:${r.error.message}`);if((r.data??[]).length>100)throw Error("POSITION_RECONCILIATION_BACKLOG_OVERFLOW");return r.data??[];
 }
 async function readOpsOrders(db,positions=[]) {
   const [pending,accounting,entries]=await Promise.all([
@@ -256,8 +284,21 @@ async function readOpsOrders(db,positions=[]) {
 }
 async function readOpsPair(db,gw=opsGateway(db)) {
   const pf=await gw({action:"p10_portfolio"},3000),positions=await readOpsPositions(db);
-  const [manual,orders]=await Promise.all([manualPositionAllowances(db),readOpsOrders(db,positions)]);
-  return {pf,positions,manual,orders,match:classifyPortfolio(positions,pf,{manual,orders})};
+  const [manual,orders,quarantines]=await Promise.all([manualPositionAllowances(db),readOpsOrders(db,positions),
+    db.from("v18_ops_incidents").select("id,generation,kind,reason,symbol,status,control_scope,exposure_state,accounting_state,order_source,evidence_version,recheck_conditions,last_checked_at,evidence")
+      .eq("exchange","binance_futures").eq("account_scope","futures").eq("control_scope","SYMBOL_QUARANTINE")
+      .in("status",["OPEN","VERIFYING"]).order("last_checked_at",{ascending:true}).limit(101)]);
+  if(quarantines.error)throw Error("SYMBOL_QUARANTINE_READ");
+  if((quarantines.data??[]).length>100)throw Error("SYMBOL_QUARANTINE_BACKLOG_OVERFLOW");
+  return {pf,positions,manual,orders,quarantines:quarantines.data??[],match:classifyPortfolio(positions,pf,{manual,orders})};
+}
+async function withCandidateOrders(db,pair,candidateSymbol) {
+  const candidate=String(candidateSymbol).toUpperCase(),r=await db.from("v11_long_regime_orders").select("*")
+    .eq("symbol",candidate).in("state",["PLANNED","DISPATCHED","RECONCILIATION_FAILED","RECONCILIATION_PENDING"])
+    .order("updated_at",{ascending:true}).limit(101);
+  if(r.error)throw Error("CANDIDATE_ORDERS_READ");if((r.data??[]).length>100)throw Error("CANDIDATE_ORDER_BACKLOG_OVERFLOW");
+  const orders=[...new Map([...pair.orders,...(r.data??[])].map(o=>[o.id,o])).values()];
+  return {...pair,orders,match:classifyPortfolio(pair.positions,pair.pf,{manual:pair.manual,orders})};
 }
 function opsGateway(db){return scopedGateway(db,cycleBudgets.get(db)??createBudget({ms:55000,calls:160}));}
 function scopedGateway(db,budget) {
@@ -276,7 +317,7 @@ async function readClosedProtectionBacklog(db,limit=100) {
   if(!Array.isArray(r.data?.rows)||typeof r.data?.complete!=="boolean")throw Error("CLOSED_PROTECTION_RESPONSE");
   return {rows:r.data.rows,complete:r.data.complete};
 }
-async function reconcileDbOnlyPosition(db,p,gw) {
+async function reconcileDbOnlyPosition(db,p,gw,scopeIncident=null) {
   const start=new Date(Date.parse(p.entry_at)-5000).toISOString(),startMs=Date.parse(start),endMs=Date.now();
   const [fills,lifecycles,laneOrders,accountTrades,orderHistory,portfolio,openOrders]=await Promise.all([
     db.from("exchange_trade_fills").select("exchange,account_scope,market,exchange_trade_id,exchange_order_id,client_order_id,side,price,quantity,quote_amount,fee_quote_amount,realized_pnl_quote,accounting_status,executed_at,v17_order_id,v17_position_id,source")
@@ -308,10 +349,13 @@ async function reconcileDbOnlyPosition(db,p,gw) {
     ledgerFills:fills.data,accountTrades:trades,orderHistory:orders,algo,portfolio,openOrders,
     tradeHistoryComplete:complete&&trades.length<1000,orderHistoryComplete:complete&&orders.length<1000});
   if(!proof.settlementPermitted)return proof;
-  const controls=await opsControls(db);
+  const controls=await opsControls(db),selected=scopeIncident??(controls.runtime.circuit_open?{
+    id:controls.runtime.incident_id,generation:controls.runtime.incident_generation}:null);
+  if(!selected?.id||!Number.isFinite(Number(selected.generation)))return {...proof,outcome:"UNRESOLVED",
+    accountingComplete:false,reason:"SETTLEMENT_INCIDENT_MISSING"};
   await verifyExecutionLease(db);
   const settled=await db.rpc("v18_settle_db_only_exit",{p_owner:leaseOwners.get(db),
-    p_incident_id:controls.runtime.incident_id,p_generation:controls.runtime.incident_generation,
+    p_incident_id:selected.id,p_generation:Number(selected.generation),
     p_position_id:p.id,p_evidence:proof.evidence});
   if(settled.error)throw Error(`DB_ONLY_SETTLEMENT:${settled.error.message}`);
   if(settled.data?.settled!==true)return {...proof,outcome:"UNRESOLVED",accountingComplete:false,
@@ -321,10 +365,29 @@ async function reconcileDbOnlyPosition(db,p,gw) {
 }
 function sortedRecord(x){return rec(x);}
 async function recordMismatch(db,match) {
-  if(match.ok)return;
-  const recoverable=match.issues.every(x=>x.kind==="QUANTITY_MISMATCH"&&x.knownExitPending||["KNOWN_EXIT_PENDING_RECONCILIATION","INCOMPLETE_OR_STALE_SNAPSHOT","UNKNOWN_ORDER_OUTCOME"].includes(x.kind)&& (x.kind!=="UNKNOWN_ORDER_OUTCOME"||x.orderId));
-  const kind=recoverable?(match.issues.some(x=>x.kind==="UNKNOWN_ORDER_OUTCOME")?"KNOWN_ORDER_PENDING_RECONCILIATION":match.issues.some(x=>x.kind==="QUANTITY_MISMATCH")?"KNOWN_EXIT_PENDING_RECONCILIATION":match.issues[0].kind):"UNEXPLAINED_EXPOSURE";
-  await circuit(db,match.issues.map(x=>`${x.kind}:${x.symbol}`).join(";"),kind,{issues:match.issues});
+  const all=[...(match.issues??[]),...(match.accounting??[])];if(!all.length)return[];
+  const rank=x=>x.controlScope===CONTROL_SCOPE.ACCOUNT_RISK_BLOCK?4:x.controlScope===CONTROL_SCOPE.ACCOUNT_ENTRY_HOLD?3:
+    x.accountingState==="CONFLICT"?2:1,results=[];
+  const account=all.filter(x=>[CONTROL_SCOPE.ACCOUNT_ENTRY_HOLD,CONTROL_SCOPE.ACCOUNT_RISK_BLOCK].includes(x.controlScope));
+  if(account.length){
+    const chosen=[...account].sort((a,b)=>rank(b)-rank(a)||String(a.kind).localeCompare(String(b.kind)))[0],
+      kind=chosen.kind==="UNKNOWN_ORDER_OUTCOME"&&chosen.orderId?"KNOWN_ORDER_PENDING_RECONCILIATION":chosen.kind;
+    results.push(await incident(db,{reason:account.map(x=>`${x.kind}:${x.symbol||"ACCOUNT"}`).sort().join(";"),kind,
+      controlScope:chosen.controlScope,state:{exposureState:chosen.exposureState,accountingState:chosen.accountingState,
+        orderSource:chosen.orderSource,recheck:chosen.recheck},evidence:{issues:account,observation:match.snapshot}}));
+  }
+  const bySymbol=new Map();
+  for(const issue of all.filter(x=>x.controlScope===CONTROL_SCOPE.SYMBOL_QUARANTINE&&x.symbol)){
+    const old=bySymbol.get(issue.symbol);if(!old||rank(issue)>rank(old))bySymbol.set(issue.symbol,issue);
+  }
+  for(const [symbol,issue] of [...bySymbol].sort(([a],[b])=>a.localeCompare(b))){
+    const related=all.filter(x=>x.symbol===symbol&&x.controlScope===CONTROL_SCOPE.SYMBOL_QUARANTINE);
+    results.push(await incident(db,{reason:related.map(x=>`${x.kind}:${symbol}`).sort().join(";"),kind:issue.kind,
+      controlScope:CONTROL_SCOPE.SYMBOL_QUARANTINE,symbol,state:{exposureState:issue.exposureState,
+        accountingState:issue.accountingState,orderSource:issue.orderSource,recheck:issue.recheck},
+      evidence:{...issue,related,observation:match.snapshot}}));
+  }
+  return results;
 }
 async function reconcileOps(db,pair,budget=createBudget({ms:8000,calls:18})) {
   const gw=scopedGateway(db,budget),results=[];
@@ -356,10 +419,10 @@ async function reconcileOps(db,pair,budget=createBudget({ms:8000,calls:18})) {
         if(state.protection.orders.some(o=>!o.terminal&&(o.lastQueryError||o.accountingPending)))throw Error("NATIVE_RECONCILIATION_PENDING");
         if(p.state!=="CLOSED"&&state.position.state==="CLOSED")continue;
         if(p.state==="CLOSED"){
-          const done=state.protection.orders.every(o=>o.terminal===true);
-          results.push({positionId:p.id,operation:"CLOSED_PROTECTION_CLEANUP",outcome:done?"RESOLVED":"UNRESOLVED",
+          const done=state.protection.orders.every(o=>o.terminal===true),accountingComplete=state.position.accountingPending!==true;
+          results.push({positionId:p.id,operation:"CLOSED_PROTECTION_CLEANUP",outcome:done&&accountingComplete?"RESOLVED":"UNRESOLVED",
             inspectionPerformed:true,evidenceSecured:done,quantityResolved:true,attributionComplete:true,
-            accountingComplete:true,protectionHealth:state.protection.health});
+            accountingComplete,protectionHealth:state.protection.health});
           continue;
         }
         const latest=await db.from("v11_long_regime_positions").select("*").eq("id",p.id).single();
@@ -367,7 +430,8 @@ async function reconcileOps(db,pair,budget=createBudget({ms:8000,calls:18})) {
       }
       const issue=pair.match.issues.find(i=>i.positionId===p.id);
       if(issue?.kind==="DB_ONLY_POSITION"||issue?.kind==="KNOWN_EXIT_PENDING_RECONCILIATION"||issue?.kind==="QUANTITY_MISMATCH")
-        results.push({positionId:p.id,...await reconcileDbOnlyPosition(db,p,gw)});
+        results.push({positionId:p.id,...await reconcileDbOnlyPosition(db,p,gw,pair.quarantines.find(i=>i.symbol===p.symbol&&
+          i.evidence?.positionId===p.id&&["DB_ONLY_POSITION","KNOWN_EXIT_PENDING_RECONCILIATION","QUANTITY_MISMATCH"].includes(i.kind)))});
       else results.push({positionId:p.id,outcome:"UNRESOLVED",inspectionPerformed:true,evidenceSecured:false,
         quantityResolved:false,attributionComplete:false,accountingComplete:false,reason:"NO_SETTLEMENT_EVIDENCE_PATH"});
     }catch(e){if(classifyFailure(e).fatal)throw e;results.push({positionId:candidate.id,error:String(e.message??e)});}
@@ -382,14 +446,18 @@ async function reconcileOps(db,pair,budget=createBudget({ms:8000,calls:18})) {
       if(o.intent==="OPEN_LONG") {
         const pos=await settleKnownEntry(db,o,raw,gw);
         if(pos?.state==="OPEN")await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position:pos,manualSymbols:pair.manual.map(x=>x.symbol),readPortfolio:()=>gw({action:"p10_portfolio"}),manage:ctx=>manageLeader(db,pos,{...ctx,gateway:gw})});
-        results.push({orderId:o.id,outcome:"RESOLVED",inspectionPerformed:true,evidenceSecured:true,
-          quantityResolved:true,attributionComplete:true,accountingComplete:true,settled:true});continue;
+        const complete=!pos||pos.metadata?.v18EntryAccountingPending!==true;
+        results.push({orderId:o.id,outcome:complete?"RESOLVED":"UNRESOLVED",inspectionPerformed:true,evidenceSecured:true,
+          quantityResolved:true,attributionComplete:true,accountingComplete:complete,settled:complete,
+          reason:complete?null:"ACCOUNTING_DETAILS_PENDING"});continue;
       }
       const row=await db.from("v11_long_regime_positions").select("*").eq("id",o.position_id).single();
       if(row.error||!row.data)throw Error("RECONCILE_POSITION_READ");
-      await applyExitReceipt(db,row.data,o,raw,await gw({action:"p10_portfolio"}),{verifyLease:()=>verifyExecutionLease(db)});
-      results.push({orderId:o.id,outcome:"RESOLVED",inspectionPerformed:true,evidenceSecured:true,
-        quantityResolved:true,attributionComplete:true,accountingComplete:true,settled:true});
+      const settled=await applyExitReceipt(db,row.data,o,raw,await gw({action:"p10_portfolio"}),{verifyLease:()=>verifyExecutionLease(db)}),
+        complete=settled.accountingPending!==true;
+      results.push({orderId:o.id,outcome:complete?"RESOLVED":"UNRESOLVED",inspectionPerformed:true,evidenceSecured:true,
+        quantityResolved:true,attributionComplete:true,accountingComplete:complete,settled:complete,
+        reason:complete?null:"ACCOUNTING_DETAILS_PENDING"});
     }catch(e){if(classifyFailure(e).fatal)throw e;results.push({orderId:o.id,error:String(e.message??e)});}
   }
   return results;
@@ -410,6 +478,51 @@ async function opsControls(db) {
   if(runtime.error||control.error||settings.error)throw Error("V18_CONTROLS_UNAVAILABLE");
   return {runtime:runtime.data,control:control.data,settings:settings.data};
 }
+async function decideEntry(db,pair,candidateSymbol,openOrders,{proposedMargin=0,cashBuffer=0,managementFailures=[]}={}) {
+  const controls=await opsControls(db);
+  return evaluateEntryDecision({candidateSymbol,classification:pair.match,portfolio:pair.pf,openOrders,
+    positions:pair.positions,orders:pair.orders,quarantines:pair.quarantines,
+    manualSymbols:pair.manual.map(x=>x.symbol),managementFailures,runtime:controls.runtime,operator:controls.control,settings:controls.settings,
+    maxSlots:MAX_SLOTS,proposedMargin,cashBuffer,requireNativeProtection:NATIVE_STOP_ENABLED});
+}
+async function persistDecisionRisk(db,pair,decision) {
+  for(const q of decision.discoveredQuarantines??[]){
+    if(pair.quarantines.some(x=>x.symbol===q.symbol&&["OPEN","VERIFYING"].includes(x.status)))continue;
+    await incident(db,{reason:`${q.kind}:${q.symbol}:${q.orderId||"UNKNOWN"}`,kind:q.kind,
+      controlScope:CONTROL_SCOPE.SYMBOL_QUARANTINE,symbol:q.symbol,
+      state:{exposureState:q.exposureState,accountingState:q.accountingState,orderSource:q.orderSource,recheck:q.recheck},
+      evidence:{...q,decisionEvidence:decision.evidence}});
+  }
+  if(decision.allowed||decision.scope===CONTROL_SCOPE.OPERATOR_HALT)return;
+  const reasons=decision.reasons??[],alreadyClassified=(pair.match.issues??[]).some(x=>
+    [CONTROL_SCOPE.ACCOUNT_ENTRY_HOLD,CONTROL_SCOPE.ACCOUNT_RISK_BLOCK].includes(x.controlScope))||
+    decision.scope===CONTROL_SCOPE.SYMBOL_QUARANTINE&&((pair.match.issues??[]).some(x=>x.symbol===decision.symbol)||
+      (pair.match.accounting??[]).some(x=>x.symbol===decision.symbol)||pair.quarantines.some(x=>x.symbol===decision.symbol));
+  if(alreadyClassified||reasons.every(x=>/ACCOUNT_(MARGIN|SLOT)_LIMIT|LIVE_EXPOSURE_EXISTS/.test(x)))return;
+  const symbol=decision.scope===CONTROL_SCOPE.SYMBOL_QUARANTINE?decision.symbol:null,
+    exposure=symbol&&pair.pf.positions.some(x=>sym(x)===symbol&&qty(x)>0)?"HELD":
+      reasons.some(x=>/INCOMPLETE|UNPROVEN|UNBOUNDED/.test(x))?"UNKNOWN":"FLAT",
+    kind=reasons.some(x=>/EVIDENCE_INCOMPLETE_OR_STALE|OPEN_ORDER_EVIDENCE/.test(x))?"INCOMPLETE_OR_STALE_SNAPSHOT":
+      reasons.some(x=>/ORDINARY_ORDER/.test(x))?"UNKNOWN_ORDER_OUTCOME":
+      reasons.some(x=>/CONDITIONAL_ORDER/.test(x))?"IDENTITY_OR_SIDE_MISMATCH":"ACCOUNT_RISK_UNBOUNDED";
+  await incident(db,{reason:reasons.join(";")||"ENTRY_RISK_UNVERIFIED",kind,controlScope:decision.scope,symbol,
+    state:{exposureState:exposure,accountingState:"ATTRIBUTION_INVESTIGATING",orderSource:"UNKNOWN",recheck:decision.recheck},
+    evidence:{decision,accountObservation:pair.pf.observation}});
+}
+async function attemptSymbolRecoveries(db,pair) {
+  if(!pair.quarantines.length)return[];
+  const live=await opsGateway(db)({action:"v18_open_orders"},5000),results=[];
+  for(const active of pair.quarantines.slice(0,5)){
+    const evidence=symbolRecoveryEvidence({incident:active,classification:pair.match,portfolio:pair.pf,
+      openOrders:live,positions:pair.positions,orders:pair.orders});
+    if(!evidence.clean){results.push({incidentId:active.id,symbol:active.symbol,resolved:false,reason:"EVIDENCE_INCOMPLETE"});continue;}
+    await verifyExecutionLease(db);
+    const r=await db.rpc("v19_symbol_recovery_observation",{p_owner:leaseOwners.get(db),p_incident_id:active.id,
+      p_generation:Number(active.generation),p_evidence_version:ENTRY_CONTROL_VERSION,p_evidence:evidence});
+    if(r.error)throw Error(`SYMBOL_RECOVERY_CAS:${r.error.message}`);results.push(r.data);
+  }
+  return results;
+}
 async function attemptOpsRecovery(db,pair,protectedIds) {
   const c=await opsControls(db);
   let incidentResolution=null;
@@ -429,21 +542,24 @@ async function attemptOpsRecovery(db,pair,protectedIds) {
   if(!after.match.ok||JSON.stringify(after.positions.map(p=>[p.id,p.updated_at]))!==JSON.stringify(pair.positions.map(p=>[p.id,p.updated_at]))||
     again.runtime.incident_id!==evidence.incidentId||again.runtime.incident_generation!==evidence.generation)return {resolved:false,reason:"RECOVERY_CHANGED"};
   await verifyExecutionLease(db);
-  const r=await db.rpc("v18_recovery_observation",{p_owner:leaseOwners.get(db),p_incident_id:evidence.incidentId,p_generation:evidence.generation,
-    p_evidence:{...evidence,observation:after.pf.observation,positions:after.positions.map(p=>({id:p.id,updated_at:p.updated_at,quantity:p.remaining_quantity})),ordersObservedAt:live.observed_at_ms}});
+  const r=await db.rpc("v19_account_recovery_observation",{p_owner:leaseOwners.get(db),p_incident_id:evidence.incidentId,p_generation:evidence.generation,
+    p_evidence_version:ENTRY_CONTROL_VERSION,p_evidence:{...evidence,observation:after.pf.observation,
+      positions:after.positions.map(p=>({id:p.id,updated_at:p.updated_at,quantity:p.remaining_quantity})),ordersObservedAt:live.observed_at_ms}});
   if(r.error)throw Error(`RECOVERY_CAS:${r.error.message}`);return r.data;
 }
 async function run(db) {
   const cycleStarted=new Date().toISOString();await verifyExecutionLease(db);
   const started=await db.from("v11_long_regime_runtime").update({last_cycle_started_at:cycleStarted}).eq("singleton",true);
   if(started.error)throw Error("HEARTBEAT_START_WRITE");
-  let managed=[],reconciliation=[],entry={entered:false,reason:"NOT_EVALUATED"},recovery=null,health="NOT_EVALUATED",fatal=null,pendingAge=null,entryEvaluationCompleted=false;
+  let managed=[],reconciliation=[],entry={entered:false,reason:"NOT_EVALUATED"},recovery=null,symbolRecovery=[],health="NOT_EVALUATED",fatal=null,pendingAge=null,entryEvaluationCompleted=false,accountEvidenceAt=null,symbolQuarantineObserved=false;
   try{
     const c=await opsControls(db);
     if(c.runtime.revision!==REVISION)throw Error("REVISION_MISMATCH");
     if(c.runtime.live_enabled!==true){entry.reason="RUNTIME_NOT_LIVE";return {ok:true,patch:PATCH,skipped:entry.reason};}
     let pair=await readOpsPair(db);
-    if(pair.positions.length>MAX_SLOTS)throw Error("V11_SLOT_OVERFLOW");
+    accountEvidenceAt=freshPortfolio(pair.pf)?new Date(Number(pair.pf.observation.requested_at_ms)).toISOString():null;
+    symbolQuarantineObserved=pair.quarantines.length>0||
+      [...(pair.match.issues??[]),...(pair.match.accounting??[])].some(x=>x.controlScope===CONTROL_SCOPE.SYMBOL_QUARANTINE);
     await recordMismatch(db,pair.match);
     const protectedIds=new Set(),globalBudget=createBudget({ms:40000,calls:120});
     // No trading while an explicit manual intervention/emergency command owns the account.
@@ -472,29 +588,38 @@ async function run(db) {
       pair.positions.every(p=>protectedIds.has(p.id)||(p.metadata?.exitProtection?.health==="PROTECTED"&&
         (p.metadata?.exitProtection?.orders??[]).some(o=>o.terminal!==true&&["ACTIVE","NEW"].includes(o.status))))?"PROTECTED":"SOFTWARE_ONLY";
     await recordMismatch(db,pair.match);
-    if(managed.some(x=>x.error))entry.reason="POSITION_MANAGEMENT_DEGRADED";
-    else if(NATIVE_STOP_ENABLED&&pair.positions.length&&health!=="PROTECTED")entry.reason="PROTECTION_DEGRADED";
-    else if(!pair.match.ok)entry.reason="PORTFOLIO_RECONCILIATION_PENDING";
+    // Local incident recovery is independent from the account circuit.  It never
+    // writes runtime/operator controls and requires distinct account observations.
+    pair=await readOpsPair(db);symbolRecovery=await attemptSymbolRecoveries(db,pair);
+    recovery=await attemptOpsRecovery(db,pair,protectedIds);
+    const controls=await opsControls(db);
+    if(controls.runtime.circuit_open)entry.reason="CIRCUIT_OPEN_MANAGEMENT_ACTIVE";
+    else if(!operatorAllowsRecovery(controls.runtime,controls.control,controls.settings))entry.reason="OPERATOR_ENTRY_BLOCK";
     else {
-      recovery=await attemptOpsRecovery(db,pair,protectedIds);
-      const controls=await opsControls(db);
-      if(controls.runtime.circuit_open)entry.reason="CIRCUIT_OPEN_MANAGEMENT_ACTIVE";
-      else if(!operatorAllowsRecovery(controls.runtime,controls.control,controls.settings))entry.reason="OPERATOR_ENTRY_BLOCK";
-      else {
-        const backlog=await readClosedProtectionBacklog(db,1000);
-        entry=await runEntryQueue(db,pair.positions,pair.manual,new Set(backlog.rows.map(p=>String(p.symbol).toUpperCase())),backlog.complete);
-        entryEvaluationCompleted=true;
-      }
+      pair.managementFailures=managed.filter(x=>x.error);
+      const backlog=await readClosedProtectionBacklog(db,1000);
+      entry=await runEntryQueue(db,pair,pair.manual,new Set(backlog.rows.map(p=>String(p.symbol).toUpperCase())),backlog.complete);
+      entryEvaluationCompleted=true;
     }
     return {ok:true,revision:REVISION,patch:PATCH,qv3Runtime:{version:QV3_VERSION,basis:QV3_ACTIVATION_BASIS,
       activation:QV3_LIVE_CUTOVER,active:Number.isSafeInteger(QV3_LIVE_CUTOVER)&&Date.now()>=QV3_LIVE_CUTOVER},
-      managed,reconciliation,entry,recovery,protectionHealth:health};
+      managed,reconciliation,entry,recovery,symbolRecovery,protectionHealth:health};
   }catch(e){fatal=e;entry.reason=String(e.message??e);throw e;}
   finally{
     // No stale executor writes after losing the lease; takeover owns the next heartbeat.
     if(!fatal||!classifyFailure(fatal).fatal){
       await verifyExecutionLease(db,true);const now=new Date().toISOString(),patch={last_cycle_completed_at:now,
         entry_block_reason:entry.entered?null:entry.reason,protection_health:health,reconciliation_pending_age:pendingAge,updated_at:now};
+      if(accountEvidenceAt)patch.last_account_evidence_at=accountEvidenceAt;
+      if(symbolQuarantineObserved)patch.last_symbol_quarantine_observed_at=now;
+      if(entryEvaluationCompleted)patch.last_entry_evaluated_at=now;
+      const managedExposureResolved=managed.some(x=>x.action?.result?.nativeReconciled||x.action?.result?.executedQuantity>0),
+        managedAccountingSettled=managed.some(x=>x.action?.result?.nativeReconciled||
+          x.action?.result?.executedQuantity>0&&x.action.result.accountingPending!==true);
+      if(managedExposureResolved||reconciliation.some(x=>x.outcome==="RESOLVED"&&x.evidenceSecured===true&&x.quantityResolved===true&&
+        (x.executedQuantity>0||x.settled===true||x.settlement)))patch.last_exposure_resolution_at=now;
+      if(managedAccountingSettled||reconciliation.some(x=>x.evidenceSecured===true&&x.attributionComplete===true&&x.accountingComplete===true&&
+        (x.settled===true||x.settlement||x.executedQuantity>0)))patch.last_accounting_settlement_at=now;
       // A completed HTTP request is not a successful trading cycle. Advance the legacy
       // success clock only after real entry evaluation and clean management/reconciliation.
       // This is telemetry only: it must never clear a circuit or change operator controls.
@@ -503,6 +628,8 @@ async function run(db) {
         patch.last_success_at=now;patch.last_error=null;
       }else if(fatal){patch.last_error=String(fatal.message??fatal).slice(0,500);}
       if(managed.length&&managed.every(x=>x.action&&!x.error&&!x.skipped)&&["PROTECTED","FLAT"].includes(health))patch.last_management_success_at=now;
+      if(managed.length&&managed.every(x=>x.action&&!x.error&&!x.skipped)&&["PROTECTED","SOFTWARE_ONLY"].includes(health))
+        patch.last_position_protection_success_at=now;
       if(reconciliation.some(x=>x.outcome==="RESOLVED"&&x.evidenceSecured===true&&x.quantityResolved===true&&
           x.attributionComplete===true&&x.accountingComplete===true)&&reconciliation.every(x=>!x.error&&x.outcome!=="UNRESOLVED"))
         patch.last_reconciliation_success_at=now;
@@ -512,13 +639,18 @@ async function run(db) {
     }
   }
 }
-async function runEntryQueue(db,openNow,manual,blockedSymbols=new Set(),backlogComplete=true) {
+async function runEntryQueue(db,pair,manual,blockedSymbols=new Set(),backlogComplete=true) {
+  const openNow=pair.positions;
   let entry={entered:false,reason:"V17_NO_ENTRY"};
   if(!backlogComplete)return{entered:false,reason:"CLOSED_PROTECTION_BACKLOG_INCOMPLETE"};
-  if(openNow.length>=MAX_SLOTS)return{entered:false,reason:"V11_SLOT_FULL"};
+  if(active(pair.pf).length>=MAX_SLOTS)return{entered:false,reason:"V11_SLOT_FULL"};
   const since=new Date(Date.now()-SIGNAL_MAX).toISOString(),sg=await db.from("v11_long_regime_signals").select("*").eq("revision",REVISION).eq("status","NEW").eq("lane","BULL").eq("features->>strategy",STRATEGY).gte("entry_bar_at",since).order("entry_bar_at",{ascending:false}).limit(10);
   if(sg.error)throw Error(`SIGNALS:${sg.error.message}`);
-const openSymbols=new Set(openNow.map(x=>String(x.symbol).toUpperCase())),closedProtectionSymbols=typeof blockedSymbols==="undefined"?new Set():blockedSymbols,eligible=(sg.data||[]).filter(x=>!openSymbols.has(String(x.symbol).toUpperCase())),queue=eligible.filter(x=>!closedProtectionSymbols.has(String(x.symbol).toUpperCase())).sort((a,b)=>Date.parse(b.entry_bar_at)-Date.parse(a.entry_bar_at)||N(rec(a.features).rank,999)-N(rec(b.features).rank,999));if(!queue.length)entry={entered:false,reason:eligible.length?"STALE_PROTECTION_SYMBOL_LOCKED":"NO_FRESH_BULL_SIGNAL"};for(const s of queue.slice(0,ENTRY_ATTEMPTS_PER_RUN)){const cl=await db.from("v11_long_regime_signals").update({status:"CLAIMED",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","NEW").select("*").maybeSingle();if(cl.error)throw new Error(`CLAIM:${cl.error.message}`);if(!cl.data){entry={entered:false,reason:"CLAIM_RACE"};continue}const attempt={dispatched:false};try{entry=await openBull(db,cl.data,openNow,manual,attempt);if(entry?.releaseClaim===true){await db.from("v11_long_regime_signals").update({status:"NEW",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","CLAIMED");break}if(entry?.entered===true)break;}catch(e){const msg=e instanceof Error?e.message:String(e),pending=await db.from("v11_long_regime_orders").select("id").eq("signal_id",s.id).eq("state","RECONCILIATION_FAILED").limit(1);if(!pending.data?.length)await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",s.id);if(attempt.dispatched)throw e;if(!ENTRY_SKIP_SYMBOL_SCOPED.test(msg))throw e;entry={entered:false,reason:msg};}}
+const openSymbols=new Set(openNow.map(x=>String(x.symbol).toUpperCase())),closedProtectionSymbols=typeof blockedSymbols==="undefined"?new Set():blockedSymbols,
+  quarantinedSymbols=typeof pair==="undefined"?new Set():new Set((pair.quarantines??[]).map(x=>String(x.symbol).toUpperCase())),eligible=(sg.data||[]).filter(x=>!openSymbols.has(String(x.symbol).toUpperCase())),
+  queue=eligible.filter(x=>!closedProtectionSymbols.has(String(x.symbol).toUpperCase())&&!quarantinedSymbols.has(String(x.symbol).toUpperCase()))
+    .sort((a,b)=>Date.parse(b.entry_bar_at)-Date.parse(a.entry_bar_at)||N(rec(a.features).rank,999)-N(rec(b.features).rank,999));
+if(!queue.length)entry={entered:false,reason:eligible.length?(eligible.some(x=>quarantinedSymbols.has(String(x.symbol).toUpperCase()))?"SYMBOL_QUARANTINED":"STALE_PROTECTION_SYMBOL_LOCKED"):"NO_FRESH_BULL_SIGNAL"};for(const s of queue.slice(0,ENTRY_ATTEMPTS_PER_RUN)){const cl=await db.from("v11_long_regime_signals").update({status:"CLAIMED",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","NEW").select("*").maybeSingle();if(cl.error)throw new Error(`CLAIM:${cl.error.message}`);if(!cl.data){entry={entered:false,reason:"CLAIM_RACE"};continue}const attempt={dispatched:false};try{entry=await openBull(db,cl.data,openNow,manual,attempt,typeof pair==="undefined"?[]:pair.managementFailures??[]);if(entry?.releaseClaim===true){await db.from("v11_long_regime_signals").update({status:"NEW",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","CLAIMED");break}if(entry?.entered===true)break;}catch(e){const msg=e instanceof Error?e.message:String(e),pending=await db.from("v11_long_regime_orders").select("id").eq("signal_id",s.id).eq("state","RECONCILIATION_FAILED").limit(1);if(!pending.data?.length)await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",s.id);if(attempt.dispatched)throw e;if(!ENTRY_SKIP_SYMBOL_SCOPED.test(msg))throw e;entry={entered:false,reason:msg};}}
 return entry;
 }
 

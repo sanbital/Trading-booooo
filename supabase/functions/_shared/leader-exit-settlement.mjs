@@ -1,4 +1,5 @@
 import {freshPortfolio,sameQuantity} from './leader-ops-isolation.mjs';
+import {canonicalOrderFills} from './leader-fill-evidence.mjs';
 const terminal=s=>['FILLED','EXPIRED','CANCELED','CANCELLED','REJECTED','PARTIALLY_FILLED_CANCELED'].includes(s);
 /** Quantity is an order fact; accounting needs the complete, deduplicated actual trades. */
 export function exitReceipt(raw,intent) {
@@ -11,17 +12,9 @@ export function exitReceipt(raw,intent) {
     String(o.reduce_only??r.reduceOnly)!=='true'||!['BOTH','LONG'].includes(o.position_side??r.positionSide)||
     !sameQuantity(requested,Number(intent.requested_quantity))||!Number.isFinite(q)||q<0||q>requested+1e-9||(status==='FILLED'&&q===0))
     throw Error('EXIT_ORDER_IDENTITY_OR_QUANTITY_MISMATCH');
-  const trades=Array.isArray(r.fills)?r.fills:[];
-  let quantity=0,funds=0,fee=0,lastAt=0,exact=trades.length>0;const ids=new Set();
-  for(const t of trades){
-    const tid=t.tradeId??t.id;if(tid==null||ids.has(String(tid))){exact=false;continue;}ids.add(String(tid));
-    const n=Number(t.qty),price=Number(t.price),f=Number(t.commission),at=Number(t.time);
-    if(!(n>0&&price>0)||!Number.isFinite(f)||!Number.isFinite(at)||t.commissionAsset!=='USDT'){exact=false;continue;}
-    quantity+=n;funds+=n*price;fee+=f;lastAt=Math.max(lastAt,at);
-  }
-  exact=exact&&sameQuantity(quantity,q);
-  return {id,client,q,requested,status,terminal:terminal(status),exact,funds:exact?funds:null,
-    fee:exact?fee:null,lastAt:exact?lastAt:Number(r.updateTime)||null,tradeIds:[...ids]};
+  const fills=canonicalOrderFills(r.fills,{expectedQuantity:q,expectedSide:'SELL'}),exact=fills.exact;
+  return {id,client,q,requested,status,terminal:terminal(status),exact,funds:exact?fills.funds:null,
+    fee:exact?fills.fee:null,lastAt:exact?fills.lastAt:Number(r.updateTime)||null,tradeIds:fills.tradeIds};
 }
 export async function applyExitReceipt(db,p,intent,raw,pf,{verifyLease,now=Date.now}={}) {
   const receipt=exitReceipt(raw,intent),meta=p.metadata??{},journal=structuredClone(meta.v18Exits??{});

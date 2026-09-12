@@ -9,6 +9,7 @@ const schema=JSON.parse(readFileSync(new URL('./schema-columns.json',import.meta
 const migration=readFileSync(new URL('../../supabase/migrations/'+readdirSync(new URL('../../supabase/migrations/',import.meta.url)).find(x=>x.endsWith('_v18_ops_isolation.sql')),import.meta.url),'utf8');
 const dbOnlyMigration=readFileSync(new URL('../../supabase/migrations/'+readdirSync(new URL('../../supabase/migrations/',import.meta.url)).find(x=>x.endsWith('_v18_db_only_reconciliation.sql')),import.meta.url),'utf8');
 const recoveryScopeMigration=readFileSync(new URL('../../supabase/migrations/'+readdirSync(new URL('../../supabase/migrations/',import.meta.url)).find(x=>x.endsWith('_v18_db_only_recovery_exit_scope.sql')),import.meta.url),'utf8');
+const scopeControlMigration=readFileSync(new URL('../../supabase/migrations/'+readdirSync(new URL('../../supabase/migrations/',import.meta.url)).find(x=>x.endsWith('_v19_scope_aware_entry_control.sql')),import.meta.url),'utf8');
 const OWNER='11111111-1111-4111-8111-111111111111';
 async function setup(){
  const pg=new PGlite();await pg.exec('create role anon; create role authenticated; create role service_role;');
@@ -26,6 +27,7 @@ async function setup(){
  await pg.exec(migration);
  await pg.exec(dbOnlyMigration);
  await pg.exec(recoveryScopeMigration);
+ await pg.exec(scopeControlMigration);
  await pg.exec(`create trigger v11_long_regime_slot_cap_trg before insert or update of state on v11_long_regime_positions for each row execute function v11_long_regime_enforce_slot_cap();`);
  await pg.exec(`create trigger original_fill_attribution before insert or update of exchange_order_id,bot_order_id,position_id on exchange_trade_fills for each row execute function enforce_futures_fill_order_attribution();
  create unique index fill_identity on exchange_trade_fills(exchange,account_scope,market,exchange_trade_id);`);
@@ -40,9 +42,10 @@ async function observe(pg,id,generation=1,obs='new-'+Math.random()){
  return (await pg.query('select v18_recovery_observation($1,$2,$3,$4) result',[OWNER,id,generation,evidence])).rows[0].result;
 }
 test('SQL migrations apply twice; RLS and invoker RPC grants exclude anon/authenticated',async()=>{
- const pg=await setup();await pg.exec(migration);await pg.exec(dbOnlyMigration);await pg.exec(recoveryScopeMigration);
- const r=await pg.query("select has_function_privilege('anon','public.v18_record_incident(uuid,text,text,jsonb)','execute') anon, has_function_privilege('authenticated','public.v18_recovery_observation(uuid,uuid,bigint,jsonb)','execute') authenticated, relrowsecurity rls from pg_class where relname='v18_ops_incidents'");
- assert.deepEqual(r.rows[0],{anon:false,authenticated:false,rls:true});await pg.close();
+ const pg=await setup();await pg.exec(migration);await pg.exec(dbOnlyMigration);await pg.exec(recoveryScopeMigration);await pg.exec(scopeControlMigration);
+ const r=await pg.query("select has_function_privilege('anon','public.v18_record_incident(uuid,text,text,jsonb)','execute') anon, has_function_privilege('authenticated','public.v18_recovery_observation(uuid,uuid,bigint,jsonb)','execute') authenticated, has_function_privilege('anon','public.v19_record_incident(uuid,text,text,text,text,jsonb,jsonb,text)','execute') v19_anon, has_function_privilege('authenticated','public.v19_account_recovery_observation(uuid,uuid,bigint,text,jsonb)','execute') v19_recovery_authenticated, has_function_privilege('service_role','public.v19_account_recovery_observation(uuid,uuid,bigint,text,jsonb)','execute') v19_recovery_service, relrowsecurity rls from pg_class where relname='v18_ops_incidents'");
+ assert.deepEqual(r.rows[0],{anon:false,authenticated:false,v19_anon:false,v19_recovery_authenticated:false,
+  v19_recovery_service:true,rls:true});await pg.close();
 });
 test('SQL V17 preserves declared ten slots; eleventh rejected, legacy cap remains three',async()=>{
  const pg=await setup();
@@ -86,6 +89,85 @@ test('SQL expired lease fences ordinary position writes in the same transaction'
  assert.equal((await pg.query('select count(*) n from v11_long_regime_positions')).rows[0].n,0);await pg.close();
 });
 
+test('SQL V19 symbol incident records diagnostics/quarantine without opening the account circuit',async()=>{
+ const pg=await setup(),state={exposureState:'FLAT',accountingState:'ATTRIBUTION_INVESTIGATING',orderSource:'BOT',
+  recheck:['SETTLE_EXACT_ORDER_LIFECYCLE']},evidence={positionId:'22222222-2222-4222-8222-222222222222'};
+ const row=(await pg.query("select v19_record_incident($1,'DB_ONLY_POSITION','DB_ONLY_POSITION:CASEUSDT','SYMBOL_QUARANTINE','CASEUSDT',$2,$3,'V19-SCOPE-AWARE-ENTRY-1') result",
+  [OWNER,state,evidence])).rows[0].result;
+ assert.equal(row.globalCircuit,false);assert.equal((await pg.query('select circuit_open from v11_long_regime_runtime')).rows[0].circuit_open,false);
+ const incident=(await pg.query('select symbol,control_scope,status,exposure_state,accounting_state,order_source from v18_ops_incidents where id=$1',[row.id])).rows[0];
+ assert.deepEqual(incident,{symbol:'CASEUSDT',control_scope:'SYMBOL_QUARANTINE',status:'OPEN',exposure_state:'FLAT',
+  accounting_state:'ATTRIBUTION_INVESTIGATING',order_source:'BOT'});await pg.close();
+});
+
+test('SQL V19 incomplete account evidence opens only the account hold and remains generation fenced',async()=>{
+ const pg=await setup(),state={exposureState:'UNKNOWN',accountingState:'ATTRIBUTION_INVESTIGATING',orderSource:'UNKNOWN',
+  recheck:['FRESH_COMPLETE_ACCOUNT_SNAPSHOT']};
+ const result=(await pg.query("select v19_record_incident($1,'INCOMPLETE_OR_STALE_SNAPSHOT','ACCOUNT_STALE','ACCOUNT_ENTRY_HOLD',null,$2,'{}','V19-SCOPE-AWARE-ENTRY-1') result",[OWNER,state])).rows[0].result;
+ assert.equal(result.globalCircuit,true);const rt=(await pg.query('select circuit_open,incident_id,incident_generation from v11_long_regime_runtime')).rows[0];
+ assert.equal(rt.circuit_open,true);assert.equal(rt.incident_id,result.id);assert.equal(Number(rt.incident_generation),1);
+ const proof=async id=>{const ms=Number((await pg.query('select extract(epoch from clock_timestamp())*1000 ms')).rows[0].ms),
+  evidence={positions:[],ordersObservedAt:ms,observation:{id,source:'BINANCE_ACCOUNT_REST',requested_at_ms:ms,received_at_ms:ms}};
+  return (await pg.query("select v19_account_recovery_observation($1,$2,1,'V19-SCOPE-AWARE-ENTRY-1',$3) result",[OWNER,result.id,evidence])).rows[0].result;};
+ assert.equal((await proof('account-1')).checks,1);
+ await pg.exec("update v18_ops_incidents set last_observed_at=clock_timestamp()-interval '60 seconds',first_clean_at=clock_timestamp()-interval '120 seconds'");
+ assert.equal((await proof('account-2')).checks,2);await pg.exec("update v18_ops_incidents set last_observed_at=clock_timestamp()-interval '60 seconds'");
+ assert.equal((await proof('account-3')).resolved,true);
+ assert.deepEqual((await pg.query('select circuit_open from v11_long_regime_runtime')).rows[0],{circuit_open:false});
+ assert.deepEqual((await pg.query('select status from v18_ops_incidents where id=$1',[result.id])).rows[0],{status:'RESOLVED'});await pg.close();
+});
+
+test('SQL V19 account reclassification links and supersedes only the prior generation',async()=>{
+ const pg=await setup(),state={exposureState:'UNKNOWN',accountingState:'ATTRIBUTION_INVESTIGATING',orderSource:'UNKNOWN',recheck:[]};
+ const first=(await pg.query("select v19_record_incident($1,'INCOMPLETE_OR_STALE_SNAPSHOT','stale','ACCOUNT_ENTRY_HOLD',null,$2,'{}','V19-SCOPE-AWARE-ENTRY-1') result",[OWNER,state])).rows[0].result;
+ const second=(await pg.query("select v19_record_incident($1,'ACCOUNT_RISK_UNBOUNDED','unbounded','ACCOUNT_RISK_BLOCK',null,$2,'{}','V19-SCOPE-AWARE-ENTRY-1') result",[OWNER,{...state,accountingState:'CONFLICT'}])).rows[0].result;
+ assert.equal(second.supersedes,first.id);assert.notEqual(second.id,first.id);
+ assert.deepEqual((await pg.query('select status,resolved_at is not null resolved from v18_ops_incidents where id=$1',[first.id])).rows[0],
+  {status:'SUPERSEDED',resolved:true});await pg.close();
+});
+
+test('SQL V19 symbol recovery requires independent evidence and cannot clear a superseded generation',async()=>{
+ const pg=await setup(),state={exposureState:'FLAT',accountingState:'ATTRIBUTION_INVESTIGATING',orderSource:'BOT',recheck:[]};
+ const one=(await pg.query("select v19_record_incident($1,'DB_ONLY_POSITION','one','SYMBOL_QUARANTINE','CASEUSDT',$2,'{}','V19-SCOPE-AWARE-ENTRY-1') result",[OWNER,state])).rows[0].result,
+  ms=Number((await pg.query('select extract(epoch from clock_timestamp())*1000 ms')).rows[0].ms),
+  evidence={clean:true,version:'V19-SCOPE-AWARE-ENTRY-1',symbol:'CASEUSDT',positions:[],ordersObservedAt:ms,
+    observation:{id:'one',source:'BINANCE_ACCOUNT_REST',requested_at_ms:ms,received_at_ms:ms}};
+ const first=(await pg.query("select v19_symbol_recovery_observation($1,$2,$3,'V19-SCOPE-AWARE-ENTRY-1',$4) result",[OWNER,one.id,one.generation,evidence])).rows[0].result;
+ assert.equal(first.checks,1);assert.equal(first.resolved,false);
+ await pg.exec("update v18_ops_incidents set last_observed_at=clock_timestamp()-interval '60 seconds',first_clean_at=clock_timestamp()-interval '60 seconds'");
+ evidence.observation.id='two';const second=(await pg.query("select v19_symbol_recovery_observation($1,$2,$3,'V19-SCOPE-AWARE-ENTRY-1',$4) result",[OWNER,one.id,one.generation,evidence])).rows[0].result;
+ assert.equal(second.resolved,true);assert.equal((await pg.query('select circuit_open from v11_long_regime_runtime')).rows[0].circuit_open,false);
+ const newer=(await pg.query("select v19_record_incident($1,'QUANTITY_MISMATCH','new','SYMBOL_QUARANTINE','CASEUSDT',$2,'{}','V19-SCOPE-AWARE-ENTRY-1') result",[OWNER,{...state,exposureState:'HELD'}])).rows[0].result;
+ const old=(await pg.query("select v19_symbol_recovery_observation($1,$2,$3,'V19-SCOPE-AWARE-ENTRY-1',$4) result",[OWNER,one.id,one.generation,evidence])).rows[0].result;
+ assert.equal(old.reason,'INCIDENT_CAS_MISS');assert.notEqual(newer.id,one.id);await pg.close();
+});
+
+test('SQL V19 flat-evidence slot exclusion is exact, fresh and cannot exceed ten effective exposures',async()=>{
+ const pg=await setup(),id=n=>'22222222-2222-4222-8222-'+String(n).padStart(12,'0');
+ for(let n=1;n<=10;n++)await pg.query("insert into v11_long_regime_positions(id,symbol,state,metadata) values($1,$2,'OPEN',$3)",[id(n),`COIN${n}USDT`,{executionMode:'LEADER_MOMENTUM_V17'}]);
+ const state={exposureState:'FLAT',accountingState:'ATTRIBUTION_INVESTIGATING',orderSource:'BOT',recheck:[]};
+ await pg.query("select v19_record_incident($1,'DB_ONLY_POSITION','flat','SYMBOL_QUARANTINE','COIN1USDT',$2,$3,'V19-SCOPE-AWARE-ENTRY-1')",[OWNER,state,{positionId:id(1)}]);
+ await pg.query("insert into v11_long_regime_positions(id,symbol,state,metadata) values($1,'COIN11USDT','OPEN',$2)",[id(11),{executionMode:'LEADER_MOMENTUM_V17'}]);
+ await assert.rejects(()=>pg.query("insert into v11_long_regime_positions(id,symbol,state,metadata) values($1,'COIN12USDT','OPEN',$2)",[id(12),{executionMode:'LEADER_MOMENTUM_V17'}]),/SLOT_CAP/);
+ await pg.close();
+});
+
+test('SQL V18 settlement accepts the exact active V19 symbol incident before accounting proof validation',async()=>{
+ const pg=await setup(),pid='22222222-2222-4222-8222-222222222222',sid='33333333-3333-4333-8333-333333333333',
+  oid='44444444-4444-4444-8444-444444444444',entry='90000000021';
+ await pg.query("insert into v11_long_regime_positions(id,signal_id,symbol,side,state,original_quantity,remaining_quantity,entry_price,entry_at,metadata,updated_at) values($1,$2,'CASEUSDT','LONG','OPEN',5,5,10,clock_timestamp()-interval '1 hour',$3,clock_timestamp())",
+  [pid,sid,{executionMode:'LEADER_MOMENTUM_V17',entryOrderId:entry,v18SettledPnl:0}]);
+ await pg.query("insert into v11_long_regime_orders(id,signal_id,position_id,symbol,intent,state,exchange_order_id,request_payload) values($1,$2,$3,'CASEUSDT','OPEN_LONG','FILLED',$4,$5)",
+  [oid,sid,pid,entry,{order:{side:'BUY',position_side:'LONG',position_effect:'OPEN'}}]);
+ const state={exposureState:'FLAT',accountingState:'ATTRIBUTION_INVESTIGATING',orderSource:'BOT',recheck:[]},incident=(await pg.query(
+  "select v19_record_incident($1,'DB_ONLY_POSITION','flat','SYMBOL_QUARANTINE','CASEUSDT',$2,$3,'V19-SCOPE-AWARE-ENTRY-1') result",[OWNER,state,{positionId:pid}])).rows[0].result,
+  updated=(await pg.query('select updated_at from v11_long_regime_positions where id=$1',[pid])).rows[0].updated_at,
+  evidence={version:'V18-DB-ONLY-EVIDENCE-1',classification:'VERIFIED_BOT_EXIT',targetPositionId:pid,targetSignalId:sid,
+    targetUpdatedAt:updated,targetRemainingQuantity:5,symbol:'CASEUSDT',entryOrderId:entry};
+ await assert.rejects(()=>pg.query('select v18_settle_db_only_exit($1,$2,$3,$4,$5)',[OWNER,incident.id,incident.generation,pid,evidence]),/DB_ONLY_STALE_LIVE_EVIDENCE/);
+ await pg.close();
+});
+
 test('SQL fill-first/native-metadata-first, duplicates and foreign scope attribution',async()=>{
  const pg=await setup(),pid='22222222-2222-4222-8222-222222222222';
  await pg.query("insert into v11_long_regime_positions(id,symbol,side,metadata,remaining_quantity,state) values($1,'EDGEUSDT','LONG',$2,0,'CLOSED')",[pid,{executionMode:'LEADER_MOMENTUM_V17'}]);
@@ -120,7 +202,7 @@ test('SQL sanitized stale-stop settlement is atomic, exact, idempotent, and alon
   signal='44444444-4444-4444-8444-444444444444',entryOrder='90000000001',exitOrder='90000000002',client='tb-v17s-stale0000000000000000001',algo='80000000001';
  const ms=Number((await pg.query('select extract(epoch from clock_timestamp())*1000 ms')).rows[0].ms),
   entryAt=new Date(ms-600000).toISOString(),sourceClosed=new Date(ms-700000).toISOString(),exitAt=new Date(ms-1000).toISOString();
- const sourceMeta={executionMode:'LEADER_MOMENTUM_V17',exitProtection:{health:'RECONCILIATION_PENDING',orders:[{clientId:client,algoId:algo,status:'CANCEL_PENDING',terminal:false,
+ const sourceMeta={executionMode:'LEADER_MOMENTUM_V17',exitProtection:{health:'RECONCILIATION_PENDING',orders:[{clientId:client,algoId:algo,status:'CANCEL_PENDING',terminal:false,crossLifecycleEvidencePending:true,
   spec:{params:{clientAlgoId:client,symbol:'CASEUSDT',side:'SELL',positionSide:'BOTH',reduceOnly:'true',type:'STOP_MARKET',quantity:120,triggerPrice:.01503}}}]}};
  const targetMeta={executionMode:'LEADER_MOMENTUM_V17',entryOrderId:entryOrder,v18SettledPnl:-.000767,qv3:{version:'QV3_ENTRY_EXIT_TWO_1'},
   exitProtection:{health:'PROTECTED',orders:[{clientId:'tb-v17s-current',algoId:'current-algo',status:'REJECTED',terminal:true,
@@ -150,7 +232,9 @@ test('SQL sanitized stale-stop settlement is atomic, exact, idempotent, and alon
  assert.deepEqual(fills,[{v17_position_id:target,accounting_status:'ACCOUNTED',source:'AUTOMATED'},{v17_position_id:target,accounting_status:'ACCOUNTED',source:'AUTOMATED'}]);
  assert.deepEqual((await pg.query("select v17_position_id,accounting_status from exchange_trade_fills where side='BUY'")).rows[0],
   {v17_position_id:target,accounting_status:'PENDING'});
- assert.equal(Number((await pg.query('select realized_pnl_usdt from v11_long_regime_positions where id=$1',[source])).rows[0].realized_pnl_usdt),-1.1);
+ const sourceRow=(await pg.query('select realized_pnl_usdt,metadata from v11_long_regime_positions where id=$1',[source])).rows[0];
+ assert.equal(Number(sourceRow.realized_pnl_usdt),-1.1);
+ assert.equal(sourceRow.metadata.exitProtection.orders[0].crossLifecycleEvidencePending,false);
  const replay=(await pg.query('select v18_settle_db_only_exit($1,$2,1,$3,$4) result',[OWNER,id,target,evidence])).rows[0].result;
  assert.equal(replay.idempotent,true);assert.equal((await pg.query("select count(*) n from exchange_trade_fills where accounting_status='ACCOUNTED'")).rows[0].n,2);
  const first=await observe(pg,id,1,'settled-1');assert.equal(first.checks,1);

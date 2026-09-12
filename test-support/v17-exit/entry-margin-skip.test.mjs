@@ -34,10 +34,16 @@ function make({available}) {
     rec: x => (x && typeof x === 'object' && !Array.isArray(x) ? x : {}),
     N: (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d),
     sym: p => String(p?.market ?? p?.symbol ?? '').toUpperCase(),
+    active: p => Array.isArray(p?.positions) ? p.positions : [],
     ceilStep: (v, s) => Math.ceil(v / s) * s, addStep: (v, s) => v + s,
     floorStep: (v, s) => Math.floor(v / s) * s,
     cid: () => 'tb-v11e-x', terminal: () => false, fill: () => ({qty: 0, avg: 0, status: 'NEW'}),
     classifyPortfolio:()=>({ok:true}),readOpsOrders:async()=>[],opsGateway:()=>ctx.gateway,
+    readOpsPair:async()=>({pf:{positions:[],positions_complete:true,available_quote:available,total_equity_quote:available,
+      total_initial_margin_quote:0},positions:[],manual:[],orders:[],quarantines:[],match:{ok:true,issues:[],accounting:[]}}),
+    withCandidateOrders:async(_db,pair)=>pair,
+    decideEntry:async()=>({allowed:true,scope:'NORMAL',reasons:[],evidence:{}}),persistDecisionRisk:async()=>{},
+    recordMismatch:async()=>[],
     portfolioMatches: () => ({ok: true, ext: []}),
     manualPositionAllowances: async () => [],
     requireLeaderEntryControls: async () => {},
@@ -46,6 +52,7 @@ function make({available}) {
     snap: async () => ({available_quote: available, ageMs: 0}),
     gateway: async c => {
       if (c.action === 'p10_portfolio') return {positions: [], positions_complete: true, available_quote: available};
+      if (c.action === 'v18_open_orders') return {complete:true,orders:[],algos:[],observed_at_ms:Date.now()};
       if (c.action === 'quote') return {best_bid: 99.9, best_ask: 100};
       if (c.action === 'symbol_info') return {quantity_step: 0.001, min_notional: 5};
       throw Error(`no order may be placed: ${c.action}`);

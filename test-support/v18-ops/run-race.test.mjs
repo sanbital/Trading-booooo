@@ -10,7 +10,11 @@ function race(baseline=false,exact=true){
   if(type==='gateway'&&cmd.action==='p10_portfolio'&&state.armed&&!state.fired){
    state.fired=true;state.exchange=state.exchange.filter(x=>x.market!=='TACUSDT');state.stopFills.TACUSDT=nativeFill(tac(),{exact});
   }
- }});return h;
+ }});
+ h.state.createOrder=(cmd,state)=>({order:{orderId:'synthetic-no-fill',clientOrderId:cmd.order.identifier,
+  symbol:cmd.order.market,side:'BUY',positionSide:'BOTH',reduceOnly:false,origQty:String(cmd.order.quantity),
+  executedQty:'0',status:'EXPIRED',avgPrice:'0',updateTime:state.now,fills:[]}});
+ return h;
 }
 test('01 baseline actual run/manage/refresh/openBull reproduces TAC COUNT:1:2 circuit',async()=>{
  const h=race(true);await assert.rejects(()=>h.ctx.runCycle(),/EXTERNAL_POSITION/);
@@ -24,15 +28,17 @@ test('03/04/20 baseline circuit skips price management, has no recovery or cycle
  assert.equal(h.state.tables.v11_long_regime_runtime[0].circuit_open,true);
  assert.equal(h.state.tables.v11_long_regime_runtime[0].last_cycle_completed_at,undefined);
 });
-test('01 patched actual run defers SOPH, reconciles TAC, continues SAGA next cycle',async()=>{
+test('01 patched actual run evaluates unrelated SOPH after TAC reconciliation, continues SAGA next cycle',async()=>{
  const h=race();const a=await h.ctx.runCycle();assert.equal(h.state.fired,true);
- assert.equal(row(h,'TACUSDT').state,'CLOSED');assert.ok(!h.state.calls.some(c=>c.action==='create_order'));
- h.advance();h.state.quotes.SAGAUSDT=.0185;await h.ctx.runCycle();
+ assert.equal(row(h,'TACUSDT').state,'OPEN');assert.equal(h.state.calls.filter(c=>c.action==='create_order').length,1);
+ assert.equal(h.state.tables.v11_long_regime_runtime[0].circuit_open,false);
+ assert.ok(h.state.tables.v18_ops_incidents.some(x=>x.symbol==='TACUSDT'&&x.control_scope==='SYMBOL_QUARANTINE'));
+ h.advance();h.state.quotes.SAGAUSDT=.0185;await h.ctx.runCycle();assert.equal(row(h,'TACUSDT').state,'CLOSED');
  assert.equal(row(h,'SAGAUSDT').peak_price,.0185);assert.ok(row(h,'SAGAUSDT').hard_stop_price>.01656525);
  assert.notEqual(a.entry.entered,true);
 });
 test('02 raw/detail fills delayed 120s: TAC exposure zero, PnL null, SAGA management continues',async()=>{
- const h=race(false,false);await h.ctx.runCycle();
+ const h=race(false,false);await h.ctx.runCycle();h.advance();await h.ctx.runCycle();
  assert.equal(row(h,'TACUSDT').remaining_quantity,0);assert.equal(row(h,'TACUSDT').realized_pnl_usdt,null);
  h.advance();h.state.quotes.SAGAUSDT=.0185;await h.ctx.runCycle();assert.equal(row(h,'SAGAUSDT').peak_price,.0185);
  h.advance();h.state.stopFills.TACUSDT=nativeFill(tac());await h.ctx.runCycle();
@@ -52,7 +58,7 @@ test('04 flat recoverable incident clears only after three fresh independent cyc
 test('14 production recovery lock timeout preserves completed SAGA protection and next-cycle recovery',async()=>{
  let fail=true;
  const h=harness({positions:[saga()],circuit:true,signal:false,hook:({type,name})=>{
-  if(type==='rpc'&&name==='v18_recovery_observation'&&fail){fail=false;throw Error('RECOVERY_CAS:canceling statement due to lock timeout');}
+  if(type==='rpc'&&name==='v19_account_recovery_observation'&&fail){fail=false;throw Error('RECOVERY_CAS:canceling statement due to lock timeout');}
  }});
  h.state.quotes.SAGAUSDT=.0185;
  await assert.rejects(()=>h.ctx.runCycle(),/lock timeout/);
@@ -78,7 +84,7 @@ test('06 true external position is isolated, never adopted or liquidated',async(
  const h=harness({positions:[saga()],signal:false});h.state.exchange.push({market:'MANUALUSDT',side:'LONG',quantity:9});
  await h.ctx.runCycle();assert.equal(h.state.tables.v11_long_regime_positions.length,1);
  assert.ok(!h.state.calls.some(c=>c.action==='create_order'));assert.ok(row(h,'SAGAUSDT').last_evaluated_at);
- assert.equal(h.state.tables.v11_long_regime_runtime[0].incident_kind,'UNEXPLAINED_EXPOSURE');
+ assert.equal(h.state.tables.v11_long_regime_runtime[0].incident_kind,'EXCHANGE_ONLY_POSITION');
 });
 test('07 mixed manual/auto symbol: no software close or stop replacement on that symbol',async()=>{
  const h=harness({positions:[saga(),tac()],signal:false,manual:[{symbol:'SAGAUSDT',side:'LONG',maxQuantity:8000}]});
@@ -94,7 +100,7 @@ test('14 lease expires during quote: no later row writes or exchange mutations',
 test('15 incomplete or stale portfolio never becomes flat/recovered',async()=>{
  for(const override of [{positions_complete:false},{observation:{id:'cached',source:'BINANCE_ACCOUNT_REST',requested_at_ms:0,received_at_ms:0}}]){
   const h=harness({circuit:true,signal:false});h.state.portfolioOverride=override;await h.ctx.runCycle();
-  assert.equal(h.state.tables.v11_long_regime_runtime[0].circuit_open,true);assert.ok(!h.state.calls.some(c=>c.rpc==='v18_recovery_observation'));
+  assert.equal(h.state.tables.v11_long_regime_runtime[0].circuit_open,true);assert.ok(!h.state.calls.some(c=>c.rpc==='v19_account_recovery_observation'));
  }
 });
 test('16 one symbol quote timeout cannot starve another owned symbol',async()=>{
@@ -116,7 +122,7 @@ test('18 LEGACY closed position invocation produces no orders or ownership edits
  assert.ok(!h.state.calls.some(c=>c.action==='create_order'));assert.equal(h.state.writes.length,0);
 });
 test('19 recovery proof cannot clear a newly opened incident generation',async()=>{
- const h=harness({circuit:true,signal:false,hook:({type,name,state})=>{if(type==='rpc'&&name==='v18_recovery_observation'){state.tables.v11_long_regime_runtime[0].incident_id='new-incident';state.tables.v11_long_regime_runtime[0].incident_generation++;}}});
+ const h=harness({circuit:true,signal:false,hook:({type,name,state})=>{if(type==='rpc'&&name==='v19_account_recovery_observation'){state.tables.v11_long_regime_runtime[0].incident_id='new-incident';state.tables.v11_long_regime_runtime[0].incident_generation++;}}});
  const r=await h.ctx.runCycle();assert.equal(r.recovery.resolved,false);assert.equal(h.state.tables.v11_long_regime_runtime[0].circuit_open,true);
 });
 test('20 early return has heartbeat, not a fabricated management success',async()=>{

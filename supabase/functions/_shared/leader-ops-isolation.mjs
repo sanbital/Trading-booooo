@@ -1,5 +1,6 @@
 /** Operational isolation only. No strategy parameters, startup or exchange side effects. */
-export const OPS_PATCH = 'V18-DB-ONLY-RECONCILIATION-1';
+import {accountingIssue,operationalIssue} from './leader-entry-control.mjs';
+export const OPS_PATCH = 'V19-SCOPE-AWARE-ENTRY-1';
 export const SCOPE = Object.freeze({exchange:'binance_futures',account_scope:'futures'});
 export const RECOVERABLE = new Set(['KNOWN_EXIT_PENDING_RECONCILIATION','KNOWN_ORDER_PENDING_RECONCILIATION','INCOMPLETE_OR_STALE_SNAPSHOT','TRANSIENT_DEPENDENCY','ACCOUNTING_DETAILS_PENDING','DB_CAS_CONFLICT']);
 export const sameQuantity = (a,b) => Number.isFinite(a)&&Number.isFinite(b)&&Math.abs(a-b)<=Math.max(1e-10,Math.abs(b)*1e-8);
@@ -36,10 +37,11 @@ export function classifyPortfolio(positions,pf,{manual=[],orders=[],now=Date.now
   const issues=[],safe=[];
   const add=(kind,p,x,extra={})=>issues.push({kind,symbol:symbol(p??x),positionId:p?.id??null,
     side:p?.side??side(x),dbQuantity:p?Number(p.remaining_quantity):null,exchangeQuantity:x?amount(x):null,
-    exchange:SCOPE.exchange,accountScope:SCOPE.account_scope,...extra});
+    exchange:SCOPE.exchange,accountScope:SCOPE.account_scope,...extra,
+    ...operationalIssue({kind,symbol:symbol(p??x),exchangeQuantity:x?amount(x):null,...extra})});
   if(!freshPortfolio(pf,now)) {
     add('INCOMPLETE_OR_STALE_SNAPSHOT',null,null,{observation:pf?.observation??null});
-    return {ok:false,issues,safe,external:[],snapshot:pf?.observation??null};
+    return {ok:false,issues,accounting:[],safe,external:[],snapshot:pf?.observation??null};
   }
   const exchange=pf.positions.filter(p=>amount(p)!==0);
   for(const x of exchange)if(!Number.isFinite(amount(x))||!symbol(x)||!side(x))add('IDENTITY_OR_SIDE_MISMATCH',null,x);
@@ -74,7 +76,8 @@ export function classifyPortfolio(positions,pf,{manual=[],orders=[],now=Date.now
   }
   for(const o of riskOrders(orders))if(!issues.some(i=>i.kind==='UNKNOWN_ORDER_OUTCOME'&&i.symbol===o.symbol))
     add('UNKNOWN_ORDER_OUTCOME',null,{symbol:o.symbol},{orderId:o.id,clientOrderId:o.client_order_id});
-  return {ok:issues.length===0,issues,safe,external:exchange,snapshot:pf.observation};
+  const accounting=orders.map(o=>accountingIssue(o,exchange)).filter(Boolean);
+  return {ok:issues.length===0,issues,accounting,safe,external:exchange,snapshot:pf.observation};
 }
 export function classifyFailure(error) {
   const message=String(error?.message??error);

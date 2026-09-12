@@ -45,7 +45,7 @@ function fixture(){
   const algo={symbol:'CASEUSDT',clientAlgoId:STALE_CLIENT,algoId:ALGO,algoStatus:'FINISHED',actualOrderId:EXIT_ORDER,
     side:'SELL',positionSide:'BOTH',reduceOnly:true,actualQty:'100'};
   const now=EXIT_AT+1000,portfolio={exchange:'binance_futures',account_scope:'futures',positions_complete:true,positions:[],
-    observation:{id:'fresh-chz-flat',source:'BINANCE_ACCOUNT_REST',requested_at_ms:now,received_at_ms:now}};
+    observation:{id:'fresh-case-flat',source:'BINANCE_ACCOUNT_REST',requested_at_ms:now,received_at_ms:now}};
   const openOrders={complete:true,orders:[],algos:[],observed_at_ms:now};
   return {target,source,entry,trades,ledger,order,algo,portfolio,openOrders,now};
 }
@@ -67,11 +67,12 @@ test('01 sanitized production-shaped run -> classify -> stale-stop reconcile -> 
   assert.equal(target.metadata.qv3.version,'QV3_ENTRY_EXIT_TWO_1');assert.equal(source.realized_pnl_usdt,-1.1);
   assert.equal(source.metadata.exitProtection.health,'CROSS_LIFECYCLE_EXECUTION');
   assert.deepEqual(h.state.tables.exchange_trade_fills.map(x=>[x.v17_position_id,x.accounting_status]),[[TARGET,'ACCOUNTED'],[TARGET,'ACCOUNTED']]);
-  assert.equal(h.state.tables.v11_long_regime_runtime[0].circuit_open,true);assert.equal(first.protectionHealth,'FLAT');
+  assert.equal(h.state.tables.v11_long_regime_runtime[0].circuit_open,false);assert.equal(first.protectionHealth,'FLAT');
+  assert.equal(first.symbolRecovery[0].resolved,false);assert.equal(first.symbolRecovery[0].checks,1);
   assert.ok(!h.state.calls.some(c=>c.action==='create_order'));
   const reconciliationSuccess=h.state.tables.v11_long_regime_runtime[0].last_reconciliation_success_at;
-  h.advance();await h.ctx.runCycle();assert.equal(h.state.tables.v11_long_regime_runtime[0].circuit_open,true);
-  h.advance();const third=await h.ctx.runCycle();assert.equal(third.recovery.resolved,true);
+  h.advance();const second=await h.ctx.runCycle();assert.equal(second.symbolRecovery[0].resolved,true);
+  h.advance();await h.ctx.runCycle();
   assert.equal(h.state.tables.v11_long_regime_runtime[0].circuit_open,false);
   assert.equal(h.state.tables.v11_long_regime_runtime[0].entry_block_reason,'NO_FRESH_BULL_SIGNAL');
   assert.equal(h.state.tables.v11_long_regime_runtime[0].last_reconciliation_success_at,reconciliationSuccess);
