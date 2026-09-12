@@ -1,16 +1,12 @@
 name: Collect V20 strategy evidence read-only
-# Run 5 repairs COPY encoding and removes the one failed run that exposed a row.
+# Completed collection is retained for explicit read-only reruns only.
 
 on:
-  push:
-    branches: [research/v20-loss-preservation-20260912]
-    paths:
-      - ".github/workflows/v20-strategy-evidence-20260912.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
-  actions: write
+  actions: read
 
 concurrency:
   group: collect-v20-strategy-evidence
@@ -33,14 +29,6 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Remove exposed failed-run log
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh api --method DELETE "/repos/$GITHUB_REPOSITORY/actions/runs/34695703853"
 
       - name: Prove immutable production basis and research-only scope
         shell: bash
