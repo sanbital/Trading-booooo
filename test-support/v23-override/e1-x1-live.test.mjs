@@ -69,6 +69,29 @@ test('enabled E1 is in the real open path and dispatches only at the post-recove
   assert.equal(h.state.calls.filter(c=>c.action==='create_order').length,1);
 });
 
+test('a newly filled and protected E1/X1 position is never reported FLAT in the same cycle',async()=>{
+  const tape=async(_symbol,start,end)=>({available:true,startAt:start,endAt:end,tradeCount:2,
+    last10sReturn:.001,takerBuyQuoteShare:.6,raw:[agg(1,start+1,.004,10,true),agg(2,end-1,.004004,10,false)]});
+  const h=harness({e1Enabled:true,x1Enabled:true,e1Tape:tape,advanceTimers:true});
+  h.state.entryQuote=state=>({best_bid:.004,best_ask:.004001,
+    bids:[{price:.004,size:1_000_000}],asks:[{price:.004001,size:1_000_000}],raw:{test:true},
+    timing:{requested_at_ms:state.now-20,received_at_ms:state.now-10,source:'GATEWAY_RECEIPT'}});
+  h.state.createOrder=(cmd,state)=>{
+    const quantity=cmd.order.quantity,price=.004001;
+    state.exchange=[{market:cmd.order.market,side:'LONG',quantity,entry_price:price,leverage:3}];
+    return{order:{orderId:'e1-filled',clientOrderId:cmd.order.identifier,symbol:cmd.order.market,side:'BUY',
+      positionSide:'BOTH',reduceOnly:false,origQty:String(quantity),executedQty:String(quantity),status:'FILLED',
+      avgPrice:String(price),updateTime:state.now,fills:[{tradeId:'e1-buy',qty:String(quantity),price:String(price),
+        commission:'.06',commissionAsset:'USDT',time:state.now}]}};
+  };
+  const result=await h.ctx.runCycle(),runtime=h.state.tables.v11_long_regime_runtime[0],
+    position=h.state.tables.v11_long_regime_positions.find(p=>p.state==='OPEN');
+  assert.equal(result.entry.entered,true);assert.equal(result.entry.entryProtection.status,'PROTECTED');
+  assert.equal(result.protectionHealth,'PROTECTED');assert.equal(runtime.protection_health,'PROTECTED');
+  assert.equal(position.metadata.entryConfirmationPolicyVersion,E1_POLICY.policyVersion);
+  assert.equal(position.metadata.exitObservationPolicyVersion,'X1_FAST_OBSERVATION_OVERRIDE_1');
+});
+
 const executorSource=readFileSync(new URL('../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
 const managerCode=executorSource.slice(executorSource.indexOf('async function leaderQuote('),
   executorSource.indexOf('const exchangeGateway='));

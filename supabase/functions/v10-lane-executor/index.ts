@@ -909,6 +909,22 @@ async function run(db) {
     // keeps the rollback flag behavior-identical to the deployed baseline.
     if(X1_ENABLED){pair=await readOpsPair(db);x1Fast=await runX1FastObservation(db,pair,Date.parse(cycleStarted)+50000)}
     else x1Fast=await runX1FastObservation(db,pair,Date.parse(cycleStarted)+50000);
+    // Entry can create a protected position after the first health calculation. Read
+    // the final owned exposure so the same response/heartbeat cannot report FLAT while
+    // a newly filled position and its resident stop are already live.
+    if(X1_ENABLED||entry.entered){
+      try{
+        const finalPair=await readOpsPair(db);await recordMismatch(db,finalPair.match);pair=finalPair;
+        if(freshPortfolio(pair.pf))accountEvidenceAt=new Date(Number(pair.pf.observation.requested_at_ms)).toISOString();
+        health=managed.some(x=>x.error||x.skipped)?"DEGRADED":!pair.match.ok?"DEGRADED":pair.positions.length===0?"FLAT":
+          pair.positions.every(p=>p.metadata?.exitProtection?.health==="PROTECTED"&&
+            (p.metadata?.exitProtection?.orders??[]).some(o=>o.terminal!==true&&["ACTIVE","NEW"].includes(o.status)))?
+            "PROTECTED":"SOFTWARE_ONLY";
+      }catch(error){
+        if(classifyFailure(error).fatal)throw error;
+        health="DEGRADED";x1Fast.errors??=[];x1Fast.errors.push({at:Date.now(),reason:`FINAL_HEALTH:${String(error.message??error)}`});
+      }
+    }
     return {ok:true,revision:REVISION,patch:PATCH,entryExecutionPolicy:{version:ENTRY_EXECUTION_POLICY_VERSION,
       maxEntryDriftPct:POLICY.maxEntryDriftPct,scope:"NEW_FILLS_ONLY"},qv3Runtime:{version:QV3_VERSION,basis:QV3_ACTIVATION_BASIS,
       activation:QV3_LIVE_CUTOVER,active:Number.isSafeInteger(QV3_LIVE_CUTOVER)&&Date.now()>=QV3_LIVE_CUTOVER},
