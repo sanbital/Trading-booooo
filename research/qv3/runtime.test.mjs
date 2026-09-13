@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {qv3Entry,qv3Exit,qv3Stamp,qv3Scope,QV3_ACTIVATION_BASIS,QV3_LIVE_CUTOVER} from '../../supabase/functions/_shared/leader-qv3-runtime.mjs';
+import {qv3Entry,qv3Exit,qv3Stamp,qv3Scope,qv3AuditEvidence,QV3_ACTIVATION_BASIS,QV3_LIVE_CUTOVER,QV3_INPUT_EVIDENCE_VERSION} from '../../supabase/functions/_shared/leader-qv3-runtime.mjs';
 import {entryGate,exitSignal} from '../../supabase/functions/_shared/leader-qv3-rules.mjs';
 const b=(t,o,h,l,c)=>[t,o,h,l,c,1,t+59999];
 const xs=[b(0,100,101,99,100.5),b(60000,100.5,100.6,100,100.4),b(120000,100.4,100.5,100,100.3)];
@@ -49,6 +49,15 @@ test('activation stamp is per position and cannot admit pre-cutover positions',(
 test('assessment never mutates peak, stop, partial status or remaining quantity',()=>{
  const state={...p,peakPrice:110,stopPrice:105,t1_completed:true,remaining_quantity:.3};
  const before=structuredClone(state);qv3Exit(state,xs,180000);assert.deepEqual(state,before);
+});
+test('audit evidence captures only the exact last two completed response candles and cannot affect state',()=>{
+ const forming=b(180000,100.3,100.4,100.2,100.35),input=[forming,...xs].reverse(),before=structuredClone(input);
+ const evidence=qv3AuditEvidence(input,180000,179999,179900);
+ assert.equal(evidence.version,QV3_INPUT_EVIDENCE_VERSION);assert.equal(evidence.status,'CAPTURED');
+ assert.deepEqual(evidence.tail.map(row=>row.openTimeMs),[60000,120000]);
+ assert.deepEqual(input,before);assert.equal(evidence.responseRows,4);assert.equal(evidence.validCompletedRows,3);
+ assert.equal(evidence.requestToEvaluationMs,100);
+ assert.deepEqual(qv3AuditEvidence(null,180000).tail,[]);
 });
 test('research and runtime chosen rules match on deterministic complete histories',()=>{
  let seed=321,count=0;const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/2**32;};
