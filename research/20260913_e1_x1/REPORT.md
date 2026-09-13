@@ -305,7 +305,7 @@ Supabase security advisor에는 기존 7개 rule family, 360 findings가 남아 
 | native 보호 | 완료 | 0.29214 설치 후 0.29603으로 단조 상승, 새 ACK 뒤 기존 stop 취소 |
 | X1 관측 | 완료 | bid peak 0.30509, 전량 sell-VWAP peak 0.3034 |
 | 새 stamp 청산·정산 | 1건 | native stop, 비용 후 -1.07524050 USDT |
-| 종료 후 계좌 | flat | signed account REST position 0, 일반 주문 0, runtime `FLAT` |
+| 종료 후 계좌 | flat | signed account REST position 0, 일반 주문 0, 조건부 주문 0, runtime `FLAT` |
 
 이 거래는 E1이 `WATCH_FAST_WEAK`로 분기하지 않았고, X1 관측 전에 기존 분 단위 R5가
 이미 risk-cut stop을 올렸습니다. X1의 추가 stop update도 없었습니다. 따라서 이 한 건은
@@ -325,5 +325,7 @@ v43 자연 주기는 열린 동안 `PROTECTED`를 반환해 같은 주기의 잘
 안의 제한된 1초 관측입니다. 첫 운영 loop는 전량 실행 가능 관측 1회와 얕은 top-bid 관측
 30회를 기록했으므로, 지속 1초 L2 커버리지로 과장하지 않습니다.
 
-상세 원시 식별자·시각·fill·stop 세대·최종 account proof는
+2026-09-13 15:30:28 UTC의 별도 read-only gateway 상태 조회도 complete account position 0,
+일반 주문 0, algo/조건부 주문 0을 반환했습니다. gateway source hash와 position mode 자체는
+이 진단에서 검증하지 못했으므로 각각 false로 보존합니다. 상세 원시 식별자·시각·fill·stop 세대·최종 account proof는
 `generated/operator_override_live_evidence.json`에 있습니다. 테스트 주문은 만들지 않았습니다.

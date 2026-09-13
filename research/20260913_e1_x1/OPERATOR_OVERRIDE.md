@@ -56,7 +56,7 @@
   변경은 만들지 않았습니다.
 - position은 2026-09-13 15:21:10.247 UTC에 native stop으로 종료됐습니다. 원시 account
   fill·수수료와 DB 정산 순손익은 -1.07524050 USDT로 일치했습니다.
-- 종료 후 signed account proof는 포지션 0, 일반 주문 0이었고 executor의 일반·조건부 주문
+- 종료 후 signed account proof는 포지션 0, 일반 주문 0, algo/조건부 주문 0이었고 executor의
   reconciliation은 수량 401, attribution/accounting complete, runtime `FLAT`을 확인했습니다.
 - 이 거래는 E1 fast-weak 분기와 X1 추가 행동이 모두 없으므로 baseline 대비 성능 차이의
   증거가 아닙니다. `DEFER` 판정은 유지합니다.

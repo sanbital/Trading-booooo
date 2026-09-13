@@ -1,5 +1,5 @@
 {
-  "evidenceCutoffUtc": "2026-09-13T15:24:55.530Z",
+  "evidenceCutoffUtc": "2026-09-13T15:30:29.977Z",
   "activation": {
     "basis": "OPERATOR_OVERRIDE_UNVALIDATED",
     "overrideId": "2026-09-13-USER-PRIORITY-OVERRIDE",
@@ -130,14 +130,21 @@
     }
   },
   "finalAccountProof": {
-    "observedAtUtc": "2026-09-13T15:24:53.746Z",
-    "source": "SIGNED_BINANCE_ACCOUNT_REST_VIA_V18_READONLY_AUDIT",
+    "observedAtUtc": "2026-09-13T15:30:28.183Z",
+    "finishedAtUtc": "2026-09-13T15:30:29.977Z",
+    "source": "SIGNED_GATEWAY_READS_VIA_QV3_OPS_STATUS",
+    "gatewayVersion": "8.0.3-P10-REGIME-ROUTER-V3-SAFE-EXIT",
+    "gatewayOpsPatch": "V18-OPS-ISOLATION-3",
     "positionsComplete": true,
     "positions": [],
     "ordinaryOrders": [],
+    "conditionalOrders": [],
+    "openOrdersComplete": true,
     "databaseOpenPositions": [],
     "databaseRememberedActiveProtectionOrders": [],
-    "allConditionalOrdersCoverageFromReadonlyAudit": false,
+    "gatewaySourceHashVerified": false,
+    "positionModeVerified": false,
+    "earlierReadonlyAuditAtUtc": "2026-09-13T15:24:53.746Z",
     "allOrderReconciliation": {
       "source": "V10_EXECUTOR_V18_OPEN_ORDERS_ORDINARY_AND_ALGO",
       "positionOutcome": "RESOLVED",
