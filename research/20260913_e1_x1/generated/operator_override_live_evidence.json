@@ -1,5 +1,5 @@
 {
-  "evidenceCutoffUtc": "2026-09-13T15:34:18.427Z",
+  "evidenceCutoffUtc": "2026-09-13T15:35:43.682666Z",
   "activation": {
     "basis": "OPERATOR_OVERRIDE_UNVALIDATED",
     "overrideId": "2026-09-13-USER-PRIORITY-OVERRIDE",
@@ -175,11 +175,18 @@
     "finalProtectionHealth": "FLAT"
   },
   "ledgerLinkage": {
-    "exchangeTradeFillsAtCutoff": "ENTRY_ROWS_PRESENT_WITH_NULL_POSITION_LINK; EXIT_ROWS_NOT_YET_PRESENT",
+    "exchangeTradeFillsAtCutoff": "ALL_TWO_ENTRY_AND_TWO_EXIT_ROWS_PRESENT",
+    "v17PositionId": "d8b779bb-b218-41a9-8b37-c96c9c764b13",
+    "v17PositionLinkComplete": true,
+    "entryV17OrderId": "3718e609-52eb-4f11-9561-0c74702c0ffd",
+    "exitNativeStopHasNoV17OrderRow": true,
+    "legacyPositionIdExpectedNullForV17": true,
+    "accountingStatusAtCutoff": "PENDING",
     "settlementEvidence": "SIGNED_ACCOUNT_USER_TRADES_PLUS_NATIVE_ACTUAL_ORDER_ID_AND_TRADE_IDS",
     "exposurePending": false,
     "accountingPending": false,
-    "interpretation": "A collector/linkage gap must not be interpreted as an absent fill or an open exposure."
+    "forcedStatusMutation": false,
+    "interpretation": "The V17 lifecycle link is complete through v17_position_id. PENDING is a late mirror-accounting status after the strategy position was already settled; it was preserved because changing it without an idempotent late-fill accounting contract risks double settlement."
   },
   "performanceInterpretation": {
     "candidateSuperior": false,

@@ -316,9 +316,12 @@ Supabase security advisor에는 기존 7개 rule family, 360 findings가 남아 
 최종 거래소 fill은 250개@0.29725와 151개@0.29722, 진입 fill은
 334개@0.29962와 67개@0.29963이었습니다. 가격 손익 -0.95556999 USDT에 진입·청산
 수수료 0.11967050 USDT를 더한 DB 정산은 -1.07524050 USDT로 일치합니다.
-`exchange_trade_fills`의 position 연결과 exit row는 확인 cutoff에 늦었지만, signed account
-user trades, native stop의 `actualOrderId`, 두 trade ID 및 executor reconciliation이 수량·비용을
-완전히 복원했습니다. 이를 미체결이나 미정산으로 해석하지 않습니다.
+`exchange_trade_fills`에는 진입 2행과 청산 2행이 모두 수집됐고, 네 행 모두 V17 전용
+`v17_position_id`로 해당 position에 연결됐습니다. legacy `position_id`가 null인 것은 V17
+원장 계약에 맞습니다. 다만 mirror 행의 `accounting_status`는 아직 `PENDING`입니다. 전략
+position의 손익·수량·수수료는 signed account user trades, native stop `actualOrderId`, trade ID 및
+executor reconciliation으로 이미 정확히 정산됐으므로, 별도 멱등 late-fill 계약 없이 상태를
+`ACCOUNTED`로 강제 변경해 이중 정산 위험을 만들지 않았습니다.
 
 v43 자연 주기는 열린 동안 `PROTECTED`를 반환해 같은 주기의 잘못된 `FLAT` 표시 수정도
 확인했습니다. X1은 cron 1분 전체를 연속 감시하는 프로세스가 아니라 각 Edge invocation
