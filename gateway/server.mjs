@@ -1665,7 +1665,7 @@ async function p10Portfolio(exchange) {
       mode: "P10_POSITION_PROOF",
     };
   }
-  const requestedAt=Date.now();
+  const requestedAt = Date.now();
   const account = (await futuresRequest(
     "GET",
     "/fapi/v2/account",
@@ -1676,9 +1676,18 @@ async function p10Portfolio(exchange) {
     ...buildFuturesPortfolio(account, {}),
     mode: "P10_POSITION_PROOF",
     account_scope: "futures",
-    positions_complete: Array.isArray(account?.positions)&&Array.isArray(account?.assets)&&
-      account.positions.every(p=>p.positionAmt!=null&&String(p.positionAmt).trim()!==""&&Number.isFinite(Number(p.positionAmt))&&p.symbol&&(Number(p.positionAmt)===0||String(p.symbol).endsWith("USDT"))),
-    observation:{id:crypto.randomUUID(),source:"BINANCE_ACCOUNT_REST",requested_at_ms:requestedAt,received_at_ms:Date.now()},
+    positions_complete: Array.isArray(account?.positions) && Array.isArray(account?.assets) &&
+      account.positions.every((p) =>
+        p.positionAmt != null && String(p.positionAmt).trim() !== "" &&
+        Number.isFinite(Number(p.positionAmt)) && p.symbol &&
+        (Number(p.positionAmt) === 0 || String(p.symbol).endsWith("USDT"))
+      ),
+    observation: {
+      id: crypto.randomUUID(),
+      source: "BINANCE_ACCOUNT_REST",
+      requested_at_ms: requestedAt,
+      received_at_ms: Date.now(),
+    },
   };
 }
 
@@ -2244,11 +2253,20 @@ async function handleCommand(command) {
       if (futures) return binanceFuturesPortfolio();
       return exchange === "upbit" ? upbitPortfolio() : binancePortfolio();
     case "v18_open_orders": {
-      if(!futures)throw Error("V18_FUTURES_ONLY");
-      const [orders,algos]=await Promise.all([
-        futuresRequest("GET","/fapi/v1/openOrders",{},{timeoutMs:2000}).then(r=>r.data),
-        futuresRequest("GET","/fapi/v1/openAlgoOrders",{},{timeoutMs:2000}).then(r=>r.data)]);
-      return {complete:Array.isArray(orders)&&Array.isArray(algos),orders,algos,observed_at_ms:Date.now(),ops_patch:OPS_PATCH};
+      if (!futures) throw Error("V18_FUTURES_ONLY");
+      const [orders, algos] = await Promise.all([
+        futuresRequest("GET", "/fapi/v1/openOrders", {}, { timeoutMs: 2000 }).then((r) => r.data),
+        futuresRequest("GET", "/fapi/v1/openAlgoOrders", {}, { timeoutMs: 2000 }).then((r) =>
+          r.data
+        ),
+      ]);
+      return {
+        complete: Array.isArray(orders) && Array.isArray(algos),
+        orders,
+        algos,
+        observed_at_ms: Date.now(),
+        ops_patch: OPS_PATCH,
+      };
     }
     case "p10_portfolio":
       return p10Portfolio(exchange);

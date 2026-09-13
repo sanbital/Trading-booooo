@@ -10263,7 +10263,12 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
     });
     if (settlementObservation.defer) {
       await patchTradingHeartbeat({ lastFullScanAt: new Date().toISOString() });
-      return { skipped: true, strategy_key: P10_STRATEGY_KEY, reason: settlementObservation.reason, settlementObservation };
+      return {
+        skipped: true,
+        strategy_key: P10_STRATEGY_KEY,
+        reason: settlementObservation.reason,
+        settlementObservation,
+      };
     }
     const safetyReason = "P10_UNTRACKED_FUTURES_EXPOSURE";
     const newlyLatched = await latchP10EntrySafety(safetyReason);
