@@ -35,11 +35,33 @@
 
 ## 코드·정합성 검증
 
-- Node 회귀·통합: 420/420 통과
+- Node 회귀·통합: 421/421 통과
 - 격리 Postgres/PGlite: 18/18 통과
 - TypeScript 모듈 구문, ESM 모듈 구문, whitespace diff 검사: 통과
-- Supabase 배포 bundling/compile: 배포 시 별도 확인
+- Supabase 배포 bundling/compile: 통과
 - 성능 검증: 미통과(`DEFER` 유지)
+
+## main·배포·자연 거래 확인
+
+- main feature commit: `9700b28e5ede28a1ff42b32cfd02609c11103ccc`
+- same-cycle health fix commit: `81930cb098162d6f16eeb9fb3d17f86c8a2e82c8`
+- 최종 executor: v43, ACTIVE, bundle
+  `c64d7965c00faac88ac99e890866f136f1c60727958ca0a6e1226168d607fa14`
+- 배포 파일 15개는 해당 main의 executor import 집합과 문자열 단위로 일치했습니다.
+- 자연 발생 BRUSDT 신호 `b906f118-88f6-4ba2-a8f2-2a9bd5ebabfa`가 E1으로 평가되고,
+  position `d8b779bb-b218-41a9-8b37-c96c9c764b13`에 E1/X1/override stamp가 저장됐습니다.
+- 401개 fill 뒤 native stop이 설치됐고, 기존 R5 risk-cut으로 0.29214에서 0.29603으로
+  상승했습니다. 새 stop ACK는 기존 stop 취소 요청보다 110ms 빨라 보호 공백이 없었습니다.
+- X1은 bid peak 0.30509와 전량 실행 가능 sell-VWAP peak 0.3034를 저장했지만 추가 stop
+  변경은 만들지 않았습니다.
+- position은 2026-09-13 15:21:10.247 UTC에 native stop으로 종료됐습니다. 원시 account
+  fill·수수료와 DB 정산 순손익은 -1.07524050 USDT로 일치했습니다.
+- 종료 후 signed account proof는 포지션 0, 일반 주문 0이었고 executor의 일반·조건부 주문
+  reconciliation은 수량 401, attribution/accounting complete, runtime `FLAT`을 확인했습니다.
+- 이 거래는 E1 fast-weak 분기와 X1 추가 행동이 모두 없으므로 baseline 대비 성능 차이의
+  증거가 아닙니다. `DEFER` 판정은 유지합니다.
+
+세부 증거는 `generated/operator_override_live_evidence.json`에 보존합니다.
 
 ## 운영 안전과 rollback
 

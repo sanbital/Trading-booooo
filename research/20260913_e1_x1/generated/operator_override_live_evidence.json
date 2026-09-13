@@ -1,0 +1,163 @@
+{
+  "evidenceCutoffUtc": "2026-09-13T15:24:55.530Z",
+  "activation": {
+    "basis": "OPERATOR_OVERRIDE_UNVALIDATED",
+    "overrideId": "2026-09-13-USER-PRIORITY-OVERRIDE",
+    "priorPerformanceVerdict": "DEFER",
+    "parametersValidatedByBacktest": false,
+    "testOrdersCreated": false
+  },
+  "repository": {
+    "branch": "main",
+    "featureCommit": "9700b28e5ede28a1ff42b32cfd02609c11103ccc",
+    "healthFixCommit": "81930cb098162d6f16eeb9fb3d17f86c8a2e82c8",
+    "executorFilesMatchedMainAtDeploy": true
+  },
+  "deployment": {
+    "projectId": "etaajwpernzrcdrifdnw",
+    "executor": {
+      "slug": "v10-lane-executor",
+      "version": 43,
+      "status": "ACTIVE",
+      "updatedAtUtc": "2026-09-13T15:20:02.641Z",
+      "bundleSha256": "c64d7965c00faac88ac99e890866f136f1c60727958ca0a6e1226168d607fa14",
+      "patch": "V23-E1-X1-OPERATOR-OVERRIDE-1",
+      "entryPolicy": "E1_FAST_WEAK_RECOVERY_OVERRIDE_1",
+      "exitObservationPolicy": "X1_FAST_OBSERVATION_OVERRIDE_1",
+      "baseExitPolicy": "V17_EXIT_R5_TAIL",
+      "qv3Policy": "QV3_ENTRY_EXIT_TWO_1"
+    },
+    "signalGenerator": {
+      "slug": "v10-lane-signal-generator",
+      "version": 19,
+      "status": "ACTIVE",
+      "bundleSha256": "84e4ec2b5ece426ac6e4b68f86dc0947a045b54231e980b411dc8348d472c574",
+      "changed": false
+    }
+  },
+  "verification": {
+    "nodeRegression": {
+      "passed": 421,
+      "failed": 0
+    },
+    "isolatedPostgresPglite": {
+      "passed": 18,
+      "failed": 0
+    },
+    "supabaseBundleCompile": "PASS",
+    "performanceValidation": "DEFER"
+  },
+  "naturalSignal": {
+    "signalId": "b906f118-88f6-4ba2-a8f2-2a9bd5ebabfa",
+    "symbol": "BRUSDT",
+    "createdAtUtc": "2026-09-13T15:15:03.437618Z",
+    "finalStatus": "CLOSED",
+    "e1Decision": {
+      "decisionAtUtc": "2026-09-13T15:15:08.850Z",
+      "confirmationState": "BASELINE_ELIGIBLE",
+      "reason": "E1_NOT_FAST_WEAK",
+      "last10sReturn": -0.0009654116315457317,
+      "takerBuyQuoteShare10s": 0.16182327468386554,
+      "tradeCount": 144,
+      "quoteAgeMs": 421,
+      "fullDepth": true,
+      "expectedEntryVwap": 0.3000416957605984,
+      "expectedExitVwap": 0.29956184538653363,
+      "expectedRoundTripCostBps": 26.039436521518855
+    }
+  },
+  "naturalPosition": {
+    "positionId": "d8b779bb-b218-41a9-8b37-c96c9c764b13",
+    "quantity": 401,
+    "entry": {
+      "orderId": "1613113522",
+      "tradeIds": [128345738, 128345739],
+      "filledAtUtc": "2026-09-13T15:15:09.879Z",
+      "averagePrice": 0.29962167082294267,
+      "quoteAmount": 120.14829,
+      "feeUsdt": 0.06007414
+    },
+    "protection": {
+      "initialTrigger": 0.29214,
+      "initialSubmittedAtUtc": "2026-09-13T15:15:13.459Z",
+      "initialAckAtUtc": "2026-09-13T15:15:15.832Z",
+      "fillToInitialAckMs": 5953,
+      "raisedTrigger": 0.29603,
+      "raisedSubmittedAtUtc": "2026-09-13T15:16:05.093Z",
+      "raisedAckAtUtc": "2026-09-13T15:16:06.404Z",
+      "oldCancelRequestedAtUtc": "2026-09-13T15:16:06.514Z",
+      "newAckBeforeOldCancelMs": 110,
+      "generation": 2,
+      "finalAlgoId": "2000001431822009",
+      "finalActualOrderId": "1613258517",
+      "finalState": "FINISHED"
+    },
+    "x1Observation": {
+      "observedAtUtc": "2026-09-13T15:16:20.781Z",
+      "observedBidPeak": 0.30509,
+      "fullQuantityExecutable": true,
+      "executableVwapPeak": 0.3034,
+      "action": "HOLD",
+      "additionalStopUpdate": false,
+      "note": "The existing minute-cycle R5 observation had already raised the risk-cut stop; this live trade does not isolate an X1 performance delta."
+    },
+    "exit": {
+      "reason": "V17_NATIVE_STOP",
+      "filledAtUtc": "2026-09-13T15:21:10.247Z",
+      "orderId": "1613258517",
+      "fills": [
+        {
+          "tradeId": 128354044,
+          "quantity": 250,
+          "price": 0.29725,
+          "feeUsdt": 0.03715625,
+          "realizedPnlUsdt": -0.59291770
+        },
+        {
+          "tradeId": 128354045,
+          "quantity": 151,
+          "price": 0.29722,
+          "feeUsdt": 0.02244011,
+          "realizedPnlUsdt": -0.36265229
+        }
+      ],
+      "averagePrice": 0.2972387032418953,
+      "quoteAmount": 119.19272,
+      "grossPricePnlUsdt": -0.95556999,
+      "exitFeeUsdt": 0.05959636,
+      "totalFeesUsdt": 0.11967050,
+      "settledNetPnlUsdt": -1.07524050
+    }
+  },
+  "finalAccountProof": {
+    "observedAtUtc": "2026-09-13T15:24:53.746Z",
+    "source": "SIGNED_BINANCE_ACCOUNT_REST_VIA_V18_READONLY_AUDIT",
+    "positionsComplete": true,
+    "positions": [],
+    "ordinaryOrders": [],
+    "databaseOpenPositions": [],
+    "databaseRememberedActiveProtectionOrders": [],
+    "allConditionalOrdersCoverageFromReadonlyAudit": false,
+    "allOrderReconciliation": {
+      "source": "V10_EXECUTOR_V18_OPEN_ORDERS_ORDINARY_AND_ALGO",
+      "positionOutcome": "RESOLVED",
+      "accountingComplete": true,
+      "attributionComplete": true,
+      "executedQuantity": 401,
+      "runtimeProtectionHealth": "FLAT"
+    }
+  },
+  "ledgerLinkage": {
+    "exchangeTradeFillsAtCutoff": "ENTRY_ROWS_PRESENT_WITH_NULL_POSITION_LINK; EXIT_ROWS_NOT_YET_PRESENT",
+    "settlementEvidence": "SIGNED_ACCOUNT_USER_TRADES_PLUS_NATIVE_ACTUAL_ORDER_ID_AND_TRADE_IDS",
+    "exposurePending": false,
+    "accountingPending": false,
+    "interpretation": "A collector/linkage gap must not be interpreted as an absent fill or an open exposure."
+  },
+  "performanceInterpretation": {
+    "candidateSuperior": false,
+    "candidateInferior": false,
+    "verdict": "DEFER",
+    "reason": "E1 did not enter WATCH_FAST_WEAK and X1 made no additional stop change, so this trade followed the baseline decision path and cannot identify a candidate delta."
+  }
+}

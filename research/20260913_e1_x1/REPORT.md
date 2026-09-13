@@ -8,7 +8,9 @@
 
 > 이 보고서는 연구 cutoff 당시의 승격 판정과 미배포 상태를 보존합니다. 이후 사용자의
 > 명시적 우선 교체 지시에 따른 미검증 운영 override는 `OPERATOR_OVERRIDE.md`에 별도로
-> 기록하며, 이 보고서의 `DEFER` 판정을 `SUPERIOR`로 소급 변경하지 않습니다.
+> 기록하며, 이 보고서의 `DEFER` 판정을 `SUPERIOR`로 소급 변경하지 않습니다. 실제 main,
+> v43 배포 및 자연 발생 신호·체결·청산 증거는 이 문서의 13절과
+> `generated/operator_override_live_evidence.json`에 후속 시각으로 보존합니다.
 
 ## 1. 결론
 
@@ -16,7 +18,7 @@
 
 현행 프로토콜의 재현 오차, 독립 검증, 기회 유지율, 비용·지연 stress, 자금·슬롯 재생, funding coverage 및 99% familywise bootstrap gate 중 어느 것도 후보 성능에 대해 통과했다고 표시할 수 없습니다. 회귀 테스트 통과는 성능 우월성과 별개입니다.
 
-그 결과 생산 코드, `main`, Edge Function 및 실거래 정책은 변경하지 않았습니다. 새 정책 신호·체결·청산은 각각 0건입니다. 검증되지 않은 후보를 완료를 위해 배포하지 않은 것이 이번 작업의 정확한 운영 결과입니다.
+연구 판정만을 근거로 한 당시 결과로는 생산 코드, `main`, Edge Function 및 실거래 정책을 변경하지 않았습니다. 당시 새 정책 신호·체결·청산은 각각 0건입니다. 이후 사용자의 명시적 운영자 override로 변경된 상태는 13절과 분리해 해석해야 합니다.
 
 | 단계 | 상태 | 근거 |
 |---|---:|---|
@@ -270,7 +272,7 @@ Supabase security advisor에는 기존 7개 rule family, 360 findings가 남아 
 4. 최소 100 종료 거래, 시간순 30건/3구간을 확보한 뒤 B0/E1/X1/E1+X1을 같은 자금·슬롯·우선순위로 재생해야 합니다.
 5. 현행 `research/qv3/protocol.json`의 모든 비용·위험·99% 신뢰 gate를 그대로 통과할 때만 production import, commit/PR, `main`, deploy, 신규 signal/fill/exit 확인 순으로 진행해야 합니다.
 
-현재 상태에서 배포를 진행하면 데이터가 없는 부분을 유리하게 가정해야만 하므로 허용할 수 없습니다.
+연구 cutoff 당시에는 배포를 진행하려면 데이터가 없는 부분을 유리하게 가정해야 했으므로 성능 승격을 허용할 수 없었습니다. 13절의 후속 배포는 이 성능 판정을 통과한 승격이 아니라 별도 운영자 override입니다.
 
 ## 산출물
 
@@ -285,3 +287,43 @@ Supabase security advisor에는 기존 7개 rule family, 360 findings가 남아 
 - `generated/preregistration.json`: 사전 고정 임계값·gate
 - `generated/validation_results.json`: 코드 테스트와 성능 gate 분리
 - `generated/operational_evidence.json`: main/deploy/runtime/account 최종 증거
+- `generated/operator_override_live_evidence.json`: override 배포와 자연 신호·체결·청산 증거
+
+## 13. 연구 판정 이후 운영자 override와 실제 적용 증거
+
+이 절은 위 연구 cutoff 이후 사건입니다. 성능 gate가 `DEFER`인 상태에서 사용자가
+미검증 교체를 명시적으로 지시했으므로, 성능 우월성 승격과 분리한
+`OPERATOR_OVERRIDE_UNVALIDATED`로 E1/X1을 활성화했습니다. 따라서 1절·10절의 연구 판정은
+그대로 유효하고, 당시의 “미배포” 기록만 후속 운영 사건으로 갱신됩니다.
+
+| 단계 | 후속 상태 | 증거 |
+|---|---:|---|
+| main 반영 | 완료 | feature `9700b28e...`, health fix `81930cb0...` |
+| 실제 배포 | 완료 | executor v43, bundle `c64d7965...` |
+| 자연 신규 신호 평가 | 완료 | BRUSDT `b906f118...`, E1 `E1_NOT_FAST_WEAK` |
+| 새 stamp 체결 | 1건 | position `d8b779bb...`, 401 BR |
+| native 보호 | 완료 | 0.29214 설치 후 0.29603으로 단조 상승, 새 ACK 뒤 기존 stop 취소 |
+| X1 관측 | 완료 | bid peak 0.30509, 전량 sell-VWAP peak 0.3034 |
+| 새 stamp 청산·정산 | 1건 | native stop, 비용 후 -1.07524050 USDT |
+| 종료 후 계좌 | flat | signed account REST position 0, 일반 주문 0, runtime `FLAT` |
+
+이 거래는 E1이 `WATCH_FAST_WEAK`로 분기하지 않았고, X1 관측 전에 기존 분 단위 R5가
+이미 risk-cut stop을 올렸습니다. X1의 추가 stop update도 없었습니다. 따라서 이 한 건은
+새 정책 연결·stamp·보호·정산은 입증하지만 B0 대비 손익 delta는 입증하지 않습니다.
+후보의 성능 판정은 여전히 `DEFER`이며, 이 손실 한 건만으로 `INFERIOR`라고 판정할 수도
+없습니다.
+
+최종 거래소 fill은 250개@0.29725와 151개@0.29722, 진입 fill은
+334개@0.29962와 67개@0.29963이었습니다. 가격 손익 -0.95556999 USDT에 진입·청산
+수수료 0.11967050 USDT를 더한 DB 정산은 -1.07524050 USDT로 일치합니다.
+`exchange_trade_fills`의 position 연결과 exit row는 확인 cutoff에 늦었지만, signed account
+user trades, native stop의 `actualOrderId`, 두 trade ID 및 executor reconciliation이 수량·비용을
+완전히 복원했습니다. 이를 미체결이나 미정산으로 해석하지 않습니다.
+
+v43 자연 주기는 열린 동안 `PROTECTED`를 반환해 같은 주기의 잘못된 `FLAT` 표시 수정도
+확인했습니다. X1은 cron 1분 전체를 연속 감시하는 프로세스가 아니라 각 Edge invocation
+안의 제한된 1초 관측입니다. 첫 운영 loop는 전량 실행 가능 관측 1회와 얕은 top-bid 관측
+30회를 기록했으므로, 지속 1초 L2 커버리지로 과장하지 않습니다.
+
+상세 원시 식별자·시각·fill·stop 세대·최종 account proof는
+`generated/operator_override_live_evidence.json`에 있습니다. 테스트 주문은 만들지 않았습니다.
