@@ -165,5 +165,64 @@ ACTIVE stop이 있는 replacement 거절은 그 stop을 취소하지 않으며 �
 격리 테스트는 16건이며, 확정 거절 종결, 불확실 timeout 보존, 기존 stop 보존을
 각각 포함한다.
 
-배포 SHA, workflow run, production v40 hash와 세 cycle 증거는 배포 완료 후 이
-문서에 추가한다.
+## 실제 배포와 작동 확인
+
+- production runtime source SHA: `77d605ddfc94b67b05052ff3be519db1a54eb24b`
+- PR: `#137` (`release/v21-post-fill-drift-1` → `release/v20-qv3-evidence-1`)
+- 배포 workflow run: `34744073941`
+- production 적용: `2026-09-13T06:59:20.218Z`, function v40
+- patch / strategy: `V21-POST-FILL-DRIFT-2` / `V21_POST_FILL_DRIFT_GUARD_1`
+- bundle SHA-256: `e098f1381f5556264d036abe5cc336c3305b0722bb6c297207f38b982b6a9c2d`
+- production export의 14개 source 파일은 Git tree
+  `88b8a16419045bda7e0433f015357b074540de87`의 대응 파일과 전부 byte-equal이었다.
+
+배포 run은 source ancestry, v39 version/hash, 변경 범위, `412/412` 회귀,
+Deno graph check, 직전 동시배포 검사, executor 단독 배포, v40 source와 operator
+control 불변, 아래 실제 scheduler cycle 3회까지 통과했다.
+
+| cycle 완료 UTC | cycle ms | 진입 평가 | 보호 | 오류/circuit |
+|---|---:|---|---|---|
+| 07:00:07.664 | 5,246 | `NO_FRESH_BULL_SIGNAL` | FLAT | 없음 / false |
+| 07:01:05.012 | 4,444 | `NO_FRESH_BULL_SIGNAL` | FLAT | 없음 / false |
+| 07:02:05.219 | 4,627 | `NO_FRESH_BULL_SIGNAL` | FLAT | 없음 / false |
+
+그 다음 증거 export의 `psql -c` 변수 치환 문법 오류로 run의 최종 conclusion은
+failure였다. 배포·source·cycle 실패로 오인하지 않았으며, 오류를 무시하지도
+않았다. 원 workflow의 SQL을 수정하고 자동 push trigger를 제거해 v40을 다시
+배포하지 못하게 했다. runtime diff가 0임을 먼저 검사하는 no-deploy 검증 commit
+`02ea3f9ec7941c061dc06148acb09a329ef71489`과 workflow run `34744398948`로
+source, controls, 정책 stamp, 정산 원장, 추가 cycle을 다시 검증했다.
+
+| 추가 cycle 완료 UTC | cycle ms | 진입 평가 | 보호 | 오류/circuit |
+|---|---:|---|---|---|
+| 07:07:05.581 | 4,378 | `NO_FRESH_BULL_SIGNAL` | FLAT | 없음 / false |
+| 07:08:05.686 | 4,532 | `NO_FRESH_BULL_SIGNAL` | FLAT | 없음 / false |
+| 07:09:06.356 | 4,662 | `NO_FRESH_BULL_SIGNAL` | FLAT | 없음 / false |
+
+검증 run은 success이며 artifact `10313158256`, digest
+`sha256:88a07c17b305c4925f760381c51b3fec07ff61fc478dfae950293b537ff73a0d`다.
+6회 동안 신규 signal/decision/order/fill/position은 모두 0건이었다. 따라서 현재
+판정은 **배포·적용 확인 / 유효 신호 대기 / 실체결 미관측**이며, 이 cycle만으로
+수익성 개선이 실거래에서 입증됐다고 주장하지 않는다.
+
+배포 첫 cycle에서 closed-protection backlog는 2→0으로 줄었고, STEEM/牛来
+position은 계속 CLOSED/잔량 0이었다. 순손익 `+5.946200510` 및
+`+4.776945410`, 종료가와 종료시각은 바뀌지 않았다. `last_error`는 null로
+정상화되고 `last_success_at`은 매 cycle 완료시각과 다시 일치한다. operator
+control, `LIVE_LIMITED`, 40 USDT allocation, circuit false, incident 0,
+QV3/R5/V19/DB-only/lease-fencing 설정도 보존됐다.
+
+## 롤백 조건
+
+롤백 기준은 v39 source commit `716a7dc61154637da539a85931476d9c685f65c6`와
+bundle `f4c9691c…`다. 신규 V21 position에서 다음 중 하나라도 확인되면 신규
+정책 dispatch를 중지하고 executor를 이 기준으로 되돌린다.
+
+- 1% 이하 fill drift 또는 잘못된 lifecycle의 포지션을 닫음.
+- 동일 close order 중복 발주, 실제 잔량보다 큰 reduce-only 수량, 원장 PnL 중복 반영.
+- native stop 보호 공백, 단조 상향 위반, 이전 거래 stop의 새 거래 개입.
+- 기존 OPEN position의 QV3/R5/policy stamp 변경.
+- account-wide circuit 오작동, lease/CAS 우회, closed backlog 또는 오류의 재누적.
+
+롤백은 기존 체결·원장을 삭제하지 않고, 이미 상향된 보호선을 낮추지 않으며,
+증거금·레버리지·계좌 한도를 바꾸지 않는다.

@@ -45,5 +45,30 @@
     "production_integration_and_safety_regressions_required": true
   },
   "deployment_classification": "EXECUTION_INTEGRITY_FIX;_QV3_AND_R5_STRATEGY_THRESHOLDS_UNCHANGED",
+  "deployment": {
+    "production_source_commit": "77d605ddfc94b67b05052ff3be519db1a54eb24b",
+    "production_source_tree": "88b8a16419045bda7e0433f015357b074540de87",
+    "pull_request": 137,
+    "deployed_at_utc": "2026-09-13T06:59:20.218Z",
+    "function_version": 40,
+    "executor_patch": "V21-POST-FILL-DRIFT-2",
+    "strategy_policy": "V21_POST_FILL_DRIFT_GUARD_1",
+    "bundle_sha256": "e098f1381f5556264d036abe5cc336c3305b0722bb6c297207f38b982b6a9c2d",
+    "deployment_workflow_run": {
+      "id": 34744073941,
+      "deployment_and_three_cycles": "PASS",
+      "final_conclusion": "FAIL_AFTER_DEPLOY_DUE_TO_EVIDENCE_EXPORT_PSQL_SUBSTITUTION",
+      "cycle_ms": [5246, 4444, 4627]
+    },
+    "no_deploy_verification": {
+      "commit": "02ea3f9ec7941c061dc06148acb09a329ef71489",
+      "workflow_run": 34744398948,
+      "conclusion": "SUCCESS",
+      "cycle_ms": [4378, 4532, 4662],
+      "artifact_id": 10313158256,
+      "artifact_sha256": "88a07c17b305c4925f760381c51b3fec07ff61fc478dfae950293b537ff73a0d"
+    },
+    "post_deploy_observation": "DEPLOYED_AND_APPLIED;_WAITING_FOR_VALID_SIGNAL;_NO_LIVE_FILL_OBSERVED"
+  },
   "rollback_basis": "716a7dc61154637da539a85931476d9c685f65c6"
 }
