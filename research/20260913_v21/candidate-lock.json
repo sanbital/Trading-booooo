@@ -1,0 +1,42 @@
+{
+  "lock": "V21_DECAY_RECLAIM_CANDIDATES_20260913",
+  "locked_at_utc": "2026-09-13T04:20:13Z",
+  "outcome_access_state": "ALL_RESULTS_THROUGH_2026-09-13T00:17:57.553824Z_ARE_DEVELOPMENT;_NO_POSITION_OUTCOME_AFTER_THAT_CUTOFF_ACCESSED_BEFORE_THIS_LOCK",
+  "rules_sha256": "8cf176b1a8afdb43c6d2325e19fbcc391f8eb1e6db954c488c2b3fa470d6a28c",
+  "protocol_sha256": "5f20931bb814d094878bd612e509b7cb0621269e60305cd2d9dcbfc915ecfb3e",
+  "rule_id": "V21_DECAY_RECLAIM_1",
+  "entry": {
+    "minimum_return_15m": 0.025,
+    "maximum_return_5m": 0.012,
+    "block_when_final_ioc_limit_lte_signal_reference": true,
+    "reason": "V21_DECAY_NO_RECLAIM"
+  },
+  "exit": {
+    "eligible_only_when_same_decay_setup_was_admitted_with_limit_gt_reference": true,
+    "minimum_position_age_ms_before_counting": 180000,
+    "required_fresh_bids_below_reference": 3,
+    "minimum_gap_ms": 45000,
+    "maximum_gap_ms": 90000,
+    "quote_round_trip_max_ms": 1000,
+    "exchange_book_age_max_ms": 3000,
+    "quote_receive_age_max_ms": 1000,
+    "reason": "V21_RECLAIM_FAILURE_3"
+  },
+  "selection_basis": "Thresholds reuse the live 2.5% initial risk magnitude and 1.2% R5 risk-cut magnitude. The additional pre-order reference/reclaim state separates old momentum from current executable continuation. The three-observation exit was selected over the two-observation form because it produced no actual winner-to-loss conversion in all development segments.",
+  "development_observation": {
+    "actual_entry_count": 157,
+    "entry_overlay_rejected": 14,
+    "entry_overlay_net_delta_usdt": 12.588,
+    "entry_overlay_segment_deltas_usdt": {"D0": 5.443, "V0": 2.431, "D1": 4.714},
+    "exit_overlay_changed": 5,
+    "exit_overlay_net_delta_usdt": 3.593,
+    "exit_overlay_segment_deltas_usdt": {"D0": 1.556, "V0": 0.0, "D1": 2.037},
+    "exit_overlay_actual_winner_to_loss": 0,
+    "limitations": [
+      "These figures are hypothesis-development observations, not independent validation.",
+      "Entry overlay does not include replacement opportunities, cash, slots, or funding.",
+      "Exit overlay uses sampled fresh executable bids with a fixed adverse impact assumption.",
+      "Production promotion remains forbidden until the locked account replay and holdout gates are evaluated."
+    ]
+  }
+}

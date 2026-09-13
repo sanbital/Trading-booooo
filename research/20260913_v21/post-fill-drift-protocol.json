@@ -1,0 +1,49 @@
+{
+  "protocol": "V21_POST_FILL_DRIFT_20260913_1",
+  "analysis_cutoff_utc": "2026-09-13T06:30:22.434605Z",
+  "development_status": "LATEST_INCIDENTS_ARE_DEVELOPMENT_DATA;_COUNTERFACTUAL_RESULTS_ARE_NOT_LIVE_PNL",
+  "baseline": {
+    "production_release_commit": "716a7dc61154637da539a85931476d9c685f65c6",
+    "function": "v10-lane-executor",
+    "function_version": 39,
+    "executor_patch": "V20-QV3-EVIDENCE-1",
+    "strategy": "QV3_ENTRY_EXIT_TWO_1",
+    "exit_policy": "V17_EXIT_R5_TAIL",
+    "bundle_sha256": "f4c9691c91fe89a8737a2c656923741422e658880dfca8e6028e8835075a66a5"
+  },
+  "accepted_execution_integrity_rule": {
+    "version": "V21_POST_FILL_DRIFT_GUARD_1",
+    "input": "actual exchange average fill and immutable completed-5m referenceClose",
+    "condition": "abs(actual_fill/referenceClose - 1) > 0.01",
+    "action": "persist lifecycle-bound invalid-entry intent; establish native protection; close through existing idempotent reduce-only path; cancel only the same lifecycle stop",
+    "scope": "new order intents stamped with this exact version only",
+    "parameter_source": "the pre-existing production maxEntryDriftPct contract; not selected from the incident outcomes"
+  },
+  "rejected_hypotheses": {
+    "spike_acceleration_entry": "dayReturn >= 0.20 and return5m >= 1.2 * return15m",
+    "first_bear_near_entry": "after QV3 arms, first later completed bearish 1m candle closes no more than 0.5% above entry"
+  },
+  "counterfactual_execution": {
+    "same_entry_and_quantity": true,
+    "normal_exit_impact": 0.0025,
+    "normal_fee_rate_each_side": 0.0005,
+    "stress_exit_impact": 0.005,
+    "stress_fee_rate_each_side": 0.001,
+    "changed_cash_slots_and_replacement_entries": "NOT_MODELED",
+    "missing_or_conflicting_data": "PRESERVE_BASELINE"
+  },
+  "promotion_gates": {
+    "candidate_net_pnl_above_baseline_after_cost": true,
+    "stress_delta_positive": true,
+    "worst_trade_not_worse": true,
+    "max_drawdown_not_worse": true,
+    "same_entry_winner_to_loss_max": 0,
+    "large_winner_value_retention_min": 0.90,
+    "opportunity_retention_min": 0.70,
+    "leave_one_triggered_trade_and_symbol_delta_positive": true,
+    "nearby_threshold_direction_disclosed": true,
+    "production_integration_and_safety_regressions_required": true
+  },
+  "deployment_classification": "EXECUTION_INTEGRITY_FIX;_QV3_AND_R5_STRATEGY_THRESHOLDS_UNCHANGED",
+  "rollback_basis": "716a7dc61154637da539a85931476d9c685f65c6"
+}

@@ -23,7 +23,7 @@ test('actual manage/close/settlement integration of two bearish candles; no dupl
  const r=await h.ctx.runCycle();assert.equal(r.qv3Runtime.active,true);assert.equal(r.managed[0].action.reason,'QV3_TWO_BEARISH_CLOSED');
  assert.equal(h.state.tables.v11_long_regime_positions[0].state,'CLOSED');
  const audit=h.state.tables.v11_long_regime_decisions.find(row=>row.reason==='QV3_TWO_BEARISH_CLOSED');
- assert.equal(audit.details.executorPatch,'V20-QV3-EVIDENCE-1');assert.equal(audit.details.qv3.inputEvidence.status,'CAPTURED');
+ assert.equal(audit.details.executorPatch,'V21-POST-FILL-DRIFT-2');assert.equal(audit.details.qv3.inputEvidence.status,'CAPTURED');
  assert.deepEqual(audit.details.qv3.inputEvidence.tail.map(row=>row.openTimeMs),[base+60000,base+120000]);
  assert.equal(Object.hasOwn(h.state.tables.v11_long_regime_positions[0].metadata.qv3State,'inputEvidence'),false);
  await h.ctx.runCycle();assert.equal(h.state.calls.filter(x=>x.action==='create_order'&&x.order.side==='SELL').length,1);
@@ -82,6 +82,77 @@ test('partial entry and delayed receipt preserve QV3 activation stamp and actual
  assert.equal(p.metadata.qv3.basis,'OPERATOR_OVERRIDE_PROTOCOL_DEFER_20260911');
  assert.equal(h.state.tables.v11_long_regime_orders.find(o=>o.intent==='OPEN_LONG').request_payload.qv3.basis,'OPERATOR_OVERRIDE_PROTOCOL_DEFER_20260911');
  assert.ok(h.state.calls.some(x=>x.action==='v17_create_stop'&&x.params.quantity===93));
+});
+test('post-fill drift is durably protected, closed, accounted, and cleaned up in the actual entry path',async()=>{
+ const rising=[b(base,100,100.1),b(base+60000,100.1,100.2),b(base+120000,100.2,100.3)];
+ const h=harness({now,qv3Cutover:base,qv3Fetch:async()=>new Response(JSON.stringify(rising))});
+ h.state.createOrder=(cmd,state)=>{
+  const quantity=cmd.order.quantity;
+  if(cmd.order.side==='BUY'){
+   const price=.00395;state.exchange=[{market:'SOPHUSDT',side:'LONG',quantity,entry_price:price}];
+   return{order:{orderId:'drift-entry',clientOrderId:cmd.order.identifier,symbol:'SOPHUSDT',side:'BUY',positionSide:'BOTH',reduceOnly:false,
+    origQty:String(quantity),executedQty:String(quantity),avgPrice:String(price),status:'FILLED',updateTime:state.now,
+    fills:[{tradeId:'drift-buy',qty:String(quantity),price:String(price),commission:'.06',commissionAsset:'USDT',time:state.now}]}};
+  }
+  const price=.003947;state.exchange=[];
+  const result={order:{orderId:'drift-exit',clientOrderId:cmd.order.identifier,symbol:'SOPHUSDT',side:'SELL',positionSide:'BOTH',reduceOnly:true,
+   origQty:String(quantity),executedQty:String(quantity),avgPrice:String(price),status:'FILLED',updateTime:state.now,
+   fills:[{tradeId:'drift-sell',qty:String(quantity),price:String(price),commission:'.06',commissionAsset:'USDT',time:state.now}]}};
+  state.software[cmd.order.identifier]=result;return result;
+ };
+ const result=await h.ctx.runCycle(),p=h.state.tables.v11_long_regime_positions[0];
+ assert.equal(result.entry.entered,true);assert.equal(result.entry.entryProtection.status,'CLOSED');
+ assert.equal(result.entry.postFillEntryGuard.reason,'V21_POST_FILL_ENTRY_DRIFT');
+ assert.equal(p.metadata.entryExecutionPolicyVersion,'V21_POST_FILL_DRIFT_GUARD_1');
+ assert.equal(p.state,'CLOSED');assert.equal(p.exit_reason,'V21_POST_FILL_ENTRY_DRIFT');
+ assert.equal(h.state.calls.filter(x=>x.action==='create_order').length,2);
+ assert.equal(h.state.calls.filter(x=>x.action==='v17_create_stop').length,1);
+ assert.equal(h.state.calls.filter(x=>x.action==='v17_cancel_stop').length,1);
+ assert.ok(p.metadata.exitProtection.orders.every(x=>x.terminal));
+});
+test('the observed 0.845 percent winner-side fill drift stays open and protected',async()=>{
+ const rising=[b(base,100,100.1),b(base+60000,100.1,100.2),b(base+120000,100.2,100.3)];
+ const h=harness({now,qv3Cutover:base,qv3Fetch:async()=>new Response(JSON.stringify(rising))});
+ h.state.createOrder=(cmd,state)=>{
+  assert.equal(cmd.order.side,'BUY');const quantity=cmd.order.quantity,price=.0039662;
+  state.exchange=[{market:'SOPHUSDT',side:'LONG',quantity,entry_price:price}];
+  return{order:{orderId:'winner-entry',clientOrderId:cmd.order.identifier,symbol:'SOPHUSDT',side:'BUY',positionSide:'BOTH',reduceOnly:false,
+   origQty:String(quantity),executedQty:String(quantity),avgPrice:String(price),status:'FILLED',updateTime:state.now,
+   fills:[{tradeId:'winner-buy',qty:String(quantity),price:String(price),commission:'.06',commissionAsset:'USDT',time:state.now}]}};
+ };
+ const result=await h.ctx.runCycle(),p=h.state.tables.v11_long_regime_positions[0];
+ assert.equal(result.entry.postFillEntryGuard.action,'KEEP');assert.equal(p.state,'OPEN');
+ assert.equal(result.entry.entryProtection.status,'PROTECTED');
+ assert.equal(h.state.calls.filter(x=>x.action==='create_order').length,1);
+});
+test('a partial post-fill guard exit protects the real residual and retries only that residual',async()=>{
+ const rising=[b(base,100,100.1),b(base+60000,100.1,100.2),b(base+120000,100.2,100.3)];
+ const h=harness({now,qv3Cutover:base,qv3Fetch:async()=>new Response(JSON.stringify(rising))});let exits=0;
+ h.state.createOrder=(cmd,state)=>{
+  const requested=cmd.order.quantity;
+  if(cmd.order.side==='BUY'){
+   const price=.00395;state.exchange=[{market:'SOPHUSDT',side:'LONG',quantity:requested,entry_price:price}];
+   return{order:{orderId:'partial-entry',clientOrderId:cmd.order.identifier,symbol:'SOPHUSDT',side:'BUY',positionSide:'BOTH',reduceOnly:false,
+    origQty:String(requested),executedQty:String(requested),avgPrice:String(price),status:'FILLED',updateTime:state.now,
+    fills:[{tradeId:'partial-buy',qty:String(requested),price:String(price),commission:'.06',commissionAsset:'USDT',time:state.now}]}};
+  }
+  exits++;const executed=exits===1?Math.floor(requested/2):requested,price=.003947;
+  const held=state.exchange[0];held.quantity-=executed;if(held.quantity<=0)state.exchange=[];
+  const result={order:{orderId:'partial-exit-'+exits,clientOrderId:cmd.order.identifier,symbol:'SOPHUSDT',side:'SELL',positionSide:'BOTH',reduceOnly:true,
+   origQty:String(requested),executedQty:String(executed),avgPrice:String(price),status:exits===1?'EXPIRED':'FILLED',updateTime:state.now,
+   fills:[{tradeId:'partial-sell-'+exits,qty:String(executed),price:String(price),commission:'.03',commissionAsset:'USDT',time:state.now}]}};
+  state.software[cmd.order.identifier]=result;return result;
+ };
+ const first=await h.ctx.runCycle(),p1=h.state.tables.v11_long_regime_positions[0];
+ assert.equal(first.entry.entryProtection.status,'PROTECTED');assert.equal(p1.state,'OPEN');
+ const residual=p1.remaining_quantity;assert.ok(residual>0&&residual<p1.original_quantity);
+ const active=p1.metadata.exitProtection.orders.filter(x=>!x.terminal);
+ assert.equal(active.length,1);assert.equal(active[0].spec.params.quantity,residual);
+ h.advance();const second=await h.ctx.runCycle(),p2=h.state.tables.v11_long_regime_positions[0];
+ assert.equal(second.managed[0].action.reason,'V21_POST_FILL_ENTRY_DRIFT');assert.equal(p2.state,'CLOSED');
+ const sellCalls=h.state.calls.filter(x=>x.action==='create_order'&&x.order.side==='SELL');
+ assert.deepEqual(sellCalls.map(x=>x.order.quantity),[p1.original_quantity,residual]);
+ assert.notEqual(sellCalls[0].order.identifier,sellCalls[1].order.identifier);
 });
 test('native fill racing after candidate state persistence never submits an extra exit',async()=>{
  let h;h=harness({positions:[pos()],now,signal:false,qv3Cutover:base,qv3Fetch:data,

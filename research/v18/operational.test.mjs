@@ -6,7 +6,7 @@ test('immediate protection uses actual partial fill, not requested quantity',asy
 test('ownership mismatch cannot reach the protection writer',async()=>{const r=await protectNewLeaderPosition({enabled:true,position:pos,readPortfolio:async()=>({positions:[{market:'EDGEUSDT',side:'LONG',quantity:196}]}),manage:()=>{throw Error('must not reach')}});assert.equal(r.status,'RECONCILIATION_PENDING');assert.match(r.error,/OWNERSHIP/);});
 test('a protection timeout preserves filled-entry semantics and requires monitoring',async()=>{const r=await protectNewLeaderPosition({enabled:true,position:pos,readPortfolio:async()=>{throw Error('timeout')},manage:()=>{throw Error('unreached')}});assert.equal(r.status,'RECONCILIATION_PENDING');assert.equal(r.softwareMonitorRequired,true);});
 test('disabled protection has no IO',async()=>{assert.equal((await protectNewLeaderPosition({enabled:false,readPortfolio:()=>{throw Error('unreached')}})).status,'DISABLED');});
-test('already failed price can close using the existing host policy',async()=>{const r=await protectNewLeaderPosition({enabled:true,position:pos,readPortfolio:async()=>({positions:[{market:'EDGEUSDT',side:'LONG',quantity:93}]}),manage:async()=>({action:'CLOSE'})});assert.equal(r.status,'CLOSED');});
+test('already failed price can close using the existing host policy',async()=>{const r=await protectNewLeaderPosition({enabled:true,position:pos,readPortfolio:async()=>({positions:[{market:'EDGEUSDT',side:'LONG',quantity:93}]}),manage:async()=>({action:'CLOSE',result:{closed:true}})});assert.equal(r.status,'CLOSED');});
 function dbMock(initial){
  let row=structuredClone(initial),patch;
  return {get row(){return row},from(){

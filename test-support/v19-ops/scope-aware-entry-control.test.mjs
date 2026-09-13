@@ -176,7 +176,7 @@ test('18 approved QV3, V19 entry control, margin, leverage, slots and V20 audit 
   const source=readFileSync(new URL('../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
   assert.match(source,/const MARGIN=40,LEV=3,[^;]*MAX_SLOTS=10/);assert.match(source,/QV3_ENTRY_EXIT_TWO_1|QV3_VERSION/);
   assert.equal(ENTRY_CONTROL_VERSION,'V19-SCOPE-AWARE-ENTRY-1');
-  assert.match(source,/PATCH="V20-QV3-EVIDENCE-1"/);assert.match(source,/p_evidence_version:ENTRY_CONTROL_VERSION/);
+  assert.match(source,/PATCH="V21-POST-FILL-DRIFT-2"/);assert.match(source,/p_evidence_version:ENTRY_CONTROL_VERSION/);
 });
 
 test('18b normal entry sizing, stop and hold decision equal the deployed production basis',async()=>{
