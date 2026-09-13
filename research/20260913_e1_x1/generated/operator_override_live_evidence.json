@@ -1,5 +1,5 @@
 {
-  "evidenceCutoffUtc": "2026-09-13T15:30:29.977Z",
+  "evidenceCutoffUtc": "2026-09-13T15:34:18.427Z",
   "activation": {
     "basis": "OPERATOR_OVERRIDE_UNVALIDATED",
     "overrideId": "2026-09-13-USER-PRIORITY-OVERRIDE",
@@ -130,8 +130,8 @@
     }
   },
   "finalAccountProof": {
-    "observedAtUtc": "2026-09-13T15:30:28.183Z",
-    "finishedAtUtc": "2026-09-13T15:30:29.977Z",
+    "observedAtUtc": "2026-09-13T15:34:16.642Z",
+    "finishedAtUtc": "2026-09-13T15:34:18.427Z",
     "source": "SIGNED_GATEWAY_READS_VIA_QV3_OPS_STATUS",
     "gatewayVersion": "8.0.3-P10-REGIME-ROUTER-V3-SAFE-EXIT",
     "gatewayOpsPatch": "V18-OPS-ISOLATION-3",
@@ -153,6 +153,26 @@
       "executedQuantity": 401,
       "runtimeProtectionHealth": "FLAT"
     }
+  },
+  "postTradeSafetyRecovery": {
+    "incidentId": "537fda56-cc50-483f-9882-88cbf976748e",
+    "generation": 55,
+    "kind": "INCOMPLETE_OR_STALE_SNAPSHOT",
+    "scope": "ACCOUNT_ENTRY_HOLD",
+    "openedAtUtc": "2026-09-13T15:31:06.587177Z",
+    "cause": "One portfolio observation aged beyond the strict three-second classification window before the account/DB comparison completed.",
+    "exposureAtIncident": "UNKNOWN_FAIL_CLOSED",
+    "recoveryEvidence": [
+      "FRESH_COMPLETE_ACCOUNT_SNAPSHOT",
+      "FRESH_COMPLETE_OPEN_ORDERS"
+    ],
+    "independentChecks": 3,
+    "resolvedAtUtc": "2026-09-13T15:33:07.604624Z",
+    "recoveryPath": "V19_SCOPE_AWARE_ENTRY_CAS",
+    "manualCircuitMutation": false,
+    "finalCircuitOpen": false,
+    "finalEntryBlockReason": "NO_FRESH_BULL_SIGNAL",
+    "finalProtectionHealth": "FLAT"
   },
   "ledgerLinkage": {
     "exchangeTradeFillsAtCutoff": "ENTRY_ROWS_PRESENT_WITH_NULL_POSITION_LINK; EXIT_ROWS_NOT_YET_PRESENT",

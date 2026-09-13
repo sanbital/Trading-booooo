@@ -325,7 +325,13 @@ v43 자연 주기는 열린 동안 `PROTECTED`를 반환해 같은 주기의 잘
 안의 제한된 1초 관측입니다. 첫 운영 loop는 전량 실행 가능 관측 1회와 얕은 top-bid 관측
 30회를 기록했으므로, 지속 1초 L2 커버리지로 과장하지 않습니다.
 
-2026-09-13 15:30:28 UTC의 별도 read-only gateway 상태 조회도 complete account position 0,
+2026-09-13 15:34:16 UTC의 별도 read-only gateway 상태 조회도 complete account position 0,
 일반 주문 0, algo/조건부 주문 0을 반환했습니다. gateway source hash와 position mode 자체는
 이 진단에서 검증하지 못했으므로 각각 false로 보존합니다. 상세 원시 식별자·시각·fill·stop 세대·최종 account proof는
 `generated/operator_override_live_evidence.json`에 있습니다. 테스트 주문은 만들지 않았습니다.
+
+15:31 UTC에는 한 account 관측이 엄격한 3초 freshness 창을 넘기면서 fail-closed account
+circuit generation 55가 열렸습니다. 거래소 노출이나 주문이 발견된 사건은 아니며, circuit을
+수동으로 내리지 않았습니다. 기존 V19 복구기가 완전 account/open-order 독립 관측 3회를
+확보한 뒤 15:33:07 UTC에 같은 generation을 CAS로 `RESOLVED` 처리했습니다. 최종 circuit은
+false, entry block은 `NO_FRESH_BULL_SIGNAL`, protection health는 `FLAT`입니다.
