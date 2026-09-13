@@ -1,0 +1,205 @@
+name: Verify deployed V21 post-fill drift guard
+
+on:
+  push:
+    branches: [release/v21-post-fill-drift-1]
+    paths:
+      - ".github/workflows/verify-v21-post-fill-drift-20260913.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: verify-v10-lane-executor-v21
+  cancel-in-progress: false
+
+jobs:
+  verify-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DEPLOYED_SOURCE_SHA: 77d605ddfc94b67b05052ff3be519db1a54eb24b
+      DEPLOYED_VERSION: "40"
+      DEPLOYED_BUNDLE_SHA256: e098f1381f5556264d036abe5cc336c3305b0722bb6c297207f38b982b6a9c2d
+      V21_DEPLOYED_AT: 2026-09-13T06:59:20.218Z
+    steps:
+      - name: Check out validation SHA
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prove this commit cannot change deployed runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/release/v21-post-fill-drift-1
+          git merge-base --is-ancestor "$DEPLOYED_SOURCE_SHA" "$GITHUB_SHA"
+          git diff --check "$DEPLOYED_SOURCE_SHA" "$GITHUB_SHA"
+          git diff --exit-code "$DEPLOYED_SOURCE_SHA" "$GITHUB_SHA" -- \
+            supabase/functions gateway supabase/migrations
+          mkdir -p verification-evidence
+          git rev-parse HEAD > verification-evidence/verification-sha.txt
+          git diff --name-status "$DEPLOYED_SOURCE_SHA" "$GITHUB_SHA" \
+            > verification-evidence/validation-only-diff.txt
+
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Verify exact production source and controls
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json \
+            > verification-evidence/functions-start.json
+          python - <<'PY'
+          import json,os
+          rows=json.load(open('verification-evidence/functions-start.json'))
+          rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
+          row=next(x for x in rows if x.get('slug')=='v10-lane-executor')
+          assert row.get('status')=='ACTIVE' and row.get('verify_jwt') is False
+          assert int(row['version'])==int(os.environ['DEPLOYED_VERSION'])
+          assert row.get('ezbr_sha256')==os.environ['DEPLOYED_BUNDLE_SHA256']
+          PY
+          mkdir -p verification-evidence/production-source
+          supabase functions download v10-lane-executor --project-ref "$SUPABASE_PROJECT_REF" \
+            --use-api --workdir "$PWD/verification-evidence/production-source"
+          node test-support/v19-ops/verify-downloaded-function.mjs \
+            verification-evidence/production-source . \
+            > verification-evidence/source-verification-start.json
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select jsonb_build_object('entry_enabled',c.entry_enabled,'legacy_entries_retired',c.legacy_entries_retired,'mode',s.mode,'pause_new_entries',s.pause_new_entries,'withdrawal_mode',s.withdrawal_mode,'manual_intervention_required',s.manual_intervention_required,'scalp_kill_switch',s.scalp_kill_switch,'emergency_liquidation',s.emergency_liquidation,'allocation_usdt',s.binance_futures_allocation_usdt,'circuit_open',r.circuit_open,'active_incidents',(select count(*) from public.v18_ops_incidents where status in ('OPEN','VERIFYING')),'closed_backlog',jsonb_array_length(public.v18_closed_protection_backlog(1000)->'rows'),'wrong_new_policy',(select count(*) from public.v11_long_regime_positions where entry_at>='$V21_DEPLOYED_AT'::timestamptz and metadata->>'entryExecutionPolicyVersion' is distinct from 'V21_POST_FILL_DRIFT_GUARD_1'),'old_policy_mutation',(select count(*) from public.v11_long_regime_positions where entry_at<'$V21_DEPLOYED_AT'::timestamptz and metadata->>'entryExecutionPolicyVersion'='V21_POST_FILL_DRIFT_GUARD_1')) from public.v17_operator_control c cross join public.trading_settings s cross join public.v11_long_regime_runtime r where c.singleton and s.id=1 and r.singleton" \
+            > verification-evidence/controls-and-policy.json
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(jsonb_agg(jsonb_build_object('id',id,'symbol',symbol,'state',state,'remaining_quantity',remaining_quantity,'realized_pnl_usdt',realized_pnl_usdt,'protection_health',metadata->'exitProtection'->>'health','terminal_resolution',jsonb_path_query_array(metadata,'$.exitProtection.orders[*] ? (@.terminalResolution.kind == \"DEFINITIVE_CREATE_REJECTION\")')) order by id),'[]'::jsonb) from public.v11_long_regime_positions where id in ('9ecaef3f-a916-4a5a-bbb4-3d4f06ac7a75','c525b7e2-8c77-43e0-bbee-5ff050f2eda8')" \
+            > verification-evidence/retired-stop-journals.json
+          python - <<'PY'
+          import json
+          c=json.load(open('verification-evidence/controls-and-policy.json'))
+          assert c['entry_enabled'] is True and c['legacy_entries_retired'] is True
+          assert c['mode']=='LIVE_LIMITED' and c['pause_new_entries'] is False
+          assert c['withdrawal_mode'] is False and c['manual_intervention_required'] is False
+          assert c['scalp_kill_switch'] is False and c['emergency_liquidation'] is False
+          assert float(c['allocation_usdt'])==40 and c['circuit_open'] is False
+          assert c['active_incidents']==0 and c['closed_backlog']==0
+          assert c['wrong_new_policy']==0 and c['old_policy_mutation']==0
+          rows={x['symbol']:x for x in json.load(open('verification-evidence/retired-stop-journals.json'))}
+          expected={'STEEMUSDT':5.946200509999982,'牛来USDT':4.776945409999996}
+          assert set(rows)==set(expected)
+          for symbol,pnl in expected.items():
+              row=rows[symbol]
+              assert row['state']=='CLOSED' and float(row['remaining_quantity'])==0
+              assert abs(float(row['realized_pnl_usdt'])-pnl)<1e-12
+              assert row['protection_health']=='POSITION_CLOSED'
+              assert len(row['terminal_resolution'])==1
+          PY
+
+      - name: Observe three further genuine scheduler cycles
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import datetime,json,os,subprocess,time
+          started=datetime.datetime.now(datetime.timezone.utc).isoformat()
+          deployed=os.environ['V21_DEPLOYED_AT']
+          literal="'"+deployed.replace("'","''")+"'::timestamptz"
+          query=r"""
+          select jsonb_build_object(
+            'observed_at',clock_timestamp(),'cycle_started_at',r.last_cycle_started_at,
+            'cycle_completed_at',r.last_cycle_completed_at,'last_success_at',r.last_success_at,
+            'last_error',r.last_error,
+            'cycle_ms',round(extract(epoch from (r.last_cycle_completed_at-r.last_cycle_started_at))*1000),
+            'entry_block_reason',r.entry_block_reason,'protection_health',r.protection_health,
+            'circuit_open',r.circuit_open,
+            'closed_backlog',jsonb_array_length(public.v18_closed_protection_backlog(1000)->'rows'),
+            'pending_order_count',(select count(*) from public.v11_long_regime_orders where state in ('PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED')),
+            'active_incident_count',(select count(*) from public.v18_ops_incidents where status in ('OPEN','VERIFYING')),
+            'duplicate_active_client_ids',(select count(*) from (select client_order_id from public.v11_long_regime_orders where state in ('PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED') and client_order_id is not null group by client_order_id having count(*)>1) d),
+            'new_signal_count',(select count(*) from public.v11_long_regime_signals where created_at>=__DEPLOYED__),
+            'new_decision_count',(select count(*) from public.v11_long_regime_decisions where decided_at>=__DEPLOYED__),
+            'new_order_count',(select count(*) from public.v11_long_regime_orders where created_at>=__DEPLOYED__),
+            'new_fill_count',(select count(*) from public.exchange_trade_fills where executed_at>=__DEPLOYED__),
+            'new_v21_position_count',(select count(*) from public.v11_long_regime_positions where entry_at>=__DEPLOYED__ and metadata->>'entryExecutionPolicyVersion'='V21_POST_FILL_DRIFT_GUARD_1'),
+            'new_wrong_policy_count',(select count(*) from public.v11_long_regime_positions where entry_at>=__DEPLOYED__ and metadata->>'entryExecutionPolicyVersion' is distinct from 'V21_POST_FILL_DRIFT_GUARD_1'),
+            'new_api_budget_error_count',((select count(*) from public.v18_ops_incidents where opened_at>=__DEPLOYED__ and reason like '%V18_API_BUDGET_EXHAUSTED%')+(select count(*) from public.v11_long_regime_decisions where decided_at>=__DEPLOYED__ and details::text like '%V18_API_BUDGET_EXHAUSTED%'))
+          ) from public.v11_long_regime_runtime r where singleton
+          """.replace('__DEPLOYED__',literal)
+          def read():
+              out=subprocess.check_output(['psql',os.environ['SUPABASE_DB_URL'],'-XAt','--set=ON_ERROR_STOP=1','-c',query],text=True)
+              return json.loads(out.strip())
+          seen=set(); rows=[]; deadline=time.time()+300
+          while time.time()<deadline and len(rows)<3:
+              state=read(); completed=state.get('cycle_completed_at')
+              clean=completed and state.get('last_success_at')==completed and state.get('last_error') is None
+              if clean and state.get('cycle_started_at')>started and completed not in seen:
+                  assert 0<=state['cycle_ms']<=60000,state
+                  for key in ('closed_backlog','pending_order_count','active_incident_count','duplicate_active_client_ids','new_wrong_policy_count','new_api_budget_error_count'):
+                      assert state[key]==0,(key,state)
+                  assert state['circuit_open'] is False,state
+                  seen.add(completed);rows.append(state)
+              if len(rows)<3:time.sleep(10)
+          with open('verification-evidence/cycles.jsonl','w') as f:
+              for row in rows:f.write(json.dumps(row,sort_keys=True)+'\n')
+          assert len(rows)==3,f'only {len(rows)} clean cycles'
+          summary={'cycle_count':3,'first':rows[0]['cycle_completed_at'],'last':rows[-1]['cycle_completed_at'],'cycle_ms':[x['cycle_ms'] for x in rows],'entry_block_reason':rows[-1]['entry_block_reason'],'protection_health':rows[-1]['protection_health'],'new_signal_count':rows[-1]['new_signal_count'],'new_decision_count':rows[-1]['new_decision_count'],'new_order_count':rows[-1]['new_order_count'],'new_fill_count':rows[-1]['new_fill_count'],'new_v21_position_count':rows[-1]['new_v21_position_count']}
+          open('verification-evidence/cycle-summary.json','w').write(json.dumps(summary,indent=2,sort_keys=True)+'\n')
+          print(json.dumps(summary,sort_keys=True))
+          PY
+
+      - name: Export policy and natural execution evidence
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,os,subprocess
+          deployed=os.environ['V21_DEPLOYED_AT']
+          literal="'"+deployed.replace("'","''")+"'::timestamptz"
+          query="""select coalesce(jsonb_agg(jsonb_build_object('position_id',p.id,'symbol',p.symbol,'signal_id',p.signal_id,'entry_at',p.entry_at,'state',p.state,'entry_order_id',p.metadata->>'entryOrderId','exit_order_id',p.metadata->>'lastExitOrderId','exit_policy',p.metadata->>'leaderExitPolicyVersion','qv3_policy',p.metadata->'qv3'->>'version','executor_patch',p.metadata->>'executorPatch','entry_execution_policy',p.metadata->>'entryExecutionPolicyVersion','post_fill_guard',p.metadata->'postFillEntryGuard','protection_health',p.metadata->'exitProtection'->>'health','fills',(select coalesce(jsonb_agg(jsonb_build_object('trade_id',f.exchange_trade_id,'order_id',f.exchange_order_id,'side',f.side,'quantity',f.quantity,'price',f.price,'executed_at',f.executed_at) order by f.executed_at),'[]'::jsonb) from public.exchange_trade_fills f where coalesce(f.v17_position_id,f.position_id)=p.id)) order by p.entry_at),'[]'::jsonb) from public.v11_long_regime_positions p where p.entry_at>=__DEPLOYED__""".replace('__DEPLOYED__',literal)
+          out=subprocess.check_output(['psql',os.environ['SUPABASE_DB_URL'],'-XAt','--set=ON_ERROR_STOP=1','-c',query],text=True)
+          open('verification-evidence/genuine-executions.json','w').write(out)
+          rows=json.loads(out)
+          for row in rows:
+              assert row['entry_execution_policy']=='V21_POST_FILL_DRIFT_GUARD_1'
+              assert row['qv3_policy']=='QV3_ENTRY_EXIT_TWO_1'
+              assert row['exit_policy']=='V17_EXIT_R5_TAIL'
+              assert row['executor_patch']=='V21-POST-FILL-DRIFT-2'
+          PY
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json \
+            > verification-evidence/functions-final.json
+          python - <<'PY'
+          import json,os
+          rows=json.load(open('verification-evidence/functions-final.json'))
+          rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
+          row=next(x for x in rows if x.get('slug')=='v10-lane-executor')
+          assert int(row['version'])==int(os.environ['DEPLOYED_VERSION'])
+          assert row.get('ezbr_sha256')==os.environ['DEPLOYED_BUNDLE_SHA256']
+          PY
+          mkdir -p verification-evidence/final-production-source
+          supabase functions download v10-lane-executor --project-ref "$SUPABASE_PROJECT_REF" \
+            --use-api --workdir "$PWD/verification-evidence/final-production-source"
+          node test-support/v19-ops/verify-downloaded-function.mjs \
+            verification-evidence/final-production-source . \
+            > verification-evidence/source-verification-final.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v21-post-fill-drift-verification
+          path: verification-evidence/
+          retention-days: 30

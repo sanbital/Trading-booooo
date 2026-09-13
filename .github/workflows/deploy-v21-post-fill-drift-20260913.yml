@@ -5,10 +5,6 @@
 name: Deploy V21 post-fill drift guard
 
 on:
-  push:
-    branches: [release/v21-post-fill-drift-1]
-    paths:
-      - ".github/workflows/deploy-v21-post-fill-drift-20260913.yml"
   workflow_dispatch:
 
 permissions:
@@ -304,10 +300,14 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           set -euo pipefail
-          deployed_at="$(cat release-evidence/deployed-at.txt)"
-          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -v deployed_at="$deployed_at" -c \
-            "select coalesce(jsonb_agg(jsonb_build_object('position_id',p.id,'symbol',p.symbol,'signal_id',p.signal_id,'entry_at',p.entry_at,'state',p.state,'entry_order_id',p.metadata->>'entryOrderId','exit_order_id',p.metadata->>'lastExitOrderId','exit_policy',p.metadata->>'leaderExitPolicyVersion','qv3_policy',p.metadata->'qv3'->>'version','executor_patch',p.metadata->>'executorPatch','entry_execution_policy',p.metadata->>'entryExecutionPolicyVersion','post_fill_guard',p.metadata->'postFillEntryGuard','protection_health',p.metadata->'exitProtection'->>'health','fills',(select coalesce(jsonb_agg(jsonb_build_object('trade_id',f.exchange_trade_id,'order_id',f.exchange_order_id,'side',f.side,'quantity',f.quantity,'price',f.price,'executed_at',f.executed_at) order by f.executed_at),'[]'::jsonb) from public.exchange_trade_fills f where coalesce(f.v17_position_id,f.position_id)=p.id)) order by p.entry_at),'[]'::jsonb) from public.v11_long_regime_positions p where p.entry_at>=:'deployed_at'::timestamptz" \
-            > release-evidence/genuine-executions.json
+          python - <<'PY'
+          import os,subprocess
+          deployed_at=open('release-evidence/deployed-at.txt').read().strip()
+          literal="'"+deployed_at.replace("'","''")+"'::timestamptz"
+          query="""select coalesce(jsonb_agg(jsonb_build_object('position_id',p.id,'symbol',p.symbol,'signal_id',p.signal_id,'entry_at',p.entry_at,'state',p.state,'entry_order_id',p.metadata->>'entryOrderId','exit_order_id',p.metadata->>'lastExitOrderId','exit_policy',p.metadata->>'leaderExitPolicyVersion','qv3_policy',p.metadata->'qv3'->>'version','executor_patch',p.metadata->>'executorPatch','entry_execution_policy',p.metadata->>'entryExecutionPolicyVersion','post_fill_guard',p.metadata->'postFillEntryGuard','protection_health',p.metadata->'exitProtection'->>'health','fills',(select coalesce(jsonb_agg(jsonb_build_object('trade_id',f.exchange_trade_id,'order_id',f.exchange_order_id,'side',f.side,'quantity',f.quantity,'price',f.price,'executed_at',f.executed_at) order by f.executed_at),'[]'::jsonb) from public.exchange_trade_fills f where coalesce(f.v17_position_id,f.position_id)=p.id)) order by p.entry_at),'[]'::jsonb) from public.v11_long_regime_positions p where p.entry_at>=__DEPLOYED__""".replace('__DEPLOYED__',literal)
+          out=subprocess.check_output(['psql',os.environ['SUPABASE_DB_URL'],'-XAt','--set=ON_ERROR_STOP=1','-c',query],text=True)
+          open('release-evidence/genuine-executions.json','w').write(out)
+          PY
           psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
             "select coalesce(jsonb_agg(jsonb_build_object('id',id,'entry_at',entry_at,'hard_stop_price',hard_stop_price,'exit_policy',metadata->>'leaderExitPolicyVersion','qv3',metadata->'qv3','entry_execution_policy',metadata->>'entryExecutionPolicyVersion') order by entry_at),'[]'::jsonb) from public.v11_long_regime_positions where state='OPEN'" \
             > release-evidence/open-positions-after.json
