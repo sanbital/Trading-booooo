@@ -34,6 +34,35 @@ test('uncertain missing order remains pending rather than assuming no submission
  assert.equal((await f.api().ensure('position-1',f.request)).status,'RECONCILIATION_PENDING');
  assert.equal(f.calls.filter(x=>x[0]==='create').length,1);
 });
+test('definitive pre-send rejection is terminal and can never become a stale stop',async()=>{
+ const f=fixture();f.exchange.createStop=async()=>{f.calls.push(['create']);throw Error('V18_STOP_OWNERSHIP_CHANGED')};
+ const result=await f.api().ensure('position-1',f.request),order=f.state().protection.orders[0];
+ assert.equal(result.status,'REJECTED');assert.equal(order.status,'REJECTED');assert.equal(order.terminal,true);
+ assert.equal(order.terminalResolution.kind,'DEFINITIVE_CREATE_REJECTION');
+ assert.equal(f.state().protection.health,'REJECTED');
+});
+test('legacy rejected submission is retired without treating a generic missing lookup as proof',async()=>{
+ const f=fixture();f.exchange.createStop=async()=>{f.calls.push(['create']);throw Error('TIMEOUT')};
+ await f.api().ensure('position-1',f.request);
+ const before=await f.store.load('position-1'),legacy=clone(before),order=legacy.protection.orders[0];
+ legacy.position.state='CLOSED';legacy.position.remainingQuantity=0;
+ order.status='CANCEL_PENDING';order.submitError='GW_400:Order would immediately trigger.';
+ order.lastQueryError='GW_400:Order does not exist.';
+ assert.equal(await f.store.compareAndSwap('position-1',before.version,legacy),true);
+ f.calls.length=0;await f.api().refresh('position-1');
+ const retired=f.state().protection.orders[0];
+ assert.equal(retired.status,'REJECTED');assert.equal(retired.terminal,true);
+ assert.equal(retired.terminalResolution.lookupError,'GW_400:Order does not exist.');
+ assert.equal(retired.lastQueryError,null);assert.equal(f.calls.filter(x=>x[0]==='query').length,0);
+ assert.equal(f.state().protection.health,'POSITION_CLOSED');
+});
+test('definitive replacement rejection keeps the acknowledged older stop protective',async()=>{
+ const f=fixture(),first=await f.api().ensure('position-1',f.request);
+ f.exchange.createStop=async()=>{throw Error('GW_400:Order would immediately trigger.')};
+ const result=await f.api().ensure('position-1',{...f.request,stopPrice:98.1});
+ assert.equal(result.status,'REJECTED');assert.equal(f.orders.get(first.clientId).algoStatus,'NEW');
+ assert.equal(f.state().protection.health,'PROTECTED');assert.equal(f.calls.filter(x=>x[0]==='cancel').length,0);
+});
 test('replacement is acknowledged before old stop cancellation',async()=>{
  const f=fixture(),first=await f.api().ensure('position-1',f.request);
  const second=await f.api().ensure('position-1',{...f.request,stopPrice:98.1});

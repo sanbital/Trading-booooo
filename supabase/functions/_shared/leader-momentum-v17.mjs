@@ -3,6 +3,11 @@
  * starting values, NOT results of the unfinished Binance backtest.
  */
 export const STRATEGY = 'LEADER_MOMENTUM_V17';
+// Completes the existing one-percent entry-drift contract at the only price that
+// ultimately matters: the exchange execution price.  The pre-dispatch guard remains
+// in place; this version is stamped on new order/position lifecycles so an already
+// open position can never be opted into the new behaviour by a deploy.
+export const ENTRY_EXECUTION_POLICY_VERSION = 'V21_POST_FILL_DRIFT_GUARD_1';
 export const POLICY = Object.freeze({
   rankLimit: 10, minDayReturn: .03, min30mReturn: .0075,
   min60mReturn: .015, minVolumeRatio: 1.1, minQuoteVolume24h: 5_000_000,
@@ -104,6 +109,19 @@ export function entryFresh(features,now,price,p=POLICY) {
   if(!(ref>0&&price>0)) return 'INVALID_PRICE';
   if(Math.abs(price/ref-1)>p.maxEntryDriftPct) return 'ENTRY_DRIFT';
   return null;
+}
+export function postFillEntryGuard(features,fillPrice,p=POLICY) {
+  const ref=num(features?.referenceClose),price=num(fillPrice),limit=num(p?.maxEntryDriftPct);
+  if(features?.strategy!==STRATEGY||!(ref>0&&price>0&&limit>0&&limit<1))
+    return {version:ENTRY_EXECUTION_POLICY_VERSION,action:'CLOSE',
+      reason:'V21_POST_FILL_ENTRY_INPUT_INVALID',referenceClose:ref,fillPrice:price,
+      driftPct:null,maxDriftPct:Number.isFinite(limit)?limit:null};
+  const driftPct=price/ref-1;
+  const exceeded=Math.abs(driftPct)-limit>1e-12;
+  return {version:ENTRY_EXECUTION_POLICY_VERSION,
+    action:exceeded?'CLOSE':'KEEP',
+    reason:exceeded?'V21_POST_FILL_ENTRY_DRIFT':'V21_POST_FILL_ENTRY_VALID',
+    referenceClose:ref,fillPrice:price,driftPct,maxDriftPct:limit};
 }
 export function nextExit(position,bid,now,p=POLICY) {
   const entry=num(position.entryPrice),at=num(position.entryAt),oldPeak=num(position.peakPrice??entry);

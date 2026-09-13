@@ -1,0 +1,47 @@
+name: V21 account market evidence 2026-09-13
+
+on:
+  push:
+    branches:
+      - codex/v21-entry-exit-account-growth-20260913
+    paths:
+      - research/20260913_v21/collect-account-market.mjs
+      - .github/workflows/v21-account-market-evidence-20260913.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: v21-account-market-evidence-20260913
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Download sealed pre-lock observations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download 34695837055 --name v20-strategy-evidence-34695837055 --dir sealed-evidence
+      - name: Verify sealed observation boundary
+        run: |
+          test "$(sha256sum sealed-evidence/protocol.json | cut -d' ' -f1)" = "830a005527eb6972e84f24fa878482aa811863b69b607caf17840c273d8493ab"
+          test "$(gzip -cd sealed-evidence/positions.jsonl.gz | wc -l)" -eq 126
+          test -s sealed-evidence/strategy-shadow.jsonl.gz
+      - name: Collect checksum-verified candles and funding
+        run: node research/20260913_v21/collect-account-market.mjs sealed-evidence market-evidence
+      - name: Verify output
+        working-directory: market-evidence
+        run: sha256sum --check manifest.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v21-account-market-${{ github.run_id }}
+          path: market-evidence/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0

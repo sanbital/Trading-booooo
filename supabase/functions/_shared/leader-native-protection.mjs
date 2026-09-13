@@ -10,6 +10,12 @@ const FINAL=new Set(['CANCELED','CANCELLED','EXPIRED','REJECTED','FINISHED']);
 const copy=x=>structuredClone(x);
 const finite=(x,name)=>{if(!Number.isFinite(x))throw Error(name);return x;};
 const eq=(a,b)=>Math.abs(a-b)<=Math.max(1e-10,Math.abs(b)*1e-8);
+// Only these errors prove that createStop did not leave an exchange order behind.
+// Timeouts, disconnects and generic lookup failures remain ambiguous forever until
+// an exact exchange receipt resolves them.
+const DEFINITIVE_CREATE_REJECTION=/^(?:V18_STOP_OWNERSHIP_CHANGED|GW_400:Order would immediately trigger\.?)$/;
+const definitiveRejectedSubmission=o=>o?.terminal!==true&&!o?.ackAt&&!o?.algoId&&!o?.actualOrderId&&
+  DEFINITIVE_CREATE_REJECTION.test(String(o?.submitError??''));
 
 // Persist what is actually known, rather than leaving the last successful label in
 // place forever.  In particular, a terminal REJECTED order is not PROTECTED.
@@ -19,9 +25,9 @@ function protectionHealth(state) {
   if(orders.some(o=>o.lastQueryError||o.accountingPending===true||(!o.terminal&&!['ACTIVE','NEW'].includes(o.status))))
     return 'RECONCILIATION_PENDING';
   if(closed)return orders.some(o=>!o.terminal)?'RECONCILIATION_PENDING':'POSITION_CLOSED';
-  if(orders.some(o=>o.terminal&&o.status==='REJECTED'))return 'REJECTED';
   const active=orders.filter(o=>!o.terminal&&['ACTIVE','NEW'].includes(o.status));
   if(active.some(o=>eq(Number(o.spec?.params?.quantity),state.position.remainingQuantity)))return 'PROTECTED';
+  if(orders.some(o=>o.terminal&&o.status==='REJECTED'))return 'REJECTED';
   return orders.length?'TERMINAL_NO_PROTECTION':'UNPROTECTED';
 }
 
@@ -56,6 +62,19 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
   }
   async function refresh(id) {
     let state=await store.load(id);owned(state);
+    // V18/V20 persisted a pre-send ownership rejection or a synchronous Binance
+    // create rejection as an uncertain SUBMITTING/CANCEL_PENDING order.  Neither
+    // error can have created an exchange order.  Resolve those exact legacy rows,
+    // while deliberately leaving TIMEOUT/CONNECTION_LOST rows pending.
+    if(state.protection.orders.some(definitiveRejectedSubmission)){
+      const normalized=copy(state);
+      for(const item of normalized.protection.orders.filter(definitiveRejectedSubmission)){
+        item.terminalResolution={kind:'DEFINITIVE_CREATE_REJECTION',at:clock(),
+          submitError:item.submitError,lookupError:item.lastQueryError??null};
+        item.status='REJECTED';item.terminal=true;item.lastQueryError=null;
+      }
+      normalized.protection.health=protectionHealth(normalized);state=await save(state,normalized);
+    }
     const initialHealth=protectionHealth(state);
     if(state.protection.health!==initialHealth){
       const normalized=copy(state);normalized.protection.health=initialHealth;state=await save(state,normalized);
@@ -216,9 +235,15 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
     try{ack=await exchange.createStop(spec.params);validAck(state.protection.orders.at(-1),ack);}
     catch(error){
       const after=copy(state),item=after.protection.orders.find(x=>x.clientId===clientId);
-      item.submitError=String(error?.message??error);after.protection.health='RECONCILIATION_PENDING';
+      item.submitError=String(error?.message??error);
+      if(definitiveRejectedSubmission(item)){
+        item.status='REJECTED';item.terminal=true;
+        item.terminalResolution={kind:'DEFINITIVE_CREATE_REJECTION',at:clock(),
+          submitError:item.submitError,lookupError:null};
+        after.protection.health=protectionHealth(after);
+      }else after.protection.health='RECONCILIATION_PENDING';
       state=await save(state,after);
-      return {status:'RECONCILIATION_PENDING',state,softwareMonitorRequired:true};
+      return {status:item.terminal?'REJECTED':'RECONCILIATION_PENDING',state,softwareMonitorRequired:true};
     }
     const accepted=copy(state),record=accepted.protection.orders.find(x=>x.clientId===clientId);
     record.algoId=String(ack.algoId);record.status=ack.algoStatus==='NEW'?'ACTIVE':String(ack.algoStatus);

@@ -21,7 +21,7 @@ function make({quoteResults, budget = 3}) {
   const calls = [];
   const ctx = {
     Date, Number, Array, Error, POLICY, nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5, console,
-    rec: x => x ?? {}, STRATEGY: 'LEADER_MOMENTUM_V17', N: x => Number(x) || 0,
+    rec: x => x ?? {}, STRATEGY: 'LEADER_MOMENTUM_V17', ENTRY_EXECUTION_POLICY_VERSION: 'V21_POST_FILL_DRIFT_GUARD_1', N: x => Number(x) || 0,
     NATIVE_STOP_ENABLED: false,
     createGatewayProtection: () => { throw Error('must not be constructed when disabled'); },
     verifyExecutionLease: async () => {},
