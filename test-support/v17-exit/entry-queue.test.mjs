@@ -38,7 +38,7 @@ test('a dispatched order always stops the run', () => {
 
 test('openBull marks dispatch at the order call, not earlier or later', () => {
   const open = source.slice(source.indexOf('async function openBull('), source.indexOf('// Best-effort feed for the decision-only exit shadow.'));
-  assert.match(open, /attempt\.dispatched=true;const raw=await gateway\(rp\)/,
+  assert.match(open, /attempt\.dispatched=true;const initialRaw=await gateway\(rp\)/,
     'the flag must be set immediately before the order leaves');
   const flag = open.indexOf('attempt.dispatched=true');
   // everything that can refuse an entry without sending anything must come first
@@ -48,7 +48,7 @@ test('openBull marks dispatch at the order call, not earlier or later', () => {
   // and the post-fill validations must come after, so they can never be treated as skippable
   for (const post of ['STOP_POLICY_INVALID', 'STOP_INVALID']) {
     const settle=source.slice(source.indexOf('async function settleKnownEntry('),source.indexOf('async function readOpsPositions('));
-    assert.ok(open.indexOf('settleKnownEntry(db,oi.data,raw,gateway)')>flag&&settle.includes(post), `${post} is checked in post-dispatch settlement`);
+    assert.ok(open.indexOf('settleKnownEntry(db,oi.data,settledRaw,gateway)')>flag&&settle.includes(post), `${post} is checked in post-dispatch settlement`);
   }
 });
 

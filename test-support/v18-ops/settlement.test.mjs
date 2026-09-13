@@ -85,6 +85,34 @@ test('11 actual openBull requested 196, fills 93 with fee delayed: owns/protects
  assert.equal(p.realized_pnl_usdt,null);assert.equal(p.entry_fee_usdt,null);
  const stops=h.state.calls.filter(c=>c.action==='v17_create_stop');assert.equal(stops.length,1);assert.equal(stops[0].params.quantity,93);
 });
+test('V22 incomplete FILLED acknowledgement is queried and protected in the same cycle',async()=>{
+ const h=harness(),s=h.state.tables.v11_long_regime_signals[0],fillAt=h.state.now-750;
+ s.symbol='STEEMUSDT';s.features.referenceClose=.07969;s.features.atr=.001;
+ h.state.entryQuote={best_bid:.07968,best_ask:.07969};
+ h.state.createOrder=(cmd,state)=>{
+  const id=cmd.order.identifier,quantity=cmd.order.quantity;
+  state.exchange=[{market:'STEEMUSDT',side:'LONG',quantity}];
+  state.software[id]={order:{orderId:'steem-entry',clientOrderId:id,symbol:'STEEMUSDT',side:'BUY',
+   positionSide:'BOTH',reduceOnly:false,origQty:String(quantity),executedQty:String(quantity),status:'FILLED',
+   avgPrice:'.07969',updateTime:fillAt,fills:[{tradeId:'steem-trade',qty:String(quantity),price:'.07969',
+    commission:'.06',commissionAsset:'USDT',time:fillAt}]}};
+  // This is the production failure shape: status and identity arrived, but normalized
+  // quantity/average-price evidence did not accompany the create response.
+  return{order:{orderId:'steem-entry',clientOrderId:id,symbol:'STEEMUSDT',side:'BUY',
+   positionSide:'BOTH',reduceOnly:false,origQty:String(quantity),status:'FILLED'}};
+ };
+ const out=await h.ctx.runCycle();
+ assert.equal(out.entry.entered,true);assert.equal(out.entry.entryFinality.source,'SAME_ORDER_QUERY');
+ const queryIndex=h.state.calls.findIndex(c=>c.action==='get_order');
+ const stopIndex=h.state.calls.findIndex(c=>c.action==='v17_create_stop');
+ assert.ok(queryIndex>=0&&stopIndex>queryIndex,'same-order confirmation must precede protection');
+ const p=h.state.tables.v11_long_regime_positions[0],o=h.state.tables.v11_long_regime_orders.find(x=>x.intent==='OPEN_LONG');
+ assert.equal(p.entry_at,new Date(fillAt).toISOString());assert.equal(p.metadata.entryFillAt,fillAt);
+ assert.equal(p.metadata.entryRecordedAt,new Date(h.state.now).toISOString());
+ assert.equal(o.state,'FILLED');assert.equal(o.reject_reason,null);
+ assert.equal(o.response_payload.v22EntryFinality.source,'SAME_ORDER_QUERY');
+ assert.equal(out.entry.entryProtection.status,'PROTECTED');assert.equal(h.state.circuits.length,0);
+});
 test('09 entry timeout: successful existing ID is recovered and protected; terminal zero stays flat',async()=>{
  for(const executed of [0,93]){
   const h=harness(),s=h.state.tables.v11_long_regime_signals[0];s.symbol='EDGEUSDT';s.features.referenceClose=.613;s.features.atr=.01;
