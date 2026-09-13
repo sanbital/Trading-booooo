@@ -1,0 +1,181 @@
+{
+  "protocol": "V20_LOSS_PRESERVATION_20260912_1",
+  "frozen_at_utc": "2026-09-12T13:03:48.819520593Z",
+  "production_baseline": {
+    "project_ref": "etaajwpernzrcdrifdnw",
+    "function": "v10-lane-executor",
+    "function_version": 38,
+    "patch": "V19-SCOPE-AWARE-ENTRY-1",
+    "strategy": "QV3_ENTRY_EXIT_TWO_1",
+    "bundle_sha256": "1935db015d2d527718c3abfca9dac57e0fb99b16b7fb23b81ea4236552d9d547",
+    "release_commit": "d5424b54ca25dff364cde96692f7bf9abdc6f77b",
+    "release_branch": "release/v19-scope-aware-entry-control-1",
+    "source_parity": "ALL_14_DEPLOYED_FILES_EXACT"
+  },
+  "time_boundaries": {
+    "cumulative_start_utc": "2026-09-08T23:44:06Z",
+    "analysis_cutoff_utc": "2026-09-12T12:54:14.867543Z",
+    "recent_48h_start_utc": "2026-09-10T12:54:14.867543Z",
+    "qv3_cutover_utc": "2026-09-11T15:20:00Z",
+    "v19_operational_cutover_utc": "2026-09-12T11:40:56.988Z"
+  },
+  "development": {
+    "start_utc": "2026-09-08T23:44:06Z",
+    "end_utc": "2026-09-11T15:20:00Z",
+    "expected_closed_entries": 80,
+    "role": "EXPLORATORY_DEVELOPMENT_ONLY"
+  },
+  "chronological_validation": {
+    "start_utc": "2026-09-11T15:20:00Z",
+    "end_utc": "2026-09-12T12:54:14.867543Z",
+    "expected_closed_entries": 46,
+    "windows": [
+      {
+        "name": "W1",
+        "start_utc": "2026-09-11T15:20:00Z",
+        "end_utc": "2026-09-11T21:53:38Z",
+        "expected_entries": 15
+      },
+      {
+        "name": "W2",
+        "start_utc": "2026-09-11T21:53:38Z",
+        "end_utc": "2026-09-12T03:30:41Z",
+        "expected_entries": 15
+      },
+      {
+        "name": "W3",
+        "start_utc": "2026-09-12T03:30:41Z",
+        "end_utc": "2026-09-12T12:54:14.867543Z",
+        "expected_entries": 16
+      }
+    ],
+    "role": "CHRONOLOGICAL_VALIDATION_PARTIALLY_OBSERVED_NOT_PRISTINE_HOLDOUT",
+    "contamination": "Aggregate cohort PnL and several recent trade examples were inspected before this freeze; candidate-level validation outcomes were not inspected. Any tuning after validation opens converts the affected window to development data."
+  },
+  "candidate_selection": {
+    "maximum_candidates": 3,
+    "candidate_lock_required_before_validation": true,
+    "development_inputs_only": true,
+    "adaptive_validation_search_allowed": false,
+    "previous_failed_candidates_preserved": [
+      "FAST_FAIL",
+      "EARLY_LOCK",
+      "VOL_TRAIL",
+      "COMBINED_R5",
+      "REPEAT_STOP_2",
+      "SPIKE_3PCT",
+      "COMBINED_ENTRY_SHADOW",
+      "LOCK_1P5"
+    ],
+    "forbidden": [
+      "SYMBOL_BLACKLIST",
+      "FUTURE_HIGH_OR_CLOSE_INPUT",
+      "WIDER_INITIAL_STOP",
+      "AVERAGE_DOWN",
+      "INCREASE_MARGIN_OR_LEVERAGE",
+      "NEAR_ZERO_OPPORTUNITY_RATE",
+      "EXIT_REASON_RELABELING",
+      "OVERRIDE_PRIOR_FAILED_RESULT"
+    ]
+  },
+  "account_and_cost_convention": {
+    "stated_initial_capital_usdt": 100,
+    "target_margin_per_entry_usdt": 40,
+    "leverage": 3,
+    "max_slots": 10,
+    "actual_fill_pnl": "gross sell proceeds minus buy cost minus observed entry and exit fees; do not deduct slippage a second time",
+    "funding": "UNKNOWN_NOT_ZERO_UNLESS_EXACTLY_ATTRIBUTED",
+    "open_positions": "EXCLUDED_FROM_CLOSED_WIN_LOSS_AND_REALIZED_PNL",
+    "accounting_pending": "SEPARATE_FROM_CONFIRMED_CLOSED",
+    "drawdown_label": "CLOSED_TRADE_CUMULATIVE_PNL_DRAWDOWN_UNLESS_MARK_TO_MARKET_EQUITY_IS_AVAILABLE"
+  },
+  "mfe": {
+    "primary_source": "BOT_OBSERVED_BID_FROM_DECISIONS",
+    "secondary_sources": [
+      "STORED_ACCOUNT_MARK_PRICE_SNAPSHOT",
+      "POST_HOC_BINANCE_ONE_MINUTE_HIGH"
+    ],
+    "source_results_must_remain_separate": true,
+    "aggregate_reproduction": "sum(net_return_i) / sum(mfe_i) on the exact same eligible trade set",
+    "zero_mfe_individual_ratio": "UNDEFINED_NOT_ZERO",
+    "diagnostic_buckets_pct": [
+      0,
+      0.2,
+      1,
+      2,
+      3,
+      5
+    ],
+    "same_reference_path_required_for_candidate_comparison": true
+  },
+  "counterfactual_execution": {
+    "decision_inputs": "ONLY_DATA_AVAILABLE_AT_OR_BEFORE_DECISION_TIME",
+    "incomplete_bar": "NEVER_USE_FINAL_OHLC",
+    "entry_bar_ambiguity": [
+      "SKIP_ENTRY_BAR",
+      "ADVERSE_FIRST_BOUND"
+    ],
+    "software_delay_ms": [
+      0,
+      10000,
+      60000
+    ],
+    "exit_price_scenarios": [
+      {
+        "name": "NORMAL",
+        "additional_adverse_impact": 0.001,
+        "exit_fee_rate": 0.0005
+      },
+      {
+        "name": "COST_STRESS",
+        "additional_adverse_impact": 0.002,
+        "exit_fee_rate": 0.001
+      }
+    ],
+    "intrabar_sequence": "UNKNOWN_IF_ONLY_OHLC",
+    "conditional_exit_replay": "SAME_ACTUAL_ENTRIES_FIXED",
+    "integrated_replay": "REQUIRED_FOR_ENTRY_FILTER_PROMOTION_AND_MUST_MODEL_CASH_SLOTS_CLEANUP_AND_REENTRY"
+  },
+  "promotion_gates_preserved": {
+    "minimum_post_update_closed_trades": 100,
+    "minimum_chronological_validation_trades": 30,
+    "minimum_validation_windows": 3,
+    "baseline_net_pnl_absolute_error_per_trade_max_usdt": 0.25,
+    "positive_validation_net_expectancy_required": true,
+    "validation_net_improvement_required": true,
+    "no_worse_max_drawdown_required": true,
+    "no_worse_worst_trade_required": true,
+    "minimum_opportunity_retention": 0.7,
+    "cost_delay_stress_outperformance_required": true,
+    "point_in_time_account_slot_cash_replay_required": true,
+    "funding_coverage_required": true
+  },
+  "additional_gates": {
+    "each_validation_window_delta_nonnegative": true,
+    "latest_operational_patch_delta_nonnegative": true,
+    "positive_net_under_stress": true,
+    "large_winner_preservation_required": true,
+    "leave_one_symbol_and_trade_out_direction_stable": true,
+    "nearby_parameter_direction_stable": true,
+    "new_actual_winner_to_loss_count_max": 0,
+    "open_position_policy_stamp_preservation_required": true
+  },
+  "classification": {
+    "SUPERIOR": "All preserved and additional gates pass on a faithful replay and account-level opportunity reconstruction.",
+    "INFERIOR": "A performance, tail, robustness, or winner-preservation gate is worse than baseline.",
+    "DEFER": "Evidence, sample, funding, fidelity, or account-level reconstruction is insufficient. No strategy deployment."
+  },
+  "stop_rule": "Never deploy a strategy candidate after a failed or unavailable required gate. Verified observability or implementation-defect fixes may be released separately and must not be described as strategy superiority.",
+  "live_safety": {
+    "no_test_orders": true,
+    "no_fake_signals": true,
+    "no_forced_close": true,
+    "no_control_relaxation": true,
+    "preserve_db_only_reconciliation": true,
+    "preserve_cross_lifecycle_stop_isolation": true,
+    "preserve_fill_attribution_and_dedup": true,
+    "preserve_lease_and_fencing": true,
+    "preserve_symbol_scope_isolation": true,
+    "preserve_existing_open_position_policy": true
+  }
+}

@@ -1,0 +1,46 @@
+name: V20 Binance Vision evidence 2026-09-12
+
+on:
+  push:
+    branches:
+      - research/v20-loss-preservation-20260912
+    paths:
+      - research/20260912_v20/collect-binance-vision.mjs
+      - .github/workflows/v20-binance-vision-20260912.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: v20-binance-vision-20260912
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Download sealed source evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download 34695837055 --name v20-strategy-evidence-34695837055 --dir prior-evidence
+      - name: Verify sealed source evidence
+        run: |
+          test "$(sha256sum prior-evidence/protocol.json | cut -d' ' -f1)" = "830a005527eb6972e84f24fa878482aa811863b69b607caf17840c273d8493ab"
+          test "$(gzip -cd prior-evidence/positions.jsonl.gz | wc -l)" -eq 126
+      - name: Collect checksum-verified static candles
+        run: node research/20260912_v20/collect-binance-vision.mjs prior-evidence vision-evidence
+      - name: Verify market artifact
+        working-directory: vision-evidence
+        run: sha256sum --check manifest.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v20-binance-vision-${{ github.run_id }}
+          path: vision-evidence/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
