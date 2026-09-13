@@ -1,0 +1,50 @@
+{
+  "fixedLedger": {
+    "databaseQueryAt": "2026-09-13T14:02:10Z",
+    "packageNetPnlUsdt": -10.277143389999765,
+    "databaseNetPnlUsdt": -10.27714339,
+    "differenceUsdt": 0,
+    "exactAggregateMatch": true
+  },
+  "rawFillTimes": {
+    "originalPackageExact": 208,
+    "originalPackageFallback": 2,
+    "currentAuditExact": 209,
+    "currentAuditFallback": 1,
+    "newlyRecoveredPositionId": "6320bad6-d86b-48be-bbdc-775a685ffcb6",
+    "recoverySource": "exchange_trade_fills",
+    "steemDbLagMs": 56054
+  },
+  "behavioralReplay": {
+    "produced": false,
+    "errorPerTradeUsdt": null,
+    "maxAllowedUsdt": 0.25,
+    "gatePassed": false,
+    "blockers": [
+      "historical native-stop event order",
+      "continuous best bid",
+      "quantity sell-VWAP",
+      "order submit/ACK timing",
+      "actual funding cashflow"
+    ]
+  },
+  "cvcException": {
+    "exchangeTradeFillJoinRows": 0,
+    "rawEntryOrderId": "443218755",
+    "rawEntryTradeIds": [
+      25107968,
+      25107969,
+      25107970,
+      25107971
+    ],
+    "nativeActualOrderId": "443307531",
+    "nativeTradeIds": [
+      25118356,
+      25118357,
+      25118358
+    ],
+    "entryFeeUsdt": 0.06000895,
+    "exitFeeUsdt": 0.05923829,
+    "assessment": "CONFIRMED fill exists; JOIN absence is ledger-link coverage failure, not no trade/no fee"
+  }
+}

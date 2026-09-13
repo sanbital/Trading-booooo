@@ -1,0 +1,41 @@
+{
+  "currentLive": {
+    "entry": [
+      "v10-lane-signal-generator/index.ts",
+      "leader-momentum-v17.mjs",
+      "v10-lane-executor/index.ts",
+      "entryFresh/postFillEntryGuard",
+      "gateway create_order",
+      "entry settlement",
+      "position insert",
+      "native stop ensure"
+    ],
+    "exit": [
+      "v10-lane-executor manageLeader",
+      "gateway p10_quotes once per invocation",
+      "nextExitReviewed with stamped R5",
+      "durable CAS position update",
+      "native stop ensure",
+      "qv3AfterProtection on completed bars",
+      "idempotent close settlement"
+    ],
+    "shadowDeadEnd": {
+      "function": "pushShadowPositions",
+      "definedAt": "v10-lane-executor/index.ts:268",
+      "calls": 0,
+      "consequence": "gateway shadow worker presence does not prove position observation or X1 deployment"
+    }
+  },
+  "candidates": {
+    "E1": {
+      "module": "research/20260913_e1_x1/e1-recovery.mjs",
+      "liveImports": 0,
+      "executionEnabled": false
+    },
+    "X1": {
+      "module": "research/20260913_e1_x1/x1-fast-observer.mjs",
+      "liveImports": 0,
+      "executionEnabled": false
+    }
+  }
+}

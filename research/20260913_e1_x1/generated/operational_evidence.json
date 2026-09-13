@@ -1,0 +1,175 @@
+{
+  "repository": {
+    "checkedAtUtc": "2026-09-13T14:31:05.823Z",
+    "branch": "main",
+    "head": "adbcebd9dcc7614966f4a61ce53dd166f0f02f40",
+    "originMain": "adbcebd9dcc7614966f4a61ce53dd166f0f02f40",
+    "productionFilesModified": false,
+    "researchFilesUntracked": true
+  },
+  "supabase": {
+    "projectId": "etaajwpernzrcdrifdnw",
+    "region": "ap-northeast-1",
+    "postgresVersion": "17.6.1.147",
+    "executor": {
+      "slug": "v10-lane-executor",
+      "version": 41,
+      "status": "ACTIVE",
+      "updatedAtUtc": "2026-09-13T10:36:17.315Z",
+      "bundleSha256": "a9f5de783c0af38da40a407b5309ee997a25fec1c80297718e0255b7a872df3e",
+      "deployedFiles": 14,
+      "sourceMatchedMain": true
+    },
+    "signalGenerator": {
+      "slug": "v10-lane-signal-generator",
+      "version": 19,
+      "status": "ACTIVE",
+      "updatedAtUtc": "2026-09-08T01:59:59.433Z",
+      "bundleSha256": "84e4ec2b5ece426ac6e4b68f86dc0947a045b54231e980b411dc8348d472c574",
+      "deployedFiles": 3,
+      "sourceMatchedMain": true
+    },
+    "otherFunctions": {
+      "exchangeTradeSyncVersion": 62,
+      "qv3OpsStatusVersion": 1
+    },
+    "policy": {
+      "patch": "V22-IMMEDIATE-ENTRY-PROTECTION-1",
+      "entry": "V21_POST_FILL_DRIFT_GUARD_1",
+      "exit": "V17_EXIT_R5_TAIL",
+      "qv3": "QV3_ENTRY_EXIT_TWO_1"
+    }
+  },
+  "gateway": {
+    "checkedAtUtc": "2026-09-13T14:28:52.295Z",
+    "version": "8.0.3-P10-REGIME-ROUTER-V3-SAFE-EXIT",
+    "opsPatch": "V18-OPS-ISOLATION-3",
+    "schedulerEnabled": false,
+    "scanIntervalMs": 12000,
+    "positionMonitorIntervalMs": 2000,
+    "p10ProofCapability": true,
+    "topBookCapability": true,
+    "gatewaySourceHashVerified": false,
+    "positionModeVerified": false
+  },
+  "exchangeAccount": {
+    "observedAtUtc": "2026-09-13T14:28:52.184Z",
+    "proofComplete": true,
+    "positions": [],
+    "regularOrders": [],
+    "conditionalOrders": [],
+    "usdt": {
+      "balance": 92.80699616,
+      "equity": 92.80699616,
+      "available": 92.80699616,
+      "locked": 0,
+      "initialMargin": 0,
+      "unrealizedPnl": 0
+    }
+  },
+  "databaseRuntime": {
+    "observedAtUtc": "2026-09-13T14:20:24Z",
+    "liveEnabled": true,
+    "circuitOpen": false,
+    "pauseNewEntries": false,
+    "killSwitch": false,
+    "emergencyLiquidation": false,
+    "manualInterventionRequired": false,
+    "futuresEnabled": true,
+    "leverage": 3,
+    "allocationUsdt": 40,
+    "reserveUsdt": 0,
+    "configuredSlotCap": 10,
+    "openPositions": 0,
+    "currentProductionPendingOrders": 0,
+    "legacyOrderRowsMarkedSubmitted": 4,
+    "legacySubmittedRowsRawStatus": "CANCELED",
+    "legacySubmittedRowsScope": "V13-RANGE-ACTIVE-EXIT-1.0.0; SEIUSDT/UNIUSDT; created 2026-09-03",
+    "lastEntryAtUtc": "2026-09-13T14:11:21Z",
+    "lastExitAtUtc": "2026-09-13T14:16:11Z",
+    "latestEntryBlockReason": "IOC_NO_FILL:EXPIRED"
+  },
+  "databaseAccountSnapshot": {
+    "observedAtUtc": "2026-09-13T14:20:03Z",
+    "positionsComplete": false,
+    "reportedEquityUsdt": 3.76359,
+    "reportedAvailableUsdt": 0.03028,
+    "authoritativeForFinalExposure": false,
+    "reason": "incomplete snapshot contradicted a later complete direct exchange proof"
+  },
+  "naturalProductionActivityDuringAudit": {
+    "policy": "unchanged V22/V21/R5/QV3",
+    "signalsSinceExecutorV41": {
+      "total": 38,
+      "closed": 10,
+      "rejected": 28
+    },
+    "positionsSinceExecutorV41": 10,
+    "latestAdditionalTrades": [
+      {
+        "positionId": "a0c1f14b-2043-41fb-8a91-41c97f295b8e",
+        "symbol": "SOLVUSDT",
+        "entryFillAtUtc": "2026-09-13T14:01:11.852Z",
+        "closedAtUtc": "2026-09-13T14:07:21.892Z",
+        "settledNetPnlUsdt": -3.19841045,
+        "entryFeeUsdt": 0.06000221,
+        "exitFeeUsdt": 0.05846224,
+        "initialProtectionAckDelayMs": 5165,
+        "exitMechanism": "native stop"
+      },
+      {
+        "positionId": "5f79558f-b6be-460d-8f0a-bef58ef9ecd8",
+        "symbol": "PUNDIXUSDT",
+        "entryFillAtUtc": "2026-09-13T14:11:14.805Z",
+        "closedAtUtc": "2026-09-13T14:15:26.681Z",
+        "settledNetPnlUsdt": -2.95761967,
+        "entryFeeUsdt": 0.05994462,
+        "exitFeeUsdt": 0.05852505,
+        "initialProtectionAckDelayMs": 6043,
+        "exitMechanism": "native stop"
+      }
+    ],
+    "combinedLatestAdditionalNetPnlUsdt": -6.15603012
+  },
+  "openOperationalIncident": {
+    "kind": "KNOWN_ORDER_PENDING_RECONCILIATION",
+    "scope": "ACCOUNT",
+    "state": "OPEN",
+    "firstObservedAtUtc": "2026-09-13T09:15:10.189486Z",
+    "clearedByThisAudit": false,
+    "note": "runtime circuit is false and the exchange proof is flat; the stale incident remains an unresolved metadata/control-plane anomaly"
+  },
+  "ledgerStateMismatch": {
+    "confirmed": true,
+    "rows": 4,
+    "databaseState": "SUBMITTED",
+    "embeddedExchangeRawStatus": "CANCELED",
+    "actualExchangeOrdersAtFinalProof": 0,
+    "mutatedByThisAudit": false,
+    "assessment": "stale legacy ledger state, not a live pending exchange order"
+  },
+  "securityAdvisors": {
+    "checkedAtUtc": "2026-09-13T14:23:00Z",
+    "rules": 7,
+    "findings": 360,
+    "byRule": {
+      "rls_enabled_no_policy": 132,
+      "security_definer_view": 29,
+      "function_search_path_mutable": 48,
+      "rls_disabled_in_public": 65,
+      "materialized_view_in_api": 10,
+      "anon_security_definer_function_executable": 38,
+      "authenticated_security_definer_function_executable": 38
+    },
+    "changedByThisAudit": false
+  },
+  "candidateDeployment": {
+    "E1": "NOT_DEPLOYED_DEFER",
+    "X1": "NOT_DEPLOYED_DEFER",
+    "E1_X1": "NOT_DEPLOYED_DEFER",
+    "newPolicySignals": 0,
+    "newPolicyFills": 0,
+    "newPolicyExits": 0,
+    "testOrdersCreated": false
+  }
+}

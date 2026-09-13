@@ -1,0 +1,20 @@
+{
+  "generatedAt": "2026-09-13T14:13:15.392Z",
+  "sourceRoot": "/workspace/scratch/67a20e2ef190/existing-research/unpacked/broad-study-20260913",
+  "inputHashes": {
+    "cohort.json": "a656fa9ef370aee0f470ec8b07e79294157a7fad4c15cd067fe771fe328376d3",
+    "cohort_review.json": "872b27a18af15129101ab044594332e03a423474c9931dc53de236ebfc2b1ccf",
+    "features.json": "70e61704228564e637ca08c5817c73e3f836aa375ec5f6b7ec077cd8eb09110e",
+    "tape10_results.json": "e6bb6306fe54bc2b5a943582df52b8dfdf099aec571f9212204828e0dd9ff8f3",
+    "winner_cases.json": "4c3cc3fed8d9e6950e50a446f3624ffe3a9f2ec72d74bed77b1b8edaa650364b",
+    "winner_results.json": "f364a4a05e71fcfc578c12c89ae5294fe1a307997deb62e492b35f5843b1844e",
+    "winner_cross_results.json": "0a9dedbfad668a578da1cac9fd7e78267e55c788658e07f056aa7953c0b8544b",
+    "manifest.json": "2e4f83efc04314cdb689edbfdc27e203a53efb3854fdcf952e3fff2f3e449af9",
+    "candidate_manifest.json": "2695c47485af7ee0be2be57bb1748926771e7a4bff5a39989509103928772480"
+  },
+  "constraints": {
+    "availableAtLteDecisionAt": "enforced where stored; otherwise assumed/UNKNOWN explicitly",
+    "secretsIncluded": false
+  },
+  "reproduction": "source package SHA256SUMS verified; reproduced analysis outputs matched file-for-file"
+}

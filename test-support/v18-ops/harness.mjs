@@ -15,6 +15,7 @@ import * as settlement from '../../supabase/functions/_shared/leader-exit-settle
 import * as dbOnly from '../../supabase/functions/_shared/leader-db-only-reconciliation.mjs';
 import * as entryControl from '../../supabase/functions/_shared/leader-entry-control.mjs';
 import * as fillEvidence from '../../supabase/functions/_shared/leader-fill-evidence.mjs';
+import * as e1 from '../../supabase/functions/_shared/leader-e1-runtime.mjs';
 export const BASE='bce9e95210829b5ae561f667dd1b499772977ec1';
 export const PRODUCTION_BASIS='d6980f0217cfcb536a3a38c1d5d7c09e39829d68';
 const root=new URL('../../',import.meta.url);
@@ -37,7 +38,7 @@ export function position(symbol='SAGAUSDT',quantity=7067.3,price=.01699){
 export function entryOrder(p){return {id:'order-'+p.id,signal_id:p.signal_id,position_id:p.id,symbol:p.symbol,intent:'OPEN_LONG',state:'FILLED',
  exchange_order_id:p.metadata.entryOrderId,client_order_id:'entry-client-'+p.id,requested_quantity:p.original_quantity,
  request_payload:{order:{side:'BUY',position_side:'LONG',position_effect:'OPEN'}},created_at:p.entry_at,updated_at:p.entry_at};}
-export function harness({positions=[],baseline=false,sourceRef=null,circuit=false,manual=[],settings={},signal=true,now=Date.parse('2026-09-10T16:16:00Z'),hook=()=>{},qv3Cutover=null,qv3Fetch=null}={}) {
+export function harness({positions=[],baseline=false,sourceRef=null,circuit=false,manual=[],settings={},signal=true,now=Date.parse('2026-09-10T16:16:00Z'),hook=()=>{},qv3Cutover=null,qv3Fetch=null,e1Enabled=false,x1Enabled=false,e1Tape=null,advanceTimers=false}={}) {
  const state={now,portfolioCount:0,lease:true,leaseOwner:null,quotes:{},stopFills:{},software:{},tradeHistory:{},orderHistory:{},calls:[],writes:[],circuits:[],hook,
   exchange:positions.map(p=>({market:p.symbol,side:p.side,quantity:p.remaining_quantity})),
   tables:{v11_long_regime_positions:clone(positions),v11_long_regime_orders:positions.map(entryOrder),v11_long_regime_decisions:[],
@@ -166,7 +167,8 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
   if(cmd.action==='symbol_info')return{quantity_step:cmd.market==='SAGAUSDT'?.1:1,price_tick:cmd.market==='SAGAUSDT'?.00001:.000001,min_notional:5};
   if(cmd.action==='p10_quotes')return cmd.markets.map(m=>{if(state.quotes[m] instanceof Error)throw state.quotes[m];const p=state.tables.v11_long_regime_positions.find(p=>p.symbol===m);
    return{market:m,best_bid:state.quotes[m]??p.entry_price,best_ask:(state.quotes[m]??p.entry_price)*1.0001,timing:{requested_at_ms:state.now,received_at_ms:state.now}};});
-  if(cmd.action==='quote')return state.entryQuote??{best_bid:.004,best_ask:.004001};
+  if(cmd.action==='quote')return typeof state.entryQuote==='function'?state.entryQuote(state):
+    state.entryQuote??{best_bid:.004,best_ask:.004001};
   if(cmd.action==='v17_query_stop'){
    const p=state.tables.v11_long_regime_positions.find(p=>p.symbol===cmd.symbol&&p.metadata?.exitProtection?.orders?.some(o=>o.clientId===cmd.clientAlgoId)),o=p.metadata.exitProtection.orders.find(o=>o.clientId===cmd.clientAlgoId);
    const f=state.stopFills[cmd.symbol];return{...o.spec.params,algoId:o.algoId??'algo-'+o.clientId,algoStatus:f?'FINISHED':state.cancelled?.has(cmd.clientAlgoId)?'CANCELED':'NEW',actualOrderId:f?.orderId??null};
@@ -189,9 +191,12 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
  source=source.replace(/^import .*;\n/gm,'').replace('const exchangeGateway=gateway;','const exchangeGateway=__gateway;');source=source.slice(0,source.indexOf('Deno.serve'));
  // Only exchange/DB/time boundaries are replaced. run/manage/open/close are actual source.
  source+='\ngateway=__gateway;this.runCycle=()=>runWithLease(__db);this.open=(...args)=>openBull(__db,...args);this.close=(...args)=>closePos(__db,...args);this.manage=(...args)=>manageLeader(__db,...args);this.setLease=()=>leaseOwners.set(__db,"test-owner");';
- const ctx={...momentum,...review,...ops,...settlement,...entrySettlement,...dbOnly,...entryControl,...fillEvidence,...qv3,QV3_LIVE_CUTOVER:qv3Cutover,qv3Candles:(symbol,at,start)=>qv3.qv3Candles(symbol,at,start,qv3Fetch??(()=>{throw Error("NETWORK_FORBIDDEN")})),leaderPortfolioMatches:momentum.portfolioMatches,protectNewLeaderPosition,createGatewayProtection:baseline?baselineAdapter.createGatewayProtection:createGatewayProtection,
-  Date:Clock,console,crypto,Map,Set,WeakMap,AbortController,TextEncoder,Response,Headers,fetch:()=>{throw Error('NETWORK_FORBIDDEN')},setTimeout,clearTimeout,
-  Deno:{env:{get:k=>k==='V17_NATIVE_STOP'?'true':''}},__gateway:gateway,__db:db};
+ const ctx={...momentum,...review,...ops,...settlement,...entrySettlement,...dbOnly,...entryControl,...fillEvidence,...qv3,...e1,
+  fetchE1AggTrades:e1Tape??e1.fetchE1AggTrades,QV3_LIVE_CUTOVER:qv3Cutover,qv3Candles:(symbol,at,start)=>qv3.qv3Candles(symbol,at,start,qv3Fetch??(()=>{throw Error("NETWORK_FORBIDDEN")})),leaderPortfolioMatches:momentum.portfolioMatches,protectNewLeaderPosition,createGatewayProtection:baseline?baselineAdapter.createGatewayProtection:createGatewayProtection,
+  Date:Clock,console,crypto,Map,Set,WeakMap,AbortController,TextEncoder,Response,Headers,fetch:()=>{throw Error('NETWORK_FORBIDDEN')},
+  setTimeout:advanceTimers?(fn,ms)=>{state.now+=Number(ms)||0;return setTimeout(fn,0)}:setTimeout,clearTimeout,
+  Deno:{env:{get:k=>k==='V17_NATIVE_STOP'?'true':k==='V23_E1_ENTRY_OVERRIDE'?(e1Enabled?'true':'false'):
+    k==='V23_X1_FAST_OBSERVATION'?(x1Enabled?'true':'false'):''}},__gateway:gateway,__db:db};
  vm.createContext(ctx);vm.runInContext(source,ctx);ctx.setLease();
  return{state,db,ctx,gateway,advance(ms=60000){state.now+=ms;state.tables.trading_account_snapshots[0].captured_at=new Clock().toISOString();}};
 }

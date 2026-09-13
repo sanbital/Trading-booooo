@@ -1,0 +1,15 @@
+family,source,covered,eligible,grade,availability
+actual_position_ledger,Supabase v11_long_regime_positions export,210,210,A,actual stored record
+raw_entry_fill_time,order.raw.updateTime/trades,209,210,A/B,"package had 208 exact/2 fallback; current exchange_trade_fills query recovered STEEM, leaving 209 exact/1 fallback"
+completed_1m_candles_trade_cohort,Binance historical futures klines,52494,210,B,"logical per-trade rows; 23612 consolidated stored symbol-time rows; post-retrieved, no historical receivedAt"
+completed_1m_candles_signal_cohort,Binance historical futures klines,76222,621,B,logical per-candidate rows; 23728 consolidated stored symbol-time rows; overlaps trade cohort and is not additive
+predecision_10s_aggTrades,Binance historical aggTrades,109,210,B,109 complete; 103 decision reference <=1s; fastWeak 28 all fresh
+post_t0_E1_5s_blocks,required but not archived,0,28,UNKNOWN,cannot synthesize
+historical_L2_best_bid_quantity_vwap,v10_usdm_forward_snapshots / gateway,0,210,UNKNOWN,forward snapshot latest 2026-09-01; none for 2026-09-13
+cross_venue_winner_cases,"Binance spot/perp, Upbit, KRW-per-USDT",4,4,B/C,case study; receipt-time lead/lag unavailable
+oi_change15,Binance historical derivative endpoint,210,210,C,availableAt assumed 5m; 10m sensitivity run
+long_account_ratio,Binance historical derivative endpoint,210,210,C,availableAt assumed 5m; 10m sensitivity run
+premium_bps,Binance historical derivative endpoint,210,210,C,availableAt assumed 5m; 10m sensitivity run
+last_funding_bps,Binance historical derivative endpoint,210,210,C,availableAt assumed 5m; 10m sensitivity run
+actual_funding_cashflow,exchange income ledger,0,210,UNKNOWN,not reconciled trade-by-trade
+news_onchain_liquidations,not supplied,0,210,UNKNOWN,not used

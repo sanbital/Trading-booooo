@@ -172,11 +172,12 @@ test('17 an inspection without settlement does not advance reconciliation-succes
   assert.equal(rt.last_reconciliation_success_at,'old');assert.ok(h.state.tables.v18_ops_incidents.some(x=>x.symbol==='AUDITUSDT'));
 });
 
-test('18 approved QV3, V19 entry control, margin, leverage, slots and V22 audit patch identity remain pinned',()=>{
+test('18 approved QV3, V19 controls, sizing and V23 override audit identity remain pinned',()=>{
   const source=readFileSync(new URL('../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
   assert.match(source,/const MARGIN=40,LEV=3,[^;]*MAX_SLOTS=10/);assert.match(source,/QV3_ENTRY_EXIT_TWO_1|QV3_VERSION/);
   assert.equal(ENTRY_CONTROL_VERSION,'V19-SCOPE-AWARE-ENTRY-1');
-  assert.match(source,/PATCH="V22-IMMEDIATE-ENTRY-PROTECTION-1"/);assert.match(source,/p_evidence_version:ENTRY_CONTROL_VERSION/);
+  assert.match(source,/PATCH="V23-E1-X1-OPERATOR-OVERRIDE-1"/);assert.match(source,/v22EntryFinality/);
+  assert.match(source,/priorPerformanceVerdict:"DEFER"/);assert.match(source,/p_evidence_version:ENTRY_CONTROL_VERSION/);
 });
 
 test('18b normal entry sizing, stop and hold decision equal the deployed production basis',async()=>{

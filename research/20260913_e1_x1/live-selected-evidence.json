@@ -1,0 +1,85 @@
+{
+  "project": "etaajwpernzrcdrifdnw",
+  "queriedAt": "2026-09-13T14:13:15.392Z",
+  "source": "Supabase SQL read-only queries against v11_long_regime_positions, v11_long_regime_orders, and exchange_trade_fills",
+  "entryFillTimeIntegrity": {
+    "positionId": "6320bad6-d86b-48be-bbdc-775a685ffcb6",
+    "symbol": "STEEMUSDT",
+    "rawFillAt": "2026-09-13T09:15:09.244Z",
+    "dbEntryAt": "2026-09-13T09:16:05.298Z",
+    "differenceMs": 56054,
+    "exchangeOrderId": "2311692358",
+    "exchangeTradeIds": [122315520]
+  },
+  "v22InitialProtection": {
+    "allNetPnlUsdt": -6.31382208,
+    "allClosedLosses": true,
+    "rows": [
+      {"positionId":"681aec00-81df-4fb2-8f55-d20320811210","symbol":"POLYXUSDT","fillAtMs":1789296309468,"firstStopAckAtMs":1789296314760,"delayMs":5292},
+      {"positionId":"69cdf212-34ca-4339-905d-5b32f356a4d3","symbol":"龙虾USDT","fillAtMs":1789298113373,"firstStopAckAtMs":1789298118386,"delayMs":5013},
+      {"positionId":"104b3c79-7490-484f-a934-3228f9780591","symbol":"FLOCKUSDT","fillAtMs":1789299011675,"firstStopAckAtMs":1789299017519,"delayMs":5844},
+      {"positionId":"f99c1d50-63c8-4ac9-bb81-0390660352b8","symbol":"BTWUSDT","fillAtMs":1789299970611,"firstStopAckAtMs":1789299975436,"delayMs":4825},
+      {"positionId":"7974d3fe-088b-4638-acaa-99467ff0ef94","symbol":"ARKUSDT","fillAtMs":1789300219534,"firstStopAckAtMs":1789300225213,"delayMs":5679},
+      {"positionId":"985525a5-89f7-4a81-90ac-71b93105a0c2","symbol":"CVCUSDT","fillAtMs":1789301413849,"firstStopAckAtMs":1789301418885,"delayMs":5036}
+    ],
+    "interpretation": "CONFIRMED protection installation timing; REFUTED as a sufficient explanation for these losses and not entry alpha"
+  },
+  "fillReconciliation": [
+    {
+      "positionId": "104b3c79-7490-484f-a934-3228f9780591",
+      "symbol": "FLOCKUSDT",
+      "entryOrderId": "545086514",
+      "entryTradeIds": [50825445,50825446],
+      "entryFillAt": "2026-09-13T11:30:11.675Z",
+      "entryFeeUsdt": 0.05999654,
+      "exitOrderId": "545281587",
+      "exitTradeIds": [50840476],
+      "exitFillAt": "2026-09-13T11:37:07.839Z",
+      "exitFeeUsdt": 0.06000029,
+      "grossPricePnlUsdt": 0.00750083,
+      "netPnlUsdt": -0.11249683,
+      "status": "CONFIRMED_COST_CONVERTED_GROSS_GAIN_TO_NET_LOSS"
+    },
+    {
+      "positionId": "f99c1d50-63c8-4ac9-bb81-0390660352b8",
+      "symbol": "BTWUSDT",
+      "entryOrderId": "1887108340",
+      "entryTradeIds": [213105956,213105957,213105958],
+      "entryFillAt": "2026-09-13T11:46:10.611Z",
+      "entryFeeUsdt": 0.05994837,
+      "exitOrderId": "1887311906",
+      "exitTradeIds": [213128841,213128842],
+      "exitFillAt": "2026-09-13T11:51:42.399Z",
+      "exitFeeUsdt": 0.05957053,
+      "status": "CONFIRMED_BY_EXCHANGE_TRADE_FILLS"
+    },
+    {
+      "positionId": "7974d3fe-088b-4638-acaa-99467ff0ef94",
+      "symbol": "ARKUSDT",
+      "entryOrderId": "3223922287",
+      "entryTradeIds": [218009636],
+      "entryFillAt": "2026-09-13T11:50:19.534Z",
+      "entryFeeUsdt": 0.0600908,
+      "exitOrderId": "3223991764",
+      "exitTradeIds": [218021465],
+      "exitFillAt": "2026-09-13T11:52:44.390Z",
+      "exitFeeUsdt": 0.0593208,
+      "status": "CONFIRMED_BY_EXCHANGE_TRADE_FILLS"
+    },
+    {
+      "positionId": "985525a5-89f7-4a81-90ac-71b93105a0c2",
+      "symbol": "CVCUSDT",
+      "entryOrderId": "443218755",
+      "entryTradeIds": [25107968,25107969,25107970,25107971],
+      "entryFillAt": "2026-09-13T12:10:13.849Z",
+      "entryFeeUsdt": 0.06000895,
+      "exitOrderId": "443307531",
+      "exitTradeIds": [25118356,25118357,25118358],
+      "exitFeeUsdt": 0.05923829,
+      "exchangeTradeFillJoinRows": 0,
+      "entryEvidence": "v11_long_regime_orders.response_payload.order.raw.fills and raw.updateTime",
+      "exitEvidence": "v11_long_regime_positions.metadata.exitProtection actualOrderId/tradeIds/appliedFee",
+      "status": "CONFIRMED_RAW_ORDER_RECOVERY_JOIN_MISSING"
+    }
+  ]
+}

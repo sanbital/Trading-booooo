@@ -10,7 +10,12 @@ import {applyExitReceipt} from "../_shared/leader-exit-settlement.mjs";
 import {analyzeDbOnlyExit} from "../_shared/leader-db-only-reconciliation.mjs";
 import {ENTRY_CONTROL_VERSION,CONTROL_SCOPE,evaluateEntryDecision,symbolRecoveryEvidence} from "../_shared/leader-entry-control.mjs";
 import {QV3_ACTIVATION_BASIS,QV3_LIVE_CUTOVER,QV3_VERSION,qv3Entry,qv3Exit,qv3Scope,qv3Stamp,qv3Candles,qv3AuditEvidence} from "../_shared/leader-qv3-runtime.mjs";
-const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V22-IMMEDIATE-ENTRY-PROTECTION-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
+import {E1_POLICY,advanceE1,e1QuoteEvidence,fetchE1AggTrades,startE1} from "../_shared/leader-e1-runtime.mjs";
+const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V23-E1-X1-OPERATOR-OVERRIDE-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
+const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Object.freeze({
+  id:"2026-09-13-USER-PRIORITY-OVERRIDE",basis:"OPERATOR_OVERRIDE_UNVALIDATED",
+  priorPerformanceVerdict:"DEFER",parametersValidatedByBacktest:false
+});
 // Bounded so a bar of refusals cannot stretch the run past the one-minute cadence.
 const ENTRY_ATTEMPTS_PER_RUN=3;
 // Pre-dispatch refusals scoped to one symbol. Never includes STOP_POLICY_INVALID or
@@ -20,6 +25,10 @@ const ENTRY_SKIP_SYMBOL_SCOPED=/^(SIGNAL_STALE_OR_FUTURE|ENTRY_DRIFT|WRONG_STRAT
 const MARGIN=40,LEV=3,NOTIONAL=MARGIN*LEV,MAX_SLOTS=10,NOTIONAL_BUFFER_USDT=.12,MAX_MARGIN_BUFFER_USDT=.25,ENTRY_CASH_BUFFER_USDT=.10,SNAP_MAX=90000,SIGNAL_MAX=300000,SPREAD_MAX=25,MAX_GAP_ATR=.5,IOC_BASE_BPS=3,IOC_MAX_BPS=12,BULL_MAX_MS=30*86400000,T1_PRICE=.075,PARTIAL=.30,TRAIL=.0225;
 function res(s,b){return new Response(JSON.stringify(b),{status:s,headers:{"content-type":"application/json","cache-control":"no-store"}})}function N(v,d=0){const x=Number(v);return Number.isFinite(x)?x:d}function rec(v){return v&&typeof v==="object"&&!Array.isArray(v)?v:{}}function eq(a,b){if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0}function dec(s){return Math.min(12,Math.max(0,Math.ceil(-Math.log10(s))+2))}function floorStep(v,s){if(!(v>0&&s>0))return 0;return Number((Math.floor((v+s*1e-9)/s)*s).toFixed(dec(s)))}function ceilStep(v,s){if(!(v>0&&s>0))return 0;return Number((Math.ceil((v-s*1e-9)/s)*s).toFixed(dec(s)))}function addStep(v,s){return Number((v+s).toFixed(dec(s)))}function cid(p,x){return`tb-${p}-${String(x).toLowerCase().replace(/[^a-z0-9]/g,"").slice(0,24)}`.slice(0,36)}function terminal(z){return z.qty<=0&&["CANCELED","CANCELLED","REJECTED","EXPIRED","PARTIALLY_FILLED_CANCELED"].includes(z.status)}
 const env=n=>(Deno.env.get(n)||"").trim(),GW=env("BINANCE_FUTURES_ORDER_GATEWAY_URL").replace(/\/$/,"")||env("BINANCE_ORDER_GATEWAY_URL").replace(/\/$/,"")||env("ORDER_GATEWAY_URL").replace(/\/$/,""),SEC=env("BINANCE_FUTURES_GATEWAY_SHARED_SECRET")||env("BINANCE_GATEWAY_SHARED_SECRET")||env("GATEWAY_SHARED_SECRET");
+// This patch is the user's explicit operator override, so its two policies activate with
+// the deployed bundle. Exact "false" values are independent emergency rollback kills and
+// every preflight/run response reports their effective state.
+const E1_ENABLED=env("V23_E1_ENTRY_OVERRIDE")!=="false",X1_ENABLED=env("V23_X1_FAST_OBSERVATION")!=="false";
 // Exchange-resident protective stop. Default OFF: enabling it starts submitting real
 // STOP_MARKET orders, so it is a deliberate operator action, not a deploy side effect.
 const NATIVE_STOP_ENABLED=env("V17_NATIVE_STOP")==="true";
@@ -74,6 +83,48 @@ function portfolioMatches(openPositions,pf,manual=[]){
   return leaderPortfolioMatches(openPositions,{...pf,positions:remaining});
 }
 function sizeEntry(ask,step){if(!(ask>0&&step>0))throw new Error("QTY_INPUT_INVALID");let amount=ceilStep(NOTIONAL/ask,step);if(!(amount>0))throw new Error("QTY_INVALID");let sizedNotional=amount*ask;if(sizedNotional<NOTIONAL+NOTIONAL_BUFFER_USDT){const bumped=addStep(amount,step),bm=bumped*ask/LEV;if(bm<=MARGIN+MAX_MARGIN_BUFFER_USDT){amount=bumped;sizedNotional=amount*ask}}const sizedMargin=sizedNotional/LEV;if(sizedNotional+1e-9<NOTIONAL)throw new Error(`ENTRY_NOTIONAL_UNDERSIZED:${sizedNotional}`);if(sizedMargin>MARGIN+MAX_MARGIN_BUFFER_USDT+1e-9)throw new Error(`ENTRY_SLOT_GRANULARITY_MARGIN:${sizedMargin.toFixed(6)}`);return{amount,sizedNotional,sizedMargin}}
+async function hashJson(value){const bytes=new TextEncoder().encode(JSON.stringify(value)),hash=new Uint8Array(await crypto.subtle.digest("SHA-256",bytes));return[...hash].map(x=>x.toString(16).padStart(2,"0")).join("")}
+function e1CurrentAssessment(s,q,step,at){
+  const bid=N(q?.best_bid),ask=N(q?.best_ask),spreadBps=bid>0&&ask>=bid?(ask/bid-1)*10000:Infinity;
+  let sized=null,limitPrice=null,guardPassed=false,liquidityPassed=false,evidence=e1QuoteEvidence(q,0,at);
+  try{
+    sized=sizeEntry(ask,step);evidence=e1QuoteEvidence(q,sized.amount,at);
+    const gatePrice=(NOTIONAL+NOTIONAL_BUFFER_USDT)/sized.amount;
+    limitPrice=Math.max(ask*(1+IOC_BASE_BPS/10000),gatePrice);
+    const iocBps=(limitPrice/ask-1)*10000;
+    guardPassed=!entryFresh(rec(s.features),at,limitPrice)&&iocBps<=IOC_MAX_BPS&&
+      sized.amount*limitPrice/LEV<=MARGIN+MAX_MARGIN_BUFFER_USDT+1e-9;
+    liquidityPassed=evidence.valid&&evidence.fullDepth&&spreadBps<=SPREAD_MAX;
+  }catch{/* Invalid current sizing remains an explicit failed guard. */}
+  return{quote:evidence,rawQuote:q,sized,limitPrice,spreadBps,guardPassed,liquidityPassed};
+}
+async function runE1Gate(s,initialQuote,step,gw){
+  const signalClose=N(s.features?.signal5Close,NaN),signalExpiresAt=signalClose+POLICY.maxEntryAgeMs,
+    tapeEnd=Date.now(),initialTape=await fetchE1AggTrades(s.symbol,tapeEnd-10000,tapeEnd),
+    decisionAt=Date.now(),initial=e1CurrentAssessment(s,initialQuote,step,decisionAt),
+    featureHash=await hashJson(rec(s.features)),initialRawHash=Array.isArray(initialTape.raw)?
+      await hashJson({tape:initialTape.raw,quote:initialQuote?.raw??null}):null;
+  let state=startE1({decisionAt,signalId:s.id,symbol:s.symbol,signalExpiresAt,baselineEligible:true,
+    tape:initialTape,quote:initial.quote,featureAsOf:Number.isFinite(signalClose)?signalClose:null,
+    featureHash,rawHash:initialRawHash}),latest=initial;
+  while(state.confirmationState==="WATCH_FAST_WEAK"){
+    const blockStart=state.watch.nextBlockStartAt,blockEnd=blockStart+E1_POLICY.blockMs,
+      waitMs=Math.max(0,blockEnd-Date.now());
+    if(waitMs>0)await new Promise(resolve=>setTimeout(resolve,waitMs));
+    const beforeFetch=Date.now();
+    if(beforeFetch>=state.watch.deadline){state=advanceE1(state,{observedAt:beforeFetch});break}
+    const[tapeRead,quoteRead]=await Promise.allSettled([fetchE1AggTrades(s.symbol,blockStart,blockEnd),
+      gw({action:"quote",market:s.symbol},3000)]),
+      tape=tapeRead.status==="fulfilled"?tapeRead.value:{available:false,reason:`E1_TAPE_FETCH:${String(tapeRead.reason)}`},
+      q=quoteRead.status==="fulfilled"?quoteRead.value:null,observedAt=Date.now(),
+      assessment=e1CurrentAssessment(s,q,step,observedAt),rawHash=Array.isArray(tape.raw)?
+        await hashJson({tape:tape.raw,quote:q?.raw??null}):null;
+    state=advanceE1(state,{observedAt,tape,quote:assessment.quote,
+      entryGuardPassed:assessment.guardPassed,liquidityPassed:assessment.liquidityPassed,rawHash});
+    latest=assessment;
+  }
+  return{decision:state,...latest};
+}
 // A stop can fill AFTER run() matched the portfolio, but BEFORE closePos reads it.
 // Confirm that exact remembered stop and book its fill before treating flatness as an
 // unexplained mismatch. This recovery only reads the exchange; it never resends a sell.
@@ -172,7 +223,7 @@ const exitPolicy=rec(s.features?.exitPolicy);
 if(!Object.values(exitPolicy).every(v=>Number.isFinite(Number(v)))||!(Number(exitPolicy.stopPct)>0&&Number(exitPolicy.stopPct)<1&&Number(exitPolicy.trailArmPct)>0&&Number(exitPolicy.trailGapPct)>0&&Number(exitPolicy.trailGapPct)<1&&Number(exitPolicy.maxHoldMs)===POLICY.maxHoldMs&&Number(exitPolicy.staleMs)>0))throw new Error("V17_EXIT_POLICY_INVALID");
 const initialFresh=entryFresh(rec(s.features),Date.now(),Number(s.features?.referenceClose));
 if(initialFresh)throw new Error(initialFresh);
-const[sn,q,i,rawInitialPair,initialOrders]=await Promise.all([snap(db),gateway({action:"quote",market:s.symbol}),
+let[sn,q,i,rawInitialPair,initialOrders]=await Promise.all([snap(db),gateway({action:"quote",market:s.symbol}),
   gateway({action:"symbol_info",market:s.symbol}),readOpsPair(db,gateway),gateway({action:"v18_open_orders"},5000)]),
   initialPair=await withCandidateOrders(db,rawInitialPair,s.symbol),manualRows=initialPair.manual;
 await recordMismatch(db,initialPair.match);
@@ -183,8 +234,8 @@ if(!initialDecision.allowed){return{entered:false,
 if(manualRows.some(x=>x.symbol===String(s.symbol).toUpperCase()))throw new Error("MANUAL_SYMBOL_LOCKED");
 if(active(initialPair.pf).length>=MAX_SLOTS)return{entered:false,reason:"V11_SLOT_FULL"};
 if(initialPair.positions.some(p=>String(p.symbol).toUpperCase()===String(s.symbol).toUpperCase()))return{entered:false,reason:"DUPLICATE_SYMBOL_OPEN"};
-const pf=initialPair.pf,bid=N(q?.best_bid),ask=N(q?.best_ask),sp=bid>0&&ask>0?(ask/bid-1)*10000:999;if(!(bid>0&&ask>0&&sp<=SPREAD_MAX))throw new Error(`ENTRY_SPREAD:${sp}`);const f=rec(s.features),ref=N(f.referenceClose),atr=N(f.atr);if(!(atr>0&&ref>0))throw new Error("ENTRY_FEATURES_INVALID");const step=N(i?.quantity_step??i?.step_size),min=Math.max(1,N(i?.min_notional,5)),sized=sizeEntry(ask,step);if(sized.sizedNotional<min)throw new Error("QTY_INVALID");const live=N(pf?.available_quote,NaN),avail=Math.min(N(sn.available_quote),live);if(!Number.isFinite(live))throw new Error("ENTRY_AVAILABLE_BALANCE_UNREADABLE");if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true};const gatePrice=(NOTIONAL+NOTIONAL_BUFFER_USDT)/sized.amount,limitPrice=Math.max(ask*(1+IOC_BASE_BPS/10000),gatePrice),iocBps=(limitPrice/ask-1)*10000;if(iocBps>IOC_MAX_BPS)throw new Error(`ENTRY_GRANULARITY_BPS:${iocBps.toFixed(3)}`);const gap=Math.abs(limitPrice-ref)/atr;
-const finalFresh=entryFresh(f,Date.now(),limitPrice);if(finalFresh)throw new Error(finalFresh);
+let pf=initialPair.pf,bid=N(q?.best_bid),ask=N(q?.best_ask),sp=bid>0&&ask>0?(ask/bid-1)*10000:999;if(!(bid>0&&ask>0&&sp<=SPREAD_MAX))throw new Error(`ENTRY_SPREAD:${sp}`);const f=rec(s.features),ref=N(f.referenceClose),atr=N(f.atr);if(!(atr>0&&ref>0))throw new Error("ENTRY_FEATURES_INVALID");let step=N(i?.quantity_step??i?.step_size),min=Math.max(1,N(i?.min_notional,5)),sized=sizeEntry(ask,step);if(sized.sizedNotional<min)throw new Error("QTY_INVALID");let live=N(pf?.available_quote,NaN),avail=Math.min(N(sn.available_quote),live);if(!Number.isFinite(live))throw new Error("ENTRY_AVAILABLE_BALANCE_UNREADABLE");if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true};let gatePrice=(NOTIONAL+NOTIONAL_BUFFER_USDT)/sized.amount,limitPrice=Math.max(ask*(1+IOC_BASE_BPS/10000),gatePrice),iocBps=(limitPrice/ask-1)*10000;if(iocBps>IOC_MAX_BPS)throw new Error(`ENTRY_GRANULARITY_BPS:${iocBps.toFixed(3)}`);let gap=Math.abs(limitPrice-ref)/atr;
+let finalFresh=entryFresh(f,Date.now(),limitPrice);if(finalFresh)throw new Error(finalFresh);
 if(sized.amount*limitPrice/LEV>MARGIN+MAX_MARGIN_BUFFER_USDT+1e-9)throw new Error("V17_LIMIT_PRICE_MARGIN_OVERFLOW");
 // V17 replaces pullback-specific ATR gap gating with a price-drift/age guard.
 // Fixed operator-authorized cutover. No request/env can move or broaden it.
@@ -202,19 +253,110 @@ if(qv3Active){
   await requireLeaderEntryControls(db);
   const freshness=entryFresh(f,Date.now(),limitPrice);if(freshness)throw Error(freshness);
 }
+let e1Decision={policyVersion:E1_POLICY.policyVersion,confirmationState:"DISABLED",allowed:true,
+  defer:false,reject:false,reasonCodes:["E1_OPERATOR_FLAG_DISABLED"],executionEnabled:false,
+  parametersValidatedByBacktest:false,activationBasis:OPERATOR_OVERRIDE.basis};
+if(E1_ENABLED){
+  const e1=await runE1Gate(s,q,step,gateway);e1Decision=e1.decision;attempt.e1=e1Decision;
+  await audit(db,null,"BULL","BULL",e1Decision.allowed?"ENTRY_ALLOW":e1Decision.reject?"ENTRY_REJECT":"ENTRY_DEFER",
+    e1Decision.reasonCodes.join(","),{signalId:s.id,symbol:s.symbol,e1:e1Decision,operatorOverride:OPERATOR_OVERRIDE});
+  if(!e1Decision.allowed){
+    const reason=`${e1Decision.confirmationState}:${e1Decision.reasonCodes.join(",")}`;
+    if(e1Decision.reject){
+      const terminal=await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:reason.slice(0,500),
+        updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","CLAIMED");
+      if(terminal.error)throw Error("E1_SIGNAL_TERMINAL_WRITE");
+      return{entered:false,reason,releaseClaim:false,e1:e1Decision,qv3:attempt.qv3};
+    }
+    return{entered:false,reason,releaseClaim:true,e1:e1Decision,qv3:attempt.qv3};
+  }
+  q=e1.rawQuote;
+  if(e1Decision.confirmationState==="RECOVERY_CONFIRMED"){
+    // Waiting creates a new decision point. Refresh ownership, open orders, cash and
+    // sizing, and price the IOC from the current ask rather than the old t0 quote.
+    [sn,rawInitialPair,initialOrders,i]=await Promise.all([snap(db),readOpsPair(db,gateway),
+      gateway({action:"v18_open_orders"},5000),gateway({action:"symbol_info",market:s.symbol},3000)]);
+    initialPair=await withCandidateOrders(db,rawInitialPair,s.symbol);manualRows=initialPair.manual;
+    await recordMismatch(db,initialPair.match);
+    const refreshedDecision=await decideEntry(db,initialPair,s.symbol,initialOrders,{managementFailures});
+    await persistDecisionRisk(db,initialPair,refreshedDecision);
+    if(!refreshedDecision.allowed)return{entered:false,
+      reason:`ENTRY_CONTROL:${refreshedDecision.scope}:${refreshedDecision.reasons.join(",")}`,
+      releaseClaim:true,entryDecision:refreshedDecision,e1:e1Decision};
+    if(manualRows.some(x=>x.symbol===String(s.symbol).toUpperCase()))throw Error("MANUAL_SYMBOL_LOCKED");
+    if(active(initialPair.pf).length>=MAX_SLOTS||initialPair.positions.some(p=>String(p.symbol).toUpperCase()===String(s.symbol).toUpperCase()))
+      return{entered:false,reason:"PORTFOLIO_CHANGED_DURING_E1",releaseClaim:true,e1:e1Decision};
+    pf=initialPair.pf;bid=N(q?.best_bid);ask=N(q?.best_ask);sp=bid>0&&ask>0?(ask/bid-1)*10000:999;
+    if(!(bid>0&&ask>0&&sp<=SPREAD_MAX))throw Error(`ENTRY_SPREAD:${sp}`);
+    step=N(i?.quantity_step??i?.step_size);min=Math.max(1,N(i?.min_notional,5));sized=sizeEntry(ask,step);
+    if(sized.sizedNotional<min)throw Error("QTY_INVALID");live=N(pf?.available_quote,NaN);avail=Math.min(N(sn.available_quote),live);
+    if(!Number.isFinite(live))throw Error("ENTRY_AVAILABLE_BALANCE_UNREADABLE");
+    if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,
+      reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true,e1:e1Decision};
+    gatePrice=(NOTIONAL+NOTIONAL_BUFFER_USDT)/sized.amount;limitPrice=Math.max(ask*(1+IOC_BASE_BPS/10000),gatePrice);
+    iocBps=(limitPrice/ask-1)*10000;if(iocBps>IOC_MAX_BPS)throw Error(`ENTRY_GRANULARITY_BPS:${iocBps.toFixed(3)}`);
+    gap=Math.abs(limitPrice-ref)/atr;finalFresh=entryFresh(f,Date.now(),limitPrice);if(finalFresh)throw Error(finalFresh);
+    if(sized.amount*limitPrice/LEV>MARGIN+MAX_MARGIN_BUFFER_USDT+1e-9)throw Error("V17_LIMIT_PRICE_MARGIN_OVERFLOW");
+    if(qv3Active){
+      let result,bars=[],evaluatedAt=Date.now();
+      try{bars=await qv3Candles(s.symbol,evaluatedAt,Math.floor(evaluatedAt/60000)*60000-180000);result=qv3Entry(bars,Date.now());}
+      catch(error){result={available:false,wouldBlock:true,reason:String(error.message??error)};}
+      attempt.qv3={...result,version:QV3_VERSION,basis:QV3_ACTIVATION_BASIS,activation:QV3_LIVE_CUTOVER,
+        evaluatedAt,symbol:s.symbol,liveExecutionEnabled:true,recheckedAfterE1:true,
+        completedBars:bars.map(b=>({openTime:Number(b[0]),closeTime:Number(b[6]),open:Number(b[1]),high:Number(b[2]),low:Number(b[3]),close:Number(b[4])}))};
+      if(!result.available||result.wouldBlock)return{entered:false,reason:result.reason,releaseClaim:true,
+        qv3:attempt.qv3,e1:e1Decision};
+    }
+  }
+}
 // Final gateway check uses a new account observation and a new complete ordinary +
 // conditional order observation.  No intent exists yet, so a denial cannot duplicate
 // or strand an order identity.
 await requireLeaderEntryControls(db);
-const[rawFinalCheck,finalOrders]=await Promise.all([readOpsPair(db),gateway({action:"v18_open_orders"},5000)]),
-  finalCheck=await withCandidateOrders(db,rawFinalCheck,s.symbol),finalDecision=await decideEntry(db,finalCheck,s.symbol,finalOrders,{proposedMargin:sized.sizedMargin,cashBuffer:ENTRY_CASH_BUFFER_USDT,managementFailures});
+const[rawFinalCheck,finalOrders,dispatchQuote,dispatchSnap]=await Promise.all([readOpsPair(db),
+  gateway({action:"v18_open_orders"},5000),E1_ENABLED?gateway({action:"quote",market:s.symbol},3000):Promise.resolve(q),
+  E1_ENABLED?snap(db):Promise.resolve(sn)]),finalCheck=await withCandidateOrders(db,rawFinalCheck,s.symbol);
+if(E1_ENABLED){
+  const dispatchAt=Date.now(),assessment=e1CurrentAssessment(s,dispatchQuote,step,dispatchAt);
+  if(!assessment.quote.valid||!assessment.liquidityPassed||!assessment.guardPassed){
+    const reason=!assessment.quote.valid?"E1_DISPATCH_QUOTE_UNKNOWN":!assessment.quote.fullDepth?
+      "E1_DISPATCH_DEPTH_INSUFFICIENT":"E1_DISPATCH_GUARD_FAILED";
+    await audit(db,null,"BULL","BULL","ENTRY_DEFER",reason,{signalId:s.id,symbol:s.symbol,
+      e1:{...e1Decision,dispatchRecheck:assessment.quote},operatorOverride:OPERATOR_OVERRIDE});
+    return{entered:false,reason,releaseClaim:true,e1:{...e1Decision,dispatchRecheck:assessment.quote}};
+  }
+  q=dispatchQuote;sn=dispatchSnap;pf=finalCheck.pf;manualRows=finalCheck.manual;
+  bid=N(q.best_bid);ask=N(q.best_ask);sp=(ask/bid-1)*10000;sized=assessment.sized;
+  live=N(pf?.available_quote,NaN);avail=Math.min(N(sn.available_quote),live);
+  if(!Number.isFinite(live))throw Error("ENTRY_AVAILABLE_BALANCE_UNREADABLE");
+  if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,
+    reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true,e1:e1Decision};
+  gatePrice=(NOTIONAL+NOTIONAL_BUFFER_USDT)/sized.amount;limitPrice=Math.max(ask*(1+IOC_BASE_BPS/10000),gatePrice);
+  iocBps=(limitPrice/ask-1)*10000;gap=Math.abs(limitPrice-ref)/atr;
+  const dispatchRawHash=dispatchQuote?.raw?await hashJson({quote:dispatchQuote.raw}):null;
+  e1Decision={...e1Decision,decisionAt:dispatchAt,quoteAgeMs:assessment.quote.quoteAgeMs,
+    evaluatedPrice:ask,expectedEntryVWAP:assessment.quote.expectedEntryVWAP,
+    expectedExitVWAP:assessment.quote.expectedExitVWAP,expectedCostBps:assessment.quote.expectedCostBps,
+    rawHashes:dispatchRawHash?[...e1Decision.rawHashes,dispatchRawHash]:e1Decision.rawHashes,
+    dispatchRecheck:{at:dispatchAt,sourceTier:assessment.quote.sourceTier,quoteAgeMs:assessment.quote.quoteAgeMs,
+      bookMode:assessment.quote.bookMode,fullDepth:assessment.quote.fullDepth,currentQuantity:sized.amount}};
+}
+const finalDecision=await decideEntry(db,finalCheck,s.symbol,finalOrders,{proposedMargin:sized.sizedMargin,cashBuffer:ENTRY_CASH_BUFFER_USDT,managementFailures});
 await recordMismatch(db,finalCheck.match);await persistDecisionRisk(db,finalCheck,finalDecision);
 if(!finalDecision.allowed){return{entered:false,
-  reason:`ENTRY_CONTROL:${finalDecision.scope}:${finalDecision.reasons.join(",")}`,releaseClaim:true,entryDecision:finalDecision}}
+  reason:`ENTRY_CONTROL:${finalDecision.scope}:${finalDecision.reasons.join(",")}`,releaseClaim:true,entryDecision:finalDecision,e1:e1Decision}}
 if(finalCheck.positions.some(p=>p.symbol===s.symbol)||active(finalCheck.pf).length>=MAX_SLOTS)return{entered:false,reason:"PORTFOLIO_CHANGED",releaseClaim:true};
+if(E1_ENABLED){
+  const checkedAt=Date.now(),receivedAt=N(q?.timing?.received_at_ms,NaN),quoteAge=checkedAt-receivedAt;
+  if(!Number.isSafeInteger(receivedAt)||quoteAge<0||quoteAge>E1_POLICY.maxQuoteAgeMs)
+    return{entered:false,reason:"E1_DISPATCH_QUOTE_AGED",releaseClaim:true,e1:e1Decision};
+  // Waiting for recovery never extends the original signal lifetime. Recheck after
+  // all account/ownership reads too, immediately before persisting the order intent.
+  const freshness=entryFresh(f,checkedAt,limitPrice);if(freshness)throw Error(freshness);
+}
 await verifyExecutionLease(db);
 const id=cid("v11e",s.id),rp={action:"create_order",leverage:LEV,order:{market:s.symbol,side:"BUY",type:"LIMIT",price:limitPrice,time_in_force:"IOC",quantity:sized.amount,identifier:id,position_side:"LONG",position_effect:"OPEN"},wait_for_final_ms:4000},
-  oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,intent:"OPEN_LONG",reason:"V17_LEADER_ENTRY_IOC",client_order_id:id,requested_quantity:sized.amount,state:"PLANNED",request_payload:{...rp,quantity_step:step,target_margin_usdt:MARGIN,sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,executor_patch:PATCH,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION,max_entry_drift_pct:POLICY.maxEntryDriftPct},entry_control:finalDecision.evidence,qv3:qv3Active?{version:QV3_VERSION,activation:QV3_LIVE_CUTOVER,basis:QV3_ACTIVATION_BASIS}:null}}).select("*").single();
+  oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,intent:"OPEN_LONG",reason:"V17_LEADER_ENTRY_IOC",client_order_id:id,requested_quantity:sized.amount,state:"PLANNED",request_payload:{...rp,quantity_step:step,price_tick:N(i?.price_tick??i?.tick_size),target_margin_usdt:MARGIN,sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,executor_patch:PATCH,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION,max_entry_drift_pct:POLICY.maxEntryDriftPct},entry_control:finalDecision.evidence,e1:E1_ENABLED?e1Decision:null,x1:X1_ENABLED?{policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,...OPERATOR_OVERRIDE}:null,operator_override:E1_ENABLED||X1_ENABLED?OPERATOR_OVERRIDE:null,qv3:qv3Active?{version:QV3_VERSION,activation:QV3_LIVE_CUTOVER,basis:QV3_ACTIVATION_BASIS}:null}}).select("*").single();
 if(oi.error)throw new Error(`ORDER_INTENT:${oi.error.message}`);
 try{
   await verifyExecutionLease(db);attempt.dispatched=true;const initialRaw=await gateway(rp),initial=fill(initialRaw);
@@ -243,11 +385,12 @@ try{
     return{entered:true,positionId:pos.data.id,symbol:s.symbol,entryPrice:receipt.price,
       quantity:receipt.quantity,stopPrice:stop,hardDeadline:pos.data.hard_deadline,iocBps,
       sizedMarginUsdt:sized.sizedMargin,entryProtection,entryFinality:evidence,
-      entryDecision:finalDecision,postFillEntryGuard:rec(pos.data.metadata).postFillEntryGuard,qv3:attempt.qv3};
+      entryDecision:finalDecision,postFillEntryGuard:rec(pos.data.metadata).postFillEntryGuard,
+      e1:e1Decision,x1PolicyVersion:rec(pos.data.metadata).exitObservationPolicyVersion,qv3:attempt.qv3};
   }
   await settleKnownEntry(db,oi.data,settledRaw,gateway);
   return{entered:false,reason:`IOC_NO_FILL:${receipt.status}`,entryFinality:evidence,
-    entryDecision:finalDecision,qv3:attempt.qv3};
+    entryDecision:finalDecision,e1:e1Decision,qv3:attempt.qv3};
 }catch(e){
   if(classifyFailure(e).fatal)throw e;await verifyExecutionLease(db);
   const msg=e instanceof Error?e.message:String(e),explicit=false;
@@ -256,7 +399,7 @@ try{
   if(explicit){
     await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),
       updated_at:new Date().toISOString()}).eq("id",s.id);
-    return{entered:false,reason:msg,qv3:attempt.qv3};
+    return{entered:false,reason:msg,e1:e1Decision,qv3:attempt.qv3};
   }
   await db.from("v11_long_regime_signals").update({status:"ORDERED",updated_at:new Date().toISOString()}).eq("id",s.id);
   await circuit(db,`BULL_ENTRY_AMBIGUOUS:${msg}`,"KNOWN_ORDER_PENDING_RECONCILIATION",
@@ -313,7 +456,7 @@ async function settleKnownEntry(db,intent,raw,gw=opsGateway(db)) {
         (!Number.isFinite(intentAt)||fillAt>=intentAt-30000)?fillAt:settledAt,
       now=new Date(entryAt),entryPolicy=intent.request_payload?.entry_execution_policy,
       fillGuard=entryPolicy?.version===ENTRY_EXECUTION_POLICY_VERSION?postFillEntryGuard(f,z.avg):null,
-      pos=await db.from("v11_long_regime_positions").insert({signal_id:s.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:s.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{qv3:intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,leaderExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFeatures:f}}).select("*").single();
+      pos=await db.from("v11_long_regime_positions").insert({signal_id:s.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:s.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{qv3:intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,leaderExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,entryConfirmationPolicyVersion:intent.request_payload?.e1?.policyVersion??null,entryConfirmation:intent.request_payload?.e1??null,exitObservationPolicyVersion:intent.request_payload?.x1?.policyVersion??null,x1Observation:{observedBidPeak:z.avg,executableVwapPeak:null,lastObservationId:null,lastObservationAt:null,source:"P10_TOP_OF_BOOK_BATCH",maxQuoteAgeMs:1000},entryMarketRules:{priceTick:N(intent.request_payload?.price_tick),quantityStep:N(intent.request_payload?.quantity_step)},operatorOverride:intent.request_payload?.operator_override??null,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFeatures:f}}).select("*").single();
     if(pos.error)throw Error(`POSITION:${pos.error.message}`);position=pos.data;
   }
   await verifyExecutionLease(db);
@@ -602,11 +745,114 @@ async function attemptOpsRecovery(db,pair,protectedIds) {
       positions:after.positions.map(p=>({id:p.id,updated_at:p.updated_at,quantity:p.remaining_quantity})),ordersObservedAt:live.observed_at_ms}});
   if(r.error)throw Error(`RECOVERY_CAS:${r.error.message}`);return r.data;
 }
+function x1TopObservation(row,p,at){
+  const bid=N(row?.best_bid),ask=N(row?.best_ask),bidSize=N(row?.bids?.[0]?.size),timing=rec(row?.timing),
+    receivedAt=N(timing.received_at_ms,NaN),requestedAt=N(timing.requested_at_ms,NaN),quantity=N(p.remaining_quantity),
+    age=at-receivedAt,valid=!row?.error&&bid>0&&ask>=bid&&bidSize>0&&Number.isSafeInteger(receivedAt)&&
+      Number.isSafeInteger(requestedAt)&&requestedAt<=receivedAt&&age>=0&&age<=1000,
+    full=valid&&bidSize+Math.max(1e-12,quantity*1e-10)>=quantity;
+  return{valid,full,bid,ask,bidSize,quantity,receivedAt,requestedAt,age,
+    source:timing.source??"P10_TOP_OF_BOOK_BATCH",bookCapturedAtMs:timing.book_captured_at_ms??null,
+    observationId:`x1:${p.id}:${Number.isSafeInteger(receivedAt)?receivedAt:at}`};
+}
+function x1LocalPolicy(p){
+  const meta=rec(p.metadata),costUsable=p.entry_fee_usdt!=null&&Number.isFinite(Number(p.entry_fee_usdt))&&
+    Number(p.entry_fee_usdt)>=0&&Number(p.original_quantity)>0,
+    r5=meta.leaderExitPolicyVersion===EXIT_REVIEW_R5.policyVersion;
+  return{...POLICY,...(costUsable?(r5?EXIT_REVIEW_R5:EXIT_REVIEW_CANDIDATE):{}),...rec(meta.leaderExitPolicy)};
+}
+async function runX1FastObservation(db,pair,deadlineMs){
+  const selected=(pair.match.safe??[]).filter(p=>rec(p.metadata).exitObservationPolicyVersion===X1_POLICY_VERSION&&
+    rec(p.metadata).v17ManualPosition!==true&&p.state==="OPEN");
+  const summary={enabled:X1_ENABLED,policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,
+    operatorOverride:OPERATOR_OVERRIDE,selected:selected.length,iterations:0,validObservations:0,
+    shallowObservations:0,unknownObservations:0,applied:[],errors:[],endedReason:X1_ENABLED?"NO_ELIGIBLE_POSITION":"FLAG_DISABLED"};
+  if(!X1_ENABLED||!selected.length)return summary;
+  const items=new Map(selected.map(p=>{const meta=rec(p.metadata),x=rec(meta.x1Observation);return[p.id,{p,
+    peak:Math.max(N(p.peak_price),N(x.observedBidPeak)),peakAt:Date.parse(meta.leaderLastHighAt||p.entry_at),
+    executablePeak:Number.isFinite(Number(x.executableVwapPeak))?Number(x.executableVwapPeak):null,
+    candidateStop:N(p.hard_stop_price),lastPersistAt:Date.parse(p.last_evaluated_at||p.updated_at),
+    lastStopSyncAt:Date.parse(x.lastStopSyncAt||0),latest:null}]}));
+  const gw=opsGateway(db),maxIterations=45;let nextAt=Date.now();
+  while(items.size&&summary.iterations<maxIterations&&Date.now()<deadlineMs-3500){
+    const wait=Math.max(0,nextAt-Date.now());if(wait>0)await new Promise(resolve=>setTimeout(resolve,wait));
+    if(Date.now()>=deadlineMs-3500||cycleBudgets.get(db)?.callsLeft<12){summary.endedReason="BUDGET_RESERVE";break}
+    const rows=[...items.values()].map(x=>x.p.symbol);let quotes;
+    try{quotes=await gw({action:"p10_quotes",markets:rows},2500)}
+    catch(error){if(classifyFailure(error).fatal)throw error;summary.errors.push({at:Date.now(),reason:String(error.message??error)});
+      summary.unknownObservations+=items.size;summary.iterations++;nextAt=Math.max(nextAt+1000,Date.now()+1);continue}
+    const at=Date.now(),proposals=[];summary.iterations++;
+    for(const item of items.values()){
+      const row=Array.isArray(quotes)?quotes.find(q=>String(q.market).toUpperCase()===String(item.p.symbol).toUpperCase()):null,
+        observation=x1TopObservation(row,item.p,at);
+      if(!observation.valid){summary.unknownObservations++;continue}
+      if(!observation.full){summary.shallowObservations++;continue}
+      summary.validObservations++;
+      const tick=N(rec(rec(item.p.metadata).entryMarketRules).priceTick);
+      if(!(tick>0)){summary.unknownObservations++;summary.errors.push({positionId:item.p.id,reason:"X1_PRICE_TICK_UNKNOWN"});continue}
+      const state=nextExitReviewed({entryPrice:N(item.p.entry_price),entryAt:Date.parse(item.p.entry_at),
+        entryFee:Number(item.p.entry_fee_usdt),quantity:N(item.p.original_quantity),peakPrice:item.peak,
+        stopPrice:item.candidateStop,lastHighAt:item.peakAt,priceTick:tick},observation.bid,at,x1LocalPolicy(item.p));
+      item.peak=state.peakPrice;item.peakAt=state.lastHighAt;item.candidateStop=Math.max(item.candidateStop,state.stopPrice);
+      item.executablePeak=Math.max(N(item.executablePeak),observation.bid);item.latest=observation;
+      const persistedStop=N(item.p.hard_stop_price),persistedPeak=N(item.p.peak_price),
+        stopDirty=item.candidateStop-persistedStop>=tick-Math.max(1e-12,tick*1e-8),
+        peakDirty=item.peak>persistedPeak+Math.max(1e-12,persistedPeak*1e-12)||
+          item.executablePeak>N(rec(item.p.metadata).x1Observation?.executableVwapPeak)+Math.max(1e-12,item.executablePeak*1e-12),
+        stopDue=stopDirty&&(state.action==="CLOSE"||!Number.isFinite(item.lastStopSyncAt)||at-item.lastStopSyncAt>=5000),
+        persistDue=peakDirty&&(!Number.isFinite(item.lastPersistAt)||at-item.lastPersistAt>=10000);
+      if(state.action==="CLOSE"||stopDue||persistDue)proposals.push({item,observation,state,tick,stopDirty});
+    }
+    if(proposals.length){
+      let check;
+      try{check=await readOpsPair(db,gw);await recordMismatch(db,check.match)}
+      catch(error){if(classifyFailure(error).fatal)throw error;summary.errors.push({at,reason:String(error.message??error)});check=null}
+      for(const proposal of proposals){
+        if(!check||cycleBudgets.get(db)?.callsLeft<8)break;
+        const fresh=check.match.safe.find(p=>p.id===proposal.item.p.id&&
+          rec(p.metadata).exitObservationPolicyVersion===X1_POLICY_VERSION);
+        if(!fresh){items.delete(proposal.item.p.id);summary.errors.push({positionId:proposal.item.p.id,reason:"X1_OWNERSHIP_CHANGED"});continue}
+        const applyAt=Date.now(),freshObservation=x1TopObservation({best_bid:proposal.observation.bid,best_ask:proposal.observation.ask,
+          bids:[{price:proposal.observation.bid,size:proposal.observation.bidSize}],timing:{requested_at_ms:proposal.observation.requestedAt,
+            received_at_ms:proposal.observation.receivedAt,book_captured_at_ms:proposal.observation.bookCapturedAtMs,
+            source:proposal.observation.source}},fresh,applyAt);
+        if(!freshObservation.valid||!freshObservation.full){summary.shallowObservations++;continue}
+        try{
+          const result=await manageLeader(db,fresh,{gateway:gw,
+            cleanupGateway:scopedGateway(db,createBudget({ms:7000,calls:10})),manualSymbols:check.manual.map(x=>x.symbol),
+            exchangeQuantity:new Map([[fresh.symbol,N(fresh.remaining_quantity)]]),evaluateQv3:false,fastObservation:true,
+            observedQuote:{bid:freshObservation.bid,ask:freshObservation.ask,bidSize:freshObservation.bidSize,
+              requestedAtMs:freshObservation.requestedAt,receivedAtMs:freshObservation.receivedAt,detectedAtMs:applyAt,
+              bookCapturedAtMs:freshObservation.bookCapturedAtMs,source:freshObservation.source,
+              observationId:freshObservation.observationId,fullQuantityExecutable:true,
+              observedBidPeak:proposal.item.peak,observedBidPeakAt:proposal.item.peakAt,
+              executableVwapPeak:proposal.item.executablePeak}});
+          summary.applied.push({positionId:fresh.id,symbol:fresh.symbol,at:applyAt,observationId:freshObservation.observationId,
+            action:result.action,reason:result.reason??null,stopBefore:N(fresh.hard_stop_price),
+            stopAfter:N(result.stopPrice,N(fresh.hard_stop_price)),observedBidPeak:proposal.item.peak,
+            executableVwapPeak:proposal.item.executablePeak,nativeStop:result.nativeStop??null});
+          if(result.action==="CLOSE"){items.delete(fresh.id);continue}
+          proposal.item.p=result.position??{...fresh,peak_price:result.peakPrice,hard_stop_price:result.stopPrice,
+            updated_at:new Date(applyAt).toISOString(),last_evaluated_at:new Date(applyAt).toISOString()};
+          proposal.item.candidateStop=N(result.stopPrice);proposal.item.lastPersistAt=applyAt;
+          if(proposal.stopDirty)proposal.item.lastStopSyncAt=applyAt;
+        }catch(error){if(classifyFailure(error).fatal)throw error;summary.errors.push({positionId:fresh.id,
+          reason:String(error.message??error)});items.delete(fresh.id)}
+      }
+    }
+    nextAt=Math.max(nextAt+1000,Date.now()+1);
+  }
+  if(!summary.endedReason||["NO_ELIGIBLE_POSITION","FLAG_DISABLED"].includes(summary.endedReason))
+    summary.endedReason=items.size?summary.iterations>=maxIterations?"MAX_ITERATIONS":"CYCLE_DEADLINE":"POSITIONS_CLOSED";
+  return summary;
+}
 async function run(db) {
   const cycleStarted=new Date().toISOString();await verifyExecutionLease(db);
   const started=await db.from("v11_long_regime_runtime").update({last_cycle_started_at:cycleStarted}).eq("singleton",true);
   if(started.error)throw Error("HEARTBEAT_START_WRITE");
-  let managed=[],reconciliation=[],entry={entered:false,reason:"NOT_EVALUATED"},recovery=null,symbolRecovery=[],health="NOT_EVALUATED",fatal=null,pendingAge=null,entryEvaluationCompleted=false,accountEvidenceAt=null,symbolQuarantineObserved=false;
+  let managed=[],reconciliation=[],entry={entered:false,reason:"NOT_EVALUATED"},recovery=null,symbolRecovery=[],
+    x1Fast={enabled:X1_ENABLED,policyVersion:X1_POLICY_VERSION,selected:0,endedReason:"NOT_EVALUATED"},
+    health="NOT_EVALUATED",fatal=null,pendingAge=null,entryEvaluationCompleted=false,accountEvidenceAt=null,symbolQuarantineObserved=false;
   try{
     const c=await opsControls(db);
     if(c.runtime.revision!==REVISION)throw Error("REVISION_MISMATCH");
@@ -656,10 +902,18 @@ async function run(db) {
       entry=await runEntryQueue(db,pair,pair.manual,new Set(backlog.rows.map(p=>String(p.symbol).toUpperCase())),backlog.complete);
       entryEvaluationCompleted=true;
     }
+    // The cron cadence remains one minute. Within this one bounded invocation X1 reads
+    // top-of-book at most once per second and preserves enough time/API budget for the
+    // heartbeat and the next lease holder. It never issues a periodic stop replacement.
+    // Do not add even a read-only exchange/account call when X1 is disabled. This
+    // keeps the rollback flag behavior-identical to the deployed baseline.
+    if(X1_ENABLED){pair=await readOpsPair(db);x1Fast=await runX1FastObservation(db,pair,Date.parse(cycleStarted)+50000)}
+    else x1Fast=await runX1FastObservation(db,pair,Date.parse(cycleStarted)+50000);
     return {ok:true,revision:REVISION,patch:PATCH,entryExecutionPolicy:{version:ENTRY_EXECUTION_POLICY_VERSION,
       maxEntryDriftPct:POLICY.maxEntryDriftPct,scope:"NEW_FILLS_ONLY"},qv3Runtime:{version:QV3_VERSION,basis:QV3_ACTIVATION_BASIS,
       activation:QV3_LIVE_CUTOVER,active:Number.isSafeInteger(QV3_LIVE_CUTOVER)&&Date.now()>=QV3_LIVE_CUTOVER},
-      managed,reconciliation,entry,recovery,symbolRecovery,protectionHealth:health};
+      e1Runtime:{enabled:E1_ENABLED,policyVersion:E1_POLICY.policyVersion,...OPERATOR_OVERRIDE},
+      x1Runtime:x1Fast,managed,reconciliation,entry,recovery,symbolRecovery,protectionHealth:health};
   }catch(e){fatal=e;entry.reason=String(e.message??e);throw e;}
   finally{
     // No stale executor writes after losing the lease; takeover owns the next heartbeat.
@@ -690,7 +944,8 @@ async function run(db) {
           x.attributionComplete===true&&x.accountingComplete===true)&&reconciliation.every(x=>!x.error&&x.outcome!=="UNRESOLVED"))
         patch.last_reconciliation_success_at=now;
       if(entry.entered)patch.last_entry_at=now;
-      if(managed.some(x=>x.action?.result?.executedQuantity>0||x.action?.result?.nativeReconciled)||reconciliation.some(x=>x.executedQuantity>0))patch.last_exit_at=now;
+      if(managed.some(x=>x.action?.result?.executedQuantity>0||x.action?.result?.nativeReconciled)||
+        reconciliation.some(x=>x.executedQuantity>0)||x1Fast.applied?.some(x=>x.action==="CLOSE"))patch.last_exit_at=now;
       const wr=await db.from("v11_long_regime_runtime").update(patch).eq("singleton",true);if(wr.error)throw Error("HEARTBEAT_WRITE");
     }
   }
@@ -736,6 +991,19 @@ async function requireLeaderEntryControls(db){
 // The budget is per run, not per position, so a systemic gateway outage costs one extra
 // round trip in total rather than one per open position.
 async function leaderQuote(p,ctx){
+  if(ctx?.observedQuote){
+    const q=ctx.observedQuote,bid=Number(q.bid),ask=Number(q.ask),detectedAtMs=Number(q.detectedAtMs),
+      bidSize=Number(q.bidSize),protectedQuantity=Number(p.remaining_quantity),
+      timing={requested_at_ms:Number(q.requestedAtMs),received_at_ms:Number(q.receivedAtMs),
+        book_captured_at_ms:q.bookCapturedAtMs??null,source:q.source??"P10_TOP_OF_BOOK_BATCH"};
+    if(!(bid>0&&ask>=bid)||!Number.isSafeInteger(detectedAtMs)||!Number.isSafeInteger(timing.received_at_ms)||
+        detectedAtMs-timing.received_at_ms<0||detectedAtMs-timing.received_at_ms>1000||q.fullQuantityExecutable!==true||
+        !(bidSize>0&&protectedQuantity>0&&bidSize+Math.max(1e-12,protectedQuantity*1e-10)>=protectedQuantity))
+      throw Error("X1_EXIT_QUOTE_INVALID_STALE_OR_SHALLOW");
+    return{bid,ask,detectedAtMs,timing,observedBidPeak:Number(q.observedBidPeak),
+      observedBidPeakAt:Number(q.observedBidPeakAt),executableVwapPeak:Number(q.executableVwapPeak),
+      observationId:q.observationId??null,bidSize};
+  }
   const read=async(timeoutMs)=>{
     const quotes=await (ctx?.gateway??gateway)({action:"p10_quotes",markets:[p.symbol]},timeoutMs);
     const q=Array.isArray(quotes)?quotes.find(x=>x.market===p.symbol):null;
@@ -759,7 +1027,7 @@ async function leaderQuote(p,ctx){
 async function manageLeader(db,p,ctx){
   const gateway=ctx?.gateway??exchangeGateway;
   await verifyExecutionLease(db);
-  const {bid,ask,detectedAtMs,timing}=await leaderQuote(p,ctx);
+  const {bid,ask,detectedAtMs,timing,observedBidPeak,observedBidPeakAt,executableVwapPeak,observationId,bidSize}=await leaderQuote(p,ctx);
   const meta=rec(p.metadata);
   // Preserve the existing policy. Today's nine trades do not validate a new default.
   // Cost-breakeven and profit-lock protection from the V17 exit review. These raise the
@@ -777,15 +1045,32 @@ async function manageLeader(db,p,ctx){
   // can ever add. Un-stamped rows are exactly the positions open across the deploy.
   const r5=meta.leaderExitPolicyVersion===EXIT_REVIEW_R5.policyVersion;
   const policy={...POLICY,...(costUsable?(r5?EXIT_REVIEW_R5:EXIT_REVIEW_CANDIDATE):{}),...rec(meta.leaderExitPolicy)};
+  const useObservedPeak=Number.isFinite(observedBidPeak)&&observedBidPeak>=Number(p.peak_price),
+    carriedPeak=useObservedPeak?observedBidPeak:Number(p.peak_price),
+    carriedHighAt=useObservedPeak&&Number.isSafeInteger(observedBidPeakAt)&&observedBidPeakAt>=Date.parse(p.entry_at)?
+      observedBidPeakAt:Date.parse(meta.leaderLastHighAt||p.entry_at);
   const state=nextExitReviewed({entryPrice:Number(p.entry_price),entryAt:Date.parse(p.entry_at),
     entryFee:Number(p.entry_fee_usdt),quantity:Number(p.original_quantity),
-    peakPrice:Number(p.peak_price),stopPrice:Number(p.hard_stop_price),
-    lastHighAt:Date.parse(meta.leaderLastHighAt||p.entry_at)},bid,detectedAtMs,policy);
+    peakPrice:carriedPeak,stopPrice:Number(p.hard_stop_price),lastHighAt:carriedHighAt,
+    // Tick rounding belongs to the X1 observation arm only. The normal one-minute
+    // manager remains behavior-identical when the override is disabled.
+    priceTick:ctx?.fastObservation===true?N(rec(meta.entryMarketRules).priceTick):0},bid,detectedAtMs,policy);
   const telemetry={detectedAtMs,quoteRequestedAtMs:timing.requested_at_ms,
-    quoteReceivedAtMs:timing.received_at_ms,exchangeBookAtMs:timing.book_captured_at_ms??null};
+    quoteReceivedAtMs:timing.received_at_ms,exchangeBookAtMs:timing.book_captured_at_ms??null,
+    source:timing.source??null,observationId:observationId??null,bidSize:Number.isFinite(bidSize)?bidSize:null};
+  const stopImproved=state.stopPrice>Number(p.hard_stop_price)+Math.max(1e-12,Number(p.hard_stop_price)*1e-12);
+  const priorX1=rec(meta.x1Observation),x1Observation=ctx?.fastObservation?{...priorX1,
+    observedBidPeak:Math.max(N(priorX1.observedBidPeak),state.peakPrice),
+    executableVwapPeak:Number.isFinite(executableVwapPeak)?Math.max(N(priorX1.executableVwapPeak),executableVwapPeak):priorX1.executableVwapPeak??null,
+    lastObservationId:observationId??null,lastObservationAt:new Date(detectedAtMs).toISOString(),
+    quoteAgeMs:detectedAtMs-timing.received_at_ms,source:timing.source??"P10_TOP_OF_BOOK_BATCH",
+    fullQuantityExecutable:true,protectedQuantity:Number(p.remaining_quantity),
+    lastStopSyncAt:stopImproved?new Date(detectedAtMs).toISOString():priorX1.lastStopSyncAt??null}:priorX1;
   const nextMeta={...meta,leaderLastHighAt:new Date(state.lastHighAt).toISOString(),
-    leaderTrailArmed:state.armed,exitTelemetry:telemetry};
-  const details={strategy:STRATEGY,bid,...state,...telemetry};
+    leaderTrailArmed:state.armed,exitTelemetry:telemetry,...(ctx?.fastObservation?{x1Observation}: {})};
+  const details={strategy:STRATEGY,bid,...state,...telemetry,
+    exitObservationPolicyVersion:ctx?.fastObservation?X1_POLICY_VERSION:meta.exitObservationPolicyVersion??null,
+    executableVwapPeak:ctx?.fastObservation?x1Observation.executableVwapPeak:null,operatorOverride:ctx?.fastObservation?OPERATOR_OVERRIDE:null};
   // Keep an exchange-resident STOP_MARKET aligned with the software stop. The software
   // monitor is unchanged and remains the primary path: this only removes the window
   // between two one-minute polls, which is where the measured loss beyond the stop
@@ -855,10 +1140,11 @@ async function manageLeader(db,p,ctx){
   if(write.error||!write.data)throw new Error("V17_EXIT_STATE_WRITE");
   // Only after the ratcheted stop is durable: the exchange order must never protect a
   // level the database does not already hold.
-  const nativeStop=await syncNativeStop("HOLD");
+  const nativeStop=ctx?.fastObservation&&!stopImproved?{status:"UNCHANGED",softwareMonitorRequired:false}:
+    await syncNativeStop("HOLD");
   // Existing stop/deadline decisions and resident protection run first. QV3 failures
   // leave that protection intact; only an exact post-cutover stamp enters QV3 scope.
-  const qv3=await qv3AfterProtection(db,write.data,ctx);
+  const qv3=ctx?.evaluateQv3===false?null:await qv3AfterProtection(db,write.data,ctx);
   if(qv3?.result){
     await audit(db,p,"BULL","BULL","FULL_CLOSE","QV3_TWO_BEARISH_CLOSED",{...details,qv3:qv3.assessment})
       .catch(e=>console.error("QV3_AUDIT_FAILED",String(e)));
@@ -866,8 +1152,9 @@ async function manageLeader(db,p,ctx){
     return {action:"CLOSE",reason:"QV3_TWO_BEARISH_CLOSED",result:qv3.result,nativeStop:retired};
   }
   if(qv3)details.qv3=qv3;
-  await audit(db,p,"BULL","BULL","HOLD","V17_MOMENTUM_HOLD",{...details,nativeStop});
-  return {action:"HOLD",strategy:STRATEGY,bid,...state,nativeStop};
+  await audit(db,p,"BULL","BULL","HOLD",ctx?.fastObservation?"X1_FAST_OBSERVATION_HOLD":"V17_MOMENTUM_HOLD",
+    {...details,nativeStop});
+  return {action:"HOLD",strategy:STRATEGY,bid,...state,nativeStop,position:write.data};
 }
 async function qv3AfterProtection(db,p,ctx){
   if(QV3_LIVE_CUTOVER===null)return null;
@@ -919,4 +1206,4 @@ async function runWithLease(db){
     if(released.error)console.error("V17_LEASE_RELEASE_FAILED");
   }
 }
-Deno.serve(async req=>{if(req.method!=="POST")return res(405,{ok:false,error:"POST_ONLY"});const U=env("SUPABASE_URL"),K=env("SUPABASE_SERVICE_ROLE_KEY"),db=createClient(U,K,{auth:{persistSession:false,autoRefreshToken:false},global:{fetch:async(url,init={})=>{const headers=new Headers(init.headers);const owner=leaseOwners.get(db);if(owner)headers.set("x-v18-execution-owner",owner);const timeout=AbortSignal.timeout(2500);return fetch(url,{...init,headers,signal:init.signal?AbortSignal.any([init.signal,timeout]):timeout})}}});if(!(await auth(db,req)))return res(401,{ok:false,error:"UNAUTHORIZED"});const body=await req.json().catch(()=>({})),mode=String(body.mode||"run").toLowerCase();try{if(mode==="preflight"||mode==="diagnostic"){const[m,sn,pf,q,i,rt,op]=await Promise.all([market(db),snap(db),gateway({action:"p10_portfolio"}),gateway({action:"quote",market:String(body.symbol||"BTCUSDT")}),gateway({action:"symbol_info",market:String(body.symbol||"BTCUSDT")}),db.from("v11_long_regime_runtime").select("*").eq("singleton",true).single(),db.from("v11_long_regime_positions").select("id,symbol,active_lane,peak_price,entry_price,last_evaluated_at,metadata").eq("state","OPEN").limit(MAX_SLOTS+1)]),step=N(i?.quantity_step??i?.step_size),ask=N(q?.best_ask),sizing=ask>0&&step>0?sizeEntry(ask,step):null;return res(200,{ok:true,revision:REVISION,patch:PATCH,entryExecutionPolicy:{version:ENTRY_EXECUTION_POLICY_VERSION,maxEntryDriftPct:POLICY.maxEntryDriftPct,scope:"NEW_FILLS_ONLY"},maxSlots:MAX_SLOTS,runtime:rt.data,marketState:m,snapshotAgeMs:sn.ageMs,availableUsdt:Math.min(N(sn.available_quote),N(pf?.available_quote)),externalPositions:active(pf).map(x=>({symbol:sym(x),quantity:qty(x)})),openPositions:(op.data||[]).map(p=>({...p,metadata:{executorPatch:rec(p.metadata).executorPatch,entryExecutionPolicyVersion:rec(p.metadata).entryExecutionPolicyVersion,qv3:rec(p.metadata).qv3}})),quote:q,symbolInfo:{step,minNotional:i?.min_notional},sizing})}return res(200,await runWithLease(db))}catch(e){const msg=e instanceof Error?e.message:String(e);return res(500,{ok:false,revision:REVISION,patch:PATCH,error:msg})}});
+Deno.serve(async req=>{if(req.method!=="POST")return res(405,{ok:false,error:"POST_ONLY"});const U=env("SUPABASE_URL"),K=env("SUPABASE_SERVICE_ROLE_KEY"),db=createClient(U,K,{auth:{persistSession:false,autoRefreshToken:false},global:{fetch:async(url,init={})=>{const headers=new Headers(init.headers);const owner=leaseOwners.get(db);if(owner)headers.set("x-v18-execution-owner",owner);const timeout=AbortSignal.timeout(2500);return fetch(url,{...init,headers,signal:init.signal?AbortSignal.any([init.signal,timeout]):timeout})}}});if(!(await auth(db,req)))return res(401,{ok:false,error:"UNAUTHORIZED"});const body=await req.json().catch(()=>({})),mode=String(body.mode||"run").toLowerCase();try{if(mode==="preflight"||mode==="diagnostic"){const[m,sn,pf,q,i,rt,op]=await Promise.all([market(db),snap(db),gateway({action:"p10_portfolio"}),gateway({action:"quote",market:String(body.symbol||"BTCUSDT")}),gateway({action:"symbol_info",market:String(body.symbol||"BTCUSDT")}),db.from("v11_long_regime_runtime").select("*").eq("singleton",true).single(),db.from("v11_long_regime_positions").select("id,symbol,active_lane,peak_price,entry_price,last_evaluated_at,metadata").eq("state","OPEN").limit(MAX_SLOTS+1)]),step=N(i?.quantity_step??i?.step_size),ask=N(q?.best_ask),sizing=ask>0&&step>0?sizeEntry(ask,step):null;return res(200,{ok:true,revision:REVISION,patch:PATCH,entryExecutionPolicy:{version:ENTRY_EXECUTION_POLICY_VERSION,maxEntryDriftPct:POLICY.maxEntryDriftPct,scope:"NEW_FILLS_ONLY"},operatorOverride:OPERATOR_OVERRIDE,e1Runtime:{enabled:E1_ENABLED,policyVersion:E1_POLICY.policyVersion},x1Runtime:{enabled:X1_ENABLED,policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,observationIntervalMs:1000},maxSlots:MAX_SLOTS,runtime:rt.data,marketState:m,snapshotAgeMs:sn.ageMs,availableUsdt:Math.min(N(sn.available_quote),N(pf?.available_quote)),externalPositions:active(pf).map(x=>({symbol:sym(x),quantity:qty(x)})),openPositions:(op.data||[]).map(p=>({...p,metadata:{executorPatch:rec(p.metadata).executorPatch,entryExecutionPolicyVersion:rec(p.metadata).entryExecutionPolicyVersion,entryConfirmationPolicyVersion:rec(p.metadata).entryConfirmationPolicyVersion,exitObservationPolicyVersion:rec(p.metadata).exitObservationPolicyVersion,x1Observation:rec(p.metadata).x1Observation,qv3:rec(p.metadata).qv3}})),quote:q,symbolInfo:{step,priceTick:i?.price_tick??i?.tick_size,minNotional:i?.min_notional},sizing})}return res(200,await runWithLease(db))}catch(e){const msg=e instanceof Error?e.message:String(e);return res(500,{ok:false,revision:REVISION,patch:PATCH,error:msg})}});

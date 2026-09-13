@@ -1,0 +1,203 @@
+{
+  "topTailDependency": {
+    "top5WinnerPnlUsdt": 59.77919857,
+    "shareOfWinningPnl": 0.26450157349699716,
+    "netWithoutLargestWinnerUsdt": -25.425256959999757,
+    "netWithoutTop5WinnersUsdt": -70.05634195999977
+  },
+  "blanketFastWeakVetoDescriptiveOnly": {
+    "affected": 28,
+    "winnersMissed": 10,
+    "winnerPnlMissedUsdt": 25.67782978,
+    "lossesAvoided": 18,
+    "lossPnlRemovedUsdt": 35.99042102,
+    "staticNetDeltaUsdt": 10.31259124,
+    "validStrategyResult": false
+  },
+  "naiveSingleFilters": {
+    "rsi5_at_least70": {
+      "n": 142,
+      "wins": 60,
+      "losses": 82,
+      "net": 10.139727800000117,
+      "winning_net_sum": 170.80032885000008,
+      "losing_net_abs_sum": 160.66060104999997,
+      "profit_factor": 1.0631127216861618,
+      "median_win": 1.4272418449999935,
+      "median_loss": -1.6339833999999978,
+      "median_hold_win": 9.184008333333335,
+      "median_hold_loss": 10.265508333333333
+    },
+    "q3_below50pct": {
+      "n": 72,
+      "wins": 32,
+      "losses": 40,
+      "net": 17.35946929000015,
+      "winning_net_sum": 92.02262526000005,
+      "losing_net_abs_sum": 74.6631559699999,
+      "profit_factor": 1.2325038242017963,
+      "median_win": 1.4627757999999955,
+      "median_loss": -1.5809937099999964,
+      "median_hold_win": 15.987258333333333,
+      "median_hold_loss": 9.908083333333334
+    },
+    "signal_age_above60s": {
+      "n": 128,
+      "wins": 54,
+      "losses": 74,
+      "net": 17.579415700000027,
+      "winning_net_sum": 156.13872936999996,
+      "losing_net_abs_sum": 138.55931366999994,
+      "profit_factor": 1.1268728549122875,
+      "median_win": 1.4627757999999955,
+      "median_loss": -1.5756912149999927,
+      "median_hold_win": 14.058308333333333,
+      "median_hold_loss": 11.00965
+    },
+    "stop_below1atr5": {
+      "n": 52,
+      "wins": 17,
+      "losses": 35,
+      "net": 2.4556019600000383,
+      "winning_net_sum": 75.29647923999995,
+      "losing_net_abs_sum": 72.84087727999992,
+      "profit_factor": 1.0337118669035343,
+      "median_win": 3.257769579999975,
+      "median_loss": -1.6370102600000238,
+      "median_hold_win": 7.055,
+      "median_hold_loss": 5.94115
+    },
+    "extension_above3atr5": {
+      "n": 67,
+      "wins": 30,
+      "losses": 37,
+      "net": 10.898169979999963,
+      "winning_net_sum": 91.44815129999999,
+      "losing_net_abs_sum": 80.54998132000003,
+      "profit_factor": 1.1352969895387675,
+      "median_win": 1.5967685049999896,
+      "median_loss": -1.71752793999999,
+      "median_hold_win": 9.10675,
+      "median_hold_loss": 10.543733333333334
+    },
+    "breadth_below40pct": {
+      "n": 66,
+      "wins": 23,
+      "losses": 43,
+      "net": -14.422637099999875,
+      "winning_net_sum": 66.04274109000006,
+      "losing_net_abs_sum": 80.46537818999994,
+      "profit_factor": 0.8207597177267442,
+      "median_win": 1.5275024000000084,
+      "median_loss": -1.6418836999999895,
+      "median_hold_win": 20.78345,
+      "median_hold_loss": 10.543733333333334
+    }
+  },
+  "postExitNoStopGrossDifferenceUsdt": {
+    "VTHO": {
+      "5": {
+        "kst_close": "2026-09-13T13:40:00+09:00",
+        "close": 0.0009494,
+        "return_vs_exit_pct": -6.573590603116797,
+        "return_vs_entry_pct": 5.334800901047032,
+        "gross_difference_usdt": -8.882179800000015
+      },
+      "15": {
+        "kst_close": "2026-09-13T13:50:00+09:00",
+        "close": 0.0009579,
+        "return_vs_exit_pct": -5.737141814541369,
+        "return_vs_entry_pct": 6.277865792198178,
+        "gross_difference_usdt": -7.75197730000001
+      },
+      "30": {
+        "kst_close": "2026-09-13T14:05:00+09:00",
+        "close": 0.0010459,
+        "return_vs_exit_pct": 2.9225632907100785,
+        "return_vs_entry_pct": 16.04136113588064,
+        "gross_difference_usdt": 3.9489426999999866
+      }
+    },
+    "SAGA": {
+      "5": {
+        "kst_close": "2026-09-13T13:51:00+09:00",
+        "close": 0.0197,
+        "return_vs_exit_pct": 0.6642820643842473,
+        "return_vs_entry_pct": 1.7699188392046539,
+        "gross_difference_usdt": 0.8062209999999886
+      },
+      "15": {
+        "kst_close": "2026-09-13T14:01:00+09:00",
+        "close": 0.0196,
+        "return_vs_exit_pct": 0.15329586101173742,
+        "return_vs_entry_pct": 1.2533202664168241,
+        "gross_difference_usdt": 0.18605099999999242
+      },
+      "30": {
+        "kst_close": "2026-09-13T14:16:00+09:00",
+        "close": 0.01945,
+        "return_vs_exit_pct": -0.6131834440470163,
+        "return_vs_entry_pct": 0.47842240723505736,
+        "gross_difference_usdt": -0.7442040000000126
+      }
+    },
+    "POLYX": {
+      "5": {
+        "kst_close": "2026-09-13T21:39:00+09:00",
+        "close": 0.04423,
+        "return_vs_exit_pct": 1.4216922724145764,
+        "return_vs_entry_pct": 2.723177998870785,
+        "gross_difference_usdt": 1.7217399999999876
+      },
+      "15": {
+        "kst_close": "2026-09-13T21:49:00+09:00",
+        "close": 0.04515,
+        "return_vs_exit_pct": 3.5313001605136396,
+        "return_vs_entry_pct": 4.859857260886646,
+        "gross_difference_usdt": 4.276579999999999
+      },
+      "30": {
+        "kst_close": "2026-09-13T22:04:00+09:00",
+        "close": 0.04013,
+        "return_vs_exit_pct": -7.979821141939936,
+        "return_vs_entry_pct": -6.798979581852027,
+        "gross_difference_usdt": -9.66396000000001
+      }
+    },
+    "BTW": {
+      "5": {
+        "kst_close": "2026-09-13T21:39:00+09:00",
+        "close": 0.73151,
+        "return_vs_exit_pct": 1.7554255209869751,
+        "return_vs_entry_pct": 2.621733261601289,
+        "gross_difference_usdt": 2.1327100000000074
+      },
+      "15": {
+        "kst_close": "2026-09-13T21:49:00+09:00",
+        "close": 0.62391,
+        "return_vs_exit_pct": -13.212085225357162,
+        "return_vs_entry_pct": -12.473205288723788,
+        "gross_difference_usdt": -16.051689999999997
+      },
+      "30": {
+        "kst_close": "2026-09-13T22:04:00+09:00",
+        "close": 0.64294,
+        "return_vs_exit_pct": -10.564950192802058,
+        "return_vs_entry_pct": -9.803533535817778,
+        "gross_difference_usdt": -12.835619999999999
+      }
+    }
+  },
+  "partialExitVtho": {
+    "assumption": "half at +2%, half at actual exit",
+    "grossPnlDeltaVsActualFullHoldUsdt": -6.44,
+    "excludes": [
+      "extra fees",
+      "slippage",
+      "remaining stop interactions"
+    ]
+  },
+  "e1ActualWinnerDamage": null,
+  "x1ActualWinnerDamage": null,
+  "conclusion": "UNKNOWN until executable replay/forward shadow; no opportunity-retention gate can be marked passed"
+}

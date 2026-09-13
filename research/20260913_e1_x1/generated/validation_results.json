@@ -1,0 +1,59 @@
+{
+  "runAtUtc": "2026-09-13T14:24:00Z",
+  "codeRegression": {
+    "passed": true,
+    "tests": 423,
+    "pass": 423,
+    "fail": 0,
+    "suites": [
+      {
+        "name": "candidate_and_audit",
+        "tests": 19,
+        "pass": 19,
+        "fail": 0
+      },
+      {
+        "name": "gateway",
+        "tests": 62,
+        "pass": 62,
+        "fail": 0
+      },
+      {
+        "name": "existing_non_sql",
+        "tests": 324,
+        "pass": 324,
+        "fail": 0
+      },
+      {
+        "name": "postgres_pglite",
+        "tests": 18,
+        "pass": 18,
+        "fail": 0
+      }
+    ]
+  },
+  "performanceValidation": {
+    "passed": false,
+    "verdict": "DEFER",
+    "baselineBehavioralReplayErrorPerTradeUsdt": null,
+    "maximumAllowedReplayErrorPerTradeUsdt": 0.25,
+    "opportunityRetention": null,
+    "costAndLatencyStressNetPnlUsdt": null,
+    "familywiseBootstrapConfidence": null,
+    "independentValidationTrades": 0,
+    "reasons": [
+      "historical <=1 second best bid and quantity sell-VWAP are unavailable for the fixed cohort",
+      "post-t0 E1 recovery blocks and current repriced fills were not archived",
+      "old/new native-stop submit, cancel and ACK event order cannot be reconstructed",
+      "point-in-time cash, slot and actual funding account replay has not been reproduced"
+    ]
+  },
+  "promotion": {
+    "eligible": false,
+    "mainIntegrated": false,
+    "deployed": false,
+    "newPolicySignals": 0,
+    "newPolicyFills": 0,
+    "newPolicyExits": 0
+  }
+}

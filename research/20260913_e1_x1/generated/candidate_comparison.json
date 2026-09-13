@@ -1,0 +1,123 @@
+{
+  "B0": {
+    "definition": "actual mixed-version fixed ledger; current code equations separately traced",
+    "actualLedger": {
+      "n": 210,
+      "wins": 84,
+      "losses": 126,
+      "net": -10.277143389999765,
+      "winning_net_sum": 226.0069676700001,
+      "losing_net_abs_sum": 236.28411105999987,
+      "profit_factor": 0.9565051439815601,
+      "median_win": 1.4272418449999935,
+      "median_loss": -1.5866709399999812,
+      "median_hold_win": 12.663808333333332,
+      "median_hold_loss": 9.663741666666667
+    },
+    "behavioralReplayErrorPerTradeUsdt": null,
+    "behavioralReplayGatePassed": false,
+    "verdict": "DEFER_AS_REPLAY_BASELINE",
+    "reason": "minute candles cannot reproduce sampled bid/native stop/ACK/intrabar ordering to <=0.25 USDT per trade"
+  },
+  "E1": {
+    "definition": "fastWeak -> at most 30s wait -> two qualifying 5s blocks -> fresh mid/guards/depth repricing",
+    "descriptiveFastWeakAssociation": {
+      "n": 28,
+      "symbols": 19,
+      "forward5": {
+        "n": 28,
+        "up": 6,
+        "down": 20,
+        "mean": -1.2534887537815533,
+        "median": -0.7199930894484452,
+        "sum": -35.09768510588349
+      },
+      "forward15": {
+        "n": 28,
+        "up": 7,
+        "down": 21,
+        "mean": -1.4764461273497569,
+        "median": -1.0109066865832406,
+        "sum": -41.340491565793194
+      },
+      "forward5_after_decision": {
+        "n": 28,
+        "up": 11,
+        "down": 16,
+        "mean": -0.8024393856420302,
+        "median": -0.40988769844205186,
+        "sum": -22.468302797976847
+      },
+      "forward15_after_decision": {
+        "n": 28,
+        "up": 9,
+        "down": 18,
+        "mean": -1.0240411347007896,
+        "median": -0.5849089604714752,
+        "sum": -28.673151771622106
+      },
+      "actual_net_usdt": {
+        "n": 28,
+        "up": 10,
+        "down": 18,
+        "mean": -0.36830682999999675,
+        "median": -1.0267603749999883,
+        "sum": -10.31259123999991
+      }
+    },
+    "blanketVetoCounterfactual": {
+      "affected": 28,
+      "winnersMissed": 10,
+      "winnerPnlMissedUsdt": 25.67782978,
+      "lossesAvoided": 18,
+      "lossPnlRemovedUsdt": 35.99042102,
+      "staticNetDeltaUsdt": 10.31259124,
+      "validStrategyResult": false
+    },
+    "accountReplay": null,
+    "opportunityRetention": null,
+    "netPnl": null,
+    "verdict": "DEFER",
+    "missing": [
+      "post-t0 non-overlapping 5s blocks",
+      "fresh L2/mid",
+      "quantity VWAP",
+      "wait/reprice fills",
+      "point-in-time cash/slots"
+    ]
+  },
+  "X1": {
+    "definition": "unchanged R5/QV3 evaluated from <=1s fresh quotes; QV3 only on a new completed bar",
+    "sameEntryExitReplay": null,
+    "netPnl": null,
+    "winnerDamage": null,
+    "verdict": "DEFER",
+    "evidence": {
+      "FLOCK": {
+        "sampledBidPeakPct": 0.765,
+        "completedBarTradeHighPct": 2.017
+      },
+      "BTW_loss": {
+        "sampledBidPeakPct": 1.979,
+        "completedBarTradeHighPct": 2.496
+      }
+    },
+    "missing": [
+      "historical <=1s best bid",
+      "quantity sell-VWAP",
+      "old/new native stop ACK sequence",
+      "intrabar event order"
+    ]
+  },
+  "E1_X1": {
+    "accountReplay": null,
+    "netPnl": null,
+    "verdict": "DEFER",
+    "reason": "both component paths lack causal execution replay"
+  },
+  "promotion": {
+    "eligible": false,
+    "deployed": false,
+    "reason": "No candidate satisfies fidelity, independent validation, cost/stress, and account replay gates"
+  }
+}

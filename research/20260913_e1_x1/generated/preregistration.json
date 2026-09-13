@@ -1,0 +1,84 @@
+{
+  "protocol": "B0_E1_X1_20260913_FREEZE_1",
+  "frozenAt": "2026-09-13T14:13:15.392Z",
+  "fixedCohort": {
+    "entryFromInclusive": "2026-09-07T15:00:00.000Z",
+    "entryBeforeExclusive": "2026-09-13T12:15:00.000Z",
+    "trades": 210,
+    "symbols": 78,
+    "dataRole": "already observed development/reconstruction data"
+  },
+  "supplements": {
+    "ids": [
+      "2938b901-5f4e-4c14-ac28-b3b849612801",
+      "8d9d800f-9107-4f5b-b648-7dbf56dab07e"
+    ],
+    "dataRole": "post-cutoff case studies only; excluded from fixed 210 learning/validation"
+  },
+  "comparisons": [
+    "B0",
+    "E1",
+    "X1",
+    "E1+X1"
+  ],
+  "maxNewCandidateFamilies": 2,
+  "E1": {
+    "last10sReturnLt": -0.002,
+    "takerBuyQuoteShare10sLt": 0.45,
+    "deadlineMs": 30000,
+    "blockMs": 5000,
+    "minimumTradesPerBlock": 2,
+    "requiredConsecutiveBlocks": 2,
+    "eachBlockReturnGte": 0,
+    "eachBlockBuyShareGte": 0.5,
+    "currentMidGteT0Mid": true,
+    "maxQuoteAgeMs": 1000,
+    "missing": "UNKNOWN"
+  },
+  "X1": {
+    "baseExitPolicy": "V17_EXIT_R5_TAIL",
+    "qv3": "QV3_ENTRY_EXIT_TWO_1",
+    "maxQuoteAgeMs": 1000,
+    "quoteEvaluationTargetMs": 1000,
+    "qv3OnlyNewCompletedBar": true,
+    "tradeHighNeverExecutablePeak": true,
+    "monotonicStop": true,
+    "restUpdateEverySecond": false,
+    "missing": "UNKNOWN"
+  },
+  "risk": {
+    "marginUsdt": 40,
+    "leverage": 3,
+    "maxSlots": 10,
+    "realAvailableCashRequired": true,
+    "manualAndOtherOwnerPositions": "PRESERVE"
+  },
+  "costs": {
+    "actualFillAlreadyContainsSlippage": true,
+    "funding": "UNKNOWN_NOT_ZERO",
+    "quantityDepthRequired": true
+  },
+  "gates": {
+    "minimumPostUpdateClosedTrades": 100,
+    "minimumChronologicalValidationTrades": 30,
+    "minimumValidationWindows": 3,
+    "baselineAbsoluteErrorPerTradeMaxUsdt": 0.25,
+    "positiveValidationNetExpectancy": true,
+    "validationNetImprovement": true,
+    "noWorseMaxDrawdown": true,
+    "noWorseWorstTrade": true,
+    "minimumOpportunityRetention": 0.7,
+    "costDelayStressOutperformance": true,
+    "pointInTimeAccountSlotCashReplay": true,
+    "fundingCoverage": true,
+    "each24hDeltaNonnegative": true,
+    "latestDeploymentDeltaNonnegative": true,
+    "positiveNetUnderStress": true,
+    "familywiseBootstrapConfidence": 0.99
+  },
+  "verdictRule": {
+    "SUPERIOR": "all fidelity/performance/risk/account gates pass",
+    "INFERIOR": "performance or risk clearly worsens",
+    "DEFER": "sample, timing, execution, account replay, or independent validation insufficient"
+  }
+}
