@@ -1,0 +1,63 @@
+{
+  "protocol": "V21_ACCOUNT_GROWTH_20260913_1",
+  "development_cutoff_utc": "2026-09-13T00:17:57.553824Z",
+  "unopened_holdout_start_utc": "2026-09-13T00:17:57.553824Z",
+  "baseline": {
+    "main_head_at_start": "bce9e95210829b5ae561f667dd1b499772977ec1",
+    "production_release_commit": "716a7dc61154637da539a85931476d9c685f65c6",
+    "function": "v10-lane-executor",
+    "function_version": 39,
+    "executor_patch": "V20-QV3-EVIDENCE-1",
+    "strategy": "QV3_ENTRY_EXIT_TWO_1",
+    "bundle_sha256": "f4c9691c91fe89a8737a2c656923741422e658880dfca8e6028e8835075a66a5"
+  },
+  "data_roles": {
+    "2026-09-08T23:44:06Z/2026-09-11T15:20:00Z": "EXPLORATORY_DEVELOPMENT",
+    "2026-09-11T15:20:00Z/2026-09-12T12:54:14.867543Z": "PREVIOUSLY_OPENED_CHRONOLOGICAL_VALIDATION_NOW_DEVELOPMENT",
+    "2026-09-12T12:54:14.867543Z/2026-09-13T00:17:57.553824Z": "NEW_HYPOTHESIS_DEVELOPMENT",
+    "after_2026-09-13T00:17:57.553824Z": "UNOPENED_CHRONOLOGICAL_HOLDOUT"
+  },
+  "candidates": {
+    "B_ENTRY_ONLY": "Block a decelerated setup when return15m >= 2.5%, return5m <= 1.2%, and the final pre-order IOC limit is <= the completed 5m signal reference close.",
+    "C_EXIT_ONLY": "For the same decelerated setup admitted with IOC limit > reference close, close through the existing idempotent reduce-only path only after three fresh 45-90 second spaced executable bids below the entry-time reference, all observed after entry+180 seconds.",
+    "D_ENTRY_AND_EXIT": "Apply the disjoint B and C branches together. Existing positions retain their entry-time policy."
+  },
+  "excluded_failed_families": [
+    "FAST_FAIL", "EARLY_LOCK", "VOL_TRAIL", "COMBINED_R5", "REPEAT_STOP_2",
+    "SPIKE_3PCT", "COMBINED_ENTRY_SHADOW", "LOCK_1P5",
+    "C1_UNARMED_TWO_BEARISH_BELOW_ENTRY", "C2_FRESH_BID_ARM_TWO_BEARISH", "C3_C1_PLUS_C2"
+  ],
+  "fixed_execution": {
+    "initial_equity_usdt": 100,
+    "target_margin_usdt": 40,
+    "leverage": 3,
+    "max_slots": 10,
+    "normal_fee_rate_each_side": 0.0005,
+    "normal_additional_exit_impact": 0.001,
+    "stress_fee_rate_each_side": 0.001,
+    "stress_entry_impact_bps": 2,
+    "stress_exit_impact_bps": 20,
+    "delay_stress_ms": 60000,
+    "same_candle_stop_and_exit": "ADVERSE_FIRST_AND_SKIP_BOUNDS",
+    "missing_or_conflicting_observation": "PRESERVE_BASELINE_OR_BLOCK_NEW_COUNTERFACTUAL_FILL"
+  },
+  "promotion_gates": {
+    "normal_account_net_pnl_above_baseline": true,
+    "stress_account_net_pnl_above_baseline": true,
+    "normal_and_stress_candidate_net_pnl_positive": true,
+    "max_drawdown_not_worse": true,
+    "worst_trade_not_worse": true,
+    "development_segment_delta_nonnegative": true,
+    "holdout_net_delta_positive": true,
+    "holdout_minimum_closed_trades": 20,
+    "opportunity_retention_min": 0.70,
+    "large_winner_value_retention_min": 0.90,
+    "same_entry_winner_to_loss_max": 0,
+    "leave_one_trade_and_symbol_direction_stable": true,
+    "nearby_threshold_direction_stable": true,
+    "funding_attributed_for_every_position_crossing_a_funding_time": true,
+    "baseline_fill_and_decision_fidelity_min": 0.99,
+    "production_integration_and_safety_regressions_required": true
+  },
+  "stop_rule": "Any missing required gate is DEFER; any worse performance, drawdown, worst-trade, winner-preservation, or stress gate is INFERIOR. Neither result authorizes strategy deployment."
+}

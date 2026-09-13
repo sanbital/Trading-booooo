@@ -3,11 +3,33 @@
  * The host serializes operations using its existing execution lease and persists
  * position accounting + receipts in the SAME compare-and-swap transaction.
  */
+import {freshPortfolio,sameQuantity} from './leader-ops-isolation.mjs';
 import {exitAttemptId,protectiveStopSpec} from './leader-exit-review.mjs';
+import {cumulativeFillDelta} from './leader-fill-evidence.mjs';
 const FINAL=new Set(['CANCELED','CANCELLED','EXPIRED','REJECTED','FINISHED']);
 const copy=x=>structuredClone(x);
 const finite=(x,name)=>{if(!Number.isFinite(x))throw Error(name);return x;};
 const eq=(a,b)=>Math.abs(a-b)<=Math.max(1e-10,Math.abs(b)*1e-8);
+// Only these errors prove that createStop did not leave an exchange order behind.
+// Timeouts, disconnects and generic lookup failures remain ambiguous forever until
+// an exact exchange receipt resolves them.
+const DEFINITIVE_CREATE_REJECTION=/^(?:V18_STOP_OWNERSHIP_CHANGED|GW_400:Order would immediately trigger\.?)$/;
+const definitiveRejectedSubmission=o=>o?.terminal!==true&&!o?.ackAt&&!o?.algoId&&!o?.actualOrderId&&
+  DEFINITIVE_CREATE_REJECTION.test(String(o?.submitError??''));
+
+// Persist what is actually known, rather than leaving the last successful label in
+// place forever.  In particular, a terminal REJECTED order is not PROTECTED.
+function protectionHealth(state) {
+  const orders=state.protection?.orders??[],closed=state.position.remainingQuantity<=1e-10||state.position.state==='CLOSED';
+  if(orders.some(o=>o.crossLifecycleExecution===true))return 'CROSS_LIFECYCLE_EXECUTION';
+  if(orders.some(o=>o.lastQueryError||o.accountingPending===true||(!o.terminal&&!['ACTIVE','NEW'].includes(o.status))))
+    return 'RECONCILIATION_PENDING';
+  if(closed)return orders.some(o=>!o.terminal)?'RECONCILIATION_PENDING':'POSITION_CLOSED';
+  const active=orders.filter(o=>!o.terminal&&['ACTIVE','NEW'].includes(o.status));
+  if(active.some(o=>eq(Number(o.spec?.params?.quantity),state.position.remainingQuantity)))return 'PROTECTED';
+  if(orders.some(o=>o.terminal&&o.status==='REJECTED'))return 'REJECTED';
+  return orders.length?'TERMINAL_NO_PROTECTION':'UNPROTECTED';
+}
 
 export function createNativeProtection({store,exchange,clock=Date.now}) {
   async function save(previous,next) {
@@ -25,53 +47,139 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
   }
   function validAck(order,ack) {
     const requested=order.spec.params;
+    const terminal=FINAL.has(String(ack.algoStatus)),actual=String(ack.actualOrderId??'');
+    // Binance may cap a reduce-only stop to the live one-way quantity when it triggers.
+    // Submission ACKs must remain exact; only a terminal ACK already bound to an
+    // actual order may report a smaller positive quantity.
+    const ackQuantity=Number(ack.quantity),quantityOk=eq(ackQuantity,requested.quantity)||
+      (terminal&&actual&&actual!=='0'&&ackQuantity>0&&ackQuantity<=requested.quantity);
     if(String(ack.clientAlgoId)!==requested.clientAlgoId||ack.symbol!==requested.symbol||
        ack.side!=='SELL'||ack.positionSide!=='BOTH'||String(ack.reduceOnly)!=='true'||
        (ack.orderType??ack.type)!=='STOP_MARKET'||
-       !eq(Number(ack.quantity),requested.quantity)||!eq(Number(ack.triggerPrice),requested.triggerPrice))
+       !quantityOk||!eq(Number(ack.triggerPrice),requested.triggerPrice))
       throw Error('NATIVE_STOP_ACK_MISMATCH');
     if(!ack.algoId||!ack.algoStatus)throw Error('NATIVE_STOP_ACK_INCOMPLETE');
   }
   async function refresh(id) {
     let state=await store.load(id);owned(state);
+    // V18/V20 persisted a pre-send ownership rejection or a synchronous Binance
+    // create rejection as an uncertain SUBMITTING/CANCEL_PENDING order.  Neither
+    // error can have created an exchange order.  Resolve those exact legacy rows,
+    // while deliberately leaving TIMEOUT/CONNECTION_LOST rows pending.
+    if(state.protection.orders.some(definitiveRejectedSubmission)){
+      const normalized=copy(state);
+      for(const item of normalized.protection.orders.filter(definitiveRejectedSubmission)){
+        item.terminalResolution={kind:'DEFINITIVE_CREATE_REJECTION',at:clock(),
+          submitError:item.submitError,lookupError:item.lastQueryError??null};
+        item.status='REJECTED';item.terminal=true;item.lastQueryError=null;
+      }
+      normalized.protection.health=protectionHealth(normalized);state=await save(state,normalized);
+    }
+    const initialHealth=protectionHealth(state);
+    if(state.protection.health!==initialHealth){
+      const normalized=copy(state);normalized.protection.health=initialHealth;state=await save(state,normalized);
+    }
     for(const remembered of [...state.protection.orders]) {
-      if(remembered.terminal)continue;
+      // Terminal exchange state does not imply that trade attribution and fees were
+      // settled.  Re-query only the small persisted pending set, never all history.
+      const crossLifecycleUnresolved=remembered.crossLifecycleEvidencePending===true&&
+        !remembered.crossLifecycleTargetPositionId;
+      if(remembered.terminal&&remembered.accountingPending!==true&&!crossLifecycleUnresolved)continue;
       let ack;
       try{ack=await exchange.queryStop(remembered.spec.params.clientAlgoId,remembered.spec.params.symbol);}
       catch(error){
         const next=copy(state),item=next.protection.orders.find(x=>x.clientId===remembered.clientId);
         item.lastQueryError=String(error?.message??error);item.lastQueryAt=clock();
         // A lookup failure is NOT evidence that an uncertain submission was absent.
-        next.protection.health='RECONCILIATION_PENDING';state=await save(state,next);continue;
+        next.protection.health=protectionHealth(next);state=await save(state,next);continue;
       }
       validAck(remembered,ack);
       let next=copy(state),item=next.protection.orders.find(x=>x.clientId===remembered.clientId);
       item.algoId=String(ack.algoId);item.status=String(ack.algoStatus);item.lastQueryAt=clock();item.lastQueryError=null;
       const actual=String(ack.actualOrderId??'');
       if(actual && actual!=='0') {
+        // Save binding BEFORE fetching trades, so fill-first arrival can be retried.
+        item.actualOrderId=actual;
+        state=await save(state,next);next=copy(state);item=next.protection.orders.find(x=>x.clientId===remembered.clientId);
         const fill=await exchange.getFill(actual,next.position.symbol);
+        // A stop can survive a software close and execute against a later position in
+        // the same one-way account.  Never debit that fill from the already-closed
+        // source lifecycle.  Preserve the exact receipt so DB-only reconciliation can
+        // prove the later lifecycle separately.
+        if(next.position.remainingQuantity<=1e-10||next.position.state==='CLOSED'){
+          if(fill?.exact===true){
+            const q=finite(Number(fill.quantity),'INVALID_FILL_QTY'),funds=finite(Number(fill.funds),'INVALID_FILL_FUNDS'),
+              fee=finite(Number(fill.fee),'INVALID_FILL_FEE');
+            if(q<0||funds<0||q>item.spec.params.quantity+1e-8)throw Error('INVALID_NATIVE_FILL');
+            item.observedQuantity=q;item.observedFunds=funds;item.observedFee=fee;
+            item.tradeIds=fill.tradeIds??[];item.lastFillAt=Number(fill.lastFillAt);item.fillStatus=fill.status;
+            if(q>(item.appliedQuantity??0)+1e-10){
+              item.crossLifecycleExecution=true;item.accountingAppliedToSource=false;
+            }else if(item.accountingPending===true){
+              const accountingQty=q-(item.accountedQuantity??0),base=next.position.settledPnl;
+              if(!Number.isFinite(base)||accountingQty<0)throw Error('NATIVE_PRIOR_ACCOUNTING_UNKNOWN');
+              next.position.settledPnl=base+funds-(item.appliedFunds??0)-next.position.entryPrice*accountingQty-fee+(item.appliedFee??0);
+              item.accountedQuantity=q;item.appliedQuantity=q;item.appliedFunds=funds;item.appliedFee=fee;
+              item.accountingPending=false;next.position.accountingPending=next.position.entryAccountingPending||
+                next.position.softwareAccountingPending||next.protection.orders.some(o=>o!==item&&o.accountingPending===true);
+              next.position.realizedPnl=next.position.accountingPending?null:next.position.settledPnl;
+              next.position.exitPrice=q>0?funds/q:next.position.exitPrice;next.position.lastFillAt=Number(fill.lastFillAt);
+            }
+            item.terminal=FINAL.has(item.status)&&['FILLED','EXPIRED','CANCELED','CANCELLED','REJECTED'].includes(fill.status);
+            next.protection.health=protectionHealth(next);state=await save(state,next);continue;
+          }
+          item.accountingAppliedToSource=false;item.crossLifecycleEvidencePending=true;
+          next.protection.health='RECONCILIATION_PENDING';state=await save(state,next);continue;
+        }
         if(!fill||fill.exact!==true) {
+          const e=fill?.orderEvidence;
+          if(e&&String(e.orderId)===actual&&e.clientAlgoId===item.clientId&&e.symbol===next.position.symbol&&
+            e.side==='SELL'&&e.positionSide==='BOTH'&&String(e.reduceOnly)==='true'&&
+            sameQuantity(e.requestedQuantity,item.spec.params.quantity)&&e.status==='FILLED'&&
+            Number.isFinite(e.quantity)&&e.quantity>=0&&e.quantity<=item.spec.params.quantity) {
+            const delta=e.quantity-(item.appliedQuantity??0),pf=await exchange.readPortfolio();
+            const rows=pf?.positions?.filter(x=>(x.market??x.symbol)===next.position.symbol)??[];
+            const held=rows.length===0?0:rows.length===1&&rows[0].side==='LONG'?Number(rows[0].quantity):NaN;
+            if(freshPortfolio(pf,clock())&&delta>=0&&delta<=next.position.remainingQuantity&&sameQuantity(held,next.position.remainingQuantity-delta)) {
+              next.position.settledPnl??=next.position.realizedPnl;
+              next.position.remainingQuantity-=delta;next.position.state=held===0?'CLOSED':'OPEN';
+              if(held===0&&Number.isFinite(e.lastAt))next.position.closedAt=e.lastAt;
+              next.position.accountingPending=true;next.position.realizedPnl=null;
+              item.accountedQuantity??=item.appliedQuantity??0;
+              item.appliedQuantity=e.quantity;item.accountingPending=true;
+            }
+          }
           next.protection.health='FILL_ACCOUNTING_PENDING';state=await save(state,next);continue;
         }
         const q=finite(Number(fill.quantity),'INVALID_FILL_QTY'),funds=finite(Number(fill.funds),'INVALID_FILL_FUNDS'),fee=finite(Number(fill.fee),'INVALID_FILL_FEE');
         if(q<0||funds<0||q>item.spec.params.quantity+1e-8)throw Error('INVALID_NATIVE_FILL');
-        const dq=q-(item.appliedQuantity??0),df=funds-(item.appliedFunds??0),dc=fee-(item.appliedFee??0);
-        if(dq< -1e-10||df< -1e-10||dq>next.position.remainingQuantity+1e-8)
-          throw Error('NATIVE_FILL_QUANTITY_MISMATCH');
-        if(dq>0||df!==0||dc!==0) {
+        let delta;
+        try{delta=cumulativeFillDelta({previousQuantity:item.appliedQuantity??0,previousFunds:item.appliedFunds??0,
+          previousFee:item.appliedFee??0,quantity:q,funds,fee,maxQuantity:item.spec.params.quantity,
+          maxDelta:next.position.remainingQuantity});}
+        catch{throw Error('NATIVE_FILL_QUANTITY_MISMATCH');}
+        const dq=delta.quantity,df=delta.funds,dc=delta.fee;
+        if(dq>0||df!==0||dc!==0||item.accountingPending) {
           next.position.remainingQuantity=Math.max(0,next.position.remainingQuantity-dq);
-          next.position.realizedPnl+=df-next.position.entryPrice*dq-dc;
+          const accountingQty=q-(item.accountedQuantity??item.appliedQuantity??0);
+          const base=next.position.settledPnl??next.position.realizedPnl;
+          if(!Number.isFinite(base))throw Error('NATIVE_PRIOR_ACCOUNTING_UNKNOWN');
+          next.position.settledPnl=base+df-next.position.entryPrice*accountingQty-dc;
+          item.accountedQuantity=q;item.accountingPending=false;
+          next.position.accountingPending=next.position.entryAccountingPending||next.position.softwareAccountingPending||next.protection.orders.some(o=>o.accountingPending===true);
+          next.position.realizedPnl=next.position.accountingPending?null:next.position.settledPnl;
           next.position.exitPrice=q>0?funds/q:next.position.exitPrice;
           next.position.lastFillAt=Number(fill.lastFillAt);
           next.position.state=next.position.remainingQuantity<=1e-10?'CLOSED':'OPEN';
           if(next.position.state==='CLOSED')next.position.closedAt=Number(fill.lastFillAt);
-          item.appliedQuantity=q;item.appliedFunds=funds;item.appliedFee=fee;
+          item.appliedQuantity=q;item.appliedFunds=funds;item.appliedFee=fee;item.tradeIds=fill.tradeIds??[];
         }
         item.actualOrderId=actual;item.fillStatus=fill.status;
         // An algo being triggered is not the same as the market order being filled.
         item.terminal=FINAL.has(item.status)&&['FILLED','EXPIRED','CANCELED','CANCELLED','REJECTED'].includes(fill.status);
       } else item.terminal=FINAL.has(item.status)&&item.status!=='FINISHED';
       if(item.status==='NEW')item.status='ACTIVE';
+      next.protection.health=protectionHealth(next);
       state=await save(state,next);
     }
     return state;
@@ -127,9 +235,15 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
     try{ack=await exchange.createStop(spec.params);validAck(state.protection.orders.at(-1),ack);}
     catch(error){
       const after=copy(state),item=after.protection.orders.find(x=>x.clientId===clientId);
-      item.submitError=String(error?.message??error);after.protection.health='RECONCILIATION_PENDING';
+      item.submitError=String(error?.message??error);
+      if(definitiveRejectedSubmission(item)){
+        item.status='REJECTED';item.terminal=true;
+        item.terminalResolution={kind:'DEFINITIVE_CREATE_REJECTION',at:clock(),
+          submitError:item.submitError,lookupError:null};
+        after.protection.health=protectionHealth(after);
+      }else after.protection.health='RECONCILIATION_PENDING';
       state=await save(state,after);
-      return {status:'RECONCILIATION_PENDING',state,softwareMonitorRequired:true};
+      return {status:item.terminal?'REJECTED':'RECONCILIATION_PENDING',state,softwareMonitorRequired:true};
     }
     const accepted=copy(state),record=accepted.protection.orders.find(x=>x.clientId===clientId);
     record.algoId=String(ack.algoId);record.status=ack.algoStatus==='NEW'?'ACTIVE':String(ack.algoStatus);

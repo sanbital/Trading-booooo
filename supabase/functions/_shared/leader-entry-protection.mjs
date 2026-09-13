@@ -14,7 +14,8 @@ export async function protectNewLeaderPosition({enabled,position,manualSymbols=[
     const match=portfolioMatches([position],{positions:rows});
     if(!match.ok)throw Error(`ENTRY_PROTECTION_OWNERSHIP:${match.reason}`);
     const result=await manage({manualSymbols,exchangeQuantity:new Map([[position.symbol,Number(position.remaining_quantity)]]),quoteRetryBudget:{remaining:1}});
-    const status=result.action==='CLOSE'?'CLOSED':result.nativeStop?.status??'RECONCILIATION_PENDING';
+    const status=result.action==='CLOSE'&&result.result?.closed===true?'CLOSED':
+      result.nativeStop?.status??'RECONCILIATION_PENDING';
     return {status,startedAt,finishedAt:clock(),softwareMonitorRequired:!['CLOSED','PROTECTED'].includes(status)};
   }catch(error){return {status:'RECONCILIATION_PENDING',startedAt,finishedAt:clock(),softwareMonitorRequired:true,error:String(error?.message??error)};}
 }

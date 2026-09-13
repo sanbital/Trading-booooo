@@ -34,18 +34,26 @@ export function createV17StopCommands({request,assertVersion,positionSideDual}) 
    const algo=await query(c),id=String(algo.actualOrderId??'');
    if(!id||id==='0'||id!==String(c.actualOrderId))throw Error('V17_NATIVE_ACTUAL_ORDER_MISMATCH');
    const order=await request('GET','/fapi/v1/order',{symbol:c.symbol,orderId:id});
-   const trades=await request('GET','/fapi/v1/userTrades',{symbol:c.symbol,orderId:id,limit:1000});
-   if(!Array.isArray(trades))return {exact:false};
+   const trades=await request('GET','/fapi/v1/userTrades',{symbol:c.symbol,orderId:id,limit:1000}).catch(()=>null);
+   const orderEvidence={orderId:id,clientAlgoId:c.clientAlgoId,symbol:c.symbol,
+     side:order.side,positionSide:order.positionSide,reduceOnly:order.reduceOnly,
+     requestedQuantity:Number(order.origQty),quantity:Number(order.executedQty),status:order.status,
+     lastAt:Number(order.updateTime)};
+   const valid=String(order.orderId)===id&&order.symbol===c.symbol&&order.side==='SELL'&&
+     String(order.reduceOnly)==='true'&&order.positionSide==='BOTH'&&
+     Number.isFinite(orderEvidence.quantity)&&orderEvidence.quantity>=0;
+   if(!valid)throw Error('V18_NATIVE_ORDER_EVIDENCE_MISMATCH');
+   if(!Array.isArray(trades))return {exact:false,orderEvidence};
    const seen=new Set();let quantity=0,funds=0,fee=0,lastFillAt=0;
    for(const t of trades){
     if(String(t.orderId)!==id||t.symbol!==c.symbol||t.side!=='SELL'||t.commissionAsset!=='USDT'||
-       seen.has(String(t.id))||![t.qty,t.price,t.commission,t.time].every(v=>Number.isFinite(Number(v))))return {exact:false};
+       seen.has(String(t.id))||![t.qty,t.price,t.commission,t.time].every(v=>Number.isFinite(Number(v))))return {exact:false,orderEvidence};
     seen.add(String(t.id));quantity+=Number(t.qty);funds+=Number(t.qty)*Number(t.price);
     fee+=Number(t.commission);lastFillAt=Math.max(lastFillAt,Number(t.time));
    }
    const close=(a,b)=>Number.isFinite(b)&&Math.abs(a-b)<=Math.max(1e-8,Math.abs(b)*1e-7);
    const exact=close(quantity,Number(order.executedQty))&&close(funds,Number(order.cumQuote));
-   return {exact,quantity,funds,fee,lastFillAt,status:order.status};
+   return {exact,quantity,funds,fee,lastFillAt,status:order.status,orderEvidence,tradeIds:[...seen]};
   }
   throw Error('V17_NATIVE_ACTION_UNSUPPORTED');
  };

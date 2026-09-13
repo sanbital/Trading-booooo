@@ -43,6 +43,13 @@ test("monitor cadence waits only for the unspent interval", () => {
   assert.equal(module.monitorCadenceDelayMs(1_000, 3_350, 2_000), 0);
 });
 
+test("valid one-character Binance bases reach the exchange without allowing query delimiters", () => {
+  for (const symbol of ["4USDT", "XUSDT", "牛USDT", "BTCUSDT", "哈基米USDT"])
+    assert.equal(module.validateBinanceSymbol(symbol), symbol);
+  for (const symbol of ["USDT", "4USDC", "4/USDT", "4&USDT", "4?USDT", "4 USDT", "4%USDT", "4\nUSDT"])
+    assert.throws(() => module.validateBinanceSymbol(symbol));
+});
+
 test("monitor cadence tolerates a non-monotonic wall clock", () => {
   assert.equal(module.monitorCadenceDelayMs(2_000, 1_900, 2_000), 2_000);
 });
@@ -310,6 +317,11 @@ test("P10 Futures position proof uses one bounded signed account request after t
   assert.ok(calls.length === 1 || calls.length === 2);
   assert.ok(calls.every((call) => call.signal instanceof AbortSignal));
   assert.equal(portfolio.mode, "P10_POSITION_PROOF");
+  assert.equal(portfolio.account_scope,"futures");
+  assert.equal(portfolio.positions_complete,true);
+  assert.equal(portfolio.observation.source,"BINANCE_ACCOUNT_REST");
+  assert.ok(portfolio.observation.id);
+  assert.ok(portfolio.observation.received_at_ms>=portfolio.observation.requested_at_ms);
   assert.deepEqual(portfolio.positions.map((row) => [row.market, row.side, row.quantity]), [
     ["ETCUSDT", "SHORT", 2],
   ]);

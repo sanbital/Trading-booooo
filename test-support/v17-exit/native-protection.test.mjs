@@ -34,6 +34,35 @@ test('uncertain missing order remains pending rather than assuming no submission
  assert.equal((await f.api().ensure('position-1',f.request)).status,'RECONCILIATION_PENDING');
  assert.equal(f.calls.filter(x=>x[0]==='create').length,1);
 });
+test('definitive pre-send rejection is terminal and can never become a stale stop',async()=>{
+ const f=fixture();f.exchange.createStop=async()=>{f.calls.push(['create']);throw Error('V18_STOP_OWNERSHIP_CHANGED')};
+ const result=await f.api().ensure('position-1',f.request),order=f.state().protection.orders[0];
+ assert.equal(result.status,'REJECTED');assert.equal(order.status,'REJECTED');assert.equal(order.terminal,true);
+ assert.equal(order.terminalResolution.kind,'DEFINITIVE_CREATE_REJECTION');
+ assert.equal(f.state().protection.health,'REJECTED');
+});
+test('legacy rejected submission is retired without treating a generic missing lookup as proof',async()=>{
+ const f=fixture();f.exchange.createStop=async()=>{f.calls.push(['create']);throw Error('TIMEOUT')};
+ await f.api().ensure('position-1',f.request);
+ const before=await f.store.load('position-1'),legacy=clone(before),order=legacy.protection.orders[0];
+ legacy.position.state='CLOSED';legacy.position.remainingQuantity=0;
+ order.status='CANCEL_PENDING';order.submitError='GW_400:Order would immediately trigger.';
+ order.lastQueryError='GW_400:Order does not exist.';
+ assert.equal(await f.store.compareAndSwap('position-1',before.version,legacy),true);
+ f.calls.length=0;await f.api().refresh('position-1');
+ const retired=f.state().protection.orders[0];
+ assert.equal(retired.status,'REJECTED');assert.equal(retired.terminal,true);
+ assert.equal(retired.terminalResolution.lookupError,'GW_400:Order does not exist.');
+ assert.equal(retired.lastQueryError,null);assert.equal(f.calls.filter(x=>x[0]==='query').length,0);
+ assert.equal(f.state().protection.health,'POSITION_CLOSED');
+});
+test('definitive replacement rejection keeps the acknowledged older stop protective',async()=>{
+ const f=fixture(),first=await f.api().ensure('position-1',f.request);
+ f.exchange.createStop=async()=>{throw Error('GW_400:Order would immediately trigger.')};
+ const result=await f.api().ensure('position-1',{...f.request,stopPrice:98.1});
+ assert.equal(result.status,'REJECTED');assert.equal(f.orders.get(first.clientId).algoStatus,'NEW');
+ assert.equal(f.state().protection.health,'PROTECTED');assert.equal(f.calls.filter(x=>x[0]==='cancel').length,0);
+});
 test('replacement is acknowledged before old stop cancellation',async()=>{
  const f=fixture(),first=await f.api().ensure('position-1',f.request);
  const second=await f.api().ensure('position-1',{...f.request,stopPrice:98.1});
@@ -74,6 +103,22 @@ test('triggered algo without reconciled fill never marks position closed',async(
  o.algoStatus='FINISHED';o.actualOrderId='fill-1';f.fills.set('fill-1',{exact:false});
  assert.equal((await f.api().ensure('position-1',f.request)).status,'RECONCILIATION_PENDING');
  assert.equal(f.state().position.remainingQuantity,10);
+});
+test('terminal rejection replaces a stale PROTECTED label with REJECTED',async()=>{
+ const f=fixture(),r=await f.api().ensure('position-1',f.request),o=f.orders.get(r.clientId);
+ o.algoStatus='REJECTED';await f.api().refresh('position-1');
+ assert.equal(f.state().protection.orders[0].terminal,true);assert.equal(f.state().protection.health,'REJECTED');
+ assert.equal(f.state().position.state,'OPEN');
+});
+test('a stop executing after its source lifecycle closed is quarantined, never charged to that source',async()=>{
+ const f=fixture(),r=await f.api().ensure('position-1',f.request),before=await f.store.load('position-1');
+ const closed=structuredClone(before);closed.position.state='CLOSED';closed.position.remainingQuantity=0;closed.position.realizedPnl=-3;
+ assert.equal(await f.store.compareAndSwap('position-1',before.version,closed),true);
+ const o=f.orders.get(r.clientId);o.algoStatus='FINISHED';o.actualOrderId='late-fill';o.quantity=7;
+ f.fills.set('late-fill',{exact:true,quantity:7,funds:679,fee:.35,lastFillAt:2000,status:'FILLED',tradeIds:['late-1']});
+ await f.api().refresh('position-1');const state=f.state(),journal=state.protection.orders[0];
+ assert.equal(state.position.realizedPnl,-3);assert.equal(journal.crossLifecycleExecution,true);
+ assert.equal(journal.accountingAppliedToSource,false);assert.equal(state.protection.health,'CROSS_LIFECYCLE_EXECUTION');
 });
 test('manual symbols and ownership drift are rejected even with an existing stop',async()=>{
  const f=fixture();await f.api().ensure('position-1',f.request);
