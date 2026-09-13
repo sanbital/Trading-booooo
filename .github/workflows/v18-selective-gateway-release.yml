@@ -43,7 +43,7 @@ jobs:
           docker build -t v18-verified-gateway gateway
           docker run -d --name v18-boot -p 127.0.0.1:8099:8080 -e V17_SHADOW_ENABLED=true v18-verified-gateway
           trap 'docker rm -f v18-boot >/dev/null 2>&1 || true' EXIT
-          for attempt in $(seq 1 20); do
+          for _ in $(seq 1 20); do
             if curl -fsS --max-time 2 http://127.0.0.1:8099/health > release-evidence/docker-health.json; then break; fi
             sleep 1
           done
