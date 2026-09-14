@@ -16,6 +16,7 @@ credential, production row, signal generation, or live order is used.
 | 9 | partial fill/close | requested quantity used | actual residual quantity drives mismatch/protection |
 | 10 | native stop races software exit | duplicate sell risk | native reconcile precedes software intent |
 | 11 | order timeout → exchange success possible | replacement ID risk | original identity remains the only recheck |
+| 11b | bot-owned immediate close acknowledgement delayed | one close stalls every symbol | close symbol quarantined; unrelated entries continue; exact identity gets first reconciliation budget |
 | 12 | fills duplicate/reversed/late | double count/order dependence | canonical exact result once; conflict fails closed |
 | 13 | restart/CAS/lease stale writer | cumulative double apply | monotonic delta rejects regression/overflow |
 | 14 | stale/incomplete account response | `positions=[]` treated flat | account hold |

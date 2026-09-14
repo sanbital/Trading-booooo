@@ -33,6 +33,19 @@ export function riskOrders(orders) {
   return orders.filter(o=>['PLANNED','DISPATCHED','RECONCILIATION_FAILED','RECONCILIATION_PENDING'].includes(o.state)&&
     o.response_payload?.v18ExposureFinal!==true);
 }
+function boundedImmediateCloseOrder(o) {
+  const q=o?.request_payload?.order??{};
+  return ['CLOSE_LONG','PARTIAL_CLOSE'].includes(String(o?.intent??'').toUpperCase())&&
+    /^tb-v11x-/.test(String(o?.client_order_id??''))&&o?.request_payload?.action==='create_order'&&
+    String(q.side??'').toUpperCase()==='SELL'&&String(q.position_effect??'').toUpperCase()==='CLOSE'&&
+    ['LONG','BOTH'].includes(String(q.position_side??'').toUpperCase())&&
+    String(q.type??'').toUpperCase()==='MARKET';
+}
+function orderIssueExtra(o) {
+  const q=o?.request_payload?.order??{};
+  return {orderId:o?.id??null,clientOrderId:o?.client_order_id??null,intent:o?.intent??null,
+    orderType:q.type??null,positionEffect:q.position_effect??null};
+}
 export function classifyPortfolio(positions,pf,{manual=[],orders=[],now=Date.now()}={}) {
   const issues=[],safe=[];
   const add=(kind,p,x,extra={})=>issues.push({kind,symbol:symbol(p??x),positionId:p?.id??null,
@@ -65,7 +78,8 @@ export function classifyPortfolio(positions,pf,{manual=[],orders=[],now=Date.now
       add('QUANTITY_MISMATCH',p,x,{knownExitPending:!!exit&&amount(x)<Number(p.remaining_quantity)});continue;
     }
     const unknown=riskOrders(orders).find(o=>o.symbol===p.symbol);
-    if(unknown){add('UNKNOWN_ORDER_OUTCOME',p,x,{orderId:unknown.id,clientOrderId:unknown.client_order_id});continue;}
+    if(unknown){add(boundedImmediateCloseOrder(unknown)?'KNOWN_EXIT_PENDING_RECONCILIATION':'UNKNOWN_ORDER_OUTCOME',
+      p,x,orderIssueExtra(unknown));continue;}
     safe.push(p);
   }
   for(const x of exchange.filter(x=>!positions.some(p=>symbol(p)===symbol(x)))) {
@@ -74,8 +88,9 @@ export function classifyPortfolio(positions,pf,{manual=[],orders=[],now=Date.now
     const pending=riskOrders(orders).find(o=>o.symbol===symbol(x)&&o.intent==='OPEN_LONG');
     add(allowed?'IDENTITY_OR_SIDE_MISMATCH':pending?'UNKNOWN_ORDER_OUTCOME':'EXCHANGE_ONLY_POSITION',null,x,pending?{orderId:pending.id,clientOrderId:pending.client_order_id}:{});
   }
-  for(const o of riskOrders(orders))if(!issues.some(i=>i.kind==='UNKNOWN_ORDER_OUTCOME'&&i.symbol===o.symbol))
-    add('UNKNOWN_ORDER_OUTCOME',null,{symbol:o.symbol},{orderId:o.id,clientOrderId:o.client_order_id});
+  for(const o of riskOrders(orders))if(!issues.some(i=>String(i.orderId??'')===String(o.id??'')))
+    add(boundedImmediateCloseOrder(o)?'KNOWN_EXIT_PENDING_RECONCILIATION':'UNKNOWN_ORDER_OUTCOME',
+      null,{symbol:o.symbol},orderIssueExtra(o));
   const accounting=orders.map(o=>accountingIssue(o,exchange)).filter(Boolean);
   return {ok:issues.length===0,issues,accounting,safe,external:exchange,snapshot:pf.observation};
 }

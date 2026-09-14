@@ -139,8 +139,13 @@ export function evaluateEntryDecision({candidateSymbol,classification={issues:[]
   if(accountIssues.length){const hard=accountIssues.some(x=>x.controlScope===CONTROL_SCOPE.ACCOUNT_RISK_BLOCK);
     return decision(hard?CONTROL_SCOPE.ACCOUNT_RISK_BLOCK:CONTROL_SCOPE.ACCOUNT_ENTRY_HOLD,
       accountIssues.map(x=>`${x.kind}:${x.symbol||'ACCOUNT'}`),evidence,accountIssues.flatMap(x=>x.recheck??[]));}
-  if(orders.some(exposurePending))return decision(CONTROL_SCOPE.ACCOUNT_ENTRY_HOLD,
-    orders.filter(exposurePending).map(x=>`PENDING_ORDER_IDENTITY:${x.id}`),evidence,
+  // A proved bot-owned immediate close can only reduce its own symbol exposure.
+  // Keep that symbol quarantined, but do not turn delayed close acknowledgement into
+  // an account-wide entry outage. Unknown entry/resting orders still fail closed.
+  const accountPendingOrders=orders.filter(o=>exposurePending(o)&&
+    !issues.some(i=>String(i.orderId??'')===String(o.id??'')&&i.controlScope===CONTROL_SCOPE.SYMBOL_QUARANTINE));
+  if(accountPendingOrders.length)return decision(CONTROL_SCOPE.ACCOUNT_ENTRY_HOLD,
+    accountPendingOrders.map(x=>`PENDING_ORDER_IDENTITY:${x.id}`),evidence,
     ['QUERY_SAME_ORDER_IDENTITY','FRESH_COMPLETE_ACCOUNT_SNAPSHOT','FRESH_COMPLETE_OPEN_ORDERS']);
 
   const targetIssues=issues.filter(x=>upper(x.symbol)===candidate),targetAccounting=accounting.filter(x=>upper(x.symbol)===candidate);

@@ -119,6 +119,19 @@ test('11 timeout risk requires same-order lookup and never authorizes a replacem
   assert.ok(issue.recheck.includes('QUERY_SAME_ORDER_IDENTITY'));
 });
 
+test('11b a bot-owned immediate close timeout quarantines one symbol, not the account',()=>{
+  const order={id:'close-pending',symbol:'OLDUSDT',intent:'CLOSE_LONG',state:'RECONCILIATION_FAILED',
+    client_order_id:'tb-v11x-known-close',request_payload:{action:'create_order',
+      order:{side:'SELL',type:'MARKET',position_side:'LONG',position_effect:'CLOSE'}},response_payload:{}};
+  const classified=classifyPortfolio([],portfolio(),{orders:[order],now:NOW}),issue=classified.issues[0];
+  assert.equal(issue.kind,'KNOWN_EXIT_PENDING_RECONCILIATION');
+  assert.equal(issue.controlScope,CONTROL_SCOPE.SYMBOL_QUARANTINE);
+  const unrelated=evaluateEntryDecision(base({classification:classified,orders:[order]}));
+  assert.equal(unrelated.allowed,true);assert.equal(unrelated.scope,CONTROL_SCOPE.NORMAL);
+  const same=evaluateEntryDecision(base({candidateSymbol:'OLDUSDT',classification:classified,orders:[order]}));
+  assert.equal(same.allowed,false);assert.equal(same.scope,CONTROL_SCOPE.SYMBOL_QUARANTINE);
+});
+
 test('12 duplicate, reverse-order and conflicting fills converge or fail deterministically',()=>{
   const a={tradeId:'2',qty:'2',price:'10',commission:'.02',commissionAsset:'USDT',time:2,side:'SELL'},
     b={tradeId:'1',qty:'3',price:'10',commission:'.03',commissionAsset:'USDT',time:1,side:'SELL'};

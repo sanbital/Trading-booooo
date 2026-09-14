@@ -589,6 +589,32 @@ async function recordMismatch(db,match) {
 }
 async function reconcileOps(db,pair,budget=createBudget({ms:8000,calls:18})) {
   const gw=scopedGateway(db,budget),results=[];
+  // Exposure-uncertain order identity gets the first reconciliation budget.
+  // Closed native-stop cleanup remains bounded and runs immediately afterward.
+  for(const o of pair.orders.filter(o=>["PLANNED","DISPATCHED","RECONCILIATION_PENDING","RECONCILIATION_FAILED"].includes(o.state)).slice(0,3)){
+    if(budget.remaining()<500)break;
+    try{
+      await verifyExecutionLease(db);
+      const touched=await db.from("v11_long_regime_orders").update({response_payload:{...rec(o.response_payload),v18LastReconcileAt:new Date().toISOString()},updated_at:new Date(Math.max(Date.now(),Date.parse(o.updated_at)+1)).toISOString()}).eq("id",o.id).eq("updated_at",o.updated_at).select("*").maybeSingle();
+      if(touched.error||!touched.data)throw Error("ORDER_RECONCILE_CAS_CONFLICT");
+      const raw=await gw({action:"get_order",market:o.symbol,identifier:o.client_order_id,exchange_order_id:o.exchange_order_id});
+      if(o.intent==="OPEN_LONG") {
+        const pos=await settleKnownEntry(db,o,raw,gw);
+        if(pos?.state==="OPEN")await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position:pos,manualSymbols:pair.manual.map(x=>x.symbol),readPortfolio:()=>gw({action:"p10_portfolio"}),manage:ctx=>manageLeader(db,pos,{...ctx,gateway:gw})});
+        const complete=!pos||pos.metadata?.v18EntryAccountingPending!==true;
+        results.push({orderId:o.id,outcome:complete?"RESOLVED":"UNRESOLVED",inspectionPerformed:true,evidenceSecured:true,
+          quantityResolved:true,attributionComplete:true,accountingComplete:complete,settled:complete,
+          reason:complete?null:"ACCOUNTING_DETAILS_PENDING"});continue;
+      }
+      const row=await db.from("v11_long_regime_positions").select("*").eq("id",o.position_id).single();
+      if(row.error||!row.data)throw Error("RECONCILE_POSITION_READ");
+      const settled=await applyExitReceipt(db,row.data,o,raw,await gw({action:"p10_portfolio"}),{verifyLease:()=>verifyExecutionLease(db)}),
+        complete=settled.accountingPending!==true;
+      results.push({orderId:o.id,outcome:complete?"RESOLVED":"UNRESOLVED",inspectionPerformed:true,evidenceSecured:true,
+        quantityResolved:true,attributionComplete:true,accountingComplete:complete,settled:complete,
+        reason:complete?null:"ACCOUNTING_DETAILS_PENDING"});
+    }catch(e){if(classifyFailure(e).fatal)throw e;results.push({orderId:o.id,error:String(e.message??e)});}
+  }
   // Management has already had its turn. Work only three oldest affected items per cycle.
   const ids=new Set(pair.match.issues.map(i=>i.positionId).filter(Boolean));
   const closedPending=await readClosedProtectionBacklog(db);
@@ -633,30 +659,6 @@ async function reconcileOps(db,pair,budget=createBudget({ms:8000,calls:18})) {
       else results.push({positionId:p.id,outcome:"UNRESOLVED",inspectionPerformed:true,evidenceSecured:false,
         quantityResolved:false,attributionComplete:false,accountingComplete:false,reason:"NO_SETTLEMENT_EVIDENCE_PATH"});
     }catch(e){if(classifyFailure(e).fatal)throw e;results.push({positionId:candidate.id,error:String(e.message??e)});}
-  }
-  for(const o of pair.orders.filter(o=>["PLANNED","DISPATCHED","RECONCILIATION_PENDING","RECONCILIATION_FAILED"].includes(o.state)).slice(0,3)){
-    if(budget.remaining()<500)break;
-    try{
-      await verifyExecutionLease(db);
-      const touched=await db.from("v11_long_regime_orders").update({response_payload:{...rec(o.response_payload),v18LastReconcileAt:new Date().toISOString()},updated_at:new Date(Math.max(Date.now(),Date.parse(o.updated_at)+1)).toISOString()}).eq("id",o.id).eq("updated_at",o.updated_at).select("*").maybeSingle();
-      if(touched.error||!touched.data)throw Error("ORDER_RECONCILE_CAS_CONFLICT");
-      const raw=await gw({action:"get_order",market:o.symbol,identifier:o.client_order_id,exchange_order_id:o.exchange_order_id});
-      if(o.intent==="OPEN_LONG") {
-        const pos=await settleKnownEntry(db,o,raw,gw);
-        if(pos?.state==="OPEN")await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position:pos,manualSymbols:pair.manual.map(x=>x.symbol),readPortfolio:()=>gw({action:"p10_portfolio"}),manage:ctx=>manageLeader(db,pos,{...ctx,gateway:gw})});
-        const complete=!pos||pos.metadata?.v18EntryAccountingPending!==true;
-        results.push({orderId:o.id,outcome:complete?"RESOLVED":"UNRESOLVED",inspectionPerformed:true,evidenceSecured:true,
-          quantityResolved:true,attributionComplete:true,accountingComplete:complete,settled:complete,
-          reason:complete?null:"ACCOUNTING_DETAILS_PENDING"});continue;
-      }
-      const row=await db.from("v11_long_regime_positions").select("*").eq("id",o.position_id).single();
-      if(row.error||!row.data)throw Error("RECONCILE_POSITION_READ");
-      const settled=await applyExitReceipt(db,row.data,o,raw,await gw({action:"p10_portfolio"}),{verifyLease:()=>verifyExecutionLease(db)}),
-        complete=settled.accountingPending!==true;
-      results.push({orderId:o.id,outcome:complete?"RESOLVED":"UNRESOLVED",inspectionPerformed:true,evidenceSecured:true,
-        quantityResolved:true,attributionComplete:true,accountingComplete:complete,settled:complete,
-        reason:complete?null:"ACCOUNTING_DETAILS_PENDING"});
-    }catch(e){if(classifyFailure(e).fatal)throw e;results.push({orderId:o.id,error:String(e.message??e)});}
   }
   return results;
 }
