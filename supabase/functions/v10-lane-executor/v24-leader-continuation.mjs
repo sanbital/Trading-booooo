@@ -51,6 +51,7 @@ export const V24_POLICY = Object.freeze({
   minImbalance25bps: 0.05,
   minTapeTrades60s: 8,      // sample floor: too few prints is UNKNOWN, not "fine"
   minTapeQuote60s: 2_000,
+  tapeRowCap: 1_000,        // Binance aggTrades page cap; a full page means TRUNCATED
 
   // --- COST / RISK --------------------------------------------------------
   maxSpreadBps: 10,

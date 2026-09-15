@@ -17,7 +17,7 @@ import {
   V24_POLICY, V24_VERSION, MIN, M15, kstDayStart, closedBars, resample, atrWilder,
   emaSeries, rvol1, anchoredVwap, setupA, setupB, chaseGate, trendGate, leaderGate,
   structuralStop, sizePosition, profitLockFloor, trailLevel, netRealisable,
-} from "./v24-leader-continuation.mjs";
+} from "../v10-lane-executor/v24-leader-continuation.mjs";
 
 const env = (n: string) => (Deno.env.get(n) || "").trim();
 const res = (s: number, b: unknown) =>
