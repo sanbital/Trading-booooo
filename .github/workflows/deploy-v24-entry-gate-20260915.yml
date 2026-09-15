@@ -164,7 +164,12 @@ jobs:
             --use-api --workdir "$PWD/release-evidence/deployed-source"
           node test-support/v19-ops/verify-downloaded-function.mjs \
             release-evidence/deployed-source . > release-evidence/deployed-source-verification.json
-          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c 'select clock_timestamp()' \
+          # ISO-8601 with a 'T' separator: the cycle timestamps this is later compared
+          # against come back from jsonb in ISO form, and psql's default output uses a
+          # space. Comparing the two as strings silently mis-orders them, because 'T'
+          # sorts after ' '.
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 \
+            -c "select to_char(clock_timestamp() at time zone 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.MS')||'+00:00'" \
             > release-evidence/deployed-at.txt
 
       - name: Observe three genuine scheduler cycles
@@ -201,9 +206,13 @@ jobs:
               return json.loads(out.strip())
           seen=set(); rows=[]; deadline=time.time()+300
           while time.time()<deadline and len(rows)<3:
-              s=read(); done=s.get('cycle_completed_at')
-              ok=(done and s.get('last_success_at')==done and s.get('last_error') is None)
-              if ok and s.get('cycle_started_at')>deployed_at and done not in seen:
+              s=read(); done=s.get('cycle_completed_at'); started=s.get('cycle_started_at')
+              # A cycle in flight still shows the PREVIOUS completion, which makes
+              # cycle_ms negative. Require the pair to belong to the same finished cycle.
+              inflight = bool(started and done and started > done)
+              ok=(done and not inflight and s.get('last_success_at')==done
+                  and s.get('last_error') is None)
+              if ok and done>deployed_at and done not in seen:
                   assert 0<=s['cycle_ms']<=60000, s
                   assert s['circuit_open'] is False, s
                   assert s['duplicate_active_client_ids']==0, s
