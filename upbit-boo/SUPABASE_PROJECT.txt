@@ -1,0 +1,8 @@
+Upbit Boo Supabase
+project_ref=yjhwsfmvtonnhdsfkary
+project_url=https://yjhwsfmvtonnhdsfkary.supabase.co
+region=ap-northeast-1
+billing=10 USD monthly while project is active
+created_at=2026-08-14T13:17:06Z
+
+No API keys, service-role keys, database passwords, or exchange credentials are stored in this file.

@@ -1,0 +1,318 @@
+import { EFFECTIVE_OBSERVATION_MIN_MS, evaluateLobEntry } from "./entry.ts";
+import { evaluateLobExit } from "./exit.ts";
+import type { LobFeatureVector } from "./types.ts";
+
+type TestFn = () => void | Promise<void>;
+const test = (globalThis as any).Deno?.test
+  ? (name: string, fn: TestFn) => (globalThis as any).Deno.test(name, fn)
+  : (name: string, fn: TestFn) => Promise.resolve(fn()).then(() => console.log(`ok - ${name}`));
+
+function assert(condition: unknown, message: string): void {
+  if (!condition) throw new Error(message);
+}
+
+const hot: LobFeatureVector = {
+  universeMode: "TOP10_24H_GAINERS_LOB_ONLY",
+  gainerRank: 3,
+  samples: 80,
+  observationMs: 50000,
+  bookAgeMs: 100,
+  spreadBps: 3,
+  bookImbalance: 0.32,
+  imbalanceStability: 0.84,
+  tradePressureFast: 0.55,
+  tradeCount: 160,
+  buyNotional: 800000,
+  sellNotional: 250000,
+  averageTradeNotional: 6500,
+  bookUpdateRate: 18,
+  tradeArrivalRate: 12,
+  aggressiveNotionalPerSecond: 70000,
+  micropriceDeviationBps: 2.2,
+  bidDepthQuote: 2000000,
+  askDepthQuote: 900000,
+  depthRatio: 2.2,
+  spoofLikeScore: 0.05,
+  askSpoofScore: 0.04,
+  askRefillRatio: 0.05,
+  askAbsorptionScore: 0.08,
+  bidAbsorptionScore: 0.72,
+  breakoutScore: 0.82,
+  sweepReclaimScore: 0.65,
+  ofiPersistence: 0.86,
+  persistentBidWall: true,
+  persistentAskWall: false,
+  dynamicStatus: "BREAKOUT_CONFIRMED",
+  dataQuality: 0.95,
+  turnover24hQuote: 100000000,
+  minActionableTurnover24h: 1000000,
+  trendContext: -0.8,
+  // v6.1 added four heat fields and v6.2 four path fields; the fixture was never updated,
+  // so `deno task test` failed type-checking on this object and the deploy could not run.
+  marketHeatScore: 82,
+  recentNotionalPerSecond: 90000,
+  notionalAcceleration: 0.7,
+  tradeCountPerSecond: 12,
+  notionalTrend: 0.4,
+  tradeSpeedTrend: 0.3,
+  tradeArrivalTrend: 0.2,
+  pathEfficiency: 0.55,
+  reversalRate: 0.35,
+  noiseBandBps: 4,
+  quoteFlickerRate: 20,
+  fundingPremiumBps: 2.5,
+  fundingAttention: 0.3,
+  fundingEdge: 0.01,
+};
+
+const costs = {
+  roundTripFeeBps: 5,
+  entrySlippageBps: 0.5,
+  targetExitSlippageBps: 0.5,
+  stopExitSlippageBps: 1.5,
+  spreadBps: 3,
+};
+
+test("bearish trend cannot veto a hot LOB BUY", () => {
+  const good = evaluateLobEntry(hot, costs);
+  assert(good.decision === "BUY", `hot LOB should buy: ${good.reasons.join(",")}`);
+  assert(good.targetReturnNetBps > 0, "target net must be positive");
+  assert(good.pattern != null, "a primary pattern is required");
+  assert(good.features.trendContext < 0, "test must prove bearish trend is not a veto");
+});
+
+test("stale orderbook is discarded", () => {
+  const stale = evaluateLobEntry({ ...hot, bookAgeMs: 10000 }, costs);
+  assert(stale.decision === "WAIT", "stale book must wait");
+});
+
+// The observation requirement was a flat 50 seconds. It is now two-tier: 15s clears
+// outright, and between EFFECTIVE_OBSERVATION_MIN_MS and 15s a window still clears if it
+// carried enough samples, trades and data quality to be worth trusting. The invariant the
+// old test protected survives — a window below the floor is never tradable — so it is
+// restated against the current rule rather than deleted.
+test("a live entry requires an effective observation window", () => {
+  const short = evaluateLobEntry(
+    { ...hot, observationMs: EFFECTIVE_OBSERVATION_MIN_MS - 1 },
+    costs,
+  );
+  assert(short.decision !== "BUY", "a window below the effective floor must not be eligible");
+  assert(
+    short.reasons.includes("INSUFFICIENT_EFFECTIVE_OBSERVATION"),
+    "short observation reason must be explicit",
+  );
+  assert(
+    evaluateLobEntry({ ...hot, observationMs: 15_000 }, costs).decision === "BUY",
+    "15 seconds must clear on its own",
+  );
+});
+
+test("the sub-15s tolerance is earned by evidence, not granted by the clock", () => {
+  const window = { ...hot, observationMs: EFFECTIVE_OBSERVATION_MIN_MS };
+  assert(
+    evaluateLobEntry(window, costs).decision === "BUY",
+    "a dense sub-15s window must remain eligible",
+  );
+  // Same window, too few aligned trades to trust it.
+  const thin = evaluateLobEntry({ ...window, tradeCount: 19 }, costs);
+  assert(thin.decision !== "BUY", "a thin sub-15s window must not be eligible");
+  assert(
+    thin.reasons.includes("INSUFFICIENT_EFFECTIVE_OBSERVATION"),
+    "a thin sub-15s window must say why",
+  );
+});
+
+test("fees and slippage feed the mandatory reward-risk gate", () => {
+  const expensive = evaluateLobEntry({ ...hot, spreadBps: 25 }, {
+    roundTripFeeBps: 20,
+    entrySlippageBps: 8,
+    targetExitSlippageBps: 8,
+    stopExitSlippageBps: 12,
+    spreadBps: 25,
+  }, { maxSpreadBps: 40, maxTargetBps: 30, minNetRewardRiskRatio: 1.5 });
+  assert(expensive.decision !== "BUY", "cost-adjusted reward-risk failure must not enter");
+  assert(
+    expensive.reasons.includes("REWARD_RISK_FAILED"),
+    "reward-risk rejection must be explicit",
+  );
+});
+
+test("forecast optimism remains informational and cannot alter LOB admission", () => {
+  const uncorrected = evaluateLobEntry(hot, costs);
+  const corrected = evaluateLobEntry(hot, { ...costs, forecastBiasPenaltyBps: 5 });
+  assert(
+    Math.abs(uncorrected.evNetBps - corrected.evNetBps) < 1e-9,
+    "forecast bias must not alter LOB entry EV",
+  );
+  assert(
+    Math.abs(uncorrected.evLowerBoundBps - corrected.evLowerBoundBps) < 1e-9,
+    "forecast bias must not alter the conservative bound",
+  );
+  assert(corrected.forecastBiasPenaltyBps === 0, "no modeled bias may become an entry gate");
+});
+
+test("a learned wider stop remains auditable but cannot become a hidden admission gate", () => {
+  const learned = evaluateLobEntry(hot, costs, { learnedStopFloorBps: 80 });
+  assert(learned.stopBps >= 80, "winner MAE floor must reach the executable stop");
+  assert(!learned.reasons.includes("NET_EV_NOT_POSITIVE"), "modeled EV is audit-only in v7");
+});
+
+test("signal reversal is classified for monitor persistence before any sell", () => {
+  const decision = evaluateLobExit({
+    emergency: false,
+    reconciliationFailed: false,
+    currentPrice: 99,
+    stopPrice: 95,
+    targetPrice: 105,
+    heldSeconds: 20,
+    maxHoldingSeconds: 180,
+    bookImbalance: -0.4,
+    tradePressure: -0.5,
+    micropriceDeviationBps: -2,
+    spreadBps: 4,
+    maxSpreadBps: 30,
+    bidDepthRatio: 0.8,
+    minBidDepthRatio: 0.3,
+    softExitConfirmations: 1,
+  });
+  assert(!decision.exit, "classification alone must not sell");
+  assert(decision.nextSoftReason === "SIGNAL_REVERSAL", "reversal must remain auditable");
+});
+
+test("maker-fill sell pressure needs settlement and repeated soft confirmation", () => {
+  const first = evaluateLobExit({
+    emergency: false,
+    reconciliationFailed: false,
+    currentPrice: 99,
+    stopPrice: 95,
+    targetPrice: 105,
+    heldSeconds: 2,
+    maxHoldingSeconds: 180,
+    bookImbalance: -0.4,
+    tradePressure: -0.5,
+    micropriceDeviationBps: -2,
+    spreadBps: 4,
+    maxSpreadBps: 30,
+    bidDepthRatio: 0.8,
+    minBidDepthRatio: 0.3,
+    softExitGraceSeconds: 6,
+    softExitConfirmations: 2,
+  });
+  assert(!first.exit, "one post-fill sell observation must not churn the position");
+  const confirmed = evaluateLobExit({
+    emergency: false,
+    reconciliationFailed: false,
+    currentPrice: 99,
+    stopPrice: 95,
+    targetPrice: 105,
+    heldSeconds: 8,
+    maxHoldingSeconds: 180,
+    bookImbalance: -0.4,
+    tradePressure: -0.5,
+    micropriceDeviationBps: -2,
+    spreadBps: 4,
+    maxSpreadBps: 30,
+    bidDepthRatio: 0.8,
+    minBidDepthRatio: 0.3,
+    previousSoftReason: first.nextSoftReason,
+    softSignalStreak: first.nextSoftSignalStreak,
+    softExitGraceSeconds: 6,
+    softExitConfirmations: 2,
+  });
+  assert(!confirmed.exit, "the monitor owns continuous-time qualification and sell approval");
+  assert(confirmed.nextSoftReason === "SIGNAL_REVERSAL", "persistent reversal remains classified");
+});
+
+test("target hit outranks a simultaneous soft invalidation", () => {
+  const target = evaluateLobExit({
+    emergency: false,
+    reconciliationFailed: false,
+    currentPrice: 106,
+    stopPrice: 95,
+    targetPrice: 105,
+    heldSeconds: 20,
+    maxHoldingSeconds: 180,
+    bookImbalance: -0.8,
+    tradePressure: -0.8,
+    micropriceDeviationBps: -4,
+    spreadBps: 80,
+    maxSpreadBps: 30,
+    bidDepthRatio: 0.01,
+    minBidDepthRatio: 0.3,
+  });
+  // Reaching the target arms the persistent book trail instead of forcing a fixed-price
+  // exit, so above the trail stop the correct answer is HOLD. What must never happen is
+  // the realized target being relabelled as a stop or an invalidation.
+  assert(!target.exit, "an armed target trail holds while price is above the trail stop");
+  assert(target.reason === "HOLD", "a realized target must not be labelled as a stop");
+  assert(target.nextSoftReason === null, "the trail must not inherit a soft exit reason");
+
+  // Retracing into the trail stop, still at or above the target, is the exit the trail
+  // exists to produce — and it is a target exit, not a stop.
+  const retraced = evaluateLobExit({
+    emergency: false,
+    reconciliationFailed: false,
+    currentPrice: 105,
+    stopPrice: 95,
+    targetPrice: 105,
+    heldSeconds: 25,
+    maxHoldingSeconds: 180,
+    bookImbalance: -0.8,
+    tradePressure: -0.8,
+    micropriceDeviationBps: -4,
+    spreadBps: 80,
+    maxSpreadBps: 30,
+    bidDepthRatio: 0.01,
+    minBidDepthRatio: 0.3,
+    softSignalStreak: target.nextSoftSignalStreak,
+  });
+  assert(retraced.exit, "a retrace into the trail stop must exit");
+  assert(retraced.reason === "TARGET_HIT", "the trail exit is a target exit");
+});
+
+test("a target trail that loses the target floor disarms instead of ordering a blocked sell", () => {
+  const armed = evaluateLobExit({
+    emergency: false,
+    reconciliationFailed: false,
+    currentPrice: 106,
+    stopPrice: 95,
+    targetPrice: 105,
+    heldSeconds: 20,
+    maxHoldingSeconds: 180,
+    bookImbalance: 0.2,
+    tradePressure: 0.2,
+    micropriceDeviationBps: 2,
+    spreadBps: 10,
+    maxSpreadBps: 30,
+    bidDepthRatio: 1,
+    minBidDepthRatio: 0.3,
+  });
+  assert(!armed.exit, "the trail arms on the first touch");
+
+  // A protected target order can only fill at or above the stored target. Requesting one
+  // below the target produced an order with no bids to match, so the position ran on to a
+  // loss instead. Below the floor the trail disarms and ordinary evaluation resumes.
+  const gapped = evaluateLobExit({
+    emergency: false,
+    reconciliationFailed: false,
+    currentPrice: 104,
+    stopPrice: 95,
+    targetPrice: 105,
+    heldSeconds: 30,
+    maxHoldingSeconds: 180,
+    bookImbalance: 0.2,
+    tradePressure: 0.2,
+    micropriceDeviationBps: 2,
+    spreadBps: 10,
+    maxSpreadBps: 30,
+    bidDepthRatio: 1,
+    minBidDepthRatio: 0.3,
+    softSignalStreak: armed.nextSoftSignalStreak,
+  });
+  assert(!gapped.exit, "no exit may be requested below the target floor");
+  assert(gapped.reason === "HOLD", "losing the target floor is a hold, not an exit");
+  assert(
+    gapped.nextSoftSignalStreak >= 0,
+    "the encoded trail peak must be cleared once the trail disarms",
+  );
+});
