@@ -16,25 +16,42 @@ const NOW = 1_800_000_000_000 - (1_800_000_000_000 % MIN);
 const bar = (t: number, o: number, h: number, l: number, c: number, qv: number, tbq: number) =>
   ({ t, o, h, l, c, qv, tbq, closeMs: t + MIN - 1 });
 
+/**
+ * The adapter resamples 1m into 3m and 5m, and the 5m EMA21 stack needs ~125 closed 1m
+ * bars before TREND can even be evaluated. A short fixture refuses with
+ * INSUFFICIENT_RESAMPLED_HISTORY and never reaches the gate under test, so this builds a
+ * genuinely rising 160-bar series: a long steady advance (so EMA9 > EMA21 and EMA21 is
+ * rising), then a heavier leg, a light 3-bar consolidation, and a breakout bar.
+ */
 function goodBars(endT: number) {
   const out = [];
-  const BASE = 30;                      // adapter requires >= 30 closed 1m bars
-  const total = BASE + 14;
+  const RISE = 146, LEG = 10, CONSOL = 3, total = RISE + LEG + CONSOL + 1;
   const start = endT - total * MIN;
-  let p = 99, i = 0;
-  for (; i < BASE; i++) out.push(bar(start + i * MIN, p, p + 0.2, p - 0.2, p, 800, 400));
-  p = 100;
-  for (; i < BASE + 10; i++) {
+  let p = 90, i = 0;
+  for (; i < RISE; i++) {
+    out.push(bar(start + i * MIN, p, p + 0.15, p - 0.05, p + 0.1, 800, 440));
+    p += 0.1;
+  }
+  for (; i < RISE + LEG; i++) {
     out.push(bar(start + i * MIN, p, p + 1, p - 0.2, p + 0.9, 5000, 3200));
     p += 0.9;
   }
   const top = p;
   for (; i < total - 1; i++)
     out.push(bar(start + i * MIN, top, top + 0.1, top - 0.6, top - 0.4, 800, 400));
-  out.push(bar(start + (total - 1) * MIN, top - 0.4, top + 2.0, top - 0.5, top + 1.8, 20000, 15000));
+  // The breakout clears the trigger (max high of the prior 3 bars, top + 0.1) but only
+  // just: chaseGate caps entry at 0.25 * ATR14_3m above the trigger, so a large breakout
+  // bar is correctly refused as CHASE_TOO_FAR and never reaches the gates under test.
+  out.push(bar(start + (total - 1) * MIN, top - 0.4, top + 0.4, top - 0.5, top + 0.3, 20000, 15000));
   return out;
 }
-const klinesOk = async (_sym: string) => goodBars(NOW);
+/** BTC is held flat so relative strength is positive and never the reason for a refusal. */
+function flatBars(endT: number, count: number) {
+  const start = endT - count * MIN;
+  return Array.from({ length: count }, (_, i) => bar(start + i * MIN, 100, 100.05, 99.95, 100, 1000, 500));
+}
+const klinesOk = async (sym: string, _iv: string, limit: number) =>
+  sym === "BTCUSDT" ? flatBars(NOW, Math.min(limit, 40)) : goodBars(NOW);
 
 const book = {
   best_bid: 108.9, best_ask: 109.0,
