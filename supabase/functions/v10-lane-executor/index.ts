@@ -11,6 +11,7 @@ import {analyzeDbOnlyExit} from "../_shared/leader-db-only-reconciliation.mjs";
 import {ENTRY_CONTROL_VERSION,CONTROL_SCOPE,evaluateEntryDecision,symbolRecoveryEvidence} from "../_shared/leader-entry-control.mjs";
 import {QV3_ACTIVATION_BASIS,QV3_LIVE_CUTOVER,QV3_VERSION,qv3Entry,qv3Exit,qv3Scope,qv3Stamp,qv3Candles,qv3AuditEvidence} from "../_shared/leader-qv3-runtime.mjs";
 import {E1_POLICY,advanceE1,e1QuoteEvidence,fetchE1AggTrades,startE1} from "../_shared/leader-e1-runtime.mjs";
+import {V24_ADAPTER_VERSION,v24EntryGate} from "./v24-entry-adapter.mjs";
 const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V23-E1-X1-OPERATOR-OVERRIDE-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Object.freeze({
   id:"2026-09-13-USER-PRIORITY-OVERRIDE",basis:"OPERATOR_OVERRIDE_UNVALIDATED",
@@ -54,6 +55,32 @@ async function circuit(db,reason,kind="UNKNOWN_ORDER_OUTCOME",evidence={}){
   return incident(db,{reason,kind,controlScope:hold?CONTROL_SCOPE.ACCOUNT_ENTRY_HOLD:CONTROL_SCOPE.ACCOUNT_RISK_BLOCK,
     state:{exposureState:"UNKNOWN",accountingState:"ATTRIBUTION_INVESTIGATING",orderSource:evidence?.orderId?"BOT":"UNKNOWN",
       recheck:["QUERY_SAME_ORDER_IDENTITY","FRESH_COMPLETE_ACCOUNT_SNAPSHOT","FRESH_COMPLETE_OPEN_ORDERS"]},evidence});
+}
+// V24 entry gate. Reads its own operator control row every cycle so enabling/disabling and
+// the edge assumption are auditable DB state, not a code constant or a hidden env var.
+// Defaults are OFF with no edge, and a read failure disables the gate rather than leaving
+// it enabled on stale state.
+async function v24Control(db){
+  const r=await db.from("v24_operator_control").select("*").eq("singleton",true).maybeSingle();
+  if(r.error||!r.data)return{enabled:false,edge:null,reason:"V24_CONTROL_UNREADABLE"};
+  const bps=Number(r.data.assumed_edge_bps),samples=Number(r.data.edge_samples);
+  const edge=Number.isFinite(bps)&&Number.isFinite(samples)&&samples>0
+    ?{expectedEdgeBps:bps,samples,basis:"OPERATOR_ASSUMED_UNVALIDATED",
+      setReason:r.data.set_reason??null,setBy:r.data.set_by??null}:null;
+  return{enabled:r.data.entry_enabled===true,edge,reason:null};
+}
+// Never lets a logging failure block or allow a trade.
+async function recordV24(db,signalId,symbol,d){
+  try{
+    await db.from("v24_entry_decisions").insert({signal_id:signalId,symbol,
+      decision:d.decision,reason:d.reason,reason_codes:d.reasonCodes??[],setup_type:d.setupType??null,
+      trigger_level:d.triggerLevel??null,setup_low:d.setupLow??null,initial_stop:d.initialStop??null,
+      cost_bps:d.costBps??null,net_edge_bps:d.netEdgeBps??null,
+      buy_share_60s:d.buyShare60s??null,buy_share_180s:d.buyShare180s??null,
+      imbalance_25:d.imbalance25??null,spread_bps:d.spreadBps??null,
+      edge_basis:d.edgeBasis??null,adapter_version:V24_ADAPTER_VERSION,
+      policy_version:d.version??"V24_UNKNOWN",evidence:d});
+  }catch{/* decision logging is best-effort; it must not affect the trade path */}
 }
 async function audit(db,p,b,a,action,reason,details={}){await db.from("v11_long_regime_decisions").insert({revision:REVISION,position_id:p?.id||null,observed_regime:details.marketRoute||null,active_lane_before:b||null,active_lane_after:a||null,action,reason,details:{...details,executorPatch:PATCH}})}
 async function manualPositionAllowances(db){
@@ -252,6 +279,22 @@ if(qv3Active){
   }
   await requireLeaderEntryControls(db);
   const freshness=entryFresh(f,Date.now(),limitPrice);if(freshness)throw Error(freshness);
+}
+// V24 confirmation. Placed before E1 so a V24 refusal costs no extra gateway work, and
+// scoped to entry only: it can refuse a V17 signal, never open one of its own, and it
+// touches no protection, exit or reconciliation path. Disabled by default.
+const v24Ctl=await v24Control(db);
+if(v24Ctl.enabled){
+  const v24=await v24EntryGate({symbol:s.symbol,features:{...f,volumeRatio:N(f.volumeRatio),
+      notionalUsdt:sized.sizedNotional,probeQuantity:sized.amount},
+    quote:q,quantityStep:step,priceTick:N(i?.price_tick??i?.tick_size),now:Date.now(),
+    fetchAgg:(sym,a,b)=>fetchE1AggTrades(sym,a,b),edge:v24Ctl.edge});
+  attempt.v24=v24;
+  await recordV24(db,s.id,s.symbol,v24);
+  await audit(db,null,"BULL","BULL",v24.allowed?"ENTRY_ALLOW":"ENTRY_DEFER",
+    `V24:${v24.reason}`,{signalId:s.id,symbol:s.symbol,v24});
+  if(!v24.allowed)return{entered:false,reason:v24.reason,releaseClaim:true,v24};
+  const v24Fresh=entryFresh(f,Date.now(),limitPrice);if(v24Fresh)throw Error(v24Fresh);
 }
 let e1Decision={policyVersion:E1_POLICY.policyVersion,confirmationState:"DISABLED",allowed:true,
   defer:false,reject:false,reasonCodes:["E1_OPERATOR_FLAG_DISABLED"],executionEnabled:false,
