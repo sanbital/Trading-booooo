@@ -106,11 +106,11 @@ function tapeProxy(bars: any[], k: number) {
 /* ----------------------------------------------------------------- replay -- */
 
 async function replaySymbol(db: any, symbol: string, cfg: any) {
-  const { data: k1raw } = await db.schema("v24").from("k1").select("t,o,h,l,c,quote_vol,taker_buy_quote,close_ms")
+  const { data: k1raw } = await db.from("v24_k1").select("t,o,h,l,c,quote_vol,taker_buy_quote,close_ms")
     .eq("symbol", symbol).order("t").limit(60000);
-  const { data: k15raw } = await db.schema("v24").from("k15").select("t,o,h,l,c,quote_vol,close_ms")
+  const { data: k15raw } = await db.from("v24_k15").select("t,o,h,l,c,quote_vol,close_ms")
     .eq("symbol", symbol).order("t").limit(6000);
-  const { data: ranks } = await db.schema("v24").from("rank_panel")
+  const { data: ranks } = await db.from("v24_rank_panel")
     .select("t,rank,day_return,qv24,rvol15,available_at").eq("symbol", symbol).lte("rank", 40).order("t");
   if (!k1raw?.length || !k15raw?.length || !ranks?.length) return { symbol, trades: [], skipped: "NO_DATA" };
 
@@ -353,8 +353,8 @@ Deno.serve(async (req) => {
   const symbols: string[] = Array.isArray(body.symbols) ? body.symbols : [];
   if (!symbols.length) return res(400, { ok: false, error: "NO_SYMBOLS" });
 
-  const { data: cfgRow } = await db.schema("v24").from("config").select("v").eq("k", "window").single();
-  const { data: btcRaw } = await db.schema("v24").from("k1").select("t,o,h,l,c,quote_vol,taker_buy_quote,close_ms")
+  const { data: cfgRow } = await db.from("v24_config").select("v").eq("k", "window").single();
+  const { data: btcRaw } = await db.from("v24_k1").select("t,o,h,l,c,quote_vol,taker_buy_quote,close_ms")
     .eq("symbol", "BTCUSDT").order("t").limit(60000);
   const btc1 = (btcRaw || []).map((r: any) => ({ t: N(r.t), o: N(r.o), h: N(r.h), l: N(r.l),
     c: N(r.c), qv: N(r.quote_vol), tbq: N(r.taker_buy_quote), closeMs: N(r.close_ms) }));
@@ -372,7 +372,7 @@ Deno.serve(async (req) => {
     const r = await replaySymbol(db, s, cfg);
     if (r.trades?.length) {
       for (let k = 0; k < r.trades.length; k += 500) {
-        const { error } = await db.schema("v24").from("trades").insert(r.trades.slice(k, k + 500));
+        const { error } = await db.from("v24_trades").insert(r.trades.slice(k, k + 500));
         if (error) return res(500, { ok: false, error: `INSERT:${error.message}`, symbol: s });
       }
       written += r.trades.length;
