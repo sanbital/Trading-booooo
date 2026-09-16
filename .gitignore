@@ -2,3 +2,7 @@
 # Staged into the image by gateway/stage-engine.mjs; never commit a second copy.
 gateway/leader-exit-r3.mjs
 gateway/leader-exit-r4.mjs
+
+# Generated deploy bundle; rebuild with scripts/boo/bundle-shadow.mjs.
+# Kept out of git so the repository sources stay the single source of truth.
+dist/

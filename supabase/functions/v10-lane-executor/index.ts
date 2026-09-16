@@ -12,6 +12,10 @@ import {ENTRY_CONTROL_VERSION,CONTROL_SCOPE,evaluateEntryDecision,symbolRecovery
 import {QV3_ACTIVATION_BASIS,QV3_LIVE_CUTOVER,QV3_VERSION,qv3Entry,qv3Exit,qv3Scope,qv3Stamp,qv3Candles,qv3AuditEvidence} from "../_shared/leader-qv3-runtime.mjs";
 import {E1_POLICY,advanceE1,e1QuoteEvidence,fetchE1AggTrades,startE1} from "../_shared/leader-e1-runtime.mjs";
 import {V24_ADAPTER_VERSION,v24EntryGate} from "./v24-entry-adapter.mjs";
+import {BOO_ADAPTER_VERSION,ENFORCEMENT as BOO_ENFORCEMENT,evaluateBooEntry,finalizeBooEntry,loadBooGateContext,openRiskSummary,recordBooVerdict} from "./boo-entry-adapter.mjs";
+import {R1_VERSION} from "../_shared/boo/r1-strategy.mjs";
+import {RISK_POLICY_VERSION} from "../_shared/boo/risk-policy.mjs";
+import {RISK_BUDGET_VERSION} from "../_shared/boo/risk-budget.mjs";
 const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V23-E1-X1-OPERATOR-OVERRIDE-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Object.freeze({
   id:"2026-09-13-USER-PRIORITY-OVERRIDE",basis:"OPERATOR_OVERRIDE_UNVALIDATED",
@@ -111,6 +115,36 @@ function portfolioMatches(openPositions,pf,manual=[]){
 }
 function sizeEntry(ask,step){if(!(ask>0&&step>0))throw new Error("QTY_INPUT_INVALID");let amount=ceilStep(NOTIONAL/ask,step);if(!(amount>0))throw new Error("QTY_INVALID");let sizedNotional=amount*ask;if(sizedNotional<NOTIONAL+NOTIONAL_BUFFER_USDT){const bumped=addStep(amount,step),bm=bumped*ask/LEV;if(bm<=MARGIN+MAX_MARGIN_BUFFER_USDT){amount=bumped;sizedNotional=amount*ask}}const sizedMargin=sizedNotional/LEV;if(sizedNotional+1e-9<NOTIONAL)throw new Error(`ENTRY_NOTIONAL_UNDERSIZED:${sizedNotional}`);if(sizedMargin>MARGIN+MAX_MARGIN_BUFFER_USDT+1e-9)throw new Error(`ENTRY_SLOT_GRANULARITY_MARGIN:${sizedMargin.toFixed(6)}`);return{amount,sizedNotional,sizedMargin}}
 async function hashJson(value){const bytes=new TextEncoder().encode(JSON.stringify(value)),hash=new Uint8Array(await crypto.subtle.digest("SHA-256",bytes));return[...hash].map(x=>x.toString(16).padStart(2,"0")).join("")}
+// --- BOO common entry gate (brief section 4) --------------------------------
+// The identity the validation approval must match. BOO_POLICY_CODE_SHA256 is
+// injected by the release workflow from the actual deployed file set; when it
+// is absent the identity is incomplete and the gate refuses, which is the
+// intended fail-closed behaviour rather than a soft default.
+const BOO_POLICY_CODE_HASH=Deno.env.get("BOO_POLICY_CODE_SHA256")||"",
+  BOO_COST_MODEL_VERSION=Deno.env.get("BOO_COST_MODEL_VERSION")||"",
+  BOO_EXECUTION_MODEL_VERSION=Deno.env.get("BOO_EXECUTION_MODEL_VERSION")||"",
+  BOO_DATASET_HASH=Deno.env.get("BOO_DATASET_SHA256")||"";
+function booRunningIdentity(parameterHash){
+  return{policyCodeHash:BOO_POLICY_CODE_HASH,parameterHash,datasetHash:BOO_DATASET_HASH,
+    costModelVersion:BOO_COST_MODEL_VERSION,executionModelVersion:BOO_EXECUTION_MODEL_VERSION};
+}
+// Depth is mandatory for sizing: without a real book we cannot compute the VWAP
+// the loss budget depends on, so an absent book is reported as unhealthy data
+// rather than filled in from the top of book.
+function booBook(q,maxAgeMs){
+  const raw=rec(q?.raw),asks=Array.isArray(raw.asks)?raw.asks:null,bids=Array.isArray(raw.bids)?raw.bids:null,
+    receivedAt=N(q?.timing?.received_at_ms,NaN),age=Number.isFinite(receivedAt)?Date.now()-receivedAt:NaN,
+    reasons=[];
+  if(!asks||!asks.length)reasons.push("NO_ASK_DEPTH");
+  if(!bids||!bids.length)reasons.push("NO_BID_DEPTH");
+  if(!Number.isFinite(age))reasons.push("QUOTE_TIME_UNKNOWN");
+  const bid=N(q?.best_bid),ask=N(q?.best_ask);
+  if(!(bid>0&&ask>0))reasons.push("QUOTE_INVALID");
+  else if(bid>=ask)reasons.push("CROSSED_BOOK");
+  return{asks:asks??[],bids:bids??[],
+    health:{bookHealthy:reasons.length===0,bookAgeMs:age,maxBookAgeMs:maxAgeMs,
+      barsFinal:true,resyncComplete:reasons.length===0,reasons}};
+}
 function e1CurrentAssessment(s,q,step,at){
   const bid=N(q?.best_bid),ask=N(q?.best_ask),spreadBps=bid>0&&ask>=bid?(ask/bid-1)*10000:Infinity;
   let sized=null,limitPrice=null,guardPassed=false,liquidityPassed=false,evidence=e1QuoteEvidence(q,0,at);
@@ -248,6 +282,69 @@ if(rec(p.metadata).executionMode===STRATEGY)return await manageLeader(db,p,ctx);
 const q=await gateway({action:"quote",market:p.symbol}),bid=N(q?.best_bid);if(!(bid>0))throw new Error("QUOTE_INVALID");const now=new Date().toISOString(),entry=N(p.entry_price),peak=Math.max(N(p.peak_price,entry),bid),peakWrite=await db.from("v11_long_regime_positions").update({peak_price:peak,last_evaluated_at:now,updated_at:now}).eq("id",p.id).select("*").single();if(peakWrite.error)throw new Error(`BULL_PEAK_WRITE:${peakWrite.error.message}`);p=peakWrite.data;const stop=N(p.hard_stop_price),deadline=Date.parse(p.hard_deadline);if(Number.isFinite(deadline)&&Date.now()>=deadline){await audit(db,p,"BULL","BULL","FULL_CLOSE","BULL_30D_SAFETY_DEADLINE",{marketRoute:m.route,bid,peak});return{action:"CLOSE",reason:"BULL_30D_SAFETY_DEADLINE",result:await closePos(db,p,1,"BULL_30D_SAFETY_DEADLINE")}}if(bid<=stop){await audit(db,p,"BULL","BULL","FULL_CLOSE","BULL_HARD_STOP",{marketRoute:m.route,bid,stop,peak});return{action:"CLOSE",reason:"BULL_HARD_STOP",result:await closePos(db,p,1,"BULL_HARD_STOP")}}if(m.route==="RANGE"||m.route==="BEAR"){const r=`REGIME_BULL_TO_${m.route}_REALIZE`;await audit(db,p,"BULL",m.route,"FULL_CLOSE",r,{marketRoute:m.route,bid,peak});return{action:"CLOSE",reason:r,result:await closePos(db,p,1,r)}}const t1=entry*(1+T1_PRICE);if(!p.t1_completed&&bid>=t1){await audit(db,p,"BULL","BULL","PARTIAL_CLOSE","BULL_T1",{marketRoute:m.route,bid,t1,peak});const frac=Math.min(1,N(p.original_quantity)*PARTIAL/Math.max(1e-12,N(p.remaining_quantity))),r=await closePos(db,p,frac,"BULL_T1");if(r?.position&&!r.closed){const ns=Math.max(N(r.position.hard_stop_price),entry),up=await db.from("v11_long_regime_positions").update({hard_stop_price:ns,peak_price:peak,last_evaluated_at:now,updated_at:now}).eq("id",p.id);if(up.error)throw new Error(`T1_PROTECT:${up.error.message}`)}return{action:"PARTIAL",reason:"BULL_T1",result:r}}let newStop=stop;if(p.t1_completed)newStop=Math.max(stop,entry,peak*(1-TRAIL));if(newStop>stop){const up=await db.from("v11_long_regime_positions").update({hard_stop_price:newStop,peak_price:peak,last_evaluated_at:now,updated_at:now}).eq("id",p.id);if(up.error)throw new Error(`BULL_TRAIL_WRITE:${up.error.message}`)}if(p.t1_completed&&bid<=newStop){await audit(db,p,"BULL","BULL","FULL_CLOSE","BULL_TRAIL_PROTECTION",{marketRoute:m.route,bid,newStop,peak});return{action:"CLOSE",reason:"BULL_TRAIL_PROTECTION",result:await closePos(db,{...p,hard_stop_price:newStop,peak_price:peak},1,"BULL_TRAIL_PROTECTION")}}await audit(db,p,"BULL","BULL","HOLD","BULL_TREND_HOLD",{marketRoute:m.route,bid,t1,t1Completed:p.t1_completed,peak,newStop,deadline:p.hard_deadline});return{action:"HOLD",lane:"BULL",bid,t1,peak,newStop,deadline:p.hard_deadline}}
 // `attempt` is an out-param: openBull sets dispatched=true at the instant an order
 // leaves this process. run() uses it to decide whether a failure is safe to move past.
+/**
+ * Assemble the executor's live state into the pure BOO entry gate.
+ *
+ * Every input that cannot be established is left ABSENT rather than defaulted,
+ * because the gate treats absent as a refusal. In particular:
+ *   - the account's own commission rate is read from the gateway, never
+ *     substituted with a documentation constant (section 7);
+ *   - the structural stop comes from the signal's exit policy, so the loss
+ *     budget is computed against the stop that will actually be installed;
+ *   - depth must be present, or `booBook` reports the data unhealthy.
+ */
+async function booGate(db,s,phase,{quote,info,snapshot,pair,orders}){
+  const parameterHash=await hashJson({strategy:STRATEGY,r1:R1_VERSION,riskPolicy:RISK_POLICY_VERSION,
+    riskBudget:RISK_BUDGET_VERSION,exitPolicy:rec(s.features?.exitPolicy)});
+  const identity=booRunningIdentity(parameterHash);
+  const [gateContext,controls,feeRates]=await Promise.all([
+    loadBooGateContext(db,identity),
+    opsControls(db),
+    opsGateway(db)({action:"fees",market:s.symbol}).catch(()=>null)]);
+  const book=booBook(quote,E1_POLICY.maxQuoteAgeMs);
+  const f=rec(s.features),ref=N(f.referenceClose),stopPct=N(rec(f.exitPolicy).stopPct);
+  const {openRisk,grossNotional}=openRiskSummary({positions:pair.positions,
+    pendingOrders:(orders?.orders??[]).filter(o=>o?.request_payload?.booRiskReservation)});
+  // Taker rate from the account, as a fraction. A missing rate leaves the field
+  // undefined so the sizing refuses rather than guessing.
+  const taker=feeRates==null?undefined:N(feeRates.taker??feeRates.takerCommissionRate,NaN);
+  return evaluateBooEntry({
+    phase,gateContext,runningIdentity:identity,
+    settings:controls.settings,runtime:controls.runtime,operatorControl:controls.control,
+    signal:{
+      strategy:{eligible:String(f.strategy||"")===STRATEGY,setupId:s.id,
+        reason:String(f.strategy||"")===STRATEGY?null:`WRONG_STRATEGY:${f.strategy}`},
+      // The structural stop the position would actually carry.
+      structuralStop:ref>0&&stopPct>0?String(ref*(1-stopPct)):"0",
+      filters:{stepSize:String(N(info?.quantity_step??info?.step_size)),
+        minQty:String(N(info?.min_quantity??info?.quantity_step??info?.step_size)),
+        maxQty:String(N(info?.max_quantity,0))||undefined,
+        minNotional:String(Math.max(1,N(info?.min_notional,5))),
+        tickSize:String(N(info?.price_tick??info?.tick_size))}},
+    book,
+    account:{
+      equity:String(N(snapshot?.total_equity_quote,N(pair.pf?.total_equity_quote,0))),
+      availableMargin:String(Math.min(N(snapshot?.available_quote),N(pair.pf?.available_quote,NaN))||0),
+      realizedToday:String(N(controls.runtime?.boo_realized_today,0)),
+      realizedThisWeek:String(N(controls.runtime?.boo_realized_this_week,0)),
+      highWaterEquity:controls.runtime?.boo_high_water_equity??null,
+      consecutiveLosses:N(controls.runtime?.boo_consecutive_losses,0),
+      reservedRisk:openRisk.toString(),openGrossNotional:grossNotional.toString(),
+      leverage:String(LEV),
+      // One-way vs hedge mode and protective-order support are proven by the
+      // portfolio observation; anything short of an explicit yes blocks entry.
+      modeSupported:pair.pf?.position_mode==="ONE_WAY"||pair.pf?.dual_side_position===false,
+      protectionSupported:NATIVE_STOP_ENABLED===true},
+    fees:{takerFeeRate:taker,stopFeeRate:taker,
+      stopSlippageFrac:"0.001",expectedFundingCost:"0"},
+    lease:{held:true,fencingToken:String(N(controls.runtime?.incident_generation,0)),gatewayReady:true},
+    // Edge evidence must be measured. The V24 row carries an ASSUMED figure,
+    // which the gate refuses by design.
+    costEvidence:{netEdgeBps:N(controls.settings?.boo_measured_net_edge_bps,NaN),
+      requiredEdgeBps:N(controls.settings?.boo_required_edge_bps,NaN),
+      source:String(controls.settings?.boo_edge_source??"ASSUMED")},
+  });
+}
 async function openBull(db,s,openPositions,manual=null,attempt={},managementFailures=[]){
 const gateway=opsGateway(db);
 await requireLeaderEntryControls(db);
@@ -263,6 +360,14 @@ const initialDecision=await decideEntry(db,initialPair,s.symbol,initialOrders,{m
 await persistDecisionRisk(db,initialPair,initialDecision);
 if(!initialDecision.allowed){return{entered:false,
   reason:`ENTRY_CONTROL:${initialDecision.scope}:${initialDecision.reasons.join(",")}`,releaseClaim:true,entryDecision:initialDecision}}
+// BOO common entry gate, checkpoint 1 of 2 (admission). Section 4 requires a
+// single gate that every new entry passes, evaluated here and again immediately
+// before the send. It is additive: it can only refuse, never admit something
+// the existing operational gate already refused.
+const booAdmission=await booGate(db,s,"ADMISSION",{quote:q,info:i,snapshot:sn,pair:initialPair,orders:initialOrders});
+await recordBooVerdict(db,{signalId:s.id,symbol:s.symbol,phase:"ADMISSION",result:booAdmission});
+if(booAdmission.blocks)return{entered:false,reason:`BOO_ENTRY_GATE:${booAdmission.verdict.reason}`,
+  releaseClaim:true,booGate:booAdmission.verdict};
 if(manualRows.some(x=>x.symbol===String(s.symbol).toUpperCase()))throw new Error("MANUAL_SYMBOL_LOCKED");
 if(active(initialPair.pf).length>=MAX_SLOTS)return{entered:false,reason:"V11_SLOT_FULL"};
 if(initialPair.positions.some(p=>String(p.symbol).toUpperCase()===String(s.symbol).toUpperCase()))return{entered:false,reason:"DUPLICATE_SYMBOL_OPEN"};
@@ -394,6 +499,15 @@ await recordMismatch(db,finalCheck.match);await persistDecisionRisk(db,finalChec
 if(!finalDecision.allowed){return{entered:false,
   reason:`ENTRY_CONTROL:${finalDecision.scope}:${finalDecision.reasons.join(",")}`,releaseClaim:true,entryDecision:finalDecision,e1:e1Decision}}
 if(finalCheck.positions.some(p=>p.symbol===s.symbol)||active(finalCheck.pf).length>=MAX_SLOTS)return{entered:false,reason:"PORTFOLIO_CHANGED",releaseClaim:true};
+// BOO common entry gate, checkpoint 2 of 2 (immediately before dispatch).
+// Re-evaluated from scratch against the state that will actually be traded --
+// a cached admission verdict is explicitly not sufficient (section 4).
+const booPredispatch=await booGate(db,s,"PRE_DISPATCH",{quote:q,info:i,snapshot:sn,pair:finalCheck,orders:finalOrders});
+await recordBooVerdict(db,{signalId:s.id,symbol:s.symbol,phase:"PRE_DISPATCH",result:booPredispatch});
+const booFinal=finalizeBooEntry(booAdmission,booPredispatch);
+if(booFinal.blocks)return{entered:false,
+  reason:`BOO_ENTRY_GATE:${booFinal.driftDetected?"STATE_DRIFT:":""}${booFinal.reason}`,
+  releaseClaim:true,booGate:booPredispatch.verdict};
 if(E1_ENABLED){
   const checkedAt=Date.now(),receivedAt=N(q?.timing?.received_at_ms,NaN),quoteAge=checkedAt-receivedAt;
   if(!Number.isSafeInteger(receivedAt)||quoteAge<0||quoteAge>E1_POLICY.maxQuoteAgeMs)
