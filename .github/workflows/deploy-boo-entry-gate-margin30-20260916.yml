@@ -134,7 +134,14 @@ jobs:
             > release-evidence/functions-before.json
           python - <<'PY'
           import json,os
-          rows=json.load(open('release-evidence/functions-before.json'))
+          # The CLI prints an upgrade notice ("A new version of Supabase CLI is
+          # available...") on STDOUT, which the redirect captures ahead of the
+          # JSON. Start at the first JSON token instead of trusting the stream to
+          # be clean; the raw file is kept as evidence either way.
+          raw=open('release-evidence/functions-before.json').read()
+          starts=[p for p in (raw.find('['), raw.find('{')) if p>=0]
+          assert starts, f'no JSON in functions list output: {raw[:200]!r}'
+          rows=json.loads(raw[min(starts):])
           rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
           row=next(x for x in rows if x.get('slug')=='v10-lane-executor')
           assert row.get('status')=='ACTIVE' and row.get('verify_jwt') is False, row
@@ -192,7 +199,10 @@ jobs:
               > release-evidence/functions-after.json
             if python - <<'PY'
           import json,sys
-          rows=json.load(open('release-evidence/functions-after.json'))
+          raw=open('release-evidence/functions-after.json').read()
+          starts=[p for p in (raw.find('['), raw.find('{')) if p>=0]
+          if not starts: sys.exit(1)
+          rows=json.loads(raw[min(starts):])
           rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
           row=next(x for x in rows if x.get('slug')=='v10-lane-executor')
           before=int(open('release-evidence/version-before.txt').read().strip())
