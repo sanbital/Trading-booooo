@@ -27,7 +27,7 @@ const ENTRY_ATTEMPTS_PER_RUN=3;
 // STOP_INVALID, which are raised only AFTER a fill -- those are caught by the
 // dispatched guard regardless, which is the check that actually protects the account.
 const ENTRY_SKIP_SYMBOL_SCOPED=/^(SIGNAL_STALE_OR_FUTURE|ENTRY_DRIFT|WRONG_STRATEGY|INVALID_PRICE|V17_EXIT_POLICY_INVALID|MANUAL_SYMBOL_LOCKED|ENTRY_SPREAD|ENTRY_FEATURES_INVALID|QTY_INVALID|ENTRY_GRANULARITY_BPS|ENTRY_SLOT_GRANULARITY_MARGIN|ENTRY_NOTIONAL_UNDERSIZED|V17_LIMIT_PRICE_MARGIN_OVERFLOW)/;
-const MARGIN=40,LEV=3,NOTIONAL=MARGIN*LEV,MAX_SLOTS=10,NOTIONAL_BUFFER_USDT=.12,MAX_MARGIN_BUFFER_USDT=.25,ENTRY_CASH_BUFFER_USDT=.10,SNAP_MAX=90000,SIGNAL_MAX=300000,SPREAD_MAX=25,MAX_GAP_ATR=.5,IOC_BASE_BPS=3,IOC_MAX_BPS=12,BULL_MAX_MS=30*86400000,T1_PRICE=.075,PARTIAL=.30,TRAIL=.0225;
+const MARGIN=30,LEV=3,NOTIONAL=MARGIN*LEV,MAX_SLOTS=10,NOTIONAL_BUFFER_USDT=.12,MAX_MARGIN_BUFFER_USDT=.25,ENTRY_CASH_BUFFER_USDT=.10,SNAP_MAX=90000,SIGNAL_MAX=300000,SPREAD_MAX=25,MAX_GAP_ATR=.5,IOC_BASE_BPS=3,IOC_MAX_BPS=12,BULL_MAX_MS=30*86400000,T1_PRICE=.075,PARTIAL=.30,TRAIL=.0225;
 function res(s,b){return new Response(JSON.stringify(b),{status:s,headers:{"content-type":"application/json","cache-control":"no-store"}})}function N(v,d=0){const x=Number(v);return Number.isFinite(x)?x:d}function rec(v){return v&&typeof v==="object"&&!Array.isArray(v)?v:{}}function eq(a,b){if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0}function dec(s){return Math.min(12,Math.max(0,Math.ceil(-Math.log10(s))+2))}function floorStep(v,s){if(!(v>0&&s>0))return 0;return Number((Math.floor((v+s*1e-9)/s)*s).toFixed(dec(s)))}function ceilStep(v,s){if(!(v>0&&s>0))return 0;return Number((Math.ceil((v-s*1e-9)/s)*s).toFixed(dec(s)))}function addStep(v,s){return Number((v+s).toFixed(dec(s)))}function cid(p,x){return`tb-${p}-${String(x).toLowerCase().replace(/[^a-z0-9]/g,"").slice(0,24)}`.slice(0,36)}function terminal(z){return z.qty<=0&&["CANCELED","CANCELLED","REJECTED","EXPIRED","PARTIALLY_FILLED_CANCELED"].includes(z.status)}
 const env=n=>(Deno.env.get(n)||"").trim(),GW=env("BINANCE_FUTURES_ORDER_GATEWAY_URL").replace(/\/$/,"")||env("BINANCE_ORDER_GATEWAY_URL").replace(/\/$/,"")||env("ORDER_GATEWAY_URL").replace(/\/$/,""),SEC=env("BINANCE_FUTURES_GATEWAY_SHARED_SECRET")||env("BINANCE_GATEWAY_SHARED_SECRET")||env("GATEWAY_SHARED_SECRET");
 // This patch is the user's explicit operator override, so its two policies activate with
@@ -1163,6 +1163,10 @@ async function requireLeaderEntryControls(db){
   if(rt.data?.live_enabled!==true||rt.data?.circuit_open===true||rt.data?.revision!==REVISION)throw new Error("V17_RUNTIME_BLOCKED");
   const x=s.data;
   if(!x||x.mode!=="LIVE_LIMITED"||x.pause_new_entries||x.withdrawal_mode||x.manual_intervention_required||x.scalp_kill_switch||x.emergency_liquidation||x.pause_lock_reason)throw new Error("V17_ENTRY_KILL_SWITCH");
+  // MARGIN and binance_futures_allocation_usdt must move TOGETHER. Changing only
+  // one halts every entry with V17_MARGIN_CONFIG_MISMATCH -- which is the safe
+  // failure, but it is a full stop, not a resize. Operator-requested on
+  // 2026-09-16: 40 -> 30 USDT per slot.
   if(!Number.isFinite(Number(x.binance_futures_allocation_usdt))||Math.abs(Number(x.binance_futures_allocation_usdt)-MARGIN)>1e-9)throw new Error("V17_MARGIN_CONFIG_MISMATCH");
 }
 // One transport hiccup on the top-of-book read used to halt the whole strategy: any throw
