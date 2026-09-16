@@ -1,15 +1,21 @@
-# V24 entry-gate release.
+# v10-lane-executor release: account-observation ordering.
 #
-# Deploys v10-lane-executor carrying the V24 confirmation gate. The gate is entry-scoped
-# and reads public.v24_operator_control, which defaults to entry_enabled = false, so this
-# deploy is behaviourally INERT: the executor keeps running the existing V17 + E1 + X1 +
-# QV3 policy exactly as before. The workflow asserts that inertness rather than assuming
-# it, and refuses to deploy if the control row has been switched on beforehand.
+# classifyPortfolio accepts a p10_portfolio observation only while freshPortfolio still
+# considers it fresh (3s). readOpsPair fetched that observation FIRST and then made four
+# DB round trips before classifying it, and closePos made one. Production therefore failed
+# healthy cycles as INCOMPLETE_OR_STALE_SNAPSHOT: across 2026-09-13..15 all 21 such
+# incidents had exchange fetch latencies of 236-911ms but observation ages of 3514-5052ms
+# at classification. The budget was being spent on our own reads, not on the exchange.
+# Each one holds account entry, and on repeat escalates to MANUAL_REVIEW_REQUIRED.
 #
-# Exit, protection and reconciliation paths are untouched by this release; the assertions
-# below prove open positions keep their policy versions and that no protective stop moved
-# down across the deploy.
-name: Deploy V24 entry gate
+# This release moves every DB read those two paths need to BEFORE the fetch, so nothing is
+# awaited between the observation and the classification that consumes it. The entry
+# candidate's open orders now join the same DB batch, which removes the separate
+# withCandidateOrders round trip; the classification input is unchanged.
+#
+# The V24 entry gate stays OFF and this release does not touch it. Strategy, exit,
+# protection and reconciliation policy are unchanged, and the assertions below prove it.
+name: Deploy executor observation ordering
 
 on:
   workflow_dispatch:
@@ -46,7 +52,14 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git diff --check
-          # The executor must carry the gate, and the gate must be inert by construction:
+          # The fix must be present: both gate paths read the DB before the observation.
+          grep -Fq 'const pf=await gw({action:"p10_portfolio"},3000);' \
+            supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'const manual=await manualPositionAllowances(db);' \
+            supabase/functions/v10-lane-executor/index.ts
+          # The round trip this release removes must be gone.
+          ! grep -q 'withCandidateOrders' supabase/functions/v10-lane-executor/index.ts
+          # The V24 gate must still be present and still inert by construction:
           # its control read defaults to disabled and its edge default refuses.
           grep -Fq 'import {V24_ADAPTER_VERSION,v24EntryGate} from "./v24-entry-adapter.mjs"' \
             supabase/functions/v10-lane-executor/index.ts
@@ -80,10 +93,14 @@ jobs:
           node --check supabase/functions/v10-lane-executor/v24-entry-adapter.mjs
           node --check supabase/functions/v10-lane-executor/v24-leader-continuation.mjs
           npm exec --yes --package=deno@2.5.6 -- deno test --allow-read --no-check \
-            supabase/functions/v10-lane-executor/v24-entry-adapter.test.ts \
-            supabase/functions/v10-lane-executor/v24-leader-continuation.test.ts \
+            supabase/functions/v10-lane-executor/*.test.ts \
             supabase/functions/_shared/*.test.ts 2>&1 | tee release-evidence/tests.txt
           grep -q '0 failed' release-evidence/tests.txt
+          # The ordering invariant this release restores must be covered, not merely green.
+          grep -q 'readOpsPair fetches the account observation after every DB read it needs' \
+            release-evidence/tests.txt
+          grep -q 'closePos reads its allowlist before the account observation' \
+            release-evidence/tests.txt
 
       - name: Type-check the exact Edge Function graph
         shell: bash
@@ -124,6 +141,11 @@ jobs:
           psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
             "select coalesce(jsonb_agg(jsonb_build_object('id',id,'entry_at',entry_at,'hard_stop_price',hard_stop_price,'exit_policy',metadata->>'leaderExitPolicyVersion','qv3',metadata->'qv3','entry_execution_policy',metadata->>'entryExecutionPolicyVersion') order by entry_at),'[]'::jsonb) from public.v11_long_regime_positions where state='OPEN'" \
             > release-evidence/open-positions-before.json
+          # Baseline for the defect being fixed. A 5-minute post-deploy window cannot
+          # prove the rate went to zero; this is recorded so the 24h rate can be compared.
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select count(*) from public.v18_ops_incidents where kind='INCOMPLETE_OR_STALE_SNAPSHOT' and opened_at > now() - interval '72 hours'" \
+            > release-evidence/stale-snapshot-incidents-72h-before.txt
 
       - name: Recheck serialization and deploy executor only
         shell: bash
@@ -206,7 +228,8 @@ jobs:
             'duplicate_active_client_ids',(select count(*) from (select client_order_id from public.v11_long_regime_orders where state in ('PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED') and client_order_id is not null group by client_order_id having count(*)>1) d),
             'v24_decision_count',(select count(*) from public.v24_entry_decisions where decided_at>=__D__),
             'v24_enter_count',(select count(*) from public.v24_entry_decisions where decided_at>=__D__ and decision='ENTER'),
-            'v24_enabled',(select entry_enabled from public.v24_operator_control where singleton)
+            'v24_enabled',(select entry_enabled from public.v24_operator_control where singleton),
+            'stale_snapshot_incidents_since_deploy',(select count(*) from public.v18_ops_incidents where kind='INCOMPLETE_OR_STALE_SNAPSHOT' and opened_at>=__D__)
           ) from public.v11_long_regime_runtime r where singleton
           """.replace('__D__',lit)
           def read():
@@ -227,6 +250,9 @@ jobs:
                   # The gate is off, so it must neither run nor admit anything.
                   assert s['v24_enabled'] is False, s
                   assert s['v24_enter_count']==0, s
+                  # The defect this release fixes must not recur while we watch. Passing
+                  # here does NOT prove the rate is zero -- the 24h rate does.
+                  assert s['stale_snapshot_incidents_since_deploy']==0, s
                   seen.add(done); rows.append(s)
               if len(rows)<3: time.sleep(10)
           with open('release-evidence/post-deploy-cycles.jsonl','w') as f:
@@ -266,6 +292,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: v24-entry-gate-release
+          name: executor-observation-ordering-release
           path: release-evidence/
           retention-days: 30

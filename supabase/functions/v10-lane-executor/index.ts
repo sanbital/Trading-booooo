@@ -198,8 +198,13 @@ async function closePos(db,p,fraction,reason,ctx={}) {
     const raw=await gw({action:"get_order",market:p.symbol,identifier:pending.client_order_id,exchange_order_id:pending.exchange_order_id});
     return applyExitReceipt(db,p,pending,raw,await gw({action:"p10_portfolio"}),{verifyLease:()=>verifyExecutionLease(db)});
   }
+  // Read the allowlist BEFORE the account observation: classifyPortfolio only accepts an
+  // observation younger than 3s, and a DB round trip taken after the fetch spends that
+  // budget on us rather than the exchange. On this path a false stale reading blocks an
+  // exit, so the ordering matters more here than on entry.
+  const manual=await manualPositionAllowances(db);
   let pf=await gw({action:"p10_portfolio"});
-  const manual=await manualPositionAllowances(db),match=classifyPortfolio([p],{...pf,positions:pf?.positions?.filter(x=>sym(x)===p.symbol)},{manual,orders});
+  const match=classifyPortfolio([p],{...pf,positions:pf?.positions?.filter(x=>sym(x)===p.symbol)},{manual,orders});
   if(!match.ok){
     if(match.issues.some(x=>x.kind==="KNOWN_EXIT_PENDING_RECONCILIATION")){
       const nativeClosed=await reconcileNativeCloseBeforeDispatch(db,p,1,gw);
@@ -251,8 +256,8 @@ if(!Object.values(exitPolicy).every(v=>Number.isFinite(Number(v)))||!(Number(exi
 const initialFresh=entryFresh(rec(s.features),Date.now(),Number(s.features?.referenceClose));
 if(initialFresh)throw new Error(initialFresh);
 let[sn,q,i,rawInitialPair,initialOrders]=await Promise.all([snap(db),gateway({action:"quote",market:s.symbol}),
-  gateway({action:"symbol_info",market:s.symbol}),readOpsPair(db,gateway),gateway({action:"v18_open_orders"},5000)]),
-  initialPair=await withCandidateOrders(db,rawInitialPair,s.symbol),manualRows=initialPair.manual;
+  gateway({action:"symbol_info",market:s.symbol}),readOpsPair(db,gateway,s.symbol),gateway({action:"v18_open_orders"},5000)]),
+  initialPair=rawInitialPair,manualRows=initialPair.manual;
 await recordMismatch(db,initialPair.match);
 const initialDecision=await decideEntry(db,initialPair,s.symbol,initialOrders,{managementFailures});
 await persistDecisionRisk(db,initialPair,initialDecision);
@@ -317,9 +322,9 @@ if(E1_ENABLED){
   if(e1Decision.confirmationState==="RECOVERY_CONFIRMED"){
     // Waiting creates a new decision point. Refresh ownership, open orders, cash and
     // sizing, and price the IOC from the current ask rather than the old t0 quote.
-    [sn,rawInitialPair,initialOrders,i]=await Promise.all([snap(db),readOpsPair(db,gateway),
+    [sn,rawInitialPair,initialOrders,i]=await Promise.all([snap(db),readOpsPair(db,gateway,s.symbol),
       gateway({action:"v18_open_orders"},5000),gateway({action:"symbol_info",market:s.symbol},3000)]);
-    initialPair=await withCandidateOrders(db,rawInitialPair,s.symbol);manualRows=initialPair.manual;
+    initialPair=rawInitialPair;manualRows=initialPair.manual;
     await recordMismatch(db,initialPair.match);
     const refreshedDecision=await decideEntry(db,initialPair,s.symbol,initialOrders,{managementFailures});
     await persistDecisionRisk(db,initialPair,refreshedDecision);
@@ -356,9 +361,9 @@ if(E1_ENABLED){
 // conditional order observation.  No intent exists yet, so a denial cannot duplicate
 // or strand an order identity.
 await requireLeaderEntryControls(db);
-const[rawFinalCheck,finalOrders,dispatchQuote,dispatchSnap]=await Promise.all([readOpsPair(db),
+const[rawFinalCheck,finalOrders,dispatchQuote,dispatchSnap]=await Promise.all([readOpsPair(db,undefined,s.symbol),
   gateway({action:"v18_open_orders"},5000),E1_ENABLED?gateway({action:"quote",market:s.symbol},3000):Promise.resolve(q),
-  E1_ENABLED?snap(db):Promise.resolve(sn)]),finalCheck=await withCandidateOrders(db,rawFinalCheck,s.symbol);
+  E1_ENABLED?snap(db):Promise.resolve(sn)]),finalCheck=rawFinalCheck;
 if(E1_ENABLED){
   const dispatchAt=Date.now(),assessment=e1CurrentAssessment(s,dispatchQuote,step,dispatchAt);
   if(!assessment.quote.valid||!assessment.liquidityPassed||!assessment.guardPassed){
@@ -523,23 +528,31 @@ async function readOpsOrders(db,positions=[]) {
   if(pending.data?.length>100)throw Error("RECONCILIATION_BACKLOG_OVERFLOW");
   return [...new Map([...(pending.data??[]),...(accounting.data??[]),...(entries.data??[])].map(o=>[o.id,o])).values()];
 }
-async function readOpsPair(db,gw=opsGateway(db)) {
-  const pf=await gw({action:"p10_portfolio"},3000),positions=await readOpsPositions(db);
-  const [manual,orders,quarantines]=await Promise.all([manualPositionAllowances(db),readOpsOrders(db,positions),
+// classifyPortfolio accepts an account observation only while it is younger than
+// freshPortfolio's 3s budget. Every DB read this pair needs therefore runs BEFORE the
+// fetch: reading first and fetching last leaves the whole budget for the exchange round
+// trip instead of spending it on our own. Ordering the other way spent 3.5-5.0s of it on
+// four DB round trips and failed healthy cycles as INCOMPLETE_OR_STALE_SNAPSHOT, which
+// holds account entry and escalates to MANUAL_REVIEW_REQUIRED on repeat.
+// candidateSymbol folds the entry candidate's open orders into the same batch so a
+// candidate check costs no extra round trip against the observation's lifetime.
+async function readOpsPair(db,gw=opsGateway(db),candidateSymbol=null) {
+  const candidate=candidateSymbol==null?null:String(candidateSymbol).toUpperCase();
+  const positions=await readOpsPositions(db);
+  const [manual,baseOrders,quarantines,candidateOrders]=await Promise.all([manualPositionAllowances(db),readOpsOrders(db,positions),
     db.from("v18_ops_incidents").select("id,generation,kind,reason,symbol,status,control_scope,exposure_state,accounting_state,order_source,evidence_version,recheck_conditions,last_checked_at,evidence")
       .eq("exchange","binance_futures").eq("account_scope","futures").eq("control_scope","SYMBOL_QUARANTINE")
-      .in("status",["OPEN","VERIFYING"]).order("last_checked_at",{ascending:true}).limit(101)]);
+      .in("status",["OPEN","VERIFYING"]).order("last_checked_at",{ascending:true}).limit(101),
+    candidate?db.from("v11_long_regime_orders").select("*").eq("symbol",candidate)
+      .in("state",["PLANNED","DISPATCHED","RECONCILIATION_FAILED","RECONCILIATION_PENDING"])
+      .order("updated_at",{ascending:true}).limit(101):Promise.resolve({data:[]})]);
   if(quarantines.error)throw Error("SYMBOL_QUARANTINE_READ");
   if((quarantines.data??[]).length>100)throw Error("SYMBOL_QUARANTINE_BACKLOG_OVERFLOW");
+  if(candidateOrders.error)throw Error("CANDIDATE_ORDERS_READ");
+  if((candidateOrders.data??[]).length>100)throw Error("CANDIDATE_ORDER_BACKLOG_OVERFLOW");
+  const orders=candidate?[...new Map([...baseOrders,...(candidateOrders.data??[])].map(o=>[o.id,o])).values()]:baseOrders;
+  const pf=await gw({action:"p10_portfolio"},3000);
   return {pf,positions,manual,orders,quarantines:quarantines.data??[],match:classifyPortfolio(positions,pf,{manual,orders})};
-}
-async function withCandidateOrders(db,pair,candidateSymbol) {
-  const candidate=String(candidateSymbol).toUpperCase(),r=await db.from("v11_long_regime_orders").select("*")
-    .eq("symbol",candidate).in("state",["PLANNED","DISPATCHED","RECONCILIATION_FAILED","RECONCILIATION_PENDING"])
-    .order("updated_at",{ascending:true}).limit(101);
-  if(r.error)throw Error("CANDIDATE_ORDERS_READ");if((r.data??[]).length>100)throw Error("CANDIDATE_ORDER_BACKLOG_OVERFLOW");
-  const orders=[...new Map([...pair.orders,...(r.data??[])].map(o=>[o.id,o])).values()];
-  return {...pair,orders,match:classifyPortfolio(pair.positions,pair.pf,{manual:pair.manual,orders})};
 }
 function opsGateway(db){return scopedGateway(db,cycleBudgets.get(db)??createBudget({ms:55000,calls:160}));}
 function scopedGateway(db,budget) {
