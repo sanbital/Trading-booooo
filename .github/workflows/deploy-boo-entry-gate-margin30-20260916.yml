@@ -130,18 +130,17 @@ jobs:
         run: |
           set -euo pipefail
           test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
-          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json \
+          # Read the function inventory from the Management API, not the CLI.
+          # `supabase functions list --output json` on the pinned 2.34.3 IGNORES
+          # the flag and prints a human table, and it writes an upgrade notice to
+          # stdout on top of that. The API returns real JSON and is what the
+          # version pin actually needs to be trustworthy.
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions" \
             > release-evidence/functions-before.json
           python - <<'PY'
           import json,os
-          # The CLI prints an upgrade notice ("A new version of Supabase CLI is
-          # available...") on STDOUT, which the redirect captures ahead of the
-          # JSON. Start at the first JSON token instead of trusting the stream to
-          # be clean; the raw file is kept as evidence either way.
-          raw=open('release-evidence/functions-before.json').read()
-          starts=[p for p in (raw.find('['), raw.find('{')) if p>=0]
-          assert starts, f'no JSON in functions list output: {raw[:200]!r}'
-          rows=json.loads(raw[min(starts):])
+          rows=json.load(open('release-evidence/functions-before.json'))
           rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
           row=next(x for x in rows if x.get('slug')=='v10-lane-executor')
           assert row.get('status')=='ACTIVE' and row.get('verify_jwt') is False, row
@@ -195,14 +194,15 @@ jobs:
         run: |
           set -euo pipefail
           for i in $(seq 1 20); do
-            supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json \
-              > release-evidence/functions-after.json
+            curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions" \
+              > release-evidence/functions-after.json || true
             if python - <<'PY'
           import json,sys
-          raw=open('release-evidence/functions-after.json').read()
-          starts=[p for p in (raw.find('['), raw.find('{')) if p>=0]
-          if not starts: sys.exit(1)
-          rows=json.loads(raw[min(starts):])
+          try:
+              rows=json.load(open('release-evidence/functions-after.json'))
+          except Exception:
+              sys.exit(1)
           rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
           row=next(x for x in rows if x.get('slug')=='v10-lane-executor')
           before=int(open('release-evidence/version-before.txt').read().strip())
