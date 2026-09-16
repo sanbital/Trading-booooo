@@ -1,0 +1,279 @@
+# Release: BOO common entry gate + per-slot margin 40 -> 30 USDT.
+#
+# Written for THIS change rather than reusing an earlier release's workflow.
+# The older deploy-executor-* workflows prove invariants specific to their own
+# releases (and assert that no _shared module changed, which is false here), so
+# running one of them would certify something it never checked.
+#
+# What this release actually does, and what the operator must know:
+#   - v10-lane-executor starts sizing at MARGIN=30 (90 USDT notional at 3x).
+#   - The BOO common entry gate becomes active at both checkpoints.
+#     boo_entry_gate_control.enforcement decides whether a refusal BLOCKS:
+#       ENFORCE -> new entries stop until a validation approval row exists
+#       OBSERVE -> verdicts are recorded, the legacy path proceeds unchanged
+#   - Exits, protection, reconciliation and settlement are untouched either way.
+#
+# MARGIN and trading_settings.binance_futures_allocation_usdt must already
+# agree before this runs; the executor refuses every entry with
+# V17_MARGIN_CONFIG_MISMATCH when they differ. That is checked below, BEFORE
+# the deploy, so a mismatch fails the release instead of the account.
+name: Deploy BOO entry gate and 30 USDT margin
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_version_before:
+        description: >-
+          The v10-lane-executor version this release expects to find in
+          production. Pinning it makes a concurrent or unexpected deploy fail
+          the release instead of silently landing on top of one.
+        required: true
+      expected_enforcement:
+        description: >-
+          The boo_entry_gate_control.enforcement value the operator intends to
+          run with (ENFORCE or OBSERVE). The release fails if production
+          disagrees, so the trading posture is never a surprise.
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-v10-lane-executor
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out exact release SHA
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prove the scope of THIS release
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --check
+          mkdir -p release-evidence
+
+          # The two changes this release exists to make.
+          grep -Fq 'const MARGIN=30,LEV=3,NOTIONAL=MARGIN*LEV' \
+            supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'import {BOO_ADAPTER_VERSION,ENFORCEMENT as BOO_ENFORCEMENT' \
+            supabase/functions/v10-lane-executor/index.ts
+          # Both gate checkpoints must be wired, not just the first.
+          grep -Fq 'const booAdmission=await booGate(db,s,"ADMISSION"' \
+            supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'const booPredispatch=await booGate(db,s,"PRE_DISPATCH"' \
+            supabase/functions/v10-lane-executor/index.ts
+          # The code-vs-DB margin guard must survive this release.
+          grep -Fq 'V17_MARGIN_CONFIG_MISMATCH' supabase/functions/v10-lane-executor/index.ts
+
+          # Policies that must NOT change here.
+          grep -Fq "policyVersion: 'V17_EXIT_R5_TAIL'" supabase/functions/_shared/leader-exit-review.mjs
+          grep -Fq "export const QV3_VERSION='QV3_ENTRY_EXIT_TWO_1'" \
+            supabase/functions/_shared/leader-qv3-runtime.mjs
+          grep -Fq "export const ENTRY_EXECUTION_POLICY_VERSION = 'V21_POST_FILL_DRIFT_GUARD_1'" \
+            supabase/functions/_shared/leader-momentum-v17.mjs
+          # The V24 gate stays present and inert by construction.
+          grep -Fq 'return{enabled:false,edge:null,reason:"V24_CONTROL_UNREADABLE"}' \
+            supabase/functions/v10-lane-executor/index.ts
+
+          # This release DOES add _shared/boo/*. It must add nothing else there,
+          # and must not touch the gateway or the signal generator.
+          git diff --name-only origin/main "$GITHUB_SHA" -- supabase/functions/_shared \
+            | grep -v '^supabase/functions/_shared/boo/' > /tmp/shared-changed.txt || true
+          if [ -s /tmp/shared-changed.txt ]; then
+            echo "unexpected _shared changes:"; cat /tmp/shared-changed.txt; exit 1
+          fi
+          git diff --quiet origin/main "$GITHUB_SHA" -- gateway \
+            supabase/functions/v10-lane-signal-generator
+
+          git rev-parse HEAD > release-evidence/release-sha.txt
+          sha256sum supabase/functions/v10-lane-executor/*.ts \
+            supabase/functions/v10-lane-executor/*.mjs \
+            supabase/functions/_shared/boo/*.mjs > release-evidence/source-sha256.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Unit-test and type-check the exact graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm exec --yes --package=deno@2.5.6 -- deno test --allow-read \
+            supabase/functions/_shared/*.test.ts \
+            supabase/functions/_shared/boo/*.test.ts \
+            supabase/functions/exchange-trade-sync/*.test.ts \
+            supabase/functions/v10-lane-executor/margin-config.test.ts \
+            2>&1 | tee release-evidence/tests.txt
+          npm exec --yes --package=deno@2.5.6 -- deno check \
+            supabase/functions/v10-lane-executor/index.ts
+
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.34.3
+
+      - name: Capture production state and prove the cutover is consistent
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json \
+            > release-evidence/functions-before.json
+          python - <<'PY'
+          import json,os
+          rows=json.load(open('release-evidence/functions-before.json'))
+          rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
+          row=next(x for x in rows if x.get('slug')=='v10-lane-executor')
+          assert row.get('status')=='ACTIVE' and row.get('verify_jwt') is False, row
+          expected=int("${{ inputs.expected_version_before }}")
+          assert int(row['version'])==expected, f"expected production v{expected}, found {row['version']}"
+          open('release-evidence/version-before.txt','w').write(str(row['version'])+'\n')
+          PY
+
+          # The DB must ALREADY carry the 30 USDT allocation. Deploying MARGIN=30
+          # against a 40 row would refuse every entry with V17_MARGIN_CONFIG_MISMATCH.
+          alloc="$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select binance_futures_allocation_usdt from public.trading_settings where id=1")"
+          test "$alloc" = "30" || { echo "allocation is $alloc, expected 30"; exit 1; }
+          lev="$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select binance_futures_leverage from public.trading_settings where id=1")"
+          test "$lev" = "3" || { echo "leverage is $lev, expected 3"; exit 1; }
+
+          # The trading posture must be the one the operator asked for.
+          enf="$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select enforcement from public.boo_entry_gate_control where singleton")"
+          test "$enf" = "${{ inputs.expected_enforcement }}" \
+            || { echo "gate enforcement is $enf, operator expected ${{ inputs.expected_enforcement }}"; exit 1; }
+
+          # A release must never be the thing that turns the V24 gate on.
+          test "$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select entry_enabled from public.v24_operator_control where singleton")" = f
+
+          psql "$SUPABASE_DB_URL" -XAt -F '|' --set=ON_ERROR_STOP=1 -c \
+            "select entry_enabled,legacy_entries_retired from public.v17_operator_control where singleton" \
+            > release-evidence/operator-before.txt
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(jsonb_agg(jsonb_build_object('id',id,'entry_at',entry_at,'hard_stop_price',hard_stop_price,'exit_policy',metadata->>'leaderExitPolicyVersion','entry_execution_policy',metadata->>'entryExecutionPolicyVersion') order by entry_at),'[]'::jsonb) from public.v11_long_regime_positions where state='OPEN'" \
+            > release-evidence/open-positions-before.json
+
+      - name: Deploy the executor only
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          date -u +%Y-%m-%dT%H:%M:%S+00:00 > release-evidence/deployed-at.txt
+          supabase functions deploy v10-lane-executor --project-ref "$SUPABASE_PROJECT_REF" \
+            --no-verify-jwt --use-api
+
+      - name: Verify the deployed version moved by exactly one
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 20); do
+            supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json \
+              > release-evidence/functions-after.json
+            if python - <<'PY'
+          import json,sys
+          rows=json.load(open('release-evidence/functions-after.json'))
+          rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
+          row=next(x for x in rows if x.get('slug')=='v10-lane-executor')
+          before=int(open('release-evidence/version-before.txt').read().strip())
+          sys.exit(0 if int(row['version'])==before+1 and row.get('status')=='ACTIVE' else 1)
+          PY
+            then echo "deployed version confirmed"; break; fi
+            test "$i" -lt 20 || { echo "version did not advance"; exit 1; }
+            sleep 15
+          done
+
+      - name: Observe three genuine scheduler cycles
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,os,subprocess,time
+          deployed=open('release-evidence/deployed-at.txt').read().strip()
+          lit="'"+deployed.replace("'","''")+"'::timestamptz"
+          q=("select jsonb_build_object("
+             "'cycle_completed_at',r.last_cycle_completed_at,"
+             "'last_error',r.last_error,"
+             "'cycle_ms',round(extract(epoch from (r.last_cycle_completed_at-r.last_cycle_started_at))*1000),"
+             "'entry_block_reason',r.entry_block_reason,"
+             "'circuit_open',r.circuit_open,"
+             "'open_position_count',(select count(*) from public.v11_long_regime_positions where state='OPEN'),"
+             "'margin_mismatch',(r.last_error like '%V17_MARGIN_CONFIG_MISMATCH%'),"
+             "'gate_decisions',(select count(*) from public.boo_entry_gate_decisions where created_at>=__D__),"
+             "'gate_blocked',(select count(*) from public.boo_entry_gate_decisions where created_at>=__D__ and allowed=false)"
+             ") from public.v11_long_regime_runtime r where singleton").replace('__D__',lit)
+          seen,rows={},[]
+          for _ in range(40):
+              s=json.loads(subprocess.check_output(
+                  ['psql',os.environ['SUPABASE_DB_URL'],'-XAt','--set=ON_ERROR_STOP=1','-c',q],text=True).strip())
+              k=s['cycle_completed_at']
+              if k and k>deployed and k not in seen:
+                  seen[k]=1; rows.append(s); print(json.dumps(s))
+                  assert 0<=s['cycle_ms']<=60000, s
+                  assert s['circuit_open'] is False, s
+                  # The cutover's own failure mode. If this fires, code and DB
+                  # disagree on the per-slot margin and every entry is refused.
+                  assert s['margin_mismatch'] is False, s
+                  if len(rows)==3: break
+              time.sleep(20)
+          json.dump(rows,open('release-evidence/cycles.json','w'),indent=2)
+          assert len(rows)==3, f'only {len(rows)} post-deploy cycles observed'
+          PY
+
+      - name: Verify open positions were preserved
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(jsonb_agg(jsonb_build_object('id',id,'entry_at',entry_at,'hard_stop_price',hard_stop_price,'exit_policy',metadata->>'leaderExitPolicyVersion','entry_execution_policy',metadata->>'entryExecutionPolicyVersion') order by entry_at),'[]'::jsonb) from public.v11_long_regime_positions where state='OPEN'" \
+            > release-evidence/open-positions-after.json
+          psql "$SUPABASE_DB_URL" -XAt -F '|' --set=ON_ERROR_STOP=1 -c \
+            "select entry_enabled,legacy_entries_retired from public.v17_operator_control where singleton" \
+            > release-evidence/operator-after.txt
+          cmp release-evidence/operator-before.txt release-evidence/operator-after.txt
+          python - <<'PY'
+          import json
+          before={x['id']:x for x in json.load(open('release-evidence/open-positions-before.json'))}
+          after={x['id']:x for x in json.load(open('release-evidence/open-positions-after.json'))}
+          for pid,old in before.items():
+              new=after.get(pid)
+              if new is None: continue          # closed naturally during observation
+              assert new['entry_at']==old['entry_at']
+              assert new['exit_policy']==old['exit_policy']
+              # A position opened under the old policy keeps it. This release must
+              # not retro-apply anything to positions already open.
+              assert new['entry_execution_policy']==old['entry_execution_policy']
+              # A protective stop may ratchet up; it must never move down.
+              assert float(new['hard_stop_price'])+1e-12>=float(old['hard_stop_price']), (pid,old,new)
+          print('open positions preserved:',len(before))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: boo-entry-gate-margin30-release
+          path: release-evidence
