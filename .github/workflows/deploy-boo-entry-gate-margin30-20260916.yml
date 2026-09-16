@@ -230,7 +230,10 @@ jobs:
              "'entry_block_reason',r.entry_block_reason,"
              "'circuit_open',r.circuit_open,"
              "'open_position_count',(select count(*) from public.v11_long_regime_positions where state='OPEN'),"
-             "'margin_mismatch',(r.last_error like '%V17_MARGIN_CONFIG_MISMATCH%'),"
+             # coalesce, because NULL LIKE '...' is NULL, not false -- and a NULL
+             # last_error is the HEALTHY case. Comparing that to False failed the
+             # observation on a perfectly good cycle the first time this ran.
+             "'margin_mismatch',(coalesce(r.last_error,'') like '%V17_MARGIN_CONFIG_MISMATCH%'),"
              "'gate_decisions',(select count(*) from public.boo_entry_gate_decisions where created_at>=__D__),"
              "'gate_blocked',(select count(*) from public.boo_entry_gate_decisions where created_at>=__D__ and allowed=false)"
              ") from public.v11_long_regime_runtime r where singleton").replace('__D__',lit)
@@ -241,7 +244,10 @@ jobs:
               k=s['cycle_completed_at']
               if k and k>deployed and k not in seen:
                   seen[k]=1; rows.append(s); print(json.dumps(s))
-                  assert 0<=s['cycle_ms']<=60000, s
+                  # cycle_ms can read NEGATIVE mid-cycle: last_cycle_started_at is
+                  # stamped when the next cycle begins, before that cycle writes its
+                  # own completed_at. Only an implausibly LONG cycle is a problem.
+                  assert s['cycle_ms'] is None or s['cycle_ms']<=60000, s
                   assert s['circuit_open'] is False, s
                   # The cutover's own failure mode. If this fires, code and DB
                   # disagree on the per-slot margin and every entry is refused.
