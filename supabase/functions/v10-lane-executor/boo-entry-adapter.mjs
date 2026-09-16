@@ -251,6 +251,51 @@ export async function recordBooVerdict(db, { signalId, symbol, phase, result }) 
 }
 
 /**
+ * Reserve the planned loss BEFORE the order is sent, atomically.
+ *
+ * The compare-and-set lives in `boo_reserve_risk()` rather than here on purpose:
+ * doing read-then-write from the application is exactly how two concurrent
+ * executor invocations both observe the same "available" figure and both
+ * proceed. Section 6 requires the reservation and the approval to be atomic, so
+ * the database performs both under one row lock.
+ *
+ * `intentId` must be a pure function of the entry intent, so a retry of the same
+ * intent reserves once (ALREADY_RESERVED) instead of twice.
+ */
+export async function reserveEntryRisk(db, { intentId, symbol, amount, fencingToken, totalBudget, clientOrderId }) {
+  const r = await db.rpc("boo_reserve_risk", {
+    p_intent_id: intentId,
+    p_symbol: symbol,
+    p_amount: String(amount),
+    p_fencing_token: Number(fencingToken),
+    p_total_budget: String(totalBudget),
+    p_client_order_id: clientOrderId ?? null,
+  });
+  // A failed RPC is NOT an unreserved budget we may spend: it is an unknown
+  // reservation state, which must block the entry.
+  if (r.error) return { ok: false, reason: `RESERVE_RPC_FAILED:${r.error.message}` };
+  return r.data ?? { ok: false, reason: "RESERVE_NO_RESULT" };
+}
+
+/**
+ * Release a reservation only when the outcome is PROVEN.
+ *
+ * `proven` must come from classifyOrderOutcome().mayRelease. An UNKNOWN outcome
+ * moves the row to UNKNOWN and keeps the budget held, which is what stops a lost
+ * response from silently freeing risk that may actually be live on the exchange.
+ */
+export async function releaseEntryRisk(db, { intentId, fencingToken, resolution, proven }) {
+  const r = await db.rpc("boo_release_risk", {
+    p_intent_id: intentId,
+    p_fencing_token: Number(fencingToken),
+    p_resolution: String(resolution ?? "UNSPECIFIED"),
+    p_proven: proven === true,
+  });
+  if (r.error) return { ok: false, reason: `RELEASE_RPC_FAILED:${r.error.message}` };
+  return r.data ?? { ok: false, reason: "RELEASE_NO_RESULT" };
+}
+
+/**
  * Summarise total open risk currently reserved, for the sizing context.
  * Open positions contribute the loss still possible down to their live stop;
  * pending/UNKNOWN orders contribute their full original reservation.

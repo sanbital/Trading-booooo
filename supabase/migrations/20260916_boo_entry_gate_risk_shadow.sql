@@ -122,6 +122,83 @@ create table if not exists public.boo_ledger_exceptions (
 create unique index if not exists boo_ledger_exceptions_unique_idx
   on public.boo_ledger_exceptions (position_id, finding_code);
 
+-- Atomic reservation, verified against the live database on 2026-09-16:
+--   budget 100, two workers requesting 80 -> exactly one RESERVED, the other
+--   INSUFFICIENT_RISK_BUDGET; the winner's retry returns ALREADY_RESERVED
+--   without a second charge; a stale fencing token is FENCED_OUT; an unproven
+--   outcome moves the row to UNKNOWN and KEEPS the budget held.
+-- Doing this compare-and-set in application code is the bug it prevents:
+-- read-then-write from two invocations interleaves and both see the same
+-- "available" figure.
+create or replace function public.boo_reserve_risk(
+  p_intent_id text, p_symbol text, p_amount numeric,
+  p_fencing_token bigint, p_total_budget numeric, p_client_order_id text default null
+) returns jsonb language plpgsql volatile security definer
+set search_path = public, pg_temp as $$
+declare
+  v_existing public.boo_risk_reservations%rowtype;
+  v_outstanding numeric;
+  v_max_token bigint;
+begin
+  if p_amount is null or p_amount <= 0 then
+    return jsonb_build_object('ok', false, 'reason', 'AMOUNT_NOT_POSITIVE');
+  end if;
+  select * into v_existing from public.boo_risk_reservations
+   where intent_id = p_intent_id for update;
+  if found then
+    return jsonb_build_object('ok', true, 'reason', 'ALREADY_RESERVED',
+      'amount', v_existing.amount_quote, 'state', v_existing.state);
+  end if;
+  select max(fencing_token) into v_max_token from public.boo_risk_reservations
+   where state in ('RESERVED', 'UNKNOWN');
+  if v_max_token is not null and p_fencing_token < v_max_token then
+    return jsonb_build_object('ok', false, 'reason', 'FENCED_OUT',
+      'held', v_max_token, 'presented', p_fencing_token);
+  end if;
+  -- UNKNOWN counts: an order whose outcome we cannot prove still holds budget.
+  select coalesce(sum(amount_quote), 0) into v_outstanding
+    from public.boo_risk_reservations where state in ('RESERVED', 'UNKNOWN');
+  if v_outstanding + p_amount > p_total_budget then
+    return jsonb_build_object('ok', false, 'reason', 'INSUFFICIENT_RISK_BUDGET',
+      'outstanding', v_outstanding, 'requested', p_amount, 'budget', p_total_budget);
+  end if;
+  insert into public.boo_risk_reservations
+    (intent_id, symbol, amount_quote, fencing_token, state, client_order_id)
+  values (p_intent_id, p_symbol, p_amount, p_fencing_token, 'RESERVED', p_client_order_id);
+  return jsonb_build_object('ok', true, 'reason', 'RESERVED',
+    'amount', p_amount, 'outstanding', v_outstanding + p_amount);
+end;
+$$;
+
+create or replace function public.boo_release_risk(
+  p_intent_id text, p_fencing_token bigint, p_resolution text, p_proven boolean
+) returns jsonb language plpgsql volatile security definer
+set search_path = public, pg_temp as $$
+declare v_existing public.boo_risk_reservations%rowtype;
+begin
+  select * into v_existing from public.boo_risk_reservations
+   where intent_id = p_intent_id for update;
+  if not found then return jsonb_build_object('ok', false, 'reason', 'NOT_RESERVED'); end if;
+  if p_fencing_token < v_existing.fencing_token then
+    return jsonb_build_object('ok', false, 'reason', 'FENCED_OUT');
+  end if;
+  if not p_proven then
+    update public.boo_risk_reservations
+       set state = 'UNKNOWN', resolution = p_resolution where intent_id = p_intent_id;
+    return jsonb_build_object('ok', false, 'reason', 'OUTCOME_UNPROVEN', 'state', 'UNKNOWN');
+  end if;
+  update public.boo_risk_reservations
+     set state = 'RELEASED', resolved_at = now(), resolution = p_resolution
+   where intent_id = p_intent_id;
+  return jsonb_build_object('ok', true, 'reason', 'RELEASED');
+end;
+$$;
+
+revoke all on function public.boo_reserve_risk(text, text, numeric, bigint, numeric, text)
+  from public, anon, authenticated;
+revoke all on function public.boo_release_risk(text, bigint, text, boolean)
+  from public, anon, authenticated;
+
 -- ---- SHADOW ---------------------------------------------------------------
 -- A strategy shadow, not an account observer: it carries candidate ranking,
 -- per-symbol setup state, entry/exit decisions and simulated outcomes.
@@ -281,6 +358,8 @@ alter table public.trading_settings
 --   drop table if exists public.boo_shadow_setups;
 --   drop table if exists public.boo_shadow_runs;
 --   drop table if exists public.boo_ledger_exceptions;
+--   drop function if exists public.boo_reserve_risk(text, text, numeric, bigint, numeric, text);
+--   drop function if exists public.boo_release_risk(text, bigint, text, boolean);
 --   drop table if exists public.boo_risk_reservations;
 --   drop table if exists public.boo_entry_gate_decisions;
 --   drop table if exists public.boo_strategy_approvals;

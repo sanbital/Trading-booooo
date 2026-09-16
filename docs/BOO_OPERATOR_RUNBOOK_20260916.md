@@ -55,14 +55,31 @@ Branch: `claude/booo-integration-accounting-risk-s1fivp`
 | SHADOW function | `supabase/functions/boo-r1-shadow/index.ts` |
 | SHADOW deploy bundle + builder | `dist/boo-r1-shadow.bundle.ts`, `scripts/boo/bundle-shadow.mjs` |
 | Reconciliation script | `scripts/boo/accounting-recon.mjs` |
+| Futures sweep prioritisation (sync fix) | `supabase/functions/exchange-trade-sync/futures-sync.ts`, `index.ts` |
+| Sweep regression tests | `supabase/functions/exchange-trade-sync/futures-priority.test.ts` |
+| LIVE_READY preflight rule (pure) | `supabase/functions/_shared/boo/preflight.mjs` |
+| Preflight property tests | `supabase/functions/_shared/boo/preflight.test.ts` |
+| Activation tool | `scripts/boo/activate.mjs` |
+| Evaluation / promotion rule | `supabase/functions/_shared/boo/evaluation.mjs` |
+| Evaluation tests | `supabase/functions/_shared/boo/evaluation.test.ts` |
+| SHADOW evaluator CLI | `scripts/boo/evaluate-shadow.mjs` |
 | Migration | `supabase/migrations/20260916_boo_entry_gate_risk_shadow.sql` |
 
 Run the tests:
 
 ```bash
-deno test --allow-read supabase/functions/_shared/boo/boo-safety.test.ts
-# 67 passed | 0 failed
+deno task test        # the repo suite now includes the BOO and sweep tests
+deno test --allow-read \
+  supabase/functions/_shared/*.test.ts \
+  supabase/functions/_shared/boo/*.test.ts \
+  supabase/functions/exchange-trade-sync/*.test.ts
+# 186 passed | 0 failed
 ```
+
+Breakdown: 67 safety/regression (section 9 items 1-30), 7 preflight property
+(including a 2^8 enumeration proving no failure subset yields live_ready),
+13 evaluation/promotion, 11 futures-sweep prioritisation, plus the pre-existing
+shared-module suite.
 
 ---
 
@@ -160,11 +177,33 @@ silently losing exit fills. Sync state timestamps cluster in single seconds
 (11:50:25, :26, :26), which is the signature of a loop being cut off rather than
 of individual failures.
 
-**Recommended fix (not applied — it touches a live function):** order the market
-loop by need — symbols with open exposure, then symbols with positions closed
-since the last sync, then unsettled orders, then the long tail — and fail the run
-when a *needed* market could not be synced, instead of only when the whole
-function throws.
+**Fix implemented (in the repository, NOT deployed).** `prioritizeFuturesMarkets()`
+in `futures-sync.ts` orders the sweep by need and marks the mandatory tiers:
+
+| tier | contents | required? |
+|---|---|---|
+| 0 EXPOSURE | the exchange says we hold it right now | yes |
+| 1 SETTLEMENT | position closed at/after this market's last sync, position not closed in our books, unsettled order, or **never synced at all** | yes |
+| 2 TAIL | everything else, oldest-sync-first, bounded to the invocation budget | no |
+
+Required tiers are never truncated to fit the budget — dropping a required
+market to make room for a routine refresh is the exact trade that produced the
+missing fills. A failure on a required market now **throws**
+(`FUTURES_REQUIRED_MARKETS_UNSYNCED:<markets>`) instead of being collected into
+`errors[]` under a successful return, so a ledger gap is visible the minute it
+opens rather than days later in an audit.
+
+**Validated against the real database.** Applying the rule to the full live
+history marks exactly three markets as required — `ARKUSDT` and `哈基米USDT`
+(`CLOSED_AFTER_LAST_SYNC`) and `CVCUSDT` (`NEVER_SYNCED`) — which are precisely
+the three positions holding the −8.00447003 USDT. Zero false positives.
+
+The spot path in the same function already had this shape (urgent → unsynced →
+oldest-first, bounded); the futures path never received it. This closes that gap.
+
+Deploying it is an operator step: `exchange-trade-sync` is a live function, and
+the change makes it fail loudly where it previously failed silently, so expect
+red runs until the three stale markets are collected.
 
 Re-run the reconciliation yourself:
 
@@ -208,6 +247,27 @@ candidate size, searches the step lattice, and re-verifies the winner at its own
 size. When the exchange minimum already breaks the budget it returns
 `decision=SKIP, reason=MIN_NOTIONAL_EXCEEDS_RISK_BUDGET` — never a rounded-up
 quantity, a tightened stop, or a raised limit.
+
+### Risk reservation is atomic, and verified
+
+`boo_reserve_risk()` / `boo_release_risk()` perform the whole compare-and-set
+inside one statement under a row lock. Doing it in application code is the bug it
+prevents: read-then-write from two executor invocations interleaves and both see
+the same "available" figure.
+
+Verified against the live database on 2026-09-16:
+
+| scenario | result |
+|---|---|
+| budget 100, two workers request 80 | exactly one `RESERVED`, other `INSUFFICIENT_RISK_BUDGET` |
+| winner retries the same intent | `ALREADY_RESERVED` — idempotent, not a second charge |
+| stale fencing token (0 vs held 1) | `FENCED_OUT` at the shared resource |
+| unproven outcome released | `OUTCOME_UNPROVEN`, row → `UNKNOWN`, **budget still held** |
+| proven outcome released | `RELEASED`, budget freed |
+
+`UNKNOWN` reservations count toward outstanding risk, so a lost response cannot
+silently free budget that may be live on the exchange. The test rows were deleted
+afterwards; the table holds no synthetic reservations.
 
 > The legacy `sizeEntry()` constant (`MARGIN=40,LEV=3`) is still present in
 > `index.ts` and still used by the legacy code path. It is *gated*, not deleted:
@@ -254,6 +314,32 @@ Exits, protection, reconciliation and settlement are untouched by the gate and
 keep running regardless of the entry verdict.
 
 ---
+
+## 5b. Evaluation and promotion
+
+`evaluation.mjs` implements the section 8 promotion rule, and
+`scripts/boo/evaluate-shadow.mjs` runs it over collected SHADOW trades:
+
+```bash
+SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... \
+node scripts/boo/evaluate-shadow.mjs --json /tmp/eval.json
+# exits non-zero unless the verdict is PROMOTE
+```
+
+Two properties are enforced by test, not by convention:
+
+- **Sample adequacy is checked before the point estimate**, so a thin but
+  flattering sample cannot be promoted on the strength of its mean. Minimum 30
+  trades over 5 independent days; below that the verdict is
+  `INSUFFICIENT_SAMPLE`, which is not a pass.
+- **Uncertainty is bootstrapped over day blocks, not trades.** Trades on one day
+  share a market shock; treating them as independent shrinks the interval until
+  almost anything looks significant. A test constructs 59 small losses plus one
+  huge winning day — the mean is positive, and the rule still returns `REJECT`.
+
+`compareVariants()` produces the A–E table when the inputs exist, and refuses to
+present variants that span different cost models, risk bases or candidate sets as
+comparable. Today it has nothing to compare (see §9).
 
 ## 6. SHADOW — what is actually running
 
@@ -405,13 +491,42 @@ values (...);   -- every field must match the running build; EVALUATED only
 
 ### 7.8 Final limited-live activation (operator only)
 
-```sql
-update boo_entry_gate_control
-   set enforcement = 'ENFORCE', set_by = '<operator>',
-       set_reason  = '<why>', updated_at = now()
- where singleton;
+Use the tool. It re-derives every precondition from the live database in the
+same run that performs the flip, and **it has no bypass** — no `--force`, no
+environment variable, no cached verdict. A 2^8 enumeration test proves that no
+subset of failing checks can produce `live_ready = true`.
 
-update trading_settings set pause_new_entries = false where id = 1;
+```bash
+# 1. Read-only preflight. Exits non-zero while anything blocks.
+SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... \
+node scripts/boo/activate.mjs --check \
+  --executor-sha  <ezbr_sha256 of the build you reviewed> \
+  --deployed-sha  <ezbr_sha256 read back from the deployed function>
+
+# 2. Only when step 1 prints live_ready = true:
+SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... \
+node scripts/boo/activate.mjs --activate \
+  --executor-sha <...> --deployed-sha <...> \
+  --operator "<name>" --reason "<why now>"
+```
+
+On a full pass it sets `boo_entry_gate_control.enforcement = 'ENFORCE'` and
+`trading_settings.pause_new_entries = false`, recording the operator and reason.
+It never places, cancels or modifies an order, and never changes an account mode.
+
+Run against the live project on 2026-09-16 it reports:
+
+```
+[FAIL] ledger_reconciled        3 unresolved
+[FAIL] risk_config_valid        RISK_PER_TRADE_IMPLAUSIBLE;DAILY_LOSS_LIMIT_IMPLAUSIBLE
+[FAIL] edge_measured            source=ASSUMED
+[FAIL] strategy_approved        0 row(s), none live/evaluated/positive
+[FAIL] shadow_sample_present    0 closed SHADOW positions
+[FAIL] gate_live                gate has never evaluated
+[FAIL] deployed_sha_pinned      no expected sha supplied
+[PASS] no_unsettled_state       no open positions or pending orders (database view)
+
+live_ready = false
 ```
 
 ### 7.9 After the first real fill
@@ -471,9 +586,9 @@ Never cancel resting protective orders as part of a rollback — regression test
 |---|---|---|
 | `code_integration_complete` | **false** | Gate, risk sizing and R1 are wired into the real executor entry path at both checkpoints and typecheck clean, but the build is **not deployed**; production still runs v47. The legacy `sizeEntry` path remains present (gated, not removed). |
 | `accounting_reconciled` | **false** | 119/122 positions reconcile within the declared tolerance. 3 positions (−8.00447003 USDT) have no exit fills in the ledger and cannot be recovered from the database. |
-| `safety_tests_passed` | **true** | 67/67 in `boo-safety.test.ts`, covering section 9 items 1–30. These are unit/property/fault-injection tests against pure modules — see `environment_integration_passed` for what they do *not* cover. |
+| `safety_tests_passed` | **true** | 186/186 across the shared layer: 67 section-9 regressions, 7 preflight property (2^8 enumeration), 13 evaluation/promotion, 11 futures-sweep, plus the pre-existing suite. Unit/property/fault-injection against pure modules — see `environment_integration_passed` for what they do *not* cover. |
 | `environment_integration_passed` | **false** | The SHADOW runs in the real Supabase runtime against live Binance data. The **executor** build has not run in any live or staging environment; no end-to-end order path test was performed. |
-| `strategy_edge_verified` | **false** | R1 is a research candidate. No backtest, no replay, no out-of-sample evaluation, no A–E comparison. Sample size is zero. |
+| `strategy_edge_verified` | **false** | R1 is a research candidate. The promotion rule and the A–E comparator now exist and are tested, but the SHADOW has produced **0 closed trades**, so the rule returns `INSUFFICIENT_SAMPLE`. Zero trades is zero evidence, not a safe result. |
 | `shadow_strategy_running` | **true** | `boo-r1-shadow` v3 + cron jobid 80, collecting real market data, ranking candidates, advancing setups, with no order capability. |
 | `live_ready` | **false** | Blocked by every `false` above. |
 | `live_activated_by_operator` | **false** | Not attempted. Reserved for the account owner. |
@@ -482,13 +597,14 @@ Never cancel resting protective orders as part of a rollback — regression test
 
 1. **Unresolved ledger** — 3 positions, −8.00447003 USDT, need
    `GET /fapi/v1/userTrades` re-collection through the authenticated gateway.
-2. **`exchange-trade-sync` starvation** — 12 markets >6h stale while the cron
-   reports success; this will keep creating new ledger holes until the market
-   loop is prioritised and needed-market failures fail the run.
+2. **`exchange-trade-sync` starvation** — fix is written and tested
+   (`prioritizeFuturesMarkets`, validated against the live database with zero
+   false positives) but **not deployed**. Until it ships, 12 markets remain
+   >6h stale and new ledger holes keep forming.
 3. **No strategy validation** — R1 has no evaluated edge, so the gate refuses it
-   by design. An A–E comparison could not be produced: it requires the full
-   historical candidate set including rejected candidates, which this
-   environment cannot fetch (see §9).
+   by design. The evaluator exists and runs; it needs trades. An A–E comparison
+   still requires the full historical candidate set including rejected
+   candidates, which this environment cannot fetch (see §9).
 4. **No executor environment test** — the integrated build has never executed.
 5. **SHADOW credential isolation is source-level, not boundary-level** — same
    Supabase project, shared secret store. Needs a separate project/host.
