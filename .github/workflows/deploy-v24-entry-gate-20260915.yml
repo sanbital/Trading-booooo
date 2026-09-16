@@ -154,16 +154,30 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           set -euo pipefail
-          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json \
-            > release-evidence/functions-after.json
+          # The Management API is read-after-write eventually consistent: on 2026-09-16 a
+          # list taken ~1s after a successful deploy still reported the OLD version, which
+          # failed this assertion and skipped the post-deploy observation on a release that
+          # had in fact landed correctly. Poll for the bump instead of reading once, and
+          # only treat it as a failure once the window is genuinely exhausted.
           python - <<'PY'
-          import json
+          import json,os,subprocess,time
+          ref=os.environ['SUPABASE_PROJECT_REF']
           def one(p):
               rows=json.load(open(p)); rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
               return next(x for x in rows if x.get('slug')=='v10-lane-executor')
-          b,a=one('release-evidence/functions-before.json'),one('release-evidence/functions-after.json')
+          b=one('release-evidence/functions-before.json')
+          want=int(b['version'])+1
+          deadline=time.time()+120; a=None
+          while time.time()<deadline:
+              with open('release-evidence/functions-after.json','w') as f:
+                  subprocess.check_call(['supabase','functions','list','--project-ref',ref,'--output','json'],stdout=f)
+              a=one('release-evidence/functions-after.json')
+              if int(a['version'])>=want: break
+              time.sleep(5)
+          assert a is not None
+          # A version PAST want means another deploy landed on top of this one.
+          assert int(a['version'])==want, (b['version'],a['version'])
           assert a.get('status')=='ACTIVE' and a.get('verify_jwt') is False
-          assert int(a['version'])==int(b['version'])+1, (b['version'],a['version'])
           assert a.get('ezbr_sha256')!=b.get('ezbr_sha256')
           open('release-evidence/production-version.txt','w').write(str(a['version'])+'\n')
           PY
