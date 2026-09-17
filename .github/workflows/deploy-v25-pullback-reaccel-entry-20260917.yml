@@ -115,16 +115,25 @@ jobs:
           grep -Fq 'return{enabled:false,edge:null,reason:"V24_CONTROL_UNREADABLE"}' \
             supabase/functions/v10-lane-executor/index.ts
 
+          # Blast radius is measured against WHAT IS ACTUALLY RUNNING, not against
+          # origin/main. Releases here are cut from main, so once main is advanced to
+          # the release SHA a diff against origin/main compares a commit to itself and
+          # silently stops guarding anything. PRODUCTION_SOURCE_SHA is the source of
+          # executor v48, the revision live in the project right now.
+          PRODUCTION_SOURCE_SHA=2666aca9687b4f86a48027984c7834c763b3916d
+          git cat-file -e "$PRODUCTION_SOURCE_SHA^{commit}" \
+            || { echo "the recorded production source SHA is not in this history"; exit 1; }
+
           # This release touches a known, closed set of _shared files. Anything else
           # moving there is unreviewed blast radius and fails the release.
-          git diff --name-only origin/main "$GITHUB_SHA" -- supabase/functions/_shared \
+          git diff --name-only "$PRODUCTION_SOURCE_SHA" "$GITHUB_SHA" -- supabase/functions/_shared \
             | grep -vE '^supabase/functions/_shared/(boo/|leader-slot-sizing|leader-pullback-reaccel|leader-momentum-v17\.mjs$|leader-exit-r5-contract)' \
             > /tmp/shared-changed.txt || true
           if [ -s /tmp/shared-changed.txt ]; then
             echo "unexpected _shared changes:"; cat /tmp/shared-changed.txt; exit 1
           fi
           # The exit path is explicitly NOT part of this release.
-          git diff --quiet origin/main "$GITHUB_SHA" -- gateway \
+          git diff --quiet "$PRODUCTION_SOURCE_SHA" "$GITHUB_SHA" -- gateway \
             supabase/functions/_shared/leader-exit-review.mjs \
             supabase/functions/_shared/leader-native-protection.mjs \
             supabase/functions/_shared/leader-qv3-rules.mjs \
