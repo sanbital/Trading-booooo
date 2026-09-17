@@ -21,6 +21,7 @@ import {
   combineSyncCounters,
   exactFuturesOrderHistory,
   futuresMarketUniverse,
+  prioritizeFuturesMarkets,
   futuresOrderDiagnosticRequest,
   readLeaderMarketRows,
 } from "./futures-sync.ts";
@@ -64,6 +65,10 @@ const PUBLIC_URL = (Deno.env.get("BINANCE_BASE_URL") ?? "https://api.binance.com
 );
 const EXCHANGE = "binance", SCOPE = "spot", QUOTE = "USDT";
 const BACKFILL_BATCH = 18, URGENT_BACKFILL_SLOTS = 6, MAX_FULL_SWEEP = 240;
+// Futures sweep budget for one invocation. Sized so the required tiers plus a
+// useful slice of the tail fit inside the one-minute cron cadence; the required
+// tiers are never truncated to honour it.
+const MAX_FUTURES_SWEEP = 60;
 // PostgREST returns at most db-max-rows (1000) per request no matter what `limit`
 // says. Anything that must be complete has to be paged explicitly.
 const PAGE_SIZE = 1000, MAX_ORDER_PAGES = 40;
@@ -294,7 +299,7 @@ async function syncFuturesTrades(sb: any) {
   const portfolioPositions = Array.isArray((portfolioObservation.portfolio as any)?.positions)
     ? (portfolioObservation.portfolio as any).positions
     : [];
-  const markets = futuresMarketUniverse({
+  const universe = futuresMarketUniverse({
     portfolioPositions,
     orders,
     positions,
@@ -302,6 +307,20 @@ async function syncFuturesTrades(sb: any) {
     ...leaderMarkets,
     quote: QUOTE,
   });
+  // Sweep by need, not by Set order. See prioritizeFuturesMarkets() for the
+  // incident this prevents: an unordered, unbounded loop over a growing universe
+  // starved its own tail while the cron kept reporting success.
+  const priority = prioritizeFuturesMarkets({
+    universe,
+    portfolioPositions,
+    positions,
+    syncStates: stateRes.data ?? [],
+    ...leaderMarkets,
+    quote: QUOTE,
+    maxMarkets: MAX_FUTURES_SWEEP,
+  });
+  const markets = priority.markets;
+  const requiredFailures: Array<{ market: string; error: string }> = [];
   let seen = 0, upserted = 0, settled = 0, succeeded = 0;
   let automated = 0, manual = 0, unmatched = 0;
   const errors: Array<{ market: string; error: string }> = [];
@@ -402,11 +421,31 @@ async function syncFuturesTrades(sb: any) {
       if (st.error) throw new Error(`FUTURES_STATE:${st.error.message}`);
       succeeded++;
     } catch (e) {
-      errors.push({ market, error: (e instanceof Error ? e.message : String(e)).slice(0, 500) });
+      const detail = (e instanceof Error ? e.message : String(e)).slice(0, 500);
+      errors.push({ market, error: detail });
+      // A market we KNOW owes us fills is not a log line. Collecting it is the
+      // job; failing to collect it has to surface as a failed run so the ledger
+      // gap is visible the minute it opens instead of days later in an audit.
+      if (priority.required.has(market)) requiredFailures.push({ market, error: detail });
     }
+  }
+  if (requiredFailures.length) {
+    throw new Error(
+      `FUTURES_REQUIRED_MARKETS_UNSYNCED:${
+        requiredFailures.map((f) => f.market).join(",").slice(0, 300)
+      }`,
+    );
   }
   return {
     markets: markets.length,
+    selection: priority.selection,
+    required_markets: priority.required.size,
+    tiers: {
+      exposure: priority.tiers.exposure.length,
+      settlement: priority.tiers.settlement.length,
+      tail: priority.tiers.tail.length,
+    },
+    universe_markets: universe.length,
     succeeded,
     seen,
     upserted,

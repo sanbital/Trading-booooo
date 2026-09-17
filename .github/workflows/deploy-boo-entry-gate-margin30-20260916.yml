@@ -130,7 +130,13 @@ jobs:
         run: |
           set -euo pipefail
           test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
-          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json \
+          # Read the function inventory from the Management API, not the CLI.
+          # `supabase functions list --output json` on the pinned 2.34.3 IGNORES
+          # the flag and prints a human table, and it writes an upgrade notice to
+          # stdout on top of that. The API returns real JSON and is what the
+          # version pin actually needs to be trustworthy.
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions" \
             > release-evidence/functions-before.json
           python - <<'PY'
           import json,os
@@ -188,11 +194,15 @@ jobs:
         run: |
           set -euo pipefail
           for i in $(seq 1 20); do
-            supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json \
-              > release-evidence/functions-after.json
+            curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions" \
+              > release-evidence/functions-after.json || true
             if python - <<'PY'
           import json,sys
-          rows=json.load(open('release-evidence/functions-after.json'))
+          try:
+              rows=json.load(open('release-evidence/functions-after.json'))
+          except Exception:
+              sys.exit(1)
           rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
           row=next(x for x in rows if x.get('slug')=='v10-lane-executor')
           before=int(open('release-evidence/version-before.txt').read().strip())
@@ -220,7 +230,10 @@ jobs:
              "'entry_block_reason',r.entry_block_reason,"
              "'circuit_open',r.circuit_open,"
              "'open_position_count',(select count(*) from public.v11_long_regime_positions where state='OPEN'),"
-             "'margin_mismatch',(r.last_error like '%V17_MARGIN_CONFIG_MISMATCH%'),"
+             # coalesce, because NULL LIKE '...' is NULL, not false -- and a NULL
+             # last_error is the HEALTHY case. Comparing that to False failed the
+             # observation on a perfectly good cycle the first time this ran.
+             "'margin_mismatch',(coalesce(r.last_error,'') like '%V17_MARGIN_CONFIG_MISMATCH%'),"
              "'gate_decisions',(select count(*) from public.boo_entry_gate_decisions where created_at>=__D__),"
              "'gate_blocked',(select count(*) from public.boo_entry_gate_decisions where created_at>=__D__ and allowed=false)"
              ") from public.v11_long_regime_runtime r where singleton").replace('__D__',lit)
@@ -231,7 +244,10 @@ jobs:
               k=s['cycle_completed_at']
               if k and k>deployed and k not in seen:
                   seen[k]=1; rows.append(s); print(json.dumps(s))
-                  assert 0<=s['cycle_ms']<=60000, s
+                  # cycle_ms can read NEGATIVE mid-cycle: last_cycle_started_at is
+                  # stamped when the next cycle begins, before that cycle writes its
+                  # own completed_at. Only an implausibly LONG cycle is a problem.
+                  assert s['cycle_ms'] is None or s['cycle_ms']<=60000, s
                   assert s['circuit_open'] is False, s
                   # The cutover's own failure mode. If this fires, code and DB
                   # disagree on the per-slot margin and every entry is refused.

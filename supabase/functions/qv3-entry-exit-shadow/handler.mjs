@@ -53,7 +53,11 @@ export function createHandler({url,key,fetchFn=fetch,now=Date.now}){
       if(r?.live_enabled!==true||r?.circuit_open!==false)liveBlocks.push('RUNTIME_OR_CIRCUIT_BLOCK');
       if(c?.entry_enabled!==true||c?.legacy_entries_retired!==true)liveBlocks.push('OPERATOR_BLOCK');
       if(!s||s.mode!=='LIVE_LIMITED'||s.pause_new_entries||s.pause_lock_reason||s.manual_intervention_required||s.emergency_liquidation||s.scalp_kill_switch||s.withdrawal_mode)liveBlocks.push('SETTINGS_BLOCK');
-      if(Number(s?.binance_futures_leverage)!==3||Number(s?.binance_futures_allocation_usdt)!==40)liveBlocks.push('RISK_CONFIG_MISMATCH');
+      // Per-slot margin was reduced 40 -> 30 on 2026-09-16 by operator instruction.
+    // This literal must track v10-lane-executor's MARGIN constant; the two are the
+    // same operational number and drifting them apart makes this shadow report a
+    // mismatch that is really just a stale copy.
+    if(Number(s?.binance_futures_leverage)!==3||Number(s?.binance_futures_allocation_usdt)!==30)liveBlocks.push('RISK_CONFIG_MISMATCH');
       if(!snapshot||snapshot.positions_complete!==true||asOf-Date.parse(snapshot.captured_at)>90000||Date.parse(snapshot.captured_at)>asOf)liveBlocks.push('ACCOUNT_SNAPSHOT_UNAVAILABLE');
       if(!scan||Date.parse(scan.signal_close_at)!==cut15||asOf-Date.parse(scan.captured_at)>6*60000||Number(scan.coverage)<POLICY.minCoverage||scan.details?.blocked||!Array.isArray(scan.details?.top10))dataProblems.push('SCAN_MISSING_STALE_OR_BLOCKED');
       const manual=new Set(locks.filter(x=>x.metadata?.v17ManualPosition===true).map(x=>x.asset+'USDT'));
