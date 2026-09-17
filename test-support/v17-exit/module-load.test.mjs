@@ -18,6 +18,7 @@ import * as momentum from '../../supabase/functions/_shared/leader-momentum-v17.
 import * as review from '../../supabase/functions/_shared/leader-exit-review.mjs';
 import * as adapter from '../../supabase/functions/_shared/leader-protection-adapter.mjs';
 import * as sizing from '../../supabase/functions/_shared/leader-slot-sizing.mjs';
+import * as setup from '../../supabase/functions/_shared/leader-pullback-reaccel.mjs';
 
 const path = new URL('../../supabase/functions/v10-lane-executor/index.ts', import.meta.url);
 const source = readFileSync(path, 'utf8');
@@ -45,6 +46,8 @@ function evaluateModule(envVars = {}) {
     ...review,
     ...adapter,
     ...sizing,
+    ...setup,
+    setupIsTerminal: setup.isTerminal,
   };
   vm.createContext(ctx);
   // A top-level `const` is not a property of the vm global, so hand it out explicitly.

@@ -130,6 +130,77 @@ jobs:
             test-support/v17-exit/module-load.test.mjs \
             2>&1 | tee release-evidence/entry-replay.txt
 
+      # The entry-timing policy's own invariants.
+      #
+      # A leader signal must not be able to buy on sight any more, and the window it
+      # is watched for must not have become a longer EXECUTION lifetime. Both are
+      # checkable without a market.
+      - name: Prove the entry timing replaces the age rule rather than extending it
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm exec --yes --package=deno@2.5.6 -- deno eval --quiet '
+            import {SETUP_POLICY, SETUP_STATE, startPullbackSetup, advancePullbackSetup,
+              entryTriggerFresh, isTerminal}
+              from "./supabase/functions/_shared/leader-pullback-reaccel.mjs";
+            import {POLICY} from "./supabase/functions/_shared/leader-momentum-v17.mjs";
+            const fail = (m) => { console.error("RELEASE_GATE_FAIL: " + m); Deno.exit(1); };
+            const MIN = 60000, T0 = Date.parse("2026-09-17T12:00:00.000Z"), REF = 100;
+            const bar = (t,o,h,l,c) => [t,String(o),String(h),String(l),String(c),"0",t+MIN-1,"0",0,"0","0","0"];
+            const sig = {id:"g",symbol:"TESTUSDT",features:{referenceClose:REF,signal5Close:T0}};
+
+            // 1. The executable window is the TRIGGER TTL, and it is stricter than the
+            //    signal age rule it replaces. If this ever inverts, the change has
+            //    become a stale-signal extension and must not ship.
+            if (!(SETUP_POLICY.entryTriggerTtlMs < POLICY.maxEntryAgeMs))
+              fail("the trigger TTL " + SETUP_POLICY.entryTriggerTtlMs + "ms is not stricter than "
+                + "the signal age rule " + POLICY.maxEntryAgeMs + "ms it replaces");
+            if (SETUP_POLICY.setupTtlMs <= POLICY.maxEntryAgeMs)
+              fail("the setup window must be longer than the age rule, or it is pointless");
+
+            // 2. An armed setup is not executable. This is the whole change.
+            const armed = startPullbackSetup(sig, T0);
+            if (entryTriggerFresh(armed.state, T0 + 1000, REF, POLICY.maxEntryDriftPct) === null)
+              fail("an ARMED setup must never be executable");
+
+            // 3. A dip alone is not executable either.
+            let st = advancePullbackSetup(armed.state, bar(T0,100,100.1,99.7,99.9), null, T0+MIN).state;
+            if (st.state !== SETUP_STATE.PULLBACK_OBSERVED) fail("0.3% dip must be a pullback");
+            if (entryTriggerFresh(st, T0 + MIN, REF, POLICY.maxEntryDriftPct) === null)
+              fail("a PULLBACK_OBSERVED setup must never be executable");
+
+            // 4. A re-acceleration is, for exactly 60 seconds and no longer.
+            st = advancePullbackSetup(st, bar(T0+MIN,99.95,100.3,99.9,100.25),
+              bar(T0,100,100.1,99.7,99.9), T0+2*MIN).state;
+            if (st.state !== SETUP_STATE.TRIGGERED) fail("the re-acceleration did not trigger");
+            if (entryTriggerFresh(st, st.triggerAt, 100.3, POLICY.maxEntryDriftPct) !== null)
+              fail("a fresh trigger must be executable");
+            if (entryTriggerFresh(st, st.triggerAt + SETUP_POLICY.entryTriggerTtlMs + 1, 100.3,
+                POLICY.maxEntryDriftPct) !== "V17_TRIGGER_STALE")
+              fail("the trigger must expire exactly at its TTL");
+
+            // 5. The chase ceiling, against the ORIGINAL reference.
+            if (entryTriggerFresh(st, st.triggerAt, REF * 1.0101, POLICY.maxEntryDriftPct)
+                !== "V17_ENTRY_DRIFT")
+              fail("a fill beyond 1% of the original reference must be refused");
+            const chased = advancePullbackSetup(armed.state, bar(T0,100,101.5,99.99,101.2), null, T0+MIN).state;
+            if (!isTerminal(chased) || chased.state !== "CHASE_EXPIRED")
+              fail("a close beyond the chase ceiling must end the setup");
+
+            // 6. The frozen parameters are the researched ones, not re-tuned.
+            const frozen = {minPullbackPct:0.0025, minReaccelPct:0.0025, maxChasePct:0.01,
+              setupTtlMs:900000, entryTriggerTtlMs:60000};
+            for (const [k,v] of Object.entries(frozen))
+              if (SETUP_POLICY[k] !== v)
+                fail(`${k} is ${SETUP_POLICY[k]}, expected the researched ${v}`);
+            if (POLICY.maxEntryDriftPct !== 0.01) fail("the 1% drift ceiling moved");
+            if (POLICY.maxEntryAgeMs !== 120000) fail("the legacy signal age rule moved");
+            console.log("entry timing " + SETUP_POLICY.version + ": watched window "
+              + SETUP_POLICY.setupTtlMs/1000 + "s, executable window "
+              + SETUP_POLICY.entryTriggerTtlMs/1000 + "s, chase ceiling "
+              + SETUP_POLICY.maxChasePct*100 + "%");
+          ' 2>&1 | tee release-evidence/entry-timing-invariants.txt
+
       # The invariant this release exists to restore.
       #
       # v48 shipped a FIXED 0.12 USDT notional buffer funded by RAISING the limit

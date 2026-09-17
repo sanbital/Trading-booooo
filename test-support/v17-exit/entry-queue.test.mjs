@@ -132,13 +132,26 @@ test('a claim race skips that candidate rather than ending the run', () => {
 // only an executing test catches.
 import vm from 'node:vm';
 import {POLICY} from '../../supabase/functions/_shared/leader-momentum-v17.mjs';
+import {SETUP_POLICY, SETUP_REASON, SETUP_STATE, isTerminal as setupIsTerminal}
+  from '../../supabase/functions/_shared/leader-pullback-reaccel.mjs';
 
-function harness({outcomes, rows: extraRows = null}) {
+/** A fixed clock, so a test's verdict never depends on when the suite is run. */
+function clockAt(fixed) {
+  return new Proxy(Date, { get: (t, k) => (k === "now" ? () => fixed : Reflect.get(t, k)) });
+}
+/** Pre-cutover: these signals take the LEGACY immediate-entry path. */
+const LEGACY_CLOSE = Date.parse("2026-09-16T12:00:00.000Z");
+const LEGACY_NOW = LEGACY_CLOSE + 30_000;
+/** Post-cutover: these are governed by the pullback setup. */
+const SETUP_CLOSE = Date.parse("2026-09-17T12:00:00.000Z");
+const SETUP_NOW = SETUP_CLOSE + 30_000;
+
+function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {}}) {
   const seen = [];
   // signal5Close is now load-bearing: the queue retires already-expired candidates
   // before claiming them, so a fixture must be inside POLICY.maxEntryAgeMs to be
   // priced at all. `bar` shifts a row's age for the expiry tests below.
-  const fresh = Date.now() - 5_000;
+  const fresh = LEGACY_CLOSE;
   const rows = extraRows ?? [
     {id: 'a', symbol: 'IOSTUSDT', entry_bar_at: '2026-09-09T13:30:00Z', features: {rank: 1, signal5Close: fresh}},
     {id: 'b', symbol: 'BULLAUSDT', entry_bar_at: '2026-09-09T13:30:00Z', features: {rank: 6, signal5Close: fresh}},
@@ -168,9 +181,25 @@ function harness({outcomes, rows: extraRows = null}) {
     return b;
   }
   const ctx = {
-    Date, Number, Math, Error, Promise, String, Object, Set, Array, console, JSON,
+    Date: clockAt(now), Number, Math, Error, Promise, String, Object, Set, Array, console, JSON,
     ENTRY_ATTEMPTS_PER_RUN: 3,
     ENTRY_RUN_BUDGET_MS: 40000,
+    SETUP_POLICY, SETUP_REASON, SETUP_STATE, SETUP_MAX_CONCURRENT: 2,
+    SETUP_ADVANCE_BUDGET_MS: 12000,
+    setupIsTerminal,
+    // The real predicate: a signal is setup-governed only from the fixed cutover on.
+    setupGoverns: (row) => {
+      const close = Number(row?.features?.signal5Close);
+      return Number.isSafeInteger(close) && close >= Date.parse("2026-09-17T00:00:00.000Z");
+    },
+    setupScopedOpen: () => [],
+    // Stubbed at its real signature. `setups` maps a row id to the state the setup
+    // reaches on this cycle, so the queue's handling of each outcome is testable
+    // without a market fetch.
+    advanceSignalSetup: async (_db, row) => {
+      const state = setups[row.id] ?? null;
+      return { row, state, changed: Boolean(state), reason: state?.terminalReason ?? SETUP_REASON.HOLD };
+    },
     POLICY,
     RELEASE_SCOPE: {SYMBOL: 'SYMBOL', ACCOUNT: 'ACCOUNT'},
     releaseStopsRun: (entry) => entry?.releaseScope !== 'SYMBOL',
@@ -188,7 +217,7 @@ function harness({outcomes, rows: extraRows = null}) {
   };
   vm.createContext(ctx);
   const loop = source.slice(source.indexOf('const openSymbols=new Set(openNow'), source.indexOf('\nreturn entry;\n}',source.indexOf('async function runEntryQueue')));
-  if (!loop.includes('for(const s of stillFresh)')) throw new Error('the entry loop was reshaped');
+  if (!loop.includes('for(const s of executable)')) throw new Error('the entry loop was reshaped');
   vm.runInContext(`this.go=async function(){let entry={entered:false,reason:"V17_NO_ENTRY"};const sg={data:sgRows,error:null};${loop};return {entry,seen}}`, ctx);
   return ctx;
 }
@@ -288,7 +317,7 @@ test('CASE 18: three symbol-scoped defers do not exceed the attempt bound', asyn
 });
 
 test('CASE 19: a candidate already past the entry age is retired without pricing it', async () => {
-  const old = Date.now() - 200_000, fresh = Date.now() - 5_000;
+  const old = LEGACY_CLOSE - 200_000, fresh = LEGACY_CLOSE;
   const ctx = harness({
     rows: [
       {id: 'a', symbol: 'IOSTUSDT', entry_bar_at: '2026-09-09T13:30:00Z',
@@ -308,7 +337,7 @@ test('CASE 19: a candidate already past the entry age is retired without pricing
 });
 
 test('CASE 18: a repeat signal on one symbol cannot hold the whole queue', async () => {
-  const fresh = Date.now() - 5_000;
+  const fresh = LEGACY_CLOSE;
   const ctx = harness({
     rows: [
       // Three bars of the same symbol ahead of one other candidate. Before the
@@ -349,4 +378,126 @@ test('CASE 20: a run where every candidate refuses is a normal run, not a fault'
   assert.ok(entry.reason, 'the run reports WHY, so the release gate can read it');
   // No throw: nothing here may open the circuit or fail the cycle.
   assert.doesNotMatch(String(entry.reason), /CIRCUIT|FAULT/);
+});
+
+// ---------------------------------------------------------------------------
+// The pullback policy's queue behaviour. A signal governed by it does not buy on
+// sight: it is watched, and only a TRIGGERED setup ever becomes a candidate.
+// ---------------------------------------------------------------------------
+
+function setupRow(id, symbol, rank) {
+  return {id, symbol, entry_bar_at: '2026-09-17T12:00:00Z',
+    features: {rank, signal5Close: SETUP_CLOSE}};
+}
+function stateOf(state, extra = {}) {
+  return {policyVersion: SETUP_POLICY.version, state, referencePrice: 100,
+    armedAt: SETUP_CLOSE, expiresAt: SETUP_CLOSE + SETUP_POLICY.setupTtlMs,
+    transitions: [], terminalReason: null, ...extra};
+}
+
+test('an ARMED setup is watched, never claimed and never priced', async () => {
+  const ctx = harness({
+    now: SETUP_NOW,
+    rows: [setupRow('a', 'IOSTUSDT', 1)],
+    setups: {a: stateOf(SETUP_STATE.ARMED)},
+    outcomes: {IOSTUSDT: {dispatch: false, throw: 'must never be priced'}},
+  });
+  const {entry, seen} = await ctx.go();
+  assert.ok(!seen.includes('a:CLAIMED'), 'a watched setup consumes no attempt');
+  assert.equal(entry.entered, false);
+  assert.equal(entry.reason, SETUP_REASON.HOLD);
+});
+
+test('a PULLBACK_OBSERVED setup is still only watched', async () => {
+  const ctx = harness({
+    now: SETUP_NOW,
+    rows: [setupRow('a', 'IOSTUSDT', 1)],
+    setups: {a: stateOf(SETUP_STATE.PULLBACK_OBSERVED, {pullbackObserved: true, pullbackLow: 99.7})},
+    outcomes: {IOSTUSDT: {dispatch: false, throw: 'must never be priced'}},
+  });
+  const {seen} = await ctx.go();
+  assert.ok(!seen.includes('a:CLAIMED'));
+});
+
+test('only a TRIGGERED setup is claimed and priced', async () => {
+  const ctx = harness({
+    now: SETUP_NOW,
+    rows: [setupRow('a', 'IOSTUSDT', 1)],
+    setups: {a: stateOf(SETUP_STATE.TRIGGERED,
+      {triggerAt: SETUP_NOW, triggerExpiresAt: SETUP_NOW + 60_000, triggerClose: 100.25})},
+    outcomes: {IOSTUSDT: {dispatch: true, result: {entered: true, positionId: 'p1'}}},
+  });
+  const {entry, seen} = await ctx.go();
+  assert.ok(seen.includes('a:CLAIMED'));
+  assert.equal(entry.entered, true);
+});
+
+test('a terminal setup is retired with its own reason, not as a stale signal', async () => {
+  for (const [state, reason] of [
+    [SETUP_STATE.CHASE_EXPIRED, SETUP_REASON.CHASE_EXPIRED],
+    [SETUP_STATE.EXPIRED_NO_PULLBACK, SETUP_REASON.SETUP_EXPIRED],
+    [SETUP_STATE.EXPIRED_NO_REACCEL, SETUP_REASON.SETUP_EXPIRED],
+  ]) {
+    const ctx = harness({
+      now: SETUP_NOW,
+      rows: [setupRow('a', 'IOSTUSDT', 1)],
+      setups: {a: stateOf(state, {terminalReason: reason})},
+      outcomes: {IOSTUSDT: {dispatch: false, throw: 'must never be priced'}},
+    });
+    const {entry, seen} = await ctx.go();
+    assert.ok(!seen.includes('a:CLAIMED'), `${state} must not be priced`);
+    assert.equal(entry.reason, reason, `${state} must report ${reason}`);
+  }
+});
+
+test('the policy-scoped admission limit caps concurrent NEW-policy entries only', async () => {
+  // Three triggered setups, limit 2: the third is refused by the POLICY limit, which
+  // is a different thing from the account-wide MAX_SLOTS and must not touch it.
+  const triggered = stateOf(SETUP_STATE.TRIGGERED,
+    {triggerAt: SETUP_NOW, triggerExpiresAt: SETUP_NOW + 60_000, triggerClose: 100.25});
+  const ctx = harness({
+    now: SETUP_NOW,
+    rows: [setupRow('a', 'IOSTUSDT', 1), setupRow('b', 'BULLAUSDT', 2), setupRow('c', 'XTZUSDT', 3)],
+    setups: {a: triggered, b: triggered, c: triggered},
+    outcomes: {
+      IOSTUSDT: {dispatch: false, result: {entered: false, reason: 'UNKNOWN:E1_QUOTE_UNKNOWN',
+        releaseClaim: true, releaseScope: 'SYMBOL'}},
+      BULLAUSDT: {dispatch: false, result: {entered: false, reason: 'UNKNOWN:E1_QUOTE_UNKNOWN',
+        releaseClaim: true, releaseScope: 'SYMBOL'}},
+      XTZUSDT: {dispatch: false, throw: 'the third must never be priced'},
+    },
+  });
+  const {seen} = await ctx.go();
+  assert.ok(seen.includes('a:CLAIMED') && seen.includes('b:CLAIMED'));
+  assert.ok(!seen.includes('c:CLAIMED'), 'the policy limit stops the third');
+  const source = readFileSync(
+    new URL('../../supabase/functions/v10-lane-executor/index.ts', import.meta.url), 'utf8');
+  assert.match(source, /const SETUP_MAX_CONCURRENT=\d;/);
+  assert.match(source, /const MAX_SLOTS=10/, 'the account-wide slot limit is untouched');
+});
+
+test('a legacy signal keeps the legacy 120s deadline, side by side', async () => {
+  // Same cycle, one pre-cutover row and one post-cutover row: they must not borrow
+  // each other's deadline.
+  const source = readFileSync(
+    new URL('../../supabase/functions/v10-lane-executor/index.ts', import.meta.url), 'utf8');
+  assert.match(source, /if\(!setupGoverns\(row\)\)\{\s*if\(now-close>POLICY\.maxEntryAgeMs\)/,
+    'the legacy age rule must still apply to legacy signals');
+  assert.match(source, /now-close>SETUP_POLICY\.setupTtlMs\+60000/,
+    'and a setup-governed signal must be retired on the setup window instead');
+  assert.equal(POLICY.maxEntryAgeMs, 120_000, 'the legacy deadline is not relaxed');
+});
+
+test('advancing setups is bounded on the wall clock as well as by queue size', () => {
+  // Each advance is a klines read. Without a bound, a full queue of watched setups
+  // could spend the whole run budget before a single entry is attempted.
+  assert.match(run, /Date\.now\(\)>=setupDeadline/);
+  const budget = Number(source.match(/const SETUP_ADVANCE_BUDGET_MS=(\d+);/)[1]);
+  const runBudget = Number(source.match(/const ENTRY_RUN_BUDGET_MS=(\d+);/)[1]);
+  assert.ok(budget > 0 && budget < runBudget,
+    `${budget}ms of setup work must leave room inside the ${runBudget}ms run budget`);
+  assert.ok(budget + runBudget < 60_000, 'and the two together must fit the cadence');
+  // A setup that misses its turn is NOT dropped: it stays NEW for the next cycle.
+  assert.ok(!/setupDeadline[\s\S]{0,200}status:"REJECTED"/.test(run),
+    'the budget must never retire a setup it simply had no time for');
 });

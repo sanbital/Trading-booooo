@@ -1,0 +1,3 @@
+# Raw Binance 1m klines: ~13 MB of numbers the exchange will re-serve on request.
+# See FETCH.md for the exact queries. Everything DERIVED from them is committed.
+*-bars.json

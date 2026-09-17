@@ -18,6 +18,7 @@ import {ENFORCEMENT as BOO_ENFORCEMENT, evaluateBooEntry, finalizeBooEntry, load
   openRiskSummary, recordBooVerdict} from '../../supabase/functions/v10-lane-executor/boo-entry-adapter.mjs';
 import {V24_ADAPTER_VERSION, v24EntryGate} from '../../supabase/functions/v10-lane-executor/v24-entry-adapter.mjs';
 import {E1_POLICY} from '../../supabase/functions/_shared/leader-e1-runtime.mjs';
+import * as pullbackSetup from '../../supabase/functions/_shared/leader-pullback-reaccel.mjs';
 import {R1_VERSION} from '../../supabase/functions/_shared/boo/r1-strategy.mjs';
 import {RISK_POLICY_VERSION} from '../../supabase/functions/_shared/boo/risk-policy.mjs';
 import {RISK_BUDGET_VERSION} from '../../supabase/functions/_shared/boo/risk-budget.mjs';
@@ -36,7 +37,7 @@ const code = sizeEntrySrc + gateSrc +
 const MARGIN = SLOT_SIZING_CONTRACT.targetMarginUsdt, LEV = SLOT_SIZING_CONTRACT.leverage,
   NOTIONAL = MARGIN * LEV, MAX_ORDER_MARGIN_USDT = slotSizingBounds(SLOT_SIZING_CONTRACT).maxOrderMarginUsdt;
 
-function make({available}) {
+function make({available, setupCutover = Number.MAX_SAFE_INTEGER}) {
   const now = Date.now();
   const features = {
     strategy: 'LEADER_MOMENTUM_V17', signal5Close: now - 1000, referenceClose: 100, atr: 1, bbPos: 0,
@@ -57,6 +58,13 @@ function make({available}) {
     recordBooVerdict, V24_ADAPTER_VERSION, v24EntryGate,
     R1_VERSION, RISK_POLICY_VERSION, RISK_BUDGET_VERSION, E1_POLICY, crypto, TextEncoder,
     NATIVE_STOP_ENABLED: false, REVISION: 'V11-LONG-REGIME-1.0.1', PATCH: 'TEST',
+    ...pullbackSetup, setupIsTerminal: pullbackSetup.isTerminal,
+    // These fixtures exercise the LEGACY immediate-entry path -- the capital and
+    // balance rules, which are shared by both entry timings. Putting the cutover
+    // beyond every fixture is how a signal is made legacy; `setupCutover` below
+    // moves it so the same harness can drive the pullback path too.
+    SETUP_LIVE_CUTOVER: setupCutover,
+    SETUP_MAX_CONCURRENT: 2,
     ENTRY_EXECUTION_POLICY_VERSION: 'TEST', MAX_GAP_ATR: .5, QV3_VERSION: 'TEST',
     QV3_ACTIVATION_BASIS: 'TEST', X1_POLICY_VERSION: 'TEST', EXIT_REVIEW_R5: {policyVersion: 'TEST'},
     // BOO reads the operator's control rows. OBSERVE is the production posture.
@@ -156,4 +164,13 @@ test('the executor hands a skipped claim back to NEW', async () => {
   const releaseIdx = run.indexOf('releaseClaim===true');
   assert.ok(releaseIdx > 0 && releaseIdx < run.indexOf('catch(e)', releaseIdx),
     'the release runs on the success path, before the catch');
+});
+
+test('once the cutover has passed, an untriggered signal cannot enter at all', async () => {
+  // The same fixture that enters on the legacy path is refused on the pullback path
+  // until its setup has actually triggered. This is the load-bearing property of the
+  // whole change: a leader signal no longer buys on sight.
+  const {ctx, signal} = make({available: 500, setupCutover: 0});
+  await assert.rejects(() => ctx.openBull(observeOnlyDb(), signal, [], []),
+    /V17_SETUP_NOT_TRIGGERED/);
 });

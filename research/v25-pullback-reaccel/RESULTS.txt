@@ -1,0 +1,76 @@
+
+=== V17 pullback / re-acceleration replay =========================
+candidates (gated V17 signals, real production rows): 129
+slot 30 USDT x 3 = 90 USDT notional; fees 5bp/side; exit slippage 10bp base
+holdout boundary: 2026-09-16T14:00:00.000Z (24h, untouched)
+
+arm / split                       n    W    L      WR     gross     fees       net     exp.      PF      MDD   avgWin  avgLoss  holdMin
+---------------------------------------------------------------------------------------------------------------------------------------
+OLD V17 immediate + R5 / dev6d   69   30   39   43.5%   +18.372    6.219   +12.153   +0.176   1.223   -15.07   +2.226   -1.400    19.2
+OLD V17 immediate + R5 / holdout24h   19    8   11   42.1%   +14.138    1.717   +12.421   +0.654   1.882    -7.09   +3.313   -1.280    22.6
+OLD V17 immediate + R5 / combined   88   38   50   43.2%   +32.511    7.936   +24.574   +0.279   1.358   -15.07   +2.455   -1.374    19.9
+---------------------------------------------------------------------------------------------------------------------------------------
+NEW pullback + R5 + QV3 cur / dev6d   32   16   16   50.0%    +5.489    2.883    +2.606   +0.081   1.120    -7.28   +1.521   -1.359    12.9
+NEW pullback + R5 + QV3 cur / holdout24h   11    5    6   45.5%   +11.846    0.996   +10.850   +0.986   2.030    -6.85   +4.277   -1.756    11.2
+NEW pullback + R5 + QV3 cur / combined   43   21   22   48.8%   +17.335    3.879   +13.456   +0.313   1.417    -7.28   +2.178   -1.467    12.5
+---------------------------------------------------------------------------------------------------------------------------------------
+NEW pullback + R5 + QV3 off / dev6d   32   18   14   56.3%   +19.366    2.890   +16.476   +0.515   1.722    -7.46   +2.183   -1.630    21.2
+NEW pullback + R5 + QV3 off / holdout24h   11    5    6   45.5%   +12.519    0.996   +11.523   +1.048   2.110    -5.83   +4.380   -1.730    15.6
+NEW pullback + R5 + QV3 off / combined   43   23   20   53.5%   +31.885    3.886   +27.999   +0.651   1.843    -7.46   +2.661   -1.660    19.8
+---------------------------------------------------------------------------------------------------------------------------------------
+
+=== cost stress (NEW entry, QV3 off, combined) ====================
+arm / split                       n    W    L      WR     gross     fees       net     exp.      PF      MDD   avgWin  avgLoss  holdMin
+stress base 10bp                 43   23   20   53.5%   +31.885    3.886   +27.999   +0.651   1.843    -7.46   +2.661   -1.660    19.8
+stress +10bp                     43   23   20   53.5%   +27.979    3.884   +24.095   +0.560   1.689    -7.90   +2.568   -1.749    19.8
+stress +20bp                     43   23   20   53.5%   +24.073    3.882   +20.191   +0.470   1.550    -8.35   +2.475   -1.837    19.8
+
+=== pullback robustness (NEW entry, QV3 off, combined) ============
+arm / split                       n    W    L      WR     gross     fees       net     exp.      PF      MDD   avgWin  avgLoss  holdMin
+pullback 0.25%                   43   23   20   53.5%   +31.885    3.886   +27.999   +0.651   1.843    -7.46   +2.661   -1.660    19.8
+pullback 0.50%                   28   14   14   50.0%   +15.752    2.528   +13.224   +0.472   1.537    -9.21   +2.704   -1.759    16.4
+pullback 0.75%                   17    8    9   47.1%   +15.803    1.538   +14.265   +0.839   1.962    -8.98   +3.637   -1.648    16.8
+
+=== does the new timing actually improve the entry? ===============
+                         OLD        NEW
+avg MAE (adverse)      -1.4%      -1.3%
+avg MFE (favourable)    2.3%       2.7%
+MFE capture            0.136      0.271
+entries                   88         43
+
+NEW exit reasons: {"V17_PROFIT_LOCK":8,"V17_TRAILING_STOP":14,"V17_RISK_CUT":12,"V17_MOMENTUM_STALE":2,"V17_HARD_STOP":7}
+
+wrote data/results.json
+
+=== all: selection effect vs timing effect ===================
+(real V17 signals, ASCII symbols only, n=601 merged opportunities)
+
+arm                                            n     WR       net     exp.      PF     MDD
+------------------------------------------------------------------------------------------
+OLD timing, NO gate  (the stated baseline)   566  39.6%  -95.482   -0.169   0.841 -112.80
+OLD timing, WITH gate  (selection only)       87  42.5%+   23.791   +0.273   1.346  -15.07
+NEW timing, NO gate  (timing only)           209  43.5%  -20.401   -0.098   0.898  -55.72
+NEW timing, WITH gate  (both)                 42  54.8%+   29.837   +0.710   1.969   -7.46
+
+
+=== dev: selection effect vs timing effect ===================
+(real V17 signals, ASCII symbols only, n=480 merged opportunities)
+
+arm                                            n     WR       net     exp.      PF     MDD
+------------------------------------------------------------------------------------------
+OLD timing, NO gate  (the stated baseline)   454  41.0%  -70.676   -0.156   0.855 -112.80
+OLD timing, WITH gate  (selection only)       69  43.5%+   12.153   +0.176   1.223  -15.07
+NEW timing, NO gate  (timing only)           166  46.4%  -14.037   -0.085   0.912  -48.65
+NEW timing, WITH gate  (both)                 31  58.1%+   17.146   +0.553   1.795   -7.46
+
+
+=== holdout: selection effect vs timing effect ===================
+(real V17 signals, ASCII symbols only, n=121 merged opportunities)
+
+arm                                            n     WR       net     exp.      PF     MDD
+------------------------------------------------------------------------------------------
+OLD timing, NO gate  (the stated baseline)   112  33.9%  -24.806   -0.221   0.781  -40.52
+OLD timing, WITH gate  (selection only)       18  38.9%+   11.638   +0.647   1.826   -7.09
+NEW timing, NO gate  (timing only)            43  32.6%   -6.364   -0.148   0.846  -21.35
+NEW timing, WITH gate  (both)                 11  45.5%+   12.691   +1.154   2.378   -4.66
+

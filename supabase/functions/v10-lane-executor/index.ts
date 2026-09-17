@@ -17,6 +17,7 @@ import {R1_VERSION} from "../_shared/boo/r1-strategy.mjs";
 import {RISK_POLICY_VERSION} from "../_shared/boo/risk-policy.mjs";
 import {RISK_BUDGET_VERSION} from "../_shared/boo/risk-budget.mjs";
 import {SLOT_SIZING_CONTRACT,assertSlotSizingContract,floorStep,planSlotEntry,slotSizingBounds} from "../_shared/leader-slot-sizing.mjs";
+import {SETUP_POLICY,SETUP_POLICY_VERSION,SETUP_REASON,SETUP_STATE,advancePullbackSetup,deserializeSetup,enterPullbackSetup,entryTriggerFresh,expirePullbackSetup,isTerminal as setupIsTerminal,serializeSetup,setupIdentity,startPullbackSetup} from "../_shared/leader-pullback-reaccel.mjs";
 const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V23-E1-X1-OPERATOR-OVERRIDE-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Object.freeze({
   id:"2026-09-13-USER-PRIORITY-OVERRIDE",basis:"OPERATOR_OVERRIDE_UNVALIDATED",
@@ -50,7 +51,7 @@ function controlReleaseScope(decision){
 // MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET / QTY_STEP_EXCEEDS_MARGIN_BUDGET / IOC_PRICE_CAP_EXCEEDED
 // are the sizing contract's reasons. ENTRY_GRANULARITY_BPS and ENTRY_SLOT_GRANULARITY_MARGIN
 // are kept so rows written by earlier revisions still classify the same way.
-const ENTRY_SKIP_SYMBOL_SCOPED=/^(SIGNAL_STALE_OR_FUTURE|SUPERSEDED_BY_FRESHER_SIGNAL|ENTRY_DRIFT|WRONG_STRATEGY|INVALID_PRICE|V17_EXIT_POLICY_INVALID|MANUAL_SYMBOL_LOCKED|ENTRY_SPREAD|ENTRY_FEATURES_INVALID|QTY_INVALID|QTY_INPUT_INVALID|MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET|QTY_STEP_EXCEEDS_MARGIN_BUDGET|IOC_PRICE_CAP_EXCEEDED|ENTRY_GRANULARITY_BPS|ENTRY_SLOT_GRANULARITY_MARGIN|ENTRY_NOTIONAL_UNDERSIZED|V17_LIMIT_PRICE_MARGIN_OVERFLOW)/;
+const ENTRY_SKIP_SYMBOL_SCOPED=/^(SIGNAL_STALE_OR_FUTURE|SUPERSEDED_BY_FRESHER_SIGNAL|V17_SETUP_BUDGET_EXHAUSTED|V17_TRIGGER_STALE|V17_TRIGGER_FUTURE|V17_SETUP_NOT_TRIGGERED|V17_SETUP_EXPIRED|V17_CHASE_EXPIRED|V17_ENTRY_DRIFT|V17_SETUP_INVALID_PRICE|V17_SETUP_POLICY_SLOT_LIMIT|ENTRY_DRIFT|WRONG_STRATEGY|INVALID_PRICE|V17_EXIT_POLICY_INVALID|MANUAL_SYMBOL_LOCKED|ENTRY_SPREAD|ENTRY_FEATURES_INVALID|QTY_INVALID|QTY_INPUT_INVALID|MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET|QTY_STEP_EXCEEDS_MARGIN_BUDGET|IOC_PRICE_CAP_EXCEEDED|ENTRY_GRANULARITY_BPS|ENTRY_SLOT_GRANULARITY_MARGIN|ENTRY_NOTIONAL_UNDERSIZED|V17_LIMIT_PRICE_MARGIN_OVERFLOW)/;
 // Slot geometry is NOT declared here. MARGIN/LEV/NOTIONAL are views onto the one
 // sizing contract (_shared/leader-slot-sizing.mjs) that the signal generator and
 // the V17 policy also read, so the four copies that drifted apart during the
@@ -61,7 +62,24 @@ const SLOT_BOUNDS=slotSizingBounds(SLOT_SIZING_CONTRACT),MAX_ORDER_MARGIN_USDT=S
 // The price cap stays visible here because the E1 guard re-checks it; the base
 // uplift is applied inside the contract and is not restated.
 const IOC_MAX_BPS=SLOT_SIZING_CONTRACT.iocMaxBps;
-const MAX_SLOTS=10,ENTRY_CASH_BUFFER_USDT=.10,SNAP_MAX=90000,SIGNAL_MAX=300000,SPREAD_MAX=25,MAX_GAP_ATR=.5,BULL_MAX_MS=30*86400000,T1_PRICE=.075,PARTIAL=.30,TRAIL=.0225;
+const MAX_SLOTS=10,ENTRY_CASH_BUFFER_USDT=.10,SPREAD_MAX=25,MAX_GAP_ATR=.5,BULL_MAX_MS=30*86400000,T1_PRICE=.075,PARTIAL=.30,TRAIL=.0225,SNAP_MAX=90000;
+// A leader signal no longer buys on sight; it arms a setup that watches for a
+// pullback and a re-acceleration for up to SETUP_POLICY.setupTtlMs. The queue must
+// therefore keep looking at a signal for that long, so the candidate window is the
+// setup window plus one 5m bar of slack -- NOT an extension of the signal's
+// EXECUTION lifetime, which is now the 60-second trigger TTL and is stricter than
+// the 120 seconds V17 ran with.
+const SIGNAL_MAX=SETUP_POLICY.setupTtlMs+300000;
+// Fixed operator cutover, recorded so a position's entry timing can be reconstructed
+// from its stamp alone. No env var or request can move it.
+const SETUP_LIVE_CUTOVER=Date.parse("2026-09-17T00:00:00.000Z");
+// Policy-scoped admission limit for the new entry timing, applied ONLY to positions
+// carrying this policy's stamp. It is deliberately separate from MAX_SLOTS: the
+// account-wide risk limit is the operator's, and this change does not touch it.
+const SETUP_MAX_CONCURRENT=2;
+// Each setup advance is one klines read. Bounding the pass on the wall clock keeps a
+// full queue of watched setups from eating the run budget the entry attempts need.
+const SETUP_ADVANCE_BUDGET_MS=12000;
 function res(s,b){return new Response(JSON.stringify(b),{status:s,headers:{"content-type":"application/json","cache-control":"no-store"}})}function N(v,d=0){const x=Number(v);return Number.isFinite(x)?x:d}function rec(v){return v&&typeof v==="object"&&!Array.isArray(v)?v:{}}function eq(a,b){if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0}// Quantity rounding lives in the sizing contract now, so there is exactly one
 // implementation of it; floorStep is what the exit path still needs directly.
 // addStep is gone with the one-step bump it existed for: quantity is solved, not nudged.
@@ -171,6 +189,94 @@ function sizeEntry(ask,step,filters={}){
   return{...plan,amount:plan.quantity,sizedNotional:plan.referenceNotionalUsdt,
     sizedMargin:plan.orderMarginUsdt};
 }
+// --- V17 pullback / re-acceleration setup lifecycle -------------------------
+//
+// The setup lives on the SIGNAL row, in features.v17Setup. That keeps it durable
+// across restarts and shared between concurrent executors without a new table, and
+// it keeps the whole lifecycle idempotent: the state machine refuses a candle it has
+// already consumed, so a retried cycle cannot deepen a low or fire a second trigger.
+//
+// Nothing here creates an order intent. A setup that never triggers costs the
+// account nothing and leaves no order lifecycle behind.
+function signalSetup(row){
+  return deserializeSetup(rec(rec(row?.features).v17Setup));
+}
+function setupGoverns(row){
+  const close=N(rec(row?.features).signal5Close,NaN);
+  return Number.isSafeInteger(SETUP_LIVE_CUTOVER)&&Number.isSafeInteger(close)&&close>=SETUP_LIVE_CUTOVER;
+}
+async function persistSetup(db,row,state,reason){
+  const features={...rec(row.features),v17Setup:serializeSetup(state)};
+  const patch={features,updated_at:new Date().toISOString()};
+  if(setupIsTerminal(state)){patch.status="REJECTED";patch.reject_reason=String(state.terminalReason??reason).slice(0,500);}
+  const w=await db.from("v11_long_regime_signals").update(patch).eq("id",row.id).eq("status","NEW");
+  if(w.error)throw Error(`SETUP_WRITE:${w.error.message}`);
+  return {...row,features,status:patch.status??row.status};
+}
+/**
+ * Advance one signal's setup by every completed 1m candle it has not seen yet.
+ * Returns the state; the caller decides whether it is executable.
+ */
+async function advanceSignalSetup(db,row,now,fetchCandles=qv3Candles){
+  let state=signalSetup(row);
+  if(state&&setupIsTerminal(state))return {row,state,changed:false};
+  if(!state){
+    const armed=startPullbackSetup({id:row.id,symbol:row.symbol,features:rec(row.features)},now,SETUP_POLICY);
+    if(!armed.ok)return {row,state:null,changed:false,reason:armed.reason};
+    state=armed.state;
+    await audit(db,null,"BULL","BULL","ENTRY_DEFER",SETUP_REASON.ARMED,
+      {signalId:row.id,symbol:row.symbol,setup:{policyVersion:SETUP_POLICY_VERSION,
+        identity:state.identity,referencePrice:state.referencePrice,expiresAt:state.expiresAt}});
+    return {row:await persistSetup(db,row,state,SETUP_REASON.ARMED),state,changed:true};
+  }
+  if(now>state.expiresAt){
+    const done=expirePullbackSetup(state,now);
+    return {row:await persistSetup(db,row,done.state,done.reason),state:done.state,changed:true};
+  }
+  // Only completed candles, and only the ones after the last one consumed.
+  const from=state.lastCandleOpenTime===null?state.armedAt:state.lastCandleOpenTime+60000;
+  const start=Math.floor(from/60000)*60000-60000;
+  let bars;
+  try{bars=await fetchCandles(row.symbol,now,start);}
+  catch(e){return {row,state,changed:false,reason:`V17_SETUP_MARKET:${String(e?.message??e)}`};}
+  if(!Array.isArray(bars))return {row,state,changed:false,reason:"V17_SETUP_MARKET_INVALID"};
+  const sorted=[...bars].filter(Array.isArray).sort((a,b)=>Number(a[0])-Number(b[0]));
+  let changed=false,lastReason=SETUP_REASON.HOLD;
+  for(let i=0;i<sorted.length;i++){
+    const out=advancePullbackSetup(state,sorted[i],i>0?sorted[i-1]:null,now,SETUP_POLICY);
+    state=out.state;lastReason=out.reason;changed=changed||out.changed;
+    if(setupIsTerminal(state)||state.state===SETUP_STATE.TRIGGERED)break;
+  }
+  if(!changed)return {row,state,changed:false,reason:lastReason};
+  if(state.state===SETUP_STATE.TRIGGERED||setupIsTerminal(state)){
+    await audit(db,null,"BULL","BULL",state.state===SETUP_STATE.TRIGGERED?"ENTRY_ALLOW":"ENTRY_DEFER",
+      lastReason,{signalId:row.id,symbol:row.symbol,setup:{policyVersion:SETUP_POLICY_VERSION,
+        state:state.state,identity:state.identity,referencePrice:state.referencePrice,
+        pullbackLow:state.pullbackLow,triggerAt:state.triggerAt,triggerClose:state.triggerClose}});
+  }
+  return {row:await persistSetup(db,row,state,lastReason),state,changed:true,reason:lastReason};
+}
+/**
+ * Execution freshness for one entry attempt.
+ *
+ * Legacy signals keep the unchanged V17 rule: 120 seconds from the 5m close, and 1%
+ * drift from the reference. A pullback-policy signal REPLACES the age half with the
+ * trigger's own 60-second window -- it does not extend it, and 60 seconds is stricter
+ * than the 120 the legacy path allows. The drift half is identical and is still
+ * measured against the ORIGINAL signal reference, so a setup can never walk its own
+ * chase ceiling upward by re-basing.
+ */
+function entryFreshFor(row,features,now,price){
+  if(!setupGoverns(row))return entryFresh(rec(features),now,price);
+  if(rec(features)?.strategy!==STRATEGY)return "WRONG_STRATEGY";
+  const state=signalSetup(row);
+  if(!state)return SETUP_REASON.NOT_TRIGGERED;
+  return entryTriggerFresh(state,now,price,POLICY.maxEntryDriftPct,SETUP_POLICY);
+}
+/** Positions opened under this entry timing, for the policy-scoped admission limit. */
+function setupScopedOpen(positions){
+  return (positions??[]).filter(p=>rec(p.metadata).entryTimingPolicyVersion===SETUP_POLICY_VERSION);
+}
 async function hashJson(value){const bytes=new TextEncoder().encode(JSON.stringify(value)),hash=new Uint8Array(await crypto.subtle.digest("SHA-256",bytes));return[...hash].map(x=>x.toString(16).padStart(2,"0")).join("")}
 // --- BOO common entry gate (brief section 4) --------------------------------
 // The identity the validation approval must match. BOO_POLICY_CODE_SHA256 is
@@ -208,7 +314,7 @@ function e1CurrentAssessment(s,q,step,at,filters={}){
   try{
     sized=sizeEntry(ask,step,filters);evidence=e1QuoteEvidence(q,sized.amount,at);
     limitPrice=sized.limitPrice;
-    guardPassed=!entryFresh(rec(s.features),at,limitPrice)&&sized.iocBps<=IOC_MAX_BPS&&
+    guardPassed=!entryFreshFor(s,s.features,at,limitPrice)&&sized.iocBps<=IOC_MAX_BPS&&
       sized.orderMarginUsdt<=MAX_ORDER_MARGIN_USDT+1e-9;
     liquidityPassed=evidence.valid&&evidence.fullDepth&&spreadBps<=SPREAD_MAX;
   }catch{/* Invalid current sizing remains an explicit failed guard. */}
@@ -419,7 +525,7 @@ const gateway=opsGateway(db);
 await requireLeaderEntryControls(db);
 const exitPolicy=rec(s.features?.exitPolicy);
 if(!Object.values(exitPolicy).every(v=>Number.isFinite(Number(v)))||!(Number(exitPolicy.stopPct)>0&&Number(exitPolicy.stopPct)<1&&Number(exitPolicy.trailArmPct)>0&&Number(exitPolicy.trailGapPct)>0&&Number(exitPolicy.trailGapPct)<1&&Number(exitPolicy.maxHoldMs)===POLICY.maxHoldMs&&Number(exitPolicy.staleMs)>0))throw new Error("V17_EXIT_POLICY_INVALID");
-const initialFresh=entryFresh(rec(s.features),Date.now(),Number(s.features?.referenceClose));
+const initialFresh=entryFreshFor(s,s.features,Date.now(),Number(s.features?.referenceClose));
 if(initialFresh)throw new Error(initialFresh);
 let[sn,q,i,rawInitialPair,initialOrders]=await Promise.all([snap(db),gateway({action:"quote",market:s.symbol}),
   gateway({action:"symbol_info",market:s.symbol}),readOpsPair(db,gateway,s.symbol),gateway({action:"v18_open_orders"},5000)]),
@@ -442,7 +548,7 @@ if(active(initialPair.pf).length>=MAX_SLOTS)return{entered:false,reason:"V11_SLO
 if(initialPair.positions.some(p=>String(p.symbol).toUpperCase()===String(s.symbol).toUpperCase()))return{entered:false,reason:"DUPLICATE_SYMBOL_OPEN"};
 let pf=initialPair.pf,bid=N(q?.best_bid),ask=N(q?.best_ask),sp=bid>0&&ask>0?(ask/bid-1)*10000:999;if(!(bid>0&&ask>0&&sp<=SPREAD_MAX))throw new Error(`ENTRY_SPREAD:${sp}`);const f=rec(s.features),ref=N(f.referenceClose),atr=N(f.atr);if(!(atr>0&&ref>0))throw new Error("ENTRY_FEATURES_INVALID");let filters=symbolFilters(i),step=filters.quantityStep,min=filters.minNotionalUsdt,sized=sizeEntry(ask,step,filters);if(sized.orderNotionalUsdt+1e-9<min)throw new Error("QTY_INVALID");let live=N(pf?.available_quote,NaN),avail=Math.min(N(sn.available_quote),live);if(!Number.isFinite(live))throw new Error("ENTRY_AVAILABLE_BALANCE_UNREADABLE");if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true};// The plan already priced and budgeted itself; nothing re-derives either here.
 let limitPrice=sized.limitPrice,iocBps=sized.iocBps,gap=Math.abs(limitPrice-ref)/atr;
-let finalFresh=entryFresh(f,Date.now(),limitPrice);if(finalFresh)throw new Error(finalFresh);
+let finalFresh=entryFreshFor(s,f,Date.now(),limitPrice);if(finalFresh)throw new Error(finalFresh);
 // Defensive: planSlotEntry already refuses anything over budget at its own limit.
 if(sized.amount*limitPrice/LEV>MAX_ORDER_MARGIN_USDT+1e-9)throw new Error("V17_LIMIT_PRICE_MARGIN_OVERFLOW");
 // V17 replaces pullback-specific ATR gap gating with a price-drift/age guard.
@@ -459,7 +565,7 @@ if(qv3Active){
     return {entered:false,reason:result.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,qv3:attempt.qv3};
   }
   await requireLeaderEntryControls(db);
-  const freshness=entryFresh(f,Date.now(),limitPrice);if(freshness)throw Error(freshness);
+  const freshness=entryFreshFor(s,f,Date.now(),limitPrice);if(freshness)throw Error(freshness);
 }
 // V24 confirmation. Placed before E1 so a V24 refusal costs no extra gateway work, and
 // scoped to entry only: it can refuse a V17 signal, never open one of its own, and it
@@ -475,13 +581,34 @@ if(v24Ctl.enabled){
   await audit(db,null,"BULL","BULL",v24.allowed?"ENTRY_ALLOW":"ENTRY_DEFER",
     `V24:${v24.reason}`,{signalId:s.id,symbol:s.symbol,v24});
   if(!v24.allowed)return{entered:false,reason:v24.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,v24};
-  const v24Fresh=entryFresh(f,Date.now(),limitPrice);if(v24Fresh)throw Error(v24Fresh);
+  const v24Fresh=entryFreshFor(s,f,Date.now(),limitPrice);if(v24Fresh)throw Error(v24Fresh);
 }
 let e1Decision={policyVersion:E1_POLICY.policyVersion,confirmationState:"DISABLED",allowed:true,
   defer:false,reject:false,reasonCodes:["E1_OPERATOR_FLAG_DISABLED"],executionEnabled:false,
   parametersValidatedByBacktest:false,activationBasis:OPERATOR_OVERRIDE.basis};
 if(E1_ENABLED){
   const e1=await runE1Gate(s,q,step,gateway,filters);e1Decision=e1.decision;attempt.e1=e1Decision;
+  // E1's FAST-WEAK WATCH is a directional question: it waits up to E1_POLICY.watchMs
+  // to see whether a 10-second slide recovers. Under the pullback policy that question
+  // has already been answered, by a COMPLETED 1m candle that closed bullish, above the
+  // previous close and back above the signal reference -- which is strictly more
+  // evidence than a 10-second tape window. Re-asking it here would spend up to 30s of
+  // a 60s trigger TTL to re-derive the same answer, and would usually expire the
+  // trigger instead of improving it.
+  //
+  // So for setup-governed signals that ONE defer becomes a recorded observation. Every
+  // other E1 outcome is untouched: a rejection still rejects, and UNKNOWN -- an absent
+  // or stale quote, a truncated tape, missing depth -- still defers. Unknown market
+  // data is never converted into a pass.
+  if(setupGoverns(s)&&e1Decision.defer===true&&!e1Decision.reject&&
+     Array.isArray(e1Decision.reasonCodes)&&e1Decision.reasonCodes.length===1&&
+     e1Decision.reasonCodes[0]==="E1_FAST_WEAK_WATCH"){
+    e1Decision={...e1Decision,allowed:true,defer:false,
+      reasonCodes:["E1_FAST_WEAK_OBSERVED_NOT_ENFORCED"],
+      fastWeakObservation:{watched:false,supersededBy:SETUP_POLICY_VERSION,
+        original:e1.decision.reasonCodes}};
+    attempt.e1=e1Decision;
+  }
   await audit(db,null,"BULL","BULL",e1Decision.allowed?"ENTRY_ALLOW":e1Decision.reject?"ENTRY_REJECT":"ENTRY_DEFER",
     e1Decision.reasonCodes.join(","),{signalId:s.id,symbol:s.symbol,e1:e1Decision,operatorOverride:OPERATOR_OVERRIDE});
   if(!e1Decision.allowed){
@@ -518,7 +645,7 @@ if(E1_ENABLED){
     if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,
       reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true,e1:e1Decision};
     limitPrice=sized.limitPrice;iocBps=sized.iocBps;
-    gap=Math.abs(limitPrice-ref)/atr;finalFresh=entryFresh(f,Date.now(),limitPrice);if(finalFresh)throw Error(finalFresh);
+    gap=Math.abs(limitPrice-ref)/atr;finalFresh=entryFreshFor(s,f,Date.now(),limitPrice);if(finalFresh)throw Error(finalFresh);
     if(sized.amount*limitPrice/LEV>MAX_ORDER_MARGIN_USDT+1e-9)throw Error("V17_LIMIT_PRICE_MARGIN_OVERFLOW");
     if(qv3Active){
       let result,bars=[],evaluatedAt=Date.now();
@@ -583,11 +710,11 @@ if(E1_ENABLED){
     return{entered:false,reason:"E1_DISPATCH_QUOTE_AGED",releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,e1:e1Decision};
   // Waiting for recovery never extends the original signal lifetime. Recheck after
   // all account/ownership reads too, immediately before persisting the order intent.
-  const freshness=entryFresh(f,checkedAt,limitPrice);if(freshness)throw Error(freshness);
+  const freshness=entryFreshFor(s,f,checkedAt,limitPrice);if(freshness)throw Error(freshness);
 }
 await verifyExecutionLease(db);
 const id=cid("v11e",s.id),rp={action:"create_order",leverage:LEV,order:{market:s.symbol,side:"BUY",type:"LIMIT",price:limitPrice,time_in_force:"IOC",quantity:sized.amount,identifier:id,position_side:"LONG",position_effect:"OPEN"},wait_for_final_ms:4000},
-  oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,intent:"OPEN_LONG",reason:"V17_LEADER_ENTRY_IOC",client_order_id:id,requested_quantity:sized.amount,state:"PLANNED",request_payload:{...rp,quantity_step:step,price_tick:filters.priceTick,min_notional_usdt:filters.minNotionalUsdt,target_margin_usdt:MARGIN,sizing_contract_version:SLOT_SIZING_CONTRACT.version,sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,order_notional_usdt:sized.orderNotionalUsdt,sizing_bound_by:sized.boundBy,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,executor_patch:PATCH,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION,max_entry_drift_pct:POLICY.maxEntryDriftPct},entry_control:finalDecision.evidence,e1:E1_ENABLED?e1Decision:null,x1:X1_ENABLED?{policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,...OPERATOR_OVERRIDE}:null,operator_override:E1_ENABLED||X1_ENABLED?OPERATOR_OVERRIDE:null,qv3:qv3Active?{version:QV3_VERSION,activation:QV3_LIVE_CUTOVER,basis:QV3_ACTIVATION_BASIS}:null}}).select("*").single();
+  oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,intent:"OPEN_LONG",reason:"V17_LEADER_ENTRY_IOC",client_order_id:id,requested_quantity:sized.amount,state:"PLANNED",request_payload:{...rp,quantity_step:step,price_tick:filters.priceTick,min_notional_usdt:filters.minNotionalUsdt,target_margin_usdt:MARGIN,sizing_contract_version:SLOT_SIZING_CONTRACT.version,entry_timing_policy:setupGoverns(s)?{version:SETUP_POLICY_VERSION,activation:SETUP_LIVE_CUTOVER,setup:serializeSetup(signalSetup(s),8)}:null,sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,order_notional_usdt:sized.orderNotionalUsdt,sizing_bound_by:sized.boundBy,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,executor_patch:PATCH,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION,max_entry_drift_pct:POLICY.maxEntryDriftPct},entry_control:finalDecision.evidence,e1:E1_ENABLED?e1Decision:null,x1:X1_ENABLED?{policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,...OPERATOR_OVERRIDE}:null,operator_override:E1_ENABLED||X1_ENABLED?OPERATOR_OVERRIDE:null,qv3:qv3Active?{version:QV3_VERSION,activation:QV3_LIVE_CUTOVER,basis:QV3_ACTIVATION_BASIS}:null}}).select("*").single();
 if(oi.error)throw new Error(`ORDER_INTENT:${oi.error.message}`);
 try{
   await verifyExecutionLease(db);attempt.dispatched=true;const initialRaw=await gateway(rp),initial=fill(initialRaw);
@@ -686,8 +813,11 @@ async function settleKnownEntry(db,intent,raw,gw=opsGateway(db)) {
       entryAt=Number.isFinite(fillAt)&&fillAt>0&&fillAt<=settledAt+1000&&
         (!Number.isFinite(intentAt)||fillAt>=intentAt-30000)?fillAt:settledAt,
       now=new Date(entryAt),entryPolicy=intent.request_payload?.entry_execution_policy,
+      // Stamped from the ORDER INTENT, so an already-open position can never be
+      // opted into this policy by a later deploy: the stamp is fixed at entry.
+      entryTiming=rec(intent.request_payload?.entry_timing_policy),
       fillGuard=entryPolicy?.version===ENTRY_EXECUTION_POLICY_VERSION?postFillEntryGuard(f,z.avg):null,
-      pos=await db.from("v11_long_regime_positions").insert({signal_id:s.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:s.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{qv3:intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,leaderExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,entryConfirmationPolicyVersion:intent.request_payload?.e1?.policyVersion??null,entryConfirmation:intent.request_payload?.e1??null,exitObservationPolicyVersion:intent.request_payload?.x1?.policyVersion??null,x1Observation:{observedBidPeak:z.avg,executableVwapPeak:null,lastObservationId:null,lastObservationAt:null,source:"P10_TOP_OF_BOOK_BATCH",maxQuoteAgeMs:1000},entryMarketRules:{priceTick:N(intent.request_payload?.price_tick),quantityStep:N(intent.request_payload?.quantity_step)},operatorOverride:intent.request_payload?.operator_override??null,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFeatures:f}}).select("*").single();
+      pos=await db.from("v11_long_regime_positions").insert({signal_id:s.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:s.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{qv3:entryTiming?.version===SETUP_POLICY_VERSION?null:(intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null),entryTimingPolicyVersion:entryTiming?.version??null,entryTimingSetup:entryTiming?.setup??null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,leaderExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,entryConfirmationPolicyVersion:intent.request_payload?.e1?.policyVersion??null,entryConfirmation:intent.request_payload?.e1??null,exitObservationPolicyVersion:intent.request_payload?.x1?.policyVersion??null,x1Observation:{observedBidPeak:z.avg,executableVwapPeak:null,lastObservationId:null,lastObservationAt:null,source:"P10_TOP_OF_BOOK_BATCH",maxQuoteAgeMs:1000},entryMarketRules:{priceTick:N(intent.request_payload?.price_tick),quantityStep:N(intent.request_payload?.quantity_step)},operatorOverride:intent.request_payload?.operator_override??null,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFeatures:f}}).select("*").single();
     if(pos.error)throw Error(`POSITION:${pos.error.message}`);position=pos.data;
   }
   await verifyExecutionLease(db);
@@ -1234,25 +1364,74 @@ for(const row of superseded)
     reject_reason:`SUPERSEDED_BY_FRESHER_SIGNAL:${String(row.symbol).toUpperCase()}`,
     updated_at:new Date().toISOString()}).eq("id",row.id).eq("status","NEW");
 if(!queue.length)entry={entered:false,reason:eligible.length?(eligible.some(x=>quarantinedSymbols.has(String(x.symbol).toUpperCase()))?"SYMBOL_QUARANTINED":"STALE_PROTECTION_SYMBOL_LOCKED"):"NO_FRESH_BULL_SIGNAL"};
-// Candidates that are ALREADY past the entry-age policy are retired here, before any
-// gateway, BOO or E1 work. The policy (POLICY.maxEntryAgeMs) is unchanged -- openBull
-// would reach the identical verdict -- but reaching it cheaply stops a batch of expired
-// rows from consuming the run's attempts while a genuinely fresh candidate waits.
+// Candidates that can no longer produce an entry are retired here, before any
+// gateway, BOO or E1 work.
+//
+// Which deadline applies depends on which entry timing owns the signal. Under the
+// pullback policy the signal is not trying to buy now -- it is watching for up to
+// SETUP_POLICY.setupTtlMs -- so POLICY.maxEntryAgeMs is not its deadline and the
+// setup's own expiry is. Legacy signals keep the 120-second rule unchanged. Neither
+// deadline is relaxed: the pullback policy's EXECUTION window is the 60-second
+// trigger TTL, which is stricter than what V17 ran with.
 const stillFresh=[];
 for(const row of queue){
-  const close=N(rec(row.features).signal5Close,NaN),now=Date.now();
-  if(!Number.isFinite(close)||now<close||now-close>POLICY.maxEntryAgeMs){
+  const now=Date.now(),close=N(rec(row.features).signal5Close,NaN);
+  if(!Number.isFinite(close)||now<close){
     await db.from("v11_long_regime_signals").update({status:"REJECTED",
       reject_reason:"SIGNAL_STALE_OR_FUTURE",updated_at:new Date().toISOString()})
       .eq("id",row.id).eq("status","NEW");
     if(!stillFresh.length)entry={entered:false,reason:"SIGNAL_STALE_OR_FUTURE"};
     continue;
   }
+  if(!setupGoverns(row)){
+    if(now-close>POLICY.maxEntryAgeMs){
+      await db.from("v11_long_regime_signals").update({status:"REJECTED",
+        reject_reason:"SIGNAL_STALE_OR_FUTURE",updated_at:new Date().toISOString()})
+        .eq("id",row.id).eq("status","NEW");
+      if(!stillFresh.length)entry={entered:false,reason:"SIGNAL_STALE_OR_FUTURE"};
+      continue;
+    }
+    stillFresh.push(row);
+    continue;
+  }
+  if(now-close>SETUP_POLICY.setupTtlMs+60000){
+    await db.from("v11_long_regime_signals").update({status:"REJECTED",
+      reject_reason:SETUP_REASON.SETUP_EXPIRED,updated_at:new Date().toISOString()})
+      .eq("id",row.id).eq("status","NEW");
+    if(!stillFresh.length)entry={entered:false,reason:SETUP_REASON.SETUP_EXPIRED};
+    continue;
+  }
   stillFresh.push(row);
+}
+// Advance every live setup on this cycle's completed candles. A setup that has not
+// triggered is not a candidate: it is watched, not queued, and it consumes no attempt.
+//
+// Each advance costs one klines read, so the whole pass is bounded on the wall clock
+// as well as by the queue size. A setup that does not get its turn this cycle is
+// still NEW and is picked up on the next one, a minute later and well inside its
+// 15-minute window -- the cadence is protected without dropping the candidate.
+const executable=[],policyOpen=setupScopedOpen(openNow).length;
+const setupDeadline=Date.now()+SETUP_ADVANCE_BUDGET_MS;
+for(const row of stillFresh){
+  if(!setupGoverns(row)){executable.push(row);continue}
+  if(Date.now()>=setupDeadline){entry={entered:false,reason:"V17_SETUP_BUDGET_EXHAUSTED"};break}
+  let advanced;
+  try{advanced=await advanceSignalSetup(db,row,Date.now());}
+  catch(e){entry={entered:false,reason:String(e?.message??e)};continue}
+  const state=advanced.state;
+  if(!state){entry={entered:false,reason:advanced.reason??SETUP_REASON.INVALID_PRICE};continue}
+  if(setupIsTerminal(state)){entry={entered:false,reason:state.terminalReason??SETUP_REASON.SETUP_EXPIRED};continue}
+  if(state.state!==SETUP_STATE.TRIGGERED){entry={entered:false,reason:advanced.reason??SETUP_REASON.HOLD};continue}
+  // Policy-scoped admission limit. It narrows this policy's own exposure during its
+  // first live window; it never widens, and it never touches MAX_SLOTS.
+  if(policyOpen+executable.filter(setupGoverns).length>=SETUP_MAX_CONCURRENT){
+    entry={entered:false,reason:"V17_SETUP_POLICY_SLOT_LIMIT"};continue;
+  }
+  executable.push(advanced.row);
 }
 const runDeadline=Date.now()+ENTRY_RUN_BUDGET_MS;
 let attempts=0;
-for(const s of stillFresh){
+for(const s of executable){
   if(attempts>=ENTRY_ATTEMPTS_PER_RUN){entry={entered:false,reason:"ENTRY_ATTEMPTS_EXHAUSTED"};break}
   if(Date.now()>=runDeadline){entry={entered:false,reason:"ENTRY_RUN_BUDGET_EXHAUSTED"};break}
   const cl=await db.from("v11_long_regime_signals").update({status:"CLAIMED",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","NEW").select("*").maybeSingle();
@@ -1462,7 +1641,7 @@ async function manageLeader(db,p,ctx){
     await syncNativeStop("HOLD");
   // Existing stop/deadline decisions and resident protection run first. QV3 failures
   // leave that protection intact; only an exact post-cutover stamp enters QV3 scope.
-  const qv3=ctx?.evaluateQv3===false?null:await qv3AfterProtection(db,write.data,ctx);
+  const qv3=ctx?.evaluateQv3===false?null:await qv3AfterProtection(db,write.data,{...rec(ctx),bid});
   if(qv3?.result){
     await audit(db,p,"BULL","BULL","FULL_CLOSE","QV3_TWO_BEARISH_CLOSED",{...details,qv3:qv3.assessment})
       .catch(e=>console.error("QV3_AUDIT_FAILED",String(e)));
@@ -1474,11 +1653,54 @@ async function manageLeader(db,p,ctx){
     {...details,nativeStop});
   return {action:"HOLD",strategy:STRATEGY,bid,...state,nativeStop,position:write.data};
 }
+/**
+ * QV3's two-bearish-candle exit, observed but NOT executed, for positions opened
+ * under the pullback entry timing.
+ *
+ * On the same 7-day window, replayed with the new entry, QV3's exit cost money:
+ * net +27.999 -> +13.456 USDT and profit factor 1.843 -> 1.417 across 43 trades. It
+ * closes a position that has merely paused, which is exactly the pause the new entry
+ * is designed to buy. The rule is kept and still evaluated so the decision stays
+ * reversible and auditable -- only the SELL is withheld.
+ *
+ * Positions opened before this policy keep their authoritative QV3 stamp and their
+ * old behaviour; nothing here reaches them.
+ */
+async function qv3ShadowOnly(db,p,ctx){
+  const meta=rec(p.metadata);
+  if(meta.entryTimingPolicyVersion!==SETUP_POLICY_VERSION)return null;
+  try{
+    const at=Date.now(),prior=rec(meta.qv3ShadowState);
+    const shape={id:p.id,entryAt:Date.parse(p.entry_at),entryPrice:Number(p.entry_price),
+      side:p.side,state:p.state,ownership:meta.v17ManualPosition===true?"MANUAL":"AUTO",
+      qv3:qv3Stamp(QV3_LIVE_CUTOVER,Date.parse(p.entry_at))};
+    const start=prior?.favorableCandle?Math.floor(at/60000)*60000-120000
+      :Math.ceil(Date.parse(p.entry_at)/60000)*60000;
+    const bars=await qv3Candles(p.symbol,at,start),evaluatedAt=Date.now();
+    const assessment=qv3Exit(shape,bars,evaluatedAt,prior?.version?prior:null);
+    if(!assessment.available)return {shadow:{...assessment,executed:false}};
+    const bid=N(ctx?.bid,NaN),quantity=N(p.remaining_quantity,NaN),entry=N(p.entry_price,NaN);
+    const shadow={version:assessment.version,wouldClose:assessment.wouldClose===true,
+      reason:assessment.reason,timestamp:new Date(evaluatedAt).toISOString(),
+      hypotheticalPnlUsdt:assessment.wouldClose&&[bid,quantity,entry].every(Number.isFinite)
+        ?(bid-entry)*quantity:null,
+      executed:false,executionEnabled:false,entryTimingPolicyVersion:SETUP_POLICY_VERSION};
+    // Shadow state is written on its own key so it can never be mistaken for the
+    // authoritative qv3State an older position carries.
+    await db.from("v11_long_regime_positions")
+      .update({metadata:{...meta,qv3ShadowState:assessment.state,qv3Shadow:shadow},
+        updated_at:new Date(Math.max(Date.now(),Date.parse(p.updated_at)+1)).toISOString()})
+      .eq("id",p.id).eq("state","OPEN").eq("updated_at",p.updated_at);
+    return {shadow};
+  }catch(e){return {shadow:{available:false,reason:String(e?.message??e),executed:false}}}
+}
 async function qv3AfterProtection(db,p,ctx){
   if(QV3_LIVE_CUTOVER===null)return null;
   let closeAttempted=false;
   const shape=row=>({id:row.id,entryAt:Date.parse(row.entry_at),entryPrice:Number(row.entry_price),
     side:row.side,state:row.state,ownership:rec(row.metadata).v17ManualPosition===true?"MANUAL":"AUTO",qv3:rec(row.metadata).qv3});
+  // A pullback-policy position is never in QV3's executing scope; it is observed only.
+  if(rec(p.metadata).entryTimingPolicyVersion===SETUP_POLICY_VERSION)return await qv3ShadowOnly(db,p,ctx);
   if(!qv3Scope(shape(p),QV3_LIVE_CUTOVER))return null;
   try{
     await verifyExecutionLease(db);
