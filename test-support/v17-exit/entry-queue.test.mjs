@@ -501,3 +501,18 @@ test('advancing setups is bounded on the wall clock as well as by queue size', (
   assert.ok(!/setupDeadline[\s\S]{0,200}status:"REJECTED"/.test(run),
     'the budget must never retire a setup it simply had no time for');
 });
+
+test('a setup is armed from its own bar close, never from when it was first seen', () => {
+  // Otherwise a row that sat NEW -- a backlog, a restart, the first cycle after this
+  // policy goes live -- would be handed a fresh 15 minutes measured from now, which
+  // is a stale-signal extension wearing a setup's clothes.
+  const advance = source.slice(source.indexOf('async function advanceSignalSetup('),
+    source.indexOf('/** Positions opened under this entry timing'));
+  assert.match(advance, /const armAt=N\(rec\(row\.features\)\.signal5Close,NaN\);/);
+  assert.match(advance, /startPullbackSetup\(\{[\s\S]*?\},armAt,SETUP_POLICY\)/,
+    'the arm time must be the bar close, not `now`');
+  assert.ok(!/startPullbackSetup\(\{[\s\S]*?\},now,/.test(advance),
+    'arming from the wall clock would extend a stale signal');
+  // And a signal with no usable close is refused rather than armed from the clock.
+  assert.match(advance, /if\(!Number\.isSafeInteger\(armAt\)\)return \{row,state:null/);
+});

@@ -221,7 +221,15 @@ async function advanceSignalSetup(db,row,now,fetchCandles=qv3Candles){
   let state=signalSetup(row);
   if(state&&setupIsTerminal(state))return {row,state,changed:false};
   if(!state){
-    const armed=startPullbackSetup({id:row.id,symbol:row.symbol,features:rec(row.features)},now,SETUP_POLICY);
+    // Armed at the signal's OWN 5m close, not at wall-clock now. The observation
+    // window is a property of the bar, so a row the executor happens to look at late
+    // -- a backlog, a restart, the first cycle after this policy goes live -- must not
+    // be handed a fresh 15 minutes. Arming at `now` would do exactly that, and a
+    // 15-minute window measured from an old bar is the stale-signal extension this
+    // policy is specifically not allowed to be.
+    const armAt=N(rec(row.features).signal5Close,NaN);
+    if(!Number.isSafeInteger(armAt))return {row,state:null,changed:false,reason:SETUP_REASON.INVALID_PRICE};
+    const armed=startPullbackSetup({id:row.id,symbol:row.symbol,features:rec(row.features)},armAt,SETUP_POLICY);
     if(!armed.ok)return {row,state:null,changed:false,reason:armed.reason};
     state=armed.state;
     await audit(db,null,"BULL","BULL","ENTRY_DEFER",SETUP_REASON.ARMED,
