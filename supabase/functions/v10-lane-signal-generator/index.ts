@@ -49,7 +49,11 @@ export async function generate(db,{diagnostic=false,scan=scanMarket,now=Date.now
       symbol:f.symbol,side:'LONG',signal_bar_at:new Date(f.signal5Open).toISOString(),
       entry_bar_at:new Date(f.signal5Close).toISOString(),features:{...f,storageLaneOnly:'BULL',
         routeAuthority:STRATEGY,maxSlots:POLICY.maxSlots,targetMarginUsdt:POLICY.marginUsdt,
-        leverage:POLICY.leverage},status:'NEW',updated_at:stamp},
+        leverage:POLICY.leverage,
+        // Stamped from the same contract the executor sizes from, and stamped WITH
+        // its version, so a signal whose sizing assumption predates a resize is
+        // identifiable in the row rather than only in a deploy log.
+        sizingContractVersion:POLICY.sizingContractVersion},status:'NEW',updated_at:stamp},
       {onConflict:'revision,lane,symbol,signal_bar_at',ignoreDuplicates:true}).select('id,symbol');
     if(write.error)throw Error(`SIGNAL_WRITE:${write.error.message}`);
     inserted.push(...(write.data||[]));

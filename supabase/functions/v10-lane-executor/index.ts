@@ -16,6 +16,7 @@ import {BOO_ADAPTER_VERSION,ENFORCEMENT as BOO_ENFORCEMENT,evaluateBooEntry,fina
 import {R1_VERSION} from "../_shared/boo/r1-strategy.mjs";
 import {RISK_POLICY_VERSION} from "../_shared/boo/risk-policy.mjs";
 import {RISK_BUDGET_VERSION} from "../_shared/boo/risk-budget.mjs";
+import {SLOT_SIZING_CONTRACT,assertSlotSizingContract,floorStep,planSlotEntry,slotSizingBounds} from "../_shared/leader-slot-sizing.mjs";
 const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V23-E1-X1-OPERATOR-OVERRIDE-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Object.freeze({
   id:"2026-09-13-USER-PRIORITY-OVERRIDE",basis:"OPERATOR_OVERRIDE_UNVALIDATED",
@@ -23,12 +24,48 @@ const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Objec
 });
 // Bounded so a bar of refusals cannot stretch the run past the one-minute cadence.
 const ENTRY_ATTEMPTS_PER_RUN=3;
+// Wall-clock companion to the attempt count. A deferred candidate no longer ends the
+// run (see runEntryQueue), so the attempt count alone no longer bounds it: an E1
+// fast-weak watch can wait up to E1_POLICY.watchMs per attempt. Stop STARTING new
+// attempts past this point; an attempt already running is never cut short.
+const ENTRY_RUN_BUDGET_MS=40000;
+// A soft defer hands the claim back. Whether it should also END THE RUN depends on
+// WHOSE answer it was. An account-wide shortfall -- no free cash, the portfolio moved
+// under us -- means no other candidate will do better this cycle, so stopping is
+// right. A symbol's own tape, book, bars or gate verdict says nothing about the next
+// candidate, and treating those as account-wide is what starved the queue: between
+// 2026-09-16 23:09 and 2026-09-17 13:05 the first candidate of nearly every cycle
+// deferred on E1_QUOTE_UNKNOWN, ended the run there, and left every other candidate
+// untouched until it aged out of POLICY.maxEntryAgeMs -- 102 of 144 rejections.
+// An UNLABELLED release still stops the run, so this is opt-in and fail-closed.
+const RELEASE_SCOPE=Object.freeze({SYMBOL:"SYMBOL",ACCOUNT:"ACCOUNT"});
+function releaseStopsRun(entry){return entry?.releaseScope!==RELEASE_SCOPE.SYMBOL}
+// ENTRY_CONTROL carries its own scope; only symbol quarantine is per-symbol.
+function controlReleaseScope(decision){
+  return decision?.scope===CONTROL_SCOPE.SYMBOL_QUARANTINE?RELEASE_SCOPE.SYMBOL:RELEASE_SCOPE.ACCOUNT;
+}
 // Pre-dispatch refusals scoped to one symbol. Never includes STOP_POLICY_INVALID or
 // STOP_INVALID, which are raised only AFTER a fill -- those are caught by the
 // dispatched guard regardless, which is the check that actually protects the account.
-const ENTRY_SKIP_SYMBOL_SCOPED=/^(SIGNAL_STALE_OR_FUTURE|ENTRY_DRIFT|WRONG_STRATEGY|INVALID_PRICE|V17_EXIT_POLICY_INVALID|MANUAL_SYMBOL_LOCKED|ENTRY_SPREAD|ENTRY_FEATURES_INVALID|QTY_INVALID|ENTRY_GRANULARITY_BPS|ENTRY_SLOT_GRANULARITY_MARGIN|ENTRY_NOTIONAL_UNDERSIZED|V17_LIMIT_PRICE_MARGIN_OVERFLOW)/;
-const MARGIN=30,LEV=3,NOTIONAL=MARGIN*LEV,MAX_SLOTS=10,NOTIONAL_BUFFER_USDT=.12,MAX_MARGIN_BUFFER_USDT=.25,ENTRY_CASH_BUFFER_USDT=.10,SNAP_MAX=90000,SIGNAL_MAX=300000,SPREAD_MAX=25,MAX_GAP_ATR=.5,IOC_BASE_BPS=3,IOC_MAX_BPS=12,BULL_MAX_MS=30*86400000,T1_PRICE=.075,PARTIAL=.30,TRAIL=.0225;
-function res(s,b){return new Response(JSON.stringify(b),{status:s,headers:{"content-type":"application/json","cache-control":"no-store"}})}function N(v,d=0){const x=Number(v);return Number.isFinite(x)?x:d}function rec(v){return v&&typeof v==="object"&&!Array.isArray(v)?v:{}}function eq(a,b){if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0}function dec(s){return Math.min(12,Math.max(0,Math.ceil(-Math.log10(s))+2))}function floorStep(v,s){if(!(v>0&&s>0))return 0;return Number((Math.floor((v+s*1e-9)/s)*s).toFixed(dec(s)))}function ceilStep(v,s){if(!(v>0&&s>0))return 0;return Number((Math.ceil((v-s*1e-9)/s)*s).toFixed(dec(s)))}function addStep(v,s){return Number((v+s).toFixed(dec(s)))}function cid(p,x){return`tb-${p}-${String(x).toLowerCase().replace(/[^a-z0-9]/g,"").slice(0,24)}`.slice(0,36)}function terminal(z){return z.qty<=0&&["CANCELED","CANCELLED","REJECTED","EXPIRED","PARTIALLY_FILLED_CANCELED"].includes(z.status)}
+// MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET / QTY_STEP_EXCEEDS_MARGIN_BUDGET / IOC_PRICE_CAP_EXCEEDED
+// are the sizing contract's reasons. ENTRY_GRANULARITY_BPS and ENTRY_SLOT_GRANULARITY_MARGIN
+// are kept so rows written by earlier revisions still classify the same way.
+const ENTRY_SKIP_SYMBOL_SCOPED=/^(SIGNAL_STALE_OR_FUTURE|SUPERSEDED_BY_FRESHER_SIGNAL|ENTRY_DRIFT|WRONG_STRATEGY|INVALID_PRICE|V17_EXIT_POLICY_INVALID|MANUAL_SYMBOL_LOCKED|ENTRY_SPREAD|ENTRY_FEATURES_INVALID|QTY_INVALID|QTY_INPUT_INVALID|MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET|QTY_STEP_EXCEEDS_MARGIN_BUDGET|IOC_PRICE_CAP_EXCEEDED|ENTRY_GRANULARITY_BPS|ENTRY_SLOT_GRANULARITY_MARGIN|ENTRY_NOTIONAL_UNDERSIZED|V17_LIMIT_PRICE_MARGIN_OVERFLOW)/;
+// Slot geometry is NOT declared here. MARGIN/LEV/NOTIONAL are views onto the one
+// sizing contract (_shared/leader-slot-sizing.mjs) that the signal generator and
+// the V17 policy also read, so the four copies that drifted apart during the
+// 40 -> 30 cutover can no longer disagree. The DB half of the agreement stays a
+// runtime fail-closed check: V17_MARGIN_CONFIG_MISMATCH.
+const MARGIN=SLOT_SIZING_CONTRACT.targetMarginUsdt,LEV=SLOT_SIZING_CONTRACT.leverage,NOTIONAL=MARGIN*LEV;
+const SLOT_BOUNDS=slotSizingBounds(SLOT_SIZING_CONTRACT),MAX_ORDER_MARGIN_USDT=SLOT_BOUNDS.maxOrderMarginUsdt;
+// The price cap stays visible here because the E1 guard re-checks it; the base
+// uplift is applied inside the contract and is not restated.
+const IOC_MAX_BPS=SLOT_SIZING_CONTRACT.iocMaxBps;
+const MAX_SLOTS=10,ENTRY_CASH_BUFFER_USDT=.10,SNAP_MAX=90000,SIGNAL_MAX=300000,SPREAD_MAX=25,MAX_GAP_ATR=.5,BULL_MAX_MS=30*86400000,T1_PRICE=.075,PARTIAL=.30,TRAIL=.0225;
+function res(s,b){return new Response(JSON.stringify(b),{status:s,headers:{"content-type":"application/json","cache-control":"no-store"}})}function N(v,d=0){const x=Number(v);return Number.isFinite(x)?x:d}function rec(v){return v&&typeof v==="object"&&!Array.isArray(v)?v:{}}function eq(a,b){if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0}// Quantity rounding lives in the sizing contract now, so there is exactly one
+// implementation of it; floorStep is what the exit path still needs directly.
+// addStep is gone with the one-step bump it existed for: quantity is solved, not nudged.
+function cid(p,x){return`tb-${p}-${String(x).toLowerCase().replace(/[^a-z0-9]/g,"").slice(0,24)}`.slice(0,36)}function terminal(z){return z.qty<=0&&["CANCELED","CANCELLED","REJECTED","EXPIRED","PARTIALLY_FILLED_CANCELED"].includes(z.status)}
 const env=n=>(Deno.env.get(n)||"").trim(),GW=env("BINANCE_FUTURES_ORDER_GATEWAY_URL").replace(/\/$/,"")||env("BINANCE_ORDER_GATEWAY_URL").replace(/\/$/,"")||env("ORDER_GATEWAY_URL").replace(/\/$/,""),SEC=env("BINANCE_FUTURES_GATEWAY_SHARED_SECRET")||env("BINANCE_GATEWAY_SHARED_SECRET")||env("GATEWAY_SHARED_SECRET");
 // This patch is the user's explicit operator override, so its two policies activate with
 // the deployed bundle. Exact "false" values are independent emergency rollback kills and
@@ -113,7 +150,27 @@ function portfolioMatches(openPositions,pf,manual=[]){
   }
   return leaderPortfolioMatches(openPositions,{...pf,positions:remaining});
 }
-function sizeEntry(ask,step){if(!(ask>0&&step>0))throw new Error("QTY_INPUT_INVALID");let amount=ceilStep(NOTIONAL/ask,step);if(!(amount>0))throw new Error("QTY_INVALID");let sizedNotional=amount*ask;if(sizedNotional<NOTIONAL+NOTIONAL_BUFFER_USDT){const bumped=addStep(amount,step),bm=bumped*ask/LEV;if(bm<=MARGIN+MAX_MARGIN_BUFFER_USDT){amount=bumped;sizedNotional=amount*ask}}const sizedMargin=sizedNotional/LEV;if(sizedNotional+1e-9<NOTIONAL)throw new Error(`ENTRY_NOTIONAL_UNDERSIZED:${sizedNotional}`);if(sizedMargin>MARGIN+MAX_MARGIN_BUFFER_USDT+1e-9)throw new Error(`ENTRY_SLOT_GRANULARITY_MARGIN:${sizedMargin.toFixed(6)}`);return{amount,sizedNotional,sizedMargin}}
+/** The exchange's real filters, read from the venue's own symbol info. */
+function symbolFilters(info){return{quantityStep:N(info?.quantity_step??info?.step_size),
+  priceTick:N(info?.price_tick??info?.tick_size),
+  minNotionalUsdt:Math.max(1,N(info?.min_notional,5)),
+  minQuantity:N(info?.min_quantity)}}
+/**
+ * One decision, not two: the quantity is solved against the very limit price the
+ * order will carry. Previously quantity was ceiled to the target notional and the
+ * remaining shortfall to a fixed 0.12 USDT buffer was bought with PRICE, which at a
+ * 90 USDT notional demanded up to 13.33 bps against a 12 bps cap and refused
+ * ordinary candidates by arithmetic. Price no longer funds sizing at all.
+ *
+ * `sizedMargin` is the margin the order needs if every lot fills at its own limit --
+ * the worst case, and the figure every downstream budget check should see.
+ */
+function sizeEntry(ask,step,filters={}){
+  const plan=planSlotEntry({ask,quantityStep:step,priceTick:N(filters.priceTick,0),
+    minNotionalUsdt:N(filters.minNotionalUsdt,0),minQuantity:N(filters.minQuantity,0)});
+  return{...plan,amount:plan.quantity,sizedNotional:plan.referenceNotionalUsdt,
+    sizedMargin:plan.orderMarginUsdt};
+}
 async function hashJson(value){const bytes=new TextEncoder().encode(JSON.stringify(value)),hash=new Uint8Array(await crypto.subtle.digest("SHA-256",bytes));return[...hash].map(x=>x.toString(16).padStart(2,"0")).join("")}
 // --- BOO common entry gate (brief section 4) --------------------------------
 // The identity the validation approval must match. BOO_POLICY_CODE_SHA256 is
@@ -145,26 +202,38 @@ function booBook(q,maxAgeMs){
     health:{bookHealthy:reasons.length===0,bookAgeMs:age,maxBookAgeMs:maxAgeMs,
       barsFinal:true,resyncComplete:reasons.length===0,reasons}};
 }
-function e1CurrentAssessment(s,q,step,at){
+function e1CurrentAssessment(s,q,step,at,filters={}){
   const bid=N(q?.best_bid),ask=N(q?.best_ask),spreadBps=bid>0&&ask>=bid?(ask/bid-1)*10000:Infinity;
   let sized=null,limitPrice=null,guardPassed=false,liquidityPassed=false,evidence=e1QuoteEvidence(q,0,at);
   try{
-    sized=sizeEntry(ask,step);evidence=e1QuoteEvidence(q,sized.amount,at);
-    const gatePrice=(NOTIONAL+NOTIONAL_BUFFER_USDT)/sized.amount;
-    limitPrice=Math.max(ask*(1+IOC_BASE_BPS/10000),gatePrice);
-    const iocBps=(limitPrice/ask-1)*10000;
-    guardPassed=!entryFresh(rec(s.features),at,limitPrice)&&iocBps<=IOC_MAX_BPS&&
-      sized.amount*limitPrice/LEV<=MARGIN+MAX_MARGIN_BUFFER_USDT+1e-9;
+    sized=sizeEntry(ask,step,filters);evidence=e1QuoteEvidence(q,sized.amount,at);
+    limitPrice=sized.limitPrice;
+    guardPassed=!entryFresh(rec(s.features),at,limitPrice)&&sized.iocBps<=IOC_MAX_BPS&&
+      sized.orderMarginUsdt<=MAX_ORDER_MARGIN_USDT+1e-9;
     liquidityPassed=evidence.valid&&evidence.fullDepth&&spreadBps<=SPREAD_MAX;
   }catch{/* Invalid current sizing remains an explicit failed guard. */}
   return{quote:evidence,rawQuote:q,sized,limitPrice,spreadBps,guardPassed,liquidityPassed};
 }
-async function runE1Gate(s,initialQuote,step,gw){
+async function runE1Gate(s,initialQuote,step,gw,filters={}){
+  // E1 judges the quote against maxQuoteAgeMs = 1000. The admission-time quote is
+  // already 1-2.5s old by the time it gets here -- the BOO gate, the account and
+  // ownership reads and this function's own 10s tape fetch all sit in between --
+  // so reusing it made E1_QUOTE_UNKNOWN unavoidable: 115 of 115 defers on
+  // 2026-09-16/17 measured 1097-2596ms, not one inside the policy. The policy is
+  // not the problem and is unchanged; the read is moved to the decision point and
+  // issued alongside the tape so it costs no extra latency. A failed read falls
+  // back to the admission quote, which E1 will then correctly refuse as stale.
   const signalClose=N(s.features?.signal5Close,NaN),signalExpiresAt=signalClose+POLICY.maxEntryAgeMs,
-    tapeEnd=Date.now(),initialTape=await fetchE1AggTrades(s.symbol,tapeEnd-10000,tapeEnd),
-    decisionAt=Date.now(),initial=e1CurrentAssessment(s,initialQuote,step,decisionAt),
+    tapeEnd=Date.now(),
+    [tapeRead,freshQuoteRead]=await Promise.allSettled([
+      fetchE1AggTrades(s.symbol,tapeEnd-10000,tapeEnd),
+      gw({action:"quote",market:s.symbol},3000)]),
+    initialTape=tapeRead.status==="fulfilled"?tapeRead.value
+      :{available:false,reason:`E1_TAPE_FETCH:${String(tapeRead.reason)}`},
+    decisionQuote=freshQuoteRead.status==="fulfilled"&&freshQuoteRead.value?freshQuoteRead.value:initialQuote,
+    decisionAt=Date.now(),initial=e1CurrentAssessment(s,decisionQuote,step,decisionAt,filters),
     featureHash=await hashJson(rec(s.features)),initialRawHash=Array.isArray(initialTape.raw)?
-      await hashJson({tape:initialTape.raw,quote:initialQuote?.raw??null}):null;
+      await hashJson({tape:initialTape.raw,quote:decisionQuote?.raw??null}):null;
   let state=startE1({decisionAt,signalId:s.id,symbol:s.symbol,signalExpiresAt,baselineEligible:true,
     tape:initialTape,quote:initial.quote,featureAsOf:Number.isFinite(signalClose)?signalClose:null,
     featureHash,rawHash:initialRawHash}),latest=initial;
@@ -178,7 +247,7 @@ async function runE1Gate(s,initialQuote,step,gw){
       gw({action:"quote",market:s.symbol},3000)]),
       tape=tapeRead.status==="fulfilled"?tapeRead.value:{available:false,reason:`E1_TAPE_FETCH:${String(tapeRead.reason)}`},
       q=quoteRead.status==="fulfilled"?quoteRead.value:null,observedAt=Date.now(),
-      assessment=e1CurrentAssessment(s,q,step,observedAt),rawHash=Array.isArray(tape.raw)?
+      assessment=e1CurrentAssessment(s,q,step,observedAt,filters),rawHash=Array.isArray(tape.raw)?
         await hashJson({tape:tape.raw,quote:q?.raw??null}):null;
     state=advanceE1(state,{observedAt,tape,quote:assessment.quote,
       entryGuardPassed:assessment.guardPassed,liquidityPassed:assessment.liquidityPassed,rawHash});
@@ -359,7 +428,7 @@ await recordMismatch(db,initialPair.match);
 const initialDecision=await decideEntry(db,initialPair,s.symbol,initialOrders,{managementFailures});
 await persistDecisionRisk(db,initialPair,initialDecision);
 if(!initialDecision.allowed){return{entered:false,
-  reason:`ENTRY_CONTROL:${initialDecision.scope}:${initialDecision.reasons.join(",")}`,releaseClaim:true,entryDecision:initialDecision}}
+  reason:`ENTRY_CONTROL:${initialDecision.scope}:${initialDecision.reasons.join(",")}`,releaseClaim:true,releaseScope:controlReleaseScope(initialDecision),entryDecision:initialDecision}}
 // BOO common entry gate, checkpoint 1 of 2 (admission). Section 4 requires a
 // single gate that every new entry passes, evaluated here and again immediately
 // before the send. It is additive: it can only refuse, never admit something
@@ -367,13 +436,15 @@ if(!initialDecision.allowed){return{entered:false,
 const booAdmission=await booGate(db,s,"ADMISSION",{quote:q,info:i,snapshot:sn,pair:initialPair,orders:initialOrders});
 await recordBooVerdict(db,{signalId:s.id,symbol:s.symbol,phase:"ADMISSION",result:booAdmission});
 if(booAdmission.blocks)return{entered:false,reason:`BOO_ENTRY_GATE:${booAdmission.verdict.reason}`,
-  releaseClaim:true,booGate:booAdmission.verdict};
+  releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,booGate:booAdmission.verdict};
 if(manualRows.some(x=>x.symbol===String(s.symbol).toUpperCase()))throw new Error("MANUAL_SYMBOL_LOCKED");
 if(active(initialPair.pf).length>=MAX_SLOTS)return{entered:false,reason:"V11_SLOT_FULL"};
 if(initialPair.positions.some(p=>String(p.symbol).toUpperCase()===String(s.symbol).toUpperCase()))return{entered:false,reason:"DUPLICATE_SYMBOL_OPEN"};
-let pf=initialPair.pf,bid=N(q?.best_bid),ask=N(q?.best_ask),sp=bid>0&&ask>0?(ask/bid-1)*10000:999;if(!(bid>0&&ask>0&&sp<=SPREAD_MAX))throw new Error(`ENTRY_SPREAD:${sp}`);const f=rec(s.features),ref=N(f.referenceClose),atr=N(f.atr);if(!(atr>0&&ref>0))throw new Error("ENTRY_FEATURES_INVALID");let step=N(i?.quantity_step??i?.step_size),min=Math.max(1,N(i?.min_notional,5)),sized=sizeEntry(ask,step);if(sized.sizedNotional<min)throw new Error("QTY_INVALID");let live=N(pf?.available_quote,NaN),avail=Math.min(N(sn.available_quote),live);if(!Number.isFinite(live))throw new Error("ENTRY_AVAILABLE_BALANCE_UNREADABLE");if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true};let gatePrice=(NOTIONAL+NOTIONAL_BUFFER_USDT)/sized.amount,limitPrice=Math.max(ask*(1+IOC_BASE_BPS/10000),gatePrice),iocBps=(limitPrice/ask-1)*10000;if(iocBps>IOC_MAX_BPS)throw new Error(`ENTRY_GRANULARITY_BPS:${iocBps.toFixed(3)}`);let gap=Math.abs(limitPrice-ref)/atr;
+let pf=initialPair.pf,bid=N(q?.best_bid),ask=N(q?.best_ask),sp=bid>0&&ask>0?(ask/bid-1)*10000:999;if(!(bid>0&&ask>0&&sp<=SPREAD_MAX))throw new Error(`ENTRY_SPREAD:${sp}`);const f=rec(s.features),ref=N(f.referenceClose),atr=N(f.atr);if(!(atr>0&&ref>0))throw new Error("ENTRY_FEATURES_INVALID");let filters=symbolFilters(i),step=filters.quantityStep,min=filters.minNotionalUsdt,sized=sizeEntry(ask,step,filters);if(sized.orderNotionalUsdt+1e-9<min)throw new Error("QTY_INVALID");let live=N(pf?.available_quote,NaN),avail=Math.min(N(sn.available_quote),live);if(!Number.isFinite(live))throw new Error("ENTRY_AVAILABLE_BALANCE_UNREADABLE");if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true};// The plan already priced and budgeted itself; nothing re-derives either here.
+let limitPrice=sized.limitPrice,iocBps=sized.iocBps,gap=Math.abs(limitPrice-ref)/atr;
 let finalFresh=entryFresh(f,Date.now(),limitPrice);if(finalFresh)throw new Error(finalFresh);
-if(sized.amount*limitPrice/LEV>MARGIN+MAX_MARGIN_BUFFER_USDT+1e-9)throw new Error("V17_LIMIT_PRICE_MARGIN_OVERFLOW");
+// Defensive: planSlotEntry already refuses anything over budget at its own limit.
+if(sized.amount*limitPrice/LEV>MAX_ORDER_MARGIN_USDT+1e-9)throw new Error("V17_LIMIT_PRICE_MARGIN_OVERFLOW");
 // V17 replaces pullback-specific ATR gap gating with a price-drift/age guard.
 // Fixed operator-authorized cutover. No request/env can move or broaden it.
 const qv3Active=Number.isSafeInteger(QV3_LIVE_CUTOVER)&&Date.now()>=QV3_LIVE_CUTOVER;
@@ -385,7 +456,7 @@ if(qv3Active){
     evaluatedAt,symbol:s.symbol,liveExecutionEnabled:true,completedBars:bars.map(b=>({openTime:Number(b[0]),closeTime:Number(b[6]),open:Number(b[1]),high:Number(b[2]),low:Number(b[3]),close:Number(b[4])}))};
   if(!result.available||result.wouldBlock){
     await audit(db,null,"BULL","BULL","ENTRY_DEFER",result.reason,{signalId:s.id,symbol:s.symbol,qv3:attempt.qv3});
-    return {entered:false,reason:result.reason,releaseClaim:true,qv3:attempt.qv3};
+    return {entered:false,reason:result.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,qv3:attempt.qv3};
   }
   await requireLeaderEntryControls(db);
   const freshness=entryFresh(f,Date.now(),limitPrice);if(freshness)throw Error(freshness);
@@ -403,14 +474,14 @@ if(v24Ctl.enabled){
   await recordV24(db,s.id,s.symbol,v24);
   await audit(db,null,"BULL","BULL",v24.allowed?"ENTRY_ALLOW":"ENTRY_DEFER",
     `V24:${v24.reason}`,{signalId:s.id,symbol:s.symbol,v24});
-  if(!v24.allowed)return{entered:false,reason:v24.reason,releaseClaim:true,v24};
+  if(!v24.allowed)return{entered:false,reason:v24.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,v24};
   const v24Fresh=entryFresh(f,Date.now(),limitPrice);if(v24Fresh)throw Error(v24Fresh);
 }
 let e1Decision={policyVersion:E1_POLICY.policyVersion,confirmationState:"DISABLED",allowed:true,
   defer:false,reject:false,reasonCodes:["E1_OPERATOR_FLAG_DISABLED"],executionEnabled:false,
   parametersValidatedByBacktest:false,activationBasis:OPERATOR_OVERRIDE.basis};
 if(E1_ENABLED){
-  const e1=await runE1Gate(s,q,step,gateway);e1Decision=e1.decision;attempt.e1=e1Decision;
+  const e1=await runE1Gate(s,q,step,gateway,filters);e1Decision=e1.decision;attempt.e1=e1Decision;
   await audit(db,null,"BULL","BULL",e1Decision.allowed?"ENTRY_ALLOW":e1Decision.reject?"ENTRY_REJECT":"ENTRY_DEFER",
     e1Decision.reasonCodes.join(","),{signalId:s.id,symbol:s.symbol,e1:e1Decision,operatorOverride:OPERATOR_OVERRIDE});
   if(!e1Decision.allowed){
@@ -421,7 +492,7 @@ if(E1_ENABLED){
       if(terminal.error)throw Error("E1_SIGNAL_TERMINAL_WRITE");
       return{entered:false,reason,releaseClaim:false,e1:e1Decision,qv3:attempt.qv3};
     }
-    return{entered:false,reason,releaseClaim:true,e1:e1Decision,qv3:attempt.qv3};
+    return{entered:false,reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,e1:e1Decision,qv3:attempt.qv3};
   }
   q=e1.rawQuote;
   if(e1Decision.confirmationState==="RECOVERY_CONFIRMED"){
@@ -435,21 +506,20 @@ if(E1_ENABLED){
     await persistDecisionRisk(db,initialPair,refreshedDecision);
     if(!refreshedDecision.allowed)return{entered:false,
       reason:`ENTRY_CONTROL:${refreshedDecision.scope}:${refreshedDecision.reasons.join(",")}`,
-      releaseClaim:true,entryDecision:refreshedDecision,e1:e1Decision};
+      releaseClaim:true,releaseScope:controlReleaseScope(refreshedDecision),entryDecision:refreshedDecision,e1:e1Decision};
     if(manualRows.some(x=>x.symbol===String(s.symbol).toUpperCase()))throw Error("MANUAL_SYMBOL_LOCKED");
     if(active(initialPair.pf).length>=MAX_SLOTS||initialPair.positions.some(p=>String(p.symbol).toUpperCase()===String(s.symbol).toUpperCase()))
       return{entered:false,reason:"PORTFOLIO_CHANGED_DURING_E1",releaseClaim:true,e1:e1Decision};
     pf=initialPair.pf;bid=N(q?.best_bid);ask=N(q?.best_ask);sp=bid>0&&ask>0?(ask/bid-1)*10000:999;
     if(!(bid>0&&ask>0&&sp<=SPREAD_MAX))throw Error(`ENTRY_SPREAD:${sp}`);
-    step=N(i?.quantity_step??i?.step_size);min=Math.max(1,N(i?.min_notional,5));sized=sizeEntry(ask,step);
-    if(sized.sizedNotional<min)throw Error("QTY_INVALID");live=N(pf?.available_quote,NaN);avail=Math.min(N(sn.available_quote),live);
+    filters=symbolFilters(i);step=filters.quantityStep;min=filters.minNotionalUsdt;sized=sizeEntry(ask,step,filters);
+    if(sized.orderNotionalUsdt+1e-9<min)throw Error("QTY_INVALID");live=N(pf?.available_quote,NaN);avail=Math.min(N(sn.available_quote),live);
     if(!Number.isFinite(live))throw Error("ENTRY_AVAILABLE_BALANCE_UNREADABLE");
     if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,
       reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true,e1:e1Decision};
-    gatePrice=(NOTIONAL+NOTIONAL_BUFFER_USDT)/sized.amount;limitPrice=Math.max(ask*(1+IOC_BASE_BPS/10000),gatePrice);
-    iocBps=(limitPrice/ask-1)*10000;if(iocBps>IOC_MAX_BPS)throw Error(`ENTRY_GRANULARITY_BPS:${iocBps.toFixed(3)}`);
+    limitPrice=sized.limitPrice;iocBps=sized.iocBps;
     gap=Math.abs(limitPrice-ref)/atr;finalFresh=entryFresh(f,Date.now(),limitPrice);if(finalFresh)throw Error(finalFresh);
-    if(sized.amount*limitPrice/LEV>MARGIN+MAX_MARGIN_BUFFER_USDT+1e-9)throw Error("V17_LIMIT_PRICE_MARGIN_OVERFLOW");
+    if(sized.amount*limitPrice/LEV>MAX_ORDER_MARGIN_USDT+1e-9)throw Error("V17_LIMIT_PRICE_MARGIN_OVERFLOW");
     if(qv3Active){
       let result,bars=[],evaluatedAt=Date.now();
       try{bars=await qv3Candles(s.symbol,evaluatedAt,Math.floor(evaluatedAt/60000)*60000-180000);result=qv3Entry(bars,Date.now());}
@@ -458,7 +528,7 @@ if(E1_ENABLED){
         evaluatedAt,symbol:s.symbol,liveExecutionEnabled:true,recheckedAfterE1:true,
         completedBars:bars.map(b=>({openTime:Number(b[0]),closeTime:Number(b[6]),open:Number(b[1]),high:Number(b[2]),low:Number(b[3]),close:Number(b[4])}))};
       if(!result.available||result.wouldBlock)return{entered:false,reason:result.reason,releaseClaim:true,
-        qv3:attempt.qv3,e1:e1Decision};
+        releaseScope:RELEASE_SCOPE.SYMBOL,qv3:attempt.qv3,e1:e1Decision};
     }
   }
 }
@@ -470,13 +540,13 @@ const[rawFinalCheck,finalOrders,dispatchQuote,dispatchSnap]=await Promise.all([r
   gateway({action:"v18_open_orders"},5000),E1_ENABLED?gateway({action:"quote",market:s.symbol},3000):Promise.resolve(q),
   E1_ENABLED?snap(db):Promise.resolve(sn)]),finalCheck=rawFinalCheck;
 if(E1_ENABLED){
-  const dispatchAt=Date.now(),assessment=e1CurrentAssessment(s,dispatchQuote,step,dispatchAt);
+  const dispatchAt=Date.now(),assessment=e1CurrentAssessment(s,dispatchQuote,step,dispatchAt,filters);
   if(!assessment.quote.valid||!assessment.liquidityPassed||!assessment.guardPassed){
     const reason=!assessment.quote.valid?"E1_DISPATCH_QUOTE_UNKNOWN":!assessment.quote.fullDepth?
       "E1_DISPATCH_DEPTH_INSUFFICIENT":"E1_DISPATCH_GUARD_FAILED";
     await audit(db,null,"BULL","BULL","ENTRY_DEFER",reason,{signalId:s.id,symbol:s.symbol,
       e1:{...e1Decision,dispatchRecheck:assessment.quote},operatorOverride:OPERATOR_OVERRIDE});
-    return{entered:false,reason,releaseClaim:true,e1:{...e1Decision,dispatchRecheck:assessment.quote}};
+    return{entered:false,reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,e1:{...e1Decision,dispatchRecheck:assessment.quote}};
   }
   q=dispatchQuote;sn=dispatchSnap;pf=finalCheck.pf;manualRows=finalCheck.manual;
   bid=N(q.best_bid);ask=N(q.best_ask);sp=(ask/bid-1)*10000;sized=assessment.sized;
@@ -484,8 +554,7 @@ if(E1_ENABLED){
   if(!Number.isFinite(live))throw Error("ENTRY_AVAILABLE_BALANCE_UNREADABLE");
   if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,
     reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true,e1:e1Decision};
-  gatePrice=(NOTIONAL+NOTIONAL_BUFFER_USDT)/sized.amount;limitPrice=Math.max(ask*(1+IOC_BASE_BPS/10000),gatePrice);
-  iocBps=(limitPrice/ask-1)*10000;gap=Math.abs(limitPrice-ref)/atr;
+  limitPrice=sized.limitPrice;iocBps=sized.iocBps;gap=Math.abs(limitPrice-ref)/atr;
   const dispatchRawHash=dispatchQuote?.raw?await hashJson({quote:dispatchQuote.raw}):null;
   e1Decision={...e1Decision,decisionAt:dispatchAt,quoteAgeMs:assessment.quote.quoteAgeMs,
     evaluatedPrice:ask,expectedEntryVWAP:assessment.quote.expectedEntryVWAP,
@@ -497,7 +566,7 @@ if(E1_ENABLED){
 const finalDecision=await decideEntry(db,finalCheck,s.symbol,finalOrders,{proposedMargin:sized.sizedMargin,cashBuffer:ENTRY_CASH_BUFFER_USDT,managementFailures});
 await recordMismatch(db,finalCheck.match);await persistDecisionRisk(db,finalCheck,finalDecision);
 if(!finalDecision.allowed){return{entered:false,
-  reason:`ENTRY_CONTROL:${finalDecision.scope}:${finalDecision.reasons.join(",")}`,releaseClaim:true,entryDecision:finalDecision,e1:e1Decision}}
+  reason:`ENTRY_CONTROL:${finalDecision.scope}:${finalDecision.reasons.join(",")}`,releaseClaim:true,releaseScope:controlReleaseScope(finalDecision),entryDecision:finalDecision,e1:e1Decision}}
 if(finalCheck.positions.some(p=>p.symbol===s.symbol)||active(finalCheck.pf).length>=MAX_SLOTS)return{entered:false,reason:"PORTFOLIO_CHANGED",releaseClaim:true};
 // BOO common entry gate, checkpoint 2 of 2 (immediately before dispatch).
 // Re-evaluated from scratch against the state that will actually be traded --
@@ -507,18 +576,18 @@ await recordBooVerdict(db,{signalId:s.id,symbol:s.symbol,phase:"PRE_DISPATCH",re
 const booFinal=finalizeBooEntry(booAdmission,booPredispatch);
 if(booFinal.blocks)return{entered:false,
   reason:`BOO_ENTRY_GATE:${booFinal.driftDetected?"STATE_DRIFT:":""}${booFinal.reason}`,
-  releaseClaim:true,booGate:booPredispatch.verdict};
+  releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,booGate:booPredispatch.verdict};
 if(E1_ENABLED){
   const checkedAt=Date.now(),receivedAt=N(q?.timing?.received_at_ms,NaN),quoteAge=checkedAt-receivedAt;
   if(!Number.isSafeInteger(receivedAt)||quoteAge<0||quoteAge>E1_POLICY.maxQuoteAgeMs)
-    return{entered:false,reason:"E1_DISPATCH_QUOTE_AGED",releaseClaim:true,e1:e1Decision};
+    return{entered:false,reason:"E1_DISPATCH_QUOTE_AGED",releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,e1:e1Decision};
   // Waiting for recovery never extends the original signal lifetime. Recheck after
   // all account/ownership reads too, immediately before persisting the order intent.
   const freshness=entryFresh(f,checkedAt,limitPrice);if(freshness)throw Error(freshness);
 }
 await verifyExecutionLease(db);
 const id=cid("v11e",s.id),rp={action:"create_order",leverage:LEV,order:{market:s.symbol,side:"BUY",type:"LIMIT",price:limitPrice,time_in_force:"IOC",quantity:sized.amount,identifier:id,position_side:"LONG",position_effect:"OPEN"},wait_for_final_ms:4000},
-  oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,intent:"OPEN_LONG",reason:"V17_LEADER_ENTRY_IOC",client_order_id:id,requested_quantity:sized.amount,state:"PLANNED",request_payload:{...rp,quantity_step:step,price_tick:N(i?.price_tick??i?.tick_size),target_margin_usdt:MARGIN,sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,executor_patch:PATCH,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION,max_entry_drift_pct:POLICY.maxEntryDriftPct},entry_control:finalDecision.evidence,e1:E1_ENABLED?e1Decision:null,x1:X1_ENABLED?{policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,...OPERATOR_OVERRIDE}:null,operator_override:E1_ENABLED||X1_ENABLED?OPERATOR_OVERRIDE:null,qv3:qv3Active?{version:QV3_VERSION,activation:QV3_LIVE_CUTOVER,basis:QV3_ACTIVATION_BASIS}:null}}).select("*").single();
+  oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,intent:"OPEN_LONG",reason:"V17_LEADER_ENTRY_IOC",client_order_id:id,requested_quantity:sized.amount,state:"PLANNED",request_payload:{...rp,quantity_step:step,price_tick:filters.priceTick,min_notional_usdt:filters.minNotionalUsdt,target_margin_usdt:MARGIN,sizing_contract_version:SLOT_SIZING_CONTRACT.version,sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,order_notional_usdt:sized.orderNotionalUsdt,sizing_bound_by:sized.boundBy,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,executor_patch:PATCH,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION,max_entry_drift_pct:POLICY.maxEntryDriftPct},entry_control:finalDecision.evidence,e1:E1_ENABLED?e1Decision:null,x1:X1_ENABLED?{policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,...OPERATOR_OVERRIDE}:null,operator_override:E1_ENABLED||X1_ENABLED?OPERATOR_OVERRIDE:null,qv3:qv3Active?{version:QV3_VERSION,activation:QV3_LIVE_CUTOVER,basis:QV3_ACTIVATION_BASIS}:null}}).select("*").single();
 if(oi.error)throw new Error(`ORDER_INTENT:${oi.error.message}`);
 try{
   await verifyExecutionLease(db);attempt.dispatched=true;const initialRaw=await gateway(rp),initial=fill(initialRaw);
@@ -1147,9 +1216,66 @@ async function runEntryQueue(db,pair,manual,blockedSymbols=new Set(),backlogComp
   if(sg.error)throw Error(`SIGNALS:${sg.error.message}`);
 const openSymbols=new Set(openNow.map(x=>String(x.symbol).toUpperCase())),closedProtectionSymbols=typeof blockedSymbols==="undefined"?new Set():blockedSymbols,
   quarantinedSymbols=typeof pair==="undefined"?new Set():new Set((pair.quarantines??[]).map(x=>String(x.symbol).toUpperCase())),eligible=(sg.data||[]).filter(x=>!openSymbols.has(String(x.symbol).toUpperCase())),
-  queue=eligible.filter(x=>!closedProtectionSymbols.has(String(x.symbol).toUpperCase())&&!quarantinedSymbols.has(String(x.symbol).toUpperCase()))
+  ranked=eligible.filter(x=>!closedProtectionSymbols.has(String(x.symbol).toUpperCase())&&!quarantinedSymbols.has(String(x.symbol).toUpperCase()))
     .sort((a,b)=>Date.parse(b.entry_bar_at)-Date.parse(a.entry_bar_at)||N(rec(a.features).rank,999)-N(rec(b.features).rank,999));
-if(!queue.length)entry={entered:false,reason:eligible.length?(eligible.some(x=>quarantinedSymbols.has(String(x.symbol).toUpperCase()))?"SYMBOL_QUARANTINED":"STALE_PROTECTION_SYMBOL_LOCKED"):"NO_FRESH_BULL_SIGNAL"};for(const s of queue.slice(0,ENTRY_ATTEMPTS_PER_RUN)){const cl=await db.from("v11_long_regime_signals").update({status:"CLAIMED",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","NEW").select("*").maybeSingle();if(cl.error)throw new Error(`CLAIM:${cl.error.message}`);if(!cl.data){entry={entered:false,reason:"CLAIM_RACE"};continue}const attempt={dispatched:false};try{entry=await openBull(db,cl.data,openNow,manual,attempt,typeof pair==="undefined"?[]:pair.managementFailures??[]);if(entry?.releaseClaim===true){await db.from("v11_long_regime_signals").update({status:"NEW",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","CLAIMED");break}if(entry?.entered===true)break;}catch(e){const msg=e instanceof Error?e.message:String(e),pending=await db.from("v11_long_regime_orders").select("id").eq("signal_id",s.id).eq("state","RECONCILIATION_FAILED").limit(1);if(!pending.data?.length)await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",s.id);if(attempt.dispatched)throw e;if(!ENTRY_SKIP_SYMBOL_SCOPED.test(msg))throw e;entry={entered:false,reason:msg};}}
+// One symbol never occupies more than one place in the queue. The list is already
+// freshest-bar-first, so the first row for a symbol is its freshest candidate and
+// every later one is superseded. Retiring them terminally (rather than leaving them
+// NEW) is what stops a symbol that keeps re-signalling from crowding out other
+// symbols on the next cycle as well.
+const seenSymbols=new Set(),queue=[],superseded=[];
+for(const row of ranked){
+  const key=String(row.symbol).toUpperCase();
+  if(seenSymbols.has(key)){superseded.push(row);continue}
+  seenSymbols.add(key);queue.push(row);
+}
+for(const row of superseded)
+  await db.from("v11_long_regime_signals").update({status:"REJECTED",
+    reject_reason:`SUPERSEDED_BY_FRESHER_SIGNAL:${String(row.symbol).toUpperCase()}`,
+    updated_at:new Date().toISOString()}).eq("id",row.id).eq("status","NEW");
+if(!queue.length)entry={entered:false,reason:eligible.length?(eligible.some(x=>quarantinedSymbols.has(String(x.symbol).toUpperCase()))?"SYMBOL_QUARANTINED":"STALE_PROTECTION_SYMBOL_LOCKED"):"NO_FRESH_BULL_SIGNAL"};
+// Candidates that are ALREADY past the entry-age policy are retired here, before any
+// gateway, BOO or E1 work. The policy (POLICY.maxEntryAgeMs) is unchanged -- openBull
+// would reach the identical verdict -- but reaching it cheaply stops a batch of expired
+// rows from consuming the run's attempts while a genuinely fresh candidate waits.
+const stillFresh=[];
+for(const row of queue){
+  const close=N(rec(row.features).signal5Close,NaN),now=Date.now();
+  if(!Number.isFinite(close)||now<close||now-close>POLICY.maxEntryAgeMs){
+    await db.from("v11_long_regime_signals").update({status:"REJECTED",
+      reject_reason:"SIGNAL_STALE_OR_FUTURE",updated_at:new Date().toISOString()})
+      .eq("id",row.id).eq("status","NEW");
+    if(!stillFresh.length)entry={entered:false,reason:"SIGNAL_STALE_OR_FUTURE"};
+    continue;
+  }
+  stillFresh.push(row);
+}
+const runDeadline=Date.now()+ENTRY_RUN_BUDGET_MS;
+let attempts=0;
+for(const s of stillFresh){
+  if(attempts>=ENTRY_ATTEMPTS_PER_RUN){entry={entered:false,reason:"ENTRY_ATTEMPTS_EXHAUSTED"};break}
+  if(Date.now()>=runDeadline){entry={entered:false,reason:"ENTRY_RUN_BUDGET_EXHAUSTED"};break}
+  const cl=await db.from("v11_long_regime_signals").update({status:"CLAIMED",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","NEW").select("*").maybeSingle();
+  if(cl.error)throw new Error(`CLAIM:${cl.error.message}`);
+  if(!cl.data){entry={entered:false,reason:"CLAIM_RACE"};continue}
+  attempts++;
+  const attempt={dispatched:false};
+  try{
+    entry=await openBull(db,cl.data,openNow,manual,attempt,typeof pair==="undefined"?[]:pair.managementFailures??[]);
+    if(entry?.releaseClaim===true){
+      await db.from("v11_long_regime_signals").update({status:"NEW",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","CLAIMED");
+      if(releaseStopsRun(entry))break;
+      continue;
+    }
+    if(entry?.entered===true)break;
+  }catch(e){
+    const msg=e instanceof Error?e.message:String(e),pending=await db.from("v11_long_regime_orders").select("id").eq("signal_id",s.id).eq("state","RECONCILIATION_FAILED").limit(1);
+    if(!pending.data?.length)await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",s.id);
+    if(attempt.dispatched)throw e;
+    if(!ENTRY_SKIP_SYMBOL_SCOPED.test(msg))throw e;
+    entry={entered:false,reason:msg};
+  }
+}
 return entry;
 }
 
@@ -1398,4 +1524,7 @@ async function runWithLease(db){
     if(released.error)console.error("V17_LEASE_RELEASE_FAILED");
   }
 }
-Deno.serve(async req=>{if(req.method!=="POST")return res(405,{ok:false,error:"POST_ONLY"});const U=env("SUPABASE_URL"),K=env("SUPABASE_SERVICE_ROLE_KEY"),db=createClient(U,K,{auth:{persistSession:false,autoRefreshToken:false},global:{fetch:async(url,init={})=>{const headers=new Headers(init.headers);const owner=leaseOwners.get(db);if(owner)headers.set("x-v18-execution-owner",owner);const timeout=AbortSignal.timeout(2500);return fetch(url,{...init,headers,signal:init.signal?AbortSignal.any([init.signal,timeout]):timeout})}}});if(!(await auth(db,req)))return res(401,{ok:false,error:"UNAUTHORIZED"});const body=await req.json().catch(()=>({})),mode=String(body.mode||"run").toLowerCase();try{if(mode==="preflight"||mode==="diagnostic"){const[m,sn,pf,q,i,rt,op]=await Promise.all([market(db),snap(db),gateway({action:"p10_portfolio"}),gateway({action:"quote",market:String(body.symbol||"BTCUSDT")}),gateway({action:"symbol_info",market:String(body.symbol||"BTCUSDT")}),db.from("v11_long_regime_runtime").select("*").eq("singleton",true).single(),db.from("v11_long_regime_positions").select("id,symbol,active_lane,peak_price,entry_price,last_evaluated_at,metadata").eq("state","OPEN").limit(MAX_SLOTS+1)]),step=N(i?.quantity_step??i?.step_size),ask=N(q?.best_ask),sizing=ask>0&&step>0?sizeEntry(ask,step):null;return res(200,{ok:true,revision:REVISION,patch:PATCH,entryExecutionPolicy:{version:ENTRY_EXECUTION_POLICY_VERSION,maxEntryDriftPct:POLICY.maxEntryDriftPct,scope:"NEW_FILLS_ONLY"},operatorOverride:OPERATOR_OVERRIDE,e1Runtime:{enabled:E1_ENABLED,policyVersion:E1_POLICY.policyVersion},x1Runtime:{enabled:X1_ENABLED,policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,observationIntervalMs:1000},maxSlots:MAX_SLOTS,runtime:rt.data,marketState:m,snapshotAgeMs:sn.ageMs,availableUsdt:Math.min(N(sn.available_quote),N(pf?.available_quote)),externalPositions:active(pf).map(x=>({symbol:sym(x),quantity:qty(x)})),openPositions:(op.data||[]).map(p=>({...p,metadata:{executorPatch:rec(p.metadata).executorPatch,entryExecutionPolicyVersion:rec(p.metadata).entryExecutionPolicyVersion,entryConfirmationPolicyVersion:rec(p.metadata).entryConfirmationPolicyVersion,exitObservationPolicyVersion:rec(p.metadata).exitObservationPolicyVersion,x1Observation:rec(p.metadata).x1Observation,qv3:rec(p.metadata).qv3}})),quote:q,symbolInfo:{step,priceTick:i?.price_tick??i?.tick_size,minNotional:i?.min_notional},sizing})}return res(200,await runWithLease(db))}catch(e){const msg=e instanceof Error?e.message:String(e);return res(500,{ok:false,revision:REVISION,patch:PATCH,error:msg})}});
+Deno.serve(async req=>{if(req.method!=="POST")return res(405,{ok:false,error:"POST_ONLY"});const U=env("SUPABASE_URL"),K=env("SUPABASE_SERVICE_ROLE_KEY"),db=createClient(U,K,{auth:{persistSession:false,autoRefreshToken:false},global:{fetch:async(url,init={})=>{const headers=new Headers(init.headers);const owner=leaseOwners.get(db);if(owner)headers.set("x-v18-execution-owner",owner);const timeout=AbortSignal.timeout(2500);return fetch(url,{...init,headers,signal:init.signal?AbortSignal.any([init.signal,timeout]):timeout})}}});if(!(await auth(db,req)))return res(401,{ok:false,error:"UNAUTHORIZED"});const body=await req.json().catch(()=>({})),mode=String(body.mode||"run").toLowerCase();try{if(mode==="preflight"||mode==="diagnostic"){const[m,sn,pf,q,i,rt,op]=await Promise.all([market(db),snap(db),gateway({action:"p10_portfolio"}),gateway({action:"quote",market:String(body.symbol||"BTCUSDT")}),gateway({action:"symbol_info",market:String(body.symbol||"BTCUSDT")}),db.from("v11_long_regime_runtime").select("*").eq("singleton",true).single(),db.from("v11_long_regime_positions").select("id,symbol,active_lane,peak_price,entry_price,last_evaluated_at,metadata").eq("state","OPEN").limit(MAX_SLOTS+1)]),pfFilters=symbolFilters(i),step=pfFilters.quantityStep,ask=N(q?.best_ask),
+      sizing=(()=>{try{return ask>0&&step>0?sizeEntry(ask,step,pfFilters):null}catch(e){return{error:String(e?.message??e)}}})();return res(200,{ok:true,revision:REVISION,patch:PATCH,entryExecutionPolicy:{version:ENTRY_EXECUTION_POLICY_VERSION,maxEntryDriftPct:POLICY.maxEntryDriftPct,scope:"NEW_FILLS_ONLY"},operatorOverride:OPERATOR_OVERRIDE,e1Runtime:{enabled:E1_ENABLED,policyVersion:E1_POLICY.policyVersion},x1Runtime:{enabled:X1_ENABLED,policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,observationIntervalMs:1000},maxSlots:MAX_SLOTS,runtime:rt.data,marketState:m,snapshotAgeMs:sn.ageMs,availableUsdt:Math.min(N(sn.available_quote),N(pf?.available_quote)),externalPositions:active(pf).map(x=>({symbol:sym(x),quantity:qty(x)})),openPositions:(op.data||[]).map(p=>({...p,metadata:{executorPatch:rec(p.metadata).executorPatch,entryExecutionPolicyVersion:rec(p.metadata).entryExecutionPolicyVersion,entryConfirmationPolicyVersion:rec(p.metadata).entryConfirmationPolicyVersion,exitObservationPolicyVersion:rec(p.metadata).exitObservationPolicyVersion,x1Observation:rec(p.metadata).x1Observation,qv3:rec(p.metadata).qv3}})),quote:q,symbolInfo:{step,priceTick:pfFilters.priceTick,minNotional:pfFilters.minNotionalUsdt,minQuantity:pfFilters.minQuantity},
+      sizingContract:{...SLOT_SIZING_CONTRACT,...slotSizingBounds(SLOT_SIZING_CONTRACT),
+        invariants:assertSlotSizingContract()},sizing})}return res(200,await runWithLease(db))}catch(e){const msg=e instanceof Error?e.message:String(e);return res(500,{ok:false,revision:REVISION,patch:PATCH,error:msg})}});

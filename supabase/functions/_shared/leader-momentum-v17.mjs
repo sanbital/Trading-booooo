@@ -2,6 +2,7 @@
  * Percent values are UNLEVERAGED price returns. Defaults are unoptimized engineering
  * starting values, NOT results of the unfinished Binance backtest.
  */
+import {SLOT_SIZING_CONTRACT} from './leader-slot-sizing.mjs';
 export const STRATEGY = 'LEADER_MOMENTUM_V17';
 // Completes the existing one-percent entry-drift contract at the only price that
 // ultimately matters: the exchange execution price.  The pre-dispatch guard remains
@@ -14,7 +15,15 @@ export const POLICY = Object.freeze({
   min5mReturn: .002, stopPct: .025, trailArmPct: .03, trailGapPct: .015,
   staleMs: 45*60_000, maxHoldMs: 6*60*60_000, maxEntryAgeMs: 120_000,
   maxEntryDriftPct: .01, cooldownMs: 30*60_000, maxSlots: 10,
-  minCoverage: .98, marginUsdt: 40, leverage: 3,
+  minCoverage: .98,
+  // Slot size is NOT declared here. It comes from the one sizing contract the
+  // executor also sizes from, so a resize cannot land in one module and not the
+  // other -- which is exactly what happened on 2026-09-16, when the executor
+  // moved to 30 USDT and this file kept saying 40, so every generated signal was
+  // stamped targetMarginUsdt=40 while orders were sized for 30.
+  marginUsdt: SLOT_SIZING_CONTRACT.targetMarginUsdt,
+  leverage: SLOT_SIZING_CONTRACT.leverage,
+  sizingContractVersion: SLOT_SIZING_CONTRACT.version,
 });
 export const M5=300_000, M15=900_000, DAY=86_400_000;
 const num=v=>typeof v==='number'?v:(typeof v==='string'&&v.trim()!==''?Number(v):NaN);

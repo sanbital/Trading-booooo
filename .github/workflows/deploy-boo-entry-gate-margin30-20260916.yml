@@ -116,6 +116,76 @@ jobs:
           npm exec --yes --package=deno@2.5.6 -- deno check \
             supabase/functions/v10-lane-executor/index.ts
 
+      # The executor's own entry path: the queue scheduling, the openBull gates, and
+      # the offline replay of the rejections v48 actually wrote in production. These
+      # run the real source rather than a copy of it.
+      - name: Replay the entry path against the recorded production rejections
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test \
+            test-support/v17-entry/*.test.mjs \
+            test-support/v17-exit/entry-queue.test.mjs \
+            test-support/v17-exit/entry-margin-skip.test.mjs \
+            test-support/v17-exit/module-load.test.mjs \
+            2>&1 | tee release-evidence/entry-replay.txt
+
+      # The invariant this release exists to restore.
+      #
+      # v48 shipped a FIXED 0.12 USDT notional buffer funded by RAISING the limit
+      # price, under a RELATIVE 12 bps cap. At a 120 USDT notional that buffer cost
+      # 10 bps and never fired. At 90 it costs 13.33 bps, so ordinary candidates were
+      # refused by arithmetic: 20 ENTRY_GRANULARITY_BPS rejections at 12.479-13.199
+      # bps, and zero entries, on a runtime that reported itself healthy the whole
+      # time. Version, circuit and last_error could not see it. This can.
+      - name: Prove the sizing contract cannot refuse itself
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm exec --yes --package=deno@2.5.6 -- deno eval --quiet '
+            import {SLOT_SIZING_CONTRACT, assertSlotSizingContract, planSlotEntry,
+              sizingPriceUpliftBps, slotSizingBounds}
+              from "./supabase/functions/_shared/leader-slot-sizing.mjs";
+            import {POLICY} from "./supabase/functions/_shared/leader-momentum-v17.mjs";
+            const fail = (m) => { console.error("RELEASE_GATE_FAIL: " + m); Deno.exit(1); };
+
+            // 1. The structural invariants, including: sizing demands no price uplift.
+            for (const c of assertSlotSizingContract()) if (!c.ok) fail(c.name + " " + c.detail);
+            if (sizingPriceUpliftBps() > SLOT_SIZING_CONTRACT.iocMaxBps)
+              fail("a sizing decision can demand more price uplift than IOC_MAX_BPS allows");
+
+            // 2. One contract, read by the generator and the executor alike.
+            if (POLICY.marginUsdt !== SLOT_SIZING_CONTRACT.targetMarginUsdt)
+              fail("POLICY.marginUsdt " + POLICY.marginUsdt + " != contract "
+                + SLOT_SIZING_CONTRACT.targetMarginUsdt);
+            if (POLICY.sizingContractVersion !== SLOT_SIZING_CONTRACT.version)
+              fail("the policy and the contract name different sizing versions");
+
+            // 3. A representative 30 USDT / 3x candidate on a fine-step symbol must be
+            //    sizeable. This is the check that would have failed the v48 release.
+            const bounds = slotSizingBounds(SLOT_SIZING_CONTRACT);
+            let refused = 0, checked = 0;
+            for (const step of [1, 0.1, 0.01, 0.001]) {
+              for (let i = 0; i < 500; i++) {
+                const ask = 0.0009 * (1 + i / 61) + step * 1e-6;
+                checked++;
+                try {
+                  const plan = planSlotEntry({ask, quantityStep: step, priceTick: 0,
+                    minNotionalUsdt: 5});
+                  if (plan.iocBps > SLOT_SIZING_CONTRACT.iocMaxBps) refused++;
+                  if (plan.referenceNotionalUsdt + 1e-9 < bounds.targetNotionalUsdt) refused++;
+                } catch (e) { if (e.code === "IOC_PRICE_CAP_EXCEEDED") refused++; }
+              }
+            }
+            if (refused > 0)
+              fail(refused + " of " + checked + " fine-step candidates are refused by the "
+                + "sizing arithmetic alone");
+            console.log("sizing contract " + SLOT_SIZING_CONTRACT.version
+              + ": " + checked + " representative candidates, 0 self-refusals, target "
+              + bounds.targetNotionalUsdt + " USDT, max order margin "
+              + bounds.maxOrderMarginUsdt.toFixed(4) + " USDT");
+          ' 2>&1 | tee release-evidence/sizing-invariants.txt
+
       - name: Install pinned Supabase CLI
         uses: supabase/setup-cli@v1
         with:
@@ -256,6 +326,66 @@ jobs:
               time.sleep(20)
           json.dump(rows,open('release-evidence/cycles.json','w'),indent=2)
           assert len(rows)==3, f'only {len(rows)} post-deploy cycles observed'
+          PY
+
+      # The check that was missing when v48 went out.
+      #
+      # v48 deployed cleanly: version advanced, circuit closed, last_error null,
+      # cycles completing in time. Every one of those was true for fourteen hours
+      # while 144 of 144 signals were refused and not one entry opened. Liveness of
+      # the process says nothing about liveness of the ENTRY PATH, so this looks at
+      # the refusals themselves.
+      #
+      # It fails the release only on a DETERMINISTIC EXECUTION error -- a refusal
+      # that is a property of our own arithmetic rather than of the market. A quiet
+      # market, a drifted price or a refusing risk gate are all legitimate reasons to
+      # open nothing, and none of them fail here.
+      - name: Fail the release if fresh candidates are dying on execution arithmetic
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,os,subprocess
+          deployed=open('release-evidence/deployed-at.txt').read().strip()
+          lit="'"+deployed.replace("'","''")+"'::timestamptz"
+          # Refusals produced by THIS executor's sizing and scheduling. Everything
+          # else -- ENTRY_DRIFT, ENTRY_SPREAD, a BOO verdict, a quiet market -- is a
+          # market or policy answer and is deliberately not counted.
+          execution = ("MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET|QTY_STEP_EXCEEDS_MARGIN_BUDGET|"
+                       "IOC_PRICE_CAP_EXCEEDED|ENTRY_GRANULARITY_BPS|"
+                       "ENTRY_SLOT_GRANULARITY_MARGIN|ENTRY_NOTIONAL_UNDERSIZED|"
+                       "V17_LIMIT_PRICE_MARGIN_OVERFLOW|SIGNAL_STALE_OR_FUTURE")
+          q=("select jsonb_build_object("
+             "'candidates',count(*),"
+             "'entered',count(*) filter (where status in ('ORDERED','FILLED','CLOSED')),"
+             "'execution_refusals',count(*) filter (where reject_reason ~ ('^('||__E__||')')),"
+             "'stale',count(*) filter (where reject_reason like 'SIGNAL_STALE%'),"
+             "'by_reason',coalesce(jsonb_object_agg(code,n) filter (where code is not null),'{}'::jsonb)"
+             ") from (select status,reject_reason,split_part(reject_reason,':',1) code,"
+             "count(*) over () n from public.v11_long_regime_signals "
+             "where created_at>=__D__) t"
+             ).replace('__D__',lit).replace('__E__',"'"+execution+"'")
+          # Only the most recent candidates matter: an older backlog is not evidence
+          # about the code that just shipped.
+          q=q.replace("where created_at>=__D__","where created_at>=__D__ order by created_at desc limit 20")
+          row=json.loads(subprocess.check_output(
+              ['psql',os.environ['SUPABASE_DB_URL'],'-XAt','--set=ON_ERROR_STOP=1','-c',q],text=True).strip())
+          json.dump(row,open('release-evidence/entry-health.json','w'),indent=2)
+          print(json.dumps(row,indent=2))
+          n=row['candidates']
+          if n==0:
+              # No signals is a quiet market, not a broken release.
+              print('no fresh candidates in the window; entry health not asserted')
+              raise SystemExit(0)
+          bad=row['execution_refusals']
+          if bad*2 > n and row['entered']==0:
+              raise SystemExit(
+                  f"RELEASE_GATE_FAIL: {bad} of the last {n} candidates were refused by this "
+                  f"executor's own sizing or scheduling and none entered: {row['by_reason']}")
+          print(f"{bad} of {n} recent candidates refused on execution arithmetic; "
+                f"{row['entered']} entered")
           PY
 
       - name: Verify open positions were preserved

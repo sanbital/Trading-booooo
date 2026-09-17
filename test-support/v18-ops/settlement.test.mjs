@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {harness,position,nativeFill} from './harness.mjs';
+import {SLOT_SIZING_CONTRACT,slotSizingBounds} from '../../supabase/functions/_shared/leader-slot-sizing.mjs';
 function receipt(p,cmd,{exact=true,quantity=cmd.order.quantity}={}){
  const id='software-'+p.id,price=p.entry_price*.99,t=Date.now();
  const raw={orderId:id,clientOrderId:cmd.order.identifier,symbol:p.symbol,side:'SELL',positionSide:'BOTH',reduceOnly:true,
@@ -71,14 +72,22 @@ test('14 CAS conflict after exchange fill retains intent, retry queries the same
  assert.equal(h.state.calls.filter(c=>c.action==='create_order').length,1);assert.equal(h.state.tables.v11_long_regime_positions[0].state,'CLOSED');
 });
 
-test('11 actual openBull requested 196, fills 93 with fee delayed: owns/protects only 93',async()=>{
+// The requested quantity follows the slot contract, so it is derived here rather
+// than pinned: the literal 196 was the 40 USDT slot's answer at .613 and stopped
+// being right when the operator moved the slot to 30. What this test is actually
+// about -- a partial fill is owned and protected at the FILLED size, not the
+// requested one -- is independent of the slot and is asserted exactly as before.
+test('11 actual openBull partial-fills 93 of the requested size: owns/protects only 93',async()=>{
  const h=harness(),s=h.state.tables.v11_long_regime_signals[0];s.symbol='EDGEUSDT';s.features.referenceClose=.613;s.features.atr=.01;
  h.state.entryQuote={best_bid:.6129,best_ask:.613};
  h.state.createOrder=(cmd,state)=>{
-  assert.equal(cmd.order.side,'BUY');assert.equal(cmd.order.quantity,196);
+  assert.equal(cmd.order.side,'BUY');
+  assert.ok(cmd.order.quantity*.613>=slotSizingBounds(SLOT_SIZING_CONTRACT).targetNotionalUsdt,
+   `${cmd.order.quantity} lots at .613 must reach the slot's target notional`);
+  assert.ok(cmd.order.quantity>93,'the fill below must be a PARTIAL one');
   state.exchange=[{market:'EDGEUSDT',side:'LONG',quantity:93}];
   return{order:{orderId:'edge-entry',clientOrderId:cmd.order.identifier,symbol:'EDGEUSDT',side:'BUY',positionSide:'BOTH',reduceOnly:false,
-   origQty:'196',executedQty:'93',status:'EXPIRED',avgPrice:'.613',updateTime:state.now,fills:[]}};
+   origQty:String(cmd.order.quantity),executedQty:'93',status:'EXPIRED',avgPrice:'.613',updateTime:state.now,fills:[]}};
  };
  const out=await h.ctx.runCycle();assert.equal(out.entry.entered,true);
  const p=h.state.tables.v11_long_regime_positions[0];assert.equal(p.original_quantity,93);assert.equal(p.remaining_quantity,93);
@@ -119,7 +128,7 @@ test('09 entry timeout: successful existing ID is recovered and protected; termi
   h.state.entryQuote={best_bid:.6129,best_ask:.613};
   h.state.createOrder=(cmd,state)=>{
    state.exchange=executed?[{market:'EDGEUSDT',side:'LONG',quantity:executed}]:[];
-   state.software[cmd.order.identifier]={order:{orderId:'known-entry',clientOrderId:cmd.order.identifier,symbol:'EDGEUSDT',side:'BUY',positionSide:'BOTH',reduceOnly:false,origQty:'196',executedQty:String(executed),status:'EXPIRED',avgPrice:'.613',updateTime:state.now,fills:[]}};
+   state.software[cmd.order.identifier]={order:{orderId:'known-entry',clientOrderId:cmd.order.identifier,symbol:'EDGEUSDT',side:'BUY',positionSide:'BOTH',reduceOnly:false,origQty:String(cmd.order.quantity),executedQty:String(executed),status:'EXPIRED',avgPrice:'.613',updateTime:state.now,fills:[]}};
    throw Error('GW_408:execution status unknown');
   };
   await assert.rejects(()=>h.ctx.runCycle(),/408/);h.advance();await h.ctx.runCycle();

@@ -7,6 +7,7 @@ import {canonicalOrderFills,cumulativeFillDelta} from '../../supabase/functions/
 import {createNativeProtection} from '../../supabase/functions/_shared/leader-native-protection.mjs';
 import {classifyPortfolio} from '../../supabase/functions/_shared/leader-ops-isolation.mjs';
 import {harness,position,PRODUCTION_BASIS} from '../v18-ops/harness.mjs';
+import {SLOT_SIZING_CONTRACT,slotSizingBounds} from '../../supabase/functions/_shared/leader-slot-sizing.mjs';
 
 const NOW=Date.parse('2026-06-01T00:00:00Z');
 const controls={runtime:{live_enabled:true,circuit_open:false},operator:{entry_enabled:true,legacy_entries_retired:true},
@@ -187,17 +188,35 @@ test('17 an inspection without settlement does not advance reconciliation-succes
 
 test('18 approved QV3, V19 controls, sizing and V23 override audit identity remain pinned',()=>{
   const source=readFileSync(new URL('../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
-  assert.match(source,/const MARGIN=40,LEV=3,[^;]*MAX_SLOTS=10/);assert.match(source,/QV3_ENTRY_EXIT_TWO_1|QV3_VERSION/);
+  // The slot was 40 USDT when this was written. The operator moved it to 30 on
+  // 2026-09-16, so pinning the literal would pin a number that is no longer the
+  // policy. What must stay pinned is that the executor declares NO slot size of its
+  // own and reads the one contract the generator reads -- the property whose absence
+  // let the four copies of it drift apart during that cutover.
+  assert.match(source,/const MARGIN=SLOT_SIZING_CONTRACT\.targetMarginUsdt,LEV=SLOT_SIZING_CONTRACT\.leverage,NOTIONAL=MARGIN\*LEV;/);
+  assert.match(source,/MAX_SLOTS=10/);
+  assert.equal(SLOT_SIZING_CONTRACT.targetMarginUsdt,30);
+  assert.equal(SLOT_SIZING_CONTRACT.leverage,3);
+  assert.match(source,/QV3_ENTRY_EXIT_TWO_1|QV3_VERSION/);
   assert.equal(ENTRY_CONTROL_VERSION,'V19-SCOPE-AWARE-ENTRY-1');
   assert.match(source,/PATCH="V23-E1-X1-OPERATOR-OVERRIDE-1"/);assert.match(source,/v22EntryFinality/);
   assert.match(source,/priorPerformanceVerdict:"DEFER"/);assert.match(source,/p_evidence_version:ENTRY_CONTROL_VERSION/);
 });
 
-test('18b normal entry sizing, stop and hold decision equal the deployed production basis',async()=>{
+// 18b used to require the CURRENT executor to size identically to PRODUCTION_BASIS.
+// That basis sized a 40 USDT slot, and the operator deliberately moved to 30, so the
+// entry-quantity half of the comparison now asserts a parity that was intentionally
+// broken -- it has been failing since v48 shipped. The half that still protects
+// something real is the EXIT side: a sizing change must not move a stop, a peak or a
+// hold decision. That is what is compared below, and the entry is checked against the
+// contract it is supposed to follow instead of against a superseded one.
+test('18b entry sizing follows the current contract; stop and hold match the production basis',async()=>{
   const make=sourceRef=>{const h=harness({sourceRef});h.state.entryQuote={best_bid:.6129,best_ask:.613};
     h.state.tables.v11_long_regime_signals[0].symbol='EDGEUSDT';h.state.tables.v11_long_regime_signals[0].features.referenceClose=.613;
     h.state.tables.v11_long_regime_signals[0].features.atr=.01;
-    h.state.createOrder=(cmd,state)=>{state.exchange=[{market:'EDGEUSDT',side:'LONG',quantity:196,entry_price:.613}];
+    // Echo the dispatched quantity rather than a literal: the slot size is a policy
+    // value now, so a hardcoded 196 would only be testing the old 40 USDT slot.
+    h.state.createOrder=(cmd,state)=>{state.exchange=[{market:'EDGEUSDT',side:'LONG',quantity:cmd.order.quantity,entry_price:.613}];
       return{order:{orderId:'entry-exact',clientOrderId:cmd.order.identifier,symbol:'EDGEUSDT',side:'BUY',positionSide:'BOTH',
         reduceOnly:false,origQty:String(cmd.order.quantity),executedQty:String(cmd.order.quantity),status:'FILLED',avgPrice:'.613',
         updateTime:state.now,fills:[{tradeId:'entry-trade',qty:String(cmd.order.quantity),price:'.613',commission:'.06',
@@ -205,11 +224,23 @@ test('18b normal entry sizing, stop and hold decision equal the deployed product
   const before=make(PRODUCTION_BASIS),after=make(null),oldRun=await before.ctx.runCycle(),newRun=await after.ctx.runCycle(),
     oldCmd=before.state.calls.find(x=>x.action==='create_order'),newCmd=after.state.calls.find(x=>x.action==='create_order'),
     oldPosition=before.state.tables.v11_long_regime_positions[0],newPosition=after.state.tables.v11_long_regime_positions[0];
-  assert.deepEqual({quantity:newCmd.order.quantity,price:newCmd.order.price,leverage:newCmd.leverage},
-    {quantity:oldCmd.order.quantity,price:oldCmd.order.price,leverage:oldCmd.leverage});
-  assert.deepEqual({quantity:newPosition.remaining_quantity,entry:newPosition.entry_price,stop:newPosition.hard_stop_price},
-    {quantity:oldPosition.remaining_quantity,entry:oldPosition.entry_price,stop:oldPosition.hard_stop_price});
-  assert.equal(newRun.entry.entered,oldRun.entry.entered);
+  assert.equal(newCmd.leverage,oldCmd.leverage,'leverage is unchanged by the resize');
+  assert.equal(newRun.entry.entered,oldRun.entry.entered,'both bases still enter');
+  // The new quantity is the contract's, priced from the ask alone.
+  const bounds=slotSizingBounds(SLOT_SIZING_CONTRACT);
+  assert.ok(newCmd.order.quantity*.613>=bounds.targetNotionalUsdt,
+    `${newCmd.order.quantity} lots at .613 must reach the ${bounds.targetNotionalUsdt} USDT target`);
+  assert.ok(newCmd.order.quantity*newCmd.order.price/SLOT_SIZING_CONTRACT.leverage
+    <=bounds.maxOrderMarginUsdt+1e-9,'and stay inside the slot budget at its own limit price');
+  assert.ok(newCmd.order.price>=.613&&(newCmd.order.price/.613-1)*10000<=SLOT_SIZING_CONTRACT.iocMaxBps,
+    'the BUY is priced above the ask but inside the IOC cap');
+  // The smaller slot must buy proportionally less, not something unrelated.
+  assert.ok(newCmd.order.quantity<oldCmd.order.quantity,
+    'a 30 USDT slot must buy fewer lots than the 40 USDT basis did');
+  // The stop is a function of the entry price, not of the size: it must not move.
+  assert.equal(newPosition.entry_price,oldPosition.entry_price);
+  assert.equal(newPosition.hard_stop_price,oldPosition.hard_stop_price);
+  assert.equal(newPosition.remaining_quantity,newCmd.order.quantity);
   const oldHold=harness({sourceRef:PRODUCTION_BASIS,positions:[position('HOLDUSDT',3,10)],signal:false}),
     newHold=harness({positions:[position('HOLDUSDT',3,10)],signal:false});
   oldHold.state.quotes.HOLDUSDT=10.05;newHold.state.quotes.HOLDUSDT=10.05;

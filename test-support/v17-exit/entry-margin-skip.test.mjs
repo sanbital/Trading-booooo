@@ -12,13 +12,29 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 import {POLICY, entryFresh} from '../../supabase/functions/_shared/leader-momentum-v17.mjs';
+import {SLOT_SIZING_CONTRACT, ceilStep, ceilTick, floorStep, planSlotEntry, slotSizingBounds}
+  from '../../supabase/functions/_shared/leader-slot-sizing.mjs';
+import {ENFORCEMENT as BOO_ENFORCEMENT, evaluateBooEntry, finalizeBooEntry, loadBooGateContext,
+  openRiskSummary, recordBooVerdict} from '../../supabase/functions/v10-lane-executor/boo-entry-adapter.mjs';
+import {V24_ADAPTER_VERSION, v24EntryGate} from '../../supabase/functions/v10-lane-executor/v24-entry-adapter.mjs';
+import {E1_POLICY} from '../../supabase/functions/_shared/leader-e1-runtime.mjs';
+import {R1_VERSION} from '../../supabase/functions/_shared/boo/r1-strategy.mjs';
+import {RISK_POLICY_VERSION} from '../../supabase/functions/_shared/boo/risk-policy.mjs';
+import {RISK_BUDGET_VERSION} from '../../supabase/functions/_shared/boo/risk-budget.mjs';
 
 const source = readFileSync(new URL('../../supabase/functions/v10-lane-executor/index.ts', import.meta.url), 'utf8');
-// Use the real sizeEntry, so the margin figures under test are the production ones.
-const sizeEntrySrc = source.slice(source.indexOf('function sizeEntry('), source.indexOf('async function closePos('));
-const code = sizeEntrySrc + source.slice(source.indexOf('async function openBull('), source.indexOf('// Best-effort feed for the decision-only exit shadow.'));
+// Use the real sizeEntry and the real gate helpers openBull calls, so the margin
+// figures under test are the production ones rather than a copy of them.
+const sizeEntrySrc = source.slice(source.indexOf('function symbolFilters('), source.indexOf('// --- BOO common entry gate'));
+// The BOO gate block through booGate itself: openBull calls into all of it.
+const gateSrc = source.slice(source.indexOf('// --- BOO common entry gate'), source.indexOf('async function openBull('));
+const code = sizeEntrySrc + gateSrc +
+  source.slice(source.indexOf('async function openBull('), source.indexOf('// Best-effort feed for the decision-only exit shadow.'));
 
-const MARGIN = 40, LEV = 3, NOTIONAL = MARGIN * LEV;
+// Slot geometry comes from the contract, like the executor's own does, so this
+// harness cannot drift from production the way the four copies of it once did.
+const MARGIN = SLOT_SIZING_CONTRACT.targetMarginUsdt, LEV = SLOT_SIZING_CONTRACT.leverage,
+  NOTIONAL = MARGIN * LEV, MAX_ORDER_MARGIN_USDT = slotSizingBounds(SLOT_SIZING_CONTRACT).maxOrderMarginUsdt;
 
 function make({available}) {
   const now = Date.now();
@@ -29,14 +45,33 @@ function make({available}) {
   const ctx = {
     Date, Number, Math, Error, Promise, String, Object, console, POLICY, entryFresh,
     STRATEGY: 'LEADER_MOMENTUM_V17', MARGIN, LEV, NOTIONAL, MAX_SLOTS: 10,
-    NOTIONAL_BUFFER_USDT: .12, MAX_MARGIN_BUFFER_USDT: .25, ENTRY_CASH_BUFFER_USDT: .10,
-    SPREAD_MAX: 25, IOC_BASE_BPS: 3, IOC_MAX_BPS: 12,
+    MAX_ORDER_MARGIN_USDT, ENTRY_CASH_BUFFER_USDT: .10,
+    SPREAD_MAX: 25, IOC_BASE_BPS: SLOT_SIZING_CONTRACT.iocBaseBps,
+    IOC_MAX_BPS: SLOT_SIZING_CONTRACT.iocMaxBps,
+    SLOT_SIZING_CONTRACT, planSlotEntry, slotSizingBounds, ceilTick,
+    RELEASE_SCOPE: {SYMBOL: 'SYMBOL', ACCOUNT: 'ACCOUNT'},
+    CONTROL_SCOPE: {SYMBOL_QUARANTINE: 'SYMBOL_QUARANTINE'},
+    // The executor's module top level is not evaluated here -- only openBull is --
+    // so the gates it calls are stubbed at their real signatures. BOO observes.
+    BOO_ENFORCEMENT, evaluateBooEntry, finalizeBooEntry, loadBooGateContext, openRiskSummary,
+    recordBooVerdict, V24_ADAPTER_VERSION, v24EntryGate,
+    R1_VERSION, RISK_POLICY_VERSION, RISK_BUDGET_VERSION, E1_POLICY, crypto, TextEncoder,
+    NATIVE_STOP_ENABLED: false, REVISION: 'V11-LONG-REGIME-1.0.1', PATCH: 'TEST',
+    ENTRY_EXECUTION_POLICY_VERSION: 'TEST', MAX_GAP_ATR: .5, QV3_VERSION: 'TEST',
+    QV3_ACTIVATION_BASIS: 'TEST', X1_POLICY_VERSION: 'TEST', EXIT_REVIEW_R5: {policyVersion: 'TEST'},
+    // BOO reads the operator's control rows. OBSERVE is the production posture.
+    opsControls: async () => ({runtime: {circuit_open: false}, settings: {mode: 'LIVE_LIMITED'},
+      operator: {entry_enabled: true}}),
+    audit: async () => {}, active: p => (Array.isArray(p?.positions) ? p.positions : []),
+    V24_ENTRY_GATE_ENABLED: false, E1_ENABLED: false, X1_ENABLED: false,
+    QV3_LIVE_CUTOVER: null, OPERATOR_OVERRIDE: {basis: 'TEST'},
+    Deno: {env: {get: () => undefined}},
     rec: x => (x && typeof x === 'object' && !Array.isArray(x) ? x : {}),
     N: (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d),
     sym: p => String(p?.market ?? p?.symbol ?? '').toUpperCase(),
     active: p => Array.isArray(p?.positions) ? p.positions : [],
-    ceilStep: (v, s) => Math.ceil(v / s) * s, addStep: (v, s) => v + s,
-    floorStep: (v, s) => Math.floor(v / s) * s,
+    // The real rounding, not a re-implementation of it.
+    ceilStep, floorStep,
     cid: () => 'tb-v11e-x', terminal: () => false, fill: () => ({qty: 0, avg: 0, status: 'NEW'}),
     classifyPortfolio:()=>({ok:true}),readOpsOrders:async()=>[],opsGateway:()=>ctx.gateway,
     readOpsPair:async()=>({pf:{positions:[],positions_complete:true,available_quote:available,total_equity_quote:available,
@@ -64,26 +99,51 @@ function make({available}) {
   return {ctx, signal: {id: 's1', symbol: 'FORMUSDT', features}};
 }
 
+// The BOO gate observes every admission and records its verdict before sizing is
+// even reached, so a DB that throws on ANY access no longer isolates the capital
+// path. This stub keeps the property the tests are actually about -- a capital
+// shortfall writes no ORDER and no SIGNAL state -- while letting the gate observe.
+function observeOnlyDb(enforcement = 'OBSERVE') {
+  const forbidden = ['v11_long_regime_orders', 'v11_long_regime_positions', 'v11_long_regime_signals'];
+  const rows = {boo_entry_gate_control: {singleton: true, enforcement}};
+  function builder(table) {
+    const b = {
+      select: () => b, eq: () => b, gte: () => b, order: () => b, limit: () => b,
+      insert: () => b, update: () => b, upsert: () => b,
+      maybeSingle: async () => ({data: rows[table] ?? null, error: null}),
+      single: async () => ({data: rows[table] ?? null, error: null}),
+      then: (res, rej) => Promise.resolve({data: [], error: null}).then(res, rej),
+    };
+    return b;
+  }
+  return {from: (table) => {
+    if (forbidden.includes(table)) throw Error(`no ${table} write on a capital skip`);
+    return builder(table);
+  }};
+}
+
 test('insufficient margin skips gracefully instead of throwing', async () => {
   const {ctx, signal} = make({available: 3.5});
-  const out = await ctx.openBull({from: () => { throw Error('no DB write on a skip'); }}, signal, [], []);
+  const out = await ctx.openBull(observeOnlyDb(), signal, [], []);
   assert.equal(out.entered, false);
-  assert.match(out.reason, /^ENTRY_MARGIN_INSUFFICIENT:3\.5000:40\./);
+  assert.match(out.reason, new RegExp(`^ENTRY_MARGIN_INSUFFICIENT:3\\.5000:${MARGIN}\\.`));
   assert.equal(out.releaseClaim, true, 'the claim must be handed back, not burned');
+  // And it is the ACCOUNT's answer: no other symbol can do better this cycle, so
+  // this one release must still end the run.
+  assert.notEqual(out.releaseScope, 'SYMBOL', 'a capital shortfall is account-wide');
 });
 
 test('the gate still refuses to enter without the cash', async () => {
   // gateway() throws on any create_order, so reaching one would fail the test.
-  const {ctx, signal} = make({available: 39.9 });
-  const out = await ctx.openBull({from: () => { throw Error('no DB write on a skip'); }}, signal, [], []);
+  const {ctx, signal} = make({available: MARGIN - 0.1});
+  const out = await ctx.openBull(observeOnlyDb(), signal, [], []);
   assert.equal(out.entered, false);
   assert.equal(out.releaseClaim, true);
 });
 
 test('an unreadable balance is still a hard fault, not a skip', async () => {
   const {ctx, signal} = make({available: NaN});
-  await assert.rejects(
-    () => ctx.openBull({from: () => { throw Error('unreached'); }}, signal, [], []),
+  await assert.rejects(() => ctx.openBull(observeOnlyDb(), signal, [], []),
     /ENTRY_AVAILABLE_BALANCE_UNREADABLE/);
 });
 

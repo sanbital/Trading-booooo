@@ -1,0 +1,47 @@
+{
+ "source": {
+  "project": "etaajwpernzrcdrifdnw",
+  "window": [
+   "2026-09-16T23:09:24.323Z",
+   "2026-09-17T13:05:00Z"
+  ],
+  "executorVersion": 48,
+  "queries": [
+   "v11_long_regime_signals where reject_reason like 'SIGNAL_STALE%' -- bar close vs row insert vs terminal write",
+   "v11_long_regime_decisions where action='ENTRY_DEFER' -- details->e1->>quoteAgeMs"
+  ]
+ },
+ "staleRejections": {
+  "count": 102,
+  "generatedPromptlyWithin12s": 102,
+  "generationLagSecondsAfterBarClose": {
+   "min": 2.1,
+   "max": 10.3
+  },
+  "firstEvaluationSecondsAfterBarClose": {
+   "min": 124.8,
+   "max": 136.5
+  },
+  "evaluatedWhileStillInsideThe120sWindow": 0,
+  "queueWaitSeconds": {
+   "min": 115.0,
+   "max": 129.9
+  },
+  "policyMaxEntryAgeMs": 120000
+ },
+ "e1Defers": {
+  "count": 118,
+  "reasonCounts": {
+   "E1_QUOTE_UNKNOWN": 115,
+   "E1_TAPE_TRUNCATED": 3
+  },
+  "quoteAgeMs": {
+   "min": 1097,
+   "max": 2596,
+   "avg": 1543
+  },
+  "policyMaxQuoteAgeMs": 1000,
+  "withinPolicy": 0
+ },
+ "entries": 0
+}

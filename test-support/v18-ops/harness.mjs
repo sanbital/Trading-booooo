@@ -16,6 +16,21 @@ import * as dbOnly from '../../supabase/functions/_shared/leader-db-only-reconci
 import * as entryControl from '../../supabase/functions/_shared/leader-entry-control.mjs';
 import * as fillEvidence from '../../supabase/functions/_shared/leader-fill-evidence.mjs';
 import * as e1 from '../../supabase/functions/_shared/leader-e1-runtime.mjs';
+import * as slotSizing from '../../supabase/functions/_shared/leader-slot-sizing.mjs';
+import * as v24Adapter from '../../supabase/functions/v10-lane-executor/v24-entry-adapter.mjs';
+import * as booAdapter from '../../supabase/functions/v10-lane-executor/boo-entry-adapter.mjs';
+import {R1_VERSION} from '../../supabase/functions/_shared/boo/r1-strategy.mjs';
+import {RISK_POLICY_VERSION} from '../../supabase/functions/_shared/boo/risk-policy.mjs';
+import {RISK_BUDGET_VERSION} from '../../supabase/functions/_shared/boo/risk-budget.mjs';
+const {SLOT_SIZING_CONTRACT}=slotSizing;
+const booBindings={...v24Adapter,
+  V24_ADAPTER_VERSION:v24Adapter.V24_ADAPTER_VERSION,
+  BOO_ADAPTER_VERSION:booAdapter.BOO_ADAPTER_VERSION,
+  BOO_ENFORCEMENT:booAdapter.ENFORCEMENT,
+  evaluateBooEntry:booAdapter.evaluateBooEntry,finalizeBooEntry:booAdapter.finalizeBooEntry,
+  loadBooGateContext:booAdapter.loadBooGateContext,openRiskSummary:booAdapter.openRiskSummary,
+  recordBooVerdict:booAdapter.recordBooVerdict,
+  R1_VERSION,RISK_POLICY_VERSION,RISK_BUDGET_VERSION};
 export const BASE='bce9e95210829b5ae561f667dd1b499772977ec1';
 export const PRODUCTION_BASIS='d6980f0217cfcb536a3a38c1d5d7c09e39829d68';
 const root=new URL('../../',import.meta.url);
@@ -38,14 +53,18 @@ export function position(symbol='SAGAUSDT',quantity=7067.3,price=.01699){
 export function entryOrder(p){return {id:'order-'+p.id,signal_id:p.signal_id,position_id:p.id,symbol:p.symbol,intent:'OPEN_LONG',state:'FILLED',
  exchange_order_id:p.metadata.entryOrderId,client_order_id:'entry-client-'+p.id,requested_quantity:p.original_quantity,
  request_payload:{order:{side:'BUY',position_side:'LONG',position_effect:'OPEN'}},created_at:p.entry_at,updated_at:p.entry_at};}
-export function harness({positions=[],baseline=false,sourceRef=null,circuit=false,manual=[],settings={},signal=true,now=Date.parse('2026-09-10T16:16:00Z'),hook=()=>{},qv3Cutover=null,qv3Fetch=null,e1Enabled=false,x1Enabled=false,e1Tape=null,advanceTimers=false}={}) {
+export function harness({positions=[],baseline=false,sourceRef=null,circuit=false,manual=[],settings={},signal=true,now=Date.parse('2026-09-10T16:16:00Z'),hook=()=>{},qv3Cutover=null,qv3Fetch=null,e1Enabled=false,x1Enabled=false,e1Tape=null,advanceTimers=false,booEnforcement='OBSERVE'}={}) {
  const state={now,portfolioCount:0,lease:true,leaseOwner:null,quotes:{},stopFills:{},software:{},tradeHistory:{},orderHistory:{},calls:[],writes:[],circuits:[],hook,
   exchange:positions.map(p=>({market:p.symbol,side:p.side,quantity:p.remaining_quantity})),
   tables:{v11_long_regime_positions:clone(positions),v11_long_regime_orders:positions.map(entryOrder),v11_long_regime_decisions:[],
    v11_long_regime_runtime:[{singleton:true,revision:'V11-LONG-REGIME-1.0.1',live_enabled:true,circuit_open:circuit,
     incident_id:circuit?'incident-1':null,incident_generation:circuit?1:0,incident_kind:circuit?'KNOWN_EXIT_PENDING_RECONCILIATION':null}],
    v17_operator_control:[{singleton:true,entry_enabled:true,legacy_entries_retired:true}],
-   trading_settings:[{id:1,mode:'LIVE_LIMITED',binance_futures_allocation_usdt:40,pause_new_entries:false,withdrawal_mode:false,manual_intervention_required:false,scalp_kill_switch:false,emergency_liquidation:false,...settings}],
+   boo_entry_gate_control:[{singleton:true,enforcement:booEnforcement}],
+   // Code and DB must agree or the executor fail-closes on V17_MARGIN_CONFIG_MISMATCH,
+   // which is the point of that guard. A baseline run executes a PINNED OLD source
+   // whose slot was 40, so it gets the allocation its own code was built for.
+   trading_settings:[{id:1,mode:'LIVE_LIMITED',binance_futures_allocation_usdt:(baseline||sourceRef)?40:SLOT_SIZING_CONTRACT.targetMarginUsdt,pause_new_entries:false,withdrawal_mode:false,manual_intervention_required:false,scalp_kill_switch:false,emergency_liquidation:false,...settings}],
    trading_asset_locks:manual.map(x=>({exchange:'binance_futures',asset:x.symbol.replace(/USDT$/,''),state:'LOCKED',metadata:{v17ManualPosition:true,...x}})),
    v11_long_regime_signals:signal?[{id:'soph-signal',symbol:'SOPHUSDT',side:'LONG',status:'NEW',lane:'BULL',revision:'V11-LONG-REGIME-1.0.1',entry_bar_at:new Date(now-60000).toISOString(),features:{strategy:momentum.STRATEGY,rank:1,signal5Close:now-60000,referenceClose:.004,atr:.0001,exitPolicy:{stopPct:.025,trailArmPct:.05,trailGapPct:.0225,maxHoldMs:momentum.POLICY.maxHoldMs,staleMs:momentum.POLICY.staleMs}}}]:[],
    trading_account_snapshots:[{exchange:'binance_futures',captured_at:new Date(now).toISOString(),positions_complete:true,available_quote:108,positions:[]}],
@@ -191,7 +210,7 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
  source=source.replace(/^import .*;\n/gm,'').replace('const exchangeGateway=gateway;','const exchangeGateway=__gateway;');source=source.slice(0,source.indexOf('Deno.serve'));
  // Only exchange/DB/time boundaries are replaced. run/manage/open/close are actual source.
  source+='\ngateway=__gateway;this.runCycle=()=>runWithLease(__db);this.open=(...args)=>openBull(__db,...args);this.close=(...args)=>closePos(__db,...args);this.manage=(...args)=>manageLeader(__db,...args);this.setLease=()=>leaseOwners.set(__db,"test-owner");';
- const ctx={...momentum,...review,...ops,...settlement,...entrySettlement,...dbOnly,...entryControl,...fillEvidence,...qv3,...e1,
+ const ctx={...momentum,...review,...ops,...settlement,...entrySettlement,...dbOnly,...entryControl,...fillEvidence,...qv3,...e1,...slotSizing,...booBindings,
   fetchE1AggTrades:e1Tape??e1.fetchE1AggTrades,QV3_LIVE_CUTOVER:qv3Cutover,qv3Candles:(symbol,at,start)=>qv3.qv3Candles(symbol,at,start,qv3Fetch??(()=>{throw Error("NETWORK_FORBIDDEN")})),leaderPortfolioMatches:momentum.portfolioMatches,protectNewLeaderPosition,createGatewayProtection:baseline?baselineAdapter.createGatewayProtection:createGatewayProtection,
   Date:Clock,console,crypto,Map,Set,WeakMap,AbortController,TextEncoder,Response,Headers,fetch:()=>{throw Error('NETWORK_FORBIDDEN')},
   setTimeout:advanceTimers?(fn,ms)=>{state.now+=Number(ms)||0;return setTimeout(fn,0)}:setTimeout,clearTimeout,
