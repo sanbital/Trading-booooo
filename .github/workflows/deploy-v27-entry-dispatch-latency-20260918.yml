@@ -281,6 +281,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2016  # single quotes are deliberate here: the payload is JS/deno source, not shell
           npm exec --yes --package=deno@2.5.6 -- deno eval --quiet '
             import {SLOT_SIZING_CONTRACT as C, slotSizingBounds}
               from "./supabase/functions/_shared/leader-slot-sizing.mjs";
