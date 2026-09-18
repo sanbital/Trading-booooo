@@ -10,8 +10,8 @@ export const STRATEGY = 'LEADER_MOMENTUM_V17';
 // open position can never be opted into the new behaviour by a deploy.
 export const ENTRY_EXECUTION_POLICY_VERSION = 'V21_POST_FILL_DRIFT_GUARD_1';
 export const POLICY = Object.freeze({
-  rankLimit: 10, minDayReturn: .03, min30mReturn: .0075,
-  min60mReturn: .015, minVolumeRatio: 1.1, minQuoteVolume24h: 5_000_000,
+  rankLimit: 10, minDayReturn: .03, maxDayReturn: .08, min30mReturn: .0075,
+  min60mReturn: .015, minVolumeRatio: 1.30, minQuoteVolume24h: 5_000_000,
   min5mReturn: .002, stopPct: .025, trailArmPct: .03, trailGapPct: .015,
   staleMs: 45*60_000, maxHoldMs: 6*60*60_000, maxEntryAgeMs: 120_000,
   maxEntryDriftPct: .01, cooldownMs: 30*60_000, maxSlots: 10,
@@ -94,6 +94,7 @@ export function rankFeatures(features) {
 export function entryReason(f,p=POLICY) {
   if(f.rank>p.rankLimit) return 'OUTSIDE_TOP10';
   if(f.dayReturn<p.minDayReturn) return 'DAY_RETURN';
+  if(f.dayReturn>=p.maxDayReturn) return 'DAY_RETURN_CHASE_CAP';
   if(f.qv24<p.minQuoteVolume24h) return 'LIQUIDITY';
   if(f.return15m<=0||f.return30m<p.min30mReturn||f.return60m<p.min60mReturn) return 'MOMENTUM';
   if(f.volumeRatio<p.minVolumeRatio) return 'VOLUME_ACCELERATION';
