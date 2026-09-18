@@ -1,0 +1,15 @@
+project_id = "Trading-booooo"
+
+[functions.market-scanner]
+# Supabase Auth 로그인은 사용하지 않습니다.
+# 대신 함수 내부에서 URL fragment 기반 SCAN_ACCESS_TOKEN을 검증합니다.
+verify_jwt = false
+
+[functions.market-learning]
+verify_jwt = false
+
+[functions.market-autotrader]
+verify_jwt = false
+
+[functions.scalp-calibration]
+verify_jwt = false
