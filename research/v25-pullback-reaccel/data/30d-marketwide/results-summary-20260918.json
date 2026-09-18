@@ -1,0 +1,90 @@
+{
+  "generatedAt": "2026-09-18T14:45:00Z",
+  "window": {
+    "start": "2026-08-19T14:20:00Z",
+    "end": "2026-09-18T14:20:00Z",
+    "days": 30
+  },
+  "universe": {
+    "usdtPerpetualCoinSymbols": 522,
+    "featureCoverage": 522,
+    "eligible15Snapshots": 965,
+    "rawConfirmedSignals": 1215,
+    "mergedSetups15m": 739,
+    "cooldownSetups30m": 617,
+    "triggerTradesAfterCooldown": 257,
+    "oneSlotTrades": 166
+  },
+  "assumptions": {
+    "marginUsdt": 30,
+    "leverage": 3,
+    "notionalUsdt": 90,
+    "entryFeeRate": 0.0005,
+    "exitFeeRate": 0.0005,
+    "exitSlippagePct": 0.001,
+    "pullbackPct": 0.0025,
+    "reaccelPct": 0.0025,
+    "maxChasePct": 0.01,
+    "setupTtlMinutes": 15,
+    "symbolCooldownMinutes": 30,
+    "qv3": "shadow-only"
+  },
+  "oneSlot": {
+    "trades": 166,
+    "wins": 77,
+    "losses": 89,
+    "winRate": 0.463855421686747,
+    "netPnl": 1.9979553880778484,
+    "expectancyUsdt": 0.012035875831794269,
+    "expectancyPctOf30": 0.0004011958610598089,
+    "profitFactor": 1.015183569419732,
+    "avgWin": 1.7348653070520885,
+    "avgLoss": -1.4785019466846403,
+    "maxDrawdownUsdt": -26.744542664710515,
+    "longestLossStreak": 11,
+    "theoreticalEndingBalanceFixedSlot": 31.99795538807785,
+    "theoreticalReturnOn30": 0.06659851293592828,
+    "minTheoreticalBalance": 1.997121795289486,
+    "maxTheoreticalBalance": 34.39438196689175
+  },
+  "allCooldownTrades": {
+    "trades": 257,
+    "wins": 112,
+    "winRate": 0.4357976653696498,
+    "netPnl": -21.4328635654263,
+    "expectancyUsdt": -0.08339635628570545,
+    "expectancyPctOf30": -0.002779878542856848,
+    "profitFactor": 0.9020718011950177
+  },
+  "robustness": {
+    "removeTop1": {
+      "netPnl": -5.494330407890797,
+      "expectancy": -0.03329897216903513
+    },
+    "removeTop3": {
+      "netPnl": -18.901169404088137,
+      "expectancy": -0.11595809450360821
+    },
+    "removeTop5": {
+      "netPnl": -28.83928396047996,
+      "expectancy": -0.17912598733217366
+    }
+  },
+  "halves": {
+    "first15d": {
+      "trades": 87,
+      "wins": 32,
+      "netPnl": -26.419272816699674,
+      "expectancy": -0.3036698024908009,
+      "profitFactor": 0.6756029742829961
+    },
+    "last15d": {
+      "trades": 79,
+      "wins": 45,
+      "netPnl": 28.417228204777523,
+      "expectancy": 0.3597117494275636,
+      "profitFactor": 1.566695425968351
+    }
+  },
+  "note": "Market-wide replay reconstructed from Binance USDⓈ-M public exchangeInfo/klines. One-slot result is path/order dependent because overlapping signals are skipped. Exact 30 USDT live capital is not sufficient for the current executor because admission requires sizedMargin + 0.10 USDT cash buffer."
+}
