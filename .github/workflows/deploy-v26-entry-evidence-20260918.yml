@@ -1,0 +1,435 @@
+# Release: the entry-evidence repair of PR #142, plus the self-describing slot
+# refusal. v10-lane-executor only; the gateway half of this change ships on its
+# own workflow when the branch merges, and MUST already be live when this runs.
+#
+# WHAT THIS RELEASE ACTUALLY CHANGES
+# ----------------------------------
+#   - A re-acceleration trigger is judged against its OWN 60s deadline, bounded by
+#     the 15-minute setup expiry, instead of the original signal's 120s clock.
+#     Production evidence, 2026-09-18 KST: twelve candidates (DRIFT, ONE, ARB x4,
+#     APT x2, PONS x2, BABY) were refused EXPIRED:ORIGINAL_SIGNAL_EXPIRED 8-15
+#     seconds after their trigger fired -- every one of them inside a live 60s
+#     window. entry-evidence.test.mjs replays all twelve by name.
+#   - The gateway's real {price,size} book, the authenticated taker fee and an
+#     explicit one-way account-mode observation reach the risk solver. Absent or
+#     contradictory evidence still refuses; nothing is defaulted into approval.
+#   - QTY_STEP/MIN_NOTIONAL refusals carry the ceiling and the lot step alongside
+#     the margin they needed. The BUDGET IS UNCHANGED: 30 USDT at 3x, 250/3 bps of
+#     slot overshoot. NEARUSDT is still refused at 30.314667 against a 30.25
+#     ceiling -- one whole NEAR is worth five times the admissible window, so no
+#     smaller quantity fits and the refusal is correct. This release only makes it
+#     readable.
+#
+# EXPLICITLY UNCHANGED, and asserted below: the 30 USDT / 3x slot, the overshoot
+# budget, MAX_SLOTS, maxEntryDriftPct 1%, maxEntryAgeMs 120s for legacy signals,
+# the setup and trigger TTLs, E1 maxQuoteAgeMs 1000ms, R5 exit policy, BOO gate
+# enforcement, and every already-open position.
+name: Deploy V26 entry-evidence repair
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_version_before:
+        description: >-
+          The v10-lane-executor version this release expects to find in
+          production. Pinning it makes a concurrent or unexpected deploy fail
+          the release instead of silently landing on top of one.
+        required: true
+      expected_enforcement:
+        description: >-
+          The boo_entry_gate_control.enforcement value the operator intends to
+          run with (ENFORCE or OBSERVE). The release fails if production
+          disagrees, so the trading posture is never a surprise.
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-v10-lane-executor
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact release SHA
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prove the scope of THIS release
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --check
+          mkdir -p release-evidence
+          git rev-parse HEAD > release-evidence/release-sha.txt
+
+      - name: Unit-test and type-check the exact graph being deployed
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm exec --yes --package=deno@2.5.6 -- deno check \
+            supabase/functions/v10-lane-executor/index.ts
+          node --test \
+            supabase/functions/v10-lane-executor/entry-evidence.test.mjs \
+            gateway/futures-mode-evidence.test.mjs \
+            gateway/image-packaging.test.mjs
+          npm exec --yes --package=deno@2.5.6 -- deno test --allow-read \
+            supabase/functions/_shared/leader-slot-sizing.test.ts \
+            supabase/functions/v10-lane-executor/margin-config.test.ts
+
+      - name: Prove the trigger window is wired into the real entry path
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The fix is only real if runE1Gate consumes it. A green unit test on the
+          # pure module would pass just as happily with the module unreferenced.
+          grep -q 'const window=executionWindowFor(s);' \
+            supabase/functions/v10-lane-executor/index.ts
+          grep -q 'signalExpiresAt=window.expiresAt' \
+            supabase/functions/v10-lane-executor/index.ts
+          npm exec --yes --package=deno@2.5.6 -- deno eval --quiet '
+            import {entryExecutionWindow} from "./supabase/functions/v10-lane-executor/entry-evidence.mjs";
+            import {SETUP_POLICY as P} from "./supabase/functions/_shared/leader-pullback-reaccel.mjs";
+            import {POLICY} from "./supabase/functions/_shared/leader-momentum-v17.mjs";
+            // PONSUSDT, 2026-09-18 12:00 KST close, triggered 12:05, refused 12:05:08.721.
+            const close=Date.parse("2026-09-18T12:00:00+09:00");
+            const trigger=Date.parse("2026-09-18T12:05:00+09:00");
+            const rejected=Date.parse("2026-09-18T12:05:08.721+09:00");
+            const id="pons-replay", symbol="PONSUSDT";
+            const s={id,symbol,features:{signal5Close:close,referenceClose:1.5,
+              v17Setup:{policyVersion:P.version,state:"TRIGGERED",signalId:id,symbol,
+                identity:`${P.version}:${symbol}:${id}:${close}`,signal5Close:close,
+                armedAt:close,referencePrice:1.5,expiresAt:close+P.setupTtlMs,
+                triggerAt:trigger,triggerExpiresAt:trigger+P.entryTriggerTtlMs,
+                triggerClose:1.51,pullbackObserved:true}}};
+            const w=entryExecutionWindow(s,true,POLICY.maxEntryAgeMs,P);
+            if(w.basis!=="PULLBACK_TRIGGER") throw Error("basis:"+w.basis);
+            // The defect must still be reproducible on the legacy clock...
+            if(!(close+POLICY.maxEntryAgeMs<=rejected)) throw Error("legacy clock did not expire");
+            // ...and must not be reachable on the governing one.
+            if(!(rejected<w.expiresAt)) throw Error("trigger window still refuses the live trigger");
+            if(w.expiresAt!==Math.min(close+P.setupTtlMs,trigger+P.entryTriggerTtlMs))
+              throw Error("window is not min(setup, trigger)");
+            // The legacy 120s clock is preserved for ungoverned signals.
+            const legacy=entryExecutionWindow(s,false,POLICY.maxEntryAgeMs,P);
+            if(legacy.expiresAt!==close+POLICY.maxEntryAgeMs) throw Error("legacy TTL moved");
+            console.log("trigger window verified");
+          '
+
+      - name: Prove this release does not widen the slot budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm exec --yes --package=deno@2.5.6 -- deno eval --quiet '
+            import {SLOT_SIZING_CONTRACT as C, slotSizingBounds, planSlotEntry}
+              from "./supabase/functions/_shared/leader-slot-sizing.mjs";
+            const b=slotSizingBounds();
+            // The operator-agreed slot and the overshoot allowance, byte for byte.
+            if(C.targetMarginUsdt!==30||C.leverage!==3) throw Error("slot changed");
+            if(C.maxSlotOvershootBps!==250/3) throw Error("overshoot budget changed");
+            if(C.notionalBufferBps!==10||C.iocBaseBps!==3||C.iocMaxBps!==12)
+              throw Error("sizing constants changed");
+            if(b.maxOrderMarginUsdt!==30.25) throw Error("ceiling moved: "+b.maxOrderMarginUsdt);
+            // NEARUSDT as production refused it at 10:30:06 KST. Still refused, at the
+            // same number, now carrying the ceiling and the step that caused it.
+            let msg="";
+            try{ planSlotEntry({ask:3.2470,quantityStep:1,priceTick:0.0001,minNotionalUsdt:5}); }
+            catch(e){ msg=e.message; }
+            const want="QTY_STEP_EXCEEDS_MARGIN_BUDGET:30.314667:max=30.250000:step=1:qty=28:px=3.248";
+            if(msg!==want) throw Error("refusal changed meaning: "+msg);
+            console.log("slot budget unchanged; refusal is self-describing");
+          '
+
+      - name: Prove the unchanged invariants really are unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm exec --yes --package=deno@2.5.6 -- deno eval --quiet '
+            import {POLICY} from "./supabase/functions/_shared/leader-momentum-v17.mjs";
+            import {SETUP_POLICY as P} from "./supabase/functions/_shared/leader-pullback-reaccel.mjs";
+            import {E1_POLICY} from "./supabase/functions/_shared/leader-e1-runtime.mjs";
+            const want={maxEntryDriftPct:0.01,maxEntryAgeMs:120000};
+            for(const [k,v] of Object.entries(want))
+              if(POLICY[k]!==v) throw Error(`POLICY.${k}=${POLICY[k]}, expected ${v}`);
+            if(P.setupTtlMs!==900000) throw Error("setupTtlMs="+P.setupTtlMs);
+            if(P.entryTriggerTtlMs!==60000) throw Error("entryTriggerTtlMs="+P.entryTriggerTtlMs);
+            if(E1_POLICY.maxQuoteAgeMs!==1000) throw Error("maxQuoteAgeMs="+E1_POLICY.maxQuoteAgeMs);
+            console.log("invariants held");
+          '
+          grep -q 'const MARGIN=30,LEV=3' supabase/functions/v10-lane-executor/index.ts
+
+      - name: Require the matching gateway to be live before the executor moves
+        shell: bash
+        env:
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+        run: |
+          set -euo pipefail
+          # The executor about to ship calls futures_position_mode. Shipping it
+          # against a gateway that does not serve that command yet is precisely the
+          # new-consumer/old-provider mismatch the release order exists to prevent.
+          # /health is an unauthenticated GET; it places no order and reads no key.
+          curl -fsS --max-time 20 --retry 6 --retry-delay 5 \
+            "https://${FLY_BINANCE_APP_NAME}.fly.dev/health" \
+            > release-evidence/gateway-health.json
+          python - <<'PY'
+          import json
+          h=json.load(open('release-evidence/gateway-health.json'))
+          assert h.get('ok') is True, h
+          caps=h.get('capabilities') or {}
+          assert caps.get('futures_position_mode') is True, (
+              'the live Binance gateway does not advertise futures_position_mode; '
+              'deploy the gateway half first. capabilities=%r' % (caps,))
+          assert (h.get('keys_configured') or {}).get('binance_futures') is True, h
+          print('gateway capability confirmed:', h.get('version'), h.get('ops_patch'))
+          PY
+
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.34.3
+
+      - name: Capture production state and prove the cutover is consistent
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
+          # Read the function inventory from the Management API, not the CLI.
+          # `supabase functions list --output json` on the pinned 2.34.3 IGNORES
+          # the flag and prints a human table, and it writes an upgrade notice to
+          # stdout on top of that. The API returns real JSON and is what the
+          # version pin actually needs to be trustworthy.
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions" \
+            > release-evidence/functions-before.json
+          python - <<'PY'
+          import json,os
+          rows=json.load(open('release-evidence/functions-before.json'))
+          rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
+          row=next(x for x in rows if x.get('slug')=='v10-lane-executor')
+          assert row.get('status')=='ACTIVE' and row.get('verify_jwt') is False, row
+          expected=int("${{ inputs.expected_version_before }}")
+          assert int(row['version'])==expected, f"expected production v{expected}, found {row['version']}"
+          open('release-evidence/version-before.txt','w').write(str(row['version'])+'\n')
+          PY
+
+          # The DB must ALREADY carry the 30 USDT allocation. Deploying MARGIN=30
+          # against a 40 row would refuse every entry with V17_MARGIN_CONFIG_MISMATCH.
+          alloc="$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select binance_futures_allocation_usdt from public.trading_settings where id=1")"
+          test "$alloc" = "30" || { echo "allocation is $alloc, expected 30"; exit 1; }
+          lev="$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select binance_futures_leverage from public.trading_settings where id=1")"
+          test "$lev" = "3" || { echo "leverage is $lev, expected 3"; exit 1; }
+
+          # The trading posture must be the one the operator asked for.
+          enf="$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select enforcement from public.boo_entry_gate_control where singleton")"
+          test "$enf" = "${{ inputs.expected_enforcement }}" \
+            || { echo "gate enforcement is $enf, operator expected ${{ inputs.expected_enforcement }}"; exit 1; }
+
+          # A release must never be the thing that turns the V24 gate on.
+          test "$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select entry_enabled from public.v24_operator_control where singleton")" = f
+
+          psql "$SUPABASE_DB_URL" -XAt -F '|' --set=ON_ERROR_STOP=1 -c \
+            "select entry_enabled,legacy_entries_retired from public.v17_operator_control where singleton" \
+            > release-evidence/operator-before.txt
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(jsonb_agg(jsonb_build_object('id',id,'entry_at',entry_at,'hard_stop_price',hard_stop_price,'exit_policy',metadata->>'leaderExitPolicyVersion','entry_execution_policy',metadata->>'entryExecutionPolicyVersion') order by entry_at),'[]'::jsonb) from public.v11_long_regime_positions where state='OPEN'" \
+            > release-evidence/open-positions-before.json
+
+      # The generator goes FIRST. It only changes what is stamped on a signal, so a
+      # brief window where the new generator feeds the old executor is harmless; the
+      # reverse -- a new executor reading signals that still claim a 40 USDT slot --
+      # is the mismatch this ordering avoids.
+      - name: Deploy the signal generator, then the executor
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          date -u +%Y-%m-%dT%H:%M:%S+00:00 > release-evidence/deployed-at.txt
+          supabase functions deploy v10-lane-signal-generator --project-ref "$SUPABASE_PROJECT_REF" \
+            --no-verify-jwt --use-api
+          supabase functions deploy v10-lane-executor --project-ref "$SUPABASE_PROJECT_REF" \
+            --no-verify-jwt --use-api
+
+      - name: Verify the deployed version moved by exactly one
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 20); do
+            curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions" \
+              > release-evidence/functions-after.json || true
+            if python - <<'PY'
+          import json,sys
+          try:
+              rows=json.load(open('release-evidence/functions-after.json'))
+          except Exception:
+              sys.exit(1)
+          rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
+          row=next(x for x in rows if x.get('slug')=='v10-lane-executor')
+          before=int(open('release-evidence/version-before.txt').read().strip())
+          sys.exit(0 if int(row['version'])==before+1 and row.get('status')=='ACTIVE' else 1)
+          PY
+            then echo "deployed version confirmed"; break; fi
+            test "$i" -lt 20 || { echo "version did not advance"; exit 1; }
+            sleep 15
+          done
+
+      - name: Observe three genuine scheduler cycles
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,os,subprocess,time
+          deployed=open('release-evidence/deployed-at.txt').read().strip()
+          lit="'"+deployed.replace("'","''")+"'::timestamptz"
+          q=("select jsonb_build_object("
+             "'cycle_completed_at',r.last_cycle_completed_at,"
+             "'last_error',r.last_error,"
+             "'cycle_ms',round(extract(epoch from (r.last_cycle_completed_at-r.last_cycle_started_at))*1000),"
+             "'entry_block_reason',r.entry_block_reason,"
+             "'circuit_open',r.circuit_open,"
+             "'open_position_count',(select count(*) from public.v11_long_regime_positions where state='OPEN'),"
+             # coalesce, because NULL LIKE '...' is NULL, not false -- and a NULL
+             # last_error is the HEALTHY case. Comparing that to False failed the
+             # observation on a perfectly good cycle the first time this ran.
+             "'margin_mismatch',(coalesce(r.last_error,'') like '%V17_MARGIN_CONFIG_MISMATCH%'),"
+             "'gate_decisions',(select count(*) from public.boo_entry_gate_decisions where created_at>=__D__),"
+             "'gate_blocked',(select count(*) from public.boo_entry_gate_decisions where created_at>=__D__ and allowed=false)"
+             ") from public.v11_long_regime_runtime r where singleton").replace('__D__',lit)
+          seen,rows={},[]
+          for _ in range(40):
+              s=json.loads(subprocess.check_output(
+                  ['psql',os.environ['SUPABASE_DB_URL'],'-XAt','--set=ON_ERROR_STOP=1','-c',q],text=True).strip())
+              k=s['cycle_completed_at']
+              if k and k>deployed and k not in seen:
+                  seen[k]=1; rows.append(s); print(json.dumps(s))
+                  # cycle_ms can read NEGATIVE mid-cycle: last_cycle_started_at is
+                  # stamped when the next cycle begins, before that cycle writes its
+                  # own completed_at. Only an implausibly LONG cycle is a problem.
+                  assert s['cycle_ms'] is None or s['cycle_ms']<=60000, s
+                  assert s['circuit_open'] is False, s
+                  # The cutover's own failure mode. If this fires, code and DB
+                  # disagree on the per-slot margin and every entry is refused.
+                  assert s['margin_mismatch'] is False, s
+                  if len(rows)==3: break
+              time.sleep(20)
+          json.dump(rows,open('release-evidence/cycles.json','w'),indent=2)
+          assert len(rows)==3, f'only {len(rows)} post-deploy cycles observed'
+          PY
+
+      # The check that was missing when v48 went out.
+      #
+      # v48 deployed cleanly: version advanced, circuit closed, last_error null,
+      # cycles completing in time. Every one of those was true for fourteen hours
+      # while 144 of 144 signals were refused and not one entry opened. Liveness of
+      # the process says nothing about liveness of the ENTRY PATH, so this looks at
+      # the refusals themselves.
+      #
+      # It fails the release only on a DETERMINISTIC EXECUTION error -- a refusal
+      # that is a property of our own arithmetic rather than of the market. A quiet
+      # market, a drifted price or a refusing risk gate are all legitimate reasons to
+      # open nothing, and none of them fail here.
+      - name: Fail the release if fresh candidates are dying on execution arithmetic
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,os,subprocess
+          deployed=open('release-evidence/deployed-at.txt').read().strip()
+          lit="'"+deployed.replace("'","''")+"'::timestamptz"
+          # Refusals produced by THIS executor's sizing and scheduling. Everything
+          # else -- ENTRY_DRIFT, ENTRY_SPREAD, a BOO verdict, a quiet market -- is a
+          # market or policy answer and is deliberately not counted.
+          execution = ("MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET|QTY_STEP_EXCEEDS_MARGIN_BUDGET|"
+                       "IOC_PRICE_CAP_EXCEEDED|ENTRY_GRANULARITY_BPS|"
+                       "ENTRY_SLOT_GRANULARITY_MARGIN|ENTRY_NOTIONAL_UNDERSIZED|"
+                       "V17_LIMIT_PRICE_MARGIN_OVERFLOW|SIGNAL_STALE_OR_FUTURE")
+          q=("select jsonb_build_object("
+             "'candidates',count(*),"
+             "'entered',count(*) filter (where status in ('ORDERED','FILLED','CLOSED')),"
+             "'execution_refusals',count(*) filter (where reject_reason ~ ('^('||__E__||')')),"
+             "'stale',count(*) filter (where reject_reason like 'SIGNAL_STALE%'),"
+             "'by_reason',coalesce(jsonb_object_agg(code,n) filter (where code is not null),'{}'::jsonb)"
+             ") from (select status,reject_reason,split_part(reject_reason,':',1) code,"
+             "count(*) over () n from public.v11_long_regime_signals "
+             "where created_at>=__D__) t"
+             ).replace('__D__',lit).replace('__E__',"'"+execution+"'")
+          # Only the most recent candidates matter: an older backlog is not evidence
+          # about the code that just shipped.
+          q=q.replace("where created_at>=__D__","where created_at>=__D__ order by created_at desc limit 20")
+          row=json.loads(subprocess.check_output(
+              ['psql',os.environ['SUPABASE_DB_URL'],'-XAt','--set=ON_ERROR_STOP=1','-c',q],text=True).strip())
+          json.dump(row,open('release-evidence/entry-health.json','w'),indent=2)
+          print(json.dumps(row,indent=2))
+          n=row['candidates']
+          if n==0:
+              # No signals is a quiet market, not a broken release.
+              print('no fresh candidates in the window; entry health not asserted')
+              raise SystemExit(0)
+          bad=row['execution_refusals']
+          if bad*2 > n and row['entered']==0:
+              raise SystemExit(
+                  f"RELEASE_GATE_FAIL: {bad} of the last {n} candidates were refused by this "
+                  f"executor's own sizing or scheduling and none entered: {row['by_reason']}")
+          print(f"{bad} of {n} recent candidates refused on execution arithmetic; "
+                f"{row['entered']} entered")
+          PY
+
+      - name: Verify open positions were preserved
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(jsonb_agg(jsonb_build_object('id',id,'entry_at',entry_at,'hard_stop_price',hard_stop_price,'exit_policy',metadata->>'leaderExitPolicyVersion','entry_execution_policy',metadata->>'entryExecutionPolicyVersion') order by entry_at),'[]'::jsonb) from public.v11_long_regime_positions where state='OPEN'" \
+            > release-evidence/open-positions-after.json
+          psql "$SUPABASE_DB_URL" -XAt -F '|' --set=ON_ERROR_STOP=1 -c \
+            "select entry_enabled,legacy_entries_retired from public.v17_operator_control where singleton" \
+            > release-evidence/operator-after.txt
+          cmp release-evidence/operator-before.txt release-evidence/operator-after.txt
+          python - <<'PY'
+          import json
+          before={x['id']:x for x in json.load(open('release-evidence/open-positions-before.json'))}
+          after={x['id']:x for x in json.load(open('release-evidence/open-positions-after.json'))}
+          for pid,old in before.items():
+              new=after.get(pid)
+              if new is None: continue          # closed naturally during observation
+              assert new['entry_at']==old['entry_at']
+              assert new['exit_policy']==old['exit_policy']
+              # A position opened under the old policy keeps it. This release must
+              # not retro-apply anything to positions already open.
+              assert new['entry_execution_policy']==old['entry_execution_policy']
+              # A protective stop may ratchet up; it must never move down.
+              assert float(new['hard_stop_price'])+1e-12>=float(old['hard_stop_price']), (pid,old,new)
+          print('open positions preserved:',len(before))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v26-entry-evidence-release
+          path: release-evidence

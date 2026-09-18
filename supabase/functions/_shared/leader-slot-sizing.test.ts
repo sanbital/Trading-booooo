@@ -186,7 +186,41 @@ Deno.test("CASE 17: a high-price symbol sizes on its own lot step, both ways", (
   } catch (error) {
     refused = String((error as SlotSizingError).message);
   }
-  assertEquals(refused, "QTY_STEP_EXCEEDS_MARGIN_BUDGET:42.679467");
+  // Field 2 is still the margin the order would need. The labelled fields after it
+  // are the ceiling that was exceeded and the lot step that forced the overshoot,
+  // so the refusal can be read without recomputing the contract by hand.
+  assertEquals(
+    refused,
+    "QTY_STEP_EXCEEDS_MARGIN_BUDGET:42.679467:max=30.250000:step=0.001:qty=0.002:px=64019.2",
+  );
+});
+
+// Production replay, 2026-09-18. Every QTY_STEP_EXCEEDS_MARGIN_BUDGET refusal the
+// deployed executor (v50) emitted that day came from a lot step worth more than the
+// whole admissible window, not from a budget that was set too tight. The window is
+// [requiredNotional, maxOrderMargin * leverage] = [90.09, 90.75] at the ask: 0.66
+// USDT wide. NEAR's step is one whole coin at ~3.25 USDT, five times the window, so
+// no quantity can land inside it. There is no smaller valid quantity to choose --
+// one lot down is 87.7 notional, below the target the slot is defined by -- which is
+// why this is a refusal with evidence rather than a sizing retry.
+Deno.test("production replay: the refused margin, ceiling and step are all recoverable", () => {
+  let refused = "";
+  try {
+    // NEARUSDT 10:30:06 KST, ask 3.2470, step 1. Production recorded 30.314667.
+    planSlotEntry({ ask: 3.2470, quantityStep: 1, priceTick: 0.0001, minNotionalUsdt: 5 });
+  } catch (error) {
+    refused = String((error as SlotSizingError).message);
+  }
+  assertEquals(
+    refused,
+    "QTY_STEP_EXCEEDS_MARGIN_BUDGET:30.314667:max=30.250000:step=1:qty=28:px=3.248",
+  );
+
+  // One lot below the refused quantity undershoots the slot rather than fitting it,
+  // so "pick a smaller quantity" is not an available answer here.
+  const bounds = slotSizingBounds();
+  assertEquals(27 * 3.2470 < bounds.requiredNotionalUsdt, true);
+  assertEquals(28 * 3.248 / 3 > bounds.maxOrderMarginUsdt, true);
 });
 
 Deno.test("an exchange minimum above the target, but inside the budget, is honoured", () => {

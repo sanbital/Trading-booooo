@@ -39,3 +39,16 @@ test('actual dispatcher sends exactly one mode GET and refuses a spot account',a
   await assert.rejects(ctx.handleCommand({exchange:'binance',action:'futures_position_mode'}),/FUTURES_MODE_FUTURES_ONLY/);
   assert.equal(calls.length,1);
 });
+
+// The release that ships the executor's account-mode consumer asserts this flag on
+// the LIVE /health before it deploys. If the flag and the command ever part company
+// -- the flag advertised without the case, or the case shipped without the flag --
+// that pre-deploy check becomes a lie in one direction or a false block in the other.
+test('the health capability flag and the served command ship together', async () => {
+  const server = await readFile(new URL('./server.mjs', import.meta.url), 'utf8');
+  const advertises = /capabilities:\s*\{[^}]*futures_position_mode:\s*true/s.test(server);
+  const serves = /case "futures_position_mode":/.test(server);
+  assert.equal(advertises, serves,
+    `capability flag (${advertises}) and command case (${serves}) must agree`);
+  assert.equal(serves, true, 'this build is expected to serve futures_position_mode');
+});

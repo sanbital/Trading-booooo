@@ -262,11 +262,17 @@ export function planSlotEntry(input, contract = SLOT_SIZING_CONTRACT) {
     // the slot cannot afford is a property of the listing, a lot step that
     // overshoots is a property of the price. They need different operator answers.
     const drivenByExchangeMinimum = quantity > quantityForTarget;
+    // Field 2 stays the margin the order would need, unchanged. The labelled
+    // fields after it answer the questions the bare number cannot: what the
+    // ceiling actually is, and which lot step forced the overshoot. Without
+    // them an operator reading `...:30.960000` cannot tell a needed amount
+    // from an allowed one, nor whether a smaller slot would ever fit.
     throw new SlotSizingError(
       drivenByExchangeMinimum
         ? SLOT_SIZING_REASON.MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET
         : SLOT_SIZING_REASON.QTY_STEP_EXCEEDS_MARGIN_BUDGET,
-      orderMarginUsdt.toFixed(6),
+      `${orderMarginUsdt.toFixed(6)}:max=${bounds.maxOrderMarginUsdt.toFixed(6)}` +
+        `:step=${quantityStep}:qty=${quantity}:px=${limitPrice}`,
     );
   }
 

@@ -2272,7 +2272,8 @@ async function handleCommand(command) {
     case "futures_position_mode":
       if (!futures) throw Error("FUTURES_MODE_FUTURES_ONLY");
       return readFuturesModeEvidence(async (method, path, params, options) =>
-        (await futuresRequest(method, path, params, options)).data);
+        (await futuresRequest(method, path, params, options)).data
+      );
     case "p10_portfolio":
       return p10Portfolio(exchange);
     case "accounts":
@@ -2454,6 +2455,11 @@ function createServer() {
           capabilities: {
             p10_top_of_book_batch: true,
             p10_position_proof: true,
+            // Advertised so a consumer can prove this gateway serves the command
+            // BEFORE it ships code that depends on it. The executor's account-mode
+            // evidence path is unusable against an image without it, and a release
+            // that cannot check would have to assume.
+            futures_position_mode: true,
           },
           // Counters only, never symbols or sizes: this endpoint is unauthenticated and
           // the numbers exist to answer whether the shadow is observing and whether the

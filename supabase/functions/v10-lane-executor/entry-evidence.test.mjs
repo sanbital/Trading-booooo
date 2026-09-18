@@ -167,3 +167,89 @@ test('unknown commission causes explicit SKIP, not a fabricated fee or planning 
     lease:{held:true,fencingToken:'1',gatewayReady:true},costEvidence:{source:'ASSUMED'}});
   assert.equal(result.blocks,true);assert.equal(result.sizing.reason,'ACCOUNT_FEE_UNAVAILABLE');
 });
+
+// Production replay, 2026-09-18 KST. Every EXPIRED:ORIGINAL_SIGNAL_EXPIRED the
+// deployed executor (v50) emitted in the 24h to 15:13 KST is listed below with the
+// timestamps the signal row actually carried: the 5m close, the re-acceleration
+// trigger, its 60s deadline, the 15m setup deadline, and the moment the executor
+// rejected the candidate (v11_long_regime_signals.updated_at, not created_at --
+// created_at is when the setup was armed).
+//
+// In all twelve the rejection lands 8-15s AFTER the trigger fired and well inside
+// its 60s window, while the legacy close+120s clock had already run out. That is
+// the defect: an expired ORIGINAL signal clock was applied to a trigger that was
+// still live. The window this repository now computes must refuse none of them.
+//
+// Passing this window check is admission to the next stage, not an entry: each of
+// these still has to clear the drift, sizing and liquidity gates afterwards.
+const PRODUCTION_EXPIRY_REPLAY_20260918 = [
+  ['DRIFTUSDT', '15:05:00', '15:10:00', '15:10:09.687'],
+  ['ONEUSDT', '13:45:00', '13:47:00', '13:47:10.501'],
+  ['ARBUSDT', '12:50:00', '12:52:00', '12:52:11.480'],
+  ['APTUSDT', '12:30:00', '12:38:00', '12:38:08.498'],
+  ['PONSUSDT', '12:05:00', '12:18:00', '12:18:07.976'],
+  ['ARBUSDT', '12:15:00', '12:17:00', '12:17:11.598'],
+  ['PONSUSDT', '12:00:00', '12:05:00', '12:05:08.721'],
+  ['APTUSDT', '11:35:00', '11:44:00', '11:44:08.590'],
+  ['ARBUSDT', '11:05:00', '11:12:00', '11:12:07.757'],
+  ['ARBUSDT', '10:50:00', '11:00:00', '11:00:14.613'],
+  ['ARBUSDT', '10:00:00', '10:02:00', '10:02:10.471'],
+  ['BABYUSDT', '09:20:00', '09:22:00', '09:22:09.232'],
+];
+const kst = (hms) => Date.parse(`2026-09-18T${hms}+09:00`);
+
+test('production replay: the 12 live expiry rejections were all inside their trigger window', () => {
+  for (const [symbol, closeAt, triggerAt, rejectedAt] of PRODUCTION_EXPIRY_REPLAY_20260918) {
+    const close = kst(closeAt), trigger = kst(triggerAt), rejected = kst(rejectedAt);
+    const id = `replay-${symbol}-${closeAt}`;
+    const s = {
+      id, symbol,
+      features: {
+        strategy: STRATEGY, signal5Close: close, referenceClose: 1.5,
+        v17Setup: {
+          policyVersion: P.version, state: 'TRIGGERED', signalId: id, symbol,
+          identity: `${P.version}:${symbol}:${id}:${close}`,
+          signal5Close: close, armedAt: close, referencePrice: 1.5,
+          expiresAt: close + P.setupTtlMs,
+          triggerAt: trigger, triggerExpiresAt: trigger + P.entryTriggerTtlMs,
+          triggerClose: 1.51, pullbackObserved: true,
+        },
+      },
+    };
+    const w = windowFor(s);
+    assert.equal(w.valid, true, `${symbol} ${closeAt}: window must be valid`);
+    // The defect, reproduced: the legacy clock had expired at the moment of rejection.
+    assert.ok(close + POLICY.maxEntryAgeMs <= rejected,
+      `${symbol} ${closeAt}: legacy clock must already be expired, or this is not the defect`);
+    // The fix: the governing window had not.
+    assert.ok(rejected < w.expiresAt,
+      `${symbol} ${closeAt}: rejected ${rejected} must precede window end ${w.expiresAt}`);
+    // The window is the trigger's own deadline, bounded by the setup's.
+    assert.equal(w.expiresAt, Math.min(close + P.setupTtlMs, trigger + P.entryTriggerTtlMs));
+    assert.equal(w.basis, 'PULLBACK_TRIGGER');
+  }
+});
+
+test('production replay: startE1 stops calling these expired once the window governs', () => {
+  for (const [symbol, closeAt, triggerAt, rejectedAt] of PRODUCTION_EXPIRY_REPLAY_20260918) {
+    const close = kst(closeAt), trigger = kst(triggerAt), rejected = kst(rejectedAt);
+    const identity = { signalId: `replay-${symbol}-${closeAt}`, symbol, decisionAt: rejected };
+    // What production did: the ORIGINAL signal clock.
+    const legacy = startE1({
+      ...identity, signalExpiresAt: close + POLICY.maxEntryAgeMs, baselineEligible: true,
+      tape: { available: false }, quote: null,
+    });
+    assert.deepEqual(legacy.reasonCodes, ['ORIGINAL_SIGNAL_EXPIRED']);
+    assert.equal(legacy.reject, true);
+    assert.equal(legacy.confirmationState, 'EXPIRED');
+    // What the repaired path passes instead.
+    const governed = startE1({
+      ...identity,
+      signalExpiresAt: Math.min(close + P.setupTtlMs, trigger + P.entryTriggerTtlMs),
+      baselineEligible: true, tape: { available: false }, quote: null,
+    });
+    assert.ok(!governed.reasonCodes.includes('ORIGINAL_SIGNAL_EXPIRED'));
+    assert.equal(governed.reject, false);
+    assert.notEqual(governed.confirmationState, 'EXPIRED');
+  }
+});
