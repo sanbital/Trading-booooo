@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 process.env.UPBIT_ACCESS_KEY = "access";
 process.env.UPBIT_SECRET_KEY = "secret";
@@ -378,8 +379,12 @@ test("futures leverage is bounded to the gateway ceiling", () => {
   assert.throws(() => module.validateFuturesLeverage(50));
 });
 
-test("futures entries independently enforce 40 USDT of posted margin", () => {
-  assert.equal(module.FUTURES_MIN_ENTRY_MARGIN_USDT, 40);
+test("futures entries independently enforce the smallest authorised slot", () => {
+  // The floor is the smallest order ANY engine this gateway serves can produce, not a
+  // copy of one engine's slot. V17's sizing contract can size down to
+  // targetMarginUsdt 30 x minSlotFillBps 5000 = 15 USDT of margin; P10 still refuses
+  // below its own 40 in its own sizing, before a command ever reaches this file.
+  assert.equal(module.FUTURES_MIN_ENTRY_MARGIN_USDT, 15);
   assert.throws(
     () =>
       module.conformFuturesOrder(
@@ -388,29 +393,29 @@ test("futures entries independently enforce 40 USDT of posted margin", () => {
           side: "BUY",
           type: "LIMIT",
           price: 100,
-          quantity: 1.199,
+          quantity: 0.449,
           identifier: "tb-margin-1",
         },
         FUTURES_INFO,
         false,
         3,
       ),
-    /40 USDT margin \(120 USDT notional at 3x\)/,
+    /15 USDT margin \(45 USDT notional at 3x\)/,
   );
-  const atThreeX = module.conformFuturesOrder(
+  const atFloor = module.conformFuturesOrder(
     {
       market: "BTCUSDT",
       side: "BUY",
       type: "LIMIT",
       price: 100,
-      quantity: 1.2,
+      quantity: 0.45,
       identifier: "tb-margin-2",
     },
     FUTURES_INFO,
     false,
     3,
   );
-  assert.equal(atThreeX.notional, 120);
+  assert.equal(atFloor.notional, 45);
 
   assert.throws(
     () =>
@@ -420,18 +425,74 @@ test("futures entries independently enforce 40 USDT of posted margin", () => {
           side: "BUY",
           type: "LIMIT",
           price: 100,
-          quantity: 1.999,
+          quantity: 0.749,
           identifier: "tb-margin-3",
         },
         FUTURES_INFO,
         false,
         5,
       ),
-    /200 USDT notional at 5x/,
+    /75 USDT notional at 5x/,
   );
 });
 
-test("the 40 USDT margin floor applies only to entries, never reduce-only exits", () => {
+test("the V17 slot the old floor refused now passes, at its exact production numbers", () => {
+  // DYDXUSDT, 2026-09-18 10:21:09 UTC. The first order the repaired entry pipeline
+  // produced, and the one the stale 40 USDT floor refused:
+  //   GW_400: Binance futures entry requires at least 40 USDT margin
+  //           (120 USDT notional at 3x); got 90.1716
+  const info = {
+    ...FUTURES_INFO,
+    market: "DYDXUSDT",
+    quantity_step: 0.1,
+    price_tick: 0.0001,
+    min_notional: 5,
+  };
+  const { order, notional } = module.conformFuturesOrder(
+    {
+      market: "DYDXUSDT",
+      side: "BUY",
+      type: "LIMIT",
+      price: 0.1304,
+      quantity: 691.5,
+      identifier: "tb-v11e-92df114d5fc748699f89c8fc",
+      position_side: "LONG",
+      position_effect: "OPEN",
+      time_in_force: "IOC",
+    },
+    info,
+    false,
+    3,
+  );
+  assert.equal(order.side, "BUY");
+  assert.equal(order.timeInForce, "IOC");
+  assert.ok(Math.abs(notional - 90.1716) < 1e-6, `notional ${notional}`);
+  // And it is comfortably above the floor, so this is not a boundary escape.
+  assert.ok(notional / 3 > module.FUTURES_MIN_ENTRY_MARGIN_USDT);
+});
+
+test("a malformed order far below any authorised slot is still refused", () => {
+  // The floor's actual job: a quantity mis-scaled by orders of magnitude.
+  assert.throws(
+    () =>
+      module.conformFuturesOrder(
+        {
+          market: "BTCUSDT",
+          side: "BUY",
+          type: "LIMIT",
+          price: 100,
+          quantity: 0.12,
+          identifier: "tb-malformed-1",
+        },
+        FUTURES_INFO,
+        false,
+        3,
+      ),
+    /15 USDT margin/,
+  );
+});
+
+test("the entry margin floor applies only to entries, never reduce-only exits", () => {
   const { order } = module.conformFuturesOrder(
     {
       market: "BTCUSDT",
@@ -915,4 +976,67 @@ test("futures portfolio exposes longs as deliverable balances and shorts as noth
   );
   assert.equal(portfolio.positions.length, 2);
   assert.equal(portfolio.positions.find((row) => row.market === "ETHUSDT").side, "SHORT");
+});
+
+// ---------------------------------------------------------------------------
+// v18_entry_never_placed_proof -- the verdict that lets a never-sent order stop
+// holding the account, and every way it must refuse to give one.
+// ---------------------------------------------------------------------------
+
+test("a never-placed proof requires all three answers to arrive and agree", () => {
+  const flat = [{ symbol: "DYDXUSDT", positionAmt: "0" }];
+  const proven = module.neverPlacedVerdict({ found: false, positions: flat, trades: [] });
+  assert.equal(proven.proven, true);
+  assert.equal(proven.position_quantity, 0);
+  assert.equal(proven.recent_trade_count, 0);
+  assert.equal(proven.position_read_ok, true);
+  assert.equal(proven.trade_read_ok, true);
+});
+
+test("an unknown answer is never a negative answer", () => {
+  const flat = [{ symbol: "DYDXUSDT", positionAmt: "0" }];
+  // A timeout or 5xx on the order lookup leaves `found` null: not proof.
+  assert.equal(module.neverPlacedVerdict({ found: null, positions: flat, trades: [] }).proven, false);
+  // The exchange knowing the id is the opposite of proof.
+  assert.equal(module.neverPlacedVerdict({ found: true, positions: flat, trades: [] }).proven, false);
+  // A position read that did not arrive cannot corroborate anything.
+  assert.equal(module.neverPlacedVerdict({ found: false, positions: null, trades: [] }).proven, false);
+  // Neither can a trade read that did not arrive.
+  assert.equal(module.neverPlacedVerdict({ found: false, positions: flat, trades: null }).proven, false);
+});
+
+test("any live quantity in the symbol refuses the proof, either direction", () => {
+  for (const amount of ["691.5", "-691.5", "0.0001"]) {
+    const verdict = module.neverPlacedVerdict({
+      found: false,
+      positions: [{ symbol: "DYDXUSDT", positionAmt: amount }],
+      trades: [],
+    });
+    assert.equal(verdict.proven, false, `positionAmt ${amount} must refuse the proof`);
+    assert.ok(verdict.position_quantity > 0);
+  }
+});
+
+test("the proof reports recent fills rather than hiding them", () => {
+  const verdict = module.neverPlacedVerdict({
+    found: false,
+    positions: [{ symbol: "DYDXUSDT", positionAmt: "0" }],
+    trades: [{ qty: "10" }, { qty: "5.5" }],
+  });
+  // A flat account with recent trades is still proven -- the order id is unknown to
+  // the exchange and nothing is held -- but the caller sees exactly what was there.
+  assert.equal(verdict.recent_trade_count, 2);
+  assert.equal(verdict.recent_filled_quantity, 15.5);
+});
+
+test("the gateway advertises the command before anything may depend on it", () => {
+  const source = readFileSync(new URL("./server.mjs", import.meta.url), "utf8");
+  assert.match(source, /v18_entry_never_placed_proof: true,/);
+  assert.match(source, /case "v18_entry_never_placed_proof": \{/);
+  // Read-only: the proof path must never place, cancel or amend anything.
+  const start = source.indexOf('case "v18_entry_never_placed_proof"');
+  const body = source.slice(start, source.indexOf('case "futures_position_mode"', start));
+  for (const forbidden of ["POST", "DELETE", "PUT", "createOrder", "cancel"]) {
+    assert.ok(!body.includes(forbidden), `the proof path must not ${forbidden}`);
+  }
 });
