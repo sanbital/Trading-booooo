@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Export existing public-market research rows (no DB writes)
+      - name: Export existing public-market research rows (explicit READ ONLY)
         shell: bash
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
@@ -25,9 +25,11 @@ jobs:
           set -euo pipefail
           test -n "$SUPABASE_DB_URL"
           mkdir -p research-export/raw research-export/modules
-          psql -X "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -Atc 'SHOW default_transaction_read_only' | grep -x on
+          psql -Xq "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -Atc "BEGIN TRANSACTION READ ONLY; SELECT current_setting('transaction_read_only'); ROLLBACK;" > research-export/transaction-mode.txt
+          grep -x on research-export/transaction-mode.txt
           for t in meta symbols k15 k5; do
-            psql -X "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -c "COPY (SELECT * FROM public.research_v26_${t}) TO STDOUT WITH (FORMAT CSV, HEADER TRUE)" | gzip -1 > "research-export/raw/${t}.csv.gz"
+            psql -Xq "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -c "BEGIN TRANSACTION READ ONLY; SET LOCAL statement_timeout='180s'; COPY (SELECT * FROM public.research_v26_${t}) TO STDOUT WITH (FORMAT CSV, HEADER TRUE); ROLLBACK;" | gzip -1 > "research-export/raw/${t}.csv.gz"
+            echo "exported market table ${t}"
           done
           cp supabase/functions/_shared/leader-momentum-v17.mjs research-export/modules/
           cp supabase/functions/_shared/leader-pullback-reaccel.mjs research-export/modules/
@@ -37,9 +39,11 @@ jobs:
           git rev-parse HEAD > research-export/source-commit.txt
           (cd research-export && sha256sum raw/* modules/* > SHA256SUMS)
       - name: Check official downloadable archive (no exchange trading API)
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p research-export
           python3 - <<'PY'
           import urllib.request,urllib.error,hashlib,json,pathlib,zipfile,io
           base='https://data.binance.vision/data/futures/um/daily/klines/BTCUSDT/15m/BTCUSDT-15m-2026-09-03.zip'
