@@ -21,6 +21,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
       - name: Apply hash-checked source repair
         run: python3 tools/entry_evidence_repair_20260918.py
       - name: Offline regression tests only
@@ -28,8 +31,10 @@ jobs:
         run: |
           set -euo pipefail
           node --test supabase/functions/v10-lane-executor/entry-evidence.test.mjs gateway/*.test.mjs | tee /tmp/entry-evidence-tests.tap
+          deno task test:entry | tee /tmp/entry-existing-tests.tap
+          deno test --allow-read supabase/functions/v10-lane-executor/margin-config.test.ts supabase/functions/_shared/boo/*.test.ts | tee /tmp/entry-deno-tests.txt
           git diff --check
-      - name: Commit to the review branch only; never merge or deploy
+      - name: Commit source to review branch only; never modify workflows, merge or deploy
         shell: bash
         env:
           EXPECTED_HEAD: ${{ github.sha }}
@@ -38,8 +43,9 @@ jobs:
           target='refs/heads/fix/entry-evidence-20260918'
           test "$GITHUB_REF" = "$target"
           test "$(git ls-remote origin "$target" | cut -f1)" = "$EXPECTED_HEAD"
-          git add -- gateway/server.mjs gateway/futures-mode-evidence.mjs gateway/futures-mode-evidence.test.mjs supabase/functions/v10-lane-executor/index.ts supabase/functions/v10-lane-executor/boo-entry-adapter.mjs supabase/functions/v10-lane-executor/entry-evidence.mjs supabase/functions/v10-lane-executor/entry-evidence.test.mjs docs/entry-evidence-repair-20260918.md .github/workflows/entry-evidence-tests.yml
-          git rm -- tools/entry_evidence_repair_20260918.py tools/entry_evidence_payload_1.txt tools/entry_evidence_payload_2.txt tools/entry_evidence_payload_3.txt .github/workflows/entry-evidence-review-20260918.yml
+          git add -- gateway/server.mjs gateway/futures-mode-evidence.mjs gateway/futures-mode-evidence.test.mjs supabase/functions/v10-lane-executor/index.ts supabase/functions/v10-lane-executor/boo-entry-adapter.mjs supabase/functions/v10-lane-executor/entry-evidence.mjs supabase/functions/v10-lane-executor/entry-evidence.test.mjs docs/entry-evidence-repair-20260918.md test-support/v18-ops/harness.mjs test-support/v17-exit/entry-margin-skip.test.mjs test-support/v17-exit/entry-queue.test.mjs
+          git rm -- tools/entry_evidence_repair_20260918.py tools/entry_evidence_payload_1.txt tools/entry_evidence_payload_2.txt tools/entry_evidence_payload_3.txt
+          test -z "$(git diff --cached --name-only -- .github/workflows)"
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix(entry): align trigger deadlines, gateway evidence and final rejection diagnostics'
           git push origin "HEAD:$target"
       - name: Collect reviewed source and test evidence
@@ -47,7 +53,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p /tmp/entry-evidence-result
-          cp /tmp/entry-evidence-tests.tap /tmp/entry-evidence-result/ 2>/dev/null || true
+          cp /tmp/entry-evidence-tests.tap /tmp/entry-existing-tests.tap /tmp/entry-deno-tests.txt /tmp/entry-evidence-result/ 2>/dev/null || true
           git rev-parse HEAD > /tmp/entry-evidence-result/commit.txt
           python3 - <<'PY'
           import pathlib, tarfile
