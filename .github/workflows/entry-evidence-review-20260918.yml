@@ -1,0 +1,52 @@
+name: Entry evidence isolated review
+
+on:
+  push:
+    branches: [fix/entry-evidence-20260918]
+    paths:
+      - .github/workflows/entry-evidence-review-20260918.yml
+      - tools/entry_evidence_repair_20260918.py
+
+permissions:
+  contents: read
+
+jobs:
+  offline-review:
+    if: github.ref == 'refs/heads/fix/entry-evidence-20260918'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Collect tracked source only; never invoke exchange or database
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/entry-evidence-review
+          python3 - <<'PY'
+          import pathlib, subprocess, tarfile
+          root = pathlib.Path('.')
+          tracked = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          selected = []
+          for name in tracked:
+              if not name:
+                  continue
+              p = pathlib.Path(name)
+              if p.name in {'AGENTS.md', 'package.json', 'deno.json', 'deno.jsonc'} or (
+                  p.suffix in {'.mjs', '.cjs', '.js', '.ts', '.py', '.yml', '.yaml', '.json'} and
+                  (name.startswith(('supabase/functions/', 'gateway/', 'tests/', 'test/', '.github/workflows/', 'scripts/', 'tools/')))
+              ):
+                  selected.append(name)
+          with tarfile.open('/tmp/entry-evidence-review/source.tar.gz', 'w:gz') as archive:
+              for name in selected:
+                  archive.add(name, arcname=name, recursive=False)
+          pathlib.Path('/tmp/entry-evidence-review/manifest.txt').write_text('\n'.join(selected))
+          pathlib.Path('/tmp/entry-evidence-review/commit.txt').write_text(subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode())
+          print(f'Collected {len(selected)} tracked source files. No trading endpoint invoked.')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: entry-evidence-source
+          path: /tmp/entry-evidence-review
+          retention-days: 3
