@@ -24,7 +24,9 @@ jobs:
         env:
           REPLAY_DAYS: "30"
           BINANCE_PACE_MS: "85"
-        run: node research/v25-pullback-reaccel/marketwide-30d.mjs | tee marketwide-30d.log
+        run: |
+          set -o pipefail
+          node research/v25-pullback-reaccel/marketwide-30d.mjs | tee marketwide-30d.log
       - uses: actions/upload-artifact@v4
         with:
           name: binance-30d-marketwide-replay
