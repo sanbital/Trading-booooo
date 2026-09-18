@@ -127,13 +127,27 @@ Deno.test("CASE 4: a coarse step inside the 30.25 USDT allowance is admitted", (
   assert(plan.orderMarginUsdt > 30, "it does overshoot -- that is the point");
 });
 
-Deno.test("CASE 5: a coarse step past the allowance is skipped, and says which", () => {
-  // NEARUSDT on 2026-09-17: step 1 at 2.88 USDT. 32 lots = 92.16 notional = 30.72
-  // margin. That is a genuinely unaffordable lot for a 30 USDT slot, and it was
-  // refused in production too -- correctly, but under a code that also refused
-  // ONEUSDT and REZUSDT, which were not unaffordable at all.
+Deno.test("CASE 5: a coarse step past the allowance takes the lot below it", () => {
+  // NEARUSDT on 2026-09-17: step 1 at 2.88 USDT. 32 lots = 92.19 notional at the
+  // order's own price = 30.73 margin, over the 30.25 ceiling. This used to end the
+  // symbol, on the claim that the lot was unaffordable. It is not: 31 lots cost
+  // 29.77 USDT of margin, satisfy every exchange filter and carry 99.2% of the slot.
+  // The ceiling is what makes that admission safe, and it has not moved.
+  const plan = planSlotEntry({ ask: 2.88, quantityStep: 1, priceTick: 0.001, minNotionalUsdt: 5 });
+  assertEquals(plan.quantity, 31);
+  assertEquals(plan.boundBy, "MARGIN_BUDGET_CAP");
+  assert(plan.orderMarginUsdt <= 30.25 + 1e-9, `${plan.orderMarginUsdt}`);
+  assert(plan.slotFillBps > 9_900, `${plan.slotFillBps}`);
+  // And the point that used to be the only one considered still overshoots, so this
+  // is a wider search rather than a wider budget.
+  assertEquals(32 * plan.limitPrice / 3 > slotSizingBounds().maxOrderMarginUsdt, true);
+});
+
+Deno.test("CASE 5b: a lot the slot cannot afford at ALL is still refused", () => {
+  // The search only ever walks DOWN, so when even one lot is over the ceiling there
+  // is nowhere to walk to. At 95 USDT a single lot needs 31.68 against 30.25.
   const reason = skipReason(() =>
-    planSlotEntry({ ask: 2.88, quantityStep: 1, priceTick: 0.001, minNotionalUsdt: 5 })
+    planSlotEntry({ ask: 95, quantityStep: 1, priceTick: 0.01, minNotionalUsdt: 5 })
   );
   assertEquals(reason, SLOT_SIZING_REASON.QTY_STEP_EXCEEDS_MARGIN_BUDGET);
 });
@@ -177,9 +191,12 @@ Deno.test("CASE 17: a high-price symbol sizes on its own lot step, both ways", (
   assert(plan.orderMarginUsdt <= 30.25 + 1e-9, `${plan.orderMarginUsdt}`);
   assert(plan.quantity * plan.limitPrice >= 5, "the exchange minimum is met at the ORDER price");
 
-  // BTC's real 0.001 step at the same price is 64 USDT of notional per lot. A 30 USDT
-  // slot cannot buy 90 USDT of it at that granularity -- and it could not at 40
-  // either. The skip is honest and names the number an operator would need.
+  // BTC's real 0.001 step at the same price is 64 USDT of notional per lot, and its
+  // 100 USDT min-notional filter forces two of them. THAT is what a 30 USDT slot
+  // cannot pay for -- not the step, which on its own would size one lot at 21.34
+  // USDT of margin. The refusal names the binding constraint, which is the exchange's
+  // minimum, because a coarse step and an unaffordable listing need different
+  // operator answers.
   let refused = "";
   try {
     planSlotEntry({ ask: 64000, quantityStep: 0.001, priceTick: 0.1, minNotionalUsdt: 100 });
@@ -187,40 +204,46 @@ Deno.test("CASE 17: a high-price symbol sizes on its own lot step, both ways", (
     refused = String((error as SlotSizingError).message);
   }
   // Field 2 is still the margin the order would need. The labelled fields after it
-  // are the ceiling that was exceeded and the lot step that forced the overshoot,
-  // so the refusal can be read without recomputing the contract by hand.
+  // are the ceiling that was exceeded and the lot step in force, so the refusal can
+  // be read without recomputing the contract by hand.
   assertEquals(
     refused,
-    "QTY_STEP_EXCEEDS_MARGIN_BUDGET:42.679467:max=30.250000:step=0.001:qty=0.002:px=64019.2",
+    "MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET:42.679467:max=30.250000:step=0.001:qty=0.002:px=64019.2",
   );
+  // Without that filter the same step is perfectly tradeable, one lot at a time.
+  const coarse = planSlotEntry({ ask: 64000, quantityStep: 0.001, priceTick: 0.1, minNotionalUsdt: 5 });
+  assertEquals(coarse.quantity, 0.001);
+  assert(coarse.orderMarginUsdt <= 30.25 + 1e-9, `${coarse.orderMarginUsdt}`);
+  assert(coarse.slotFillBps >= SLOT_SIZING_CONTRACT.minSlotFillBps, `${coarse.slotFillBps}`);
 });
 
 // Production replay, 2026-09-18. Every QTY_STEP_EXCEEDS_MARGIN_BUDGET refusal the
-// deployed executor (v50) emitted that day came from a lot step worth more than the
-// whole admissible window, not from a budget that was set too tight. The window is
-// [requiredNotional, maxOrderMargin * leverage] = [90.09, 90.75] at the ask: 0.66
-// USDT wide. NEAR's step is one whole coin at ~3.25 USDT, five times the window, so
-// no quantity can land inside it. There is no smaller valid quantity to choose --
-// one lot down is 87.7 notional, below the target the slot is defined by -- which is
-// why this is a refusal with evidence rather than a sizing retry.
-Deno.test("production replay: the refused margin, ceiling and step are all recoverable", () => {
-  let refused = "";
-  try {
-    // NEARUSDT 10:30:06 KST, ask 3.2470, step 1. Production recorded 30.314667.
-    planSlotEntry({ ask: 3.2470, quantityStep: 1, priceTick: 0.0001, minNotionalUsdt: 5 });
-  } catch (error) {
-    refused = String((error as SlotSizingError).message);
-  }
-  assertEquals(
-    refused,
-    "QTY_STEP_EXCEEDS_MARGIN_BUDGET:30.314667:max=30.250000:step=1:qty=28:px=3.248",
-  );
-
-  // One lot below the refused quantity undershoots the slot rather than fitting it,
-  // so "pick a smaller quantity" is not an available answer here.
+// deployed executor (v50/v51) emitted that day came from evaluating exactly ONE point
+// on the quantity lattice -- ceil(requiredNotional / ask) -- and ending the symbol
+// when that point sat above the margin ceiling. The admissible window it was aiming
+// at, [requiredNotional, maxOrderMargin x leverage] = [90.09, 90.75] at the ask, is
+// 0.66 USDT wide, so any symbol whose lot is worth more than that misses it by
+// construction. NEAR's lot is 3.25 USDT, five times the window -- which says the
+// TARGET is unreachable, not that the SLOT is unaffordable. The lattice point below
+// it costs 29.23 USDT of margin against a 30.25 ceiling and carries 97.4% of the
+// slot; refusing it opened nothing and protected nothing.
+Deno.test("production replay: NEARUSDT sizes one lot below the point that overshot", () => {
   const bounds = slotSizingBounds();
-  assertEquals(27 * 3.2470 < bounds.requiredNotionalUsdt, true);
+  // NEARUSDT 10:30:06 KST, ask 3.2470, step 1. Production recorded 30.314667 at 28.
+  const plan = planSlotEntry({ ask: 3.2470, quantityStep: 1, priceTick: 0.0001, minNotionalUsdt: 5 });
+  assertEquals(plan.quantity, 27);
+  assertEquals(plan.boundBy, "MARGIN_BUDGET_CAP");
+  assertEquals(plan.limitPrice, 3.248);
+  // The refused figure is reproduced exactly, and is still over the ceiling: the
+  // budget did not move, the search did.
+  assertEquals((28 * 3.248 / 3).toFixed(6), "30.314667");
   assertEquals(28 * 3.248 / 3 > bounds.maxOrderMarginUsdt, true);
+  assertEquals(plan.orderMarginUsdt <= bounds.maxOrderMarginUsdt + 1e-9, true);
+  // It undershoots the target, which is exactly what the slot-fill floor is there to
+  // bound -- and it is nowhere near it.
+  assertEquals(27 * 3.2470 < bounds.requiredNotionalUsdt, true);
+  assert(plan.referenceNotionalUsdt >= bounds.minOrderNotionalUsdt, `${plan.referenceNotionalUsdt}`);
+  assert(plan.slotFillBps > 9_700, `${plan.slotFillBps}`);
 });
 
 Deno.test("an exchange minimum above the target, but inside the budget, is honoured", () => {
