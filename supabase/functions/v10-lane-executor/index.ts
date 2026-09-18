@@ -1,4 +1,5 @@
 // @ts-nocheck
+import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode,entryPriceEvidence} from "./entry-evidence.mjs";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 import {POLICY, STRATEGY, ENTRY_EXECUTION_POLICY_VERSION, entryFresh, postFillEntryGuard, nextExit, portfolioMatches as leaderPortfolioMatches} from "../_shared/leader-momentum-v17.mjs";
 import {nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5, exitAttemptId, classifyExitResponse} from "../_shared/leader-exit-review.mjs";
@@ -257,8 +258,8 @@ async function advanceSignalSetup(db,row,now,fetchCandles=qv3Candles){
   }
   if(!changed)return {row,state,changed:false,reason:lastReason};
   if(state.state===SETUP_STATE.TRIGGERED||setupIsTerminal(state)){
-    await audit(db,null,"BULL","BULL",state.state===SETUP_STATE.TRIGGERED?"ENTRY_ALLOW":"ENTRY_DEFER",
-      lastReason,{signalId:row.id,symbol:row.symbol,setup:{policyVersion:SETUP_POLICY_VERSION,
+    await audit(db,null,"BULL","BULL","ENTRY_DEFER",
+      lastReason,{signalId:row.id,symbol:row.symbol,stage:"SETUP_TRANSITION",finalAdmission:false,orderDispatched:false,setup:{policyVersion:SETUP_POLICY_VERSION,
         state:state.state,identity:state.identity,referencePrice:state.referencePrice,
         pullbackLow:state.pullbackLow,triggerAt:state.triggerAt,triggerClose:state.triggerClose}});
   }
@@ -279,6 +280,10 @@ function entryFreshFor(row,features,now,price){
   if(rec(features)?.strategy!==STRATEGY)return "WRONG_STRATEGY";
   const state=signalSetup(row);
   if(!state)return SETUP_REASON.NOT_TRIGGERED;
+  const window=executionWindowFor(row);
+  if(!window.valid)return window.reason;
+  if(now<window.startsAt)return SETUP_REASON.TRIGGER_FUTURE;
+  if(now>=window.expiresAt)return SETUP_REASON.TRIGGER_STALE;
   return entryTriggerFresh(state,now,price,POLICY.maxEntryDriftPct,SETUP_POLICY);
 }
 /** Positions opened under this entry timing, for the policy-scoped admission limit. */
@@ -302,19 +307,15 @@ function booRunningIdentity(parameterHash){
 // Depth is mandatory for sizing: without a real book we cannot compute the VWAP
 // the loss budget depends on, so an absent book is reported as unhealthy data
 // rather than filled in from the top of book.
-function booBook(q,maxAgeMs){
-  const raw=rec(q?.raw),asks=Array.isArray(raw.asks)?raw.asks:null,bids=Array.isArray(raw.bids)?raw.bids:null,
-    receivedAt=N(q?.timing?.received_at_ms,NaN),age=Number.isFinite(receivedAt)?Date.now()-receivedAt:NaN,
-    reasons=[];
-  if(!asks||!asks.length)reasons.push("NO_ASK_DEPTH");
-  if(!bids||!bids.length)reasons.push("NO_BID_DEPTH");
-  if(!Number.isFinite(age))reasons.push("QUOTE_TIME_UNKNOWN");
-  const bid=N(q?.best_bid),ask=N(q?.best_ask);
-  if(!(bid>0&&ask>0))reasons.push("QUOTE_INVALID");
-  else if(bid>=ask)reasons.push("CROSSED_BOOK");
-  return{asks:asks??[],bids:bids??[],
-    health:{bookHealthy:reasons.length===0,bookAgeMs:age,maxBookAgeMs:maxAgeMs,
-      barsFinal:true,resyncComplete:reasons.length===0,reasons}};
+function booBook(q,maxAgeMs){return normalizeEntryBook(q,maxAgeMs,Date.now());}
+function executionWindowFor(row){
+  return entryExecutionWindow(row,setupGoverns(row),POLICY.maxEntryAgeMs,SETUP_POLICY);
+}
+function checkedEntryFresh(row,features,now,price,attempt,phase,quote=null){
+  const reason=entryFreshFor(row,features,now,price);
+  attempt.entryPriceCheck=entryPriceEvidence(row,price,now,phase,quote,
+    executionWindowFor(row),POLICY.maxEntryDriftPct,reason);
+  return reason;
 }
 function e1CurrentAssessment(s,q,step,at,filters={}){
   const bid=N(q?.best_bid),ask=N(q?.best_ask),spreadBps=bid>0&&ask>=bid?(ask/bid-1)*10000:Infinity;
@@ -337,7 +338,9 @@ async function runE1Gate(s,initialQuote,step,gw,filters={}){
   // not the problem and is unchanged; the read is moved to the decision point and
   // issued alongside the tape so it costs no extra latency. A failed read falls
   // back to the admission quote, which E1 will then correctly refuse as stale.
-  const signalClose=N(s.features?.signal5Close,NaN),signalExpiresAt=signalClose+POLICY.maxEntryAgeMs,
+  const window=executionWindowFor(s);
+  if(!window.valid)throw Error(window.reason);
+  const signalClose=N(s.features?.signal5Close,NaN),signalExpiresAt=window.expiresAt,
     tapeEnd=Date.now(),
     [tapeRead,freshQuoteRead]=await Promise.allSettled([
       fetchE1AggTrades(s.symbol,tapeEnd-10000,tapeEnd),
@@ -480,17 +483,18 @@ async function booGate(db,s,phase,{quote,info,snapshot,pair,orders}){
   const parameterHash=await hashJson({strategy:STRATEGY,r1:R1_VERSION,riskPolicy:RISK_POLICY_VERSION,
     riskBudget:RISK_BUDGET_VERSION,exitPolicy:rec(s.features?.exitPolicy)});
   const identity=booRunningIdentity(parameterHash);
-  const [gateContext,controls,feeRates]=await Promise.all([
+  const [gateContext,controls,feeRates,positionMode]=await Promise.all([
     loadBooGateContext(db,identity),
     opsControls(db),
-    opsGateway(db)({action:"fees",market:s.symbol}).catch(()=>null)]);
+    opsGateway(db)({action:"fees",market:s.symbol}).catch(()=>null),
+    opsGateway(db)({action:"futures_position_mode"},2000).catch(()=>null)]);
   const book=booBook(quote,E1_POLICY.maxQuoteAgeMs);
   const f=rec(s.features),ref=N(f.referenceClose),stopPct=N(rec(f.exitPolicy).stopPct);
   const {openRisk,grossNotional}=openRiskSummary({positions:pair.positions,
     pendingOrders:(orders?.orders??[]).filter(o=>o?.request_payload?.booRiskReservation)});
   // Taker rate from the account, as a fraction. A missing rate leaves the field
   // undefined so the sizing refuses rather than guessing.
-  const taker=feeRates==null?undefined:N(feeRates.taker??feeRates.takerCommissionRate,NaN);
+  const taker=gatewayTakerFeeRate(feeRates,s.symbol);
   return evaluateBooEntry({
     phase,gateContext,runningIdentity:identity,
     settings:controls.settings,runtime:controls.runtime,operatorControl:controls.control,
@@ -515,8 +519,8 @@ async function booGate(db,s,phase,{quote,info,snapshot,pair,orders}){
       reservedRisk:openRisk.toString(),openGrossNotional:grossNotional.toString(),
       leverage:String(LEV),
       // One-way vs hedge mode and protective-order support are proven by the
-      // portfolio observation; anything short of an explicit yes blocks entry.
-      modeSupported:pair.pf?.position_mode==="ONE_WAY"||pair.pf?.dual_side_position===false,
+      // authenticated mode observation; anything short of an explicit yes blocks entry.
+      modeSupported:supportedFuturesMode(positionMode,Date.now()),
       protectionSupported:NATIVE_STOP_ENABLED===true},
     fees:{takerFeeRate:taker,stopFeeRate:taker,
       stopSlippageFrac:"0.001",expectedFundingCost:"0"},
@@ -533,7 +537,7 @@ const gateway=opsGateway(db);
 await requireLeaderEntryControls(db);
 const exitPolicy=rec(s.features?.exitPolicy);
 if(!Object.values(exitPolicy).every(v=>Number.isFinite(Number(v)))||!(Number(exitPolicy.stopPct)>0&&Number(exitPolicy.stopPct)<1&&Number(exitPolicy.trailArmPct)>0&&Number(exitPolicy.trailGapPct)>0&&Number(exitPolicy.trailGapPct)<1&&Number(exitPolicy.maxHoldMs)===POLICY.maxHoldMs&&Number(exitPolicy.staleMs)>0))throw new Error("V17_EXIT_POLICY_INVALID");
-const initialFresh=entryFreshFor(s,s.features,Date.now(),Number(s.features?.referenceClose));
+const initialFresh=checkedEntryFresh(s,s.features,Date.now(),Number(s.features?.referenceClose),attempt,"PRE_ADMISSION");
 if(initialFresh)throw new Error(initialFresh);
 let[sn,q,i,rawInitialPair,initialOrders]=await Promise.all([snap(db),gateway({action:"quote",market:s.symbol}),
   gateway({action:"symbol_info",market:s.symbol}),readOpsPair(db,gateway,s.symbol),gateway({action:"v18_open_orders"},5000)]),
@@ -548,6 +552,8 @@ if(!initialDecision.allowed){return{entered:false,
 // before the send. It is additive: it can only refuse, never admit something
 // the existing operational gate already refused.
 const booAdmission=await booGate(db,s,"ADMISSION",{quote:q,info:i,snapshot:sn,pair:initialPair,orders:initialOrders});
+attempt.booAdmission={enforcement:booAdmission.enforcement,blocks:booAdmission.blocks,
+  verdictAllowed:booAdmission.verdict.allowed,reason:booAdmission.verdict.reason};
 await recordBooVerdict(db,{signalId:s.id,symbol:s.symbol,phase:"ADMISSION",result:booAdmission});
 if(booAdmission.blocks)return{entered:false,reason:`BOO_ENTRY_GATE:${booAdmission.verdict.reason}`,
   releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,booGate:booAdmission.verdict};
@@ -556,7 +562,7 @@ if(active(initialPair.pf).length>=MAX_SLOTS)return{entered:false,reason:"V11_SLO
 if(initialPair.positions.some(p=>String(p.symbol).toUpperCase()===String(s.symbol).toUpperCase()))return{entered:false,reason:"DUPLICATE_SYMBOL_OPEN"};
 let pf=initialPair.pf,bid=N(q?.best_bid),ask=N(q?.best_ask),sp=bid>0&&ask>0?(ask/bid-1)*10000:999;if(!(bid>0&&ask>0&&sp<=SPREAD_MAX))throw new Error(`ENTRY_SPREAD:${sp}`);const f=rec(s.features),ref=N(f.referenceClose),atr=N(f.atr);if(!(atr>0&&ref>0))throw new Error("ENTRY_FEATURES_INVALID");let filters=symbolFilters(i),step=filters.quantityStep,min=filters.minNotionalUsdt,sized=sizeEntry(ask,step,filters);if(sized.orderNotionalUsdt+1e-9<min)throw new Error("QTY_INVALID");let live=N(pf?.available_quote,NaN),avail=Math.min(N(sn.available_quote),live);if(!Number.isFinite(live))throw new Error("ENTRY_AVAILABLE_BALANCE_UNREADABLE");if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true};// The plan already priced and budgeted itself; nothing re-derives either here.
 let limitPrice=sized.limitPrice,iocBps=sized.iocBps,gap=Math.abs(limitPrice-ref)/atr;
-let finalFresh=entryFreshFor(s,f,Date.now(),limitPrice);if(finalFresh)throw new Error(finalFresh);
+let finalFresh=checkedEntryFresh(s,f,Date.now(),limitPrice,attempt,"ADMISSION_PRICE",q);if(finalFresh)throw new Error(finalFresh);
 // Defensive: planSlotEntry already refuses anything over budget at its own limit.
 if(sized.amount*limitPrice/LEV>MAX_ORDER_MARGIN_USDT+1e-9)throw new Error("V17_LIMIT_PRICE_MARGIN_OVERFLOW");
 // V17 replaces pullback-specific ATR gap gating with a price-drift/age guard.
@@ -573,7 +579,7 @@ if(qv3Active){
     return {entered:false,reason:result.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,qv3:attempt.qv3};
   }
   await requireLeaderEntryControls(db);
-  const freshness=entryFreshFor(s,f,Date.now(),limitPrice);if(freshness)throw Error(freshness);
+  const freshness=checkedEntryFresh(s,f,Date.now(),limitPrice,attempt,"AFTER_QV3",q);if(freshness)throw Error(freshness);
 }
 // V24 confirmation. Placed before E1 so a V24 refusal costs no extra gateway work, and
 // scoped to entry only: it can refuse a V17 signal, never open one of its own, and it
@@ -587,9 +593,9 @@ if(v24Ctl.enabled){
   attempt.v24=v24;
   await recordV24(db,s.id,s.symbol,v24);
   await audit(db,null,"BULL","BULL",v24.allowed?"ENTRY_ALLOW":"ENTRY_DEFER",
-    `V24:${v24.reason}`,{signalId:s.id,symbol:s.symbol,v24});
+    `V24:${v24.reason}`,{signalId:s.id,symbol:s.symbol,stage:"V24_CONFIRMATION",finalAdmission:false,v24});
   if(!v24.allowed)return{entered:false,reason:v24.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,v24};
-  const v24Fresh=entryFreshFor(s,f,Date.now(),limitPrice);if(v24Fresh)throw Error(v24Fresh);
+  const v24Fresh=checkedEntryFresh(s,f,Date.now(),limitPrice,attempt,"AFTER_V24",q);if(v24Fresh)throw Error(v24Fresh);
 }
 let e1Decision={policyVersion:E1_POLICY.policyVersion,confirmationState:"DISABLED",allowed:true,
   defer:false,reject:false,reasonCodes:["E1_OPERATOR_FLAG_DISABLED"],executionEnabled:false,
@@ -618,7 +624,7 @@ if(E1_ENABLED){
     attempt.e1=e1Decision;
   }
   await audit(db,null,"BULL","BULL",e1Decision.allowed?"ENTRY_ALLOW":e1Decision.reject?"ENTRY_REJECT":"ENTRY_DEFER",
-    e1Decision.reasonCodes.join(","),{signalId:s.id,symbol:s.symbol,e1:e1Decision,operatorOverride:OPERATOR_OVERRIDE});
+    e1Decision.reasonCodes.join(","),{signalId:s.id,symbol:s.symbol,stage:"E1_CONFIRMATION",finalAdmission:false,e1:e1Decision,operatorOverride:OPERATOR_OVERRIDE});
   if(!e1Decision.allowed){
     const reason=`${e1Decision.confirmationState}:${e1Decision.reasonCodes.join(",")}`;
     if(e1Decision.reject){
@@ -653,7 +659,7 @@ if(E1_ENABLED){
     if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,
       reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true,e1:e1Decision};
     limitPrice=sized.limitPrice;iocBps=sized.iocBps;
-    gap=Math.abs(limitPrice-ref)/atr;finalFresh=entryFreshFor(s,f,Date.now(),limitPrice);if(finalFresh)throw Error(finalFresh);
+    gap=Math.abs(limitPrice-ref)/atr;finalFresh=checkedEntryFresh(s,f,Date.now(),limitPrice,attempt,"AFTER_E1",q);if(finalFresh)throw Error(finalFresh);
     if(sized.amount*limitPrice/LEV>MAX_ORDER_MARGIN_USDT+1e-9)throw Error("V17_LIMIT_PRICE_MARGIN_OVERFLOW");
     if(qv3Active){
       let result,bars=[],evaluatedAt=Date.now();
@@ -676,6 +682,9 @@ const[rawFinalCheck,finalOrders,dispatchQuote,dispatchSnap]=await Promise.all([r
   E1_ENABLED?snap(db):Promise.resolve(sn)]),finalCheck=rawFinalCheck;
 if(E1_ENABLED){
   const dispatchAt=Date.now(),assessment=e1CurrentAssessment(s,dispatchQuote,step,dispatchAt,filters);
+  attempt.entryPriceCheck=entryPriceEvidence(s,assessment.limitPrice,dispatchAt,"E1_DISPATCH_PRICE",
+    dispatchQuote,executionWindowFor(s),POLICY.maxEntryDriftPct,
+    entryFreshFor(s,s.features,dispatchAt,assessment.limitPrice));
   if(!assessment.quote.valid||!assessment.liquidityPassed||!assessment.guardPassed){
     const reason=!assessment.quote.valid?"E1_DISPATCH_QUOTE_UNKNOWN":!assessment.quote.fullDepth?
       "E1_DISPATCH_DEPTH_INSUFFICIENT":"E1_DISPATCH_GUARD_FAILED";
@@ -709,6 +718,8 @@ if(finalCheck.positions.some(p=>p.symbol===s.symbol)||active(finalCheck.pf).leng
 const booPredispatch=await booGate(db,s,"PRE_DISPATCH",{quote:q,info:i,snapshot:sn,pair:finalCheck,orders:finalOrders});
 await recordBooVerdict(db,{signalId:s.id,symbol:s.symbol,phase:"PRE_DISPATCH",result:booPredispatch});
 const booFinal=finalizeBooEntry(booAdmission,booPredispatch);
+attempt.booPredispatch={enforcement:booPredispatch.enforcement,blocks:booFinal.blocks,
+  verdictAllowed:booPredispatch.verdict.allowed,reason:booFinal.reason};
 if(booFinal.blocks)return{entered:false,
   reason:`BOO_ENTRY_GATE:${booFinal.driftDetected?"STATE_DRIFT:":""}${booFinal.reason}`,
   releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,booGate:booPredispatch.verdict};
@@ -718,7 +729,7 @@ if(E1_ENABLED){
     return{entered:false,reason:"E1_DISPATCH_QUOTE_AGED",releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,e1:e1Decision};
   // Waiting for recovery never extends the original signal lifetime. Recheck after
   // all account/ownership reads too, immediately before persisting the order intent.
-  const freshness=entryFreshFor(s,f,checkedAt,limitPrice);if(freshness)throw Error(freshness);
+  const freshness=checkedEntryFresh(s,f,checkedAt,limitPrice,attempt,"PRE_DISPATCH_PRICE",q);if(freshness)throw Error(freshness);
 }
 await verifyExecutionLease(db);
 const id=cid("v11e",s.id),rp={action:"create_order",leverage:LEV,order:{market:s.symbol,side:"BUY",type:"LIMIT",price:limitPrice,time_in_force:"IOC",quantity:sized.amount,identifier:id,position_side:"LONG",position_effect:"OPEN"},wait_for_final_ms:4000},
@@ -1449,6 +1460,13 @@ for(const s of executable){
   const attempt={dispatched:false};
   try{
     entry=await openBull(db,cl.data,openNow,manual,attempt,typeof pair==="undefined"?[]:pair.managementFailures??[]);
+    await audit(db,null,"BULL","BULL",entry?.entered?"ENTRY_ALLOW":"ENTRY_DEFER",
+      entry?.entered?"V17_ENTRY_FILLED":entry?.reason??"V17_NO_ENTRY",{
+        signalId:s.id,symbol:s.symbol,stage:"ENTRY_ATTEMPT_OUTCOME",
+        finalAdmission:entry?.entered===true,orderDispatched:attempt.dispatched===true,
+        entered:entry?.entered===true,entryPriceCheck:attempt.entryPriceCheck??null,
+        booAdmission:attempt.booAdmission??null,booPredispatch:attempt.booPredispatch??null})
+      .catch(()=>console.error("V17_ENTRY_OUTCOME_AUDIT_FAILED",s.id));
     if(entry?.releaseClaim===true){
       await db.from("v11_long_regime_signals").update({status:"NEW",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","CLAIMED");
       if(releaseStopsRun(entry))break;
@@ -1459,6 +1477,11 @@ for(const s of executable){
     const msg=e instanceof Error?e.message:String(e),pending=await db.from("v11_long_regime_orders").select("id").eq("signal_id",s.id).eq("state","RECONCILIATION_FAILED").limit(1);
     if(!pending.data?.length)await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",s.id);
     if(attempt.dispatched)throw e;
+    await audit(db,null,"BULL","BULL","ENTRY_REJECT",msg.slice(0,500),{
+      signalId:s.id,symbol:s.symbol,stage:"PRE_ORDER_REJECTION",finalAdmission:false,
+      orderDispatched:false,entryPriceCheck:attempt.entryPriceCheck??null,
+      booAdmission:attempt.booAdmission??null,booPredispatch:attempt.booPredispatch??null})
+      .catch(()=>console.error("V17_ENTRY_REJECTION_AUDIT_FAILED",s.id));
     if(!ENTRY_SKIP_SYMBOL_SCOPED.test(msg))throw e;
     entry={entered:false,reason:msg};
   }

@@ -148,6 +148,7 @@ const SETUP_NOW = SETUP_CLOSE + 30_000;
 
 function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {}}) {
   const seen = [];
+  const audits = [];
   // signal5Close is now load-bearing: the queue retires already-expired candidates
   // before claiming them, so a fixture must be inside POLICY.maxEntryAgeMs to be
   // priced at all. `bar` shifts a row's age for the expiry tests below.
@@ -181,6 +182,7 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
     return b;
   }
   const ctx = {
+    audit: async (...args) => { audits.push(args); }, audits,
     Date: clockAt(now), Number, Math, Error, Promise, String, Object, Set, Array, console, JSON,
     ENTRY_ATTEMPTS_PER_RUN: 3,
     ENTRY_RUN_BUDGET_MS: 40000,

@@ -80,6 +80,7 @@ jobs:
           grep -Fq 'sizingContractVersion:POLICY.sizingContractVersion' \
             supabase/functions/v10-lane-signal-generator/index.ts
           # No literal 40 may survive anywhere in the slot contract.
+          # shellcheck disable=SC2251  # the leading ! is a deliberate expected-failure probe; the result is asserted below
           ! grep -Fq 'marginUsdt: 40' supabase/functions/_shared/leader-momentum-v17.mjs
           grep -Fq 'import {BOO_ADAPTER_VERSION,ENFORCEMENT as BOO_ENFORCEMENT' \
             supabase/functions/v10-lane-executor/index.ts
@@ -188,6 +189,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2016  # single quotes are deliberate here: the payload is JS/deno source, not shell
           npm exec --yes --package=deno@2.5.6 -- deno eval --quiet '
             import {SETUP_POLICY, SETUP_STATE, startPullbackSetup, advancePullbackSetup,
               entryTriggerFresh, isTerminal}

@@ -58,6 +58,7 @@ jobs:
           grep -Fq 'const manual=await manualPositionAllowances(db);' \
             supabase/functions/v10-lane-executor/index.ts
           # The round trip this release removes must be gone.
+          # shellcheck disable=SC2251  # the leading ! is a deliberate expected-failure probe; the result is asserted below
           ! grep -q 'withCandidateOrders' supabase/functions/v10-lane-executor/index.ts
           # The V24 gate must still be present and still inert by construction:
           # its control read defaults to disabled and its edge default refuses.

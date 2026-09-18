@@ -1,3 +1,4 @@
+import * as entryEvidence from '../../supabase/functions/v10-lane-executor/entry-evidence.mjs';
 // A fully deployed account has no free margin for another 40 USDT slot. That is a normal
 // state, not a fault, but openBull threw on it: the exception escaped run(), so the whole
 // executor cycle returned 500 and set last_error, and the still-fresh signal was burned as
@@ -44,6 +45,7 @@ function make({available, setupCutover = Number.MAX_SAFE_INTEGER}) {
     exitPolicy: {stopPct: .025, trailArmPct: .03, trailGapPct: .015, staleMs: POLICY.staleMs, maxHoldMs: POLICY.maxHoldMs},
   };
   const ctx = {
+    ...entryEvidence,
     Date, Number, Math, Error, Promise, String, Object, console, POLICY, entryFresh,
     STRATEGY: 'LEADER_MOMENTUM_V17', MARGIN, LEV, NOTIONAL, MAX_SLOTS: 10,
     MAX_ORDER_MARGIN_USDT, ENTRY_CASH_BUFFER_USDT: .10,
