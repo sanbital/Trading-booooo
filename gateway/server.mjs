@@ -1084,11 +1084,57 @@ async function binanceOrderTest(payload) {
 // only for the symbol it is about to trade.
 // ---------------------------------------------------------------------------
 
+/**
+ * The verdict half of v18_entry_never_placed_proof, kept pure so the ONE predicate a
+ * caller may read as proof is testable without an exchange.
+ *
+ * `found` is three-valued on purpose: false only for a definitive "order does not
+ * exist", true when the exchange knows the id, and null for every unknown -- a
+ * timeout, a 5xx, an auth failure. `positions` and `trades` are null when their read
+ * did not succeed. A missing answer is never a negative answer, so `proven` requires
+ * all three to have arrived AND to agree.
+ */
+function neverPlacedVerdict({ found, positions, trades }) {
+  const positionQuantity = Array.isArray(positions)
+    ? positions.reduce((sum, row) => sum + Math.abs(Number(row?.positionAmt) || 0), 0)
+    : null;
+  const filledQuantity = Array.isArray(trades)
+    ? trades.reduce((sum, row) => sum + Math.abs(Number(row?.qty) || 0), 0)
+    : null;
+  return {
+    proven: found === false && positionQuantity === 0 && Array.isArray(trades),
+    found: found === undefined ? null : found,
+    position_quantity: positionQuantity,
+    recent_trade_count: Array.isArray(trades) ? trades.length : null,
+    recent_filled_quantity: filledQuantity,
+    position_read_ok: Array.isArray(positions),
+    trade_read_ok: Array.isArray(trades),
+  };
+}
+
 const FUTURES_MIN_LEVERAGE = 1;
 const FUTURES_MAX_LEVERAGE = 20;
-// Mirrors FUTURES_MIN_ENTRY_MARGIN_USDT in the engine. This gateway-side copy is an
-// independent last line of defence if a malformed command bypasses engine sizing.
-const FUTURES_MIN_ENTRY_MARGIN_USDT = 40;
+// An independent last line of defence if a malformed command bypasses engine sizing:
+// a quantity mis-scaled by orders of magnitude cannot reach the exchange through here.
+//
+// IT IS NOT A COPY OF ANY ONE ENGINE'S SLOT, and used to be, which is what broke the
+// first real V17 entry of 2026-09-18. This gateway serves two engines with different
+// allocations: market-autotrader (P10) sizes at FUTURES_MIN_ENTRY_MARGIN_USDT = 40 in
+// its own futures-exit-policy, while v10-lane-executor (V17) has run a 30 USDT slot at
+// 3x since the operator's 2026-09-16 cutover, which trading_settings has carried ever
+// since. Pinning this floor to P10's number meant every V17 order was refused here:
+//
+//   2026-09-18 10:21:09 UTC  DYDXUSDT  691.5 @ 3x, notional 90.1716
+//   GW_400: Binance futures entry requires at least 40 USDT margin (120 USDT
+//           notional at 3x); got 90.1716
+//
+// So the floor is the SMALLEST ORDER ANY AUTHORISED ENGINE CAN PRODUCE, which is the
+// V17 slot-sizing contract's own slot-fill floor: targetMarginUsdt 30 x minSlotFillBps
+// 5000 = 15 USDT of margin. Below that no engine's sizing can go, so anything below it
+// is malformed by definition. Each engine still enforces its own, stricter minimum
+// before a command ever reaches this file -- P10's 40 USDT floor is untouched and is
+// applied by P10's own sizing, not here.
+const FUTURES_MIN_ENTRY_MARGIN_USDT = 15;
 // Mirrors DEFAULT_FUTURES_LEVERAGE in the engine's futures-exit-policy. The gateway keeps
 // its own copy so an order that arrives without one still opens at the authorised size.
 const DEFAULT_FUTURES_LEVERAGE = integerEnv(
@@ -2269,6 +2315,77 @@ async function handleCommand(command) {
         ops_patch: OPS_PATCH,
       };
     }
+    // Read-only proof that a client order id was NEVER ACCEPTED by the exchange.
+    //
+    // WHY THIS EXISTS. An order this gateway refuses in its own validation -- a bad
+    // tick, a filter, the entry floor above -- is rejected BEFORE any Binance request
+    // is signed, so no order identity can exist. The executor cannot know that: all it
+    // sees is a failed create_order, which it must treat as an ambiguous outcome and
+    // halt the account on. Its reconciliation then asks Binance about the order, gets
+    // -2013 "Order does not exist", and THROWS -- because for an order that really was
+    // sent, -2013 is not proof of anything. So the intent can never settle, riskOrders
+    // never empties, and the circuit never closes. That is exactly what happened on
+    // 2026-09-18: DYDXUSDT was refused here at 10:21:09 and the account was still held
+    // 45 minutes later with no exposure anywhere.
+    //
+    // This command answers the narrow question honestly instead of guessing: it reports
+    // whether the exchange knows the client order id, what it currently holds in that
+    // symbol, and whether it has any fill recorded against that id. It NEVER converts a
+    // missing answer into a negative one -- an unreachable exchange, a timeout or any
+    // error other than a definitive not-found leaves `proven` false and the executor
+    // keeps holding. It places no order and cancels nothing.
+    case "v18_entry_never_placed_proof": {
+      if (!futures) throw Error("NEVER_PLACED_PROOF_FUTURES_ONLY");
+      const market = validateBinanceSymbol(command.market);
+      const clientOrderId = validateIdentifier(command.identifier);
+      const requestedAtMs = Date.now();
+      let found = null, lookupCode = null, lookupMessage = null;
+      try {
+        const row = (await futuresRequest("GET", "/fapi/v1/order", {
+          symbol: market,
+          origClientOrderId: clientOrderId,
+        }, { timeoutMs: 3000 })).data;
+        // The exchange knows this id. Whatever its status, the order was placed.
+        found = Boolean(row && (row.orderId != null || row.clientOrderId != null));
+      } catch (error) {
+        lookupCode = Number(error?.code);
+        lookupMessage = String(error?.message || "");
+        // ONLY a definitive not-found counts. Everything else stays unknown.
+        found = (lookupCode === -2013 || /order does not exist/i.test(lookupMessage))
+          ? false
+          : null;
+      }
+      // Two independent corroborating reads, so the verdict never rests on -2013 alone:
+      // what the account actually holds in that symbol, and whether any trade was ever
+      // filled against this client order id.
+      const [positionRead, tradeRead] = await Promise.allSettled([
+        futuresRequest("GET", "/fapi/v2/positionRisk", { symbol: market }, { timeoutMs: 3000 })
+          .then((r) => r.data),
+        futuresRequest("GET", "/fapi/v1/userTrades", { symbol: market, limit: 500 }, {
+          timeoutMs: 3000,
+        }).then((r) => r.data),
+      ]);
+      // Binance's userTrades rows carry the exchange order id, not the client id, so a
+      // fill is matched through the order lookup above when it exists. With no order
+      // and no position, the trade list is reported as-is for the caller to judge; it
+      // is never silently treated as empty.
+      return {
+        exchange: "binance_futures",
+        market,
+        identifier: clientOrderId,
+        source: "BINANCE_FUTURES_ORDER_AND_POSITION_REST",
+        // `proven` is the only field that may be read as proof. See neverPlacedVerdict.
+        ...neverPlacedVerdict({
+          found,
+          positions: positionRead.status === "fulfilled" ? positionRead.value : null,
+          trades: tradeRead.status === "fulfilled" ? tradeRead.value : null,
+        }),
+        lookup_code: Number.isFinite(lookupCode) ? lookupCode : null,
+        requested_at_ms: requestedAtMs,
+        observed_at_ms: Date.now(),
+        ops_patch: OPS_PATCH,
+      };
+    }
     case "futures_position_mode":
       if (!futures) throw Error("FUTURES_MODE_FUTURES_ONLY");
       return readFuturesModeEvidence(async (method, path, params, options) =>
@@ -2460,6 +2577,10 @@ function createServer() {
             // evidence path is unusable against an image without it, and a release
             // that cannot check would have to assume.
             futures_position_mode: true,
+            // Same contract as above: the executor's never-placed settlement is
+            // unusable against an image without this command, so a release can
+            // prove the gateway serves it instead of assuming.
+            v18_entry_never_placed_proof: true,
           },
           // Counters only, never symbols or sizes: this endpoint is unauthenticated and
           // the numbers exist to answer whether the shadow is observing and whether the
@@ -2541,6 +2662,7 @@ export {
   FUTURES_MIN_ENTRY_MARGIN_USDT,
   localRateLimit,
   monitorCadenceDelayMs,
+  neverPlacedVerdict,
   normalizeBinanceOrder,
   normalizeFuturesOrder,
   normalizeP10QuoteBatch,

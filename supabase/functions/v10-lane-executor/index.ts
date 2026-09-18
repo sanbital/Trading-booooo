@@ -1053,6 +1053,84 @@ async function recordMismatch(db,match) {
   }
   return results;
 }
+/**
+ * How long after an intent was written a definitive exchange "not found" can still be
+ * read as proof that the order never existed.
+ *
+ * Binance answers a query by origClientOrderId with -2013 for BOTH "never accepted"
+ * and "too old to still be queryable", and those must never be conflated. The window
+ * is what separates them: inside it the exchange is still able to answer about any
+ * order it accepted, so a not-found means it accepted none. Well inside Binance's own
+ * retention, because the only orders this path is for are minutes old.
+ */
+const NEVER_PLACED_PROOF_MAX_AGE_MS=6*3600000;
+/**
+ * Settle an entry intent that the exchange proves it never accepted.
+ *
+ * This is the narrowest possible escape from the deadlock described at the call site,
+ * and every condition below is load-bearing:
+ *
+ *   - OPEN_LONG only. An exit intent that cannot be reconciled must keep holding the
+ *     account: a position may be live and unprotected, which is the opposite risk.
+ *   - No exchange_order_id. If the gateway ever handed back an id, the exchange saw
+ *     the order and this path is not applicable.
+ *   - The reconciliation error is a DEFINITIVE not-found, not a timeout, a 5xx, an
+ *     auth failure or an unreachable gateway. Unknown stays unknown.
+ *   - The intent is younger than NEVER_PLACED_PROOF_MAX_AGE_MS, so the not-found
+ *     cannot be Binance's retention window rather than the order's absence.
+ *   - The gateway's own proof comes back `proven`: the exchange does not know the id,
+ *     the account holds nothing in that symbol, and BOTH corroborating reads
+ *     succeeded. A partial answer is not a proof.
+ *
+ * It writes no position, no fill and no exposure -- it records that an order which was
+ * never sent was never sent. Returns null when anything is short of proven, and the
+ * caller then reports the original error and the account keeps holding.
+ */
+async function settleNeverPlacedEntry(db,order,error,gw){
+  const message=String(error?.message??error??"");
+  if(order.intent!=="OPEN_LONG"||order.exchange_order_id!=null)return null;
+  if(!/-2013|order does not exist/i.test(message))return null;
+  const createdAt=Date.parse(order.created_at);
+  if(!Number.isFinite(createdAt)||Date.now()-createdAt>NEVER_PLACED_PROOF_MAX_AGE_MS)return null;
+  let proof;
+  try{proof=await gw({action:"v18_entry_never_placed_proof",market:order.symbol,
+    identifier:order.client_order_id},5000);}
+  catch(e){
+    if(classifyFailure(e).fatal)throw e;
+    return {orderId:order.id,error:`NEVER_PLACED_PROOF_UNAVAILABLE:${String(e?.message??e)}`};
+  }
+  if(proof?.proven!==true||proof.found!==false||N(proof.position_quantity,NaN)!==0||
+     proof.position_read_ok!==true||proof.trade_read_ok!==true){
+    return {orderId:order.id,outcome:"UNRESOLVED",inspectionPerformed:true,evidenceSecured:false,
+      reason:"NEVER_PLACED_NOT_PROVEN",proof:proof??null};
+  }
+  await verifyExecutionLease(db);
+  const evidence={neverPlaced:true,provenAt:new Date().toISOString(),
+    lookupCode:proof.lookup_code??null,positionQuantity:proof.position_quantity,
+    recentTradeCount:proof.recent_trade_count,source:proof.source,
+    observedAtMs:proof.observed_at_ms,gatewayRejection:order.reject_reason??null,
+    // The flag riskOrders reads. Setting it is what lets the account resume, so it is
+    // written only on the proven branch and only together with the evidence above.
+    v18ExposureFinal:true};
+  const wr=await db.from("v11_long_regime_orders").update({state:"REJECTED",
+    reject_reason:`ORDER_NEVER_PLACED:${String(order.reject_reason??message).slice(0,400)}`,
+    response_payload:{...rec(order.response_payload),v18EntryNeverPlaced:evidence,
+      v18ExposureFinal:true},
+    updated_at:new Date().toISOString()}).eq("id",order.id).eq("state",order.state);
+  if(wr.error)throw Error(`NEVER_PLACED_WRITE:${wr.error.message}`);
+  // The signal is retired with the same fact, so the candidate is not reopened and
+  // re-refused on the next cycle.
+  await db.from("v11_long_regime_signals").update({status:"REJECTED",
+    reject_reason:`ORDER_NEVER_PLACED:${String(order.reject_reason??message).slice(0,400)}`,
+    updated_at:new Date().toISOString()}).eq("id",order.signal_id).neq("status","REJECTED");
+  await audit(db,null,"BULL","BULL","ENTRY_REJECT","ORDER_NEVER_PLACED",
+    {signalId:order.signal_id,symbol:order.symbol,stage:"NEVER_PLACED_SETTLEMENT",
+      finalAdmission:false,orderDispatched:false,orderId:order.id,evidence})
+    .catch(()=>console.error("V17_NEVER_PLACED_AUDIT_FAILED",order.id));
+  return {orderId:order.id,outcome:"RESOLVED",inspectionPerformed:true,evidenceSecured:true,
+    quantityResolved:true,attributionComplete:true,accountingComplete:true,settled:true,
+    executedQuantity:0,reason:"ORDER_NEVER_PLACED"};
+}
 async function reconcileOps(db,pair,budget=createBudget({ms:8000,calls:18})) {
   const gw=scopedGateway(db,budget),results=[];
   // Exposure-uncertain order identity gets the first reconciliation budget.
@@ -1079,7 +1157,22 @@ async function reconcileOps(db,pair,budget=createBudget({ms:8000,calls:18})) {
       results.push({orderId:o.id,outcome:complete?"RESOLVED":"UNRESOLVED",inspectionPerformed:true,evidenceSecured:true,
         quantityResolved:true,attributionComplete:true,accountingComplete:complete,settled:complete,
         reason:complete?null:"ACCOUNTING_DETAILS_PENDING"});
-    }catch(e){if(classifyFailure(e).fatal)throw e;results.push({orderId:o.id,error:String(e.message??e)});}
+    }catch(e){
+      if(classifyFailure(e).fatal)throw e;
+      // An order this gateway refused in its OWN validation was never signed, never
+      // sent, and cannot have an identity on the exchange -- but the executor only
+      // saw a failed create_order, which it must treat as ambiguous. The query above
+      // then asks Binance about it, gets -2013, and throws. Every cycle. The intent
+      // stays in riskOrders, recoveryEvidence stays ineligible, and the account is
+      // held forever over exposure that does not exist: 2026-09-18, DYDXUSDT refused
+      // at 10:21:09 for a 40 USDT floor the slot had not used since 2026-09-16, still
+      // holding the account 45 minutes later with a flat book and a flat exchange.
+      //
+      // So the not-found is ESTABLISHED rather than assumed, and only then settles.
+      // Anything short of the full proof leaves the order exactly where it is.
+      const settled=await settleNeverPlacedEntry(db,o,e,gw);
+      results.push(settled??{orderId:o.id,error:String(e.message??e)});
+    }
   }
   // Management has already had its turn. Work only three oldest affected items per cycle.
   const ids=new Set(pair.match.issues.map(i=>i.positionId).filter(Boolean));

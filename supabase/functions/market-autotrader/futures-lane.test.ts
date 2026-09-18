@@ -74,7 +74,14 @@ Deno.test("entry sizing commits margin and the exchange sees margin x leverage",
   assertEquals(entryQuantityForNotional("binance", 150, 0.02442, 0.1), 6142.5);
 });
 
-Deno.test("futures entry minimum is an isolated 40 USDT margin floor", () => {
+// P10's own 40 USDT entry floor is UNCHANGED and is asserted here exactly as before.
+// What changed on 2026-09-18 is that the gateway's independent floor stopped being a
+// copy of it. The gateway serves two engines with different allocations -- P10 at 40,
+// V17 at the operator's 30 USDT slot since 2026-09-16 -- so a shared floor pinned to
+// P10's number refused every V17 order (DYDXUSDT, 90.1716 notional, 10:21:09 UTC).
+// The gateway now floors at the smallest order ANY authorised engine can produce and
+// P10 keeps enforcing its own, stricter minimum in its own sizing, below.
+Deno.test("futures entry minimum is an isolated 40 USDT margin floor for P10", () => {
   assertEquals(FUTURES_MIN_ENTRY_MARGIN_USDT, 40);
   assert(ENGINE.includes("minOrder: FUTURES_MIN_ENTRY_MARGIN_USDT"));
   assert(ENGINE.includes("futuresEntryMinimums(leverage, rules.min_notional)"));
@@ -90,8 +97,12 @@ Deno.test("futures entry minimum is an isolated 40 USDT margin floor", () => {
       'const executableMinimumCapitalQuote = exchange === "binance_futures"',
     ),
   );
-  assert(GATEWAY.includes("const FUTURES_MIN_ENTRY_MARGIN_USDT = 40"));
+  // The gateway's floor is the smallest authorised slot across both engines --
+  // V17's targetMarginUsdt 30 x minSlotFillBps 5000 = 15 -- not a copy of P10's 40.
+  assert(GATEWAY.includes("const FUTURES_MIN_ENTRY_MARGIN_USDT = 15"));
   assert(GATEWAY.includes("FUTURES_MIN_ENTRY_MARGIN_USDT * entryLeverage"));
+  // P10 is unaffected because its own floor is applied before the gateway is reached.
+  assert(ENGINE.includes("futuresAffordableEntry"));
   assert(MARGIN_40_MIGRATION.includes("FUTURES_ENTRY_MARGIN_BELOW_40_USDT"));
   assert(MARGIN_40_MIGRATION.includes("binance_futures_allocation_usdt >= 40"));
   assert(DASHBOARD.includes("futuresFixed < 40"));
