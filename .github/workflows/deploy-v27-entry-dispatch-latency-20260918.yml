@@ -34,10 +34,12 @@
 # the R5 exit policy, BOO gate enforcement, the native-stop operator flag, and every
 # already-open position.
 #
-# NO GATEWAY DEPLOY IS REQUIRED. This release adds no gateway command: quote, fees,
-# futures_position_mode and v18_open_orders are all already served by the live
-# gateway (they are what v51 calls today). The capability check below still runs, so
-# the release fails rather than assumes it.
+# GATEWAY ORDERING. The executor shipped here calls v18_entry_never_placed_proof, a
+# command added to the gateway in #144, so the gateway MUST already be live. The
+# capability check below asserts that against /health rather than assuming it, exactly
+# as it does for futures_position_mode: an executor deployed against an image that does
+# not serve the command would deadlock on the first entry intent it has to reconcile,
+# which is the failure this whole release exists to remove.
 name: Deploy V27 entry dispatch latency
 
 on:
@@ -246,15 +248,14 @@ jobs:
             exit 1
           fi
 
-      - name: Require the live gateway to still serve every command this executor uses
+      - name: Require the live gateway to serve every command this executor uses
         shell: bash
         env:
           FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
         run: |
           set -euo pipefail
-          # This release adds no gateway command, but it must not be the first to
-          # discover that one went away. /health is an unauthenticated GET; it places
-          # no order and reads no key.
+          # The new-consumer/old-provider mismatch the release order exists to prevent.
+          # /health is an unauthenticated GET; it places no order and reads no key.
           curl -fsS --max-time 20 --retry 6 --retry-delay 5 \
             "https://${FLY_BINANCE_APP_NAME}.fly.dev/health" \
             > release-evidence/gateway-health.json
@@ -263,12 +264,40 @@ jobs:
           h=json.load(open('release-evidence/gateway-health.json'))
           assert h.get('ok') is True, h
           caps=h.get('capabilities') or {}
-          assert caps.get('futures_position_mode') is True, (
-              'the live Binance gateway does not advertise futures_position_mode; '
-              'deploy the gateway half first. capabilities=%r' % (caps,))
+          # Every gateway command this executor depends on, asserted by name. A missing
+          # one means the gateway half has not landed yet and the executor must wait.
+          for capability in ('futures_position_mode', 'v18_entry_never_placed_proof'):
+              assert caps.get(capability) is True, (
+                  'the live Binance gateway does not advertise %s; deploy the gateway '
+                  'half first. capabilities=%r' % (capability, caps))
           assert (h.get('keys_configured') or {}).get('binance_futures') is True, h
-          print('gateway capability confirmed:', h.get('version'), h.get('ops_patch'))
+          print('gateway capabilities confirmed:', h.get('version'), h.get('ops_patch'))
           PY
+
+      # The floor that refused the first real V17 order. It lives in the gateway, so
+      # the executor cannot assert it from its own source: a release that shipped
+      # against an image still carrying 40 would reproduce 2026-09-18 exactly.
+      - name: Prove the live gateway will accept a full V17 slot
+        shell: bash
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016  # single quotes are deliberate here: the payload is JS/deno source, not shell
+          npm exec --yes --package=deno@2.5.6 -- deno eval --quiet '
+            import {SLOT_SIZING_CONTRACT as C, slotSizingBounds}
+              from "./supabase/functions/_shared/leader-slot-sizing.mjs";
+            const source=await Deno.readTextFile("./gateway/server.mjs");
+            const m=source.match(/const FUTURES_MIN_ENTRY_MARGIN_USDT = (\d+(?:\.\d+)?);/);
+            if(!m) throw Error("the gateway entry floor is no longer readable");
+            const floor=Number(m[1]);
+            const smallest=C.targetMarginUsdt*C.minSlotFillBps/10_000;
+            if(floor>smallest)
+              throw Error(`gateway floor ${floor} refuses this slot contract, whose `+
+                `smallest order is ${smallest} USDT of margin`);
+            // And the full slot, which is what production actually sends.
+            if(slotSizingBounds().targetNotionalUsdt/C.leverage<floor)
+              throw Error("gateway floor refuses the target slot itself");
+            console.log("gateway floor",floor,"admits slots from",smallest,"USDT of margin");
+          '
 
       - name: Install pinned Supabase CLI
         uses: supabase/setup-cli@v1
