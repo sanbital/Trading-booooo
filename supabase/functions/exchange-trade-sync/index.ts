@@ -68,7 +68,7 @@ const BACKFILL_BATCH = 18, URGENT_BACKFILL_SLOTS = 6, MAX_FULL_SWEEP = 240;
 // Futures sweep budget for one invocation. Sized so the required tiers plus a
 // useful slice of the tail fit inside the one-minute cron cadence; the required
 // tiers are never truncated to honour it.
-const MAX_FUTURES_SWEEP = 60;
+const MAX_FUTURES_SWEEP = 24;
 // PostgREST returns at most db-max-rows (1000) per request no matter what `limit`
 // says. Anything that must be complete has to be paged explicitly.
 const PAGE_SIZE = 1000, MAX_ORDER_PAGES = 40;
@@ -533,6 +533,27 @@ Deno.serve(async (req: Request) => {
     const errors: Array<{ market: string; error: string }> = [];
     let succeeded = 0, seen = 0, upserted = 0, automated = 0, manual = 0, unmatched = 0;
     let positionsClosed = 0, fillsRelinked = 0;
+    // Futures settlement is safety/accounting-critical and must run BEFORE the much
+    // larger spot sweep. The previous order let spot consume most of the invocation
+    // wall-clock budget, so futures markets could remain stale even after we added
+    // priority ordering inside syncFuturesTrades().
+    const futuresSync = await syncFuturesTrades(sb).catch((e) => ({
+      markets: 0,
+      succeeded: 0,
+      seen: 0,
+      upserted: 0,
+      settled: 0,
+      automated: 0,
+      manual: 0,
+      unmatched: 0,
+      portfolio_markets: [],
+      errors: [{ market: "__FUTURES__", error: e instanceof Error ? e.message : String(e) }],
+    }));
+    if (futuresSync.errors.length) {
+      for (const row of futuresSync.errors.slice(0, 10)) {
+        errors.push({ market: `FUTURES:${row.market}`, error: row.error });
+      }
+    }
     try {
       const account = await gateway({ exchange: EXCHANGE, action: "accounts" }) as {
         balances?: Array<{ asset: string; free: string; locked: string }>;
@@ -724,23 +745,6 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      const futuresSync = await syncFuturesTrades(sb).catch((e) => ({
-        markets: 0,
-        succeeded: 0,
-        seen: 0,
-        upserted: 0,
-        settled: 0,
-        automated: 0,
-        manual: 0,
-        unmatched: 0,
-        portfolio_markets: [],
-        errors: [{ market: "__FUTURES__", error: e instanceof Error ? e.message : String(e) }],
-      }));
-      if (futuresSync.errors.length) {
-        for (const row of futuresSync.errors.slice(0, 10)) {
-          errors.push({ market: `FUTURES:${row.market}`, error: row.error });
-        }
-      }
       const totals = combineSyncCounters(
         {
           markets: markets.length,
