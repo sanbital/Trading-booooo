@@ -16,6 +16,24 @@ dns.setDefaultResultOrder("ipv4first");
 
 const OPS_PATCH = "V18-OPS-ISOLATION-3";
 const VERSION = "8.0.3-P10-REGIME-ROUTER-V3-SAFE-EXIT";
+/**
+ * Which gateway IMAGE is live, reported on /health as `build`.
+ *
+ * Deliberately NOT VERSION and NOT OPS_PATCH: both of those participate in the
+ * engine-version handshake (ACCEPTED_ENGINE_VERSIONS) or are echoed in command
+ * results that consumers compare, so bumping either to mark a deploy would change
+ * behaviour rather than describe it. This string changes behaviour nowhere and is
+ * compared to nothing -- it exists so a deploy is CONFIRMABLE.
+ *
+ * Why it had to exist: on 2026-09-18 the gateway was redeployed to repin the entry
+ * floor, and there was no way to tell from outside whether the new image was live.
+ * The only available evidence was behavioural -- wait for an order and see whether it
+ * was refused -- which is exactly the wrong thing to be uncertain about when the
+ * previous image was silently refusing every entry the account tried to make.
+ *
+ * Bump this on every gateway release.
+ */
+const GATEWAY_BUILD = "2026-09-18-entry-floor-15-and-never-placed-proof";
 // Keep exactly one audited previous protocol revision during the rolling cutover. Both the
 // old engine/new gateway and new engine/old gateway therefore remain order-compatible;
 // arbitrary or older revisions stay rejected.
@@ -2569,6 +2587,7 @@ function createServer() {
             scan_seconds: SCAN_INTERVAL_MS / 1000,
             monitor_seconds: MONITOR_INTERVAL_MS / 1000,
           },
+          build: GATEWAY_BUILD,
           capabilities: {
             p10_top_of_book_batch: true,
             p10_position_proof: true,
@@ -2660,6 +2679,7 @@ export {
   floorStep,
   formatStep,
   FUTURES_MIN_ENTRY_MARGIN_USDT,
+  GATEWAY_BUILD,
   localRateLimit,
   monitorCadenceDelayMs,
   neverPlacedVerdict,

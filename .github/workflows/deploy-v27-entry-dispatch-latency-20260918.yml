@@ -228,25 +228,40 @@ jobs:
           grep -q 'const NATIVE_STOP_ENABLED=env("V17_NATIVE_STOP")==="true";' \
             supabase/functions/v10-lane-executor/index.ts
           # The exit, protection and reconciliation modules are not part of this
-          # release. Compared against the branch point, not against the working tree,
-          # which in CI is always clean and would make this assertion vacuous.
-          # checkout ran with fetch-depth: 0, so origin/main is already local. It is
-          # read rather than re-fetched because this job holds no credentials.
-          git rev-parse --verify origin/main >/dev/null
-          base="$(git merge-base HEAD origin/main)"
-          git diff --name-only "$base" HEAD -- \
-            supabase/functions/_shared/leader-exit-review.mjs \
-            supabase/functions/_shared/leader-entry-protection.mjs \
-            supabase/functions/_shared/leader-exit-settlement.mjs \
-            supabase/functions/_shared/leader-protection-adapter.mjs \
-            supabase/functions/_shared/leader-entry-settlement.mjs \
-            supabase/functions/_shared/leader-db-only-reconciliation.mjs \
-            > release-evidence/exit-paths.txt
-          if [ -s release-evidence/exit-paths.txt ]; then
-            echo "this release touches exit/protection/reconciliation modules:"
-            cat release-evidence/exit-paths.txt
-            exit 1
-          fi
+          # release, asserted by CONTENT rather than by a git range. A range only says
+          # what a particular diff touched, and when this workflow is dispatched from
+          # main -- which is how it is actually run -- HEAD is the branch tip and the
+          # range is empty, so the check passed without checking anything. Hashes hold
+          # however the release is dispatched, and a deliberate change to one of these
+          # files fails here until an operator updates the pin on purpose.
+          python - <<'PY'
+          import hashlib, json, sys
+          pinned = {
+            "supabase/functions/_shared/leader-exit-review.mjs":
+              "607eb7cda785c6acf72d5c81f177d56c7668e07afa178fc826658d88aa05c059",
+            "supabase/functions/_shared/leader-entry-protection.mjs":
+              "33ab1a82bdf73d6bd0fab01d6a635427a894bbf0a5af46890a481b6de01eda02",
+            "supabase/functions/_shared/leader-exit-settlement.mjs":
+              "cc503ad0ecf41c65f4594d2782a6f37cddc63d3a8fe69f8c120460b6b5aaa8c1",
+            "supabase/functions/_shared/leader-protection-adapter.mjs":
+              "1abad42a24fb4a5da2674d9a30a92a8721ce3ffd181813a36dec567e792b9540",
+            "supabase/functions/_shared/leader-entry-settlement.mjs":
+              "ddf969cf6a7ca16791cb1cc07bc5cd52e23a89cd5885e0ef02d81a967e371659",
+            "supabase/functions/_shared/leader-db-only-reconciliation.mjs":
+              "2c509cecc25ef1b48688ff175e5039edead198011c62832e49825495cb648385",
+          }
+          observed, drifted = {}, []
+          for path, want in pinned.items():
+              got = hashlib.sha256(open(path, "rb").read()).hexdigest()
+              observed[path] = got
+              if got != want:
+                  drifted.append(f"{path}: pinned {want}, found {got}")
+          json.dump(observed, open("release-evidence/exit-path-hashes.json", "w"), indent=2)
+          if drifted:
+              sys.exit("this release changes exit/protection/reconciliation code:\n  " +
+                       "\n  ".join(drifted))
+          print(f"exit/protection/reconciliation unchanged across {len(pinned)} modules")
+          PY
 
       - name: Require the live gateway to serve every command this executor uses
         shell: bash
@@ -271,7 +286,16 @@ jobs:
                   'the live Binance gateway does not advertise %s; deploy the gateway '
                   'half first. capabilities=%r' % (capability, caps))
           assert (h.get('keys_configured') or {}).get('binance_futures') is True, h
-          print('gateway capabilities confirmed:', h.get('version'), h.get('ops_patch'))
+          # Which IMAGE answered. Without it a release can only confirm the gateway is
+          # up, not that the gateway it needs is the one running -- and a gateway that
+          # is up while silently refusing every entry is the failure of 2026-09-18.
+          build = h.get('build')
+          assert isinstance(build, str) and build, (
+              'the live gateway does not report a build marker; it predates the '
+              'fingerprint and cannot be identified. health=%r' % (h,))
+          open('release-evidence/gateway-build.txt', 'w').write(build + '\n')
+          print('gateway capabilities confirmed:', h.get('version'), h.get('ops_patch'),
+                'build', build)
           PY
 
       # The floor that refused the first real V17 order. It lives in the gateway, so
