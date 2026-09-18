@@ -1,3 +1,4 @@
+import { readFuturesModeEvidence } from "./futures-mode-evidence.mjs";
 import { createV17StopCommands } from "./v17-stop-commands.mjs";
 import http from "node:http";
 import crypto from "node:crypto";
@@ -2268,6 +2269,10 @@ async function handleCommand(command) {
         ops_patch: OPS_PATCH,
       };
     }
+    case "futures_position_mode":
+      if (!futures) throw Error("FUTURES_MODE_FUTURES_ONLY");
+      return readFuturesModeEvidence(async (method, path, params, options) =>
+        (await futuresRequest(method, path, params, options)).data);
     case "p10_portfolio":
       return p10Portfolio(exchange);
     case "accounts":

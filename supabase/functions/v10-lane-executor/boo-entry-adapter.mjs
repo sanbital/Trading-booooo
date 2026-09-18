@@ -139,7 +139,8 @@ export function evaluateBooEntry({
       highWaterEquity: account.highWaterEquity,
       consecutiveLosses: account.consecutiveLosses,
     });
-    if (limits.allowed) {
+    if (limits.allowed && [fees.takerFeeRate,fees.stopFeeRate].every(
+      rate => typeof rate === "number" && Number.isFinite(rate) && rate >= 0 && rate < 1)) {
       sizing = solveQuantity({
         policy: resolved.policy,
         equity: account.equity,
@@ -158,6 +159,8 @@ export function evaluateBooEntry({
         dailyRemaining: limits.dailyRemaining,
         weeklyRemaining: limits.weeklyRemaining,
       });
+    } else if (limits.allowed) {
+      sizing = { decision: "SKIP", reason: "ACCOUNT_FEE_UNAVAILABLE" };
     }
   }
 
