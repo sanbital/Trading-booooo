@@ -165,7 +165,11 @@ jobs:
             if(E1_POLICY.maxQuoteAgeMs!==1000) throw Error("maxQuoteAgeMs="+E1_POLICY.maxQuoteAgeMs);
             console.log("invariants held");
           '
-          grep -q 'const MARGIN=30,LEV=3' supabase/functions/v10-lane-executor/index.ts
+          # The executor DERIVES its slot from the contract rather than restating it,
+          # which is the point of the contract. Assert the derivation; the literal
+          # 30/3 is pinned by the sizing step above, at its single source.
+          grep -q 'const MARGIN=SLOT_SIZING_CONTRACT.targetMarginUsdt,LEV=SLOT_SIZING_CONTRACT.leverage' \
+            supabase/functions/v10-lane-executor/index.ts
 
       - name: Require the matching gateway to be live before the executor moves
         shell: bash
