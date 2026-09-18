@@ -1040,3 +1040,26 @@ test("the gateway advertises the command before anything may depend on it", () =
     assert.ok(!body.includes(forbidden), `the proof path must not ${forbidden}`);
   }
 });
+
+test("the gateway reports which image is live, without touching the handshake", () => {
+  // The gap this closes: on 2026-09-18 the gateway was redeployed to repin the entry
+  // floor and nothing outside it could confirm the new image was serving. The only
+  // evidence available was behavioural -- wait for an order and see whether it was
+  // refused -- which is the wrong thing to be uncertain about when the previous image
+  // was silently refusing every entry the account tried to make.
+  assert.equal(typeof module.GATEWAY_BUILD, "string");
+  assert.ok(module.GATEWAY_BUILD.length > 0);
+  const source = readFileSync(new URL("./server.mjs", import.meta.url), "utf8");
+  assert.match(source, /build: GATEWAY_BUILD,/, "it must be reported on /health");
+  // It must describe the deploy, never gate it: a build string that entered the
+  // engine-version handshake would turn a release marker into a compatibility break.
+  assert.notEqual(module.GATEWAY_BUILD, module.VERSION);
+  assert.notEqual(module.GATEWAY_BUILD, module.PREVIOUS_ENGINE_VERSION);
+  const handshake = source.slice(source.indexOf("const ACCEPTED_ENGINE_VERSIONS"),
+    source.indexOf("const PORT ="));
+  assert.ok(!handshake.includes("GATEWAY_BUILD"),
+    "the build marker must not participate in ACCEPTED_ENGINE_VERSIONS");
+  // And it must be compared to nothing anywhere in the gateway.
+  const comparisons = source.match(/GATEWAY_BUILD\s*(===|!==|==|!=)/g) ?? [];
+  assert.deepEqual(comparisons, [], "the build marker is descriptive, never a gate");
+});
