@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - supabase/functions/v10-lane-executor/**
+      - supabase/functions/_shared/**
       - gateway/**
       - test-support/**
       - .github/workflows/entry-evidence-tests.yml
@@ -10,6 +11,7 @@ on:
     branches: [fix/entry-evidence-20260918]
     paths:
       - supabase/functions/v10-lane-executor/**
+      - supabase/functions/_shared/**
       - gateway/**
       - test-support/**
       - .github/workflows/entry-evidence-tests.yml
@@ -37,8 +39,15 @@ jobs:
         run: node --test supabase/functions/v10-lane-executor/entry-evidence.test.mjs gateway/*.test.mjs
       - name: Existing entry integration regressions
         run: deno task test:entry
-      - name: Read-only margin and BOO regressions
-        run: deno test --allow-read supabase/functions/v10-lane-executor/margin-config.test.ts supabase/functions/_shared/boo/*.test.ts
+      - name: Read-only margin, sizing and BOO regressions
+        run: |
+          deno test --allow-read \
+            supabase/functions/v10-lane-executor/margin-config.test.ts \
+            supabase/functions/v10-lane-executor/ops-observation-ordering.test.ts \
+            supabase/functions/_shared/leader-slot-sizing.test.ts \
+            supabase/functions/_shared/boo/*.test.ts
+      - name: Whole repository test suite
+        run: deno task test
       - name: Build exact gateway image and verify imports without networking or credentials
         shell: bash
         run: |

@@ -47,7 +47,7 @@
  */
 
 /** Identity of the arithmetic below. Bump when the contract's meaning changes. */
-export const SLOT_SIZING_CONTRACT_VERSION = "V17_SLOT_SIZING_2_RELATIVE_BUFFER";
+export const SLOT_SIZING_CONTRACT_VERSION = "V17_SLOT_SIZING_3_FEASIBLE_LATTICE";
 
 /**
  * Production slot contract.
@@ -77,6 +77,26 @@ export const SLOT_SIZING_CONTRACT = Object.freeze({
    * became a looser fraction of the slot when the slot shrank.
    */
   maxSlotOvershootBps: 250 / 3,
+  /**
+   * How far BELOW the target notional a slot may be filled when the lot step
+   * does not divide the target. This is the other half of maxSlotOvershootBps
+   * and it exists because the two are not symmetric: overshooting spends margin
+   * the operator did not allocate, so it is capped tightly; undershooting spends
+   * less and risks less, so the only question it raises is whether the position
+   * is still a meaningful slot. 5000 bps = the order must carry at least half
+   * the slot. A symbol coarser than that is skipped with its own reason rather
+   * than traded at a token size.
+   *
+   * Under the CURRENT overshoot budget this floor is provably slack, and that is
+   * deliberate rather than accidental: the largest affordable multiple k satisfies
+   * (k+1) x limit > maxNotional, so k x limit > maxNotional - limit; when
+   * limit <= maxNotional/2 that already exceeds half the slot, and when
+   * limit > maxNotional/2 then k = 1 and the single lot exceeds half by itself. So
+   * nothing this contract admits today can hit the floor. It is here so that
+   * widening maxSlotOvershootBps -- which does make thin lattice points reachable --
+   * cannot silently start opening token-size positions.
+   */
+  minSlotFillBps: 5_000,
   /** Marketability uplift applied to the ask for a BUY IOC. */
   iocBaseBps: 3,
   /** Hard ceiling on how far above the ask a BUY IOC may be priced. */
@@ -88,8 +108,15 @@ export const SLOT_SIZING_REASON = Object.freeze({
   INPUT_INVALID: "QTY_INPUT_INVALID",
   /** The exchange's own minimum order already costs more margin than the slot has. */
   MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET: "MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET",
-  /** The lot step is too coarse: the smallest quantity reaching the target overshoots. */
+  /** The lot step is too coarse: ONE lot already costs more margin than the slot has. */
   QTY_STEP_EXCEEDS_MARGIN_BUDGET: "QTY_STEP_EXCEEDS_MARGIN_BUDGET",
+  /**
+   * A lot-aligned quantity fits the budget, but the largest one that does is a
+   * smaller fraction of the slot than minSlotFillBps allows. Distinct from the
+   * two above: nothing about the exchange forbids this order, the slot geometry
+   * does, and the operator answer is a different slot size, not a different symbol.
+   */
+  SLOT_FILL_BELOW_FLOOR: "QTY_STEP_BELOW_SLOT_FLOOR",
   /** Tick rounding alone would price the BUY further above the ask than allowed. */
   IOC_PRICE_CAP_EXCEEDED: "IOC_PRICE_CAP_EXCEEDED",
 });
@@ -144,10 +171,12 @@ export function slotSizingBounds(contract = SLOT_SIZING_CONTRACT) {
   const targetNotionalUsdt = contract.targetMarginUsdt * contract.leverage;
   return Object.freeze({
     targetNotionalUsdt,
-    /** Quantity must reach at least this notional at the ask. */
+    /** The notional a quantity AIMS at. Reaching it is preferred, not required. */
     requiredNotionalUsdt: targetNotionalUsdt * (1 + contract.notionalBufferBps / 10_000),
     /** The order, priced at its own limit, may not need more margin than this. */
     maxOrderMarginUsdt: contract.targetMarginUsdt * (1 + contract.maxSlotOvershootBps / 10_000),
+    /** Below this notional at the ask the order is not a slot any more. */
+    minOrderNotionalUsdt: targetNotionalUsdt * (contract.minSlotFillBps / 10_000),
   });
 }
 
@@ -196,6 +225,14 @@ export function assertSlotSizingContract(contract = SLOT_SIZING_CONTRACT) {
   );
   // Headroom for the base uplift on top of the buffer, or every fine-step symbol
   // would be admitted by quantity and then refused on margin at its own price.
+  // A floor at or above the target would make the admissible band empty for every
+  // symbol whose step does not divide the target exactly -- the opposite of what
+  // the floor is for. A floor of zero would let a slot be filled at a token size.
+  require(
+    "SLOT_FILL_FLOOR_LEAVES_A_BAND",
+    contract.minSlotFillBps > 0 && contract.minSlotFillBps < 10_000,
+    `${contract.minSlotFillBps}`,
+  );
   require(
     "OVERSHOOT_ABSORBS_BUFFER_AND_BASE_UPLIFT",
     bounds.requiredNotionalUsdt * (1 + contract.iocBaseBps / 10_000) / contract.leverage <=
@@ -215,14 +252,31 @@ export function sizingPriceUpliftBps(_contract = SLOT_SIZING_CONTRACT) {
 }
 
 /**
- * Smallest quantity that simultaneously satisfies the target notional, the
- * exchange's minimum notional and minimum quantity, the lot step, the slot's
- * margin overshoot budget and the IOC price cap -- or a single, specific reason
- * why no such quantity exists.
+ * The best quantity this slot can buy, or a single specific reason why none exists.
  *
- * `ask` is the executable reference price; the target notional is measured
- * against it. The exchange's min-notional filter is measured against the ORDER's
- * own price, which is what the exchange validates.
+ * WHY THIS IS A LATTICE SEARCH AND NOT A FORMULA
+ * ----------------------------------------------
+ * The admissible quantities are the multiples of the exchange's lot step, and the
+ * slot defines a band on them: at least the exchange's own minimums, at most the
+ * margin ceiling, aiming at the target notional. The previous implementation only
+ * ever evaluated ONE point on that lattice -- ceil(target / ask) -- and refused the
+ * whole symbol when that single point sat above the ceiling. That is a false
+ * refusal whenever a smaller multiple is admissible, which is the ordinary case for
+ * any symbol whose step is a meaningful fraction of the slot:
+ *
+ *     UNIUSDT, 2026-09-18 03:17 UTC. ask 8.916, step 1, slot 30 USDT at 3x.
+ *     ceil(90.09 / 8.916) = 11 -> 11 x 8.919 / 3 = 32.70 USDT > 30.25 ceiling.
+ *     REFUSED as QTY_STEP_EXCEEDS_MARGIN_BUDGET -- while qty 10 costs 29.73 USDT,
+ *     satisfies every exchange filter, and is 99.1% of the slot.
+ *
+ * So the search walks DOWN from the target to the largest admissible multiple. It
+ * never walks up: the margin ceiling is the operator's allocation and is enforced
+ * at the order's own limit price, which is the worst case for a BUY IOC because
+ * every lot could fill at the cap.
+ *
+ * `ask` is the executable reference price; the target notional is measured against
+ * it. The exchange's min-notional filter is measured against the ORDER's own price,
+ * which is what the exchange validates.
  */
 export function planSlotEntry(input, contract = SLOT_SIZING_CONTRACT) {
   const ask = num(input?.ask),
@@ -244,39 +298,58 @@ export function planSlotEntry(input, contract = SLOT_SIZING_CONTRACT) {
     throw new SlotSizingError(SLOT_SIZING_REASON.IOC_PRICE_CAP_EXCEEDED, iocBps.toFixed(3));
   }
 
-  // 2. Quantity: the smallest lot-aligned amount meeting every lower bound.
+  // 2. The lattice bounds, all expressed as lot-aligned quantities.
+  //    LOWER: what the exchange will not go below. UPPER: what the slot will not
+  //    go above, charged at the order's own limit. AIM: the target notional.
   const quantityForTarget = ceilStep(bounds.requiredNotionalUsdt / ask, quantityStep);
   const quantityForMinNotional = minNotionalUsdt > 0
     ? ceilStep(minNotionalUsdt / limitPrice, quantityStep)
     : 0;
   const quantityForMinQuantity = minQuantity > 0 ? ceilStep(minQuantity, quantityStep) : 0;
-  const quantity = Math.max(quantityForTarget, quantityForMinNotional, quantityForMinQuantity);
-  if (!(quantity > 0)) throw new SlotSizingError(SLOT_SIZING_REASON.INPUT_INVALID);
+  const exchangeFloor = Math.max(quantityStep, quantityForMinNotional, quantityForMinQuantity);
+  const marginCeiling = floorStep(
+    bounds.maxOrderMarginUsdt * contract.leverage / limitPrice, quantityStep);
 
-  // 3. Budget, charged at the order's own price -- the worst case for a BUY IOC,
-  //    because every lot could fill at the cap.
-  const orderNotionalUsdt = quantity * limitPrice,
-    orderMarginUsdt = orderNotionalUsdt / contract.leverage;
-  if (orderMarginUsdt > bounds.maxOrderMarginUsdt + EPS) {
-    // Two different failures, never merged into one code: an exchange minimum
-    // the slot cannot afford is a property of the listing, a lot step that
-    // overshoots is a property of the price. They need different operator answers.
-    const drivenByExchangeMinimum = quantity > quantityForTarget;
-    // Field 2 stays the margin the order would need, unchanged. The labelled
-    // fields after it answer the questions the bare number cannot: what the
-    // ceiling actually is, and which lot step forced the overshoot. Without
-    // them an operator reading `...:30.960000` cannot tell a needed amount
-    // from an allowed one, nor whether a smaller slot would ever fit.
-    throw new SlotSizingError(
-      drivenByExchangeMinimum
-        ? SLOT_SIZING_REASON.MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET
-        : SLOT_SIZING_REASON.QTY_STEP_EXCEEDS_MARGIN_BUDGET,
-      `${orderMarginUsdt.toFixed(6)}:max=${bounds.maxOrderMarginUsdt.toFixed(6)}` +
-        `:step=${quantityStep}:qty=${quantity}:px=${limitPrice}`,
-    );
+  const detail = (quantity) =>
+    `${(quantity * limitPrice / contract.leverage).toFixed(6)}` +
+    `:max=${bounds.maxOrderMarginUsdt.toFixed(6)}` +
+    `:step=${quantityStep}:qty=${quantity}:px=${limitPrice}`;
+
+  // 3. Three distinct ways the lattice can be empty, never merged into one code:
+  //    one lot is unaffordable (a property of the price against the slot), the
+  //    exchange's own minimum is unaffordable (a property of the listing), or the
+  //    best affordable lot is not a meaningful slot (a property of the geometry).
+  //    They need different operator answers.
+  if (!(marginCeiling >= quantityStep - EPS)) {
+    throw new SlotSizingError(SLOT_SIZING_REASON.QTY_STEP_EXCEEDS_MARGIN_BUDGET,
+      detail(quantityStep));
+  }
+  if (exchangeFloor > marginCeiling + EPS) {
+    throw new SlotSizingError(SLOT_SIZING_REASON.MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET,
+      detail(exchangeFloor));
   }
 
+  // 4. The best admissible point: as close to the target as the ceiling allows,
+  //    never below what the exchange requires.
+  const quantity = Math.max(exchangeFloor, Math.min(quantityForTarget, marginCeiling));
+  if (!(quantity > 0)) throw new SlotSizingError(SLOT_SIZING_REASON.INPUT_INVALID);
+
   const referenceNotionalUsdt = quantity * ask;
+  if (referenceNotionalUsdt + EPS < bounds.minOrderNotionalUsdt) {
+    throw new SlotSizingError(SLOT_SIZING_REASON.SLOT_FILL_BELOW_FLOOR,
+      `${detail(quantity)}:notional=${referenceNotionalUsdt.toFixed(6)}` +
+      `:floor=${bounds.minOrderNotionalUsdt.toFixed(6)}`);
+  }
+
+  const orderNotionalUsdt = quantity * limitPrice,
+    orderMarginUsdt = orderNotionalUsdt / contract.leverage;
+  // Belt and braces: the ceiling is how `quantity` was derived, so this can only
+  // fire on an arithmetic regression. It stays because it is the one invariant a
+  // sizing bug must never be able to cross silently.
+  if (orderMarginUsdt > bounds.maxOrderMarginUsdt + EPS) {
+    throw new SlotSizingError(SLOT_SIZING_REASON.QTY_STEP_EXCEEDS_MARGIN_BUDGET, detail(quantity));
+  }
+
   return {
     contractVersion: contract.version,
     quantity,
@@ -291,11 +364,16 @@ export function planSlotEntry(input, contract = SLOT_SIZING_CONTRACT) {
     targetNotionalUsdt: bounds.targetNotionalUsdt,
     requiredNotionalUsdt: bounds.requiredNotionalUsdt,
     maxOrderMarginUsdt: bounds.maxOrderMarginUsdt,
-    boundBy: quantity === quantityForTarget
-      ? "TARGET_NOTIONAL"
-      : quantity === quantityForMinNotional
+    minOrderNotionalUsdt: bounds.minOrderNotionalUsdt,
+    /** How much of the slot this order actually carries, in bps of the target. */
+    slotFillBps: referenceNotionalUsdt / bounds.targetNotionalUsdt * 10_000,
+    boundBy: quantity === quantityForMinNotional && quantity > quantityForTarget
       ? "EXCHANGE_MIN_NOTIONAL"
-      : "EXCHANGE_MIN_QUANTITY",
+      : quantity === quantityForMinQuantity && quantity > quantityForTarget
+      ? "EXCHANGE_MIN_QUANTITY"
+      : quantity === quantityForTarget
+      ? "TARGET_NOTIONAL"
+      : "MARGIN_BUDGET_CAP",
   };
 }
 

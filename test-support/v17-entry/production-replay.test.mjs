@@ -145,15 +145,75 @@ test('the symbols refused by arithmetic are admitted; the unaffordable ones are 
     assert.equal(entry.admit, entry.n,
       `${symbol}: ${entry.n - entry.admit} of ${entry.n} still refused (${[...entry.skip]})`);
   }
-  // NEARUSDT (step 1 at ~2.7-2.9) and UNIUSDT (step 1 at 6.75) genuinely cannot be
-  // bought in 90 USDT of notional at that granularity. They must STILL be skipped,
-  // and for the reason that names the lot step rather than a price cap.
+  // NEARUSDT (step 1 at ~2.7-2.9) and UNIUSDT (step 1 at 6.75) were previously
+  // refused QTY_STEP_EXCEEDS_MARGIN_BUDGET, on the claim that the slot could not
+  // afford them. That claim was false: it came from evaluating exactly ONE point on
+  // the quantity lattice -- ceil(target / ask) -- and refusing the symbol when that
+  // point overshot the ceiling, without ever asking whether the multiple BELOW it
+  // fits. It does, comfortably. NEARUSDT at ask 3.2470 costs 30.31 USDT at 28 lots
+  // and 29.23 at 27; UNIUSDT at 8.916 costs 32.70 at 11 lots and 29.73 at 10. Both
+  // are inside the unchanged 30.25 ceiling and carry over 97% of the slot.
   for (const symbol of ['NEARUSDT', 'UNIUSDT']) {
     const entry = bySymbol.get(symbol);
     assert.ok(entry, `${symbol} must be in the window`);
-    assert.equal(entry.admit, 0, `${symbol} must remain unaffordable at a 30 USDT slot`);
-    assert.deepEqual([...entry.skip], ['QTY_STEP_EXCEEDS_MARGIN_BUDGET']);
+    assert.equal(entry.admit, entry.n,
+      `${symbol}: ${entry.n - entry.admit} of ${entry.n} still refused (${[...entry.skip]})`);
   }
+  // The ceiling and the floor are what make that admission safe, so they are asserted
+  // on every plan this replay produced, not just on the two symbols above. A sizing
+  // change that bought its entries by spending more margin would fail here.
+  const bounds = slotSizingBounds(SLOT_SIZING_CONTRACT);
+  for (const row of replayed) {
+    if (!row.now) continue;
+    assert.ok(row.now.orderMarginUsdt <= bounds.maxOrderMarginUsdt + 1e-9,
+      `${row.signal.symbol} sized ${row.now.orderMarginUsdt} over the ${bounds.maxOrderMarginUsdt} ceiling`);
+    assert.ok(row.now.referenceNotionalUsdt + 1e-9 >= bounds.minOrderNotionalUsdt,
+      `${row.signal.symbol} sized ${row.now.referenceNotionalUsdt} under the slot-fill floor`);
+    assert.equal(row.now.quantity % row.chosen.step < 1e-9 ||
+      Math.abs(row.now.quantity % row.chosen.step - row.chosen.step) < 1e-9, true,
+      `${row.signal.symbol} quantity ${row.now.quantity} is off the ${row.chosen.step} lattice`);
+  }
+});
+
+test('a lot the slot cannot afford at ALL is still refused, by its own reason', () => {
+  // The lattice search must not become a way to buy something unaffordable. At
+  // 95 USDT a single lot needs 31.68 USDT of margin against a 30.25 ceiling: there is
+  // no smaller admissible quantity, so the refusal stands and still names the step.
+  let reason = null;
+  try { planSlotEntry({ask: 95, quantityStep: 1, priceTick: 0.01, minNotionalUsdt: 5}); }
+  catch (error) { reason = error.message; }
+  assert.match(reason ?? '', /^QTY_STEP_EXCEEDS_MARGIN_BUDGET:31\.676667:max=30\.250000:step=1:qty=1:px=95\.03$/);
+  // An exchange minimum the slot cannot pay for is a DIFFERENT refusal: BTCUSDT's
+  // 100 USDT minNotional is above the whole 90 USDT slot, whatever the lot step.
+  let btc = null;
+  try { planSlotEntry({ask: 60000, quantityStep: 0.001, priceTick: 0.1, minNotionalUsdt: 100}); }
+  catch (error) { btc = error.message; }
+  assert.match(btc ?? '', /^MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET:/);
+});
+
+test('the slot-fill floor is slack today and binds if the overshoot budget widens', () => {
+  // Under the SHIPPED contract the floor is provably unreachable, and that is worth
+  // pinning rather than leaving as an accident. The largest affordable multiple k
+  // satisfies (k+1) x limit > maxNotional, so k x limit > maxNotional - limit; if
+  // limit <= maxNotional/2 that is already more than half the slot, and if
+  // limit > maxNotional/2 then k = 1 and the single lot is itself more than half.
+  // Either way no admitted order can carry less than 50% of the target notional.
+  for (let ask = 1; ask <= 90; ask += 0.37) {
+    let plan = null;
+    try { plan = planSlotEntry({ask, quantityStep: 1, priceTick: 0.01, minNotionalUsdt: 5}); }
+    catch { continue; }
+    assert.ok(plan.slotFillBps >= SLOT_SIZING_CONTRACT.minSlotFillBps,
+      `ask ${ask} sized ${plan.slotFillBps} bps of the slot`);
+  }
+  // The floor is not decoration: raise it and the same thin lattice point is refused,
+  // which is what protects the slot if maxSlotOvershootBps is ever widened.
+  const thin = planSlotEntry({ask: 60, quantityStep: 1, priceTick: 0.01, minNotionalUsdt: 5});
+  assert.equal(thin.quantity, 1, 'one lot of a 60 USDT symbol is all a 90 USDT slot affords');
+  const strict = {...SLOT_SIZING_CONTRACT, minSlotFillBps: 8_000};
+  let below = null;
+  try { planSlotEntry({ask: 60, quantityStep: 1, priceTick: 0.01, minNotionalUsdt: 5}, strict); }
+  catch (error) { below = error.message; }
+  assert.match(below ?? '', /^QTY_STEP_BELOW_SLOT_FLOOR:.*:floor=72\.000000$/);
 });
 
 test('nothing outside the sizing layer is loosened by this change', () => {

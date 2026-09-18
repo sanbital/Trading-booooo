@@ -49,10 +49,12 @@ function controlReleaseScope(decision){
 // Pre-dispatch refusals scoped to one symbol. Never includes STOP_POLICY_INVALID or
 // STOP_INVALID, which are raised only AFTER a fill -- those are caught by the
 // dispatched guard regardless, which is the check that actually protects the account.
-// MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET / QTY_STEP_EXCEEDS_MARGIN_BUDGET / IOC_PRICE_CAP_EXCEEDED
-// are the sizing contract's reasons. ENTRY_GRANULARITY_BPS and ENTRY_SLOT_GRANULARITY_MARGIN
+// MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET / QTY_STEP_EXCEEDS_MARGIN_BUDGET /
+// QTY_STEP_BELOW_SLOT_FLOOR / IOC_PRICE_CAP_EXCEEDED are the sizing contract's
+// reasons: each is a property of ONE symbol's price and lot step, so none of them
+// says anything about the next candidate in the queue. ENTRY_GRANULARITY_BPS and ENTRY_SLOT_GRANULARITY_MARGIN
 // are kept so rows written by earlier revisions still classify the same way.
-const ENTRY_SKIP_SYMBOL_SCOPED=/^(SIGNAL_STALE_OR_FUTURE|SUPERSEDED_BY_FRESHER_SIGNAL|V17_SETUP_BUDGET_EXHAUSTED|V17_TRIGGER_STALE|V17_TRIGGER_FUTURE|V17_SETUP_NOT_TRIGGERED|V17_SETUP_EXPIRED|V17_CHASE_EXPIRED|V17_ENTRY_DRIFT|V17_SETUP_INVALID_PRICE|V17_SETUP_POLICY_SLOT_LIMIT|ENTRY_DRIFT|WRONG_STRATEGY|INVALID_PRICE|V17_EXIT_POLICY_INVALID|MANUAL_SYMBOL_LOCKED|ENTRY_SPREAD|ENTRY_FEATURES_INVALID|QTY_INVALID|QTY_INPUT_INVALID|MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET|QTY_STEP_EXCEEDS_MARGIN_BUDGET|IOC_PRICE_CAP_EXCEEDED|ENTRY_GRANULARITY_BPS|ENTRY_SLOT_GRANULARITY_MARGIN|ENTRY_NOTIONAL_UNDERSIZED|V17_LIMIT_PRICE_MARGIN_OVERFLOW)/;
+const ENTRY_SKIP_SYMBOL_SCOPED=/^(SIGNAL_STALE_OR_FUTURE|SUPERSEDED_BY_FRESHER_SIGNAL|V17_SETUP_BUDGET_EXHAUSTED|V17_TRIGGER_STALE|V17_TRIGGER_FUTURE|V17_SETUP_NOT_TRIGGERED|V17_SETUP_EXPIRED|V17_CHASE_EXPIRED|V17_ENTRY_DRIFT|V17_SETUP_INVALID_PRICE|V17_SETUP_POLICY_SLOT_LIMIT|ENTRY_DRIFT|WRONG_STRATEGY|INVALID_PRICE|V17_EXIT_POLICY_INVALID|MANUAL_SYMBOL_LOCKED|ENTRY_SPREAD|ENTRY_FEATURES_INVALID|QTY_INVALID|QTY_INPUT_INVALID|MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET|QTY_STEP_EXCEEDS_MARGIN_BUDGET|QTY_STEP_BELOW_SLOT_FLOOR|IOC_PRICE_CAP_EXCEEDED|ENTRY_GRANULARITY_BPS|ENTRY_SLOT_GRANULARITY_MARGIN|ENTRY_NOTIONAL_UNDERSIZED|V17_LIMIT_PRICE_MARGIN_OVERFLOW)/;
 // Slot geometry is NOT declared here. MARGIN/LEV/NOTIONAL are views onto the one
 // sizing contract (_shared/leader-slot-sizing.mjs) that the signal generator and
 // the V17 policy also read, so the four copies that drifted apart during the
@@ -219,7 +221,7 @@ async function persistSetup(db,row,state,reason){
  * Returns the state; the caller decides whether it is executable.
  */
 async function advanceSignalSetup(db,row,now,fetchCandles=qv3Candles){
-  let state=signalSetup(row);
+  let state=signalSetup(row),justArmed=false;
   if(state&&setupIsTerminal(state))return {row,state,changed:false};
   if(!state){
     // Armed at the signal's OWN 5m close, not at wall-clock now. The observation
@@ -232,11 +234,20 @@ async function advanceSignalSetup(db,row,now,fetchCandles=qv3Candles){
     if(!Number.isSafeInteger(armAt))return {row,state:null,changed:false,reason:SETUP_REASON.INVALID_PRICE};
     const armed=startPullbackSetup({id:row.id,symbol:row.symbol,features:rec(row.features)},armAt,SETUP_POLICY);
     if(!armed.ok)return {row,state:null,changed:false,reason:armed.reason};
-    state=armed.state;
+    state=armed.state;justArmed=true;
     await audit(db,null,"BULL","BULL","ENTRY_DEFER",SETUP_REASON.ARMED,
       {signalId:row.id,symbol:row.symbol,setup:{policyVersion:SETUP_POLICY_VERSION,
         identity:state.identity,referencePrice:state.referencePrice,expiresAt:state.expiresAt}});
-    return {row:await persistSetup(db,row,state,SETUP_REASON.ARMED),state,changed:true};
+    // Deliberately NOT a return. Arming used to end the cycle here, which cost a
+    // whole minute before the first candle was ever read -- and the bar a setup is
+    // armed FROM is already complete, so a setup whose pullback and re-acceleration
+    // both sit on that bar triggered at armedAt + 60s and was only discovered on the
+    // next cycle, by which time its 60-second trigger window had closed. Production,
+    // 2026-09-18 UTC: GUSDT 08:20, UNIUSDT 03:15, OPUSDT 03:20, DRIFTUSDT 06:00 and
+    // BABYUSDT 00:25 were all armed and then rejected V17_TRIGGER_STALE on a trigger
+    // that was live at the moment they armed. Arming and reading the tape are one
+    // cycle's work; nothing below is reached any earlier than the bar allows, because
+    // completedCandle still refuses anything that has not closed.
   }
   if(now>state.expiresAt){
     const done=expirePullbackSetup(state,now);
@@ -246,9 +257,11 @@ async function advanceSignalSetup(db,row,now,fetchCandles=qv3Candles){
   const from=state.lastCandleOpenTime===null?state.armedAt:state.lastCandleOpenTime+60000;
   const start=Math.floor(from/60000)*60000-60000;
   let bars;
+  const keep=async(reason)=>({row:justArmed?await persistSetup(db,row,state,SETUP_REASON.ARMED):row,
+    state,changed:justArmed,reason});
   try{bars=await fetchCandles(row.symbol,now,start);}
-  catch(e){return {row,state,changed:false,reason:`V17_SETUP_MARKET:${String(e?.message??e)}`};}
-  if(!Array.isArray(bars))return {row,state,changed:false,reason:"V17_SETUP_MARKET_INVALID"};
+  catch(e){return await keep(`V17_SETUP_MARKET:${String(e?.message??e)}`);}
+  if(!Array.isArray(bars))return await keep("V17_SETUP_MARKET_INVALID");
   const sorted=[...bars].filter(Array.isArray).sort((a,b)=>Number(a[0])-Number(b[0]));
   let changed=false,lastReason=SETUP_REASON.HOLD;
   for(let i=0;i<sorted.length;i++){
@@ -256,14 +269,15 @@ async function advanceSignalSetup(db,row,now,fetchCandles=qv3Candles){
     state=out.state;lastReason=out.reason;changed=changed||out.changed;
     if(setupIsTerminal(state)||state.state===SETUP_STATE.TRIGGERED)break;
   }
-  if(!changed)return {row,state,changed:false,reason:lastReason};
+  if(!changed&&!justArmed)return {row,state,changed:false,reason:lastReason};
   if(state.state===SETUP_STATE.TRIGGERED||setupIsTerminal(state)){
     await audit(db,null,"BULL","BULL","ENTRY_DEFER",
       lastReason,{signalId:row.id,symbol:row.symbol,stage:"SETUP_TRANSITION",finalAdmission:false,orderDispatched:false,setup:{policyVersion:SETUP_POLICY_VERSION,
         state:state.state,identity:state.identity,referencePrice:state.referencePrice,
         pullbackLow:state.pullbackLow,triggerAt:state.triggerAt,triggerClose:state.triggerClose}});
   }
-  return {row:await persistSetup(db,row,state,lastReason),state,changed:true,reason:lastReason};
+  return {row:await persistSetup(db,row,state,justArmed&&!changed?SETUP_REASON.ARMED:lastReason),
+    state,changed:true,reason:justArmed&&!changed?SETUP_REASON.ARMED:lastReason};
 }
 /**
  * Execution freshness for one entry attempt.
@@ -329,7 +343,7 @@ function e1CurrentAssessment(s,q,step,at,filters={}){
   }catch{/* Invalid current sizing remains an explicit failed guard. */}
   return{quote:evidence,rawQuote:q,sized,limitPrice,spreadBps,guardPassed,liquidityPassed};
 }
-async function runE1Gate(s,initialQuote,step,gw,filters={}){
+async function runE1Gate(s,initialQuote,step,gw,filters={},watchFastWeak=true){
   // E1 judges the quote against maxQuoteAgeMs = 1000. The admission-time quote is
   // already 1-2.5s old by the time it gets here -- the BOO gate, the account and
   // ownership reads and this function's own 10s tape fetch all sit in between --
@@ -354,7 +368,15 @@ async function runE1Gate(s,initialQuote,step,gw,filters={}){
   let state=startE1({decisionAt,signalId:s.id,symbol:s.symbol,signalExpiresAt,baselineEligible:true,
     tape:initialTape,quote:initial.quote,featureAsOf:Number.isFinite(signalClose)?signalClose:null,
     featureHash,rawHash:initialRawHash}),latest=initial;
-  while(state.confirmationState==="WATCH_FAST_WEAK"){
+  // `watchFastWeak` is false for setup-governed signals, and the caller then converts
+  // the single E1_FAST_WEAK_WATCH defer into a recorded observation. Draining the
+  // watch first and converting afterwards -- which is what this loop did -- made that
+  // conversion unreachable (the final state is never the initial defer) while still
+  // spending up to E1_POLICY.watchMs of a 60-second trigger window on an answer the
+  // caller was always going to discard. Production, 2026-09-18 08:49 UTC: STRKUSDT
+  // triggered at 08:49:00, E1 watched until 08:49:36, and the trigger expired at
+  // 08:50:00. Skipping the watch changes no verdict; it stops paying for one.
+  while(watchFastWeak&&state.confirmationState==="WATCH_FAST_WEAK"){
     const blockStart=state.watch.nextBlockStartAt,blockEnd=blockStart+E1_POLICY.blockMs,
       waitMs=Math.max(0,blockEnd-Date.now());
     if(waitMs>0)await new Promise(resolve=>setTimeout(resolve,waitMs));
@@ -479,7 +501,22 @@ const q=await gateway({action:"quote",market:p.symbol}),bid=N(q?.best_bid);if(!(
  *     budget is computed against the stop that will actually be installed;
  *   - depth must be present, or `booBook` reports the data unhealthy.
  */
-async function booGate(db,s,phase,{quote,info,snapshot,pair,orders}){
+/**
+ * Everything the BOO gate needs to READ, separated from the decision it makes.
+ *
+ * The split is not cosmetic. evaluateBooEntry is pure, so once these four reads
+ * are in hand the verdict costs nothing; leaving them fused meant the pre-dispatch
+ * verdict put two gateway round trips and two DB reads BETWEEN the quote the order
+ * is priced from and the check that the quote is still fresh. That check uses
+ * E1_POLICY.maxQuoteAgeMs = 1000ms, so it could not be met by construction: the
+ * account's own controls, fee schedule and position mode take longer than a second
+ * to fetch. Production, 2026-09-17/18 UTC: every one of the 7 candidates that
+ * reached this point was refused E1_DISPATCH_QUOTE_AGED, released its claim and was
+ * then refused V17_TRIGGER_STALE on the following cycle -- 0 order intents from 8
+ * pre-dispatch attempts. The policy is not the problem and is unchanged; the reads
+ * move off the critical path instead.
+ */
+async function booGateInputs(db,s){
   const parameterHash=await hashJson({strategy:STRATEGY,r1:R1_VERSION,riskPolicy:RISK_POLICY_VERSION,
     riskBudget:RISK_BUDGET_VERSION,exitPolicy:rec(s.features?.exitPolicy)});
   const identity=booRunningIdentity(parameterHash);
@@ -488,6 +525,11 @@ async function booGate(db,s,phase,{quote,info,snapshot,pair,orders}){
     opsControls(db),
     opsGateway(db)({action:"fees",market:s.symbol}).catch(()=>null),
     opsGateway(db)({action:"futures_position_mode"},2000).catch(()=>null)]);
+  return {identity,gateContext,controls,feeRates,positionMode};
+}
+/** Pure. Same verdict as booGate, from inputs a caller already holds. */
+function booVerdict(s,phase,inputs,{quote,info,snapshot,pair,orders}){
+  const {identity,gateContext,controls,feeRates,positionMode}=inputs;
   const book=booBook(quote,E1_POLICY.maxQuoteAgeMs);
   const f=rec(s.features),ref=N(f.referenceClose),stopPct=N(rec(f.exitPolicy).stopPct);
   const {openRisk,grossNotional}=openRiskSummary({positions:pair.positions,
@@ -532,6 +574,7 @@ async function booGate(db,s,phase,{quote,info,snapshot,pair,orders}){
       source:String(controls.settings?.boo_edge_source??"ASSUMED")},
   });
 }
+async function booGate(db,s,phase,ctx){return booVerdict(s,phase,await booGateInputs(db,s),ctx)}
 async function openBull(db,s,openPositions,manual=null,attempt={},managementFailures=[]){
 const gateway=opsGateway(db);
 await requireLeaderEntryControls(db);
@@ -601,7 +644,7 @@ let e1Decision={policyVersion:E1_POLICY.policyVersion,confirmationState:"DISABLE
   defer:false,reject:false,reasonCodes:["E1_OPERATOR_FLAG_DISABLED"],executionEnabled:false,
   parametersValidatedByBacktest:false,activationBasis:OPERATOR_OVERRIDE.basis};
 if(E1_ENABLED){
-  const e1=await runE1Gate(s,q,step,gateway,filters);e1Decision=e1.decision;attempt.e1=e1Decision;
+  const e1=await runE1Gate(s,q,step,gateway,filters,!setupGoverns(s));e1Decision=e1.decision;attempt.e1=e1Decision;
   // E1's FAST-WEAK WATCH is a directional question: it waits up to E1_POLICY.watchMs
   // to see whether a 10-second slide recovers. Under the pullback policy that question
   // has already been answered, by a COMPLETED 1m candle that closed bullish, above the
@@ -610,17 +653,18 @@ if(E1_ENABLED){
   // a 60s trigger TTL to re-derive the same answer, and would usually expire the
   // trigger instead of improving it.
   //
-  // So for setup-governed signals that ONE defer becomes a recorded observation. Every
-  // other E1 outcome is untouched: a rejection still rejects, and UNKNOWN -- an absent
-  // or stale quote, a truncated tape, missing depth -- still defers. Unknown market
-  // data is never converted into a pass.
+  // So for setup-governed signals the watch is not entered at all (see runE1Gate) and
+  // that ONE defer becomes a recorded observation here. Every other E1 outcome is
+  // untouched: a rejection still rejects, and UNKNOWN -- an absent or stale quote, a
+  // truncated tape, missing depth -- still defers. Unknown market data is never
+  // converted into a pass, and a non-governed signal still serves the full watch.
   if(setupGoverns(s)&&e1Decision.defer===true&&!e1Decision.reject&&
      Array.isArray(e1Decision.reasonCodes)&&e1Decision.reasonCodes.length===1&&
      e1Decision.reasonCodes[0]==="E1_FAST_WEAK_WATCH"){
     e1Decision={...e1Decision,allowed:true,defer:false,
       reasonCodes:["E1_FAST_WEAK_OBSERVED_NOT_ENFORCED"],
       fastWeakObservation:{watched:false,supersededBy:SETUP_POLICY_VERSION,
-        original:e1.decision.reasonCodes}};
+        original:e1.decision.reasonCodes,observations:e1.decision.observations??[]}};
     attempt.e1=e1Decision;
   }
   await audit(db,null,"BULL","BULL",e1Decision.allowed?"ENTRY_ALLOW":e1Decision.reject?"ENTRY_REJECT":"ENTRY_DEFER",
@@ -676,10 +720,26 @@ if(E1_ENABLED){
 // Final gateway check uses a new account observation and a new complete ordinary +
 // conditional order observation.  No intent exists yet, so a denial cannot duplicate
 // or strand an order identity.
+//
+// ORDERING IS LOAD-BEARING FROM HERE DOWN.
+// -----------------------------------------
+// The order is priced from a quote, and the last thing this function does before
+// writing the intent is re-assert that that quote is younger than
+// E1_POLICY.maxQuoteAgeMs (1000ms). Everything that sits BETWEEN the quote and that
+// assertion is charged against the 1000ms, so this block is arranged so that nothing
+// between them performs I/O: the ownership/orders/snapshot reads, the account
+// snapshot and BOO's four reads all happen BEFORE or ALONGSIDE the quote, and the
+// decisions taken after it -- sizing, the entry-control verdict, the BOO verdict,
+// the drift and trigger-window checks -- are pure arithmetic over state already in
+// hand. Re-introducing an await between the quote read and the dispatch check is
+// exactly the defect this fixes; see booGateInputs for the production evidence.
 await requireLeaderEntryControls(db);
-const[rawFinalCheck,finalOrders,dispatchQuote,dispatchSnap]=await Promise.all([readOpsPair(db,undefined,s.symbol),
-  gateway({action:"v18_open_orders"},5000),E1_ENABLED?gateway({action:"quote",market:s.symbol},3000):Promise.resolve(q),
-  E1_ENABLED?snap(db):Promise.resolve(sn)]),finalCheck=rawFinalCheck;
+const[rawFinalCheck,finalOrders,dispatchSnap,booInputs,dispatchQuote]=await Promise.all([
+  readOpsPair(db,undefined,s.symbol),
+  gateway({action:"v18_open_orders"},5000),
+  E1_ENABLED?snap(db):Promise.resolve(sn),
+  booGateInputs(db,s),
+  E1_ENABLED?gateway({action:"quote",market:s.symbol},3000):Promise.resolve(q)]),finalCheck=rawFinalCheck;
 if(E1_ENABLED){
   const dispatchAt=Date.now(),assessment=e1CurrentAssessment(s,dispatchQuote,step,dispatchAt,filters);
   attempt.entryPriceCheck=entryPriceEvidence(s,assessment.limitPrice,dispatchAt,"E1_DISPATCH_PRICE",
@@ -689,6 +749,7 @@ if(E1_ENABLED){
     const reason=!assessment.quote.valid?"E1_DISPATCH_QUOTE_UNKNOWN":!assessment.quote.fullDepth?
       "E1_DISPATCH_DEPTH_INSUFFICIENT":"E1_DISPATCH_GUARD_FAILED";
     await audit(db,null,"BULL","BULL","ENTRY_DEFER",reason,{signalId:s.id,symbol:s.symbol,
+      entryPriceCheck:attempt.entryPriceCheck,
       e1:{...e1Decision,dispatchRecheck:assessment.quote},operatorOverride:OPERATOR_OVERRIDE});
     return{entered:false,reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,e1:{...e1Decision,dispatchRecheck:assessment.quote}};
   }
@@ -699,38 +760,55 @@ if(E1_ENABLED){
   if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,
     reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true,e1:e1Decision};
   limitPrice=sized.limitPrice;iocBps=sized.iocBps;gap=Math.abs(limitPrice-ref)/atr;
-  const dispatchRawHash=dispatchQuote?.raw?await hashJson({quote:dispatchQuote.raw}):null;
   e1Decision={...e1Decision,decisionAt:dispatchAt,quoteAgeMs:assessment.quote.quoteAgeMs,
     evaluatedPrice:ask,expectedEntryVWAP:assessment.quote.expectedEntryVWAP,
     expectedExitVWAP:assessment.quote.expectedExitVWAP,expectedCostBps:assessment.quote.expectedCostBps,
-    rawHashes:dispatchRawHash?[...e1Decision.rawHashes,dispatchRawHash]:e1Decision.rawHashes,
     dispatchRecheck:{at:dispatchAt,sourceTier:assessment.quote.sourceTier,quoteAgeMs:assessment.quote.quoteAgeMs,
       bookMode:assessment.quote.bookMode,fullDepth:assessment.quote.fullDepth,currentQuantity:sized.amount}};
 }
-const finalDecision=await decideEntry(db,finalCheck,s.symbol,finalOrders,{proposedMargin:sized.sizedMargin,cashBuffer:ENTRY_CASH_BUFFER_USDT,managementFailures});
+// Pure: the controls were read alongside the quote above. A clean portfolio writes
+// nothing here, so the happy path from the quote to the dispatch check stays I/O-free.
+const finalDecision=decideEntryWith(booInputs.controls,finalCheck,s.symbol,finalOrders,{proposedMargin:sized.sizedMargin,cashBuffer:ENTRY_CASH_BUFFER_USDT,managementFailures});
 await recordMismatch(db,finalCheck.match);await persistDecisionRisk(db,finalCheck,finalDecision);
 if(!finalDecision.allowed){return{entered:false,
   reason:`ENTRY_CONTROL:${finalDecision.scope}:${finalDecision.reasons.join(",")}`,releaseClaim:true,releaseScope:controlReleaseScope(finalDecision),entryDecision:finalDecision,e1:e1Decision}}
 if(finalCheck.positions.some(p=>p.symbol===s.symbol)||active(finalCheck.pf).length>=MAX_SLOTS)return{entered:false,reason:"PORTFOLIO_CHANGED",releaseClaim:true};
 // BOO common entry gate, checkpoint 2 of 2 (immediately before dispatch).
-// Re-evaluated from scratch against the state that will actually be traded --
-// a cached admission verdict is explicitly not sufficient (section 4).
-const booPredispatch=await booGate(db,s,"PRE_DISPATCH",{quote:q,info:i,snapshot:sn,pair:finalCheck,orders:finalOrders});
-await recordBooVerdict(db,{signalId:s.id,symbol:s.symbol,phase:"PRE_DISPATCH",result:booPredispatch});
+// Re-evaluated from scratch against the state that will actually be traded -- the
+// dispatch quote's own book and the quantity this order will carry. A cached
+// admission verdict is explicitly not sufficient (section 4); what is cached here is
+// only the account state BOO reads, taken in the same round trip as the quote.
+const booPredispatch=booVerdict(s,"PRE_DISPATCH",booInputs,{quote:q,info:i,snapshot:sn,pair:finalCheck,orders:finalOrders});
 const booFinal=finalizeBooEntry(booAdmission,booPredispatch);
 attempt.booPredispatch={enforcement:booPredispatch.enforcement,blocks:booFinal.blocks,
   verdictAllowed:booPredispatch.verdict.allowed,reason:booFinal.reason};
-if(booFinal.blocks)return{entered:false,
-  reason:`BOO_ENTRY_GATE:${booFinal.driftDetected?"STATE_DRIFT:":""}${booFinal.reason}`,
-  releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,booGate:booPredispatch.verdict};
+if(booFinal.blocks){
+  await recordBooVerdict(db,{signalId:s.id,symbol:s.symbol,phase:"PRE_DISPATCH",result:booPredispatch});
+  return{entered:false,
+    reason:`BOO_ENTRY_GATE:${booFinal.driftDetected?"STATE_DRIFT:":""}${booFinal.reason}`,
+    releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,booGate:booPredispatch.verdict};
+}
 if(E1_ENABLED){
   const checkedAt=Date.now(),receivedAt=N(q?.timing?.received_at_ms,NaN),quoteAge=checkedAt-receivedAt;
   if(!Number.isSafeInteger(receivedAt)||quoteAge<0||quoteAge>E1_POLICY.maxQuoteAgeMs)
-    return{entered:false,reason:"E1_DISPATCH_QUOTE_AGED",releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,e1:e1Decision};
+    return{entered:false,reason:`E1_DISPATCH_QUOTE_AGED:${Number.isFinite(quoteAge)?Math.round(quoteAge):"UNKNOWN"}`,
+      releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,e1:e1Decision};
   // Waiting for recovery never extends the original signal lifetime. Recheck after
   // all account/ownership reads too, immediately before persisting the order intent.
   const freshness=checkedEntryFresh(s,f,checkedAt,limitPrice,attempt,"PRE_DISPATCH_PRICE",q);if(freshness)throw Error(freshness);
+  e1Decision={...e1Decision,dispatchQuoteAgeAtIntentMs:quoteAge};
 }
+// Evidence, not a gate: the digest of the exact book this order was priced from.
+// It is taken AFTER the freshness checks so it cannot spend their budget, and its
+// failure cannot refuse an entry that every gate already admitted.
+if(E1_ENABLED&&dispatchQuote?.raw){
+  try{e1Decision={...e1Decision,rawHashes:[...(e1Decision.rawHashes??[]),
+    await hashJson({quote:dispatchQuote.raw})]};}catch{/* evidence only */}
+}
+// The verdict is recorded once the trade decision is made, never in front of it:
+// a dashboard write is not a trading decision and must not spend the quote's budget.
+// recordBooVerdict swallows its own failures, so BOO logging can never block entry.
+await recordBooVerdict(db,{signalId:s.id,symbol:s.symbol,phase:"PRE_DISPATCH",result:booPredispatch});
 await verifyExecutionLease(db);
 const id=cid("v11e",s.id),rp={action:"create_order",leverage:LEV,order:{market:s.symbol,side:"BUY",type:"LIMIT",price:limitPrice,time_in_force:"IOC",quantity:sized.amount,identifier:id,position_side:"LONG",position_effect:"OPEN"},wait_for_final_ms:4000},
   oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,intent:"OPEN_LONG",reason:"V17_LEADER_ENTRY_IOC",client_order_id:id,requested_quantity:sized.amount,state:"PLANNED",request_payload:{...rp,quantity_step:step,price_tick:filters.priceTick,min_notional_usdt:filters.minNotionalUsdt,target_margin_usdt:MARGIN,sizing_contract_version:SLOT_SIZING_CONTRACT.version,entry_timing_policy:setupGoverns(s)?{version:SETUP_POLICY_VERSION,activation:SETUP_LIVE_CUTOVER,setup:serializeSetup(signalSetup(s),8)}:null,sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,order_notional_usdt:sized.orderNotionalUsdt,sizing_bound_by:sized.boundBy,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,executor_patch:PATCH,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION,max_entry_drift_pct:POLICY.maxEntryDriftPct},entry_control:finalDecision.evidence,e1:E1_ENABLED?e1Decision:null,x1:X1_ENABLED?{policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,...OPERATOR_OVERRIDE}:null,operator_override:E1_ENABLED||X1_ENABLED?OPERATOR_OVERRIDE:null,qv3:qv3Active?{version:QV3_VERSION,activation:QV3_LIVE_CUTOVER,basis:QV3_ACTIVATION_BASIS}:null}}).select("*").single();
@@ -1066,12 +1144,21 @@ async function opsControls(db) {
   if(runtime.error||control.error||settings.error)throw Error("V18_CONTROLS_UNAVAILABLE");
   return {runtime:runtime.data,control:control.data,settings:settings.data};
 }
-async function decideEntry(db,pair,candidateSymbol,openOrders,{proposedMargin=0,cashBuffer=0,managementFailures=[]}={}) {
-  const controls=await opsControls(db);
+/**
+ * Pure entry-control decision from controls the caller already read. Same split,
+ * and for the same reason, as booVerdict: at the dispatch point the proposed margin
+ * is only known AFTER the pricing quote, so this has to run after it -- and anything
+ * that runs after it must not be a network read, or the quote is stale before the
+ * order is written.
+ */
+function decideEntryWith(controls,pair,candidateSymbol,openOrders,{proposedMargin=0,cashBuffer=0,managementFailures=[]}={}) {
   return evaluateEntryDecision({candidateSymbol,classification:pair.match,portfolio:pair.pf,openOrders,
     positions:pair.positions,orders:pair.orders,quarantines:pair.quarantines,
     manualSymbols:pair.manual.map(x=>x.symbol),managementFailures,runtime:controls.runtime,operator:controls.control,settings:controls.settings,
     maxSlots:MAX_SLOTS,proposedMargin,cashBuffer,requireNativeProtection:NATIVE_STOP_ENABLED});
+}
+async function decideEntry(db,pair,candidateSymbol,openOrders,opts={}) {
+  return decideEntryWith(await opsControls(db),pair,candidateSymbol,openOrders,opts);
 }
 async function persistDecisionRisk(db,pair,decision) {
   for(const q of decision.discoveredQuarantines??[]){
@@ -1431,7 +1518,26 @@ for(const row of queue){
 // 15-minute window -- the cadence is protected without dropping the candidate.
 const executable=[],policyOpen=setupScopedOpen(openNow).length;
 const setupDeadline=Date.now()+SETUP_ADVANCE_BUDGET_MS;
-for(const row of stillFresh){
+// Advance the setups closest to firing FIRST. The wall-clock budget above is real --
+// each advance is a klines read -- so when it runs out, the candidates it did not
+// reach wait a whole minute. For a WATCHING setup that costs nothing: its 15-minute
+// window has minutes left. For a setup already holding a live trigger, or one bar
+// away from producing one, a minute is the entire executable window. Freshest-bar
+// order remains the tiebreaker inside each stage, so nothing else about the queue's
+// fairness changes -- and this cannot promote a candidate past a gate, only past a
+// budget.
+// The persisted stage label only. This is an ORDERING heuristic, never a gate, so it
+// reads the stored string directly rather than through signalSetup's policy-version
+// validation: a row this policy cannot deserialize simply sorts last, and every real
+// admission decision downstream still goes through the validated state.
+const stageRank=(row)=>{
+  if(!setupGoverns(row))return 0;
+  const st=rec(rec(row.features).v17Setup).state;
+  return st===SETUP_STATE.TRIGGERED?3:st===SETUP_STATE.PULLBACK_OBSERVED?2:st===SETUP_STATE.ARMED?1:0;
+};
+const advanceOrder=[...stillFresh].sort((a,b)=>
+  stageRank(b)-stageRank(a)||Date.parse(b.entry_bar_at)-Date.parse(a.entry_bar_at));
+for(const row of advanceOrder){
   if(!setupGoverns(row)){executable.push(row);continue}
   if(Date.now()>=setupDeadline){entry={entered:false,reason:"V17_SETUP_BUDGET_EXHAUSTED"};break}
   let advanced;

@@ -100,17 +100,35 @@ export function supportedFuturesMode(mode, now=Date.now(), maxAgeMs=3000) {
     now-o.requested_at_ms<=maxAgeMs;
 }
 
-/** Safe to persist: bounded prices/times only, never credentials or an entire response. */
+/**
+ * Safe to persist: bounded prices/times only, never credentials or an entire response.
+ *
+ * Every field a drift or staleness refusal has to be ADJUDICATED from is recorded
+ * here, because "the price moved" and "we measured against the wrong thing" look
+ * identical in a bare reason string. Reading one of these rows must answer, without
+ * any other source: which signal and symbol, at which stage, what the reference was,
+ * what price was actually checked, what the book said and how old that reading was,
+ * the drift and the ceiling it was compared against, and the exact trigger window
+ * the check was inside or outside of.
+ */
 export function entryPriceEvidence(row, price, now, phase, quote, window, maxDriftPct, reason) {
   const ref=number(row?.features?.referenceClose), px=number(price);
   const nullable=(v)=>Number.isFinite(number(v))?number(v):null;
+  const setup=row?.features?.v17Setup;
+  const receivedAt=nullable(quote?.timing?.received_at_ms);
   return {stage:phase,finalAdmission:false,orderDispatched:false,reason:reason??null,
+    signalId:row?.id==null?null:String(row.id),
+    symbol:String(row?.symbol??'').toUpperCase()||null,
+    setupState:typeof setup?.state==='string'?setup.state:null,
     evaluatedAt:now,referencePrice:nullable(ref),evaluatedPrice:nullable(px),
+    triggerClose:nullable(setup?.triggerClose),
     priceBasis:quote?'ORDER_LIMIT':'SIGNAL_REFERENCE_ONLY',
     bestBid:nullable(quote?.best_bid),bestAsk:nullable(quote?.best_ask),
-    quoteReceivedAt:nullable(quote?.timing?.received_at_ms),
+    quoteReceivedAt:receivedAt,
+    quoteAgeMs:receivedAt===null||!Number.isSafeInteger(number(now))?null:number(now)-receivedAt,
     driftPct:ref>0&&px>0?px/ref-1:null,maxDriftPct,
     lowerAllowedPrice:ref>0?ref*(1-maxDriftPct):null,
     upperAllowedPrice:ref>0?ref*(1+maxDriftPct):null,
+    triggerAt:nullable(setup?.triggerAt),triggerExpiresAt:nullable(setup?.triggerExpiresAt),
     executionWindow:window};
 }
