@@ -1,52 +1,65 @@
 name: Entry evidence isolated review
-
 on:
   push:
     branches: [fix/entry-evidence-20260918]
-    paths:
-      - .github/workflows/entry-evidence-review-20260918.yml
-      - tools/entry_evidence_repair_20260918.py
-
+    paths: [tools/entry_evidence_repair_20260918.py]
 permissions:
-  contents: read
-
+  contents: write
 jobs:
   offline-review:
     if: github.ref == 'refs/heads/fix/entry-evidence-20260918'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      SCHEDULER_ENABLED: 'false'
+      V17_SHADOW_ENABLED: 'false'
     steps:
       - uses: actions/checkout@v4
         with:
-          persist-credentials: false
-      - name: Collect tracked source only; never invoke exchange or database
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Apply hash-checked source repair
+        run: python3 tools/entry_evidence_repair_20260918.py
+      - name: Offline regression tests only
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p /tmp/entry-evidence-review
+          node --test supabase/functions/v10-lane-executor/entry-evidence.test.mjs gateway/*.test.mjs | tee /tmp/entry-evidence-tests.tap
+          git diff --check
+      - name: Commit to the review branch only; never merge or deploy
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          target='refs/heads/fix/entry-evidence-20260918'
+          test "$GITHUB_REF" = "$target"
+          test "$(git ls-remote origin "$target" | cut -f1)" = "$EXPECTED_HEAD"
+          git add -- gateway/server.mjs gateway/futures-mode-evidence.mjs gateway/futures-mode-evidence.test.mjs supabase/functions/v10-lane-executor/index.ts supabase/functions/v10-lane-executor/boo-entry-adapter.mjs supabase/functions/v10-lane-executor/entry-evidence.mjs supabase/functions/v10-lane-executor/entry-evidence.test.mjs docs/entry-evidence-repair-20260918.md .github/workflows/entry-evidence-tests.yml
+          git rm -- tools/entry_evidence_repair_20260918.py tools/entry_evidence_payload_1.txt tools/entry_evidence_payload_2.txt tools/entry_evidence_payload_3.txt .github/workflows/entry-evidence-review-20260918.yml
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix(entry): align trigger deadlines, gateway evidence and final rejection diagnostics'
+          git push origin "HEAD:$target"
+      - name: Collect reviewed source and test evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p /tmp/entry-evidence-result
+          cp /tmp/entry-evidence-tests.tap /tmp/entry-evidence-result/ 2>/dev/null || true
+          git rev-parse HEAD > /tmp/entry-evidence-result/commit.txt
           python3 - <<'PY'
-          import pathlib, subprocess, tarfile
-          root = pathlib.Path('.')
-          tracked = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
-          selected = []
-          for name in tracked:
-              if not name:
-                  continue
-              p = pathlib.Path(name)
-              if p.name in {'AGENTS.md', 'package.json', 'deno.json', 'deno.jsonc'} or (
-                  p.suffix in {'.mjs', '.cjs', '.js', '.ts', '.py', '.yml', '.yaml', '.json'} and
-                  (name.startswith(('supabase/functions/', 'gateway/', 'tests/', 'test/', '.github/workflows/', 'scripts/', 'tools/')))
-              ):
-                  selected.append(name)
-          with tarfile.open('/tmp/entry-evidence-review/source.tar.gz', 'w:gz') as archive:
-              for name in selected:
-                  archive.add(name, arcname=name, recursive=False)
-          pathlib.Path('/tmp/entry-evidence-review/manifest.txt').write_text('\n'.join(selected))
-          pathlib.Path('/tmp/entry-evidence-review/commit.txt').write_text(subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode())
-          print(f'Collected {len(selected)} tracked source files. No trading endpoint invoked.')
+          import pathlib, tarfile
+          with tarfile.open('/tmp/entry-evidence-result/source.tar.gz','w:gz') as archive:
+              for root in ['gateway','test-support','supabase/functions','.github/workflows']:
+                  for p in pathlib.Path(root).rglob('*'):
+                      if p.is_file() and p.suffix in {'.mjs','.js','.ts','.json','.yml','.yaml'}:
+                          archive.add(p,arcname=str(p),recursive=False)
           PY
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: entry-evidence-source
-          path: /tmp/entry-evidence-review
+          name: entry-evidence-result
+          path: /tmp/entry-evidence-result
           retention-days: 3
