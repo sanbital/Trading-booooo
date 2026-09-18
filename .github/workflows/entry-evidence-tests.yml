@@ -1,0 +1,41 @@
+name: Entry evidence regression
+on:
+  pull_request:
+    paths:
+      - supabase/functions/v10-lane-executor/**
+      - gateway/**
+      - test-support/**
+      - .github/workflows/entry-evidence-tests.yml
+  push:
+    branches: [fix/entry-evidence-20260918]
+    paths:
+      - supabase/functions/v10-lane-executor/**
+      - gateway/**
+      - test-support/**
+      - .github/workflows/entry-evidence-tests.yml
+permissions:
+  contents: read
+jobs:
+  entry-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SCHEDULER_ENABLED: 'false'
+      V17_SHADOW_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Boundary, dispatcher, and existing gateway tests
+        run: node --test supabase/functions/v10-lane-executor/entry-evidence.test.mjs gateway/*.test.mjs
+      - name: Existing entry integration regressions
+        run: deno task test:entry
+      - name: Read-only margin and BOO regressions
+        run: deno test --allow-read supabase/functions/v10-lane-executor/margin-config.test.ts supabase/functions/_shared/boo/*.test.ts
