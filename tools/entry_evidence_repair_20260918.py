@@ -26,10 +26,19 @@ NEW = {
     "docs/entry-evidence-repair-20260918.md",
     ".github/workflows/entry-evidence-tests.yml",
 }
+HARNESS = {
+    "test-support/v18-ops/harness.mjs": "9469b8647c561f4518727053e1352c025215a542",
+    "test-support/v17-exit/entry-margin-skip.test.mjs": "7e40d712cba88084c94e934495a8653a012dd5e6",
+    "test-support/v17-exit/entry-queue.test.mjs": "81f5f64a5dbc44e6b1c039a64317104710ad47ad",
+}
 
 def require(condition, message):
     if not condition:
         raise RuntimeError(message)
+
+def replace_once(source, old, new):
+    require(source.count(old) == 1, "Test harness anchor changed")
+    return source.replace(old, new, 1)
 
 require(os.environ.get("GITHUB_REF") == TARGET, "Ref is not the isolated review branch")
 require(not subprocess.check_output(["git", "status", "--porcelain"], text=True).strip(), "Working tree is not clean")
@@ -39,7 +48,7 @@ require(hashlib.sha256(raw).hexdigest() == DIGEST, "Source payload digest mismat
 payload = json.loads(raw)
 require(payload["expected"] == EXISTING, "Unexpected base file set")
 require(set(payload["files"]) == NEW, "Unexpected new file set")
-for path, expected in EXISTING.items():
+for path, expected in {**EXISTING, **HARNESS}.items():
     actual = subprocess.check_output(["git", "hash-object", path], text=True).strip()
     require(actual == expected, f"Base source drift: {path}")
 for path in NEW:
@@ -52,4 +61,19 @@ for path, content in payload["files"].items():
     target = pathlib.Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
-print("Applied 3 hash-checked existing files and 6 reviewed new files. Offline tests must pass before review-branch commit.")
+# Existing tests evaluate extracted functions in a VM and must bind actual new
+# imports there, just as the native module loader does. Assertions are unchanged.
+for name in HARNESS:
+    path = pathlib.Path(name)
+    source = path.read_text()
+    if name.endswith('/harness.mjs'):
+        source = "import * as entryEvidence from '../../supabase/functions/v10-lane-executor/entry-evidence.mjs';\n" + source
+        source = replace_once(source, 'const ctx={...momentum,', 'const ctx={...entryEvidence,...momentum,')
+    elif 'margin-skip' in name:
+        source = "import * as entryEvidence from '../../supabase/functions/v10-lane-executor/entry-evidence.mjs';\n" + source
+        source = replace_once(source, 'const ctx = {\n', 'const ctx = {\n    ...entryEvidence,\n')
+    else:
+        source = replace_once(source, 'const seen = [];', 'const seen = [];\n  const audits = [];')
+        source = replace_once(source, 'Date: clockAt(now), Number,', 'audit: async (...args) => { audits.push(args); }, audits,\n    Date: clockAt(now), Number,')
+    path.write_text(source)
+print('Applied hash-checked source and test harness imports. No assertions, live controls or trading endpoints changed.')
