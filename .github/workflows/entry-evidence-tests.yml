@@ -39,3 +39,14 @@ jobs:
         run: deno task test:entry
       - name: Read-only margin and BOO regressions
         run: deno test --allow-read supabase/functions/v10-lane-executor/margin-config.test.ts supabase/functions/_shared/boo/*.test.ts
+      - name: Build exact gateway image and verify imports without networking or credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          node gateway/stage-engine.mjs
+          docker build --network=none --tag gateway-entry-evidence-ci gateway
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            -e SCHEDULER_ENABLED=false -e V17_SHADOW_ENABLED=false \
+            gateway-entry-evidence-ci node --input-type=module --eval \
+            "for (const name of ['server.mjs','v17-shadow-worker.mjs','v17-shadow-host.mjs','leader-exit-r4.mjs']) { await import('./' + name); } console.log('DOCKER_IMAGE_IMPORT_OK');"
