@@ -156,6 +156,7 @@ export function evaluateBooEntry({
         openGrossNotional: account.openGrossNotional,
         availableMargin: account.availableMargin,
         leverage: account.leverage,
+        entryPriceCap: signal.entryPriceCap,
         dailyRemaining: limits.dailyRemaining,
         weeklyRemaining: limits.weeklyRemaining,
       });
