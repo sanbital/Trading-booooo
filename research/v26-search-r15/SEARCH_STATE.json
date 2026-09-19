@@ -1,0 +1,12 @@
+{
+  "completedAt": "2026-09-19T23:30:29Z",
+  "iteration": "R15",
+  "testedCandidates": ["C39"],
+  "nextCandidateId": "C40",
+  "no_robust_edge_found": true,
+  "developmentPass": [],
+  "walkForwardRun": false,
+  "walkForwardReason": "C39 had negative executable and opportunity-level net, PF below one, insufficient sample/active days, negative stress, top-winner removal and confidence bound.",
+  "unusedHoldoutConsumed": false,
+  "nextHypothesisConstraint": "Leave C34 and market-regime interactions. Test causal rank acceleration plus recent return contribution without threshold tuning or protection relaxation."
+}
