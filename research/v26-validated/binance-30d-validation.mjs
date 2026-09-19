@@ -18,6 +18,7 @@ import {
   rollingPullbackQualityPercentiles, crossSectionalPullbackQualityDecision,
   buyerFlowAccelerationScore, crossSectionalBuyerFlowDecision,
   executionAdjustedBreakoutScore, crossSectionalExecutionValueDecision,
+  compressionExpansion60mScore, crossSectionalCompressionExpansionDecision,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { resolveRiskPolicy, evaluateLossLimits } from "../../supabase/functions/_shared/boo/risk-policy.mjs";
 import { solveQuantity } from "../../supabase/functions/_shared/boo/risk-budget.mjs";
@@ -470,6 +471,20 @@ for(const s of mergedSignals(uniqueSignals)){
 }
 const executionValueById=new Map(rollingPullbackQualityPercentiles(executionValueRecords).map(x=>[x.id,x]));
 
+// C34 uses a distinct one-hour compression-to-expansion regime transition.
+const compressionExpansionRecords=[];
+for(const s of mergedSignals(uniqueSignals)){
+  const cached=pathCache.get(s.id),rows=Array.isArray(cached)?cached:cached?.rows;
+  if(!rows?.length)continue;
+  const tr=setupTrigger(s,rows.filter(r=>Number(r[0])>=s.s5c-2*MIN));
+  if(!tr.ok)continue;
+  const triggerAt=Number(tr.state.triggerAt);
+  const bars=rows.filter(r=>Number(r[0])>=triggerAt-60*MIN&&Number(r[0])<triggerAt);
+  const scored=compressionExpansion60mScore({triggerAt,now:triggerAt,bars});
+  if(scored.status==="KNOWN")compressionExpansionRecords.push({id:s.id,at:triggerAt,score:scored.score});
+}
+const compressionExpansionById=new Map(rollingPullbackQualityPercentiles(compressionExpansionRecords).map(x=>[x.id,x]));
+
 const opportunitiesByVariant=new Map();
 const candidateIds=ONLY_CANDIDATE?ONLY_CANDIDATE.split(",").map(x=>x.trim()).filter(Boolean):Object.keys(V26_CANDIDATES);
 for(const id of candidateIds){
@@ -611,6 +626,11 @@ for(const id of candidateIds){
     if(V26_CANDIDATES[id].crossSectionalExecutionValue){
       const context=executionValueById.get(s.id);
       const decision=crossSectionalExecutionValueDecision({valuePercentile:context?.percentile,observations:context?.observations});
+      if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
+    }
+    if(V26_CANDIDATES[id].crossSectionalCompressionExpansion60m){
+      const context=compressionExpansionById.get(s.id);
+      const decision=crossSectionalCompressionExpansionDecision({expansionPercentile:context?.percentile,observations:context?.observations});
       if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
     }
     if(V26_CANDIDATES[id].breakoutRetestHold2m||V26_CANDIDATES[id].controlledPullbackReclaim3m||V26_CANDIDATES[id].breakoutAcceptance3m){

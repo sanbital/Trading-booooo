@@ -1,0 +1,26 @@
+{
+  "experimentId": "V26-SEARCH-R10-C34",
+  "preregisteredAt": "2026-09-19T18:44:22Z",
+  "branch": "research/v26-strategy-search-r10-20260920",
+  "parentCheckpoint": "9df7ba9cff46a0b6f09eb4a488ce3198b3ab995f",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "developmentWindow": {"start":"2026-08-19T15:10:00.000Z","end":"2026-09-18T15:10:00.000Z","classification":"DEVELOPMENT_USED"},
+  "reservedHoldout": {"start":"2025-12-22T15:10:00.000Z","end":"2026-03-22T15:10:00.000Z","status":"LOCKED_UNSEEN_DO_NOT_OPEN_UNLESS_DEVELOPMENT_AND_WALK_FORWARD_PASS"},
+  "account": {"startingCapitalUsdt":30,"leverage":3,"maxConcurrentPositions":1,"quantitySource":"solveQuantity.plan.quantity","riskPolicy":"existing BOO risk-policy/risk-budget plus operator-tightened limits"},
+  "sharedExit": "STRENGTH_LOSS_V1",
+  "candidates": [{
+    "id": "C34",
+    "name": "ROLLING_CROSS_SECTIONAL_60M_COMPRESSION_EXPANSION",
+    "hypothesis": "Fresh continuation is more likely when the last completed five-minute directional advance expands sharply relative to the instrument's preceding 55-minute normal range, separating a new impulse from an old 24-hour leader.",
+    "score": "positive return of final completed 5m block / median normalized high-low range of the preceding eleven completed 5m blocks",
+    "rules": [
+      "use exactly sixty completed one-minute bars ending at trigger time",
+      "aggregate them into twelve non-overlapping completed five-minute blocks",
+      "require a positive final five-minute block and compute one continuous expansion score",
+      "rank against completed scores in the trailing seven days, require at least 20 causal observations and percentile >= 0.60",
+      "preserve next-open execution, structural stop, solveQuantity quantity and all account protections"
+    ]
+  }],
+  "promotionGates": {"minTrades":30,"minActiveDays":10,"netPnlPositive":true,"monthlyReturnPositive":true,"minProfitFactor":1.2,"stressNetAndPfPositive":true,"top1RemovedNetPositive":true,"dayBlockMultipleTestingAdjustedExpectancyLowerBoundPositive":true,"walkForwardPositive":true,"unusedHoldoutPositive":true},
+  "holdoutPolicy": "Do not open walk-forward or reserved holdout unless C34 passes every development gate."
+}

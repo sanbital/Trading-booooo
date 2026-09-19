@@ -6,7 +6,7 @@
  * is live merely because this file exists; activation requires a matching,
  * unrevoked approval identity and ENFORCE mode.
  */
-export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-15";
+export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-16";
 
 const BASE = Object.freeze({
   minDayReturn: 0.03,
@@ -40,6 +40,7 @@ const BASE = Object.freeze({
   crossSectionalPullbackQuality: false,
   crossSectionalBuyerFlowAcceleration: false,
   crossSectionalExecutionValue: false,
+  crossSectionalCompressionExpansion60m: false,
   minRankOverride: null,
   maxRankOverride: null,
 });
@@ -130,6 +131,9 @@ export const V26_CANDIDATES = Object.freeze({
   }),
   C33: Object.freeze({
     ...BASE, id: "C33", structuralStop: true, crossSectionalExecutionValue: true,
+  }),
+  C34: Object.freeze({
+    ...BASE, id: "C34", structuralStop: true, crossSectionalCompressionExpansion60m: true,
   }),
 });
 
@@ -1052,4 +1056,38 @@ export function crossSectionalExecutionValueDecision({valuePercentile,observatio
   const allowed=valuePercentile>=0.60;
   return {action:allowed?"ENTER":"REJECT",reason:allowed?"C33_EXECUTION_VALUE_PASS":"C33_EXECUTION_VALUE_FAIL",
     valuePercentile,observations,threshold:0.60};
+}
+
+/**
+ * C34 score: directional range expansion in the last completed five minutes
+ * relative to the median normalized range of the prior eleven five-minute
+ * blocks. Exactly sixty completed one-minute bars are used, so no future bar
+ * or final excursion can enter the decision.
+ */
+export function compressionExpansion60mScore({triggerAt,now,bars}) {
+  if(!Number.isSafeInteger(triggerAt)||!Number.isSafeInteger(now)||!Array.isArray(bars)||bars.length!==60)
+    return {status:"UNKNOWN",reason:"C34_COMPRESSION_EXPANSION_INPUT_MISSING"};
+  const xs=bars.map((b,i)=>researchBar(b,triggerAt-(60-i)*minute,now));
+  if(xs.some(x=>x===null))return {status:"UNKNOWN",reason:"C34_COMPRESSION_EXPANSION_BAR_INVALID"};
+  const blocks=[];
+  for(let i=0;i<12;i++){
+    const block=xs.slice(i*5,i*5+5),open=block[0].open,close=block[4].close;
+    const high=Math.max(...block.map(x=>x.high)),low=Math.min(...block.map(x=>x.low));
+    blocks.push({open,close,normalizedRange:(high-low)/open});
+  }
+  const prior=blocks.slice(0,11).map(x=>x.normalizedRange).sort((a,b)=>a-b);
+  const medianPriorRange=prior[Math.floor(prior.length/2)],current=blocks[11];
+  const directionalAdvance=current.close/current.open-1;
+  if(!(medianPriorRange>0&&directionalAdvance>0))
+    return {status:"UNKNOWN",reason:"C34_COMPRESSION_EXPANSION_NONPOSITIVE"};
+  return {status:"KNOWN",score:directionalAdvance/medianPriorRange,directionalAdvance,medianPriorRange};
+}
+
+/** C34: keep the upper causal cross-section of fresh 60m compression breaks. */
+export function crossSectionalCompressionExpansionDecision({expansionPercentile,observations}) {
+  if(!finite(expansionPercentile)||!Number.isSafeInteger(observations)||observations<20)
+    return {action:"UNKNOWN",reason:"C34_COMPRESSION_EXPANSION_CONTEXT_MISSING"};
+  const allowed=expansionPercentile>=0.60;
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C34_COMPRESSION_EXPANSION_PASS":"C34_COMPRESSION_EXPANSION_FAIL",
+    expansionPercentile,observations,threshold:0.60};
 }

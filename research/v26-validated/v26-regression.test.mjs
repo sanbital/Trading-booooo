@@ -31,6 +31,8 @@ import {
   crossSectionalBuyerFlowDecision,
   executionAdjustedBreakoutScore,
   crossSectionalExecutionValueDecision,
+  compressionExpansion60mScore,
+  crossSectionalCompressionExpansionDecision,
   V26_CANDIDATES,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { runExit, summarise } from "../v25-pullback-reaccel/replay.mjs";
@@ -59,7 +61,7 @@ test("selection gate fails closed on null/NaN and respects exact boundaries", ()
   assert.equal(POLICY.maxDayReturn, 0.08);
 });
 
-test("registered C0-C33 definitions preserve the frozen C0-C5 prefix", () => {
+test("registered C0-C34 definitions preserve the frozen C0-C5 prefix", () => {
   assert.deepEqual(Object.keys(V26_CANDIDATES).slice(0,6), ["C0","C1","C2","C3","C4","C5"]);
   assert.ok(V26_CANDIDATES.C12);
   assert.ok(V26_CANDIDATES.C15);
@@ -71,10 +73,26 @@ test("registered C0-C33 definitions preserve the frozen C0-C5 prefix", () => {
   assert.ok(V26_CANDIDATES.C31);
   assert.ok(V26_CANDIDATES.C32);
   assert.ok(V26_CANDIDATES.C33);
+  assert.ok(V26_CANDIDATES.C34);
   assert.equal(V26_CANDIDATES.C0.structuralStop, false);
   assert.equal(V26_CANDIDATES.C4.earlyFailureExit, true);
   assert.equal(V26_CANDIDATES.C4.marketParticipation, true);
   assert.equal(V26_CANDIDATES.C5.maxDayReturn, 0.05);
+});
+
+test("C34 scores only completed 60m compression-to-expansion evidence",()=>{
+  const triggerAt=1_800_003_600_000;
+  const bars=Array.from({length:60},(_,i)=>{
+    const open=100+i*.001,wide=i>=55?.15:.02,close=open+(i>=55?.08:.002);
+    return {openTime:triggerAt-(60-i)*60_000,open,high:open+wide,low:open-wide/2,close,
+      closeTime:triggerAt-(59-i)*60_000-1,quoteVolume:1000,takerBuyQuote:550};
+  });
+  const scored=compressionExpansion60mScore({triggerAt,now:triggerAt,bars});
+  assert.equal(scored.status,"KNOWN");
+  assert.ok(scored.score>1);
+  assert.equal(compressionExpansion60mScore({triggerAt,now:triggerAt,bars:bars.slice(1)}).status,"UNKNOWN");
+  assert.equal(crossSectionalCompressionExpansionDecision({expansionPercentile:.60,observations:20}).action,"ENTER");
+  assert.equal(crossSectionalCompressionExpansionDecision({expansionPercentile:.59,observations:20}).action,"REJECT");
 });
 
 test("C33 scores completed breakout surplus against structural risk and fixed costs",()=>{
