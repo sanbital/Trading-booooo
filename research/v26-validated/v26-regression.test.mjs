@@ -10,6 +10,9 @@ import {
   accelerationReignitionDecision,
   compressionExpansionDecision,
   rankPersistenceDecision,
+  pullbackAbsorptionDecision,
+  relativeStrengthResidualDecision,
+  sweepReclaimDecision,
   V26_CANDIDATES,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { runExit, summarise } from "../v25-pullback-reaccel/replay.mjs";
@@ -38,14 +41,27 @@ test("selection gate fails closed on null/NaN and respects exact boundaries", ()
   assert.equal(POLICY.maxDayReturn, 0.08);
 });
 
-test("registered C0-C15 definitions preserve the frozen C0-C5 prefix", () => {
+test("registered C0-C18 definitions preserve the frozen C0-C5 prefix", () => {
   assert.deepEqual(Object.keys(V26_CANDIDATES).slice(0,6), ["C0","C1","C2","C3","C4","C5"]);
   assert.ok(V26_CANDIDATES.C12);
   assert.ok(V26_CANDIDATES.C15);
+  assert.ok(V26_CANDIDATES.C18);
   assert.equal(V26_CANDIDATES.C0.structuralStop, false);
   assert.equal(V26_CANDIDATES.C4.earlyFailureExit, true);
   assert.equal(V26_CANDIDATES.C4.marketParticipation, true);
   assert.equal(V26_CANDIDATES.C5.maxDayReturn, 0.05);
+});
+
+test("C16-C18 structural gates use completed absorption, residual and reclaim evidence",()=>{
+  const triggerAt=1_800_000_360_000;
+  const rows=[
+    {o:100,c:99.8,h:100.1,l:99.7,tb:470},{o:99.8,c:99.6,h:99.9,l:99.5,tb:460},
+    {o:99.6,c:99.7,h:99.8,l:99.55,tb:500},{o:99.7,c:99.8,h:99.9,l:99.6,tb:520},
+    {o:99.8,c:99.9,h:100,l:99.7,tb:540},{o:99.9,c:100.2,h:100.25,l:99.8,tb:650},
+  ].map((x,i)=>({openTime:triggerAt-(6-i)*60_000,open:x.o,high:x.h,low:x.l,close:x.c,closeTime:triggerAt-(6-i)*60_000+59_999,quoteVolume:1000,takerBuyQuote:x.tb}));
+  assert.equal(pullbackAbsorptionDecision({triggerAt,now:triggerAt,bars:rows,signalReference:100}).action,"ENTER");
+  assert.equal(relativeStrengthResidualDecision({return30m:.03,return60m:.05,btcReturn30m:.005,btcReturn60m:.01}).action,"ENTER");
+  assert.equal(sweepReclaimDecision({triggerAt,now:triggerAt,bars:rows,signalReference:100}).action,"ENTER");
 });
 
 test("C13-C15 structural gates use only completed preregistered inputs", () => {
