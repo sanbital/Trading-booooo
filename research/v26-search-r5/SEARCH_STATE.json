@@ -1,0 +1,12 @@
+{
+  "completedAt": "2026-09-19T14:20:25Z",
+  "iteration": "R5",
+  "testedCandidates": ["C25", "C26", "C27"],
+  "nextCandidateId": "C28",
+  "no_robust_edge_found": true,
+  "developmentPass": [],
+  "walkForwardRun": false,
+  "walkForwardReason": "No candidate passed the preregistered 30-day development gates.",
+  "unusedHoldoutConsumed": false,
+  "nextHypothesisConstraint": "Do not tune C25-C27 around the two observed C25 winners. Explore a structurally different pre-entry failure-avoidance or cross-sectional relative-pullback hypothesis without relaxing any protection."
+}

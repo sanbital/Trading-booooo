@@ -5,10 +5,11 @@
   "parentCheckpoint": "7875a1e82186b59f7cabba4c6c962454fdce3515",
   "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
   "developmentWindow": {
-    "startExclusive": "2026-08-20T15:10:00.000Z",
-    "end": "2026-09-19T15:10:00.000Z",
+    "start": "2026-08-19T15:10:00.000Z",
+    "end": "2026-09-18T15:10:00.000Z",
     "classification": "DEVELOPMENT_USED"
   },
+  "administrativeCorrection": "The preregistration commit mislabeled the inherited R4 development window by +1 day. This field was corrected to the actual R4 window after the first fail-closed replay; candidate rules and thresholds were not changed.",
   "reservedHoldout": {
     "start": "2025-12-22T15:10:00.000Z",
     "end": "2026-03-22T15:10:00.000Z",
