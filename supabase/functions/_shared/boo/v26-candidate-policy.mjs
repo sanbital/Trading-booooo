@@ -6,7 +6,7 @@
  * is live merely because this file exists; activation requires a matching,
  * unrevoked approval identity and ENFORCE mode.
  */
-export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-3";
+export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-4";
 
 const BASE = Object.freeze({
   minDayReturn: 0.03,
@@ -17,6 +17,7 @@ const BASE = Object.freeze({
   marketParticipation: false,
   entryConfirmation1m: false,
   breakoutContinuation1m: false,
+  triggerQuality1m: false,
 });
 
 export const V26_CANDIDATES = Object.freeze({
@@ -28,6 +29,7 @@ export const V26_CANDIDATES = Object.freeze({
   C5: Object.freeze({ ...BASE, id: "C5", maxDayReturn: 0.05, structuralStop: true }),
   C6: Object.freeze({ ...BASE, id: "C6", structuralStop: true, entryConfirmation1m: true }),
   C7: Object.freeze({ ...BASE, id: "C7", structuralStop: true, breakoutContinuation1m: true }),
+  C8: Object.freeze({ ...BASE, id: "C8", structuralStop: true, triggerQuality1m: true }),
 });
 
 export const STRUCTURAL_STOP = Object.freeze({
@@ -295,5 +297,54 @@ export function breakoutContinuation1mDecision({
     conditions,
     confirmationOpenTime: openTime,
     confirmationClose: close,
+  };
+}
+
+
+export const TRIGGER_QUALITY_1M = Object.freeze({
+  minTakerBuyQuoteRatio: 0.55,
+  minCloseLocation: 0.75,
+});
+
+/**
+ * C8 trigger-quality gate.
+ * Uses only the already-completed re-acceleration trigger candle, so the
+ * decision remains causal and entry can still occur at the next minute open.
+ * It requires buyer-dominant flow and a close in the top quartile of the
+ * candle range, i.e. the trigger itself must finish strong rather than merely
+ * satisfy the geometric re-acceleration rule.
+ */
+export function triggerQuality1mDecision({ triggerAt, bar }) {
+  if (!Number.isSafeInteger(triggerAt) || !bar || typeof bar !== "object") {
+    return { action: "UNKNOWN", reason: "C8_TRIGGER_QUALITY_INPUT_MISSING" };
+  }
+  const openTime = Number(bar.openTime ?? bar.t ?? bar[0]);
+  const high = Number(bar.high ?? bar.h ?? bar[2]);
+  const low = Number(bar.low ?? bar.l ?? bar[3]);
+  const close = Number(bar.close ?? bar.c ?? bar[4]);
+  const closeTime = Number(bar.closeTime ?? bar.ct ?? bar[6] ?? (openTime + minute - 1));
+  const quote = Number(bar.quoteVolume ?? bar.qv ?? bar[7]);
+  const takerBuyQuote = Number(bar.takerBuyQuote ?? bar.tb ?? bar[10]);
+  if (![openTime, high, low, close, closeTime, quote, takerBuyQuote].every(Number.isFinite) ||
+      openTime !== triggerAt - minute || closeTime !== triggerAt - 1 ||
+      !(high >= close && close >= low && low > 0 && quote > 0 &&
+        takerBuyQuote >= 0 && takerBuyQuote <= quote * (1 + 1e-9))) {
+    return { action: "UNKNOWN", reason: "C8_TRIGGER_QUALITY_BAR_INVALID" };
+  }
+  const range = high - low;
+  const closeLocation = range > 0 ? (close - low) / range : 1;
+  const takerBuyQuoteRatio = takerBuyQuote / quote;
+  const conditions = Object.freeze({
+    takerBuyQuoteRatioAtLeast55:
+      takerBuyQuoteRatio >= TRIGGER_QUALITY_1M.minTakerBuyQuoteRatio,
+    closeInTopQuartile: closeLocation >= TRIGGER_QUALITY_1M.minCloseLocation,
+  });
+  const allowed = Object.values(conditions).every(Boolean);
+  return {
+    action: allowed ? "ENTER" : "REJECT",
+    reason: allowed ? "C8_TRIGGER_QUALITY_PASS" : "C8_TRIGGER_QUALITY_FAIL",
+    takerBuyQuoteRatio,
+    closeLocation,
+    conditions,
   };
 }
