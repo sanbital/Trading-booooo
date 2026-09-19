@@ -6,7 +6,7 @@
  * is live merely because this file exists; activation requires a matching,
  * unrevoked approval identity and ENFORCE mode.
  */
-export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-4";
+export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-5";
 
 const BASE = Object.freeze({
   minDayReturn: 0.03,
@@ -18,6 +18,7 @@ const BASE = Object.freeze({
   entryConfirmation1m: false,
   breakoutContinuation1m: false,
   triggerQuality1m: false,
+  antiExhaustion: false,
 });
 
 export const V26_CANDIDATES = Object.freeze({
@@ -30,6 +31,7 @@ export const V26_CANDIDATES = Object.freeze({
   C6: Object.freeze({ ...BASE, id: "C6", structuralStop: true, entryConfirmation1m: true }),
   C7: Object.freeze({ ...BASE, id: "C7", structuralStop: true, breakoutContinuation1m: true }),
   C8: Object.freeze({ ...BASE, id: "C8", structuralStop: true, triggerQuality1m: true }),
+  C9: Object.freeze({ ...BASE, id: "C9", maxDayReturn: 0.05, structuralStop: true, antiExhaustion: true }),
 });
 
 export const STRUCTURAL_STOP = Object.freeze({
@@ -345,6 +347,47 @@ export function triggerQuality1mDecision({ triggerAt, bar }) {
     reason: allowed ? "C8_TRIGGER_QUALITY_PASS" : "C8_TRIGGER_QUALITY_FAIL",
     takerBuyQuoteRatio,
     closeLocation,
+    conditions,
+  };
+}
+
+
+export const ANTI_EXHAUSTION = Object.freeze({
+  maxVolumeRatio: 4.0,
+  minTriggerTakerBuyQuoteRatio: 0.60,
+});
+
+/**
+ * C9 development hypothesis: keep the profitable C5 day-return cap, but refuse
+ * blow-off volume and require buyer-dominant flow on the completed trigger bar.
+ * Inputs are all known at the trigger close; no future candle is read.
+ */
+export function antiExhaustionDecision({ volumeRatio, triggerAt, bar }) {
+  if (!(finite(volumeRatio) && volumeRatio >= 0) || !Number.isSafeInteger(triggerAt) ||
+      !bar || typeof bar !== "object") {
+    return { action: "UNKNOWN", reason: "C9_ANTI_EXHAUSTION_INPUT_MISSING" };
+  }
+  const openTime = Number(bar.openTime ?? bar.t ?? bar[0]);
+  const closeTime = Number(bar.closeTime ?? bar.ct ?? bar[6] ?? (openTime + minute - 1));
+  const quote = Number(bar.quoteVolume ?? bar.qv ?? bar[7]);
+  const takerBuyQuote = Number(bar.takerBuyQuote ?? bar.tb ?? bar[10]);
+  if (![openTime, closeTime, quote, takerBuyQuote].every(Number.isFinite) ||
+      openTime !== triggerAt - minute || closeTime !== triggerAt - 1 ||
+      !(quote > 0 && takerBuyQuote >= 0 && takerBuyQuote <= quote * (1 + 1e-9))) {
+    return { action: "UNKNOWN", reason: "C9_ANTI_EXHAUSTION_BAR_INVALID" };
+  }
+  const takerBuyQuoteRatio = takerBuyQuote / quote;
+  const conditions = Object.freeze({
+    volumeNotBlowoff: volumeRatio <= ANTI_EXHAUSTION.maxVolumeRatio,
+    buyerDominantTrigger:
+      takerBuyQuoteRatio >= ANTI_EXHAUSTION.minTriggerTakerBuyQuoteRatio,
+  });
+  const allowed = Object.values(conditions).every(Boolean);
+  return {
+    action: allowed ? "ENTER" : "REJECT",
+    reason: allowed ? "C9_ANTI_EXHAUSTION_PASS" : "C9_ANTI_EXHAUSTION_FAIL",
+    takerBuyQuoteRatio,
+    volumeRatio,
     conditions,
   };
 }
