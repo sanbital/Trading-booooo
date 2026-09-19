@@ -1,0 +1,14 @@
+{
+  "completedAt": "2026-09-19T23:22:43Z",
+  "iteration": "R14",
+  "testedCandidates": [
+    "C38"
+  ],
+  "nextCandidateId": "C39",
+  "no_robust_edge_found": true,
+  "developmentPass": [],
+  "walkForwardRun": false,
+  "walkForwardReason": "C38 had negative executable net, PF below one, only six trades/four active days, negative top-winner removal and negative adjusted confidence bound.",
+  "unusedHoldoutConsumed": false,
+  "nextHypothesisConstraint": "Stop static participation and queue variants. Test completed-snapshot market breadth/BTC momentum inflection without tuning C34 thresholds or relaxing protection."
+}
