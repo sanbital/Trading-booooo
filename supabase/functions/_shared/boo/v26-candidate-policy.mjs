@@ -22,6 +22,9 @@ const BASE = Object.freeze({
   accelerationReignition: false,
   compressionExpansion: false,
   rankPersistence: false,
+  pullbackAbsorption: false,
+  relativeStrengthResidual: false,
+  sweepReclaim: false,
   minRankOverride: null,
   maxRankOverride: null,
 });
@@ -58,6 +61,15 @@ export const V26_CANDIDATES = Object.freeze({
   }),
   C15: Object.freeze({
     ...BASE, id: "C15", structuralStop: true, rankPersistence: true,
+  }),
+  C16: Object.freeze({
+    ...BASE, id: "C16", structuralStop: true, pullbackAbsorption: true,
+  }),
+  C17: Object.freeze({
+    ...BASE, id: "C17", structuralStop: true, relativeStrengthResidual: true,
+  }),
+  C18: Object.freeze({
+    ...BASE, id: "C18", structuralStop: true, sweepReclaim: true,
   }),
 });
 
@@ -549,4 +561,63 @@ export function rankPersistenceDecision({currentRank,priorRanks,return30m,return
   });
   const allowed=Object.values(conditions).every(Boolean);
   return {action:allowed?"ENTER":"REJECT",reason:allowed?"C15_RANK_PASS":"C15_RANK_FAIL",conditions,observations};
+}
+
+/** C16: sellers are absorbed during the pullback, then price and buyer share reclaim together. */
+export function pullbackAbsorptionDecision({triggerAt,now,bars,signalReference}) {
+  if(!Number.isSafeInteger(triggerAt)||!Number.isSafeInteger(now)||!Array.isArray(bars)||bars.length<6||
+      !(finite(signalReference)&&signalReference>0))return {action:"UNKNOWN",reason:"C16_ABSORPTION_INPUT_MISSING"};
+  const xs=bars.slice(-6).map((b,i)=>researchBar(b,triggerAt-(6-i)*minute,now));
+  if(xs.some(x=>x===null))return {action:"UNKNOWN",reason:"C16_ABSORPTION_BAR_INVALID"};
+  const pullback=xs.slice(0,5),trigger=xs[5];
+  const downBars=pullback.filter(x=>x.close<x.open);
+  const pullbackBuyRatio=pullback.reduce((s,x)=>s+x.ratio*x.quote,0)/pullback.reduce((s,x)=>s+x.quote,0);
+  const priorBuyRatio=pullback.reduce((s,x)=>s+x.ratio,0)/pullback.length;
+  const conditions=Object.freeze({
+    actualPullback:downBars.length>=2,
+    aggregateSellingAbsorbed:pullbackBuyRatio>=0.45,
+    higherLowsIntoTrigger:xs[3].low<=xs[4].low&&xs[4].low<=trigger.low,
+    referenceReclaimed:trigger.close>=signalReference,
+    localClosesBroken:trigger.close>Math.max(...pullback.slice(-3).map(x=>x.close)),
+    buyerShareShift:trigger.ratio>priorBuyRatio&&trigger.ratio>=0.55,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C16_ABSORPTION_PASS":"C16_ABSORPTION_FAIL",conditions,pullbackBuyRatio,triggerBuyRatio:trigger.ratio};
+}
+
+/** C17: leadership must be a fresh residual acceleration over BTC, not raw beta. */
+export function relativeStrengthResidualDecision({return30m,return60m,btcReturn30m,btcReturn60m}) {
+  if(![return30m,return60m,btcReturn30m,btcReturn60m].every(finite))
+    return {action:"UNKNOWN",reason:"C17_RELATIVE_STRENGTH_INPUT_MISSING"};
+  const residual30=return30m-btcReturn30m,residual60=return60m-btcReturn60m;
+  const prior30=return60m-return30m;
+  const conditions=Object.freeze({
+    positiveCurrentMomentum:return30m>0&&return60m>0,
+    outperformingBtc30:residual30>0,
+    outperformingBtc60:residual60>0,
+    currentHalfAccelerating:return30m>prior30,
+    residualConcentratedNow:residual30>=residual60/2,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C17_RELATIVE_STRENGTH_PASS":"C17_RELATIVE_STRENGTH_FAIL",conditions,residual30,residual60,prior30};
+}
+
+/** C18: a completed close below reference is swept, rejected and reclaimed with buyers. */
+export function sweepReclaimDecision({triggerAt,now,bars,signalReference}) {
+  if(!Number.isSafeInteger(triggerAt)||!Number.isSafeInteger(now)||!Array.isArray(bars)||bars.length<6||
+      !(finite(signalReference)&&signalReference>0))return {action:"UNKNOWN",reason:"C18_SWEEP_INPUT_MISSING"};
+  const xs=bars.slice(-6).map((b,i)=>researchBar(b,triggerAt-(6-i)*minute,now));
+  if(xs.some(x=>x===null))return {action:"UNKNOWN",reason:"C18_SWEEP_BAR_INVALID"};
+  const pre=xs.slice(0,5),trigger=xs[5],sweeps=pre.filter(x=>x.low<signalReference&&x.close<signalReference);
+  const minLow=Math.min(...pre.map(x=>x.low)),minIndex=pre.findIndex(x=>x.low===minLow);
+  const conditions=Object.freeze({
+    completedBreakdownObserved:sweeps.length>=1,
+    sweepPrecedesRecovery:minIndex<=3,
+    recoveryClosesRising:pre[4].close>pre[3].close&&trigger.close>pre[4].close,
+    referenceReclaimed:trigger.close>signalReference,
+    microSwingBroken:trigger.close>Math.max(pre[3].high,pre[4].high),
+    flowReversal:Math.min(...pre.map(x=>x.ratio))<0.50&&trigger.ratio>=0.60,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C18_SWEEP_PASS":"C18_SWEEP_FAIL",conditions,minIndex,triggerBuyRatio:trigger.ratio};
 }
