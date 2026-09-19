@@ -1,0 +1,91 @@
+name: V26 Binance 30d validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/v26-parity-risk-replay-20260919]
+    paths:
+      - 'research/v26-validated/binance-30d-validation.mjs'
+      - 'research/v26-validated/binance-symbol-filters-20260919.json'
+      - 'research/v26-validated/binance-missing-15m-20260903.json'
+      - '.github/workflows/v26-binance-30d-validation.yml'
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: v26-binance-30d-validation
+  cancel-in-progress: true
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      REPLAY_DAYS: '30'
+      REPLAY_END_MS: '1789744200000'
+      V26_EXPORT_DIR: /tmp/v26-export
+      V26_VISION_CACHE: /tmp/v26-vision
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/v26-parity-risk-replay-20260919
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Download audited read-only research export
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl -fL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/sanbital/Trading-booooo/actions/artifacts/10556516292/zip \
+            -o /tmp/v26-export.zip
+          rm -rf "$V26_EXPORT_DIR" "$V26_VISION_CACHE"
+          mkdir -p "$V26_EXPORT_DIR" "$V26_VISION_CACHE"
+          unzip -q /tmp/v26-export.zip -d "$V26_EXPORT_DIR"
+          test -f "$V26_EXPORT_DIR/raw/k15.csv.gz"
+          test -f "$V26_EXPORT_DIR/raw/symbols.csv.gz"
+          sha256sum "$V26_EXPORT_DIR/raw/"*.csv.gz
+
+      - name: Validate source syntax
+        run: |
+          set -euo pipefail
+          node --check research/v26-validated/binance-30d-validation.mjs
+          sha256sum research/v26-validated/binance-30d-validation.mjs \
+            | tee research/v26-validated/VALIDATOR_SHA256.txt
+
+      - name: Run 30-day C0-C5 replay from Binance official data
+        run: |
+          set -euo pipefail
+          rm -rf research/v26-validated/results-30d
+          mkdir -p research/v26-validated/results-30d
+          node --max-old-space-size=6144 research/v26-validated/binance-30d-validation.mjs \
+            2>&1 | tee research/v26-validated/results-30d/run.log
+
+      - name: Commit deterministic result
+        if: success()
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add research/v26-validated/VALIDATOR_SHA256.txt \
+                  research/v26-validated/results-30d
+          if ! git diff --cached --quiet; then
+            git commit -m 'research(v26): save Binance Vision 30d C0-C5 results'
+            git push origin HEAD:fix/v26-parity-risk-replay-20260919
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v26-binance-30d-validation
+          path: |
+            research/v26-validated/VALIDATOR_SHA256.txt
+            research/v26-validated/results-30d
+          if-no-files-found: warn
+          retention-days: 30

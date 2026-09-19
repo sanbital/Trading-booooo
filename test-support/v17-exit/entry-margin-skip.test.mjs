@@ -12,7 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
-import {POLICY, entryFresh} from '../../supabase/functions/_shared/leader-momentum-v17.mjs';
+import {POLICY, entryFresh, entryReason} from '../../supabase/functions/_shared/leader-momentum-v17.mjs';
 import {SLOT_SIZING_CONTRACT, ceilStep, ceilTick, floorStep, planSlotEntry, slotSizingBounds}
   from '../../supabase/functions/_shared/leader-slot-sizing.mjs';
 import {ENFORCEMENT as BOO_ENFORCEMENT, evaluateBooEntry, finalizeBooEntry, loadBooGateContext,
@@ -41,12 +41,12 @@ const MARGIN = SLOT_SIZING_CONTRACT.targetMarginUsdt, LEV = SLOT_SIZING_CONTRACT
 function make({available, setupCutover = Number.MAX_SAFE_INTEGER}) {
   const now = Date.now();
   const features = {
-    strategy: 'LEADER_MOMENTUM_V17', signal5Close: now - 1000, referenceClose: 100, atr: 1, bbPos: 0,
+    strategy: 'LEADER_MOMENTUM_V17', rank:1, dayReturn:.04, qv24:8_000_000, return15m:.002, return30m:.008, return60m:.016, volumeRatio:1.30, signal5Close: now - 1000, referenceClose: 100, atr: 1, bbPos: 0,
     exitPolicy: {stopPct: .025, trailArmPct: .03, trailGapPct: .015, staleMs: POLICY.staleMs, maxHoldMs: POLICY.maxHoldMs},
   };
   const ctx = {
     ...entryEvidence,
-    Date, Number, Math, Error, Promise, String, Object, console, POLICY, entryFresh,
+    Date, Number, Math, Error, Promise, String, Object, console, POLICY, entryFresh, entryReason,
     STRATEGY: 'LEADER_MOMENTUM_V17', MARGIN, LEV, NOTIONAL, MAX_SLOTS: 10,
     MAX_ORDER_MARGIN_USDT, ENTRY_CASH_BUFFER_USDT: .10,
     SPREAD_MAX: 25, IOC_BASE_BPS: SLOT_SIZING_CONTRACT.iocBaseBps,

@@ -92,6 +92,18 @@ export function rankFeatures(features) {
   return [...features].sort((a,b)=>b.dayReturn-a.dayReturn||cmp(a.symbol,b.symbol)).map((x,i)=>({...x,rank:i+1}));
 }
 export function entryReason(f,p=POLICY) {
+  // This function is called both from the scanner and again by the executor.
+  // JavaScript comparisons against NaN are false, so a missing/null/non-finite
+  // feature must be rejected BEFORE threshold checks or it can fall through as
+  // ELIGIBLE. Persisted legacy signals therefore cannot bypass a newer gate.
+  if(!f||typeof f!=='object'||!p||typeof p!=='object') return 'INVALID_FEATURES';
+  const fields=['rank','dayReturn','qv24','return15m','return30m','return60m','volumeRatio'];
+  if(!fields.every(k=>typeof f[k]==='number'&&Number.isFinite(f[k]))) return 'INVALID_FEATURES';
+  const limits=['rankLimit','minDayReturn','maxDayReturn','minQuoteVolume24h','min30mReturn','min60mReturn','minVolumeRatio'];
+  if(!limits.every(k=>typeof p[k]==='number'&&Number.isFinite(p[k]))) return 'INVALID_POLICY';
+  if(!Number.isInteger(f.rank)||f.rank<1||!Number.isInteger(p.rankLimit)||p.rankLimit<1||
+     !(p.minDayReturn>=0&&p.maxDayReturn>p.minDayReturn)||p.minQuoteVolume24h<0||
+     p.minVolumeRatio<0) return 'INVALID_FEATURES';
   if(f.rank>p.rankLimit) return 'OUTSIDE_TOP10';
   if(f.dayReturn<p.minDayReturn) return 'DAY_RETURN';
   if(f.dayReturn>=p.maxDayReturn) return 'DAY_RETURN_CHASE_CAP';

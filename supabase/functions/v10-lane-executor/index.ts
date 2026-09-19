@@ -1,7 +1,7 @@
 // @ts-nocheck
 import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode,entryPriceEvidence} from "./entry-evidence.mjs";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
-import {POLICY, STRATEGY, ENTRY_EXECUTION_POLICY_VERSION, entryFresh, postFillEntryGuard, nextExit, portfolioMatches as leaderPortfolioMatches} from "../_shared/leader-momentum-v17.mjs";
+import {POLICY, STRATEGY, ENTRY_EXECUTION_POLICY_VERSION, entryFresh, entryReason, postFillEntryGuard, nextExit, portfolioMatches as leaderPortfolioMatches} from "../_shared/leader-momentum-v17.mjs";
 import {nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5, exitAttemptId, classifyExitResponse} from "../_shared/leader-exit-review.mjs";
 import {protectNewLeaderPosition} from "../_shared/leader-entry-protection.mjs";
 import {createGatewayProtection} from "../_shared/leader-protection-adapter.mjs";
@@ -13,11 +13,11 @@ import {ENTRY_CONTROL_VERSION,CONTROL_SCOPE,evaluateEntryDecision,symbolRecovery
 import {QV3_ACTIVATION_BASIS,QV3_LIVE_CUTOVER,QV3_VERSION,qv3Entry,qv3Exit,qv3Scope,qv3Stamp,qv3Candles,qv3AuditEvidence} from "../_shared/leader-qv3-runtime.mjs";
 import {E1_POLICY,advanceE1,e1QuoteEvidence,fetchE1AggTrades,startE1} from "../_shared/leader-e1-runtime.mjs";
 import {V24_ADAPTER_VERSION,v24EntryGate} from "./v24-entry-adapter.mjs";
-import {BOO_ADAPTER_VERSION,ENFORCEMENT as BOO_ENFORCEMENT,evaluateBooEntry,finalizeBooEntry,loadBooGateContext,openRiskSummary,recordBooVerdict} from "./boo-entry-adapter.mjs";
+import {BOO_ADAPTER_VERSION,ENFORCEMENT as BOO_ENFORCEMENT,evaluateBooEntry,finalizeBooEntry,loadBooGateContext,openRiskSummary,recordBooVerdict,reserveEntryRisk,releaseEntryRisk} from "./boo-entry-adapter.mjs";
 import {R1_VERSION} from "../_shared/boo/r1-strategy.mjs";
 import {RISK_POLICY_VERSION} from "../_shared/boo/risk-policy.mjs";
 import {RISK_BUDGET_VERSION} from "../_shared/boo/risk-budget.mjs";
-import {SLOT_SIZING_CONTRACT,assertSlotSizingContract,floorStep,planSlotEntry,slotSizingBounds} from "../_shared/leader-slot-sizing.mjs";
+import {SLOT_SIZING_CONTRACT,assertSlotSizingContract,entryLimitPrice,floorStep,planSlotEntry,slotSizingBounds} from "../_shared/leader-slot-sizing.mjs";
 import {SETUP_POLICY,SETUP_POLICY_VERSION,SETUP_REASON,SETUP_STATE,advancePullbackSetup,deserializeSetup,enterPullbackSetup,entryTriggerFresh,expirePullbackSetup,isTerminal as setupIsTerminal,serializeSetup,setupIdentity,startPullbackSetup} from "../_shared/leader-pullback-reaccel.mjs";
 const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V23-E1-X1-OPERATOR-OVERRIDE-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Object.freeze({
@@ -191,6 +191,33 @@ function sizeEntry(ask,step,filters={}){
     minNotionalUsdt:N(filters.minNotionalUsdt,0),minQuantity:N(filters.minQuantity,0)});
   return{...plan,amount:plan.quantity,sizedNotional:plan.referenceNotionalUsdt,
     sizedMargin:plan.orderMarginUsdt};
+}
+function selectionGate(features){
+  const reason=entryReason(rec(features));
+  return reason==="ELIGIBLE"?null:`V17_SELECTION_GATE:${reason}`;
+}
+function applyBooRiskQuantity(legacy,booFinal){
+  if(booFinal?.enforcement!==BOO_ENFORCEMENT.ENFORCE)return legacy;
+  const sizing=booFinal?.sizing,plan=sizing?.plan;
+  if(sizing?.decision!=="ENTER"||!plan)throw Error(`BOO_RISK_SIZING:${sizing?.reason??"NO_PLAN"}`);
+  const amount=N(plan.quantity?.toString?.()??plan.quantity,NaN),
+    riskNotional=N(plan.notional?.toString?.()??plan.notional,NaN),
+    riskMargin=N(plan.margin?.toString?.()??plan.margin,NaN),
+    plannedLoss=N(plan.plannedLoss?.toString?.()??plan.plannedLoss,NaN),
+    limitPrice=N(legacy?.limitPrice,NaN);
+  if(!(amount>0&&riskNotional>0&&riskMargin>0&&plannedLoss>0&&limitPrice>0))
+    throw Error("BOO_RISK_SIZING_INVALID");
+  const orderNotionalUsdt=amount*limitPrice,orderMarginUsdt=orderNotionalUsdt/LEV;
+  // solveQuantity was evaluated with this exact IOC cap. A mismatch means the
+  // validated plan and the order being built have diverged; fail closed.
+  if(orderNotionalUsdt>riskNotional+Math.max(1e-8,riskNotional*1e-9)||
+     orderMarginUsdt>riskMargin+Math.max(1e-8,riskMargin*1e-9))
+    throw Error("BOO_RISK_PLAN_ORDER_MISMATCH");
+  return{...legacy,quantity:amount,amount,referenceNotionalUsdt:riskNotional,
+    referenceMarginUsdt:riskMargin,orderNotionalUsdt,orderMarginUsdt,
+    sizedNotional:riskNotional,sizedMargin:riskMargin,boundBy:"BOO_RISK_BUDGET",
+    booRiskPlan:{version:sizing.version??RISK_BUDGET_VERSION,plannedLoss,
+      tradeBudget:N(plan.tradeBudget?.toString?.()??plan.tradeBudget,NaN)}};
 }
 // --- V17 pullback / re-acceleration setup lifecycle -------------------------
 //
@@ -532,6 +559,11 @@ function booVerdict(s,phase,inputs,{quote,info,snapshot,pair,orders}){
   const {identity,gateContext,controls,feeRates,positionMode}=inputs;
   const book=booBook(quote,E1_POLICY.maxQuoteAgeMs);
   const f=rec(s.features),ref=N(f.referenceClose),stopPct=N(rec(f.exitPolicy).stopPct);
+  let entryPriceCap=null;
+  try{
+    entryPriceCap=entryLimitPrice(N(quote?.best_ask,NaN),
+      N(info?.price_tick??info?.tick_size,0)).limitPrice;
+  }catch{/* Invalid/unavailable cap is passed as null; BOO sizing fails closed. */}
   const {openRisk,grossNotional}=openRiskSummary({positions:pair.positions,
     pendingOrders:(orders?.orders??[]).filter(o=>o?.request_payload?.booRiskReservation)});
   // Taker rate from the account, as a fraction. A missing rate leaves the field
@@ -545,6 +577,7 @@ function booVerdict(s,phase,inputs,{quote,info,snapshot,pair,orders}){
         reason:String(f.strategy||"")===STRATEGY?null:`WRONG_STRATEGY:${f.strategy}`},
       // The structural stop the position would actually carry.
       structuralStop:ref>0&&stopPct>0?String(ref*(1-stopPct)):"0",
+      entryPriceCap,
       filters:{stepSize:String(N(info?.quantity_step??info?.step_size)),
         minQty:String(N(info?.min_quantity??info?.quantity_step??info?.step_size)),
         maxQty:String(N(info?.max_quantity,0))||undefined,
@@ -580,6 +613,7 @@ const gateway=opsGateway(db);
 await requireLeaderEntryControls(db);
 const exitPolicy=rec(s.features?.exitPolicy);
 if(!Object.values(exitPolicy).every(v=>Number.isFinite(Number(v)))||!(Number(exitPolicy.stopPct)>0&&Number(exitPolicy.stopPct)<1&&Number(exitPolicy.trailArmPct)>0&&Number(exitPolicy.trailGapPct)>0&&Number(exitPolicy.trailGapPct)<1&&Number(exitPolicy.maxHoldMs)===POLICY.maxHoldMs&&Number(exitPolicy.staleMs)>0))throw new Error("V17_EXIT_POLICY_INVALID");
+const initialSelection=selectionGate(s.features);if(initialSelection)throw new Error(initialSelection);
 const initialFresh=checkedEntryFresh(s,s.features,Date.now(),Number(s.features?.referenceClose),attempt,"PRE_ADMISSION");
 if(initialFresh)throw new Error(initialFresh);
 let[sn,q,i,rawInitialPair,initialOrders]=await Promise.all([snap(db),gateway({action:"quote",market:s.symbol}),
@@ -788,6 +822,16 @@ if(booFinal.blocks){
     reason:`BOO_ENTRY_GATE:${booFinal.driftDetected?"STATE_DRIFT:":""}${booFinal.reason}`,
     releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,booGate:booPredispatch.verdict};
 }
+// In ENFORCE, solveQuantity is authoritative. OBSERVE remains observation-only,
+// which preserves current operation while this unapproved policy is measured.
+sized=applyBooRiskQuantity(sized,booFinal);
+limitPrice=N(sized.limitPrice);iocBps=N(sized.iocBps);gap=Math.abs(limitPrice-ref)/atr;
+live=N(finalCheck.pf?.available_quote,NaN);avail=Math.min(N(sn.available_quote),live);
+if(!Number.isFinite(live))throw Error("ENTRY_AVAILABLE_BALANCE_UNREADABLE");
+if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,
+  reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,
+  releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL};
+const finalSelection=selectionGate(s.features);if(finalSelection)throw Error(finalSelection);
 if(E1_ENABLED){
   const checkedAt=Date.now(),receivedAt=N(q?.timing?.received_at_ms,NaN),quoteAge=checkedAt-receivedAt;
   if(!Number.isSafeInteger(receivedAt)||quoteAge<0||quoteAge>E1_POLICY.maxQuoteAgeMs)
@@ -810,9 +854,29 @@ if(E1_ENABLED&&dispatchQuote?.raw){
 // recordBooVerdict swallows its own failures, so BOO logging can never block entry.
 await recordBooVerdict(db,{signalId:s.id,symbol:s.symbol,phase:"PRE_DISPATCH",result:booPredispatch});
 await verifyExecutionLease(db);
-const id=cid("v11e",s.id),rp={action:"create_order",leverage:LEV,order:{market:s.symbol,side:"BUY",type:"LIMIT",price:limitPrice,time_in_force:"IOC",quantity:sized.amount,identifier:id,position_side:"LONG",position_effect:"OPEN"},wait_for_final_ms:4000},
-  oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,intent:"OPEN_LONG",reason:"V17_LEADER_ENTRY_IOC",client_order_id:id,requested_quantity:sized.amount,state:"PLANNED",request_payload:{...rp,quantity_step:step,price_tick:filters.priceTick,min_notional_usdt:filters.minNotionalUsdt,target_margin_usdt:MARGIN,sizing_contract_version:SLOT_SIZING_CONTRACT.version,entry_timing_policy:setupGoverns(s)?{version:SETUP_POLICY_VERSION,activation:SETUP_LIVE_CUTOVER,setup:serializeSetup(signalSetup(s),8)}:null,sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,order_notional_usdt:sized.orderNotionalUsdt,sizing_bound_by:sized.boundBy,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,executor_patch:PATCH,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION,max_entry_drift_pct:POLICY.maxEntryDriftPct},entry_control:finalDecision.evidence,e1:E1_ENABLED?e1Decision:null,x1:X1_ENABLED?{policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,...OPERATOR_OVERRIDE}:null,operator_override:E1_ENABLED||X1_ENABLED?OPERATOR_OVERRIDE:null,qv3:qv3Active?{version:QV3_VERSION,activation:QV3_LIVE_CUTOVER,basis:QV3_ACTIVATION_BASIS}:null}}).select("*").single();
-if(oi.error)throw new Error(`ORDER_INTENT:${oi.error.message}`);
+const id=cid("v11e",s.id);
+let riskReservation=null;
+if(booFinal.enforcement===BOO_ENFORCEMENT.ENFORCE){
+  const plan=booFinal.sizing?.plan,plannedLoss=N(plan?.plannedLoss?.toString?.()??plan?.plannedLoss,NaN),
+    equity=N(sn?.total_equity_quote,N(finalCheck.pf?.total_equity_quote,NaN)),
+    totalRiskFrac=N(booPredispatch.riskPolicy?.policy?.maxTotalOpenRiskFrac?.toString?.()??
+      booPredispatch.riskPolicy?.policy?.maxTotalOpenRiskFrac,NaN),
+    fencingToken=N(booInputs.controls?.runtime?.incident_generation,NaN);
+  if(!(plannedLoss>0&&equity>0&&totalRiskFrac>0&&Number.isSafeInteger(fencingToken)))
+    throw Error("BOO_RISK_RESERVATION_INPUT_INVALID");
+  const rr=await reserveEntryRisk(db,{intentId:id,symbol:s.symbol,amount:plannedLoss,
+    fencingToken,totalBudget:equity*totalRiskFrac,clientOrderId:id});
+  if(!rr?.ok)return{entered:false,reason:`BOO_RISK_RESERVATION:${rr?.reason??"FAILED"}`,
+    releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL};
+  riskReservation={intentId:id,amountQuote:plannedLoss,fencingToken,state:String(rr.state??rr.reason??"RESERVED")};
+}
+const rp={action:"create_order",leverage:LEV,order:{market:s.symbol,side:"BUY",type:"LIMIT",price:limitPrice,time_in_force:"IOC",quantity:sized.amount,identifier:id,position_side:"LONG",position_effect:"OPEN"},wait_for_final_ms:4000},
+  oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,intent:"OPEN_LONG",reason:"V17_LEADER_ENTRY_IOC",client_order_id:id,requested_quantity:sized.amount,state:"PLANNED",request_payload:{...rp,quantity_step:step,price_tick:filters.priceTick,min_notional_usdt:filters.minNotionalUsdt,target_margin_usdt:MARGIN,sizing_contract_version:SLOT_SIZING_CONTRACT.version,entry_timing_policy:setupGoverns(s)?{version:SETUP_POLICY_VERSION,activation:SETUP_LIVE_CUTOVER,setup:serializeSetup(signalSetup(s),8)}:null,sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,order_notional_usdt:sized.orderNotionalUsdt,sizing_bound_by:sized.boundBy,booRiskReservation:riskReservation?.amountQuote??null,booRiskPlan:sized.booRiskPlan??null,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,executor_patch:PATCH,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION,max_entry_drift_pct:POLICY.maxEntryDriftPct},entry_control:finalDecision.evidence,e1:E1_ENABLED?e1Decision:null,x1:X1_ENABLED?{policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,...OPERATOR_OVERRIDE}:null,operator_override:E1_ENABLED||X1_ENABLED?OPERATOR_OVERRIDE:null,qv3:qv3Active?{version:QV3_VERSION,activation:QV3_LIVE_CUTOVER,basis:QV3_ACTIVATION_BASIS}:null}}).select("*").single();
+if(oi.error){
+  if(riskReservation)await releaseEntryRisk(db,{intentId:riskReservation.intentId,
+    fencingToken:riskReservation.fencingToken,resolution:"INTENT_WRITE_FAILED_NO_DISPATCH",proven:true});
+  throw new Error(`ORDER_INTENT:${oi.error.message}`);
+}
 try{
   await verifyExecutionLease(db);attempt.dispatched=true;const initialRaw=await gateway(rp),initial=fill(initialRaw);
   let finalRaw=initialRaw,receipt=null,finalitySource="CREATE_RESPONSE";
@@ -837,17 +901,25 @@ try{
     const entryProtection=await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position:pos.data,
       manualSymbols:manualRows.map(x=>x.symbol),readPortfolio:()=>gateway({action:"p10_portfolio"},5000),
       manage:ctx=>manageLeader(db,pos.data,{...ctx,gateway})});
+    const riskReservationRelease=riskReservation?await releaseEntryRisk(db,{
+      intentId:riskReservation.intentId,fencingToken:riskReservation.fencingToken,
+      resolution:"OPEN_POSITION_RECORDED_AND_PROTECTED",proven:true}):null;
     return{entered:true,positionId:pos.data.id,symbol:s.symbol,entryPrice:receipt.price,
       quantity:receipt.quantity,stopPrice:stop,hardDeadline:pos.data.hard_deadline,iocBps,
-      sizedMarginUsdt:sized.sizedMargin,entryProtection,entryFinality:evidence,
+      sizedMarginUsdt:sized.sizedMargin,entryProtection,entryFinality:evidence,riskReservationRelease,
       entryDecision:finalDecision,postFillEntryGuard:rec(pos.data.metadata).postFillEntryGuard,
       e1:e1Decision,x1PolicyVersion:rec(pos.data.metadata).exitObservationPolicyVersion,qv3:attempt.qv3};
   }
   await settleKnownEntry(db,oi.data,settledRaw,gateway);
-  return{entered:false,reason:`IOC_NO_FILL:${receipt.status}`,entryFinality:evidence,
+  const riskReservationRelease=riskReservation?await releaseEntryRisk(db,{
+    intentId:riskReservation.intentId,fencingToken:riskReservation.fencingToken,
+    resolution:`PROVEN_NO_FILL:${receipt.status}`,proven:true}):null;
+  return{entered:false,reason:`IOC_NO_FILL:${receipt.status}`,entryFinality:evidence,riskReservationRelease,
     entryDecision:finalDecision,e1:e1Decision,qv3:attempt.qv3};
 }catch(e){
   if(classifyFailure(e).fatal)throw e;await verifyExecutionLease(db);
+  if(riskReservation)await releaseEntryRisk(db,{intentId:riskReservation.intentId,
+    fencingToken:riskReservation.fencingToken,resolution:"ENTRY_OUTCOME_UNPROVEN",proven:false});
   const msg=e instanceof Error?e.message:String(e),explicit=false;
   await db.from("v11_long_regime_orders").update({state:explicit?"REJECTED":"RECONCILIATION_FAILED",
     reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",oi.data.id);

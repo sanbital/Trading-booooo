@@ -11,10 +11,11 @@
  *   - a setup only ever sees candles whose closeTime is already past `now`;
  *   - the earliest possible entry is the OPEN of the minute AFTER the trigger candle
  *     closed, never that candle's own open, high or low;
- *   - within a holding bar the stop is tested against the level that was already
- *     fixed at the END of the previous bar, and only then is the peak advanced with
- *     this bar's high. A bar can therefore never raise the stop and fill it at the
- *     same time.
+ *   - the entry stop is active on the entry bar itself;
+ *   - within every holding bar the pre-existing stop is tested before that bar's
+ *     high may ratchet protection;
+ *   - close-only decisions execute no earlier than the next bar's open;
+ *   - a position still open at the data boundary remains UNSETTLED.
  *
  * Usage: node replay.mjs [--pullback 0.0025] [--stress 0] [--qv3 off|current] [--entry new|old]
  */
@@ -86,44 +87,64 @@ export function findTrigger(signal, bars, policy) {
 }
 
 /**
- * Hold a position from `entryPrice` through `bars`, under R5, with no same-bar
- * lookahead. `bars[0]` is the entry bar; the stop is first testable on bars[1].
+ * Hold a position from entry through completed 1m bars under R5.
+ *
+ * Execution rules:
+ *   - bars[0] IS the entry bar, so the entry stop is active immediately.
+ *   - a stop fixed before a bar is tested before that bar's high may ratchet risk.
+ *   - a decision that only becomes knowable at a bar close fills no earlier than
+ *     the NEXT bar open.
+ *   - if the replay window ends while still open, the trade remains UNSETTLED.
+ *
+ * entry.stopPrice optionally supplies a structural initial stop (C1+). When it
+ * is absent, C0 keeps the production percentage stop.
  */
 export function runExit(entry, bars, { stressPct = 0, qv3 = "off" } = {}) {
   const policy = { ...POLICY, ...EXIT_REVIEW_R5 };
   const slip = COSTS.exitSlippagePct + stressPct;
   let peakPrice = entry.price, lastHighAt = entry.at,
-    stopPrice = entry.price * (1 - POLICY.stopPct);
+    stopPrice = Number(entry.stopPrice ?? entry.price * (1 - POLICY.stopPct));
   const seen = [];
-  let mae = 0, mfe = 0;
+  let mae = 0, mfe = 0, pendingClose = null;
 
-  for (let i = 1; i < bars.length; i++) {
+  if (!(stopPrice > 0 && stopPrice < entry.price)) throw Error("INVALID_INITIAL_STOP");
+
+  for (let i = 0; i < bars.length; i++) {
     const bar = bars[i], closeAt = bar[0] + MIN - 1;
     const [, o, h, l, c] = bar;
-    mae = Math.min(mae, l / entry.price - 1);
-    mfe = Math.max(mfe, h / entry.price - 1);
 
-    // 1. The stop as it stood BEFORE this bar opened.
+    // A close-only decision from the PREVIOUS completed bar can execute now.
+    if (pendingClose) {
+      const raw = o;
+      return settle(entry, raw * (1 - slip), bar[0], pendingClose, { mae, mfe });
+    }
+
+    // 1. The stop that existed BEFORE this bar opened is live from the entry
+    // bar onward. It is evaluated before this bar's high to avoid using a later
+    // favourable excursion to create an earlier stop.
     const preBar = {
       entryPrice: entry.price, entryAt: entry.at, peakPrice, lastHighAt, stopPrice,
       entryFee: entry.fee, quantity: entry.quantity,
     };
     const adverse = nextExitReviewed(preBar, l, closeAt, policy);
     if (adverse.action === "CLOSE" && l <= adverse.stopPrice) {
-      // A gap through the stop fills at the open, not at the level.
+      // If the bar opens through the stop, the fill cannot be better than the open.
       const raw = Math.min(o, adverse.stopPrice);
-      return settle(entry, raw * (1 - slip), closeAt, adverse.reason, { mae, mfe });
+      mae = Math.min(mae, raw / entry.price - 1);
+      return settle(entry, raw * (1 - slip), bar[0], adverse.reason, { mae, mfe });
     }
 
-    // 2. Only now may the bar's high advance the peak, for the NEXT bar.
-    const favourable = nextExitReviewed(
-      { ...preBar }, h, closeAt, policy,
-    );
+    // Only once we know the pre-existing stop survived may the full bar's
+    // excursion enter MAE/MFE and its high ratchet protection for NEXT bar.
+    mae = Math.min(mae, l / entry.price - 1);
+    mfe = Math.max(mfe, h / entry.price - 1);
+    const favourable = nextExitReviewed({ ...preBar }, h, closeAt, policy);
     peakPrice = favourable.peakPrice;
     lastHighAt = favourable.lastHighAt;
     stopPrice = favourable.stopPrice;
 
-    // 3. Time-based exits are decided on the close, and fill on the close.
+    // 2. Rules whose evidence exists only at close create a pending instruction.
+    // They do NOT fill at the close that made the decision knowable.
     const onClose = nextExitReviewed(
       { entryPrice: entry.price, entryAt: entry.at, peakPrice, lastHighAt, stopPrice,
         entryFee: entry.fee, quantity: entry.quantity },
@@ -131,26 +152,38 @@ export function runExit(entry, bars, { stressPct = 0, qv3 = "off" } = {}) {
     );
     if (onClose.action === "CLOSE" && onClose.reason !== "V17_HARD_STOP" &&
         onClose.reason !== "V17_TRAILING_STOP") {
-      return settle(entry, c * (1 - slip), closeAt, onClose.reason, { mae, mfe });
+      pendingClose = onClose.reason;
     }
 
-    // 4. QV3's two-bearish-candle exit, when it is the authoritative policy.
+    // 3. QV3 is also a completed-candle decision and therefore queues for the
+    // next executable bar rather than being back-filled at this close.
     seen.push(toKline(bar));
-    if (qv3 === "current") {
+    if (!pendingClose && qv3 === "current") {
       const pos = { entryAt: entry.at, entryPrice: entry.price, ownership: "AUTO" };
       if (exitSignal(pos, seen, closeAt + 1, "ENTRY_EXIT_TWO")) {
-        return settle(entry, c * (1 - slip), closeAt, "QV3_TWO_BEARISH_CLOSED", { mae, mfe });
+        pendingClose = "QV3_TWO_BEARISH_CLOSED";
       }
     }
   }
+
   const last = bars.at(-1);
-  return settle(entry, last[4] * (1 - slip), last[0] + MIN - 1, "REPLAY_WINDOW_END", { mae, mfe });
+  const mark = last ? Number(last[4]) : entry.price;
+  return {
+    status: "UNSETTLED",
+    reason: pendingClose ? `PENDING_NEXT_OPEN:${pendingClose}` : "REPLAY_WINDOW_END_OPEN",
+    entryPrice: entry.price, entryAt: entry.at, quantity: entry.quantity,
+    stopPrice, peakPrice, mae, mfe, markedPrice: mark,
+    unrealizedGrossPnl: (mark - entry.price) * entry.quantity,
+    exitPrice: null, exitAt: null, grossPnl: null, fees: entry.fee,
+    netPnl: null, holdMs: last ? last[0] + MIN - 1 - entry.at : 0,
+  };
 }
 
 function settle(entry, exitPrice, exitAt, reason, extra) {
   const gross = (exitPrice - entry.price) * entry.quantity;
   const exitFee = exitPrice * entry.quantity * COSTS.exitFeeRate;
   return {
+    status: "SETTLED",
     ...extra,
     entryPrice: entry.price, exitPrice, entryAt: entry.at, exitAt, reason,
     quantity: entry.quantity, grossPnl: gross, fees: entry.fee + exitFee,
@@ -160,29 +193,31 @@ function settle(entry, exitPrice, exitAt, reason, extra) {
 
 /** Aggregate a list of settled trades into the reported metrics. */
 export function summarise(trades) {
-  const n = trades.length;
-  const wins = trades.filter((t) => t.netPnl > 0), losses = trades.filter((t) => t.netPnl <= 0);
-  const net = trades.reduce((s, t) => s + t.netPnl, 0);
-  const gross = trades.reduce((s, t) => s + t.grossPnl, 0);
-  const fees = trades.reduce((s, t) => s + t.fees, 0);
+  const settled = trades.filter((t) => t?.status !== "UNSETTLED" && Number.isFinite(t?.netPnl));
+  const unresolved = trades.filter((t) => t?.status === "UNSETTLED");
+  const n = settled.length;
+  const wins = settled.filter((t) => t.netPnl > 0), losses = settled.filter((t) => t.netPnl <= 0);
+  const net = settled.reduce((s, t) => s + t.netPnl, 0);
+  const gross = settled.reduce((s, t) => s + t.grossPnl, 0);
+  const fees = settled.reduce((s, t) => s + t.fees, 0);
   const grossWin = wins.reduce((s, t) => s + t.netPnl, 0);
   const grossLoss = Math.abs(losses.reduce((s, t) => s + t.netPnl, 0));
   let equity = 0, peak = 0, mdd = 0;
-  for (const t of [...trades].sort((a, b) => a.exitAt - b.exitAt)) {
+  for (const t of [...settled].sort((a, b) => a.exitAt - b.exitAt)) {
     equity += t.netPnl;
     peak = Math.max(peak, equity);
     mdd = Math.min(mdd, equity - peak);
   }
   return {
+    inputTrades: trades.length,
     trades: n,
+    unresolved: unresolved.length,
     wins: wins.length,
     losses: losses.length,
     winRate: n ? wins.length / n : 0,
     grossPnl: gross,
     fees,
-    // Slippage is already inside grossPnl via the executed price; reported separately
-    // so the cost stack is legible rather than implied.
-    slippage: trades.reduce((s, t) => s + t.slippageCost ?? 0, 0),
+    slippage: settled.reduce((s, t) => s + (t.slippageCost ?? 0), 0),
     netPnl: net,
     expectancy: n ? net / n : 0,
     expectancyPctOfMargin: n ? net / n / MARGIN : 0,
@@ -190,9 +225,10 @@ export function summarise(trades) {
     maxDrawdown: mdd,
     avgWin: wins.length ? grossWin / wins.length : 0,
     avgLoss: losses.length ? -grossLoss / losses.length : 0,
-    avgHoldMin: n ? trades.reduce((s, t) => s + t.holdMs, 0) / n / MIN : 0,
-    avgMae: n ? trades.reduce((s, t) => s + t.mae, 0) / n : 0,
-    avgMfe: n ? trades.reduce((s, t) => s + t.mfe, 0) / n : 0,
+    avgHoldMin: n ? settled.reduce((s, t) => s + t.holdMs, 0) / n / MIN : 0,
+    avgMae: n ? settled.reduce((s, t) => s + t.mae, 0) / n : 0,
+    avgMfe: n ? settled.reduce((s, t) => s + t.mfe, 0) / n : 0,
+    unresolvedMarkedPnl: unresolved.reduce((s,t)=>s+(Number(t.unrealizedGrossPnl)||0),0),
   };
 }
 

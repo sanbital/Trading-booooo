@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "experimentId": "BOO-V26-PREREG-20260919",
+  "preregisteredAt": "2026-09-19T00:00:00Z",
+  "purpose": "Compare C0-C5 without post-result threshold tuning; no candidate is eligible for live promotion without independent validation.",
+  "developmentWindow": {
+    "classification": "DEVELOPMENT_ONLY_ALREADY_REPEATED",
+    "startMs": 1787152200000,
+    "endMsExclusive": 1789744200000,
+    "kstLabel": "2026-08-20 00:10 KST .. 2026-09-19 00:10 KST"
+  },
+  "independentValidation": {
+    "status": "REQUIRED_NOT_YET_ACQUIRED",
+    "rule": "Must be an unused chronological period not consumed by tuning or prior repeated evaluation.",
+    "leakagePolicy": "No future observer state, no reconstructed BULL/NEUTRAL labels, no result-driven threshold changes."
+  },
+  "frozenCommon": {
+    "dayReturnMinInclusive": 0.03,
+    "dayReturnMaxExclusive": 0.08,
+    "volumeRatioMinInclusive": 1.3,
+    "topK": 10,
+    "topKOrdering": "rank full eligible historical universe first, then apply gate",
+    "leverage": 3,
+    "totalStartingCapitalUsdt": 30,
+    "concurrentPositions": 1,
+    "structuralStopFormula": "setupLow - max(2*ticks, 0.1*completed_5m_ATR14)",
+    "earlyFailure": {
+      "minCompleted1mBars": 3,
+      "maxHoldingMinutes": 5,
+      "maxMfeRExclusive": 0.25,
+      "lastTwoClosesBelowOriginalSignalReference": true,
+      "latestCloseLowerThanPrevious": true,
+      "lastThreeTakerBuyQuoteOverTotalQuoteExclusive": 0.5
+    },
+    "marketParticipation": {
+      "btcUsdtReturn60mMinInclusive": 0,
+      "rising30mFractionAmongLiquidFuturesMinInclusive": 0.5
+    },
+    "riskPolicy": {
+      "riskPerTradeFraction": 0.0025,
+      "maxTotalOpenRiskFraction": 0.005,
+      "maxGrossNotionalToEquity": 1,
+      "maxConcurrentPositions": 1,
+      "dailyLossLimitFraction": 0.01,
+      "weeklyLossLimitFraction": 0.03,
+      "recoveryHighWaterDrawdownFraction": 0.05,
+      "maxConsecutiveLosses": 3
+    }
+  },
+  "candidates": {
+    "C0": {
+      "structuralStop": false,
+      "earlyFailure": false,
+      "marketParticipation": false,
+      "dayReturnMaxExclusive": 0.08
+    },
+    "C1": {
+      "structuralStop": true,
+      "earlyFailure": false,
+      "marketParticipation": false,
+      "dayReturnMaxExclusive": 0.08
+    },
+    "C2": {
+      "structuralStop": true,
+      "earlyFailure": true,
+      "marketParticipation": false,
+      "dayReturnMaxExclusive": 0.08
+    },
+    "C3": {
+      "structuralStop": true,
+      "earlyFailure": false,
+      "marketParticipation": true,
+      "dayReturnMaxExclusive": 0.08
+    },
+    "C4": {
+      "structuralStop": true,
+      "earlyFailure": true,
+      "marketParticipation": true,
+      "dayReturnMaxExclusive": 0.08
+    },
+    "C5": {
+      "structuralStop": true,
+      "earlyFailure": false,
+      "marketParticipation": false,
+      "dayReturnMaxExclusive": 0.05,
+      "role": "falsification comparator"
+    }
+  },
+  "executionModel": {
+    "firstEntryBarStopActive": true,
+    "closeKnownDecisionExecution": "next executable price, never same historical close",
+    "sameBarAmbiguity": "pre-existing stop tested before same-bar high; sensitivity must be reported",
+    "windowEndOpenTrade": "UNSETTLED, include marked equity for MDD; do not force realized exit",
+    "fees": "account-confirmed entry and exit fees required",
+    "slippage": "size-dependent; stress cases required",
+    "funding": "actual holding-period funding required",
+    "minOrderAndFilters": "historical lot/tick/min-notional where available; otherwise qualification blocked",
+    "unknownOrders": "reserve risk until outcome proven"
+  },
+  "promotionContract": {
+    "minProfitFactor": 1.2,
+    "stressedNetPnlMustBePositive": true,
+    "independentExpectedValueMustBePositive": true,
+    "expectancyLowerBoundMustBePositive": true,
+    "sufficientSampleRequired": true,
+    "zeroTradesNeverPass": true,
+    "insufficientSampleNeverPass": true
+  },
+  "sourceEvidence": {
+    "handoffSpecSha256": "3d34b3b1429ece6d435b9f5c1a979a49626c9042e10074eaf672e888eaa46ef9",
+    "auditSqlSha256": "d01e7bc96f1dcfe247207f347a0a986c7faaa92f83b76e90d7ab10a301a37eec",
+    "verifiedAuditSha256": "1edf659b2d30a965a25b2633b29a6533c3f9c38d67f80791a4d492f1de4d66e9",
+    "sourceMainMergeCommit": "0e26b1343f4670cfa89a613b45f6e99d7f2943a5"
+  }
+}

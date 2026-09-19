@@ -1,0 +1,105 @@
+name: V26 repair missing 15m from Binance Vision
+
+on:
+  push:
+    branches: [fix/v26-parity-risk-replay-20260919]
+    paths:
+      - '.github/workflows/v26-repair-missing15m.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/v26-parity-risk-replay-20260919
+          fetch-depth: 0
+
+      - name: Download audited read-only export
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl -fL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/sanbital/Trading-booooo/actions/artifacts/10556516292/zip \
+            -o /tmp/v26-export.zip
+          rm -rf /tmp/v26-export
+          mkdir -p /tmp/v26-export
+          unzip -q /tmp/v26-export.zip -d /tmp/v26-export
+          test -f /tmp/v26-export/raw/symbols.csv.gz
+
+      - name: Recover exact missing candle from official Binance Vision
+        run: |
+          set -euo pipefail
+          mkdir -p research/v26-validated
+          python3 - <<'PY'
+          import csv,gzip,json,io,zipfile,urllib.request,urllib.error,urllib.parse,hashlib,time
+          from concurrent.futures import ThreadPoolExecutor,as_completed
+
+          TARGET=1788402600000
+          DATE='2026-09-03'
+          BASE='https://data.binance.vision/data/futures/um/daily/klines'
+          with gzip.open('/tmp/v26-export/raw/symbols.csv.gz','rt',newline='') as f:
+              symbols=[r['symbol'] for r in csv.DictReader(f)]
+
+          def one(symbol):
+              fn=f'{symbol}-15m-{DATE}.zip'
+              url=f'{BASE}/{urllib.parse.quote(symbol,safe="")}/15m/{urllib.parse.quote(fn,safe="")}'
+              last=None
+              for a in range(4):
+                  try:
+                      with urllib.request.urlopen(url,timeout=30) as r:
+                          b=r.read()
+                      with zipfile.ZipFile(io.BytesIO(b)) as z:
+                          names=z.namelist()
+                          if len(names)!=1:
+                              return {'symbol':symbol,'error':'ZIP_MEMBERS'}
+                          text=io.TextIOWrapper(z.open(names[0]),encoding='utf-8')
+                          rd=csv.reader(text)
+                          for row in rd:
+                              try:t=int(row[0])
+                              except:continue
+                              if t==TARGET:
+                                  return {'symbol':symbol,'row':row,'zipSha256':hashlib.sha256(b).hexdigest(),'url':url}
+                      return {'symbol':symbol,'error':'TARGET_NOT_FOUND','url':url}
+                  except Exception as e:
+                      last=type(e).__name__+':'+str(e)[:180]
+                      time.sleep(min(8,2**a))
+              return {'symbol':symbol,'error':last,'url':url}
+
+          rows=[];errors=[]
+          with ThreadPoolExecutor(max_workers=16) as ex:
+              fut={ex.submit(one,s):s for s in symbols}
+              for i,f in enumerate(as_completed(fut),1):
+                  x=f.result()
+                  (rows if 'row' in x else errors).append(x)
+                  if i%50==0: print('recovered',i,'/',len(symbols),'ok',len(rows),'err',len(errors),flush=True)
+          rows.sort(key=lambda x:x['symbol']);errors.sort(key=lambda x:x['symbol'])
+          out={'targetOpenTime':TARGET,'targetUtc':'2026-09-03T02:30:00Z',
+               'source':'Binance Vision official futures UM daily klines','requested':len(symbols),
+               'recovered':len(rows),'errors':errors,'rows':rows}
+          raw=json.dumps(out,ensure_ascii=False,separators=(',',':')).encode()
+          out['resultSha256']=hashlib.sha256(raw).hexdigest()
+          with open('research/v26-validated/binance-missing-15m-20260903.json','w') as f:
+              json.dump(out,f,ensure_ascii=False,indent=2)
+          print(json.dumps({'requested':len(symbols),'recovered':len(rows),'errors':len(errors),
+                            'errorRows':errors,'resultSha256':out['resultSha256']},ensure_ascii=False))
+
+          PY
+
+      - name: Commit recovered source rows
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add research/v26-validated/binance-missing-15m-20260903.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'research(v26): recover common missing 15m candle from Binance Vision'
+            git push origin HEAD:fix/v26-parity-risk-replay-20260919
+          fi

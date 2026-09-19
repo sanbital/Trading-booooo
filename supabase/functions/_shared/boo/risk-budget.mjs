@@ -120,6 +120,9 @@ export function evaluateQuantity(quantity, ctx) {
     leverage,
     dailyRemaining,
     weeklyRemaining,
+    // Optional worst-case BUY fill cap. Live execution supplies the actual IOC
+    // limit price; replay may omit it when exact fill prices are already known.
+    entryPriceCap,
   } = ctx;
 
   const q = dec(quantity);
@@ -148,13 +151,23 @@ export function evaluateQuantity(quantity, ctx) {
     return { ok: false, reasons: [...reasons, "STOP_NOT_BELOW_ENTRY"], plan: null };
   }
 
-  // Notional filter uses the real filled notional, not q * last price.
-  const notional = entryWalk.notional;
+  // The book walk is the expected executable VWAP. When live supplies an IOC
+  // limit, however, the order is legally allowed to fill anywhere up to that cap.
+  // Risk must therefore budget the WORSE of the walked VWAP and the actual order
+  // price, otherwise solveQuantity can approve a quantity that the order itself can
+  // spend more margin/risk on than was validated.
+  let entryRiskPrice = entryWalk.vwap;
+  if (entryPriceCap !== null && entryPriceCap !== undefined) {
+    const cap = dec(entryPriceCap);
+    if (!cap.isPos()) return { ok: false, reasons: [...reasons, "ENTRY_PRICE_CAP_INVALID"], plan: null };
+    entryRiskPrice = entryRiskPrice.max(cap);
+  }
+  const notional = q.mul(entryRiskPrice);
   if (filters.minNotional && notional.lt(filters.minNotional)) reasons.push("BELOW_MIN_NOTIONAL");
 
   const loss = plannedLoss({
     quantity: q,
-    entryVwap: entryWalk.vwap,
+    entryVwap: entryRiskPrice,
     stopExitPrice: stopExit,
     takerFeeRate,
     stopFeeRate,
@@ -190,7 +203,9 @@ export function evaluateQuantity(quantity, ctx) {
     reasons,
     plan: {
       quantity: q,
-      entryVwap: entryWalk.vwap,
+      entryVwap: entryRiskPrice,
+      observedBookVwap: entryWalk.vwap,
+      entryPriceCap: entryPriceCap === null || entryPriceCap === undefined ? null : dec(entryPriceCap),
       notional,
       margin,
       stopPrice: stop,

@@ -139,8 +139,14 @@ export function evaluateBooEntry({
       highWaterEquity: account.highWaterEquity,
       consecutiveLosses: account.consecutiveLosses,
     });
-    if (limits.allowed && [fees.takerFeeRate,fees.stopFeeRate].every(
-      rate => typeof rate === "number" && Number.isFinite(rate) && rate >= 0 && rate < 1)) {
+    const entryPriceCap = Number(signal.entryPriceCap);
+    const feesKnown = [fees.takerFeeRate,fees.stopFeeRate].every(
+      rate => typeof rate === "number" && Number.isFinite(rate) && rate >= 0 && rate < 1);
+    if (limits.allowed && !feesKnown) {
+      sizing = { decision: "SKIP", reason: "ACCOUNT_FEE_UNAVAILABLE" };
+    } else if (limits.allowed && !(entryPriceCap > 0 && Number.isFinite(entryPriceCap))) {
+      sizing = { decision: "SKIP", reason: "ENTRY_PRICE_CAP_UNAVAILABLE" };
+    } else if (limits.allowed) {
       sizing = solveQuantity({
         policy: resolved.policy,
         equity: account.equity,
@@ -156,11 +162,10 @@ export function evaluateBooEntry({
         openGrossNotional: account.openGrossNotional,
         availableMargin: account.availableMargin,
         leverage: account.leverage,
+        entryPriceCap: signal.entryPriceCap,
         dailyRemaining: limits.dailyRemaining,
         weeklyRemaining: limits.weeklyRemaining,
       });
-    } else if (limits.allowed) {
-      sizing = { decision: "SKIP", reason: "ACCOUNT_FEE_UNAVAILABLE" };
     }
   }
 

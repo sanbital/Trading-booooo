@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "status": "PARITY_FAILED",
+  "livePromotionEligible": false,
+  "noRobustEdgeFound": true,
+  "meaning": "No candidate can currently be certified as robust; this does not assert that all candidates have negative economic expectancy.",
+  "reasons": [
+    "522/522 stored symbols have the same missing 15m candle at 2026-09-03 11:30 KST.",
+    "1174/1190 stored signals disagree with production-parity KST dayReturn; 225 cross the 3%-8% gate after correction.",
+    "The legacy replay did not test the entry bar stop and could realize close-known exits at the same close.",
+    "research_v26_targets contains 725 rows while research_v26_outcomes contains 0 rows.",
+    "The historical universe is not reconstructable from current TRADING symbols alone; delisted contracts are missing.",
+    "No unused independent validation period has been acquired.",
+    "No current matching positive approval exists in boo_strategy_approvals.",
+    "The deployed generator/executor bundle predates PR #149 and still contains the old selection gate."
+  ],
+  "preservation": {
+    "deletePriorResults": false,
+    "treatment": "Mark prior performance outputs INVALIDATED/PARITY_FAILED; preserve raw data, candidate lists, code, cost model and hashes."
+  }
+}
