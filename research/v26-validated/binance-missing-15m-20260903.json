@@ -3,24 +3,8 @@
   "targetUtc": "2026-09-03T02:30:00Z",
   "source": "Binance Vision official futures UM daily klines",
   "requested": 522,
-  "recovered": 519,
-  "errors": [
-    {
-      "symbol": "币安人生USDT",
-      "error": "UnicodeEncodeError:'ascii' codec can't encode characters in position 34-37: ordinal not in range(128)",
-      "url": "https://data.binance.vision/data/futures/um/daily/klines/币安人生USDT/15m/币安人生USDT-15m-2026-09-03.zip"
-    },
-    {
-      "symbol": "我踏马来了USDT",
-      "error": "UnicodeEncodeError:'ascii' codec can't encode characters in position 34-38: ordinal not in range(128)",
-      "url": "https://data.binance.vision/data/futures/um/daily/klines/我踏马来了USDT/15m/我踏马来了USDT-15m-2026-09-03.zip"
-    },
-    {
-      "symbol": "龙虾USDT",
-      "error": "UnicodeEncodeError:'ascii' codec can't encode characters in position 34-35: ordinal not in range(128)",
-      "url": "https://data.binance.vision/data/futures/um/daily/klines/龙虾USDT/15m/龙虾USDT-15m-2026-09-03.zip"
-    }
-  ],
+  "recovered": 522,
+  "errors": [],
   "rows": [
     {
       "symbol": "0GUSDT",
@@ -9882,7 +9866,64 @@
       ],
       "zipSha256": "bb0af01c0211c7d51fcc78034a53bd5471643da364b29346d75b2d6e13102de8",
       "url": "https://data.binance.vision/data/futures/um/daily/klines/ZRXUSDT/15m/ZRXUSDT-15m-2026-09-03.zip"
+    },
+    {
+      "symbol": "币安人生USDT",
+      "row": [
+        "1788402600000",
+        "0.4886000",
+        "0.4909000",
+        "0.4881000",
+        "0.4902000",
+        "50192",
+        "1788403499999",
+        "24574.8743300",
+        "545",
+        "23050",
+        "11288.2481600",
+        "0"
+      ],
+      "zipSha256": "5376a41c6b2b680ecf37283735cbf2f921b81fe020c092968ba9ede4902422b5",
+      "url": "https://data.binance.vision/data/futures/um/daily/klines/%E5%B8%81%E5%AE%89%E4%BA%BA%E7%94%9FUSDT/15m/%E5%B8%81%E5%AE%89%E4%BA%BA%E7%94%9FUSDT-15m-2026-09-03.zip"
+    },
+    {
+      "symbol": "我踏马来了USDT",
+      "row": [
+        "1788402600000",
+        "0.0111930",
+        "0.0112560",
+        "0.0111500",
+        "0.0112140",
+        "1811289",
+        "1788403499999",
+        "20296.8338090",
+        "935",
+        "582340",
+        "6527.4260290",
+        "0"
+      ],
+      "zipSha256": "f961e03cad29f320edc0257ebee3bec3b51c062f45d1303372a0e69218533b64",
+      "url": "https://data.binance.vision/data/futures/um/daily/klines/%E6%88%91%E8%B8%8F%E9%A9%AC%E6%9D%A5%E4%BA%86USDT/15m/%E6%88%91%E8%B8%8F%E9%A9%AC%E6%9D%A5%E4%BA%86USDT-15m-2026-09-03.zip"
+    },
+    {
+      "symbol": "龙虾USDT",
+      "row": [
+        "1788402600000",
+        "0.0687200",
+        "0.0687460",
+        "0.0683880",
+        "0.0684110",
+        "2212116",
+        "1788403499999",
+        "151542.0775870",
+        "4404",
+        "1129373",
+        "77374.5400390",
+        "0"
+      ],
+      "zipSha256": "8d17828a3bfb50f31c9e7b8a484afdeaff6075bd7e146e44a4066e9a166616e1",
+      "url": "https://data.binance.vision/data/futures/um/daily/klines/%E9%BE%99%E8%99%BEUSDT/15m/%E9%BE%99%E8%99%BEUSDT-15m-2026-09-03.zip"
     }
   ],
-  "resultSha256": "2527c73340d021a924abe757cfa095fad9ee0482085188a1ba4d64efce627ec9"
+  "resultSha256": "5b95b290625a098000d41bdbaa3dc2f9c727101f93531f7e63eb46f98a662a47"
 }
