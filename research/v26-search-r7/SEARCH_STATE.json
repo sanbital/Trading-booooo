@@ -1,0 +1,12 @@
+{
+  "completedAt": "2026-09-19T16:22:52Z",
+  "iteration": "R7",
+  "testedCandidates": ["C31"],
+  "nextCandidateId": "C32",
+  "no_robust_edge_found": true,
+  "developmentPass": [],
+  "walkForwardRun": false,
+  "walkForwardReason": "C31 failed development profitability and robustness gates.",
+  "unusedHoldoutConsumed": false,
+  "nextHypothesisConstraint": "Do not tune C31 percentile. Test a different single cross-sectional axis based on current buyer-flow acceleration relative to peers."
+}
