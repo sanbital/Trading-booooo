@@ -6,7 +6,7 @@
  * is live merely because this file exists; activation requires a matching,
  * unrevoked approval identity and ENFORCE mode.
  */
-export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-2";
+export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-3";
 
 const BASE = Object.freeze({
   minDayReturn: 0.03,
@@ -16,6 +16,7 @@ const BASE = Object.freeze({
   earlyFailureExit: false,
   marketParticipation: false,
   entryConfirmation1m: false,
+  breakoutContinuation1m: false,
 });
 
 export const V26_CANDIDATES = Object.freeze({
@@ -26,6 +27,7 @@ export const V26_CANDIDATES = Object.freeze({
   C4: Object.freeze({ ...BASE, id: "C4", structuralStop: true, earlyFailureExit: true, marketParticipation: true }),
   C5: Object.freeze({ ...BASE, id: "C5", maxDayReturn: 0.05, structuralStop: true }),
   C6: Object.freeze({ ...BASE, id: "C6", structuralStop: true, entryConfirmation1m: true }),
+  C7: Object.freeze({ ...BASE, id: "C7", structuralStop: true, breakoutContinuation1m: true }),
 });
 
 export const STRUCTURAL_STOP = Object.freeze({
@@ -47,6 +49,10 @@ export const MARKET_PARTICIPATION = Object.freeze({
 
 export const ENTRY_CONFIRMATION_1M = Object.freeze({
   minTakerBuyQuoteRatio: 0.50,
+});
+
+export const BREAKOUT_CONTINUATION_1M = Object.freeze({
+  minTakerBuyQuoteRatio: 0.55,
 });
 
 const finite = (x) => typeof x === "number" && Number.isFinite(x);
@@ -229,6 +235,62 @@ export function entryConfirmation1mDecision({
   return {
     action: allowed ? "ENTER" : "REJECT",
     reason: allowed ? "C6_CONFIRMATION_PASS" : "C6_CONFIRMATION_FAIL",
+    takerBuyQuoteRatio,
+    conditions,
+    confirmationOpenTime: openTime,
+    confirmationClose: close,
+  };
+}
+
+
+/**
+ * C7 continuation confirmation.
+ * After the re-acceleration trigger closes, wait exactly one full 1m candle.
+ * Enter only at the following minute open when that confirmation candle:
+ *  - closes above the trigger candle HIGH, not merely its close;
+ *  - has >=55% taker-buy quote share;
+ *  - never trades below the original signal reference.
+ * This turns C7 into a continuation breakout test rather than a delayed C6.
+ */
+export function breakoutContinuation1mDecision({
+  triggerAt,
+  signalReference,
+  triggerHigh,
+  now,
+  bar,
+}) {
+  if (![triggerAt, signalReference, triggerHigh, now].every(finite) ||
+      !Number.isSafeInteger(triggerAt) || !Number.isSafeInteger(now) ||
+      !(signalReference > 0 && triggerHigh > 0) || now < triggerAt + minute) {
+    return { action: "UNKNOWN", reason: "C7_CONTINUATION_INPUT_MISSING" };
+  }
+  if (!bar || typeof bar !== "object") {
+    return { action: "UNKNOWN", reason: "C7_CONTINUATION_BAR_MISSING" };
+  }
+  const openTime = Number(bar.openTime ?? bar.t ?? bar[0]);
+  const low = Number(bar.low ?? bar.l ?? bar[3]);
+  const close = Number(bar.close ?? bar.c ?? bar[4]);
+  const closeTime = Number(bar.closeTime ?? bar.ct ?? bar[6] ?? (openTime + minute - 1));
+  const quote = Number(bar.quoteVolume ?? bar.qv ?? bar[7]);
+  const takerBuyQuote = Number(bar.takerBuyQuote ?? bar.tb ?? bar[10]);
+  if (![openTime, low, close, closeTime, quote, takerBuyQuote].every(Number.isFinite) ||
+      !Number.isSafeInteger(openTime) || openTime !== triggerAt ||
+      closeTime !== openTime + minute - 1 || closeTime >= now ||
+      !(low > 0 && close > 0 && quote > 0 && takerBuyQuote >= 0 &&
+        takerBuyQuote <= quote * (1 + 1e-9))) {
+    return { action: "UNKNOWN", reason: "C7_CONTINUATION_BAR_INVALID" };
+  }
+  const takerBuyQuoteRatio = takerBuyQuote / quote;
+  const conditions = Object.freeze({
+    closeBreaksTriggerHigh: close > triggerHigh,
+    takerBuyQuoteRatioAtLeast55:
+      takerBuyQuoteRatio >= BREAKOUT_CONTINUATION_1M.minTakerBuyQuoteRatio,
+    noLossOfSignalReference: low >= signalReference,
+  });
+  const allowed = Object.values(conditions).every(Boolean);
+  return {
+    action: allowed ? "ENTER" : "REJECT",
+    reason: allowed ? "C7_CONTINUATION_PASS" : "C7_CONTINUATION_FAIL",
     takerBuyQuoteRatio,
     conditions,
     confirmationOpenTime: openTime,
