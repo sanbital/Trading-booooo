@@ -19,6 +19,9 @@ const BASE = Object.freeze({
   breakoutContinuation1m: false,
   triggerQuality1m: false,
   antiExhaustion: false,
+  accelerationReignition: false,
+  compressionExpansion: false,
+  rankPersistence: false,
   minRankOverride: null,
   maxRankOverride: null,
 });
@@ -46,6 +49,15 @@ export const V26_CANDIDATES = Object.freeze({
   C12: Object.freeze({
     ...BASE, id: "C12", maxDayReturn: 0.05, structuralStop: true,
     antiExhaustion: true, antiExhaustionMinBuyRatio: 0.70,
+  }),
+  C13: Object.freeze({
+    ...BASE, id: "C13", structuralStop: true, accelerationReignition: true,
+  }),
+  C14: Object.freeze({
+    ...BASE, id: "C14", structuralStop: true, compressionExpansion: true,
+  }),
+  C15: Object.freeze({
+    ...BASE, id: "C15", structuralStop: true, rankPersistence: true,
   }),
 });
 
@@ -462,4 +474,79 @@ export function persistence2mDecision({
   });
   const allowed=Object.values(conditions).every(Boolean);
   return {action:allowed?"ENTER":"REJECT",reason:allowed?"C10_PERSISTENCE_PASS":"C10_PERSISTENCE_FAIL",conditions,bars:norm};
+}
+
+function researchBar(bar, expectedOpen, now) {
+  const openTime=Number(bar?.openTime ?? bar?.t ?? bar?.[0]);
+  const open=Number(bar?.open ?? bar?.o ?? bar?.[1]);
+  const high=Number(bar?.high ?? bar?.h ?? bar?.[2]);
+  const low=Number(bar?.low ?? bar?.l ?? bar?.[3]);
+  const close=Number(bar?.close ?? bar?.c ?? bar?.[4]);
+  const closeTime=Number(bar?.closeTime ?? bar?.ct ?? bar?.[6] ?? (openTime+minute-1));
+  const quote=Number(bar?.quoteVolume ?? bar?.qv ?? bar?.[7]);
+  const takerBuyQuote=Number(bar?.takerBuyQuote ?? bar?.tb ?? bar?.[10]);
+  if (![openTime,open,high,low,close,closeTime,quote,takerBuyQuote].every(Number.isFinite) ||
+      openTime!==expectedOpen || closeTime!==openTime+minute-1 || closeTime>=now ||
+      !(low>0&&high>=Math.max(open,close)&&low<=Math.min(open,close)&&quote>0&&
+        takerBuyQuote>=0&&takerBuyQuote<=quote*(1+1e-9))) return null;
+  return {openTime,open,high,low,close,quote,ratio:takerBuyQuote/quote};
+}
+
+/** C13: renewed price acceleration and rising buyer share into the trigger. */
+export function accelerationReignitionDecision({triggerAt,now,bars,return5m,return15m}) {
+  if (!Number.isSafeInteger(triggerAt)||!Number.isSafeInteger(now)||!Array.isArray(bars)||bars.length<4||
+      ![return5m,return15m].every(finite)) return {action:"UNKNOWN",reason:"C13_ACCEL_INPUT_MISSING"};
+  const xs=bars.slice(-4).map((b,i)=>researchBar(b,triggerAt-(4-i)*minute,now));
+  if(xs.some(x=>x===null))return {action:"UNKNOWN",reason:"C13_ACCEL_BAR_INVALID"};
+  const r=[xs[1].close/xs[0].close-1,xs[2].close/xs[1].close-1,xs[3].close/xs[2].close-1];
+  const ratios=xs.map(x=>x.ratio);
+  const conditions=Object.freeze({
+    lastMinutePositive:r[2]>0,
+    priceAccelerating:r[2]>(r[0]+r[1])/2,
+    recentFiveDominatesPriorTen:return5m>Math.max(0,(return15m-return5m)/2),
+    buyerShareRising:ratios[3]>=ratios[2]&&ratios[2]>=ratios[1],
+    buyerShareImproved:ratios[3]-ratios[1]>=0.08,
+    buyerDominantNow:ratios[3]>=0.55,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C13_ACCEL_PASS":"C13_ACCEL_FAIL",conditions,returns1m:r,takerBuyRatios:ratios};
+}
+
+/** C14: a compact four-minute shelf followed by buyer-led range expansion. */
+export function compressionExpansionDecision({triggerAt,now,bars}) {
+  if(!Number.isSafeInteger(triggerAt)||!Number.isSafeInteger(now)||!Array.isArray(bars)||bars.length<5)
+    return {action:"UNKNOWN",reason:"C14_COMPRESSION_INPUT_MISSING"};
+  const xs=bars.slice(-5).map((b,i)=>researchBar(b,triggerAt-(5-i)*minute,now));
+  if(xs.some(x=>x===null))return {action:"UNKNOWN",reason:"C14_COMPRESSION_BAR_INVALID"};
+  const shelf=xs.slice(0,4),trigger=xs[4],priorHigh=Math.max(...shelf.map(x=>x.high));
+  const meanClose=shelf.reduce((s,x)=>s+x.close,0)/shelf.length;
+  const shelfWidth=(Math.max(...shelf.map(x=>x.high))-Math.min(...shelf.map(x=>x.low)))/meanClose;
+  const meanRange=shelf.reduce((s,x)=>s+(x.high-x.low),0)/shelf.length;
+  const triggerRange=trigger.high-trigger.low;
+  const closeLocation=triggerRange>0?(trigger.close-trigger.low)/triggerRange:0;
+  const conditions=Object.freeze({
+    shelfCompressed:shelfWidth<=0.008,
+    rangeExpanded:triggerRange>=1.5*meanRange,
+    priorHighBroken:trigger.close>priorHigh,
+    buyerDominant:trigger.ratio>=0.60,
+    closeNearHigh:closeLocation>=0.75,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C14_COMPRESSION_PASS":"C14_COMPRESSION_FAIL",conditions,shelfWidth,rangeExpansion:meanRange>0?triggerRange/meanRange:null,closeLocation,takerBuyRatio:trigger.ratio};
+}
+
+/** C15: persistent cross-sectional leadership, not a one-snapshot rank spike. */
+export function rankPersistenceDecision({currentRank,priorRanks,return30m,return60m}) {
+  if(!finite(currentRank)||!Array.isArray(priorRanks)||priorRanks.length!==2||
+      !priorRanks.every(x=>x===null||finite(x))||![return30m,return60m].every(finite))
+    return {action:"UNKNOWN",reason:"C15_RANK_INPUT_MISSING"};
+  const observations=[currentRank,...priorRanks];
+  const conditions=Object.freeze({
+    topTenAtLeastTwoSnapshots:observations.filter(x=>finite(x)&&x<=10).length>=2,
+    noCollapseFromObservedLeader:priorRanks.filter(finite).every(x=>currentRank<=x+3),
+    currentContributionPositive:return30m>0,
+    recentHalfDominates:return60m<=0?return30m>0:return30m>=0.55*return60m,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C15_RANK_PASS":"C15_RANK_FAIL",conditions,observations};
 }
