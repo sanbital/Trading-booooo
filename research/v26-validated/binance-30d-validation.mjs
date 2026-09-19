@@ -8,7 +8,7 @@ import {
   SETUP_POLICY, SETUP_STATE, advancePullbackSetup, startPullbackSetup,
 } from "../../supabase/functions/_shared/leader-pullback-reaccel.mjs";
 import {
-  V26_CANDIDATES, structuralStopPrice, earlyFailureDecision, marketParticipationDecision, entryConfirmation1mDecision, breakoutContinuation1mDecision, triggerQuality1mDecision, antiExhaustionDecision,
+  V26_CANDIDATES, structuralStopPrice, earlyFailureDecision, marketParticipationDecision, marketBreadthInflectionDecision, entryConfirmation1mDecision, breakoutContinuation1mDecision, triggerQuality1mDecision, antiExhaustionDecision,
   accelerationReignitionDecision, compressionExpansionDecision, rankPersistenceDecision,
   pullbackAbsorptionDecision, relativeStrengthResidualDecision, sweepReclaimDecision,
   freshLeaderRotationDecision, accountFeasibleLadderDecision, twoPulseResetDecision,
@@ -390,8 +390,34 @@ for(const [cut,group] of leaderGroups){
   }
 }
 const btc15Index=indexRows(export15.get("BTCUSDT")||[]),btcFeaturesAtCut=new Map();
-for(const cut of new Set(eligibleWindows.map(x=>x.cut))){
+for(const cut of new Set(eligibleWindows.flatMap(x=>[x.cut,x.cut-M15]))){
   try{btcFeaturesAtCut.set(cut,feature15("BTCUSDT",exactBars(btc15Index,M15,cut,110),cut));}catch{}
+}
+const marketInflectionAtCut=new Map();
+if(!ONLY_CANDIDATE||ONLY_CANDIDATE.split(",").map(x=>x.trim()).includes("C39")){
+  const export15Indexes=new Map([...export15.entries()].map(([symbol,rows])=>[symbol,indexRows(rows)]));
+  const snapshots=new Map();
+  const cuts=[...new Set(eligibleWindows.flatMap(x=>[x.cut,x.cut-M15]))].sort((a,b)=>a-b);
+  for(const cut of cuts){
+    const expected=allSymbols.filter(s=>{const lc=lifecycle(s);return lc.onboard<=cut-110*M15&&lc.delivery>cut;});
+    const features=[];
+    for(const s of expected){
+      try{features.push(feature15(s.symbol,exactBars(export15Indexes.get(s.symbol)||new Map(),M15,cut,110),cut));}catch{}
+    }
+    if(!expected.length||features.length/expected.length<POLICY.minCoverage)continue;
+    const liquid=features.filter(x=>x.qv24>=POLICY.minQuoteVolume24h);
+    const btc=features.find(x=>x.symbol==="BTCUSDT");
+    if(!liquid.length||!btc)continue;
+    snapshots.set(cut,{btcReturn30m:Number(btc.return30m),rising30mFraction:liquid.filter(x=>x.return30m>0).length/liquid.length});
+  }
+  for(const cut of new Set(eligibleWindows.map(x=>x.cut))){
+    const current=snapshots.get(cut),prior=snapshots.get(cut-M15);
+    const decision=marketBreadthInflectionDecision({
+      btcReturn30m:current?.btcReturn30m,priorBtcReturn30m:prior?.btcReturn30m,
+      rising30mFraction:current?.rising30mFraction,priorRising30mFraction:prior?.rising30mFraction,
+    });
+    marketInflectionAtCut.set(cut,decision.action==="ENTER");
+  }
 }
 const need5=new Map();
 for(const x of eligibleWindows){
@@ -402,7 +428,7 @@ for(const x of eligibleWindows){
 await mapLimit([...need5.values()],16,x=>visionDay(x.symbol,"5m",x.date));
 console.log("PREFETCH5_DONE",need5.size);
 const rawSignals=[];let ew=0;
-for(const x of eligibleWindows){const rows=await pagedKlines(x.f.symbol,"5m",x.cut-14*M5,x.cut+10*M5-1,100).catch(()=>[]),idx=indexRows(rows);for(const t of [x.cut,x.cut+M5,x.cut+2*M5]){if(t<START||t>=END)continue;try{const b=exactBars(idx,M5,t,14),last=b.at(-1),prev=b.at(-2),r5=last.c/prev.c-1,r15=last.c/b.at(-4).c-1,btc=btcFeaturesAtCut.get(x.cut),leaderContext=leaderContextAtCut.get(x.f.symbol+"|"+x.cut);if(r5>=POLICY.min5mReturn&&r15>0&&last.c>=last.o)rawSignals.push({id:`${x.f.symbol}:${t}`,symbol:x.f.symbol,s5c:t,ref:last.c,rank:x.f.rank,c5Allowed:x.c5,marketAllowed:x.marketAllowed,priorRanks:[historicalRanks.get(x.f.symbol+"|"+(x.cut-M15))??null,historicalRanks.get(x.f.symbol+"|"+(x.cut-2*M15))??null],btcReturn30m:Number(btc?.return30m),btcReturn60m:Number(btc?.return60m),leaderContext,features:{...x.f,referenceClose:last.c,signal5Close:t,return5m:r5,confirmationReturn15m:r15}});}catch{}}if(++ew%100===0)console.log("5M_WINDOWS",ew,"/",eligibleWindows.length);}
+for(const x of eligibleWindows){const rows=await pagedKlines(x.f.symbol,"5m",x.cut-14*M5,x.cut+10*M5-1,100).catch(()=>[]),idx=indexRows(rows);for(const t of [x.cut,x.cut+M5,x.cut+2*M5]){if(t<START||t>=END)continue;try{const b=exactBars(idx,M5,t,14),last=b.at(-1),prev=b.at(-2),r5=last.c/prev.c-1,r15=last.c/b.at(-4).c-1,btc=btcFeaturesAtCut.get(x.cut),leaderContext=leaderContextAtCut.get(x.f.symbol+"|"+x.cut);if(r5>=POLICY.min5mReturn&&r15>0&&last.c>=last.o)rawSignals.push({id:`${x.f.symbol}:${t}`,symbol:x.f.symbol,s5c:t,ref:last.c,rank:x.f.rank,c5Allowed:x.c5,marketAllowed:x.marketAllowed,marketInflectionAllowed:marketInflectionAtCut.get(x.cut)===true,priorRanks:[historicalRanks.get(x.f.symbol+"|"+(x.cut-M15))??null,historicalRanks.get(x.f.symbol+"|"+(x.cut-2*M15))??null],btcReturn30m:Number(btc?.return30m),btcReturn60m:Number(btc?.return60m),leaderContext,features:{...x.f,referenceClose:last.c,signal5Close:t,return5m:r5,confirmationReturn15m:r15}});}catch{}}if(++ew%100===0)console.log("5M_WINDOWS",ew,"/",eligibleWindows.length);}
 const uniqueSignals=[...new Map(rawSignals.map(s=>[s.id,s])).values()].sort((a,b)=>a.s5c-b.s5c||a.symbol.localeCompare(b.symbol));console.log("RAW_SIGNALS",uniqueSignals.length);
 const pathHorizon=EXIT_POLICY==="LEGACY_C0_C12_REPRODUCTION"?POLICY.maxHoldMs:STRENGTH_OBSERVATION_MS;
 const need1=new Map();
@@ -522,6 +548,7 @@ for(const id of candidateIds){
   if(Number.isFinite(candidate.minRankOverride)) filtered=filtered.filter(s=>s.rank>=candidate.minRankOverride);
   if(Number.isFinite(candidate.maxRankOverride)) filtered=filtered.filter(s=>s.rank<=candidate.maxRankOverride);
   if(candidate.marketParticipation) filtered=filtered.filter(s=>s.marketAllowed);
+  if(candidate.marketBreadthInflection) filtered=filtered.filter(s=>s.marketInflectionAllowed);
   filtered=mergedSignals(filtered);const ops=[],reasons={};
   for(const s of filtered){
     const cached=pathCache.get(s.id),rows=Array.isArray(cached)?cached:cached?.rows;

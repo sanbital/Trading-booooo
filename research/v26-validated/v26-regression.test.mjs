@@ -7,6 +7,7 @@ import {
   structuralStopPrice,
   earlyFailureDecision,
   marketParticipationDecision,
+  marketBreadthInflectionDecision,
   accelerationReignitionDecision,
   compressionExpansionDecision,
   rankPersistenceDecision,
@@ -64,7 +65,7 @@ test("selection gate fails closed on null/NaN and respects exact boundaries", ()
   assert.equal(POLICY.maxDayReturn, 0.08);
 });
 
-test("registered C0-C38 definitions preserve the frozen C0-C5 prefix", () => {
+test("registered C0-C39 definitions preserve the frozen C0-C5 prefix", () => {
   assert.deepEqual(Object.keys(V26_CANDIDATES).slice(0,6), ["C0","C1","C2","C3","C4","C5"]);
   assert.ok(V26_CANDIDATES.C12);
   assert.ok(V26_CANDIDATES.C15);
@@ -81,10 +82,26 @@ test("registered C0-C38 definitions preserve the frozen C0-C5 prefix", () => {
   assert.ok(V26_CANDIDATES.C36);
   assert.ok(V26_CANDIDATES.C37);
   assert.ok(V26_CANDIDATES.C38);
+  assert.ok(V26_CANDIDATES.C39);
   assert.equal(V26_CANDIDATES.C0.structuralStop, false);
   assert.equal(V26_CANDIDATES.C4.earlyFailureExit, true);
   assert.equal(V26_CANDIDATES.C4.marketParticipation, true);
   assert.equal(V26_CANDIDATES.C5.maxDayReturn, 0.05);
+});
+
+test("C39 requires joint completed-snapshot breadth and BTC improvement",()=>{
+  assert.equal(V26_CANDIDATES.C39.marketBreadthInflection,true);
+  assert.equal(V26_CANDIDATES.C39.marketParticipation,false);
+  assert.equal(V26_CANDIDATES.C39.crossSectionalCompressionExpansion60m,true);
+  assert.equal(marketBreadthInflectionDecision({
+    btcReturn30m:.002,priorBtcReturn30m:-.001,rising30mFraction:.52,priorRising30mFraction:.47,
+  }).action,"ENTER");
+  assert.equal(marketBreadthInflectionDecision({
+    btcReturn30m:.002,priorBtcReturn30m:-.001,rising30mFraction:.45,priorRising30mFraction:.47,
+  }).action,"REJECT");
+  assert.equal(marketBreadthInflectionDecision({
+    btcReturn30m:null,priorBtcReturn30m:-.001,rising30mFraction:.52,priorRising30mFraction:.47,
+  }).action,"UNKNOWN");
 });
 
 test("C38 composes unchanged market participation with C34 expansion",()=>{

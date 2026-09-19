@@ -6,7 +6,7 @@
  * is live merely because this file exists; activation requires a matching,
  * unrevoked approval identity and ENFORCE mode.
  */
-export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-20";
+export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-21";
 
 const BASE = Object.freeze({
   minDayReturn: 0.03,
@@ -15,6 +15,7 @@ const BASE = Object.freeze({
   structuralStop: false,
   earlyFailureExit: false,
   marketParticipation: false,
+  marketBreadthInflection: false,
   entryConfirmation1m: false,
   breakoutContinuation1m: false,
   triggerQuality1m: false,
@@ -152,6 +153,10 @@ export const V26_CANDIDATES = Object.freeze({
   }),
   C38: Object.freeze({
     ...BASE, id: "C38", structuralStop: true, marketParticipation: true,
+    crossSectionalCompressionExpansion60m: true,
+  }),
+  C39: Object.freeze({
+    ...BASE, id: "C39", structuralStop: true, marketBreadthInflection: true,
     crossSectionalCompressionExpansion60m: true,
   }),
 });
@@ -307,6 +312,33 @@ export function marketParticipationDecision({
     reason: allowed ? "MARKET_PARTICIPATION_PASS" : "MARKET_PARTICIPATION_FAIL",
     btcReturn60m,
     risingFraction,
+  };
+}
+
+/**
+ * C39 market inflection gate. Both inputs are completed 15m snapshots. It
+ * accepts only a joint improvement in liquid-universe 30m breadth and BTC 30m
+ * return; no absolute level is tuned from the C38 result.
+ */
+export function marketBreadthInflectionDecision({
+  btcReturn30m,
+  priorBtcReturn30m,
+  rising30mFraction,
+  priorRising30mFraction,
+}) {
+  if (![btcReturn30m, priorBtcReturn30m, rising30mFraction, priorRising30mFraction].every(finite) ||
+      rising30mFraction < 0 || rising30mFraction > 1 ||
+      priorRising30mFraction < 0 || priorRising30mFraction > 1) {
+    return { action:"UNKNOWN", reason:"C39_MARKET_INFLECTION_DATA_MISSING" };
+  }
+  const breadthDelta = rising30mFraction - priorRising30mFraction;
+  const btcMomentumDelta = btcReturn30m - priorBtcReturn30m;
+  const allowed = breadthDelta > 0 && btcMomentumDelta > 0;
+  return {
+    action:allowed?"ENTER":"REJECT",
+    reason:allowed?"C39_MARKET_INFLECTION_PASS":"C39_MARKET_INFLECTION_FAIL",
+    breadthDelta,
+    btcMomentumDelta,
   };
 }
 

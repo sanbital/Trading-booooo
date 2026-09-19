@@ -1,0 +1,34 @@
+{
+  "experimentId": "V26-SEARCH-R15-C39",
+  "candidateId": "C39",
+  "candidateName": "MARKET_BREADTH_INFLECTION_COMPRESSION_EXPANSION",
+  "branch": "research/v26-strategy-search-r15-20260920",
+  "parentCheckpoint": "c870a1091bcd7d083cfe5a8b4b9c3906ece81f4a",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "preregisteredAt": "2026-09-19T23:24:43Z",
+  "window": {
+    "start": "2026-08-19T15:10:00.000Z",
+    "end": "2026-09-18T15:10:00.000Z",
+    "classification": "USED_DEVELOPMENT"
+  },
+  "rules": {
+    "base": "unchanged C34 compression-to-expansion upper cross-sectional gate",
+    "marketInflection": "current completed liquid-universe 30m rising fraction > prior completed 15m snapshot fraction AND current completed BTC 30m return > prior completed 15m snapshot BTC 30m return",
+    "missingSnapshot": "UNKNOWN_REJECT",
+    "entry": "ordinary immediate next-open trigger; no queue delay",
+    "exit": "STRENGTH_LOSS_V1",
+    "risk": "30 USDT, 3x, one position, unchanged BOO policy and solveQuantity.plan.quantity"
+  },
+  "forbiddenChanges": [
+    "threshold tuning from C38 outcomes",
+    "risk or leverage increase",
+    "protection relaxation",
+    "time-only exit",
+    "funding zero substitution"
+  ],
+  "reservedUnusedHoldout": {
+    "start": "2025-12-22T15:10:00.000Z",
+    "end": "2026-03-22T15:10:00.000Z",
+    "status": "LOCKED_NOT_CONSUMED"
+  }
+}
