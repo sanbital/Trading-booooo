@@ -11,10 +11,11 @@
  *   - a setup only ever sees candles whose closeTime is already past `now`;
  *   - the earliest possible entry is the OPEN of the minute AFTER the trigger candle
  *     closed, never that candle's own open, high or low;
- *   - within a holding bar the stop is tested against the level that was already
- *     fixed at the END of the previous bar, and only then is the peak advanced with
- *     this bar's high. A bar can therefore never raise the stop and fill it at the
- *     same time.
+ *   - the entry stop is active on the entry bar itself;
+ *   - within every holding bar the pre-existing stop is tested before that bar's
+ *     high may ratchet protection;
+ *   - close-only decisions execute no earlier than the next bar's open;
+ *   - a position still open at the data boundary remains UNSETTLED.
  *
  * Usage: node replay.mjs [--pullback 0.0025] [--stress 0] [--qv3 off|current] [--entry new|old]
  */
