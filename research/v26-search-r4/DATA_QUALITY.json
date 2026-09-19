@@ -1,0 +1,29 @@
+{
+  "status": "PASS",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "window": {
+    "start": "2026-08-19T15:10:00.000Z",
+    "end": "2026-09-18T15:10:00.000Z"
+  },
+  "binanceVision": {
+    "officialChecksumRequired": true,
+    "blocked15mCutoffs": 0,
+    "total15mCutoffs": 2880,
+    "rawSignals": 1234,
+    "eligible15Windows": 932,
+    "datasetHash": "3ac81bf6d42e2d818a143734797a8a654552e1b2162d755b39c91fd2b5519ace"
+  },
+  "funding": {
+    "source": "BINANCE_USDM_FUNDING_RATE_HISTORY",
+    "provider": "VERIFIED_COVERAGE_CACHE",
+    "symbolsCovered": 79,
+    "reusedCoverage": 78,
+    "freshlyFetchedCoverage": 1,
+    "missingCoverage": 0,
+    "zeroSubstitutionOnFailure": false,
+    "cacheSha256": "6665fcf45fd97da5775f1c4a666c557bd2e6be55a461a546e28390a9ad378e21"
+  },
+  "exitPolicy": "STRENGTH_LOSS_V1",
+  "historicalL2Available": false,
+  "slippageModel": "preregistered baseline, 2x and 4x bps"
+}

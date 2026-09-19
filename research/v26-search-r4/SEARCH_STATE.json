@@ -1,0 +1,12 @@
+{
+  "completedAt": "2026-09-19T13:20:00Z",
+  "iteration": "R4",
+  "testedCandidates": ["C22", "C23", "C24"],
+  "nextCandidateId": "C25",
+  "no_robust_edge_found": true,
+  "developmentPass": [],
+  "walkForwardRun": false,
+  "walkForwardReason": "No candidate passed the preregistered 30-day development gates.",
+  "unusedHoldoutConsumed": false,
+  "nextHypothesisConstraint": "Do not loosen or micro-tune C22-C24. Explore a causally different completed breakout-retest/hold or failed-retest-avoidance entry sequence without relaxing any protection."
+}
