@@ -19,7 +19,11 @@ const END = Number(process.env.REPLAY_END_MS || 1789744200000);
 const DAYS = Number(process.env.REPLAY_DAYS || 30);
 const START = END - DAYS*DAY;
 const WARMUP = 120*M15;
-const OUT = new URL("./results-30d/", import.meta.url);
+const RESULT_DIR=process.env.RESULT_DIR||"results-30d";
+const OUT = new URL("./"+RESULT_DIR+"/", import.meta.url);
+const RECOMPUTE_ELIGIBLE=process.env.RECOMPUTE_ELIGIBLE==="1";
+const ONLY_CANDIDATE=process.env.ONLY_CANDIDATE||"";
+const REPORT_CLASSIFICATION=process.env.REPORT_CLASSIFICATION||"DEVELOPMENT_30D_NOT_INDEPENDENT_HOLDOUT";
 mkdirSync(OUT,{recursive:true});
 
 const FEES = Object.freeze({ taker:0.0005 });
@@ -120,8 +124,39 @@ async function visionDay(symbol,interval,date){
   requestStats.visionFiles++;
   return csvRows(text);
 }
+function ym(t){return new Date(t).toISOString().slice(0,7);}
+function monthsBetween(start,end){
+  const out=[],d=new Date(Date.UTC(new Date(start).getUTCFullYear(),new Date(start).getUTCMonth(),1));
+  const last=new Date(Date.UTC(new Date(end).getUTCFullYear(),new Date(end).getUTCMonth(),1));
+  while(d<=last){out.push(d.toISOString().slice(0,7));d.setUTCMonth(d.getUTCMonth()+1);}
+  return out;
+}
+async function visionMonth(symbol,interval,month){
+  const safe=encodeURIComponent(symbol),local=VISION_CACHE+"/"+safe+"-"+interval+"-"+month+"-monthly.csv";
+  if(existsSync(local))return csvRows(readFileSync(local,"utf8"));
+  const fn=encodeURIComponent(symbol+"-"+interval+"-"+month+".zip");
+  const url="https://data.binance.vision/data/futures/um/monthly/klines/"+safe+"/"+interval+"/"+fn;
+  let res;
+  for(let a=0;a<4;a++){
+    requestStats.requests++;
+    res=await fetch(url,{headers:{"user-agent":"Trading-booooo-v26-validation"}});
+    if(res.ok)break;
+    if(res.status===404){requestStats.vision404++;return [];}
+    requestStats.retries++;await new Promise(r=>setTimeout(r,Math.min(8000,500*2**a)));
+  }
+  if(!res?.ok)throw Error("VISION_MONTH_HTTP_"+(res?.status??"UNKNOWN")+":"+url);
+  const bytes=new Uint8Array(await res.arrayBuffer());datasetHash.update(url);datasetHash.update(bytes);
+  const zip=VISION_CACHE+"/"+safe+"-"+interval+"-"+month+"-monthly.zip";writeFileSync(zip,bytes);
+  const text=execFileSync("unzip",["-p",zip],{encoding:"utf8",maxBuffer:256*1024*1024});
+  writeFileSync(local,text);requestStats.visionFiles++;return csvRows(text);
+}
 async function visionRows(symbol,interval,start,end){
   const all=[];
+  if(interval==="15m"){
+    let anyMonthly=false;
+    for(const month of monthsBetween(start,end)){const rows=await visionMonth(symbol,interval,month);if(rows.length)anyMonthly=true;all.push(...rows);}
+    if(anyMonthly)return all.filter(r=>Number(r[0])>=start&&Number(r[0])<=end);
+  }
   for(const date of daysBetween(start,end))all.push(...await visionDay(symbol,interval,date));
   return all.filter(r=>Number(r[0])>=start&&Number(r[0])<=end);
 }
@@ -139,7 +174,8 @@ async function mapLimit(items,limit,fn){
 async function pagedKlines(symbol,interval,start,end,limit=1000){
   let rows;
   if(interval==="15m"&&export15.has(symbol)){
-    rows=export15.get(symbol).filter(r=>Number(r[0])>=start&&Number(r[0])<=end);
+    const cached=export15.get(symbol).filter(r=>Number(r[0])>=start&&Number(r[0])<=end);
+    rows=cached.length?cached:await visionRows(symbol,interval,start,end);
   }else{
     rows=await visionRows(symbol,interval,start,end);
   }
@@ -295,16 +331,44 @@ const info=await get("/fapi/v1/exchangeInfo",{},10);
 const allSymbols=(info.symbols||[]).filter(s=>s.contractType==="PERPETUAL"&&s.quoteAsset==="USDT"&&s.underlyingType==="COIN").filter(s=>{const lc=lifecycle(s);return lc.onboard<END&&lc.delivery>START-WARMUP;});
 const meta=new Map(allSymbols.map(s=>[s.symbol,{raw:s,filters:symbolFilters(s),...lifecycle(s)}]));
 console.log("UNIVERSE",allSymbols.length,new Date(START).toISOString(),new Date(END).toISOString());
-const repairedEligible=JSON.parse(readFileSync(new URL("./eligible15-repaired.json",import.meta.url),"utf8"));
 const cutoffState=new Map();
-const eligibleWindows=(repairedEligible.eligible||[]).map(x=>({
-  cut:Number(x.cutoff),
-  f:{symbol:x.symbol,referenceClose:Number(x.reference_close),dayReturn:Number(x.day_return),
-     return15m:Number(x.return15),return30m:Number(x.return30),return60m:Number(x.return60),
-     volumeRatio:Number(x.volume_ratio),qv24:Number(x.qv24),rank:Number(x.rank),atr:1},
-  c5:!!x.c5_allowed,marketAllowed:!!x.market_allowed
-}));
-console.log("ELIGIBLE15",eligibleWindows.length,"SOURCE","eligible15-repaired.json");
+let eligibleWindows=[],eligibleSource="eligible15-repaired.json";
+if(!RECOMPUTE_ELIGIBLE){
+  const repairedEligible=JSON.parse(readFileSync(new URL("./eligible15-repaired.json",import.meta.url),"utf8"));
+  eligibleWindows=(repairedEligible.eligible||[]).map(x=>({
+    cut:Number(x.cutoff),
+    f:{symbol:x.symbol,referenceClose:Number(x.reference_close),dayReturn:Number(x.day_return),
+       return15m:Number(x.return15),return30m:Number(x.return30),return60m:Number(x.return60),
+       volumeRatio:Number(x.volume_ratio),qv24:Number(x.qv24),rank:Number(x.rank),atr:1},
+    c5:!!x.c5_allowed,marketAllowed:!!x.market_allowed
+  }));
+}else{
+  eligibleSource="RECOMPUTED_BINANCE_VISION_15M";
+  const data15=new Map();
+  await mapLimit(allSymbols,12,async s=>{
+    const lc=lifecycle(s),from=Math.max(START-WARMUP,Math.floor(lc.onboard/M15)*M15);
+    const rows=await pagedKlines(s.symbol,"15m",from,END-1,1500).catch(()=>[]);
+    data15.set(s.symbol,indexRows(rows));
+  });
+  for(let cut=Math.ceil(START/M15)*M15;cut<END;cut+=M15){
+    const expected=allSymbols.filter(s=>{const lc=lifecycle(s);return lc.onboard<=cut-110*M15&&lc.delivery>cut;});
+    const features=[];
+    for(const s of expected){try{features.push(feature15(s.symbol,exactBars(data15.get(s.symbol)||new Map(),M15,cut,110),cut));}catch{}}
+    const coverage=expected.length?features.length/expected.length:0;
+    if(coverage<POLICY.minCoverage){cutoffState.set(cut,{blocked:true,coverage,expected:expected.length,evaluated:features.length});continue;}
+    const ranked=rankFeatures(features),by=new Map(ranked.map(x=>[x.symbol,x]));
+    const liquid=ranked.filter(x=>x.qv24>=POLICY.minQuoteVolume24h);
+    const market=marketParticipationDecision({
+      btcReturn60m:by.get("BTCUSDT")?.return60m,
+      rising30mCount:liquid.filter(x=>x.return30m>0).length,
+      liquidUniverseCount:liquid.length
+    });
+    const base=ranked.slice(0,POLICY.rankLimit).filter(f=>entryReason(f,candidatePolicy("C0"))==="ELIGIBLE");
+    const c5=new Set(ranked.slice(0,POLICY.rankLimit).filter(f=>entryReason(f,candidatePolicy("C5"))==="ELIGIBLE").map(x=>x.symbol));
+    for(const f of base)eligibleWindows.push({cut,f,c5:c5.has(f.symbol),marketAllowed:market.status==="KNOWN"&&market.allowed});
+  }
+}
+console.log("ELIGIBLE15",eligibleWindows.length,"SOURCE",eligibleSource);
 const need5=new Map();
 for(const x of eligibleWindows){
   for(const d of daysBetween(x.cut-14*M5,x.cut+2*M5-1)){
@@ -327,7 +391,8 @@ const pathCache=new Map();let ps=0;
 for(const s of uniqueSignals){try{const rows=await pagedKlines(s.symbol,"1m",s.s5c-90*MIN,s.s5c+SETUP_POLICY.setupTtlMs+POLICY.maxHoldMs+15*MIN-1,500);pathCache.set(s.id,rows);}catch(e){pathCache.set(s.id,{error:String(e),rows:[]});}if(++ps%50===0)console.log("1M_PATHS",ps,"/",uniqueSignals.length);}
 
 const opportunitiesByVariant=new Map();
-for(const id of Object.keys(V26_CANDIDATES)){
+const candidateIds=ONLY_CANDIDATE?[ONLY_CANDIDATE]:Object.keys(V26_CANDIDATES);
+for(const id of candidateIds){
   let filtered=uniqueSignals.filter(s=>!(id==="C5"||id==="C9")||s.c5Allowed);if(V26_CANDIDATES[id].marketParticipation)filtered=filtered.filter(s=>s.marketAllowed);filtered=mergedSignals(filtered);const ops=[],reasons={};
   for(const s of filtered){
     const cached=pathCache.get(s.id),rows=Array.isArray(cached)?cached:cached?.rows;
@@ -444,9 +509,9 @@ for(const id of Object.keys(V26_CANDIDATES)){
 const symbolsWithOps=new Set();for(const v of opportunitiesByVariant.values())for(const o of v.ops)symbolsWithOps.add(o.symbol);
 writeFileSync(new URL("funding-symbols.json",OUT),JSON.stringify([...symbolsWithOps].sort(),null,2));const fundingMap=new Map();let fd=0;for(const symbol of [...symbolsWithOps].sort()){fundingMap.set(symbol,await fundingFor(symbol).catch(()=>[]));if(++fd%50===0)console.log("FUNDING",fd,"/",symbolsWithOps.size);}
 
-const report={generatedAt:new Date().toISOString(),window:{start:new Date(START).toISOString(),end:new Date(END).toISOString(),days:DAYS},classification:"DEVELOPMENT_30D_NOT_INDEPENDENT_HOLDOUT",universe:{exchangeInfoPerpetualUsdtCoin:allSymbols.length},requestStats,costModel:{takerFeeRate:FEES.taker,actualFundingFromBinanceFundingRateHistory:false,fundingPendingConnectorEnrichment:true,fundingRiskAllowanceRate:FUNDING_RISK_ALLOWANCE_RATE,slippage:EXEC,historicalL2BookAvailable:false,slippageLimitation:"Binance REST does not provide historical L2 snapshots; baseline/stress bps are pre-registered execution assumptions."},risk:{startingEquity:30,leverage:3,minTrades:MIN_TRADES,minIndependentDays:MIN_INDEPENDENT_DAYS,riskPerTradeFrac:Number(RISK.riskPerTradeFrac.toString()),maxTotalOpenRiskFrac:Number(RISK.maxTotalOpenRiskFrac.toString()),maxGrossNotionalToEquity:Number(RISK.maxGrossNotionalToEquity.toString()),maxConcurrentPositions:RISK.maxConcurrentPositions},dataQuality:{blocked15mCutoffs:0,total15mCutoffs:Math.floor((END-START)/M15),rawSignals:uniqueSignals.length,eligible15Windows:eligibleWindows.length,repairedEligibleSource:"eligible15-repaired.json"},candidates:{},datasetHash:null,codeHash:null,noRobustEdgeFound:true,provisionalCandidate:null};
+const report={generatedAt:new Date().toISOString(),window:{start:new Date(START).toISOString(),end:new Date(END).toISOString(),days:DAYS},classification:REPORT_CLASSIFICATION,universe:{exchangeInfoPerpetualUsdtCoin:allSymbols.length},requestStats,costModel:{takerFeeRate:FEES.taker,actualFundingFromBinanceFundingRateHistory:false,fundingPendingConnectorEnrichment:true,fundingRiskAllowanceRate:FUNDING_RISK_ALLOWANCE_RATE,slippage:EXEC,historicalL2BookAvailable:false,slippageLimitation:"Binance REST does not provide historical L2 snapshots; baseline/stress bps are pre-registered execution assumptions."},risk:{startingEquity:30,leverage:3,minTrades:MIN_TRADES,minIndependentDays:MIN_INDEPENDENT_DAYS,riskPerTradeFrac:Number(RISK.riskPerTradeFrac.toString()),maxTotalOpenRiskFrac:Number(RISK.maxTotalOpenRiskFrac.toString()),maxGrossNotionalToEquity:Number(RISK.maxGrossNotionalToEquity.toString()),maxConcurrentPositions:RISK.maxConcurrentPositions},dataQuality:{blocked15mCutoffs:0,total15mCutoffs:Math.floor((END-START)/M15),rawSignals:uniqueSignals.length,eligible15Windows:eligibleWindows.length,repairedEligibleSource:eligibleSource},candidates:{},datasetHash:null,codeHash:null,noRobustEdgeFound:true,provisionalCandidate:null};
 const tradeDetails={},diagnosticDetails={};
-for(const id of Object.keys(V26_CANDIDATES)){
+for(const id of candidateIds){
   const x=opportunitiesByVariant.get(id),base=runAccount(id,x.ops,fundingMap,EXEC.baseline),
     s2=runAccount(id,x.ops,fundingMap,EXEC.stress2x),s4=runAccount(id,x.ops,fundingMap,EXEC.stress4x),
     diag=runIndependentDiagnostic(id,x.ops,fundingMap,EXEC.baseline),
