@@ -1,0 +1,40 @@
+{
+  "C28": {
+    "baseline": [
+      {
+        "id": "ZENUSDT:1787419800000",
+        "symbol": "ZENUSDT",
+        "rank": 5,
+        "entryAt": 1787419920000,
+        "exitAt": 1787420100000,
+        "reason": "STRENGTH_LOSS",
+        "markToMarket": false,
+        "qty": 0.9,
+        "entry": 5.602680299999999,
+        "exit": 5.551223,
+        "gross": -0.04631156999999924,
+        "entryFee": 0.002521206135,
+        "exitFee": 0.0024980503500000003,
+        "funding": 0,
+        "fundingEvents": 0,
+        "net": -0.051330826484999245,
+        "plannedLoss": 0.070553744955,
+        "initialStop": 5.541,
+        "mfe": 0.00017853954650970394,
+        "mae": -0.008748437778968055
+      }
+    ],
+    "stress2x": [],
+    "stress4x": []
+  },
+  "C29": {
+    "baseline": [],
+    "stress2x": [],
+    "stress4x": []
+  },
+  "C30": {
+    "baseline": [],
+    "stress2x": [],
+    "stress4x": []
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "completedAt": "2026-09-19T14:39:26Z",
+  "iteration": "R6",
+  "testedCandidates": ["C28", "C29", "C30"],
+  "nextCandidateId": "C31",
+  "no_robust_edge_found": true,
+  "developmentPass": [],
+  "walkForwardRun": false,
+  "walkForwardReason": "No candidate passed the preregistered 30-day development gates.",
+  "unusedHoldoutConsumed": false,
+  "nextHypothesisConstraint": "Do not relax C28-C30 until they trade. Test structurally broader single-axis hypotheses, preferably cross-sectional pullback quality ranking followed by the existing trigger rather than stacking more absolute gates."
+}
