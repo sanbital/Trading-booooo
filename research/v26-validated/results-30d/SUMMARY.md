@@ -15,10 +15,11 @@ This is a fresh Binance-API development replay, not an independent holdout.
 | C6 | 5 | -0.2133 | 29.7867 | -0.71% | 0.220 | -0.2836 | -0.06873 | -0.1582 | 0.0000 | NO |
 | C7 | 4 | -0.0947 | 29.9053 | -0.32% | 0.356 | -0.1222 | -0.06934 | -0.0690 | 0.0000 | NO |
 | C8 | 6 | -0.2765 | 29.7235 | -0.92% | 0.188 | -0.2875 | -0.06873 | -0.2941 | -0.1368 | NO |
+| C9 | 8 | 0.2150 | 30.2150 | 0.72% | 2.041 | -0.2516 | -0.02525 | 0.6151 | 0.0000 | NO |
 
 Provisional candidate: NONE
 
 no_robust_edge_found=true (no unused independent holdout).
 
-Dataset hash: `fbb84a07a5d71ca90fdef1da23809fbe4fd7de482875e1fb763c1c4918a59024`
-Code hash: `2457a1ebc8bd0f08979d6f95a56bb6c2a8c5b78605955d1fbf892bf9bb42e6d2`
+Dataset hash: `06cd72705d00f449b73943287d87d398545310fd52a2c93368e8da371ae753fb`
+Code hash: `635bef22b9f6b4354e56908c68f66f5b28f7616edac83a279566751ac191da09`
