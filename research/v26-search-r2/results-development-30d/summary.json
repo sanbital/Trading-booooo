@@ -1,0 +1,454 @@
+{
+  "generatedAt": "2026-09-19T11:24:24.332Z",
+  "window": {
+    "start": "2026-08-19T15:10:00.000Z",
+    "end": "2026-09-18T15:10:00.000Z",
+    "days": 30
+  },
+  "classification": "DEVELOPMENT_30D_NOT_INDEPENDENT_HOLDOUT",
+  "exitPolicy": "STRENGTH_LOSS_V1",
+  "universe": {
+    "exchangeInfoPerpetualUsdtCoin": 530
+  },
+  "requestStats": {
+    "requests": 0,
+    "retries": 0,
+    "weight": 0,
+    "http429": 0,
+    "http418": 0,
+    "http451": 0,
+    "vision404": 0,
+    "visionFiles": 5482
+  },
+  "costModel": {
+    "takerFeeRate": 0.0005,
+    "actualFundingFromBinanceFundingRateHistory": true,
+    "fundingProvider": "VERIFIED_COVERAGE_CACHE",
+    "fundingPendingConnectorEnrichment": false,
+    "fundingRiskAllowanceRate": 0.001,
+    "slippage": {
+      "baseline": {
+        "entryBps": 3,
+        "stopBps": 10,
+        "discretionaryBps": 5
+      },
+      "stress2x": {
+        "entryBps": 6,
+        "stopBps": 20,
+        "discretionaryBps": 10
+      },
+      "stress4x": {
+        "entryBps": 12,
+        "stopBps": 40,
+        "discretionaryBps": 20
+      }
+    },
+    "historicalL2BookAvailable": false,
+    "slippageLimitation": "Binance REST does not provide historical L2 snapshots; baseline/stress bps are pre-registered execution assumptions."
+  },
+  "risk": {
+    "startingEquity": 30,
+    "leverage": 3,
+    "minTrades": 30,
+    "minIndependentDays": 10,
+    "riskPerTradeFrac": 0.0025,
+    "maxTotalOpenRiskFrac": 0.005,
+    "maxGrossNotionalToEquity": 1,
+    "maxConcurrentPositions": 1
+  },
+  "dataQuality": {
+    "blocked15mCutoffs": 0,
+    "total15mCutoffs": 2880,
+    "cutoffCoverageSource": "AUDITED_EXPORT_15M",
+    "rawSignals": 1234,
+    "eligible15Windows": 932,
+    "repairedEligibleSource": "eligible15-repaired.json"
+  },
+  "candidates": {
+    "C16": {
+      "preAccount": {
+        "filteredSignals": 723,
+        "opportunities": 60,
+        "pathReasons": {
+          "V17_SETUP_EXPIRED": 267,
+          "V17_CHASE_EXPIRED": 142,
+          "C16_ABSORPTION_FAIL": 254
+        }
+      },
+      "baseline": {
+        "trades": 4,
+        "realizedTrades": 4,
+        "markedOpenPositions": 0,
+        "markedOpenPnl": 0,
+        "rejections": {
+          "MIN_NOTIONAL_EXCEEDS_RISK_BUDGET": 7,
+          "SLOT_OCCUPIED": 2,
+          "CONSECUTIVE_LOSS_LIMIT_REACHED": 47
+        },
+        "wins": 1,
+        "losses": 3,
+        "netPnl": -0.09351249846632981,
+        "finalEquity": 29.90648750153367,
+        "returnPct": -0.0031170832822109934,
+        "profitFactor": 0.373445132706375,
+        "avgWin": 0.05573620000799977,
+        "avgLoss": -0.04974956615810986,
+        "avgNet": -0.023378124616582452,
+        "mdd": -0.22282678531372824,
+        "longestLossStreak": 3,
+        "byDay": {
+          "2026-08-21": 0.05573620000799977,
+          "2026-08-23": -0.07986224816433066,
+          "2026-08-24": -0.06938645030999892
+        },
+        "byWeek": {
+          "2026-08-17": -0.02412604815633089,
+          "2026-08-24": -0.06938645030999892
+        },
+        "removeTop1Net": -0.1492486984743296,
+        "removeTop3Net": -0.07002287160120035,
+        "removeTop5Net": 0,
+        "activeDays": 3,
+        "expectancyLcb5": -0.05465878719608212
+      },
+      "stress2x": {
+        "trades": 9,
+        "realizedTrades": 9,
+        "markedOpenPositions": 0,
+        "markedOpenPnl": 0,
+        "rejections": {
+          "MIN_NOTIONAL_EXCEEDS_RISK_BUDGET": 51
+        },
+        "wins": 4,
+        "losses": 5,
+        "netPnl": -0.1332758947895985,
+        "finalEquity": 29.8667241052104,
+        "returnPct": -0.00444252982631995,
+        "profitFactor": 0.5297898862612347,
+        "avgWin": 0.03754078181162512,
+        "avgLoss": -0.0566878044072198,
+        "avgNet": -0.014808432754399834,
+        "mdd": -0.2264152860926032,
+        "longestLossStreak": 2,
+        "byDay": {
+          "2026-08-21": -0.044570641559999714,
+          "2026-08-28": -0.011564719279999185,
+          "2026-08-29": -0.06913978171560037,
+          "2026-09-01": 0.03817866423600004,
+          "2026-09-07": -0.0693879974005001,
+          "2026-09-08": -0.018087714747599237,
+          "2026-09-13": 0.04129629567810005
+        },
+        "byWeek": {
+          "2026-08-17": -0.044570641559999714,
+          "2026-08-24": -0.08070450099559956,
+          "2026-08-31": 0.03817866423600004,
+          "2026-09-07": -0.04617941646999928
+        },
+        "removeTop1Net": -0.1899860378895986,
+        "removeTop3Net": -0.2694609978036987,
+        "removeTop5Net": -0.25137328305609946,
+        "activeDays": 7,
+        "expectancyLcb5": -0.037333229318324945
+      },
+      "stress4x": {
+        "trades": 2,
+        "realizedTrades": 2,
+        "markedOpenPositions": 0,
+        "markedOpenPnl": 0,
+        "rejections": {
+          "MIN_NOTIONAL_EXCEEDS_RISK_BUDGET": 58
+        },
+        "wins": 1,
+        "losses": 1,
+        "netPnl": -0.06628518255800092,
+        "finalEquity": 29.933714817442,
+        "returnPct": -0.0022095060852666973,
+        "profitFactor": 0.04675371882161607,
+        "avgWin": 0.003251078811999399,
+        "avgLoss": -0.06953626137000032,
+        "avgNet": -0.03314259127900046,
+        "mdd": -0.07011822366800047,
+        "longestLossStreak": 1,
+        "byDay": {
+          "2026-08-28": -0.06953626137000032,
+          "2026-09-08": 0.003251078811999399
+        },
+        "byWeek": {
+          "2026-08-24": -0.06953626137000032,
+          "2026-09-07": 0.003251078811999399
+        },
+        "removeTop1Net": -0.06953626137000032,
+        "removeTop3Net": 0,
+        "removeTop5Net": 0,
+        "activeDays": 2,
+        "expectancyLcb5": -0.06953626137000032
+      },
+      "independentOpportunityDiagnostic": {
+        "trades": 18,
+        "wins": 6,
+        "losses": 12,
+        "winRate": 0.3333333333333333,
+        "netPnl": -0.36104014287385305,
+        "avgNet": -0.02005778571521406,
+        "profitFactor": 0.4135690028501914
+      },
+      "sufficientSample": false,
+      "developmentPass": false
+    },
+    "C17": {
+      "preAccount": {
+        "filteredSignals": 723,
+        "opportunities": 252,
+        "pathReasons": {
+          "V17_SETUP_EXPIRED": 267,
+          "V17_CHASE_EXPIRED": 142,
+          "C17_RELATIVE_STRENGTH_FAIL": 62
+        }
+      },
+      "baseline": {
+        "trades": 3,
+        "realizedTrades": 3,
+        "markedOpenPositions": 0,
+        "markedOpenPnl": 0,
+        "rejections": {
+          "MIN_NOTIONAL_EXCEEDS_RISK_BUDGET": 10,
+          "CONSECUTIVE_LOSS_LIMIT_REACHED": 239
+        },
+        "wins": 0,
+        "losses": 3,
+        "netPnl": -0.20482167195030004,
+        "finalEquity": 29.7951783280497,
+        "returnPct": -0.006827389065010001,
+        "profitFactor": 0,
+        "avgWin": 0,
+        "avgLoss": -0.06827389065010002,
+        "avgNet": -0.06827389065010002,
+        "mdd": -0.21247521315330076,
+        "longestLossStreak": 3,
+        "byDay": {
+          "2026-08-20": -0.06876838052699907,
+          "2026-08-21": -0.13605329142330097
+        },
+        "byWeek": {
+          "2026-08-17": -0.20482167195030004
+        },
+        "removeTop1Net": -0.13847954022179884,
+        "removeTop3Net": 0,
+        "removeTop5Net": 0,
+        "activeDays": 2,
+        "expectancyLcb5": -0.06876838052699907
+      },
+      "stress2x": {
+        "trades": 6,
+        "realizedTrades": 6,
+        "markedOpenPositions": 0,
+        "markedOpenPnl": 0,
+        "rejections": {
+          "MIN_NOTIONAL_EXCEEDS_RISK_BUDGET": 17,
+          "SLOT_OCCUPIED": 2,
+          "CONSECUTIVE_LOSS_LIMIT_REACHED": 227
+        },
+        "wins": 1,
+        "losses": 5,
+        "netPnl": -0.27331108352279765,
+        "finalEquity": 29.7266889164772,
+        "returnPct": -0.00911036945075992,
+        "profitFactor": 0.04946531126431305,
+        "avgWin": 0.014222961012000646,
+        "avgLoss": -0.05750680890695965,
+        "avgNet": -0.045551847253799606,
+        "mdd": -0.2786775129827994,
+        "longestLossStreak": 3,
+        "byDay": {
+          "2026-08-20": -0.06935681913999843,
+          "2026-08-21": -0.08737276865999889,
+          "2026-08-22": -0.06920239801279987,
+          "2026-08-23": -0.04737909771000043
+        },
+        "byWeek": {
+          "2026-08-17": -0.27331108352279765
+        },
+        "removeTop1Net": -0.28753404453479825,
+        "removeTop3Net": -0.20682105726479805,
+        "removeTop5Net": -0.06935681913999843,
+        "activeDays": 4,
+        "expectancyLcb5": -0.0692410032945995
+      },
+      "stress4x": {
+        "trades": 5,
+        "realizedTrades": 5,
+        "markedOpenPositions": 0,
+        "markedOpenPnl": 0,
+        "rejections": {
+          "MIN_NOTIONAL_EXCEEDS_RISK_BUDGET": 246,
+          "SLOT_OCCUPIED": 1
+        },
+        "wins": 1,
+        "losses": 4,
+        "netPnl": -0.13677145443300096,
+        "finalEquity": 29.863228545567,
+        "returnPct": -0.004559048481100032,
+        "profitFactor": 0.39751689889889347,
+        "avgWin": 0.09024147619200004,
+        "avgLoss": -0.05675323265625025,
+        "avgNet": -0.027354290886600192,
+        "mdd": -0.14163549272999987,
+        "longestLossStreak": 2,
+        "byDay": {
+          "2026-08-21": -0.06875264518200107,
+          "2026-08-28": -0.06953626137000032,
+          "2026-08-31": 0.09024147619200004,
+          "2026-09-02": -0.06970522119300018,
+          "2026-09-09": -0.01901880287999943
+        },
+        "byWeek": {
+          "2026-08-17": -0.06875264518200107,
+          "2026-08-24": -0.06953626137000032,
+          "2026-08-31": 0.02053625499899986,
+          "2026-09-07": -0.01901880287999943
+        },
+        "removeTop1Net": -0.227012930625001,
+        "removeTop3Net": -0.1392414825630005,
+        "removeTop5Net": 0,
+        "activeDays": 5,
+        "expectancyLcb5": -0.06929039882400057
+      },
+      "independentOpportunityDiagnostic": {
+        "trades": 93,
+        "wins": 31,
+        "losses": 62,
+        "winRate": 0.3333333333333333,
+        "netPnl": -0.061145553819475076,
+        "avgNet": -0.000657479073327689,
+        "profitFactor": 0.981597934517444
+      },
+      "sufficientSample": false,
+      "developmentPass": false
+    },
+    "C18": {
+      "preAccount": {
+        "filteredSignals": 723,
+        "opportunities": 80,
+        "pathReasons": {
+          "V17_SETUP_EXPIRED": 267,
+          "V17_CHASE_EXPIRED": 142,
+          "C18_SWEEP_FAIL": 234
+        }
+      },
+      "baseline": {
+        "trades": 5,
+        "realizedTrades": 5,
+        "markedOpenPositions": 0,
+        "markedOpenPnl": 0,
+        "rejections": {
+          "MIN_NOTIONAL_EXCEEDS_RISK_BUDGET": 6,
+          "CONSECUTIVE_LOSS_LIMIT_REACHED": 69
+        },
+        "wins": 1,
+        "losses": 4,
+        "netPnl": -0.1072724787663226,
+        "finalEquity": 29.892727521233677,
+        "returnPct": -0.003575749292210753,
+        "profitFactor": 0.3419216720673127,
+        "avgWin": 0.05573620000799977,
+        "avgLoss": -0.04075216969358059,
+        "avgNet": -0.021454495753264517,
+        "mdd": -0.16115396331357346,
+        "longestLossStreak": 3,
+        "byDay": {
+          "2026-08-21": -0.046136679132749436,
+          "2026-08-23": -0.06113579963357315
+        },
+        "byWeek": {
+          "2026-08-17": -0.1072724787663226
+        },
+        "removeTop1Net": -0.16300867877432235,
+        "removeTop3Net": -0.12119667070574901,
+        "removeTop5Net": 0,
+        "activeDays": 2,
+        "expectancyLcb5": -0.030567899816786575
+      },
+      "stress2x": {
+        "trades": 3,
+        "realizedTrades": 3,
+        "markedOpenPositions": 0,
+        "markedOpenPnl": 0,
+        "rejections": {
+          "MIN_NOTIONAL_EXCEEDS_RISK_BUDGET": 23,
+          "CONSECUTIVE_LOSS_LIMIT_REACHED": 54
+        },
+        "wins": 0,
+        "losses": 3,
+        "netPnl": -0.1711146504839982,
+        "finalEquity": 29.828885349516003,
+        "returnPct": -0.00570382168279994,
+        "profitFactor": 0,
+        "avgWin": 0,
+        "avgLoss": -0.0570382168279994,
+        "avgNet": -0.0570382168279994,
+        "mdd": -0.21375110994399904,
+        "longestLossStreak": 3,
+        "byDay": {
+          "2026-08-21": -0.03333388955999979,
+          "2026-08-28": -0.1377807609239984
+        },
+        "byWeek": {
+          "2026-08-17": -0.03333388955999979,
+          "2026-08-24": -0.1377807609239984
+        },
+        "removeTop1Net": -0.1377807609239984,
+        "removeTop3Net": 0,
+        "removeTop5Net": 0,
+        "activeDays": 2,
+        "expectancyLcb5": -0.0688903804619992
+      },
+      "stress4x": {
+        "trades": 1,
+        "realizedTrades": 1,
+        "markedOpenPositions": 0,
+        "markedOpenPnl": 0,
+        "rejections": {
+          "MIN_NOTIONAL_EXCEEDS_RISK_BUDGET": 79
+        },
+        "wins": 0,
+        "losses": 1,
+        "netPnl": -0.06953626137000032,
+        "finalEquity": 29.93046373863,
+        "returnPct": -0.0023178753790000107,
+        "profitFactor": 0,
+        "avgWin": 0,
+        "avgLoss": -0.06953626137000032,
+        "avgNet": -0.06953626137000032,
+        "mdd": -0.06996067785999927,
+        "longestLossStreak": 1,
+        "byDay": {
+          "2026-08-28": -0.06953626137000032
+        },
+        "byWeek": {
+          "2026-08-24": -0.06953626137000032
+        },
+        "removeTop1Net": 0,
+        "removeTop3Net": 0,
+        "removeTop5Net": 0,
+        "activeDays": 1,
+        "expectancyLcb5": null
+      },
+      "independentOpportunityDiagnostic": {
+        "trades": 25,
+        "wins": 10,
+        "losses": 15,
+        "winRate": 0.4,
+        "netPnl": 0.4684078256784441,
+        "avgNet": 0.018736313027137762,
+        "profitFactor": 1.6262483811018882
+      },
+      "sufficientSample": false,
+      "developmentPass": false
+    }
+  },
+  "datasetHash": "c8b9bcfbd88209724eb646e24016c7eb87012b672d8db7c8262236e46e79301b",
+  "codeHash": "ec9719fb78bb87b9e7457b28f4f35514747bff25f8601a3367e8d71e50c66acc",
+  "noRobustEdgeFound": true,
+  "provisionalCandidate": null
+}
