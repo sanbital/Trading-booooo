@@ -4,8 +4,13 @@ on:
   push:
     branches: [research/v26-validator-integrity-20260919]
     paths:
+      - 'research/v26-validated/binance-30d-validation.mjs'
       - 'research/v26-validated/data-source-integrity.mjs'
       - 'research/v26-validated/data-source-integrity.test.mjs'
+      - 'research/v26-validated/verified-binance-provider.mjs'
+      - 'research/v26-validated/verified-binance-provider.test.mjs'
+      - 'research/v26-validated/validator-entrypoint.test.mjs'
+      - 'research/v26-validated/v26-regression.test.mjs'
       - '.github/workflows/v26-validator-integrity-research.yml'
   workflow_dispatch:
 
@@ -33,7 +38,12 @@ jobs:
       - name: Pure integrity regression tests
         run: |
           set -euo pipefail
-          node --test research/v26-validated/data-source-integrity.test.mjs
+          node --check research/v26-validated/binance-30d-validation.mjs
+          node --test \
+            research/v26-validated/data-source-integrity.test.mjs \
+            research/v26-validated/verified-binance-provider.test.mjs \
+            research/v26-validated/validator-entrypoint.test.mjs \
+            research/v26-validated/v26-regression.test.mjs
 
       - name: Verify one official Binance Vision archive checksum
         id: vision
@@ -68,7 +78,7 @@ jobs:
           FUNDING_HTTP: ${{ steps.funding.outputs.http }}
         run: |
           set -euo pipefail
-          node -e "const fs=require('fs');let fundingBody=null;try{fundingBody=JSON.parse(fs.readFileSync('/tmp/v26-integrity/funding.json','utf8'));}catch{}const http=String(process.env.FUNDING_HTTP||'');const out={generatedAt:new Date().toISOString(),sourceCommit:process.env.GITHUB_SHA,scope:'RESEARCH_ONLY_NO_LIVE_CHANGE',pureTests:'PASS',binanceVision:{file:'BTCUSDT-15m-2026-05.zip',checksumVerified:true,sha256:process.env.VISION_SHA},fundingRest:{httpStatus:http,usable:http==='200',failClosedRequired:http!=='200',sample:http==='200'?fundingBody:null},promotionEligible:false,reason:'VALIDATOR_INTEGRATION_AND_FULL_REPLAY_PENDING'};fs.writeFileSync('research/v26-validated/integrity-live-probe-20260919.json',JSON.stringify(out,null,2)+'\n');"
+          node -e "const fs=require('fs');let fundingBody=null;try{fundingBody=JSON.parse(fs.readFileSync('/tmp/v26-integrity/funding.json','utf8'));}catch{}const http=String(process.env.FUNDING_HTTP||'');const out={generatedAt:new Date().toISOString(),sourceCommit:process.env.GITHUB_SHA,scope:'RESEARCH_ONLY_NO_LIVE_CHANGE',validatorIntegration:'COMPLETE',pureTests:'PASS',binanceVision:{file:'BTCUSDT-15m-2026-05.zip',checksumVerified:true,sha256:process.env.VISION_SHA},fundingRest:{httpStatus:http,usable:http==='200',failClosedRequired:http!=='200',requiredProvider:http==='200'?'BINANCE_REST_OR_VERIFIED_CACHE':'VERIFIED_COVERAGE_CACHE',sample:http==='200'?fundingBody:null},promotionEligible:false,reason:'VALIDATOR_READY_STRATEGY_RESULTS_REQUIRE_SEPARATE_REPLAY'};fs.writeFileSync('research/v26-validated/integrity-live-probe-20260919.json',JSON.stringify(out,null,2)+'\n');"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add research/v26-validated/integrity-live-probe-20260919.json
