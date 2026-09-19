@@ -1,0 +1,8 @@
+a3abafa283093e9f4879a43a37dde4fb396f1b15590240c5bd805f968c115760  experiment-manifest.json
+b3ffb3a890612b2cd7cd7722fc609d74fd096bcae583fb3c59cd55835ba6750e  ../v26-validated/binance-30d-validation.mjs
+279ea2e923ee855b6a07e008f8d4ae7a820cdae27b27695f336cb648a97724f3  ../../supabase/functions/_shared/boo/v26-candidate-policy.mjs
+1e58e36d6a27c223b9b27e5f0f31eb4474f11a137c69aa6f93330fa4c31d7ade  results-development-30d/summary.json
+fbfca2c2fc620f410abbda326b75059613ff7ef756b36ae12ea441f03ea30a00  results-development-30d/trades.json
+284808d84bd95b4bbcb2d614c77e86b51c5d2b44796abd133d28b4aa6bce708c  results-development-30d/edge-diagnostic.json
+77f0fd8eed4b11aa9b8a7c10004affccedc76429f7330e40e6d10cb8ef06c9bd  funding-cache-development-30d.json
+dcfad77c1a57c7d711bc8aa2674a0ba35bf68df9123f065bc2040ba3a27f4807  funding-cache-development-30d.json.gz
