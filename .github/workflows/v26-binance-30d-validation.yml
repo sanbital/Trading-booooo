@@ -16,7 +16,7 @@ permissions:
 
 concurrency:
   group: v26-binance-30d-validation
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   replay:
