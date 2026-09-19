@@ -25,6 +25,8 @@ import {
   sellerExhaustionDecision,
   volumeDryupReaccelDecision,
   buyerNotionalEscalationDecision,
+  rollingPullbackQualityPercentiles,
+  crossSectionalPullbackQualityDecision,
   V26_CANDIDATES,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { runExit, summarise } from "../v25-pullback-reaccel/replay.mjs";
@@ -53,7 +55,7 @@ test("selection gate fails closed on null/NaN and respects exact boundaries", ()
   assert.equal(POLICY.maxDayReturn, 0.08);
 });
 
-test("registered C0-C30 definitions preserve the frozen C0-C5 prefix", () => {
+test("registered C0-C31 definitions preserve the frozen C0-C5 prefix", () => {
   assert.deepEqual(Object.keys(V26_CANDIDATES).slice(0,6), ["C0","C1","C2","C3","C4","C5"]);
   assert.ok(V26_CANDIDATES.C12);
   assert.ok(V26_CANDIDATES.C15);
@@ -62,10 +64,24 @@ test("registered C0-C30 definitions preserve the frozen C0-C5 prefix", () => {
   assert.ok(V26_CANDIDATES.C24);
   assert.ok(V26_CANDIDATES.C27);
   assert.ok(V26_CANDIDATES.C30);
+  assert.ok(V26_CANDIDATES.C31);
   assert.equal(V26_CANDIDATES.C0.structuralStop, false);
   assert.equal(V26_CANDIDATES.C4.earlyFailureExit, true);
   assert.equal(V26_CANDIDATES.C4.marketParticipation, true);
   assert.equal(V26_CANDIDATES.C5.maxDayReturn, 0.05);
+});
+
+test("C31 rolling pullback quality is causal and uses one cross-sectional gate",()=>{
+  const records=Array.from({length:24},(_,i)=>({id:`R${i}`,at:1_800_000_000_000+i*60_000,score:i+1}));
+  const ranked=rollingPullbackQualityPercentiles(records,{lookbackMs:24*60*60_000,minObservations:20});
+  assert.equal(ranked[18].percentile,null);
+  assert.equal(ranked[19].observations,20);
+  assert.equal(ranked[19].percentile,1);
+  assert.equal(crossSectionalPullbackQualityDecision({qualityPercentile:.60,observations:20}).action,"ENTER");
+  assert.equal(crossSectionalPullbackQualityDecision({qualityPercentile:.59,observations:20}).action,"REJECT");
+  const withFuture=rollingPullbackQualityPercentiles([...records,{id:"FUTURE",at:records.at(-1).at+86_400_000,score:999}],
+    {lookbackMs:7*86_400_000,minObservations:20});
+  assert.equal(withFuture.find(x=>x.id==="R19").percentile,ranked[19].percentile);
 });
 
 test("C28-C30 use seller exhaustion, volume dry-up and absolute buyer notional",()=>{

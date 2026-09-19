@@ -15,6 +15,7 @@ import {
   liquidityAdjustedEfficiencyDecision, selectiveLeaderRegimeDecision, distributedTrendDecision,
   breakoutRetestHold2mDecision, controlledPullbackReclaim3mDecision, breakoutAcceptance3mDecision,
   sellerExhaustionDecision, volumeDryupReaccelDecision, buyerNotionalEscalationDecision,
+  rollingPullbackQualityPercentiles, crossSectionalPullbackQualityDecision,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { resolveRiskPolicy, evaluateLossLimits } from "../../supabase/functions/_shared/boo/risk-policy.mjs";
 import { solveQuantity } from "../../supabase/functions/_shared/boo/risk-budget.mjs";
@@ -419,6 +420,20 @@ if(EXIT_POLICY==="STRENGTH_LOSS_V1"){
   });
 }
 
+// C31 context is built once from completed setup/trigger geometry. The rolling
+// pure helper cannot see later timestamps, so no future result enters a rank.
+const pullbackQualityRecords=[];
+for(const s of mergedSignals(uniqueSignals)){
+  const cached=pathCache.get(s.id),rows=Array.isArray(cached)?cached:cached?.rows;
+  if(!rows?.length)continue;
+  const tr=setupTrigger(s,rows.filter(r=>Number(r[0])>=s.s5c-2*MIN));
+  if(!tr.ok)continue;
+  const triggerAt=Number(tr.state.triggerAt),low=Number(tr.state.pullbackLow),close=Number(tr.state.triggerClose);
+  const depth=(s.ref-low)/s.ref,recovery=(close-low)/s.ref,durationMinutes=(triggerAt-s.s5c)/MIN;
+  if(depth>0&&recovery>0&&durationMinutes>0)pullbackQualityRecords.push({id:s.id,at:triggerAt,score:(recovery/depth)/Math.sqrt(durationMinutes)});
+}
+const pullbackQualityById=new Map(rollingPullbackQualityPercentiles(pullbackQualityRecords).map(x=>[x.id,x]));
+
 const opportunitiesByVariant=new Map();
 const candidateIds=ONLY_CANDIDATE?ONLY_CANDIDATE.split(",").map(x=>x.trim()).filter(Boolean):Object.keys(V26_CANDIDATES);
 for(const id of candidateIds){
@@ -545,6 +560,11 @@ for(const id of candidateIds){
     if(V26_CANDIDATES[id].buyerNotionalEscalation){
       const bars=rows.filter(r=>Number(r[0])>=triggerAt-4*MIN&&Number(r[0])<triggerAt);
       const decision=buyerNotionalEscalationDecision({triggerAt,now:triggerAt,bars,signalReference:s.ref});
+      if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
+    }
+    if(V26_CANDIDATES[id].crossSectionalPullbackQuality){
+      const context=pullbackQualityById.get(s.id);
+      const decision=crossSectionalPullbackQualityDecision({qualityPercentile:context?.percentile,observations:context?.observations});
       if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
     }
     if(V26_CANDIDATES[id].breakoutRetestHold2m||V26_CANDIDATES[id].controlledPullbackReclaim3m||V26_CANDIDATES[id].breakoutAcceptance3m){

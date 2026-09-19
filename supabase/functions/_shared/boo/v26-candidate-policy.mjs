@@ -6,7 +6,7 @@
  * is live merely because this file exists; activation requires a matching,
  * unrevoked approval identity and ENFORCE mode.
  */
-export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-12";
+export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-13";
 
 const BASE = Object.freeze({
   minDayReturn: 0.03,
@@ -37,6 +37,7 @@ const BASE = Object.freeze({
   sellerExhaustion: false,
   volumeDryupReaccel: false,
   buyerNotionalEscalation: false,
+  crossSectionalPullbackQuality: false,
   minRankOverride: null,
   maxRankOverride: null,
 });
@@ -118,6 +119,9 @@ export const V26_CANDIDATES = Object.freeze({
   }),
   C30: Object.freeze({
     ...BASE, id: "C30", structuralStop: true, buyerNotionalEscalation: true,
+  }),
+  C31: Object.freeze({
+    ...BASE, id: "C31", structuralStop: true, crossSectionalPullbackQuality: true,
   }),
 });
 
@@ -956,4 +960,30 @@ export function buyerNotionalEscalationDecision({triggerAt,now,bars,signalRefere
   });
   const allowed=Object.values(conditions).every(Boolean);
   return {action:allowed?"ENTER":"REJECT",reason:allowed?"C30_BUYER_NOTIONAL_PASS":"C30_BUYER_NOTIONAL_FAIL",conditions,buy,sell,closeLocation};
+}
+
+/**
+ * Assign a causal rolling percentile to each completed setup score. A record can
+ * see only records at or before its timestamp; equal-time records are all known
+ * at the same queue decision. This is shared pure logic for replay/scanner use.
+ */
+export function rollingPullbackQualityPercentiles(records,{lookbackMs=7*24*60*minute,minObservations=20}={}) {
+  if(!Array.isArray(records)||!(finite(lookbackMs)&&lookbackMs>0)||!Number.isSafeInteger(minObservations)||minObservations<1)
+    return [];
+  const xs=records.map(x=>({id:String(x?.id??""),at:Number(x?.at),score:Number(x?.score)}))
+    .filter(x=>x.id&&Number.isSafeInteger(x.at)&&finite(x.score)).sort((a,b)=>a.at-b.at||a.id.localeCompare(b.id));
+  return xs.map(x=>{
+    const pool=xs.filter(y=>y.at>=x.at-lookbackMs&&y.at<=x.at).map(y=>y.score);
+    return {id:x.id,at:x.at,score:x.score,observations:pool.length,
+      percentile:pool.length>=minObservations?pool.filter(v=>v<=x.score).length/pool.length:null};
+  });
+}
+
+/** C31: select only the upper rolling cross-section of pullback recovery efficiency. */
+export function crossSectionalPullbackQualityDecision({qualityPercentile,observations}) {
+  if(!finite(qualityPercentile)||!Number.isSafeInteger(observations)||observations<20)
+    return {action:"UNKNOWN",reason:"C31_PULLBACK_QUALITY_CONTEXT_MISSING"};
+  const allowed=qualityPercentile>=0.60;
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C31_PULLBACK_QUALITY_PASS":"C31_PULLBACK_QUALITY_FAIL",
+    qualityPercentile,observations,threshold:0.60};
 }

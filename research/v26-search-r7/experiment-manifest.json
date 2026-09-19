@@ -1,0 +1,51 @@
+{
+  "experimentId": "V26-SEARCH-R7-C31",
+  "preregisteredAt": "2026-09-19T16:18:30Z",
+  "branch": "research/v26-strategy-search-r7-20260920",
+  "parentCheckpoint": "a062f4c0c84315e651cd913127643676f98c6e97",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "developmentWindow": {
+    "start": "2026-08-19T15:10:00.000Z",
+    "end": "2026-09-18T15:10:00.000Z",
+    "classification": "DEVELOPMENT_USED"
+  },
+  "reservedHoldout": {
+    "start": "2025-12-22T15:10:00.000Z",
+    "end": "2026-03-22T15:10:00.000Z",
+    "status": "LOCKED_UNSEEN_DO_NOT_OPEN_UNLESS_DEVELOPMENT_AND_WALK_FORWARD_PASS"
+  },
+  "account": {
+    "startingCapitalUsdt": 30,
+    "leverage": 3,
+    "maxConcurrentPositions": 1,
+    "quantitySource": "solveQuantity.plan.quantity",
+    "riskPolicy": "existing BOO risk-policy/risk-budget plus operator-tightened limits"
+  },
+  "sharedExit": "STRENGTH_LOSS_V1",
+  "candidates": [{
+    "id": "C31",
+    "name": "ROLLING_CROSS_SECTIONAL_PULLBACK_QUALITY",
+    "hypothesis": "Selecting a broad upper cross-section of fast recovery relative to pullback depth is more robust than stacking absolute candle and flow gates.",
+    "score": "((triggerClose - pullbackLow) / referencePrice) / ((referencePrice - pullbackLow) / referencePrice) / sqrt(minutesFromSignalToTrigger)",
+    "rules": [
+      "use only completed setup and trigger state available at trigger time",
+      "rank the score against completed setup scores in the trailing seven days, including equal-time queue peers but no later timestamp",
+      "require at least 20 causal observations",
+      "accept score percentile >= 0.60 as the only new gate",
+      "enter at the existing trigger's next open with unchanged structural stop and account protections"
+    ]
+  }],
+  "promotionGates": {
+    "minTrades": 30,
+    "minActiveDays": 10,
+    "netPnlPositive": true,
+    "monthlyReturnPositive": true,
+    "minProfitFactor": 1.2,
+    "stressNetAndPfPositive": true,
+    "top1RemovedNetPositive": true,
+    "dayBlockMultipleTestingAdjustedExpectancyLowerBoundPositive": true,
+    "walkForwardPositive": true,
+    "unusedHoldoutPositive": true
+  },
+  "holdoutPolicy": "Do not open walk-forward or reserved holdout unless C31 passes every development gate."
+}
