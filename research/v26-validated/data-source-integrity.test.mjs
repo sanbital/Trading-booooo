@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   sha256Hex, verifyChecksumBytes, logicalDatasetHash,
   collectMonthlyWithDailyFallback, fetchFundingHistory, fundingHistoryFromCache,
-  cutoffCoverageSummary, longFundingCost,
+  cutoffCoverageSummary, longFundingCost, strengthLossDecision,
 } from "./data-source-integrity.mjs";
 
 const row=(t,v="1")=>[t,v,v,v,v,"0",t+899_999,"1",0,"0","0.5","0"];
@@ -89,4 +89,14 @@ test("actual CETUS event produces exact long funding cost",async()=>{
   assert.equal(base.events,1);
   assert.ok(Math.abs(base.signedCost-0.000347745)<1e-15);
   assert.ok(Math.abs(stress2.signedCost-0.000311895)<1e-15);
+});
+
+test("strength-loss decision uses completed price/flow evidence, never holding time",()=>{
+  const bars=[
+    {high:105,close:104,quoteVolume:100,takerBuyQuote:60},
+    {high:104,close:102,quoteVolume:100,takerBuyQuote:40},
+    {high:103,close:99,quoteVolume:100,takerBuyQuote:39},
+  ];
+  assert.deepEqual(strengthLossDecision({bars,referencePrice:100,peakPrice:105}),{close:true,reason:"STRENGTH_LOSS"});
+  assert.equal(strengthLossDecision({bars:[...bars.slice(0,2),{...bars[2],takerBuyQuote:70}],referencePrice:100,peakPrice:105}).close,false);
 });
