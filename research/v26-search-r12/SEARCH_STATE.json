@@ -1,0 +1,12 @@
+{
+  "completedAt": "2026-09-19T20:23:30Z",
+  "iteration": "R12",
+  "testedCandidates": ["C36"],
+  "nextCandidateId": "C37",
+  "no_robust_edge_found": true,
+  "developmentPass": [],
+  "walkForwardRun": false,
+  "walkForwardReason": "C36 had negative account and opportunity-level PnL, PF below one, inadequate sample and a negative confidence lower bound.",
+  "unusedHoldoutConsumed": false,
+  "nextHypothesisConstraint": "Do not retune C36 or relax protection. Reserve one setup per completed 15m scanner cohort using setup-time evidence, then preserve immediate trigger execution."
+}
