@@ -1138,21 +1138,25 @@ const FUTURES_MAX_LEVERAGE = 20;
 // IT IS NOT A COPY OF ANY ONE ENGINE'S SLOT, and used to be, which is what broke the
 // first real V17 entry of 2026-09-18. This gateway serves two engines with different
 // allocations: market-autotrader (P10) sizes at FUTURES_MIN_ENTRY_MARGIN_USDT = 40 in
-// its own futures-exit-policy, while v10-lane-executor (V17) has run a 30 USDT slot at
-// 3x since the operator's 2026-09-16 cutover, which trading_settings has carried ever
-// since. Pinning this floor to P10's number meant every V17 order was refused here:
+// its own futures-exit-policy (untouched by any V17 resize -- it is P10's own floor,
+// not derived from V17's contract), while v10-lane-executor (V17) has run a 30 USDT
+// slot at 3x since the operator's 2026-09-16 cutover, moved to a 200 USDT slot at 3x
+// on 2026-09-19 (leverage and MAX_SLOTS unchanged). Pinning this floor to P10's number
+// meant every V17 order was refused here, at the 30 USDT slot:
 //
 //   2026-09-18 10:21:09 UTC  DYDXUSDT  691.5 @ 3x, notional 90.1716
 //   GW_400: Binance futures entry requires at least 40 USDT margin (120 USDT
 //           notional at 3x); got 90.1716
 //
-// So the floor is the SMALLEST ORDER ANY AUTHORISED ENGINE CAN PRODUCE, which is the
-// V17 slot-sizing contract's own slot-fill floor: targetMarginUsdt 30 x minSlotFillBps
-// 5000 = 15 USDT of margin. Below that no engine's sizing can go, so anything below it
-// is malformed by definition. Each engine still enforces its own, stricter minimum
-// before a command ever reaches this file -- P10's 40 USDT floor is untouched and is
-// applied by P10's own sizing, not here.
-const FUTURES_MIN_ENTRY_MARGIN_USDT = 15;
+// So the floor is the SMALLEST ORDER ANY AUTHORISED ENGINE CAN PRODUCE, which is
+// min(P10's own 40, V17 slot-sizing contract's own slot-fill floor). At the 30 USDT
+// slot that V17 floor was targetMarginUsdt 30 x minSlotFillBps 5000 = 15, below P10's
+// 40, so the gateway floor was 15. At the current 200 USDT slot the V17 floor is
+// 200 x 5000/10_000 = 100, ABOVE P10's 40 -- so P10's own floor is now the smaller
+// (and binding) one: min(40, 100) = 40. Below that no engine's sizing can go, so
+// anything below it is malformed by definition. Each engine still enforces its own,
+// stricter minimum before a command ever reaches this file.
+const FUTURES_MIN_ENTRY_MARGIN_USDT = 40;
 // Mirrors DEFAULT_FUTURES_LEVERAGE in the engine's futures-exit-policy. The gateway keeps
 // its own copy so an order that arrives without one still opens at the authorised size.
 const DEFAULT_FUTURES_LEVERAGE = integerEnv(

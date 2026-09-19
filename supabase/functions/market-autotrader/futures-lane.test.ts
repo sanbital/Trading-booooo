@@ -74,13 +74,16 @@ Deno.test("entry sizing commits margin and the exchange sees margin x leverage",
   assertEquals(entryQuantityForNotional("binance", 150, 0.02442, 0.1), 6142.5);
 });
 
-// P10's own 40 USDT entry floor is UNCHANGED and is asserted here exactly as before.
+// P10's own 40 USDT entry floor is UNCHANGED and is asserted here exactly as before --
+// it is P10's own floor, not derived from V17's contract, so no V17 resize touches it.
 // What changed on 2026-09-18 is that the gateway's independent floor stopped being a
-// copy of it. The gateway serves two engines with different allocations -- P10 at 40,
+// copy of it: the gateway serves two engines with different allocations -- P10 at 40,
 // V17 at the operator's 30 USDT slot since 2026-09-16 -- so a shared floor pinned to
 // P10's number refused every V17 order (DYDXUSDT, 90.1716 notional, 10:21:09 UTC).
-// The gateway now floors at the smallest order ANY authorised engine can produce and
-// P10 keeps enforcing its own, stricter minimum in its own sizing, below.
+// The gateway floors at the smallest order ANY authorised engine can produce. At the
+// current 200 USDT V17 slot (2026-09-19; leverage and MAX_SLOTS unchanged) that V17
+// floor is 200 x minSlotFillBps 5000/10_000 = 100, ABOVE P10's 40 -- so P10's own 40
+// is now the smaller, binding one, and the gateway floor moved back to 40 with it.
 Deno.test("futures entry minimum is an isolated 40 USDT margin floor for P10", () => {
   assertEquals(FUTURES_MIN_ENTRY_MARGIN_USDT, 40);
   assert(ENGINE.includes("minOrder: FUTURES_MIN_ENTRY_MARGIN_USDT"));
@@ -97,9 +100,10 @@ Deno.test("futures entry minimum is an isolated 40 USDT margin floor for P10", (
       'const executableMinimumCapitalQuote = exchange === "binance_futures"',
     ),
   );
-  // The gateway's floor is the smallest authorised slot across both engines --
-  // V17's targetMarginUsdt 30 x minSlotFillBps 5000 = 15 -- not a copy of P10's 40.
-  assert(GATEWAY.includes("const FUTURES_MIN_ENTRY_MARGIN_USDT = 15"));
+  // The gateway's floor is the smallest authorised slot across both engines. At the
+  // current 200 USDT V17 slot that is P10's own 40 (V17's own floor is 100) -- not a
+  // hardcoded copy of either number in isolation, but the smaller of the two today.
+  assert(GATEWAY.includes("const FUTURES_MIN_ENTRY_MARGIN_USDT = 40"));
   assert(GATEWAY.includes("FUTURES_MIN_ENTRY_MARGIN_USDT * entryLeverage"));
   // P10 is unaffected because its own floor is applied before the gateway is reached.
   assert(ENGINE.includes("futuresAffordableEntry"));

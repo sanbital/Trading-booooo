@@ -74,9 +74,10 @@ test('14 CAS conflict after exchange fill retains intent, retry queries the same
 
 // The requested quantity follows the slot contract, so it is derived here rather
 // than pinned: the literal 196 was the 40 USDT slot's answer at .613 and stopped
-// being right when the operator moved the slot to 30. What this test is actually
-// about -- a partial fill is owned and protected at the FILLED size, not the
-// requested one -- is independent of the slot and is asserted exactly as before.
+// being right when the operator moved the slot, first to 30 and then (2026-09-19)
+// to 200. What this test is actually about -- a partial fill is owned and protected
+// at the FILLED size, not the requested one -- is independent of the slot and is
+// asserted exactly as before.
 test('11 actual openBull partial-fills 93 of the requested size: owns/protects only 93',async()=>{
  const h=harness(),s=h.state.tables.v11_long_regime_signals[0];s.symbol='EDGEUSDT';s.features.referenceClose=.613;s.features.atr=.01;
  h.state.entryQuote={best_bid:.6129,best_ask:.613};

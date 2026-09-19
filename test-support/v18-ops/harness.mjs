@@ -69,7 +69,10 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
    trading_settings:[{id:1,mode:'LIVE_LIMITED',binance_futures_allocation_usdt:(baseline||sourceRef)?40:SLOT_SIZING_CONTRACT.targetMarginUsdt,pause_new_entries:false,withdrawal_mode:false,manual_intervention_required:false,scalp_kill_switch:false,emergency_liquidation:false,...settings}],
    trading_asset_locks:manual.map(x=>({exchange:'binance_futures',asset:x.symbol.replace(/USDT$/,''),state:'LOCKED',metadata:{v17ManualPosition:true,...x}})),
    v11_long_regime_signals:signal?[{id:'soph-signal',symbol:'SOPHUSDT',side:'LONG',status:'NEW',lane:'BULL',revision:'V11-LONG-REGIME-1.0.1',entry_bar_at:new Date(now-60000).toISOString(),features:{strategy:momentum.STRATEGY,rank:1,signal5Close:now-60000,referenceClose:.004,atr:.0001,exitPolicy:{stopPct:.025,trailArmPct:.05,trailGapPct:.0225,maxHoldMs:momentum.POLICY.maxHoldMs,staleMs:momentum.POLICY.staleMs}}}]:[],
-   trading_account_snapshots:[{exchange:'binance_futures',captured_at:new Date(now).toISOString(),positions_complete:true,available_quote:108,positions:[]}],
+   // 720 comfortably funds one slot at the current 200 USDT / 3x contract (ceiling
+   // ~201.67 + the cash buffer), at roughly the same headroom the old 108 default
+   // gave the 30 USDT slot it was sized for.
+   trading_account_snapshots:[{exchange:'binance_futures',captured_at:new Date(now).toISOString(),positions_complete:true,available_quote:720,positions:[]}],
    exchange_trade_fills:[],v18_ops_incidents:circuit?[{id:'incident-1',generation:1,kind:'KNOWN_EXIT_PENDING_RECONCILIATION',reason:null,resolution_evidence:null,
     exchange:'binance_futures',account_scope:'futures',control_scope:'ACCOUNT_ENTRY_HOLD',status:'OPEN'}]:[],
   },incidents:new Map(),seq:0};
@@ -182,7 +185,7 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
   if(cmd.action==='p10_portfolio')return {exchange:'binance_futures',account_scope:'futures',positions_complete:true,
    positions:clone(state.exchange).map(x=>({...x,entry_price:x.entry_price??state.tables.v11_long_regime_positions.find(p=>p.symbol===x.market)?.entry_price??1,
     leverage:x.leverage??3,initial_margin_quote:x.initial_margin_quote??Math.abs(Number(x.quantity))*(x.entry_price??state.tables.v11_long_regime_positions.find(p=>p.symbol===x.market)?.entry_price??1)/3})),
-   available_quote:108,total_equity_quote:108,total_initial_margin_quote:state.exchange.reduce((sum,x)=>sum+Math.abs(Number(x.quantity))*(x.entry_price??state.tables.v11_long_regime_positions.find(p=>p.symbol===x.market)?.entry_price??1)/3,0),
+   available_quote:720,total_equity_quote:720,total_initial_margin_quote:state.exchange.reduce((sum,x)=>sum+Math.abs(Number(x.quantity))*(x.entry_price??state.tables.v11_long_regime_positions.find(p=>p.symbol===x.market)?.entry_price??1)/3,0),
    observation:{id:'snapshot-'+state.portfolioCount,source:'BINANCE_ACCOUNT_REST',requested_at_ms:state.now,received_at_ms:state.now},...state.portfolioOverride};
   if(cmd.action==='v18_open_orders')return{complete:true,orders:[],algos:state.tables.v11_long_regime_positions.flatMap(p=>(p.metadata?.exitProtection?.orders??[]).filter(o=>!o.terminal&&o.status==='ACTIVE').map(o=>({...o.spec.params,algoId:o.algoId,algoStatus:'NEW'}))),observed_at_ms:state.now,...state.openOrdersOverride};
   if(cmd.action==='symbol_info')return{quantity_step:cmd.market==='SAGAUSDT'?.1:1,price_tick:cmd.market==='SAGAUSDT'?.00001:.000001,min_notional:5};

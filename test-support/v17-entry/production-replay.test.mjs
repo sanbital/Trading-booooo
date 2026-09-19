@@ -20,6 +20,16 @@ import {POLICY} from '../../supabase/functions/_shared/leader-momentum-v17.mjs';
 const EVIDENCE = JSON.parse(readFileSync(
   new URL('./evidence/rejected-signals-20260917.json', import.meta.url), 'utf8'));
 
+// This whole file replays a frozen historical window (v48, 2026-09-16/17), when the
+// live contract targeted a 30 USDT slot. The operator has since moved the target to
+// 200 USDT (2026-09-19; MAX_SLOTS and leverage unchanged), so every planSlotEntry
+// call below is pinned to that DAY's contract explicitly rather than to whatever
+// SLOT_SIZING_CONTRACT resolves to today -- otherwise this replay would silently
+// start asking a different question (what a 200 USDT slot would have done) instead
+// of the one it exists to answer (what the lattice-search fix did to that day's
+// real rejections, at that day's 30 USDT margin).
+const CONTRACT_20260917 = Object.freeze({...SLOT_SIZING_CONTRACT, targetMarginUsdt: 30});
+
 // ---- the deployed v48 arithmetic, reproduced exactly ------------------------
 const OLD = {MARGIN: 30, LEV: 3, NOTIONAL: 90, NOTIONAL_BUFFER_USDT: 0.12,
   MAX_MARGIN_BUFFER_USDT: 0.25, IOC_BASE_BPS: 3, IOC_MAX_BPS: 12};
@@ -110,7 +120,7 @@ test('every stored sizing rejection is reproduced exactly by the v48 arithmetic'
       let verdict;
       try {
         const plan = planSlotEntry({ask: hit.ask, quantityStep: hit.step,
-          priceTick: signal.priceTick ?? 0, minNotionalUsdt: 5});
+          priceTick: signal.priceTick ?? 0, minNotionalUsdt: 5}, CONTRACT_20260917);
         verdict = `ADMIT:${plan.boundBy}`;
       } catch (error) { verdict = `SKIP:${error.code}`; }
       verdicts.add(verdict);
@@ -121,7 +131,7 @@ test('every stored sizing rejection is reproduced exactly by the v48 arithmetic'
     let now = null, reason = null;
     try {
       now = planSlotEntry({ask: chosen.ask, quantityStep: chosen.step,
-        priceTick: signal.priceTick ?? 0, minNotionalUsdt: 5});
+        priceTick: signal.priceTick ?? 0, minNotionalUsdt: 5}, CONTRACT_20260917);
     } catch (error) { reason = error.message; }
     replayed.push({signal, chosen, now, reason, candidates: hits.length});
   }
@@ -162,7 +172,7 @@ test('the symbols refused by arithmetic are admitted; the unaffordable ones are 
   // The ceiling and the floor are what make that admission safe, so they are asserted
   // on every plan this replay produced, not just on the two symbols above. A sizing
   // change that bought its entries by spending more margin would fail here.
-  const bounds = slotSizingBounds(SLOT_SIZING_CONTRACT);
+  const bounds = slotSizingBounds(CONTRACT_20260917);
   for (const row of replayed) {
     if (!row.now) continue;
     assert.ok(row.now.orderMarginUsdt <= bounds.maxOrderMarginUsdt + 1e-9,
@@ -180,13 +190,13 @@ test('a lot the slot cannot afford at ALL is still refused, by its own reason', 
   // 95 USDT a single lot needs 31.68 USDT of margin against a 30.25 ceiling: there is
   // no smaller admissible quantity, so the refusal stands and still names the step.
   let reason = null;
-  try { planSlotEntry({ask: 95, quantityStep: 1, priceTick: 0.01, minNotionalUsdt: 5}); }
+  try { planSlotEntry({ask: 95, quantityStep: 1, priceTick: 0.01, minNotionalUsdt: 5}, CONTRACT_20260917); }
   catch (error) { reason = error.message; }
   assert.match(reason ?? '', /^QTY_STEP_EXCEEDS_MARGIN_BUDGET:31\.676667:max=30\.250000:step=1:qty=1:px=95\.03$/);
   // An exchange minimum the slot cannot pay for is a DIFFERENT refusal: BTCUSDT's
   // 100 USDT minNotional is above the whole 90 USDT slot, whatever the lot step.
   let btc = null;
-  try { planSlotEntry({ask: 60000, quantityStep: 0.001, priceTick: 0.1, minNotionalUsdt: 100}); }
+  try { planSlotEntry({ask: 60000, quantityStep: 0.001, priceTick: 0.1, minNotionalUsdt: 100}, CONTRACT_20260917); }
   catch (error) { btc = error.message; }
   assert.match(btc ?? '', /^MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET:/);
 });
@@ -200,16 +210,16 @@ test('the slot-fill floor is slack today and binds if the overshoot budget widen
   // Either way no admitted order can carry less than 50% of the target notional.
   for (let ask = 1; ask <= 90; ask += 0.37) {
     let plan = null;
-    try { plan = planSlotEntry({ask, quantityStep: 1, priceTick: 0.01, minNotionalUsdt: 5}); }
+    try { plan = planSlotEntry({ask, quantityStep: 1, priceTick: 0.01, minNotionalUsdt: 5}, CONTRACT_20260917); }
     catch { continue; }
-    assert.ok(plan.slotFillBps >= SLOT_SIZING_CONTRACT.minSlotFillBps,
+    assert.ok(plan.slotFillBps >= CONTRACT_20260917.minSlotFillBps,
       `ask ${ask} sized ${plan.slotFillBps} bps of the slot`);
   }
   // The floor is not decoration: raise it and the same thin lattice point is refused,
   // which is what protects the slot if maxSlotOvershootBps is ever widened.
-  const thin = planSlotEntry({ask: 60, quantityStep: 1, priceTick: 0.01, minNotionalUsdt: 5});
+  const thin = planSlotEntry({ask: 60, quantityStep: 1, priceTick: 0.01, minNotionalUsdt: 5}, CONTRACT_20260917);
   assert.equal(thin.quantity, 1, 'one lot of a 60 USDT symbol is all a 90 USDT slot affords');
-  const strict = {...SLOT_SIZING_CONTRACT, minSlotFillBps: 8_000};
+  const strict = {...CONTRACT_20260917, minSlotFillBps: 8_000};
   let below = null;
   try { planSlotEntry({ask: 60, quantityStep: 1, priceTick: 0.01, minNotionalUsdt: 5}, strict); }
   catch (error) { below = error.message; }
@@ -227,11 +237,11 @@ test('nothing outside the sizing layer is loosened by this change', () => {
 });
 
 test('REPORT: every replayed rejection, old verdict vs new', () => {
-  const bounds = slotSizingBounds(SLOT_SIZING_CONTRACT);
+  const bounds = slotSizingBounds(CONTRACT_20260917);
   const lines = [
     '',
-    `contract ${SLOT_SIZING_CONTRACT.version}  target ${SLOT_SIZING_CONTRACT.targetMarginUsdt} USDT ` +
-      `@ ${SLOT_SIZING_CONTRACT.leverage}x = ${bounds.targetNotionalUsdt} notional  ` +
+    `contract ${CONTRACT_20260917.version} (2026-09-17 replay)  target ${CONTRACT_20260917.targetMarginUsdt} USDT ` +
+      `@ ${CONTRACT_20260917.leverage}x = ${bounds.targetNotionalUsdt} notional  ` +
       `required >= ${bounds.requiredNotionalUsdt.toFixed(4)}  max margin ${bounds.maxOrderMarginUsdt.toFixed(4)}`,
     '',
     ['symbol', 'stored reject', 'ask', 'step', 'new', 'qty', 'notional', 'margin', 'ioc bps', 'why']
@@ -257,7 +267,7 @@ test('REPORT: every replayed rejection, old verdict vs new', () => {
   const admitted = replayed.filter(r => r.now).length;
   lines.push(`${admitted} of ${replayed.length} replayed rejections are admitted by the new contract; ` +
     `${replayed.length - admitted} remain skipped, every one because its lot step costs more ` +
-    `margin than a ${SLOT_SIZING_CONTRACT.targetMarginUsdt} USDT slot has.`);
+    `margin than a ${CONTRACT_20260917.targetMarginUsdt} USDT slot has.`);
   console.log(lines.join('\n'));
   assert.ok(admitted > 0);
 });

@@ -27,10 +27,13 @@
  * margin against a 30.25 ceiling, refused -- while qty 10 = 29.73 USDT and 99.1% of
  * the slot.
  *
- * No threshold in this file was changed to make a test pass. The slot is still 30 USDT
- * at 3x, the drift ceiling is still 1%, the trigger TTL is still 60s, the setup window
- * is still 15 minutes and maxQuoteAgeMs is still 1000ms; every one of those is
- * asserted below as unchanged.
+ * No threshold in this file was changed to make a test pass. At the time of this
+ * incident the slot was 30 USDT at 3x, the drift ceiling was 1%, the trigger TTL was
+ * 60s, the setup window was 15 minutes and maxQuoteAgeMs was 1000ms; every one of
+ * those is asserted below as unchanged FOR THIS REPLAY, against a contract frozen to
+ * that day (CONTRACT_20260918) rather than to whatever the live slot is today. The
+ * operator moved the live slot to 200 USDT on 2026-09-19 (leverage and MAX_SLOTS
+ * unchanged); test 11b pins that separately, against the live contract.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -49,6 +52,14 @@ import {
 import {
   entryExecutionWindow, entryPriceEvidence, normalizeEntryBook, supportedFuturesMode,
 } from '../../supabase/functions/v10-lane-executor/entry-evidence.mjs';
+
+// This file replays the frozen v51 (2026-09-18) production window, when the live
+// contract targeted a 30 USDT slot. The operator has since moved the target to 200
+// USDT (2026-09-19; MAX_SLOTS and leverage unchanged), so every sizing call below
+// pins that day's contract explicitly instead of reading whatever SLOT_SIZING_CONTRACT
+// resolves to today -- this file exists to prove the lattice-search fix, not to track
+// the live margin.
+const CONTRACT_20260918 = Object.freeze({...SLOT_SIZING_CONTRACT, targetMarginUsdt: 30});
 
 const SRC = readFileSync(
   new URL('../../supabase/functions/v10-lane-executor/index.ts', import.meta.url), 'utf8');
@@ -327,41 +338,69 @@ test('17. an ACCOUNT-wide refusal still stops the run', () => {
 
 test('8+9. the lattice is searched downward and UNIUSDT becomes an order', () => {
   // UNIUSDT as production refused it, 2026-09-18 03:17 UTC.
-  const plan = planSlotEntry({ask: 8.916, quantityStep: 1, priceTick: 0.001, minNotionalUsdt: 5});
+  const plan = planSlotEntry(
+    {ask: 8.916, quantityStep: 1, priceTick: 0.001, minNotionalUsdt: 5}, CONTRACT_20260918);
   assert.equal(plan.quantity, 10, 'one step below the 11 that overshot');
   assert.equal(plan.boundBy, 'MARGIN_BUDGET_CAP');
-  assert.ok(plan.orderMarginUsdt <= slotSizingBounds().maxOrderMarginUsdt);
+  assert.ok(plan.orderMarginUsdt <= slotSizingBounds(CONTRACT_20260918).maxOrderMarginUsdt);
   assert.ok(plan.slotFillBps > 9_900, 'and it is still essentially a full slot');
   // The exact refusal string production wrote, now an order instead.
   let old = null;
   try {
-    const bounds = slotSizingBounds();
+    const bounds = slotSizingBounds(CONTRACT_20260918);
     const ceil = Math.ceil(bounds.requiredNotionalUsdt / 8.916);
-    if (ceil * plan.limitPrice / SLOT_SIZING_CONTRACT.leverage > bounds.maxOrderMarginUsdt) old = ceil;
+    if (ceil * plan.limitPrice / CONTRACT_20260918.leverage > bounds.maxOrderMarginUsdt) old = ceil;
   } catch { /* unreachable */ }
   assert.equal(old, 11, 'the point that used to be the ONLY one evaluated still overshoots');
 });
 
 test('10. a genuine exchange minimum above the slot is still a skip', () => {
   assert.throws(
-    () => planSlotEntry({ask: 60000, quantityStep: 0.001, priceTick: 0.1, minNotionalUsdt: 100}),
+    () => planSlotEntry({ask: 60000, quantityStep: 0.001, priceTick: 0.1, minNotionalUsdt: 100},
+      CONTRACT_20260918),
     (e) => e.code === SLOT_SIZING_REASON.MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET &&
       /:max=30\.250000:step=0\.001:qty=0\.002:px=60018$/.test(e.message));
   assert.throws(
-    () => planSlotEntry({ask: 95, quantityStep: 1, priceTick: 0.01, minNotionalUsdt: 5}),
+    () => planSlotEntry({ask: 95, quantityStep: 1, priceTick: 0.01, minNotionalUsdt: 5}, CONTRACT_20260918),
     (e) => e.code === SLOT_SIZING_REASON.QTY_STEP_EXCEEDS_MARGIN_BUDGET &&
       e.message === 'QTY_STEP_EXCEEDS_MARGIN_BUDGET:31.676667:max=30.250000:step=1:qty=1:px=95.03');
 });
 
 test('11. no admissible quantity can exceed the margin ceiling, over a wide sweep', () => {
-  const bounds = slotSizingBounds();
-  assert.equal(SLOT_SIZING_CONTRACT.targetMarginUsdt, 30, 'the slot is unchanged');
-  assert.equal(SLOT_SIZING_CONTRACT.leverage, 3, 'the leverage is unchanged');
-  assert.equal(SLOT_SIZING_CONTRACT.maxSlotOvershootBps, 250 / 3, 'the overshoot budget is unchanged');
+  const bounds = slotSizingBounds(CONTRACT_20260918);
+  assert.equal(CONTRACT_20260918.targetMarginUsdt, 30, 'the replayed window is pinned to that day\'s slot');
+  assert.equal(CONTRACT_20260918.leverage, 3, 'the leverage is unchanged');
+  assert.equal(CONTRACT_20260918.maxSlotOvershootBps, 250 / 3, 'the overshoot budget is unchanged');
   assert.equal(bounds.maxOrderMarginUsdt, 30.25);
   let admitted = 0;
   for (const step of [1, 0.1, 0.01, 0.001, 5]) {
     for (let ask = 0.0011; ask < 120; ask *= 1.17) {
+      let plan = null;
+      try {
+        plan = planSlotEntry({ask, quantityStep: step, priceTick: 0.0001, minNotionalUsdt: 5},
+          CONTRACT_20260918);
+      } catch { continue; }
+      admitted++;
+      assert.ok(plan.orderMarginUsdt <= bounds.maxOrderMarginUsdt + 1e-9,
+        `ask ${ask} step ${step} sized ${plan.orderMarginUsdt} over the ceiling`);
+      assert.ok(plan.iocBps <= CONTRACT_20260918.iocMaxBps + 1e-9);
+      assert.ok(plan.orderNotionalUsdt + 1e-9 >= 5, 'minNotional is never bypassed');
+      assert.ok(plan.referenceNotionalUsdt + 1e-9 >= bounds.minOrderNotionalUsdt);
+    }
+  }
+  assert.ok(admitted > 100, `the sweep must actually admit orders, got ${admitted}`);
+});
+
+test('11b. the LIVE contract is 200 USDT at 3x, and its own ceiling is never exceeded', () => {
+  // Same sweep, against today's live contract rather than the frozen replay above,
+  // so a change to the live slot is caught here even if the historical replay is
+  // (correctly) pinned to the day it documents.
+  const bounds = slotSizingBounds();
+  assert.equal(SLOT_SIZING_CONTRACT.targetMarginUsdt, 200, 'operator instruction, 2026-09-19');
+  assert.equal(SLOT_SIZING_CONTRACT.leverage, 3, 'leverage is unchanged by the margin-only resize');
+  let admitted = 0;
+  for (const step of [1, 0.1, 0.01, 0.001, 5]) {
+    for (let ask = 0.0011; ask < 800; ask *= 1.17) {
       let plan = null;
       try { plan = planSlotEntry({ask, quantityStep: step, priceTick: 0.0001, minNotionalUsdt: 5}); }
       catch { continue; }
