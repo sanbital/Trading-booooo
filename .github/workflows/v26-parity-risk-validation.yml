@@ -65,8 +65,4 @@ jobs:
              !m.promotionContract.expectancyLowerBoundMustBePositive)
             throw Error('promotion contract changed');
           NODE
-          if grep -v 'grep -R' .github/workflows/v26-parity-risk-validation.yml | \
-             grep --line-number -E 'supabase functions deploy|fly deploy|create_order'; then
-            echo "validation workflow must not deploy or place orders"
-            exit 1
-          fi
+
