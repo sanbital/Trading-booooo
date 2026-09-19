@@ -39,7 +39,7 @@ jobs:
           set -euo pipefail
           mkdir -p research/v26-validated
           python3 - <<'PY'
-          import csv,gzip,json,io,zipfile,urllib.request,urllib.error,hashlib,time
+          import csv,gzip,json,io,zipfile,urllib.request,urllib.error,urllib.parse,hashlib,time
           from concurrent.futures import ThreadPoolExecutor,as_completed
 
           TARGET=1788402600000
@@ -50,7 +50,7 @@ jobs:
 
           def one(symbol):
               fn=f'{symbol}-15m-{DATE}.zip'
-              url=f'{BASE}/{symbol}/15m/{fn}'
+              url=f'{BASE}/{urllib.parse.quote(symbol,safe="")}/15m/{urllib.parse.quote(fn,safe="")}'
               last=None
               for a in range(4):
                   try:
