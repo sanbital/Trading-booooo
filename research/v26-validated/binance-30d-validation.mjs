@@ -11,6 +11,7 @@ import {
   V26_CANDIDATES, structuralStopPrice, earlyFailureDecision, marketParticipationDecision, entryConfirmation1mDecision, breakoutContinuation1mDecision, triggerQuality1mDecision, antiExhaustionDecision,
   accelerationReignitionDecision, compressionExpansionDecision, rankPersistenceDecision,
   pullbackAbsorptionDecision, relativeStrengthResidualDecision, sweepReclaimDecision,
+  freshLeaderRotationDecision, accountFeasibleLadderDecision, twoPulseResetDecision,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { resolveRiskPolicy, evaluateLossLimits } from "../../supabase/functions/_shared/boo/risk-policy.mjs";
 import { solveQuantity } from "../../supabase/functions/_shared/boo/risk-budget.mjs";
@@ -474,6 +475,20 @@ for(const id of candidateIds){
       const decision=sweepReclaimDecision({triggerAt,now:triggerAt,bars,signalReference:s.ref});
       if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
     }
+    if(V26_CANDIDATES[id].freshLeaderRotation){
+      const triggerBar=rows.find(r=>Number(r[0])===triggerAt-MIN);
+      const decision=freshLeaderRotationDecision({
+        currentRank:s.rank,priorRanks:s.priorRanks,
+        return30m:Number(s.features?.return30m),return60m:Number(s.features?.return60m),
+        triggerAt,now:triggerAt,bar:triggerBar,
+      });
+      if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
+    }
+    if(V26_CANDIDATES[id].twoPulseReset){
+      const bars=rows.filter(r=>Number(r[0])>=triggerAt-8*MIN&&Number(r[0])<triggerAt);
+      const decision=twoPulseResetDecision({triggerAt,now:triggerAt,bars,signalReference:s.ref});
+      if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
+    }
     if(V26_CANDIDATES[id].entryConfirmation1m||V26_CANDIDATES[id].breakoutContinuation1m){
       const confirmationRow=rows.find(r=>Number(r[0])===triggerAt);
       let decision;
@@ -519,6 +534,16 @@ for(const id of candidateIds){
       const st=structuralStopPrice({setupLow:Number(tr.state.pullbackLow),priceTick:meta.get(s.symbol)?.filters.tickSize,atr5m14:atr14_5m(rows,entryAt)});
       if(st.status!=="OK"||!(st.price<entryOpen)){reasons[st.reason||"STRUCTURAL_STOP_INVALID"]=(reasons[st.reason||"STRUCTURAL_STOP_INVALID"]||0)+1;continue;}
       stop=st.price;
+    }
+    if(V26_CANDIDATES[id].accountFeasibleLadder){
+      const bars=rows.filter(r=>Number(r[0])>=triggerAt-4*MIN&&Number(r[0])<triggerAt);
+      const decision=accountFeasibleLadderDecision({
+        triggerAt,now:triggerAt,bars,signalReference:s.ref,entryPrice:entryOpen,stopPrice:stop,
+        filters:meta.get(s.symbol)?.filters,equity:30,riskFraction:Number(RISK.riskPerTradeFrac.toString()),
+        takerFee:FEES.taker,entryBps:EXEC.baseline.entryBps,stopBps:EXEC.baseline.stopBps,
+        fundingAllowanceRate:FUNDING_RISK_ALLOWANCE_RATE,
+      });
+      if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
     }
     const triggerBarForDiag=rows.find(r=>Number(r[0])===triggerAt-MIN);
     const tq=triggerBarForDiag?Number(triggerBarForDiag[7]):Number.NaN;

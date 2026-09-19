@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "iteration": "R3",
+  "preregisteredAt": "2026-09-19T11:59:16Z",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "parentCheckpoint": "c4fc1966a5b67251820a97a93344653fa9d0758e",
+  "branch": "research/v26-strategy-search-r3-20260919",
+  "account": {"startingEquity": 30, "leverage": 3, "maxConcurrentPositions": 1, "riskPerTradePct": 0.25},
+  "exitPolicy": "STRENGTH_LOSS_V1",
+  "developmentWindow": {"start": "2026-08-19T15:10:00.000Z", "end": "2026-09-18T15:10:00.000Z", "classification": "USED_DEVELOPMENT"},
+  "reservedUnusedFinalHoldout": {"start": "2025-12-22T15:10:00.000Z", "end": "2026-03-22T15:10:00.000Z", "consumeOnlyAfterDevelopmentAndWalkForwardPass": true},
+  "candidates": [
+    {
+      "id": "C19",
+      "structure": "FRESH_LEADER_ROTATION",
+      "rules": "Current rank is top 10; latest completed prior rank is observed and improves by at least four places; current 30m return is positive and exceeds the preceding 30m contribution; completed trigger buyer share is at least 55% and closes in the upper 35% of its range."
+    },
+    {
+      "id": "C20",
+      "structure": "ACCOUNT_FEASIBLE_HIGHER_LOW_LADDER",
+      "rules": "Last three completed lows are nondecreasing, last two closes hold the signal reference and trigger buyer share is at least 55%; the exchange minimum order, rounded to minQty/stepSize, must fit the unchanged 30 USDT x 0.25% risk budget after baseline entry/stop slippage, both taker fees and the fixed funding allowance."
+    },
+    {
+      "id": "C21",
+      "structure": "TWO_PULSE_ORDERLY_RESET",
+      "rules": "Eight completed minutes show a positive first three-bar pulse, a three-bar reset whose range contracts and whose lows hold the signal reference, followed by two rising closes that break the first-pulse high while quote-weighted buyer share re-expands above the reset and reaches at least 57%."
+    }
+  ],
+  "promotionGates": {"minTrades": 30, "minActiveDays": 10, "netPositive": true, "returnPositive": true, "minProfitFactor": 1.2, "stress2xNetPositive": true, "stress2xProfitFactorAboveOne": true, "removeTop1NetPositive": true, "expectancyLowerBoundPositive": true, "independentValidationRequired": true},
+  "forbidden": ["threshold tuning after outcome", "time-only exit", "missing funding as zero", "risk or leverage increase", "holdout inspection for development failures"]
+}

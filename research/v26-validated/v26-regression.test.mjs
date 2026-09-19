@@ -13,6 +13,9 @@ import {
   pullbackAbsorptionDecision,
   relativeStrengthResidualDecision,
   sweepReclaimDecision,
+  freshLeaderRotationDecision,
+  accountFeasibleLadderDecision,
+  twoPulseResetDecision,
   V26_CANDIDATES,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { runExit, summarise } from "../v25-pullback-reaccel/replay.mjs";
@@ -41,15 +44,44 @@ test("selection gate fails closed on null/NaN and respects exact boundaries", ()
   assert.equal(POLICY.maxDayReturn, 0.08);
 });
 
-test("registered C0-C18 definitions preserve the frozen C0-C5 prefix", () => {
+test("registered C0-C21 definitions preserve the frozen C0-C5 prefix", () => {
   assert.deepEqual(Object.keys(V26_CANDIDATES).slice(0,6), ["C0","C1","C2","C3","C4","C5"]);
   assert.ok(V26_CANDIDATES.C12);
   assert.ok(V26_CANDIDATES.C15);
   assert.ok(V26_CANDIDATES.C18);
+  assert.ok(V26_CANDIDATES.C21);
   assert.equal(V26_CANDIDATES.C0.structuralStop, false);
   assert.equal(V26_CANDIDATES.C4.earlyFailureExit, true);
   assert.equal(V26_CANDIDATES.C4.marketParticipation, true);
   assert.equal(V26_CANDIDATES.C5.maxDayReturn, 0.05);
+});
+
+test("C19-C21 add rotation, executable geometry and two-pulse structures",()=>{
+  const triggerAt=1_800_000_480_000;
+  const bar=(i,{o,h,l,c,tb,q=1000})=>({
+    openTime:triggerAt-(8-i)*60_000,open:o,high:h,low:l,close:c,
+    closeTime:triggerAt-(8-i)*60_000+59_999,quoteVolume:q,takerBuyQuote:tb,
+  });
+  const pulse=[
+    bar(0,{o:100,h:100.4,l:99.9,c:100.3,tb:560}),
+    bar(1,{o:100.3,h:100.8,l:100.2,c:100.7,tb:590}),
+    bar(2,{o:100.7,h:101,l:100.6,c:100.8,tb:570}),
+    bar(3,{o:100.8,h:100.85,l:100.45,c:100.55,tb:470}),
+    bar(4,{o:100.55,h:100.75,l:100.4,c:100.65,tb:480}),
+    bar(5,{o:100.65,h:100.8,l:100.5,c:100.7,tb:500}),
+    bar(6,{o:100.7,h:101,l:100.65,c:100.9,tb:600}),
+    bar(7,{o:100.9,h:101.3,l:100.85,c:101.2,tb:650}),
+  ];
+  assert.equal(freshLeaderRotationDecision({
+    currentRank:5,priorRanks:[11,14],return30m:.03,return60m:.045,
+    triggerAt,now:triggerAt,bar:pulse.at(-1),
+  }).action,"ENTER");
+  const ladder=pulse.slice(-4);
+  assert.equal(accountFeasibleLadderDecision({
+    triggerAt,now:triggerAt,bars:ladder,signalReference:100.5,entryPrice:101.25,stopPrice:100.5,
+    filters:{minNotional:5,minQty:.001,stepSize:.001},
+  }).action,"ENTER");
+  assert.equal(twoPulseResetDecision({triggerAt,now:triggerAt,bars:pulse,signalReference:100}).action,"ENTER");
 });
 
 test("C16-C18 structural gates use completed absorption, residual and reclaim evidence",()=>{

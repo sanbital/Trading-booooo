@@ -6,7 +6,7 @@
  * is live merely because this file exists; activation requires a matching,
  * unrevoked approval identity and ENFORCE mode.
  */
-export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-8";
+export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-9";
 
 const BASE = Object.freeze({
   minDayReturn: 0.03,
@@ -25,6 +25,9 @@ const BASE = Object.freeze({
   pullbackAbsorption: false,
   relativeStrengthResidual: false,
   sweepReclaim: false,
+  freshLeaderRotation: false,
+  accountFeasibleLadder: false,
+  twoPulseReset: false,
   minRankOverride: null,
   maxRankOverride: null,
 });
@@ -70,6 +73,15 @@ export const V26_CANDIDATES = Object.freeze({
   }),
   C18: Object.freeze({
     ...BASE, id: "C18", structuralStop: true, sweepReclaim: true,
+  }),
+  C19: Object.freeze({
+    ...BASE, id: "C19", structuralStop: true, freshLeaderRotation: true,
+  }),
+  C20: Object.freeze({
+    ...BASE, id: "C20", structuralStop: true, accountFeasibleLadder: true,
+  }),
+  C21: Object.freeze({
+    ...BASE, id: "C21", structuralStop: true, twoPulseReset: true,
   }),
 });
 
@@ -620,4 +632,92 @@ export function sweepReclaimDecision({triggerAt,now,bars,signalReference}) {
   });
   const allowed=Object.values(conditions).every(Boolean);
   return {action:allowed?"ENTER":"REJECT",reason:allowed?"C18_SWEEP_PASS":"C18_SWEEP_FAIL",conditions,minIndex,triggerBuyRatio:trigger.ratio};
+}
+
+/** C19: a fresh cross-sectional leader rotates into the top ten with confirmed buyer flow. */
+export function freshLeaderRotationDecision({
+  currentRank,priorRanks,return30m,return60m,triggerAt,now,bar,
+}) {
+  if(!finite(currentRank)||!Array.isArray(priorRanks)||priorRanks.length!==2||
+      !priorRanks.every(x=>x===null||finite(x))||![return30m,return60m].every(finite)||
+      !Number.isSafeInteger(triggerAt)||!Number.isSafeInteger(now))
+    return {action:"UNKNOWN",reason:"C19_ROTATION_INPUT_MISSING"};
+  const trigger=researchBar(bar,triggerAt-minute,now);
+  if(!trigger)return {action:"UNKNOWN",reason:"C19_ROTATION_BAR_INVALID"};
+  const latestPrior=priorRanks[0],priorHalf=return60m-return30m;
+  const range=trigger.high-trigger.low;
+  const closeLocation=range>0?(trigger.close-trigger.low)/range:0;
+  const conditions=Object.freeze({
+    currentTopTen:currentRank<=10,
+    priorRankObserved:finite(latestPrior),
+    freshRankJump:finite(latestPrior)&&latestPrior-currentRank>=4,
+    recentReturnPositive:return30m>0,
+    currentHalfAccelerating:return30m>priorHalf,
+    buyerConfirmed:trigger.ratio>=0.55,
+    closeInUpperRange:closeLocation>=0.65,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C19_ROTATION_PASS":"C19_ROTATION_FAIL",conditions,closeLocation,triggerBuyRatio:trigger.ratio};
+}
+
+function ceilStep(value,step){
+  if(!(finite(value)&&value>=0&&finite(step)&&step>0))return Number.NaN;
+  return Math.ceil((value-step*1e-10)/step)*step;
+}
+
+/**
+ * C20: a higher-low ladder is admitted only when the exchange minimum order
+ * fits the unchanged 30 USDT / 0.25% risk budget under baseline costs.
+ */
+export function accountFeasibleLadderDecision({
+  triggerAt,now,bars,signalReference,entryPrice,stopPrice,filters,
+  equity=30,riskFraction=0.0025,takerFee=0.0005,entryBps=3,stopBps=10,
+  fundingAllowanceRate=0.001,
+}) {
+  if(!Number.isSafeInteger(triggerAt)||!Number.isSafeInteger(now)||!Array.isArray(bars)||bars.length<4||
+      ![signalReference,entryPrice,stopPrice,equity,riskFraction,takerFee,entryBps,stopBps,fundingAllowanceRate].every(finite)||
+      !(signalReference>0&&entryPrice>stopPrice&&stopPrice>0&&equity>0&&riskFraction>0)||!filters)
+    return {action:"UNKNOWN",reason:"C20_FEASIBLE_LADDER_INPUT_MISSING"};
+  const xs=bars.slice(-4).map((b,i)=>researchBar(b,triggerAt-(4-i)*minute,now));
+  if(xs.some(x=>x===null))return {action:"UNKNOWN",reason:"C20_FEASIBLE_LADDER_BAR_INVALID"};
+  const minNotional=Number(filters.minNotional),minQty=Number(filters.minQty),stepSize=Number(filters.stepSize);
+  if(![minNotional,minQty,stepSize].every(finite)||!(minNotional>0&&minQty>0&&stepSize>0))
+    return {action:"UNKNOWN",reason:"C20_FEASIBLE_LADDER_FILTERS_INVALID"};
+  const entryExec=entryPrice*(1+entryBps/10_000),stopExec=stopPrice*(1-stopBps/10_000);
+  const minimumQty=ceilStep(Math.max(minQty,minNotional/entryExec),stepSize);
+  const minimumOrderLoss=minimumQty*((entryExec-stopExec)+entryExec*takerFee+stopExec*takerFee+entryExec*fundingAllowanceRate);
+  const riskBudget=equity*riskFraction;
+  const conditions=Object.freeze({
+    risingLows:xs[1].low<=xs[2].low&&xs[2].low<=xs[3].low,
+    lastTwoHoldReference:xs.slice(-2).every(x=>x.close>=signalReference),
+    buyerDominantTrigger:xs[3].ratio>=0.55,
+    minimumOrderWithinRisk:minimumOrderLoss<=riskBudget,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C20_FEASIBLE_LADDER_PASS":"C20_FEASIBLE_LADDER_FAIL",conditions,minimumQty,minimumOrderLoss,riskBudget};
+}
+
+/** C21: an impulse, orderly reset and second buyer-led pulse form one entry pattern. */
+export function twoPulseResetDecision({triggerAt,now,bars,signalReference}) {
+  if(!Number.isSafeInteger(triggerAt)||!Number.isSafeInteger(now)||!Array.isArray(bars)||bars.length<8||
+      !(finite(signalReference)&&signalReference>0))return {action:"UNKNOWN",reason:"C21_TWO_PULSE_INPUT_MISSING"};
+  const xs=bars.slice(-8).map((b,i)=>researchBar(b,triggerAt-(8-i)*minute,now));
+  if(xs.some(x=>x===null))return {action:"UNKNOWN",reason:"C21_TWO_PULSE_BAR_INVALID"};
+  const first=xs.slice(0,3),reset=xs.slice(3,6),second=xs.slice(6,8);
+  const firstAdvance=first[2].close/first[0].open-1;
+  const firstHigh=Math.max(...first.map(x=>x.high));
+  const firstRange=Math.max(...first.map(x=>x.high))-Math.min(...first.map(x=>x.low));
+  const resetRange=Math.max(...reset.map(x=>x.high))-Math.min(...reset.map(x=>x.low));
+  const resetBuy=reset.reduce((s,x)=>s+x.ratio*x.quote,0)/reset.reduce((s,x)=>s+x.quote,0);
+  const secondBuy=second.reduce((s,x)=>s+x.ratio*x.quote,0)/second.reduce((s,x)=>s+x.quote,0);
+  const conditions=Object.freeze({
+    firstPulsePositive:firstAdvance>0,
+    resetRangeContracts:firstRange>0&&resetRange<firstRange,
+    resetHoldsReference:Math.min(...reset.map(x=>x.low))>=signalReference,
+    secondPulseRising:second[1].close>second[0].close,
+    firstPulseHighBroken:second[1].close>firstHigh,
+    buyerFlowReexpands:secondBuy>resetBuy&&secondBuy>=0.57,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C21_TWO_PULSE_PASS":"C21_TWO_PULSE_FAIL",conditions,firstAdvance,resetRangeRatio:firstRange>0?resetRange/firstRange:null,resetBuy,secondBuy};
 }
