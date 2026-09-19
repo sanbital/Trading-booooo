@@ -64,7 +64,7 @@ test("selection gate fails closed on null/NaN and respects exact boundaries", ()
   assert.equal(POLICY.maxDayReturn, 0.08);
 });
 
-test("registered C0-C37 definitions preserve the frozen C0-C5 prefix", () => {
+test("registered C0-C38 definitions preserve the frozen C0-C5 prefix", () => {
   assert.deepEqual(Object.keys(V26_CANDIDATES).slice(0,6), ["C0","C1","C2","C3","C4","C5"]);
   assert.ok(V26_CANDIDATES.C12);
   assert.ok(V26_CANDIDATES.C15);
@@ -80,10 +80,20 @@ test("registered C0-C37 definitions preserve the frozen C0-C5 prefix", () => {
   assert.ok(V26_CANDIDATES.C35);
   assert.ok(V26_CANDIDATES.C36);
   assert.ok(V26_CANDIDATES.C37);
+  assert.ok(V26_CANDIDATES.C38);
   assert.equal(V26_CANDIDATES.C0.structuralStop, false);
   assert.equal(V26_CANDIDATES.C4.earlyFailureExit, true);
   assert.equal(V26_CANDIDATES.C4.marketParticipation, true);
   assert.equal(V26_CANDIDATES.C5.maxDayReturn, 0.05);
+});
+
+test("C38 composes unchanged market participation with C34 expansion",()=>{
+  assert.equal(V26_CANDIDATES.C38.marketParticipation,true);
+  assert.equal(V26_CANDIDATES.C38.crossSectionalCompressionExpansion60m,true);
+  assert.equal(V26_CANDIDATES.C38.structuralStop,true);
+  assert.equal(V26_CANDIDATES.C38.compressionExpansionQueueWinner,false);
+  assert.equal(V26_CANDIDATES.C38.compressionExpansionCycleAuction,false);
+  assert.equal(V26_CANDIDATES.C38.compressionExpansionSetupReservation,false);
 });
 
 test("C37 reserves one deterministic setup before any later trigger evidence",()=>{

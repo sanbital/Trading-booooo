@@ -1,0 +1,25 @@
+{
+  "experimentId": "V26-SEARCH-R14-C38",
+  "preregisteredAt": "2026-09-19T23:18:40Z",
+  "branch": "research/v26-strategy-search-r14-20260920",
+  "parentCheckpoint": "66deaa11e3708d2eb0ea7ef9e651e86ec12f7a26",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "developmentWindow": {"start":"2026-08-19T15:10:00.000Z","end":"2026-09-18T15:10:00.000Z","classification":"DEVELOPMENT_USED"},
+  "reservedHoldout": {"start":"2025-12-22T15:10:00.000Z","end":"2026-03-22T15:10:00.000Z","status":"LOCKED_UNSEEN_DO_NOT_OPEN_UNLESS_DEVELOPMENT_AND_WALK_FORWARD_PASS"},
+  "account": {"startingCapitalUsdt":30,"leverage":3,"maxConcurrentPositions":1,"quantitySource":"solveQuantity.plan.quantity","riskPolicy":"existing BOO risk-policy/risk-budget plus operator-tightened limits"},
+  "sharedExit": "STRENGTH_LOSS_V1",
+  "candidates": [{
+    "id": "C38",
+    "name": "MARKET_PARTICIPATION_CONDITIONED_COMPRESSION_EXPANSION",
+    "hypothesis": "Fresh leader expansion is more executable when the broad liquid universe participates and BTC's completed 60-minute return is non-negative; conditioning C34 on the already-defined historical participation state should reject isolated pumps without altering trigger timing.",
+    "rules": [
+      "retain the unchanged C34 causal trailing-seven-day expansion percentile >= 0.60 with at least 20 observations",
+      "require the existing marketParticipationDecision to be KNOWN and allowed at the historical scanner cutoff",
+      "market participation remains BTC completed 60m return >= 0 and liquid-universe completed 30m rising fraction >= 0.50",
+      "execute the ordinary next-open trigger path with unchanged entry-drift, structural stop and strength-loss exit",
+      "use no queue variant, outcome, future candle, symbol tuning, risk relaxation or protection bypass"
+    ]
+  }],
+  "promotionGates": {"minTrades":30,"minActiveDays":10,"netPnlPositive":true,"monthlyReturnPositive":true,"minProfitFactor":1.2,"stressNetAndPfPositive":true,"top1RemovedNetPositive":true,"dayBlockMultipleTestingAdjustedExpectancyLowerBoundPositive":true,"walkForwardPositive":true,"unusedHoldoutPositive":true},
+  "holdoutPolicy": "Do not open walk-forward or reserved holdout unless C38 passes every development gate."
+}

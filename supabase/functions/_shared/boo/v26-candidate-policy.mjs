@@ -6,7 +6,7 @@
  * is live merely because this file exists; activation requires a matching,
  * unrevoked approval identity and ENFORCE mode.
  */
-export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-19";
+export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-20";
 
 const BASE = Object.freeze({
   minDayReturn: 0.03,
@@ -149,6 +149,10 @@ export const V26_CANDIDATES = Object.freeze({
   C37: Object.freeze({
     ...BASE, id: "C37", structuralStop: true, crossSectionalCompressionExpansion60m: true,
     compressionExpansionSetupReservation: true,
+  }),
+  C38: Object.freeze({
+    ...BASE, id: "C38", structuralStop: true, marketParticipation: true,
+    crossSectionalCompressionExpansion60m: true,
   }),
 });
 
