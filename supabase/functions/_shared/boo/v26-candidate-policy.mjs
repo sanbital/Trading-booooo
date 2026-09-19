@@ -373,7 +373,7 @@ export const ANTI_EXHAUSTION = Object.freeze({
  * blow-off volume and require buyer-dominant flow on the completed trigger bar.
  * Inputs are all known at the trigger close; no future candle is read.
  */
-export function antiExhaustionDecision({ volumeRatio, triggerAt, bar }) {
+export function antiExhaustionDecision({ volumeRatio, triggerAt, bar, minTriggerTakerBuyQuoteRatio = ANTI_EXHAUSTION.minTriggerTakerBuyQuoteRatio }) {
   if (!(finite(volumeRatio) && volumeRatio >= 0) || !Number.isSafeInteger(triggerAt) ||
       !bar || typeof bar !== "object") {
     return { action: "UNKNOWN", reason: "C9_ANTI_EXHAUSTION_INPUT_MISSING" };
@@ -391,7 +391,7 @@ export function antiExhaustionDecision({ volumeRatio, triggerAt, bar }) {
   const conditions = Object.freeze({
     volumeNotBlowoff: volumeRatio <= ANTI_EXHAUSTION.maxVolumeRatio,
     buyerDominantTrigger:
-      takerBuyQuoteRatio >= ANTI_EXHAUSTION.minTriggerTakerBuyQuoteRatio,
+      takerBuyQuoteRatio >= minTriggerTakerBuyQuoteRatio,
   });
   const allowed = Object.values(conditions).every(Boolean);
   return {
