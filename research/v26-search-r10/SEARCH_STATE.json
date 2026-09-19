@@ -1,0 +1,12 @@
+{
+  "completedAt": "2026-09-19T18:48:41Z",
+  "iteration": "R10",
+  "testedCandidates": ["C34"],
+  "nextCandidateId": "C35",
+  "no_robust_edge_found": true,
+  "developmentPass": [],
+  "walkForwardRun": false,
+  "walkForwardReason": "C34 failed executable account profitability and robustness gates despite positive opportunity-level expectancy.",
+  "unusedHoldoutConsumed": false,
+  "nextHypothesisConstraint": "Do not tune C34 or relax protection. Test deterministic highest-score selection within each same-time queue cohort."
+}
