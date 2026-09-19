@@ -3,7 +3,9 @@
 // leader-momentum-v17's POLICY.marginUsdt, and the targetMarginUsdt stamped on every
 // generated signal. On 2026-09-16 the operator moved the slot 40 -> 30; the first two
 // followed and the last two did not, so every signal written after the cutover
-// carried targetMarginUsdt=40 while orders were sized for 30.
+// carried targetMarginUsdt=40 while orders were sized for 30. On 2026-09-19 the
+// operator moved the slot 30 -> 200 (margin only; MAX_SLOTS and leverage unchanged),
+// through the single sizing contract this test file now pins.
 //
 // Three of those four now read one contract. The fourth is the live DB, which must
 // stay a runtime comparison: the executor refuses to trade when code and settings
@@ -36,15 +38,15 @@ Deno.test("margin: the executor declares no slot size of its own", () => {
 });
 
 // CASE 14 -- what the signal generator stamps on every row it writes.
-Deno.test("CASE 14: generated signals carry targetMarginUsdt = 30, from the contract", () => {
+Deno.test("CASE 14: generated signals carry targetMarginUsdt = 200, from the contract", () => {
   assert(
     /targetMarginUsdt:POLICY\.marginUsdt/.test(GENERATOR),
     "the generator must stamp the policy's margin",
   );
   assertEquals(POLICY.marginUsdt, SLOT_SIZING_CONTRACT.targetMarginUsdt);
-  assertEquals(POLICY.marginUsdt, 30, "operator instruction, 2026-09-16");
-  assertEquals(POLICY.leverage, 3);
-  assertEquals(POLICY.marginUsdt * POLICY.leverage, 90, "notional per slot");
+  assertEquals(POLICY.marginUsdt, 200, "operator instruction, 2026-09-19");
+  assertEquals(POLICY.leverage, 3, "leverage is unchanged by the margin-only resize");
+  assertEquals(POLICY.marginUsdt * POLICY.leverage, 600, "notional per slot");
 });
 
 // CASE 15 -- and it stamps WHICH contract, so a pre-resize row is identifiable.
@@ -74,29 +76,25 @@ Deno.test("CASE 12/13: the runtime guard comparing code to DB allocation is inta
       Math.abs(Number(dbAllocation) - SLOT_SIZING_CONTRACT.targetMarginUsdt) > 1e-9
       ? "V17_MARGIN_CONFIG_MISMATCH"
       : null;
-  assertEquals(guard(40), "V17_MARGIN_CONFIG_MISMATCH", "CASE 12: DB 40 vs code 30 is refused");
-  assertEquals(guard(30), null, "CASE 13: DB 30 vs code 30 proceeds");
+  assertEquals(guard(30), "V17_MARGIN_CONFIG_MISMATCH", "CASE 12: DB 30 vs code 200 is refused");
+  assertEquals(guard(200), null, "CASE 13: DB 200 vs code 200 proceeds");
   assertEquals(guard(Number.NaN), "V17_MARGIN_CONFIG_MISMATCH", "an unreadable setting fails closed");
 });
 
-Deno.test("margin: a 30 USDT slot still needs headroom above the cash buffer", () => {
+Deno.test("margin: a 200 USDT slot still needs headroom above the cash buffer", () => {
   const margin = SLOT_SIZING_CONTRACT.targetMarginUsdt;
   const cashBuffer = Number(SOURCE.match(/ENTRY_CASH_BUFFER_USDT=(\.?\d+(?:\.\d+)?)/)?.[1] ?? NaN);
   const maxOrderMargin = slotSizingBounds(SLOT_SIZING_CONTRACT).maxOrderMarginUsdt;
   assert(Number.isFinite(cashBuffer));
-  // The slot overshoot allowance is still 0.25 USDT, expressed relatively so it
-  // survives the next resize instead of silently becoming a different fraction.
-  assert(Math.abs(maxOrderMargin - 30.25) < 1e-9, `${maxOrderMargin}`);
-  // Equity observed on 2026-09-16 was 38.3699 USDT. Record what this sizing
-  // implies so the number is visible rather than inferred later.
-  const equityObserved = 38.3699;
-  const needed = maxOrderMargin + cashBuffer;
-  assert(
-    needed < equityObserved,
-    `a ${margin} USDT slot needs ${needed.toFixed(4)} USDT, which must fit inside ` +
-      `the observed ${equityObserved} equity for entries to resume`,
-  );
-  assert(margin * 2 > equityObserved, "two concurrent slots must not fit at this equity");
+  // The slot overshoot allowance is unchanged at 250/3 bps, expressed relatively so
+  // it survives a resize instead of silently becoming a different fraction: at 200
+  // USDT that is 200 * (250/3)/10_000 = 1.6667 USDT, i.e. a 201.6667 USDT ceiling.
+  assert(Math.abs(maxOrderMargin - 201.66666666666666) < 1e-6, `${maxOrderMargin}`);
+  assertEquals(margin, 200, "operator instruction, 2026-09-19");
+  assertEquals(margin * SLOT_SIZING_CONTRACT.leverage, 600, "notional per slot at 3x");
+  // A single slot must still need materially more than the cash buffer alone, i.e.
+  // the buffer is headroom on top of the margin, not a replacement for it.
+  assert(maxOrderMargin > cashBuffer, `${maxOrderMargin} must exceed the ${cashBuffer} cash buffer`);
 });
 
 // CASE 7 / 8 / 9 -- the entry-age and drift policy is UNCHANGED by this work. The

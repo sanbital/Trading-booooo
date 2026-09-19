@@ -188,14 +188,15 @@ test('17 an inspection without settlement does not advance reconciliation-succes
 
 test('18 approved QV3, V19 controls, sizing and V23 override audit identity remain pinned',()=>{
   const source=readFileSync(new URL('../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
-  // The slot was 40 USDT when this was written. The operator moved it to 30 on
-  // 2026-09-16, so pinning the literal would pin a number that is no longer the
-  // policy. What must stay pinned is that the executor declares NO slot size of its
-  // own and reads the one contract the generator reads -- the property whose absence
-  // let the four copies of it drift apart during that cutover.
+  // The slot was 40 USDT when this was written, moved to 30 on 2026-09-16, and moved
+  // to 200 on 2026-09-19 (MAX_SLOTS and leverage unchanged). Pinning the literal each
+  // time would pin a number that keeps stopping being the policy. What must stay
+  // pinned is that the executor declares NO slot size of its own and reads the one
+  // contract the generator reads -- the property whose absence let the four copies of
+  // it drift apart during the first cutover.
   assert.match(source,/const MARGIN=SLOT_SIZING_CONTRACT\.targetMarginUsdt,LEV=SLOT_SIZING_CONTRACT\.leverage,NOTIONAL=MARGIN\*LEV;/);
   assert.match(source,/MAX_SLOTS=10/);
-  assert.equal(SLOT_SIZING_CONTRACT.targetMarginUsdt,30);
+  assert.equal(SLOT_SIZING_CONTRACT.targetMarginUsdt,200);
   assert.equal(SLOT_SIZING_CONTRACT.leverage,3);
   assert.match(source,/QV3_ENTRY_EXIT_TWO_1|QV3_VERSION/);
   assert.equal(ENTRY_CONTROL_VERSION,'V19-SCOPE-AWARE-ENTRY-1');
@@ -234,9 +235,9 @@ test('18b entry sizing follows the current contract; stop and hold match the pro
     <=bounds.maxOrderMarginUsdt+1e-9,'and stay inside the slot budget at its own limit price');
   assert.ok(newCmd.order.price>=.613&&(newCmd.order.price/.613-1)*10000<=SLOT_SIZING_CONTRACT.iocMaxBps,
     'the BUY is priced above the ask but inside the IOC cap');
-  // The smaller slot must buy proportionally less, not something unrelated.
-  assert.ok(newCmd.order.quantity<oldCmd.order.quantity,
-    'a 30 USDT slot must buy fewer lots than the 40 USDT basis did');
+  // The larger slot must buy proportionally more, not something unrelated.
+  assert.ok(newCmd.order.quantity>oldCmd.order.quantity,
+    'a 200 USDT slot must buy more lots than the 40 USDT basis did');
   // The stop is a function of the entry price, not of the size: it must not move.
   assert.equal(newPosition.entry_price,oldPosition.entry_price);
   assert.equal(newPosition.hard_stop_price,oldPosition.hard_stop_price);

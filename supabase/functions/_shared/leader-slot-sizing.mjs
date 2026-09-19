@@ -52,29 +52,29 @@ export const SLOT_SIZING_CONTRACT_VERSION = "V17_SLOT_SIZING_3_FEASIBLE_LATTICE"
 /**
  * Production slot contract.
  *
- * targetMarginUsdt / leverage are the operator-agreed slot (30 USDT at 3x,
- * instruction of 2026-09-16). Every *Usdt field is a USDT amount and every *Bps
- * field is a relative rate in basis points of the target notional; the suffixes
- * are load-bearing, not decoration -- conflating them is the bug above.
+ * targetMarginUsdt / leverage are the operator-agreed slot (200 USDT at 3x,
+ * instruction of 2026-09-19; previously 30 USDT at 3x, instruction of
+ * 2026-09-16). Every *Usdt field is a USDT amount and every *Bps field is a
+ * relative rate in basis points of the target notional; the suffixes are
+ * load-bearing, not decoration -- conflating them is the bug above.
  */
 export const SLOT_SIZING_CONTRACT = Object.freeze({
   version: SLOT_SIZING_CONTRACT_VERSION,
-  targetMarginUsdt: 30,
+  targetMarginUsdt: 200,
   leverage: 3,
   /**
    * Quantity-side rounding headroom above the target notional, relative.
-   * 10 bps of 90 USDT = 0.09 USDT. At the previous 120 USDT notional the old
-   * absolute 0.12 USDT buffer was exactly 10 bps, so this is the same headroom
-   * the system ran with for months -- expressed in the unit that survives a
-   * resize. It is met by buying one more step, never by paying more.
+   * 10 bps of the target notional. Expressed relatively so this headroom
+   * survives a resize instead of drifting into a different fraction of the
+   * slot. It is met by buying one more step, never by paying more.
    */
   notionalBufferBps: 10,
   /**
    * How far one slot may exceed its margin allocation because the exchange's lot
-   * step does not divide the target notional. 250/3 bps of 30 USDT = 0.25 USDT
-   * exactly, which is the allowance production runs with today. Expressed
-   * relatively for the same reason as above: an absolute 0.25 USDT silently
-   * became a looser fraction of the slot when the slot shrank.
+   * step does not divide the target notional. 250/3 bps of the target margin,
+   * which is the allowance production has run with since the 40 -> 30 cutover.
+   * Expressed relatively so an absolute allowance does not silently become a
+   * looser or tighter fraction of the slot every time the slot is resized.
    */
   maxSlotOvershootBps: 250 / 3,
   /**

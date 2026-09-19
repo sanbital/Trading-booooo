@@ -381,10 +381,11 @@ test("futures leverage is bounded to the gateway ceiling", () => {
 
 test("futures entries independently enforce the smallest authorised slot", () => {
   // The floor is the smallest order ANY engine this gateway serves can produce, not a
-  // copy of one engine's slot. V17's sizing contract can size down to
-  // targetMarginUsdt 30 x minSlotFillBps 5000 = 15 USDT of margin; P10 still refuses
-  // below its own 40 in its own sizing, before a command ever reaches this file.
-  assert.equal(module.FUTURES_MIN_ENTRY_MARGIN_USDT, 15);
+  // copy of one engine's slot. At the current 200 USDT / 3x V17 slot, V17's own
+  // sizing contract cannot go below targetMarginUsdt 200 x minSlotFillBps 5000 =
+  // 100 USDT of margin -- ABOVE P10's fixed 40, so P10's own floor is now the smaller
+  // (and binding) one: min(40, 100) = 40.
+  assert.equal(module.FUTURES_MIN_ENTRY_MARGIN_USDT, 40);
   assert.throws(
     () =>
       module.conformFuturesOrder(
@@ -393,14 +394,14 @@ test("futures entries independently enforce the smallest authorised slot", () =>
           side: "BUY",
           type: "LIMIT",
           price: 100,
-          quantity: 0.449,
+          quantity: 1.199,
           identifier: "tb-margin-1",
         },
         FUTURES_INFO,
         false,
         3,
       ),
-    /15 USDT margin \(45 USDT notional at 3x\)/,
+    /40 USDT margin \(120 USDT notional at 3x\)/,
   );
   const atFloor = module.conformFuturesOrder(
     {
@@ -408,14 +409,14 @@ test("futures entries independently enforce the smallest authorised slot", () =>
       side: "BUY",
       type: "LIMIT",
       price: 100,
-      quantity: 0.45,
+      quantity: 1.2,
       identifier: "tb-margin-2",
     },
     FUTURES_INFO,
     false,
     3,
   );
-  assert.equal(atFloor.notional, 45);
+  assert.equal(atFloor.notional, 120);
 
   assert.throws(
     () =>
@@ -425,22 +426,29 @@ test("futures entries independently enforce the smallest authorised slot", () =>
           side: "BUY",
           type: "LIMIT",
           price: 100,
-          quantity: 0.749,
+          quantity: 1.999,
           identifier: "tb-margin-3",
         },
         FUTURES_INFO,
         false,
         5,
       ),
-    /75 USDT notional at 5x/,
+    /200 USDT notional at 5x/,
   );
 });
 
 test("the V17 slot the old floor refused now passes, at its exact production numbers", () => {
   // DYDXUSDT, 2026-09-18 10:21:09 UTC. The first order the repaired entry pipeline
-  // produced, and the one the stale 40 USDT floor refused:
+  // produced, and the one the stale 40 USDT floor refused, back when V17 ran a 30
+  // USDT slot:
   //   GW_400: Binance futures entry requires at least 40 USDT margin
   //           (120 USDT notional at 3x); got 90.1716
+  // That specific order (90.1716 notional, ~30.06 USDT margin at 3x) belonged to the
+  // 30 USDT slot regime and is smaller than ANY order the current 200 USDT slot can
+  // produce (its own floor is 100 USDT margin, see above), so it is no longer a
+  // representative live example -- replayed here at the ORIGINAL 15 USDT floor that
+  // was live that day, purely to keep the historical fix pinned.
+  const historicalFloor = 15;
   const info = {
     ...FUTURES_INFO,
     market: "DYDXUSDT",
@@ -448,26 +456,56 @@ test("the V17 slot the old floor refused now passes, at its exact production num
     price_tick: 0.0001,
     min_notional: 5,
   };
+  const price = 0.1304, quantity = 691.5, leverage = 3;
+  const notional = price * quantity;
+  assert.ok(Math.abs(notional - 90.1716) < 1e-6, `notional ${notional}`);
+  assert.ok(notional >= historicalFloor * leverage, "admitted under that day's 15 USDT floor");
+  // Under the CURRENT floor (40) the same order is correctly refused: a 30 USDT-slot
+  // order is smaller than anything the 200 USDT slot should ever produce.
+  assert.throws(
+    () =>
+      module.conformFuturesOrder(
+        {
+          market: "DYDXUSDT",
+          side: "BUY",
+          type: "LIMIT",
+          price,
+          quantity,
+          identifier: "tb-v11e-92df114d5fc748699f89c8fc",
+          position_side: "LONG",
+          position_effect: "OPEN",
+          time_in_force: "IOC",
+        },
+        info,
+        false,
+        leverage,
+      ),
+    /40 USDT margin/,
+  );
+});
+
+test("the smallest order the current 200 USDT V17 slot can produce clears the floor", () => {
+  // V17's own slot-fill floor at the current contract is 100 USDT of margin (300
+  // USDT notional at 3x) -- comfortably above the gateway's 40 USDT floor, so no
+  // legitimate V17 order can ever be refused here.
   const { order, notional } = module.conformFuturesOrder(
     {
-      market: "DYDXUSDT",
+      market: "BTCUSDT",
       side: "BUY",
       type: "LIMIT",
-      price: 0.1304,
-      quantity: 691.5,
-      identifier: "tb-v11e-92df114d5fc748699f89c8fc",
+      price: 100,
+      quantity: 3,
+      identifier: "tb-v17-min-slot-fill",
       position_side: "LONG",
       position_effect: "OPEN",
       time_in_force: "IOC",
     },
-    info,
+    FUTURES_INFO,
     false,
     3,
   );
   assert.equal(order.side, "BUY");
-  assert.equal(order.timeInForce, "IOC");
-  assert.ok(Math.abs(notional - 90.1716) < 1e-6, `notional ${notional}`);
-  // And it is comfortably above the floor, so this is not a boundary escape.
+  assert.equal(notional, 300);
   assert.ok(notional / 3 > module.FUTURES_MIN_ENTRY_MARGIN_USDT);
 });
 
@@ -488,7 +526,7 @@ test("a malformed order far below any authorised slot is still refused", () => {
         false,
         3,
       ),
-    /15 USDT margin/,
+    /40 USDT margin/,
   );
 });
 
