@@ -1,0 +1,26 @@
+{
+  "experimentId": "V26-SEARCH-R12-C36",
+  "preregisteredAt": "2026-09-19T20:19:28Z",
+  "branch": "research/v26-strategy-search-r12-20260920",
+  "parentCheckpoint": "27926473a93591bfed6e147a6f31096e159a325f",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "developmentWindow": {"start":"2026-08-19T15:10:00.000Z","end":"2026-09-18T15:10:00.000Z","classification":"DEVELOPMENT_USED"},
+  "reservedHoldout": {"start":"2025-12-22T15:10:00.000Z","end":"2026-03-22T15:10:00.000Z","status":"LOCKED_UNSEEN_DO_NOT_OPEN_UNLESS_DEVELOPMENT_AND_WALK_FORWARD_PASS"},
+  "account": {"startingCapitalUsdt":30,"leverage":3,"maxConcurrentPositions":1,"quantitySource":"solveQuantity.plan.quantity","riskPolicy":"existing BOO risk-policy/risk-budget plus operator-tightened limits"},
+  "sharedExit": "STRENGTH_LOSS_V1",
+  "candidates": [{
+    "id": "C36",
+    "name": "COMPLETED_15M_COMPRESSION_EXPANSION_QUEUE_AUCTION",
+    "hypothesis": "C34's opportunity edge may be diluted by first-arrival ordering across nearby but non-identical trigger minutes; a causal auction over each fully completed 15-minute scanner cycle can select the strongest fresh expansion before the one account slot is committed.",
+    "score": "unchanged C34 score: positive return of final completed 5m block / median normalized high-low range of the preceding eleven completed 5m blocks",
+    "rules": [
+      "apply the unchanged causal C34 trailing-seven-day percentile >= 0.60 gate with at least 20 observations",
+      "group eligible triggers by their fully completed 15-minute scanner cycle; a boundary trigger belongs to the cycle that just completed",
+      "retain exactly one signal with the highest pre-entry C34 score, breaking equal-score ties by lexical signal id",
+      "enter at the cycle-end one-minute open or later; reapply the unchanged entry-drift and structural-stop validity checks at that price",
+      "use no outcome, future candle, final excursion, symbol tuning, risk relaxation or protection bypass"
+    ]
+  }],
+  "promotionGates": {"minTrades":30,"minActiveDays":10,"netPnlPositive":true,"monthlyReturnPositive":true,"minProfitFactor":1.2,"stressNetAndPfPositive":true,"top1RemovedNetPositive":true,"dayBlockMultipleTestingAdjustedExpectancyLowerBoundPositive":true,"walkForwardPositive":true,"unusedHoldoutPositive":true},
+  "holdoutPolicy": "Do not open walk-forward or reserved holdout unless C36 passes every development gate."
+}

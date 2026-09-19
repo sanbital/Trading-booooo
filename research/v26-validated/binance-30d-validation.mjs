@@ -20,6 +20,7 @@ import {
   executionAdjustedBreakoutScore, crossSectionalExecutionValueDecision,
   compressionExpansion60mScore, crossSectionalCompressionExpansionDecision,
   selectCompressionExpansionQueueWinners,
+  selectCompressionExpansionCycleWinners,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { resolveRiskPolicy, evaluateLossLimits } from "../../supabase/functions/_shared/boo/risk-policy.mjs";
 import { solveQuantity } from "../../supabase/functions/_shared/boo/risk-budget.mjs";
@@ -491,6 +492,12 @@ const compressionExpansionQueueWinners=new Set(selectCompressionExpansionQueueWi
     return Number.isSafeInteger(context?.observations)&&context.observations>=20&&context.percentile>=0.60;
   })
 ).map(record=>record.id));
+const compressionExpansionCycleWinners=new Map(selectCompressionExpansionCycleWinners(
+  compressionExpansionRecords.filter(record=>{
+    const context=compressionExpansionById.get(record.id);
+    return Number.isSafeInteger(context?.observations)&&context.observations>=20&&context.percentile>=0.60;
+  })
+).map(record=>[record.id,record]));
 
 const opportunitiesByVariant=new Map();
 const candidateIds=ONLY_CANDIDATE?ONLY_CANDIDATE.split(",").map(x=>x.trim()).filter(Boolean):Object.keys(V26_CANDIDATES);
@@ -643,6 +650,11 @@ for(const id of candidateIds){
     if(V26_CANDIDATES[id].compressionExpansionQueueWinner&&!compressionExpansionQueueWinners.has(s.id)){
       reasons.C35_QUEUE_NOT_HIGHEST=(reasons.C35_QUEUE_NOT_HIGHEST||0)+1;
       continue;
+    }
+    if(V26_CANDIDATES[id].compressionExpansionCycleAuction){
+      const winner=compressionExpansionCycleWinners.get(s.id);
+      if(!winner){reasons.C36_CYCLE_AUCTION_NOT_HIGHEST=(reasons.C36_CYCLE_AUCTION_NOT_HIGHEST||0)+1;continue;}
+      entryAt=winner.entryAt;
     }
     if(V26_CANDIDATES[id].breakoutRetestHold2m||V26_CANDIDATES[id].controlledPullbackReclaim3m||V26_CANDIDATES[id].breakoutAcceptance3m){
       const triggerBar=rows.find(r=>Number(r[0])===triggerAt-MIN);

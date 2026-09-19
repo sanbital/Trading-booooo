@@ -6,7 +6,7 @@
  * is live merely because this file exists; activation requires a matching,
  * unrevoked approval identity and ENFORCE mode.
  */
-export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-17";
+export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-18";
 
 const BASE = Object.freeze({
   minDayReturn: 0.03,
@@ -42,6 +42,7 @@ const BASE = Object.freeze({
   crossSectionalExecutionValue: false,
   crossSectionalCompressionExpansion60m: false,
   compressionExpansionQueueWinner: false,
+  compressionExpansionCycleAuction: false,
   minRankOverride: null,
   maxRankOverride: null,
 });
@@ -139,6 +140,10 @@ export const V26_CANDIDATES = Object.freeze({
   C35: Object.freeze({
     ...BASE, id: "C35", structuralStop: true, crossSectionalCompressionExpansion60m: true,
     compressionExpansionQueueWinner: true,
+  }),
+  C36: Object.freeze({
+    ...BASE, id: "C36", structuralStop: true, crossSectionalCompressionExpansion60m: true,
+    compressionExpansionCycleAuction: true,
   }),
 });
 
@@ -1114,4 +1119,24 @@ export function selectCompressionExpansionQueueWinners(records) {
       byAt.set(record.at,record);
   }
   return [...byAt.values()].sort((a,b)=>a.at-b.at||a.id.localeCompare(b.id));
+}
+
+/**
+ * C36: run a causal auction after each completed scanner cycle. A trigger at
+ * an exact cycle boundary belongs to the cycle that just completed. The
+ * highest already-eligible C34 score wins and may enter at the cycle-end open;
+ * lexical id breaks equal-score ties deterministically.
+ */
+export function selectCompressionExpansionCycleWinners(records,{cycleMs=15*minute}={}) {
+  if(!Array.isArray(records)||!Number.isSafeInteger(cycleMs)||cycleMs<=0)return [];
+  const valid=records.filter(r=>r&&typeof r.id==="string"&&r.id.length>0&&
+    Number.isSafeInteger(r.at)&&r.at>0&&finite(r.score));
+  const byCycleEnd=new Map();
+  for(const record of valid){
+    const cycleEnd=Math.ceil(record.at/cycleMs)*cycleMs;
+    const current=byCycleEnd.get(cycleEnd);
+    if(!current||record.score>current.score||(record.score===current.score&&record.id<current.id))
+      byCycleEnd.set(cycleEnd,{...record,entryAt:cycleEnd});
+  }
+  return [...byCycleEnd.values()].sort((a,b)=>a.entryAt-b.entryAt||a.id.localeCompare(b.id));
 }
