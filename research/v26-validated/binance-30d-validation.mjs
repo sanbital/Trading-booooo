@@ -21,6 +21,7 @@ import {
   compressionExpansion60mScore, crossSectionalCompressionExpansionDecision,
   selectCompressionExpansionQueueWinners,
   selectCompressionExpansionCycleWinners,
+  selectCompressionExpansionSetupReservations,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { resolveRiskPolicy, evaluateLossLimits } from "../../supabase/functions/_shared/boo/risk-policy.mjs";
 import { solveQuantity } from "../../supabase/functions/_shared/boo/risk-budget.mjs";
@@ -499,6 +500,19 @@ const compressionExpansionCycleWinners=new Map(selectCompressionExpansionCycleWi
   })
 ).map(record=>[record.id,record]));
 
+// C37 reserves one setup using only bars completed at that setup timestamp.
+const compressionExpansionSetupRecords=[];
+for(const s of mergedSignals(uniqueSignals)){
+  const cached=pathCache.get(s.id),rows=Array.isArray(cached)?cached:cached?.rows;
+  if(!rows?.length)continue;
+  const bars=rows.filter(r=>Number(r[0])>=s.s5c-60*MIN&&Number(r[0])<s.s5c);
+  const scored=compressionExpansion60mScore({triggerAt:s.s5c,now:s.s5c,bars});
+  if(scored.status==="KNOWN")compressionExpansionSetupRecords.push({id:s.id,at:s.s5c,score:scored.score});
+}
+const compressionExpansionSetupReservations=new Set(
+  selectCompressionExpansionSetupReservations(compressionExpansionSetupRecords).map(record=>record.id)
+);
+
 const opportunitiesByVariant=new Map();
 const candidateIds=ONLY_CANDIDATE?ONLY_CANDIDATE.split(",").map(x=>x.trim()).filter(Boolean):Object.keys(V26_CANDIDATES);
 for(const id of candidateIds){
@@ -655,6 +669,10 @@ for(const id of candidateIds){
       const winner=compressionExpansionCycleWinners.get(s.id);
       if(!winner){reasons.C36_CYCLE_AUCTION_NOT_HIGHEST=(reasons.C36_CYCLE_AUCTION_NOT_HIGHEST||0)+1;continue;}
       entryAt=winner.entryAt;
+    }
+    if(V26_CANDIDATES[id].compressionExpansionSetupReservation&&!compressionExpansionSetupReservations.has(s.id)){
+      reasons.C37_SETUP_NOT_RESERVED=(reasons.C37_SETUP_NOT_RESERVED||0)+1;
+      continue;
     }
     if(V26_CANDIDATES[id].breakoutRetestHold2m||V26_CANDIDATES[id].controlledPullbackReclaim3m||V26_CANDIDATES[id].breakoutAcceptance3m){
       const triggerBar=rows.find(r=>Number(r[0])===triggerAt-MIN);

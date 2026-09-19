@@ -35,6 +35,7 @@ import {
   crossSectionalCompressionExpansionDecision,
   selectCompressionExpansionQueueWinners,
   selectCompressionExpansionCycleWinners,
+  selectCompressionExpansionSetupReservations,
   V26_CANDIDATES,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { runExit, summarise } from "../v25-pullback-reaccel/replay.mjs";
@@ -63,7 +64,7 @@ test("selection gate fails closed on null/NaN and respects exact boundaries", ()
   assert.equal(POLICY.maxDayReturn, 0.08);
 });
 
-test("registered C0-C36 definitions preserve the frozen C0-C5 prefix", () => {
+test("registered C0-C37 definitions preserve the frozen C0-C5 prefix", () => {
   assert.deepEqual(Object.keys(V26_CANDIDATES).slice(0,6), ["C0","C1","C2","C3","C4","C5"]);
   assert.ok(V26_CANDIDATES.C12);
   assert.ok(V26_CANDIDATES.C15);
@@ -78,10 +79,23 @@ test("registered C0-C36 definitions preserve the frozen C0-C5 prefix", () => {
   assert.ok(V26_CANDIDATES.C34);
   assert.ok(V26_CANDIDATES.C35);
   assert.ok(V26_CANDIDATES.C36);
+  assert.ok(V26_CANDIDATES.C37);
   assert.equal(V26_CANDIDATES.C0.structuralStop, false);
   assert.equal(V26_CANDIDATES.C4.earlyFailureExit, true);
   assert.equal(V26_CANDIDATES.C4.marketParticipation, true);
   assert.equal(V26_CANDIDATES.C5.maxDayReturn, 0.05);
+});
+
+test("C37 reserves one deterministic setup before any later trigger evidence",()=>{
+  const selected=selectCompressionExpansionSetupReservations([
+    {id:"weak",at:1_000_000,score:1.5},
+    {id:"strong",at:1_000_000,score:2.5},
+    {id:"later",at:1_300_000,score:1.1},
+  ]);
+  assert.deepEqual(selected.map(x=>x.id),["strong","later"]);
+  assert.equal(V26_CANDIDATES.C37.crossSectionalCompressionExpansion60m,true);
+  assert.equal(V26_CANDIDATES.C37.compressionExpansionSetupReservation,true);
+  assert.equal(V26_CANDIDATES.C37.compressionExpansionCycleAuction,false);
 });
 
 test("C36 holds a causal 15m auction and enters at the completed cycle boundary",()=>{

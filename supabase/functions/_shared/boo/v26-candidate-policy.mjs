@@ -6,7 +6,7 @@
  * is live merely because this file exists; activation requires a matching,
  * unrevoked approval identity and ENFORCE mode.
  */
-export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-18";
+export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-19";
 
 const BASE = Object.freeze({
   minDayReturn: 0.03,
@@ -43,6 +43,7 @@ const BASE = Object.freeze({
   crossSectionalCompressionExpansion60m: false,
   compressionExpansionQueueWinner: false,
   compressionExpansionCycleAuction: false,
+  compressionExpansionSetupReservation: false,
   minRankOverride: null,
   maxRankOverride: null,
 });
@@ -144,6 +145,10 @@ export const V26_CANDIDATES = Object.freeze({
   C36: Object.freeze({
     ...BASE, id: "C36", structuralStop: true, crossSectionalCompressionExpansion60m: true,
     compressionExpansionCycleAuction: true,
+  }),
+  C37: Object.freeze({
+    ...BASE, id: "C37", structuralStop: true, crossSectionalCompressionExpansion60m: true,
+    compressionExpansionSetupReservation: true,
   }),
 });
 
@@ -1139,4 +1144,14 @@ export function selectCompressionExpansionCycleWinners(records,{cycleMs=15*minut
       byCycleEnd.set(cycleEnd,{...record,entryAt:cycleEnd});
   }
   return [...byCycleEnd.values()].sort((a,b)=>a.entryAt-b.entryAt||a.id.localeCompare(b.id));
+}
+
+/**
+ * C37: reserve one setup from each simultaneously completed setup cohort.
+ * Every score must be calculable at the setup timestamp, before pullback and
+ * trigger observations. The reserved setup may then use the ordinary immediate
+ * trigger path without the post-trigger delay introduced by C36.
+ */
+export function selectCompressionExpansionSetupReservations(records) {
+  return selectCompressionExpansionQueueWinners(records);
 }

@@ -1,0 +1,26 @@
+{
+  "experimentId": "V26-SEARCH-R13-C37",
+  "preregisteredAt": "2026-09-19T21:38:28Z",
+  "branch": "research/v26-strategy-search-r13-20260920",
+  "parentCheckpoint": "b1e68023e75762ea7c3fb79a726af1388f93a5f0",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "developmentWindow": {"start":"2026-08-19T15:10:00.000Z","end":"2026-09-18T15:10:00.000Z","classification":"DEVELOPMENT_USED"},
+  "reservedHoldout": {"start":"2025-12-22T15:10:00.000Z","end":"2026-03-22T15:10:00.000Z","status":"LOCKED_UNSEEN_DO_NOT_OPEN_UNLESS_DEVELOPMENT_AND_WALK_FORWARD_PASS"},
+  "account": {"startingCapitalUsdt":30,"leverage":3,"maxConcurrentPositions":1,"quantitySource":"solveQuantity.plan.quantity","riskPolicy":"existing BOO risk-policy/risk-budget plus operator-tightened limits"},
+  "sharedExit": "STRENGTH_LOSS_V1",
+  "candidates": [{
+    "id": "C37",
+    "name": "SETUP_TIME_COMPRESSION_EXPANSION_RESERVATION",
+    "hypothesis": "The positive immediate C34 opportunity signal should be preserved if queue competition is resolved before the pullback/trigger path: reserve the strongest setup-time expansion in each simultaneous setup cohort, then allow its ordinary trigger to execute immediately without C36's harmful batching delay.",
+    "score": "setup-time positive return of final completed 5m block / median normalized high-low range of the preceding eleven completed 5m blocks",
+    "rules": [
+      "at each completed setup timestamp, compute the score from exactly sixty already-completed one-minute bars",
+      "reserve exactly one setup with the highest score; use lexical signal id for deterministic ties",
+      "after reservation, retain the unchanged C34 trigger-time causal percentile >= 0.60 gate with at least 20 observations",
+      "execute the ordinary next-open trigger path without post-trigger waiting; retain entry-drift and structural-stop checks",
+      "use no outcome, future candle, final excursion, symbol tuning, risk relaxation or protection bypass"
+    ]
+  }],
+  "promotionGates": {"minTrades":30,"minActiveDays":10,"netPnlPositive":true,"monthlyReturnPositive":true,"minProfitFactor":1.2,"stressNetAndPfPositive":true,"top1RemovedNetPositive":true,"dayBlockMultipleTestingAdjustedExpectancyLowerBoundPositive":true,"walkForwardPositive":true,"unusedHoldoutPositive":true},
+  "holdoutPolicy": "Do not open walk-forward or reserved holdout unless C37 passes every development gate."
+}
