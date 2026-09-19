@@ -125,6 +125,17 @@ async function visionRows(symbol,interval,start,end){
   for(const date of daysBetween(start,end))all.push(...await visionDay(symbol,interval,date));
   return all.filter(r=>Number(r[0])>=start&&Number(r[0])<=end);
 }
+async function mapLimit(items,limit,fn){
+  let next=0,done=0;
+  async function worker(){
+    while(true){
+      const i=next++; if(i>=items.length)return;
+      await fn(items[i],i); done++;
+      if(done%100===0)console.log("PREFETCH",done,"/",items.length);
+    }
+  }
+  await Promise.all(Array.from({length:Math.min(limit,items.length)},worker));
+}
 async function pagedKlines(symbol,interval,start,end,limit=1000){
   let rows;
   if(interval==="15m"&&export15.has(symbol)){
@@ -247,9 +258,24 @@ const eligibleWindows=(repairedEligible.eligible||[]).map(x=>({
   c5:!!x.c5_allowed,marketAllowed:!!x.market_allowed
 }));
 console.log("ELIGIBLE15",eligibleWindows.length,"SOURCE","eligible15-repaired.json");
+const need5=new Map();
+for(const x of eligibleWindows){
+  for(const d of daysBetween(x.cut-14*M5,x.cut+2*M5-1)){
+    const k=x.f.symbol+"|"+d;need5.set(k,{symbol:x.f.symbol,date:d});
+  }
+}
+await mapLimit([...need5.values()],16,x=>visionDay(x.symbol,"5m",x.date));
+console.log("PREFETCH5_DONE",need5.size);
 const rawSignals=[];let ew=0;
 for(const x of eligibleWindows){const rows=await pagedKlines(x.f.symbol,"5m",x.cut-14*M5,x.cut+10*M5-1,100).catch(()=>[]),idx=indexRows(rows);for(const t of [x.cut,x.cut+M5,x.cut+2*M5]){if(t<START||t>=END)continue;try{const b=exactBars(idx,M5,t,14),last=b.at(-1),prev=b.at(-2),r5=last.c/prev.c-1,r15=last.c/b.at(-4).c-1;if(r5>=POLICY.min5mReturn&&r15>0&&last.c>=last.o)rawSignals.push({id:`${x.f.symbol}:${t}`,symbol:x.f.symbol,s5c:t,ref:last.c,rank:x.f.rank,c5Allowed:x.c5,marketAllowed:x.marketAllowed,features:{...x.f,referenceClose:last.c,signal5Close:t,return5m:r5,confirmationReturn15m:r15}});}catch{}}if(++ew%100===0)console.log("5M_WINDOWS",ew,"/",eligibleWindows.length);}
 const uniqueSignals=[...new Map(rawSignals.map(s=>[s.id,s])).values()].sort((a,b)=>a.s5c-b.s5c||a.symbol.localeCompare(b.symbol));console.log("RAW_SIGNALS",uniqueSignals.length);
+const need1=new Map();
+for(const sig of uniqueSignals){
+  const a=sig.s5c-90*MIN,b=sig.s5c+SETUP_POLICY.setupTtlMs+POLICY.maxHoldMs+15*MIN-1;
+  for(const d of daysBetween(a,b)){const k=sig.symbol+"|"+d;need1.set(k,{symbol:sig.symbol,date:d});}
+}
+await mapLimit([...need1.values()],16,x=>visionDay(x.symbol,"1m",x.date));
+console.log("PREFETCH1_DONE",need1.size);
 const pathCache=new Map();let ps=0;
 for(const s of uniqueSignals){try{const rows=await pagedKlines(s.symbol,"1m",s.s5c-90*MIN,s.s5c+SETUP_POLICY.setupTtlMs+POLICY.maxHoldMs+15*MIN-1,500);pathCache.set(s.id,rows);}catch(e){pathCache.set(s.id,{error:String(e),rows:[]});}if(++ps%50===0)console.log("1M_PATHS",ps,"/",uniqueSignals.length);}
 
