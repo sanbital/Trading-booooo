@@ -1,0 +1,78 @@
+{
+  "experimentId": "V26-SEARCH-R5-C25-C27",
+  "preregisteredAt": "2026-09-19T14:14:12Z",
+  "branch": "research/v26-strategy-search-r5-20260919",
+  "parentCheckpoint": "7875a1e82186b59f7cabba4c6c962454fdce3515",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "developmentWindow": {
+    "startExclusive": "2026-08-20T15:10:00.000Z",
+    "end": "2026-09-19T15:10:00.000Z",
+    "classification": "DEVELOPMENT_USED"
+  },
+  "reservedHoldout": {
+    "start": "2025-12-22T15:10:00.000Z",
+    "end": "2026-03-22T15:10:00.000Z",
+    "status": "LOCKED_UNSEEN_DO_NOT_OPEN_UNLESS_DEVELOPMENT_AND_WALK_FORWARD_PASS"
+  },
+  "account": {
+    "startingCapitalUsdt": 30,
+    "leverage": 3,
+    "maxConcurrentPositions": 1,
+    "quantitySource": "solveQuantity.plan.quantity",
+    "riskPolicy": "existing BOO risk-policy/risk-budget plus operator-tightened limits"
+  },
+  "sharedExit": "STRENGTH_LOSS_V1",
+  "candidates": [
+    {
+      "id": "C25",
+      "name": "BREAKOUT_RETEST_HOLD_2M",
+      "hypothesis": "A leader breakout becomes actionable only after a completed retest holds structure and a second completed bar recovers the breakout with rising buyer share.",
+      "rules": [
+        "after the original trigger, wait for exactly two fully completed 1m bars",
+        "bar 1 low <= original trigger close, low >= setup low, and close >= signal reference",
+        "bar 2 low >= bar 1 low and close > original trigger high",
+        "bar 2 taker-buy quote ratio > bar 1 and >= 0.55",
+        "enter at the next bar open, triggerAt+2m"
+      ]
+    },
+    {
+      "id": "C26",
+      "name": "CONTROLLED_PULLBACK_RECLAIM_3M",
+      "hypothesis": "A short controlled pullback that preserves the setup and is reclaimed by stronger buyer flow separates continuation from immediate failure.",
+      "rules": [
+        "after the original trigger, wait for exactly three fully completed 1m bars",
+        "all three lows remain >= setup low",
+        "at least one of bars 1-2 closes below trigger close but >= signal reference",
+        "bar 3 closes above trigger close and above both prior closes",
+        "bar 3 taker-buy quote ratio > quote-weighted mean of bars 1-2 and >= 0.58",
+        "enter at the next bar open, triggerAt+3m"
+      ]
+    },
+    {
+      "id": "C27",
+      "name": "BREAKOUT_ACCEPTANCE_3M",
+      "hypothesis": "Repeated completed closes above a breakout with reference preservation indicate price acceptance rather than a one-bar spike.",
+      "rules": [
+        "after the original trigger, wait for exactly three fully completed 1m bars",
+        "all three lows remain >= signal reference",
+        "at least two closes are > original trigger high",
+        "final close >= first close and lies in the upper half of its candle",
+        "quote-weighted three-bar taker-buy ratio >= 0.52",
+        "enter at the next bar open, triggerAt+3m"
+      ]
+    }
+  ],
+  "promotionGates": {
+    "minTrades": 30,
+    "minActiveDays": 10,
+    "netPnlPositive": true,
+    "monthlyReturnPositive": true,
+    "minProfitFactor": 1.2,
+    "stressNetAndPfPositive": true,
+    "top1RemovedNetPositive": true,
+    "dayBlockMultipleTestingAdjustedExpectancyLowerBoundPositive": true,
+    "walkForwardPositive": true,
+    "unusedHoldoutPositive": true
+  },
+  "holdoutPolicy": "Do not open walk-forward or reserved holdout unless a preregistered candidate passes every development gate."
+}

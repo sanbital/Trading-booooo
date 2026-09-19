@@ -19,6 +19,9 @@ import {
   liquidityAdjustedEfficiencyDecision,
   selectiveLeaderRegimeDecision,
   distributedTrendDecision,
+  breakoutRetestHold2mDecision,
+  controlledPullbackReclaim3mDecision,
+  breakoutAcceptance3mDecision,
   V26_CANDIDATES,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { runExit, summarise } from "../v25-pullback-reaccel/replay.mjs";
@@ -47,17 +50,46 @@ test("selection gate fails closed on null/NaN and respects exact boundaries", ()
   assert.equal(POLICY.maxDayReturn, 0.08);
 });
 
-test("registered C0-C24 definitions preserve the frozen C0-C5 prefix", () => {
+test("registered C0-C27 definitions preserve the frozen C0-C5 prefix", () => {
   assert.deepEqual(Object.keys(V26_CANDIDATES).slice(0,6), ["C0","C1","C2","C3","C4","C5"]);
   assert.ok(V26_CANDIDATES.C12);
   assert.ok(V26_CANDIDATES.C15);
   assert.ok(V26_CANDIDATES.C18);
   assert.ok(V26_CANDIDATES.C21);
   assert.ok(V26_CANDIDATES.C24);
+  assert.ok(V26_CANDIDATES.C27);
   assert.equal(V26_CANDIDATES.C0.structuralStop, false);
   assert.equal(V26_CANDIDATES.C4.earlyFailureExit, true);
   assert.equal(V26_CANDIDATES.C4.marketParticipation, true);
   assert.equal(V26_CANDIDATES.C5.maxDayReturn, 0.05);
+});
+
+test("C25-C27 delay entry until completed retest, reclaim, or acceptance evidence",()=>{
+  const triggerAt=1_800_001_800_000;
+  const mk=(i,{o,h,l,c,tb,q=1000})=>({openTime:triggerAt+i*60_000,open:o,high:h,low:l,close:c,
+    closeTime:triggerAt+(i+1)*60_000-1,quoteVolume:q,takerBuyQuote:tb});
+  const retest=[
+    mk(0,{o:100.7,h:100.8,l:100.35,c:100.55,tb:500}),
+    mk(1,{o:100.55,h:101.2,l:100.5,c:101.1,tb:600}),
+  ];
+  assert.equal(breakoutRetestHold2mDecision({triggerAt,now:triggerAt+120_000,bars:retest,
+    signalReference:100.2,setupLow:100.1,triggerClose:100.6,triggerHigh:101}).action,"ENTER");
+  const reclaim=[
+    mk(0,{o:100.7,h:100.8,l:100.3,c:100.5,tb:480}),
+    mk(1,{o:100.5,h:100.65,l:100.25,c:100.45,tb:500}),
+    mk(2,{o:100.45,h:101,l:100.4,c:100.9,tb:620}),
+  ];
+  assert.equal(controlledPullbackReclaim3mDecision({triggerAt,now:triggerAt+180_000,bars:reclaim,
+    signalReference:100.2,setupLow:100.1,triggerClose:100.6}).action,"ENTER");
+  const accepted=[
+    mk(0,{o:100.8,h:101.3,l:100.4,c:101.15,tb:540}),
+    mk(1,{o:101.15,h:101.4,l:100.6,c:101.2,tb:520}),
+    mk(2,{o:101.2,h:101.5,l:100.8,c:101.3,tb:560}),
+  ];
+  assert.equal(breakoutAcceptance3mDecision({triggerAt,now:triggerAt+180_000,bars:accepted,
+    signalReference:100.2,triggerHigh:101}).action,"ENTER");
+  assert.equal(breakoutAcceptance3mDecision({triggerAt,now:triggerAt+120_000,bars:accepted,
+    signalReference:100.2,triggerHigh:101}).action,"UNKNOWN");
 });
 
 test("C22-C24 use contemporaneous efficiency, selective breadth and distributed trend",()=>{

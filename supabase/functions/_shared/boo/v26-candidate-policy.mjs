@@ -6,7 +6,7 @@
  * is live merely because this file exists; activation requires a matching,
  * unrevoked approval identity and ENFORCE mode.
  */
-export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-10";
+export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-11";
 
 const BASE = Object.freeze({
   minDayReturn: 0.03,
@@ -31,6 +31,9 @@ const BASE = Object.freeze({
   liquidityAdjustedEfficiency: false,
   selectiveLeaderRegime: false,
   distributedTrend: false,
+  breakoutRetestHold2m: false,
+  controlledPullbackReclaim3m: false,
+  breakoutAcceptance3m: false,
   minRankOverride: null,
   maxRankOverride: null,
 });
@@ -94,6 +97,15 @@ export const V26_CANDIDATES = Object.freeze({
   }),
   C24: Object.freeze({
     ...BASE, id: "C24", structuralStop: true, distributedTrend: true,
+  }),
+  C25: Object.freeze({
+    ...BASE, id: "C25", structuralStop: true, breakoutRetestHold2m: true,
+  }),
+  C26: Object.freeze({
+    ...BASE, id: "C26", structuralStop: true, controlledPullbackReclaim3m: true,
+  }),
+  C27: Object.freeze({
+    ...BASE, id: "C27", structuralStop: true, breakoutAcceptance3m: true,
   }),
 });
 
@@ -801,4 +813,68 @@ export function distributedTrendDecision({triggerAt,now,bars,signalReference,lea
   });
   const allowed=Object.values(conditions).every(Boolean);
   return {action:allowed?"ENTER":"REJECT",reason:allowed?"C24_DISTRIBUTED_PASS":"C24_DISTRIBUTED_FAIL",conditions,returns,weightedBuy};
+}
+
+/** C25: wait for a completed retest, then require buyer-led recovery above the breakout. */
+export function breakoutRetestHold2mDecision({triggerAt,now,bars,signalReference,setupLow,triggerClose,triggerHigh}) {
+  if(!Number.isSafeInteger(triggerAt)||!Number.isSafeInteger(now)||!Array.isArray(bars)||bars.length!==2||
+      ![signalReference,setupLow,triggerClose,triggerHigh].every(finite)||
+      !(signalReference>0&&setupLow>0&&triggerClose>0&&triggerHigh>0)||now<triggerAt+2*minute)
+    return {action:"UNKNOWN",reason:"C25_RETEST_INPUT_MISSING"};
+  const xs=bars.map((b,i)=>researchBar(b,triggerAt+i*minute,now));
+  if(xs.some(x=>x===null))return {action:"UNKNOWN",reason:"C25_RETEST_BAR_INVALID"};
+  const conditions=Object.freeze({
+    firstBarRetestsBreakout:xs[0].low<=triggerClose,
+    retestPreservesSetup:xs[0].low>=setupLow,
+    retestClosesAboveReference:xs[0].close>=signalReference,
+    recoveryFormsHigherLow:xs[1].low>=xs[0].low,
+    recoveryBreaksTriggerHigh:xs[1].close>triggerHigh,
+    buyerShareRises:xs[1].ratio>xs[0].ratio,
+    recoveryBuyerDominant:xs[1].ratio>=0.55,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C25_RETEST_PASS":"C25_RETEST_FAIL",conditions,bars:xs};
+}
+
+/** C26: a controlled two-bar pullback must reclaim on a stronger third completed bar. */
+export function controlledPullbackReclaim3mDecision({triggerAt,now,bars,signalReference,setupLow,triggerClose}) {
+  if(!Number.isSafeInteger(triggerAt)||!Number.isSafeInteger(now)||!Array.isArray(bars)||bars.length!==3||
+      ![signalReference,setupLow,triggerClose].every(finite)||!(signalReference>0&&setupLow>0&&triggerClose>0)||
+      now<triggerAt+3*minute)return {action:"UNKNOWN",reason:"C26_RECLAIM_INPUT_MISSING"};
+  const xs=bars.map((b,i)=>researchBar(b,triggerAt+i*minute,now));
+  if(xs.some(x=>x===null))return {action:"UNKNOWN",reason:"C26_RECLAIM_BAR_INVALID"};
+  const early=xs.slice(0,2),earlyQuote=early.reduce((s,x)=>s+x.quote,0);
+  const earlyBuy=early.reduce((s,x)=>s+x.ratio*x.quote,0)/earlyQuote;
+  const conditions=Object.freeze({
+    setupNeverInvalidated:xs.every(x=>x.low>=setupLow),
+    controlledPullbackOccurs:early.some(x=>x.close<triggerClose&&x.close>=signalReference),
+    finalReclaimsTrigger:xs[2].close>triggerClose,
+    finalLeadsAllCloses:xs[2].close>Math.max(xs[0].close,xs[1].close),
+    buyerFlowReclaims:xs[2].ratio>earlyBuy,
+    finalBuyerDominant:xs[2].ratio>=0.58,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C26_RECLAIM_PASS":"C26_RECLAIM_FAIL",conditions,earlyBuy,bars:xs};
+}
+
+/** C27: require three completed minutes of price acceptance above the breakout. */
+export function breakoutAcceptance3mDecision({triggerAt,now,bars,signalReference,triggerHigh}) {
+  if(!Number.isSafeInteger(triggerAt)||!Number.isSafeInteger(now)||!Array.isArray(bars)||bars.length!==3||
+      ![signalReference,triggerHigh].every(finite)||!(signalReference>0&&triggerHigh>0)||now<triggerAt+3*minute)
+    return {action:"UNKNOWN",reason:"C27_ACCEPTANCE_INPUT_MISSING"};
+  const xs=bars.map((b,i)=>researchBar(b,triggerAt+i*minute,now));
+  if(xs.some(x=>x===null))return {action:"UNKNOWN",reason:"C27_ACCEPTANCE_BAR_INVALID"};
+  const quote=xs.reduce((s,x)=>s+x.quote,0);
+  const weightedBuy=xs.reduce((s,x)=>s+x.ratio*x.quote,0)/quote;
+  const finalRange=xs[2].high-xs[2].low;
+  const finalLocation=finalRange>0?(xs[2].close-xs[2].low)/finalRange:0;
+  const conditions=Object.freeze({
+    referenceAccepted:xs.every(x=>x.low>=signalReference),
+    repeatedClosesAboveBreakout:xs.filter(x=>x.close>triggerHigh).length>=2,
+    finalCloseSustains:xs[2].close>=xs[0].close,
+    finalCloseUpperHalf:finalLocation>=0.50,
+    aggregateBuyerSupport:weightedBuy>=0.52,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C27_ACCEPTANCE_PASS":"C27_ACCEPTANCE_FAIL",conditions,weightedBuy,finalLocation,bars:xs};
 }

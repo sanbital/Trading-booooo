@@ -13,6 +13,7 @@ import {
   pullbackAbsorptionDecision, relativeStrengthResidualDecision, sweepReclaimDecision,
   freshLeaderRotationDecision, accountFeasibleLadderDecision, twoPulseResetDecision,
   liquidityAdjustedEfficiencyDecision, selectiveLeaderRegimeDecision, distributedTrendDecision,
+  breakoutRetestHold2mDecision, controlledPullbackReclaim3mDecision, breakoutAcceptance3mDecision,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { resolveRiskPolicy, evaluateLossLimits } from "../../supabase/functions/_shared/boo/risk-policy.mjs";
 import { solveQuantity } from "../../supabase/functions/_shared/boo/risk-budget.mjs";
@@ -529,6 +530,20 @@ for(const id of candidateIds){
       const bars=rows.filter(r=>Number(r[0])>=triggerAt-6*MIN&&Number(r[0])<triggerAt),ctx=s.leaderContext||{};
       const decision=distributedTrendDecision({triggerAt,now:triggerAt,bars,signalReference:s.ref,leaderBreadth30m:Number(ctx.leaderBreadth30m)});
       if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
+    }
+    if(V26_CANDIDATES[id].breakoutRetestHold2m||V26_CANDIDATES[id].controlledPullbackReclaim3m||V26_CANDIDATES[id].breakoutAcceptance3m){
+      const triggerBar=rows.find(r=>Number(r[0])===triggerAt-MIN);
+      const triggerClose=triggerBar?Number(triggerBar[4]):Number.NaN;
+      const triggerHigh=triggerBar?Number(triggerBar[2]):Number.NaN;
+      const waitBars=V26_CANDIDATES[id].breakoutRetestHold2m?2:3;
+      const bars=rows.filter(r=>Number(r[0])>=triggerAt&&Number(r[0])<triggerAt+waitBars*MIN);
+      const common={triggerAt,now:triggerAt+waitBars*MIN,bars,signalReference:s.ref,setupLow:Number(tr.state.pullbackLow),triggerClose,triggerHigh};
+      let decision;
+      if(V26_CANDIDATES[id].breakoutRetestHold2m)decision=breakoutRetestHold2mDecision(common);
+      else if(V26_CANDIDATES[id].controlledPullbackReclaim3m)decision=controlledPullbackReclaim3mDecision(common);
+      else decision=breakoutAcceptance3mDecision(common);
+      if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
+      entryAt=triggerAt+waitBars*MIN;
     }
     if(V26_CANDIDATES[id].entryConfirmation1m||V26_CANDIDATES[id].breakoutContinuation1m){
       const confirmationRow=rows.find(r=>Number(r[0])===triggerAt);
