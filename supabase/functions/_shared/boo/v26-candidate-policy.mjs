@@ -6,7 +6,7 @@
  * is live merely because this file exists; activation requires a matching,
  * unrevoked approval identity and ENFORCE mode.
  */
-export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-5";
+export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-6";
 
 const BASE = Object.freeze({
   minDayReturn: 0.03,
@@ -19,6 +19,8 @@ const BASE = Object.freeze({
   breakoutContinuation1m: false,
   triggerQuality1m: false,
   antiExhaustion: false,
+  minRankOverride: null,
+  maxRankOverride: null,
 });
 
 export const V26_CANDIDATES = Object.freeze({
@@ -32,6 +34,10 @@ export const V26_CANDIDATES = Object.freeze({
   C7: Object.freeze({ ...BASE, id: "C7", structuralStop: true, breakoutContinuation1m: true }),
   C8: Object.freeze({ ...BASE, id: "C8", structuralStop: true, triggerQuality1m: true }),
   C9: Object.freeze({ ...BASE, id: "C9", maxDayReturn: 0.05, structuralStop: true, antiExhaustion: true }),
+  C10: Object.freeze({
+    ...BASE, id: "C10", maxDayReturn: 0.05, structuralStop: true,
+    antiExhaustion: true, triggerQuality1m: true, minRankOverride: 6, maxRankOverride: 10,
+  }),
 });
 
 export const STRUCTURAL_STOP = Object.freeze({
