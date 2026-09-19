@@ -135,7 +135,7 @@ export async function fetchFundingHistory({ symbol, startTime, endTime, fetchImp
   while (cursor <= endTime) {
     const q = new URLSearchParams({symbol,startTime:String(cursor),endTime:String(endTime),limit:"1000"});
     const url = `${baseUrl}/fapi/v1/fundingRate?${q}`;
-    const res = await fetchImpl(url,{headers:{"user-agent":"Trading-booooo-v26-validation"}});
+    const res = await fetchImpl(url,{headers:{"user-agent":"Trading-booooo-v26-validation"},signal:AbortSignal.timeout(30_000)});
     if (!res?.ok) throw new Error(`FUNDING_HTTP_${res?.status ?? "UNKNOWN"}:${symbol}`);
     const body = await res.json();
     if (!Array.isArray(body)) throw new Error("FUNDING_RESPONSE_INVALID:" + symbol);
@@ -229,4 +229,24 @@ export function longFundingCost(rows, entryAt, exitAt, qty) {
     }
   }
   return {signedCost:cost,events};
+}
+
+/** Price/flow based exit evidence. No holding-time input is accepted. */
+export function strengthLossDecision({ bars, referencePrice, peakPrice }) {
+  if (!Array.isArray(bars) || bars.length < 3 || !(Number(referencePrice)>0) || !(Number(peakPrice)>0)) {
+    return {close:false,reason:"INSUFFICIENT_STRENGTH_EVIDENCE"};
+  }
+  const recent=bars.slice(-3).map(x=>({
+    high:Number(x.high),close:Number(x.close),quoteVolume:Number(x.quoteVolume),takerBuyQuote:Number(x.takerBuyQuote),
+  }));
+  if (recent.some(x=>![x.high,x.close,x.quoteVolume,x.takerBuyQuote].every(Number.isFinite))) {
+    throw new Error("INVALID_STRENGTH_BAR");
+  }
+  const lowerCloses=recent[0].close>recent[1].close&&recent[1].close>recent[2].close;
+  const lowerHighs=recent[0].high>recent[1].high&&recent[1].high>recent[2].high;
+  const sellDominant=recent.slice(1).every(x=>x.quoteVolume>0&&x.takerBuyQuote/x.quoteVolume<0.45);
+  const structureLost=recent[2].close<Number(referencePrice)||recent[2].close<=Number(peakPrice)*(1-0.006);
+  return lowerCloses&&lowerHighs&&sellDominant&&structureLost
+    ?{close:true,reason:"STRENGTH_LOSS"}
+    :{close:false,reason:"STRENGTH_REMAINS"};
 }
