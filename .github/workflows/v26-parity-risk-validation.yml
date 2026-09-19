@@ -1,0 +1,71 @@
+name: V26 parity and risk validation CI
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/functions/_shared/leader-momentum-v17.mjs'
+      - 'supabase/functions/_shared/leader-slot-sizing.mjs'
+      - 'supabase/functions/_shared/boo/**'
+      - 'supabase/functions/v10-lane-executor/**'
+      - 'research/v25-pullback-reaccel/replay.mjs'
+      - 'research/v26-validated/**'
+      - '.github/workflows/v26-parity-risk-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: V26 pure regression tests
+        run: |
+          set -euo pipefail
+          node --test research/v26-validated/v26-regression.test.mjs
+
+      - name: Type-check actual executor graph
+        run: |
+          set -euo pipefail
+          npm exec --yes --package=deno@2.5.6 -- deno check             supabase/functions/v10-lane-executor/index.ts
+
+      - name: Existing risk and slot regressions
+        run: |
+          set -euo pipefail
+          npm exec --yes --package=deno@2.5.6 -- deno test --allow-read             supabase/functions/_shared/leader-slot-sizing.test.ts             supabase/functions/_shared/boo/*.test.ts
+
+      - name: Prove final order quantity is risk-plan authoritative under ENFORCE
+        run: |
+          set -euo pipefail
+          grep -q 'sized=applyBooRiskQuantity(sized,booFinal)'             supabase/functions/v10-lane-executor/index.ts
+          grep -q 'quantity:sized.amount'             supabase/functions/v10-lane-executor/index.ts
+          grep -q 'booRiskReservation:riskReservation?.amountQuote'             supabase/functions/v10-lane-executor/index.ts
+          grep -q 'entryPriceCap: signal.entryPriceCap'             supabase/functions/v10-lane-executor/boo-entry-adapter.mjs
+
+      - name: Prove experiment was pre-registered and cannot auto-deploy
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs=require('fs');
+          const m=JSON.parse(fs.readFileSync('research/v26-validated/experiment-manifest.json','utf8'));
+          const ids=Object.keys(m.candidates);
+          if(JSON.stringify(ids)!==JSON.stringify(['C0','C1','C2','C3','C4','C5']))
+            throw Error('candidate manifest changed');
+          if(m.independentValidation.status!=='REQUIRED_NOT_YET_ACQUIRED')
+            throw Error('holdout was relabeled without evidence');
+          if(m.promotionContract.minProfitFactor!==1.2 ||
+             !m.promotionContract.stressedNetPnlMustBePositive ||
+             !m.promotionContract.expectancyLowerBoundMustBePositive)
+            throw Error('promotion contract changed');
+          NODE
+          if grep -R --line-number -E 'supabase functions deploy|fly deploy|create_order'              .github/workflows/v26-parity-risk-validation.yml; then
+            echo "validation workflow must not deploy or place orders"
+            exit 1
+          fi
