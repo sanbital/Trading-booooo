@@ -1,7 +1,8 @@
 {
-  "generatedAt": "2026-09-19T08:50:07.413Z",
-  "sourceCommit": "94709ee39c278c0fcd795785aa15ac25f502f0d4",
+  "generatedAt": "2026-09-19T09:10:19.427Z",
+  "sourceCommit": "d7c2ccb093d9bb6282f58541f033d49d00ecd14e",
   "scope": "RESEARCH_ONLY_NO_LIVE_CHANGE",
+  "validatorIntegration": "COMPLETE",
   "pureTests": "PASS",
   "binanceVision": {
     "file": "BTCUSDT-15m-2026-05.zip",
@@ -12,8 +13,9 @@
     "httpStatus": "451",
     "usable": false,
     "failClosedRequired": true,
+    "requiredProvider": "VERIFIED_COVERAGE_CACHE",
     "sample": null
   },
   "promotionEligible": false,
-  "reason": "VALIDATOR_INTEGRATION_AND_FULL_REPLAY_PENDING"
+  "reason": "VALIDATOR_READY_STRATEGY_RESULTS_REQUIRE_SEPARATE_REPLAY"
 }
