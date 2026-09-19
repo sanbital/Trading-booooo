@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-19T07:35:00Z",
+  "sourceHead": "7b6a0c3d9f7b5d835161cbb2ed3273d3fc194c34",
+  "policy": "Any market interval whose outcomes were viewed becomes USED for subsequent adaptive candidate design. Overlapping or exactly reused intervals are not new independent holdouts.",
+  "used": [
+    {
+      "source": "results-holdout-c12-90d",
+      "storedClassification": "FIXED_C12_INDEPENDENT_HISTORICAL_HOLDOUT_90D",
+      "start": "2026-03-22T15:10:00.000Z",
+      "end": "2026-06-20T15:10:00.000Z",
+      "status": "USED_NOT_FULLY_INDEPENDENT",
+      "note": "Overlaps the already-viewed C11 window from 2026-04-21T15:10Z to 2026-06-20T15:10Z."
+    },
+    {
+      "source": "results-holdout-c11-60d",
+      "storedClassification": "INDEPENDENT_HISTORICAL_HOLDOUT_60D_PRECEDING_C10",
+      "start": "2026-04-21T15:10:00.000Z",
+      "end": "2026-06-20T15:10:00.000Z",
+      "status": "USED"
+    },
+    {
+      "source": "results-holdout-c10-30d",
+      "storedClassification": "INDEPENDENT_HISTORICAL_HOLDOUT_30D_PRECEDING_C9_WINDOWS",
+      "start": "2026-06-20T15:10:00.000Z",
+      "end": "2026-07-20T15:10:00.000Z",
+      "status": "USED"
+    },
+    {
+      "source": "results-holdout2-c12-30d",
+      "storedClassification": "SECOND_INDEPENDENT_HISTORICAL_HOLDOUT_30D",
+      "start": "2026-06-20T15:10:00.000Z",
+      "end": "2026-07-20T15:10:00.000Z",
+      "status": "USED_REUSED_WINDOW",
+      "note": "Exact reuse of the already-viewed C10 window; not a second unused independent holdout."
+    },
+    {
+      "source": "results-holdout-c9-30d",
+      "storedClassification": "INDEPENDENT_HISTORICAL_HOLDOUT_30D_PRECEDING_DEVELOPMENT",
+      "start": "2026-07-20T15:10:00.000Z",
+      "end": "2026-08-19T15:10:00.000Z",
+      "status": "USED"
+    },
+    {
+      "source": "results-30d",
+      "storedClassification": "DEVELOPMENT_30D_NOT_INDEPENDENT_HOLDOUT",
+      "start": "2026-08-19T15:10:00.000Z",
+      "end": "2026-09-18T15:10:00.000Z",
+      "status": "USED_DEVELOPMENT"
+    }
+  ],
+  "continuousUsedUnion": {
+    "start": "2026-03-22T15:10:00.000Z",
+    "end": "2026-09-18T15:10:00.000Z"
+  },
+  "reservedUnused": [
+    {
+      "start": "2025-12-22T15:10:00.000Z",
+      "end": "2026-03-22T15:10:00.000Z",
+      "days": 90,
+      "status": "RESERVED_UNUSED_FINAL_HOLDOUT_DO_NOT_QUERY_UNTIL_CANDIDATE_FROZEN",
+      "rule": "Do not inspect candidate outcomes, funding, or price paths from this block before validator repair and preregistration. If inspected for tuning, mark USED immediately."
+    }
+  ]
+}
