@@ -1,0 +1,12 @@
+{
+  "completedAt": "2026-09-19T19:30:17Z",
+  "iteration": "R11",
+  "testedCandidates": ["C35"],
+  "nextCandidateId": "C36",
+  "no_robust_edge_found": true,
+  "developmentPass": [],
+  "walkForwardRun": false,
+  "walkForwardReason": "C35 had negative executable account PnL, inadequate sample and a negative confidence lower bound; its same-timestamp filter did not alter the realized C34 account path.",
+  "unusedHoldoutConsumed": false,
+  "nextHypothesisConstraint": "Do not tune C34/C35 or relax protection. Test a causal completed-15m queue auction across near-time eligible triggers, then enter only the highest score at the next open."
+}
