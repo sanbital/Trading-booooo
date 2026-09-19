@@ -391,3 +391,60 @@ export function antiExhaustionDecision({ volumeRatio, triggerAt, bar }) {
     conditions,
   };
 }
+
+
+/** C9: same C7 breakout test, but the confirmation minute may never lose trigger close. */
+export function holdTriggerClose1mDecision(args) {
+  const base = breakoutContinuation1mDecision(args);
+  if (base.action !== "ENTER") return base;
+  const low = Number(args?.bar?.low ?? args?.bar?.l ?? args?.bar?.[3]);
+  const triggerClose = Number(args?.triggerClose);
+  if (!(Number.isFinite(low) && Number.isFinite(triggerClose) && triggerClose > 0)) {
+    return { action: "UNKNOWN", reason: "C9_TRIGGER_CLOSE_INPUT_MISSING" };
+  }
+  const allowed = low >= triggerClose;
+  return {
+    ...base,
+    action: allowed ? "ENTER" : "REJECT",
+    reason: allowed ? "C9_HOLD_TRIGGER_CLOSE_PASS" : "C9_HOLD_TRIGGER_CLOSE_FAIL",
+    conditions: { ...base.conditions, lowAtOrAboveTriggerClose: allowed },
+  };
+}
+
+/**
+ * C10: require two consecutive completed 1m continuation bars after trigger.
+ * Both must keep their lows above trigger close, close non-decreasing, and each
+ * must have >=55% taker-buy quote share. Entry is at the third minute open.
+ */
+export function persistence2mDecision({
+  triggerAt, signalReference, triggerClose, triggerHigh, now, bars,
+}) {
+  if (![triggerAt, signalReference, triggerClose, triggerHigh, now].every(finite) ||
+      !Number.isSafeInteger(triggerAt) || !Number.isSafeInteger(now) ||
+      !(signalReference > 0 && triggerClose > 0 && triggerHigh > 0) ||
+      now < triggerAt + 2 * minute || !Array.isArray(bars) || bars.length < 2) {
+    return { action: "UNKNOWN", reason: "C10_PERSISTENCE_INPUT_MISSING" };
+  }
+  const norm = bars.slice(0,2).map((bar,i) => {
+    const openTime=Number(bar?.openTime ?? bar?.t ?? bar?.[0]);
+    const low=Number(bar?.low ?? bar?.l ?? bar?.[3]);
+    const close=Number(bar?.close ?? bar?.c ?? bar?.[4]);
+    const closeTime=Number(bar?.closeTime ?? bar?.ct ?? bar?.[6] ?? (openTime+minute-1));
+    const quote=Number(bar?.quoteVolume ?? bar?.qv ?? bar?.[7]);
+    const takerBuyQuote=Number(bar?.takerBuyQuote ?? bar?.tb ?? bar?.[10]);
+    if (![openTime,low,close,closeTime,quote,takerBuyQuote].every(Number.isFinite) ||
+        openTime !== triggerAt + i*minute || closeTime !== openTime+minute-1 ||
+        closeTime >= now || !(low>0&&close>0&&quote>0&&takerBuyQuote>=0&&takerBuyQuote<=quote*(1+1e-9))) return null;
+    return {openTime,low,close,ratio:takerBuyQuote/quote};
+  });
+  if (norm.some(x=>x===null)) return { action:"UNKNOWN", reason:"C10_PERSISTENCE_BAR_INVALID" };
+  const conditions=Object.freeze({
+    firstBreaksTriggerHigh:norm[0].close>triggerHigh,
+    bothHoldTriggerClose:norm.every(x=>x.low>=triggerClose),
+    bothBuyDominant:norm.every(x=>x.ratio>=BREAKOUT_CONTINUATION_1M.minTakerBuyQuoteRatio),
+    secondCloseNonDecreasing:norm[1].close>=norm[0].close,
+    secondCloseAboveReference:norm[1].close>signalReference,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C10_PERSISTENCE_PASS":"C10_PERSISTENCE_FAIL",conditions,bars:norm};
+}
