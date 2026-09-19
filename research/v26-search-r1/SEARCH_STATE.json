@@ -1,0 +1,12 @@
+{
+  "completedAt": "2026-09-19T10:05:00Z",
+  "iteration": "R1",
+  "testedCandidates": ["C13", "C14", "C15"],
+  "nextCandidateId": "C16",
+  "no_robust_edge_found": true,
+  "developmentPass": [],
+  "walkForwardRun": false,
+  "walkForwardReason": "No candidate passed the preregistered 30-day development gates.",
+  "unusedHoldoutConsumed": false,
+  "nextHypothesisConstraint": "Do not micro-tune C13-C15. Explore a distinct entry architecture based on pullback absorption/reclaim or relative-strength residuals."
+}
