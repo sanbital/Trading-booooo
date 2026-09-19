@@ -6,7 +6,7 @@
  * is live merely because this file exists; activation requires a matching,
  * unrevoked approval identity and ENFORCE mode.
  */
-export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-16";
+export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-17";
 
 const BASE = Object.freeze({
   minDayReturn: 0.03,
@@ -41,6 +41,7 @@ const BASE = Object.freeze({
   crossSectionalBuyerFlowAcceleration: false,
   crossSectionalExecutionValue: false,
   crossSectionalCompressionExpansion60m: false,
+  compressionExpansionQueueWinner: false,
   minRankOverride: null,
   maxRankOverride: null,
 });
@@ -134,6 +135,10 @@ export const V26_CANDIDATES = Object.freeze({
   }),
   C34: Object.freeze({
     ...BASE, id: "C34", structuralStop: true, crossSectionalCompressionExpansion60m: true,
+  }),
+  C35: Object.freeze({
+    ...BASE, id: "C35", structuralStop: true, crossSectionalCompressionExpansion60m: true,
+    compressionExpansionQueueWinner: true,
   }),
 });
 
@@ -1090,4 +1095,23 @@ export function crossSectionalCompressionExpansionDecision({expansionPercentile,
   const allowed=expansionPercentile>=0.60;
   return {action:allowed?"ENTER":"REJECT",reason:allowed?"C34_COMPRESSION_EXPANSION_PASS":"C34_COMPRESSION_EXPANSION_FAIL",
     expansionPercentile,observations,threshold:0.60};
+}
+
+/**
+ * C35: choose exactly one already-eligible C34 opportunity for each completed
+ * trigger timestamp. Selection uses only the pre-entry C34 score; lexical id is
+ * a deterministic tie-breaker. The caller remains responsible for applying the
+ * unchanged C34 causal percentile gate before invoking this function.
+ */
+export function selectCompressionExpansionQueueWinners(records) {
+  if(!Array.isArray(records))return [];
+  const valid=records.filter(r=>r&&typeof r.id==="string"&&r.id.length>0&&
+    Number.isSafeInteger(r.at)&&finite(r.score));
+  const byAt=new Map();
+  for(const record of valid){
+    const current=byAt.get(record.at);
+    if(!current||record.score>current.score||(record.score===current.score&&record.id<current.id))
+      byAt.set(record.at,record);
+  }
+  return [...byAt.values()].sort((a,b)=>a.at-b.at||a.id.localeCompare(b.id));
 }

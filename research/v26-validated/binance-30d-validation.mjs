@@ -19,6 +19,7 @@ import {
   buyerFlowAccelerationScore, crossSectionalBuyerFlowDecision,
   executionAdjustedBreakoutScore, crossSectionalExecutionValueDecision,
   compressionExpansion60mScore, crossSectionalCompressionExpansionDecision,
+  selectCompressionExpansionQueueWinners,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { resolveRiskPolicy, evaluateLossLimits } from "../../supabase/functions/_shared/boo/risk-policy.mjs";
 import { solveQuantity } from "../../supabase/functions/_shared/boo/risk-budget.mjs";
@@ -484,6 +485,12 @@ for(const s of mergedSignals(uniqueSignals)){
   if(scored.status==="KNOWN")compressionExpansionRecords.push({id:s.id,at:triggerAt,score:scored.score});
 }
 const compressionExpansionById=new Map(rollingPullbackQualityPercentiles(compressionExpansionRecords).map(x=>[x.id,x]));
+const compressionExpansionQueueWinners=new Set(selectCompressionExpansionQueueWinners(
+  compressionExpansionRecords.filter(record=>{
+    const context=compressionExpansionById.get(record.id);
+    return Number.isSafeInteger(context?.observations)&&context.observations>=20&&context.percentile>=0.60;
+  })
+).map(record=>record.id));
 
 const opportunitiesByVariant=new Map();
 const candidateIds=ONLY_CANDIDATE?ONLY_CANDIDATE.split(",").map(x=>x.trim()).filter(Boolean):Object.keys(V26_CANDIDATES);
@@ -632,6 +639,10 @@ for(const id of candidateIds){
       const context=compressionExpansionById.get(s.id);
       const decision=crossSectionalCompressionExpansionDecision({expansionPercentile:context?.percentile,observations:context?.observations});
       if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
+    }
+    if(V26_CANDIDATES[id].compressionExpansionQueueWinner&&!compressionExpansionQueueWinners.has(s.id)){
+      reasons.C35_QUEUE_NOT_HIGHEST=(reasons.C35_QUEUE_NOT_HIGHEST||0)+1;
+      continue;
     }
     if(V26_CANDIDATES[id].breakoutRetestHold2m||V26_CANDIDATES[id].controlledPullbackReclaim3m||V26_CANDIDATES[id].breakoutAcceptance3m){
       const triggerBar=rows.find(r=>Number(r[0])===triggerAt-MIN);

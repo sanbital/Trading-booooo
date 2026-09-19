@@ -1,0 +1,26 @@
+{
+  "experimentId": "V26-SEARCH-R11-C35",
+  "preregisteredAt": "2026-09-19T19:25:23Z",
+  "branch": "research/v26-strategy-search-r11-20260920",
+  "parentCheckpoint": "fb9520632c5dc59ce058d6ec0f417a0acc8c26e8",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "developmentWindow": {"start":"2026-08-19T15:10:00.000Z","end":"2026-09-18T15:10:00.000Z","classification":"DEVELOPMENT_USED"},
+  "reservedHoldout": {"start":"2025-12-22T15:10:00.000Z","end":"2026-03-22T15:10:00.000Z","status":"LOCKED_UNSEEN_DO_NOT_OPEN_UNLESS_DEVELOPMENT_AND_WALK_FORWARD_PASS"},
+  "account": {"startingCapitalUsdt":30,"leverage":3,"maxConcurrentPositions":1,"quantitySource":"solveQuantity.plan.quantity","riskPolicy":"existing BOO risk-policy/risk-budget plus operator-tightened limits"},
+  "sharedExit": "STRENGTH_LOSS_V1",
+  "candidates": [{
+    "id": "C35",
+    "name": "DETERMINISTIC_COMPRESSION_EXPANSION_QUEUE_WINNER",
+    "hypothesis": "C34's positive opportunity-level expectancy is lost when the account consumes its single slot on a weaker simultaneous signal; selecting only the highest pre-entry compression-expansion score in each same-time queue cohort should preserve the causal opportunity edge without loosening any entry, risk, or account gate.",
+    "score": "unchanged C34 score: positive return of final completed 5m block / median normalized high-low range of the preceding eleven completed 5m blocks",
+    "rules": [
+      "apply the unchanged causal C34 trailing-seven-day percentile >= 0.60 gate with at least 20 observations",
+      "within each identical completed trigger timestamp, retain exactly one eligible signal with the highest C34 score",
+      "break equal-score ties by lexical signal id for deterministic scanner/replay parity",
+      "use no outcome, future candle, final excursion, or symbol-specific tuning in queue selection",
+      "preserve next-open execution, structural stop, solveQuantity quantity and all account protections"
+    ]
+  }],
+  "promotionGates": {"minTrades":30,"minActiveDays":10,"netPnlPositive":true,"monthlyReturnPositive":true,"minProfitFactor":1.2,"stressNetAndPfPositive":true,"top1RemovedNetPositive":true,"dayBlockMultipleTestingAdjustedExpectancyLowerBoundPositive":true,"walkForwardPositive":true,"unusedHoldoutPositive":true},
+  "holdoutPolicy": "Do not open walk-forward or reserved holdout unless C35 passes every development gate."
+}
