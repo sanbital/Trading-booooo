@@ -16,6 +16,9 @@ import {
   freshLeaderRotationDecision,
   accountFeasibleLadderDecision,
   twoPulseResetDecision,
+  liquidityAdjustedEfficiencyDecision,
+  selectiveLeaderRegimeDecision,
+  distributedTrendDecision,
   V26_CANDIDATES,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { runExit, summarise } from "../v25-pullback-reaccel/replay.mjs";
@@ -44,16 +47,38 @@ test("selection gate fails closed on null/NaN and respects exact boundaries", ()
   assert.equal(POLICY.maxDayReturn, 0.08);
 });
 
-test("registered C0-C21 definitions preserve the frozen C0-C5 prefix", () => {
+test("registered C0-C24 definitions preserve the frozen C0-C5 prefix", () => {
   assert.deepEqual(Object.keys(V26_CANDIDATES).slice(0,6), ["C0","C1","C2","C3","C4","C5"]);
   assert.ok(V26_CANDIDATES.C12);
   assert.ok(V26_CANDIDATES.C15);
   assert.ok(V26_CANDIDATES.C18);
   assert.ok(V26_CANDIDATES.C21);
+  assert.ok(V26_CANDIDATES.C24);
   assert.equal(V26_CANDIDATES.C0.structuralStop, false);
   assert.equal(V26_CANDIDATES.C4.earlyFailureExit, true);
   assert.equal(V26_CANDIDATES.C4.marketParticipation, true);
   assert.equal(V26_CANDIDATES.C5.maxDayReturn, 0.05);
+});
+
+test("C22-C24 use contemporaneous efficiency, selective breadth and distributed trend",()=>{
+  const triggerAt=1_800_001_200_000;
+  const trigger={openTime:triggerAt-60_000,open:100.4,high:100.8,low:100.3,close:100.7,closeTime:triggerAt-1,quoteVolume:1000,takerBuyQuote:600};
+  assert.equal(liquidityAdjustedEfficiencyDecision({
+    return30m:.02,return60m:.03,return30mPercentile:.8,volumeRatioPercentile:.7,
+    efficiencyPercentile:.6,triggerAt,now:triggerAt,bar:trigger,
+  }).action,"ENTER");
+  assert.equal(selectiveLeaderRegimeDecision({
+    return30m:.02,return60m:.03,return30mPercentile:.9,efficiencyPercentile:.8,
+    leaderBreadth30m:.4,triggerAt,now:triggerAt,bar:trigger,
+  }).action,"ENTER");
+  const bars=[0,1,2,3,4,5].map((i)=>{
+    const open=100+i*.1,close=open+.08;
+    return {openTime:triggerAt-(6-i)*60_000,open,high:close+.06,low:open-.06,close,
+      closeTime:triggerAt-(6-i)*60_000+59_999,quoteVolume:1000,takerBuyQuote:550};
+  });
+  assert.equal(distributedTrendDecision({
+    triggerAt,now:triggerAt,bars,signalReference:100.2,leaderBreadth30m:.7,
+  }).action,"ENTER");
 });
 
 test("C19-C21 add rotation, executable geometry and two-pulse structures",()=>{

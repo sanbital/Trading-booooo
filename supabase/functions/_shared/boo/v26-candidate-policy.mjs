@@ -6,7 +6,7 @@
  * is live merely because this file exists; activation requires a matching,
  * unrevoked approval identity and ENFORCE mode.
  */
-export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-9";
+export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-10";
 
 const BASE = Object.freeze({
   minDayReturn: 0.03,
@@ -28,6 +28,9 @@ const BASE = Object.freeze({
   freshLeaderRotation: false,
   accountFeasibleLadder: false,
   twoPulseReset: false,
+  liquidityAdjustedEfficiency: false,
+  selectiveLeaderRegime: false,
+  distributedTrend: false,
   minRankOverride: null,
   maxRankOverride: null,
 });
@@ -82,6 +85,15 @@ export const V26_CANDIDATES = Object.freeze({
   }),
   C21: Object.freeze({
     ...BASE, id: "C21", structuralStop: true, twoPulseReset: true,
+  }),
+  C22: Object.freeze({
+    ...BASE, id: "C22", structuralStop: true, liquidityAdjustedEfficiency: true,
+  }),
+  C23: Object.freeze({
+    ...BASE, id: "C23", structuralStop: true, selectiveLeaderRegime: true,
+  }),
+  C24: Object.freeze({
+    ...BASE, id: "C24", structuralStop: true, distributedTrend: true,
   }),
 });
 
@@ -720,4 +732,73 @@ export function twoPulseResetDecision({triggerAt,now,bars,signalReference}) {
   });
   const allowed=Object.values(conditions).every(Boolean);
   return {action:allowed?"ENTER":"REJECT",reason:allowed?"C21_TWO_PULSE_PASS":"C21_TWO_PULSE_FAIL",conditions,firstAdvance,resetRangeRatio:firstRange>0?resetRange/firstRange:null,resetBuy,secondBuy};
+}
+
+/** C22: current strength must be efficient relative to the contemporaneous leader set. */
+export function liquidityAdjustedEfficiencyDecision({
+  return30m,return60m,return30mPercentile,volumeRatioPercentile,efficiencyPercentile,
+  triggerAt,now,bar,
+}) {
+  if(![return30m,return60m,return30mPercentile,volumeRatioPercentile,efficiencyPercentile].every(finite)||
+      !Number.isSafeInteger(triggerAt)||!Number.isSafeInteger(now))
+    return {action:"UNKNOWN",reason:"C22_EFFICIENCY_INPUT_MISSING"};
+  const trigger=researchBar(bar,triggerAt-minute,now);
+  if(!trigger)return {action:"UNKNOWN",reason:"C22_EFFICIENCY_BAR_INVALID"};
+  const range=trigger.high-trigger.low;
+  const closeLocation=range>0?(trigger.close-trigger.low)/range:0;
+  const conditions=Object.freeze({
+    positiveThirtyAndSixty:return30m>0&&return60m>0,
+    upperLeaderReturn:return30mPercentile>=0.65,
+    upperLeaderParticipation:volumeRatioPercentile>=0.65,
+    nonWastefulVolume:efficiencyPercentile>=0.50,
+    buyerConfirmed:trigger.ratio>=0.55,
+    closeInUpperRange:closeLocation>=0.60,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C22_EFFICIENCY_PASS":"C22_EFFICIENCY_FAIL",conditions,closeLocation,triggerBuyRatio:trigger.ratio};
+}
+
+/** C23: enter only an exceptional efficient leader while the contemporaneous leader set is narrow. */
+export function selectiveLeaderRegimeDecision({
+  return30m,return60m,return30mPercentile,efficiencyPercentile,leaderBreadth30m,
+  triggerAt,now,bar,
+}) {
+  if(![return30m,return60m,return30mPercentile,efficiencyPercentile,leaderBreadth30m].every(finite)||
+      !Number.isSafeInteger(triggerAt)||!Number.isSafeInteger(now))
+    return {action:"UNKNOWN",reason:"C23_SELECTIVE_INPUT_MISSING"};
+  const trigger=researchBar(bar,triggerAt-minute,now);
+  if(!trigger)return {action:"UNKNOWN",reason:"C23_SELECTIVE_BAR_INVALID"};
+  const conditions=Object.freeze({
+    narrowLeaderRegime:leaderBreadth30m<=0.50,
+    exceptionalRecentLeader:return30mPercentile>=0.80,
+    efficientLeader:efficiencyPercentile>=0.65,
+    positiveThirtyAndSixty:return30m>0&&return60m>0,
+    buyerConfirmed:trigger.ratio>=0.55,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C23_SELECTIVE_PASS":"C23_SELECTIVE_FAIL",conditions,triggerBuyRatio:trigger.ratio};
+}
+
+/** C24: broad leader participation plus a distributed, non-single-candle ascent. */
+export function distributedTrendDecision({triggerAt,now,bars,signalReference,leaderBreadth30m}) {
+  if(!Number.isSafeInteger(triggerAt)||!Number.isSafeInteger(now)||!Array.isArray(bars)||bars.length<6||
+      !(finite(signalReference)&&signalReference>0&&finite(leaderBreadth30m)))
+    return {action:"UNKNOWN",reason:"C24_DISTRIBUTED_INPUT_MISSING"};
+  const xs=bars.slice(-6).map((b,i)=>researchBar(b,triggerAt-(6-i)*minute,now));
+  if(xs.some(x=>x===null))return {action:"UNKNOWN",reason:"C24_DISTRIBUTED_BAR_INVALID"};
+  const returns=xs.slice(1).map((x,i)=>x.close/xs[i].close-1);
+  const positive=returns.filter(x=>x>0),sumPositive=positive.reduce((s,x)=>s+x,0);
+  const ranges=xs.map(x=>x.high-x.low),sumRanges=ranges.reduce((s,x)=>s+x,0);
+  const weightedBuy=xs.reduce((s,x)=>s+x.ratio*x.quote,0)/xs.reduce((s,x)=>s+x.quote,0);
+  const conditions=Object.freeze({
+    broadLeaderRegime:leaderBreadth30m>=0.60,
+    distributedPositiveCloses:positive.length>=4,
+    positiveWindow:xs.at(-1).close>xs[0].open,
+    noSingleReturnDominates:sumPositive>0&&Math.max(...positive)/sumPositive<=0.55,
+    noSingleRangeDominates:sumRanges>0&&Math.max(...ranges)/sumRanges<=0.40,
+    referenceHeld:Math.min(...xs.slice(-3).map(x=>x.close))>=signalReference,
+    aggregateBuyerSupport:weightedBuy>=0.52,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C24_DISTRIBUTED_PASS":"C24_DISTRIBUTED_FAIL",conditions,returns,weightedBuy};
 }

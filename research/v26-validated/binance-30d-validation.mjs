@@ -12,6 +12,7 @@ import {
   accelerationReignitionDecision, compressionExpansionDecision, rankPersistenceDecision,
   pullbackAbsorptionDecision, relativeStrengthResidualDecision, sweepReclaimDecision,
   freshLeaderRotationDecision, accountFeasibleLadderDecision, twoPulseResetDecision,
+  liquidityAdjustedEfficiencyDecision, selectiveLeaderRegimeDecision, distributedTrendDecision,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { resolveRiskPolicy, evaluateLossLimits } from "../../supabase/functions/_shared/boo/risk-policy.mjs";
 import { solveQuantity } from "../../supabase/functions/_shared/boo/risk-budget.mjs";
@@ -362,6 +363,23 @@ if(!RECOMPUTE_ELIGIBLE){
 }
 console.log("ELIGIBLE15",eligibleWindows.length,"SOURCE",eligibleSource);
 const historicalRanks=new Map(eligibleWindows.map(x=>[x.f.symbol+"|"+x.cut,x.f.rank]));
+const leaderGroups=new Map();
+for(const x of eligibleWindows){if(!leaderGroups.has(x.cut))leaderGroups.set(x.cut,[]);leaderGroups.get(x.cut).push(x);}
+const leaderContextAtCut=new Map();
+const percentile=(values,value)=>values.length?values.filter(x=>x<=value).length/values.length:Number.NaN;
+for(const [cut,group] of leaderGroups){
+  const r30=group.map(x=>Number(x.f.return30m)).filter(Number.isFinite);
+  const volumes=group.map(x=>Number(x.f.volumeRatio)).filter(Number.isFinite);
+  const efficiencies=group.map(x=>Number(x.f.return30m)/Math.max(Number(x.f.volumeRatio),1e-12)).filter(Number.isFinite);
+  const breadth=r30.length?r30.filter(x=>x>0).length/r30.length:Number.NaN;
+  for(const x of group){
+    const rr=Number(x.f.return30m),vr=Number(x.f.volumeRatio),eff=rr/Math.max(vr,1e-12);
+    leaderContextAtCut.set(x.f.symbol+"|"+cut,{
+      return30mPercentile:percentile(r30,rr),volumeRatioPercentile:percentile(volumes,vr),
+      efficiencyPercentile:percentile(efficiencies,eff),leaderBreadth30m:breadth,
+    });
+  }
+}
 const btc15Index=indexRows(export15.get("BTCUSDT")||[]),btcFeaturesAtCut=new Map();
 for(const cut of new Set(eligibleWindows.map(x=>x.cut))){
   try{btcFeaturesAtCut.set(cut,feature15("BTCUSDT",exactBars(btc15Index,M15,cut,110),cut));}catch{}
@@ -375,7 +393,7 @@ for(const x of eligibleWindows){
 await mapLimit([...need5.values()],16,x=>visionDay(x.symbol,"5m",x.date));
 console.log("PREFETCH5_DONE",need5.size);
 const rawSignals=[];let ew=0;
-for(const x of eligibleWindows){const rows=await pagedKlines(x.f.symbol,"5m",x.cut-14*M5,x.cut+10*M5-1,100).catch(()=>[]),idx=indexRows(rows);for(const t of [x.cut,x.cut+M5,x.cut+2*M5]){if(t<START||t>=END)continue;try{const b=exactBars(idx,M5,t,14),last=b.at(-1),prev=b.at(-2),r5=last.c/prev.c-1,r15=last.c/b.at(-4).c-1,btc=btcFeaturesAtCut.get(x.cut);if(r5>=POLICY.min5mReturn&&r15>0&&last.c>=last.o)rawSignals.push({id:`${x.f.symbol}:${t}`,symbol:x.f.symbol,s5c:t,ref:last.c,rank:x.f.rank,c5Allowed:x.c5,marketAllowed:x.marketAllowed,priorRanks:[historicalRanks.get(x.f.symbol+"|"+(x.cut-M15))??null,historicalRanks.get(x.f.symbol+"|"+(x.cut-2*M15))??null],btcReturn30m:Number(btc?.return30m),btcReturn60m:Number(btc?.return60m),features:{...x.f,referenceClose:last.c,signal5Close:t,return5m:r5,confirmationReturn15m:r15}});}catch{}}if(++ew%100===0)console.log("5M_WINDOWS",ew,"/",eligibleWindows.length);}
+for(const x of eligibleWindows){const rows=await pagedKlines(x.f.symbol,"5m",x.cut-14*M5,x.cut+10*M5-1,100).catch(()=>[]),idx=indexRows(rows);for(const t of [x.cut,x.cut+M5,x.cut+2*M5]){if(t<START||t>=END)continue;try{const b=exactBars(idx,M5,t,14),last=b.at(-1),prev=b.at(-2),r5=last.c/prev.c-1,r15=last.c/b.at(-4).c-1,btc=btcFeaturesAtCut.get(x.cut),leaderContext=leaderContextAtCut.get(x.f.symbol+"|"+x.cut);if(r5>=POLICY.min5mReturn&&r15>0&&last.c>=last.o)rawSignals.push({id:`${x.f.symbol}:${t}`,symbol:x.f.symbol,s5c:t,ref:last.c,rank:x.f.rank,c5Allowed:x.c5,marketAllowed:x.marketAllowed,priorRanks:[historicalRanks.get(x.f.symbol+"|"+(x.cut-M15))??null,historicalRanks.get(x.f.symbol+"|"+(x.cut-2*M15))??null],btcReturn30m:Number(btc?.return30m),btcReturn60m:Number(btc?.return60m),leaderContext,features:{...x.f,referenceClose:last.c,signal5Close:t,return5m:r5,confirmationReturn15m:r15}});}catch{}}if(++ew%100===0)console.log("5M_WINDOWS",ew,"/",eligibleWindows.length);}
 const uniqueSignals=[...new Map(rawSignals.map(s=>[s.id,s])).values()].sort((a,b)=>a.s5c-b.s5c||a.symbol.localeCompare(b.symbol));console.log("RAW_SIGNALS",uniqueSignals.length);
 const pathHorizon=EXIT_POLICY==="LEGACY_C0_C12_REPRODUCTION"?POLICY.maxHoldMs:STRENGTH_OBSERVATION_MS;
 const need1=new Map();
@@ -487,6 +505,29 @@ for(const id of candidateIds){
     if(V26_CANDIDATES[id].twoPulseReset){
       const bars=rows.filter(r=>Number(r[0])>=triggerAt-8*MIN&&Number(r[0])<triggerAt);
       const decision=twoPulseResetDecision({triggerAt,now:triggerAt,bars,signalReference:s.ref});
+      if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
+    }
+    if(V26_CANDIDATES[id].liquidityAdjustedEfficiency){
+      const triggerBar=rows.find(r=>Number(r[0])===triggerAt-MIN),ctx=s.leaderContext||{};
+      const decision=liquidityAdjustedEfficiencyDecision({
+        return30m:Number(s.features?.return30m),return60m:Number(s.features?.return60m),
+        return30mPercentile:Number(ctx.return30mPercentile),volumeRatioPercentile:Number(ctx.volumeRatioPercentile),
+        efficiencyPercentile:Number(ctx.efficiencyPercentile),triggerAt,now:triggerAt,bar:triggerBar,
+      });
+      if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
+    }
+    if(V26_CANDIDATES[id].selectiveLeaderRegime){
+      const triggerBar=rows.find(r=>Number(r[0])===triggerAt-MIN),ctx=s.leaderContext||{};
+      const decision=selectiveLeaderRegimeDecision({
+        return30m:Number(s.features?.return30m),return60m:Number(s.features?.return60m),
+        return30mPercentile:Number(ctx.return30mPercentile),efficiencyPercentile:Number(ctx.efficiencyPercentile),
+        leaderBreadth30m:Number(ctx.leaderBreadth30m),triggerAt,now:triggerAt,bar:triggerBar,
+      });
+      if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
+    }
+    if(V26_CANDIDATES[id].distributedTrend){
+      const bars=rows.filter(r=>Number(r[0])>=triggerAt-6*MIN&&Number(r[0])<triggerAt),ctx=s.leaderContext||{};
+      const decision=distributedTrendDecision({triggerAt,now:triggerAt,bars,signalReference:s.ref,leaderBreadth30m:Number(ctx.leaderBreadth30m)});
       if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
     }
     if(V26_CANDIDATES[id].entryConfirmation1m||V26_CANDIDATES[id].breakoutContinuation1m){

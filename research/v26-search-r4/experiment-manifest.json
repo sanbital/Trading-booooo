@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "iteration": "R4",
+  "preregisteredAt": "2026-09-19T13:15:41Z",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "parentCheckpoint": "72bee5c73c40afb533cd5a9a082647c96115e739",
+  "branch": "research/v26-strategy-search-r4-20260919",
+  "account": {"startingEquity": 30, "leverage": 3, "maxConcurrentPositions": 1, "riskPerTradePct": 0.25},
+  "exitPolicy": "STRENGTH_LOSS_V1",
+  "developmentWindow": {"start": "2026-08-19T15:10:00.000Z", "end": "2026-09-18T15:10:00.000Z", "classification": "USED_DEVELOPMENT"},
+  "reservedUnusedFinalHoldout": {"start": "2025-12-22T15:10:00.000Z", "end": "2026-03-22T15:10:00.000Z", "consumeOnlyAfterDevelopmentAndWalkForwardPass": true},
+  "contextDefinition": "All empirical percentiles and breadth values use only the contemporaneous completed eligible leader set at that cutoff; no future cross-section is used.",
+  "candidates": [
+    {
+      "id": "C22",
+      "structure": "LIQUIDITY_ADJUSTED_LEADER_EFFICIENCY",
+      "rules": "Positive 30m and 60m returns; contemporaneous leader-set percentiles at least 65% for 30m return and volume acceleration and at least 50% for 30m-return/volume-ratio efficiency; completed trigger buyer share at least 55% and close in the upper 40% of its range."
+    },
+    {
+      "id": "C23",
+      "structure": "SELECTIVE_NARROW_LEADER_REGIME",
+      "rules": "At most half of the contemporaneous leader set has positive 30m return, while the candidate is at or above the 80th percentile for 30m return and 65th percentile for return/volume efficiency, has positive 30m and 60m returns, and completed trigger buyer share at least 55%."
+    },
+    {
+      "id": "C24",
+      "structure": "BROAD_DISTRIBUTED_TREND",
+      "rules": "At least 60% of the contemporaneous leader set has positive 30m return; six completed minutes contain at least four positive close-to-close steps, finish above the first open, hold the reference on the final three closes, have quote-weighted buyer share at least 52%, and no one positive return or candle range dominates the window."
+    }
+  ],
+  "promotionGates": {"minTrades": 30, "minActiveDays": 10, "netPositive": true, "returnPositive": true, "minProfitFactor": 1.2, "stress2xNetPositive": true, "stress2xProfitFactorAboveOne": true, "removeTop1NetPositive": true, "expectancyLowerBoundPositive": true, "independentValidationRequired": true},
+  "forbidden": ["threshold tuning after outcome", "time-only exit", "missing funding as zero", "risk or leverage increase", "holdout inspection for development failures"]
+}
