@@ -246,6 +246,30 @@ function solveRiskQuantity({equity,trade,filters,realizedToday,realizedWeek,high
   }
   return result;
 }
+function runIndependentDiagnostic(variant,ops,fundingMap,slip){
+  const trades=[],rejections={};
+  const reject=r=>rejections[r]=(rejections[r]||0)+1;
+  for(const base of ops){
+    const sized=solveRiskQuantity({equity:30,trade:base,filters:base.filters,
+      realizedToday:0,realizedWeek:0,highWater:30,lossStreak:0,slip});
+    if(sized.decision!=="ENTER"){reject(sized.reason||"RISK_SKIP");continue;}
+    const qty=Number(sized.plan.quantity.toString()),t=applySlippage(base,slip);
+    if(!(qty>0&&Number.isFinite(t.exitExec))){reject("UNSETTLED_OR_INVALID");continue;}
+    const fund=fundingPnl(fundingMap.get(t.symbol)||[],t.entryAt,t.exitAt,qty);
+    const entryFee=t.entryExec*qty*FEES.taker,exitFee=t.exitExec*qty*FEES.taker;
+    const gross=(t.exitExec-t.entryExec)*qty,net=gross-entryFee-exitFee-fund.signedCost;
+    trades.push({id:t.id,symbol:t.symbol,entryAt:t.entryAt,exitAt:t.exitAt,net,gross,
+      entryFee,exitFee,funding:fund.signedCost,reason:t.reason,qty,initialStop:t.initialStop,
+      mfe:t.mfe,mae:t.mae,...(t.diagnosticFeatures||{})});
+  }
+  const wins=trades.filter(x=>x.net>0),losses=trades.filter(x=>x.net<=0);
+  const gp=wins.reduce((a,x)=>a+x.net,0),gl=Math.abs(losses.reduce((a,x)=>a+x.net,0));
+  return {variant,trades,rejections,summary:{trades:trades.length,wins:wins.length,losses:losses.length,
+    winRate:trades.length?wins.length/trades.length:0,netPnl:trades.reduce((a,x)=>a+x.net,0),
+    avgNet:trades.length?trades.reduce((a,x)=>a+x.net,0)/trades.length:0,
+    profitFactor:gl>0?gp/gl:(gp>0?Infinity:0)}};
+}
+
 function bootstrapLcb(trades,seedText){
   const days=new Map();for(const t of trades){const k=kstDayKey(t.exitAt);if(!days.has(k))days.set(k,[]);days.get(k).push(t);}const blocks=[...days.values()];if(blocks.length<2)return null;
   let seed=2166136261;for(const ch of seedText)seed=(seed^ch.charCodeAt(0))*16777619>>>0;const rnd=()=>{seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;return(seed>>>0)/4294967296;};const vals=[];
@@ -373,7 +397,30 @@ for(const id of Object.keys(V26_CANDIDATES)){
       if(st.status!=="OK"||!(st.price<entryOpen)){reasons[st.reason||"STRUCTURAL_STOP_INVALID"]=(reasons[st.reason||"STRUCTURAL_STOP_INVALID"]||0)+1;continue;}
       stop=st.price;
     }
-    const settled=simulateExit({...s,rows,entryAt,entryOpen,initialStop:stop,filters:meta.get(s.symbol).filters},id);
+    const triggerBarForDiag=rows.find(r=>Number(r[0])===triggerAt-MIN);
+    const tq=triggerBarForDiag?Number(triggerBarForDiag[7]):Number.NaN;
+    const ttb=triggerBarForDiag?Number(triggerBarForDiag[10]):Number.NaN;
+    const th=triggerBarForDiag?Number(triggerBarForDiag[2]):Number.NaN;
+    const tl=triggerBarForDiag?Number(triggerBarForDiag[3]):Number.NaN;
+    const tc=triggerBarForDiag?Number(triggerBarForDiag[4]):Number.NaN;
+    const settled=simulateExit({
+      ...s,rows,entryAt,entryOpen,initialStop:stop,filters:meta.get(s.symbol).filters,
+      diagnosticFeatures:{
+        dayReturn:Number(s.features?.dayReturn),
+        volumeRatio:Number(s.features?.volumeRatio),
+        return5m:Number(s.features?.return5m),
+        return15m:Number(s.features?.return15m),
+        return30m:Number(s.features?.return30m),
+        return60m:Number(s.features?.return60m),
+        rank:Number(s.rank),
+        pullbackDepth:(s.ref-Number(tr.state.pullbackLow))/s.ref,
+        entryDrift:entryOpen/s.ref-1,
+        stopDistancePct:(entryOpen-stop)/entryOpen,
+        triggerTakerBuyRatio:tq>0?ttb/tq:Number.NaN,
+        triggerCloseLocation:Number.isFinite(th)&&Number.isFinite(tl)&&th>tl?(tc-tl)/(th-tl):Number.NaN,
+        marketAllowed:!!s.marketAllowed
+      }
+    },id);
     if(!Number.isFinite(settled.exitAt)){reasons.UNSETTLED=(reasons.UNSETTLED||0)+1;continue;}
     ops.push(settled);
   }
@@ -383,7 +430,18 @@ const symbolsWithOps=new Set();for(const v of opportunitiesByVariant.values())fo
 writeFileSync(new URL("funding-symbols.json",OUT),JSON.stringify([...symbolsWithOps].sort(),null,2));const fundingMap=new Map();let fd=0;for(const symbol of [...symbolsWithOps].sort()){fundingMap.set(symbol,await fundingFor(symbol).catch(()=>[]));if(++fd%50===0)console.log("FUNDING",fd,"/",symbolsWithOps.size);}
 
 const report={generatedAt:new Date().toISOString(),window:{start:new Date(START).toISOString(),end:new Date(END).toISOString(),days:DAYS},classification:"DEVELOPMENT_30D_NOT_INDEPENDENT_HOLDOUT",universe:{exchangeInfoPerpetualUsdtCoin:allSymbols.length},requestStats,costModel:{takerFeeRate:FEES.taker,actualFundingFromBinanceFundingRateHistory:false,fundingPendingConnectorEnrichment:true,fundingRiskAllowanceRate:FUNDING_RISK_ALLOWANCE_RATE,slippage:EXEC,historicalL2BookAvailable:false,slippageLimitation:"Binance REST does not provide historical L2 snapshots; baseline/stress bps are pre-registered execution assumptions."},risk:{startingEquity:30,leverage:3,minTrades:MIN_TRADES,minIndependentDays:MIN_INDEPENDENT_DAYS,riskPerTradeFrac:Number(RISK.riskPerTradeFrac.toString()),maxTotalOpenRiskFrac:Number(RISK.maxTotalOpenRiskFrac.toString()),maxGrossNotionalToEquity:Number(RISK.maxGrossNotionalToEquity.toString()),maxConcurrentPositions:RISK.maxConcurrentPositions},dataQuality:{blocked15mCutoffs:0,total15mCutoffs:Math.floor((END-START)/M15),rawSignals:uniqueSignals.length,eligible15Windows:eligibleWindows.length,repairedEligibleSource:"eligible15-repaired.json"},candidates:{},datasetHash:null,codeHash:null,noRobustEdgeFound:true,provisionalCandidate:null};
-const tradeDetails={};
-for(const id of Object.keys(V26_CANDIDATES)){const x=opportunitiesByVariant.get(id),base=runAccount(id,x.ops,fundingMap,EXEC.baseline),s2=runAccount(id,x.ops,fundingMap,EXEC.stress2x),s4=runAccount(id,x.ops,fundingMap,EXEC.stress4x),b=summarizeAccount(base),m2=summarizeAccount(s2),m4=summarizeAccount(s4),enough=b.trades>=MIN_TRADES&&b.activeDays>=MIN_INDEPENDENT_DAYS;report.candidates[id]={preAccount:{filteredSignals:x.filteredSignals,opportunities:x.ops.length,pathReasons:x.reasons},baseline:b,stress2x:m2,stress4x:m4,sufficientSample:enough,developmentPass:enough&&b.profitFactor>=1.2&&m2.netPnl>0&&b.expectancyLcb5!==null&&b.expectancyLcb5>0};tradeDetails[id]={baseline:base.trades,stress2x:s2.trades,stress4x:s4.trades};}
+const tradeDetails={},diagnosticDetails={};
+for(const id of Object.keys(V26_CANDIDATES)){
+  const x=opportunitiesByVariant.get(id),base=runAccount(id,x.ops,fundingMap,EXEC.baseline),
+    s2=runAccount(id,x.ops,fundingMap,EXEC.stress2x),s4=runAccount(id,x.ops,fundingMap,EXEC.stress4x),
+    diag=runIndependentDiagnostic(id,x.ops,fundingMap,EXEC.baseline),
+    b=summarizeAccount(base),m2=summarizeAccount(s2),m4=summarizeAccount(s4),
+    enough=b.trades>=MIN_TRADES&&b.activeDays>=MIN_INDEPENDENT_DAYS;
+  report.candidates[id]={preAccount:{filteredSignals:x.filteredSignals,opportunities:x.ops.length,pathReasons:x.reasons},
+    baseline:b,stress2x:m2,stress4x:m4,independentOpportunityDiagnostic:diag.summary,
+    sufficientSample:enough,developmentPass:enough&&b.profitFactor>=1.2&&m2.netPnl>0&&b.expectancyLcb5!==null&&b.expectancyLcb5>0};
+  tradeDetails[id]={baseline:base.trades,stress2x:s2.trades,stress4x:s4.trades};
+  diagnosticDetails[id]=diag.trades;
+}
 const viable=Object.entries(report.candidates).filter(([,v])=>v.developmentPass).sort((a,b)=>b[1].stress2x.netPnl-a[1].stress2x.netPnl);if(viable.length)report.provisionalCandidate=viable[0][0];report.noRobustEdgeFound=true;report.datasetHash=datasetHash.digest("hex");const codeHasher=createHash("sha256");for(const f of [new URL("../../supabase/functions/_shared/leader-momentum-v17.mjs",import.meta.url),new URL("../../supabase/functions/_shared/leader-pullback-reaccel.mjs",import.meta.url),new URL("../../supabase/functions/_shared/boo/v26-candidate-policy.mjs",import.meta.url),new URL("../../supabase/functions/_shared/boo/risk-policy.mjs",import.meta.url),new URL("../../supabase/functions/_shared/boo/risk-budget.mjs",import.meta.url)])codeHasher.update(readFileSync(f));codeHasher.update(readFileSync(new URL(import.meta.url)));report.codeHash=codeHasher.digest("hex");
-writeFileSync(new URL("summary.json",OUT),JSON.stringify(report,null,2));writeFileSync(new URL("trades-pre-funding.json",OUT),JSON.stringify(tradeDetails,null,2));const md=[];md.push("# Binance 30-day V26 validation","",`Window: ${report.window.start} -> ${report.window.end}`,"","This is a fresh Binance-API development replay, not an independent holdout.","","| Candidate | Trades | Net | Final equity | Return | PF | MDD | LCB/trade | Stress2x net | Stress4x net | Dev pass |","|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|");for(const [id,v] of Object.entries(report.candidates)){const b=v.baseline;md.push(`| ${id} | ${b.trades} | ${b.netPnl.toFixed(4)} | ${b.finalEquity.toFixed(4)} | ${(b.returnPct*100).toFixed(2)}% | ${Number.isFinite(b.profitFactor)?b.profitFactor.toFixed(3):"Inf"} | ${b.mdd.toFixed(4)} | ${b.expectancyLcb5==null?"NA":b.expectancyLcb5.toFixed(5)} | ${v.stress2x.netPnl.toFixed(4)} | ${v.stress4x.netPnl.toFixed(4)} | ${v.developmentPass?"YES":"NO"} |`);}md.push("","Provisional candidate: "+(report.provisionalCandidate??"NONE"),"","no_robust_edge_found=true (no unused independent holdout).","","Dataset hash: `"+report.datasetHash+"`","Code hash: `"+report.codeHash+"`");writeFileSync(new URL("SUMMARY.md",OUT),md.join("\n")+"\n");console.log(md.join("\n"));
+writeFileSync(new URL("summary.json",OUT),JSON.stringify(report,null,2));writeFileSync(new URL("trades-pre-funding.json",OUT),JSON.stringify(tradeDetails,null,2));writeFileSync(new URL("edge-diagnostic.json",OUT),JSON.stringify(diagnosticDetails,null,2));const md=[];md.push("# Binance 30-day V26 validation","",`Window: ${report.window.start} -> ${report.window.end}`,"","This is a fresh Binance-API development replay, not an independent holdout.","","| Candidate | Trades | Net | Final equity | Return | PF | MDD | LCB/trade | Stress2x net | Stress4x net | Dev pass |","|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|");for(const [id,v] of Object.entries(report.candidates)){const b=v.baseline;md.push(`| ${id} | ${b.trades} | ${b.netPnl.toFixed(4)} | ${b.finalEquity.toFixed(4)} | ${(b.returnPct*100).toFixed(2)}% | ${Number.isFinite(b.profitFactor)?b.profitFactor.toFixed(3):"Inf"} | ${b.mdd.toFixed(4)} | ${b.expectancyLcb5==null?"NA":b.expectancyLcb5.toFixed(5)} | ${v.stress2x.netPnl.toFixed(4)} | ${v.stress4x.netPnl.toFixed(4)} | ${v.developmentPass?"YES":"NO"} |`);}md.push("","Provisional candidate: "+(report.provisionalCandidate??"NONE"),"","no_robust_edge_found=true (no unused independent holdout).","","Dataset hash: `"+report.datasetHash+"`","Code hash: `"+report.codeHash+"`");writeFileSync(new URL("SUMMARY.md",OUT),md.join("\n")+"\n");console.log(md.join("\n"));
