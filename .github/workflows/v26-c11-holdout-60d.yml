@@ -1,0 +1,82 @@
+name: V26 C11 independent 60d holdout
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/v26-parity-risk-replay-20260919]
+    paths:
+      - '.github/workflows/v26-c11-holdout-60d.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v26-c11-holdout-60d
+  cancel-in-progress: true
+
+jobs:
+  holdout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      REPLAY_DAYS: '60'
+      REPLAY_END_MS: '1781968200000'
+      RESULT_DIR: results-holdout-c11-60d
+      RECOMPUTE_ELIGIBLE: '1'
+      ONLY_CANDIDATE: C11
+      REPORT_CLASSIFICATION: INDEPENDENT_HISTORICAL_HOLDOUT_60D_PRECEDING_C10
+      V26_EXPORT_DIR: /tmp/v26-export
+      V26_VISION_CACHE: /tmp/v26-vision
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/v26-parity-risk-replay-20260919
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/cache@v4
+        with:
+          path: /tmp/v26-vision
+          key: v26-c11-holdout-20260422-20260621-v1
+      - name: Download audited export shell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl -fL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/sanbital/Trading-booooo/actions/artifacts/10556516292/zip \
+            -o /tmp/v26-export.zip
+          rm -rf "$V26_EXPORT_DIR"
+          mkdir -p "$V26_EXPORT_DIR" "$V26_VISION_CACHE"
+          unzip -q /tmp/v26-export.zip -d "$V26_EXPORT_DIR"
+          test -f "$V26_EXPORT_DIR/raw/k15.csv.gz"
+      - name: Validate C11 source
+        run: |
+          set -euo pipefail
+          node --check research/v26-validated/binance-30d-validation.mjs
+          node -e "import('./supabase/functions/_shared/boo/v26-candidate-policy.mjs').then(m=>{if(!m.V26_CANDIDATES.C11)process.exit(2);console.log(m.V26_CANDIDATES.C11)})"
+      - name: Run independent 60d C11 holdout
+        run: |
+          set -euo pipefail
+          rm -rf "research/v26-validated/$RESULT_DIR"
+          mkdir -p "research/v26-validated/$RESULT_DIR"
+          node --max-old-space-size=6144 research/v26-validated/binance-30d-validation.mjs \
+            2>&1 | tee "research/v26-validated/$RESULT_DIR/run.log"
+      - name: Commit holdout result
+        if: success()
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "research/v26-validated/$RESULT_DIR"
+          if ! git diff --cached --quiet; then
+            git commit -m 'research(v26): save C11 independent 60d holdout'
+            git push origin HEAD:fix/v26-parity-risk-replay-20260919
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v26-c11-holdout-60d
+          path: research/v26-validated/results-holdout-c11-60d
+          retention-days: 30
