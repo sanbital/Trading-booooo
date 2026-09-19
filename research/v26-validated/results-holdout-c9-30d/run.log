@@ -1,0 +1,27 @@
+UNIVERSE 530 2026-07-20T15:10:00.000Z 2026-08-19T15:10:00.000Z
+PREFETCH 100 / 530
+PREFETCH 200 / 530
+PREFETCH 300 / 530
+PREFETCH 400 / 530
+PREFETCH 500 / 530
+ELIGIBLE15 0 SOURCE RECOMPUTED_BINANCE_VISION_15M
+PREFETCH5_DONE 0
+RAW_SIGNALS 0
+PREFETCH1_DONE 0
+OPS C9 0 0 {}
+# Binance 30-day V26 validation
+
+Window: 2026-07-20T15:10:00.000Z -> 2026-08-19T15:10:00.000Z
+
+This is a fresh Binance-API development replay, not an independent holdout.
+
+| Candidate | Trades | Net | Final equity | Return | PF | MDD | LCB/trade | Stress2x net | Stress4x net | Dev pass |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| C9 | 0 | 0.0000 | 30.0000 | 0.00% | 0.000 | 0.0000 | NA | 0.0000 | 0.0000 | NO |
+
+Provisional candidate: NONE
+
+no_robust_edge_found=true (no unused independent holdout).
+
+Dataset hash: `ce9e1fb828ca9b334d6bc2ab2566f971e6b39358e542c6792a58093cbbec598c`
+Code hash: `40721f97d91af4ea1afa725dd05c54bb16ebd7a253f90fd3538e4a5b202f71e3`
