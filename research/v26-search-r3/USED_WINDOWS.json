@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "sourceLedger": "research/v26-validated/USED_WINDOWS.json",
+  "updatedAt": "2026-09-19T12:04:35Z",
+  "newlyObserved": [
+    {
+      "candidates": ["C19", "C20", "C21"],
+      "start": "2026-08-19T15:10:00.000Z",
+      "end": "2026-09-18T15:10:00.000Z",
+      "classification": "USED_DEVELOPMENT",
+      "note": "Already inside the continuous used union. R3 outcomes are development evidence and cannot be relabeled as independent holdout evidence."
+    }
+  ],
+  "continuousUsedUnion": {
+    "start": "2026-03-22T15:10:00.000Z",
+    "end": "2026-09-18T15:10:00.000Z"
+  },
+  "reservedUnused": [
+    {
+      "start": "2025-12-22T15:10:00.000Z",
+      "end": "2026-03-22T15:10:00.000Z",
+      "days": 90,
+      "status": "RESERVED_UNUSED_FINAL_HOLDOUT_NOT_CONSUMED_R3"
+    }
+  ]
+}
