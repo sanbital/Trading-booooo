@@ -1,0 +1,110 @@
+name: V26 validator integrity research
+
+on:
+  push:
+    branches: [research/v26-validator-integrity-20260919]
+    paths:
+      - 'research/v26-validated/data-source-integrity.mjs'
+      - 'research/v26-validated/data-source-integrity.test.mjs'
+      - '.github/workflows/v26-validator-integrity-research.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v26-validator-integrity-research
+  cancel-in-progress: false
+
+jobs:
+  integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: research/v26-validator-integrity-20260919
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Pure integrity regression tests
+        run: |
+          set -euo pipefail
+          node --test research/v26-validated/data-source-integrity.test.mjs
+
+      - name: Verify one official Binance Vision archive checksum
+        id: vision
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/v26-integrity
+          cd /tmp/v26-integrity
+          base='https://data.binance.vision/data/futures/um/monthly/klines/BTCUSDT/15m/BTCUSDT-15m-2026-05.zip'
+          curl -fsSLo BTCUSDT-15m-2026-05.zip "$base"
+          curl -fsSLo BTCUSDT-15m-2026-05.zip.CHECKSUM "$base.CHECKSUM"
+          sha256sum -c BTCUSDT-15m-2026-05.zip.CHECKSUM
+          echo "zip_sha=$(sha256sum BTCUSDT-15m-2026-05.zip | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Probe Binance USD-M funding endpoint without bypass
+        id: funding
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/v26-integrity
+          url='https://fapi.binance.com/fapi/v1/fundingRate?symbol=CETUSUSDT&startTime=1778428140000&endTime=1778429280000&limit=1000'
+          code=$(curl -sS -o /tmp/v26-integrity/funding.json -w '%{http_code}' "$url" || true)
+          echo "http=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" = 200 ]; then
+            node - <<'NODE'
+            const fs=require('fs');
+            const x=JSON.parse(fs.readFileSync('/tmp/v26-integrity/funding.json','utf8'));
+            if(!Array.isArray(x)) throw Error('funding response not array');
+            const e=x.find(r=>Number(r.fundingTime)===1778428800000);
+            if(!e) throw Error('expected CETUS funding event absent');
+            if(String(e.fundingRate)!=='0.00005000' || String(e.markPrice)!=='0.03585000') throw Error('CETUS event mismatch');
+            NODE
+          fi
+
+      - name: Save research probe checkpoint
+        shell: bash
+        env:
+          VISION_SHA: ${{ steps.vision.outputs.zip_sha }}
+          FUNDING_HTTP: ${{ steps.funding.outputs.http }}
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs=require('fs');
+          let fundingBody=null;
+          try { fundingBody=JSON.parse(fs.readFileSync('/tmp/v26-integrity/funding.json','utf8')); } catch {}
+          const http=String(process.env.FUNDING_HTTP||'');
+          const out={
+            generatedAt:new Date().toISOString(),
+            sourceCommit:process.env.GITHUB_SHA,
+            scope:'RESEARCH_ONLY_NO_LIVE_CHANGE',
+            pureTests:'PASS',
+            binanceVision:{
+              file:'BTCUSDT-15m-2026-05.zip',
+              checksumVerified:true,
+              sha256:process.env.VISION_SHA,
+            },
+            fundingRest:{
+              httpStatus:http,
+              usable:http==='200',
+              failClosedRequired:http!=='200',
+              sample:http==='200'?fundingBody:null,
+            },
+            promotionEligible:false,
+            reason:'VALIDATOR_INTEGRATION_AND_FULL_REPLAY_PENDING'
+          };
+          fs.writeFileSync('research/v26-validated/integrity-live-probe-20260919.json',JSON.stringify(out,null,2)+'\n');
+          NODE
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add research/v26-validated/integrity-live-probe-20260919.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'research(v26): save validator integrity live probe'
+            git push origin HEAD:research/v26-validator-integrity-20260919
+          fi
