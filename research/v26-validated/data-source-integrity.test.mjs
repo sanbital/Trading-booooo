@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   sha256Hex, verifyChecksumBytes, logicalDatasetHash,
-  collectMonthlyWithDailyFallback, fetchFundingHistory, longFundingCost,
+  collectMonthlyWithDailyFallback, fetchFundingHistory, fundingHistoryFromCache,
+  cutoffCoverageSummary, longFundingCost,
 } from "./data-source-integrity.mjs";
 
 const row=(t,v="1")=>[t,v,v,v,v,"0",t+899_999,"1",0,"0","0.5","0"];
@@ -41,6 +42,42 @@ test("mixed monthly availability falls back per missing month/day",async()=>{
 test("funding provider refuses blocked/missing history instead of zeroing it",async()=>{
   const fake=async()=>({ok:false,status:451,json:async()=>({})});
   await assert.rejects(()=>fetchFundingHistory({symbol:"CETUSUSDT",startTime:1,endTime:2,fetchImpl:fake}),/FUNDING_HTTP_451/);
+});
+
+test("funding cache distinguishes verified zero events from missing coverage",()=>{
+  const cache={coverage:[{symbol:"APTUSDT",startTime:100,endTime:200,events:[]}]};
+  assert.deepEqual(fundingHistoryFromCache({cache,symbol:"APTUSDT",startTime:120,endTime:180}),[]);
+  assert.throws(()=>fundingHistoryFromCache({cache,symbol:"APTUSDT",startTime:90,endTime:180}),/FUNDING_CACHE_COVERAGE_MISSING/);
+  assert.throws(()=>fundingHistoryFromCache({cache,symbol:"STOUSDT",startTime:120,endTime:180}),/FUNDING_CACHE_COVERAGE_MISSING/);
+});
+
+test("funding cache returns only verified events inside requested interval",()=>{
+  const a={symbol:"CETUSUSDT",fundingTime:150,fundingRate:"0.00005000",markPrice:"0.03585000"};
+  const b={symbol:"CETUSUSDT",fundingTime:190,fundingRate:"0.00006000",markPrice:"0.03600000"};
+  const cache={coverage:[{symbol:"CETUSUSDT",startTime:100,endTime:220,events:[a,b]}]};
+  assert.deepEqual(fundingHistoryFromCache({cache,symbol:"CETUSUSDT",startTime:140,endTime:180}),[a]);
+});
+
+test("cutoff quality summary derives blocked count from actual completed bars",()=>{
+  const I=900_000, cut1=10*I, cut2=11*I;
+  const rowsBySymbol=new Map([
+    ["A",[row(7*I),row(8*I),row(9*I),row(10*I)]],
+    ["B",[row(8*I),row(9*I),row(10*I)]],
+  ]);
+  const out=cutoffCoverageSummary({
+    cutoffs:[cut1,cut2],
+    expectedByCutoff:()=>["A","B"],
+    rowsBySymbol,
+    intervalMs:I,
+    requiredBars:3,
+    minCoverage:0.75,
+  });
+  assert.equal(out.totalCutoffs,2);
+  assert.equal(out.blockedCutoffs,1);
+  assert.deepEqual(out.details.map(x=>({evaluated:x.evaluated,coverage:x.coverage,blocked:x.blocked})),[
+    {evaluated:1,coverage:0.5,blocked:true},
+    {evaluated:2,coverage:1,blocked:false},
+  ]);
 });
 
 test("actual CETUS event produces exact long funding cost",async()=>{
