@@ -1,4 +1,5 @@
 name: V26 C9 independent 30d holdout
+# rerun after Vision-only 15m fix
 
 on:
   workflow_dispatch:
