@@ -166,6 +166,24 @@ export function ceilTick(price, tick) {
   return Number((Math.ceil((price - tick * 1e-9) / tick) * tick).toFixed(stepDecimals(tick)));
 }
 
+/**
+ * Price-only half of the entry contract. Risk-budget sizing must be allowed to
+ * choose quantity without calling the legacy fixed-slot quantity solver, while
+ * still using exactly the same IOC price/tick rules as production.
+ */
+export function entryLimitPrice(ask, priceTick = 0, contract = SLOT_SIZING_CONTRACT) {
+  const a = num(ask), tick = num(priceTick);
+  if (!(a > 0) || !Number.isFinite(tick) || tick < 0) {
+    throw new SlotSizingError(SLOT_SIZING_REASON.INPUT_INVALID);
+  }
+  const limitPrice = ceilTick(a * (1 + contract.iocBaseBps / 10_000), tick);
+  const iocBps = (limitPrice / a - 1) * 10_000;
+  if (iocBps > contract.iocMaxBps + EPS) {
+    throw new SlotSizingError(SLOT_SIZING_REASON.IOC_PRICE_CAP_EXCEEDED, iocBps.toFixed(3));
+  }
+  return { limitPrice, iocBps };
+}
+
 /** Derived USDT amounts for a contract. Kept in one place so nothing recomputes them. */
 export function slotSizingBounds(contract = SLOT_SIZING_CONTRACT) {
   const targetNotionalUsdt = contract.targetMarginUsdt * contract.leverage;
@@ -292,11 +310,9 @@ export function planSlotEntry(input, contract = SLOT_SIZING_CONTRACT) {
   const bounds = slotSizingBounds(contract);
 
   // 1. Price first, and from the ask alone. Nothing about the quantity feeds in.
-  const limitPrice = ceilTick(ask * (1 + contract.iocBaseBps / 10_000), priceTick);
-  const iocBps = (limitPrice / ask - 1) * 10_000;
-  if (iocBps > contract.iocMaxBps + EPS) {
-    throw new SlotSizingError(SLOT_SIZING_REASON.IOC_PRICE_CAP_EXCEEDED, iocBps.toFixed(3));
-  }
+  // Risk-budget sizing calls this same helper, so a different quantity can never
+  // imply a different pricing contract.
+  const { limitPrice, iocBps } = entryLimitPrice(ask, priceTick, contract);
 
   // 2. The lattice bounds, all expressed as lot-aligned quantities.
   //    LOWER: what the exchange will not go below. UPPER: what the slot will not
