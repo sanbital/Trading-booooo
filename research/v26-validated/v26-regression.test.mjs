@@ -7,6 +7,9 @@ import {
   structuralStopPrice,
   earlyFailureDecision,
   marketParticipationDecision,
+  accelerationReignitionDecision,
+  compressionExpansionDecision,
+  rankPersistenceDecision,
   V26_CANDIDATES,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { runExit, summarise } from "../v25-pullback-reaccel/replay.mjs";
@@ -35,13 +38,25 @@ test("selection gate fails closed on null/NaN and respects exact boundaries", ()
   assert.equal(POLICY.maxDayReturn, 0.08);
 });
 
-test("registered C0-C12 definitions preserve the frozen C0-C5 prefix", () => {
+test("registered C0-C15 definitions preserve the frozen C0-C5 prefix", () => {
   assert.deepEqual(Object.keys(V26_CANDIDATES).slice(0,6), ["C0","C1","C2","C3","C4","C5"]);
   assert.ok(V26_CANDIDATES.C12);
+  assert.ok(V26_CANDIDATES.C15);
   assert.equal(V26_CANDIDATES.C0.structuralStop, false);
   assert.equal(V26_CANDIDATES.C4.earlyFailureExit, true);
   assert.equal(V26_CANDIDATES.C4.marketParticipation, true);
   assert.equal(V26_CANDIDATES.C5.maxDayReturn, 0.05);
+});
+
+test("C13-C15 structural gates use only completed preregistered inputs", () => {
+  const triggerAt=1_800_000_300_000;
+  const mk=(i,{o=100,h=100.3,l=99.9,c=100,q=1000,tb=500}={})=>({openTime:triggerAt-(4-i)*60_000,open:o,high:h,low:l,close:c,closeTime:triggerAt-(4-i)*60_000+59_999,quoteVolume:q,takerBuyQuote:tb});
+  const accel=[mk(0,{c:100,tb:450}),mk(1,{c:100.02,tb:480}),mk(2,{c:100.05,tb:560}),mk(3,{h:100.3,c:100.2,tb:650})];
+  assert.equal(accelerationReignitionDecision({triggerAt,now:triggerAt,bars:accel,return5m:.006,return15m:.009}).action,"ENTER");
+  const comp=[];for(let i=0;i<4;i++)comp.push({openTime:triggerAt-(5-i)*60_000,open:100,high:100.1,low:99.9,close:100,closeTime:triggerAt-(5-i)*60_000+59_999,quoteVolume:1000,takerBuyQuote:520});
+  comp.push({openTime:triggerAt-60_000,open:100,high:100.7,low:99.95,close:100.65,closeTime:triggerAt-1,quoteVolume:1800,takerBuyQuote:1200});
+  assert.equal(compressionExpansionDecision({triggerAt,now:triggerAt,bars:comp}).action,"ENTER");
+  assert.equal(rankPersistenceDecision({currentRank:4,priorRanks:[6,null],return30m:.02,return60m:.03}).action,"ENTER");
 });
 
 test("structural stop uses the larger of two ticks and 0.1 ATR then rounds outward", () => {
