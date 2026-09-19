@@ -9,7 +9,7 @@ import {
   SETUP_POLICY, SETUP_STATE, advancePullbackSetup, startPullbackSetup,
 } from "../../supabase/functions/_shared/leader-pullback-reaccel.mjs";
 import {
-  V26_CANDIDATES, structuralStopPrice, earlyFailureDecision, marketParticipationDecision, entryConfirmation1mDecision, breakoutContinuation1mDecision, triggerQuality1mDecision,
+  V26_CANDIDATES, structuralStopPrice, earlyFailureDecision, marketParticipationDecision, entryConfirmation1mDecision, breakoutContinuation1mDecision, triggerQuality1mDecision, antiExhaustionDecision,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { resolveRiskPolicy, evaluateLossLimits } from "../../supabase/functions/_shared/boo/risk-policy.mjs";
 import { solveQuantity } from "../../supabase/functions/_shared/boo/risk-budget.mjs";
@@ -328,7 +328,7 @@ for(const s of uniqueSignals){try{const rows=await pagedKlines(s.symbol,"1m",s.s
 
 const opportunitiesByVariant=new Map();
 for(const id of Object.keys(V26_CANDIDATES)){
-  let filtered=uniqueSignals.filter(s=>id!=="C5"||s.c5Allowed);if(V26_CANDIDATES[id].marketParticipation)filtered=filtered.filter(s=>s.marketAllowed);filtered=mergedSignals(filtered);const ops=[],reasons={};
+  let filtered=uniqueSignals.filter(s=>!(id==="C5"||id==="C9")||s.c5Allowed);if(V26_CANDIDATES[id].marketParticipation)filtered=filtered.filter(s=>s.marketAllowed);filtered=mergedSignals(filtered);const ops=[],reasons={};
   for(const s of filtered){
     const cached=pathCache.get(s.id),rows=Array.isArray(cached)?cached:cached?.rows;
     if(!rows?.length){reasons.PATH_MISSING=(reasons.PATH_MISSING||0)+1;continue;}
@@ -336,6 +336,21 @@ for(const id of Object.keys(V26_CANDIDATES)){
     if(!tr.ok){reasons[tr.reason]=(reasons[tr.reason]||0)+1;continue;}
     const triggerAt=Number(tr.state.triggerAt);
     let entryAt=triggerAt;
+    if(V26_CANDIDATES[id].antiExhaustion){
+      const triggerBar=rows.find(r=>Number(r[0])===triggerAt-MIN);
+      const decision=antiExhaustionDecision({
+        volumeRatio:Number(s.features?.volumeRatio),
+        triggerAt,
+        bar:triggerBar?{
+          openTime:Number(triggerBar[0]),closeTime:Number(triggerBar[0])+MIN-1,
+          quoteVolume:Number(triggerBar[7]),takerBuyQuote:Number(triggerBar[10])
+        }:null
+      });
+      if(decision.action!=="ENTER"){
+        reasons[decision.reason]=(reasons[decision.reason]||0)+1;
+        continue;
+      }
+    }
     if(V26_CANDIDATES[id].triggerQuality1m){
       const triggerBar=rows.find(r=>Number(r[0])===triggerAt-MIN);
       const decision=triggerQuality1mDecision({
