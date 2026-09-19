@@ -29,6 +29,8 @@ import {
   crossSectionalPullbackQualityDecision,
   buyerFlowAccelerationScore,
   crossSectionalBuyerFlowDecision,
+  executionAdjustedBreakoutScore,
+  crossSectionalExecutionValueDecision,
   V26_CANDIDATES,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { runExit, summarise } from "../v25-pullback-reaccel/replay.mjs";
@@ -57,7 +59,7 @@ test("selection gate fails closed on null/NaN and respects exact boundaries", ()
   assert.equal(POLICY.maxDayReturn, 0.08);
 });
 
-test("registered C0-C32 definitions preserve the frozen C0-C5 prefix", () => {
+test("registered C0-C33 definitions preserve the frozen C0-C5 prefix", () => {
   assert.deepEqual(Object.keys(V26_CANDIDATES).slice(0,6), ["C0","C1","C2","C3","C4","C5"]);
   assert.ok(V26_CANDIDATES.C12);
   assert.ok(V26_CANDIDATES.C15);
@@ -68,10 +70,21 @@ test("registered C0-C32 definitions preserve the frozen C0-C5 prefix", () => {
   assert.ok(V26_CANDIDATES.C30);
   assert.ok(V26_CANDIDATES.C31);
   assert.ok(V26_CANDIDATES.C32);
+  assert.ok(V26_CANDIDATES.C33);
   assert.equal(V26_CANDIDATES.C0.structuralStop, false);
   assert.equal(V26_CANDIDATES.C4.earlyFailureExit, true);
   assert.equal(V26_CANDIDATES.C4.marketParticipation, true);
   assert.equal(V26_CANDIDATES.C5.maxDayReturn, 0.05);
+});
+
+test("C33 scores completed breakout surplus against structural risk and fixed costs",()=>{
+  const scored=executionAdjustedBreakoutScore({signalReference:100,triggerClose:101,structuralStop:99,
+    takerFee:.0005,entryBps:3,stopBps:10,fundingAllowanceRate:.001});
+  assert.equal(scored.status,"KNOWN");
+  assert.ok(scored.score>0&&scored.score<1);
+  assert.equal(executionAdjustedBreakoutScore({signalReference:101,triggerClose:101,structuralStop:99}).status,"UNKNOWN");
+  assert.equal(crossSectionalExecutionValueDecision({valuePercentile:.60,observations:20}).action,"ENTER");
+  assert.equal(crossSectionalExecutionValueDecision({valuePercentile:.59,observations:20}).action,"REJECT");
 });
 
 test("C32 ranks completed buyer-flow acceleration relative to seller flow",()=>{

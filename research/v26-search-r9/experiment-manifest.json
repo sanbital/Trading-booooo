@@ -1,0 +1,26 @@
+{
+  "experimentId": "V26-SEARCH-R9-C33",
+  "preregisteredAt": "2026-09-19T17:22:49Z",
+  "branch": "research/v26-strategy-search-r9-20260920",
+  "parentCheckpoint": "bb4095c9f8762e5a5f74c5634d0b35726e618f65",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "developmentWindow": {"start":"2026-08-19T15:10:00.000Z","end":"2026-09-18T15:10:00.000Z","classification":"DEVELOPMENT_USED"},
+  "reservedHoldout": {"start":"2025-12-22T15:10:00.000Z","end":"2026-03-22T15:10:00.000Z","status":"LOCKED_UNSEEN_DO_NOT_OPEN_UNLESS_DEVELOPMENT_AND_WALK_FORWARD_PASS"},
+  "account": {"startingCapitalUsdt":30,"leverage":3,"maxConcurrentPositions":1,"quantitySource":"solveQuantity.plan.quantity","riskPolicy":"existing BOO risk-policy/risk-budget plus operator-tightened limits"},
+  "sharedExit": "STRENGTH_LOSS_V1",
+  "candidates": [{
+    "id": "C33",
+    "name": "ROLLING_CROSS_SECTIONAL_EXECUTION_VALUE",
+    "hypothesis": "A completed breakout is worth taking only when its surplus above the signal reference is large relative to structural-stop downside and pre-fixed conservative round-trip costs.",
+    "score": "(triggerClose - signalReference) / ((triggerClose - structuralStop) + triggerClose * (2*takerFee + (entryBps+stopBps)/10000 + fundingAllowanceRate))",
+    "rules": [
+      "use only signal reference, completed trigger close, setup low, completed ATR14 and exchange tick known at trigger completion",
+      "exclude next-open price, future MFE and all later bars from the score",
+      "rank against completed scores in the trailing seven days with no later timestamp",
+      "require at least 20 causal observations and percentile >= 0.60 as the only new gate",
+      "preserve next-open execution, structural stop, solveQuantity quantity and all account protections"
+    ]
+  }],
+  "promotionGates": {"minTrades":30,"minActiveDays":10,"netPnlPositive":true,"monthlyReturnPositive":true,"minProfitFactor":1.2,"stressNetAndPfPositive":true,"top1RemovedNetPositive":true,"dayBlockMultipleTestingAdjustedExpectancyLowerBoundPositive":true,"walkForwardPositive":true,"unusedHoldoutPositive":true},
+  "holdoutPolicy": "Do not open walk-forward or reserved holdout unless C33 passes every development gate."
+}

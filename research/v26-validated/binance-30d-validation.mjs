@@ -17,6 +17,7 @@ import {
   sellerExhaustionDecision, volumeDryupReaccelDecision, buyerNotionalEscalationDecision,
   rollingPullbackQualityPercentiles, crossSectionalPullbackQualityDecision,
   buyerFlowAccelerationScore, crossSectionalBuyerFlowDecision,
+  executionAdjustedBreakoutScore, crossSectionalExecutionValueDecision,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { resolveRiskPolicy, evaluateLossLimits } from "../../supabase/functions/_shared/boo/risk-policy.mjs";
 import { solveQuantity } from "../../supabase/functions/_shared/boo/risk-budget.mjs";
@@ -450,6 +451,25 @@ for(const s of mergedSignals(uniqueSignals)){
 }
 const buyerFlowById=new Map(rollingPullbackQualityPercentiles(buyerFlowRecords).map(x=>[x.id,x]));
 
+// C33 ranks only geometry and pre-fixed costs known when the trigger completes.
+const executionValueRecords=[];
+for(const s of mergedSignals(uniqueSignals)){
+  const cached=pathCache.get(s.id),rows=Array.isArray(cached)?cached:cached?.rows;
+  if(!rows?.length)continue;
+  const tr=setupTrigger(s,rows.filter(r=>Number(r[0])>=s.s5c-2*MIN));
+  if(!tr.ok)continue;
+  const triggerAt=Number(tr.state.triggerAt);
+  const st=structuralStopPrice({setupLow:Number(tr.state.pullbackLow),priceTick:meta.get(s.symbol)?.filters.tickSize,atr5m14:atr14_5m(rows,triggerAt)});
+  if(st.status!=="OK")continue;
+  const scored=executionAdjustedBreakoutScore({
+    signalReference:s.ref,triggerClose:Number(tr.state.triggerClose),structuralStop:st.price,
+    takerFee:FEES.taker,entryBps:EXEC.baseline.entryBps,stopBps:EXEC.baseline.stopBps,
+    fundingAllowanceRate:FUNDING_RISK_ALLOWANCE_RATE,
+  });
+  if(scored.status==="KNOWN")executionValueRecords.push({id:s.id,at:triggerAt,score:scored.score});
+}
+const executionValueById=new Map(rollingPullbackQualityPercentiles(executionValueRecords).map(x=>[x.id,x]));
+
 const opportunitiesByVariant=new Map();
 const candidateIds=ONLY_CANDIDATE?ONLY_CANDIDATE.split(",").map(x=>x.trim()).filter(Boolean):Object.keys(V26_CANDIDATES);
 for(const id of candidateIds){
@@ -586,6 +606,11 @@ for(const id of candidateIds){
     if(V26_CANDIDATES[id].crossSectionalBuyerFlowAcceleration){
       const context=buyerFlowById.get(s.id);
       const decision=crossSectionalBuyerFlowDecision({flowPercentile:context?.percentile,observations:context?.observations});
+      if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
+    }
+    if(V26_CANDIDATES[id].crossSectionalExecutionValue){
+      const context=executionValueById.get(s.id);
+      const decision=crossSectionalExecutionValueDecision({valuePercentile:context?.percentile,observations:context?.observations});
       if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
     }
     if(V26_CANDIDATES[id].breakoutRetestHold2m||V26_CANDIDATES[id].controlledPullbackReclaim3m||V26_CANDIDATES[id].breakoutAcceptance3m){

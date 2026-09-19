@@ -6,7 +6,7 @@
  * is live merely because this file exists; activation requires a matching,
  * unrevoked approval identity and ENFORCE mode.
  */
-export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-14";
+export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-15";
 
 const BASE = Object.freeze({
   minDayReturn: 0.03,
@@ -39,6 +39,7 @@ const BASE = Object.freeze({
   buyerNotionalEscalation: false,
   crossSectionalPullbackQuality: false,
   crossSectionalBuyerFlowAcceleration: false,
+  crossSectionalExecutionValue: false,
   minRankOverride: null,
   maxRankOverride: null,
 });
@@ -126,6 +127,9 @@ export const V26_CANDIDATES = Object.freeze({
   }),
   C32: Object.freeze({
     ...BASE, id: "C32", structuralStop: true, crossSectionalBuyerFlowAcceleration: true,
+  }),
+  C33: Object.freeze({
+    ...BASE, id: "C33", structuralStop: true, crossSectionalExecutionValue: true,
   }),
 });
 
@@ -1020,4 +1024,32 @@ export function crossSectionalBuyerFlowDecision({flowPercentile,observations}) {
   const allowed=flowPercentile>=0.60;
   return {action:allowed?"ENTER":"REJECT",reason:allowed?"C32_BUYER_FLOW_PASS":"C32_BUYER_FLOW_FAIL",
     flowPercentile,observations,threshold:0.60};
+}
+
+/**
+ * C33 score: completed breakout surplus per conservative executable downside.
+ * All inputs exist at trigger completion; the next-bar open and later MFE are
+ * deliberately excluded. Costs are fixed before outcomes are observed.
+ */
+export function executionAdjustedBreakoutScore({
+  signalReference,triggerClose,structuralStop,takerFee=0.0005,
+  entryBps=3,stopBps=10,fundingAllowanceRate=0.001,
+}) {
+  if(![signalReference,triggerClose,structuralStop,takerFee,entryBps,stopBps,fundingAllowanceRate].every(finite)||
+      !(signalReference>0&&triggerClose>signalReference&&structuralStop>0&&structuralStop<triggerClose&&
+        takerFee>=0&&entryBps>=0&&stopBps>=0&&fundingAllowanceRate>=0))
+    return {status:"UNKNOWN",reason:"C33_EXECUTION_VALUE_INPUT_INVALID"};
+  const breakoutSurplus=triggerClose-signalReference;
+  const conservativeDownside=(triggerClose-structuralStop)+triggerClose*(2*takerFee+(entryBps+stopBps)/10_000+fundingAllowanceRate);
+  if(!(conservativeDownside>0))return {status:"UNKNOWN",reason:"C33_EXECUTION_VALUE_DENOMINATOR_INVALID"};
+  return {status:"KNOWN",score:breakoutSurplus/conservativeDownside,breakoutSurplus,conservativeDownside};
+}
+
+/** C33: retain the upper rolling cross-section of completed execution value. */
+export function crossSectionalExecutionValueDecision({valuePercentile,observations}) {
+  if(!finite(valuePercentile)||!Number.isSafeInteger(observations)||observations<20)
+    return {action:"UNKNOWN",reason:"C33_EXECUTION_VALUE_CONTEXT_MISSING"};
+  const allowed=valuePercentile>=0.60;
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C33_EXECUTION_VALUE_PASS":"C33_EXECUTION_VALUE_FAIL",
+    valuePercentile,observations,threshold:0.60};
 }
