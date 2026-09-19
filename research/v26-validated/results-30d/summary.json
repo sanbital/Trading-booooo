@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-19T02:18:03.406Z",
+  "generatedAt": "2026-09-19T04:07:56.963Z",
   "window": {
     "start": "2026-08-19T15:10:00.000Z",
     "end": "2026-09-18T15:10:00.000Z",
@@ -687,10 +687,119 @@
       },
       "sufficientSample": false,
       "developmentPass": false
+    },
+    "C6": {
+      "preAccount": {
+        "filteredSignals": 723,
+        "opportunities": 73,
+        "pathReasons": {
+          "V17_SETUP_EXPIRED": 267,
+          "V17_CHASE_EXPIRED": 142,
+          "C6_CONFIRMATION_FAIL": 210,
+          "ENTRY_DRIFT": 31
+        }
+      },
+      "baseline": {
+        "trades": 5,
+        "rejections": {
+          "MIN_NOTIONAL_EXCEEDS_RISK_BUDGET": 21,
+          "SLOT_OCCUPIED": 1,
+          "CONSECUTIVE_LOSS_LIMIT_REACHED": 46
+        },
+        "wins": 1,
+        "losses": 4,
+        "netPnl": -0.21332887906349532,
+        "finalEquity": 29.786671120936504,
+        "returnPct": -0.007110962635449844,
+        "profitFactor": 0.2197443607075039,
+        "avgWin": 0.0600800760540008,
+        "avgLoss": -0.06835223877937402,
+        "avgNet": -0.042665775812699064,
+        "mdd": -0.28364065357749624,
+        "longestLossStreak": 3,
+        "byDay": {
+          "2026-08-20": -0.06951277574999931,
+          "2026-08-21": 0.0600800760540008,
+          "2026-08-24": -0.06785551294499893,
+          "2026-08-27": -0.06858094697999947,
+          "2026-08-31": -0.0674597194424984
+        },
+        "byWeek": {
+          "2026-08-17": -0.009432699695998512,
+          "2026-08-24": -0.13643645992499842,
+          "2026-08-31": -0.0674597194424984
+        },
+        "removeTop1Net": -0.2734089551174961,
+        "removeTop3Net": -0.13809372272999879,
+        "removeTop5Net": 0,
+        "activeDays": 5,
+        "expectancyLcb5": -0.06872943298049919
+      },
+      "stress2x": {
+        "trades": 4,
+        "rejections": {
+          "MIN_NOTIONAL_EXCEEDS_RISK_BUDGET": 22,
+          "SLOT_OCCUPIED": 1,
+          "CONSECUTIVE_LOSS_LIMIT_REACHED": 46
+        },
+        "wins": 1,
+        "losses": 3,
+        "netPnl": -0.15818370820199634,
+        "finalEquity": 29.841816291798004,
+        "returnPct": -0.005272790273399878,
+        "profitFactor": 0.23180590917265606,
+        "avgWin": 0.04773262217700035,
+        "avgLoss": -0.0686387767929989,
+        "avgNet": -0.039545927050499086,
+        "mdd": -0.28357143473399304,
+        "longestLossStreak": 3,
+        "byDay": {
+          "2026-08-21": 0.04773262217700035,
+          "2026-08-24": -0.06872051330099933,
+          "2026-08-27": -0.0690226817279986,
+          "2026-08-31": -0.06817313534999876
+        },
+        "byWeek": {
+          "2026-08-17": 0.04773262217700035,
+          "2026-08-24": -0.13774319502899793,
+          "2026-08-31": -0.06817313534999876
+        },
+        "removeTop1Net": -0.2059163303789967,
+        "removeTop3Net": -0.0690226817279986,
+        "removeTop5Net": 0,
+        "activeDays": 4,
+        "expectancyLcb5": -0.06881029513349864
+      },
+      "stress4x": {
+        "trades": 0,
+        "rejections": {
+          "MIN_NOTIONAL_EXCEEDS_RISK_BUDGET": 73
+        },
+        "wins": 0,
+        "losses": 0,
+        "netPnl": 0,
+        "finalEquity": 30,
+        "returnPct": 0,
+        "profitFactor": 0,
+        "avgWin": 0,
+        "avgLoss": 0,
+        "avgNet": 0,
+        "mdd": 0,
+        "longestLossStreak": 0,
+        "byDay": {},
+        "byWeek": {},
+        "removeTop1Net": 0,
+        "removeTop3Net": 0,
+        "removeTop5Net": 0,
+        "activeDays": 0,
+        "expectancyLcb5": null
+      },
+      "sufficientSample": false,
+      "developmentPass": false
     }
   },
-  "datasetHash": "ace383a59ac3e42fefb0a6a36b4b9c0c1935902d37f3b7d2b3e8d03b2db28b1f",
-  "codeHash": "e1ebc6d57629d68df2ecd79a7209b0db670bafeb7fc25e5f5e57cda439e95847",
+  "datasetHash": "1680efc947c3a40ec82022ccf926c77b43564cd29a49e66516b6efe6abf434e1",
+  "codeHash": "f2d744e4e8534394f1c32f85762c25de48e28e52acfa4b5c181abb9276930aee",
   "noRobustEdgeFound": true,
   "provisionalCandidate": null
 }
