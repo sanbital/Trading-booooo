@@ -6,11 +6,11 @@ This is a fresh Binance-API development replay, not an independent holdout.
 
 | Candidate | Trades | Net | Final equity | Return | PF | MDD | LCB/trade | Stress2x net | Stress4x net | Dev pass |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| C9 | 0 | 0.0000 | 30.0000 | 0.00% | 0.000 | 0.0000 | NA | 0.0000 | 0.0000 | NO |
+| C9 | 3 | -0.1662 | 29.8338 | -0.55% | 0.000 | -0.1764 | -0.06661 | -0.0588 | 0.0267 | NO |
 
 Provisional candidate: NONE
 
 no_robust_edge_found=true (no unused independent holdout).
 
-Dataset hash: `ce9e1fb828ca9b334d6bc2ab2566f971e6b39358e542c6792a58093cbbec598c`
-Code hash: `40721f97d91af4ea1afa725dd05c54bb16ebd7a253f90fd3538e4a5b202f71e3`
+Dataset hash: `8b81f6986e6455bcd60df8f69900ab9ba15788a95778ef9b9273f92c2e156c7d`
+Code hash: `30d5c0165cf1772378e6dad937cb5253fafe40a7c1028a23812ea10fcebbd9ec`
