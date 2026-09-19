@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "experimentId": "BOO-V26-SEARCH-R1-20260919",
+  "preregisteredAt": "2026-09-19T09:24:00Z",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "branch": "research/v26-strategy-search-r1-20260919",
+  "status": "PREREGISTERED_BEFORE_RESULTS",
+  "common": {
+    "startingCapitalUsdt": 30,
+    "leverage": 3,
+    "maxConcurrentPositions": 1,
+    "riskPolicy": "existing BOO stricter operator policy",
+    "quantitySource": "solveQuantity.plan.quantity only",
+    "exitPolicy": "STRENGTH_LOSS_V1",
+    "feesAndSlippage": "validator baseline plus 2x and 4x preregistered stress",
+    "funding": "actual Binance USD-M history or verified full-coverage cache; fail closed",
+    "developmentWindow": "2026-08-19T15:10:00Z/2026-09-18T15:10:00Z (USED)",
+    "walkForward": "three chronological 10-day folds only after the frozen 30-day replay",
+    "finalHoldout": "2025-12-22T15:10:00Z/2026-03-22T15:10:00Z; consume only for a development-pass candidate"
+  },
+  "candidates": {
+    "C13": {
+      "name": "ACCELERATION_REIGNITION",
+      "hypothesis": "A current leader continues when trigger-minute price acceleration and taker-buy share rise together, and the most recent 5m contribution dominates the preceding 10m.",
+      "structure": "four completed 1m bars ending at trigger; positive accelerating last return; nondecreasing buyer share with >=8pp improvement and final >=55%; 5m return exceeds half of prior 10m contribution"
+    },
+    "C14": {
+      "name": "COMPRESSION_EXPANSION",
+      "hypothesis": "A leader is safer after a compact shelf and buyer-led range expansion than after an undifferentiated pullback trigger.",
+      "structure": "four-minute shelf width <=0.8%; trigger range >=1.5x shelf mean; close breaks shelf high, buyer share >=60%, close in top quartile"
+    },
+    "C15": {
+      "name": "RANK_PERSISTENCE_LEADER",
+      "hypothesis": "Persistent cross-sectional leadership with current 30m contribution is superior to a one-snapshot 24h return rank.",
+      "structure": "top-10 eligible at least two of current/prior two 15m snapshots; current rank not worse by >3; return30m positive and >=55% of positive return60m"
+    }
+  },
+  "promotionGates": {
+    "minTrades": 30,
+    "minActiveDays": 10,
+    "profitFactor": 1.2,
+    "baselineNetPositive": true,
+    "stress2xNetPositiveAndPfAboveOne": true,
+    "removeTop1Positive": true,
+    "removeTop3AndTop5Reported": true,
+    "dayBlockBootstrapLcbPositive": true,
+    "independentHoldoutPositive": true
+  }
+}
