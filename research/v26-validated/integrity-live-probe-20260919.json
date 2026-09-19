@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-09-19T06:51:38.148Z",
-  "sourceCommit": "3857a230cd1d822a50d94e8a1835f6c01461dae4",
+  "generatedAt": "2026-09-19T08:49:52.230Z",
+  "sourceCommit": "defabea668ca75d88992807696a0b86165121039",
   "scope": "RESEARCH_ONLY_NO_LIVE_CHANGE",
   "pureTests": "PASS",
   "binanceVision": {
@@ -9,10 +9,18 @@
     "sha256": "1c0a865f62ddca9890f5d7bbe901b7261a3818785594d960f5fce36ee7ce81f5"
   },
   "fundingRest": {
-    "httpStatus": "451",
-    "usable": false,
-    "failClosedRequired": true,
-    "sample": null
+    "httpStatus": "200",
+    "usable": true,
+    "failClosedRequired": false,
+    "sample": [
+      {
+        "symbol": "CETUSUSDT",
+        "fundingTime": 1778428800000,
+        "fundingRate": "0.00005000",
+        "markPrice": "0.03585000",
+        "rateType": "Regular"
+      }
+    ]
   },
   "promotionEligible": false,
   "reason": "VALIDATOR_INTEGRATION_AND_FULL_REPLAY_PENDING"
