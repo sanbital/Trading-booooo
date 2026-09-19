@@ -214,12 +214,35 @@ async function fundingFor(symbol){return await get("/fapi/v1/fundingRate",{symbo
 function fundingPnl(rows,entryAt,exitAt,qty){if(!Number.isFinite(exitAt))return{signedCost:0,events:0};let signed=0,n=0;for(const x of rows||[]){const t=Number(x.fundingTime),rate=Number(x.fundingRate),mark=Number(x.markPrice);if(t>entryAt&&t<=exitAt&&Number.isFinite(rate)&&Number.isFinite(mark)&&mark>0){signed+=qty*mark*rate;n++;}}return{signedCost:signed,events:n};}
 function riskPolicy(){const r=resolveRiskPolicy({risk_per_trade_pct:.25,max_daily_loss_pct:1,max_weekly_loss_pct:3,max_open_positions:1,max_open_positions_per_exchange:1,max_consecutive_losses:3});if(!r.ok)throw Error("RISK_POLICY_RESOLVE_FAILED:"+JSON.stringify(r.errors));return r.policy;}
 const RISK=riskPolicy();
+function dstr(v,p=12){
+  const n=Number(v);
+  if(!Number.isFinite(n))throw Error("NONFINITE_DECIMAL_INPUT:"+v);
+  let s=n.toFixed(p).replace(/0+$/,"").replace(/\.$/,"");
+  return s===""||s==="-0"?"0":s;
+}
 function solveRiskQuantity({equity,trade,filters,realizedToday,realizedWeek,highWater,lossStreak,slip}){
-  const limits=evaluateLossLimits({policy:RISK,equity,realizedToday,realizedThisWeek:realizedWeek,highWaterEquity:highWater,consecutiveLosses:lossStreak});if(!limits.allowed)return{decision:"SKIP",reason:limits.blocks.map(x=>x.code).join("|")||"LOSS_LIMIT"};
-  const entry=trade.entryOpen*(1+slip.entryBps/10_000),stopSlip=slip.stopBps/10_000;let fundingAllowance=0,lastQty=null,result=null;
+  const limits=evaluateLossLimits({policy:RISK,equity:dstr(equity),realizedToday:dstr(realizedToday),
+    realizedThisWeek:dstr(realizedWeek),highWaterEquity:dstr(highWater),consecutiveLosses:lossStreak});
+  if(!limits.allowed)return{decision:"SKIP",reason:limits.blocks.map(x=>x.code).join("|")||"LOSS_LIMIT"};
+  const entry=trade.entryOpen*(1+slip.entryBps/10_000),stopSlip=slip.stopBps/10_000;
+  let fundingAllowance="0",lastQty=null,result=null;
   for(let i=0;i<6;i++){
-    result=solveQuantity({policy:RISK,equity:String(equity),bookAsks:[[String(entry),"1000000000000"]],bookBids:[[String(trade.initialStop),"1000000000000"]],structuralStop:String(trade.initialStop),stopSlippageFrac:String(stopSlip),takerFeeRate:FEES.taker,stopFeeRate:FEES.taker,expectedFundingCost:String(fundingAllowance),filters:{stepSize:String(filters.stepSize),minQty:String(filters.minQty),maxQty:String(filters.maxQty),minNotional:String(filters.minNotional)},reservedRisk:"0",openGrossNotional:"0",availableMargin:String(Math.max(0,equity-.10)),leverage:"3",entryPriceCap:String(entry),dailyRemaining:limits.dailyRemaining,weeklyRemaining:limits.weeklyRemaining});
-    if(result.decision!=="ENTER")return result;const q=Number(result.plan.quantity.toString()),next=q*entry*FUNDING_RISK_ALLOWANCE_RATE;if(lastQty!==null&&Math.abs(q-lastQty)<1e-12){fundingAllowance=next;break;}lastQty=q;fundingAllowance=next;
+    result=solveQuantity({policy:RISK,equity:dstr(equity),
+      bookAsks:[[dstr(entry),"1000000000000"]],
+      bookBids:[[dstr(trade.initialStop),"1000000000000"]],
+      structuralStop:dstr(trade.initialStop),stopSlippageFrac:dstr(stopSlip),
+      takerFeeRate:dstr(FEES.taker,8),stopFeeRate:dstr(FEES.taker,8),
+      expectedFundingCost:fundingAllowance,
+      filters:{stepSize:dstr(filters.stepSize),minQty:dstr(filters.minQty),
+        maxQty:dstr(filters.maxQty),minNotional:dstr(filters.minNotional)},
+      reservedRisk:"0",openGrossNotional:"0",availableMargin:dstr(Math.max(0,equity-.10)),
+      leverage:"3",entryPriceCap:dstr(entry),dailyRemaining:limits.dailyRemaining,
+      weeklyRemaining:limits.weeklyRemaining});
+    if(result.decision!=="ENTER")return result;
+    const q=Number(result.plan.quantity.toString());
+    const next=dstr(q*entry*FUNDING_RISK_ALLOWANCE_RATE);
+    if(lastQty!==null&&Math.abs(q-lastQty)<1e-12){fundingAllowance=next;break;}
+    lastQty=q;fundingAllowance=next;
   }
   return result;
 }
@@ -285,7 +308,8 @@ for(const id of Object.keys(V26_CANDIDATES)){
   for(const s of filtered){const cached=pathCache.get(s.id),rows=Array.isArray(cached)?cached:cached?.rows;if(!rows?.length){reasons.PATH_MISSING=(reasons.PATH_MISSING||0)+1;continue;}const tr=setupTrigger(s,rows.filter(r=>Number(r[0])>=s.s5c-2*MIN));if(!tr.ok){reasons[tr.reason]=(reasons[tr.reason]||0)+1;continue;}const entryAt=Number(tr.state.triggerAt),entryRow=rows.find(r=>Number(r[0])===entryAt);if(!entryRow){reasons.ENTRY_BAR_MISSING=(reasons.ENTRY_BAR_MISSING||0)+1;continue;}const entryOpen=Number(entryRow[1]);if(Math.abs(entryOpen/s.ref-1)>POLICY.maxEntryDriftPct){reasons.ENTRY_DRIFT=(reasons.ENTRY_DRIFT||0)+1;continue;}let stop=entryOpen*(1-POLICY.stopPct);if(V26_CANDIDATES[id].structuralStop){const st=structuralStopPrice({setupLow:Number(tr.state.pullbackLow),priceTick:meta.get(s.symbol)?.filters.tickSize,atr5m14:atr14_5m(rows,entryAt)});if(st.status!=="OK"||!(st.price<entryOpen)){reasons[st.reason||"STRUCTURAL_STOP_INVALID"]=(reasons[st.reason||"STRUCTURAL_STOP_INVALID"]||0)+1;continue;}stop=st.price;}const settled=simulateExit({...s,rows,entryAt,entryOpen,initialStop:stop,filters:meta.get(s.symbol).filters},id);if(!Number.isFinite(settled.exitAt)){reasons.UNSETTLED=(reasons.UNSETTLED||0)+1;continue;}ops.push(settled);}
   opportunitiesByVariant.set(id,{ops,reasons,filteredSignals:filtered.length});console.log("OPS",id,filtered.length,ops.length,reasons);
 }
-const symbolsWithOps=new Set();for(const v of opportunitiesByVariant.values())for(const o of v.ops)symbolsWithOps.add(o.symbol);const fundingMap=new Map();let fd=0;for(const symbol of [...symbolsWithOps].sort()){fundingMap.set(symbol,await fundingFor(symbol).catch(()=>[]));if(++fd%50===0)console.log("FUNDING",fd,"/",symbolsWithOps.size);}
+const symbolsWithOps=new Set();for(const v of opportunitiesByVariant.values())for(const o of v.ops)symbolsWithOps.add(o.symbol);
+writeFileSync(new URL("funding-symbols.json",OUT),JSON.stringify([...symbolsWithOps].sort(),null,2));const fundingMap=new Map();let fd=0;for(const symbol of [...symbolsWithOps].sort()){fundingMap.set(symbol,await fundingFor(symbol).catch(()=>[]));if(++fd%50===0)console.log("FUNDING",fd,"/",symbolsWithOps.size);}
 
 const report={generatedAt:new Date().toISOString(),window:{start:new Date(START).toISOString(),end:new Date(END).toISOString(),days:DAYS},classification:"DEVELOPMENT_30D_NOT_INDEPENDENT_HOLDOUT",universe:{exchangeInfoPerpetualUsdtCoin:allSymbols.length},requestStats,costModel:{takerFeeRate:FEES.taker,actualFundingFromBinanceFundingRateHistory:false,fundingPendingConnectorEnrichment:true,fundingRiskAllowanceRate:FUNDING_RISK_ALLOWANCE_RATE,slippage:EXEC,historicalL2BookAvailable:false,slippageLimitation:"Binance REST does not provide historical L2 snapshots; baseline/stress bps are pre-registered execution assumptions."},risk:{startingEquity:30,leverage:3,minTrades:MIN_TRADES,minIndependentDays:MIN_INDEPENDENT_DAYS,riskPerTradeFrac:Number(RISK.riskPerTradeFrac.toString()),maxTotalOpenRiskFrac:Number(RISK.maxTotalOpenRiskFrac.toString()),maxGrossNotionalToEquity:Number(RISK.maxGrossNotionalToEquity.toString()),maxConcurrentPositions:RISK.maxConcurrentPositions},dataQuality:{blocked15mCutoffs:0,total15mCutoffs:Math.floor((END-START)/M15),rawSignals:uniqueSignals.length,eligible15Windows:eligibleWindows.length,repairedEligibleSource:"eligible15-repaired.json"},candidates:{},datasetHash:null,codeHash:null,noRobustEdgeFound:true,provisionalCandidate:null};
 const tradeDetails={};
