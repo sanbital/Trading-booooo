@@ -16,6 +16,7 @@ import {
   breakoutRetestHold2mDecision, controlledPullbackReclaim3mDecision, breakoutAcceptance3mDecision,
   sellerExhaustionDecision, volumeDryupReaccelDecision, buyerNotionalEscalationDecision,
   rollingPullbackQualityPercentiles, crossSectionalPullbackQualityDecision,
+  buyerFlowAccelerationScore, crossSectionalBuyerFlowDecision,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { resolveRiskPolicy, evaluateLossLimits } from "../../supabase/functions/_shared/boo/risk-policy.mjs";
 import { solveQuantity } from "../../supabase/functions/_shared/boo/risk-budget.mjs";
@@ -434,6 +435,21 @@ for(const s of mergedSignals(uniqueSignals)){
 }
 const pullbackQualityById=new Map(rollingPullbackQualityPercentiles(pullbackQualityRecords).map(x=>[x.id,x]));
 
+// C32 uses the same causal rolling percentile machinery with a distinct,
+// preregistered buyer-vs-seller quote-flow acceleration score.
+const buyerFlowRecords=[];
+for(const s of mergedSignals(uniqueSignals)){
+  const cached=pathCache.get(s.id),rows=Array.isArray(cached)?cached:cached?.rows;
+  if(!rows?.length)continue;
+  const tr=setupTrigger(s,rows.filter(r=>Number(r[0])>=s.s5c-2*MIN));
+  if(!tr.ok)continue;
+  const triggerAt=Number(tr.state.triggerAt);
+  const bars=rows.filter(r=>Number(r[0])>=triggerAt-4*MIN&&Number(r[0])<triggerAt);
+  const scored=buyerFlowAccelerationScore({triggerAt,now:triggerAt,bars});
+  if(scored.status==="KNOWN")buyerFlowRecords.push({id:s.id,at:triggerAt,score:scored.score});
+}
+const buyerFlowById=new Map(rollingPullbackQualityPercentiles(buyerFlowRecords).map(x=>[x.id,x]));
+
 const opportunitiesByVariant=new Map();
 const candidateIds=ONLY_CANDIDATE?ONLY_CANDIDATE.split(",").map(x=>x.trim()).filter(Boolean):Object.keys(V26_CANDIDATES);
 for(const id of candidateIds){
@@ -565,6 +581,11 @@ for(const id of candidateIds){
     if(V26_CANDIDATES[id].crossSectionalPullbackQuality){
       const context=pullbackQualityById.get(s.id);
       const decision=crossSectionalPullbackQualityDecision({qualityPercentile:context?.percentile,observations:context?.observations});
+      if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
+    }
+    if(V26_CANDIDATES[id].crossSectionalBuyerFlowAcceleration){
+      const context=buyerFlowById.get(s.id);
+      const decision=crossSectionalBuyerFlowDecision({flowPercentile:context?.percentile,observations:context?.observations});
       if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
     }
     if(V26_CANDIDATES[id].breakoutRetestHold2m||V26_CANDIDATES[id].controlledPullbackReclaim3m||V26_CANDIDATES[id].breakoutAcceptance3m){

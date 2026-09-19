@@ -27,6 +27,8 @@ import {
   buyerNotionalEscalationDecision,
   rollingPullbackQualityPercentiles,
   crossSectionalPullbackQualityDecision,
+  buyerFlowAccelerationScore,
+  crossSectionalBuyerFlowDecision,
   V26_CANDIDATES,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { runExit, summarise } from "../v25-pullback-reaccel/replay.mjs";
@@ -55,7 +57,7 @@ test("selection gate fails closed on null/NaN and respects exact boundaries", ()
   assert.equal(POLICY.maxDayReturn, 0.08);
 });
 
-test("registered C0-C31 definitions preserve the frozen C0-C5 prefix", () => {
+test("registered C0-C32 definitions preserve the frozen C0-C5 prefix", () => {
   assert.deepEqual(Object.keys(V26_CANDIDATES).slice(0,6), ["C0","C1","C2","C3","C4","C5"]);
   assert.ok(V26_CANDIDATES.C12);
   assert.ok(V26_CANDIDATES.C15);
@@ -65,10 +67,26 @@ test("registered C0-C31 definitions preserve the frozen C0-C5 prefix", () => {
   assert.ok(V26_CANDIDATES.C27);
   assert.ok(V26_CANDIDATES.C30);
   assert.ok(V26_CANDIDATES.C31);
+  assert.ok(V26_CANDIDATES.C32);
   assert.equal(V26_CANDIDATES.C0.structuralStop, false);
   assert.equal(V26_CANDIDATES.C4.earlyFailureExit, true);
   assert.equal(V26_CANDIDATES.C4.marketParticipation, true);
   assert.equal(V26_CANDIDATES.C5.maxDayReturn, 0.05);
+});
+
+test("C32 ranks completed buyer-flow acceleration relative to seller flow",()=>{
+  const triggerAt=1_800_002_400_000;
+  const mk=(i,q,tb)=>({openTime:triggerAt-(4-i)*60_000,open:100+i*.1,high:100.2+i*.1,
+    low:99.9+i*.1,close:100.1+i*.1,closeTime:triggerAt-(3-i)*60_000-1,
+    quoteVolume:q,takerBuyQuote:tb});
+  const scored=buyerFlowAccelerationScore({triggerAt,now:triggerAt,bars:[
+    mk(0,1000,450),mk(1,1000,470),mk(2,1100,650),mk(3,1200,780),
+  ]});
+  assert.equal(scored.status,"KNOWN");
+  assert.ok(scored.score>0);
+  assert.equal(crossSectionalBuyerFlowDecision({flowPercentile:.60,observations:20}).action,"ENTER");
+  assert.equal(crossSectionalBuyerFlowDecision({flowPercentile:.59,observations:20}).action,"REJECT");
+  assert.equal(crossSectionalBuyerFlowDecision({flowPercentile:null,observations:19}).action,"UNKNOWN");
 });
 
 test("C31 rolling pullback quality is causal and uses one cross-sectional gate",()=>{

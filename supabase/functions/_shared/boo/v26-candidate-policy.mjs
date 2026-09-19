@@ -6,7 +6,7 @@
  * is live merely because this file exists; activation requires a matching,
  * unrevoked approval identity and ENFORCE mode.
  */
-export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-13";
+export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-14";
 
 const BASE = Object.freeze({
   minDayReturn: 0.03,
@@ -38,6 +38,7 @@ const BASE = Object.freeze({
   volumeDryupReaccel: false,
   buyerNotionalEscalation: false,
   crossSectionalPullbackQuality: false,
+  crossSectionalBuyerFlowAcceleration: false,
   minRankOverride: null,
   maxRankOverride: null,
 });
@@ -122,6 +123,9 @@ export const V26_CANDIDATES = Object.freeze({
   }),
   C31: Object.freeze({
     ...BASE, id: "C31", structuralStop: true, crossSectionalPullbackQuality: true,
+  }),
+  C32: Object.freeze({
+    ...BASE, id: "C32", structuralStop: true, crossSectionalBuyerFlowAcceleration: true,
   }),
 });
 
@@ -986,4 +990,34 @@ export function crossSectionalPullbackQualityDecision({qualityPercentile,observa
   const allowed=qualityPercentile>=0.60;
   return {action:allowed?"ENTER":"REJECT",reason:allowed?"C31_PULLBACK_QUALITY_PASS":"C31_PULLBACK_QUALITY_FAIL",
     qualityPercentile,observations,threshold:0.60};
+}
+
+/**
+ * C32 score: buyer quote-volume acceleration relative to seller quote-volume
+ * acceleration over two completed two-minute blocks. This continuous score is
+ * ranked causally across contemporaneous candidates instead of requiring the
+ * four absolute buyer-notional increases used by C30.
+ */
+export function buyerFlowAccelerationScore({triggerAt,now,bars}) {
+  if(!Number.isSafeInteger(triggerAt)||!Number.isSafeInteger(now)||!Array.isArray(bars)||bars.length!==4)
+    return {status:"UNKNOWN",reason:"C32_BUYER_FLOW_INPUT_MISSING"};
+  const xs=bars.map((b,i)=>researchBar(b,triggerAt-(4-i)*minute,now));
+  if(xs.some(x=>x===null))return {status:"UNKNOWN",reason:"C32_BUYER_FLOW_BAR_INVALID"};
+  const buy=xs.map(x=>x.quote*x.ratio),sell=xs.map(x=>x.quote*(1-x.ratio));
+  const mean=x=>(x[0]+x[1])/2;
+  const priorBuy=mean(buy.slice(0,2)),recentBuy=mean(buy.slice(2,4));
+  const priorSell=mean(sell.slice(0,2)),recentSell=mean(sell.slice(2,4));
+  if(![priorBuy,recentBuy,priorSell,recentSell].every(x=>finite(x)&&x>0))
+    return {status:"UNKNOWN",reason:"C32_BUYER_FLOW_NOTIONAL_INVALID"};
+  const score=Math.log(recentBuy/priorBuy)-Math.log(recentSell/priorSell);
+  return {status:"KNOWN",score,priorBuy,recentBuy,priorSell,recentSell};
+}
+
+/** C32: keep the upper rolling cross-section of relative buyer-flow acceleration. */
+export function crossSectionalBuyerFlowDecision({flowPercentile,observations}) {
+  if(!finite(flowPercentile)||!Number.isSafeInteger(observations)||observations<20)
+    return {action:"UNKNOWN",reason:"C32_BUYER_FLOW_CONTEXT_MISSING"};
+  const allowed=flowPercentile>=0.60;
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C32_BUYER_FLOW_PASS":"C32_BUYER_FLOW_FAIL",
+    flowPercentile,observations,threshold:0.60};
 }

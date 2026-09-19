@@ -1,0 +1,51 @@
+{
+  "experimentId": "V26-SEARCH-R8-C32",
+  "preregisteredAt": "2026-09-19T17:13:33Z",
+  "branch": "research/v26-strategy-search-r8-20260920",
+  "parentCheckpoint": "8f85f53f2f74b7424f14820fa5b8b864e318cf42",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "developmentWindow": {
+    "start": "2026-08-19T15:10:00.000Z",
+    "end": "2026-09-18T15:10:00.000Z",
+    "classification": "DEVELOPMENT_USED"
+  },
+  "reservedHoldout": {
+    "start": "2025-12-22T15:10:00.000Z",
+    "end": "2026-03-22T15:10:00.000Z",
+    "status": "LOCKED_UNSEEN_DO_NOT_OPEN_UNLESS_DEVELOPMENT_AND_WALK_FORWARD_PASS"
+  },
+  "account": {
+    "startingCapitalUsdt": 30,
+    "leverage": 3,
+    "maxConcurrentPositions": 1,
+    "quantitySource": "solveQuantity.plan.quantity",
+    "riskPolicy": "existing BOO risk-policy/risk-budget plus operator-tightened limits"
+  },
+  "sharedExit": "STRENGTH_LOSS_V1",
+  "candidates": [{
+    "id": "C32",
+    "name": "ROLLING_CROSS_SECTIONAL_BUYER_FLOW_ACCELERATION",
+    "hypothesis": "A continuous relative acceleration of buyer quote notional versus seller quote notional identifies current continuation better than C30's brittle four-bar monotonic buyer-notional sequence.",
+    "score": "log(mean(takerBuyQuote[-2:]) / mean(takerBuyQuote[-4:-2])) - log(mean(sellerQuote[-2:]) / mean(sellerQuote[-4:-2]))",
+    "rules": [
+      "use exactly four completed one-minute bars ending at trigger time",
+      "rank the score against completed scores in the trailing seven days, including equal-time queue peers but no later timestamp",
+      "require at least 20 causal observations",
+      "accept score percentile >= 0.60 as the only new gate",
+      "enter at the existing trigger next open with unchanged structural stop and account protections"
+    ]
+  }],
+  "promotionGates": {
+    "minTrades": 30,
+    "minActiveDays": 10,
+    "netPnlPositive": true,
+    "monthlyReturnPositive": true,
+    "minProfitFactor": 1.2,
+    "stressNetAndPfPositive": true,
+    "top1RemovedNetPositive": true,
+    "dayBlockMultipleTestingAdjustedExpectancyLowerBoundPositive": true,
+    "walkForwardPositive": true,
+    "unusedHoldoutPositive": true
+  },
+  "holdoutPolicy": "Do not open walk-forward or reserved holdout unless C32 passes every development gate."
+}
