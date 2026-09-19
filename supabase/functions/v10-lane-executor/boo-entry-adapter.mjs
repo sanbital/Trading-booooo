@@ -140,10 +140,13 @@ export function evaluateBooEntry({
       consecutiveLosses: account.consecutiveLosses,
     });
     const entryPriceCap = Number(signal.entryPriceCap);
-    if (limits.allowed && !(entryPriceCap > 0 && Number.isFinite(entryPriceCap))) {
+    const feesKnown = [fees.takerFeeRate,fees.stopFeeRate].every(
+      rate => typeof rate === "number" && Number.isFinite(rate) && rate >= 0 && rate < 1);
+    if (limits.allowed && !feesKnown) {
+      sizing = { decision: "SKIP", reason: "ACCOUNT_FEE_UNAVAILABLE" };
+    } else if (limits.allowed && !(entryPriceCap > 0 && Number.isFinite(entryPriceCap))) {
       sizing = { decision: "SKIP", reason: "ENTRY_PRICE_CAP_UNAVAILABLE" };
-    } else if (limits.allowed && [fees.takerFeeRate,fees.stopFeeRate].every(
-      rate => typeof rate === "number" && Number.isFinite(rate) && rate >= 0 && rate < 1)) {
+    } else if (limits.allowed) {
       sizing = solveQuantity({
         policy: resolved.policy,
         equity: account.equity,
@@ -163,8 +166,6 @@ export function evaluateBooEntry({
         dailyRemaining: limits.dailyRemaining,
         weeklyRemaining: limits.weeklyRemaining,
       });
-    } else if (limits.allowed) {
-      sizing = { decision: "SKIP", reason: "ACCOUNT_FEE_UNAVAILABLE" };
     }
   }
 
