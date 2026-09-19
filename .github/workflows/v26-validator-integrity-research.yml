@@ -58,14 +58,7 @@ jobs:
           code=$(curl -sS -o /tmp/v26-integrity/funding.json -w '%{http_code}' "$url" || true)
           echo "http=$code" >> "$GITHUB_OUTPUT"
           if [ "$code" = 200 ]; then
-            node - <<'NODE'
-            const fs=require('fs');
-            const x=JSON.parse(fs.readFileSync('/tmp/v26-integrity/funding.json','utf8'));
-            if(!Array.isArray(x)) throw Error('funding response not array');
-            const e=x.find(r=>Number(r.fundingTime)===1778428800000);
-            if(!e) throw Error('expected CETUS funding event absent');
-            if(String(e.fundingRate)!=='0.00005000' || String(e.markPrice)!=='0.03585000') throw Error('CETUS event mismatch');
-            NODE
+            node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/v26-integrity/funding.json','utf8'));if(!Array.isArray(x))throw Error('funding response not array');const e=x.find(r=>Number(r.fundingTime)===1778428800000);if(!e)throw Error('expected CETUS funding event absent');if(String(e.fundingRate)!=='0.00005000'||String(e.markPrice)!=='0.03585000')throw Error('CETUS event mismatch');"
           fi
 
       - name: Save research probe checkpoint
@@ -75,32 +68,7 @@ jobs:
           FUNDING_HTTP: ${{ steps.funding.outputs.http }}
         run: |
           set -euo pipefail
-          node - <<'NODE'
-          const fs=require('fs');
-          let fundingBody=null;
-          try { fundingBody=JSON.parse(fs.readFileSync('/tmp/v26-integrity/funding.json','utf8')); } catch {}
-          const http=String(process.env.FUNDING_HTTP||'');
-          const out={
-            generatedAt:new Date().toISOString(),
-            sourceCommit:process.env.GITHUB_SHA,
-            scope:'RESEARCH_ONLY_NO_LIVE_CHANGE',
-            pureTests:'PASS',
-            binanceVision:{
-              file:'BTCUSDT-15m-2026-05.zip',
-              checksumVerified:true,
-              sha256:process.env.VISION_SHA,
-            },
-            fundingRest:{
-              httpStatus:http,
-              usable:http==='200',
-              failClosedRequired:http!=='200',
-              sample:http==='200'?fundingBody:null,
-            },
-            promotionEligible:false,
-            reason:'VALIDATOR_INTEGRATION_AND_FULL_REPLAY_PENDING'
-          };
-          fs.writeFileSync('research/v26-validated/integrity-live-probe-20260919.json',JSON.stringify(out,null,2)+'\n');
-          NODE
+          node -e "const fs=require('fs');let fundingBody=null;try{fundingBody=JSON.parse(fs.readFileSync('/tmp/v26-integrity/funding.json','utf8'));}catch{}const http=String(process.env.FUNDING_HTTP||'');const out={generatedAt:new Date().toISOString(),sourceCommit:process.env.GITHUB_SHA,scope:'RESEARCH_ONLY_NO_LIVE_CHANGE',pureTests:'PASS',binanceVision:{file:'BTCUSDT-15m-2026-05.zip',checksumVerified:true,sha256:process.env.VISION_SHA},fundingRest:{httpStatus:http,usable:http==='200',failClosedRequired:http!=='200',sample:http==='200'?fundingBody:null},promotionEligible:false,reason:'VALIDATOR_INTEGRATION_AND_FULL_REPLAY_PENDING'};fs.writeFileSync('research/v26-validated/integrity-live-probe-20260919.json',JSON.stringify(out,null,2)+'\n');"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add research/v26-validated/integrity-live-probe-20260919.json
