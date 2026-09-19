@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-19T04:14:50.407Z",
+  "generatedAt": "2026-09-19T04:16:35.463Z",
   "window": {
     "start": "2026-08-19T15:10:00.000Z",
     "end": "2026-09-18T15:10:00.000Z",
@@ -143,6 +143,15 @@
         "activeDays": 0,
         "expectancyLcb5": null
       },
+      "independentOpportunityDiagnostic": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "winRate": 0,
+        "netPnl": 0,
+        "avgNet": 0,
+        "profitFactor": 0
+      },
       "sufficientSample": false,
       "developmentPass": false
     },
@@ -247,6 +256,15 @@
         "activeDays": 3,
         "expectancyLcb5": -0.0693320439359995
       },
+      "independentOpportunityDiagnostic": {
+        "trades": 112,
+        "wins": 44,
+        "losses": 68,
+        "winRate": 0.39285714285714285,
+        "netPnl": 0.36449784864199763,
+        "avgNet": 0.003254445077160693,
+        "profitFactor": 1.0803194837762156
+      },
       "sufficientSample": false,
       "developmentPass": false
     },
@@ -350,6 +368,15 @@
         "removeTop5Net": 0,
         "activeDays": 3,
         "expectancyLcb5": -0.0693320439359995
+      },
+      "independentOpportunityDiagnostic": {
+        "trades": 112,
+        "wins": 41,
+        "losses": 71,
+        "winRate": 0.36607142857142855,
+        "netPnl": 0.05399573936099822,
+        "avgNet": 0.00048210481572319837,
+        "profitFactor": 1.0119321587484473
       },
       "sufficientSample": false,
       "developmentPass": false
@@ -461,6 +488,15 @@
         "activeDays": 4,
         "expectancyLcb5": -0.06760247930549972
       },
+      "independentOpportunityDiagnostic": {
+        "trades": 48,
+        "wins": 17,
+        "losses": 31,
+        "winRate": 0.3541666666666667,
+        "netPnl": -0.004893325821150332,
+        "avgNet": -0.00010194428794063192,
+        "profitFactor": 0.997569600448159
+      },
       "sufficientSample": false,
       "developmentPass": false
     },
@@ -570,6 +606,15 @@
         "removeTop5Net": 0,
         "activeDays": 4,
         "expectancyLcb5": -0.06760247930549972
+      },
+      "independentOpportunityDiagnostic": {
+        "trades": 48,
+        "wins": 16,
+        "losses": 32,
+        "winRate": 0.3333333333333333,
+        "netPnl": -0.044591671718651096,
+        "avgNet": -0.0009289931608052311,
+        "profitFactor": 0.9776306619802784
       },
       "sufficientSample": false,
       "developmentPass": false
@@ -685,6 +730,15 @@
         "activeDays": 5,
         "expectancyLcb5": -0.06864318505859987
       },
+      "independentOpportunityDiagnostic": {
+        "trades": 42,
+        "wins": 19,
+        "losses": 23,
+        "winRate": 0.4523809523809524,
+        "netPnl": 0.9564199656641793,
+        "avgNet": 0.022771903944385222,
+        "profitFactor": 1.6383016551121123
+      },
       "sufficientSample": false,
       "developmentPass": false
     },
@@ -794,6 +848,15 @@
         "activeDays": 0,
         "expectancyLcb5": null
       },
+      "independentOpportunityDiagnostic": {
+        "trades": 15,
+        "wins": 4,
+        "losses": 11,
+        "winRate": 0.26666666666666666,
+        "netPnl": -0.14624084529064202,
+        "avgNet": -0.009749389686042801,
+        "profitFactor": 0.7896571998412317
+      },
       "sufficientSample": false,
       "developmentPass": false
     },
@@ -894,6 +957,15 @@
         "removeTop5Net": 0,
         "activeDays": 0,
         "expectancyLcb5": null
+      },
+      "independentOpportunityDiagnostic": {
+        "trades": 5,
+        "wins": 1,
+        "losses": 4,
+        "winRate": 0.2,
+        "netPnl": -0.16286071508014752,
+        "avgNet": -0.0325721430160295,
+        "profitFactor": 0.24390174264764072
       },
       "sufficientSample": false,
       "developmentPass": false
@@ -1005,12 +1077,21 @@
         "activeDays": 2,
         "expectancyLcb5": -0.06960821162399988
       },
+      "independentOpportunityDiagnostic": {
+        "trades": 53,
+        "wins": 18,
+        "losses": 35,
+        "winRate": 0.33962264150943394,
+        "netPnl": -0.379531955571772,
+        "avgNet": -0.007160980293807019,
+        "profitFactor": 0.8356234819289711
+      },
       "sufficientSample": false,
       "developmentPass": false
     }
   },
-  "datasetHash": "eee93d09e10ccb33d242c1cdc0b730c73378b66bcb1558ea5f74725cd00b4043",
-  "codeHash": "589b1ea055fa38db9adddf7f7fa1fafc303c2f098d8c9543494cf07ec40140e8",
+  "datasetHash": "fbb84a07a5d71ca90fdef1da23809fbe4fd7de482875e1fb763c1c4918a59024",
+  "codeHash": "2457a1ebc8bd0f08979d6f95a56bb6c2a8c5b78605955d1fbf892bf9bb42e6d2",
   "noRobustEdgeFound": true,
   "provisionalCandidate": null
 }
