@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
-import { execFileSync } from "node:child_process";
 import {
   POLICY, M5, M15, parseBars, feature15, rankFeatures, entryReason, confirm5,
 } from "../../supabase/functions/_shared/leader-momentum-v17.mjs";
@@ -13,6 +12,11 @@ import {
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { resolveRiskPolicy, evaluateLossLimits } from "../../supabase/functions/_shared/boo/risk-policy.mjs";
 import { solveQuantity } from "../../supabase/functions/_shared/boo/risk-budget.mjs";
+import {
+  collectMonthlyWithDailyFallback, cutoffCoverageSummary, fetchFundingHistory,
+  fundingHistoryFromCache, logicalDatasetHash, missingTimes, sha256Hex, strengthLossDecision,
+} from "./data-source-integrity.mjs";
+import { createVerifiedVisionProvider } from "./verified-binance-provider.mjs";
 
 const DAY=86_400_000, MIN=60_000, HOUR=3_600_000;
 const END = Number(process.env.REPLAY_END_MS || 1789744200000);
@@ -24,6 +28,9 @@ const OUT = new URL("./"+RESULT_DIR+"/", import.meta.url);
 const RECOMPUTE_ELIGIBLE=process.env.RECOMPUTE_ELIGIBLE==="1";
 const ONLY_CANDIDATE=process.env.ONLY_CANDIDATE||"";
 const REPORT_CLASSIFICATION=process.env.REPORT_CLASSIFICATION||"DEVELOPMENT_30D_NOT_INDEPENDENT_HOLDOUT";
+const EXIT_POLICY=process.env.V26_EXIT_POLICY||"STRENGTH_LOSS_V1";
+const FUNDING_CACHE_PATH=process.env.V26_FUNDING_CACHE||"";
+const STRENGTH_OBSERVATION_MS=Number(process.env.V26_STRENGTH_OBSERVATION_MS||24*HOUR);
 mkdirSync(OUT,{recursive:true});
 
 const FEES = Object.freeze({ taker:0.0005 });
@@ -38,23 +45,20 @@ const MIN_TRADES = 30, MIN_INDEPENDENT_DAYS = 10;
 const EXPORT_DIR=process.env.V26_EXPORT_DIR||"/tmp/v26-export";
 const VISION_CACHE=process.env.V26_VISION_CACHE||"/tmp/v26-vision";
 mkdirSync(VISION_CACHE,{recursive:true});
-const datasetHash=createHash("sha256");
 const requestStats={requests:0,retries:0,weight:0,http429:0,http418:0,http451:0,vision404:0,visionFiles:0};
-
-function csvRows(text){
-  const out=[];
-  for(const line of text.split(/\r?\n/)){
-    if(!line)continue;
-    const a=line.split(",");
-    if(!/^\d+$/.test(a[0]??""))continue;
-    out.push(a);
-  }
-  return out;
+const datasetRecords=new Map();
+function registerDatasetRecord(source,bytesOrHash){
+  const digest=/^[0-9a-f]{64}$/i.test(String(bytesOrHash))?String(bytesOrHash).toLowerCase():sha256Hex(bytesOrHash);
+  const previous=datasetRecords.get(String(source));
+  if(previous&&previous!==digest)throw Error("DATASET_SOURCE_CONFLICT:"+source);
+  datasetRecords.set(String(source),digest);
 }
+
 function loadExport15(){
   const p=EXPORT_DIR+"/raw/k15.csv.gz";
   if(!existsSync(p))throw Error("V26_EXPORT_K15_MISSING");
-  const text=gunzipSync(readFileSync(p)).toString("utf8");
+  const compressed=readFileSync(p);registerDatasetRecord("local:audited-export/raw/k15.csv.gz",compressed);
+  const text=gunzipSync(compressed).toString("utf8");
   const map=new Map();
   for(const line of text.split(/\r?\n/).slice(1)){
     if(!line)continue;
@@ -67,7 +71,8 @@ function loadExport15(){
   }
   const missPath=new URL("./binance-missing-15m-20260903.json",import.meta.url);
   if(existsSync(missPath)){
-    const miss=JSON.parse(readFileSync(missPath,"utf8"));
+    const missBytes=readFileSync(missPath);registerDatasetRecord("repo:research/v26-validated/binance-missing-15m-20260903.json",missBytes);
+    const miss=JSON.parse(missBytes.toString("utf8"));
     for(const x of miss.rows||[]){
       if(!map.has(x.symbol))map.set(x.symbol,[]);
       map.get(x.symbol).push(x.row);
@@ -81,7 +86,9 @@ function loadExport15(){
 }
 const export15=loadExport15();
 
-const pin=JSON.parse(readFileSync(new URL("./binance-symbol-filters-20260919.json",import.meta.url),"utf8"));
+const pinUrl=new URL("./binance-symbol-filters-20260919.json",import.meta.url);
+const pinBytes=readFileSync(pinUrl);registerDatasetRecord("repo:research/v26-validated/binance-symbol-filters-20260919.json",pinBytes);
+const pin=JSON.parse(pinBytes.toString("utf8"));
 const exchangeInfo={symbols:(pin.symbols||[]).map(s=>({
   symbol:s.symbol,status:s.status,contractType:s.contractType,quoteAsset:s.quoteAsset,
   underlyingType:s.underlyingType,onboardDate:s.onboardDate,deliveryDate:s.deliveryDate,
@@ -98,65 +105,26 @@ function daysBetween(start,end){
   for(;t<=last;t+=DAY)a.push(ymd(t));
   return a;
 }
-async function visionDay(symbol,interval,date){
-  const key=symbol+"|"+interval+"|"+date;
-  const safe=encodeURIComponent(symbol);
-  const local=VISION_CACHE+"/"+safe+"-"+interval+"-"+date+".csv";
-  if(existsSync(local))return csvRows(readFileSync(local,"utf8"));
-  const fn=encodeURIComponent(symbol+"-"+interval+"-"+date+".zip");
-  const url="https://data.binance.vision/data/futures/um/daily/klines/"+safe+"/"+interval+"/"+fn;
-  let res;
-  for(let a=0;a<4;a++){
-    requestStats.requests++;
-    res=await fetch(url,{headers:{"user-agent":"Trading-booooo-v26-validation"}});
-    if(res.ok)break;
-    if(res.status===404){requestStats.vision404++;return [];}
-    requestStats.retries++;
-    await new Promise(r=>setTimeout(r,Math.min(8000,500*2**a)));
-  }
-  if(!res?.ok)throw Error("VISION_HTTP_"+(res?.status??"UNKNOWN")+":"+url);
-  const bytes=new Uint8Array(await res.arrayBuffer());
-  datasetHash.update(url);datasetHash.update(bytes);
-  const zip=VISION_CACHE+"/"+safe+"-"+interval+"-"+date+".zip";
-  writeFileSync(zip,bytes);
-  const text=execFileSync("unzip",["-p",zip],{encoding:"utf8",maxBuffer:128*1024*1024});
-  writeFileSync(local,text);
-  requestStats.visionFiles++;
-  return csvRows(text);
-}
-function ym(t){return new Date(t).toISOString().slice(0,7);}
-function monthsBetween(start,end){
-  const out=[],d=new Date(Date.UTC(new Date(start).getUTCFullYear(),new Date(start).getUTCMonth(),1));
-  const last=new Date(Date.UTC(new Date(end).getUTCFullYear(),new Date(end).getUTCMonth(),1));
-  while(d<=last){out.push(d.toISOString().slice(0,7));d.setUTCMonth(d.getUTCMonth()+1);}
-  return out;
-}
-async function visionMonth(symbol,interval,month){
-  const safe=encodeURIComponent(symbol),local=VISION_CACHE+"/"+safe+"-"+interval+"-"+month+"-monthly.csv";
-  if(existsSync(local))return csvRows(readFileSync(local,"utf8"));
-  const fn=encodeURIComponent(symbol+"-"+interval+"-"+month+".zip");
-  const url="https://data.binance.vision/data/futures/um/monthly/klines/"+safe+"/"+interval+"/"+fn;
-  let res;
-  for(let a=0;a<4;a++){
-    requestStats.requests++;
-    res=await fetch(url,{headers:{"user-agent":"Trading-booooo-v26-validation"}});
-    if(res.ok)break;
-    if(res.status===404){requestStats.vision404++;return [];}
-    requestStats.retries++;await new Promise(r=>setTimeout(r,Math.min(8000,500*2**a)));
-  }
-  if(!res?.ok)throw Error("VISION_MONTH_HTTP_"+(res?.status??"UNKNOWN")+":"+url);
-  const bytes=new Uint8Array(await res.arrayBuffer());datasetHash.update(url);datasetHash.update(bytes);
-  const zip=VISION_CACHE+"/"+safe+"-"+interval+"-"+month+"-monthly.zip";writeFileSync(zip,bytes);
-  const text=execFileSync("unzip",["-p",zip],{encoding:"utf8",maxBuffer:256*1024*1024});
-  writeFileSync(local,text);requestStats.visionFiles++;return csvRows(text);
-}
+const vision=createVerifiedVisionProvider({
+  cacheDir:VISION_CACHE,
+  onRequest:()=>requestStats.requests++,
+  onNotFound:()=>requestStats.vision404++,
+  onRetry:(_url,status)=>{requestStats.retries++;if(status===418)requestStats.http418++;if(status===429)requestStats.http429++;if(status===451)requestStats.http451++;},
+  onVerified:r=>{registerDatasetRecord(r.source,r.sha256);requestStats.visionFiles++;},
+});
+async function visionDay(symbol,interval,date){return (await vision.load({kind:"daily",symbol,interval,period:date})).rows;}
+async function visionMonth(symbol,interval,month){return (await vision.load({kind:"monthly",symbol,interval,period:month})).rows;}
 async function visionRows(symbol,interval,start,end){
-  const all=[];
   if(interval==="15m"){
-    let anyMonthly=false;
-    for(const month of monthsBetween(start,end)){const rows=await visionMonth(symbol,interval,month);if(rows.length)anyMonthly=true;all.push(...rows);}
-    if(anyMonthly)return all.filter(r=>Number(r[0])>=start&&Number(r[0])<=end);
+    const acquired=await collectMonthlyWithDailyFallback({
+      start,end,intervalMs:M15,
+      loadMonthly:month=>visionMonth(symbol,interval,month),
+      loadDaily:date=>visionDay(symbol,interval,date),
+    });
+    if(!acquired.complete)throw Error(`KLINE_COVERAGE_INCOMPLETE:${symbol}:${interval}:${acquired.missing.length}`);
+    return acquired.rows;
   }
+  const all=[];
   for(const date of daysBetween(start,end))all.push(...await visionDay(symbol,interval,date));
   return all.filter(r=>Number(r[0])>=start&&Number(r[0])<=end);
 }
@@ -179,7 +147,7 @@ async function pagedKlines(symbol,interval,start,end,limit=1000){
     rows=await visionRows(symbol,interval,start,end);
   }else if(interval==="15m"&&export15.has(symbol)){
     const cached=export15.get(symbol).filter(r=>Number(r[0])>=start&&Number(r[0])<=end);
-    rows=cached.length?cached:await visionRows(symbol,interval,start,end);
+    rows=missingTimes(cached,start,end,M15).length?[...cached,...await visionRows(symbol,interval,start,end)]:cached;
   }else{
     rows=await visionRows(symbol,interval,start,end);
   }
@@ -189,11 +157,15 @@ async function pagedKlines(symbol,interval,start,end,limit=1000){
     if(seen.has(t)&&JSON.stringify(seen.get(t))!==JSON.stringify(r))throw Error("KLINE_CONFLICT:"+symbol+":"+interval+":"+t);
     seen.set(t,r);
   }
-  return [...seen.values()].sort((a,b)=>Number(a[0])-Number(b[0]));
+  const sorted=[...seen.values()].sort((a,b)=>Number(a[0])-Number(b[0]));
+  const intervalMs=interval==="15m"?M15:interval==="5m"?M5:interval==="1m"?MIN:null;
+  if(!intervalMs)throw Error("UNSUPPORTED_KLINE_INTERVAL:"+interval);
+  const gaps=missingTimes(sorted,start,end,intervalMs);
+  if(gaps.length)throw Error(`KLINE_COVERAGE_INCOMPLETE:${symbol}:${interval}:${gaps.length}`);
+  return sorted;
 }
 async function get(path,params={}){
   if(path==="/fapi/v1/exchangeInfo")return exchangeInfo;
-  if(path==="/fapi/v1/fundingRate")return [];
   throw Error("UNSUPPORTED_OFFLINE_GET:"+path);
 }
 
@@ -245,12 +217,24 @@ function simulateExit(op,variant){
     mae=Math.min(mae,l/entry-1);mfe=Math.max(mfe,h/entry-1);if(h>peak){peak=h;lastHighAt=closeAt;}
     const omfe=peak/entry-1;if(omfe>=POLICY.trailArmPct)stop=Math.max(stop,peak*(1-POLICY.trailGapPct));if(omfe>=.02)stop=Math.max(stop,entry+(peak-entry)*.50);if(omfe>=.01||closeAt-op.entryAt>=600_000)stop=Math.max(stop,entry*(1-.012));marks.push({t:closeAt,c});
     if(V26_CANDIDATES[variant].earlyFailureExit&&closeAt-op.entryAt<=5*MIN){const ef=earlyFailureDecision({entryPrice:entry,initialStopPrice:op.initialStop,signalReference:op.ref,entryAt:op.entryAt,now:closeAt+1,completedBars:rows.slice(0,i+1).map(x=>({openTime:Number(x[0]),closeTime:Number(x[0])+MIN-1,high:Number(x[2]),close:Number(x[4]),quoteVolume:Number(x[7]),takerBuyQuote:Number(x[10])}))});if(ef.action==="CLOSE")pending=ef.reason;}
-    if(!pending&&closeAt-op.entryAt>=POLICY.maxHoldMs)pending="V17_MAX_HOLD";if(!pending&&closeAt-lastHighAt>=POLICY.staleMs)pending="V17_MOMENTUM_STALE";
+    if(!pending&&EXIT_POLICY==="LEGACY_C0_C12_REPRODUCTION"&&closeAt-op.entryAt>=POLICY.maxHoldMs)pending="V17_MAX_HOLD";
+    if(!pending&&EXIT_POLICY==="LEGACY_C0_C12_REPRODUCTION"&&closeAt-lastHighAt>=POLICY.staleMs)pending="V17_MOMENTUM_STALE";
+    if(!pending&&EXIT_POLICY==="STRENGTH_LOSS_V1"&&i>=2){
+      const decision=strengthLossDecision({
+        bars:rows.slice(i-2,i+1).map(x=>({high:Number(x[2]),close:Number(x[4]),quoteVolume:Number(x[7]),takerBuyQuote:Number(x[10])})),
+        referencePrice:op.ref,peakPrice:peak,
+      });
+      if(decision.close)pending=decision.reason;
+    }
+  }
+  if(EXIT_POLICY==="STRENGTH_LOSS_V1"){
+    const mark=op.evaluationMark;
+    if(!(mark&&Number.isSafeInteger(mark.at)&&Number.isFinite(mark.price)&&mark.price>0))throw Error("EVALUATION_MARK_MISSING:"+op.symbol);
+    return{...op,exitAt:mark.at,exitRef:mark.price,exitKind:"EVALUATION",reason:"EVALUATION_MARK",markToMarket:true,mfe,mae,marks};
   }
   return{...op,exitAt:null,exitRef:null,exitKind:"UNSETTLED",reason:"PATH_END",mfe,mae,marks};
 }
 function applySlippage(t,s){const entry=t.entryOpen*(1+s.entryBps/10_000);if(!Number.isFinite(t.exitRef))return{...t,entryExec:entry,exitExec:null};const b=t.exitKind==="STOP"?s.stopBps:s.discretionaryBps;return{...t,entryExec:entry,exitExec:t.exitRef*(1-b/10_000)};}
-async function fundingFor(symbol){return await get("/fapi/v1/fundingRate",{symbol,startTime:START,endTime:END,limit:1000},1);}
 function fundingPnl(rows,entryAt,exitAt,qty){if(!Number.isFinite(exitAt))return{signedCost:0,events:0};let signed=0,n=0;for(const x of rows||[]){const t=Number(x.fundingTime),rate=Number(x.fundingRate),mark=Number(x.markPrice);if(t>entryAt&&t<=exitAt&&Number.isFinite(rate)&&Number.isFinite(mark)&&mark>0){signed+=qty*mark*rate;n++;}}return{signedCost:signed,events:n};}
 function riskPolicy(){const r=resolveRiskPolicy({risk_per_trade_pct:.25,max_daily_loss_pct:1,max_weekly_loss_pct:3,max_open_positions:1,max_open_positions_per_exchange:1,max_consecutive_losses:3});if(!r.ok)throw Error("RISK_POLICY_RESOLVE_FAILED:"+JSON.stringify(r.errors));return r.policy;}
 const RISK=riskPolicy();
@@ -317,7 +301,8 @@ function bootstrapLcb(trades,seedText){
 }
 function summarizeAccount(result){
   const ts=result.trades,w=ts.filter(t=>t.net>0),l=ts.filter(t=>t.net<=0),gp=w.reduce((s,t)=>s+t.net,0),gl=Math.abs(l.reduce((s,t)=>s+t.net,0)),net=ts.reduce((s,t)=>s+t.net,0);let streak=0,maxStreak=0;for(const t of ts){if(t.net<=0){streak++;maxStreak=Math.max(maxStreak,streak);}else streak=0;}const byDay={},byWeek={};for(const t of ts){const d=kstDayKey(t.exitAt),wk=kstWeekKey(t.exitAt);byDay[d]=(byDay[d]||0)+t.net;byWeek[wk]=(byWeek[wk]||0)+t.net;}const strip=n=>{const ids=new Set([...ts].sort((a,b)=>b.net-a.net).slice(0,n).map(x=>x.id));return ts.filter(t=>!ids.has(t.id)).reduce((s,t)=>s+t.net,0);};
-  return{trades:ts.length,rejections:result.rejections,wins:w.length,losses:l.length,netPnl:net,finalEquity:30+net,returnPct:net/30,profitFactor:gl>0?gp/gl:(gp>0?Infinity:0),avgWin:w.length?gp/w.length:0,avgLoss:l.length?-gl/l.length:0,avgNet:ts.length?net/ts.length:0,mdd:result.mdd,longestLossStreak:maxStreak,byDay,byWeek,removeTop1Net:strip(1),removeTop3Net:strip(3),removeTop5Net:strip(5),activeDays:Object.keys(byDay).length,expectancyLcb5:bootstrapLcb(ts,result.variant)};
+  const marked=ts.filter(t=>t.markToMarket),realized=ts.filter(t=>!t.markToMarket);
+  return{trades:ts.length,realizedTrades:realized.length,markedOpenPositions:marked.length,markedOpenPnl:marked.reduce((s,t)=>s+t.net,0),rejections:result.rejections,wins:w.length,losses:l.length,netPnl:net,finalEquity:30+net,returnPct:net/30,profitFactor:gl>0?gp/gl:(gp>0?Infinity:0),avgWin:w.length?gp/w.length:0,avgLoss:l.length?-gl/l.length:0,avgNet:ts.length?net/ts.length:0,mdd:result.mdd,longestLossStreak:maxStreak,byDay,byWeek,removeTop1Net:strip(1),removeTop3Net:strip(3),removeTop5Net:strip(5),activeDays:Object.keys(byDay).length,expectancyLcb5:bootstrapLcb(ts,result.variant)};
 }
 function runAccount(variant,ops,fundingMap,slip){
   let equity=30,highWater=30,busyUntil=-Infinity,lossStreak=0,mdd=0,peak=30;const realizedDay=new Map(),realizedWeek=new Map(),trades=[],rej={};const reject=r=>rej[r]=(rej[r]||0)+1;
@@ -326,7 +311,7 @@ function runAccount(variant,ops,fundingMap,slip){
     const qty=Number(sized.plan.quantity.toString()),t=applySlippage(base,slip);if(!(qty>0&&Number.isFinite(t.exitExec))){reject("UNSETTLED_OR_INVALID");continue;}const fund=fundingPnl(fundingMap.get(t.symbol)||[],t.entryAt,t.exitAt,qty),entryFee=t.entryExec*qty*FEES.taker,exitFee=t.exitExec*qty*FEES.taker,gross=(t.exitExec-t.entryExec)*qty,net=gross-entryFee-exitFee-fund.signedCost;
     for(const m of t.marks){if(m.t>=t.exitAt)break;const accrued=fundingPnl(fundingMap.get(t.symbol)||[],t.entryAt,m.t,qty).signedCost,marked=equity+(m.c-t.entryExec)*qty-entryFee-accrued;peak=Math.max(peak,marked);mdd=Math.min(mdd,marked-peak);}
     equity+=net;peak=Math.max(peak,equity);mdd=Math.min(mdd,equity-peak);highWater=Math.max(highWater,equity);const ed=kstDayKey(t.exitAt),ew=kstWeekKey(t.exitAt);realizedDay.set(ed,(realizedDay.get(ed)||0)+net);realizedWeek.set(ew,(realizedWeek.get(ew)||0)+net);lossStreak=net<=0?lossStreak+1:0;busyUntil=t.exitAt;
-    trades.push({id:t.id,symbol:t.symbol,rank:t.rank,entryAt:t.entryAt,exitAt:t.exitAt,reason:t.reason,qty,entry:t.entryExec,exit:t.exitExec,gross,entryFee,exitFee,funding:fund.signedCost,fundingEvents:fund.events,net,plannedLoss:Number(sized.plan.plannedLoss.toString()),initialStop:t.initialStop,mfe:t.mfe,mae:t.mae});
+    trades.push({id:t.id,symbol:t.symbol,rank:t.rank,entryAt:t.entryAt,exitAt:t.exitAt,reason:t.reason,markToMarket:!!t.markToMarket,qty,entry:t.entryExec,exit:t.exitExec,gross,entryFee,exitFee,funding:fund.signedCost,fundingEvents:fund.events,net,plannedLoss:Number(sized.plan.plannedLoss.toString()),initialStop:t.initialStop,mfe:t.mfe,mae:t.mae});
   }
   return{variant,trades,rejections:rej,mdd};
 }
@@ -384,15 +369,27 @@ console.log("PREFETCH5_DONE",need5.size);
 const rawSignals=[];let ew=0;
 for(const x of eligibleWindows){const rows=await pagedKlines(x.f.symbol,"5m",x.cut-14*M5,x.cut+10*M5-1,100).catch(()=>[]),idx=indexRows(rows);for(const t of [x.cut,x.cut+M5,x.cut+2*M5]){if(t<START||t>=END)continue;try{const b=exactBars(idx,M5,t,14),last=b.at(-1),prev=b.at(-2),r5=last.c/prev.c-1,r15=last.c/b.at(-4).c-1;if(r5>=POLICY.min5mReturn&&r15>0&&last.c>=last.o)rawSignals.push({id:`${x.f.symbol}:${t}`,symbol:x.f.symbol,s5c:t,ref:last.c,rank:x.f.rank,c5Allowed:x.c5,marketAllowed:x.marketAllowed,features:{...x.f,referenceClose:last.c,signal5Close:t,return5m:r5,confirmationReturn15m:r15}});}catch{}}if(++ew%100===0)console.log("5M_WINDOWS",ew,"/",eligibleWindows.length);}
 const uniqueSignals=[...new Map(rawSignals.map(s=>[s.id,s])).values()].sort((a,b)=>a.s5c-b.s5c||a.symbol.localeCompare(b.symbol));console.log("RAW_SIGNALS",uniqueSignals.length);
+const pathHorizon=EXIT_POLICY==="LEGACY_C0_C12_REPRODUCTION"?POLICY.maxHoldMs:STRENGTH_OBSERVATION_MS;
 const need1=new Map();
 for(const sig of uniqueSignals){
-  const a=sig.s5c-90*MIN,b=sig.s5c+SETUP_POLICY.setupTtlMs+POLICY.maxHoldMs+15*MIN-1;
+  const a=sig.s5c-90*MIN,b=Math.min(END-1,sig.s5c+SETUP_POLICY.setupTtlMs+pathHorizon+15*MIN-1);
   for(const d of daysBetween(a,b)){const k=sig.symbol+"|"+d;need1.set(k,{symbol:sig.symbol,date:d});}
 }
 await mapLimit([...need1.values()],16,x=>visionDay(x.symbol,"1m",x.date));
 console.log("PREFETCH1_DONE",need1.size);
 const pathCache=new Map();let ps=0;
-for(const s of uniqueSignals){try{const rows=await pagedKlines(s.symbol,"1m",s.s5c-90*MIN,s.s5c+SETUP_POLICY.setupTtlMs+POLICY.maxHoldMs+15*MIN-1,500);pathCache.set(s.id,rows);}catch(e){pathCache.set(s.id,{error:String(e),rows:[]});}if(++ps%50===0)console.log("1M_PATHS",ps,"/",uniqueSignals.length);}
+for(const s of uniqueSignals){const until=Math.min(END-1,s.s5c+SETUP_POLICY.setupTtlMs+pathHorizon+15*MIN-1);const rows=await pagedKlines(s.symbol,"1m",s.s5c-90*MIN,until,500);pathCache.set(s.id,rows);if(++ps%50===0)console.log("1M_PATHS",ps,"/",uniqueSignals.length);}
+const evaluationMarks=new Map();
+if(EXIT_POLICY==="STRENGTH_LOSS_V1"){
+  const symbols=[...new Set(uniqueSignals.map(s=>s.symbol))].sort();
+  await mapLimit(symbols,12,async symbol=>{
+    const lc=meta.get(symbol);const at=Math.min(END,lc?.delivery||END);
+    const rows=await pagedKlines(symbol,"1m",Math.max(START,at-DAY),at-1,1500);
+    const last=rows.at(-1);
+    if(!last)throw Error("EVALUATION_MARK_MISSING:"+symbol);
+    evaluationMarks.set(symbol,{at,price:Number(last[4]),sourceBar:Number(last[0])});
+  });
+}
 
 const opportunitiesByVariant=new Map();
 const candidateIds=ONLY_CANDIDATE?[ONLY_CANDIDATE]:Object.keys(V26_CANDIDATES);
@@ -495,7 +492,7 @@ for(const id of candidateIds){
     const tl=triggerBarForDiag?Number(triggerBarForDiag[3]):Number.NaN;
     const tc=triggerBarForDiag?Number(triggerBarForDiag[4]):Number.NaN;
     const settled=simulateExit({
-      ...s,rows,entryAt,entryOpen,initialStop:stop,filters:meta.get(s.symbol).filters,
+      ...s,rows,entryAt,entryOpen,initialStop:stop,filters:meta.get(s.symbol).filters,evaluationMark:evaluationMarks.get(s.symbol),
       diagnosticFeatures:{
         dayReturn:Number(s.features?.dayReturn),
         volumeRatio:Number(s.features?.volumeRatio),
@@ -518,9 +515,42 @@ for(const id of candidateIds){
   opportunitiesByVariant.set(id,{ops,reasons,filteredSignals:filtered.length});console.log("OPS",id,filtered.length,ops.length,reasons);
 }
 const symbolsWithOps=new Set();for(const v of opportunitiesByVariant.values())for(const o of v.ops)symbolsWithOps.add(o.symbol);
-writeFileSync(new URL("funding-symbols.json",OUT),JSON.stringify([...symbolsWithOps].sort(),null,2));const fundingMap=new Map();let fd=0;for(const symbol of [...symbolsWithOps].sort()){fundingMap.set(symbol,await fundingFor(symbol).catch(()=>[]));if(++fd%50===0)console.log("FUNDING",fd,"/",symbolsWithOps.size);}
+writeFileSync(new URL("funding-symbols.json",OUT),JSON.stringify([...symbolsWithOps].sort(),null,2));
+let fundingCache=null;
+if(FUNDING_CACHE_PATH){
+  if(!existsSync(FUNDING_CACHE_PATH))throw Error("FUNDING_CACHE_MISSING:"+FUNDING_CACHE_PATH);
+  const bytes=readFileSync(FUNDING_CACHE_PATH);registerDatasetRecord("local:funding-cache:"+FUNDING_CACHE_PATH,bytes);
+  const parsed=JSON.parse(bytes.toString("utf8"));
+  fundingCache=Array.isArray(parsed.queriedHoldingIntervals)?{coverage:parsed.queriedHoldingIntervals.map(x=>({symbol:x.symbol,startTime:Number(x.entryAt),endTime:Number(x.exitAt),events:x.events||[]}))}:parsed;
+}
+const fundingMap=new Map();let fd=0;
+for(const symbol of [...symbolsWithOps].sort()){
+  const intervals=[];
+  for(const v of opportunitiesByVariant.values())for(const o of v.ops)if(o.symbol===symbol)intervals.push({entryAt:o.entryAt,exitAt:o.exitAt});
+  const unique=[...new Map(intervals.map(x=>[`${x.entryAt}:${x.exitAt}`,x])).values()];
+  let rows=[];
+  if(fundingCache){
+    for(const x of unique)rows.push(...fundingHistoryFromCache({cache:fundingCache,symbol,startTime:x.entryAt,endTime:x.exitAt}));
+  }else if(unique.length){
+    const startTime=Math.min(...unique.map(x=>x.entryAt)),endTime=Math.max(...unique.map(x=>x.exitAt));
+    rows=await fetchFundingHistory({symbol,startTime,endTime});
+    registerDatasetRecord(`binance-usdm-funding:${symbol}:${startTime}:${endTime}`,JSON.stringify(rows));
+  }
+  fundingMap.set(symbol,[...new Map(rows.map(x=>[Number(x.fundingTime),x])).values()].sort((a,b)=>Number(a.fundingTime)-Number(b.fundingTime)));
+  if(++fd%50===0)console.log("FUNDING",fd,"/",symbolsWithOps.size);
+}
 
-const report={generatedAt:new Date().toISOString(),window:{start:new Date(START).toISOString(),end:new Date(END).toISOString(),days:DAYS},classification:REPORT_CLASSIFICATION,universe:{exchangeInfoPerpetualUsdtCoin:allSymbols.length},requestStats,costModel:{takerFeeRate:FEES.taker,actualFundingFromBinanceFundingRateHistory:false,fundingPendingConnectorEnrichment:true,fundingRiskAllowanceRate:FUNDING_RISK_ALLOWANCE_RATE,slippage:EXEC,historicalL2BookAvailable:false,slippageLimitation:"Binance REST does not provide historical L2 snapshots; baseline/stress bps are pre-registered execution assumptions."},risk:{startingEquity:30,leverage:3,minTrades:MIN_TRADES,minIndependentDays:MIN_INDEPENDENT_DAYS,riskPerTradeFrac:Number(RISK.riskPerTradeFrac.toString()),maxTotalOpenRiskFrac:Number(RISK.maxTotalOpenRiskFrac.toString()),maxGrossNotionalToEquity:Number(RISK.maxGrossNotionalToEquity.toString()),maxConcurrentPositions:RISK.maxConcurrentPositions},dataQuality:{blocked15mCutoffs:0,total15mCutoffs:Math.floor((END-START)/M15),rawSignals:uniqueSignals.length,eligible15Windows:eligibleWindows.length,repairedEligibleSource:eligibleSource},candidates:{},datasetHash:null,codeHash:null,noRobustEdgeFound:true,provisionalCandidate:null};
+let cutoffQuality;
+if(RECOMPUTE_ELIGIBLE){
+  const total=Math.floor((END-Math.ceil(START/M15)*M15-1)/M15)+1;
+  cutoffQuality={totalCutoffs:Math.max(0,total),blockedCutoffs:[...cutoffState.values()].filter(x=>x.blocked).length,source:"RECOMPUTED_BINANCE_VISION_15M"};
+}else{
+  const cutoffs=[];for(let cut=Math.ceil(START/M15)*M15;cut<END;cut+=M15)cutoffs.push(cut);
+  const q=cutoffCoverageSummary({cutoffs,expectedByCutoff:cut=>allSymbols.filter(s=>{const lc=lifecycle(s);return lc.onboard<=cut-110*M15&&lc.delivery>cut;}).map(s=>s.symbol),rowsBySymbol:export15,intervalMs:M15,requiredBars:110,minCoverage:POLICY.minCoverage});
+  cutoffQuality={totalCutoffs:q.totalCutoffs,blockedCutoffs:q.blockedCutoffs,source:"AUDITED_EXPORT_15M",minCoverage:POLICY.minCoverage};
+}
+
+const report={generatedAt:new Date().toISOString(),window:{start:new Date(START).toISOString(),end:new Date(END).toISOString(),days:DAYS},classification:REPORT_CLASSIFICATION,exitPolicy:EXIT_POLICY,universe:{exchangeInfoPerpetualUsdtCoin:allSymbols.length},requestStats,costModel:{takerFeeRate:FEES.taker,actualFundingFromBinanceFundingRateHistory:true,fundingProvider:FUNDING_CACHE_PATH?"VERIFIED_COVERAGE_CACHE":"BINANCE_USDM_FUNDING_RATE_HISTORY",fundingPendingConnectorEnrichment:false,fundingRiskAllowanceRate:FUNDING_RISK_ALLOWANCE_RATE,slippage:EXEC,historicalL2BookAvailable:false,slippageLimitation:"Binance REST does not provide historical L2 snapshots; baseline/stress bps are pre-registered execution assumptions."},risk:{startingEquity:30,leverage:3,minTrades:MIN_TRADES,minIndependentDays:MIN_INDEPENDENT_DAYS,riskPerTradeFrac:Number(RISK.riskPerTradeFrac.toString()),maxTotalOpenRiskFrac:Number(RISK.maxTotalOpenRiskFrac.toString()),maxGrossNotionalToEquity:Number(RISK.maxGrossNotionalToEquity.toString()),maxConcurrentPositions:RISK.maxConcurrentPositions},dataQuality:{blocked15mCutoffs:cutoffQuality.blockedCutoffs,total15mCutoffs:cutoffQuality.totalCutoffs,cutoffCoverageSource:cutoffQuality.source,rawSignals:uniqueSignals.length,eligible15Windows:eligibleWindows.length,repairedEligibleSource:eligibleSource},candidates:{},datasetHash:null,codeHash:null,noRobustEdgeFound:true,provisionalCandidate:null};
 const tradeDetails={},diagnosticDetails={};
 for(const id of candidateIds){
   const x=opportunitiesByVariant.get(id),base=runAccount(id,x.ops,fundingMap,EXEC.baseline),
@@ -534,5 +564,5 @@ for(const id of candidateIds){
   tradeDetails[id]={baseline:base.trades,stress2x:s2.trades,stress4x:s4.trades};
   diagnosticDetails[id]=diag.trades;
 }
-const viable=Object.entries(report.candidates).filter(([,v])=>v.developmentPass).sort((a,b)=>b[1].stress2x.netPnl-a[1].stress2x.netPnl);if(viable.length)report.provisionalCandidate=viable[0][0];report.noRobustEdgeFound=true;report.datasetHash=datasetHash.digest("hex");const codeHasher=createHash("sha256");for(const f of [new URL("../../supabase/functions/_shared/leader-momentum-v17.mjs",import.meta.url),new URL("../../supabase/functions/_shared/leader-pullback-reaccel.mjs",import.meta.url),new URL("../../supabase/functions/_shared/boo/v26-candidate-policy.mjs",import.meta.url),new URL("../../supabase/functions/_shared/boo/risk-policy.mjs",import.meta.url),new URL("../../supabase/functions/_shared/boo/risk-budget.mjs",import.meta.url)])codeHasher.update(readFileSync(f));codeHasher.update(readFileSync(new URL(import.meta.url)));report.codeHash=codeHasher.digest("hex");
+const viable=Object.entries(report.candidates).filter(([,v])=>v.developmentPass).sort((a,b)=>b[1].stress2x.netPnl-a[1].stress2x.netPnl);if(viable.length)report.provisionalCandidate=viable[0][0];report.noRobustEdgeFound=true;report.datasetHash=logicalDatasetHash([...datasetRecords].map(([source,sha256])=>({source,sha256})));const codeHasher=createHash("sha256");for(const f of [new URL("../../supabase/functions/_shared/leader-momentum-v17.mjs",import.meta.url),new URL("../../supabase/functions/_shared/leader-pullback-reaccel.mjs",import.meta.url),new URL("../../supabase/functions/_shared/boo/v26-candidate-policy.mjs",import.meta.url),new URL("../../supabase/functions/_shared/boo/risk-policy.mjs",import.meta.url),new URL("../../supabase/functions/_shared/boo/risk-budget.mjs",import.meta.url),new URL("./data-source-integrity.mjs",import.meta.url),new URL("./verified-binance-provider.mjs",import.meta.url)])codeHasher.update(readFileSync(f));codeHasher.update(readFileSync(new URL(import.meta.url)));report.codeHash=codeHasher.digest("hex");
 writeFileSync(new URL("summary.json",OUT),JSON.stringify(report,null,2));writeFileSync(new URL("trades-pre-funding.json",OUT),JSON.stringify(tradeDetails,null,2));writeFileSync(new URL("edge-diagnostic.json",OUT),JSON.stringify(diagnosticDetails,null,2));const md=[];md.push("# Binance 30-day V26 validation","",`Window: ${report.window.start} -> ${report.window.end}`,"","This is a fresh Binance-API development replay, not an independent holdout.","","| Candidate | Trades | Net | Final equity | Return | PF | MDD | LCB/trade | Stress2x net | Stress4x net | Dev pass |","|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|");for(const [id,v] of Object.entries(report.candidates)){const b=v.baseline;md.push(`| ${id} | ${b.trades} | ${b.netPnl.toFixed(4)} | ${b.finalEquity.toFixed(4)} | ${(b.returnPct*100).toFixed(2)}% | ${Number.isFinite(b.profitFactor)?b.profitFactor.toFixed(3):"Inf"} | ${b.mdd.toFixed(4)} | ${b.expectancyLcb5==null?"NA":b.expectancyLcb5.toFixed(5)} | ${v.stress2x.netPnl.toFixed(4)} | ${v.stress4x.netPnl.toFixed(4)} | ${v.developmentPass?"YES":"NO"} |`);}md.push("","Provisional candidate: "+(report.provisionalCandidate??"NONE"),"","no_robust_edge_found=true (no unused independent holdout).","","Dataset hash: `"+report.datasetHash+"`","Code hash: `"+report.codeHash+"`");writeFileSync(new URL("SUMMARY.md",OUT),md.join("\n")+"\n");console.log(md.join("\n"));
