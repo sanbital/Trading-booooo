@@ -1,0 +1,12 @@
+{
+  "completedAt": "2026-09-19T17:18:25Z",
+  "iteration": "R8",
+  "testedCandidates": ["C32"],
+  "nextCandidateId": "C33",
+  "no_robust_edge_found": true,
+  "developmentPass": [],
+  "walkForwardRun": false,
+  "walkForwardReason": "C32 failed development profitability and robustness gates.",
+  "unusedHoldoutConsumed": false,
+  "nextHypothesisConstraint": "Do not tune C32 percentile. Test a distinct single cross-sectional execution-adjusted continuation geometry score: completed breakout surplus relative to structural-stop loss and conservative round-trip costs."
+}
