@@ -9,7 +9,7 @@ import {
   SETUP_POLICY, SETUP_STATE, advancePullbackSetup, startPullbackSetup,
 } from "../../supabase/functions/_shared/leader-pullback-reaccel.mjs";
 import {
-  V26_CANDIDATES, structuralStopPrice, earlyFailureDecision, marketParticipationDecision,
+  V26_CANDIDATES, structuralStopPrice, earlyFailureDecision, marketParticipationDecision, entryConfirmation1mDecision,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { resolveRiskPolicy, evaluateLossLimits } from "../../supabase/functions/_shared/boo/risk-policy.mjs";
 import { solveQuantity } from "../../supabase/functions/_shared/boo/risk-budget.mjs";
@@ -305,7 +305,47 @@ for(const s of uniqueSignals){try{const rows=await pagedKlines(s.symbol,"1m",s.s
 const opportunitiesByVariant=new Map();
 for(const id of Object.keys(V26_CANDIDATES)){
   let filtered=uniqueSignals.filter(s=>id!=="C5"||s.c5Allowed);if(V26_CANDIDATES[id].marketParticipation)filtered=filtered.filter(s=>s.marketAllowed);filtered=mergedSignals(filtered);const ops=[],reasons={};
-  for(const s of filtered){const cached=pathCache.get(s.id),rows=Array.isArray(cached)?cached:cached?.rows;if(!rows?.length){reasons.PATH_MISSING=(reasons.PATH_MISSING||0)+1;continue;}const tr=setupTrigger(s,rows.filter(r=>Number(r[0])>=s.s5c-2*MIN));if(!tr.ok){reasons[tr.reason]=(reasons[tr.reason]||0)+1;continue;}const entryAt=Number(tr.state.triggerAt),entryRow=rows.find(r=>Number(r[0])===entryAt);if(!entryRow){reasons.ENTRY_BAR_MISSING=(reasons.ENTRY_BAR_MISSING||0)+1;continue;}const entryOpen=Number(entryRow[1]);if(Math.abs(entryOpen/s.ref-1)>POLICY.maxEntryDriftPct){reasons.ENTRY_DRIFT=(reasons.ENTRY_DRIFT||0)+1;continue;}let stop=entryOpen*(1-POLICY.stopPct);if(V26_CANDIDATES[id].structuralStop){const st=structuralStopPrice({setupLow:Number(tr.state.pullbackLow),priceTick:meta.get(s.symbol)?.filters.tickSize,atr5m14:atr14_5m(rows,entryAt)});if(st.status!=="OK"||!(st.price<entryOpen)){reasons[st.reason||"STRUCTURAL_STOP_INVALID"]=(reasons[st.reason||"STRUCTURAL_STOP_INVALID"]||0)+1;continue;}stop=st.price;}const settled=simulateExit({...s,rows,entryAt,entryOpen,initialStop:stop,filters:meta.get(s.symbol).filters},id);if(!Number.isFinite(settled.exitAt)){reasons.UNSETTLED=(reasons.UNSETTLED||0)+1;continue;}ops.push(settled);}
+  for(const s of filtered){
+    const cached=pathCache.get(s.id),rows=Array.isArray(cached)?cached:cached?.rows;
+    if(!rows?.length){reasons.PATH_MISSING=(reasons.PATH_MISSING||0)+1;continue;}
+    const tr=setupTrigger(s,rows.filter(r=>Number(r[0])>=s.s5c-2*MIN));
+    if(!tr.ok){reasons[tr.reason]=(reasons[tr.reason]||0)+1;continue;}
+    const triggerAt=Number(tr.state.triggerAt);
+    let entryAt=triggerAt;
+    if(V26_CANDIDATES[id].entryConfirmation1m){
+      const confirmationRow=rows.find(r=>Number(r[0])===triggerAt);
+      const decision=entryConfirmation1mDecision({
+        triggerAt,
+        signalReference:s.ref,
+        triggerClose:Number(tr.state.triggerClose),
+        setupLow:Number(tr.state.pullbackLow),
+        now:triggerAt+MIN,
+        bar:confirmationRow?{
+          openTime:Number(confirmationRow[0]),low:Number(confirmationRow[3]),
+          close:Number(confirmationRow[4]),closeTime:Number(confirmationRow[0])+MIN-1,
+          quoteVolume:Number(confirmationRow[7]),takerBuyQuote:Number(confirmationRow[10])
+        }:null
+      });
+      if(decision.action!=="ENTER"){
+        reasons[decision.reason]=(reasons[decision.reason]||0)+1;
+        continue;
+      }
+      entryAt=triggerAt+MIN;
+    }
+    const entryRow=rows.find(r=>Number(r[0])===entryAt);
+    if(!entryRow){reasons.ENTRY_BAR_MISSING=(reasons.ENTRY_BAR_MISSING||0)+1;continue;}
+    const entryOpen=Number(entryRow[1]);
+    if(Math.abs(entryOpen/s.ref-1)>POLICY.maxEntryDriftPct){reasons.ENTRY_DRIFT=(reasons.ENTRY_DRIFT||0)+1;continue;}
+    let stop=entryOpen*(1-POLICY.stopPct);
+    if(V26_CANDIDATES[id].structuralStop){
+      const st=structuralStopPrice({setupLow:Number(tr.state.pullbackLow),priceTick:meta.get(s.symbol)?.filters.tickSize,atr5m14:atr14_5m(rows,entryAt)});
+      if(st.status!=="OK"||!(st.price<entryOpen)){reasons[st.reason||"STRUCTURAL_STOP_INVALID"]=(reasons[st.reason||"STRUCTURAL_STOP_INVALID"]||0)+1;continue;}
+      stop=st.price;
+    }
+    const settled=simulateExit({...s,rows,entryAt,entryOpen,initialStop:stop,filters:meta.get(s.symbol).filters},id);
+    if(!Number.isFinite(settled.exitAt)){reasons.UNSETTLED=(reasons.UNSETTLED||0)+1;continue;}
+    ops.push(settled);
+  }
   opportunitiesByVariant.set(id,{ops,reasons,filteredSignals:filtered.length});console.log("OPS",id,filtered.length,ops.length,reasons);
 }
 const symbolsWithOps=new Set();for(const v of opportunitiesByVariant.values())for(const o of v.ops)symbolsWithOps.add(o.symbol);
