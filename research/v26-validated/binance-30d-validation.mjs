@@ -14,6 +14,7 @@ import {
   freshLeaderRotationDecision, accountFeasibleLadderDecision, twoPulseResetDecision,
   liquidityAdjustedEfficiencyDecision, selectiveLeaderRegimeDecision, distributedTrendDecision,
   breakoutRetestHold2mDecision, controlledPullbackReclaim3mDecision, breakoutAcceptance3mDecision,
+  sellerExhaustionDecision, volumeDryupReaccelDecision, buyerNotionalEscalationDecision,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { resolveRiskPolicy, evaluateLossLimits } from "../../supabase/functions/_shared/boo/risk-policy.mjs";
 import { solveQuantity } from "../../supabase/functions/_shared/boo/risk-budget.mjs";
@@ -529,6 +530,21 @@ for(const id of candidateIds){
     if(V26_CANDIDATES[id].distributedTrend){
       const bars=rows.filter(r=>Number(r[0])>=triggerAt-6*MIN&&Number(r[0])<triggerAt),ctx=s.leaderContext||{};
       const decision=distributedTrendDecision({triggerAt,now:triggerAt,bars,signalReference:s.ref,leaderBreadth30m:Number(ctx.leaderBreadth30m)});
+      if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
+    }
+    if(V26_CANDIDATES[id].sellerExhaustion){
+      const bars=rows.filter(r=>Number(r[0])>=triggerAt-5*MIN&&Number(r[0])<triggerAt);
+      const decision=sellerExhaustionDecision({triggerAt,now:triggerAt,bars,signalReference:s.ref});
+      if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
+    }
+    if(V26_CANDIDATES[id].volumeDryupReaccel){
+      const bars=rows.filter(r=>Number(r[0])>=triggerAt-6*MIN&&Number(r[0])<triggerAt);
+      const decision=volumeDryupReaccelDecision({triggerAt,now:triggerAt,bars,signalReference:s.ref});
+      if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
+    }
+    if(V26_CANDIDATES[id].buyerNotionalEscalation){
+      const bars=rows.filter(r=>Number(r[0])>=triggerAt-4*MIN&&Number(r[0])<triggerAt);
+      const decision=buyerNotionalEscalationDecision({triggerAt,now:triggerAt,bars,signalReference:s.ref});
       if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
     }
     if(V26_CANDIDATES[id].breakoutRetestHold2m||V26_CANDIDATES[id].controlledPullbackReclaim3m||V26_CANDIDATES[id].breakoutAcceptance3m){

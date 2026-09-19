@@ -1,0 +1,76 @@
+{
+  "experimentId": "V26-SEARCH-R6-C28-C30",
+  "preregisteredAt": "2026-09-19T14:36:26Z",
+  "branch": "research/v26-strategy-search-r6-20260919",
+  "parentCheckpoint": "44095ffce688770a1f5dd997524c7b1caf7ed7a2",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "developmentWindow": {
+    "start": "2026-08-19T15:10:00.000Z",
+    "end": "2026-09-18T15:10:00.000Z",
+    "classification": "DEVELOPMENT_USED"
+  },
+  "reservedHoldout": {
+    "start": "2025-12-22T15:10:00.000Z",
+    "end": "2026-03-22T15:10:00.000Z",
+    "status": "LOCKED_UNSEEN_DO_NOT_OPEN_UNLESS_DEVELOPMENT_AND_WALK_FORWARD_PASS"
+  },
+  "account": {
+    "startingCapitalUsdt": 30,
+    "leverage": 3,
+    "maxConcurrentPositions": 1,
+    "quantitySource": "solveQuantity.plan.quantity",
+    "riskPolicy": "existing BOO risk-policy/risk-budget plus operator-tightened limits"
+  },
+  "sharedExit": "STRENGTH_LOSS_V1",
+  "candidates": [
+    {
+      "id": "C28",
+      "name": "PULLBACK_SELLER_EXHAUSTION",
+      "hypothesis": "Continuation quality improves when absolute seller notional and downside range fade through a reference-preserving pullback before a buyer-led break.",
+      "rules": [
+        "use five fully completed 1m bars ending at the original trigger",
+        "among the first four bars, at least two close down and the final down-bar seller quote is below the first down-bar seller quote",
+        "sum of ranges in bars 3-4 is below bars 1-2 and all pullback closes hold signal reference",
+        "trigger closes above all four pullback highs with taker-buy quote ratio >= 0.55",
+        "enter at the next open"
+      ]
+    },
+    {
+      "id": "C29",
+      "name": "VOLUME_DRYUP_REACCELERATION",
+      "hypothesis": "A positive impulse followed by lower-volume, narrower consolidation and renewed volume identifies fresh continuation rather than exhausted chasing.",
+      "rules": [
+        "use six fully completed 1m bars: three impulse, two pullback, one trigger",
+        "impulse advances; pullback mean quote volume is below impulse mean and pullback range is smaller",
+        "both pullback lows hold signal reference",
+        "trigger quote volume exceeds 1.25x pullback mean, closes above both pullback highs, and taker-buy quote ratio >= 0.55",
+        "enter at the next open"
+      ]
+    },
+    {
+      "id": "C30",
+      "name": "BUYER_NOTIONAL_ESCALATION",
+      "hypothesis": "Increasing absolute buyer notional across completed bars is more informative than a static buyer ratio for distinguishing real demand from low-volume ratio noise.",
+      "rules": [
+        "use four fully completed 1m bars ending at the original trigger",
+        "absolute taker-buy quote increases strictly in every bar",
+        "trigger seller quote does not exceed the maximum of the prior three bars and all closes hold signal reference",
+        "trigger closes above all prior highs, in the upper 35% of its range, with taker-buy quote ratio >= 0.55",
+        "enter at the next open"
+      ]
+    }
+  ],
+  "promotionGates": {
+    "minTrades": 30,
+    "minActiveDays": 10,
+    "netPnlPositive": true,
+    "monthlyReturnPositive": true,
+    "minProfitFactor": 1.2,
+    "stressNetAndPfPositive": true,
+    "top1RemovedNetPositive": true,
+    "dayBlockMultipleTestingAdjustedExpectancyLowerBoundPositive": true,
+    "walkForwardPositive": true,
+    "unusedHoldoutPositive": true
+  },
+  "holdoutPolicy": "Do not open walk-forward or reserved holdout unless a preregistered candidate passes every development gate."
+}

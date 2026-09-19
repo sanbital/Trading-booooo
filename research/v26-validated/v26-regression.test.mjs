@@ -22,6 +22,9 @@ import {
   breakoutRetestHold2mDecision,
   controlledPullbackReclaim3mDecision,
   breakoutAcceptance3mDecision,
+  sellerExhaustionDecision,
+  volumeDryupReaccelDecision,
+  buyerNotionalEscalationDecision,
   V26_CANDIDATES,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { runExit, summarise } from "../v25-pullback-reaccel/replay.mjs";
@@ -50,7 +53,7 @@ test("selection gate fails closed on null/NaN and respects exact boundaries", ()
   assert.equal(POLICY.maxDayReturn, 0.08);
 });
 
-test("registered C0-C27 definitions preserve the frozen C0-C5 prefix", () => {
+test("registered C0-C30 definitions preserve the frozen C0-C5 prefix", () => {
   assert.deepEqual(Object.keys(V26_CANDIDATES).slice(0,6), ["C0","C1","C2","C3","C4","C5"]);
   assert.ok(V26_CANDIDATES.C12);
   assert.ok(V26_CANDIDATES.C15);
@@ -58,10 +61,41 @@ test("registered C0-C27 definitions preserve the frozen C0-C5 prefix", () => {
   assert.ok(V26_CANDIDATES.C21);
   assert.ok(V26_CANDIDATES.C24);
   assert.ok(V26_CANDIDATES.C27);
+  assert.ok(V26_CANDIDATES.C30);
   assert.equal(V26_CANDIDATES.C0.structuralStop, false);
   assert.equal(V26_CANDIDATES.C4.earlyFailureExit, true);
   assert.equal(V26_CANDIDATES.C4.marketParticipation, true);
   assert.equal(V26_CANDIDATES.C5.maxDayReturn, 0.05);
+});
+
+test("C28-C30 use seller exhaustion, volume dry-up and absolute buyer notional",()=>{
+  const triggerAt=1_800_002_400_000;
+  const mk=(openTime,{o,h,l,c,q,tb})=>({openTime,open:o,high:h,low:l,close:c,
+    closeTime:openTime+59_999,quoteVolume:q,takerBuyQuote:tb});
+  const five=[
+    mk(triggerAt-300_000,{o:100.4,h:100.6,l:100.2,c:100.3,q:1200,tb:480}),
+    mk(triggerAt-240_000,{o:100.3,h:100.5,l:100.15,c:100.2,q:1000,tb:420}),
+    mk(triggerAt-180_000,{o:100.2,h:100.35,l:100.1,c:100.15,q:800,tb:360}),
+    mk(triggerAt-120_000,{o:100.15,h:100.3,l:100.1,c:100.25,q:650,tb:325}),
+    mk(triggerAt-60_000,{o:100.25,h:100.9,l:100.2,c:100.8,q:1300,tb:780}),
+  ];
+  assert.equal(sellerExhaustionDecision({triggerAt,now:triggerAt,bars:five,signalReference:100.1}).action,"ENTER");
+  const six=[
+    mk(triggerAt-360_000,{o:100,h:100.4,l:99.9,c:100.3,q:1200,tb:650}),
+    mk(triggerAt-300_000,{o:100.3,h:100.7,l:100.2,c:100.6,q:1300,tb:720}),
+    mk(triggerAt-240_000,{o:100.6,h:100.9,l:100.5,c:100.8,q:1100,tb:620}),
+    mk(triggerAt-180_000,{o:100.8,h:100.82,l:100.55,c:100.65,q:600,tb:280}),
+    mk(triggerAt-120_000,{o:100.65,h:100.75,l:100.5,c:100.7,q:500,tb:260}),
+    mk(triggerAt-60_000,{o:100.7,h:101.2,l:100.65,c:101.1,q:1500,tb:900}),
+  ];
+  assert.equal(volumeDryupReaccelDecision({triggerAt,now:triggerAt,bars:six,signalReference:100.5}).action,"ENTER");
+  const four=[
+    mk(triggerAt-240_000,{o:100.2,h:100.4,l:100.1,c:100.3,q:800,tb:400}),
+    mk(triggerAt-180_000,{o:100.3,h:100.5,l:100.2,c:100.4,q:900,tb:500}),
+    mk(triggerAt-120_000,{o:100.4,h:100.6,l:100.3,c:100.5,q:1000,tb:600}),
+    mk(triggerAt-60_000,{o:100.5,h:101.1,l:100.45,c:101,q:1400,tb:1000}),
+  ];
+  assert.equal(buyerNotionalEscalationDecision({triggerAt,now:triggerAt,bars:four,signalReference:100.1}).action,"ENTER");
 });
 
 test("C25-C27 delay entry until completed retest, reclaim, or acceptance evidence",()=>{

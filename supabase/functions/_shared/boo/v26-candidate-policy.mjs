@@ -6,7 +6,7 @@
  * is live merely because this file exists; activation requires a matching,
  * unrevoked approval identity and ENFORCE mode.
  */
-export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-11";
+export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-12";
 
 const BASE = Object.freeze({
   minDayReturn: 0.03,
@@ -34,6 +34,9 @@ const BASE = Object.freeze({
   breakoutRetestHold2m: false,
   controlledPullbackReclaim3m: false,
   breakoutAcceptance3m: false,
+  sellerExhaustion: false,
+  volumeDryupReaccel: false,
+  buyerNotionalEscalation: false,
   minRankOverride: null,
   maxRankOverride: null,
 });
@@ -106,6 +109,15 @@ export const V26_CANDIDATES = Object.freeze({
   }),
   C27: Object.freeze({
     ...BASE, id: "C27", structuralStop: true, breakoutAcceptance3m: true,
+  }),
+  C28: Object.freeze({
+    ...BASE, id: "C28", structuralStop: true, sellerExhaustion: true,
+  }),
+  C29: Object.freeze({
+    ...BASE, id: "C29", structuralStop: true, volumeDryupReaccel: true,
+  }),
+  C30: Object.freeze({
+    ...BASE, id: "C30", structuralStop: true, buyerNotionalEscalation: true,
   }),
 });
 
@@ -877,4 +889,71 @@ export function breakoutAcceptance3mDecision({triggerAt,now,bars,signalReference
   });
   const allowed=Object.values(conditions).every(Boolean);
   return {action:allowed?"ENTER":"REJECT",reason:allowed?"C27_ACCEPTANCE_PASS":"C27_ACCEPTANCE_FAIL",conditions,weightedBuy,finalLocation,bars:xs};
+}
+
+/** C28: selling notional must fade during the pullback before a buyer-led trigger. */
+export function sellerExhaustionDecision({triggerAt,now,bars,signalReference}) {
+  if(!Number.isSafeInteger(triggerAt)||!Number.isSafeInteger(now)||!Array.isArray(bars)||bars.length!==5||
+      !(finite(signalReference)&&signalReference>0))return {action:"UNKNOWN",reason:"C28_SELLER_EXHAUSTION_INPUT_MISSING"};
+  const xs=bars.map((b,i)=>researchBar(b,triggerAt-(5-i)*minute,now));
+  if(xs.some(x=>x===null))return {action:"UNKNOWN",reason:"C28_SELLER_EXHAUSTION_BAR_INVALID"};
+  const pullback=xs.slice(0,4),trigger=xs[4];
+  const selling=pullback.filter(x=>x.close<=x.open).map(x=>x.quote*(1-x.ratio));
+  const earlyRange=(pullback[0].high-pullback[0].low)+(pullback[1].high-pullback[1].low);
+  const lateRange=(pullback[2].high-pullback[2].low)+(pullback[3].high-pullback[3].low);
+  const conditions=Object.freeze({
+    repeatedSellingBars:selling.length>=2,
+    sellerNotionalFades:selling.length>=2&&selling.at(-1)<selling[0],
+    downsideRangeContracts:lateRange<earlyRange,
+    closesPreserveReference:pullback.every(x=>x.close>=signalReference),
+    triggerBreaksPullback:trigger.close>Math.max(...pullback.map(x=>x.high)),
+    triggerBuyerDominant:trigger.ratio>=0.55,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C28_SELLER_EXHAUSTION_PASS":"C28_SELLER_EXHAUSTION_FAIL",conditions,selling,earlyRange,lateRange};
+}
+
+/** C29: volume must dry up in an orderly pullback, then re-expand on the trigger. */
+export function volumeDryupReaccelDecision({triggerAt,now,bars,signalReference}) {
+  if(!Number.isSafeInteger(triggerAt)||!Number.isSafeInteger(now)||!Array.isArray(bars)||bars.length!==6||
+      !(finite(signalReference)&&signalReference>0))return {action:"UNKNOWN",reason:"C29_DRYUP_INPUT_MISSING"};
+  const xs=bars.map((b,i)=>researchBar(b,triggerAt-(6-i)*minute,now));
+  if(xs.some(x=>x===null))return {action:"UNKNOWN",reason:"C29_DRYUP_BAR_INVALID"};
+  const impulse=xs.slice(0,3),pullback=xs.slice(3,5),trigger=xs[5];
+  const impulseQuote=impulse.reduce((s,x)=>s+x.quote,0)/impulse.length;
+  const pullbackQuote=pullback.reduce((s,x)=>s+x.quote,0)/pullback.length;
+  const impulseRange=Math.max(...impulse.map(x=>x.high))-Math.min(...impulse.map(x=>x.low));
+  const pullbackRange=Math.max(...pullback.map(x=>x.high))-Math.min(...pullback.map(x=>x.low));
+  const conditions=Object.freeze({
+    impulseAdvances:impulse.at(-1).close>impulse[0].open,
+    pullbackVolumeDries:pullbackQuote<impulseQuote,
+    pullbackRangeContracts:impulseRange>0&&pullbackRange<impulseRange,
+    pullbackPreservesReference:pullback.every(x=>x.low>=signalReference),
+    triggerVolumeReexpands:trigger.quote>pullbackQuote*1.25,
+    triggerBreaksPullback:trigger.close>Math.max(...pullback.map(x=>x.high)),
+    triggerBuyerDominant:trigger.ratio>=0.55,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C29_DRYUP_PASS":"C29_DRYUP_FAIL",conditions,impulseQuote,pullbackQuote,impulseRange,pullbackRange};
+}
+
+/** C30: absolute buyer notional, not just its ratio, must escalate into a clean break. */
+export function buyerNotionalEscalationDecision({triggerAt,now,bars,signalReference}) {
+  if(!Number.isSafeInteger(triggerAt)||!Number.isSafeInteger(now)||!Array.isArray(bars)||bars.length!==4||
+      !(finite(signalReference)&&signalReference>0))return {action:"UNKNOWN",reason:"C30_BUYER_NOTIONAL_INPUT_MISSING"};
+  const xs=bars.map((b,i)=>researchBar(b,triggerAt-(4-i)*minute,now));
+  if(xs.some(x=>x===null))return {action:"UNKNOWN",reason:"C30_BUYER_NOTIONAL_BAR_INVALID"};
+  const buy=xs.map(x=>x.quote*x.ratio),sell=xs.map(x=>x.quote*(1-x.ratio));
+  const trigger=xs[3],prior=xs.slice(0,3);
+  const range=trigger.high-trigger.low,closeLocation=range>0?(trigger.close-trigger.low)/range:0;
+  const conditions=Object.freeze({
+    buyerNotionalEscalates:buy[1]>buy[0]&&buy[2]>buy[1]&&buy[3]>buy[2],
+    sellerNotionalContained:sell[3]<=Math.max(...sell.slice(0,3)),
+    referenceHeld:xs.every(x=>x.close>=signalReference),
+    triggerBreaksPriorHigh:trigger.close>Math.max(...prior.map(x=>x.high)),
+    triggerClosesStrong:closeLocation>=0.65,
+    triggerBuyerDominant:trigger.ratio>=0.55,
+  });
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C30_BUYER_NOTIONAL_PASS":"C30_BUYER_NOTIONAL_FAIL",conditions,buy,sell,closeLocation};
 }
