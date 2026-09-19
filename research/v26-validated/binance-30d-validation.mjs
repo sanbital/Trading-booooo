@@ -416,6 +416,7 @@ for(const id of candidateIds){
       const decision=antiExhaustionDecision({
         volumeRatio:Number(s.features?.volumeRatio),
         triggerAt,
+        minTriggerTakerBuyQuoteRatio:V26_CANDIDATES[id].antiExhaustionMinBuyRatio ?? undefined,
         bar:triggerBar?{
           openTime:Number(triggerBar[0]),closeTime:Number(triggerBar[0])+MIN-1,
           quoteVolume:Number(triggerBar[7]),takerBuyQuote:Number(triggerBar[10])
