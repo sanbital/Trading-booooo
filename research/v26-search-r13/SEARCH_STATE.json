@@ -1,0 +1,12 @@
+{
+  "completedAt": "2026-09-19T21:42:30Z",
+  "iteration": "R13",
+  "testedCandidates": ["C37"],
+  "nextCandidateId": "C38",
+  "no_robust_edge_found": true,
+  "developmentPass": [],
+  "walkForwardRun": false,
+  "walkForwardReason": "C37 repeated the negative realized C34/C35 account path and failed all executable robustness gates.",
+  "unusedHoldoutConsumed": false,
+  "nextHypothesisConstraint": "Stop queue variants. Combine unchanged C34 with the existing historical market-participation gate; do not tune thresholds or relax protection."
+}
