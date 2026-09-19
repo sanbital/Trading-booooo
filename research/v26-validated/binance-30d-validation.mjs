@@ -397,7 +397,13 @@ for(const s of uniqueSignals){try{const rows=await pagedKlines(s.symbol,"1m",s.s
 const opportunitiesByVariant=new Map();
 const candidateIds=ONLY_CANDIDATE?[ONLY_CANDIDATE]:Object.keys(V26_CANDIDATES);
 for(const id of candidateIds){
-  let filtered=uniqueSignals.filter(s=>!(id==="C5"||id==="C9")||s.c5Allowed);if(V26_CANDIDATES[id].marketParticipation)filtered=filtered.filter(s=>s.marketAllowed);filtered=mergedSignals(filtered);const ops=[],reasons={};
+  const candidate=V26_CANDIDATES[id];
+  let filtered=uniqueSignals;
+  if(candidate.maxDayReturn<=0.05) filtered=filtered.filter(s=>s.c5Allowed);
+  if(Number.isFinite(candidate.minRankOverride)) filtered=filtered.filter(s=>s.rank>=candidate.minRankOverride);
+  if(Number.isFinite(candidate.maxRankOverride)) filtered=filtered.filter(s=>s.rank<=candidate.maxRankOverride);
+  if(candidate.marketParticipation) filtered=filtered.filter(s=>s.marketAllowed);
+  filtered=mergedSignals(filtered);const ops=[],reasons={};
   for(const s of filtered){
     const cached=pathCache.get(s.id),rows=Array.isArray(cached)?cached:cached?.rows;
     if(!rows?.length){reasons.PATH_MISSING=(reasons.PATH_MISSING||0)+1;continue;}
