@@ -173,7 +173,11 @@ async function mapLimit(items,limit,fn){
 }
 async function pagedKlines(symbol,interval,start,end,limit=1000){
   let rows;
-  if(interval==="15m"&&export15.has(symbol)){
+  if(interval==="15m"&&RECOMPUTE_ELIGIBLE){
+    // Independent windows must never accept a partial overlap from the development
+    // export as complete history. Recompute from Binance Vision only.
+    rows=await visionRows(symbol,interval,start,end);
+  }else if(interval==="15m"&&export15.has(symbol)){
     const cached=export15.get(symbol).filter(r=>Number(r[0])>=start&&Number(r[0])<=end);
     rows=cached.length?cached:await visionRows(symbol,interval,start,end);
   }else{
