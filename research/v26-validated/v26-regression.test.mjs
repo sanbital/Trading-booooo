@@ -35,8 +35,9 @@ test("selection gate fails closed on null/NaN and respects exact boundaries", ()
   assert.equal(POLICY.maxDayReturn, 0.08);
 });
 
-test("C0-C5 are frozen before outcome evaluation", () => {
-  assert.deepEqual(Object.keys(V26_CANDIDATES), ["C0","C1","C2","C3","C4","C5"]);
+test("registered C0-C12 definitions preserve the frozen C0-C5 prefix", () => {
+  assert.deepEqual(Object.keys(V26_CANDIDATES).slice(0,6), ["C0","C1","C2","C3","C4","C5"]);
+  assert.ok(V26_CANDIDATES.C12);
   assert.equal(V26_CANDIDATES.C0.structuralStop, false);
   assert.equal(V26_CANDIDATES.C4.earlyFailureExit, true);
   assert.equal(V26_CANDIDATES.C4.marketParticipation, true);
