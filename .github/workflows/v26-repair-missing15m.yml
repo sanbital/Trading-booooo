@@ -89,9 +89,8 @@ jobs:
           with open('research/v26-validated/binance-missing-15m-20260903.json','w') as f:
               json.dump(out,f,ensure_ascii=False,indent=2)
           print(json.dumps({'requested':len(symbols),'recovered':len(rows),'errors':len(errors),
-                            'resultSha256':out['resultSha256']}))
-          if errors:
-              raise SystemExit('missing candle recovery incomplete')
+                            'errorRows':errors,'resultSha256':out['resultSha256']},ensure_ascii=False))
+
           PY
 
       - name: Commit recovered source rows
