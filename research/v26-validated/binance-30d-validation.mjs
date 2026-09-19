@@ -9,7 +9,7 @@ import {
   SETUP_POLICY, SETUP_STATE, advancePullbackSetup, startPullbackSetup,
 } from "../../supabase/functions/_shared/leader-pullback-reaccel.mjs";
 import {
-  V26_CANDIDATES, structuralStopPrice, earlyFailureDecision, marketParticipationDecision, entryConfirmation1mDecision, breakoutContinuation1mDecision,
+  V26_CANDIDATES, structuralStopPrice, earlyFailureDecision, marketParticipationDecision, entryConfirmation1mDecision, breakoutContinuation1mDecision, triggerQuality1mDecision,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { resolveRiskPolicy, evaluateLossLimits } from "../../supabase/functions/_shared/boo/risk-policy.mjs";
 import { solveQuantity } from "../../supabase/functions/_shared/boo/risk-budget.mjs";
@@ -312,6 +312,21 @@ for(const id of Object.keys(V26_CANDIDATES)){
     if(!tr.ok){reasons[tr.reason]=(reasons[tr.reason]||0)+1;continue;}
     const triggerAt=Number(tr.state.triggerAt);
     let entryAt=triggerAt;
+    if(V26_CANDIDATES[id].triggerQuality1m){
+      const triggerBar=rows.find(r=>Number(r[0])===triggerAt-MIN);
+      const decision=triggerQuality1mDecision({
+        triggerAt,
+        bar:triggerBar?{
+          openTime:Number(triggerBar[0]),high:Number(triggerBar[2]),low:Number(triggerBar[3]),
+          close:Number(triggerBar[4]),closeTime:Number(triggerBar[0])+MIN-1,
+          quoteVolume:Number(triggerBar[7]),takerBuyQuote:Number(triggerBar[10])
+        }:null
+      });
+      if(decision.action!=="ENTER"){
+        reasons[decision.reason]=(reasons[decision.reason]||0)+1;
+        continue;
+      }
+    }
     if(V26_CANDIDATES[id].entryConfirmation1m||V26_CANDIDATES[id].breakoutContinuation1m){
       const confirmationRow=rows.find(r=>Number(r[0])===triggerAt);
       let decision;
