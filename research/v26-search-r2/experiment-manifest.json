@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "experimentId": "BOO-V26-SEARCH-R2-20260919",
+  "preregisteredAt": "2026-09-19T11:15:00Z",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "parentCheckpoint": "fc95371430d3d1e6595957534301dcb1d248cc06",
+  "branch": "research/v26-strategy-search-r2-20260919",
+  "status": "PREREGISTERED_BEFORE_RESULTS",
+  "common": {
+    "startingCapitalUsdt": 30,
+    "leverage": 3,
+    "maxConcurrentPositions": 1,
+    "riskPolicy": "existing BOO stricter operator policy",
+    "quantitySource": "solveQuantity.plan.quantity only",
+    "exitPolicy": "STRENGTH_LOSS_V1",
+    "developmentWindow": "2026-08-19T15:10:00Z/2026-09-18T15:10:00Z (USED)",
+    "finalHoldout": "2025-12-22T15:10:00Z/2026-03-22T15:10:00Z; consume only for a development-pass candidate"
+  },
+  "candidates": {
+    "C16": {"name":"PULLBACK_ABSORPTION_RECLAIM","structure":"two or more down bars; pullback aggregate buyer share >=45%; three nondecreasing lows; reference and local closes reclaimed; trigger buyer share >=55% and above pullback mean"},
+    "C17": {"name":"BTC_RELATIVE_STRENGTH_REACCELERATION","structure":"positive 30m/60m returns; positive residual over BTC at both horizons; current 30m exceeds prior 30m; current residual contains at least half of 60m residual"},
+    "C18": {"name":"FAILED_BREAKDOWN_SWEEP_RECLAIM","structure":"completed close and low below reference, recovery after sweep low, two rising recovery closes, trigger above reference and micro-swing highs, buyer share reversal from below 50% to at least 60%"}
+  },
+  "promotionGates": {"minTrades":30,"minActiveDays":10,"profitFactor":1.2,"stress2xNetPositiveAndPfAboveOne":true,"removeTop1Positive":true,"dayBlockBootstrapLcbPositive":true,"independentHoldoutPositive":true}
+}
