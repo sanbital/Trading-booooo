@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-19T04:13:00.118Z",
+  "generatedAt": "2026-09-19T04:14:50.407Z",
   "window": {
     "start": "2026-08-19T15:10:00.000Z",
     "end": "2026-09-18T15:10:00.000Z",
@@ -897,10 +897,120 @@
       },
       "sufficientSample": false,
       "developmentPass": false
+    },
+    "C8": {
+      "preAccount": {
+        "filteredSignals": 723,
+        "opportunities": 156,
+        "pathReasons": {
+          "V17_SETUP_EXPIRED": 267,
+          "V17_CHASE_EXPIRED": 142,
+          "C8_TRIGGER_QUALITY_FAIL": 158
+        }
+      },
+      "baseline": {
+        "trades": 6,
+        "rejections": {
+          "MIN_NOTIONAL_EXCEEDS_RISK_BUDGET": 10,
+          "SLOT_OCCUPIED": 2,
+          "CONSECUTIVE_LOSS_LIMIT_REACHED": 138
+        },
+        "wins": 1,
+        "losses": 5,
+        "netPnl": -0.27647358633383634,
+        "finalEquity": 29.723526413666164,
+        "returnPct": -0.009215786211127877,
+        "profitFactor": 0.18806064132882228,
+        "avgWin": 0.06403655568750106,
+        "avgLoss": -0.06810202840426748,
+        "avgNet": -0.04607893105563939,
+        "mdd": -0.28749583468869133,
+        "longestLossStreak": 3,
+        "byDay": {
+          "2026-08-20": -0.13748422052513865,
+          "2026-08-21": -0.004759795372498363,
+          "2026-08-22": -0.06871823775120017,
+          "2026-08-23": -0.06551133268499915
+        },
+        "byWeek": {
+          "2026-08-17": -0.27647358633383634
+        },
+        "removeTop1Net": -0.3405101420213374,
+        "removeTop3Net": -0.20628296933819867,
+        "removeTop5Net": -0.06879635105999943,
+        "activeDays": 4,
+        "expectancyLcb5": -0.06872778675574784
+      },
+      "stress2x": {
+        "trades": 6,
+        "rejections": {
+          "MIN_NOTIONAL_EXCEEDS_RISK_BUDGET": 17,
+          "SLOT_OCCUPIED": 2,
+          "CONSECUTIVE_LOSS_LIMIT_REACHED": 131
+        },
+        "wins": 1,
+        "losses": 5,
+        "netPnl": -0.2941494328200167,
+        "finalEquity": 29.705850567179983,
+        "returnPct": -0.009804981094000556,
+        "profitFactor": 0.14839057502101718,
+        "avgWin": 0.05125472100000017,
+        "avgLoss": -0.06908083076400337,
+        "avgNet": -0.04902490547000279,
+        "mdd": -0.2941494328200136,
+        "longestLossStreak": 3,
+        "byDay": {
+          "2026-08-20": -0.13867938233421792,
+          "2026-08-21": -0.01818106857999957,
+          "2026-08-22": -0.06920239801279987,
+          "2026-08-24": -0.06808658389299932
+        },
+        "byWeek": {
+          "2026-08-17": -0.22606284892701736,
+          "2026-08-24": -0.06808658389299932
+        },
+        "removeTop1Net": -0.3454041538200168,
+        "removeTop3Net": -0.20811517191421766,
+        "removeTop5Net": -0.06943578957999974,
+        "activeDays": 4,
+        "expectancyLcb5": -0.0692573152745235
+      },
+      "stress4x": {
+        "trades": 2,
+        "rejections": {
+          "MIN_NOTIONAL_EXCEEDS_RISK_BUDGET": 154
+        },
+        "wins": 0,
+        "losses": 2,
+        "netPnl": -0.13682730230399914,
+        "finalEquity": 29.863172697696,
+        "returnPct": -0.004560910076799971,
+        "profitFactor": 0,
+        "avgWin": 0,
+        "avgLoss": -0.06841365115199957,
+        "avgNet": -0.06841365115199957,
+        "mdd": -0.17028341987999696,
+        "longestLossStreak": 2,
+        "byDay": {
+          "2026-08-24": -0.06960821162399988,
+          "2026-09-09": -0.06721909067999926
+        },
+        "byWeek": {
+          "2026-08-24": -0.06960821162399988,
+          "2026-09-07": -0.06721909067999926
+        },
+        "removeTop1Net": -0.06960821162399988,
+        "removeTop3Net": 0,
+        "removeTop5Net": 0,
+        "activeDays": 2,
+        "expectancyLcb5": -0.06960821162399988
+      },
+      "sufficientSample": false,
+      "developmentPass": false
     }
   },
-  "datasetHash": "5c17f0801544cd9603590539485f9778536559d9890863f7d0c19863f00ba6a2",
-  "codeHash": "d5a2a8539b61ad789ab2b5e78834ce9040afb86224109abf5a19cfa845e0eb5c",
+  "datasetHash": "eee93d09e10ccb33d242c1cdc0b730c73378b66bcb1558ea5f74725cd00b4043",
+  "codeHash": "589b1ea055fa38db9adddf7f7fa1fafc303c2f098d8c9543494cf07ec40140e8",
   "noRobustEdgeFound": true,
   "provisionalCandidate": null
 }
