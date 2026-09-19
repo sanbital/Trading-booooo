@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-19T07:35:00Z",
+  "sourceResult": "research/v26-validated/results-holdout-c12-90d/trades-pre-funding.json",
+  "sourceHead": "7b6a0c3d9f7b5d835161cbb2ed3273d3fc194c34",
+  "fundingSource": "Binance USD-M public Funding Rate History connector",
+  "queriedHoldingIntervals": [
+    {"symbol":"APTUSDT","entryAt":1774285920000,"exitAt":1774286880000,"events":[]},
+    {"symbol":"STOUSDT","entryAt":1774541040000,"exitAt":1774541100000,"events":[]},
+    {"symbol":"MORPHOUSDT","entryAt":1775753640000,"exitAt":1775755260000,"events":[]},
+    {"symbol":"CETUSUSDT","entryAt":1778428140000,"exitAt":1778429280000,"events":[{"fundingTime":1778428800000,"fundingRate":"0.00005000","markPrice":"0.03585000","rateType":"Regular"}]},
+    {"symbol":"RAVEUSDT","entryAt":1778946480000,"exitAt":1778946840000,"events":[]},
+    {"symbol":"COLLECTUSDT","entryAt":1779092820000,"exitAt":1779093600000,"events":[]},
+    {"symbol":"FFUSDT","entryAt":1779119340000,"exitAt":1779120000000,"events":[]},
+    {"symbol":"STORJUSDT","entryAt":1779842940000,"exitAt":1779844140000,"events":[]}
+  ],
+  "longFundingCosts": {
+    "baselineCETUS": {"qty":194,"costUsdt":0.000347745},
+    "stress2xCETUS": {"qty":174,"costUsdt":0.000311895},
+    "stress4x": {"costUsdt":0}
+  },
+  "fundingEnrichedAccountMetrics": {
+    "baseline": {
+      "netPnlBefore": -0.09601611747479408,
+      "netPnlAfter": -0.09636386247479412,
+      "profitFactorBefore": 0.7173394744644864,
+      "profitFactorAfter": 0.7163157527494508
+    },
+    "stress2x": {
+      "netPnlBefore": 0.0022856958304040553,
+      "netPnlAfter": 0.001973800830404021,
+      "profitFactorBefore": 1.0113347678163276,
+      "profitFactorAfter": 1.009788080212033
+    },
+    "stress4x": {
+      "changed": false
+    }
+  },
+  "conclusion": "C12 remains rejected. Funding enrichment worsens baseline and stress2x slightly and does not alter the no_robust_edge_found=true conclusion.",
+  "promotionEligible": false
+}
