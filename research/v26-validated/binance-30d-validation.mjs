@@ -1,0 +1,209 @@
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  POLICY, M5, M15, parseBars, feature15, rankFeatures, entryReason, confirm5,
+} from "../../supabase/functions/_shared/leader-momentum-v17.mjs";
+import {
+  SETUP_POLICY, SETUP_STATE, advancePullbackSetup, startPullbackSetup,
+} from "../../supabase/functions/_shared/leader-pullback-reaccel.mjs";
+import {
+  V26_CANDIDATES, structuralStopPrice, earlyFailureDecision, marketParticipationDecision,
+} from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
+import { resolveRiskPolicy, evaluateLossLimits } from "../../supabase/functions/_shared/boo/risk-policy.mjs";
+import { solveQuantity } from "../../supabase/functions/_shared/boo/risk-budget.mjs";
+
+const FAPI = process.env.BINANCE_FAPI || "https://fapi.binance.com";
+const DAY=86_400_000, MIN=60_000, HOUR=3_600_000;
+const END = Number(process.env.REPLAY_END_MS || Math.floor(Date.now()/M15)*M15);
+const DAYS = Number(process.env.REPLAY_DAYS || 30);
+const START = END - DAYS*DAY;
+const WARMUP = 120*M15;
+const OUT = new URL("./results-30d/", import.meta.url);
+mkdirSync(OUT,{recursive:true});
+
+const FEES = Object.freeze({ taker:0.0005 });
+const EXEC = Object.freeze({
+  baseline:{entryBps:3,stopBps:10,discretionaryBps:5},
+  stress2x:{entryBps:6,stopBps:20,discretionaryBps:10},
+  stress4x:{entryBps:12,stopBps:40,discretionaryBps:20},
+});
+const FUNDING_RISK_ALLOWANCE_RATE = 0.001;
+const MIN_TRADES = 30, MIN_INDEPENDENT_DAYS = 10;
+
+const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+let nextRequestAt=0;
+const datasetHash=createHash("sha256");
+const requestStats={requests:0,retries:0,weight:0,http429:0,http418:0,http451:0};
+function weightForKlines(limit){ return limit<100?1:limit<500?2:limit<=1000?5:10; }
+async function throttle(weight=1){
+  const now=Date.now(), wait=Math.max(0,nextRequestAt-now);
+  if(wait) await sleep(wait);
+  nextRequestAt=Math.max(Date.now(),nextRequestAt)+Math.ceil(weight*34);
+}
+async function get(path,params={},weight=1){
+  const q=new URLSearchParams(Object.entries(params).filter(([,v])=>v!==undefined&&v!==null).map(([k,v])=>[k,String(v)]));
+  const url=`${FAPI}${path}?${q}`;
+  for(let attempt=0;attempt<7;attempt++){
+    await throttle(weight);
+    requestStats.requests++;requestStats.weight+=weight;
+    const res=await fetch(url,{headers:{accept:"application/json","user-agent":"Trading-booooo-v26-validation"}});
+    if(res.ok){
+      const text=await res.text();
+      datasetHash.update(url);datasetHash.update("\n");datasetHash.update(text);datasetHash.update("\n");
+      return JSON.parse(text);
+    }
+    const body=(await res.text()).slice(0,300);
+    if(res.status===451){requestStats.http451++;throw Error(`BINANCE_451:${path}:${body}`);}
+    if(res.status===429||res.status===418||res.status>=500){
+      if(res.status===429)requestStats.http429++;
+      if(res.status===418)requestStats.http418++;
+      requestStats.retries++;
+      const ra=Number(res.headers.get("retry-after"));
+      await sleep(Number.isFinite(ra)?ra*1000:Math.min(60_000,1000*2**attempt));
+      continue;
+    }
+    throw Error(`BINANCE_${res.status}:${path}:${body}`);
+  }
+  throw Error(`BINANCE_RETRIES_EXHAUSTED:${path}`);
+}
+async function pagedKlines(symbol,interval,start,end,limit=1000){
+  const step={"1m":MIN,"5m":M5,"15m":M15}[interval];
+  const out=[];let cursor=start;
+  while(cursor<=end){
+    const rows=await get("/fapi/v1/klines",{symbol,interval,startTime:cursor,endTime:end,limit},weightForKlines(limit));
+    if(!Array.isArray(rows)||!rows.length)break;
+    out.push(...rows);
+    const next=Number(rows.at(-1)[0])+step;
+    if(!(next>cursor))throw Error(`KLINE_CURSOR_STALL:${symbol}:${interval}`);
+    cursor=next;
+    if(rows.length<limit)break;
+  }
+  const seen=new Map();
+  for(const r of out){
+    const t=Number(r[0]);
+    if(seen.has(t)&&JSON.stringify(seen.get(t))!==JSON.stringify(r))throw Error(`KLINE_CONFLICT:${symbol}:${interval}:${t}`);
+    seen.set(t,r);
+  }
+  return [...seen.values()].sort((a,b)=>Number(a[0])-Number(b[0]));
+}
+function indexRows(rows){return new Map(rows.map(r=>[Number(r[0]),r]));}
+function exactBars(index,interval,cutoff,required){
+  const last=Math.floor(cutoff/interval)*interval-interval,raw=[];
+  for(let i=required-1;i>=0;i--){const row=index.get(last-i*interval);if(!row)throw Error("KLINE_GAP");raw.push(row);}
+  return parseBars(raw,interval,cutoff,required);
+}
+function symbolFilters(s){
+  const price=(s.filters||[]).find(f=>f.filterType==="PRICE_FILTER")||{};
+  const lot=(s.filters||[]).find(f=>f.filterType==="LOT_SIZE")||{};
+  const notional=(s.filters||[]).find(f=>f.filterType==="MIN_NOTIONAL"||f.filterType==="NOTIONAL")||{};
+  return {tickSize:Number(price.tickSize),stepSize:Number(lot.stepSize),minQty:Number(lot.minQty),maxQty:Number(lot.maxQty),minNotional:Number(notional.notional??notional.minNotional??5)};
+}
+function lifecycle(s){const onboard=Number(s.onboardDate||0),d=Number(s.deliveryDate||4_133_404_800_000);return{onboard,delivery:Number.isFinite(d)&&d>0?d:4_133_404_800_000};}
+function candidatePolicy(id){return {...POLICY,maxDayReturn:V26_CANDIDATES[id].maxDayReturn,minVolumeRatio:1.30};}
+function kstDayKey(t){return new Date(t+9*HOUR).toISOString().slice(0,10);}
+function kstWeekKey(t){const d=new Date(t+9*HOUR),dow=(d.getUTCDay()+6)%7;return new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate()-dow)).toISOString().slice(0,10);}
+function aggregate5mFrom1m(rows,cutoff,need=15){
+  const buckets=new Map();
+  for(const r of rows){const t=Number(r[0]);if(t>=cutoff)continue;const b=Math.floor(t/M5)*M5;let x=buckets.get(b);if(!x)x={t:b,o:Number(r[1]),h:-Infinity,l:Infinity,c:Number(r[4]),n:0};x.h=Math.max(x.h,Number(r[2]));x.l=Math.min(x.l,Number(r[3]));x.c=Number(r[4]);x.n++;buckets.set(b,x);}
+  const keys=[...buckets.keys()].filter(t=>t+M5<=cutoff).sort((a,b)=>a-b).slice(-need);
+  if(keys.length!==need)return null;for(let i=1;i<keys.length;i++)if(keys[i]-keys[i-1]!==M5)return null;
+  const bars=keys.map(k=>buckets.get(k));if(bars.some(b=>b.n!==5))return null;return bars;
+}
+function atr14_5m(rows,cutoff){const bars=aggregate5mFrom1m(rows,cutoff,15);if(!bars)return null;let sum=0;for(let i=1;i<bars.length;i++){const x=bars[i],p=bars[i-1];sum+=Math.max(x.h-x.l,Math.abs(x.h-p.c),Math.abs(x.l-p.c));}return sum/14;}
+function setupTrigger(signal,rows){
+  const armed=startPullbackSetup({id:signal.id,symbol:signal.symbol,features:{referenceClose:signal.ref,signal5Close:signal.s5c}},signal.s5c,SETUP_POLICY);
+  if(!armed.ok)return{ok:false,reason:armed.reason};let st=armed.state,prev=null;
+  for(const r of rows){
+    const t=Number(r[0]);if(t<signal.s5c)continue;
+    const raw=[t,String(r[1]),String(r[2]),String(r[3]),String(r[4]),String(r[5]??0),t+MIN-1,String(r[7]??0),Number(r[8]??0),String(r[9]??0),String(r[10]??0),String(r[11]??0)];
+    const pr=prev?[Number(prev[0]),String(prev[1]),String(prev[2]),String(prev[3]),String(prev[4]),String(prev[5]??0),Number(prev[0])+MIN-1,String(prev[7]??0),Number(prev[8]??0),String(prev[9]??0),String(prev[10]??0),String(prev[11]??0)]:null;
+    const out=advancePullbackSetup(st,raw,pr,t+MIN,SETUP_POLICY);st=out.state;prev=r;
+    if(st?.state===SETUP_STATE.TRIGGERED)return{ok:true,state:st};
+    if([SETUP_STATE.EXPIRED_NO_PULLBACK,SETUP_STATE.EXPIRED_NO_REACCEL,SETUP_STATE.CHASE_EXPIRED,SETUP_STATE.INVALIDATED,SETUP_STATE.CONSUMED].includes(st?.state))return{ok:false,reason:st.terminalReason??st.state,state:st};
+  }
+  return{ok:false,reason:"SETUP_PATH_INCOMPLETE",state:st};
+}
+function mergedSignals(signals){const by=new Map(),kept=[];for(const s of [...signals].sort((a,b)=>a.s5c-b.s5c||a.symbol.localeCompare(b.symbol))){const p=by.get(s.symbol);if(p&&s.s5c<p.s5c+SETUP_POLICY.setupTtlMs)continue;by.set(s.symbol,s);kept.push(s);}return kept;}
+function simulateExit(op,variant){
+  const rows=op.rows.filter(r=>Number(r[0])>=op.entryAt);const entry=op.entryOpen;
+  let stop=op.initialStop,peak=entry,lastHighAt=op.entryAt,pending=null,mfe=0,mae=0;const marks=[];
+  for(let i=0;i<rows.length;i++){
+    const r=rows[i],t=Number(r[0]),o=Number(r[1]),h=Number(r[2]),l=Number(r[3]),c=Number(r[4]),closeAt=t+MIN-1;
+    if(pending)return{...op,exitAt:t,exitRef:o,exitKind:"DISCRETIONARY",reason:pending,mfe,mae,marks};
+    if(l<=stop){const ref=Math.min(o,stop);mae=Math.min(mae,ref/entry-1);return{...op,exitAt:t,exitRef:ref,exitKind:"STOP",reason:stop>entry*(1-POLICY.stopPct)+1e-12?"PROTECTIVE_STOP":"INITIAL_STOP",mfe,mae,marks};}
+    mae=Math.min(mae,l/entry-1);mfe=Math.max(mfe,h/entry-1);if(h>peak){peak=h;lastHighAt=closeAt;}
+    const omfe=peak/entry-1;if(omfe>=POLICY.trailArmPct)stop=Math.max(stop,peak*(1-POLICY.trailGapPct));if(omfe>=.02)stop=Math.max(stop,entry+(peak-entry)*.50);if(omfe>=.01||closeAt-op.entryAt>=600_000)stop=Math.max(stop,entry*(1-.012));marks.push({t:closeAt,c});
+    if(V26_CANDIDATES[variant].earlyFailureExit&&closeAt-op.entryAt<=5*MIN){const ef=earlyFailureDecision({entryPrice:entry,initialStopPrice:op.initialStop,signalReference:op.ref,entryAt:op.entryAt,now:closeAt+1,completedBars:rows.slice(0,i+1).map(x=>({openTime:Number(x[0]),closeTime:Number(x[0])+MIN-1,high:Number(x[2]),close:Number(x[4]),quoteVolume:Number(x[7]),takerBuyQuote:Number(x[10])}))});if(ef.action==="CLOSE")pending=ef.reason;}
+    if(!pending&&closeAt-op.entryAt>=POLICY.maxHoldMs)pending="V17_MAX_HOLD";if(!pending&&closeAt-lastHighAt>=POLICY.staleMs)pending="V17_MOMENTUM_STALE";
+  }
+  return{...op,exitAt:null,exitRef:null,exitKind:"UNSETTLED",reason:"PATH_END",mfe,mae,marks};
+}
+function applySlippage(t,s){const entry=t.entryOpen*(1+s.entryBps/10_000);if(!Number.isFinite(t.exitRef))return{...t,entryExec:entry,exitExec:null};const b=t.exitKind==="STOP"?s.stopBps:s.discretionaryBps;return{...t,entryExec:entry,exitExec:t.exitRef*(1-b/10_000)};}
+async function fundingFor(symbol){return await get("/fapi/v1/fundingRate",{symbol,startTime:START,endTime:END,limit:1000},1);}
+function fundingPnl(rows,entryAt,exitAt,qty){if(!Number.isFinite(exitAt))return{signedCost:0,events:0};let signed=0,n=0;for(const x of rows||[]){const t=Number(x.fundingTime),rate=Number(x.fundingRate),mark=Number(x.markPrice);if(t>entryAt&&t<=exitAt&&Number.isFinite(rate)&&Number.isFinite(mark)&&mark>0){signed+=qty*mark*rate;n++;}}return{signedCost:signed,events:n};}
+function riskPolicy(){const r=resolveRiskPolicy({risk_per_trade_pct:.25,max_daily_loss_pct:1,max_weekly_loss_pct:3,max_open_positions:1,max_open_positions_per_exchange:1,max_consecutive_losses:3});if(!r.ok)throw Error("RISK_POLICY_RESOLVE_FAILED:"+JSON.stringify(r.errors));return r.policy;}
+const RISK=riskPolicy();
+function solveRiskQuantity({equity,trade,filters,realizedToday,realizedWeek,highWater,lossStreak,slip}){
+  const limits=evaluateLossLimits({policy:RISK,equity,realizedToday,realizedThisWeek:realizedWeek,highWaterEquity:highWater,consecutiveLosses:lossStreak});if(!limits.allowed)return{decision:"SKIP",reason:limits.blocks.map(x=>x.code).join("|")||"LOSS_LIMIT"};
+  const entry=trade.entryOpen*(1+slip.entryBps/10_000),stopSlip=slip.stopBps/10_000;let fundingAllowance=0,lastQty=null,result=null;
+  for(let i=0;i<6;i++){
+    result=solveQuantity({policy:RISK,equity:String(equity),bookAsks:[[String(entry),"1000000000000"]],bookBids:[[String(trade.initialStop),"1000000000000"]],structuralStop:String(trade.initialStop),stopSlippageFrac:String(stopSlip),takerFeeRate:FEES.taker,stopFeeRate:FEES.taker,expectedFundingCost:String(fundingAllowance),filters:{stepSize:String(filters.stepSize),minQty:String(filters.minQty),maxQty:String(filters.maxQty),minNotional:String(filters.minNotional)},reservedRisk:"0",openGrossNotional:"0",availableMargin:String(Math.max(0,equity-.10)),leverage:"3",entryPriceCap:String(entry),dailyRemaining:limits.dailyRemaining,weeklyRemaining:limits.weeklyRemaining});
+    if(result.decision!=="ENTER")return result;const q=Number(result.plan.quantity.toString()),next=q*entry*FUNDING_RISK_ALLOWANCE_RATE;if(lastQty!==null&&Math.abs(q-lastQty)<1e-12){fundingAllowance=next;break;}lastQty=q;fundingAllowance=next;
+  }
+  return result;
+}
+function bootstrapLcb(trades,seedText){
+  const days=new Map();for(const t of trades){const k=kstDayKey(t.exitAt);if(!days.has(k))days.set(k,[]);days.get(k).push(t);}const blocks=[...days.values()];if(blocks.length<2)return null;
+  let seed=2166136261;for(const ch of seedText)seed=(seed^ch.charCodeAt(0))*16777619>>>0;const rnd=()=>{seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;return(seed>>>0)/4294967296;};const vals=[];
+  for(let b=0;b<5000;b++){let net=0,n=0;for(let i=0;i<blocks.length;i++){const block=blocks[Math.floor(rnd()*blocks.length)];for(const x of block){net+=x.net;n++;}}vals.push(n?net/n:0);}vals.sort((a,b)=>a-b);return vals[Math.floor(vals.length*.05)];
+}
+function summarizeAccount(result){
+  const ts=result.trades,w=ts.filter(t=>t.net>0),l=ts.filter(t=>t.net<=0),gp=w.reduce((s,t)=>s+t.net,0),gl=Math.abs(l.reduce((s,t)=>s+t.net,0)),net=ts.reduce((s,t)=>s+t.net,0);let streak=0,maxStreak=0;for(const t of ts){if(t.net<=0){streak++;maxStreak=Math.max(maxStreak,streak);}else streak=0;}const byDay={},byWeek={};for(const t of ts){const d=kstDayKey(t.exitAt),wk=kstWeekKey(t.exitAt);byDay[d]=(byDay[d]||0)+t.net;byWeek[wk]=(byWeek[wk]||0)+t.net;}const strip=n=>{const ids=new Set([...ts].sort((a,b)=>b.net-a.net).slice(0,n).map(x=>x.id));return ts.filter(t=>!ids.has(t.id)).reduce((s,t)=>s+t.net,0);};
+  return{trades:ts.length,rejections:result.rejections,wins:w.length,losses:l.length,netPnl:net,finalEquity:30+net,returnPct:net/30,profitFactor:gl>0?gp/gl:(gp>0?Infinity:0),avgWin:w.length?gp/w.length:0,avgLoss:l.length?-gl/l.length:0,avgNet:ts.length?net/ts.length:0,mdd:result.mdd,longestLossStreak:maxStreak,byDay,byWeek,removeTop1Net:strip(1),removeTop3Net:strip(3),removeTop5Net:strip(5),activeDays:Object.keys(byDay).length,expectancyLcb5:bootstrapLcb(ts,result.variant)};
+}
+function runAccount(variant,ops,fundingMap,slip){
+  let equity=30,highWater=30,busyUntil=-Infinity,lossStreak=0,mdd=0,peak=30;const realizedDay=new Map(),realizedWeek=new Map(),trades=[],rej={};const reject=r=>rej[r]=(rej[r]||0)+1;
+  for(const base of [...ops].sort((a,b)=>a.entryAt-b.entryAt||a.rank-b.rank||a.symbol.localeCompare(b.symbol))){
+    if(base.entryAt<busyUntil){reject("SLOT_OCCUPIED");continue;}const d=kstDayKey(base.entryAt),wk=kstWeekKey(base.entryAt);const sized=solveRiskQuantity({equity,trade:base,filters:base.filters,realizedToday:realizedDay.get(d)||0,realizedWeek:realizedWeek.get(wk)||0,highWater,lossStreak,slip});if(sized.decision!=="ENTER"){reject(sized.reason||"RISK_SKIP");continue;}
+    const qty=Number(sized.plan.quantity.toString()),t=applySlippage(base,slip);if(!(qty>0&&Number.isFinite(t.exitExec))){reject("UNSETTLED_OR_INVALID");continue;}const fund=fundingPnl(fundingMap.get(t.symbol)||[],t.entryAt,t.exitAt,qty),entryFee=t.entryExec*qty*FEES.taker,exitFee=t.exitExec*qty*FEES.taker,gross=(t.exitExec-t.entryExec)*qty,net=gross-entryFee-exitFee-fund.signedCost;
+    for(const m of t.marks){if(m.t>=t.exitAt)break;const accrued=fundingPnl(fundingMap.get(t.symbol)||[],t.entryAt,m.t,qty).signedCost,marked=equity+(m.c-t.entryExec)*qty-entryFee-accrued;peak=Math.max(peak,marked);mdd=Math.min(mdd,marked-peak);}
+    equity+=net;peak=Math.max(peak,equity);mdd=Math.min(mdd,equity-peak);highWater=Math.max(highWater,equity);const ed=kstDayKey(t.exitAt),ew=kstWeekKey(t.exitAt);realizedDay.set(ed,(realizedDay.get(ed)||0)+net);realizedWeek.set(ew,(realizedWeek.get(ew)||0)+net);lossStreak=net<=0?lossStreak+1:0;busyUntil=t.exitAt;
+    trades.push({id:t.id,symbol:t.symbol,rank:t.rank,entryAt:t.entryAt,exitAt:t.exitAt,reason:t.reason,qty,entry:t.entryExec,exit:t.exitExec,gross,entryFee,exitFee,funding:fund.signedCost,fundingEvents:fund.events,net,plannedLoss:Number(sized.plan.plannedLoss.toString()),initialStop:t.initialStop,mfe:t.mfe,mae:t.mae});
+  }
+  return{variant,trades,rejections:rej,mdd};
+}
+
+const info=await get("/fapi/v1/exchangeInfo",{},10);
+const allSymbols=(info.symbols||[]).filter(s=>s.contractType==="PERPETUAL"&&s.quoteAsset==="USDT"&&s.underlyingType==="COIN").filter(s=>{const lc=lifecycle(s);return lc.onboard<END&&lc.delivery>START-WARMUP;});
+const meta=new Map(allSymbols.map(s=>[s.symbol,{raw:s,filters:symbolFilters(s),...lifecycle(s)}]));
+console.log("UNIVERSE",allSymbols.length,new Date(START).toISOString(),new Date(END).toISOString());
+const data15=new Map();let done=0;
+for(const s of allSymbols){const lc=lifecycle(s),from=Math.max(START-WARMUP,Math.floor(lc.onboard/M15)*M15);try{const rows=await pagedKlines(s.symbol,"15m",from,END-1,1000);data15.set(s.symbol,{rows,index:indexRows(rows)});}catch(e){console.error("15M_FAIL",s.symbol,String(e));data15.set(s.symbol,{rows:[],index:new Map(),error:String(e)});}if(++done%25===0)console.log("15M",done,"/",allSymbols.length);}
+
+const cutoffState=new Map(),eligibleWindows=[];
+for(let cut=Math.ceil(START/M15)*M15;cut<END;cut+=M15){
+  const expected=allSymbols.filter(s=>{const lc=lifecycle(s);return lc.onboard<=cut-110*M15&&lc.delivery>cut;});const features=[],errors=[];
+  for(const s of expected){try{features.push(feature15(s.symbol,exactBars(data15.get(s.symbol).index,M15,cut,110),cut));}catch(e){errors.push([s.symbol,String(e.message||e)]);}}
+  const coverage=expected.length?features.length/expected.length:0;if(coverage<POLICY.minCoverage){cutoffState.set(cut,{blocked:true,coverage,expected:expected.length,evaluated:features.length,errors});continue;}
+  const ranked=rankFeatures(features),bySymbol=new Map(ranked.map(x=>[x.symbol,x])),liquid=ranked.filter(x=>x.qv24>=POLICY.minQuoteVolume24h),up=liquid.filter(x=>x.return30m>0).length,btc=bySymbol.get("BTCUSDT"),market=marketParticipationDecision({btcReturn60m:btc?.return60m,rising30mCount:up,liquidUniverseCount:liquid.length});
+  const base=ranked.slice(0,POLICY.rankLimit).filter(f=>entryReason(f,candidatePolicy("C0"))==="ELIGIBLE");const c5=new Set(ranked.slice(0,POLICY.rankLimit).filter(f=>entryReason(f,candidatePolicy("C5"))==="ELIGIBLE").map(x=>x.symbol));cutoffState.set(cut,{blocked:false,coverage,expected:expected.length,evaluated:features.length,market,base,c5});for(const f of base)eligibleWindows.push({cut,f,c5:c5.has(f.symbol),marketAllowed:market.status==="KNOWN"&&market.allowed});
+}
+console.log("ELIGIBLE15",eligibleWindows.length);
+const rawSignals=[];let ew=0;
+for(const x of eligibleWindows){const rows=await pagedKlines(x.f.symbol,"5m",x.cut-14*M5,x.cut+10*M5-1,100).catch(()=>[]),idx=indexRows(rows);for(const t of [x.cut,x.cut+M5,x.cut+2*M5]){if(t<START||t>=END)continue;try{const b=exactBars(idx,M5,t,14),sig=confirm5(x.f,b,t,candidatePolicy("C0"));if(sig)rawSignals.push({id:`${x.f.symbol}:${t}`,symbol:x.f.symbol,s5c:t,ref:sig.referenceClose,rank:x.f.rank,c5Allowed:x.c5,marketAllowed:x.marketAllowed,features:sig});}catch{}}if(++ew%100===0)console.log("5M_WINDOWS",ew,"/",eligibleWindows.length);}
+const uniqueSignals=[...new Map(rawSignals.map(s=>[s.id,s])).values()].sort((a,b)=>a.s5c-b.s5c||a.symbol.localeCompare(b.symbol));console.log("RAW_SIGNALS",uniqueSignals.length);
+const pathCache=new Map();let ps=0;
+for(const s of uniqueSignals){try{const rows=await pagedKlines(s.symbol,"1m",s.s5c-90*MIN,s.s5c+SETUP_POLICY.setupTtlMs+POLICY.maxHoldMs+15*MIN-1,500);pathCache.set(s.id,rows);}catch(e){pathCache.set(s.id,{error:String(e),rows:[]});}if(++ps%50===0)console.log("1M_PATHS",ps,"/",uniqueSignals.length);}
+
+const opportunitiesByVariant=new Map();
+for(const id of Object.keys(V26_CANDIDATES)){
+  let filtered=uniqueSignals.filter(s=>id!=="C5"||s.c5Allowed);if(V26_CANDIDATES[id].marketParticipation)filtered=filtered.filter(s=>s.marketAllowed);filtered=mergedSignals(filtered);const ops=[],reasons={};
+  for(const s of filtered){const cached=pathCache.get(s.id),rows=Array.isArray(cached)?cached:cached?.rows;if(!rows?.length){reasons.PATH_MISSING=(reasons.PATH_MISSING||0)+1;continue;}const tr=setupTrigger(s,rows.filter(r=>Number(r[0])>=s.s5c-2*MIN));if(!tr.ok){reasons[tr.reason]=(reasons[tr.reason]||0)+1;continue;}const entryAt=Number(tr.state.triggerAt),entryRow=rows.find(r=>Number(r[0])===entryAt);if(!entryRow){reasons.ENTRY_BAR_MISSING=(reasons.ENTRY_BAR_MISSING||0)+1;continue;}const entryOpen=Number(entryRow[1]);if(Math.abs(entryOpen/s.ref-1)>POLICY.maxEntryDriftPct){reasons.ENTRY_DRIFT=(reasons.ENTRY_DRIFT||0)+1;continue;}let stop=entryOpen*(1-POLICY.stopPct);if(V26_CANDIDATES[id].structuralStop){const st=structuralStopPrice({setupLow:Number(tr.state.pullbackLow),priceTick:meta.get(s.symbol)?.filters.tickSize,atr5m14:atr14_5m(rows,entryAt)});if(st.status!=="OK"||!(st.price<entryOpen)){reasons[st.reason||"STRUCTURAL_STOP_INVALID"]=(reasons[st.reason||"STRUCTURAL_STOP_INVALID"]||0)+1;continue;}stop=st.price;}const settled=simulateExit({...s,rows,entryAt,entryOpen,initialStop:stop,filters:meta.get(s.symbol).filters},id);if(!Number.isFinite(settled.exitAt)){reasons.UNSETTLED=(reasons.UNSETTLED||0)+1;continue;}ops.push(settled);}
+  opportunitiesByVariant.set(id,{ops,reasons,filteredSignals:filtered.length});console.log("OPS",id,filtered.length,ops.length,reasons);
+}
+const symbolsWithOps=new Set();for(const v of opportunitiesByVariant.values())for(const o of v.ops)symbolsWithOps.add(o.symbol);const fundingMap=new Map();let fd=0;for(const symbol of [...symbolsWithOps].sort()){fundingMap.set(symbol,await fundingFor(symbol).catch(()=>[]));if(++fd%50===0)console.log("FUNDING",fd,"/",symbolsWithOps.size);}
+
+const report={generatedAt:new Date().toISOString(),window:{start:new Date(START).toISOString(),end:new Date(END).toISOString(),days:DAYS},classification:"DEVELOPMENT_30D_NOT_INDEPENDENT_HOLDOUT",universe:{exchangeInfoPerpetualUsdtCoin:allSymbols.length},requestStats,costModel:{takerFeeRate:FEES.taker,actualFundingFromBinanceFundingRateHistory:true,fundingRiskAllowanceRate:FUNDING_RISK_ALLOWANCE_RATE,slippage:EXEC,historicalL2BookAvailable:false,slippageLimitation:"Binance REST does not provide historical L2 snapshots; baseline/stress bps are pre-registered execution assumptions."},risk:{startingEquity:30,leverage:3,minTrades:MIN_TRADES,minIndependentDays:MIN_INDEPENDENT_DAYS,riskPerTradeFrac:Number(RISK.riskPerTradeFrac.toString()),maxTotalOpenRiskFrac:Number(RISK.maxTotalOpenRiskFrac.toString()),maxGrossNotionalToEquity:Number(RISK.maxGrossNotionalToEquity.toString()),maxConcurrentPositions:RISK.maxConcurrentPositions},dataQuality:{blocked15mCutoffs:[...cutoffState.values()].filter(x=>x.blocked).length,total15mCutoffs:cutoffState.size,rawSignals:uniqueSignals.length,eligible15Windows:eligibleWindows.length},candidates:{},datasetHash:null,codeHash:null,noRobustEdgeFound:true,provisionalCandidate:null};
+for(const id of Object.keys(V26_CANDIDATES)){const x=opportunitiesByVariant.get(id),base=runAccount(id,x.ops,fundingMap,EXEC.baseline),s2=runAccount(id,x.ops,fundingMap,EXEC.stress2x),s4=runAccount(id,x.ops,fundingMap,EXEC.stress4x),b=summarizeAccount(base),m2=summarizeAccount(s2),m4=summarizeAccount(s4),enough=b.trades>=MIN_TRADES&&b.activeDays>=MIN_INDEPENDENT_DAYS;report.candidates[id]={preAccount:{filteredSignals:x.filteredSignals,opportunities:x.ops.length,pathReasons:x.reasons},baseline:b,stress2x:m2,stress4x:m4,sufficientSample:enough,developmentPass:enough&&b.profitFactor>=1.2&&m2.netPnl>0&&b.expectancyLcb5!==null&&b.expectancyLcb5>0};}
+const viable=Object.entries(report.candidates).filter(([,v])=>v.developmentPass).sort((a,b)=>b[1].stress2x.netPnl-a[1].stress2x.netPnl);if(viable.length)report.provisionalCandidate=viable[0][0];report.noRobustEdgeFound=true;report.datasetHash=datasetHash.digest("hex");const codeHasher=createHash("sha256");for(const f of [new URL("../../supabase/functions/_shared/leader-momentum-v17.mjs",import.meta.url),new URL("../../supabase/functions/_shared/leader-pullback-reaccel.mjs",import.meta.url),new URL("../../supabase/functions/_shared/boo/v26-candidate-policy.mjs",import.meta.url),new URL("../../supabase/functions/_shared/boo/risk-policy.mjs",import.meta.url),new URL("../../supabase/functions/_shared/boo/risk-budget.mjs",import.meta.url)])codeHasher.update(readFileSync(f));codeHasher.update(readFileSync(new URL(import.meta.url)));report.codeHash=codeHasher.digest("hex");
+writeFileSync(new URL("summary.json",OUT),JSON.stringify(report,null,2));const md=[];md.push("# Binance 30-day V26 validation","",`Window: ${report.window.start} -> ${report.window.end}`,"","This is a fresh Binance-API development replay, not an independent holdout.","","| Candidate | Trades | Net | Final equity | Return | PF | MDD | LCB/trade | Stress2x net | Stress4x net | Dev pass |","|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|");for(const [id,v] of Object.entries(report.candidates)){const b=v.baseline;md.push(`| ${id} | ${b.trades} | ${b.netPnl.toFixed(4)} | ${b.finalEquity.toFixed(4)} | ${(b.returnPct*100).toFixed(2)}% | ${Number.isFinite(b.profitFactor)?b.profitFactor.toFixed(3):"Inf"} | ${b.mdd.toFixed(4)} | ${b.expectancyLcb5==null?"NA":b.expectancyLcb5.toFixed(5)} | ${v.stress2x.netPnl.toFixed(4)} | ${v.stress4x.netPnl.toFixed(4)} | ${v.developmentPass?"YES":"NO"} |`);}md.push("","Provisional candidate: "+(report.provisionalCandidate??"NONE"),"","no_robust_edge_found=true (no unused independent holdout).","","Dataset hash: `"+report.datasetHash+"`","Code hash: `"+report.codeHash+"`");writeFileSync(new URL("SUMMARY.md",OUT),md.join("\n")+"\n");console.log(md.join("\n"));
