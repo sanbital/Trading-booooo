@@ -9,7 +9,7 @@ import {
   SETUP_POLICY, SETUP_STATE, advancePullbackSetup, startPullbackSetup,
 } from "../../supabase/functions/_shared/leader-pullback-reaccel.mjs";
 import {
-  V26_CANDIDATES, structuralStopPrice, earlyFailureDecision, marketParticipationDecision, entryConfirmation1mDecision,
+  V26_CANDIDATES, structuralStopPrice, earlyFailureDecision, marketParticipationDecision, entryConfirmation1mDecision, breakoutContinuation1mDecision,
 } from "../../supabase/functions/_shared/boo/v26-candidate-policy.mjs";
 import { resolveRiskPolicy, evaluateLossLimits } from "../../supabase/functions/_shared/boo/risk-policy.mjs";
 import { solveQuantity } from "../../supabase/functions/_shared/boo/risk-budget.mjs";
@@ -312,20 +312,36 @@ for(const id of Object.keys(V26_CANDIDATES)){
     if(!tr.ok){reasons[tr.reason]=(reasons[tr.reason]||0)+1;continue;}
     const triggerAt=Number(tr.state.triggerAt);
     let entryAt=triggerAt;
-    if(V26_CANDIDATES[id].entryConfirmation1m){
+    if(V26_CANDIDATES[id].entryConfirmation1m||V26_CANDIDATES[id].breakoutContinuation1m){
       const confirmationRow=rows.find(r=>Number(r[0])===triggerAt);
-      const decision=entryConfirmation1mDecision({
-        triggerAt,
-        signalReference:s.ref,
-        triggerClose:Number(tr.state.triggerClose),
-        setupLow:Number(tr.state.pullbackLow),
-        now:triggerAt+MIN,
-        bar:confirmationRow?{
-          openTime:Number(confirmationRow[0]),low:Number(confirmationRow[3]),
-          close:Number(confirmationRow[4]),closeTime:Number(confirmationRow[0])+MIN-1,
-          quoteVolume:Number(confirmationRow[7]),takerBuyQuote:Number(confirmationRow[10])
-        }:null
-      });
+      let decision;
+      if(V26_CANDIDATES[id].breakoutContinuation1m){
+        const triggerBar=rows.find(r=>Number(r[0])===triggerAt-MIN);
+        decision=breakoutContinuation1mDecision({
+          triggerAt,
+          signalReference:s.ref,
+          triggerHigh:triggerBar?Number(triggerBar[2]):Number.NaN,
+          now:triggerAt+MIN,
+          bar:confirmationRow?{
+            openTime:Number(confirmationRow[0]),low:Number(confirmationRow[3]),
+            close:Number(confirmationRow[4]),closeTime:Number(confirmationRow[0])+MIN-1,
+            quoteVolume:Number(confirmationRow[7]),takerBuyQuote:Number(confirmationRow[10])
+          }:null
+        });
+      }else{
+        decision=entryConfirmation1mDecision({
+          triggerAt,
+          signalReference:s.ref,
+          triggerClose:Number(tr.state.triggerClose),
+          setupLow:Number(tr.state.pullbackLow),
+          now:triggerAt+MIN,
+          bar:confirmationRow?{
+            openTime:Number(confirmationRow[0]),low:Number(confirmationRow[3]),
+            close:Number(confirmationRow[4]),closeTime:Number(confirmationRow[0])+MIN-1,
+            quoteVolume:Number(confirmationRow[7]),takerBuyQuote:Number(confirmationRow[10])
+          }:null
+        });
+      }
       if(decision.action!=="ENTER"){
         reasons[decision.reason]=(reasons[decision.reason]||0)+1;
         continue;
