@@ -20,7 +20,9 @@ import {RISK_BUDGET_VERSION} from "../_shared/boo/risk-budget.mjs";
 import {SLOT_SIZING_CONTRACT,assertSlotSizingContract,floorStep,planSlotEntry,slotSizingBounds} from "../_shared/leader-slot-sizing.mjs";
 import {SETUP_POLICY,SETUP_POLICY_VERSION,SETUP_REASON,SETUP_STATE,advancePullbackSetup,deserializeSetup,enterPullbackSetup,entryTriggerFresh,expirePullbackSetup,isTerminal as setupIsTerminal,serializeSetup,setupIdentity,startPullbackSetup} from "../_shared/leader-pullback-reaccel.mjs";
 import {B06133_VERSION,evaluateB06133,fetchB06133Inputs} from "../_shared/leader-b06133-entry.mjs";
-const REVISION="V11-LONG-REGIME-1.0.1",PATCH="B06133-CONCURRENT-4-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
+import {CEC0040_CONFIG,CEC0040_TARGET_VERSION,CEC0040_VERSION,P142_POLICY_VERSION,
+  advanceP142Completed,nextExitP142,p142Mean44Target} from "../_shared/leader-cec0040.mjs";
+const REVISION="V11-LONG-REGIME-1.0.1",PATCH="CEC0040-P142-DEPLOYMENT-READY-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Object.freeze({
   id:"2026-09-13-USER-PRIORITY-OVERRIDE",basis:"OPERATOR_OVERRIDE_UNVALIDATED",
   priorPerformanceVerdict:"DEFER",parametersValidatedByBacktest:false
@@ -55,7 +57,7 @@ function controlReleaseScope(decision){
 // reasons: each is a property of ONE symbol's price and lot step, so none of them
 // says anything about the next candidate in the queue. ENTRY_GRANULARITY_BPS and ENTRY_SLOT_GRANULARITY_MARGIN
 // are kept so rows written by earlier revisions still classify the same way.
-const ENTRY_SKIP_SYMBOL_SCOPED=/^(SIGNAL_STALE_OR_FUTURE|SUPERSEDED_BY_FRESHER_SIGNAL|V17_SETUP_BUDGET_EXHAUSTED|V17_TRIGGER_STALE|V17_TRIGGER_FUTURE|V17_SETUP_NOT_TRIGGERED|V17_SETUP_EXPIRED|V17_CHASE_EXPIRED|V17_ENTRY_DRIFT|V17_SETUP_INVALID_PRICE|V17_SETUP_POLICY_SLOT_LIMIT|B06133_REJECT|B06133_INPUT_UNKNOWN|B06133_MARKET_UNAVAILABLE|B06133_SELECTION_INVALID|ENTRY_DRIFT|WRONG_STRATEGY|INVALID_PRICE|V17_EXIT_POLICY_INVALID|MANUAL_SYMBOL_LOCKED|ENTRY_SPREAD|ENTRY_FEATURES_INVALID|QTY_INVALID|QTY_INPUT_INVALID|MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET|QTY_STEP_EXCEEDS_MARGIN_BUDGET|QTY_STEP_BELOW_SLOT_FLOOR|IOC_PRICE_CAP_EXCEEDED|ENTRY_GRANULARITY_BPS|ENTRY_SLOT_GRANULARITY_MARGIN|ENTRY_NOTIONAL_UNDERSIZED|V17_LIMIT_PRICE_MARGIN_OVERFLOW)/;
+const ENTRY_SKIP_SYMBOL_SCOPED=/^(SIGNAL_STALE_OR_FUTURE|SUPERSEDED_BY_FRESHER_SIGNAL|V17_SETUP_BUDGET_EXHAUSTED|V17_TRIGGER_STALE|V17_TRIGGER_FUTURE|V17_SETUP_NOT_TRIGGERED|V17_SETUP_EXPIRED|V17_CHASE_EXPIRED|V17_ENTRY_DRIFT|V17_SETUP_INVALID_PRICE|V17_SETUP_POLICY_SLOT_LIMIT|B06133_REJECT|B06133_INPUT_UNKNOWN|B06133_MARKET_UNAVAILABLE|B06133_SELECTION_INVALID|CEC0040_SELECTION_INVALID|ENTRY_DRIFT|WRONG_STRATEGY|INVALID_PRICE|V17_EXIT_POLICY_INVALID|MANUAL_SYMBOL_LOCKED|ENTRY_SPREAD|ENTRY_FEATURES_INVALID|QTY_INVALID|QTY_INPUT_INVALID|MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET|QTY_STEP_EXCEEDS_MARGIN_BUDGET|QTY_STEP_BELOW_SLOT_FLOOR|IOC_PRICE_CAP_EXCEEDED|ENTRY_GRANULARITY_BPS|ENTRY_SLOT_GRANULARITY_MARGIN|ENTRY_NOTIONAL_UNDERSIZED|V17_LIMIT_PRICE_MARGIN_OVERFLOW)/;
 // Slot geometry is NOT declared here. MARGIN/LEV/NOTIONAL are views onto the one
 // sizing contract (_shared/leader-slot-sizing.mjs) that the signal generator and
 // the V17 policy also read, so the four copies that drifted apart during the
@@ -311,6 +313,227 @@ async function applyB06133Selection(db,row,state){
     {signalId:row.id,symbol:row.symbol,stage:"B06133_ENTRY_SELECTION",finalAdmission:false,
       orderDispatched:false,b06133:stamp});
   return {allowed:stamp.allowed,row:write.data,stamp};
+}
+
+/**
+ * Atomic causal decision. Postgres serializes EWMA/reject-run updates and refuses a
+ * decision while any older admitted target lacks completed-candle coverage through
+ * this signal's cutoff. Shadow mode records the model action but preserves B06133.
+ */
+async function applyCec0040Selection(db,row,state){
+  const b06133=rec(rec(row.features).b06133),decisionAt=Number(state?.triggerAt);
+  if(b06133.version!==B06133_VERSION||b06133.allowed!==true||
+     !["R62","BUYER_SHARE_RESCUE","BOTH"].includes(b06133.branch)||!Number.isSafeInteger(decisionAt))
+    throw Error("CEC0040_INPUT_INVALID");
+  await verifyExecutionLease(db);
+  const r=await db.rpc("v11_cec0040_decide",{p_signal_id:row.id,
+    p_decision_at:new Date(decisionAt).toISOString(),p_symbol:String(row.symbol).toUpperCase(),
+    p_branch:b06133.branch,p_bootstrap:false});
+  if(r.error)throw Error(`CEC0040_DECISION:${r.error.message}`);
+  const d=rec(r.data),evaluatedAt=Date.now(),stamp={version:CEC0040_VERSION,targetVersion:CEC0040_TARGET_VERSION,
+    ready:d.ready===true,action:d.action??null,modelAllowed:d.modelAllowed===true,
+    effectiveAllowed:d.effectiveAllowed===true,enforcementEnabled:d.enforcementEnabled===true,
+    predictionUsdt:d.predictionUsdt??null,trainingCount:d.trainingCount??null,
+    rejectRunBefore:d.rejectRunBefore??null,rejectRunAfter:d.rejectRunAfter??null,
+    decisionAt,evaluatedAt,idempotent:d.idempotent===true,
+    reason:d.ready!==true?String(d.reason??"CEC0040_STATE_NOT_READY"):
+      d.effectiveAllowed===true?d.enforcementEnabled===true?`CEC0040_${d.action}`:`CEC0040_SHADOW_${d.action}`:"CEC0040_REJECT"};
+  const features={...rec(row.features),cec0040:stamp},patch={features,updated_at:new Date(evaluatedAt).toISOString()};
+  // A real model rejection is terminal only after enforcement activation. State lag
+  // remains NEW and may retry inside the existing trigger TTL.
+  if(stamp.ready&&stamp.enforcementEnabled&&!stamp.effectiveAllowed){patch.status="REJECTED";patch.reject_reason=stamp.reason;}
+  const write=await db.from("v11_long_regime_signals").update(patch).eq("id",row.id).eq("status","NEW").select("*").maybeSingle();
+  if(write.error)throw Error(`CEC0040_WRITE:${write.error.message}`);
+  if(!write.data)return {allowed:false,row,stamp:{...stamp,reason:"CEC0040_CAS_RACE"}};
+  await audit(db,null,"BULL","BULL",stamp.effectiveAllowed?"ENTRY_ALLOW":"ENTRY_REJECT",stamp.reason,
+    {signalId:row.id,symbol:row.symbol,stage:"CEC0040_ENTRY_CONTROL",finalAdmission:false,
+      orderDispatched:false,cec0040:stamp});
+  return {allowed:stamp.ready&&stamp.effectiveAllowed,row:write.data,stamp};
+}
+
+async function registerCec0040Target(db,position,signal){
+  const cec=rec(rec(signal.features).cec0040),b06133=rec(rec(signal.features).b06133);
+  if(cec.version!==CEC0040_VERSION||cec.modelAllowed!==true)return null;
+  await verifyExecutionLease(db);
+  const r=await db.rpc("v11_cec0040_register_target",{p_position_id:position.id,p_signal_id:signal.id,
+    p_symbol:String(position.symbol).toUpperCase(),p_branch:b06133.branch,p_entry_at:position.entry_at,
+    p_actual_entry_price:Number(position.entry_price)});
+  if(r.error)throw Error(`CEC0040_TARGET_REGISTER:${r.error.message}`);
+  return r.data;
+}
+
+async function fetchCec0040Funding(symbol,start,end,fetchFn=fetch){
+  if(!(Number.isSafeInteger(start)&&Number.isSafeInteger(end)&&end>=start))throw Error("CEC0040_FUNDING_WINDOW");
+  const p=new URLSearchParams({symbol,startTime:String(start),endTime:String(end),limit:"100"});
+  const r=await fetchFn("https://fapi.binance.com/fapi/v1/fundingRate?"+p,{method:"GET",signal:AbortSignal.timeout(2000)});
+  if(!r.ok)throw Error(`CEC0040_FUNDING_${r.status}`);
+  const rows=await r.json();if(!Array.isArray(rows)||rows.length>100)throw Error("CEC0040_FUNDING_INVALID");
+  return rows.map(x=>({fundingTime:Number(x.fundingTime),fundingRate:Number(x.fundingRate),markPrice:Number(x.markPrice)}));
+}
+
+async function repairCec0040Targets(db){
+  const q=await db.rpc("v11_cec0040_missing_targets");
+  if(q.error)return {ok:false,reason:`CEC0040_TARGET_REPAIR_READ:${q.error.message}`,checked:0,results:[]};
+  const rows=Array.isArray(q.data)?q.data:[],results=[];
+  for(const row of rows){
+    try{
+      await verifyExecutionLease(db);
+      const saved=await db.rpc("v11_cec0040_register_target",{p_position_id:row.position_id,
+        p_signal_id:row.signal_id,p_symbol:row.symbol,p_branch:row.branch,p_entry_at:row.entry_at,
+        p_actual_entry_price:Number(row.actual_entry_price)});
+      if(saved.error)throw Error(saved.error.message);
+      results.push({positionId:row.position_id,status:"REGISTERED"});
+    }catch(error){results.push({positionId:row.position_id,status:"ERROR",reason:String(error?.message??error)})}
+  }
+  return {ok:results.every(x=>x.status==="REGISTERED"),checked:rows.length,results};
+}
+
+/** Resolve at most four target shadows per cycle; no authenticated exchange call. */
+async function refreshCec0040Targets(db){
+  const repair=await repairCec0040Targets(db);
+  const q=await db.from("v11_cec0040_targets").select("*").eq("status","PENDING")
+    .eq("policy_version",CEC0040_VERSION).order("entry_at",{ascending:true}).limit(4);
+  if(q.error)return {ok:false,reason:`CEC0040_TARGET_READ:${q.error.message}`,repair,checked:0,results:[]};
+  const rows=q.data||[],results=await boundedMap(rows,2,async target=>{
+    const now=Date.now(),entryAt=Date.parse(target.entry_at),start=Math.floor(entryAt/60000)*60000,
+      through=Math.floor(now/60000)*60000-1;
+    if(through<start)return {positionId:target.position_id,status:"PENDING",reason:"NO_COMPLETED_CANDLE"};
+    try{
+      const bars=await qv3Candles(target.symbol,now,start);
+      let out=p142Mean44Target({entryAt,actualEntryPrice:Number(target.actual_entry_price),
+        branch:target.branch,bars,fundingEvents:[]});
+      if(out.status==="RESOLVED"){
+        const funding=await fetchCec0040Funding(target.symbol,entryAt+1,out.targetExitAt);
+        out=p142Mean44Target({entryAt,actualEntryPrice:Number(target.actual_entry_price),
+          branch:target.branch,bars,fundingEvents:funding});
+      }
+      const status=out.status==="UNKNOWN_GAP"?"ERROR":out.status;
+      await verifyExecutionLease(db);
+      const saved=await db.rpc("v11_cec0040_observe_target",{p_position_id:target.position_id,p_status:status,
+        p_observed_through:new Date(through).toISOString(),p_target_exit_at:out.status==="RESOLVED"?new Date(out.targetExitAt).toISOString():null,
+        p_target_net_usdt:out.status==="RESOLVED"?out.targetNetUsdt:null,
+        p_replay:{version:out.version,style:out.style,status:out.status,pathNets:out.pathNets??null,
+          outcomes:out.outcomes?.map(x=>({status:x.status,exitAt:x.exitAt??null,netBeforeFunding:x.netBeforeFunding??null,reason:x.reason??null}))??null}});
+      if(saved.error)throw Error(`CEC0040_TARGET_WRITE:${saved.error.message}`);
+      return {positionId:target.position_id,status,through,targetExitAt:out.targetExitAt??null,targetNetUsdt:out.targetNetUsdt??null};
+    }catch(error){return {positionId:target.position_id,status:"UNAVAILABLE",reason:String(error?.message??error)}}
+  });
+  return {ok:repair.ok&&results.every(x=>x.status!=="UNAVAILABLE"&&x.status!=="ERROR"),repair,
+    checked:rows.length,results};
+}
+
+/**
+ * Replay only post-seed B06133 decisions that already exist in the production DB.
+ * This writes controller/target ledgers, never signals, positions, orders or controls.
+ * Existing positions retain their entry-time exit-policy stamp.
+ */
+async function bootstrapCec0040(db){
+  await verifyExecutionLease(db);
+  const stateRead=await db.from("v11_cec0040_state").select("*").eq("singleton",true).single();
+  if(stateRead.error||!stateRead.data)throw Error("CEC0040_BOOTSTRAP_STATE_UNAVAILABLE");
+  const state=stateRead.data;
+  if(state.bootstrap_complete===true)return {ok:true,mode:"CEC0040_BOOTSTRAP",idempotent:true,
+    processed:0,state};
+  const cursor=Date.parse(state.last_decision_at??state.seeded_through),
+    scanStart=new Date(Date.parse(state.seeded_through)-20*60000).toISOString(),signals=[];
+  let scanTruncated=false;
+  for(let page=0;page<10;page++){
+    const signalsRead=await db.from("v11_long_regime_signals").select("id,symbol,status,features,entry_bar_at")
+      .eq("revision",REVISION).gte("entry_bar_at",scanStart).order("entry_bar_at",{ascending:true})
+      .order("id",{ascending:true}).range(page*1000,page*1000+999);
+    if(signalsRead.error)throw Error(`CEC0040_BOOTSTRAP_SIGNALS:${signalsRead.error.message}`);
+    signals.push(...(signalsRead.data??[]));
+    if((signalsRead.data??[]).length<1000)break;
+    if(page===9)scanTruncated=true;
+  }
+  const processedIds=new Set();
+  for(let page=0;page<10;page++){
+    const decisions=await db.from("v11_cec0040_decisions").select("signal_id")
+      .gte("decision_at",state.seeded_through).order("decision_at",{ascending:true})
+      .order("signal_id",{ascending:true}).range(page*1000,page*1000+999);
+    if(decisions.error)throw Error(`CEC0040_BOOTSTRAP_DECISIONS:${decisions.error.message}`);
+    for(const row of decisions.data??[])processedIds.add(row.signal_id);
+    if((decisions.data??[]).length<1000)break;
+    if(page===9)scanTruncated=true;
+  }
+  const candidates=signals.map(row=>({row,b:rec(rec(row.features).b06133)}))
+    .filter(x=>x.b.version===B06133_VERSION&&x.b.allowed===true&&
+      ["R62","BUYER_SHARE_RESCUE","BOTH"].includes(x.b.branch)&&
+      Number.isSafeInteger(Number(x.b.source?.decisionAt))&&
+      Number(x.b.source.decisionAt)>Date.parse(state.seeded_through)&&!processedIds.has(x.row.id))
+    .sort((a,b)=>Number(a.b.source.decisionAt)-Number(b.b.source.decisionAt)||
+      N(rec(a.row.features).rank,999)-N(rec(b.row.features).rank,999)||
+      String(a.row.symbol).localeCompare(String(b.row.symbol))||String(a.row.id).localeCompare(String(b.row.id)));
+  if(candidates.some(x=>Number(x.b.source.decisionAt)<cursor))throw Error("CEC0040_BOOTSTRAP_ORDER_GAP");
+  const results=[];
+  for(const item of candidates){
+    await verifyExecutionLease(db);
+    const decisionAt=Number(item.b.source.decisionAt),decided=await db.rpc("v11_cec0040_decide",{
+      p_signal_id:item.row.id,p_decision_at:new Date(decisionAt).toISOString(),
+      p_symbol:String(item.row.symbol).toUpperCase(),p_branch:item.b.branch,p_bootstrap:true});
+    if(decided.error)throw Error(`CEC0040_BOOTSTRAP_DECISION:${decided.error.message}`);
+    const decision=rec(decided.data);
+    if(decision.ready!==true){
+      const refresh=await refreshCec0040Targets(db);
+      const retried=await db.rpc("v11_cec0040_decide",{p_signal_id:item.row.id,
+        p_decision_at:new Date(decisionAt).toISOString(),p_symbol:String(item.row.symbol).toUpperCase(),
+        p_branch:item.b.branch,p_bootstrap:true});
+      if(retried.error||rec(retried.data).ready!==true)throw Error(`CEC0040_BOOTSTRAP_NOT_READY:${rec(retried.data).reason??retried.error?.message??"UNKNOWN"}`);
+      Object.assign(decision,rec(retried.data),{refresh});
+    }
+    let target=null;
+    if(decision.modelAllowed===true){
+      const position=await db.from("v11_long_regime_positions").select("*").eq("signal_id",item.row.id).maybeSingle();
+      if(position.error)throw Error(`CEC0040_BOOTSTRAP_POSITION:${position.error.message}`);
+      if(position.data){
+        target=await db.rpc("v11_cec0040_register_target",{p_position_id:position.data.id,
+          p_signal_id:item.row.id,p_symbol:String(item.row.symbol).toUpperCase(),p_branch:item.b.branch,
+          p_entry_at:position.data.entry_at,p_actual_entry_price:Number(position.data.entry_price)});
+        if(target.error)throw Error(`CEC0040_BOOTSTRAP_TARGET:${target.error.message}`);
+        await refreshCec0040Targets(db);
+      }
+    }
+    results.push({signalId:item.row.id,symbol:item.row.symbol,decisionAt,action:decision.action,
+      modelAllowed:decision.modelAllowed===true,targetRegistered:target!==null});
+  }
+  const targetRefresh=await refreshCec0040Targets(db);
+  let completion=null;
+  if(!scanTruncated&&targetRefresh.ok){
+    completion=await db.rpc("v11_cec0040_complete_bootstrap",{
+      p_expected_seeded_through:state.seeded_through,p_scanned_through:new Date().toISOString(),
+      p_reason:"POST_SEED_B06133_DATABASE_REPLAY_COMPLETE"});
+    if(completion.error)throw Error(`CEC0040_BOOTSTRAP_COMPLETE:${completion.error.message}`);
+  }
+  const after=await db.from("v11_cec0040_state").select("*").eq("singleton",true).single();
+  if(after.error)throw Error(`CEC0040_BOOTSTRAP_STATE_VERIFY:${after.error.message}`);
+  return {ok:true,mode:"CEC0040_BOOTSTRAP",processed:results.length,scanned:signals.length,scanTruncated,
+    results,targetRefresh,completion:completion?.data??null,state:after.data};
+}
+
+async function cec0040RuntimeStatus(db){
+  const [state,pending,resolved,applied,errors,missing]=await Promise.all([
+    db.from("v11_cec0040_state").select("*").eq("singleton",true).maybeSingle(),
+    db.from("v11_cec0040_targets").select("position_id",{count:"exact",head:true}).eq("status","PENDING"),
+    db.from("v11_cec0040_targets").select("position_id",{count:"exact",head:true}).eq("status","RESOLVED"),
+    db.from("v11_cec0040_targets").select("position_id",{count:"exact",head:true}).eq("status","APPLIED"),
+    db.from("v11_cec0040_targets").select("position_id",{count:"exact",head:true}).eq("status","ERROR"),
+    db.rpc("v11_cec0040_missing_targets")]);
+  const failed=[state,pending,resolved,applied,errors,missing].find(x=>x.error);
+  if(failed)return {available:false,version:CEC0040_VERSION,reason:String(failed.error.message)};
+  const s=state.data;
+  if(!s)return {available:false,version:CEC0040_VERSION,reason:"CEC0040_STATE_MISSING"};
+  return {available:true,version:s.policy_version,targetVersion:s.target_version,
+    p142PolicyVersion:P142_POLICY_VERSION,configHash:s.config_hash,
+    identityValid:s.policy_version===CEC0040_VERSION&&s.target_version===CEC0040_TARGET_VERSION&&
+      s.config_hash==="3b0ebe775334e24a020887532cec7b57d014a7a7383a06e217d0949b3113630f",
+    mode:s.enforcement_enabled===true?"ENFORCED":"SHADOW",enforcementEnabled:s.enforcement_enabled===true,
+    ewmaUsdt:s.ewma_usdt==null?null:Number(s.ewma_usdt),trainingCount:Number(s.training_count),
+    rejectRun:Number(s.reject_run),seededThrough:s.seeded_through,lastDecisionAt:s.last_decision_at,
+    bootstrapComplete:s.bootstrap_complete===true,bootstrapCompletedAt:s.bootstrap_completed_at??null,
+    bootstrapScannedThrough:s.bootstrap_scanned_through??null,
+    enforcementChangedAt:s.enforcement_changed_at??null,enforcementReason:s.enforcement_reason??null,
+    targets:{pending:pending.count??0,resolved:resolved.count??0,applied:applied.count??0,
+      error:errors.count??0,missing:(missing.data??[]).length}};
 }
 /**
  * Execution freshness for one entry attempt.
@@ -610,11 +833,16 @@ function booVerdict(s,phase,inputs,{quote,info,snapshot,pair,orders}){
 async function booGate(db,s,phase,ctx){return booVerdict(s,phase,await booGateInputs(db,s),ctx)}
 async function openBull(db,s,openPositions,manual=null,attempt={},managementFailures=[]){
 const gateway=opsGateway(db);
-const selection=rec(rec(s.features).b06133),selectedSetup=signalSetup(s);
+const selection=rec(rec(s.features).b06133),cec=rec(rec(s.features).cec0040),selectedSetup=signalSetup(s);
 if(selection.version!==B06133_VERSION||selection.allowed!==true||selection.result!==true||
   !["R62","BUYER_SHARE_RESCUE","BOTH"].includes(selection.branch)||
   Number(selection.source?.decisionAt)!==Number(selectedSetup?.triggerAt))
   throw new Error("B06133_SELECTION_INVALID");
+if(cec.version!==CEC0040_VERSION||cec.targetVersion!==CEC0040_TARGET_VERSION||cec.ready!==true||
+  cec.effectiveAllowed!==true||Number(cec.decisionAt)!==Number(selectedSetup?.triggerAt)||
+  !["ADMIT","PROBE","REJECT"].includes(cec.action)||
+  (cec.enforcementEnabled===true&&!["ADMIT","PROBE"].includes(cec.action)))
+  throw new Error("CEC0040_SELECTION_INVALID");
 await requireLeaderEntryControls(db);
 const exitPolicy=rec(s.features?.exitPolicy);
 if(!Object.values(exitPolicy).every(v=>Number.isFinite(Number(v)))||!(Number(exitPolicy.stopPct)>0&&Number(exitPolicy.stopPct)<1&&Number(exitPolicy.trailArmPct)>0&&Number(exitPolicy.trailGapPct)>0&&Number(exitPolicy.trailGapPct)<1&&Number(exitPolicy.maxHoldMs)===POLICY.maxHoldMs&&Number(exitPolicy.staleMs)>0))throw new Error("V17_EXIT_POLICY_INVALID");
@@ -849,7 +1077,7 @@ if(E1_ENABLED&&dispatchQuote?.raw){
 await recordBooVerdict(db,{signalId:s.id,symbol:s.symbol,phase:"PRE_DISPATCH",result:booPredispatch});
 await verifyExecutionLease(db);
 const id=cid("v11e",s.id),rp={action:"create_order",leverage:LEV,order:{market:s.symbol,side:"BUY",type:"LIMIT",price:limitPrice,time_in_force:"IOC",quantity:sized.amount,identifier:id,position_side:"LONG",position_effect:"OPEN"},wait_for_final_ms:4000},
-  oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,intent:"OPEN_LONG",reason:"V17_LEADER_ENTRY_IOC",client_order_id:id,requested_quantity:sized.amount,state:"PLANNED",request_payload:{...rp,quantity_step:step,price_tick:filters.priceTick,min_notional_usdt:filters.minNotionalUsdt,target_margin_usdt:MARGIN,sizing_contract_version:SLOT_SIZING_CONTRACT.version,entry_timing_policy:setupGoverns(s)?{version:SETUP_POLICY_VERSION,activation:SETUP_LIVE_CUTOVER,setup:serializeSetup(signalSetup(s),8)}:null,entry_selection:rec(s.features).b06133,sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,order_notional_usdt:sized.orderNotionalUsdt,sizing_bound_by:sized.boundBy,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,setup_max_concurrent:SETUP_MAX_CONCURRENT,executor_patch:PATCH,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION,max_entry_drift_pct:POLICY.maxEntryDriftPct},entry_control:finalDecision.evidence,e1:E1_ENABLED?e1Decision:null,x1:X1_ENABLED?{policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,...OPERATOR_OVERRIDE}:null,operator_override:E1_ENABLED||X1_ENABLED?OPERATOR_OVERRIDE:null,qv3:qv3Active?{version:QV3_VERSION,activation:QV3_LIVE_CUTOVER,basis:QV3_ACTIVATION_BASIS}:null}}).select("*").single();
+  oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,intent:"OPEN_LONG",reason:"V17_LEADER_ENTRY_IOC",client_order_id:id,requested_quantity:sized.amount,state:"PLANNED",request_payload:{...rp,quantity_step:step,price_tick:filters.priceTick,min_notional_usdt:filters.minNotionalUsdt,target_margin_usdt:MARGIN,sizing_contract_version:SLOT_SIZING_CONTRACT.version,entry_timing_policy:setupGoverns(s)?{version:SETUP_POLICY_VERSION,activation:SETUP_LIVE_CUTOVER,setup:serializeSetup(signalSetup(s),8)}:null,entry_selection:rec(s.features).b06133,entry_controller:rec(s.features).cec0040,sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,order_notional_usdt:sized.orderNotionalUsdt,sizing_bound_by:sized.boundBy,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,setup_max_concurrent:SETUP_MAX_CONCURRENT,executor_patch:PATCH,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION,max_entry_drift_pct:POLICY.maxEntryDriftPct},entry_control:finalDecision.evidence,e1:E1_ENABLED?e1Decision:null,x1:X1_ENABLED?{policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,...OPERATOR_OVERRIDE}:null,operator_override:E1_ENABLED||X1_ENABLED?OPERATOR_OVERRIDE:null,qv3:qv3Active?{version:QV3_VERSION,activation:QV3_LIVE_CUTOVER,basis:QV3_ACTIVATION_BASIS}:null}}).select("*").single();
 if(oi.error)throw new Error(`ORDER_INTENT:${oi.error.message}`);
 try{
   await verifyExecutionLease(db);attempt.dispatched=true;const initialRaw=await gateway(rp),initial=fill(initialRaw);
@@ -880,7 +1108,7 @@ try{
       sizedMarginUsdt:sized.sizedMargin,entryProtection,entryFinality:evidence,
       entryDecision:finalDecision,postFillEntryGuard:rec(pos.data.metadata).postFillEntryGuard,
       e1:e1Decision,x1PolicyVersion:rec(pos.data.metadata).exitObservationPolicyVersion,
-      b06133:rec(pos.data.metadata).b06133,qv3:attempt.qv3};
+      b06133:rec(pos.data.metadata).b06133,cec0040:rec(pos.data.metadata).cec0040,qv3:attempt.qv3};
   }
   await settleKnownEntry(db,oi.data,settledRaw,gateway);
   return{entered:false,reason:`IOC_NO_FILL:${receipt.status}`,entryFinality:evidence,
@@ -952,8 +1180,9 @@ async function settleKnownEntry(db,intent,raw,gw=opsGateway(db)) {
       // Stamped from the ORDER INTENT, so an already-open position can never be
       // opted into this policy by a later deploy: the stamp is fixed at entry.
       entryTiming=rec(intent.request_payload?.entry_timing_policy),
+      entryController=rec(intent.request_payload?.entry_controller),
       fillGuard=entryPolicy?.version===ENTRY_EXECUTION_POLICY_VERSION?postFillEntryGuard(f,z.avg):null,
-      pos=await db.from("v11_long_regime_positions").insert({signal_id:s.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:s.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{entrySelectionPolicyVersion:intent.request_payload?.entry_selection?.version??null,b06133:intent.request_payload?.entry_selection??null,qv3:entryTiming?.version===SETUP_POLICY_VERSION?null:(intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null),entryTimingPolicyVersion:entryTiming?.version??null,entryTimingSetup:entryTiming?.setup??null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,leaderExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,entryConfirmationPolicyVersion:intent.request_payload?.e1?.policyVersion??null,entryConfirmation:intent.request_payload?.e1??null,exitObservationPolicyVersion:intent.request_payload?.x1?.policyVersion??null,x1Observation:{observedBidPeak:z.avg,executableVwapPeak:null,lastObservationId:null,lastObservationAt:null,source:"P10_TOP_OF_BOOK_BATCH",maxQuoteAgeMs:1000},entryMarketRules:{priceTick:N(intent.request_payload?.price_tick),quantityStep:N(intent.request_payload?.quantity_step)},operatorOverride:intent.request_payload?.operator_override??null,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,setupMaxConcurrent:SETUP_MAX_CONCURRENT,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFeatures:f}}).select("*").single();
+      pos=await db.from("v11_long_regime_positions").insert({signal_id:s.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:s.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{entrySelectionPolicyVersion:intent.request_payload?.entry_selection?.version??null,b06133:intent.request_payload?.entry_selection??null,entryControllerPolicyVersion:entryController?.version??null,cec0040:entryController?.version===CEC0040_VERSION?entryController:null,qv3:entryTiming?.version===SETUP_POLICY_VERSION?null:(intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null),entryTimingPolicyVersion:entryTiming?.version??null,entryTimingSetup:entryTiming?.setup??null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,leaderExitPolicyVersion:entryController?.version===CEC0040_VERSION&&entryController.enforcementEnabled===true?P142_POLICY_VERSION:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,entryConfirmationPolicyVersion:intent.request_payload?.e1?.policyVersion??null,entryConfirmation:intent.request_payload?.e1??null,exitObservationPolicyVersion:intent.request_payload?.x1?.policyVersion??null,x1Observation:{observedBidPeak:z.avg,executableVwapPeak:null,lastObservationId:null,lastObservationAt:null,source:"P10_TOP_OF_BOOK_BATCH",maxQuoteAgeMs:1000},entryMarketRules:{priceTick:N(intent.request_payload?.price_tick),quantityStep:N(intent.request_payload?.quantity_step)},operatorOverride:intent.request_payload?.operator_override??null,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,setupMaxConcurrent:SETUP_MAX_CONCURRENT,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFeatures:f}}).select("*").single();
     if(pos.error)throw Error(`POSITION:${pos.error.message}`);position=pos.data;
   }
   await verifyExecutionLease(db);
@@ -962,6 +1191,11 @@ async function settleKnownEntry(db,intent,raw,gw=opsGateway(db)) {
   if(wr.error)throw Error("ENTRY_ORDER_WRITE");
   const sr=await db.from("v11_long_regime_signals").update({status:position.state==="CLOSED"?"CLOSED":"FILLED",position_id:position.id,updated_at:new Date().toISOString()}).eq("id",s.id);
   if(sr.error)throw Error("ENTRY_SIGNAL_WRITE");
+  // The exposure and accounting are already known and durable. A controller-ledger
+  // outage must not rewrite that settled order as ambiguous; the next cycle repairs
+  // the missing row, and the atomic decision RPC blocks new entries until it exists.
+  try{await registerCec0040Target(db,position,s)}
+  catch(error){console.error("CEC0040_TARGET_REGISTER_DEFERRED",position.id,String(error?.message??error))}
   return position;
 }
 async function readOpsPositions(db) {
@@ -1367,7 +1601,8 @@ function x1TopObservation(row,p,at){
 function x1LocalPolicy(p){
   const meta=rec(p.metadata),costUsable=p.entry_fee_usdt!=null&&Number.isFinite(Number(p.entry_fee_usdt))&&
     Number(p.entry_fee_usdt)>=0&&Number(p.original_quantity)>0,
-    r5=meta.leaderExitPolicyVersion===EXIT_REVIEW_R5.policyVersion;
+    r5=meta.leaderExitPolicyVersion===EXIT_REVIEW_R5.policyVersion||
+      meta.leaderExitPolicyVersion===P142_POLICY_VERSION;
   return{...POLICY,...(costUsable?(r5?EXIT_REVIEW_R5:EXIT_REVIEW_CANDIDATE):{}),...rec(meta.leaderExitPolicy)};
 }
 async function runX1FastObservation(db,pair,deadlineMs){
@@ -1461,6 +1696,7 @@ async function run(db) {
   if(started.error)throw Error("HEARTBEAT_START_WRITE");
   let managed=[],reconciliation=[],entry={entered:false,reason:"NOT_EVALUATED"},recovery=null,symbolRecovery=[],
     x1Fast={enabled:X1_ENABLED,policyVersion:X1_POLICY_VERSION,selected:0,endedReason:"NOT_EVALUATED"},
+    cec0040Targets={ok:false,checked:0,results:[],reason:"NOT_EVALUATED"},
     health="NOT_EVALUATED",fatal=null,pendingAge=null,entryEvaluationCompleted=false,accountEvidenceAt=null,symbolQuarantineObserved=false;
   try{
     const c=await opsControls(db);
@@ -1502,6 +1738,10 @@ async function run(db) {
     // writes runtime/operator controls and requires distinct account observations.
     pair=await readOpsPair(db);symbolRecovery=await attemptSymbolRecoveries(db,pair);
     recovery=await attemptOpsRecovery(db,pair,protectedIds);
+    // Target maintenance is isolated from position management. Public market-data or
+    // shadow-ledger failures are telemetry here; the atomic controller RPC itself is
+    // the authority that fails NEW entries closed when causal state is not ready.
+    cec0040Targets=await refreshCec0040Targets(db);
     const controls=await opsControls(db);
     if(controls.runtime.circuit_open)entry.reason="CIRCUIT_OPEN_MANAGEMENT_ACTIVE";
     else if(!operatorAllowsRecovery(controls.runtime,controls.control,controls.settings))entry.reason="OPERATOR_ENTRY_BLOCK";
@@ -1538,6 +1778,8 @@ async function run(db) {
       maxEntryDriftPct:POLICY.maxEntryDriftPct,scope:"NEW_FILLS_ONLY"},qv3Runtime:{version:QV3_VERSION,basis:QV3_ACTIVATION_BASIS,
       activation:QV3_LIVE_CUTOVER,active:Number.isSafeInteger(QV3_LIVE_CUTOVER)&&Date.now()>=QV3_LIVE_CUTOVER},
       b06133Runtime:{version:B06133_VERSION,scope:"NEW_ENTRIES_AFTER_PULLBACK_REACCEL_TRIGGER",enabled:true},
+      cec0040Runtime:{version:CEC0040_VERSION,targetVersion:CEC0040_TARGET_VERSION,
+        p142PolicyVersion:P142_POLICY_VERSION,targetRefresh:cec0040Targets},
       e1Runtime:{enabled:E1_ENABLED,policyVersion:E1_POLICY.policyVersion,...OPERATOR_OVERRIDE},
       x1Runtime:x1Fast,managed,reconciliation,entry,recovery,symbolRecovery,protectionHealth:health};
   }catch(e){fatal=e;entry.reason=String(e.message??e);throw e;}
@@ -1649,7 +1891,7 @@ for(const row of queue){
 // as well as by the queue size. A setup that does not get its turn this cycle is
 // still NEW and is picked up on the next one, a minute later and well inside its
 // 15-minute window -- the cadence is protected without dropping the candidate.
-const executable=[],policyOpen=setupScopedOpen(openNow).length;
+const triggered=[],executable=[],policyOpen=setupScopedOpen(openNow).length;
 const setupDeadline=Date.now()+SETUP_ADVANCE_BUDGET_MS;
 // Advance the setups closest to firing FIRST. The wall-clock budget above is real --
 // each advance is a klines read -- so when it runs out, the candidates it did not
@@ -1688,6 +1930,16 @@ for(const row of advanceOrder){
   if(!state){entry={entered:false,reason:advanced.reason??SETUP_REASON.INVALID_PRICE};continue}
   if(setupIsTerminal(state)){entry={entered:false,reason:state.terminalReason??SETUP_REASON.SETUP_EXPIRED};continue}
   if(state.state!==SETUP_STATE.TRIGGERED){entry={entered:false,reason:advanced.reason??SETUP_REASON.HOLD};continue}
+  triggered.push({row:advanced.row,state});
+}
+// CEC is causal state, so triggered candidates must reach it chronologically. Setup
+// advancement above may prioritize nearly-fired/newer rows for latency, but that
+// operational ordering is not allowed to reorder the controller's history.
+triggered.sort((a,b)=>Number(a.state.triggerAt)-Number(b.state.triggerAt)||
+  N(rec(a.row.features).rank,999)-N(rec(b.row.features).rank,999)||
+  String(a.row.symbol).localeCompare(String(b.row.symbol))||String(a.row.id).localeCompare(String(b.row.id)));
+for(const advanced of triggered){
+  const row=advanced.row,state=advanced.state;
   // Policy-scoped admission limit. It narrows this policy's own exposure during its
   // first live window; it never widens, and it never touches MAX_SLOTS.
   if(policyOpen+executable.filter(setupGoverns).length>=SETUP_MAX_CONCURRENT){
@@ -1697,7 +1949,11 @@ for(const row of advanceOrder){
   try{selected=await applyB06133Selection(db,advanced.row,state);}
   catch(error){entry={entered:false,reason:String(error?.message??error)};continue;}
   if(!selected.allowed){entry={entered:false,reason:selected.stamp.reason};continue;}
-  executable.push(selected.row);
+  let controlled;
+  try{controlled=await applyCec0040Selection(db,selected.row,state);}
+  catch(error){entry={entered:false,reason:String(error?.message??error)};continue;}
+  if(!controlled.allowed){entry={entered:false,reason:controlled.stamp.reason};continue;}
+  executable.push(controlled.row);
 }
 const runDeadline=Date.now()+ENTRY_RUN_BUDGET_MS;
 let attempts=0;
@@ -1806,8 +2062,34 @@ async function leaderQuote(p,ctx){
 async function manageLeader(db,p,ctx){
   const gateway=ctx?.gateway??exchangeGateway;
   await verifyExecutionLease(db);
-  const {bid,ask,detectedAtMs,timing,observedBidPeak,observedBidPeakAt,executableVwapPeak,observationId,bidSize}=await leaderQuote(p,ctx);
   const meta=rec(p.metadata);
+  const p142Active=meta.leaderExitPolicyVersion===P142_POLICY_VERSION&&
+    rec(meta.cec0040).version===CEC0040_VERSION&&rec(meta.cec0040).enforcementEnabled===true;
+  let p142State=Object.keys(rec(meta.p142State)).length?rec(meta.p142State):null,p142Error=null;
+  // P142 consumes completed candles before the execution quote is requested. This
+  // preserves the quote's existing freshness budget and keeps X1's one-second path
+  // free of public candle reads. A market-data failure degrades to the already-live
+  // R5 stop; it can neither lower protection nor stop the ordinary manager.
+  const costUsable=p.entry_fee_usdt!=null&&Number.isFinite(Number(p.entry_fee_usdt))&&Number(p.entry_fee_usdt)>=0&&
+    Number(p.original_quantity)>0;
+  if(p142Active&&ctx?.fastObservation!==true&&costUsable){
+    const entryAt=Date.parse(p.entry_at),start=p142State?.lastBarOpen==null?
+      Math.floor(entryAt/60000)*60000:Number(p142State.lastBarOpen),
+      completedThrough=Math.floor(Date.now()/60000)*60000-1;
+    if(Number.isSafeInteger(start)&&completedThrough>=start){
+      try{
+        const bars=await qv3Candles(p.symbol,Date.now(),start);
+        p142State=advanceP142Completed({id:p.id,entryAt,entryPrice:Number(p.entry_price),
+          entryFee:Number(p.entry_fee_usdt),quantity:Number(p.original_quantity),
+          stopPrice:Number(p.hard_stop_price),peakPrice:Number(p.peak_price),
+          branch:rec(meta.b06133).branch},bars,p142State);
+      }catch(error){
+        p142Error=String(error?.message??error).slice(0,300);
+        console.error("P142_COMPLETED_CANDLE_UNAVAILABLE",p.id,p142Error);
+      }
+    }
+  }
+  const {bid,ask,detectedAtMs,timing,observedBidPeak,observedBidPeakAt,executableVwapPeak,observationId,bidSize}=await leaderQuote(p,ctx);
   // Preserve the existing policy. Today's nine trades do not validate a new default.
   // Cost-breakeven and profit-lock protection from the V17 exit review. These raise the
   // stop only; they can never lower it. Both are evaluated per tick with no confirmation
@@ -1815,25 +2097,25 @@ async function manageLeader(db,p,ctx){
   // costBreakeven() throws on a non-finite entry fee or quantity, which would abort this
   // whole evaluation and leave the position unmanaged. Degrade to the baseline stop
   // instead: a weaker stop still protects, no stop at all does not.
-  const costUsable=p.entry_fee_usdt!=null&&Number.isFinite(Number(p.entry_fee_usdt))&&Number(p.entry_fee_usdt)>=0&&
-    Number(p.original_quantity)>0;
   if(!costUsable)console.error("V17_EXIT_COST_INPUTS_UNUSABLE",p.id);
   // Cutover is per position, decided by the stamp written at entry. A position opened
   // under the old ladder keeps it for its whole life, so nothing that is already running
   // has its stop moved by this deploy: R5's risk cut is a level that only NEW positions
   // can ever add. Un-stamped rows are exactly the positions open across the deploy.
-  const r5=meta.leaderExitPolicyVersion===EXIT_REVIEW_R5.policyVersion;
+  const r5=meta.leaderExitPolicyVersion===EXIT_REVIEW_R5.policyVersion||p142Active;
   const policy={...POLICY,...(costUsable?(r5?EXIT_REVIEW_R5:EXIT_REVIEW_CANDIDATE):{}),...rec(meta.leaderExitPolicy)};
   const useObservedPeak=Number.isFinite(observedBidPeak)&&observedBidPeak>=Number(p.peak_price),
     carriedPeak=useObservedPeak?observedBidPeak:Number(p.peak_price),
     carriedHighAt=useObservedPeak&&Number.isSafeInteger(observedBidPeakAt)&&observedBidPeakAt>=Date.parse(p.entry_at)?
       observedBidPeakAt:Date.parse(meta.leaderLastHighAt||p.entry_at);
-  const state=nextExitReviewed({entryPrice:Number(p.entry_price),entryAt:Date.parse(p.entry_at),
+  const exitInput={entryPrice:Number(p.entry_price),entryAt:Date.parse(p.entry_at),
     entryFee:Number(p.entry_fee_usdt),quantity:Number(p.original_quantity),
     peakPrice:carriedPeak,stopPrice:Number(p.hard_stop_price),lastHighAt:carriedHighAt,
     // Tick rounding belongs to the X1 observation arm only. The normal one-minute
     // manager remains behavior-identical when the override is disabled.
-    priceTick:ctx?.fastObservation===true?N(rec(meta.entryMarketRules).priceTick):0},bid,detectedAtMs,policy);
+    priceTick:ctx?.fastObservation===true?N(rec(meta.entryMarketRules).priceTick):0};
+  const state=p142Active?nextExitP142(exitInput,bid,detectedAtMs,policy,p142State):
+    nextExitReviewed(exitInput,bid,detectedAtMs,policy);
   const telemetry={detectedAtMs,quoteRequestedAtMs:timing.requested_at_ms,
     quoteReceivedAtMs:timing.received_at_ms,exchangeBookAtMs:timing.book_captured_at_ms??null,
     source:timing.source??null,observationId:observationId??null,bidSize:Number.isFinite(bidSize)?bidSize:null};
@@ -1846,7 +2128,11 @@ async function manageLeader(db,p,ctx){
     fullQuantityExecutable:true,protectedQuantity:Number(p.remaining_quantity),
     lastStopSyncAt:stopImproved?new Date(detectedAtMs).toISOString():priorX1.lastStopSyncAt??null}:priorX1;
   const nextMeta={...meta,leaderLastHighAt:new Date(state.lastHighAt).toISOString(),
-    leaderTrailArmed:state.armed,exitTelemetry:telemetry,...(ctx?.fastObservation?{x1Observation}: {})};
+    leaderTrailArmed:state.armed,exitTelemetry:telemetry,
+    ...(p142Active&&p142State?{p142State}:{}),
+    ...(p142Active&&ctx?.fastObservation!==true?{p142Observation:{policyVersion:P142_POLICY_VERSION,
+      lastAttemptAt:new Date(detectedAtMs).toISOString(),error:p142Error}}:{}),
+    ...(ctx?.fastObservation?{x1Observation}: {})};
   const details={strategy:STRATEGY,bid,...state,...telemetry,
     exitObservationPolicyVersion:ctx?.fastObservation?X1_POLICY_VERSION:meta.exitObservationPolicyVersion??null,
     executableVwapPeak:ctx?.fastObservation?x1Observation.executableVwapPeak:null,operatorOverride:ctx?.fastObservation?OPERATOR_OVERRIDE:null};
@@ -2016,19 +2302,78 @@ async function verifyExecutionLease(db,allowBudgetExceeded=false){
   const r=await db.rpc("v17_verify_execution_lease",{p_owner:owner});
   if(r.error||r.data!==true)throw new Error("V17_EXECUTION_LEASE_EXPIRED");
 }
-async function runWithLease(db){
+async function runWithLease(db,operation=run){
   const owner=crypto.randomUUID();
   const lock=await db.rpc("v17_acquire_execution_lease",{p_owner:owner});
   if(lock.error)throw new Error("V17_LEASE_UNAVAILABLE");
   if(lock.data!==true)return {ok:true,skipped:"V17_EXECUTOR_BUSY"};
   leaseOwners.set(db,owner);cycleBudgets.set(db,createBudget({ms:55000,calls:160}));
-  try{return await run(db);}finally{
+  try{return await operation(db);}finally{
     leaseOwners.delete(db);cycleBudgets.delete(db);
     const released=await db.rpc("v17_release_execution_lease",{p_owner:owner});
     if(released.error)console.error("V17_LEASE_RELEASE_FAILED");
   }
 }
-Deno.serve(async req=>{if(req.method!=="POST")return res(405,{ok:false,error:"POST_ONLY"});const U=env("SUPABASE_URL"),K=env("SUPABASE_SERVICE_ROLE_KEY"),db=createClient(U,K,{auth:{persistSession:false,autoRefreshToken:false},global:{fetch:async(url,init={})=>{const headers=new Headers(init.headers);const owner=leaseOwners.get(db);if(owner)headers.set("x-v18-execution-owner",owner);const timeout=AbortSignal.timeout(2500);return fetch(url,{...init,headers,signal:init.signal?AbortSignal.any([init.signal,timeout]):timeout})}}});if(!(await auth(db,req)))return res(401,{ok:false,error:"UNAUTHORIZED"});const body=await req.json().catch(()=>({})),mode=String(body.mode||"run").toLowerCase();try{if(mode==="preflight"||mode==="diagnostic"){const[m,sn,pf,q,i,rt,op]=await Promise.all([market(db),snap(db),gateway({action:"p10_portfolio"}),gateway({action:"quote",market:String(body.symbol||"BTCUSDT")}),gateway({action:"symbol_info",market:String(body.symbol||"BTCUSDT")}),db.from("v11_long_regime_runtime").select("*").eq("singleton",true).single(),db.from("v11_long_regime_positions").select("id,symbol,active_lane,peak_price,entry_price,last_evaluated_at,metadata").eq("state","OPEN").limit(MAX_SLOTS+1)]),pfFilters=symbolFilters(i),step=pfFilters.quantityStep,ask=N(q?.best_ask),
-      sizing=(()=>{try{return ask>0&&step>0?sizeEntry(ask,step,pfFilters):null}catch(e){return{error:String(e?.message??e)}}})();return res(200,{ok:true,revision:REVISION,patch:PATCH,entryExecutionPolicy:{version:ENTRY_EXECUTION_POLICY_VERSION,maxEntryDriftPct:POLICY.maxEntryDriftPct,scope:"NEW_FILLS_ONLY"},b06133Runtime:{version:B06133_VERSION,scope:"NEW_ENTRIES_AFTER_PULLBACK_REACCEL_TRIGGER",enabled:true,maxConcurrent:SETUP_MAX_CONCURRENT},operatorOverride:OPERATOR_OVERRIDE,e1Runtime:{enabled:E1_ENABLED,policyVersion:E1_POLICY.policyVersion},x1Runtime:{enabled:X1_ENABLED,policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,observationIntervalMs:1000},maxSlots:MAX_SLOTS,runtime:rt.data,marketState:m,snapshotAgeMs:sn.ageMs,availableUsdt:Math.min(N(sn.available_quote),N(pf?.available_quote)),externalPositions:active(pf).map(x=>({symbol:sym(x),quantity:qty(x)})),openPositions:(op.data||[]).map(p=>({...p,metadata:{executorPatch:rec(p.metadata).executorPatch,entrySelectionPolicyVersion:rec(p.metadata).entrySelectionPolicyVersion,b06133:rec(p.metadata).b06133,entryExecutionPolicyVersion:rec(p.metadata).entryExecutionPolicyVersion,entryConfirmationPolicyVersion:rec(p.metadata).entryConfirmationPolicyVersion,exitObservationPolicyVersion:rec(p.metadata).exitObservationPolicyVersion,x1Observation:rec(p.metadata).x1Observation,qv3:rec(p.metadata).qv3}})),quote:q,symbolInfo:{step,priceTick:pfFilters.priceTick,minNotional:pfFilters.minNotionalUsdt,minQuantity:pfFilters.minQuantity},
-      sizingContract:{...SLOT_SIZING_CONTRACT,...slotSizingBounds(SLOT_SIZING_CONTRACT),
-        invariants:assertSlotSizingContract()},sizing})}return res(200,await runWithLease(db))}catch(e){const msg=e instanceof Error?e.message:String(e);return res(500,{ok:false,revision:REVISION,patch:PATCH,error:msg})}});
+Deno.serve(async req=>{
+  if(req.method!=="POST")return res(405,{ok:false,error:"POST_ONLY"});
+  const U=env("SUPABASE_URL"),K=env("SUPABASE_SERVICE_ROLE_KEY"),db=createClient(U,K,{
+    auth:{persistSession:false,autoRefreshToken:false},
+    global:{fetch:async(url,init={})=>{
+      const headers=new Headers(init.headers),owner=leaseOwners.get(db);
+      if(owner)headers.set("x-v18-execution-owner",owner);
+      const timeout=AbortSignal.timeout(2500);
+      return fetch(url,{...init,headers,signal:init.signal?AbortSignal.any([init.signal,timeout]):timeout});
+    }}
+  });
+  if(!(await auth(db,req)))return res(401,{ok:false,error:"UNAUTHORIZED"});
+  const body=await req.json().catch(()=>({})),mode=String(body.mode||"run").toLowerCase();
+  try{
+    if(mode==="preflight"||mode==="diagnostic"){
+      const [m,sn,pf,q,i,rt,op,cec]=await Promise.all([
+        market(db),snap(db),gateway({action:"p10_portfolio"}),
+        gateway({action:"quote",market:String(body.symbol||"BTCUSDT")}),
+        gateway({action:"symbol_info",market:String(body.symbol||"BTCUSDT")}),
+        db.from("v11_long_regime_runtime").select("*").eq("singleton",true).single(),
+        db.from("v11_long_regime_positions")
+          .select("id,symbol,active_lane,peak_price,entry_price,last_evaluated_at,metadata")
+          .eq("state","OPEN").limit(MAX_SLOTS+1),
+        cec0040RuntimeStatus(db)
+      ]),pfFilters=symbolFilters(i),step=pfFilters.quantityStep,ask=N(q?.best_ask),
+        sizing=(()=>{try{return ask>0&&step>0?sizeEntry(ask,step,pfFilters):null}
+          catch(e){return{error:String(e?.message??e)}}})();
+      return res(200,{ok:true,revision:REVISION,patch:PATCH,
+        entryExecutionPolicy:{version:ENTRY_EXECUTION_POLICY_VERSION,maxEntryDriftPct:POLICY.maxEntryDriftPct,scope:"NEW_FILLS_ONLY"},
+        b06133Runtime:{version:B06133_VERSION,scope:"NEW_ENTRIES_AFTER_PULLBACK_REACCEL_TRIGGER",enabled:true,maxConcurrent:SETUP_MAX_CONCURRENT},
+        cec0040Runtime:cec,operatorOverride:OPERATOR_OVERRIDE,
+        e1Runtime:{enabled:E1_ENABLED,policyVersion:E1_POLICY.policyVersion},
+        x1Runtime:{enabled:X1_ENABLED,policyVersion:X1_POLICY_VERSION,
+          baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,observationIntervalMs:1000},
+        maxSlots:MAX_SLOTS,runtime:rt.data,marketState:m,snapshotAgeMs:sn.ageMs,
+        availableUsdt:Math.min(N(sn.available_quote),N(pf?.available_quote)),
+        externalPositions:active(pf).map(x=>({symbol:sym(x),quantity:qty(x)})),
+        openPositions:(op.data||[]).map(p=>({...p,metadata:{
+          executorPatch:rec(p.metadata).executorPatch,
+          entrySelectionPolicyVersion:rec(p.metadata).entrySelectionPolicyVersion,
+          b06133:rec(p.metadata).b06133,
+          entryControllerPolicyVersion:rec(p.metadata).entryControllerPolicyVersion,
+          cec0040:rec(p.metadata).cec0040,
+          leaderExitPolicyVersion:rec(p.metadata).leaderExitPolicyVersion,
+          p142State:rec(p.metadata).p142State,
+          p142Observation:rec(p.metadata).p142Observation,
+          entryExecutionPolicyVersion:rec(p.metadata).entryExecutionPolicyVersion,
+          entryConfirmationPolicyVersion:rec(p.metadata).entryConfirmationPolicyVersion,
+          exitObservationPolicyVersion:rec(p.metadata).exitObservationPolicyVersion,
+          x1Observation:rec(p.metadata).x1Observation,qv3:rec(p.metadata).qv3}})),
+        quote:q,symbolInfo:{step,priceTick:pfFilters.priceTick,
+          minNotional:pfFilters.minNotionalUsdt,minQuantity:pfFilters.minQuantity},
+        sizingContract:{...SLOT_SIZING_CONTRACT,...slotSizingBounds(SLOT_SIZING_CONTRACT),
+          invariants:assertSlotSizingContract()},sizing});
+    }
+    if(mode==="cec-bootstrap")return res(200,await runWithLease(db,bootstrapCec0040));
+    if(mode!=="run")return res(400,{ok:false,revision:REVISION,patch:PATCH,error:"MODE_UNSUPPORTED"});
+    return res(200,await runWithLease(db));
+  }catch(e){
+    const msg=e instanceof Error?e.message:String(e);
+    return res(500,{ok:false,revision:REVISION,patch:PATCH,error:msg});
+  }
+});

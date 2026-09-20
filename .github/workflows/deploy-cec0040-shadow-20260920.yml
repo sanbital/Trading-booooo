@@ -1,0 +1,250 @@
+name: Deploy and activate CEC0040
+
+on:
+  push:
+    branches: [release/cec0040-live-20260920]
+    paths:
+      - ".github/workflows/deploy-cec0040-shadow-20260920.yml"
+      - ".github/workflows/activate-cec0040-20260920.yml"
+      - "supabase/functions/_shared/leader-b06133-entry.test.mjs"
+      - "supabase/functions/_shared/leader-cec0040.mjs"
+      - "supabase/functions/_shared/leader-cec0040.test.mjs"
+      - "supabase/functions/v10-lane-executor/index.ts"
+      - "supabase/migrations/20260920114124_cec0040_operational_state.sql"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-v10-lane-executor
+  cancel-in-progress: false
+
+env:
+  BASELINE_SHA: c8bf11870586697d70aab1c58a57eeb5c992e186
+  EXPECTED_VERSION_BEFORE: "57"
+  EXPECTED_EXECUTOR_HASH: ec236f035eb66de096f4773b230279d6888cb782ed28c0908b7c056b7e920208
+  EXECUTOR_PATCH: CEC0040-P142-DEPLOYMENT-READY-1
+  CEC_VERSION: CEC0040_CAUSAL_EDGE_CONTROLLER_1
+  TARGET_VERSION: CEC0040_P142_MEAN44_1
+  P142_VERSION: P142_COMPLETED_PRICE_BRANCH_1
+  CONFIG_HASH: 3b0ebe775334e24a020887532cec7b57d014a7a7383a06e217d0949b3113630f
+
+jobs:
+  shadow-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact release SHA
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Prove release scope and frozen risk constraints
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git merge-base "$BASELINE_SHA" HEAD)" = "$BASELINE_SHA"
+          git diff --check
+          mkdir -p release-evidence
+          changed="$(git diff --name-only "$BASELINE_SHA" HEAD | sort)"
+          expected="$(printf '%s\n' \
+            .github/workflows/activate-cec0040-20260920.yml \
+            .github/workflows/deploy-cec0040-shadow-20260920.yml \
+            supabase/functions/_shared/leader-b06133-entry.test.mjs \
+            supabase/functions/_shared/leader-cec0040.mjs \
+            supabase/functions/_shared/leader-cec0040.test.mjs \
+            supabase/functions/v10-lane-executor/index.ts \
+            supabase/migrations/20260920114124_cec0040_operational_state.sql | sort)"
+          test "$changed" = "$expected" || { echo "$changed"; exit 1; }
+          grep -Fq 'PATCH="CEC0040-P142-DEPLOYMENT-READY-1"' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'const SETUP_MAX_CONCURRENT=4' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'const MAX_SLOTS=10' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'targetMarginUsdt: 200' supabase/functions/_shared/leader-slot-sizing.mjs
+          grep -Fq 'leverage: 3' supabase/functions/_shared/leader-slot-sizing.mjs
+          grep -Fq "0.9945815883759598,116,0,'2026-09-20T07:03:54.503Z',false" \
+            supabase/migrations/20260920114124_cec0040_operational_state.sql
+          git diff --quiet "$BASELINE_SHA" HEAD -- \
+            supabase/functions/_shared/leader-b06133-entry.mjs \
+            supabase/functions/_shared/leader-pullback-reaccel.mjs \
+            supabase/functions/_shared/leader-exit-review.mjs \
+            supabase/functions/_shared/leader-entry-protection.mjs \
+            supabase/functions/_shared/leader-protection-adapter.mjs \
+            supabase/functions/_shared/leader-entry-settlement.mjs \
+            supabase/functions/_shared/leader-exit-settlement.mjs \
+            supabase/functions/_shared/leader-db-only-reconciliation.mjs \
+            supabase/functions/_shared/leader-entry-control.mjs \
+            supabase/functions/_shared/leader-ops-isolation.mjs \
+            supabase/functions/_shared/leader-slot-sizing.mjs
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run policy and executor regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test \
+            supabase/functions/_shared/*.test.mjs \
+            supabase/functions/v10-lane-executor/*.test.mjs \
+            | tee release-evidence/tests.tap
+          node --check supabase/functions/_shared/leader-cec0040.mjs
+          npm exec --yes --package=deno@2.5.6 -- deno check \
+            supabase/functions/v10-lane-executor/index.ts
+
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Prove production baseline and capture open positions
+        id: baseline
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json \
+            > release-evidence/functions-before.json
+          python - <<'PY'
+          import json,os
+          x=json.load(open('release-evidence/functions-before.json'))
+          x=x.get('functions',x) if isinstance(x,dict) else x
+          row=next(r for r in x if r.get('slug')=='v10-lane-executor')
+          assert row.get('status')=='ACTIVE' and row.get('verify_jwt') is False, row
+          assert int(row['version'])==int(os.environ['EXPECTED_VERSION_BEFORE']), row
+          assert row.get('ezbr_sha256')==os.environ['EXPECTED_EXECUTOR_HASH'], row
+          PY
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select jsonb_build_object('observedAt',clock_timestamp(),'runtime',(select to_jsonb(x) from (select revision,live_enabled,circuit_open,last_error,protection_health from public.v11_long_regime_runtime where singleton) x),'settings',(select to_jsonb(x) from (select mode,pause_new_entries,withdrawal_mode,manual_intervention_required,scalp_kill_switch,emergency_liquidation,binance_futures_allocation_usdt,binance_futures_leverage from public.trading_settings where id=1) x),'pendingOrders',(select count(*) from public.v11_long_regime_orders where state in ('PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED')))" \
+            > release-evidence/safety-before.json
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(jsonb_agg(jsonb_build_object('id',id,'signalId',signal_id,'symbol',symbol,'entryAt',entry_at,'originalQuantity',original_quantity,'remainingQuantity',remaining_quantity,'hardStopPrice',hard_stop_price,'exitPolicy',metadata->>'leaderExitPolicyVersion') order by id),'[]'::jsonb) from public.v11_long_regime_positions where state='OPEN'" \
+            > release-evidence/open-before.json
+          python - <<'PY'
+          import json
+          x=json.load(open('release-evidence/safety-before.json')); r=x['runtime']; s=x['settings']
+          assert r['revision']=='V11-LONG-REGIME-1.0.1' and r['live_enabled'] and not r['circuit_open'] and not r['last_error'], r
+          assert s['mode']=='LIVE_LIMITED' and not s['pause_new_entries'], s
+          assert not any(s[k] for k in ('withdrawal_mode','manual_intervention_required','scalp_kill_switch','emergency_liquidation')), s
+          assert float(s['binance_futures_allocation_usdt'])==200 and float(s['binance_futures_leverage'])==3, s
+          PY
+
+      - name: Apply shadow-only CEC state migration
+        id: migration
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" -X --single-transaction --set=ON_ERROR_STOP=1 \
+            -f supabase/migrations/20260920114124_cec0040_operational_state.sql
+          state="$(psql "$SUPABASE_DB_URL" -XAt -F '|' --set=ON_ERROR_STOP=1 -c \
+            "select policy_version,target_version,config_hash,enforcement_enabled,bootstrap_complete,training_count,ewma_usdt,reject_run from public.v11_cec0040_state where singleton")"
+          test "$state" = "$CEC_VERSION|$TARGET_VERSION|$CONFIG_HASH|f|f|116|0.9945815883759598|0"
+
+      - name: Deploy executor in fail-closed bootstrap mode
+        id: deploy
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy v10-lane-executor --project-ref "$SUPABASE_PROJECT_REF" \
+            --no-verify-jwt --use-api
+
+      - name: Bootstrap post-seed DB decisions and activate CEC0040
+        id: verify
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json \
+            > release-evidence/functions-after.json
+          python - <<'PY'
+          import json,os
+          x=json.load(open('release-evidence/functions-after.json'))
+          x=x.get('functions',x) if isinstance(x,dict) else x
+          row=next(r for r in x if r.get('slug')=='v10-lane-executor')
+          assert row.get('status')=='ACTIVE' and row.get('verify_jwt') is False, row
+          assert int(row['version'])==int(os.environ['EXPECTED_VERSION_BEFORE'])+1, row
+          PY
+          mkdir -p release-evidence/production-after
+          supabase functions download v10-lane-executor --project-ref "$SUPABASE_PROJECT_REF" \
+            --use-api --workdir "$PWD/release-evidence/production-after"
+          node test-support/v19-ops/verify-downloaded-function.mjs \
+            release-evidence/production-after . > release-evidence/source-parity.json
+          token="$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select token from public.edge_internal_tokens where name='v10-lane-executor'")"
+          endpoint="https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/v10-lane-executor"
+          curl -fsS --max-time 60 -X POST -H "content-type: application/json" \
+            -H "x-v10-executor-token: $token" -d '{"mode":"cec-bootstrap"}' "$endpoint" \
+            > release-evidence/bootstrap.json
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 \
+            --set=config_hash="$CONFIG_HASH" > release-evidence/activation.json <<'SQL'
+          select public.v11_cec0040_set_enforcement(
+            true, :'config_hash', 'OPERATOR_AUTHORIZED_IMMEDIATE_CEC0040_PRODUCTION_CUTOVER'
+          );
+          SQL
+          curl -fsS --max-time 30 -X POST -H "content-type: application/json" \
+            -H "x-v10-executor-token: $token" -d '{"mode":"preflight","symbol":"BTCUSDT"}' "$endpoint" \
+            > release-evidence/preflight.json
+          python - <<'PY'
+          import json,os
+          b=json.load(open('release-evidence/bootstrap.json')); p=json.load(open('release-evidence/preflight.json'))
+          assert b.get('ok') is True and b.get('state',{}).get('bootstrap_complete') is True, b
+          assert p.get('ok') is True and p.get('patch')==os.environ['EXECUTOR_PATCH'], p
+          c=p['cec0040Runtime']
+          assert c['available'] and c['identityValid'] and c['mode']=='ENFORCED' and c['enforcementEnabled'], c
+          assert c['bootstrapComplete'] and c['targets']['error']==0 and c['targets']['missing']==0, c
+          assert p['maxSlots']==10 and float(p['sizingContract']['targetMarginUsdt'])==200, p
+          assert float(p['sizingContract']['leverage'])==3, p
+          for x in p['openPositions']:
+              assert x['metadata']['leaderExitPolicyVersion']!='P142_COMPLETED_PRICE_BRANCH_1', x
+          PY
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select coalesce(jsonb_agg(jsonb_build_object('id',id,'signalId',signal_id,'symbol',symbol,'entryAt',entry_at,'originalQuantity',original_quantity,'remainingQuantity',remaining_quantity,'hardStopPrice',hard_stop_price,'exitPolicy',metadata->>'leaderExitPolicyVersion') order by id),'[]'::jsonb) from public.v11_long_regime_positions where state='OPEN'" \
+            > release-evidence/open-after.json
+          python - <<'PY'
+          import json
+          before={x['id']:x for x in json.load(open('release-evidence/open-before.json'))}
+          after={x['id']:x for x in json.load(open('release-evidence/open-after.json'))}
+          for pid,old in before.items():
+              new=after.get(pid)
+              if new is None: continue
+              assert new['signalId']==old['signalId'] and new['entryAt']==old['entryAt'], (old,new)
+              assert new['exitPolicy']==old['exitPolicy'], (old,new)
+              assert float(new['originalQuantity'])==float(old['originalQuantity']), (old,new)
+              assert float(new['remainingQuantity'])<=float(old['remainingQuantity'])+1e-12, (old,new)
+              assert float(new['hardStopPrice'])+1e-12>=float(old['hardStopPrice']), (old,new)
+          PY
+
+      - name: Roll back executor if shadow rollout fails
+        if: failure() && steps.migration.outcome == 'success'
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select public.v11_cec0040_set_enforcement(false,'$CONFIG_HASH','AUTOMATED_SHADOW_ROLLOUT_ROLLBACK')" || true
+          git checkout "$BASELINE_SHA" -- supabase/functions
+          supabase functions deploy v10-lane-executor --project-ref "$SUPABASE_PROJECT_REF" \
+            --no-verify-jwt --use-api
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cec0040-shadow-release
+          path: release-evidence
