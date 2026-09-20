@@ -1,0 +1,12 @@
+{
+  "completedAt": "2026-09-20T01:47:53Z",
+  "iteration": "R17",
+  "testedCandidates": ["C41"],
+  "nextCandidateId": "C42",
+  "no_robust_edge_found": true,
+  "developmentPass": [],
+  "walkForwardRun": false,
+  "walkForwardReason": "C41 lost at both account and independent-opportunity levels and failed the minimum sample, PF, net, stress and confidence-bound gates.",
+  "unusedHoldoutConsumed": false,
+  "nextHypothesisConstraint": "Do not tune C41. Replace 30m/24h freshness with a structurally distinct completed 5m versus preceding 25m pulse-share cross-section."
+}
