@@ -1,0 +1,12 @@
+{
+  "completedAt": "2026-09-20T01:15:59Z",
+  "iteration": "R16",
+  "testedCandidates": ["C40"],
+  "nextCandidateId": "C41",
+  "no_robust_edge_found": true,
+  "developmentPass": [],
+  "walkForwardRun": false,
+  "walkForwardReason": "C40 produced zero opportunities after its frozen causal history requirements; zero trades are a failed sample.",
+  "unusedHoldoutConsumed": false,
+  "nextHypothesisConstraint": "Do not relax C40. Use one broad contemporaneous cross-sectional momentum-freshness score instead of stacked rank-history gates."
+}

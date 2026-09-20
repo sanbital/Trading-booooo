@@ -1,0 +1,25 @@
+{
+  "status": "PASS",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "window": {"start":"2026-08-19T15:10:00.000Z","end":"2026-09-18T15:10:00.000Z"},
+  "binanceVision": {
+    "officialChecksumRequired": true,
+    "blocked15mCutoffs": 0,
+    "total15mCutoffs": 2880,
+    "rawSignals": 1234,
+    "eligible15Windows": 932,
+    "datasetHash": "ce4facf916f0af3c5ed70f84dcf643270f5a24f6bd5ce5df3357eafd68fe0f2d"
+  },
+  "funding": {
+    "source": "BINANCE_USDM_FUNDING_RATE_HISTORY",
+    "provider": "VERIFIED_COVERAGE_CACHE",
+    "symbolsRequired": 0,
+    "cacheCoverageSymbols": 77,
+    "missingCoverage": 0,
+    "zeroSubstitutionOnFailure": false,
+    "note": "No C40 opportunity reached an executable holding interval."
+  },
+  "exitPolicy": "STRENGTH_LOSS_V1",
+  "historicalL2Available": false,
+  "slippageModel": "preregistered baseline, 2x and 4x bps"
+}
