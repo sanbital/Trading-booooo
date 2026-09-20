@@ -362,10 +362,23 @@ async function registerCec0040Target(db,position,signal){
   return r.data;
 }
 
-async function fetchCec0040Funding(symbol,start,end,fetchFn=fetch){
+async function fetchCec0040Public(url,init={},fetchFn=fetch){
+  let last=null;
+  for(let attempt=1;attempt<=3;attempt++){
+    try{
+      const r=await fetchFn(url,{...init,signal:AbortSignal.timeout(5000)});
+      if(r.ok||r.status<500&&r.status!==429)return r;
+      last=Error(`CEC0040_PUBLIC_${r.status}`);
+    }catch(error){last=error}
+    if(attempt<3)await new Promise(resolve=>setTimeout(resolve,150*attempt));
+  }
+  throw last??Error("CEC0040_PUBLIC_UNAVAILABLE");
+}
+
+async function fetchCec0040Funding(symbol,start,end,fetchFn=fetchCec0040Public){
   if(!(Number.isSafeInteger(start)&&Number.isSafeInteger(end)&&end>=start))throw Error("CEC0040_FUNDING_WINDOW");
   const p=new URLSearchParams({symbol,startTime:String(start),endTime:String(end),limit:"100"});
-  const r=await fetchFn("https://fapi.binance.com/fapi/v1/fundingRate?"+p,{method:"GET",signal:AbortSignal.timeout(2000)});
+  const r=await fetchFn("https://fapi.binance.com/fapi/v1/fundingRate?"+p,{method:"GET"});
   if(!r.ok)throw Error(`CEC0040_FUNDING_${r.status}`);
   const rows=await r.json();if(!Array.isArray(rows)||rows.length>100)throw Error("CEC0040_FUNDING_INVALID");
   return rows.map(x=>({fundingTime:Number(x.fundingTime),fundingRate:Number(x.fundingRate),markPrice:Number(x.markPrice)}));
@@ -399,7 +412,7 @@ async function refreshCec0040Targets(db){
       through=Math.floor(now/60000)*60000-1;
     if(through<start)return {positionId:target.position_id,status:"PENDING",reason:"NO_COMPLETED_CANDLE"};
     try{
-      const bars=await qv3Candles(target.symbol,now,start);
+      const bars=await qv3Candles(target.symbol,now,start,fetchCec0040Public);
       let out=p142Mean44Target({entryAt,actualEntryPrice:Number(target.actual_entry_price),
         branch:target.branch,bars,fundingEvents:[]});
       if(out.status==="RESOLVED"){

@@ -188,9 +188,20 @@ jobs:
           token="$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
             "select token from public.edge_internal_tokens where name='v10-lane-executor'")"
           endpoint="https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/v10-lane-executor"
-          curl -fsS --max-time 60 -X POST -H "content-type: application/json" \
-            -H "x-v10-executor-token: $token" -d '{"mode":"cec-bootstrap"}' "$endpoint" \
-            > release-evidence/bootstrap.json
+          bootstrap_status="$(curl -sS --max-time 90 -o release-evidence/bootstrap.json -w '%{http_code}' \
+            -X POST -H "content-type: application/json" -H "x-v10-executor-token: $token" \
+            -d '{"mode":"cec-bootstrap"}' "$endpoint")"
+          if [ "$bootstrap_status" != 200 ]; then
+            python - <<'PY'
+          import json
+          try:
+              x=json.load(open('release-evidence/bootstrap.json'))
+              print({'ok':x.get('ok'),'error':x.get('error'),'patch':x.get('patch')})
+          except Exception as exc:
+              print({'bootstrap_response_parse_error':str(exc)})
+          PY
+            exit 1
+          fi
           psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 \
             --set=config_hash="$CONFIG_HASH" > release-evidence/activation.json <<'SQL'
           select public.v11_cec0040_set_enforcement(

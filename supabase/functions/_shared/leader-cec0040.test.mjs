@@ -113,6 +113,9 @@ test('executor integration is version-gated and cannot rewrite legacy positions'
   assert.match(executor,/P142_POLICY_VERSION/);
   assert.match(executor,/v11_cec0040_decide/);
   assert.match(executor,/v11_cec0040_register_target/);
+  assert.match(executor,/async function fetchCec0040Public/);
+  assert.match(executor,/attempt<=3/);
+  assert.match(executor,/AbortSignal\.timeout\(5000\)/);
   assert.match(executor,/leaderExitPolicyVersion:.*P142_POLICY_VERSION/);
   assert.match(executor,/meta\.leaderExitPolicyVersion===P142_POLICY_VERSION/);
   assert.match(executor,/ctx\?\.fastObservation!==true&&costUsable/);
