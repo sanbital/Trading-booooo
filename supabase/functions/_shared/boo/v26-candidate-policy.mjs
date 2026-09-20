@@ -6,7 +6,7 @@
  * is live merely because this file exists; activation requires a matching,
  * unrevoked approval identity and ENFORCE mode.
  */
-export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-21";
+export const V26_CANDIDATE_POLICY_VERSION = "BOO-V26-CANDIDATES-PREREG-22";
 
 const BASE = Object.freeze({
   minDayReturn: 0.03,
@@ -23,6 +23,7 @@ const BASE = Object.freeze({
   accelerationReignition: false,
   compressionExpansion: false,
   rankPersistence: false,
+  rankAccelerationLeader: false,
   pullbackAbsorption: false,
   relativeStrengthResidual: false,
   sweepReclaim: false,
@@ -158,6 +159,9 @@ export const V26_CANDIDATES = Object.freeze({
   C39: Object.freeze({
     ...BASE, id: "C39", structuralStop: true, marketBreadthInflection: true,
     crossSectionalCompressionExpansion60m: true,
+  }),
+  C40: Object.freeze({
+    ...BASE, id: "C40", structuralStop: true, rankAccelerationLeader: true,
   }),
 });
 
@@ -676,6 +680,26 @@ export function rankPersistenceDecision({currentRank,priorRanks,return30m,return
   });
   const allowed=Object.values(conditions).every(Boolean);
   return {action:allowed?"ENTER":"REJECT",reason:allowed?"C15_RANK_PASS":"C15_RANK_FAIL",conditions,observations};
+}
+
+/**
+ * C40: a leader must climb at both completed 15m snapshots and the latest
+ * thirty minutes must contribute more return than the preceding thirty. The
+ * 50/50 split follows equal clock duration and is not fitted to outcomes.
+ */
+export function rankAccelerationLeaderDecision({currentRank,priorRanks,return30m,return60m}) {
+  if(!finite(currentRank)||!Array.isArray(priorRanks)||priorRanks.length!==2||
+      !priorRanks.every(finite)||![return30m,return60m].every(finite))
+    return {action:"UNKNOWN",reason:"C40_RANK_ACCELERATION_INPUT_MISSING"};
+  const [prior15mRank,prior30mRank]=priorRanks;
+  const priorHalfReturn=return60m-return30m;
+  const conditions={
+    strictlyImprovingRank:currentRank<prior15mRank&&prior15mRank<prior30mRank,
+    positiveRecentReturn:return30m>0,
+    recentHalfAccelerating:return30m>priorHalfReturn,
+  };
+  const allowed=Object.values(conditions).every(Boolean);
+  return {action:allowed?"ENTER":"REJECT",reason:allowed?"C40_RANK_ACCELERATION_PASS":"C40_RANK_ACCELERATION_FAIL",conditions,priorHalfReturn};
 }
 
 /** C16: sellers are absorbed during the pullback, then price and buyer share reclaim together. */

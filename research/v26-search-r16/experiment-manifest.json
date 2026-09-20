@@ -1,0 +1,37 @@
+{
+  "experimentId": "V26-SEARCH-R16-C40",
+  "candidateId": "C40",
+  "candidateName": "STRICT_RANK_ACCELERATION_RECENT_CONTRIBUTION",
+  "branch": "research/v26-strategy-search-r16-20260920",
+  "parentCheckpoint": "eda03ac6729f46593c2647406db6a12f85f501ef",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "preregisteredAt": "2026-09-20T01:13:18Z",
+  "window": {
+    "start": "2026-08-19T15:10:00.000Z",
+    "end": "2026-09-18T15:10:00.000Z",
+    "classification": "USED_DEVELOPMENT"
+  },
+  "rules": {
+    "rankAcceleration": "current completed rank < rank 15m earlier < rank 30m earlier; both prior ranks required",
+    "returnContribution": "completed return30m > 0 and return30m > (return60m - return30m)",
+    "thresholdRationale": "equal 30m halves of the same 60m window; not fitted to outcomes",
+    "missingHistory": "UNKNOWN_REJECT",
+    "entry": "ordinary setup-trigger path and next-open fill",
+    "stop": "unchanged structural stop",
+    "exit": "STRENGTH_LOSS_V1",
+    "risk": "30 USDT, 3x, one position, unchanged BOO policy and solveQuantity.plan.quantity"
+  },
+  "forbiddenChanges": [
+    "C15 threshold tuning",
+    "rank tolerance after outcomes",
+    "risk or leverage increase",
+    "protection relaxation",
+    "time-only exit",
+    "funding zero substitution"
+  ],
+  "reservedUnusedHoldout": {
+    "start": "2025-12-22T15:10:00.000Z",
+    "end": "2026-03-22T15:10:00.000Z",
+    "status": "LOCKED_NOT_CONSUMED"
+  }
+}

@@ -9,7 +9,7 @@ import {
 } from "../../supabase/functions/_shared/leader-pullback-reaccel.mjs";
 import {
   V26_CANDIDATES, structuralStopPrice, earlyFailureDecision, marketParticipationDecision, marketBreadthInflectionDecision, entryConfirmation1mDecision, breakoutContinuation1mDecision, triggerQuality1mDecision, antiExhaustionDecision,
-  accelerationReignitionDecision, compressionExpansionDecision, rankPersistenceDecision,
+  accelerationReignitionDecision, compressionExpansionDecision, rankPersistenceDecision, rankAccelerationLeaderDecision,
   pullbackAbsorptionDecision, relativeStrengthResidualDecision, sweepReclaimDecision,
   freshLeaderRotationDecision, accountFeasibleLadderDecision, twoPulseResetDecision,
   liquidityAdjustedEfficiencyDecision, selectiveLeaderRegimeDecision, distributedTrendDecision,
@@ -600,6 +600,10 @@ for(const id of candidateIds){
     }
     if(V26_CANDIDATES[id].rankPersistence){
       const decision=rankPersistenceDecision({currentRank:s.rank,priorRanks:s.priorRanks,return30m:Number(s.features?.return30m),return60m:Number(s.features?.return60m)});
+      if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
+    }
+    if(V26_CANDIDATES[id].rankAccelerationLeader){
+      const decision=rankAccelerationLeaderDecision({currentRank:s.rank,priorRanks:s.priorRanks,return30m:Number(s.features?.return30m),return60m:Number(s.features?.return60m)});
       if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
     }
     if(V26_CANDIDATES[id].pullbackAbsorption){

@@ -11,6 +11,7 @@ import {
   accelerationReignitionDecision,
   compressionExpansionDecision,
   rankPersistenceDecision,
+  rankAccelerationLeaderDecision,
   pullbackAbsorptionDecision,
   relativeStrengthResidualDecision,
   sweepReclaimDecision,
@@ -65,7 +66,7 @@ test("selection gate fails closed on null/NaN and respects exact boundaries", ()
   assert.equal(POLICY.maxDayReturn, 0.08);
 });
 
-test("registered C0-C39 definitions preserve the frozen C0-C5 prefix", () => {
+test("registered C0-C40 definitions preserve the frozen C0-C5 prefix", () => {
   assert.deepEqual(Object.keys(V26_CANDIDATES).slice(0,6), ["C0","C1","C2","C3","C4","C5"]);
   assert.ok(V26_CANDIDATES.C12);
   assert.ok(V26_CANDIDATES.C15);
@@ -83,10 +84,20 @@ test("registered C0-C39 definitions preserve the frozen C0-C5 prefix", () => {
   assert.ok(V26_CANDIDATES.C37);
   assert.ok(V26_CANDIDATES.C38);
   assert.ok(V26_CANDIDATES.C39);
+  assert.ok(V26_CANDIDATES.C40);
   assert.equal(V26_CANDIDATES.C0.structuralStop, false);
   assert.equal(V26_CANDIDATES.C4.earlyFailureExit, true);
   assert.equal(V26_CANDIDATES.C4.marketParticipation, true);
   assert.equal(V26_CANDIDATES.C5.maxDayReturn, 0.05);
+});
+
+test("C40 requires two completed rank improvements and recent-half acceleration",()=>{
+  assert.equal(V26_CANDIDATES.C40.rankAccelerationLeader,true);
+  assert.equal(V26_CANDIDATES.C40.rankPersistence,false);
+  assert.equal(rankAccelerationLeaderDecision({currentRank:3,priorRanks:[5,8],return30m:.03,return60m:.05}).action,"ENTER");
+  assert.equal(rankAccelerationLeaderDecision({currentRank:3,priorRanks:[5,4],return30m:.03,return60m:.05}).action,"REJECT");
+  assert.equal(rankAccelerationLeaderDecision({currentRank:3,priorRanks:[5,null],return30m:.03,return60m:.05}).action,"UNKNOWN");
+  assert.equal(rankAccelerationLeaderDecision({currentRank:3,priorRanks:[5,8],return30m:.02,return60m:.05}).action,"REJECT");
 });
 
 test("C39 requires joint completed-snapshot breadth and BTC improvement",()=>{
