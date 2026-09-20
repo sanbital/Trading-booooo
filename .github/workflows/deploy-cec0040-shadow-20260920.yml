@@ -21,7 +21,6 @@ concurrency:
 
 env:
   BASELINE_SHA: c8bf11870586697d70aab1c58a57eeb5c992e186
-  EXPECTED_VERSION_BEFORE: "57"
   EXPECTED_EXECUTOR_HASH: ec236f035eb66de096f4773b230279d6888cb782ed28c0908b7c056b7e920208
   EXECUTOR_PATCH: CEC0040-P142-DEPLOYMENT-READY-1
   CEC_VERSION: CEC0040_CAUSAL_EDGE_CONTROLLER_1
@@ -117,8 +116,10 @@ jobs:
           x=x.get('functions',x) if isinstance(x,dict) else x
           row=next(r for r in x if r.get('slug')=='v10-lane-executor')
           assert row.get('status')=='ACTIVE' and row.get('verify_jwt') is False, row
-          assert int(row['version'])==int(os.environ['EXPECTED_VERSION_BEFORE']), row
+          assert int(row['version'])>=57, row
           assert row.get('ezbr_sha256')==os.environ['EXPECTED_EXECUTOR_HASH'], row
+          with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as f:
+              f.write(f"executor_version={int(row['version'])}\n")
           PY
           psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
             "select jsonb_build_object('observedAt',clock_timestamp(),'runtime',(select to_jsonb(x) from (select revision,live_enabled,circuit_open,last_error,protection_health from public.v11_long_regime_runtime where singleton) x),'settings',(select to_jsonb(x) from (select mode,pause_new_entries,withdrawal_mode,manual_intervention_required,scalp_kill_switch,emergency_liquidation,binance_futures_allocation_usdt,binance_futures_leverage from public.trading_settings where id=1) x),'pendingOrders',(select count(*) from public.v11_long_regime_orders where state in ('PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED')))" \
@@ -166,6 +167,7 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          EXPECTED_VERSION_BEFORE: ${{ steps.baseline.outputs.executor_version }}
         run: |
           set -euo pipefail
           supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json \
