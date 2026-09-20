@@ -114,8 +114,11 @@ test('executor integration is version-gated and cannot rewrite legacy positions'
   assert.match(executor,/v11_cec0040_decide/);
   assert.match(executor,/v11_cec0040_register_target/);
   assert.match(executor,/async function fetchCec0040Public/);
-  assert.match(executor,/attempt<=3/);
-  assert.match(executor,/AbortSignal\.timeout\(5000\)/);
+  assert.match(executor,/fapi1\.binance\.com/);
+  assert.match(executor,/fapi2\.binance\.com/);
+  assert.match(executor,/CEC0040_PUBLIC_HOST_INVALID/);
+  assert.match(executor,/AbortSignal\.timeout\(10000\)/);
+  assert.match(executor,/REFRESH:\$\{refreshFailures\}/);
   assert.match(executor,/leaderExitPolicyVersion:.*P142_POLICY_VERSION/);
   assert.match(executor,/meta\.leaderExitPolicyVersion===P142_POLICY_VERSION/);
   assert.match(executor,/ctx\?\.fastObservation!==true&&costUsable/);

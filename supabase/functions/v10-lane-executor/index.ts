@@ -363,14 +363,17 @@ async function registerCec0040Target(db,position,signal){
 }
 
 async function fetchCec0040Public(url,init={},fetchFn=fetch){
+  const parsed=new URL(url),hosts=["fapi.binance.com","fapi1.binance.com","fapi2.binance.com"];
+  if(parsed.protocol!=="https:"||!hosts.includes(parsed.hostname))throw Error("CEC0040_PUBLIC_HOST_INVALID");
   let last=null;
-  for(let attempt=1;attempt<=3;attempt++){
+  for(let attempt=1;attempt<=hosts.length;attempt++){
     try{
-      const r=await fetchFn(url,{...init,signal:AbortSignal.timeout(5000)});
+      const candidate=new URL(parsed);candidate.hostname=hosts[attempt-1];
+      const r=await fetchFn(candidate.toString(),{...init,signal:AbortSignal.timeout(10000)});
       if(r.ok||r.status<500&&r.status!==429)return r;
-      last=Error(`CEC0040_PUBLIC_${r.status}`);
+      last=Error(`CEC0040_PUBLIC_${candidate.hostname}_${r.status}`);
     }catch(error){last=error}
-    if(attempt<3)await new Promise(resolve=>setTimeout(resolve,150*attempt));
+    if(attempt<hosts.length)await new Promise(resolve=>setTimeout(resolve,150*attempt));
   }
   throw last??Error("CEC0040_PUBLIC_UNAVAILABLE");
 }
@@ -491,7 +494,14 @@ async function bootstrapCec0040(db){
       const retried=await db.rpc("v11_cec0040_decide",{p_signal_id:item.row.id,
         p_decision_at:new Date(decisionAt).toISOString(),p_symbol:String(item.row.symbol).toUpperCase(),
         p_branch:item.b.branch,p_bootstrap:true});
-      if(retried.error||rec(retried.data).ready!==true)throw Error(`CEC0040_BOOTSTRAP_NOT_READY:${rec(retried.data).reason??retried.error?.message??"UNKNOWN"}`);
+      if(retried.error||rec(retried.data).ready!==true){
+        const refreshFailures=[...(refresh.results??[]),...(refresh.repair?.results??[])]
+          .filter(x=>["UNAVAILABLE","ERROR"].includes(x.status))
+          .map(x=>`${x.positionId??"UNKNOWN"}:${x.reason??x.status}`).join("|").slice(0,480);
+        const reason=rec(retried.data).reason??retried.error?.message??"UNKNOWN";
+        throw Error(`CEC0040_BOOTSTRAP_NOT_READY:${reason}${refreshFailures?`:REFRESH:${refreshFailures}`:
+          refresh.reason?`:REFRESH:${refresh.reason}`:""}`);
+      }
       Object.assign(decision,rec(retried.data),{refresh});
     }
     let target=null;
