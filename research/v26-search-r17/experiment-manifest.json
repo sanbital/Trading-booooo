@@ -1,0 +1,44 @@
+{
+  "experimentId": "V26-SEARCH-R17-C41",
+  "candidateId": "C41",
+  "candidateName": "CONTEMPORANEOUS_MOMENTUM_FRESHNESS",
+  "branch": "research/v26-strategy-search-r17-20260920",
+  "parentCheckpoint": "dfcf4a274ec498f32b6238052b0a12a2e145f5bf",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "preregisteredAt": "2026-09-20T01:37:56Z",
+  "window": {
+    "start": "2026-08-19T15:10:00.000Z",
+    "end": "2026-09-18T15:10:00.000Z",
+    "classification": "USED_DEVELOPMENT"
+  },
+  "rules": {
+    "score": "completed return30m / completed dayReturn at the same 15m scanner cutoff",
+    "crossSection": "percentile among contemporaneous baseline-eligible leaders only",
+    "entryGate": "freshness percentile >= 0.60 with at least 3 contemporaneous peers",
+    "thresholdRationale": "upper 40% structural cross-section, fixed before results and consistent with prior cross-sectional experiments",
+    "missingContext": "UNKNOWN_REJECT",
+    "entry": "ordinary setup-trigger path and next-open fill",
+    "stop": "unchanged structural stop",
+    "exit": "STRENGTH_LOSS_V1",
+    "risk": "30 USDT, 3x, one position, unchanged BOO policy and solveQuantity.plan.quantity"
+  },
+  "codeHashesBeforeReplay": {
+    "candidatePolicySha256": "cb52f0ae84969b13b2d3145df96559731155e7135a78a0e7bec82b9546039cb1",
+    "validatorRunnerSha256": "82dd5414ec724c95cf9ad3b4939fb5e0256ead0257e2da94c16a83faea5c47d2",
+    "regressionTestSha256": "fe0c8956ed006beb56683b05ac94b21f1b08519d181aae2e28c806976ced2209",
+    "candidatePatchSha256": "feb7694b332fe10408f142675b67f14d104c7114dfe1ef3acdacdbabd856da46"
+  },
+  "forbiddenChanges": [
+    "threshold changes after outcomes",
+    "additional absolute momentum gates after outcomes",
+    "risk or leverage increase",
+    "protection relaxation",
+    "time-only exit",
+    "funding zero substitution"
+  ],
+  "reservedUnusedHoldout": {
+    "start": "2025-12-22T15:10:00.000Z",
+    "end": "2026-03-22T15:10:00.000Z",
+    "status": "LOCKED_NOT_CONSUMED"
+  }
+}

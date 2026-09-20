@@ -10,6 +10,7 @@ import {
 import {
   V26_CANDIDATES, structuralStopPrice, earlyFailureDecision, marketParticipationDecision, marketBreadthInflectionDecision, entryConfirmation1mDecision, breakoutContinuation1mDecision, triggerQuality1mDecision, antiExhaustionDecision,
   accelerationReignitionDecision, compressionExpansionDecision, rankPersistenceDecision, rankAccelerationLeaderDecision,
+  momentumFreshnessScore, crossSectionalMomentumFreshnessDecision,
   pullbackAbsorptionDecision, relativeStrengthResidualDecision, sweepReclaimDecision,
   freshLeaderRotationDecision, accountFeasibleLadderDecision, twoPulseResetDecision,
   liquidityAdjustedEfficiencyDecision, selectiveLeaderRegimeDecision, distributedTrendDecision,
@@ -380,12 +381,16 @@ for(const [cut,group] of leaderGroups){
   const r30=group.map(x=>Number(x.f.return30m)).filter(Number.isFinite);
   const volumes=group.map(x=>Number(x.f.volumeRatio)).filter(Number.isFinite);
   const efficiencies=group.map(x=>Number(x.f.return30m)/Math.max(Number(x.f.volumeRatio),1e-12)).filter(Number.isFinite);
+  const freshnessScores=group.map(x=>momentumFreshnessScore({return30m:Number(x.f.return30m),dayReturn:Number(x.f.dayReturn)}))
+    .filter(x=>x.status==="KNOWN").map(x=>x.score);
   const breadth=r30.length?r30.filter(x=>x>0).length/r30.length:Number.NaN;
   for(const x of group){
     const rr=Number(x.f.return30m),vr=Number(x.f.volumeRatio),eff=rr/Math.max(vr,1e-12);
     leaderContextAtCut.set(x.f.symbol+"|"+cut,{
       return30mPercentile:percentile(r30,rr),volumeRatioPercentile:percentile(volumes,vr),
       efficiencyPercentile:percentile(efficiencies,eff),leaderBreadth30m:breadth,
+      momentumFreshnessPercentile:percentile(freshnessScores,rr/Number(x.f.dayReturn)),
+      momentumFreshnessPeers:freshnessScores.length,
     });
   }
 }
@@ -604,6 +609,11 @@ for(const id of candidateIds){
     }
     if(V26_CANDIDATES[id].rankAccelerationLeader){
       const decision=rankAccelerationLeaderDecision({currentRank:s.rank,priorRanks:s.priorRanks,return30m:Number(s.features?.return30m),return60m:Number(s.features?.return60m)});
+      if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
+    }
+    if(V26_CANDIDATES[id].crossSectionalMomentumFreshness){
+      const ctx=s.leaderContext||{};
+      const decision=crossSectionalMomentumFreshnessDecision({freshnessPercentile:ctx.momentumFreshnessPercentile,peerCount:ctx.momentumFreshnessPeers});
       if(decision.action!=="ENTER"){reasons[decision.reason]=(reasons[decision.reason]||0)+1;continue;}
     }
     if(V26_CANDIDATES[id].pullbackAbsorption){

@@ -12,6 +12,8 @@ import {
   compressionExpansionDecision,
   rankPersistenceDecision,
   rankAccelerationLeaderDecision,
+  momentumFreshnessScore,
+  crossSectionalMomentumFreshnessDecision,
   pullbackAbsorptionDecision,
   relativeStrengthResidualDecision,
   sweepReclaimDecision,
@@ -66,7 +68,7 @@ test("selection gate fails closed on null/NaN and respects exact boundaries", ()
   assert.equal(POLICY.maxDayReturn, 0.08);
 });
 
-test("registered C0-C40 definitions preserve the frozen C0-C5 prefix", () => {
+test("registered C0-C41 definitions preserve the frozen C0-C5 prefix", () => {
   assert.deepEqual(Object.keys(V26_CANDIDATES).slice(0,6), ["C0","C1","C2","C3","C4","C5"]);
   assert.ok(V26_CANDIDATES.C12);
   assert.ok(V26_CANDIDATES.C15);
@@ -85,10 +87,23 @@ test("registered C0-C40 definitions preserve the frozen C0-C5 prefix", () => {
   assert.ok(V26_CANDIDATES.C38);
   assert.ok(V26_CANDIDATES.C39);
   assert.ok(V26_CANDIDATES.C40);
+  assert.ok(V26_CANDIDATES.C41);
   assert.equal(V26_CANDIDATES.C0.structuralStop, false);
   assert.equal(V26_CANDIDATES.C4.earlyFailureExit, true);
   assert.equal(V26_CANDIDATES.C4.marketParticipation, true);
   assert.equal(V26_CANDIDATES.C5.maxDayReturn, 0.05);
+});
+
+test("C41 ranks recent contribution across contemporaneous eligible leaders",()=>{
+  assert.equal(V26_CANDIDATES.C41.crossSectionalMomentumFreshness,true);
+  assert.equal(V26_CANDIDATES.C41.rankAccelerationLeader,false);
+  const fresh=momentumFreshnessScore({return30m:.012,dayReturn:.04});
+  assert.equal(fresh.status,"KNOWN");
+  assert.ok(Math.abs(fresh.score-.30)<1e-12);
+  assert.equal(momentumFreshnessScore({return30m:.01,dayReturn:0}).status,"UNKNOWN");
+  assert.equal(crossSectionalMomentumFreshnessDecision({freshnessPercentile:.60,peerCount:3}).action,"ENTER");
+  assert.equal(crossSectionalMomentumFreshnessDecision({freshnessPercentile:.59,peerCount:8}).action,"REJECT");
+  assert.equal(crossSectionalMomentumFreshnessDecision({freshnessPercentile:.90,peerCount:2}).action,"UNKNOWN");
 });
 
 test("C40 requires two completed rank improvements and recent-half acceleration",()=>{
