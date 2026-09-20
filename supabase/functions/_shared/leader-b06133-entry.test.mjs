@@ -104,10 +104,11 @@ test('BTC fetch failure cannot block a confirmed rescue OR branch',async()=>{
 const executor=await readFile(new URL('../v10-lane-executor/index.ts',import.meta.url),'utf8');
 test('executor gates only after trigger and before queue/claim',()=>{
   const trigger=executor.indexOf('if(state.state!==SETUP_STATE.TRIGGERED)');
-  const gate=executor.indexOf('selected=await applyB06133Selection');
-  const queue=executor.indexOf('executable.push(selected.row)');
+  const gate=executor.indexOf('selected=await applyB06133Selection'),
+    controller=executor.indexOf('controlled=await applyCec0040Selection');
+  const queue=executor.indexOf('executable.push(controlled.row)');
   const claim=executor.indexOf('update({status:"CLAIMED"');
-  assert.ok(trigger>=0&&trigger<gate&&gate<queue&&queue<claim);
+  assert.ok(trigger>=0&&trigger<gate&&gate<controller&&controller<queue&&queue<claim);
   assert.ok(executor.includes('throw new Error("B06133_SELECTION_INVALID")'));
 });
 
