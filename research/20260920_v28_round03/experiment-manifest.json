@@ -1,0 +1,68 @@
+{
+  "experimentId": "V28-ROUND03-CF01",
+  "candidateId": "CF01",
+  "candidateName": "NEXT_1M_BREAKOUT_FLOW_CONFIRM",
+  "preregisteredAt": "2026-09-20T02:41:00Z",
+  "validatorBaseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+  "researchContract": {
+    "marginPerSlotUsdt": 200,
+    "leverage": 3,
+    "maxSlots": 10,
+    "nominalPerSlotUsdt": 600,
+    "productionMutation": false
+  },
+  "hypothesis": "A reacceleration entry has higher conditional expectancy when the entry minute finishes above the observed entry reference and completed taker-buy flow remains a majority without weakening versus the prior minute.",
+  "rules": {
+    "cohort": "Canonical automated Futures fills grouped by v17_position_id; positions first entered inside the fixed window and fully exited by the snapshot.",
+    "confirmationBar": "The completed 1m candle whose start is floor(original entry_at to one minute).",
+    "breakoutHold": "confirmation close >= original executed entry VWAP.",
+    "buyerFlowPersistence": "confirmation taker_buy_quote / quote_vol >= 0.50 and >= the immediately preceding completed 1m candle ratio.",
+    "entryTime": "The next 1m candle open, exactly confirmation start + 60 seconds.",
+    "entryPrice": "next 1m open plus 5 bps adverse entry slippage.",
+    "unfilled": "Reject if any required candle is missing, quote_vol <= 0, the original position exited before delayed entry, or the next open is unavailable.",
+    "quantity": "Use only the actually executed original quantity for paired diagnostics; do not linearly claim 600 USDT fillability.",
+    "exit": "Reuse the canonical actual exit VWAP and exact sell-side fee for the paired diagnostic. This is not a full replacement-position replay.",
+    "funding": "Fail closed for promotion unless funding is fully reconciled for every accepted holding interval.",
+    "baseCosts": {
+      "entryFeeBps": 5,
+      "entrySlippageBps": 5,
+      "exitFee": "exact canonical sell-fill fee"
+    },
+    "stressCosts": {
+      "entryFeeBps": 7,
+      "entrySlippageBps": 10,
+      "exitFeeMultiplier": 1.4
+    }
+  },
+  "windows": {
+    "actual48h": {
+      "start": "2026-09-18T01:48:51.26328Z",
+      "end": "2026-09-20T01:48:51.26328Z",
+      "classification": "VIEWED_DEVELOPMENT_DIAGNOSTIC"
+    },
+    "actual24h": {
+      "start": "2026-09-19T01:48:51.26328Z",
+      "end": "2026-09-20T01:48:51.26328Z",
+      "classification": "VIEWED_DEVELOPMENT_DIAGNOSTIC"
+    },
+    "market30d7d": {
+      "status": "REQUIRES_PERSISTED_V28_REPLAY_FILES_AND_FUNDING_COVERAGE",
+      "doNotSubstitute": "The older 2026-08-19T15:15Z..2026-09-18T15:15Z cache is not current rolling data."
+    }
+  },
+  "evaluation": {
+    "report": [
+      "trade count",
+      "net PnL",
+      "capacity-normalized diagnostic return",
+      "profit factor",
+      "trade-sequence MDD",
+      "largest-winner removed PnL",
+      "missed winner PnL",
+      "entry-delay price cost",
+      "funding completeness",
+      "market replay and holdout status"
+    ],
+    "promotion": "Forbidden from this paired diagnostic alone."
+  }
+}

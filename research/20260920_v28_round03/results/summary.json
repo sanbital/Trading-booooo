@@ -1,0 +1,123 @@
+{
+  "experimentId": "V28-ROUND03-CF01",
+  "candidateId": "CF01",
+  "status": "REJECTED_DIAGNOSTIC_INCOMPLETE",
+  "noRobustEdgeFound": true,
+  "validator": {
+    "baseline": "f5ee84bfd5449189d73ccee56aabcbd51a2de53a",
+    "validatorIntegration": "COMPLETE",
+    "pureTests": "PASS",
+    "binanceVisionChecksumVerified": true,
+    "fundingRest": "HTTP_451_FAIL_CLOSED"
+  },
+  "data": {
+    "canonicalFills": "public.exchange_trade_fills SELECT-only",
+    "oneMinuteCandles": "public.claude_k1 SELECT-only",
+    "oneMinuteCoverage": {
+      "start": "2026-09-01T00:00:00Z",
+      "end": "2026-09-19T10:31:00Z",
+      "rows": 5961872,
+      "symbols": 225
+    },
+    "fundingComplete": false,
+    "full600UsdtFillabilityProven": false,
+    "productionMutated": false
+  },
+  "actual48h": {
+    "window": {
+      "start": "2026-09-18T01:48:51.26328Z",
+      "end": "2026-09-20T01:48:51.26328Z"
+    },
+    "cohortPositions": 52,
+    "coveredPositions": 19,
+    "missingCandlePositions": 33,
+    "trades": 2,
+    "wins": 1,
+    "losses": 1,
+    "netPnlUsdtActualQuantityFundingExcluded": -1.28548051,
+    "capacityNormalizedDiagnosticReturnPct": -0.064274,
+    "profitFactor": 0.373342,
+    "tradeSequenceMddUsdt": -2.05132739,
+    "removeTop1NetPnlUsdt": -2.05132739,
+    "removeTop3NetPnlUsdt": -2.05132739,
+    "removeTop5NetPnlUsdt": -2.05132739,
+    "stressNetPnlUsdt": -1.44850060,
+    "stressProfitFactor": 0.320820,
+    "entryDelayGrossCostUsdt": 0.68893407,
+    "rejectedOriginalWinners": 24,
+    "rejectedOriginalWinnerNetPnlUsdt": 207.86651191,
+    "rejections": {
+      "MISSING_CANDLE": 33,
+      "BREAKOUT_NOT_HELD": 9,
+      "BUYER_FLOW_WEAKENED": 5,
+      "BUYER_FLOW_NOT_MAJORITY": 3
+    },
+    "acceptedTrades": [
+      {
+        "positionId": "064571ec-8beb-4432-b3ef-268c3b9489da",
+        "symbol": "ZENUSDT",
+        "entryAt": "2026-09-18T19:31:11.394Z",
+        "delayedEntryAt": "2026-09-18T19:32:00Z",
+        "originalNetPnlUsdt": 0.85331710,
+        "candidateNetPnlUsdt": 0.76584689,
+        "entryDelayGrossCostUsdt": 0.08742650
+      },
+      {
+        "positionId": "5e3094e2-ebf3-4448-978e-6628012abcb1",
+        "symbol": "MAGMAUSDT",
+        "entryAt": "2026-09-18T22:23:09.841Z",
+        "delayedEntryAt": "2026-09-18T22:24:00Z",
+        "originalNetPnlUsdt": -1.44951906,
+        "candidateNetPnlUsdt": -2.05132739,
+        "entryDelayGrossCostUsdt": 0.60150758
+      }
+    ]
+  },
+  "actual24h": {
+    "window": {
+      "start": "2026-09-19T01:48:51.26328Z",
+      "end": "2026-09-20T01:48:51.26328Z"
+    },
+    "cohortPositions": 34,
+    "coveredPositions": 6,
+    "missingCandlePositions": 28,
+    "trades": 0,
+    "netPnlUsdt": 0,
+    "returnPct": 0,
+    "profitFactor": null,
+    "mddUsdt": 0,
+    "removeTop1NetPnlUsdt": null,
+    "rejectedOriginalWinners": 18,
+    "rejectedOriginalWinnerNetPnlUsdt": 198.73294170,
+    "rejections": {
+      "MISSING_CANDLE": 28,
+      "BREAKOUT_NOT_HELD": 3,
+      "BUYER_FLOW_WEAKENED": 2,
+      "BUYER_FLOW_NOT_MAJORITY": 1
+    }
+  },
+  "marketReplay": {
+    "development30d": "BLOCKED_MISSING_PERSISTED_V28_REPLAY_FILES_AND_CURRENT_FUNDING_COVERAGE",
+    "development7d": "BLOCKED_MISSING_PERSISTED_V28_REPLAY_FILES_AND_CURRENT_FUNDING_COVERAGE",
+    "walkForward": "NOT_RUN",
+    "unusedHoldout": "NOT_RUN"
+  },
+  "statisticalGates": {
+    "minimumTrades30": false,
+    "minimumActiveDays10": false,
+    "expectancyLowerBoundPositive": false,
+    "dayBlockBootstrap": "NOT_MEANINGFUL_N_EQUALS_2",
+    "multipleTestingAdjusted": false
+  },
+  "rejectionReasons": [
+    "48h paired diagnostic lost money and PF was below 1.2",
+    "cost stress remained negative",
+    "largest-winner removal remained negative",
+    "24h produced zero accepted trades",
+    "candidate discarded many profitable original trades",
+    "1m candle coverage was incomplete",
+    "funding and 600 USDT fillability were not proven",
+    "30d/7d market replay and independent validation were not executable from persisted artifacts"
+  ],
+  "nextHypothesis": "Replace the conjunctive completed-bar filter with a two-path structure: immediate entry when the completed entry minute already closes above the reference with majority flow, otherwise permit one pullback-reclaim event whose reclaim price and buyer-flow slope are observed before entry. Preregister as a discrete state machine and measure winner opportunity cost without relaxing risk limits."
+}
