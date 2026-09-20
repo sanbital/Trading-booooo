@@ -2,7 +2,7 @@ name: Deploy and activate CEC0040
 
 on:
   push:
-    branches: [release/cec0040-live-20260920]
+    branches: [release/cec0040-live-20260920, main]
     paths:
       - ".github/workflows/deploy-cec0040-shadow-20260920.yml"
       - ".github/workflows/activate-cec0040-20260920.yml"
