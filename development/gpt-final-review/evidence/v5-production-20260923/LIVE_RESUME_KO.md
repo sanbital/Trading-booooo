@@ -14,3 +14,12 @@
   `last_error`만 갱신하면 오류는 그대로 기록하되 MANUAL_REVIEW로 승격하지 않음. 헤더 없는 writer, 다른 소유자·만료 lease,
   circuit 개방, circuit_reason 변경은 기존대로 승격. SQL: `sql/v18_external_incident_epoch_executor_owner.sql`, 테스트: `tests/incident-epoch-sql.test.mjs`.
 - 임시 검증 함수 삭제: release workflow의 `delete-gpt-final-review-verify` 대상으로 수행.
+
+## 호가·펀딩·미결제약정 스냅샷 입력 추가 (executor v71, ezbr `2500de76…`, main `2b96c6a`)
+- 심사 시점에 공개 Binance USD-M 4개 엔드포인트(호가 100단계, premiumIndex, openInterest, 5분 OI 이력)를 캔들과 병렬 조회.
+- GPT 사실 항목 추가: 스프레드(bp), ±25bp 매수·매도 호가 금액, 호가 불균형, 슬롯 주문금액(600 USDT) 대비 매도 호가 배수,
+  펀딩비, mark/index 프리미엄, 미결제약정 금액, OI 5분·60분 변화율. 스냅샷 시점 5초 초과 자료는 제외, 실패 소스는 해당 항목만 비움.
+- 실제 API 라이브 프로브 8건(BTC·ETH·SOL·ACE·XRP·DOGE·BNB): 8/8 검증 통과, 마이크로구조 수집 8/8 완전,
+  스냅샷 시점 신선도 0~9ms(요청 5~15ms). GPT가 7/8건에서 마이크로구조 사실을 근거로 인용.
+  지연 2.6~4.3초(두 번째 측정 2.6~3.6초), 출력 370~482 토큰, 건당 약 $0.004.
+- 프로브 후보는 fixture이며 선택기가 거절한 종목이라 전부 VETO가 정상 결과. 라이브 PASS 경로는 실제 후보에서 확인 필요.
