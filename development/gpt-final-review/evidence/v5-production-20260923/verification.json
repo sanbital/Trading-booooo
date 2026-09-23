@@ -1,0 +1,28 @@
+{
+  "recorded_at_utc": "2026-09-23T13:56:00Z",
+  "github_main": "bdefc29c65206a60902e6421368663981f63b3ad",
+  "prs": [162, 163, 164],
+  "executor": {"before": {"version": 68, "ezbr_sha256": "b26c7671e5be151bf8db86072c5fb71d7f045870001e9e9aa5962235cbd5e5e9", "source": "fea185c (pre-GPT)"},
+               "after": {"version": 70, "ezbr_sha256": "073c585cd9886e3755b8e8d4b2884b68cc3e689264aede7b55c496d846a2c1ec", "bundle_digest": "fbe5d261631566e92103062291c934b214193945223e037576e73e3baf56fe0b", "files": 38, "byte_identical_to": "bdefc29c65206a60902e6421368663981f63b3ad", "release_run": 35869942639}},
+  "migration": {"name": "gpt_final_review_production_hardening", "version": "20260923132101"},
+  "model": "gpt-5.4-mini-2026-03-17", "reasoning_effort": "none", "production_profile": "V5",
+  "real_api": {
+    "V4_baseline_synthetic": {"calls": 8, "http_200": 8, "validated": 0, "errors": ["PASS_CANNOT_ECHO_MODEL", "PASS_REQUIRES_TWO_FACTS", "FALSE_MISSING"], "latency_ms": {"p50": 4084, "max": 6033, "min": 3323}, "avg_input_tokens": 6396, "avg_output_tokens": 483, "cost_usd": 0.0485},
+    "V5_pre_split_synthetic": {"calls": 8, "http_200": 8, "validated": 1, "errors": ["PASS_CANNOT_ECHO_MODEL"], "latency_ms": {"p50": 2248, "max": 3678}, "cost_usd": 0.02798},
+    "V5_final": {"calls": 35, "http_200": 35, "validated": 35, "timeouts": 0, "refusals": 0, "invalid_evidence": 0,
+      "breakdown": {"A_synthetic": 10, "B_live_market_fixture": 12, "C_real_engine_approved_replay": 10, "duplicate_test": 1, "production_dryrun": 2},
+      "decisions": {"PASS": 23, "VETO": 12, "ABSTAIN": 0},
+      "latency_ms": {"p50": 2316, "p95": 3888, "max": 4200, "min": 1749, "sample": 35},
+      "tokens": {"input": 155664, "cached_input": 59136, "output": 11750, "avg_input": 4448, "avg_output": 336},
+      "cost_usd": 0.12971, "avg_cost_usd": 0.00371, "candidate_id_match": "35/35", "snapshot_hash_match": "35/35"},
+    "total_real_api_calls": 51, "total_cost_usd_documented_rate": 0.2062
+  },
+  "faults_real_journal_injected_transport": {"http429": "HTTP_429 ABSTAIN", "http500": "HTTP_500 ABSTAIN", "malformed": "API_OR_VALIDATION_ERROR ABSTAIN", "wrong_candidate": "IDENTITY_MISMATCH ABSTAIN", "wrong_snapshot": "IDENTITY_MISMATCH ABSTAIN", "timeout": "API_TIMEOUT ABSTAIN (5524 ms, bounded by review validity)"},
+  "duplicate": {"concurrent_coordinators": 2, "late_coordinator": 1, "api_requests": 1, "same_job": true},
+  "production_dryrun": {"orders_sent": 0, "order_intents_written": 0, "verdicts": ["WOULD_NOT_EXECUTE (circuit open, replay staleness)", "WOULD_NOT_EXECUTE (+ duplicate-order protection)", "WOULD_ABSTAIN (existing CEC REJECT, no API call)"]},
+  "account_2026-09-23T13:48Z": {"binance_positions": 0, "binance_ordinary_orders": 0, "binance_conditional_orders": 0, "db_open_positions": 0, "db_unresolved_orders": 0},
+  "gpt_control": {"mode": "OFF", "daily_cap_usd": 0, "max_calls_per_day": 0},
+  "circuit": {"open": true, "incident_kind": "MANUAL_REVIEW_REQUIRED", "generation": 123, "not_released": true},
+  "tests": {"total": 176, "passed": 176, "failed": 0},
+  "orders": 0
+}
