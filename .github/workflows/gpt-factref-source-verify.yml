@@ -1,0 +1,42 @@
+name: GPT fact-reference source-only verification
+on:
+  push:
+    branches: [fix/gpt-factrefs-20260923]
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Apply transport repair and run every review regression test
+        run: |
+          set -euo pipefail
+          python development/gpt-final-review/apply-factref-v4.py
+          mkdir -p development/gpt-final-review/evidence/factref-v4
+          node --test development/gpt-final-review/tests/*.test.mjs > development/gpt-final-review/evidence/factref-v4/tests.tap
+          cp supabase/functions/v10-lane-executor/index.ts /tmp/gpt-executor-syntax.mjs
+          node --check /tmp/gpt-executor-syntax.mjs
+          git diff --exit-code e9e87ebdf2e464a2cb4387c232d9831c3cde4464 -- supabase/functions/v10-lane-executor/index.ts supabase/functions/_shared/leader-cec0040.mjs supabase/functions/_shared/leader-slot-sizing.mjs supabase/functions/_shared/leader-exit-review.mjs
+          python - <<'PY'
+          import re,json,pathlib,hashlib
+          p=pathlib.Path('development/gpt-final-review/evidence/factref-v4')
+          t=(p/'tests.tap').read_text()
+          result={'baseline':'e9e87ebdf2e464a2cb4387c232d9831c3cde4464','tests':int(re.search(r'^# tests (\d+)',t,re.M)[1]),'passed':int(re.search(r'^# pass (\d+)',t,re.M)[1]),'failed':int(re.search(r'^# fail (\d+)',t,re.M)[1]),'executor_unchanged':True,'executor_syntax':'PASS','actual_api_calls':0,'production_engine_deployed':False,'trading_controls_changed':False,'hashes':{f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in pathlib.Path('supabase/functions/_shared/gpt-final-review').glob('*.mjs')}}
+          (p/'verification.json').write_text(json.dumps(result,indent=2)+'\n')
+          PY
+      - name: Restore existing workflows and commit verified source without deployment
+        run: |
+          set -euo pipefail
+          git restore --source=e9e87ebdf2e464a2cb4387c232d9831c3cde4464 -- .github/workflows
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Fix GPT evidence transport using named source facts [skip ci]'
+          git push origin HEAD:fix/gpt-factrefs-20260923

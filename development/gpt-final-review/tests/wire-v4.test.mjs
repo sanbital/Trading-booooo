@@ -1,0 +1,18 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {WIRE_OUTPUT_SCHEMA_V4,FACT_PATHS,compactInputV4,expandWireV4,parseApiResponseV4,toWireV4} from '../../../supabase/functions/_shared/gpt-final-review/wire-v4.mjs';
+import {validateAnswer} from '../../../supabase/functions/_shared/gpt-final-review/contract.mjs';
+import {packet,answer,rawResponse} from './helpers.mjs';
+test('V4 named facts preserve the exact canonical answer and source precision',async()=>{const p=await packet(),a=answer(p);assert.deepEqual(validateAnswer(expandWireV4(toWireV4(a,p),p),p),a);});
+test('V4 publishes explicit names, values and units instead of implicit array indices',async()=>{const p=await packet(),refs=compactInputV4(p).evidence_refs;assert.equal(Array.isArray(refs),false);assert.equal(refs.C_return_5m.value,p.current_market.metrics.return_5m.value);assert.equal(refs.C_return_5m.path,'/current_market/metrics/return_5m');});
+test('V4 forbids model-supplied numeric copies rather than silently repairing them',async()=>{const p=await packet(),w=toWireV4(answer(p),p);w.s[0].v=999;assert.throws(()=>expandWireV4(w,p),/EXTRA/);});
+test('V4 forbids model-supplied unit copies',async()=>{const p=await packet(),w=toWireV4(answer(p),p);w.s[0].u='percent';assert.throws(()=>expandWireV4(w,p),/EXTRA/);});
+test('V4 rejects unknown fact identifiers',async()=>{const p=await packet(),w=toWireV4(answer(p),p);w.s[0].p='C_invented';assert.throws(()=>expandWireV4(w,p),/ENUM/);});
+test('V4 rejects numeric indices from the legacy transport',async()=>{const p=await packet(),w=toWireV4(answer(p),p);w.s[0].p=37;assert.throws(()=>expandWireV4(w,p),/TYPE/);});
+test('V4 removes conflicting duplicate assessment without changing the decision',async()=>{const p=await packet(),w=toWireV4(answer(p,'VETO'),p);const a=expandWireV4(w,p);assert.equal(a.decision,'VETO');assert.equal(a.assessment,'CONTRADICTED');w.a='SUPPORTED';assert.throws(()=>expandWireV4(w,p),/EXTRA/);});
+test('V4 still rejects digits in free-text interpretations',async()=>{const p=await packet(),w=toWireV4(answer(p),p);w.s[0].n='15분 상승';assert.throws(()=>validateAnswer(expandWireV4(w,p),p),/NUMERICAL_PROSE/);});
+test('V4 still rejects candidate and snapshot identity changes',async()=>{const p=await packet(),w=toWireV4(answer(p),p);w.c='OTHER';assert.throws(()=>validateAnswer(expandWireV4(w,p),p),/IDENTITY/);w.c=p.candidate_id;w.h='0'.repeat(64);assert.throws(()=>validateAnswer(expandWireV4(w,p),p),/IDENTITY/);});
+test('V4 cannot mark a populated fact as missing',async()=>{const p=await packet(),w=toWireV4(answer(p),p);w.m=['C_return_5m'];assert.throws(()=>validateAnswer(expandWireV4(w,p),p),/FALSE_MISSING/);});
+test('V4 does not turn data incompleteness into a PASS',async()=>{const p=await packet(),w=toWireV4(answer(p),p);p.current_market.quality.complete=false;assert.throws(()=>validateAnswer(expandWireV4(w,p),p),/CURRENT_INPUT/);});
+test('V4 requires its own wire version and rejects a canonical-shaped API response',async()=>{const p=await packet();assert.throws(()=>parseApiResponseV4(rawResponse(answer(p)),p));const w=toWireV4(answer(p),p);w.w='FACTREF3';assert.throws(()=>expandWireV4(w,p),/ENUM/);});
+test('V4 every schema object forbids additional properties',()=>{const walk=x=>{if(!x||typeof x!=='object')return;if(x.type==='object')assert.equal(x.additionalProperties,false);Object.values(x).forEach(v=>Array.isArray(v)?v.forEach(walk):walk(v));};walk(WIRE_OUTPUT_SCHEMA_V4);assert.ok(Object.keys(FACT_PATHS).length>30);});
