@@ -80,3 +80,9 @@ test('local journal persists deduplication across store instances',async()=>{
 });
 test('local runner cannot call API without explicit option',async()=>{const {main}=await import('../review-once.mjs');await assert.rejects(main([]),/EXPLICIT_API_CALL_REQUIRED/);});
 test('SHADOW adapter does not await even journal I/O',async()=>{let complete;const waiting=new Promise(r=>complete=r),db={};const scheduled=[];setTestCoordinator(db,{config:{mode:'SHADOW'},consider:()=>waiting,schedule:p=>scheduled.push(p)});const s=candidate(),r=await gptFilterExecutable(db,[s]);assert.deepEqual(r.candidates,[s]);assert.equal(scheduled.length,1);complete();await Promise.all(scheduled);});
+test('review purpose is part of the job binding (no cross-purpose reuse)',async()=>{
+  const store=new MemoryReviewStore(),requests=[];
+  const a=service({store,requests,purpose:'PRODUCTION'}).c,b=service({store,requests,purpose:'DRYRUN'}).c;
+  await completed(a);await completed(b);assert.equal(requests.length,2);assert.equal(store.rows.size,2);
+  assert.notEqual(await a.binding,await b.binding);
+});
