@@ -1,0 +1,36 @@
+{
+  "version": "GPT_FINAL_ENTRY_REVIEW_2",
+  "model": "gpt-5.4-mini-2026-03-17",
+  "limits": {
+    "requestMs": 8000,
+    "executionReserveMs": 3000,
+    "reviewMaxAgeMs": 15000,
+    "inputBytes": 60000,
+    "outputTokens": 1800,
+    "bars1m": 12,
+    "bars5m": 12
+  },
+  "prompt_hash": "dd13502845de0048192f67f775c053a170465ac5a9ef5991e949b168b19304ac",
+  "schema_hash": "4ec6c07ddefd5540c06deeeee9da4eeec75142ad949db249b2efcad8babc8998",
+  "current_commit": "fea185c089932386d057a8abea14997007713b6d",
+  "executor_blob": "b3cb11693036b8761bbe2618508f33ba1738e5d1",
+  "patch_regions": [
+    "runtime_import",
+    "candidate_queue_before_claim",
+    "entry_final_confirmation",
+    "predispatch_no_io_confirmation",
+    "resume_only_after_original_lease_release"
+  ],
+  "test_result": {
+    "tests": 57,
+    "passed": 57,
+    "failed": 0,
+    "kind": "NEW_MODULE_AND_SYNTHETIC_ADAPTER_TESTS"
+  },
+  "actual_api_calls": 0,
+  "production_deployments": 0,
+  "sql_executions": 0,
+  "remote_pushes": 0,
+  "orders": 0,
+  "full_executor_integration_tested": false
+}

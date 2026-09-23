@@ -1,0 +1,179 @@
+{
+  "type": "object",
+  "properties": {
+    "candidate_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "snapshot_hash": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "decision": {
+      "type": "string",
+      "enum": [
+        "PASS",
+        "VETO",
+        "ABSTAIN"
+      ]
+    },
+    "assessment": {
+      "type": "string",
+      "enum": [
+        "SUPPORTED",
+        "CONTRADICTED",
+        "INSUFFICIENT_EVIDENCE"
+      ]
+    },
+    "checked_claims": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "properties": {
+          "claim_id": {
+            "type": "string",
+            "enum": [
+              "absorption",
+              "volumeTails",
+              "fresh15over30",
+              "btcAnyUp",
+              "buyerShareRise",
+              "fresh5over15",
+              "recentHourLead",
+              "CURRENT_REACCELERATION"
+            ]
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "SUPPORTED",
+              "CONTRADICTED",
+              "UNKNOWN"
+            ]
+          },
+          "evidence_paths": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 180
+            }
+          }
+        },
+        "required": [
+          "claim_id",
+          "verdict",
+          "evidence_paths"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "supporting_evidence": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "properties": {
+          "field_path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 180
+          },
+          "observed_value": {
+            "type": [
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "interpretation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 180
+          }
+        },
+        "required": [
+          "field_path",
+          "observed_value",
+          "unit",
+          "interpretation"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "opposing_evidence": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "properties": {
+          "field_path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 180
+          },
+          "observed_value": {
+            "type": [
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "interpretation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 180
+          }
+        },
+        "required": [
+          "field_path",
+          "observed_value",
+          "unit",
+          "interpretation"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "missing_fields": {
+      "type": "array",
+      "maxItems": 24,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 180
+      }
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    }
+  },
+  "required": [
+    "candidate_id",
+    "snapshot_hash",
+    "decision",
+    "assessment",
+    "checked_claims",
+    "supporting_evidence",
+    "opposing_evidence",
+    "missing_fields",
+    "summary"
+  ],
+  "additionalProperties": false
+}

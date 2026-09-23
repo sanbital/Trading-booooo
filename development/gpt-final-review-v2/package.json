@@ -1,0 +1,1 @@
+{"name":"trading-booooo-gpt-final-reviewer-v2","version":"2.0.0","private":true,"type":"module","engines":{"node":">=22.16.0"},"scripts":{"test":"node --test development/gpt-final-review/tests/*.test.mjs","demo":"node development/gpt-final-review/demo.mjs"}}

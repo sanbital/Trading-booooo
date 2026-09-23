@@ -1,0 +1,98 @@
+{
+  ".env.example": {
+    "bytes": 277,
+    "sha256": "2f675161f5d0b6ab091eaf0b811b13a4bb9bd3fe333f9049632e844ba9584183"
+  },
+  ".gitignore": {
+    "bytes": 83,
+    "sha256": "93100766f384c2aaec9a2b9eef9f9b7a34301596fd88048066c562c1b1d0e84b"
+  },
+  "README_KO.md": {
+    "bytes": 8828,
+    "sha256": "11f6120e58df030e01f7c8e03769b9de862bab81ad02cb5eae4720d1a1a93d4f"
+  },
+  "development/gpt-final-review/apply-current.mjs": {
+    "bytes": 4681,
+    "sha256": "7149cb858b0f798537dc8d9d3b4d9a9ac4aacf276f35231cb4ad3aa4c1d611df"
+  },
+  "development/gpt-final-review/create_review_store.UNAPPLIED.sql": {
+    "bytes": 3151,
+    "sha256": "9162a35e426f14aa2be7caccef52a97ad114235d42c262de198667585741c4e0"
+  },
+  "development/gpt-final-review/demo.mjs": {
+    "bytes": 897,
+    "sha256": "9dcb26178553d08e15b1e76695770805dbea89becfdc997029aa1d0a8fd1e040"
+  },
+  "development/gpt-final-review/evidence/code_contract.json": {
+    "bytes": 1058,
+    "sha256": "a592612699a1aed88eb0489b6d14662edebbe4796a6153cb8bb265ac23f27b84"
+  },
+  "development/gpt-final-review/evidence/connection_regions.json": {
+    "bytes": 2019,
+    "sha256": "6317e4d9cca66e9f03fade48e6c3705f48e92465dd4a022e387537bd8f4ac6aa"
+  },
+  "development/gpt-final-review/evidence/demo.txt": {
+    "bytes": 789,
+    "sha256": "b0781123eb8a32706b557c220ab44cf7d4b0f881a3e7021a0a6d0319977b62e3"
+  },
+  "development/gpt-final-review/evidence/output_schema.json": {
+    "bytes": 3818,
+    "sha256": "b85a75932811147d22e586d3e7bfdac8bddfdf6bef4a70da888f6d542b0d1524"
+  },
+  "development/gpt-final-review/evidence/runtime_prompt.txt": {
+    "bytes": 3296,
+    "sha256": "dd13502845de0048192f67f775c053a170465ac5a9ef5991e949b168b19304ac"
+  },
+  "development/gpt-final-review/evidence/tests.tap": {
+    "bytes": 9631,
+    "sha256": "9993097aeb1379870496a2d8a46dff0e5df9ac75a0181c6add219b9d77a0d2ae"
+  },
+  "development/gpt-final-review/file-store.mjs": {
+    "bytes": 2311,
+    "sha256": "157194a89b8659d4c0f428fcf7f3575a0ae80d69e21ecd82bede5aa31e3892d9"
+  },
+  "development/gpt-final-review/review-once.mjs": {
+    "bytes": 2590,
+    "sha256": "1e7bdbec74ad7c709aa24af9e6a0fe152f126a0c8e5c2d9cf4f9f2f25751fd09"
+  },
+  "development/gpt-final-review/tests/helpers.mjs": {
+    "bytes": 4014,
+    "sha256": "b19219f1481c2f0ebef35664e5b4e60cc78248325aad5052363a52df7fc0b2e2"
+  },
+  "development/gpt-final-review/tests/reviewer.test.mjs": {
+    "bytes": 16968,
+    "sha256": "bb018a66779746472f1791d71daef1febeb34f236947a826a5a29d8a84b2dd0b"
+  },
+  "package.json": {
+    "bytes": 259,
+    "sha256": "d776c081aaecfe28729f941b241e1f796240d283083ae7997be786bbe64e0e7d"
+  },
+  "supabase/functions/_shared/gpt-final-review/contract.mjs": {
+    "bytes": 10989,
+    "sha256": "91ad443beddb4dc786340b4610870a8b11c47636cb04c18c58bef219e865ca75"
+  },
+  "supabase/functions/_shared/gpt-final-review/coordinator.mjs": {
+    "bytes": 8782,
+    "sha256": "17487ed31927ac0ccc46194eb60d357dd01c6e944cab6aac3c49ab63d32c2bd8"
+  },
+  "supabase/functions/_shared/gpt-final-review/market.mjs": {
+    "bytes": 9508,
+    "sha256": "648f57044031d18ecdb88c3424308c958eaadd5bc92e82e0ff991955a92c58e1"
+  },
+  "supabase/functions/_shared/gpt-final-review/openai.mjs": {
+    "bytes": 4205,
+    "sha256": "bb8795a76f9e7b0c8124fd801c7191ae5e0690ad12832b439aa3aefa6f187a09"
+  },
+  "supabase/functions/_shared/gpt-final-review/prompt.mjs": {
+    "bytes": 3329,
+    "sha256": "00fc14d7aa92104cee19be8c17d0bc1e34ae34d0fea26c45c90688e9a1c33784"
+  },
+  "supabase/functions/_shared/gpt-final-review/supabase-store.mjs": {
+    "bytes": 1317,
+    "sha256": "04e8af5844992f6e2f0d70f5807c775ee0e8499cdc16639d283a096f87b421be"
+  },
+  "supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs": {
+    "bytes": 2470,
+    "sha256": "fcf86293de5dcfe5b5e60cc2944f169be0bb6b1091bd08de254f9ca0b787a186"
+  }
+}
