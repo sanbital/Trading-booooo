@@ -1,0 +1,27 @@
+[
+  {
+    "name": "runtime_import",
+    "from": "import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode,entryPriceEvidence} from \"./entry-evidence.mjs\";",
+    "to": "import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode,entryPriceEvidence} from \"./entry-evidence.mjs\";\nimport {gptFilterExecutable,gptFinalCheck,runWithGptReview} from \"./gpt-final-review-adapter.mjs\";"
+  },
+  {
+    "name": "candidate_queue_before_claim",
+    "from": "const runDeadline=Date.now()+ENTRY_RUN_BUDGET_MS;\nlet attempts=0;\nfor(const s of executable){",
+    "to": "const gptReviewed=await gptFilterExecutable(db,executable);\nif(executable.length&&!gptReviewed.candidates.length)entry={entered:false,reason:gptReviewed.reason};\nconst runDeadline=Date.now()+ENTRY_RUN_BUDGET_MS;\nlet attempts=0;\nfor(const s of gptReviewed.candidates){"
+  },
+  {
+    "name": "entry_final_confirmation",
+    "from": "await requireLeaderEntryControls(db);\nconst exitPolicy=rec(s.features?.exitPolicy);",
+    "to": "const gptEntryCheck=gptFinalCheck(db,s);\nif(!gptEntryCheck.allowed)return{entered:false,reason:gptEntryCheck.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL};\nattempt.gptFinalReview=gptEntryCheck.review??null;\nawait requireLeaderEntryControls(db);\nconst exitPolicy=rec(s.features?.exitPolicy);"
+  },
+  {
+    "name": "predispatch_no_io_confirmation",
+    "from": "await verifyExecutionLease(db);\nconst id=cid(\"v11e\",s.id),rp=",
+    "to": "await verifyExecutionLease(db);\n// Pure final check; no GPT/network call after the execution quote.\nconst gptDispatchCheck=gptFinalCheck(db,s);\nif(!gptDispatchCheck.allowed)return{entered:false,reason:gptDispatchCheck.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL};\nconst id=cid(\"v11e\",s.id),rp="
+  },
+  {
+    "name": "resume_only_after_original_lease_release",
+    "from": "return res(200,await runWithLease(db));",
+    "to": "return res(200,await runWithGptReview(db,runWithLease));"
+  }
+]

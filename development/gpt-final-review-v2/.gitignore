@@ -1,0 +1,8 @@
+.env
+.env.*
+!.env.example
+private-gpt-journal/
+*.lock
+*.tmp
+*.backup
+node_modules/
