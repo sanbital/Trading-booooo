@@ -16,3 +16,16 @@ test('V4 cannot mark a populated fact as missing',async()=>{const p=await packet
 test('V4 does not turn data incompleteness into a PASS',async()=>{const p=await packet(),w=toWireV4(answer(p),p);p.current_market.quality.complete=false;assert.throws(()=>validateAnswer(expandWireV4(w,p),p),/CURRENT_INPUT/);});
 test('V4 requires its own wire version and rejects a canonical-shaped API response',async()=>{const p=await packet();assert.throws(()=>parseApiResponseV4(rawResponse(answer(p)),p));const w=toWireV4(answer(p),p);w.w='FACTREF3';assert.throws(()=>expandWireV4(w,p),/ENUM/);});
 test('V4 every schema object forbids additional properties',()=>{const walk=x=>{if(!x||typeof x!=='object')return;if(x.type==='object')assert.equal(x.additionalProperties,false);Object.values(x).forEach(v=>Array.isArray(v)?v.forEach(walk):walk(v));};walk(WIRE_OUTPUT_SCHEMA_V4);assert.ok(Object.keys(FACT_PATHS).length>30);});
+import {toWireV5,expandWireV5,compactInputV5,WIRE_OUTPUT_SCHEMA_V5} from '../../../supabase/functions/_shared/gpt-final-review/wire-v4.mjs';
+test('V5 round-trips the canonical answer with exact restored values and server labels',async()=>{const p=await packet(),a=answer(p),x=validateAnswer(expandWireV5(toWireV5(a,p),p),p);
+  assert.equal(x.decision,'PASS');assert.deepEqual(x.supporting_evidence.map(e=>[e.field_path,e.observed_value,e.unit]),a.supporting_evidence.map(e=>[e.field_path,e.observed_value,e.unit]));assert.deepEqual(x.missing_fields,[]);});
+test('V5 schema keeps current and original evidence apart',async()=>{const p=await packet(),w=toWireV5(answer(p),p);
+  assert.throws(()=>expandWireV5({...w,support_orig:['C_return_5m']},p),/ENUM/);assert.throws(()=>expandWireV5({...w,support_now:['O_return15m']},p),/ENUM/);});
+test('V5 rejects numeric/unit/prose fields and legacy keys',async()=>{const p=await packet(),w=toWireV5(answer(p),p);
+  for(const extra of [{v:1},{u:'x'},{s:[]},{m:[]},{support:[]}])assert.throws(()=>expandWireV5({...w,...extra},p),/EXTRA/);});
+test('V5 still enforces identity and PASS evidence rules',async()=>{const p=await packet(),w=toWireV5(answer(p),p);
+  assert.throws(()=>validateAnswer(expandWireV5({...w,c:'other'},p),p),/IDENTITY/);assert.throws(()=>validateAnswer(expandWireV5({...w,h:'0'.repeat(64)},p),p),/IDENTITY/);
+  assert.throws(()=>validateAnswer(expandWireV5({...w,support_now:[]},p),p),/PASS_/);assert.throws(()=>validateAnswer(expandWireV5({...w,n:'승률 90'},p),p),/NUMERICAL/);});
+test('V5 input carries every fact once and no candidate symbol',async()=>{const p=await packet(),i=compactInputV5(p);
+  assert.equal(Object.keys(i.facts.rows).length,Object.keys(FACT_PATHS).length);assert.ok(!JSON.stringify(i).includes('TESTUSDT'));assert.equal(i.c,p.candidate_id);assert.equal(i.h,p.snapshot_hash);
+  const walk=x=>{if(!x||typeof x!=='object')return;if(x.type==='object')assert.equal(x.additionalProperties,false);Object.values(x).forEach(v=>Array.isArray(v)?v.forEach(walk):walk(v));};walk(WIRE_OUTPUT_SCHEMA_V5);});

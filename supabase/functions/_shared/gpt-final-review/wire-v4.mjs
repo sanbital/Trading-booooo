@@ -50,12 +50,17 @@ export function parseApiResponseV4(raw,packet){return expandWireV4(parseApiRespo
  * Interpretation text in the canonical answer is a fixed server label, never a number
  * and never a correction of model output. */
 export const WIRE_VERSION_V5='FACTREF5';
+const refNow={type:'string',enum:Object.keys(FACT_PATHS).filter(id=>id.startsWith('C_'))};
+const refOrig={type:'string',enum:Object.keys(FACT_PATHS).filter(id=>!id.startsWith('C_'))};
 export const V5_SUPPORT_LABEL='모델이 선택한 지지 근거';
 export const V5_OPPOSE_LABEL='모델이 선택한 반대 근거';
 export const WIRE_OUTPUT_SCHEMA_V5=obj({
  w:{type:'string',enum:[WIRE_VERSION_V5]},c:str(80),h:str(64),d:{type:'string',enum:['PASS','VETO','ABSTAIN']},
  k:{type:'array',minItems:1,maxItems:8,items:obj({i:{type:'string',enum:[...FACTORS,'CURRENT_REACCELERATION']},v:{type:'string',enum:['SUPPORTED','CONTRADICTED','UNKNOWN']},e:{type:'array',maxItems:3,items:ref}})},
- s:{type:'array',maxItems:4,items:ref},o:{type:'array',maxItems:4,items:ref},m:{type:'array',maxItems:24,items:ref},n:str(60)
+ // Evidence lists are split by source so the schema itself keeps current-market facts
+ // (C_) and original-model facts (O_/F_) apart; the model cannot put one in the other.
+ support_now:{type:'array',maxItems:3,items:refNow},support_orig:{type:'array',maxItems:3,items:refOrig},
+ oppose_now:{type:'array',maxItems:3,items:refNow},oppose_orig:{type:'array',maxItems:3,items:refOrig},n:str(60)
 });
 export function compactInputV5(packet){
  const facts={};
@@ -71,6 +76,9 @@ export function compactInputV5(packet){
   facts:{columns:['value','unit','formula','missing_reason'],rows:facts}};
  ensure(new TextEncoder().encode(JSON.stringify(input)).length<=LIMITS.inputBytes,'INPUT_TOO_LARGE');return input;
 }
+/** Missing facts are a deterministic property of the immutable snapshot (value === null),
+ * so V5 does not ask the model to enumerate them; the canonical answer lists none and data
+ * completeness remains enforced by the server-side quality/arithmetic checks. */
 export function expandWireV5(wire,packet){
  validateShape(wire,WIRE_OUTPUT_SCHEMA_V5);
  const path=id=>{ensure(Object.hasOwn(FACT_PATHS,id),'EVIDENCE_REFERENCE_INVALID');const p=FACT_PATHS[id];evidenceAt(packet,p);return p;};
@@ -78,13 +86,15 @@ export function expandWireV5(wire,packet){
  return {candidate_id:wire.c,snapshot_hash:wire.h,decision:wire.d,
   assessment:{PASS:'SUPPORTED',VETO:'CONTRADICTED',ABSTAIN:'INSUFFICIENT_EVIDENCE'}[wire.d],
   checked_claims:wire.k.map(x=>({claim_id:x.i,verdict:x.v,evidence_paths:x.e.map(path)})),
-  supporting_evidence:wire.s.map(evidence(V5_SUPPORT_LABEL)),opposing_evidence:wire.o.map(evidence(V5_OPPOSE_LABEL)),
-  missing_fields:wire.m.map(path),summary:wire.n};
+  supporting_evidence:[...wire.support_now,...wire.support_orig].map(evidence(V5_SUPPORT_LABEL)),
+  opposing_evidence:[...wire.oppose_now,...wire.oppose_orig].map(evidence(V5_OPPOSE_LABEL)),
+  missing_fields:[],summary:wire.n};
 }
 /** Fixture encoder only. */
 export function toWireV5(answer,packet){
  const w=toWireV4(answer,packet);
- return {w:WIRE_VERSION_V5,c:w.c,h:w.h,d:w.d,k:w.k.map(x=>({...x,e:x.e.slice(0,3)})),s:w.s.map(x=>x.p),o:w.o.map(x=>x.p),m:w.m,n:w.n.slice(0,60)};
+ return {w:WIRE_VERSION_V5,c:w.c,h:w.h,d:w.d,k:w.k.map(x=>({...x,e:x.e.slice(0,3)})),support_now:w.s.map(x=>x.p).filter(id=>id.startsWith('C_')),support_orig:w.s.map(x=>x.p).filter(id=>!id.startsWith('C_')),
+  oppose_now:w.o.map(x=>x.p).filter(id=>id.startsWith('C_')),oppose_orig:w.o.map(x=>x.p).filter(id=>!id.startsWith('C_')),n:w.n.slice(0,60)};
 }
 export const WIRE_PROFILES=Object.freeze({
  V4:Object.freeze({schemaName:'entry_final_review_v4_factref',schema:WIRE_OUTPUT_SCHEMA_V4,input:compactInputV4,expand:expandWireV4}),
