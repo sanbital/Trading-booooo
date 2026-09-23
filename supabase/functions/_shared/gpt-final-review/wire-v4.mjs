@@ -5,7 +5,8 @@
 import {FACTORS,LIMITS,ensure,evidenceAt,validateShape,parseApiResponse,validateAnswer} from './contract.mjs';
 export const WIRE_VERSION='FACTREF4';
 const original=['volumeRatio','return5m','return15m','return30m','return60m','btc_return30m','btc_return2h','source_buy_share_3m','source_price_change_3m','source_buy_share_first','source_buy_share_previous','source_buy_share_latest'];
-const current=['return_5m','return_15m','return_30m','return_60m','volume_ratio_3m','taker_buy_ratio_3m','relative_strength_btc_15m','distance_recent_high_15m','distance_sma20','distance_trigger_reference','last_body','last_upper_wick','last_lower_wick','last_close_change','day_return','spread','depth','funding'];
+const current=['return_5m','return_15m','return_30m','return_60m','volume_ratio_3m','taker_buy_ratio_3m','relative_strength_btc_15m','distance_recent_high_15m','distance_sma20','distance_trigger_reference','last_body','last_upper_wick','last_lower_wick','last_close_change','day_return','spread','depth','funding',
+ 'bid_depth_25bps','book_imbalance_25bps','ask_depth_to_slot_notional','mark_index_premium','open_interest_usdt','oi_change_5m','oi_change_60m'];
 export const FACT_PATHS=Object.freeze(Object.fromEntries([
  ...original.map(k=>['O_'+k,'/original_model/metrics/'+k]),
  ...FACTORS.map(k=>['F_'+k,'/original_model/factors/'+k]),
@@ -70,7 +71,7 @@ export function compactInputV5(packet){
  const input={w:WIRE_VERSION_V5,c:packet.candidate_id,h:packet.snapshot_hash,as_of_offset_ms:packet.as_of_offset_ms,
   original_model:{proposed_action:o.proposed_action,branch:o.branch,decision_basis:o.decision_basis,arithmetic_check:o.arithmetic_check,
    source_timing:o.source_timing,global_control:o.global_control},
-  current_market:{quality:cur.quality,availability:cur.availability,
+  current_market:{quality:cur.quality,availability:cur.availability,microstructure_availability:cur.microstructure_availability??[],
    bars_1m:{columns:['open_offset_ms','open','high','low','close'],unit:'price_index_latest_close_100',rows:bars(cur.one_minute)},
    bars_5m:{columns:['open_offset_ms','open','high','low','close'],unit:'price_index_latest_close_100',rows:bars(cur.five_minute)}},
   facts:{columns:['value','unit','formula','missing_reason'],rows:facts}};

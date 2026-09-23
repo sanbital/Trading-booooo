@@ -25,3 +25,9 @@ test('frozen sizing/slot constants remain in the executor',()=>{
   assert.match(src,/const MAX_SLOTS=10,/);assert.match(src,/const SETUP_MAX_CONCURRENT=4/);
   assert.match(src,/const MARGIN=SLOT_SIZING_CONTRACT\.targetMarginUsdt,LEV=SLOT_SIZING_CONTRACT\.leverage/);
 });
+test('live probe module cannot reach orders, intents, signals or the live coordinator',()=>{
+  const mod=readFileSync(new URL('./gpt-final-review-dryrun.mjs',import.meta.url),'utf8');
+  for(const re of [/create_order/,/v17_create_stop/,/\.insert\(/,/\.upsert\(/,/\.update\(/,/\.delete\(/,/v11_long_regime/,/gateway/i,/coordinatorFor/])assert.ok(!re.test(mod),'probe contains '+re);
+  assert.match(mod,/purpose:'DRYRUN'/);
+  const route=src.slice(src.indexOf('mode==="gpt-live-probe"'),src.indexOf('mode==="cec-bootstrap"'));assert.match(route,/orderCalls:0/);assert.ok(!/runWithLease|opsGateway|openBull/.test(route));
+});

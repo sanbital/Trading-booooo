@@ -3,7 +3,7 @@
 export const V5_HOOKS=[
 {
 "from": "import {gptFilterExecutable,gptFinalCheck,runWithGptReview,gptReviewReadyToResume} from \"./gpt-final-review-adapter.mjs\";",
-"to": "import {gptFilterExecutable,gptFinalCheck,runWithGptReview,gptReviewReadyToResume} from \"./gpt-final-review-adapter.mjs\";\nimport {dryRunCoordinator,dryRunReviewPhase} from \"./gpt-final-review-dryrun.mjs\";\nimport {readReviewControl} from \"../_shared/gpt-final-review/supabase-store.mjs\";"
+"to": "import {gptFilterExecutable,gptFinalCheck,runWithGptReview,gptReviewReadyToResume} from \"./gpt-final-review-adapter.mjs\";\nimport {dryRunCoordinator,dryRunReviewPhase,liveProbe} from \"./gpt-final-review-dryrun.mjs\";\nimport {readReviewControl} from \"../_shared/gpt-final-review/supabase-store.mjs\";"
 },
 {
 "from": "  if(r.error)throw Error(`RECOVERY_CAS:${r.error.message}`);return r.data;\n}",
@@ -15,6 +15,6 @@ export const V5_HOOKS=[
 },
 {
 "from": "    if(mode===\"cec-bootstrap\")return res(200,await runWithLease(db,bootstrapCec0040));",
-"to": "    if(mode===\"ops-readiness\")return res(200,await opsReadiness(db));\n    if(mode===\"gpt-dryrun\")return res(200,await gptDryRun(db,body));\n    if(mode===\"cec-bootstrap\")return res(200,await runWithLease(db,bootstrapCec0040));"
+"to": "    if(mode===\"ops-readiness\")return res(200,await opsReadiness(db));\n    if(mode===\"gpt-dryrun\")return res(200,await gptDryRun(db,body));\n    if(mode===\"gpt-live-probe\"){\n      const symbol=String(body.symbol??\"BTCUSDT\").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return res(400,{ok:false,error:\"SYMBOL\"});\n      return res(200,{ok:true,revision:REVISION,patch:PATCH,orderCalls:0,probe:await liveProbe(db,{symbol,apiKey:env(\"OPENAI_API_KEY\")||\"\",\n        runId:String(body.runId??crypto.randomUUID()),evaluate:evaluateB06133,fetchInputs:fetchB06133Inputs})});\n    }\n    if(mode===\"cec-bootstrap\")return res(200,await runWithLease(db,bootstrapCec0040));"
 }
 ];
