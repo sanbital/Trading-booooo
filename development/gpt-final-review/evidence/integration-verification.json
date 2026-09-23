@@ -1,0 +1,26 @@
+{
+  "base_commit": "cadf2c4ad360966fd148e5b665244ec7d81d336c",
+  "baseline_executor_blob": "b3cb11693036b8761bbe2618508f33ba1738e5d1",
+  "integrated_executor_blob": "80b79fb449ad01e4534bfa1076b75a142f887650",
+  "additive_regions": [
+    "runtime_import",
+    "candidate_queue_before_claim",
+    "entry_final_confirmation",
+    "predispatch_no_io_confirmation",
+    "resume_only_after_original_lease_release"
+  ],
+  "original_engine_after_reverse_patch_identical": true,
+  "local_import_graph_files": 35,
+  "actual_executor_syntax_check": "PASS",
+  "off_path_network_calls": 0,
+  "off_path_db_calls": 0,
+  "off_path_original_cycle_count": 1,
+  "root_module_mock_tests": 57,
+  "actual_gpt_api_calls": 0,
+  "production_deployed": false,
+  "sql_executed": false,
+  "secrets_changed": false,
+  "mode_default": "OFF",
+  "live_enforcement_enabled": false,
+  "integrated_source_sha256": "f375d0c03ee027223223f55c7f04c22a7ada7d85ece0df3c2eaa2cf87819b3b1"
+}
