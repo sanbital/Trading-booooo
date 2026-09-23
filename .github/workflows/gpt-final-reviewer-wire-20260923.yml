@@ -1,0 +1,124 @@
+name: Wire GPT final reviewer without deployment
+
+on:
+  push:
+    branches: [integration/gpt-final-reviewer-v2-20260923]
+    paths: [.github/workflows/gpt-final-reviewer-wire-20260923.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gpt-final-reviewer-source-integration
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    if: github.repository == 'sanbital/Trading-booooo' && github.ref == 'refs/heads/integration/gpt-final-reviewer-v2-20260923'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.16.0'
+      - name: Verify package tests and apply only the checked source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          PKG=development/gpt-final-review-v2
+          test "$(git hash-object supabase/functions/v10-lane-executor/index.ts)" = b3cb11693036b8761bbe2618508f33ba1738e5d1
+          npm --prefix "$PKG" test
+          node "$PKG/development/gpt-final-review/apply-current.mjs" "$PWD" --write
+          cp -R "$PKG/development/gpt-final-review/tests" development/gpt-final-review/tests
+          cp "$PKG/development/gpt-final-review/apply-current.mjs" development/gpt-final-review/apply-current.mjs
+          cp "$PKG/development/gpt-final-review/file-store.mjs" development/gpt-final-review/file-store.mjs
+          mkdir -p development/gpt-final-review/evidence
+          node --test development/gpt-final-review/tests/reviewer.test.mjs | tee development/gpt-final-review/evidence/integrated-tests.tap
+      - name: Check actual executor syntax and exact baseline preservation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp supabase/functions/v10-lane-executor/index.ts "$RUNNER_TEMP/gpt-integrated-executor.mjs"
+          node --check "$RUNNER_TEMP/gpt-integrated-executor.mjs"
+          for f in supabase/functions/_shared/gpt-final-review/*.mjs supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs; do
+            node --check "$f"
+          done
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import {readFileSync,writeFileSync,existsSync} from 'node:fs';
+          import {dirname,resolve} from 'node:path';
+          import {createHash} from 'node:crypto';
+          import {replacements,gitBlob,EXPECTED_BLOB} from './development/gpt-final-review/apply-current.mjs';
+          import {gptFilterExecutable,gptFinalCheck,runWithGptReview} from './supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
+          const source=readFileSync('supabase/functions/v10-lane-executor/index.ts','utf8');
+          let reversed=source;
+          for(const r of [...replacements].reverse()){
+            assert.equal(reversed.split(r.to).length,2,'non-unique inserted region '+r.name);
+            reversed=reversed.replace(r.to,r.from);
+          }
+          assert.equal(gitBlob(reversed),EXPECTED_BLOB,'original engine changed outside additive hooks');
+          assert.equal(reversed,readFileSync('development/gpt-final-review/original-index.ts.backup','utf8'));
+          const walked=new Set();
+          function walk(path){
+            path=resolve(path); if(walked.has(path))return; walked.add(path);
+            const text=readFileSync(path,'utf8');
+            for(const m of text.matchAll(/(?:from\s*|import\s*)['"](\.[^'"]+)['"]/g)){
+              const next=resolve(dirname(path),m[1]); assert.ok(existsSync(next),'missing import '+next); walk(next);
+            }
+          }
+          walk('supabase/functions/v10-lane-executor/index.ts');
+          globalThis.fetch=()=>{throw Error('OFF_MUST_NOT_CALL_NETWORK');};
+          const db=new Proxy({}, {get(){throw Error('OFF_MUST_NOT_READ_DB');}});
+          const candidates=[{id:'off-path-check'}];
+          const filtered=await gptFilterExecutable(db,candidates);
+          assert.equal(filtered.candidates,candidates); assert.equal(filtered.reason,'OFF');
+          assert.equal(gptFinalCheck(db,candidates[0]).allowed,true);
+          const originalResult={ok:true,entry:{entered:false,reason:'BASELINE_RESULT'}};
+          let runs=0;assert.equal(await runWithGptReview(db,async()=>{runs++;return originalResult;}),originalResult);
+          assert.equal(runs,1);
+          const defaults=readFileSync('development/gpt-final-review-v2/.env.example','utf8');
+          assert.ok(defaults.includes('GPT_FINAL_REVIEW_MODE=OFF'));
+          assert.ok(defaults.includes('GPT_FINAL_REVIEW_DAILY_BUDGET_USD=0'));
+          const report={base_commit:'cadf2c4ad360966fd148e5b665244ec7d81d336c',baseline_executor_blob:EXPECTED_BLOB,
+            integrated_executor_blob:gitBlob(source),additive_regions:replacements.map(r=>r.name),
+            original_engine_after_reverse_patch_identical:true,local_import_graph_files:walked.size,
+            actual_executor_syntax_check:'PASS',off_path_network_calls:0,off_path_db_calls:0,
+            off_path_original_cycle_count:runs,root_module_mock_tests:57,
+            actual_gpt_api_calls:0,production_deployed:false,sql_executed:false,secrets_changed:false,
+            mode_default:'OFF',live_enforcement_enabled:false,
+            integrated_source_sha256:createHash('sha256').update(source).digest('hex')};
+          writeFileSync('development/gpt-final-review/evidence/integration-verification.json',JSON.stringify(report,null,2)+'\n');
+          console.log(JSON.stringify(report,null,2));
+          JS
+      - name: Commit verified source only to the same integration branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/integration/gpt-final-reviewer-v2-20260923
+          remote="$(git ls-remote origin "$GITHUB_REF" | cut -f1)"
+          test "$remote" = "$GITHUB_SHA"
+          rm development/gpt-final-review/original-index.ts.backup
+          git add supabase/functions/_shared/gpt-final-review \
+            supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs \
+            supabase/functions/v10-lane-executor/index.ts \
+            development/gpt-final-review/tests \
+            development/gpt-final-review/apply-current.mjs \
+            development/gpt-final-review/file-store.mjs \
+            development/gpt-final-review/evidence/integrated-tests.tap \
+            development/gpt-final-review/evidence/integration-verification.json
+          git diff --cached --check
+          git diff --cached --name-only | while IFS= read -r path; do
+            case "$path" in
+              supabase/functions/_shared/gpt-final-review/*|supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs|supabase/functions/v10-lane-executor/index.ts|development/gpt-final-review/*) ;;
+              *) echo "Unexpected changed path: $path"; exit 1;;
+            esac
+          done
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Connect GPT final reviewer to existing entry path; preserve baseline and default OFF [skip ci]'
+          git push origin "HEAD:$GITHUB_REF"
+          echo "INTEGRATED_COMMIT=$(git rev-parse HEAD)"
