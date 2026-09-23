@@ -38,9 +38,14 @@ test('paid request requires compact format; canonical-shaped mock cannot pass as
 });
 test('same snapshot, same evidence references and no identity-dependent cache key',async()=>{
  const p=await packet(),q=await packet(candidate('other'));assert.deepEqual(compactInput(p).evidence_refs,compactInput(q).evidence_refs);
- const a=payloadFor(p),b=payloadFor(q);assert.equal(a.prompt_cache_key,b.prompt_cache_key);
+ // V4 baseline profile stays byte-compatible for A/B measurement.
+ const a=payloadFor(p,'V4'),b=payloadFor(q,'V4');assert.equal(a.prompt_cache_key,b.prompt_cache_key);
  assert.equal(a.model,'gpt-5.4-mini-2026-03-17');assert.equal(a.reasoning.effort,'none');assert.equal(a.service_tier,'default');assert.equal(a.max_output_tokens,1800);
  assert.deepEqual(a.text.format.schema,WIRE_OUTPUT_SCHEMA_V4);assert.notDeepEqual(a.input[1],b.input[1]);
+ // Production profile: same model/effort/tier, stable prefix, identity-free cache key.
+ const x=payloadFor(p),y=payloadFor(q);assert.equal(x.prompt_cache_key,y.prompt_cache_key);assert.equal(x.input[0].content,y.input[0].content);
+ assert.equal(x.model,a.model);assert.equal(x.reasoning.effort,'none');assert.equal(x.service_tier,'default');assert.deepEqual(x.tools,[]);
+ assert.ok(!x.prompt_cache_key.includes(p.candidate_id));assert.notDeepEqual(x.input[1],y.input[1]);
 });
 test('public candle cache coalesces simultaneous reads and preserves availability timestamps',async()=>{
  const c=new CandleReadCache();let calls=0,clock=100,release;const wait=new Promise(r=>release=r);
@@ -75,7 +80,7 @@ for(const decision of ['VETO','ABSTAIN'])test(decision+' never interrupts protec
  const c=service({decision}),db={};setTestCoordinator(db,c);await gptFilterExecutable(db,[candidate()]);await Promise.all([...c.pending.values()]);assert.equal(gptReviewReadyToResume(db),false);
 });
 test('storage failure cannot produce an actionable wake hint',async()=>{
- const store=new MemoryReviewStore();store.save=async()=>{throw Error('DB_FAILURE');};const c=service({store}),db={};setTestCoordinator(db,c);
+ const store=new MemoryReviewStore();store.complete=async()=>{throw Error('DB_FAILURE');};const c=service({store}),db={};setTestCoordinator(db,c);
  await gptFilterExecutable(db,[candidate()]);await Promise.all([...c.pending.values()]);assert.equal(gptReviewReadyToResume(db),false);
 });
 test('expired PASS cannot interrupt X1 or extend signal validity',async()=>{

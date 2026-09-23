@@ -1,4 +1,4 @@
-import {toWireV4 as toWireAnswer} from '../../../supabase/functions/_shared/gpt-final-review/wire-v4.mjs';
+import {toWireV4 as toWireAnswer,toWireV5,FACT_PATHS} from '../../../supabase/functions/_shared/gpt-final-review/wire-v4.mjs';
 import {arithmeticCheck,decisionIdentity,MODEL} from '../../../supabase/functions/_shared/gpt-final-review/contract.mjs';
 import {computeMarket,buildPacket} from '../../../supabase/functions/_shared/gpt-final-review/market.mjs';
 export const T=Date.UTC(2026,8,23,10,0,0);
@@ -36,8 +36,15 @@ export function rawResponse(a){return {id:'resp_TEST_ONLY',status:'completed',mo
 export function transport({decision='PASS',status=200,mutate=a=>a,hold=null,requests=[]}={}){
   return async(url,init)=>{
     requests.push({url,payload:JSON.parse(init.body),init});if(hold)await hold;
-    const p=JSON.parse(JSON.parse(init.body).input[1].content);
-    return new Response(JSON.stringify(rawResponse(toWireAnswer(mutate(answer(p,decision)),p))),{status,headers:{'content-type':'application/json','x-request-id':'req_TEST_ONLY'}});
+    const input=JSON.parse(JSON.parse(init.body).input[1].content);
+    const wire=input.w==='FACTREF5'?(p=>toWireV5(mutate(answer(p,decision)),p))(packetFromV5(input)):toWireAnswer(mutate(answer(input,decision)),input);
+    return new Response(JSON.stringify(rawResponse(wire)),{status,headers:{'content-type':'application/json','x-request-id':'req_TEST_ONLY'}});
   };
 }
 export function config(mode='ENFORCE'){return {mode,modeValid:true,approvalRef:'TEST_ONLY',apiBudgetUsd:10,maxCalls:50,enforceApproved:true};}
+/** Rebuilds the fact view a V5 request exposes, so the mock answers only from what it was sent. */
+export function packetFromV5(input){
+  const p={candidate_id:input.c,snapshot_hash:input.h,original_model:{...input.original_model,metrics:{},factors:{}},current_market:{quality:input.current_market.quality,metrics:{}}};
+  for(const [id,path] of Object.entries(FACT_PATHS)){const [value,unit]=input.facts.rows[id];const [,a,b,k]=path.split('/');p[a][b][k]={value,unit};}
+  return p;
+}

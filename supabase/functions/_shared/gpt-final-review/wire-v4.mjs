@@ -41,6 +41,59 @@ export function expandWireV4(wire,packet){
   supporting_evidence:wire.s.map(evidence),opposing_evidence:wire.o.map(evidence),missing_fields:wire.m.map(path),summary:wire.n};
 }
 export function parseApiResponseV4(raw,packet){return expandWireV4(parseApiResponse(raw),packet);}
+
+/* V5 transport (latency profile). Same verdict contract, candidate/snapshot echo and
+ * server-side fact restoration as V4; it removes transport duplication only:
+ *  - input: each fact is sent once as [value, unit, formula, missing_reason] instead of
+ *    the metric object AND a second evidence_refs copy;
+ *  - output: evidence is a bare fact ID list (no per-fact prose); one short summary.
+ * Interpretation text in the canonical answer is a fixed server label, never a number
+ * and never a correction of model output. */
+export const WIRE_VERSION_V5='FACTREF5';
+export const V5_SUPPORT_LABEL='모델이 선택한 지지 근거';
+export const V5_OPPOSE_LABEL='모델이 선택한 반대 근거';
+export const WIRE_OUTPUT_SCHEMA_V5=obj({
+ w:{type:'string',enum:[WIRE_VERSION_V5]},c:str(80),h:str(64),d:{type:'string',enum:['PASS','VETO','ABSTAIN']},
+ k:{type:'array',minItems:1,maxItems:8,items:obj({i:{type:'string',enum:[...FACTORS,'CURRENT_REACCELERATION']},v:{type:'string',enum:['SUPPORTED','CONTRADICTED','UNKNOWN']},e:{type:'array',maxItems:3,items:ref}})},
+ s:{type:'array',maxItems:4,items:ref},o:{type:'array',maxItems:4,items:ref},m:{type:'array',maxItems:24,items:ref},n:str(60)
+});
+export function compactInputV5(packet){
+ const facts={};
+ for(const [id,path] of Object.entries(FACT_PATHS)){const f=evidenceAt(packet,path);facts[id]=[f.value,f.unit,f.formula??null,f.missing_reason??null];}
+ const bars=xs=>(xs??[]).map(b=>[b.open_offset_ms,b.open,b.high,b.low,b.close]);
+ const o=packet.original_model,cur=packet.current_market;
+ const input={w:WIRE_VERSION_V5,c:packet.candidate_id,h:packet.snapshot_hash,as_of_offset_ms:packet.as_of_offset_ms,
+  original_model:{proposed_action:o.proposed_action,branch:o.branch,decision_basis:o.decision_basis,arithmetic_check:o.arithmetic_check,
+   source_timing:o.source_timing,global_control:o.global_control},
+  current_market:{quality:cur.quality,availability:cur.availability,
+   bars_1m:{columns:['open_offset_ms','open','high','low','close'],unit:'price_index_latest_close_100',rows:bars(cur.one_minute)},
+   bars_5m:{columns:['open_offset_ms','open','high','low','close'],unit:'price_index_latest_close_100',rows:bars(cur.five_minute)}},
+  facts:{columns:['value','unit','formula','missing_reason'],rows:facts}};
+ ensure(new TextEncoder().encode(JSON.stringify(input)).length<=LIMITS.inputBytes,'INPUT_TOO_LARGE');return input;
+}
+export function expandWireV5(wire,packet){
+ validateShape(wire,WIRE_OUTPUT_SCHEMA_V5);
+ const path=id=>{ensure(Object.hasOwn(FACT_PATHS,id),'EVIDENCE_REFERENCE_INVALID');const p=FACT_PATHS[id];evidenceAt(packet,p);return p;};
+ const evidence=label=>id=>{const p=path(id),fact=evidenceAt(packet,p);return {field_path:p,observed_value:fact.value,unit:fact.unit,interpretation:label};};
+ return {candidate_id:wire.c,snapshot_hash:wire.h,decision:wire.d,
+  assessment:{PASS:'SUPPORTED',VETO:'CONTRADICTED',ABSTAIN:'INSUFFICIENT_EVIDENCE'}[wire.d],
+  checked_claims:wire.k.map(x=>({claim_id:x.i,verdict:x.v,evidence_paths:x.e.map(path)})),
+  supporting_evidence:wire.s.map(evidence(V5_SUPPORT_LABEL)),opposing_evidence:wire.o.map(evidence(V5_OPPOSE_LABEL)),
+  missing_fields:wire.m.map(path),summary:wire.n};
+}
+/** Fixture encoder only. */
+export function toWireV5(answer,packet){
+ const w=toWireV4(answer,packet);
+ return {w:WIRE_VERSION_V5,c:w.c,h:w.h,d:w.d,k:w.k.map(x=>({...x,e:x.e.slice(0,3)})),s:w.s.map(x=>x.p),o:w.o.map(x=>x.p),m:w.m,n:w.n.slice(0,60)};
+}
+export const WIRE_PROFILES=Object.freeze({
+ V4:Object.freeze({schemaName:'entry_final_review_v4_factref',schema:WIRE_OUTPUT_SCHEMA_V4,input:compactInputV4,expand:expandWireV4}),
+ V5:Object.freeze({schemaName:'entry_final_review_v5_factref',schema:WIRE_OUTPUT_SCHEMA_V5,input:compactInputV5,expand:expandWireV5})
+});
+const wireProfile=name=>{ensure(Object.hasOwn(WIRE_PROFILES,name),'API_PROFILE_UNKNOWN');return WIRE_PROFILES[name];};
+export function wireSchema(name){return wireProfile(name).schema;}
+export function wireInput(packet,name){return wireProfile(name).input(packet);}
+export function parseApiResponseWire(raw,packet,name){return wireProfile(name).expand(parseApiResponse(raw),packet);}
 /** Fixture encoder only. It refuses altered source values rather than repairing them. */
 export function toWireV4(answer,packet){
  validateAnswer(answer,packet);

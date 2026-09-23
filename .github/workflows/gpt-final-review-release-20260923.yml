@@ -1,0 +1,164 @@
+name: GPT final review release (manual)
+# Manual only. Deploys ONE Edge Function from the dispatched ref after the full
+# regression suite, frozen-policy proof and type check pass, then proves the deployed
+# bundle is byte-identical to the ref. It never changes trading controls, circuit,
+# GPT mode or budget, and never places orders.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Function to deploy"
+        required: true
+        type: choice
+        options: [gpt-final-review-verify, v10-lane-executor]
+      expected_version_before:
+        description: "Current production version of the target (pins against concurrent deploys)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-v10-lane-executor
+  cancel-in-progress: false
+
+env:
+  FROZEN_BASE: fea185c089932386d057a8abea14997007713b6d
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prove frozen trading policy is unchanged since the deployed baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-evidence
+          git diff --check
+          git merge-base --is-ancestor "$FROZEN_BASE" HEAD
+          git diff --quiet "$FROZEN_BASE" HEAD -- \
+            supabase/functions/_shared/leader-slot-sizing.mjs \
+            supabase/functions/_shared/leader-momentum-v17.mjs \
+            supabase/functions/_shared/leader-exit-review.mjs \
+            supabase/functions/_shared/leader-entry-protection.mjs \
+            supabase/functions/_shared/leader-protection-adapter.mjs \
+            supabase/functions/_shared/leader-native-protection.mjs \
+            supabase/functions/_shared/leader-entry-settlement.mjs \
+            supabase/functions/_shared/leader-exit-settlement.mjs \
+            supabase/functions/_shared/leader-db-only-reconciliation.mjs \
+            supabase/functions/_shared/leader-entry-control.mjs \
+            supabase/functions/_shared/leader-ops-isolation.mjs \
+            supabase/functions/_shared/leader-fill-evidence.mjs \
+            supabase/functions/_shared/leader-qv3-runtime.mjs \
+            supabase/functions/_shared/leader-qv3-rules.mjs \
+            supabase/functions/_shared/leader-e1-runtime.mjs \
+            supabase/functions/_shared/leader-b06133-entry.mjs \
+            supabase/functions/_shared/leader-cec0040.mjs \
+            supabase/functions/_shared/leader-pullback-reaccel.mjs \
+            supabase/functions/_shared/boo \
+            supabase/functions/v10-lane-executor/entry-evidence.mjs \
+            supabase/functions/v10-lane-executor/boo-entry-adapter.mjs \
+            supabase/functions/v10-lane-executor/v24-entry-adapter.mjs \
+            supabase/functions/v10-lane-executor/v24-leader-continuation.mjs
+          grep -Fq 'targetMarginUsdt: 200' supabase/functions/_shared/leader-slot-sizing.mjs
+          grep -Fq 'leverage: 3' supabase/functions/_shared/leader-slot-sizing.mjs
+          grep -Fq 'const MAX_SLOTS=10' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'const SETUP_MAX_CONCURRENT=4' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'PATCH="CEC0040-P142-DEPLOYMENT-READY-1"' supabase/functions/v10-lane-executor/index.ts
+          git diff --stat "$FROZEN_BASE" HEAD -- supabase/functions > release-evidence/source-diff-stat.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Regression tests (GPT reviewer, journal SQL on PGlite, executor/policy suites)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/pglite && (cd /tmp/pglite && npm init -y >/dev/null && npm i --no-audit --no-fund @electric-sql/pglite@0.3 >/dev/null)
+          export PGLITE_MODULE=/tmp/pglite/node_modules/@electric-sql/pglite/dist/index.js
+          node --test \
+            development/gpt-final-review/tests/*.test.mjs \
+            supabase/functions/_shared/*.test.mjs \
+            supabase/functions/v10-lane-executor/*.test.mjs \
+            | tee release-evidence/tests.tap
+          grep -E '^# (tests|pass|fail)' release-evidence/tests.tap
+          grep -Eq '^# fail 0$' release-evidence/tests.tap
+
+      - name: Type-check and import graph of the target
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm exec --yes --package=deno@2.5.6 -- deno check "supabase/functions/${{ inputs.target }}/index.ts"
+          npm exec --yes --package=deno@2.5.6 -- deno info --json "supabase/functions/${{ inputs.target }}/index.ts" > release-evidence/import-graph.json
+          node -e "const g=require('./release-evidence/import-graph.json');const local=g.modules.filter(m=>m.specifier.startsWith('file://')).map(m=>m.specifier.split('/supabase/functions/')[1]).sort();console.log(JSON.stringify(local));require('fs').writeFileSync('release-evidence/local-modules.json',JSON.stringify(local,null,2));if(g.modules.some(m=>m.error))process.exit(1)"
+
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Pin production version before deploy
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          TARGET: ${{ inputs.target }}
+          EXPECTED: ${{ inputs.expected_version_before }}
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-before.json
+          python3 - <<'PY'
+          import json,os
+          x=json.load(open('release-evidence/functions-before.json'));x=x.get('functions',x) if isinstance(x,dict) else x
+          row=next((r for r in x if r.get('slug')==os.environ['TARGET']),None)
+          if os.environ['EXPECTED']=='0': assert row is None, row
+          else:
+              assert row and str(row['version'])==os.environ['EXPECTED'] and row.get('verify_jwt') is False, row
+          PY
+
+      - name: Deploy target
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy "${{ inputs.target }}" --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt --use-api
+
+      - name: Prove deployed bundle equals this ref
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          TARGET: ${{ inputs.target }}
+          EXPECTED: ${{ inputs.expected_version_before }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-after.json
+          python3 - <<'PY'
+          import json,os
+          x=json.load(open('release-evidence/functions-after.json'));x=x.get('functions',x) if isinstance(x,dict) else x
+          row=next(r for r in x if r.get('slug')==os.environ['TARGET'])
+          assert row['status']=='ACTIVE' and row.get('verify_jwt') is False and int(row['version'])==int(os.environ['EXPECTED'])+1, row
+          print(json.dumps({'slug':row['slug'],'version':row['version'],'ezbr_sha256':row.get('ezbr_sha256')}))
+          json.dump(row,open('release-evidence/deployed-row.json','w'))
+          PY
+          mkdir -p release-evidence/download
+          supabase functions download "$TARGET" --project-ref "$SUPABASE_PROJECT_REF" --use-api --workdir "$PWD/release-evidence/download"
+          node ops/gpt-final-review/verify-bundle-parity.mjs release-evidence/download . "$TARGET" | tee release-evidence/bundle-parity.json
+          echo "source_sha=$GITHUB_SHA" | tee -a release-evidence/bundle-parity.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gpt-final-review-release-${{ inputs.target }}
+          path: release-evidence
