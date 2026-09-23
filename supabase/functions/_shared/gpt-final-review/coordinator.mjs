@@ -52,7 +52,8 @@ export class FinalReviewCoordinator {
     this.profile=profile;this.purpose=purpose;const wire=profileOf(profile).wire;
     this.tickets=new Map();this.tracked=new Map();this.pending=new Map();this.readyHints=new Map();this.yieldArmed=false;
     this.promptHash=hash(promptFor(wire));this.schemaHash=hash(wireSchema(wire));
-    this.binding=hash({version:VERSION,model:MODEL,prompt:promptFor(wire),schema:OUTPUT_SCHEMA,wireSchema:wireSchema(wire),limits:LIMITS,profile:profileOf(profile)});
+    // purpose is bound so PRODUCTION, DRYRUN and VERIFICATION reviews of one candidate never share a row.
+    this.binding=hash({version:VERSION,model:MODEL,prompt:promptFor(wire),schema:OUTPUT_SCHEMA,wireSchema:wireSchema(wire),limits:LIMITS,profile:profileOf(profile),purpose});
   }
   setConfig(config){this.config=config;}
   authorized(){const c=this.config;return c.modeValid!==false&&c.approvalRef.length>0&&c.apiBudgetUsd>=MAX_RESERVED_USD&&
