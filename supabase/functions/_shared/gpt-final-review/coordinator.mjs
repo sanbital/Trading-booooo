@@ -1,19 +1,37 @@
-import {WIRE_OUTPUT_SCHEMA_V4 as WIRE_OUTPUT_SCHEMA,parseApiResponseV4 as parseApiResponse} from './wire-v4.mjs';
+import {wireSchema,parseApiResponseWire} from './wire-v4.mjs';
 import {VERSION,MODEL,LIMITS,OUTPUT_SCHEMA,canonical,hash,baselineAllowed,decisionIdentity,triggerExpiry,validateAnswer,ensure} from './contract.mjs';
-import {SYSTEM_PROMPT} from './prompt.mjs';
+import {promptFor} from './prompt.mjs';
 import {collectMarket,buildPacket,packetHash} from './market.mjs';
-import {callFinalReviewer} from './openai.mjs';
-export const MAX_RESERVED_USD=.10; // Conservative ceiling for the bounded packet/output, not measured spend.
+import {callFinalReviewer,DEFAULT_PROFILE,profileOf} from './openai.mjs';
+export const MAX_RESERVED_USD=.10; // Conservative per-call reservation; settled to documented token cost after the call.
+/** Human-readable release label stored with every review (source_commit column). */
+export const RELEASE='gpt-final-review-v5-20260923';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const MODES=['OFF','SHADOW','ENFORCE'];
+/** Legacy env-only configuration (tests and emergency override). */
 export function configFromEnv(get){
   const requested=String(get('GPT_FINAL_REVIEW_MODE')||'OFF').toUpperCase();
-  const mode=['OFF','SHADOW','ENFORCE'].includes(requested)?requested:'ENFORCE';
-  return Object.freeze({mode,modeValid:['OFF','SHADOW','ENFORCE'].includes(requested),
+  const mode=MODES.includes(requested)?requested:'ENFORCE';
+  return Object.freeze({mode,modeValid:MODES.includes(requested),
     approvalRef:String(get('GPT_FINAL_REVIEW_API_APPROVAL')||''),apiBudgetUsd:Number(get('GPT_FINAL_REVIEW_DAILY_BUDGET_USD')||0),
     maxCalls:Number(get('GPT_FINAL_REVIEW_MAX_CALLS_PER_DAY')||0),
-    enforceApproved:get('GPT_FINAL_REVIEW_ENFORCE_APPROVED')==='true'});
+    enforceApproved:get('GPT_FINAL_REVIEW_ENFORCE_APPROVED')==='true',source:'ENV'});
 }
-/** Test-only store; the executor uses the durable Supabase store below, never this one. */
+/** Production configuration: the gpt_final_review_control row is the authority.
+ * GPT_FINAL_REVIEW_MODE=OFF in the function environment is an emergency kill that
+ * restores the existing model path regardless of the row. An unreadable row fails
+ * closed for candidates (ENFORCE without authorization => candidate ABSTAIN). */
+export function configFromControl(row,get=()=>''){
+  if(String(get('GPT_FINAL_REVIEW_MODE')||'').toUpperCase()==='OFF')
+    return Object.freeze({mode:'OFF',modeValid:true,approvalRef:'',apiBudgetUsd:0,maxCalls:0,enforceApproved:false,source:'ENV_KILL'});
+  if(!row||typeof row!=='object')
+    return Object.freeze({mode:'ENFORCE',modeValid:false,approvalRef:'',apiBudgetUsd:0,maxCalls:0,enforceApproved:false,source:'CONTROL_UNREADABLE'});
+  const mode=String(row.mode??'').toUpperCase();
+  return Object.freeze({mode:MODES.includes(mode)?mode:'ENFORCE',modeValid:MODES.includes(mode),
+    approvalRef:String(row.approval_ref??''),apiBudgetUsd:Number(row.daily_cap_usd??0),maxCalls:Number(row.max_calls_per_day??0),
+    enforceApproved:row.enforce_approved===true,source:'DB_CONTROL'});
+}
+/** Test-only store; the executor uses the durable Supabase store, never this one. */
 export class MemoryReviewStore {
   rows=new Map();reserved=0;calls=0;
   async claim(key,record,config){
@@ -24,15 +42,19 @@ export class MemoryReviewStore {
     return {created:true,row:structuredClone(row)};
   }
   async get(key){return structuredClone(this.rows.get(key)??null);}
-  async save(key,owner,state,record){const old=this.rows.get(key);ensure(old?.owner===owner&&old.state==='RUNNING','REVIEW_WRITE_CAS');
-    this.rows.set(key,{...old,state,record:structuredClone(record)});return true;}
+  async complete(key,owner,record){const old=this.rows.get(key);ensure(old?.owner===owner&&old.state==='RUNNING','REVIEW_RESULT_CAS');
+    this.rows.set(key,{...old,state:'DONE',record:structuredClone(record)});return true;}
 }
 export class FinalReviewCoordinator {
-  constructor({config,store,apiKey=()=>'',fetchFn=fetch,market=collectMarket,now=Date.now,schedule=p=>{p.catch(()=>{});}}){
+  constructor({config,store,apiKey=()=>'',fetchFn=fetch,market=collectMarket,now=Date.now,schedule=p=>{p.catch(()=>{});},
+    profile=DEFAULT_PROFILE,purpose='PRODUCTION'}){
     this.config=config;this.store=store;this.apiKey=apiKey;this.fetchFn=fetchFn;this.market=market;this.now=now;this.schedule=schedule;
+    this.profile=profile;this.purpose=purpose;const wire=profileOf(profile).wire;
     this.tickets=new Map();this.tracked=new Map();this.pending=new Map();this.readyHints=new Map();this.yieldArmed=false;
-    this.binding=hash({version:VERSION,model:MODEL,prompt:SYSTEM_PROMPT,schema:OUTPUT_SCHEMA,wireSchema:WIRE_OUTPUT_SCHEMA,limits:LIMITS});
+    this.promptHash=hash(promptFor(wire));this.schemaHash=hash(wireSchema(wire));
+    this.binding=hash({version:VERSION,model:MODEL,prompt:promptFor(wire),schema:OUTPUT_SCHEMA,wireSchema:wireSchema(wire),limits:LIMITS,profile:profileOf(profile)});
   }
+  setConfig(config){this.config=config;}
   authorized(){const c=this.config;return c.modeValid!==false&&c.approvalRef.length>0&&c.apiBudgetUsd>=MAX_RESERVED_USD&&
     Number.isInteger(c.maxCalls)&&c.maxCalls>0&&!!this.apiKey()&&(c.mode!=='ENFORCE'||c.enforceApproved===true);}
   async consider(s){
@@ -43,27 +65,33 @@ export class FinalReviewCoordinator {
     for(const [k,h] of this.readyHints)if(h.signalId===String(s?.id))this.readyHints.delete(k);
     const deny=reason=>({allowed:shadow,reason,decision:'ABSTAIN',scope:'CANDIDATE'});
     if(!baselineAllowed(s))return deny('BASELINE_REJECT_OR_INVALID');
-    if(!this.authorized())return deny('GPT_REVIEW_NOT_CONFIGURED_OR_APPROVED');
+    if(!this.authorized())return deny(this.config.source==='CONTROL_UNREADABLE'?'GPT_CONTROL_UNREADABLE':'GPT_REVIEW_NOT_CONFIGURED_OR_APPROVED');
     const now=this.now(),expires=triggerExpiry(s);
     if(now>=expires-LIMITS.executionReserveMs)return deny('GPT_TRIGGER_EXPIRED');
+    let key;
     try{
       const identity=decisionIdentity(s),identityJson=canonical(identity),binding=await this.binding;
-      const key=await hash({binding,identity});this.tracked.set(key,{identityJson,s:structuredClone(s),expires});
+      key=await hash({binding,identity});this.tracked.set(key,{identityJson,s:structuredClone(s),expires});
       let row=await this.store.get(key);
       if(!row){
         const record={version:VERSION,binding,identity,identity_json:identityJson,expires_at_ms:expires,
-          reserved_usd:MAX_RESERVED_USD,api_approval_ref:this.config.approvalRef,packet:null,result:null};
-        const claimed=await this.store.claim(key,record,this.config);row=claimed.row;
+          reserved_usd:MAX_RESERVED_USD,api_approval_ref:this.config.approvalRef,purpose:this.purpose,wire_profile:this.profile,
+          prompt_hash:await this.promptHash,schema_hash:await this.schemaHash,source_commit:RELEASE,packet:null,result:null};
+        let claimed;
+        try{claimed=await this.store.claim(key,record,this.config);}
+        catch(e){if(/API_BUDGET_EXHAUSTED/.test(String(e?.message??e)))return deny('GPT_API_BUDGET_EXHAUSTED');throw e;}
+        row=claimed.row;
         if(claimed.created){
           // Only the independent promise waits for the API. No trading lease is passed.
           const task=this.work(key,row.owner,record).catch(()=>false).finally(()=>this.pending.delete(key));
           this.pending.set(key,task);this.schedule(task);
         }
       }
+      // RUNNING rows are never re-called: an uncertain request stays pending until TTL.
       if(row.state!=='DONE')return deny('GPT_REVIEW_PENDING');
       const checked=await this.validateStored(row,identityJson,expires,binding);
       if(checked.valid)this.tickets.set(String(s.id),checked.ticket);
-      return {allowed:shadow||checked.allowed,reason:checked.reason,decision:checked.decision,scope:'CANDIDATE'};
+      return {allowed:shadow||checked.allowed,reason:checked.reason,decision:checked.decision,scope:'CANDIDATE',jobKey:key};
     }catch{return deny('GPT_REVIEW_STORAGE_OR_VALIDATION_ERROR');}
   }
   async work(key,owner,record){
@@ -75,12 +103,12 @@ export class FinalReviewCoordinator {
       // Snapshot persistence before the paid request; failures cannot lead to an unrecorded PASS.
       if(this.store.snapshot)await this.store.snapshot(key,owner,record);
       record.result=await callFinalReviewer(record.packet,{apiKey:this.apiKey(),fetchFn:this.fetchFn,now:this.now,
-        deadlineMs:record.valid_until_ms});
+        deadlineMs:record.valid_until_ms,profile:this.profile});
     }catch{
       record.result={origin:'LOCAL_DATA_ERROR',valid:false,decision:'ABSTAIN',error:'REVIEW_PREPARATION_FAILED',
-        attempted:false,api_cost_usd:0,completed_at_ms:this.now()};
+        attempted:false,api_cost_usd:0,completed_at_ms:this.now(),model_requested:MODEL,wire_profile:this.profile};
     }
-    await this.store.save(key,owner,'DONE',record);
+    await this.store.complete(key,owner,record);
     // Mark ready only after durable save and complete raw-response validation.
     // This hint can shorten observation waiting, but a new lease cycle still
     // rereads and validates the journal before it creates an entry ticket.
@@ -98,9 +126,10 @@ export class FinalReviewCoordinator {
     if(!Number.isSafeInteger(z?.completed_at_ms)||z.completed_at_ms>now||z.completed_at_ms<r.snapshot_at_ms||
       !Number.isSafeInteger(r.valid_until_ms)||r.valid_until_ms!==Math.min(expires-LIMITS.executionReserveMs,r.snapshot_at_ms+LIMITS.reviewMaxAgeMs)||
       now>=r.valid_until_ms||z.completed_at_ms>=r.valid_until_ms)return deny('GPT_STALE_OR_FUTURE_REVIEW');
-    if(z.origin!=='OPENAI_API'||!z.valid||!z.raw_response||z.model_requested!==MODEL||z.raw_response.model!==MODEL||!z.request_id)
+    if(z.origin!=='OPENAI_API'||!z.valid||!z.raw_response||z.model_requested!==MODEL||z.raw_response.model!==MODEL||!z.request_id||
+      z.wire_profile!==this.profile)
       return deny('GPT_NO_VALID_API_RESPONSE');
-    const answer=validateAnswer(parseApiResponse(z.raw_response,r.packet),r.packet);
+    const answer=validateAnswer(parseApiResponseWire(z.raw_response,r.packet,profileOf(this.profile).wire),r.packet);
     const ticket={identityJson,decision:answer.decision,validUntil:r.valid_until_ms,expires,
       candidateId:r.packet.candidate_id,snapshotHash:r.packet.snapshot_hash,model:MODEL,summary:answer.summary};
     return {valid:true,allowed:answer.decision==='PASS',decision:answer.decision,reason:'GPT_'+answer.decision,ticket};

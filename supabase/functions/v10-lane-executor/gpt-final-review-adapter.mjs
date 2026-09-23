@@ -1,9 +1,10 @@
-import {FinalReviewCoordinator,configFromEnv} from '../_shared/gpt-final-review/coordinator.mjs';
-import {SupabaseReviewStore} from '../_shared/gpt-final-review/supabase-store.mjs';
+import {FinalReviewCoordinator,configFromControl} from '../_shared/gpt-final-review/coordinator.mjs';
+import {SupabaseReviewStore,readReviewControl} from '../_shared/gpt-final-review/supabase-store.mjs';
 const contexts=new WeakMap();
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
 export function coordinatorFor(db){
-  if(!contexts.has(db))contexts.set(db,new FinalReviewCoordinator({config:configFromEnv(getenv),
+  // Until the control row is read, the coordinator is OFF: no DB/API work at all.
+  if(!contexts.has(db))contexts.set(db,new FinalReviewCoordinator({config:configFromControl({mode:'OFF'},getenv),
     store:new SupabaseReviewStore(db),apiKey:()=>getenv('OPENAI_API_KEY'),
     schedule:promise=>{if(globalThis.EdgeRuntime?.waitUntil)EdgeRuntime.waitUntil(promise);else promise.catch(()=>{});}}));
   return contexts.get(db);
@@ -11,6 +12,9 @@ export function coordinatorFor(db){
 /** One journal lookup per existing-approved candidate. No API await or signal claim. */
 export async function gptFilterExecutable(db,executable){
   const c=coordinatorFor(db);
+  // No candidate: no control read, no journal I/O. Existing path unchanged.
+  if(!executable.length)return {candidates:executable,reason:c.config.mode};
+  if(!c.injected)c.setConfig(configFromControl(await readReviewControl(db).catch(()=>null),getenv));
   if(c.config.mode==='OFF')return {candidates:executable,reason:'OFF'};
   if(c.config.mode==='SHADOW'){
     // Even journal I/O must not sit on the original entry/quote timing path.
@@ -38,4 +42,4 @@ export async function runWithGptReview(db,runWithLease){
   return {...second,gptFinalReview:{mode:c.config.mode,rechecked:true,firstCycleEntry:first.entry??null}};
 }
 // Dependency injection for isolated tests only; not exposed as an HTTP operation.
-export function setTestCoordinator(db,c){contexts.set(db,c);}
+export function setTestCoordinator(db,c){c.injected=true;contexts.set(db,c);}
