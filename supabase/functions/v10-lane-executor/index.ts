@@ -1,6 +1,8 @@
 // @ts-nocheck
 import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode,entryPriceEvidence} from "./entry-evidence.mjs";
 import {gptFilterExecutable,gptFinalCheck,runWithGptReview,gptReviewReadyToResume} from "./gpt-final-review-adapter.mjs";
+import {dryRunCoordinator,dryRunReviewPhase} from "./gpt-final-review-dryrun.mjs";
+import {readReviewControl} from "../_shared/gpt-final-review/supabase-store.mjs";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 import {POLICY, STRATEGY, ENTRY_EXECUTION_POLICY_VERSION, entryFresh, postFillEntryGuard, nextExit, portfolioMatches as leaderPortfolioMatches} from "../_shared/leader-momentum-v17.mjs";
 import {nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5, exitAttemptId, classifyExitResponse} from "../_shared/leader-exit-review.mjs";
@@ -1616,6 +1618,11 @@ async function attemptOpsRecovery(db,pair,protectedIds) {
   const r=await db.rpc("v19_account_recovery_observation",{p_owner:leaseOwners.get(db),p_incident_id:evidence.incidentId,p_generation:evidence.generation,
     p_evidence_version:ENTRY_CONTROL_VERSION,p_evidence:{...evidence,observation:after.pf.observation,
       positions:after.positions.map(p=>({id:p.id,updated_at:p.updated_at,quantity:p.remaining_quantity})),ordersObservedAt:live.observed_at_ms}});
+  // A lock timeout rolls the whole recovery transaction back: nothing changed and no
+  // observation was recorded. Report it in this cycle's recovery result and retry on a
+  // later cycle (SQL still enforces freshness/independence). Other errors stay fatal.
+  if(r.error&&/lock timeout|55P03/i.test(`${r.error.code??""} ${r.error.message??""}`))
+    return {resolved:false,reason:"RECOVERY_LOCK_BUSY",retryable:true};
   if(r.error)throw Error(`RECOVERY_CAS:${r.error.message}`);return r.data;
 }
 function x1TopObservation(row,p,at){
@@ -2337,6 +2344,84 @@ async function verifyExecutionLease(db,allowBudgetExceeded=false){
   const r=await db.rpc("v17_verify_execution_lease",{p_owner:owner});
   if(r.error||r.data!==true)throw new Error("V17_EXECUTION_LEASE_EXPIRED");
 }
+// READ-ONLY account/order/GPT readiness. No lease, no DB writes, no exchange writes.
+async function opsReadiness(db){
+  const [pf,oo,rt,positions,orders,control]=await Promise.all([gateway({action:"p10_portfolio"}),gateway({action:"v18_open_orders"}),
+    db.from("v11_long_regime_runtime").select("circuit_open,circuit_reason,incident_kind,incident_generation,last_error,entry_block_reason,protection_health,last_cycle_completed_at").eq("singleton",true).single(),
+    db.from("v11_long_regime_positions").select("id,symbol,remaining_quantity").eq("state","OPEN").limit(MAX_SLOTS+1),
+    db.from("v11_long_regime_orders").select("id,symbol,state").in("state",["PLANNED","DISPATCHED","RECONCILIATION_PENDING","RECONCILIATION_FAILED"]).limit(101),
+    readReviewControl(db)]);
+  const ex=active(pf).map(x=>({symbol:sym(x),quantity:qty(x)}));
+  return {ok:true,revision:REVISION,patch:PATCH,observedAt:new Date().toISOString(),
+    binance:{positionsComplete:pf?.positions_complete===true,positions:ex,positionCount:ex.length,availableQuote:N(pf?.available_quote,null),
+      openOrdersComplete:oo?.complete===true,ordinaryOrderCount:Array.isArray(oo?.orders)?oo.orders.length:null,
+      conditionalOrderCount:Array.isArray(oo?.algos)?oo.algos.length:null,ordersObservedAtMs:oo?.observed_at_ms??null},
+    db:{openPositionCount:(positions.data??[]).length,openPositions:positions.data??[],unresolvedOrderCount:(orders.data??[]).length,unresolvedOrders:orders.data??[]},
+    runtime:rt.data??null,gptControl:control,openaiKeyPresent:(env("OPENAI_API_KEY")||"").length>0,maxSlots:MAX_SLOTS,
+    sizing:{targetMarginUsdt:MARGIN,leverage:LEV}};
+}
+// ORDER-FREE end-to-end GPT dry run for one real engine-approved candidate (replayed on a
+// clock shifted to trigger+offset). Phase 1 runs the API with NO lease. Phase 2 takes a
+// fresh ordinary execution lease, re-reads the journal and re-checks every entry guard with
+// current account state, then STOPS: it never claims the signal, never writes an intent,
+// never calls create_order, and persists nothing but the DRYRUN journal row.
+async function gptDryRun(db,body){
+  const signalId=String(body.signalId??"");if(!/^[0-9a-f-]{36}$/i.test(signalId))return{ok:false,error:"SIGNAL_ID"};
+  const row=await db.from("v11_long_regime_signals").select("*").eq("id",signalId).maybeSingle();
+  if(row.error||!row.data)return{ok:false,error:"SIGNAL_NOT_FOUND"};
+  const s={...row.data,status:"NEW"},f=rec(s.features),trigger=Number(rec(f.v17Setup).triggerAt);
+  if(!Number.isSafeInteger(trigger))return{ok:false,error:"TRIGGER_MISSING"};
+  const runId=String(body.runId??crypto.randomUUID()).slice(0,60),apiKey=env("OPENAI_API_KEY")||"";
+  const c=dryRunCoordinator(db,{triggerAt:trigger,offsetMs:Number(body.offsetMs??4000),runId,apiKey});
+  // Phase 1: GPT outside any lease. Optionally a normal leased management cycle runs at the
+  // same time to show protection/exit work is not blocked by the API call.
+  const cycleP=body.withCycle===true?runWithLease(db).then(r=>({ok:r?.ok,skipped:r?.skipped??null,protectionHealth:r?.protectionHealth??null,
+    x1:r?.x1Runtime?{endedReason:r.x1Runtime.endedReason??null,observations:r.x1Runtime.observations??null}:null,entryReason:r?.entry?.reason??null,recovery:r?.recovery??null}))
+    .catch(e=>({error:String(e?.message??e).slice(0,200)})):Promise.resolve(null);
+  const review=await dryRunReviewPhase(c,s),concurrentCycle=await cycleP;
+  // Phase 2: new ordinary lease; re-read the stored result and re-run the guards.
+  const guardOp=async db=>{
+    const t=Date.now(),reread=await c.consider(s),gpt=c.check(s),reasons=[];
+    const sel=rec(f.b06133),cec=rec(f.cec0040),g={};
+    g.baseline=review.baselineAllowed;if(!g.baseline)reasons.push("EXISTING_MODEL_NOT_APPROVED");
+    g.gpt={reread:reread.reason,decision:reread.decision??null,check:gpt.reason,allowed:gpt.allowed};if(!gpt.allowed)reasons.push("GPT:"+gpt.reason);
+    const ep=rec(f.exitPolicy);g.exitPolicyValid=Object.values(ep).every(v=>Number.isFinite(Number(v)))&&Number(ep.stopPct)>0&&Number(ep.stopPct)<1&&Number(ep.trailArmPct)>0&&Number(ep.trailGapPct)>0&&Number(ep.trailGapPct)<1&&Number(ep.maxHoldMs)===POLICY.maxHoldMs&&Number(ep.staleMs)>0;
+    if(!g.exitPolicyValid)reasons.push("V17_EXIT_POLICY_INVALID");
+    const cp=await db.rpc("v11_cec0040_preview_readonly",{p_signal_id:s.id,p_decision_at:new Date(trigger).toISOString(),p_symbol:String(s.symbol).toUpperCase(),p_branch:sel.branch??"R62"});
+    g.cecPreview=cp.error?{error:cp.error.message}:cp.data;
+    try{await requireLeaderEntryControls(db);g.leaderControls="PASS";}catch(e){g.leaderControls=String(e?.message??e);reasons.push(g.leaderControls);}
+    const gw=opsGateway(db),controls=await opsControls(db);
+    const [sn,q,i,pair,orders]=await Promise.all([snap(db).catch(e=>({error:String(e.message)})),gw({action:"quote",market:s.symbol}),gw({action:"symbol_info",market:s.symbol}),
+      readOpsPair(db,gw,s.symbol),gw({action:"v18_open_orders"},5000)]);
+    const bid=N(q?.best_bid),ask=N(q?.best_ask),sp=bid>0&&ask>0?(ask/bid-1)*10000:999,filters=symbolFilters(i);
+    let sized=null;try{sized=sizeEntry(ask,filters.quantityStep,filters);}catch(e){reasons.push("SIZING:"+String(e?.message??e));}
+    g.quote={bid,ask,spreadBps:sp,spreadOk:sp<=SPREAD_MAX};if(!(sp<=SPREAD_MAX))reasons.push("ENTRY_SPREAD");
+    g.sizing=sized?{targetMarginUsdt:MARGIN,leverage:LEV,sizedMargin:sized.sizedMargin,orderNotionalUsdt:sized.orderNotionalUsdt,limitPrice:sized.limitPrice,boundBy:sized.boundBy}:null;
+    const avail=Math.min(N(sn?.available_quote,NaN),N(pair.pf?.available_quote,NaN));
+    g.margin={availableUsdt:avail,required:sized?sized.sizedMargin+ENTRY_CASH_BUFFER_USDT:null,ok:!!sized&&avail>=sized.sizedMargin+ENTRY_CASH_BUFFER_USDT};if(!g.margin.ok)reasons.push("ENTRY_MARGIN_INSUFFICIENT");
+    g.slots={exchangePositions:active(pair.pf).length,maxSlots:MAX_SLOTS,ok:active(pair.pf).length<MAX_SLOTS};if(!g.slots.ok)reasons.push("V11_SLOT_FULL");
+    g.duplicate={symbolOpen:pair.positions.some(p=>String(p.symbol).toUpperCase()===String(s.symbol).toUpperCase()),
+      pendingSymbolOrders:pair.orders.filter(o=>String(o.symbol).toUpperCase()===String(s.symbol).toUpperCase()&&["PLANNED","DISPATCHED","RECONCILIATION_PENDING","RECONCILIATION_FAILED"].includes(o.state)).length,
+      intentId:cid("v11e",s.id)};
+    const dupIntent=await db.from("v11_long_regime_orders").select("id,state").eq("client_order_id",g.duplicate.intentId).limit(1);
+    g.duplicate.existingIntent=(dupIntent.data??[]).length>0;
+    if(g.duplicate.symbolOpen||g.duplicate.pendingSymbolOrders||g.duplicate.existingIntent)reasons.push("DUPLICATE_ORDER_PROTECTION");
+    const decision=decideEntryWith(controls,pair,s.symbol,orders,{proposedMargin:sized?.sizedMargin??0,cashBuffer:ENTRY_CASH_BUFFER_USDT});
+    g.entryControl={allowed:decision.allowed,scope:decision.scope??null,reasons:decision.reasons??[]};if(!decision.allowed)reasons.push("ENTRY_CONTROL:"+(decision.reasons??[]).join(","));
+    g.circuit={open:controls.runtime.circuit_open,reason:controls.runtime.circuit_reason,incidentKind:controls.runtime.incident_kind};if(controls.runtime.circuit_open)reasons.push("CIRCUIT_OPEN");
+    const attempt={},fresh=sized?checkedEntryFresh(s,f,Date.now(),sized.limitPrice,attempt,"DRYRUN_PRICE",q):"NO_PRICE";
+    g.freshness={reason:fresh??null,note:"real-time price vs historical trigger reference; a replayed candidate is expected to be stale here"};if(fresh)reasons.push("ENTRY_FRESHNESS:"+fresh);
+    const verdict=g.gpt.decision==="VETO"?"WOULD_VETO":!gpt.allowed?"WOULD_ABSTAIN":reasons.length?"WOULD_NOT_EXECUTE":"WOULD_EXECUTE";
+    return{ok:true,verdict,stoppedBeforeOrderEndpoint:true,orderCalls:0,reasons,guards:g,phase2Ms:Date.now()-t};
+  };
+  // The ordinary cron cycle may hold the lease; wait for it like any next cycle would.
+  let guarded=null,leaseWaits=0;
+  for(;leaseWaits<60;leaseWaits++){guarded=await runWithLease(db,guardOp);if(!guarded?.skipped)break;await new Promise(r=>setTimeout(r,1000));}
+  if(guarded)guarded.leaseWaits=leaseWaits;
+  const job=await db.from("gpt_final_entry_reviews").select("job_key,state,purpose,decision,valid,error,request_id,input_tokens,cached_input_tokens,output_tokens,api_cost_usd,settled_usd,latency_ms,model,prompt_hash,schema_hash,source_commit,candidate_id,snapshot_hash").eq("signal_id",s.id).eq("purpose","DRYRUN").order("created_at",{ascending:false}).limit(1).maybeSingle();
+  return{ok:true,revision:REVISION,patch:PATCH,signal:{id:s.id,symbol:s.symbol,historicalStatus:row.data.status,historicalRejectReason:row.data.reject_reason,branch:rec(f.b06133).branch??null,cecAction:rec(f.cec0040).action??null,triggerAt:trigger},
+    review,concurrentCycle,guarded,journal:job.data??null};
+}
 async function runWithLease(db,operation=run){
   const owner=crypto.randomUUID();
   const lock=await db.rpc("v17_acquire_execution_lease",{p_owner:owner});
@@ -2404,6 +2489,8 @@ Deno.serve(async req=>{
         sizingContract:{...SLOT_SIZING_CONTRACT,...slotSizingBounds(SLOT_SIZING_CONTRACT),
           invariants:assertSlotSizingContract()},sizing});
     }
+    if(mode==="ops-readiness")return res(200,await opsReadiness(db));
+    if(mode==="gpt-dryrun")return res(200,await gptDryRun(db,body));
     if(mode==="cec-bootstrap")return res(200,await runWithLease(db,bootstrapCec0040));
     if(mode!=="run")return res(400,{ok:false,revision:REVISION,patch:PATCH,error:"MODE_UNSUPPORTED"});
     return res(200,await runWithGptReview(db,runWithLease));
