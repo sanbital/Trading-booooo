@@ -19,8 +19,11 @@ export async function gptFilterExecutable(db,executable){
   }
   const candidates=[],reviews=[];
   for(const s of executable){const r=await c.consider(s);reviews.push({signalId:s.id,...r});if(r.allowed)candidates.push(s);}
-  return {candidates,reason:reviews.some(r=>r.reason==='GPT_REVIEW_PENDING')?'GPT_REVIEW_PENDING':reviews.at(-1)?.reason??'GPT_NO_CANDIDATE',reviews};
+  const pending=reviews.some(r=>r.reason==='GPT_REVIEW_PENDING');
+  c.yieldArmed=candidates.length===0&&pending;
+  return {candidates,reason:pending?'GPT_REVIEW_PENDING':reviews.at(-1)?.reason??'GPT_NO_CANDIDATE',reviews};
 }
+export function gptReviewReadyToResume(db){return coordinatorFor(db).consumeReadyYield();}
 export function gptFinalCheck(db,s){return coordinatorFor(db).check(s);}
 /** The existing engine keeps its whole lease and protection/X1 behavior unchanged.
  * The API runs independently. Only after lease release may a completed PASS request

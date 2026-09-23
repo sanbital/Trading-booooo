@@ -1,0 +1,42 @@
+name: Audit ZRO closed trigger
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/audit-zro-closed-trigger.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Query current ZRO metadata and position triggers
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          {
+            echo "audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo 'ZRO_METADATA'
+            psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select metadata::text from public.trading_positions where id='111c5f48-27bf-4c26-9819-4f4ed7714577'::uuid"
+            echo 'ZRO_FIELDS'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select coalesce(metadata->'accounting_repair'->>'revision',''),coalesce(metadata->>'display_data_status',''),coalesce(metadata->>'exclude_from_learning',''),coalesce(metadata->>'pending_exit_action',''),coalesce(metadata->>'pending_exit_reason',''),coalesce(metadata->>'pending_exit_at','') from public.trading_positions where id='111c5f48-27bf-4c26-9819-4f4ed7714577'::uuid"
+            echo 'POSITION_TRIGGERS'
+            psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select tgname||E'\n'||pg_get_triggerdef(t.oid)||E'\n'||pg_get_functiondef(t.tgfoid) from pg_trigger t where t.tgrelid='public.trading_positions'::regclass and not t.tgisinternal order by tgname"
+          } > .github/zro-closed-trigger-audit.txt
+      - name: Commit audit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/zro-closed-trigger-audit.txt
+          git commit -m "chore: record closed position guard audit" || true
+          git pull --rebase origin main || true
+          git push origin HEAD:main || true

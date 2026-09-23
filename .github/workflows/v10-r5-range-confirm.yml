@@ -1,0 +1,33 @@
+name: V10 R5 RANGE Locked Confirmation
+
+on:
+  push:
+    branches:
+      - v10-continuation-20260830
+    paths:
+      - 'research/v10_continuation/r5-range-lock.json'
+      - 'research/v10_continuation/run_r5_range_confirm.py'
+      - '.github/workflows/v10-r5-range-confirm.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  confirm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: v10-cache-r3
+          key: v10-r3-binance-usdm-15m-2023-2025-v1
+      - name: Confirm pre-locked RANGE candidate on unused 2023 window
+        run: python research/v10_continuation/run_r5_range_confirm.py
+      - name: Upload confirmation result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v10-r5-range-confirm-result
+          path: research/v10_continuation/r5-range-confirm-result.json
+          if-no-files-found: error

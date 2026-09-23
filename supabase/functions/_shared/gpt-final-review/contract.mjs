@@ -1,5 +1,5 @@
 /** Decision-only contract. Never receives an exchange client, account or DB secret. */
-export const VERSION = 'GPT_FINAL_ENTRY_REVIEW_2';
+export const VERSION = 'GPT_FINAL_ENTRY_REVIEW_3_LATENCY';
 export const BASELINE_COMMIT = 'fea185c089932386d057a8abea14997007713b6d';
 export const MODEL = 'gpt-5.4-mini-2026-03-17';
 export const LIMITS = Object.freeze({requestMs:8000, executionReserveMs:3000,
@@ -78,9 +78,52 @@ export const OUTPUT_SCHEMA=obj({candidate_id:str(80),snapshot_hash:str(64),
     verdict:{type:'string',enum:['SUPPORTED','CONTRADICTED','UNKNOWN']},evidence_paths:{type:'array',maxItems:6,items:str(180)}})},
   supporting_evidence:{type:'array',maxItems:6,items:evidence},opposing_evidence:{type:'array',maxItems:6,items:evidence},
   missing_fields:{type:'array',maxItems:24,items:str(180)},summary:str(240)});
+
+/** Short transport keys and numeric evidence references only reduce serialization.
+ * Expand back into the original strict contract before ANY verdict can be used. */
+const refSchema={type:'integer',minimum:0,maximum:255};
+const compactEvidence=obj({p:refSchema,v:{type:['number','boolean','null']},u:str(40),n:str(80)});
+export const WIRE_OUTPUT_SCHEMA=obj({c:str(80),h:str(64),
+  d:{type:'string',enum:['PASS','VETO','ABSTAIN']},
+  a:{type:'string',enum:['SUPPORTED','CONTRADICTED','INSUFFICIENT_EVIDENCE']},
+  k:{type:'array',minItems:1,maxItems:8,items:obj({i:{type:'string',enum:[...FACTORS,'CURRENT_REACCELERATION']},
+    v:{type:'string',enum:['SUPPORTED','CONTRADICTED','UNKNOWN']},e:{type:'array',maxItems:6,items:refSchema}})},
+  s:{type:'array',maxItems:3,items:compactEvidence},o:{type:'array',maxItems:3,items:compactEvidence},
+  m:{type:'array',maxItems:24,items:refSchema},n:str(120)});
+export function evidenceReferences(packet){
+  const paths=[];
+  for(const root of ['original_model/metrics','original_model/factors','current_market/metrics']){
+    const [a,b]=root.split('/');
+    for(const key of Object.keys(packet?.[a]?.[b]??{}).sort()){
+      const path='/'+root+'/'+key;evidenceAt(packet,path);paths.push(path);
+    }
+  }
+  ensure(paths.length>0&&paths.length<=256,'EVIDENCE_REFERENCE_COUNT');return paths;
+}
+export function compactInput(packet){
+  const input={...packet,evidence_refs:evidenceReferences(packet)};
+  ensure(new TextEncoder().encode(JSON.stringify(input)).length<=LIMITS.inputBytes,'INPUT_TOO_LARGE');return input;
+}
+export function toWireAnswer(answer,packet){
+  const refs=evidenceReferences(packet),ref=p=>{const i=refs.indexOf(p);ensure(i>=0,'EVIDENCE_REFERENCE_UNKNOWN');return i;};
+  const ev=e=>({p:ref(e.field_path),v:e.observed_value,u:e.unit,n:e.interpretation});
+  return {c:answer.candidate_id,h:answer.snapshot_hash,d:answer.decision,a:answer.assessment,
+    k:answer.checked_claims.map(c=>({i:c.claim_id,v:c.verdict,e:c.evidence_paths.map(ref)})),
+    s:answer.supporting_evidence.map(ev),o:answer.opposing_evidence.map(ev),m:answer.missing_fields.map(ref),n:answer.summary};
+}
+export function expandWireAnswer(wire,packet){
+  validateShape(wire,WIRE_OUTPUT_SCHEMA);const refs=evidenceReferences(packet);
+  const path=i=>{ensure(Number.isSafeInteger(i)&&i>=0&&i<refs.length,'EVIDENCE_REFERENCE_INVALID');return refs[i];};
+  const ev=e=>({field_path:path(e.p),observed_value:e.v,unit:e.u,interpretation:e.n});
+  return {candidate_id:wire.c,snapshot_hash:wire.h,decision:wire.d,assessment:wire.a,
+    checked_claims:wire.k.map(c=>({claim_id:c.i,verdict:c.v,evidence_paths:c.e.map(path)})),
+    supporting_evidence:wire.s.map(ev),opposing_evidence:wire.o.map(ev),missing_fields:wire.m.map(path),summary:wire.n};
+}
+
 export function validateShape(v,s,p='$') {
   const ts=Array.isArray(s.type)?s.type:[s.type],t=v===null?'null':Array.isArray(v)?'array':typeof v;
-  ensure(ts.includes(t),`TYPE:${p}`);
+  ensure(ts.includes(t)||(t==='number'&&ts.includes('integer')&&Number.isSafeInteger(v)),`TYPE:${p}`);
+  if(t==='number'){ensure(v>=(s.minimum??-Infinity)&&v<=(s.maximum??Infinity),`NUMBER:${p}`);}
   if(s.enum)ensure(s.enum.includes(v),`ENUM:${p}`);
   if(t==='number')ensure(Number.isFinite(v),`NUMBER:${p}`);
   if(t==='string')ensure(v.length>=(s.minLength??0)&&v.length<=(s.maxLength??Infinity),`STRING:${p}`);
@@ -100,14 +143,15 @@ export function evidenceAt(packet,path) {
   for(const p of parts){ensure(Object.hasOwn(x,p),'EVIDENCE_MISSING');x=x[p];}
   ensure(x && Object.hasOwn(x,'value') && typeof x.unit==='string','EVIDENCE_NOT_METRIC');return x;
 }
-export function parseApiResponse(raw) {
+export function parseApiResponse(raw,packet=null) {
   ensure(raw?.status==='completed'&&!raw.error&&!raw.incomplete_details,'API_INCOMPLETE');
   const chunks=[];
   for(const m of raw.output??[]) {
     ensure(m.type==='message'||m.type==='reasoning','UNEXPECTED_API_TOOL');
     for(const c of m.content??[]){ensure(c.type!=='refusal','API_REFUSAL');if(c.type==='output_text')chunks.push(c.text);}
   }
-  ensure(chunks.length===1,'API_OUTPUT_COUNT');return JSON.parse(chunks[0]);
+  ensure(chunks.length===1,'API_OUTPUT_COUNT');const parsed=JSON.parse(chunks[0]);
+  return packet?expandWireAnswer(parsed,packet):parsed;
 }
 export function validateAnswer(answer,packet) {
   validateShape(answer,OUTPUT_SCHEMA);

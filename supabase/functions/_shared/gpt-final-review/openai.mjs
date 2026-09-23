@@ -1,11 +1,11 @@
-import {MODEL,LIMITS,OUTPUT_SCHEMA,ensure,parseApiResponse,validateAnswer} from './contract.mjs';
+import {MODEL,LIMITS,WIRE_OUTPUT_SCHEMA,compactInput,ensure,parseApiResponse,validateAnswer} from './contract.mjs';
 import {SYSTEM_PROMPT} from './prompt.mjs';
 export const API_URL='https://api.openai.com/v1/responses';
 export const PRICING=Object.freeze({inputPerMillion:.75,cachedPerMillion:.075,outputPerMillion:4.5,verified:'2026-09-23'});
-export function payloadFor(packet){return {model:MODEL,store:false,tools:[],truncation:'disabled',service_tier:'default',
+export function payloadFor(packet){return {model:MODEL,store:false,tools:[],truncation:'disabled',service_tier:'default',prompt_cache_key:'boo-final-review-v3-latency',
   reasoning:{effort:'none'},max_output_tokens:LIMITS.outputTokens,
-  input:[{role:'system',content:SYSTEM_PROMPT},{role:'user',content:JSON.stringify(packet)}],
-  text:{format:{type:'json_schema',name:'current_entry_final_review_v2',strict:true,schema:OUTPUT_SCHEMA}}};}
+  input:[{role:'system',content:SYSTEM_PROMPT},{role:'user',content:JSON.stringify(compactInput(packet))}],
+  text:{format:{type:'json_schema',name:'entry_final_review_v3_compact',strict:true,schema:WIRE_OUTPUT_SCHEMA}}};}
 export function costOf(raw){
   const u=raw?.usage,c=u?.input_tokens_details?.cached_tokens;
   if(!u||![u.input_tokens,u.output_tokens,c].every(Number.isSafeInteger)||c<0||c>u.input_tokens||u.output_tokens<0||u.input_tokens<0)
@@ -34,7 +34,7 @@ export async function callFinalReviewer(packet,{apiKey,fetchFn=fetch,now=Date.no
       const cost=costOf(raw);result.usage=cost.usage;result.api_cost_usd=cost.usd;result.cost_basis=cost.basis;
       ensure(response.ok,'HTTP_'+response.status);
       ensure(raw.model===MODEL,'RESPONSE_MODEL_MISMATCH');ensure(typeof result.request_id==='string'&&result.request_id.length>0,'REQUEST_ID_MISSING');
-      return validateAnswer(parseApiResponse(raw),packet);
+      return validateAnswer(parseApiResponse(raw,packet),packet);
     };
     // The race also bounds body reading and test/custom transports ignoring AbortSignal.
     const expiry=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(Error('API_TIMEOUT'));},limit);});

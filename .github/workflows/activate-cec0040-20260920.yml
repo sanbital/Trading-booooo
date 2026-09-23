@@ -1,0 +1,90 @@
+name: Activate CEC0040 enforcement
+
+on:
+  workflow_dispatch:
+    inputs:
+      approval_reason:
+        description: Auditable reason for enabling or re-enabling CEC0040 after bootstrap
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-v10-lane-executor
+  cancel-in-progress: false
+
+env:
+  CONFIG_HASH: 3b0ebe775334e24a020887532cec7b57d014a7a7383a06e217d0949b3113630f
+  EXECUTOR_PATCH: CEC0040-P142-DEPLOYMENT-READY-1
+
+jobs:
+  activate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Validate forward shadow state and activate atomically
+        id: activate
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          APPROVAL_REASON: ${{ inputs.approval_reason }}
+        run: |
+          set -euo pipefail
+          test "${#APPROVAL_REASON}" -ge 12
+          mkdir -p activation-evidence
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select to_jsonb(s) from public.v11_cec0040_state s where singleton" \
+            > activation-evidence/state-before.json
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 \
+            --set=reason="$APPROVAL_REASON" --set=config_hash="$CONFIG_HASH" \
+            > activation-evidence/activation.json <<'SQL'
+          select public.v11_cec0040_set_enforcement(
+            true, :'config_hash', :'reason'
+          );
+          SQL
+          test "$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select enforcement_enabled::text from public.v11_cec0040_state where singleton")" = true
+
+      - name: Verify live preflight reports enforced controller
+        shell: bash
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          token="$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select token from public.edge_internal_tokens where name='v10-lane-executor'")"
+          curl -fsS --max-time 30 -X POST -H "content-type: application/json" \
+            -H "x-v10-executor-token: $token" -d '{"mode":"preflight","symbol":"BTCUSDT"}' \
+            "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/v10-lane-executor" \
+            > activation-evidence/preflight.json
+          python - <<'PY'
+          import json,os
+          x=json.load(open('activation-evidence/preflight.json')); c=x['cec0040Runtime']
+          assert x.get('ok') is True and x.get('patch')==os.environ['EXECUTOR_PATCH'], x
+          assert c['available'] and c['identityValid'] and c['bootstrapComplete'], c
+          assert c['mode']=='ENFORCED' and c['enforcementEnabled'], c
+          assert c['targets']['error']==0 and c['targets']['missing']==0, c
+          PY
+
+      - name: Disable enforcement if activation verification fails
+        if: failure()
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
+            "select public.v11_cec0040_set_enforcement(false,'$CONFIG_HASH','AUTOMATED_ACTIVATION_VERIFICATION_ROLLBACK')"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cec0040-activation
+          path: activation-evidence

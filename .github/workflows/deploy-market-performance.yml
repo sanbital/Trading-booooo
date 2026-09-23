@@ -1,0 +1,78 @@
+name: Deploy Market Performance Dashboard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "supabase/functions/market-performance/**"
+      - "deno.json"
+      - ".github/workflows/deploy-market-performance.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-market-performance
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Validate fill-time performance code
+        run: |
+          deno check supabase/functions/market-performance/index.ts
+          deno test supabase/functions/market-performance/*.test.ts
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Validate deployment secrets
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          for name in SUPABASE_ACCESS_TOKEN SUPABASE_PROJECT_REF; do
+            if [ -z "${!name:-}" ]; then echo "::error::GitHub repository secret ${name} is missing."; exit 1; fi
+          done
+
+      - name: Deploy performance function
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          supabase functions deploy market-performance \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
+
+      - name: Verify deployed dashboard API
+        shell: bash
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        run: |
+          if [ -z "${LEARNING_ACCESS_TOKEN:-}" ]; then echo "::error::LEARNING_ACCESS_TOKEN is missing."; exit 1; fi
+          autotrade_token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
+          body="$(curl --fail-with-body --retry 3 --retry-delay 3 --max-time 60 -X POST \
+            -H "content-type: application/json" \
+            -H "x-autotrade-token: ${autotrade_token}" \
+            "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/market-performance")"
+          jq -e '.ok == true and .performance_revision == "6.11.0-r11-DIRECTION-AWARE-EXCHANGE-FILLS"' <<< "$body" >/dev/null
+          jq '{ok, version, performance_revision, generated_at, source_counts, account_reconciliation}' <<< "$body"

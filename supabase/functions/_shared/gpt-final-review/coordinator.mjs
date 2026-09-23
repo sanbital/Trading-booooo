@@ -1,4 +1,4 @@
-import {VERSION,MODEL,LIMITS,OUTPUT_SCHEMA,canonical,hash,baselineAllowed,decisionIdentity,triggerExpiry,validateAnswer,parseApiResponse,ensure} from './contract.mjs';
+import {VERSION,MODEL,LIMITS,OUTPUT_SCHEMA,WIRE_OUTPUT_SCHEMA,canonical,hash,baselineAllowed,decisionIdentity,triggerExpiry,validateAnswer,parseApiResponse,ensure} from './contract.mjs';
 import {SYSTEM_PROMPT} from './prompt.mjs';
 import {collectMarket,buildPacket,packetHash} from './market.mjs';
 import {callFinalReviewer} from './openai.mjs';
@@ -29,8 +29,8 @@ export class MemoryReviewStore {
 export class FinalReviewCoordinator {
   constructor({config,store,apiKey=()=>'',fetchFn=fetch,market=collectMarket,now=Date.now,schedule=p=>{p.catch(()=>{});}}){
     this.config=config;this.store=store;this.apiKey=apiKey;this.fetchFn=fetchFn;this.market=market;this.now=now;this.schedule=schedule;
-    this.tickets=new Map();this.tracked=new Map();this.pending=new Map();
-    this.binding=hash({version:VERSION,model:MODEL,prompt:SYSTEM_PROMPT,schema:OUTPUT_SCHEMA,limits:LIMITS});
+    this.tickets=new Map();this.tracked=new Map();this.pending=new Map();this.readyHints=new Map();this.yieldArmed=false;
+    this.binding=hash({version:VERSION,model:MODEL,prompt:SYSTEM_PROMPT,schema:OUTPUT_SCHEMA,wireSchema:WIRE_OUTPUT_SCHEMA,limits:LIMITS});
   }
   authorized(){const c=this.config;return c.modeValid!==false&&c.approvalRef.length>0&&c.apiBudgetUsd>=MAX_RESERVED_USD&&
     Number.isInteger(c.maxCalls)&&c.maxCalls>0&&!!this.apiKey()&&(c.mode!=='ENFORCE'||c.enforceApproved===true);}
@@ -39,6 +39,7 @@ export class FinalReviewCoordinator {
     const shadow=this.config.mode==='SHADOW';
     // A failed re-read must not leave an earlier PASS ticket usable.
     this.tickets.delete(String(s?.id));
+    for(const [k,h] of this.readyHints)if(h.signalId===String(s?.id))this.readyHints.delete(k);
     const deny=reason=>({allowed:shadow,reason,decision:'ABSTAIN',scope:'CANDIDATE'});
     if(!baselineAllowed(s))return deny('BASELINE_REJECT_OR_INVALID');
     if(!this.authorized())return deny('GPT_REVIEW_NOT_CONFIGURED_OR_APPROVED');
@@ -78,7 +79,13 @@ export class FinalReviewCoordinator {
       record.result={origin:'LOCAL_DATA_ERROR',valid:false,decision:'ABSTAIN',error:'REVIEW_PREPARATION_FAILED',
         attempted:false,api_cost_usd:0,completed_at_ms:this.now()};
     }
-    await this.store.save(key,owner,'DONE',record);return record.result?.valid===true;
+    await this.store.save(key,owner,'DONE',record);
+    // Mark ready only after durable save and complete raw-response validation.
+    // This hint can shorten observation waiting, but a new lease cycle still
+    // rereads and validates the journal before it creates an entry ticket.
+    const checked=await this.validateStored({record},record.identity_json,record.expires_at_ms,record.binding).catch(()=>null);
+    if(checked?.allowed)this.readyHints.set(key,{signalId:record.identity.signal_id,validUntil:checked.ticket.validUntil});
+    return record.result?.valid===true;
   }
   async validateStored(row,identityJson,expires,binding){
     const r=row.record,z=r?.result,now=this.now();
@@ -92,7 +99,7 @@ export class FinalReviewCoordinator {
       now>=r.valid_until_ms||z.completed_at_ms>=r.valid_until_ms)return deny('GPT_STALE_OR_FUTURE_REVIEW');
     if(z.origin!=='OPENAI_API'||!z.valid||!z.raw_response||z.model_requested!==MODEL||z.raw_response.model!==MODEL||!z.request_id)
       return deny('GPT_NO_VALID_API_RESPONSE');
-    const answer=validateAnswer(parseApiResponse(z.raw_response),r.packet);
+    const answer=validateAnswer(parseApiResponse(z.raw_response,r.packet),r.packet);
     const ticket={identityJson,decision:answer.decision,validUntil:r.valid_until_ms,expires,
       candidateId:r.packet.candidate_id,snapshotHash:r.packet.snapshot_hash,model:MODEL,summary:answer.summary};
     return {valid:true,allowed:answer.decision==='PASS',decision:answer.decision,reason:'GPT_'+answer.decision,ticket};
@@ -105,6 +112,16 @@ export class FinalReviewCoordinator {
     if(!baselineAllowed(s)||!t||t.identityJson!==canonical(decisionIdentity(s)))return {allowed:false,reason:'GPT_REVIEW_IDENTITY_CHANGED'};
     if(now>=t.validUntil||now>=t.expires-LIMITS.executionReserveMs)return {allowed:false,reason:'GPT_REVIEW_EXPIRED'};
     return {allowed:t.decision==='PASS',reason:'GPT_'+t.decision,review:t};
+  }
+  /** Pure scheduling hint. No database/network wait on the protection loop. */
+  consumeReadyYield(){
+    if(this.config.mode!=='ENFORCE'||!this.yieldArmed||!this.authorized())return false;
+    const now=this.now();
+    for(const [key,hint] of this.readyHints){
+      if(now>=hint.validUntil){this.readyHints.delete(key);continue;}
+      if(this.tracked.has(key)){this.yieldArmed=false;return true;}
+    }
+    return false;
   }
   /** Called only AFTER runWithLease has returned, never from the order path. */
   async waitReady(){

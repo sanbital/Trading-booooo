@@ -1,0 +1,36 @@
+name: Research Binance 30d Marketwide Replay
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "research/v25-pullback-reaccel/marketwide-30d.mjs"
+      - ".github/workflows/research-binance-30d-marketwide.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run Binance public-data replay
+        env:
+          REPLAY_DAYS: "30"
+          BINANCE_PACE_MS: "85"
+        run: |
+          set -o pipefail
+          node research/v25-pullback-reaccel/marketwide-30d.mjs | tee marketwide-30d.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binance-30d-marketwide-replay
+          path: |
+            research/v25-pullback-reaccel/data/30d-marketwide/results.json
+            research/v25-pullback-reaccel/data/30d-marketwide/candidates.json
+            marketwide-30d.log

@@ -1,0 +1,155 @@
+name: Finalize residual TP50 SL10 v7.5.1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/finalize-residual-tp50-sl10-v751.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: finalize-residual-tp50-sl10-v751
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ENGINE_VERSION: 7.5.1-RESIDUAL-TP50-SL10
+      MIGRATION_PATH: supabase/migrations/20260806045000_residual_tp50_sl10_v751.sql
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Canonicalize production source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_residual_tp50_sl10_v751.py
+          cp scripts/sql/residual_tp50_sl10_v751.sql "${MIGRATION_PATH}"
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Validate canonical source
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-scanner/engine.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          deno check supabase/functions/market-scanner/index.ts
+          node --check gateway/server.mjs
+          node --test gateway/server.test.mjs
+          grep -q "${ENGINE_VERSION}" supabase/functions/market-autotrader/index.ts
+          grep -q "${ENGINE_VERSION}" supabase/functions/market-scanner/engine.ts
+          grep -q "${ENGINE_VERSION}" gateway/server.mjs
+          grep -q 'RESIDUAL_TAKE_PROFIT_50' supabase/functions/market-autotrader/index.ts
+          grep -q 'RESIDUAL_STOP_LOSS_10' supabase/functions/market-autotrader/index.ts
+          git diff --check
+
+      - name: Verify production database authority
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            v_guard text;
+            v_policy text;
+            s public.trading_settings%rowtype;
+          begin
+            select pg_get_functiondef(p.oid) into v_guard
+            from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+            where n.nspname='public' and p.proname='guard_residual_sell_order_v751';
+            select pg_get_functiondef(p.oid) into v_policy
+            from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+            where n.nspname='public' and p.proname='enforce_residual_exit_position_policy_v751';
+            if v_guard is null
+               or position('v_net_return_pct < 49.999' in v_guard)=0
+               or position('v_net_return_pct > -9.999' in v_guard)=0 then
+              raise exception 'residual TP50/SL10 database guard missing';
+            end if;
+            if v_policy is null
+               or position('residual_take_profit_pct' in v_policy)=0
+               or position('residual_stop_loss_pct' in v_policy)=0 then
+              raise exception 'residual position policy missing';
+            end if;
+            if not exists (
+              select 1 from pg_trigger t join pg_class c on c.oid=t.tgrelid
+              where not t.tgisinternal and c.relname='trading_orders'
+                and t.tgname='zzzzz_trading_orders_residual_exit_v751'
+            ) then
+              raise exception 'residual order guard trigger missing';
+            end if;
+            select * into s from public.trading_settings where id=1;
+            if s.pause_new_entries is true then
+              raise exception 'new entries are paused';
+            end if;
+            if coalesce(s.gateway_error_count,0) <> 0 then
+              raise exception 'gateway error count is nonzero: %', s.gateway_error_count;
+            end if;
+            if s.last_monitor_at is null or now() - s.last_monitor_at > interval '60 seconds' then
+              raise exception 'monitor heartbeat is stale';
+            end if;
+            if s.last_gateway_heartbeat_at is null or now() - s.last_gateway_heartbeat_at > interval '60 seconds' then
+              raise exception 'gateway heartbeat is stale';
+            end if;
+            if exists (
+              select 1 from public.trading_positions
+              where state in ('OPEN','EXITING')
+                and coalesce(metadata#>>'{exit_policy_revision}','') <> '7.5.1-RESIDUAL-TP50-SL10'
+            ) then
+              raise exception 'open position policy revision mismatch';
+            end if;
+          end
+          $$;
+          SQL
+
+      - name: Verify gateway parity
+        env:
+          FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          upbit_health="$(curl --fail-with-body --retry 8 --retry-delay 3 "https://${FLY_APP_NAME}.fly.dev/health")"
+          binance_health="$(curl --fail-with-body --retry 8 --retry-delay 3 "https://${FLY_BINANCE_APP_NAME}.fly.dev/health")"
+          echo "${upbit_health}"
+          echo "${binance_health}"
+          test "$(jq -r '.version' <<<"${upbit_health}")" = "${ENGINE_VERSION}"
+          test "$(jq -r '.version' <<<"${binance_health}")" = "${ENGINE_VERSION}"
+          test "$(jq -r '.scheduler.lastError // empty' <<<"${upbit_health}")" = ""
+
+      - name: Commit canonical source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-scanner/engine.ts \
+            gateway/server.mjs \
+            scripts/apply_residual_tp50_sl10_v751.py \
+            scripts/sql/residual_tp50_sl10_v751.sql \
+            "${MIGRATION_PATH}"
+          if git diff --cached --quiet; then
+            echo "Canonical source already committed"
+          else
+            git commit -m "fix: activate residual TP50 SL10 exits"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi

@@ -1,0 +1,28 @@
+{
+  "version": "GPT_FINAL_ENTRY_REVIEW_3_LATENCY",
+  "model": "gpt-5.4-mini-2026-03-17",
+  "baseline": "28af604d790c2c0934867614e0f734a87e220221",
+  "mock_tests": 79,
+  "actual_api_calls": 0,
+  "production_deployed": false,
+  "secrets_changed": false,
+  "trading_database_writes": 0,
+  "orders": 0,
+  "default_mode": "OFF",
+  "executor_syntax": "PASS",
+  "relative_import_files": 36,
+  "executor_sha256": "9fb4e393dc3f32e17940286d041707280c2af72e4f5684de73741fa3ca9ea13f",
+  "serialization_fixture": {
+    "kind": "synthetic_not_api_latency",
+    "canonical_utf8_bytes": 1614,
+    "compact_utf8_bytes": 839
+  },
+  "timing_fixture": {
+    "kind": "virtual_time_not_api_latency",
+    "snapshot_second": 1,
+    "pass_second": 4,
+    "old_x1_completion_second": 47,
+    "new_observation_yield_second": 4,
+    "all_original_guards_rechecked": true
+  }
+}

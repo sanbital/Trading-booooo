@@ -1,0 +1,54 @@
+name: Audit v7.6.12 recovery progress 2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/audit-v7612-recovery-progress2.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+      - name: Read production state
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set +e
+          q(){ psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "$1" 2>&1; }
+          {
+            echo "audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "pause=$(q "select coalesce(pause_new_entries,false)::text from public.trading_settings where id=1")"
+            echo "zro=$(q "select state||'|'||initial_quantity||'|'||remaining_quantity||'|'||planned_entry_price||'|'||average_entry_price||'|'||stop_price||'|'||target_1||'|'||coalesce(realized_pnl_quote,0)||'|'||coalesce(realized_return_pct,0)||'|'||coalesce(close_reason,'')||'|'||coalesce(metadata->'accounting_repair'->>'revision','') from public.trading_positions where id='111c5f48-27bf-4c26-9819-4f4ed7714577'::uuid")"
+            echo "manual_fill_detached=$(q "select (position_id is null)::text from public.exchange_trade_fills where id='55ddf00e-3f89-4df8-8e07-90af3e60cd0b'::uuid")"
+            echo "manual_order_detached=$(q "select (position_id is null)::text from public.trading_orders where id='038e70c3-a28b-4e91-8316-eee8cc62e6a0'::uuid")"
+            echo "latest_monitor=$(q "select coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR'")"
+            echo "failed_since_patch=$(q "select count(*) from public.trading_cycle_runs where started_at>='2026-08-19T12:56:13Z'::timestamptz and status='FAILED'")"
+            echo "dupes=$(q "select count(*) from (select position_id from public.trading_orders where side='SELL' and position_id is not null and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED') group by position_id having count(*)>1)d")"
+            echo "replay_exit_events=$(q "select count(*) from public.trading_events where created_at>='2026-08-19T12:56:13Z'::timestamptz and code in ('PARTIAL_EXIT','POSITION_CLOSED') and details->>'accounting_applied'='false'")"
+            echo "stale_manual=$(q "select count(*) from public.trading_positions p join public.exchange_trade_fills f on f.position_id=p.id where f.source='MANUAL' and p.opened_at is not null and f.executed_at<p.opened_at-interval '1 minute' and p.state<>'CLOSED'")"
+            fn=$(supabase functions list --project-ref "${SUPABASE_PROJECT_REF}" 2>&1 | grep -F 'market-autotrader' | head -n1)
+            echo "function=${fn}"
+          } > .github/v7612-recovery-progress2.txt
+          exit 0
+      - name: Commit audit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/v7612-recovery-progress2.txt
+          git commit -m "chore: record v7.6.12 recovery progress" || true
+          git pull --rebase origin main || true
+          git push origin HEAD:main || true

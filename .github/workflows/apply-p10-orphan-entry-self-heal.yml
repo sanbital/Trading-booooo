@@ -1,0 +1,352 @@
+name: Apply and deploy P10 orphan entry self-heal
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".p10-orphan-entry-self-heal-trigger"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: p10-orphan-entry-self-heal
+  cancel-in-progress: false
+
+jobs:
+  patch-test-deploy:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'bot/p10-orphan-entry-self-heal'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out current main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Apply bounded P10 orphan-entry patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          python - <<'PY'
+          from pathlib import Path
+
+          index_path = Path('supabase/functions/market-autotrader/index.ts')
+          helper_path = Path('supabase/functions/market-autotrader/p10-entry-reconciliation.ts')
+          test_path = Path('supabase/functions/market-autotrader/p10-entry-reconciliation.test.ts')
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one anchor, found {count}')
+              return text.replace(old, new, 1)
+
+          helper = helper_path.read_text()
+          helper_anchor = 'export type FuturesExposure = { market: unknown; side: unknown; quantity: unknown };\n'
+          helper_insert = r'''export type P10PendingReservationClock = {
+            state: unknown;
+            reservationExpiresAt: unknown;
+            createdAt?: unknown;
+            nowMs: number;
+            fallbackTtlMs?: number;
+          };
+
+          /**
+           * Expiry is only a cleanup eligibility signal. Callers must still prove that no
+           * order/exchange exposure exists before releasing a live reservation.
+           */
+          export function p10PendingReservationExpired(input: P10PendingReservationClock): boolean {
+            if (String(input.state || "").toUpperCase() !== "ENTRY_PENDING") return false;
+            if (!Number.isFinite(input.nowMs)) return false;
+
+            const explicitExpiry = Date.parse(String(input.reservationExpiresAt || ""));
+            if (Number.isFinite(explicitExpiry)) return explicitExpiry <= input.nowMs;
+
+            const createdAt = Date.parse(String(input.createdAt || ""));
+            if (!Number.isFinite(createdAt)) return false;
+            const fallbackTtlMs = Number.isFinite(Number(input.fallbackTtlMs))
+              ? Math.max(1_000, Number(input.fallbackTtlMs))
+              : 180_000;
+            return createdAt + fallbackTtlMs <= input.nowMs;
+          }
+
+          '''
+          helper = replace_once(helper, helper_anchor, helper_insert + helper_anchor, 'helper-expiry')
+          helper_path.write_text(helper)
+
+          tests = test_path.read_text()
+          tests = replace_once(
+              tests,
+              '  p10PreOrderEntryDisposition,\n',
+              '  p10PreOrderEntryDisposition,\n  p10PendingReservationExpired,\n',
+              'test-import',
+          )
+          tests += r'''
+
+          Deno.test("P10 pending reservation expiry uses the explicit boundary", () => {
+            const expiry = Date.parse("2026-08-27T14:07:09.000Z");
+            const base = {
+              state: "ENTRY_PENDING",
+              reservationExpiresAt: "2026-08-27T14:07:09.000Z",
+            };
+            assertEquals(p10PendingReservationExpired({ ...base, nowMs: expiry - 1 }), false);
+            assertEquals(p10PendingReservationExpired({ ...base, nowMs: expiry }), true);
+            assertEquals(p10PendingReservationExpired({ ...base, nowMs: expiry + 1 }), true);
+          });
+
+          Deno.test("P10 pending reservation expiry falls back to creation time for legacy rows", () => {
+            const createdAt = "2026-08-27T14:04:09.000Z";
+            assertEquals(p10PendingReservationExpired({
+              state: "ENTRY_PENDING",
+              reservationExpiresAt: null,
+              createdAt,
+              nowMs: Date.parse("2026-08-27T14:07:09.000Z"),
+            }), true);
+            assertEquals(p10PendingReservationExpired({
+              state: "OPEN",
+              reservationExpiresAt: "2020-01-01T00:00:00.000Z",
+              createdAt,
+              nowMs: Date.parse("2026-08-27T14:07:09.000Z"),
+            }), false);
+          });
+          '''
+          test_path.write_text(tests)
+
+          index = index_path.read_text()
+          index = replace_once(
+              index,
+              '  p10PreOrderEntryDisposition,\n',
+              '  p10PreOrderEntryDisposition,\n  p10PendingReservationExpired,\n',
+              'index-import',
+          )
+          index = replace_once(
+              index,
+              'const VERSION = "8.0.1-P10-ENTRY-RECONCILIATION";',
+              'const VERSION = "8.0.2-P10-ORPHAN-ENTRY-SELF-HEAL";',
+              'engine-version',
+          )
+
+          order_start = '  const orderRow = await createOrderRecord({\n'
+          gateway_marker = '  try {\n    const result = await gateway(exchange, {'
+          start = index.find(order_start)
+          if start < 0:
+              raise SystemExit('order-record start anchor missing')
+          end = index.find(gateway_marker, start)
+          if end < 0:
+              raise SystemExit('gateway marker missing after P10 order-record anchor')
+          original = index[start:end]
+          if original.count('createOrderRecord') != 1:
+              raise SystemExit('unexpected P10 order-record block')
+          wrapped = original.replace('  const orderRow = await createOrderRecord({', '    orderRow = await createOrderRecord({', 1)
+          if not wrapped.endswith('  });\n'):
+              raise SystemExit('unexpected order-record block terminator')
+          wrapped = wrapped[:-5] + '    });\n'
+          rollback = r'''  let orderRow: any;
+          try {
+          ''' + wrapped + r'''  } catch (error) {
+            // createOrderRecord runs before gateway(create_order), so failure here proves
+            // that this attempt never submitted an exchange order. Release only this still-
+            // pending reservation; later reconciliation remains the fallback if cleanup fails.
+            const errorMessage = error instanceof Error
+              ? error.message
+              : String(error ?? "unknown P10 order-record failure");
+            const failedAt = new Date().toISOString();
+            await patch("trading_positions", `id=eq.${position.id}&state=eq.ENTRY_PENDING`, {
+              state: "CANCELLED",
+              reserved_quote: 0,
+              reserved_quantity: 0,
+              reservation_expires_at: null,
+              close_reason: "P10_ENTRY_ORDER_RECORD_FAILED",
+              closed_at: failedAt,
+              metadata: {
+                ...(position.metadata || {}),
+                p10_entry_order_record_failed_at: failedAt,
+                p10_entry_order_record_error: errorMessage,
+                p10_entry_order_submitted: false,
+              },
+            }).catch((cleanupError) => console.error("P10_ENTRY_ORDER_RECORD_CLEANUP_FAILED", cleanupError));
+            await rejectP10Claim(claimId, `P10_ENTRY_ORDER_RECORD_FAILED:${errorMessage}`)
+              .catch((claimError) => console.error("P10_ENTRY_ORDER_RECORD_CLAIM_REJECT_FAILED", claimError));
+            await event("P10_ENTRY_ORDER_RECORD_FAILED", errorMessage, {
+              strategy_key: P10_STRATEGY_KEY,
+              exchange,
+              market: signal.market,
+              side,
+              position_id: position.id,
+              order_submitted: false,
+            }, { cycleId, positionId: position.id, level: "WARNING" })
+              .catch((eventError) => console.error("P10_ENTRY_ORDER_RECORD_FAILURE_EVENT_FAILED", eventError));
+            return {
+              entered: false,
+              exchange,
+              market: signal.market,
+              side,
+              pre_order_error: true,
+              reason: "P10_ENTRY_ORDER_RECORD_FAILED",
+            };
+          }
+          '''
+          index = index[:start] + rollback + index[end:]
+
+          orphan_anchor = '  if (!orderRow) return { reconciled: false, reason: "no pending P10 order" };'
+          orphan_replacement = r'''  if (!orderRow) {
+            if (
+              !entryReconciliation || position.state !== "ENTRY_PENDING" ||
+              !p10PendingReservationExpired({
+                state: position.state,
+                reservationExpiresAt: position.reservation_expires_at,
+                createdAt: position.created_at,
+                nowMs: Date.now(),
+              })
+            ) {
+              return { reconciled: false, reason: "no pending P10 order" };
+            }
+
+            // A missing row in the reconcilable-state query is not enough to release money.
+            // First prove that there is no ENTRY order row in any state, then prove zero
+            // directional exchange exposure. Any ambiguity stays fail-closed.
+            const anyEntryOrders = await db(
+              `trading_orders?position_id=eq.${position.id}&purpose=eq.ENTRY&select=id,state&limit=1`,
+            ) as any[];
+            if (anyEntryOrders.length) {
+              await latchP10EntrySafety("P10_ENTRY_RECONCILIATION_REQUIRED");
+              await event("P10_ORPHAN_ENTRY_ORDER_STATE_MISMATCH", `${position.exchange}:${position.market} has an entry order outside the reconciliation state set`, {
+                order_id: anyEntryOrders[0]?.id || null,
+                order_state: anyEntryOrders[0]?.state || null,
+              }, { cycleId, positionId: position.id, level: "CRITICAL" }).catch(() => null);
+              return { reconciled: false, reason: "P10 entry order exists outside reconcilable states" };
+            }
+
+            let exposure: Awaited<ReturnType<typeof p10EntryExposureProof>>;
+            try {
+              exposure = await p10EntryExposureProof(position, 0);
+            } catch (error) {
+              await latchP10EntrySafety("P10_ENTRY_RECONCILIATION_REQUIRED");
+              await event("P10_ORPHAN_ENTRY_EXPOSURE_PROOF_FAILED", `${position.exchange}:${position.market} exchange exposure could not be proven before orphan cleanup`, {
+                error: error instanceof Error ? error.message : String(error),
+              }, { cycleId, positionId: position.id, level: "CRITICAL" }).catch(() => null);
+              return { reconciled: false, reason: "P10 orphan exchange exposure proof failed" };
+            }
+
+            if (exposure.exchangeQuantity > exposure.tolerance) {
+              await latchP10EntrySafety("P10_ENTRY_RECONCILIATION_REQUIRED");
+              const detectedAt = new Date().toISOString();
+              const flagged = await patch(
+                "trading_positions",
+                `id=eq.${position.id}&state=eq.ENTRY_PENDING`,
+                {
+                  state: "RECONCILIATION_FAILED",
+                  metadata: {
+                    ...(position.metadata || {}),
+                    reconciliation_phase: "ENTRY",
+                    p10_entry_accounting_detail_pending: true,
+                    p10_orphan_entry_exposure_detected_at: detectedAt,
+                    p10_orphan_entry_exchange_quantity: exposure.exchangeQuantity,
+                    p10_orphan_entry_exposure_tolerance: exposure.tolerance,
+                  },
+                },
+              );
+              await event("P10_ORPHAN_ENTRY_LIVE_EXPOSURE", `${position.exchange}:${position.market} orphan pending retained because live exposure exists`, {
+                exchange_quantity: exposure.exchangeQuantity,
+                tolerance: exposure.tolerance,
+                reservation_released: false,
+              }, { cycleId, positionId: position.id, level: "CRITICAL" }).catch(() => null);
+              return {
+                reconciled: false,
+                reason: "P10 orphan entry has live exchange exposure",
+                position: flagged[0] || position,
+              };
+            }
+
+            const cancelledAt = new Date().toISOString();
+            const cancelled = await patch(
+              "trading_positions",
+              `id=eq.${position.id}&state=eq.ENTRY_PENDING`,
+              {
+                state: "CANCELLED",
+                reserved_quote: 0,
+                reserved_quantity: 0,
+                reservation_expires_at: null,
+                close_reason: "P10_ORPHAN_ENTRY_EXPIRED",
+                closed_at: cancelledAt,
+                metadata: {
+                  ...(position.metadata || {}),
+                  p10_orphan_entry_cancelled_at: cancelledAt,
+                  p10_orphan_entry_zero_exposure_proven: true,
+                },
+              },
+            );
+            if (!cancelled.length) {
+              return { reconciled: false, reason: "P10 orphan entry changed concurrently" };
+            }
+            const claimId = String(position.metadata?.p10_claim_id || "");
+            if (claimId) {
+              await rejectP10Claim(claimId, "P10_ORPHAN_ENTRY_EXPIRED").catch(() => null);
+            }
+            await event("P10_ORPHAN_ENTRY_CANCELLED", `${position.exchange}:${position.market} expired orphan pending reservation released`, {
+              order_row_count: 0,
+              exchange_quantity: exposure.exchangeQuantity,
+              tolerance: exposure.tolerance,
+              reservation_released: true,
+            }, { cycleId, positionId: position.id, level: "WARNING" }).catch(() => null);
+            return { reconciled: true, cancelled: cancelled[0], source: "ORPHAN_ENTRY_EXPIRED" };
+          }'''
+          index = replace_once(index, orphan_anchor, orphan_replacement, 'orphan-reconciliation')
+          index_path.write_text(index)
+          PY
+
+      - name: Format and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt \
+            supabase/functions/market-autotrader/p10-entry-reconciliation.ts \
+            supabase/functions/market-autotrader/p10-entry-reconciliation.test.ts \
+            supabase/functions/market-autotrader/index.ts
+          git diff --check
+          deno test supabase/functions/market-autotrader/p10-entry-reconciliation.test.ts
+          deno test --allow-read supabase/functions/market-autotrader/p10-entry-latch-ownership.test.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          grep -q '8.0.2-P10-ORPHAN-ENTRY-SELF-HEAL' supabase/functions/market-autotrader/index.ts
+          grep -q 'P10_ENTRY_ORDER_RECORD_FAILED' supabase/functions/market-autotrader/index.ts
+          grep -q 'P10_ORPHAN_ENTRY_CANCELLED' supabase/functions/market-autotrader/index.ts
+          grep -q 'p10PendingReservationExpired' supabase/functions/market-autotrader/p10-entry-reconciliation.test.ts
+
+      - name: Commit validated fix to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-autotrader/p10-entry-reconciliation.ts \
+            supabase/functions/market-autotrader/p10-entry-reconciliation.test.ts
+          git commit -m "fix: self-heal orphan P10 entry reservations"
+          git push origin HEAD:main
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Deploy market-autotrader to production
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_PROJECT_REF:-}"
+          supabase functions deploy market-autotrader \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api

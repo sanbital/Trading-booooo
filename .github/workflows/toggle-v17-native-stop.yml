@@ -1,0 +1,81 @@
+name: Toggle V17 Native Stop
+
+# Operator switch for the exchange-resident STOP_MARKET.
+#
+# Turning this ON causes the executor to submit real conditional orders to Binance
+# (POST /fapi/v1/algoOrder, SELL, reduceOnly, ONE_WAY). It is deliberately a separate,
+# manually dispatched workflow rather than a deploy side effect, and it takes the value
+# as an input so it can be switched back OFF in one run.
+#
+# The software monitor remains the primary exit path in both states; the resting stop
+# only removes the window between two one-minute polls.
+on:
+  workflow_dispatch:
+    inputs:
+      enabled:
+        description: "Submit real STOP_MARKET orders?"
+        required: true
+        type: choice
+        options: ["false", "true"]
+        default: "false"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toggle-v17-native-stop
+  cancel-in-progress: false
+
+jobs:
+  toggle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Refuse to arm an executor that cannot book a native fill
+        if: ${{ inputs.enabled == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A native stop fills BETWEEN two polls, which leaves the exchange flat while the
+          # database still shows the position open. run() must reconcile that before its
+          # mismatch guard calls circuit(), or the feature working as designed halts trading
+          # with the fill unbooked.
+          grep -Fq 'async function reconcileNativeFills(' supabase/functions/v10-lane-executor/index.ts \
+            || { echo "::error::executor cannot book a native fill; arming would halt trading on the first stop."; exit 1; }
+          grep -Fq 'const reconciled=await reconcileNativeFills(db,allOpen);' supabase/functions/v10-lane-executor/index.ts \
+            || { echo "::error::reconciliation is not wired ahead of the exchange mismatch guard."; exit 1; }
+
+      - name: Run the V17 exit test suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test test-support/v17-exit/*.test.mjs
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Set the flag and redeploy so it takes effect now
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          ENABLED: ${{ inputs.enabled }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_PROJECT_REF:-}"
+          case "${ENABLED}" in true|false) ;; *) echo "::error::enabled must be true or false"; exit 1 ;; esac
+          supabase secrets set "V17_NATIVE_STOP=${ENABLED}" --project-ref "${SUPABASE_PROJECT_REF}"
+          # Secrets reach a function on its next boot; redeploy so the change is immediate
+          # and observable rather than arriving at an unpredictable cold start.
+          supabase functions deploy v10-lane-executor \
+            --project-ref "${SUPABASE_PROJECT_REF}" --no-verify-jwt --use-api
+          echo "V17_NATIVE_STOP=${ENABLED}"

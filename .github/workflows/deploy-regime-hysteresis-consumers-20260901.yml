@@ -1,0 +1,93 @@
+name: Deploy Regime Hysteresis Consumers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "research/regime-hysteresis-v1-consumers-trigger.txt"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regime-hysteresis-v1-consumers-20260901
+  cancel-in-progress: false
+
+jobs:
+  validate-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Validate coordinated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'breakEvenAtR: 1.50' supabase/functions/_shared/p10-policy.ts
+          grep -Fq 'P10-MARKET-RISK-1.2.0-HYSTERESIS-CUTOVER' supabase/functions/_shared/p10-market-risk.ts
+          grep -Fq 'modelRevision: "MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET"' supabase/functions/_shared/p10-market-risk.ts
+          grep -Fq 'V10_REGIME_TRANSITION_LIVE_EXIT_COMPILED = true' supabase/functions/_shared/v10_regime_transition.ts
+          deno test supabase/functions/_shared/p10-policy.test.ts
+          deno test supabase/functions/_shared/p10-market-risk.test.ts
+          deno test supabase/functions/_shared/v10_regime_transition.test.ts
+          deno test supabase/functions/_shared/v10_lane_exit.test.ts
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Validate production deploy secrets
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_PROJECT_REF:-}"
+
+      - name: Deploy market-autotrader
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy market-autotrader \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
+
+      - name: Deploy v10-lane-executor
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy v10-lane-executor \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
+
+      - name: Verify active functions
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "${SUPABASE_PROJECT_REF}" | tee /tmp/functions.txt
+          grep -q "market-autotrader" /tmp/functions.txt
+          grep -q "v10-lane-executor" /tmp/functions.txt

@@ -1,4 +1,5 @@
 import {LIMITS,VERSION,metric,numberOrNull,hash,ensure,arithmeticCheck,FACTORS} from './contract.mjs';
+import {cacheFor} from './candle-cache.mjs';
 const MIN=60000;
 const host='https://fapi.binance.com';
 const fields=['return_5m','return_15m','return_30m','return_60m','volume_ratio_3m','taker_buy_ratio_3m',
@@ -30,11 +31,15 @@ export async function collectMarket(identity,{fetchFn=fetch,now=Date.now,deadlin
     // Binance counts the in-progress bar toward limit. End at the last CLOSED bar.
     const endTime=Math.floor(requested/duration)*duration-1;
     const url=host+'/fapi/v1/klines?'+new URLSearchParams({symbol:market,interval,limit:String(limit),endTime:String(endTime)});
+    const load=async()=>{
     const abort=AbortSignal.timeout(ms);
     const r=await fetchFn(url,{method:'GET',redirect:'error',signal:signal?AbortSignal.any([signal,abort]):abort});
     ensure(r.ok,'PUBLIC_MARKET_UNAVAILABLE');
     const text=await r.text();ensure(text.length<=200000,'MARKET_RESPONSE_TOO_LARGE');
     return {rows:JSON.parse(text),requestedAt:requested,receivedAt:now()};
+    };
+    // A caller-specific cancellation must not cancel another caller's shared read.
+    return signal?load():cacheFor(fetchFn).read(url,load,now);
   }
   try{
     const [one,five,btc]=await Promise.all([read(symbol,'1m',61),read(symbol,'5m',12),read('BTCUSDT','1m',16)]);

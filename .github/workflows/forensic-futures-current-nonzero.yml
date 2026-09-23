@@ -1,0 +1,51 @@
+name: Forensic current futures nonzero closed rows
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/forensic-futures-current-nonzero.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Query current rows and writers
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          A='acb862f8-062d-471a-bab4-48a117abebe6'
+          B='2e37cf5b-6328-4859-b5b0-b7e6dadd5a03'
+          {
+            echo "audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo 'POSITIONS'
+            psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select row_to_json(x)::text from (select id,exchange,market,state,opened_at,closed_at,initial_quantity,remaining_quantity,average_entry_price,planned_entry_price,stop_price,target_1,target_2,realized_cost_quote,realized_proceeds_quote,paid_fees_quote,realized_pnl_quote,realized_return_pct,close_reason,accounting_version,fee_accounting_quality,metadata,created_at,updated_at from public.trading_positions where id in ('${A}'::uuid,'${B}'::uuid) order by opened_at)x"
+            echo 'ORDERS'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select position_id,id,created_at,side,purpose,state,identifier,requested_volume,executed_volume,average_fill_price,executed_funds_quote,paid_fee_quote,coalesce(completed_at::text,''),coalesce(error_message,'') from public.trading_orders where position_id in ('${A}'::uuid,'${B}'::uuid) order by position_id,created_at"
+            echo 'FILLS'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select position_id,executed_at,id,side,quantity,quote_amount,fee_quote_amount,coalesce(bot_order_id::text,''),source,accounting_status from public.exchange_trade_fills where position_id in ('${A}'::uuid,'${B}'::uuid) order by position_id,executed_at"
+            echo 'EVENTS'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select position_id,created_at,code,left(coalesce(message,''),120),details::text from public.trading_events where position_id in ('${A}'::uuid,'${B}'::uuid) order by position_id,created_at"
+            echo 'TRADING_POSITION_TRIGGERS'
+            psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select tgname||E'\n'||pg_get_triggerdef(t.oid)||E'\n'||pg_get_functiondef(t.tgfoid) from pg_trigger t where t.tgrelid='public.trading_positions'::regclass and not t.tgisinternal order by tgname"
+            echo 'FUNCTIONS_WITH_764_OR_FUTURES_ZERO'
+            psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select '-- '||p.proname||E'\n'||pg_get_functiondef(p.oid) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and (pg_get_functiondef(p.oid) ilike '%7.6.4%' or pg_get_functiondef(p.oid) ilike '%FUTURES_EXCHANGE_POSITION_ZERO%') order by p.proname"
+          } > .github/futures-current-nonzero-forensic.txt
+      - name: Commit result
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/futures-current-nonzero-forensic.txt
+          git commit -m "chore: record current futures nonzero forensic" || true
+          git pull --rebase origin main || true
+          git push origin HEAD:main || true

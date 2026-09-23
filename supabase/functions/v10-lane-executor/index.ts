@@ -1,6 +1,6 @@
 // @ts-nocheck
 import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode,entryPriceEvidence} from "./entry-evidence.mjs";
-import {gptFilterExecutable,gptFinalCheck,runWithGptReview} from "./gpt-final-review-adapter.mjs";
+import {gptFilterExecutable,gptFinalCheck,runWithGptReview,gptReviewReadyToResume} from "./gpt-final-review-adapter.mjs";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 import {POLICY, STRATEGY, ENTRY_EXECUTION_POLICY_VERSION, entryFresh, postFillEntryGuard, nextExit, portfolioMatches as leaderPortfolioMatches} from "../_shared/leader-momentum-v17.mjs";
 import {nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5, exitAttemptId, classifyExitResponse} from "../_shared/leader-exit-review.mjs";
@@ -1714,6 +1714,9 @@ async function runX1FastObservation(db,pair,deadlineMs){
           reason:String(error.message??error)});items.delete(fresh.id)}
       }
     }
+    // Only after this observation and every detected protection action finish.
+    // A ready hint cannot trade: release the normal lease, then re-run all guards.
+    if(gptReviewReadyToResume(db)){summary.endedReason="GPT_REVIEW_READY";break;}
     nextAt=Math.max(nextAt+1000,Date.now()+1);
   }
   if(!summary.endedReason||["NO_ELIGIBLE_POSITION","FLAG_DISABLED"].includes(summary.endedReason))

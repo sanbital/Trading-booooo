@@ -1,0 +1,109 @@
+name: Verify M1 core score production
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-m1-core-score-production
+  cancel-in-progress: false
+
+env:
+  RELEASE_VERSION: 7.3.8-M1-CORE-SCORE-OBS-TOLERANCE
+  M1_GATE_VERSION: M1-BB-CORE4-AUX-SCORE-STOCH-14-3-3-V3
+
+jobs:
+  verify-production:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.title == '[VERIFY] M1 core score production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verify live settings engines scans and open entries
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL}"
+          sleep 20
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<SQL
+          do \$\$
+          declare
+            s public.trading_settings%rowtype;
+            latest_scan_id uuid;
+            candidate_count integer;
+            current_gate_count integer;
+            legacy_reason_count integer;
+            engine_count integer;
+          begin
+            select * into s from public.trading_settings where id=1;
+            if s.pause_new_entries then raise exception 'new entries are paused'; end if;
+            if s.emergency_liquidation then raise exception 'emergency liquidation is active'; end if;
+            if s.lob_live_admission_revision <> '${RELEASE_VERSION}' or
+               s.lob_model_revision <> '${RELEASE_VERSION}' then
+              raise exception 'revision mismatch live=% model=%',
+                s.lob_live_admission_revision, s.lob_model_revision;
+            end if;
+            if s.lob_observation_window_ms <> 15000 or s.lob_max_gainer_rank <> 10 then
+              raise exception 'runtime mismatch observation=% rank=%',
+                s.lob_observation_window_ms, s.lob_max_gainer_rank;
+            end if;
+            if s.gateway_error_count <> 0 then raise exception 'gateway errors=%', s.gateway_error_count; end if;
+            if s.last_full_scan_at < now()-interval '150 seconds' or
+               s.last_monitor_at < now()-interval '150 seconds' or
+               s.last_gateway_heartbeat_at < now()-interval '150 seconds' then
+              raise exception 'stale heartbeat scan=% monitor=% gateway=%',
+                s.last_full_scan_at, s.last_monitor_at, s.last_gateway_heartbeat_at;
+            end if;
+
+            select id into latest_scan_id
+            from public.scanner_scan_runs
+            where created_at >= now()-interval '3 minutes'
+            order by created_at desc limit 1;
+            if latest_scan_id is null then raise exception 'no fresh scan'; end if;
+
+            select count(*),
+                   count(*) filter (where snapshot#>>'{lob,features,m1GateVersion}'='${M1_GATE_VERSION}'),
+                   count(*) filter (where coalesce(snapshot#>'{lob,reasons}','[]'::jsonb) ? 'INSUFFICIENT_15S_OBSERVATION')
+            into candidate_count, current_gate_count, legacy_reason_count
+            from public.scanner_candidates where scan_id=latest_scan_id;
+            if candidate_count = 0 or current_gate_count <> candidate_count then
+              raise exception 'gate version mismatch candidates=% current=%', candidate_count, current_gate_count;
+            end if;
+            if legacy_reason_count <> 0 then
+              raise exception 'legacy 15-second boundary reason remains: %', legacy_reason_count;
+            end if;
+
+            select count(distinct exchange) into engine_count
+            from public.trading_joint_objective_snapshots
+            where captured_at >= now()-interval '3 minutes'
+              and engine_version='${RELEASE_VERSION}';
+            if engine_count < 2 then raise exception 'new engine missing exchange count=%', engine_count; end if;
+
+            raise notice 'PRODUCTION_VERIFIED scan=% candidates=% gate=% engines=% entries_open=true',
+              latest_scan_id, candidate_count, '${M1_GATE_VERSION}', engine_count;
+          end
+          \$\$;
+
+          with latest as (select * from public.scanner_scan_runs order by created_at desc limit 1)
+          select jsonb_build_object(
+            'verified_at_utc', now(),
+            'scan_id', l.id,
+            'scan_status', l.status,
+            'candidate_count', (select count(*) from public.scanner_candidates c where c.scan_id=l.id),
+            'buy_count', (select count(*) from public.scanner_candidates c where c.scan_id=l.id and c.decision='BUY'),
+            'core_passed', (select count(*) from public.scanner_candidates c where c.scan_id=l.id and coalesce((c.snapshot#>>'{lob,features,m1CorePassed}')::boolean,false)),
+            'auxiliary_passed', (select count(*) from public.scanner_candidates c where c.scan_id=l.id and coalesce((c.snapshot#>>'{lob,features,m1AuxiliaryPassed}')::boolean,false)),
+            'prebreakout_passed', (select count(*) from public.scanner_candidates c where c.scan_id=l.id and coalesce((c.snapshot#>>'{lob,features,m1PreBreakout}')::boolean,false)),
+            'pause_new_entries', (select pause_new_entries from public.trading_settings where id=1),
+            'gateway_error_count', (select gateway_error_count from public.trading_settings where id=1)
+          ) as production_evidence
+          from latest l;
+          SQL

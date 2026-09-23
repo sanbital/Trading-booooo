@@ -1,0 +1,51 @@
+name: Audit ZRO post repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/audit-zro-post-repair.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Query production state read-only
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          POS='111c5f48-27bf-4c26-9819-4f4ed7714577'
+          {
+            echo "audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo 'SETTINGS'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select pause_new_entries,coalesce(manual_event_reason,''),manual_intervention_required,withdrawal_mode from public.trading_settings where id=1"
+            echo 'ZRO_POSITION'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select state,initial_quantity,remaining_quantity,planned_entry_price,average_entry_price,stop_price,target_1,realized_cost_quote,realized_proceeds_quote,paid_fees_quote,realized_pnl_quote,realized_return_pct,coalesce(close_reason,''),coalesce(accounting_version,''),coalesce(fee_accounting_quality,''),updated_at from public.trading_positions where id='${POS}'::uuid"
+            echo 'ZRO_METADATA_REPAIR'
+            psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "select coalesce(metadata->'accounting_repair','null'::jsonb)::text from public.trading_positions where id='${POS}'::uuid"
+            echo 'ZRO_METADATA_FLAGS'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select coalesce(metadata->>'display_data_status',''),coalesce(metadata->>'exclude_from_learning',''),coalesce(metadata->>'pending_exit_action',''),coalesce(metadata->>'pending_exit_reason','') from public.trading_positions where id='${POS}'::uuid"
+            echo 'DETACHMENT'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select (position_id is null)::text from public.exchange_trade_fills where id='55ddf00e-3f89-4df8-8e07-90af3e60cd0b'::uuid; select (position_id is null)::text from public.trading_orders where id='038e70c3-a28b-4e91-8316-eee8cc62e6a0'::uuid"
+            echo 'INVARIANTS'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select 'stale_manual',count(*)::text from public.trading_positions p join public.exchange_trade_fills f on f.position_id=p.id where f.source='MANUAL' and p.opened_at is not null and f.executed_at<p.opened_at-interval '1 minute' and p.state<>'CLOSED'; select 'duplicate_pending_sell',count(*)::text from (select position_id from public.trading_orders where side='SELL' and position_id is not null and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED') group by position_id having count(*)>1)d; select 'replay_noop_exit_events',count(*)::text from public.trading_events where created_at>='2026-08-19T12:56:13Z'::timestamptz and code in ('PARTIAL_EXIT','POSITION_CLOSED') and details->>'accounting_applied'='false'; select 'failed_cycles',count(*)::text from public.trading_cycle_runs where started_at>='2026-08-19T12:56:13Z'::timestamptz and status='FAILED'; select 'latest_monitor',coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR'"
+            echo 'CLOSED_NONZERO_LAST24H'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "select id,exchange,market,initial_quantity,remaining_quantity,residual_quantity,residual_value_quote,coalesce(close_reason,''),coalesce(accounting_version,''),coalesce(metadata->>'display_data_status',''),coalesce(metadata->>'exclude_from_learning',''),updated_at from public.trading_positions where state='CLOSED' and remaining_quantity<>0 and updated_at>=now()-interval '24 hours' order by updated_at desc"
+          } > .github/zro-post-repair-audit.txt
+      - name: Commit audit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/zro-post-repair-audit.txt
+          git commit -m "chore: record ZRO post-repair audit" || true
+          git pull --rebase origin main || true
+          git push origin HEAD:main || true

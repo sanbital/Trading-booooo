@@ -1,0 +1,42 @@
+name: Legacy P10 Exact 200 Validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p10-exact-200-legacy-validation
+  cancel-in-progress: false
+
+jobs:
+  validate-current-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out current source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Validate exact-200 contract without mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/p10_exact_200_hotfix.py --validate-only
+          deno fmt --check supabase/functions/market-autotrader/index.ts supabase/functions/_shared/p10-policy.ts supabase/functions/_shared/p10-policy.test.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          deno check supabase/functions/_shared/p10-policy.test.ts
+          deno test supabase/functions/_shared/p10-policy.test.ts
+          deno task check
+          deno task test
+
+      - name: Assert no production side effects in this legacy workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(grep -E 'SUPABASE_DB_URL|psql |supabase functions deploy|git push origin HEAD:main' .github/workflows/hotfix-p10-futures-exact-200.yml || true)"

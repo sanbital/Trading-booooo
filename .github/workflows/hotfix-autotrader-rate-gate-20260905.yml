@@ -1,0 +1,224 @@
+name: Hotfix autotrader DB execution gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/hotfix-autotrader-rate-gate-20260905.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hotfix-autotrader-rate-gate-20260905
+  cancel-in-progress: false
+
+jobs:
+  patch-deploy-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Patch durable execution gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("supabase/functions/market-autotrader/index.ts")
+          text = path.read_text()
+
+          def replace_once(old: str, new: str, marker: str) -> None:
+              global text
+              if new in text:
+                  return
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{marker}: expected exactly one old block, found {count}")
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              'const MAX_SCAN_SECONDS = 280;\n',
+              'const MAX_SCAN_SECONDS = 280;\n'
+              'const MIN_MONITOR_INTERVAL_SECONDS = 10;\n'
+              'const MIN_FULL_SCAN_INTERVAL_SECONDS = 60;\n',
+              'timing constants',
+          )
+
+          old_rpc = '''async function rpc(name: string, body: JsonRecord): Promise<any> {
+            return db(`rpc/${name}`, { method: "POST", body: JSON.stringify(body) });
+          }
+          '''
+          new_rpc = old_rpc + '''async function tryAcquireExecutionGate(
+            gateKey: string,
+            minSeconds: number,
+          ): Promise<{ acquired: boolean; error?: string }> {
+            try {
+              const acquired = await rpc("try_acquire_autotrader_execution_gate", {
+                p_gate_key: gateKey,
+                p_min_seconds: minSeconds,
+              });
+              return { acquired: acquired === true };
+            } catch (error) {
+              return {
+                acquired: false,
+                error: error instanceof Error ? error.message : String(error),
+              };
+            }
+          }
+          '''
+          replace_once(old_rpc, new_rpc, 'rpc gate helper')
+
+          replace_once(
+              '    full_scan_interval_seconds: [10, 3600],\n',
+              '    full_scan_interval_seconds: [60, 3600],\n',
+              'scan setting minimum',
+          )
+          replace_once(
+              '    monitor_interval_seconds: [5, 300],\n',
+              '    monitor_interval_seconds: [10, 300],\n',
+              'monitor setting minimum',
+          )
+
+          old_status = '    if (action === "status") return response({ ok: true, ...(await status(settings)) });\n'
+          gate_block = old_status + '''
+              if (action === "scan" || action === "monitor") {
+                const minIntervalSeconds = action === "monitor"
+                  ? Math.max(
+                    MIN_MONITOR_INTERVAL_SECONDS,
+                    finite(settings.monitor_interval_seconds, MIN_MONITOR_INTERVAL_SECONDS),
+                  )
+                  : Math.max(
+                    MIN_FULL_SCAN_INTERVAL_SECONDS,
+                    finite(settings.full_scan_interval_seconds, MIN_FULL_SCAN_INTERVAL_SECONDS),
+                  );
+                const boundedMinIntervalSeconds = Math.floor(minIntervalSeconds);
+                const executionGate = await tryAcquireExecutionGate(
+                  `market-autotrader:${action}`,
+                  boundedMinIntervalSeconds,
+                );
+                if (!executionGate.acquired) {
+                  return response({
+                    ok: true,
+                    status: "SKIPPED",
+                    action,
+                    reason: executionGate.error
+                      ? "EXECUTION_GATE_ERROR"
+                      : `${action.toUpperCase()}_THROTTLED`,
+                    min_interval_seconds: boundedMinIntervalSeconds,
+                  });
+                }
+              }
+          '''
+          replace_once(old_status, gate_block, 'handler execution gate')
+
+          required = [
+              'const MIN_MONITOR_INTERVAL_SECONDS = 10;',
+              'const MIN_FULL_SCAN_INTERVAL_SECONDS = 60;',
+              'try_acquire_autotrader_execution_gate',
+              'full_scan_interval_seconds: [60, 3600]',
+              'monitor_interval_seconds: [10, 300]',
+              '`market-autotrader:${action}`',
+              'EXECUTION_GATE_ERROR',
+              '${action.toUpperCase()}_THROTTLED',
+          ]
+          for marker in required:
+              if marker not in text:
+                  raise SystemExit(f"missing required marker: {marker}")
+          if text.index('`market-autotrader:${action}`') > text.index('cycleId = await beginCycle'):
+              raise SystemExit('execution gate must run before beginCycle')
+          path.write_text(text)
+
+          migration = Path("supabase/migrations/20260905030000_autotrader_execution_gate.sql")
+          if not migration.exists():
+              migration.write_text('''-- Durable global cadence gate for market-autotrader heavy cycles.\n-- Production was created ahead of this migration during the 2026-09-05 incident response.\ncreate table if not exists public.autotrader_execution_gate (\n  gate_key text primary key,\n  last_started_at timestamptz not null,\n  updated_at timestamptz not null default clock_timestamp(),\n  constraint autotrader_execution_gate_key_len check (char_length(gate_key) between 1 and 80)\n);\n\nalter table public.autotrader_execution_gate enable row level security;\nrevoke all on table public.autotrader_execution_gate from public, anon, authenticated;\n\ncreate or replace function public.try_acquire_autotrader_execution_gate(\n  p_gate_key text,\n  p_min_seconds integer\n) returns boolean\nlanguage plpgsql\nsecurity definer\nset search_path = pg_catalog, public\nas $$\ndeclare\n  v_now timestamptz := clock_timestamp();\n  v_acquired boolean := false;\nbegin\n  if p_gate_key is null\n     or btrim(p_gate_key) = ''\n     or p_min_seconds is null\n     or p_min_seconds < 1\n     or p_min_seconds > 3600 then\n    return false;\n  end if;\n\n  insert into public.autotrader_execution_gate as g\n    (gate_key, last_started_at, updated_at)\n  values\n    (p_gate_key, v_now, v_now)\n  on conflict (gate_key) do update\n    set last_started_at = excluded.last_started_at,\n        updated_at = excluded.updated_at\n    where g.last_started_at <= excluded.last_started_at - make_interval(secs => p_min_seconds)\n  returning true into v_acquired;\n\n  return coalesce(v_acquired, false);\nend;\n$$;\n\nrevoke all on function public.try_acquire_autotrader_execution_gate(text, integer)\n  from public, anon, authenticated;\ngrant execute on function public.try_acquire_autotrader_execution_gate(text, integer)\n  to service_role;\n''')
+          PY
+
+          deno fmt supabase/functions/market-autotrader/index.ts
+          deno fmt --check supabase/functions/market-autotrader/index.ts
+          deno check supabase/functions/market-autotrader/index.ts
+
+          grep -q 'const MIN_MONITOR_INTERVAL_SECONDS = 10' supabase/functions/market-autotrader/index.ts
+          grep -q 'const MIN_FULL_SCAN_INTERVAL_SECONDS = 60' supabase/functions/market-autotrader/index.ts
+          grep -q 'try_acquire_autotrader_execution_gate' supabase/functions/market-autotrader/index.ts
+          grep -q 'full_scan_interval_seconds: \[60, 3600\]' supabase/functions/market-autotrader/index.ts
+          grep -q 'monitor_interval_seconds: \[10, 300\]' supabase/functions/market-autotrader/index.ts
+
+      - name: Persist source and migration on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "Patch already present on main"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/market-autotrader/index.ts \
+            supabase/migrations/20260905030000_autotrader_execution_gate.sql
+          git commit -m "fix: hard-gate autotrader monitor and scan cadence"
+          git push origin HEAD:main
+
+      - name: Verify production gate contract
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL}"
+          ready="$(psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+            select
+              to_regclass('public.autotrader_execution_gate') is not null
+              and exists (
+                select 1
+                from pg_proc p
+                join pg_namespace n on n.oid = p.pronamespace
+                where n.nspname = 'public'
+                  and p.proname = 'try_acquire_autotrader_execution_gate'
+                  and p.prosecdef
+                  and not has_function_privilege('anon', p.oid, 'EXECUTE')
+                  and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                  and has_function_privilege('service_role', p.oid, 'EXECUTE')
+              );
+          ")"
+          test "${ready}" = "t"
+
+      - name: Deploy market-autotrader only
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN}"
+          test -n "${SUPABASE_PROJECT_REF}"
+          supabase functions deploy market-autotrader \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
+
+      - name: Confirm deployed function exists
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "${SUPABASE_PROJECT_REF}" | grep -q 'market-autotrader'
