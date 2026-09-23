@@ -1,0 +1,40 @@
+name: Validate Trading Dashboard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "validation/v700-deploy-validation.mjs"
+      - ".github/workflows/validate-dashboard.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Check existing dashboard JavaScript
+        run: |
+          node --check docs/app.js
+          node --check docs/config.js
+          node --check docs/performance.js
+          node --check docs/realized-performance.js
+          node --check docs/dashboard-only.js
+
+      - name: Check V15 live-control JavaScript
+        run: node --check docs/v15-range-control.js
+
+      - name: Run dashboard DOM tests
+        run: node --test docs/version-runtime.test.mjs
+
+      - name: Run dashboard deployment invariants
+        run: node validation/v700-deploy-validation.mjs

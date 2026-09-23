@@ -1,0 +1,562 @@
+TAP version 13
+# Subtest: V3 compact transport expands to the identical canonical verdict and facts
+ok 1 - V3 compact transport expands to the identical canonical verdict and facts
+  ---
+  duration_ms: 25.765828
+  type: 'test'
+  ...
+# Subtest: wire schemas disallow all additional fields
+ok 2 - wire schemas disallow all additional fields
+  ---
+  duration_ms: 0.595249
+  type: 'test'
+  ...
+# Subtest: invalid evidence reference -1 cannot become PASS
+ok 3 - invalid evidence reference -1 cannot become PASS
+  ---
+  duration_ms: 5.271248
+  type: 'test'
+  ...
+# Subtest: invalid evidence reference 0.5 cannot become PASS
+ok 4 - invalid evidence reference 0.5 cannot become PASS
+  ---
+  duration_ms: 4.603804
+  type: 'test'
+  ...
+# Subtest: invalid evidence reference 256 cannot become PASS
+ok 5 - invalid evidence reference 256 cannot become PASS
+  ---
+  duration_ms: 4.541387
+  type: 'test'
+  ...
+# Subtest: a valid integer outside the actual dictionary is also rejected
+ok 6 - a valid integer outside the actual dictionary is also rejected
+  ---
+  duration_ms: 10.66299
+  type: 'test'
+  ...
+# Subtest: compact transport still rejects invented numerical values and mismatched identity
+ok 7 - compact transport still rejects invented numerical values and mismatched identity
+  ---
+  duration_ms: 8.289393
+  type: 'test'
+  ...
+# Subtest: paid request requires compact format; canonical-shaped mock cannot pass as a new API response
+ok 8 - paid request requires compact format; canonical-shaped mock cannot pass as a new API response
+  ---
+  duration_ms: 6.246218
+  type: 'test'
+  ...
+# Subtest: same snapshot, same evidence references and no identity-dependent cache key
+ok 9 - same snapshot, same evidence references and no identity-dependent cache key
+  ---
+  duration_ms: 9.791055
+  type: 'test'
+  ...
+# Subtest: public candle cache coalesces simultaneous reads and preserves availability timestamps
+ok 10 - public candle cache coalesces simultaneous reads and preserves availability timestamps
+  ---
+  duration_ms: 3.61493
+  type: 'test'
+  ...
+# Subtest: cache never reuses a different closed-bar URL or an expired read
+ok 11 - cache never reuses a different closed-bar URL or an expired read
+  ---
+  duration_ms: 0.712338
+  type: 'test'
+  ...
+# Subtest: failed cached public fetch is evicted rather than becoming healthy data
+ok 12 - failed cached public fetch is evicted rather than becoming healthy data
+  ---
+  duration_ms: 0.608264
+  type: 'test'
+  ...
+# Subtest: two different candidates share only the identical BTC candle read: six requests become five
+ok 13 - two different candidates share only the identical BTC candle read: six requests become five
+  ---
+  duration_ms: 36.29547
+  type: 'test'
+  ...
+# Subtest: pending API never yields the observation loop; saved valid PASS may yield once
+ok 14 - pending API never yields the observation loop; saved valid PASS may yield once
+  ---
+  duration_ms: 19.774338
+  type: 'test'
+  ...
+# Subtest: VETO never interrupts protection for a retry
+ok 15 - VETO never interrupts protection for a retry
+  ---
+  duration_ms: 8.104179
+  type: 'test'
+  ...
+# Subtest: ABSTAIN never interrupts protection for a retry
+ok 16 - ABSTAIN never interrupts protection for a retry
+  ---
+  duration_ms: 7.217056
+  type: 'test'
+  ...
+# Subtest: storage failure cannot produce an actionable wake hint
+ok 17 - storage failure cannot produce an actionable wake hint
+  ---
+  duration_ms: 11.936964
+  type: 'test'
+  ...
+# Subtest: expired PASS cannot interrupt X1 or extend signal validity
+ok 18 - expired PASS cannot interrupt X1 or extend signal validity
+  ---
+  duration_ms: 7.816032
+  type: 'test'
+  ...
+# Subtest: OFF has no ready-yield effect
+ok 19 - OFF has no ready-yield effect
+  ---
+  duration_ms: 0.640584
+  type: 'test'
+  ...
+# Subtest: SHADOW has no ready-yield effect
+ok 20 - SHADOW has no ready-yield effect
+  ---
+  duration_ms: 0.699164
+  type: 'test'
+  ...
+# Subtest: virtual protection loop yields after a completed observation; ordinary leased cycle rechecks
+ok 21 - virtual protection loop yields after a completed observation; ordinary leased cycle rechecks
+  ---
+  duration_ms: 15.902892
+  type: 'test'
+  ...
+# Subtest: only two reversible executor wiring hooks; no exit policy or financial controls changed
+ok 22 - only two reversible executor wiring hooks; no exit policy or financial controls changed
+  ---
+  duration_ms: 2.775254
+  type: 'test'
+  ...
+# Subtest: existing valid decision recognized without changing its settings
+ok 23 - existing valid decision recognized without changing its settings
+  ---
+  duration_ms: 4.611766
+  type: 'test'
+  ...
+# Subtest: existing rejection is not upgraded
+ok 24 - existing rejection is not upgraded
+  ---
+  duration_ms: 5.293259
+  type: 'test'
+  ...
+# Subtest: CEC effective denial is not upgraded
+ok 25 - CEC effective denial is not upgraded
+  ---
+  duration_ms: 0.839746
+  type: 'test'
+  ...
+# Subtest: packet includes original BUY decision and its basis
+ok 26 - packet includes original BUY decision and its basis
+  ---
+  duration_ms: 23.487311
+  type: 'test'
+  ...
+# Subtest: does not send raw symbol/account/secrets/PNL from arbitrary feature fields
+ok 27 - does not send raw symbol/account/secrets/PNL from arbitrary feature fields
+  ---
+  duration_ms: 3.008239
+  type: 'test'
+  ...
+# Subtest: strict schema objects all disallow additional fields
+ok 28 - strict schema objects all disallow additional fields
+  ---
+  duration_ms: 0.496846
+  type: 'test'
+  ...
+# Subtest: Responses request has strict schema, no tools and server-side auth
+ok 29 - Responses request has strict schema, no tools and server-side auth
+  ---
+  duration_ms: 52.573349
+  type: 'test'
+  ...
+# Subtest: VETO retained as candidate-specific rejection
+ok 30 - VETO retained as candidate-specific rejection
+  ---
+  duration_ms: 19.863213
+  type: 'test'
+  ...
+# Subtest: ABSTAIN does not become PASS
+ok 31 - ABSTAIN does not become PASS
+  ---
+  duration_ms: 22.045814
+  type: 'test'
+  ...
+# Subtest: valid PASS can proceed only to existing guards
+ok 32 - valid PASS can proceed only to existing guards
+  ---
+  duration_ms: 24.266733
+  type: 'test'
+  ...
+# Subtest: SHADOW preserves existing queue even with invalid review
+ok 33 - SHADOW preserves existing queue even with invalid review
+  ---
+  duration_ms: 10.48622
+  type: 'test'
+  ...
+# Subtest: OFF has no DB/API calls
+ok 34 - OFF has no DB/API calls
+  ---
+  duration_ms: 0.815932
+  type: 'test'
+  ...
+# Subtest: unknown mode does not silently fail open
+ok 35 - unknown mode does not silently fail open
+  ---
+  duration_ms: 0.214199
+  type: 'test'
+  ...
+# Subtest: explicit enforcement approval is required
+ok 36 - explicit enforcement approval is required
+  ---
+  duration_ms: 1.729424
+  type: 'test'
+  ...
+# Subtest: missing API key makes zero calls
+ok 37 - missing API key makes zero calls
+  ---
+  duration_ms: 6.539782
+  type: 'test'
+  ...
+# Subtest: unapproved budget makes zero calls
+ok 38 - unapproved budget makes zero calls
+  ---
+  duration_ms: 1.075906
+  type: 'test'
+  ...
+# Subtest: candidate mismatch invalidates response
+ok 39 - candidate mismatch invalidates response
+  ---
+  duration_ms: 5.980819
+  type: 'test'
+  ...
+# Subtest: snapshot mismatch invalidates response
+ok 40 - snapshot mismatch invalidates response
+  ---
+  duration_ms: 5.165701
+  type: 'test'
+  ...
+# Subtest: fabricated field invalidates response
+ok 41 - fabricated field invalidates response
+  ---
+  duration_ms: 2.564323
+  type: 'test'
+  ...
+# Subtest: fabricated numerical observation invalidates response
+ok 42 - fabricated numerical observation invalidates response
+  ---
+  duration_ms: 3.405178
+  type: 'test'
+  ...
+# Subtest: changed units invalidate response
+ok 43 - changed units invalidate response
+  ---
+  duration_ms: 3.155102
+  type: 'test'
+  ...
+# Subtest: numeric prediction in prose is rejected
+ok 44 - numeric prediction in prose is rejected
+  ---
+  duration_ms: 7.067877
+  type: 'test'
+  ...
+# Subtest: PASS cannot only echo original factors
+ok 45 - PASS cannot only echo original factors
+  ---
+  duration_ms: 6.838851
+  type: 'test'
+  ...
+# Subtest: wrong original arithmetic cannot be confirmed
+ok 46 - wrong original arithmetic cannot be confirmed
+  ---
+  duration_ms: 2.410353
+  type: 'test'
+  ...
+# Subtest: missing fresh market data cannot be confirmed
+ok 47 - missing fresh market data cannot be confirmed
+  ---
+  duration_ms: 2.056193
+  type: 'test'
+  ...
+# Subtest: response refusal is not a valid PASS
+ok 48 - response refusal is not a valid PASS
+  ---
+  duration_ms: 0.223186
+  type: 'test'
+  ...
+# Subtest: incomplete response is rejected
+ok 49 - incomplete response is rejected
+  ---
+  duration_ms: 0.176219
+  type: 'test'
+  ...
+# Subtest: HTTP 429 is isolated with no repeat-until-PASS
+ok 50 - HTTP 429 is isolated with no repeat-until-PASS
+  ---
+  duration_ms: 3.140715
+  type: 'test'
+  ...
+# Subtest: HTTP 500 is isolated with no repeat-until-PASS
+ok 51 - HTTP 500 is isolated with no repeat-until-PASS
+  ---
+  duration_ms: 3.086584
+  type: 'test'
+  ...
+# Subtest: HTTP 401 is isolated with no repeat-until-PASS
+ok 52 - HTTP 401 is isolated with no repeat-until-PASS
+  ---
+  duration_ms: 2.776426
+  type: 'test'
+  ...
+# Subtest: timeout also bounds transports ignoring abort
+ok 53 - timeout also bounds transports ignoring abort
+  ---
+  duration_ms: 17.794346
+  type: 'test'
+  ...
+# Subtest: late PASS is discarded
+ok 54 - late PASS is discarded
+  ---
+  duration_ms: 4.447793
+  type: 'test'
+  ...
+# Subtest: same decision concurrent across coordinators has one paid request
+ok 55 - same decision concurrent across coordinators has one paid request
+  ---
+  duration_ms: 10.987182
+  type: 'test'
+  ...
+# Subtest: pending GPT returns promptly and independent management can run
+ok 56 - pending GPT returns promptly and independent management can run
+  ---
+  duration_ms: 3.957498
+  type: 'test'
+  ...
+# Subtest: changing candidate features invalidates cached authorization
+ok 57 - changing candidate features invalidates cached authorization
+  ---
+  duration_ms: 5.262702
+  type: 'test'
+  ...
+# Subtest: claim transition NEW to CLAIMED does not invalidate same decision
+ok 58 - claim transition NEW to CLAIMED does not invalidate same decision
+  ---
+  duration_ms: 5.084489
+  type: 'test'
+  ...
+# Subtest: old PASS expires without extending trigger
+ok 59 - old PASS expires without extending trigger
+  ---
+  duration_ms: 5.601814
+  type: 'test'
+  ...
+# Subtest: saved decision string is not trusted without raw evidence
+ok 60 - saved decision string is not trusted without raw evidence
+  ---
+  duration_ms: 5.924495
+  type: 'test'
+  ...
+# Subtest: future completed candles are removed
+ok 61 - future completed candles are removed
+  ---
+  duration_ms: 0.34322
+  type: 'test'
+  ...
+# Subtest: bar gaps and duplicate bars are errors
+ok 62 - bar gaps and duplicate bars are errors
+  ---
+  duration_ms: 0.273069
+  type: 'test'
+  ...
+# Subtest: unknown usage is not zero cost
+ok 63 - unknown usage is not zero cost
+  ---
+  duration_ms: 0.090549
+  type: 'test'
+  ...
+# Subtest: known token cost is kept in USD
+ok 64 - known token cost is kept in USD
+  ---
+  duration_ms: 0.130473
+  type: 'test'
+  ...
+# Subtest: budget stops additional distinct calls
+ok 65 - budget stops additional distinct calls
+  ---
+  duration_ms: 17.048636
+  type: 'test'
+  ...
+# Subtest: adapter filters before signal CLAIMED and never orders
+ok 66 - adapter filters before signal CLAIMED and never orders
+  ---
+  duration_ms: 4.875991
+  type: 'test'
+  ...
+# Subtest: resumption waits outside original lease and reuses ordinary cycle
+ok 67 - resumption waits outside original lease and reuses ordinary cycle
+  ---
+  duration_ms: 0.382344
+  type: 'test'
+  ...
+# Subtest: no GPT-triggered retry after an ordinary engine rejection
+ok 68 - no GPT-triggered retry after an ordinary engine rejection
+  ---
+  duration_ms: 0.132877
+  type: 'test'
+  ...
+# Subtest: local connector patch has five unique narrow regions
+ok 69 - local connector patch has five unique narrow regions
+  ---
+  duration_ms: 0.285251
+  type: 'test'
+  ...
+# Subtest: local installer refuses an unverified current source blob
+ok 70 - local installer refuses an unverified current source blob
+  ---
+  duration_ms: 0.515902
+  type: 'test'
+  ...
+# Subtest: SQL uses private review tables and no trading mutations
+ok 71 - SQL uses private review tables and no trading mutations
+  ---
+  duration_ms: 0.265665
+  type: 'test'
+  ...
+# Subtest: trade constants, exits and native protection have no replacement patch
+ok 72 - trade constants, exits and native protection have no replacement patch
+  ---
+  duration_ms: 0.137115
+  type: 'test'
+  ...
+# Subtest: PASS requires checking original active branch, not current movement only
+ok 73 - PASS requires checking original active branch, not current movement only
+  ---
+  duration_ms: 7.275074
+  type: 'test'
+  ...
+# Subtest: missing original taker share cannot become measured zero
+ok 74 - missing original taker share cannot become measured zero
+  ---
+  duration_ms: 3.83472
+  type: 'test'
+  ...
+# Subtest: failed stored revalidation clears prior valid ticket
+ok 75 - failed stored revalidation clears prior valid ticket
+  ---
+  duration_ms: 5.456463
+  type: 'test'
+  ...
+# Subtest: market collector ends at closed candles, retaining required complete counts
+ok 76 - market collector ends at closed candles, retaining required complete counts
+  ---
+  duration_ms: 2.865382
+  type: 'test'
+  ...
+# Subtest: local journal persists deduplication across store instances
+ok 77 - local journal persists deduplication across store instances
+  ---
+  duration_ms: 3.95305
+  type: 'test'
+  ...
+# Subtest: local runner cannot call API without explicit option
+ok 78 - local runner cannot call API without explicit option
+  ---
+  duration_ms: 0.988944
+  type: 'test'
+  ...
+# Subtest: SHADOW adapter does not await even journal I/O
+ok 79 - SHADOW adapter does not await even journal I/O
+  ---
+  duration_ms: 0.331147
+  type: 'test'
+  ...
+# Subtest: V4 named facts preserve the exact canonical answer and source precision
+ok 80 - V4 named facts preserve the exact canonical answer and source precision
+  ---
+  duration_ms: 22.966188
+  type: 'test'
+  ...
+# Subtest: V4 publishes explicit names, values and units instead of implicit array indices
+ok 81 - V4 publishes explicit names, values and units instead of implicit array indices
+  ---
+  duration_ms: 4.106308
+  type: 'test'
+  ...
+# Subtest: V4 forbids model-supplied numeric copies rather than silently repairing them
+ok 82 - V4 forbids model-supplied numeric copies rather than silently repairing them
+  ---
+  duration_ms: 3.87784
+  type: 'test'
+  ...
+# Subtest: V4 forbids model-supplied unit copies
+ok 83 - V4 forbids model-supplied unit copies
+  ---
+  duration_ms: 4.555561
+  type: 'test'
+  ...
+# Subtest: V4 rejects unknown fact identifiers
+ok 84 - V4 rejects unknown fact identifiers
+  ---
+  duration_ms: 3.530953
+  type: 'test'
+  ...
+# Subtest: V4 rejects numeric indices from the legacy transport
+ok 85 - V4 rejects numeric indices from the legacy transport
+  ---
+  duration_ms: 5.738882
+  type: 'test'
+  ...
+# Subtest: V4 removes conflicting duplicate assessment without changing the decision
+ok 86 - V4 removes conflicting duplicate assessment without changing the decision
+  ---
+  duration_ms: 3.839047
+  type: 'test'
+  ...
+# Subtest: V4 still rejects digits in free-text interpretations
+ok 87 - V4 still rejects digits in free-text interpretations
+  ---
+  duration_ms: 3.144582
+  type: 'test'
+  ...
+# Subtest: V4 still rejects candidate and snapshot identity changes
+ok 88 - V4 still rejects candidate and snapshot identity changes
+  ---
+  duration_ms: 7.133399
+  type: 'test'
+  ...
+# Subtest: V4 cannot mark a populated fact as missing
+ok 89 - V4 cannot mark a populated fact as missing
+  ---
+  duration_ms: 4.497125
+  type: 'test'
+  ...
+# Subtest: V4 does not turn data incompleteness into a PASS
+ok 90 - V4 does not turn data incompleteness into a PASS
+  ---
+  duration_ms: 6.68837
+  type: 'test'
+  ...
+# Subtest: V4 requires its own wire version and rejects a canonical-shaped API response
+ok 91 - V4 requires its own wire version and rejects a canonical-shaped API response
+  ---
+  duration_ms: 2.981038
+  type: 'test'
+  ...
+# Subtest: V4 every schema object forbids additional properties
+ok 92 - V4 every schema object forbids additional properties
+  ---
+  duration_ms: 0.467511
+  type: 'test'
+  ...
+1..92
+# tests 92
+# suites 0
+# pass 92
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 446.654122

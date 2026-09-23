@@ -1,0 +1,70 @@
+name: Patch Dashboard Account Return Display
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/patch-dashboard-account-return-display.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Wire realized performance module into dashboard
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('docs/index.html')
+          html = path.read_text(encoding='utf-8')
+
+          css = '  <link rel="stylesheet" href="./performance.css?v=20260821-account-return-r1">\n'
+          js = '  <script src="./realized-performance.js?v=20260821-account-return-r1" defer></script>\n'
+
+          if './performance.css?v=20260821-account-return-r1' not in html:
+              anchor = '  <link rel="stylesheet" href="./styles.css?v=7.5.3-RECOVERY-NET-POSITIVE-r1">\n'
+              if anchor not in html:
+                  raise SystemExit('styles.css anchor not found')
+              html = html.replace(anchor, anchor + css, 1)
+
+          if './realized-performance.js?v=20260821-account-return-r1' not in html:
+              anchor = '  <script src="./app.js?v=7.6.4-MARKET-REGIME-LEARNING-r3" defer></script>\n'
+              if anchor not in html:
+                  raise SystemExit('app.js anchor not found')
+              html = html.replace(anchor, anchor + js, 1)
+
+          path.write_text(html, encoding='utf-8')
+          PY
+
+      - name: Validate dashboard display module
+        shell: bash
+        run: |
+          node --check docs/realized-performance.js
+          grep -Fq 'Binance 계정 수익률 · 오늘' docs/realized-performance.js
+          grep -Fq '전략 ROI · 누적' docs/realized-performance.js
+          grep -Fq 'account-performance' docs/realized-performance.js
+          grep -Fq './realized-performance.js?v=20260821-account-return-r1' docs/index.html
+          grep -Fq './performance.css?v=20260821-account-return-r1' docs/index.html
+
+      - name: Commit dashboard wiring if needed
+        shell: bash
+        run: |
+          if git diff --quiet -- docs/index.html; then
+            echo "dashboard already wired"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/index.html
+          git commit -m "dashboard: show Binance equity return separately"
+          git push origin HEAD:main

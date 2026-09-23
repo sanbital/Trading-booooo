@@ -1,0 +1,88 @@
+name: Audit orphan pending futures sells v7.6.13
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/audit-orphan-pending-futures-sells-v7613.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Query pending futures sell ledger read-only
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          {
+            echo "audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo 'PENDING'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select o.id,o.position_id,p.market,p.state,o.created_at,o.updated_at,o.purpose,o.state,
+                     coalesce(o.identifier,''),coalesce(o.exchange_order_id,''),o.requested_volume,
+                     coalesce(o.executed_volume,0),coalesce(o.average_fill_price,0),coalesce(o.executed_funds_quote,0),
+                     coalesce(o.completed_at::text,''),coalesce(o.error_message,''),
+                     coalesce(p.remaining_quantity,0),coalesce(p.close_reason,''),coalesce(p.closed_at::text,'')
+              from public.trading_orders o
+              join public.trading_positions p on p.id=o.position_id
+              where p.exchange='binance_futures' and o.side='SELL'
+                and o.state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED')
+              order by o.created_at;"
+            echo 'PENDING_FILL_AGG'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              with pending as (
+                select o.id,o.position_id,o.exchange_order_id
+                from public.trading_orders o join public.trading_positions p on p.id=o.position_id
+                where p.exchange='binance_futures' and o.side='SELL'
+                  and o.state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED')
+              )
+              select q.id,q.position_id,q.exchange_order_id,
+                     count(f.*),coalesce(sum(f.quantity),0),coalesce(sum(f.quote_amount),0),
+                     coalesce(min(f.executed_at)::text,''),coalesce(max(f.executed_at)::text,'')
+              from pending q left join public.exchange_trade_fills f
+                on f.bot_order_id=q.id or (q.exchange_order_id is not null and f.exchange_order_id=q.exchange_order_id)
+              group by q.id,q.position_id,q.exchange_order_id;"
+            echo 'POSITION_SELL_HISTORY'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              with ids as (
+                select distinct o.position_id
+                from public.trading_orders o join public.trading_positions p on p.id=o.position_id
+                where p.exchange='binance_futures' and o.side='SELL'
+                  and o.state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED')
+              )
+              select o.position_id,o.id,o.created_at,o.purpose,o.state,coalesce(o.identifier,''),coalesce(o.exchange_order_id,''),
+                     o.requested_volume,coalesce(o.executed_volume,0),coalesce(o.completed_at::text,''),coalesce(o.error_message,'')
+              from public.trading_orders o join ids i on i.position_id=o.position_id
+              where o.side='SELL' order by o.position_id,o.created_at;"
+            echo 'POSITION_EVENTS'
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              with ids as (
+                select distinct o.position_id
+                from public.trading_orders o join public.trading_positions p on p.id=o.position_id
+                where p.exchange='binance_futures' and o.side='SELL'
+                  and o.state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED')
+              )
+              select e.position_id,e.created_at,e.code,left(coalesce(e.message,''),120),e.details::text
+              from public.trading_events e join ids i on i.position_id=e.position_id
+              where e.code in ('POSITION_CLOSED','PARTIAL_EXIT','EXIT_RECONCILE_INCOMPLETE','EXIT_RECONCILED_FROM_FILLS','FUTURES_EXCHANGE_POSITION_ZERO','EXCHANGE_FUTURES_POSITION_ZERO_RECONCILED','ORDER_RECONCILED','ORDER_APPLIED','EXIT_DEFERRED_UNSETTLED_ORDER','EXIT_CLAIM_SKIPPED')
+              order by e.position_id,e.created_at;"
+          } > .github/orphan-pending-futures-sells-v7613.txt
+      - name: Commit audit
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/orphan-pending-futures-sells-v7613.txt
+          git commit -m "chore: record orphan pending futures sell audit" || true
+          git pull --rebase origin main || true
+          git push origin HEAD:main || true

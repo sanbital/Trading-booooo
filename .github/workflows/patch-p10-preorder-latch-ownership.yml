@@ -1,0 +1,86 @@
+name: Patch P10 pre-order latch ownership
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/patch-p10-preorder-latch-ownership.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: patch-p10-preorder-latch-ownership
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Patch source ownership
+        run: python .github/scripts/patch_p10_preorder.py
+
+      - name: Format and focused verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt \
+            supabase/functions/market-autotrader/p10-entry-reconciliation.ts \
+            supabase/functions/market-autotrader/p10-entry-reconciliation.test.ts \
+            supabase/functions/market-autotrader/p10-entry-latch-ownership.test.ts \
+            supabase/functions/market-autotrader/index.ts
+          deno fmt --check \
+            supabase/functions/market-autotrader/p10-entry-reconciliation.ts \
+            supabase/functions/market-autotrader/p10-entry-reconciliation.test.ts \
+            supabase/functions/market-autotrader/p10-entry-latch-ownership.test.ts \
+            supabase/functions/market-autotrader/index.ts
+          deno test supabase/functions/market-autotrader/p10-entry-reconciliation.test.ts
+          deno test --allow-read \
+            supabase/functions/market-autotrader/p10-entry-latch-ownership.test.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          python - <<'PY'
+          from pathlib import Path
+          src = Path('supabase/functions/market-autotrader/index.ts').read_text()
+          scan = src[src.index('async function p10ScanCycle('):src.index('async function p10FetchJson(')]
+          entry = src[src.index('async function enterP10Signal('):src.index('async function p10ScanCycle(')]
+          needle = 'latchP10EntrySafety("P10_ENTRY_RECONCILIATION_REQUIRED")'
+          assert needle not in scan, 'scan-level catch still owns reconciliation latch'
+          assert entry.count(needle) >= 2, 'post-submit reconciliation ownership was lost'
+          assert 'P10_ENTRY_POLICY_BLOCK' in src
+          assert 'P10_ENTRY_PREORDER_ERROR' in src
+          sql = Path('supabase/migrations/20260826094500_p10_entry_reconciliation_invariants.sql').read_text()
+          assert 'NO_ENTRY_RECONCILIATION_EVIDENCE' in sql
+          assert 'RECENT_FUTURES_CLOSE_GRACE' in sql
+          PY
+          git diff --check
+
+      - name: Commit production fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-autotrader/p10-entry-reconciliation.ts \
+            supabase/functions/market-autotrader/p10-entry-reconciliation.test.ts \
+            supabase/functions/market-autotrader/p10-entry-latch-ownership.test.ts \
+            supabase/migrations/20260826094500_p10_entry_reconciliation_invariants.sql \
+            supabase/migrations/20260827001000_p10_entry_latch_evidence_guard.sql
+          if git diff --cached --quiet; then
+            echo "No changes required."
+            exit 0
+          fi
+          git commit -m "fix: separate P10 policy blocks from reconciliation"
+          git push origin HEAD:main

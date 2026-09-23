@@ -1,0 +1,130 @@
+name: Repair V10 Executor Identity
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "research/v10-executor-identity-fix-trigger.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-v10-executor-identity-20260901
+  cancel-in-progress: false
+
+jobs:
+  repair-test-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Align executor and exit runtime identities
+        shell: python
+        run: |
+          from pathlib import Path
+
+          replacements = {
+              Path("supabase/functions/v10-lane-executor/index.ts"): [
+                  ('const ENGINE_REVISION = "V10-LANE-EXECUTOR-1.0.0";',
+                   'const ENGINE_REVISION = "V10-LANE-EXECUTOR-1.2.0";'),
+              ],
+              Path("supabase/functions/_shared/v10_lane_exit_config.ts"): [
+                  ('export const V10_EXIT_ENGINE_REVISION = "V10-LANES-EXIT-RUNTIME-1.0.0";',
+                   'export const V10_EXIT_ENGINE_REVISION = "V10-LANES-EXIT-RUNTIME-1.1.0";'),
+                  ('"f6480355e2e0c987afe1af7a8b66dc61d5fd35b1fa165d1ad940f3b5b331741d";',
+                   '"1aa96472956500b17e27d8b923a1dd883643a728b74c5f096d8f780a27307c4b";'),
+                  ('key: "BULL_R7_SP_T22P5_Q0P30_F0_G6P75",',
+                   'key: "BULL_R7_SP_T22P5_Q0P30_F0_G6P75__RT110",'),
+                  ('key: "RANGE_R7_STATE_T1P00_A18_G0P75",',
+                   'key: "RANGE_R7_STATE_T1P00_A18_G0P75__RT110",'),
+                  ('key: "BEAR_R8_STATE_T1P76_R0P0200_B0P40",',
+                   'key: "BEAR_R8_STATE_T1P76_R0P0200_B0P40__RT110",'),
+              ],
+          }
+
+          for path, pairs in replacements.items():
+              text = path.read_text()
+              for old, new in pairs:
+                  if old in text:
+                      text = text.replace(old, new)
+                  elif new not in text:
+                      raise SystemExit(f"expected identity not found in {path}: {old}")
+              path.write_text(text)
+
+      - name: Validate coordinated identities and tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'const ENGINE_REVISION = "V10-LANE-EXECUTOR-1.2.0";' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'V10_EXIT_ENGINE_REVISION = "V10-LANES-EXIT-RUNTIME-1.1.0"' supabase/functions/_shared/v10_lane_exit_config.ts
+          grep -Fq '1aa96472956500b17e27d8b923a1dd883643a728b74c5f096d8f780a27307c4b' supabase/functions/_shared/v10_lane_exit_config.ts
+          grep -Fq 'BULL_R7_SP_T22P5_Q0P30_F0_G6P75__RT110' supabase/functions/_shared/v10_lane_exit_config.ts
+          grep -Fq 'RANGE_R7_STATE_T1P00_A18_G0P75__RT110' supabase/functions/_shared/v10_lane_exit_config.ts
+          grep -Fq 'BEAR_R8_STATE_T1P76_R0P0200_B0P40__RT110' supabase/functions/_shared/v10_lane_exit_config.ts
+          grep -Fq 'V10_REGIME_TRANSITION_LIVE_EXIT_COMPILED = true' supabase/functions/_shared/v10_regime_transition.ts
+          grep -Fq 'modelRevision: "MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET"' supabase/functions/_shared/p10-market-risk.ts
+          deno test supabase/functions/_shared/p10-market-risk.test.ts
+          deno test supabase/functions/_shared/v10_regime_transition.test.ts
+          deno test supabase/functions/_shared/v10_lane_exit.test.ts
+
+      - name: Commit identity repair to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- supabase/functions/v10-lane-executor/index.ts supabase/functions/_shared/v10_lane_exit_config.ts; then
+            echo "Source already aligned"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/v10-lane-executor/index.ts supabase/functions/_shared/v10_lane_exit_config.ts
+          git commit -m "Align V10 executor 1.2 and exit runtime 1.1 identities"
+          git push origin HEAD:main
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Validate production deploy secrets
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_PROJECT_REF:-}"
+
+      - name: Deploy repaired v10-lane-executor only
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy v10-lane-executor \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
+
+      - name: Verify function is active
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "${SUPABASE_PROJECT_REF}" | tee /tmp/functions.txt
+          grep -q "v10-lane-executor" /tmp/functions.txt

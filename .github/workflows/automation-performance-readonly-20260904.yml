@@ -1,0 +1,145 @@
+name: One-shot Post-fix Performance Readonly 20260904
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/automation-performance-readonly-20260904.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      PGOPTIONS: '-c default_transaction_read_only=on -c statement_timeout=60000'
+    steps:
+      - name: Query post-fix live trading performance read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL}"
+          FIX_AT='2026-09-03 13:42:00+00'
+          echo '=== CLOCK ==='
+          psql "${SUPABASE_DB_URL}" -P pager=off -F '|' -A -t -c "select now(), '${FIX_AT}'::timestamptz;"
+
+          echo '=== V15_TABLES ==='
+          psql "${SUPABASE_DB_URL}" -P pager=off -F '|' -A -t -c "select table_name,string_agg(column_name,',' order by ordinal_position) from information_schema.columns where table_schema='public' and (table_name ilike 'v15%' or table_name ilike '%range%live%') group by table_name order by table_name;"
+
+          echo '=== POST_TRADING_POSITIONS ==='
+          psql "${SUPABASE_DB_URL}" -P pager=off -F '|' -A -t <<SQL
+          select
+            case when exchange='binance_futures' then 'FUTURES' else 'SPOT' end market_type,
+            exchange, quote_currency,
+            count(*) filter(where state='CLOSED') closed_n,
+            count(*) filter(where state='OPEN') open_n,
+            count(*) filter(where state='CLOSED' and realized_pnl_quote>0) wins,
+            count(*) filter(where state='CLOSED' and realized_pnl_quote<0) losses,
+            round(coalesce(sum(realized_pnl_quote) filter(where state='CLOSED'),0)::numeric,6) pnl,
+            round(avg(realized_return_pct) filter(where state='CLOSED')::numeric,4) avg_ret_pct,
+            round(avg(realized_pnl_quote) filter(where state='CLOSED' and realized_pnl_quote>0)::numeric,6) avg_win_pnl,
+            round(avg(realized_pnl_quote) filter(where state='CLOSED' and realized_pnl_quote<0)::numeric,6) avg_loss_pnl,
+            count(*) filter(where state='CLOSED' and upper(coalesce(close_reason,'')) like '%STOP%') stops,
+            round(100.0*count(*) filter(where state='CLOSED' and upper(coalesce(close_reason,'')) like '%STOP%')/nullif(count(*) filter(where state='CLOSED'),0),2) stop_pct,
+            round(avg(mfe_capture_ratio) filter(where state='CLOSED')::numeric,4) avg_mfe_capture,
+            round(avg(profit_giveback_bps) filter(where state='CLOSED')::numeric,2) avg_giveback_bps,
+            min(opened_at),max(coalesce(closed_at,opened_at))
+          from public.trading_positions
+          where is_paper is false and opened_at >= '${FIX_AT}'::timestamptz
+          group by market_type,exchange,quote_currency
+          order by market_type,exchange;
+          SQL
+
+          echo '=== POST_TRADING_POSITION_ROWS ==='
+          psql "${SUPABASE_DB_URL}" -P pager=off -F '|' -A -t <<SQL
+          select case when exchange='binance_futures' then 'FUTURES' else 'SPOT' end,
+            exchange,market,state,
+            to_char(opened_at at time zone 'Asia/Seoul','MM-DD HH24:MI:SS'),
+            to_char(closed_at at time zone 'Asia/Seoul','MM-DD HH24:MI:SS'),
+            round(realized_pnl_quote::numeric,6),round(realized_return_pct::numeric,4),close_reason,
+            round(peak_return_pct::numeric,4),round(mfe_capture_ratio::numeric,4),round(profit_giveback_bps::numeric,2),strategy_key
+          from public.trading_positions
+          where is_paper is false and opened_at >= '${FIX_AT}'::timestamptz
+          order by opened_at;
+          SQL
+
+          echo '=== POST_V10_LANE_POSITIONS ==='
+          psql "${SUPABASE_DB_URL}" -P pager=off -F '|' -A -t <<SQL
+          select lane,fingerprint,state,count(*) n,
+            count(*) filter(where closed_at is not null) closed_n,
+            count(*) filter(where closed_at is null) open_n,
+            count(*) filter(where realized_pnl_usdt>0) wins,
+            count(*) filter(where realized_pnl_usdt<0) losses,
+            round(coalesce(sum(realized_pnl_usdt),0)::numeric,6) pnl,
+            min(opened_at),max(coalesce(closed_at,opened_at))
+          from public.v10_lane_positions
+          where opened_at >= '${FIX_AT}'::timestamptz
+          group by lane,fingerprint,state order by lane,fingerprint,state;
+          SQL
+
+          echo '=== POST_V11_LONG_REGIME_POSITIONS ==='
+          psql "${SUPABASE_DB_URL}" -P pager=off -F '|' -A -t <<SQL
+          select revision,entry_lane,active_lane,state,count(*) n,
+            count(*) filter(where closed_at is not null) closed_n,
+            count(*) filter(where closed_at is null) open_n,
+            count(*) filter(where realized_pnl_usdt>0) wins,
+            count(*) filter(where realized_pnl_usdt<0) losses,
+            round(coalesce(sum(realized_pnl_usdt),0)::numeric,6) pnl,
+            min(entry_at),max(coalesce(closed_at,entry_at))
+          from public.v11_long_regime_positions
+          where entry_at >= '${FIX_AT}'::timestamptz
+          group by revision,entry_lane,active_lane,state order by revision,entry_lane,active_lane,state;
+          SQL
+
+          echo '=== POST_ORDER_FILL_COUNTS ==='
+          psql "${SUPABASE_DB_URL}" -P pager=off -F '|' -A -t <<SQL
+          select o.exchange,o.state,o.purpose,count(distinct o.id) orders,count(f.id) fills,
+            min(o.created_at),max(coalesce(f.executed_at,o.completed_at,o.created_at))
+          from public.trading_orders o left join public.trading_fills f on f.order_id=o.id
+          where o.created_at >= '${FIX_AT}'::timestamptz
+          group by o.exchange,o.state,o.purpose order by o.exchange,o.state,o.purpose;
+          SQL
+
+          echo '=== PRE4_FUTURES_TRADING_POSITIONS ==='
+          psql "${SUPABASE_DB_URL}" -P pager=off -F '|' -A -t <<SQL
+          with x as (
+            select * from public.trading_positions
+            where is_paper=false and exchange='binance_futures' and state='CLOSED' and opened_at < '${FIX_AT}'::timestamptz
+            order by opened_at desc limit 4
+          )
+          select count(*),count(*) filter(where realized_pnl_quote>0),count(*) filter(where realized_pnl_quote<0),
+            round(sum(realized_pnl_quote)::numeric,6),round(avg(realized_return_pct)::numeric,4),
+            round(avg(realized_pnl_quote) filter(where realized_pnl_quote>0)::numeric,6),
+            round(avg(realized_pnl_quote) filter(where realized_pnl_quote<0)::numeric,6),
+            count(*) filter(where upper(coalesce(close_reason,'')) like '%STOP%'),
+            round(avg(mfe_capture_ratio)::numeric,4),round(avg(profit_giveback_bps)::numeric,2),min(opened_at),max(closed_at)
+          from x;
+          SQL
+
+          echo '=== PRIOR4_FUTURES_TRADING_POSITIONS ==='
+          psql "${SUPABASE_DB_URL}" -P pager=off -F '|' -A -t <<SQL
+          with x as (
+            select * from public.trading_positions
+            where is_paper=false and exchange='binance_futures' and state='CLOSED' and opened_at < '${FIX_AT}'::timestamptz
+            order by opened_at desc offset 4 limit 4
+          )
+          select count(*),count(*) filter(where realized_pnl_quote>0),count(*) filter(where realized_pnl_quote<0),
+            round(sum(realized_pnl_quote)::numeric,6),round(avg(realized_return_pct)::numeric,4),
+            round(avg(realized_pnl_quote) filter(where realized_pnl_quote>0)::numeric,6),
+            round(avg(realized_pnl_quote) filter(where realized_pnl_quote<0)::numeric,6),
+            count(*) filter(where upper(coalesce(close_reason,'')) like '%STOP%'),
+            round(avg(mfe_capture_ratio)::numeric,4),round(avg(profit_giveback_bps)::numeric,2),min(opened_at),max(closed_at)
+          from x;
+          SQL
+
+          echo '=== ACCOUNTING_ANOMALIES_POST ==='
+          psql "${SUPABASE_DB_URL}" -P pager=off -F '|' -A -t <<SQL
+          select count(*) filter(where state='CLOSED' and (realized_pnl_quote is null or realized_return_pct is null)) incomplete,
+                 count(*) filter(where state='CLOSED' and peak_return_pct is not null and realized_return_pct is not null and peak_return_pct < realized_return_pct) peak_lt_realized,
+                 count(*) filter(where state='CLOSED' and profit_giveback_bps < 0) negative_giveback
+          from public.trading_positions
+          where is_paper=false and opened_at >= '${FIX_AT}'::timestamptz;
+          SQL

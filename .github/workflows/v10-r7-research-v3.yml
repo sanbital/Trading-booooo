@@ -1,0 +1,98 @@
+name: V10 R7 New Mechanism Research V3
+
+on:
+  push:
+    branches: [v10-continuation-20260830]
+    paths:
+      - 'research/v10_continuation/run_r7_v3.py'
+      - 'research/v10_continuation/r7-protocol-lock-v3.json'
+      - '.github/workflows/v10-r7-research-v3.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v10-r7-new-mechanism-research-v3
+  cancel-in-progress: false
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/cache@v4
+        with:
+          path: v10-cache-r3
+          key: v10-r3-binance-usdm-15m-2023-2025-v1
+      - name: Verify V3 protocol, source, and runtime-only correction
+        run: |
+          python - <<'PY'
+          import hashlib, json, pathlib
+          root=pathlib.Path('research/v10_continuation')
+          protocol=json.loads((root/'r7-protocol-lock-v3.json').read_text())
+          wrapper=(root/'run_r7_v3.py').read_bytes()
+          source=(root/'run_r7.py').read_bytes()
+          assert protocol['immutable_after_commit'] is True
+          assert protocol['test_accessed_before_lock'] is False
+          assert protocol['final_holdout']['accessed_before_lock'] is False
+          assert hashlib.sha256(wrapper).hexdigest()==protocol['runner_sha256']
+          assert hashlib.sha256(source).hexdigest()==protocol['source_runner_sha256']
+          text=source.decode('utf-8')
+          transform=protocol['audited_transform']
+          assert text.count(transform['from'])==transform['count_required']==1
+          corrected=text.replace(transform['from'],transform['to'],1)
+          compile(corrected,str(root/'run_r7.py'),'exec')
+          assert 'loader.load_period(P22' not in corrected
+          assert protocol['runtime_correction']['statistical_logic_changed'] is False
+          assert protocol['runtime_correction']['candidate_universe_changed'] is False
+          assert protocol['runtime_correction']['gates_changed'] is False
+          assert protocol['selection_gates']['maximum_asset_exposure_share']==0.25
+          assert protocol['cost_model']['base_round_trip_bps']==18
+          assert protocol['cost_model']['stress_round_trip_bps']==21
+          print('R7 V3 sealed; prior attempts untouched; 2022 holdout isolated')
+          PY
+      - name: Syntax check V3 wrapper
+        run: python -m py_compile research/v10_continuation/run_r7_v3.py
+      - name: Run R7 RANGE and BEAR discovery
+        run: python research/v10_continuation/run_r7_v3.py
+      - name: Record immutable source-data hashes
+        run: |
+          python - <<'PY'
+          import hashlib,json,pathlib,os
+          files=[]
+          root=pathlib.Path('v10-cache-r3')
+          for path in sorted(root.rglob('*.zip')):
+              h=hashlib.sha256(path.read_bytes()).hexdigest()
+              files.append({'path':str(path),'bytes':path.stat().st_size,'sha256':h})
+          manifest={
+              'schema_version':3,
+              'source':'Binance Data Vision USD-M monthly 15m klines',
+              'github_sha':os.environ.get('GITHUB_SHA'),
+              'workflow_run_id':os.environ.get('GITHUB_RUN_ID'),
+              'files':files,
+              'file_count':len(files),
+              'manifest_sha256':hashlib.sha256(json.dumps(files,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
+          }
+          pathlib.Path('research/v10_continuation/r7-v3-data-manifest.json').write_text(json.dumps(manifest,sort_keys=True,indent=2)+'\n')
+          assert files, 'no source archives found'
+          print(f"recorded {len(files)} verified source archives")
+          PY
+      - name: Upload R7 V3 result and source manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v10-r7-v3-result
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            research/v10_continuation/r7-v3-result.json
+            research/v10_continuation/r7-v3-data-manifest.json
+            research/v10_continuation/r7-protocol-lock-v3.json
+            research/v10_continuation/r7-v1-infrastructure-audit.json
+            research/v10_continuation/r7-v2-infrastructure-audit.json

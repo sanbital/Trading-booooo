@@ -1,4 +1,5 @@
-import {VERSION,MODEL,LIMITS,OUTPUT_SCHEMA,WIRE_OUTPUT_SCHEMA,canonical,hash,baselineAllowed,decisionIdentity,triggerExpiry,validateAnswer,parseApiResponse,ensure} from './contract.mjs';
+import {WIRE_OUTPUT_SCHEMA_V4 as WIRE_OUTPUT_SCHEMA,parseApiResponseV4 as parseApiResponse} from './wire-v4.mjs';
+import {VERSION,MODEL,LIMITS,OUTPUT_SCHEMA,canonical,hash,baselineAllowed,decisionIdentity,triggerExpiry,validateAnswer,ensure} from './contract.mjs';
 import {SYSTEM_PROMPT} from './prompt.mjs';
 import {collectMarket,buildPacket,packetHash} from './market.mjs';
 import {callFinalReviewer} from './openai.mjs';

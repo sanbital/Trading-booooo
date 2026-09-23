@@ -1,0 +1,21 @@
+{
+  "baseline": "e9e87ebdf2e464a2cb4387c232d9831c3cde4464",
+  "tests": 92,
+  "passed": 92,
+  "failed": 0,
+  "executor_unchanged": true,
+  "executor_syntax": "PASS",
+  "actual_api_calls": 0,
+  "production_engine_deployed": false,
+  "trading_controls_changed": false,
+  "hashes": {
+    "openai.mjs": "52175261f96f4c2f9ddf9fe473de61a62dc3f952d88764161379a269fc09e70d",
+    "contract.mjs": "8de4e07d6c3bb13f8387700ce04138e07db8b6fb65433499d53cf01e19aad8e4",
+    "supabase-store.mjs": "04e8af5844992f6e2f0d70f5807c775ee0e8499cdc16639d283a096f87b421be",
+    "candle-cache.mjs": "4ca9be9a1aa94ce8da3cc6c7f8e3203e61ee01fc76693e453e631bdcb382a96a",
+    "wire-v4.mjs": "58d62d79a8820c64b2fb377b75905305551c4634421c7496bd660cd1d947a6bf",
+    "market.mjs": "6683f41331f8e8789f53751c54ba2ea6cbbc8beedcb5f3f40f3dbd094aa615b6",
+    "coordinator.mjs": "1792ee6f41c6bc5e8f8b4e58d7f2043aeb92960a990eb7efcc7e4dee9ac6520c",
+    "prompt.mjs": "aa0c454f2df61b1177a81eb746ea19a70704fa9a8d197e51d02bc1c6237a47a0"
+  }
+}

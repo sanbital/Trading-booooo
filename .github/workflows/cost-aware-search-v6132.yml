@@ -1,0 +1,57 @@
+name: Cost Aware Search v6.13.2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/cost-aware-search-v6132.trigger
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v1
+        with:
+          deno-version: v2.x
+
+      - name: Patch scanner allocation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('supabase/functions/market-scanner/index.ts')
+          text = path.read_text(encoding='utf-8')
+          old_import = 'import { loadLobSearchExpansion, selectLobSearchRows } from "./search-expansion.ts";'
+          new_import = 'import { loadLobSearchExpansion, selectCostAwareLobRows } from "./search-expansion.ts";'
+          if old_import not in text:
+              raise SystemExit('missing search import anchor')
+          text = text.replace(old_import, new_import, 1)
+          old_select = '  const selectedRows = selectLobSearchRows(heatRanked, searchExpansion);'
+          new_select = '  const selectedRows = selectCostAwareLobRows(heatRanked, searchExpansion);'
+          if old_select not in text:
+              raise SystemExit('missing selectedRows anchor')
+          text = text.replace(old_select, new_select, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Run search tests
+        run: deno test supabase/functions/market-scanner/search-expansion.test.ts
+
+      - name: Commit integration
+        run: |
+          if git diff --quiet; then
+            echo "No changes required"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/market-scanner/index.ts
+          git commit -m "feat(v6.13.2): reserve scanner slots for liquid markets"
+          git push

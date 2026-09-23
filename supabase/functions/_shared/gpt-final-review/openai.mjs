@@ -1,11 +1,12 @@
-import {MODEL,LIMITS,WIRE_OUTPUT_SCHEMA,compactInput,ensure,parseApiResponse,validateAnswer} from './contract.mjs';
+import {WIRE_OUTPUT_SCHEMA_V4 as WIRE_OUTPUT_SCHEMA,compactInputV4 as compactInput,parseApiResponseV4 as parseApiResponse} from './wire-v4.mjs';
+import {MODEL,LIMITS,ensure,validateAnswer} from './contract.mjs';
 import {SYSTEM_PROMPT} from './prompt.mjs';
 export const API_URL='https://api.openai.com/v1/responses';
 export const PRICING=Object.freeze({inputPerMillion:.75,cachedPerMillion:.075,outputPerMillion:4.5,verified:'2026-09-23'});
-export function payloadFor(packet){return {model:MODEL,store:false,tools:[],truncation:'disabled',service_tier:'default',prompt_cache_key:'boo-final-review-v3-latency',
+export function payloadFor(packet){return {model:MODEL,store:false,tools:[],truncation:'disabled',service_tier:'default',prompt_cache_key:'boo-final-review-v4-facts',
   reasoning:{effort:'none'},max_output_tokens:LIMITS.outputTokens,
   input:[{role:'system',content:SYSTEM_PROMPT},{role:'user',content:JSON.stringify(compactInput(packet))}],
-  text:{format:{type:'json_schema',name:'entry_final_review_v3_compact',strict:true,schema:WIRE_OUTPUT_SCHEMA}}};}
+  text:{format:{type:'json_schema',name:'entry_final_review_v4_factref',strict:true,schema:WIRE_OUTPUT_SCHEMA}}};}
 export function costOf(raw){
   const u=raw?.usage,c=u?.input_tokens_details?.cached_tokens;
   if(!u||![u.input_tokens,u.output_tokens,c].every(Number.isSafeInteger)||c<0||c>u.input_tokens||u.output_tokens<0||u.input_tokens<0)

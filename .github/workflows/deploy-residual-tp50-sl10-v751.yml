@@ -1,0 +1,292 @@
+name: Deploy residual TP50 SL10 v7.5.1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-residual-tp50-sl10-v751.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy-residual-tp50-sl10-v751
+  cancel-in-progress: false
+
+jobs:
+  patch-deploy-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ENGINE_VERSION: 7.5.1-RESIDUAL-TP50-SL10
+      MIGRATION_PATH: supabase/migrations/20260806045000_residual_tp50_sl10_v751.sql
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Pause new entries during rollout
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=true, updated_at=now() where id=1 and emergency_liquidation is not true"
+
+      - name: Apply staged residual policy patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_residual_tp50_sl10_v751.py
+          cp scripts/sql/residual_tp50_sl10_v751.sql "${MIGRATION_PATH}"
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Validate patched runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-scanner/engine.ts
+          deno check supabase/functions/market-autotrader/index.ts
+          deno check supabase/functions/market-scanner/index.ts
+          node --check gateway/server.mjs
+          node --test gateway/server.test.mjs
+          grep -q "${ENGINE_VERSION}" supabase/functions/market-autotrader/index.ts
+          grep -q "${ENGINE_VERSION}" supabase/functions/market-scanner/engine.ts
+          grep -q "${ENGINE_VERSION}" gateway/server.mjs
+          grep -q 'RESIDUAL_TAKE_PROFIT_50' supabase/functions/market-autotrader/index.ts
+          grep -q 'RESIDUAL_STOP_LOSS_10' supabase/functions/market-autotrader/index.ts
+          grep -q 'RESIDUAL_AWAITING_TP50_OR_SL10' supabase/functions/market-autotrader/index.ts
+          git diff --check
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Apply database authority
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" \
+            --set=ON_ERROR_STOP=1 \
+            --single-transaction \
+            --file "${MIGRATION_PATH}"
+
+      - name: Deploy scanner and autotrader
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase functions deploy market-scanner \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
+          supabase functions deploy market-autotrader \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy version-matched gateways
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+        shell: bash
+        working-directory: gateway
+        run: |
+          set -euo pipefail
+          test -n "${FLY_API_TOKEN:-}"
+          test -n "${FLY_APP_NAME:-}"
+          test -n "${FLY_BINANCE_APP_NAME:-}"
+          flyctl deploy . --remote-only -a "${FLY_APP_NAME}" --config ./fly.toml --ha=false
+          flyctl scale count 1 -a "${FLY_APP_NAME}" --yes
+          flyctl deploy . --remote-only -a "${FLY_BINANCE_APP_NAME}" --config ./fly.binance.toml --ha=false
+          flyctl scale count 1 -a "${FLY_BINANCE_APP_NAME}" --yes
+
+      - name: Verify gateway engine parity
+        env:
+          FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          upbit_health="$(curl --fail-with-body --retry 15 --retry-delay 3 "https://${FLY_APP_NAME}.fly.dev/health")"
+          binance_health="$(curl --fail-with-body --retry 15 --retry-delay 3 "https://${FLY_BINANCE_APP_NAME}.fly.dev/health")"
+          echo "${upbit_health}"
+          echo "${binance_health}"
+          test "$(jq -r '.version' <<<"${upbit_health}")" = "${ENGINE_VERSION}"
+          test "$(jq -r '.version' <<<"${binance_health}")" = "${ENGINE_VERSION}"
+
+      - name: Run production monitor cycles
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          autotrade_token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
+          for attempt in 1 2 3; do
+            response="$(curl --fail-with-body --retry 2 --retry-delay 3 --max-time 90 -X POST \
+              -H 'content-type: application/json' \
+              -H "x-autotrade-token: ${autotrade_token}" \
+              -d '{"action":"monitor"}' \
+              "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/market-autotrader")"
+            echo "monitor ${attempt}: ${response}"
+            sleep 3
+          done
+
+      - name: Verify production policy and current holdings
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            v_guard text;
+            v_policy text;
+            v_paused boolean;
+          begin
+            select pg_get_functiondef(p.oid) into v_guard
+            from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+            where n.nspname='public' and p.proname='guard_residual_sell_order_v751';
+            select pg_get_functiondef(p.oid) into v_policy
+            from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+            where n.nspname='public' and p.proname='enforce_residual_exit_position_policy_v751';
+
+            if v_guard is null
+               or position('v_net_return_pct < 49.999' in v_guard)=0
+               or position('v_net_return_pct > -9.999' in v_guard)=0 then
+              raise exception 'residual TP50/SL10 database guard missing';
+            end if;
+            if v_policy is null
+               or position('residual_take_profit_pct' in v_policy)=0
+               or position('residual_stop_loss_pct' in v_policy)=0 then
+              raise exception 'residual position policy missing';
+            end if;
+            if not exists (
+              select 1 from pg_trigger t join pg_class c on c.oid=t.tgrelid
+              where not t.tgisinternal and c.relname='trading_orders'
+                and t.tgname='zzzzz_trading_orders_residual_exit_v751'
+            ) then
+              raise exception 'residual order guard trigger missing';
+            end if;
+            if exists (
+              select 1 from pg_trigger t join pg_class c on c.oid=t.tgrelid
+              where not t.tgisinternal and c.relname='trading_orders'
+                and t.tgname='zzzzz_trading_orders_half_hold_v750'
+            ) then
+              raise exception 'legacy v750 order guard still active';
+            end if;
+            select pause_new_entries into v_paused from public.trading_settings where id=1;
+            if v_paused is not true then
+              raise exception 'entries must remain paused until rollout verification completes';
+            end if;
+            if exists (
+              select 1 from public.trading_positions
+              where state in ('OPEN','EXITING')
+                and coalesce(metadata#>>'{exit_policy_revision}','') <> '7.5.1-RESIDUAL-TP50-SL10'
+            ) then
+              raise exception 'one or more open positions do not carry v7.5.1 policy metadata';
+            end if;
+            if exists (
+              select 1 from public.trading_positions
+              where state in ('OPEN','EXITING')
+                and remaining_quantity <= initial_quantity * 0.5 + greatest(coalesce(quantity_step,0) * 1.001, initial_quantity * 0.00000001)
+                and coalesce(metadata#>>'{exit_policy_quote,approved_reason}','') = 'PROTECTED_50_PERCENT_HOLD_ACTIVE'
+            ) then
+              raise exception 'legacy unbounded protected-hold decision remains active';
+            end if;
+          end
+          $$;
+
+          select market, state, initial_quantity, remaining_quantity, t1_completed,
+                 metadata#>>'{half_hold_policy,stage}' as policy_stage,
+                 metadata#>>'{exit_policy_quote,approved_reason}' as approved_reason,
+                 metadata#>>'{exit_policy_quote,hard_stop_net_return_pct}' as observed_net_return_pct,
+                 metadata#>>'{live_mark,fee_net_return_pct}' as live_net_return_pct,
+                 updated_at
+          from public.trading_positions
+          where market in ('BICOUSDT','DODOUSDT','HMSTRUSDT')
+            and state in ('OPEN','EXITING','CLOSED')
+          order by market, opened_at desc;
+          SQL
+
+      - name: Resume live operation
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -c \
+            "update public.trading_settings set pause_new_entries=false, lob_live_admission_revision='${ENGINE_VERSION}', lob_model_revision='${ENGINE_VERSION}', version=version+1, last_resume_at=now(), updated_at=now() where id=1 and emergency_liquidation is not true and manual_intervention_required is not true"
+          autotrade_token="$(printf 'autotrade:%s' "$LEARNING_ACCESS_TOKEN" | sha256sum | awk '{print $1}')"
+          curl --fail-with-body --retry 3 --retry-delay 3 --max-time 90 -X POST \
+            -H 'content-type: application/json' \
+            -H "x-autotrade-token: ${autotrade_token}" \
+            -d '{"action":"monitor"}' \
+            "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/market-autotrader"
+          sleep 5
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            s public.trading_settings%rowtype;
+          begin
+            select * into s from public.trading_settings where id=1;
+            if s.pause_new_entries is true then
+              raise exception 'new entries were not resumed';
+            end if;
+            if coalesce(s.gateway_error_count,0) <> 0 then
+              raise exception 'gateway error count is nonzero: %', s.gateway_error_count;
+            end if;
+            if s.last_monitor_at is null or now() - s.last_monitor_at > interval '60 seconds' then
+              raise exception 'monitor heartbeat is stale';
+            end if;
+            if s.lob_live_admission_revision <> '7.5.1-RESIDUAL-TP50-SL10'
+               or s.lob_model_revision <> '7.5.1-RESIDUAL-TP50-SL10' then
+              raise exception 'settings revision mismatch';
+            end if;
+          end
+          $$;
+          SQL
+
+      - name: Commit canonical production source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/market-autotrader/index.ts \
+            supabase/functions/market-scanner/engine.ts \
+            gateway/server.mjs \
+            scripts/apply_residual_tp50_sl10_v751.py \
+            scripts/sql/residual_tp50_sl10_v751.sql \
+            "${MIGRATION_PATH}"
+          if git diff --cached --quiet; then
+            echo "Canonical source already committed"
+          else
+            git commit -m "fix: add residual TP50 SL10 exits"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi

@@ -1,0 +1,63 @@
+name: Evidence Uncertainty v6.13.2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/evidence-uncertainty-v6132.trigger
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v1
+        with:
+          deno-version: v2.x
+
+      - name: Patch evidence-aware uncertainty
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('supabase/functions/_shared/lob/entry.ts')
+          text = path.read_text(encoding='utf-8')
+          import_anchor = 'import { evaluateEntryPayoff } from "./payoff-governor.ts";\n'
+          import_line = 'import { resolveLobUncertaintyHaircut } from "./uncertainty.ts";\n'
+          if import_line not in text:
+              if import_anchor not in text:
+                  raise SystemExit('missing uncertainty import anchor')
+              text = text.replace(import_anchor, import_anchor + import_line, 1)
+
+          old = '  const conservativeEdge = signalEdge * (1 - clamp(cfg.uncertaintyHaircut, 0, 0.9));\n'
+          new = '''  const uncertainty = resolveLobUncertaintyHaircut(\n    features,\n    clamp(cfg.uncertaintyHaircut, 0, 0.9),\n  );\n  const conservativeEdge = signalEdge * (1 - uncertainty.haircut);\n  if (uncertainty.tier !== "BASE") {\n    warnings.push(`EVIDENCE_UNCERTAINTY_${uncertainty.tier}`);\n  }\n'''
+          if old not in text:
+              raise SystemExit('missing conservative-edge anchor')
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Run focused LOB tests
+        run: |
+          deno test --allow-env \
+            supabase/functions/_shared/lob/uncertainty.test.ts \
+            supabase/functions/_shared/lob/entry.mission.test.ts
+
+      - name: Commit integration
+        run: |
+          if git diff --quiet; then
+            echo "No changes required"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/_shared/lob/entry.ts
+          git commit -m "feat(v6.13.2): calibrate uncertainty from live evidence"
+          git push

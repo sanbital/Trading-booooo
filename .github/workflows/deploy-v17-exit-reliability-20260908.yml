@@ -1,0 +1,187 @@
+name: Deploy V17 Exit Reliability
+
+# Ships the V17 exit-reliability patch to the production v10-lane-executor:
+# batched top-of-book quote with a staleness gate, close-before-audit ordering,
+# and deterministic exit attempt identifiers. The R3/R4 review modules ride along
+# as unreferenced files; nothing imports them from the live path.
+#
+# The Binance gateway half of this change (v17_create_stop / v17_cancel_stop)
+# is deployed by deploy-binance-gateway.yml, which already fires on any push to
+# main touching gateway/**. Do not deploy the gateway from here as well.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "research/v17-exit-reliability-deploy-trigger.txt"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-v17-exit-reliability-20260908
+  cancel-in-progress: false
+
+jobs:
+  verify-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # The push trigger only fires on main, so for that path this is still main. A
+      # workflow_dispatch deploys the ref it was dispatched on, which is what makes it
+      # possible to ship a reviewed branch without first moving main. Whatever ref that
+      # is gets echoed below, so production never runs code whose origin is unrecorded.
+      - name: Check out the ref being deployed
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - name: Record what is being deployed
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ref:   ${GITHUB_REF}"
+          echo "sha:   ${GITHUB_SHA}"
+          echo "event: ${GITHUB_EVENT_NAME}"
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::warning::Deploying production from ${GITHUB_REF}, not main. Fast-forward main to ${GITHUB_SHA}, or the next main-triggered deploy will silently revert this."
+          fi
+
+      - name: Check the exit protection wiring
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Cost-breakeven / profit-lock protection is ACTIVE: the executor spreads
+          # EXIT_REVIEW_CANDIDATE into the effective policy. Both thresholds are applied
+          # per tick with no confirmation window, so they work on the one-minute cron.
+          grep -Fq 'nextExitReviewed' supabase/functions/v10-lane-executor/index.ts
+          # The build being shipped is named by the last line of the deploy trigger, and the
+          # executor's PATCH must agree with it -- so a trigger bump can never ship a stale
+          # build, and a PATCH bump can never ship without a trigger. This used to be a
+          # hardcoded version string, which went stale on every patch and then failed with
+          # no message at all, because a bare grep under `set -e` prints nothing.
+          patch_src="$(grep -o 'PATCH="[^"]*"' supabase/functions/v10-lane-executor/index.ts | head -1 | sed 's/^PATCH="//; s/"$//')"
+          patch_want="$(grep -v '^[[:space:]]*$' research/v17-exit-reliability-deploy-trigger.txt | tail -n1 | awk '{print $NF}')"
+          if [ -z "${patch_src}" ] || [ "${patch_src}" != "${patch_want}" ]; then
+            echo "::error::executor PATCH '${patch_src}' does not match the deploy trigger '${patch_want}'"
+            exit 1
+          fi
+          echo "deploying executor build ${patch_src}"
+          grep -Eq 'const policy=\{\.\.\.POLICY,.*EXIT_REVIEW_CANDIDATE' supabase/functions/v10-lane-executor/index.ts \
+            || { echo "::error::EXIT_REVIEW_CANDIDATE no longer reaches the effective policy; profit protection would be off."; exit 1; }
+
+          # R5 loss-tail ladder. The cutover is per position: only rows stamped at entry with
+          # leaderExitPolicyVersion take the new ladder, so a position open across a deploy
+          # keeps the policy it was opened under and never has its stop moved underneath it.
+          grep -Fq 'EXIT_REVIEW_R5' supabase/functions/v10-lane-executor/index.ts \
+            || { echo "::error::the executor no longer selects the R5 exit ladder."; exit 1; }
+          grep -Fq 'leaderExitPolicyVersion:EXIT_REVIEW_R5.policyVersion' supabase/functions/v10-lane-executor/index.ts \
+            || { echo "::error::new positions are not stamped with the R5 policy version; the cutover would never start."; exit 1; }
+          grep -Eq 'const r5=meta\.leaderExitPolicyVersion===EXIT_REVIEW_R5\.policyVersion;' supabase/functions/v10-lane-executor/index.ts \
+            || { echo "::error::the per-position R5 gate is missing; open positions could have their stop moved by a deploy."; exit 1; }
+          # The quote retry must stay scoped to the top-of-book read. Widening it over the
+          # exit dispatch would let a retry close a position twice.
+          grep -Fq 'async function leaderQuote(' supabase/functions/v10-lane-executor/index.ts \
+            || { echo "::error::the retrying quote read is gone; one gateway timeout would halt the strategy again."; exit 1; }
+          awk '/async function leaderQuote\(/,/async function manageLeader\(/' \
+            supabase/functions/v10-lane-executor/index.ts > /tmp/leader-quote.txt
+          for bad in closePos create_order syncNativeStop; do
+            if grep -Fq "$bad" /tmp/leader-quote.txt; then
+              echo "::error::leaderQuote contains $bad; a retry there could act twice"
+              exit 1
+            fi
+          done
+
+          # The entry queue may price several candidates in one run, but never after an order
+          # has left the process -- at that point whether a position exists is unknowable, so a
+          # second entry could double the account's exposure.
+          grep -Fq 'if(attempt.dispatched)throw e;' supabase/functions/v10-lane-executor/index.ts \
+            || { echo "::error::the dispatched guard is gone; the entry queue could open a second position."; exit 1; }
+          awk '/if\(attempt\.dispatched\)throw e;/{d=NR} /ENTRY_SKIP_SYMBOL_SCOPED\.test\(msg\)/{s=NR} END{if(!d||!s||s<d){print "::error::the dispatched guard must precede the symbol-scoped allowance"; exit 1}}' \
+            supabase/functions/v10-lane-executor/index.ts
+          # openBull must be the only place that marks dispatch, and it must sit on the order call.
+          grep -Fq 'attempt.dispatched=true;const raw=await gateway(rp)' supabase/functions/v10-lane-executor/index.ts \
+            || { echo "::error::the dispatch mark is not on the order call."; exit 1; }
+          if [ "$(grep -c 'attempt\.dispatched=true' supabase/functions/v10-lane-executor/index.ts)" != "1" ]; then
+            echo "::error::dispatch is marked in more than one place; closePos shares the same line and has no attempt in scope"
+            exit 1
+          fi
+
+          for key in riskCutArmPct riskCutLevelPct failCutAfterMs policyVersion; do
+            grep -Fq "$key" supabase/functions/_shared/leader-exit-review.mjs \
+              || { echo "::error::EXIT_REVIEW_R5 lost $key; the risk cut cannot arm."; exit 1; }
+          done
+
+          # costBreakeven() needs both cost inputs; without them it throws and the whole
+          # exit evaluation aborts, leaving the position with no stop at all.
+          for key in estimatedExitFeeRate exitSlippageBudgetPct breakEvenArmPct profitLockArmPct profitLockCapture; do
+            grep -Fq "$key" supabase/functions/_shared/leader-exit-review.mjs \
+              || { echo "::error::EXIT_REVIEW_CANDIDATE lost $key; the breakeven math cannot run."; exit 1; }
+          done
+          # A row with an unusable fee/quantity must fall back to the baseline stop
+          # rather than abort the evaluation.
+          grep -Fq 'costUsable' supabase/functions/v10-lane-executor/index.ts \
+            || { echo "::error::missing the unusable-cost fallback; a bad row would leave a position unmanaged."; exit 1; }
+
+          # The exchange-resident stop must stay opt-in. Enabling it starts submitting
+          # real STOP_MARKET orders, which is an operator decision, not a deploy effect.
+          grep -Fq 'const NATIVE_STOP_ENABLED=env("V17_NATIVE_STOP")==="true";' supabase/functions/v10-lane-executor/index.ts \
+            || { echo "::error::the native stop flag is missing or no longer defaults off."; exit 1; }
+
+          # R3/R4 stay out of the live path. Their exits need a confirmation clock that a
+          # one-minute cron cannot feed: maxEvidenceGapMs is 3s, so every tick resets
+          # breachSince and the 10s confirmation never completes, which would silently
+          # remove the soft stop and all profit protection. Wiring them requires a
+          # sub-second event host first.
+          for mod in leader-exit-r3 leader-exit-r4; do
+            if grep -Fq "$mod" supabase/functions/v10-lane-executor/index.ts; then
+              echo "::error::executor imports $mod; its confirmation clock cannot run on the one-minute cron."
+              exit 1
+            fi
+          done
+
+      - name: Run the V17 exit test suite against production sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test test-support/v17-exit/*.test.mjs research/v18/*.test.mjs
+          node --check gateway/server.mjs
+          node --test gateway/server.test.mjs
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Validate production deploy secrets
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_PROJECT_REF:-}"
+
+      - name: Deploy v10-lane-executor only
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy v10-lane-executor \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --no-verify-jwt \
+            --use-api
+
+      - name: Verify function is active
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "${SUPABASE_PROJECT_REF}" | tee /tmp/functions.txt
+          grep -q "v10-lane-executor" /tmp/functions.txt

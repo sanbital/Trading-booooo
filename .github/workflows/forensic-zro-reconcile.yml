@@ -1,0 +1,80 @@
+name: Forensic ZRO reconcile loop
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/forensic-zro-reconcile.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Query affected position and ledgers read-only
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          POS='111c5f48-27bf-4c26-9819-4f4ed7714577'
+          ORD='76b87951-0409-4c5b-b211-df54a2c88384'
+          {
+            echo '# ZRO reconciliation forensic'
+            echo "audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            echo '## position'
+            psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select jsonb_build_object(
+                'id',id,'exchange',exchange,'market',market,'state',state,
+                'initial_quantity',initial_quantity,'remaining_quantity',remaining_quantity,
+                'average_entry_price',average_entry_price,'realized_cost_quote',realized_cost_quote,
+                'realized_proceeds_quote',realized_proceeds_quote,'paid_fees_quote',paid_fees_quote,
+                'realized_pnl_quote',realized_pnl_quote,'close_reason',close_reason,'closed_at',closed_at,
+                'opened_at',opened_at,'updated_at',updated_at,'metadata',metadata
+              )::text from public.trading_positions where id='${POS}'::uuid;"
+            echo
+            echo '## orders'
+            psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select jsonb_build_object(
+                'id',id,'created_at',created_at,'side',side,'purpose',purpose,'state',state,
+                'identifier',identifier,'requested_volume',requested_volume,
+                'executed_volume',executed_volume,'average_fill_price',average_fill_price,
+                'executed_funds_quote',executed_funds_quote,'paid_fee_quote',paid_fee_quote,
+                'fee_asset',fee_asset,'completed_at',completed_at,'error_message',error_message
+              )::text
+              from public.trading_orders where position_id='${POS}'::uuid order by created_at;"
+            echo
+            echo '## fills_for_stop_order'
+            psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select row_to_json(x)::text from (
+                select id,order_id,trade_id,price,volume,funds_quote,fee_amount,fee_asset,fee_quote_estimate,executed_at
+                from public.trading_fills where order_id='${ORD}'::uuid order by executed_at
+              ) x;"
+            echo
+            echo '## latest_reconcile_events'
+            psql "${SUPABASE_DB_URL}" -At --set=ON_ERROR_STOP=1 -c "
+              select jsonb_build_object('created_at',created_at,'code',code,'message',message,'details',details)::text
+              from public.trading_events
+              where position_id='${POS}'::uuid
+                and code in ('PARTIAL_EXIT','EXIT_RECONCILE_INCOMPLETE','EXIT_RECONCILED_FROM_FILLS','BALANCE_REDUCTION_DEFERRED_FOR_BOT_EXIT','STALE_POSITION_BALANCE_RECONCILED')
+              order by created_at desc limit 12;"
+          } > .github/zro-reconcile-forensic.txt
+
+      - name: Commit forensic result
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/zro-reconcile-forensic.txt
+          git commit -m "chore: record ZRO reconciliation forensic" || true
+          git pull --rebase origin main
+          git push origin HEAD:main

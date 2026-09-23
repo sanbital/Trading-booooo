@@ -1,5 +1,5 @@
 /** Decision-only contract. Never receives an exchange client, account or DB secret. */
-export const VERSION = 'GPT_FINAL_ENTRY_REVIEW_3_LATENCY';
+export const VERSION = 'GPT_FINAL_ENTRY_REVIEW_4_FACTREF';
 export const BASELINE_COMMIT = 'fea185c089932386d057a8abea14997007713b6d';
 export const MODEL = 'gpt-5.4-mini-2026-03-17';
 export const LIMITS = Object.freeze({requestMs:8000, executionReserveMs:3000,

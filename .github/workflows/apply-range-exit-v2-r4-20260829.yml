@@ -1,0 +1,169 @@
+name: Apply RANGE Exit V2 source-only R4
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "research/regime_router_v5/range-exit-v2-r4-trigger.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-range-exit-v2-r4-20260829
+  cancel-in-progress: false
+
+jobs:
+  validate-commit-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          fetch-depth: 2
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: v2.x
+
+      - name: Apply validated R3 source patch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          source = Path('.github/workflows/apply-range-exit-v2-r2-20260829.yml').read_text()
+          opener = "          python3 - <<'PY'\n"
+          closer = "\n          PY\n"
+          start = source.index(opener) + len(opener)
+          end = source.index(closer, start)
+          script = textwrap.dedent(source[start:end])
+          exec(compile(script, 'range-exit-v2-r2-patch.py', 'exec'), {'__name__': '__main__'})
+
+          path = Path('supabase/functions/regime-router-v5-research/ops.test.ts')
+          text = path.read_text()
+          old_import = 'import { CANDIDATE_REGISTRY_HASH_INPUT, candidates } from "./strategies.ts";'
+          new_import = '''import {
+            CANDIDATE_REGISTRY_HASH_INPUT,
+            candidates,
+            V5_CANDIDATE_REGISTRY_REVISION,
+          } from "./strategies.ts";'''
+          if text.count(old_import) != 1:
+              raise SystemExit('ops.test.ts strategies import identity mismatch')
+          text = text.replace(old_import, new_import, 1)
+          old_fixture = 'candidate_registry_revision: "V5_PRECOMMITTED_NEIGHBOURHOOD_20260828_A",'
+          if text.count(old_fixture) != 1:
+              raise SystemExit('ops.test.ts stale registry fixture identity mismatch')
+          path.write_text(text.replace(
+              old_fixture,
+              'candidate_registry_revision: V5_CANDIDATE_REGISTRY_REVISION,',
+              1,
+          ))
+          PY
+
+          # R2 also edits orchestration workflows. R4 intentionally discards those
+          # changes so the source commit never needs GitHub workflow-write permission.
+          git checkout -- \
+            .github/workflows/deploy-regime-router-v5-research.yml \
+            .github/workflows/run-regime-router-v5-job.yml
+
+          deno fmt \
+            supabase/functions/regime-router-v5-research/types.ts \
+            supabase/functions/regime-router-v5-research/strategies.ts \
+            supabase/functions/regime-router-v5-research/simulator.ts \
+            supabase/functions/regime-router-v5-research/simulator.test.ts \
+            supabase/functions/regime-router-v5-research/ops.test.ts
+
+      - name: Validate all 98 tests and production isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno check supabase/functions/regime-router-v5-research/*.ts
+          deno test supabase/functions/regime-router-v5-research/*.test.ts
+          grep -Fq 'REGIME_ROUTER_V5_STRUCTURAL_TACTICAL_RANGE_EXIT_V2_15M_120D_RSWF' \
+            supabase/functions/regime-router-v5-research/types.ts
+          grep -Fq 'V5_PRECOMMITTED_NEIGHBOURHOOD_20260829_RANGE_EXIT_V2_A' \
+            supabase/functions/regime-router-v5-research/strategies.ts
+          grep -Fq 'partialTakeAtr: 0.45' supabase/functions/regime-router-v5-research/strategies.ts
+          grep -Fq 'partialTakeFraction: 0.60' supabase/functions/regime-router-v5-research/strategies.ts
+          grep -Fq 'noResponseBars: 3' supabase/functions/regime-router-v5-research/strategies.ts
+          test -z "$(git diff --name-only -- .github/workflows/deploy-regime-router-v5-research.yml .github/workflows/run-regime-router-v5-job.yml)"
+          if find supabase/functions/regime-router-v5-research \
+            -type f -name '*.ts' ! -name '*.test.ts' -print0 \
+            | xargs -0 grep -n -E \
+              'market-autotrader|market-v2-signal|trading_settings|exchange_orders|/fapi/v1/order|order-gateway|positionRisk|/fapi/v[12]/position|exchange_positions'; then
+            echo 'research source references production trading path' >&2
+            exit 1
+          fi
+
+      - name: Commit source-only research revision
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            supabase/functions/regime-router-v5-research/types.ts \
+            supabase/functions/regime-router-v5-research/strategies.ts \
+            supabase/functions/regime-router-v5-research/simulator.ts \
+            supabase/functions/regime-router-v5-research/simulator.test.ts \
+            supabase/functions/regime-router-v5-research/ops.test.ts
+          git diff --cached --check
+          git commit -m 'research: add range exit v2 partial realization'
+          patch_sha=$(git rev-parse HEAD)
+          git push origin HEAD:main
+          printf 'patch_sha=%s\n' "$patch_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Compute immutable implementation identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="$RUNNER_TEMP/v5-implementation-manifest.bin"
+          : > "$manifest"
+          while IFS= read -r -d '' source_file; do
+            file_sha256=$(sha256sum "$source_file" | awk '{print $1}')
+            printf '%s  %s\0' "$file_sha256" "$source_file" >> "$manifest"
+          done < <(
+            git ls-files -z -- supabase/functions/regime-router-v5-research \
+              | grep -zE '\.ts$' | grep -zvE '\.test\.ts$' | LC_ALL=C sort -z
+          )
+          implementation_sha256=$(sha256sum "$manifest" | awk '{print $1}')
+          [[ "$implementation_sha256" =~ ^[0-9a-f]{64}$ ]]
+          printf 'implementation_sha256=%s\n' "$implementation_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Deploy stamped research-only function
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          PATCH_SHA: ${{ steps.commit.outputs.patch_sha }}
+          IMPLEMENTATION_SHA256: ${{ steps.identity.outputs.implementation_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = 'etaajwpernzrcdrifdnw'
+          source_file='supabase/functions/regime-router-v5-research/types.ts'
+          test "$(grep -Foh '__V5_BUILD_SOURCE_SHA__' "$source_file" | wc -l)" = '1'
+          test "$(grep -Foh '__V5_IMPLEMENTATION_SHA256__' "$source_file" | wc -l)" = '1'
+          sed -i \
+            -e "s/__V5_BUILD_SOURCE_SHA__/$PATCH_SHA/" \
+            -e "s/__V5_IMPLEMENTATION_SHA256__/$IMPLEMENTATION_SHA256/" \
+            "$source_file"
+          deno check supabase/functions/regime-router-v5-research/*.ts
+          supabase functions deploy regime-router-v5-research \
+            --project-ref "$SUPABASE_PROJECT_REF" \
+            --no-verify-jwt \
+            --use-api
+          printf 'DEPLOYED_SOURCE_SHA=%s\n' "$PATCH_SHA"
+          printf 'DEPLOYED_IMPLEMENTATION_SHA256=%s\n' "$IMPLEMENTATION_SHA256"

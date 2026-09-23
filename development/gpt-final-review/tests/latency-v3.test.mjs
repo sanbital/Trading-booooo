@@ -1,3 +1,4 @@
+import {WIRE_OUTPUT_SCHEMA_V4} from '../../../supabase/functions/_shared/gpt-final-review/wire-v4.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {writeFileSync,readFileSync,existsSync} from 'node:fs';
@@ -39,7 +40,7 @@ test('same snapshot, same evidence references and no identity-dependent cache ke
  const p=await packet(),q=await packet(candidate('other'));assert.deepEqual(compactInput(p).evidence_refs,compactInput(q).evidence_refs);
  const a=payloadFor(p),b=payloadFor(q);assert.equal(a.prompt_cache_key,b.prompt_cache_key);
  assert.equal(a.model,'gpt-5.4-mini-2026-03-17');assert.equal(a.reasoning.effort,'none');assert.equal(a.service_tier,'default');assert.equal(a.max_output_tokens,1800);
- assert.deepEqual(a.text.format.schema,WIRE_OUTPUT_SCHEMA);assert.notDeepEqual(a.input[1],b.input[1]);
+ assert.deepEqual(a.text.format.schema,WIRE_OUTPUT_SCHEMA_V4);assert.notDeepEqual(a.input[1],b.input[1]);
 });
 test('public candle cache coalesces simultaneous reads and preserves availability timestamps',async()=>{
  const c=new CandleReadCache();let calls=0,clock=100,release;const wait=new Promise(r=>release=r);

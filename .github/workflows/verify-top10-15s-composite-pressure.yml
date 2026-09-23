@@ -1,0 +1,139 @@
+name: Verify Top10 15s composite pressure
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-production:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.title == '[VERIFY] 15s Top10 composite pressure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RELEASE_VERSION: 7.3.7-15S-TOP10-COMPOSITE-PRESSURE
+    steps:
+      - name: Verify production runtime
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL}"
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 <<SQL
+          \pset pager off
+
+          do \$\$
+          declare
+            s public.trading_settings%rowtype;
+            latest_scan public.scanner_scan_runs%rowtype;
+            legacy_acceleration_reasons integer;
+            current_engine_exchanges integer;
+          begin
+            select * into s from public.trading_settings where id = 1;
+            if s.pause_new_entries then
+              raise exception 'new entries are still paused';
+            end if;
+            if s.emergency_liquidation then
+              raise exception 'emergency liquidation is unexpectedly enabled';
+            end if;
+            if s.lob_observation_window_ms <> 15000 then
+              raise exception 'observation window is %, expected 15000', s.lob_observation_window_ms;
+            end if;
+            if s.lob_max_gainer_rank <> 10 then
+              raise exception 'max gainer rank is %, expected 10', s.lob_max_gainer_rank;
+            end if;
+            if s.lob_live_admission_revision <> '${RELEASE_VERSION}' or
+               s.lob_model_revision <> '${RELEASE_VERSION}' then
+              raise exception 'runtime revision mismatch live=% model=%',
+                s.lob_live_admission_revision, s.lob_model_revision;
+            end if;
+            if s.last_full_scan_at < now() - interval '150 seconds' then
+              raise exception 'scanner heartbeat stale: %', s.last_full_scan_at;
+            end if;
+            if s.last_monitor_at < now() - interval '150 seconds' or
+               s.last_gateway_heartbeat_at < now() - interval '150 seconds' then
+              raise exception 'monitor/gateway heartbeat stale monitor=% gateway=%',
+                s.last_monitor_at, s.last_gateway_heartbeat_at;
+            end if;
+
+            select * into latest_scan
+            from public.scanner_scan_runs
+            order by created_at desc
+            limit 1;
+            if latest_scan.id is null then
+              raise exception 'no scanner run found';
+            end if;
+            if latest_scan.summary#>>'{coverage,exchanges,upbit,dynamic_orderflow,requested_observation_seconds}' <> '15' or
+               latest_scan.summary#>>'{coverage,exchanges,binance,dynamic_orderflow,requested_observation_seconds}' <> '15' then
+              raise exception 'latest scanner run is not 15s/15s';
+            end if;
+
+            select count(*) into legacy_acceleration_reasons
+            from public.scanner_candidates c,
+              lateral jsonb_array_elements_text(coalesce(c.snapshot#>'{lob,reasons}', '[]'::jsonb)) r(reason)
+            where c.scan_id = latest_scan.id
+              and r.reason = 'BUY_FLOW_NOT_ACCELERATING';
+            if legacy_acceleration_reasons <> 0 then
+              raise exception 'legacy acceleration hard gate still emitted % times', legacy_acceleration_reasons;
+            end if;
+
+            select count(distinct exchange) into current_engine_exchanges
+            from public.trading_joint_objective_snapshots
+            where captured_at >= now() - interval '5 minutes'
+              and engine_version = '${RELEASE_VERSION}';
+            if current_engine_exchanges < 2 then
+              raise exception 'new autotrader engine not observed on both exchanges: %', current_engine_exchanges;
+            end if;
+
+            raise notice 'production verified scan=% status=% observation=15s top10=true composite_pressure=true engine_exchanges=%',
+              latest_scan.id, latest_scan.status, current_engine_exchanges;
+          end
+          \$\$;
+
+          with latest as (
+            select * from public.scanner_scan_runs order by created_at desc limit 1
+          )
+          select jsonb_build_object(
+            'verified_at_utc', now(),
+            'scan_id', l.id,
+            'scan_status', l.status,
+            'scan_created_at', l.created_at,
+            'upbit_observation_seconds', l.summary#>>'{coverage,exchanges,upbit,dynamic_orderflow,requested_observation_seconds}',
+            'binance_observation_seconds', l.summary#>>'{coverage,exchanges,binance,dynamic_orderflow,requested_observation_seconds}',
+            'upbit_observed_markets', l.summary#>>'{coverage,exchanges,upbit,dynamic_orderflow,websocket_markets}',
+            'binance_observed_markets', l.summary#>>'{coverage,exchanges,binance,dynamic_orderflow,websocket_markets}',
+            'upbit_sufficient_markets', l.summary#>>'{coverage,exchanges,upbit,dynamic_orderflow,sufficient_markets}',
+            'binance_sufficient_markets', l.summary#>>'{coverage,exchanges,binance,dynamic_orderflow,sufficient_markets}',
+            'candidate_count', (select count(*) from public.scanner_candidates c where c.scan_id=l.id),
+            'buy_count', (select count(*) from public.scanner_candidates c where c.scan_id=l.id and c.decision='BUY'),
+            'legacy_acceleration_gate_count', (
+              select count(*)
+              from public.scanner_candidates c,
+                lateral jsonb_array_elements_text(coalesce(c.snapshot#>'{lob,reasons}', '[]'::jsonb)) r(reason)
+              where c.scan_id=l.id and r.reason='BUY_FLOW_NOT_ACCELERATING'
+            )
+          ) as production_verification
+          from latest l;
+
+          select jsonb_build_object(
+            'pause_new_entries', pause_new_entries,
+            'emergency_liquidation', emergency_liquidation,
+            'lob_observation_window_ms', lob_observation_window_ms,
+            'lob_max_gainer_rank', lob_max_gainer_rank,
+            'lob_live_admission_revision', lob_live_admission_revision,
+            'lob_model_revision', lob_model_revision,
+            'last_full_scan_at', last_full_scan_at,
+            'last_monitor_at', last_monitor_at,
+            'last_gateway_heartbeat_at', last_gateway_heartbeat_at,
+            'gateway_error_count', gateway_error_count
+          ) as runtime_settings
+          from public.trading_settings
+          where id=1;
+          SQL

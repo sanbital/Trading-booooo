@@ -1,0 +1,119 @@
+name: Forensic exit idempotency v7.6.11
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/forensic-exit-idempotency-v7611.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: forensic-exit-idempotency-v7611
+  cancel-in-progress: false
+
+jobs:
+  forensic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Query production ledgers read-only
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          DEPLOYED_AT='2026-08-19T12:30:11Z'
+          {
+            echo "# Exit idempotency forensic audit"
+            echo "audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "deploy_at=${DEPLOYED_AT}"
+            echo
+            echo "## settings"
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select 'pause_new_entries='||coalesce(pause_new_entries,false)::text,
+                     'manual_event_reason='||coalesce(manual_event_reason,''),
+                     'manual_intervention_required='||coalesce(manual_intervention_required,false)::text,
+                     'withdrawal_mode='||coalesce(withdrawal_mode,false)::text,
+                     'mode='||coalesce(mode,'')
+              from public.trading_settings where id=1;"
+            echo
+            echo "## event_code_aggregate_since_deploy"
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select code, count(*) as events,
+                     count(distinct order_id) as distinct_orders,
+                     count(distinct position_id) as distinct_positions
+              from public.trading_events
+              where created_at >= '${DEPLOYED_AT}'::timestamptz
+              group by code
+              order by events desc, code;"
+            echo
+            echo "## exit_events_since_deploy"
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select created_at, code, coalesce(position_id::text,''), coalesce(order_id::text,''),
+                     left(coalesce(message,''),160)
+              from public.trading_events
+              where created_at >= '${DEPLOYED_AT}'::timestamptz
+                and code in ('POSITION_CLOSED','PARTIAL_EXIT','EXIT_DEFERRED_UNSETTLED_ORDER','EXIT_CLAIM_SKIPPED')
+              order by created_at;"
+            echo
+            echo "## sell_orders_since_deploy"
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select created_at,id,position_id,market,purpose,state,requested_volume,executed_volume,average_fill_price,identifier
+              from public.trading_orders
+              where created_at >= '${DEPLOYED_AT}'::timestamptz and side='SELL'
+              order by created_at;"
+            echo
+            echo "## duplicate_pending_sell_positions"
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select position_id,count(*),string_agg(id::text||':'||state||':'||coalesce(purpose,''),',' order by created_at)
+              from public.trading_orders
+              where side='SELL' and position_id is not null
+                and state not in ('APPLIED','REJECTED','NOT_FOUND','EXCHANGE_CANCELLED','CANCELLED')
+              group by position_id having count(*)>1;"
+            echo
+            echo "## suspicious_applied_sell_pairs_last_24h_same_purpose_within_5s"
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              with s as (
+                select id,position_id,market,purpose,created_at,executed_volume,executed_funds_quote,
+                       lag(id) over(partition by position_id,purpose order by created_at) prev_id,
+                       lag(created_at) over(partition by position_id,purpose order by created_at) prev_at
+                from public.trading_orders
+                where side='SELL' and state='APPLIED' and created_at >= now()-interval '24 hours'
+              )
+              select created_at,position_id,market,purpose,prev_id,id,
+                     extract(epoch from(created_at-prev_at))::numeric(12,3) seconds_apart,
+                     executed_volume,executed_funds_quote
+              from s
+              where prev_at is not null and created_at-prev_at <= interval '5 seconds'
+              order by created_at;"
+            echo
+            echo "## closed_position_accounting_flags_last_24h"
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select count(*) filter(where state='CLOSED') as closed,
+                     count(*) filter(where state='CLOSED' and remaining_quantity<>0) as closed_nonzero_remaining,
+                     count(*) filter(where state in('OPEN','PARTIAL','EXITING','RECONCILING') and remaining_quantity<=0) as live_nonpositive_remaining
+              from public.trading_positions
+              where updated_at >= now()-interval '24 hours';"
+            echo
+            echo "## monitor_health"
+            psql "${SUPABASE_DB_URL}" -At -F '|' --set=ON_ERROR_STOP=1 -c "
+              select 'latest_monitor',coalesce(max(started_at)::text,'') from public.trading_cycle_runs where kind='MONITOR';
+              select 'failed_since_deploy',count(*)::text from public.trading_cycle_runs where started_at >= '${DEPLOYED_AT}'::timestamptz and status='FAILED';"
+          } > .github/exit-idempotency-v7611-forensic.txt
+
+      - name: Commit forensic result
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/exit-idempotency-v7611-forensic.txt
+          git commit -m "chore: record exit idempotency forensic audit" || true
+          git pull --rebase origin main
+          git push origin HEAD:main

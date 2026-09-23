@@ -1,4 +1,5 @@
-import {arithmeticCheck,decisionIdentity,MODEL,toWireAnswer} from '../../../supabase/functions/_shared/gpt-final-review/contract.mjs';
+import {toWireV4 as toWireAnswer} from '../../../supabase/functions/_shared/gpt-final-review/wire-v4.mjs';
+import {arithmeticCheck,decisionIdentity,MODEL} from '../../../supabase/functions/_shared/gpt-final-review/contract.mjs';
 import {computeMarket,buildPacket} from '../../../supabase/functions/_shared/gpt-final-review/market.mjs';
 export const T=Date.UTC(2026,8,23,10,0,0);
 export function candidate(id='test-signal'){

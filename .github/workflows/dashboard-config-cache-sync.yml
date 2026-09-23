@@ -1,0 +1,61 @@
+name: Dashboard Config Cache Sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/config.js
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-config-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Sync config cache revision into index
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          config = Path('docs/config.js').read_text(encoding='utf-8')
+          index_path = Path('docs/index.html')
+          index = index_path.read_text(encoding='utf-8')
+
+          match = re.search(r'const DASHBOARD_REVISION = "([^"]+)";', config)
+          if not match:
+              raise SystemExit('DASHBOARD_REVISION not found')
+          revision = match.group(1)
+
+          updated, count = re.subn(
+              r'\.\/config\.js\?v=[^"<]+',
+              f'./config.js?v={revision}',
+              index,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f'config.js reference replacement count={count}')
+          index_path.write_text(updated, encoding='utf-8')
+          print(f'synced index config cache to {revision}')
+          PY
+
+      - name: Commit cache sync if needed
+        shell: bash
+        run: |
+          if git diff --quiet -- docs/index.html; then
+            echo "index already synchronized"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/index.html
+          git commit -m "dashboard: sync config cache revision"
+          git push origin HEAD:main

@@ -1,0 +1,46 @@
+name: Debug guarded ZRO repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/debug-zro-repair.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Execute repair inside rollback transaction
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set +e
+          {
+            echo 'BEGIN;'
+            cat supabase/migrations/20260819125500_zro_stale_manual_fill_repair.sql
+            echo 'ROLLBACK;'
+          } > /tmp/zro-repair-debug.sql
+          psql "${SUPABASE_DB_URL}" --set=ON_ERROR_STOP=1 -f /tmp/zro-repair-debug.sql > /tmp/zro-repair-debug.log 2>&1
+          rc=$?
+          {
+            echo "audited_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "rc=${rc}"
+            tail -n 120 /tmp/zro-repair-debug.log
+          } > .github/zro-repair-debug.txt
+          exit 0
+      - name: Commit debug result
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/zro-repair-debug.txt
+          git commit -m "chore: record guarded ZRO repair diagnostic" || true
+          git pull --rebase origin main || true
+          git push origin HEAD:main || true
