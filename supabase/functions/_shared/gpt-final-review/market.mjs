@@ -1,10 +1,11 @@
 import {LIMITS,VERSION,metric,numberOrNull,hash,ensure,arithmeticCheck,FACTORS} from './contract.mjs';
 import {cacheFor} from './candle-cache.mjs';
+import {readMicro,computeMicro,missingMicro} from './micro.mjs';
 const MIN=60000;
 const host='https://fapi.binance.com';
 const fields=['return_5m','return_15m','return_30m','return_60m','volume_ratio_3m','taker_buy_ratio_3m',
   'relative_strength_btc_15m','distance_recent_high_15m','distance_sma20','distance_trigger_reference',
-  'last_body','last_upper_wick','last_lower_wick','last_close_change','day_return','spread','depth','funding'];
+  'last_body','last_upper_wick','last_lower_wick','last_close_change','day_return'];
 export function normalizeBars(raw,interval,cutoff){
   ensure(Array.isArray(raw),'BARS_NOT_ARRAY');
   const xs=raw.filter(b=>Array.isArray(b)&&Number(b[6])<cutoff).map(b=>{
@@ -18,8 +19,10 @@ export function normalizeBars(raw,interval,cutoff){
   }).sort((a,b)=>a.t-b.t);
   ensure(xs.every((b,i)=>i===0||b.t-xs[i-1].t===interval),'BAR_DUPLICATE_OR_GAP');return xs;
 }
-function missingMarket(reason){return {metrics:Object.fromEntries(fields.map(k=>[k,metric(null,k==='spread'?'bps':k==='depth'?'USDT':'fraction','unavailable',reason)])),
-  one_minute:[],five_minute:[],quality:{complete:false,missing_reason:reason},availability:[]};}
+function missingMarket(reason){return {metrics:{...Object.fromEntries(fields.map(k=>[k,metric(null,'fraction','unavailable',reason)])),...missingMicro(reason)},
+  one_minute:[],five_minute:[],quality:{complete:false,missing_reason:reason,microstructure_complete:false},availability:[],microstructure_availability:[]};}
+/** A replay clock (shifted away from wall time) cannot read historical books/OI: withhold them. */
+const POINT_IN_TIME_TOLERANCE_MS=2000;
 /** Read public candles only. Never an exchange account or signed endpoint. */
 export async function collectMarket(identity,{fetchFn=fetch,now=Date.now,deadlineMs,signal}={}){
   const requested=now(),symbol=identity.symbol;
@@ -42,15 +45,17 @@ export async function collectMarket(identity,{fetchFn=fetch,now=Date.now,deadlin
     return signal?load():cacheFor(fetchFn).read(url,load,now);
   }
   try{
-    const [one,five,btc]=await Promise.all([read(symbol,'1m',61),read(symbol,'5m',12),read('BTCUSDT','1m',16)]);
-    return computeMarket(identity,{one,five,btc},now());
+    const live=Math.abs(requested-Date.now())<=POINT_IN_TIME_TOLERANCE_MS;
+    const [one,five,btc,micro]=await Promise.all([read(symbol,'1m',61),read(symbol,'5m',12),read('BTCUSDT','1m',16),
+      live?readMicro(symbol,{fetchFn,now,ms,signal}):Promise.resolve(null)]);
+    return computeMarket(identity,{one,five,btc,micro,microMissingReason:live?null:'NOT_POINT_IN_TIME_REPLAY'},now());
   }catch{return missingMarket('PUBLIC_MARKET_UNAVAILABLE');}
 }
-export function computeMarket(identity,{one,five,btc},asOf){
+export function computeMarket(identity,{one,five,btc,micro=null,microMissingReason='NOT_COLLECTED'},asOf){
   const o=normalizeBars(one.rows,MIN,one.requestedAt),f=normalizeBars(five.rows,5*MIN,five.requestedAt),b=normalizeBars(btc.rows,MIN,btc.requestedAt);
   ensure([one,five,btc].every(x=>Number.isSafeInteger(x.requestedAt)&&x.receivedAt>=x.requestedAt&&x.receivedAt<=asOf),'AVAILABILITY_INVALID');
   const last=o.at(-1);if(!last)return missingMarket('NO_COMPLETED_CANDLE');
-  const metrics=Object.fromEntries(fields.map(k=>[k,metric(null,k==='spread'?'bps':k==='depth'?'USDT':'fraction','not supplied by public candle source','NOT_COLLECTED')]));
+  const metrics=Object.fromEntries(fields.map(k=>[k,metric(null,'fraction','not supplied by public candle source','NOT_COLLECTED')]));
   const put=(k,value,unit,formula)=>metrics[k]=metric(value,unit,formula,'INSUFFICIENT_COMPLETED_CANDLES');
   for(const n of [5,15,30,60])put('return_'+n+'m',o.length>n?last.c/o.at(-n-1).c-1:null,'fraction','last completed close / completed close N minutes earlier - 1');
   const recent=o.slice(-3),prior=o.slice(-6,-3),sum=(xs,k)=>xs.some(x=>x[k]===null)?null:xs.reduce((s,x)=>s+x[k],0);
@@ -71,8 +76,13 @@ export function computeMarket(identity,{one,five,btc},asOf){
     open:x.o*scale,high:x.h*scale,low:x.l*scale,close:x.c*scale,unit:'price_index_latest_close_100'}));
   const complete=o.length>=61&&f.length>=12&&b.length>=16&&asOf-last.end<=90000&&
     asOf-f.at(-1).end<=330000&&asOf-b.at(-1).end<=90000;
+  const ms=micro?computeMicro(micro,asOf):{metrics:missingMicro(microMissingReason),availability:[]};
+  Object.assign(metrics,ms.metrics);
+  const microComplete=ms.availability.length>0&&ms.availability.every(x=>x.ok);
   return {metrics,one_minute:series(o.slice(-LIMITS.bars1m)),five_minute:series(f.slice(-LIMITS.bars5m)),
-    quality:{complete,missing_reason:complete?null:'INCOMPLETE_OR_STALE_CANDLES'},
+    quality:{complete,missing_reason:complete?null:'INCOMPLETE_OR_STALE_CANDLES',microstructure_complete:microComplete,
+      microstructure_max_age_ms:ms.availability.length?Math.max(...ms.availability.map(x=>x.age_at_snapshot_ms??Infinity)):null},
+    microstructure_availability:ms.availability,
     availability:[one,five,btc].map((x,i)=>({source:['symbol_1m','symbol_5m','btc_1m'][i],
       requested_offset_ms:x.requestedAt-identity.trigger_at_ms,available_offset_ms:x.receivedAt-identity.trigger_at_ms}))};
 }

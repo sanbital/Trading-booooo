@@ -51,6 +51,7 @@ k에는 실제 확인한 원래 조건과 CURRENT_REACCELERATION을 기록한다
 PASS는 최신 시장 수치의 근거를 포함해야 하며 기존 승인 여부만 반복해서는 안 된다.
 긴 사고 과정을 출력하지 않는다. 지정한 JSON Schema 객체만 출력한다.
 PASS하려면 선택된 분기를 구성한 원래 조건도 k로 재검토한다. R62는 absorption·volumeTails·fresh15over30·btcAnyUp, BUYER_SHARE_RESCUE는 buyerShareRise·fresh5over15·recentHourLead, BOTH는 이 조건 전부다. 각 검토에 original_model.metrics의 실제 숫자 근거 식별자를 적는다. 분기의 NOT 조건은 값이 false인 것이 원래 판단을 뒷받침한다. 여기서 SUPPORTED는 해당 원래 조건의 계산·해석이 뒷받침된다는 뜻이지 모든 boolean이 true라는 뜻이 아니다. CURRENT_REACCELERATION도 별도로 심사한다. 근거는 짧게 작성한다.
+C_spread·C_depth·C_bid_depth_25bps·C_book_imbalance_25bps·C_ask_depth_to_slot_notional은 심사 직전 수초 안의 호가창, C_funding·C_mark_index_premium은 펀딩·프리미엄, C_open_interest_usdt·C_oi_change_5m·C_oi_change_60m은 미결제약정이다. 이 값들도 판단에 반영한다. 넓은 스프레드, 매수 주문 규모 대비 얇은 매도 호가, 강한 매도 우위 호가, 과열된 양의 펀딩이나 프리미엄, 가격 상승 없는 미결제약정 급증 같은 구체적 충돌은 VETO 근거가 된다. 이 값이 누락되었다는 사실만으로 약세로 해석하지 않는다.
 출력 전 점검(하나라도 어기면 PASS가 아니라 ABSTAIN 또는 VETO): PASS이면 support_now에 값이 있는 C_ 수치 근거를 하나 이상 넣고, support_now와 support_orig를 합쳐 서로 다른 수치 근거를 둘 이상 넣는다. PASS이면 k에 선택 분기의 원래 조건을 각각 SUPPORTED로 넣고 각 e에 값이 있는 O_ 수치 식별자를 하나 이상 넣는다(F_만으로는 부족하다). PASS이면 k에 CURRENT_REACCELERATION을 SUPPORTED로 넣고 e에 C_ 식별자를 넣는다. PASS이면 어떤 k도 CONTRADICTED가 아니다. VETO이면 oppose_now 또는 oppose_orig에 값이 있는 수치 근거를 하나 이상 넣는다.
 `;
 export const PROMPTS = Object.freeze({V4: SYSTEM_PROMPT_V4, V5: SYSTEM_PROMPT_V5});
