@@ -10,7 +10,7 @@ on:
         description: "Function to deploy"
         required: true
         type: choice
-        options: [gpt-final-review-verify, v10-lane-executor]
+        options: [gpt-final-review-verify, v10-lane-executor, delete-gpt-final-review-verify]
       expected_version_before:
         description: "Current production version of the target (pins against concurrent deploys)"
         required: true
@@ -26,7 +26,33 @@ env:
   FROZEN_BASE: fea185c089932386d057a8abea14997007713b6d
 
 jobs:
+  delete-verify:
+    # Removes ONLY the temporary order-free verification function.
+    if: inputs.target == 'delete-gpt-final-review-verify'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+      - name: Delete gpt-final-review-verify (pinned version)
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          EXPECTED: ${{ inputs.expected_version_before }}
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > before.json
+          python3 -c "import json,os;x=json.load(open('before.json'));x=x.get('functions',x) if isinstance(x,dict) else x;r=next(r for r in x if r['slug']=='gpt-final-review-verify');assert str(r['version'])==os.environ['EXPECTED'],r;print(r['slug'],r['version'])"
+          supabase functions delete gpt-final-review-verify --project-ref "$SUPABASE_PROJECT_REF"
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > after.json
+          python3 -c "import json;x=json.load(open('after.json'));x=x.get('functions',x) if isinstance(x,dict) else x;assert not any(r['slug']=='gpt-final-review-verify' for r in x);assert any(r['slug']=='v10-lane-executor' and r['status']=='ACTIVE' for r in x);print('deleted; executor still ACTIVE')"
+
   release:
+    if: inputs.target != 'delete-gpt-final-review-verify'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

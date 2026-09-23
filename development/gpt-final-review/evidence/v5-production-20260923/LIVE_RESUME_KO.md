@@ -8,3 +8,9 @@
 - 해제 직후 진입 평가 정상(`NO_FRESH_BULL_SIGNAL`). 08:50 이후 시장 국면 NEUTRAL이라 기존 모델 신호 없음 → 실제 후보의 ENFORCE 경로는 다음 BULL 신호에서 관찰 필요.
 - 미해결: 실행자 자신의 주기 오류가 open circuit에서 MANUAL_REVIEW로 승격되는 trigger 동작 수정은 도구 보안 판정으로 거부됨(운영자 결정 필요).
   v70은 이 경로의 실제 원인(복구 lock timeout)만 재시도로 처리함.
+
+## 후속 (사용자 승인)
+- `v18_external_incident_epoch` 수정 적용(migration `20260923141626`): 현재 유효한 lease 소유자(실행자)가 circuit·사유를 바꾸지 않고
+  `last_error`만 갱신하면 오류는 그대로 기록하되 MANUAL_REVIEW로 승격하지 않음. 헤더 없는 writer, 다른 소유자·만료 lease,
+  circuit 개방, circuit_reason 변경은 기존대로 승격. SQL: `sql/v18_external_incident_epoch_executor_owner.sql`, 테스트: `tests/incident-epoch-sql.test.mjs`.
+- 임시 검증 함수 삭제: release workflow의 `delete-gpt-final-review-verify` 대상으로 수행.
