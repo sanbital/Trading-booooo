@@ -34,8 +34,9 @@ jobs:
           npm --prefix "$PKG" test
           node "$PKG/development/gpt-final-review/apply-current.mjs" "$PWD" --write
           cp -R "$PKG/development/gpt-final-review/tests" development/gpt-final-review/tests
-          cp "$PKG/development/gpt-final-review/apply-current.mjs" development/gpt-final-review/apply-current.mjs
-          cp "$PKG/development/gpt-final-review/file-store.mjs" development/gpt-final-review/file-store.mjs
+          for file in apply-current.mjs file-store.mjs review-once.mjs create_review_store.UNAPPLIED.sql; do
+            cp "$PKG/development/gpt-final-review/$file" "development/gpt-final-review/$file"
+          done
           mkdir -p development/gpt-final-review/evidence
           node --test development/gpt-final-review/tests/reviewer.test.mjs | tee development/gpt-final-review/evidence/integrated-tests.tap
       - name: Check actual executor syntax and exact baseline preservation
@@ -108,6 +109,8 @@ jobs:
             development/gpt-final-review/tests \
             development/gpt-final-review/apply-current.mjs \
             development/gpt-final-review/file-store.mjs \
+            development/gpt-final-review/review-once.mjs \
+            development/gpt-final-review/create_review_store.UNAPPLIED.sql \
             development/gpt-final-review/evidence/integrated-tests.tap \
             development/gpt-final-review/evidence/integration-verification.json
           git diff --cached --check
