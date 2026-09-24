@@ -2424,16 +2424,13 @@ async function manageLeader(db,p,ctx){
       return {status:"SYNC_FAILED",softwareMonitorRequired:true};
     }
   }
-  // A marketable BUY LIMIT has a ceiling but no floor: during a fast reversal it can
-  // execute materially below the quote that passed entryFresh().  The assessment was
-  // computed from the exact fill and persisted with the new position before reaching
-  // this manager.  Protect first, close through the ordinary idempotent exit path, then
-  // retire that same lifecycle's stop.  A restart repeats the durable intent instead of
-  // forgetting the invalid entry or creating another close order.
+  // Post-fill price drift is evidence only: the position was already approved by GPT
+  // and actually executed. Only malformed/unsafe post-fill evidence may force this
+  // deterministic safety close; ordinary positive or negative drift never does.
   const fillGuard=rec(meta.postFillEntryGuard),fillGuardClose=
     meta.entryExecutionPolicyVersion===ENTRY_EXECUTION_POLICY_VERSION&&
     fillGuard.version===ENTRY_EXECUTION_POLICY_VERSION&&fillGuard.action==="CLOSE"&&
-    ["V21_POST_FILL_ENTRY_DRIFT","V21_POST_FILL_ENTRY_INPUT_INVALID"].includes(fillGuard.reason)&&
+    fillGuard.reason==="V21_POST_FILL_ENTRY_INPUT_INVALID"&&
     (fillGuard.fillPrice===null||Math.abs(N(fillGuard.fillPrice)-N(p.entry_price))<=Math.max(1e-12,N(p.entry_price)*1e-8));
   if(fillGuardClose){
     const nativeStop=await syncNativeStop("HOLD");
