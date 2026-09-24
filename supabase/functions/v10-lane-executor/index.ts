@@ -1377,6 +1377,24 @@ async function settleKnownEntry(db,intent,raw,gw=opsGateway(db),opts={}) {
     if(already){
       if(Math.abs(N(already.quantity)-receipt.quantity)>1e-8||Math.abs(N(already.price)-receipt.price)>Math.max(1e-12,receipt.price*1e-7))
         throw Error("ENTRY_RETRY_IDEMPOTENCY_MISMATCH");
+      // A terminal order may be known before its canonical fills/fees arrive. Resolve
+      // that SAME entry leg exactly once without mistaking it for another top-up.
+      if(receipt.exact===true&&already.exact!==true){
+        const nextFills=fills.map(x=>(String(x.exchangeOrderId)===receipt.id||String(x.intentId)===String(intent.id))?
+          {...x,fee:receipt.fee,exact:true,filledAt:receipt.lastAt??x.filledAt??null}:x),
+          allExact=nextFills.every(x=>x.exact===true&&Number.isFinite(Number(x.fee))),
+          totalFee=allExact?nextFills.reduce((a,x)=>a+N(x.fee),0):null,
+          pendingExit=(meta.exitProtection?.orders??[]).some(x=>x.accountingPending)||
+            Object.values(meta.v18Exits??{}).some(x=>x.quantity>0&&!x.detailsComplete),
+          settled=N(meta.v18SettledPnl)-receipt.fee,now=new Date(Math.max(Date.now(),Date.parse(position.updated_at)+1)).toISOString();
+        await verifyExecutionLease(db);
+        const up=await db.from("v11_long_regime_positions").update({entry_fee_usdt:totalFee,
+          realized_pnl_usdt:allExact&&!pendingExit?settled:null,
+          metadata:{...meta,entryFillOrders:nextFills,v18SettledPnl:settled,v18EntryAccountingPending:!allExact,
+            exitAccountingPending:!allExact||pendingExit},updated_at:now})
+          .eq("id",position.id).eq("updated_at",position.updated_at).select("*").maybeSingle();
+        if(up.error||!up.data)throw Error("ENTRY_ACCOUNTING_CAS_CONFLICT");position=up.data;
+      }
     }else{
       // A retry may only top up an untouched partial entry. If protection/exit changed
       // quantity in the meantime, stop rather than re-expand the position.
