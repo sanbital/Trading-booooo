@@ -2,6 +2,7 @@ import {WIRE_OUTPUT_SCHEMA_V4} from '../../../supabase/functions/_shared/gpt-fin
 import test from 'node:test';
 import {V5_HOOKS} from '../executor-hooks-v5.mjs';
 import {V30_HOOKS} from '../executor-hooks-v30.mjs';
+import {FD1_HOOKS} from '../executor-hooks-fd1.mjs';
 import assert from 'node:assert/strict';
 import {writeFileSync,readFileSync,existsSync} from 'node:fs';
 import {WIRE_OUTPUT_SCHEMA,OUTPUT_SCHEMA,MODEL,LIMITS,VERSION,validateShape,validateAnswer,expandWireAnswer,toWireAnswer,compactInput,parseApiResponse,decisionIdentity} from '../../../supabase/functions/_shared/gpt-final-review/contract.mjs';
@@ -111,7 +112,8 @@ test('only two reversible executor wiring hooks; no exit policy or financial con
  const path=new URL('../../../supabase/functions/v10-lane-executor/index.ts',import.meta.url);
  if(existsSync(path)){
    let source=readFileSync(path,'utf8');
-   // V30 live-front hooks, then V5 operator/recovery hooks are removed; nothing else may differ.
+   // FD1 + CEC-advisory hooks, V30 live-front hooks, then V5 operator/recovery hooks are removed; nothing else may differ.
+   for(const h of [...FD1_HOOKS].reverse()){assert.equal(source.split(h.to).length,2);source=source.replace(h.to,h.from);}
    for(const h of [...V30_HOOKS].reverse()){assert.equal(source.split(h.to).length,2);source=source.replace(h.to,h.from);}
    for(const h of [...V5_HOOKS].reverse()){assert.equal(source.split(h.to).length,2);source=source.replace(h.to,h.from);}
    for(const h of [...FAST_HOOKS].reverse()){assert.equal(source.split(h.to).length,2);source=source.replace(h.to,h.from);}

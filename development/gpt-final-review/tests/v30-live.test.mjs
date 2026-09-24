@@ -6,6 +6,7 @@ import {P142_STYLE_BY_BRANCH,p142StyleForBranch} from '../../../supabase/functio
 import {FinalReviewCoordinator,MemoryReviewStore} from '../../../supabase/functions/_shared/gpt-final-review/coordinator.mjs';
 import {coordinatorFor} from '../../../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
 import {V30_HOOKS} from '../executor-hooks-v30.mjs';
+import {FD1_HOOKS} from '../executor-hooks-fd1.mjs';
 import {T,candidate,marketData,transport,config} from './helpers.mjs';
 
 const stampV30=s=>{s.features.v30Front=v30FrontDecision(s.features.b06133,V30_FRONT_LIVE_VERSION);return s;};
@@ -23,9 +24,12 @@ test('live baseline admits a V30 candidate B06133 rejected, and never rewrites B
   assert.equal(s.features.b06133.allowed,false);assert.equal(s.features.b06133.reason,'B06133_REJECT');
   assert.equal(entryBranchOf(s.features),'V30_SCORE');
 });
-test('live baseline keeps every CEC0040 check',()=>{
-  for(const mut of [c=>{c.effectiveAllowed=false;},c=>{c.ready=false;},c=>{c.action='REJECT';},c=>{c.decisionAt=T+60000;},c=>{c.version='X';}]){
+test('live baseline: CEC0040 action is advisory (main 2026-09-24) but the stamp must be fresh and valid',()=>{
+  for(const mut of [c=>{c.ready=false;},c=>{c.decisionAt=T+60000;},c=>{c.version='X';},c=>{c.action='BOGUS';}]){
     const s=b06133Rejected();mut(s.features.cec0040);assert.equal(baselineAllowedLive(s),false);
+  }
+  for(const mut of [c=>{c.effectiveAllowed=false;},c=>{c.action='REJECT';}]){
+    const s=b06133Rejected();mut(s.features.cec0040);assert.equal(baselineAllowedLive(s),true);
   }
   const s=b06133Rejected();s.features.cec0040=undefined;assert.equal(baselineAllowedLive(s),false);
 });
@@ -52,7 +56,7 @@ test('production coordinator uses the V6S prompt and the live baseline',async()=
 });
 test('V30 executor hooks change no sizing, slot, leverage, stop or lease control',()=>{
   const src=readFileSync(new URL('../../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
-  let base=src;for(const h of [...V30_HOOKS].reverse())base=base.replace(h.to,h.from);
+  let base=src;for(const h of [...FD1_HOOKS].reverse())base=base.replace(h.to,h.from);for(const h of [...V30_HOOKS].reverse())base=base.replace(h.to,h.from);
   for(const token of ['const MAX_SLOTS=10','const SETUP_MAX_CONCURRENT=4','SLOT_SIZING_CONTRACT.targetMarginUsdt','leverage:LEV',
     'POLICY.maxEntryDriftPct','verifyExecutionLease(db)','postFillEntryGuard(','v17_create_stop','stopPct'])
     assert.equal(src.split(token).length,base.split(token).length,token);

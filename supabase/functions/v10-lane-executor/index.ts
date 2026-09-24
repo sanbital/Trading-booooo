@@ -3,6 +3,8 @@ import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFut
 import {gptFilterExecutable,gptFinalCheck,runWithGptReview,gptReviewReadyToResume} from "./gpt-final-review-adapter.mjs";
 import {dryRunCoordinator,dryRunReviewPhase,liveProbe} from "./gpt-final-review-dryrun.mjs";
 import {readReviewControl} from "../_shared/gpt-final-review/supabase-store.mjs";
+import {fd1HoldTick,fd1Probe,FD1_HOLD_POLICY_VERSION,TIME_REASONS as FD1_TIME_REASONS} from "./gpt-final-decision-adapter.mjs";
+import {FD1_ENTRY_ENGINE} from "../_shared/gpt-final-decision/engine.mjs";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 import {POLICY, STRATEGY, ENTRY_EXECUTION_POLICY_VERSION, entryFresh, postFillEntryGuard, nextExit, portfolioMatches as leaderPortfolioMatches} from "../_shared/leader-momentum-v17.mjs";
 import {nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5, exitAttemptId, classifyExitResponse} from "../_shared/leader-exit-review.mjs";
@@ -1221,7 +1223,7 @@ async function settleKnownEntry(db,intent,raw,gw=opsGateway(db)) {
       entryTiming=rec(intent.request_payload?.entry_timing_policy),
       entryController=rec(intent.request_payload?.entry_controller),
       fillGuard=entryPolicy?.version===ENTRY_EXECUTION_POLICY_VERSION?postFillEntryGuard(f,z.avg):null,
-      pos=await db.from("v11_long_regime_positions").insert({signal_id:s.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:s.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{entrySelectionPolicyVersion:intent.request_payload?.entry_selection?.version??null,b06133:intent.request_payload?.entry_selection??null,v30Front:intent.request_payload?.entry_front??null,entryBranch:intent.request_payload?.entry_branch??null,entryControllerPolicyVersion:entryController?.version??null,cec0040:entryController?.version===CEC0040_VERSION?entryController:null,qv3:entryTiming?.version===SETUP_POLICY_VERSION?null:(intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null),entryTimingPolicyVersion:entryTiming?.version??null,entryTimingSetup:entryTiming?.setup??null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,leaderExitPolicyVersion:entryController?.version===CEC0040_VERSION&&entryController.enforcementEnabled===true?P142_POLICY_VERSION:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,entryConfirmationPolicyVersion:intent.request_payload?.e1?.policyVersion??null,entryConfirmation:intent.request_payload?.e1??null,exitObservationPolicyVersion:intent.request_payload?.x1?.policyVersion??null,x1Observation:{observedBidPeak:z.avg,executableVwapPeak:null,lastObservationId:null,lastObservationAt:null,source:"P10_TOP_OF_BOOK_BATCH",maxQuoteAgeMs:1000},entryMarketRules:{priceTick:N(intent.request_payload?.price_tick),quantityStep:N(intent.request_payload?.quantity_step)},operatorOverride:intent.request_payload?.operator_override??null,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,setupMaxConcurrent:SETUP_MAX_CONCURRENT,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFeatures:f}}).select("*").single();
+      pos=await db.from("v11_long_regime_positions").insert({signal_id:s.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:s.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{entrySelectionPolicyVersion:intent.request_payload?.entry_selection?.version??null,b06133:intent.request_payload?.entry_selection??null,v30Front:intent.request_payload?.entry_front??null,entryBranch:intent.request_payload?.entry_branch??null,entryControllerPolicyVersion:entryController?.version??null,cec0040:entryController?.version===CEC0040_VERSION?entryController:null,qv3:entryTiming?.version===SETUP_POLICY_VERSION?null:(intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null),entryTimingPolicyVersion:entryTiming?.version??null,entryTimingSetup:entryTiming?.setup??null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,fd1HoldPolicyVersion:FD1_HOLD_POLICY_VERSION,leaderExitPolicyVersion:entryController?.version===CEC0040_VERSION&&entryController.enforcementEnabled===true?P142_POLICY_VERSION:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,entryConfirmationPolicyVersion:intent.request_payload?.e1?.policyVersion??null,entryConfirmation:intent.request_payload?.e1??null,exitObservationPolicyVersion:intent.request_payload?.x1?.policyVersion??null,x1Observation:{observedBidPeak:z.avg,executableVwapPeak:null,lastObservationId:null,lastObservationAt:null,source:"P10_TOP_OF_BOOK_BATCH",maxQuoteAgeMs:1000},entryMarketRules:{priceTick:N(intent.request_payload?.price_tick),quantityStep:N(intent.request_payload?.quantity_step)},operatorOverride:intent.request_payload?.operator_override??null,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,setupMaxConcurrent:SETUP_MAX_CONCURRENT,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFeatures:f}}).select("*").single();
     if(pos.error)throw Error(`POSITION:${pos.error.message}`);position=pos.data;
   }
   await verifyExecutionLease(db);
@@ -2234,6 +2236,19 @@ async function manageLeader(db,p,ctx){
       retired=await syncNativeStop(result?.closed===true?"CLOSE":"HOLD",residual);
     return {action:"CLOSE",reason:fillGuard.reason,result,nativeStop:retired,fillGuard};
   }
+  // FD1 (GPT final decision): only a TIME-based close candidate or a HOLD tick is ever
+  // offered to GPT. Every stop-based CLOSE above is executed untouched and never waits.
+  if(meta.fd1HoldPolicyVersion===FD1_HOLD_POLICY_VERSION){
+    const timeCandidate=state.action==="CLOSE"&&FD1_TIME_REASONS.includes(state.reason)&&bid>state.stopPrice?state.reason:null;
+    if(state.action!=="CLOSE"||timeCandidate){
+      const fd1=await fd1HoldTick(db,p,{meta,state,bid,now:detectedAtMs,timeCandidate});
+      nextMeta.fd1Hold=fd1.state;details.fd1={reason:fd1.reason??null,close:fd1.close===true,fallback:fd1.fallback===true,
+        timeCandidate,last:fd1.state?.last??null,pending:fd1.state?.pending?.event??null};
+      if(timeCandidate&&!fd1.close){state.action="HOLD";state.reason=null;}
+      else if(fd1.close&&fd1.reason==="FD1_GPT_EXIT"){state.action="CLOSE";state.reason="FD1_GPT_EXIT";}
+      details.action=state.action;details.reason=state.reason;
+    }
+  }
   if(state.action==="CLOSE"){
     // No peak update or audit round trip may delay an already detected stop.
     const result=await closePos(db,{...p,peak_price:state.peakPrice,
@@ -2502,6 +2517,12 @@ Deno.serve(async req=>{
       const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
       return res(200,{ok:true,revision:REVISION,patch:PATCH,orderCalls:0,probe:await liveProbe(db,{symbol,apiKey:env("OPENAI_API_KEY")||"",
         runId:String(body.runId??crypto.randomUUID()),evaluate:evaluateB06133,fetchInputs:fetchB06133Inputs})});
+    }
+    if(mode==="fd1-probe"){
+      // ORDER-FREE: FD1 entry + hold decisions on live data; no lease, no signal/position/order write.
+      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
+      return res(200,{ok:true,revision:REVISION,patch:PATCH,orderCalls:0,sizing:{targetMarginUsdt:MARGIN,leverage:Number(LEV),maxSlots:MAX_SLOTS},
+        probe:await fd1Probe(db,{symbol,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID()),engine:FD1_ENTRY_ENGINE})});
     }
     if(mode==="cec-bootstrap")return res(200,await runWithLease(db,bootstrapCec0040));
     if(mode!=="run")return res(400,{ok:false,revision:REVISION,patch:PATCH,error:"MODE_UNSUPPORTED"});
