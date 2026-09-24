@@ -39,12 +39,25 @@ export function gptReviewReadyToResume(db){return coordinatorFor(db).consumeRead
 /** Order-time re-check. Only an ENFORCE-mode, unexpired, identity-bound GPT BUY passes.
  * With a triggered FINAL RECHECK record, the recheck's own valid BUY is additionally required
  * and replaces the initial answer's age limit (never the trigger expiry or identity). */
-export function gptFinalCheck(db,s,finalRecheck=null){
+export function gptBeginExecution(db,s,finalRecheck){
+  if(!gptFinalCheck(db,s,finalRecheck).allowed)return null;
+  return coordinatorFor(db).beginExecution(s,{supersededBy:finalRecheck?.recheck_triggered?finalRecheck.final.job_key:null});
+}
+export function gptConfirmFirstFinality(db,token,first){
+  return coordinatorFor(db).confirmFirstFinality(token,{orderId:first.oi.id,
+    confirmedAt:first.evidence.confirmedAt,quantity:first.oi.requested_quantity});
+}
+export function gptConsumeRetry(db,token){return coordinatorFor(db).consumeRetry(token);}
+export function gptFinalCheck(db,s,finalRecheck=null,retryAuthority=null){
   const c=coordinatorFor(db);
   if(c.config.mode!=='ENFORCE')return {allowed:false,reason:'GPT_NOT_ENFORCING_NO_NEW_ENTRY'};
   const triggered=finalRecheck?.recheck_triggered===true;
+  if(retryAuthority&&(finalRecheck?.recheck_sequence!==2||
+    !Number.isFinite(finalRecheck.pre_dispatch_at)||c.now()<finalRecheck.pre_dispatch_at||
+    c.now()-finalRecheck.pre_dispatch_at>10000||typeof finalRecheck.recheck_triggered!=='boolean'))
+    return {allowed:false,reason:'IOC_RETRY_FRESH_RECHECK_REQUIRED'};
   if(triggered&&!recheckAllows(finalRecheck.final,c.now()))return {allowed:false,reason:'GPT_FINAL_RECHECK_NOT_BUY_OR_EXPIRED'};
-  const r=c.check(s,triggered?{supersededBy:finalRecheck.final.job_key}:{});
+  const r=c.check(s,{supersededBy:triggered?finalRecheck.final.job_key:null,retryAuthority});
   return r.allowed===true&&r.review?.decision===c.allowDecision()?r:{...r,allowed:false};
 }
 /** The coordinator's current control/config for the FINAL RECHECK (same row, same ledger). */

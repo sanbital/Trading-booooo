@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import {managerBindings} from '../current-manager-bindings.mjs';
 import {readFileSync} from 'node:fs';
 import {E1_POLICY,aggregateAggTrades,advanceE1,depthVwap,e1QuoteEvidence,isFastWeak,startE1}
   from '../../supabase/functions/_shared/leader-e1-runtime.mjs';
@@ -54,6 +55,9 @@ test('enabled E1 is in the real open path and dispatches only at the post-recove
       takerBuyQuoteShare:initial?.4:.6,raw:[{a:1,T:start+1,p:String(price),q:'1',m:true},
         {a:2,T:end-1,p:String(price*(initial?.997:1.001)),q:'1',m:false}]};};
   const h=harness({e1Enabled:true,e1Tape:tape,advanceTimers:true});
+  // Exercise the legacy E1 watcher; current setup-governed entries record fast-weak
+  // as evidence and intentionally do not wait through this recovery branch.
+  h.ctx.setupGoverns=()=>false;
   h.state.entryQuote=state=>({best_bid:.004009,best_ask:.00401,
     bids:[{price:.004009,size:1_000_000}],asks:[{price:.00401,size:1_000_000}],
     timing:{requested_at_ms:state.now-20,received_at_ms:state.now-10,source:'GATEWAY_RECEIPT'}});
@@ -66,7 +70,8 @@ test('enabled E1 is in the real open path and dispatches only at the post-recove
   assert.equal(intent.request_payload.e1.policyVersion,E1_POLICY.policyVersion);
   assert.equal(intent.request_payload.e1.dispatchRecheck.currentQuantity,intent.requested_quantity);
   assert.equal(intent.request_payload.operator_override.priorPerformanceVerdict,'DEFER');
-  assert.equal(h.state.calls.filter(c=>c.action==='create_order').length,1);
+  assert.equal(h.state.calls.filter(c=>c.action==='create_order').length,2);
+  assert.equal(result.reason,'IOC_RETRY_EXHAUSTED');
 });
 
 test('a newly filled and protected E1/X1 position is never reported FLAT in the same cycle',async()=>{
@@ -116,7 +121,7 @@ function managerHarness(){
     createGatewayProtection:()=>{throw Error('native protection must be disabled in this test')},
     qv3AfterProtection:async()=>null,exchangeGateway:async c=>{gatewayCalls.push(c);throw Error('unexpected gateway')},
   };
-  vm.createContext(context);vm.runInContext(managerCode+';this.manage=manageLeader;',context);
+  Object.assign(context,managerBindings);vm.createContext(context);vm.runInContext(managerCode+';this.manage=manageLeader;',context);
   return{position,writes,gatewayCalls,manage:context.manage,db:{from:()=>builder}};
 }
 

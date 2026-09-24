@@ -2,6 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {harness,position} from './harness.mjs';
 
+test('CASE 20: actual protected position management advances management heartbeat',async()=>{
+  const p=position(),h=harness({positions:[p],signal:false});
+  const rt=h.state.tables.v11_long_regime_runtime[0];rt.last_management_success_at='old';
+  const out=await h.ctx.runCycle();
+  assert.equal(out.managed.length,1);assert.ok(out.managed[0].action);assert.equal(out.managed[0].error,undefined);
+  assert.equal(rt.last_management_success_at,rt.last_cycle_completed_at);
+});
+test('new entry protection completion has its own timestamp even with no pre-entry managed positions',async()=>{
+  const h=harness({signal:false}),rt=h.state.tables.v11_long_regime_runtime[0],at=h.state.now-20;
+  h.ctx.runEntryQueue=async()=>({entered:true,entryProtection:{status:'PROTECTED',finishedAt:at}});
+  const out=await h.ctx.runCycle();assert.equal(out.managed.length,0);
+  assert.equal(rt.last_management_success_at,new Date(at).toISOString());
+  assert.equal(rt.last_position_protection_success_at,new Date(at).toISOString());
+});
+
 test('successful signal evaluation advances success time without claiming flat position protection',async()=>{
   const h=harness({signal:false}),rt=h.state.tables.v11_long_regime_runtime[0];
   rt.last_success_at='2026-09-10T00:00:00Z';rt.last_error='OLD_TIMEOUT';

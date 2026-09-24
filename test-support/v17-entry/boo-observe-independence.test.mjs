@@ -21,16 +21,16 @@ import {B06133_VERSION} from '../../supabase/functions/_shared/leader-b06133-ent
 import {CEC0040_VERSION,CEC0040_TARGET_VERSION} from '../../supabase/functions/_shared/leader-cec0040.mjs';
 
 function stampCurrentEntry(h){
-  const signal=h.state.tables.v11_long_regime_signals[0],at=signal.features.signal5Close;
+  const signal=h.state.tables.v11_long_regime_signals[0],at=signal.features.v17Setup.triggerAt;
   Object.assign(signal.features,{sizingContractVersion:SLOT_SIZING_CONTRACT.version,
     targetMarginUsdt:SLOT_SIZING_CONTRACT.targetMarginUsdt,leverage:SLOT_SIZING_CONTRACT.leverage,
-    v17Setup:{identity:'boo-test',policyVersion:SETUP_POLICY_VERSION,state:SETUP_STATE.TRIGGERED,
-      referencePrice:signal.features.referenceClose,armedAt:at,triggerAt:at,triggerExpiresAt:at+60000},
+    v17Setup:{...signal.features.v17Setup},
     b06133:{version:B06133_VERSION,source:{decisionAt:at}},
     cec0040:{version:CEC0040_VERSION,targetVersion:CEC0040_TARGET_VERSION,ready:true,decisionAt:at,action:'ADMIT'}});
   Object.assign(h.ctx,{B06133_VERSION,CEC0040_VERSION,CEC0040_TARGET_VERSION,V30_FRONT_LIVE_VERSION:'TEST',
     baselineAllowedV30:()=>true,entryBranchOf:()=> 'TEST_BRANCH',
     gptFinalCheck:()=>({allowed:true,review:{decision:'PASS'}}),
+    gptBeginExecution:()=>({}),gptConfirmFirstFinality:()=>true,
     finalRecheckStep:async()=>({proceed:true,reason:'TEST_PASS',record:{recheck_triggered:false}}),
     withOrderTiming:x=>x,IOC_RETRY_POLICY:{maxAttempts:1}});
   return signal;
@@ -89,4 +89,3 @@ test('a refusing BOO verdict is a SYMBOL-scoped release, not an account halt', (
   const tail = source.slice(at, at + 220);
   assert.match(tail, /releaseScope:RELEASE_SCOPE\.SYMBOL/);
 });
-

@@ -95,6 +95,28 @@ test('11 actual openBull partial-fills 93 of the requested size: owns/protects o
  assert.equal(p.realized_pnl_usdt,null);assert.equal(p.entry_fee_usdt,null);
  const stops=h.state.calls.filter(c=>c.action==='v17_create_stop');assert.equal(stops.length,1);assert.equal(stops[0].params.quantity,93);
 });
+
+test('LTC production-shaped full fill keeps 150 x 3 sizing, exact fee, OPEN and one native reduceOnly stop',async()=>{
+ const h=harness(),s=h.state.tables.v11_long_regime_signals[0];s.symbol='LTCUSDT';s.features.referenceClose=68.73;s.features.atr=1;
+ h.state.symbolInfo={quantity_step:.001,price_tick:.01,min_notional:5};
+ h.state.entryQuote={best_bid:68.72,best_ask:68.73};
+ let expectedFee;
+ h.state.createOrder=(cmd,state)=>{
+  const qty=cmd.order.quantity;expectedFee=Number((qty*68.73*.0005).toFixed(8));
+  assert.equal(cmd.leverage,3);assert.ok(Math.abs(qty*68.73/3-150)<.25,JSON.stringify(cmd.order));
+  state.exchange=[{market:'LTCUSDT',side:'LONG',quantity:qty,entry_price:68.73}];
+  return {order:{orderId:'ltc-entry',clientOrderId:cmd.order.identifier,symbol:'LTCUSDT',side:'BUY',positionSide:'BOTH',reduceOnly:false,
+    origQty:String(qty),executedQty:String(qty),status:'FILLED',avgPrice:'68.73',updateTime:state.now,
+    fills:[{tradeId:'ltc-trade',qty:String(qty),price:'68.73',commission:String(expectedFee),commissionAsset:'USDT',time:state.now,side:'BUY'}]}};
+ };
+ const result=await h.ctx.runCycle(),p=h.state.tables.v11_long_regime_positions[0];
+ assert.equal(result.entry.entered,true);assert.equal(result.entry.entryProtection.status,'PROTECTED');
+ assert.equal(p.state,'OPEN');assert.equal(p.entry_fee_usdt,expectedFee);
+ assert.equal(h.state.calls.filter(c=>c.action==='create_order').length,1);
+ const stops=h.state.calls.filter(c=>c.action==='v17_create_stop');assert.equal(stops.length,1);
+ assert.equal(stops[0].params.type,'STOP_MARKET');assert.equal(String(stops[0].params.reduceOnly),'true');
+ assert.equal(stops[0].params.quantity,p.remaining_quantity);
+});
 test('V22 incomplete FILLED acknowledgement is queried and protected in the same cycle',async()=>{
  const h=harness(),s=h.state.tables.v11_long_regime_signals[0],fillAt=h.state.now-750;
  s.symbol='STEEMUSDT';s.features.referenceClose=.07969;s.features.atr=.001;

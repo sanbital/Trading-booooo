@@ -1,6 +1,6 @@
 // @ts-nocheck
 import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode,entryPriceEvidence} from "./entry-evidence.mjs";
-import {gptFilterExecutable,gptFinalCheck,runWithGptReview,gptReviewReadyToResume} from "./gpt-final-review-adapter.mjs";
+import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,runWithGptReview,gptReviewReadyToResume} from "./gpt-final-review-adapter.mjs";
 import {dryRunCoordinator,dryRunReviewPhase,liveProbe} from "./gpt-final-review-dryrun.mjs";
 import {readReviewControl} from "../_shared/gpt-final-review/supabase-store.mjs";
 import {fd1HoldTick,fd1Probe,FD1_HOLD_POLICY_VERSION,TIME_REASONS as FD1_TIME_REASONS} from "./gpt-final-decision-adapter.mjs";
@@ -29,7 +29,7 @@ import {SETUP_POLICY,SETUP_POLICY_VERSION,SETUP_REASON,SETUP_STATE,advancePullba
 import {B06133_VERSION,evaluateB06133,fetchB06133Inputs} from "../_shared/leader-b06133-entry.mjs";
 import {V30_FRONT_LIVE_VERSION,v30FrontDecision,entryBranchOf,baselineAllowedV30} from "../_shared/gpt-final-review/contract.mjs";
 import {CEC0040_CONFIG,CEC0040_TARGET_VERSION,CEC0040_VERSION,P142_POLICY_VERSION,advanceP142Completed,nextExitP142,p142Mean44Target} from "../_shared/leader-cec0040.mjs";
-const REVISION="V11-LONG-REGIME-1.0.1",PATCH="FD1-EXECUTION-RETRY-SIZING150-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
+const REVISION="V11-LONG-REGIME-1.0.1",PATCH="FD1-BOUNDED-RETRY-AUTHORITY-2",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Object.freeze({
   id:"2026-09-13-USER-PRIORITY-OVERRIDE",basis:"OPERATOR_OVERRIDE_UNVALIDATED",
   priorPerformanceVerdict:"DEFER",parametersValidatedByBacktest:false
@@ -210,7 +210,8 @@ function retryE1Evidence(tape,q,quantity,at){
     expectedCostBps:ev.expectedCostBps,observations:tape?.available?[{startAt:tape.startAt,endAt:tape.endAt,
       return:tape.last10sReturn,buyShare:tape.takerBuyQuoteShare,tradeCount:tape.tradeCount}]:[]};
 }
-async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,step,payload}){
+async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,step,payload,authorize}){
+  if(!Number.isInteger(attemptNo)||attemptNo<1||attemptNo>IOC_RETRY_POLICY.maxAttempts)throw Error("IOC_RETRY_EXHAUSTED");
   const id=cid(attemptNo===1?"v11e":`v11r${attemptNo}`,s.id),
     rp={action:"create_order",leverage:LEV,order:{market:s.symbol,side:"BUY",type:"LIMIT",price:limitPrice,
       time_in_force:"IOC",quantity,identifier:id,position_side:"LONG",position_effect:"OPEN"},wait_for_final_ms:4000},
@@ -222,6 +223,16 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
   if(oi.error)throw Error(`ORDER_INTENT:${oi.error.message}`);
   try{
     await verifyExecutionLease(db);
+    // Re-evaluate after durable intent/lease I/O. A slow database must not spend the
+    // approval or quote budget and then send a stale order. No venue call on refusal.
+    const authority=authorize?.();
+    if(authority?.allowed!==true){
+      const reason=authority?.reason??"IOC_DISPATCH_AUTHORITY_MISSING";
+      const wr=await db.from("v11_long_regime_orders").update({state:"REJECTED",reject_reason:reason,
+        response_payload:{notDispatched:true},updated_at:new Date().toISOString()}).eq("id",oi.data.id);
+      if(wr.error)throw Error("IOC_NO_DISPATCH_WRITE");
+      return {blocked:true,reason,oi:oi.data};
+    }
     const initialRaw=await gw(rp),initial=fill(initialRaw);let finalRaw=initialRaw,receipt=null,finalitySource="CREATE_RESPONSE";
     try{receipt=entryReceipt(initialRaw,oi.data);}catch{}
     if(!receipt){
@@ -1233,8 +1244,13 @@ const finishPartialOrAbort=async(reason,extra={})=>{
     updated_at:new Date().toISOString()}).eq("id",s.id);
   return{entered:false,reason,...extra,entryDecision:finalDecision,e1:e1Decision,qv3:attempt.qv3};
 };
+const retryAuthority=gptBeginExecution(db,s,attempt.finalRecheck);
+if(!retryAuthority)return await finishPartialOrAbort("GPT_REVIEW_EXPIRED",{executionAttempts:0});
 attempt.dispatched=true;
-const first=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:1,quantity:sized.amount,limitPrice,step,payload:baseIntentPayload});
+const first=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:1,quantity:sized.amount,limitPrice,step,payload:baseIntentPayload,
+  authorize:()=>gptFinalCheck(db,s,attempt.finalRecheck)});
+if(first.blocked)return await finishPartialOrAbort(first.reason,{executionAttempts:0});
+const retryArmed=gptConfirmFirstFinality(db,retryAuthority,first);
 lastEvidence=first.evidence;lastReceipt=first.receipt;
 if(first.receipt.quantity>0){
   currentPosition=await settleKnownEntry(db,first.oi,first.settledRaw,gateway,{registerTarget:false});
@@ -1261,11 +1277,15 @@ if(first.receipt.quantity>0){
   await settleKnownEntry(db,first.oi,first.settledRaw,gateway,{retireZeroFillSignal:false,registerTarget:false});
 }
 if(IOC_RETRY_POLICY.maxAttempts<2)return await finishPartialOrAbort("IOC_RETRY_EXHAUSTED",{executionAttempts:1});
+if(!retryArmed)return await finishPartialOrAbort("IOC_RETRY_AUTHORITY_INVALID",{executionAttempts:1});
 
 // Retry decision point: fresh tape+book first. A meaningful change invokes bounded FINAL
 // RECHECK sequence #2; no change keeps the still-valid previous GPT decision.
 let retryAt=Date.now(),[retryQuote0,retryTape]=await Promise.all([
   gateway({action:"quote",market:s.symbol},3000),fetchE1AggTrades(s.symbol,retryAt-10000,retryAt)]);
+if(retryTape?.available!==true||retryTape.startAt!==retryAt-10000||retryTape.endAt!==retryAt||
+  !(Number.isFinite(retryTape.last10sReturn)&&Number.isFinite(retryTape.takerBuyQuoteShare)&&retryTape.tradeCount>0))
+  return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:FRESH_TAPE_UNAVAILABLE",{executionAttempts:1});
 let retryE1=retryE1Evidence(retryTape,retryQuote0,currentPosition?N(currentPosition.original_quantity):sized.amount,retryAt);
 const retryRecheck=await finalRecheckStep(db,s,{ticket:attempt.gptFinalReview,e1:retryE1,rawQuote:retryQuote0,sequence:2});
 attempt.finalRecheck=retryRecheck.record;
@@ -1273,33 +1293,37 @@ if(!retryRecheck.proceed)return await finishPartialOrAbort(retryRecheck.reason,{
 
 // FINAL BUY can take seconds. Re-read every execution-safety input after the answer.
 await requireLeaderEntryControls(db);
-const[retryPair,retryOrders,retrySnap,retryQuote]=await Promise.all([
-  readOpsPair(db,undefined,s.symbol),gateway({action:"v18_open_orders"},5000),snap(db),gateway({action:"quote",market:s.symbol},3000)]);
+const[retryPair,retryOrders,retrySnap,retryQuote,retryInfo]=await Promise.all([
+  readOpsPair(db,undefined,s.symbol),gateway({action:"v18_open_orders"},5000),snap(db),gateway({action:"quote",market:s.symbol},3000),
+  gateway({action:"symbol_info",market:s.symbol},3000)]);
 await recordMismatch(db,retryPair.match);
 const retryNow=Date.now(),retryBid=N(retryQuote?.best_bid),retryAsk=N(retryQuote?.best_ask);
 if(!(retryBid>0&&retryAsk>=retryBid))return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:INVALID_BOOK",{executionAttempts:1});
 const retryQuoteAge=retryNow-N(retryQuote?.timing?.received_at_ms,NaN);
 if(!Number.isFinite(retryQuoteAge)||retryQuoteAge<0||retryQuoteAge>E1_POLICY.maxQuoteAgeMs)
   return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:STALE_QUOTE",{executionAttempts:1});
+if(!normalizeEntryBook(retryQuote,E1_POLICY.maxQuoteAgeMs,retryNow).health.bookHealthy)
+  return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:INVALID_BOOK",{executionAttempts:1});
 if(attempt.finalRecheck?.recheck_triggered===true){
   const safety=postRecheckSafety({recheck:attempt.finalRecheck.final,quote:retryQuote,at:retryNow});
   attempt.finalRecheck={...attempt.finalRecheck,postSafety:safety};
   if(!safety.ok)return await finishPartialOrAbort(`EXECUTION_SAFETY_REJECT:${safety.reason}`,{executionAttempts:1});
 }
-const retryGpt=gptFinalCheck(db,s,attempt.finalRecheck);
+const retryGpt=gptFinalCheck(db,s,attempt.finalRecheck,retryAuthority);
 if(!retryGpt.allowed)return await finishPartialOrAbort(retryGpt.reason,{executionAttempts:1});
 const latestPosition=currentPosition?retryPair.positions.find(p=>p.id===currentPosition.id):null;
 if(currentPosition&&!latestPosition)return await finishPartialOrAbort("PARTIAL_FILL_POSITION_MISSING",{executionAttempts:1});
 if(retryPair.manual.some(x=>x.symbol===String(s.symbol).toUpperCase()))
   return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:MANUAL_SYMBOL_LOCKED",{executionAttempts:1});
 let retrySized;
-try{retrySized=sizeEntry(retryAsk,step,filters)}catch(error){
+try{filters=symbolFilters(retryInfo);step=filters.quantityStep;
+  retrySized=sizeEntry(retryAsk,step,filters);retrySized.amount=Math.min(sized.amount,retrySized.amount,floorStep(MARGIN*LEV/retryAsk,step))}catch(error){
   return await finishPartialOrAbort(`EXECUTION_SAFETY_REJECT:${String(error?.code??error?.message??error)}`,{executionAttempts:1});
 }
 const heldQty=latestPosition?N(latestPosition.original_quantity):0,heldNotional=latestPosition?heldQty*N(latestPosition.entry_price):0,
   retryPlan=planAggressiveIocRetry({quote:retryQuote,targetQuantity:retrySized.amount,filledQuantity:heldQty,
     quantityStep:step,priceTick:filters.priceTick,minNotionalUsdt:filters.minNotionalUsdt,minQuantity:filters.minQuantity,
-    leverage:LEV,maxTotalMarginUsdt:MAX_ORDER_MARGIN_USDT,currentPositionNotionalUsdt:heldNotional});
+    leverage:LEV,maxTotalMarginUsdt:MARGIN,currentPositionNotionalUsdt:heldNotional});
 if(!retryPlan.ok)return await finishPartialOrAbort(`EXECUTION_SAFETY_REJECT:${retryPlan.reason}`,{executionAttempts:1,retryPlan});
 if(retryPlan.complete){
   if(latestPosition){currentPosition=latestPosition;return await finishPartialOrAbort(retryPlan.underExchangeMinimum?"REMAINDER_BELOW_EXCHANGE_MINIMUM":"TARGET_ALREADY_FILLED",
@@ -1318,8 +1342,17 @@ if(!retryDecision.allowed)return await finishPartialOrAbort(`EXECUTION_SAFETY_RE
 const retryPayload={...baseIntentPayload,entry_final_recheck:withOrderTiming(attempt.finalRecheck),spread_bps:retryPlan.spreadBps,
   ioc_bps:retryPlan.chaseBps,expected_entry_vwap:retryPlan.expectedVwap,expected_slippage_bps:retryPlan.slippageBps,
   retry_of_order_id:first.oi.id,retry_remaining_quantity:retryPlan.remainingQuantity,entry_control:retryDecision.evidence};
+const retryDispatchCheck=gptFinalCheck(db,s,attempt.finalRecheck,retryAuthority);
+if(!retryDispatchCheck.allowed)
+  return await finishPartialOrAbort(retryDispatchCheck.reason??"IOC_RETRY_AUTHORITY_EXPIRED_OR_INVALID",{executionAttempts:1});
 const second=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:2,quantity:retryPlan.remainingQuantity,
-  limitPrice:retryPlan.limitPrice,step,payload:retryPayload});
+  limitPrice:retryPlan.limitPrice,step,payload:retryPayload,authorize:()=>{
+    const check=gptFinalCheck(db,s,attempt.finalRecheck,retryAuthority),age=Date.now()-Number(retryQuote?.timing?.received_at_ms);
+    if(!check.allowed)return check;
+    if(!Number.isFinite(age)||age<0||age>E1_POLICY.maxQuoteAgeMs)return {allowed:false,reason:"EXECUTION_SAFETY_REJECT:STALE_QUOTE"};
+    return gptConsumeRetry(db,retryAuthority)?check:{allowed:false,reason:"IOC_RETRY_AUTHORITY_EXPIRED_OR_INVALID"};
+  }});
+if(second.blocked)return await finishPartialOrAbort(second.reason,{executionAttempts:1,retryPlan});
 lastEvidence=second.evidence;lastReceipt=second.receipt;
 if(second.receipt.quantity>0){
   currentPosition=await settleKnownEntry(db,second.oi,second.settledRaw,gateway,{registerTarget:false});
@@ -1335,7 +1368,7 @@ if(second.receipt.quantity>0){
     e1:e1Decision,x1PolicyVersion:rec(currentPosition.metadata).exitObservationPolicyVersion,b06133:rec(currentPosition.metadata).b06133,
     cec0040:rec(currentPosition.metadata).cec0040,qv3:attempt.qv3,executionAttempts:2,retryPlan};
 }
-await settleKnownEntry(db,second.oi,second.settledRaw,gateway,{retireZeroFillSignal:false,registerTarget:false});
+await settleKnownEntry(db,second.oi,second.settledRaw,gateway,{retireZeroFillSignal:false,registerTarget:false,existingPosition:currentPosition});
 return await finishPartialOrAbort("IOC_RETRY_EXHAUSTED",{executionAttempts:2,retryPlan});
 }
 // Best-effort feed for the decision-only exit shadow. It must never be able to affect
@@ -1356,7 +1389,11 @@ async function settleKnownEntry(db,intent,raw,gw=opsGateway(db),opts={}) {
   if(sig.error||!sig.data||sig.data.features?.strategy!==STRATEGY||intent.request_payload?.order?.side!=="BUY"||intent.request_payload?.order?.position_effect!=="OPEN")throw Error("ENTRY_INTENT_OWNERSHIP_UNPROVEN");
   if(receipt.quantity===0){
     const pf=await gw({action:"p10_portfolio"});
-    if(!freshPortfolio(pf)||pf.positions.some(p=>(p.market??p.symbol)===intent.symbol&&Number(p.quantity)!==0))throw Error("ENTRY_ZERO_EXPOSURE_UNPROVEN");
+    const residual=pf?.positions?.filter(p=>(p.market??p.symbol)===intent.symbol&&Number(p.quantity)!==0)??[];
+    const held=opts.existingPosition;
+    const exposureProven=held?held.symbol===intent.symbol&&held.state==="OPEN"&&residual.length===1&&
+      String(residual[0].side??"LONG").toUpperCase()==="LONG"&&Number(residual[0].quantity)===Number(held.remaining_quantity):residual.length===0;
+    if(!freshPortfolio(pf)||!exposureProven)throw Error("ENTRY_ZERO_EXPOSURE_UNPROVEN");
     await verifyExecutionLease(db);
     const wr=await db.from("v11_long_regime_orders").update({state:"REJECTED",exchange_order_id:receipt.id,response_payload:{...raw,v18ExposureFinal:true},reject_reason:`IOC_NO_FILL:${receipt.status}`,updated_at:new Date().toISOString()}).eq("id",intent.id);
     if(wr.error)throw Error("ENTRY_TERMINAL_WRITE");
@@ -2064,8 +2101,15 @@ async function run(db) {
         patch.last_success_at=now;patch.last_error=null;
       }else if(fatal){patch.last_error=String(fatal.message??fatal).slice(0,500);}
       if(managed.length&&managed.every(x=>x.action&&!x.error&&!x.skipped)&&["PROTECTED","FLAT"].includes(health))patch.last_management_success_at=now;
-      if(managed.length&&managed.every(x=>x.action&&!x.error&&!x.skipped)&&["PROTECTED","SOFTWARE_ONLY"].includes(health))
+      if(managed.length&&managed.every(x=>x.action&&!x.error&&!x.skipped)&&health==="PROTECTED")
         patch.last_position_protection_success_at=now;
+      // A newly filled position is managed inside openBull, after the cycle's managed[]
+      // snapshot. Record that actual successful event at its completion time.
+      if(entry.entered&&["PROTECTED","CLOSED"].includes(entry.entryProtection?.status)&&
+          Number.isFinite(entry.entryProtection.finishedAt)){
+        patch.last_management_success_at=new Date(entry.entryProtection.finishedAt).toISOString();
+        if(entry.entryProtection.status==="PROTECTED")patch.last_position_protection_success_at=patch.last_management_success_at;
+      }
       if(reconciliation.some(x=>x.outcome==="RESOLVED"&&x.evidenceSecured===true&&x.quantityResolved===true&&
           x.attributionComplete===true&&x.accountingComplete===true)&&reconciliation.every(x=>!x.error&&x.outcome!=="UNRESOLVED"))
         patch.last_reconciliation_success_at=now;

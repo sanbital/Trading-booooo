@@ -47,6 +47,23 @@ export class MemoryReviewStore {
     this.rows.set(key,{...old,state:'DONE',record:structuredClone(record)});return true;}
 }
 export class FinalReviewCoordinator {
+  // Process-local capabilities: never serialized, recovered, or shared with another cycle.
+  retryLifecycles=new WeakMap();
+  beginExecution(s,{supersededBy=null}={}){
+    const check=this.check(s,{supersededBy});
+    if(!check.allowed)return null;
+    const token=Object.freeze({});
+    this.retryLifecycles.set(token,{ticket:check.review,signal:s,startedAt:this.now(),deadline:null,used:false});
+    return token;
+  }
+  confirmFirstFinality(token,{orderId,confirmedAt,quantity}){
+    const life=this.retryLifecycles.get(token),at=Date.parse(confirmedAt);
+    if(!life||life.deadline!==null||!orderId||!Number.isFinite(at)||at<life.startedAt||at>this.now()||
+      !Number.isFinite(quantity)||quantity<0)return false;
+    life.deadline=at+15000;life.firstOrderId=orderId;life.targetQuantity=quantity;
+    return true;
+  }
+  consumeRetry(token){const life=this.retryLifecycles.get(token);if(!life||life.used||this.now()>=life.deadline)return false;life.used=true;return true;}
   constructor({config,store,apiKey=()=>'',fetchFn=fetch,market=collectMarket,now=Date.now,schedule=p=>{p.catch(()=>{});},
     profile=DEFAULT_PROFILE,purpose='PRODUCTION',baseline=baselineAllowed,expiry=triggerExpiry,engine=null}){
     this.config=config;this.store=store;this.apiKey=apiKey;this.fetchFn=fetchFn;this.market=market;this.now=now;this.schedule=schedule;
@@ -149,14 +166,17 @@ export class FinalReviewCoordinator {
     return {valid:true,allowed:answer.decision===this.allowDecision(),decision:answer.decision,reason:'GPT_'+answer.decision,ticket};
   }
   /** Pure, no I/O. Run again immediately before intent creation. */
-  check(s,{supersededBy=null}={}){
+  check(s,{supersededBy=null,retryAuthority=null}={}){
     if(this.config.mode==='OFF'||this.config.mode==='SHADOW')return {allowed:true,reason:this.config.mode};
     if(!this.authorized())return {allowed:false,reason:'GPT_REVIEW_NOT_APPROVED'};
     const t=this.tickets.get(String(s?.id)),now=this.now();
     if(!this.baseline(s)||!t||t.identityJson!==canonical(this.identity(s)))return {allowed:false,reason:'GPT_REVIEW_IDENTITY_CHANGED'};
     // A FINAL RECHECK answer supersedes the initial answer's age limit only; the trigger
     // expiry, identity and baseline above/below still bind. Its own validity is checked by the caller.
-    if((supersededBy===null&&now>=t.validUntil)||now>=t.expires-LIMITS.executionReserveMs)return {allowed:false,reason:'GPT_REVIEW_EXPIRED'};
+    const life=retryAuthority&&this.retryLifecycles.get(retryAuthority);
+    if(retryAuthority&&(!life||life.signal!==s||life.ticket!==t||life.used||life.deadline===null||now>=life.deadline))
+      return {allowed:false,reason:'IOC_RETRY_AUTHORITY_EXPIRED_OR_INVALID'};
+    if(!life&&((supersededBy===null&&now>=t.validUntil)||now>=t.expires-LIMITS.executionReserveMs))return {allowed:false,reason:'GPT_REVIEW_EXPIRED'};
     return {allowed:t.decision===this.allowDecision(),reason:'GPT_'+t.decision,review:t};
   }
   /** Pure scheduling hint. No database/network wait on the protection loop. */
