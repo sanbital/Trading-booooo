@@ -8,9 +8,11 @@ export const PRICING=Object.freeze({inputPerMillion:.75,cachedPerMillion:.075,ou
  * (output length/verbosity and duplicate input removal), never the verdict contract. */
 export const PROFILES=Object.freeze({
   V4:Object.freeze({wire:'V4',maxOutputTokens:LIMITS.outputTokens,verbosity:null,cacheKey:'boo-final-review-v4-facts'}),
-  V5:Object.freeze({wire:'V5',maxOutputTokens:900,verbosity:'low',cacheKey:'boo-final-review-v5-facts'})
+  V5:Object.freeze({wire:'V5',maxOutputTokens:900,verbosity:'low',cacheKey:'boo-final-review-v5-facts'}),
+  /** Production since 2026-09-24: real-time risk review only (see contract.mjs V6). */
+  V6:Object.freeze({wire:'V6',maxOutputTokens:700,verbosity:'low',cacheKey:'boo-final-review-v6-rtrisk'})
 });
-export const DEFAULT_PROFILE='V5';
+export const DEFAULT_PROFILE='V6';
 export function profileOf(name=DEFAULT_PROFILE){ensure(Object.hasOwn(PROFILES,name),'API_PROFILE_UNKNOWN');return PROFILES[name];}
 export function payloadFor(packet,profileName=DEFAULT_PROFILE){
   const p=profileOf(profileName),text={format:{type:'json_schema',name:WIRE_PROFILES[p.wire].schemaName,strict:true,schema:wireSchema(p.wire)}};
@@ -59,7 +61,7 @@ export async function callFinalReviewer(packet,{apiKey,fetchFn=fetch,now=Date.no
     ensure(now()<deadlineMs,'LATE_RESPONSE');result.decision=result.answer.decision;result.valid=true;
   }catch(e){
     // Never include an arbitrary network exception or URL in persisted errors.
-    const safe=/^(API_TIMEOUT|LATE_RESPONSE|HTTP_\d+|RESPONSE_[A-Z_]+|REQUEST_ID_MISSING|API_[A-Z_]+|IDENTITY_MISMATCH|EVIDENCE_[A-Z_]+|PASS_[A-Z_]+|CURRENT_[A-Z_]+|ORIGINAL_[A-Z_]+|ASSESSMENT_CONFLICT|VETO_REQUIRES_FACT|NUMERICAL_[A-Z_]+|FALSE_MISSING|DUPLICATE_CLAIM|UNEXPECTED_API_TOOL|TYPE:|ENUM:|STRING:|REQUIRED:|EXTRA:|ARRAY:)/;
+    const safe=/^(API_TIMEOUT|LATE_RESPONSE|HTTP_\d+|RESPONSE_[A-Z_]+|REQUEST_ID_MISSING|API_[A-Z_]+|IDENTITY_MISMATCH|EVIDENCE_[A-Z_]+|PASS_[A-Z_]+|CURRENT_[A-Z_]+|ORIGINAL_[A-Z_]+|ASSESSMENT_CONFLICT|VETO_[A-Z_]+|V6_[A-Z_]+|NUMERICAL_[A-Z_]+|FALSE_MISSING|DUPLICATE_CLAIM|UNEXPECTED_API_TOOL|TYPE:|ENUM:|STRING:|REQUIRED:|EXTRA:|ARRAY:)/;
     result.error=safe.test(e?.message??'')?String(e.message).slice(0,180):'API_OR_VALIDATION_ERROR';
     result.decision='ABSTAIN';result.valid=false;
   }finally{clearTimeout(timer);result.completed_at_ms=now();result.latency_ms=result.completed_at_ms-started;}

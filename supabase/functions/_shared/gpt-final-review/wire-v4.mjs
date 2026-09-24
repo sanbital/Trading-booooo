@@ -2,7 +2,7 @@
  * attached locally, never generated, rounded, or corrected from model text.
  * The canonical validator still checks identity, freshness at the caller, claims,
  * numeric evidence requirements, completeness, and unsupported prose. */
-import {FACTORS,LIMITS,ensure,evidenceAt,validateShape,parseApiResponse,validateAnswer} from './contract.mjs';
+import {FACTORS,LIMITS,ensure,evidenceAt,validateShape,parseApiResponse,validateAnswer,REVIEW_CONTRACT_V6,RISK_CATEGORIES,riskAssessment} from './contract.mjs';
 export const WIRE_VERSION='FACTREF4';
 const original=['volumeRatio','return5m','return15m','return30m','return60m','btc_return30m','btc_return2h','source_buy_share_3m','source_price_change_3m','source_buy_share_first','source_buy_share_previous','source_buy_share_latest'];
 const current=['return_5m','return_15m','return_30m','return_60m','volume_ratio_3m','taker_buy_ratio_3m','relative_strength_btc_15m','distance_recent_high_15m','distance_sma20','distance_trigger_reference','last_body','last_upper_wick','last_lower_wick','last_close_change','day_return','spread','depth','funding',
@@ -97,9 +97,56 @@ export function toWireV5(answer,packet){
  return {w:WIRE_VERSION_V5,c:w.c,h:w.h,d:w.d,k:w.k.map(x=>({...x,e:x.e.slice(0,3)})),support_now:w.s.map(x=>x.p).filter(id=>id.startsWith('C_')),support_orig:w.s.map(x=>x.p).filter(id=>!id.startsWith('C_')),
   oppose_now:w.o.map(x=>x.p).filter(id=>id.startsWith('C_')),oppose_orig:w.o.map(x=>x.p).filter(id=>!id.startsWith('C_')),n:w.n.slice(0,60)};
 }
+/* V6 transport: real-time risk review. Input = current-market facts (C_ only, each
+ * with its value/unit/formula), the deterministic risk flags with their published
+ * thresholds, and the machine decision as read-only CONTEXT. Output = decision, the
+ * named risk categories with the C_ facts that show them, and supporting C_ facts.
+ * No original-model re-audit field exists in the schema. */
+export const WIRE_VERSION_V6='RTRISK6';
+export const V6_SUPPORT_LABEL='현재 시장 정상 근거';
+export const V6_RISK_LABEL='실시간 위험 근거';
+export const WIRE_OUTPUT_SCHEMA_V6=obj({
+ w:{type:'string',enum:[WIRE_VERSION_V6]},c:str(80),h:str(64),d:{type:'string',enum:['PASS','VETO','ABSTAIN']},
+ risks:{type:'array',maxItems:4,items:obj({r:{type:'string',enum:[...RISK_CATEGORIES]},e:{type:'array',maxItems:3,items:refNow}})},
+ support_now:{type:'array',maxItems:3,items:refNow},n:str(60)
+});
+export function compactInputV6(packet){
+ const facts={};
+ for(const [id,path] of Object.entries(FACT_PATHS)){if(!id.startsWith('C_'))continue;const f=evidenceAt(packet,path);facts[id]=[f.value,f.unit,f.formula??null,f.missing_reason??null];}
+ const bars=xs=>(xs??[]).map(b=>[b.open_offset_ms,b.open,b.high,b.low,b.close]);
+ const o=packet.original_model,cur=packet.current_market,om=k=>o.metrics?.[k]?.value??null,risk=riskAssessment(packet);
+ const input={w:WIRE_VERSION_V6,c:packet.candidate_id,h:packet.snapshot_hash,as_of_offset_ms:packet.as_of_offset_ms,
+  machine_decision:{proposed_action:o.proposed_action,status:'ADMITTED_BY_V17_B06133_CEC0040',selector_branch:o.branch,
+   controller:o.global_control,context_returns:{return15m:om('return15m'),return30m:om('return30m'),return60m:om('return60m'),volumeRatio:om('volumeRatio')},
+   note:'machine selection is final for selection; do not re-evaluate it'},
+  risk_flags:Object.fromEntries(Object.entries(risk.flags).map(([k,x])=>[k,{level:x.level,rule:x.rule,facts:x.facts}])),
+  current_market:{quality:cur.quality,microstructure_availability:cur.microstructure_availability??[],
+   bars_1m:{columns:['open_offset_ms','open','high','low','close'],unit:'price_index_latest_close_100',rows:bars(cur.one_minute)},
+   bars_5m:{columns:['open_offset_ms','open','high','low','close'],unit:'price_index_latest_close_100',rows:bars(cur.five_minute)}},
+  facts:{columns:['value','unit','formula','missing_reason'],rows:facts}};
+ ensure(new TextEncoder().encode(JSON.stringify(input)).length<=LIMITS.inputBytes,'INPUT_TOO_LARGE');return input;
+}
+export function expandWireV6(wire,packet){
+ validateShape(wire,WIRE_OUTPUT_SCHEMA_V6);
+ const path=id=>{ensure(Object.hasOwn(FACT_PATHS,id)&&id.startsWith('C_'),'EVIDENCE_REFERENCE_INVALID');const p=FACT_PATHS[id];evidenceAt(packet,p);return p;};
+ const evidence=label=>id=>{const p=path(id),fact=evidenceAt(packet,p);return {field_path:p,observed_value:fact.value,unit:fact.unit,interpretation:label};};
+ const risks=wire.risks.map(x=>({risk_id:x.r,evidence:x.e.map(evidence(V6_RISK_LABEL))}));
+ return {review_contract:REVIEW_CONTRACT_V6,candidate_id:wire.c,snapshot_hash:wire.h,decision:wire.d,
+  assessment:{PASS:'SUPPORTED',VETO:'CONTRADICTED',ABSTAIN:'INSUFFICIENT_EVIDENCE'}[wire.d],risks,checked_claims:[],
+  supporting_evidence:wire.support_now.map(evidence(V6_SUPPORT_LABEL)),opposing_evidence:risks.flatMap(x=>x.evidence),
+  missing_fields:[],summary:wire.n};
+}
+/** Fixture encoder only. */
+export function toWireV6(answer){
+ const ids=Object.fromEntries(Object.entries(FACT_PATHS).map(([id,p])=>[p,id]));
+ return {w:WIRE_VERSION_V6,c:answer.candidate_id,h:answer.snapshot_hash,d:answer.decision,
+  risks:(answer.risks??[]).map(x=>({r:x.risk_id,e:x.evidence.map(e=>ids[e.field_path])})),
+  support_now:answer.supporting_evidence.map(e=>ids[e.field_path]).filter(id=>id?.startsWith('C_')).slice(0,3),n:answer.summary.slice(0,60)};
+}
 export const WIRE_PROFILES=Object.freeze({
  V4:Object.freeze({schemaName:'entry_final_review_v4_factref',schema:WIRE_OUTPUT_SCHEMA_V4,input:compactInputV4,expand:expandWireV4}),
- V5:Object.freeze({schemaName:'entry_final_review_v5_factref',schema:WIRE_OUTPUT_SCHEMA_V5,input:compactInputV5,expand:expandWireV5})
+ V5:Object.freeze({schemaName:'entry_final_review_v5_factref',schema:WIRE_OUTPUT_SCHEMA_V5,input:compactInputV5,expand:expandWireV5}),
+ V6:Object.freeze({schemaName:'entry_final_review_v6_realtime_risk',schema:WIRE_OUTPUT_SCHEMA_V6,input:compactInputV6,expand:expandWireV6})
 });
 const wireProfile=name=>{ensure(Object.hasOwn(WIRE_PROFILES,name),'API_PROFILE_UNKNOWN');return WIRE_PROFILES[name];};
 export function wireSchema(name){return wireProfile(name).schema;}

@@ -7,7 +7,7 @@ import {buildPacket,computeMarket,normalizeBars} from '../../../supabase/functio
 import {FinalReviewCoordinator,MemoryReviewStore,configFromEnv} from '../../../supabase/functions/_shared/gpt-final-review/coordinator.mjs';
 import {gptFilterExecutable,gptFinalCheck,runWithGptReview,setTestCoordinator} from '../../../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
 import {transform,checkedTransform,replacements} from '../apply-current.mjs';
-import {T,candidate,bars,marketData,packet,answer,rawResponse,transport,config} from './helpers.mjs';
+import {T,candidate,bars,marketData,microData,packet,answer,rawResponse,transport,config} from './helpers.mjs';
 function service(options={}){
   const requests=options.requests??[],store=options.store??new MemoryReviewStore();
   const c=new FinalReviewCoordinator({config:options.config??config(),store,apiKey:()=> 'TEST_KEY_NOT_A_SECRET',
@@ -22,7 +22,7 @@ test('packet includes original BUY decision and its basis',async()=>{const p=awa
 test('does not send raw symbol/account/secrets/PNL from arbitrary feature fields',async()=>{const s=candidate();s.account_id='PRIVATE';s.features.OPENAI_API_KEY='PRIVATE';s.features.pnl=123;s.features.b06133.source.exchange_secret='PRIVATE';const p=await packet(s);const text=JSON.stringify(p);assert.ok(!text.includes('PRIVATE'));assert.ok(!text.includes('TESTUSDT'));assert.ok(!text.includes('pnl'));});
 test('strict schema objects all disallow additional fields',()=>{function walk(x){if(!x||typeof x!=='object')return;if(x.type==='object')assert.equal(x.additionalProperties,false);Object.values(x).forEach(v=>Array.isArray(v)?v.forEach(walk):walk(v));}walk(OUTPUT_SCHEMA);});
 test('Responses request has strict schema, no tools and server-side auth',async()=>{const requests=[];const p=await packet();const out=await callFinalReviewer(p,{apiKey:'TEST',fetchFn:transport({requests}),now:()=>T+1000,deadlineMs:T+10000});assert.equal(out.decision,'PASS');assert.equal(requests[0].url,API_URL);assert.equal(requests[0].payload.model,MODEL);assert.equal(requests[0].payload.text.format.strict,true);assert.deepEqual(requests[0].payload.tools,[]);assert.equal(requests[0].payload.store,false);assert.ok(requests[0].init.headers.authorization.startsWith('Bearer '));});
-test('VETO retained as candidate-specific rejection',async()=>{const {c}=service({fetchFn:transport({decision:'VETO'})});const r=await completed(c);assert.equal(r.allowed,false);assert.equal(r.decision,'VETO');});
+test('VETO retained as candidate-specific rejection',async()=>{const wide={bids:[['105','500']],asks:[['106.2','500']]};const {c}=service({fetchFn:transport({decision:'VETO'}),market:async()=>marketData(candidate(),T+1000,microData({book:wide}))});const r=await completed(c);assert.equal(r.allowed,false);assert.equal(r.decision,'VETO');});
 test('ABSTAIN does not become PASS',async()=>{const {c}=service({fetchFn:transport({decision:'ABSTAIN'})});assert.equal((await completed(c)).allowed,false);});
 test('valid PASS can proceed only to existing guards',async()=>{const {c}=service();assert.equal((await completed(c)).allowed,true);assert.equal(c.check(candidate()).allowed,true);});
 test('SHADOW preserves existing queue even with invalid review',async()=>{const {c}=service({config:config('SHADOW'),fetchFn:transport({decision:'VETO'})});assert.equal((await completed(c)).allowed,true);assert.equal(c.check(candidate()).allowed,true);});

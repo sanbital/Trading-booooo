@@ -5,7 +5,7 @@ import {collectMarket,buildPacket,packetHash} from './market.mjs';
 import {callFinalReviewer,DEFAULT_PROFILE,profileOf} from './openai.mjs';
 export const MAX_RESERVED_USD=.10; // Conservative per-call reservation; settled to documented token cost after the call.
 /** Human-readable release label stored with every review (source_commit column). */
-export const RELEASE='gpt-final-review-v5.1-micro-20260923';
+export const RELEASE='gpt-final-review-v6-realtime-risk-20260924';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const MODES=['OFF','SHADOW','ENFORCE'];
 /** Legacy env-only configuration (tests and emergency override). */
