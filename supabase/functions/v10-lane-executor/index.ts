@@ -1663,11 +1663,11 @@ async function opsControls(db) {
  * that runs after it must not be a network read, or the quote is stale before the
  * order is written.
  */
-function decideEntryWith(controls,pair,candidateSymbol,openOrders,{proposedMargin=0,cashBuffer=0,managementFailures=[]}={}) {
+function decideEntryWith(controls,pair,candidateSymbol,openOrders,{proposedMargin=0,cashBuffer=0,managementFailures=[],existingPositionId=null}={}) {
   return evaluateEntryDecision({candidateSymbol,classification:pair.match,portfolio:pair.pf,openOrders,
     positions:pair.positions,orders:pair.orders,quarantines:pair.quarantines,
     manualSymbols:pair.manual.map(x=>x.symbol),managementFailures,runtime:controls.runtime,operator:controls.control,settings:controls.settings,
-    maxSlots:MAX_SLOTS,proposedMargin,cashBuffer,requireNativeProtection:NATIVE_STOP_ENABLED});
+    maxSlots:MAX_SLOTS,proposedMargin,cashBuffer,requireNativeProtection:NATIVE_STOP_ENABLED,existingPositionId});
 }
 async function decideEntry(db,pair,candidateSymbol,openOrders,opts={}) {
   return decideEntryWith(await opsControls(db),pair,candidateSymbol,openOrders,opts);
