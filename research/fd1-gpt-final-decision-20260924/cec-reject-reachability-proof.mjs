@@ -8,6 +8,7 @@ const {entryExecutionWindow}=await import(R+'v10-lane-executor/entry-evidence.mj
 const {SETUP_POLICY}=await import(R+'_shared/leader-pullback-reaccel.mjs');
 const {FinalReviewCoordinator,MemoryReviewStore}=await import(R+'_shared/gpt-final-review/coordinator.mjs');
 const {FD1_ENTRY_ENGINE,fd1EntryIdentity}=await import(R+'_shared/gpt-final-decision/engine.mjs');
+const {entryWire}=await import('../../development/gpt-final-decision/tests/fixtures.mjs');
 const rows=JSON.parse(readFileSync(new URL('./data/cec_reject_rows.json',import.meta.url)));
 for(const row of rows){
   const s={...structuredClone(row),status:'NEW'},f=s.features,trig=Number(f.v17Setup.triggerAt);
@@ -21,7 +22,7 @@ for(const row of rows){
       if(u.hostname==='api.openai.com'){apiCalls++;const i=JSON.parse(JSON.parse(init.body).input[1].content);
         const w=answer==='BUY'?{d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'상승'}:{d:answer,reasons:[],support:[],n:'보류'};
         return new Response(JSON.stringify({model:'gpt-5.4-mini-2026-03-17',status:'completed',usage:{input_tokens:1,output_tokens:1,input_tokens_details:{cached_tokens:0}},
-          output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({t:'ENTRY',c:i.candidate_id,...w})}]}]}),{status:200,headers:{'x-request-id':'r'}});}
+          output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(entryWire({t:'ENTRY',c:i.candidate_id,...w}))}]}]}),{status:200,headers:{'x-request-id':'r'}});}
       const MIN=60000,end=Number(u.searchParams.get('endTime')??trig)+1,lim=Number(u.searchParams.get('limit')??1),iv=u.searchParams.get('interval')==='5m'?5*MIN:MIN;
       if(u.pathname==='/fapi/v1/klines')return Response.json(Array.from({length:lim},(_,k)=>{const t=Math.floor(end/iv)*iv-(lim-k)*iv,o=0.17+k*0.0002,c=o+0.0002;return [t,String(o),String(c*1.001),String(o*0.999),String(c),'0',t+iv-1,'10000',0,'0','6000','0'];}));
       if(u.pathname==='/futures/data/openInterestHist')return Response.json(Array.from({length:13},(_,k)=>({timestamp:Math.floor(trig/300000)*300000-(12-k)*300000,sumOpenInterest:1000+k,sumOpenInterestValue:5e5})));

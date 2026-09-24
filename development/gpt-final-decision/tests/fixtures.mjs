@@ -19,3 +19,11 @@ export function mockApi(wireFor,{model='gpt-5.4-mini-2026-03-17',status=200}={})
     return new Response(JSON.stringify(raw),{status,headers:{'x-request-id':'req_1'}});};
   return {fetchFn,calls};
 }
+/** An ENTRY wire with the evidence/EV fields (2026-09-25 contract) filled consistently for
+ * its decision, so a test states only what it is about. Explicit fields win. */
+export function entryWire(w){
+  const d=w.d,base=d==='BUY'?{bearish:[],invalidation:[],upside_pct:2,downside_pct:1,ev:'POSITIVE',confidence:0.6,abstain_reason:'NONE'}:
+    d==='SKIP'?{bearish:[],invalidation:[],upside_pct:0.5,downside_pct:1.5,ev:'NEGATIVE',confidence:0.6,abstain_reason:'NONE'}:
+    {bearish:[],invalidation:[],upside_pct:1,downside_pct:1,ev:'UNDETERMINED',confidence:0.3,abstain_reason:'EV_UNDETERMINABLE'};
+  return {...base,reasons:[],support:[],...w};
+}

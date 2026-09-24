@@ -1,0 +1,32 @@
+{
+  "baseline": {"patch": "FD1-BOUNDED-RETRY-AUTHORITY-2", "commit": "dba40b4e9c115088eb1835c6a76ee28cc0946f3a"},
+  "candidate": {"patch": "FD1-OPPORTUNITY-REFINEMENT-1"},
+  "data_cutoff_utc": "2026-09-24T18:57:00Z",
+  "units": "USDT per 450 USDT notional unless noted; 60m model = entry at trigger/chase close, native stop -2.5%, else 60m close, 0.1% fee",
+  "fd1_window": {
+    "from_utc": "2026-09-24T04:20:00Z",
+    "gpt_entry_reviews": 35, "gpt_buy": 28, "filled": 9, "recheck_skip": 6, "ioc_no_fill": 3, "buy_orphans_after_0730": 7,
+    "abstain": {"n": 5, "no_flag": 4, "missed_60m_all": 14.3, "missed_60m_post_upgrade": 26.0,
+      "cases": {"LSK 08:06 HARD PREMIUM_EXTREME": -11.70, "BROCCOLI714 12:43": 7.01, "CFG 15:38": -0.74, "RIVER 15:45": 10.37, "RIVER 16:10": 9.36}},
+    "opportunity_capture_60m": {"pool": 359.76, "baseline_pct": 8.3, "candidate_all_in_pct": 45.2},
+    "buy_precision_60m_pct": 35.7
+  },
+  "replay_table": {
+    "baseline_realized": {"n": 9, "net": -18.40, "pf": 0.658, "win_pct": 22.2, "avg_win": 17.68, "avg_loss": -7.68, "max_loss": -11.22},
+    "baseline_60m": {"n": 9, "net": -48.81, "pf": 0.379, "win_pct": 11.1, "avg_win": 29.83, "avg_loss": -9.83, "max_loss": -11.70},
+    "candidate_all_in_60m": {"n": 27, "net": -1.80, "pf": 0.989, "win_pct": 33.3, "avg_win": 18.05, "avg_loss": -9.12, "max_loss": -11.70},
+    "components": {"orphan_recovery": -46.85, "ioc_retry": 52.76, "live_chase": 24.46, "abstain_to_buy": 16.64},
+    "expected_with_gpt_rates": {"no_orphans": 21.0, "with_orphans": -25.85,
+      "assumptions": "IOC retry fill 0.70; GPT BUY share 0.80 for LIVE chase and no-flag ABSTAIN with no selection skill"}
+  },
+  "full_data": {
+    "chase_counterfactual_60m": {"DEAD": {"n": 159, "sum": -414.4}, "LIVE": {"n": 129, "sum": 101.3},
+      "UNCERTAIN": {"n": 32, "sum": -149.3}, "NO_DATA": {"n": 62, "sum": -128.0}, "journal_reported_sum_60m": 1945.6},
+    "ioc": {"attempt1": 119, "filled": 83, "fill_pct": 69.7, "attempt2_sent": 0, "no_fill_missed_60m": 69.9, "no_fill_missed_30m": 5.7},
+    "abstain_replay_after_0917": {"no_flag_n": 46, "mean_r60_pct": -1.00, "buy_no_flag_n": 227, "buy_mean_r60_pct": -0.25},
+    "all_in_effect_estimate": -232
+  },
+  "production_lifecycle": {"stale_new_rows_without_reason": 29, "legacy_no_setup": 20, "never_triggered_setups": 9,
+    "live_orphan_at_cutoff": "LINKUSDT 18:48 GPT BUY, GPT_REVIEW_EXPIRED 1 s before dispatch"},
+  "tests": {"node_main": "375/375 (baseline 342/342)", "test_support": "405/409 (4 pre-existing failures, same as baseline)", "deno": "1055/1055"}
+}

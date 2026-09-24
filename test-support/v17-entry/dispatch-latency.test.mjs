@@ -52,6 +52,7 @@ import {
 import {
   entryExecutionWindow, entryPriceEvidence, normalizeEntryBook, supportedFuturesMode,
 } from '../../supabase/functions/v10-lane-executor/entry-evidence.mjs';
+import * as liveChase from '../../supabase/functions/_shared/leader-live-chase.mjs';
 
 // This file replays the frozen v51 (2026-09-18) production window, when the live
 // contract targeted a 30 USDT slot. The operator has since moved the target to 200
@@ -187,6 +188,8 @@ function setupAdvancer({candles, persisted = []}) {
     },
     qv3Candles: async () => candles,
     audits, persisted,
+    // (2026-09-25) LIVE momentum chase evaluation lives in the same span; these fixtures never chase.
+    LIVE_CHASE_ENABLED: true, ...liveChase,
   };
   vm.createContext(ctx);
   vm.runInContext(body, ctx);
@@ -645,4 +648,56 @@ test('25. the account-mode observation is authenticated, fresh and explicitly on
     requested_at_ms: now - 9_000, received_at_ms: now - 8_900}}, now), false);
   assert.equal(supportedFuturesMode({...good, dual_side_position: true}, now), false);
   assert.equal(supportedFuturesMode({...good, position_mode: 'HEDGE'}, now), false);
+});
+
+// ---------------------------------------------------------------------------
+// 2026-09-25 LIVE momentum chase: the frozen machine still says CHASE_EXPIRED; the market
+// state at that chase bar decides whether GPT sees a trigger.
+// ---------------------------------------------------------------------------
+/** 66 completed 1m bars: an hour drifting up to the reference, then the first bar after arm
+ * jumps 2% above it (the chase bar). `vol5`/`buy` shape the last five bars. */
+function chaseTape({vol5 = 2, buy = 0.6} = {}) {
+  const out = [];
+  for (let i = 0; i < 66; i++) {
+    const t = CLOSE - 65 * MIN + i * MIN, chase = i === 65;
+    const c = chase ? REF * 1.02 : REF * (0.97 + 0.0299 * i / 64), o = chase ? REF * 1.0005 : c * 0.9995;
+    const q = i >= 61 ? 1000 * vol5 : 1000;
+    out.push([t, String(o), String(Math.max(o, c) * 1.0004), String(Math.min(o, c) * 0.9996), String(c), '0', t + MIN - 1,
+      String(q), 0, '0', String(q * buy), '0']);
+  }
+  return out;
+}
+test('LIVE chase: CHASE LIVE becomes a GPT trigger in the same cycle; CHASE DEAD stays rejected with its evidence', async () => {
+  const live = setupAdvancer({candles: chaseTape()});
+  const now = CLOSE + MIN + 5_000;                  // the chase bar (armed bar) closed 5 s ago
+  const out = await live.advanceSignalSetup({}, row(), now);
+  assert.equal(out.state.state, SETUP_STATE.TRIGGERED);
+  assert.equal(out.state.triggerMode, 'LIVE_MOMENTUM_CHASE');
+  assert.equal(out.state.chase.state, 'LIVE');
+  assert.equal(out.state.triggerAt, CLOSE + MIN);
+  assert.ok(now < out.state.triggerExpiresAt, 'inside the ordinary 60 s trigger window');
+  assert.equal(live.audits.at(-1)[5], 'V17_LIVE_CHASE_TRIGGERED');
+  assert.equal(live.audits.at(-1)[6].setup.chase.state, 'LIVE', 'the chase evidence is audited');
+
+  const dead = setupAdvancer({candles: chaseTape({vol5: 0.4, buy: 0.4})});
+  const d = await dead.advanceSignalSetup({}, row(), now);
+  assert.equal(d.state.state, SETUP_STATE.CHASE_EXPIRED);
+  assert.match(d.state.terminalReason, /^V17_CHASE_EXPIRED:DEAD:.*VOLUME_FADING/);
+  assert.equal(d.state.chase.state, 'DEAD');
+
+  const off = setupAdvancer({candles: chaseTape()});off.LIVE_CHASE_ENABLED = false;
+  const k = await off.advanceSignalSetup({}, row(), now);
+  assert.equal(k.state.state, SETUP_STATE.CHASE_EXPIRED);assert.equal(k.state.terminalReason, SETUP_REASON.CHASE_EXPIRED,
+    'FD1_LIVE_CHASE_TO_GPT=false restores the original verdict exactly');
+
+  const late = setupAdvancer({candles: chaseTape()});
+  const l = await late.advanceSignalSetup({}, row(), CLOSE + 2 * MIN + 1_000);
+  assert.equal(l.state.state, SETUP_STATE.CHASE_EXPIRED, 'a chase first seen after its window is not a trigger');
+  assert.match(l.state.terminalReason, /^V17_CHASE_EXPIRED:STALE:CHASE_TRIGGER_WINDOW_UNAVAILABLE/);
+
+  const blind = setupAdvancer({candles: chaseTape()});
+  let reads = 0;blind.qv3Candles = async () => (++reads === 1 ? chaseTape() : Promise.reject(Error('HTTP_429')));
+  const b = await blind.advanceSignalSetup({}, row(), now);
+  assert.equal(b.state.state, SETUP_STATE.CHASE_EXPIRED, 'no market data: the rejection stands');
+  assert.match(b.state.terminalReason, /CHASE_DATA_UNAVAILABLE/);
 });

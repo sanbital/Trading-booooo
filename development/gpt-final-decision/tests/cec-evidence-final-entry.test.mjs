@@ -8,7 +8,7 @@ import {baselineAllowedLive,v30FrontDecision,V30_FRONT_LIVE_VERSION} from '../..
 import {FD1_ENTRY_ENGINE} from '../../../supabase/functions/_shared/gpt-final-decision/engine.mjs';
 import {gptFilterExecutable,gptFinalCheck,setTestCoordinator} from '../../../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
 import {candidate,T} from '../../gpt-final-review/tests/helpers.mjs';
-import {klines} from './fixtures.mjs';
+import {klines,entryWire} from './fixtures.mjs';
 const MIN=60000;
 function world(answer){
   const calls={openai:0};
@@ -20,7 +20,7 @@ function world(answer){
       const w={BUY:{d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'상승 지속'},SKIP:{d:'SKIP',reasons:[],support:[],n:'건너뜀'},
         ABSTAIN:{d:'ABSTAIN',reasons:[],support:[],n:'판단 불가'}}[answer];
       const raw={model:'gpt-5.4-mini-2026-03-17',status:'completed',usage:{input_tokens:3000,output_tokens:80,input_tokens_details:{cached_tokens:0}},
-        output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({t:'ENTRY',c:input.candidate_id,...w})}]}]};
+        output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(entryWire({t:'ENTRY',c:input.candidate_id,...w}))}]}]};
       return new Response(JSON.stringify(raw),{status:200,headers:{'x-request-id':'req'}});}
     const p=u.pathname,at=Number(u.searchParams.get('endTime')??T)+1;
     if(p==='/fapi/v1/klines')return Response.json(klines(Number(u.searchParams.get('limit')),u.searchParams.get('interval')==='5m'?5*MIN:MIN,at,{step:u.searchParams.get('symbol')==='BTCUSDT'?.0001:.001}));
@@ -92,9 +92,10 @@ test('executor: CEC REJECT is not terminal, openBull does not re-veto it, GPT BU
   const cec=src.slice(src.indexOf('async function applyCec0040Selection'),src.indexOf('async function registerCec0040Target'));
   assert.ok(!/patch\.status="REJECTED"/.test(cec),'no terminal REJECTED from CEC');
   assert.match(cec,/return \{allowed:stamp\.ready,row:write\.data,stamp\}/);
-  const open=src.slice(src.indexOf('async function openBull'),src.indexOf('const gptEntryCheck=gptFinalCheck(db,s);'));
+  const open=src.slice(src.indexOf('async function openBull'),src.indexOf('const gptEntryCheck=gptFinalCheck(db,s,null,null,{allowAged:true});'));
   assert.ok(!/effectiveAllowed|modelAllowed/.test(open),'no CEC admission re-check before the GPT check');
-  assert.match(src,/const gptEntryCheck=gptFinalCheck\(db,s\);\nif\(!gptEntryCheck\.allowed\)return\{entered:false/);
+  // allowAged only lets an aged BUY reach the forced FINAL RECHECK; it never dispatches on it.
+  assert.match(src,/const gptEntryCheck=gptFinalCheck\(db,s,null,null,\{allowAged:true\}\);\nif\(!gptEntryCheck\.allowed\)return\{entered:false/);
   assert.match(src,/const gptDispatchCheck=gptFinalCheck\(db,s,attempt\.finalRecheck\);/);
   const reg=src.slice(src.indexOf('async function registerCec0040Target'),src.indexOf('async function fetchCec0040Public'));
   assert.ok(!/modelAllowed|effectiveAllowed/.test(reg));assert.match(reg,/\["ADMIT","PROBE","REJECT"\]\.includes\(cec\.action\)/);

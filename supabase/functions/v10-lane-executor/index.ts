@@ -1,6 +1,6 @@
 // @ts-nocheck
 import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode,entryPriceEvidence} from "./entry-evidence.mjs";
-import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,runWithGptReview,gptReviewReadyToResume} from "./gpt-final-review-adapter.mjs";
+import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,runWithGptReview,gptReviewReadyToResume,gptArmFollowUp} from "./gpt-final-review-adapter.mjs";
 import {dryRunCoordinator,dryRunReviewPhase,liveProbe} from "./gpt-final-review-dryrun.mjs";
 import {readReviewControl} from "../_shared/gpt-final-review/supabase-store.mjs";
 import {fd1HoldTick,fd1Probe,FD1_HOLD_POLICY_VERSION,TIME_REASONS as FD1_TIME_REASONS} from "./gpt-final-decision-adapter.mjs";
@@ -20,6 +20,8 @@ import {QV3_ACTIVATION_BASIS,QV3_LIVE_CUTOVER,QV3_VERSION,qv3Entry,qv3Exit,qv3Sc
 import {E1_POLICY,advanceE1,e1QuoteEvidence,fetchE1AggTrades,startE1} from "../_shared/leader-e1-runtime.mjs";
 import {V24_ADAPTER_VERSION,v24EntryGate} from "./v24-entry-adapter.mjs";
 import {IOC_RETRY_POLICY,planAggressiveIocRetry} from "./entry-ioc-retry.mjs";
+import {ENTRY_LIFECYCLE_VERSION,lifecycleNote,noteChanged,gptTerminalReason,expiredTriggerReason,agedOutReason} from "./entry-lifecycle.mjs";
+import {LIVE_CHASE_POLICY,LIVE_CHASE_REASON,CHASE_STATE,classifyChase,liveChaseTrigger,deadChaseState} from "../_shared/leader-live-chase.mjs";
 import {BOO_ADAPTER_VERSION,ENFORCEMENT as BOO_ENFORCEMENT,evaluateBooEntry,finalizeBooEntry,loadBooGateContext,openRiskSummary,recordBooVerdict} from "./boo-entry-adapter.mjs";
 import {R1_VERSION} from "../_shared/boo/r1-strategy.mjs";
 import {RISK_POLICY_VERSION} from "../_shared/boo/risk-policy.mjs";
@@ -29,7 +31,7 @@ import {SETUP_POLICY,SETUP_POLICY_VERSION,SETUP_REASON,SETUP_STATE,advancePullba
 import {B06133_VERSION,evaluateB06133,fetchB06133Inputs} from "../_shared/leader-b06133-entry.mjs";
 import {V30_FRONT_LIVE_VERSION,v30FrontDecision,entryBranchOf,baselineAllowedV30} from "../_shared/gpt-final-review/contract.mjs";
 import {CEC0040_CONFIG,CEC0040_TARGET_VERSION,CEC0040_VERSION,P142_POLICY_VERSION,advanceP142Completed,nextExitP142,p142Mean44Target} from "../_shared/leader-cec0040.mjs";
-const REVISION="V11-LONG-REGIME-1.0.1",PATCH="FD1-BOUNDED-RETRY-AUTHORITY-2",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
+const REVISION="V11-LONG-REGIME-1.0.1",PATCH="FD1-OPPORTUNITY-REFINEMENT-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Object.freeze({
   id:"2026-09-13-USER-PRIORITY-OVERRIDE",basis:"OPERATOR_OVERRIDE_UNVALIDATED",
   priorPerformanceVerdict:"DEFER",parametersValidatedByBacktest:false
@@ -105,6 +107,10 @@ const E1_ENABLED=env("V23_E1_ENTRY_OVERRIDE")!=="false",X1_ENABLED=env("V23_X1_F
 // Exchange-resident protective stop. Default OFF: enabling it starts submitting real
 // STOP_MARKET orders, so it is a deliberate operator action, not a deploy side effect.
 const NATIVE_STOP_ENABLED=env("V17_NATIVE_STOP")==="true";
+// (2026-09-25) A V17 chase whose market state is LIVE or UNCERTAIN becomes a trigger for GPT
+// with late-entry context instead of a terminal V17_CHASE_EXPIRED; a DEAD chase is rejected as
+// before. FD1_LIVE_CHASE_TO_GPT=false restores the terminal verdict for every chase.
+const LIVE_CHASE_ENABLED=env("FD1_LIVE_CHASE_TO_GPT")!=="false";
 async function hmac(s,m){const k=await crypto.subtle.importKey("raw",new TextEncoder().encode(s),{name:"HMAC",hash:"SHA-256"},false,["sign"]),g=await crypto.subtle.sign("HMAC",k,new TextEncoder().encode(m));return[...new Uint8Array(g)].map(x=>x.toString(16).padStart(2,"0")).join("")}
 async function gateway(cmd,tm=20000){if(!GW||!SEC)throw new Error("GATEWAY_CONFIG");const x=["create_order","v17_create_stop","v17_cancel_stop"].includes(cmd.action)?{...cmd,engine_version:PROTOCOL}:cmd,raw=JSON.stringify({exchange:"binance_futures",...x}),ts=String(Date.now()),nonce=crypto.randomUUID(),sig=await hmac(SEC,`${ts}\n${nonce}\n${raw}`),c=new AbortController,t=setTimeout(()=>c.abort(),tm);try{const r=await fetch(`${GW}/v1/command`,{method:"POST",signal:c.signal,headers:{"content-type":"application/json","x-gateway-ts":ts,"x-gateway-nonce":nonce,"x-gateway-signature":sig},body:raw}),txt=await r.text();let d;try{d=txt?JSON.parse(txt):null}catch{d={raw:txt}}if(!r.ok||!d?.ok)throw new Error(`GW_${r.status}:${d?.error||txt}`);return d.result}finally{clearTimeout(t)}}
 function fill(p){const o=p?.order??p??{},f=p?.fill??{},q=Math.max(0,N(f.executedVolume??f.executed_quantity??o.executed_volume??o.executedQty)),a=Math.max(0,N(f.averagePrice??f.average_price??o.average_price??o.avgPrice));return{status:String(o?.status??p?.status??"UNKNOWN").toUpperCase(),exchangeOrderId:o?.exchange_order_id==null?o?.orderId==null?null:String(o.orderId):String(o.exchange_order_id),qty:q,avg:a,fee:Math.max(0,N(f.paidFeeQuote??f.paidFee??o.paid_fee??o.commission)),raw:p}}
@@ -203,6 +209,27 @@ function sizeEntry(ask,step,filters={}){
     sizedMargin:plan.orderMarginUsdt};
 }
 
+/** Per-attempt IOC evidence (2026-09-25), persisted in the order intent's request_payload:
+ * the book the attempt was priced from, how far above the ask its limit sat, how much of the
+ * book that limit could reach, and for a retry what changed since the first attempt. */
+function iocAttemptEvidence({attemptNo,quote,quantity,limitPrice,at,prior=null,plan=null,filledBefore=null,firstStatus=null}){
+  const num=v=>Number.isFinite(Number(v))&&v!==null&&v!==""?Number(v):null;
+  const bid=num(quote?.best_bid),ask=num(quote?.best_ask),recv=num(quote?.timing?.received_at_ms),lim=num(limitPrice);
+  const asks=(Array.isArray(quote?.asks)?quote.asks:[]).map(l=>Array.isArray(l)?[num(l[0]),num(l[1])]:[num(l?.price),num(l?.size)])
+    .filter(([p,z])=>p>0&&z>0);
+  return {version:"IOC_ATTEMPT_EVIDENCE_1",attemptNo,at,bestBid:bid,bestAsk:ask,
+    spreadBps:bid>0&&ask>=bid?(ask-bid)/((ask+bid)/2)*10000:null,quoteReceivedAt:recv,quoteAgeMs:recv===null?null:at-recv,
+    askLevels:asks.length,askDepthQty:asks.reduce((a,[,z])=>a+z,0),
+    executableQtyAtLimit:lim===null?null:asks.filter(([p])=>p<=lim*(1+1e-12)).reduce((a,[,z])=>a+z,0),
+    requestedQty:num(quantity),limitPrice:lim,offsetBps:lim!==null&&ask>0?(lim/ask-1)*10000:null,
+    lastPrice:num(quote?.last_price??quote?.last??quote?.raw?.lastPrice),
+    ...(prior?{sinceFirstAttemptMs:at-prior.at,askChangeBpsSinceFirst:ask>0&&prior.bestAsk>0?(ask/prior.bestAsk-1)*10000:null,
+      firstLimitPrice:prior.limitPrice,firstStatus,filledBeforeQty:filledBefore}:{}),
+    ...(plan?{retryPlan:{version:IOC_RETRY_POLICY.version,upliftBps:plan.upliftBps??null,depthLimitPrice:plan.depthLimitPrice??null,
+      expectedVwap:plan.expectedVwap??null,slippageBps:plan.slippageBps??null,chaseBps:plan.chaseBps??null,
+      budgetShrunk:plan.budgetShrunk===true,requestedRemainingQuantity:plan.requestedRemainingQuantity??null,
+      totalWorstMargin:plan.totalWorstMargin??null}}:{})};
+}
 function retryE1Evidence(tape,q,quantity,at){
   const ev=e1QuoteEvidence(q,quantity,at);
   return {confirmationState:"IOC_RETRY_RECHECK",reasonCodes:["IOC_RETRY_FRESH_SNAPSHOT"],
@@ -233,7 +260,7 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
       if(wr.error)throw Error("IOC_NO_DISPATCH_WRITE");
       return {blocked:true,reason,oi:oi.data};
     }
-    const initialRaw=await gw(rp),initial=fill(initialRaw);let finalRaw=initialRaw,receipt=null,finalitySource="CREATE_RESPONSE";
+    const sentAt=Date.now(),initialRaw=await gw(rp),respondedAt=Date.now(),initial=fill(initialRaw);let finalRaw=initialRaw,receipt=null,finalitySource="CREATE_RESPONSE";
     try{receipt=entryReceipt(initialRaw,oi.data);}catch{}
     if(!receipt){
       await verifyExecutionLease(db);
@@ -244,7 +271,9 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
       finalRaw=await gw({action:"get_order",market:s.symbol,identifier:id,exchange_order_id:initial.exchangeOrderId},5000);
       receipt=entryReceipt(finalRaw,oi.data);finalitySource="SAME_ORDER_QUERY";
     }
-    const evidence={source:finalitySource,initialStatus:initial.status,confirmedAt:new Date().toISOString(),attemptNo};
+    const evidence={source:finalitySource,initialStatus:initial.status,confirmedAt:new Date().toISOString(),attemptNo,
+      sentAt,respondedAt,latencyMs:respondedAt-sentAt,finalStatus:receipt?.status??null,executedQty:receipt?.quantity??null,
+      avgPrice:receipt?.price??null,requestedQty:quantity,limitPrice};
     return {oi:oi.data,rp,id,receipt,initial,evidence,settledRaw:{...finalRaw,v22EntryFinality:evidence}};
   }catch(error){
     if(classifyFailure(error).fatal)throw error;
@@ -334,15 +363,78 @@ async function advanceSignalSetup(db,row,now,fetchCandles=qv3Candles){
     state=out.state;lastReason=out.reason;changed=changed||out.changed;
     if(setupIsTerminal(state)||state.state===SETUP_STATE.TRIGGERED)break;
   }
+  // The frozen state machine still ends a >1% run as CHASE_EXPIRED. The market state at that
+  // chase bar decides what follows: LIVE/UNCERTAIN -> a trigger GPT judges with late-entry
+  // context; DEAD or unreadable -> the same rejection, now carrying its evidence.
+  if(changed&&LIVE_CHASE_ENABLED&&state.state===SETUP_STATE.CHASE_EXPIRED&&state.terminalReason===SETUP_REASON.CHASE_EXPIRED){
+    const chased=await evaluateLiveChase(row,state,now,fetchCandles);
+    state=chased.state;lastReason=chased.reason;
+  }
   if(!changed&&!justArmed)return {row,state,changed:false,reason:lastReason};
   if(state.state===SETUP_STATE.TRIGGERED||setupIsTerminal(state)){
     await audit(db,null,"BULL","BULL","ENTRY_DEFER",
       lastReason,{signalId:row.id,symbol:row.symbol,stage:"SETUP_TRANSITION",finalAdmission:false,orderDispatched:false,setup:{policyVersion:SETUP_POLICY_VERSION,
         state:state.state,identity:state.identity,referencePrice:state.referencePrice,
-        pullbackLow:state.pullbackLow,triggerAt:state.triggerAt,triggerClose:state.triggerClose}});
+        pullbackLow:state.pullbackLow,triggerAt:state.triggerAt,triggerClose:state.triggerClose,
+        triggerMode:state.triggerMode??null,terminalReason:state.terminalReason??null,chase:state.chase??null}});
   }
   return {row:await persistSetup(db,row,state,justArmed&&!changed?SETUP_REASON.ARMED:lastReason),
     state,changed:true,reason:justArmed&&!changed?SETUP_REASON.ARMED:lastReason};
+}
+/** Classify the chase bar a setup just expired on (leader-live-chase.mjs). One public klines
+ * read; any failure keeps the V17_CHASE_EXPIRED rejection (fail closed). */
+async function evaluateLiveChase(row,state,now,fetchCandles=qv3Candles){
+  const open=N(state.lastCandleOpenTime,NaN);
+  let bars=null;
+  if(Number.isSafeInteger(open)){
+    try{bars=await fetchCandles(row.symbol,now,open-(LIVE_CHASE_POLICY.lookbackBars-1)*60000);}catch{bars=null;}
+  }
+  const classification=classifyChase(bars,{referencePrice:state.referencePrice,chaseBarOpenTime:open});
+  const live=liveChaseTrigger(state,classification,{now,setupPolicy:SETUP_POLICY});
+  if(live)return {state:live,reason:LIVE_CHASE_REASON};
+  const late=[CHASE_STATE.LIVE,CHASE_STATE.UNCERTAIN].includes(classification.state);
+  return {state:deadChaseState(state,classification,now,late?"CHASE_TRIGGER_WINDOW_UNAVAILABLE":null),reason:SETUP_REASON.CHASE_EXPIRED};
+}
+/** Evidence only: the last execution-path outcome of a still-open candidate, so its eventual
+ * terminal reason can name it (entry-lifecycle.mjs). A failed write never changes a decision. */
+async function noteEntryLifecycle(db,row,note,statuses=["NEW"]){
+  const f=rec(row?.features);
+  if(!row?.id||!noteChanged(f.entryLifecycle,note))return row;
+  try{
+    const w=await db.from("v11_long_regime_signals").update({features:{...f,entryLifecycle:note}}).eq("id",row.id).in("status",statuses);
+    if(w.error)console.error("ENTRY_LIFECYCLE_NOTE_FAILED",row.id,String(w.error.message).slice(0,200));
+  }catch(error){console.error("ENTRY_LIFECYCLE_NOTE_FAILED",row.id,String(error?.message??error).slice(0,200));}
+  return {...row,features:{...f,entryLifecycle:note}};
+}
+/**
+ * Terminal accounting for candidates that can no longer enter: a TRIGGERED setup whose
+ * execution window has closed (it never re-arms, and GPT refuses it inside the reserve),
+ * and any NEW row older than the queue's look-back. Labels only: nothing here can admit,
+ * price or order anything, and it runs before the slot check so a full book cannot hide it.
+ */
+async function sweepEntryLifecycle(db,now=Date.now()){
+  const since=new Date(now-SIGNAL_MAX).toISOString(),
+    cols="id,symbol,entry_bar_at,setup_state:features->v17Setup->>state,trigger_expires_at:features->v17Setup->>triggerExpiresAt,note:features->entryLifecycle",
+    base=()=>db.from("v11_long_regime_signals").select(cols).eq("revision",REVISION).eq("status","NEW").eq("lane","BULL").eq("features->>strategy",STRATEGY);
+  const [aged,triggered]=await Promise.all([base().lt("entry_bar_at",since).order("entry_bar_at",{ascending:true}).limit(40),
+    base().gte("entry_bar_at",since).eq("features->v17Setup->>state",SETUP_STATE.TRIGGERED).limit(40)]);
+  if(aged.error||triggered.error)throw Error(`LIFECYCLE_SWEEP:${(aged.error??triggered.error).message}`);
+  const retired=[];
+  for(const row of [...(aged.data??[]),...(triggered.data??[])]){
+    const agedOut=Date.parse(row.entry_bar_at)<Date.parse(since),expiresAt=N(row.trigger_expires_at,NaN);
+    const windowClosed=row.setup_state===SETUP_STATE.TRIGGERED&&Number.isSafeInteger(expiresAt)&&now>=expiresAt;
+    if(!agedOut&&!windowClosed)continue;
+    const note=row.note&&typeof row.note==="object"?row.note:null,
+      reason=(windowClosed?expiredTriggerReason(note):agedOutReason(row.setup_state??null,note)).slice(0,500);
+    const w=await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:reason,updated_at:new Date(now).toISOString()})
+      .eq("id",row.id).eq("status","NEW");
+    if(w.error)throw Error(`LIFECYCLE_SWEEP_WRITE:${w.error.message}`);
+    retired.push({signalId:row.id,reason});
+    await audit(db,null,"BULL","BULL","ENTRY_REJECT",reason,{signalId:row.id,symbol:row.symbol,stage:"ENTRY_LIFECYCLE_TERMINAL",
+      finalAdmission:false,orderDispatched:false,lifecycle:{version:ENTRY_LIFECYCLE_VERSION,windowClosed,agedOut,note}})
+      .catch(()=>console.error("ENTRY_LIFECYCLE_AUDIT_FAILED",row.id));
+  }
+  return retired;
 }
 /**
  * Apply B06133 to an already-triggered candidate.  The trigger timestamp, not the
@@ -943,7 +1035,9 @@ if(cec.version!==CEC0040_VERSION||cec.targetVersion!==CEC0040_TARGET_VERSION||ce
   Number(cec.decisionAt)!==Number(selectedSetup?.triggerAt)||
   !["ADMIT","PROBE","REJECT"].includes(cec.action))
   throw new Error("CEC0040_SELECTION_INVALID");
-const gptEntryCheck=gptFinalCheck(db,s);
+// An AGED GPT BUY (past its 15 s answer validity, trigger still live) may enter only to be
+// re-decided by a forced GPT FINAL RECHECK below; it can never dispatch on its own.
+const gptEntryCheck=gptFinalCheck(db,s,null,null,{allowAged:true});
 if(!gptEntryCheck.allowed)return{entered:false,reason:gptEntryCheck.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL};
 attempt.gptFinalReview=gptEntryCheck.review??null;
 await requireLeaderEntryControls(db);
@@ -970,8 +1064,11 @@ await recordBooVerdict(db,{signalId:s.id,symbol:s.symbol,phase:"ADMISSION",resul
 if(booAdmission.blocks)return{entered:false,reason:`BOO_ENTRY_GATE:${booAdmission.verdict.reason}`,
   releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,booGate:booAdmission.verdict};
 if(manualRows.some(x=>x.symbol===String(s.symbol).toUpperCase()))throw new Error("MANUAL_SYMBOL_LOCKED");
-if(active(initialPair.pf).length>=MAX_SLOTS)return{entered:false,reason:"V11_SLOT_FULL"};
-if(initialPair.positions.some(p=>String(p.symbol).toUpperCase()===String(s.symbol).toUpperCase()))return{entered:false,reason:"DUPLICATE_SYMBOL_OPEN"};
+// Account-wide: the claim goes back (a slot may free inside the trigger window) and the run stops.
+if(active(initialPair.pf).length>=MAX_SLOTS)return{entered:false,reason:"V11_SLOT_FULL",releaseClaim:true};
+// This symbol already has a position: final for this candidate.
+if(initialPair.positions.some(p=>String(p.symbol).toUpperCase()===String(s.symbol).toUpperCase()))return{entered:false,reason:"DUPLICATE_SYMBOL_OPEN",
+  terminal:"SLOT_UNAVAILABLE:DUPLICATE_SYMBOL_OPEN"};
 let pf=initialPair.pf,bid=N(q?.best_bid),ask=N(q?.best_ask),sp=bid>0&&ask>0?(ask/bid-1)*10000:999;if(!(bid>0&&ask>0&&sp<=SPREAD_MAX))throw new Error(`ENTRY_SPREAD:${sp}`);const f=rec(s.features),ref=N(f.referenceClose),atr=N(f.atr);if(!(atr>0&&ref>0))throw new Error("ENTRY_FEATURES_INVALID");let filters=symbolFilters(i),step=filters.quantityStep,min=filters.minNotionalUsdt,sized=sizeEntry(ask,step,filters);if(sized.orderNotionalUsdt+1e-9<min)throw new Error("QTY_INVALID");let live=N(pf?.available_quote,NaN),avail=Math.min(N(sn.available_quote),live);if(!Number.isFinite(live))throw new Error("ENTRY_AVAILABLE_BALANCE_UNREADABLE");if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true};// The plan already priced and budgeted itself; nothing re-derives either here.
 let limitPrice=sized.limitPrice,iocBps=sized.iocBps,gap=Math.abs(limitPrice-ref)/atr;
 let finalFresh=checkedEntryFresh(s,f,Date.now(),limitPrice,attempt,"ADMISSION_PRICE",q);if(finalFresh)throw new Error(finalFresh);
@@ -1221,6 +1318,9 @@ const baseIntentPayload={price_tick:filters.priceTick,min_notional_usdt:filters.
     activation:SETUP_LIVE_CUTOVER,setup:serializeSetup(signalSetup(s),8)}:null,entry_selection:rec(s.features).b06133,
   entry_front:rec(s.features).v30Front??null,entry_branch:entryBranchOf(rec(s.features)),entry_controller:rec(s.features).cec0040,
   entry_gpt_decision:attempt.gptFinalReview??null,entry_final_recheck:withOrderTiming(attempt.finalRecheck),
+  // Cohort evidence: the refusal this candidate carried into this attempt (e.g. ENTRY_PER_RUN_LIMIT
+  // = entered by the follow-up cycle); an aged BUY shows INITIAL_ANSWER_AGED in entry_final_recheck.
+  entry_lifecycle_prior:rec(s.features).entryLifecycle??null,
   sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,order_notional_usdt:sized.orderNotionalUsdt,
   sizing_bound_by:sized.boundBy,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,
   setup_max_concurrent:SETUP_MAX_CONCURRENT,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION,
@@ -1246,8 +1346,10 @@ const finishPartialOrAbort=async(reason,extra={})=>{
 };
 const retryAuthority=gptBeginExecution(db,s,attempt.finalRecheck);
 if(!retryAuthority)return await finishPartialOrAbort("GPT_REVIEW_EXPIRED",{executionAttempts:0});
+const firstEvidence=iocAttemptEvidence({attemptNo:1,quote:q,quantity:sized.amount,limitPrice,at:Date.now()});
 attempt.dispatched=true;
-const first=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:1,quantity:sized.amount,limitPrice,step,payload:baseIntentPayload,
+const first=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:1,quantity:sized.amount,limitPrice,step,
+  payload:{...baseIntentPayload,ioc_attempt_evidence:firstEvidence},
   authorize:()=>gptFinalCheck(db,s,attempt.finalRecheck)});
 if(first.blocked)return await finishPartialOrAbort(first.reason,{executionAttempts:0});
 const retryArmed=gptConfirmFirstFinality(db,retryAuthority,first);
@@ -1341,7 +1443,9 @@ if(!retryDecision.allowed)return await finishPartialOrAbort(`EXECUTION_SAFETY_RE
   {executionAttempts:1,retryPlan,entryDecision:retryDecision});
 const retryPayload={...baseIntentPayload,entry_final_recheck:withOrderTiming(attempt.finalRecheck),spread_bps:retryPlan.spreadBps,
   ioc_bps:retryPlan.chaseBps,expected_entry_vwap:retryPlan.expectedVwap,expected_slippage_bps:retryPlan.slippageBps,
-  retry_of_order_id:first.oi.id,retry_remaining_quantity:retryPlan.remainingQuantity,entry_control:retryDecision.evidence};
+  retry_of_order_id:first.oi.id,retry_remaining_quantity:retryPlan.remainingQuantity,entry_control:retryDecision.evidence,
+  ioc_attempt_evidence:iocAttemptEvidence({attemptNo:2,quote:retryQuote,quantity:retryPlan.remainingQuantity,limitPrice:retryPlan.limitPrice,
+    at:Date.now(),prior:firstEvidence,plan:retryPlan,filledBefore:heldQty,firstStatus:first.receipt?.status??first.initial?.status??null})};
 const retryDispatchCheck=gptFinalCheck(db,s,attempt.finalRecheck,retryAuthority);
 if(!retryDispatchCheck.allowed)
   return await finishPartialOrAbort(retryDispatchCheck.reason??"IOC_RETRY_AUTHORITY_EXPIRED_OR_INVALID",{executionAttempts:1});
@@ -2124,7 +2228,11 @@ async function runEntryQueue(db,pair,manual,blockedSymbols=new Set(),backlogComp
   const openNow=pair.positions;
   let entry={entered:false,reason:"V17_NO_ENTRY"};
   if(!backlogComplete)return{entered:false,reason:"CLOSED_PROTECTION_BACKLOG_INCOMPLETE"};
-  if(active(pair.pf).length>=MAX_SLOTS)return{entered:false,reason:"V11_SLOT_FULL"};
+  // Terminal labels for candidates that can no longer enter (never an admission).
+  let lifecycleRetired=[];
+  try{lifecycleRetired=await sweepEntryLifecycle(db,Date.now());}
+  catch(error){console.error("ENTRY_LIFECYCLE_SWEEP_FAILED",String(error?.message??error).slice(0,200));}
+  if(active(pair.pf).length>=MAX_SLOTS)return{entered:false,reason:"V11_SLOT_FULL",lifecycleRetired:lifecycleRetired.length};
   const since=new Date(Date.now()-SIGNAL_MAX).toISOString(),sg=await db.from("v11_long_regime_signals").select("*").eq("revision",REVISION).eq("status","NEW").eq("lane","BULL").eq("features->>strategy",STRATEGY).gte("entry_bar_at",since).order("entry_bar_at",{ascending:false}).limit(10);
   if(sg.error)throw Error(`SIGNALS:${sg.error.message}`);
 const openSymbols=new Set(openNow.map(x=>String(x.symbol).toUpperCase())),closedProtectionSymbols=typeof blockedSymbols==="undefined"?new Set():blockedSymbols,
@@ -2232,6 +2340,9 @@ for(const row of advanceOrder){
   if(!state){entry={entered:false,reason:advanced.reason??SETUP_REASON.INVALID_PRICE};continue}
   if(setupIsTerminal(state)){entry={entered:false,reason:state.terminalReason??SETUP_REASON.SETUP_EXPIRED};continue}
   if(state.state!==SETUP_STATE.TRIGGERED){entry={entered:false,reason:advanced.reason??SETUP_REASON.HOLD};continue}
+  // A closed trigger window cannot enter; skip the selector/controller/GPT work and let the
+  // next lifecycle sweep name it.
+  if(Date.now()>=N(state.triggerExpiresAt,0)){entry={entered:false,reason:SETUP_REASON.TRIGGER_STALE};continue}
   triggered.push({row:advanced.row,state});
 }
 // CEC is causal state, so triggered candidates must reach it chronologically. Setup
@@ -2245,7 +2356,9 @@ for(const advanced of triggered){
   // Policy-scoped admission limit. It narrows this policy's own exposure during its
   // first live window; it never widens, and it never touches MAX_SLOTS.
   if(policyOpen+executable.filter(setupGoverns).length>=SETUP_MAX_CONCURRENT){
-    entry={entered:false,reason:"V17_SETUP_POLICY_SLOT_LIMIT"};continue;
+    entry={entered:false,reason:"V17_SETUP_POLICY_SLOT_LIMIT"};
+    await noteEntryLifecycle(db,row,lifecycleNote({at:Date.now(),stage:"POLICY_SLOT",reason:"V17_SETUP_POLICY_SLOT_LIMIT"}));
+    continue;
   }
   let selected;
   try{selected=await applyB06133Selection(db,advanced.row,state);}
@@ -2259,11 +2372,33 @@ for(const advanced of triggered){
 }
 const gptReviewed=await gptFilterExecutable(db,executable);
 if(executable.length&&!gptReviewed.candidates.length)entry={entered:false,reason:gptReviewed.reason};
+// Every reviewed candidate that GPT did not pass leaves a trace: a SKIP/ABSTAIN (or failed
+// answer) is final for its trigger and is recorded terminally now; anything transient
+// (pending, aged past recheck, not configured) is noted for the window-close label.
+for(const review of gptReviewed.reviews??[]){
+  if(review.allowed===true)continue;
+  const row=executable.find(x=>String(x.id)===String(review.signalId));if(!row)continue;
+  const terminal=gptTerminalReason(review);
+  if(terminal){
+    const w=await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:terminal,updated_at:new Date().toISOString()})
+      .eq("id",row.id).eq("status","NEW");
+    if(w.error)console.error("GPT_TERMINAL_WRITE_FAILED",row.id,String(w.error.message).slice(0,200));
+    await audit(db,null,"BULL","BULL","ENTRY_REJECT",terminal,{signalId:row.id,symbol:row.symbol,stage:"GPT_FINAL_ENTRY",
+      finalAdmission:false,orderDispatched:false,gpt:{decision:review.decision,reason:review.reason,detail:review.detail??null,jobKey:review.jobKey??null}})
+      .catch(()=>console.error("GPT_TERMINAL_AUDIT_FAILED",row.id));
+    continue;
+  }
+  await noteEntryLifecycle(db,row,lifecycleNote({at:Date.now(),stage:"GPT_REVIEW",reason:review.reason,gptDecision:review.storedDecision??null}));
+}
 const runDeadline=Date.now()+ENTRY_RUN_BUDGET_MS;
 let attempts=0;
-for(const s of gptReviewed.candidates){
-  if(attempts>=ENTRY_ATTEMPTS_PER_RUN){entry={entered:false,reason:"ENTRY_ATTEMPTS_EXHAUSTED"};break}
-  if(Date.now()>=runDeadline){entry={entered:false,reason:"ENTRY_RUN_BUDGET_EXHAUSTED"};break}
+const queued=gptReviewed.candidates;
+// Candidates this run did not reach keep their claim-free NEW status; the note names why.
+const noteRest=async(from,reason)=>{for(const r of queued.slice(from))
+  await noteEntryLifecycle(db,r,lifecycleNote({at:Date.now(),stage:"QUEUE",reason,gptDecision:"BUY"}));};
+for(const [index,s] of queued.entries()){
+  if(attempts>=ENTRY_ATTEMPTS_PER_RUN){entry={entered:false,reason:"ENTRY_ATTEMPTS_EXHAUSTED"};await noteRest(index,entry.reason);break}
+  if(Date.now()>=runDeadline){entry={entered:false,reason:"ENTRY_RUN_BUDGET_EXHAUSTED"};await noteRest(index,entry.reason);break}
   const cl=await db.from("v11_long_regime_signals").update({status:"CLAIMED",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","NEW").select("*").maybeSingle();
   if(cl.error)throw new Error(`CLAIM:${cl.error.message}`);
   if(!cl.data){entry={entered:false,reason:"CLAIM_RACE"};continue}
@@ -2279,11 +2414,28 @@ for(const s of gptReviewed.candidates){
         booAdmission:attempt.booAdmission??null,booPredispatch:attempt.booPredispatch??null})
       .catch(()=>console.error("V17_ENTRY_OUTCOME_AUDIT_FAILED",s.id));
     if(entry?.releaseClaim===true){
-      await db.from("v11_long_regime_signals").update({status:"NEW",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","CLAIMED");
+      // The released candidate carries the refusal it came back with (its window-close label).
+      const released={...rec(cl.data.features),entryLifecycle:lifecycleNote({at:Date.now(),stage:"EXECUTION",reason:entry.reason,gptDecision:"BUY"})};
+      await db.from("v11_long_regime_signals").update({status:"NEW",updated_at:new Date().toISOString(),features:released}).eq("id",s.id).eq("status","CLAIMED");
       if(releaseStopsRun(entry))break;
       continue;
     }
-    if(entry?.entered===true)break;
+    // A refusal that is final for this candidate (it can never enter this trigger) is terminal
+    // at once instead of leaving the claim behind.
+    if(entry?.terminal&&entry?.entered!==true){
+      await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:String(entry.terminal).slice(0,500),
+        updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","CLAIMED");
+      continue;
+    }
+    // One run opens at most one position. GPT BUY candidates it did not reach are noted and,
+    // while one can still be rechecked in its window, ONE follow-up cycle is armed for them.
+    if(entry?.entered===true){
+      const rest=queued.slice(index+1);let followUpArmed=false;
+      try{await noteRest(index+1,"ENTRY_PER_RUN_LIMIT");followUpArmed=rest.length>0&&gptArmFollowUp(db,rest);}
+      catch{/* evidence and scheduling only: never turns an entry into a refusal */}
+      entry={...entry,remainingGptBuys:rest.length,followUpArmed};
+      break;
+    }
   }catch(e){
     const msg=e instanceof Error?e.message:String(e),pending=await db.from("v11_long_regime_orders").select("id").eq("signal_id",s.id).eq("state","RECONCILIATION_FAILED").limit(1);
     if(!pending.data?.length)await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",s.id);

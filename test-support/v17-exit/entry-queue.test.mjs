@@ -113,11 +113,16 @@ test('the symbol-scoped list matches only pre-dispatch refusals it declares', ()
 });
 
 test('a successful entry and an exhausted account both stop the queue', () => {
-  assert.match(run, /if\(entry\?\.entered===true\)break;/, 'one entry per run is still the rule');
+  // One run opens at most one position (2026-09-25: the GPT BUYs it did not reach are noted
+  // and handed to ONE follow-up cycle, never priced in this run).
+  const at = run.indexOf('if(entry?.entered===true){');
+  assert.ok(at > 0, 'one entry per run is still the rule');
+  const block = run.slice(at, run.indexOf('break;', at) + 'break;'.length);
+  assert.ok(!/continue|openBull|status:"CLAIMED"/.test(block), 'an entry always ends the run');
   assert.match(run, /if\(entry\?\.releaseClaim===true\)\{[^}]*status:"NEW"[^}]*\}\.\.\.|if\(entry\?\.releaseClaim===true\)\{/,
     'a margin skip must hand the claim back');
   const rel = run.indexOf('releaseClaim===true');
-  const tail = run.slice(rel, rel + 400);
+  const tail = run.slice(rel, run.indexOf('continue;', rel));
   assert.ok(tail.includes('break'), 'insufficient capital must stop the queue, not retry per symbol');
   assert.ok(tail.includes('status:"NEW"'), 'the claim must be released');
 });
@@ -134,6 +139,7 @@ import vm from 'node:vm';
 import {POLICY} from '../../supabase/functions/_shared/leader-momentum-v17.mjs';
 import {SETUP_POLICY, SETUP_REASON, SETUP_STATE, isTerminal as setupIsTerminal}
   from '../../supabase/functions/_shared/leader-pullback-reaccel.mjs';
+import {lifecycleNote, gptTerminalReason} from '../../supabase/functions/v10-lane-executor/entry-lifecycle.mjs';
 
 /** A fixed clock, so a test's verdict never depends on when the suite is run. */
 function clockAt(fixed) {
@@ -146,9 +152,12 @@ const LEGACY_NOW = LEGACY_CLOSE + 30_000;
 const SETUP_CLOSE = Date.parse("2026-09-17T12:00:00.000Z");
 const SETUP_NOW = SETUP_CLOSE + 30_000;
 
-function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {}, setupMaxConcurrent = 4}) {
+function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {}, setupMaxConcurrent = 4,
+  reviews = null, followUp = false}) {
   const seen = [];
   const audits = [];
+  const notes = [];
+  const terminals = [];
   // signal5Close is now load-bearing: the queue retires already-expired candidates
   // before claiming them, so a fixture must be inside POLICY.maxEntryAgeMs to be
   // priced at all. `bar` shifts a row's age for the expiry tests below.
@@ -165,7 +174,8 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
     const b = {
       select: () => b, eq: (k, v) => { if (k === 'id') st.id = v; return b; },
       gte: () => b, order: () => b, neq: () => b,
-      update: (patch) => { st.patch = patch; return b; },
+      update: (patch) => { st.patch = patch; if (patch?.status === 'REJECTED') terminals.push({id: null, patch, st}); return b; },
+      in: () => b,
       limit: async () => ({data: [], error: null}),
       maybeSingle: async () => {
         if (st.patch?.status) seen.push(`${st.id}:${st.patch.status}`);
@@ -212,7 +222,11 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
     N: (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d),
     rec: x => (x && typeof x === 'object' && !Array.isArray(x) ? x : {}),
     openNow: [], manual: [], sgRows: rows, seen,
-    gptFilterExecutable: async (_db, executable) => ({candidates: executable, reason: 'TEST_GPT_PASS'}),
+    gptFilterExecutable: async (_db, executable) => reviews ? reviews(executable) :
+      ({candidates: executable, reason: 'TEST_GPT_PASS', reviews: executable.map(s => ({signalId: s.id, allowed: true}))}),
+    lifecycleNote, gptTerminalReason, notes, terminals,
+    noteEntryLifecycle: async (_db, row, note) => { notes.push({id: row.id, ...note}); return row; },
+    gptArmFollowUp: (_db, rest) => followUp && rest.length > 0,
     openBull: async (_db, sig, _o, _m, attempt) => {
       const o = outcomes[sig.symbol];
       if (o.dispatch) attempt.dispatched = true;
@@ -223,7 +237,7 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
   };
   vm.createContext(ctx);
   const loop = source.slice(source.indexOf('const openSymbols=new Set(openNow'), source.indexOf('\nreturn entry;\n}',source.indexOf('async function runEntryQueue')));
-  if (!loop.includes('for(const s of gptReviewed.candidates)')) throw new Error('the entry loop was reshaped');
+  if (!loop.includes('for(const [index,s] of queued.entries())')) throw new Error('the entry loop was reshaped');
   vm.runInContext(`this.go=async function(){let entry={entered:false,reason:"V17_NO_ENTRY"};const sg={data:sgRows,error:null};${loop};return {entry,seen}}`, ctx);
   return ctx;
 }
@@ -522,4 +536,97 @@ test('a setup is armed from its own bar close, never from when it was first seen
     'arming from the wall clock would extend a stale signal');
   // And a signal with no usable close is refused rather than armed from the clock.
   assert.match(advance, /if\(!Number\.isSafeInteger\(armAt\)\)return \{row,state:null/);
+});
+
+// ---------------------------------------------------------------------------
+// Entry lifecycle (2026-09-25): no GPT-reviewed candidate ends without a terminal reason.
+// ---------------------------------------------------------------------------
+const liveTrigger = () => stateOf(SETUP_STATE.TRIGGERED,
+  {triggerAt: SETUP_NOW, triggerExpiresAt: SETUP_NOW + 60_000, triggerClose: 100.25});
+
+test('BUY orphan prevention: an entered run notes the GPT BUYs it did not reach and arms one follow-up', async () => {
+  const ctx = harness({now: SETUP_NOW, followUp: true,
+    rows: [setupRow('a', 'QNTUSDT', 1), setupRow('b', 'TRBUSDT', 2), setupRow('c', 'XTZUSDT', 3)],
+    setups: {a: liveTrigger(), b: liveTrigger(), c: liveTrigger()},
+    outcomes: {QNTUSDT: {dispatch: true, result: {entered: true, positionId: 'p1'}},
+      TRBUSDT: {dispatch: false, throw: 'must not be priced in the same run'},
+      XTZUSDT: {dispatch: false, throw: 'must not be priced in the same run'}}});
+  const {entry, seen} = await ctx.go();
+  assert.equal(entry.entered, true);
+  assert.ok(!seen.includes('b:CLAIMED') && !seen.includes('c:CLAIMED'), 'still one entry per run');
+  assert.equal(entry.remainingGptBuys, 2);
+  assert.equal(entry.followUpArmed, true, 'the follow-up cycle is armed for the live BUYs');
+  const noted = ctx.notes.filter(n => n.reason === 'ENTRY_PER_RUN_LIMIT').map(n => n.id).sort();
+  assert.deepEqual(noted, ['b', 'c'], 'each unreached BUY carries why it was not tried');
+  assert.ok(ctx.notes.every(n => n.gptDecision === 'BUY'));
+});
+
+test('GPT SKIP / ABSTAIN is terminal at once; a pending review is only noted', async () => {
+  const ctx = harness({now: SETUP_NOW,
+    rows: [setupRow('a', 'IOSTUSDT', 1), setupRow('b', 'BULLAUSDT', 2), setupRow('c', 'XTZUSDT', 3)],
+    setups: {a: liveTrigger(), b: liveTrigger(), c: liveTrigger()},
+    reviews: (ex) => ({candidates: [], reason: 'GPT_REVIEW_PENDING', reviews: [
+      {signalId: ex[0].id, allowed: false, reason: 'GPT_SKIP', decision: 'SKIP', detail: 'EV_UNFAVORABLE'},
+      {signalId: ex[1].id, allowed: false, reason: 'GPT_ABSTAIN', decision: 'ABSTAIN', detail: 'DATA_INSUFFICIENT'},
+      {signalId: ex[2].id, allowed: false, reason: 'GPT_REVIEW_PENDING', decision: 'ABSTAIN'}]}),
+    outcomes: {IOSTUSDT: {throw: 'no'}, BULLAUSDT: {throw: 'no'}, XTZUSDT: {throw: 'no'}}});
+  const {entry} = await ctx.go();
+  assert.equal(entry.entered, false);
+  const terminal = Object.fromEntries(ctx.terminals.map(t => [t.st.id, t.patch.reject_reason]));
+  assert.equal(terminal.a, 'GPT_SKIP:EV_UNFAVORABLE');
+  assert.equal(terminal.b, 'GPT_ABSTAIN:DATA_INSUFFICIENT');
+  assert.equal(terminal.c, undefined, 'a pending answer is not final');
+  assert.deepEqual(ctx.notes.map(n => [n.id, n.stage, n.reason]), [['c', 'GPT_REVIEW', 'GPT_REVIEW_PENDING']]);
+});
+
+test('duplicate entry: an open duplicate is terminal; a full book returns the claim and stops the run', async () => {
+  const ctx = harness({now: SETUP_NOW,
+    rows: [setupRow('a', 'IOSTUSDT', 1), setupRow('b', 'BULLAUSDT', 2), setupRow('c', 'XTZUSDT', 3)],
+    setups: {a: liveTrigger(), b: liveTrigger(), c: liveTrigger()},
+    outcomes: {IOSTUSDT: {dispatch: false, result: {entered: false, reason: 'DUPLICATE_SYMBOL_OPEN',
+      terminal: 'SLOT_UNAVAILABLE:DUPLICATE_SYMBOL_OPEN'}},
+    BULLAUSDT: {dispatch: false, result: {entered: false, reason: 'V11_SLOT_FULL', releaseClaim: true}},
+    XTZUSDT: {dispatch: false, throw: 'a full book must stop the run'}}});
+  const {seen} = await ctx.go();
+  assert.ok(seen.includes('a:REJECTED'), 'the duplicate is closed, never left CLAIMED');
+  assert.equal(ctx.terminals.find(t => t.st.id === 'a').patch.reject_reason, 'SLOT_UNAVAILABLE:DUPLICATE_SYMBOL_OPEN');
+  assert.ok(seen.includes('b:NEW'), 'a full book hands the claim back for the trigger window');
+  assert.ok(!seen.includes('c:CLAIMED'), 'and ends the run: no slot is free for anyone');
+});
+
+test('a released claim records the refusal it came back with', async () => {
+  const releases = [];
+  const ctx = harness({now: SETUP_NOW,
+    rows: [setupRow('a', 'IOSTUSDT', 1)], setups: {a: liveTrigger()},
+    outcomes: {IOSTUSDT: {dispatch: false, result: {entered: false, reason: 'E1_DISPATCH_QUOTE_AGED:1400',
+      releaseClaim: true, releaseScope: 'SYMBOL'}}}});
+  const from = ctx.db.from;
+  ctx.db.from = (name) => { const b = from(name), update = b.update;
+    b.update = (patch) => { if (patch?.status === 'NEW') releases.push(patch); return update(patch); }; return b; };
+  await ctx.go();
+  assert.equal(releases.length, 1);
+  assert.equal(releases[0].features.entryLifecycle.reason, 'E1_DISPATCH_QUOTE_AGED:1400');
+  assert.equal(releases[0].features.entryLifecycle.gptDecision, 'BUY');
+});
+
+test('BUY but stale: a closed trigger window is skipped before any selector, controller or GPT work', async () => {
+  let selected = 0;
+  const ctx = harness({now: SETUP_NOW + 61_000,
+    rows: [setupRow('a', 'IOSTUSDT', 1)],
+    setups: {a: stateOf(SETUP_STATE.TRIGGERED, {triggerAt: SETUP_NOW, triggerExpiresAt: SETUP_NOW + 60_000, triggerClose: 100.25})},
+    outcomes: {IOSTUSDT: {throw: 'a closed window must never be priced'}}});
+  ctx.applyB06133Selection = async (_db, row) => { selected++; return {allowed: true, row}; };
+  const {entry, seen} = await ctx.go();
+  assert.equal(selected, 0);
+  assert.ok(!seen.includes('a:CLAIMED'));
+  assert.equal(entry.reason, SETUP_REASON.TRIGGER_STALE);
+});
+
+test('the lifecycle sweep runs before the slot check and is never an admission', () => {
+  const q = source.slice(source.indexOf('async function runEntryQueue('));
+  const sweep = q.indexOf('sweepEntryLifecycle(db'), slot = q.indexOf('if(active(pair.pf).length>=MAX_SLOTS)');
+  assert.ok(sweep > 0 && sweep < slot, 'a full book cannot hide an expired trigger');
+  const fn = source.slice(source.indexOf('async function sweepEntryLifecycle('), source.indexOf('async function applyB06133Selection('));
+  assert.ok(!/status:"(NEW|CLAIMED|ORDERED)"/.test(fn.replace(/eq\("status","NEW"\)/g, '')), 'the sweep only ever writes REJECTED');
+  assert.ok(!/openBull|dispatchEntryIocAttempt|gateway\(/.test(fn), 'and never prices or orders');
 });
