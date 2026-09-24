@@ -93,4 +93,4 @@
 - **production 연결**: 첫 FINAL 링크는 10:42Z 이후. PLUMEUSDT(10:12Z 진입)가 2군(CURRENT_BUY / 미선정) 첫 사례가 된다.
 - **2단계**: G7(운영자 YES, `OPENAI_API_KEY_SHADOW` 를 별도 OpenAI project 와 월 한도로 등록, 조직 크레딧/자동충전 확인) + 1단계 12시간 무사고(가장 빠르면 2026-09-24 21:50Z 이후) 후
   `update shadow_le.control set gpt_enabled=true, set_by='…', reason='…' where singleton;` 한 줄로 켠다. 코드 재배포는 필요 없다.
-- **표본**: 판정은 사전등록대로 ≥15 거래일 AND ≥300 EMERGING-BUY 이후. 첫 3시간 EMERGING 선정은 3건이었다(속도 ≈ 24건/일 수준이면 300건까지 수 주가 걸릴 수 있다 — 판정 일정에 반영, 임계값은 바꾸지 않는다).
+- **표본**: 판정은 사전등록대로 ≥15 거래일 AND ≥300 EMERGING-BUY 이후. 배포 후 첫 40분의 EMERGING 선정은 2건이었다. 선정 속도가 낮으면 300건까지 15일보다 오래 걸릴 수 있다 — 판정 일정에 반영하고 임계값은 바꾸지 않는다.
