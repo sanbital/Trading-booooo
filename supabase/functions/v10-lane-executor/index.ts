@@ -1220,7 +1220,7 @@ async function pushShadowPositions(db,open){
     .filter(x=>x.entryPrice>0&&x.quantity>0&&x.quantityStep>0&&Number.isFinite(x.entryAt));
   if(positions.length)await gateway({action:"v17_shadow_positions",positions},5000);
 }
-async function settleKnownEntry(db,intent,raw,gw=opsGateway(db)) {
+async function settleKnownEntry(db,intent,raw,gw=opsGateway(db),opts={}) {
   const receipt=entryReceipt(raw,intent),sig=await db.from("v11_long_regime_signals").select("*").eq("id",intent.signal_id).single();
   if(sig.error||!sig.data||sig.data.features?.strategy!==STRATEGY||intent.request_payload?.order?.side!=="BUY"||intent.request_payload?.order?.position_effect!=="OPEN")throw Error("ENTRY_INTENT_OWNERSHIP_UNPROVEN");
   if(receipt.quantity===0){
@@ -1229,53 +1229,74 @@ async function settleKnownEntry(db,intent,raw,gw=opsGateway(db)) {
     await verifyExecutionLease(db);
     const wr=await db.from("v11_long_regime_orders").update({state:"REJECTED",exchange_order_id:receipt.id,response_payload:{...raw,v18ExposureFinal:true},reject_reason:`IOC_NO_FILL:${receipt.status}`,updated_at:new Date().toISOString()}).eq("id",intent.id);
     if(wr.error)throw Error("ENTRY_TERMINAL_WRITE");
-    const sr=await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:`IOC_NO_FILL:${receipt.status}`,updated_at:new Date().toISOString()}).eq("id",intent.signal_id);
-    if(sr.error)throw Error("ENTRY_SIGNAL_WRITE");return null;
+    if(opts.retireZeroFillSignal!==false){
+      const sr=await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:`IOC_NO_FILL:${receipt.status}`,updated_at:new Date().toISOString()}).eq("id",intent.signal_id);
+      if(sr.error)throw Error("ENTRY_SIGNAL_WRITE");
+    }
+    return null;
   }
-  const s=sig.data,f=rec(s.features),atr=N(f.atr),z={qty:receipt.quantity,avg:receipt.price,fee:receipt.fee,exchangeOrderId:receipt.id};
-  const found=await db.from("v11_long_regime_positions").select("*").eq("signal_id",s.id).maybeSingle();
+  const row=sig.data,f=rec(row.features),atr=N(f.atr),z={qty:receipt.quantity,avg:receipt.price,fee:receipt.fee,exchangeOrderId:receipt.id};
+  const found=await db.from("v11_long_regime_positions").select("*").eq("signal_id",row.id).maybeSingle();
   if(found.error)throw Error("ENTRY_POSITION_LOOKUP");
   let position=found.data;
   if(position){
-    if(position.metadata?.entryOrderId!==receipt.id||!Number.isFinite(N(position.original_quantity))||Math.abs(N(position.original_quantity)-receipt.quantity)>1e-8||Math.abs(N(position.entry_price)-receipt.price)>Math.max(1e-12,receipt.price*1e-7))throw Error("ENTRY_EXISTING_OWNERSHIP_MISMATCH");
-    if(receipt.exact&&position.metadata?.v18EntryAccountingPending){
-      const meta=rec(position.metadata),settled=N(meta.v18SettledPnl)-receipt.fee;
-      const pending=(meta.exitProtection?.orders??[]).some(x=>x.accountingPending)||Object.values(meta.v18Exits??{}).some(x=>x.quantity>0&&!x.detailsComplete);
+    const meta=rec(position.metadata),fills=Array.isArray(meta.entryFillOrders)?meta.entryFillOrders:[],
+      already=fills.find(x=>String(x.exchangeOrderId)===receipt.id||String(x.intentId)===String(intent.id));
+    if(already){
+      if(Math.abs(N(already.quantity)-receipt.quantity)>1e-8||Math.abs(N(already.price)-receipt.price)>Math.max(1e-12,receipt.price*1e-7))
+        throw Error("ENTRY_RETRY_IDEMPOTENCY_MISMATCH");
+    }else{
+      // A retry may only top up an untouched partial entry. If protection/exit changed
+      // quantity in the meantime, stop rather than re-expand the position.
+      if(Math.abs(N(position.original_quantity)-N(position.remaining_quantity))>1e-8)throw Error("PARTIAL_FILL_POSITION_CHANGED");
+      const manual=await manualPositionAllowances(db),pf=await gw({action:"p10_portfolio"}),
+        newQty=N(position.original_quantity)+receipt.quantity;
+      if(manual.some(x=>x.symbol===row.symbol)||!entryExposureMatches(pf,row.symbol,newQty))throw Error("ENTRY_RETRY_EXPOSURE_UNPROVEN");
+      const oldQty=N(position.original_quantity),oldAvg=N(position.entry_price),newAvg=(oldQty*oldAvg+receipt.quantity*receipt.price)/newQty,
+        stopPct=Number(f.exitPolicy?.stopPct);
+      if(!(stopPct>0&&stopPct<1&&newAvg>0))throw Error("STOP_POLICY_INVALID");
+      const hardStop=Math.max(N(position.hard_stop_price),newAvg*(1-stopPct)),oldFee=position.entry_fee_usdt==null?null:N(position.entry_fee_usdt),
+        feesExact=receipt.exact&&oldFee!==null&&meta.v18EntryAccountingPending!==true,
+        entryFee=feesExact?oldFee+receipt.fee:null,settledBase=N(meta.v18SettledPnl,Number.NaN),
+        settled=feesExact&&Number.isFinite(settledBase)?settledBase-receipt.fee:settledBase,
+        now=new Date(Math.max(Date.now(),Date.parse(position.updated_at)+1)).toISOString(),
+        nextMeta={...meta,entryFillOrders:[...fills,{intentId:intent.id,exchangeOrderId:receipt.id,quantity:receipt.quantity,
+          price:receipt.price,fee:receipt.fee,exact:receipt.exact,filledAt:receipt.lastAt??null}],
+          lastAppliedOrderId:intent.id,entryFillAt:receipt.lastAt??meta.entryFillAt??null,
+          sizedMarginUsdt:newQty*newAvg/LEV,v18SettledPnl:Number.isFinite(settled)?settled:meta.v18SettledPnl,
+          v18EntryAccountingPending:!feesExact,exitAccountingPending:!feesExact||meta.exitAccountingPending===true};
       await verifyExecutionLease(db);
-      const up=await db.from("v11_long_regime_positions").update({entry_fee_usdt:receipt.fee,realized_pnl_usdt:pending?null:settled,
-        metadata:{...meta,v18SettledPnl:settled,v18EntryAccountingPending:false,exitAccountingPending:pending},updated_at:new Date(Math.max(Date.now(),Date.parse(position.updated_at)+1)).toISOString()}).eq("id",position.id).eq("updated_at",position.updated_at).select("*").maybeSingle();
-      if(up.error||!up.data)throw Error("ENTRY_ACCOUNTING_CAS_CONFLICT");position=up.data;
+      const up=await db.from("v11_long_regime_positions").update({original_quantity:newQty,remaining_quantity:newQty,entry_price:newAvg,
+        hard_stop_price:hardStop,peak_price:Math.max(N(position.peak_price),receipt.price,newAvg),
+        entry_fee_usdt:entryFee,realized_pnl_usdt:feesExact&&meta.exitAccountingPending!==true?settled:null,
+        metadata:nextMeta,updated_at:now}).eq("id",position.id).eq("updated_at",position.updated_at).select("*").maybeSingle();
+      if(up.error||!up.data)throw Error("ENTRY_RETRY_POSITION_CAS_CONFLICT");
+      position=up.data;
     }
   }else{
-    const manual=await manualPositionAllowances(db);
-    const pf=await gw({action:"p10_portfolio"});
-    if(manual.some(x=>x.symbol===s.symbol)||!entryExposureMatches(pf,s.symbol,receipt.quantity))throw Error("ENTRY_EXPOSURE_UNPROVEN");
+    const manual=await manualPositionAllowances(db),pf=await gw({action:"p10_portfolio"});
+    if(manual.some(x=>x.symbol===row.symbol)||!entryExposureMatches(pf,row.symbol,receipt.quantity))throw Error("ENTRY_EXPOSURE_UNPROVEN");
     const sized={sizedMargin:receipt.quantity*receipt.price/LEV};
     await verifyExecutionLease(db);
     const stopPct=Number(f.exitPolicy?.stopPct);if(!(stopPct>0&&stopPct<1))throw new Error("STOP_POLICY_INVALID");const stop=z.avg*(1-stopPct);if(!(stop>0&&stop<z.avg))throw new Error("STOP_INVALID");
     const settledAt=Date.now(),intentAt=Date.parse(intent.created_at),fillAt=Number(receipt.lastAt),
-      entryAt=Number.isFinite(fillAt)&&fillAt>0&&fillAt<=settledAt+1000&&
-        (!Number.isFinite(intentAt)||fillAt>=intentAt-30000)?fillAt:settledAt,
+      entryAt=Number.isFinite(fillAt)&&fillAt>0&&fillAt<=settledAt+1000&&(!Number.isFinite(intentAt)||fillAt>=intentAt-30000)?fillAt:settledAt,
       now=new Date(entryAt),entryPolicy=intent.request_payload?.entry_execution_policy,
-      // Stamped from the ORDER INTENT, so an already-open position can never be
-      // opted into this policy by a later deploy: the stamp is fixed at entry.
-      entryTiming=rec(intent.request_payload?.entry_timing_policy),
-      entryController=rec(intent.request_payload?.entry_controller),
+      entryTiming=rec(intent.request_payload?.entry_timing_policy),entryController=rec(intent.request_payload?.entry_controller),
       fillGuard=entryPolicy?.version===ENTRY_EXECUTION_POLICY_VERSION?postFillEntryGuard(f,z.avg):null,
-      pos=await db.from("v11_long_regime_positions").insert({signal_id:s.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:s.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{entrySelectionPolicyVersion:intent.request_payload?.entry_selection?.version??null,b06133:intent.request_payload?.entry_selection??null,v30Front:intent.request_payload?.entry_front??null,entryBranch:intent.request_payload?.entry_branch??null,entryControllerPolicyVersion:entryController?.version??null,cec0040:entryController?.version===CEC0040_VERSION?entryController:null,gptEntryDecision:intent.request_payload?.entry_gpt_decision??null,finalRecheck:intent.request_payload?.entry_final_recheck??null,qv3:entryTiming?.version===SETUP_POLICY_VERSION?null:(intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null),entryTimingPolicyVersion:entryTiming?.version??null,entryTimingSetup:entryTiming?.setup??null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,fd1HoldPolicyVersion:FD1_HOLD_POLICY_VERSION,leaderExitPolicyVersion:entryController?.version===CEC0040_VERSION&&entryController.enforcementEnabled===true?P142_POLICY_VERSION:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,entryConfirmationPolicyVersion:intent.request_payload?.e1?.policyVersion??null,entryConfirmation:intent.request_payload?.e1??null,exitObservationPolicyVersion:intent.request_payload?.x1?.policyVersion??null,x1Observation:{observedBidPeak:z.avg,executableVwapPeak:null,lastObservationId:null,lastObservationAt:null,source:"P10_TOP_OF_BOOK_BATCH",maxQuoteAgeMs:1000},entryMarketRules:{priceTick:N(intent.request_payload?.price_tick),quantityStep:N(intent.request_payload?.quantity_step)},operatorOverride:intent.request_payload?.operator_override??null,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,setupMaxConcurrent:SETUP_MAX_CONCURRENT,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFeatures:f}}).select("*").single();
+      pos=await db.from("v11_long_regime_positions").insert({signal_id:row.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:row.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{entrySelectionPolicyVersion:intent.request_payload?.entry_selection?.version??null,b06133:intent.request_payload?.entry_selection??null,v30Front:intent.request_payload?.entry_front??null,entryBranch:intent.request_payload?.entry_branch??null,entryControllerPolicyVersion:entryController?.version??null,cec0040:entryController?.version===CEC0040_VERSION?entryController:null,gptEntryDecision:intent.request_payload?.entry_gpt_decision??null,finalRecheck:intent.request_payload?.entry_final_recheck??null,qv3:entryTiming?.version===SETUP_POLICY_VERSION?null:(intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null),entryTimingPolicyVersion:entryTiming?.version??null,entryTimingSetup:entryTiming?.setup??null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,fd1HoldPolicyVersion:FD1_HOLD_POLICY_VERSION,leaderExitPolicyVersion:entryController?.version===CEC0040_VERSION&&entryController.enforcementEnabled===true?P142_POLICY_VERSION:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,entryConfirmationPolicyVersion:intent.request_payload?.e1?.policyVersion??null,entryConfirmation:intent.request_payload?.e1??null,exitObservationPolicyVersion:intent.request_payload?.x1?.policyVersion??null,x1Observation:{observedBidPeak:z.avg,executableVwapPeak:null,lastObservationId:null,lastObservationAt:null,source:"P10_TOP_OF_BOOK_BATCH",maxQuoteAgeMs:1000},entryMarketRules:{priceTick:N(intent.request_payload?.price_tick),quantityStep:N(intent.request_payload?.quantity_step)},operatorOverride:intent.request_payload?.operator_override??null,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,setupMaxConcurrent:SETUP_MAX_CONCURRENT,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFillOrders:[{intentId:intent.id,exchangeOrderId:receipt.id,quantity:receipt.quantity,price:receipt.price,fee:receipt.fee,exact:receipt.exact,filledAt:receipt.lastAt??null}],entryFeatures:f}}).select("*").single();
     if(pos.error)throw Error(`POSITION:${pos.error.message}`);position=pos.data;
   }
   await verifyExecutionLease(db);
   const wr=await db.from("v11_long_regime_orders").update({state:receipt.exact?"FILLED":"RECONCILIATION_PENDING",exchange_order_id:receipt.id,
     response_payload:{...raw,v18ExposureFinal:true},position_id:position.id,reject_reason:null,updated_at:new Date().toISOString()}).eq("id",intent.id);
   if(wr.error)throw Error("ENTRY_ORDER_WRITE");
-  const sr=await db.from("v11_long_regime_signals").update({status:position.state==="CLOSED"?"CLOSED":"FILLED",position_id:position.id,updated_at:new Date().toISOString()}).eq("id",s.id);
+  const sr=await db.from("v11_long_regime_signals").update({status:position.state==="CLOSED"?"CLOSED":"FILLED",position_id:position.id,updated_at:new Date().toISOString()}).eq("id",row.id);
   if(sr.error)throw Error("ENTRY_SIGNAL_WRITE");
-  // The exposure and accounting are already known and durable. A controller-ledger
-  // outage must not rewrite that settled order as ambiguous; the next cycle repairs
-  // the missing row, and the atomic decision RPC blocks new entries until it exists.
-  try{await registerCec0040Target(db,position,s)}
-  catch(error){console.error("CEC0040_TARGET_REGISTER_DEFERRED",position.id,String(error?.message??error))}
+  if(opts.registerTarget!==false){
+    try{await registerCec0040Target(db,position,row)}
+    catch(error){console.error("CEC0040_TARGET_REGISTER_DEFERRED",position.id,String(error?.message??error))}
+  }
   return position;
 }
 async function readOpsPositions(db) {
