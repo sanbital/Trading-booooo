@@ -373,9 +373,10 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
 export function recheckAllows(r,at){
   return r?.valid===true&&r.decision==='BUY'&&Number.isFinite(r.valid_until_ms)&&at<r.valid_until_ms;
 }
-/** Pure deterministic execution safety after a FINAL BUY, on the dispatch quote. Not a strategy
- * judgment: the quote must be newer than the answer, readable, not catastrophically wide, and
- * the price must not have moved materially since the snapshot GPT answered on. */
+/** Pure deterministic execution safety after a FINAL BUY, on the dispatch quote.
+ * This is execution safety only: the quote must be newer than the answer, readable
+ * and not catastrophically wide. Price drift is evidence, never a second strategy veto;
+ * meaningful drift belongs in detectChange() -> GPT FINAL RECHECK. */
 export function postRecheckSafety({recheck,quote,at,policy=RECHECK_POLICY}){
   const ref=num(recheck?.current_ref?.mid),bid=num(quote?.best_bid),ask=num(quote?.best_ask),recv=num(quote?.timing?.received_at_ms);
   if(!recheckAllows(recheck,at))return {ok:false,reason:'RC_FINAL_NOT_BUY_OR_EXPIRED'};
@@ -385,6 +386,5 @@ export function postRecheckSafety({recheck,quote,at,policy=RECHECK_POLICY}){
   if(spreadBps>policy.catastrophicSpreadBps)return {ok:false,reason:'RC_POST_SPREAD_CATASTROPHIC',spreadBps};
   if(ref===null)return {ok:false,reason:'RC_POST_REFERENCE_MISSING'};
   const drift=mid/ref-1;
-  if(drift<=policy.postDriftAdverse||drift>=policy.postDriftChase)return {ok:false,reason:'RC_POST_DRIFT',drift,spreadBps};
   return {ok:true,reason:null,drift,spreadBps};
 }
