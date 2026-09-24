@@ -95,7 +95,7 @@ test('executor: CEC REJECT is not terminal, openBull does not re-veto it, GPT BU
   const open=src.slice(src.indexOf('async function openBull'),src.indexOf('const gptEntryCheck=gptFinalCheck(db,s);'));
   assert.ok(!/effectiveAllowed|modelAllowed/.test(open),'no CEC admission re-check before the GPT check');
   assert.match(src,/const gptEntryCheck=gptFinalCheck\(db,s\);\nif\(!gptEntryCheck\.allowed\)return\{entered:false/);
-  assert.match(src,/const gptDispatchCheck=gptFinalCheck\(db,s\);/);
+  assert.match(src,/const gptDispatchCheck=gptFinalCheck\(db,s,attempt\.finalRecheck\);/);
   const reg=src.slice(src.indexOf('async function registerCec0040Target'),src.indexOf('async function fetchCec0040Public'));
   assert.ok(!/modelAllowed|effectiveAllowed/.test(reg));assert.match(reg,/\["ADMIT","PROBE","REJECT"\]\.includes\(cec\.action\)/);
   assert.ok(src.includes('entry_gpt_decision:attempt.gptFinalReview??null')&&src.includes('gptEntryDecision:intent.request_payload?.entry_gpt_decision??null'));

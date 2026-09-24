@@ -7,6 +7,7 @@ import {FinalReviewCoordinator,MemoryReviewStore} from '../../../supabase/functi
 import {coordinatorFor} from '../../../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
 import {V30_HOOKS} from '../executor-hooks-v30.mjs';
 import {FD1_HOOKS} from '../executor-hooks-fd1.mjs';
+import {RECHECK_HOOKS} from '../executor-hooks-recheck.mjs';
 import {T,candidate,marketData,transport,config} from './helpers.mjs';
 
 const stampV30=s=>{s.features.v30Front=v30FrontDecision(s.features.b06133,V30_FRONT_LIVE_VERSION);return s;};
@@ -53,7 +54,7 @@ test('production coordinator: FD1 engine (GPT final entry decision) on the live 
 });
 test('V30 executor hooks change no sizing, slot, leverage, stop or lease control',()=>{
   const src=readFileSync(new URL('../../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
-  let base=src;for(const h of [...FD1_HOOKS].reverse())base=base.replace(h.to,h.from);for(const h of [...V30_HOOKS].reverse())base=base.replace(h.to,h.from);
+  let base=src;for(const h of [...RECHECK_HOOKS].reverse())base=base.replace(h.to,h.from);for(const h of [...FD1_HOOKS].reverse())base=base.replace(h.to,h.from);for(const h of [...V30_HOOKS].reverse())base=base.replace(h.to,h.from);
   for(const token of ['const MAX_SLOTS=10','const SETUP_MAX_CONCURRENT=4','SLOT_SIZING_CONTRACT.targetMarginUsdt','leverage:LEV',
     'POLICY.maxEntryDriftPct','verifyExecutionLease(db)','postFillEntryGuard(','v17_create_stop','stopPct'])
     assert.equal(src.split(token).length,base.split(token).length,token);
