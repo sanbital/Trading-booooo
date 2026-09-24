@@ -8,14 +8,26 @@
 // asks GPT once, and stores the validated answer. It uses its own capped budget row and
 // never touches the production GPT ledger, signals, orders, positions or controls.
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2.57.4';
-import {computeFacts} from '../_shared/gpt-final-decision/facts.mjs';
+import {computeFacts,modelJudgments} from '../_shared/gpt-final-decision/facts.mjs';
 import {readSources} from '../_shared/gpt-final-decision/market.mjs';
 import {buildDecisionPacket,callDecision} from '../_shared/gpt-final-decision/api.mjs';
 const PATCH='FD1-REPLAY-1',BATCH=24,CONCURRENCY=6,RESERVE_USD=0.02,WALL_MS=110_000;
 const reply=(s,b)=>new Response(JSON.stringify(b),{status:s,headers:{'content-type':'application/json','cache-control':'no-store'}});
 function eq(a,b){if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0;}
+const FACTORS=['absorption','volumeTails','fresh15over30','btcAnyUp','buyerShareRise','fresh5over15','recentHourLead'];
+/** Compact job context -> the same judgment block production builds from signal features. */
+export function expandContext(c){
+  if(!c?.k)return c??{};
+  const [ref,dayReturn,rank,r5,c15,bAllowed,branch,bits,v30,v30failed,cecAction,cecPred]=c.k;
+  const factors=Object.fromEntries(FACTORS.map((k,i)=>[k,bits[i]==='1'?true:bits[i]==='0'?false:null]));
+  const features={strategy:'LEADER_MOMENTUM_V17',rank,dayReturn,return5m:r5,confirmationReturn15m:c15,v17Setup:{state:'TRIGGERED'},
+    b06133:{allowed:bAllowed===1,branch,reason:bAllowed===1?'B06133_ALLOW':'B06133_REJECT',factors},
+    v30Front:{admitted:v30===1,failed:v30failed?v30failed.split(','):[]},
+    cec0040:{action:cecAction,effectiveAllowed:cecAction!=='REJECT',ready:true,predictionUsdt:cecPred}};
+  return {...c,referenceClose:ref,dayReturn,rank,judgments:modelJudgments(features)};
+}
 async function one(db,job,apiKey,btcCache){
-  const c=job.context??{},at=Number(job.as_of_ms);
+  const c=expandContext(job.context),at=Number(job.as_of_ms);
   let result,packet=null;
   try{
     const {src,errors}=await readSources(job.symbol,at,{mode:'REPLAY',btcCache});

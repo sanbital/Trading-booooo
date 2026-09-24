@@ -174,10 +174,8 @@ export function modelJudgments(features){
     v17:{strategy:f.strategy??null,setup_state:t.state??null,rank:num(f.rank),day_return:num(f.dayReturn),
       signal_return_5m:num(f.return5m),confirmation_return_15m:num(f.confirmationReturn15m),note:'V17 generated this candidate (top-10 KST day leader, 5m confirmation, pullback then re-acceleration trigger)'},
     b06133:{allowed:b.allowed===true,branch:b.branch??null,reason:b.reason??null,
-      factors:Object.fromEntries(['absorption','volumeTails','fresh15over30','btcAnyUp','buyerShareRise','fresh5over15','recentHourLead'].map(k=>[k,tri(b.factors?.[k])])),
-      measured_note:'historically (09-08..09-24) B06133 ALLOW did not outperform REJECT'},
-    v30:v?{admitted:v.admitted===true,failed:[...(v.failed??[])],rule:'fresh5over15=true AND volumeTails=false',
-      measured_note:'the two split-half stable factors on the candidate stream'}:null,
+      factors:Object.fromEntries(['absorption','volumeTails','fresh15over30','btcAnyUp','buyerShareRise','fresh5over15','recentHourLead'].map(k=>[k,tri(b.factors?.[k])]))},
+    v30:v?{admitted:v.admitted===true,failed:[...(v.failed??[])],rule:'fresh5over15=true AND volumeTails=false'}:null,
     cec0040:{action:c.action??null,effective_allowed:c.effectiveAllowed===true,ready:c.ready===true,prediction_usdt_per_trade:num(c.predictionUsdt),
       note:'strategy-wide causal edge estimate from recent closed trades (not symbol specific)'}
   };
