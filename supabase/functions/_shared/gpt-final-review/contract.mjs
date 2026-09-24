@@ -48,7 +48,39 @@ export function decisionIdentity(s) {
     cec:{version:c.version??null,targetVersion:c.targetVersion??null,decisionAt:numberOrNull(c.decisionAt),
       action:c.action??null,ready:c.ready===true,effectiveAllowed:c.effectiveAllowed===true,enforcementEnabled:c.enforcementEnabled===true},
     // Bound locally to prevent changing exit rules after a review. Not sent to the LLM.
-    exit_policy:JSON.parse(JSON.stringify(f.exitPolicy??{}))};
+    exit_policy:JSON.parse(JSON.stringify(f.exitPolicy??{})),
+    // Present ONLY for candidates admitted by an alternative front-end policy (V30 shadow).
+    // Production rows never carry v30Front, so their identity is byte-identical to before.
+    ...(f.v30Front?{front_policy:frontPolicyIdentity(f.v30Front)}:{})};
+}
+/* V30 front-end score policy (SHADOW observation only, 2026-09-24).
+ * B06133's two most stable factors on the production candidate stream (split-half
+ * consistent, 2026-09-08..09-24) point the OPPOSITE way to its branches: recent
+ * acceleration (fresh5over15=true) is the better side, extreme volume (volumeTails=true)
+ * the worse. V30 admits on those two, keeps every other B06133 factor as reference,
+ * and never rewrites the B06133 stamp: a candidate B06133 rejected stays rejected there. */
+export const V30_FRONT_VERSION='V30_FRONT_SCORE_SHADOW_1';
+export const V30_REQUIRED=Object.freeze({fresh5over15:true,volumeTails:false});
+export function v30FrontDecision(b06133){
+  const f=b06133?.factors??{},failed=[],unknown=[];
+  for(const [k,want] of Object.entries(V30_REQUIRED)){const v=tri(f[k]);if(v===null)unknown.push(k);else if(v!==want)failed.push(k);}
+  return {version:V30_FRONT_VERSION,required:{...V30_REQUIRED},factors:Object.fromEntries(FACTORS.map(k=>[k,tri(f[k])])),
+    admitted:failed.length===0&&unknown.length===0,failed,unknown,
+    b06133:{version:b06133?.version??null,allowed:b06133?.allowed===true,result:tri(b06133?.result),branch:b06133?.branch??null,reason:b06133?.reason??null}};
+}
+function frontPolicyIdentity(v){
+  return {version:v.version??null,admitted:v.admitted===true,failed:[...(v.failed??[])],unknown:[...(v.unknown??[])],
+    b06133_allowed:v.b06133?.allowed===true,b06133_reason:v.b06133?.reason??null};
+}
+/** Baseline for the V30 shadow: the SAME trigger and B06133 evidence, a different admission rule. */
+export function baselineAllowedV30(s){
+  const f=s?.features,b=f?.b06133,t=f?.v17Setup,v=f?.v30Front;
+  if(!(s?.id&&s?.symbol&&t?.state&&Number.isSafeInteger(Number(t.triggerAt))&&Number(t.triggerAt)>0&&Number(t.triggerAt)%60000===0))return false;
+  if(b?.version!=='B06133_ENTRY_SELECTION_1'||Number(b.source?.decisionAt)!==Number(t.triggerAt))return false;
+  if(v?.version!==V30_FRONT_VERSION||v.admitted!==true)return false;
+  // The stamp must be what the policy computes from the unmodified B06133 factors.
+  const again=v30FrontDecision(b);
+  return again.admitted===true&&JSON.stringify(again.factors)===JSON.stringify(v.factors)&&v.b06133?.allowed===(b.allowed===true);
 }
 export function triggerExpiry(s){return Number(s.features.v17Setup.triggerAt)+60000;}
 export function arithmeticCheck(identity) {
@@ -154,6 +186,7 @@ export function parseApiResponse(raw,packet=null) {
   return packet?expandWireAnswer(parsed,packet):parsed;
 }
 export function validateAnswer(answer,packet) {
+  if(answer?.review_contract===REVIEW_CONTRACT_V6)return validateAnswerV6(answer,packet);
   validateShape(answer,OUTPUT_SCHEMA);
   ensure(answer.candidate_id===packet.candidate_id && answer.snapshot_hash===packet.snapshot_hash,'IDENTITY_MISMATCH');
   ensure(new Set(answer.checked_claims.map(x=>x.claim_id)).size===answer.checked_claims.length,'DUPLICATE_CLAIM');
@@ -185,5 +218,100 @@ export function validateAnswer(answer,packet) {
       'ORIGINAL_CLAIM_RECHECK_REQUIRED');
   }
   if(answer.decision==='VETO')ensure(answer.opposing_evidence.some(e=>e.observed_value!==null),'VETO_REQUIRES_FACT');
+  return answer;
+}
+
+/* ---------------------------------------------------------------------------
+ * V6: REAL-TIME RISK REVIEW (role separation, 2026-09-24)
+ *
+ * Measured on production data (09-08..09-24): every V17 stage is decided by a
+ * deterministic machine model (V17 selection + pullback/re-acceleration timing,
+ * B06133 selection, CEC0040 causal edge). V4/V5 asked the LLM to re-audit those
+ * same B06133 booleans before it was even allowed to PASS -- a fourth evaluation of
+ * the same information -- and let it VETO on free-text readings of market numbers.
+ * The one production VETO (NILUSDT 2026-09-23 23:32) cited "ask depth / 600 USDT
+ * slot = 36x" as OPPOSING evidence, i.e. the direction of the ratio was misread.
+ *
+ * V6 gives the reviewer exactly one job: is there a NEW real-time execution risk,
+ * visible in the seconds-old snapshot, that the machine models could not see?
+ *  - It no longer re-verifies B06133/CEC/V17. Their decisions are context, not claims.
+ *  - A VETO must name a risk category and cite a current-market fact that actually
+ *    lies on the RISK SIDE of that category's published threshold (server-checked).
+ *    "Already rose" / "volatile" is not a category, so it cannot be a VETO basis.
+ *  - HARD risks and incomplete data are deterministic: PASS is impossible while one
+ *    is active, whatever the model says. Nothing here can turn a machine REJECT into
+ *    an entry; GPT only ever sees candidates the machine models already admitted.
+ * ------------------------------------------------------------------------- */
+export const REVIEW_CONTRACT_V6='REALTIME_RISK_V6';
+const M='/current_market/metrics/';
+/** Each rule: facts it may cite, a HARD band (deterministic block) and a SOFT band
+ * (the reviewer may VETO; below it a VETO in this category is invalid). */
+export const RISK_RULES=Object.freeze({
+  SPREAD_ABNORMAL:Object.freeze({facts:['spread'],hard:m=>m.spread>25,soft:m=>m.spread>10,
+    text:'spread bps: soft>10, hard>25 (executor order guard is 25)'}),
+  THIN_ASK_LIQUIDITY:Object.freeze({facts:['ask_depth_to_slot_notional','depth'],hard:m=>m.ask_depth_to_slot_notional<1.5,soft:m=>m.ask_depth_to_slot_notional<5,
+    text:'ask notional within 25bp / 600 USDT order: soft<5, hard<1.5 (HIGHER IS SAFER)'}),
+  SELL_WALL_IMBALANCE:Object.freeze({facts:['book_imbalance_25bps','bid_depth_25bps'],hard:m=>m.book_imbalance_25bps<=-0.75,soft:m=>m.book_imbalance_25bps<=-0.45,
+    text:'(bid-ask)/(bid+ask) within 25bp: soft<=-0.45, hard<=-0.75 (NEGATIVE = sellers dominate)'}),
+  FUNDING_EXTREME:Object.freeze({facts:['funding'],hard:m=>m.funding>=0.003,soft:m=>m.funding>=0.0008,
+    text:'funding per interval: soft>=0.0008, hard>=0.003 (crowded longs)'}),
+  PREMIUM_EXTREME:Object.freeze({facts:['mark_index_premium'],hard:m=>Math.abs(m.mark_index_premium)>=0.01,soft:m=>Math.abs(m.mark_index_premium)>=0.004,
+    text:'|mark/index-1|: soft>=0.004, hard>=0.01'}),
+  OI_PRICE_DIVERGENCE:Object.freeze({facts:['oi_change_5m','return_5m','oi_change_60m'],hard:()=>false,
+    soft:m=>Math.abs(m.oi_change_5m)>=0.02&&m.oi_change_5m*m.return_5m<0,
+    text:'|OI 5m change|>=0.02 moving AGAINST the 5m price move (soft only)'}),
+  PRICE_COLLAPSE:Object.freeze({facts:['distance_trigger_reference','last_close_change','last_body'],
+    hard:m=>m.distance_trigger_reference<=-0.01||m.last_close_change<=-0.02,
+    soft:m=>m.distance_trigger_reference<=0||m.last_close_change<=-0.006,
+    text:'price vs original signal reference: soft<=0 (re-acceleration fully reversed), hard<=-0.01; or last 1m close change soft<=-0.006, hard<=-0.02'}),
+});
+export const RISK_CATEGORIES=Object.freeze([...Object.keys(RISK_RULES),'DATA_INCOMPLETE']);
+const val=(packet,k)=>packet?.current_market?.metrics?.[k]?.value;
+function metricsOf(packet){const m={};for(const r of Object.values(RISK_RULES))for(const k of r.facts)m[k]=val(packet,k);return m;}
+const rule3=(fn,m)=>{try{const r=fn(m);return r===true;}catch{return false;}};
+/** Deterministic, model-independent risk state of one immutable snapshot. */
+export function riskAssessment(packet){
+  const m=metricsOf(packet),q=packet?.current_market?.quality??{},out={};
+  for(const [id,r] of Object.entries(RISK_RULES)){
+    const missing=r.facts.slice(0,id==='OI_PRICE_DIVERGENCE'?2:1).some(k=>!finite(m[k]));
+    out[id]={level:missing?'UNKNOWN':rule3(r.hard,m)?'HARD':rule3(r.soft,m)?'SOFT':'CLEAR',rule:r.text,facts:r.facts.map(k=>'C_'+k)};
+  }
+  const incomplete=q.complete!==true||q.microstructure_complete!==true;
+  out.DATA_INCOMPLETE={level:incomplete?'HARD':'CLEAR',rule:'candles and seconds-old book/funding/OI must all be present',facts:[]};
+  const hard=Object.entries(out).filter(([,x])=>x.level==='HARD').map(([k])=>k);
+  return {flags:out,hard,soft:Object.entries(out).filter(([,x])=>x.level==='SOFT').map(([k])=>k)};
+}
+export function validateAnswerV6(answer,packet){
+  ensure(answer&&answer.review_contract===REVIEW_CONTRACT_V6,'V6_CONTRACT');
+  ensure(answer.candidate_id===packet.candidate_id&&answer.snapshot_hash===packet.snapshot_hash,'IDENTITY_MISMATCH');
+  ensure(['PASS','VETO','ABSTAIN'].includes(answer.decision),'ENUM:decision');
+  ensure(typeof answer.summary==='string'&&answer.summary.length>0&&!/[0-9]/.test(answer.summary),'NUMERICAL_SUMMARY');
+  const risk=riskAssessment(packet);
+  for(const e of [...answer.supporting_evidence,...answer.opposing_evidence]){
+    ensure(e.field_path.startsWith(M),'EVIDENCE_NOT_CURRENT');const v=evidenceAt(packet,e.field_path);
+    ensure(v.value===e.observed_value&&v.unit===e.unit,'EVIDENCE_VALUE_MISMATCH');
+  }
+  if(answer.decision==='PASS'){
+    // Integrity of the stamped selector factors is a data check, not a judgment.
+    ensure(packet.original_model.arithmetic_check.consistent,'ORIGINAL_CALCULATION_CONTRADICTED');
+    ensure(risk.hard.length===0,'PASS_WITH_HARD_RISK:'+risk.hard.join(','));
+    ensure(answer.risks.length===0,'PASS_WITH_NAMED_RISK');
+    ensure(answer.supporting_evidence.some(e=>typeof e.observed_value==='number'),'PASS_REQUIRES_CURRENT_FACT');
+  }
+  if(answer.decision==='VETO'){
+    ensure(answer.risks.length>0,'VETO_REQUIRES_RISK');
+    for(const r of answer.risks){
+      ensure(RISK_CATEGORIES.includes(r.risk_id),'ENUM:risk');
+      const f=risk.flags[r.risk_id];
+      // The category must actually be at risk in THIS snapshot; a misread direction
+      // (e.g. deep ask liquidity cited as thin) is rejected here, not trusted.
+      ensure(f.level==='SOFT'||f.level==='HARD','VETO_RISK_NOT_PRESENT:'+r.risk_id);
+      if(r.risk_id!=='DATA_INCOMPLETE'){
+        const allowed=RISK_RULES[r.risk_id].facts.map(k=>M+k);
+        ensure(r.evidence.length>0&&r.evidence.every(e=>allowed.includes(e.field_path)),'VETO_EVIDENCE_OUTSIDE_RISK:'+r.risk_id);
+        ensure(r.evidence.some(e=>typeof e.observed_value==='number'),'VETO_REQUIRES_FACT');
+      }
+    }
+  }
   return answer;
 }

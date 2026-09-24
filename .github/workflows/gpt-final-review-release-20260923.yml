@@ -10,7 +10,7 @@ on:
         description: "Function to deploy"
         required: true
         type: choice
-        options: [gpt-final-review-verify, v10-lane-executor, delete-gpt-final-review-verify]
+        options: [gpt-final-review-verify, v10-lane-executor, v10-lane-signal-generator, v30-front-shadow, delete-gpt-final-review-verify]
       expected_version_before:
         description: "Current production version of the target (pins against concurrent deploys)"
         required: true
@@ -99,6 +99,9 @@ jobs:
           grep -Fq 'const SETUP_MAX_CONCURRENT=4' supabase/functions/v10-lane-executor/index.ts
           grep -Fq 'PATCH="CEC0040-P142-DEPLOYMENT-READY-1"' supabase/functions/v10-lane-executor/index.ts
           git diff --stat "$FROZEN_BASE" HEAD -- supabase/functions > release-evidence/source-diff-stat.txt
+          # The generator stamps targetMarginUsdt/leverage from the SAME contract the
+          # executor sizes from; the deployed bundle must carry 200 x 3.
+          node -e "import('./supabase/functions/_shared/leader-momentum-v17.mjs').then(m=>{if(m.POLICY.marginUsdt!==200||m.POLICY.leverage!==3||m.POLICY.maxSlots!==10)process.exit(1);console.log('generator stamp',m.POLICY.marginUsdt,m.POLICY.leverage,m.POLICY.sizingContractVersion)})"
 
       - uses: actions/setup-node@v4
         with:

@@ -1,4 +1,5 @@
-import {toWireV4 as toWireAnswer,toWireV5,FACT_PATHS} from '../../../supabase/functions/_shared/gpt-final-review/wire-v4.mjs';
+import {toWireV4 as toWireAnswer,toWireV5,toWireV6,FACT_PATHS} from '../../../supabase/functions/_shared/gpt-final-review/wire-v4.mjs';
+import {REVIEW_CONTRACT_V6} from '../../../supabase/functions/_shared/gpt-final-review/contract.mjs';
 import {arithmeticCheck,decisionIdentity,MODEL} from '../../../supabase/functions/_shared/gpt-final-review/contract.mjs';
 import {computeMarket,buildPacket} from '../../../supabase/functions/_shared/gpt-final-review/market.mjs';
 export const T=Date.UTC(2026,8,23,10,0,0);
@@ -14,10 +15,18 @@ export function candidate(id='test-signal'){
 export function bars(n,interval,price=100){
   return Array.from({length:n},(_,i)=>{const t=T-(n-i)*interval,o=price+i*.1,c=o+.05;return[t,String(o),String(c+.1),String(o-.1),String(c),'100',t+interval-1,'10000',10,'55','5500','0'];});
 }
-export function marketData(s=candidate(),at=T+1000){
+/** Seconds-old order book / funding / OI fixture: deep, balanced, calm (no V6 risk). */
+export function microData({book=null,premium=null,oiHist=null}={}){
+  const src=data=>({data,requestedAt:T+200,receivedAt:T+300});
+  const lv=(p0,step)=>Array.from({length:20},(_,i)=>[String(p6(p0+step*i)),'100']);
+  const p6=x=>Number(x.toFixed(6));
+  return {book:src(book??{bids:lv(106.18,-0.01),asks:lv(106.2,0.01)}),premium:src(premium??{markPrice:'106.2',indexPrice:'106.19',lastFundingRate:'0.0001'}),
+    oi:src({openInterest:'1000'}),oiHist:src(oiHist??Array.from({length:13},(_,i)=>({timestamp:T-(13-i)*300000,sumOpenInterest:String(10000+i)})))};
+}
+export function marketData(s=candidate(),at=T+1000,micro=microData()){
   return computeMarket(decisionIdentity(s),{one:{rows:bars(61,60000),requestedAt:T+100,receivedAt:T+300},
     five:{rows:bars(12,300000),requestedAt:T+100,receivedAt:T+300},
-    btc:{rows:bars(16,60000,60000),requestedAt:T+100,receivedAt:T+300}},at);
+    btc:{rows:bars(16,60000,60000),requestedAt:T+100,receivedAt:T+300},micro},at);
 }
 export async function packet(s=candidate()){return buildPacket(decisionIdentity(s),marketData(s),T+1000);}
 export function answer(p,decision='PASS'){
@@ -37,7 +46,8 @@ export function transport({decision='PASS',status=200,mutate=a=>a,hold=null,requ
   return async(url,init)=>{
     requests.push({url,payload:JSON.parse(init.body),init});if(hold)await hold;
     const input=JSON.parse(JSON.parse(init.body).input[1].content);
-    const wire=input.w==='FACTREF5'?(p=>toWireV5(mutate(answer(p,decision)),p))(packetFromV5(input)):toWireAnswer(mutate(answer(input,decision)),input);
+    const wire=input.w==='RTRISK6'?toWireV6(mutate(answerV6(packetFromV6(input),decision))):
+      input.w==='FACTREF5'?(p=>toWireV5(mutate(answer(p,decision)),p))(packetFromV5(input)):toWireAnswer(mutate(answer(input,decision)),input);
     return new Response(JSON.stringify(rawResponse(wire)),{status,headers:{'content-type':'application/json','x-request-id':'req_TEST_ONLY'}});
   };
 }
@@ -46,5 +56,20 @@ export function config(mode='ENFORCE'){return {mode,modeValid:true,approvalRef:'
 export function packetFromV5(input){
   const p={candidate_id:input.c,snapshot_hash:input.h,original_model:{...input.original_model,metrics:{},factors:{}},current_market:{quality:input.current_market.quality,metrics:{}}};
   for(const [id,path] of Object.entries(FACT_PATHS)){const [value,unit]=input.facts.rows[id];const [,a,b,k]=path.split('/');p[a][b][k]={value,unit};}
+  return p;
+}
+
+/** Canonical V6 answer built only from what a V6 request exposes. */
+export function answerV6(p,decision='PASS',risks=null){
+  const ev=k=>({field_path:'/current_market/metrics/'+k,observed_value:p.current_market.metrics[k].value,unit:p.current_market.metrics[k].unit,interpretation:'x'});
+  return {review_contract:REVIEW_CONTRACT_V6,candidate_id:p.candidate_id,snapshot_hash:p.snapshot_hash,decision,
+    assessment:{PASS:'SUPPORTED',VETO:'CONTRADICTED',ABSTAIN:'INSUFFICIENT_EVIDENCE'}[decision],
+    risks:risks??(decision==='VETO'?[{risk_id:'SPREAD_ABNORMAL',evidence:[ev('spread')]}]:[]),checked_claims:[],
+    supporting_evidence:decision==='PASS'?[ev('return_5m'),ev('ask_depth_to_slot_notional')]:[],opposing_evidence:[],missing_fields:[],
+    summary:decision==='PASS'?'새로운 실시간 위험이 확인되지 않습니다.':decision==='VETO'?'실시간 주문 위험이 확인됩니다.':'판단할 수 없습니다.'};
+}
+export function packetFromV6(input){
+  const p={candidate_id:input.c,snapshot_hash:input.h,current_market:{quality:input.current_market.quality,metrics:{}}};
+  for(const [id,[value,unit]] of Object.entries(input.facts.rows))p.current_market.metrics[id.slice(2)]={value,unit};
   return p;
 }
