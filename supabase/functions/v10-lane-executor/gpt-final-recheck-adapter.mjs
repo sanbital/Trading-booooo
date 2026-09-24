@@ -47,7 +47,8 @@ export function markRecheckOutcome(db,s,record,outcome){
  */
 export async function finalRecheckStep(db,s,{ticket,e1,rawQuote,now=Date.now,purpose='PRODUCTION',config=null,apiKey=null,
   dataMode='LIVE',asOf=null}){
-  const at=now(),snapshot=preDispatchSnapshot({at,rawQuote,e1}),detection=detectChange(ticket?.initial,snapshot);
+  // A historical fixture (asOf) is judged at its own dispatch instant, never at the wall clock.
+  const at=asOf??now(),snapshot=preDispatchSnapshot({at,rawQuote,e1}),detection=detectChange(ticket?.initial,snapshot);
   const record={version:RECHECK_VERSION,initial_gpt_decision:ticket?.decision??null,initial_gpt_at:ticket?.initial?.completedAt??null,
     initial_snapshot_at:ticket?.initial?.snapshotAt??null,initial_snapshot_hash:ticket?.snapshotHash??null,
     initial_context:ticket?.initial??null,pre_dispatch_snapshot:snapshot,pre_dispatch_at:at,
