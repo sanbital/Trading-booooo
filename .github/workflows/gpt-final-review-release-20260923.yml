@@ -87,7 +87,6 @@ jobs:
             supabase/functions/_shared/leader-e1-runtime.mjs \
             supabase/functions/_shared/leader-b06133-entry.mjs \
             supabase/functions/_shared/boo \
-            supabase/functions/v10-lane-executor/entry-evidence.mjs \
             supabase/functions/v10-lane-executor/boo-entry-adapter.mjs \
             supabase/functions/v10-lane-executor/v24-entry-adapter.mjs \
             supabase/functions/v10-lane-executor/v24-leader-continuation.mjs
@@ -95,7 +94,10 @@ jobs:
           grep -Fq 'leverage: 3' supabase/functions/_shared/leader-slot-sizing.mjs
           grep -Fq 'const MAX_SLOTS=10' supabase/functions/v10-lane-executor/index.ts
           grep -Fq 'const SETUP_MAX_CONCURRENT=4' supabase/functions/v10-lane-executor/index.ts
-          grep -Fq 'PATCH="FD1-GPT-FINAL-DECISION-1"' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'PATCH="FD1-GPT-FINAL-ENTRY-CEC-EVIDENCE-2"' supabase/functions/v10-lane-executor/index.ts
+          # entry-evidence.mjs: must equal PR #175 (ebed212): the execution window accepts the
+          # stamped CONTINUATION_NO_PULLBACK trigger with full geometry/provenance checks.
+          git diff --quiet ebed212 HEAD -- supabase/functions/v10-lane-executor/entry-evidence.mjs
           # leader-pullback-reaccel.mjs: must equal the operator's continuation-trigger commit
           # 8895c28 (merged to main and deployed 2026-09-24 13:00 KST), nothing else.
           git diff --quiet 8895c28 HEAD -- supabase/functions/_shared/leader-pullback-reaccel.mjs
@@ -124,6 +126,7 @@ jobs:
             development/gpt-final-review/tests/*.test.mjs \
             supabase/functions/_shared/*.test.mjs \
             supabase/functions/v10-lane-executor/*.test.mjs \
+            tests/*.test.mjs \
             | tee release-evidence/tests.tap
           grep -E '^# (tests|pass|fail)' release-evidence/tests.tap
           grep -Eq '^# fail 0$' release-evidence/tests.tap
