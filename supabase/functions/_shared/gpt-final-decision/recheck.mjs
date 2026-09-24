@@ -46,7 +46,7 @@ export const RECHECK_POLICY=Object.freeze({
   depthDropFraction:-0.5,
   imbalanceShift:-0.30,
   slippageWorsenBps:5,
-  postDriftAdverse:-0.0025,postDriftChase:0.005,catastrophicSpreadBps:25,
+  catastrophicSpreadBps:25,
 });
 const num=x=>x!==null&&x!==undefined&&x!==''&&Number.isFinite(Number(x))?Number(x):null;
 const has=(m,...ks)=>ks.every(k=>m[k]!==null&&m[k]!==undefined&&Number.isFinite(m[k]));
