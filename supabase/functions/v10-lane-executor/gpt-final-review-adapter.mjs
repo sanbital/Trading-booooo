@@ -79,13 +79,15 @@ export function gptRecheckConfig(db){return coordinatorFor(db).config;}
  * The API runs independently. Only after lease release may a completed PASS request
  * one additional ordinary cycle. A busy/expired result is never forced through.
  */
-/** (2026-09-25) One run still opens at most one position. When a run entered and other
- * GPT BUY candidates it did not reach still hold a live trigger, ONE follow-up ordinary
- * cycle (new lease, fresh reads, protection first) may take the next of them instead of
- * letting its trigger expire untried (TRBUSDT 2026-09-24 17:17). */
+/** (2026-09-25) A run admits GPT BUY candidates one at a time for as long as the account has
+ * capacity (entry-capacity.mjs), re-reading the account after every fill. The BUYs a run leaves
+ * are those its cycle budget could not finish an attempt for (followUpArmed), whether or not it
+ * entered. While one of them still holds a live trigger, ONE follow-up ordinary cycle (new lease
+ * and budget, fresh reads, protection first) may take them instead of letting their triggers
+ * expire untried (TRBUSDT 2026-09-24 17:17). */
 export const FOLLOW_UP_POLICY=Object.freeze({maxFollowUps:1,maxElapsedMs:30000});
 function wantsFollowUp(result,started,now){
-  return result?.entry?.entered===true&&result.entry.followUpArmed===true&&Number(result.entry.remainingGptBuys)>0&&
+  return result?.entry?.followUpArmed===true&&Number(result.entry.remainingGptBuys)>0&&
     result?.ok!==false&&!result?.skipped&&now-started<FOLLOW_UP_POLICY.maxElapsedMs;
 }
 export async function runWithGptReview(db,runWithLease,switches=recoverySwitches()){
@@ -96,13 +98,13 @@ export async function runWithGptReview(db,runWithLease,switches=recoverySwitches
     return {...next,gptFinalReview:{...(next?.gptFinalReview??{}),mode:c.config.mode,followUp:true,priorEntries:[...prior,result.entry]}};
   };
   if(c.config.mode!=='ENFORCE'||first?.ok===false||first?.skipped)return first;
-  if(first?.entry?.entered)return await followUp(first,[]);
+  if(first?.entry?.entered||first?.entry?.followUpArmed)return await followUp(first,[]);
   if(first?.entry?.reason!=='GPT_REVIEW_PENDING')return first;
   let ready=false;try{ready=await c.waitReady();}catch{/* GPT errors are candidate-scoped. */}
   if(!ready)return first;
   const second=await runWithLease(db);
   const out={...second,gptFinalReview:{mode:c.config.mode,rechecked:true,firstCycleEntry:first.entry??null}};
-  return second?.entry?.entered?await followUp(out,[]):out;
+  return second?.entry?.entered||second?.entry?.followUpArmed?await followUp(out,[]):out;
 }
 // Dependency injection for isolated tests only; not exposed as an HTTP operation.
 export function setTestCoordinator(db,c){c.injected=true;contexts.set(db,c);}

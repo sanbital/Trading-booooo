@@ -200,7 +200,7 @@ test('18 approved QV3, V19 controls, sizing and V23 override audit identity rema
   assert.equal(SLOT_SIZING_CONTRACT.leverage,3);
   assert.match(source,/QV3_ENTRY_EXIT_TWO_1|QV3_VERSION/);
   assert.equal(ENTRY_CONTROL_VERSION,'V19-SCOPE-AWARE-ENTRY-1');
-  assert.match(source,/PATCH="FD1-OPPORTUNITY-REFINEMENT-1"/);assert.match(source,/v22EntryFinality/);
+  assert.match(source,/PATCH="FD1-MULTISLOT-CAPACITY-1"/);assert.match(source,/v22EntryFinality/);
   assert.match(source,/priorPerformanceVerdict:"DEFER"/);assert.match(source,/p_evidence_version:ENTRY_CONTROL_VERSION/);
 });
 

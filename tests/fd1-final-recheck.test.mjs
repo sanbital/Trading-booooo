@@ -14,6 +14,7 @@ import {detectChange,preDispatchSnapshot,validateRecheck,recheckFlags,buildReche
 import {computeFacts} from '../supabase/functions/_shared/gpt-final-decision/facts.mjs';
 import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,setTestCoordinator} from '../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
 import {IOC_RETRY_POLICY,planAggressiveIocRetry,floorStep} from '../supabase/functions/v10-lane-executor/entry-ioc-retry.mjs';
+import {budgetCovers} from '../supabase/functions/v10-lane-executor/entry-capacity.mjs';
 import {finalRecheckStep,setRecheckTestHooks,withOrderTiming} from '../supabase/functions/v10-lane-executor/gpt-final-recheck-adapter.mjs';
 import {nilTicket,NIL_E1,NIL_DISPATCH_QUOTE,NIL_SIGNAL,NIL_DISPATCH_AT} from '../supabase/functions/v10-lane-executor/recheck-nil-fixture.mjs';
 import {candidate,T} from '../development/gpt-final-review/tests/helpers.mjs';
@@ -206,7 +207,7 @@ test('contract: price drop alone is not a SKIP; BUY needs current up-support and
 });
 test('14. release invariants: GPT remains before IOC, sizing is 150x3, retry is bounded and protection/lease stay in path',()=>{
   const src=readFileSync(new URL('../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
-  for(const k of ['const MAX_SLOTS=10','const SETUP_MAX_CONCURRENT=4','PATCH="FD1-OPPORTUNITY-REFINEMENT-1"',
+  for(const k of ['const MAX_SLOTS=10','const SETUP_MAX_CONCURRENT=MAX_SLOTS;','PATCH="FD1-MULTISLOT-CAPACITY-1"',
     'SLOT_SIZING_CONTRACT.targetMarginUsdt','verifyExecutionLease(db)','protectNewLeaderPosition({','time_in_force:"IOC"',
     'IOC_RETRY_POLICY.maxAttempts','planAggressiveIocRetry(','SIZING_CONTRACT_STALE'])assert.ok(src.includes(k),k);
   const step=src.indexOf('await finalRecheckStep(db,s,'),dispatch=src.indexOf('const gptDispatchCheck=gptFinalCheck(db,s,attempt.finalRecheck);'),
@@ -218,7 +219,7 @@ test('14. release invariants: GPT remains before IOC, sizing is 150x3, retry is 
 
 // Execute the real openBull IOC lifecycle, replacing only I/O dependencies. The real
 // coordinator, detector, recheck API parser, authority checks and retry planner run.
-async function retryLifecycle({fills=[375],final='BUY',changed=false,expired=false,protection='PROTECTED'}={}){
+async function retryLifecycle({fills=[375],final='BUY',changed=false,expired=false,protection='PROTECTED',budget=null}={}){
   let now=T+1500;
   const x=await initialDecision({final,clock:()=>now});
   const source=readFileSync(new URL('../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
@@ -234,6 +235,8 @@ async function retryLifecycle({fills=[375],final='BUY',changed=false,expired=fal
     sized:{amount:375},iocBps:0,limitPrice:1.2,step:1,filters:{priceTick:.0001,minNotionalUsdt:5,minQuantity:1},baseIntentPayload:{},
     manualRows:[],managementFailures:[],finalDecision:{allowed:true},e1Decision:null,NATIVE_STOP_ENABLED:true,
     MARGIN:150,LEV:3,ENTRY_CASH_BUFFER_USDT:.1,RELEASE_SCOPE:{SYMBOL:'SYMBOL'},
+    // The cycle's lease budget as the executor keeps it; none unless a case sets one.
+    budgetCovers,cycleBudgets:new Map(budget?[[db,budget]]:[]),IOC_RETRY_RESERVE:{ms:16000,calls:14},
     IOC_RETRY_POLICY,planAggressiveIocRetry,floorStep,E1_POLICY:{maxQuoteAgeMs:1000},
     gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,
     Date:class extends Date{static now(){return now;}},console,
@@ -302,6 +305,20 @@ test('CASE 9: partial second fill is protected; no third IOC',async()=>{
 test('CASE 10: second zero fill terminalizes; no third IOC',async()=>{
   const r=await retryLifecycle({fills:[0,0]});assert.equal(r.orders.length,2);assert.equal(r.result.reason,'IOC_RETRY_EXHAUSTED');
   assert.equal(r.writes.at(-1).reject_reason,'IOC_RETRY_EXHAUSTED');
+});
+// (2026-09-25) A later admission in a multi-slot run can reach its retry late in the cycle. The retry is
+// only sent when the lease budget can also settle and protect it; otherwise the attempt ends there.
+test('CASE 11: a cycle budget that cannot finish the retry sends no second IOC',async()=>{
+  const short={remaining:()=>9000,callsLeft:40};
+  const zero=await retryLifecycle({fills:[0,375],budget:short});assert.equal(zero.orders.length,1);
+  assert.equal(zero.result.entered,false);assert.equal(zero.result.reason,'IOC_RETRY_EXHAUSTED:CYCLE_BUDGET_RESERVE');
+  assert.equal(zero.writes.at(-1).reject_reason,'IOC_RETRY_EXHAUSTED:CYCLE_BUDGET_RESERVE');
+  const partial=await retryLifecycle({fills:[100,275],budget:{remaining:()=>60000,callsLeft:10}});
+  assert.equal(partial.orders.length,1,'too few gateway calls left: no top-up');assert.equal(partial.result.entered,true);
+  assert.equal(partial.result.reason,'PARTIAL_FILL_ABORT:IOC_RETRY_EXHAUSTED:CYCLE_BUDGET_RESERVE');
+  assert.equal(partial.result.entryProtection.status,'PROTECTED','the protected partial is kept');
+  const ample=await retryLifecycle({fills:[0,375],budget:{remaining:()=>30000,callsLeft:60}});
+  assert.equal(ample.orders.length,2,'a budget that can finish it keeps the bounded retry');
 });
 test('retry capability cannot be fabricated, cloned, reused or moved to another signal/cycle',async()=>{
   const x=await initialDecision();const token=gptBeginExecution(x.db,x.s,null);

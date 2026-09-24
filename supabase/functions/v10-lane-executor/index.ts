@@ -21,6 +21,7 @@ import {E1_POLICY,advanceE1,e1QuoteEvidence,fetchE1AggTrades,startE1} from "../_
 import {V24_ADAPTER_VERSION,v24EntryGate} from "./v24-entry-adapter.mjs";
 import {IOC_RETRY_POLICY,planAggressiveIocRetry} from "./entry-ioc-retry.mjs";
 import {ENTRY_LIFECYCLE_VERSION,lifecycleNote,noteChanged,gptTerminalReason,expiredTriggerReason,agedOutReason} from "./entry-lifecycle.mjs";
+import {ENTRY_CAPACITY_VERSION,UNUSED_SLOT_REASON,accountStopReason,budgetCovers,entryCapacity,ledgerEntry,slotCostUsdt,slotReasonOf,unusedSlotAccounting} from "./entry-capacity.mjs";
 import {LIVE_CHASE_POLICY,LIVE_CHASE_REASON,CHASE_STATE,classifyChase,liveChaseTrigger,deadChaseState} from "../_shared/leader-live-chase.mjs";
 import {BOO_ADAPTER_VERSION,ENFORCEMENT as BOO_ENFORCEMENT,evaluateBooEntry,finalizeBooEntry,loadBooGateContext,openRiskSummary,recordBooVerdict} from "./boo-entry-adapter.mjs";
 import {R1_VERSION} from "../_shared/boo/r1-strategy.mjs";
@@ -31,17 +32,32 @@ import {SETUP_POLICY,SETUP_POLICY_VERSION,SETUP_REASON,SETUP_STATE,advancePullba
 import {B06133_VERSION,evaluateB06133,fetchB06133Inputs} from "../_shared/leader-b06133-entry.mjs";
 import {V30_FRONT_LIVE_VERSION,v30FrontDecision,entryBranchOf,baselineAllowedV30} from "../_shared/gpt-final-review/contract.mjs";
 import {CEC0040_CONFIG,CEC0040_TARGET_VERSION,CEC0040_VERSION,P142_POLICY_VERSION,advanceP142Completed,nextExitP142,p142Mean44Target} from "../_shared/leader-cec0040.mjs";
-const REVISION="V11-LONG-REGIME-1.0.1",PATCH="FD1-OPPORTUNITY-REFINEMENT-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
+const REVISION="V11-LONG-REGIME-1.0.1",PATCH="FD1-MULTISLOT-CAPACITY-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Object.freeze({
   id:"2026-09-13-USER-PRIORITY-OVERRIDE",basis:"OPERATOR_OVERRIDE_UNVALIDATED",
   priorPerformanceVerdict:"DEFER",parametersValidatedByBacktest:false
 });
-// Bounded so a bar of refusals cannot stretch the run past the one-minute cadence.
-const ENTRY_ATTEMPTS_PER_RUN=3;
-// Wall-clock companion to the attempt count. A deferred candidate no longer ends the
-// run (see runEntryQueue), so the attempt count alone no longer bounds it: an E1
-// fast-weak watch can wait up to E1_POLICY.watchMs per attempt. Stop STARTING new
-// attempts past this point; an attempt already running is never cut short.
+// (2026-09-25) There is no fixed number of entry attempts per run any more (it was 3, and a
+// fill ended the run). The run admits GPT BUY candidates one at a time while the account has
+// capacity for another full slot (entry-capacity.mjs), a candidate is left, and the cycle's
+// lease budget can still FINISH one more attempt. That last bound is a safety limit, not a
+// throttle: a gateway call refused by an exhausted budget at the order step marks the intent
+// RECONCILIATION_FAILED and opens the account circuit (dispatchEntryIocAttempt), and a fill
+// whose settlement or stop the budget cuts off waits a cycle for reconciliation, unprotected.
+// Sized from production, 2026-09-18..24: 84 filled attempts took <= 11.6 s from BOO admission
+// to outcome (p99 11.45 s), the claim and first reads ~2 s before that, and a GPT FINAL
+// RECHECK adds at most its 4 s request timeout. A single-IOC filled attempt makes ~22 budgeted
+// gateway calls (quote, symbol_info, portfolio and open orders at admission and again before
+// dispatch, fees and position mode for BOO, the E1 quote, the order, settlement, native stop),
+// 26 with an E1 recovery re-read.
+const ENTRY_ATTEMPT_RESERVE=Object.freeze({ms:20000,calls:26});
+// The bounded IOC retry is a second order inside the same attempt: fresh tape and quote, up to a
+// 4 s FINAL RECHECK, the account re-read, the order, its settlement and its stop (order to
+// outcome <= 9.0 s in production). It is only started when the budget can finish it.
+const IOC_RETRY_RESERVE=Object.freeze({ms:16000,calls:14});
+// Wall-clock companion to the budget reserve: an E1 fast-weak watch can wait up to
+// E1_POLICY.watchMs per attempt. Stop STARTING new attempts past this point; an attempt
+// already running is never cut short.
 const ENTRY_RUN_BUDGET_MS=40000;
 // A soft defer hands the claim back. Whether it should also END THE RUN depends on
 // WHOSE answer it was. An account-wide shortfall -- no free cash, the portfolio moved
@@ -78,6 +94,10 @@ const SLOT_BOUNDS=slotSizingBounds(SLOT_SIZING_CONTRACT),MAX_ORDER_MARGIN_USDT=S
 // uplift is applied inside the contract and is not restated.
 const IOC_MAX_BPS=SLOT_SIZING_CONTRACT.iocMaxBps;
 const MAX_SLOTS=10,ENTRY_CASH_BUFFER_USDT=.10,SPREAD_MAX=25,MAX_GAP_ATR=.5,BULL_MAX_MS=30*86400000,T1_PRICE=.075,PARTIAL=.30,TRAIL=.0225,SNAP_MAX=90000;
+// The most one slot can take from free margin (entry-capacity.mjs): the sizing contract's
+// margin ceiling plus the VIP-0 taker fee (0.05%) and the IOC price cap's open loss on that
+// notional -- 152.02 USDT at 150 x 3. A slot is never made smaller to fit more of them.
+const ENTRY_SLOT_COST_USDT=slotCostUsdt({maxOrderMarginUsdt:MAX_ORDER_MARGIN_USDT,leverage:LEV,takerFeeRate:.0005,iocMaxBps:IOC_MAX_BPS});
 // A leader signal no longer buys on sight; it arms a setup that watches for a
 // pullback and a re-acceleration for up to SETUP_POLICY.setupTtlMs. The queue must
 // therefore keep looking at a signal for that long, so the candidate window is the
@@ -89,9 +109,14 @@ const SIGNAL_MAX=SETUP_POLICY.setupTtlMs+300000;
 // from its stamp alone. No env var or request can move it.
 const SETUP_LIVE_CUTOVER=Date.parse("2026-09-17T00:00:00.000Z");
 // Policy-scoped admission limit for the new entry timing, applied ONLY to positions
-// carrying this policy's stamp. It is deliberately separate from MAX_SLOTS: the
-// account-wide risk limit is the operator's, and this change does not touch it.
-const SETUP_MAX_CONCURRENT=4;
+// carrying this policy's stamp. It was 2 for the policy's first live window (2026-09-17)
+// and 4 from 2026-09-20. It never refused a candidate in production (0 rows with
+// V17_SETUP_POLICY_SLOT_LIMIT) and the account never held more than 2 positions at once.
+// Every V17 entry now carries the stamp, so any value below MAX_SLOTS is a second, hidden
+// account cap: it is the operator's own MAX_SLOTS (2026-09-25). It counts positions the
+// policy HOLDS, never candidates still waiting for GPT -- how many of those can enter is
+// decided after GPT, from the account (entry-capacity.mjs).
+const SETUP_MAX_CONCURRENT=MAX_SLOTS;
 // Each setup advance is one klines read. Bounding the pass on the wall clock keeps a
 // full queue of watched setups from eating the run budget the entry attempts need.
 const SETUP_ADVANCE_BUDGET_MS=12000;
@@ -1321,6 +1346,8 @@ const baseIntentPayload={price_tick:filters.priceTick,min_notional_usdt:filters.
   // Cohort evidence: the refusal this candidate carried into this attempt (e.g. ENTRY_PER_RUN_LIMIT
   // = entered by the follow-up cycle); an aged BUY shows INITIAL_ANSWER_AGED in entry_final_recheck.
   entry_lifecycle_prior:rec(s.features).entryLifecycle??null,
+  // Which of this run's admissions this order is, and the account capacity it was admitted on.
+  entry_capacity:attempt.capacity??null,
   sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,order_notional_usdt:sized.orderNotionalUsdt,
   sizing_bound_by:sized.boundBy,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,
   setup_max_concurrent:SETUP_MAX_CONCURRENT,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION,
@@ -1380,6 +1407,11 @@ if(first.receipt.quantity>0){
 }
 if(IOC_RETRY_POLICY.maxAttempts<2)return await finishPartialOrAbort("IOC_RETRY_EXHAUSTED",{executionAttempts:1});
 if(!retryArmed)return await finishPartialOrAbort("IOC_RETRY_AUTHORITY_INVALID",{executionAttempts:1});
+// The retry is a second order inside this cycle's lease budget, so it starts only when the budget
+// can also settle and protect it (IOC_RETRY_RESERVE). Otherwise the attempt ends here: a partial
+// fill keeps its protected position, a zero fill ends with nothing held.
+if(!budgetCovers(cycleBudgets.get(db),IOC_RETRY_RESERVE))
+  return await finishPartialOrAbort("IOC_RETRY_EXHAUSTED:CYCLE_BUDGET_RESERVE",{executionAttempts:1});
 
 // Retry decision point: fresh tape+book first. A meaningful change invokes bounded FINAL
 // RECHECK sequence #2; no change keeps the still-valid previous GPT decision.
@@ -2224,6 +2256,28 @@ async function run(db) {
     }
   }
 }
+// Account state the entry capacity is computed from (entry-capacity.mjs); `pair` is readOpsPair's.
+function capacityInputs(pair,snapshot){
+  return {livePositions:Array.isArray(pair?.pf?.positions)?pair.pf.positions:[],liveAvailableUsdt:pair?.pf?.available_quote,
+    dbPositions:Array.isArray(pair?.positions)?pair.positions:[],orders:Array.isArray(pair?.orders)?pair.orders:[],
+    quarantinedOrderIds:(pair?.match?.issues??[]).filter(i=>i?.controlScope===CONTROL_SCOPE.SYMBOL_QUARANTINE&&i?.orderId!=null).map(i=>String(i.orderId)),
+    snapshot:snapshot?{availableUsdt:snapshot.available_quote,capturedAtMs:Date.parse(snapshot.captured_at)}:null};
+}
+function admissionCapacity(view,ledger){
+  return entryCapacity({maxSlots:MAX_SLOTS,slotCost:ENTRY_SLOT_COST_USDT,cashBufferUsdt:ENTRY_CASH_BUFFER_USDT,...view,ledger});
+}
+// After a fill: the exchange portfolio, the DB positions and unresolved orders, and the account
+// snapshot, read again. Anything unreadable or stale throws and the caller stops admitting.
+async function refreshCapacityInputs(db){
+  const [fresh,sn]=await Promise.all([readOpsPair(db),snap(db)]);
+  if(!freshPortfolio(fresh.pf))throw Error("CAPACITY_PORTFOLIO_STALE");
+  return capacityInputs(fresh,sn);
+}
+function entrySummary(e){
+  return {symbol:e?.symbol??null,positionId:e?.positionId??null,reason:e?.reason??null,sizedMarginUsdt:N(e?.sizedMarginUsdt,null),
+    quantity:N(e?.quantity,null),entryPrice:N(e?.entryPrice,null),executionAttempts:e?.executionAttempts??null,
+    protection:e?.entryProtection?.status??null};
+}
 async function runEntryQueue(db,pair,manual,blockedSymbols=new Set(),backlogComplete=true) {
   const openNow=pair.positions;
   let entry={entered:false,reason:"V17_NO_ENTRY"};
@@ -2353,9 +2407,11 @@ triggered.sort((a,b)=>Number(a.state.triggerAt)-Number(b.state.triggerAt)||
   String(a.row.symbol).localeCompare(String(b.row.symbol))||String(a.row.id).localeCompare(String(b.row.id)));
 for(const advanced of triggered){
   const row=advanced.row,state=advanced.state;
-  // Policy-scoped admission limit. It narrows this policy's own exposure during its
-  // first live window; it never widens, and it never touches MAX_SLOTS.
-  if(policyOpen+executable.filter(setupGoverns).length>=SETUP_MAX_CONCURRENT){
+  // Policy-scoped admission limit (= MAX_SLOTS, see SETUP_MAX_CONCURRENT). It counts the
+  // positions this policy holds. Candidates are NOT counted here: a pre-GPT cap on how many
+  // candidates may be reviewed would leave a slot empty whenever GPT skips one of them while
+  // an unreviewed BUY waits. Capacity is decided after GPT by the entry loop below.
+  if(policyOpen>=SETUP_MAX_CONCURRENT){
     entry={entered:false,reason:"V17_SETUP_POLICY_SLOT_LIMIT"};
     await noteEntryLifecycle(db,row,lifecycleNote({at:Date.now(),stage:"POLICY_SLOT",reason:"V17_SETUP_POLICY_SLOT_LIMIT"}));
     continue;
@@ -2390,20 +2446,44 @@ for(const review of gptReviewed.reviews??[]){
   }
   await noteEntryLifecycle(db,row,lifecycleNote({at:Date.now(),stage:"GPT_REVIEW",reason:review.reason,gptDecision:review.storedDecision??null}));
 }
-const runDeadline=Date.now()+ENTRY_RUN_BUDGET_MS;
-let attempts=0;
 const queued=gptReviewed.candidates;
 // Candidates this run did not reach keep their claim-free NEW status; the note names why.
 const noteRest=async(from,reason)=>{for(const r of queued.slice(from))
   await noteEntryLifecycle(db,r,lifecycleNote({at:Date.now(),stage:"QUEUE",reason,gptDecision:"BUY"}));};
+// Multi-slot admission (2026-09-25, entry-capacity.mjs). GPT BUY candidates are admitted ONE AT A
+// TIME, in queue order, for as long as the account has room for another full slot. After every
+// fill the exchange portfolio, the DB positions and the unresolved orders are read again and
+// capacity is recomputed with this run's own fills booked in a ledger, so neither a lagging
+// exchange view nor a DB row that does not exist yet can be read as a free slot, and nothing is
+// ever dispatched in parallel. A refusal about one symbol moves on to the next candidate. A
+// refusal about the account, an account that cannot be re-read, or a cycle budget that could not
+// finish another attempt ends the run, and every GPT BUY it did not reach is noted with the
+// reason. Every slot still empty at the end is accounted for (unusedSlotAccounting).
+const runDeadline=Date.now()+ENTRY_RUN_BUDGET_MS,triggerOf=new Map(triggered.map(t=>[String(t.row.id),t.state]));
+const ledger=[],entries=[],refusals=[];
+let view=capacityInputs(pair,null),cap=admissionCapacity(view,ledger),stop=null,unreached=0,lastEntered=null;
+const initialCapacity=cap;
 for(const [index,s] of queued.entries()){
-  if(attempts>=ENTRY_ATTEMPTS_PER_RUN){entry={entered:false,reason:"ENTRY_ATTEMPTS_EXHAUSTED"};await noteRest(index,entry.reason);break}
-  if(Date.now()>=runDeadline){entry={entered:false,reason:"ENTRY_RUN_BUDGET_EXHAUSTED"};await noteRest(index,entry.reason);break}
+  // An unreadable account before the first entry is left to openBull, which fails the cycle on it
+  // as before; after a fill it ends the run here (fail closed).
+  if(cap.capacity<1&&(entries.length>0||cap.reason!==UNUSED_SLOT_REASON.ACCOUNT_SAFETY_BLOCK)){
+    stop={reason:cap.reason,detail:cap.detail};entry={entered:false,reason:`${cap.reason}:${cap.detail}`};
+    await noteRest(index,entry.reason);break}
+  if(Date.now()>=runDeadline||!budgetCovers(cycleBudgets.get(db),ENTRY_ATTEMPT_RESERVE)){
+    const detail=Date.now()>=runDeadline?"ENTRY_RUN_BUDGET_EXHAUSTED":"CYCLE_BUDGET_RESERVE";
+    stop={reason:UNUSED_SLOT_REASON.EXECUTION_SAFETY_REJECT,detail};unreached=queued.length-index;
+    entry={entered:false,reason:`${UNUSED_SLOT_REASON.EXECUTION_SAFETY_REJECT}:${detail}`};await noteRest(index,entry.reason);break}
+  // An earlier entry takes ~10 s: this candidate's 60 s trigger window may have closed meanwhile.
+  const trigger=triggerOf.get(String(s.id));
+  if(trigger&&Date.now()>=N(trigger.triggerExpiresAt,0)){
+    entry={entered:false,reason:SETUP_REASON.TRIGGER_STALE};refusals.push(slotReasonOf(entry.reason));
+    await noteEntryLifecycle(db,s,lifecycleNote({at:Date.now(),stage:"QUEUE",reason:entry.reason,gptDecision:"BUY"}));
+    continue}
   const cl=await db.from("v11_long_regime_signals").update({status:"CLAIMED",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","NEW").select("*").maybeSingle();
   if(cl.error)throw new Error(`CLAIM:${cl.error.message}`);
   if(!cl.data){entry={entered:false,reason:"CLAIM_RACE"};continue}
-  attempts++;
-  const attempt={dispatched:false};
+  const attempt={dispatched:false,capacity:{version:cap.version,runEntryIndex:entries.length+1,capacity:cap.capacity,
+    usedSlots:cap.usedSlots,maxSlots:cap.maxSlots,freeMarginUsdt:cap.freeMarginUsdt,slotCostUsdt:cap.slotCostUsdt}};
   try{
     entry=await openBull(db,cl.data,openNow,manual,attempt,typeof pair==="undefined"?[]:pair.managementFailures??[]);
     await audit(db,null,"BULL","BULL",entry?.entered?"ENTRY_ALLOW":"ENTRY_DEFER",
@@ -2417,7 +2497,9 @@ for(const [index,s] of queued.entries()){
       // The released candidate carries the refusal it came back with (its window-close label).
       const released={...rec(cl.data.features),entryLifecycle:lifecycleNote({at:Date.now(),stage:"EXECUTION",reason:entry.reason,gptDecision:"BUY"})};
       await db.from("v11_long_regime_signals").update({status:"NEW",updated_at:new Date().toISOString(),features:released}).eq("id",s.id).eq("status","CLAIMED");
-      if(releaseStopsRun(entry))break;
+      if(releaseStopsRun(entry)){stop={reason:accountStopReason(entry.reason),detail:String(entry.reason??"").slice(0,200)};
+        await noteRest(index+1,`${stop.reason}:${stop.detail}`);break}
+      refusals.push(slotReasonOf(entry.reason));
       continue;
     }
     // A refusal that is final for this candidate (it can never enter this trigger) is terminal
@@ -2425,17 +2507,24 @@ for(const [index,s] of queued.entries()){
     if(entry?.terminal&&entry?.entered!==true){
       await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:String(entry.terminal).slice(0,500),
         updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","CLAIMED");
+      refusals.push(slotReasonOf(entry.terminal));
       continue;
     }
-    // One run opens at most one position. GPT BUY candidates it did not reach are noted and,
-    // while one can still be rechecked in its window, ONE follow-up cycle is armed for them.
     if(entry?.entered===true){
-      const rest=queued.slice(index+1);let followUpArmed=false;
-      try{await noteRest(index+1,"ENTRY_PER_RUN_LIMIT");followUpArmed=rest.length>0&&gptArmFollowUp(db,rest);}
-      catch{/* evidence and scheduling only: never turns an entry into a refusal */}
-      entry={...entry,remainingGptBuys:rest.length,followUpArmed};
-      break;
+      // Book the fill BEFORE reading the account again: until both views show it, the ledger is
+      // what keeps its slot and its margin from being counted as free.
+      lastEntered=entry;ledger.push(ledgerEntry(entry,Date.now()));entries.push(entrySummary(entry));
+      try{view=await refreshCapacityInputs(db);cap=admissionCapacity(view,ledger);}
+      catch(error){
+        cap=admissionCapacity(view,ledger);
+        stop={reason:UNUSED_SLOT_REASON.ACCOUNT_SAFETY_BLOCK,detail:`CAPACITY_REFRESH_FAILED:${String(error?.message??error).slice(0,120)}`};
+        await noteRest(index+1,`${stop.reason}:${stop.detail}`);break;
+      }
+      continue;
     }
+    // Refused and already closed by openBull (E1 reject, FINAL RECHECK, IOC without a fill):
+    // nothing is held, so the slot stays free for the next candidate.
+    refusals.push(slotReasonOf(entry?.reason));
   }catch(e){
     const msg=e instanceof Error?e.message:String(e),pending=await db.from("v11_long_regime_orders").select("id").eq("signal_id",s.id).eq("state","RECONCILIATION_FAILED").limit(1);
     if(!pending.data?.length)await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",s.id);
@@ -2446,10 +2535,17 @@ for(const [index,s] of queued.entries()){
       booAdmission:attempt.booAdmission??null,booPredispatch:attempt.booPredispatch??null})
       .catch(()=>console.error("V17_ENTRY_REJECTION_AUDIT_FAILED",s.id));
     if(!ENTRY_SKIP_SYMBOL_SCOPED.test(msg))throw e;
-    entry={entered:false,reason:msg};
+    entry={entered:false,reason:msg};refusals.push(slotReasonOf(msg));
   }
 }
-return entry;
+const unusedSlots=unusedSlotAccounting(cap,{stop,refusals,unreached}),rest=unreached?queued.slice(queued.length-unreached):[];
+// A BUY the cycle budget did not reach can still be taken by ONE follow-up cycle (a fresh
+// budget) while its trigger window allows a recheck.
+let followUpArmed=false;
+if(rest.length){try{followUpArmed=gptArmFollowUp(db,rest)===true;}catch{/* scheduling only */}}
+const capacity={version:ENTRY_CAPACITY_VERSION,initial:initialCapacity,final:cap,unusedSlots};
+if(lastEntered)return {...lastEntered,entered:true,entries,entryCount:entries.length,capacity,remainingGptBuys:rest.length,followUpArmed};
+return {...entry,capacity,remainingGptBuys:rest.length,followUpArmed};
 }
 
 async function requireLeaderEntryControls(db){
@@ -2894,6 +2990,9 @@ Deno.serve(async req=>{
           baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,observationIntervalMs:1000},
         maxSlots:MAX_SLOTS,runtime:rt.data,marketState:m,snapshotAgeMs:sn.ageMs,
         availableUsdt:Math.min(N(sn.available_quote),N(pf?.available_quote)),
+        entryCapacity:{version:ENTRY_CAPACITY_VERSION,slotCostUsdt:ENTRY_SLOT_COST_USDT,cashBufferUsdt:ENTRY_CASH_BUFFER_USDT,
+          attemptReserve:ENTRY_ATTEMPT_RESERVE,iocRetryReserve:IOC_RETRY_RESERVE,
+          marginSlots:Math.max(0,Math.floor((Math.min(N(sn.available_quote),N(pf?.available_quote))-ENTRY_CASH_BUFFER_USDT+1e-9)/ENTRY_SLOT_COST_USDT))},
         externalPositions:active(pf).map(x=>({symbol:sym(x),quantity:qty(x)})),
         openPositions:(op.data||[]).map(p=>({...p,metadata:{
           executorPatch:rec(p.metadata).executorPatch,

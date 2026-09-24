@@ -1,32 +1,260 @@
 {
-  "baseline": {"patch": "FD1-BOUNDED-RETRY-AUTHORITY-2", "commit": "dba40b4e9c115088eb1835c6a76ee28cc0946f3a"},
-  "candidate": {"patch": "FD1-OPPORTUNITY-REFINEMENT-1"},
+  "baseline": {
+    "patch": "FD1-BOUNDED-RETRY-AUTHORITY-2",
+    "commit": "dba40b4e9c115088eb1835c6a76ee28cc0946f3a"
+  },
+  "candidate": {
+    "patch": "FD1-OPPORTUNITY-REFINEMENT-1"
+  },
   "data_cutoff_utc": "2026-09-24T18:57:00Z",
   "units": "USDT per 450 USDT notional unless noted; 60m model = entry at trigger/chase close, native stop -2.5%, else 60m close, 0.1% fee",
   "fd1_window": {
     "from_utc": "2026-09-24T04:20:00Z",
-    "gpt_entry_reviews": 35, "gpt_buy": 28, "filled": 9, "recheck_skip": 6, "ioc_no_fill": 3, "buy_orphans_after_0730": 7,
-    "abstain": {"n": 5, "no_flag": 4, "missed_60m_all": 14.3, "missed_60m_post_upgrade": 26.0,
-      "cases": {"LSK 08:06 HARD PREMIUM_EXTREME": -11.70, "BROCCOLI714 12:43": 7.01, "CFG 15:38": -0.74, "RIVER 15:45": 10.37, "RIVER 16:10": 9.36}},
-    "opportunity_capture_60m": {"pool": 359.76, "baseline_pct": 8.3, "candidate_all_in_pct": 45.2},
+    "gpt_entry_reviews": 35,
+    "gpt_buy": 28,
+    "filled": 9,
+    "recheck_skip": 6,
+    "ioc_no_fill": 3,
+    "buy_orphans_after_0730": 7,
+    "abstain": {
+      "n": 5,
+      "no_flag": 4,
+      "missed_60m_all": 14.3,
+      "missed_60m_post_upgrade": 26.0,
+      "cases": {
+        "LSK 08:06 HARD PREMIUM_EXTREME": -11.7,
+        "BROCCOLI714 12:43": 7.01,
+        "CFG 15:38": -0.74,
+        "RIVER 15:45": 10.37,
+        "RIVER 16:10": 9.36
+      }
+    },
+    "opportunity_capture_60m": {
+      "pool": 359.76,
+      "baseline_pct": 8.3,
+      "candidate_all_in_pct": 45.2
+    },
     "buy_precision_60m_pct": 35.7
   },
   "replay_table": {
-    "baseline_realized": {"n": 9, "net": -18.40, "pf": 0.658, "win_pct": 22.2, "avg_win": 17.68, "avg_loss": -7.68, "max_loss": -11.22},
-    "baseline_60m": {"n": 9, "net": -48.81, "pf": 0.379, "win_pct": 11.1, "avg_win": 29.83, "avg_loss": -9.83, "max_loss": -11.70},
-    "candidate_all_in_60m": {"n": 27, "net": -1.80, "pf": 0.989, "win_pct": 33.3, "avg_win": 18.05, "avg_loss": -9.12, "max_loss": -11.70},
-    "components": {"orphan_recovery": -46.85, "ioc_retry": 52.76, "live_chase": 24.46, "abstain_to_buy": 16.64},
-    "expected_with_gpt_rates": {"no_orphans": 21.0, "with_orphans": -25.85,
-      "assumptions": "IOC retry fill 0.70; GPT BUY share 0.80 for LIVE chase and no-flag ABSTAIN with no selection skill"}
+    "baseline_realized": {
+      "n": 9,
+      "net": -18.4,
+      "pf": 0.658,
+      "win_pct": 22.2,
+      "avg_win": 17.68,
+      "avg_loss": -7.68,
+      "max_loss": -11.22
+    },
+    "baseline_60m": {
+      "n": 9,
+      "net": -48.81,
+      "pf": 0.379,
+      "win_pct": 11.1,
+      "avg_win": 29.83,
+      "avg_loss": -9.83,
+      "max_loss": -11.7
+    },
+    "candidate_all_in_60m": {
+      "n": 27,
+      "net": -1.8,
+      "pf": 0.989,
+      "win_pct": 33.3,
+      "avg_win": 18.05,
+      "avg_loss": -9.12,
+      "max_loss": -11.7
+    },
+    "components": {
+      "orphan_recovery": -46.85,
+      "ioc_retry": 52.76,
+      "live_chase": 24.46,
+      "abstain_to_buy": 16.64
+    },
+    "expected_with_gpt_rates": {
+      "no_orphans": 21.0,
+      "with_orphans": -25.85,
+      "assumptions": "IOC retry fill 0.70; GPT BUY share 0.80 for LIVE chase and no-flag ABSTAIN with no selection skill"
+    }
   },
   "full_data": {
-    "chase_counterfactual_60m": {"DEAD": {"n": 159, "sum": -414.4}, "LIVE": {"n": 129, "sum": 101.3},
-      "UNCERTAIN": {"n": 32, "sum": -149.3}, "NO_DATA": {"n": 62, "sum": -128.0}, "journal_reported_sum_60m": 1945.6},
-    "ioc": {"attempt1": 119, "filled": 83, "fill_pct": 69.7, "attempt2_sent": 0, "no_fill_missed_60m": 69.9, "no_fill_missed_30m": 5.7},
-    "abstain_replay_after_0917": {"no_flag_n": 46, "mean_r60_pct": -1.00, "buy_no_flag_n": 227, "buy_mean_r60_pct": -0.25},
+    "chase_counterfactual_60m": {
+      "DEAD": {
+        "n": 159,
+        "sum": -414.4
+      },
+      "LIVE": {
+        "n": 129,
+        "sum": 101.3
+      },
+      "UNCERTAIN": {
+        "n": 32,
+        "sum": -149.3
+      },
+      "NO_DATA": {
+        "n": 62,
+        "sum": -128.0
+      },
+      "journal_reported_sum_60m": 1945.6
+    },
+    "ioc": {
+      "attempt1": 119,
+      "filled": 83,
+      "fill_pct": 69.7,
+      "attempt2_sent": 0,
+      "no_fill_missed_60m": 69.9,
+      "no_fill_missed_30m": 5.7
+    },
+    "abstain_replay_after_0917": {
+      "no_flag_n": 46,
+      "mean_r60_pct": -1.0,
+      "buy_no_flag_n": 227,
+      "buy_mean_r60_pct": -0.25
+    },
     "all_in_effect_estimate": -232
   },
-  "production_lifecycle": {"stale_new_rows_without_reason": 29, "legacy_no_setup": 20, "never_triggered_setups": 9,
-    "live_orphan_at_cutoff": "LINKUSDT 18:48 GPT BUY, GPT_REVIEW_EXPIRED 1 s before dispatch"},
-  "tests": {"node_main": "375/375 (baseline 342/342)", "test_support": "405/409 (4 pre-existing failures, same as baseline)", "deno": "1055/1055"}
+  "production_lifecycle": {
+    "stale_new_rows_without_reason": 29,
+    "legacy_no_setup": 20,
+    "never_triggered_setups": 9,
+    "live_orphan_at_cutoff": "LINKUSDT 18:48 GPT BUY, GPT_REVIEW_EXPIRED 1 s before dispatch"
+  },
+  "tests": {
+    "node_main": "375/375 (baseline 342/342)",
+    "test_support": "405/409 (4 pre-existing failures, same as baseline)",
+    "deno": "1055/1055"
+  },
+  "phase2_multislot": {
+    "patch": "FD1-MULTISLOT-CAPACITY-1",
+    "capacity_rule": "min(MAX_SLOTS - used_slots, floor((free_margin - 0.10) / 152.021375), valid GPT BUYs), re-read after every fill",
+    "slot_cost_usdt": {
+      "target_margin": 150,
+      "lot_step_ceiling": 151.25,
+      "taker_fee_rate": 0.0005,
+      "ioc_price_cap_bps": 12,
+      "total": 152.021375
+    },
+    "capacity_table": [
+      [
+        149,
+        0,
+        0
+      ],
+      [
+        152.13,
+        1,
+        1
+      ],
+      [
+        345,
+        2,
+        2
+      ],
+      [
+        470,
+        3,
+        3
+      ],
+      [
+        620,
+        4,
+        4
+      ],
+      [
+        1000,
+        6,
+        6
+      ],
+      [
+        1500,
+        9,
+        9
+      ],
+      [
+        1520.32,
+        10,
+        10
+      ],
+      [
+        5000,
+        10,
+        10
+      ]
+    ],
+    "capacity_table_columns": [
+      "available_usdt",
+      "expected",
+      "actual_run_of_12_buys"
+    ],
+    "same_trigger_multi_buy_fd1": [
+      {
+        "trigger": "2026-09-24T16:16:00Z",
+        "filled": "USELESSUSDT (150.20)",
+        "untried": "CHIPUSDT",
+        "available_before": 361.09,
+        "available_after": 210.16,
+        "untried_n60": -0.05,
+        "untried_n30": 3.64
+      },
+      {
+        "trigger": "2026-09-24T17:17:00Z",
+        "filled": "QNTUSDT (148.81)",
+        "untried": "TRBUSDT",
+        "available_before": 351.67,
+        "available_after": 202.86,
+        "untried_n60": -11.7,
+        "untried_n30": -6.8
+      }
+    ],
+    "attempt_duration_s_boo_to_outcome_since_0918": {
+      "entered": {
+        "n": 84,
+        "p50": 8.71,
+        "p90": 9.8,
+        "p99": 11.45,
+        "max": 11.57
+      },
+      "dispatched_no_entry": {
+        "n": 36,
+        "p50": 4.48,
+        "p99": 6.97,
+        "max": 7.4
+      },
+      "not_dispatched": {
+        "n": 60,
+        "p50": 1.63,
+        "p99": 15.43,
+        "max": 30.03
+      }
+    },
+    "reserves": {
+      "entry_attempt": {
+        "ms": 20000,
+        "calls": 26
+      },
+      "ioc_retry": {
+        "ms": 16000,
+        "calls": 14
+      },
+      "cycle_budget": {
+        "ms": 55000,
+        "calls": 160
+      }
+    },
+    "caps": {
+      "break_after_first_fill": "removed (sequential admission)",
+      "ENTRY_ATTEMPTS_PER_RUN_3": "removed (dynamic)",
+      "SETUP_MAX_CONCURRENT_4": "= MAX_SLOTS, held positions only (0 production refusals; max concurrency observed 2)",
+      "MAX_SLOTS_10": "kept",
+      "entry_control": "kept",
+      "cycle_budget": "kept (safety)",
+      "queue_limit_10": "kept (14/958 windows >10 live signals)",
+      "boo_max_concurrent_positions_1": "kept, latent (OBSERVE only)",
+      "gpt_daily_cap_300": "kept (55 used 2026-09-24)"
+    },
+    "tests": {
+      "node_main": "387/387",
+      "test_support": "435/439 (same 4 pre-existing qv3 failures)",
+      "deno": "1055/1055"
+    }
+  }
 }

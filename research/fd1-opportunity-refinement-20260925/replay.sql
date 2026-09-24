@@ -77,3 +77,60 @@ from public.v11_long_regime_signals s
 where s.status='NEW' and s.reject_reason is null and s.lane='BULL' and s.revision='V11-LONG-REGIME-1.0.1'
   and s.features->>'strategy'='LEADER_MOMENTUM_V17' and s.entry_bar_at < now()-interval '20 minutes'
 group by 1;
+
+-- ===== Phase 2: dynamic multi-slot admission =====
+
+-- 6. Same-trigger GPT BUY groups in the FD1 window: which BUYs were ordered/filled (the one-entry-per-run loss).
+with e as (
+  select distinct on (r.signal_id) r.signal_id, r.decision, s.symbol,
+    to_timestamp((s.features->'v17Setup'->>'triggerAt')::bigint/1000.0) trig,
+    exists(select 1 from public.v11_long_regime_orders o where o.signal_id=s.id and o.intent='OPEN_LONG') ordered,
+    exists(select 1 from public.v11_long_regime_positions p where p.signal_id=s.id) filled
+  from public.gpt_final_entry_reviews r join public.v11_long_regime_signals s on s.id::text=r.signal_id
+  where r.purpose='PRODUCTION' and coalesce(r.record->>'kind','')<>'FD1_FINAL_RECHECK'
+    and coalesce(r.record->'packet'->>'task','ENTRY')='ENTRY' and r.created_at>='2026-09-24 04:20'
+  order by r.signal_id, r.created_at)
+select trig, count(*) filter (where decision='BUY') buys, count(*) filter (where decision='BUY' and filled) filled,
+  string_agg(symbol||':'||decision||case when filled then '(F)' when ordered then '(O)' else '' end, ' ' order by symbol) syms
+from e group by trig having count(*) filter (where decision='BUY')>=2 order by trig;
+
+-- 7. Free margin around those fills (account snapshots).
+select captured_at, available_quote, jsonb_array_length(coalesce(positions,'[]'::jsonb)) positions
+from public.trading_account_snapshots where exchange='binance_futures'
+  and (captured_at between '2026-09-24 16:15:30+00' and '2026-09-24 16:18:30+00'
+    or captured_at between '2026-09-24 17:15:30+00' and '2026-09-24 17:19:30+00')
+order by captured_at;
+
+-- 8. Per-attempt duration (BOO admission -> ENTRY_ATTEMPT_OUTCOME) behind ENTRY_ATTEMPT_RESERVE.
+with o as (
+  select d.decided_at out_at, d.details->>'signalId' sid, (d.details->>'orderDispatched')::boolean dispatched,
+    (d.details->>'entered')::boolean entered
+  from public.v11_long_regime_decisions d
+  where d.decided_at >= '2026-09-18' and d.details->>'stage'='ENTRY_ATTEMPT_OUTCOME'),
+s as (select o.*, (select min(b.created_at) from public.boo_entry_gate_decisions b where b.signal_id::text=o.sid
+   and b.phase='ADMISSION' and b.created_at between o.out_at - interval '90 seconds' and o.out_at) adm from o)
+select case when entered then 'ENTERED' when dispatched then 'DISPATCHED_NO_ENTRY' else 'NOT_DISPATCHED' end k, count(*) n,
+  round(percentile_cont(0.5) within group (order by extract(epoch from out_at-adm))::numeric,2) p50,
+  round(percentile_cont(0.99) within group (order by extract(epoch from out_at-adm))::numeric,2) p99,
+  round(max(extract(epoch from out_at-adm))::numeric,2) mx
+from s group by 1 order by 1;
+
+-- 9. Concurrency actually reached since the pullback policy went live, and policy-cap refusals.
+with p as (select id, entry_at, coalesce(closed_at, now()) closed_at, realized_pnl_usdt
+  from public.v11_long_regime_positions where entry_at >= '2026-09-17')
+select (select count(*) from p q where q.entry_at <= p.entry_at and q.closed_at > p.entry_at) concurrent_at_entry,
+  count(*) n, round(sum(realized_pnl_usdt)::numeric,2) pnl
+from p group by 1 order by 1;
+select count(*) policy_slot_limit_rejections from public.v11_long_regime_signals where reject_reason like '%V17_SETUP_POLICY_SLOT_LIMIT%';
+
+-- 10. How often more than 10 signals were live inside a 20-minute window (the queue's .limit(10) work bound).
+with b as (select entry_bar_at, count(*) n from public.v11_long_regime_signals
+  where revision='V11-LONG-REGIME-1.0.1' and lane='BULL' and features->>'strategy'='LEADER_MOMENTUM_V17'
+    and entry_bar_at>='2026-09-18' group by 1),
+w as (select b1.entry_bar_at, (select sum(b2.n) from b b2 where b2.entry_bar_at > b1.entry_bar_at - interval '20 minutes'
+  and b2.entry_bar_at <= b1.entry_bar_at) live_window from b b1)
+select count(*) filter (where live_window>10) windows_over_10, count(*) windows, max(live_window) max_live from w;
+
+-- 11. GPT calls per day against the 300/day cap.
+select date_trunc('day', created_at) d, count(*) n from public.gpt_final_entry_reviews
+where purpose='PRODUCTION' and created_at >= '2026-09-20' group by 1 order by 1;

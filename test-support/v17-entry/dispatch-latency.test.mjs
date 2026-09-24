@@ -320,7 +320,8 @@ test('6+7+18. a sizing refusal is symbol-scoped and the queue keeps going', () =
 });
 
 test('17. an ACCOUNT-wide refusal still stops the run', () => {
-  assert.match(QUEUE, /if\(releaseStopsRun\(entry\)\)break;/);
+  // (2026-09-25) It also names the stop for every GPT BUY it did not reach.
+  assert.match(QUEUE, /if\(releaseStopsRun\(entry\)\)\{stop=\{reason:accountStopReason\(entry\.reason\)[^\n]*\n\s*await noteRest\(index\+1,[^\n]*break\}/);
   assert.match(SRC, /function releaseStopsRun\(entry\)\{return entry\?\.releaseScope!==RELEASE_SCOPE\.SYMBOL\}/,
     'an unlabelled release must keep halting the run -- fail closed');
   for (const accountWide of ['ENTRY_MARGIN_INSUFFICIENT', 'PORTFOLIO_CHANGED_DURING_E1',

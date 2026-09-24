@@ -19,6 +19,7 @@ import * as review from '../../supabase/functions/_shared/leader-exit-review.mjs
 import * as adapter from '../../supabase/functions/_shared/leader-protection-adapter.mjs';
 import * as sizing from '../../supabase/functions/_shared/leader-slot-sizing.mjs';
 import * as setup from '../../supabase/functions/_shared/leader-pullback-reaccel.mjs';
+import * as capacity from '../../supabase/functions/v10-lane-executor/entry-capacity.mjs';
 
 const path = new URL('../../supabase/functions/v10-lane-executor/index.ts', import.meta.url);
 const source = readFileSync(path, 'utf8');
@@ -48,6 +49,8 @@ function evaluateModule(envVars = {}) {
     ...sizing,
     ...setup,
     setupIsTerminal: setup.isTerminal,
+    // (2026-09-25) the slot cost is computed at load: ENTRY_SLOT_COST_USDT=slotCostUsdt(...)
+    ...capacity,
   };
   vm.createContext(ctx);
   // A top-level `const` is not a property of the vm global, so hand it out explicitly.

@@ -136,3 +136,110 @@ GPT 선별률 가정(IOC 체결 70%, chase/ABSTAIN BUY 80%, 선별력 0): orphan
 ## 10–12
 
 `replay.sql`에 위 수치를 재현하는 읽기 전용 쿼리, `summary.json`에 수치를 둔다. 운영 판단·잔여 위험은 최종 보고 참고.
+
+---
+
+# Phase 2 — V17/FD1 동적 멀티슬롯 (2026-09-25, PATCH `FD1-MULTISLOT-CAPACITY-1`)
+
+## M1. 첫 체결 후 run이 끝난 이유
+`runEntryQueue`는 GPT BUY 후보를 순서대로 시도하다 `entry.entered===true`가 되면 `break`했다(Phase 1에서는 남은 BUY에
+`ENTRY_PER_RUN_LIMIT`을 적고 follow-up 1회를 걸었을 뿐, 같은 run에서는 시도하지 않았다). 여기에 고정 상한 두 개가 겹쳤다:
+`ENTRY_ATTEMPTS_PER_RUN=3`, 그리고 GPT 이전에 "보유 포지션 + 대기 후보"를 세던 `SETUP_MAX_CONCURRENT=4`.
+FD1 구간에서 같은 trigger 분에 GPT BUY가 2개 이상이었던 경우는 2건이고, 둘 다 두 번째 BUY가 한 번도 시도되지 않았다.
+
+| trigger | BUY | 첫 체결 | 체결 후 가용 | 두 번째 BUY | 60분 결과(450 기준) |
+|---|---|---|---:|---|---:|
+| 16:16 | USELESS, CHIP | USELESS 150.20 | 361.09→210.16 | CHIP 미시도 → 16:30 V17_SETUP_EXPIRED | CHIP −0.05 |
+| 17:17 | QNT, TRB | QNT 148.81 (17:17:22) | 351.67→202.86 | TRB 미시도 → 17:30 V17_SETUP_EXPIRED | TRB −11.70 |
+
+두 건 모두 두 번째 슬롯 증거금(≥152.13)이 있었다. 사후 60분 결과는 합계 −11.75라서 이번 변경은 수익 개선이 아니라
+"GPT가 BUY한 후보를 계좌 여력만큼 실행한다"는 정합성 수정이다(Phase 1 결론과 같다: 추가 거래의 PnL은 GPT 선별력에 달림).
+
+## M2. break 처리
+`break`를 지운 것이 아니라 순차 admission으로 바꿨다(`index.ts` runEntryQueue, `entry-capacity.mjs`):
+1. 시도 전: capacity ≥ 1, 사이클 lease 예산이 한 번의 시도를 끝까지 감당(`ENTRY_ATTEMPT_RESERVE` 20 s/26 calls),
+   후보의 60 s trigger 창이 아직 열려 있음.
+2. 체결 후: 체결을 run ledger에 먼저 기록(실제 체결 증거금·거래소 응답 시각) → 거래소 포트폴리오·DB OPEN 포지션·미해결
+   주문·계좌 snapshot을 다시 읽음(`refreshCapacityInputs`) → capacity 재계산 → 다음 후보.
+   재조회 실패·stale 포트폴리오면 `ACCOUNT_SAFETY_BLOCK:CAPACITY_REFRESH_FAILED`로 즉시 종료(fail closed, 체결은 유지).
+3. 심볼 단위 거절(SKIP/ABSTAIN, E1·spread·depth·drift, IOC 무체결, 중복 심볼)은 다음 후보로 진행.
+   계좌 단위 거절(증거금 부족, 슬롯 없음, 미해결 주문 hold, ACCOUNT_RISK/OPERATOR, 재조회 실패)은 종료.
+4. 주문은 절대 병렬로 보내지 않는다(openBull 호출 지점 1곳, 순차 await). 종료 사유는 남은 BUY 전부에 기록된다.
+
+## M3–M4. 숨은 동시성 상한 전수 조사
+
+| 상한 | 값 | 결정 | 근거 |
+|---|---|---|---|
+| run 내 `if(entry.entered) break` | 1/run | **제거→순차 admission** | QNT/TRB·CHIP/USELESS 2건 미시도 |
+| `ENTRY_ATTEMPTS_PER_RUN` | 3 | **제거→동적** | min(capacity, 유효 BUY, 사이클 예산) |
+| `SETUP_MAX_CONCURRENT` | 2→4 | **=MAX_SLOTS, 보유 포지션만 계수** | 운영 중 거절 0건, 최대 동시 보유 2. 모든 V17 진입이 stamp를 가지므로 사실상 숨은 계좌 상한 |
+| `MAX_SLOTS` | 10 | 유지 | operator 계약 |
+| `ENTRY_CASH_BUFFER_USDT` | 0.10 | 유지 | 기존 증거금 검사 |
+| entry control ACCOUNT_SLOT_LIMIT / MARGIN_LIMIT / PENDING_ORDER_IDENTITY / LIVE_ORDINARY_ORDER / UNBOUNDED_CONDITIONAL / native protection | — | 유지 | 계좌 안전 불변식(capacity가 PENDING hold를 같은 predicate로 반영, parity 테스트) |
+| 사이클 lease 예산 | 55 s / 160 calls | 유지(안전) | 예산 소진 상태의 create_order는 intent RECONCILIATION_FAILED + 계좌 circuit(`dispatchEntryIocAttempt`) |
+| `ENTRY_ATTEMPT_RESERVE` (신규) | 20 s / 26 calls | 신규 안전 한계 | 운영 체결 84건: BOO admission→결과 p99 11.45 s, max 11.57 s; +claim·첫 조회 ~2 s; recheck 요청 timeout 4 s. 단일 IOC 체결 ≈22 gateway calls(E1 recovery 26) |
+| `IOC_RETRY_RESERVE` (신규) | 16 s / 14 calls | 신규 안전 한계 | 재시도는 예산이 정산·보호까지 끝낼 수 있을 때만(아니면 `IOC_RETRY_EXHAUSTED:CYCLE_BUDGET_RESERVE`, 부분 체결은 보호된 채 유지) |
+| `ENTRY_RUN_BUDGET_MS` | 40 s | 유지(cadence) | E1 watch 대비 wall-clock |
+| lease TTL | 10분 / 잔여 60 s 검증 | 유지 | 한계가 아님 |
+| 후보 조회 `.limit(10)` | 10 | 유지(작업 상한) | 20분 창 >10 신호: 958 중 14(1.5%) |
+| `SETUP_ADVANCE_BUDGET_MS` | 12 s | 유지 | klines 읽기 상한 |
+| signal generator | 10 − 보유 | 유지 | POLICY.maxSlots=10과 일치 |
+| GPT 일일 한도 | 300 calls / $3 | 유지 | 9/24 사용 55 |
+| follow-up | 1회 / 30 s | 유지, 대상 확장 | 예산으로 못 닿은 BUY에도 1회 |
+| BOO `max_concurrent_positions` | 1 (PROTECTIVE_DEFAULTS) | 유지, 보고 | OBSERVE 모드에서만 운영 중이라 차단 안 함. **ENFORCE 전환 시 계좌를 1포지션으로 묶는 잠재 상한** — risk limit이라 변경하지 않음 |
+
+## M5. 증거금 기반 capacity
+`capacity = min(MAX_SLOTS − 사용 슬롯, floor((가용 − 0.10)/152.02), 유효 GPT BUY)`.
+152.02 = sizing 상한(151.25, lot-step overshoot) × (1 + 3 × (taker 0.05% + IOC 가격 상한 12 bps)). 슬롯은 항상 150이며,
+슬롯 수를 늘리려 개별 증거금을 줄이지 않는다. 사용 슬롯 = 거래소 포지션 ∪ DB OPEN ∪ 미해결 entry 주문 ∪ run ledger(심볼 기준).
+가용 = min(live − 화면에 아직 없는 ledger 체결, snapshot − 캡처 후 ledger 체결) − 미해결 entry 주문당 152.02.
+
+| Available Margin | Slot Margin | MAX_SLOTS | Expected Capacity | Actual Capacity |
+|---:|---|---:|---:|---:|
+| 149 | 150 (+2.02) | 10 | 0 | 0 |
+| 150 + buffer (≥152.13) | 150 (+2.02) | 10 | 1 | 1 |
+| 345 | 150 (+2.02) | 10 | 2 | 2 |
+| 470 | 150 (+2.02) | 10 | 3 | 3 |
+| 620 | 150 (+2.02) | 10 | 4 | 4 |
+| 1,000 | 150 (+2.02) | 10 | 6 | 6 |
+| 1,500 + buffer (≥1,520.32) | 150 (+2.02) | 10 | 10 | 10 |
+| (참고) 1,500.00 정확히 | 150 (+2.02) | 10 | 9 | 9 |
+
+"Actual"은 실제 runEntryQueue 루프를 12개 BUY로 돌린 결과(test-support/v17-exit/entry-queue.test.mjs). 1,500.00에서 9인 것은
+9번 체결 후 수수료·슬리피지로 145.50만 남아 10번째가 증거금 검사에서 거절되기 때문이다.
+
+## M6. QNT/TRB replay
+실제 루프·실제 capacity 코드로 17:17 재현: 351.67 → QNT 148.81 체결 → 재조회 202.86 → capacity 1 → TRB claim·openBull 도달
+(runEntryIndex 2, usedSlots 1). TRB의 GPT 답(17:17:11.6)은 17:17:26.6 이후 aged이므로 Phase 1의 강제 FINAL RECHECK를 거쳐야
+주문된다(trigger 17:18:00, 재확인 최소 여유 8 s + 예약 3 s). 첫 진입이 창을 넘기면 TRB는 `V17_TRIGGER_STALE`로 명시된다.
+
+## M7. 2/3/4/10 슬롯 시뮬레이션
+345→2, 470→3, 620→4, 5,000→10(12개 BUY, MAX_SLOTS 도달 후 나머지 2개 `MAX_SLOTS_REACHED:10/10`).
+보유 0–10 × BUY 1–10 전 조합(110개)에서 진입 수 = min(빈 슬롯, BUY 수), 남는 슬롯은 모두 NO_VALID_GPT_BUY.
+
+## M8. Oversubscription 방지 증명
+- 순차: 코드상 openBull 호출 지점 1곳, `Promise.all` 없음. 시뮬레이션에서 동시 진행 openBull 최대 1.
+- 재조회: 체결 i번째 이후의 admission은 정확히 i번 재조회한 뒤에만 일어난다(테스트로 고정).
+- 지연 방어: 거래소·DB·snapshot이 모두 체결 전 값(320)에 멈춰도 ledger만으로 2건에서 멈춤(실제 여력 2). ledger가 없으면
+  같은 화면으로 2건을 더 허용했을 것(=과다 사용).
+- 최종 관문은 그대로: openBull의 증거금 검사·entry control(ACCOUNT_SLOT/MARGIN_LIMIT, PENDING_ORDER_IDENTITY).
+- 단일 executor lease이므로 run 간 경합이 없고, claim은 NEW→CLAIMED CAS.
+
+## M9. 부분 체결
+부분 체결은 실제 체결 증거금으로 ledger에 기록되고 슬롯 1개를 차지한다. 400 USDT에서 첫 진입이 60 USDT만 체결되면
+재계산 capacity 2 → 두 건 더 진입(총 3). 150으로 기록했다면 1건만 가능했다.
+
+## M10. 첫 체결 후 포트폴리오 재조회
+`refreshCapacityInputs` = readOpsPair(DB 포지션·미해결 주문, 이어서 p10_portfolio) + trading_account_snapshots,
+`freshPortfolio` 3 s 검증. 실패/stale → ACCOUNT_SAFETY_BLOCK, 남은 BUY에 사유 기록, 체결 결과는 유지.
+
+## 남는 슬롯 사유(최종 점검)
+run 결과 `entry.capacity.unusedSlots.byReason`은 항상 `MAX_SLOTS − 사용 슬롯`과 합이 같고, 사유는
+NO_VALID_GPT_BUY / INSUFFICIENT_MARGIN / MAX_SLOTS_REACHED / EXECUTION_SAFETY_REJECT / ACCOUNT_SAFETY_BLOCK /
+PENDING_CAPITAL_RESERVED 중 하나뿐이다. "증거금 + 빈 슬롯 + 유효 GPT BUY"인데 슬롯이 남는 경로는 사이클 예산 부족
+(EXECUTION_SAFETY_REJECT:CYCLE_BUDGET_RESERVE, follow-up 1회로 인계)과 trigger 창 종료(V17_TRIGGER_STALE)뿐이며 둘 다 명시된다.
+
+## 테스트 (Phase 2)
+- node main: 387/387 (Phase 1 375 + capacity 11 + retry 예산 1).
+- test-support: 435/439. 실패 4건은 Phase 1 baseline과 같은 기존 실패(qv3 integration 23/33/34/36).
+- deno task test: 1055/1055. (task 밖의 slot-margin-200-usdt.test.ts 3건 실패는 baseline 동일 — 200 USDT 슬롯 고정값)
