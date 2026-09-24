@@ -65,3 +65,25 @@ Findings:
 - Not replay-validated (no historical books): book-based categories (spread, thin liquidity, sell wall, fill slippage). They are live only and observed in production.
 
 Production defect found and fixed during pre-deploy reconciliation: `v11_cec0040_decisions/targets` CHECK constraints rejected branch V30_SCORE, so every V30-only candidate failed CEC0040 (fail-closed) since the V30 cutover. Migration 20260924041645.
+
+## 4. Production deployment (KST 2026-09-24 13:19–13:22)
+
+- **Pre-deploy reconciliation (KST 13:09):**
+  - Binance: 0 positions, 0 normal orders, 0 conditional orders.
+  - DB: 0 open positions, 0 unresolved orders.
+  - Circuit closed, protection FLAT, GPT control ENFORCE ($3/300 per day).
+  - Sizing 200 USDT × 3, max 10 slots.
+  - Found `entry_block_reason = CEC0040 branch check violation`, a pre-existing V30 defect. Fixed by migration 20260924041645.
+- **Main changes merged first:**
+  - CEC advisory (14c257f/d7c50a4), reverted on data (§3).
+  - Continuation trigger (8895c28), kept as the operator deployed it. The release workflow permits exactly that file content. **Continuation triggers are not covered by the FD1 replay**, which used pullback triggers only. They still pass the V30, CEC and GPT gates.
+- **Executor deploys:**
+  - v77 at commit 8e8058d.
+  - v78 at commit ffe01b4, which narrows SELL_WALL to net imbalance after the live probe showed max-ask-level ≥10× is normal on liquid books.
+  - Both went through the release workflow: frozen-policy proof, 233/233 tests, deno check, version pin, bundle parity.
+- **Post-deploy (order-free `fd1-probe`):**
+  - v77 on SOLUSDT: entry SKIP, valid categories. HOLD was invalid (HOLD listing reasons) and fell back to the deterministic time exit, as designed.
+  - v78 on DOGEUSDT: entry SKIP with MOMENTUM_FADED and SIGNAL_INVALIDATED, valid, 2.2 s, $0.0036. HOLD valid, 1.6 s, so the time exit was deferred 15 minutes.
+  - Candles, microstructure and derivatives were complete. orderCalls = 0.
+- **Scheduled cycles** on FD1-GPT-FINAL-DECISION-1 returned HTTP 200 (KST 13:20, 13:21, 13:22).
+- **Unchanged:** native STOP_MARKET sync, R5, P142, 1% drift guard, lease/fencing, dedupe, circuit, 200 × 3, 10 slots.
