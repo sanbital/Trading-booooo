@@ -347,16 +347,16 @@ async function applyCec0040Selection(db,row,state){
     reason:d.ready!==true?String(d.reason??"CEC0040_STATE_NOT_READY"):
       d.effectiveAllowed===true?d.enforcementEnabled===true?`CEC0040_${d.action}`:`CEC0040_SHADOW_${d.action}`:"CEC0040_REJECT"};
   const features={...rec(row.features),cec0040:stamp},patch={features,updated_at:new Date(evaluatedAt).toISOString()};
-  // A real model rejection is terminal only after enforcement activation. State lag
-  // remains NEW and may retry inside the existing trigger TTL.
-  if(stamp.ready&&stamp.enforcementEnabled&&!stamp.effectiveAllowed){patch.status="REJECTED";patch.reject_reason=stamp.reason;}
+  // CEC0040 is advisory evidence for GPT, not a hard admission gate.
+  // Keep the exact causal stamp (including REJECT) without terminating the signal.
+  // A not-ready CEC state still defers because its evidence is incomplete.
   const write=await db.from("v11_long_regime_signals").update(patch).eq("id",row.id).eq("status","NEW").select("*").maybeSingle();
   if(write.error)throw Error(`CEC0040_WRITE:${write.error.message}`);
   if(!write.data)return {allowed:false,row,stamp:{...stamp,reason:"CEC0040_CAS_RACE"}};
   await audit(db,null,"BULL","BULL",stamp.effectiveAllowed?"ENTRY_ALLOW":"ENTRY_REJECT",stamp.reason,
     {signalId:row.id,symbol:row.symbol,stage:"CEC0040_ENTRY_CONTROL",finalAdmission:false,
       orderDispatched:false,cec0040:stamp});
-  return {allowed:stamp.ready&&stamp.effectiveAllowed,row:write.data,stamp};
+  return {allowed:stamp.ready,row:write.data,stamp};
 }
 
 async function registerCec0040Target(db,position,signal){
@@ -873,9 +873,8 @@ if(selection.version!==B06133_VERSION||Number(selection.source?.decisionAt)!==Nu
 if(!baselineAllowedV30(s,V30_FRONT_LIVE_VERSION)||!entryBranchOf(rec(s.features)))
   throw new Error("V30_SELECTION_INVALID");
 if(cec.version!==CEC0040_VERSION||cec.targetVersion!==CEC0040_TARGET_VERSION||cec.ready!==true||
-  cec.effectiveAllowed!==true||Number(cec.decisionAt)!==Number(selectedSetup?.triggerAt)||
-  !["ADMIT","PROBE","REJECT"].includes(cec.action)||
-  (cec.enforcementEnabled===true&&!["ADMIT","PROBE"].includes(cec.action)))
+  Number(cec.decisionAt)!==Number(selectedSetup?.triggerAt)||
+  !["ADMIT","PROBE","REJECT"].includes(cec.action))
   throw new Error("CEC0040_SELECTION_INVALID");
 const gptEntryCheck=gptFinalCheck(db,s);
 if(!gptEntryCheck.allowed)return{entered:false,reason:gptEntryCheck.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL};
