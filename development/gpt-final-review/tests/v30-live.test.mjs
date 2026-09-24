@@ -46,13 +46,9 @@ test('entry branch: B06133 branch when B06133 also admitted, V30_SCORE otherwise
   assert.equal(p142StyleForBranch('V30_SCORE'),'retestAnchor');
   assert.deepEqual(Object.keys(P142_STYLE_BY_BRANCH),['R62','BUYER_SHARE_RESCUE','BOTH','V30_SCORE']);
 });
-test('production coordinator uses the V6S prompt and the live baseline',async()=>{
-  const c=coordinatorFor({});assert.equal(c.profile,'V6S');assert.equal(c.baseline,baselineAllowedLive);
-  const s=b06133Rejected(),r=new FinalReviewCoordinator({config:config(),store:new MemoryReviewStore(),apiKey:()=>'MOCK',now:()=>T+1000,
-    market:async()=>marketData(s),fetchFn:transport(),profile:'V6S',baseline:baselineAllowedLive});
-  await r.consider(s);await Promise.all([...r.pending.values()]);const out=await r.consider(s);
-  assert.equal(out.decision,'PASS');assert.equal(r.check(s).allowed,true);
-  assert.equal(decisionIdentity(s).front_policy.b06133_allowed,false);
+test('production coordinator: FD1 engine (GPT final entry decision) on the live V30 baseline',()=>{
+  const c=coordinatorFor({});assert.equal(c.engine?.id,'GPT_FINAL_DECISION_FD1:ENTRY');assert.equal(c.baseline,baselineAllowedLive);
+  assert.equal(c.allowDecision(),'BUY');
 });
 test('V30 executor hooks change no sizing, slot, leverage, stop or lease control',()=>{
   const src=readFileSync(new URL('../../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
