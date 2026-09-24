@@ -1,6 +1,6 @@
 # FD1 — GPT as the final trading decision maker (entry and exit), 2026-09-24
 
-Status: IN PROGRESS (design, implementation and replay validation; production decision pending).
+Status: validated on replay; deployed as executor PATCH FD1-GPT-FINAL-DECISION-1 (see §4).
 
 ## 1. Design
 
@@ -16,7 +16,7 @@ Status: IN PROGRESS (design, implementation and replay validation; production de
   - Any failure results in ABSTAIN: no entry for a candidate, and the deterministic engine for a position.
 - **Facts** (`facts.mjs`) are raw, point-in-time facts, kept separate from model judgments (V17, B06133, V30, CEC0040), which are reference only.
 
-## 2. Validation status: BLOCKED (OpenAI credit exhausted, 2026-09-24 ~03:15Z)
+## 2. Interruption (resolved): OpenAI credit exhausted 2026-09-24 ~03:15Z, topped up by the operator ~03:40Z
 
 - **OpenAI error:** HTTP 429 `insufficient_quota / credit_balance_exhausted`. This is the account's credit, not a rate limit. The production GPT entry review uses the same key, so every candidate fails closed (ABSTAIN, no order) until the credit is topped up. Exits are deterministic and unaffected.
 - **Replay progress:**
@@ -38,3 +38,30 @@ Status: IN PROGRESS (design, implementation and replay validation; production de
   - Time-based exits are 1% of exits. Holding every time candidate (always-HOLD) changes the 16-day result by only +67 USDT (−1651 → −1584).
   - GPT's exit authority therefore has little room to add value. Entry selection is what matters.
 - **Production:** unchanged. The executor runs main (v75: V30 front, CEC advisory, GPT V6S final entry). FD1 code is on the branch, tested (233/233) and NOT deployed.
+
+## 3. Validation (complete, KST 2026-09-24 13:15)
+
+GPT replay: 1,114 entry decisions (BUY 756 / SKIP 178 / ABSTAIN 164 / invalid 16) and 1,841 hold decisions (HOLD 1,483 / EXIT 108 / ABSTAIN 97 / invalid 153). Replay API cost $8.53, latency p50 1.41 s / p95 2.20 s. Invalid answers fall back: ABSTAIN on entry, deterministic engine on hold (114 of the hold invalids were HOLD during a HARD premium flag).
+
+Same 1,119 V17 pullback triggers, same entry price rule, exits, costs (real 5+5 bp fee, 5/10 bp slip; 44 bp stress in brackets). Cap 4 slots, net USDT / trades / PF / MDD [44bp]:
+
+| arm | 24h | 48h | 7d | 16d | MDD 16d |
+|---|---|---|---|---|---|
+| A previous prod (B06133+CEC, det exit) | −13 / 4 | −42 / 9 | −124 / 29 | −119 / 42 / 0.62 [−164] | −129 |
+| B0 V30 + CEC hard, det exit | −112 / 9 | −53 / 23 | +18 / 97 | +80 / 176 / 1.06 [−171] | −188 |
+| B1 V30, CEC advisory (= v75 production), det exit | −130 / 23 | −207 / 54 | −37 / 228 | +198 / 410 / 1.07 [−294] | −369 |
+| X all triggers, det exit | −295 / 42 | −467 / 103 | −843 / 446 | −1053 / 777 / 0.82 [−1885] | −1147 |
+| C GPT on all triggers + GPT hold | −238 / 30 | −270 / 76 | −289 / 327 | −438 / 553 / 0.89 [−1043] | −462 |
+| C1 same, det exit | −241 / 30 | −276 / 76 | −273 / 326 | −435 / 553 [−1031] | −507 |
+| C2 GPT + V30 gate | −87 / 15 | −155 / 42 | −80 / 174 | −47 / 299 [−417] | −258 |
+| C3 GPT + CEC gate | −113 / 13 | −204 / 33 | −97 / 144 | −295 / 239 [−603] | −387 |
+| **C4 GPT + V30 + CEC gates + GPT hold (DEPLOYED)** | −63 / 6 | −85 / 18 | +50 / 71 | **+343 / 129 / 1.41 [+208]** | **−117** |
+
+Findings:
+- GPT improves on "take every trigger" (C vs X) but GPT alone with the relaxed front is clearly worse than production: C is not deployable.
+- Hard gates kept on data: V30 (C3→C4: 16d −295 → +343) and CEC0040 (C2→C4: −47 → +343, MDD −258 → −117). This reverts main's CEC-advisory change (14c257f/d7c50a4) on evidence.
+- C4 vs current production B1: better in 24h, 48h, 7d and 16d, MDD −117 vs −369, 44 bp stress +208 vs −294. C4 vs B0 (same gates without FD1): better in 24h/7d/16d, 48h −85 vs −53. Short windows are small samples (6–18 trades).
+- GPT exit authority is nearly neutral (C vs C1 within ±15 USDT): time exits are ~1% of exits; stops dominate.
+- Not replay-validated (no historical books): book-based categories (spread, thin liquidity, sell wall, fill slippage). They are live only and observed in production.
+
+Production defect found and fixed during pre-deploy reconciliation: `v11_cec0040_decisions/targets` CHECK constraints rejected branch V30_SCORE, so every V30-only candidate failed CEC0040 (fail-closed) since the V30 cutover. Migration 20260924041645.
