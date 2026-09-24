@@ -72,6 +72,8 @@ export async function callDecision(packet,{apiKey,fetchFn=fetch,now=Date.now,tim
       const text=await res.text();ensure(text.length<=150000,'FD_RESPONSE_TOO_LARGE');
       let raw;try{raw=JSON.parse(text);}catch{throw Error('FD_RESPONSE_NOT_JSON');}
       out.usage=raw?.usage??null;out.api_cost_usd=costOf(raw);
+      if(!res.ok){const e=raw?.error??{};out.error_detail={type:String(e.type??'').slice(0,60)||null,code:String(e.code??'').slice(0,60)||null,
+        retry_after:res.headers?.get?.('retry-after')??null,limit_requests:res.headers?.get?.('x-ratelimit-remaining-requests')??null,limit_tokens:res.headers?.get?.('x-ratelimit-remaining-tokens')??null};}
       ensure(res.ok,'HTTP_'+res.status);ensure(raw.model===MODEL,'FD_MODEL_MISMATCH');
       out.wire=parseOutput(raw);return validateDecision(out.wire,packet);
     })();
