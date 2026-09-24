@@ -116,7 +116,7 @@ function decision(scope,reasons,evidence,recheck,extra={}) {
  */
 export function evaluateEntryDecision({candidateSymbol,classification={issues:[],accounting:[]},portfolio,
   openOrders,positions=[],orders=[],quarantines=[],manualSymbols=[],runtime={},operator={},settings={},
-  managementFailures=[],maxSlots=10,proposedMargin=0,cashBuffer=0,requireNativeProtection=true,now=Date.now()}={}) {
+  managementFailures=[],maxSlots=10,proposedMargin=0,cashBuffer=0,requireNativeProtection=true,existingPositionId=null,now=Date.now()}={}) {
   const candidate=upper(candidateSymbol),reasons=[],recheck=[];
   const evidence={version:ENTRY_CONTROL_VERSION,evaluatedAt:now,candidateSymbol:candidate,
     accountObservationId:portfolio?.observation?.id??null,accountRequestedAtMs:portfolio?.observation?.requested_at_ms??null,
@@ -164,9 +164,13 @@ export function evaluateEntryDecision({candidateSymbol,classification={issues:[]
   if(!finite(portfolio.available_quote)||!finite(portfolio.total_equity_quote)||!finite(portfolio.total_initial_margin_quote)||invalidRisk)
     return decision(CONTROL_SCOPE.ACCOUNT_ENTRY_HOLD,['ACCOUNT_RISK_BOUND_UNPROVEN'],evidence,
       ['FRESH_COMPLETE_MARGIN_AND_POSITION_EVIDENCE']);
-  if(seen.has(candidate))return decision(CONTROL_SCOPE.SYMBOL_QUARANTINE,[`LIVE_EXPOSURE_EXISTS:${candidate}`],evidence,
+  const topupPosition=existingPositionId?positions.find(p=>String(p?.id)===String(existingPositionId)&&upper(p?.symbol)===candidate&&p?.state==='OPEN'):null,
+    topupExposure=topupPosition?portfolioRows.filter(x=>symbol(x)===candidate):[];
+  const ownedTopup=!!topupPosition&&topupExposure.length===1&&
+    Math.abs(quantity(topupExposure[0])-number(topupPosition.remaining_quantity))<=Math.max(1e-10,quantity(topupExposure[0])*1e-8);
+  if(seen.has(candidate)&&!ownedTopup)return decision(CONTROL_SCOPE.SYMBOL_QUARANTINE,[`LIVE_EXPOSURE_EXISTS:${candidate}`],evidence,
     ['CONFIRM_SYMBOL_FLAT_OR_CLOSE_EXISTING_LIFECYCLE'],{symbol:candidate});
-  if(seen.size>=maxSlots)return decision(CONTROL_SCOPE.ACCOUNT_ENTRY_HOLD,['ACCOUNT_SLOT_LIMIT'],evidence,['ACCOUNT_SLOT_AVAILABLE']);
+  if(!ownedTopup&&seen.size>=maxSlots)return decision(CONTROL_SCOPE.ACCOUNT_ENTRY_HOLD,['ACCOUNT_SLOT_LIMIT'],evidence,['ACCOUNT_SLOT_AVAILABLE']);
   if(!finite(proposedMargin)||number(proposedMargin)<0||!finite(cashBuffer)||number(cashBuffer)<0||
     number(portfolio.available_quote)+1e-9<number(proposedMargin)+number(cashBuffer))
     return decision(CONTROL_SCOPE.ACCOUNT_ENTRY_HOLD,['ACCOUNT_MARGIN_LIMIT'],evidence,['SUFFICIENT_VERIFIED_AVAILABLE_MARGIN']);
