@@ -39,7 +39,7 @@ Deno.serve(async req=>{
     const out=await run({store,guard,now:Date.now,apiKey:Deno.env.get('OPENAI_API_KEY_SHADOW')||null});
     return reply(200,{...out,patch:PATCH,role:'shadow_le_writer',db_host_kind:/pooler/.test(t.host??'')?'POOLER':'DIRECT'});
   }catch(e){
-    return reply(500,{ok:false,patch:PATCH,error:String(e?.code??e?.message??e).slice(0,200),orderCalls:0});
+    return reply(500,{ok:false,patch:PATCH,error:[e?.code,e?.message??String(e)].filter(Boolean).join(':').slice(0,300),orderCalls:0});
   }finally{
     try{await sql.end({timeout:2});}catch{/* closed */}
   }

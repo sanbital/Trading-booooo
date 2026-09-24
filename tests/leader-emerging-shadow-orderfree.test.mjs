@@ -65,6 +65,9 @@ test('every SQL statement: writes only into shadow_le, functions only shadow_le.
     for(const m of q.matchAll(/\b([a-z_]+)\.([a-z_0-9]+)\s*\(/g))
       assert.ok(m[1]==='shadow_le','name '+name+': function outside shadow_le: '+m[0]);
     assert.ok(!/\bset\s+role|\bgrant\b|\bcreate\b|\balter\b|\bdrop\b/i.test(q),name+': DDL/role statement');
+    // postgres.js serializes a parameter it sees typed json/jsonb with JSON.stringify: a pre-serialized
+    // string would arrive as a JSON scalar. Every JSON parameter therefore goes through ::text first.
+    assert.ok(!/\$\d+::jsonb?\b/.test(q),name+': JSON parameter must be $N::text::jsonb');
   }
 });
 

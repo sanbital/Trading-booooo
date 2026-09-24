@@ -20,7 +20,7 @@ export const PATCH='LE-SHADOW-1';
 const iso=t=>new Date(t).toISOString();
 const ms=x=>x instanceof Date?x.getTime():typeof x==='number'?x:Date.parse(x);
 const int=x=>Number.isFinite(x)?Math.round(x):null;
-const errText=e=>String(e?.code??e?.message??e).slice(0,80)+(e?.detail!=null?':'+String(e.detail).slice(0,40):'');
+const errText=e=>(e?.name==='GuardError'||e?.constructor?.name==='GuardError'?String(e.code):[e?.code,e?.message??String(e)].filter(Boolean).join(':')).slice(0,120)+(e?.detail!=null&&typeof e.detail!=='object'?':'+String(e.detail).slice(0,40):'');
 
 function binanceStatus(g){return g.state.dayHalt??g.state.abort??'OK';}
 function baseCycle(mode,started){return {mode,status:'OK',started_at:iso(started),patch:PATCH,errors:[],detail:{},arms_active:[],request_weight:0,gpt_calls:0,binance_status:'OK'};}

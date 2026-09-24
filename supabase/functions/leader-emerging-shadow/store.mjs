@@ -33,7 +33,7 @@ export const SQL=Object.freeze({
   observerRange:`select observation_bucket, observed_at, liquid_prices from public.market_regime_observations where model_revision = $1 and observed_at >= $2::timestamptz and observed_at < $3::timestamptz order by observed_at asc`,
   scanExists:`select 1 as x from shadow_le.cycles where mode = 'SCAN' and status = 'OK' and observation_bucket = $1::timestamptz limit 1`,
   anchor:`select kst_day, prices, coin_symbols, anchor_observed_at, anchor_quality from shadow_le.day_anchor where kst_day = $1::date`,
-  insertAnchor:`insert into shadow_le.day_anchor(${list(ANCHOR_COLS)}) select ${pick(ANCHOR_COLS)} from jsonb_populate_record(null::shadow_le.day_anchor, $1::jsonb) r on conflict (kst_day) do nothing returning kst_day`,
+  insertAnchor:`insert into shadow_le.day_anchor(${list(ANCHOR_COLS)}) select ${pick(ANCHOR_COLS)} from jsonb_populate_record(null::shadow_le.day_anchor, $1::text::jsonb) r on conflict (kst_day) do nothing returning kst_day`,
   historyRefs:`select observed_at, rank_order from shadow_le.cycles where mode = 'SCAN' and status = 'OK' and observed_at >= $1::timestamptz and observed_at < $2::timestamptz order by observed_at`,
   historyToday:`select observed_at, jsonb_path_query_array(rank_order, '$[0 to 9]') as top10 from shadow_le.cycles where mode = 'SCAN' and status = 'OK' and kst_day = $1::date and observed_at < $2::timestamptz order by observed_at`,
   recentShortlisted:`select distinct symbol from shadow_le.candidates where shortlisted and observed_at > $1::timestamptz`,
@@ -45,26 +45,26 @@ export const SQL=Object.freeze({
   budgetSettle:`select shadow_le.budget_settle($1::bigint, $2::numeric) as r`,
   budgetState:`select shadow_le.budget_state() as r`,
   writeCycle:`with cy as (
-      insert into shadow_le.cycles(${list(CYCLE_COLS)}) select ${pick(CYCLE_COLS)} from jsonb_populate_record(null::shadow_le.cycles, $1::jsonb) r returning cycle_id),
+      insert into shadow_le.cycles(${list(CYCLE_COLS)}) select ${pick(CYCLE_COLS)} from jsonb_populate_record(null::shadow_le.cycles, $1::text::jsonb) r returning cycle_id),
     ins_c as (
       insert into shadow_le.candidates(cycle_id, ${list(CANDIDATE_COLS)})
-      select cy.cycle_id, ${pick(CANDIDATE_COLS)} from cy, jsonb_populate_recordset(null::shadow_le.candidates, $2::jsonb) r returning candidate_id, symbol),
+      select cy.cycle_id, ${pick(CANDIDATE_COLS)} from cy, jsonb_populate_recordset(null::shadow_le.candidates, $2::text::jsonb) r returning candidate_id, symbol),
     ins_d as (
       insert into shadow_le.decisions(candidate_id, cycle_id, ${list(DECISION_COLS)})
-      select c.candidate_id, cy.cycle_id, ${pick(DECISION_COLS)} from cy, jsonb_populate_recordset(null::shadow_le.decisions, $3::jsonb) r join ins_c c on c.symbol = r.symbol
+      select c.candidate_id, cy.cycle_id, ${pick(DECISION_COLS)} from cy, jsonb_populate_recordset(null::shadow_le.decisions, $3::text::jsonb) r join ins_c c on c.symbol = r.symbol
       returning decision_id, candidate_id, symbol, arm, decision)
     select (select cycle_id from cy) as cycle_id, (select count(*) from ins_c) as n_candidates,
       (select coalesce(jsonb_agg(jsonb_build_object('decision_id', decision_id, 'candidate_id', candidate_id, 'symbol', symbol, 'arm', arm, 'decision', decision)), '[]'::jsonb) from ins_d) as decisions`,
-  insertCycleOnly:`insert into shadow_le.cycles(${list(CYCLE_COLS)}) select ${pick(CYCLE_COLS)} from jsonb_populate_record(null::shadow_le.cycles, $1::jsonb) r returning cycle_id`,
+  insertCycleOnly:`insert into shadow_le.cycles(${list(CYCLE_COLS)}) select ${pick(CYCLE_COLS)} from jsonb_populate_record(null::shadow_le.cycles, $1::text::jsonb) r returning cycle_id`,
   insertDecisions:`insert into shadow_le.decisions(candidate_id, cycle_id, ${list(DECISION_COLS)})
-    select r.candidate_id, r.cycle_id, ${pick(DECISION_COLS)} from jsonb_populate_recordset(null::shadow_le.decisions, $1::jsonb) r
+    select r.candidate_id, r.cycle_id, ${pick(DECISION_COLS)} from jsonb_populate_recordset(null::shadow_le.decisions, $1::text::jsonb) r
     on conflict do nothing returning decision_id, arm, attempt`,
   activeWaits:`select d.decision_id, d.candidate_id, d.cycle_id, d.symbol, d.wait_trigger, d.wait_expires_at, d.snapshot_at, d.packet, k.rank_now, k.lane
     from shadow_le.decisions d join shadow_le.candidates k on k.candidate_id = d.candidate_id
     where d.decision = 'WAIT' and d.wait_expires_at > now() and not exists (select 1 from shadow_le.wait_events e where e.decision_id = d.decision_id)
     order by d.snapshot_at limit 5`,
   cyclesAfter:`select observed_at, rank_order from shadow_le.cycles where mode = 'SCAN' and status = 'OK' and observed_at > $1::timestamptz order by observed_at`,
-  claimWaitEvent:`insert into shadow_le.wait_events(${list(WAIT_EVENT_COLS)}) select ${pick(WAIT_EVENT_COLS)} from jsonb_populate_record(null::shadow_le.wait_events, $1::jsonb) r on conflict (decision_id) do nothing returning event_id`,
+  claimWaitEvent:`insert into shadow_le.wait_events(${list(WAIT_EVENT_COLS)}) select ${pick(WAIT_EVENT_COLS)} from jsonb_populate_record(null::shadow_le.wait_events, $1::text::jsonb) r on conflict (decision_id) do nothing returning event_id`,
   sweepExpiredWaits:`insert into shadow_le.wait_events(decision_id, symbol, event, at, detail)
     select d.decision_id, d.symbol, 'EXPIRED', d.wait_expires_at, '{"by":"sweep"}'::jsonb from shadow_le.decisions d
     where d.decision = 'WAIT' and d.wait_expires_at <= now() and not exists (select 1 from shadow_le.wait_events e where e.decision_id = d.decision_id)
@@ -83,7 +83,7 @@ export const SQL=Object.freeze({
       where d.arm in ('GPT_ALT1','WAIT_MECHANICAL') and d.decision = 'BUY' and d.hyp_entry_at < $1::timestamptz
         and not exists (select 1 from shadow_le.outcomes o where o.decision_id = d.decision_id)) z
     order by hyp_entry_at limit $2::int`,
-  insertOutcomes:`insert into shadow_le.outcomes(${list(OUTCOME_COLS)}) select ${pick(OUTCOME_COLS)} from jsonb_populate_recordset(null::shadow_le.outcomes, $1::jsonb) r on conflict do nothing returning outcome_id`,
+  insertOutcomes:`insert into shadow_le.outcomes(${list(OUTCOME_COLS)}) select ${pick(OUTCOME_COLS)} from jsonb_populate_recordset(null::shadow_le.outcomes, $1::text::jsonb) r on conflict do nothing returning outcome_id`,
   labelObserver:`select shadow_le.label_observer_outcomes($1::int) as n`,
   linkProduction:`select shadow_le.link_production($1::int) as n`,
 });
