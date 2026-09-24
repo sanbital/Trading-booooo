@@ -104,7 +104,7 @@ test('executor: CEC REJECT is not terminal, openBull does not re-veto it, GPT BU
   assert.equal(src.split('intent:"OPEN_LONG"').length-1,1,'one OPEN_LONG intent writer (inside openBull, after both GPT checks)');
 });
 test('SQL: CEC target registration/repair/lag accept REJECT decisions, never rewrite the decision',()=>{
-  const sql=readFileSync(new URL('../../../supabase/migrations/20260924054500_cec0040_track_gpt_bought_rejects.sql',import.meta.url),'utf8');
+  const sql=readFileSync(new URL('../../../supabase/migrations/20260924052022_cec0040_track_gpt_bought_rejects.sql',import.meta.url),'utf8');
   assert.match(sql,/model_action in \('ADMIT','PROBE','REJECT'\)/);
   assert.ok(!/update public\.v11_cec0040_decisions/i.test(sql));
 });
