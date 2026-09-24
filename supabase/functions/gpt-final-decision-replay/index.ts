@@ -37,7 +37,7 @@ async function one(db,job,apiKey,btcCache){
     const budget=await db.rpc('fd1_replay_reserve',{p_reserve:RESERVE_USD});
     if(budget.error||budget.data!==true)result={decision:'ABSTAIN',valid:false,error:'FD_REPLAY_BUDGET_EXHAUSTED',attempted:false,source_errors:errors};
     else{result=await callDecision(packet,{apiKey});result.source_errors=errors;
-      await db.rpc('fd1_replay_settle',{p_reserve:RESERVE_USD,p_cost:Number(result.api_cost_usd??RESERVE_USD)});}
+      await db.rpc('fd1_replay_settle',{p_reserve:RESERVE_USD,p_cost:Number(result.api_cost_usd??(result.http_status&&result.http_status>=400?0:RESERVE_USD))});}
   }catch(e){result={decision:'ABSTAIN',valid:false,error:'FD_REPLAY_PREP:'+String(e?.message??e).slice(0,80),attempted:false};}
   const up=await db.from('fd1_replay_jobs').update({state:'DONE',packet,result,decision:result.decision,valid:result.valid===true,
     error:result.error??null,api_cost_usd:result.api_cost_usd??0,latency_ms:result.latency_ms??null,completed_at:new Date().toISOString()})
