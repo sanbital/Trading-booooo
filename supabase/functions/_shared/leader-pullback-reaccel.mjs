@@ -42,7 +42,7 @@
  * a separate experiment, not in this module.
  */
 
-export const SETUP_POLICY_VERSION = "V17_PULLBACK_REACCEL_ENTRY_1";
+export const SETUP_POLICY_VERSION = "V17_GPT_CONTINUATION_ENTRY_2";
 
 export const SETUP_POLICY = Object.freeze({
   version: SETUP_POLICY_VERSION,
@@ -87,6 +87,7 @@ export const SETUP_REASON = Object.freeze({
   ARMED: "V17_SETUP_ARMED",
   PULLBACK_CONFIRMED: "V17_PULLBACK_CONFIRMED",
   REACCEL_TRIGGERED: "V17_REACCEL_TRIGGERED",
+  CONTINUATION_TRIGGERED: "V17_CONTINUATION_TRIGGERED",
   SETUP_EXPIRED: "V17_SETUP_EXPIRED",
   CHASE_EXPIRED: "V17_CHASE_EXPIRED",
   TRIGGER_STALE: "V17_TRIGGER_STALE",
@@ -271,8 +272,12 @@ export function advancePullbackSetup(state, candle, prevCandle, now, policy = SE
     changed = true;
   }
 
-  // Re-acceleration. Only from PULLBACK_OBSERVED, and only on a bar that is bullish
-  // in its own right, higher than the bar before it, and back above the reference.
+  // Re-acceleration after a pullback remains a valid trigger.
+  // In GPT-final-decision production, a clean continuation is ALSO allowed to reach
+  // V30/CEC/GPT instead of being hard-rejected merely because no 0.25% dip occurred.
+  // This does not buy on sight: it still requires a completed bullish 1m bar, an
+  // adjacent higher close, recovery above the minimum reacceleration level, and the
+  // unchanged 1% chase ceiling. GPT remains the strategic final decision maker.
   if (next.state === SETUP_STATE.PULLBACK_OBSERVED) {
     const prev = completedCandle(prevCandle, at);
     const adjacent = prev !== null && prev.openTime === bar.openTime - MINUTE;
@@ -291,6 +296,29 @@ export function advancePullbackSetup(state, candle, prevCandle, now, policy = SE
         triggerClose: bar.close,
       });
       return { state: next, reason: SETUP_REASON.REACCEL_TRIGGERED, changed: true };
+    }
+  }
+
+  // No-pullback continuation path: the old state machine could watch a leader rise
+  // for the full 15 minutes and then discard it as EXPIRED_NO_PULLBACK. That made
+  // the timing rule a strategic veto in front of GPT. Let a still-strong, non-chased
+  // continuation reach the downstream evidence stack instead.
+  if (next.state === SETUP_STATE.ARMED && !next.pullbackObserved) {
+    const prev = completedCandle(prevCandle, at);
+    const adjacent = prev !== null && prev.openTime === bar.openTime - MINUTE;
+    if (adjacent &&
+        bar.close > bar.open &&
+        bar.close > prev.close &&
+        bar.close >= ref * (1 + policy.minReaccelPct) &&
+        bar.close <= ref * (1 + policy.maxChasePct)) {
+      const triggerAt = bar.openTime + MINUTE;
+      next = withTransition(next, SETUP_STATE.TRIGGERED, SETUP_REASON.CONTINUATION_TRIGGERED, at, {
+        triggerAt,
+        triggerExpiresAt: triggerAt + policy.entryTriggerTtlMs,
+        triggerClose: bar.close,
+        triggerMode: "CONTINUATION_NO_PULLBACK",
+      });
+      return { state: next, reason: SETUP_REASON.CONTINUATION_TRIGGERED, changed: true };
     }
   }
 
