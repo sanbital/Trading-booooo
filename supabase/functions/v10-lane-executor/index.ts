@@ -1100,11 +1100,11 @@ if(attempt.finalRecheck?.recheck_triggered===true){
   attempt.finalRecheck={...attempt.finalRecheck,postSafety:safety};
   if(!safety.ok){
     markRecheckOutcome(db,s,attempt.finalRecheck,"NO_ORDER_POST_RECHECK_SAFETY:"+safety.reason);
-    await audit(db,null,"BULL","BULL","ENTRY_REJECT",safety.reason,{signalId:s.id,symbol:s.symbol,stage:"GPT_FINAL_RECHECK_SAFETY",finalRecheck:attempt.finalRecheck});
-    const terminal=await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:safety.reason,
-      updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","CLAIMED");
-    if(terminal.error)throw Error("FINAL_RECHECK_SIGNAL_TERMINAL_WRITE");
-    return{entered:false,reason:safety.reason,releaseClaim:false,finalRecheck:attempt.finalRecheck,e1:e1Decision};
+    // Refusal only. Like every other refusal in this span it releases the symbol claim. A retry
+    // never reuses this answer: it needs the initial answer still inside its own 15 s validity
+    // and a fresh detector pass, and a second recheck of the same BUY fails closed.
+    await audit(db,null,"BULL","BULL","ENTRY_DEFER",safety.reason,{signalId:s.id,symbol:s.symbol,stage:"GPT_FINAL_RECHECK_SAFETY",finalRecheck:attempt.finalRecheck});
+    return{entered:false,reason:safety.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,finalRecheck:attempt.finalRecheck,e1:e1Decision};
   }
 }
 // Pure: the controls were read alongside the quote above. A clean portfolio writes
