@@ -58,7 +58,7 @@ test('CASE 40: an old-policy position keeps the authoritative QV3 behaviour', ()
 
 test('CASE 40: a new-policy entry is never given the authoritative QV3 stamp', () => {
   assert.match(SOURCE,
-    /metadata:\{qv3:entryTiming\?\.version===SETUP_POLICY_VERSION\?null:/,
+    /metadata:\{[\s\S]*?qv3:entryTiming\?\.version===SETUP_POLICY_VERSION\?null:/,
     'the stamp must be withheld at insert, which is what keeps qv3Scope false');
   assert.match(SOURCE, /entryTimingPolicyVersion:entryTiming\?\.version\?\?null/);
 });
@@ -68,13 +68,13 @@ test('the entry-timing stamp is taken from the ORDER INTENT, so a deploy cannot 
   // policy has no such field, so no later deploy can opt it in.
   assert.match(SOURCE, /entryTiming=rec\(intent\.request_payload\?\.entry_timing_policy\)/);
   assert.match(SOURCE, /entry_timing_policy:setupGoverns\(s\)\?\{version:SETUP_POLICY_VERSION/);
-  assert.equal(SETUP_POLICY_VERSION, 'V17_PULLBACK_REACCEL_ENTRY_1');
+  assert.equal(SETUP_POLICY_VERSION, 'V17_GPT_CONTINUATION_ENTRY_2');
 });
 
 test('R5 remains the authoritative exit for both policies', () => {
   // The entry change must not quietly become an exit change. Every position, old or
   // new, still carries the same exit policy version.
-  assert.match(SOURCE, /leaderExitPolicyVersion:EXIT_REVIEW_R5\.policyVersion/);
+  assert.match(SOURCE, /leaderExitPolicyVersion:entryController\?\.version===CEC0040_VERSION[\s\S]*?:EXIT_REVIEW_R5\.policyVersion/);
   const insert = SOURCE.slice(SOURCE.indexOf('v11_long_regime_positions").insert('));
   assert.ok(!/leaderExitPolicy:[^,]*SETUP/.test(insert.slice(0, 4000)),
     'the exit policy is not re-pointed by the entry policy');

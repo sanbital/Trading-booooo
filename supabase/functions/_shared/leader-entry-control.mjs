@@ -167,6 +167,8 @@ export function evaluateEntryDecision({candidateSymbol,classification={issues:[]
   const topupPosition=existingPositionId?positions.find(p=>String(p?.id)===String(existingPositionId)&&upper(p?.symbol)===candidate&&p?.state==='OPEN'):null,
     topupExposure=topupPosition?portfolioRows.filter(x=>symbol(x)===candidate):[];
   const ownedTopup=!!topupPosition&&topupExposure.length===1&&
+    finite(topupPosition.original_quantity)&&finite(topupPosition.remaining_quantity)&&
+    close(topupPosition.original_quantity,topupPosition.remaining_quantity)&&
     Math.abs(quantity(topupExposure[0])-number(topupPosition.remaining_quantity))<=Math.max(1e-10,quantity(topupExposure[0])*1e-8);
   if(seen.has(candidate)&&!ownedTopup)return decision(CONTROL_SCOPE.SYMBOL_QUARANTINE,[`LIVE_EXPOSURE_EXISTS:${candidate}`],evidence,
     ['CONFIRM_SYMBOL_FLAT_OR_CLOSE_EXISTING_LIFECYCLE'],{symbol:candidate});

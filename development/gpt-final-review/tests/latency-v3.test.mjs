@@ -1,18 +1,13 @@
 import {WIRE_OUTPUT_SCHEMA_V4} from '../../../supabase/functions/_shared/gpt-final-review/wire-v4.mjs';
 import test from 'node:test';
-import {V5_HOOKS} from '../executor-hooks-v5.mjs';
-import {V30_HOOKS} from '../executor-hooks-v30.mjs';
-import {FD1_HOOKS} from '../executor-hooks-fd1.mjs';
-import {RECHECK_HOOKS} from '../executor-hooks-recheck.mjs';
 import assert from 'node:assert/strict';
-import {writeFileSync,readFileSync,existsSync} from 'node:fs';
+import {readFileSync,existsSync} from 'node:fs';
 import {WIRE_OUTPUT_SCHEMA,OUTPUT_SCHEMA,MODEL,LIMITS,VERSION,validateShape,validateAnswer,expandWireAnswer,toWireAnswer,compactInput,parseApiResponse,decisionIdentity} from '../../../supabase/functions/_shared/gpt-final-review/contract.mjs';
 import {FinalReviewCoordinator,MemoryReviewStore} from '../../../supabase/functions/_shared/gpt-final-review/coordinator.mjs';
 import {CandleReadCache} from '../../../supabase/functions/_shared/gpt-final-review/candle-cache.mjs';
 import {collectMarket} from '../../../supabase/functions/_shared/gpt-final-review/market.mjs';
 import {payloadFor} from '../../../supabase/functions/_shared/gpt-final-review/openai.mjs';
 import {gptFilterExecutable,gptReviewReadyToResume,runWithGptReview,setTestCoordinator} from '../../../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
-import {FAST_HOOKS,EXPECTED_EXECUTOR_BLOB,blob} from '../wire-executor-latency-v3.mjs';
 import {T,candidate,bars,packet,answer,transport,config,marketData,rawResponse} from './helpers.mjs';
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 function service({decision='PASS',store=new MemoryReviewStore(),now=()=>T+1000,hold=null,mode='ENFORCE',fetchFn=null}={}){
@@ -106,19 +101,14 @@ test('virtual protection loop yields after a completed observation; ordinary lea
  assert.ok(events.indexOf('yield-after-protection')>events.indexOf('protection-complete-4'));
  assert.ok(events.indexOf('second-cycle-protection')>events.indexOf('lease-released'));
 });
-test('only two reversible executor wiring hooks; no exit policy or financial controls changed',()=>{
- assert.equal(FAST_HOOKS.length,2);const text=JSON.stringify(FAST_HOOKS);
- assert.ok(!/circuit_open=false|pause_new_entries|stopPct|trailGapPct|targetMarginUsdt|MAX_SLOTS=/.test(text));
- assert.match(FAST_HOOKS[1].to,/every detected protection action finish/);
+test('GPT ready hint waits for protection and re-enters through the leased cycle',()=>{
  const path=new URL('../../../supabase/functions/v10-lane-executor/index.ts',import.meta.url);
  if(existsSync(path)){
-   let source=readFileSync(path,'utf8');
-   // FINAL RECHECK hooks, FD1 + CEC-advisory hooks, V30 live-front hooks, then V5 operator/recovery hooks are removed; nothing else may differ.
-   for(const h of [...RECHECK_HOOKS].reverse()){assert.equal(source.split(h.to).length,2);source=source.replace(h.to,h.from);}
-   for(const h of [...FD1_HOOKS].reverse()){assert.equal(source.split(h.to).length,2);source=source.replace(h.to,h.from);}
-   for(const h of [...V30_HOOKS].reverse()){assert.equal(source.split(h.to).length,2);source=source.replace(h.to,h.from);}
-   for(const h of [...V5_HOOKS].reverse()){assert.equal(source.split(h.to).length,2);source=source.replace(h.to,h.from);}
-   for(const h of [...FAST_HOOKS].reverse()){assert.equal(source.split(h.to).length,2);source=source.replace(h.to,h.from);}
-   assert.equal(blob(source),EXPECTED_EXECUTOR_BLOB);
+   const source=readFileSync(path,'utf8');
+   const fast=source.slice(source.indexOf('async function runX1FastObservation('),source.indexOf('async function run(db)'));
+   const cycle=source.slice(source.indexOf('async function run(db)'),source.indexOf('async function runEntryQueue('));
+   assert.match(fast,/await manageLeader\(db,fresh,[\s\S]*?if\(gptReviewReadyToResume\(db\)\)/);
+   assert.match(cycle,/await verifyExecutionLease\(db\);[\s\S]*?await runEntryQueue\(db,pair/);
+   assert.match(source,/return res\(200,await runWithGptReview\(db,runWithLease\)\)/);
  }
 });

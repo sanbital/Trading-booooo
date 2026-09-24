@@ -212,7 +212,7 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
  };
  let source=sourceRef?execFileSync('git',['show',sourceRef+':supabase/functions/v10-lane-executor/index.ts'],{cwd:root,encoding:'utf8'}):
   baseline?execFileSync('git',['show',BASE+':supabase/functions/v10-lane-executor/index.ts'],{cwd:root,encoding:'utf8'}):readFileSync(new URL('supabase/functions/v10-lane-executor/index.ts',root),'utf8');
- source=source.replace(/^import .*;\n/gm,'').replace('const exchangeGateway=gateway;','const exchangeGateway=__gateway;');source=source.slice(0,source.indexOf('Deno.serve'));
+ source=source.replace(/\r\n/g,'\n').replace(/^import .*;\n/gm,'').replace('const exchangeGateway=gateway;','const exchangeGateway=__gateway;');source=source.slice(0,source.indexOf('Deno.serve'));
  // Only exchange/DB/time boundaries are replaced. run/manage/open/close are actual source.
  source+='\ngateway=__gateway;this.runCycle=()=>runWithLease(__db);this.open=(...args)=>openBull(__db,...args);this.close=(...args)=>closePos(__db,...args);this.manage=(...args)=>manageLeader(__db,...args);this.setLease=()=>leaseOwners.set(__db,"test-owner");';
  const ctx={...entryEvidence,...momentum,...review,...ops,...settlement,...entrySettlement,...dbOnly,...entryControl,...fillEvidence,...qv3,...e1,...slotSizing,...booBindings,...pullbackSetup,setupIsTerminal:pullbackSetup.isTerminal,

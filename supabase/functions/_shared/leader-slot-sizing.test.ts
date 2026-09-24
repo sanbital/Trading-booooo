@@ -140,13 +140,13 @@ Deno.test("CASE 5: a coarse step past the allowance takes the lot below it", () 
   // A step of 1 at 19.20 USDT: naive ceil(450.45/19.2)=24 lots costs 24*19.206/3 =
   // 153.648 USDT of margin, over the 151.25 ceiling. This used to end the symbol,
   // on the claim that the lot was unaffordable. It is not: 23 lots cost about 147.25 USDT
-  // of margin, satisfy every exchange filter and carry 99.2% of the slot. The
+  // of margin, satisfy every exchange filter and carry about 98.1% of the slot. The
   // ceiling is what makes that admission safe, and it has not moved.
   const plan = planSlotEntry({ ask: 19.2, quantityStep: 1, priceTick: 0.001, minNotionalUsdt: 5 });
   assertEquals(plan.quantity, 23);
   assertEquals(plan.boundBy, "MARGIN_BUDGET_CAP");
   assert(plan.orderMarginUsdt <= 151.25 + 1e-9, `${plan.orderMarginUsdt}`);
-  assert(plan.slotFillBps > 9_900, `${plan.slotFillBps}`);
+  assert(plan.slotFillBps > 9_800, `${plan.slotFillBps}`);
   // And the point that used to be the only one considered still overshoots, so this
   // is a wider search rather than a wider budget.
   assertEquals(24 * plan.limitPrice / 3 > slotSizingBounds().maxOrderMarginUsdt, true);

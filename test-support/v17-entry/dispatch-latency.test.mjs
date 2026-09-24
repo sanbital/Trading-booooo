@@ -62,7 +62,7 @@ import {
 const CONTRACT_20260918 = Object.freeze({...SLOT_SIZING_CONTRACT, targetMarginUsdt: 30});
 
 const SRC = readFileSync(
-  new URL('../../supabase/functions/v10-lane-executor/index.ts', import.meta.url), 'utf8');
+  new URL('../../supabase/functions/v10-lane-executor/index.ts', import.meta.url), 'utf8').replace(/\r\n/g,'\n');
 const OPEN_BULL = SRC.slice(SRC.indexOf('async function openBull('),
   SRC.indexOf('// Best-effort feed for the decision-only exit shadow.'));
 const QUEUE = SRC.slice(SRC.indexOf('async function runEntryQueue('),
@@ -391,12 +391,12 @@ test('11. no admissible quantity can exceed the margin ceiling, over a wide swee
   assert.ok(admitted > 100, `the sweep must actually admit orders, got ${admitted}`);
 });
 
-test('11b. the LIVE contract is 200 USDT at 3x, and its own ceiling is never exceeded', () => {
+test('11b. the LIVE contract is 150 USDT at 3x, and its own ceiling is never exceeded', () => {
   // Same sweep, against today's live contract rather than the frozen replay above,
   // so a change to the live slot is caught here even if the historical replay is
   // (correctly) pinned to the day it documents.
   const bounds = slotSizingBounds();
-  assert.equal(SLOT_SIZING_CONTRACT.targetMarginUsdt, 200, 'operator instruction, 2026-09-19');
+  assert.equal(SLOT_SIZING_CONTRACT.targetMarginUsdt, 150, 'operator instruction, 2026-09-24');
   assert.equal(SLOT_SIZING_CONTRACT.leverage, 3, 'leverage is unchanged by the margin-only resize');
   let admitted = 0;
   for (const step of [1, 0.1, 0.01, 0.001, 5]) {
@@ -599,7 +599,7 @@ test('23. exit, protection and reconciliation are untouched by this change', () 
   for (const marker of [
     'async function closePos(db,p,fraction,reason,ctx={})',
     'async function reconcileNativeCloseBeforeDispatch(db,p,fraction,gw=opsGateway(db))',
-    'const entryProtection=await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED',
+    'lastProtection=await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED',
     'if(!ownedEntry(p,orders))throw Error("EXIT_OWNERSHIP_UNPROVEN")',
     'await circuit(db,`EXIT_PENDING:${p.symbol}`,"KNOWN_ORDER_PENDING_RECONCILIATION"',
     'if(current.data.state!=="OPEN")return {closed:current.data.state==="CLOSED"',
@@ -625,7 +625,7 @@ test('24. nothing in this test file can reach an exchange', () => {
   }
   // And the order path is reached only through the gateway command the release gate
   // pins, so a test can never construct one by accident.
-  assert.match(OPEN_BULL, /rp=\{action:"create_order",leverage:LEV,order:\{market:s\.symbol,side:"BUY",type:"LIMIT"/);
+  assert.match(SRC, /rp=\{action:"create_order",leverage:LEV,order:\{market:s\.symbol,side:"BUY",type:"LIMIT"/);
 });
 
 test('25. the account-mode observation is authenticated, fresh and explicitly one-way', () => {

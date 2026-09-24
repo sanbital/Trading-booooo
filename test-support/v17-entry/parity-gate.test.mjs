@@ -7,13 +7,13 @@ const base={
   atr:.01,signal15Close:1,
 };
 
-assert.equal(POLICY.maxDayReturn,.08);
-assert.equal(POLICY.minVolumeRatio,1.30);
+assert.equal(POLICY.maxDayReturn,undefined);
+assert.equal(POLICY.minVolumeRatio,1.10);
 assert.equal(entryReason(base),"ELIGIBLE");
 assert.equal(entryReason({...base,dayReturn:.079999}),"ELIGIBLE");
-assert.equal(entryReason({...base,dayReturn:.08}),"DAY_RETURN_CHASE_CAP");
-assert.equal(entryReason({...base,dayReturn:.20}),"DAY_RETURN_CHASE_CAP");
-assert.equal(entryReason({...base,volumeRatio:1.299999}),"VOLUME_ACCELERATION");
-assert.equal(entryReason({...base,volumeRatio:1.30}),"ELIGIBLE");
+assert.equal(entryReason({...base,dayReturn:.08}),"ELIGIBLE");
+assert.equal(entryReason({...base,dayReturn:.20}),"ELIGIBLE");
+assert.equal(entryReason({...base,volumeRatio:1.099999}),"VOLUME_ACCELERATION");
+assert.equal(entryReason({...base,volumeRatio:1.10}),"ELIGIBLE");
 
 console.log("v17 parity gate ok");

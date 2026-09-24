@@ -10,7 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 
-const source = readFileSync(new URL('../../supabase/functions/v10-lane-executor/index.ts', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../../supabase/functions/v10-lane-executor/index.ts', import.meta.url), 'utf8').replace(/\r\n/g,'\n');
 const run = source.slice(source.indexOf('async function run(db)'), source.indexOf('async function requireLeaderEntryControls'));
 
 test('the executor prices more than one candidate per run', () => {
@@ -77,8 +77,8 @@ test('a dispatched order always stops the run', () => {
 
 test('openBull marks dispatch at the order call, not earlier or later', () => {
   const open = source.slice(source.indexOf('async function openBull('), source.indexOf('// Best-effort feed for the decision-only exit shadow.'));
-  assert.match(open, /attempt\.dispatched=true;const initialRaw=await gateway\(rp\)/,
-    'the flag must be set immediately before the order leaves');
+  assert.match(open, /attempt\.dispatched=true;\s*const first=await dispatchEntryIocAttempt\(db,s,gateway/,
+    'the flag must be set immediately before the first IOC attempt');
   const flag = open.indexOf('attempt.dispatched=true');
   // everything that can refuse an entry without sending anything must come first
   for (const pre of ['ENTRY_SPREAD', 'QTY_INVALID', 'ENTRY_MARGIN_INSUFFICIENT', 'ENTRY_GRANULARITY_BPS']) {
@@ -87,7 +87,7 @@ test('openBull marks dispatch at the order call, not earlier or later', () => {
   // and the post-fill validations must come after, so they can never be treated as skippable
   for (const post of ['STOP_POLICY_INVALID', 'STOP_INVALID']) {
     const settle=source.slice(source.indexOf('async function settleKnownEntry('),source.indexOf('async function readOpsPositions('));
-    assert.ok(open.indexOf('settleKnownEntry(db,oi.data,settledRaw,gateway)')>flag&&settle.includes(post), `${post} is checked in post-dispatch settlement`);
+    assert.ok(open.indexOf('settleKnownEntry(db,first.oi,first.settledRaw,gateway')>flag&&settle.includes(post), `${post} is checked in post-dispatch settlement`);
   }
 });
 
@@ -139,14 +139,14 @@ import {SETUP_POLICY, SETUP_REASON, SETUP_STATE, isTerminal as setupIsTerminal}
 function clockAt(fixed) {
   return new Proxy(Date, { get: (t, k) => (k === "now" ? () => fixed : Reflect.get(t, k)) });
 }
-/** Pre-cutover: these signals take the LEGACY immediate-entry path. */
-const LEGACY_CLOSE = Date.parse("2026-09-16T12:00:00.000Z");
+/** Current entry candidates carry a triggered setup; legacy rows are retired by B06133. */
+const LEGACY_CLOSE = Date.parse("2026-09-17T12:00:00.000Z");
 const LEGACY_NOW = LEGACY_CLOSE + 30_000;
 /** Post-cutover: these are governed by the pullback setup. */
 const SETUP_CLOSE = Date.parse("2026-09-17T12:00:00.000Z");
 const SETUP_NOW = SETUP_CLOSE + 30_000;
 
-function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {}}) {
+function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {}, setupMaxConcurrent = 4}) {
   const seen = [];
   const audits = [];
   // signal5Close is now load-bearing: the queue retires already-expired candidates
@@ -186,7 +186,7 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
     Date: clockAt(now), Number, Math, Error, Promise, String, Object, Set, Array, console, JSON,
     ENTRY_ATTEMPTS_PER_RUN: 3,
     ENTRY_RUN_BUDGET_MS: 40000,
-    SETUP_POLICY, SETUP_REASON, SETUP_STATE, SETUP_MAX_CONCURRENT: 2,
+    SETUP_POLICY, SETUP_REASON, SETUP_STATE, SETUP_MAX_CONCURRENT: setupMaxConcurrent,
     SETUP_ADVANCE_BUDGET_MS: 12000,
     setupIsTerminal,
     // The real predicate: a signal is setup-governed only from the fixed cutover on.
@@ -199,9 +199,12 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
     // reaches on this cycle, so the queue's handling of each outcome is testable
     // without a market fetch.
     advanceSignalSetup: async (_db, row) => {
-      const state = setups[row.id] ?? null;
+      const state = setups[row.id] === undefined ? stateOf(SETUP_STATE.TRIGGERED,
+        {triggerAt: now, triggerExpiresAt: now + 60_000, triggerClose: 100.25}) : setups[row.id];
       return { row, state, changed: Boolean(state), reason: state?.terminalReason ?? SETUP_REASON.HOLD };
     },
+    applyB06133Selection: async (_db, row) => ({allowed:true,row}),
+    applyCec0040Selection: async (_db, row) => ({allowed:true,row}),
     POLICY,
     RELEASE_SCOPE: {SYMBOL: 'SYMBOL', ACCOUNT: 'ACCOUNT'},
     releaseStopsRun: (entry) => entry?.releaseScope !== 'SYMBOL',
@@ -320,7 +323,7 @@ test('CASE 18: three symbol-scoped defers do not exceed the attempt bound', asyn
 });
 
 test('CASE 19: a candidate already past the entry age is retired without pricing it', async () => {
-  const old = LEGACY_CLOSE - 200_000, fresh = LEGACY_CLOSE;
+  const old = LEGACY_CLOSE - SETUP_POLICY.setupTtlMs - 61_000, fresh = LEGACY_CLOSE;
   const ctx = harness({
     rows: [
       {id: 'a', symbol: 'IOSTUSDT', entry_bar_at: '2026-09-09T13:30:00Z',
@@ -460,6 +463,7 @@ test('the policy-scoped admission limit caps concurrent NEW-policy entries only'
     {triggerAt: SETUP_NOW, triggerExpiresAt: SETUP_NOW + 60_000, triggerClose: 100.25});
   const ctx = harness({
     now: SETUP_NOW,
+    setupMaxConcurrent: 2,
     rows: [setupRow('a', 'IOSTUSDT', 1), setupRow('b', 'BULLAUSDT', 2), setupRow('c', 'XTZUSDT', 3)],
     setups: {a: triggered, b: triggered, c: triggered},
     outcomes: {
