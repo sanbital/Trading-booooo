@@ -43,7 +43,7 @@ export function payloadFor(packet){
   return {model:MODEL,store:false,tools:[],truncation:'disabled',service_tier:'default',
     prompt_cache_key:'boo-fd1-'+packet.task.toLowerCase(),reasoning:{effort:'none'},max_output_tokens:600,
     input:[{role:'system',content:PROMPTS[packet.task]},{role:'user',content:JSON.stringify(modelInput(packet))}],
-    text:{verbosity:'low',format:{type:'json_schema',name:'fd1_'+packet.task.toLowerCase(),strict:true,schema:wireSchema(packet.task)}}};
+    text:{verbosity:'low',format:{type:'json_schema',name:'fd1_'+packet.task.toLowerCase(),strict:true,schema:wireSchema(packet.task,packet)}}};
 }
 export function costOf(raw){
   const u=raw?.usage,c=u?.input_tokens_details?.cached_tokens??0;

@@ -9,7 +9,7 @@ export function src(at,opt={}){
   return {one:klines(121,MIN,at,opt),five:klines(49,5*MIN,at,opt),btc:klines(61,MIN,at,{step:.0001}),
     oiHist:Array.from({length:13},(_,i)=>({timestamp:Math.floor(at/300000)*300000-(12-i)*300000,sumOpenInterest:1000*(1+.001*i),sumOpenInterestValue:5e6})),
     premium:[[Math.floor(at/MIN)*MIN-MIN,'0','0','0','0.0002','0',Math.floor(at/MIN)*MIN-1]],funding:{rate:.0001},
-    book:{bids:[[1.199,5000],[1.198,5000]],asks:[[1.2,5000],[1.201,5000]]},...(opt.src??{})};
+    book:{bids:[[1.199,2000],[1.198,2000]],asks:[[1.2,2000],[1.201,2000]]},...(opt.src??{})};
 }
 export function mockApi(wireFor,{model='gpt-5.4-mini-2026-03-17',status=200}={}){
   const calls=[];

@@ -96,11 +96,20 @@ export function riskFlags(packet){
 
 const obj=properties=>({type:'object',properties,required:Object.keys(properties),additionalProperties:false});
 const citeable=task=>FACT_KEYS.filter(k=>task==='HOLD'||!POSITION_KEYS.includes(k));
-export function wireSchema(task){
-  const key={type:'string',enum:citeable(task)};
-  return obj({t:{type:'string',enum:[task]},c:{type:'string',minLength:1,maxLength:80},d:{type:'string',enum:DECISIONS[task]},
-    reasons:{type:'array',maxItems:4,items:obj({r:{type:'string',enum:categoriesFor(task)},e:{type:'array',maxItems:4,items:key}})},
-    support:{type:'array',maxItems:6,items:{type:'string',enum:Object.keys(SUPPORT_UP).filter(k=>task==='HOLD'||!POSITION_KEYS.includes(k))}},n:{type:'string',minLength:1,maxLength:200}});
+/** Output schema. With a packet, the choices are narrowed to THIS snapshot: only categories
+ * whose band is breached now can be a reason, only facts that currently point up can be
+ * support, and SKIP/EXIT is not offered when no category is breached. The server still
+ * re-validates every answer against the same packet. */
+export function wireSchema(task,packet=null){
+  const risk=packet?riskFlags(packet):null,m=packet?.facts?.values;
+  const cats=risk?categoriesFor(task).filter(k=>['SOFT','HARD'].includes(risk.flags[k]?.level)):categoriesFor(task);
+  const catFacts=[...new Set(cats.flatMap(k=>CATEGORIES[k].facts))].filter(k=>!m||has(m,k));
+  const up=Object.keys(SUPPORT_UP).filter(k=>(task==='HOLD'||!POSITION_KEYS.includes(k))&&(!m||(has(m,k)&&SUPPORT_UP[k](m[k])===true)));
+  const decisions=cats.length?DECISIONS[task]:DECISIONS[task].filter(d=>d!=='SKIP'&&d!=='EXIT');
+  const reasonItem=obj({r:{type:'string',enum:cats.length?cats:['DATA_INCOMPLETE']},e:{type:'array',maxItems:4,items:{type:'string',enum:catFacts.length?catFacts:['return_5m']}}});
+  return obj({t:{type:'string',enum:[task]},c:{type:'string',minLength:1,maxLength:80},d:{type:'string',enum:decisions},
+    reasons:{type:'array',maxItems:cats.length?4:0,items:reasonItem},
+    support:{type:'array',maxItems:6,items:{type:'string',enum:up.length?up:['return_5m']}},n:{type:'string',minLength:1,maxLength:200}});
 }
 function ensure(ok,reason){if(!ok)throw Error(reason);}
 export function validateShape(v,s,p='$'){

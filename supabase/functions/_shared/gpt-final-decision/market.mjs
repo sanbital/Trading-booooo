@@ -9,7 +9,7 @@ async function get(fetchFn,path,ms){
 const q=o=>new URLSearchParams(Object.fromEntries(Object.entries(o).map(([k,v])=>[k,String(v)])));
 /** @returns src for computeFacts, plus per-source errors. Never throws for a single source. */
 export async function readSources(symbol,asOf,{mode='LIVE',fetchFn=fetch,ms=3000,btcCache=null}={}){
-  if(!/^[A-Z0-9]{2,60}USDT$/.test(symbol))throw Error('SYMBOL_INVALID');
+  if(!/^[\p{L}\p{N}_]{1,60}USDT$/u.test(symbol))throw Error('SYMBOL_INVALID');
   const end=Math.floor(asOf/MIN)*MIN-1,end5=Math.floor(asOf/(5*MIN))*5*MIN-1,errors={};
   const safe=async(name,fn)=>{try{return await fn();}catch(e){errors[name]=String(e?.message??e).slice(0,60);return null;}};
   const kl=(s,interval,limit,endTime)=>get(fetchFn,'/fapi/v1/klines?'+q({symbol:s,interval,limit,endTime}),ms);

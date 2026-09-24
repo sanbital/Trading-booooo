@@ -12,7 +12,7 @@ const hold=async(opt,pos={entryPrice:1.1,peakPrice:1.2,entryAt:T-3600000,lastHig
 
 test('facts use only completed bars before asOf and separate machine judgments',()=>{
   const f=facts();assert.ok(f.quality.candles_complete);assert.ok(f.values.return_5m>0);assert.ok(f.values.taker_buy_ratio_5m>.59);
-  assert.equal(f.values.ask_depth_to_order,(1.2*5000+1.201*5000)/600);
+  assert.equal(f.values.ask_depth_to_order,(1.2*2000+1.201*2000)/600);
   const later=computeFacts({...src(T),one:[...src(T).one,[T,'9','9','9','9','0',T+MIN-1,'1','0','1','1','0']]},{asOf:T+2000});
   assert.equal(later.values.return_1m,f.values.return_1m,'a bar closing after asOf is ignored');
   assert.deepEqual(Object.keys(f.values).sort(),[...FACT_KEYS].sort());
@@ -69,4 +69,14 @@ test('payload: fixed prefix per task, identity-free cache key, no numbers from t
   const a=payloadFor(await entry()),b=payloadFor(await hold());
   assert.equal(a.prompt_cache_key,'boo-fd1-entry');assert.equal(b.prompt_cache_key,'boo-fd1-hold');assert.notEqual(a.input[0].content,b.input[0].content);
   assert.ok(Buffer.byteLength(a.input[1].content)<8000);
+});
+test('per-snapshot schema: only breached categories and currently-up facts are selectable',async()=>{
+  const calm=await entry(),s=wireSchema('ENTRY',calm);
+  assert.deepEqual(s.properties.d.enum,['BUY','ABSTAIN']);assert.equal(s.properties.reasons.maxItems,0);
+  assert.ok(s.properties.support.items.enum.includes('return_5m'));assert.ok(!s.properties.support.items.enum.includes('spread_bps')||calm.facts.values.spread_bps<=10);
+  const sell=await entry({buy:.3}),t=wireSchema('ENTRY',sell);
+  assert.ok(t.properties.d.enum.includes('SKIP'));assert.ok(t.properties.reasons.items.properties.r.enum.includes('SELL_DOMINANCE'));
+  assert.ok(!t.properties.reasons.items.properties.r.enum.includes('MOMENTUM_FADED'));
+  assert.ok(!t.properties.support.items.enum.includes('taker_buy_ratio_5m'));
+  assert.deepEqual(payloadFor(sell).text.format.schema,t);
 });
