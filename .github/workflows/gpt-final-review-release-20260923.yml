@@ -86,7 +86,6 @@ jobs:
             supabase/functions/_shared/leader-qv3-rules.mjs \
             supabase/functions/_shared/leader-e1-runtime.mjs \
             supabase/functions/_shared/leader-b06133-entry.mjs \
-            supabase/functions/_shared/leader-cec0040.mjs \
             supabase/functions/_shared/leader-pullback-reaccel.mjs \
             supabase/functions/_shared/boo \
             supabase/functions/v10-lane-executor/entry-evidence.mjs \
@@ -97,7 +96,13 @@ jobs:
           grep -Fq 'leverage: 3' supabase/functions/_shared/leader-slot-sizing.mjs
           grep -Fq 'const MAX_SLOTS=10' supabase/functions/v10-lane-executor/index.ts
           grep -Fq 'const SETUP_MAX_CONCURRENT=4' supabase/functions/v10-lane-executor/index.ts
-          grep -Fq 'PATCH="CEC0040-P142-DEPLOYMENT-READY-1"' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'PATCH="V30-FRONT-SCORE-LIVE-1"' supabase/functions/v10-lane-executor/index.ts
+          # leader-cec0040.mjs: the ONLY permitted change since the frozen base is the
+          # operator-approved V30_SCORE -> retestAnchor exit-style mapping (2026-09-24).
+          git diff -U0 "$FROZEN_BASE" HEAD -- supabase/functions/_shared/leader-cec0040.mjs \
+            | grep -E '^[-+][^-+]' > release-evidence/cec0040-diff.txt || true
+          test "$(grep -c '^-' release-evidence/cec0040-diff.txt || true)" = 0
+          test "$(grep -vE "^\+  (// V30 front admission without a B06133 branch \(2026-09-24\): R62's retest-anchor exit,|// the style the V30 validation replay used for branchless candidates\.|V30_SCORE:'retestAnchor',)$" release-evidence/cec0040-diff.txt | wc -l)" = 0
           git diff --stat "$FROZEN_BASE" HEAD -- supabase/functions > release-evidence/source-diff-stat.txt
           # The generator stamps targetMarginUsdt/leverage from the SAME contract the
           # executor sizes from; the deployed bundle must carry 200 x 3.

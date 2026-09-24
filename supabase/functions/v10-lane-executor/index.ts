@@ -23,9 +23,10 @@ import {RISK_BUDGET_VERSION} from "../_shared/boo/risk-budget.mjs";
 import {SLOT_SIZING_CONTRACT,assertSlotSizingContract,floorStep,planSlotEntry,slotSizingBounds} from "../_shared/leader-slot-sizing.mjs";
 import {SETUP_POLICY,SETUP_POLICY_VERSION,SETUP_REASON,SETUP_STATE,advancePullbackSetup,deserializeSetup,enterPullbackSetup,entryTriggerFresh,expirePullbackSetup,isTerminal as setupIsTerminal,serializeSetup,setupIdentity,startPullbackSetup} from "../_shared/leader-pullback-reaccel.mjs";
 import {B06133_VERSION,evaluateB06133,fetchB06133Inputs} from "../_shared/leader-b06133-entry.mjs";
+import {V30_FRONT_LIVE_VERSION,v30FrontDecision,entryBranchOf,baselineAllowedV30} from "../_shared/gpt-final-review/contract.mjs";
 import {CEC0040_CONFIG,CEC0040_TARGET_VERSION,CEC0040_VERSION,P142_POLICY_VERSION,
   advanceP142Completed,nextExitP142,p142Mean44Target} from "../_shared/leader-cec0040.mjs";
-const REVISION="V11-LONG-REGIME-1.0.1",PATCH="CEC0040-P142-DEPLOYMENT-READY-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
+const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V30-FRONT-SCORE-LIVE-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Object.freeze({
   id:"2026-09-13-USER-PRIORITY-OVERRIDE",basis:"OPERATOR_OVERRIDE_UNVALIDATED",
   priorPerformanceVerdict:"DEFER",parametersValidatedByBacktest:false
@@ -60,7 +61,7 @@ function controlReleaseScope(decision){
 // reasons: each is a property of ONE symbol's price and lot step, so none of them
 // says anything about the next candidate in the queue. ENTRY_GRANULARITY_BPS and ENTRY_SLOT_GRANULARITY_MARGIN
 // are kept so rows written by earlier revisions still classify the same way.
-const ENTRY_SKIP_SYMBOL_SCOPED=/^(SIGNAL_STALE_OR_FUTURE|SUPERSEDED_BY_FRESHER_SIGNAL|V17_SETUP_BUDGET_EXHAUSTED|V17_TRIGGER_STALE|V17_TRIGGER_FUTURE|V17_SETUP_NOT_TRIGGERED|V17_SETUP_EXPIRED|V17_CHASE_EXPIRED|V17_ENTRY_DRIFT|V17_SETUP_INVALID_PRICE|V17_SETUP_POLICY_SLOT_LIMIT|B06133_REJECT|B06133_INPUT_UNKNOWN|B06133_MARKET_UNAVAILABLE|B06133_SELECTION_INVALID|CEC0040_SELECTION_INVALID|ENTRY_DRIFT|WRONG_STRATEGY|INVALID_PRICE|V17_EXIT_POLICY_INVALID|MANUAL_SYMBOL_LOCKED|ENTRY_SPREAD|ENTRY_FEATURES_INVALID|QTY_INVALID|QTY_INPUT_INVALID|MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET|QTY_STEP_EXCEEDS_MARGIN_BUDGET|QTY_STEP_BELOW_SLOT_FLOOR|IOC_PRICE_CAP_EXCEEDED|ENTRY_GRANULARITY_BPS|ENTRY_SLOT_GRANULARITY_MARGIN|ENTRY_NOTIONAL_UNDERSIZED|V17_LIMIT_PRICE_MARGIN_OVERFLOW)/;
+const ENTRY_SKIP_SYMBOL_SCOPED=/^(SIGNAL_STALE_OR_FUTURE|SUPERSEDED_BY_FRESHER_SIGNAL|V17_SETUP_BUDGET_EXHAUSTED|V17_TRIGGER_STALE|V17_TRIGGER_FUTURE|V17_SETUP_NOT_TRIGGERED|V17_SETUP_EXPIRED|V17_CHASE_EXPIRED|V17_ENTRY_DRIFT|V17_SETUP_INVALID_PRICE|V17_SETUP_POLICY_SLOT_LIMIT|B06133_REJECT|B06133_INPUT_UNKNOWN|V30_FRONT_REJECT|V30_SELECTION_INVALID|B06133_MARKET_UNAVAILABLE|B06133_SELECTION_INVALID|CEC0040_SELECTION_INVALID|ENTRY_DRIFT|WRONG_STRATEGY|INVALID_PRICE|V17_EXIT_POLICY_INVALID|MANUAL_SYMBOL_LOCKED|ENTRY_SPREAD|ENTRY_FEATURES_INVALID|QTY_INVALID|QTY_INPUT_INVALID|MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET|QTY_STEP_EXCEEDS_MARGIN_BUDGET|QTY_STEP_BELOW_SLOT_FLOOR|IOC_PRICE_CAP_EXCEEDED|ENTRY_GRANULARITY_BPS|ENTRY_SLOT_GRANULARITY_MARGIN|ENTRY_NOTIONAL_UNDERSIZED|V17_LIMIT_PRICE_MARGIN_OVERFLOW)/;
 // Slot geometry is NOT declared here. MARGIN/LEV/NOTIONAL are views onto the one
 // sizing contract (_shared/leader-slot-sizing.mjs) that the signal generator and
 // the V17 policy also read, so the four copies that drifted apart during the
@@ -306,16 +307,21 @@ async function applyB06133Selection(db,row,state){
         prebars:null,btc:{known:false,return30m:null,return2h:null,freshnessMs:null},btcBars:null},
       error:String(error?.message??error).slice(0,300)};
   }
-  const features={...rec(row.features),b06133:stamp};
+  // V30 (operator decision 2026-09-24): B06133 is recorded exactly as evaluated and kept
+  // as reference evidence; admission is the V30 score gate on those same factors.
+  const v30=v30FrontDecision(stamp,V30_FRONT_LIVE_VERSION),admitted=v30.admitted===true;
+  const features={...rec(row.features),b06133:stamp,v30Front:v30};
   const patch={features,updated_at:new Date(evaluatedAt).toISOString()};
-  if(!stamp.allowed){patch.status="REJECTED";patch.reject_reason=stamp.reason;}
+  if(!admitted){patch.status="REJECTED";patch.reject_reason=stamp.result===null?stamp.reason:
+    `V30_FRONT_REJECT:${[...v30.failed,...v30.unknown].join("+")||"UNKNOWN"}`;}
   const write=await db.from("v11_long_regime_signals").update(patch).eq("id",row.id).eq("status","NEW").select("*").maybeSingle();
   if(write.error)throw Error(`B06133_WRITE:${write.error.message}`);
   if(!write.data)return {allowed:false,row,stamp:{...stamp,reason:"B06133_CAS_RACE"}};
-  await audit(db,null,"BULL","BULL",stamp.allowed?"ENTRY_ALLOW":"ENTRY_REJECT",stamp.reason,
-    {signalId:row.id,symbol:row.symbol,stage:"B06133_ENTRY_SELECTION",finalAdmission:false,
-      orderDispatched:false,b06133:stamp});
-  return {allowed:stamp.allowed,row:write.data,stamp};
+  const reason=admitted?"V30_FRONT_ADMIT":patch.reject_reason;
+  await audit(db,null,"BULL","BULL",admitted?"ENTRY_ALLOW":"ENTRY_REJECT",reason,
+    {signalId:row.id,symbol:row.symbol,stage:"V30_ENTRY_SELECTION",finalAdmission:false,
+      orderDispatched:false,b06133:stamp,v30Front:v30});
+  return {allowed:admitted,row:write.data,stamp:{...stamp,reason}};
 }
 
 /**
@@ -324,14 +330,13 @@ async function applyB06133Selection(db,row,state){
  * this signal's cutoff. Shadow mode records the model action but preserves B06133.
  */
 async function applyCec0040Selection(db,row,state){
-  const b06133=rec(rec(row.features).b06133),decisionAt=Number(state?.triggerAt);
-  if(b06133.version!==B06133_VERSION||b06133.allowed!==true||
-     !["R62","BUYER_SHARE_RESCUE","BOTH"].includes(b06133.branch)||!Number.isSafeInteger(decisionAt))
+  const b06133=rec(rec(row.features).b06133),decisionAt=Number(state?.triggerAt),branch=entryBranchOf(rec(row.features));
+  if(b06133.version!==B06133_VERSION||!branch||Number(b06133.source?.decisionAt)!==decisionAt||!Number.isSafeInteger(decisionAt))
     throw Error("CEC0040_INPUT_INVALID");
   await verifyExecutionLease(db);
   const r=await db.rpc("v11_cec0040_decide",{p_signal_id:row.id,
     p_decision_at:new Date(decisionAt).toISOString(),p_symbol:String(row.symbol).toUpperCase(),
-    p_branch:b06133.branch,p_bootstrap:false});
+    p_branch:branch,p_bootstrap:false});
   if(r.error)throw Error(`CEC0040_DECISION:${r.error.message}`);
   const d=rec(r.data),evaluatedAt=Date.now(),stamp={version:CEC0040_VERSION,targetVersion:CEC0040_TARGET_VERSION,
     ready:d.ready===true,action:d.action??null,modelAllowed:d.modelAllowed===true,
@@ -355,11 +360,11 @@ async function applyCec0040Selection(db,row,state){
 }
 
 async function registerCec0040Target(db,position,signal){
-  const cec=rec(rec(signal.features).cec0040),b06133=rec(rec(signal.features).b06133);
-  if(cec.version!==CEC0040_VERSION||cec.modelAllowed!==true)return null;
+  const cec=rec(rec(signal.features).cec0040),branch=entryBranchOf(rec(signal.features));
+  if(cec.version!==CEC0040_VERSION||cec.modelAllowed!==true||!branch)return null;
   await verifyExecutionLease(db);
   const r=await db.rpc("v11_cec0040_register_target",{p_position_id:position.id,p_signal_id:signal.id,
-    p_symbol:String(position.symbol).toUpperCase(),p_branch:b06133.branch,p_entry_at:position.entry_at,
+    p_symbol:String(position.symbol).toUpperCase(),p_branch:branch,p_entry_at:position.entry_at,
     p_actual_entry_price:Number(position.entry_price)});
   if(r.error)throw Error(`CEC0040_TARGET_REGISTER:${r.error.message}`);
   return r.data;
@@ -860,10 +865,13 @@ async function booGate(db,s,phase,ctx){return booVerdict(s,phase,await booGateIn
 async function openBull(db,s,openPositions,manual=null,attempt={},managementFailures=[]){
 const gateway=opsGateway(db);
 const selection=rec(rec(s.features).b06133),cec=rec(rec(s.features).cec0040),selectedSetup=signalSetup(s);
-if(selection.version!==B06133_VERSION||selection.allowed!==true||selection.result!==true||
-  !["R62","BUYER_SHARE_RESCUE","BOTH"].includes(selection.branch)||
-  Number(selection.source?.decisionAt)!==Number(selectedSetup?.triggerAt))
+// Under V30 the B06133 stamp must be intact and taken at this trigger, but its
+// allowed/branch values are reference evidence: neither required nor rewritten.
+if(selection.version!==B06133_VERSION||Number(selection.source?.decisionAt)!==Number(selectedSetup?.triggerAt))
   throw new Error("B06133_SELECTION_INVALID");
+// The V30 stamp must equal what the policy recomputes from that unmodified stamp.
+if(!baselineAllowedV30(s,V30_FRONT_LIVE_VERSION)||!entryBranchOf(rec(s.features)))
+  throw new Error("V30_SELECTION_INVALID");
 if(cec.version!==CEC0040_VERSION||cec.targetVersion!==CEC0040_TARGET_VERSION||cec.ready!==true||
   cec.effectiveAllowed!==true||Number(cec.decisionAt)!==Number(selectedSetup?.triggerAt)||
   !["ADMIT","PROBE","REJECT"].includes(cec.action)||
@@ -1109,7 +1117,7 @@ await verifyExecutionLease(db);
 const gptDispatchCheck=gptFinalCheck(db,s);
 if(!gptDispatchCheck.allowed)return{entered:false,reason:gptDispatchCheck.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL};
 const id=cid("v11e",s.id),rp={action:"create_order",leverage:LEV,order:{market:s.symbol,side:"BUY",type:"LIMIT",price:limitPrice,time_in_force:"IOC",quantity:sized.amount,identifier:id,position_side:"LONG",position_effect:"OPEN"},wait_for_final_ms:4000},
-  oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,intent:"OPEN_LONG",reason:"V17_LEADER_ENTRY_IOC",client_order_id:id,requested_quantity:sized.amount,state:"PLANNED",request_payload:{...rp,quantity_step:step,price_tick:filters.priceTick,min_notional_usdt:filters.minNotionalUsdt,target_margin_usdt:MARGIN,sizing_contract_version:SLOT_SIZING_CONTRACT.version,entry_timing_policy:setupGoverns(s)?{version:SETUP_POLICY_VERSION,activation:SETUP_LIVE_CUTOVER,setup:serializeSetup(signalSetup(s),8)}:null,entry_selection:rec(s.features).b06133,entry_controller:rec(s.features).cec0040,sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,order_notional_usdt:sized.orderNotionalUsdt,sizing_bound_by:sized.boundBy,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,setup_max_concurrent:SETUP_MAX_CONCURRENT,executor_patch:PATCH,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION,max_entry_drift_pct:POLICY.maxEntryDriftPct},entry_control:finalDecision.evidence,e1:E1_ENABLED?e1Decision:null,x1:X1_ENABLED?{policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,...OPERATOR_OVERRIDE}:null,operator_override:E1_ENABLED||X1_ENABLED?OPERATOR_OVERRIDE:null,qv3:qv3Active?{version:QV3_VERSION,activation:QV3_LIVE_CUTOVER,basis:QV3_ACTIVATION_BASIS}:null}}).select("*").single();
+  oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,intent:"OPEN_LONG",reason:"V17_LEADER_ENTRY_IOC",client_order_id:id,requested_quantity:sized.amount,state:"PLANNED",request_payload:{...rp,quantity_step:step,price_tick:filters.priceTick,min_notional_usdt:filters.minNotionalUsdt,target_margin_usdt:MARGIN,sizing_contract_version:SLOT_SIZING_CONTRACT.version,entry_timing_policy:setupGoverns(s)?{version:SETUP_POLICY_VERSION,activation:SETUP_LIVE_CUTOVER,setup:serializeSetup(signalSetup(s),8)}:null,entry_selection:rec(s.features).b06133,entry_front:rec(s.features).v30Front??null,entry_branch:entryBranchOf(rec(s.features)),entry_controller:rec(s.features).cec0040,sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,order_notional_usdt:sized.orderNotionalUsdt,sizing_bound_by:sized.boundBy,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,setup_max_concurrent:SETUP_MAX_CONCURRENT,executor_patch:PATCH,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION,max_entry_drift_pct:POLICY.maxEntryDriftPct},entry_control:finalDecision.evidence,e1:E1_ENABLED?e1Decision:null,x1:X1_ENABLED?{policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,...OPERATOR_OVERRIDE}:null,operator_override:E1_ENABLED||X1_ENABLED?OPERATOR_OVERRIDE:null,qv3:qv3Active?{version:QV3_VERSION,activation:QV3_LIVE_CUTOVER,basis:QV3_ACTIVATION_BASIS}:null}}).select("*").single();
 if(oi.error)throw new Error(`ORDER_INTENT:${oi.error.message}`);
 try{
   await verifyExecutionLease(db);attempt.dispatched=true;const initialRaw=await gateway(rp),initial=fill(initialRaw);
@@ -1214,7 +1222,7 @@ async function settleKnownEntry(db,intent,raw,gw=opsGateway(db)) {
       entryTiming=rec(intent.request_payload?.entry_timing_policy),
       entryController=rec(intent.request_payload?.entry_controller),
       fillGuard=entryPolicy?.version===ENTRY_EXECUTION_POLICY_VERSION?postFillEntryGuard(f,z.avg):null,
-      pos=await db.from("v11_long_regime_positions").insert({signal_id:s.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:s.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{entrySelectionPolicyVersion:intent.request_payload?.entry_selection?.version??null,b06133:intent.request_payload?.entry_selection??null,entryControllerPolicyVersion:entryController?.version??null,cec0040:entryController?.version===CEC0040_VERSION?entryController:null,qv3:entryTiming?.version===SETUP_POLICY_VERSION?null:(intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null),entryTimingPolicyVersion:entryTiming?.version??null,entryTimingSetup:entryTiming?.setup??null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,leaderExitPolicyVersion:entryController?.version===CEC0040_VERSION&&entryController.enforcementEnabled===true?P142_POLICY_VERSION:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,entryConfirmationPolicyVersion:intent.request_payload?.e1?.policyVersion??null,entryConfirmation:intent.request_payload?.e1??null,exitObservationPolicyVersion:intent.request_payload?.x1?.policyVersion??null,x1Observation:{observedBidPeak:z.avg,executableVwapPeak:null,lastObservationId:null,lastObservationAt:null,source:"P10_TOP_OF_BOOK_BATCH",maxQuoteAgeMs:1000},entryMarketRules:{priceTick:N(intent.request_payload?.price_tick),quantityStep:N(intent.request_payload?.quantity_step)},operatorOverride:intent.request_payload?.operator_override??null,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,setupMaxConcurrent:SETUP_MAX_CONCURRENT,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFeatures:f}}).select("*").single();
+      pos=await db.from("v11_long_regime_positions").insert({signal_id:s.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:s.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{entrySelectionPolicyVersion:intent.request_payload?.entry_selection?.version??null,b06133:intent.request_payload?.entry_selection??null,v30Front:intent.request_payload?.entry_front??null,entryBranch:intent.request_payload?.entry_branch??null,entryControllerPolicyVersion:entryController?.version??null,cec0040:entryController?.version===CEC0040_VERSION?entryController:null,qv3:entryTiming?.version===SETUP_POLICY_VERSION?null:(intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null),entryTimingPolicyVersion:entryTiming?.version??null,entryTimingSetup:entryTiming?.setup??null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,leaderExitPolicyVersion:entryController?.version===CEC0040_VERSION&&entryController.enforcementEnabled===true?P142_POLICY_VERSION:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,entryConfirmationPolicyVersion:intent.request_payload?.e1?.policyVersion??null,entryConfirmation:intent.request_payload?.e1??null,exitObservationPolicyVersion:intent.request_payload?.x1?.policyVersion??null,x1Observation:{observedBidPeak:z.avg,executableVwapPeak:null,lastObservationId:null,lastObservationAt:null,source:"P10_TOP_OF_BOOK_BATCH",maxQuoteAgeMs:1000},entryMarketRules:{priceTick:N(intent.request_payload?.price_tick),quantityStep:N(intent.request_payload?.quantity_step)},operatorOverride:intent.request_payload?.operator_override??null,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,setupMaxConcurrent:SETUP_MAX_CONCURRENT,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFeatures:f}}).select("*").single();
     if(pos.error)throw Error(`POSITION:${pos.error.message}`);position=pos.data;
   }
   await verifyExecutionLease(db);
@@ -2124,7 +2132,7 @@ async function manageLeader(db,p,ctx){
         p142State=advanceP142Completed({id:p.id,entryAt,entryPrice:Number(p.entry_price),
           entryFee:Number(p.entry_fee_usdt),quantity:Number(p.original_quantity),
           stopPrice:Number(p.hard_stop_price),peakPrice:Number(p.peak_price),
-          branch:rec(meta.b06133).branch},bars,p142State);
+          branch:meta.entryBranch??rec(meta.b06133).branch},bars,p142State);
       }catch(error){
         p142Error=String(error?.message??error).slice(0,300);
         console.error("P142_COMPLETED_CANDLE_UNAVAILABLE",p.id,p142Error);
