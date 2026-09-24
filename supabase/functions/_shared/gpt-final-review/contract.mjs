@@ -48,7 +48,39 @@ export function decisionIdentity(s) {
     cec:{version:c.version??null,targetVersion:c.targetVersion??null,decisionAt:numberOrNull(c.decisionAt),
       action:c.action??null,ready:c.ready===true,effectiveAllowed:c.effectiveAllowed===true,enforcementEnabled:c.enforcementEnabled===true},
     // Bound locally to prevent changing exit rules after a review. Not sent to the LLM.
-    exit_policy:JSON.parse(JSON.stringify(f.exitPolicy??{}))};
+    exit_policy:JSON.parse(JSON.stringify(f.exitPolicy??{})),
+    // Present ONLY for candidates admitted by an alternative front-end policy (V30 shadow).
+    // Production rows never carry v30Front, so their identity is byte-identical to before.
+    ...(f.v30Front?{front_policy:frontPolicyIdentity(f.v30Front)}:{})};
+}
+/* V30 front-end score policy (SHADOW observation only, 2026-09-24).
+ * B06133's two most stable factors on the production candidate stream (split-half
+ * consistent, 2026-09-08..09-24) point the OPPOSITE way to its branches: recent
+ * acceleration (fresh5over15=true) is the better side, extreme volume (volumeTails=true)
+ * the worse. V30 admits on those two, keeps every other B06133 factor as reference,
+ * and never rewrites the B06133 stamp: a candidate B06133 rejected stays rejected there. */
+export const V30_FRONT_VERSION='V30_FRONT_SCORE_SHADOW_1';
+export const V30_REQUIRED=Object.freeze({fresh5over15:true,volumeTails:false});
+export function v30FrontDecision(b06133){
+  const f=b06133?.factors??{},failed=[],unknown=[];
+  for(const [k,want] of Object.entries(V30_REQUIRED)){const v=tri(f[k]);if(v===null)unknown.push(k);else if(v!==want)failed.push(k);}
+  return {version:V30_FRONT_VERSION,required:{...V30_REQUIRED},factors:Object.fromEntries(FACTORS.map(k=>[k,tri(f[k])])),
+    admitted:failed.length===0&&unknown.length===0,failed,unknown,
+    b06133:{version:b06133?.version??null,allowed:b06133?.allowed===true,result:tri(b06133?.result),branch:b06133?.branch??null,reason:b06133?.reason??null}};
+}
+function frontPolicyIdentity(v){
+  return {version:v.version??null,admitted:v.admitted===true,failed:[...(v.failed??[])],unknown:[...(v.unknown??[])],
+    b06133_allowed:v.b06133?.allowed===true,b06133_reason:v.b06133?.reason??null};
+}
+/** Baseline for the V30 shadow: the SAME trigger and B06133 evidence, a different admission rule. */
+export function baselineAllowedV30(s){
+  const f=s?.features,b=f?.b06133,t=f?.v17Setup,v=f?.v30Front;
+  if(!(s?.id&&s?.symbol&&t?.state&&Number.isSafeInteger(Number(t.triggerAt))&&Number(t.triggerAt)>0&&Number(t.triggerAt)%60000===0))return false;
+  if(b?.version!=='B06133_ENTRY_SELECTION_1'||Number(b.source?.decisionAt)!==Number(t.triggerAt))return false;
+  if(v?.version!==V30_FRONT_VERSION||v.admitted!==true)return false;
+  // The stamp must be what the policy computes from the unmodified B06133 factors.
+  const again=v30FrontDecision(b);
+  return again.admitted===true&&JSON.stringify(again.factors)===JSON.stringify(v.factors)&&v.b06133?.allowed===(b.allowed===true);
 }
 export function triggerExpiry(s){return Number(s.features.v17Setup.triggerAt)+60000;}
 export function arithmeticCheck(identity) {

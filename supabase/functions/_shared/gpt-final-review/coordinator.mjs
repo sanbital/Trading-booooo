@@ -47,13 +47,14 @@ export class MemoryReviewStore {
 }
 export class FinalReviewCoordinator {
   constructor({config,store,apiKey=()=>'',fetchFn=fetch,market=collectMarket,now=Date.now,schedule=p=>{p.catch(()=>{});},
-    profile=DEFAULT_PROFILE,purpose='PRODUCTION'}){
+    profile=DEFAULT_PROFILE,purpose='PRODUCTION',baseline=baselineAllowed,expiry=triggerExpiry}){
     this.config=config;this.store=store;this.apiKey=apiKey;this.fetchFn=fetchFn;this.market=market;this.now=now;this.schedule=schedule;
-    this.profile=profile;this.purpose=purpose;const wire=profileOf(profile).wire;
+    this.baseline=baseline;this.expiry=expiry;
+    this.profile=profile;this.purpose=purpose;const wire=profileOf(profile).wire,promptText=promptFor(profileOf(profile).prompt??wire);
     this.tickets=new Map();this.tracked=new Map();this.pending=new Map();this.readyHints=new Map();this.yieldArmed=false;
-    this.promptHash=hash(promptFor(wire));this.schemaHash=hash(wireSchema(wire));
+    this.promptHash=hash(promptText);this.schemaHash=hash(wireSchema(wire));
     // purpose is bound so PRODUCTION, DRYRUN and VERIFICATION reviews of one candidate never share a row.
-    this.binding=hash({version:VERSION,model:MODEL,prompt:promptFor(wire),schema:OUTPUT_SCHEMA,wireSchema:wireSchema(wire),limits:LIMITS,profile:profileOf(profile),purpose});
+    this.binding=hash({version:VERSION,model:MODEL,prompt:promptText,schema:OUTPUT_SCHEMA,wireSchema:wireSchema(wire),limits:LIMITS,profile:profileOf(profile),purpose});
   }
   setConfig(config){this.config=config;}
   authorized(){const c=this.config;return c.modeValid!==false&&c.approvalRef.length>0&&c.apiBudgetUsd>=MAX_RESERVED_USD&&
@@ -65,9 +66,9 @@ export class FinalReviewCoordinator {
     this.tickets.delete(String(s?.id));
     for(const [k,h] of this.readyHints)if(h.signalId===String(s?.id))this.readyHints.delete(k);
     const deny=reason=>({allowed:shadow,reason,decision:'ABSTAIN',scope:'CANDIDATE'});
-    if(!baselineAllowed(s))return deny('BASELINE_REJECT_OR_INVALID');
+    if(!this.baseline(s))return deny('BASELINE_REJECT_OR_INVALID');
     if(!this.authorized())return deny(this.config.source==='CONTROL_UNREADABLE'?'GPT_CONTROL_UNREADABLE':'GPT_REVIEW_NOT_CONFIGURED_OR_APPROVED');
-    const now=this.now(),expires=triggerExpiry(s);
+    const now=this.now(),expires=this.expiry(s);
     if(now>=expires-LIMITS.executionReserveMs)return deny('GPT_TRIGGER_EXPIRED');
     let key;
     try{
@@ -140,7 +141,7 @@ export class FinalReviewCoordinator {
     if(this.config.mode==='OFF'||this.config.mode==='SHADOW')return {allowed:true,reason:this.config.mode};
     if(!this.authorized())return {allowed:false,reason:'GPT_REVIEW_NOT_APPROVED'};
     const t=this.tickets.get(String(s?.id)),now=this.now();
-    if(!baselineAllowed(s)||!t||t.identityJson!==canonical(decisionIdentity(s)))return {allowed:false,reason:'GPT_REVIEW_IDENTITY_CHANGED'};
+    if(!this.baseline(s)||!t||t.identityJson!==canonical(decisionIdentity(s)))return {allowed:false,reason:'GPT_REVIEW_IDENTITY_CHANGED'};
     if(now>=t.validUntil||now>=t.expires-LIMITS.executionReserveMs)return {allowed:false,reason:'GPT_REVIEW_EXPIRED'};
     return {allowed:t.decision==='PASS',reason:'GPT_'+t.decision,review:t};
   }

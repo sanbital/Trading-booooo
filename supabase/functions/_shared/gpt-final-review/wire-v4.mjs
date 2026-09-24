@@ -115,8 +115,10 @@ export function compactInputV6(packet){
  for(const [id,path] of Object.entries(FACT_PATHS)){if(!id.startsWith('C_'))continue;const f=evidenceAt(packet,path);facts[id]=[f.value,f.unit,f.formula??null,f.missing_reason??null];}
  const bars=xs=>(xs??[]).map(b=>[b.open_offset_ms,b.open,b.high,b.low,b.close]);
  const o=packet.original_model,cur=packet.current_market,om=k=>o.metrics?.[k]?.value??null,risk=riskAssessment(packet);
+ const fp=o.front_policy??null;
  const input={w:WIRE_VERSION_V6,c:packet.candidate_id,h:packet.snapshot_hash,as_of_offset_ms:packet.as_of_offset_ms,
-  machine_decision:{proposed_action:o.proposed_action,status:'ADMITTED_BY_V17_B06133_CEC0040',selector_branch:o.branch,
+  machine_decision:{proposed_action:o.proposed_action,status:fp?'ADMITTED_BY_'+fp.version:'ADMITTED_BY_V17_B06133_CEC0040',
+   ...(fp?{front_policy:fp,b06133_rule:{result:fp.b06133_allowed?'ALLOW':'REJECT',reason:fp.b06133_reason,role:'REFERENCE_ONLY'}}:{}),selector_branch:o.branch,
    controller:o.global_control,context_returns:{return15m:om('return15m'),return30m:om('return30m'),return60m:om('return60m'),volumeRatio:om('volumeRatio')},
    note:'machine selection is final for selection; do not re-evaluate it'},
   risk_flags:Object.fromEntries(Object.entries(risk.flags).map(([k,x])=>[k,{level:x.level,rule:x.rule,facts:x.facts}])),

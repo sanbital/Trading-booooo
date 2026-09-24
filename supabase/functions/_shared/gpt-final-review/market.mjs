@@ -108,7 +108,8 @@ export async function buildPacket(identity,current,asOf){
       metrics:originalMetrics,factors:factorMetrics,arithmetic_check:arithmeticCheck(identity),
       source_timing:{decision_offset_ms:0,original_available_offset_ms:null,
         missing_reason:'ORIGINAL_SELECTOR_RECEIPT_TIME_NOT_RECORDED; values are available at this new review snapshot, not claimed available at the historical trigger'},
-      global_control:{scope:'STRATEGY_GLOBAL_NOT_SYMBOL_EXPECTED_RETURN',action:identity.cec.action,enforcement_enabled:identity.cec.enforcementEnabled}},
+      global_control:{scope:'STRATEGY_GLOBAL_NOT_SYMBOL_EXPECTED_RETURN',action:identity.cec.action,enforcement_enabled:identity.cec.enforcementEnabled},
+      ...(identity.front_policy?{front_policy:identity.front_policy}:{})},
     current_market:current};
   packet.snapshot_hash=await packetHash(packet);
   ensure(new TextEncoder().encode(canonicalPacket(packet)).length<=LIMITS.inputBytes,'INPUT_TOO_LARGE');

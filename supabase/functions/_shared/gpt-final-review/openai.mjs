@@ -10,7 +10,9 @@ export const PROFILES=Object.freeze({
   V4:Object.freeze({wire:'V4',maxOutputTokens:LIMITS.outputTokens,verbosity:null,cacheKey:'boo-final-review-v4-facts'}),
   V5:Object.freeze({wire:'V5',maxOutputTokens:900,verbosity:'low',cacheKey:'boo-final-review-v5-facts'}),
   /** Production since 2026-09-24: real-time risk review only (see contract.mjs V6). */
-  V6:Object.freeze({wire:'V6',maxOutputTokens:700,verbosity:'low',cacheKey:'boo-final-review-v6-rtrisk'})
+  V6:Object.freeze({wire:'V6',maxOutputTokens:700,verbosity:'low',cacheKey:'boo-final-review-v6-rtrisk'}),
+  /** V30 front-policy SHADOW observation: identical wire and validation, prompt names the V30 admission. */
+  V6S:Object.freeze({wire:'V6',prompt:'V6S',maxOutputTokens:700,verbosity:'low',cacheKey:'boo-final-review-v6s-rtrisk'})
 });
 export const DEFAULT_PROFILE='V6';
 export function profileOf(name=DEFAULT_PROFILE){ensure(Object.hasOwn(PROFILES,name),'API_PROFILE_UNKNOWN');return PROFILES[name];}
@@ -20,7 +22,7 @@ export function payloadFor(packet,profileName=DEFAULT_PROFILE){
   // Fixed prefix first (instructions + schema), candidate-specific data last.
   return {model:MODEL,store:false,tools:[],truncation:'disabled',service_tier:'default',prompt_cache_key:p.cacheKey,
     reasoning:{effort:'none'},max_output_tokens:p.maxOutputTokens,
-    input:[{role:'system',content:promptFor(p.wire)},{role:'user',content:JSON.stringify(wireInput(packet,p.wire))}],text};
+    input:[{role:'system',content:promptFor(p.prompt??p.wire)},{role:'user',content:JSON.stringify(wireInput(packet,p.wire))}],text};
 }
 export function costOf(raw){
   const u=raw?.usage,c=u?.input_tokens_details?.cached_tokens;
