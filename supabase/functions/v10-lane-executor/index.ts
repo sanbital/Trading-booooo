@@ -28,7 +28,7 @@ import {B06133_VERSION,evaluateB06133,fetchB06133Inputs} from "../_shared/leader
 import {V30_FRONT_LIVE_VERSION,v30FrontDecision,entryBranchOf,baselineAllowedV30} from "../_shared/gpt-final-review/contract.mjs";
 import {CEC0040_CONFIG,CEC0040_TARGET_VERSION,CEC0040_VERSION,P142_POLICY_VERSION,
   advanceP142Completed,nextExitP142,p142Mean44Target} from "../_shared/leader-cec0040.mjs";
-const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V30-FRONT-SCORE-LIVE-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
+const REVISION="V11-LONG-REGIME-1.0.1",PATCH="FD1-GPT-FINAL-DECISION-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Object.freeze({
   id:"2026-09-13-USER-PRIORITY-OVERRIDE",basis:"OPERATOR_OVERRIDE_UNVALIDATED",
   priorPerformanceVerdict:"DEFER",parametersValidatedByBacktest:false
@@ -349,16 +349,16 @@ async function applyCec0040Selection(db,row,state){
     reason:d.ready!==true?String(d.reason??"CEC0040_STATE_NOT_READY"):
       d.effectiveAllowed===true?d.enforcementEnabled===true?`CEC0040_${d.action}`:`CEC0040_SHADOW_${d.action}`:"CEC0040_REJECT"};
   const features={...rec(row.features),cec0040:stamp},patch={features,updated_at:new Date(evaluatedAt).toISOString()};
-  // CEC0040 is advisory evidence for GPT, not a hard admission gate.
-  // Keep the exact causal stamp (including REJECT) without terminating the signal.
-  // A not-ready CEC state still defers because its evidence is incomplete.
+  // A real model rejection is terminal only after enforcement activation. State lag
+  // remains NEW and may retry inside the existing trigger TTL.
+  if(stamp.ready&&stamp.enforcementEnabled&&!stamp.effectiveAllowed){patch.status="REJECTED";patch.reject_reason=stamp.reason;}
   const write=await db.from("v11_long_regime_signals").update(patch).eq("id",row.id).eq("status","NEW").select("*").maybeSingle();
   if(write.error)throw Error(`CEC0040_WRITE:${write.error.message}`);
   if(!write.data)return {allowed:false,row,stamp:{...stamp,reason:"CEC0040_CAS_RACE"}};
   await audit(db,null,"BULL","BULL",stamp.effectiveAllowed?"ENTRY_ALLOW":"ENTRY_REJECT",stamp.reason,
     {signalId:row.id,symbol:row.symbol,stage:"CEC0040_ENTRY_CONTROL",finalAdmission:false,
       orderDispatched:false,cec0040:stamp});
-  return {allowed:stamp.ready,row:write.data,stamp};
+  return {allowed:stamp.ready&&stamp.effectiveAllowed,row:write.data,stamp};
 }
 
 async function registerCec0040Target(db,position,signal){
@@ -875,8 +875,9 @@ if(selection.version!==B06133_VERSION||Number(selection.source?.decisionAt)!==Nu
 if(!baselineAllowedV30(s,V30_FRONT_LIVE_VERSION)||!entryBranchOf(rec(s.features)))
   throw new Error("V30_SELECTION_INVALID");
 if(cec.version!==CEC0040_VERSION||cec.targetVersion!==CEC0040_TARGET_VERSION||cec.ready!==true||
-  Number(cec.decisionAt)!==Number(selectedSetup?.triggerAt)||
-  !["ADMIT","PROBE","REJECT"].includes(cec.action))
+  cec.effectiveAllowed!==true||Number(cec.decisionAt)!==Number(selectedSetup?.triggerAt)||
+  !["ADMIT","PROBE","REJECT"].includes(cec.action)||
+  (cec.enforcementEnabled===true&&!["ADMIT","PROBE"].includes(cec.action)))
   throw new Error("CEC0040_SELECTION_INVALID");
 const gptEntryCheck=gptFinalCheck(db,s);
 if(!gptEntryCheck.allowed)return{entered:false,reason:gptEntryCheck.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL};

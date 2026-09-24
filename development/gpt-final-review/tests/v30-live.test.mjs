@@ -24,12 +24,9 @@ test('live baseline admits a V30 candidate B06133 rejected, and never rewrites B
   assert.equal(s.features.b06133.allowed,false);assert.equal(s.features.b06133.reason,'B06133_REJECT');
   assert.equal(entryBranchOf(s.features),'V30_SCORE');
 });
-test('live baseline: CEC0040 action is advisory (main 2026-09-24) but the stamp must be fresh and valid',()=>{
-  for(const mut of [c=>{c.ready=false;},c=>{c.decisionAt=T+60000;},c=>{c.version='X';},c=>{c.action='BOGUS';}]){
+test('live baseline keeps every CEC0040 check (FD1 validation: the CEC hard gate independently cut loss)',()=>{
+  for(const mut of [c=>{c.effectiveAllowed=false;},c=>{c.ready=false;},c=>{c.action='REJECT';},c=>{c.decisionAt=T+60000;},c=>{c.version='X';}]){
     const s=b06133Rejected();mut(s.features.cec0040);assert.equal(baselineAllowedLive(s),false);
-  }
-  for(const mut of [c=>{c.effectiveAllowed=false;},c=>{c.action='REJECT';}]){
-    const s=b06133Rejected();mut(s.features.cec0040);assert.equal(baselineAllowedLive(s),true);
   }
   const s=b06133Rejected();s.features.cec0040=undefined;assert.equal(baselineAllowedLive(s),false);
 });

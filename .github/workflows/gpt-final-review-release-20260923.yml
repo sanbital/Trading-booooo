@@ -96,7 +96,7 @@ jobs:
           grep -Fq 'leverage: 3' supabase/functions/_shared/leader-slot-sizing.mjs
           grep -Fq 'const MAX_SLOTS=10' supabase/functions/v10-lane-executor/index.ts
           grep -Fq 'const SETUP_MAX_CONCURRENT=4' supabase/functions/v10-lane-executor/index.ts
-          grep -Fq 'PATCH="V30-FRONT-SCORE-LIVE-1"' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'PATCH="FD1-GPT-FINAL-DECISION-1"' supabase/functions/v10-lane-executor/index.ts
           # leader-cec0040.mjs: the ONLY permitted change since the frozen base is the
           # operator-approved V30_SCORE -> retestAnchor exit-style mapping (2026-09-24).
           git diff -U0 "$FROZEN_BASE" HEAD -- supabase/functions/_shared/leader-cec0040.mjs \
