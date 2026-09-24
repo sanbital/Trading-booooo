@@ -1,6 +1,6 @@
 /** FD1 system prompts. Static text (fact dictionary + category bands) so the prefix is cacheable. */
 import {FACT_DEFS} from './facts.mjs';
-import {CATEGORIES,categoriesFor,SUPPORT_UP} from './contract.mjs';
+import {CATEGORIES,categoriesFor,SUPPORT_TEXT} from './contract.mjs';
 const dict=Object.entries(FACT_DEFS).map(([k,[s,u,d]])=>`- ${k} [${s}, ${u}]: ${d}`).join('\n');
 const cats=task=>categoriesFor(task).map(k=>`- ${k}: ${CATEGORIES[k].text}; cite only: ${CATEGORIES[k].facts.join(', ')||'(none)'}`).join('\n');
 const COMMON=`너는 바이낸스 USDT 무기한 선물 롱 전용 자동매매 '트레이딩 부우'의 최종 매매 판단자다.
@@ -14,8 +14,9 @@ risk_flags는 서버가 공개 임계값으로 계산한 결정론적 상태다(
 
 출력 규칙(서버가 검증하며, 어기면 네 답은 무효 = ABSTAIN 처리):
 - c에는 입력의 candidate_id를 그대로 적는다.
-- reasons의 각 r은 아래 카테고리 중 risk_flags에서 SOFT 또는 HARD인 것만 가능하고, e에는 그 카테고리가 허용한 사실 키만 적는다.
-- support에는 상승 근거가 살아 있음을 보여주는 사실 키만 적는다. 서버가 방향을 검사한다(예: return_5m>0, taker_buy_ratio_5m>0.5, ask_depth_to_order>=5).
+- reasons의 각 r은 아래 카테고리 중 입력 risk_flags에 SOFT 또는 HARD로 표시된 것만 가능하다(risk_flags에 없는 카테고리는 CLEAR 또는 UNKNOWN이므로 사유가 될 수 없다). 또한 e에는 그 카테고리가 허용한 사실 키만 적는다.
+- support에는 아래 '지지 조건'을 지금 실제로 만족하는 사실 키만 적는다. 서버가 값을 확인하며, 조건을 만족하지 않는 키는 버려지고 근거로 세지 않는다.
+지지 조건: ${Object.values(SUPPORT_TEXT).join(', ')}
 - n은 한국어 한두 문장 요약이며 숫자를 쓰지 않는다.
 
 사실 사전:
@@ -42,4 +43,4 @@ EXIT 카테고리:
 ${cats('HOLD')}
 `;
 export const PROMPTS=Object.freeze({ENTRY:ENTRY_PROMPT,HOLD:HOLD_PROMPT});
-export const SUPPORT_KEYS=Object.freeze(Object.keys(SUPPORT_UP));
+

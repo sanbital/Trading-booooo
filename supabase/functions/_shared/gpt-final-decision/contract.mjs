@@ -57,16 +57,20 @@ export const CATEGORIES=Object.freeze({
 export const CATEGORY_IDS=Object.freeze(Object.keys(CATEGORIES));
 export const categoriesFor=task=>CATEGORY_IDS.filter(k=>CATEGORIES[k].tasks.includes(task));
 /** Facts that may be cited as SUPPORT, with the direction that means "uptrend alive". */
-export const SUPPORT_UP=Object.freeze({
-  return_1m:v=>v>0,return_5m:v=>v>0,return_15m:v=>v>0,return_30m:v=>v>0,return_60m:v=>v>0,return_4h:v=>v>0,
-  accel_5m_vs_15m:v=>v>0,accel_15m_vs_60m:v=>v>0,distance_sma20:v=>v>0,distance_trigger_reference:v=>v>0,
-  distance_high_60m:v=>v>=-0.01,distance_low_15m:v=>v>=0.01,volume_ratio_5m_vs_60m:v=>v>=1,
-  taker_buy_ratio_5m:v=>v>0.5,taker_buy_ratio_15m:v=>v>0.5,taker_buy_ratio_60m:v=>v>0.5,buyer_share_change:v=>v>0,
-  relative_strength_15m:v=>v>0,relative_strength_60m:v=>v>0,btc_return_15m:v=>v>=0,btc_return_60m:v=>v>=0,
-  oi_change_5m:v=>v>0,oi_change_60m:v=>v>0,funding_rate:v=>v<0.0008,
-  spread_bps:v=>v<=10,ask_depth_to_order:v=>v>=5,bid_depth_to_order:v=>v>=3,book_imbalance_25bps:v=>v>0,est_buy_slippage_bps:v=>v<8,
-  position_return:v=>v>0,position_drawdown_from_peak:v=>v>-0.01,position_minutes_since_new_high:v=>v<=15
+const UP=Object.freeze({
+  return_1m:['>',0],return_5m:['>',0],return_15m:['>',0],return_30m:['>',0],return_60m:['>',0],return_4h:['>',0],
+  accel_5m_vs_15m:['>',0],accel_15m_vs_60m:['>',0],distance_sma20:['>',0],distance_trigger_reference:['>',0],
+  distance_high_60m:['>=',-0.01],distance_low_15m:['>=',0.01],volume_ratio_5m_vs_60m:['>=',1],
+  taker_buy_ratio_5m:['>',0.5],taker_buy_ratio_15m:['>',0.5],taker_buy_ratio_60m:['>',0.5],buyer_share_change:['>',0],
+  relative_strength_15m:['>',0],relative_strength_60m:['>',0],btc_return_15m:['>=',0],btc_return_60m:['>=',0],
+  oi_change_5m:['>',0],oi_change_60m:['>',0],funding_rate:['<',0.0008],
+  spread_bps:['<=',10],ask_depth_to_order:['>=',5],bid_depth_to_order:['>=',3],book_imbalance_25bps:['>',0],est_buy_slippage_bps:['<',8],
+  position_return:['>',0],position_drawdown_from_peak:['>',-0.01],position_minutes_since_new_high:['<=',15]
 });
+const OPS={'>':(v,t)=>v>t,'>=':(v,t)=>v>=t,'<':(v,t)=>v<t,'<=':(v,t)=>v<=t};
+/** Facts that may be cited as SUPPORT, with the direction that means "uptrend alive". */
+export const SUPPORT_UP=Object.freeze(Object.fromEntries(Object.entries(UP).map(([k,[op,t]])=>[k,v=>OPS[op](v,t)])));
+export const SUPPORT_TEXT=Object.freeze(Object.fromEntries(Object.entries(UP).map(([k,[op,t]])=>[k,k+op+t])));
 /** Price/flow facts; BUY/HOLD must cite at least one of them on the up side. */
 export const TREND_SUPPORT=Object.freeze(['return_1m','return_5m','return_15m','return_30m','return_60m','accel_5m_vs_15m','accel_15m_vs_60m',
   'distance_sma20','distance_trigger_reference','distance_high_60m','taker_buy_ratio_5m','taker_buy_ratio_15m','relative_strength_15m','relative_strength_60m',
@@ -96,7 +100,7 @@ export function wireSchema(task){
   const key={type:'string',enum:citeable(task)};
   return obj({t:{type:'string',enum:[task]},c:{type:'string',minLength:1,maxLength:80},d:{type:'string',enum:DECISIONS[task]},
     reasons:{type:'array',maxItems:4,items:obj({r:{type:'string',enum:categoriesFor(task)},e:{type:'array',maxItems:4,items:key}})},
-    support:{type:'array',maxItems:6,items:key},n:{type:'string',minLength:1,maxLength:200}});
+    support:{type:'array',maxItems:6,items:{type:'string',enum:Object.keys(SUPPORT_UP).filter(k=>task==='HOLD'||!POSITION_KEYS.includes(k))}},n:{type:'string',minLength:1,maxLength:200}});
 }
 function ensure(ok,reason){if(!ok)throw Error(reason);}
 export function validateShape(v,s,p='$'){
@@ -120,8 +124,11 @@ export function validateDecision(wire,packet){
     return {category:x.r,level:flag.level,evidence:x.e.map(cite)};
   });
   ensure(new Set(wire.support).size===wire.support.length,'FD_DUPLICATE_SUPPORT');
-  const support=wire.support.map(k=>{ensure(Object.hasOwn(SUPPORT_UP,k),'FD_SUPPORT_NOT_ALLOWED:'+k);const e=cite(k);
-    ensure(SUPPORT_UP[k](e.value)===true,'FD_SUPPORT_WRONG_DIRECTION:'+k);return e;});
+  // A support cite is only counted when the server confirms its direction; a misdirected
+  // or unavailable cite is dropped and recorded, never counted toward BUY/HOLD.
+  const support=[],rejected_support=[];
+  for(const k of wire.support){ensure(Object.hasOwn(SUPPORT_UP,k),'FD_SUPPORT_NOT_ALLOWED:'+k);
+    if(has(m,k)&&SUPPORT_UP[k](m[k])===true)support.push(cite(k));else rejected_support.push(k);}
   const d=wire.d;
   if(d==='BUY'||d==='HOLD'){
     ensure(risk.hard.length===0,'FD_'+d+'_WITH_HARD_RISK:'+risk.hard.join(','));
@@ -130,5 +137,5 @@ export function validateDecision(wire,packet){
     ensure(support.some(e=>TREND_SUPPORT.includes(e.key)),'FD_'+d+'_REQUIRES_TREND_FACT');
   }
   if(d==='SKIP'||d==='EXIT')ensure(reasons.length>0,'FD_'+d+'_REQUIRES_CATEGORY');
-  return {version:FD_VERSION,task,decision:d,reasons,support,summary:wire.n,risk_hard:risk.hard,risk_soft:risk.soft};
+  return {version:FD_VERSION,task,decision:d,reasons,support,rejected_support,summary:wire.n,risk_hard:risk.hard,risk_soft:risk.soft};
 }

@@ -28,8 +28,9 @@ test('BUY needs >=2 up-side facts incl. a trend fact, and no HARD risk',async()=
   assert.equal(validateDecision({t:'ENTRY',c:p.candidate_id,d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'상승 지속'},p).decision,'BUY');
   assert.throws(()=>validateDecision({t:'ENTRY',c:p.candidate_id,d:'BUY',reasons:[],support:['return_5m'],n:'x'},p),/REQUIRES_SUPPORT/);
   assert.throws(()=>validateDecision({t:'ENTRY',c:p.candidate_id,d:'BUY',reasons:[],support:['spread_bps','funding_rate'],n:'x'},p),/TREND_FACT/);
-  const down=await entry({step:-.001});
-  assert.throws(()=>validateDecision({t:'ENTRY',c:down.candidate_id,d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'x'},down),/WRONG_DIRECTION/);
+  const down=await entry({step:-.001},{referenceClose:.5});
+  assert.throws(()=>validateDecision({t:'ENTRY',c:down.candidate_id,d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'x'},down),/REQUIRES_SUPPORT/);
+  assert.deepEqual(validateDecision({t:'ENTRY',c:p.candidate_id,d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m','btc_return_15m'],n:'x'},p).rejected_support,[]);
   const wide=await entry({src:{book:{bids:[[1.0,5000]],asks:[[1.2,5000]]}}});
   assert.throws(()=>validateDecision({t:'ENTRY',c:wide.candidate_id,d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'x'},wide),/HARD_RISK/);
 });
