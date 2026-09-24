@@ -1,11 +1,15 @@
 import {FinalReviewCoordinator,configFromControl} from '../_shared/gpt-final-review/coordinator.mjs';
 import {SupabaseReviewStore,readReviewControl} from '../_shared/gpt-final-review/supabase-store.mjs';
+import {baselineAllowedLive} from '../_shared/gpt-final-review/contract.mjs';
 const contexts=new WeakMap();
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
 export function coordinatorFor(db){
   // Until the control row is read, the coordinator is OFF: no DB/API work at all.
   if(!contexts.has(db))contexts.set(db,new FinalReviewCoordinator({config:configFromControl({mode:'OFF'},getenv),
     store:new SupabaseReviewStore(db),apiKey:()=>getenv('OPENAI_API_KEY'),
+    // Live front policy V30 (operator decision 2026-09-24): GPT is the final entry
+    // decision on V30 + CEC0040 admissions; B06133 is reference evidence only.
+    profile:'V6S',baseline:baselineAllowedLive,
     schedule:promise=>{if(globalThis.EdgeRuntime?.waitUntil)EdgeRuntime.waitUntil(promise);else promise.catch(()=>{});}}));
   return contexts.get(db);
 }
