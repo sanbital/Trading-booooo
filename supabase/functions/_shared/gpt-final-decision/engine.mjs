@@ -7,6 +7,7 @@ import {readSources} from './market.mjs';
 import {buildDecisionPacket,callDecision,hash,MODEL,payloadFor,PRICING} from './api.mjs';
 import {validateDecision,FD_VERSION,wireSchema} from './contract.mjs';
 import {PROMPTS} from './prompt.mjs';
+import {bookReference} from './recheck.mjs';
 const num=x=>x!==null&&x!==undefined&&Number.isFinite(Number(x))?Number(x):null;
 /** Immutable decision identity: the trigger and the evidence GPT is shown. */
 export function fd1EntryIdentity(s){
@@ -28,6 +29,10 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
     const facts=computeFacts(src,{asOf:captured,referenceClose:identity.reference_close,dayReturn:identity.day_return,rank:identity.rank});
     const packet=await buildDecisionPacket({task:'ENTRY',subjectId:identity.signal_id,symbol:identity.symbol,dataMode:'LIVE',facts,judgments:identity.judgments});
     packet.as_of_offset_ms=captured-identity.trigger_at_ms;packet.source_errors=errors;
+    // FINAL RECHECK reference: the book price this BUY was judged on. Stored in the hashed
+    // packet (not shown to GPT) so the pre-dispatch change detector compares like with like.
+    const ref=src.book?bookReference(src.book,captured):null;
+    packet.execution_ref=ref?{bid:ref.bid,ask:ref.ask,mid:ref.mid,at:captured}:null;
     packet.snapshot_hash='';packet.snapshot_hash=await hash({...packet,snapshot_hash:''});
     return {packet,captured};
   },

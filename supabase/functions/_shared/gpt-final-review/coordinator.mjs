@@ -3,6 +3,7 @@ import {VERSION,MODEL,LIMITS,OUTPUT_SCHEMA,canonical,hash,baselineAllowed,decisi
 import {promptFor} from './prompt.mjs';
 import {collectMarket,buildPacket,packetHash} from './market.mjs';
 import {callFinalReviewer,DEFAULT_PROFILE,profileOf} from './openai.mjs';
+import {initialContext} from '../gpt-final-decision/recheck.mjs';
 export const MAX_RESERVED_USD=.10; // Conservative per-call reservation; settled to documented token cost after the call.
 /** Human-readable release label stored with every review (source_commit column). */
 export const RELEASE='gpt-final-review-v6-realtime-risk-20260924';
@@ -142,16 +143,20 @@ export class FinalReviewCoordinator {
       return deny('GPT_NO_VALID_API_RESPONSE');
     const answer=this.engine?this.engine.revalidate(z,r.packet):validateAnswer(parseApiResponseWire(z.raw_response,r.packet,profileOf(this.profile).wire),r.packet);
     const ticket={identityJson,decision:answer.decision,validUntil:r.valid_until_ms,expires,
-      candidateId:r.packet.candidate_id,snapshotHash:r.packet.snapshot_hash,model,summary:answer.summary};
+      candidateId:r.packet.candidate_id,snapshotHash:r.packet.snapshot_hash,model,summary:answer.summary,
+      // FINAL RECHECK: what this decision was based on (initial facts, book reference, support).
+      ...(this.engine?{initial:initialContext(r,answer)}:{})};
     return {valid:true,allowed:answer.decision===this.allowDecision(),decision:answer.decision,reason:'GPT_'+answer.decision,ticket};
   }
   /** Pure, no I/O. Run again immediately before intent creation. */
-  check(s){
+  check(s,{supersededBy=null}={}){
     if(this.config.mode==='OFF'||this.config.mode==='SHADOW')return {allowed:true,reason:this.config.mode};
     if(!this.authorized())return {allowed:false,reason:'GPT_REVIEW_NOT_APPROVED'};
     const t=this.tickets.get(String(s?.id)),now=this.now();
     if(!this.baseline(s)||!t||t.identityJson!==canonical(this.identity(s)))return {allowed:false,reason:'GPT_REVIEW_IDENTITY_CHANGED'};
-    if(now>=t.validUntil||now>=t.expires-LIMITS.executionReserveMs)return {allowed:false,reason:'GPT_REVIEW_EXPIRED'};
+    // A FINAL RECHECK answer supersedes the initial answer's age limit only; the trigger
+    // expiry, identity and baseline above/below still bind. Its own validity is checked by the caller.
+    if((supersededBy===null&&now>=t.validUntil)||now>=t.expires-LIMITS.executionReserveMs)return {allowed:false,reason:'GPT_REVIEW_EXPIRED'};
     return {allowed:t.decision===this.allowDecision(),reason:'GPT_'+t.decision,review:t};
   }
   /** Pure scheduling hint. No database/network wait on the protection loop. */

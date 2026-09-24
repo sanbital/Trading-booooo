@@ -2,6 +2,7 @@ import {FinalReviewCoordinator,configFromControl} from '../_shared/gpt-final-rev
 import {SupabaseReviewStore,readReviewControl} from '../_shared/gpt-final-review/supabase-store.mjs';
 import {baselineAllowedLive} from '../_shared/gpt-final-review/contract.mjs';
 import {FD1_ENTRY_ENGINE} from '../_shared/gpt-final-decision/engine.mjs';
+import {recheckAllows} from '../_shared/gpt-final-decision/recheck.mjs';
 const contexts=new WeakMap();
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
 export function coordinatorFor(db){
@@ -35,13 +36,19 @@ export async function gptFilterExecutable(db,executable){
   return {candidates,reason:pending?'GPT_REVIEW_PENDING':reviews.at(-1)?.reason??'GPT_NO_CANDIDATE',reviews};
 }
 export function gptReviewReadyToResume(db){return coordinatorFor(db).consumeReadyYield();}
-/** Order-time re-check. Only an ENFORCE-mode, unexpired, identity-bound GPT BUY passes. */
-export function gptFinalCheck(db,s){
+/** Order-time re-check. Only an ENFORCE-mode, unexpired, identity-bound GPT BUY passes.
+ * With a triggered FINAL RECHECK record, the recheck's own valid BUY is additionally required
+ * and replaces the initial answer's age limit (never the trigger expiry or identity). */
+export function gptFinalCheck(db,s,finalRecheck=null){
   const c=coordinatorFor(db);
   if(c.config.mode!=='ENFORCE')return {allowed:false,reason:'GPT_NOT_ENFORCING_NO_NEW_ENTRY'};
-  const r=c.check(s);
+  const triggered=finalRecheck?.recheck_triggered===true;
+  if(triggered&&!recheckAllows(finalRecheck.final,c.now()))return {allowed:false,reason:'GPT_FINAL_RECHECK_NOT_BUY_OR_EXPIRED'};
+  const r=c.check(s,triggered?{supersededBy:finalRecheck.final.job_key}:{});
   return r.allowed===true&&r.review?.decision===c.allowDecision()?r:{...r,allowed:false};
 }
+/** The coordinator's current control/config for the FINAL RECHECK (same row, same ledger). */
+export function gptRecheckConfig(db){return coordinatorFor(db).config;}
 /** The existing engine keeps its whole lease and protection/X1 behavior unchanged.
  * The API runs independently. Only after lease release may a completed PASS request
  * one additional ordinary cycle. A busy/expired result is never forced through.

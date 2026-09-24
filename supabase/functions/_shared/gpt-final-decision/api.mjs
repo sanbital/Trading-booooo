@@ -56,15 +56,15 @@ export function parseOutput(raw){
     for(const c of m.content??[]){ensure(c.type!=='refusal','FD_API_REFUSAL');if(c.type==='output_text')chunks.push(c.text);}}
   ensure(chunks.length===1,'FD_API_OUTPUT_COUNT');return JSON.parse(chunks[0]);
 }
-const SAFE=/^(FD_[A-Z_]+(:[A-Za-z0-9_,]*)?|HTTP_\d+|API_TIMEOUT|TYPE:|ENUM:|STRING:|REQUIRED:|EXTRA:|ARRAY:)/;
+const SAFE=/^((FD|RC)_[A-Z_]+(:[A-Za-z0-9_,]*)?|HTTP_\d+|API_TIMEOUT|TYPE:|ENUM:|STRING:|REQUIRED:|EXTRA:|ARRAY:)/;
 /** One request, never retried. Any failure => ABSTAIN (entry: no order; hold: deterministic engine). */
-export async function callDecision(packet,{apiKey,fetchFn=fetch,now=Date.now,timeoutMs=REQUEST_MS}={}){
+export async function callDecision(packet,{apiKey,fetchFn=fetch,now=Date.now,timeoutMs=REQUEST_MS,payloadFn=payloadFor,validate=validateDecision}={}){
   const started=now(),out={origin:'OPENAI_API',model:MODEL,decision:'ABSTAIN',valid:false,answer:null,error:null,wire:null,
     request_id:null,http_status:null,usage:null,api_cost_usd:null,started_at_ms:started,completed_at_ms:null,latency_ms:null,attempted:false};
   if(!apiKey){out.error='FD_API_KEY_MISSING';out.api_cost_usd=0;out.completed_at_ms=now();out.latency_ms=0;return out;}
   const controller=new AbortController();let timer;
   try{
-    const body=JSON.stringify(payloadFor(packet));out.attempted=true;
+    const body=JSON.stringify(payloadFn(packet));out.attempted=true;
     const req=(async()=>{
       const res=await fetchFn(API_URL,{method:'POST',redirect:'error',signal:controller.signal,body,
         headers:{'content-type':'application/json',authorization:'Bearer '+apiKey}});
@@ -75,7 +75,7 @@ export async function callDecision(packet,{apiKey,fetchFn=fetch,now=Date.now,tim
       if(!res.ok){const e=raw?.error??{};out.error_detail={type:String(e.type??'').slice(0,60)||null,code:String(e.code??'').slice(0,60)||null,
         retry_after:res.headers?.get?.('retry-after')??null,limit_requests:res.headers?.get?.('x-ratelimit-remaining-requests')??null,limit_tokens:res.headers?.get?.('x-ratelimit-remaining-tokens')??null};}
       ensure(res.ok,'HTTP_'+res.status);ensure(raw.model===MODEL,'FD_MODEL_MISMATCH');
-      out.wire=parseOutput(raw);return validateDecision(out.wire,packet);
+      out.wire=parseOutput(raw);return validate(out.wire,packet);
     })();
     const expiry=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(Error('API_TIMEOUT'));},timeoutMs);});
     out.answer=await Promise.race([req,expiry]);out.decision=out.answer.decision;out.valid=true;
