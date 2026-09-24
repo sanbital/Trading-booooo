@@ -1198,60 +1198,142 @@ if(E1_ENABLED&&dispatchQuote?.raw){
 // recordBooVerdict swallows its own failures, so BOO logging can never block entry.
 await recordBooVerdict(db,{signalId:s.id,symbol:s.symbol,phase:"PRE_DISPATCH",result:booPredispatch});
 await verifyExecutionLease(db);
-// Pure final check; no GPT/network call after the execution quote.
+// Pure final check before the first IOC.
 const gptDispatchCheck=gptFinalCheck(db,s,attempt.finalRecheck);
 if(!gptDispatchCheck.allowed)return{entered:false,reason:gptDispatchCheck.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL};
-const id=cid("v11e",s.id),rp={action:"create_order",leverage:LEV,order:{market:s.symbol,side:"BUY",type:"LIMIT",price:limitPrice,time_in_force:"IOC",quantity:sized.amount,identifier:id,position_side:"LONG",position_effect:"OPEN"},wait_for_final_ms:4000},
-  oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,intent:"OPEN_LONG",reason:"V17_LEADER_ENTRY_IOC",client_order_id:id,requested_quantity:sized.amount,state:"PLANNED",request_payload:{...rp,quantity_step:step,price_tick:filters.priceTick,min_notional_usdt:filters.minNotionalUsdt,target_margin_usdt:MARGIN,sizing_contract_version:SLOT_SIZING_CONTRACT.version,entry_timing_policy:setupGoverns(s)?{version:SETUP_POLICY_VERSION,activation:SETUP_LIVE_CUTOVER,setup:serializeSetup(signalSetup(s),8)}:null,entry_selection:rec(s.features).b06133,entry_front:rec(s.features).v30Front??null,entry_branch:entryBranchOf(rec(s.features)),entry_controller:rec(s.features).cec0040,entry_gpt_decision:attempt.gptFinalReview??null,entry_final_recheck:withOrderTiming(attempt.finalRecheck),sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,order_notional_usdt:sized.orderNotionalUsdt,sizing_bound_by:sized.boundBy,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,setup_max_concurrent:SETUP_MAX_CONCURRENT,executor_patch:PATCH,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION,max_entry_drift_pct:POLICY.maxEntryDriftPct},entry_control:finalDecision.evidence,e1:E1_ENABLED?e1Decision:null,x1:X1_ENABLED?{policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,...OPERATOR_OVERRIDE}:null,operator_override:E1_ENABLED||X1_ENABLED?OPERATOR_OVERRIDE:null,qv3:qv3Active?{version:QV3_VERSION,activation:QV3_LIVE_CUTOVER,basis:QV3_ACTIVATION_BASIS}:null}}).select("*").single();
-if(oi.error)throw new Error(`ORDER_INTENT:${oi.error.message}`);
-try{
-  await verifyExecutionLease(db);attempt.dispatched=true;const initialRaw=await gateway(rp),initial=fill(initialRaw);
-  let finalRaw=initialRaw,receipt=null,finalitySource="CREATE_RESPONSE";
-  try{receipt=entryReceipt(initialRaw,oi.data);}catch{/* Query the exact persisted identity below. */}
-  if(!receipt){
-    // A gateway wait can return the terminal status before its normalized fill fields.
-    // Persist the ambiguity first, then query this exact order identity immediately so
-    // an actual position receives its resident stop in this invocation, not next minute.
-    await verifyExecutionLease(db);
-    const pending=await db.from("v11_long_regime_orders").update({state:"RECONCILIATION_PENDING",
-      exchange_order_id:initial.exchangeOrderId,response_payload:{...initialRaw,v22ImmediateEntryQueryPending:true},
-      reject_reason:`IOC_CONFIRMING:${initial.status}`,updated_at:new Date().toISOString()}).eq("id",oi.data.id);
-    if(pending.error)throw Error("ENTRY_PENDING_WRITE");
-    finalRaw=await gateway({action:"get_order",market:s.symbol,identifier:id,
-      exchange_order_id:initial.exchangeOrderId},5000);
-    receipt=entryReceipt(finalRaw,oi.data);finalitySource="SAME_ORDER_QUERY";
+const baseIntentPayload={price_tick:filters.priceTick,min_notional_usdt:filters.minNotionalUsdt,target_margin_usdt:MARGIN,
+  sizing_contract_version:SLOT_SIZING_CONTRACT.version,entry_timing_policy:setupGoverns(s)?{version:SETUP_POLICY_VERSION,
+    activation:SETUP_LIVE_CUTOVER,setup:serializeSetup(signalSetup(s),8)}:null,entry_selection:rec(s.features).b06133,
+  entry_front:rec(s.features).v30Front??null,entry_branch:entryBranchOf(rec(s.features)),entry_controller:rec(s.features).cec0040,
+  entry_gpt_decision:attempt.gptFinalReview??null,entry_final_recheck:withOrderTiming(attempt.finalRecheck),
+  sized_margin_usdt:sized.sizedMargin,sized_notional_usdt:sized.sizedNotional,order_notional_usdt:sized.orderNotionalUsdt,
+  sizing_bound_by:sized.boundBy,leverage:LEV,spread_bps:sp,entry_gap_atr:gap,ioc_bps:iocBps,max_slots:MAX_SLOTS,
+  setup_max_concurrent:SETUP_MAX_CONCURRENT,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION,
+    max_entry_drift_pct:POLICY.maxEntryDriftPct},entry_control:finalDecision.evidence,e1:E1_ENABLED?e1Decision:null,
+  x1:X1_ENABLED?{policyVersion:X1_POLICY_VERSION,baseExitPolicyVersion:EXIT_REVIEW_R5.policyVersion,...OPERATOR_OVERRIDE}:null,
+  operator_override:E1_ENABLED||X1_ENABLED?OPERATOR_OVERRIDE:null,
+  qv3:qv3Active?{version:QV3_VERSION,activation:QV3_LIVE_CUTOVER,basis:QV3_ACTIVATION_BASIS}:null};
+let currentPosition=null,lastProtection=null,lastEvidence=null,lastReceipt=null;
+const finishPartialOrAbort=async(reason,extra={})=>{
+  if(currentPosition){
+    try{await registerCec0040Target(db,currentPosition,s)}catch(error){console.error("CEC0040_TARGET_REGISTER_DEFERRED",currentPosition.id,String(error?.message??error))}
+    return{entered:true,reason:`PARTIAL_FILL_ABORT:${reason}`,positionId:currentPosition.id,symbol:s.symbol,
+      entryPrice:N(currentPosition.entry_price),quantity:N(currentPosition.original_quantity),stopPrice:N(currentPosition.hard_stop_price),
+      hardDeadline:currentPosition.hard_deadline,sizedMarginUsdt:N(currentPosition.original_quantity)*N(currentPosition.entry_price)/LEV,
+      entryProtection:lastProtection,entryFinality:lastEvidence,entryDecision:finalDecision,
+      postFillEntryGuard:rec(currentPosition.metadata).postFillEntryGuard,e1:e1Decision,
+      x1PolicyVersion:rec(currentPosition.metadata).exitObservationPolicyVersion,b06133:rec(currentPosition.metadata).b06133,
+      cec0040:rec(currentPosition.metadata).cec0040,qv3:attempt.qv3,...extra};
   }
-  const evidence={source:finalitySource,initialStatus:initial.status,confirmedAt:new Date().toISOString()},
-    settledRaw={...finalRaw,v22EntryFinality:evidence};
-  if(receipt.quantity>0){
-    const pos={data:await settleKnownEntry(db,oi.data,settledRaw,gateway)},stop=pos.data.hard_stop_price;
-    const entryProtection=await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position:pos.data,
-      manualSymbols:manualRows.map(x=>x.symbol),readPortfolio:()=>gateway({action:"p10_portfolio"},5000),
-      manage:ctx=>manageLeader(db,pos.data,{...ctx,gateway})});
-    return{entered:true,positionId:pos.data.id,symbol:s.symbol,entryPrice:receipt.price,
-      quantity:receipt.quantity,stopPrice:stop,hardDeadline:pos.data.hard_deadline,iocBps,
-      sizedMarginUsdt:sized.sizedMargin,entryProtection,entryFinality:evidence,
-      entryDecision:finalDecision,postFillEntryGuard:rec(pos.data.metadata).postFillEntryGuard,
-      e1:e1Decision,x1PolicyVersion:rec(pos.data.metadata).exitObservationPolicyVersion,
-      b06133:rec(pos.data.metadata).b06133,cec0040:rec(pos.data.metadata).cec0040,qv3:attempt.qv3};
+  await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:String(reason).slice(0,500),
+    updated_at:new Date().toISOString()}).eq("id",s.id);
+  return{entered:false,reason,...extra,entryDecision:finalDecision,e1:e1Decision,qv3:attempt.qv3};
+};
+attempt.dispatched=true;
+const first=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:1,quantity:sized.amount,limitPrice,step,payload:baseIntentPayload});
+lastEvidence=first.evidence;lastReceipt=first.receipt;
+if(first.receipt.quantity>0){
+  currentPosition=await settleKnownEntry(db,first.oi,first.settledRaw,gateway,{registerTarget:false});
+  lastProtection=await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position:currentPosition,
+    manualSymbols:manualRows.map(x=>x.symbol),readPortfolio:()=>gateway({action:"p10_portfolio"},5000),
+    manage:ctx=>manageLeader(db,currentPosition,{...ctx,gateway})});
+  const firstFull=first.receipt.quantity+Math.max(1e-12,step*1e-8)>=sized.amount;
+  if(firstFull){
+    try{await registerCec0040Target(db,currentPosition,s)}catch(error){console.error("CEC0040_TARGET_REGISTER_DEFERRED",currentPosition.id,String(error?.message??error))}
+    return{entered:true,positionId:currentPosition.id,symbol:s.symbol,entryPrice:N(currentPosition.entry_price),
+      quantity:N(currentPosition.original_quantity),stopPrice:N(currentPosition.hard_stop_price),hardDeadline:currentPosition.hard_deadline,
+      iocBps,sizedMarginUsdt:N(currentPosition.original_quantity)*N(currentPosition.entry_price)/LEV,entryProtection:lastProtection,
+      entryFinality:lastEvidence,entryDecision:finalDecision,postFillEntryGuard:rec(currentPosition.metadata).postFillEntryGuard,
+      e1:e1Decision,x1PolicyVersion:rec(currentPosition.metadata).exitObservationPolicyVersion,
+      b06133:rec(currentPosition.metadata).b06133,cec0040:rec(currentPosition.metadata).cec0040,qv3:attempt.qv3,
+      executionAttempts:1};
   }
-  await settleKnownEntry(db,oi.data,settledRaw,gateway);
-  return{entered:false,reason:`IOC_NO_FILL:${receipt.status}`,entryFinality:evidence,
-    entryDecision:finalDecision,e1:e1Decision,qv3:attempt.qv3};
-}catch(e){
-  if(classifyFailure(e).fatal)throw e;await verifyExecutionLease(db);
-  const msg=e instanceof Error?e.message:String(e),explicit=false;
-  await db.from("v11_long_regime_orders").update({state:explicit?"REJECTED":"RECONCILIATION_FAILED",
-    reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",oi.data.id);
-  if(explicit){
-    await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),
-      updated_at:new Date().toISOString()}).eq("id",s.id);
-    return{entered:false,reason:msg,e1:e1Decision,qv3:attempt.qv3};
-  }
-  await db.from("v11_long_regime_signals").update({status:"ORDERED",updated_at:new Date().toISOString()}).eq("id",s.id);
-  await circuit(db,`BULL_ENTRY_AMBIGUOUS:${msg}`,"KNOWN_ORDER_PENDING_RECONCILIATION",
-    {orderId:oi.data.id,clientOrderId:id,error:msg});throw e;
-}}
+  // Do not increase a partial exposure unless the already-filled quantity is protected
+  // by an exchange-resident stop. Software-only or uncertain protection keeps the fill,
+  // but aborts the top-up.
+  if(lastProtection?.status!=="PROTECTED")
+    return await finishPartialOrAbort("PROTECTION_UNAVAILABLE",{executionAttempts:1});
+}else{
+  await settleKnownEntry(db,first.oi,first.settledRaw,gateway,{retireZeroFillSignal:false,registerTarget:false});
+}
+if(IOC_RETRY_POLICY.maxAttempts<2)return await finishPartialOrAbort("IOC_RETRY_EXHAUSTED",{executionAttempts:1});
+
+// Retry decision point: fresh tape+book first. A meaningful change invokes bounded FINAL
+// RECHECK sequence #2; no change keeps the still-valid previous GPT decision.
+let retryAt=Date.now(),[retryQuote0,retryTape]=await Promise.all([
+  gateway({action:"quote",market:s.symbol},3000),fetchE1AggTrades(s.symbol,retryAt-10000,retryAt)]);
+let retryE1=retryE1Evidence(retryTape,retryQuote0,currentPosition?N(currentPosition.original_quantity):sized.amount,retryAt);
+const retryRecheck=await finalRecheckStep(db,s,{ticket:attempt.gptFinalReview,e1:retryE1,rawQuote:retryQuote0,sequence:2});
+attempt.finalRecheck=retryRecheck.record;
+if(!retryRecheck.proceed)return await finishPartialOrAbort(retryRecheck.reason,{executionAttempts:1,finalRecheck:retryRecheck.record});
+
+// FINAL BUY can take seconds. Re-read every execution-safety input after the answer.
+await requireLeaderEntryControls(db);
+const[retryPair,retryOrders,retrySnap,retryQuote]=await Promise.all([
+  readOpsPair(db,undefined,s.symbol),gateway({action:"v18_open_orders"},5000),snap(db),gateway({action:"quote",market:s.symbol},3000)]);
+await recordMismatch(db,retryPair.match);
+const retryNow=Date.now(),retryBid=N(retryQuote?.best_bid),retryAsk=N(retryQuote?.best_ask);
+if(!(retryBid>0&&retryAsk>=retryBid))return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:INVALID_BOOK",{executionAttempts:1});
+const retryQuoteAge=retryNow-N(retryQuote?.timing?.received_at_ms,NaN);
+if(!Number.isFinite(retryQuoteAge)||retryQuoteAge<0||retryQuoteAge>E1_POLICY.maxQuoteAgeMs)
+  return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:STALE_QUOTE",{executionAttempts:1});
+if(attempt.finalRecheck?.recheck_triggered===true){
+  const safety=postRecheckSafety({recheck:attempt.finalRecheck.final,quote:retryQuote,at:retryNow});
+  attempt.finalRecheck={...attempt.finalRecheck,postSafety:safety};
+  if(!safety.ok)return await finishPartialOrAbort(`EXECUTION_SAFETY_REJECT:${safety.reason}`,{executionAttempts:1});
+}
+const retryGpt=gptFinalCheck(db,s,attempt.finalRecheck);
+if(!retryGpt.allowed)return await finishPartialOrAbort(retryGpt.reason,{executionAttempts:1});
+const latestPosition=currentPosition?retryPair.positions.find(p=>p.id===currentPosition.id):null;
+if(currentPosition&&!latestPosition)return await finishPartialOrAbort("PARTIAL_FILL_POSITION_MISSING",{executionAttempts:1});
+if(retryPair.manual.some(x=>x.symbol===String(s.symbol).toUpperCase()))
+  return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:MANUAL_SYMBOL_LOCKED",{executionAttempts:1});
+let retrySized;
+try{retrySized=sizeEntry(retryAsk,step,filters)}catch(error){
+  return await finishPartialOrAbort(`EXECUTION_SAFETY_REJECT:${String(error?.code??error?.message??error)}`,{executionAttempts:1});
+}
+const heldQty=latestPosition?N(latestPosition.original_quantity):0,heldNotional=latestPosition?heldQty*N(latestPosition.entry_price):0,
+  retryPlan=planAggressiveIocRetry({quote:retryQuote,targetQuantity:retrySized.amount,filledQuantity:heldQty,
+    quantityStep:step,priceTick:filters.priceTick,minNotionalUsdt:filters.minNotionalUsdt,minQuantity:filters.minQuantity,
+    leverage:LEV,maxTotalMarginUsdt:MAX_ORDER_MARGIN_USDT,currentPositionNotionalUsdt:heldNotional});
+if(!retryPlan.ok)return await finishPartialOrAbort(`EXECUTION_SAFETY_REJECT:${retryPlan.reason}`,{executionAttempts:1,retryPlan});
+if(retryPlan.complete){
+  if(latestPosition){currentPosition=latestPosition;return await finishPartialOrAbort(retryPlan.underExchangeMinimum?"REMAINDER_BELOW_EXCHANGE_MINIMUM":"TARGET_ALREADY_FILLED",
+      {executionAttempts:1,retryPlan});}
+  return await finishPartialOrAbort("IOC_RETRY_NO_QUANTITY",{executionAttempts:1,retryPlan});
+}
+const additionalMargin=retryPlan.remainingQuantity*retryPlan.limitPrice/LEV,
+  retryAvail=Math.min(N(retrySnap.available_quote),N(retryPair.pf?.available_quote,NaN));
+if(!Number.isFinite(retryAvail)||retryAvail<additionalMargin+ENTRY_CASH_BUFFER_USDT)
+  return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:INSUFFICIENT_MARGIN",{executionAttempts:1,retryPlan});
+const retryDecision=await decideEntry(db,retryPair,s.symbol,retryOrders,{proposedMargin:additionalMargin,
+  cashBuffer:ENTRY_CASH_BUFFER_USDT,managementFailures,existingPositionId:latestPosition?.id??null});
+await persistDecisionRisk(db,retryPair,retryDecision);
+if(!retryDecision.allowed)return await finishPartialOrAbort(`EXECUTION_SAFETY_REJECT:${retryDecision.scope}:${retryDecision.reasons.join(",")}`,
+  {executionAttempts:1,retryPlan,entryDecision:retryDecision});
+const retryPayload={...baseIntentPayload,entry_final_recheck:withOrderTiming(attempt.finalRecheck),spread_bps:retryPlan.spreadBps,
+  ioc_bps:retryPlan.chaseBps,expected_entry_vwap:retryPlan.expectedVwap,expected_slippage_bps:retryPlan.slippageBps,
+  retry_of_order_id:first.oi.id,retry_remaining_quantity:retryPlan.remainingQuantity,entry_control:retryDecision.evidence};
+const second=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:2,quantity:retryPlan.remainingQuantity,
+  limitPrice:retryPlan.limitPrice,step,payload:retryPayload});
+lastEvidence=second.evidence;lastReceipt=second.receipt;
+if(second.receipt.quantity>0){
+  currentPosition=await settleKnownEntry(db,second.oi,second.settledRaw,gateway,{registerTarget:false});
+  lastProtection=await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position:currentPosition,
+    manualSymbols:retryPair.manual.map(x=>x.symbol),readPortfolio:()=>gateway({action:"p10_portfolio"},5000),
+    manage:ctx=>manageLeader(db,currentPosition,{...ctx,gateway})});
+  try{await registerCec0040Target(db,currentPosition,s)}catch(error){console.error("CEC0040_TARGET_REGISTER_DEFERRED",currentPosition.id,String(error?.message??error))}
+  const finalQty=N(currentPosition.original_quantity),targetQty=retrySized.amount,complete=finalQty+Math.max(1e-12,step*1e-8)>=targetQty;
+  return{entered:true,reason:complete?"IOC_RETRY_FILLED":"PARTIAL_FILL_ABORT:IOC_RETRY_EXHAUSTED",positionId:currentPosition.id,
+    symbol:s.symbol,entryPrice:N(currentPosition.entry_price),quantity:finalQty,stopPrice:N(currentPosition.hard_stop_price),
+    hardDeadline:currentPosition.hard_deadline,sizedMarginUsdt:finalQty*N(currentPosition.entry_price)/LEV,entryProtection:lastProtection,
+    entryFinality:lastEvidence,entryDecision:retryDecision,postFillEntryGuard:rec(currentPosition.metadata).postFillEntryGuard,
+    e1:e1Decision,x1PolicyVersion:rec(currentPosition.metadata).exitObservationPolicyVersion,b06133:rec(currentPosition.metadata).b06133,
+    cec0040:rec(currentPosition.metadata).cec0040,qv3:attempt.qv3,executionAttempts:2,retryPlan};
+}
+await settleKnownEntry(db,second.oi,second.settledRaw,gateway,{retireZeroFillSignal:false,registerTarget:false});
+return await finishPartialOrAbort("IOC_RETRY_EXHAUSTED",{executionAttempts:2,retryPlan});
+}
 // Best-effort feed for the decision-only exit shadow. It must never be able to affect
 // trading: every failure is swallowed, and the gateway ignores it unless the shadow is
 // enabled there. quantity_step lives on the opening order, not on the position row.
