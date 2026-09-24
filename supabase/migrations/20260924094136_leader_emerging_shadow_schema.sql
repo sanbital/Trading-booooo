@@ -539,15 +539,18 @@ end $$;
 
 -- ---------------------------------------------------------------- privileges
 revoke all on all tables in schema shadow_le from public;
+revoke all on all sequences in schema shadow_le from public;
 revoke all on all functions in schema shadow_le from public;
 do $$ begin
   if exists (select 1 from pg_roles where rolname = 'anon') then
     execute 'revoke all on schema shadow_le from anon, authenticated';
     execute 'revoke all on all tables in schema shadow_le from anon, authenticated';
+    execute 'revoke all on all sequences in schema shadow_le from anon, authenticated';
     execute 'revoke all on all functions in schema shadow_le from anon, authenticated';
   end if;
   if exists (select 1 from pg_roles where rolname = 'service_role') then
     execute 'revoke all on all tables in schema shadow_le from service_role';
+    execute 'revoke all on all sequences in schema shadow_le from service_role';
     execute 'revoke all on all functions in schema shadow_le from service_role';
   end if;
 end $$;
