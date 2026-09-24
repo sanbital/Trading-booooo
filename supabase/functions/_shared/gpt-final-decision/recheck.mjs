@@ -11,8 +11,9 @@
  *    than the answer, no catastrophic spread, no large drift since the answer's snapshot).
  *    The existing order guards (quote age, depth, margin, slots, duplicates, lease/fencing,
  *    circuit, BOO) still run after it, unchanged.
- * At most RECHECK_POLICY.maxRechecksPerCandidate recheck per candidate: the journal key is
- * per signal + initial snapshot, and a second claim of the same key fails closed.
+ * Rechecks are bounded by RECHECK_POLICY.maxRechecksPerCandidate and keyed by
+ * signal + initial snapshot + IOC-attempt sequence. Replaying the same sequence
+ * fails closed; a later IOC attempt may consume the next sequence only.
  *
  * Thresholds (see research/fd1-final-recheck-20260924/README.md):
  *  - price / tape bands are the adverse 20% tail of the change observed over the same
