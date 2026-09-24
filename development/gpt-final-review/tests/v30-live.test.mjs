@@ -35,6 +35,17 @@ test('live baseline: CEC0040 action is evidence, not a veto; the stamp must be f
   }
   const s=b06133Rejected();s.features.cec0040=undefined;assert.equal(baselineAllowedLive(s),false);
 });
+test('fresh5over15=false is admitted as negative GPT evidence while volumeTails stays hard',()=>{
+  const s=b06133Rejected();s.features.b06133.factors.fresh5over15=false;stampV30(s);
+  assert.equal(s.features.v30Front.admitted,true);
+  assert.deepEqual(s.features.v30Front.negativeEvidence,['fresh5over15']);
+  assert.equal(baselineAllowedLive(s),true);
+  const tails=b06133Rejected();tails.features.b06133.factors.fresh5over15=false;
+  tails.features.b06133.factors.volumeTails=true;stampV30(tails);
+  assert.equal(tails.features.v30Front.admitted,false);
+  assert.ok(tails.features.v30Front.failed.includes('volumeTails'));
+  assert.equal(baselineAllowedLive(tails),false);
+});
 test('live baseline refuses a failed V30 gate, the shadow version, and a claimed-rejected status',()=>{
   const s=b06133Rejected();s.features.b06133.factors.volumeTails=true;stampV30(s);
   assert.equal(s.features.v30Front.admitted,false);assert.equal(baselineAllowedLive(s),false);
