@@ -1,7 +1,9 @@
 -- LE-SHADOW-1 내일 오전 점검 SQL (2026-09-25). 전부 읽기 전용 SELECT. project etaajwpernzrcdrifdnw.
 -- 목적: 배관·비용·행태 점검. 성과는 n 과 95% CI 만 보고하며 판정하지 않는다
 -- (사전등록 PREREGISTRATION.md §9: 판정은 ≥15 거래일 AND ≥300 EMERGING-BUY 이후).
--- :since 는 첫 SCAN 사이클 시각으로 바꿔 쓴다 (아래 Q0 참조).
+-- 사전등록 수정 1: 판정 표본은 kst_day >= '2026-09-25' (첫 완전 KST 일). 배포일(kst_day='2026-09-24') 행은
+-- first-entry 플래그가 부정확하므로 행태·성과 집계에서는 `where kst_day >= '2026-09-25'` 를 붙여 따로 본다.
+-- 운영·비용 KPI 는 배포일 행을 포함해도 된다.
 
 -- Q0. 배포 이후 창
 select min(observed_at) first_scan, max(observed_at) last_scan, count(*) scans

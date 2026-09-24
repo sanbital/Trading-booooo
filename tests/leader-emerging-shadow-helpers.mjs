@@ -48,6 +48,7 @@ export async function setupDb(){
   const PGlite=await pglite(),pg=new PGlite();
   await pg.exec(PRODUCTION_STUBS);
   await pg.exec('begin;'+migration('schema')+'commit;');
+  await pg.exec('begin;'+migration('compare_index')+'commit;');
   // every store statement runs AS the writer role, exactly like production
   const asWriter={query:async(text,params)=>{
     await pg.exec('set role shadow_le_writer');
