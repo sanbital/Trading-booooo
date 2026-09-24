@@ -87,3 +87,14 @@ Production defect found and fixed during pre-deploy reconciliation: `v11_cec0040
   - Candles, microstructure and derivatives were complete. orderCalls = 0.
 - **Scheduled cycles** on FD1-GPT-FINAL-DECISION-1 returned HTTP 200 (KST 13:20, 13:21, 13:22).
 - **Unchanged:** native STOP_MARKET sync, R5, P142, 1% drift guard, lease/fencing, dedupe, circuit, 200 × 3, 10 slots.
+
+## 5. Operator directive (KST 2026-09-24, after deployment)
+
+- **Directive:** The operator will remove the hard rejects (V30 and CEC0040 hard gates, etc.). The final trading decision is made through the GPT API. The removal will be done by the operator's separate GPT agent, not in this workstream. This workstream does not remove them.
+- **For whoever removes them, the checks that currently enforce the gates:**
+  - `development/gpt-final-review/tests/v30-live.test.mjs`: "live baseline keeps every CEC0040 check".
+  - `baselineAllowedLive` in `_shared/gpt-final-review/contract.mjs`.
+  - `applyCec0040Selection` / `openBull` in the executor, and `applyB06133Selection` (V30_FRONT_REJECT).
+  - The release workflow's exact-content check on `leader-pullback-reaccel.mjs` (8895c28) and its PATCH grep.
+  - `development/gpt-final-review/executor-hooks-fd1.mjs` (hook list regenerated from the diff against a19f76e).
+- **Reference data:** In the replay (§3), GPT on all triggers without these gates (arm C) was clearly worse than the gated arm C4 (16d −438 vs +343). Watch performance after the removal.
