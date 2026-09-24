@@ -47,7 +47,7 @@
  */
 
 /** Identity of the arithmetic below. Bump when the contract's meaning changes. */
-export const SLOT_SIZING_CONTRACT_VERSION = "V17_SLOT_SIZING_3_FEASIBLE_LATTICE";
+export const SLOT_SIZING_CONTRACT_VERSION = "V17_SLOT_SIZING_4_MARGIN150";
 
 /**
  * Production slot contract.
@@ -60,7 +60,7 @@ export const SLOT_SIZING_CONTRACT_VERSION = "V17_SLOT_SIZING_3_FEASIBLE_LATTICE"
  */
 export const SLOT_SIZING_CONTRACT = Object.freeze({
   version: SLOT_SIZING_CONTRACT_VERSION,
-  targetMarginUsdt: 200,
+  targetMarginUsdt: 150,
   leverage: 3,
   /**
    * Quantity-side rounding headroom above the target notional, relative.

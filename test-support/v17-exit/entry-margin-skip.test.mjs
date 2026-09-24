@@ -23,6 +23,8 @@ import * as pullbackSetup from '../../supabase/functions/_shared/leader-pullback
 import {R1_VERSION} from '../../supabase/functions/_shared/boo/r1-strategy.mjs';
 import {RISK_POLICY_VERSION} from '../../supabase/functions/_shared/boo/risk-policy.mjs';
 import {RISK_BUDGET_VERSION} from '../../supabase/functions/_shared/boo/risk-budget.mjs';
+import {B06133_VERSION} from '../../supabase/functions/_shared/leader-b06133-entry.mjs';
+import {CEC0040_VERSION,CEC0040_TARGET_VERSION} from '../../supabase/functions/_shared/leader-cec0040.mjs';
 
 const source = readFileSync(new URL('../../supabase/functions/v10-lane-executor/index.ts', import.meta.url), 'utf8');
 // Use the real sizeEntry and the real gate helpers openBull calls, so the margin
@@ -42,6 +44,11 @@ function make({available, setupCutover = Number.MAX_SAFE_INTEGER}) {
   const now = Date.now();
   const features = {
     strategy: 'LEADER_MOMENTUM_V17', signal5Close: now - 1000, referenceClose: 100, atr: 1, bbPos: 0,
+    sizingContractVersion:SLOT_SIZING_CONTRACT.version,targetMarginUsdt:MARGIN,leverage:LEV,
+    v17Setup:{identity:'test-setup',policyVersion:pullbackSetup.SETUP_POLICY_VERSION,state:pullbackSetup.SETUP_STATE.TRIGGERED,
+      referencePrice:100,armedAt:now-1000,triggerAt:now-1000,triggerExpiresAt:now+59000},
+    b06133:{version:B06133_VERSION,source:{decisionAt:now-1000}},
+    cec0040:{version:CEC0040_VERSION,targetVersion:CEC0040_TARGET_VERSION,ready:true,decisionAt:now-1000,action:'ADMIT'},
     exitPolicy: {stopPct: .025, trailArmPct: .03, trailGapPct: .015, staleMs: POLICY.staleMs, maxHoldMs: POLICY.maxHoldMs},
   };
   const ctx = {
@@ -52,6 +59,9 @@ function make({available, setupCutover = Number.MAX_SAFE_INTEGER}) {
     SPREAD_MAX: 25, IOC_BASE_BPS: SLOT_SIZING_CONTRACT.iocBaseBps,
     IOC_MAX_BPS: SLOT_SIZING_CONTRACT.iocMaxBps,
     SLOT_SIZING_CONTRACT, planSlotEntry, slotSizingBounds, ceilTick,
+    B06133_VERSION,CEC0040_VERSION,CEC0040_TARGET_VERSION,V30_FRONT_LIVE_VERSION:'TEST',
+    baselineAllowedV30:()=>true,entryBranchOf:()=> 'TEST_BRANCH',
+    gptFinalCheck:()=>({allowed:true,review:{decision:'PASS'}}),
     RELEASE_SCOPE: {SYMBOL: 'SYMBOL', ACCOUNT: 'ACCOUNT'},
     CONTROL_SCOPE: {SYMBOL_QUARANTINE: 'SYMBOL_QUARANTINE'},
     // The executor's module top level is not evaluated here -- only openBull is --
@@ -173,6 +183,7 @@ test('once the cutover has passed, an untriggered signal cannot enter at all', a
   // until its setup has actually triggered. This is the load-bearing property of the
   // whole change: a leader signal no longer buys on sight.
   const {ctx, signal} = make({available: 500, setupCutover: 0});
+  delete signal.features.v17Setup;
   await assert.rejects(() => ctx.openBull(observeOnlyDb(), signal, [], []),
-    /V17_SETUP_NOT_TRIGGERED/);
+    /B06133_SELECTION_INVALID/);
 });

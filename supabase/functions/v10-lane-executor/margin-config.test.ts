@@ -3,8 +3,8 @@
 // leader-momentum-v17's POLICY.marginUsdt, and the targetMarginUsdt stamped on every
 // generated signal. On 2026-09-16 the operator moved the slot 40 -> 30; the first two
 // followed and the last two did not, so every signal written after the cutover
-// carried targetMarginUsdt=40 while orders were sized for 30. On 2026-09-19 the
-// operator moved the slot 30 -> 200 (margin only; MAX_SLOTS and leverage unchanged),
+// carried targetMarginUsdt=40 while orders were sized for 30. On 2026-09-24 the
+// operator moved the slot 200 -> 150 (margin only; MAX_SLOTS and leverage unchanged),
 // through the single sizing contract this test file now pins.
 //
 // Three of those four now read one contract. The fourth is the live DB, which must
@@ -38,15 +38,15 @@ Deno.test("margin: the executor declares no slot size of its own", () => {
 });
 
 // CASE 14 -- what the signal generator stamps on every row it writes.
-Deno.test("CASE 14: generated signals carry targetMarginUsdt = 200, from the contract", () => {
+Deno.test("CASE 14: generated signals carry targetMarginUsdt = 150, from the contract", () => {
   assert(
     /targetMarginUsdt:POLICY\.marginUsdt/.test(GENERATOR),
     "the generator must stamp the policy's margin",
   );
   assertEquals(POLICY.marginUsdt, SLOT_SIZING_CONTRACT.targetMarginUsdt);
-  assertEquals(POLICY.marginUsdt, 200, "operator instruction, 2026-09-19");
+  assertEquals(POLICY.marginUsdt, 150, "operator instruction, 2026-09-24");
   assertEquals(POLICY.leverage, 3, "leverage is unchanged by the margin-only resize");
-  assertEquals(POLICY.marginUsdt * POLICY.leverage, 600, "notional per slot");
+  assertEquals(POLICY.marginUsdt * POLICY.leverage, 450, "notional per slot");
 });
 
 // CASE 15 -- and it stamps WHICH contract, so a pre-resize row is identifiable.
@@ -76,22 +76,22 @@ Deno.test("CASE 12/13: the runtime guard comparing code to DB allocation is inta
       Math.abs(Number(dbAllocation) - SLOT_SIZING_CONTRACT.targetMarginUsdt) > 1e-9
       ? "V17_MARGIN_CONFIG_MISMATCH"
       : null;
-  assertEquals(guard(30), "V17_MARGIN_CONFIG_MISMATCH", "CASE 12: DB 30 vs code 200 is refused");
-  assertEquals(guard(200), null, "CASE 13: DB 200 vs code 200 proceeds");
+  assertEquals(guard(200), "V17_MARGIN_CONFIG_MISMATCH", "CASE 12: DB 200 vs code 150 is refused");
+  assertEquals(guard(150), null, "CASE 13: DB 150 vs code 150 proceeds");
   assertEquals(guard(Number.NaN), "V17_MARGIN_CONFIG_MISMATCH", "an unreadable setting fails closed");
 });
 
-Deno.test("margin: a 200 USDT slot still needs headroom above the cash buffer", () => {
+Deno.test("margin: a 150 USDT slot still needs headroom above the cash buffer", () => {
   const margin = SLOT_SIZING_CONTRACT.targetMarginUsdt;
   const cashBuffer = Number(SOURCE.match(/ENTRY_CASH_BUFFER_USDT=(\.?\d+(?:\.\d+)?)/)?.[1] ?? NaN);
   const maxOrderMargin = slotSizingBounds(SLOT_SIZING_CONTRACT).maxOrderMarginUsdt;
   assert(Number.isFinite(cashBuffer));
   // The slot overshoot allowance is unchanged at 250/3 bps, expressed relatively so
-  // it survives a resize instead of silently becoming a different fraction: at 200
-  // USDT that is 200 * (250/3)/10_000 = 1.6667 USDT, i.e. a 201.6667 USDT ceiling.
-  assert(Math.abs(maxOrderMargin - 201.66666666666666) < 1e-6, `${maxOrderMargin}`);
-  assertEquals(margin, 200, "operator instruction, 2026-09-19");
-  assertEquals(margin * SLOT_SIZING_CONTRACT.leverage, 600, "notional per slot at 3x");
+  // it survives a resize instead of silently becoming a different fraction: at 150
+  // USDT that is 150 * (250/3)/10_000 = 1.25 USDT, i.e. a 151.25 USDT ceiling.
+  assert(Math.abs(maxOrderMargin - 151.25) < 1e-6, `${maxOrderMargin}`);
+  assertEquals(margin, 150, "operator instruction, 2026-09-24");
+  assertEquals(margin * SLOT_SIZING_CONTRACT.leverage, 450, "notional per slot at 3x");
   // A single slot must still need materially more than the cash buffer alone, i.e.
   // the buffer is headroom on top of the margin, not a replacement for it.
   assert(maxOrderMargin > cashBuffer, `${maxOrderMargin} must exceed the ${cashBuffer} cash buffer`);
@@ -125,6 +125,20 @@ Deno.test("CASE 7: a price more than 1% from referenceClose is still ENTRY_DRIFT
   // 101/100-1 is 0.010000000000000009 in float64, so the exact boundary lands on the
   // refusing side. Recorded rather than papered over: the limit is not widened here.
   assertEquals(entryFresh(features, close + 1000, 101), "ENTRY_DRIFT");
+});
+
+Deno.test("pre-resize signals cannot execute after the 150 USDT cutover", () => {
+  assert(SOURCE.includes('throw new Error("SIZING_CONTRACT_STALE")'));
+  assert(SOURCE.includes("signalSizing.sizingContractVersion!==SLOT_SIZING_CONTRACT.version"));
+  assert(SOURCE.includes("signalSizing.targetMarginUsdt"));
+  assert(SOURCE.includes("signalSizing.leverage"));
+});
+
+Deno.test("ENTRY_DRIFT remains measurable evidence but executor suppresses it as a hard strategy veto", () => {
+  assert(SOURCE.includes('function strategicDriftToRecheck(reason)'));
+  assert(SOURCE.includes('["V17_ENTRY_DRIFT","ENTRY_DRIFT"]'));
+  assert(/strategicDriftToRecheck\(entryFresh/.test(SOURCE));
+  assert(/strategicDriftToRecheck\(entryTriggerFresh/.test(SOURCE));
 });
 
 Deno.test("the sizing skips are symbol-scoped, so one bad symbol never halts the run", () => {

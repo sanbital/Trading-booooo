@@ -114,7 +114,7 @@ function host(now) {
     e1CurrentAssessment:(_s,q)=>({rawQuote:q,quote:{bid:100,ask:101,receivedAt:now-100,bookGap:false,
       sourceTier:'RECEIVED_REST_L2_100',quoteAgeMs:100},guardPassed:true,liquidityPassed:true})};
   vm.createContext(ctx);
-  for(const n of ['executionWindowFor','entryFreshFor','checkedEntryFresh','runE1Gate'])
+  for(const n of ['executionWindowFor','strategicDriftToRecheck','entryFreshFor','checkedEntryFresh','runE1Gate'])
     vm.runInContext(functionSource(n),ctx);
   return ctx;
 }
@@ -129,16 +129,16 @@ test('real runE1Gate does not resurrect an expired trigger',async()=>{
   const r=await ctx.runE1Gate(signal(),quote(),1,async()=>quote());
   assert.equal(r.decision.allowed,false);assert.equal(r.decision.confirmationState,'EXPIRED');
 });
-test('real price gate keeps both sides of the original 1% drift limit',()=>{
+test('real price gate converts both sides of the old 1% drift limit into non-terminal evidence',()=>{
   const s=signal(),now=T+540010,ctx=host(now);
   assert.equal(ctx.entryFreshFor(s,s.features,now,.0189),null);
-  assert.equal(ctx.entryFreshFor(s,s.features,now,.0191),'V17_ENTRY_DRIFT');
-  assert.equal(ctx.entryFreshFor(s,s.features,now,.0185),'V17_ENTRY_DRIFT');
-  assert.equal(ctx.entryFreshFor(s,s.features,T+600000,.0189),'V17_TRIGGER_STALE');
+  assert.equal(ctx.entryFreshFor(s,s.features,now,.0191),null,'positive drift is for GPT recheck');
+  assert.equal(ctx.entryFreshFor(s,s.features,now,.0185),null,'negative drift is for GPT recheck');
+  assert.equal(ctx.entryFreshFor(s,s.features,T+600000,.0189),'V17_TRIGGER_STALE','trigger TTL remains hard');
 });
-test('actual rejected limit price, original reference and audit stage are retained',()=>{
+test('drifted limit price and original reference remain auditable without a hard reject',()=>{
   const s=signal(),now=T+540010,ctx=host(now),attempt={};
-  assert.equal(ctx.checkedEntryFresh(s,s.features,now,.0191,attempt,'ADMISSION_PRICE',quote(now)),'V17_ENTRY_DRIFT');
+  assert.equal(ctx.checkedEntryFresh(s,s.features,now,.0191,attempt,'ADMISSION_PRICE',quote(now)),null);
   const d=attempt.entryPriceCheck;assert.equal(d.evaluatedPrice,.0191);
   assert.equal(d.referencePrice,.01879);assert.equal(d.priceBasis,'ORDER_LIMIT');
   assert.equal(d.finalAdmission,false);assert.equal(d.orderDispatched,false);

@@ -53,16 +53,15 @@ export function decisionIdentity(s) {
     // Production rows never carry v30Front, so their identity is byte-identical to before.
     ...(f.v30Front?{front_policy:frontPolicyIdentity(f.v30Front)}:{})};
 }
-/* V30 front-end score policy (SHADOW observation only, 2026-09-24).
- * B06133's two most stable factors on the production candidate stream (split-half
- * consistent, 2026-09-08..09-24) point the OPPOSITE way to its branches: recent
- * acceleration (fresh5over15=true) is the better side, extreme volume (volumeTails=true)
- * the worse. V30 admits on those two, keeps every other B06133 factor as reference,
- * and never rewrites the B06133 stamp: a candidate B06133 rejected stays rejected there. */
-export const V30_FRONT_VERSION='V30_FRONT_SCORE_SHADOW_1';
-export const V30_REQUIRED=Object.freeze({fresh5over15:true,volumeTails:false});
-/** LIVE version (2026-09-24, operator-approved): V30 replaces B06133 as the hard gate. */
-export const V30_FRONT_LIVE_VERSION='V30_FRONT_SCORE_1';
+/* V30 front-end policy.
+ * volumeTails remains the protected hard front gate: production post-mortems found
+ * its rejects subsequently weak. fresh5over15 is no longer a terminal veto. A false
+ * value is preserved verbatim as NEGATIVE EVIDENCE for GPT, which remains the final
+ * strategy decision maker. No B06133/CEC value is rewritten. */
+export const V30_FRONT_VERSION='V30_FRONT_SCORE_SHADOW_2_FRESH_EVIDENCE';
+export const V30_REQUIRED=Object.freeze({volumeTails:false});
+/** LIVE version (2026-09-24): volumeTails hard safety + fresh5over15 GPT evidence. */
+export const V30_FRONT_LIVE_VERSION='V30_FRONT_SCORE_2_FRESH_EVIDENCE';
 /** P142/CEC branch for a V30 admission: B06133's own branch when B06133 also admitted,
  * else the explicit V30_SCORE label (never a borrowed B06133 branch). */
 export const V30_ENTRY_BRANCH='V30_SCORE';
@@ -74,13 +73,15 @@ export function entryBranchOf(features){
 export function v30FrontDecision(b06133,version=V30_FRONT_VERSION){
   const f=b06133?.factors??{},failed=[],unknown=[];
   for(const [k,want] of Object.entries(V30_REQUIRED)){const v=tri(f[k]);if(v===null)unknown.push(k);else if(v!==want)failed.push(k);}
+  const fresh=tri(f.fresh5over15);
   return {version,required:{...V30_REQUIRED},factors:Object.fromEntries(FACTORS.map(k=>[k,tri(f[k])])),
     admitted:failed.length===0&&unknown.length===0,failed,unknown,
+    negativeEvidence:fresh===false?['fresh5over15']:[],
     b06133:{version:b06133?.version??null,allowed:b06133?.allowed===true,result:tri(b06133?.result),branch:b06133?.branch??null,reason:b06133?.reason??null}};
 }
 function frontPolicyIdentity(v){
   return {version:v.version??null,admitted:v.admitted===true,failed:[...(v.failed??[])],unknown:[...(v.unknown??[])],
-    b06133_allowed:v.b06133?.allowed===true,b06133_reason:v.b06133?.reason??null};
+    negative_evidence:[...(v.negativeEvidence??[])],b06133_allowed:v.b06133?.allowed===true,b06133_reason:v.b06133?.reason??null};
 }
 /** Baseline for the V30 shadow: the SAME trigger and B06133 evidence, a different admission rule. */
 export function baselineAllowedV30(s,version=V30_FRONT_VERSION){

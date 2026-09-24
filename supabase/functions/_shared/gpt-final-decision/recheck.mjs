@@ -11,8 +11,9 @@
  *    than the answer, no catastrophic spread, no large drift since the answer's snapshot).
  *    The existing order guards (quote age, depth, margin, slots, duplicates, lease/fencing,
  *    circuit, BOO) still run after it, unchanged.
- * At most RECHECK_POLICY.maxRechecksPerCandidate recheck per candidate: the journal key is
- * per signal + initial snapshot, and a second claim of the same key fails closed.
+ * Rechecks are bounded by RECHECK_POLICY.maxRechecksPerCandidate and keyed by
+ * signal + initial snapshot + IOC-attempt sequence. Replaying the same sequence
+ * fails closed; a later IOC attempt may consume the next sequence only.
  *
  * Thresholds (see research/fd1-final-recheck-20260924/README.md):
  *  - price / tape bands are the adverse 20% tail of the change observed over the same
@@ -30,7 +31,7 @@ export const RECHECK_VERSION='GPT_FINAL_RECHECK_FD1_RC1';
 export const RECHECK_TASK='RECHECK';
 export const RECHECK_POLICY=Object.freeze({
   version:RECHECK_VERSION,
-  maxRechecksPerCandidate:1,
+  maxRechecksPerCandidate:2,
   requestTimeoutMs:4000,     // one API request, never retried
   freshReadMs:1500,          // fresh FD1 facts for the CURRENT section
   answerMaxAgeMs:8000,       // a final BUY is usable this long after its own snapshot
@@ -45,7 +46,7 @@ export const RECHECK_POLICY=Object.freeze({
   depthDropFraction:-0.5,
   imbalanceShift:-0.30,
   slippageWorsenBps:5,
-  postDriftAdverse:-0.0025,postDriftChase:0.005,catastrophicSpreadBps:25,
+  catastrophicSpreadBps:25,
 });
 const num=x=>x!==null&&x!==undefined&&x!==''&&Number.isFinite(Number(x))?Number(x):null;
 const has=(m,...ks)=>ks.every(k=>m[k]!==null&&m[k]!==undefined&&Number.isFinite(m[k]));
@@ -313,20 +314,21 @@ function authorized(c,apiKey){return c?.mode==='ENFORCE'&&c.modeValid!==false&&c
  * @returns {decision,valid,error,answer,latency_ms,api_cost_usd,snapshot_at_ms,completed_at_ms,valid_until_ms,job_key,attempted}
  */
 export async function runFinalRecheck({signal,ticket,detection,preDispatch,store,config,apiKey,fetchFn=fetch,now=Date.now,
-  purpose='PRODUCTION',readFresh=readSources,dataMode='LIVE',asOf=null,policy=RECHECK_POLICY}){
+  purpose='PRODUCTION',readFresh=readSources,dataMode='LIVE',asOf=null,sequence=1,policy=RECHECK_POLICY}){
   const started=now();
   const out=(o)=>({version:RECHECK_VERSION,decision:'ABSTAIN',valid:false,error:null,answer:null,latency_ms:null,api_cost_usd:null,
     snapshot_at_ms:null,completed_at_ms:now(),valid_until_ms:null,job_key:null,attempted:false,started_at_ms:started,...o});
   if(!authorized(config,apiKey))return out({error:'RC_NOT_AUTHORIZED'});
+  if(!Number.isInteger(sequence)||sequence<1||sequence>policy.maxRechecksPerCandidate)return out({error:'RC_LIMIT_REACHED'});
   const f=signal?.features??{},initial=ticket?.initial;
   const expires=num(ticket?.expires),deadline=expires===null?started+policy.requestTimeoutMs:expires-policy.executionReserveMs;
   if(started>=deadline)return out({error:'RC_TRIGGER_EXPIRED'});
   let key,owner,record;
   try{
     const identity={signal_id:String(signal.id),symbol:String(signal.symbol).toUpperCase(),kind:'FD1_FINAL_RECHECK',
-      initial_snapshot_hash:String(ticket?.snapshotHash??''),trigger_at_ms:num(f.v17Setup?.triggerAt)};
+      recheck_sequence:sequence,initial_snapshot_hash:String(ticket?.snapshotHash??''),trigger_at_ms:num(f.v17Setup?.triggerAt)};
     key=await hash({version:RECHECK_VERSION,identity,purpose});
-    record={version:RECHECK_VERSION,kind:'FD1_FINAL_RECHECK',purpose,api_approval_ref:config.approvalRef,identity,reserved_usd:0.10,
+    record={version:RECHECK_VERSION,kind:'FD1_FINAL_RECHECK',purpose,recheck_sequence:sequence,api_approval_ref:config.approvalRef,identity,reserved_usd:0.10,
       source_commit:RECHECK_VERSION,prompt_hash:await hash(RECHECK_PROMPT),detection,packet:null,result:null};
     let claimed;
     try{claimed=await store.claim(key,record,config);}
@@ -373,9 +375,10 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
 export function recheckAllows(r,at){
   return r?.valid===true&&r.decision==='BUY'&&Number.isFinite(r.valid_until_ms)&&at<r.valid_until_ms;
 }
-/** Pure deterministic execution safety after a FINAL BUY, on the dispatch quote. Not a strategy
- * judgment: the quote must be newer than the answer, readable, not catastrophically wide, and
- * the price must not have moved materially since the snapshot GPT answered on. */
+/** Pure deterministic execution safety after a FINAL BUY, on the dispatch quote.
+ * This is execution safety only: the quote must be newer than the answer, readable
+ * and not catastrophically wide. Price drift is evidence, never a second strategy veto;
+ * meaningful drift belongs in detectChange() -> GPT FINAL RECHECK. */
 export function postRecheckSafety({recheck,quote,at,policy=RECHECK_POLICY}){
   const ref=num(recheck?.current_ref?.mid),bid=num(quote?.best_bid),ask=num(quote?.best_ask),recv=num(quote?.timing?.received_at_ms);
   if(!recheckAllows(recheck,at))return {ok:false,reason:'RC_FINAL_NOT_BUY_OR_EXPIRED'};
@@ -385,6 +388,5 @@ export function postRecheckSafety({recheck,quote,at,policy=RECHECK_POLICY}){
   if(spreadBps>policy.catastrophicSpreadBps)return {ok:false,reason:'RC_POST_SPREAD_CATASTROPHIC',spreadBps};
   if(ref===null)return {ok:false,reason:'RC_POST_REFERENCE_MISSING'};
   const drift=mid/ref-1;
-  if(drift<=policy.postDriftAdverse||drift>=policy.postDriftChase)return {ok:false,reason:'RC_POST_DRIFT',drift,spreadBps};
   return {ok:true,reason:null,drift,spreadBps};
 }

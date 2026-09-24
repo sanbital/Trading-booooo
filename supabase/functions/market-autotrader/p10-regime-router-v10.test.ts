@@ -5,19 +5,19 @@ const MIGRATION = new URL(
   "supabase/migrations/20260830054000_v10_production_regime_router_fail_closed.sql",
   ROOT,
 );
-const migration = await Deno.readTextFile(MIGRATION);
+const migration = (await Deno.readTextFile(MIGRATION)).replace(/\r\n/g,"\n");
 const ACL_FINALIZATION_MIGRATION = new URL(
   "supabase/migrations/20260830055500_v10_legacy_resolver_acl_finalization.sql",
   ROOT,
 );
-const aclFinalizationMigration = await Deno.readTextFile(
+const aclFinalizationMigration = (await Deno.readTextFile(
   ACL_FINALIZATION_MIGRATION,
-);
+)).replace(/\r\n/g,"\n");
 const CLAIM_DRIFT_MIGRATION = new URL(
   "supabase/migrations/20260830060500_v10_claim_drift_reconciliation.sql",
   ROOT,
 );
-const claimDriftMigration = await Deno.readTextFile(CLAIM_DRIFT_MIGRATION);
+const claimDriftMigration = (await Deno.readTextFile(CLAIM_DRIFT_MIGRATION)).replace(/\r\n/g,"\n");
 
 function section(start: string, end: string): string {
   const from = migration.indexOf(start);

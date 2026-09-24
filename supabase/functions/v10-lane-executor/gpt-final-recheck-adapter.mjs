@@ -23,7 +23,7 @@ function schedule(p){const t=p.catch(e=>console.error('FD1_RECHECK_LOG_FAILED',S
 /** Evidence row for every candidate that reached the detector (ordered, skipped or not). */
 function logRow(db,s,record,outcome){
   const row={signal_id:String(s.id),symbol:String(s.symbol).toUpperCase(),policy_version:RECHECK_VERSION,
-    initial_gpt_decision:record.initial_gpt_decision,initial_gpt_at:ms(record.initial_gpt_at),initial_snapshot_at:ms(record.initial_snapshot_at),
+    recheck_sequence:record.recheck_sequence??1,initial_gpt_decision:record.initial_gpt_decision,initial_gpt_at:ms(record.initial_gpt_at),initial_snapshot_at:ms(record.initial_snapshot_at),
     initial_snapshot_hash:record.initial_snapshot_hash??null,initial_context:record.initial_context??null,
     pre_dispatch_at:ms(record.pre_dispatch_at),pre_dispatch_snapshot:record.pre_dispatch_snapshot,
     recheck_triggered:record.recheck_triggered,recheck_reasons:record.recheck_reasons,deltas:record.deltas,
@@ -38,7 +38,8 @@ const ms=x=>Number.isFinite(Number(x))&&x!==null?new Date(Number(x)).toISOString
 export function markRecheckOutcome(db,s,record,outcome){
   if(testHooks?.log){const r=testHooks.log.findLast(x=>x.signal_id===String(s.id));if(r)r.outcome=outcome;return;}
   schedule((async()=>{const r=await db.from('fd1_final_recheck_log').update({outcome}).eq('signal_id',String(s.id))
-    .eq('initial_snapshot_hash',record.initial_snapshot_hash??'');if(r.error)throw Error(r.error.message);})());
+    .eq('initial_snapshot_hash',record.initial_snapshot_hash??'').eq('recheck_sequence',record.recheck_sequence??1);
+    if(r.error)throw Error(r.error.message);})());
 }
 /**
  * @returns {proceed:boolean, reason:string, record:object}
@@ -46,10 +47,10 @@ export function markRecheckOutcome(db,s,record,outcome){
  *   proceed=false -> FINAL SKIP / ABSTAIN / timeout / error / invalid / expired / limit: no order.
  */
 export async function finalRecheckStep(db,s,{ticket,e1,rawQuote,now=Date.now,purpose='PRODUCTION',config=null,apiKey=null,
-  dataMode='LIVE',asOf=null}){
+  dataMode='LIVE',asOf=null,sequence=1}){
   // A historical fixture (asOf) is judged at its own dispatch instant, never at the wall clock.
   const at=asOf??now(),snapshot=preDispatchSnapshot({at,rawQuote,e1}),detection=detectChange(ticket?.initial,snapshot);
-  const record={version:RECHECK_VERSION,initial_gpt_decision:ticket?.decision??null,initial_gpt_at:ticket?.initial?.completedAt??null,
+  const record={version:RECHECK_VERSION,recheck_sequence:sequence,initial_gpt_decision:ticket?.decision??null,initial_gpt_at:ticket?.initial?.completedAt??null,
     initial_snapshot_at:ticket?.initial?.snapshotAt??null,initial_snapshot_hash:ticket?.snapshotHash??null,
     initial_context:ticket?.initial??null,pre_dispatch_snapshot:snapshot,pre_dispatch_at:at,
     recheck_triggered:detection.triggered,recheck_reasons:detection.reasons,deltas:detection.deltas,
@@ -60,7 +61,7 @@ export async function finalRecheckStep(db,s,{ticket,e1,rawQuote,now=Date.now,pur
   }
   let final;
   try{
-    final=await runFinalRecheck({signal:s,ticket,detection,preDispatch:snapshot,purpose,dataMode,asOf,
+    final=await runFinalRecheck({signal:s,ticket,detection,preDispatch:snapshot,purpose,dataMode,asOf,sequence,
       store:testHooks?.store??new SupabaseReviewStore(db),config:config??testHooks?.config??gptRecheckConfig(db),
       apiKey:apiKey??testHooks?.apiKey??getenv('OPENAI_API_KEY'),fetchFn:testHooks?.fetchFn??fetch,now,readFresh:testHooks?.readFresh});
   }catch(e){final={decision:'ABSTAIN',valid:false,error:'RC_ADAPTER_ERROR',completed_at_ms:now()};}

@@ -32,8 +32,12 @@ test('V30 decision never rewrites B06133: a rejected stamp stays rejected and vi
 test('V30 baseline refuses failed/unknown factors and a tampered stamp',()=>{
   const s=rejectedButV30();
   const bad=structuredClone(s);bad.features.b06133.factors.fresh5over15=false;const v=v30FrontDecision(bad.features.b06133);
-  assert.equal(v.admitted,false);assert.deepEqual(v.failed,['fresh5over15']);
-  assert.equal(baselineAllowedV30({...bad,features:{...bad.features,v30Front:v}}),false);
+  assert.equal(v.admitted,true);assert.deepEqual(v.negativeEvidence,['fresh5over15']);
+  assert.equal(baselineAllowedV30({...bad,features:{...bad.features,v30Front:v}}),true);
+  const failed=structuredClone(s);failed.features.b06133.factors.volumeTails=true;
+  const fv=v30FrontDecision(failed.features.b06133);
+  assert.equal(fv.admitted,false);assert.deepEqual(fv.failed,['volumeTails']);
+  assert.equal(baselineAllowedV30({...failed,features:{...failed.features,v30Front:fv}}),false);
   const unk=structuredClone(s);unk.features.b06133.factors.volumeTails=null;assert.deepEqual(v30FrontDecision(unk.features.b06133).unknown,['volumeTails']);
   const forged={...s,features:{...s.features,v30Front:{...v30FrontDecision(s.features.b06133),b06133:{allowed:true}}}};
   assert.equal(baselineAllowedV30(forged),false,'claiming B06133 allowed when it was not');
@@ -43,7 +47,7 @@ test('V30 baseline refuses failed/unknown factors and a tampered stamp',()=>{
 test('GPT input states the V30 admission and the B06133 REJECT as reference; prompt V6S differs only in who selected',async()=>{
   const s=rejectedButV30();s.features.v30Front=v30FrontDecision(s.features.b06133);
   const p=await buildPacket(decisionIdentity(s),marketData(s),T+1000),i=compactInputV6(p);
-  assert.equal(i.machine_decision.status,'ADMITTED_BY_V30_FRONT_SCORE_SHADOW_1');assert.equal(i.machine_decision.b06133_rule.result,'REJECT');
+  assert.equal(i.machine_decision.status,'ADMITTED_BY_V30_FRONT_SCORE_SHADOW_2_FRESH_EVIDENCE');assert.equal(i.machine_decision.b06133_rule.result,'REJECT');
   assert.equal(i.machine_decision.b06133_rule.role,'REFERENCE_ONLY');
   assert.notEqual(SYSTEM_PROMPT_V6S,SYSTEM_PROMPT_V6);
   const a=SYSTEM_PROMPT_V6.split('\n'),b=SYSTEM_PROMPT_V6S.split('\n');assert.equal(a.length,b.length);

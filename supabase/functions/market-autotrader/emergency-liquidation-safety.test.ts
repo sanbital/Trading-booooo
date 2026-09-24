@@ -3,9 +3,9 @@ import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.t
 const ROOT = new URL("../../../", import.meta.url);
 
 Deno.test("emergency liquidation uses its confirmed RPC and never masquerades as TIME", async () => {
-  const source = await Deno.readTextFile(
+  const source = (await Deno.readTextFile(
     new URL("supabase/functions/market-autotrader/index.ts", ROOT),
-  );
+  )).replace(/\r\n/g,"\n");
 
   assert(source.includes('rpc("request_emergency_liquidation"'));
   assert(source.includes('p_confirmation: String(body.confirmation || "")'));

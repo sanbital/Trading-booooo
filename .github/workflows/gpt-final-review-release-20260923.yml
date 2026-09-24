@@ -4,6 +4,8 @@ name: GPT final review release (manual)
 # bundle is byte-identical to the ref. It never changes trading controls, circuit,
 # GPT mode or budget, and never places orders.
 on:
+  push:
+    branches: [release/fd1-execution-retry-sizing150-20260924]
   workflow_dispatch:
     inputs:
       target:
@@ -28,7 +30,7 @@ env:
 jobs:
   delete-verify:
     # Removes ONLY the temporary order-free verification function.
-    if: inputs.target == 'delete-gpt-final-review-verify'
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'delete-gpt-final-review-verify'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -52,7 +54,7 @@ jobs:
           python3 -c "import json;x=json.load(open('after.json'));x=x.get('functions',x) if isinstance(x,dict) else x;assert not any(r['slug']=='gpt-final-review-verify' for r in x);assert any(r['slug']=='v10-lane-executor' and r['status']=='ACTIVE' for r in x);print('deleted; executor still ACTIVE')"
 
   release:
-    if: inputs.target != 'delete-gpt-final-review-verify'
+    if: github.event_name == 'workflow_dispatch' && inputs.target != 'delete-gpt-final-review-verify'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -200,4 +202,191 @@ jobs:
         if: always()
         with:
           name: gpt-final-review-release-${{ inputs.target }}
+          path: release-evidence
+  fd1-production-release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/release/fd1-execution-retry-sizing150-20260924'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prove release source equals main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git diff --check
+          git diff --quiet origin/main -- supabase/functions/v10-lane-executor supabase/functions/v10-lane-signal-generator supabase/functions/_shared supabase/migrations/20260924090000_fd1_execution_retry_missed_journal.sql
+          grep -Fq 'targetMarginUsdt: 150' supabase/functions/_shared/leader-slot-sizing.mjs
+          grep -Fq 'leverage: 3' supabase/functions/_shared/leader-slot-sizing.mjs
+          grep -Fq 'const MAX_SLOTS=10' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'PATCH="FD1-EXECUTION-RETRY-SIZING150-1"' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq "maxAttempts:2" supabase/functions/v10-lane-executor/entry-ioc-retry.mjs
+          grep -Fq "V30_REQUIRED=Object.freeze({volumeTails:false})" supabase/functions/_shared/gpt-final-review/contract.mjs
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.5.6
+
+      - name: Full regression and type checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/fd1-pglite
+          (cd /tmp/fd1-pglite && npm init -y >/dev/null && npm install --no-audit --no-fund @electric-sql/pglite@0.3.0 >/dev/null)
+          export PGLITE_MODULE=/tmp/fd1-pglite/node_modules/@electric-sql/pglite/dist/index.js
+          node --test development/gpt-final-review/tests/*.test.mjs supabase/functions/_shared/*.test.mjs supabase/functions/v10-lane-executor/*.test.mjs tests/*.test.mjs
+          deno task test:entry
+          deno test --allow-read supabase/functions/_shared/leader-slot-sizing.test.ts supabase/functions/v10-lane-executor/margin-config.test.ts
+          deno check supabase/functions/v10-lane-executor/index.ts
+          deno check supabase/functions/v10-lane-signal-generator/index.ts
+          deno task test
+
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Pre-deploy production safety snapshot
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -n "$SUPABASE_DB_URL"
+          mkdir -p release-evidence
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-before.json
+          python3 - <<'PY'
+          import json
+          x=json.load(open('release-evidence/functions-before.json'));x=x.get('functions',x) if isinstance(x,dict) else x
+          for slug in ('v10-lane-executor','v10-lane-signal-generator'):
+              r=next(z for z in x if z['slug']==slug)
+              assert r['status']=='ACTIVE' and r.get('verify_jwt') is False,r
+          json.dump({r['slug']:r['version'] for r in x if r['slug'] in ('v10-lane-executor','v10-lane-signal-generator')},open('release-evidence/versions-before.json','w'))
+          PY
+          psql "$SUPABASE_DB_URL" --set=ON_ERROR_STOP=1 -At <<'SQL' | tee release-evidence/db-before.txt
+          do $$
+          declare s public.trading_settings%rowtype; rt public.v11_long_regime_runtime%rowtype;
+          begin
+            select * into s from public.trading_settings where id=1 for share;
+            select * into rt from public.v11_long_regime_runtime where singleton=true for share;
+            if s.mode<>'LIVE_LIMITED' or s.pause_new_entries or s.emergency_liquidation or s.manual_intervention_required or
+               s.binance_futures_enabled is not true or s.binance_futures_trade_ready is not true or
+               s.binance_futures_leverage<>3 or s.binance_futures_allocation_usdt<>200 or s.max_open_positions_per_exchange<>10
+              then raise exception 'PREDEPLOY_TRADING_SETTINGS_MISMATCH'; end if;
+            if rt.live_enabled is not true or rt.circuit_open is true then raise exception 'PREDEPLOY_RUNTIME_NOT_HEALTHY'; end if;
+            if exists(select 1 from public.v11_long_regime_orders where state in ('PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED')
+              and created_at>now()-interval '24 hours') then raise exception 'PREDEPLOY_UNRESOLVED_RECENT_ORDER'; end if;
+          end $$;
+          select 'settings',binance_futures_allocation_usdt,binance_futures_leverage,max_open_positions_per_exchange from public.trading_settings where id=1;
+          select 'open_positions',count(*) from public.v11_long_regime_positions where state='OPEN';
+          SQL
+
+      - name: Apply journal/recheck migration
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" --set=ON_ERROR_STOP=1 --single-transaction --file supabase/migrations/20260924090000_fd1_execution_retry_missed_journal.sql
+
+      - name: Deploy executor then generator while DB margin remains 200
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy v10-lane-executor --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt --use-api
+          supabase functions deploy v10-lane-signal-generator --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt --use-api
+
+      - name: Atomic production sizing cutover to 150 x 3
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" --set=ON_ERROR_STOP=1 --single-transaction <<'SQL'
+          do $$
+          declare n integer;s public.trading_settings%rowtype;
+          begin
+            update public.trading_settings set binance_futures_allocation_usdt=150,version=coalesce(version,0)+1,updated_at=now()
+            where id=1 and binance_futures_allocation_usdt=200 and binance_futures_leverage=3 and max_open_positions_per_exchange=10
+              and mode='LIVE_LIMITED' and pause_new_entries=false and emergency_liquidation=false and manual_intervention_required=false;
+            get diagnostics n=row_count;
+            if n<>1 then raise exception 'SIZING_CUTOVER_CAS_FAILED'; end if;
+            select * into s from public.trading_settings where id=1;
+            if s.binance_futures_allocation_usdt<>150 or s.binance_futures_leverage<>3 or s.max_open_positions_per_exchange<>10
+              then raise exception 'SIZING_CUTOVER_VERIFY_FAILED'; end if;
+          end $$;
+          SQL
+
+      - name: Prove deployed bundles equal release source
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-after.json
+          python3 - <<'PY'
+          import json
+          b=json.load(open('release-evidence/versions-before.json'))
+          x=json.load(open('release-evidence/functions-after.json'));x=x.get('functions',x) if isinstance(x,dict) else x
+          for slug in ('v10-lane-executor','v10-lane-signal-generator'):
+              r=next(z for z in x if z['slug']==slug)
+              assert r['status']=='ACTIVE' and int(r['version'])==int(b[slug])+1,r
+          PY
+          for target in v10-lane-executor v10-lane-signal-generator; do
+            mkdir -p "release-evidence/download-$target"
+            supabase functions download "$target" --project-ref "$SUPABASE_PROJECT_REF" --use-api --workdir "$PWD/release-evidence/download-$target"
+            node ops/gpt-final-review/verify-bundle-parity.mjs "release-evidence/download-$target" . "$target" | tee "release-evidence/parity-$target.json"
+          done
+
+      - name: Post-deploy production verification
+        shell: bash
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          token="$(psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c "select token from public.edge_internal_tokens where name='v10-lane-executor'")"
+          test -n "$token"
+          endpoint="https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/v10-lane-executor"
+          curl -fsS --retry 2 -H "content-type: application/json" -H "x-v10-executor-token: $token" -d '{"mode":"ops-readiness"}' "$endpoint" > release-evidence/ops-readiness.json
+          curl -fsS --retry 2 -H "content-type: application/json" -H "x-v10-executor-token: $token" -d '{"mode":"preflight","symbol":"BTCUSDT"}' "$endpoint" > release-evidence/preflight.json
+          curl -fsS --retry 1 -H "content-type: application/json" -H "x-v10-executor-token: $token" -d '{"mode":"fd1-recheck-probe","symbol":"BTCUSDT","fixture":"LIVE","runId":"release-20260924"}' "$endpoint" > release-evidence/fd1-recheck-probe.json
+          python3 - <<'PY'
+          import json
+          o=json.load(open('release-evidence/ops-readiness.json'));p=json.load(open('release-evidence/preflight.json'));r=json.load(open('release-evidence/fd1-recheck-probe.json'))
+          assert o['ok'] and o['patch']=='FD1-EXECUTION-RETRY-SIZING150-1',o
+          assert o['sizing']['targetMarginUsdt']==150 and o['sizing']['leverage']==3 and o['maxSlots']==10,o
+          assert o['binance']['positionsComplete'] is True and o['binance']['openOrdersComplete'] is True,o
+          assert p['ok'] and p['sizingContract']['targetMarginUsdt']==150 and p['sizingContract']['leverage']==3,p
+          assert r['ok'] and r['orderCalls']==0,r
+          PY
+          psql "$SUPABASE_DB_URL" --set=ON_ERROR_STOP=1 -At <<'SQL' | tee release-evidence/post-deploy-db.txt
+          select public.missed_opportunity_sync(10000);
+          select public.missed_opportunity_track(30);
+          select 'journal_rows',count(*) from public.missed_opportunity_journal;
+          select 'margin',binance_futures_allocation_usdt,'leverage',binance_futures_leverage,'max_slots',max_open_positions_per_exchange from public.trading_settings where id=1;
+          select 'open_positions',count(*) from public.v11_long_regime_positions where state='OPEN';
+          select 'recent_unresolved',count(*) from public.v11_long_regime_orders where state in ('PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED') and created_at>now()-interval '24 hours';
+          SQL
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fd1-execution-retry-sizing150-release
           path: release-evidence

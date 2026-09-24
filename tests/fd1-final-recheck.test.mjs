@@ -111,12 +111,16 @@ test('6d. expired FINAL BUY -> no order (and no fallback to the INITIAL BUY)',as
   const late=r.record.final.valid_until_ms+1;x.setNow(late);
   assert.equal(recheckAllows(r.record.final,late),false);assert.equal(gptFinalCheck(x.db,x.s,r.record).allowed,false);
 });
-test('6e. max one recheck per candidate: a second recheck of the same BUY fails closed',async()=>{
+test('6e. final rechecks are bounded per IOC attempt: duplicate sequence fails, sequence 2 is the last allowed',async()=>{
   const x=await initialDecision({final:'BUY'});
-  await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:WEAK,rawQuote:calmQuote(T+11900),now:()=>T+12000});
-  const again=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:WEAK,rawQuote:calmQuote(T+13900),now:()=>T+14000});
-  assert.equal(again.proceed,false);assert.equal(again.record.final.error,'RC_LIMIT_REACHED');assert.equal(x.w.calls.recheck,1);
-  assert.equal(RECHECK_POLICY.maxRechecksPerCandidate,1);
+  const first=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:WEAK,rawQuote:calmQuote(T+11900),now:()=>T+12000,sequence:1});
+  assert.equal(first.proceed,true);
+  const duplicate=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:WEAK,rawQuote:calmQuote(T+12900),now:()=>T+13000,sequence:1});
+  assert.equal(duplicate.proceed,false);assert.equal(duplicate.record.final.error,'RC_LIMIT_REACHED');
+  const second=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:WEAK,rawQuote:calmQuote(T+13900),now:()=>T+14000,sequence:2});
+  assert.equal(second.proceed,true);assert.equal(RECHECK_POLICY.maxRechecksPerCandidate,2);
+  const third=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:WEAK,rawQuote:calmQuote(T+14900),now:()=>T+15000,sequence:3});
+  assert.equal(third.proceed,false);assert.equal(third.record.final.error,'RC_LIMIT_REACHED');
 });
 test('7. FINAL BUY, then the dispatch quote is not newer than the answer -> no order',async()=>{
   const x=await initialDecision({final:'BUY'});
@@ -124,13 +128,13 @@ test('7. FINAL BUY, then the dispatch quote is not newer than the answer -> no o
   const s=postRecheckSafety({recheck:r.record.final,quote:calmQuote(r.record.final.completed_at_ms-1),at:T+13000});
   assert.deepEqual([s.ok,s.reason],[false,'RC_POST_QUOTE_NOT_AFTER_ANSWER']);
 });
-test('8. FINAL BUY, then catastrophic spread or a large drift -> no order',async()=>{
+test('8. FINAL BUY post-safety blocks catastrophic execution risk, but price drift is not a second strategy veto',async()=>{
   const x=await initialDecision({final:'BUY'});
   const r=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:WEAK,rawQuote:calmQuote(T+11900),now:()=>T+12000});
   const wide=postRecheckSafety({recheck:r.record.final,quote:{best_bid:1.19,best_ask:1.2,timing:{received_at_ms:T+13000}},at:T+13000});
   assert.deepEqual([wide.ok,wide.reason],[false,'RC_POST_SPREAD_CATASTROPHIC']);
   const drop=postRecheckSafety({recheck:r.record.final,quote:{best_bid:1.193,best_ask:1.1932,timing:{received_at_ms:T+13000}},at:T+13000});
-  assert.deepEqual([drop.ok,drop.reason],[false,'RC_POST_DRIFT']);
+  assert.equal(drop.ok,true);assert.ok(drop.drift<0);
 });
 for(const [id,initial] of [['9','SKIP'],['10','ABSTAIN']])
 test(`${id}. INITIAL ${initial} -> no order and no FINAL RECHECK (openBull returns before the detector)`,async()=>{
@@ -197,23 +201,14 @@ test('contract: price drop alone is not a SKIP; BUY needs current up-support and
   assert.match(RECHECK_PROMPT,/조금 전 이 후보를 BUY했다/);assert.match(RECHECK_PROMPT,/지금 이 순간에도 신규 LONG 진입 근거가 충분한가/);
   assert.match(RECHECK_PROMPT,/자동 승인하는 절차가 아니다/);assert.match(RECHECK_PROMPT,/CEC0040 REJECT를 따를 의무도/);
 });
-test('14. protection / exit / sizing regression: the recheck wiring touches none of them',()=>{
+test('14. release invariants: GPT remains before IOC, sizing is 150x3, retry is bounded and protection/lease stay in path',()=>{
   const src=readFileSync(new URL('../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
-  for(const k of ['const MAX_SLOTS=10','const SETUP_MAX_CONCURRENT=4','PATCH="FD1-GPT-FINAL-RECHECK-1"'])assert.ok(src.includes(k),k);
-  // Every executor change is one of the exact reversible RECHECK hooks; stripping them restores main b0af0dc byte for byte.
-  let base=src;for(const h of [...RECHECK_HOOKS].reverse()){assert.equal(base.split(h.to).length,2);base=base.replace(h.to,h.from);}
-  assert.equal(base,execFileSync('git',['show','b0af0dc:supabase/functions/v10-lane-executor/index.ts'],{encoding:'utf8'}));
-  for(const h of RECHECK_HOOKS){
-    let i=0;while(i<h.from.length&&h.from[i]===h.to[i])i++;let j=0;while(j<h.from.length-i&&h.from.at(-1-j)===h.to.at(-1-j))j++;
-    const added=h.to.slice(i,h.to.length-j),removed=h.from.slice(i,h.from.length-j);
-    for(const forbidden of ['hard_stop_price','NATIVE_STOP','stopPct','P142','EXIT_REVIEW_R5','X1_POLICY','MARGIN=','LEV=','MAX_SLOTS=','verifyExecutionLease','closePos(','manageLeader','circuit('])
-      assert.ok(!added.includes(forbidden)&&!removed.includes(forbidden),'recheck hook must not touch '+forbidden);
-  }
-  // the single OPEN_LONG writer stays behind both GPT checks and after the recheck step
-  const step=src.indexOf('await finalRecheckStep(db,s,'),dispatch=src.indexOf('const gptDispatchCheck=gptFinalCheck(db,s,attempt.finalRecheck);'),intent=src.indexOf('intent:"OPEN_LONG"');
-  assert.ok(step>0&&dispatch>step&&intent>dispatch);assert.equal(src.split('intent:"OPEN_LONG"').length-1,1);
-  // frozen policy files are byte-identical to main before this change
-  const frozen=['leader-slot-sizing.mjs','leader-exit-review.mjs','leader-entry-protection.mjs','leader-protection-adapter.mjs','leader-native-protection.mjs',
-    'leader-exit-settlement.mjs','leader-entry-control.mjs','leader-e1-runtime.mjs','leader-cec0040.mjs','leader-momentum-v17.mjs'].map(f=>'supabase/functions/_shared/'+f);
-  assert.equal(execFileSync('git',['diff','--stat','b0af0dc','--',...frozen],{encoding:'utf8'}),'');
+  for(const k of ['const MAX_SLOTS=10','const SETUP_MAX_CONCURRENT=4','PATCH="FD1-EXECUTION-RETRY-SIZING150-1"',
+    'SLOT_SIZING_CONTRACT.targetMarginUsdt','verifyExecutionLease(db)','protectNewLeaderPosition({','time_in_force:"IOC"',
+    'IOC_RETRY_POLICY.maxAttempts','planAggressiveIocRetry(','SIZING_CONTRACT_STALE'])assert.ok(src.includes(k),k);
+  const step=src.indexOf('await finalRecheckStep(db,s,'),dispatch=src.indexOf('const gptDispatchCheck=gptFinalCheck(db,s,attempt.finalRecheck);'),
+    first=src.indexOf('dispatchEntryIocAttempt(db,s,gateway,{attemptNo:1'),second=src.indexOf('dispatchEntryIocAttempt(db,s,gateway,{attemptNo:2');
+  assert.ok(step>0&&dispatch>step&&first>dispatch&&second>first);
+  assert.equal(src.split('time_in_force:"IOC"').length-1,1,'IOC shape is centralized in the dispatcher');
+  assert.match(src,/strategicDriftToRecheck\(entryTriggerFresh/,'V17 drift must feed recheck rather than hard reject');
 });

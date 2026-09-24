@@ -134,12 +134,13 @@ Deno.test("CASE 7: pullback then +0.25% bullish recovery triggers", () => {
   assertEquals(state.triggerExpiresAt, T0 + 2 * MIN + SETUP_POLICY.entryTriggerTtlMs);
 });
 
-Deno.test("a re-acceleration without a prior pullback never triggers", () => {
-  const { state } = drive([
+Deno.test("a strong continuation can trigger without a prior pullback", () => {
+  const { state, last } = drive([
     bar(T0, 100, 100.4, 99.99, 100.3),
     bar(T0 + MIN, 100.3, 100.6, 100.2, 100.5),
   ]);
-  assertEquals(state.state, SETUP_STATE.ARMED, "no dip, no entry -- this is the whole point");
+  assertEquals(state.state, SETUP_STATE.TRIGGERED);
+  assertEquals(last, SETUP_REASON.CONTINUATION_TRIGGERED);
 });
 
 // ---------------------------------------------------------------- 8
@@ -391,7 +392,7 @@ Deno.test("the frozen parameters are exactly the researched ones", () => {
   assertEquals(SETUP_POLICY.maxChasePct, 0.01);
   assertEquals(SETUP_POLICY.setupTtlMs, 900_000);
   assertEquals(SETUP_POLICY.entryTriggerTtlMs, 60_000);
-  assertEquals(SETUP_POLICY.version, "V17_PULLBACK_REACCEL_ENTRY_1");
+  assertEquals(SETUP_POLICY.version, "V17_GPT_CONTINUATION_ENTRY_2");
   assertEquals(SETUP_POLICY.parametersValidatedByBacktest, false,
     "a 7-day sample is not a market-wide validation and must not claim to be");
 });

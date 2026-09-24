@@ -8,7 +8,7 @@ export const STRATEGY = 'LEADER_MOMENTUM_V17';
 // ultimately matters: the exchange execution price.  The pre-dispatch guard remains
 // in place; this version is stamped on new order/position lifecycles so an already
 // open position can never be opted into the new behaviour by a deploy.
-export const ENTRY_EXECUTION_POLICY_VERSION = 'V21_POST_FILL_DRIFT_GUARD_1';
+export const ENTRY_EXECUTION_POLICY_VERSION = 'FD1_POST_FILL_DRIFT_EVIDENCE_1';
 export const POLICY = Object.freeze({
   rankLimit: 10, minDayReturn: .03, min30mReturn: .0075,
   min60mReturn: .015, minVolumeRatio: 1.1, minQuoteVolume24h: 5_000_000,
@@ -125,12 +125,12 @@ export function postFillEntryGuard(features,fillPrice,p=POLICY) {
     return {version:ENTRY_EXECUTION_POLICY_VERSION,action:'CLOSE',
       reason:'V21_POST_FILL_ENTRY_INPUT_INVALID',referenceClose:ref,fillPrice:price,
       driftPct:null,maxDriftPct:Number.isFinite(limit)?limit:null};
-  const driftPct=price/ref-1;
-  const exceeded=Math.abs(driftPct)-limit>1e-12;
-  return {version:ENTRY_EXECUTION_POLICY_VERSION,
-    action:exceeded?'CLOSE':'KEEP',
-    reason:exceeded?'V21_POST_FILL_ENTRY_DRIFT':'V21_POST_FILL_ENTRY_VALID',
-    referenceClose:ref,fillPrice:price,driftPct,maxDriftPct:limit};
+  const driftPct=price/ref-1,exceeded=Math.abs(driftPct)-limit>1e-12;
+  // A valid fill is already an executed GPT-approved position. Price drift alone is
+  // strategy evidence, not an execution-safety reason to reverse the trade locally.
+  return {version:ENTRY_EXECUTION_POLICY_VERSION,action:'KEEP',
+    reason:exceeded?'FD1_POST_FILL_DRIFT_EVIDENCE':'FD1_POST_FILL_ENTRY_VALID',
+    referenceClose:ref,fillPrice:price,driftPct,maxDriftPct:limit,driftExceeded:exceeded};
 }
 export function nextExit(position,bid,now,p=POLICY) {
   const entry=num(position.entryPrice),at=num(position.entryAt),oldPeak=num(position.peakPrice??entry);

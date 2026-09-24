@@ -15,6 +15,26 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {harness} from '../v18-ops/harness.mjs';
 import {ENFORCEMENT} from '../../supabase/functions/v10-lane-executor/boo-entry-adapter.mjs';
+import {SLOT_SIZING_CONTRACT} from '../../supabase/functions/_shared/leader-slot-sizing.mjs';
+import {SETUP_POLICY_VERSION,SETUP_STATE} from '../../supabase/functions/_shared/leader-pullback-reaccel.mjs';
+import {B06133_VERSION} from '../../supabase/functions/_shared/leader-b06133-entry.mjs';
+import {CEC0040_VERSION,CEC0040_TARGET_VERSION} from '../../supabase/functions/_shared/leader-cec0040.mjs';
+
+function stampCurrentEntry(h){
+  const signal=h.state.tables.v11_long_regime_signals[0],at=signal.features.signal5Close;
+  Object.assign(signal.features,{sizingContractVersion:SLOT_SIZING_CONTRACT.version,
+    targetMarginUsdt:SLOT_SIZING_CONTRACT.targetMarginUsdt,leverage:SLOT_SIZING_CONTRACT.leverage,
+    v17Setup:{identity:'boo-test',policyVersion:SETUP_POLICY_VERSION,state:SETUP_STATE.TRIGGERED,
+      referencePrice:signal.features.referenceClose,armedAt:at,triggerAt:at,triggerExpiresAt:at+60000},
+    b06133:{version:B06133_VERSION,source:{decisionAt:at}},
+    cec0040:{version:CEC0040_VERSION,targetVersion:CEC0040_TARGET_VERSION,ready:true,decisionAt:at,action:'ADMIT'}});
+  Object.assign(h.ctx,{B06133_VERSION,CEC0040_VERSION,CEC0040_TARGET_VERSION,V30_FRONT_LIVE_VERSION:'TEST',
+    baselineAllowedV30:()=>true,entryBranchOf:()=> 'TEST_BRANCH',
+    gptFinalCheck:()=>({allowed:true,review:{decision:'PASS'}}),
+    finalRecheckStep:async()=>({proceed:true,reason:'TEST_PASS',record:{recheck_triggered:false}}),
+    withOrderTiming:x=>x,IOC_RETRY_POLICY:{maxAttempts:1}});
+  return signal;
+}
 
 /** One admission attempt, with the gate set to `enforcement`. */
 async function attempt(enforcement) {
@@ -23,7 +43,7 @@ async function attempt(enforcement) {
     orderId: 'boo-probe', clientOrderId: cmd.order.identifier, symbol: cmd.order.market,
     side: 'BUY', positionSide: 'BOTH', reduceOnly: false, origQty: String(cmd.order.quantity),
     executedQty: '0', status: 'EXPIRED', avgPrice: '0', updateTime: state.now, fills: []}});
-  const signal = h.state.tables.v11_long_regime_signals[0];
+  const signal = stampCurrentEntry(h);
   const result = await h.ctx.open(signal, [], []);
   const verdicts = h.state.tables.boo_entry_gate_decisions ?? [];
   return {result, verdicts, dispatched: h.state.calls.filter(c => c.action === 'create_order')};
@@ -54,7 +74,7 @@ test('an absent control row enforces rather than defaults to observing', async (
   // not become permission.
   const h = harness({booEnforcement: ENFORCEMENT.OBSERVE});
   h.state.tables.boo_entry_gate_control = [];
-  const signal = h.state.tables.v11_long_regime_signals[0];
+  const signal = stampCurrentEntry(h);
   const result = await h.ctx.open(signal, [], []);
   assert.match(String(result.reason), /^BOO_ENTRY_GATE:/);
 });

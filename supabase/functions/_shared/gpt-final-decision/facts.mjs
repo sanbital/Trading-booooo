@@ -175,7 +175,8 @@ export function modelJudgments(features){
       signal_return_5m:num(f.return5m),confirmation_return_15m:num(f.confirmationReturn15m),note:'V17 generated this candidate (top-10 KST day leader, 5m confirmation, pullback then re-acceleration trigger)'},
     b06133:{allowed:b.allowed===true,branch:b.branch??null,reason:b.reason??null,
       factors:Object.fromEntries(['absorption','volumeTails','fresh15over30','btcAnyUp','buyerShareRise','fresh5over15','recentHourLead'].map(k=>[k,tri(b.factors?.[k])]))},
-    v30:v?{admitted:v.admitted===true,failed:[...(v.failed??[])],rule:'fresh5over15=true AND volumeTails=false'}:null,
+    v30:v?{admitted:v.admitted===true,failed:[...(v.failed??[])],negative_evidence:[...(v.negativeEvidence??[])],
+      rule:'volumeTails=false is required; fresh5over15=false is negative evidence for GPT, not a veto'}:null,
     cec0040:{action:c.action??null,effective_allowed:c.effectiveAllowed===true,ready:c.ready===true,prediction_usdt_per_trade:num(c.predictionUsdt),
       note:'strategy-wide causal edge estimate from recent closed trades (not symbol specific)'}
   };
