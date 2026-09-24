@@ -30,7 +30,7 @@ export const RECHECK_VERSION='GPT_FINAL_RECHECK_FD1_RC1';
 export const RECHECK_TASK='RECHECK';
 export const RECHECK_POLICY=Object.freeze({
   version:RECHECK_VERSION,
-  maxRechecksPerCandidate:1,
+  maxRechecksPerCandidate:2,
   requestTimeoutMs:4000,     // one API request, never retried
   freshReadMs:1500,          // fresh FD1 facts for the CURRENT section
   answerMaxAgeMs:8000,       // a final BUY is usable this long after its own snapshot
@@ -313,20 +313,21 @@ function authorized(c,apiKey){return c?.mode==='ENFORCE'&&c.modeValid!==false&&c
  * @returns {decision,valid,error,answer,latency_ms,api_cost_usd,snapshot_at_ms,completed_at_ms,valid_until_ms,job_key,attempted}
  */
 export async function runFinalRecheck({signal,ticket,detection,preDispatch,store,config,apiKey,fetchFn=fetch,now=Date.now,
-  purpose='PRODUCTION',readFresh=readSources,dataMode='LIVE',asOf=null,policy=RECHECK_POLICY}){
+  purpose='PRODUCTION',readFresh=readSources,dataMode='LIVE',asOf=null,sequence=1,policy=RECHECK_POLICY}){
   const started=now();
   const out=(o)=>({version:RECHECK_VERSION,decision:'ABSTAIN',valid:false,error:null,answer:null,latency_ms:null,api_cost_usd:null,
     snapshot_at_ms:null,completed_at_ms:now(),valid_until_ms:null,job_key:null,attempted:false,started_at_ms:started,...o});
   if(!authorized(config,apiKey))return out({error:'RC_NOT_AUTHORIZED'});
+  if(!Number.isInteger(sequence)||sequence<1||sequence>policy.maxRechecksPerCandidate)return out({error:'RC_LIMIT_REACHED'});
   const f=signal?.features??{},initial=ticket?.initial;
   const expires=num(ticket?.expires),deadline=expires===null?started+policy.requestTimeoutMs:expires-policy.executionReserveMs;
   if(started>=deadline)return out({error:'RC_TRIGGER_EXPIRED'});
   let key,owner,record;
   try{
     const identity={signal_id:String(signal.id),symbol:String(signal.symbol).toUpperCase(),kind:'FD1_FINAL_RECHECK',
-      initial_snapshot_hash:String(ticket?.snapshotHash??''),trigger_at_ms:num(f.v17Setup?.triggerAt)};
+      recheck_sequence:sequence,initial_snapshot_hash:String(ticket?.snapshotHash??''),trigger_at_ms:num(f.v17Setup?.triggerAt)};
     key=await hash({version:RECHECK_VERSION,identity,purpose});
-    record={version:RECHECK_VERSION,kind:'FD1_FINAL_RECHECK',purpose,api_approval_ref:config.approvalRef,identity,reserved_usd:0.10,
+    record={version:RECHECK_VERSION,kind:'FD1_FINAL_RECHECK',purpose,recheck_sequence:sequence,api_approval_ref:config.approvalRef,identity,reserved_usd:0.10,
       source_commit:RECHECK_VERSION,prompt_hash:await hash(RECHECK_PROMPT),detection,packet:null,result:null};
     let claimed;
     try{claimed=await store.claim(key,record,config);}
