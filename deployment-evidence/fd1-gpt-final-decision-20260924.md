@@ -98,3 +98,30 @@ Production defect found and fixed during pre-deploy reconciliation: `v11_cec0040
   - The release workflow's exact-content check on `leader-pullback-reaccel.mjs` (8895c28) and its PATCH grep.
   - `development/gpt-final-review/executor-hooks-fd1.mjs` (hook list regenerated from the diff against a19f76e).
 - **Reference data:** In the replay (§3), GPT on all triggers without these gates (arm C) was clearly worse than the gated arm C4 (16d −438 vs +343). Watch performance after the removal.
+
+## 6. CEC0040 as GPT evidence; GPT is the sole final entry decision (KST 2026-09-24 14:20–14:26)
+
+- **Scope:**
+  - Took over PR #175 (continuation execution window) and the prepared CEC-removal intent.
+  - The CEC-removal patch was not on GitHub. It was implemented here as the re-application of 14c257f/d7c50a4 plus the fixes below.
+- **Pre-existing defects found:**
+  1. **V30 stamp integrity.** `baselineAllowedV30` compared stamps with JSON.stringify. Postgres jsonb reorders keys, so every V30 candidate read back from the DB failed the GPT baseline and the openBull V30 re-check. GPT was never reached for a V30 candidate since the V30 cutover. Fixed in PR #177.
+  2. **GPT OFF/SHADOW passed candidates through** to order admission without a GPT BUY. They now admit no new entry.
+  3. **CEC target tracking only covered ADMIT/PROBE** (`modelAllowed`), a selection bias. It now covers every ready decision; migration 20260924052022.
+  4. **Continuation triggers were rejected** by the execution window (`pullbackObserved` required). Fixed by PR #175.
+- **Traceability:**
+  - The GPT decision is stored with the order intent (`entry_gpt_decision`) and the position (`gptEntryDecision`), next to the CEC stamp (`entry_controller` / `cec0040`).
+  - CEC action → GPT decision → entry → exit → net PnL is joinable per position.
+- **Tests:** 290/290. The release verifier passed: exact-content allowances for entry-evidence.mjs (ebed212) and leader-pullback-reaccel.mjs (8895c28).
+- **Deploys** (release workflow from main):
+  - Run 35959574067: main 3d07bad → v79.
+  - Run 35959823684: main bc6ae9c → v80.
+- **Post-deploy:**
+  - ops-readiness: PATCH FD1-GPT-FINAL-ENTRY-CEC-EVIDENCE-2, GPT ENFORCE, Binance 0/0/0, DB 0/0, circuit closed, protection FLAT, 200 × 3 × 10.
+  - fd1-probe CYSUSDT: entry SKIP valid (2.6 s), HOLD valid. orderCalls 0.
+  - Scheduled cycles: HTTP 200.
+- **Order-free proof on the real stored CYSUSDT row** (CEC REJECT, prediction −3.67, continuation), `research/fd1-gpt-final-decision-20260924/cec-reject-reachability-proof.mjs`:
+  - Execution window valid (CONTINUATION_TRIGGER).
+  - GPT baseline passes and GPT sees CEC REJECT.
+  - GPT BUY leads to an order candidate. SKIP or ABSTAIN leads to no order.
+- **Reminder (§3):** the replay favoured V30 + CEC hard gate (16d +343 vs −47 without it). This change implements the operator's architecture decision; outcomes are recorded for comparison.
