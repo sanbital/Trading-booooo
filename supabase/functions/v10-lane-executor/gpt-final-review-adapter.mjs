@@ -20,11 +20,13 @@ export async function gptFilterExecutable(db,executable){
   // No candidate: no control read, no journal I/O. Existing path unchanged.
   if(!executable.length)return {candidates:executable,reason:c.config.mode};
   if(!c.injected)c.setConfig(configFromControl(await readReviewControl(db).catch(()=>null),getenv));
-  if(c.config.mode==='OFF')return {candidates:executable,reason:'OFF'};
+  // GPT is the final entry decision maker: without an enforcing GPT there is no new entry.
+  // OFF (control row or env kill) and SHADOW never fall back to the model stack.
+  if(c.config.mode==='OFF')return {candidates:[],reason:'GPT_OFF_NO_NEW_ENTRY'};
   if(c.config.mode==='SHADOW'){
-    // Even journal I/O must not sit on the original entry/quote timing path.
+    // Observation only; journal I/O stays off the entry/quote timing path.
     for(const s of executable){const task=c.consider(s).catch(()=>null);c.schedule(task);}
-    return {candidates:executable,reason:'SHADOW_NONBLOCKING',reviews:[]};
+    return {candidates:[],reason:'GPT_SHADOW_NO_NEW_ENTRY',reviews:[]};
   }
   const candidates=[],reviews=[];
   for(const s of executable){const r=await c.consider(s);reviews.push({signalId:s.id,...r});if(r.allowed)candidates.push(s);}
@@ -33,7 +35,13 @@ export async function gptFilterExecutable(db,executable){
   return {candidates,reason:pending?'GPT_REVIEW_PENDING':reviews.at(-1)?.reason??'GPT_NO_CANDIDATE',reviews};
 }
 export function gptReviewReadyToResume(db){return coordinatorFor(db).consumeReadyYield();}
-export function gptFinalCheck(db,s){return coordinatorFor(db).check(s);}
+/** Order-time re-check. Only an ENFORCE-mode, unexpired, identity-bound GPT BUY passes. */
+export function gptFinalCheck(db,s){
+  const c=coordinatorFor(db);
+  if(c.config.mode!=='ENFORCE')return {allowed:false,reason:'GPT_NOT_ENFORCING_NO_NEW_ENTRY'};
+  const r=c.check(s);
+  return r.allowed===true&&r.review?.decision===c.allowDecision()?r:{...r,allowed:false};
+}
 /** The existing engine keeps its whole lease and protection/X1 behavior unchanged.
  * The API runs independently. Only after lease release may a completed PASS request
  * one additional ordinary cycle. A busy/expired result is never forced through.

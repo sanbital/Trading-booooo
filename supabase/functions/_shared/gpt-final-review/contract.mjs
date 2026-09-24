@@ -92,14 +92,15 @@ export function baselineAllowedV30(s,version=V30_FRONT_VERSION){
   const again=v30FrontDecision(b,version);
   return again.admitted===true&&JSON.stringify(again.factors)===JSON.stringify(v.factors)&&v.b06133?.allowed===(b.allowed===true);
 }
-/** LIVE baseline: V30 admission from the unmodified B06133 stamp, then the SAME CEC0040
- * checks as before. B06133 allowed=false is accepted as evidence, never rewritten. */
+/** LIVE baseline: V30 defines the candidate set. CEC0040 must be fresh and internally
+ * valid, but its ADMIT/PROBE/REJECT action is advisory evidence for GPT rather than a
+ * hard admission veto. B06133 and CEC values are never rewritten. */
 export function baselineAllowedLive(s){
   const f=s?.features,c=f?.cec0040,t=f?.v17Setup;
   return baselineAllowedV30(s,V30_FRONT_LIVE_VERSION)&&t?.state==='TRIGGERED'&&
-    c?.version==='CEC0040_CAUSAL_EDGE_CONTROLLER_1'&&c.targetVersion==='CEC0040_P142_MEAN44_1'&&c.ready===true&&c.effectiveAllowed===true&&
+    c?.version==='CEC0040_CAUSAL_EDGE_CONTROLLER_1'&&c.targetVersion==='CEC0040_P142_MEAN44_1'&&c.ready===true&&
     Number(c.decisionAt)===Number(t.triggerAt)&&['ADMIT','PROBE','REJECT'].includes(c.action)&&
-    (c.enforcementEnabled!==true||['ADMIT','PROBE'].includes(c.action))&&!['REJECTED','ORDERED'].includes(s.status);
+    !['REJECTED','ORDERED'].includes(s.status);
 }
 export function triggerExpiry(s){return Number(s.features.v17Setup.triggerAt)+60000;}
 export function arithmeticCheck(identity) {

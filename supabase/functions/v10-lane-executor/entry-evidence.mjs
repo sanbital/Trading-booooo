@@ -3,6 +3,33 @@ const number = (value) => typeof value === 'number' ||
   (typeof value === 'string' && value.trim() !== '') ? Number(value) : NaN;
 const stamp = (value) => Number.isSafeInteger(number(value)) && number(value) > 0;
 
+/** Validate the already-deployed continuation path; never infer it from a missing dip.
+ * This is timing integrity only. CEC, GPT, account and execution guards still decide
+ * admission. The selector's completed bars must prove the same trigger and prices.
+ */
+function continuationTimingValid(row, policy) {
+  const s=row?.features?.v17Setup, source=row?.features?.b06133?.source;
+  if (policy?.version!=='V17_GPT_CONTINUATION_ENTRY_2' ||
+      s?.triggerMode!=='CONTINUATION_NO_PULLBACK' || s.pullbackObserved!==false ||
+      s.pullbackLow!==null || !Array.isArray(source?.prebars)) return false;
+  const trigger=number(s.triggerAt), ref=number(s.referencePrice), px=number(s.triggerClose),
+    floor=number(policy.minReaccelPct), ceiling=number(policy.maxChasePct);
+  if (!stamp(trigger) || trigger%60000!==0 || !(ref>0) || !Number.isFinite(ref) ||
+      !(floor>0 && floor<=ceiling && ceiling<1) ||
+      number(source.decisionAt)!==trigger || number(s.lastCandleOpenTime)!==trigger-60000 ||
+      number(s.lastClose)!==px || !(px>=ref*(1+floor) && px<=ref*(1+ceiling))) return false;
+  const bars=source.prebars, bar=bars.at(-1), prev=bars.at(-2);
+  const valid=(b,t)=>!!b && number(b.openTime)===t && number(b.closeTime)===t+59999 &&
+    [b.open,b.high,b.low,b.close].every(v=>Number.isFinite(number(v)) && number(v)>0) &&
+    number(b.high)>=Math.max(number(b.open),number(b.close)) &&
+    number(b.low)<=Math.min(number(b.open),number(b.close));
+  if (!valid(bar,trigger-60000) || !valid(prev,trigger-120000) ||
+      number(bar.close)!==px || !(px>number(bar.open) && px>number(prev.close))) return false;
+  return Array.isArray(s.transitions) && s.transitions.some(t=>
+    t?.to==='TRIGGERED' && t.reason==='V17_CONTINUATION_TRIGGERED' &&
+    stamp(t.at) && number(t.at)>=trigger && number(t.at)<=number(s.expiresAt));
+}
+
 /** A setup's trigger clock replaces, rather than resets, the legacy signal clock. */
 export function entryExecutionWindow(row, governed, legacyTtlMs, policy) {
   const close = number(row?.features?.signal5Close);
@@ -14,6 +41,9 @@ export function entryExecutionWindow(row, governed, legacyTtlMs, policy) {
   if (!s || s.policyVersion !== policy.version || s.state !== 'TRIGGERED')
     return invalid('V17_SETUP_NOT_TRIGGERED');
   const symbol = String(row.symbol ?? '').toUpperCase();
+  const continuation=s.triggerMode==='CONTINUATION_NO_PULLBACK';
+  const timingValid=continuation?continuationTimingValid(row,policy):
+    s.triggerMode==null && s.pullbackObserved===true;
   if (!row.id || !symbol || s.signalId !== row.id || s.symbol !== symbol ||
       s.identity !== `${policy.version}:${symbol}:${row.id}:${close}` ||
       number(s.signal5Close) !== close || number(s.armedAt) !== close ||
@@ -22,9 +52,9 @@ export function entryExecutionWindow(row, governed, legacyTtlMs, policy) {
       number(s.expiresAt) !== close+policy.setupTtlMs ||
       number(s.triggerExpiresAt) !== number(s.triggerAt)+policy.entryTriggerTtlMs ||
       number(s.triggerAt) <= close || number(s.triggerAt) > number(s.expiresAt) ||
-      s.pullbackObserved !== true || !(number(s.triggerClose)>0))
+      !timingValid || !(number(s.triggerClose)>0))
     return invalid('V17_SETUP_INVALID_PRICE');
-  return {valid:true, basis:'PULLBACK_TRIGGER', featureAsOf:close,
+  return {valid:true, basis:continuation?'CONTINUATION_TRIGGER':'PULLBACK_TRIGGER', featureAsOf:close,
     startsAt:number(s.triggerAt),
     expiresAt:Math.min(number(s.expiresAt),number(s.triggerExpiresAt))};
 }
