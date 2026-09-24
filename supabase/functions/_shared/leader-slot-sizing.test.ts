@@ -127,7 +127,7 @@ Deno.test("CASE 3: no ask can make the contract refuse itself on price", () => {
 });
 
 // CASE 4 / CASE 5 -- the coarse-step boundary stays exactly where it was, in
-// RELATIVE terms; the USDT ceiling it is measured against is now 201.6667.
+// RELATIVE terms; the USDT ceiling it is measured against is now 151.25.
 Deno.test("CASE 4: a coarse step inside the 151.25 USDT allowance is admitted", () => {
   // step*ask = 1.50 USDT of notional: the ceil can overshoot 450 by at most 1.50,
   // i.e. ~150.55 USDT of margin, inside the allowance.
@@ -202,13 +202,13 @@ Deno.test("CASE 17: a high-price symbol sizes on its own lot step, both ways", (
 
   // BTC's real 0.001 step at the same price is 64 USDT of notional per lot. A 650
   // USDT min-notional filter (roughly BTC's own minimum at this price) forces the
-  // quantity up to where a 200 USDT slot cannot follow -- not because the step is
+  // quantity up to where a 150 USDT slot cannot follow -- not because the step is
   // coarse, but because the exchange's own minimum outruns the budget. The refusal
   // names the binding constraint, because a coarse step and an unaffordable listing
   // need different operator answers.
   let refused = "";
   try {
-    planSlotEntry({ ask: 64000, quantityStep: 0.001, priceTick: 0.1, minNotionalUsdt: 650 });
+    planSlotEntry({ ask: 64000, quantityStep: 0.001, priceTick: 0.1, minNotionalUsdt: 500 });
   } catch (error) {
     refused = String((error as SlotSizingError).message);
   }
@@ -217,12 +217,12 @@ Deno.test("CASE 17: a high-price symbol sizes on its own lot step, both ways", (
   // be read without recomputing the contract by hand.
   assertEquals(
     refused,
-    "MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET:234.737067:max=201.666667:step=0.001:qty=0.011:px=64019.2",
+    "MIN_NOTIONAL_EXCEEDS_MARGIN_BUDGET:170.717867:max=151.250000:step=0.001:qty=0.008:px=64019.2",
   );
   // Without that filter the same step sizes multiple lots up toward the target.
   const coarse = planSlotEntry({ ask: 64000, quantityStep: 0.001, priceTick: 0.1, minNotionalUsdt: 5 });
-  assertEquals(coarse.quantity, 0.009);
-  assert(coarse.orderMarginUsdt <= 201.66666666666666 + 1e-9, `${coarse.orderMarginUsdt}`);
+  assertEquals(coarse.quantity, 0.007);
+  assert(coarse.orderMarginUsdt <= 151.25 + 1e-9, `${coarse.orderMarginUsdt}`);
   assert(coarse.slotFillBps >= SLOT_SIZING_CONTRACT.minSlotFillBps, `${coarse.slotFillBps}`);
 });
 
