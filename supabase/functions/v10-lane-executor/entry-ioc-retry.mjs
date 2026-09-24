@@ -20,8 +20,7 @@ export function ceilTick(value,tick){
   if(!(n(tick)>0))return n(value);
   return Number((Math.ceil((n(value)-n(tick)*1e-9)/n(tick))*n(tick)).toFixed(dec(n(tick))));
 }
-function levels(xs){return (Array.isArray(xs)?xs:[]).map(x=>Array.isArray(x)?[n(x[0]),n(x[1])]:[n(x?.price),n(x?.size)])
-  .filter(([p,q])=>p>0&&q>=0&&Number.isFinite(p)&&Number.isFinite(q));}
+function levels(xs){return (Array.isArray(xs)?xs:[]).map(x=>Array.isArray(x)?[n(x[0]),n(x[1])]:[n(x?.price),n(x?.size)]);}
 /**
  * Recalculate ONLY the remaining quantity from a fresh book.
  * The limit is the deepest ask needed to fill that remainder, tick-rounded upward,
@@ -33,8 +32,17 @@ export function planAggressiveIocRetry(input,policy=IOC_RETRY_POLICY){
     filled=n(input?.filledQuantity||0),lev=n(input?.leverage),maxMargin=n(input?.maxTotalMarginUsdt),
     currentNotional=n(input?.currentPositionNotionalUsdt||0),minNotional=Math.max(0,n(input?.minNotionalUsdt||0)),
     minQuantity=Math.max(0,n(input?.minQuantity||0));
-  if(!(bid>0&&ask>=bid&&step>0&&target>=0&&filled>=0&&lev>0&&maxMargin>0))
+  if(![bid,ask,step,tick,target,filled,lev,maxMargin,currentNotional,minNotional,minQuantity,
+    policy.maxChaseBps,policy.catastrophicSpreadBps].every(Number.isFinite)||
+    !(bid>0&&ask>=bid&&step>0&&tick>=0&&target>=0&&filled>=0&&lev>0&&maxMargin>0&&
+      currentNotional>=0&&minNotional>=0&&minQuantity>=0&&policy.maxChaseBps>=0&&policy.catastrophicSpreadBps>=0)||
+    (filled>0&&!(currentNotional>0)))
     return {ok:false,reason:'IOC_RETRY_INPUT_INVALID'};
+  // The deepest consumed ask is a valid marketable limit only for an ordered,
+  // internally consistent book. Never silently discard malformed levels.
+  if(asks.some(([price,size],i)=>!Number.isFinite(price)||!Number.isFinite(size)||
+    price<ask||size<0||(i>0&&price<=asks[i-1][0])))
+    return {ok:false,reason:'IOC_RETRY_BOOK_INVALID'};
   const mid=(bid+ask)/2,spreadBps=(ask-bid)/mid*10000;
   if(spreadBps>policy.catastrophicSpreadBps)return {ok:false,reason:'IOC_RETRY_SPREAD_CATASTROPHIC',spreadBps};
   const remaining=floorStep(Math.max(0,target-filled),step);

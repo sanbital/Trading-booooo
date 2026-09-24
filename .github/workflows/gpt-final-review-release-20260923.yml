@@ -239,7 +239,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p /tmp/fd1-pglite
+          (cd /tmp/fd1-pglite && npm init -y >/dev/null && npm install --no-audit --no-fund @electric-sql/pglite@0.3.0 >/dev/null)
+          export PGLITE_MODULE=/tmp/fd1-pglite/node_modules/@electric-sql/pglite/dist/index.js
           node --test development/gpt-final-review/tests/*.test.mjs supabase/functions/_shared/*.test.mjs supabase/functions/v10-lane-executor/*.test.mjs tests/*.test.mjs
+          deno task test:entry
           deno test --allow-read supabase/functions/_shared/leader-slot-sizing.test.ts supabase/functions/v10-lane-executor/margin-config.test.ts
           deno check supabase/functions/v10-lane-executor/index.ts
           deno check supabase/functions/v10-lane-signal-generator/index.ts
@@ -386,4 +390,3 @@ jobs:
         with:
           name: fd1-execution-retry-sizing150-release
           path: release-evidence
-
