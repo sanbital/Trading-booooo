@@ -1,0 +1,66 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {holdStep,initialHoldState,nextEvent,HOLD_POLICY} from '../../../supabase/functions/_shared/gpt-final-decision/hold.mjs';
+import {fd1HoldTick,setFd1HoldTestHooks} from '../../../supabase/functions/v10-lane-executor/gpt-final-decision-adapter.mjs';
+import {MemoryReviewStore} from '../../../supabase/functions/_shared/gpt-final-review/coordinator.mjs';
+const T=1_800_000_000_000,MIN=60000;
+const cfg={mode:'ENFORCE',modeValid:true,approvalRef:'test',apiBudgetUsd:3,maxCalls:300,enforceApproved:true,source:'TEST'};
+function harness(decision,{valid=true,config=cfg}={}){
+  const store=new MemoryReviewStore(),tasks=[];
+  setFd1HoldTestHooks({store,apiKey:'k',config,schedule:t=>tasks.push(t),
+    review:async()=>({packet:{p:1},result:{decision:valid?decision:'ABSTAIN',valid,completed_at_ms:Date.now()+0,attempted:true,api_cost_usd:.002}})});
+  return {store,tasks,flush:()=>Promise.all(tasks)};
+}
+const pos={id:'pos-1',signal_id:'s1',symbol:'ABCUSDT',entry_price:1,entry_at:new Date(T-3600000).toISOString()};
+const st=(peak=1.05)=>({peakPrice:peak,stopPrice:.99,lastHighAt:T-50*MIN,protectionStage:'RISK_CUT'});
+async function tick(meta,now,{time='V17_MOMENTUM_STALE',bid=1.03,peak=1.05}={}){return fd1HoldTick({},pos,{meta,state:st(peak),bid,now,timeCandidate:time});}
+
+test('time candidate: waits for GPT, valid HOLD defers for the TTL, then asks again',async()=>{
+  const h=harness('HOLD');let meta={};
+  let r=await tick(meta,Date.now());assert.equal(r.close,false);assert.equal(r.reason,'FD1_AWAITING_GPT');meta.fd1Hold=r.state;
+  await h.flush();r=await tick(meta,Date.now()+1000);assert.equal(r.close,false);assert.equal(r.reason,'FD1_GPT_HOLD');meta.fd1Hold=r.state;
+  r=await tick(meta,Date.now()+60_000);assert.equal(r.close,false);assert.equal(r.reason,'FD1_GPT_HOLD');
+  r=await tick(meta,Date.now()+HOLD_POLICY.holdTtlMs+2000);assert.equal(r.close,false);assert.equal(r.reason,'FD1_AWAITING_GPT');assert.equal(r.state.reviews,2);
+});
+for(const [d,valid,expect] of [['EXIT',true,'FD1_GPT_EXIT'],['ABSTAIN',true,null],['HOLD',false,null]])
+test(`time candidate with ${d}${valid?'':' (invalid)'} closes (${expect??'deterministic fallback'})`,async()=>{
+  const h=harness(d,{valid});let meta={};let r=await tick(meta,Date.now());meta.fd1Hold=r.state;await h.flush();
+  r=await tick(meta,Date.now()+1000);assert.equal(r.close,true);assert.equal(r.reason,expect);if(!expect)assert.equal(r.fallback,true);
+});
+test('no answer within the wait window -> deterministic time exit',async()=>{
+  harness('HOLD');setFd1HoldTestHooks({store:new MemoryReviewStore(),apiKey:'k',config:cfg,schedule:()=>{},review:()=>new Promise(()=>{})});
+  let meta={};let r=await tick(meta,T);meta.fd1Hold=r.state;
+  r=await tick(meta,T+HOLD_POLICY.timeAnswerWaitMs+1);assert.equal(r.close,true);assert.equal(r.fallback,true);
+});
+test('GPT not authorized / budget exhausted -> deterministic behaviour immediately',async()=>{
+  harness('HOLD',{config:{...cfg,mode:'SHADOW'}});let r=await tick({},T);assert.equal(r.close,true);assert.equal(r.fallback,true);
+  const store=new MemoryReviewStore();store.claim=async()=>{throw Error('API_BUDGET_EXHAUSTED');};
+  setFd1HoldTestHooks({store,apiKey:'k',config:cfg,schedule:()=>{},review:async()=>({})});
+  r=await tick({},T);assert.equal(r.close,true);assert.equal(r.state.last.decision,'BUDGET_EXHAUSTED');
+  r=await fd1HoldTick({},pos,{meta:{},state:st(),bid:1.03,now:T,timeCandidate:null});assert.equal(r.close,false);
+});
+test('events: deterioration and big moves start a review; GPT EXIT closes only when fresh; spacing respected',async()=>{
+  const h=harness('EXIT');let meta={};
+  let r=await fd1HoldTick({},pos,{meta,state:st(1.01),bid:1.005,now:Date.now(),timeCandidate:null});assert.equal(r.start,undefined);
+  r=await fd1HoldTick({},pos,{meta,state:st(1.05),bid:1.03,now:Date.now(),timeCandidate:null});assert.equal(r.start.event,'MOMENTUM_DETERIORATION');meta.fd1Hold=r.state;
+  await h.flush();r=await fd1HoldTick({},pos,{meta,state:st(1.05),bid:1.03,now:Date.now()+1000,timeCandidate:null});assert.equal(r.close,true);assert.equal(r.reason,'FD1_GPT_EXIT');
+  const s=nextEvent({...initialHoldState(1),lastReviewAt:T,lastReviewPrice:1},{now:T+MIN,price:1.1,peak:1.1});assert.equal(s.event,null,'min gap');
+  const u=nextEvent({...initialHoldState(1),lastReviewAt:T,lastReviewPrice:1},{now:T+6*MIN,price:1.03,peak:1.03});assert.equal(u.event,'SIGNIFICANT_PRICE_CHANGE');
+});
+test('a stale EXIT answer (older than exitMaxAgeMs) is not executed',async()=>{
+  const s0={...initialHoldState(1),pending:{key:'k',event:'MOMENTUM_DETERIORATION',at:T}};
+  const r=await holdStep(s0,{now:T+HOLD_POLICY.exitMaxAgeMs+5000,price:1,peak:1.05,timeCandidate:null,positionId:'p',
+    answerOf:async()=>({state:'DONE',decision:'EXIT',valid:true,completed_at_ms:T})});
+  assert.equal(r.close,false);
+});
+test('executor: stops are never offered to GPT; only time candidates and HOLD ticks; new positions stamped',()=>{
+  const src=readFileSync(new URL('../../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
+  const i=src.indexOf('if(meta.fd1HoldPolicyVersion===FD1_HOLD_POLICY_VERSION){'),j=src.indexOf('if(state.action==="CLOSE"){',i);
+  assert.ok(i>0&&j>i);const block=src.slice(i,j);
+  assert.match(block,/FD1_TIME_REASONS\.includes\(state\.reason\)&&bid>state\.stopPrice/);
+  assert.match(block,/if\(state\.action!=="CLOSE"\|\|timeCandidate\)/);
+  assert.ok(!/stopPrice\s*=|hard_stop_price|syncNativeStop|leverage|MARGIN|MAX_SLOTS/.test(block.replace(/bid>state\.stopPrice/,'')));
+  assert.ok(src.indexOf('fillGuardClose){')<i,'post-fill guard close runs before FD1');
+  assert.ok(src.includes('fd1HoldPolicyVersion:FD1_HOLD_POLICY_VERSION,'));
+});

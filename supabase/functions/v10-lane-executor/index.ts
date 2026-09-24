@@ -3,6 +3,8 @@ import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFut
 import {gptFilterExecutable,gptFinalCheck,runWithGptReview,gptReviewReadyToResume} from "./gpt-final-review-adapter.mjs";
 import {dryRunCoordinator,dryRunReviewPhase,liveProbe} from "./gpt-final-review-dryrun.mjs";
 import {readReviewControl} from "../_shared/gpt-final-review/supabase-store.mjs";
+import {fd1HoldTick,fd1Probe,FD1_HOLD_POLICY_VERSION,TIME_REASONS as FD1_TIME_REASONS} from "./gpt-final-decision-adapter.mjs";
+import {FD1_ENTRY_ENGINE} from "../_shared/gpt-final-decision/engine.mjs";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 import {POLICY, STRATEGY, ENTRY_EXECUTION_POLICY_VERSION, entryFresh, postFillEntryGuard, nextExit, portfolioMatches as leaderPortfolioMatches} from "../_shared/leader-momentum-v17.mjs";
 import {nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5, exitAttemptId, classifyExitResponse} from "../_shared/leader-exit-review.mjs";
@@ -26,7 +28,7 @@ import {B06133_VERSION,evaluateB06133,fetchB06133Inputs} from "../_shared/leader
 import {V30_FRONT_LIVE_VERSION,v30FrontDecision,entryBranchOf,baselineAllowedV30} from "../_shared/gpt-final-review/contract.mjs";
 import {CEC0040_CONFIG,CEC0040_TARGET_VERSION,CEC0040_VERSION,P142_POLICY_VERSION,
   advanceP142Completed,nextExitP142,p142Mean44Target} from "../_shared/leader-cec0040.mjs";
-const REVISION="V11-LONG-REGIME-1.0.1",PATCH="V30-FRONT-SCORE-LIVE-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
+const REVISION="V11-LONG-REGIME-1.0.1",PATCH="FD1-GPT-FINAL-DECISION-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Object.freeze({
   id:"2026-09-13-USER-PRIORITY-OVERRIDE",basis:"OPERATOR_OVERRIDE_UNVALIDATED",
   priorPerformanceVerdict:"DEFER",parametersValidatedByBacktest:false
@@ -347,16 +349,16 @@ async function applyCec0040Selection(db,row,state){
     reason:d.ready!==true?String(d.reason??"CEC0040_STATE_NOT_READY"):
       d.effectiveAllowed===true?d.enforcementEnabled===true?`CEC0040_${d.action}`:`CEC0040_SHADOW_${d.action}`:"CEC0040_REJECT"};
   const features={...rec(row.features),cec0040:stamp},patch={features,updated_at:new Date(evaluatedAt).toISOString()};
-  // CEC0040 is advisory evidence for GPT, not a hard admission gate.
-  // Keep the exact causal stamp (including REJECT) without terminating the signal.
-  // A not-ready CEC state still defers because its evidence is incomplete.
+  // A real model rejection is terminal only after enforcement activation. State lag
+  // remains NEW and may retry inside the existing trigger TTL.
+  if(stamp.ready&&stamp.enforcementEnabled&&!stamp.effectiveAllowed){patch.status="REJECTED";patch.reject_reason=stamp.reason;}
   const write=await db.from("v11_long_regime_signals").update(patch).eq("id",row.id).eq("status","NEW").select("*").maybeSingle();
   if(write.error)throw Error(`CEC0040_WRITE:${write.error.message}`);
   if(!write.data)return {allowed:false,row,stamp:{...stamp,reason:"CEC0040_CAS_RACE"}};
   await audit(db,null,"BULL","BULL",stamp.effectiveAllowed?"ENTRY_ALLOW":"ENTRY_REJECT",stamp.reason,
     {signalId:row.id,symbol:row.symbol,stage:"CEC0040_ENTRY_CONTROL",finalAdmission:false,
       orderDispatched:false,cec0040:stamp});
-  return {allowed:stamp.ready,row:write.data,stamp};
+  return {allowed:stamp.ready&&stamp.effectiveAllowed,row:write.data,stamp};
 }
 
 async function registerCec0040Target(db,position,signal){
@@ -873,8 +875,9 @@ if(selection.version!==B06133_VERSION||Number(selection.source?.decisionAt)!==Nu
 if(!baselineAllowedV30(s,V30_FRONT_LIVE_VERSION)||!entryBranchOf(rec(s.features)))
   throw new Error("V30_SELECTION_INVALID");
 if(cec.version!==CEC0040_VERSION||cec.targetVersion!==CEC0040_TARGET_VERSION||cec.ready!==true||
-  Number(cec.decisionAt)!==Number(selectedSetup?.triggerAt)||
-  !["ADMIT","PROBE","REJECT"].includes(cec.action))
+  cec.effectiveAllowed!==true||Number(cec.decisionAt)!==Number(selectedSetup?.triggerAt)||
+  !["ADMIT","PROBE","REJECT"].includes(cec.action)||
+  (cec.enforcementEnabled===true&&!["ADMIT","PROBE"].includes(cec.action)))
   throw new Error("CEC0040_SELECTION_INVALID");
 const gptEntryCheck=gptFinalCheck(db,s);
 if(!gptEntryCheck.allowed)return{entered:false,reason:gptEntryCheck.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL};
@@ -1221,7 +1224,7 @@ async function settleKnownEntry(db,intent,raw,gw=opsGateway(db)) {
       entryTiming=rec(intent.request_payload?.entry_timing_policy),
       entryController=rec(intent.request_payload?.entry_controller),
       fillGuard=entryPolicy?.version===ENTRY_EXECUTION_POLICY_VERSION?postFillEntryGuard(f,z.avg):null,
-      pos=await db.from("v11_long_regime_positions").insert({signal_id:s.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:s.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{entrySelectionPolicyVersion:intent.request_payload?.entry_selection?.version??null,b06133:intent.request_payload?.entry_selection??null,v30Front:intent.request_payload?.entry_front??null,entryBranch:intent.request_payload?.entry_branch??null,entryControllerPolicyVersion:entryController?.version??null,cec0040:entryController?.version===CEC0040_VERSION?entryController:null,qv3:entryTiming?.version===SETUP_POLICY_VERSION?null:(intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null),entryTimingPolicyVersion:entryTiming?.version??null,entryTimingSetup:entryTiming?.setup??null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,leaderExitPolicyVersion:entryController?.version===CEC0040_VERSION&&entryController.enforcementEnabled===true?P142_POLICY_VERSION:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,entryConfirmationPolicyVersion:intent.request_payload?.e1?.policyVersion??null,entryConfirmation:intent.request_payload?.e1??null,exitObservationPolicyVersion:intent.request_payload?.x1?.policyVersion??null,x1Observation:{observedBidPeak:z.avg,executableVwapPeak:null,lastObservationId:null,lastObservationAt:null,source:"P10_TOP_OF_BOOK_BATCH",maxQuoteAgeMs:1000},entryMarketRules:{priceTick:N(intent.request_payload?.price_tick),quantityStep:N(intent.request_payload?.quantity_step)},operatorOverride:intent.request_payload?.operator_override??null,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,setupMaxConcurrent:SETUP_MAX_CONCURRENT,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFeatures:f}}).select("*").single();
+      pos=await db.from("v11_long_regime_positions").insert({signal_id:s.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:s.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{entrySelectionPolicyVersion:intent.request_payload?.entry_selection?.version??null,b06133:intent.request_payload?.entry_selection??null,v30Front:intent.request_payload?.entry_front??null,entryBranch:intent.request_payload?.entry_branch??null,entryControllerPolicyVersion:entryController?.version??null,cec0040:entryController?.version===CEC0040_VERSION?entryController:null,qv3:entryTiming?.version===SETUP_POLICY_VERSION?null:(intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null),entryTimingPolicyVersion:entryTiming?.version??null,entryTimingSetup:entryTiming?.setup??null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,fd1HoldPolicyVersion:FD1_HOLD_POLICY_VERSION,leaderExitPolicyVersion:entryController?.version===CEC0040_VERSION&&entryController.enforcementEnabled===true?P142_POLICY_VERSION:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,entryConfirmationPolicyVersion:intent.request_payload?.e1?.policyVersion??null,entryConfirmation:intent.request_payload?.e1??null,exitObservationPolicyVersion:intent.request_payload?.x1?.policyVersion??null,x1Observation:{observedBidPeak:z.avg,executableVwapPeak:null,lastObservationId:null,lastObservationAt:null,source:"P10_TOP_OF_BOOK_BATCH",maxQuoteAgeMs:1000},entryMarketRules:{priceTick:N(intent.request_payload?.price_tick),quantityStep:N(intent.request_payload?.quantity_step)},operatorOverride:intent.request_payload?.operator_override??null,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,setupMaxConcurrent:SETUP_MAX_CONCURRENT,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFeatures:f}}).select("*").single();
     if(pos.error)throw Error(`POSITION:${pos.error.message}`);position=pos.data;
   }
   await verifyExecutionLease(db);
@@ -2234,6 +2237,19 @@ async function manageLeader(db,p,ctx){
       retired=await syncNativeStop(result?.closed===true?"CLOSE":"HOLD",residual);
     return {action:"CLOSE",reason:fillGuard.reason,result,nativeStop:retired,fillGuard};
   }
+  // FD1 (GPT final decision): only a TIME-based close candidate or a HOLD tick is ever
+  // offered to GPT. Every stop-based CLOSE above is executed untouched and never waits.
+  if(meta.fd1HoldPolicyVersion===FD1_HOLD_POLICY_VERSION){
+    const timeCandidate=state.action==="CLOSE"&&FD1_TIME_REASONS.includes(state.reason)&&bid>state.stopPrice?state.reason:null;
+    if(state.action!=="CLOSE"||timeCandidate){
+      const fd1=await fd1HoldTick(db,p,{meta,state,bid,now:detectedAtMs,timeCandidate});
+      nextMeta.fd1Hold=fd1.state;details.fd1={reason:fd1.reason??null,close:fd1.close===true,fallback:fd1.fallback===true,
+        timeCandidate,last:fd1.state?.last??null,pending:fd1.state?.pending?.event??null};
+      if(timeCandidate&&!fd1.close){state.action="HOLD";state.reason=null;}
+      else if(fd1.close&&fd1.reason==="FD1_GPT_EXIT"){state.action="CLOSE";state.reason="FD1_GPT_EXIT";}
+      details.action=state.action;details.reason=state.reason;
+    }
+  }
   if(state.action==="CLOSE"){
     // No peak update or audit round trip may delay an already detected stop.
     const result=await closePos(db,{...p,peak_price:state.peakPrice,
@@ -2502,6 +2518,12 @@ Deno.serve(async req=>{
       const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
       return res(200,{ok:true,revision:REVISION,patch:PATCH,orderCalls:0,probe:await liveProbe(db,{symbol,apiKey:env("OPENAI_API_KEY")||"",
         runId:String(body.runId??crypto.randomUUID()),evaluate:evaluateB06133,fetchInputs:fetchB06133Inputs})});
+    }
+    if(mode==="fd1-probe"){
+      // ORDER-FREE: FD1 entry + hold decisions on live data; no lease, no signal/position/order write.
+      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
+      return res(200,{ok:true,revision:REVISION,patch:PATCH,orderCalls:0,sizing:{targetMarginUsdt:MARGIN,leverage:Number(LEV),maxSlots:MAX_SLOTS},
+        probe:await fd1Probe(db,{symbol,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID()),engine:FD1_ENTRY_ENGINE})});
     }
     if(mode==="cec-bootstrap")return res(200,await runWithLease(db,bootstrapCec0040));
     if(mode!=="run")return res(400,{ok:false,revision:REVISION,patch:PATCH,error:"MODE_UNSUPPORTED"});

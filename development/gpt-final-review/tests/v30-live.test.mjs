@@ -6,6 +6,7 @@ import {P142_STYLE_BY_BRANCH,p142StyleForBranch} from '../../../supabase/functio
 import {FinalReviewCoordinator,MemoryReviewStore} from '../../../supabase/functions/_shared/gpt-final-review/coordinator.mjs';
 import {coordinatorFor} from '../../../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
 import {V30_HOOKS} from '../executor-hooks-v30.mjs';
+import {FD1_HOOKS} from '../executor-hooks-fd1.mjs';
 import {T,candidate,marketData,transport,config} from './helpers.mjs';
 
 const stampV30=s=>{s.features.v30Front=v30FrontDecision(s.features.b06133,V30_FRONT_LIVE_VERSION);return s;};
@@ -23,7 +24,7 @@ test('live baseline admits a V30 candidate B06133 rejected, and never rewrites B
   assert.equal(s.features.b06133.allowed,false);assert.equal(s.features.b06133.reason,'B06133_REJECT');
   assert.equal(entryBranchOf(s.features),'V30_SCORE');
 });
-test('live baseline keeps every CEC0040 check',()=>{
+test('live baseline keeps every CEC0040 check (FD1 validation: the CEC hard gate independently cut loss)',()=>{
   for(const mut of [c=>{c.effectiveAllowed=false;},c=>{c.ready=false;},c=>{c.action='REJECT';},c=>{c.decisionAt=T+60000;},c=>{c.version='X';}]){
     const s=b06133Rejected();mut(s.features.cec0040);assert.equal(baselineAllowedLive(s),false);
   }
@@ -42,17 +43,13 @@ test('entry branch: B06133 branch when B06133 also admitted, V30_SCORE otherwise
   assert.equal(p142StyleForBranch('V30_SCORE'),'retestAnchor');
   assert.deepEqual(Object.keys(P142_STYLE_BY_BRANCH),['R62','BUYER_SHARE_RESCUE','BOTH','V30_SCORE']);
 });
-test('production coordinator uses the V6S prompt and the live baseline',async()=>{
-  const c=coordinatorFor({});assert.equal(c.profile,'V6S');assert.equal(c.baseline,baselineAllowedLive);
-  const s=b06133Rejected(),r=new FinalReviewCoordinator({config:config(),store:new MemoryReviewStore(),apiKey:()=>'MOCK',now:()=>T+1000,
-    market:async()=>marketData(s),fetchFn:transport(),profile:'V6S',baseline:baselineAllowedLive});
-  await r.consider(s);await Promise.all([...r.pending.values()]);const out=await r.consider(s);
-  assert.equal(out.decision,'PASS');assert.equal(r.check(s).allowed,true);
-  assert.equal(decisionIdentity(s).front_policy.b06133_allowed,false);
+test('production coordinator: FD1 engine (GPT final entry decision) on the live V30 baseline',()=>{
+  const c=coordinatorFor({});assert.equal(c.engine?.id,'GPT_FINAL_DECISION_FD1:ENTRY');assert.equal(c.baseline,baselineAllowedLive);
+  assert.equal(c.allowDecision(),'BUY');
 });
 test('V30 executor hooks change no sizing, slot, leverage, stop or lease control',()=>{
   const src=readFileSync(new URL('../../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
-  let base=src;for(const h of [...V30_HOOKS].reverse())base=base.replace(h.to,h.from);
+  let base=src;for(const h of [...FD1_HOOKS].reverse())base=base.replace(h.to,h.from);for(const h of [...V30_HOOKS].reverse())base=base.replace(h.to,h.from);
   for(const token of ['const MAX_SLOTS=10','const SETUP_MAX_CONCURRENT=4','SLOT_SIZING_CONTRACT.targetMarginUsdt','leverage:LEV',
     'POLICY.maxEntryDriftPct','verifyExecutionLease(db)','postFillEntryGuard(','v17_create_stop','stopPct'])
     assert.equal(src.split(token).length,base.split(token).length,token);

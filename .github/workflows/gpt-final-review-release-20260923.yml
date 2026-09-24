@@ -10,7 +10,7 @@ on:
         description: "Function to deploy"
         required: true
         type: choice
-        options: [gpt-final-review-verify, v10-lane-executor, v10-lane-signal-generator, v30-front-shadow, delete-gpt-final-review-verify]
+        options: [gpt-final-review-verify, v10-lane-executor, v10-lane-signal-generator, v30-front-shadow, gpt-final-decision-replay, delete-gpt-final-review-verify]
       expected_version_before:
         description: "Current production version of the target (pins against concurrent deploys)"
         required: true
@@ -86,7 +86,6 @@ jobs:
             supabase/functions/_shared/leader-qv3-rules.mjs \
             supabase/functions/_shared/leader-e1-runtime.mjs \
             supabase/functions/_shared/leader-b06133-entry.mjs \
-            supabase/functions/_shared/leader-pullback-reaccel.mjs \
             supabase/functions/_shared/boo \
             supabase/functions/v10-lane-executor/entry-evidence.mjs \
             supabase/functions/v10-lane-executor/boo-entry-adapter.mjs \
@@ -96,7 +95,10 @@ jobs:
           grep -Fq 'leverage: 3' supabase/functions/_shared/leader-slot-sizing.mjs
           grep -Fq 'const MAX_SLOTS=10' supabase/functions/v10-lane-executor/index.ts
           grep -Fq 'const SETUP_MAX_CONCURRENT=4' supabase/functions/v10-lane-executor/index.ts
-          grep -Fq 'PATCH="V30-FRONT-SCORE-LIVE-1"' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'PATCH="FD1-GPT-FINAL-DECISION-1"' supabase/functions/v10-lane-executor/index.ts
+          # leader-pullback-reaccel.mjs: must equal the operator's continuation-trigger commit
+          # 8895c28 (merged to main and deployed 2026-09-24 13:00 KST), nothing else.
+          git diff --quiet 8895c28 HEAD -- supabase/functions/_shared/leader-pullback-reaccel.mjs
           # leader-cec0040.mjs: the ONLY permitted change since the frozen base is the
           # operator-approved V30_SCORE -> retestAnchor exit-style mapping (2026-09-24).
           git diff -U0 "$FROZEN_BASE" HEAD -- supabase/functions/_shared/leader-cec0040.mjs \

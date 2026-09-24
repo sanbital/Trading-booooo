@@ -47,16 +47,20 @@ export class MemoryReviewStore {
 }
 export class FinalReviewCoordinator {
   constructor({config,store,apiKey=()=>'',fetchFn=fetch,market=collectMarket,now=Date.now,schedule=p=>{p.catch(()=>{});},
-    profile=DEFAULT_PROFILE,purpose='PRODUCTION',baseline=baselineAllowed,expiry=triggerExpiry}){
+    profile=DEFAULT_PROFILE,purpose='PRODUCTION',baseline=baselineAllowed,expiry=triggerExpiry,engine=null}){
     this.config=config;this.store=store;this.apiKey=apiKey;this.fetchFn=fetchFn;this.market=market;this.now=now;this.schedule=schedule;
-    this.baseline=baseline;this.expiry=expiry;
-    this.profile=profile;this.purpose=purpose;const wire=profileOf(profile).wire,promptText=promptFor(profileOf(profile).prompt??wire);
+    this.baseline=baseline;this.expiry=expiry;this.engine=engine;this.identity=engine?.identity??decisionIdentity;
+    // An engine (FD1 final decision) replaces the question and answer contract; the durable
+    // claim/ledger/TTL/ticket machinery below is identical for every engine.
+    this.profile=engine?engine.id:profile;this.purpose=purpose;const wire=engine?null:profileOf(profile).wire,promptText=engine?engine.promptText:promptFor(profileOf(profile).prompt??wire);
     this.tickets=new Map();this.tracked=new Map();this.pending=new Map();this.readyHints=new Map();this.yieldArmed=false;
-    this.promptHash=hash(promptText);this.schemaHash=hash(wireSchema(wire));
+    this.promptHash=hash(promptText);this.schemaHash=hash(engine?engine.schema:wireSchema(wire));
     // purpose is bound so PRODUCTION, DRYRUN and VERIFICATION reviews of one candidate never share a row.
-    this.binding=hash({version:VERSION,model:MODEL,prompt:promptText,schema:OUTPUT_SCHEMA,wireSchema:wireSchema(wire),limits:LIMITS,profile:profileOf(profile),purpose});
+    this.binding=engine?hash({version:VERSION,engine:engine.id,model:engine.model,prompt:promptText,schema:engine.schema,limits:LIMITS,purpose}):
+      hash({version:VERSION,model:MODEL,prompt:promptText,schema:OUTPUT_SCHEMA,wireSchema:wireSchema(wire),limits:LIMITS,profile:profileOf(profile),purpose});
   }
   setConfig(config){this.config=config;}
+  allowDecision(){return this.engine?this.engine.allow:'PASS';}
   authorized(){const c=this.config;return c.modeValid!==false&&c.approvalRef.length>0&&c.apiBudgetUsd>=MAX_RESERVED_USD&&
     Number.isInteger(c.maxCalls)&&c.maxCalls>0&&!!this.apiKey()&&(c.mode!=='ENFORCE'||c.enforceApproved===true);}
   async consider(s){
@@ -72,7 +76,7 @@ export class FinalReviewCoordinator {
     if(now>=expires-LIMITS.executionReserveMs)return deny('GPT_TRIGGER_EXPIRED');
     let key;
     try{
-      const identity=decisionIdentity(s),identityJson=canonical(identity),binding=await this.binding;
+      const identity=this.identity(s),identityJson=canonical(identity),binding=await this.binding;
       key=await hash({binding,identity});this.tracked.set(key,{identityJson,s:structuredClone(s),expires});
       let row=await this.store.get(key);
       if(!row){
@@ -98,13 +102,17 @@ export class FinalReviewCoordinator {
   }
   async work(key,owner,record){
     try{
-      const current=await this.market(record.identity,{fetchFn:this.fetchFn,now:this.now,
-        deadlineMs:record.expires_at_ms-LIMITS.executionReserveMs});
-      const captured=this.now();record.packet=await buildPacket(record.identity,current,captured);record.snapshot_at_ms=captured;
+      const deadlineMs=record.expires_at_ms-LIMITS.executionReserveMs;
+      let captured;
+      if(this.engine){const prep=await this.engine.prepare(record.identity,{fetchFn:this.fetchFn,now:this.now,deadlineMs});record.packet=prep.packet;captured=prep.captured;}
+      else{const current=await this.market(record.identity,{fetchFn:this.fetchFn,now:this.now,deadlineMs});
+        captured=this.now();record.packet=await buildPacket(record.identity,current,captured);}
+      record.snapshot_at_ms=captured;
       record.valid_until_ms=Math.min(record.expires_at_ms-LIMITS.executionReserveMs,captured+LIMITS.reviewMaxAgeMs);
       // Snapshot persistence before the paid request; failures cannot lead to an unrecorded PASS.
       if(this.store.snapshot)await this.store.snapshot(key,owner,record);
-      record.result=await callFinalReviewer(record.packet,{apiKey:this.apiKey(),fetchFn:this.fetchFn,now:this.now,
+      record.result=this.engine?await this.engine.call(record.packet,{apiKey:this.apiKey(),fetchFn:this.fetchFn,now:this.now,deadlineMs:record.valid_until_ms}):
+        await callFinalReviewer(record.packet,{apiKey:this.apiKey(),fetchFn:this.fetchFn,now:this.now,
         deadlineMs:record.valid_until_ms,profile:this.profile});
     }catch{
       record.result={origin:'LOCAL_DATA_ERROR',valid:false,decision:'ABSTAIN',error:'REVIEW_PREPARATION_FAILED',
@@ -122,28 +130,29 @@ export class FinalReviewCoordinator {
     const r=row.record,z=r?.result,now=this.now();
     const deny=reason=>({valid:false,allowed:false,decision:'ABSTAIN',reason});
     if(r?.version!==VERSION||r.binding!==binding||r.identity_json!==identityJson||r.expires_at_ms!==expires)return deny('GPT_BINDING_MISMATCH');
-    if(!r.packet||await packetHash(r.packet)!==r.packet.snapshot_hash)return deny('GPT_SNAPSHOT_MISMATCH');
+    if(!r.packet||await (this.engine?this.engine.packetHash(r.packet):packetHash(r.packet))!==r.packet.snapshot_hash)return deny('GPT_SNAPSHOT_MISMATCH');
     if(!Number.isSafeInteger(r.snapshot_at_ms)||r.snapshot_at_ms>now||r.snapshot_at_ms<r.identity.trigger_at_ms||
       r.packet.as_of_offset_ms!==r.snapshot_at_ms-r.identity.trigger_at_ms)return deny('GPT_SNAPSHOT_TIME_INVALID');
     if(!Number.isSafeInteger(z?.completed_at_ms)||z.completed_at_ms>now||z.completed_at_ms<r.snapshot_at_ms||
       !Number.isSafeInteger(r.valid_until_ms)||r.valid_until_ms!==Math.min(expires-LIMITS.executionReserveMs,r.snapshot_at_ms+LIMITS.reviewMaxAgeMs)||
       now>=r.valid_until_ms||z.completed_at_ms>=r.valid_until_ms)return deny('GPT_STALE_OR_FUTURE_REVIEW');
-    if(z.origin!=='OPENAI_API'||!z.valid||!z.raw_response||z.model_requested!==MODEL||z.raw_response.model!==MODEL||!z.request_id||
+    const model=this.engine?this.engine.model:MODEL;
+    if(z.origin!=='OPENAI_API'||!z.valid||!z.raw_response||z.model_requested!==model||z.raw_response.model!==model||!z.request_id||
       z.wire_profile!==this.profile)
       return deny('GPT_NO_VALID_API_RESPONSE');
-    const answer=validateAnswer(parseApiResponseWire(z.raw_response,r.packet,profileOf(this.profile).wire),r.packet);
+    const answer=this.engine?this.engine.revalidate(z,r.packet):validateAnswer(parseApiResponseWire(z.raw_response,r.packet,profileOf(this.profile).wire),r.packet);
     const ticket={identityJson,decision:answer.decision,validUntil:r.valid_until_ms,expires,
-      candidateId:r.packet.candidate_id,snapshotHash:r.packet.snapshot_hash,model:MODEL,summary:answer.summary};
-    return {valid:true,allowed:answer.decision==='PASS',decision:answer.decision,reason:'GPT_'+answer.decision,ticket};
+      candidateId:r.packet.candidate_id,snapshotHash:r.packet.snapshot_hash,model,summary:answer.summary};
+    return {valid:true,allowed:answer.decision===this.allowDecision(),decision:answer.decision,reason:'GPT_'+answer.decision,ticket};
   }
   /** Pure, no I/O. Run again immediately before intent creation. */
   check(s){
     if(this.config.mode==='OFF'||this.config.mode==='SHADOW')return {allowed:true,reason:this.config.mode};
     if(!this.authorized())return {allowed:false,reason:'GPT_REVIEW_NOT_APPROVED'};
     const t=this.tickets.get(String(s?.id)),now=this.now();
-    if(!this.baseline(s)||!t||t.identityJson!==canonical(decisionIdentity(s)))return {allowed:false,reason:'GPT_REVIEW_IDENTITY_CHANGED'};
+    if(!this.baseline(s)||!t||t.identityJson!==canonical(this.identity(s)))return {allowed:false,reason:'GPT_REVIEW_IDENTITY_CHANGED'};
     if(now>=t.validUntil||now>=t.expires-LIMITS.executionReserveMs)return {allowed:false,reason:'GPT_REVIEW_EXPIRED'};
-    return {allowed:t.decision==='PASS',reason:'GPT_'+t.decision,review:t};
+    return {allowed:t.decision===this.allowDecision(),reason:'GPT_'+t.decision,review:t};
   }
   /** Pure scheduling hint. No database/network wait on the protection loop. */
   consumeReadyYield(){
