@@ -11,7 +11,7 @@ import {createClient} from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 import {computeFacts,modelJudgments} from '../_shared/gpt-final-decision/facts.mjs';
 import {readSources} from '../_shared/gpt-final-decision/market.mjs';
 import {buildDecisionPacket,callDecision} from '../_shared/gpt-final-decision/api.mjs';
-const PATCH='FD1-REPLAY-3',BATCH=50,CONCURRENCY=8,RESERVE_USD=0.02,WALL_MS=110_000;
+const PATCH='FD1-REPLAY-4',BATCH=20,CONCURRENCY=3,RESERVE_USD=0.02,WALL_MS=110_000;
 const reply=(s,b)=>new Response(JSON.stringify(b),{status:s,headers:{'content-type':'application/json','cache-control':'no-store'}});
 function eq(a,b){if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0;}
 const FACTORS=['absorption','volumeTails','fresh15over30','btcAnyUp','buyerShareRise','fresh5over15','recentHourLead'];
