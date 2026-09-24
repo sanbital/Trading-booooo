@@ -47,9 +47,11 @@ export const CATEGORIES=Object.freeze({
   THIN_LIQUIDITY:{tasks:['ENTRY','HOLD'],facts:['ask_depth_to_order','bid_depth_to_order','ask_depth_25bps_usdt','bid_depth_25bps_usdt'],need:['ask_depth_to_order','bid_depth_to_order'],
     soft:m=>f(m,'ask_depth_to_order')<5||f(m,'bid_depth_to_order')<3,hard:m=>f(m,'ask_depth_to_order')<1.5||f(m,'bid_depth_to_order')<1,
     text:'soft: ask_depth_to_order<5 OR bid_depth_to_order<3; HARD: ask<1.5 OR bid<1 (HIGHER IS SAFER)'},
-  SELL_WALL:{tasks:['ENTRY','HOLD'],facts:['book_imbalance_25bps','max_ask_wall_to_order'],need:['book_imbalance_25bps','max_ask_wall_to_order'],
-    soft:m=>f(m,'book_imbalance_25bps')<=-0.45||f(m,'max_ask_wall_to_order')>=10,hard:m=>f(m,'book_imbalance_25bps')<=-0.75,
-    text:'soft: book_imbalance_25bps<=-0.45 OR max_ask_wall_to_order>=10; HARD: imbalance<=-0.75'},
+  SELL_WALL:{tasks:['ENTRY','HOLD'],facts:['book_imbalance_25bps','max_ask_wall_to_order'],need:['book_imbalance_25bps'],
+    // A single large ask level is normal on liquid symbols (SOL: >1000x a 600 USDT order), so
+    // the band is the V6-validated net imbalance only; the wall size stays citable context.
+    soft:m=>f(m,'book_imbalance_25bps')<=-0.45,hard:m=>f(m,'book_imbalance_25bps')<=-0.75,
+    text:'soft: book_imbalance_25bps<=-0.45; HARD: <=-0.75 (NEGATIVE = sellers dominate)'},
   FILL_WORSE:{tasks:['ENTRY'],facts:['est_buy_slippage_bps'],need:['est_buy_slippage_bps'],
     soft:m=>f(m,'est_buy_slippage_bps')>=8,hard:m=>f(m,'est_buy_slippage_bps')>=25,text:'soft>=8 bps, HARD>=25 bps'},
   DATA_INCOMPLETE:{tasks:['ENTRY','HOLD'],facts:[],need:[],soft:()=>false,hard:()=>false,text:'candles (and, live, the order book) must be complete'}
