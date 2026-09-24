@@ -28,8 +28,7 @@ import {SLOT_SIZING_CONTRACT,assertSlotSizingContract,floorStep,planSlotEntry,sl
 import {SETUP_POLICY,SETUP_POLICY_VERSION,SETUP_REASON,SETUP_STATE,advancePullbackSetup,deserializeSetup,enterPullbackSetup,entryTriggerFresh,expirePullbackSetup,isTerminal as setupIsTerminal,serializeSetup,setupIdentity,startPullbackSetup} from "../_shared/leader-pullback-reaccel.mjs";
 import {B06133_VERSION,evaluateB06133,fetchB06133Inputs} from "../_shared/leader-b06133-entry.mjs";
 import {V30_FRONT_LIVE_VERSION,v30FrontDecision,entryBranchOf,baselineAllowedV30} from "../_shared/gpt-final-review/contract.mjs";
-import {CEC0040_CONFIG,CEC0040_TARGET_VERSION,CEC0040_VERSION,P142_POLICY_VERSION,
-  advanceP142Completed,nextExitP142,p142Mean44Target} from "../_shared/leader-cec0040.mjs";
+import {CEC0040_CONFIG,CEC0040_TARGET_VERSION,CEC0040_VERSION,P142_POLICY_VERSION,advanceP142Completed,nextExitP142,p142Mean44Target} from "../_shared/leader-cec0040.mjs";
 const REVISION="V11-LONG-REGIME-1.0.1",PATCH="FD1-EXECUTION-RETRY-SIZING150-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Object.freeze({
   id:"2026-09-13-USER-PRIORITY-OVERRIDE",basis:"OPERATOR_OVERRIDE_UNVALIDATED",
