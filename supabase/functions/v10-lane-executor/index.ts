@@ -29,7 +29,7 @@ import {B06133_VERSION,evaluateB06133,fetchB06133Inputs} from "../_shared/leader
 import {V30_FRONT_LIVE_VERSION,v30FrontDecision,entryBranchOf,baselineAllowedV30} from "../_shared/gpt-final-review/contract.mjs";
 import {CEC0040_CONFIG,CEC0040_TARGET_VERSION,CEC0040_VERSION,P142_POLICY_VERSION,
   advanceP142Completed,nextExitP142,p142Mean44Target} from "../_shared/leader-cec0040.mjs";
-const REVISION="V11-LONG-REGIME-1.0.1",PATCH="FD1-GPT-FINAL-RECHECK-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
+const REVISION="V11-LONG-REGIME-1.0.1",PATCH="FD1-EXECUTION-RETRY-SIZING150-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Object.freeze({
   id:"2026-09-13-USER-PRIORITY-OVERRIDE",basis:"OPERATOR_OVERRIDE_UNVALIDATED",
   priorPerformanceVerdict:"DEFER",parametersValidatedByBacktest:false
@@ -574,15 +574,17 @@ async function cec0040RuntimeStatus(db){
 /**
  * Execution freshness for one entry attempt.
  *
- * Legacy signals keep the unchanged V17 rule: 120 seconds from the 5m close, and 1%
- * drift from the reference. A pullback-policy signal REPLACES the age half with the
- * trigger's own 60-second window -- it does not extend it, and 60 seconds is stricter
- * than the 120 the legacy path allows. The drift half is identical and is still
- * measured against the ORIGINAL signal reference, so a setup can never walk its own
- * chase ceiling upward by re-basing.
+ * Age/trigger validity remains deterministic execution safety. The former 1% price
+ * drift result is retained as evidence but is no longer a hard strategy rejection:
+ * after GPT BUY, meaningful market movement is handled by GPT FINAL RECHECK instead.
  */
+function strategicDriftToRecheck(reason){
+  // ENTRY_DRIFT is a market-change detector, never a deterministic strategy veto
+  // after GPT BUY. Age/identity/trigger-window failures remain hard execution bounds.
+  return ["V17_ENTRY_DRIFT","ENTRY_DRIFT"].includes(String(reason||""))?null:reason;
+}
 function entryFreshFor(row,features,now,price){
-  if(!setupGoverns(row))return entryFresh(rec(features),now,price);
+  if(!setupGoverns(row))return strategicDriftToRecheck(entryFresh(rec(features),now,price));
   if(rec(features)?.strategy!==STRATEGY)return "WRONG_STRATEGY";
   const state=signalSetup(row);
   if(!state)return SETUP_REASON.NOT_TRIGGERED;
@@ -590,7 +592,7 @@ function entryFreshFor(row,features,now,price){
   if(!window.valid)return window.reason;
   if(now<window.startsAt)return SETUP_REASON.TRIGGER_FUTURE;
   if(now>=window.expiresAt)return SETUP_REASON.TRIGGER_STALE;
-  return entryTriggerFresh(state,now,price,POLICY.maxEntryDriftPct,SETUP_POLICY);
+  return strategicDriftToRecheck(entryTriggerFresh(state,now,price,POLICY.maxEntryDriftPct,SETUP_POLICY));
 }
 /** Positions opened under this entry timing, for the policy-scoped admission limit. */
 function setupScopedOpen(positions){
