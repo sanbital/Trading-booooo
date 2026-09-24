@@ -61,15 +61,17 @@ begin
     where tracked_at is null and track_attempts < 6 and pre_dispatch_at < now() - interval '62 minutes'
     order by created_at limit greatest(1,least(p_limit,50))
   loop
-    update public.fd1_final_recheck_log set track_attempts=track_attempts+1 where id=r.id;
     e := coalesce(r.counterfactual_entry_price,(r.pre_dispatch_snapshot->>'mid')::numeric);
-    if e is null or e<=0 then continue; end if;
+    if e is null or e<=0 then update public.fd1_final_recheck_log set track_attempts=track_attempts+1 where id=r.id; continue; end if;
     t0 := (floor(extract(epoch from r.pre_dispatch_at)*1000/60000)*60000)::bigint;
     begin
       select status, case when status=200 then content::jsonb end into st, k
         from http_get('https://fapi.binance.com/fapi/v1/klines?symbol='||r.symbol||'&interval=1m&startTime='||t0||'&limit=62');
-    exception when others then continue; end;
-    if st is distinct from 200 or jsonb_array_length(k) < 61 then continue; end if;
+    exception when others then st := null; end;
+    if st is distinct from 200 or jsonb_array_length(k) < 61 then
+      -- failed reads count toward the retry cap; an open position below only waits
+      update public.fd1_final_recheck_log set track_attempts=track_attempts+1 where id=r.id; continue;
+    end if;
     -- bar i covers [t0+i m, t0+(i+1) m); the close of bar h is the price h minutes after dispatch (1m resolution)
     with b as (select (o.ord-1)::int i,(x->>2)::numeric h,(x->>3)::numeric l,(x->>4)::numeric c
                from jsonb_array_elements(k) with ordinality o(x,ord))
@@ -81,7 +83,7 @@ begin
       counterfactual_net_usdt=600*(case when exists(select 1 from b where i<=60 and l<=e*0.975) then -0.025
         else (select c from b where i=60)/e-1 end) - 0.6
     where g.id=r.id;
-    -- the real position of the same signal, once closed
+    -- the real position of the same signal, once closed (an open position waits, uncounted)
     select p.id,p.entry_price,p.exit_price,p.exit_reason,p.realized_pnl_usdt,p.entry_at,p.closed_at,p.state into pos
       from public.v11_long_regime_positions p where p.signal_id::text=r.signal_id order by p.entry_at desc limit 1;
     if pos.id is not null and pos.state<>'CLOSED' then continue; end if;
@@ -128,7 +130,7 @@ select
 from public.fd1_final_recheck_log
 group by 1,2;
 
-select cron.schedule('fd1-final-recheck-track-5m', '*/5 * * * *', $cmd$ select public.fd1_final_recheck_track(10); $cmd$);
+select cron.schedule('fd1-final-recheck-track-5m', '*/5 * * * *', $cmd$ select public.fd1_final_recheck_track(20); $cmd$);
 
 -- Order-free replay of the FINAL RECHECK (A/B comparison on historical FD1 BUY triggers).
 alter table public.fd1_replay_jobs drop constraint if exists fd1_replay_jobs_task_check;
