@@ -127,6 +127,20 @@ Deno.test("CASE 7: a price more than 1% from referenceClose is still ENTRY_DRIFT
   assertEquals(entryFresh(features, close + 1000, 101), "ENTRY_DRIFT");
 });
 
+Deno.test("pre-resize signals cannot execute after the 150 USDT cutover", () => {
+  assert(SOURCE.includes('throw new Error("SIZING_CONTRACT_STALE")'));
+  assert(SOURCE.includes("signalSizing.sizingContractVersion!==SLOT_SIZING_CONTRACT.version"));
+  assert(SOURCE.includes("signalSizing.targetMarginUsdt"));
+  assert(SOURCE.includes("signalSizing.leverage"));
+});
+
+Deno.test("ENTRY_DRIFT remains measurable evidence but executor suppresses it as a hard strategy veto", () => {
+  assert(SOURCE.includes('function strategicDriftToRecheck(reason)'));
+  assert(SOURCE.includes('["V17_ENTRY_DRIFT","ENTRY_DRIFT"]'));
+  assert(/strategicDriftToRecheck\(entryFresh/.test(SOURCE));
+  assert(/strategicDriftToRecheck\(entryTriggerFresh/.test(SOURCE));
+});
+
 Deno.test("the sizing skips are symbol-scoped, so one bad symbol never halts the run", () => {
   const list = SOURCE.match(/const ENTRY_SKIP_SYMBOL_SCOPED=\/\^\(([^)]+)\)/)?.[1] ?? "";
   for (
