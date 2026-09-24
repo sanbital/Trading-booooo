@@ -61,10 +61,20 @@ export function decisionIdentity(s) {
  * and never rewrites the B06133 stamp: a candidate B06133 rejected stays rejected there. */
 export const V30_FRONT_VERSION='V30_FRONT_SCORE_SHADOW_1';
 export const V30_REQUIRED=Object.freeze({fresh5over15:true,volumeTails:false});
-export function v30FrontDecision(b06133){
+/** LIVE version (2026-09-24, operator-approved): V30 replaces B06133 as the hard gate. */
+export const V30_FRONT_LIVE_VERSION='V30_FRONT_SCORE_1';
+/** P142/CEC branch for a V30 admission: B06133's own branch when B06133 also admitted,
+ * else the explicit V30_SCORE label (never a borrowed B06133 branch). */
+export const V30_ENTRY_BRANCH='V30_SCORE';
+export function entryBranchOf(features){
+  const b=features?.b06133,v=features?.v30Front;
+  if(v?.version!==V30_FRONT_LIVE_VERSION||v.admitted!==true)return null;
+  return b?.allowed===true&&['R62','BUYER_SHARE_RESCUE','BOTH'].includes(b.branch)?b.branch:V30_ENTRY_BRANCH;
+}
+export function v30FrontDecision(b06133,version=V30_FRONT_VERSION){
   const f=b06133?.factors??{},failed=[],unknown=[];
   for(const [k,want] of Object.entries(V30_REQUIRED)){const v=tri(f[k]);if(v===null)unknown.push(k);else if(v!==want)failed.push(k);}
-  return {version:V30_FRONT_VERSION,required:{...V30_REQUIRED},factors:Object.fromEntries(FACTORS.map(k=>[k,tri(f[k])])),
+  return {version,required:{...V30_REQUIRED},factors:Object.fromEntries(FACTORS.map(k=>[k,tri(f[k])])),
     admitted:failed.length===0&&unknown.length===0,failed,unknown,
     b06133:{version:b06133?.version??null,allowed:b06133?.allowed===true,result:tri(b06133?.result),branch:b06133?.branch??null,reason:b06133?.reason??null}};
 }
@@ -73,14 +83,23 @@ function frontPolicyIdentity(v){
     b06133_allowed:v.b06133?.allowed===true,b06133_reason:v.b06133?.reason??null};
 }
 /** Baseline for the V30 shadow: the SAME trigger and B06133 evidence, a different admission rule. */
-export function baselineAllowedV30(s){
+export function baselineAllowedV30(s,version=V30_FRONT_VERSION){
   const f=s?.features,b=f?.b06133,t=f?.v17Setup,v=f?.v30Front;
   if(!(s?.id&&s?.symbol&&t?.state&&Number.isSafeInteger(Number(t.triggerAt))&&Number(t.triggerAt)>0&&Number(t.triggerAt)%60000===0))return false;
   if(b?.version!=='B06133_ENTRY_SELECTION_1'||Number(b.source?.decisionAt)!==Number(t.triggerAt))return false;
-  if(v?.version!==V30_FRONT_VERSION||v.admitted!==true)return false;
+  if(v?.version!==version||v.admitted!==true)return false;
   // The stamp must be what the policy computes from the unmodified B06133 factors.
-  const again=v30FrontDecision(b);
+  const again=v30FrontDecision(b,version);
   return again.admitted===true&&JSON.stringify(again.factors)===JSON.stringify(v.factors)&&v.b06133?.allowed===(b.allowed===true);
+}
+/** LIVE baseline: V30 admission from the unmodified B06133 stamp, then the SAME CEC0040
+ * checks as before. B06133 allowed=false is accepted as evidence, never rewritten. */
+export function baselineAllowedLive(s){
+  const f=s?.features,c=f?.cec0040,t=f?.v17Setup;
+  return baselineAllowedV30(s,V30_FRONT_LIVE_VERSION)&&t?.state==='TRIGGERED'&&
+    c?.version==='CEC0040_CAUSAL_EDGE_CONTROLLER_1'&&c.targetVersion==='CEC0040_P142_MEAN44_1'&&c.ready===true&&c.effectiveAllowed===true&&
+    Number(c.decisionAt)===Number(t.triggerAt)&&['ADMIT','PROBE','REJECT'].includes(c.action)&&
+    (c.enforcementEnabled!==true||['ADMIT','PROBE'].includes(c.action))&&!['REJECTED','ORDERED'].includes(s.status);
 }
 export function triggerExpiry(s){return Number(s.features.v17Setup.triggerAt)+60000;}
 export function arithmeticCheck(identity) {

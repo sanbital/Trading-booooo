@@ -23,6 +23,9 @@ export const CEC0040_44BP_COSTS=Object.freeze({
 });
 export const P142_STYLE_BY_BRANCH=Object.freeze({
   R62:'retestAnchor',BUYER_SHARE_RESCUE:'rangeFloor',BOTH:'pivotFloor',
+  // V30 front admission without a B06133 branch (2026-09-24): R62's retest-anchor exit,
+  // the style the V30 validation replay used for branchless candidates.
+  V30_SCORE:'retestAnchor',
 });
 export const P142_MODES=Object.freeze(['LOW_FIRST','HIGH_FIRST','CLOSE_ONLY']);
 const MINUTE=60000,EPS=1e-12;
