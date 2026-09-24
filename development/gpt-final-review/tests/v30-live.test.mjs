@@ -60,3 +60,11 @@ test('V30 executor hooks change no sizing, slot, leverage, stop or lease control
   assert.ok(src.includes('throw new Error("B06133_SELECTION_INVALID")'));assert.ok(src.includes('throw new Error("V30_SELECTION_INVALID")'));
   assert.ok(src.includes('p_branch:branch,p_bootstrap:false'));assert.ok(src.includes('branch:meta.entryBranch??rec(meta.b06133).branch'));
 });
+test('V30 stamp integrity survives a Postgres jsonb round trip (key order), and still rejects a changed factor',()=>{
+  const s=b06133Rejected(),f=s.features.v30Front.factors;
+  s.features.v30Front.factors=Object.fromEntries(Object.entries(f).reverse());
+  assert.equal(baselineAllowedLive(s),true);
+  const t=b06133Rejected();t.features.v30Front.factors={...t.features.v30Front.factors,recentHourLead:!t.features.v30Front.factors.recentHourLead};
+  assert.equal(baselineAllowedLive(t),false);
+  const u=b06133Rejected();delete u.features.v30Front.factors.absorption;assert.equal(baselineAllowedLive(u),false);
+});

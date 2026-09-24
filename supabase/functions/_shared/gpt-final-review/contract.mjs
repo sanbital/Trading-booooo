@@ -90,7 +90,10 @@ export function baselineAllowedV30(s,version=V30_FRONT_VERSION){
   if(v?.version!==version||v.admitted!==true)return false;
   // The stamp must be what the policy computes from the unmodified B06133 factors.
   const again=v30FrontDecision(b,version);
-  return again.admitted===true&&JSON.stringify(again.factors)===JSON.stringify(v.factors)&&v.b06133?.allowed===(b.allowed===true);
+  // Key-order independent: the stamp is read back from Postgres jsonb, which reorders keys.
+  const stamped=v.factors&&typeof v.factors==='object'?v.factors:{};
+  return again.admitted===true&&Object.keys(stamped).length===FACTORS.length&&
+    FACTORS.every(k=>Object.hasOwn(stamped,k)&&stamped[k]===again.factors[k])&&v.b06133?.allowed===(b.allowed===true);
 }
 /** LIVE baseline: V30 defines the candidate set. CEC0040 must be fresh and internally
  * valid, but its ADMIT/PROBE/REJECT action is advisory evidence for GPT rather than a
