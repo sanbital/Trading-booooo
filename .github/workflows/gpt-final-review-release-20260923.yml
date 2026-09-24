@@ -106,7 +106,7 @@ jobs:
           git diff -U0 "$FROZEN_BASE" HEAD -- supabase/functions/_shared/leader-cec0040.mjs \
             | grep -E '^[-+][^-+]' > release-evidence/cec0040-diff.txt || true
           test "$(grep -c '^-' release-evidence/cec0040-diff.txt || true)" = 0
-          test "$(grep -vE "^\+  (// V30 front admission without a B06133 branch \(2026-09-24\): R62's retest-anchor exit,|// the style the V30 validation replay used for branchless candidates\.|V30_SCORE:'retestAnchor',)$" release-evidence/cec0040-diff.txt | wc -l)" = 0
+          test "$(grep -cvE "^\+  (// V30 front admission without a B06133 branch \(2026-09-24\): R62's retest-anchor exit,|// the style the V30 validation replay used for branchless candidates\.|V30_SCORE:'retestAnchor',)$" release-evidence/cec0040-diff.txt || true)" = 0
           git diff --stat "$FROZEN_BASE" HEAD -- supabase/functions > release-evidence/source-diff-stat.txt
           # The generator stamps targetMarginUsdt/leverage from the SAME contract the
           # executor sizes from; the deployed bundle must carry 200 x 3.
