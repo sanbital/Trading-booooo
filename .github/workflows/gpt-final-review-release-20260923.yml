@@ -10,7 +10,7 @@ on:
         description: "Function to deploy"
         required: true
         type: choice
-        options: [gpt-final-review-verify, v10-lane-executor, v10-lane-signal-generator, v30-front-shadow, delete-gpt-final-review-verify]
+        options: [gpt-final-review-verify, v10-lane-executor, v10-lane-signal-generator, v30-front-shadow, gpt-final-decision-replay, delete-gpt-final-review-verify]
       expected_version_before:
         description: "Current production version of the target (pins against concurrent deploys)"
         required: true
