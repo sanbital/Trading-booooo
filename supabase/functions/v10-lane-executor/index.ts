@@ -19,6 +19,7 @@ import {ENTRY_CONTROL_VERSION,CONTROL_SCOPE,evaluateEntryDecision,symbolRecovery
 import {QV3_ACTIVATION_BASIS,QV3_LIVE_CUTOVER,QV3_VERSION,qv3Entry,qv3Exit,qv3Scope,qv3Stamp,qv3Candles,qv3AuditEvidence} from "../_shared/leader-qv3-runtime.mjs";
 import {E1_POLICY,advanceE1,e1QuoteEvidence,fetchE1AggTrades,startE1} from "../_shared/leader-e1-runtime.mjs";
 import {V24_ADAPTER_VERSION,v24EntryGate} from "./v24-entry-adapter.mjs";
+import {IOC_RETRY_POLICY,planAggressiveIocRetry} from "./entry-ioc-retry.mjs";
 import {BOO_ADAPTER_VERSION,ENFORCEMENT as BOO_ENFORCEMENT,evaluateBooEntry,finalizeBooEntry,loadBooGateContext,openRiskSummary,recordBooVerdict} from "./boo-entry-adapter.mjs";
 import {R1_VERSION} from "../_shared/boo/r1-strategy.mjs";
 import {RISK_POLICY_VERSION} from "../_shared/boo/risk-policy.mjs";
@@ -201,6 +202,50 @@ function sizeEntry(ask,step,filters={}){
     minNotionalUsdt:N(filters.minNotionalUsdt,0),minQuantity:N(filters.minQuantity,0)});
   return{...plan,amount:plan.quantity,sizedNotional:plan.referenceNotionalUsdt,
     sizedMargin:plan.orderMarginUsdt};
+}
+
+function retryE1Evidence(tape,q,quantity,at){
+  const ev=e1QuoteEvidence(q,quantity,at);
+  return {confirmationState:"IOC_RETRY_RECHECK",reasonCodes:["IOC_RETRY_FRESH_SNAPSHOT"],
+    decisionAt:at,expectedEntryVWAP:ev.expectedEntryVWAP,expectedExitVWAP:ev.expectedExitVWAP,
+    expectedCostBps:ev.expectedCostBps,observations:tape?.available?[{startAt:tape.startAt,endAt:tape.endAt,
+      return:tape.last10sReturn,buyShare:tape.takerBuyQuoteShare,tradeCount:tape.tradeCount}]:[]};
+}
+async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,step,payload}){
+  const id=cid(attemptNo===1?"v11e":`v11r${attemptNo}`,s.id),
+    rp={action:"create_order",leverage:LEV,order:{market:s.symbol,side:"BUY",type:"LIMIT",price:limitPrice,
+      time_in_force:"IOC",quantity,identifier:id,position_side:"LONG",position_effect:"OPEN"},wait_for_final_ms:4000},
+    oi=await db.from("v11_long_regime_orders").insert({revision:REVISION,signal_id:s.id,position_id:null,symbol:s.symbol,
+      intent:"OPEN_LONG",reason:attemptNo===1?"V17_LEADER_ENTRY_IOC":"V17_LEADER_ENTRY_IOC_RETRY",
+      client_order_id:id,requested_quantity:quantity,state:"PLANNED",
+      request_payload:{...rp,...payload,quantity_step:step,entry_ioc_attempt:attemptNo,
+        entry_ioc_max_attempts:IOC_RETRY_POLICY.maxAttempts,executor_patch:PATCH}}).select("*").single();
+  if(oi.error)throw Error(`ORDER_INTENT:${oi.error.message}`);
+  try{
+    await verifyExecutionLease(db);
+    const initialRaw=await gw(rp),initial=fill(initialRaw);let finalRaw=initialRaw,receipt=null,finalitySource="CREATE_RESPONSE";
+    try{receipt=entryReceipt(initialRaw,oi.data);}catch{}
+    if(!receipt){
+      await verifyExecutionLease(db);
+      const pending=await db.from("v11_long_regime_orders").update({state:"RECONCILIATION_PENDING",
+        exchange_order_id:initial.exchangeOrderId,response_payload:{...initialRaw,v22ImmediateEntryQueryPending:true},
+        reject_reason:`IOC_CONFIRMING:${initial.status}`,updated_at:new Date().toISOString()}).eq("id",oi.data.id);
+      if(pending.error)throw Error("ENTRY_PENDING_WRITE");
+      finalRaw=await gw({action:"get_order",market:s.symbol,identifier:id,exchange_order_id:initial.exchangeOrderId},5000);
+      receipt=entryReceipt(finalRaw,oi.data);finalitySource="SAME_ORDER_QUERY";
+    }
+    const evidence={source:finalitySource,initialStatus:initial.status,confirmedAt:new Date().toISOString(),attemptNo};
+    return {oi:oi.data,rp,id,receipt,initial,evidence,settledRaw:{...finalRaw,v22EntryFinality:evidence}};
+  }catch(error){
+    if(classifyFailure(error).fatal)throw error;
+    const msg=String(error?.message??error);await verifyExecutionLease(db);
+    await db.from("v11_long_regime_orders").update({state:"RECONCILIATION_FAILED",reject_reason:msg.slice(0,500),
+      updated_at:new Date().toISOString()}).eq("id",oi.data.id);
+    await db.from("v11_long_regime_signals").update({status:"ORDERED",updated_at:new Date().toISOString()}).eq("id",s.id);
+    await circuit(db,`BULL_ENTRY_AMBIGUOUS:${msg}`,"KNOWN_ORDER_PENDING_RECONCILIATION",
+      {orderId:oi.data.id,clientOrderId:id,error:msg,attemptNo});
+    throw error;
+  }
 }
 // --- V17 pullback / re-acceleration setup lifecycle -------------------------
 //
