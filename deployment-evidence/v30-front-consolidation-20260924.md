@@ -71,3 +71,16 @@ GPT(건별 실시간 위험)와 역할이 다른 전략 단위 실현성과 조�
 - DB: `20260924005850_v30_front_shadow_observation`(테이블·내부 토큰), `20260924010034_schedule_v30_front_shadow`(30초 cron).
 - 01:01Z 확인: executor last_error 없음·circuit 닫힘, shadow cron 성공, Binance 포지션 0/주문 0/조건부 0,
   DB OPEN 0/미해결 0, sizing 200×3, GPT ENFORCE.
+
+## 8. 실거래 전환 (운영자 결정, 2026-09-24 01:50Z)
+검증상 명확한 개선이 아니었다는 기록(§3·§5)을 유지한 채, 운영자 결정으로 V30을 실거래 앞단으로 전환.
+- 경로: V17 트리거 → V30 점수 게이트 → CEC0040 → **GPT V6S 최종 진입 판정** → 결정론적 주문 안전검사.
+- B06133: 계속 계산·원본 저장, 판정은 참고(REFERENCE_ONLY). 거절값을 true로 바꾸지 않음.
+- branch 없는 V30 진입은 `V30_SCORE`(청산 retestAnchor). CEC RPC 마이그레이션 `20260924015005`.
+- 주문 직전: B06133 스탬프 무결성 + V30 스탬프 재계산 일치 필수. P142 청산은 `metadata.entryBranch`.
+- 불변: 200 USDT×3x, MAX_SLOTS=10, SETUP_MAX_CONCURRENT=4, 1% 괴리 가드(주문 전·체결 후), native stop, lease.
+- 코드 `f1ff223` (테스트 210/210), release run 35944672943 → `v10-lane-executor` **v74**.
+- 섀도 cron 중지: 마이그레이션 `20260924015348`.
+- 배포 전 01:50Z: Binance 포지션 0/주문 0/조건부 0, DB OPEN 0/미해결 0, circuit 닫힘.
+- 배포 후 01:53Z: PATCH `V30-FRONT-SCORE-LIVE-1`, preflight ETHUSDT 602.29 USDT notional / 200.76 margin,
+  슬롯 10, cron 사이클 정상(last_error 없음).
