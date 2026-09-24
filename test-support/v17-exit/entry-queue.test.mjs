@@ -209,6 +209,7 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
     N: (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d),
     rec: x => (x && typeof x === 'object' && !Array.isArray(x) ? x : {}),
     openNow: [], manual: [], sgRows: rows, seen,
+    gptFilterExecutable: async (_db, executable) => ({candidates: executable, reason: 'TEST_GPT_PASS'}),
     openBull: async (_db, sig, _o, _m, attempt) => {
       const o = outcomes[sig.symbol];
       if (o.dispatch) attempt.dispatched = true;
@@ -219,7 +220,7 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
   };
   vm.createContext(ctx);
   const loop = source.slice(source.indexOf('const openSymbols=new Set(openNow'), source.indexOf('\nreturn entry;\n}',source.indexOf('async function runEntryQueue')));
-  if (!loop.includes('for(const s of executable)')) throw new Error('the entry loop was reshaped');
+  if (!loop.includes('for(const s of gptReviewed.candidates)')) throw new Error('the entry loop was reshaped');
   vm.runInContext(`this.go=async function(){let entry={entered:false,reason:"V17_NO_ENTRY"};const sg={data:sgRows,error:null};${loop};return {entry,seen}}`, ctx);
   return ctx;
 }
