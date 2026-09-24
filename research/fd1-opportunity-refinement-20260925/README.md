@@ -210,8 +210,9 @@ FD1 구간에서 같은 trigger 분에 GPT BUY가 2개 이상이었던 경우는
 
 ## M6. QNT/TRB replay
 실제 루프·실제 capacity 코드로 17:17 재현: 351.67 → QNT 148.81 체결 → 재조회 202.86 → capacity 1 → TRB claim·openBull 도달
-(runEntryIndex 2, usedSlots 1). TRB의 GPT 답(17:17:11.6)은 17:17:26.6 이후 aged이므로 Phase 1의 강제 FINAL RECHECK를 거쳐야
-주문된다(trigger 17:18:00, 재확인 최소 여유 8 s + 예약 3 s). 첫 진입이 창을 넘기면 TRB는 `V17_TRIGGER_STALE`로 명시된다.
+(runEntryIndex 2, usedSlots 1). TRB의 GPT 답(snapshot 17:17:09.3)은 valid_until 17:17:24.3이라 QNT 결과(17:17:27.3) 뒤에는
+aged이고, Phase 1의 강제 FINAL RECHECK(허용 한계 17:18:00 − 3 s − 8 s = 17:17:49)를 거쳐 BUY일 때만 주문된다.
+CHIP도 같다(valid_until 16:16:25.8, USELESS 체결 16:16:27.3, 한계 16:16:49). 첫 진입이 창을 넘기면 `V17_TRIGGER_STALE`로 명시된다.
 
 ## M7. 2/3/4/10 슬롯 시뮬레이션
 345→2, 470→3, 620→4, 5,000→10(12개 BUY, MAX_SLOTS 도달 후 나머지 2개 `MAX_SLOTS_REACHED:10/10`).
