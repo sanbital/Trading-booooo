@@ -43,7 +43,10 @@ Deno.serve(async req=>{
     const db={query:(text,params)=>sql.unsafe(text,params)};
     const store=makeStore(db),store2=makeStoreV2(db);
     const guard=createGuard({fetchFn:fetch});
-    const out=await run({store,store2,guard,now:Date.now,apiKey:Deno.env.get('OPENAI_API_KEY_SHADOW')||null});
+    // Prefer a dedicated shadow key when configured. Otherwise share the production OpenAI
+    // project key; shadow DB budgets + production-health stand-down remain enforced.
+    const apiKey=(Deno.env.get('OPENAI_API_KEY_SHADOW')||Deno.env.get('OPENAI_API_KEY')||'').trim()||null;
+    const out=await run({store,store2,guard,now:Date.now,apiKey});
     return reply(200,{...out,patch:PATCH,role:'shadow_le_writer',db_host_kind:/pooler/.test(t.host??'')?'POOLER':'DIRECT'});
   }catch(e){
     return reply(500,{ok:false,patch:PATCH,error:[e?.code,e?.message??String(e)].filter(Boolean).join(':').slice(0,300),orderCalls:0});

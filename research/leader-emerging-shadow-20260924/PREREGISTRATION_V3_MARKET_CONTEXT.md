@@ -40,3 +40,10 @@ Evaluate only decisions whose packet version is `LE_GPT_ALT2_2_MARKET_CONTEXT`; 
 Primary forward outcomes remain net bps at 60/120/240 minutes, MFE/MAE and decision-group comparisons. Also inspect disagreement cases where symbol-level evidence is bullish while market breadth is adverse, because the main failure mode under test is over-vetoing strong independent leaders.
 
 No threshold or rule will be changed from outcome knowledge inside this version.
+
+
+## Shared production OpenAI key fallback
+
+At operator request, the shadow function now prefers `OPENAI_API_KEY_SHADOW` but falls back to the existing project secret `OPENAI_API_KEY` when no dedicated shadow key exists. The key value is never logged or persisted.
+
+This changes only credential selection. Shadow lane call/USD budgets, production-health stand-down and order-free isolation remain unchanged. Because the external OpenAI account/project is shared in fallback mode, actual provider quota is shared with production; production 429/quota signals continue to stop shadow GPT calls.

@@ -139,6 +139,12 @@ test('ALT2 contract: WAIT needs reason + one trigger + TTL 5..15; re-ask cannot 
   for(const k of Object.keys(TRIGGERS))assert.ok(ALT2_PROMPT.includes(k),k);
 });
 
+test('shadow entrypoint: dedicated key preferred, production OPENAI_API_KEY is fallback only', ()=>{
+  const src=readFileSync(new URL('../supabase/functions/leader-emerging-shadow/index.ts',import.meta.url),'utf8');
+  assert.ok(src.includes("Deno.env.get('OPENAI_API_KEY_SHADOW')||Deno.env.get('OPENAI_API_KEY')"));
+  assert.ok(!/console\.(log|error).*OPENAI_API_KEY/.test(src));
+});
+
 test('ALT2 prompt: continuation-vs-blowoff question, STRONG != BUY, no production answer, advisory legacy', ()=>{
   for(const s of ['continuation','blow-off','"강도" 사실이 아닌 것','override.code','ADVISORY','시간이 지났다는 이유만으로 BUY 가 되지는 않는다',
     'market_context','배경 정보이지 진입 하드게이트가 아니다','시장 전체가 약하다는 이유 하나만으로','news_context'])assert.ok(ALT2_PROMPT.includes(s),s);
