@@ -44,7 +44,12 @@ test('bundle contains no order / lease / CEC-RPC / production-GPT-ledger / gatew
     'SERVICE_ROLE','service_role_key','/fapi/v1/order','/fapi/v2/','listenKey','/fapi/v1/leverage','/fapi/v1/marginType','X-MBX-APIKEY'])
     assert.ok(!BUNDLE.includes(s),'forbidden string in bundle: '+s);
   assert.ok(!/ORDER_GATEWAY|GATEWAY_SHARED_SECRET/.test(BUNDLE),'gateway env name in bundle');
-  assert.ok(!/OPENAI_API_KEY(?!_SHADOW)/.test(BUNDLE),'production OpenAI key name in bundle');
+  // Operator-approved exception: the shadow entrypoint may read the existing production OpenAI
+  // project key as a fallback. It may not expose, persist or reference that key anywhere else.
+  assert.equal((BUNDLE.match(/\bOPENAI_API_KEY\b/g)||[]).length,1,'production OpenAI key fallback must have exactly one reference');
+  const idx=readFileSync(ENTRY,'utf8');
+  assert.ok(/Deno\.env\.get\('OPENAI_API_KEY_SHADOW'\)\|\|Deno\.env\.get\('OPENAI_API_KEY'\)/.test(idx),'approved key fallback shape');
+  assert.ok(!/console\.(log|error)[^\n]*OPENAI_API_KEY|OPENAI_API_KEY[^\n]*(insert|update|jsonb)/i.test(BUNDLE),'OpenAI key must not be logged or persisted');
   assert.ok(!/SUPABASE_SERVICE_ROLE|supabase-js|createClient/.test(BUNDLE),'service-role client in bundle');
 });
 
@@ -80,7 +85,7 @@ test('the only DB login is shadow_le_writer; SUPABASE_DB_URL user/password are n
   assert.deepEqual(dbTarget(undefined,'https://abcd.supabase.co'),{host:'db.abcd.supabase.co',port:5432,database:'postgres',username:'shadow_le_writer'});
   const idx=readFileSync(ENTRY,'utf8');
   assert.ok(/password:credential/.test(idx)&&!/\.password\b/.test(idx),'password must be the request credential');
-  assert.ok(/OPENAI_API_KEY_SHADOW/.test(idx));
+  assert.ok(/OPENAI_API_KEY_SHADOW/.test(idx)&&/OPENAI_API_KEY/.test(idx));
 });
 
 test('ALT1 prompt: no "already rose is not a reason" sentence; asks the cost-explicit 60-120 minute question', ()=>{
