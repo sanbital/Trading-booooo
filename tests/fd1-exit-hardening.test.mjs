@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {holdStep,initialHoldState,nextEvent,HOLD_POLICY,runHoldReview} from '../supabase/functions/_shared/gpt-final-decision/hold.mjs';
 import {computeFacts} from '../supabase/functions/_shared/gpt-final-decision/facts.mjs';
 import {buildDecisionPacket} from '../supabase/functions/_shared/gpt-final-decision/api.mjs';
-import {recordHoldShadow,holdShadowEnabled,flashCostCeiling} from '../supabase/functions/_shared/gpt-final-decision/hold-shadow.mjs';
+import {recordHoldShadow,shadowJobKey,holdShadowEnabled,flashCostCeiling} from '../supabase/functions/_shared/gpt-final-decision/hold-shadow.mjs';
 import {fd1HoldTick,setFd1HoldTestHooks} from '../supabase/functions/v10-lane-executor/gpt-final-decision-adapter.mjs';
 import {MemoryReviewStore} from '../supabase/functions/_shared/gpt-final-review/coordinator.mjs';
 import {T,src} from '../development/gpt-final-decision/tests/fixtures.mjs';
@@ -63,9 +63,18 @@ test('shadow is opt-in, budget-claimed once, independent and retains unknown cos
   assert.equal((await recordHoldShadow(args)).state,'DISABLED');assert.equal(calls,0);
   assert.equal((await recordHoldShadow({...args,enabled:true})).state,'DONE');
   assert.equal((await recordHoldShadow({...args,enabled:true})).state,'DUPLICATE');assert.equal(calls,1);
-  const row=await store.get('s');assert.deepEqual(row.record.authority,[]);assert.equal(row.record.result.api_cost_usd,null);
+  const key=await shadowJobKey('g');assert.match(key,/^[0-9a-f]{64}$/);
+  const row=await store.get(key);assert.deepEqual(row.record.authority,[]);assert.equal(row.record.result.api_cost_usd,null);
   const blocked={...args,key:'blocked',enabled:true,store:{claim:async()=>{throw Error('API_BUDGET_EXHAUSTED');}}};
   assert.equal((await recordHoldShadow(blocked)).state,'UNAVAILABLE');assert.equal(calls,1);
+});
+test('shadow keys satisfy the production DB constraint and differ by parent',async()=>{
+  const a=await shadowJobKey('a'),b=await shadowJobKey('b');assert.notEqual(a,b);assert.equal(a,await shadowJobKey('a'));
+  const store=new MemoryReviewStore(),claim=store.claim.bind(store);
+  store.claim=async(key,record,config)=>{assert.match(key,/^[0-9a-f]{64}$/);return claim(key,record,config);};
+  const r=await recordHoldShadow({packet:await packet(),snapshotAt:T,parentKey:'test-parent',identity:{},store,config,
+    apiKey:'test',enabled:true,invoke:async()=>({valid:false,attempted:false})});
+  assert.equal(r.state,'DONE');
 });
 test('GPT result is durable and usable while DeepSeek is unresolved',async()=>{
   const store=new MemoryReviewStore(),tasks=[],p=await packet();let finish;

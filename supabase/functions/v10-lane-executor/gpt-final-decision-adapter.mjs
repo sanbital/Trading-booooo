@@ -8,7 +8,7 @@
 import {holdStep,initialHoldState,runHoldReview,TIME_REASONS,FD1_HOLD_POLICY_VERSION} from '../_shared/gpt-final-decision/hold.mjs';
 import {SupabaseReviewStore,readReviewControl} from '../_shared/gpt-final-review/supabase-store.mjs';
 import {configFromControl} from '../_shared/gpt-final-review/coordinator.mjs';
-import {recordHoldShadow,holdShadowEnabled,HOLD_RELEASE} from '../_shared/gpt-final-decision/hold-shadow.mjs';
+import {recordHoldShadow,shadowJobKey,holdShadowEnabled,HOLD_RELEASE} from '../_shared/gpt-final-decision/hold-shadow.mjs';
 import {hash} from '../_shared/gpt-final-decision/api.mjs';
 export {HOLD_RELEASE,holdShadowEnabled};
 export {FD1_HOLD_POLICY_VERSION,TIME_REASONS};
@@ -47,7 +47,7 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate}){
       const task=(async()=>{
         let shadow=Promise.resolve();
         const onPacket=(packet,snapshotAt)=>{shadow=recordHoldShadow({packet,snapshotAt,parentKey:step.start.key,
-          key:step.start.key+':deepseek',identity:record.identity,store,config,
+          identity:record.identity,store,config,
           enabled:testHooks?.shadowEnabled??holdShadowEnabled(getenv('DEEPSEEK_HOLD_SHADOW_ENABLED')),
           apiKey:testHooks?.deepseekKey??getenv('deepseek api'),invoke:testHooks?.counterCall});};
         const out=await (testHooks?.review??runHoldReview)({apiKey,position:{id:p.id,symbol:p.symbol,entryPrice:Number(p.entry_price),
@@ -68,7 +68,7 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate}){
 export async function fd1ExitProbe(db,{symbol,runId,apiKey,fetchFn=fetch}){
   const config=configFromControl(await readReviewControl(db),getenv);
   if(!authorized(config,apiKey))return {ok:false,error:'NOT_AUTHORIZED',orderCalls:0};
-  const key='exit-probe:'+await hash({runId,symbol,v:HOLD_RELEASE}),store=new SupabaseReviewStore(db);
+  const key=await hash({runId,symbol,v:HOLD_RELEASE,kind:'EXIT_PROBE'}),store=new SupabaseReviewStore(db),shadowKey=await shadowJobKey(key);
   const record={version:HOLD_RELEASE,kind:'FD1_HOLD_PROBE',purpose:'DRYRUN',api_approval_ref:config.approvalRef,
     identity:{symbol,position_id:'fixture:'+runId,event:'TIME_EXIT_CANDIDATE:V17_MOMENTUM_STALE'},
     reserved_usd:.10,source_commit:HOLD_RELEASE,packet:null,result:null};
@@ -84,14 +84,14 @@ export async function fd1ExitProbe(db,{symbol,runId,apiKey,fetchFn=fetch}){
     out=await runHoldReview({apiKey,fetchFn,position:{id:'fixture:'+runId,symbol,entryPrice:bid*.99,peakPrice:bid,
       entryAt:t-50*60000,lastHighAt:t-46*60000,stopPrice:bid*.975,entryFeatures:{}},
       event:record.identity.event,timeCandidate:'V17_MOMENTUM_STALE',stopStage:'RISK_CUT',
-      onPacket:(packet,snapshotAt)=>{shadow=recordHoldShadow({packet,snapshotAt,parentKey:key,key:key+':deepseek',
+      onPacket:(packet,snapshotAt)=>{shadow=recordHoldShadow({packet,snapshotAt,parentKey:key,
         identity:record.identity,store,config,apiKey:getenv('deepseek api'),enabled:holdShadowEnabled(getenv('DEEPSEEK_HOLD_SHADOW_ENABLED'))});}});
   }catch{out={packet:null,result:{valid:false,decision:'ABSTAIN',attempted:false,error:'PROBE_PREP_FAILED',api_cost_usd:0}};}
   await store.complete(key,claim.row.owner,{...record,packet:out.packet,result:out.result,
     snapshot_at_ms:out.packet?.position?.valuation?.snapshot_at_ms??null});
-  const shadowStatus=await shadow,child=await store.get(key+':deepseek');
+  const shadowStatus=await shadow,child=await store.get(shadowKey);
   return {ok:out.result.valid===true&&child?.record?.result?.valid===true,fixture:true,orderCalls:0,release:HOLD_RELEASE,
-    jobKey:key,shadowKey:key+':deepseek',gpt:out.result,deepseek:child?.record?.result??null,shadowStatus,
+    jobKey:key,shadowKey,gpt:out.result,deepseek:child?.record?.result??null,shadowStatus,
     valuation:out.packet?.position?.valuation??null,snapshotHash:out.packet?.snapshot_hash??null,
     identicalPacket:!!child&&child.record.packet?.snapshot_hash===out.packet?.snapshot_hash};
 }

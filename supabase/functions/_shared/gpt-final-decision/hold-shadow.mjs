@@ -1,5 +1,7 @@
 /** Independent HOLD observer. Its result is never read by holdStep or the order executor. */
 import {sharedReview,callCounter,MODEL_CANDIDATES} from './parallel.mjs';
+import {hash} from './api.mjs';
+export const shadowJobKey=parentKey=>hash({kind:'DS_HOLD_SHADOW_1',parentKey});
 export const HOLD_RELEASE='FD1-EXIT-HARDENING-DS-SHADOW-1';
 // Enabled by the 2026-09-25 deployment approval; explicit false/invalid value disables.
 export const holdShadowEnabled=value=>value===''||value==='true';
@@ -11,13 +13,14 @@ export function flashCostCeiling(result){
   const cost=(u.prompt_tokens*.3+u.completion_tokens*1.2)/1e6;
   return cost<=.10?cost:null;
 }
-export async function recordHoldShadow({packet,snapshotAt,key,parentKey,identity,store,config,apiKey,
+export async function recordHoldShadow({packet,snapshotAt,parentKey,identity,store,config,apiKey,
   enabled=false,invoke=callCounter}){
   if(!enabled||!apiKey)return {state:'DISABLED'};
   const record={version:'DS_HOLD_SHADOW_1',kind:'DS_HOLD_SHADOW',purpose:'VERIFICATION',authority:[],
     api_approval_ref:config.approvalRef,identity,parent_key:parentKey,source_commit:'DS_HOLD_SHADOW_1',
     reserved_usd:0.10,packet,snapshot_at_ms:snapshotAt,result:null};
   try{
+    const key=await shadowJobKey(parentKey);
     const claimed=await store.claim(key,record,config);
     if(!claimed.created)return {state:'DUPLICATE'};
     let result,attempted=false;
