@@ -2287,10 +2287,21 @@ async function runEntryQueue(db,pair,manual,blockedSymbols=new Set(),backlogComp
   try{lifecycleRetired=await sweepEntryLifecycle(db,Date.now());}
   catch(error){console.error("ENTRY_LIFECYCLE_SWEEP_FAILED",String(error?.message??error).slice(0,200));}
   if(active(pair.pf).length>=MAX_SLOTS)return{entered:false,reason:"V11_SLOT_FULL",lifecycleRetired:lifecycleRetired.length};
-  const since=new Date(Date.now()-SIGNAL_MAX).toISOString(),sg=await db.from("v11_long_regime_signals").select("*").eq("revision",REVISION).eq("status","NEW").eq("lane","BULL").eq("features->>strategy",STRATEGY).gte("entry_bar_at",since).order("entry_bar_at",{ascending:false}).limit(10);
-  if(sg.error)throw Error(`SIGNALS:${sg.error.message}`);
+  // Read the whole fresh candidate window in pages. A fixed query limit silently hid
+  // valid BUYs behind earlier SKIPs or symbol-level execution refusals. Do not mutate
+  // signal status until pagination completes, so our own claims cannot shift offsets.
+  const since=new Date(Date.now()-SIGNAL_MAX).toISOString(),signalPageSize=100,signalRows=[];
+  for(let offset=0;;offset+=signalPageSize){
+    const page=await db.from("v11_long_regime_signals").select("*").eq("revision",REVISION).eq("status","NEW")
+      .eq("lane","BULL").eq("features->>strategy",STRATEGY).gte("entry_bar_at",since)
+      .order("entry_bar_at",{ascending:false}).order("id",{ascending:false})
+      .range(offset,offset+signalPageSize-1);
+    if(page.error)throw Error(`SIGNALS:${page.error.message}`);
+    signalRows.push(...(page.data??[]));
+    if((page.data??[]).length<signalPageSize)break;
+  }
 const openSymbols=new Set(openNow.map(x=>String(x.symbol).toUpperCase())),closedProtectionSymbols=typeof blockedSymbols==="undefined"?new Set():blockedSymbols,
-  quarantinedSymbols=typeof pair==="undefined"?new Set():new Set((pair.quarantines??[]).map(x=>String(x.symbol).toUpperCase())),eligible=(sg.data||[]).filter(x=>!openSymbols.has(String(x.symbol).toUpperCase())),
+  quarantinedSymbols=typeof pair==="undefined"?new Set():new Set((pair.quarantines??[]).map(x=>String(x.symbol).toUpperCase())),eligible=signalRows.filter(x=>!openSymbols.has(String(x.symbol).toUpperCase())),
   ranked=eligible.filter(x=>!closedProtectionSymbols.has(String(x.symbol).toUpperCase())&&!quarantinedSymbols.has(String(x.symbol).toUpperCase()))
     .sort((a,b)=>Date.parse(b.entry_bar_at)-Date.parse(a.entry_bar_at)||N(rec(a.features).rank,999)-N(rec(b.features).rank,999));
 // One symbol never occupies more than one place in the queue. The list is already

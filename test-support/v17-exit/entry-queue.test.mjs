@@ -197,6 +197,7 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
   const notes = [];
   const terminals = [];
   const attempts = [];
+  const signalRanges = [];
   const model = account ?? accountModel();
   let inFlight = 0, maxInFlight = 0;
   // A clock the stubs can move: a slow first entry is what closes a later candidate's window.
@@ -221,6 +222,14 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
       update: (patch) => { st.patch = patch; if (patch?.status === 'REJECTED') terminals.push({id: null, patch, st}); return b; },
       in: () => b,
       limit: async () => ({data: [], error: null}),
+      range: async (from, to) => {
+        assert.equal(name, 'v11_long_regime_signals');
+        signalRanges.push([from, to]);
+        // Supabase/PostgREST applies the ordered range on the server, not after GPT.
+        const ordered = [...rows].sort((a, b) => Date.parse(b.entry_bar_at) - Date.parse(a.entry_bar_at) ||
+          String(b.id).localeCompare(String(a.id)));
+        return {data: ordered.slice(from, to + 1), error: null};
+      },
       maybeSingle: async () => {
         if (st.patch?.status) seen.push(`${st.id}:${st.patch.status}`);
         return {data: rows.find(r => r.id === st.id) || {}, error: null};
@@ -266,7 +275,8 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
     ENTRY_SKIP_SYMBOL_SCOPED: /^(SIGNAL_STALE_OR_FUTURE|ENTRY_DRIFT|ENTRY_SPREAD)/,
     N: (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d),
     rec: x => (x && typeof x === 'object' && !Array.isArray(x) ? x : {}),
-    openNow: model.pair().positions, manual: [], sgRows: rows, seen,
+    openNow: model.pair().positions, manual: [], signalRanges, seen, SIGNAL_MAX: 1_200_000,
+    REVISION: 'V11-LONG-REGIME-1.0.1', STRATEGY: 'P10',
     gptFilterExecutable: async (_db, executable) => reviews ? reviews(executable) :
       ({candidates: executable, reason: 'TEST_GPT_PASS', reviews: executable.map(s => ({signalId: s.id, allowed: true}))}),
     lifecycleNote, gptTerminalReason, notes, terminals, attempts, model,
@@ -304,9 +314,10 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
   const helpers = source.slice(source.indexOf('// Account state the entry capacity is computed from'), source.indexOf('async function runEntryQueue('));
   if (!helpers.includes('function refreshCapacityInputs(db)')) throw new Error('the capacity helpers moved');
   vm.runInContext(helpers, ctx);
-  const loop = source.slice(source.indexOf('const openSymbols=new Set(openNow'), source.indexOf('\n}\n\nasync function requireLeaderEntryControls',source.indexOf('async function runEntryQueue')));
+  const loop = source.slice(source.indexOf('const since=new Date(Date.now()-SIGNAL_MAX).toISOString(),signalPageSize='),
+    source.indexOf('\n}\n\nasync function requireLeaderEntryControls',source.indexOf('async function runEntryQueue')));
   if (!loop.includes('for(const [index,s] of queued.entries())')) throw new Error('the entry loop was reshaped');
-  vm.runInContext(`this.go=async function(){let entry={entered:false,reason:"V17_NO_ENTRY"};const sg={data:sgRows,error:null};const out=await (async()=>{${loop}\n})();return {entry:out,seen}}`, ctx);
+  vm.runInContext(`this.go=async function(){let entry={entered:false,reason:"V17_NO_ENTRY"};const out=await (async()=>{${loop}\n})();return {entry:out,seen}}`, ctx);
   return ctx;
 }
 
@@ -784,6 +795,20 @@ test('J8 four BUYs with four slots of capital: all four enter', async () => {
   const {entry} = await ctx.go();
   assert.equal(entry.entryCount, 4);
   assert.deepEqual(Array.from(entry.entries, e => e.symbol), rows.map(r => r.symbol));
+});
+
+test('production query pagination reaches BUYs beyond the first full page of GPT SKIPs', async () => {
+  const rows = buyRows(110);
+  const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows),
+    reviews: (ex) => ({candidates: ex.slice(100), reason: 'TEST', reviews: ex.map((s, i) =>
+      i < 100 ? {signalId: s.id, allowed: false, reason: 'GPT_SKIP', decision: 'SKIP'} :
+        {signalId: s.id, allowed: true})}),
+    outcomes: allFill(rows), account: accountModel({available: 5_000})});
+  const {entry} = await ctx.go();
+  assert.deepEqual(ctx.signalRanges, [[0,99],[100,199]], 'the real query requests page two');
+  assert.equal(entry.entryCount, 10, 'all available slots use BUYs hidden behind the first page');
+  assert.equal(ctx.model.fills.length, 10);
+  assert.equal(ctx.model.reads, 10, 'portfolio is refreshed after each fill');
 });
 
 test('J9 a GPT SKIP (initial or FINAL RECHECK) moves on to the next BUY', async () => {
