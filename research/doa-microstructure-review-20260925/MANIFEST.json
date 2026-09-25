@@ -1,0 +1,21 @@
+{
+  "version": "DOA_MICRO_REVIEW_1",
+  "status": "DRAFT_CAPTURE_NOT_STARTED",
+  "scope": "research only; no trading authority",
+  "normalization": "UTF-8 with LF",
+  "hashes": {
+    ".gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
+    "PROTOCOL.md": "67276a9664170ab20b6b354d501ab3880fa41197e23600d7c95b35f43b8e14e6",
+    "README.md": "423c422aeffad597655699dcd7b678e163900dfd7374ccbf7ddabb6327966328",
+    "analyze.mjs": "e5178a1f8f09c1b57979a5968f39fd96b777834da23fbc73683ea2ae34349ad4",
+    "capture-schema.draft.sql": "40db4c4b34fa7de1f3d97a83e8e597d4dd2e31409106b8a577a3084a6c3e1637",
+    "historical.json": "aa09515ed639f16ef86fd59644f98e50d9b06a6ba37af676fbba2b206009ba76",
+    "queries.sql": "d012c21dd9094a8f41556db4b0ecd046f50b01132cf707893ac4ee1c9c752385",
+    "results.json": "d7c34eb0e48450ecc8c0b3a3ce8bccb4cdaa7ac5b2d4d07650ed103b276bd362",
+    "snapshot.json": "0a1b66a846af28f363ce71f0aad913bd0f88228902dc2bcbe824339554e0c368",
+    "supplement-queries.sql": "8b3955ced305b641d2fa22f7de96b50369ebd72fef36b2d003a241d537981cf0",
+    "supplement.json": "05ebe499231334c86f889425120d5d702848cef661c5433a4f9eb8d4b5b2d3ec",
+    "v17-ids.json": "51c3c70e318c28cae3d2ad5b6882d5cdd106996dc4f0d91a8c5d4cdd143fda91",
+    "verify.test.mjs": "5a667a72789eac9c1bae707cf0b5c56b2c437f0619cc05dbdee00220f4d95886"
+  }
+}
