@@ -154,12 +154,16 @@ export function computeFacts(src,ctx){
   for(const k of MICRO_KEYS)put(k,bk?.[k]??null,src.book?'BOOK_INVALID':(src.bookMissingReason??'BOOK_NOT_COLLECTED'));
   const p=ctx.position;
   if(p&&last){
-    const entry=num(p.entryPrice),peak=Math.max(num(p.peakPrice)??entry,entry),stop=num(p.stopPrice),price=last.c;
-    put('position_return',entry>0?price/entry-1:null);put('position_peak_return',entry>0?peak/entry-1:null);
-    put('position_drawdown_from_peak',peak>0?price/peak-1:null);
+    const quoteAt=src.book?.requestedAtMs,receivedAt=src.book?.receivedAtMs,exchangeAt=Number(src.book?.T??src.book?.E);
+    const liveValid=bk&&Number.isSafeInteger(quoteAt)&&Number.isSafeInteger(receivedAt)&&quoteAt<=receivedAt&&
+      receivedAt<=asOf&&asOf-quoteAt<=5000&&Number.isSafeInteger(exchangeAt)&&exchangeAt<=asOf&&asOf-exchangeAt<=5000;
+    const price=p.requireLiveQuote?(liveValid?Number(src.book.bids[0][0]):null):last.c;
+    const entry=num(p.entryPrice),peak=Math.max(num(p.peakPrice)??entry,entry,price??0),stop=num(p.stopPrice);
+    put('position_return',price!==null&&entry>0?price/entry-1:null);put('position_peak_return',entry>0?peak/entry-1:null);
+    put('position_drawdown_from_peak',price!==null&&peak>0?price/peak-1:null);
     put('position_minutes_held',num(p.entryAt)!==null?(asOf-Number(p.entryAt))/MIN:null);
     put('position_minutes_since_new_high',num(p.lastHighAt)!==null?(asOf-Number(p.lastHighAt))/MIN:null);
-    put('position_stop_distance',stop>0?price/stop-1:null);
+    put('position_stop_distance',price!==null&&stop>0?price/stop-1:null);
   }else for(const k of POSITION_KEYS)put(k,null,'NOT_A_POSITION_REVIEW');
   return {version:FACTS_VERSION,values:v,missing:why,quality:{candles_complete:candlesComplete,
     micro_complete:MICRO_KEYS.every(k=>v[k]!==null),derivatives_complete:['funding_rate','premium_index','oi_change_5m'].every(k=>v[k]!==null),

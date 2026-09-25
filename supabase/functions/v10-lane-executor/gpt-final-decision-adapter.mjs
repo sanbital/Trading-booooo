@@ -8,6 +8,9 @@
 import {holdStep,initialHoldState,runHoldReview,TIME_REASONS,FD1_HOLD_POLICY_VERSION} from '../_shared/gpt-final-decision/hold.mjs';
 import {SupabaseReviewStore,readReviewControl} from '../_shared/gpt-final-review/supabase-store.mjs';
 import {configFromControl} from '../_shared/gpt-final-review/coordinator.mjs';
+import {recordHoldShadow,holdShadowEnabled,HOLD_RELEASE} from '../_shared/gpt-final-decision/hold-shadow.mjs';
+import {hash} from '../_shared/gpt-final-decision/api.mjs';
+export {HOLD_RELEASE,holdShadowEnabled};
 export {FD1_HOLD_POLICY_VERSION,TIME_REASONS};
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
 let testHooks=null;
@@ -42,17 +45,55 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate}){
     if(claimed.created){
       const owner=claimed.row.owner;
       const task=(async()=>{
+        let shadow=Promise.resolve();
+        const onPacket=(packet,snapshotAt)=>{shadow=recordHoldShadow({packet,snapshotAt,parentKey:step.start.key,
+          key:step.start.key+':deepseek',identity:record.identity,store,config,
+          enabled:testHooks?.shadowEnabled??holdShadowEnabled(getenv('DEEPSEEK_HOLD_SHADOW_ENABLED')),
+          apiKey:testHooks?.deepseekKey??getenv('deepseek api'),invoke:testHooks?.counterCall});};
         const out=await (testHooks?.review??runHoldReview)({apiKey,position:{id:p.id,symbol:p.symbol,entryPrice:Number(p.entry_price),
           peakPrice:state.peakPrice,entryAt:Date.parse(p.entry_at),lastHighAt:state.lastHighAt,stopPrice:state.stopPrice,entryFeatures:f},
-          event:step.start.event,timeCandidate,stopStage:state.protectionStage??null});
+          event:step.start.event,timeCandidate,stopStage:state.protectionStage??null,onPacket});
         await store.complete(step.start.key,owner,{...record,packet:out.packet,result:out.result,
           snapshot_at_ms:out.packet?now:null});
+        // GPT is already durable and consumable. The observer cannot extend its deadline.
+        await shadow;
       })().catch(e=>console.error('FD1_HOLD_REVIEW_FAILED',p.id,String(e?.message??e).slice(0,200)));
       if(testHooks?.schedule)testHooks.schedule(task);
       else if(globalThis.EdgeRuntime?.waitUntil)EdgeRuntime.waitUntil(task);
     }
     return step;
   }catch{return fail('ADAPTER_ERROR');}
+}
+/** Authenticated order-free deployed-path check: both providers, claims and completion. */
+export async function fd1ExitProbe(db,{symbol,runId,apiKey,fetchFn=fetch}){
+  const config=configFromControl(await readReviewControl(db),getenv);
+  if(!authorized(config,apiKey))return {ok:false,error:'NOT_AUTHORIZED',orderCalls:0};
+  const key='exit-probe:'+await hash({runId,symbol,v:HOLD_RELEASE}),store=new SupabaseReviewStore(db);
+  const record={version:HOLD_RELEASE,kind:'FD1_HOLD_PROBE',purpose:'DRYRUN',api_approval_ref:config.approvalRef,
+    identity:{symbol,position_id:'fixture:'+runId,event:'TIME_EXIT_CANDIDATE:V17_MOMENTUM_STALE'},
+    reserved_usd:.10,source_commit:HOLD_RELEASE,packet:null,result:null};
+  const claim=await store.claim(key,record,config);
+  if(!claim.created)return {ok:true,duplicate:true,jobKey:key,orderCalls:0};
+  let shadow=Promise.resolve({state:'NOT_STARTED'}),out;
+  try{
+    const res=await fetchFn('https://fapi.binance.com/fapi/v1/ticker/bookTicker?symbol='+encodeURIComponent(symbol),
+      {signal:AbortSignal.timeout(2500)});
+    if(!res.ok)throw Error('QUOTE_HTTP');const bid=Number((await res.json()).bidPrice);
+    if(!(bid>0))throw Error('QUOTE_INVALID');
+    const t=Date.now();
+    out=await runHoldReview({apiKey,fetchFn,position:{id:'fixture:'+runId,symbol,entryPrice:bid*.99,peakPrice:bid,
+      entryAt:t-50*60000,lastHighAt:t-46*60000,stopPrice:bid*.975,entryFeatures:{}},
+      event:record.identity.event,timeCandidate:'V17_MOMENTUM_STALE',stopStage:'RISK_CUT',
+      onPacket:(packet,snapshotAt)=>{shadow=recordHoldShadow({packet,snapshotAt,parentKey:key,key:key+':deepseek',
+        identity:record.identity,store,config,apiKey:getenv('deepseek api'),enabled:holdShadowEnabled(getenv('DEEPSEEK_HOLD_SHADOW_ENABLED'))});}});
+  }catch{out={packet:null,result:{valid:false,decision:'ABSTAIN',attempted:false,error:'PROBE_PREP_FAILED',api_cost_usd:0}};}
+  await store.complete(key,claim.row.owner,{...record,packet:out.packet,result:out.result,
+    snapshot_at_ms:out.packet?.position?.valuation?.snapshot_at_ms??null});
+  const shadowStatus=await shadow,child=await store.get(key+':deepseek');
+  return {ok:out.result.valid===true&&child?.record?.result?.valid===true,fixture:true,orderCalls:0,release:HOLD_RELEASE,
+    jobKey:key,shadowKey:key+':deepseek',gpt:out.result,deepseek:child?.record?.result??null,shadowStatus,
+    valuation:out.packet?.position?.valuation??null,snapshotHash:out.packet?.snapshot_hash??null,
+    identicalPacket:!!child&&child.record.packet?.snapshot_hash===out.packet?.snapshot_hash};
 }
 /** ORDER-FREE production probe of both FD1 decisions on live data (no lease, no claim of
  * signals, no order, no position write). Entry: the production FD1 engine on a fixture

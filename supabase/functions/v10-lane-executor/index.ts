@@ -3,7 +3,7 @@ import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFut
 import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,runWithGptReview,gptReviewReadyToResume,gptArmFollowUp} from "./gpt-final-review-adapter.mjs";
 import {dryRunCoordinator,dryRunReviewPhase,liveProbe} from "./gpt-final-review-dryrun.mjs";
 import {readReviewControl} from "../_shared/gpt-final-review/supabase-store.mjs";
-import {fd1HoldTick,fd1Probe,FD1_HOLD_POLICY_VERSION,TIME_REASONS as FD1_TIME_REASONS} from "./gpt-final-decision-adapter.mjs";
+import {fd1HoldTick,fd1Probe,fd1ExitProbe,HOLD_RELEASE,holdShadowEnabled,FD1_HOLD_POLICY_VERSION,TIME_REASONS as FD1_TIME_REASONS} from "./gpt-final-decision-adapter.mjs";
 import {FD1_ENTRY_ENGINE} from "../_shared/gpt-final-decision/engine.mjs";
 import {finalRecheckStep,finalRecheckProbe,postRecheckSafety,markRecheckOutcome,withOrderTiming} from "./gpt-final-recheck-adapter.mjs";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
@@ -2889,6 +2889,7 @@ async function opsReadiness(db){
       conditionalOrderCount:Array.isArray(oo?.algos)?oo.algos.length:null,ordersObservedAtMs:oo?.observed_at_ms??null},
     db:{openPositionCount:(positions.data??[]).length,openPositions:positions.data??[],unresolvedOrderCount:(orders.data??[]).length,unresolvedOrders:orders.data??[]},
     runtime:rt.data??null,gptControl:control,openaiKeyPresent:(env("OPENAI_API_KEY")||"").length>0,maxSlots:MAX_SLOTS,
+    holdRelease:HOLD_RELEASE,deepseekShadow:{enabled:holdShadowEnabled(env("DEEPSEEK_HOLD_SHADOW_ENABLED")||""),keyPresent:!!env("deepseek api"),authority:[]},
     sizing:{targetMarginUsdt:MARGIN,leverage:LEV}};
 }
 // ORDER-FREE end-to-end GPT dry run for one real engine-approved candidate (replayed on a
@@ -3024,6 +3025,10 @@ Deno.serve(async req=>{
           invariants:assertSlotSizingContract()},sizing});
     }
     if(mode==="ops-readiness")return res(200,await opsReadiness(db));
+    if(mode==="fd1-exit-probe"){
+      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
+      return res(200,await fd1ExitProbe(db,{symbol,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID()).slice(0,80)}));
+    }
     if(mode==="gpt-dryrun")return res(200,await gptDryRun(db,body));
     if(mode==="gpt-live-probe"){
       const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
