@@ -88,16 +88,19 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
  Date.now=()=>state.now;
  class Clock extends Date {constructor(...x){super(...(x.length?x:[state.now]));}static now(){return state.now;}}
  const get=(r,k)=>k.includes('->>')?r[k.split('->>')[0]]?.[k.split('->>')[1]]:r[k];
- const db={from(table){let filters=[],patch=null,insert=null,limit=Infinity,sort=null,single=false;const b={
+ const db={from(table){let filters=[],patch=null,insert=null,limit=Infinity,rangeFrom=0,sort=[],single=false;const b={
   select(){return b;},eq(k,v){filters.push(r=>String(get(r,k))===String(v));return b;},in(k,vs){filters.push(r=>vs.includes(get(r,k)));return b;},
   or(expression){if(expression!=="response_payload->>v18ExposureFinal.is.null,response_payload->>v18ExposureFinal.neq.true")throw Error("unsupported test filter");filters.push(r=>r.response_payload?.v18ExposureFinal!==true);return b;},
-  gte(k,v){filters.push(r=>get(r,k)>=v);return b;},order(k,o){sort=[k,o?.ascending!==false];return b;},limit(n){limit=n;return b;},
+  gte(k,v){filters.push(r=>get(r,k)>=v);return b;},order(k,o){sort.push([k,o?.ascending!==false]);return b;},
+  limit(n){limit=n;return b;},range(from,to){rangeFrom=from;limit=to-from+1;return b;},
   update(v){patch=clone(v);return b;},insert(v){insert=clone(v);return b;},single(){single=true;return b;},maybeSingle(){single=true;return b;},
   async then(resolve,reject){try{
    await state.hook({type:'db',table,patch,insert,state});
    if((patch||insert)&&!state.lease)throw Error('V18_EXECUTION_FENCED');
    let rows=(state.tables[table]??[]).filter(r=>filters.every(f=>f(r)));
-   if(sort)rows.sort((a,b)=>String(get(a,sort[0])).localeCompare(String(get(b,sort[0])))*(sort[1]?1:-1));rows=rows.slice(0,limit);
+   if(sort.length)rows.sort((a,b)=>{for(const [key,ascending] of sort){
+     const cmp=String(get(a,key)).localeCompare(String(get(b,key)));if(cmp)return cmp*(ascending?1:-1);
+   }return 0;});rows=rows.slice(rangeFrom,rangeFrom+limit);
    if(insert){const row={id:'new-'+(++state.seq),created_at:new Clock().toISOString(),updated_at:new Clock().toISOString(),...insert};(state.tables[table]??=[]).push(row);rows=[row];}
    if(patch){for(const r of rows)Object.assign(r,patch);}
    if(patch||insert){state.writes.push({table,patch,insert,count:rows.length});if(table==='v11_long_regime_runtime'&&patch?.circuit_open===true)state.circuits.push(patch);}
