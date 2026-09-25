@@ -1,0 +1,3 @@
+/collectors/doa-capture/** text eol=lf
+/supabase/functions/doa-capture-ingest/** text eol=lf
+/research/doa-capture-live-20260925/** text eol=lf
