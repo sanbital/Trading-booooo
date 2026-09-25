@@ -3,6 +3,7 @@
  * Input is one point-in-time public.market_regime_observations row selected at-or-before the
  * candidate snapshot. The raw observer feature tree is deliberately NOT forwarded to GPT.
  * This module keeps only stable, compact context so the individual-symbol evidence remains primary.
+ * It is also covered by the shadow order-free static surface test.
  */
 export const MARKET_CONTEXT_VERSION='LE_MARKET_CONTEXT_1';
 export const MARKET_CONTEXT_MAX_AGE_MS=10*60_000;

@@ -258,7 +258,7 @@ test('snapshot freshness: fresh <=25 s, book refresh <=120 s, stale beyond (or f
 
 // ================================================================ static: order-free, allowlist
 test('V2 SQL: writes only shadow_le.v2_* / cycles, production SELECT only on already-granted tables, JSON params via ::text', ()=>{
-  const READ_OK=new Set(['v11_cec0040_state','v17_market_scan_runs','gpt_final_entry_reviews','v11_long_regime_positions']);
+  const READ_OK=new Set(['v11_cec0040_state','v17_market_scan_runs','gpt_final_entry_reviews','v11_long_regime_positions','market_regime_observations']);
   for(const [name,q] of Object.entries(SQL_V2)){
     for(const m of q.matchAll(/\b(insert\s+into|update|delete\s+from|merge\s+into|truncate)\s+([a-z_][\w.]*)/gi))
       assert.ok(/^shadow_le\.(v2_\w+|cycles)$/.test(m[2]),name+': write outside shadow_le v2: '+m[0]);
@@ -271,7 +271,7 @@ test('V2 SQL: writes only shadow_le.v2_* / cycles, production SELECT only on alr
 
 test('V2 modules: no order / account / lease / production-ledger / service-key surface', ()=>{
   const dir=new URL('../supabase/functions/leader-emerging-shadow/v2/',import.meta.url);
-  const src=['axes','contract','prompt','gpt','wait','outcome','run','store'].map(f=>readFileSync(new URL(f+'.mjs',dir),'utf8')).join('\n');
+  const src=['axes','contract','prompt','gpt','wait','outcome','market-context','run','store'].map(f=>readFileSync(new URL(f+'.mjs',dir),'utf8')).join('\n');
   for(const s of ['/fapi/v1/order','/fapi/v2/','listenKey','/fapi/v1/leverage','/fapi/v1/marginType','X-MBX-APIKEY','signature','v11_cec0040_decide',
     'gpt_final_review_claim','verifyExecutionLease','/v1/command','SERVICE_ROLE','createClient','OPENAI_API_KEY"','insert into public','update public'])
     assert.ok(!src.includes(s),'forbidden: '+s);
