@@ -1,4 +1,4 @@
-// Migration 20260925090000 (entry lifecycle journal) on a real Postgres (PGlite), applied on
+// Migration 20260925003050 (entry lifecycle journal) on a real Postgres (PGlite), applied on
 // top of the two journal migrations it extends, and pinned to the executor's JS classes.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,7 +12,7 @@ const {PGlite}=await import(pathToFileURL(dependency).href);
 const read=f=>readFileSync(new URL('../supabase/migrations/'+f,import.meta.url),'utf8');
 const original=read('20260924090000_fd1_execution_retry_missed_journal.sql');
 const accounting=read('20260924143851_fd1_retry_journal_accounting.sql');
-const lifecycle=read('20260925090000_fd1_entry_lifecycle_journal.sql');
+const lifecycle=read('20260925003050_fd1_entry_lifecycle_journal.sql');
 const MIN=60000;
 // The columns 20260924143851 adds to the journal (its functions need production-only objects).
 const accountingColumns=accounting.slice(accounting.indexOf('alter table public.missed_opportunity_journal'),
