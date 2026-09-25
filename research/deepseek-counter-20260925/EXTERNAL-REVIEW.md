@@ -18,7 +18,15 @@
 
 `node research/deepseek-counter-20260925/review-evidence.mjs`는 원본 replay·diagnostic·outcome·temporal 결과와 label 파일을 읽어 재집계한다. [review-evidence.json](review-evidence.json)에 입력 SHA-256과 결과를 기록했다. 기존 raw 데이터·라벨·분할·수익 정책·historical prompt는 변경하지 않았다. Temporal raw 자료는 기존 로컬/비공개 연구 저장소에 있으므로 공개 체크아웃만으로 그 부분을 재계산할 수는 없다.
 
-로컬 통합 검증: 129 tests passed, 0 failed. HOLD/최종 RECHECK 기존 회귀도 포함했다. main의 정확한 수정 SHA에 대한 GitHub Actions 결과는 DeepSeek research regression과 Workflow Lint에서 확인한다. 로컬 통과를 원격 CI 통과로 간주하지 않는다.
+로컬 통합 검증: 129 tests passed, 0 failed. HOLD/최종 RECHECK 기존 회귀도 포함했다. 수정 SHA acf540d의 [연구 CI](https://github.com/sanbital/Trading-booooo/actions/runs/36129279625)와 [Workflow Lint](https://github.com/sanbital/Trading-booooo/actions/runs/36129279634)가 모두 success였다. 후속 트리거 수정 커밋에서도 같은 두 검사를 실행한다.
+
+### 자동 배포 부작용 및 재발 방지
+
+main push의 기존 `deploy-market-autotrader-v707.yml`은 `_shared/**` 전체를 대상으로 했다. 사전 점검에서 이 경로를 놓쳐 acf540d가 [기존 배포 workflow](https://github.com/sanbital/Trading-booooo/actions/runs/36129279584)를 함께 실행했다. 중단 시도 전에 11:26 UTC에 완료되었다. 이는 요청한 연구-only 범위를 벗어난 부작용이며 의도한 배포로 취급하지 않는다.
+
+market-autotrader v448, market-regime-observer v90, market-v2-signal v81, market-scanner v418이 재배포되었다. 해당 함수 소스는 이번 커밋에서 수정하지 않았지만, 재배포 전 네 함수의 번들을 보관하지 않았으므로 이전 운영 번들과 byte-identical했다고 주장하지 않는다. 임의로 추정한 버전으로 되돌리지 않았다.
+
+v10-lane-executor는 v89, SHA-256 ae8742095256da88ceef4f0e337f2df9c4954229a760ae66b76bb2b7ea5dd152 그대로이며 해당 소스도 바뀌지 않았다. 재발 방지를 위해 기존 배포 workflow의 push/PR 경로에서 `gpt-final-decision/**`을 제외했다. 이 모듈들은 별도 FD1 릴리스 경로의 대상이다. 후속 커밋은 비밀키 없는 연구 CI와 lint로 검증한다.
 
 ## A/A·B/B 계획 — 구현 완료, API 실험 미실행
 
