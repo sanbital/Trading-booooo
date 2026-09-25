@@ -44,7 +44,8 @@ Deno.serve(async req=>{
     const store=makeStore(db),store2=makeStoreV2(db);
     const guard=createGuard({fetchFn:fetch});
     // Prefer a dedicated shadow key when configured. Otherwise share the production OpenAI
-    // project key; shadow DB budgets + production-health stand-down remain enforced.
+    // project key; shadow DB budgets + production-health stand-down remain enforced. This is the
+    // single audited production-key reference permitted by the order-free bundle test.
     const apiKey=(Deno.env.get('OPENAI_API_KEY_SHADOW')||Deno.env.get('OPENAI_API_KEY')||'').trim()||null;
     const out=await run({store,store2,guard,now:Date.now,apiKey});
     return reply(200,{...out,patch:PATCH,role:'shadow_le_writer',db_host_kind:/pooler/.test(t.host??'')?'POOLER':'DIRECT'});
