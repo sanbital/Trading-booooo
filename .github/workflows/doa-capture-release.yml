@@ -1,22 +1,51 @@
-name: DOA capture host preflight
+name: Independent DOA capture release
 on:
   push:
     branches: [release/doa-capture-20260925]
-    paths: [.github/workflows/doa-capture-release.yml]
+    paths: [.github/workflows/doa-capture-release.yml, collectors/doa-capture/**, supabase/functions/doa-capture-ingest/**]
 permissions:
   contents: read
+concurrency:
+  group: deploy-doa-capture-only
+  cancel-in-progress: false
 jobs:
-  preflight:
+  verify-and-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
-      - name: Inspect collector host capability without changing trading app
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Regression and type checks
         run: |
           set -euo pipefail
-          flyctl version
-          flyctl orgs list --json
-          flyctl apps create --help
-          flyctl machine run --help
+          npm ci --prefix test-support/v18-ops --ignore-scripts
+          export PGLITE_MODULE="$PWD/test-support/v18-ops/node_modules/@electric-sql/pglite/dist/index.js"
+          node --test collectors/doa-capture/*.test.mjs
+          npm exec --yes --package=deno@2.5.6 -- deno check supabase/functions/doa-capture-ingest/index.ts
+          node --check collectors/doa-capture/worker.mjs
+      - name: Build exact isolated collector image and reject missing credentials
+        run: |
+          set -euo pipefail
+          image="registry.fly.io/sanbital-doa-capture-20260925:$GITHUB_SHA"
+          docker build -t "$image" collectors/doa-capture
+          if docker run --rm "$image" > boot.log 2>&1; then exit 1; fi
+          grep -q INVALID_CONFIG boot.log
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: 0.4.108
+      - name: Deploy independent public-data collector
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: node collectors/doa-capture/deploy.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: doa-capture-release
+          path: capture-release.json
+          retention-days: 30
