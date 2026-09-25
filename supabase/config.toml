@@ -17,3 +17,12 @@ verify_jwt = false
 
 [functions.scalp-calibration]
 verify_jwt = false
+
+# Research endpoints authenticate the existing private FD1 replay token in code.
+[functions.deepseek-connection-check]
+verify_jwt = false
+
+[functions.deepseek-counter-replay]
+verify_jwt = false
+
+

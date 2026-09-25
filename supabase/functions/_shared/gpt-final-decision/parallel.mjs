@@ -11,7 +11,7 @@ export const DEEPSEEK_URL='https://api.deepseek.com/chat/completions';
 // Verified against official API documentation on 2026-09-25; not a model selection.
 export const MODEL_CANDIDATES=Object.freeze([
   Object.freeze({model:'deepseek-flash',thinking:'disabled'}),
-  Object.freeze({model:'deepseek-v4-pro',thinking:'enabled'}),
+  Object.freeze({model:'deepseek-v4-pro',thinking:'enabled',reasoning_effort:'low'}),
 ]);
 const levels=['LOW','MEDIUM','HIGH'];
 const en=values=>({type:'string',enum:values});
@@ -52,7 +52,10 @@ For HOLD consider dead-on-arrival, broken thesis, trend persistence and prematur
 For RECHECK evaluate current facts and changes, not merely that the price has risen.
 Use only available fact keys as evidence. Confidence is an uncalibrated self-report, not a probability.
 You cannot modify stops, leverage, sizing or execution safety. Return only the requested short JSON.
-Never return chain-of-thought. Use UNCERTAIN when evidence is insufficient.`;
+Never return chain-of-thought. Use UNCERTAIN when evidence is insufficient.
+Output exactly the schema keys, with no additional keys. Evidence MUST contain 1 to 6 fact-key strings only.
+The summary MUST be a single short sentence of at most 100 characters, including spaces.
+Copy candidate_id exactly. Return one plain JSON object without markdown or surrounding text.`;
 
 /** A single immutable input, including GPT's exact market/evidence representation.
  * Accept ONLY a packet, never a whole DB row (which may contain future outcomes).
@@ -70,16 +73,16 @@ export async function sharedReview(packet,{snapshotAtMs,inputPayload=payloadFor}
   const snapshotHash=await hash({packet:copy,snapshot_at_ms:snapshotAtMs,market_input:marketInput});
   return freeze({packet:copy,snapshot_at_ms:snapshotAtMs,snapshot_hash:snapshotHash,market_input:marketInput});
 }
-export async function callCounter(shared,{apiKey,model,thinking,fetchFn=fetch,now=Date.now,timeoutMs=REQUEST_MS}={}){
+export async function callCounter(shared,{apiKey,model,thinking,reasoning_effort,fetchFn=fetch,now=Date.now,timeoutMs=REQUEST_MS}={}){
   const start=now(),out={provider:'deepseek',model,valid:false,answer:null,error:null,attempted:false,
     snapshot_hash:shared.snapshot_hash,snapshot_at_ms:shared.snapshot_at_ms,started_at_ms:start,
     completed_at_ms:null,latency_ms:null,usage:null};
   let timer;const abort=new AbortController();
   try{
-    assert(MODEL_CANDIDATES.some(x=>x.model===model&&x.thinking===thinking),'COUNTER_MODEL');
+    assert(MODEL_CANDIDATES.some(x=>x.model===model&&x.thinking===thinking&&x.reasoning_effort===reasoning_effort),'COUNTER_MODEL');
     assert(apiKey,'COUNTER_KEY_MISSING');
     assert(Number.isFinite(timeoutMs)&&timeoutMs>0&&timeoutMs<=REQUEST_MS,'COUNTER_TIMEOUT_BUDGET');
-    const body=JSON.stringify({model,thinking:{type:thinking},max_tokens:1500,stream:false,
+    const body=JSON.stringify({model,thinking:{type:thinking},...(reasoning_effort?{reasoning_effort}:{}),max_tokens:1500,stream:false,
       response_format:{type:'json_object'},messages:[{role:'system',content:SYSTEM+'\nJSON schema: '+JSON.stringify(counterSchema(shared.packet.task))},
         {role:'user',content:JSON.stringify(shared.market_input)}]});
     const request=(async()=>{
@@ -100,7 +103,11 @@ export async function callCounter(shared,{apiKey,model,thinking,fetchFn=fetch,no
     const expiry=new Promise((_,reject)=>{timer=setTimeout(()=>{abort.abort();reject(Error('COUNTER_TIMEOUT'));},timeoutMs);});
     const result=await Promise.race([request,expiry]);
     out.answer=result.answer;out.usage=result.usage;out.valid=true;
-  }catch(e){out.error=/^COUNTER_[A-Z_0-9]+$/.test(e?.message??'')?e.message:'COUNTER_INVALID_RESPONSE';}
+  }catch(e){
+    const message=e?.message??'';
+    const shape=/^(TYPE|ENUM|STRING|EXTRA|REQUIRED|ARRAY):/.exec(message);
+    out.error=/^COUNTER_[A-Z_0-9]+$/.test(message)?message:shape?'COUNTER_SCHEMA_'+shape[1]:'COUNTER_INVALID_RESPONSE';
+  }
   finally{clearTimeout(timer);out.completed_at_ms=now();out.latency_ms=out.completed_at_ms-start;}
   return out;
 }
@@ -130,3 +137,4 @@ export async function parallelReview(shared,{openai={},deepseek={},now=Date.now,
   return {version:COUNTER_VERSION,snapshot_hash:shared.snapshot_hash,snapshot_at_ms:shared.snapshot_at_ms,
     gpt,counter,fusion,started_at_ms:started,completed_at_ms:completed,latency_ms:completed-started};
 }
+

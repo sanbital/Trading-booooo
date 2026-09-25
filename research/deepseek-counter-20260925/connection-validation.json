@@ -1,0 +1,132 @@
+{
+  "status": "AUTHENTICATED_AND_REPLAYED_NO_PRODUCTION_AUTHORITY",
+  "baseline_main": "2c62bc06a7a3eb3b053802e1dcf876158c0d8c51",
+  "secret_name": "deepseek api",
+  "sample_count": 122,
+  "unique_jobs": 122,
+  "stats": {
+    "gpt": {
+      "n": 122,
+      "valid": 113,
+      "errors": {
+        "FD_EV_SKIP_REQUIRES_DOWNSIDE_ABOVE_UPSIDE": 4,
+        "API_TIMEOUT": 1,
+        "RC_SKIP_PRICE_ONLY": 1,
+        "FD_HOLD_REQUIRES_TREND_FACT": 2,
+        "FD_HOLD_WITH_HARD_RISK:PREMIUM_EXTREME": 1
+      },
+      "latency": {
+        "p50": 1610,
+        "p95": 2206,
+        "p99": 4002
+      }
+    },
+    "deepseek-flash": {
+      "n": 122,
+      "valid": 120,
+      "errors": {
+        "COUNTER_SCHEMA_EXTRA": 1,
+        "COUNTER_SCHEMA_ENUM": 1
+      },
+      "latency": {
+        "p50": 1073,
+        "p95": 1393,
+        "p99": 1457
+      }
+    },
+    "deepseek-v4-pro": {
+      "n": 122,
+      "valid": 0,
+      "errors": {
+        "COUNTER_TIMEOUT": 122
+      },
+      "latency": {
+        "p50": 8001,
+        "p95": 8009,
+        "p99": 8010
+      }
+    }
+  },
+  "descriptive_recheck": {
+    "kind": "descriptive only, not OOS; 450-USDT scaled 600-USDT tracker proxy; no fill/capacity/latency simulation",
+    "labelled": 25,
+    "comparison": {
+      "historical_gpt": {
+        "n": 4,
+        "net": -31.183041245301,
+        "winRate": 0,
+        "profitFactor": 0,
+        "avgWinner": null,
+        "avgLoser": -7.79576031132525,
+        "worst": -11.7
+      },
+      "replayed_gpt": {
+        "n": 4,
+        "net": -31.183041245301,
+        "winRate": 0,
+        "profitFactor": 0,
+        "avgWinner": null,
+        "avgLoser": -7.79576031132525,
+        "worst": -11.7
+      },
+      "support_only": {
+        "n": 1,
+        "net": -11.7,
+        "winRate": 0,
+        "profitFactor": 0,
+        "avgWinner": null,
+        "avgLoser": -11.7,
+        "worst": -11.7
+      },
+      "rescue": {
+        "n": 4,
+        "net": -31.183041245301,
+        "winRate": 0,
+        "profitFactor": 0,
+        "avgWinner": null,
+        "avgLoser": -7.79576031132525,
+        "worst": -11.7
+      },
+      "veto": {
+        "n": 4,
+        "net": -31.183041245301,
+        "winRate": 0,
+        "profitFactor": 0,
+        "avgWinner": null,
+        "avgLoser": -7.79576031132525,
+        "worst": -11.7
+      }
+    }
+  },
+  "train": null,
+  "validation": {
+    "node_existing": 762,
+    "node_added": 9,
+    "operational_harness": 71,
+    "deno": 1055,
+    "endpoint_typecheck": "PASS",
+    "unauthenticated_replay_http": 401
+  },
+  "test": null,
+  "authority": [],
+  "first_parallel_call": {
+    "gpt_start": 1790322998188,
+    "gpt_end": 1790322999953,
+    "flash_start": 1790322998190,
+    "flash_end": 1790322999143,
+    "total_three_provider_ms": 8005,
+    "orderCalls": 0
+  },
+  "known_limitations": [
+    "Historical outcomes previously inspected: not untouched OOS",
+    "No calibrated confidence, task trust weights or frozen A-G model selection",
+    "No ENTRY full outcome join or HOLD counterfactual exit-sequence validation",
+    "No fills/capacity/latency trading simulation",
+    "Provider timeout token costs unavailable",
+    "No live executor deployment or exchange reconciliation"
+  ],
+  "sources": [
+    "https://api-docs.deepseek.com/guides/thinking_mode/",
+    "https://api-docs.deepseek.com/api/create-chat-completion/"
+  ]
+}

@@ -1,4 +1,8 @@
-# DeepSeek counter-model research — blocked, not a production release
+# DeepSeek counter-model research — not a production trading release
+
+Update: the credential blocker has been resolved and 122 live-network historical
+replays completed. See [connection results](CONNECTION-RESULTS.md) for current
+status. The report below is the original pre-credential audit, retained as history.
 
 2026-09-25. Baseline main: `a6e27077fd6e9e54576d31609048c6afc96bb3f6`.
 Production project: `etaajwpernzrcdrifdnw`.
@@ -145,3 +149,4 @@ fetch callbacks and a two-start barrier with monotonic timestamps. They prove
 overlapping call invocation and input equality in code, not production API
 latency. A malformed response, HTTP error, or timeout cannot promote the counter
 model to authority. Stops and trading safety are outside this module.
+
