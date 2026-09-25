@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {buildDecisionPacket,payloadFor,MODEL} from '../supabase/functions/_shared/gpt-final-decision/api.mjs';
 import {computeFacts} from '../supabase/functions/_shared/gpt-final-decision/facts.mjs';
 import {buildRecheckPacket,recheckPayload,validateRecheck} from '../supabase/functions/_shared/gpt-final-decision/recheck.mjs';
-import {sharedReview,callCounter,parallelReview,fuse,MODEL_CANDIDATES} from '../supabase/functions/_shared/gpt-final-decision/parallel.mjs';
+import {sharedReview,callCounter,collectParallelReview as parallelReview,fuse,MODEL_CANDIDATES} from '../supabase/functions/_shared/gpt-final-decision/parallel.mjs';
 import {src,T,entryWire} from '../development/gpt-final-decision/tests/fixtures.mjs';
 const facts=()=>computeFacts(src(T),{asOf:T,referenceClose:1.1,dayReturn:.2,rank:1});
 async function shared(task='ENTRY'){

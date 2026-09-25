@@ -1,0 +1,106 @@
+{
+  "status": "INSPECTED_DEVELOPMENT_NOT_OOS",
+  "authority": [],
+  "sources": {
+    "live-provider-replay.json": "79321d85b21d6ac3c9be1a7942a4356242cc2e60149c5906dd861d84b5026834",
+    "initial-provider-diagnostics.json": "bd5bf9554f0110104908058c8fb3e2c0837c8351f670ad002eccc1552538a75d",
+    "connection-recheck-outcomes.json": "babb877aa5f1c87de63b1bce3f813937e20efaa73414ccc0c9a0ffddddebac05",
+    "../deepseek-temporal-20260925/provider-results.json": "9da9a4db48a9b86471552b976e68b0e8c50c46f4886edd6d87297dd980d8bfbf",
+    "../deepseek-temporal-20260925/development-labels.json": "579a85a9c206d753dbaa6768cc9cdd34c76502f79d3d3ac3bbcf30232a9fdb4a"
+  },
+  "replay": {
+    "deepseek-flash": {
+      "n": 122,
+      "valid": 120,
+      "timeouts": 0,
+      "timeouts_by_task": {
+        "ENTRY": 0,
+        "HOLD": 0,
+        "RECHECK": 0
+      }
+    },
+    "deepseek-v4-pro": {
+      "n": 122,
+      "valid": 0,
+      "timeouts": 122,
+      "timeouts_by_task": {
+        "ENTRY": 76,
+        "HOLD": 19,
+        "RECHECK": 27
+      }
+    }
+  },
+  "diagnostics": {
+    "deepseek-flash": {
+      "n": 27,
+      "valid": 7,
+      "timeouts": 0,
+      "timeouts_by_task": {
+        "ENTRY": 0,
+        "HOLD": 0,
+        "RECHECK": 0
+      }
+    },
+    "deepseek-v4-pro": {
+      "n": 27,
+      "valid": 0,
+      "timeouts": 27,
+      "timeouts_by_task": {
+        "ENTRY": 19,
+        "HOLD": 5,
+        "RECHECK": 3
+      }
+    }
+  },
+  "recheck": {
+    "labelled": 25,
+    "buy_count": 4,
+    "buy_proxy": -31.183041245301,
+    "support_only": [
+      {
+        "symbol": "ONDOUSDT",
+        "gpt": "BUY",
+        "flash": "SUPPORT_BUY",
+        "proxy": -11.7
+      }
+    ],
+    "opposed_positive": [
+      {
+        "symbol": "XAIUSDT",
+        "gpt": "SKIP",
+        "flash": "OPPOSE_BUY",
+        "proxy": 90.893844627754
+      },
+      {
+        "symbol": "SAGAUSDT",
+        "gpt": "SKIP",
+        "flash": "OPPOSE_BUY",
+        "proxy": 34.7954495311638
+      }
+    ]
+  },
+  "temporal": {
+    "invalid": {
+      "A": 2,
+      "B": 6
+    },
+    "disagreement": {
+      "with_history": {
+        "n": 36,
+        "disagreements": 1
+      },
+      "without_history": {
+        "n": 75,
+        "disagreements": 15
+      }
+    },
+    "early_exits": [
+      {
+        "id": "H:PENGUUSDT:1790110020000@1790110439999",
+        "arm": "B",
+        "history_count": 0,
+        "incremental_proxy_usdt": 0.9337390794597695
+      }
+    ]
+  }
+}

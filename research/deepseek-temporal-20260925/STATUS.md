@@ -34,9 +34,11 @@ Recorded tokens imply approximately $0.1223 combined at documented peak Flash pr
 
 **Do not promote either arm to an entry gate or early-exit rule.** This is DEVELOPMENT only. The positive proxy is not realized profit or OOS improvement. Minute-bar labels use delayed execution and fixed stored stops, omit full profit-lock evolution, fills, capacity and added latency. The synthetic always-HOLD event generator can include review points unreachable under production policy. Winner retention is not established by one early exit.
 
-Trading safeguards, sizing, native stops, GPT fallback and order execution were not changed. The research-only parallelReview helper still needs a separate baseline-preserving deadline fix before live integration; this worker does not import it into trading.
+Trading safeguards, sizing, native stops, GPT fallback and order execution were not changed by this temporal experiment. External review reproduced a specific research-helper defect: parallelReview awaited both providers, then used their joint completion time to invalidate a timely GPT decision. A counter consuming its 200ms budget turned an immediate valid BUY into ABSTAIN/COUNTER_STALE at 202ms. The fixed helper settles baseline freshness and return time independently; only the explicitly offline collector waits for counter diagnostics. ENTRY/HOLD remain capped at 8s, RECHECK at 4s, and a supplied trigger expiry reserves 3000ms.
 
-No prospective experiment or automatic promotion is running. Full execution-aware replay and untouched chronological TEST evidence remain required. The original live-trading integration objective remains unmet.
+These statements describe the c2fd61e experiment. The later v89 release enabled a separate order-free DeepSeek observer; it does not call parallelReview and grants no counter authority. This external-review patch does not modify or redeploy the executor. See [external review](../deepseek-counter-20260925/EXTERNAL-REVIEW.md).
+
+The temporal experiment remains disabled with no automatic promotion. Full execution-aware replay and untouched chronological TEST evidence remain required before any DeepSeek decision authority. A/A and B/B repetition tooling is now available, but no new provider noise experiment has been executed and no historical prompt or outcome has been tuned.
 
 ## Reproduction
 

@@ -6,6 +6,8 @@ was read out, copied to a local file, or written to logs.
 
 ## Release decision
 
+Scope: this report records the c2fd61e-era research deployment, not the later v89 HOLD observer release. The external review and current prerequisites are recorded in [EXTERNAL-REVIEW.md](EXTERNAL-REVIEW.md).
+
 **Connection and research deployment complete; trading authority remains ungranted.**
 This is not a completed production trading integration or an OOS improvement claim.
 
@@ -85,6 +87,14 @@ Remaining: untouched chronological OOS selection/calibration, ENTRY and HOLD
 exit-path evaluation, validated task-specific fusion, audit migration and executor
 integration if evidence supports them, and deployment/order-linkage/exchange
 reconciliation. Credential absence is no longer the blocker.
+
+## External-review correction: baseline deadline ownership
+
+Confirmed defect in the research helper: parallelReview used Promise.allSettled and evaluated freshness after both providers finished. With a real advancing clock, immediate GPT BUY and a 200ms counter timeout produced ABSTAIN/COUNTER_STALE at 202ms. Earlier fixed-clock tests masked the defect. The 122-provider replay directly calls the providers rather than this helper, so this bug does not retroactively change that saved dataset. The later production HOLD observer also does not call this helper.
+
+The patch separates startParallelReview.baseline and .counter, makes parallelReview return on GPT completion, and confines joint waiting to collectParallelReview for offline diagnostics. Freshness uses the locally observed GPT completion plus its reported timestamp, never the later counter finish. Late/invalid GPT still abstains; late counter results are discarded and cannot mutate a returned decision. Task caps are ENTRY/HOLD 8000ms and RECHECK 4000ms, intersected with snapshot expiry and any trigger expiry minus 3000ms. Consumers must still revalidate at order dispatch; an offline collected decision is not an executable ticket.
+
+Pro remains available only as an explicitly marked research candidate (122/122 timeouts, plus 27/27 separate diagnostics). It is excluded from REALTIME_MODEL_CANDIDATES and rejected by the baseline-first coordinator without allowResearchOnly=true. Its full completion latency is unknown; the dataset establishes failure under these caps, not universal model unusability.
 
 Official sources checked:
 - https://api-docs.deepseek.com/api/create-chat-completion/
