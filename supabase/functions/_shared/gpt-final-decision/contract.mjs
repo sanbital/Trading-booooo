@@ -15,6 +15,8 @@ export const ENTRY_TASK='ENTRY',HOLD_TASK='HOLD';
 export const DECISIONS=Object.freeze({ENTRY:['BUY','SKIP','ABSTAIN'],HOLD:['HOLD','EXIT','ABSTAIN']});
 const f=(m,k)=>m[k];
 const has=(m,...ks)=>ks.every(k=>m[k]!==null&&m[k]!==undefined&&Number.isFinite(m[k]));
+/** SETUP_POLICY.maxChasePct of leader-pullback-reaccel.mjs (pinned equal by a test). */
+export const CHASE_CEILING=0.01;
 /** Categories: facts GPT may cite, SOFT band (reason valid), HARD band (deterministic block). */
 export const CATEGORIES=Object.freeze({
   MOMENTUM_FADED:{tasks:['ENTRY','HOLD'],facts:['return_5m','return_15m','accel_5m_vs_15m','return_1m'],need:['return_5m','return_15m'],
@@ -54,6 +56,14 @@ export const CATEGORIES=Object.freeze({
     text:'soft: book_imbalance_25bps<=-0.45; HARD: <=-0.75 (NEGATIVE = sellers dominate)'},
   FILL_WORSE:{tasks:['ENTRY'],facts:['est_buy_slippage_bps'],need:['est_buy_slippage_bps'],
     soft:m=>f(m,'est_buy_slippage_bps')>=8,hard:m=>f(m,'est_buy_slippage_bps')>=25,text:'soft>=8 bps, HARD>=25 bps'},
+  // Late entry (2026-09-25). The V17 setup buys within its 1% chase ceiling of the signal
+  // reference (SETUP_POLICY.maxChasePct); above it the reference-anchored stop geometry is
+  // worse. A LIVE_MOMENTUM_CHASE candidate is above it by construction, so GPT may always
+  // SKIP a chase for lateness while BUY stays possible. It applies only to a packet that
+  // carries chase context (when:), so an ordinary trigger's categories are unchanged, and
+  // recheck:false keeps the protected FINAL RECHECK category set unchanged.
+  CHASE_EXTENDED:{tasks:['ENTRY'],recheck:false,when:p=>!!p?.chase,facts:['distance_trigger_reference','distance_high_60m','return_5m'],need:['distance_trigger_reference'],
+    soft:m=>f(m,'distance_trigger_reference')>CHASE_CEILING,hard:()=>false,text:'distance_trigger_reference>0.01 (above the V17 1% chase ceiling)'},
   DATA_INCOMPLETE:{tasks:['ENTRY','HOLD'],facts:[],need:[],soft:()=>false,hard:()=>false,text:'candles (and, live, the order book) must be complete'}
 });
 export const CATEGORY_IDS=Object.freeze(Object.keys(CATEGORIES));
@@ -78,6 +88,23 @@ export const TREND_SUPPORT=Object.freeze(['return_1m','return_5m','return_15m','
   'distance_sma20','distance_trigger_reference','distance_high_60m','taker_buy_ratio_5m','taker_buy_ratio_15m','relative_strength_15m','relative_strength_60m',
   'position_drawdown_from_peak','position_minutes_since_new_high']);
 export const DATA_MODES=Object.freeze(['LIVE','REPLAY']);
+/** Structured expected-value reasoning on ENTRY (2026-09-25). Written BEFORE the decision
+ * (schema order), recorded with the answer, and never used as a gate: confidence and the
+ * EV fields cannot block a BUY. Only an ABSTAIN must say which of the four reasons applies. */
+export const EV_BIASES=Object.freeze(['POSITIVE','NEUTRAL','NEGATIVE','UNDETERMINED']);
+export const ABSTAIN_REASONS=Object.freeze(['NONE','DATA_INSUFFICIENT','EVIDENCE_CONFLICT_SEVERE','EV_UNDETERMINABLE','EXECUTION_UNSAFE']);
+/** SKIP by expected value when no risk category is breached. Legitimate only with >=2
+ * server-verified bearish facts (>=1 price/flow fact) and GPT's own NEGATIVE EV with
+ * downside > upside: the mirror of BUY's >=2 verified up-facts rule. */
+export const EV_SKIP='EV_UNFAVORABLE';
+/** A fact is bearish evidence exactly when it fails its published SUPPORT_UP direction (the
+ * complement), so no new threshold is introduced and "already rose / near a high /
+ * volatile" can never be cited: a rising return is not bearish. */
+export const BEARISH=Object.freeze(Object.fromEntries(Object.keys(SUPPORT_UP).filter(k=>!POSITION_KEYS.includes(k))
+  .map(k=>[k,v=>SUPPORT_UP[k](v)===false])));
+export const BEARISH_TEXT=Object.freeze(Object.fromEntries(Object.entries(UP).filter(([k])=>!POSITION_KEYS.includes(k))
+  .map(([k,[op,t]])=>[k,k+({'>':'<=','>=':'<','<':'>=','<=':'>'}[op])+t])));
+const ENTRY_FACTS=FACT_KEYS.filter(k=>!POSITION_KEYS.includes(k));
 
 /** Deterministic, model-independent risk state of one snapshot. */
 export function riskFlags(packet){
@@ -85,6 +112,7 @@ export function riskFlags(packet){
   for(const id of categoriesFor(task)){
     if(id==='DATA_INCOMPLETE')continue;
     const c=CATEGORIES[id],micro=c.facts.some(k=>MICRO_KEYS.includes(k));
+    if(c.when&&!c.when(packet))continue;
     let level;
     if(!c.need.every(k=>has(m,k)))level='UNKNOWN';
     else{try{level=c.hard(m)===true?'HARD':c.soft(m)===true?'SOFT':'CLEAR';}catch{level='UNKNOWN';}}
@@ -103,15 +131,25 @@ const citeable=task=>FACT_KEYS.filter(k=>task==='HOLD'||!POSITION_KEYS.includes(
  * support, and SKIP/EXIT is not offered when no category is breached. The server still
  * re-validates every answer against the same packet. */
 export function wireSchema(task,packet=null){
-  const risk=packet?riskFlags(packet):null,m=packet?.facts?.values;
+  const risk=packet?riskFlags(packet):null,m=packet?.facts?.values,entry=task==='ENTRY';
   const cats=risk?categoriesFor(task).filter(k=>['SOFT','HARD'].includes(risk.flags[k]?.level)):categoriesFor(task);
-  const catFacts=[...new Set(cats.flatMap(k=>CATEGORIES[k].facts))].filter(k=>!m||has(m,k));
+  // ENTRY only: the facts that fail their up-direction now, and whether EV_UNFAVORABLE can be cited.
+  const bear=entry?Object.keys(BEARISH).filter(k=>!m||(has(m,k)&&BEARISH[k](m[k])===true)):[];
+  const evSkip=entry&&(!m||(bear.length>=2&&bear.some(k=>TREND_SUPPORT.includes(k))));
+  const reasonIds=[...cats,...(evSkip?[EV_SKIP]:[])];
+  const catFacts=[...new Set([...cats.flatMap(k=>CATEGORIES[k].facts),...(evSkip?bear:[])])].filter(k=>!m||has(m,k));
   const up=Object.keys(SUPPORT_UP).filter(k=>(task==='HOLD'||!POSITION_KEYS.includes(k))&&(!m||(has(m,k)&&SUPPORT_UP[k](m[k])===true)));
-  const decisions=cats.length?DECISIONS[task]:DECISIONS[task].filter(d=>d!=='SKIP'&&d!=='EXIT');
-  const reasonItem=obj({r:{type:'string',enum:cats.length?cats:['DATA_INCOMPLETE']},e:{type:'array',maxItems:4,items:{type:'string',enum:catFacts.length?catFacts:['return_5m']}}});
-  return obj({t:{type:'string',enum:[task]},c:{type:'string',minLength:1,maxLength:80},d:{type:'string',enum:decisions},
-    reasons:{type:'array',maxItems:cats.length?4:0,items:reasonItem},
-    support:{type:'array',maxItems:6,items:{type:'string',enum:up.length?up:['return_5m']}},n:{type:'string',minLength:1,maxLength:200}});
+  const decisions=reasonIds.length?DECISIONS[task]:DECISIONS[task].filter(d=>d!=='SKIP'&&d!=='EXIT');
+  const reasonItem=obj({r:{type:'string',enum:reasonIds.length?reasonIds:['DATA_INCOMPLETE']},e:{type:'array',maxItems:4,items:{type:'string',enum:catFacts.length?catFacts:['return_5m']}}});
+  const t={type:'string',enum:[task]},c={type:'string',minLength:1,maxLength:80},d={type:'string',enum:decisions},
+    reasons={type:'array',maxItems:reasonIds.length?4:0,items:reasonItem},
+    support={type:'array',maxItems:6,items:{type:'string',enum:up.length?up:['return_5m']}},n={type:'string',minLength:1,maxLength:200};
+  if(!entry)return obj({t,c,d,reasons,support,n});
+  // Evidence first, decision after: the property order is the generation order.
+  return obj({t,c,support,bearish:{type:'array',maxItems:6,items:{type:'string',enum:bear.length?bear:['return_5m']}},
+    invalidation:{type:'array',maxItems:3,items:obj({fact:{type:'string',enum:ENTRY_FACTS},op:{type:'string',enum:['BELOW','ABOVE']},value:{type:'number'}})},
+    upside_pct:{type:'number'},downside_pct:{type:'number'},ev:{type:'string',enum:EV_BIASES},confidence:{type:'number'},
+    d,abstain_reason:{type:'string',enum:ABSTAIN_REASONS},reasons,n});
 }
 function ensure(ok,reason){if(!ok)throw Error(reason);}
 export function validateShape(v,s,p='$'){
@@ -124,11 +162,17 @@ export function validateShape(v,s,p='$'){
 }
 /** Server-side validation. Returns the canonical answer or throws FD_* reasons. */
 export function validateDecision(wire,packet){
-  const task=packet.task;validateShape(wire,wireSchema(task));
+  const task=packet.task,entry=task==='ENTRY';validateShape(wire,wireSchema(task));
   ensure(wire.c===packet.candidate_id,'FD_IDENTITY_MISMATCH');
   ensure(!/[0-9]/.test(wire.n),'FD_NUMERICAL_SUMMARY');
   const m=packet.facts.values,risk=riskFlags(packet),cite=k=>{ensure(has(m,k),'FD_CITED_FACT_MISSING:'+k);return {key:k,value:m[k],unit:FACT_DEFS[k][1]};};
+  const isBear=k=>Object.hasOwn(BEARISH,k)&&has(m,k)&&BEARISH[k](m[k])===true;
   const reasons=wire.reasons.map(x=>{
+    if(entry&&x.r===EV_SKIP){
+      ensure(new Set(x.e).size===x.e.length&&x.e.length>=2&&x.e.every(isBear),'FD_EV_SKIP_REQUIRES_BEARISH_FACTS');
+      ensure(x.e.some(k=>TREND_SUPPORT.includes(k)),'FD_EV_SKIP_REQUIRES_TREND_FACT');
+      return {category:EV_SKIP,level:'EV',evidence:x.e.map(cite)};
+    }
     const c=CATEGORIES[x.r],flag=risk.flags[x.r];
     ensure(flag&&(flag.level==='SOFT'||flag.level==='HARD'),'FD_REASON_NOT_PRESENT:'+x.r);
     if(x.r!=='DATA_INCOMPLETE'){ensure(x.e.length>0&&x.e.every(k=>c.facts.includes(k)),'FD_REASON_EVIDENCE_OUTSIDE:'+x.r);}
@@ -148,5 +192,24 @@ export function validateDecision(wire,packet){
     ensure(support.some(e=>TREND_SUPPORT.includes(e.key)),'FD_'+d+'_REQUIRES_TREND_FACT');
   }
   if(d==='SKIP'||d==='EXIT')ensure(reasons.length>0,'FD_'+d+'_REQUIRES_CATEGORY');
-  return {version:FD_VERSION,task,decision:d,reasons,support,rejected_support,summary:wire.n,risk_hard:risk.hard,risk_soft:risk.soft};
+  const out={version:FD_VERSION,task,decision:d,reasons,support,rejected_support,summary:wire.n,risk_hard:risk.hard,risk_soft:risk.soft};
+  if(!entry)return out;
+  // EV evidence. Recorded, never a gate: an inconsistency on BUY is flagged, not refused.
+  ensure(new Set(wire.bearish).size===wire.bearish.length,'FD_DUPLICATE_BEARISH');
+  const bearish=[],rejected_bearish=[];
+  for(const k of wire.bearish){ensure(Object.hasOwn(BEARISH,k),'FD_BEARISH_NOT_ALLOWED:'+k);if(isBear(k))bearish.push(cite(k));else rejected_bearish.push(k);}
+  const up=wire.upside_pct,down=wire.downside_pct,conf=wire.confidence,ev=wire.ev,flags=[];
+  if(!(up>=0&&up<=100))flags.push('UPSIDE_OUT_OF_RANGE');if(!(down>=0&&down<=100))flags.push('DOWNSIDE_OUT_OF_RANGE');
+  if(!(conf>=0&&conf<=1))flags.push('CONFIDENCE_OUT_OF_RANGE');
+  if(d==='BUY'&&ev==='NEGATIVE')flags.push('BUY_WITH_NEGATIVE_EV');
+  if(d==='BUY'&&down>up)flags.push('BUY_WITH_DOWNSIDE_ABOVE_UPSIDE');
+  if(d==='SKIP'&&ev==='POSITIVE')flags.push('SKIP_WITH_POSITIVE_EV');
+  if(d!=='ABSTAIN'&&wire.abstain_reason!=='NONE')flags.push('ABSTAIN_REASON_ON_'+d);
+  if(d==='ABSTAIN')ensure(wire.abstain_reason!=='NONE','FD_ABSTAIN_REQUIRES_REASON');
+  if(d==='SKIP'&&reasons.some(r=>r.category===EV_SKIP)){
+    ensure(ev==='NEGATIVE','FD_EV_SKIP_REQUIRES_NEGATIVE_EV');ensure(down>up,'FD_EV_SKIP_REQUIRES_DOWNSIDE_ABOVE_UPSIDE');}
+  return {...out,bullish_evidence:support.map(e=>e.key),bearish_evidence:bearish,rejected_bearish,
+    invalidation_conditions:wire.invalidation.map(x=>({fact:x.fact,op:x.op,value:x.value})),
+    expected_upside_pct:up,expected_downside_pct:down,expected_value_bias:ev,confidence:conf,
+    abstain_reason:d==='ABSTAIN'?wire.abstain_reason:'NONE',consistency_flags:flags};
 }

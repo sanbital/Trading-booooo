@@ -86,3 +86,28 @@ test('review purpose is part of the job binding (no cross-purpose reuse)',async(
   await completed(a);await completed(b);assert.equal(requests.length,2);assert.equal(store.rows.size,2);
   assert.notEqual(await a.binding,await b.binding);
 });
+
+test('follow-up cycle: one extra ordinary cycle after an entry, only when armed and early enough',async()=>{
+  const stub=(armed=true,now=()=>0)=>({config:{mode:'ENFORCE'},now,waitReady:()=>{throw Error('must not wait')}});
+  const entered={ok:true,entry:{entered:true,remainingGptBuys:1,followUpArmed:true}};
+  let db={},runs=0;setTestCoordinator(db,stub());
+  let out=await runWithGptReview(db,async()=>{runs++;return runs===1?entered:{ok:true,entry:{entered:false,reason:'X'}};});
+  assert.equal(runs,2,'one follow-up cycle');assert.equal(out.gptFinalReview.followUp,true);
+  db={};runs=0;setTestCoordinator(db,stub());
+  await runWithGptReview(db,async()=>{runs++;return entered;});
+  assert.equal(runs,2,'never more than one follow-up, even if it enters again');
+  db={};runs=0;setTestCoordinator(db,stub());
+  await runWithGptReview(db,async()=>{runs++;return {ok:true,entry:{entered:true,remainingGptBuys:2,followUpArmed:false}};});
+  assert.equal(runs,1,'not armed: no follow-up');
+  let t=0;db={};runs=0;setTestCoordinator(db,stub(true,()=>t));
+  await runWithGptReview(db,async()=>{runs++;t+=31000;return entered;});
+  assert.equal(runs,1,'too late in the invocation: no follow-up');
+  db={};runs=0;setTestCoordinator(db,{config:{mode:'SHADOW'},now:()=>0});
+  await runWithGptReview(db,async()=>{runs++;return entered;});assert.equal(runs,1,'only in ENFORCE');
+  db={};runs=0;setTestCoordinator(db,stub());
+  await runWithGptReview(db,async()=>{runs++;return entered;},{agedRecheck:true,followUp:false});
+  assert.equal(runs,1,'FD1_ENTRY_FOLLOW_UP=false restores one cycle');
+  const {recoverySwitches}=await import('../../../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs');
+  assert.deepEqual(recoverySwitches(()=>''),{agedRecheck:true,followUp:true});
+  assert.deepEqual(recoverySwitches(k=>k==='FD1_AGED_BUY_RECHECK'||k==='FD1_ENTRY_FOLLOW_UP'?'false':''),{agedRecheck:false,followUp:false});
+});

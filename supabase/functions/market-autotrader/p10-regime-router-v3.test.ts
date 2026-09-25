@@ -7,7 +7,7 @@ const MIGRATION = new URL(
 );
 
 Deno.test("regime router v3 preserves five explicit lanes without promoting rejected V5 edges", async () => {
-  const sql = (await Deno.readTextFile(MIGRATION)).replace(/\r\n/g,"\n");
+  const sql = (await Deno.readTextFile(MIGRATION)).replace(/\r\n/g, "\n");
 
   for (
     const state of [
@@ -36,7 +36,7 @@ Deno.test("regime router v3 preserves five explicit lanes without promoting reje
 });
 
 Deno.test("regime router v3 never invents market tactical confirmation from the global observer", async () => {
-  const sql = (await Deno.readTextFile(MIGRATION)).replace(/\r\n/g,"\n");
+  const sql = (await Deno.readTextFile(MIGRATION)).replace(/\r\n/g, "\n");
 
   assert(sql.includes("v_state text := 'NO_TRADE'"));
   assert(sql.includes("v_candidate_state := 'RANGE_UP_CYCLE'"));
@@ -49,7 +49,7 @@ Deno.test("regime router v3 never invents market tactical confirmation from the 
 });
 
 Deno.test("regime router v3 keeps lineage append-only and internal RPCs service-role only", async () => {
-  const sql = (await Deno.readTextFile(MIGRATION)).replace(/\r\n/g,"\n");
+  const sql = (await Deno.readTextFile(MIGRATION)).replace(/\r\n/g, "\n");
 
   assert(sql.includes("is append-only; insert a new router revision instead"));
   assert(sql.includes("before truncate on public.p10_regime_router_validations"));
@@ -82,7 +82,7 @@ Deno.test("regime router v3 keeps lineage append-only and internal RPCs service-
 });
 
 Deno.test("claim v3 passes market-time evidence and preserves BULL-only fail semantics", async () => {
-  const sql = (await Deno.readTextFile(MIGRATION)).replace(/\r\n/g,"\n");
+  const sql = (await Deno.readTextFile(MIGRATION)).replace(/\r\n/g, "\n");
 
   assert(sql.includes("public.resolve_p10_production_regime_route_v3(\n      p_market,"));
   assert(sql.includes("p_signal_time,"));

@@ -8,6 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import {managerBindings} from '../current-manager-bindings.mjs';
 import {readFileSync} from 'node:fs';
 import {POLICY} from '../../supabase/functions/_shared/leader-momentum-v17.mjs';
 import {nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5}
@@ -35,7 +36,7 @@ function make({quoteResults, budget = 3}) {
     closePos: async () => ({closed: true}),
     audit: async () => {},
   };
-  ctx.classifyFailure=()=>({fatal:false});vm.createContext(ctx);
+  Object.assign(ctx,managerBindings);ctx.classifyFailure=()=>({fatal:false});vm.createContext(ctx);
   vm.runInContext(code + ';this.manage=manageLeader;', ctx);
   const p = {id: 'p', symbol: 'FORMUSDT', entry_price: 100, original_quantity: 1, entry_fee_usdt: .05,
     peak_price: 100, hard_stop_price: 97.5, entry_at: new Date(now - 60000).toISOString(), metadata: {}};

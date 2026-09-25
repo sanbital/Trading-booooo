@@ -9,7 +9,7 @@ test('closed V17 and pending entry symbols remain collectable when portfolio and
 });
 
 function fakeDb(rows,failTable=null){const reads=[];return {reads,from(table){return {
-  select(columns){assert.equal(columns,'id,symbol');return this;},
+  select(columns){assert.equal(columns,table==='v11_long_regime_positions'?'id,symbol,state,closed_at':'id,symbol,state,updated_at');return this;},
   order(key,{ascending}){assert.equal(key,'id');assert.equal(ascending,true);return this;},
   async range(start,end){reads.push({table,start,end});return table===failTable?{error:{message:'READ_FAILED'},data:null}:{error:null,data:rows[table].slice(start,end+1)};},
 };}};}

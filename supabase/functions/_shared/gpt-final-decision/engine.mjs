@@ -8,17 +8,24 @@ import {buildDecisionPacket,callDecision,hash,MODEL,payloadFor,PRICING} from './
 import {validateDecision,FD_VERSION,wireSchema} from './contract.mjs';
 import {PROMPTS} from './prompt.mjs';
 import {bookReference} from './recheck.mjs';
+import {LIVE_CHASE_MODE,chaseContext} from '../leader-live-chase.mjs';
 const num=x=>x!==null&&x!==undefined&&Number.isFinite(Number(x))?Number(x):null;
-/** Immutable decision identity: the trigger and the evidence GPT is shown. */
+/** Immutable decision identity: the trigger and the evidence GPT is shown. A LIVE chase
+ * trigger also binds its chase classification; an ordinary trigger's identity is unchanged. */
 export function fd1EntryIdentity(s){
   const f=s?.features??{},t=f.v17Setup??{};
+  const chase=t.triggerMode===LIVE_CHASE_MODE&&t.chase?JSON.parse(JSON.stringify(t.chase)):null;
   return {signal_id:String(s?.id??''),symbol:String(s?.symbol??'').toUpperCase(),trigger_at_ms:num(t.triggerAt),
     reference_close:num(f.referenceClose),day_return:num(f.dayReturn),rank:num(f.rank),judgments:modelJudgments(f),
-    exit_policy:JSON.parse(JSON.stringify(f.exitPolicy??{}))};
+    exit_policy:JSON.parse(JSON.stringify(f.exitPolicy??{})),...(chase?{chase}:{})};
 }
 export const FD1_ENTRY_ENGINE=Object.freeze({
   id:FD_VERSION+':ENTRY',
   allow:'BUY',
+  // An initial BUY that aged past its answer validity while its trigger is still live is
+  // not dropped: it may enter the order path only to be re-decided by a forced GPT FINAL
+  // RECHECK on fresh data (never dispatched on the aged answer). See coordinator.check().
+  agedRecheck:true,
   model:MODEL,
   promptText:PROMPTS.ENTRY,
   schema:wireSchema('ENTRY'),
@@ -27,7 +34,8 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
     const asOf=now(),{src,errors}=await readSources(identity.symbol,asOf,{mode:'LIVE',fetchFn,ms:Math.max(200,Math.min(2500,deadlineMs-asOf))});
     const captured=now();
     const facts=computeFacts(src,{asOf:captured,referenceClose:identity.reference_close,dayReturn:identity.day_return,rank:identity.rank});
-    const packet=await buildDecisionPacket({task:'ENTRY',subjectId:identity.signal_id,symbol:identity.symbol,dataMode:'LIVE',facts,judgments:identity.judgments});
+    const chase=identity.chase?chaseContext(identity.chase,facts,{referencePrice:identity.reference_close,stopPct:identity.exit_policy?.stopPct}):null;
+    const packet=await buildDecisionPacket({task:'ENTRY',subjectId:identity.signal_id,symbol:identity.symbol,dataMode:'LIVE',facts,judgments:identity.judgments,chase});
     packet.as_of_offset_ms=captured-identity.trigger_at_ms;packet.source_errors=errors;
     // FINAL RECHECK reference: the book price this BUY was judged on. Stored in the hashed
     // packet (not shown to GPT) so the pre-dispatch change detector compares like with like.

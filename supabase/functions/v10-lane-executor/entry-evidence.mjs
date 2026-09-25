@@ -1,4 +1,5 @@
 /** Pure boundary adapters. Missing evidence is never converted into approval. */
+import {LIVE_CHASE_MODE,liveChaseTimingValid} from '../_shared/leader-live-chase.mjs';
 const number = (value) => typeof value === 'number' ||
   (typeof value === 'string' && value.trim() !== '') ? Number(value) : NaN;
 const stamp = (value) => Number.isSafeInteger(number(value)) && number(value) > 0;
@@ -41,8 +42,11 @@ export function entryExecutionWindow(row, governed, legacyTtlMs, policy) {
   if (!s || s.policyVersion !== policy.version || s.state !== 'TRIGGERED')
     return invalid('V17_SETUP_NOT_TRIGGERED');
   const symbol = String(row.symbol ?? '').toUpperCase();
-  const continuation=s.triggerMode==='CONTINUATION_NO_PULLBACK';
+  const continuation=s.triggerMode==='CONTINUATION_NO_PULLBACK',chase=s.triggerMode===LIVE_CHASE_MODE;
+  // A LIVE momentum chase (2026-09-25) proves its own provenance: the chase bar the frozen
+  // state machine recorded, the same bar in the selector's prebars, CHASE_EXPIRED then TRIGGERED.
   const timingValid=continuation?continuationTimingValid(row,policy):
+    chase?liveChaseTimingValid(row,policy):
     s.triggerMode==null && s.pullbackObserved===true;
   if (!row.id || !symbol || s.signalId !== row.id || s.symbol !== symbol ||
       s.identity !== `${policy.version}:${symbol}:${row.id}:${close}` ||
@@ -54,7 +58,7 @@ export function entryExecutionWindow(row, governed, legacyTtlMs, policy) {
       number(s.triggerAt) <= close || number(s.triggerAt) > number(s.expiresAt) ||
       !timingValid || !(number(s.triggerClose)>0))
     return invalid('V17_SETUP_INVALID_PRICE');
-  return {valid:true, basis:continuation?'CONTINUATION_TRIGGER':'PULLBACK_TRIGGER', featureAsOf:close,
+  return {valid:true, basis:continuation?'CONTINUATION_TRIGGER':chase?'LIVE_CHASE_TRIGGER':'PULLBACK_TRIGGER', featureAsOf:close,
     startsAt:number(s.triggerAt),
     expiresAt:Math.min(number(s.expiresAt),number(s.triggerExpiresAt))};
 }
