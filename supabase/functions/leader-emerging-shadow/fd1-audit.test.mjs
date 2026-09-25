@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {runFd1Audit,fd1Packet,FD1_SQL} from './fd1-audit.mjs';
+import {runFd1Audit,fd1Packet,allowedEvidence,FD1_SQL} from './fd1-audit.mjs';
 import {MODEL} from './v2/contract.mjs';
 
 const at=Date.parse('2026-09-25T06:40:00Z');
@@ -25,6 +25,9 @@ test('both tasks are independent research records without exposing the productio
     assert.equal(url,'https://api.openai.com/v1/responses');
     const packet=JSON.parse(opt.body).input[1].content;
     asks.push(JSON.parse(packet));
+    const schema=JSON.parse(opt.body).text.format.schema;
+    assert.ok(schema.properties.e.items.enum.includes('position_return'));
+    assert.ok(asks.at(-1).evidence_keys.includes('position_return'));
     const hold=asks.length===2;
     return response({decision:hold?'EXIT_ENTRY_FAILURE':'WAIT_RECHECK',trend_valid:true,entry_valid:false,micro_only:!hold,
       e:hold?['position_return','position_peak_return','taker_buy_ratio_5m']:['change.price_change','initial_facts.return_15m','nonexistent_metric'],reason:'Test'});
@@ -47,4 +50,5 @@ test('production quota stands down without a claim or GPT request',async()=>{
 test('packet excludes production judgment and future fields',()=>{
   const packet=fd1Packet({...review('HOLD','x'),packet:{...review('HOLD','x').packet,answer:{decision:'HOLD'},outcome:{pnl:100}}});
   assert.equal(packet.answer,undefined);assert.equal(packet.outcome,undefined);assert.equal(packet.position_stage,'INITIAL');
+  assert.ok(allowedEvidence(packet).includes('position_peak_return'));
 });
