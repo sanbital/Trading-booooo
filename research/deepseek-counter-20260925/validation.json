@@ -1,0 +1,33 @@
+{
+  "status": "RESEARCH_BLOCKED_MISSING_DEEPSEEK_CREDENTIAL",
+  "baseline_main": "a6e27077fd6e9e54576d31609048c6afc96bb3f6",
+  "node_full_regression": {"passed": 761, "failed": 0},
+  "node_parallel_final": {"passed": 18, "failed": 0, "included_in_full_run": 17, "added_offline_packet_test_after_full_run": 1},
+  "node_operational_harness": {"passed": 71, "failed": 0},
+  "deno_task_test": {"passed": 1055, "steps": 13, "failed": 0},
+  "deno_version": "2.5.6",
+  "pglite_version": "0.3.14",
+  "executor_and_signal_generator_typecheck": "PASS",
+  "node_syntax_check": "PASS",
+  "checkout_note": "CRLF caused two source-text assertions to fail. Normalizing working-tree code to LF without Git content changes resolved both; suites were rerun.",
+  "saved_packets_offline_preparation": {"passed": 122, "failed": 0},
+  "api_calls_live": 0,
+  "oos_comparison": "NOT_RUN",
+  "train_metrics": null,
+  "validation_metrics": null,
+  "test_metrics": null,
+  "authority": [],
+  "migration_applied": false,
+  "production_deployment_by_this_task": false,
+  "existing_executor": {
+    "version": 87,
+    "status": "ACTIVE",
+    "bundle_sha256": "753aae6b3e65b6b064085b95d287b8c18ba500b4be1c642eb7d3527800643ace"
+  },
+  "parallel_evidence_kind": "controlled fetch callbacks, not external network",
+  "parallel_final_test_monotonic_ms": {
+    "ENTRY": {"gpt_start": 133.0758, "deepseek_start": 133.8028, "first_callback_end": 133.89},
+    "HOLD": {"gpt_start": 167.0192, "deepseek_start": 167.2055, "first_callback_end": 167.2637},
+    "RECHECK": {"gpt_start": 174.228, "deepseek_start": 174.4567, "first_callback_end": 174.5208}
+  }
+}
