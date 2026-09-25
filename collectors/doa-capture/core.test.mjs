@@ -1,6 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {Book,Flow,WeightBudget,vwap,inWindow} from './core.mjs';
+import {Book,Flow,WeightBudget,vwap,inWindow,streamURLs} from './core.mjs';
+test('Binance public book and market trade/kline routes are separated',()=>{const u=streamURLs('BTCUSDT');assert.equal(new URL(u.book).pathname,'/public/stream');assert.equal(new URL(u.market).pathname,'/market/stream');assert.equal(new URL(u.market).searchParams.get('streams'),'btcusdt@aggTrade/btcusdt@kline_1m/btcusdt@forceOrder');});
+test('bounded pre-snapshot buffer discards old events without declaring continuity',()=>{const b=new Book();for(let i=1;i<=300;i++)b.event({U:i,u:i,pu:i-1,b:[],a:[],E:i},i);assert.equal(b.buffer.length,200);assert.equal(b.ready,false);assert.throws(()=>b.snapshot(snap),/GAP/);});
 const snap={lastUpdateId:10,bids:[[99,10],[98,10]],asks:[[101,10],[102,10]]};
 const event=(u,pu=10)=>({U:u,u,pu,b:[],a:[],E:1000});
 test('snapshot is unusable until bridging event; loss of sequence rejects',()=>{const b=new Book();b.snapshot(snap);assert.equal(b.metrics(1000).book_complete,false);b.event({...event(11),U:10},1000);assert.equal(b.metrics(1000).book_complete,true);assert.throws(()=>b.event(event(14,12),1100),/GAP/);});

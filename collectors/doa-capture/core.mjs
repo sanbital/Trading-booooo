@@ -1,5 +1,10 @@
-export const VERSION = 'DOA-CAPTURE-1';
+export const VERSION = 'DOA-CAPTURE-1.1';
 export const iso = n => new Date(n).toISOString();
+export function streamURLs(symbol){
+  const s=symbol.toLowerCase();
+  return {book:'wss://fstream.binance.com/public/stream?streams='+s+'@depth@100ms',
+    market:'wss://fstream.binance.com/market/stream?streams='+['aggTrade','kline_1m','forceOrder'].map(x=>s+'@'+x).join('/')};
+}
 export class Book {
   constructor() { this.reset(); }
   reset() { this.bids=new Map(); this.asks=new Map(); this.last=null; this.ready=false; this.buffer=[]; this.at=0; this.add=0; this.remove=0; this.received=0; this.syncAt=Infinity; }
@@ -11,7 +16,8 @@ export class Book {
     for (const [e,t] of pending) this.event(e,t);
   }
   event(e,t) {
-    if (this.last===null) { if(this.buffer.length>=1000) throw Error('DEPTH_BUFFER_CAP'); this.buffer.push([e,t]); return; }
+    // Before snapshot, retain only the latest20s; a missing bridge still fails closed.
+    if (this.last===null) { if(this.buffer.length>=200)this.buffer.shift(); this.buffer.push([e,t]); return; }
     if (+e.u<this.last || (this.ready && +e.u===this.last)) return;
     if ((!this.ready && !(+e.U<=this.last && +e.u>=this.last)) || (this.ready && +e.pu!==this.last)) throw Error('DEPTH_GAP');
     for(const [side,rows] of [[this.bids,e.b],[this.asks,e.a]]) for(const [p0,q0] of rows) {

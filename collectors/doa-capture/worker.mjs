@@ -1,4 +1,4 @@
-import {Book,Flow,WeightBudget,VERSION,iso,inWindow} from './core.mjs';
+import {Book,Flow,WeightBudget,VERSION,iso,inWindow,streamURLs} from './core.mjs';
 import {randomUUID} from 'node:crypto';
 const endpoint=process.env.CAPTURE_ENDPOINT;
 const token=process.env.CAPTURE_TOKEN;
@@ -22,31 +22,36 @@ async function publicGet(path,weight){
 }
 function enqueue(row){const key=row.kind+':'+row.symbol+':'+row.at;if(seen.has(key))return;seen.set(key,Date.now());queue.set(key,row);if(queue.size>1200)throw Error('PERSIST_QUEUE_CAP');}
 function connect(symbol,candles){
-  const s={symbol,candles,book:new Book(),flow:new Flow(),ring:[],socket:null,started:Date.now(),lastBucket:Date.now(),lastTradeAt:0,lastCandle:null,needBackfill:candles,reconnectAt:0};
+  const s={symbol,candles,book:new Book(),flow:new Flow(),ring:[],socket:null,marketSocket:null,started:Date.now(),lastBucket:Date.now(),lastTradeAt:0,lastCandle:null,needBackfill:candles,reconnectAt:0};
   states.set(symbol,s);openSocket(s);return s;
 }
 function openSocket(s){
   s.book.reset();s.flow=new Flow();s.started=Date.now();s.lastBucket=Date.now();
-  const slug=s.symbol.toLowerCase();
-  const ws=new WebSocket('wss://fstream.binance.com/stream?streams='+['depth@100ms','aggTrade','kline_1m','forceOrder'].map(x=>slug+'@'+x).join('/'));
+  const urls=streamURLs(s.symbol);
+  const ws=new WebSocket(urls.book),marketWs=new WebSocket(urls.market);
   s.socket=ws;
-  ws.addEventListener('message',msg=>{try{
+  s.marketSocket=marketWs;
+  const message=msg=>{try{
     if(s.socket!==ws)return;
     const e=JSON.parse(msg.data).data;const now=Date.now();
+    if(!e || (e.st!==undefined && +e.st!==1) || e.s && e.s!==s.symbol)return;
     if(e.e==='depthUpdate')s.book.event(e,now);
     if(e.e==='aggTrade'){s.flow.event(e);s.lastTradeAt=now;}
     if(e.e==='forceOrder')s.flow.liquidation+=Number(e.o.ap||e.o.p)*Number(e.o.z);
     if(e.e==='kline' && e.k.x){const k=e.k;s.lastCandle={at:iso(+k.t),return_1m:+k.c/(+k.o)-1};if(s.candles)enqueue({kind:'candle',symbol:s.symbol,at:iso(+k.t),payload:{open:+k.o,high:+k.h,low:+k.l,close:+k.c,quote_volume:+k.q,taker_buy_quote:+k.Q,exchange_at:iso(+e.E),available_at:iso(now),source:'WS_CLOSED',complete:true}});}
-  }catch(e){wsGaps++;s.book.reset();s.flow.complete=false;ws.close();s.reconnectAt=Date.now()+5000;log('STREAM_GAP',{symbol:s.symbol,reason:e.message});}});
-  ws.addEventListener('error',()=>{s.book.ready=false;s.flow.complete=false;});
-  ws.addEventListener('close',()=>{if(s.socket===ws){s.book.reset();s.flow.complete=false;s.reconnectAt=Date.now()+5000;}});
+  }catch(e){wsGaps++;s.book.reset();s.flow.complete=false;ws.close();marketWs.close();s.reconnectAt=Date.now()+5000;log('STREAM_GAP',{symbol:s.symbol,reason:e.message});}};
+  for(const socket of [ws,marketWs]){
+    socket.addEventListener('message',message);
+    socket.addEventListener('error',()=>{if(s.socket===ws){s.book.ready=false;s.flow.complete=false;ws.close();marketWs.close();}});
+    socket.addEventListener('close',()=>{if(s.socket===ws){s.book.reset();s.flow.complete=false;s.reconnectAt=Date.now()+5000;ws.close();marketWs.close();}});
+  }
 }
 async function watch(){
   const out=await api('watch');if(stop)return;
   if(out.protocol_sha256!==expected)throw Error('PROTOCOL_MISMATCH');
   deadline=Date.parse(out.ends_at);lastControl=Date.now();windows=out.windows;
   const desired=new Map(out.watch.map(x=>[x.symbol,x]));
-  for(const [symbol,s] of states)if(!desired.has(symbol)){s.socket.close();states.delete(symbol);}
+  for(const [symbol,s] of states)if(!desired.has(symbol)){s.socket.close();s.marketSocket.close();states.delete(symbol);}
   for(const w of desired.values()){
     if(!/^[A-Z0-9]{2,24}USDT$/.test(w.symbol))continue;
     const s=states.get(w.symbol)||connect(w.symbol,w.candles);
@@ -84,7 +89,7 @@ async function flush(){
   if(!pending){
     const selected=[];let size=0;
     for(const [k,row] of queue){const bytes=Buffer.byteLength(JSON.stringify(row));if(selected.length>=300||size+bytes>350000)break;selected.push([k,row]);size+=bytes;}
-    pending={batch_id:randomUUID(),rows:selected.map(x=>x[1]),metrics:{version:VERSION,watched:states.size,synced:[...states.values()].filter(s=>s.book.ready).length,queue:queue.size,ws_gaps:wsGaps,rest_failures:restFailures,rss_bytes:process.memoryUsage().rss,last_bucket_at:iso(Date.now()),order_calls:0,llm_calls:0}};
+    pending={batch_id:randomUUID(),rows:selected.map(x=>x[1]),metrics:{version:VERSION,watched:states.size,synced:[...states.values()].filter(s=>s.book.ready).length,trade_streams_seen:[...states.values()].filter(s=>s.lastTradeAt>0).length,candle_streams_seen:[...states.values()].filter(s=>s.lastCandle!==null).length,queue:queue.size,ws_gaps:wsGaps,rest_failures:restFailures,rss_bytes:process.memoryUsage().rss,last_bucket_at:iso(Date.now()),order_calls:0,llm_calls:0}};
     for(const [k] of selected)queue.delete(k);
   }
   const out=await api('ingest',pending);lastControl=Date.now();pending=null;
@@ -96,7 +101,7 @@ let previousBucket=Math.floor(Date.now()/5000),task=null;
 log('STARTED',{worker_id,protocol_sha256:expected,deadline:iso(deadline)});
 const timer=setInterval(()=>{
   const now=Date.now();
-  if(stop || now>=deadline || now-lastControl>90000 || now-boot>14*86400000 || process.memoryUsage().rss>230000000){clearInterval(timer);for(const s of states.values())s.socket.close();log('STOPPED',{reason:stop?'CONTROL_OR_SIGNAL':now>=deadline?'DEADLINE':now-lastControl>90000?'CONTROL_STALE':'RESOURCE_CAP'});setTimeout(()=>process.exit(0),1000);return;}
+  if(stop || now>=deadline || now-lastControl>90000 || now-boot>14*86400000 || process.memoryUsage().rss>230000000){clearInterval(timer);for(const s of states.values()){s.socket.close();s.marketSocket.close();}log('STOPPED',{reason:stop?'CONTROL_OR_SIGNAL':now>=deadline?'DEADLINE':now-lastControl>90000?'CONTROL_STALE':'RESOURCE_CAP'});setTimeout(()=>process.exit(0),1000);return;}
   try{
     const b=Math.floor(now/5000);if(b!==previousBucket){bucket(now);previousBucket=b;}
     for(const s of states.values())if(s.socket.readyState===WebSocket.CLOSED && now>=s.reconnectAt)openSocket(s);
