@@ -17,14 +17,16 @@ export async function hash(x){
   const b=new TextEncoder().encode(typeof x==='string'?x:canonical(x));
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256',b))].map(v=>v.toString(16).padStart(2,'0')).join('');
 }
-/** @param position {event, deterministicExitCandidate, stopStage} for HOLD */
-export async function buildDecisionPacket({task,subjectId,symbol,dataMode,facts,judgments,position=null}){
+/** @param position {event, deterministicExitCandidate, stopStage} for HOLD
+ *  @param chase    ENTRY only: late-entry context of a LIVE_MOMENTUM_CHASE candidate (absent otherwise,
+ *                  so an ordinary candidate's packet is byte-identical to before). */
+export async function buildDecisionPacket({task,subjectId,symbol,dataMode,facts,judgments,position=null,chase=null}){
   ensure(task==='ENTRY'||task==='HOLD','FD_TASK');ensure(DATA_MODES.includes(dataMode),'FD_DATA_MODE');
   ensure(facts?.version===FACTS_VERSION,'FD_FACTS_VERSION');ensure(task==='ENTRY'||position,'FD_POSITION_REQUIRED');
   const packet={version:FD_VERSION,task,candidate_id:'c_'+(await hash(String(subjectId))).slice(0,24),symbol:String(symbol).toUpperCase(),
     data_mode:dataMode,facts,model_judgments:judgments??null,
     position:task==='HOLD'?{event:String(position.event??'REVIEW'),deterministic_exit_candidate:position.deterministicExitCandidate??null,
-      stop_stage:position.stopStage??null}:null,snapshot_hash:''};
+      stop_stage:position.stopStage??null}:null,...(task==='ENTRY'&&chase?{chase}:{}),snapshot_hash:''};
   packet.snapshot_hash=await hash({...packet,snapshot_hash:''});
   return packet;
 }
@@ -37,11 +39,13 @@ export function modelInput(packet){
   return {t:packet.task,candidate_id:packet.candidate_id,symbol:packet.symbol,data_mode:packet.data_mode,facts:sections,
     unavailable:Object.keys(FACT_DEFS).filter(k=>v[k]===null&&(packet.task==='HOLD'||FACT_DEFS[k][0]!=='position')),
     risk_flags:Object.fromEntries(Object.entries(risk.flags).filter(([,x])=>x.level!=='CLEAR').map(([k,x])=>[k,x.level])),
-    model_judgments:packet.model_judgments,...(packet.position?{position:packet.position}:{})};
+    model_judgments:packet.model_judgments,...(packet.position?{position:packet.position}:{}),...(packet.chase?{chase:packet.chase}:{})};
 }
+/** ENTRY now writes its evidence and expected value before the decision, so it gets more room. */
+export const MAX_OUTPUT_TOKENS=Object.freeze({ENTRY:1000,HOLD:600});
 export function payloadFor(packet){
   return {model:MODEL,store:false,tools:[],truncation:'disabled',service_tier:'default',
-    prompt_cache_key:'boo-fd1-'+packet.task.toLowerCase(),reasoning:{effort:'none'},max_output_tokens:600,
+    prompt_cache_key:'boo-fd1-'+packet.task.toLowerCase(),reasoning:{effort:'none'},max_output_tokens:MAX_OUTPUT_TOKENS[packet.task],
     input:[{role:'system',content:PROMPTS[packet.task]},{role:'user',content:JSON.stringify(modelInput(packet))}],
     text:{verbosity:'low',format:{type:'json_schema',name:'fd1_'+packet.task.toLowerCase(),strict:true,schema:wireSchema(packet.task,packet)}}};
 }

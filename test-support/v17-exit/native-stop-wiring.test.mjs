@@ -9,6 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import {managerBindings} from '../current-manager-bindings.mjs';
 import { readFileSync } from 'node:fs';
 import { POLICY } from '../../supabase/functions/_shared/leader-momentum-v17.mjs';
 import { nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5 }
@@ -53,7 +54,7 @@ function harness({ enabled = false, bid = 99, ensure, symbolInfoFails = false } 
     closePos: async () => { calls.push('close'); return { closed: true }; },
     audit: async () => { calls.push('audit'); },
   };
-  vm.createContext(ctx);
+  Object.assign(ctx,managerBindings);vm.createContext(ctx);
   vm.runInContext(code + ';this.manage=manageLeader;', ctx);
   const builder={update(){return this},eq(){return this},select(){return this},async single(){calls.push('write');return{data:{ok:true}}}};
   const db={from:()=>builder};

@@ -6,7 +6,7 @@
  *  4. records the outcome (evidence only; a logging failure never changes a decision).
  * Fail closed: when a recheck is required, only a valid unexpired FINAL BUY continues. */
 import {detectChange,preDispatchSnapshot,runFinalRecheck,recheckAllows,postRecheckSafety,initialContext,
-  RECHECK_POLICY,RECHECK_VERSION} from '../_shared/gpt-final-decision/recheck.mjs';
+  RECHECK_POLICY,RECHECK_VERSION,AGED_REASON} from '../_shared/gpt-final-decision/recheck.mjs';
 import {computeFacts} from '../_shared/gpt-final-decision/facts.mjs';
 import {readSources} from '../_shared/gpt-final-decision/market.mjs';
 import {SupabaseReviewStore,readReviewControl} from '../_shared/gpt-final-review/supabase-store.mjs';
@@ -49,7 +49,11 @@ export function markRecheckOutcome(db,s,record,outcome){
 export async function finalRecheckStep(db,s,{ticket,e1,rawQuote,now=Date.now,purpose='PRODUCTION',config=null,apiKey=null,
   dataMode='LIVE',asOf=null,sequence=1}){
   // A historical fixture (asOf) is judged at its own dispatch instant, never at the wall clock.
-  const at=asOf??now(),snapshot=preDispatchSnapshot({at,rawQuote,e1}),detection=detectChange(ticket?.initial,snapshot);
+  // Sequence 1 only: an initial BUY that is aged, or would age before dispatch, is re-asked
+  // (INITIAL_ANSWER_AGED) instead of being dispatched on or expiring at the dispatch check.
+  const at=asOf??now(),snapshot=preDispatchSnapshot({at,rawQuote,e1});
+  const aged=sequence===1&&(ticket?.aged===true||(Number.isFinite(ticket?.validUntil)&&at>=ticket.validUntil-RECHECK_POLICY.initialAgeMarginMs));
+  const detection=detectChange(ticket?.initial,snapshot,RECHECK_POLICY,{force:aged?[AGED_REASON]:[]});
   const record={version:RECHECK_VERSION,recheck_sequence:sequence,initial_gpt_decision:ticket?.decision??null,initial_gpt_at:ticket?.initial?.completedAt??null,
     initial_snapshot_at:ticket?.initial?.snapshotAt??null,initial_snapshot_hash:ticket?.snapshotHash??null,
     initial_context:ticket?.initial??null,pre_dispatch_snapshot:snapshot,pre_dispatch_at:at,

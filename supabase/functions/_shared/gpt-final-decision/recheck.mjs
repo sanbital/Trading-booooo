@@ -47,7 +47,14 @@ export const RECHECK_POLICY=Object.freeze({
   imbalanceShift:-0.30,
   slippageWorsenBps:5,
   catastrophicSpreadBps:25,
+  // (2026-09-25) An initial BUY this close to (or past) its own 15 s answer validity is
+  // re-asked before dispatch instead of expiring on the dispatch check: time alone is not
+  // a change in the market, so GPT decides again on fresh data (INITIAL_ANSWER_AGED).
+  // 2.5 s covers the dispatch block's parallel reads between this point and the order.
+  initialAgeMarginMs:2500,
 });
+/** Forced (non-market) recheck reasons. */
+export const AGED_REASON='INITIAL_ANSWER_AGED';
 const num=x=>x!==null&&x!==undefined&&x!==''&&Number.isFinite(Number(x))?Number(x):null;
 const has=(m,...ks)=>ks.every(k=>m[k]!==null&&m[k]!==undefined&&Number.isFinite(m[k]));
 function ensure(ok,reason){if(!ok)throw Error(reason);}
@@ -90,9 +97,10 @@ function bookLevel(id,m){
   return c.hard(m)?'HARD':c.soft(m)?'SOFT':'CLEAR';
 }
 const RANK={CLEAR:0,SOFT:1,HARD:2};
-/** Pure. The change detector: triggered => GPT FINAL RECHECK is required before an order. */
-export function detectChange(initial,current,policy=RECHECK_POLICY){
-  const reasons=[],I=initial?.facts??{},B=current?.book??{};
+/** Pure. The change detector: triggered => GPT FINAL RECHECK is required before an order.
+ * `force` adds non-market reasons (only AGED_REASON) decided by the caller. */
+export function detectChange(initial,current,policy=RECHECK_POLICY,{force=[]}={}){
+  const reasons=[...force.filter(r=>r===AGED_REASON)],I=initial?.facts??{},B=current?.book??{};
   const initMid=num(initial?.executionRef?.mid)??num(initial?.lastClose),initRefKind=num(initial?.executionRef?.mid)!==null?'BOOK_MID':
     num(initial?.lastClose)!==null?'LAST_CLOSE':null;
   const d=(a,b)=>a!==null&&b!==null?a-b:null,rel=(a,b)=>a!==null&&b>0?a/b-1:null;
@@ -172,13 +180,15 @@ const CHANGE_UP=Object.freeze({tape_return:['>',0],tape_buy_share:['>',0.5],buy_
 const OPS={'>':(v,t)=>v>t,'>=':(v,t)=>v>=t};
 const CHANGE_SUPPORT=Object.fromEntries(Object.entries(CHANGE_UP).map(([k,[o,t]])=>[k,v=>OPS[o](v,t)]));
 const RECHECK_TREND=Object.freeze([...TREND_SUPPORT,'tape_return','tape_buy_share','price_change_since_initial']);
-const ENTRY_CATS=categoriesFor('ENTRY'),CHANGE_CAT_IDS=Object.keys(CHANGE_CATEGORIES);
+// recheck:false categories (CHASE_EXTENDED) belong to the initial ENTRY question only; the
+// FINAL RECHECK category set is unchanged.
+const ENTRY_CATS=categoriesFor('ENTRY').filter(k=>CATEGORIES[k].recheck!==false),CHANGE_CAT_IDS=Object.keys(CHANGE_CATEGORIES);
 const FACT_OK=FACT_KEYS.filter(k=>!POSITION_KEYS.includes(k));
 const allSupport=()=>[...Object.keys(SUPPORT_UP).filter(k=>!POSITION_KEYS.includes(k)),...Object.keys(CHANGE_SUPPORT)];
 /** Deterministic flags: FD1 ENTRY categories on the CURRENT facts + change categories. */
 export function recheckFlags(packet){
   const fd=riskFlags({task:'ENTRY',data_mode:packet.data_mode,facts:packet.facts});
-  const m=packet.change.values,flags={...fd.flags};
+  const m=packet.change.values,flags=Object.fromEntries(Object.entries(fd.flags).filter(([k])=>k==='DATA_INCOMPLETE'||ENTRY_CATS.includes(k)));
   for(const id of CHANGE_CAT_IDS){const c=CHANGE_CATEGORIES[id];let level;
     if(!c.need.every(k=>has(m,k)))level='UNKNOWN';else{try{level=c.soft(m)===true?'SOFT':'CLEAR';}catch{level='UNKNOWN';}}
     flags[id]={level,micro:id==='BOOK_DETERIORATED'};}
@@ -248,6 +258,7 @@ export const RECHECK_PROMPT=`너는 바이낸스 USDT 무기한 선물 롱 전�
 - 동시에 단순 가격 하락만으로 SKIP하지 마라(PRICE_SLIPPED 하나만으로는 SKIP 사유가 될 수 없다). "이미 많이 올랐다", "변동성이 크다"도 SKIP 사유가 아니다. 이 전략은 원래 강하게 상승하는 종목을 산다.
 - 알고리즘 판단(V17, V30, B06133, CEC0040)은 model_judgments에 참고용으로만 있다. CEC0040 REJECT를 따를 의무도, 무시할 의무도 없다. 사실을 우선하라.
 - 10초 테이프(tape_*)는 짧은 창이라 잡음이 있다. tape_trade_count와 다른 사실을 함께 보라.
+- trigger_reasons의 ${AGED_REASON}은 시장 변화가 아니라 처음 BUY 답의 유효시간이 주문 전에 끝나 다시 묻는 것이다. 시간이 지났다는 사실 자체는 SKIP 사유가 아니다. current와 change로 판단하라.
 - 너는 주문 크기, 레버리지, 슬롯, 손절, 주문 안전검사를 바꿀 수 없다. 그것들은 항상 작동한다.
 
 결정:

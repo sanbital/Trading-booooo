@@ -19,6 +19,14 @@ import * as fillEvidence from '../../supabase/functions/_shared/leader-fill-evid
 import * as e1 from '../../supabase/functions/_shared/leader-e1-runtime.mjs';
 import * as slotSizing from '../../supabase/functions/_shared/leader-slot-sizing.mjs';
 import * as pullbackSetup from '../../supabase/functions/_shared/leader-pullback-reaccel.mjs';
+import * as cec from '../../supabase/functions/_shared/leader-cec0040.mjs';
+import * as b06133 from '../../supabase/functions/_shared/leader-b06133-entry.mjs';
+import * as gpt from '../../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
+import * as fd1 from '../../supabase/functions/v10-lane-executor/gpt-final-decision-adapter.mjs';
+import * as retry from '../../supabase/functions/v10-lane-executor/entry-ioc-retry.mjs';
+import * as lifecycle from '../../supabase/functions/v10-lane-executor/entry-lifecycle.mjs';
+import * as liveChase from '../../supabase/functions/_shared/leader-live-chase.mjs';
+import * as capacity from '../../supabase/functions/v10-lane-executor/entry-capacity.mjs';
 import * as v24Adapter from '../../supabase/functions/v10-lane-executor/v24-entry-adapter.mjs';
 import * as booAdapter from '../../supabase/functions/v10-lane-executor/boo-entry-adapter.mjs';
 import {R1_VERSION} from '../../supabase/functions/_shared/boo/r1-strategy.mjs';
@@ -80,16 +88,19 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
  Date.now=()=>state.now;
  class Clock extends Date {constructor(...x){super(...(x.length?x:[state.now]));}static now(){return state.now;}}
  const get=(r,k)=>k.includes('->>')?r[k.split('->>')[0]]?.[k.split('->>')[1]]:r[k];
- const db={from(table){let filters=[],patch=null,insert=null,limit=Infinity,sort=null,single=false;const b={
+ const db={from(table){let filters=[],patch=null,insert=null,limit=Infinity,rangeFrom=0,sort=[],single=false;const b={
   select(){return b;},eq(k,v){filters.push(r=>String(get(r,k))===String(v));return b;},in(k,vs){filters.push(r=>vs.includes(get(r,k)));return b;},
   or(expression){if(expression!=="response_payload->>v18ExposureFinal.is.null,response_payload->>v18ExposureFinal.neq.true")throw Error("unsupported test filter");filters.push(r=>r.response_payload?.v18ExposureFinal!==true);return b;},
-  gte(k,v){filters.push(r=>get(r,k)>=v);return b;},order(k,o){sort=[k,o?.ascending!==false];return b;},limit(n){limit=n;return b;},
+  gte(k,v){filters.push(r=>get(r,k)>=v);return b;},order(k,o){sort.push([k,o?.ascending!==false]);return b;},
+  limit(n){limit=n;return b;},range(from,to){rangeFrom=from;limit=to-from+1;return b;},
   update(v){patch=clone(v);return b;},insert(v){insert=clone(v);return b;},single(){single=true;return b;},maybeSingle(){single=true;return b;},
   async then(resolve,reject){try{
    await state.hook({type:'db',table,patch,insert,state});
    if((patch||insert)&&!state.lease)throw Error('V18_EXECUTION_FENCED');
    let rows=(state.tables[table]??[]).filter(r=>filters.every(f=>f(r)));
-   if(sort)rows.sort((a,b)=>String(get(a,sort[0])).localeCompare(String(get(b,sort[0])))*(sort[1]?1:-1));rows=rows.slice(0,limit);
+   if(sort.length)rows.sort((a,b)=>{for(const [key,ascending] of sort){
+     const cmp=String(get(a,key)).localeCompare(String(get(b,key)));if(cmp)return cmp*(ascending?1:-1);
+   }return 0;});rows=rows.slice(rangeFrom,rangeFrom+limit);
    if(insert){const row={id:'new-'+(++state.seq),created_at:new Clock().toISOString(),updated_at:new Clock().toISOString(),...insert};(state.tables[table]??=[]).push(row);rows=[row];}
    if(patch){for(const r of rows)Object.assign(r,patch);}
    if(patch||insert){state.writes.push({table,patch,insert,count:rows.length});if(table==='v11_long_regime_runtime'&&patch?.circuit_open===true)state.circuits.push(patch);}
@@ -98,6 +109,8 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
  };return b;},async rpc(name,args){
   state.calls.push({rpc:name,args:clone(args)});await state.hook({type:'rpc',name,args,state});
   if(name==='v17_verify_execution_lease')return {data:state.lease};
+  if(name==='v11_cec0040_missing_targets')return {data:[]};
+  if(name==='v11_cec0040_register_target')return {data:{ok:true}};
   if(name==='v17_acquire_execution_lease'){if(state.leaseOwner)return{data:false};state.leaseOwner=args.p_owner;return{data:state.lease};}
   if(name==='v17_release_execution_lease'){if(state.leaseOwner===args.p_owner)state.leaseOwner=null;return{data:true};}
   if(!state.lease)throw Error('V18_EXECUTION_FENCED');
@@ -188,7 +201,7 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
    available_quote:720,total_equity_quote:720,total_initial_margin_quote:state.exchange.reduce((sum,x)=>sum+Math.abs(Number(x.quantity))*(x.entry_price??state.tables.v11_long_regime_positions.find(p=>p.symbol===x.market)?.entry_price??1)/3,0),
    observation:{id:'snapshot-'+state.portfolioCount,source:'BINANCE_ACCOUNT_REST',requested_at_ms:state.now,received_at_ms:state.now},...state.portfolioOverride};
   if(cmd.action==='v18_open_orders')return{complete:true,orders:[],algos:state.tables.v11_long_regime_positions.flatMap(p=>(p.metadata?.exitProtection?.orders??[]).filter(o=>!o.terminal&&o.status==='ACTIVE').map(o=>({...o.spec.params,algoId:o.algoId,algoStatus:'NEW'}))),observed_at_ms:state.now,...state.openOrdersOverride};
-  if(cmd.action==='symbol_info')return{quantity_step:cmd.market==='SAGAUSDT'?.1:1,price_tick:cmd.market==='SAGAUSDT'?.00001:.000001,min_notional:5};
+  if(cmd.action==='symbol_info')return state.symbolInfo??{quantity_step:cmd.market==='SAGAUSDT'?.1:1,price_tick:cmd.market==='SAGAUSDT'?.00001:.000001,min_notional:5};
   if(cmd.action==='p10_quotes')return cmd.markets.map(m=>{if(state.quotes[m] instanceof Error)throw state.quotes[m];const p=state.tables.v11_long_regime_positions.find(p=>p.symbol===m);
    return{market:m,best_bid:state.quotes[m]??p.entry_price,best_ask:(state.quotes[m]??p.entry_price)*1.0001,timing:{requested_at_ms:state.now,received_at_ms:state.now}};});
   if(cmd.action==='quote')return typeof state.entryQuote==='function'?state.entryQuote(state):
@@ -215,13 +228,38 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
  source=source.replace(/\r\n/g,'\n').replace(/^import .*;\n/gm,'').replace('const exchangeGateway=gateway;','const exchangeGateway=__gateway;');source=source.slice(0,source.indexOf('Deno.serve'));
  // Only exchange/DB/time boundaries are replaced. run/manage/open/close are actual source.
  source+='\ngateway=__gateway;this.runCycle=()=>runWithLease(__db);this.open=(...args)=>openBull(__db,...args);this.close=(...args)=>closePos(__db,...args);this.manage=(...args)=>manageLeader(__db,...args);this.setLease=()=>leaseOwners.set(__db,"test-owner");';
- const ctx={...entryEvidence,...momentum,...review,...ops,...settlement,...entrySettlement,...dbOnly,...entryControl,...fillEvidence,...qv3,...e1,...slotSizing,...booBindings,...pullbackSetup,setupIsTerminal:pullbackSetup.isTerminal,
+ const ctx={...retry,...lifecycle,...liveChase,...capacity,...cec,...b06133,...gpt,...fd1,FD1_TIME_REASONS:fd1.TIME_REASONS,...entryEvidence,...momentum,...review,...ops,...settlement,...entrySettlement,...dbOnly,...entryControl,...fillEvidence,...qv3,...e1,...slotSizing,...booBindings,...pullbackSetup,setupIsTerminal:pullbackSetup.isTerminal,
   fetchE1AggTrades:e1Tape??e1.fetchE1AggTrades,QV3_LIVE_CUTOVER:qv3Cutover,qv3Candles:(symbol,at,start)=>qv3.qv3Candles(symbol,at,start,qv3Fetch??(()=>{throw Error("NETWORK_FORBIDDEN")})),leaderPortfolioMatches:momentum.portfolioMatches,protectNewLeaderPosition,createGatewayProtection:baseline?baselineAdapter.createGatewayProtection:createGatewayProtection,
   Date:Clock,console,crypto,Map,Set,WeakMap,AbortController,TextEncoder,Response,Headers,fetch:()=>{throw Error('NETWORK_FORBIDDEN')},
   setTimeout:advanceTimers?(fn,ms)=>{state.now+=Number(ms)||0;return setTimeout(fn,0)}:setTimeout,clearTimeout,
   Deno:{env:{get:k=>k==='V17_NATIVE_STOP'?'true':k==='V23_E1_ENTRY_OVERRIDE'?(e1Enabled?'true':'false'):
     k==='V23_X1_FAST_OBSERVATION'?(x1Enabled?'true':'false'):''}},__gateway:gateway,__db:db};
  vm.createContext(ctx);vm.runInContext(source,ctx);ctx.setLease();
+ // These historical suites exercise execution/reconciliation, not the strategy
+ // admission that was introduced later. Model an approved candidate at that boundary;
+ // tests/fd1-final-recheck.test.mjs separately runs the real GPT/detector authority.
+ if(!baseline&&!sourceRef&&signal){
+   const stamp=row=>{const at=state.now-1000;Object.assign(row.features,{
+     sizingContractVersion:SLOT_SIZING_CONTRACT.version,targetMarginUsdt:SLOT_SIZING_CONTRACT.targetMarginUsdt,leverage:3,
+     v17Setup:{identity:`${pullbackSetup.SETUP_POLICY_VERSION}:${row.symbol}:${row.id}:${row.features.signal5Close}`,policyVersion:pullbackSetup.SETUP_POLICY_VERSION,state:'TRIGGERED',
+       symbol:row.symbol,signalId:row.id,referencePrice:row.features.referenceClose,triggerClose:row.features.referenceClose,
+       signal5Close:row.features.signal5Close,armedAt:row.features.signal5Close,triggerAt:at,
+       expiresAt:row.features.signal5Close+pullbackSetup.SETUP_POLICY.setupTtlMs,
+       pullbackObserved:true,triggerExpiresAt:at+pullbackSetup.SETUP_POLICY.entryTriggerTtlMs},
+     b06133:{version:b06133.B06133_VERSION,source:{decisionAt:at}},
+     cec0040:{version:cec.CEC0040_VERSION,targetVersion:cec.CEC0040_TARGET_VERSION,ready:true,decisionAt:at,action:'ADMIT'}});return row;};
+   state.tables.v11_long_regime_signals.forEach(stamp);
+   const runCurrentCycle=ctx.runCycle;
+   ctx.runCycle=()=>{state.tables.v11_long_regime_signals.filter(x=>x.status==='NEW').forEach(stamp);return runCurrentCycle();};
+   Object.assign(ctx,{setupGoverns:()=>true,POLICY:momentum.POLICY,advanceSignalSetup:async(_db,row)=>({row:stamp(row),state:row.features.v17Setup}),
+     applyB06133Selection:async(_db,row)=>({allowed:true,row,stamp:row.features.b06133}),
+     applyCec0040Selection:async(_db,row)=>({allowed:true,row,stamp:row.features.cec0040}),
+     baselineAllowedV30:()=>true,V30_FRONT_LIVE_VERSION:'TEST',entryBranchOf:()=> 'TEST',
+     gptFilterExecutable:async(_db,candidates)=>({candidates}),gptFinalCheck:()=>({allowed:true,review:{decision:'BUY'}}),
+     gptBeginExecution:()=>({}),gptConfirmFirstFinality:()=>true,gptConsumeRetry:()=>true,
+     finalRecheckStep:async()=>({proceed:true,record:{recheck_triggered:false}}),withOrderTiming:x=>x,
+     fetchE1AggTrades:e1Tape??(async()=>({available:false,reason:'TEST_NO_TAPE'}))});
+ }
  return{state,db,ctx,gateway,advance(ms=60000){state.now+=ms;state.tables.trading_account_snapshots[0].captured_at=new Clock().toISOString();}};
 }
 export function nativeFill(p,{exact=true,price=p.entry_price*.988,quantity=p.remaining_quantity}={}){

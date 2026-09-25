@@ -3,6 +3,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
+import {normalizeEntryBook} from '../supabase/functions/v10-lane-executor/entry-evidence.mjs';
 import {execFileSync} from 'node:child_process';
 import {FinalReviewCoordinator,MemoryReviewStore} from '../supabase/functions/_shared/gpt-final-review/coordinator.mjs';
 import {baselineAllowedLive,v30FrontDecision,V30_FRONT_LIVE_VERSION} from '../supabase/functions/_shared/gpt-final-review/contract.mjs';
@@ -10,12 +12,14 @@ import {FD1_ENTRY_ENGINE} from '../supabase/functions/_shared/gpt-final-decision
 import {detectChange,preDispatchSnapshot,validateRecheck,recheckFlags,buildRecheckPacket,recheckAllows,postRecheckSafety,
   RECHECK_POLICY,RECHECK_PROMPT,recheckPayload} from '../supabase/functions/_shared/gpt-final-decision/recheck.mjs';
 import {computeFacts} from '../supabase/functions/_shared/gpt-final-decision/facts.mjs';
-import {gptFilterExecutable,gptFinalCheck,setTestCoordinator} from '../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
+import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,setTestCoordinator} from '../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
+import {IOC_RETRY_POLICY,planAggressiveIocRetry,floorStep} from '../supabase/functions/v10-lane-executor/entry-ioc-retry.mjs';
+import {budgetCovers} from '../supabase/functions/v10-lane-executor/entry-capacity.mjs';
 import {finalRecheckStep,setRecheckTestHooks,withOrderTiming} from '../supabase/functions/v10-lane-executor/gpt-final-recheck-adapter.mjs';
 import {nilTicket,NIL_E1,NIL_DISPATCH_QUOTE,NIL_SIGNAL,NIL_DISPATCH_AT} from '../supabase/functions/v10-lane-executor/recheck-nil-fixture.mjs';
 import {candidate,T} from '../development/gpt-final-review/tests/helpers.mjs';
 import {RECHECK_HOOKS} from '../development/gpt-final-review/executor-hooks-recheck.mjs';
-import {klines,src as srcFixture} from '../development/gpt-final-decision/tests/fixtures.mjs';
+import {klines,src as srcFixture,entryWire} from '../development/gpt-final-decision/tests/fixtures.mjs';
 const MIN=60000,MODEL='gpt-5.4-mini-2026-03-17';
 const ENFORCE={mode:'ENFORCE',modeValid:true,approvalRef:'t',apiBudgetUsd:3,maxCalls:300,enforceApproved:true,source:'TEST'};
 const BOOK={bids:[[1.199,2000],[1.198,2000]],asks:[[1.2,2000],[1.201,2000]]};
@@ -38,7 +42,7 @@ function world({initial='BUY',final='BUY'}={}){
       calls.entry++;
       const w={BUY:{d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'상승 지속'},SKIP:{d:'SKIP',reasons:[],support:[],n:'건너뜀'},
         ABSTAIN:{d:'ABSTAIN',reasons:[],support:[],n:'판단 불가'}}[initial];
-      return raw(input,{t:'ENTRY',...w});}
+      return raw(input,entryWire({t:'ENTRY',...w}));}
     const p=u.pathname,at=Number(u.searchParams.get('endTime')??T)+1;
     if(p==='/fapi/v1/klines')return Response.json(klines(Number(u.searchParams.get('limit')),u.searchParams.get('interval')==='5m'?5*MIN:MIN,at,{step:u.searchParams.get('symbol')==='BTCUSDT'?.0001:.001}));
     if(p==='/futures/data/openInterestHist')return Response.json(Array.from({length:13},(_,i)=>({timestamp:Math.floor(T/300000)*300000-(12-i)*300000,sumOpenInterest:1000+i,sumOpenInterestValue:5e6})));
@@ -69,7 +73,7 @@ async function initialDecision({initial='BUY',final='BUY',action='ADMIT',clock}=
     readFresh:async(symbol,at)=>({src:srcFixture(at),errors:{}})});
   return {db,c,s,w,check,ticket:check.review,log,setNow:x=>{now=x;},store};
 }
-const calmQuote=at=>({best_bid:1.199,best_ask:1.2,bids:BOOK.bids,asks:BOOK.asks,timing:{received_at_ms:at}});
+const calmQuote=at=>({best_bid:1.199,best_ask:1.2,bids:BOOK.bids,asks:BOOK.asks,timing:{requested_at_ms:at-10,received_at_ms:at}});
 const e1Obs=(ret,share,n=150)=>({confirmationState:'BASELINE_ELIGIBLE',reasonCodes:['E1_NOT_FAST_WEAK'],expectedCostBps:12,
   observations:[{startAt:T,endAt:T+10000,return:ret,buyShare:share,tradeCount:n}]});
 const CALM=e1Obs(0.001,0.6),WEAK=e1Obs(-0.003,0.35);
@@ -203,7 +207,7 @@ test('contract: price drop alone is not a SKIP; BUY needs current up-support and
 });
 test('14. release invariants: GPT remains before IOC, sizing is 150x3, retry is bounded and protection/lease stay in path',()=>{
   const src=readFileSync(new URL('../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
-  for(const k of ['const MAX_SLOTS=10','const SETUP_MAX_CONCURRENT=4','PATCH="FD1-EXECUTION-RETRY-SIZING150-1"',
+  for(const k of ['const MAX_SLOTS=10','const SETUP_MAX_CONCURRENT=MAX_SLOTS;','PATCH="FD1-MULTISLOT-CAPACITY-1"',
     'SLOT_SIZING_CONTRACT.targetMarginUsdt','verifyExecutionLease(db)','protectNewLeaderPosition({','time_in_force:"IOC"',
     'IOC_RETRY_POLICY.maxAttempts','planAggressiveIocRetry(','SIZING_CONTRACT_STALE'])assert.ok(src.includes(k),k);
   const step=src.indexOf('await finalRecheckStep(db,s,'),dispatch=src.indexOf('const gptDispatchCheck=gptFinalCheck(db,s,attempt.finalRecheck);'),
@@ -211,4 +215,181 @@ test('14. release invariants: GPT remains before IOC, sizing is 150x3, retry is 
   assert.ok(step>0&&dispatch>step&&first>dispatch&&second>first);
   assert.equal(src.split('time_in_force:"IOC"').length-1,1,'IOC shape is centralized in the dispatcher');
   assert.match(src,/strategicDriftToRecheck\(entryTriggerFresh/,'V17 drift must feed recheck rather than hard reject');
+});
+
+// Execute the real openBull IOC lifecycle, replacing only I/O dependencies. The real
+// coordinator, detector, recheck API parser, authority checks and retry planner run.
+async function retryLifecycle({fills=[375],final='BUY',changed=false,expired=false,protection='PROTECTED',budget=null}={}){
+  let now=T+1500;
+  const x=await initialDecision({final,clock:()=>now});
+  const source=readFileSync(new URL('../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
+  const body=source.slice(source.indexOf('let currentPosition=null,lastProtection='),
+    source.indexOf('// Best-effort feed for the decision-only exit shadow.'));
+  let position=null;const orders=[],events=[],writes=[];
+  const db=x.db;db.from=()=>({update:patch=>({eq:async()=>{writes.push(patch);return {};}})});
+  const quote=()=>calmQuote(now);
+  const gateway=async cmd=>{if(cmd.action==='quote'){if(orders.length===1)now=expired?T+31000:T+19000;return quote();}
+    if(cmd.action==='symbol_info')return {quantityStep:1,priceTick:.0001,minNotionalUsdt:5,minQuantity:1};
+    if(cmd.action==='v18_open_orders')return {complete:true,orders:[]};throw Error('UNEXPECTED_IO:'+cmd.action);};
+  const c={db,s:x.s,gateway,q:quote(),attempt:{gptFinalReview:x.ticket,finalRecheck:{recheck_triggered:false}},
+    sized:{amount:375},iocBps:0,limitPrice:1.2,step:1,filters:{priceTick:.0001,minNotionalUsdt:5,minQuantity:1},baseIntentPayload:{},
+    manualRows:[],managementFailures:[],finalDecision:{allowed:true},e1Decision:null,NATIVE_STOP_ENABLED:true,
+    MARGIN:150,LEV:3,ENTRY_CASH_BUFFER_USDT:.1,RELEASE_SCOPE:{SYMBOL:'SYMBOL'},
+    // The cycle's lease budget as the executor keeps it; none unless a case sets one.
+    budgetCovers,cycleBudgets:new Map(budget?[[db,budget]]:[]),IOC_RETRY_RESERVE:{ms:16000,calls:14},
+    IOC_RETRY_POLICY,planAggressiveIocRetry,floorStep,E1_POLICY:{maxQuoteAgeMs:1000},
+    gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,
+    Date:class extends Date{static now(){return now;}},console,
+    N:(v,d=0)=>Number.isFinite(Number(v))?Number(v):d,rec:v=>v??{},withOrderTiming,
+    normalizeEntryBook,fetchE1AggTrades:async(_s,startAt,endAt)=>({available:true,startAt,endAt,last10sReturn:.001,takerBuyQuoteShare:.6,tradeCount:50}),retryE1Evidence:()=>changed?WEAK:CALM,
+    finalRecheckStep:(db,s,opts)=>finalRecheckStep(db,s,{...opts,now:()=>now}),postRecheckSafety,
+    requireLeaderEntryControls:async()=>{},recordMismatch:async()=>{},persistDecisionRisk:async()=>{},
+    readOpsPair:async()=>({positions:position?[position]:[],manual:[],pf:{available_quote:1000},match:{ok:true}}),
+    snap:async()=>({available_quote:1000}),symbolFilters:x=>x,sizeEntry:()=>({amount:375}),decideEntry:async()=>({allowed:true}),
+    registerCec0040Target:async()=>{},
+    dispatchEntryIocAttempt:async(db,s,gw,opts)=>{
+      const authority=opts.authorize();if(!authority.allowed)return {blocked:true,reason:authority.reason};
+      assert.ok(opts.attemptNo<=2);orders.push(opts);events.push('order'+opts.attemptNo);
+      now=opts.attemptNo===1?T+14000:now;
+      const quantity=fills[opts.attemptNo-1]??0;
+      return {oi:{id:'order'+opts.attemptNo,requested_quantity:opts.quantity},receipt:{quantity},
+        evidence:{confirmedAt:new Date(now).toISOString()},settledRaw:{quantity}};
+    },
+    settleKnownEntry:async(db,oi,raw)=>{
+      if(!raw.quantity)return null;
+      position={id:'pos',original_quantity:(position?.original_quantity??0)+raw.quantity,entry_price:1.2,metadata:{}};
+      return position;
+    },
+    protectNewLeaderPosition:async()=>{events.push('protect');return {status:protection,finishedAt:now};},
+  };
+  vm.createContext(c);
+  // The real per-attempt evidence builder (pure) runs inside the same context.
+  vm.runInContext(source.slice(source.indexOf('function iocAttemptEvidence('),source.indexOf('function retryE1Evidence(')),c);
+  const result=await vm.runInContext('(async function(){'+body+ ')()',c);
+  return {result,orders,events,writes,x};
+}
+test('CASE 1 LTC: full first fill has one IOC and protection, no retry',async()=>{
+  const r=await retryLifecycle({fills:[375]});assert.equal(r.orders.length,1);assert.equal(r.result.entered,true);
+  assert.equal(r.result.entryProtection.status,'PROTECTED');assert.equal(r.result.sizedMarginUsdt,150);
+});
+test('CASE 2 BROCCOLI: expired ordinary BUY, fresh no-change evidence, bounded second fill',async()=>{
+  const r=await retryLifecycle({fills:[0,375]});assert.equal(r.orders.length,2);assert.equal(r.result.reason,'IOC_RETRY_FILLED');
+  assert.equal(r.x.w.calls.recheck,0);assert.equal(r.x.c.check(r.x.s).reason,'GPT_REVIEW_EXPIRED');
+});
+test('CASE 3: expired retry capability sends no second IOC',async()=>{
+  const r=await retryLifecycle({fills:[0,375],expired:true});assert.equal(r.orders.length,1);
+  assert.match(r.result.reason,/AUTHORITY_EXPIRED/);
+});
+for(const [id,final,count] of [[4,'BUY',2],[5,'SKIP',1],[6,'ERROR',1],[6,'ABSTAIN',1],[6,'INVALID',1]])
+test(`CASE ${id}: meaningful change FINAL ${final} yields ${count} IOC(s)`,async()=>{
+  const r=await retryLifecycle({fills:[0,375],changed:true,final});assert.equal(r.orders.length,count);
+});
+test('CASE 7: partial protected first fill precedes remaining top-up',async()=>{
+  // (2026-09-25) The retry is priced ask+8 bps (1.201). The full 275-lot remainder would then be
+  // worth 120+330.3 = 450.3 USDT notional > 150 x 3, so the remainder is cut to 274 lots: the
+  // margin ceiling holds at the worst-case limit, and nothing is bought beyond the target.
+  const r=await retryLifecycle({fills:[100,275]});assert.equal(r.orders[1].quantity,274);
+  assert.ok(100*1.2+274*r.orders[1].limitPrice<=450+1e-9);assert.equal(r.orders[1].limitPrice,1.201);
+  assert.equal(r.orders[1].payload.ioc_attempt_evidence.retryPlan.budgetShrunk,true);
+  assert.equal(r.orders[1].payload.ioc_attempt_evidence.filledBeforeQty,100);
+  assert.deepEqual(r.events,['order1','protect','order2','protect']);
+});
+test('CASE 8: failed native protection forbids top-up',async()=>{
+  const r=await retryLifecycle({fills:[100,275],protection:'RECONCILIATION_PENDING'});assert.equal(r.orders.length,1);
+  assert.equal(r.result.reason,'PARTIAL_FILL_ABORT:PROTECTION_UNAVAILABLE');
+});
+test('CASE 9: partial second fill is protected; no third IOC',async()=>{
+  const r=await retryLifecycle({fills:[0,100]});assert.equal(r.orders.length,2);
+  assert.equal(r.result.reason,'PARTIAL_FILL_ABORT:IOC_RETRY_EXHAUSTED');assert.equal(r.result.entryProtection.status,'PROTECTED');
+});
+test('CASE 10: second zero fill terminalizes; no third IOC',async()=>{
+  const r=await retryLifecycle({fills:[0,0]});assert.equal(r.orders.length,2);assert.equal(r.result.reason,'IOC_RETRY_EXHAUSTED');
+  assert.equal(r.writes.at(-1).reject_reason,'IOC_RETRY_EXHAUSTED');
+});
+// (2026-09-25) A later admission in a multi-slot run can reach its retry late in the cycle. The retry is
+// only sent when the lease budget can also settle and protect it; otherwise the attempt ends there.
+test('CASE 11: a cycle budget that cannot finish the retry sends no second IOC',async()=>{
+  const short={remaining:()=>9000,callsLeft:40};
+  const zero=await retryLifecycle({fills:[0,375],budget:short});assert.equal(zero.orders.length,1);
+  assert.equal(zero.result.entered,false);assert.equal(zero.result.reason,'IOC_RETRY_EXHAUSTED:CYCLE_BUDGET_RESERVE');
+  assert.equal(zero.writes.at(-1).reject_reason,'IOC_RETRY_EXHAUSTED:CYCLE_BUDGET_RESERVE');
+  const partial=await retryLifecycle({fills:[100,275],budget:{remaining:()=>60000,callsLeft:10}});
+  assert.equal(partial.orders.length,1,'too few gateway calls left: no top-up');assert.equal(partial.result.entered,true);
+  assert.equal(partial.result.reason,'PARTIAL_FILL_ABORT:IOC_RETRY_EXHAUSTED:CYCLE_BUDGET_RESERVE');
+  assert.equal(partial.result.entryProtection.status,'PROTECTED','the protected partial is kept');
+  const ample=await retryLifecycle({fills:[0,375],budget:{remaining:()=>30000,callsLeft:60}});
+  assert.equal(ample.orders.length,2,'a budget that can finish it keeps the bounded retry');
+});
+test('retry capability cannot be fabricated, cloned, reused or moved to another signal/cycle',async()=>{
+  const x=await initialDecision();const token=gptBeginExecution(x.db,x.s,null);
+  x.setNow(T+10000);assert.equal(x.c.confirmFirstFinality(token,{orderId:'first',confirmedAt:new Date(T+10000).toISOString(),quantity:375}),true);
+  const r={recheck_sequence:2,pre_dispatch_at:T+19000,recheck_triggered:false};x.setNow(T+19000);
+  assert.equal(gptFinalCheck(x.db,x.s,r,token).allowed,true);
+  assert.equal(gptFinalCheck(x.db,{...x.s},r,token).allowed,false);
+  assert.equal(gptFinalCheck(x.db,x.s,r,{}).allowed,false);
+  assert.equal(gptConsumeRetry(x.db,token),true);assert.equal(gptConsumeRetry(x.db,token),false);
+  assert.equal(gptFinalCheck(x.db,x.s,r,token).allowed,false);
+});
+
+test('durable intent latency cannot bypass the last authority check; a third IOC cannot create an intent',async()=>{
+  const src=readFileSync(new URL('../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
+  // The next top-level declaration is the extraction boundary, without rewriting dispatch.
+  const dispatch=src.slice(src.indexOf('async function dispatchEntryIocAttempt('),src.indexOf('\n// ---',src.indexOf('async function dispatchEntryIocAttempt(')));
+  const events=[],writes=[];
+  const db={from:()=>({insert:row=>{events.push('intent');return {select:()=>({single:async()=>({data:{id:'o',...row}})})};},
+    update:row=>({eq:async()=>{writes.push(row);return {};}})})};
+  const ctx={IOC_RETRY_POLICY,LEV:3,REVISION:'test',PATCH:'test',cid:()=> 'id',Date,
+    verifyExecutionLease:async()=>events.push('lease'),classifyFailure:()=>({fatal:false})};
+  vm.createContext(ctx);vm.runInContext(dispatch+'\nthis.dispatch=dispatchEntryIocAttempt;',ctx);
+  const gw=async()=>{events.push('venue');throw Error('MUST_NOT_SEND');};
+  const result=await ctx.dispatch(db,{id:'s',symbol:'LTCUSDT'},gw,{attemptNo:2,quantity:1,limitPrice:1,step:1,payload:{},
+    authorize:()=>{events.push('authority');return {allowed:false,reason:'IOC_RETRY_AUTHORITY_EXPIRED_OR_INVALID'};}});
+  assert.equal(result.blocked,true);assert.deepEqual(events,['intent','lease','authority']);
+  assert.equal(writes[0].state,'REJECTED');assert.equal(writes[0].response_payload.notDispatched,true);
+  await assert.rejects(ctx.dispatch(db,{id:'s'},gw,{attemptNo:3}),/IOC_RETRY_EXHAUSTED/);
+  assert.equal(events.filter(x=>x==='intent').length,1);
+});
+
+// ---------------------------------------------------------------------------------------
+// 2026-09-25: an initial BUY that ages before dispatch is re-decided, never dispatched stale.
+// ---------------------------------------------------------------------------------------
+test('AGED initial BUY: forced FINAL RECHECK (INITIAL_ANSWER_AGED) on an unchanged market; only its FINAL BUY dispatches',async()=>{
+  const x=await initialDecision({final:'BUY'}),at=x.ticket.validUntil+1500;x.setNow(at);
+  const again=await gptFilterExecutable(x.db,[x.s]);
+  assert.equal(again.candidates.length,1);assert.equal(again.reviews[0].aged,true);
+  assert.equal(gptFinalCheck(x.db,x.s).allowed,false,'the aged answer alone never dispatches');
+  const entry=gptFinalCheck(x.db,x.s,null,null,{allowAged:true});assert.equal(entry.allowed,true);
+  const r=await finalRecheckStep(x.db,x.s,{ticket:entry.review,e1:CALM,rawQuote:calmQuote(at-100),now:()=>at});
+  assert.equal(r.record.recheck_triggered,true);assert.deepEqual(r.record.recheck_reasons,['INITIAL_ANSWER_AGED']);
+  assert.equal(x.w.calls.recheck,1);assert.equal(r.record.final_gpt_decision,'BUY');assert.equal(r.proceed,true);
+  assert.equal(gptFinalCheck(x.db,x.s,r.record).allowed,true,'the FINAL BUY supersedes the aged answer');
+  assert.equal(gptFinalCheck(x.db,x.s,r.record,null,{allowAged:true}).allowed,true);
+});
+for(const final of ['ABSTAIN','INVALID','TIMEOUT'])
+test(`AGED initial BUY + FINAL ${final} places no order`,async()=>{
+  const x=await initialDecision({final}),at=x.ticket.validUntil+1500;x.setNow(at);
+  await gptFilterExecutable(x.db,[x.s]);const entry=gptFinalCheck(x.db,x.s,null,null,{allowAged:true});
+  const r=await finalRecheckStep(x.db,x.s,{ticket:entry.review,e1:CALM,rawQuote:calmQuote(at-100),now:()=>at});
+  assert.equal(r.record.recheck_triggered,true);assert.equal(r.proceed,false);
+  assert.equal(gptFinalCheck(x.db,x.s,r.record).allowed,false);
+});
+test('a BUY about to age before dispatch is re-asked now; the IOC retry (sequence 2) is never forced',async()=>{
+  const x=await initialDecision({final:'BUY'}),at=x.ticket.validUntil-1000;x.setNow(at);
+  const r=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:CALM,rawQuote:calmQuote(at-100),now:()=>at});
+  assert.deepEqual(r.record.recheck_reasons,['INITIAL_ANSWER_AGED']);
+  const y=await initialDecision({final:'BUY'}),late=y.ticket.validUntil+1500;y.setNow(late);
+  const r2=await finalRecheckStep(y.db,y.s,{ticket:y.ticket,e1:CALM,rawQuote:calmQuote(late-100),now:()=>late,sequence:2});
+  assert.equal(r2.record.recheck_triggered,false,'the retry authority, not the answer age, governs attempt 2');
+  const early=await initialDecision({final:'BUY'});early.setNow(T+9000);
+  const r3=await finalRecheckStep(early.db,early.s,{ticket:early.ticket,e1:CALM,rawQuote:calmQuote(T+8900),now:()=>T+9000});
+  assert.equal(r3.record.recheck_triggered,false,'a fresh answer with an unchanged market still needs no recheck');
+});
+test('FINAL RECHECK categories are unchanged; the prompt explains INITIAL_ANSWER_AGED is not a SKIP reason',async()=>{
+  const {recheckSchema,AGED_REASON}=await import('../supabase/functions/_shared/gpt-final-decision/recheck.mjs');
+  assert.equal(AGED_REASON,'INITIAL_ANSWER_AGED');
+  assert.ok(!recheckSchema().properties.reasons.items.properties.r.enum.includes('CHASE_EXTENDED'));
+  assert.match(RECHECK_PROMPT,/INITIAL_ANSWER_AGED은 시장 변화가 아니라/);assert.match(RECHECK_PROMPT,/SKIP 사유가 아니다/);
+  assert.equal(RECHECK_POLICY.maxRechecksPerCandidate,2);assert.equal(RECHECK_POLICY.answerMaxAgeMs,8000);
+  const d=detectChange({facts:{},executionRef:{mid:1.2},snapshotAt:T},{at:T+5000,mid:1.2,tape:null},RECHECK_POLICY,{force:['INITIAL_ANSWER_AGED','NOT_A_REASON']});
+  assert.ok(d.reasons.includes('INITIAL_ANSWER_AGED')&&!d.reasons.includes('NOT_A_REASON'),'only the aged reason can be forced');
 });

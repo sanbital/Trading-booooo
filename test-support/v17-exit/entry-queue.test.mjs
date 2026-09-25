@@ -4,8 +4,11 @@
 // then rejected as stale at 13:32 and 13:33 without ever being priced. 44 signals died that
 // way over two days.
 //
-// The queue must never become a way to open two positions in one run, so the tests below pin
-// the stop conditions as hard as the continue conditions.
+// (2026-09-25) A run now opens as many positions as the account has capacity for: GPT BUY
+// candidates are admitted one at a time and the account is read again after every fill
+// (entry-capacity.mjs). The stop conditions are pinned as hard as the continue conditions: an
+// account-wide refusal, an unreadable account after a fill, no capacity, or a cycle budget that
+// cannot finish another attempt all end the run, and a dispatched failure still halts it.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -13,15 +16,17 @@ import {readFileSync} from 'node:fs';
 const source = readFileSync(new URL('../../supabase/functions/v10-lane-executor/index.ts', import.meta.url), 'utf8').replace(/\r\n/g,'\n');
 const run = source.slice(source.indexOf('async function run(db)'), source.indexOf('async function requireLeaderEntryControls'));
 
-test('the executor prices more than one candidate per run', () => {
-  assert.match(run, /if\(attempts>=ENTRY_ATTEMPTS_PER_RUN\)/,
-    'entries must be attempted from a bounded queue');
-  assert.match(source, /const ENTRY_ATTEMPTS_PER_RUN=(\d+);/);
-  const n = Number(source.match(/const ENTRY_ATTEMPTS_PER_RUN=(\d+);/)[1]);
-  assert.ok(n >= 2 && n <= 5, `${n} attempts must beat 1 without overrunning the cadence`);
-  // The attempt count alone no longer bounds the run: a symbol-scoped defer now
-  // continues, and an E1 fast-weak watch can wait per attempt. A wall clock must
-  // stop new attempts as well, or three watches overrun the one-minute cadence.
+test('the run admits by capacity and the cycle budget, never by a fixed attempt count', () => {
+  assert.ok(!/ENTRY_ATTEMPTS_PER_RUN/.test(source), 'no fixed number of attempts per run');
+  assert.match(run, /if\(cap\.capacity<1&&/, 'account capacity bounds the run');
+  assert.match(run, /budgetCovers\(cycleBudgets\.get\(db\),ENTRY_ATTEMPT_RESERVE\)/,
+    'a new attempt starts only when the lease budget can finish it');
+  const reserve = source.match(/const ENTRY_ATTEMPT_RESERVE=Object\.freeze\(\{ms:(\d+),calls:(\d+)\}\);/);
+  assert.ok(reserve, 'the attempt reserve is declared');
+  const lease = source.match(/cycleBudgets\.set\(db,createBudget\(\{ms:(\d+),calls:(\d+)\}\)\)/);
+  assert.ok(Number(reserve[1]) < Number(lease[1]) && Number(reserve[2]) < Number(lease[2]),
+    'one attempt fits inside one cycle budget');
+  // The wall clock still bounds the run as well: an E1 fast-weak watch can wait per attempt.
   assert.match(run, /Date\.now\(\)>=runDeadline/, 'the run needs a wall-clock bound too');
   const budget = Number(source.match(/const ENTRY_RUN_BUDGET_MS=(\d+);/)[1]);
   assert.ok(budget > 0 && budget < 60000, `${budget}ms must fit inside the cadence`);
@@ -46,7 +51,7 @@ test('already-expired candidates are retired without any gateway work', () => {
 });
 
 test('a soft defer stops the run only when it was the ACCOUNT that refused', () => {
-  assert.match(run, /if\(releaseStopsRun\(entry\)\)break;/);
+  assert.match(run, /if\(releaseStopsRun\(entry\)\)\{stop=\{reason:accountStopReason\(entry\.reason\)[^\n]*\n\s*await noteRest\(index\+1,[^\n]*break\}/);
   assert.match(source, /function releaseStopsRun\(entry\)\{return entry\?\.releaseScope!==RELEASE_SCOPE\.SYMBOL\}/,
     'an unlabelled release must keep the old halting behaviour -- fail closed');
   // Every account-wide refusal must stay unlabelled or explicitly ACCOUNT.
@@ -112,12 +117,16 @@ test('the symbol-scoped list matches only pre-dispatch refusals it declares', ()
   }
 });
 
-test('a successful entry and an exhausted account both stop the queue', () => {
-  assert.match(run, /if\(entry\?\.entered===true\)break;/, 'one entry per run is still the rule');
-  assert.match(run, /if\(entry\?\.releaseClaim===true\)\{[^}]*status:"NEW"[^}]*\}\.\.\.|if\(entry\?\.releaseClaim===true\)\{/,
-    'a margin skip must hand the claim back');
+test('a fill re-reads the account and continues; an exhausted account stops the queue', () => {
+  const at = run.indexOf('if(entry?.entered===true){');
+  assert.ok(at > 0);
+  const block = run.slice(at, run.indexOf('continue;', at) + 'continue;'.length);
+  const book = block.indexOf('ledger.push(ledgerEntry(entry,Date.now()))'), refresh = block.indexOf('refreshCapacityInputs(db)');
+  assert.ok(book > 0 && refresh > book, 'the fill is booked before the account is read again');
+  assert.match(block, /catch\(error\)\{[\s\S]*ACCOUNT_SAFETY_BLOCK[\s\S]*break;/, 'an unreadable account after a fill fails closed');
+  assert.ok(!/openBull|status:"CLAIMED"/.test(block), 'nothing is priced before the next loop turn re-checks capacity');
   const rel = run.indexOf('releaseClaim===true');
-  const tail = run.slice(rel, rel + 400);
+  const tail = run.slice(rel, run.indexOf('continue;', rel));
   assert.ok(tail.includes('break'), 'insufficient capital must stop the queue, not retry per symbol');
   assert.ok(tail.includes('status:"NEW"'), 'the claim must be released');
 });
@@ -134,6 +143,10 @@ import vm from 'node:vm';
 import {POLICY} from '../../supabase/functions/_shared/leader-momentum-v17.mjs';
 import {SETUP_POLICY, SETUP_REASON, SETUP_STATE, isTerminal as setupIsTerminal}
   from '../../supabase/functions/_shared/leader-pullback-reaccel.mjs';
+import {lifecycleNote, gptTerminalReason} from '../../supabase/functions/v10-lane-executor/entry-lifecycle.mjs';
+import * as capacity from '../../supabase/functions/v10-lane-executor/entry-capacity.mjs';
+import {CONTROL_SCOPE} from '../../supabase/functions/_shared/leader-entry-control.mjs';
+import {SLOT_SIZING_CONTRACT, slotSizingBounds} from '../../supabase/functions/_shared/leader-slot-sizing.mjs';
 
 /** A fixed clock, so a test's verdict never depends on when the suite is run. */
 function clockAt(fixed) {
@@ -146,9 +159,50 @@ const LEGACY_NOW = LEGACY_CLOSE + 30_000;
 const SETUP_CLOSE = Date.parse("2026-09-17T12:00:00.000Z");
 const SETUP_NOW = SETUP_CLOSE + 30_000;
 
-function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {}, setupMaxConcurrent = 4}) {
+/** A Binance account kept in step with the fills the stubbed openBull makes: the executor's own
+ * capacity helpers read it through readOpsPair/snap exactly as they read production. `lag` freezes
+ * the exchange view, the DB view and the snapshot at their initial state (nothing a fill did is
+ * visible), so only the run's own ledger can keep a filled slot from looking free. */
+function accountModel({available = 10_000, open = [], pending = [], issues = [], lag = false, feeUsdt = 0.5} = {}) {
+  const m = {available, positions: open.map(symbol => ({symbol, quantity: 1})),
+    db: open.map(symbol => ({symbol, state: 'OPEN'})), orders: [...pending], issues, lag, reads: 0, fail: null, fills: []};
+  const initial = {available, positions: [...m.positions], db: [...m.db]};
+  m.fill = (symbol, margin) => {
+    m.fills.push({symbol, margin});
+    m.available -= margin + feeUsdt;
+    m.positions.push({symbol, quantity: 1});
+    m.db.push({symbol, state: 'OPEN'});
+  };
+  m.pair = () => ({pf: {available_quote: m.lag ? initial.available : m.available, positions: m.lag ? initial.positions : m.positions},
+    positions: m.lag ? initial.db : m.db, orders: m.orders, match: {issues: m.issues}});
+  // The account snapshot job: fresh (captured now, after every fill so far) unless lagging.
+  m.snapshot = () => ({available_quote: m.lag ? initial.available : m.available,
+    captured_at: new Date(m.lag ? 0 : m.clock?.now ?? 0).toISOString()});
+  return m;
+}
+// The executor's own capacity constants, read from its source so the harness cannot drift.
+const constOf = (re) => { const m = source.match(re); if (!m) throw new Error('constant moved: ' + re); return m; };
+const MAX_SLOTS = Number(constOf(/const MAX_SLOTS=(\d+),ENTRY_CASH_BUFFER_USDT=/)[1]);
+const CASH_BUFFER = Number(constOf(/ENTRY_CASH_BUFFER_USDT=([\d.]+),/)[1]);
+const ATTEMPT_RESERVE = (([, ms, calls]) => ({ms: Number(ms), calls: Number(calls)}))(
+  constOf(/const ENTRY_ATTEMPT_RESERVE=Object\.freeze\(\{ms:(\d+),calls:(\d+)\}\);/));
+const FEE_RATE = Number(constOf(/ENTRY_SLOT_COST_USDT=slotCostUsdt\(\{maxOrderMarginUsdt:MAX_ORDER_MARGIN_USDT,leverage:LEV,takerFeeRate:([\d.]+),iocMaxBps:IOC_MAX_BPS\}\)/)[1]);
+const SLOT_COST = capacity.slotCostUsdt({maxOrderMarginUsdt: slotSizingBounds(SLOT_SIZING_CONTRACT).maxOrderMarginUsdt,
+  leverage: SLOT_SIZING_CONTRACT.leverage, takerFeeRate: FEE_RATE, iocMaxBps: SLOT_SIZING_CONTRACT.iocMaxBps});
+
+function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {}, setupMaxConcurrent = MAX_SLOTS,
+  reviews = null, followUp = false, account = null, budget = null, policyOpen = 0}) {
   const seen = [];
   const audits = [];
+  const notes = [];
+  const terminals = [];
+  const attempts = [];
+  const signalRanges = [];
+  const model = account ?? accountModel();
+  let inFlight = 0, maxInFlight = 0;
+  // A clock the stubs can move: a slow first entry is what closes a later candidate's window.
+  const clock = {now};
+  model.clock = clock;
   // signal5Close is now load-bearing: the queue retires already-expired candidates
   // before claiming them, so a fixture must be inside POLICY.maxEntryAgeMs to be
   // priced at all. `bar` shifts a row's age for the expiry tests below.
@@ -165,8 +219,17 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
     const b = {
       select: () => b, eq: (k, v) => { if (k === 'id') st.id = v; return b; },
       gte: () => b, order: () => b, neq: () => b,
-      update: (patch) => { st.patch = patch; return b; },
+      update: (patch) => { st.patch = patch; if (patch?.status === 'REJECTED') terminals.push({id: null, patch, st}); return b; },
+      in: () => b,
       limit: async () => ({data: [], error: null}),
+      range: async (from, to) => {
+        assert.equal(name, 'v11_long_regime_signals');
+        signalRanges.push([from, to]);
+        // Supabase/PostgREST applies the ordered range on the server, not after GPT.
+        const ordered = [...rows].sort((a, b) => Date.parse(b.entry_bar_at) - Date.parse(a.entry_bar_at) ||
+          String(b.id).localeCompare(String(a.id)));
+        return {data: ordered.slice(from, to + 1), error: null};
+      },
       maybeSingle: async () => {
         if (st.patch?.status) seen.push(`${st.id}:${st.patch.status}`);
         return {data: rows.find(r => r.id === st.id) || {}, error: null};
@@ -181,10 +244,11 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
     };
     return b;
   }
+  const db = {from: table};
   const ctx = {
     audit: async (...args) => { audits.push(args); }, audits,
-    Date: clockAt(now), Number, Math, Error, Promise, String, Object, Set, Array, console, JSON,
-    ENTRY_ATTEMPTS_PER_RUN: 3,
+    Date: new Proxy(Date, {get: (t, k) => (k === 'now' ? () => clock.now : Reflect.get(t, k))}),
+    Number, Math, Error, Promise, String, Object, Set, Map, Array, console, JSON, clock,
     ENTRY_RUN_BUDGET_MS: 40000,
     SETUP_POLICY, SETUP_REASON, SETUP_STATE, SETUP_MAX_CONCURRENT: setupMaxConcurrent,
     SETUP_ADVANCE_BUDGET_MS: 12000,
@@ -194,7 +258,7 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
       const close = Number(row?.features?.signal5Close);
       return Number.isSafeInteger(close) && close >= Date.parse("2026-09-17T00:00:00.000Z");
     },
-    setupScopedOpen: () => [],
+    setupScopedOpen: () => Array.from({length: policyOpen}, (_, i) => ({id: 'held' + i})),
     // Stubbed at its real signature. `setups` maps a row id to the state the setup
     // reaches on this cycle, so the queue's handling of each outcome is testable
     // without a market fetch.
@@ -211,20 +275,49 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
     ENTRY_SKIP_SYMBOL_SCOPED: /^(SIGNAL_STALE_OR_FUTURE|ENTRY_DRIFT|ENTRY_SPREAD)/,
     N: (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d),
     rec: x => (x && typeof x === 'object' && !Array.isArray(x) ? x : {}),
-    openNow: [], manual: [], sgRows: rows, seen,
-    gptFilterExecutable: async (_db, executable) => ({candidates: executable, reason: 'TEST_GPT_PASS'}),
+    openNow: model.pair().positions, manual: [], signalRanges, seen, SIGNAL_MAX: 1_200_000,
+    REVISION: 'V11-LONG-REGIME-1.0.1', STRATEGY: 'P10',
+    gptFilterExecutable: async (_db, executable) => reviews ? reviews(executable) :
+      ({candidates: executable, reason: 'TEST_GPT_PASS', reviews: executable.map(s => ({signalId: s.id, allowed: true}))}),
+    lifecycleNote, gptTerminalReason, notes, terminals, attempts, model,
+    noteEntryLifecycle: async (_db, row, note) => { notes.push({id: row.id, ...note}); return row; },
+    gptArmFollowUp: (_db, rest) => followUp && rest.length > 0,
+    // Entry capacity: the real module and the executor's real helpers (sliced below), reading the
+    // account model through the same readOpsPair/snap seams production uses.
+    ...capacity, CONTROL_SCOPE, MAX_SLOTS, ENTRY_CASH_BUFFER_USDT: CASH_BUFFER, ENTRY_SLOT_COST_USDT: SLOT_COST,
+    ENTRY_ATTEMPT_RESERVE: ATTEMPT_RESERVE, cycleBudgets: new Map(budget ? [[db, budget]] : []),
+    pair: model.pair(),
+    readOpsPair: async () => { model.reads++; if (model.fail) throw new Error(model.fail); return model.pair(); },
+    snap: async () => model.snapshot(),
+    freshPortfolio: (pf) => pf?.stale !== true,
     openBull: async (_db, sig, _o, _m, attempt) => {
-      const o = outcomes[sig.symbol];
-      if (o.dispatch) attempt.dispatched = true;
-      if (o.throw) throw Error(o.throw);
-      return o.result;
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+      try {
+        attempts.push({symbol: sig.symbol, capacity: attempt.capacity, readsBefore: model.reads, fillsBefore: model.fills.length});
+        // Yield: a second openBull started without awaiting this one would overlap here.
+        await new Promise(r => setImmediate(r));
+        const spec = outcomes[sig.symbol];
+        const o = typeof spec === 'function' ? spec({model, attempt, clock}) : spec;
+        if (o.dispatch) attempt.dispatched = true;
+        if (o.throw) throw Error(o.throw);
+        if (o.result?.entered !== true) return o.result;
+        // The exchange answers the order, then time moves on: a snapshot read after this contains it.
+        model.fill(sig.symbol, o.margin ?? 150);
+        const respondedAt = clock.now; clock.now += 1;
+        return {symbol: sig.symbol, sizedMarginUsdt: o.margin ?? 150, entryFinality: {respondedAt}, ...o.result};
+      } finally { inFlight--; }
     },
-    db: {from: table},
+    maxInFlight: () => maxInFlight,
+    db,
   };
   vm.createContext(ctx);
-  const loop = source.slice(source.indexOf('const openSymbols=new Set(openNow'), source.indexOf('\nreturn entry;\n}',source.indexOf('async function runEntryQueue')));
-  if (!loop.includes('for(const s of gptReviewed.candidates)')) throw new Error('the entry loop was reshaped');
-  vm.runInContext(`this.go=async function(){let entry={entered:false,reason:"V17_NO_ENTRY"};const sg={data:sgRows,error:null};${loop};return {entry,seen}}`, ctx);
+  const helpers = source.slice(source.indexOf('// Account state the entry capacity is computed from'), source.indexOf('async function runEntryQueue('));
+  if (!helpers.includes('function refreshCapacityInputs(db)')) throw new Error('the capacity helpers moved');
+  vm.runInContext(helpers, ctx);
+  const loop = source.slice(source.indexOf('const since=new Date(Date.now()-SIGNAL_MAX).toISOString(),signalPageSize='),
+    source.indexOf('\n}\n\nasync function requireLeaderEntryControls',source.indexOf('async function runEntryQueue')));
+  if (!loop.includes('for(const [index,s] of queued.entries())')) throw new Error('the entry loop was reshaped');
+  vm.runInContext(`this.go=async function(){let entry={entered:false,reason:"V17_NO_ENTRY"};const out=await (async()=>{${loop}\n})();return {entry:out,seen}}`, ctx);
   return ctx;
 }
 
@@ -237,7 +330,11 @@ test('a symbol-specific no-fill lets the next candidate be priced in the same ru
   const {entry, seen} = await ctx.go();
   assert.equal(entry.entered, true, 'the second candidate was entered');
   assert.ok(seen.includes('a:CLAIMED') && seen.includes('b:CLAIMED'), 'both were claimed');
-  assert.ok(!seen.includes('c:CLAIMED'), 'it stopped once an entry succeeded');
+  // (2026-09-25) An entry no longer ends the run: with capacity left, the third is priced too,
+  // after the account was read again.
+  assert.ok(seen.includes('c:CLAIMED'), 'capacity remained, so the next BUY was priced');
+  assert.equal(ctx.attempts.find(a => a.symbol === 'XTZUSDT').readsBefore, 1, 'after a fresh account read');
+  assert.equal(entry.entryCount, 1);
 });
 
 test('rank order decides which candidate of a bar is priced first', async () => {
@@ -456,30 +553,27 @@ test('a terminal setup is retired with its own reason, not as a stale signal', a
   }
 });
 
-test('the policy-scoped admission limit caps concurrent NEW-policy entries only', async () => {
-  // Three triggered setups, limit 2: the third is refused by the POLICY limit, which
-  // is a different thing from the account-wide MAX_SLOTS and must not touch it.
+test('the policy-scoped admission limit counts held positions, never queued candidates', async () => {
+  // (2026-09-25) The limit was 2, then 4, and it counted candidates still waiting for GPT against
+  // it -- a hidden account cap below MAX_SLOTS. It is MAX_SLOTS now and counts held positions.
   const triggered = stateOf(SETUP_STATE.TRIGGERED,
     {triggerAt: SETUP_NOW, triggerExpiresAt: SETUP_NOW + 60_000, triggerClose: 100.25});
-  const ctx = harness({
-    now: SETUP_NOW,
-    setupMaxConcurrent: 2,
-    rows: [setupRow('a', 'IOSTUSDT', 1), setupRow('b', 'BULLAUSDT', 2), setupRow('c', 'XTZUSDT', 3)],
-    setups: {a: triggered, b: triggered, c: triggered},
-    outcomes: {
-      IOSTUSDT: {dispatch: false, result: {entered: false, reason: 'UNKNOWN:E1_QUOTE_UNKNOWN',
-        releaseClaim: true, releaseScope: 'SYMBOL'}},
-      BULLAUSDT: {dispatch: false, result: {entered: false, reason: 'UNKNOWN:E1_QUOTE_UNKNOWN',
-        releaseClaim: true, releaseScope: 'SYMBOL'}},
-      XTZUSDT: {dispatch: false, throw: 'the third must never be priced'},
-    },
-  });
+  const rows = [setupRow('a', 'IOSTUSDT', 1), setupRow('b', 'BULLAUSDT', 2), setupRow('c', 'XTZUSDT', 3),
+    setupRow('d', 'QNTUSDT', 4), setupRow('e', 'TRBUSDT', 5)];
+  const defer = {dispatch: false, result: {entered: false, reason: 'UNKNOWN:E1_QUOTE_UNKNOWN',
+    releaseClaim: true, releaseScope: 'SYMBOL'}};
+  const outcomes = Object.fromEntries(rows.map(r => [r.symbol, defer]));
+  const ctx = harness({now: SETUP_NOW, policyOpen: 4, rows, setups: Object.fromEntries(rows.map(r => [r.id, triggered])), outcomes});
   const {seen} = await ctx.go();
-  assert.ok(seen.includes('a:CLAIMED') && seen.includes('b:CLAIMED'));
-  assert.ok(!seen.includes('c:CLAIMED'), 'the policy limit stops the third');
+  assert.equal(seen.filter(x => x.endsWith(':CLAIMED')).length, 5, 'four held positions leave six slots: all five are priced');
+  const full = harness({now: SETUP_NOW, policyOpen: MAX_SLOTS, rows, setups: Object.fromEntries(rows.map(r => [r.id, triggered])),
+    outcomes: Object.fromEntries(rows.map(r => [r.symbol, {throw: 'must never be priced'}]))});
+  const blocked = await full.go();
+  assert.ok(!blocked.seen.some(x => x.endsWith(':CLAIMED')), 'the policy holding MAX_SLOTS positions admits nothing');
+  assert.ok(full.notes.every(n => n.reason === 'V17_SETUP_POLICY_SLOT_LIMIT'));
   const source = readFileSync(
     new URL('../../supabase/functions/v10-lane-executor/index.ts', import.meta.url), 'utf8');
-  assert.match(source, /const SETUP_MAX_CONCURRENT=\d;/);
+  assert.match(source, /const SETUP_MAX_CONCURRENT=MAX_SLOTS;/);
   assert.match(source, /const MAX_SLOTS=10/, 'the account-wide slot limit is untouched');
 });
 
@@ -522,4 +616,488 @@ test('a setup is armed from its own bar close, never from when it was first seen
     'arming from the wall clock would extend a stale signal');
   // And a signal with no usable close is refused rather than armed from the clock.
   assert.match(advance, /if\(!Number\.isSafeInteger\(armAt\)\)return \{row,state:null/);
+});
+
+// ---------------------------------------------------------------------------
+// Entry lifecycle (2026-09-25): no GPT-reviewed candidate ends without a terminal reason.
+// ---------------------------------------------------------------------------
+const liveTrigger = () => stateOf(SETUP_STATE.TRIGGERED,
+  {triggerAt: SETUP_NOW, triggerExpiresAt: SETUP_NOW + 60_000, triggerClose: 100.25});
+
+test('BUY orphan prevention: with capacity left, every GPT BUY of the run is priced in the same run', async () => {
+  // (2026-09-25) Previously one entry ended the run and the other BUYs were only noted
+  // (ENTRY_PER_RUN_LIMIT) for a follow-up cycle. Now the account is re-read and they are priced.
+  const ctx = harness({now: SETUP_NOW, followUp: true,
+    rows: [setupRow('a', 'QNTUSDT', 1), setupRow('b', 'TRBUSDT', 2), setupRow('c', 'XTZUSDT', 3)],
+    setups: {a: liveTrigger(), b: liveTrigger(), c: liveTrigger()},
+    outcomes: {QNTUSDT: {dispatch: true, result: {entered: true, positionId: 'p1'}},
+      TRBUSDT: {dispatch: true, result: {entered: true, positionId: 'p2'}},
+      XTZUSDT: {dispatch: true, result: {entered: true, positionId: 'p3'}}}});
+  const {entry, seen} = await ctx.go();
+  assert.equal(entry.entered, true);
+  assert.deepEqual(Array.from(entry.entries, e => e.symbol), ['QNTUSDT', 'TRBUSDT', 'XTZUSDT']);
+  assert.ok(['a', 'b', 'c'].every(id => seen.includes(`${id}:CLAIMED`)));
+  assert.equal(entry.remainingGptBuys, 0);
+  assert.equal(entry.followUpArmed, false, 'nothing was left for a follow-up');
+  assert.ok(!ctx.notes.some(n => n.reason === 'ENTRY_PER_RUN_LIMIT'), 'no BUY is parked by a per-run limit');
+});
+
+test('GPT SKIP / ABSTAIN is terminal at once; a pending review is only noted', async () => {
+  const ctx = harness({now: SETUP_NOW,
+    rows: [setupRow('a', 'IOSTUSDT', 1), setupRow('b', 'BULLAUSDT', 2), setupRow('c', 'XTZUSDT', 3)],
+    setups: {a: liveTrigger(), b: liveTrigger(), c: liveTrigger()},
+    reviews: (ex) => ({candidates: [], reason: 'GPT_REVIEW_PENDING', reviews: [
+      {signalId: ex[0].id, allowed: false, reason: 'GPT_SKIP', decision: 'SKIP', detail: 'EV_UNFAVORABLE'},
+      {signalId: ex[1].id, allowed: false, reason: 'GPT_ABSTAIN', decision: 'ABSTAIN', detail: 'DATA_INSUFFICIENT'},
+      {signalId: ex[2].id, allowed: false, reason: 'GPT_REVIEW_PENDING', decision: 'ABSTAIN'}]}),
+    outcomes: {IOSTUSDT: {throw: 'no'}, BULLAUSDT: {throw: 'no'}, XTZUSDT: {throw: 'no'}}});
+  const {entry} = await ctx.go();
+  assert.equal(entry.entered, false);
+  const terminal = Object.fromEntries(ctx.terminals.map(t => [t.st.id, t.patch.reject_reason]));
+  assert.equal(terminal.a, 'GPT_SKIP:EV_UNFAVORABLE');
+  assert.equal(terminal.b, 'GPT_ABSTAIN:DATA_INSUFFICIENT');
+  assert.equal(terminal.c, undefined, 'a pending answer is not final');
+  assert.deepEqual(ctx.notes.map(n => [n.id, n.stage, n.reason]), [['c', 'GPT_REVIEW', 'GPT_REVIEW_PENDING']]);
+});
+
+test('duplicate entry: an open duplicate is terminal; a full book returns the claim and stops the run', async () => {
+  const ctx = harness({now: SETUP_NOW,
+    rows: [setupRow('a', 'IOSTUSDT', 1), setupRow('b', 'BULLAUSDT', 2), setupRow('c', 'XTZUSDT', 3)],
+    setups: {a: liveTrigger(), b: liveTrigger(), c: liveTrigger()},
+    outcomes: {IOSTUSDT: {dispatch: false, result: {entered: false, reason: 'DUPLICATE_SYMBOL_OPEN',
+      terminal: 'SLOT_UNAVAILABLE:DUPLICATE_SYMBOL_OPEN'}},
+    BULLAUSDT: {dispatch: false, result: {entered: false, reason: 'V11_SLOT_FULL', releaseClaim: true}},
+    XTZUSDT: {dispatch: false, throw: 'a full book must stop the run'}}});
+  const {seen} = await ctx.go();
+  assert.ok(seen.includes('a:REJECTED'), 'the duplicate is closed, never left CLAIMED');
+  assert.equal(ctx.terminals.find(t => t.st.id === 'a').patch.reject_reason, 'SLOT_UNAVAILABLE:DUPLICATE_SYMBOL_OPEN');
+  assert.ok(seen.includes('b:NEW'), 'a full book hands the claim back for the trigger window');
+  assert.ok(!seen.includes('c:CLAIMED'), 'and ends the run: no slot is free for anyone');
+});
+
+test('a released claim records the refusal it came back with', async () => {
+  const releases = [];
+  const ctx = harness({now: SETUP_NOW,
+    rows: [setupRow('a', 'IOSTUSDT', 1)], setups: {a: liveTrigger()},
+    outcomes: {IOSTUSDT: {dispatch: false, result: {entered: false, reason: 'E1_DISPATCH_QUOTE_AGED:1400',
+      releaseClaim: true, releaseScope: 'SYMBOL'}}}});
+  const from = ctx.db.from;
+  ctx.db.from = (name) => { const b = from(name), update = b.update;
+    b.update = (patch) => { if (patch?.status === 'NEW') releases.push(patch); return update(patch); }; return b; };
+  await ctx.go();
+  assert.equal(releases.length, 1);
+  assert.equal(releases[0].features.entryLifecycle.reason, 'E1_DISPATCH_QUOTE_AGED:1400');
+  assert.equal(releases[0].features.entryLifecycle.gptDecision, 'BUY');
+});
+
+test('BUY but stale: a closed trigger window is skipped before any selector, controller or GPT work', async () => {
+  let selected = 0;
+  const ctx = harness({now: SETUP_NOW + 61_000,
+    rows: [setupRow('a', 'IOSTUSDT', 1)],
+    setups: {a: stateOf(SETUP_STATE.TRIGGERED, {triggerAt: SETUP_NOW, triggerExpiresAt: SETUP_NOW + 60_000, triggerClose: 100.25})},
+    outcomes: {IOSTUSDT: {throw: 'a closed window must never be priced'}}});
+  ctx.applyB06133Selection = async (_db, row) => { selected++; return {allowed: true, row}; };
+  const {entry, seen} = await ctx.go();
+  assert.equal(selected, 0);
+  assert.ok(!seen.includes('a:CLAIMED'));
+  assert.equal(entry.reason, SETUP_REASON.TRIGGER_STALE);
+});
+
+test('the lifecycle sweep runs before the slot check and is never an admission', () => {
+  const q = source.slice(source.indexOf('async function runEntryQueue('));
+  const sweep = q.indexOf('sweepEntryLifecycle(db'), slot = q.indexOf('if(active(pair.pf).length>=MAX_SLOTS)');
+  assert.ok(sweep > 0 && sweep < slot, 'a full book cannot hide an expired trigger');
+  const fn = source.slice(source.indexOf('async function sweepEntryLifecycle('), source.indexOf('async function applyB06133Selection('));
+  assert.ok(!/status:"(NEW|CLAIMED|ORDERED)"/.test(fn.replace(/eq\("status","NEW"\)/g, '')), 'the sweep only ever writes REJECTED');
+  assert.ok(!/openBull|dispatchEntryIocAttempt|gateway\(/.test(fn), 'and never prices or orders');
+});
+
+// ---------------------------------------------------------------------------
+// Dynamic multi-slot admission (2026-09-25). capacity = min(MAX_SLOTS - used slots,
+// floor((free margin - cash buffer) / slot cost), valid GPT BUYs), re-read after every fill
+// (entry-capacity.mjs). J1-J18, the QNT/TRB replay, the 2/3/4/10-slot simulations and the
+// oversubscription proof. The account model charges 0.5 USDT of fees per fill unless a test
+// sets otherwise; a slot is always 150 USDT of margin -- nothing here makes a slot smaller.
+// ---------------------------------------------------------------------------
+const R = capacity.UNUSED_SLOT_REASON;
+const plain = (x) => JSON.parse(JSON.stringify(x));
+const capAt = (available, extra = {}) => capacity.entryCapacity({maxSlots: MAX_SLOTS, slotCost: SLOT_COST,
+  cashBufferUsdt: CASH_BUFFER, liveAvailableUsdt: available, ...extra});
+const SLOT_BUFFER = SLOT_COST - SLOT_SIZING_CONTRACT.targetMarginUsdt + CASH_BUFFER;
+/** n GPT BUY candidates with live triggers, ranked in order. */
+function buyRows(n, prefix = 'C') {
+  return Array.from({length: n}, (_, i) => setupRow(`${prefix}${i}`, `${prefix}${i}USDT`, i + 1));
+}
+function liveSetups(rows) { return Object.fromEntries(rows.map(r => [r.id, liveTrigger()])); }
+const fills = (margin = 150) => ({dispatch: true, margin, result: {entered: true, positionId: 'p'}});
+function allFill(rows, margin = 150) { return Object.fromEntries(rows.map(r => [r.symbol, fills(margin)])); }
+function sumReasons(unused) { return Object.values(unused.byReason).reduce((a, b) => a + b, 0); }
+const REASONS = new Set(Object.values(R));
+function assertEveryUnusedSlotHasAReason(entry, maxSlots = MAX_SLOTS) {
+  const u = entry.capacity.unusedSlots;
+  assert.equal(u.free, maxSlots - entry.capacity.final.usedSlots);
+  assert.equal(sumReasons(u), u.free, 'every empty slot carries exactly one reason');
+  for (const k of Object.keys(u.byReason)) assert.ok(REASONS.has(k), `${k} is one of the six reasons`);
+}
+
+test('the slot cost is 150 USDT of margin plus fee, lot-step and price-cap reserve -- never less', () => {
+  assert.equal(SLOT_SIZING_CONTRACT.targetMarginUsdt, 150);
+  assert.ok(Math.abs(SLOT_COST - 152.021375) < 1e-9, `slot cost ${SLOT_COST}`);
+  assert.ok(Math.abs(SLOT_BUFFER - 2.121375) < 1e-9, 'the buffer on top of 150 USDT');
+  assert.equal(MAX_SLOTS, 10);
+});
+
+for (const [id, available, expected] of [['J1', 149, 0], ['J2', 150 + SLOT_BUFFER + 0.005, 1], ['J3', 345, 2],
+  ['J4', 470, 3], ['J5', 620, 4], ['J6', 5_000, 10], ['-', 1_000, 6], ['-', 1_500, 9], ['-', 1_520.32, 10]]) {
+  test(`${id} ${available.toFixed(2)} USDT free with MAX_SLOTS ${MAX_SLOTS}: capacity ${expected}, and a run of 12 GPT BUYs enters exactly ${expected}`, async () => {
+    const c = capAt(available);
+    assert.equal(c.capacity, expected, 'expected capacity');
+    if (expected === 0) assert.equal(c.reason, R.INSUFFICIENT_MARGIN);
+    const rows = buyRows(12);
+    const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows), outcomes: allFill(rows),
+      account: accountModel({available})});
+    const {entry} = await ctx.go();
+    const actual = entry.entered ? entry.entryCount : 0;
+    assert.equal(actual, expected, 'actual capacity used by the run');
+    assert.ok(ctx.model.fills.every(f => f.margin === 150), 'every slot is a full 150 USDT slot');
+    assert.ok(ctx.maxInFlight() <= 1, 'one attempt at a time');
+    assertEveryUnusedSlotHasAReason(entry);
+    const reason = expected === MAX_SLOTS ? null : R.INSUFFICIENT_MARGIN;
+    if (reason) assert.equal(entry.capacity.unusedSlots.byReason[reason], MAX_SLOTS - expected);
+  });
+}
+
+test('J2 the buffer is required: 150.00 USDT alone is not one slot, 150 + buffer is', () => {
+  assert.equal(capAt(150).capacity, 0);
+  assert.equal(capAt(150 + SLOT_BUFFER + 0.005).capacity, 1);
+  assert.match(capAt(150).detail, /^150\.00<152\.13$/);
+});
+
+test('J7 two BUYs: the second is evaluated only after the first fill and a fresh account read', async () => {
+  const rows = buyRows(2);
+  const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows), outcomes: allFill(rows),
+    account: accountModel({available: 345})});
+  const {entry} = await ctx.go();
+  assert.equal(entry.entryCount, 2);
+  const [first, second] = ctx.attempts;
+  assert.equal(first.readsBefore, 0);
+  assert.equal(second.readsBefore, 1, 'the account was read again between the two');
+  assert.equal(second.fillsBefore, 1, 'after the first fill');
+  assert.equal(second.capacity.usedSlots, 1);
+  assert.equal(second.capacity.runEntryIndex, 2);
+  assert.ok(Math.abs(second.capacity.freeMarginUsdt - (345 - 150.5)) < 1e-9, 'priced on the post-fill margin');
+});
+
+test('J8 four BUYs with four slots of capital: all four enter', async () => {
+  const rows = buyRows(4);
+  const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows), outcomes: allFill(rows),
+    account: accountModel({available: 620})});
+  const {entry} = await ctx.go();
+  assert.equal(entry.entryCount, 4);
+  assert.deepEqual(Array.from(entry.entries, e => e.symbol), rows.map(r => r.symbol));
+});
+
+test('production query pagination reaches BUYs beyond the first full page of GPT SKIPs', async () => {
+  const rows = buyRows(110);
+  const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows),
+    reviews: (ex) => ({candidates: ex.slice(100), reason: 'TEST', reviews: ex.map((s, i) =>
+      i < 100 ? {signalId: s.id, allowed: false, reason: 'GPT_SKIP', decision: 'SKIP'} :
+        {signalId: s.id, allowed: true})}),
+    outcomes: allFill(rows), account: accountModel({available: 5_000})});
+  const {entry} = await ctx.go();
+  assert.deepEqual(ctx.signalRanges, [[0,99],[100,199]], 'the real query requests page two');
+  assert.equal(entry.entryCount, 10, 'all available slots use BUYs hidden behind the first page');
+  assert.equal(ctx.model.fills.length, 10);
+  assert.equal(ctx.model.reads, 10, 'portfolio is refreshed after each fill');
+});
+
+test('J9 a GPT SKIP (initial or FINAL RECHECK) moves on to the next BUY', async () => {
+  const rows = buyRows(3);
+  const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows),
+    reviews: (ex) => ({candidates: ex.slice(1), reason: 'TEST', reviews: [
+      {signalId: ex[0].id, allowed: false, reason: 'GPT_SKIP', decision: 'SKIP', detail: 'EV_UNFAVORABLE'},
+      ...ex.slice(1).map(s => ({signalId: s.id, allowed: true}))]}),
+    outcomes: {C0USDT: {throw: 'a SKIP is never priced'},
+      C1USDT: {dispatch: false, result: {entered: false, reason: 'GPT_FINAL_RECHECK_SKIP'}},
+      C2USDT: fills()},
+    account: accountModel({available: 620})});
+  const {entry, seen} = await ctx.go();
+  assert.ok(!seen.includes('C0:CLAIMED'));
+  assert.equal(entry.entryCount, 1);
+  assert.equal(entry.entries[0].symbol, 'C2USDT', 'the BUY after the SKIPs entered');
+  assert.equal(entry.capacity.unusedSlots.byReason[R.NO_VALID_GPT_BUY] > 0, true);
+  assertEveryUnusedSlotHasAReason(entry);
+});
+
+test('J10 an execution refusal (released or thrown before dispatch) moves on to the next BUY', async () => {
+  const rows = buyRows(3);
+  const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows),
+    outcomes: {C0USDT: {dispatch: false, result: {entered: false, reason: 'E1_DISPATCH_QUOTE_AGED:1400', releaseClaim: true, releaseScope: 'SYMBOL'}},
+      C1USDT: {dispatch: false, throw: 'ENTRY_SPREAD:41'}, C2USDT: fills()},
+    account: accountModel({available: 620})});
+  const {entry, seen} = await ctx.go();
+  assert.ok(seen.includes('C0:NEW') && seen.includes('C2:CLAIMED'));
+  assert.equal(entry.entryCount, 1);
+  // 620 - 150.5 leaves 3 fundable slots: 2 are explained by the two execution refusals.
+  assert.equal(entry.capacity.unusedSlots.byReason[R.EXECUTION_SAFETY_REJECT], 2);
+  assertEveryUnusedSlotHasAReason(entry);
+});
+
+test('J11 margin for only one slot: the run stops after the first fill, the rest are named', async () => {
+  const rows = buyRows(3);
+  const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows), outcomes: allFill(rows),
+    account: accountModel({available: 300})});
+  const {entry, seen} = await ctx.go();
+  assert.equal(entry.entryCount, 1);
+  assert.ok(!seen.includes('C1:CLAIMED') && !seen.includes('C2:CLAIMED'), 'no claim without a funded slot');
+  assert.equal(entry.capacity.unusedSlots.stop.reason, R.INSUFFICIENT_MARGIN);
+  assert.equal(entry.capacity.unusedSlots.byReason[R.INSUFFICIENT_MARGIN], 9);
+  const noted = ctx.notes.filter(n => n.stage === 'QUEUE').map(n => n.reason);
+  assert.equal(noted.length, 2);
+  assert.ok(noted.every(r => /^INSUFFICIENT_MARGIN:149\.50<152\.13$/.test(r)), noted.join());
+});
+
+test('J12 a partial fill books its ACTUAL margin, so the rest of the account stays usable', async () => {
+  const rows = buyRows(4);
+  const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows),
+    outcomes: {C0USDT: {dispatch: true, margin: 60, result: {entered: true, reason: 'PARTIAL_FILL_ABORT:IOC_RETRY_EXHAUSTED'}},
+      C1USDT: fills(), C2USDT: fills(), C3USDT: fills()},
+    account: accountModel({available: 400})});
+  const {entry} = await ctx.go();
+  // 400 - 60.5 = 339.5 -> two more full slots; booking the partial as a whole slot would allow one.
+  assert.equal(entry.entryCount, 3);
+  assert.equal(entry.entries[0].sizedMarginUsdt, 60);
+  assert.equal(ctx.attempts[1].capacity.capacity, 2, 'recomputed from the partial margin');
+  assert.equal(ctx.attempts[1].capacity.usedSlots, 1, 'a partial fill holds one slot');
+});
+
+test('J13 an unresolved entry order reserves its slot and margin; a held account admits nothing', async () => {
+  const pending = {id: 'o1', symbol: 'OLDUSDT', intent: 'OPEN_LONG', state: 'DISPATCHED', response_payload: {}};
+  const rows = buyRows(2);
+  const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows),
+    outcomes: Object.fromEntries(rows.map(r => [r.symbol, {throw: 'must never be priced'}])),
+    account: accountModel({available: 5_000, pending: [pending]})});
+  const {entry, seen} = await ctx.go();
+  assert.ok(!seen.some(x => x.endsWith(':CLAIMED')));
+  assert.equal(entry.capacity.initial.reason, R.PENDING_CAPITAL_RESERVED);
+  assert.equal(entry.capacity.unusedSlots.byReason[R.PENDING_CAPITAL_RESERVED], 9, 'the order holds one slot; nine wait on it');
+  // Under a symbol quarantine the order no longer holds the account, but its slot and margin stay reserved.
+  const c = capAt(320, {orders: [pending], quarantinedOrderIds: ['o1']});
+  assert.equal(c.usedSlots, 1);
+  assert.equal(c.marginSlotsGross, 2);
+  assert.equal(c.capacity, 1, 'one slot of margin is held back for the unresolved order');
+  const held = capAt(320, {orders: [{...pending, response_payload: {v18ExposureFinal: true}}]});
+  assert.equal(held.capacity, 2, 'an order whose exposure is final reserves nothing');
+});
+
+test('J14 MAX_SLOTS: nine held + three BUYs enters one; ten held enters none', async () => {
+  const held = Array.from({length: 9}, (_, i) => `H${i}USDT`);
+  const rows = buyRows(3);
+  const nine = harness({now: SETUP_NOW, rows, setups: liveSetups(rows), outcomes: allFill(rows),
+    account: accountModel({available: 5_000, open: held})});
+  const a = await nine.go();
+  assert.equal(a.entry.entryCount, 1);
+  assert.equal(a.entry.capacity.unusedSlots.stop.reason, R.MAX_SLOTS_REACHED);
+  assert.equal(a.entry.capacity.unusedSlots.free, 0);
+  const ten = harness({now: SETUP_NOW, rows, setups: liveSetups(rows),
+    outcomes: Object.fromEntries(rows.map(r => [r.symbol, {throw: 'must never be priced'}])),
+    account: accountModel({available: 5_000, open: [...held, 'H9USDT']})});
+  const b = await ten.go();
+  assert.equal(b.entry.entered, false);
+  assert.match(b.entry.reason, /^MAX_SLOTS_REACHED:10\/10$/);
+});
+
+test('J15 a duplicate symbol never enters: held symbols are not queued, a late duplicate is terminal', async () => {
+  const rows = [setupRow('a', 'HELDUSDT', 1), setupRow('b', 'RACEUSDT', 2), setupRow('c', 'NEXTUSDT', 3)];
+  const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows),
+    outcomes: {HELDUSDT: {throw: 'a held symbol is never priced'},
+      RACEUSDT: {dispatch: false, result: {entered: false, reason: 'DUPLICATE_SYMBOL_OPEN', terminal: 'SLOT_UNAVAILABLE:DUPLICATE_SYMBOL_OPEN'}},
+      NEXTUSDT: fills()},
+    account: accountModel({available: 5_000, open: ['HELDUSDT']})});
+  const {entry, seen} = await ctx.go();
+  assert.ok(!seen.includes('a:CLAIMED'));
+  assert.ok(seen.includes('b:REJECTED'));
+  assert.equal(entry.entryCount, 1);
+  assert.equal(entry.entries[0].symbol, 'NEXTUSDT');
+});
+
+test('J16 twelve BUYs and ample margin never exceed MAX_SLOTS', async () => {
+  const rows = buyRows(12);
+  const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows), outcomes: allFill(rows),
+    account: accountModel({available: 50_000})});
+  const {entry, seen} = await ctx.go();
+  assert.equal(entry.entryCount, MAX_SLOTS);
+  assert.equal(seen.filter(x => x.endsWith(':CLAIMED')).length, MAX_SLOTS, 'the eleventh is never claimed');
+  assert.equal(entry.capacity.final.usedSlots, MAX_SLOTS);
+  const rest = ctx.notes.filter(n => n.stage === 'QUEUE').map(n => n.reason);
+  assert.deepEqual(rest, ['MAX_SLOTS_REACHED:10/10', 'MAX_SLOTS_REACHED:10/10']);
+});
+
+test('J17 no double use of free margin: with every account view lagging, the ledger alone stops at the true capacity', async () => {
+  // Exchange, DB and snapshot all keep showing 320 USDT free and no positions after each fill.
+  const rows = buyRows(4);
+  const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows), outcomes: allFill(rows),
+    account: accountModel({available: 320, lag: true})});
+  const {entry} = await ctx.go();
+  assert.equal(entry.entryCount, 2, 'true capacity: 320 - 2 x 150.5 = 19 USDT left');
+  assert.ok(ctx.model.available < 152.12 && ctx.model.available > 0, 'the real account was never overdrawn');
+  assert.deepEqual(plain(entry.capacity.final.ledgerSymbols), ['C0USDT', 'C1USDT']);
+  assert.equal(entry.capacity.final.usedSlots, 2, 'the ledger holds both slots although no view shows them');
+  // Without the ledger the same lagging view would report two free slots after both fills.
+  const naive = capAt(320);
+  assert.equal(naive.capacity, 2, 'what a view-only capacity would have allowed again');
+  assert.equal(ctx.maxInFlight(), 1);
+});
+
+test('J18 an account that cannot be re-read after a fill ends the run fail-closed; the fill stands', async () => {
+  for (const failure of ['error', 'stale']) {
+    const rows = buyRows(3);
+    const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows),
+      outcomes: {C0USDT: ({model}) => {
+        if (failure === 'error') model.fail = 'GATEWAY_TIMEOUT';
+        else { const pair = model.pair; model.pair = () => ({...pair(), pf: {...pair().pf, stale: true}}); }
+        return fills();
+      }, C1USDT: {throw: 'must never be priced'}, C2USDT: {throw: 'must never be priced'}},
+      account: accountModel({available: 5_000})});
+    const {entry, seen} = await ctx.go();
+    assert.equal(entry.entered, true, 'the first fill is reported');
+    assert.equal(entry.entryCount, 1);
+    assert.ok(!seen.includes('C1:CLAIMED'));
+    assert.equal(entry.capacity.unusedSlots.stop.reason, R.ACCOUNT_SAFETY_BLOCK);
+    assert.match(entry.capacity.unusedSlots.stop.detail, failure === 'error' ?
+      /^CAPACITY_REFRESH_FAILED:GATEWAY_TIMEOUT$/ : /^CAPACITY_REFRESH_FAILED:CAPACITY_PORTFOLIO_STALE$/);
+    assert.equal(ctx.notes.filter(n => n.stage === 'QUEUE' && /^ACCOUNT_SAFETY_BLOCK:CAPACITY_REFRESH_FAILED/.test(n.reason)).length, 2);
+    assertEveryUnusedSlotHasAReason(entry);
+  }
+});
+
+/** The two production signals: QNTUSDT's 17:10 bar and TRBUSDT's 17:15 bar, both triggered 17:17:00. */
+function qntTrbRows() {
+  const row = (id, symbol, rank, bar) => ({id, symbol, entry_bar_at: bar, features: {rank, signal5Close: Date.parse(bar)}});
+  return [row('qnt', 'QNTUSDT', 1, '2026-09-24T17:10:00Z'), row('trb', 'TRBUSDT', 2, '2026-09-24T17:15:00Z')];
+}
+test('QNT/TRB 2026-09-24 17:17 replay: after QNT fills, TRB reaches its order stage on the post-fill account', async () => {
+  // Production: 351.67 USDT free, QNT filled 148.81 USDT of margin at 17:17:22 and the account
+  // showed 202.86 free; TRB (GPT BUY 17:17:11.6, trigger window to 17:18:00) was never priced.
+  const trig = Date.parse('2026-09-24T17:17:00Z'), now = trig + 15_000;
+  const trigger = stateOf(SETUP_STATE.TRIGGERED, {triggerAt: trig, triggerExpiresAt: trig + 60_000, triggerClose: 1});
+  const rows = qntTrbRows();
+  let trbSaw = null;
+  const ctx = harness({now, rows, setups: {qnt: trigger, trb: trigger},
+    outcomes: {QNTUSDT: ({clock}) => { clock.now += 12_000; return fills(148.81); },
+      TRBUSDT: ({attempt}) => { trbSaw = attempt.capacity; return fills(150); }},
+    account: accountModel({available: 351.67, feeUsdt: 0})});
+  const {entry, seen} = await ctx.go();
+  assert.ok(seen.includes('trb:CLAIMED'), 'TRB is claimed in the same run');
+  assert.ok(trbSaw, 'TRB reached openBull (its order stage)');
+  assert.equal(trbSaw.runEntryIndex, 2);
+  assert.equal(trbSaw.usedSlots, 1);
+  assert.equal(trbSaw.capacity, 1);
+  assert.ok(Math.abs(trbSaw.freeMarginUsdt - 202.86) < 1e-9, 'priced on the re-read 202.86 USDT');
+  assert.deepEqual(Array.from(entry.entries, e => e.symbol), ['QNTUSDT', 'TRBUSDT']);
+});
+
+test('QNT/TRB variant: if QNT takes past TRB\'s trigger window, TRB is named V17_TRIGGER_STALE, never silently dropped', async () => {
+  // Run 2 starts 40 s into the window and QNT's entry takes 21 s (inside the run's wall clock).
+  const trig = Date.parse('2026-09-24T17:17:00Z'), now = trig + 40_000;
+  const trigger = stateOf(SETUP_STATE.TRIGGERED, {triggerAt: trig, triggerExpiresAt: trig + 60_000, triggerClose: 1});
+  const rows = qntTrbRows();
+  const ctx = harness({now, rows, setups: {qnt: trigger, trb: trigger},
+    outcomes: {QNTUSDT: ({clock}) => { clock.now = trig + 61_000; return fills(148.81); },
+      TRBUSDT: {throw: 'a closed window is never priced'}},
+    account: accountModel({available: 351.67, feeUsdt: 0})});
+  const {entry, seen} = await ctx.go();
+  assert.ok(!seen.includes('trb:CLAIMED'));
+  const note = ctx.notes.find(n => n.id === 'trb');
+  assert.equal(note.reason, SETUP_REASON.TRIGGER_STALE);
+  assert.equal(note.gptDecision, 'BUY');
+  assert.equal(entry.capacity.unusedSlots.byReason[R.EXECUTION_SAFETY_REJECT], 1, 'the free slot TRB would have taken is explained');
+  assertEveryUnusedSlotHasAReason(entry);
+});
+
+test('the cycle budget bounds the run: BUYs it cannot finish are named, handed to the follow-up, and their slots explained', async () => {
+  const rows = buyRows(5);
+  let attemptsSeen = 0;
+  const budget = {remaining: () => (attemptsSeen >= 2 ? ATTEMPT_RESERVE.ms - 1 : 50_000), get callsLeft() { return 100; }};
+  const outcomes = Object.fromEntries(rows.map(r => [r.symbol, () => { attemptsSeen++; return fills(); }]));
+  const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows), outcomes, budget, followUp: true,
+    account: accountModel({available: 5_000})});
+  const {entry} = await ctx.go();
+  assert.equal(entry.entryCount, 2);
+  assert.equal(entry.remainingGptBuys, 3);
+  assert.equal(entry.followUpArmed, true, 'one follow-up cycle (a fresh budget) is armed for them');
+  assert.equal(entry.capacity.unusedSlots.stop.detail, 'CYCLE_BUDGET_RESERVE');
+  assert.equal(entry.capacity.unusedSlots.byReason[R.EXECUTION_SAFETY_REJECT], 3);
+  assert.equal(entry.capacity.unusedSlots.byReason[R.NO_VALID_GPT_BUY], 5);
+  assert.equal(ctx.notes.filter(n => n.reason === 'EXECUTION_SAFETY_REJECT:CYCLE_BUDGET_RESERVE').length, 3);
+  // Too few gateway calls left is the same stop.
+  const calls = harness({now: SETUP_NOW, rows: buyRows(2), setups: liveSetups(buyRows(2)), outcomes: allFill(buyRows(2)),
+    budget: {remaining: () => 50_000, callsLeft: ATTEMPT_RESERVE.calls - 1}, account: accountModel({available: 5_000})});
+  const c = await calls.go();
+  assert.equal(c.entry.entered, false);
+  assert.equal(c.entry.reason, 'EXECUTION_SAFETY_REJECT:CYCLE_BUDGET_RESERVE');
+});
+
+test('an ACCOUNT-scoped refusal after a fill stops the run with its own reason for every fundable slot', async () => {
+  const rows = buyRows(3);
+  const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows),
+    outcomes: {C0USDT: fills(), C1USDT: {dispatch: false, result: {entered: false,
+      reason: 'ENTRY_CONTROL:ACCOUNT_RISK_BLOCK:ACCOUNT_CIRCUIT:X', releaseClaim: true, releaseScope: 'ACCOUNT'}},
+    C2USDT: {throw: 'must never be priced'}},
+    account: accountModel({available: 5_000})});
+  const {entry, seen} = await ctx.go();
+  assert.equal(entry.entryCount, 1);
+  assert.ok(seen.includes('C1:NEW') && !seen.includes('C2:CLAIMED'));
+  assert.equal(entry.capacity.unusedSlots.stop.reason, R.ACCOUNT_SAFETY_BLOCK);
+  assert.equal(entry.capacity.unusedSlots.byReason[R.ACCOUNT_SAFETY_BLOCK], 9);
+  assert.equal(ctx.notes.find(n => n.id === 'C2').reason, 'ACCOUNT_SAFETY_BLOCK:ENTRY_CONTROL:ACCOUNT_RISK_BLOCK:ACCOUNT_CIRCUIT:X');
+});
+
+test('FINAL CHECK: enough margin + an empty slot + a valid GPT BUY never leaves the slot empty', async () => {
+  // Every combination of 1..10 BUYs against 0..10 held slots with ample margin: the run enters
+  // min(free slots, BUYs), and anything left empty is explained by one of the six reasons.
+  for (let held = 0; held <= MAX_SLOTS; held++) for (let n = 1; n <= MAX_SLOTS; n++) {
+    const rows = buyRows(n);
+    const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows), outcomes: allFill(rows),
+      account: accountModel({available: 50_000, open: Array.from({length: held}, (_, i) => `H${i}USDT`)})});
+    const {entry} = await ctx.go();
+    const entered = entry.entered ? entry.entryCount : 0;
+    assert.equal(entered, Math.min(MAX_SLOTS - held, n), `held ${held}, BUYs ${n}`);
+    assertEveryUnusedSlotHasAReason(entry);
+    const unused = entry.capacity.unusedSlots.byReason;
+    assert.equal(unused[R.INSUFFICIENT_MARGIN] ?? 0, 0, 'ample margin');
+    assert.equal(unused[R.NO_VALID_GPT_BUY] ?? 0, MAX_SLOTS - held - entered, 'only slots with no BUY left are empty');
+  }
+});
+
+test('oversubscription proof: attempts never overlap and capacity is re-read before every admission after a fill', async () => {
+  const rows = buyRows(8);
+  const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows), outcomes: allFill(rows),
+    account: accountModel({available: 1_000})});
+  const {entry} = await ctx.go();
+  assert.equal(entry.entryCount, 6);
+  assert.equal(ctx.maxInFlight(), 1, 'no Promise.all: one openBull at a time');
+  ctx.attempts.forEach((a, i) => {
+    assert.equal(a.readsBefore, i, `admission ${i + 1} follows ${i} account re-reads`);
+    assert.ok(a.capacity.capacity >= 1 && a.capacity.freeMarginUsdt >= SLOT_COST + CASH_BUFFER, 'never admitted without a funded slot');
+  });
+  assert.ok(ctx.model.available >= 0, 'the account was never overdrawn');
+  const source = readFileSync(new URL('../../supabase/functions/v10-lane-executor/index.ts', import.meta.url), 'utf8');
+  const q = source.slice(source.indexOf('async function runEntryQueue('), source.indexOf('async function requireLeaderEntryControls'));
+  assert.ok(!/Promise\.all\([^)]*openBull/.test(q) && (q.match(/openBull\(/g) ?? []).length === 1, 'one sequential call site');
+});
+
+test('an unlabelled claim release stops the run (fail closed) and its slots are an account stop, never "no valid BUY"', async () => {
+  for (const reason of ['PORTFOLIO_CHANGED', 'SOME_FUTURE_ACCOUNT_REFUSAL']) {
+    const rows = buyRows(3);
+    const ctx = harness({now: SETUP_NOW, rows, setups: liveSetups(rows),
+      outcomes: {C0USDT: fills(), C1USDT: {dispatch: false, result: {entered: false, reason, releaseClaim: true}},
+        C2USDT: {throw: 'must never be priced'}},
+      account: accountModel({available: 5_000})});
+    const {entry, seen} = await ctx.go();
+    assert.ok(!seen.includes('C2:CLAIMED'), reason);
+    assert.equal(entry.capacity.unusedSlots.stop.reason, R.ACCOUNT_SAFETY_BLOCK, reason);
+    assert.equal(entry.capacity.unusedSlots.byReason[R.NO_VALID_GPT_BUY] ?? 0, 0, reason);
+    assertEveryUnusedSlotHasAReason(entry);
+  }
 });

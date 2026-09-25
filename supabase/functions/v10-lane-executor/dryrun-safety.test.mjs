@@ -22,7 +22,7 @@ test('recovery lock timeout is retryable and all other recovery errors stay fata
   assert.match(fn,/lock timeout\|55P03/);assert.match(fn,/RECOVERY_LOCK_BUSY/);assert.match(fn,/if\(r\.error\)throw Error\(`RECOVERY_CAS:/);
 });
 test('frozen sizing/slot constants remain in the executor',()=>{
-  assert.match(src,/const MAX_SLOTS=10,/);assert.match(src,/const SETUP_MAX_CONCURRENT=4/);
+  assert.match(src,/const MAX_SLOTS=10,/);assert.match(src,/const SETUP_MAX_CONCURRENT=MAX_SLOTS;/);
   assert.match(src,/const MARGIN=SLOT_SIZING_CONTRACT\.targetMarginUsdt,LEV=SLOT_SIZING_CONTRACT\.leverage/);
 });
 test('live probe module cannot reach orders, intents, signals or the live coordinator',()=>{

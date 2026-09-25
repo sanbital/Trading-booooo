@@ -117,19 +117,22 @@ test('order and position retain selector evidence while risk geometry stays fixe
   assert.ok(executor.includes('entrySelectionPolicyVersion:intent.request_payload?.entry_selection?.version'));
   assert.ok(executor.includes('b06133:intent.request_payload?.entry_selection??null'));
   assert.ok(executor.includes('const MAX_SLOTS=10'));
-  assert.ok(executor.includes('const SETUP_MAX_CONCURRENT=4'));
+  assert.ok(executor.includes('const SETUP_MAX_CONCURRENT=MAX_SLOTS;'));
   assert.ok(executor.includes('setup_max_concurrent:SETUP_MAX_CONCURRENT'));
   assert.ok(executor.includes('setupMaxConcurrent:SETUP_MAX_CONCURRENT'));
   assert.ok(executor.includes('const MARGIN=SLOT_SIZING_CONTRACT.targetMarginUsdt,LEV=SLOT_SIZING_CONTRACT.leverage'));
 });
 
-test('B06133 setup admission permits four concurrent positions and blocks the fifth',()=>{
-  const limit=Number(executor.match(/const SETUP_MAX_CONCURRENT=(\d+)/)?.[1]);
-  assert.equal(limit,4);
-  assert.ok(executor.includes('policyOpen+executable.filter(setupGoverns).length>=SETUP_MAX_CONCURRENT'));
-  const blocked=(policyOpen,queued)=>policyOpen+queued>=limit;
-  assert.equal(blocked(2,0),false);
-  assert.equal(blocked(3,0),false);
-  assert.equal(blocked(3,1),true);
-  assert.equal(blocked(4,0),true);
+// (2026-09-25) The policy limit was 2, then 4 -- a second account cap below the operator's
+// MAX_SLOTS, since every V17 entry carries the policy stamp. It is MAX_SLOTS now, and it counts
+// positions the policy holds, never candidates still waiting for GPT.
+test('B06133 setup admission is the operator MAX_SLOTS and never counts queued candidates',()=>{
+  assert.ok(executor.includes('const SETUP_MAX_CONCURRENT=MAX_SLOTS;'));
+  const maxSlots=Number(executor.match(/const MAX_SLOTS=(\d+)/)?.[1]);
+  assert.equal(maxSlots,10);
+  assert.ok(executor.includes('if(policyOpen>=SETUP_MAX_CONCURRENT){'));
+  assert.ok(!executor.includes('policyOpen+executable.filter(setupGoverns).length'),'queued candidates are not a cap');
+  const blocked=policyOpen=>policyOpen>=maxSlots;
+  for(const open of [0,2,3,4,5,9])assert.equal(blocked(open),false,`${open} held positions leave room`);
+  assert.equal(blocked(10),true);
 });
