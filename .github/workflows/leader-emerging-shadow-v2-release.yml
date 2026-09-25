@@ -1,0 +1,133 @@
+name: LE-SHADOW-2 release (shadow function only)
+# Deploys ONLY the order-free leader-emerging-shadow Edge Function from this branch after the
+# full regression suite, the shadow order-free/V2 suites and a type check pass, then proves:
+#   * the deployed bundle is byte-identical to this commit,
+#   * the production executor and signal generator bundles are unchanged (same version + ezbr),
+#   * no production function source differs from main.
+# It never changes trading controls, sizing, circuit, GPT mode or budget, and never places orders.
+on:
+  push:
+    branches: [claude/shadow-v2-implementation-diuxkj]
+    paths:
+      - supabase/functions/leader-emerging-shadow/**
+      - .github/workflows/leader-emerging-shadow-v2-release.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-leader-emerging-shadow
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prove only shadow code differs from main
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-evidence
+          git fetch --no-tags origin main
+          git diff --check
+          # every production function (and every shared module) must equal main; only the shadow dir may differ
+          git diff --quiet origin/main HEAD -- supabase/functions ':!supabase/functions/leader-emerging-shadow'
+          git diff --stat origin/main HEAD -- supabase/functions > release-evidence/source-diff-stat.txt
+          cat release-evidence/source-diff-stat.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Regression tests (full suite incl. LE-SHADOW-1/2 on PGlite)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/pglite && (cd /tmp/pglite && npm init -y >/dev/null && npm i --no-audit --no-fund @electric-sql/pglite@0.3 >/dev/null)
+          export PGLITE_MODULE=/tmp/pglite/node_modules/@electric-sql/pglite/dist/index.js
+          node --test \
+            development/gpt-final-review/tests/*.test.mjs \
+            supabase/functions/_shared/*.test.mjs \
+            supabase/functions/v10-lane-executor/*.test.mjs \
+            tests/*.test.mjs \
+            | tee release-evidence/tests.tap
+          grep -E '^# (tests|pass|fail)' release-evidence/tests.tap
+          grep -Eq '^# fail 0$' release-evidence/tests.tap
+
+      - name: Type-check and import graph of the shadow function
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm exec --yes --package=deno@2.5.6 -- deno check supabase/functions/leader-emerging-shadow/index.ts
+          npm exec --yes --package=deno@2.5.6 -- deno info --json supabase/functions/leader-emerging-shadow/index.ts > release-evidence/import-graph.json
+          node -e "const g=require('./release-evidence/import-graph.json');const local=g.modules.filter(m=>m.specifier.startsWith('file://')).map(m=>m.specifier.split('/supabase/functions/')[1]).sort();console.log(JSON.stringify(local));if(g.modules.some(m=>m.error))process.exit(1);if(local.some(f=>/v10-lane-executor|v10-lane-signal-generator|gateway|coordinator/.test(f)))process.exit(2)"
+
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Record production bundles and the shadow version before deploy
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-before.json
+          python3 - <<'PY'
+          import json
+          x=json.load(open('release-evidence/functions-before.json'));x=x.get('functions',x) if isinstance(x,dict) else x
+          row=next(r for r in x if r.get('slug')=='leader-emerging-shadow')
+          assert row.get('verify_jwt') is False, row
+          keep={r['slug']:{'version':r['version'],'ezbr_sha256':r.get('ezbr_sha256')} for r in x if r['slug'] in ('v10-lane-executor','v10-lane-signal-generator')}
+          json.dump({'shadow_version_before':row['version'],'production':keep},open('release-evidence/pin.json','w'))
+          print(json.dumps({'shadow_version_before':row['version'],'production':keep}))
+          PY
+
+      - name: Deploy leader-emerging-shadow only
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy leader-emerging-shadow --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt --use-api
+
+      - name: Prove deployed shadow bundle equals this commit and production bundles are unchanged
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-after.json
+          python3 - <<'PY'
+          import json
+          pin=json.load(open('release-evidence/pin.json'))
+          x=json.load(open('release-evidence/functions-after.json'));x=x.get('functions',x) if isinstance(x,dict) else x
+          row=next(r for r in x if r.get('slug')=='leader-emerging-shadow')
+          assert row['status']=='ACTIVE' and row.get('verify_jwt') is False and int(row['version'])==int(pin['shadow_version_before'])+1, row
+          for slug,v in pin['production'].items():
+              now=next(r for r in x if r['slug']==slug)
+              assert now['version']==v['version'] and now.get('ezbr_sha256')==v['ezbr_sha256'], (slug,now,v)
+          print(json.dumps({'slug':row['slug'],'version':row['version'],'ezbr_sha256':row.get('ezbr_sha256'),'production_unchanged':pin['production']}))
+          PY
+          mkdir -p release-evidence/download
+          supabase functions download leader-emerging-shadow --project-ref "$SUPABASE_PROJECT_REF" --use-api --workdir "$PWD/release-evidence/download"
+          node ops/gpt-final-review/verify-bundle-parity.mjs release-evidence/download . leader-emerging-shadow | tee release-evidence/bundle-parity.json
+          echo "source_sha=$GITHUB_SHA" | tee -a release-evidence/bundle-parity.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: le-shadow-v2-release
+          path: release-evidence
