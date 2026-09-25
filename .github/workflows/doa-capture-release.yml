@@ -26,6 +26,8 @@ jobs:
           npm ci --prefix test-support/v18-ops --ignore-scripts
           export PGLITE_MODULE="$PWD/test-support/v18-ops/node_modules/@electric-sql/pglite/dist/index.js"
           node --test collectors/doa-capture/*.test.mjs
+          node --test tests/capture-context.test.mjs tests/fd1-final-recheck.test.mjs tests/fd1-exit-hardening.test.mjs development/gpt-final-decision/tests/*.test.mjs
+          npm exec --yes --package=deno@2.5.6 -- deno check supabase/functions/v10-lane-executor/index.ts
           npm exec --yes --package=deno@2.5.6 -- deno check supabase/functions/doa-capture-ingest/index.ts
           node --check collectors/doa-capture/worker.mjs
       - name: Build exact isolated collector image and reject missing credentials

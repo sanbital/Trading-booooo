@@ -2,6 +2,7 @@
 import {FACT_DEFS,FACTS_VERSION} from './facts.mjs';
 import {FD_VERSION,DATA_MODES,riskFlags,wireSchema,validateDecision} from './contract.mjs';
 import {PROMPTS} from './prompt.mjs';
+import {contextForModel} from './capture-context.mjs';
 export const MODEL='gpt-5.4-mini-2026-03-17';
 export const API_URL='https://api.openai.com/v1/responses';
 export const PRICING=Object.freeze({inputPerMillion:.75,cachedPerMillion:.075,outputPerMillion:4.5});
@@ -39,7 +40,7 @@ export function modelInput(packet){
   return {t:packet.task,candidate_id:packet.candidate_id,symbol:packet.symbol,data_mode:packet.data_mode,facts:sections,
     unavailable:Object.keys(FACT_DEFS).filter(k=>v[k]===null&&(packet.task==='HOLD'||FACT_DEFS[k][0]!=='position')),
     risk_flags:Object.fromEntries(Object.entries(risk.flags).filter(([,x])=>x.level!=='CLEAR').map(([k,x])=>[k,x.level])),
-    model_judgments:packet.model_judgments,...(packet.position?{position:packet.position}:{}),...(packet.chase?{chase:packet.chase}:{})};
+    model_judgments:packet.model_judgments,...(packet.facts.capture_context?{capture_context:contextForModel(packet.facts.capture_context)}:{}),...(packet.position?{position:packet.position}:{}),...(packet.chase?{chase:packet.chase}:{})};
 }
 /** ENTRY now writes its evidence and expected value before the decision, so it gets more room. */
 export const MAX_OUTPUT_TOKENS=Object.freeze({ENTRY:1000,HOLD:600});

@@ -25,6 +25,7 @@
  *    re-calibrated from the pre-dispatch snapshots this release records. */
 import {computeFacts,FACT_DEFS,FACT_KEYS,POSITION_KEYS,bookFacts,modelJudgments} from './facts.mjs';
 import {readSources} from './market.mjs';
+import {CAPTURE_NOTE,contextForModel} from './capture-context.mjs';
 import {CATEGORIES,categoriesFor,riskFlags,SUPPORT_UP,SUPPORT_TEXT,TREND_SUPPORT,validateShape} from './contract.mjs';
 import {callDecision,hash,MODEL} from './api.mjs';
 export const RECHECK_VERSION='GPT_FINAL_RECHECK_FD1_RC1';
@@ -248,7 +249,7 @@ const catText=[...ENTRY_CATS.map(k=>`- ${k}: ${CATEGORIES[k].text}; cite only: $
   ...CHANGE_CAT_IDS.map(k=>`- ${k}: ${CHANGE_CATEGORIES[k].text}; cite only: ${CHANGE_CATEGORIES[k].facts.join(', ')}`)].join('\n');
 const supText=[...Object.entries(SUPPORT_TEXT).filter(([k])=>!POSITION_KEYS.includes(k)).map(([,t])=>t),
   ...Object.entries(CHANGE_UP).map(([k,[o,t]])=>k+o+t)].join(', ');
-export const RECHECK_PROMPT=`너는 바이낸스 USDT 무기한 선물 롱 전용 자동매매 '트레이딩 부우'의 최종 매매 판단자다.
+export const RECHECK_PROMPT=CAPTURE_NOTE+'\n'+`너는 바이낸스 USDT 무기한 선물 롱 전용 자동매매 '트레이딩 부우'의 최종 매매 판단자다.
 너는 조금 전 이 후보를 BUY했다. 그 이후 실제 주문 직전까지 시장 상태가 의미 있게 변했다(trigger_reasons).
 질문: 이 변화까지 반영했을 때, 지금 이 순간에도 신규 LONG 진입 근거가 충분한가?
 
@@ -287,7 +288,7 @@ export function recheckModelInput(packet){
   return {t:RECHECK_TASK,candidate_id:packet.candidate_id,symbol:packet.symbol,data_mode:packet.data_mode,
     initial:{decision:packet.initial.decision,summary:packet.initial.summary,support:packet.initial.support,
       facts:Object.fromEntries(Object.entries(packet.initial.facts).filter(([,x])=>x!==null).map(([k,x])=>[k,round(x)]))},
-    current:{facts:sections,unavailable:FACT_OK.filter(k=>v[k]===null)},
+    current:{facts:sections,unavailable:FACT_OK.filter(k=>v[k]===null),...(packet.facts.capture_context?{capture_context:contextForModel(packet.facts.capture_context)}:{})},
     change:Object.fromEntries(Object.entries(packet.change.values).filter(([,x])=>x!==null).map(([k,x])=>[k,round(x)])),
     trigger_reasons:packet.trigger_reasons,
     risk_flags:Object.fromEntries(Object.entries(risk.flags).filter(([,x])=>x.level!=='CLEAR').map(([k,x])=>[k,x.level])),

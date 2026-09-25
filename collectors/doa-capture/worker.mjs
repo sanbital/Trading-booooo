@@ -1,5 +1,6 @@
 import {Book,Flow,WeightBudget,VERSION,iso,inWindow,streamURLs} from './core.mjs';
 import {randomUUID} from 'node:crypto';
+import {summarizeCapture} from './context.mjs';
 const endpoint=process.env.CAPTURE_ENDPOINT;
 const token=process.env.CAPTURE_TOKEN;
 const expected=process.env.PROTOCOL_SHA256;
@@ -90,6 +91,7 @@ async function flush(){
     const selected=[];let size=0;
     for(const [k,row] of queue){const bytes=Buffer.byteLength(JSON.stringify(row));if(selected.length>=300||size+bytes>350000)break;selected.push([k,row]);size+=bytes;}
     pending={batch_id:randomUUID(),rows:selected.map(x=>x[1]),metrics:{version:VERSION,watched:states.size,synced:[...states.values()].filter(s=>s.book.ready).length,trade_streams_seen:[...states.values()].filter(s=>s.lastTradeAt>0).length,candle_streams_seen:[...states.values()].filter(s=>s.lastCandle!==null).length,queue:queue.size,ws_gaps:wsGaps,rest_failures:restFailures,rss_bytes:process.memoryUsage().rss,last_bucket_at:iso(Date.now()),order_calls:0,llm_calls:0}};
+    pending.metrics.live_contexts=Object.fromEntries([...states].map(([symbol,s])=>[symbol,summarizeCapture(s.ring,Date.now())]));
     for(const [k] of selected)queue.delete(k);
   }
   const out=await api('ingest',pending);lastControl=Date.now();pending=null;

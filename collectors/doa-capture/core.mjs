@@ -1,4 +1,4 @@
-export const VERSION = 'DOA-CAPTURE-1.1';
+export const VERSION = 'DOA-CAPTURE-2-GPT-CONTEXT';
 export const iso = n => new Date(n).toISOString();
 export function streamURLs(symbol){
   const s=symbol.toLowerCase();

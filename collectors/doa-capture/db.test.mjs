@@ -12,6 +12,7 @@ test('private RPC: authorization, leases, caps, idempotency and no trading mutat
  create table public.v17_market_scan_runs(captured_at timestamptz,details jsonb);
  grant select on public.v11_long_regime_signals,public.v11_long_regime_positions,public.v17_market_scan_runs to service_role;`);
  await db.exec(await readFile(new URL('../../supabase/migrations/20260925131209_doa_capture_live.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20260925135156_doa_gpt_capture_context.sql',import.meta.url),'utf8'));
  const rpc=async(action,body={})=>(await db.query('select public.doa_capture_rpc($1,$2::jsonb) as r',[action,JSON.stringify({worker_id:'worker-test-123',...body})])).rows[0].r;
  await db.exec(`insert into doa_capture.control(id,enabled,protocol_sha256,starts_at,ends_at) values(1,false,repeat('a',64),now()-interval '1 minute',now()+interval '1 day');set role service_role;`);
  assert.equal((await rpc('watch')).enabled,false);
@@ -20,6 +21,17 @@ test('private RPC: authorization, leases, caps, idempotency and no trading mutat
  await assert.rejects(db.query('select * from doa_capture.control'),/permission denied/);
  await db.exec(`reset role;update doa_capture.control set enabled=true;insert into public.v11_long_regime_signals values('00000000-0000-0000-0000-000000000001','BTCUSDT',now(),'REJECTED','{"strategy":"LEADER_MOMENTUM_V17"}');set role service_role;`);
  assert.equal((await rpc('watch')).enabled,true);
+ const context=async()=> (await db.query("select public.doa_gpt_capture_context('BTCUSDT',now()) as c")).rows[0].c;
+ assert.equal((await context()).reason,'DISABLED');
+ await db.exec(`reset role;update doa_capture.control set gpt_context_enabled=true,heartbeat_at=now(),metrics='{"live_contexts":{"BTCUSDT":{"status":"AVAILABLE","sentinel":1}}}';set role service_role;`);
+ assert.equal((await context()).sentinel,1);
+ await db.exec(`reset role;update doa_capture.control set heartbeat_at=now()-interval '30 seconds';set role service_role;`);
+ assert.equal((await context()).reason,'STALE_OR_FUTURE');
+ await db.exec(`reset role;update doa_capture.control set heartbeat_at=now()+interval '30 seconds';set role service_role;`);
+ assert.equal((await context()).reason,'STALE_OR_FUTURE');
+ await db.exec('reset role;set role anon;');
+ await assert.rejects(context(),/permission denied/);
+ await db.exec('reset role;set role service_role;');
  assert.equal((await rpc('watch',{worker_id:'other-worker-123'})).reason,'LEASE_BUSY');
  const batch={batch_id:'00000000-0000-0000-0000-000000000002',rows:[{kind:'micro',symbol:'BTCUSDT',at:new Date().toISOString(),payload:{book_complete:false}}]};
  assert.equal((await rpc('ingest',batch)).inserted,1);

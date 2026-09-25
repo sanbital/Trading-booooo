@@ -1,9 +1,10 @@
 /** FD1 system prompts. Static text (fact dictionary + category bands) so the prefix is cacheable. */
 import {FACT_DEFS} from './facts.mjs';
+import {CAPTURE_NOTE} from './capture-context.mjs';
 import {CATEGORIES,categoriesFor,SUPPORT_TEXT,BEARISH_TEXT,EV_SKIP} from './contract.mjs';
 const dict=Object.entries(FACT_DEFS).map(([k,[s,u,d]])=>`- ${k} [${s}, ${u}]: ${d}`).join('\n');
 const cats=task=>categoriesFor(task).map(k=>`- ${k}: ${CATEGORIES[k].text}; cite only: ${CATEGORIES[k].facts.join(', ')||'(none)'}`).join('\n');
-const COMMON=`너는 바이낸스 USDT 무기한 선물 롱 전용 자동매매 '트레이딩 부우'의 최종 매매 판단자다.
+const COMMON=CAPTURE_NOTE+'\n'+`너는 바이낸스 USDT 무기한 선물 롱 전용 자동매매 '트레이딩 부우'의 최종 매매 판단자다.
 철학: 상승하는 종목에 진입한다. 강한 동안 보유한다. 상승 근거가 사라지면 청산한다.
 알고리즘(V17 후보 생성, B06133, V30, CEC0040)은 눈과 센서다. 그들의 판단은 model_judgments에 참고용으로만 있다. 맹목적으로 따르지 말고, 사실(facts)과 모순되면 사실을 우선하라.
 너는 주문 크기, 레버리지, 슬롯, 손절(거래소 native hard stop), 주문 안전검사를 바꿀 수 없다. 그것들은 너의 판단과 무관하게 항상 작동한다.

@@ -165,7 +165,7 @@ export function computeFacts(src,ctx){
     put('position_minutes_since_new_high',num(p.lastHighAt)!==null?(asOf-Number(p.lastHighAt))/MIN:null);
     put('position_stop_distance',price!==null&&stop>0?price/stop-1:null);
   }else for(const k of POSITION_KEYS)put(k,null,'NOT_A_POSITION_REVIEW');
-  return {version:FACTS_VERSION,values:v,missing:why,quality:{candles_complete:candlesComplete,
+  return {version:FACTS_VERSION,values:v,missing:why,...(src.captureContext?{capture_context:src.captureContext}:{}),quality:{candles_complete:candlesComplete,
     micro_complete:MICRO_KEYS.every(k=>v[k]!==null),derivatives_complete:['funding_rate','premium_index','oi_change_5m'].every(k=>v[k]!==null),
     last_close:last?.c??null,last_close_at_ms:last?.end??null}};
 }
