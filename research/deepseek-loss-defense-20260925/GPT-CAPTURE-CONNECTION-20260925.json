@@ -1,0 +1,88 @@
+{
+  "source_commit": "fd84952718000e22fa926cad8e968042643dad0d",
+  "ci": {
+    "url": "https://github.com/sanbital/Trading-booooo/actions/runs/36145245186",
+    "collector_tests": 12,
+    "gpt_tests": 114,
+    "status": "success"
+  },
+  "deployment": {
+    "id": "523856f5-4833-467f-9395-3e13a8118046",
+    "slug": "v10-lane-executor",
+    "name": "v10-lane-executor",
+    "status": "ACTIVE",
+    "version": 90,
+    "created_at": 1788229637046,
+    "updated_at": 1790345264548,
+    "verify_jwt": false,
+    "import_map": false,
+    "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_523856f5-4833-467f-9395-3e13a8118046_90/source/functions/v10-lane-executor/index.ts",
+    "ezbr_sha256": "486f6192ca97d801d9c1471ab7f8f74fbc74c58527327ba066cf12ad1e3ddb17"
+  },
+  "executor_source_unchanged": true,
+  "order_adapters_unchanged": true,
+  "probe_order_calls": 0,
+  "probe_symbols": [
+    "ENAUSDT"
+  ],
+  "reviews": [
+    {
+      "job_key": "1c42ca7194c8970fdf909ff05215cc37b4aac48758b85113e9447b8ff60a47ee",
+      "kind": "ENTRY",
+      "state": "DONE",
+      "capture_status": "AVAILABLE",
+      "capture_age_ms": 13170,
+      "capture_window_ms": 60029,
+      "request_id": "req_86b353c91c094401a8a267a05a0fea57",
+      "valid": "true",
+      "latency_ms": "2720",
+      "error": null
+    },
+    {
+      "job_key": "548167b9fa301dd91a0043e1d1c3f2c9c8dac81904c70b4ec4f67eef4179bf91",
+      "kind": "FD1_FINAL_RECHECK",
+      "state": "DONE",
+      "capture_status": "AVAILABLE",
+      "capture_age_ms": 13548,
+      "capture_window_ms": 60029,
+      "request_id": "req_a10bc5ba2cce4bb2b89e436e84e3c118",
+      "valid": "true",
+      "latency_ms": "2554",
+      "error": null
+    },
+    {
+      "job_key": "5a08748fdfdfdc71d600c66918a8778f24a085a8ebd3d2b51c357ec000f9bfd9",
+      "kind": "FD1_HOLD_PROBE",
+      "state": "DONE",
+      "capture_status": "AVAILABLE",
+      "capture_age_ms": 11640,
+      "capture_window_ms": 60029,
+      "request_id": "req_eab7cfe278a246478cb25d77c99be353",
+      "valid": "true",
+      "latency_ms": "1293",
+      "error": null
+    },
+    {
+      "job_key": "69f0c0852507bec8cd658ee97073d04afa29f26e5b9392c6e522a45c1cd01474",
+      "kind": "DS_HOLD_SHADOW",
+      "state": "DONE",
+      "capture_status": "AVAILABLE",
+      "capture_age_ms": 11640,
+      "capture_window_ms": 60029,
+      "request_id": null,
+      "valid": "false",
+      "latency_ms": "1146",
+      "error": "COUNTER_SCHEMA_EXTRA"
+    }
+  ],
+  "readiness": {
+    "observedAt": "2026-09-25T14:10:23.447Z",
+    "open_positions": 0,
+    "open_orders": 0,
+    "circuit_open": false,
+    "last_error": null,
+    "protection_health": "FLAT",
+    "deepseek_authority": []
+  },
+  "limits": "Input delivery, freshness, order-free provider calls and safety regressions verified; no performance or causal profitability claim. DeepSeek HOLD shadow returned invalid schema in this one probe; GPT was valid and unaffected."
+}
