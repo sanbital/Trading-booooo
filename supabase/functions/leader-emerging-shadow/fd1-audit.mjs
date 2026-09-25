@@ -4,7 +4,7 @@
 import {MODEL} from './v2/contract.mjs';
 import {costOf,parseOutput,standDown,hashOf} from './gpt.mjs';
 
-export const FD1_AUDIT_VERSION='LE_FD1_THESIS_SHADOW_3';
+export const FD1_AUDIT_VERSION='LE_FD1_THESIS_SHADOW_4';
 export const FD1_AUDIT_MAX_CALLS_DAY=60;
 export const FD1_AUDIT_MAX_USD_DAY=.30;
 const n=x=>x===null||x===undefined?null:Number.isFinite(Number(x))?Number(x):null;
@@ -58,7 +58,10 @@ export function fd1Packet(r){
 function validate(a,p){
   if(!a||!['boolean','object'].includes(typeof a.trend_valid)||!['boolean','object'].includes(typeof a.entry_valid))throw Error('INVALID_FLAGS');
   const choices=p.task==='RECHECK'?['PASS','WAIT_RECHECK','SKIP','ABSTAIN']:['HOLD','EXIT_ENTRY_FAILURE','EXIT_TREND_FAILURE','ABSTAIN'];
-  if(!choices.includes(a.decision)||!Array.isArray(a.e)||a.e.length>8||typeof a.reason!=='string'||a.reason.length>240)throw Error('INVALID_ANSWER');
+  if(!choices.includes(a.decision)||!Array.isArray(a.e)||typeof a.reason!=='string')throw Error('INVALID_ANSWER:'+String(a?.decision).slice(0,24));
+  // Responses API JSON schema can enforce shape without reliably enforcing maxLength/maxItems.
+  // Truncate free text, but never relax the decision and evidence correctness checks.
+  a={...a,e:a.e.slice(0,8),reason:a.reason.slice(0,240)};
   const known=new Set();
   const visit=(v,path='',depth=0)=>{
     if(!v||typeof v!=='object'||depth>4)return;
