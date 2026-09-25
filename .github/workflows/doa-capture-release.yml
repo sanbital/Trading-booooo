@@ -1,0 +1,22 @@
+name: DOA capture host preflight
+on:
+  push:
+    branches: [release/doa-capture-20260925]
+    paths: [.github/workflows/doa-capture-release.yml]
+permissions:
+  contents: read
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+      - name: Inspect collector host capability without changing trading app
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          flyctl version
+          flyctl orgs list --json
+          flyctl apps create --help
+          flyctl machine run --help
