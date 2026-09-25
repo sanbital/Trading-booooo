@@ -15,8 +15,9 @@ import {v2Gate,buildPacketV2,callAlt2,promptHashV2,schemaHashV2,hashOf,BUDGET_V2
 import {MODEL} from './contract.mjs';
 import {evaluateWaitV2,terminalResolution,recheckContextV2,ttlMs} from './wait.mjs';
 import {labelV2,beyondAskBps,roundTripBps,KLINE_LIMIT,COSTS_V2} from './outcome.mjs';
+import {buildMarketContext} from './market-context.mjs';
 
-export const PATCH_V2='LE-SHADOW-2';
+export const PATCH_V2='LE-SHADOW-2-MARKET-CONTEXT-1';
 export const ORDER_NOTIONAL_BASIS_USDT=600;   // FD1 facts depth/slippage basis (facts.mjs SLOT_ORDER_NOTIONAL_USDT)
 export const SNAPSHOT_MAX_AGE_MS=25_000;      // older book => refresh before GPT
 export const SNAPSHOT_HARD_MAX_AGE_MS=120_000; // older candles/book => no GPT at all (STALE_SNAPSHOT)
@@ -29,6 +30,10 @@ const ms=x=>x instanceof Date?x.getTime():typeof x==='number'?x:Date.parse(x);
 const fin=x=>typeof x==='number'&&Number.isFinite(x);
 const num=x=>x===null||x===undefined?null:(Number.isFinite(Number(x))?Number(x):null);
 const errText=e=>(e?.code?String(e.code):String(e?.message??e)).slice(0,120);
+async function marketContextAt(store,t){
+  try{return buildMarketContext(await store.marketRegimeAt(iso(t)),t);}
+  catch{return buildMarketContext(null,t);}
+}
 
 // ------------------------------------------------------------------------------------ helpers
 export function microFields(v){
@@ -123,6 +128,7 @@ export async function v2Discovery({store2,guard,apiKey,now,health,cycleId,observ
   const gate=v2Gate({control:ctl,apiKey,health,lane:'DISCOVERY'});out.gate=gate;
   const idOf=new Map((written?.decisions??[]).map(d=>[d.symbol,d.candidate_id]));
   const cecState=await store2.cecState();
+  const marketContext=await marketContextAt(store2,observedAt);
   const items=[];
   for(const sym of selected){
     const x=rich.get(sym),row=rows.find(r=>r.symbol===sym),cid=idOf.get(sym);
@@ -144,6 +150,7 @@ export async function v2Discovery({store2,guard,apiKey,now,health,cycleId,observ
     const hard=it.x.hardBlock??[];
     const p=chosen.get(it.symbol);
     const prescore={gpt_gate:gate,selected_for_gpt:!!p,prescore:p?.prescore??null,prescore_rank:p?.prescore_rank??null,hard_block:hard,
+      market_context:marketContext,
       rule:'<=1 LEADER + <=1 EMERGING; order: overheat count, continuation state, execution state, rank (strength is not a positive key)'};
     // freshness: refresh the book (not candles) if the snapshot aged past 25 s before the GPT call
     let stale=false;
@@ -180,7 +187,8 @@ export async function v2Discovery({store2,guard,apiKey,now,health,cycleId,observ
       if(stale){
         rows2.push({...base,decision_source:'ALT_GPT',decision:'ABSTAIN',valid:false,actual_trade:false,shadow_trade:false,gate:'STALE_SNAPSHOT',error:'STALE_SNAPSHOT'});
       }else if(calls<BUDGET_V2.DISCOVERY.perCycle){
-        const packet=buildPacketV2({lane:'DISCOVERY',symbol:it.symbol,eventKey:'le2_d_'+eventId,facts,axes,rankContext:it.rankContext,legacy:it.legacy,cost,hardSafety:hard});
+        const packet=buildPacketV2({lane:'DISCOVERY',symbol:it.symbol,eventKey:'le2_d_'+eventId,facts,axes,rankContext:it.rankContext,
+          marketContext,legacy:it.legacy,cost,hardSafety:hard});
         const {r,hashes}=await askAlt({store:store2,guard,apiKey,now,lane:'DISCOVERY',packet});
         if(r.attempted){calls++;out.gpt_calls++;}
         const row=gptRow(base,r,packet,hashes);
@@ -236,6 +244,8 @@ export async function runParity({store2,now=Date.now,apiKey=null,health=null,gua
       const snapAt=num(pr.snapshot_at_ms)??ms(pr.snapshot_at);
       const cycles=await store2.rankCycles(iso(snapAt-65*MIN),iso(snapAt));
       const pe=parityEvent(pr,cycles);
+      const marketContext=await marketContextAt(store2,snapAt);
+      pe.event.prescore={market_context:marketContext};
       const eventId=await store2.insertEvent(pe.event);
       if(!eventId){out.push({s:pr.symbol,state:'ALREADY_CLAIMED'});continue;}
       const base={event_id:eventId,lane:'PARITY',symbol:pr.symbol,attempt:1,parent_decision_id:null,hyp_entry_at:pe.event.entry_ref_at,
@@ -250,7 +260,7 @@ export async function runParity({store2,now=Date.now,apiKey=null,health=null,gua
         rows.push({...base,decision_source:'ALT_GPT',decision:'ABSTAIN',valid:false,actual_trade:false,shadow_trade:false,gate:'PARITY_LAG_EXCEEDED',error:'PARITY_LAG_EXCEEDED:'+Math.round(lag/1000)+'s'});
       }else if(calls<BUDGET_V2.PARITY.perRun){
         const packet=buildPacketV2({lane:'PARITY',symbol:pr.symbol,eventKey:'le2_p_'+eventId,facts:pe.facts,axes:pe.axes,rankContext:pe.rankContext,
-          legacy:pe.legacy,cost:pe.cost,hardSafety:pe.hard});
+          marketContext,legacy:pe.legacy,cost:pe.cost,hardSafety:pe.hard});
         const {r,hashes}=await askAlt({store:store2,guard:g,apiKey,now,lane:'PARITY',packet});
         if(r.attempted)calls++;
         const row=gptRow(base,r,packet,hashes);
@@ -317,8 +327,9 @@ export async function runV2Wait({store2,now=Date.now,apiKey=null,health=null,gua
       const v=facts?.values??{},cost=costFromFacts(v);
       const ctx=recheckContextV2(w.packet??{},facts,{price:ev.price,snapshotMid:spec.mid,elapsedMs:asOf-Number(spec.snapshot_at_ms),trigger:spec.trigger});
       const axes=computeAxes(v,{...(w.rank_context??{}),cost});
+      const marketContext=await marketContextAt(store2,asOf);
       const packet=buildPacketV2({lane:w.lane,symbol:w.symbol,eventKey:(w.packet?.event_key??'le2')+'_r',facts:v,axes,rankContext:w.rank_context,
-        legacy:w.packet?.legacy??null,cost,hardSafety:[],attempt:2,...ctx});
+        marketContext,legacy:w.packet?.legacy??null,cost,hardSafety:[],attempt:2,...ctx});
       const {r,hashes}=await askAlt({store:store2,guard:g,apiKey,now,lane:w.lane,packet});
       if(r.attempted)calls++;
       let quote=null;try{quote=await readQuote(g,w.symbol,now);}catch{/* no entry */}

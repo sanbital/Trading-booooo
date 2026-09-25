@@ -19,7 +19,8 @@ create role anon; create role authenticated; create role service_role;
 create schema extensions;
 create function extensions.gen_random_bytes(n int) returns bytea language sql as $$ select decode(repeat(md5(random()::text), 2), 'hex') $$;
 create table public.market_regime_observations(id uuid primary key default gen_random_uuid(), observation_bucket timestamptz unique, observed_at timestamptz,
-  model_revision text, liquid_prices jsonb, created_at timestamptz default now());
+  model_revision text, predicted_regime text, bull_score double precision, confidence double precision, sample_size int, features jsonb,
+  benchmark_prices jsonb, liquid_prices jsonb, trading_influence boolean, created_at timestamptz default now());
 create table public.v17_market_scan_runs(id bigint generated always as identity primary key, captured_at timestamptz, strategy text, signal_close_at timestamptz, details jsonb);
 create table public.v11_cec0040_state(singleton boolean primary key, ewma_usdt numeric, training_count int, reject_run int, updated_at timestamptz);
 insert into public.v11_cec0040_state values (true, -4.07, 126, 0, now());

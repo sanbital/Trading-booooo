@@ -12,6 +12,7 @@ import {createGuard,GuardError} from '../supabase/functions/leader-emerging-shad
 import {runScan} from '../supabase/functions/leader-emerging-shadow/shadow.mjs';
 import {kstDayStart} from '../supabase/functions/leader-emerging-shadow/universe.mjs';
 import {computeAxes,pickForGpt,BANDS} from '../supabase/functions/leader-emerging-shadow/v2/axes.mjs';
+import {buildMarketContext,MARKET_CONTEXT_VERSION,MARKET_CONTEXT_MAX_AGE_MS} from '../supabase/functions/leader-emerging-shadow/v2/market-context.mjs';
 import {validateAnswer,wireSchema,legacyNegatives,TRIGGERS} from '../supabase/functions/leader-emerging-shadow/v2/contract.mjs';
 import {ALT2_PROMPT} from '../supabase/functions/leader-emerging-shadow/v2/prompt.mjs';
 import {callAlt2,buildPacketV2,v2Gate,BUDGET_V2} from '../supabase/functions/leader-emerging-shadow/v2/gpt.mjs';
@@ -32,6 +33,26 @@ const COST={breakeven_bps:17,roundtrip_cost_bps_real:17};
 const pkt=(o={})=>({attempt:1,facts:FACTS,cost:COST,legacy:{cec0040:{action:'ADMIT'},b06133:{allowed:true},v30:{admitted:true}},rank_context:{rank:14},hard_safety:[],...o});
 const wire=(o={})=>({d:'BUY',phase:'MID_CONTINUATION',overheat_view:'NOT_OVERHEATED',reasons:[],support:['taker_buy_ratio_5m','distance_high_60m','return_15m'],
   expected_move_bps:60,override:{model:'NONE',code:'NONE',e:[]},wait:{reason:'NONE',trigger:'NONE',param:null,ttl_min:null},n:'요약',...o});
+
+
+test('market context: compresses full-market observer point-in-time; never forwards raw tree/news/liquidity', ()=>{
+  const row={observed_at:new Date(T0-2*MIN).toISOString(),predicted_regime:'NEUTRAL',bull_score:45,confidence:.61,sample_size:1312,
+    features:{universe:{total:1312,binance_futures:527,binance_spot:496,upbit_spot:289},
+      breadth_24h:{binance_futures:{sample_size:527,positive_fraction:.82,clipped_mean_pct:3.1,gain_tail_fraction:.1,loss_tail_fraction:.02}},
+      breadth_30m:{binance_futures:{sample_size:527,positive_fraction:.14,clipped_mean_pct:-.7,gain_tail_fraction:.01,loss_tail_fraction:.08}},
+      benchmark:{markets:[{asset:'BTC',venue:'binance_futures',r30:-.08,r120:.12,r360:-.13,r1440:.37,score:50.2},
+        {asset:'ETH',venue:'binance_futures',r30:-.06,r120:-.14,r360:-.29,r1440:.24,score:48.1}]},
+      momentum_phase:{phase:'CAPITULATION_REBOUND'},giant_raw_section:{must_not:'leak'}}};
+  const c=buildMarketContext(row,T0);
+  assert.equal(c.version,MARKET_CONTEXT_VERSION);assert.equal(c.status,'OK');assert.equal(c.breadth_state,'STRONG_24H_WEAK_30M');
+  assert.equal(c.universe.binance_futures,527);assert.equal(c.breadth.binance_futures_30m.positive_fraction,.14);
+  assert.equal(c.benchmarks.BTC.return_30m_pct,-.08);assert.equal(c.regime.momentum_phase,'CAPITULATION_REBOUND');
+  assert.equal(c.news_context.status,'NOT_INCLUDED_PHASE_1');assert.equal(c.direct_marketwide_liquidity.status,'NOT_INCLUDED_PHASE_1');
+  assert.ok(!JSON.stringify(c).includes('giant_raw_section'));
+  assert.equal(buildMarketContext({...row,observed_at:new Date(T0-MARKET_CONTEXT_MAX_AGE_MS-1).toISOString()},T0).status,'STALE');
+  assert.equal(buildMarketContext({...row,observed_at:new Date(T0+1).toISOString()},T0).status,'INVALID_TIME');
+  assert.equal(buildMarketContext(null,T0).status,'MISSING');
+});
 
 // ================================================================ pure: axes (non-monotone)
 test('axes: six independent axes, no composite; extreme strength lands on OVERHEAT, not on a better score', ()=>{
@@ -119,7 +140,8 @@ test('ALT2 contract: WAIT needs reason + one trigger + TTL 5..15; re-ask cannot 
 });
 
 test('ALT2 prompt: continuation-vs-blowoff question, STRONG != BUY, no production answer, advisory legacy', ()=>{
-  for(const s of ['continuation','blow-off','"강도" 사실이 아닌 것','override.code','ADVISORY','시간이 지났다는 이유만으로 BUY 가 되지는 않는다'])assert.ok(ALT2_PROMPT.includes(s),s);
+  for(const s of ['continuation','blow-off','"강도" 사실이 아닌 것','override.code','ADVISORY','시간이 지났다는 이유만으로 BUY 가 되지는 않는다',
+    'market_context','배경 정보이지 진입 하드게이트가 아니다','시장 전체가 약하다는 이유 하나만으로','news_context'])assert.ok(ALT2_PROMPT.includes(s),s);
   assert.ok(!/production (GPT|FD1)의? (결정|판단|답)/.test(ALT2_PROMPT));
 });
 
@@ -492,6 +514,7 @@ test('DISCOVERY end-to-end: V1 cycle intact, V2 events for the shortlist, ALT GP
   const rb=(await admin.query(`select count(*)::int n from shadow_le.v2_decisions where decision_source='RULE_BASELINE'`))[0].n;assert.equal(rb,out.v2.events);
   const sent=JSON.parse(ai.bodies[0].input[1].content);
   assert.equal(sent.lane_source,'DISCOVERY');assert.ok(sent.axes.overheat&&sent.axes.execution&&!('composite' in sent.axes));
+  assert.ok(sent.market_context&&['OK','PARTIAL'].includes(sent.market_context.status));
   const g=(await admin.query(`select distinct grp from shadow_le.v2_compare`)).map(x=>x.grp);
   assert.ok(g.every(x=>/^(10_|D0_|D_)/.test(x)),JSON.stringify(g));
   // V2 failure never breaks V1: a broken store2 still returns the V1 cycle

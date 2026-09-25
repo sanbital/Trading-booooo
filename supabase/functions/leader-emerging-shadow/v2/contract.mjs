@@ -12,7 +12,7 @@
  *     A WAIT always ends in BUY / SKIP / ABSTAIN: trigger => one GPT re-ask (no WAIT allowed),
  *     TTL or invalidation => deterministic SKIP. Time passing alone never makes a BUY.
  *   - SKIP needs >= 1 reason code with >= 1 cited fact. */
-export const ALT2_VERSION='LE_GPT_ALT2_1';
+export const ALT2_VERSION='LE_GPT_ALT2_2_MARKET_CONTEXT';
 export const MODEL='gpt-5.4-mini-2026-03-17';
 export const REQUEST_MS=9000;
 export const DECISIONS=Object.freeze(['BUY','WAIT','SKIP','ABSTAIN']);

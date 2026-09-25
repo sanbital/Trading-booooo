@@ -22,6 +22,10 @@ export const SQL_V2=Object.freeze({
   controlV2:`select enabled, gpt_enabled, v2_discovery_gpt, v2_parity_enabled from shadow_le.control where singleton`,
   haltedTodayV2:`select binance_status from shadow_le.cycles where started_at >= (date_trunc('day', now() at time zone 'utc') at time zone 'utc') and binance_status like 'BINANCE_HTTP_%' limit 1`,
   cecState:`select ewma_usdt, training_count, reject_run, updated_at from public.v11_cec0040_state where singleton`,
+  marketRegimeAt:`select observed_at, model_revision, predicted_regime, bull_score, confidence, sample_size, features
+    from public.market_regime_observations
+    where observed_at <= $1::timestamptz and observed_at >= $1::timestamptz - interval '10 minutes'
+    order by observed_at desc limit 1`,
   prodScanLatest:`select captured_at, details->'blocked' as blocked, details->'errors' as errors from public.v17_market_scan_runs order by captured_at desc limit 1`,
   prodEntryPending:`select r.job_key, r.signal_id, r.symbol, r.candidate_id, r.decision, r.valid, r.error, r.snapshot_at, r.created_at,
       r.record->'packet' as packet, r.record->>'identity_json' as identity_json, r.record->'snapshot_at_ms' as snapshot_at_ms, r.record->'result'->>'origin' as origin
@@ -74,6 +78,7 @@ export function makeStoreV2(db){
     controlV2:()=>one('controlV2'),
     haltedTodayV2:async()=>!!(await one('haltedTodayV2')),
     cecState:()=>one('cecState'),
+    marketRegimeAt:at=>one('marketRegimeAt',[at]),
     prodScanLatest:()=>one('prodScanLatest'),
     prodEntryPending:(since,limit)=>q('prodEntryPending',[since,limit]),
     rankCycles:(from,to)=>q('rankCycles',[from,to]),

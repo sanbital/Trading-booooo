@@ -28,16 +28,16 @@ const noPosition=v=>Object.fromEntries(Object.entries(v??{}).filter(([k])=>!k.st
  * Packet for ALT GPT V2. Contains ONLY point-in-time facts, the axes computed from them, rank
  * context, advisory legacy judgments and explicit costs. Never a production decision.
  */
-export function buildPacketV2({lane,symbol,eventKey,facts,axes,rankContext,legacy,cost,hardSafety=[],attempt=1,initial=null,current=null,delta=null,trigger=null}){
+export function buildPacketV2({lane,symbol,eventKey,facts,axes,rankContext,marketContext=null,legacy,cost,hardSafety=[],attempt=1,initial=null,current=null,delta=null,trigger=null}){
   return {version:ALT2_VERSION,lane_source:lane,attempt,event_key:eventKey,symbol,
-    rank_context:rankContext??null,facts:noPosition(facts),axes,cost,hard_safety:hardSafety,
+    rank_context:rankContext??null,market_context:marketContext??null,facts:noPosition(facts),axes,cost,hard_safety:hardSafety,
     legacy:legacy??null,
     ...(attempt===2?{initial,current,delta,trigger}:{})};
 }
 
 export function payloadV2(packet){
   return {model:MODEL,store:false,tools:[],truncation:'disabled',service_tier:'default',
-    prompt_cache_key:'boo-le-shadow-alt2',reasoning:{effort:'none'},max_output_tokens:700,
+    prompt_cache_key:'boo-le-shadow-alt2-marketctx',reasoning:{effort:'none'},max_output_tokens:700,
     input:[{role:'system',content:ALT2_PROMPT},{role:'user',content:JSON.stringify(packet)}],
     text:{verbosity:'low',format:{type:'json_schema',name:'le_alt2',strict:true,schema:wireSchema({recheck:packet.attempt===2})}}};
 }
