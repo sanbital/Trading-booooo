@@ -20,6 +20,7 @@ const list=cs=>cs.join(', '),pick=(cs,a='r')=>cs.map(c=>a+'.'+c).join(', ');
 
 export const SQL_V2=Object.freeze({
   controlV2:`select enabled, gpt_enabled, v2_discovery_gpt, v2_parity_enabled from shadow_le.control where singleton`,
+  haltedTodayV2:`select binance_status from shadow_le.cycles where started_at >= (date_trunc('day', now() at time zone 'utc') at time zone 'utc') and binance_status like 'BINANCE_HTTP_%' limit 1`,
   cecState:`select ewma_usdt, training_count, reject_run, updated_at from public.v11_cec0040_state where singleton`,
   prodScanLatest:`select captured_at, details->'blocked' as blocked, details->'errors' as errors from public.v17_market_scan_runs order by captured_at desc limit 1`,
   prodEntryPending:`select r.job_key, r.signal_id, r.symbol, r.candidate_id, r.decision, r.valid, r.error, r.snapshot_at, r.created_at,
@@ -71,6 +72,7 @@ export function makeStoreV2(db){
   const one=async(name,params)=>(await q(name,params))[0]??null;
   return {
     controlV2:()=>one('controlV2'),
+    haltedTodayV2:async()=>!!(await one('haltedTodayV2')),
     cecState:()=>one('cecState'),
     prodScanLatest:()=>one('prodScanLatest'),
     prodEntryPending:(since,limit)=>q('prodEntryPending',[since,limit]),

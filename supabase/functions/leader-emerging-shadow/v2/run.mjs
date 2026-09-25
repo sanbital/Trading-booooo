@@ -278,7 +278,8 @@ export async function runV2Wait({store2,now=Date.now,apiKey=null,health=null,gua
   const waits=await store2.v2OpenWaits();
   if(!waits.length)return {ok:true,mode:'v2wait',status:'NO_OPEN_WAIT'};
   const g=guard??createGuard({fetchFn:fetch,...V2_GUARD});
-  const yieldReason=await productionYield(store2,now());
+  // a Binance 418/429/451 anywhere in the shadow today halts every shadow Binance read until 00:00Z
+  const yieldReason=(await store2.haltedTodayV2())?'HALTED_TODAY':await productionYield(store2,now());
   const out=[],errors=[];let calls=0,live=0;
   for(const w of waits){
     const spec=w.recheck_trigger??{};
@@ -338,6 +339,7 @@ export async function runV2Wait({store2,now=Date.now,apiKey=null,health=null,gua
 export async function v2Outcome({store2,now=Date.now,guard=null,limit=15}){
   const g=guard??createGuard({fetchFn:fetch,...V2_GUARD});
   const out={labeled:0,errors:[],request_weight:0};
+  if(await store2.haltedTodayV2()){out.status='HALTED_TODAY';return out;}
   if(await productionYield(store2,now())){out.status='SHADOW_YIELD_PRODUCTION_WEIGHT';return out;}
   const due=await store2.v2OutcomeDue(iso(now()-(KLINE_LIMIT+1)*MIN),limit);
   const rows=[];

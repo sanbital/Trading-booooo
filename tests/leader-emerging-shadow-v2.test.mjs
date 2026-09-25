@@ -500,3 +500,22 @@ test('DISCOVERY end-to-end: V1 cycle intact, V2 events for the shortlist, ALT GP
   const out2=await runScan({store,store2:broken,guard:createGuard({fetchFn:w.fetchFn}),now:()=>t+5*MIN+20_000,apiKey:'sk'});
   assert.ok(['OK','DUPLICATE_BUCKET'].includes(out2.status));
 });
+
+test('day halt: after a Binance 418 today, V2 WAIT and V2 OUTCOME make no Binance request (expired WAITs still resolve to SKIP)', async()=>{
+  const {admin,store2}=await setupV2();
+  await admin.query(`update shadow_le.control set v2_parity_enabled=true, set_by='t', reason='on'`);
+  await addProdEntry(admin,{job:'h1',at:Date.now()-30_000});
+  await addProdEntry(admin,{job:'h2',sym:'BUSDT',at:Date.now()-30_000});
+  const ai=openaiFor(()=>wire({d:'WAIT',expected_move_bps:null,wait:{reason:'SPREAD_WIDE',trigger:'SPREAD_IMPROVE',param:null,ttl_min:5}}));
+  const H={n_60m:0,n_err_60m:0,n_quota_60m:0,ledger_calls_today:0};
+  await runParity({store2,now:Date.now,apiKey:'sk',health:H,guard:createGuard({fetchFn:world({openai:ai.fn}).fetchFn,...V2_GUARD})});
+  await admin.query(`insert into shadow_le.cycles(mode,status,started_at,finished_at,binance_status,patch) values ('SCAN','OK',now(),now(),'BINANCE_HTTP_418','t')`);
+  const w=world();
+  const live=await runV2Wait({store2,now:Date.now,apiKey:'sk',health:H,guard:createGuard({fetchFn:w.fetchFn,...V2_GUARD})});
+  assert.ok(live.waits.every(x=>x.state==='DEFERRED'&&x.why==='HALTED_TODAY'),JSON.stringify(live));
+  const exp=await runV2Wait({store2,now:()=>Date.now()+6*MIN,apiKey:'sk',health:H,guard:createGuard({fetchFn:w.fetchFn,...V2_GUARD})});
+  assert.deepEqual(exp.waits.map(x=>x.resolution),['SKIP','SKIP']);
+  const o=await v2Outcome({store2,now:Date.now,guard:createGuard({fetchFn:w.fetchFn,...V2_GUARD})});
+  assert.equal(o.status,'HALTED_TODAY');
+  assert.equal(w.calls.length,0,'no Binance request while halted');
+});
