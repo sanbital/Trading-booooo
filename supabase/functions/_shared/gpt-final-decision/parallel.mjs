@@ -85,6 +85,7 @@ export async function callCounter(shared,{apiKey,model,thinking,reasoning_effort
     const body=JSON.stringify({model,thinking:{type:thinking},...(reasoning_effort?{reasoning_effort}:{}),max_tokens:1500,stream:false,
       response_format:{type:'json_object'},messages:[{role:'system',content:SYSTEM+'\nJSON schema: '+JSON.stringify(counterSchema(shared.packet.task))},
         {role:'user',content:JSON.stringify(shared.market_input)}]});
+    assert(new TextEncoder().encode(body).length<=49152,'COUNTER_REQUEST_SIZE');
     const request=(async()=>{
       out.attempted=true;
       const res=await fetchFn(DEEPSEEK_URL,{method:'POST',redirect:'error',signal:abort.signal,

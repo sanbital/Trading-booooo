@@ -26,3 +26,5 @@ verify_jwt = false
 verify_jwt = false
 
 
+[functions.deepseek-temporal-shadow]
+verify_jwt = false
