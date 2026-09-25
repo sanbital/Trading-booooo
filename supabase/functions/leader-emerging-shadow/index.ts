@@ -14,9 +14,15 @@ import {createGuard} from './guard.mjs';
 import {makeStore} from './store.mjs';
 import {dbTarget} from './dbtarget.mjs';
 import {runScan,runWait,runOutcome,runDiagnostic,PATCH} from './shadow.mjs';
+import {makeStoreV2} from './v2/store.mjs';
+import {runParity,runV2Wait,runHealth} from './v2/run.mjs';
 
 const reply=(s,b)=>new Response(JSON.stringify(b),{status:s,headers:{'content-type':'application/json','cache-control':'no-store'}});
-const MODES={scan:runScan,wait:runWait,outcome:runOutcome,diagnostic:runDiagnostic};
+const MODES={scan:runScan,wait:runWait,outcome:runOutcome,diagnostic:runDiagnostic,
+  // LE-SHADOW-2
+  parity:async(o)=>runParity({...o,health:o.apiKey?await o.store.gptHealth():null}),
+  v2wait:async(o)=>runV2Wait({...o,health:o.apiKey?await o.store.gptHealth():null}),
+  health:runHealth};
 
 Deno.serve(async req=>{
   if(req.method!=='POST')return reply(405,{ok:false,error:'POST_ONLY'});
@@ -34,9 +40,10 @@ Deno.serve(async req=>{
       const who=await sql.unsafe('select current_user as u');
       if(who?.[0]?.u!=='shadow_le_writer')return reply(401,{ok:false,error:'UNEXPECTED_ROLE'});
     }catch{return reply(401,{ok:false,error:'UNAUTHORIZED'});}
-    const store=makeStore({query:(text,params)=>sql.unsafe(text,params)});
+    const db={query:(text,params)=>sql.unsafe(text,params)};
+    const store=makeStore(db),store2=makeStoreV2(db);
     const guard=createGuard({fetchFn:fetch});
-    const out=await run({store,guard,now:Date.now,apiKey:Deno.env.get('OPENAI_API_KEY_SHADOW')||null});
+    const out=await run({store,store2,guard,now:Date.now,apiKey:Deno.env.get('OPENAI_API_KEY_SHADOW')||null});
     return reply(200,{...out,patch:PATCH,role:'shadow_le_writer',db_host_kind:/pooler/.test(t.host??'')?'POOLER':'DIRECT'});
   }catch(e){
     return reply(500,{ok:false,patch:PATCH,error:[e?.code,e?.message??String(e)].filter(Boolean).join(':').slice(0,300),orderCalls:0});

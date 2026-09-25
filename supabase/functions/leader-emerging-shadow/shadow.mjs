@@ -15,8 +15,9 @@ import {evaluateWait,recheckContext} from './wait.mjs';
 import {labelOutcome,KLINE_LIMIT} from './outcome.mjs';
 import {scoreAlternativeEntry} from './alternative-score.mjs';
 import {scoreV2} from './score-v2.mjs';
+import {v2Discovery,v2Outcome} from './v2/run.mjs';
 
-export const PATCH='LE-SHADOW-1';
+export const PATCH='LE-SHADOW-1+2';
 const iso=t=>new Date(t).toISOString();
 const ms=x=>x instanceof Date?x.getTime():typeof x==='number'?x:Date.parse(x);
 const int=x=>Number.isFinite(x)?Math.round(x):null;
@@ -89,7 +90,7 @@ async function gptDecision({store,guard,apiKey,now,c,rich,packet,snapshotAt,atte
 }
 
 // ------------------------------------------------------------------------------------ scan
-export async function runScan({store,guard,now=Date.now,apiKey=null}){
+export async function runScan({store,store2=null,guard,now=Date.now,apiKey=null}){
   const started=now(),cycle=baseCycle('SCAN',started);
   const ctl=await store.control();
   if(ctl?.enabled!==true)return {ok:true,mode:'scan',status:'DISABLED',written:false};
@@ -177,7 +178,14 @@ export async function runScan({store,guard,now=Date.now,apiKey=null}){
   });
   finish(cycle,guard,now);
   const w=await store.writeCycle(cycle,candidates,decisions);
-  return {ok:true,mode:'scan',status:cycle.status,cycle_id:w?.cycle_id??null,observed_at:cycle.observed_at,source:cycle.source,
+  // LE-SHADOW-2 DISCOVERY lane: runs only after the LE-SHADOW-1 cycle is safely written; any V2
+  // failure is reported and never touches the V1 record.
+  let v2=null;
+  if(store2&&w?.cycle_id&&selected.length){
+    try{v2=await v2Discovery({store2,guard,apiKey,now,health:apiKey?await store.gptHealth():null,cycleId:w.cycle_id,observedAt,written:w,rows,selected,rich,decisions});}
+    catch(e){v2={error:errText(e)};}
+  }
+  return {ok:true,mode:'scan',v2,status:cycle.status,cycle_id:w?.cycle_id??null,observed_at:cycle.observed_at,source:cycle.source,
     n_universe:cycle.n_universe,lanes:{leader:cycle.n_leader,emerging:cycle.n_emerging,control:cycle.n_control},shortlist:selected,
     top30:rows.map(r=>r.symbol),request_weight:cycle.request_weight,used_weight_max:cycle.used_weight_max,binance_status:cycle.binance_status,
     gpt_state:cycle.gpt_state,gpt_calls:cycle.gpt_calls,decisions:decisions.map(d=>({s:d.symbol,arm:d.arm,d:d.decision})),errors:cycle.errors,orderCalls:0};
@@ -232,7 +240,7 @@ export async function runWait({store,guard,now=Date.now,apiKey=null}){
 }
 
 // ------------------------------------------------------------------------------------ outcome
-export async function runOutcome({store,guard,now=Date.now,limit=20}){
+export async function runOutcome({store,store2=null,guard,now=Date.now,limit=20}){
   const ctl=await store.control();
   if(ctl?.enabled!==true)return {ok:true,mode:'outcome',status:'DISABLED'};
   const started=now(),cycle=baseCycle('OUTCOME',started);
@@ -254,9 +262,12 @@ export async function runOutcome({store,guard,now=Date.now,limit=20}){
     if(rows.length)labeled=(await store.insertOutcomes(rows)).length;
   }else cycle.status='HALTED_TODAY_PRECISE_SKIPPED';
   const observer=await store.labelObserver(8),linked=await store.linkProduction(1500);
-  cycle.detail={labeled,observer,linked,swept};
+  // LE-SHADOW-2 outcomes: own guard (cap 60, abort at shared used-weight 1000), never blocks V1 labels
+  let v2=null;
+  if(store2&&!(await store.haltedToday())){try{v2=await v2Outcome({store2,now});}catch(e){v2={error:errText(e)};}}
+  cycle.detail={labeled,observer,linked,swept,v2};
   await store.insertCycleOnly(finish(cycle,guard,now));
-  return {ok:true,mode:'outcome',status:cycle.status,labeled,observer,linked,swept,request_weight:cycle.request_weight,errors:cycle.errors,orderCalls:0};
+  return {ok:true,mode:'outcome',status:cycle.status,labeled,observer,linked,swept,v2,request_weight:cycle.request_weight,errors:cycle.errors,orderCalls:0};
 }
 
 // ------------------------------------------------------------------------------------ diagnostic (NO writes)

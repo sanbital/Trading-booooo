@@ -7,7 +7,7 @@
  * Binance protection: a per-cycle weight cap (documented request weights, counted before the
  * request), an immediate abort when the shared IP's x-mbx-used-weight-1m reaches 1,200 (the
  * production scanner stops at 2,100, so the shadow always yields first), and a day halt on
- * HTTP 418/429. There is exactly one Binance host: no fapi1/fapi2 rotation. */
+ * HTTP 418/429/451. There is exactly one Binance host: no fapi1/fapi2 rotation. */
 export const BINANCE_HOST='fapi.binance.com';
 export const OPENAI_HOST='api.openai.com';
 export const BINANCE_PATHS=Object.freeze(['/fapi/v1/klines','/fapi/v1/depth','/fapi/v1/exchangeInfo','/fapi/v1/ticker/price',
@@ -15,7 +15,7 @@ export const BINANCE_PATHS=Object.freeze(['/fapi/v1/klines','/fapi/v1/depth','/f
 export const OPENAI_PATHS=Object.freeze(['/v1/responses']);
 export const WEIGHT_ABORT_AT=1200;
 export const CYCLE_WEIGHT_CAP=100;
-export const DAY_HALT_STATUSES=Object.freeze([418,429]);
+export const DAY_HALT_STATUSES=Object.freeze([418,429,451]);
 
 export class GuardError extends Error{
   constructor(code,detail=null){super(code);this.code=code;this.detail=detail;}

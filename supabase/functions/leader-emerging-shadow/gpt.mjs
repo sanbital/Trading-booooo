@@ -60,7 +60,7 @@ export function costOf(raw){
   if(!u||!Number.isSafeInteger(u.input_tokens)||!Number.isSafeInteger(u.output_tokens))return null;
   return ((u.input_tokens-c)*PRICING.inputPerMillion+c*PRICING.cachedPerMillion+u.output_tokens*PRICING.outputPerMillion)/1e6;
 }
-function parseOutput(raw){
+export function parseOutput(raw){
   if(!(raw?.status==='completed'&&!raw.error&&!raw.incomplete_details))throw Error('ALT_API_INCOMPLETE');
   const chunks=[];
   for(const m of raw.output??[]){
