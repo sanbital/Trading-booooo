@@ -1,0 +1,29 @@
+name: Self evolution validation
+on:
+  pull_request:
+    paths:
+      - 'supabase/functions/_shared/self-evolution/**'
+      - 'supabase/functions/self-evolution-worker/**'
+      - 'supabase/functions/_shared/gpt-final-decision/**'
+      - 'supabase/migrations/*autonomous*'
+      - 'development/self-evolution/**'
+      - '.github/workflows/self-evolution-validation.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --prefix "$RUNNER_TEMP/evolution-test" --no-save @electric-sql/pglite@0.3.14
+      - name: Decision, database, execution and capture regressions
+        run: |
+          export PGLITE_MODULE="$RUNNER_TEMP/evolution-test/node_modules/@electric-sql/pglite/dist/index.js"
+          node --test development/self-evolution/tests/*.test.mjs development/gpt-final-decision/tests/*.test.mjs tests/fd1*.test.mjs test-support/v17-entry/*.test.mjs test-support/v17-exit/*.test.mjs collectors/doa-capture/*.test.mjs

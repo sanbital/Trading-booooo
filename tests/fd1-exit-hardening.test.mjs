@@ -83,7 +83,7 @@ test('FIRST completion cannot release pending HOLD arbitration',async()=>{
   setFd1HoldTestHooks({store,apiKey:'test',config,deepseekKey:'test',schedule:t=>tasks.push(t),
     review:async()=>{await gate;return {packet:p,result:{valid:true,decision:'EXIT',completed_at_ms:T,api_cost_usd:.001}};}});
   try{
-    const pos={id:'p',symbol:'ABCUSDT',entry_price:1.1,entry_at:new Date(T-60000).toISOString()};
+    const pos={id:'p',symbol:'ABCUSDT',state:'OPEN',remaining_quantity:1,entry_price:1.1,entry_at:new Date(T-60000).toISOString()};
     const args={meta:{},state:{peakPrice:1.2,stopPrice:1},bid:1.19,now:T,timeCandidate:'V17_MAX_HOLD'};
     const started=await fd1HoldTick({},pos,args);
     assert.equal((await store.get(started.start.key)).state,'RUNNING');

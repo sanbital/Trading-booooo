@@ -3,6 +3,8 @@ import {callDecision,payloadFor,hash} from './api.mjs';
 import {validateDecision,validateShape} from './contract.mjs';
 import {callAdvisory,evidenceCatalog,validateAdvisory} from './advisory.mjs';
 import {flashCostCeiling} from './hold-shadow.mjs';
+import {resolvePolicy} from '../self-evolution/runtime.mjs';
+import {policyPrompt} from '../self-evolution/policy.mjs';
 import {validateMarketSensor,SENSOR_NOTE} from './market-sensor.mjs';
 export const DUAL_VERSION='FD1_GPT_FINAL_ARBITRATION_2';
 export const ARBITRATION_PROMPT=`
@@ -53,7 +55,7 @@ function normalizeArbitration(arbitration){
   return {...arbitration,considered:[...new Set([...(arbitration.adopted??[]),...(arbitration.rejected??[])])]};
 }
 function freeze(x){if(x&&typeof x==='object'){Object.values(x).forEach(freeze);Object.freeze(x);}return x;}
-export async function frozenReview(packet,{snapshotAtMs,inputPayload=payloadFor}={}){
+export async function frozenReview(packet,{snapshotAtMs,inputPayload=payloadFor,policy=null}={}){
   if(!Number.isSafeInteger(snapshotAtMs))throw Error('FD_SNAPSHOT_TIME');
   const copy=clone(packet);
   if(copy.facts?.market_sensor)copy.facts.market_sensor=validateMarketSensor(copy.facts.market_sensor,snapshotAtMs);
@@ -63,6 +65,7 @@ export async function frozenReview(packet,{snapshotAtMs,inputPayload=payloadFor}
     market.trajectory_contracts={trade_trajectory:'capture_context / TRADE_CONTEXT_V3',market_sensor_trajectory:'market_sensor.market_sensor_trajectory / MARKET_SENSOR_CONTEXT_V1'};
     base.input[0].content+='\n'+SENSOR_NOTE;
   }
+  if(policy){market.decision_policy=policy.context;base.input[0].content+=policyPrompt(policy.context,'gpt');}
   market.deterministic_safety_state={market_flags:market.risk_flags??{},native_stop_stage:copy.position?.stop_stage??null,
     priority:'HARD_SAFETY_OVERRIDES_ALL_MODELS',account_and_exchange_truth:'NOT_IN_MODEL_SNAPSHOT_RECONCILED_BY_EXECUTOR'};
   market.execution_state={phase:copy.task==='RECHECK'?'PRE_DISPATCH':copy.task==='HOLD'?'OPEN_POSITION_REVIEW':'PRE_ADMISSION',
@@ -75,7 +78,7 @@ export async function frozenReview(packet,{snapshotAtMs,inputPayload=payloadFor}
     capture_trajectory_hash:trajectoryHash,orderbook_reference:copy.current_ref??copy.execution_ref??copy.position?.valuation??null,
     tape_window:copy.pre_dispatch?.tape??null,initial_reference:copy.initial?.execution_ref??null,
     current_reference:copy.current_ref??copy.execution_ref??null,position_state:copy.position??null,
-    trigger_identity:{candidate_id:copy.candidate_id,reasons:copy.trigger_reasons??[],offset_ms:copy.as_of_offset_ms??null}};
+    trigger_identity:{candidate_id:copy.candidate_id,reasons:copy.trigger_reasons??[],offset_ms:copy.as_of_offset_ms??null},policy_version:policy?.bundle?.policy_version??null,policy_hash:policy?.hash??null};
   const snapshot_hash=await hash({identity,market});
   return freeze({packet:copy,base_payload:base,snapshot_at_ms:snapshotAtMs,snapshot_hash,
     market_input:{...market,snapshot:{...identity,snapshot_hash}},capture_trajectory_hash:trajectoryHash});
@@ -126,10 +129,11 @@ export function arbitrationPayload(current,initial,reviews){
 }
 /** First calls overlap; FINAL always runs. FIRST/advice never become an executable fallback. */
 export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch,now=Date.now,deadlineMs,
-  gptCall=callDecision,counterCall=callAdvisory,snapshotAtMs,inputPayload=payloadFor,validate=validateDecision,refreshPacket}={}){
+  gptCall=callDecision,counterCall=callAdvisory,snapshotAtMs,inputPayload=payloadFor,validate=validateDecision,refreshPacket,policy:policyOverride=null}={}){
   const started=now(),deadline=Number.isFinite(deadlineMs)?deadlineMs:started+15000;
   const invalid=error=>({valid:false,decision:'ABSTAIN',answer:null,wire:null,error,attempted:false,completed_at_ms:now(),api_cost_usd:0});
-  const initial=await frozenReview(packet,{snapshotAtMs:snapshotAtMs??started,inputPayload});
+  const policy=await resolvePolicy(packet,{policy:policyOverride,snapshotAtMs:snapshotAtMs??started,now,fetchFn});
+  const initial=await frozenReview(packet,{snapshotAtMs:snapshotAtMs??started,inputPayload,policy});
   // Live advisory responses take about 3-4 s; leave at least 2.5 s for refresh + FINAL.
   const firstMs=Math.max(1,Math.min(6000,deadline-now()-2500,Math.floor((deadline-now()-1500)*.65)));
   const safe=async fn=>{try{return await fn();}catch{return invalid('FD_PROVIDER_ERROR');}};
@@ -145,7 +149,7 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
   if(refreshPacket&&deadline-now()>2200){try{
     const refreshed=await refreshPacket(Math.min(1200,deadline-now()-1000));
     if(refreshed?.packet&&Number.isSafeInteger(refreshed.captured)&&refreshed.captured>=initial.snapshot_at_ms&&refreshed.captured<=now()){
-      current=await frozenReview(refreshed.packet,{snapshotAtMs:refreshed.captured,inputPayload});refreshError=null;
+      current=await frozenReview(refreshed.packet,{snapshotAtMs:refreshed.captured,inputPayload,policy});refreshError=null;
     }
     else refreshError='LATEST_SNAPSHOT_UNAVAILABLE';
   }catch{refreshError='LATEST_SNAPSHOT_UNAVAILABLE';}}
@@ -157,7 +161,7 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
   if(final.valid===true){try{const answer=validateFinalWire(final.wire,current.packet,{validate,catalog,advisory:ds});final={...final,answer,decision:answer.decision};}
     catch(e){final={...final,valid:false,decision:'ABSTAIN',answer:null,error:e.message??'FD_FINAL_INVALID'};}}
   const accepted=final.valid===true&&now()<deadline,arb=accepted?final.answer?.arbitration:null;
-  const audit={version:DUAL_VERSION,authority:'GPT_FINAL_ONLY',initial_gpt_decision:first.decision??'ABSTAIN',
+  const audit={version:DUAL_VERSION,authority:'GPT_FINAL_ONLY',policy_version:policy.bundle.policy_version,policy_hash:policy.hash,policy_source:policy.source,policy_generation:policy.generation??null,initial_gpt_decision:first.decision??'ABSTAIN',
     deepseek_preference:ds.valid===true?ds.answer.decision_preference:null,deepseek_valid:ds.valid===true,
     deepseek_available:ds.available===true,deepseek_agreement:disagreement(first,ds),deepseek_error:ds.error??null,
     deepseek_evidence_considered:arb?.considered??[],deepseek_adopted:arb?.adopted??[],deepseek_rejected:arb?.rejected??[],
