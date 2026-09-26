@@ -50,9 +50,17 @@ export async function patternReview(store,keys,{full=false,failed_policy=null}={
  const active=await store.rpc('evolution_active_policy'),day=new Date().toISOString().slice(0,10),hid='HYP_'+day.replaceAll('-','')+'_'+(await hash({parent:active.bundle.policy_version,failed_policy})).slice(0,12);
  const pending=await store.read(store.table('evolution_policy_states').select('version,state').in('state',['SIMULATING','VALIDATING','HOLDOUT_TEST','QUALIFIED','PROMOTING']));
  if(pending.length)return {patterns:patterns.length,waiting:'FROZEN_CHALLENGER_IN_VALIDATION',challengers:pending};
- const exists=await store.read(store.table('evolution_hypotheses').select('id').eq('id',hid).maybeSingle());if(exists)return {patterns:patterns.length,hypothesis:hid,duplicate:true};
+ const exists=await store.read(store.table('evolution_hypotheses').select('*').eq('id',hid).maybeSingle());
+ if(exists){if(exists.state==='REJECTED_SCOPE_VIOLATION')return {patterns:patterns.length,hypothesis:hid,duplicate:true};
+  const saved=await store.read(store.table('evolution_policy_bundles').select('version').eq('version',exists.policy_version).maybeSingle());
+  if(saved)return {patterns:patterns.length,hypothesis:hid,duplicate:true};
+  // Resume interrupted legacy registration using its original evidence cutoff and proposal.
+  const cutoff=Date.parse(exists.created_at),outcomes=await store.read(store.table('evolution_outcomes').select('outcome').order('outcome_at',{ascending:false}).limit(1500));
+  const candidate=exists.critique?.frozen_candidate??candidateFrom(active.bundle,exists.proposal.output,{version:exists.policy_version,cutoff,calibration:calibrate(outcomes.map(x=>x.outcome),cutoff)});
+  return store.rpc('evolution_register_candidate',{p_hypothesis:exists,p_bundle:candidate,p_hash:await hash(candidate)});
+ }
  const summary=rows.map(r=>({trade_id:r.trade_id,net:r.realized_net_usdt,regime:r.regime,reviews:r.review.reviews.map(x=>({provider:x.provider,lesson:x.output.lesson,candidate_improvement:x.output.candidate_improvement})),critiques:r.review.critiques.map(x=>({provider:x.provider,output:x.output}))}));
- const input={evidence_ids:rows.map(r=>r.trade_id),patterns,trade_reviews:summary,parent_policy:active.bundle,failed_policy,task:'Propose ONE bounded intelligence interpretation improvement. Use only allowed stage/rubric/features. No account, sizing, safety, code or time-only forced exit changes. Supporting/contradicting evidence must name supplied trade IDs.'};
+ const input={evidence_ids:rows.map(r=>r.trade_id),patterns,trade_reviews:summary,parent_policy:active.bundle,failed_policy,task:'Propose ONE bounded intelligence interpretation improvement. ENTRY/RECHECK decide BUY/SKIP/ABSTAIN; HOLD/EXIT interpret HOLD/PROTECT/EXIT. Use only allowed stage/rubric/features. No account, sizing, safety, code or time-only forced exit changes. Supporting/contradicting evidence must be exact supplied trade IDs.'};
  const call=researchCaller(store,keys),proposals=await Promise.all(['gpt','deepseek'].map(provider=>call(provider,{kind:'HYPOTHESIS',input,schema:PROPOSAL_SCHEMA})));
  for(const p of proposals)if([...p.output.supporting_evidence,...p.output.contradicting_evidence].some(id=>!input.evidence_ids.includes(id)))throw Error('HYPOTHESIS_EVIDENCE_MISMATCH');
  const critiques=await Promise.all(['gpt','deepseek'].map((provider,i)=>call(provider,{kind:'HYPOTHESIS_CRITIQUE',schema:CRITIQUE_SCHEMA,input:{...input,own_proposal:proposals[i].output,other_proposal:proposals[1-i].output}})));
@@ -60,12 +68,10 @@ export async function patternReview(store,keys,{full=false,failed_policy=null}={
  const outcomeRows=await store.read(store.table('evolution_outcomes').select('outcome').order('outcome_at',{ascending:false}).limit(1500));
  let candidate,state='PROPOSED',error=null;
  try{candidate=candidateFrom(active.bundle,proposals[0].output,{version,cutoff,calibration:calibrate(outcomeRows.map(x=>x.outcome),cutoff)});validatePolicy(candidate);}catch(e){state='REJECTED_SCOPE_VIOLATION';error=String(e.message);}
- await store.write('evolution_hypotheses',{id:hid,description:proposals[0].output.hypothesis,proposal:proposals[0],critique:{cross_critiques:critiques,independent_proposal:proposals[1],synthesis:'Both independent proposals retained. Challenger freezes GPT proposal; no automatic preference vote.',error},supporting_patterns:patterns.map(p=>p.pattern_id),policy_version:candidate?version:null,state});
- if(candidate){const parent=await store.read(store.table('evolution_policy_bundles').select('source_manifest').eq('version',active.bundle.policy_version).single());
-  await store.write('evolution_policy_bundles',{version,parent_version:active.bundle.policy_version,bundle:candidate,sha256:await hash(candidate),source_manifest:parent.source_manifest,data_cutoff:new Date(cutoff).toISOString()});
-  await store.write('evolution_policy_states',{version,state:'SIMULATING',reason:'FROZEN; PROSPECTIVE_VALIDATION_AND_UNTOUCHED_HOLDOUT_REQUIRED'});
-  await store.enqueue('simulate:'+version,'SIMULATE',{policy_version:version},18,new Date(cutoff+60000).toISOString());
- }
+ const hypothesis={id:hid,description:proposals[0].output.hypothesis,proposal:proposals[0],critique:{cross_critiques:critiques,independent_proposal:proposals[1],frozen_candidate:candidate??null,synthesis:'Both independent proposals retained. Challenger freezes GPT proposal; no automatic preference vote.',error},supporting_patterns:patterns.map(p=>p.pattern_id),policy_version:candidate?version:null,state};
+ if(candidate)return store.rpc('evolution_register_candidate',{p_hypothesis:hypothesis,p_bundle:candidate,p_hash:await hash(candidate)});
+ await store.write('evolution_hypotheses',hypothesis);
  await store.write('evolution_events',{kind:state==='REJECTED_SCOPE_VIOLATION'?state:'CHALLENGER_FROZEN',policy_version:candidate?version:null,details:{hypothesis:hid,reviewed_trades:rows.length,full,failed_policy}});
  return {patterns:patterns.length,hypothesis:hid,policy_version:candidate?version:null,state};
 }
+

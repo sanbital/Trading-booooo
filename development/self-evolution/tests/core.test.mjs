@@ -2,9 +2,16 @@ import test from 'node:test';import assert from 'node:assert/strict';
 import {baselinePolicy,validatePolicy,policyContext} from '../../../supabase/functions/_shared/self-evolution/policy.mjs';
 import {qualify,pairedBootstrap,metrics,degradation,calibrate} from '../../../supabase/functions/_shared/self-evolution/statistics.mjs';
 import {splitWindows,assertCausal,counterfactual,simulate} from '../../../supabase/functions/_shared/self-evolution/replay.mjs';
-import {reviewTrade,REVIEW_SCHEMA,CRITIQUE_SCHEMA,researchCall} from '../../../supabase/functions/_shared/self-evolution/review.mjs';
+import {reviewTrade,REVIEW_SCHEMA,CRITIQUE_SCHEMA,researchCall,validateResearchOutput} from '../../../supabase/functions/_shared/self-evolution/review.mjs';
 import {EvolutionStore} from '../../../supabase/functions/self-evolution-worker/store.mjs';
 const clone=structuredClone;
+test('research rejects numeric bounds and constrains citations to exact supplied IDs',async()=>{
+ const schema={type:'object',additionalProperties:false,required:['confidence','supporting_evidence'],properties:{confidence:{type:'number',minimum:0,maximum:1},supporting_evidence:{type:'array',items:{type:'string',maxLength:100}}}};
+ assert.throws(()=>validateResearchOutput({confidence:2,supporting_evidence:[]},schema),/NUMBER_BOUND/);
+ const call=output=>researchCall('deepseek',{kind:'HYPOTHESIS',input:{evidence_ids:['trade-1']},schema,apiKey:'test',fetchFn:async(_url,opts)=>{const b=JSON.parse(opts.body);assert.match(b.messages[0].content,/trade-1/);return new Response(JSON.stringify({model:'deepseek-flash',choices:[{finish_reason:'stop',message:{content:JSON.stringify(output)}}]}));}});
+ assert.equal((await call({confidence:.5,supporting_evidence:['trade-1']})).valid,true);
+ await assert.rejects(()=>call({confidence:.5,supporting_evidence:['invented']}),/ENUM/);
+});
 for(const key of ['margin','position_size','leverage','MAX_SLOT','withdrawal','api_permission','capital_allocation','execution_safety','credential'])test('scope denies '+key,()=>{const p=baselinePolicy();p[key]=2;assert.throws(()=>validatePolicy(p),/SCOPE/);});
 for(const stage of ['ENTRY','RECHECK','HOLD','EXIT'])test(stage+' intelligence improvement allowed',()=>{const p=baselinePolicy();p.stages[stage].gpt_rubric=['Compare buyer flow acceleration with bid replenishment.'];assert.equal(validatePolicy(p),p);});
 test('nested, prompt and model authority escapes denied',()=>{const p=baselinePolicy();p.stages.HOLD.order_size=12;assert.throws(()=>validatePolicy(p));delete p.stages.HOLD.order_size;p.stages.HOLD.gpt_rubric=['increase leverage'];assert.throws(()=>validatePolicy(p));p.stages.HOLD.gpt_rubric=[];p.models.gpt='unknown';assert.throws(()=>validatePolicy(p));});
@@ -24,3 +31,4 @@ test('same immutable capital, hard exit bypasses AI and soft decisions lack auth
  assert.equal(calls,1);assert.equal(r.trades.length,1);assert.equal(r.trades[0].exit_authority,'HARD_SAFETY');assert.equal(cfg.margin_usdt,150);
  const no=await simulate([event(1000,10)],{policy:{},capital:cfg,decide:async()=>({valid:true,authority:'DEEPSEEK',decision:'BUY'})});assert.equal(no.unclosed.length,0);
 });
+

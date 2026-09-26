@@ -4,7 +4,7 @@
 
 ## Authority and preserved baseline
 
-Initial audit: main `bcdc3b2`, executor v101. During implementation main advanced to `d89c55f` and the deployed executor to v104 (`48a2657336b7ecb5b47aab79d79f2d48357e8522b367c6b41d6fadcfbe03f6a1`). PRs 192–196 were reconciled. The operator explicitly selected preservation of PR193 resident profit protection and the DeepSeek emergency exit exception; these fixed execution mechanisms are outside policy evolution. Ordinary strategy arbitration remains GPT FIRST + independent DeepSeek, followed by refreshed GPT FINAL.
+Initial audit: main `bcdc3b2`, executor v101. During implementation main advanced to `d89c55f` and the deployed executor to v104 (`48a2657336b7ecb5b47aab79d79f2d48357e8522b367c6b41d6fadcfbe03f6a1`). PRs 192–197 and the production-only v105 emergency-validation/native-stop ratchet hotfixes were reconciled. Executor v106 adds only the policy reader and two intelligence integrations over that v105 bundle. The operator explicitly selected preservation of PR193 resident profit protection and the DeepSeek emergency exit exception; these fixed execution mechanisms are outside policy evolution. Ordinary strategy arbitration remains GPT FIRST + independent DeepSeek, followed by refreshed GPT FINAL.
 
 The frozen comparison account is 332.01243023 USDT, slot margin 150 USDT, leverage 3, MAX_SLOTS 10, with available-capital competition. Commission is 0.0005 per side, observed in 500 recent fills. These are research inputs, not writes to trading settings. No AI confidence affects quantity. No research code has an order, withdrawal, transfer, credential-management or source-deployment operation.
 
@@ -28,8 +28,11 @@ Realtime reads are cached for 15 seconds with a 250ms deadline; a short bounded 
 
 Service role only: `select public.evolution_report();`. This report contains the active/previous policy, challengers, queue, last review/scan/simulation, patterns, hypotheses, calibration, disagreement and promotion/rollback events. Full lineage and evidence remain in the additive `evolution_*` tables. Anonymous and authenticated clients have no access. No existing trading history is updated or deleted.
 
-The initial champion is `POLICY_BASELINE_V104`. Calibration without adequate exact observed outcomes stays absent. A proposal or replay is not profitability evidence. Until a full forward study and live lifecycle exist: **PROFITABILITY UNKNOWN**.
+The immutable original bootstrap is `POLICY_BASELINE_V104`; the operator baseline was reconciled to `POLICY_BASELINE_V105` without changing decision rubrics or capital settings. Calibration without adequate exact observed outcomes stays absent. A proposal or replay is not profitability evidence. Until a full forward study and live lifecycle exist: **PROFITABILITY UNKNOWN**.
 
 ## Verification
 
 Set `PGLITE_MODULE` to the native filesystem path of `@electric-sql/pglite/dist/index.js`, then run `node --test development/self-evolution/tests/*.test.mjs`. The suite includes forbidden scope, independent reviews, provider failure, causality, portfolio authority, migration roles, immutable history, lease fencing, SQL null rejection, atomic promotion and rollback. The release also ran 570 related decision/capture/IOC/partial-fill/native-protection tests and Deno checks.
+
+Production verification: executor v106 (`b91fa4076e9a286918dd4521f7c4138b10e3872e3f992e346e86652f3baaea48`), worker v4 (`d1f4a45084ac8c1414993ff65c83f9edf3696156297724fbe76d0e3f2caea2e4`). The no-order QUSDT probe returned valid GPT FINAL HOLD with identical independent snapshot hashes and active policy V105. QUSDT, SPELLUSDT, JELLYJELLYUSDT and WLDUSDT each returned AVAILABLE with 24 ordered buckets. Initial dual reviews include a +30.8573 USDT winner and two losses; full-universe collection evaluated 525/525 symbols. `POLICY_20260926_f6be6ff8f8b50d7d` is a frozen research challenger, not an active trading policy. See the release receipt for the evidence and remaining limitations.
+

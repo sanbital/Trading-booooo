@@ -46,4 +46,16 @@ test('additive migration, role isolation, claim fencing, scope and immutable bas
  assert.deepEqual((await db.query('select capital_manifest from evolution_control')).rows[0].capital_manifest,capital);
  assert.equal((await db.query("select count(*)::int n from evolution_policy_bundles where version='POLICY_BASELINE_V104'")).rows[0].n,1);
  await assert.rejects(()=>db.exec("update evolution_policy_bundles set sha256=repeat('c',64) where version='POLICY_BASELINE_V105'"),/IMMUTABLE/);
+ await db.exec(await fs.readFile(new URL('../../../supabase/migrations/20260926173812_evolution_scope_and_recovery.sql',import.meta.url),'utf8'));
+ const candidate={...baselinePolicy(),policy_version:'POLICY_ATOMIC',parent_version:'POLICY_BASELINE_V105'};
+ candidate.stages.RECHECK.deepseek_rubric=['Recheck must re-prove fresh marginal demand.'];
+ assert.equal((await db.query('select evolution_scope_valid($1::jsonb) ok',[JSON.stringify(candidate)])).rows[0].ok,true);
+ for(const forbidden of ['increase margin','change leverage','position size doubled','withdraw funds','relax hard stop','eval(code)']){const bad=structuredClone(candidate);bad.stages.ENTRY.gpt_rubric=[forbidden];assert.equal((await db.query('select evolution_scope_valid($1::jsonb) ok',[JSON.stringify(bad)])).rows[0].ok,false);}
+ const hypothesis={id:'HYP_ATOMIC',description:'Evidence interpretation',proposal:{},critique:{},supporting_patterns:[],policy_version:candidate.policy_version};
+ const registered=(await db.query('select evolution_register_candidate($1,$2,$3) r',[JSON.stringify(hypothesis),JSON.stringify(candidate),'d'.repeat(64)])).rows[0].r;assert.equal(registered.state,'SIMULATING');
+ assert.equal((await db.query('select evolution_register_candidate($1,$2,$3) r',[JSON.stringify(hypothesis),JSON.stringify(candidate),'d'.repeat(64)])).rows[0].r.duplicate,true);
+ await assert.rejects(()=>db.query('select evolution_register_candidate($1,$2,$3)',[JSON.stringify(hypothesis),JSON.stringify(candidate),'e'.repeat(64)]),/IMMUTABLE_CONFLICT/);
+ assert.equal((await db.query("select count(*)::int n from evolution_jobs where dedupe_key='simulate:POLICY_ATOMIC'")).rows[0].n,1);
+ assert.equal((await db.query('select evolution_active_policy() a')).rows[0].a.bundle.policy_version,'POLICY_BASELINE_V105','registration cannot promote');
  }finally{await db.close();}});
+
