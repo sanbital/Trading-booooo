@@ -28,7 +28,7 @@ export async function buildDecisionPacket({task,subjectId,symbol,dataMode,facts,
   const packet={version:FD_VERSION,task,candidate_id:'c_'+(await hash(String(subjectId))).slice(0,24),symbol:String(symbol).toUpperCase(),
     data_mode:dataMode,facts,model_judgments:judgments??null,
     position:task==='HOLD'?{event:String(position.event??'REVIEW'),deterministic_exit_candidate:position.deterministicExitCandidate??null,
-      stop_stage:position.stopStage??null,...(position.valuation?{valuation:position.valuation}:{})}:null,...(task==='ENTRY'&&chase?{chase}:{}),snapshot_hash:''};
+      stop_stage:position.stopStage??null,...(position.positionId?{position_id:String(position.positionId),generation:position.generation??null}:{}),...(position.exitContext?{exit_context:position.exitContext}:{}),...(position.valuation?{valuation:position.valuation}:{})}:null,...(task==='ENTRY'&&chase?{chase}:{}),snapshot_hash:''};
   packet.snapshot_hash=await hash({...packet,snapshot_hash:''});
   return packet;
 }

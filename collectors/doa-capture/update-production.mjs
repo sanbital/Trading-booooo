@@ -2,7 +2,7 @@
 import {readFileSync,writeFileSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-const app='sanbital-doa-capture-20260925',ref='refs/heads/codex/production-gpt-arbitration-20260926';
+const app='sanbital-doa-capture-20260925',ref='refs/heads/codex/ai-exit-authority-v2-20260926';
 if(process.env.GITHUB_REF!==ref)throw Error('WRONG_RELEASE_REF');
 const protocol=createHash('sha256').update(readFileSync('collectors/doa-capture/PROTOCOL.md')).digest('hex');
 const endpoint='https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/doa-capture-ingest';
@@ -33,13 +33,8 @@ try{
  const current=await machine('/'+before.id);if(current.instance_id!==before.instance_id)throw Error('CONCURRENT_CAPTURE_DEPLOYMENT');
  // Preserve resources, environment, secret references, network, and all other current config.
  const config={...cfg,image,auto_destroy:false,restart:{policy:'on-failure',max_retries:10}};
- if(cfg.auto_destroy===true){
-   // Fly refuses updates to --rm Machines. Start a persistent successor with the same
-   // app secrets/config; the DB lease prevents it collecting until the old worker stops.
-   const next=await machine('','POST',{name:'capture-continuous',region:before.region,config});
-   activeId=next.id;evidence.successor=safe(next);writeFileSync('capture-release.json',JSON.stringify(evidence,null,2));
-   await machine('/'+before.id+'/stop','POST',{signal:'SIGTERM',timeout:'10s'},nonce);replaced=true;
- }else await machine('/'+before.id,'POST',{current_version:before.instance_id,config},nonce);
+ if(cfg.auto_destroy===true)throw Error('EXISTING_PERSISTENT_COLLECTOR_REQUIRED');
+ await machine('/'+before.id,'POST',{current_version:before.instance_id,config},nonce);
 }finally{try{await machine('/'+before.id+'/lease','DELETE',undefined,nonce);}catch(e){if(!replaced||!String(e.message).includes('404'))throw e;}}
 evidence.after=safe(await machine('/'+activeId));
 writeFileSync('capture-release.json',JSON.stringify(evidence,null,2));
@@ -50,9 +45,9 @@ for(let i=0;i<40;i++){
  metrics->>'watched' watched,metrics->>'queue' queue from doa_capture.control where id=1`))[0];
  const captures=await query(`select s.symbol,c->>'status' status,c->>'reason' reason,c->>'buckets' buckets,jsonb_array_length(c->'trajectory') points
  from (values('QUSDT'),('SPELLUSDT'),('JELLYJELLYUSDT')) s(symbol)
- cross join lateral (select public.doa_gpt_capture_context(s.symbol,clock_timestamp()) c) x`);
+ cross join lateral (select public.doa_gpt_capture_context_v3(s.symbol,clock_timestamp()) c) x`);
  console.log(JSON.stringify({state,captures}));evidence.validation={state,captures};
- if(state.version==='DOA-CAPTURE-3-CONTINUOUS'&&Number(state.age_s)<25&&captures.every(x=>x.status==='AVAILABLE'&&Number(x.buckets)===12&&x.points===12)){
+ if(state.version==='DOA-CAPTURE-4-COVERAGE-RECOVERY'&&Number(state.age_s)<25&&captures.every(x=>x.status==='AVAILABLE'&&Number(x.buckets)===24&&x.points===24)){
    verified=true;break;
  }
 }

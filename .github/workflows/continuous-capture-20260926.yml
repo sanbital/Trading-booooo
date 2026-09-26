@@ -1,7 +1,7 @@
-name: Continuous capture production release
+name: Existing collector coverage recovery release
 on:
   push:
-    branches: [codex/production-gpt-arbitration-20260926]
+    branches: [codex/ai-exit-authority-v2-20260926]
     paths: [deployment-evidence/capture-release-request.json]
 permissions:
   contents: read

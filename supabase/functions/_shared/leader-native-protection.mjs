@@ -3,6 +3,7 @@
  * The host serializes operations using its existing execution lease and persists
  * position accounting + receipts in the SAME compare-and-swap transaction.
  */
+import {EXIT_AUTHORITY_VERSION,EXIT_CLASS} from './exit-authority.mjs';
 import {freshPortfolio,sameQuantity} from './leader-ops-isolation.mjs';
 import {exitAttemptId,protectiveStopSpec} from './leader-exit-review.mjs';
 import {cumulativeFillDelta} from './leader-fill-evidence.mjs';
@@ -214,21 +215,33 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
     // Reconcile every ambiguous attempt before a distinct attempt is created.
     if(outstanding.some(x=>!['ACTIVE','NEW'].includes(x.status)||x.lastQueryError))
       return {status:'RECONCILIATION_PENDING',state,softwareMonitorRequired:true};
-    const current=outstanding.filter(x=>eq(x.spec.params.quantity,p.remainingQuantity))
+    const retiring=new Set(request.authorityVersion===EXIT_AUTHORITY_VERSION&&request.exitClass===EXIT_CLASS.HARD_SAFETY?
+      request.legacySoftOrderIds??[]:[]);
+    for(const order of outstanding.filter(x=>retiring.has(x.clientId))){
+      if(order.exitClass===EXIT_CLASS.HARD_SAFETY||order.spec.params.triggerPrice<p.entryPrice||
+        !(request.stopPrice>0&&request.stopPrice<p.entryPrice))throw Error('HARD_FLOOR_RETIREMENT_FORBIDDEN');
+    }
+    const hardOrders=outstanding.filter(x=>!retiring.has(x.clientId));
+    const current=hardOrders.filter(x=>eq(x.spec.params.quantity,p.remainingQuantity))
       .sort((a,b)=>b.spec.params.triggerPrice-a.spec.params.triggerPrice)[0];
     if(current&&current.spec.params.triggerPrice>=request.stopPrice) {
+      if(request.exitClass===EXIT_CLASS.HARD_SAFETY&&!current.exitClass&&current.spec.params.triggerPrice<p.entryPrice){
+        const annotated=copy(state),item=annotated.protection.orders.find(x=>x.clientId===current.clientId);
+        item.exitClass=EXIT_CLASS.HARD_SAFETY;item.authorityVersion=EXIT_AUTHORITY_VERSION;
+        state=await save(state,annotated);
+      }
       for(const other of outstanding.filter(x=>x.clientId!==current.clientId))
         state=await cancelRemembered(state,other.clientId);
       return finishReplacement(state,current.clientId,request);
     }
     const generation=(state.protection.generation??0)+1;
     const clientId=await exitAttemptId(id,String(generation),'v17s');
-    const spec=protectiveStopSpec({...request,stopPrice:Math.max(request.stopPrice,...outstanding.map(x=>x.spec.params.triggerPrice)),symbol:p.symbol,positionId:id,
+    const spec=protectiveStopSpec({...request,stopPrice:Math.max(request.stopPrice,...hardOrders.map(x=>x.spec.params.triggerPrice)),symbol:p.symbol,positionId:id,
       ownedQuantity:p.remainingQuantity,clientAlgoId:clientId});
     if(request.lastPrice!=null&&spec.params.triggerPrice>=request.lastPrice)
       return {status:'STOP_ALREADY_CROSSED',state,softwareMonitorRequired:true};
     const next=copy(state);next.protection.generation=generation;
-    next.protection.orders.push({clientId,spec,status:'SUBMITTING',submittedAt:clock(),terminal:false});
+    next.protection.orders.push({clientId,spec,...(request.exitClass?{exitClass:request.exitClass,authorityVersion:request.authorityVersion}:{}),status:'SUBMITTING',submittedAt:clock(),terminal:false});
     // Persist before sending. A crash after this point only queries this same id.
     state=await save(state,next);
     let ack;

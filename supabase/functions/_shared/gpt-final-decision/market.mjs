@@ -9,7 +9,7 @@ async function get(fetchFn,path,ms){
 }
 const q=o=>new URLSearchParams(Object.fromEntries(Object.entries(o).map(([k,v])=>[k,String(v)])));
 /** @returns src for computeFacts, plus per-source errors. Never throws for a single source. */
-export async function readSources(symbol,asOf,{mode='LIVE',fetchFn=fetch,ms=3000,btcCache=null,now=Date.now}={}){
+export async function readSources(symbol,asOf,{mode='LIVE',fetchFn=fetch,ms=3000,btcCache=null,now=Date.now,positionId=null}={}){
   if(!/^[\p{L}\p{N}_]{1,60}USDT$/u.test(symbol))throw Error('SYMBOL_INVALID');
   const end=Math.floor(asOf/MIN)*MIN-1,end5=Math.floor(asOf/(5*MIN))*5*MIN-1,errors={};
   const safe=async(name,fn)=>{try{return await fn();}catch(e){errors[name]=String(e?.message??e).slice(0,60);return null;}};
@@ -27,6 +27,6 @@ export async function readSources(symbol,asOf,{mode='LIVE',fetchFn=fetch,ms=3000
         const r=Array.isArray(x)?x.filter(y=>Number(y.fundingTime)<=asOf).at(-1):null;return r?{rate:Number(r.fundingRate)}:null;}),
     live?safe('book',async()=>{const requestedAt=now();const data=await get(fetchFn,'/fapi/v1/depth?'+q({symbol,limit:100}),ms);
       return {...data,requestedAtMs:requestedAt,receivedAtMs:now()};}):Promise.resolve(null),
-    live?readCapture(symbol,asOf,{fetchFn,timeoutMs:Math.min(200,ms)}):Promise.resolve(null)]);
+    live?readCapture(symbol,asOf,{fetchFn,timeoutMs:Math.min(350,ms),positionId}):Promise.resolve(null)]);
   return {src:{one,five,btc:b,oiHist,premium,funding,book,...(captureContext?{captureContext}:{}),bookMissingReason:live?(book?null:'BOOK_UNAVAILABLE'):'NOT_POINT_IN_TIME_REPLAY'},errors};
 }

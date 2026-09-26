@@ -14,8 +14,8 @@ const cfg={mode:'ENFORCE',modeValid:true,approvalRef:'test',apiBudgetUsd:3,maxCa
 function harness(decision,{valid=true,config=cfg}={}){
   const store=new MemoryReviewStore(),tasks=[];
   setFd1HoldTestHooks({store,apiKey:'k',config,schedule:t=>tasks.push(t),
-    review:async()=>{
-      const now=Date.now(),packet=await buildDecisionPacket({task:'HOLD',subjectId:'hold-test',symbol:'ABCUSDT',dataMode:'LIVE',facts:computeFacts(marketSource(now),{asOf:now}),position:{event:'REVIEW'}});
+    review:async({position})=>{
+      const now=Date.now(),packet=await buildDecisionPacket({task:'HOLD',subjectId:'hold-test',symbol:'ABCUSDT',dataMode:'LIVE',facts:computeFacts(marketSource(now),{asOf:now}),position:{event:'REVIEW',positionId:position.id,generation:position.generation}});
       const result=await dualEntryDecision(packet,{apiKey:'k',fetchFn:async(url,init)=>{
         const input=JSON.parse(JSON.parse(init.body).input[1].content),wire={t:'HOLD',c:input.candidate_id,d:decision,reasons:decision==='EXIT'?[{r:'GPT_JUDGMENT',e:['return_5m']}]:[],support:['return_5m'],n:'Evidence review',...(input.independent_reviews?{arbitration:finalFields(input)}:{})};
         return Response.json({model:MODEL,status:'completed',usage:{input_tokens:100,output_tokens:100},output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(wire)}]}]});
@@ -65,13 +65,12 @@ test('a stale EXIT answer (older than exitMaxAgeMs) is not executed',async()=>{
     answerOf:async()=>({state:'DONE',decision:'EXIT',valid:true,completed_at_ms:T})});
   assert.equal(r.close,false);
 });
-test('executor: stops are never offered to GPT; only time candidates and HOLD ticks; new positions stamped',()=>{
-  const src=readFileSync(new URL('../../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
-  const i=src.indexOf("if([FD1_HOLD_POLICY_VERSION,'FD1_HOLD_REVIEW_1'].includes(meta.fd1HoldPolicyVersion)){"),j=src.indexOf('if(state.action==="CLOSE"){',i);
-  assert.ok(i>0&&j>i);const block=src.slice(i,j);
-  assert.match(block,/FD1_TIME_REASONS\.includes\(state\.reason\)&&bid>state\.stopPrice/);
-  assert.match(block,/if\(state\.action!=="CLOSE"\|\|timeCandidate\)/);
-  assert.ok(!/stopPrice\s*=|hard_stop_price|syncNativeStop|leverage|MARGIN|MAX_SLOTS/.test(block.replace(/bid>state\.stopPrice/,'')));
-  assert.ok(src.indexOf('fillGuardClose){')<i,'post-fill guard close runs before FD1');
-  assert.ok(src.includes('fd1HoldPolicyVersion:FD1_HOLD_POLICY_VERSION,'));
+test('executor: hard safety precedes AI; soft candidates reach canonical FINAL; new positions stamped',()=>{
+ const src=readFileSync(new URL('../../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
+ const manager=src.slice(src.indexOf('async function manageLeader('));
+ assert.ok(manager.indexOf('if(hardBefore.hardHit)')<manager.indexOf('await fd1HoldTick'));
+ assert.match(manager,/softTrigger:soft,exitContext:aiExitContext/);
+ assert.match(manager,/state.stopPrice=hard.hardFloor/);
+ assert.match(manager,/assertExitAuthority\(fd1.reason,p,fd1.approval/);
+ assert.ok(src.includes('fd1HoldPolicyVersion:FD1_HOLD_POLICY_VERSION,'));
 });

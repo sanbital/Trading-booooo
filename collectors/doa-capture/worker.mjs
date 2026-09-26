@@ -6,7 +6,7 @@ const token=process.env.CAPTURE_TOKEN;
 const expected=process.env.PROTOCOL_SHA256;
 if(endpoint!=='https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/doa-capture-ingest' || !/^[a-f0-9]{64}$/.test(token||'') || !/^[a-f0-9]{64}$/.test(expected||'')) throw Error('INVALID_CONFIG');
 const worker_id=randomUUID(), states=new Map(), budget=new WeightBudget(), queue=new Map(), seen=new Map();
-let windows=[],deadline=0,lastControl=0,lastWatch=0,lastFlush=0,busyRest=false,stop=false,restFailures=0,wsGaps=0,backoffUntil=0;
+let windows=[],deadline=0,lastControl=0,lastWatch=0,lastFlush=0,busyRest=false,stop=false,restFailures=0,wsGaps=0,coverageRefreshes=0,backoffUntil=0;
 let production=false,universe=new Set(),universeAt=0,unavailableSymbols={};
 const boot=Date.now();
 const log=(event,extra={})=>console.log(JSON.stringify({event,at:iso(Date.now()),version:VERSION,...extra}));
@@ -38,7 +38,7 @@ function openSocket(s){
     const e=JSON.parse(msg.data).data;const now=Date.now();
     if(!e || (e.st!==undefined && +e.st!==1) || e.s && e.s!==s.symbol)return;
     if(e.e==='depthUpdate')s.book.event(e,now);
-    if(e.e==='aggTrade'){s.flow.event(e);s.lastTradeAt=now;}
+    if(e.e==='aggTrade'){s.flow.event(e,now);s.lastTradeAt=now;}
     if(e.e==='forceOrder')s.flow.liquidation+=Number(e.o.ap||e.o.p)*Number(e.o.z);
     if(e.e==='kline' && e.k.x){const k=e.k;s.lastCandle={at:iso(+k.t),return_1m:+k.c/(+k.o)-1};if(s.candles)enqueue({kind:'candle',symbol:s.symbol,at:iso(+k.t),payload:{open:+k.o,high:+k.h,low:+k.l,close:+k.c,quote_volume:+k.q,taker_buy_quote:+k.Q,exchange_at:iso(+e.E),available_at:iso(now),source:'WS_CLOSED',complete:true}});}
   }catch(e){wsGaps++;s.book.reset();s.flow.complete=false;ws.close();marketWs.close();s.reconnectAt=Date.now()+5000;log('STREAM_GAP',{symbol:s.symbol,reason:e.message});}};
@@ -76,7 +76,10 @@ async function recover(){
   try{
     for(const s of states.values()){
       if(s.socket.readyState!==WebSocket.OPEN)continue;
-      if(s.book.last===null){const snap=await publicGet('/fapi/v1/depth?symbol='+s.symbol+'&limit=1000',20);if(snap){try{s.book.snapshot(snap);}catch(e){s.book.reset();throw e;}return;}}
+      if(s.book.needsCoverageRefresh(Date.now())){
+        s.book.reset();coverageRefreshes++;log('COVERAGE_BOUNDARY_RESYNC',{symbol:s.symbol});
+      }
+      if(s.book.last===null){const snap=await publicGet('/fapi/v1/depth?symbol='+s.symbol+'&limit=1000',20);if(snap){try{s.book.snapshot(snap,Date.now());}catch(e){s.book.reset();throw e;}return;}}
       if(s.needBackfill){const rows=await publicGet('/fapi/v1/klines?symbol='+s.symbol+'&interval=1m&limit=65',2);if(rows){for(const k of rows)if(+k[6]<Date.now() && +k[0]>=boot-120000)enqueue({kind:'candle',symbol:s.symbol,at:iso(+k[0]),payload:{open:+k[1],high:+k[2],low:+k[3],close:+k[4],quote_volume:+k[7],taker_buy_quote:+k[10],available_at:iso(Date.now()),source:'REST_CLOSED_BACKFILL',complete:true}});s.needBackfill=false;return;}}
     }
   }catch(e){restFailures++;log('RECOVERY_ERROR',{reason:e.message});}finally{busyRest=false;}
@@ -85,10 +88,10 @@ function bucket(now){
   for(const [key,t] of seen)if(now-t>600000)seen.delete(key);
   const btc=states.get('BTCUSDT')?.lastCandle;
   for(const s of states.values()){
-    const m=s.book.metrics(now),flow=s.flow.metrics();
+    const m=s.book.metrics(now),flow=s.flow.metrics(now);
     const full=s.started<=s.lastBucket && s.book.syncAt<=s.lastBucket && now-s.lastBucket>=4500 && now-s.lastBucket<=5500;
     const row={kind:'micro',symbol:s.symbol,at:iso(Math.floor(now/5000)*5000),payload:{...m,...flow,available_at:iso(now),interval_start:iso(s.lastBucket),interval_end:iso(now),interval_ms:now-s.lastBucket,
-      bucket_complete:full && m.book_complete && flow.trade_sequence_complete,
+      bucket_complete:full && m.book_complete && flow.trade_sequence_complete && flow.flow_causal,
       btc_return_1m:btc && now-Date.parse(btc.at)<125000?btc.return_1m:null,btc_candle_at:btc?.at||null,sector_return_1m:null,sector_map_version:null,maker_fee_bps:null,taker_fee_bps:null,funding_cashflow:null,
       source:'BINANCE_USDM_DIFF_AGGTRADE',version:VERSION}};
     s.lastBucket=now;s.ring.push(row);s.ring=s.ring.filter(x=>Date.parse(x.at)>=now-240000);
@@ -101,7 +104,7 @@ async function flush(){
   if(!pending){
     const selected=[];let size=0;
     for(const [k,row] of queue){const bytes=Buffer.byteLength(JSON.stringify(row));if(selected.length>=300||size+bytes>350000)break;selected.push([k,row]);size+=bytes;}
-    pending={batch_id:randomUUID(),rows:selected.map(x=>x[1]),metrics:{version:VERSION,watched:states.size,synced:[...states.values()].filter(s=>s.book.ready).length,trade_streams_seen:[...states.values()].filter(s=>s.lastTradeAt>0).length,candle_streams_seen:[...states.values()].filter(s=>s.lastCandle!==null).length,queue:queue.size,ws_gaps:wsGaps,rest_failures:restFailures,rss_bytes:process.memoryUsage().rss,last_bucket_at:iso(Date.now()),order_calls:0,llm_calls:0}};
+    pending={batch_id:randomUUID(),rows:selected.map(x=>x[1]),metrics:{version:VERSION,watched:states.size,synced:[...states.values()].filter(s=>s.book.ready).length,trade_streams_seen:[...states.values()].filter(s=>s.lastTradeAt>0).length,candle_streams_seen:[...states.values()].filter(s=>s.lastCandle!==null).length,queue:queue.size,ws_gaps:wsGaps,coverage_refreshes:coverageRefreshes,rest_failures:restFailures,rss_bytes:process.memoryUsage().rss,last_bucket_at:iso(Date.now()),order_calls:0,llm_calls:0}};
     pending.metrics.live_contexts=Object.fromEntries([...states].map(([symbol,s])=>[symbol,summarizeCapture(s.ring,Date.now())]));
     pending.metrics.unavailable_symbols=unavailableSymbols;
     pending.metrics.production_continuous=production;

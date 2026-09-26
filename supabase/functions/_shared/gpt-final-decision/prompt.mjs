@@ -49,7 +49,7 @@ CEC0040(model_judgments.cec0040): 전략 전체의 최근 거래당 기대손익
 2) bearish(bearish evidence): 지금 지지 조건을 만족하지 못하는 사실. 서버가 방향을 검증한다. 하락 조건: ${Object.values(BEARISH_TEXT).join(', ')}
    오르고 있다는 사실(양의 수익률, 고점 근처)은 bearish가 될 수 없다.
 3) invalidation: 이 진입 논리가 틀렸다고 볼 조건 최대 세 개(fact, BELOW/ABOVE, value; value는 그 사실의 단위). 기록용이며 주문·청산에 쓰이지 않는다.
-4) upside_pct / downside_pct: 이 가격에 진입했을 때 향후 30~60분의 현실적 기대 상승폭과, 판단이 틀렸을 때의 현실적 하락폭(퍼센트, 0 이상). 청산 구조: 진입가 -2.5% 거래소 손절, 진입 10분 뒤 또는 +1% 도달 뒤에는 -1.2%로 손실 제한, +2%부터 이익의 절반 보호, +3%부터 고점 대비 1.5% 추적 손절. downside를 손절 폭으로 기계적으로 적지 말고, upside는 current_propulsion이 실제로 밀어줄 수 있는 폭으로 적어라.
+4) upside_pct / downside_pct: 이 가격에 진입했을 때 향후 30~60분의 현실적 기대 상승폭과, 판단이 틀렸을 때의 현실적 하락폭(퍼센트, 0 이상). 청산 구조: 진입가 -2.5% 거래소 손절, 진입 10분 뒤 또는 +1% 도달 뒤에는 -1.2%로 손실 제한, +2% 이익 잠금과 +3% 이후 고점 대비 1.5% trailing은 SOFT 재평가 증거이며 자동 청산하지 않는다. 최종 전략 청산은 GPT FINAL이 결정한다. downside를 손절 폭으로 기계적으로 적지 말고, upside는 current_propulsion이 실제로 밀어줄 수 있는 폭으로 적어라.
 5) ev: 근거를 비교한 기대값 방향 POSITIVE / NEUTRAL / NEGATIVE / UNDETERMINED.
 6) confidence: 0~1. 기록용이며 차단 기준이 아니다. 확신이 낮으면 낮게 적되, 그것만으로 결정을 바꾸지 마라.
 7) d:
@@ -69,10 +69,10 @@ export const HOLD_PROMPT=commonFor('HOLD')+`
 과제(t=HOLD): 이미 보유 중인 롱 포지션에 대해 하나의 질문에 답하라: "이 포지션을 매수하게 만든 상승 근거가 지금도 살아 있는가?"
 - HOLD: 상승 근거가 살아 있다. support에 현재 상승/매수 우위를 보여주는 사실 1개 이상. 주의할 위험이 있으면 reasons에 적어도 된다(기록용). DATA_INCOMPLETE가 HARD이면 HOLD 불가.
 - EXIT: 네 판단으로 상승 근거가 무너졌다. 사유는 실제로 SOFT/HARD인 카테고리, 또는 임계값을 넘지 않았더라도 네가 종합적으로 판단한 ${JUDGMENT}(근거 사실 포함). 짧은 눌림이나 잡음 하나만으로 EXIT하지 말고, 상승 논리가 실제로 사라졌을 때 청산하라.
-- 시간은 청산 사유가 아니다. "오래 보유했다", "45분간 신고가가 없다", "6시간이 지났다"는 그 자체로 EXIT 근거가 아니다. 추세가 살아 있으면 계속 보유하고, 진입 5분 뒤라도 근거가 무너지면 청산한다.
-- position.deterministic_exit_candidate가 있으면(예: V17_MOMENTUM_STALE, V17_MAX_HOLD) 기계 규칙이 시간 기준 청산을 제안한 상태다. 네가 유효한 HOLD를 주면 이번에는 보류되고, EXIT/ABSTAIN/무효면 기계 규칙대로 청산된다.
+- position.exit_context의 P142/trailing/profit-lock/손익분기 보호는 SOFT trigger다. HARD floor와 구분하라. HOLD는 해당 soft 청산을 막고, PROTECT는 exposure 확대 없이 내부 soft level과 민감도를 강화하고 30초 내 재평가한다.\n- 시간은 청산 사유가 아니다. "오래 보유했다", "45분간 신고가가 없다", "6시간이 지났다"는 그 자체로 EXIT 근거가 아니다. 추세가 살아 있으면 계속 보유하고, 진입 5분 뒤라도 근거가 무너지면 청산한다.
+- position.deterministic_exit_candidate가 있으면(예: V17_MOMENTUM_STALE, V17_MAX_HOLD) 기계 규칙이 시간 기준 청산을 제안한 상태다. GPT FINAL HOLD는 후보를 보류한다. 오직 유효하고 최신인 GPT FINAL EXIT만 전략적 청산을 승인한다. ABSTAIN/무효/오류는 기존 HARD 보호를 유지하며 제한된 재평가를 예약한다.
 - 손실 포지션에 물타기, 손절 이동/취소는 존재하지 않는 선택지다. 손절은 항상 거래소에 독립적으로 걸려 있다.
-- ABSTAIN: 판단 불가. 이 경우 기존 결정론적 청산 엔진이 그대로 적용된다.
+- ABSTAIN: 판단 불가. SOFT 후보를 자동 청산으로 바꾸지 않는다. HARD 재난 손절과 최대손실 floor는 항상 우선한다.
 EXIT 카테고리:
 ${cats('HOLD')}
 `;

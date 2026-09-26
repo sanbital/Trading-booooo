@@ -1,7 +1,7 @@
 {
-  "purpose": "Replace the audited ephemeral collector with a persistent successor under the same DB lease",
-  "migration": "20260926125702",
-  "prior_executor_version": 97,
-  "prior_executor_sha256": "5b562a53085d27c3f02f0d216e009d551e4494b9510e49299ebfbcc553e8617a",
-  "requested_scope": "Update only existing public-data collector; preserve Binance execution settings"
+  "purpose": "Recover stale finite depth snapshot boundaries in the existing continuous collector and verify 24-bucket production context",
+  "migration": "20260926144820",
+  "prior_executor_version": 100,
+  "prior_executor_sha256": "2240e56d1479f1b0af8f9da47fe7120766b073d8cd3e5b2db0fb866823292d87",
+  "requested_scope": "Update only the existing persistent public-data worker; keep its 240-second ring, resources, secrets and execution configuration"
 }

@@ -68,7 +68,7 @@ export const FACT_DEFS=Object.freeze({
   position_drawdown_from_peak:['position','fraction','current price / peak since entry - 1'],
   position_minutes_held:['position','minutes','minutes since entry fill'],
   position_minutes_since_new_high:['position','minutes','minutes since the position last made a new high'],
-  position_stop_distance:['position','fraction','current price / protective stop - 1 (distance to the hard/lock stop)'],
+  position_stop_distance:['position','fraction','current price / protective stop - 1 (distance to the hard maximum-loss floor; soft levels are separate exit_context evidence)'],
   // same-symbol trade memory (ENTRY only; the most recent V17 trade of this symbol closed before the snapshot, within 24h)
   prev_trade_minutes_since_exit:['history','minutes','minutes since the previous same-symbol position closed'],
   prev_trade_return:['history','fraction','previous same-symbol position exit price / entry price - 1'],

@@ -137,3 +137,17 @@ test('loop does not start on construction or overlap ticks and can stop in fligh
  assert.equal(callback,undefined);loop.start();const running=callback();await loop.tick();assert.equal(count,1);
  loop.stop();resolve();await running;assert.equal(callback,null);
 });
+
+test('T28 hard protection cannot be downgraded through legacy soft retirement',async()=>{
+ const f=fixture(),hard={...f.request,exitClass:'HARD_SAFETY',authorityVersion:'AI_EXIT_AUTHORITY_2'};
+ const first=await f.api().ensure('position-1',hard);
+ await assert.rejects(()=>f.api().ensure('position-1',{...hard,stopPrice:96,legacySoftOrderIds:[first.clientId]}),/HARD_FLOOR_RETIREMENT_FORBIDDEN/);
+ assert.equal(f.orders.get(first.clientId).algoStatus,'NEW');
+});
+test('T28 legacy soft replacement failure never cancels prior resident protection',async()=>{
+ const f=fixture(),first=await f.api().ensure('position-1',{...f.request,stopPrice:102,lastPrice:104});
+ f.exchange.createStop=async()=>{throw Error('TIMEOUT')};
+ const r=await f.api().ensure('position-1',{...f.request,exitClass:'HARD_SAFETY',authorityVersion:'AI_EXIT_AUTHORITY_2',legacySoftOrderIds:[first.clientId]});
+ assert.equal(r.status,'RECONCILIATION_PENDING');assert.equal(f.calls.filter(x=>x[0]==='cancel').length,0);
+ assert.equal(f.orders.get(first.clientId).algoStatus,'NEW');
+});

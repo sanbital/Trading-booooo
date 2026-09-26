@@ -13,3 +13,25 @@ test('VWAP conserves quote, unavailable liquidity returns null',()=>{assert.equa
 test('trade gap marks incomplete; duplicate ignored; next full bucket recovers',()=>{const f=new Flow();f.event({a:1,p:100,q:2,T:1000,m:true});f.event({a:1,p:100,q:2,T:1000,m:true});assert.equal(f.sell,200);assert.equal(f.complete,false);f.reset();f.event({a:2,p:100,q:1,T:2000,m:false});assert.equal(f.complete,true);f.event({a:4,p:100,q:1,T:2000,m:true});assert.equal(f.complete,false);});
 test('rolling REST cap has no minute-boundary burst',()=>{const b=new WeightBudget();for(let i=0;i<5;i++)assert.equal(b.claim(20,i),true);assert.equal(b.claim(2,59000),false);assert.equal(b.claim(20,60001),true);});
 test('window includes actual prehistory and rejects unrelated symbols',()=>{const w=[{symbol:'BTCUSDT',at:new Date(100000).toISOString()}];assert.equal(inWindow(40000,w,'BTCUSDT'),true);assert.equal(inWindow(220000,w,'BTCUSDT'),true);assert.equal(inWindow(220001,w,'BTCUSDT'),false);assert.equal(inWindow(40000,w,'ETHUSDT'),false);});
+
+test('coverage drift resyncs the existing book; intrinsic shallow coverage does not cause REST loops',()=>{
+ const b=new Book();
+ b.snapshot({lastUpdateId:10,bids:[[100,1],[99,1]],asks:[[100.1,1],[101,1]]},0);
+ b.event({U:10,u:11,pu:10,E:1,b:[],a:[]},1);
+ assert.equal(b.needsCoverageRefresh(1),false);
+ // Move both sides past the finite old snapshot boundary without breaking sequence.
+ b.event({U:12,u:12,pu:11,E:61000,b:[[100,0],[99,0],[103,1],[102,1]],a:[[100.1,0],[101,0],[103.1,1],[104,1]]},61000);
+ assert.equal(b.needsCoverageRefresh(61000),true);
+ const shallow=new Book();
+ shallow.snapshot({lastUpdateId:10,bids:[[100,1],[99.99,1]],asks:[[100.01,1],[100.02,1]]},0);
+ shallow.event({U:10,u:11,pu:10,E:61000,b:[],a:[]},61000);
+ assert.equal(shallow.metrics(61000).coverage_25,false);assert.equal(shallow.needsCoverageRefresh(61000),false);
+});
+
+test('trade flow preserves event/receipt causality and rejects a future observation without fabricating data',()=>{
+ const f=new Flow();f.event({a:1,T:900,E:950,p:1,q:2,m:false},1000);f.reset();
+ f.event({a:2,T:5100,E:5100,p:1,q:2,m:false},4900);
+ assert.equal(f.metrics(5000).flow_causal,false);
+ assert.equal(f.metrics(5000).buy_quote_5s,2);
+ f.reset();assert.equal(f.metrics(10000).flow_causal,true);assert.equal(f.metrics(10000).trade_event_at,null);
+});
