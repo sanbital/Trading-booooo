@@ -2788,7 +2788,8 @@ async function manageLeader(db,p,ctx){
   }
   // FD1 (GPT final decision): only a TIME-based close candidate or a HOLD tick is ever
   // offered to GPT. Every stop-based CLOSE above is executed untouched and never waits.
-  if(meta.fd1HoldPolicyVersion===FD1_HOLD_POLICY_VERSION){
+  if([FD1_HOLD_POLICY_VERSION,'FD1_HOLD_REVIEW_1'].includes(meta.fd1HoldPolicyVersion)){
+    nextMeta.fd1HoldPolicyVersion=FD1_HOLD_POLICY_VERSION;
     const timeCandidate=state.action==="CLOSE"&&FD1_TIME_REASONS.includes(state.reason)&&bid>state.stopPrice?state.reason:null;
     if(state.action!=="CLOSE"||timeCandidate){
       const fd1=await fd1HoldTick(db,p,{meta,state,bid,now:detectedAtMs,timeCandidate});
@@ -3067,25 +3068,25 @@ Deno.serve(async req=>{
     }
     if(mode==="ops-readiness")return res(200,await opsReadiness(db));
     if(mode==="fd1-exit-probe"){
-      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
+      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{1,24}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
       return res(200,await fd1ExitProbe(db,{symbol,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID()).slice(0,80)}));
     }
     if(mode==="gpt-dryrun")return res(200,await gptDryRun(db,body));
     if(mode==="gpt-live-probe"){
-      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
+      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{1,24}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
       return res(200,{ok:true,revision:REVISION,patch:PATCH,orderCalls:0,probe:await liveProbe(db,{symbol,apiKey:env("OPENAI_API_KEY")||"",
         runId:String(body.runId??crypto.randomUUID()),evaluate:evaluateB06133,fetchInputs:fetchB06133Inputs})});
     }
     if(mode==="fd1-probe"){
       // ORDER-FREE: FD1 entry + hold decisions on live data; no lease, no signal/position/order write.
-      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
+      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{1,24}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
       return res(200,{ok:true,revision:REVISION,patch:PATCH,orderCalls:0,sizing:{targetMarginUsdt:MARGIN,leverage:Number(LEV),maxSlots:MAX_SLOTS},
-        probe:await fd1Probe(db,{symbol,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID()),engine:FD1_ENTRY_ENGINE})});
+        probe:await fd1Probe(db,{symbol,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID()),engine:{...FD1_ENTRY_ENGINE,deepseekKey:()=>env("deepseek api")}})});
     }
     if(mode==="fd1-recheck-probe"){
       // ORDER-FREE: INITIAL BUY fixture -> deterioration -> change detector -> real GPT FINAL
       // RECHECK (DRYRUN journal) -> post-recheck safety. No lease, no signal/position/order write.
-      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
+      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{1,24}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
       const fixture=body.fixture==="NIL"?"NIL":"LIVE";
       return res(200,{ok:true,revision:REVISION,patch:PATCH,orderCalls:0,sizing:{targetMarginUsdt:MARGIN,leverage:Number(LEV),maxSlots:MAX_SLOTS},
         probe:await finalRecheckProbe(db,{symbol,fixture,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID())})});

@@ -29,7 +29,8 @@ import {readSources} from './market.mjs';
 import {CAPTURE_NOTE,contextForModel} from './capture-context.mjs';
 import {CATEGORIES,categoriesFor,riskFlags,SUPPORT_UP,SUPPORT_TEXT,TREND_SUPPORT,validateShape,JUDGMENT,EXECUTION_SAFETY} from './contract.mjs';
 import {callDecision,hash,MODEL} from './api.mjs';
-export const RECHECK_VERSION='GPT_FINAL_RECHECK_FD1_RC2';
+import {dualEntryDecision,DUAL_VERSION,ARBITRATION_PROMPT} from './dual.mjs';
+export const RECHECK_VERSION='GPT_FINAL_RECHECK_FD1_RC3';
 export const RECHECK_TASK='RECHECK';
 export const RECHECK_POLICY=Object.freeze({
   version:RECHECK_VERSION,
@@ -331,7 +332,7 @@ function authorized(c,apiKey){return c?.mode==='ENFORCE'&&c.modeValid!==false&&c
  * One GPT FINAL RECHECK. Never throws; every failure is ABSTAIN (no order).
  * @returns {decision,valid,error,answer,latency_ms,api_cost_usd,snapshot_at_ms,completed_at_ms,valid_until_ms,job_key,attempted}
  */
-export async function runFinalRecheck({signal,ticket,detection,preDispatch,store,config,apiKey,fetchFn=fetch,now=Date.now,
+export async function runFinalRecheck({signal,ticket,detection,preDispatch,store,config,apiKey,deepseekKey,fetchFn=fetch,now=Date.now,
   purpose='PRODUCTION',readFresh=readSources,dataMode='LIVE',asOf=null,sequence=1,policy=RECHECK_POLICY}){
   const started=now();
   const out=(o)=>({version:RECHECK_VERSION,decision:'ABSTAIN',valid:false,error:null,answer:null,latency_ms:null,api_cost_usd:null,
@@ -347,7 +348,7 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
       recheck_sequence:sequence,initial_snapshot_hash:String(ticket?.snapshotHash??''),trigger_at_ms:num(f.v17Setup?.triggerAt)};
     key=await hash({version:RECHECK_VERSION,identity,purpose});
     record={version:RECHECK_VERSION,kind:'FD1_FINAL_RECHECK',purpose,recheck_sequence:sequence,api_approval_ref:config.approvalRef,identity,reserved_usd:0.10,
-      source_commit:RECHECK_VERSION,prompt_hash:await hash(RECHECK_PROMPT),detection,packet:null,result:null};
+      source_commit:RECHECK_VERSION,prompt_hash:await hash(RECHECK_PROMPT+ARBITRATION_PROMPT),detection,packet:null,result:null};
     let claimed;
     try{claimed=await store.claim(key,record,config);}
     catch(e){return out({error:/API_BUDGET_EXHAUSTED/.test(String(e?.message??e))?'RC_BUDGET_EXHAUSTED':'RC_CLAIM_FAILED',job_key:key});}
@@ -365,12 +366,20 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
     const currentRef=src.book?bookReference(src.book,captured):null;
     record.packet=await buildRecheckPacket({signalId:signal.id,symbol:signal.symbol,dataMode,facts,initial,detection,judgments,
       currentRef:currentRef?{bid:currentRef.bid,ask:currentRef.ask,mid:currentRef.mid,at:captured}:null,preDispatch});
-    record.packet.source_errors=errors;
+    record.packet.source_errors=errors;record.packet.snapshot_hash=await hash({...record.packet,snapshot_hash:''});
     record.snapshot_at_ms=asOf===null?captured:now();
     const remaining=deadline-now();
     if(remaining<=0)throw Error('RC_TRIGGER_EXPIRED');
-    result=await callDecision(record.packet,{apiKey,fetchFn,now,timeoutMs:Math.max(1,Math.min(policy.requestTimeoutMs,remaining)),
-      payloadFn:recheckPayload,validate:validateRecheck});
+    result=await dualEntryDecision(record.packet,{apiKey,deepseekKey,fetchFn,now,deadlineMs:Math.min(deadline,record.snapshot_at_ms+policy.answerMaxAgeMs),
+      snapshotAtMs:record.snapshot_at_ms,inputPayload:recheckPayload,validate:validateRecheck,
+      refreshPacket:asOf===null?async ms=>{
+        const next=await readFresh(String(signal.symbol).toUpperCase(),now(),{mode:dataMode,fetchFn,ms}),captured=now();
+        const facts=computeFacts(next.src,{asOf:captured,referenceClose:f.referenceClose,dayReturn:f.dayReturn,rank:f.rank});
+        const ref=next.src.book?bookReference(next.src.book,captured):null;
+        const packet=await buildRecheckPacket({signalId:signal.id,symbol:signal.symbol,dataMode,facts,initial,detection,judgments,currentRef:ref?{bid:ref.bid,ask:ref.ask,mid:ref.mid,at:captured}:null,preDispatch});
+        return {packet,captured};
+      }:null});
+    if(result.final_packet){record.packet=result.final_packet;record.snapshot_at_ms=result.final_snapshot_at_ms;}
     result={...result,model_requested:MODEL,wire_profile:RECHECK_VERSION};
   }catch(e){
     result={origin:'LOCAL_DATA_ERROR',valid:false,decision:'ABSTAIN',error:/^RC_/.test(e?.message??'')?e.message:'RC_PREPARATION_FAILED',
@@ -384,7 +393,7 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
     latency_ms:result.latency_ms??null,snapshot_at_ms:snap});}
   const common={job_key:key,attempted:result.attempted===true,api_cost_usd:result.api_cost_usd??null,latency_ms:result.latency_ms??null,
     snapshot_at_ms:snap,completed_at_ms:result.completed_at_ms??now(),valid_until_ms:validUntil,answer:result.answer??null,
-    current_ref:record.packet?.current_ref??null,request_id:result.request_id??null};
+    current_ref:record.packet?.current_ref??null,request_id:result.request_id??null,arbitration:result.arbitration??null};
   if(!result.valid)return out({...common,error:result.error??'RC_INVALID'});
   if(validUntil===null||now()>=validUntil)return out({...common,error:'RC_EXPIRED'});
   return out({...common,decision:result.decision,valid:true});

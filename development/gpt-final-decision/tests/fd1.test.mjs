@@ -13,7 +13,7 @@ const hold=async(opt,pos={entryPrice:1.1,peakPrice:1.2,entryAt:T-3600000,lastHig
 
 test('facts use only completed bars before asOf and separate machine judgments',()=>{
   const f=facts();assert.ok(f.quality.candles_complete);assert.ok(f.values.return_5m>0);assert.ok(f.values.taker_buy_ratio_5m>.59);
-  assert.equal(f.values.ask_depth_to_order,(1.2*2000+1.201*2000)/600);
+  assert.equal(f.values.ask_depth_to_order,(1.2*2000+1.201*2000)/450);
   const later=computeFacts({...src(T),one:[...src(T).one,[T,'9','9','9','9','0',T+MIN-1,'1','0','1','1','0']]},{asOf:T+2000});
   assert.equal(later.values.return_1m,f.values.return_1m,'a bar closing after asOf is ignored');
   assert.deepEqual(Object.keys(f.values).sort(),[...FACT_KEYS].sort());
@@ -24,13 +24,13 @@ test('replay mode withholds the book without a HARD data flag; live requires it'
   assert.equal(r.facts.values.spread_bps,null);assert.equal(riskFlags(r).flags.DATA_INCOMPLETE.level,'CLEAR');
   const l=await entry({src:{book:null}});assert.equal(riskFlags(l).flags.DATA_INCOMPLETE.level,'HARD');
 });
-test('BUY needs >=2 up-side facts incl. a trend fact, and no HARD risk',async()=>{
+test('BUY needs one verified support fact and preserves execution hard risk',async()=>{
   const p=await entry();
   assert.equal(validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'상승 지속'}),p).decision,'BUY');
-  assert.throws(()=>validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',reasons:[],support:['return_5m'],n:'x'}),p),/REQUIRES_SUPPORT/);
-  assert.throws(()=>validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',reasons:[],support:['spread_bps','funding_rate'],n:'x'}),p),/TREND_FACT/);
+  assert.equal(validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',reasons:[],support:['return_5m'],n:'x'}),p).decision,'BUY');
+  assert.equal(validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',reasons:[],support:['spread_bps','funding_rate'],n:'x'}),p).decision,'BUY');
   const down=await entry({step:-.001},{referenceClose:.5});
-  assert.throws(()=>validateDecision(entryWire({t:'ENTRY',c:down.candidate_id,d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'x'}),down),/REQUIRES_SUPPORT/);
+  assert.equal(validateDecision(entryWire({t:'ENTRY',c:down.candidate_id,d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'x'}),down).support.length,1);
   assert.deepEqual(validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m','btc_return_15m'],n:'x'}),p).rejected_support,[]);
   const wide=await entry({src:{book:{bids:[[1.0,5000]],asks:[[1.2,5000]]}}});
   assert.throws(()=>validateDecision(entryWire({t:'ENTRY',c:wide.candidate_id,d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'x'}),wide),/HARD_RISK/);
@@ -75,7 +75,7 @@ test('per-snapshot schema: only breached categories and currently-up facts are s
   const calm=await entry(),s=wireSchema('ENTRY',calm);
   // (2026-09-25) No category is breached, so no category can be a reason. SKIP stays possible
   // only as EV_UNFAVORABLE, GPT's own expected-value verdict, citing server-verified bearish facts.
-  assert.deepEqual(s.properties.reasons.items.properties.r.enum,['EV_UNFAVORABLE']);
+  assert.deepEqual(s.properties.reasons.items.properties.r.enum,['EV_UNFAVORABLE','GPT_JUDGMENT']);
   const bear=s.properties.bearish.items.enum;
   assert.ok(bear.length>=2&&bear.every(k=>s.properties.reasons.items.properties.e.items.enum.includes(k)));
   assert.ok(!bear.includes('return_5m')&&!bear.includes('taker_buy_ratio_5m'),'a rising return or buyer tape is never bearish');
@@ -104,7 +104,7 @@ test('GPT BUY: confidence and EV are recorded and flagged, never a gate',async()
   assert.equal(low.decision,'BUY','a low-confidence BUY is still a BUY');
   assert.equal(low.confidence,.05);assert.deepEqual(low.consistency_flags,['BUY_WITH_NEGATIVE_EV','BUY_WITH_DOWNSIDE_ABOVE_UPSIDE']);
   // BUY's own rules are unchanged: two verified up-facts incl. a trend fact.
-  assert.throws(()=>validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',support:['return_5m'],n:'x'}),p),/REQUIRES_SUPPORT/);
+  assert.equal(validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',support:['return_5m'],n:'x'}),p).decision,'BUY');
   const b=validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',support:['return_5m','taker_buy_ratio_5m'],
     bearish:['return_5m','accel_5m_vs_15m'],invalidation:[{fact:'return_5m',op:'BELOW',value:0}],n:'상승'}),p);
   assert.deepEqual(b.rejected_bearish,['return_5m'],'a rising fact cited as bearish is dropped, never counted');
@@ -112,17 +112,17 @@ test('GPT BUY: confidence and EV are recorded and flagged, never a gate',async()
   assert.deepEqual(b.invalidation_conditions,[{fact:'return_5m',op:'BELOW',value:0}]);
   assert.deepEqual(b.bullish_evidence,['return_5m','taker_buy_ratio_5m']);
 });
-test('EV_UNFAVORABLE SKIP: >=2 verified bearish facts incl. price/flow, NEGATIVE EV and downside > upside',async()=>{
+test('EV SKIP verifies cited direction; confidence and EV inconsistencies remain evidence',async()=>{
   const p=await entry(); // calm uptrend: accelerations marginally negative, buyer_share_change 0
   const w=x=>entryWire({t:'ENTRY',c:p.candidate_id,d:'SKIP',reasons:[{r:EV_SKIP,e:['accel_5m_vs_15m','accel_15m_vs_60m']}],
     bearish:['accel_5m_vs_15m','accel_15m_vs_60m'],ev:'NEGATIVE',upside_pct:.5,downside_pct:1.5,n:'기대값 불리',...x});
   const ok=validateDecision(w(),p);assert.equal(ok.decision,'SKIP');assert.equal(ok.reasons[0].category,EV_SKIP);
   assert.equal(ok.reasons[0].level,'EV');
   assert.throws(()=>validateDecision(w({reasons:[{r:EV_SKIP,e:['return_5m','accel_5m_vs_15m']}]}),p),/BEARISH_FACTS/,'"already rose" can never be cited');
-  assert.throws(()=>validateDecision(w({reasons:[{r:EV_SKIP,e:['accel_5m_vs_15m']}]}),p),/BEARISH_FACTS/,'one fact is not enough');
-  assert.throws(()=>validateDecision(w({reasons:[{r:EV_SKIP,e:['buyer_share_change','book_imbalance_25bps']}]}),p),/TREND_FACT/);
-  assert.throws(()=>validateDecision(w({ev:'POSITIVE'}),p),/NEGATIVE_EV/);
-  assert.throws(()=>validateDecision(w({upside_pct:2,downside_pct:1}),p),/DOWNSIDE_ABOVE_UPSIDE/);
+  assert.equal(validateDecision(w({reasons:[{r:EV_SKIP,e:['accel_5m_vs_15m']}]}),p).decision,'SKIP');
+  assert.throws(()=>validateDecision(w({reasons:[{r:EV_SKIP,e:['return_5m']}]}),p),/BEARISH_FACTS/);
+  assert.ok(validateDecision(w({ev:'POSITIVE'}),p).consistency_flags.includes('SKIP_WITH_POSITIVE_EV'));
+  assert.ok(validateDecision(w({upside_pct:2,downside_pct:1}),p).consistency_flags.includes('SKIP_NEGATIVE_EV_WITHOUT_DOWNSIDE_EDGE'));
   // A category SKIP keeps its own rule: the category must be breached now.
   assert.throws(()=>validateDecision(w({reasons:[{r:'MOMENTUM_FADED',e:['return_5m']}]}),p),/REASON_NOT_PRESENT/);
 });

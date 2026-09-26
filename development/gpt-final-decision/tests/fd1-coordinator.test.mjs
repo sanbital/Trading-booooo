@@ -1,3 +1,4 @@
+import {finalFields} from '../../../test-support/arbitration-fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {FinalReviewCoordinator,MemoryReviewStore,AGED_RECHECK_MIN_MS} from '../../../supabase/functions/_shared/gpt-final-review/coordinator.mjs';
@@ -9,7 +10,7 @@ function world(decide,{now}){
     const u=new URL(url);
     if(u.hostname==='api.openai.com'){const body=JSON.parse(init.body),input=JSON.parse(body.input[1].content);
       const raw={model:'gpt-5.4-mini-2026-03-17',status:'completed',usage:{input_tokens:3000,output_tokens:90,input_tokens_details:{cached_tokens:2000}},
-        output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(decide(input,body))}]}]};
+        output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({...decide(input,body),...(input.independent_reviews?{arbitration:finalFields(input)}:{})})}]}]};
       return new Response(JSON.stringify(raw),{status:200,headers:{'x-request-id':'req_x'}});}
     const p=u.pathname,at=Number(u.searchParams.get('endTime')??now())+1;
     if(p==='/fapi/v1/klines'){const iv=u.searchParams.get('interval')==='5m'?5*MIN:MIN;return Response.json(klines(Number(u.searchParams.get('limit')),iv,at,{step:u.searchParams.get('symbol')==='BTCUSDT'?.0001:.001}));}

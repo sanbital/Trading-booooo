@@ -1,3 +1,4 @@
+import {finalFields} from '../../../test-support/arbitration-fixtures.mjs';
 // CEC0040 is GPT evidence, GPT is the final entry decision (2026-09-24 operator architecture).
 // Scenarios A-J of the release brief; K-M are tests/entry-continuation-compat.test.mjs.
 import test from 'node:test';
@@ -20,7 +21,7 @@ function world(answer){
       const w={BUY:{d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'상승 지속'},SKIP:{d:'SKIP',reasons:[],support:[],n:'건너뜀'},
         ABSTAIN:{d:'ABSTAIN',reasons:[],support:[],n:'판단 불가'}}[answer];
       const raw={model:'gpt-5.4-mini-2026-03-17',status:'completed',usage:{input_tokens:3000,output_tokens:80,input_tokens_details:{cached_tokens:0}},
-        output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(entryWire({t:'ENTRY',c:input.candidate_id,...w}))}]}]};
+        output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(entryWire({t:'ENTRY',c:input.candidate_id,...w,...(input.independent_reviews?{arbitration:finalFields(input)}:{})}))}]}]};
       return new Response(JSON.stringify(raw),{status:200,headers:{'x-request-id':'req'}});}
     const p=u.pathname,at=Number(u.searchParams.get('endTime')??T)+1;
     if(p==='/fapi/v1/klines')return Response.json(klines(Number(u.searchParams.get('limit')),u.searchParams.get('interval')==='5m'?5*MIN:MIN,at,{step:u.searchParams.get('symbol')==='BTCUSDT'?.0001:.001}));
@@ -88,7 +89,7 @@ test(`J. CEC ${name} -> no GPT call and no entry`,async()=>{
   const out=await decide(db,c,s);assert.equal(out.second.candidates.length,0);assert.equal(out.check.allowed,false);assert.equal(w.calls.openai,0);
 });
 test('executor: CEC REJECT is not terminal, openBull does not re-veto it, GPT BUY is required, every ready CEC decision is target-tracked',()=>{
-  const src=readFileSync(new URL('../../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
+  const src=readFileSync(new URL('../../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8').replace(/\r\n/g,'\n');
   const cec=src.slice(src.indexOf('async function applyCec0040Selection'),src.indexOf('async function registerCec0040Target'));
   assert.ok(!/patch\.status="REJECTED"/.test(cec),'no terminal REJECTED from CEC');
   assert.match(cec,/return \{allowed:stamp\.ready,row:write\.data,stamp\}/);

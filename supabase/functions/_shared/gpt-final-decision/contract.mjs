@@ -14,7 +14,7 @@ import {fatigueAxes,FATIGUE_AXES,FATIGUE_FACTS} from './assessment.mjs';
 export const FD_VERSION='GPT_FINAL_DECISION_FD1';
 export const CONTRACT_VERSION='FD1_CONTRACT_JUDGMENT_1';
 export const ENTRY_TASK='ENTRY',HOLD_TASK='HOLD';
-export const DECISIONS=Object.freeze({ENTRY:['BUY','SKIP','ABSTAIN'],HOLD:['HOLD','EXIT','ABSTAIN']});
+export const DECISIONS=Object.freeze({ENTRY:['BUY','SKIP','ABSTAIN'],HOLD:['HOLD','PROTECT','EXIT','ABSTAIN']});
 const f=(m,k)=>m[k];
 const has=(m,...ks)=>ks.every(k=>m[k]!==null&&m[k]!==undefined&&Number.isFinite(m[k]));
 /** SETUP_POLICY.maxChasePct of leader-pullback-reaccel.mjs (pinned equal by a test). */
@@ -228,6 +228,7 @@ export function validateDecision(wire,packet){
     // Integrity only: at least one cited fact must really point up now.
     ensure(support.length>=1,'FD_'+d+'_REQUIRES_SUPPORT');
   }
+  if(d==='PROTECT')ensure(reasons.length>0||support.length>0,'FD_PROTECT_REQUIRES_EVIDENCE');
   if(d==='SKIP'||d==='EXIT')ensure(reasons.length>0,'FD_'+d+'_REQUIRES_CATEGORY');
   const buyLike=d==='BUY'||d==='HOLD';
   const out={version:FD_VERSION,task,decision:d,reasons:buyLike?[]:reasons,...(buyLike&&reasons.length?{noted_risks:reasons}:{}),

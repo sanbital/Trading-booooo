@@ -1,3 +1,4 @@
+import {finalFields} from '../test-support/arbitration-fixtures.mjs';
 // GPT FINAL RECHECK (FD1-RC1): INITIAL GPT BUY -> pre-dispatch change detector -> (only when the
 // market meaningfully changed) GPT FINAL RECHECK -> deterministic post-recheck safety -> order guards.
 import test from 'node:test';
@@ -24,7 +25,7 @@ const MIN=60000,MODEL='gpt-5.4-mini-2026-03-17';
 const ENFORCE={mode:'ENFORCE',modeValid:true,approvalRef:'t',apiBudgetUsd:3,maxCalls:300,enforceApproved:true,source:'TEST'};
 const BOOK={bids:[[1.199,2000],[1.198,2000]],asks:[[1.2,2000],[1.201,2000]]};
 const raw=(input,w)=>new Response(JSON.stringify({model:MODEL,status:'completed',usage:{input_tokens:3000,output_tokens:80,input_tokens_details:{cached_tokens:0}},
-  output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({c:input.candidate_id,...w})}]}]}),{status:200,headers:{'x-request-id':'req'}});
+  output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({c:input.candidate_id,...w,...(input.independent_reviews?{arbitration:finalFields(input)}:{})})}]}]}),{status:200,headers:{'x-request-id':'req'}});
 const RECHECK_WIRE={BUY:{t:'RECHECK',d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'상승 근거 유지'},
   SKIP:{t:'RECHECK',d:'SKIP',reasons:[{r:'TAPE_SELLING',e:['tape_return','tape_buy_share']}],support:[],n:'매도 우위 전환'},
   ABSTAIN:{t:'RECHECK',d:'ABSTAIN',reasons:[],support:[],n:'판단 불가'},
@@ -90,7 +91,7 @@ test('2+3. INITIAL BUY + meaningful deterioration -> FINAL RECHECK; FINAL BUY ->
   const x=await initialDecision({final:'BUY'});x.setNow(T+12000);
   const r=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:WEAK,rawQuote:calmQuote(T+11900),now:()=>T+12000});
   assert.equal(r.record.recheck_triggered,true);assert.ok(r.record.recheck_reasons.includes('TAPE_FLOW_REVERSED'));
-  assert.equal(x.w.calls.recheck,1);assert.equal(r.record.final_gpt_decision,'BUY');assert.equal(r.proceed,true);
+  assert.equal(x.w.calls.recheck,2);assert.equal(r.record.final_gpt_decision,'BUY');assert.equal(r.proceed,true);
   // initial answer's 15 s age limit is superseded by the recheck, never the trigger expiry
   x.setNow(T+17500);
   const safety=postRecheckSafety({recheck:r.record.final,quote:calmQuote(T+17400),at:T+17500});
@@ -361,7 +362,7 @@ test('AGED initial BUY: forced FINAL RECHECK (INITIAL_ANSWER_AGED) on an unchang
   const entry=gptFinalCheck(x.db,x.s,null,null,{allowAged:true});assert.equal(entry.allowed,true);
   const r=await finalRecheckStep(x.db,x.s,{ticket:entry.review,e1:CALM,rawQuote:calmQuote(at-100),now:()=>at});
   assert.equal(r.record.recheck_triggered,true);assert.deepEqual(r.record.recheck_reasons,['INITIAL_ANSWER_AGED']);
-  assert.equal(x.w.calls.recheck,1);assert.equal(r.record.final_gpt_decision,'BUY');assert.equal(r.proceed,true);
+  assert.equal(x.w.calls.recheck,2);assert.equal(r.record.final_gpt_decision,'BUY');assert.equal(r.proceed,true);
   assert.equal(gptFinalCheck(x.db,x.s,r.record).allowed,true,'the FINAL BUY supersedes the aged answer');
   assert.equal(gptFinalCheck(x.db,x.s,r.record,null,{allowAged:true}).allowed,true);
 });

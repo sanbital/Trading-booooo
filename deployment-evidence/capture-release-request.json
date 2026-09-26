@@ -1,0 +1,7 @@
+{
+  "purpose": "Restore real continuous capture before GPT arbitration release",
+  "migration": "20260926125702",
+  "prior_executor_version": 97,
+  "prior_executor_sha256": "5b562a53085d27c3f02f0d216e009d551e4494b9510e49299ebfbcc553e8617a",
+  "requested_scope": "Update only existing public-data collector; preserve Binance execution settings"
+}

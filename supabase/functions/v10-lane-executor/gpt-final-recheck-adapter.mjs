@@ -29,7 +29,7 @@ function logRow(db,s,record,outcome){
     recheck_triggered:record.recheck_triggered,recheck_reasons:record.recheck_reasons,deltas:record.deltas,
     final_gpt_decision:record.final_gpt_decision,final_gpt_at:ms(record.final_gpt_at),final_error:record.final?.error??null,
     final_job_key:record.final?.job_key??null,final_latency_ms:record.final?.latency_ms??null,final_cost_usd:record.final?.api_cost_usd??null,
-    final_answer:record.final?.answer??null,outcome,counterfactual_entry_price:record.pre_dispatch_snapshot?.ask??null};
+    final_answer:record.final?.answer?{...record.final.answer,arbitration:record.final.arbitration??null}:null,outcome,counterfactual_entry_price:record.pre_dispatch_snapshot?.ask??null};
   if(testHooks?.log){testHooks.log.push(row);return;}
   schedule((async()=>{const r=await db.from('fd1_final_recheck_log').insert(row);if(r.error)throw Error(r.error.message);})());
 }
@@ -67,7 +67,7 @@ export async function finalRecheckStep(db,s,{ticket,e1,rawQuote,now=Date.now,pur
   try{
     final=await runFinalRecheck({signal:s,ticket,detection,preDispatch:snapshot,purpose,dataMode,asOf,sequence,
       store:testHooks?.store??new SupabaseReviewStore(db),config:config??testHooks?.config??gptRecheckConfig(db),
-      apiKey:apiKey??testHooks?.apiKey??getenv('OPENAI_API_KEY'),fetchFn:testHooks?.fetchFn??fetch,now,readFresh:testHooks?.readFresh});
+      apiKey:apiKey??testHooks?.apiKey??getenv('OPENAI_API_KEY'),deepseekKey:testHooks?.deepseekKey??getenv('deepseek api'),fetchFn:testHooks?.fetchFn??fetch,now,readFresh:testHooks?.readFresh});
   }catch(e){final={decision:'ABSTAIN',valid:false,error:'RC_ADAPTER_ERROR',completed_at_ms:now()};}
   record.final=final;record.final_gpt_decision=final.valid===true?final.decision:'ABSTAIN';record.final_gpt_at=final.completed_at_ms??null;
   const proceed=recheckAllows(final,now());

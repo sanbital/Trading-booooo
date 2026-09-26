@@ -9,7 +9,7 @@ import {validateDecision,FD_VERSION,wireSchema} from './contract.mjs';
 import {PROMPTS} from './prompt.mjs';
 import {bookReference} from './recheck.mjs';
 import {LIVE_CHASE_MODE,chaseContext} from '../leader-live-chase.mjs';
-import {dualEntryDecision,ARBITRATION_PROMPT,DUAL_VERSION} from './dual.mjs';
+import {dualEntryDecision,ARBITRATION_PROMPT,DUAL_VERSION,revalidateArbitration} from './dual.mjs';
 const num=x=>x!==null&&x!==undefined&&Number.isFinite(Number(x))?Number(x):null;
 /** Immutable decision identity: the trigger and the evidence GPT is shown. A LIVE chase
  * trigger also binds its chase classification; an ordinary trigger's identity is unchanged. */
@@ -33,7 +33,7 @@ export async function readHistory(reader,identity,timeoutMs=1500){
   finally{clearTimeout(timer);}
 }
 export const FD1_ENTRY_ENGINE=Object.freeze({
-  id:FD_VERSION+':ENTRY',
+  id:FD_VERSION+':ENTRY:'+DUAL_VERSION,
   allow:'BUY',
   // An initial BUY that aged past its answer validity while its trigger is still live is
   // not dropped: it may enter the order path only to be re-decided by a forced GPT FINAL
@@ -68,17 +68,17 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
   async packetHash(packet){return hash({...packet,snapshot_hash:''});},
   // Dual-AI (2026-09-26): () => DeepSeek key, injected by the executor adapter; absent => GPT alone.
   deepseekKey:null,
-  async call(packet,{apiKey,fetchFn,now,deadlineMs}){
+  async call(packet,{apiKey,fetchFn,now,deadlineMs,identity}){
     const dsKey=typeof this.deepseekKey==='function'?this.deepseekKey():null;
-    const r=dsKey?await dualEntryDecision(packet,{apiKey,deepseekKey:dsKey,fetchFn,now,deadlineMs,snapshotAtMs:packet?.execution_ref?.at}):
-      await callDecision(packet,{apiKey,fetchFn,now,timeoutMs:Math.max(1,Math.min(8000,deadlineMs-now()))});
+    const r=await dualEntryDecision(packet,{apiKey,deepseekKey:dsKey,fetchFn,now,deadlineMs,snapshotAtMs:packet?.execution_ref?.at??now(),
+      refreshPacket:identity?ms=>this.prepare(identity,{fetchFn,now,deadlineMs:now()+ms}):null});
     // Stored for re-validation: the exact wire the API returned (never re-generated).
     return {...r,origin:'OPENAI_API',model_requested:MODEL,raw_response:r.wire?{model:MODEL,wire:r.wire}:null,
-      request_id:r.request_id??null,wire_profile:FD_VERSION+':ENTRY'};
+      request_id:r.request_id??null,wire_profile:this.id};
   },
   revalidate(result,packet){
     if(result?.raw_response?.model!==MODEL||!result.raw_response.wire)throw Error('FD_NO_STORED_WIRE');
-    return validateDecision(result.raw_response.wire,packet);
+    return revalidateArbitration(result,packet);
   }
 });
 export {payloadFor,PRICING};
