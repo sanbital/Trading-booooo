@@ -17,6 +17,21 @@ export function evidenceCatalog(value,prefix='',out={}){
   if(value&&typeof value==='object')for(const [k,v] of Object.entries(value))evidenceCatalog(v,prefix?prefix+'.'+k:k,out);
   return out;
 }
+/** Bounded exact citation menu from this frozen snapshot, shared once through $defs. */
+export function advisoryEvidenceSchema(shared){
+  const schema=advisorySchema(shared.packet.task),keys=Object.keys(evidenceCatalog(shared.market_input)).filter(k=>
+    /^(current\.)?facts\./.test(k)||
+    /^(current\.)?capture_context\.dynamics\.(return_(5|15|30|60|120)s|velocity|acceleration)$/.test(k)||
+    /^(current\.)?capture_context\.dynamics\.horizons\.s(5|15|30|60|120)\.(return|net_taker_flow|buy_share|flow_acceleration|imbalance|spread|trade_count)$/.test(k)||
+    /^(current\.)?capture_context\.trajectory\.(0|11|23)\.(d_mid_bps|buy_share_5s|net_taker_quote_5s|spread_bps|imbalance)$/.test(k)||
+    /^market_sensor\.(btc_return_1m|return_(5|15|30|60|120)s|sensor_freshness_ms|sensor_event_latency_ms|depth_coverage_complete)$/.test(k)||
+    /^market_sensor\.market_sensor_trajectory\.(0|11|23)\.(taker_buy_quote_5s|taker_sell_quote_5s|observed_imbalance|depth_coverage_complete)$/.test(k)
+  ).slice(0,256);
+  if(!keys.length)return schema;
+  return {...schema,$defs:{evidence_path:{type:'string',enum:keys}},properties:{...schema.properties,
+    bullish_evidence:{...schema.properties.bullish_evidence,items:{$ref:'#/$defs/evidence_path'}},
+    bearish_evidence:{...schema.properties.bearish_evidence,items:{$ref:'#/$defs/evidence_path'}}}};
+}
 export function validateAdvisory(wire,shared){
   validateShape(wire,advisorySchema(shared.packet.task));
   if(wire.snapshot_hash!==shared.snapshot_hash||wire.candidate_id!==shared.packet.candidate_id)throw Error('DEEPSEEK_INPUT_MISMATCH');
@@ -35,6 +50,7 @@ new highs, momentum exhaustion, bid support, ask pressure, OI divergence, BTC, f
 Read the ordered 120-second trajectory, 5/15/30/60/120s dynamics and recent 60s. Compare early vs late and last 10-20 seconds.\nSoft protection levels are review triggers, never mandatory EXIT. Catastrophic/R5 loss floors cannot be overridden.
 Missing evidence stays unknown. Never invent measurements or claim book cancellations are trades.
 bullish_evidence/bearish_evidence contain ONLY exact dot paths to supplied numeric/boolean facts (arrays use zero-based indices).
+Copy evidence paths verbatim from the supplied JSON schema's $defs.evidence_path.enum; do not reconstruct paths from metric names.
 For example facts.trend.return_5m, facts.position.position_return, capture_context.trajectory.11.d_mid_bps.
 Aggregated trade flow uses capture_context.dynamics.horizons.s120.net_taker_flow (also s5/s15/s30/s60); always retain the horizons segment.
 BTC sensor returns use market_sensor.return_120s; its per-bucket flow uses market_sensor.market_sensor_trajectory.23.taker_buy_quote_5s.
@@ -51,7 +67,7 @@ export async function callAdvisory(shared,{apiKey,fetchFn=fetch,now=Date.now,tim
   try{
     if(!apiKey)throw Error('DEEPSEEK_KEY_MISSING');
     const body=JSON.stringify({model,thinking:{type:'disabled'},max_tokens:1400,stream:false,response_format:{type:'json_object'},
-      messages:[{role:'system',content:ADVISORY_PROMPT+'\n'+SENSOR_NOTE+'\nJSON schema: '+JSON.stringify(advisorySchema(shared.packet.task))},
+      messages:[{role:'system',content:ADVISORY_PROMPT+'\n'+SENSOR_NOTE+'\nJSON schema: '+JSON.stringify(advisoryEvidenceSchema(shared))},
         {role:'user',content:JSON.stringify(shared.market_input)}]});
     if(body.length>90000)throw Error('DEEPSEEK_INPUT_SIZE');
     const request=(async()=>{
