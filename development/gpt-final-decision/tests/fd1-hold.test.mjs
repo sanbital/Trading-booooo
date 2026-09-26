@@ -1,3 +1,8 @@
+import {finalFields} from '../../../test-support/arbitration-fixtures.mjs';
+import {dualEntryDecision} from '../../../supabase/functions/_shared/gpt-final-decision/dual.mjs';
+import {buildDecisionPacket,MODEL} from '../../../supabase/functions/_shared/gpt-final-decision/api.mjs';
+import {computeFacts} from '../../../supabase/functions/_shared/gpt-final-decision/facts.mjs';
+import {src as marketSource} from './fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -9,7 +14,13 @@ const cfg={mode:'ENFORCE',modeValid:true,approvalRef:'test',apiBudgetUsd:3,maxCa
 function harness(decision,{valid=true,config=cfg}={}){
   const store=new MemoryReviewStore(),tasks=[];
   setFd1HoldTestHooks({store,apiKey:'k',config,schedule:t=>tasks.push(t),
-    review:async()=>({packet:{p:1},result:{decision:valid?decision:'ABSTAIN',valid,completed_at_ms:Date.now()+0,attempted:true,api_cost_usd:.002}})});
+    review:async()=>{
+      const now=Date.now(),packet=await buildDecisionPacket({task:'HOLD',subjectId:'hold-test',symbol:'ABCUSDT',dataMode:'LIVE',facts:computeFacts(marketSource(now),{asOf:now}),position:{event:'REVIEW'}});
+      const result=await dualEntryDecision(packet,{apiKey:'k',fetchFn:async(url,init)=>{
+        const input=JSON.parse(JSON.parse(init.body).input[1].content),wire={t:'HOLD',c:input.candidate_id,d:decision,reasons:decision==='EXIT'?[{r:'GPT_JUDGMENT',e:['return_5m']}]:[],support:['return_5m'],n:'Evidence review',...(input.independent_reviews?{arbitration:finalFields(input)}:{})};
+        return Response.json({model:MODEL,status:'completed',usage:{input_tokens:100,output_tokens:100},output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(wire)}]}]});
+      }});return {packet,result:{...result,valid:valid&&result.valid}};
+    }});
   return {store,tasks,flush:()=>Promise.all(tasks)};
 }
 const pos={id:'pos-1',signal_id:'s1',symbol:'ABCUSDT',entry_price:1,entry_at:new Date(T-3600000).toISOString()};
@@ -23,21 +34,21 @@ test('time candidate: waits for GPT, valid HOLD defers for the TTL, then asks ag
   r=await tick(meta,Date.now()+60_000);assert.equal(r.close,false);assert.equal(r.reason,'FD1_GPT_HOLD');
   r=await tick(meta,Date.now()+HOLD_POLICY.holdTtlMs+2000);assert.equal(r.close,false);assert.equal(r.reason,'FD1_AWAITING_GPT');assert.equal(r.state.reviews,2);
 });
-for(const [d,valid,expect] of [['EXIT',true,'FD1_GPT_EXIT'],['ABSTAIN',true,null],['HOLD',false,null]])
+for(const [d,valid,expect] of [['EXIT',true,'FD1_GPT_EXIT'],['ABSTAIN',true,'FD1_FINAL_UNAVAILABLE'],['HOLD',false,'FD1_FINAL_UNAVAILABLE']])
 test(`time candidate with ${d}${valid?'':' (invalid)'} closes (${expect??'deterministic fallback'})`,async()=>{
   const h=harness(d,{valid});let meta={};let r=await tick(meta,Date.now());meta.fd1Hold=r.state;await h.flush();
-  r=await tick(meta,Date.now()+1000);assert.equal(r.close,true);assert.equal(r.reason,expect);if(!expect)assert.equal(r.fallback,true);
+  r=await tick(meta,Date.now()+1000);assert.equal(r.close,d==='EXIT'&&valid);assert.equal(r.reason,expect);
 });
-test('no answer within the wait window -> deterministic time exit',async()=>{
+test('no final answer within wait window -> protected retry',async()=>{
   harness('HOLD');setFd1HoldTestHooks({store:new MemoryReviewStore(),apiKey:'k',config:cfg,schedule:()=>{},review:()=>new Promise(()=>{})});
   let meta={};let r=await tick(meta,T);meta.fd1Hold=r.state;
-  r=await tick(meta,T+HOLD_POLICY.timeAnswerWaitMs+1);assert.equal(r.close,true);assert.equal(r.fallback,true);
+  r=await tick(meta,T+HOLD_POLICY.timeAnswerWaitMs+1);assert.equal(r.close,false);assert.ok(r.state.retryAfter);
 });
-test('GPT not authorized / budget exhausted -> deterministic behaviour immediately',async()=>{
-  harness('HOLD',{config:{...cfg,mode:'SHADOW'}});let r=await tick({},T);assert.equal(r.close,true);assert.equal(r.fallback,true);
+test('GPT unavailable / budget exhausted -> protection stays; no strategic close',async()=>{
+  harness('HOLD',{config:{...cfg,mode:'SHADOW'}});let r=await tick({},T);assert.equal(r.close,false);assert.ok(r.state.retryAfter);
   const store=new MemoryReviewStore();store.claim=async()=>{throw Error('API_BUDGET_EXHAUSTED');};
   setFd1HoldTestHooks({store,apiKey:'k',config:cfg,schedule:()=>{},review:async()=>({})});
-  r=await tick({},T);assert.equal(r.close,true);assert.equal(r.state.last.decision,'BUDGET_EXHAUSTED');
+  r=await tick({},T);assert.equal(r.close,false);assert.equal(r.state.last.decision,'BUDGET_EXHAUSTED');
   r=await fd1HoldTick({},pos,{meta:{},state:st(),bid:1.03,now:T,timeCandidate:null});assert.equal(r.close,false);
 });
 test('events: deterioration and big moves start a review; GPT EXIT closes only when fresh; spacing respected',async()=>{
@@ -56,7 +67,7 @@ test('a stale EXIT answer (older than exitMaxAgeMs) is not executed',async()=>{
 });
 test('executor: stops are never offered to GPT; only time candidates and HOLD ticks; new positions stamped',()=>{
   const src=readFileSync(new URL('../../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
-  const i=src.indexOf('if(meta.fd1HoldPolicyVersion===FD1_HOLD_POLICY_VERSION){'),j=src.indexOf('if(state.action==="CLOSE"){',i);
+  const i=src.indexOf("if([FD1_HOLD_POLICY_VERSION,'FD1_HOLD_REVIEW_1'].includes(meta.fd1HoldPolicyVersion)){"),j=src.indexOf('if(state.action==="CLOSE"){',i);
   assert.ok(i>0&&j>i);const block=src.slice(i,j);
   assert.match(block,/FD1_TIME_REASONS\.includes\(state\.reason\)&&bid>state\.stopPrice/);
   assert.match(block,/if\(state\.action!=="CLOSE"\|\|timeCandidate\)/);

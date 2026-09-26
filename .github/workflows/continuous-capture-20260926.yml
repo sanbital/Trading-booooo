@@ -1,0 +1,53 @@
+name: Continuous capture production release
+on:
+  push:
+    branches: [codex/production-gpt-arbitration-20260926]
+    paths: [deployment-evidence/capture-release-request.json]
+permissions:
+  contents: read
+concurrency:
+  group: deploy-doa-capture-only
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate capture and execution regressions
+        run: |
+          set -euo pipefail
+          npm ci --prefix test-support/v18-ops --ignore-scripts
+          export PGLITE_MODULE="$PWD/test-support/v18-ops/node_modules/@electric-sql/pglite/dist/index.js"
+          node --test collectors/doa-capture/*.test.mjs tests/fd1*.test.mjs test-support/v17-entry/*.test.mjs test-support/v17-exit/*.test.mjs
+          npm exec --yes --package=deno@2.5.6 -- deno check supabase/functions/v10-lane-executor/index.ts
+          npm exec --yes --package=deno@2.5.6 -- deno check supabase/functions/doa-capture-ingest/index.ts
+          node --check collectors/doa-capture/worker.mjs
+      - name: Build exact commit image
+        run: |
+          set -euo pipefail
+          image="registry.fly.io/sanbital-doa-capture-20260925:$GITHUB_SHA"
+          docker build -t "$image" collectors/doa-capture
+          if docker run --rm "$image" > boot.log 2>&1; then exit 1; fi
+          grep -q INVALID_CONFIG boot.log
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: 0.4.108
+      - name: Update existing collector and verify real trajectory
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: node collectors/doa-capture/update-production.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: continuous-capture-production
+          path: capture-release.json
+          retention-days: 30

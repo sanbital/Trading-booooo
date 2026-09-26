@@ -1,0 +1,397 @@
+{
+  "production": {
+    "version": 100,
+    "status": "ACTIVE",
+    "artifact_sha256": "2240e56d1479f1b0af8f9da47fe7120766b073d8cd3e5b2db0fb866823292d87",
+    "source_files": 61,
+    "downloaded_source_exact_match": true,
+    "source_commit": "5a52998882cbbd047bbf58ea96b7b660097f4470"
+  },
+  "collector": {
+    "source_commit": "bfcb99a58e670e1542b8a593cb67fbf833ca4998",
+    "image_digest": "sha256:2d9a13b817f848fb9bfaf3dd79cc231534c0bb1844a02515548b7b60f7c69da2",
+    "workflow_run": 36244118177
+  },
+  "settings": {
+    "review": {
+      "mode": "ENFORCE",
+      "daily_cap_usd": 3,
+      "enforce_approved": true,
+      "max_calls_per_day": 300
+    },
+    "runtime": {
+      "revision": "V11-LONG-REGIME-1.0.1",
+      "circuit_open": false,
+      "live_enabled": true
+    },
+    "migration": {
+      "name": "continuous_capture_arbitration",
+      "version": "20260926125702"
+    },
+    "open_positions": 0
+  },
+  "sizing": {
+    "margin_usdt": 150,
+    "leverage": 3,
+    "max_slots": 10
+  },
+  "regression": {
+    "tests": 478,
+    "passed": 478,
+    "failed": 0
+  },
+  "entry_recheck_journals": [
+    {
+      "job_key": "08b52786c4bcd259594f52c0513fc706cab665531c6a6e779d9d1fad78c5ca7b",
+      "purpose": "DRYRUN",
+      "decision": "SKIP",
+      "valid": true,
+      "error": null,
+      "api_cost_usd": "0.036457500000000004",
+      "bytes": 171085,
+      "arbitration": {
+        "authority": "GPT_FINAL_ONLY",
+        "first": "SKIP",
+        "deepseek": "SKIP",
+        "deepseek_valid": true,
+        "deepseek_error": null,
+        "final": "SKIP",
+        "snapshot_hash": "b32f81ea4f60ae40b1041c65fbfa51a4982d864a8977fee55801f16e18ae255c",
+        "gpt_first_snapshot_hash": "b32f81ea4f60ae40b1041c65fbfa51a4982d864a8977fee55801f16e18ae255c",
+        "deepseek_snapshot_hash": "b32f81ea4f60ae40b1041c65fbfa51a4982d864a8977fee55801f16e18ae255c",
+        "capture_trajectory_hash": "cd0bec8b190697563226519eb9e28230e99966fc0ef82480f30096cf7b729fff",
+        "first_start": 1790429319301,
+        "deepseek_start": 1790429319302,
+        "first_ms": 1587,
+        "deepseek_ms": 2711,
+        "considered": [
+          "initial.current.facts.trend.return_60m",
+          "initial.current.facts.trend.return_4h",
+          "initial.current.facts.market.relative_strength_60m",
+          "initial.current.facts.derivatives.oi_change_60m",
+          "initial.current.facts.trend.return_1m",
+          "initial.current.facts.trend.distance_low_15m",
+          "initial.current.facts.volume.taker_buy_ratio_5m",
+          "initial.current.facts.volume.buyer_share_change",
+          "initial.current.facts.trend.accel_5m_vs_15m",
+          "initial.current.facts.trend.accel_15m_vs_60m",
+          "initial.current.facts.micro.book_imbalance_25bps",
+          "initial.current.facts.trend.return_5m"
+        ],
+        "adopted": [
+          "initial.current.facts.trend.return_1m",
+          "initial.current.facts.trend.distance_low_15m",
+          "initial.current.facts.volume.taker_buy_ratio_5m",
+          "initial.current.facts.volume.buyer_share_change",
+          "initial.current.facts.trend.accel_5m_vs_15m",
+          "initial.current.facts.trend.accel_15m_vs_60m"
+        ],
+        "rejected": [
+          "initial.current.facts.trend.return_60m",
+          "initial.current.facts.trend.return_4h",
+          "initial.current.facts.market.relative_strength_60m",
+          "initial.current.facts.derivatives.oi_change_60m",
+          "initial.current.facts.micro.book_imbalance_25bps",
+          "initial.current.facts.trend.return_5m"
+        ],
+        "reason": "초기 강세 추세는 남아 있으나, 현재 스냅샷에서는 단기 체결 흐름과 테이프가 반대로 돌아서 초기 매수 근거가 약화됐다.",
+        "initial_capture": {
+          "status": "AVAILABLE",
+          "buckets": 12,
+          "points": 12
+        },
+        "final_capture": {
+          "status": "AVAILABLE",
+          "buckets": 12,
+          "points": 12
+        }
+      }
+    },
+    {
+      "job_key": "9e137e73df6ccb66082eda328fb47529be77acc61fc7bda16b9ea458dade0622",
+      "purpose": "DRYRUN",
+      "decision": "SKIP",
+      "valid": true,
+      "error": null,
+      "api_cost_usd": "0.038070599999999996",
+      "bytes": 157064,
+      "arbitration": {
+        "authority": "GPT_FINAL_ONLY",
+        "first": "SKIP",
+        "deepseek": "SKIP",
+        "deepseek_valid": true,
+        "deepseek_error": null,
+        "final": "SKIP",
+        "snapshot_hash": "76d1600cd6364722e2d1bec960cafd4ba25f01abbe5df8fab18a2c8ac18b18f5",
+        "gpt_first_snapshot_hash": "76d1600cd6364722e2d1bec960cafd4ba25f01abbe5df8fab18a2c8ac18b18f5",
+        "deepseek_snapshot_hash": "76d1600cd6364722e2d1bec960cafd4ba25f01abbe5df8fab18a2c8ac18b18f5",
+        "capture_trajectory_hash": "851e31e046b05ccaaeb72b7d588bcbe2858d52b67a3f36b20687196a7701f5c1",
+        "first_start": 1790429319211,
+        "deepseek_start": 1790429319212,
+        "first_ms": 1932,
+        "deepseek_ms": 2791,
+        "considered": [
+          "initial.facts.trend.return_60m",
+          "initial.facts.trend.return_4h",
+          "initial.facts.market.relative_strength_60m",
+          "initial.facts.derivatives.oi_change_60m",
+          "initial.facts.volume.taker_buy_ratio_5m",
+          "initial.facts.trend.accel_5m_vs_15m",
+          "initial.facts.trend.accel_15m_vs_60m",
+          "initial.facts.trend.return_5m",
+          "initial.facts.volume.buyer_share_change",
+          "initial.facts.volume.volume_ratio_5m_vs_60m",
+          "initial.capture_context.trajectory.11.d_net_taker_quote"
+        ],
+        "adopted": [
+          "initial.facts.trend.accel_5m_vs_15m",
+          "initial.facts.trend.accel_15m_vs_60m",
+          "initial.facts.trend.return_5m",
+          "initial.facts.volume.buyer_share_change",
+          "initial.facts.volume.volume_ratio_5m_vs_60m",
+          "initial.capture_context.trajectory.11.d_net_taker_quote"
+        ],
+        "rejected": [
+          "initial.facts.trend.return_60m",
+          "initial.facts.trend.return_4h",
+          "initial.facts.market.relative_strength_60m",
+          "initial.facts.derivatives.oi_change_60m",
+          "initial.facts.volume.taker_buy_ratio_5m"
+        ],
+        "reason": "최근 상위 추세는 강하지만 마지막 구간에서 매수 추진과 참여가 꺾였고, 고점 갱신 뒤 시간이 지나며 재가속이 확인되지 않았다. 체결 흐름과 추세가 엇갈려 새 롱의 기대값이 약하다.",
+        "initial_capture": {
+          "status": "AVAILABLE",
+          "buckets": 12,
+          "points": 12
+        },
+        "final_capture": {
+          "status": "AVAILABLE",
+          "buckets": 12,
+          "points": 12
+        }
+      }
+    }
+  ],
+  "hold": {
+    "version": "FD1_GPT_FINAL_ARBITRATION_2",
+    "authority": "GPT_FINAL_ONLY",
+    "first": "HOLD",
+    "deepseek": "HOLD",
+    "deepseek_valid": true,
+    "final": "HOLD",
+    "snapshot_hash": "f9345bc73c7d3682975d06a9fad6fef3e76f679c5e179aca94e6b66b73a98c05",
+    "gpt_first_snapshot_hash": "f9345bc73c7d3682975d06a9fad6fef3e76f679c5e179aca94e6b66b73a98c05",
+    "deepseek_snapshot_hash": "f9345bc73c7d3682975d06a9fad6fef3e76f679c5e179aca94e6b66b73a98c05",
+    "capture_trajectory_hash": "b9ef42eb13aa0ff6bc188b21e6cc395a2cfea64c7eb941ae3a57af5336bba05e",
+    "considered": [
+      "initial.facts.trend.return_60m",
+      "initial.facts.trend.return_4h",
+      "initial.facts.market.relative_strength_60m",
+      "initial.facts.derivatives.oi_change_60m",
+      "initial.facts.volume.taker_buy_ratio_60m",
+      "initial.facts.position.position_return",
+      "initial.facts.trend.accel_5m_vs_15m",
+      "initial.facts.trend.accel_15m_vs_60m",
+      "initial.facts.volume.buyer_share_change",
+      "initial.facts.volume.volume_ratio_5m_vs_60m",
+      "initial.facts.micro.book_imbalance_25bps",
+      "initial.facts.trend.distance_high_60m"
+    ],
+    "adopted": [
+      "initial.facts.trend.return_60m",
+      "initial.facts.trend.return_4h",
+      "initial.facts.market.relative_strength_60m",
+      "initial.facts.derivatives.oi_change_60m",
+      "initial.facts.volume.taker_buy_ratio_60m",
+      "initial.facts.position.position_return"
+    ],
+    "rejected": [
+      "initial.facts.trend.accel_5m_vs_15m",
+      "initial.facts.trend.accel_15m_vs_60m",
+      "initial.facts.volume.buyer_share_change",
+      "initial.facts.volume.volume_ratio_5m_vs_60m",
+      "initial.facts.micro.book_imbalance_25bps",
+      "initial.facts.trend.distance_high_60m"
+    ],
+    "reason": "DeepSeek is valid and matches the snapshot. I adopt its bullish core and reject the weakening tape as insufficient for exit because higher-timeframe trend, relative strength, and OI remain intact.",
+    "initial_capture": {
+      "status": "AVAILABLE",
+      "points": 12
+    },
+    "final_capture": {
+      "status": "AVAILABLE",
+      "points": 12
+    }
+  },
+  "strategic_exit": {
+    "version": "FD1_GPT_FINAL_ARBITRATION_2",
+    "authority": "GPT_FINAL_ONLY",
+    "first": "EXIT",
+    "deepseek": "PROTECT",
+    "deepseek_valid": true,
+    "final": "EXIT",
+    "snapshot_hash": "58194478de76c6854b14f8847d1613ec3683235ba8e2f9e8c573dd10700575b3",
+    "gpt_first_snapshot_hash": "58194478de76c6854b14f8847d1613ec3683235ba8e2f9e8c573dd10700575b3",
+    "deepseek_snapshot_hash": "58194478de76c6854b14f8847d1613ec3683235ba8e2f9e8c573dd10700575b3",
+    "capture_trajectory_hash": "688bf35934656968f4e15a842c47a0be56c714d833dbfffba5bb090ee6f74691",
+    "considered": [
+      "initial.facts.trend.return_60m",
+      "initial.facts.trend.return_4h",
+      "initial.facts.trend.distance_low_15m",
+      "initial.facts.derivatives.oi_change_60m",
+      "initial.capture_context.trajectory.9.buy_share_5s",
+      "initial.capture_context.trajectory.1.d_mid_bps",
+      "initial.facts.trend.accel_5m_vs_15m",
+      "initial.facts.trend.accel_15m_vs_60m",
+      "initial.facts.volume.buyer_share_change",
+      "initial.facts.volume.volume_ratio_5m_vs_60m",
+      "initial.capture_context.trajectory.10.buy_share_5s",
+      "initial.capture_context.trajectory.10.net_taker_quote_5s"
+    ],
+    "adopted": [
+      "initial.facts.trend.return_60m",
+      "initial.facts.trend.return_4h",
+      "initial.facts.trend.distance_low_15m",
+      "initial.facts.derivatives.oi_change_60m",
+      "initial.facts.trend.accel_5m_vs_15m",
+      "initial.facts.trend.accel_15m_vs_60m"
+    ],
+    "rejected": [
+      "initial.capture_context.trajectory.9.buy_share_5s",
+      "initial.capture_context.trajectory.1.d_mid_bps",
+      "initial.facts.volume.buyer_share_change",
+      "initial.facts.volume.volume_ratio_5m_vs_60m",
+      "initial.capture_context.trajectory.10.buy_share_5s",
+      "initial.capture_context.trajectory.10.net_taker_quote_5s"
+    ],
+    "reason": "DeepSeek is valid, but I reject its lower-confidence replay of short-horizon trajectory as decisive. The higher-timeframe uptrend remains intact, yet the live pullback/decay plus stale high and soft funding make the entry thesis weaker, so0",
+    "initial_capture": {
+      "status": "AVAILABLE",
+      "points": 12
+    },
+    "final_capture": {
+      "status": "AVAILABLE",
+      "points": 12
+    }
+  },
+  "order_calls_in_probes": 0,
+  "capture_targets": [
+    {
+      "checked_at": "2026-09-26 13:31:27.409942+00",
+      "symbol": "JELLYJELLYUSDT",
+      "kind": "AUDIT_TARGET",
+      "status": "AVAILABLE",
+      "reason": null,
+      "buckets": "12",
+      "points": 12,
+      "end_ms": "1790429480158"
+    },
+    {
+      "checked_at": "2026-09-26 13:31:27.40995+00",
+      "symbol": "QUSDT",
+      "kind": "AUDIT_TARGET",
+      "status": "AVAILABLE",
+      "reason": null,
+      "buckets": "12",
+      "points": 12,
+      "end_ms": "1790429480158"
+    },
+    {
+      "checked_at": "2026-09-26 13:31:27.409952+00",
+      "symbol": "SPELLUSDT",
+      "kind": "AUDIT_TARGET",
+      "status": "AVAILABLE",
+      "reason": null,
+      "buckets": "12",
+      "points": 12,
+      "end_ms": "1790429480158"
+    }
+  ],
+  "scanner_top10": [
+    {
+      "checked_at": "2026-09-26 13:33:09.928763+00",
+      "symbol": "2ZUSDT",
+      "status": "AVAILABLE",
+      "reason": null,
+      "buckets": "12",
+      "points": 12
+    },
+    {
+      "checked_at": "2026-09-26 13:33:09.934394+00",
+      "symbol": "ARKUSDT",
+      "status": "AVAILABLE",
+      "reason": null,
+      "buckets": "12",
+      "points": 12
+    },
+    {
+      "checked_at": "2026-09-26 13:33:09.940713+00",
+      "symbol": "BEATUSDT",
+      "status": "AVAILABLE",
+      "reason": null,
+      "buckets": "12",
+      "points": 12
+    },
+    {
+      "checked_at": "2026-09-26 13:33:09.949646+00",
+      "symbol": "MUBARAKUSDT",
+      "status": "AVAILABLE",
+      "reason": null,
+      "buckets": "12",
+      "points": 12
+    },
+    {
+      "checked_at": "2026-09-26 13:33:09.956475+00",
+      "symbol": "OPGUSDT",
+      "status": "AVAILABLE",
+      "reason": null,
+      "buckets": "12",
+      "points": 12
+    },
+    {
+      "checked_at": "2026-09-26 13:33:09.961319+00",
+      "symbol": "PROMUSDT",
+      "status": "AVAILABLE",
+      "reason": null,
+      "buckets": "12",
+      "points": 12
+    },
+    {
+      "checked_at": "2026-09-26 13:33:09.966101+00",
+      "symbol": "QUSDT",
+      "status": "AVAILABLE",
+      "reason": null,
+      "buckets": "12",
+      "points": 12
+    },
+    {
+      "checked_at": "2026-09-26 13:33:09.972454+00",
+      "symbol": "RAREUSDT",
+      "status": "AVAILABLE",
+      "reason": null,
+      "buckets": "12",
+      "points": 12
+    },
+    {
+      "checked_at": "2026-09-26 13:33:09.977388+00",
+      "symbol": "SPELLUSDT",
+      "status": "AVAILABLE",
+      "reason": null,
+      "buckets": "12",
+      "points": 12
+    },
+    {
+      "checked_at": "2026-09-26 13:33:09.985146+00",
+      "symbol": "VELODROMEUSDT",
+      "status": "AVAILABLE",
+      "reason": null,
+      "buckets": "12",
+      "points": 12
+    }
+  ],
+  "limitations": [
+    "No open live position during verification. HOLD/EXIT probes use fixture positions with live market data.",
+    "No trade or P&L outcome is established by these order-free probes.",
+    "Newly watched symbols require a full 60-second buffer; actual sequence gaps/stale data stay explicitly UNAVAILABLE."
+  ]
+}

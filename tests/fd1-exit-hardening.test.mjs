@@ -1,3 +1,4 @@
+import {finalFields} from '../test-support/arbitration-fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {holdStep,initialHoldState,nextEvent,HOLD_POLICY,runHoldReview} from '../supabase/functions/_shared/gpt-final-decision/hold.mjs';
@@ -25,11 +26,11 @@ test('adverse crossing bypasses ordinary 5m gap but keeps 1m gap, arming, pendin
 });
 for(const [name,completed,at] of [['old',T-600000,T-660000],['future',T+1,T-1000],['null',null,T-1000],
   ['nan',NaN,T-1000],['before-request',T-2000,T-1000],['late-completion',T-1000,T-30000]])
-test(`invalid HOLD timestamp: ${name} falls back instead of extending`,async()=>{
+test(`invalid HOLD timestamp: ${name} retains hard protection without a strategic close`,async()=>{
   const r=await holdStep({...initialHoldState(100),pending:{key:'k',event:'TIME_EXIT_CANDIDATE:V17_MAX_HOLD',at}},
     {now:T,price:100,peak:100,timeCandidate:'V17_MAX_HOLD',positionId:'p',
       answerOf:async()=>({state:'DONE',valid:true,decision:'HOLD',completed_at_ms:completed})});
-  assert.equal(r.close,true);assert.equal(r.fallback,true);assert.equal(r.state.holdUntil,null);
+  assert.equal(r.close,false);assert.equal(r.state.retryAfter,T+60000);assert.equal(r.state.holdUntil,null);
 });
 test('fresh HOLD still extends and fresh EXIT still closes',async()=>{
   for(const decision of ['HOLD','EXIT']){
@@ -76,21 +77,21 @@ test('shadow keys satisfy the production DB constraint and differ by parent',asy
     apiKey:'test',enabled:true,invoke:async()=>({valid:false,attempted:false})});
   assert.equal(r.state,'DONE');
 });
-test('GPT result is durable and usable while DeepSeek is unresolved',async()=>{
+test('FIRST completion cannot release pending HOLD arbitration',async()=>{
   const store=new MemoryReviewStore(),tasks=[],p=await packet();let finish;
   const gate=new Promise(resolve=>{finish=resolve;});
-  setFd1HoldTestHooks({store,apiKey:'test',config,shadowEnabled:true,deepseekKey:'test',schedule:t=>tasks.push(t),
-    counterCall:async()=>{await gate;return {valid:true,answer:{decision_preference:'EXIT'}};},
-    review:async({onPacket})=>{onPacket(p,T);return {packet:p,result:{valid:true,decision:'HOLD',completed_at_ms:T,api_cost_usd:.001}};}});
+  setFd1HoldTestHooks({store,apiKey:'test',config,deepseekKey:'test',schedule:t=>tasks.push(t),
+    review:async()=>{await gate;return {packet:p,result:{valid:true,decision:'EXIT',completed_at_ms:T,api_cost_usd:.001}};}});
   try{
     const pos={id:'p',symbol:'ABCUSDT',entry_price:1.1,entry_at:new Date(T-60000).toISOString()};
     const args={meta:{},state:{peakPrice:1.2,stopPrice:1},bid:1.19,now:T,timeCandidate:'V17_MAX_HOLD'};
     const started=await fd1HoldTick({},pos,args);
-    // Let the background GPT persistence finish; the unresolved counter must not block it.
-    for(let i=0;i<20;i++)await Promise.resolve();
-    assert.equal((await store.get(started.start.key)).state,'DONE');
-    const consumed=await fd1HoldTick({},pos,{...args,meta:{fd1Hold:started.state},now:T+1000});
-    assert.equal(consumed.close,false);assert.equal(consumed.reason,'FD1_GPT_HOLD');
+    assert.equal((await store.get(started.start.key)).state,'RUNNING');
+    const pending=await fd1HoldTick({},pos,{...args,meta:{fd1Hold:started.state},now:T+1000});
+    assert.equal(pending.close,false);assert.equal(pending.reason,'FD1_AWAITING_GPT');
+    finish();await Promise.all(tasks);
+    const forged=await fd1HoldTick({},pos,{...args,meta:{fd1Hold:started.state},now:T+2000});
+    assert.equal(forged.close,false,'unvalidated first-only EXIT cannot close a position');
   }finally{finish();await Promise.all(tasks);setFd1HoldTestHooks(null);}
 });
 test('live quote failure returns ABSTAIN before any model call',async()=>{
@@ -105,7 +106,7 @@ test('live review supplies identical bid valuation to GPT and observer; observer
       seen=JSON.parse(JSON.parse(init.body).input[1].content);
       return new Response(JSON.stringify({model:'gpt-5.4-mini-2026-03-17',status:'completed',
         usage:{input_tokens:100,output_tokens:30},output:[{type:'message',content:[{type:'output_text',
-          text:JSON.stringify({t:'HOLD',c:seen.candidate_id,d:'HOLD',reasons:[],support:['return_5m'],n:'trend alive'})}]}]}));
+          text:JSON.stringify({t:'HOLD',c:seen.candidate_id,d:'HOLD',reasons:[],support:['return_5m'],n:'trend alive',...(seen.independent_reviews?{arbitration:finalFields(seen)}:{})})}]}]}));
     }
     const u=new URL(url);let body;
     if(u.pathname.endsWith('/depth'))body=s.book;
@@ -118,7 +119,7 @@ test('live review supplies identical bid valuation to GPT and observer; observer
   const r=await runHoldReview({position:{...position,id:'p',symbol:'ABCUSDT'},event:'REVIEW',apiKey:'test',now:()=>T,fetchFn,
     onPacket:p=>{observed=p;throw Error('observer failure');}});
   assert.equal(r.result.valid,true);assert.equal(r.result.decision,'HOLD');
-  assert.equal(observed.snapshot_hash,r.packet.snapshot_hash);
+  assert.equal(observed.snapshot_hash,r.result.arbitration.initial_packet.snapshot_hash);
   assert.equal(seen.position.valuation.basis,'EXECUTABLE_BID');
   assert.equal(seen.facts.position.position_return,Number((1.199/1.1-1).toPrecision(5)));
 });

@@ -9,10 +9,12 @@
  *  - HARD bands are deterministic: BUY/HOLD is invalid while one is active. An invalid or
  *    missing answer is ABSTAIN: no entry; for a position the deterministic exit engine rules.
  *  - GPT never sees or controls sizing, leverage, slots, the native stop or order safety. */
-import {FACT_DEFS,FACT_KEYS,MICRO_KEYS,POSITION_KEYS} from './facts.mjs';
+import {FACT_DEFS,FACT_KEYS,MICRO_KEYS,POSITION_KEYS,HISTORY_KEYS} from './facts.mjs';
+import {fatigueAxes,FATIGUE_AXES,FATIGUE_FACTS} from './assessment.mjs';
 export const FD_VERSION='GPT_FINAL_DECISION_FD1';
+export const CONTRACT_VERSION='FD1_CONTRACT_JUDGMENT_1';
 export const ENTRY_TASK='ENTRY',HOLD_TASK='HOLD';
-export const DECISIONS=Object.freeze({ENTRY:['BUY','SKIP','ABSTAIN'],HOLD:['HOLD','EXIT','ABSTAIN']});
+export const DECISIONS=Object.freeze({ENTRY:['BUY','SKIP','ABSTAIN'],HOLD:['HOLD','PROTECT','EXIT','ABSTAIN']});
 const f=(m,k)=>m[k];
 const has=(m,...ks)=>ks.every(k=>m[k]!==null&&m[k]!==undefined&&Number.isFinite(m[k]));
 /** SETUP_POLICY.maxChasePct of leader-pullback-reaccel.mjs (pinned equal by a test). */
@@ -64,6 +66,21 @@ export const CATEGORIES=Object.freeze({
   // recheck:false keeps the protected FINAL RECHECK category set unchanged.
   CHASE_EXTENDED:{tasks:['ENTRY'],recheck:false,when:p=>!!p?.chase,facts:['distance_trigger_reference','distance_high_60m','return_5m'],need:['distance_trigger_reference'],
     soft:m=>f(m,'distance_trigger_reference')>CHASE_CEILING,hard:()=>false,text:'distance_trigger_reference>0.01 (above the V17 1% chase ceiling)'},
+  // (2026-09-26) Propulsion fading while the trend still looks strong: two or more of the
+  // independent fatigue axes of assessment.mjs weak at once. SOFT only (a legitimate SKIP
+  // reason GPT may cite, never a block): in replay no axis combination lowered per-trade
+  // expected value by itself, so it must be weighed, not obeyed. Applies to the FINAL
+  // RECHECK too (current facts), where it names propulsion deterioration since the BUY.
+  EXHAUSTION:{tasks:['ENTRY'],facts:FATIGUE_FACTS,need:[],soft:m=>fatigueAxes(m).weak.length>=2,hard:()=>false,
+    text:'2+ fatigue axes weak: '+Object.entries(FATIGUE_AXES).map(([k,a])=>k+'='+a.text).join('; ')},
+  // Same-symbol re-entry within an hour with no new high since the previous exit: the
+  // question is whether a NEW impulse exists, not whether the old one "is still alive".
+  // Only for a packet that carries trade memory; never part of the FINAL RECHECK set.
+  REENTRY_NO_NEW_IMPULSE:{tasks:['ENTRY'],recheck:false,when:p=>has(p?.facts?.values??{},'prev_trade_minutes_since_exit'),
+    facts:['prev_trade_minutes_since_exit','prev_trade_return','prev_trade_mfe','price_vs_prev_peak','new_high_since_prev_exit'],
+    need:['prev_trade_minutes_since_exit','price_vs_prev_peak'],
+    soft:m=>m.prev_trade_minutes_since_exit<=60&&(has(m,'new_high_since_prev_exit')?m.new_high_since_prev_exit===0:m.price_vs_prev_peak<=0),hard:()=>false,
+    text:'prev_trade_minutes_since_exit<=60 AND no new high since that exit (new_high_since_prev_exit=0, or price_vs_prev_peak<=0 when unknown)'},
   DATA_INCOMPLETE:{tasks:['ENTRY','HOLD'],facts:[],need:[],soft:()=>false,hard:()=>false,text:'candles (and, live, the order book) must be complete'}
 });
 export const CATEGORY_IDS=Object.freeze(Object.keys(CATEGORIES));
@@ -77,7 +94,9 @@ const UP=Object.freeze({
   relative_strength_15m:['>',0],relative_strength_60m:['>',0],btc_return_15m:['>=',0],btc_return_60m:['>=',0],
   oi_change_5m:['>',0],oi_change_60m:['>',0],funding_rate:['<',0.0008],
   spread_bps:['<=',10],ask_depth_to_order:['>=',5],bid_depth_to_order:['>=',3],book_imbalance_25bps:['>',0],est_buy_slippage_bps:['<',8],
-  position_return:['>',0],position_drawdown_from_peak:['>',-0.01],position_minutes_since_new_high:['<=',15]
+  position_return:['>',0],position_drawdown_from_peak:['>',-0.01],position_minutes_since_new_high:['<=',15],
+  // ENTRY trade memory: a fresh breakout above the previous same-symbol peak is support.
+  price_vs_prev_peak:['>',0],new_high_since_prev_exit:['>=',1]
 });
 const OPS={'>':(v,t)=>v>t,'>=':(v,t)=>v>=t,'<':(v,t)=>v<t,'<=':(v,t)=>v<=t};
 /** Facts that may be cited as SUPPORT, with the direction that means "uptrend alive". */
@@ -97,6 +116,15 @@ export const ABSTAIN_REASONS=Object.freeze(['NONE','DATA_INSUFFICIENT','EVIDENCE
  * server-verified bearish facts (>=1 price/flow fact) and GPT's own NEGATIVE EV with
  * downside > upside: the mirror of BUY's >=2 verified up-facts rule. */
 export const EV_SKIP='EV_UNFAVORABLE';
+/** (2026-09-26, operator principle) Models prepare evidence; they never constrain GPT's
+ * strategy judgment. GPT may SKIP (ENTRY/RECHECK) or EXIT (HOLD) on its own judgment,
+ * citing any facts that exist in the snapshot, whether or not a deterministic band fired. */
+export const JUDGMENT='GPT_JUDGMENT';
+/** The only HARD bands that still refuse a BUY: order/execution safety, which GPT never controls.
+ * Strategy bands (SIGNAL_INVALIDATED, FUNDING/PREMIUM_EXTREME, SELL_WALL) are evidence. */
+export const EXECUTION_SAFETY=Object.freeze(['SPREAD_ABNORMAL','THIN_LIQUIDITY','FILL_WORSE','DATA_INCOMPLETE']);
+/** A HOLD is refused only when the snapshot cannot be judged at all. */
+export const HOLD_BLOCKING=Object.freeze(['DATA_INCOMPLETE']);
 /** A fact is bearish evidence exactly when it fails its published SUPPORT_UP direction (the
  * complement), so no new threshold is introduced and "already rose / near a high /
  * volatile" can never be cited: a rising return is not bearish. */
@@ -125,7 +153,7 @@ export function riskFlags(packet){
 }
 
 const obj=properties=>({type:'object',properties,required:Object.keys(properties),additionalProperties:false});
-const citeable=task=>FACT_KEYS.filter(k=>task==='HOLD'||!POSITION_KEYS.includes(k));
+const citeable=task=>FACT_KEYS.filter(k=>task==='HOLD'?!HISTORY_KEYS.includes(k):!POSITION_KEYS.includes(k));
 /** Output schema. With a packet, the choices are narrowed to THIS snapshot: only categories
  * whose band is breached now can be a reason, only facts that currently point up can be
  * support, and SKIP/EXIT is not offered when no category is breached. The server still
@@ -135,11 +163,13 @@ export function wireSchema(task,packet=null){
   const cats=risk?categoriesFor(task).filter(k=>['SOFT','HARD'].includes(risk.flags[k]?.level)):categoriesFor(task);
   // ENTRY only: the facts that fail their up-direction now, and whether EV_UNFAVORABLE can be cited.
   const bear=entry?Object.keys(BEARISH).filter(k=>!m||(has(m,k)&&BEARISH[k](m[k])===true)):[];
-  const evSkip=entry&&(!m||(bear.length>=2&&bear.some(k=>TREND_SUPPORT.includes(k))));
-  const reasonIds=[...cats,...(evSkip?[EV_SKIP]:[])];
-  const catFacts=[...new Set([...cats.flatMap(k=>CATEGORIES[k].facts),...(evSkip?bear:[])])].filter(k=>!m||has(m,k));
-  const up=Object.keys(SUPPORT_UP).filter(k=>(task==='HOLD'||!POSITION_KEYS.includes(k))&&(!m||(has(m,k)&&SUPPORT_UP[k](m[k])===true)));
-  const decisions=reasonIds.length?DECISIONS[task]:DECISIONS[task].filter(d=>d!=='SKIP'&&d!=='EXIT');
+  const evSkip=entry&&(!m||bear.length>=1);
+  const reasonIds=[...cats,...(evSkip?[EV_SKIP]:[]),JUDGMENT];
+  // GPT_JUDGMENT may cite any fact present in this snapshot.
+  const judgeFacts=citeable(task).filter(k=>!m||has(m,k));
+  const catFacts=[...new Set([...cats.flatMap(k=>CATEGORIES[k].facts),...(evSkip?bear:[]),...judgeFacts])].filter(k=>!m||has(m,k));
+  const up=Object.keys(SUPPORT_UP).filter(k=>(task==='HOLD'?!HISTORY_KEYS.includes(k):!POSITION_KEYS.includes(k))&&(!m||(has(m,k)&&SUPPORT_UP[k](m[k])===true)));
+  const decisions=DECISIONS[task];
   const reasonItem=obj({r:{type:'string',enum:reasonIds.length?reasonIds:['DATA_INCOMPLETE']},e:{type:'array',maxItems:4,items:{type:'string',enum:catFacts.length?catFacts:['return_5m']}}});
   const t={type:'string',enum:[task]},c={type:'string',minLength:1,maxLength:80},d={type:'string',enum:decisions},
     reasons={type:'array',maxItems:reasonIds.length?4:0,items:reasonItem},
@@ -168,9 +198,14 @@ export function validateDecision(wire,packet){
   const m=packet.facts.values,risk=riskFlags(packet),cite=k=>{ensure(has(m,k),'FD_CITED_FACT_MISSING:'+k);return {key:k,value:m[k],unit:FACT_DEFS[k][1]};};
   const isBear=k=>Object.hasOwn(BEARISH,k)&&has(m,k)&&BEARISH[k](m[k])===true;
   const reasons=wire.reasons.map(x=>{
+    if(x.r===JUDGMENT){
+      // Integrity only: the cited facts must exist in this snapshot. No band is required.
+      ensure(new Set(x.e).size===x.e.length&&x.e.length>=1&&x.e.every(k=>citeable(task).includes(k)),'FD_JUDGMENT_REQUIRES_FACTS');
+      return {category:JUDGMENT,level:'JUDGMENT',evidence:x.e.map(cite)};
+    }
     if(entry&&x.r===EV_SKIP){
-      ensure(new Set(x.e).size===x.e.length&&x.e.length>=2&&x.e.every(isBear),'FD_EV_SKIP_REQUIRES_BEARISH_FACTS');
-      ensure(x.e.some(k=>TREND_SUPPORT.includes(k)),'FD_EV_SKIP_REQUIRES_TREND_FACT');
+      // Integrity only: every cited fact must actually point down now.
+      ensure(new Set(x.e).size===x.e.length&&x.e.length>=1&&x.e.every(isBear),'FD_EV_SKIP_REQUIRES_BEARISH_FACTS');
       return {category:EV_SKIP,level:'EV',evidence:x.e.map(cite)};
     }
     const c=CATEGORIES[x.r],flag=risk.flags[x.r];
@@ -186,13 +221,18 @@ export function validateDecision(wire,packet){
     if(has(m,k)&&SUPPORT_UP[k](m[k])===true)support.push(cite(k));else rejected_support.push(k);}
   const d=wire.d;
   if(d==='BUY'||d==='HOLD'){
-    ensure(risk.hard.length===0,'FD_'+d+'_WITH_HARD_RISK:'+risk.hard.join(','));
-    ensure(reasons.length===0,'FD_'+d+'_WITH_REASON');
-    ensure(support.length>=(d==='BUY'?2:1),'FD_'+d+'_REQUIRES_SUPPORT');
-    ensure(support.some(e=>TREND_SUPPORT.includes(e.key)),'FD_'+d+'_REQUIRES_TREND_FACT');
+    const blocking=risk.hard.filter(k=>(d==='BUY'?EXECUTION_SAFETY:HOLD_BLOCKING).includes(k));
+    ensure(blocking.length===0,'FD_'+d+'_WITH_HARD_RISK:'+blocking.join(','));
+    // (2026-09-26) A BUY/HOLD that also names concerns is still GPT's decision: the concerns
+    // are recorded (noted_risks), never a reason to void the answer.
+    // Integrity only: at least one cited fact must really point up now.
+    ensure(support.length>=1,'FD_'+d+'_REQUIRES_SUPPORT');
   }
+  if(d==='PROTECT')ensure(reasons.length>0||support.length>0,'FD_PROTECT_REQUIRES_EVIDENCE');
   if(d==='SKIP'||d==='EXIT')ensure(reasons.length>0,'FD_'+d+'_REQUIRES_CATEGORY');
-  const out={version:FD_VERSION,task,decision:d,reasons,support,rejected_support,summary:wire.n,risk_hard:risk.hard,risk_soft:risk.soft};
+  const buyLike=d==='BUY'||d==='HOLD';
+  const out={version:FD_VERSION,task,decision:d,reasons:buyLike?[]:reasons,...(buyLike&&reasons.length?{noted_risks:reasons}:{}),
+    support,rejected_support,summary:wire.n,risk_hard:risk.hard,risk_soft:risk.soft};
   if(!entry)return out;
   // EV evidence. Recorded, never a gate: an inconsistency on BUY is flagged, not refused.
   ensure(new Set(wire.bearish).size===wire.bearish.length,'FD_DUPLICATE_BEARISH');
@@ -206,8 +246,7 @@ export function validateDecision(wire,packet){
   if(d==='SKIP'&&ev==='POSITIVE')flags.push('SKIP_WITH_POSITIVE_EV');
   if(d!=='ABSTAIN'&&wire.abstain_reason!=='NONE')flags.push('ABSTAIN_REASON_ON_'+d);
   if(d==='ABSTAIN')ensure(wire.abstain_reason!=='NONE','FD_ABSTAIN_REQUIRES_REASON');
-  if(d==='SKIP'&&reasons.some(r=>r.category===EV_SKIP)){
-    ensure(ev==='NEGATIVE','FD_EV_SKIP_REQUIRES_NEGATIVE_EV');ensure(down>up,'FD_EV_SKIP_REQUIRES_DOWNSIDE_ABOVE_UPSIDE');}
+  if(d==='SKIP'&&ev==='NEGATIVE'&&!(down>up))flags.push('SKIP_NEGATIVE_EV_WITHOUT_DOWNSIDE_EDGE');
   return {...out,bullish_evidence:support.map(e=>e.key),bearish_evidence:bearish,rejected_bearish,
     invalidation_conditions:wire.invalidation.map(x=>({fact:x.fact,op:x.op,value:x.value})),
     expected_upside_pct:up,expected_downside_pct:down,expected_value_bias:ev,confidence:conf,

@@ -7,13 +7,13 @@ const host='https://fapi.binance.com';
 /** Max age of any microstructure source at snapshot time; older values are withheld. */
 export const MICRO_MAX_AGE_MS=5000;
 /** Target order notional of one slot (200 USDT x 3). Reference only; sizing is unchanged. */
-export const SLOT_ORDER_NOTIONAL_USDT=600;
+export const SLOT_ORDER_NOTIONAL_USDT=450;
 export const MICRO_FIELDS=Object.freeze({
   spread:['bps','best ask / best bid - 1, in basis points of mid, from the order book snapshot'],
   depth:['USDT','ask-side notional within 25 bps above mid (liquidity available to a buyer)'],
   bid_depth_25bps:['USDT','bid-side notional within 25 bps below mid'],
   book_imbalance_25bps:['ratio','(bid notional - ask notional) / (bid + ask) within 25 bps of mid'],
-  ask_depth_to_slot_notional:['ratio','ask notional within 25 bps / 600 USDT slot order notional'],
+  ask_depth_to_slot_notional:['ratio','ask notional within 25 bps / 450 USDT slot order notional'],
   funding:['fraction','last funding rate per funding interval (premiumIndex.lastFundingRate)'],
   mark_index_premium:['fraction','mark price / index price - 1'],
   open_interest_usdt:['USDT','open interest contracts x mark price'],

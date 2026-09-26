@@ -139,9 +139,14 @@ export class FinalReviewCoordinator {
       record.valid_until_ms=Math.min(record.expires_at_ms-LIMITS.executionReserveMs,captured+LIMITS.reviewMaxAgeMs);
       // Snapshot persistence before the paid request; failures cannot lead to an unrecorded PASS.
       if(this.store.snapshot)await this.store.snapshot(key,owner,record);
-      record.result=this.engine?await this.engine.call(record.packet,{apiKey:this.apiKey(),fetchFn:this.fetchFn,now:this.now,deadlineMs:record.valid_until_ms}):
+      record.result=this.engine?await this.engine.call(record.packet,{apiKey:this.apiKey(),fetchFn:this.fetchFn,now:this.now,deadlineMs:record.valid_until_ms,identity:record.identity}):
         await callFinalReviewer(record.packet,{apiKey:this.apiKey(),fetchFn:this.fetchFn,now:this.now,
         deadlineMs:record.valid_until_ms,profile:this.profile});
+      if(this.engine&&record.result.final_packet){
+        record.packet=record.result.final_packet;
+        record.snapshot_at_ms=record.result.final_snapshot_at_ms;
+        record.valid_until_ms=Math.min(deadlineMs,record.snapshot_at_ms+LIMITS.reviewMaxAgeMs);
+      }
     }catch{
       record.result={origin:'LOCAL_DATA_ERROR',valid:false,decision:'ABSTAIN',error:'REVIEW_PREPARATION_FAILED',
         attempted:false,api_cost_usd:0,completed_at_ms:this.now(),model_requested:MODEL,wire_profile:this.profile};

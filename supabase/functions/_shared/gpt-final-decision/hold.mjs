@@ -3,16 +3,18 @@
  * Deterministic protection is NEVER delegated: the native stop, R5 risk cut, P142 locks,
  * trailing and every safety close run exactly as before and are never delayed. GPT only
  *  (a) decides a TIME-based exit candidate (V17_MOMENTUM_STALE / V17_MAX_HOLD): a fresh
- *      valid HOLD defers it for HOLD_TTL_MS; EXIT, ABSTAIN, invalid, timeout, budget or
- *      any error falls back to the deterministic time exit;
+ *      valid FINAL HOLD defers it for HOLD_TTL_MS; only FINAL EXIT closes it.
+ *      Unavailable arbitration retains protection and schedules a bounded later review;
  *  (b) may EXIT on a meaningful state change (momentum deterioration, significant price
- *      move) when it names a thesis-broken category breached in that snapshot.
+ *      move) naming a breached category or, since 2026-09-26, its own GPT_JUDGMENT on cited facts
+ *      (models prepare evidence; they do not constrain GPT's exit judgment).
  * Calls are event-driven, spaced, capped per position and journaled once per key. */
 import {computeFacts,modelJudgments} from './facts.mjs';
 import {readSources} from './market.mjs';
 import {buildDecisionPacket,callDecision,hash,MODEL} from './api.mjs';
 import {FD_VERSION} from './contract.mjs';
-export const FD1_HOLD_POLICY_VERSION='FD1_HOLD_REVIEW_1';
+import {dualEntryDecision,DUAL_VERSION} from './dual.mjs';
+export const FD1_HOLD_POLICY_VERSION='FD1_HOLD_FINAL_ARBITRATION_2';
 export const TIME_REASONS=Object.freeze(['V17_MOMENTUM_STALE','V17_MAX_HOLD']);
 export const HOLD_POLICY=Object.freeze({holdTtlMs:15*60_000,minGapMs:5*60_000,deteriorationMinGapMs:60_000,maxReviews:30,
   deteriorationDrawdown:-0.015,priceMove:0.02,timeAnswerWaitMs:25_000,exitMaxAgeMs:90_000});
@@ -24,8 +26,10 @@ export function initialHoldState(entryPrice){
 /** Pure: which review (if any) this observation starts. Mirrors the validated replay. */
 export function nextEvent(st,{now,price,peak,timeCandidate},P=HOLD_POLICY){
   const s={...st};
+  if(s.retryAfter&&now<s.retryAfter)return {state:s,event:null};
   if(peak>s.lastPeak){s.lastPeak=peak;s.ddArmed=true;}
   if(s.pending)return {state:s,event:null};
+  if(s.protectUntil&&now>=s.protectUntil&&s.reviews<P.maxReviews){s.protectUntil=null;return {state:s,event:'PROTECTION_REASSESSMENT'};}
   if(timeCandidate){
     if(s.holdUntil&&now<s.holdUntil)return {state:s,event:null};
     if(s.reviews>=P.maxReviews)return {state:s,event:null,exhausted:true};
@@ -59,19 +63,20 @@ export async function holdStep(st0,{now,price,peak,timeCandidate,positionId,answ
       const decision=a.valid===true&&fresh?a.decision:'ABSTAIN';
       st.last={key:st.pending.key,event:st.pending.event,decision,at:now};st.pending=null;
       if(isTime){
-        if(decision==='HOLD'&&timeCandidate){st.holdUntil=now+P.holdTtlMs;return {close:false,reason:'FD1_GPT_HOLD',state:st};}
-        if(timeCandidate)return {close:true,reason:decision==='EXIT'?'FD1_GPT_EXIT':null,fallback:decision!=='EXIT',state:st};
+        if((decision==='HOLD'||decision==='PROTECT')&&timeCandidate){st.holdUntil=now+(decision==='PROTECT'?P.deteriorationMinGapMs:P.holdTtlMs);if(decision==='PROTECT')st.protectUntil=st.holdUntil;return {close:false,reason:'FD1_GPT_'+decision,state:st};}
+        if(timeCandidate){if(decision!=='EXIT')st.retryAfter=now+P.deteriorationMinGapMs;return {close:decision==='EXIT',reason:decision==='EXIT'?'FD1_GPT_EXIT':'FD1_FINAL_UNAVAILABLE',state:st};}
         return {close:false,reason:null,state:st}; // the time condition already cleared (new high)
       }
+      if(decision==='PROTECT'){st.protectUntil=now+P.deteriorationMinGapMs;return {close:false,reason:'FD1_GPT_PROTECT',state:st};}
       if(decision==='EXIT'&&fresh)return {close:true,reason:'FD1_GPT_EXIT',state:st};
     }else if(age>P.timeAnswerWaitMs){
       st.last={key:st.pending.key,event:st.pending.event,decision:'TIMEOUT',at:now};st.pending=null;
-      if(isTime&&timeCandidate)return {close:true,reason:null,fallback:true,state:st};
+      if(isTime&&timeCandidate){st.retryAfter=now+P.deteriorationMinGapMs;return {close:false,reason:'FD1_FINAL_TIMEOUT',state:st};}
     }else if(isTime&&timeCandidate)return {close:false,reason:'FD1_AWAITING_GPT',state:st};
   }
   // 2. start a new review on a meaningful change
   const n=nextEvent(st,{now,price,peak,timeCandidate},P);st=n.state;
-  if(n.exhausted)return {close:true,reason:null,fallback:true,state:st};
+  if(n.exhausted)return {close:false,reason:'FD1_REVIEW_LIMIT',state:st};
   if(n.event){
     const key=await hash({v:FD1_HOLD_POLICY_VERSION,positionId:String(positionId),event:n.event,at:Math.floor(now/1000)});
     st.pending={key,event:n.event,at:now};st.reviews+=1;st.lastReviewAt=now;st.lastReviewPrice=price;
@@ -81,7 +86,7 @@ export async function holdStep(st0,{now,price,peak,timeCandidate,positionId,answ
   return {close:false,reason:null,state:st};
 }
 /** Build and ask one HOLD review from live public data. Never throws. */
-export async function runHoldReview({position,event,timeCandidate,stopStage,apiKey,fetchFn=fetch,now=Date.now,onPacket}){
+export async function runHoldReview({position,event,timeCandidate,stopStage,apiKey,deepseekKey,fetchFn=fetch,now=Date.now,onPacket}){
   try{
     const asOf=now(),{src,errors}=await readSources(String(position.symbol).toUpperCase(),asOf,{mode:'LIVE',fetchFn,ms:2500,now});
     const f=position.entryFeatures??{},snapshotAt=now();
@@ -95,8 +100,14 @@ export async function runHoldReview({position,event,timeCandidate,stopStage,apiK
           candle_close_at_ms:facts.quality.last_close_at_ms}}});
     // Observers are detached: no observer rejection or latency changes the GPT decision.
     if(onPacket)Promise.resolve().then(()=>onPacket(packet,snapshotAt)).catch(()=>{});
-    const result=await callDecision(packet,{apiKey,fetchFn,now});
-    return {packet,result:{...result,source_errors:errors,model:MODEL,contract:FD_VERSION}};
+    const result=await dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn,now,deadlineMs:asOf+HOLD_POLICY.timeAnswerWaitMs-1000,snapshotAtMs:snapshotAt,
+      refreshPacket:async ms=>{
+        const at=now(),fresh=await readSources(String(position.symbol).toUpperCase(),at,{mode:'LIVE',fetchFn,ms,now}),captured=now();
+        const nextFacts=computeFacts(fresh.src,{asOf:captured,referenceClose:f.referenceClose,dayReturn:f.dayReturn,rank:f.rank,position:{entryPrice:position.entryPrice,peakPrice:position.peakPrice,entryAt:position.entryAt,lastHighAt:position.lastHighAt,stopPrice:position.stopPrice,requireLiveQuote:true}});
+        const next={...packet,facts:nextFacts,position:{...packet.position,valuation:{...packet.position.valuation,snapshot_at_ms:captured,quote_at_ms:Number(fresh.src.book?.T??fresh.src.book?.E)}}};
+        next.snapshot_hash=await hash({...next,snapshot_hash:''});return {packet:next,captured};
+      }});
+    return {packet:result.final_packet??packet,result:{...result,source_errors:errors,model:MODEL,contract:FD_VERSION}};
   }catch(e){
     return {packet:null,result:{decision:'ABSTAIN',valid:false,attempted:false,api_cost_usd:0,error:'FD_HOLD_PREP:'+String(e?.message??e).slice(0,80),completed_at_ms:now()}};
   }

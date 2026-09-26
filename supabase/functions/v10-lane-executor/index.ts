@@ -23,7 +23,7 @@ import {IOC_RETRY_POLICY,planAggressiveIocRetry} from "./entry-ioc-retry.mjs";
 import {RETRY_RECONCILIATION_VERSION,retryProofCandidate,parentTradeStart,proveUnplacedPartialRetry} from "./entry-retry-reconciliation.mjs";
 import {ENTRY_LIFECYCLE_VERSION,lifecycleNote,noteChanged,gptTerminalReason,expiredTriggerReason,agedOutReason} from "./entry-lifecycle.mjs";
 import {ENTRY_CAPACITY_VERSION,UNUSED_SLOT_REASON,accountStopReason,budgetCovers,entryCapacity,ledgerEntry,slotCostUsdt,slotReasonOf,unusedSlotAccounting} from "./entry-capacity.mjs";
-import {LIVE_CHASE_POLICY,LIVE_CHASE_REASON,CHASE_STATE,classifyChase,liveChaseTrigger,deadChaseState} from "../_shared/leader-live-chase.mjs";
+import {LIVE_CHASE_POLICY,LIVE_CHASE_REASON,CHASE_STATE,classifyChase,liveChaseTrigger,deadChaseState,chaseEvidenceUsable} from "../_shared/leader-live-chase.mjs";
 import {BOO_ADAPTER_VERSION,ENFORCEMENT as BOO_ENFORCEMENT,evaluateBooEntry,finalizeBooEntry,loadBooGateContext,openRiskSummary,recordBooVerdict} from "./boo-entry-adapter.mjs";
 import {R1_VERSION} from "../_shared/boo/r1-strategy.mjs";
 import {RISK_POLICY_VERSION} from "../_shared/boo/risk-policy.mjs";
@@ -47,15 +47,17 @@ const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Objec
 // whose settlement or stop the budget cuts off waits a cycle for reconciliation, unprotected.
 // Sized from production, 2026-09-18..24: 84 filled attempts took <= 11.6 s from BOO admission
 // to outcome (p99 11.45 s), the claim and first reads ~2 s before that, and a GPT FINAL
-// RECHECK adds at most its 4 s request timeout. A single-IOC filled attempt makes ~22 budgeted
+// RECHECK arbitration now adds at most 8 s across the parallel FIRST calls and GPT FINAL.
+// Keep the original post-model settlement/protection time by adding the 4 s difference.
+// A single-IOC filled attempt makes ~22 budgeted
 // gateway calls (quote, symbol_info, portfolio and open orders at admission and again before
 // dispatch, fees and position mode for BOO, the E1 quote, the order, settlement, native stop),
 // 26 with an E1 recovery re-read.
-const ENTRY_ATTEMPT_RESERVE=Object.freeze({ms:20000,calls:26});
+const ENTRY_ATTEMPT_RESERVE=Object.freeze({ms:24000,calls:26});
 // The bounded IOC retry is a second order inside the same attempt: fresh tape and quote, up to a
-// 4 s FINAL RECHECK, the account re-read, the order, its settlement and its stop (order to
+// 8 s FINAL RECHECK arbitration, the account re-read, the order, its settlement and its stop (order to
 // outcome <= 9.0 s in production). It is only started when the budget can finish it.
-const IOC_RETRY_RESERVE=Object.freeze({ms:16000,calls:14});
+const IOC_RETRY_RESERVE=Object.freeze({ms:20000,calls:14});
 // Wall-clock companion to the budget reserve: an E1 fast-weak watch can wait up to
 // E1_POLICY.watchMs per attempt. Stop STARTING new attempts past this point; an attempt
 // already running is never cut short.
@@ -418,7 +420,7 @@ async function evaluateLiveChase(row,state,now,fetchCandles=qv3Candles){
   const classification=classifyChase(bars,{referencePrice:state.referencePrice,chaseBarOpenTime:open});
   const live=liveChaseTrigger(state,classification,{now,setupPolicy:SETUP_POLICY});
   if(live)return {state:live,reason:LIVE_CHASE_REASON};
-  const late=[CHASE_STATE.LIVE,CHASE_STATE.UNCERTAIN].includes(classification.state);
+  const late=chaseEvidenceUsable(classification);
   return {state:deadChaseState(state,classification,now,late?"CHASE_TRIGGER_WINDOW_UNAVAILABLE":null),reason:SETUP_REASON.CHASE_EXPIRED};
 }
 /** Evidence only: the last execution-path outcome of a still-open candidate, so its eventual
@@ -487,17 +489,18 @@ async function applyB06133Selection(db,row,state){
   // as reference evidence; admission is the V30 score gate on those same factors.
   const v30=v30FrontDecision(stamp,V30_FRONT_LIVE_VERSION),admitted=v30.admitted===true;
   const features={...rec(row.features),b06133:stamp,v30Front:v30};
+  // (2026-09-26) Sensors prepare evidence; they never end a candidate before the AI decides.
+  // A V30 non-admission or unavailable B06133 inputs are recorded and shown to GPT/DeepSeek.
   const patch={features,updated_at:new Date(evaluatedAt).toISOString()};
-  if(!admitted){patch.status="REJECTED";patch.reject_reason=stamp.result===null?stamp.reason:
-    `V30_FRONT_REJECT:${[...v30.failed,...v30.unknown].join("+")||"UNKNOWN"}`;}
   const write=await db.from("v11_long_regime_signals").update(patch).eq("id",row.id).eq("status","NEW").select("*").maybeSingle();
   if(write.error)throw Error(`B06133_WRITE:${write.error.message}`);
   if(!write.data)return {allowed:false,row,stamp:{...stamp,reason:"B06133_CAS_RACE"}};
-  const reason=admitted?"V30_FRONT_ADMIT":patch.reject_reason;
-  await audit(db,null,"BULL","BULL",admitted?"ENTRY_ALLOW":"ENTRY_REJECT",reason,
+  const reason=admitted?"V30_FRONT_ADMIT":stamp.result===null?`${stamp.reason}:EVIDENCE_ONLY`:
+    `V30_FRONT_NOT_ADMITTED:${[...v30.failed,...v30.unknown].join("+")||"UNKNOWN"}:EVIDENCE_ONLY`;
+  await audit(db,null,"BULL","BULL",admitted?"ENTRY_ALLOW":"ENTRY_EVIDENCE",reason,
     {signalId:row.id,symbol:row.symbol,stage:"V30_ENTRY_SELECTION",finalAdmission:false,
       orderDispatched:false,b06133:stamp,v30Front:v30});
-  return {allowed:admitted,row:write.data,stamp:{...stamp,reason}};
+  return {allowed:true,row:write.data,stamp:{...stamp,reason}};
 }
 
 /**
@@ -1055,7 +1058,7 @@ if(signalSizing.sizingContractVersion!==SLOT_SIZING_CONTRACT.version||
 if(selection.version!==B06133_VERSION||Number(selection.source?.decisionAt)!==Number(selectedSetup?.triggerAt))
   throw new Error("B06133_SELECTION_INVALID");
 // The V30 stamp must equal what the policy recomputes from that unmodified stamp.
-if(!baselineAllowedV30(s,V30_FRONT_LIVE_VERSION)||!entryBranchOf(rec(s.features)))
+if(!baselineAllowedV30(s,V30_FRONT_LIVE_VERSION,{requireAdmission:false})||!entryBranchOf(rec(s.features)))
   throw new Error("V30_SELECTION_INVALID");
 if(cec.version!==CEC0040_VERSION||cec.targetVersion!==CEC0040_TARGET_VERSION||cec.ready!==true||
   Number(cec.decisionAt)!==Number(selectedSetup?.triggerAt)||
@@ -2787,7 +2790,8 @@ async function manageLeader(db,p,ctx){
   }
   // FD1 (GPT final decision): only a TIME-based close candidate or a HOLD tick is ever
   // offered to GPT. Every stop-based CLOSE above is executed untouched and never waits.
-  if(meta.fd1HoldPolicyVersion===FD1_HOLD_POLICY_VERSION){
+  if([FD1_HOLD_POLICY_VERSION,'FD1_HOLD_REVIEW_1'].includes(meta.fd1HoldPolicyVersion)){
+    nextMeta.fd1HoldPolicyVersion=FD1_HOLD_POLICY_VERSION;
     const timeCandidate=state.action==="CLOSE"&&FD1_TIME_REASONS.includes(state.reason)&&bid>state.stopPrice?state.reason:null;
     if(state.action!=="CLOSE"||timeCandidate){
       const fd1=await fd1HoldTick(db,p,{meta,state,bid,now:detectedAtMs,timeCandidate});
@@ -3066,25 +3070,25 @@ Deno.serve(async req=>{
     }
     if(mode==="ops-readiness")return res(200,await opsReadiness(db));
     if(mode==="fd1-exit-probe"){
-      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
+      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{1,24}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
       return res(200,await fd1ExitProbe(db,{symbol,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID()).slice(0,80)}));
     }
     if(mode==="gpt-dryrun")return res(200,await gptDryRun(db,body));
     if(mode==="gpt-live-probe"){
-      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
+      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{1,24}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
       return res(200,{ok:true,revision:REVISION,patch:PATCH,orderCalls:0,probe:await liveProbe(db,{symbol,apiKey:env("OPENAI_API_KEY")||"",
         runId:String(body.runId??crypto.randomUUID()),evaluate:evaluateB06133,fetchInputs:fetchB06133Inputs})});
     }
     if(mode==="fd1-probe"){
       // ORDER-FREE: FD1 entry + hold decisions on live data; no lease, no signal/position/order write.
-      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
+      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{1,24}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
       return res(200,{ok:true,revision:REVISION,patch:PATCH,orderCalls:0,sizing:{targetMarginUsdt:MARGIN,leverage:Number(LEV),maxSlots:MAX_SLOTS},
-        probe:await fd1Probe(db,{symbol,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID()),engine:FD1_ENTRY_ENGINE})});
+        probe:await fd1Probe(db,{symbol,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID()),engine:{...FD1_ENTRY_ENGINE,deepseekKey:()=>env("deepseek api")}})});
     }
     if(mode==="fd1-recheck-probe"){
       // ORDER-FREE: INITIAL BUY fixture -> deterioration -> change detector -> real GPT FINAL
       // RECHECK (DRYRUN journal) -> post-recheck safety. No lease, no signal/position/order write.
-      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
+      const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{1,24}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
       const fixture=body.fixture==="NIL"?"NIL":"LIVE";
       return res(200,{ok:true,revision:REVISION,patch:PATCH,orderCalls:0,sizing:{targetMarginUsdt:MARGIN,leverage:Number(LEV),maxSlots:MAX_SLOTS},
         probe:await finalRecheckProbe(db,{symbol,fixture,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID())})});
