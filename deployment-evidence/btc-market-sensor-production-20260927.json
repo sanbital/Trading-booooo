@@ -1,0 +1,1348 @@
+{
+  "verdict": "BTC MARKET SENSOR: PRODUCTION VERIFIED",
+  "observed_at": "2026-09-26 17:07:23.583304+00",
+  "source": {
+    "sensor_merge": "f9991053869ebab1cf220b3431afe0fdddcee037",
+    "citation_prompt_merge": "ac604191168c37215770d207949303a550921754",
+    "exact_evidence_menu_merge": "d89c55f62e5183c57281067d4327b7d21931f8ce",
+    "prs": [
+      194,
+      195,
+      196
+    ],
+    "deployed_changed_modules_match_main": [
+      {
+        "path": "supabase/functions/_shared/gpt-final-decision/advisory.mjs",
+        "match": true
+      },
+      {
+        "path": "supabase/functions/_shared/gpt-final-decision/capture-context.mjs",
+        "match": true
+      },
+      {
+        "path": "supabase/functions/_shared/gpt-final-decision/dual.mjs",
+        "match": true
+      },
+      {
+        "path": "supabase/functions/_shared/gpt-final-decision/facts.mjs",
+        "match": true
+      },
+      {
+        "path": "supabase/functions/_shared/gpt-final-decision/market.mjs",
+        "match": true
+      },
+      {
+        "path": "supabase/functions/_shared/gpt-final-decision/market-sensor.mjs",
+        "match": true
+      }
+    ]
+  },
+  "production": {
+    "collector": {
+      "app": "sanbital-doa-capture-20260925",
+      "source_commit": "f9991053869ebab1cf220b3431afe0fdddcee037",
+      "version": "DOA-CAPTURE-6-MARKET-SENSOR",
+      "image_digest": "sha256:8032b54a78a42507de98a2d4ef572e70967e41dbda19694dbc075ae90b5deb99",
+      "image_only_update": true,
+      "workflow": "https://github.com/sanbital/Trading-booooo/actions/runs/36256455824",
+      "artifact": "https://github.com/sanbital/Trading-booooo/actions/runs/36256455824/artifacts/10911376651",
+      "artifact_sha256": "17f16786ab2ad9e7fb8d7646c791d285aa6c49c0ad9e40e4d6a0e07943a471d4"
+    },
+    "executor": {
+      "version": 104,
+      "hash": "48a2657336b7ecb5b47aab79d79f2d48357e8522b367c6b41d6fadcfbe03f6a1",
+      "files": 64,
+      "mismatches": [],
+      "scope": "All 64 deployed files verified against the intended bundle. Six changed sensor/advisory modules match main d89c55f. Unrelated PR193 main exit changes were not part of this deployment; unchanged files were preserved from the actual deployed bundle."
+    },
+    "trade_v3_md5_before_and_after": "16c234ccede07d0eaf698a02ee98b08d"
+  },
+  "soak": {
+    "start": "2026-09-26T16:51:51.302Z",
+    "end": "2026-09-26T17:01:53.048Z",
+    "duration_seconds": 601.746,
+    "observations": 32,
+    "all_sensor_available": true,
+    "all_watched_equal_synced": true,
+    "max_event_latency_ms": 129,
+    "distinct_closed_candle_returns": 11,
+    "source": "GitHub release job logs; production artifact retained separately",
+    "stable_samples": [
+      {
+        "at": "2026-09-26T16:51:51.302Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": -0.0001414872810067136,
+        "latency_ms": 126,
+        "coverage": {
+          "bid": 15.464735824141147,
+          "ask": 14.70368769438616
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "LYNUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "PHAUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "HUMAUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "PROMUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "RAREUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "RUNEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "TNSRUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "MAGMAUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "SPELLUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "MUBARAKUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "VELODROMEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "JELLYJELLYUSDT",
+            "buckets": null
+          }
+        ],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:52:09.615Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": -0.0001414872810067136,
+        "latency_ms": 126,
+        "coverage": {
+          "bid": 15.464735824141147,
+          "ask": 14.70368769438616
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "PHAUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "PROMUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "RAREUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "RUNEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "TNSRUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "SPELLUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "VELODROMEUSDT",
+            "buckets": null
+          }
+        ],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:52:28.848Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": 0,
+        "latency_ms": 126,
+        "coverage": {
+          "bid": 14.467305257761735,
+          "ask": 15.704132012228282
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "PHAUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "PROMUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "RAREUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "RUNEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "TNSRUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "SPELLUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "VELODROMEUSDT",
+            "buckets": null
+          }
+        ],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:52:48.523Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": 0,
+        "latency_ms": 126,
+        "coverage": {
+          "bid": 14.455429884029861,
+          "ask": 15.716043267580554
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "PHAUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "PROMUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "RAREUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "RUNEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "TNSRUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "SPELLUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "VELODROMEUSDT",
+            "buckets": null
+          }
+        ],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:53:07.182Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": 0,
+        "latency_ms": 126,
+        "coverage": {
+          "bid": 14.455429884029861,
+          "ask": 15.716043267580554
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "TNSRUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "VELODROMEUSDT",
+            "buckets": null
+          }
+        ],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:53:27.172Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": -0.00010107664463587795,
+        "latency_ms": 126,
+        "coverage": {
+          "bid": 14.455429884029861,
+          "ask": 15.716043267580554
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "TNSRUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "VELODROMEUSDT",
+            "buckets": null
+          }
+        ],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:53:46.502Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": -0.00010107664463587795,
+        "latency_ms": 126,
+        "coverage": {
+          "bid": 14.455429884029861,
+          "ask": 15.716043267580554
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "TNSRUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "VELODROMEUSDT",
+            "buckets": null
+          }
+        ],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:54:04.711Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": -0.00010107664463587795,
+        "latency_ms": 126,
+        "coverage": {
+          "bid": 14.016021198266438,
+          "ask": 16.15677963329893
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:54:23.277Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": -0.0001486571502304912,
+        "latency_ms": 126,
+        "coverage": {
+          "bid": 13.065816149634914,
+          "ask": 17.10985574078078
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:54:41.555Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": -0.0001486571502304912,
+        "latency_ms": 126,
+        "coverage": {
+          "bid": 13.065816149634914,
+          "ask": 17.10985574078078
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:55:01.802Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": -0.0001486571502304912,
+        "latency_ms": 126,
+        "coverage": {
+          "bid": 13.065816149634914,
+          "ask": 17.10985574078078
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:55:23.660Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": 0.0002854641647318523,
+        "latency_ms": 126,
+        "coverage": {
+          "bid": 14.22979241628704,
+          "ask": 15.942362502326885
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:55:43.006Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": 0.0002854641647318523,
+        "latency_ms": 126,
+        "coverage": {
+          "bid": 14.22979241628704,
+          "ask": 15.942362502326885
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:56:02.389Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": 0.0002854641647318523,
+        "latency_ms": 127,
+        "coverage": {
+          "bid": 13.065816149634914,
+          "ask": 17.10985574078078
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:56:23.302Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": -0.0002758699415917887,
+        "latency_ms": 127,
+        "coverage": {
+          "bid": 10.677627841542813,
+          "ask": 19.50525999577619
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:56:42.677Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": -0.0002758699415917887,
+        "latency_ms": 127,
+        "coverage": {
+          "bid": 11.901568497065993,
+          "ask": 18.2776211851481
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:57:00.946Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": -0.0002758699415917887,
+        "latency_ms": 127,
+        "coverage": {
+          "bid": 11.450052491799086,
+          "ask": 18.730501452818004
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:57:22.604Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": -0.00016176148744440066,
+        "latency_ms": 127,
+        "coverage": {
+          "bid": 14.407928106638195,
+          "ask": 15.763688572307274
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:57:42.106Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": -0.00016176148744440066,
+        "latency_ms": 127,
+        "coverage": {
+          "bid": 14.407928106638195,
+          "ask": 15.763688572307274
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:58:01.297Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": -0.00016176148744440066,
+        "latency_ms": 126,
+        "coverage": {
+          "bid": 14.407928106638195,
+          "ask": 15.763688572307274
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:58:21.340Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": 0.00029740413772438856,
+        "latency_ms": 126,
+        "coverage": {
+          "bid": 12.851995092334288,
+          "ask": 17.32432286162299
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:58:40.333Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": 0.00029740413772438856,
+        "latency_ms": 126,
+        "coverage": {
+          "bid": 12.851995092334288,
+          "ask": 17.32432286162299
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:58:58.689Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": 0.00029740413772438856,
+        "latency_ms": 129,
+        "coverage": {
+          "bid": 12.851995092334288,
+          "ask": 17.32432286162299
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:59:18.137Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": -0.00015460435556147178,
+        "latency_ms": 129,
+        "coverage": {
+          "bid": 12.555006212081818,
+          "ask": 17.622209098245353
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:59:37.527Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": -0.00015460435556147178,
+        "latency_ms": 129,
+        "coverage": {
+          "bid": 12.555006212081818,
+          "ask": 17.622209098245353
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T16:59:55.781Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": -0.00015460435556147178,
+        "latency_ms": 129,
+        "coverage": {
+          "bid": 12.555006212081818,
+          "ask": 17.622209098245353
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T17:00:15.185Z",
+        "status": "AVAILABLE",
+        "watched": 30,
+        "synced": 30,
+        "return_1m": -0.000030925652352964406,
+        "latency_ms": 129,
+        "coverage": {
+          "bid": 12.661924243748535,
+          "ask": 17.514968012137366
+        },
+        "trade_unavailable": [],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T17:00:35.170Z",
+        "status": "AVAILABLE",
+        "watched": 31,
+        "synced": 31,
+        "return_1m": -0.000030925652352964406,
+        "latency_ms": 129,
+        "coverage": {
+          "bid": 12.661924243748535,
+          "ask": 17.514968012137366
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER",
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "LSKUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BILLUSDT",
+            "buckets": null
+          }
+        ],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T17:00:54.479Z",
+        "status": "AVAILABLE",
+        "watched": 31,
+        "synced": 31,
+        "return_1m": -0.000030925652352964406,
+        "latency_ms": 129,
+        "coverage": {
+          "bid": 12.661924243748535,
+          "ask": 17.514968012137366
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER",
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "LSKUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BILLUSDT",
+            "buckets": null
+          }
+        ],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T17:01:13.712Z",
+        "status": "AVAILABLE",
+        "watched": 31,
+        "synced": 31,
+        "return_1m": 0.000011894849530236229,
+        "latency_ms": 129,
+        "coverage": {
+          "bid": 12.661924243748535,
+          "ask": 17.514968012137366
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER",
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "LSKUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BILLUSDT",
+            "buckets": null
+          }
+        ],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T17:01:33.548Z",
+        "status": "AVAILABLE",
+        "watched": 31,
+        "synced": 31,
+        "return_1m": 0.000011894849530236229,
+        "latency_ms": 129,
+        "coverage": {
+          "bid": 12.661924243748535,
+          "ask": 17.514968012137366
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER",
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "LSKUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BILLUSDT",
+            "buckets": null
+          }
+        ],
+        "open": null
+      },
+      {
+        "at": "2026-09-26T17:01:53.048Z",
+        "status": "AVAILABLE",
+        "watched": 31,
+        "synced": 31,
+        "return_1m": 0.000011894849530236229,
+        "latency_ms": 129,
+        "coverage": {
+          "bid": 14.502931209487034,
+          "ask": 15.668398416153853
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER",
+              "TRADE_CANDIDATE"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "LSKUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BILLUSDT",
+            "buckets": null
+          }
+        ],
+        "open": null
+      }
+    ]
+  },
+  "final_readonly_audit": {
+    "observed_at": "2026-09-26 17:07:23.583304+00",
+    "buckets": 120,
+    "gaps": 0,
+    "incomplete": 0,
+    "future_events": 0,
+    "stale": 0,
+    "max_latency_ms": "129.000000",
+    "candle_updates": 11,
+    "full_depth": 0,
+    "injected_candidate_buckets": 3565,
+    "injection_mismatch": 0,
+    "sensor": {
+      "role": "MARKET_SENSOR",
+      "end_ms": 1790442440035,
+      "status": "AVAILABLE",
+      "symbol": "BTCUSDT",
+      "buckets": 24,
+      "version": "MARKET_SENSOR_CONTEXT_V1",
+      "as_of_ms": 1790442443583,
+      "contract": "MARKET_SENSOR_CONTEXT_V1",
+      "start_ms": 1790442320190,
+      "ingested_at_ms": 1790442441856,
+      "coverage_policy": "ALL_24_REQUIRED",
+      "depth_semantics": "OBSERVED_WITHIN_SNAPSHOT_AND_25BP_INTERSECTION_NO_EXTRAPOLATION"
+    },
+    "btc_trade": {
+      "role": "TRADE_CANDIDATE",
+      "reason": "TRADE_CONTEXT_UNAVAILABLE_DEPTH_COVERAGE",
+      "status": "UNAVAILABLE",
+      "contract": "TRADE_CONTEXT_V3"
+    },
+    "metrics": {
+      "queue": 31,
+      "synced": 31,
+      "version": "DOA-CAPTURE-6-MARKET-SENSOR",
+      "watched": 31,
+      "ws_gaps": 0,
+      "llm_calls": 0,
+      "rss_bytes": 130002944,
+      "order_calls": 0,
+      "watch_roles": {
+        "QUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "2ZUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "USUSDT": [
+          "SCANNER_LEADER",
+          "TRADE_CANDIDATE"
+        ],
+        "ACEUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "ARKUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "BTCUSDT": [
+          "MARKET_SENSOR"
+        ],
+        "BTWUSDT": [
+          "SCANNER_LEADER",
+          "TRADE_CANDIDATE"
+        ],
+        "FILUSDT": [
+          "SCANNER_LEADER",
+          "TRADE_CANDIDATE"
+        ],
+        "LSKUSDT": [
+          "SCANNER_LEADER",
+          "TRADE_CANDIDATE"
+        ],
+        "LYNUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "PHAUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "QNTUSDT": [
+          "SCANNER_LEADER",
+          "TRADE_CANDIDATE"
+        ],
+        "WLDUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "BEATUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "BILLUSDT": [
+          "SCANNER_LEADER"
+        ],
+        "CHIPUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "DYDXUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "GALAUSDT": [
+          "SCANNER_LEADER",
+          "TRADE_CANDIDATE"
+        ],
+        "HUMAUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "ORDIUSDT": [
+          "SCANNER_LEADER",
+          "TRADE_CANDIDATE"
+        ],
+        "PROMUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "RAREUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "RUNEUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "TAKEUSDT": [
+          "SCANNER_LEADER",
+          "TRADE_CANDIDATE"
+        ],
+        "TNSRUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "MAGMAUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "SPELLUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "CLANKERUSDT": [
+          "SCANNER_LEADER"
+        ],
+        "MUBARAKUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "VELODROMEUSDT": [
+          "TRADE_CANDIDATE"
+        ],
+        "JELLYJELLYUSDT": [
+          "TRADE_CANDIDATE"
+        ]
+      },
+      "rest_failures": 0,
+      "source_commit": "f9991053869ebab1cf220b3431afe0fdddcee037",
+      "last_bucket_at": "2026-09-26T17:07:21.234Z",
+      "coverage_refreshes": 0,
+      "trade_streams_seen": 31,
+      "candle_streams_seen": 31,
+      "unavailable_symbols": {},
+      "production_continuous": true
+    },
+    "trade_contexts": [
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "QUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "2ZUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "USUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "ACEUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "ARKUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "BTWUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "FILUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "LSKUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "LYNUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "PHAUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "QNTUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "WLDUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "BEATUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "BILLUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "CHIPUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "DYDXUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "GALAUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "HUMAUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "ORDIUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "PROMUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "RAREUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "RUNEUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "TAKEUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "TNSRUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "MAGMAUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "SPELLUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "CLANKERUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "MUBARAKUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "VELODROMEUSDT"
+      },
+      {
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "JELLYJELLYUSDT"
+      }
+    ],
+    "open_count": 0,
+    "trade_md5": "16c234ccede07d0eaf698a02ee98b08d"
+  },
+  "live_order_free_model_probe": {
+    "mode": "fd1-exit-probe",
+    "position_fixture": true,
+    "live_market_data": true,
+    "job_key": "8e034535ccc78362d90917876a40750d2e5d4a3fb361527d9606de5f6d787dcb",
+    "ok": true,
+    "order_calls": 0,
+    "identical_packet": true,
+    "gpt_first_valid": true,
+    "deepseek_valid": true,
+    "gpt_final_valid": true,
+    "gpt_first_snapshot_hash": "90f4130435243196e700904ca7c4aefcf8fec966565e019e0c1555714dfed743",
+    "deepseek_snapshot_hash": "90f4130435243196e700904ca7c4aefcf8fec966565e019e0c1555714dfed743",
+    "initial_sensor_hash": "0ccbc25f3d58bbc9a347547ebba488da54af5d552a699909b11b9550efc86923",
+    "final_sensor_hash": "5edcc3604ef727df1b3dada4494a50390b7b56064b07e6b80d87909a5895a740",
+    "initial_sensor_status": "AVAILABLE",
+    "final_sensor_status": "AVAILABLE",
+    "final_cutoff_ms": 1790442359810,
+    "final_latest_sensor_event_or_ingest_ms": 1790442356966,
+    "post_cutoff_events": 0,
+    "all_depth_partial": true,
+    "deepseek_cited_btc_return_120s": true,
+    "gpt_final_adopted_btc_return_120s": true
+  },
+  "tests": {
+    "t01_t14": "PASS: actual PGlite functions, collector metrics, provider payload and cutoff checks",
+    "latest_regression": {
+      "tests": 537,
+      "pass": 537,
+      "fail": 0,
+      "workflow": "https://github.com/sanbital/Trading-booooo/actions/runs/36257506757"
+    },
+    "deno_executor_and_generator": "PASS"
+  },
+  "orders_and_controls": {
+    "test_orders": 0,
+    "order_calls": 0,
+    "trading_config_changes": 0,
+    "config_hashes_unchanged": [
+      {
+        "name": "v17_operator_control",
+        "hash": "86169d37c52e8b0246b7691327fb7d7a"
+      },
+      {
+        "name": "gpt_final_review_control",
+        "hash": "c49124e5a20c669589afc39d9be61e1f"
+      },
+      {
+        "name": "boo_entry_gate_control",
+        "hash": "8d12c6b98b29c045c01bd10dd19fd3a6"
+      },
+      {
+        "name": "v24_operator_control",
+        "hash": "043b75182269f098ee31451d3932757e"
+      }
+    ]
+  },
+  "open_position_scope": {
+    "final_live_open_positions": 0,
+    "note": "The predeployment WLD open-position context was AVAILABLE. That position closed normally before the sensor soak. T12 exercises OPEN_POSITION identity/state and strict coverage regressions; the final live model probe uses an explicit position fixture and creates no position/order. No live postdeployment OPEN position was available to inspect."
+  }
+}
