@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {dualEntryDecision,arbitrationPayload,frozenReview} from '../supabase/functions/_shared/gpt-final-decision/dual.mjs';
-import {buildDecisionPacket,MODEL} from '../supabase/functions/_shared/gpt-final-decision/api.mjs';
+import {buildDecisionPacket,MODEL,hash} from '../supabase/functions/_shared/gpt-final-decision/api.mjs';
 import {computeFacts} from '../supabase/functions/_shared/gpt-final-decision/facts.mjs';
 import {validateCapture120,CAPTURE_VERSION} from '../supabase/functions/_shared/gpt-final-decision/capture-context.mjs';
 import {holdStep,initialHoldState} from '../supabase/functions/_shared/gpt-final-decision/hold.mjs';
@@ -39,7 +39,8 @@ test(id+' actual parallel advice → refresh → FINAL → hold state, with full
   return Response.json({model:MODEL,status:'completed',usage:{input_tokens:1000,output_tokens:100},output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(wire)}]}]});
  };
  const p=await packet(),r=await dualEntryDecision(p,{apiKey:'fixture',deepseekKey:'fixture',fetchFn,now:()=>now,snapshotAtMs:now,
-  refreshPacket:async()=>({packet:{...p,position:{...p.position,exit_context:{...p.position.exit_context,latest_refresh:true}}},captured:now})});
+  refreshPacket:async()=>{const next={...p,position:{...p.position,exit_context:{...p.position.exit_context,latest_refresh:true}}};
+   next.snapshot_hash=await hash({...next,snapshot_hash:''});return {packet:next,captured:now};}});
  assert.deepEqual(first,advisory);assert.equal(calls,2);assert.equal(r.valid,true,r.error);assert.equal(r.decision,final);
  assert.ok(!JSON.stringify(finalSchema.$defs.arbitration_evidence).includes('"pattern"'),'FINAL evidence schema must stay exact under 120s capture');
  const enumCount=JSON.stringify(finalSchema).match(/"enum":/g)?.length??0;assert.ok(enumCount<40);
@@ -59,4 +60,3 @@ test('120s evidence schema still rejects invented paths; skipped/future refresh 
   refreshPacket:async()=>({packet:p,captured:now+100000})});
  assert.equal(r.arbitration.refresh_error,'LATEST_SNAPSHOT_UNAVAILABLE');assert.equal(r.valid,false);
 });
-

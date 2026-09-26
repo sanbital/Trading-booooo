@@ -7,7 +7,7 @@ import {validateMarketSensor} from '../../supabase/functions/_shared/gpt-final-d
 import {validateCapture120} from '../../supabase/functions/_shared/gpt-final-decision/capture-context.mjs';
 import {frozenReview,dualEntryDecision} from '../../supabase/functions/_shared/gpt-final-decision/dual.mjs';
 import {computeFacts} from '../../supabase/functions/_shared/gpt-final-decision/facts.mjs';
-import {buildDecisionPacket,MODEL} from '../../supabase/functions/_shared/gpt-final-decision/api.mjs';
+import {buildDecisionPacket,MODEL,hash} from '../../supabase/functions/_shared/gpt-final-decision/api.mjs';
 import {src} from '../../development/gpt-final-decision/tests/fixtures.mjs';
 import {finalFields} from '../../test-support/arbitration-fixtures.mjs';
 const {PGlite}=await import(pathToFileURL(process.env.PGLITE_MODULE).href);
@@ -90,6 +90,9 @@ test('role contracts T01-T14: actual Postgres RPC, collector and model wiring',a
  });
  await t.test('T14 FINAL cutoff excludes later BTC events and does not substitute new history',async()=>{
   const corrupted=structuredClone(packet);corrupted.facts.market_sensor.market_sensor_trajectory[23].flow_event_ms=now+1;
+  await assert.rejects(frozenReview(corrupted,{snapshotAtMs:now}),/GPT_SNAPSHOT_MISMATCH/);
+  // A newly constructed, correctly hashed source packet still fails sensor causality.
+  corrupted.snapshot_hash=await hash({...corrupted,snapshot_hash:''});
   const frozen=await frozenReview(corrupted,{snapshotAtMs:now});assert.equal(frozen.market_input.market_sensor.status,'UNAVAILABLE');assert.equal(frozen.market_input.market_sensor.market_sensor_trajectory,undefined);
   assert.equal(validateMarketSensor(rawSensor,rawSensor.end_ms+25001).status,'UNAVAILABLE');
  });

@@ -58,7 +58,13 @@ function freeze(x){if(x&&typeof x==='object'){Object.values(x).forEach(freeze);O
 export async function frozenReview(packet,{snapshotAtMs,inputPayload=payloadFor,policy=null}={}){
   if(!Number.isSafeInteger(snapshotAtMs))throw Error('FD_SNAPSHOT_TIME');
   const copy=clone(packet);
+  // Validate the supplied snapshot before canonicalization: never launder a mutated
+  // packet by signing it again. All tasks use the same empty-hash convention.
+  if(await hash({...copy,snapshot_hash:''})!==copy.snapshot_hash)throw Error('GPT_SNAPSHOT_MISMATCH');
   if(copy.facts?.market_sensor)copy.facts.market_sensor=validateMarketSensor(copy.facts.market_sensor,snapshotAtMs);
+  // Sensor freshness is derived at capture time, after the source read. Bind that
+  // final canonical payload BEFORE either provider sees it or it reaches the journal.
+  copy.snapshot_hash=await hash({...copy,snapshot_hash:''});
   const base=inputPayload(copy),market=JSON.parse(base.input.find(x=>x.role==='user').content);
   if(copy.facts?.market_sensor){
     market.market_sensor=copy.facts.market_sensor;

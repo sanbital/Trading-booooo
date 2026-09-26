@@ -70,9 +70,10 @@ export class FinalReviewCoordinator {
   }
   consumeRetry(token){const life=this.retryLifecycles.get(token);if(!life||life.used||this.now()>=life.deadline)return false;life.used=true;return true;}
   constructor({config,store,apiKey=()=>'',fetchFn=fetch,market=collectMarket,now=Date.now,schedule=p=>{p.catch(()=>{});},
-    profile=DEFAULT_PROFILE,purpose='PRODUCTION',baseline=baselineAllowed,expiry=triggerExpiry,engine=null}){
+    profile=DEFAULT_PROFILE,purpose='PRODUCTION',baseline=baselineAllowed,expiry=triggerExpiry,engine=null,onResolved=async()=>{}}){
     this.config=config;this.store=store;this.apiKey=apiKey;this.fetchFn=fetchFn;this.market=market;this.now=now;this.schedule=schedule;
     this.baseline=baseline;this.expiry=expiry;this.engine=engine;this.identity=engine?.identity??decisionIdentity;
+    this.onResolved=onResolved;this.waitOutcomes=[];
     // An engine (FD1 final decision) replaces the question and answer contract; the durable
     // claim/ledger/TTL/ticket machinery below is identical for every engine.
     this.profile=engine?engine.id:profile;this.purpose=purpose;const wire=engine?null:profileOf(profile).wire,promptText=engine?engine.promptText:promptFor(profileOf(profile).prompt??wire);
@@ -232,16 +233,30 @@ export class FinalReviewCoordinator {
   }
   /** Called only AFTER runWithLease has returned, never from the order path. */
   async waitReady(){
+    this.waitOutcomes=[];
     if(this.config.mode!=='ENFORCE'||!this.tracked.size)return false;
     const deadline=Math.min(this.now()+LIMITS.requestMs+3000,Math.max(...[...this.tracked.values()].map(x=>x.expires-LIMITS.executionReserveMs)));
-    while(this.now()<deadline){
-      let unresolved=false;
+    const reported=new Set();let firstRead=true;
+    // Read once even at the deadline, so a completed failure cannot remain PENDING.
+    while(firstRead||this.now()<deadline){
+      firstRead=false;let unresolved=false,ready=false;
       for(const [key,t] of this.tracked){
+        this.tickets.delete(String(t.s.id));
         const row=await this.store.get(key).catch(()=>null);
         if(!row||row.state!=='DONE'){unresolved=true;continue;}
-        const checked=await this.validateStored(row,t.identityJson,t.expires,await this.binding).catch(()=>null);
-        if(checked?.allowed)return true;
+        const checked=await this.validateStored(row,t.identityJson,t.expires,await this.binding)
+          .catch(()=>({valid:false,allowed:false,decision:'ABSTAIN',reason:'GPT_REVIEW_STORAGE_OR_VALIDATION_ERROR'}));
+        // The durable row, never a ready hint or pending promise, restores the ticket.
+        if(checked.valid)this.tickets.set(String(t.s.id),checked.ticket);
+        if(checked.allowed)ready=true;
+        const review={signalId:t.s.id,jobKey:key,allowed:checked.allowed,decision:checked.decision,reason:checked.reason,
+          storedDecision:row.record?.result?.decision??null,detail:checked.detail??null,error:row.record?.result?.error??null};
+        if(!reported.has(key)){
+          reported.add(key);this.waitOutcomes.push(review);
+          await this.onResolved(t.s,review).catch(()=>console.error('GPT_ASYNC_LIFECYCLE_WRITE_FAILED',t.s.id));
+        }
       }
+      if(ready)return true;
       if(!unresolved)return false;
       await sleep(Math.min(150,Math.max(1,deadline-this.now())));
     }

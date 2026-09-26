@@ -1,10 +1,24 @@
 import {FinalReviewCoordinator,configFromControl} from '../_shared/gpt-final-review/coordinator.mjs';
 import {SupabaseReviewStore,readReviewControl} from '../_shared/gpt-final-review/supabase-store.mjs';
-import {baselineAllowedLive} from '../_shared/gpt-final-review/contract.mjs';
+import {baselineAllowedLive,canonical} from '../_shared/gpt-final-review/contract.mjs';
 import {FD1_ENTRY_ENGINE} from '../_shared/gpt-final-decision/engine.mjs';
 import {recheckAllows} from '../_shared/gpt-final-decision/recheck.mjs';
+import {lifecycleNote} from './entry-lifecycle.mjs';
 const contexts=new WeakMap();
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
+/** After lease release, replace only this identity's still-pending lifecycle note.
+ * Read fresh features and CAS the whole JSON to avoid overwriting a concurrent cycle.
+ * No signal claim, terminalization, order, or historical-row repair is performed here. */
+export async function recordAsyncReviewOutcome(db,s,review,now=Date.now){
+  const r=await db.from('v11_long_regime_signals').select('id,symbol,status,features').eq('id',s.id).eq('status','NEW').maybeSingle();
+  if(r.error)throw Error('GPT_ASYNC_LIFECYCLE_READ');
+  const row=r.data;if(!row||row.features?.entryLifecycle?.reason!=='GPT_REVIEW_PENDING')return;
+  if(canonical(FD1_ENTRY_ENGINE.identity(row))!==canonical(FD1_ENTRY_ENGINE.identity(s)))return;
+  const note=lifecycleNote({at:now(),stage:'GPT_REVIEW',reason:review.reason,gptDecision:review.storedDecision});
+  const w=await db.from('v11_long_regime_signals').update({features:{...row.features,entryLifecycle:note}})
+    .eq('id',row.id).eq('status','NEW').eq('features',JSON.stringify(row.features));
+  if(w.error)throw Error('GPT_ASYNC_LIFECYCLE_WRITE');
+}
 /** Operator switches for the two BUY-recovery paths (2026-09-25). Default on; 'false' restores
  * the previous behaviour exactly: an aged BUY is refused, and a run that entered ends the cycle. */
 export const recoverySwitches=(get=getenv)=>({agedRecheck:get('FD1_AGED_BUY_RECHECK')!=='false',followUp:get('FD1_ENTRY_FOLLOW_UP')!=='false'});
@@ -31,6 +45,7 @@ export function coordinatorFor(db){
       // FIRST providers run independently; GPT FINAL always reviews both (including unavailable advice).
       deepseekKey:()=>getenv('deepseek api')||null},
     baseline:baselineAllowedLive,
+    onResolved:(s,review)=>recordAsyncReviewOutcome(db,s,review),
     schedule:promise=>{if(globalThis.EdgeRuntime?.waitUntil)EdgeRuntime.waitUntil(promise);else promise.catch(()=>{});}}));
   return contexts.get(db);
 }
@@ -116,7 +131,11 @@ export async function runWithGptReview(db,runWithLease,switches=recoverySwitches
   if(first?.entry?.entered||first?.entry?.followUpArmed)return await followUp(first,[]);
   if(first?.entry?.reason!=='GPT_REVIEW_PENDING')return first;
   let ready=false;try{ready=await c.waitReady();}catch{/* GPT errors are candidate-scoped. */}
-  if(!ready)return first;
+  if(!ready){
+    const outcomes=c.waitOutcomes??[];
+    return outcomes.length?{...first,entry:{...first.entry,reason:outcomes.at(-1).reason},
+      gptFinalReview:{mode:c.config.mode,rechecked:false,resolved:outcomes}}:first;
+  }
   const second=await runWithLease(db);
   const out={...second,gptFinalReview:{mode:c.config.mode,rechecked:true,firstCycleEntry:first.entry??null}};
   return second?.entry?.entered||second?.entry?.followUpArmed?await followUp(out,[]):out;
