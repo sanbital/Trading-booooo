@@ -1,7 +1,7 @@
 {
-  "purpose": "Bound collector recovery work and reconnect delayed streams; require 20 consecutive 120-second coverage samples",
+  "purpose": "Resolve measured 92 percent CPU steal by resizing the existing collector to shared-4x/1GB; require 20 consecutive causal 24-point samples",
   "migration": "20260926144820",
   "prior_executor_version": 101,
   "prior_executor_sha256": "c26a627220609477e6cdf9c0aeba14a14bd3cd85dd282e02c087c6c89e172642",
-  "requested_scope": "Update only the existing persistent public-data worker; keep its 240-second ring, resources, secrets and execution configuration"
+  "requested_scope": "Resize only existing machine 185030da006d48 from shared-1x/256MB to shared-4x/1GB; keep 240-second ring, REST budget, secrets and all trading sizing/execution settings"
 }
