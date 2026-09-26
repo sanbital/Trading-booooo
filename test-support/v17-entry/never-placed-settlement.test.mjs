@@ -26,6 +26,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import {retryProofCandidate} from '../../supabase/functions/v10-lane-executor/entry-retry-reconciliation.mjs';
 
 const SRC = readFileSync(
   new URL('../../supabase/functions/v10-lane-executor/index.ts', import.meta.url), 'utf8');
@@ -52,6 +53,7 @@ function harness({ proof, proofThrows = null, fatal = () => ({ fatal: false }) }
   };
   const ctx = {
     Number, Math, Date, String, Object, Error, Promise, JSON, console,
+    retryProofCandidate,
     N: (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d),
     rec: (x) => (x && typeof x === 'object' && !Array.isArray(x) ? x : {}),
     classifyFailure: fatal,
