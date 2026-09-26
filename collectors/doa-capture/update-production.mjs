@@ -28,15 +28,23 @@ const auth=spawnSync('flyctl',['auth','docker'],{encoding:'utf8'});if(auth.statu
 const push=spawnSync('docker',['push',image],{stdio:'inherit'});if(push.status!==0)throw Error('IMAGE_PUSH_FAILED');
 const lease=await machine('/'+before.id+'/lease','POST',{description:'capture-'+process.env.GITHUB_SHA.slice(0,12),ttl:60});
 const nonce=lease.data?.nonce;if(!nonce)throw Error('MACHINE_LEASE_MISSING');
+let activeId=before.id,replaced=false;
 try{
  const current=await machine('/'+before.id);if(current.instance_id!==before.instance_id)throw Error('CONCURRENT_CAPTURE_DEPLOYMENT');
  // Preserve resources, environment, secret references, network, and all other current config.
- await machine('/'+before.id,'POST',{current_version:before.instance_id,config:{...cfg,image,auto_destroy:false,restart:{policy:'on-failure',max_retries:10}}},nonce);
-}finally{await machine('/'+before.id+'/lease','DELETE',undefined,nonce);}
-evidence.after=safe(await machine('/'+before.id));
+ const config={...cfg,image,auto_destroy:false,restart:{policy:'on-failure',max_retries:10}};
+ if(cfg.auto_destroy===true){
+   // Fly refuses updates to --rm Machines. Start a persistent successor with the same
+   // app secrets/config; the DB lease prevents it collecting until the old worker stops.
+   const next=await machine('','POST',{name:'capture-continuous',region:before.region,config});
+   activeId=next.id;evidence.successor=safe(next);writeFileSync('capture-release.json',JSON.stringify(evidence,null,2));
+   await machine('/'+before.id+'/stop','POST',{signal:'SIGTERM',timeout:'10s'},nonce);replaced=true;
+ }else await machine('/'+before.id,'POST',{current_version:before.instance_id,config},nonce);
+}finally{try{await machine('/'+before.id+'/lease','DELETE',undefined,nonce);}catch(e){if(!replaced||!String(e.message).includes('404'))throw e;}}
+evidence.after=safe(await machine('/'+activeId));
 writeFileSync('capture-release.json',JSON.stringify(evidence,null,2));
 let verified=false;
-for(let i=0;i<24;i++){
+for(let i=0;i<40;i++){
  await new Promise(r=>setTimeout(r,15000));
  const state=(await query(`select metrics->>'version' version,extract(epoch from clock_timestamp()-heartbeat_at) age_s,
  metrics->>'watched' watched,metrics->>'queue' queue from doa_capture.control where id=1`))[0];
