@@ -167,6 +167,23 @@ no deterministic logic changed (the signal-generator cooldown fix was NOT deploy
 - Rollback: redeploy `f606f61` (executor v90 bundle `486f6192…`).
 - DeepSeek remains an order-free observer; any authority needs its own A/B on these candidates.
 
+
+### 7b. Operator architecture: sensors prepare evidence, GPT + DeepSeek decide (2026-09-26)
+
+| executor | time UTC | source | change |
+|---|---|---|---|
+| v92 | 05:36 | `06ce484` | SKIP/EXIT on `GPT_JUDGMENT`; strategy HARD bands become evidence (only spread / thin liquidity / fill slippage / incomplete data block BUY) |
+| v93 | 06:00 | codex `partial-retry-reconciliation` | (other operator) partial IOC retry reconciliation |
+| v94 | 06:07 | `b04bc7a` | v93 + V30 non-admission, missing B06133 inputs and chase DEAD-on-real-data become evidence (no pre-AI reject); dual-AI ENTRY (GPT + DeepSeek Flash in parallel, GPT arbitration on a split, unresolved BUY split = no order; `FD1_DUAL_AI_ENTRY=false` = GPT only) |
+| v95 | 06:10 | `3ba70d9` | live regression fix: v92 voided BUY/HOLD answers that also listed a concern (`FD_*_WITH_REASON`: PHA, RARE×2 ENTRY and one HOLD); concerns are now `noted_risks` |
+
+Deterministic and never delegated: MAX_SLOTS 10, 150 USDT × 3 sizing contract, balance, duplicate
+orders/exposure, lease/fencing, order identity, invalid quantity/tick/notional, reconciliation, gateway
+and unknown order outcomes, native exchange stops (hard stop, R5 risk cut, profit lock, trailing — all
+native), stale/malformed data, manual/operator locks. Time exits remain GPT-deferrable (HOLD).
+Each release: frozen sizing/stop/protection/CEC files proven unchanged vs `f606f61`, full node suite,
+Deno check, version pin (the v93 race failed closed), bundle parity.
+
 ## 8. Metrics to watch
 
 Per-trade net of GPT BUYs vs all candidates (selection skill), low-MFE (<0.5% in 60m) share, BUY rate,
