@@ -37,6 +37,17 @@ async function deepseekEmergency(result,{p,packet,generation,now}){
        identity.snapshot_at_ms!==snapshot||recordedHash!==snapshotHash||arb.snapshot_hash!==snapshotHash||
        arb.deepseek_snapshot_hash!==snapshotHash||arb.gpt_first_snapshot_hash!==snapshotHash||
        await hash({identity,market})!==snapshotHash)return null;
+    // runHoldReview persists the refreshed FINAL packet when available. Bind that
+    // exact packet to its own frozen snapshot; FIRST and FINAL may legitimately differ.
+    const packetInput=arb.final_input??input,{snapshot:packetIdentityWithHash,...packetMarket}=packetInput,
+      {snapshot_hash:packetSnapshotHash,...packetIdentity}=packetIdentityWithHash;
+    if(packet.symbol!==identity.symbol||packetIdentity.task!=='HOLD'||packetIdentity.symbol!==identity.symbol||
+       packetIdentity.candidate_id!==packet.candidate_id||
+       packetIdentity.position_state?.position_id!==String(p.id)||packetIdentity.position_state?.generation!==generation||
+       !Number.isSafeInteger(packetIdentity.snapshot_at_ms)||packetIdentity.snapshot_at_ms<snapshot||packetIdentity.snapshot_at_ms>now||
+       packetSnapshotHash!==(arb.final_input?arb.final_snapshot_hash:snapshotHash)||
+       await hash({identity:packetIdentity,market:packetMarket})!==packetSnapshotHash||
+       await hash(packet)!==packetIdentity.packet_hash)return null;
     validateAdvisory(a,{packet:{task:'HOLD',candidate_id:identity.candidate_id},snapshot_hash:snapshotHash,market_input:input});
   }catch{return null;}
   return {decision,valid:true,authority:'DEEPSEEK_EMERGENCY_EXIT_ONLY',completed_at_ms:completed,
