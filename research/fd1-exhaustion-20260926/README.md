@@ -83,6 +83,81 @@ What the data does **not** support (so it was not built):
 | 6 prompt weighting | supported | trend-only support, 84% BUY, EV anchored on stop constant |
 | 7 late-stage universe | weakly supported | current sample: return_4h>25% −3.47/trade, day_return>25% −2.48; not in legacy |
 
-## 4–7. Change, risks, selection, A/B
+## 4. What was built (branch `claude/trading-loss-root-cause-analysis-by0cc7`, on top of `f606f61`)
 
-See sections below (A/B filled from `fd1_replay_jobs` run tags `x26-base` / `x26-new`).
+1. `assessment.mjs`: ENTRY input regrouped into `trend_strength` / `current_propulsion` / `fatigue`
+   (independent axes PRICE, FLOW, PARTICIPATION, BOOK; OI deliberately not a fatigue axis).
+2. Same-symbol trade memory (ENTRY only): previous trade minutes since exit, return, MFE, price vs its
+   peak/exit, new high since exit, entries in 24h. Read in the engine snapshot through an injected DB
+   reader (bounded, fail-open); stored in the hashed packet, decision identity unchanged.
+3. Two SOFT categories GPT may cite, never HARD: `EXHAUSTION` (≥2 weak axes; also in FINAL RECHECK on
+   current facts) and `REENTRY_NO_NEW_IMPULSE` (≤60 min after a same-symbol exit, no new high).
+4. ENTRY prompt: the question is "new long at this price, 30–60 min continuation EV", normal pullback vs
+   exhaustion, re-entry question, real exit geometry for downside. "Already rose / near high" stays
+   explicitly not a SKIP reason.
+5. CEC0040 shown as a strategy-wide base rate; `effective_allowed` removed from GPT's view.
+6. FINAL RECHECK sees initial vs current assessment.
+7. Signal generator: 30-min cooldown anchored to the new signal bar.
+HOLD prompt/schema byte-identical to production (pinned by test). 474/474 node tests incl. PGlite SQL.
+
+## 5. Risks of each piece
+
+- Exhaustion evidence: can cut normal pullbacks of real winners (observed: 25 of 65 EXHAUSTION skips
+  were winners). Microstructure (BOOK) is noisy and absent in replay.
+- Trade memory: can over-weight one prior failure and skip a genuine second breakout; stale memory if
+  the regime changed (limited to 24h, 60-min flag window).
+- Hard cooldown: misses fast re-breakouts; re-entries were not worse on average.
+- CEC weighting: a strategy-wide number can override a symbol's own strength; a raw REJECT label reads
+  like a veto.
+- Prompt strengthening: SKIP bias (observed: BUY rate 91% → 65%); more malformed SKIP attempts
+  (invalid answers 50 → 109, all fail closed to no order).
+- More features: longer input, duplicated evidence; mitigated by axis grouping.
+
+## 6. Real-GPT A/B (order-free replay, same model, REPLAY mode, same candidates)
+
+BASE = production modules of `f606f61` (prompt hash `6861e409…`, verified in CI before deploy);
+NEW = this branch. 780 current-generator candidates (09-17..09-26) + 300 seeded legacy (09-02..16).
+Outcome = live R5 exit simulated on 1m klines from the decision close, 450 notional, 0.1% fees
+(validated: sim mean −0.180% vs realized −0.185% on 389 real trades). Cost 10.63 USD.
+
+| window | BASE BUY n / net / avg / PF | NEW BUY n / net / avg / PF | prevented losers | missed winners |
+|---|---|---|---:|---:|
+| 12h | 44 / −114.9 / −2.61 / 0.47 | 32 / −34.0 / −1.06 / 0.72 | 11 (−94.8) | 1 (+13.8) |
+| 24h | 111 / −248.5 / −2.24 / 0.53 | 84 / −125.1 / −1.49 / 0.64 | 21 (−173.9) | 7 (+55.4) |
+| 48h | 205 / −321.5 / −1.57 / 0.65 | 161 / −208.5 / −1.30 / 0.70 | 32 (−255.8) | 15 (+124.3) |
+| 7d | 606 / −952.2 / −1.57 / 0.67 | 429 / −580.5 / −1.35 / 0.71 | 112 (−910.1) | 71 (+533.2) |
+| all current | 707 / −908.4 / −1.28 / 0.73 | 505 / −576.1 / −1.14 / 0.75 | 125 (−995.0) | 86 (+663.2) |
+| legacy sample | 224 / −346.4 / −1.55 / 0.70 | 149 / −192.1 / −1.29 / 0.75 | 55 (−456.8) | 28 (+249.9) |
+
+Controls: PROM 02:16 and GRASS 02:20 stay BUY in NEW; GRASS 02:49 becomes ABSTAIN; the other 12h
+losers (ARK, PROM 04:07, LDO, SEI×2, EIGEN, WLD) are still BUY. Low-MFE share of BUYs 11.2% → 9.7%.
+
+**Selection skill test**: keep NEW's number of trades but choose them at random from BASE's BUYs
+(20,000 draws): current p=0.29, legacy p=0.155. Skips citing EXHAUSTION averaged −1.38 (base −1.28).
+The gain is not distinguishable from trading less.
+
+## 7. Decision
+
+Not deployed to production. The package lowers loss mainly by removing ~30% of trades without
+demonstrated selection skill, misses 86 winners, and doubles invalid answers — the "trade less"
+outcome this task explicitly excludes. Production remains executor v90 / `f606f61`; nothing was merged
+to `main` (a merge would also fire `main.deploy-supabase.yml` through the release branch's migrations).
+The generator cooldown fix is kept on the branch but not deployed (64 affected signals, −2.10 vs −1.45,
+not significant).
+
+What is certain: the losses were not a stop, execution or recheck failure; the universe is negative-EV
+under the current exit; single snapshots do not separate the winners from the "strong but fading"
+losers; CEC's label is a schedule, not evidence. What would move the needle is a signal that is not in
+the entry snapshot (path after entry, regime/breadth), which is a different project than prompt edits.
+
+## 8. Metrics to watch
+
+Per-trade net of GPT BUYs vs all candidates (selection skill), low-MFE (<0.5% in 60m) share, BUY rate,
+invalid-answer rate, re-entries within 60 min without a new high, candidate-universe 12h/24h average.
+
+## Reproduction
+
+`scripts/`: `parse.py` (exports) → `build.mjs` (production `computeFacts` + R5 sim) → `a*.py`, `ml.py`,
+`combo.py`, `models.py`, `ab.py`, `ab2.py`. DB research tables (RLS, service only): `research_exh_k1`
+(408,405 1m klines = claude_k1 cache + gap fetch), `research_exh_oi`, `research_exh_windows`,
+`research_x26_jobs`; A/B answers in `fd1_replay_jobs` tags `x26-base` / `x26-new`.
