@@ -195,3 +195,18 @@ invalid-answer rate, re-entries within 60 min without a new high, candidate-univ
 `combo.py`, `models.py`, `ab.py`, `ab2.py`. DB research tables (RLS, service only): `research_exh_k1`
 (408,405 1m klines = claude_k1 cache + gap fetch), `research_exh_oi`, `research_exh_windows`,
 `research_x26_jobs`; A/B answers in `fd1_replay_jobs` tags `x26-base` / `x26-new`.
+
+## Live operational verification (2026-09-26, executor v95 -> v97)
+
+- First full cycle on the AI-decides path: JELLYJELLYUSDT. 09:06 ENTRY SKIP (sell wall, premium);
+  09:13 ENTRY BUY with noted_risks (SELL_WALL, EXHAUSTION kept as risks, decision kept) -> RECHECK SKIP
+  (buyer retreat); 09:27 ENTRY BUY -> RECHECK BUY -> filled 150 USDT x3; 10:08 GPT HOLD (valid; DeepSeek
+  shadow agreed); 10:15 native profit-lock stop closed it at +5.95 USDT (peak +2.8%).
+- RECHECK SKIPs on v95 (ARK, VELODROME, 2Z x2) would each have hit the -2.5% stop (counterfactual -15.6 USDT).
+- 06:53-08:25 OpenAI `insufficient_quota / credit_balance_exhausted` (HTTP 429): GPT ABSTAIN, no orders.
+- 60s capture (CAPTURE-CONTEXT-2, executor v97 deployed separately 06:26) was UNAVAILABLE for about half of
+  calls: micro rows were persisted only 4 min after signal/entry. Fixed DB-side (sql/capture-coverage-20260926.sql):
+  rolling windows for NEW V17 signals and OPEN positions, lookback 95s.
+- 09:42-10:07 database outage: checkpoint write took 270s, autovacuum could not start, Postgres crashed and
+  recovered at 10:07 (DB 44.8 GB; scanner_candidates 14 GB). The capture worker exits on a stale control
+  (>90s) and was redeployed by re-running `doa-capture-release` run 36145245186 (10:20, success).
