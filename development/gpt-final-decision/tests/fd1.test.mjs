@@ -24,20 +24,23 @@ test('replay mode withholds the book without a HARD data flag; live requires it'
   assert.equal(r.facts.values.spread_bps,null);assert.equal(riskFlags(r).flags.DATA_INCOMPLETE.level,'CLEAR');
   const l=await entry({src:{book:null}});assert.equal(riskFlags(l).flags.DATA_INCOMPLETE.level,'HARD');
 });
-test('BUY needs >=2 up-side facts incl. a trend fact, and no HARD risk',async()=>{
+test('BUY: GPT decides; the server only checks cited facts really point up and order-safety HARD bands',async()=>{
   const p=await entry();
   assert.equal(validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'상승 지속'}),p).decision,'BUY');
-  assert.throws(()=>validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',reasons:[],support:['return_5m'],n:'x'}),p),/REQUIRES_SUPPORT/);
-  assert.throws(()=>validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',reasons:[],support:['spread_bps','funding_rate'],n:'x'}),p),/TREND_FACT/);
+  // (2026-09-26 operator principle) one verified up-fact suffices; no model-imposed count or trend-fact rule.
+  assert.equal(validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',reasons:[],support:['return_5m'],n:'x'}),p).decision,'BUY');
+  assert.equal(validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',reasons:[],support:['spread_bps','funding_rate'],n:'x'}),p).decision,'BUY');
+  assert.throws(()=>validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',reasons:[],support:[],n:'x'}),p),/REQUIRES_SUPPORT/);
   const down=await entry({step:-.001},{referenceClose:.5});
-  assert.throws(()=>validateDecision(entryWire({t:'ENTRY',c:down.candidate_id,d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'x'}),down),/REQUIRES_SUPPORT/);
+  assert.throws(()=>validateDecision(entryWire({t:'ENTRY',c:down.candidate_id,d:'BUY',reasons:[],support:['return_5m'],n:'x'}),down),/REQUIRES_SUPPORT/,'a falling return cited as support is dropped, leaving none');
+  assert.deepEqual(validateDecision(entryWire({t:'ENTRY',c:down.candidate_id,d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'x'}),down).rejected_support,['return_5m']);
   assert.deepEqual(validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m','btc_return_15m'],n:'x'}),p).rejected_support,[]);
   const wide=await entry({src:{book:{bids:[[1.0,5000]],asks:[[1.2,5000]]}}});
   assert.throws(()=>validateDecision(entryWire({t:'ENTRY',c:wide.candidate_id,d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'x'}),wide),/HARD_RISK/);
 });
 test('SKIP must name a category actually breached; "already rose" is impossible',async()=>{
   const p=await entry();
-  assert.throws(()=>validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'SKIP',reasons:[{r:'MOMENTUM_FADED',e:['return_5m']}],support:[],n:'이미 많이 올랐다'}),p),/REASON_NOT_PRESENT/);
+  assert.throws(()=>validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'SKIP',reasons:[{r:'MOMENTUM_FADED',e:['return_5m']}],support:[],n:'이미 많이 올랐다'}),p),/REASON_NOT_PRESENT/,'a band GPT claims must really be breached');
   assert.throws(()=>validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'SKIP',reasons:[],support:[],n:'x'}),p),/REQUIRES_CATEGORY/);
   assert.ok(!Object.keys(CATEGORIES).some(k=>/RISEN|OVEREXT|HIGH_RETURN|VOLATIL|TIME/.test(k)));
   const sell=await entry({buy:.3});
@@ -71,11 +74,11 @@ test('payload: fixed prefix per task, identity-free cache key, no numbers from t
   assert.equal(a.prompt_cache_key,'boo-fd1-entry');assert.equal(b.prompt_cache_key,'boo-fd1-hold');assert.notEqual(a.input[0].content,b.input[0].content);
   assert.ok(Buffer.byteLength(a.input[1].content)<8000);
 });
-test('per-snapshot schema: only breached categories and currently-up facts are selectable',async()=>{
+test('per-snapshot schema: breached categories, EV_UNFAVORABLE and GPT_JUDGMENT are selectable; support is currently-up facts',async()=>{
   const calm=await entry(),s=wireSchema('ENTRY',calm);
-  // (2026-09-25) No category is breached, so no category can be a reason. SKIP stays possible
-  // only as EV_UNFAVORABLE, GPT's own expected-value verdict, citing server-verified bearish facts.
-  assert.deepEqual(s.properties.reasons.items.properties.r.enum,['EV_UNFAVORABLE']);
+  // (2026-09-26) No category is breached; GPT can still SKIP on EV or on its own judgment.
+  assert.deepEqual(s.properties.reasons.items.properties.r.enum,['EV_UNFAVORABLE','GPT_JUDGMENT']);
+  assert.ok(s.properties.d.enum.includes('SKIP'));
   const bear=s.properties.bearish.items.enum;
   assert.ok(bear.length>=2&&bear.every(k=>s.properties.reasons.items.properties.e.items.enum.includes(k)));
   assert.ok(!bear.includes('return_5m')&&!bear.includes('taker_buy_ratio_5m'),'a rising return or buyer tape is never bearish');
@@ -103,8 +106,8 @@ test('GPT BUY: confidence and EV are recorded and flagged, never a gate',async()
     confidence:.05,ev:'NEGATIVE',upside_pct:.5,downside_pct:2,n:'상승'}),p);
   assert.equal(low.decision,'BUY','a low-confidence BUY is still a BUY');
   assert.equal(low.confidence,.05);assert.deepEqual(low.consistency_flags,['BUY_WITH_NEGATIVE_EV','BUY_WITH_DOWNSIDE_ABOVE_UPSIDE']);
-  // BUY's own rules are unchanged: two verified up-facts incl. a trend fact.
-  assert.throws(()=>validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',support:['return_5m'],n:'x'}),p),/REQUIRES_SUPPORT/);
+  // BUY needs one server-verified up-fact; a misdirected cite is dropped, never counted.
+  assert.throws(()=>validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',support:[],n:'x'}),p),/REQUIRES_SUPPORT/);
   const b=validateDecision(entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',support:['return_5m','taker_buy_ratio_5m'],
     bearish:['return_5m','accel_5m_vs_15m'],invalidation:[{fact:'return_5m',op:'BELOW',value:0}],n:'상승'}),p);
   assert.deepEqual(b.rejected_bearish,['return_5m'],'a rising fact cited as bearish is dropped, never counted');
@@ -112,17 +115,21 @@ test('GPT BUY: confidence and EV are recorded and flagged, never a gate',async()
   assert.deepEqual(b.invalidation_conditions,[{fact:'return_5m',op:'BELOW',value:0}]);
   assert.deepEqual(b.bullish_evidence,['return_5m','taker_buy_ratio_5m']);
 });
-test('EV_UNFAVORABLE SKIP: >=2 verified bearish facts incl. price/flow, NEGATIVE EV and downside > upside',async()=>{
+test('EV_UNFAVORABLE / GPT_JUDGMENT SKIP: cited facts must be real; EV fields are recorded, not gates',async()=>{
   const p=await entry(); // calm uptrend: accelerations marginally negative, buyer_share_change 0
   const w=x=>entryWire({t:'ENTRY',c:p.candidate_id,d:'SKIP',reasons:[{r:EV_SKIP,e:['accel_5m_vs_15m','accel_15m_vs_60m']}],
     bearish:['accel_5m_vs_15m','accel_15m_vs_60m'],ev:'NEGATIVE',upside_pct:.5,downside_pct:1.5,n:'기대값 불리',...x});
   const ok=validateDecision(w(),p);assert.equal(ok.decision,'SKIP');assert.equal(ok.reasons[0].category,EV_SKIP);
   assert.equal(ok.reasons[0].level,'EV');
   assert.throws(()=>validateDecision(w({reasons:[{r:EV_SKIP,e:['return_5m','accel_5m_vs_15m']}]}),p),/BEARISH_FACTS/,'"already rose" can never be cited');
-  assert.throws(()=>validateDecision(w({reasons:[{r:EV_SKIP,e:['accel_5m_vs_15m']}]}),p),/BEARISH_FACTS/,'one fact is not enough');
-  assert.throws(()=>validateDecision(w({reasons:[{r:EV_SKIP,e:['buyer_share_change','book_imbalance_25bps']}]}),p),/TREND_FACT/);
-  assert.throws(()=>validateDecision(w({ev:'POSITIVE'}),p),/NEGATIVE_EV/);
-  assert.throws(()=>validateDecision(w({upside_pct:2,downside_pct:1}),p),/DOWNSIDE_ABOVE_UPSIDE/);
+  assert.equal(validateDecision(w({reasons:[{r:EV_SKIP,e:['accel_5m_vs_15m']}]}),p).decision,'SKIP','one verified bearish fact is enough');
+  assert.deepEqual(validateDecision(w({ev:'POSITIVE'}),p).consistency_flags,['SKIP_WITH_POSITIVE_EV'],'EV is GPT\'s record, flagged not refused');
+  assert.deepEqual(validateDecision(w({upside_pct:2,downside_pct:1}),p).consistency_flags,['SKIP_NEGATIVE_EV_WITHOUT_DOWNSIDE_EDGE']);
+  // GPT's own judgment: any real facts, no band required; an absent fact is refused.
+  const j=validateDecision(w({reasons:[{r:'GPT_JUDGMENT',e:['return_60m','taker_buy_ratio_5m']}]}),p);
+  assert.equal(j.reasons[0].category,'GPT_JUDGMENT');assert.equal(j.reasons[0].level,'JUDGMENT');
+  assert.throws(()=>validateDecision(w({reasons:[{r:'GPT_JUDGMENT',e:[]}]}),p),/JUDGMENT_REQUIRES_FACTS/);
+  assert.throws(()=>validateDecision(w({reasons:[{r:'GPT_JUDGMENT',e:['position_return']}]}),p),/ENUM|JUDGMENT_REQUIRES_FACTS/,'position facts do not exist for ENTRY');
   // A category SKIP keeps its own rule: the category must be breached now.
   assert.throws(()=>validateDecision(w({reasons:[{r:'MOMENTUM_FADED',e:['return_5m']}]}),p),/REASON_NOT_PRESENT/);
 });

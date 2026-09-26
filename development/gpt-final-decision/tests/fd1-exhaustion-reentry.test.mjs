@@ -32,7 +32,7 @@ test('1. early strength with strong propulsion: no fatigue, no new SKIP category
   const p=await packet({...strong,...noHist});
   assert.deepEqual(fatigueAxes(p.facts.values).weak,[]);assert.ok(!soft(p).includes('EXHAUSTION'));assert.ok(!('REENTRY_NO_NEW_IMPULSE' in riskFlags(p).flags));
   assert.equal(buy(p,['return_5m','taker_buy_ratio_5m','accel_5m_vs_15m']).decision,'BUY');
-  assert.deepEqual(wireSchema('ENTRY',p).properties.d.enum,['BUY','ABSTAIN'],'nothing breached: SKIP is not even offered');
+  assert.deepEqual(wireSchema('ENTRY',p).properties.reasons.items.properties.r.enum,['GPT_JUDGMENT'],'no band breached: SKIP only on GPT\'s own judgment');
 });
 test('2. normal short pullback inside a strong trend (one axis) is not exhaustion',async()=>{
   const v={...strong,return_5m:-.001,accel_5m_vs_15m:-.007,accel_15m_vs_60m:.004,taker_buy_ratio_5m:.51,buyer_share_change:-.03,minutes_since_high_60m:4,distance_high_60m:-.004};
@@ -76,7 +76,7 @@ test('7. after a loss, a completely new strong wave (new high, >1h later) is not
 });
 test('8. a negative CEC alone on a very strong symbol creates no SKIP route and is shown as a base rate',async()=>{
   const p=await packet({...strong,...noHist},{action:'REJECT',effectiveAllowed:false,ready:true,predictionUsdt:-4.9});
-  assert.deepEqual(wireSchema('ENTRY',p).properties.d.enum,['BUY','ABSTAIN']);
+  assert.deepEqual(wireSchema('ENTRY',p).properties.reasons.items.properties.r.enum,['GPT_JUDGMENT'],'CEC creates no category; GPT alone may decide to skip');
   const cec=modelInput(p).model_judgments.cec0040;
   assert.equal(cec.strategy_base_rate_usdt_per_trade,-4.9);assert.equal(cec.symbol_specific,false);assert.ok(!('effective_allowed' in cec));
   assert.match(cec.note,/not a judgment of this symbol/);
@@ -118,9 +118,10 @@ test('history reader is bounded and fail-open; the engine filters trades closing
   const r=await readHistory(async()=>[{exit_at_ms:T-1},{exit_at_ms:T}],{symbol:'X',trigger_at_ms:T});
   assert.equal(r.trades.length,1);
 });
-test('HOLD prompt and schema are byte-identical to production; memory stays out of HOLD and FINAL RECHECK',async()=>{
-  assert.equal(await hash(PROMPTS.HOLD),'f7af874f89f2c46e00842a4016a429ab37a9174cb0ea1177ae45c6516351ffbd');
-  assert.equal(await hash(wireSchema('HOLD')),'472884881356fbca1b2a7f015b11a0473de4511b48b18a03fc383ac1e6c043ef');
+test('HOLD: GPT may EXIT on its own judgment; memory stays out of HOLD and FINAL RECHECK',async()=>{
+  assert.match(PROMPTS.HOLD,/GPT_JUDGMENT/);assert.match(PROMPTS.HOLD,/시간은 청산 사유가 아니다/);
+  const holdEnum=wireSchema('HOLD').properties.reasons.items.properties.r.enum;assert.ok(holdEnum.includes('GPT_JUDGMENT'));
+  for(const k of HISTORY_KEYS)assert.ok(!wireSchema('HOLD').properties.support.items.enum.includes(k),k);
   for(const k of HISTORY_KEYS){assert.ok(!PROMPTS.HOLD.includes(k),k);assert.ok(!RECHECK_PROMPT.includes(k),k);assert.ok(!INITIAL_KEYS.includes(k),k);assert.ok(PROMPTS.ENTRY.includes(k),k);}
   assert.match(PROMPTS.ENTRY,/지금 이 가격에서 새 롱을 넣은 뒤 30~60분 동안 추가 상승할 확률과 기대값/);
   assert.match(PROMPTS.ENTRY,/"이미 많이 올랐다", "변동성이 높다", "신고가 근처", "단기 수익률이 높다"는 그 자체로 SKIP 사유가 아니다/);
