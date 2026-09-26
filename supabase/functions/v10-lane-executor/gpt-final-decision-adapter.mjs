@@ -8,6 +8,7 @@ import {configFromControl} from '../_shared/gpt-final-review/coordinator.mjs';
 import {recordHoldShadow,shadowJobKey,holdShadowEnabled,HOLD_RELEASE} from '../_shared/gpt-final-decision/hold-shadow.mjs';
 import {revalidateArbitration,DUAL_VERSION} from '../_shared/gpt-final-decision/dual.mjs';
 import {hash} from '../_shared/gpt-final-decision/api.mjs';
+import {validateAdvisory} from '../_shared/gpt-final-decision/advisory.mjs';
 export {HOLD_RELEASE,holdShadowEnabled};
 export {FD1_HOLD_POLICY_VERSION,TIME_REASONS};
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
@@ -17,13 +18,27 @@ function authorized(c,apiKey){return c.mode==='ENFORCE'&&c.modeValid!==false&&c.
   c.apiBudgetUsd>=0.10&&Number.isInteger(c.maxCalls)&&c.maxCalls>0&&!!apiKey;}
 function emergencyEligible(c,deepseekKey){return c?.mode==='ENFORCE'&&c?.modeValid!==false&&c?.enforceApproved===true&&
   typeof c?.approvalRef==='string'&&c.approvalRef.length>0&&!!deepseekKey;}
-function deepseekEmergency(result,{p,generation,now}){
+async function deepseekEmergency(result,{p,packet,generation,now}){
   const ds=result?.arbitration?.deepseek,a=ds?.answer,decision=a?.decision_preference;
   if(ds?.valid!==true||!['HOLD','PROTECT','EXIT'].includes(decision)||a?.recommended_action!==decision)return null;
   const completed=Number(ds.completed_at_ms),snapshot=Number(ds.snapshot_at_ms),snapshotHash=String(ds.snapshot_hash??'');
   if(!Number.isSafeInteger(completed)||completed>now||now-completed>HOLD_POLICY.exitMaxAgeMs||
      !Number.isSafeInteger(snapshot)||snapshot>now||now-snapshot>HOLD_POLICY.exitMaxAgeMs||
-     !/^[a-f0-9]{64}$/.test(snapshotHash))return null;
+     completed<snapshot||!/^[a-f0-9]{64}$/.test(snapshotHash))return null;
+  // A persisted valid flag alone cannot grant authority. Rebind the exact frozen
+  // HOLD snapshot, position generation and supported evidence when consuming it.
+  try{
+    const arb=result.arbitration,input=arb.initial_input,{snapshot:identityWithHash,...market}=input,
+      {snapshot_hash:recordedHash,...identity}=identityWithHash;
+    if(arb.version!==DUAL_VERSION||packet?.task!=='HOLD'||identity.task!=='HOLD'||
+       packet.position?.position_id!==String(p.id)||packet.position?.generation!==generation||
+       identity.position_state?.position_id!==String(p.id)||identity.position_state?.generation!==generation||
+       identity.symbol!==String(p.symbol).toUpperCase()||packet.candidate_id!==identity.candidate_id||
+       identity.snapshot_at_ms!==snapshot||recordedHash!==snapshotHash||arb.snapshot_hash!==snapshotHash||
+       arb.deepseek_snapshot_hash!==snapshotHash||arb.gpt_first_snapshot_hash!==snapshotHash||
+       await hash({identity,market})!==snapshotHash)return null;
+    validateAdvisory(a,{packet:{task:'HOLD',candidate_id:identity.candidate_id},snapshot_hash:snapshotHash,market_input:input});
+  }catch{return null;}
   return {decision,valid:true,authority:'DEEPSEEK_EMERGENCY_EXIT_ONLY',completed_at_ms:completed,
     snapshot_at_ms:snapshot,snapshot_hash:snapshotHash,positionId:String(p.id),generation};
 }
@@ -49,6 +64,7 @@ function applyEmergency(step,e,{p,generation,now,bid,state,timeCandidate,softTri
  * @returns {close:boolean, reason:string|null, fallback?:boolean, state:object, review?:object}
  */
 export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTrigger=null,exitContext=null}){
+  if(p.state!=='OPEN'||!(Number(p.remaining_quantity)>0))return {close:false,reason:'FD1_POSITION_NOT_OPEN',state:meta.fd1Hold??initialHoldState(p.entry_price)};
   const store=testHooks?.store??new SupabaseReviewStore(db),apiKey=testHooks?.apiKey??getenv('OPENAI_API_KEY');
   let prior=meta.fd1Hold&&meta.fd1Hold.version===FD1_HOLD_POLICY_VERSION?meta.fd1Hold:
     {...initialHoldState(p.entry_price),...(meta.fd1Hold??{}),version:FD1_HOLD_POLICY_VERSION,pending:null,holdUntil:null};
@@ -69,7 +85,7 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
       completed_at_ms:r.completed_at_ms,snapshot_at_ms:r.final_snapshot_at_ms,snapshot_hash:r.arbitration?.final_snapshot_hash??null,
       refresh_error:r.arbitration?.refresh_error??null};
     if(row.state==='DONE'&&identityOk){
-      const emergency=deepseekEmergency(r,{p,generation,now});
+      const emergency=await deepseekEmergency(r,{p,packet:row.record.packet,generation,now});
       if(emergency)return {state:row.state,...emergency,refresh_error:null};
     }
     return {state:row.state,decision:r.decision,valid:false,authority:null,completed_at_ms:r.completed_at_ms,
@@ -90,8 +106,10 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
         if(!emergencyEligible(config,deepseekKey))return null;
         const out=await (testHooks?.review??runHoldReview)({apiKey:'',deepseekKey,exitContext,position,
           event:step.start.event,timeCandidate,stopStage:state.protectionStage??null});
-        const e=deepseekEmergency(out.result,{p,generation,now});
-        return e?applyEmergency(step,e,{p,generation,now,bid,state,timeCandidate,softTrigger,dynamics,why}):null;
+        // Provider completion occurs after the observation that started this tick.
+        const consumedAt=(testHooks?.now??Date.now)();
+        const e=await deepseekEmergency(out.result,{p,packet:out.packet,generation,now:consumedAt});
+        return e?applyEmergency(step,e,{p,generation,now:consumedAt,bid,state,timeCandidate,softTrigger,dynamics,why}):null;
       };
     if(!authorized(config,apiKey)){
       const emergency=await emergencyReview('GPT_UNAVAILABLE');

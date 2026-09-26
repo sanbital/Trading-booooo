@@ -1,5 +1,6 @@
 import {finalFields} from '../../../test-support/arbitration-fixtures.mjs';
-import {dualEntryDecision} from '../../../supabase/functions/_shared/gpt-final-decision/dual.mjs';
+import {dualEntryDecision,frozenReview,DUAL_VERSION} from '../../../supabase/functions/_shared/gpt-final-decision/dual.mjs';
+import {positionGeneration} from '../../../supabase/functions/_shared/exit-authority.mjs';
 import {buildDecisionPacket,MODEL} from '../../../supabase/functions/_shared/gpt-final-decision/api.mjs';
 import {computeFacts} from '../../../supabase/functions/_shared/gpt-final-decision/facts.mjs';
 import {src as marketSource} from './fixtures.mjs';
@@ -23,7 +24,7 @@ function harness(decision,{valid=true,config=cfg}={}){
     }});
   return {store,tasks,flush:()=>Promise.all(tasks)};
 }
-const pos={id:'pos-1',signal_id:'s1',symbol:'ABCUSDT',entry_price:1,entry_at:new Date(T-3600000).toISOString()};
+const pos={id:'pos-1',signal_id:'s1',symbol:'ABCUSDT',state:'OPEN',remaining_quantity:10,entry_price:1,entry_at:new Date(T-3600000).toISOString()};
 const st=(peak=1.05)=>({peakPrice:peak,stopPrice:.99,lastHighAt:T-50*MIN,protectionStage:'RISK_CUT'});
 async function tick(meta,now,{time='V17_MOMENTUM_STALE',bid=1.03,peak=1.05}={}){return fd1HoldTick({},pos,{meta,state:st(peak),bid,now,timeCandidate:time});}
 
@@ -53,12 +54,17 @@ test('GPT unavailable / budget exhausted keeps protection when no validated emer
 });
 test('GPT budget exhaustion promotes only a fresh validated DeepSeek HOLD reviewer for existing positions',async()=>{
   const store=new MemoryReviewStore();store.claim=async()=>{throw Error('API_BUDGET_EXHAUSTED');};
-  const ds=(decision)=>({result:{arbitration:{deepseek:{valid:true,answer:{decision_preference:decision,recommended_action:decision},
-    completed_at_ms:T,snapshot_at_ms:T,snapshot_hash:'d'.repeat(64)}}}});
-  setFd1HoldTestHooks({store,apiKey:'k',deepseekKey:'ds',config:cfg,schedule:()=>{},review:async()=>ds('EXIT')});
+  const packet=await buildDecisionPacket({task:'HOLD',subjectId:'emergency',symbol:pos.symbol,dataMode:'LIVE',facts:computeFacts(marketSource(T),{asOf:T}),position:{positionId:pos.id,generation:positionGeneration(pos)}});
+  const shared=await frozenReview(packet,{snapshotAtMs:T});
+  const ds=(decision)=>({packet,result:{arbitration:{version:DUAL_VERSION,initial_input:shared.market_input,snapshot_hash:shared.snapshot_hash,
+    gpt_first_snapshot_hash:shared.snapshot_hash,deepseek_snapshot_hash:shared.snapshot_hash,deepseek:{valid:true,
+    answer:{task:'HOLD',candidate_id:packet.candidate_id,snapshot_hash:shared.snapshot_hash,decision_preference:decision,recommended_action:decision,
+      confidence:.8,thesis_state:'WEAKENING',bullish_evidence:[],bearish_evidence:['facts.trend.return_5m'],risk_flags:[],trajectory_interpretation:'Observed decline',strongest_counterargument:'Recovery possible',reason:'Risk evidence'},
+    completed_at_ms:T,snapshot_at_ms:T,snapshot_hash:shared.snapshot_hash}}}});
+  setFd1HoldTestHooks({store,apiKey:'k',deepseekKey:'ds',config:cfg,now:()=>T,schedule:()=>{},review:async()=>ds('EXIT')});
   let r=await tick({},T);assert.equal(r.close,true);assert.equal(r.reason,'FD1_DEEPSEEK_EXIT');assert.equal(r.fallback,true);
   assert.equal(r.approval.authority,'DEEPSEEK_EMERGENCY_EXIT_ONLY');
-  setFd1HoldTestHooks({store,apiKey:'k',deepseekKey:'ds',config:cfg,schedule:()=>{},review:async()=>ds('PROTECT')});
+  setFd1HoldTestHooks({store,apiKey:'k',deepseekKey:'ds',config:cfg,now:()=>T,schedule:()=>{},review:async()=>ds('PROTECT')});
   r=await tick({},T);assert.equal(r.close,false);assert.equal(r.reason,'FD1_DEEPSEEK_PROTECT');assert.ok(r.state.protectLevel>0);
 });
 test('events: deterioration and big moves start a review; GPT EXIT closes only when fresh; spacing respected',async()=>{

@@ -153,10 +153,25 @@ test('T28 hard protection cannot be downgraded through legacy soft retirement',a
  await assert.rejects(()=>f.api().ensure('position-1',{...hard,stopPrice:96,legacySoftOrderIds:[first.clientId]}),/HARD_FLOOR_RETIREMENT_FORBIDDEN/);
  assert.equal(f.orders.get(first.clientId).algoStatus,'NEW');
 });
-test('T28 legacy soft replacement failure never cancels prior resident protection',async()=>{
+test('T28 legacy soft protection cannot be replaced by a lower hard floor',async()=>{
  const f=fixture(),first=await f.api().ensure('position-1',{...f.request,stopPrice:102,lastPrice:104});
  f.exchange.createStop=async()=>{throw Error('TIMEOUT')};
  const r=await f.api().ensure('position-1',{...f.request,exitClass:'HARD_SAFETY',authorityVersion:'AI_EXIT_AUTHORITY_2',legacySoftOrderIds:[first.clientId]});
- assert.equal(r.status,'RECONCILIATION_PENDING');assert.equal(f.calls.filter(x=>x[0]==='cancel').length,0);
+ assert.equal(r.status,'PROTECTED');assert.equal(f.calls.filter(x=>x[0]==='cancel').length,0);
+ assert.equal(f.calls.filter(x=>x[0]==='create').length,1);
  assert.equal(f.orders.get(first.clientId).algoStatus,'NEW');
+});
+test('A-D resident 97.5 -> 101 -> 102 is ACK-before-cancel and rejects lower floors',async()=>{
+ const f=fixture(),hard=await f.api().ensure('position-1',f.request);
+ const req={...f.request,stopPrice:101,lastPrice:104,exitClass:'SOFT_PROTECTION',authorityVersion:'AI_EXIT_AUTHORITY_2',protectionReason:'V17_PROFIT_LOCK'};
+ const one=await f.api().ensure('position-1',req);assert.equal(f.orders.get(one.clientId).triggerPrice,101);
+ assert.equal(f.orders.get(hard.clientId).algoStatus,'CANCELED');
+ for(const floor of [100,97.5]){const r=await f.api().ensure('position-1',{...req,stopPrice:floor});assert.equal(r.clientId,one.clientId);}
+ const create=f.exchange.createStop;f.exchange.createStop=async()=>{throw Error('GW_400:Order would immediately trigger.')};
+ await f.api().ensure('position-1',{...req,stopPrice:102});assert.equal(f.orders.get(one.clientId).algoStatus,'NEW');
+ f.exchange.createStop=create;const two=await f.api().ensure('position-1',{...req,stopPrice:102});
+ assert.equal(f.orders.get(two.clientId).triggerPrice,102);
+ assert.ok(f.calls.findIndex(x=>x[0]==='create'&&x[1]===two.clientId)<f.calls.findIndex(x=>x[0]==='cancel'&&x[1]===one.clientId));
+ assert.equal(f.orders.get(two.clientId).quantity,10);assert.equal(f.orders.get(two.clientId).reduceOnly,'true');
+ assert.equal(f.orders.get(two.clientId).positionSide,'BOTH');assert.equal(f.orders.get(two.clientId).type,'STOP_MARKET');
 });
