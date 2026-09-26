@@ -1,4 +1,4 @@
-import {Book,Flow,WeightBudget,VERSION,iso,inWindow,streamURLs,normalizeSymbol} from './core.mjs';
+import {Book,Flow,WeightBudget,VERSION,iso,inWindow,streamURLs,normalizeSymbol,transportFresh} from './core.mjs';
 import {randomUUID} from 'node:crypto';
 import {summarizeCapture} from './context.mjs';
 const endpoint=process.env.CAPTURE_ENDPOINT;
@@ -33,19 +33,21 @@ function openSocket(s){
   const ws=new WebSocket(urls.book),marketWs=new WebSocket(urls.market);
   s.socket=ws;
   s.marketSocket=marketWs;
+  const retire=()=>{if(s.socket!==ws)return;s.socket=null;s.marketSocket=null;s.book.reset();s.flow.complete=false;s.reconnectAt=Date.now()+5000;ws.close();marketWs.close();};
   const message=msg=>{try{
     if(s.socket!==ws)return;
     const e=JSON.parse(msg.data).data;const now=Date.now();
     if(!e || (e.st!==undefined && +e.st!==1) || e.s && e.s!==s.symbol)return;
+    if(!transportFresh(e,now))throw Error('TRANSPORT_EVENT_STALE_OR_FUTURE');
     if(e.e==='depthUpdate')s.book.event(e,now);
     if(e.e==='aggTrade'){s.flow.event(e,now);s.lastTradeAt=now;}
     if(e.e==='forceOrder')s.flow.liquidation+=Number(e.o.ap||e.o.p)*Number(e.o.z);
     if(e.e==='kline' && e.k.x){const k=e.k;s.lastCandle={at:iso(+k.t),return_1m:+k.c/(+k.o)-1};if(s.candles)enqueue({kind:'candle',symbol:s.symbol,at:iso(+k.t),payload:{open:+k.o,high:+k.h,low:+k.l,close:+k.c,quote_volume:+k.q,taker_buy_quote:+k.Q,exchange_at:iso(+e.E),available_at:iso(now),source:'WS_CLOSED',complete:true}});}
-  }catch(e){wsGaps++;s.book.reset();s.flow.complete=false;ws.close();marketWs.close();s.reconnectAt=Date.now()+5000;log('STREAM_GAP',{symbol:s.symbol,reason:e.message});}};
+  }catch(e){wsGaps++;retire();log('STREAM_GAP',{symbol:s.symbol,reason:e.message});}};
   for(const socket of [ws,marketWs]){
     socket.addEventListener('message',message);
-    socket.addEventListener('error',()=>{if(s.socket===ws){s.book.ready=false;s.flow.complete=false;ws.close();marketWs.close();}});
-    socket.addEventListener('close',()=>{if(s.socket===ws){s.book.reset();s.flow.complete=false;s.reconnectAt=Date.now()+5000;ws.close();marketWs.close();}});
+    socket.addEventListener('error',retire);
+    socket.addEventListener('close',retire);
   }
 }
 async function watch(){
@@ -63,7 +65,7 @@ async function watch(){
     if(x.symbol&&universe.has(x.symbol))return true;
     unavailableSymbols[x.symbol??'INVALID']='NOT_ACTIVE_USDM_PERPETUAL';return false;
   }).map(x=>[x.symbol,x]));
-  for(const [symbol,s] of states)if(!desired.has(symbol)){s.socket.close();s.marketSocket.close();states.delete(symbol);}
+  for(const [symbol,s] of states)if(!desired.has(symbol)){s.socket?.close();s.marketSocket?.close();states.delete(symbol);}
   for(const w of desired.values()){
     if(!normalizeSymbol(w.symbol))continue;
     const s=states.get(w.symbol)||connect(w.symbol,w.candles);
@@ -75,7 +77,7 @@ async function recover(){
   if(busyRest || stop)return;busyRest=true;
   try{
     for(const s of states.values()){
-      if(s.socket.readyState!==WebSocket.OPEN)continue;
+      if(s.socket?.readyState!==WebSocket.OPEN)continue;
       if(s.book.needsCoverageRefresh(Date.now())){
         s.book.reset();coverageRefreshes++;log('COVERAGE_BOUNDARY_RESYNC',{symbol:s.symbol});
       }
@@ -121,10 +123,10 @@ let previousBucket=Math.floor(Date.now()/5000),task=null;
 log('STARTED',{worker_id,protocol_sha256:expected,deadline:iso(deadline)});
 const timer=setInterval(()=>{
   const now=Date.now();
-  if(stop || now>=deadline || now-lastControl>90000 || (!production&&now-boot>14*86400000) || process.memoryUsage().rss>230000000){clearInterval(timer);for(const s of states.values()){s.socket.close();s.marketSocket.close();}log('STOPPED',{reason:stop?'CONTROL_OR_SIGNAL':now>=deadline?'DEADLINE':now-lastControl>90000?'CONTROL_STALE':'RESOURCE_CAP'});setTimeout(()=>process.exit(stop?0:1),1000);return;}
+  if(stop || now>=deadline || now-lastControl>90000 || (!production&&now-boot>14*86400000) || process.memoryUsage().rss>230000000){clearInterval(timer);for(const s of states.values()){s.socket?.close();s.marketSocket?.close();}log('STOPPED',{reason:stop?'CONTROL_OR_SIGNAL':now>=deadline?'DEADLINE':now-lastControl>90000?'CONTROL_STALE':'RESOURCE_CAP'});setTimeout(()=>process.exit(stop?0:1),1000);return;}
   try{
     const b=Math.floor(now/5000);if(b!==previousBucket){bucket(now);previousBucket=b;}
-    for(const s of states.values())if(s.socket.readyState===WebSocket.CLOSED && now>=s.reconnectAt)openSocket(s);
+    for(const s of states.values())if((!s.socket||s.socket.readyState===WebSocket.CLOSED) && now>=s.reconnectAt)openSocket(s);
     void recover();
     if(!task){
       if(now-lastWatch>=15000){lastWatch=now;task=watch();}

@@ -1,7 +1,7 @@
 name: Existing collector coverage recovery release
 on:
   push:
-    branches: [codex/ai-exit-authority-v2-20260926]
+    branches: [codex/capture-transport-backlog-20260926]
     paths: [deployment-evidence/capture-release-request.json]
 permissions:
   contents: read
