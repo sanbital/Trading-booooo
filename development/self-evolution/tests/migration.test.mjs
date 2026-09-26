@@ -8,7 +8,7 @@ test('additive migration, role isolation, claim fencing, scope and immutable bas
  create table public.gpt_final_entry_reviews(job_key text primary key,record jsonb,purpose text,state text,symbol text,snapshot_at timestamptz,created_at timestamptz);
  create table public.v11_long_regime_positions(id uuid,signal_id uuid,symbol text,state text,entry_at timestamptz,closed_at timestamptz,realized_pnl_usdt numeric);
  create table doa_capture.live_micro(kind text,symbol text,at timestamptz,received_at timestamptz,payload jsonb);`);
- await db.exec(sql);const p=baselinePolicy();
+ await db.exec(sql);const p={...baselinePolicy(),policy_version:'POLICY_BASELINE_V104',parent_version:null};
  assert.equal((await db.query('select public.evolution_scope_valid($1::jsonb) ok',[JSON.stringify(p)])).rows[0].ok,true);
  for(const key of ['margin','leverage','withdrawal']){assert.equal((await db.query('select public.evolution_scope_valid($1::jsonb) ok',[JSON.stringify({...p,[key]:2})])).rows[0].ok,false);}
  for(const change of [q=>q.stages.ENTRY.feature_weights=[{feature:'acceleration',weight:null}],q=>q.calibration=[{provider:'gpt',stage:'ENTRY',regime:'BREAKOUT',n:null,correct:0,accuracy:0,lower:0,upper:1,as_of_ms:0,metric:'NET_DIRECTION_60S'}],q=>q.stages.ENTRY.gpt_rubric=null]){const q=structuredClone(p);change(q);assert.equal((await db.query('select evolution_scope_valid($1::jsonb) ok',[JSON.stringify(q)])).rows[0].ok,false);}
@@ -38,4 +38,12 @@ test('additive migration, role isolation, claim fencing, scope and immutable bas
  await assert.rejects(()=>db.query("select evolution_rollback($1,'MODEL_DISLIKES_IT','{}')",[next.policy_version]),/ROLLBACK_REASON/);
  const rolled=(await db.query("select evolution_rollback($1,'POLICY_INTEGRITY','{}') r",[next.policy_version])).rows[0].r;assert.equal(rolled.active,p.policy_version);
  assert.equal((await db.query("select count(*)::int n from evolution_jobs where kind='FULL_REVIEW'")).rows[0].n,1);
+ const capital=(await db.query('select capital_manifest from evolution_control')).rows[0].capital_manifest;
+ await db.exec(await fs.readFile(new URL('../../../supabase/migrations/20260926172019_evolution_v105_baseline.sql',import.meta.url),'utf8'));
+ const rebased=(await db.query('select evolution_active_policy() a')).rows[0].a;
+ assert.equal(rebased.bundle.policy_version,'POLICY_BASELINE_V105');
+ assert.equal(rebased.bundle.parent_version,'POLICY_BASELINE_V104');
+ assert.deepEqual((await db.query('select capital_manifest from evolution_control')).rows[0].capital_manifest,capital);
+ assert.equal((await db.query("select count(*)::int n from evolution_policy_bundles where version='POLICY_BASELINE_V104'")).rows[0].n,1);
+ await assert.rejects(()=>db.exec("update evolution_policy_bundles set sha256=repeat('c',64) where version='POLICY_BASELINE_V105'"),/IMMUTABLE/);
  }finally{await db.close();}});

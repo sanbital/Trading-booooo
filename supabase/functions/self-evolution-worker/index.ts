@@ -12,9 +12,9 @@ export async function tick(store,keys){
  const now=Date.now(),ingested=await store.rpc('evolution_ingest');
  await store.enqueue('monitor:'+Math.floor(now/300000),'MONITOR',{},1);
  await store.enqueue('outcomes:'+Math.floor(now/600000),'OUTCOMES',{},15);
- await store.enqueue('market:'+Math.floor(now/3600000),'MARKET_SCAN',{},30);
- await store.enqueue('patterns:'+Math.floor(now/21600000),'PATTERN_REVIEW',{},50);
- await store.enqueue('full:'+Math.floor(now/86400000),'FULL_REVIEW',{},60);
+ await store.enqueue('market:'+Math.floor(now/3600000),'MARKET_SCAN',{},8);
+ await store.enqueue('patterns:'+Math.floor(now/21600000),'PATTERN_REVIEW',{},12);
+ await store.enqueue('full:'+Math.floor(now/86400000),'FULL_REVIEW',{},13);
  const job=await store.rpc('evolution_claim_job');if(!job){await store.rpc('evolution_worker_heartbeat',{p_version:VERSION});return {ok:true,idle:true,ingested};}
  try{let result;switch(job.kind){
   case 'TRADE_REVIEW':result=await tradeReview(store,job.payload.trade_id,keys);break;

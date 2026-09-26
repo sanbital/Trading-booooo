@@ -11,11 +11,18 @@ const EP={...POLICY,...EXIT_REVIEW_R5};
 export function emptyPortfolio(capital,start){return {version:'CAUSAL_PORTFOLIO_1',last_ms:start,cash:capital.capital_usdt,positions:{},trades:[],events:0,missing:[],decisions:0,opportunities:0,completed:0,decision_errors:0,filled:0,rejections:0,symbols:[],regimes:[],days:[]};}
 export function filtersOf(filters){const get=t=>filters?.find(x=>x.filterType===t)??{};return {quantityStep:Number(get('LOT_SIZE').stepSize),priceTick:Number(get('PRICE_FILTER').tickSize),minNotionalUsdt:Number(get('MIN_NOTIONAL').notional),minQuantity:Number(get('LOT_SIZE').minQty)};}
 function validQuote(q){return q&&q.bid>0&&q.ask>=q.bid&&Number.isSafeInteger(q.at_ms)&&q.received_at_ms>=q.at_ms&&q.coverage===true;}
+// Future execution results never release cash, expose a price, or free a slot early.
+function settle(s,at){s.pending_fills??=[];const due=s.pending_fills.filter(f=>f.at<=at);s.pending_fills=s.pending_fills.filter(f=>f.at>at);
+ for(const f of due){if(f.kind==='ENTRY'){s.cash+=f.reserved-(f.position?.margin??0);if(f.position){s.positions[f.symbol]=f.position;s.filled++;}else s.rejections++;}
+  else{s.cash+=f.margin+f.trade.net_usdt;s.trades.push(f.trade);s.completed++;delete s.positions[f.symbol];}}
+}
 export async function advancePortfolio(input,event,{capital,decide,fillQuote,candles,funding,capture,recheck}){
  const s=structuredClone(input);ensure(capital.margin_usdt===SLOT_SIZING_CONTRACT.targetMarginUsdt&&capital.leverage===SLOT_SIZING_CONTRACT.leverage&&capital.max_slots===10,'CAPITAL_MANIFEST_DRIFT');
  ensure(event.at_ms>=s.last_ms&&event.id!==s.last_id&&event.received_at_ms<=event.at_ms,'PORTFOLIO_CAUSAL_ORDER');s.last_ms=event.at_ms;s.last_id=event.id;s.events++;
+ settle(s,event.at_ms);
  s.symbols=[...new Set([...(s.symbols??[]),event.symbol])];s.days=[...new Set([...(s.days??[]),Math.floor(event.at_ms/86400000)])];if(event.regime)s.regimes=[...new Set([...(s.regimes??[]),event.regime])];
  let p=s.positions[event.symbol],decision=null,hard=null,soft=null,eventName=null;
+ if(s.pending_fills.some(f=>f.symbol===event.symbol))return s;
  if(p&&event.at_ms<=p.entry_at_ms)return s;
  if(!validQuote(event.quote)){if(p)s.missing.push({id:event.id,reason:'QUOTE_GAP',symbol:event.symbol});return s;}
  const bid=event.quote.bid;
@@ -49,7 +56,7 @@ export async function advancePortfolio(input,event,{capital,decide,fillQuote,can
    }
   }
  }else if(event.opportunity&&event.admission_eligible){s.opportunities++;
-  if(Object.keys(s.positions).length>=capital.max_slots||s.cash<capital.margin_usdt)return s;
+  if(Object.keys(s.positions).length+s.pending_fills.filter(f=>f.kind==='ENTRY').length>=capital.max_slots||s.cash<capital.margin_usdt)return s;
   decision=await decide({event,position:null,task:'ENTRY'});s.decisions++;eventName='ENTRY';
  }
  if(!decision?.valid||!['GPT_FINAL_ONLY','HARD_SAFETY','RESIDENT_PROTECTION','DEEPSEEK_EMERGENCY_EXIT_ONLY'].includes(decision.authority)){if(decision)s.decision_errors++;return s;}
@@ -58,20 +65,21 @@ export async function advancePortfolio(input,event,{capital,decide,fillQuote,can
   const f=filtersOf(event.filters);let plan;try{plan=planSlotEntry({ask:event.quote.ask,...f});}catch{return s;}
   const q=await fillQuote(event.symbol,event.at_ms+Math.max(1,decision.latency_ms??0)+capital.latency_ms);
   if(!validQuote(q)||!(q.buy_vwap>0)){s.missing.push({id:event.id,reason:'ENTRY_QUOTE_UNAVAILABLE'});return s;}
-  if(q.buy_vwap>plan.limitPrice){s.rejections++;return s;}
+  const reserved=plan.maxOrderMarginUsdt;if(s.cash<reserved)return s;
+  if(q.buy_vwap>plan.limitPrice){s.cash-=reserved;s.pending_fills.push({kind:'ENTRY',symbol:event.symbol,at:q.received_at_ms,reserved,position:null});return s;}
   const qty=plan.quantity;if(!(q.ask_depth_usdt>=qty*q.buy_vwap)){s.missing.push({id:event.id,reason:'PARTIAL_FILL_UNRESOLVED'});return s;}
   const margin=qty*q.buy_vwap/capital.leverage;if(margin>plan.maxOrderMarginUsdt||s.cash<margin)return s;
-  const pid='sim:'+event.id,entryAt=new Date(q.at_ms).toISOString();s.positions[event.symbol]={id:pid,symbol:event.symbol,entry_at:entryAt,entry_at_ms:q.at_ms,entry_price:q.buy_vwap,original_quantity:qty,remaining_quantity:qty,
+  const pid='sim:'+event.id,entryAt=new Date(q.received_at_ms).toISOString(),position={id:pid,symbol:event.symbol,entry_at:entryAt,entry_at_ms:q.received_at_ms,entry_price:q.buy_vwap,original_quantity:qty,remaining_quantity:qty,
    entry_fee:qty*q.buy_vwap*capital.taker_fee,entry_notional:qty*q.buy_vwap,margin,hard_stop_price:q.buy_vwap*(1-POLICY.stopPct),peak_price:q.buy_vwap,last_high_at:q.at_ms,last_observation:q.at_ms,
-   filters:f,branch:event.branch??'V30_SCORE',regime:event.regime,metadata:{},decision_id:event.id};s.cash-=margin;s.filled++;
+   filters:f,branch:event.branch??'V30_SCORE',regime:event.regime,metadata:{},decision_id:event.id};s.cash-=reserved;s.pending_fills.push({kind:'ENTRY',symbol:event.symbol,at:q.received_at_ms,reserved,position});
  }else if(p&&decision.decision==='EXIT'){
   const q=await fillQuote(event.symbol,event.at_ms+capital.latency_ms);
   if(!validQuote(q)||!(q.sell_vwap>0)||q.bid_depth_usdt<p.remaining_quantity*q.sell_vwap){s.missing.push({id:event.id,reason:'EXIT_FILL_UNRESOLVED'});return s;}
   const cashflow=await funding(event.symbol,p.entry_at_ms,q.at_ms,p.remaining_quantity);if(!Number.isFinite(cashflow)){s.missing.push({id:event.id,reason:'FUNDING_MISSING'});return s;}
   const fee=q.sell_vwap*p.remaining_quantity*capital.taker_fee,net=(q.sell_vwap-p.entry_price)*p.remaining_quantity-p.entry_fee-fee-cashflow;
-  s.trades.push({symbol:p.symbol,entry_ms:p.entry_at_ms,closed_ms:q.at_ms,net_usdt:net,fees_usdt:p.entry_fee+fee,funding_usdt:cashflow,notional_usdt:p.entry_notional,regime:p.regime,
-   mfe:p.peak_price/p.entry_price-1,mfe_capture:p.peak_price>p.entry_price?(q.sell_vwap-p.entry_price)/(p.peak_price-p.entry_price):null,exit_reason:eventName,exit_authority:decision.authority,entry_decision_id:p.decision_id});
-  s.cash+=p.margin+net;s.completed++;delete s.positions[event.symbol];
+  const trade={symbol:p.symbol,entry_ms:p.entry_at_ms,closed_ms:q.received_at_ms,net_usdt:net,fees_usdt:p.entry_fee+fee,funding_usdt:cashflow,notional_usdt:p.entry_notional,regime:p.regime,
+   mfe:p.peak_price/p.entry_price-1,mfe_capture:p.peak_price>p.entry_price?(q.sell_vwap-p.entry_price)/(p.peak_price-p.entry_price):null,exit_reason:eventName,exit_authority:decision.authority,entry_decision_id:p.decision_id};
+  s.pending_fills.push({kind:'EXIT',symbol:p.symbol,at:q.received_at_ms,margin:p.margin,trade});
  }
  return s;
 }

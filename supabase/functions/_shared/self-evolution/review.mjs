@@ -10,7 +10,7 @@ const BASE=`You are reviewing trading intelligence, with NO order, code, account
 export async function researchCall(provider,{kind,input,schema,apiKey,fetchFn=fetch,timeoutMs=25000,now=Date.now}){
  const started=now(),abort=new AbortController();let timer;
  if(!apiKey)throw Error('RESEARCH_PROVIDER_KEY_MISSING');
- const system=BASE+'\nTask: '+kind+(provider==='deepseek'?'\nBe an independent critic. Do not assume GPT is right.':'\nIndependently scrutinize your own errors.');
+ const system=BASE+'\nEach string must be shorter than its schema maxLength in characters (not words). Keep every list item under 180 characters and explanations under 400 characters.\nTask: '+kind+(provider==='deepseek'?'\nBe an independent critic. Do not assume GPT is right.':'\nIndependently scrutinize your own errors.');
  const model=provider==='gpt'?MODEL:MODELS.deepseek[0];
  const body=provider==='gpt'?{model,store:false,tools:[],reasoning:{effort:'none'},max_output_tokens:2400,
   input:[{role:'system',content:system},{role:'user',content:JSON.stringify(input)}],text:{format:{type:'json_schema',name:'evolution_'+kind.toLowerCase(),strict:true,schema}}}:

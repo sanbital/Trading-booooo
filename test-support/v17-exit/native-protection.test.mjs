@@ -157,6 +157,6 @@ test('T28 legacy soft replacement failure never cancels prior resident protectio
  const f=fixture(),first=await f.api().ensure('position-1',{...f.request,stopPrice:102,lastPrice:104});
  f.exchange.createStop=async()=>{throw Error('TIMEOUT')};
  const r=await f.api().ensure('position-1',{...f.request,exitClass:'HARD_SAFETY',authorityVersion:'AI_EXIT_AUTHORITY_2',legacySoftOrderIds:[first.clientId]});
- assert.equal(r.status,'RECONCILIATION_PENDING');assert.equal(f.calls.filter(x=>x[0]==='cancel').length,0);
+ assert.equal(r.status,'PROTECTED');assert.equal(f.calls.filter(x=>x[0]==='create').length,1);assert.equal(f.calls.filter(x=>x[0]==='cancel').length,0);
  assert.equal(f.orders.get(first.clientId).algoStatus,'NEW');
 });

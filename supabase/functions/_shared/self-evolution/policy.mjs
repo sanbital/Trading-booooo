@@ -31,7 +31,7 @@ export function validatePolicy(p){
  }
  ensure(JSON.stringify(p).length<=30000);return p;
 }
-export function baselinePolicy(cutoff=0){return {schema_version:EVOLUTION_VERSION,policy_version:'POLICY_BASELINE_V104',parent_version:null,data_cutoff_ms:cutoff,
+export function baselinePolicy(cutoff=0){return {schema_version:EVOLUTION_VERSION,policy_version:'POLICY_BASELINE_V105',parent_version:'POLICY_BASELINE_V104',data_cutoff_ms:cutoff,
  models:{gpt:MODELS.gpt[0],deepseek:MODELS.deepseek[0]},stages:Object.fromEntries(STAGES.map(s=>[s,{gpt_rubric:[],deepseek_rubric:[],feature_weights:[],calibration_strength:0}])),calibration:[]};}
 export function policyContext(p,task,asOf){validatePolicy(p);ensure(p.data_cutoff_ms<=asOf,'EVOLUTION_FUTURE_POLICY');
  const stage=task==='HOLD'?'HOLD':task==='RECHECK'?'RECHECK':'ENTRY';

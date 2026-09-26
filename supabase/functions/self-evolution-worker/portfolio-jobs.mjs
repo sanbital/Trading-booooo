@@ -40,7 +40,7 @@ export async function portfolioJob(store,version,keys,{maxWallMs=65000,source='M
   for(const [arm,policy]of [['champion',champ],['challenger',p]].sort((a,b)=>(cursors[a[0]]??begin)-(cursors[b[0]]??begin))){
    const id=version+':'+split+':'+arm,old=await store.read(store.table('evolution_portfolios').select('state').eq('id',id).maybeSingle());let state=old?.state??emptyPortfolio(capital,begin);
    const ops=await store.read(store.table('evolution_opportunities').select('*').eq('context->>source',source).gte('at_ms',state.last_ms-7000).lte('at_ms',end).order('at_ms').limit(40));
-   const symbols=[...new Set([...Object.keys(state.positions),...ops.map(x=>x.symbol)])];
+   const symbols=[...new Set([...Object.keys(state.positions),...(state.pending_fills??[]).map(f=>f.symbol),...ops.map(x=>x.symbol)])];
    if(!symbols.length)continue;
    const pageEnd=ops.length===40?Math.min(end,ops.at(-1).at_ms):end;
    const frames=await store.read(store.table('evolution_market_frames').select('*').in('symbol',symbols).gte('received_at',new Date(state.last_ms).toISOString()).lte('received_at',new Date(pageEnd).toISOString()).order('received_at').order('symbol').limit(1200));

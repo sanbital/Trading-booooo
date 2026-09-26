@@ -26,8 +26,8 @@ export async function simulationJob(store,version,keys){
     policy_hash:policy.sha256,champion_hash:champion.sha256,dataset_hash:await hash(e),symbol:e.symbol,regime:e.context.regime,
     admission_eligible:e.context.admission_eligible,packet:e.packet,context:e.context,order_calls:0}});done++;
  }
- await store.enqueue('simulate:'+version+':'+Math.floor(Date.now()/3600000),'SIMULATE',{policy_version:version},45,new Date(Date.now()+3600000).toISOString());
- await store.enqueue('validate:'+version+':'+Math.floor(Date.now()/86400000),'VALIDATE',{policy_version:version},55);
+ await store.enqueue('simulate:'+version+':'+Math.floor(Date.now()/3600000),'SIMULATE',{policy_version:version},18,new Date(Date.now()+3600000).toISOString());
+ await store.enqueue('validate:'+version+':'+Math.floor(Date.now()/86400000),'VALIDATE',{policy_version:version},19);
  return {policy_version:version,new_pairs:done,available_opportunities:rows.length,portfolio};
 }
 export async function validationJob(store,version){
@@ -42,7 +42,7 @@ export async function validationJob(store,version){
  const reviews=actualRows.map(r=>({id:r.id,state:r.state}));
  const allMissing=states.flatMap(s=>s.missing??[]),events=states.reduce((v,s)=>v+s.events,0),filled=states.reduce((v,s)=>v+(s.filled??0),0),closed=states.reduce((v,s)=>v+s.trades.length,0);
  const report={version:'VALIDATION_REPORT_1',scope_valid:!!validatePolicy(p.bundle),integrity_valid:await hash(p.bundle)===p.sha256&&await hash(c.bundle)===c.sha256&&p.source_manifest.replay_kernel_hash===REPLAY_KERNEL_HASH&&c.source_manifest.replay_kernel_hash===REPLAY_KERNEL_HASH,
- policy_hash:p.sha256,champion_hash:c.sha256,dataset_hash:await hash({states,sets,reviews}),execution_parity:marketRows.length===4&&allMissing.length/Math.max(1,events)<=.01&&!allMissing.some(x=>/PARTIAL|EXIT_FILL|FUNDING/.test(x.reason)),
+ policy_hash:p.sha256,champion_hash:c.sha256,dataset_hash:await hash({states,sets,reviews}),execution_parity:marketRows.length===4&&states.every(s=>!(s.pending_fills?.length))&&allMissing.length/Math.max(1,events)<=.01&&!allMissing.some(x=>/PARTIAL|EXIT_FILL|FUNDING/.test(x.reason)),
  market_wide:sets.length>=14,universe_coverage:sets.length?Math.min(...sets.map(s=>s.coverage)):0,future_leakage:false,split_overlap:false,
  discovery_end:p.bundle.data_cutoff_ms,validation_start:cut,validation_end:cut+14*86400000-600001,holdout_start:cut+14*86400000,candidate_frozen_at:Date.parse(p.created_at),
  holdout_uses:1,holdout_complete:complete,actual_trade_replay:actualRows.length===4&&actualRows.every(r=>r.state.trades.length>=5&&r.state.missing.length===0),

@@ -221,7 +221,9 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
       if(order.exitClass===EXIT_CLASS.HARD_SAFETY||order.spec.params.triggerPrice<p.entryPrice||
         !(request.stopPrice>0&&request.stopPrice<p.entryPrice))throw Error('HARD_FLOOR_RETIREMENT_FORBIDDEN');
     }
-    const hardOrders=outstanding.filter(x=>!retiring.has(x.clientId));
+    // Legacy labels cannot exclude an acknowledged floor from the ratchet.
+    // A profit floor is resident protection even when requested hard safety is lower.
+    const hardOrders=outstanding;
     const current=hardOrders.filter(x=>eq(x.spec.params.quantity,p.remainingQuantity))
       .sort((a,b)=>b.spec.params.triggerPrice-a.spec.params.triggerPrice)[0];
     if(current&&current.spec.params.triggerPrice>=request.stopPrice) {

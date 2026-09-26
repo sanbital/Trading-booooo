@@ -32,7 +32,9 @@ export async function tradeReview(store,id,keys){
  const review=await reviewTrade(dataset,{keys,call:researchCaller(store,keys)});
  const policyVersion=journal.find(d=>d.stage==='ENTRY')?.policy_version??'LEGACY_UNVERSIONED',regime=regimeOf(journal[0]?.record?.packet?.facts);
  await store.write('evolution_reviews',{trade_id:id,dataset_hash:review.dataset_hash,dataset,review,policy_version:policyVersion,realized_net_usdt:p.realized_pnl_usdt,regime});
- await store.enqueue('patterns:'+Math.floor(Date.now()/21600000),'PATTERN_REVIEW',{},50);
+ const reviewed=await store.read(store.table('evolution_reviews').select('trade_id').limit(200));
+ // Batch keys prevent a full backfill queue starving the first useful pattern review.
+ if(reviewed.length===2||reviewed.length%20===0)await store.enqueue('patterns:batch:'+Math.floor(reviewed.length/20),'PATTERN_REVIEW',{},12);
  return {trade_id:id,gpt:review.reviews[0].valid,deepseek:review.reviews[1].valid,cross_critique:review.critiques.length,decisions:journal.length,net_usdt:p.realized_pnl_usdt};
 }
 export async function patternReview(store,keys,{full=false,failed_policy=null}={}){
@@ -62,7 +64,7 @@ export async function patternReview(store,keys,{full=false,failed_policy=null}={
  if(candidate){const parent=await store.read(store.table('evolution_policy_bundles').select('source_manifest').eq('version',active.bundle.policy_version).single());
   await store.write('evolution_policy_bundles',{version,parent_version:active.bundle.policy_version,bundle:candidate,sha256:await hash(candidate),source_manifest:parent.source_manifest,data_cutoff:new Date(cutoff).toISOString()});
   await store.write('evolution_policy_states',{version,state:'SIMULATING',reason:'FROZEN; PROSPECTIVE_VALIDATION_AND_UNTOUCHED_HOLDOUT_REQUIRED'});
-  await store.enqueue('simulate:'+version,'SIMULATE',{policy_version:version},40,new Date(cutoff+60000).toISOString());
+  await store.enqueue('simulate:'+version,'SIMULATE',{policy_version:version},18,new Date(cutoff+60000).toISOString());
  }
  await store.write('evolution_events',{kind:state==='REJECTED_SCOPE_VIOLATION'?state:'CHALLENGER_FROZEN',policy_version:candidate?version:null,details:{hypothesis:hid,reviewed_trades:rows.length,full,failed_policy}});
  return {patterns:patterns.length,hypothesis:hid,policy_version:candidate?version:null,state};
