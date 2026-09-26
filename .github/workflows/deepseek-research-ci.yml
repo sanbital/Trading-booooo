@@ -1,9 +1,14 @@
-name: DeepSeek research regression
+name: AI strategy and capture regression
 on:
   push:
     branches: [main]
     paths:
       - 'supabase/functions/_shared/gpt-final-decision/**'
+      - 'supabase/functions/v10-lane-executor/**'
+      - 'collectors/doa-capture/**'
+      - 'supabase/migrations/*capture*'
+      - 'test-support/v17-entry/**'
+      - 'test-support/v17-exit/**'
       - 'tests/fd1-*.test.mjs'
       - 'development/gpt-final-decision/tests/**'
       - 'research/deepseek-counter-20260925/**'
@@ -12,6 +17,11 @@ on:
   pull_request:
     paths:
       - 'supabase/functions/_shared/gpt-final-decision/**'
+      - 'supabase/functions/v10-lane-executor/**'
+      - 'collectors/doa-capture/**'
+      - 'supabase/migrations/*capture*'
+      - 'test-support/v17-entry/**'
+      - 'test-support/v17-exit/**'
       - 'tests/fd1-*.test.mjs'
       - 'development/gpt-final-decision/tests/**'
       - 'research/deepseek-counter-20260925/**'
@@ -32,15 +42,12 @@ jobs:
         with:
           node-version: '22'
       - name: Install isolated SQL test runtime
-        run: npm install --prefix "$RUNNER_TEMP/pglite" --ignore-scripts --no-audit --no-fund @electric-sql/pglite@0.3.0
-      - name: Research, HOLD and final-recheck regressions (no API keys or deployment)
+        run: npm install --prefix "$RUNNER_TEMP/pglite" --ignore-scripts --no-audit --no-fund @electric-sql/pglite@0.3.14
+      - name: Production arbitration, capture and execution safety regressions (no API keys or deployment)
         env:
           PGLITE_MODULE: ${{ runner.temp }}/pglite/node_modules/@electric-sql/pglite/dist/index.js
         run: |
           node --test \
-            tests/fd1-parallel.test.mjs tests/fd1-parallel-deadline.test.mjs \
-            tests/fd1-counter-errors.test.mjs tests/fd1-noise-control.test.mjs \
-            tests/fd1-temporal.test.mjs tests/fd1-exit-hardening.test.mjs \
-            tests/fd1-final-recheck.test.mjs \
-            development/gpt-final-decision/tests/fd1.test.mjs \
-            development/gpt-final-decision/tests/fd1-hold.test.mjs
+            tests/fd1*.test.mjs \
+            test-support/v17-entry/*.test.mjs test-support/v17-exit/*.test.mjs \
+            collectors/doa-capture/*.test.mjs development/gpt-final-decision/tests/*.test.mjs

@@ -1,0 +1,249 @@
+{
+  "artifact_sha256": "2240e56d1479f1b0af8f9da47fe7120766b073d8cd3e5b2db0fb866823292d87",
+  "files": [
+    {
+      "path": "supabase/functions/v10-lane-executor/index.ts",
+      "sha256": "45fcafa9bd43facb2fb363d71b7a97afbb0a3dd0826fdba0c6333738adfa028d"
+    },
+    {
+      "path": "supabase/functions/v10-lane-executor/entry-evidence.mjs",
+      "sha256": "06c5b5f8f47916727fe31b204450bcdc0c8b23bdcb9b9ca40ad9c517e867958e"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-live-chase.mjs",
+      "sha256": "50ff6eccfc49a8e4a37685dc34476c9c98d63fd749f9d3fe99414663f7890ebb"
+    },
+    {
+      "path": "supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs",
+      "sha256": "5853c5b18ddff3a86853f7a90e135513c98868870c8f1ff3ac51bf16d2611d7b"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-review/coordinator.mjs",
+      "sha256": "efebc06f27446c0806141dfc75483a717836a8ee0b0a21657f9bc62f860f31a7"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-review/wire-v4.mjs",
+      "sha256": "1e0c005ce2637c7136cd1278bb1027953b1398dc7272f29e8a58f1c6300875b5"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-review/contract.mjs",
+      "sha256": "010cd1b76798febcbbd42088b69671f297e3e6fb939ce53cb7fc601da574f28b"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-review/prompt.mjs",
+      "sha256": "1e77b89009f22c19f8fd7febb7823f13abad63a2945e34043150d7c4871e60a7"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-review/market.mjs",
+      "sha256": "09bb5f9ae595b4d6a0357e7aec261de78e17d68943207c4e3542658b50d9816e"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-review/candle-cache.mjs",
+      "sha256": "4ca9be9a1aa94ce8da3cc6c7f8e3203e61ee01fc76693e453e631bdcb382a96a"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-review/micro.mjs",
+      "sha256": "fad9cf95c57ce7b4e4f4921731154f66d8b76c1879bfb0f1319e5db3b351e94c"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-review/openai.mjs",
+      "sha256": "3b2f6f8c3299582285923aa4be763b1531a24670d803e19c3151cd05e8fdb2de"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-decision/recheck.mjs",
+      "sha256": "c8a4d860fc747b8adbd4a6ce752b111d1b86d76dac69813f87822b00d0b749da"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-decision/facts.mjs",
+      "sha256": "3da8e349049187962ef82a62f3473298c24631b89313cbbf9b52cdff07b770b7"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-decision/assessment.mjs",
+      "sha256": "4182f4cf0c72110a8d5feeeabdce78d167cec5f043d30457eac076264b0aaaaf"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-decision/market.mjs",
+      "sha256": "e3ba4a9dc21d4ee88d71c61a068d87be02b70eaad9262e9671c96525dcdee432"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-decision/capture-context.mjs",
+      "sha256": "aa1330ebaa68b056dc0bcd35fd08bc612e4c781f073618c5421d30c1dcddab1e"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-decision/contract.mjs",
+      "sha256": "b41fdb188957cc57d808cac7999b63561d73ef422134fa7104c81376a3e40221"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-decision/api.mjs",
+      "sha256": "d3f3f996598a669bf8d91091636aa08e03dc5d032ac8b91ae0f31576870ee6b7"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-decision/prompt.mjs",
+      "sha256": "56272375a71560862ada747d1ea99fce4ce464308821776dfee2513a84e83246"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-decision/dual.mjs",
+      "sha256": "1acc164050cb20dff09f839ba01d1dd14ec040318e37ebf53e2ec540b310b560"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-decision/advisory.mjs",
+      "sha256": "4caee7f1a9c7bda6ed32cad000be8f806f3547017d3961fc2201b61a76e22c82"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-decision/parallel.mjs",
+      "sha256": "1cac2833d80eb19307777124020c159888292ab9a3b469992e5b09eef1a4efb0"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-decision/hold-shadow.mjs",
+      "sha256": "5a117266d033babed39689ba8519c0500b10cae88c16e9bf456c1c05545cb684"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-review/supabase-store.mjs",
+      "sha256": "508543de134fab232319b6dc1384c1073a2a29071886ad1a2de44da6b6c6b320"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-decision/engine.mjs",
+      "sha256": "76e166f61cb9d08d5c24b64fbe3b088ac9e63151859eba44cefc3153770f34bc"
+    },
+    {
+      "path": "supabase/functions/v10-lane-executor/gpt-final-review-dryrun.mjs",
+      "sha256": "6846307b05d17126fd83da3fff706fc099ea9532bdb382c0ff8d3c3923e63e5b"
+    },
+    {
+      "path": "supabase/functions/v10-lane-executor/gpt-final-decision-adapter.mjs",
+      "sha256": "08580da123e63d2533dc61103e6dca946180fa8328fc3c5dd8e8f4d1549a91d6"
+    },
+    {
+      "path": "supabase/functions/_shared/gpt-final-decision/hold.mjs",
+      "sha256": "57a93365f7920892e05dcab700b21345c7b1e07a982b94547334400594eff5a0"
+    },
+    {
+      "path": "supabase/functions/v10-lane-executor/gpt-final-recheck-adapter.mjs",
+      "sha256": "30e81e3aab1a6c2fbf5f73d648e44bf302c0f852a77934dc19d48c332742f8fe"
+    },
+    {
+      "path": "supabase/functions/v10-lane-executor/recheck-nil-fixture.mjs",
+      "sha256": "4f56c8b629b2bd2b0f6e3293e1c372a5a7c4fcdf222363fb51c89db52d9beff2"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-momentum-v17.mjs",
+      "sha256": "a8c23f2fa0bd34979bac19fe341724684e5e7544a3ac066d09cabe4f846c9a0e"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-slot-sizing.mjs",
+      "sha256": "26953a7e7d9b8e31a538223897c13ef6cb3f34d924d108c588e6ab82e16e430e"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-exit-review.mjs",
+      "sha256": "607eb7cda785c6acf72d5c81f177d56c7668e07afa178fc826658d88aa05c059"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-entry-protection.mjs",
+      "sha256": "33ab1a82bdf73d6bd0fab01d6a635427a894bbf0a5af46890a481b6de01eda02"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-protection-adapter.mjs",
+      "sha256": "1abad42a24fb4a5da2674d9a30a92a8721ce3ffd181813a36dec567e792b9540"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-ops-isolation.mjs",
+      "sha256": "bf1559ffbaae06afba47cb5d40a7ccde4f3138985d8820a25182042974668154"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-entry-control.mjs",
+      "sha256": "8a41b549e29ad2acdbd467ec88cd0dd54dbdd133a5b337ca469ce88570b0b023"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-native-protection.mjs",
+      "sha256": "defa39436c2f3216531ed23ff6722dd7901c9cb83ff8dcd89d0c320281899fad"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-fill-evidence.mjs",
+      "sha256": "3b01444200575108548ed18c18a9733b93d831afe0561e8f53988875c0cf278e"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-entry-settlement.mjs",
+      "sha256": "ddf969cf6a7ca16791cb1cc07bc5cd52e23a89cd5885e0ef02d81a967e371659"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-exit-settlement.mjs",
+      "sha256": "cc503ad0ecf41c65f4594d2782a6f37cddc63d3a8fe69f8c120460b6b5aaa8c1"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-db-only-reconciliation.mjs",
+      "sha256": "2c509cecc25ef1b48688ff175e5039edead198011c62832e49825495cb648385"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-qv3-runtime.mjs",
+      "sha256": "3ef0db9b1f718357756b19e6ecd2d31ff4563e1e2f35bbe345839562de58cc50"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-qv3-rules.mjs",
+      "sha256": "567435bfcbae8b29328f499a8a1cc1a59b62a13bb523e762040613d4a16570fa"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-e1-runtime.mjs",
+      "sha256": "252bd6358c336be2ba0ec4e76075ba3480daa15c991fe87c0a727fd9efd71d0d"
+    },
+    {
+      "path": "supabase/functions/v10-lane-executor/v24-entry-adapter.mjs",
+      "sha256": "b6300e58672c78de4f002d255598e8e6588f00f9e32e0ee9ebe31066b618a142"
+    },
+    {
+      "path": "supabase/functions/v10-lane-executor/v24-leader-continuation.mjs",
+      "sha256": "5aa8893c035380b36cd90a0d2db5c4e0a43a35adb958b2df6d44b4f012358beb"
+    },
+    {
+      "path": "supabase/functions/v10-lane-executor/entry-ioc-retry.mjs",
+      "sha256": "24636365e51ca58fb5b2a8a99490303e727bae4918752e44d93d4f4508edd08e"
+    },
+    {
+      "path": "supabase/functions/v10-lane-executor/entry-retry-reconciliation.mjs",
+      "sha256": "ccca60cc98ea7c97557767b69026cd86ec00ff830d744642d8bb9d4d5ffec056"
+    },
+    {
+      "path": "supabase/functions/v10-lane-executor/entry-lifecycle.mjs",
+      "sha256": "abd0217a6ce6d102c14792085c4e24645b78b36bbbbee72cb81a1034d6fccf82"
+    },
+    {
+      "path": "supabase/functions/v10-lane-executor/entry-capacity.mjs",
+      "sha256": "01463e70289c9def5f0c6576391c3768de31b8a007bc0477764b8a7eced4e02c"
+    },
+    {
+      "path": "supabase/functions/v10-lane-executor/boo-entry-adapter.mjs",
+      "sha256": "563fff54b827da2e7491e3b359c14118f9d8a29bdfb0b10f0d005448b15a05ad"
+    },
+    {
+      "path": "supabase/functions/_shared/boo/entry-gate.mjs",
+      "sha256": "2f689c9b48901c318362d8aa3624f65a9eb12079ae48dafb3accd33567929faf"
+    },
+    {
+      "path": "supabase/functions/_shared/boo/decimal.mjs",
+      "sha256": "cf568cd470534a7ead823c4a141322410a59af0258f18924fc85876f86c590af"
+    },
+    {
+      "path": "supabase/functions/_shared/boo/risk-policy.mjs",
+      "sha256": "fc42a6933497fea758367f78643339d5e61a001dc6d67bcb4d5c877b5f74623e"
+    },
+    {
+      "path": "supabase/functions/_shared/boo/risk-budget.mjs",
+      "sha256": "985cb673b642c77c9144497c6100672fc8026b46f9facfd9a0dc7408ef631bf1"
+    },
+    {
+      "path": "supabase/functions/_shared/boo/r1-strategy.mjs",
+      "sha256": "27baafb7c7c7eb666c94fe2ea2e1c04d012889d88697d896ff29bfb91855a911"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-pullback-reaccel.mjs",
+      "sha256": "f37a6dd2ae2cd9c56fee8944d0fab76d2d5a80c611ba6a4140829914ef81c425"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-b06133-entry.mjs",
+      "sha256": "e85865527cc4c19aad992d2d207f2a075dfca3507eb1c7fc3d67f5c94a1465bf"
+    },
+    {
+      "path": "supabase/functions/_shared/leader-cec0040.mjs",
+      "sha256": "713f384dd11f8b399fae7f6497e42f29ab086603075f280809c99f0859a47fd7"
+    }
+  ]
+}
