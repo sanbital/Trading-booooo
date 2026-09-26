@@ -160,3 +160,50 @@ test('T28 legacy soft replacement failure never cancels prior resident protectio
  assert.equal(r.status,'PROTECTED');assert.equal(f.calls.filter(x=>x[0]==='create').length,1);assert.equal(f.calls.filter(x=>x[0]==='cancel').length,0);
  assert.equal(f.orders.get(first.clientId).algoStatus,'NEW');
 });
+
+for(const [label,requested,legacy] of [['O',97.5,false],['P',98,true]])
+test(`${label} acknowledged profit floor 101 survives lower hard request${legacy?' and legacy soft label':''}`,async()=>{
+ const f=fixture(),first=await f.api().ensure('position-1',{...f.request,stopPrice:101,lastPrice:104,
+   exitClass:'SOFT_PROTECTION',authorityVersion:'AI_EXIT_AUTHORITY_2',protectionReason:'V17_PROFIT_LOCK'});
+ const result=await f.api().ensure('position-1',{...f.request,stopPrice:requested,lastPrice:104,
+   exitClass:'HARD_SAFETY',authorityVersion:'AI_EXIT_AUTHORITY_2',legacySoftOrderIds:legacy?[first.clientId]:[]});
+ assert.equal(result.status,'PROTECTED');assert.equal(result.clientId,first.clientId);
+ const resident=f.state().protection.orders.find(x=>x.clientId===first.clientId);
+ assert.equal(resident.spec.params.triggerPrice,101);assert.equal(resident.status,'ACTIVE');
+ assert.equal(resident.protectionReason,'V17_PROFIT_LOCK');
+ assert.equal(f.calls.filter(x=>x[0]==='create').length,1);assert.equal(f.calls.filter(x=>x[0]==='cancel').length,0);
+});
+
+test('Q 101 to 102 waits for actual new ACK and durable ACTIVE before canceling 101',async()=>{
+ const f=fixture(),request={...f.request,stopPrice:101,lastPrice:104,exitClass:'SOFT_PROTECTION',
+   authorityVersion:'AI_EXIT_AUTHORITY_2',protectionReason:'V17_PROFIT_LOCK'};
+ const first=await f.api().ensure('position-1',request),create=f.exchange.createStop,cancel=f.exchange.cancelStop;
+ let release,submitted,acked=false;
+ const gate=new Promise(resolve=>{release=resolve;}),started=new Promise(resolve=>{submitted=resolve;});
+ f.exchange.createStop=async params=>{submitted();await gate;const ack=await create(params);acked=true;return ack;};
+ f.exchange.cancelStop=async id=>{
+   assert.equal(acked,true,'create call alone is not an ACK');
+   const replacement=f.state().protection.orders.find(x=>x.clientId!==first.clientId);
+   assert.equal(replacement.status,'ACTIVE');assert.equal(replacement.spec.params.triggerPrice,102);
+   return cancel(id);
+ };
+ const pending=f.api().ensure('position-1',{...request,stopPrice:102});
+ await started;
+ try{assert.equal(f.orders.get(first.clientId).algoStatus,'NEW');assert.equal(f.calls.filter(x=>x[0]==='cancel').length,0);}
+ finally{release();}
+ const second=await pending;
+ assert.equal(second.status,'PROTECTED');assert.notEqual(second.clientId,first.clientId);
+ assert.equal(f.orders.get(second.clientId).algoStatus,'NEW');assert.equal(f.orders.get(first.clientId).algoStatus,'CANCELED');
+});
+
+for(const error of ['TIMEOUT','GW_400:Order would immediately trigger.'])
+test(`R failed 102 replacement keeps 101 ACTIVE: ${error}`,async()=>{
+ const f=fixture(),request={...f.request,stopPrice:101,lastPrice:104,exitClass:'SOFT_PROTECTION',
+   authorityVersion:'AI_EXIT_AUTHORITY_2',protectionReason:'V17_PROFIT_LOCK'};
+ const first=await f.api().ensure('position-1',request);
+ f.exchange.createStop=async()=>{throw Error(error);};
+ await f.api().ensure('position-1',{...request,stopPrice:102});
+ const resident=f.state().protection.orders.find(x=>x.clientId===first.clientId);
+ assert.equal(resident.status,'ACTIVE');assert.equal(resident.spec.params.triggerPrice,101);
+ assert.equal(f.orders.get(first.clientId).algoStatus,'NEW');assert.equal(f.calls.filter(x=>x[0]==='cancel').length,0);
+});
