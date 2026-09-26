@@ -1,5 +1,5 @@
 /** Event-driven strategic review. Hard safety is checked before this module.
- * Soft protection never has independent order authority. */
+ * Soft protection may be promoted to resident reduce-only protection by the host; strategic exits remain explicitly authorized. */
 import {computeFacts,modelJudgments} from './facts.mjs';
 import {readSources} from './market.mjs';
 import {buildDecisionPacket,callDecision,hash,MODEL} from './api.mjs';
@@ -55,11 +55,15 @@ export async function holdStep(st0,{now,price,peak,timeCandidate,softTrigger,dyn
    const completed=a?.completed_at_ms,snapshot=a?.snapshot_at_ms??completed;
    const fresh=Number.isSafeInteger(completed)&&completed>=pending.at&&completed<=now&&now-completed<=P.exitMaxAgeMs&&
     completed-pending.at<=P.timeAnswerWaitMs&&Number.isSafeInteger(snapshot)&&snapshot>=pending.at&&snapshot<=now&&now-snapshot<=P.exitMaxAgeMs;
-   const decision=a?.valid===true&&fresh&&!a.refresh_error?a.decision:'ABSTAIN';
-   st.last={key:pending.key,event:pending.event,decision,at:now};st.pending=null;
+   const decision=a?.valid===true&&fresh&&!a.refresh_error?a.decision:'ABSTAIN',authority=a?.authority??'GPT_FINAL_ONLY';
+   st.last={key:pending.key,event:pending.event,decision,authority,at:now};st.pending=null;
    st.softReceipt={key:pending.softKey??softTrigger?.key,price,peak,evidenceKey:dynamics?.evidenceKey??null,at:now};
-   if(decision==='EXIT')return {close:true,reason:'FD1_GPT_EXIT',state:st,approval:{authority:'GPT_FINAL_ONLY',valid:true,decision,
-     positionId:String(positionId),generation:st.generation,jobKey:pending.key,completedAt:completed,snapshotAt:snapshot,refreshError:null}};
+   if(decision==='EXIT'){
+     const emergency=authority==='DEEPSEEK_EMERGENCY_EXIT_ONLY';
+     return {close:true,reason:emergency?'FD1_DEEPSEEK_EXIT':'FD1_GPT_EXIT',state:st,approval:{authority,valid:true,decision,
+       positionId:String(positionId),generation:st.generation,jobKey:emergency?null:pending.key,
+       snapshotHash:a?.snapshot_hash??null,completedAt:completed,snapshotAt:snapshot,refreshError:null}};
+   }
    if(decision==='PROTECT'){
     // Internal soft floor only. Never becomes a native stop or changes exposure.
     st.protectLevel=Math.max(st.protectLevel??0,softTrigger?.level??0,price*(1+P.deteriorationDrawdown/2));

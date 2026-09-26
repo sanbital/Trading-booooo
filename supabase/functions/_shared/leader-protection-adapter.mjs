@@ -1,5 +1,6 @@
 import {freshPortfolio} from './leader-ops-isolation.mjs';
 import {createNativeProtection} from './leader-native-protection.mjs';
+import {EXIT_CLASS,exitClass} from './exit-authority.mjs';
 /** Existing position row is the atomic accounting/receipt journal. CAS journal; V18 migration permits explicitly pending accounting. */
 export function createPositionProtectionStore(db,verifyLease=async()=>{}) {
  const snapshots=new Map();
@@ -17,10 +18,20 @@ export function createPositionProtectionStore(db,verifyLease=async()=>{}) {
   },
   async compareAndSwap(id,expected,next){
    const old=snapshots.get(id);if(!old||(old.metadata?.exitProtection?.version??0)!==expected)return false;
-   const p=next.position,now=new Date(Math.max(Date.now(),Date.parse(old.updated_at)+1)).toISOString(),patch={
+   const p=next.position,now=new Date(Math.max(Date.now(),Date.parse(old.updated_at)+1)).toISOString();
+   let nativeExitReason=old.exit_reason;
+   if(p.state==='CLOSED'&&old.state!=='CLOSED'){
+    nativeExitReason='V17_NATIVE_STOP';
+    const filled=[...(next.protection?.orders??[])].filter(o=>o?.terminal===true&&o?.fillStatus==='FILLED'&&Number(o?.appliedQuantity)>0)
+      .sort((a,b)=>Number(a?.lastFillAt??a?.ackAt??0)-Number(b?.lastFillAt??b?.ackAt??0)).at(-1);
+    if(filled?.exitClass===EXIT_CLASS.SOFT_PROTECTION&&filled?.protectionReason){
+      try{if(exitClass(filled.protectionReason)===EXIT_CLASS.SOFT_PROTECTION)nativeExitReason=filled.protectionReason;}catch{}
+    }
+   }
+   const patch={
     remaining_quantity:p.remainingQuantity,realized_pnl_usdt:p.realizedPnl,
     state:p.state,exit_price:p.exitPrice,closed_at:p.closedAt?new Date(p.closedAt).toISOString():null,
-    exit_reason:p.state==='CLOSED'&&old.state!=='CLOSED'?'V17_NATIVE_STOP':old.exit_reason,
+    exit_reason:nativeExitReason,
     metadata:{...old.metadata,v18SettledPnl:p.settledPnl??p.realizedPnl,exitAccountingPending:p.accountingPending===true,exitProtection:{...next.protection,version:next.version}},updated_at:now};
    await verifyLease();
    const {data,error}=await db.from('v11_long_regime_positions').update(patch)

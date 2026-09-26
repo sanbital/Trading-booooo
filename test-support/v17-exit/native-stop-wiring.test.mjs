@@ -76,7 +76,7 @@ test('disabled by default: no protection is constructed and no stop order is tou
   assert.deepEqual(h.ensured, []);
 });
 
-test('enabled: hard floor is durable before exchange protection; profit lock stays soft', async () => {
+test('enabled: earned profit floor is durable before exchange protection and becomes the resident stop', async () => {
   const h = harness({ enabled: true, bid: 102 });
   const r = await h.ctx.manage(h.db, h.position, h.context);
   assert.equal(r.action, 'HOLD');
@@ -87,8 +87,10 @@ test('enabled: hard floor is durable before exchange protection; profit lock sta
   assert.equal(request.positionMode, 'ONE_WAY');
   assert.equal(request.exchangeQuantity, 1000);
   assert.equal(request.lastPrice, 102);
-  // peak 103.03 => profit lock 101.515, which is above the incoming 101.4846 trail
-  assert.equal(request.stopPrice,97.5);assert.ok(r.softStopPrice>101.4846);assert.equal(request.exitClass,'HARD_SAFETY');
+  // peak 103.03 => profit lock 101.515. The resident reduce-only stop must ratchet to it,
+  // never remain at the 97.5 hard-loss floor.
+  assert.equal(request.stopPrice,101.515);assert.ok(r.softStopPrice>101.4846);
+  assert.equal(request.exitClass,'SOFT_PROTECTION');assert.equal(request.protectionReason,'V17_PROFIT_LOCK');
 });
 
 test('a protection failure never blocks or alters the software exit', async () => {

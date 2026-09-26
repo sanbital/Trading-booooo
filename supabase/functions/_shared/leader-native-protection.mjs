@@ -241,7 +241,9 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
     if(request.lastPrice!=null&&spec.params.triggerPrice>=request.lastPrice)
       return {status:'STOP_ALREADY_CROSSED',state,softwareMonitorRequired:true};
     const next=copy(state);next.protection.generation=generation;
-    next.protection.orders.push({clientId,spec,...(request.exitClass?{exitClass:request.exitClass,authorityVersion:request.authorityVersion}:{}),status:'SUBMITTING',submittedAt:clock(),terminal:false});
+    next.protection.orders.push({clientId,spec,...(request.exitClass?{exitClass:request.exitClass,authorityVersion:request.authorityVersion}:{}),
+      ...(request.protectionReason?{protectionReason:String(request.protectionReason)}:{}),
+      status:'SUBMITTING',submittedAt:clock(),terminal:false});
     // Persist before sending. A crash after this point only queries this same id.
     state=await save(state,next);
     let ack;

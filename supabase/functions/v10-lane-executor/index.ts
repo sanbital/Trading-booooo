@@ -2752,11 +2752,22 @@ async function manageLeader(db,p,ctx){
     priceTick:ctx?.fastObservation===true?N(rec(meta.entryMarketRules).priceTick):0};
   const state=p142Active?nextExitP142(exitInput,bid,detectedAtMs,policy,p142State):
     nextExitReviewed(exitInput,bid,detectedAtMs,policy);
-  const soft=softCandidate(state,hard,p,bid),legacySoftOrderIds=legacySoftOrders(p,hard);
-  const rawExit={...state};
-  // Software and exchange protection use ONLY the independently monotonic loss floor.
+  const soft=softCandidate(state,hard,p,bid),legacySoftOrderIds=legacySoftOrders(p,hard),
+    activeResidentStop=Math.max(0,...(rec(meta.exitProtection).orders??[]).filter(o=>o&&o.terminal!==true&&["ACTIVE","NEW"].includes(o.status))
+      .map(o=>N(o?.spec?.params?.triggerPrice)).filter(x=>x>0));
+  const rawExit={...state},softEps=Math.max(1e-12,Number(p.entry_price)*1e-10);
+  let residentProtection={level:hard.hardFloor,reason:hard.hardReason,exitClass:EXIT_CLASS.HARD_SAFETY};
+  if(Number(soft.level)>residentProtection.level+softEps)
+    residentProtection={level:Number(soft.level),reason:soft.reason,exitClass:EXIT_CLASS.SOFT_PROTECTION};
+  // The DB hard floor remains loss-safety only. A ratcheted profit/protect floor is separate,
+  // but once armed it has real reduce-only resident authority and may never move down.
   state.stopPrice=hard.hardFloor;state.softStopPrice=soft.level;state.exitClass=hard.hardHit?EXIT_CLASS.HARD_SAFETY:EXIT_CLASS.SOFT_PROTECTION;
   state.action=hard.hardHit?"CLOSE":"HOLD";state.reason=hard.hardHit?hard.hardReason:null;
+  if(!hard.hardHit&&soft.active&&soft.crossed&&Number(soft.level)>hard.hardFloor+softEps){
+    state.action="CLOSE";state.reason=soft.reason;state.exitClass=EXIT_CLASS.SOFT_PROTECTION;
+    ctx={...ctx,finalApproval:{authority:"RESIDENT_PROTECTION",valid:true,positionId:String(p.id),
+      generation:hard.generation,reason:soft.reason,level:Number(soft.level),observedAt:detectedAtMs}};
+  }
   const aiExitContext=exitContext(p,hard,soft,bid,detectedAtMs);
   const telemetry={detectedAtMs,quoteRequestedAtMs:timing.requested_at_ms,
     quoteReceivedAtMs:timing.received_at_ms,exchangeBookAtMs:timing.book_captured_at_ms??null,
@@ -2769,7 +2780,7 @@ async function manageLeader(db,p,ctx){
     quoteAgeMs:detectedAtMs-timing.received_at_ms,source:timing.source??"P10_TOP_OF_BOOK_BATCH",
     fullQuantityExecutable:true,protectedQuantity:Number(p.remaining_quantity),
     lastStopSyncAt:stopImproved?new Date(detectedAtMs).toISOString():priorX1.lastStopSyncAt??null}:priorX1;
-  const nextMeta={...meta,exitAuthority:{...hard,softLevel:soft.level,softReason:soft.reason,legacySoftOrderIds},strategicExitCandidate:null,leaderLastHighAt:new Date(state.lastHighAt).toISOString(),
+  let nextMeta={...meta,exitAuthority:{...hard,softLevel:soft.level,softReason:soft.reason,legacySoftOrderIds},strategicExitCandidate:null,leaderLastHighAt:new Date(state.lastHighAt).toISOString(),
     leaderTrailArmed:state.armed,exitTelemetry:telemetry,
     ...(p142Active&&p142State?{p142State}:{}),
     ...(p142Active&&ctx?.fastObservation!==true?{p142Observation:{policyVersion:P142_POLICY_VERSION,
@@ -2778,11 +2789,10 @@ async function manageLeader(db,p,ctx){
   const details={strategy:STRATEGY,bid,...state,...telemetry,exitAuthority:aiExitContext,rawExit,
     exitObservationPolicyVersion:ctx?.fastObservation?X1_POLICY_VERSION:meta.exitObservationPolicyVersion??null,
     executableVwapPeak:ctx?.fastObservation?x1Observation.executableVwapPeak:null,operatorOverride:ctx?.fastObservation?OPERATOR_OVERRIDE:null};
-  // Keep an exchange-resident STOP_MARKET aligned only with the HARD loss floor. The software
-  // monitor is unchanged and remains the primary path: this only removes the window
-  // between two one-minute polls, which is where the measured loss beyond the stop
-  // comes from. Every failure is swallowed — protection is best-effort and must never
-  // delay, block or alter a detected exit.
+  // Keep one exchange-resident reduce-only STOP_MARKET at the strongest durable protection:
+  // hard loss floor, deterministic profit/trailing floor, or AI PROTECT floor. Replacement is
+  // acknowledge-before-cancel and monotonic, so provider outages cannot erase already-earned
+  // protection. Software closes a resident soft crossing if a gap arrives before replacement.
   async function syncNativeStop(reason,confirmedQuantity=null){
     if(!NATIVE_STOP_ENABLED)return null;
     const exchangeQuantity=confirmedQuantity===null?ctx?.exchangeQuantity?.get(String(p.symbol).toUpperCase()):confirmedQuantity;
@@ -2795,7 +2805,8 @@ async function manageLeader(db,p,ctx){
       const cleanup=reason==="CLOSE"?(ctx?.cleanupGateway??gateway):gateway;
       const info=reason==="CLOSE"?{price_tick:1,quantity_step:1}:await cleanup({action:"symbol_info",market:p.symbol},5000);
       const out=await createGatewayProtection(db,cleanup,()=>verifyExecutionLease(db))
-        .ensure(p.id,{exitClass:EXIT_CLASS.HARD_SAFETY,authorityVersion:EXIT_AUTHORITY_VERSION,legacySoftOrderIds,stopPrice:hard.hardFloor,priceTick:N(info?.price_tick??info?.tick_size),
+        .ensure(p.id,{exitClass:residentProtection.exitClass,authorityVersion:EXIT_AUTHORITY_VERSION,legacySoftOrderIds,
+          protectionReason:residentProtection.reason,stopPrice:residentProtection.level,priceTick:N(info?.price_tick??info?.tick_size),
           quantityStep:N(info?.quantity_step??info?.step_size),exchangeQuantity:exchangeQuantity??0,
           positionMode:"ONE_WAY",manualSymbols:ctx?.manualSymbols??[],lastPrice:bid});
       const ackAt=Math.max(0,...(out.state?.protection?.orders??[]).filter(o=>!o.terminal).map(o=>Number(o.lastQueryAt??o.ackAt??0)));
@@ -2824,21 +2835,31 @@ async function manageLeader(db,p,ctx){
       retired=await syncNativeStop(result?.closed===true?"CLOSE":"HOLD",residual);
     return {action:"CLOSE",reason:fillGuard.reason,result,nativeStop:retired,fillGuard};
   }
-  // Mandatory canonical arbitration for every strategic candidate. Never wait for a
-  // provider here: fd1HoldTick claims/consumes durable background work. Native hard
-  // protection and the next fast observation remain independent of provider latency.
-  if(!hard.hardHit){
+  // GPT FINAL is primary. DeepSeek may assume EXIT/HOLD/PROTECT authority only when GPT is
+  // unavailable or its budget is exhausted; it never receives entry authority. Resident
+  // protection remains independent of both providers.
+  if(state.action!=="CLOSE"){
     nextMeta.fd1HoldPolicyVersion=FD1_HOLD_POLICY_VERSION;
     const timeCandidate=FD1_TIME_REASONS.includes(rawExit.reason)?rawExit.reason:null;
     const fd1=await fd1HoldTick(db,p,{meta:nextMeta,state,bid,now:detectedAtMs,timeCandidate,
       softTrigger:soft,exitContext:aiExitContext});
     nextMeta.fd1Hold=fd1.state;
-    details.fd1={reason:fd1.reason??null,close:fd1.close===true,timeCandidate,last:fd1.state?.last??null,pending:fd1.state?.pending?.event??null};
-    if(fd1.close&&fd1.reason==="FD1_GPT_EXIT"){
+    const aiProtect=N(fd1.state?.protectLevel);
+    if(aiProtect>residentProtection.level+softEps)
+      residentProtection={level:aiProtect,reason:"AI_PROTECT_LEVEL",exitClass:EXIT_CLASS.SOFT_PROTECTION};
+    nextMeta.exitAuthority={...nextMeta.exitAuthority,residentLevel:residentProtection.level,
+      residentReason:residentProtection.reason,residentExitClass:residentProtection.exitClass};
+    details.fd1={reason:fd1.reason??null,close:fd1.close===true,fallback:fd1.fallback===true,timeCandidate,
+      last:fd1.state?.last??null,pending:fd1.state?.pending?.event??null,residentProtection};
+    if(fd1.close&&["FD1_GPT_EXIT","FD1_DEEPSEEK_EXIT"].includes(fd1.reason)){
       assertExitAuthority(fd1.reason,p,fd1.approval,Date.now());
       state.action="CLOSE";state.reason=fd1.reason;state.exitClass=EXIT_CLASS.AI_STRATEGIC;ctx={...ctx,finalApproval:fd1.approval};
     }
     details.action=state.action;details.reason=state.reason;
+  }else{
+    nextMeta.exitAuthority={...nextMeta.exitAuthority,residentLevel:residentProtection.level,
+      residentReason:residentProtection.reason,residentExitClass:residentProtection.exitClass};
+    details.action=state.action;details.reason=state.reason;details.residentProtection=residentProtection;
   }
   if(state.action==="CLOSE"){
     // No peak update or audit round trip may delay an already detected stop.
@@ -2861,8 +2882,10 @@ async function manageLeader(db,p,ctx){
   if(write.error||!write.data)throw new Error("V17_EXIT_STATE_WRITE");
   // Only after the ratcheted stop is durable: the exchange order must never protect a
   // level the database does not already hold.
-  const nativeStop=ctx?.fastObservation&&!stopImproved&&meta.exitAuthority?.version===EXIT_AUTHORITY_VERSION&&!legacySoftOrderIds.some(id=>(meta.exitProtection?.orders??[]).some(o=>o.clientId===id&&!o.terminal))?{status:"UNCHANGED",softwareMonitorRequired:false}:
-    await syncNativeStop("HOLD");
+  const residentImproved=residentProtection.level>activeResidentStop+softEps;
+  const nativeStop=ctx?.fastObservation&&!residentImproved&&!stopImproved&&meta.exitAuthority?.version===EXIT_AUTHORITY_VERSION&&
+    !legacySoftOrderIds.some(id=>(meta.exitProtection?.orders??[]).some(o=>o.clientId===id&&!o.terminal))?
+    {status:"UNCHANGED",softwareMonitorRequired:false}:await syncNativeStop("HOLD");
   // Existing HARD decisions and resident protection run first. QV3 failures
   // leave that protection intact; only an exact post-cutover stamp enters QV3 scope.
   const qv3=ctx?.evaluateQv3===false?null:await qv3AfterProtection(db,write.data,{...rec(ctx),bid});
