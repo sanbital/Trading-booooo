@@ -13,7 +13,7 @@ async function query(sql){const r=await fetch('https://api.supabase.com/v1/proje
 async function machine(path='',method='GET',body,nonce){const r=await fetch('https://api.machines.dev/v1/apps/'+app+'/machines'+path,{
  method,headers:{authorization:'Bearer '+process.env.FLY_API_TOKEN,'content-type':'application/json',...(nonce?{'fly-machine-lease-nonce':nonce}:{})},
  ...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(60000)});
- if(!r.ok)throw Error('MACHINE_HTTP_'+r.status);return r.json();}
+ if(!r.ok){const e=await r.json().catch(()=>({}));const reason=String(e.error??e.message??e.code??'').slice(0,240);throw Error('MACHINE_HTTP_'+r.status+':'+reason);}return r.json();}
 const safe=m=>({id:m.id,state:m.state,region:m.region,instance_id:m.instance_id,image:m.image_ref,
  guest:m.config.guest,restart:m.config.restart,auto_destroy:m.config.auto_destroy,env_keys:Object.keys(m.config.env??{})});
 const c=(await query('select enabled,production_enabled,protocol_sha256 from doa_capture.control where id=1'))[0];
@@ -26,7 +26,7 @@ const evidence={source_commit:process.env.GITHUB_SHA,protocol_sha256:protocol,be
 writeFileSync('capture-release.json',JSON.stringify(evidence,null,2));console.log(JSON.stringify({before:evidence.before}));
 const auth=spawnSync('flyctl',['auth','docker'],{encoding:'utf8'});if(auth.status!==0)throw Error('REGISTRY_AUTH_FAILED');
 const push=spawnSync('docker',['push',image],{stdio:'inherit'});if(push.status!==0)throw Error('IMAGE_PUSH_FAILED');
-const lease=await machine('/'+before.id+'/lease','POST',{description:'Continuous capture release '+process.env.GITHUB_SHA,ttl:180});
+const lease=await machine('/'+before.id+'/lease','POST',{description:'capture-'+process.env.GITHUB_SHA.slice(0,12),ttl:60});
 const nonce=lease.data?.nonce;if(!nonce)throw Error('MACHINE_LEASE_MISSING');
 try{
  const current=await machine('/'+before.id);if(current.instance_id!==before.instance_id)throw Error('CONCURRENT_CAPTURE_DEPLOYMENT');
