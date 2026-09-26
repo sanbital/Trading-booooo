@@ -20,6 +20,7 @@ import {QV3_ACTIVATION_BASIS,QV3_LIVE_CUTOVER,QV3_VERSION,qv3Entry,qv3Exit,qv3Sc
 import {E1_POLICY,advanceE1,e1QuoteEvidence,fetchE1AggTrades,startE1} from "../_shared/leader-e1-runtime.mjs";
 import {V24_ADAPTER_VERSION,v24EntryGate} from "./v24-entry-adapter.mjs";
 import {IOC_RETRY_POLICY,planAggressiveIocRetry} from "./entry-ioc-retry.mjs";
+import {RETRY_RECONCILIATION_VERSION,retryProofCandidate,parentTradeStart,proveUnplacedPartialRetry} from "./entry-retry-reconciliation.mjs";
 import {ENTRY_LIFECYCLE_VERSION,lifecycleNote,noteChanged,gptTerminalReason,expiredTriggerReason,agedOutReason} from "./entry-lifecycle.mjs";
 import {ENTRY_CAPACITY_VERSION,UNUSED_SLOT_REASON,accountStopReason,budgetCovers,entryCapacity,ledgerEntry,slotCostUsdt,slotReasonOf,unusedSlotAccounting} from "./entry-capacity.mjs";
 import {LIVE_CHASE_POLICY,LIVE_CHASE_REASON,CHASE_STATE,classifyChase,liveChaseTrigger,deadChaseState,chaseEvidenceUsable} from "../_shared/leader-live-chase.mjs";
@@ -1761,6 +1762,37 @@ async function recordMismatch(db,match) {
  * retention, because the only orders this path is for are minutes old.
  */
 const NEVER_PLACED_PROOF_MAX_AGE_MS=6*3600000;
+// A refused second IOC can coexist with its proven first fill. Recover only this
+// exact case using fresh venue order/trade history and unchanged owned exposure.
+// The account's ordinary recovery gate still owns reopening; no orders are sent here.
+async function settleNeverPlacedPartialRetry(db,order,proof,gw){
+  if(!retryProofCandidate(order))return null;
+  const pr=await db.from("v11_long_regime_orders").select("*").eq("id",order.request_payload.retry_of_order_id).maybeSingle();
+  if(pr.error||!pr.data)return {orderId:order.id,outcome:"UNRESOLVED",reason:"RETRY_PARENT_UNAVAILABLE"};
+  const parent=pr.data,fromId=parentTradeStart(parent);
+  if(fromId===null)return {orderId:order.id,outcome:"UNRESOLVED",reason:"RETRY_PARENT_FILL_UNAVAILABLE"};
+  const readsStartedAt=Date.now(),[orderHistory,trades]=await Promise.all([
+    gw({action:"order_history",market:order.symbol,start_time:Date.parse(parent.created_at)-1000,end_time:readsStartedAt,limit:1000},3000),
+    gw({action:"trade_history",market:order.symbol,from_id:fromId,limit:1000},3000)]),readsFinishedAt=Date.now(),
+    pair=await readOpsPair(db,gw),evidence=proveUnplacedPartialRetry({order,parent,proof,orderHistory,trades,pair,readsStartedAt,readsFinishedAt});
+  if(!evidence.proven)return {orderId:order.id,outcome:"UNRESOLVED",inspectionPerformed:true,evidenceSecured:false,reason:evidence.reason};
+  await verifyExecutionLease(db);
+  const wr=await db.from("v11_long_regime_orders").update({state:"REJECTED",
+    reject_reason:`PARTIAL_RETRY_NEVER_PLACED:${String(order.reject_reason).slice(0,380)}`,
+    response_payload:{...rec(order.response_payload),v18EntryNeverPlaced:{...evidence,neverPlaced:true,provenAt:new Date().toISOString()},v18ExposureFinal:true},
+    updated_at:new Date().toISOString()}).eq("id",order.id).eq("state",order.state).is("exchange_order_id",null).select("id").maybeSingle();
+  if(wr.error||!wr.data)throw Error("RETRY_NEVER_PLACED_CAS_CONFLICT");
+  // The first entry remains FILLED; rejecting its unaccepted remainder must not erase it.
+  const signal=await db.from("v11_long_regime_signals").update({status:"FILLED",reject_reason:null,updated_at:new Date().toISOString()})
+    .eq("id",order.signal_id).eq("status","ORDERED");
+  if(signal.error)throw Error("RETRY_PARTIAL_SIGNAL_WRITE");
+  await audit(db,{id:evidence.positionId},"BULL","BULL","ENTRY_PARTIAL_RECONCILED","PARTIAL_RETRY_NEVER_PLACED",
+    {signalId:order.signal_id,symbol:order.symbol,orderId:order.id,version:RETRY_RECONCILIATION_VERSION,evidence})
+    .catch(()=>console.error("RETRY_NEVER_PLACED_AUDIT_FAILED",order.id));
+  return {orderId:order.id,outcome:"RESOLVED",inspectionPerformed:true,evidenceSecured:true,quantityResolved:true,
+    attributionComplete:true,accountingComplete:true,settled:true,executedQuantity:0,reason:"PARTIAL_RETRY_NEVER_PLACED",
+    retainedPositionId:evidence.positionId,retainedQuantity:evidence.retainedQuantity,version:RETRY_RECONCILIATION_VERSION};
+}
 /**
  * Settle an entry intent that the exchange proves it never accepted.
  *
@@ -1798,6 +1830,14 @@ async function settleNeverPlacedEntry(db,order,error,gw){
   }
   if(proof?.proven!==true||proof.found!==false||N(proof.position_quantity,NaN)!==0||
      proof.position_read_ok!==true||proof.trade_read_ok!==true){
+    let retry;
+    try{retry=await settleNeverPlacedPartialRetry(db,order,proof,gw);}
+    catch(error){
+      if(classifyFailure(error).fatal)throw error;
+      return {orderId:order.id,outcome:"UNRESOLVED",inspectionPerformed:true,evidenceSecured:false,
+        reason:"RETRY_NEVER_PLACED_PROOF_UNAVAILABLE",error:String(error?.message??error).slice(0,300)};
+    }
+    if(retry)return retry;
     return {orderId:order.id,outcome:"UNRESOLVED",inspectionPerformed:true,evidenceSecured:false,
       reason:"NEVER_PLACED_NOT_PROVEN",proof:proof??null};
   }
