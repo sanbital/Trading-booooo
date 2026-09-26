@@ -70,6 +70,15 @@ test('replacement is acknowledged before old stop cancellation',async()=>{
  const created=f.calls.findIndex(x=>x[0]==='create'&&x[1]===second.clientId),canceled=f.calls.findIndex(x=>x[0]==='cancel'&&x[1]===first.clientId);
  assert.ok(created<canceled);assert.equal(f.orders.get(first.clientId).algoStatus,'CANCELED');
 });
+test('resident soft profit stop keeps its reason and cannot be downgraded',async()=>{
+ const f=fixture(),soft={...f.request,stopPrice:101,lastPrice:102,exitClass:'SOFT_PROTECTION',
+   authorityVersion:'AI_EXIT_AUTHORITY_2',protectionReason:'V17_PROFIT_LOCK'};
+ const first=await f.api().ensure('position-1',soft),state=f.state(),order=state.protection.orders.find(x=>x.clientId===first.clientId);
+ assert.equal(first.status,'PROTECTED');assert.equal(order.protectionReason,'V17_PROFIT_LOCK');assert.equal(order.spec.params.triggerPrice,101);
+ const again=await f.api().ensure('position-1',{...soft,stopPrice:100});
+ assert.equal(again.status,'PROTECTED');assert.equal(again.clientId,first.clientId);
+ assert.equal(f.calls.filter(x=>x[0]==='create').length,1,'a lower requested floor must never replace the stronger resident stop');
+});
 test('failed replacement preserves the old stop',async()=>{
  const f=fixture(),first=await f.api().ensure('position-1',f.request);
  f.exchange.createStop=async()=>{throw Error('REJECTED')};
