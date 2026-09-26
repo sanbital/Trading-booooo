@@ -23,11 +23,13 @@
  *    taker buy share > 0.5) both reversed on the latest tape;
  *  - book deltas have no historical book, so they are conservative relative moves and are
  *    re-calibrated from the pre-dispatch snapshots this release records. */
-import {computeFacts,FACT_DEFS,FACT_KEYS,POSITION_KEYS,bookFacts,modelJudgments} from './facts.mjs';
+import {computeFacts,FACT_DEFS,FACT_KEYS,POSITION_KEYS,HISTORY_KEYS,bookFacts,modelJudgments} from './facts.mjs';
+import {entryAssessment} from './assessment.mjs';
 import {readSources} from './market.mjs';
-import {CATEGORIES,categoriesFor,riskFlags,SUPPORT_UP,SUPPORT_TEXT,TREND_SUPPORT,validateShape} from './contract.mjs';
+import {CAPTURE_NOTE,contextForModel} from './capture-context.mjs';
+import {CATEGORIES,categoriesFor,riskFlags,SUPPORT_UP,SUPPORT_TEXT,TREND_SUPPORT,validateShape,JUDGMENT,EXECUTION_SAFETY} from './contract.mjs';
 import {callDecision,hash,MODEL} from './api.mjs';
-export const RECHECK_VERSION='GPT_FINAL_RECHECK_FD1_RC1';
+export const RECHECK_VERSION='GPT_FINAL_RECHECK_FD1_RC2';
 export const RECHECK_TASK='RECHECK';
 export const RECHECK_POLICY=Object.freeze({
   version:RECHECK_VERSION,
@@ -72,7 +74,9 @@ export function bookReference(raw,at=null){
   return {bid,ask,mid:(bid+ask)/2,at:num(raw?.timing?.received_at_ms)??at,facts};
 }
 /** The keys of the INITIAL facts carried with the BUY ticket and shown again to GPT. */
-export const INITIAL_KEYS=Object.freeze(FACT_KEYS.filter(k=>!POSITION_KEYS.includes(k)));
+// Same-symbol trade memory belongs to the initial ENTRY question only (it does not change in seconds).
+const NOT_RECHECK=[...POSITION_KEYS,...HISTORY_KEYS];
+export const INITIAL_KEYS=Object.freeze(FACT_KEYS.filter(k=>!NOT_RECHECK.includes(k)));
 /** Compact initial context stored in the BUY ticket (coordinator). */
 export function initialContext(record,answer){
   const v=record?.packet?.facts?.values??{};
@@ -183,8 +187,8 @@ const RECHECK_TREND=Object.freeze([...TREND_SUPPORT,'tape_return','tape_buy_shar
 // recheck:false categories (CHASE_EXTENDED) belong to the initial ENTRY question only; the
 // FINAL RECHECK category set is unchanged.
 const ENTRY_CATS=categoriesFor('ENTRY').filter(k=>CATEGORIES[k].recheck!==false),CHANGE_CAT_IDS=Object.keys(CHANGE_CATEGORIES);
-const FACT_OK=FACT_KEYS.filter(k=>!POSITION_KEYS.includes(k));
-const allSupport=()=>[...Object.keys(SUPPORT_UP).filter(k=>!POSITION_KEYS.includes(k)),...Object.keys(CHANGE_SUPPORT)];
+const FACT_OK=FACT_KEYS.filter(k=>!NOT_RECHECK.includes(k));
+const allSupport=()=>[...Object.keys(SUPPORT_UP).filter(k=>!NOT_RECHECK.includes(k)),...Object.keys(CHANGE_SUPPORT)];
 /** Deterministic flags: FD1 ENTRY categories on the CURRENT facts + change categories. */
 export function recheckFlags(packet){
   const fd=riskFlags({task:'ENTRY',data_mode:packet.data_mode,facts:packet.facts});
@@ -202,11 +206,11 @@ const obj=properties=>({type:'object',properties,required:Object.keys(properties
 export function recheckSchema(packet=null){
   const risk=packet?recheckFlags(packet):null;
   const allCats=[...ENTRY_CATS,...CHANGE_CAT_IDS];
-  const cats=risk?allCats.filter(k=>['SOFT','HARD'].includes(risk.flags[k]?.level)):allCats;
+  const cats=[...(risk?allCats.filter(k=>['SOFT','HARD'].includes(risk.flags[k]?.level)):allCats),JUDGMENT];
   const known=k=>{const v=packet?valueOf(packet,k):0;return v!==null&&v!==undefined&&Number.isFinite(v);};
-  const catFacts=[...new Set(cats.flatMap(catFactsOf))].filter(k=>!packet||known(k));
+  const catFacts=[...new Set([...cats.filter(k=>k!==JUDGMENT).flatMap(catFactsOf),...FACT_OK,...CHANGE_KEYS])].filter(k=>!packet||known(k));
   const up=allSupport().filter(k=>!packet||(known(k)&&upOf(k)(valueOf(packet,k))===true));
-  const decisions=cats.length?['BUY','SKIP','ABSTAIN']:['BUY','ABSTAIN'];
+  const decisions=['BUY','SKIP','ABSTAIN'];
   const reasonItem=obj({r:{type:'string',enum:cats.length?cats:['DATA_INCOMPLETE']},e:{type:'array',maxItems:4,items:{type:'string',enum:catFacts.length?catFacts:['return_5m']}}});
   return obj({t:{type:'string',enum:[RECHECK_TASK]},c:{type:'string',minLength:1,maxLength:80},d:{type:'string',enum:decisions},
     reasons:{type:'array',maxItems:cats.length?4:0,items:reasonItem},
@@ -221,6 +225,9 @@ export function validateRecheck(wire,packet){
   const cite=k=>{const v=valueOf(packet,k);ensure(v!==null&&v!==undefined&&Number.isFinite(v),'FD_CITED_FACT_MISSING:'+k);
     return {key:k,value:v,unit:(FACT_DEFS[k]??CHANGE_DEFS[k])[1]};};
   const reasons=wire.reasons.map(x=>{
+    // GPT's own judgment: integrity only, the cited current/change facts must exist.
+    if(x.r===JUDGMENT){ensure(new Set(x.e).size===x.e.length&&x.e.length>=1&&x.e.every(k=>FACT_OK.includes(k)||CHANGE_KEYS.includes(k)),'FD_JUDGMENT_REQUIRES_FACTS');
+      return {category:JUDGMENT,level:'JUDGMENT',evidence:x.e.map(cite)};}
     const flag=risk.flags[x.r];ensure(flag&&(flag.level==='SOFT'||flag.level==='HARD'),'FD_REASON_NOT_PRESENT:'+x.r);
     if(x.r!=='DATA_INCOMPLETE')ensure(x.e.length>0&&x.e.every(k=>catFactsOf(x.r).includes(k)),'FD_REASON_EVIDENCE_OUTSIDE:'+x.r);
     return {category:x.r,level:flag.level,evidence:x.e.map(cite)};
@@ -231,44 +238,43 @@ export function validateRecheck(wire,packet){
     const v=valueOf(packet,k);if(v!==null&&v!==undefined&&Number.isFinite(v)&&up(v)===true)support.push(cite(k));else rejected_support.push(k);}
   const d=wire.d;
   if(d==='BUY'){
-    ensure(risk.hard.length===0,'FD_BUY_WITH_HARD_RISK:'+risk.hard.join(','));
-    ensure(reasons.length===0,'FD_BUY_WITH_REASON');
-    ensure(support.length>=2,'FD_BUY_REQUIRES_SUPPORT');
-    ensure(support.some(e=>RECHECK_TREND.includes(e.key)),'FD_BUY_REQUIRES_TREND_FACT');
+    const blocking=risk.hard.filter(k=>EXECUTION_SAFETY.includes(k));
+    ensure(blocking.length===0,'FD_BUY_WITH_HARD_RISK:'+blocking.join(','));
+    ensure(support.length>=1,'FD_BUY_REQUIRES_SUPPORT');
   }
-  if(d==='SKIP'){
-    ensure(reasons.length>0,'FD_SKIP_REQUIRES_CATEGORY');
-    // A lower price alone is not a reason to abandon a BUY (strategy buys strong movers).
-    ensure(reasons.some(r=>r.category!=='PRICE_SLIPPED'),'RC_SKIP_PRICE_ONLY');
-  }
-  return {version:RECHECK_VERSION,task:RECHECK_TASK,decision:d,reasons,support,rejected_support,summary:wire.n,risk_hard:risk.hard,risk_soft:risk.soft};
+  // GPT decides; a SKIP only has to say why (a band, or its own judgment on cited facts).
+  if(d==='SKIP')ensure(reasons.length>0,'FD_SKIP_REQUIRES_CATEGORY');
+  return {version:RECHECK_VERSION,task:RECHECK_TASK,decision:d,reasons:d==='BUY'?[]:reasons,...(d==='BUY'&&reasons.length?{noted_risks:reasons}:{}),
+    support,rejected_support,summary:wire.n,risk_hard:risk.hard,risk_soft:risk.soft};
 }
 const dict=Object.entries({...Object.fromEntries(FACT_OK.map(k=>[k,FACT_DEFS[k]])),...CHANGE_DEFS}).map(([k,[s,u,d]])=>`- ${k} [${s}, ${u}]: ${d}`).join('\n');
 const catText=[...ENTRY_CATS.map(k=>`- ${k}: ${CATEGORIES[k].text}; cite only: ${CATEGORIES[k].facts.join(', ')||'(none)'}`),
   ...CHANGE_CAT_IDS.map(k=>`- ${k}: ${CHANGE_CATEGORIES[k].text}; cite only: ${CHANGE_CATEGORIES[k].facts.join(', ')}`)].join('\n');
-const supText=[...Object.entries(SUPPORT_TEXT).filter(([k])=>!POSITION_KEYS.includes(k)).map(([,t])=>t),
+const supText=[...Object.entries(SUPPORT_TEXT).filter(([k])=>!NOT_RECHECK.includes(k)).map(([,t])=>t),
   ...Object.entries(CHANGE_UP).map(([k,[o,t]])=>k+o+t)].join(', ');
-export const RECHECK_PROMPT=`너는 바이낸스 USDT 무기한 선물 롱 전용 자동매매 '트레이딩 부우'의 최종 매매 판단자다.
+export const RECHECK_PROMPT=CAPTURE_NOTE+'\n'+`너는 바이낸스 USDT 무기한 선물 롱 전용 자동매매 '트레이딩 부우'의 최종 매매 판단자다.
 너는 조금 전 이 후보를 BUY했다. 그 이후 실제 주문 직전까지 시장 상태가 의미 있게 변했다(trigger_reasons).
 질문: 이 변화까지 반영했을 때, 지금 이 순간에도 신규 LONG 진입 근거가 충분한가?
 
 판단 원칙:
 - 핵심은 "처음 BUY하게 만든 근거(initial.support)가 지금도 살아 있는가"이다. initial과 current, change를 비교하라.
 - 이 재확인은 처음 BUY를 자동 승인하는 절차가 아니다. 근거가 약해졌으면 SKIP하라.
-- 동시에 단순 가격 하락만으로 SKIP하지 마라(PRICE_SLIPPED 하나만으로는 SKIP 사유가 될 수 없다). "이미 많이 올랐다", "변동성이 크다"도 SKIP 사유가 아니다. 이 전략은 원래 강하게 상승하는 종목을 산다.
-- 알고리즘 판단(V17, V30, B06133, CEC0040)은 model_judgments에 참고용으로만 있다. CEC0040 REJECT를 따를 의무도, 무시할 의무도 없다. 사실을 우선하라.
+- 동시에 단순 가격 하락만으로 SKIP하지는 마라(강세 종목의 짧은 흔들림일 수 있다). "이미 많이 올랐다", "변동성이 크다"도 그 자체로는 SKIP 사유가 아니다. 이 전략은 원래 강하게 상승하는 종목을 산다.
+- 알고리즘과 risk_flags는 너를 위해 준비한 자료이며 너의 판단을 제약하지 않는다. 최종 판단은 네가 내린다.
+- 알고리즘 판단(V17, V30, B06133, CEC0040)은 model_judgments에 참고용으로만 있다. CEC0040은 전략 전체의 기준율이며 REJECT/PROBE는 탐색 순번일 뿐 이 종목 판단이 아니다. CEC0040 REJECT를 따를 의무도, 무시할 의무도 없다. 사실을 우선하라.
+- initial.assessment와 current.assessment를 비교하라. trend_strength가 그대로여도 current_propulsion이 식고 fatigue 축이 새로 약해졌다면(EXHAUSTION) 처음 BUY의 추진력 근거가 사라진 것일 수 있다. 한 축의 짧은 흔들림은 SKIP 사유가 아니다.
 - 10초 테이프(tape_*)는 짧은 창이라 잡음이 있다. tape_trade_count와 다른 사실을 함께 보라.
 - trigger_reasons의 ${AGED_REASON}은 시장 변화가 아니라 처음 BUY 답의 유효시간이 주문 전에 끝나 다시 묻는 것이다. 시간이 지났다는 사실 자체는 SKIP 사유가 아니다. current와 change로 판단하라.
 - 너는 주문 크기, 레버리지, 슬롯, 손절, 주문 안전검사를 바꿀 수 없다. 그것들은 항상 작동한다.
 
 결정:
-- BUY: 현재 데이터에서도 상승 근거가 유지된다. support에 지금 실제로 만족하는 상승 사실 2개 이상(가격/체결 흐름 사실 1개 이상). reasons는 비운다. HARD 플래그가 있으면 BUY 불가.
-- SKIP: 최초 BUY 이후 시장이 의미 있게 악화됐거나 현재 진입 근거가 충분하지 않다. risk_flags에 SOFT/HARD로 표시된 카테고리만 사유가 될 수 있다.
+- BUY: 현재 데이터에서도 상승 근거가 유지된다. support에 지금 실제로 만족하는 상승 사실. reasons는 비운다. 주문 안전 HARD(${EXECUTION_SAFETY.join(', ')})가 있으면 BUY 불가.
+- SKIP: 네 판단으로 최초 BUY 이후 시장이 악화됐거나 현재 진입 근거가 충분하지 않다. 사유는 SOFT/HARD 카테고리 또는 ${JUDGMENT}(근거 사실 포함).
 - ABSTAIN: 데이터 부족/모순으로 판단 불가. ABSTAIN이면 주문하지 않는다.
 
 출력 규칙(서버가 검증하며, 어기면 무효 = ABSTAIN = 주문 없음):
 - t는 RECHECK, c에는 입력의 candidate_id를 그대로 적는다.
-- reasons의 각 r은 risk_flags에 SOFT 또는 HARD로 표시된 카테고리만, e에는 그 카테고리가 허용한 사실 키만.
+- reasons의 각 r은 risk_flags에 SOFT 또는 HARD로 표시된 카테고리(e에는 그 카테고리가 허용한 사실 키만), 또는 ${JUDGMENT}(e에는 입력 current/change에 있는 근거 사실 키).
 - support에는 아래 지지 조건을 지금 실제로 만족하는 키만. 지지 조건: ${supText}
 - n은 한국어 한두 문장 요약이며 숫자를 쓰지 않는다.
 
@@ -286,8 +292,9 @@ export function recheckModelInput(packet){
   const risk=recheckFlags(packet);
   return {t:RECHECK_TASK,candidate_id:packet.candidate_id,symbol:packet.symbol,data_mode:packet.data_mode,
     initial:{decision:packet.initial.decision,summary:packet.initial.summary,support:packet.initial.support,
-      facts:Object.fromEntries(Object.entries(packet.initial.facts).filter(([,x])=>x!==null).map(([k,x])=>[k,round(x)]))},
-    current:{facts:sections,unavailable:FACT_OK.filter(k=>v[k]===null)},
+      facts:Object.fromEntries(Object.entries(packet.initial.facts).filter(([,x])=>x!==null).map(([k,x])=>[k,round(x)])),
+      assessment:entryAssessment(packet.initial.facts??{})},
+    current:{facts:sections,unavailable:FACT_OK.filter(k=>v[k]===null),assessment:entryAssessment(v),...(packet.facts.capture_context?{capture_context:contextForModel(packet.facts.capture_context)}:{})},
     change:Object.fromEntries(Object.entries(packet.change.values).filter(([,x])=>x!==null).map(([k,x])=>[k,round(x)])),
     trigger_reasons:packet.trigger_reasons,
     risk_flags:Object.fromEntries(Object.entries(risk.flags).filter(([,x])=>x.level!=='CLEAR').map(([k,x])=>[k,x.level])),

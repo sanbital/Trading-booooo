@@ -25,6 +25,12 @@ export const LIVE_CHASE_VERSION = "V17_LIVE_CHASE_1";
 export const LIVE_CHASE_MODE = "LIVE_MOMENTUM_CHASE";
 export const LIVE_CHASE_REASON = "V17_LIVE_CHASE_TRIGGERED";
 export const CHASE_STATE = Object.freeze({ DEAD: "DEAD", LIVE: "LIVE", UNCERTAIN: "UNCERTAIN" });
+/** (2026-09-26) Data failures are the only chase verdicts that still end a candidate. A DEAD
+ * verdict computed on real bars (volume fading, sellers, failing breakout, lower low, trend
+ * down) is evidence the AI weighs; the >maxLiveChasePct range stays an execution limit. */
+export const CHASE_DATA_FAILURES = Object.freeze(["CHASE_INPUT_INVALID", "CHASE_DATA_UNAVAILABLE"]);
+export const chaseEvidenceUsable = (c) => [CHASE_STATE.LIVE, CHASE_STATE.UNCERTAIN, CHASE_STATE.DEAD].includes(c?.state) &&
+  Array.isArray(c?.reasons) && !c.reasons.some((r) => CHASE_DATA_FAILURES.includes(r));
 
 export const LIVE_CHASE_POLICY = Object.freeze({
   version: LIVE_CHASE_VERSION,
@@ -116,7 +122,7 @@ export function classifyChase(raw, { referencePrice, chaseBarOpenTime, policy = 
 export function liveChaseTrigger(state, classification, { now, setupPolicy, policy = LIVE_CHASE_POLICY }) {
   const at = num(now), open = num(state?.lastCandleOpenTime), ref = num(state?.referencePrice), px = num(state?.lastClose);
   if (state?.state !== "CHASE_EXPIRED" || state.terminalReason !== "V17_CHASE_EXPIRED") return null;
-  if (![CHASE_STATE.LIVE, CHASE_STATE.UNCERTAIN].includes(classification?.state) || classification.version !== policy.version) return null;
+  if (!chaseEvidenceUsable(classification) || classification.version !== policy.version) return null;
   if (!Number.isSafeInteger(at) || !Number.isSafeInteger(open) || !(ref > 0 && px > 0)) return null;
   if (!(px > ref * (1 + setupPolicy.maxChasePct) && px <= ref * (1 + policy.maxLiveChasePct))) return null;
   const triggerAt = open + MINUTE, triggerExpiresAt = triggerAt + setupPolicy.entryTriggerTtlMs;
@@ -155,7 +161,7 @@ export function deadChaseState(state, classification, now, why = null) {
 export function liveChaseTimingValid(row, setupPolicy, policy = LIVE_CHASE_POLICY) {
   const s = row?.features?.v17Setup, source = row?.features?.b06133?.source;
   if (s?.triggerMode !== LIVE_CHASE_MODE || s.chase?.version !== policy.version ||
-    ![CHASE_STATE.LIVE, CHASE_STATE.UNCERTAIN].includes(s.chase?.state) || !Array.isArray(source?.prebars)) return false;
+    !chaseEvidenceUsable(s.chase) || !Array.isArray(source?.prebars)) return false;
   const trigger = num(s.triggerAt), ref = num(s.referencePrice), px = num(s.triggerClose);
   if (!Number.isSafeInteger(trigger) || trigger % MINUTE !== 0 || !(ref > 0) || !(px > 0) ||
     num(source.decisionAt) !== trigger || num(s.lastCandleOpenTime) !== trigger - MINUTE || num(s.lastClose) !== px ||

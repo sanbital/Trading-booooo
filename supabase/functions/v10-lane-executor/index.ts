@@ -23,7 +23,7 @@ import {IOC_RETRY_POLICY,planAggressiveIocRetry} from "./entry-ioc-retry.mjs";
 import {RETRY_RECONCILIATION_VERSION,retryProofCandidate,parentTradeStart,proveUnplacedPartialRetry} from "./entry-retry-reconciliation.mjs";
 import {ENTRY_LIFECYCLE_VERSION,lifecycleNote,noteChanged,gptTerminalReason,expiredTriggerReason,agedOutReason} from "./entry-lifecycle.mjs";
 import {ENTRY_CAPACITY_VERSION,UNUSED_SLOT_REASON,accountStopReason,budgetCovers,entryCapacity,ledgerEntry,slotCostUsdt,slotReasonOf,unusedSlotAccounting} from "./entry-capacity.mjs";
-import {LIVE_CHASE_POLICY,LIVE_CHASE_REASON,CHASE_STATE,classifyChase,liveChaseTrigger,deadChaseState} from "../_shared/leader-live-chase.mjs";
+import {LIVE_CHASE_POLICY,LIVE_CHASE_REASON,CHASE_STATE,classifyChase,liveChaseTrigger,deadChaseState,chaseEvidenceUsable} from "../_shared/leader-live-chase.mjs";
 import {BOO_ADAPTER_VERSION,ENFORCEMENT as BOO_ENFORCEMENT,evaluateBooEntry,finalizeBooEntry,loadBooGateContext,openRiskSummary,recordBooVerdict} from "./boo-entry-adapter.mjs";
 import {R1_VERSION} from "../_shared/boo/r1-strategy.mjs";
 import {RISK_POLICY_VERSION} from "../_shared/boo/risk-policy.mjs";
@@ -418,7 +418,7 @@ async function evaluateLiveChase(row,state,now,fetchCandles=qv3Candles){
   const classification=classifyChase(bars,{referencePrice:state.referencePrice,chaseBarOpenTime:open});
   const live=liveChaseTrigger(state,classification,{now,setupPolicy:SETUP_POLICY});
   if(live)return {state:live,reason:LIVE_CHASE_REASON};
-  const late=[CHASE_STATE.LIVE,CHASE_STATE.UNCERTAIN].includes(classification.state);
+  const late=chaseEvidenceUsable(classification);
   return {state:deadChaseState(state,classification,now,late?"CHASE_TRIGGER_WINDOW_UNAVAILABLE":null),reason:SETUP_REASON.CHASE_EXPIRED};
 }
 /** Evidence only: the last execution-path outcome of a still-open candidate, so its eventual
@@ -487,17 +487,18 @@ async function applyB06133Selection(db,row,state){
   // as reference evidence; admission is the V30 score gate on those same factors.
   const v30=v30FrontDecision(stamp,V30_FRONT_LIVE_VERSION),admitted=v30.admitted===true;
   const features={...rec(row.features),b06133:stamp,v30Front:v30};
+  // (2026-09-26) Sensors prepare evidence; they never end a candidate before the AI decides.
+  // A V30 non-admission or unavailable B06133 inputs are recorded and shown to GPT/DeepSeek.
   const patch={features,updated_at:new Date(evaluatedAt).toISOString()};
-  if(!admitted){patch.status="REJECTED";patch.reject_reason=stamp.result===null?stamp.reason:
-    `V30_FRONT_REJECT:${[...v30.failed,...v30.unknown].join("+")||"UNKNOWN"}`;}
   const write=await db.from("v11_long_regime_signals").update(patch).eq("id",row.id).eq("status","NEW").select("*").maybeSingle();
   if(write.error)throw Error(`B06133_WRITE:${write.error.message}`);
   if(!write.data)return {allowed:false,row,stamp:{...stamp,reason:"B06133_CAS_RACE"}};
-  const reason=admitted?"V30_FRONT_ADMIT":patch.reject_reason;
-  await audit(db,null,"BULL","BULL",admitted?"ENTRY_ALLOW":"ENTRY_REJECT",reason,
+  const reason=admitted?"V30_FRONT_ADMIT":stamp.result===null?`${stamp.reason}:EVIDENCE_ONLY`:
+    `V30_FRONT_NOT_ADMITTED:${[...v30.failed,...v30.unknown].join("+")||"UNKNOWN"}:EVIDENCE_ONLY`;
+  await audit(db,null,"BULL","BULL",admitted?"ENTRY_ALLOW":"ENTRY_EVIDENCE",reason,
     {signalId:row.id,symbol:row.symbol,stage:"V30_ENTRY_SELECTION",finalAdmission:false,
       orderDispatched:false,b06133:stamp,v30Front:v30});
-  return {allowed:admitted,row:write.data,stamp:{...stamp,reason}};
+  return {allowed:true,row:write.data,stamp:{...stamp,reason}};
 }
 
 /**
@@ -1055,7 +1056,7 @@ if(signalSizing.sizingContractVersion!==SLOT_SIZING_CONTRACT.version||
 if(selection.version!==B06133_VERSION||Number(selection.source?.decisionAt)!==Number(selectedSetup?.triggerAt))
   throw new Error("B06133_SELECTION_INVALID");
 // The V30 stamp must equal what the policy recomputes from that unmodified stamp.
-if(!baselineAllowedV30(s,V30_FRONT_LIVE_VERSION)||!entryBranchOf(rec(s.features)))
+if(!baselineAllowedV30(s,V30_FRONT_LIVE_VERSION,{requireAdmission:false})||!entryBranchOf(rec(s.features)))
   throw new Error("V30_SELECTION_INVALID");
 if(cec.version!==CEC0040_VERSION||cec.targetVersion!==CEC0040_TARGET_VERSION||cec.ready!==true||
   Number(cec.decisionAt)!==Number(selectedSetup?.triggerAt)||

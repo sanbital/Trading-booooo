@@ -6,7 +6,8 @@
  *      valid HOLD defers it for HOLD_TTL_MS; EXIT, ABSTAIN, invalid, timeout, budget or
  *      any error falls back to the deterministic time exit;
  *  (b) may EXIT on a meaningful state change (momentum deterioration, significant price
- *      move) when it names a thesis-broken category breached in that snapshot.
+ *      move) naming a breached category or, since 2026-09-26, its own GPT_JUDGMENT on cited facts
+ *      (models prepare evidence; they do not constrain GPT's exit judgment).
  * Calls are event-driven, spaced, capped per position and journaled once per key. */
 import {computeFacts,modelJudgments} from './facts.mjs';
 import {readSources} from './market.mjs';

@@ -192,14 +192,14 @@ test('detector: thresholds are distribution bands, missing data triggers (never 
   // a 10 s tape with too few trades is noise: flow triggers need minTapeTrades
   assert.equal(detectChange(init,{...q(100),tape:{return:-.004,buyShare:.1,tradeCount:5}}).triggered,false);
 });
-test('contract: price drop alone is not a SKIP; BUY needs current up-support and no HARD risk; the prompt keeps GPT the judge',async()=>{
+test('production RC2: GPT may weigh price risk; BUY needs current support and preserves execution safety',async()=>{
   const init={snapshotAt:T,executionRef:{mid:1.21},facts:{taker_buy_ratio_5m:.6},support:['return_5m']};
   const d=detectChange(init,{at:T+10000,mid:1.1995,book:null,tape:{return:.001,buyShare:.6,tradeCount:100}});
   assert.deepEqual(d.reasons,['PRICE_ADVERSE']);
   const facts=computeFacts(srcFixture(T),{asOf:T,referenceClose:1,dayReturn:.1,rank:1});
   const p=await buildRecheckPacket({signalId:'x',symbol:'TESTUSDT',facts,initial:init,detection:d,judgments:null});
-  assert.throws(()=>validateRecheck({c:p.candidate_id,...RECHECK_WIRE.INVALID},p),/RC_SKIP_PRICE_ONLY/);
-  assert.throws(()=>validateRecheck({c:p.candidate_id,t:'RECHECK',d:'BUY',reasons:[],support:['return_5m'],n:'유지'},p),/FD_BUY_REQUIRES_SUPPORT/);
+  assert.equal(validateRecheck({c:p.candidate_id,...RECHECK_WIRE.INVALID},p).decision,'SKIP');
+  assert.equal(validateRecheck({c:p.candidate_id,t:'RECHECK',d:'BUY',reasons:[],support:['return_5m'],n:'유지'},p).decision,'BUY');
   const hard=await buildRecheckPacket({signalId:'x',symbol:'TESTUSDT',facts:{...facts,values:{...facts.values,spread_bps:40}},initial:init,detection:d,judgments:null});
   assert.throws(()=>validateRecheck({c:hard.candidate_id,...RECHECK_WIRE.BUY},hard),/FD_BUY_WITH_HARD_RISK/);
   assert.match(RECHECK_PROMPT,/조금 전 이 후보를 BUY했다/);assert.match(RECHECK_PROMPT,/지금 이 순간에도 신규 LONG 진입 근거가 충분한가/);
