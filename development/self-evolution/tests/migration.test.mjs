@@ -59,3 +59,32 @@ test('additive migration, role isolation, claim fencing, scope and immutable bas
  assert.equal((await db.query('select evolution_active_policy() a')).rows[0].a.bundle.policy_version,'POLICY_BASELINE_V105','registration cannot promote');
  }finally{await db.close();}});
 
+test('historical capture is causal at its cutoff, without live heartbeat dependence',async()=>{
+ const db=new PGlite();try{
+  await db.exec(`create table public.evolution_market_frames(kind text,symbol text,at timestamptz,received_at timestamptz,payload jsonb);
+   create table public.v11_long_regime_positions(id uuid,symbol text,state text);`);
+  await db.exec(await fs.readFile(new URL('../../../supabase/migrations/20260926180102_evolution_replay_receipt_cutoff.sql',import.meta.url),'utf8'));
+  const end=Date.parse('2020-01-01T00:10:00Z'),iso=n=>new Date(n).toISOString();
+  function payload(t){const candle=Math.floor(t/60000)*60000;return {interval_start:iso(t-5000),interval_end:iso(t),interval_ms:5000,
+   bucket_complete:true,book_complete:true,trade_sequence_complete:true,coverage_25:true,flow_causal:true,trade_count:0,
+   mid:100,exchange_at:iso(t-20),received_at:iso(t-10),spread_bps:1,buy_quote_5s:600,sell_quote_5s:400,
+   ask_25_usdt:10000,bid_25_usdt:11000,buy_vwap_450:100.01,sell_vwap_450:99.99,
+   btc_candle_complete:true,btc_return_1m:0.001,btc_candle_at:iso(candle-60000),btc_candle_end_ms:candle,
+   btc_candle_exchange_ms:candle-1,btc_candle_received_ms:candle,best_bid:99.99,best_ask:100.01,
+   observed_bid_depth_usdt:11000,observed_ask_depth_usdt:10000,depth_bid_coverage_bps:25,depth_ask_coverage_bps:25,
+   depth_coverage_complete:true,depth_bid_boundary:99.75,depth_ask_boundary:100.25};}
+  async function put(t,received){await db.query("insert into evolution_market_frames values('micro','BTCUSDT',$1,$2,$3)",[iso(t),iso(received),JSON.stringify(payload(t))]);}
+  const context=async(cut=end+1000)=>(await db.query('select evolution_capture_context($1,$2,null) c,evolution_market_sensor($1,$2) s',['BTCUSDT',iso(cut)])).rows[0];
+  for(let i=24;i>=0;i--)await put(end-i*5000,end-i*5000+200);
+  let r=await context();assert.equal(r.c.status,'AVAILABLE');assert.equal(r.s.status,'AVAILABLE');assert.equal(r.c.trajectory.length,24);assert.equal(r.s.market_sensor_trajectory.length,24);
+  assert.ok(r.c.trajectory.every(p=>p.received_at_ms<=end+1000));
+  await put(end+500,end+2000);r=await context();assert.equal(r.c.status,'AVAILABLE','late-arriving frame cannot poison a past snapshot');assert.equal(r.s.status,'AVAILABLE');
+  await db.query('delete from evolution_market_frames where at>$1',[iso(end)]);
+  await put(end+5000,end+500);r=await context();assert.equal(r.c.reason,'FUTURE_BUCKET');assert.equal(r.s.reason,'FUTURE_BUCKET');
+  await db.query('delete from evolution_market_frames where at>$1',[iso(end)]);
+  r=await context(end+30000);assert.equal(r.c.reason,'STALE_BUCKET');assert.equal(r.s.reason,'STALE_BUCKET');
+  r=await context(Date.now()+60000);assert.equal(r.c.reason,'STALE_OR_FUTURE');assert.equal(r.s.reason,'STALE_OR_FUTURE');
+  await db.query('delete from evolution_market_frames where at=$1',[iso(end-60000)]);r=await context();assert.notEqual(r.c.status,'AVAILABLE');assert.notEqual(r.s.status,'AVAILABLE');
+ }finally{await db.close();}
+});
+

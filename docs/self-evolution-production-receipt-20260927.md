@@ -11,8 +11,8 @@
 | 직전 executor | v105 / `f55a69d782600c41bd75b07b5af277baea896a397d9ad0b1a032bed3ef26adce` |
 | 배포 executor | v106 / `b91fa4076e9a286918dd4521f7c4138b10e3872e3f992e346e86652f3baaea48` |
 | executor 배포 시각 | 2026-09-26 17:32:55 UTC |
-| 연구 worker | self-evolution-worker v5 / `e0335fe984547fc10cfae3f7bcb079d4f4166701c394675d3547f43a8c0793aa` |
-| worker 배포 시각 | 2026-09-26 17:47:39 UTC |
+| 연구 worker | self-evolution-worker v6 / `96dffb22a4a54286a0a5284da349965d077cd4ae70b781afeaf8eb6f8ad08ea3` |
+| worker 배포 시각 | 2026-09-26 18:02:00 UTC |
 | 핵심 merge | PR198 / `8203036ce018c1bf6aede5fe21bfc21321b8d1fa` |
 | 후속 보정 | PR200: 정확한 근거 ID, SQL 범위 검사, 원자적 후보 등록·복구 |
 | active champion | `POLICY_BASELINE_V105` |
@@ -52,8 +52,8 @@
 | 24 | rollback | policy 무결성/오류율/손실 꼬리·drawdown 악화/health deadline으로 previous champion 복귀. DB 통합 테스트 통과. 실거래에서 신규 champion rollback은 아직 발생하지 않음. |
 | 25 | scope | exact object schema·stage/model/feature allowlist·금지 권한 검사. SQL 독립 재검사. AI 생성 코드 실행 없음. |
 | 26 | immutable config | 실조회 margin 150 USDT, leverage 3, MAX_SLOTS 10, dynamic cash capacity 유지. 실제 잔고 332.01243023 USDT는 연구 비교 입력으로만 사용. |
-| 27 | production deploy | executor v106, worker v5 ACTIVE. 실제 번들 source 검증. |
-| 28 | migrations | 아래 4개 additive migration 적용. trading history 삭제/수정 없음. |
+| 27 | production deploy | executor v106, worker v6 ACTIVE. 실제 번들 source 검증. |
+| 28 | migrations | 아래 5개 additive migration 적용. trading history 삭제/수정 없음. |
 | 29 | main | PR198 merge; PR200 후속 보정. |
 | 30 | artifact | 위 버전/hash. Bundler가 사용하지 않는 연구 모듈은 executor 결과물에서 제외하며, 반환된 모든 소스는 배포 입력과 일치. |
 | 31 | DB evidence | 17:46 UTC 기준 journal 375, micro archive 12,762, review 3, outcome 16, pattern 33, hypothesis 1, paired simulation 1. |
@@ -84,8 +84,9 @@
 | 20260926171806_autonomous_evolution_activation | 기준 정책, worker token, scheduler |
 | 20260926173042_evolution_v105_baseline | 승인된 v105 보호 코드 기준선 동결, 자금 설정 변경 없음 |
 | 20260926174101_evolution_scope_and_recovery | 단어 경계 scope 검사, 후보 원자적 등록·복구 |
+| 20260926180102_evolution_replay_receipt_cutoff | historical cutoff 기준 freshness, 수신 완료 frame만 선택 |
 
-관련 회귀 570/570, 이후 연구 보정 34/34, migration 재검증 및 Deno check 통과. GitHub CI도 실행했다. 권한 위반, provider timeout, 최초 판단 독립성, 미래 데이터/결측, hard/soft exit, fill 지연 중 자금 사용 금지, SQL null 우회, immutable history, queue fencing, atomic switch, rollback을 검증했다.
+최종 관련 회귀 574/574 및 Deno check 통과. 연구 전용 테스트는 37/37. GitHub CI도 실행했다. 권한 위반, provider timeout, 최초 판단 독립성, 미래 데이터/결측, hard/soft exit, fill 지연 중 자금 사용 금지, SQL null 우회, immutable history, queue fencing, atomic switch, rollback을 검증했다.
 
 ## 남은 관측 한계
 
@@ -93,3 +94,11 @@
 
 운영 조회: service-only `select public.evolution_report();`. 실제 자금·계좌·안전 설정은 자가진화 범위 밖이며, 후보 policy가 runtime source를 수정하거나 배포할 수 없다.
 
+## 최종 causal replay 확인 — 18:05 UTC
+
+연구 archive RPC의 freshness 비교가 현재 시계에 묶여 과거 packet을 거부하던 문제를 수정했다. 수신 시각이 cutoff 이하인 frame만 먼저 선택한 뒤 최근 25개에서 24개 trajectory를 만든다. 미래 event sentinel, 누락·gap·stale 검증은 유지했다. 실시간 capture RPC는 변경하지 않았다. PostgreSQL microsecond 수신 시각은 millisecond로 올림하고, 재시작 cursor는 1ms 겹쳐 조회한 뒤 event ID로 중복 제거한다.
+
+- QUSDT/SPELLUSDT/JELLYJELLYUSDT/WLDUSDT: 2분 전 cutoff에서 AVAILABLE, 24 points, 실제 coverage 120,065ms, 모든 수신 시각이 cutoff 이하. BTC market sensor도 후속 동일 방식 조회에서 AVAILABLE. 유효하지 않은 bucket이 들어간 구간은 그대로 UNAVAILABLE 처리한다.
+- 연구 job 24724 DONE: champion/challenger 각각 709개 관측, missing 0, open 0, 완료 거래 0. paired API 비교는 총 3개. 거래 없음은 성과 개선으로 인정하지 않는다.
+- Worker v6의 반환 source 36개가 배포 입력과 모두 일치했다. Executor는 v106 및 기존 hash 그대로다.
+- 동시 merge PR201의 보호 강화 코드는 그대로 계승하며 이번 변경은 연구 worker·archive·테스트에만 한정한다.
