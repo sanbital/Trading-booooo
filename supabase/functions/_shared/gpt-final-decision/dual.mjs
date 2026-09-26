@@ -19,7 +19,11 @@ If DeepSeek input mismatched, do not use its opinion; explain that status in arb
 For HOLD, PROTECT retains existing deterministic/native protection and requests a sooner review;
 it cannot widen/cancel stops or independently place an order. Strategic EXIT requires your final EXIT.
 arbitration evidence lists use exact dot paths prefixed current. or initial. to numeric/boolean market evidence.
+These are full paths, e.g. current.facts.trend.return_5m or initial.capture_context.trajectory.11.d_mid_bps.
+Unlike original reasons/support, bare fact names such as current.return_5m are invalid here.
+For RECHECK the input has a nested current object, so use current.current.facts.trend.return_5m.
 adopted/rejected list only paths from valid DeepSeek bullish/bearish evidence, prefixed initial.
+If DeepSeek is unavailable/invalid, considered/adopted/rejected must be empty; do not attribute GPT FIRST claims to DeepSeek.
 When valid advice supplies evidence, explicitly put a cited key in considered and adopt or reject it.
 Return concise conclusions, never chain-of-thought. The original task decision schema still applies.`;
 const arr={type:'array',maxItems:6,items:{type:'string',minLength:1,maxLength:180}};
@@ -72,7 +76,17 @@ export function validateFinalWire(wire,packet,{validate=validateDecision,catalog
 }
 export function arbitrationPayload(current,initial,reviews){
   const base=clone(current.base_payload),schema=base.text.format.schema;
-  base.text.format.schema={...schema,properties:{...schema.properties,arbitration:ARBITRATION_SCHEMA},required:[...schema.required,'arbitration']};
+  const catalog={...evidenceCatalog(initial.market_input,'initial'),...evidenceCatalog(current.market_input,'current')};
+  // One enum definition shared by five lists, avoiding duplicated enum budgets and ambiguous bare keys.
+  const keys=Object.keys(catalog).filter(k=>/^(initial|current)\.(current\.)?(facts|capture_context)\./.test(k));
+  const cited=reviews.deepseek.valid?[...reviews.deepseek.answer.bullish_evidence,...reviews.deepseek.answer.bearish_evidence].map(k=>'initial.'+k):[];
+  const evidence={...arr,items:{$ref:'#/$defs/arbitration_evidence'}};
+  const advisoryEvidence=cited.length?{...arr,items:{type:'string',enum:[...new Set(cited)]}}:{...arr,maxItems:0};
+  const allKeys=[...new Set([...keys,...cited])],chunks=[];
+  for(let i=0;i<allKeys.length;i+=200)chunks.push({type:'string',enum:allKeys.slice(i,i+200)});
+  base.text.format.schema={...schema,$defs:{...schema.$defs,arbitration_evidence:chunks.length?{anyOf:chunks}:{type:'string'}},
+    properties:{...schema.properties,arbitration:{...ARBITRATION_SCHEMA,properties:{...ARBITRATION_SCHEMA.properties,
+      considered:reviews.deepseek.valid?evidence:{...arr,maxItems:0},adopted:advisoryEvidence,rejected:advisoryEvidence,supporting:evidence,opposing:evidence}}},required:[...schema.required,'arbitration']};
   const before=initial.packet.facts.values,after=current.packet.facts.values;
   const changes=Object.fromEntries(Object.keys(after).filter(k=>Number.isFinite(before[k])&&Number.isFinite(after[k])).map(k=>[k,after[k]-before[k]]));
   return {...base,max_output_tokens:Math.max(1400,base.max_output_tokens),prompt_cache_key:'boo-fd1-final-'+current.packet.task.toLowerCase(),

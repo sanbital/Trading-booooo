@@ -47,15 +47,17 @@ const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Objec
 // whose settlement or stop the budget cuts off waits a cycle for reconciliation, unprotected.
 // Sized from production, 2026-09-18..24: 84 filled attempts took <= 11.6 s from BOO admission
 // to outcome (p99 11.45 s), the claim and first reads ~2 s before that, and a GPT FINAL
-// RECHECK adds at most its 4 s request timeout. A single-IOC filled attempt makes ~22 budgeted
+// RECHECK arbitration now adds at most 8 s across the parallel FIRST calls and GPT FINAL.
+// Keep the original post-model settlement/protection time by adding the 4 s difference.
+// A single-IOC filled attempt makes ~22 budgeted
 // gateway calls (quote, symbol_info, portfolio and open orders at admission and again before
 // dispatch, fees and position mode for BOO, the E1 quote, the order, settlement, native stop),
 // 26 with an E1 recovery re-read.
-const ENTRY_ATTEMPT_RESERVE=Object.freeze({ms:20000,calls:26});
+const ENTRY_ATTEMPT_RESERVE=Object.freeze({ms:24000,calls:26});
 // The bounded IOC retry is a second order inside the same attempt: fresh tape and quote, up to a
-// 4 s FINAL RECHECK, the account re-read, the order, its settlement and its stop (order to
+// 8 s FINAL RECHECK arbitration, the account re-read, the order, its settlement and its stop (order to
 // outcome <= 9.0 s in production). It is only started when the budget can finish it.
-const IOC_RETRY_RESERVE=Object.freeze({ms:16000,calls:14});
+const IOC_RETRY_RESERVE=Object.freeze({ms:20000,calls:14});
 // Wall-clock companion to the budget reserve: an E1 fast-weak watch can wait up to
 // E1_POLICY.watchMs per attempt. Stop STARTING new attempts past this point; an attempt
 // already running is never cut short.

@@ -9,8 +9,8 @@ const obj=properties=>({type:'object',properties,required:Object.keys(properties
 export function advisorySchema(task){return obj({task:en([task]),candidate_id:text(80),snapshot_hash:text(64),
   decision_preference:en(task==='HOLD'?['HOLD','PROTECT','EXIT','UNCERTAIN']:['BUY','SKIP','ABSTAIN','UNCERTAIN']),
   confidence:{type:'number',minimum:0,maximum:1},thesis_state:en(['STRONG','ALIVE','WEAKENING','BROKEN','UNKNOWN']),
-  bullish_evidence:list(),bearish_evidence:list(),risk_flags:list(),trajectory_interpretation:text(240),
-  strongest_counterargument:text(240),recommended_action:en(task==='HOLD'?['HOLD','PROTECT','EXIT','UNCERTAIN']:['BUY','SKIP','ABSTAIN','UNCERTAIN']),reason:text(240)});}
+  bullish_evidence:list(),bearish_evidence:list(),risk_flags:list(),trajectory_interpretation:text(800),
+  strongest_counterargument:text(800),recommended_action:en(task==='HOLD'?['HOLD','PROTECT','EXIT','UNCERTAIN']:['BUY','SKIP','ABSTAIN','UNCERTAIN']),reason:text(800)});}
 export function evidenceCatalog(value,prefix='',out={}){
   if(typeof value==='number'&&Number.isFinite(value)||typeof value==='boolean'){out[prefix]=value;return out;}
   if(value&&typeof value==='object')for(const [k,v] of Object.entries(value))evidenceCatalog(v,prefix?prefix+'.'+k:k,out);
@@ -34,6 +34,10 @@ new highs, momentum exhaustion, bid support, ask pressure, OI divergence, BTC, f
 Read the ordered 60-second trajectory: compare first 30 seconds with last 30 and last 10-20 seconds.
 Missing evidence stays unknown. Never invent measurements or claim book cancellations are trades.
 bullish_evidence/bearish_evidence contain ONLY exact dot paths to supplied numeric/boolean facts (arrays use zero-based indices).
+For example facts.trend.return_5m, facts.position.position_return, capture_context.trajectory.11.d_mid_bps.
+For RECHECK the market facts are nested: current.facts.trend.return_5m. Copy actual paths from input.
+Do not output bare fact names, values, explanations or evidence objects in these two arrays.
+Keep each prose field to at most two short sentences and each evidence array to at most six paths.
 Give concise evidence-based conclusions, no chain-of-thought. Confidence is uncalibrated, never a vote or gate.
 Set task from input.t; copy candidate_id and snapshot.snapshot_hash exactly. Return one JSON object matching the schema.`;
 export async function callAdvisory(shared,{apiKey,fetchFn=fetch,now=Date.now,timeoutMs=5000}={}){
@@ -55,11 +59,14 @@ export async function callAdvisory(shared,{apiKey,fetchFn=fetch,now=Date.now,tim
       const raw=JSON.parse(rawText);out.usage=raw.usage??null;out.available=true;
       if(raw.model!==model)throw Error('DEEPSEEK_MODEL_MISMATCH');
       if(raw.choices?.length!==1||raw.choices[0].finish_reason!=='stop')throw Error('DEEPSEEK_INCOMPLETE');
-      return validateAdvisory(JSON.parse(raw.choices[0].message.content),shared);
+      const wire=JSON.parse(raw.choices[0].message.content);
+      if(JSON.stringify(wire).length<=12000)out.wire=wire;
+      return validateAdvisory(wire,shared);
     })();
     out.answer=await Promise.race([request,new Promise((_,reject)=>{timer=setTimeout(()=>{abort.abort();reject(Error('DEEPSEEK_TIMEOUT'));},timeoutMs);})]);
     out.valid=true;
-  }catch(e){out.error=/^DEEPSEEK_[A-Z_0-9]+$/.test(e?.message??'')?e.message:'DEEPSEEK_INVALID_RESPONSE';}
+  }catch(e){out.error=/^DEEPSEEK_[A-Z_0-9]+$/.test(e?.message??'')?e.message:'DEEPSEEK_INVALID_RESPONSE';
+    if(/^(TYPE|ENUM|STRING|REQUIRED|EXTRA|ARRAY):\$[A-Za-z0-9_/$]*$/.test(e?.message??''))out.validation_error=e.message.slice(0,160);}
   finally{clearTimeout(timer);out.completed_at_ms=now();out.latency_ms=out.completed_at_ms-started;}
   return out;
 }
