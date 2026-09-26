@@ -8,7 +8,7 @@
  * history: in replay those facts are null with reason NOT_POINT_IN_TIME_REPLAY. */
 export const FACTS_VERSION='FD1_FACTS_2';
 const MIN=60000;
-export const SLOT_ORDER_NOTIONAL_USDT=600; // 200 USDT x 3 (reference only; sizing is unchanged)
+export const SLOT_ORDER_NOTIONAL_USDT=450; // 150 USDT x 3 (current live slot notional reference; sizing is unchanged)
 const finite=x=>x!==null&&x!==undefined&&x!==''&&Number.isFinite(Number(x));
 const num=x=>finite(x)?Number(x):null;
 function ensure(ok,reason){if(!ok)throw Error(reason);}
@@ -57,11 +57,11 @@ export const FACT_DEFS=Object.freeze({
   ask_depth_25bps_usdt:['micro','USDT','ask notional within 25 bps above mid'],
   bid_depth_25bps_usdt:['micro','USDT','bid notional within 25 bps below mid'],
   book_imbalance_25bps:['micro','ratio','(bid - ask)/(bid + ask) notional within 25 bps (negative = sellers dominate)'],
-  ask_depth_to_order:['micro','ratio','ask notional within 25 bps / 600 USDT order (higher = safer)'],
-  bid_depth_to_order:['micro','ratio','bid notional within 25 bps / 600 USDT order (exit liquidity)'],
-  max_ask_wall_to_order:['micro','ratio','largest single ask level within 50 bps / 600 USDT'],
-  max_bid_wall_to_order:['micro','ratio','largest single bid level within 50 bps / 600 USDT'],
-  est_buy_slippage_bps:['micro','bps','estimated average fill vs mid for a 600 USDT market buy, walking the asks'],
+  ask_depth_to_order:['micro','ratio','ask notional within 25 bps / 450 USDT order (higher = safer)'],
+  bid_depth_to_order:['micro','ratio','bid notional within 25 bps / 450 USDT order (exit liquidity)'],
+  max_ask_wall_to_order:['micro','ratio','largest single ask level within 50 bps / 450 USDT'],
+  max_bid_wall_to_order:['micro','ratio','largest single bid level within 50 bps / 450 USDT'],
+  est_buy_slippage_bps:['micro','bps','estimated average fill vs mid for a 450 USDT market buy, walking the asks'],
   // position (hold review only)
   position_return:['position','fraction','current price / average entry - 1'],
   position_peak_return:['position','fraction','peak price since entry / entry - 1'],

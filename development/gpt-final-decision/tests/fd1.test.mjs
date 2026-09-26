@@ -13,7 +13,7 @@ const hold=async(opt,pos={entryPrice:1.1,peakPrice:1.2,entryAt:T-3600000,lastHig
 
 test('facts use only completed bars before asOf and separate machine judgments',()=>{
   const f=facts();assert.ok(f.quality.candles_complete);assert.ok(f.values.return_5m>0);assert.ok(f.values.taker_buy_ratio_5m>.59);
-  assert.equal(f.values.ask_depth_to_order,(1.2*2000+1.201*2000)/600);
+  assert.equal(f.values.ask_depth_to_order,(1.2*2000+1.201*2000)/450);
   const later=computeFacts({...src(T),one:[...src(T).one,[T,'9','9','9','9','0',T+MIN-1,'1','0','1','1','0']]},{asOf:T+2000});
   assert.equal(later.values.return_1m,f.values.return_1m,'a bar closing after asOf is ignored');
   assert.deepEqual(Object.keys(f.values).sort(),[...FACT_KEYS].sort());

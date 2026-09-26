@@ -15,7 +15,7 @@ test('computes spread, 25bp depth, imbalance, slot coverage, funding, premium an
   const {metrics:m,availability}=computeMicro({book:src(book),premium:src(premium),oi:src({openInterest:'50'}),oiHist:src(hist)},AS);
   assert.ok(Math.abs(m.spread.value-20)<1e-9);assert.equal(m.spread.unit,'bps');
   assert.ok(Math.abs(m.bid_depth_25bps.value-(99.9*10+99.8*20))<1e-9);assert.ok(Math.abs(m.depth.value-(100.1*5+100.2*10))<1e-9);
-  assert.ok(m.book_imbalance_25bps.value>0);assert.ok(Math.abs(m.ask_depth_to_slot_notional.value-m.depth.value/600)<1e-12);
+  assert.ok(m.book_imbalance_25bps.value>0);assert.ok(Math.abs(m.ask_depth_to_slot_notional.value-m.depth.value/450)<1e-12);
   assert.equal(m.funding.value,0.0001);assert.ok(Math.abs(m.mark_index_premium.value-(100/99.9-1))<1e-12);
   assert.equal(m.open_interest_usdt.value,5000);assert.ok(Math.abs(m.oi_change_5m.value-(1120/1110-1))<1e-12);assert.ok(Math.abs(m.oi_change_60m.value-(1120/1000-1))<1e-12);
   assert.ok(availability.every(x=>x.ok&&x.age_at_snapshot_ms===500&&x.request_ms===80));

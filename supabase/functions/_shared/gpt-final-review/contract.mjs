@@ -256,7 +256,7 @@ export function validateAnswer(answer,packet) {
  * B06133 selection, CEC0040 causal edge). V4/V5 asked the LLM to re-audit those
  * same B06133 booleans before it was even allowed to PASS -- a fourth evaluation of
  * the same information -- and let it VETO on free-text readings of market numbers.
- * The one production VETO (NILUSDT 2026-09-23 23:32) cited "ask depth / 600 USDT
+ * The one production VETO (NILUSDT 2026-09-23 23:32) cited "ask depth / 450 USDT
  * slot = 36x" as OPPOSING evidence, i.e. the direction of the ratio was misread.
  *
  * V6 gives the reviewer exactly one job: is there a NEW real-time execution risk,
@@ -277,7 +277,7 @@ export const RISK_RULES=Object.freeze({
   SPREAD_ABNORMAL:Object.freeze({facts:['spread'],hard:m=>m.spread>25,soft:m=>m.spread>10,
     text:'spread bps: soft>10, hard>25 (executor order guard is 25)'}),
   THIN_ASK_LIQUIDITY:Object.freeze({facts:['ask_depth_to_slot_notional','depth'],hard:m=>m.ask_depth_to_slot_notional<1.5,soft:m=>m.ask_depth_to_slot_notional<5,
-    text:'ask notional within 25bp / 600 USDT order: soft<5, hard<1.5 (HIGHER IS SAFER)'}),
+    text:'ask notional within 25bp / 450 USDT order: soft<5, hard<1.5 (HIGHER IS SAFER)'}),
   SELL_WALL_IMBALANCE:Object.freeze({facts:['book_imbalance_25bps','bid_depth_25bps'],hard:m=>m.book_imbalance_25bps<=-0.75,soft:m=>m.book_imbalance_25bps<=-0.45,
     text:'(bid-ask)/(bid+ask) within 25bp: soft<=-0.45, hard<=-0.75 (NEGATIVE = sellers dominate)'}),
   FUNDING_EXTREME:Object.freeze({facts:['funding'],hard:m=>m.funding>=0.003,soft:m=>m.funding>=0.0008,
