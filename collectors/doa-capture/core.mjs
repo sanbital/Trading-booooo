@@ -1,4 +1,5 @@
-export const VERSION = 'DOA-CAPTURE-4-COVERAGE-RECOVERY';
+export const VERSION = 'DOA-CAPTURE-5-BOUNDED-TRANSPORT';
+export function transportFresh(e,receivedAt){const at=Number(e.E??e.T);return Number.isSafeInteger(at)&&Number.isSafeInteger(receivedAt)&&at<=receivedAt+1000&&receivedAt-at<=10000;}
 export const normalizeSymbol=value=>{const s=String(value??'').trim().toUpperCase();return /^[A-Z0-9]{1,24}USDT$/.test(s)?s:null;};
 export const iso = n => new Date(n).toISOString();
 export function streamURLs(symbol){
@@ -36,11 +37,16 @@ export class Book {
   needsCoverageRefresh(now) {
     // A diff book can be fresh but its finite snapshot boundary may have been left
     // behind by price movement. Do not loop on intrinsically shallow 1000-level books.
-    if(!this.ready||!this.snapshotCovered25||now-this.snapshotAt<60000)return false;
-    const m=this.metrics(now);return m.book_complete===true&&m.coverage_25===false;
+    if(!this.ready||!this.snapshotCovered25||now-this.snapshotAt<60000||now-(this.coverageCheckedAt??-Infinity)<5000)return false;
+    this.coverageCheckedAt=now;
+    if(now-this.received>3000||now-this.at>10000)return false;
+    // Recovery runs every 200 ms. Never sort full books or calculate impact here.
+    let bid=-Infinity,ask=Infinity;for(const p of this.bids.keys())if(p>bid)bid=p;for(const p of this.asks.keys())if(p<ask)ask=p;
+    if(!(bid>0&&ask>=bid))return false;const mid=(bid+ask)/2;
+    return !(this.bidBoundary<=mid*.9975&&this.askBoundary>=mid*1.0025);
   }
   metrics(now) {
-    if(!this.ready || now-this.received>3000) return {book_complete:false,reason:'BOOK_UNSYNCED_OR_STALE'};
+    if(!this.ready || now-this.received>3000 || this.at>now || now-this.at>10000) return {book_complete:false,reason:'BOOK_UNSYNCED_OR_STALE'};
     const bids=[...this.bids].sort((a,b)=>b[0]-a[0]),asks=[...this.asks].sort((a,b)=>a[0]-b[0]);
     const bid=bids[0]?.[0],ask=asks[0]?.[0],mid=(bid+ask)/2;
     if(!(bid>0 && ask>=bid)) return {book_complete:false,reason:'CROSSED_OR_EMPTY'};
@@ -66,7 +72,7 @@ export class Flow {
     if(this.last!==null && +e.a<=this.last) return;
     if(this.last===null || +e.a!==this.last+1) this.complete=false;
     const eventAt=Math.max(Number(e.T),Number(e.E??e.T));
-    if(!Number.isSafeInteger(eventAt)||!Number.isSafeInteger(receivedAt))this.invalidTime=true;
+    if(!Number.isSafeInteger(eventAt)||!Number.isSafeInteger(receivedAt)||receivedAt-eventAt>10000||eventAt>receivedAt+1000)this.invalidTime=true;
     else{this.eventAt=Math.max(this.eventAt??0,eventAt);this.receivedAt=Math.max(this.receivedAt??0,receivedAt);}
     this.last=+e.a;const n=+e.p*(+e.q); if(e.m) {this.sell+=n;const k=Math.floor(+e.T/1000);this.seconds.set(k,(this.seconds.get(k)||0)+n);} else this.buy+=n;
     this.count++;

@@ -22,23 +22,382 @@
   "collector": {
     "machine_id": "185030da006d48",
     "same_existing_machine": true,
+    "source_commit": "d44fb4dcb5617b40be70561b758f05a145d1e932",
+    "image": {
+      "registry": "registry.fly.io",
+      "repository": "sanbital-doa-capture-20260925",
+      "tag": "d44fb4dcb5617b40be70561b758f05a145d1e932",
+      "digest": "sha256:e16d79509fdf6d5ed67d3f94e984a633dda09bd4503f2d9b8c9d8b4c0bac757a",
+      "labels": null
+    },
+    "image_digest": "sha256:e16d79509fdf6d5ed67d3f94e984a633dda09bd4503f2d9b8c9d8b4c0bac757a",
+    "guest": {
+      "cpu_kind": "shared",
+      "cpus": 4,
+      "memory_mb": 1024
+    },
+    "previous_guest": {
+      "cpu_kind": "shared",
+      "cpus": 1,
+      "memory_mb": 256
+    },
+    "workflow_run": 36252542870,
+    "conclusion": "success",
+    "stable_samples": 20,
+    "validation": {
+      "state": {
+        "version": "DOA-CAPTURE-5-BOUNDED-TRANSPORT",
+        "age_s": "4.595252",
+        "watched": "26",
+        "queue": "26"
+      },
+      "captures": [
+        {
+          "symbol": "QUSDT",
+          "status": "AVAILABLE",
+          "reason": null,
+          "buckets": "24",
+          "points": 24
+        },
+        {
+          "symbol": "SPELLUSDT",
+          "status": "AVAILABLE",
+          "reason": null,
+          "buckets": "24",
+          "points": 24
+        },
+        {
+          "symbol": "JELLYJELLYUSDT",
+          "status": "AVAILABLE",
+          "reason": null,
+          "buckets": "24",
+          "points": 24
+        }
+      ]
+    },
+    "completed_at": "2026-09-26T15:53:23Z"
+  },
+  "ci": {
+    "run": 36252545001,
+    "executor_baseline_run": 36250295073,
+    "tests": 515,
+    "pass": 515,
+    "fail": 0,
+    "skipped": 0,
+    "deno_check": "PASS",
+    "required_tests": "T01–T28 PASS",
+    "invariants": "INV-EXIT-01–10 PASS",
+    "followup_run": 36252545001
+  },
+  "production": {
+    "open": [
+      {
+        "id": "889a8c9c-c349-424a-b2d4-ef3555ba0648",
+        "state": "OPEN",
+        "symbol": "HUMAUSDT",
+        "entry_at": "2026-09-26T15:41:29.736+00:00",
+        "hold_last": {
+          "at": 1790438045557,
+          "key": "5993d3814df7a039388397b7a66941329af737fe686ef52ffbd05df7aba831db",
+          "event": "MOMENTUM_ACCELERATION_FLIP",
+          "decision": "ABSTAIN"
+        },
+        "hard_floor": 0.030559,
+        "hold_pending": {
+          "at": 1790438107585,
+          "key": "c42b9e59148c25d585a941a6a1e29be2a22e3b3954e3cebf5631850560c185a1",
+          "event": "MOMENTUM_ACCELERATION_FLIP",
+          "softKey": null
+        },
+        "native_health": "PROTECTED",
+        "native_orders": [
+          {
+            "ack_at": 1790437295681,
+            "status": "CANCELED",
+            "terminal": true,
+            "exit_class": "HARD_SAFETY",
+            "trigger_price": 0.030157
+          },
+          {
+            "ack_at": 1790437927863,
+            "status": "ACTIVE",
+            "terminal": false,
+            "exit_class": "HARD_SAFETY",
+            "trigger_price": 0.030559
+          }
+        ],
+        "protect_level": null,
+        "exit_authority": {
+          "mae": -0.006773627602600363,
+          "mfe": 0.005059733474790384,
+          "peak": 0.031086,
+          "hardHit": false,
+          "version": "AI_EXIT_AUTHORITY_2",
+          "drawdown": -0.00643376439554777,
+          "giveback": 1.2779956811651314,
+          "maeScope": "SINCE_ENTRY",
+          "hardFloor": 0.030559,
+          "softLevel": null,
+          "attachedAt": 1790437293335,
+          "generation": "889a8c9c-c349-424a-b2d4-ef3555ba0648:2026-09-26T15:41:29.736+00:00",
+          "hardReason": "R5_RISK_CUT",
+          "softReason": null,
+          "initialFloor": 0.030157,
+          "lowestObservedBid": 0.03072,
+          "legacySoftOrderIds": []
+        }
+      }
+    ],
+    "capture": {
+      "synced": "26",
+      "enabled": true,
+      "version": "DOA-CAPTURE-5-BOUNDED-TRANSPORT",
+      "watched": "26",
+      "ws_gaps": "0",
+      "heartbeat_at": "2026-09-26T15:55:08.617811+00:00",
+      "rest_failures": "0",
+      "production_enabled": true,
+      "gpt_context_enabled": true
+    },
+    "runtime": {
+      "last_cycle": "2026-09-26T15:54:49.227+00:00",
+      "last_error": null,
+      "circuit_open": false,
+      "live_enabled": true,
+      "protection_health": "PROTECTED"
+    },
+    "coverage": [
+      {
+        "age_ms": 4270,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "QUSDT",
+        "buckets": 24,
+        "window_ms": 119856,
+        "received_causal": true,
+        "trajectory_sha256": "ab5f5e036f481277ff338ff445e17b7d1ec474e9b91b32f70ec874d9a2ac75e0"
+      },
+      {
+        "age_ms": 4270,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "SPELLUSDT",
+        "buckets": 24,
+        "window_ms": 119856,
+        "received_causal": true,
+        "trajectory_sha256": "c4f72386f8bc7ca6f414d9ea026098697cfb64dfa508c436ae6c91950d542d7c"
+      },
+      {
+        "age_ms": 4270,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "JELLYJELLYUSDT",
+        "buckets": 24,
+        "window_ms": 119856,
+        "received_causal": true,
+        "trajectory_sha256": "fe1cfb5cec0ded378c8e210b8356598b50c25a2a065dcc02cfbc602f377aba8e"
+      },
+      {
+        "age_ms": 4270,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "HUMAUSDT",
+        "buckets": 24,
+        "window_ms": 119856,
+        "received_causal": true,
+        "trajectory_sha256": "b7c04dcb50eefe446f25f286462ba6c3bc045ae4768861fd8181b3723f15991e"
+      }
+    ],
+    "settings": {
+      "mode": "LIVE_LIMITED",
+      "pause": false,
+      "margin": 150,
+      "emergency": false
+    },
+    "checked_at": "2026-09-26T15:55:09.287204+00:00",
+    "latest_live_micro": "2026-09-26T15:55:05+00:00"
+  },
+  "probes": [
+    {
+      "symbol": "JELLYJELLYUSDT",
+      "fixture": true,
+      "purpose": "DRYRUN",
+      "order_calls": 0,
+      "ok": true,
+      "job_key": "80cfd3cc3bba820d76a450935ebad620437ce25cfb24ef3d6fa0fbbd550805fc",
+      "identical_first_packet": true,
+      "gpt_model": "gpt-5.4-mini-2026-03-17",
+      "deepseek_model": "deepseek-flash",
+      "gpt_first": "PROTECT",
+      "deepseek_preference": "PROTECT",
+      "deepseek_valid": true,
+      "final": "PROTECT",
+      "valid": true,
+      "error": null,
+      "refresh_error": null,
+      "initial_snapshot_hash": "b6758fe10ce587f56f723ac2bf8f7aa97e8aad0031f6fc5389335687bc18a660",
+      "final_snapshot_hash": "07cf6102250b22cfd3abe02becb30aa335ece1664fb6cfc0522717920ad31e21",
+      "initial_capture": {
+        "status": "AVAILABLE",
+        "points": 24,
+        "trajectory_hash": "aa1c2d1ad1d4ea5b464d93d1735cc321f8aa61d818667c23dca94cb6740d9739",
+        "age_ms": 6886
+      },
+      "final_capture": {
+        "status": "AVAILABLE",
+        "points": 24,
+        "trajectory_hash": "02b69ba1a9a06f69e403b7b274b4c22cb982ceabf4e39f02e27713a0909ef12d",
+        "age_ms": 5389
+      },
+      "api_calls": 3,
+      "completed_at_ms": 1790435238302
+    },
+    {
+      "symbol": "QUSDT",
+      "fixture": true,
+      "purpose": "DRYRUN",
+      "order_calls": 0,
+      "ok": true,
+      "job_key": "c5527a8f3a01384a63ff37d922a44aea90275113c1fdf76283016b7694153599",
+      "identical_first_packet": true,
+      "gpt_model": "gpt-5.4-mini-2026-03-17",
+      "deepseek_model": "deepseek-flash",
+      "gpt_first": "HOLD",
+      "deepseek_preference": "PROTECT",
+      "deepseek_valid": true,
+      "final": "PROTECT",
+      "valid": true,
+      "error": null,
+      "refresh_error": null,
+      "initial_snapshot_hash": "0569cd51619cc9b5f57f425e753a01850fc0021ee7c38f3aa1c77eb3ce0bebca",
+      "final_snapshot_hash": "64b3a70a7cedb84f5d3aa348726c90392754a413d11a2baec1ba0642d3a0e894",
+      "initial_capture": {
+        "status": "AVAILABLE",
+        "points": 24,
+        "trajectory_hash": "b70680b6cd538e8d837e662f707cf0e4ab94f8f3280b7a313e53f22485f87e51",
+        "age_ms": 4606
+      },
+      "final_capture": {
+        "status": "AVAILABLE",
+        "points": 24,
+        "trajectory_hash": "b70680b6cd538e8d837e662f707cf0e4ab94f8f3280b7a313e53f22485f87e51",
+        "age_ms": 7572
+      },
+      "api_calls": 3,
+      "completed_at_ms": 1790435321006
+    },
+    {
+      "symbol": "SPELLUSDT",
+      "fixture": true,
+      "purpose": "DRYRUN",
+      "order_calls": 0,
+      "ok": true,
+      "job_key": "17ec63aec5329fc1be6344e757ec974edf1d2bd40b0942d354f550d921ea8811",
+      "identical_first_packet": true,
+      "gpt_model": "gpt-5.4-mini-2026-03-17",
+      "deepseek_model": "deepseek-flash",
+      "gpt_first": "HOLD",
+      "deepseek_preference": "HOLD",
+      "deepseek_valid": true,
+      "final": "PROTECT",
+      "valid": true,
+      "error": null,
+      "refresh_error": null,
+      "initial_snapshot_hash": "857f2a8f3d38100d03dc48450ed2eeb787b8cb9d7b1d147e026d0a50e0db06f9",
+      "final_snapshot_hash": "45e718444fb7b0ce6f09b26d264210f57dce27f16a621afe7807ecf9f0ee806b",
+      "initial_capture": {
+        "status": "AVAILABLE",
+        "points": 24,
+        "trajectory_hash": "98f9e6d7ebbda449460c545b1ebbaaa0aa8b0ada3989f7afec8824bfd14dfbb0",
+        "age_ms": 6286
+      },
+      "final_capture": {
+        "status": "AVAILABLE",
+        "points": 24,
+        "trajectory_hash": "33b63ad66bc974598aa4465308e64d132b45d0e0e518df6c12afe6879aff648f",
+        "age_ms": 5008
+      },
+      "api_calls": 3,
+      "completed_at_ms": 1790436585002
+    }
+  ],
+  "limitations": [
+    "Live HUMA HOLD has been observed, but no v2 forward open-to-close strategy lifecycle has been completed at this audit.",
+    "Live opinions with unsupported evidence references were rejected; hard protection remained active and bounded reevaluation continued.",
+    "Historical counterfactual model decisions are scripted authority/safety regressions, not profit evidence.",
+    "BTCUSDT finite 1000-level depth snapshot lacks full 25bp coverage; its trajectory remains explicitly unavailable."
+  ],
+  "collector_previous": {
+    "machine_id": "185030da006d48",
+    "same_existing_machine": true,
     "image": "registry.fly.io/sanbital-doa-capture-20260925:ee80b882f70dbce9ae16b5cac48e7f37acb2e531",
     "image_digest": "sha256:754abe9dc780d588ad797c9200ff638e048a83bd50af74367a30a071fedee8fa",
     "workflow_run": 36250293205,
     "conclusion": "success",
     "validated_at": "2026-09-26T15:05:02.881Z"
   },
-  "ci": {
-    "run": 36250295073,
-    "tests": 513,
-    "pass": 513,
-    "fail": 0,
-    "skipped": 0,
-    "deno_check": "PASS",
-    "required_tests": "T01–T28 PASS",
-    "invariants": "INV-EXIT-01–10 PASS"
+  "capture_cpu_diagnosis": {
+    "first": [
+      6738,
+      0,
+      2169,
+      48758,
+      449,
+      0,
+      1675,
+      22740
+    ],
+    "second": [
+      6843,
+      0,
+      2194,
+      48758,
+      449,
+      0,
+      1683,
+      24273
+    ],
+    "delta": [
+      105,
+      0,
+      25,
+      0,
+      0,
+      0,
+      8,
+      1533
+    ],
+    "stealPercent": 91.74147217235189,
+    "workflow": 36252442419
   },
-  "production": {
+  "live_position_attachment": {
+    "checked_at": "2026-09-26T15:45:30Z",
+    "position_id": "889a8c9c-c349-424a-b2d4-ef3555ba0648",
+    "symbol": "HUMAUSDT",
+    "entry_at": "2026-09-26 15:41:29.736+00",
+    "entry_price": "0.03092950494845361",
+    "hard_floor": "0.030157",
+    "initial_floor": 0.030157,
+    "exit_authority_version": "AI_EXIT_AUTHORITY_2",
+    "generation": "889a8c9c-c349-424a-b2d4-ef3555ba0648:2026-09-26T15:41:29.736+00:00",
+    "hold_version": "FD1_HOLD_EXIT_AUTHORITY_2",
+    "protection_health": "PROTECTED",
+    "native_orders": [
+      {
+        "exit_class": "HARD_SAFETY",
+        "status": "ACTIVE",
+        "ack_at": 1790437295681,
+        "trigger_price": 0.030157,
+        "terminal": false
+      }
+    ],
+    "capture_status": "AVAILABLE"
+  },
+  "production_initial": {
     "open": [],
     "capture": {
       "synced": "20",
@@ -430,79 +789,333 @@
     ],
     "latest_live_micro": "2026-09-26T15:08:55+00:00"
   },
-  "probes": [
+  "production_universe": {
+    "at": "2026-09-26T15:54:01.603294+00:00",
+    "runtime": {
+      "last_cycle": "2026-09-26T15:53:48.662+00:00",
+      "last_error": null,
+      "circuit_open": false
+    },
+    "scanner": [
+      {
+        "symbol": "USUSDT",
+        "capture": "AVAILABLE"
+      },
+      {
+        "symbol": "BTWUSDT",
+        "capture": "AVAILABLE"
+      },
+      {
+        "symbol": "HUMAUSDT",
+        "capture": "AVAILABLE"
+      },
+      {
+        "symbol": "QNTUSDT",
+        "capture": "AVAILABLE"
+      },
+      {
+        "symbol": "DYDXUSDT",
+        "capture": "AVAILABLE"
+      },
+      {
+        "symbol": "WLDUSDT",
+        "capture": "AVAILABLE"
+      },
+      {
+        "symbol": "CHIPUSDT",
+        "capture": "AVAILABLE"
+      },
+      {
+        "symbol": "FILUSDT",
+        "capture": "AVAILABLE"
+      },
+      {
+        "symbol": "EPICUSDT",
+        "capture": "AVAILABLE"
+      },
+      {
+        "symbol": "BEATUSDT",
+        "capture": "AVAILABLE"
+      }
+    ],
+    "symbols": 26,
+    "available": 25,
+    "unavailable": [
+      {
+        "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+        "symbol": "BTCUSDT"
+      }
+    ],
+    "max_book_lag_ms": 123
+  },
+  "live_production_reviews": [
     {
-      "symbol": "JELLYJELLYUSDT",
-      "fixture": true,
-      "purpose": "DRYRUN",
-      "order_calls": 0,
-      "ok": true,
-      "job_key": "80cfd3cc3bba820d76a450935ebad620437ce25cfb24ef3d6fa0fbbd550805fc",
-      "identical_first_packet": true,
-      "gpt_model": "gpt-5.4-mini-2026-03-17",
-      "deepseek_model": "deepseek-flash",
+      "job_key": "f66df2d96a9fa0d475d19d700561e7a9bd7c25612860a4b6d86fafb68cf3e426",
+      "state": "DONE",
+      "purpose": "PRODUCTION",
+      "identity": {
+        "event": "BID_DEPTH_COLLAPSE",
+        "symbol": "HUMAUSDT",
+        "signal_id": "9f7ee17a-4dd8-4e84-a585-7e2031a58b30",
+        "generation": "889a8c9c-c349-424a-b2d4-ef3555ba0648:2026-09-26T15:41:29.736+00:00",
+        "position_id": "889a8c9c-c349-424a-b2d4-ef3555ba0648"
+      },
+      "valid": "false",
+      "decision": "ABSTAIN",
+      "model": "gpt-5.4-mini-2026-03-17",
       "gpt_first": "PROTECT",
-      "deepseek_preference": "PROTECT",
-      "deepseek_valid": true,
-      "final": "PROTECT",
-      "valid": true,
-      "error": null,
+      "deepseek": null,
+      "deepseek_valid": "false",
       "refresh_error": null,
-      "initial_snapshot_hash": "b6758fe10ce587f56f723ac2bf8f7aa97e8aad0031f6fc5389335687bc18a660",
-      "final_snapshot_hash": "07cf6102250b22cfd3abe02becb30aa335ece1664fb6cfc0522717920ad31e21",
-      "initial_capture": {
-        "status": "AVAILABLE",
-        "points": 24,
-        "trajectory_hash": "aa1c2d1ad1d4ea5b464d93d1735cc321f8aa61d818667c23dca94cb6740d9739",
-        "age_ms": 6886
-      },
-      "final_capture": {
-        "status": "AVAILABLE",
-        "points": 24,
-        "trajectory_hash": "02b69ba1a9a06f69e403b7b274b4c22cb982ceabf4e39f02e27713a0909ef12d",
-        "age_ms": 5389
-      },
-      "api_calls": 3,
-      "completed_at_ms": 1790435238302
+      "capture": "AVAILABLE",
+      "points": 24,
+      "authority": "GPT_FINAL_ONLY"
     },
     {
-      "symbol": "QUSDT",
-      "fixture": true,
-      "purpose": "DRYRUN",
-      "order_calls": 0,
-      "ok": true,
-      "job_key": "c5527a8f3a01384a63ff37d922a44aea90275113c1fdf76283016b7694153599",
-      "identical_first_packet": true,
-      "gpt_model": "gpt-5.4-mini-2026-03-17",
-      "deepseek_model": "deepseek-flash",
+      "job_key": "26c0fc52115edcf88ae5d33880d0821ea365c3bd4a8a5292087d604186578f1f",
+      "state": "DONE",
+      "purpose": "PRODUCTION",
+      "identity": {
+        "event": "MOMENTUM_ACCELERATION_FLIP",
+        "symbol": "HUMAUSDT",
+        "signal_id": "9f7ee17a-4dd8-4e84-a585-7e2031a58b30",
+        "generation": "889a8c9c-c349-424a-b2d4-ef3555ba0648:2026-09-26T15:41:29.736+00:00",
+        "position_id": "889a8c9c-c349-424a-b2d4-ef3555ba0648"
+      },
+      "valid": "true",
+      "decision": "HOLD",
+      "model": "gpt-5.4-mini-2026-03-17",
       "gpt_first": "HOLD",
-      "deepseek_preference": "PROTECT",
-      "deepseek_valid": true,
-      "final": "PROTECT",
-      "valid": true,
-      "error": null,
+      "deepseek": null,
+      "deepseek_valid": "false",
       "refresh_error": null,
-      "initial_snapshot_hash": "0569cd51619cc9b5f57f425e753a01850fc0021ee7c38f3aa1c77eb3ce0bebca",
-      "final_snapshot_hash": "64b3a70a7cedb84f5d3aa348726c90392754a413d11a2baec1ba0642d3a0e894",
-      "initial_capture": {
-        "status": "AVAILABLE",
-        "points": 24,
-        "trajectory_hash": "b70680b6cd538e8d837e662f707cf0e4ab94f8f3280b7a313e53f22485f87e51",
-        "age_ms": 4606
+      "capture": "AVAILABLE",
+      "points": 24,
+      "authority": "GPT_FINAL_ONLY"
+    },
+    {
+      "job_key": "c76816c0b1cc3d1c5fca35f82848737910109311fc2c29e08ba9c3e359dbfaa2",
+      "state": "DONE",
+      "purpose": "PRODUCTION",
+      "identity": {
+        "event": "MOMENTUM_ACCELERATION_FLIP",
+        "symbol": "HUMAUSDT",
+        "signal_id": "9f7ee17a-4dd8-4e84-a585-7e2031a58b30",
+        "generation": "889a8c9c-c349-424a-b2d4-ef3555ba0648:2026-09-26T15:41:29.736+00:00",
+        "position_id": "889a8c9c-c349-424a-b2d4-ef3555ba0648"
       },
-      "final_capture": {
-        "status": "AVAILABLE",
-        "points": 24,
-        "trajectory_hash": "b70680b6cd538e8d837e662f707cf0e4ab94f8f3280b7a313e53f22485f87e51",
-        "age_ms": 7572
-      },
-      "api_calls": 3,
-      "completed_at_ms": 1790435321006
+      "valid": "true",
+      "decision": "HOLD",
+      "model": "gpt-5.4-mini-2026-03-17",
+      "gpt_first": "HOLD",
+      "deepseek": "HOLD",
+      "deepseek_valid": "true",
+      "refresh_error": null,
+      "capture": "AVAILABLE",
+      "points": 24,
+      "authority": "GPT_FINAL_ONLY"
     }
   ],
-  "limitations": [
-    "No forward production HOLD-to-EXIT lifecycle has occurred since deployment.",
-    "Historical counterfactual decisions are scripted authority/safety regressions, not profit evidence.",
-    "BTCUSDT full-depth trajectory is unavailable because its current finite 1000-level snapshot does not cover 25 bp; no synthetic data or validation relaxation."
+  "capture_cpu_after": {
+    "first": [
+      5070,
+      0,
+      2274,
+      212888,
+      76,
+      0,
+      1972,
+      569
+    ],
+    "second": [
+      5299,
+      0,
+      2364,
+      219512,
+      76,
+      0,
+      2048,
+      594
+    ],
+    "delta": [
+      229,
+      0,
+      90,
+      6624,
+      0,
+      0,
+      76,
+      25
+    ],
+    "stealPercent": 0.35491198182850653,
+    "activeCpuPercent": 5.607609312890403,
+    "workflow": 36253299416,
+    "guest": {
+      "cpus": 4,
+      "cpu_kind": "shared",
+      "memory_mb": 1024
+    }
+  },
+  "capture_soak_samples": [
+    {
+      "at": "2026-09-26T15:44:49.216442+00:00",
+      "worker": {
+        "synced": "13",
+        "version": "DOA-CAPTURE-5-BOUNDED-TRANSPORT",
+        "watched": "26",
+        "ws_gaps": "0",
+        "heartbeat": "2026-09-26T15:44:47.273286+00:00",
+        "rest_failures": "0"
+      },
+      "coverage": [
+        {
+          "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+          "status": "UNAVAILABLE",
+          "symbol": "JELLYJELLYUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+          "status": "UNAVAILABLE",
+          "symbol": "QUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+          "status": "UNAVAILABLE",
+          "symbol": "SPELLUSDT",
+          "buckets": null
+        }
+      ],
+      "book_receive_lag_ms": 124
+    },
+    {
+      "at": "2026-09-26T15:46:42.48693+00:00",
+      "worker": {
+        "synced": "21",
+        "version": "DOA-CAPTURE-5-BOUNDED-TRANSPORT",
+        "watched": "26",
+        "ws_gaps": "0",
+        "heartbeat": "2026-09-26T15:46:37.593657+00:00",
+        "rest_failures": "0"
+      },
+      "coverage": [
+        {
+          "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+          "status": "UNAVAILABLE",
+          "symbol": "JELLYJELLYUSDT",
+          "buckets": null
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "QUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+          "status": "UNAVAILABLE",
+          "symbol": "SPELLUSDT",
+          "buckets": null
+        }
+      ],
+      "book_receive_lag_ms": 124
+    },
+    {
+      "at": "2026-09-26T15:48:05.288909+00:00",
+      "worker": {
+        "synced": "25",
+        "version": "DOA-CAPTURE-5-BOUNDED-TRANSPORT",
+        "watched": "26",
+        "ws_gaps": "0",
+        "heartbeat": "2026-09-26T15:48:02.648743+00:00",
+        "rest_failures": "0"
+      },
+      "coverage": [
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "JELLYJELLYUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "QUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "SPELLUSDT",
+          "buckets": 24
+        }
+      ],
+      "book_receive_lag_ms": 123
+    },
+    {
+      "at": "2026-09-26T15:49:50.080502+00:00",
+      "worker": {
+        "synced": "26",
+        "version": "DOA-CAPTURE-5-BOUNDED-TRANSPORT",
+        "watched": "26",
+        "ws_gaps": "0",
+        "heartbeat": "2026-09-26T15:49:47.733587+00:00",
+        "rest_failures": "0"
+      },
+      "coverage": [
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "JELLYJELLYUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "QUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "SPELLUSDT",
+          "buckets": 24
+        }
+      ],
+      "book_receive_lag_ms": 124
+    },
+    {
+      "at": "2026-09-26T15:52:45.951456+00:00",
+      "worker": {
+        "synced": "26",
+        "version": "DOA-CAPTURE-5-BOUNDED-TRANSPORT",
+        "watched": "26",
+        "ws_gaps": "0",
+        "heartbeat": "2026-09-26T15:52:43.430885+00:00",
+        "rest_failures": "0"
+      },
+      "coverage": [
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "JELLYJELLYUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "QUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "SPELLUSDT",
+          "buckets": 24
+        }
+      ],
+      "book_receive_lag_ms": 124
+    }
   ]
 }

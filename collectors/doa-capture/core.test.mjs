@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {Book,Flow,WeightBudget,vwap,inWindow,streamURLs} from './core.mjs';
+import {Book,Flow,WeightBudget,vwap,inWindow,streamURLs,transportFresh} from './core.mjs';
 test('Binance public book and market trade/kline routes are separated',()=>{const u=streamURLs('BTCUSDT');assert.equal(new URL(u.book).pathname,'/public/stream');assert.equal(new URL(u.market).pathname,'/market/stream');assert.equal(new URL(u.market).searchParams.get('streams'),'btcusdt@aggTrade/btcusdt@kline_1m/btcusdt@forceOrder');});
 test('bounded pre-snapshot buffer discards old events without declaring continuity',()=>{const b=new Book();for(let i=1;i<=300;i++)b.event({U:i,u:i,pu:i-1,b:[],a:[],E:i},i);assert.equal(b.buffer.length,200);assert.equal(b.ready,false);assert.throws(()=>b.snapshot(snap),/GAP/);});
 const snap={lastUpdateId:10,bids:[[99,10],[98,10]],asks:[[101,10],[102,10]]};
@@ -34,4 +34,22 @@ test('trade flow preserves event/receipt causality and rejects a future observat
  assert.equal(f.metrics(5000).flow_causal,false);
  assert.equal(f.metrics(5000).buy_quote_5s,2);
  f.reset();assert.equal(f.metrics(10000).flow_causal,true);assert.equal(f.metrics(10000).trade_event_at,null);
+});
+
+test('recovery coverage checks do not invoke full metrics sorting and are limited to once per 5 seconds',()=>{
+ const b=new Book();b.snapshot({lastUpdateId:10,bids:[[100,1],[99,1]],asks:[[100.1,1],[101,1]]},0);
+ b.event({U:10,u:11,pu:10,E:61000,b:[],a:[]},61000);
+ b.metrics=()=>{throw Error('FULL_SORT_FORBIDDEN_IN_RECOVERY');};
+ assert.equal(b.needsCoverageRefresh(61000),false);
+ b.bids.keys=()=>{throw Error('REPEATED_SCAN_FORBIDDEN');};
+ for(let now=61200;now<66000;now+=200)assert.equal(b.needsCoverageRefresh(now),false);
+});
+test('fresh receipts cannot disguise a delayed Binance transport backlog',()=>{
+ assert.equal(transportFresh({E:1000},11000),true);
+ assert.equal(transportFresh({E:1000},11001),false);
+ assert.equal(transportFresh({E:13000},11000),false);
+ const b=new Book();b.snapshot(snap,1000);b.event({...event(11),U:10},12000);
+ assert.equal(b.metrics(12000).book_complete,false);
+ const f=new Flow();f.event({a:1,T:1000,E:1000,p:1,q:2,m:false},12000);
+ assert.equal(f.metrics(12000).flow_causal,false);
 });
