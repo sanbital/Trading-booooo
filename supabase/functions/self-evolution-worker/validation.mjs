@@ -11,6 +11,8 @@ import {actualOpportunities} from './market-jobs.mjs';
 import {portfolioJob} from './portfolio-jobs.mjs';
 export {policyDecision,replayPayload} from './decision.mjs';
 export async function simulationJob(store,version,keys){
+ const lifecycle=await store.read(store.table('evolution_policy_states').select('state').eq('version',version).single());
+ if(!['SIMULATING','VALIDATING','HOLDOUT_TEST'].includes(lifecycle.state))return {policy_version:version,state:lifecycle.state,stopped:true};
  const policy=await store.read(store.table('evolution_policy_bundles').select('*').eq('version',version).single());validatePolicy(policy.bundle);
  const champion=await store.read(store.table('evolution_policy_bundles').select('*').eq('version',policy.parent_version).single());
  const cutoff=Date.parse(policy.created_at),rows=await store.read(store.table('evolution_opportunities').select('*').gte('at_ms',cutoff+60000).order('at_ms').limit(1000));
@@ -71,3 +73,4 @@ export async function monitor(store){
  if(health.expired||result.rollback)return store.rpc('evolution_rollback',{p_expected_version:active.active_version,p_reason:health.expired?'PROMOTION_HEALTH_TIMEOUT':result.reason,p_evidence:{live:metrics(live),baseline,decisions:decisions.length}});
  return {state:health.state,version:active.active_version,health,live:metrics(live),degradation:result};
 }
+

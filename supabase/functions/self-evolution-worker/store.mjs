@@ -3,7 +3,7 @@ export const TABLES=new Set(['evolution_market_frames','evolution_portfolios','e
 export class EvolutionStore{
  constructor(db){this.db=db;}
  table(name){if(!TABLES.has(name))throw Error('EVOLUTION_TABLE_DENIED');return this.db.from(name);}
- async rpc(name,args={}){if(!/^evolution_(market_sensor|capture_context|ingest|claim_job|finish_job|reserve_api|worker_heartbeat|report|active_policy|bootstrap|promote|policy_health|rollback)$/.test(name))throw Error('EVOLUTION_RPC_DENIED');const r=await this.db.rpc(name,args);if(r.error)throw Error('EVOLUTION_DB:'+r.error.message);return r.data;}
+ async rpc(name,args={}){if(!/^evolution_(register_candidate|market_sensor|capture_context|ingest|claim_job|finish_job|reserve_api|worker_heartbeat|report|active_policy|bootstrap|promote|policy_health|rollback)$/.test(name))throw Error('EVOLUTION_RPC_DENIED');const r=await this.db.rpc(name,args);if(r.error)throw Error('EVOLUTION_DB:'+r.error.message);return r.data;}
  async read(query){const r=await query;if(r.error)throw Error('EVOLUTION_READ:'+r.error.message);return r.data;}
  async write(name,value,{upsert=false,onConflict}={}){const table=this.table(name),q=upsert?table.upsert(value,{onConflict}):table.insert(value),r=await q;if(r.error&&r.error.code!=='23505')throw Error('EVOLUTION_WRITE:'+r.error.message);return !r.error;}
  async enqueue(key,kind,payload={},priority=100,availableAt=null){return this.write('evolution_jobs',{dedupe_key:key,kind,payload,priority,...(availableAt?{available_at:availableAt}:{})});}
@@ -15,3 +15,4 @@ export class EvolutionStore{
  async closedTrades(since){return this.read(this.db.from('v11_long_regime_positions').select('id,signal_id,symbol,entry_at,closed_at,state,realized_pnl_usdt,original_quantity,entry_price,entry_fee_usdt,exit_price,exit_reason').eq('state','CLOSED').gte('closed_at',since).order('closed_at').limit(1000));}
  async journalFor(trade){return this.read(this.table('evolution_decisions').select('*').eq('signal_id',trade.signal_id).order('snapshot_at'));}
 }
+
