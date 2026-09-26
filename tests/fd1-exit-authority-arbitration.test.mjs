@@ -41,6 +41,7 @@ test(id+' actual parallel advice → refresh → FINAL → hold state, with full
  const p=await packet(),r=await dualEntryDecision(p,{apiKey:'fixture',deepseekKey:'fixture',fetchFn,now:()=>now,snapshotAtMs:now,
   refreshPacket:async()=>({packet:{...p,position:{...p.position,exit_context:{...p.position.exit_context,latest_refresh:true}}},captured:now})});
  assert.deepEqual(first,advisory);assert.equal(calls,2);assert.equal(r.valid,true,r.error);assert.equal(r.decision,final);
+ assert.ok(!JSON.stringify(finalSchema.$defs.arbitration_evidence).includes('"pattern"'),'FINAL evidence schema must stay exact under 120s capture');
  const enumCount=JSON.stringify(finalSchema).match(/"enum":/g)?.length??0;assert.ok(enumCount<40);
  function enums(x){return x&&typeof x==='object'?(Array.isArray(x.enum)?x.enum.length:0)+Object.entries(x).filter(([k])=>k!=='enum').reduce((n,[,v])=>n+enums(v),0):0;}
  assert.ok(enums(finalSchema)<=1000);
