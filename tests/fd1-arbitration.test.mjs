@@ -98,6 +98,21 @@ test('production citation contract can review all twelve independent claims with
  const r=await dualEntryDecision(await packet(),{apiKey:'fixture',deepseekKey:'fixture',fetchFn,now:()=>T});
  assert.equal(r.valid,true,r.error);assert.equal(r.arbitration.deepseek_evidence_considered.length,12);
 });
+test('FINAL normalizes redundant considered from adopted and rejected evidence',async()=>{
+ let cited=null;
+ const fetchFn=async(url,init)=>{
+  const b=JSON.parse(init.body),ds=String(url).includes('deepseek'),input=JSON.parse(ds?b.messages[1].content:b.input[1].content);
+  if(ds){const a=dsAnswer(input,'BUY');a.bullish_evidence=a.bearish_evidence;a.bearish_evidence=[];cited='initial.'+a.bullish_evidence[0];return dsResponse(a);}
+  if(!input.independent_reviews)return gptResponse(input,'BUY');
+  const raw=await gptResponse(input,'BUY').json(),wire=JSON.parse(raw.output[0].content[0].text);
+  wire.arbitration={...wire.arbitration,considered:[],adopted:[cited],rejected:[]};
+  raw.output[0].content[0].text=JSON.stringify(wire);return Response.json(raw);
+ };
+ const r=await dualEntryDecision(await packet(),{apiKey:'fixture',deepseekKey:'fixture',fetchFn,now:()=>T});
+ assert.equal(r.valid,true,r.error);assert.equal(r.decision,'BUY');
+ assert.deepEqual(r.arbitration.deepseek_evidence_considered,[cited]);
+ assert.deepEqual(r.answer.arbitration.considered,[cited]);
+});
 test('invalid advisory schema preserves bounded diagnostic wire, never a valid answer',async()=>{
  const r=await callAdvisory({packet:await packet(),snapshot_hash:'a'.repeat(64),snapshot_at_ms:T,market_input:{}},{apiKey:'fixture',now:()=>T,
   fetchFn:async()=>dsResponse({task:'ENTRY'})});

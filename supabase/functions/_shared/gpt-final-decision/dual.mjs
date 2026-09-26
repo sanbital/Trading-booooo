@@ -29,12 +29,27 @@ adopted/rejected list only paths from valid DeepSeek bullish/bearish evidence, p
 If DeepSeek is unavailable/invalid, considered/adopted/rejected must be empty; do not attribute GPT FIRST claims to DeepSeek.
 When valid advice supplies evidence, explicitly put a cited key in considered and adopt or reject it.
 considered must contain the union of adopted and rejected (up to twelve keys); it refers to DeepSeek's initial snapshot claims.
+supporting/opposing must cite only exact paths offered by the schema; never rename, alias, or move an initial path under current.
 Return concise conclusions, never chain-of-thought. The original task decision schema still applies.`;
 const arr={type:'array',maxItems:6,items:{type:'string',minLength:1,maxLength:180}};
 export const ARBITRATION_SCHEMA={type:'object',additionalProperties:false,
   properties:{considered:{...arr,maxItems:12},adopted:arr,rejected:arr,supporting:arr,opposing:arr,reason:{type:'string',minLength:1,maxLength:240}},
   required:['considered','adopted','rejected','supporting','opposing','reason']};
 const clone=x=>JSON.parse(JSON.stringify(x));
+const FINAL_TRAJECTORY_FIELDS=new Set([
+  'd_mid_bps','buy_share_5s','net_taker_quote_5s','imbalance','spread_bps',
+  'd_buy_share','d_net_taker_quote','d_ask_depth_25_pct','d_bid_depth_25_pct','trade_count'
+]);
+export function finalEvidenceKeys(catalog){
+  return Object.keys(catalog).filter(k=>{
+    if(!/^(initial|current)\.(current\.)?(facts|capture_context|change)\./.test(k))return false;
+    if(!k.includes('.capture_context.trajectory.'))return true;
+    return FINAL_TRAJECTORY_FIELDS.has(k.slice(k.lastIndexOf('.')+1));
+  });
+}
+function normalizeArbitration(arbitration){
+  return {...arbitration,considered:[...new Set([...(arbitration.adopted??[]),...(arbitration.rejected??[])])]};
+}
 function freeze(x){if(x&&typeof x==='object'){Object.values(x).forEach(freeze);Object.freeze(x);}return x;}
 export async function frozenReview(packet,{snapshotAtMs,inputPayload=payloadFor}={}){
   if(!Number.isSafeInteger(snapshotAtMs))throw Error('FD_SNAPSHOT_TIME');
@@ -65,30 +80,32 @@ export function reviewsFor(gpt,ds){return {
 export function disagreement(gpt,ds){return ds?.valid===true&&gpt?.valid===true?
   (gpt.decision===ds.answer.decision_preference?'AGREE':'DISAGREE'):'UNAVAILABLE_OR_INVALID';}
 export function validateFinalWire(wire,packet,{validate=validateDecision,catalog=null,advisory=null}={}){
-  const {arbitration,...base}=wire;validateShape(arbitration,ARBITRATION_SCHEMA);
+  const {arbitration:rawArbitration,...base}=wire;validateShape(rawArbitration,ARBITRATION_SCHEMA);
+  // considered duplicates adopted/rejected. Normalize that redundant bookkeeping so a
+  // missing duplicate path cannot invalidate an otherwise evidence-valid FINAL decision.
+  const arbitration=normalizeArbitration(rawArbitration);
   const answer=validate(base,packet);
   if(catalog)for(const field of ['considered','adopted','rejected','supporting','opposing']){
     const keys=arbitration[field];if(new Set(keys).size!==keys.length||keys.some(k=>!Object.hasOwn(catalog,k)))throw Error('FD_ARBITRATION_EVIDENCE');
   }
   if(advisory){const allowed=advisory.valid===true?[...advisory.answer.bullish_evidence,...advisory.answer.bearish_evidence].map(k=>'initial.'+k):[];
     if([...arbitration.adopted,...arbitration.rejected].some(k=>!allowed.includes(k)))throw Error('FD_ARBITRATION_ADVISORY_EVIDENCE');
-    if(allowed.length&&(!arbitration.considered.some(k=>allowed.includes(k))||
-      arbitration.adopted.length+arbitration.rejected.length===0))throw Error('FD_ARBITRATION_ADVISORY_UNREVIEWED');
-    if([...arbitration.adopted,...arbitration.rejected].some(k=>!arbitration.considered.includes(k)))throw Error('FD_ARBITRATION_UNCONSIDERED_CLAIM');
+    if(allowed.length&&arbitration.adopted.length+arbitration.rejected.length===0)throw Error('FD_ARBITRATION_ADVISORY_UNREVIEWED');
     if(arbitration.adopted.some(k=>arbitration.rejected.includes(k)))throw Error('FD_ARBITRATION_CONTRADICTORY');}
   return {...answer,arbitration};
 }
 export function arbitrationPayload(current,initial,reviews){
   const base=clone(current.base_payload),schema=base.text.format.schema;
   const catalog={...evidenceCatalog(initial.market_input,'initial'),...evidenceCatalog(current.market_input,'current')};
-  // One enum definition shared by five lists, avoiding duplicated enum budgets and ambiguous bare keys.
-  const keys=Object.keys(catalog).filter(k=>/^(initial|current)\.(current\.)?(facts|capture_context|change)\./.test(k));
+  // The full 120s trajectory remains in the prompt, but FINAL citations use a bounded exact
+  // allow-list. Never fall back to a regex: it can admit paths that do not exist in the snapshot.
+  const keys=finalEvidenceKeys(catalog);
   const cited=reviews.deepseek.valid?[...reviews.deepseek.answer.bullish_evidence,...reviews.deepseek.answer.bearish_evidence].map(k=>'initial.'+k):[];
   const evidence={...arr,items:{$ref:'#/$defs/arbitration_evidence'}};
   const advisoryEvidence=cited.length?{...arr,items:{type:'string',enum:[...new Set(cited)]}}:{...arr,maxItems:0};
   const allKeys=[...new Set([...keys,...cited])],chunks=[];
   for(let i=0;i<allKeys.length;i+=200)chunks.push({type:'string',enum:allKeys.slice(i,i+200)});
-  base.text.format.schema={...schema,$defs:{...schema.$defs,arbitration_evidence:allKeys.length>700?{type:'string',pattern:'^(initial|current)\\.(current\\.)?(facts|capture_context|position|change)\\.[A-Za-z0-9_.]+$'}:chunks.length?{anyOf:chunks}:{type:'string'}},
+  base.text.format.schema={...schema,$defs:{...schema.$defs,arbitration_evidence:chunks.length?{anyOf:chunks}:{type:'string',enum:['__NO_VALID_EVIDENCE__']}},
     properties:{...schema.properties,arbitration:{...ARBITRATION_SCHEMA,properties:{...ARBITRATION_SCHEMA.properties,
       considered:{...advisoryEvidence,maxItems:cited.length?12:0},adopted:advisoryEvidence,rejected:advisoryEvidence,supporting:evidence,opposing:evidence}}},required:[...schema.required,'arbitration']};
   const before=initial.packet.facts.values,after=current.packet.facts.values;
