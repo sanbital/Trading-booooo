@@ -53,7 +53,7 @@ CEC0040(model_judgments.cec0040): 전략 전체의 최근 거래당 기대손익
 5) ev: 근거를 비교한 기대값 방향 POSITIVE / NEUTRAL / NEGATIVE / UNDETERMINED.
 6) confidence: 0~1. 기록용이며 차단 기준이 아니다. 확신이 낮으면 낮게 적되, 그것만으로 결정을 바꾸지 마라.
 7) d:
-- BUY: 네 판단으로 기대값이 우호적이다. support에 지금 실제로 상승을 가리키는 사실(가능하면 current_propulsion 사실 포함)을 적는다. reasons는 비운다. 주문 안전 HARD(${EXECUTION_SAFETY.join(', ')})가 있으면 BUY 불가.
+- BUY: 네 판단으로 기대값이 우호적이다. support에 지금 실제로 상승을 가리키는 사실(가능하면 current_propulsion 사실 포함)을 적는다. 감수하는 위험이 있으면 reasons에 적어도 된다(기록용). 주문 안전 HARD(${EXECUTION_SAFETY.join(', ')})가 있으면 BUY 불가.
 - SKIP: 네 판단으로 지금 이 가격의 새 롱이 불리하다. 사유는 (a) 실제로 SOFT/HARD인 카테고리, (b) ${EV_SKIP}(e에는 지금 하락 조건을 만족하는 사실만), 또는 (c) ${JUDGMENT}(임계값을 넘지 않았더라도 네가 종합적으로 판단한 근거 사실). 서버는 임계값 충족을 요구하지 않는다.
 - ABSTAIN: 다음 넷 중 하나일 때만, abstain_reason과 함께. DATA_INSUFFICIENT(판단에 필요한 핵심 데이터가 없다), EVIDENCE_CONFLICT_SEVERE(상승·하락 근거가 강하게 충돌해 방향을 정할 수 없다), EV_UNDETERMINABLE(기대값 우위를 판단할 근거 자체가 없다), EXECUTION_UNSAFE(체결 조건 때문에 전략 판단이 무의미하다). BUY/SKIP이면 abstain_reason은 NONE이다. ABSTAIN이면 주문하지 않는다.
 - 정보가 완벽하지 않다는 이유만으로 ABSTAIN하지 마라. 근거의 방향과 기대값을 비교해 BUY 또는 SKIP 중 하나를 골라라.
@@ -67,7 +67,7 @@ ${cats('ENTRY')}
 `;
 export const HOLD_PROMPT=commonFor('HOLD')+`
 과제(t=HOLD): 이미 보유 중인 롱 포지션에 대해 하나의 질문에 답하라: "이 포지션을 매수하게 만든 상승 근거가 지금도 살아 있는가?"
-- HOLD: 상승 근거가 살아 있다. support에 현재 상승/매수 우위를 보여주는 사실 1개 이상. reasons는 비운다. DATA_INCOMPLETE가 HARD이면 HOLD 불가.
+- HOLD: 상승 근거가 살아 있다. support에 현재 상승/매수 우위를 보여주는 사실 1개 이상. 주의할 위험이 있으면 reasons에 적어도 된다(기록용). DATA_INCOMPLETE가 HARD이면 HOLD 불가.
 - EXIT: 네 판단으로 상승 근거가 무너졌다. 사유는 실제로 SOFT/HARD인 카테고리, 또는 임계값을 넘지 않았더라도 네가 종합적으로 판단한 ${JUDGMENT}(근거 사실 포함). 짧은 눌림이나 잡음 하나만으로 EXIT하지 말고, 상승 논리가 실제로 사라졌을 때 청산하라.
 - 시간은 청산 사유가 아니다. "오래 보유했다", "45분간 신고가가 없다", "6시간이 지났다"는 그 자체로 EXIT 근거가 아니다. 추세가 살아 있으면 계속 보유하고, 진입 5분 뒤라도 근거가 무너지면 청산한다.
 - position.deterministic_exit_candidate가 있으면(예: V17_MOMENTUM_STALE, V17_MAX_HOLD) 기계 규칙이 시간 기준 청산을 제안한 상태다. 네가 유효한 HOLD를 주면 이번에는 보류되고, EXIT/ABSTAIN/무효면 기계 규칙대로 청산된다.

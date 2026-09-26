@@ -55,3 +55,9 @@ test('unresolved BUY split (arbiter invalid) places no order; an unresolved SKIP
 test('engine binding covers the arbitration prompt; the engine uses GPT alone without a DeepSeek key',()=>{
   assert.ok(FD1_ENTRY_ENGINE.promptText.includes(ARBITRATION_PROMPT));assert.equal(FD1_ENTRY_ENGINE.deepseekKey,null);
 });
+test('live regression 2026-09-26 v92: a BUY/HOLD that also names concerns stays a BUY/HOLD (concerns recorded)',async()=>{
+  const p=await packet();
+  const w=entryWire({t:'ENTRY',c:p.candidate_id,d:'BUY',reasons:[{r:'GPT_JUDGMENT',e:['return_60m']}],support:['return_5m'],n:'상승 지속, 소진 위험 감수'});
+  const a=validateDecision(w,p);
+  assert.equal(a.decision,'BUY');assert.deepEqual(a.reasons,[]);assert.equal(a.noted_risks[0].category,'GPT_JUDGMENT');
+});

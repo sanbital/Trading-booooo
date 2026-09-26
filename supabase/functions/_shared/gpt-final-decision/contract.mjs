@@ -223,12 +223,15 @@ export function validateDecision(wire,packet){
   if(d==='BUY'||d==='HOLD'){
     const blocking=risk.hard.filter(k=>(d==='BUY'?EXECUTION_SAFETY:HOLD_BLOCKING).includes(k));
     ensure(blocking.length===0,'FD_'+d+'_WITH_HARD_RISK:'+blocking.join(','));
-    ensure(reasons.length===0,'FD_'+d+'_WITH_REASON');
+    // (2026-09-26) A BUY/HOLD that also names concerns is still GPT's decision: the concerns
+    // are recorded (noted_risks), never a reason to void the answer.
     // Integrity only: at least one cited fact must really point up now.
     ensure(support.length>=1,'FD_'+d+'_REQUIRES_SUPPORT');
   }
   if(d==='SKIP'||d==='EXIT')ensure(reasons.length>0,'FD_'+d+'_REQUIRES_CATEGORY');
-  const out={version:FD_VERSION,task,decision:d,reasons,support,rejected_support,summary:wire.n,risk_hard:risk.hard,risk_soft:risk.soft};
+  const buyLike=d==='BUY'||d==='HOLD';
+  const out={version:FD_VERSION,task,decision:d,reasons:buyLike?[]:reasons,...(buyLike&&reasons.length?{noted_risks:reasons}:{}),
+    support,rejected_support,summary:wire.n,risk_hard:risk.hard,risk_soft:risk.soft};
   if(!entry)return out;
   // EV evidence. Recorded, never a gate: an inconsistency on BUY is flagged, not refused.
   ensure(new Set(wire.bearish).size===wire.bearish.length,'FD_DUPLICATE_BEARISH');

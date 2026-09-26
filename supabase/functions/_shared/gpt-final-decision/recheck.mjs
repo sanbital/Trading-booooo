@@ -240,12 +240,12 @@ export function validateRecheck(wire,packet){
   if(d==='BUY'){
     const blocking=risk.hard.filter(k=>EXECUTION_SAFETY.includes(k));
     ensure(blocking.length===0,'FD_BUY_WITH_HARD_RISK:'+blocking.join(','));
-    ensure(reasons.length===0,'FD_BUY_WITH_REASON');
     ensure(support.length>=1,'FD_BUY_REQUIRES_SUPPORT');
   }
   // GPT decides; a SKIP only has to say why (a band, or its own judgment on cited facts).
   if(d==='SKIP')ensure(reasons.length>0,'FD_SKIP_REQUIRES_CATEGORY');
-  return {version:RECHECK_VERSION,task:RECHECK_TASK,decision:d,reasons,support,rejected_support,summary:wire.n,risk_hard:risk.hard,risk_soft:risk.soft};
+  return {version:RECHECK_VERSION,task:RECHECK_TASK,decision:d,reasons:d==='BUY'?[]:reasons,...(d==='BUY'&&reasons.length?{noted_risks:reasons}:{}),
+    support,rejected_support,summary:wire.n,risk_hard:risk.hard,risk_soft:risk.soft};
 }
 const dict=Object.entries({...Object.fromEntries(FACT_OK.map(k=>[k,FACT_DEFS[k]])),...CHANGE_DEFS}).map(([k,[s,u,d]])=>`- ${k} [${s}, ${u}]: ${d}`).join('\n');
 const catText=[...ENTRY_CATS.map(k=>`- ${k}: ${CATEGORIES[k].text}; cite only: ${CATEGORIES[k].facts.join(', ')||'(none)'}`),
