@@ -1,4 +1,4 @@
-export const VERSION = 'DOA-CAPTURE-5-BOUNDED-TRANSPORT';
+export const VERSION = 'DOA-CAPTURE-6-MARKET-SENSOR';
 export function transportFresh(e,receivedAt){const at=Number(e.E??e.T);return Number.isSafeInteger(at)&&Number.isSafeInteger(receivedAt)&&at<=receivedAt+1000&&receivedAt-at<=10000;}
 export const normalizeSymbol=value=>{const s=String(value??'').trim().toUpperCase();return /^[A-Z0-9]{1,24}USDT$/.test(s)?s:null;};
 export const iso = n => new Date(n).toISOString();
@@ -53,6 +53,12 @@ export class Book {
     const depth=(rows,band,isBid)=>rows.filter(([p])=>isBid?p>=mid*(1-band):p<=mid*(1+band)).reduce((v,[p,q])=>v+p*q,0);
     const coverage=b=>this.bidBoundary<=mid*(1-b) && this.askBoundary>=mid*(1+b);
     return {book_complete:true,best_bid:bid,best_ask:ask,bid_qty:bids[0][1],ask_qty:asks[0][1],mid,
+      depth_coverage_complete:coverage(.0025),depth_requested_bps:25,
+      depth_bid_coverage_bps:Math.max(0,Math.min(25,(mid-this.bidBoundary)/mid*10000)),
+      depth_ask_coverage_bps:Math.max(0,Math.min(25,(this.askBoundary-mid)/mid*10000)),
+      depth_bid_boundary:this.bidBoundary,depth_ask_boundary:this.askBoundary,
+      observed_bid_depth_usdt:depth(bids.filter(([p])=>p>=this.bidBoundary),.0025,true),
+      observed_ask_depth_usdt:depth(asks.filter(([p])=>p<=this.askBoundary),.0025,false),
       spread_bps:(ask-bid)/mid*10000,bid_25_usdt:depth(bids,.0025,true),ask_25_usdt:depth(asks,.0025,false),
       bid_50_usdt:depth(bids,.005,true),ask_50_usdt:depth(asks,.005,false),coverage_25:coverage(.0025),coverage_50:coverage(.005),
       buy_vwap_450:vwap(asks,450),sell_vwap_450:vwap(bids,450),displayed_ask_added_5s:this.add,displayed_ask_removed_5s:this.remove,
@@ -85,4 +91,18 @@ export function inWindow(t,windows,symbol){return windows.some(w=>w.symbol===sym
 export class WeightBudget {
   constructor(){this.used=[];}
   claim(n,now){this.used=this.used.filter(x=>x[0]>now-60000);if(this.used.reduce((s,x)=>s+x[1],0)+n>100)return false;this.used.push([now,n]);return true;}
+}
+
+// The last actually received, closed BTC candle is the only injection source.
+export function closedCandle(e,receivedAt){
+ const k=e.k,start=Number(k?.t),end=start+60000;
+ if(k?.x!==true||!Number.isSafeInteger(start)||Number(k.T)!==end-1||!(Number(k.o)>0)||!(Number(k.c)>0))return null;
+ return {at:iso(start),end_ms:end,exchange_ms:Number(e.E),received_ms:receivedAt,complete:true,return_1m:Number(k.c)/Number(k.o)-1};
+}
+export function btcCandleFields(c,cutoff){
+ const valid=c?.complete===true&&[c.end_ms,c.exchange_ms,c.received_ms,cutoff].every(Number.isSafeInteger)&&
+  c.end_ms<=cutoff&&c.exchange_ms<=cutoff&&c.received_ms<=cutoff&&c.exchange_ms>=c.end_ms-1&&
+  c.received_ms>=c.exchange_ms-1000&&c.received_ms-c.exchange_ms<=10000&&cutoff-c.end_ms<=65000&&Number.isFinite(c.return_1m);
+ return {btc_return_1m:valid?c.return_1m:null,btc_candle_at:c?.at??null,
+  btc_candle_complete:valid,btc_candle_end_ms:c?.end_ms??null,btc_candle_exchange_ms:c?.exchange_ms??null,btc_candle_received_ms:c?.received_ms??null};
 }

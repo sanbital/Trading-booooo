@@ -2,6 +2,7 @@
  * REPLAY reads Binance history endpoints with endTime strictly before `asOf`, so a
  * replay packet contains only what was published before the historical decision. */
 import {readCapture} from './capture-context.mjs';
+import {readMarketSensor} from './market-sensor.mjs';
 const HOST='https://fapi.binance.com',MIN=60000;
 async function get(fetchFn,path,ms){
   const r=await fetchFn(HOST+path,{method:'GET',redirect:'error',signal:AbortSignal.timeout(ms)});
@@ -18,7 +19,7 @@ export async function readSources(symbol,asOf,{mode='LIVE',fetchFn=fetch,ms=3000
   const btcRead=()=>kl('BTCUSDT','1m',61,end);
   const btc=btcCache?(btcCache.get(btcKey)??(btcCache.set(btcKey,safe('btc',btcRead)),btcCache.get(btcKey))):safe('btc',btcRead);
   const live=mode==='LIVE';
-  const [one,five,b,oiHist,premium,funding,book,captureContext]=await Promise.all([
+  const [one,five,b,oiHist,premium,funding,book,captureContext,marketSensor]=await Promise.all([
     safe('one',()=>kl(symbol,'1m',121,end)),safe('five',()=>kl(symbol,'5m',49,end5)),btc,
     safe('oi',()=>get(fetchFn,'/futures/data/openInterestHist?'+q({symbol,period:'5m',limit:13,...(live?{}:{endTime:asOf})}),ms)),
     safe('premium',()=>get(fetchFn,'/fapi/v1/premiumIndexKlines?'+q({symbol,interval:'1m',limit:3,endTime:end}),ms)),
@@ -27,6 +28,7 @@ export async function readSources(symbol,asOf,{mode='LIVE',fetchFn=fetch,ms=3000
         const r=Array.isArray(x)?x.filter(y=>Number(y.fundingTime)<=asOf).at(-1):null;return r?{rate:Number(r.fundingRate)}:null;}),
     live?safe('book',async()=>{const requestedAt=now();const data=await get(fetchFn,'/fapi/v1/depth?'+q({symbol,limit:100}),ms);
       return {...data,requestedAtMs:requestedAt,receivedAtMs:now()};}):Promise.resolve(null),
-    live?readCapture(symbol,asOf,{fetchFn,timeoutMs:Math.min(350,ms),positionId}):Promise.resolve(null)]);
-  return {src:{one,five,btc:b,oiHist,premium,funding,book,...(captureContext?{captureContext}:{}),bookMissingReason:live?(book?null:'BOOK_UNAVAILABLE'):'NOT_POINT_IN_TIME_REPLAY'},errors};
+    live?readCapture(symbol,asOf,{fetchFn,timeoutMs:Math.min(350,ms),positionId}):Promise.resolve(null),
+    live?readMarketSensor(asOf,{fetchFn,timeoutMs:Math.min(350,ms)}):Promise.resolve(null)]);
+  return {src:{one,five,btc:b,oiHist,premium,funding,book,...(captureContext?{captureContext}:{}),...(marketSensor?{marketSensor}:{}),bookMissingReason:live?(book?null:'BOOK_UNAVAILABLE'):'NOT_POINT_IN_TIME_REPLAY'},errors};
 }

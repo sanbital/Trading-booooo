@@ -33,8 +33,8 @@ export async function readCapture(symbol,asOf,{fetchFn=fetch,timeoutMs=350,posit
  const url=env('SUPABASE_URL'),key=env('SUPABASE_SERVICE_ROLE_KEY');if(!url||!key)return unavailable('NOT_CONFIGURED');
  const controller=new AbortController();let timer;
  try{
-  const work=(async()=>{const r=await fetchFn(url+'/rest/v1/rpc/doa_gpt_capture_context_v3',{method:'POST',redirect:'error',signal:controller.signal,
-   headers:{apikey:key,Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify({p_symbol:symbol,p_as_of:new Date(asOf).toISOString(),p_position_id:positionId})});
+  const work=(async()=>{const r=await fetchFn(url+'/rest/v1/rpc/doa_context_for_role_v1',{method:'POST',redirect:'error',signal:controller.signal,
+   headers:{apikey:key,Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify({p_symbol:symbol,p_as_of:new Date(asOf).toISOString(),p_position_id:positionId,p_role:positionId?'OPEN_POSITION':'TRADE_CANDIDATE'})});
    if(!r.ok)return unavailable('READ_FAILED');const text=await r.text();if(text.length>65536)return unavailable('TOO_LARGE');const c=validateCapture120(JSON.parse(text),asOf);if(c.status==='AVAILABLE')c.trajectory_hash=await hash(c.trajectory);return c;})();
   return await Promise.race([work,new Promise(resolve=>{timer=setTimeout(()=>{controller.abort();resolve(unavailable('TIMEOUT'));},Math.max(1,Math.min(350,timeoutMs)));})]);
  }catch{return unavailable('READ_FAILED');}finally{clearTimeout(timer);}

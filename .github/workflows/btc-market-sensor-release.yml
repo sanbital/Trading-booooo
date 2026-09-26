@@ -1,0 +1,46 @@
+name: BTC market sensor release and ten minute audit
+on:
+  push:
+    branches: [main]
+    paths: [deployment-evidence/market-sensor-release-request.json]
+permissions:
+  contents: read
+concurrency:
+  group: deploy-doa-capture-only
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Contract and execution regressions
+        run: |
+          set -euo pipefail
+          npm ci --prefix test-support/v18-ops --ignore-scripts
+          export PGLITE_MODULE="$PWD/test-support/v18-ops/node_modules/@electric-sql/pglite/dist/index.js"
+          node --test collectors/doa-capture/*.test.mjs tests/fd1*.test.mjs test-support/v17-entry/*.test.mjs test-support/v17-exit/*.test.mjs
+          npm exec --yes --package=deno@2.5.6 -- deno check supabase/functions/v10-lane-executor/index.ts
+      - name: Build pinned public collector image
+        run: docker build --build-arg "SOURCE_COMMIT=$GITHUB_SHA" -t "registry.fly.io/sanbital-doa-capture-20260925:$GITHUB_SHA" collectors/doa-capture
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: 0.4.108
+      - name: Image-only update and read-only sensor soak
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: node collectors/doa-capture/release-market-sensor.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: btc-market-sensor-production
+          path: market-sensor-release.json
+          retention-days: 30
