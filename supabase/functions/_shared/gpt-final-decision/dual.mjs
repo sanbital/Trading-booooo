@@ -20,6 +20,7 @@ For HOLD, PROTECT retains existing deterministic/native protection and requests 
 it cannot widen/cancel stops or independently place an order. Strategic EXIT requires your final EXIT.
 arbitration evidence lists use exact dot paths prefixed current. or initial. to numeric/boolean market evidence.
 adopted/rejected list only paths from valid DeepSeek bullish/bearish evidence, prefixed initial.
+When valid advice supplies evidence, explicitly put a cited key in considered and adopt or reject it.
 Return concise conclusions, never chain-of-thought. The original task decision schema still applies.`;
 const arr={type:'array',maxItems:6,items:{type:'string',minLength:1,maxLength:180}};
 export const ARBITRATION_SCHEMA={type:'object',additionalProperties:false,
@@ -30,6 +31,12 @@ function freeze(x){if(x&&typeof x==='object'){Object.values(x).forEach(freeze);O
 export async function frozenReview(packet,{snapshotAtMs,inputPayload=payloadFor}={}){
   if(!Number.isSafeInteger(snapshotAtMs))throw Error('FD_SNAPSHOT_TIME');
   const copy=clone(packet),base=inputPayload(copy),market=JSON.parse(base.input.find(x=>x.role==='user').content);
+  market.deterministic_safety_state={market_flags:market.risk_flags??{},native_stop_stage:copy.position?.stop_stage??null,
+    priority:'HARD_SAFETY_OVERRIDES_ALL_MODELS',account_and_exchange_truth:'NOT_IN_MODEL_SNAPSHOT_RECONCILED_BY_EXECUTOR'};
+  market.execution_state={phase:copy.task==='RECHECK'?'PRE_DISPATCH':copy.task==='HOLD'?'OPEN_POSITION_REVIEW':'PRE_ADMISSION',
+    book_reference:copy.current_ref??copy.execution_ref??copy.position?.valuation??null,
+    pre_dispatch:copy.pre_dispatch??null,deterministic_exit_candidate:copy.position?.deterministic_exit_candidate??null,
+    execution_permission:'NONE_UNTIL_FINAL_AND_EXECUTOR_SAFETY_CHECKS'};
   const capture=copy.facts?.capture_context??{status:'UNAVAILABLE'},trajectoryHash=await hash(capture);
   const identity={symbol:copy.symbol,task:copy.task,candidate_id:copy.candidate_id,snapshot_at_ms:snapshotAtMs,
     packet_hash:await hash(copy),capture_window:{start_ms:capture.start_ms??null,end_ms:capture.end_ms??null},
@@ -57,6 +64,9 @@ export function validateFinalWire(wire,packet,{validate=validateDecision,catalog
   }
   if(advisory){const allowed=advisory.valid===true?[...advisory.answer.bullish_evidence,...advisory.answer.bearish_evidence].map(k=>'initial.'+k):[];
     if([...arbitration.adopted,...arbitration.rejected].some(k=>!allowed.includes(k)))throw Error('FD_ARBITRATION_ADVISORY_EVIDENCE');
+    if(allowed.length&&(!arbitration.considered.some(k=>allowed.includes(k))||
+      arbitration.adopted.length+arbitration.rejected.length===0))throw Error('FD_ARBITRATION_ADVISORY_UNREVIEWED');
+    if([...arbitration.adopted,...arbitration.rejected].some(k=>!arbitration.considered.includes(k)))throw Error('FD_ARBITRATION_UNCONSIDERED_CLAIM');
     if(arbitration.adopted.some(k=>arbitration.rejected.includes(k)))throw Error('FD_ARBITRATION_CONTRADICTORY');}
   return {...answer,arbitration};
 }
@@ -68,8 +78,7 @@ export function arbitrationPayload(current,initial,reviews){
   return {...base,max_output_tokens:Math.max(1400,base.max_output_tokens),prompt_cache_key:'boo-fd1-final-'+current.packet.task.toLowerCase(),
     input:[{role:'system',content:base.input[0].content+ARBITRATION_PROMPT},{role:'user',content:JSON.stringify({
       ...current.market_input,initial_snapshot:initial.market_input,snapshot_delta:changes,independent_reviews:reviews,
-      disagreement:disagreement(reviews.gpt,{valid:reviews.deepseek.valid,answer:reviews.deepseek.answer}),
-      execution_state:{order_dispatched:false,role:'STRATEGY_REVIEW_ONLY',hard_safety:'EXECUTOR_REVALIDATES_BEFORE_ANY_ORDER'}})}]};
+      disagreement:disagreement(reviews.gpt,{valid:reviews.deepseek.valid,answer:reviews.deepseek.answer})})}]};
 }
 /** First calls overlap; FINAL always runs. FIRST/advice never become an executable fallback. */
 export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch,now=Date.now,deadlineMs,

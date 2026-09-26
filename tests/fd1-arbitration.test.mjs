@@ -12,9 +12,12 @@ export function finalFields(input){
  return {considered:cited,adopted:[],rejected:cited,supporting:key?['current.'+key]:[],opposing:[],reason:'Reviewed independent claims against current evidence'};
 }
 export function gptResponse(input,decision='BUY'){
- const base=input.t==='ENTRY'?entryWire({t:'ENTRY',c:input.candidate_id,d:decision,reasons:decision==='SKIP'?[{r:'GPT_JUDGMENT',e:['return_5m']}]:[],support:decision==='ABSTAIN'?[]:['return_5m'],n:'Evidence review'}):
- {t:input.t,c:input.candidate_id,d:decision,reasons:[],support:['return_5m'],n:'Evidence review'};
- if(input.independent_reviews)base.arbitration=finalFields(input);
+ const base=input.t==='ENTRY'?entryWire({t:'ENTRY',c:input.candidate_id,d:decision,reasons:decision==='SKIP'?[{r:'GPT_JUDGMENT',e:['return_5m']}]:[],support:decision==='ABSTAIN'?[]:['return_5m','taker_buy_ratio_5m'],n:'Evidence review'}):
+ {t:input.t,c:input.candidate_id,d:decision,reasons:decision==='EXIT'?[{r:'GPT_JUDGMENT',e:['return_5m']}]:[],support:['return_5m'],n:'Evidence review'};
+  if(input.independent_reviews)base.arbitration=finalFields(input);
+ if(base.arbitration&&['SKIP','EXIT'].includes(decision)){
+   base.arbitration.adopted=base.arbitration.rejected;base.arbitration.rejected=[];
+ }
  return Response.json({model:MODEL,status:'completed',usage:{input_tokens:1000,output_tokens:200},output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(base)}]}]});
 }
 async function packet(task='ENTRY') {return buildDecisionPacket({task,subjectId:'arb-test',symbol:'QUSDT',dataMode:'LIVE',
@@ -38,6 +41,7 @@ for(const final of ['BUY','SKIP'])test('independent parallel FIRST; DeepSeek SKI
  assert.equal(finalInput.independent_reviews.deepseek.answer.decision_preference,'SKIP');
  assert.equal(r.valid,true,r.error);assert.equal(r.decision,final);assert.equal(r.arbitration.authority,'GPT_FINAL_ONLY');
  assert.equal(r.arbitration.deepseek_agreement,'DISAGREE');assert.equal(r.arbitration.api_calls,3);
+ assert.ok((final==='BUY'?r.arbitration.deepseek_rejected:r.arbitration.deepseek_adopted).length>0);
  assert.equal(revalidateArbitration(r,r.final_packet).decision,final);
 });
 for(const condition of ['agree','missing','timeout','mismatch','fabricated'])test('FINAL mandatory when advice '+condition,async()=>{
@@ -76,4 +80,14 @@ test('latest snapshot reaches FINAL while FIRST hash remains frozen',async()=>{
 });
 test('legacy first-only journal is never executable',async()=>{
  assert.throws(()=>revalidateArbitration({valid:true,wire:{}},{}),/FD_FINAL_AUTHORITY/);
+});
+for(const final of ['HOLD','PROTECT','EXIT'])test('DeepSeek EXIT cannot command a close; HOLD FINAL may choose '+final,async()=>{
+ const fetchFn=async(url,init)=>{
+  const b=JSON.parse(init.body),ds=String(url).includes('deepseek'),input=JSON.parse(ds?b.messages[1].content:b.input[1].content);
+  if(ds)return dsResponse(dsAnswer(input,'EXIT'));
+  return gptResponse(input,input.independent_reviews?final:'HOLD');
+ };
+ const r=await dualEntryDecision(await packet('HOLD'),{apiKey:'fixture',deepseekKey:'fixture',fetchFn,now:()=>T});
+ assert.equal(r.valid,true,r.error);assert.equal(r.decision,final);assert.equal(r.arbitration.deepseek_preference,'EXIT');
+ assert.equal(revalidateArbitration(r,r.final_packet).decision,final);
 });
