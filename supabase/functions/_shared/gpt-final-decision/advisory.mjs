@@ -36,6 +36,9 @@ Read the ordered 120-second trajectory, 5/15/30/60/120s dynamics and recent 60s.
 Missing evidence stays unknown. Never invent measurements or claim book cancellations are trades.
 bullish_evidence/bearish_evidence contain ONLY exact dot paths to supplied numeric/boolean facts (arrays use zero-based indices).
 For example facts.trend.return_5m, facts.position.position_return, capture_context.trajectory.11.d_mid_bps.
+Aggregated trade flow uses capture_context.dynamics.horizons.s120.net_taker_flow (also s5/s15/s30/s60); always retain the horizons segment.
+BTC sensor returns use market_sensor.return_120s; its per-bucket flow uses market_sensor.market_sensor_trajectory.23.taker_buy_quote_5s.
+These are path examples only: cite them only when the exact numeric/boolean field exists in this snapshot.
 For RECHECK the market facts are nested: current.facts.trend.return_5m. Copy actual paths from input.
 Do not output bare fact names, values, explanations or evidence objects in these two arrays.
 Keep each prose field to at most two short sentences and each evidence array to at most six paths.
