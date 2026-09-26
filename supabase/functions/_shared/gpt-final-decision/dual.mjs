@@ -25,10 +25,11 @@ For RECHECK the input has a nested current object, so use current.current.facts.
 adopted/rejected list only paths from valid DeepSeek bullish/bearish evidence, prefixed initial.
 If DeepSeek is unavailable/invalid, considered/adopted/rejected must be empty; do not attribute GPT FIRST claims to DeepSeek.
 When valid advice supplies evidence, explicitly put a cited key in considered and adopt or reject it.
+considered must contain the union of adopted and rejected (up to twelve keys); it refers to DeepSeek's initial snapshot claims.
 Return concise conclusions, never chain-of-thought. The original task decision schema still applies.`;
 const arr={type:'array',maxItems:6,items:{type:'string',minLength:1,maxLength:180}};
 export const ARBITRATION_SCHEMA={type:'object',additionalProperties:false,
-  properties:{considered:arr,adopted:arr,rejected:arr,supporting:arr,opposing:arr,reason:{type:'string',minLength:1,maxLength:240}},
+  properties:{considered:{...arr,maxItems:12},adopted:arr,rejected:arr,supporting:arr,opposing:arr,reason:{type:'string',minLength:1,maxLength:240}},
   required:['considered','adopted','rejected','supporting','opposing','reason']};
 const clone=x=>JSON.parse(JSON.stringify(x));
 function freeze(x){if(x&&typeof x==='object'){Object.values(x).forEach(freeze);Object.freeze(x);}return x;}
@@ -78,7 +79,7 @@ export function arbitrationPayload(current,initial,reviews){
   const base=clone(current.base_payload),schema=base.text.format.schema;
   const catalog={...evidenceCatalog(initial.market_input,'initial'),...evidenceCatalog(current.market_input,'current')};
   // One enum definition shared by five lists, avoiding duplicated enum budgets and ambiguous bare keys.
-  const keys=Object.keys(catalog).filter(k=>/^(initial|current)\.(current\.)?(facts|capture_context)\./.test(k));
+  const keys=Object.keys(catalog).filter(k=>/^(initial|current)\.(current\.)?(facts|capture_context|change)\./.test(k));
   const cited=reviews.deepseek.valid?[...reviews.deepseek.answer.bullish_evidence,...reviews.deepseek.answer.bearish_evidence].map(k=>'initial.'+k):[];
   const evidence={...arr,items:{$ref:'#/$defs/arbitration_evidence'}};
   const advisoryEvidence=cited.length?{...arr,items:{type:'string',enum:[...new Set(cited)]}}:{...arr,maxItems:0};
@@ -86,7 +87,7 @@ export function arbitrationPayload(current,initial,reviews){
   for(let i=0;i<allKeys.length;i+=200)chunks.push({type:'string',enum:allKeys.slice(i,i+200)});
   base.text.format.schema={...schema,$defs:{...schema.$defs,arbitration_evidence:chunks.length?{anyOf:chunks}:{type:'string'}},
     properties:{...schema.properties,arbitration:{...ARBITRATION_SCHEMA,properties:{...ARBITRATION_SCHEMA.properties,
-      considered:reviews.deepseek.valid?evidence:{...arr,maxItems:0},adopted:advisoryEvidence,rejected:advisoryEvidence,supporting:evidence,opposing:evidence}}},required:[...schema.required,'arbitration']};
+      considered:{...advisoryEvidence,maxItems:cited.length?12:0},adopted:advisoryEvidence,rejected:advisoryEvidence,supporting:evidence,opposing:evidence}}},required:[...schema.required,'arbitration']};
   const before=initial.packet.facts.values,after=current.packet.facts.values;
   const changes=Object.fromEntries(Object.keys(after).filter(k=>Number.isFinite(before[k])&&Number.isFinite(after[k])).map(k=>[k,after[k]-before[k]]));
   return {...base,max_output_tokens:Math.max(1400,base.max_output_tokens),prompt_cache_key:'boo-fd1-final-'+current.packet.task.toLowerCase(),
@@ -100,7 +101,8 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
   const started=now(),deadline=Number.isFinite(deadlineMs)?deadlineMs:started+15000;
   const invalid=error=>({valid:false,decision:'ABSTAIN',answer:null,wire:null,error,attempted:false,completed_at_ms:now(),api_cost_usd:0});
   const initial=await frozenReview(packet,{snapshotAtMs:snapshotAtMs??started,inputPayload});
-  const firstMs=Math.max(1,Math.min(6000,Math.floor((deadline-now()-1500)*.48)));
+  // Live advisory responses take about 3-4 s; leave at least 2.5 s for refresh + FINAL.
+  const firstMs=Math.max(1,Math.min(6000,deadline-now()-2500,Math.floor((deadline-now()-1500)*.65)));
   const safe=async fn=>{try{return await fn();}catch{return invalid('FD_PROVIDER_ERROR');}};
   const [first0,ds0]=await Promise.all([
     safe(()=>gptCall(initial.packet,{apiKey,fetchFn,now,timeoutMs:firstMs,payloadFn:()=>firstPayload(initial),validate})),

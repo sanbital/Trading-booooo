@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {dualEntryDecision,revalidateArbitration,DUAL_VERSION} from '../supabase/functions/_shared/gpt-final-decision/dual.mjs';
-import {evidenceCatalog} from '../supabase/functions/_shared/gpt-final-decision/advisory.mjs';
+import {evidenceCatalog,callAdvisory} from '../supabase/functions/_shared/gpt-final-decision/advisory.mjs';
 import {buildDecisionPacket,MODEL,hash} from '../supabase/functions/_shared/gpt-final-decision/api.mjs';
 import {computeFacts} from '../supabase/functions/_shared/gpt-final-decision/facts.mjs';
 import {T,src,entryWire} from '../development/gpt-final-decision/tests/fixtures.mjs';
@@ -80,6 +80,29 @@ test('latest snapshot reaches FINAL while FIRST hash remains frozen',async()=>{
 });
 test('legacy first-only journal is never executable',async()=>{
  assert.throws(()=>revalidateArbitration({valid:true,wire:{}},{}),/FD_FINAL_AUTHORITY/);
+});
+test('production citation contract can review all twelve independent claims with exact initial paths',async()=>{
+ const fetchFn=async(url,init)=>{
+  const b=JSON.parse(init.body),ds=String(url).includes('deepseek'),input=JSON.parse(ds?b.messages[1].content:b.input[1].content);
+  if(ds){const a=dsAnswer(input,'SKIP'),keys=Object.keys(evidenceCatalog(input)).filter(k=>k.startsWith('facts.')).slice(0,12);
+   a.bullish_evidence=keys.slice(0,6);a.bearish_evidence=keys.slice(6);return dsResponse(a);}
+  if(!input.independent_reviews)return gptResponse(input);
+  const schema=b.text.format.schema.properties.arbitration.properties;
+  const keys=[...input.independent_reviews.deepseek.answer.bullish_evidence,...input.independent_reviews.deepseek.answer.bearish_evidence].map(k=>'initial.'+k);
+  assert.equal(schema.considered.maxItems,12);assert.deepEqual(schema.considered.items.enum,keys);
+  assert.ok(!schema.considered.items.enum.includes('current.return_5m'));
+  const r=await gptResponse(input).json(),wire=JSON.parse(r.output[0].content[0].text);
+  wire.arbitration={...wire.arbitration,considered:keys,adopted:keys.slice(0,6),rejected:keys.slice(6)};
+  r.output[0].content[0].text=JSON.stringify(wire);return Response.json(r);
+ };
+ const r=await dualEntryDecision(await packet(),{apiKey:'fixture',deepseekKey:'fixture',fetchFn,now:()=>T});
+ assert.equal(r.valid,true,r.error);assert.equal(r.arbitration.deepseek_evidence_considered.length,12);
+});
+test('invalid advisory schema preserves bounded diagnostic wire, never a valid answer',async()=>{
+ const r=await callAdvisory({packet:await packet(),snapshot_hash:'a'.repeat(64),snapshot_at_ms:T,market_input:{}},{apiKey:'fixture',now:()=>T,
+  fetchFn:async()=>dsResponse({task:'ENTRY'})});
+ assert.equal(r.valid,false);assert.equal(r.answer,null);assert.equal(r.error,'DEEPSEEK_INVALID_RESPONSE');
+ assert.match(r.validation_error,/^REQUIRED:/);assert.deepEqual(r.wire,{task:'ENTRY'});
 });
 for(const final of ['HOLD','PROTECT','EXIT'])test('DeepSeek EXIT cannot command a close; HOLD FINAL may choose '+final,async()=>{
  const fetchFn=async(url,init)=>{
