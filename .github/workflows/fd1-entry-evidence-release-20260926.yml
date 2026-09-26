@@ -50,7 +50,7 @@ jobs:
             supabase/functions/_shared/leader-pullback-reaccel.mjs supabase/functions/_shared/leader-live-chase.mjs \
             supabase/functions/_shared/boo supabase/functions/v10-lane-executor/entry-evidence.mjs \
             supabase/functions/v10-lane-executor/boo-entry-adapter.mjs supabase/functions/v10-lane-executor/gpt-final-recheck-adapter.mjs
-          grep -Fq 'targetMarginUsdt: 200' supabase/functions/_shared/leader-slot-sizing.mjs
+          grep -Fq 'targetMarginUsdt: 150,' supabase/functions/_shared/leader-slot-sizing.mjs
           grep -Fq 'leverage: 3' supabase/functions/_shared/leader-slot-sizing.mjs
           grep -Fq 'const MAX_SLOTS=10' supabase/functions/v10-lane-executor/index.ts
           git diff --stat "$PROD_RELEASE" HEAD -- supabase/functions | tee release-evidence/source-diff-stat.txt
