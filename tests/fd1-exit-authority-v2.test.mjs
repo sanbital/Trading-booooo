@@ -35,18 +35,14 @@ test('T03 corruption cannot dispatch guessed quantity; ownership/reconciliation 
  assert.equal(h.state.calls.filter(x=>x.action==='create_order').length,0);assert.equal(h.state.tables.v11_long_regime_positions[0].state,'OPEN');
 });
 for(const [id,stage] of [['T04','retestAnchor_LOCK'],['T05','retestAnchor_TRAIL'],['T06','V17_PROFIT_LOCK']])
-test(id+' INV-EXIT-02 soft protection alone cannot close or install a profit stop',async()=>{
+test(id+' resident soft protection closes a crossed profit floor without waiting for AI',async()=>{
  const p=mk();p.peak_price=104;p.hard_stop_price=102;p.metadata.leaderExitPolicyVersion=P142_POLICY_VERSION;
  p.metadata.cec0040={version:CEC0040_VERSION,enforcementEnabled:true};p.metadata.p142State={stage,stopPrice:102};
  p.metadata.exitProtection.orders[0].spec.params.triggerPrice=102;
  const h=production(p,101,'HOLD'),r=await h.manage();
- assert.equal(r.action,'HOLD');assert.equal(h.ai(),1);
- assert.equal(h.state.calls.filter(x=>x.action==='create_order').length,0);
- const orders=h.state.tables.v11_long_regime_positions[0].metadata.exitProtection.orders.filter(x=>!x.terminal);
- assert.equal(orders.length,1);assert.equal(orders[0].exitClass,EXIT_CLASS.HARD_SAFETY);
- assert.ok(orders[0].spec.params.triggerPrice<=100);
- const created=h.state.calls.findIndex(x=>x.action==='v17_create_stop'),cancelled=h.state.calls.findIndex(x=>x.action==='v17_cancel_stop');
- assert.ok(created>=0&&cancelled>created,'new hard stop must be acknowledged before retiring legacy soft');
+ assert.equal(r.action,'CLOSE');assert.equal(h.ai(),0,'an already-earned resident floor is executable without a provider');
+ assert.equal(exitClass(r.reason),EXIT_CLASS.SOFT_PROTECTION);
+ assert.equal(h.state.calls.filter(x=>x.action==='create_order').length,1,'software fallback closes if the resident floor is already crossed');
 });
 async function settled(decision,{valid=true,refresh_error=null}={}){
  const p=mk(),initial={...initialHoldState(100),pending:{key:'job',event:'SOFT_PROTECTION_TRIGGER:retestAnchor_LOCK',at:T-2000,softKey:soft.key}};
@@ -83,12 +79,29 @@ test('T25 provider failure on soft trigger keeps protection and bounds retry',as
  const r=await settled('EXIT',{valid:false});assert.equal(r.close,false);assert.equal(r.state.retryAfter,T+60000);
  const refresh=await settled('EXIT',{refresh_error:'LATEST_SNAPSHOT_UNAVAILABLE'});assert.equal(refresh.close,false);
 });
-test('INV-EXIT-05/06/07 DeepSeek/FIRST/stale/wrong-generation results never authorize an order',()=>{
+test('DeepSeek emergency EXIT propagates distinct authority through the HOLD state machine',async()=>{
+ const p=mk(),initial={...initialHoldState(100),pending:{key:'job',event:'MOMENTUM_DETERIORATION',at:T-2000,softKey:null}};
+ const r=await holdStep(initial,{now:T,price:99,peak:104,softTrigger:null,positionId:p.id,generation:positionGeneration(p),
+   answerOf:async()=>({state:'DONE',valid:true,decision:'EXIT',authority:'DEEPSEEK_EMERGENCY_EXIT_ONLY',
+     completed_at_ms:T-1000,snapshot_at_ms:T-1200,snapshot_hash:'b'.repeat(64),refresh_error:null})});
+ assert.equal(r.close,true);assert.equal(r.reason,'FD1_DEEPSEEK_EXIT');
+ assert.equal(r.approval.authority,'DEEPSEEK_EMERGENCY_EXIT_ONLY');assert.equal(r.approval.snapshotHash,'b'.repeat(64));
+});
+test('INV-EXIT-05/06/07 authority remains explicit for GPT, resident protection and DeepSeek emergency',()=>{
  const p=mk(),a=makeApproval(p);
  for(const bad of [null,{...a,authority:'DEEPSEEK'},{...a,authority:'GPT_FIRST'},{...a,completedAt:T-25001},{...a,snapshotAt:T+1},{...a,generation:'old'},{...a,decision:'HOLD'}])
   assert.throws(()=>assertExitAuthority('FD1_GPT_EXIT',p,bad,T),/FRESH_GPT_FINAL/);
  for(const reason of Object.keys(EXIT_REASONS).filter(k=>exitClass(k)===EXIT_CLASS.SOFT_PROTECTION))
   assert.throws(()=>assertExitAuthority(reason,p,a,T),/SOFT_DIRECT_CLOSE/);
+ const resident={authority:'RESIDENT_PROTECTION',valid:true,positionId:p.id,generation:positionGeneration(p),
+   reason:'V17_PROFIT_LOCK',level:101,observedAt:T};
+ assert.equal(assertExitAuthority('V17_PROFIT_LOCK',p,resident,T),EXIT_CLASS.SOFT_PROTECTION);
+ assert.throws(()=>assertExitAuthority('V17_PROFIT_LOCK',p,{...resident,observedAt:T-5001},T),/SOFT_DIRECT_CLOSE/);
+ const ds={authority:'DEEPSEEK_EMERGENCY_EXIT_ONLY',valid:true,decision:'EXIT',positionId:p.id,generation:positionGeneration(p),
+   snapshotHash:'a'.repeat(64),completedAt:T,snapshotAt:T};
+ assert.equal(assertExitAuthority('FD1_DEEPSEEK_EXIT',p,ds,T),EXIT_CLASS.AI_STRATEGIC);
+ for(const bad of [{...ds,decision:'HOLD'},{...ds,snapshotHash:'bad'},{...ds,generation:'old'},{...ds,completedAt:T-25001}])
+  assert.throws(()=>assertExitAuthority('FD1_DEEPSEEK_EXIT',p,bad,T),/FRESH_DEEPSEEK/);
 });
 test('hard floor is monotonic over every carried stage and provider opinion',()=>{
  let p=mk(),last=0;
@@ -110,15 +123,14 @@ function historicalPosition(row){
  p.metadata.exitProtection.orders[0].spec.params.triggerPrice=Number(row.hard_stop_price);
  return p;
 }
-test('T23 JELLY: verified soft native stop formerly beat HOLD; v2 HOLD preserves hard floor and position',async()=>{
+test('T23 JELLY: a crossed earned soft floor now exits even when the strategic model would HOLD',async()=>{
  const row=historical.find(x=>x.symbol==='JELLYJELLYUSDT'),p=historicalPosition(row);
  assert.equal(row.hold.last.decision,'HOLD');assert.equal(row.exit_reason,'V17_NATIVE_STOP');
  assert.equal(p.hard_stop_price,.06875);assert.ok(row.post_exit_60m.high>Number(row.exit_price));
  const h=production(p,Number(row.exit_price),'HOLD',Date.parse(row.closed_at)),r=await h.manage();
- assert.equal(r.action,'HOLD');assert.equal(h.state.tables.v11_long_regime_positions[0].state,'OPEN');
- assert.equal(h.state.calls.filter(x=>x.action==='create_order').length,0);
- const floor=h.state.tables.v11_long_regime_positions[0].hard_stop_price;
- assert.ok(floor>=p.entry_price*.975);assert.ok(floor<.06875);
+ assert.equal(r.action,'CLOSE');assert.equal(h.ai(),0);
+ assert.equal(exitClass(r.reason),EXIT_CLASS.SOFT_PROTECTION);
+ assert.equal(h.state.tables.v11_long_regime_positions[0].state,'CLOSED');
 });
 test('T24 historical HARD saver: FOLKS HOLD cannot override the unchanged catastrophic loss floor',async()=>{
  const row=historical.find(x=>x.symbol==='FOLKSUSDT'),p=historicalPosition(row);
@@ -128,13 +140,19 @@ test('T24 historical HARD saver: FOLKS HOLD cannot override the unchanged catast
 });
 for(const row of historical.filter(x=>/^[BE]_/.test(x.case)))test('loser-protection counterexample '+row.case,async()=>{
  const p=historicalPosition(row);assert.ok(row.post_exit_60m.low<Number(row.exit_price));
- // Two deliberately scripted FINAL responses, not a hindsight claim about what GPT would say.
+ // Explicit GPT EXIT still works when no resident floor has already taken authority.
  const exit=production(p,Number(row.exit_price),'EXIT',Date.parse(row.closed_at));
- assert.equal((await exit.manage()).action,'CLOSE');assert.equal(exit.ai(),1);
+ const exitResult=await exit.manage();assert.equal(exitResult.action,'CLOSE');
  const hold=production(p,Number(row.exit_price),'HOLD',Date.parse(row.closed_at));
- assert.equal((await hold.manage()).action,'HOLD');
- hold.state.now+=60000;
- hold.state.quotes[p.symbol]=Math.min(row.post_exit_60m.low,p.entry_price*.975-.000001);
- const hard=await hold.manage();assert.equal(hard.action,'CLOSE');
- assert.equal(hold.ai(),1,'subsequent hard loss does not wait for another model opinion');
+ const first=await hold.manage();
+ if(first.action==='CLOSE'){
+   assert.equal(hold.ai(),0,'crossed resident profit protection must not wait for GPT HOLD');
+   assert.equal(exitClass(first.reason),EXIT_CLASS.SOFT_PROTECTION);
+ }else{
+   assert.equal(first.action,'HOLD');
+   hold.state.now+=60000;
+   hold.state.quotes[p.symbol]=Math.min(row.post_exit_60m.low,p.entry_price*.975-.000001);
+   const hard=await hold.manage();assert.equal(hard.action,'CLOSE');
+   assert.equal(hold.ai(),1,'subsequent hard loss does not wait for another model opinion');
+ }
 });
