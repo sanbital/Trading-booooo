@@ -67,7 +67,9 @@ export const V30_FRONT_LIVE_VERSION='V30_FRONT_SCORE_2_FRESH_EVIDENCE';
 export const V30_ENTRY_BRANCH='V30_SCORE';
 export function entryBranchOf(features){
   const b=features?.b06133,v=features?.v30Front;
-  if(v?.version!==V30_FRONT_LIVE_VERSION||v.admitted!==true)return null;
+  // (2026-09-26) V30's verdict is evidence for the AI, not an admission gate: a non-admitted
+  // candidate still carries a branch (exit-style mapping for CEC tracking only).
+  if(v?.version!==V30_FRONT_LIVE_VERSION)return null;
   return b?.allowed===true&&['R62','BUYER_SHARE_RESCUE','BOTH'].includes(b.branch)?b.branch:V30_ENTRY_BRANCH;
 }
 export function v30FrontDecision(b06133,version=V30_FRONT_VERSION){
@@ -84,16 +86,16 @@ function frontPolicyIdentity(v){
     negative_evidence:[...(v.negativeEvidence??[])],b06133_allowed:v.b06133?.allowed===true,b06133_reason:v.b06133?.reason??null};
 }
 /** Baseline for the V30 shadow: the SAME trigger and B06133 evidence, a different admission rule. */
-export function baselineAllowedV30(s,version=V30_FRONT_VERSION){
+export function baselineAllowedV30(s,version=V30_FRONT_VERSION,{requireAdmission=true}={}){
   const f=s?.features,b=f?.b06133,t=f?.v17Setup,v=f?.v30Front;
   if(!(s?.id&&s?.symbol&&t?.state&&Number.isSafeInteger(Number(t.triggerAt))&&Number(t.triggerAt)>0&&Number(t.triggerAt)%60000===0))return false;
   if(b?.version!=='B06133_ENTRY_SELECTION_1'||Number(b.source?.decisionAt)!==Number(t.triggerAt))return false;
-  if(v?.version!==version||v.admitted!==true)return false;
+  if(v?.version!==version||(requireAdmission&&v.admitted!==true))return false;
   // The stamp must be what the policy computes from the unmodified B06133 factors.
   const again=v30FrontDecision(b,version);
   // Key-order independent: the stamp is read back from Postgres jsonb, which reorders keys.
   const stamped=v.factors&&typeof v.factors==='object'?v.factors:{};
-  return again.admitted===true&&Object.keys(stamped).length===FACTORS.length&&
+  return (!requireAdmission||again.admitted===true)&&again.admitted===(v.admitted===true)&&Object.keys(stamped).length===FACTORS.length&&
     FACTORS.every(k=>Object.hasOwn(stamped,k)&&stamped[k]===again.factors[k])&&v.b06133?.allowed===(b.allowed===true);
 }
 /** LIVE baseline: V30 defines the candidate set. CEC0040 must be fresh and internally
@@ -101,7 +103,8 @@ export function baselineAllowedV30(s,version=V30_FRONT_VERSION){
  * hard admission veto. B06133 and CEC values are never rewritten. */
 export function baselineAllowedLive(s){
   const f=s?.features,c=f?.cec0040,t=f?.v17Setup;
-  return baselineAllowedV30(s,V30_FRONT_LIVE_VERSION)&&t?.state==='TRIGGERED'&&
+  // Stamp integrity only: V30's admitted/failed verdict is evidence GPT sees, never a gate.
+  return baselineAllowedV30(s,V30_FRONT_LIVE_VERSION,{requireAdmission:false})&&t?.state==='TRIGGERED'&&
     c?.version==='CEC0040_CAUSAL_EDGE_CONTROLLER_1'&&c.targetVersion==='CEC0040_P142_MEAN44_1'&&c.ready===true&&
     Number(c.decisionAt)===Number(t.triggerAt)&&['ADMIT','PROBE','REJECT'].includes(c.action)&&
     !['REJECTED','ORDERED'].includes(s.status);

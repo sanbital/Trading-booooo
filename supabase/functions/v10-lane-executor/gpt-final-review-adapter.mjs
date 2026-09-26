@@ -27,7 +27,10 @@ export function coordinatorFor(db){
     // The aged-BUY switch only removes agedRecheck; the binding (prompt, schema, model) is the same.
     // Same-symbol trade memory (2026-09-26) is read inside the engine's snapshot and stored in
     // the hashed packet; the decision identity (and so every identity re-check) is unchanged.
-    engine:{...FD1_ENTRY_ENGINE,...(recoverySwitches().agedRecheck?{}:{agedRecheck:false}),history:(symbol,beforeMs)=>readSymbolTrades(db,symbol,beforeMs)},
+    engine:{...FD1_ENTRY_ENGINE,...(recoverySwitches().agedRecheck?{}:{agedRecheck:false}),history:(symbol,beforeMs)=>readSymbolTrades(db,symbol,beforeMs),
+      // (2026-09-26) GPT + DeepSeek judge every ENTRY independently; GPT arbitrates a split.
+      // FD1_DUAL_AI_ENTRY=false returns to GPT alone; a missing DeepSeek key does the same.
+      deepseekKey:()=>getenv('FD1_DUAL_AI_ENTRY')==='false'?null:(getenv('deepseek api')||null)},
     baseline:baselineAllowedLive,
     schedule:promise=>{if(globalThis.EdgeRuntime?.waitUntil)EdgeRuntime.waitUntil(promise);else promise.catch(()=>{});}}));
   return contexts.get(db);

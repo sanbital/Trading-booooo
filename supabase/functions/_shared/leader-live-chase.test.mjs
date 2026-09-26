@@ -69,14 +69,17 @@ function chaseExpired(px=REF*1.02){
   return {...armed,state:'CHASE_EXPIRED',terminalReason:'V17_CHASE_EXPIRED',lastCandleOpenTime:CHASE_OPEN,lastClose:px,
     transitions:[...armed.transitions,{at:CHASE_OPEN+MIN+4000,to:'CHASE_EXPIRED',reason:'V17_CHASE_EXPIRED'}]};
 }
-test('CHASE LIVE becomes a trigger with the ordinary 60 s window; DEAD, late or extreme stays rejected',()=>{
+test('CHASE LIVE or DEAD-on-real-data becomes a trigger with the ordinary 60 s window (DEAD is AI evidence); data failure, late or extreme stays rejected',()=>{
   const live=classify(bars()),now=CHASE_OPEN+MIN+4000;
   const t=liveChaseTrigger(chaseExpired(),live,{now,setupPolicy:SETUP_POLICY});
   assert.equal(t.state,'TRIGGERED');assert.equal(t.terminalReason,null);assert.equal(t.triggerMode,LIVE_CHASE_MODE);
   assert.equal(t.triggerAt,CHASE_OPEN+MIN);assert.equal(t.triggerExpiresAt,CHASE_OPEN+MIN+SETUP_POLICY.entryTriggerTtlMs);
   assert.equal(t.triggerClose,REF*1.02);assert.equal(t.chase.state,CHASE_STATE.LIVE);
   assert.equal(t.transitions.at(-1).reason,LIVE_CHASE_REASON);
-  assert.equal(liveChaseTrigger(chaseExpired(),classify(bars({vol5:.5})),{now,setupPolicy:SETUP_POLICY}),null,'DEAD');
+  const deadT=liveChaseTrigger(chaseExpired(),classify(bars({vol5:.5})),{now,setupPolicy:SETUP_POLICY});
+  assert.equal(deadT.state,'TRIGGERED','a DEAD verdict on real bars is evidence for the AI (2026-09-26)');
+  assert.equal(deadT.chase.state,CHASE_STATE.DEAD);assert.ok(deadT.chase.reasons.includes('VOLUME_FADING'));
+  assert.equal(liveChaseTrigger(chaseExpired(),classify(null),{now,setupPolicy:SETUP_POLICY}),null,'data failure stays rejected');
   assert.equal(liveChaseTrigger(chaseExpired(),live,{now:CHASE_OPEN+2*MIN,setupPolicy:SETUP_POLICY}),null,'window closed');
   assert.equal(liveChaseTrigger(chaseExpired(REF*1.06),live,{now,setupPolicy:SETUP_POLICY}),null,'beyond the 5% safety ceiling');
   assert.equal(liveChaseTrigger({...chaseExpired(),terminalReason:'V17_SETUP_EXPIRED'},live,{now,setupPolicy:SETUP_POLICY}),null);
@@ -99,7 +102,7 @@ test('a LIVE chase trigger proves its own execution window; tampered provenance 
   assert.equal(w.valid,true);assert.equal(w.basis,'LIVE_CHASE_TRIGGER');
   assert.equal(w.startsAt,CHASE_OPEN+MIN);assert.equal(w.expiresAt,CHASE_OPEN+2*MIN);
   assert.equal(liveChaseTimingValid(liveRow(),SETUP_POLICY),true);
-  for(const [name,m] of [['dead chase',s=>({...s,chase:{...s.chase,state:'DEAD'}})],
+  for(const [name,m] of [['data-failure chase',s=>({...s,chase:{...s.chase,state:'DEAD',reasons:['CHASE_DATA_UNAVAILABLE']}})],
     ['no CHASE_EXPIRED observation',s=>({...s,transitions:s.transitions.filter(x=>x.to!=='CHASE_EXPIRED')})],
     ['price inside the ordinary band',s=>({...s,triggerClose:REF*1.005,lastClose:REF*1.005})],
     ['moved trigger',s=>({...s,triggerAt:s.triggerAt+MIN,triggerExpiresAt:s.triggerExpiresAt+MIN})]]){

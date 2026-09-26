@@ -38,8 +38,11 @@ jobs:
           set -euo pipefail
           mkdir -p release-evidence
           git merge-base --is-ancestor "$PROD_RELEASE" HEAD
+          # index.ts and leader-live-chase.mjs change by design (2026-09-26: sensors -> evidence);
+          # their exact diffs are recorded below as release evidence.
+          git diff "$PROD_RELEASE" HEAD -- supabase/functions/v10-lane-executor/index.ts supabase/functions/_shared/leader-live-chase.mjs \
+            supabase/functions/_shared/gpt-final-review/contract.mjs | tee release-evidence/sensor-to-evidence.diff
           git diff --quiet "$PROD_RELEASE" HEAD -- \
-            supabase/functions/v10-lane-executor/index.ts \
             supabase/functions/_shared/leader-slot-sizing.mjs supabase/functions/_shared/leader-momentum-v17.mjs \
             supabase/functions/_shared/leader-exit-review.mjs supabase/functions/_shared/leader-entry-protection.mjs \
             supabase/functions/_shared/leader-protection-adapter.mjs supabase/functions/_shared/leader-native-protection.mjs \
@@ -47,7 +50,7 @@ jobs:
             supabase/functions/_shared/leader-db-only-reconciliation.mjs supabase/functions/_shared/leader-entry-control.mjs \
             supabase/functions/_shared/leader-ops-isolation.mjs supabase/functions/_shared/leader-fill-evidence.mjs \
             supabase/functions/_shared/leader-b06133-entry.mjs supabase/functions/_shared/leader-cec0040.mjs \
-            supabase/functions/_shared/leader-pullback-reaccel.mjs supabase/functions/_shared/leader-live-chase.mjs \
+            supabase/functions/_shared/leader-pullback-reaccel.mjs \
             supabase/functions/_shared/boo supabase/functions/v10-lane-executor/entry-evidence.mjs \
             supabase/functions/v10-lane-executor/boo-entry-adapter.mjs supabase/functions/v10-lane-executor/gpt-final-recheck-adapter.mjs
           grep -Fq 'targetMarginUsdt: 150,' supabase/functions/_shared/leader-slot-sizing.mjs
@@ -63,7 +66,7 @@ jobs:
           mkdir -p /tmp/pglite && (cd /tmp/pglite && npm init -y >/dev/null && npm i --no-audit --no-fund @electric-sql/pglite@0.3 >/dev/null)
           export PGLITE_MODULE=/tmp/pglite/node_modules/@electric-sql/pglite/dist/index.js
           node --test development/gpt-final-review/tests/*.test.mjs development/gpt-final-decision/tests/*.test.mjs \
-            supabase/functions/_shared/*.test.mjs supabase/functions/v10-lane-executor/*.test.mjs tests/*.test.mjs | tee release-evidence/tests.tap
+            supabase/functions/_shared/*.test.mjs supabase/functions/v10-lane-executor/*.test.mjs tests/*.test.mjs test-support/v17-entry/*.test.mjs | tee release-evidence/tests.tap
           grep -E '^# (tests|pass|fail)' release-evidence/tests.tap
           grep -Eq '^# fail 0$' release-evidence/tests.tap
       - name: Type-check target

@@ -9,6 +9,7 @@ import {validateDecision,FD_VERSION,wireSchema} from './contract.mjs';
 import {PROMPTS} from './prompt.mjs';
 import {bookReference} from './recheck.mjs';
 import {LIVE_CHASE_MODE,chaseContext} from '../leader-live-chase.mjs';
+import {dualEntryDecision,ARBITRATION_PROMPT,DUAL_VERSION} from './dual.mjs';
 const num=x=>x!==null&&x!==undefined&&Number.isFinite(Number(x))?Number(x):null;
 /** Immutable decision identity: the trigger and the evidence GPT is shown. A LIVE chase
  * trigger also binds its chase classification; an ordinary trigger's identity is unchanged. */
@@ -39,7 +40,8 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
   // RECHECK on fresh data (never dispatched on the aged answer). See coordinator.check().
   agedRecheck:true,
   model:MODEL,
-  promptText:PROMPTS.ENTRY,
+  // The binding covers the ENTRY prompt and the dual-AI arbitration addendum.
+  promptText:PROMPTS.ENTRY+'\n['+DUAL_VERSION+']'+ARBITRATION_PROMPT,
   schema:wireSchema('ENTRY'),
   identity:fd1EntryIdentity,
   // Same-symbol trade memory reader (symbol, beforeMs) => closed trades; injected by the
@@ -64,8 +66,12 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
     return {packet,captured};
   },
   async packetHash(packet){return hash({...packet,snapshot_hash:''});},
+  // Dual-AI (2026-09-26): () => DeepSeek key, injected by the executor adapter; absent => GPT alone.
+  deepseekKey:null,
   async call(packet,{apiKey,fetchFn,now,deadlineMs}){
-    const r=await callDecision(packet,{apiKey,fetchFn,now,timeoutMs:Math.max(1,Math.min(8000,deadlineMs-now()))});
+    const dsKey=typeof this.deepseekKey==='function'?this.deepseekKey():null;
+    const r=dsKey?await dualEntryDecision(packet,{apiKey,deepseekKey:dsKey,fetchFn,now,deadlineMs,snapshotAtMs:packet?.execution_ref?.at}):
+      await callDecision(packet,{apiKey,fetchFn,now,timeoutMs:Math.max(1,Math.min(8000,deadlineMs-now()))});
     // Stored for re-validation: the exact wire the API returned (never re-generated).
     return {...r,origin:'OPENAI_API',model_requested:MODEL,raw_response:r.wire?{model:MODEL,wire:r.wire}:null,
       request_id:r.request_id??null,wire_profile:FD_VERSION+':ENTRY'};

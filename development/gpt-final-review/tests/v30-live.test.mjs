@@ -35,7 +35,7 @@ test('live baseline: CEC0040 action is evidence, not a veto; the stamp must be f
   }
   const s=b06133Rejected();s.features.cec0040=undefined;assert.equal(baselineAllowedLive(s),false);
 });
-test('fresh5over15=false is admitted as negative GPT evidence while volumeTails stays hard',()=>{
+test('V30 verdicts are evidence: fresh5over15 and volumeTails failures both reach the AI (2026-09-26)',()=>{
   const s=b06133Rejected();s.features.b06133.factors.fresh5over15=false;stampV30(s);
   assert.equal(s.features.v30Front.admitted,true);
   assert.deepEqual(s.features.v30Front.negativeEvidence,['fresh5over15']);
@@ -44,11 +44,13 @@ test('fresh5over15=false is admitted as negative GPT evidence while volumeTails 
   tails.features.b06133.factors.volumeTails=true;stampV30(tails);
   assert.equal(tails.features.v30Front.admitted,false);
   assert.ok(tails.features.v30Front.failed.includes('volumeTails'));
-  assert.equal(baselineAllowedLive(tails),false);
+  assert.equal(baselineAllowedLive(tails),true,'a V30 non-admission is shown to GPT, not a pre-AI reject');
+  assert.equal(entryBranchOf(tails.features),'V30_SCORE');
 });
-test('live baseline refuses a failed V30 gate, the shadow version, and a claimed-rejected status',()=>{
+test('live baseline refuses a tampered V30 stamp, the shadow version, and a claimed-rejected status',()=>{
   const s=b06133Rejected();s.features.b06133.factors.volumeTails=true;stampV30(s);
-  assert.equal(s.features.v30Front.admitted,false);assert.equal(baselineAllowedLive(s),false);
+  assert.equal(s.features.v30Front.admitted,false);assert.equal(baselineAllowedLive(s),true);
+  s.features.v30Front={...s.features.v30Front,admitted:true};assert.equal(baselineAllowedLive(s),false,'a stamp that disagrees with its own factors is refused');
   const t=b06133Rejected();t.features.v30Front=v30FrontDecision(t.features.b06133,V30_FRONT_VERSION);assert.equal(baselineAllowedLive(t),false);
   const u=b06133Rejected();u.status='REJECTED';assert.equal(baselineAllowedLive(u),false);
 });
