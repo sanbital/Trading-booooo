@@ -1,0 +1,57 @@
+{
+  "control": {
+    "id": 1,
+    "enabled": true,
+    "ends_at": "2026-10-09T13:23:00+00:00",
+    "metrics": {
+      "queue": 0,
+      "synced": 21,
+      "version": "DOA-CAPTURE-1.1",
+      "watched": 21,
+      "ws_gaps": 1,
+      "llm_calls": 0,
+      "rss_bytes": 110391296,
+      "order_calls": 0,
+      "rest_failures": 0,
+      "last_bucket_at": "2026-09-25T13:36:45.750Z",
+      "trade_streams_seen": 21,
+      "candle_streams_seen": 21
+    },
+    "requests": 81,
+    "starts_at": "2026-09-25T13:23:00+00:00",
+    "lease_until": "2026-09-25T13:38:16.30609+00:00",
+    "heartbeat_at": "2026-09-25T13:36:46.30609+00:00",
+    "bytes_reserved": 16904,
+    "protocol_sha256": "0958474cef33d6fae6880ebb29a6daf5f0288bb6c3933245f5f26f1f59c0673f"
+  },
+  "candidates": 0,
+  "ws_candles": 4,
+  "observed_at": "2026-09-25T13:36:53.346726+00:00",
+  "observations": [
+    {
+      "n": 6,
+      "kind": "candle",
+      "last_at": "2026-09-25T13:35:00+00:00",
+      "symbols": 1,
+      "first_at": "2026-09-25T13:24:00+00:00"
+    }
+  ],
+  "open_positions": 0,
+  "release_sha": "4f94aa865b2b047e225ec4f8b9e44e728db4b1fe",
+  "ci": {
+    "run": 36141526028,
+    "tests": 12,
+    "passed": 12,
+    "failed": 0
+  },
+  "executor": {
+    "version_before": 89,
+    "version_after": 89,
+    "sha256": "ae8742095256da88ceef4f0e337f2df9c4954229a760ae66b76bb2b7ea5dd152",
+    "unchanged": true
+  },
+  "live_candidate_window_demonstrated": false,
+  "actual_fill_link_demonstrated": false,
+  "initialization_complete": true,
+  "note": "21/21 books synchronized; trades and closed candles observed on all21 streams. One sequence gap was detected and recovered; affected buckets are quality-flagged. Only BTC candles are persisted until candidates/positions require other paths."
+}

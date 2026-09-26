@@ -1,0 +1,101 @@
+name: FD1 entry evidence release (trigger file)
+# Deploys ONE production function named in research/fd1-exhaustion-20260926/release-trigger.json
+# ({"target":"v10-lane-executor"|"v10-lane-signal-generator","expected_version_before":"N"}) after
+# the full regression suite, a frozen-trading-policy proof against the live release f606f61
+# (executor v90) and a Deno type check; then proves the deployed bundle is byte-identical to
+# this ref. It never changes trading controls, circuit, GPT mode, budgets, sizing or orders.
+on:
+  push:
+    branches: [claude/trading-loss-root-cause-analysis-by0cc7]
+    paths: [research/fd1-exhaustion-20260926/release-trigger.json]
+permissions:
+  contents: read
+concurrency:
+  group: deploy-v10-lane-executor
+  cancel-in-progress: false
+env:
+  PROD_RELEASE: f606f61222baeffb448c45a1befcb9c148ef912f
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Read trigger
+        id: t
+        run: |
+          set -euo pipefail
+          T=research/fd1-exhaustion-20260926/release-trigger.json
+          echo "target=$(python3 -c "import json;print(json.load(open('$T'))['target'])")" >> "$GITHUB_OUTPUT"
+          echo "expected=$(python3 -c "import json;print(json.load(open('$T'))['expected_version_before'])")" >> "$GITHUB_OUTPUT"
+          python3 -c "import json;assert json.load(open('$T'))['target'] in ('v10-lane-executor','v10-lane-signal-generator')"
+      - name: Prove frozen trading policy and executor entry file are unchanged since the live release
+        run: |
+          set -euo pipefail
+          mkdir -p release-evidence
+          git merge-base --is-ancestor "$PROD_RELEASE" HEAD
+          # index.ts and leader-live-chase.mjs change by design (2026-09-26: sensors -> evidence);
+          # their exact diffs are recorded below as release evidence.
+          git diff "$PROD_RELEASE" HEAD -- supabase/functions/v10-lane-executor/index.ts supabase/functions/_shared/leader-live-chase.mjs \
+            supabase/functions/_shared/gpt-final-review/contract.mjs | tee release-evidence/sensor-to-evidence.diff
+          git diff --quiet "$PROD_RELEASE" HEAD -- \
+            supabase/functions/_shared/leader-slot-sizing.mjs supabase/functions/_shared/leader-momentum-v17.mjs \
+            supabase/functions/_shared/leader-exit-review.mjs supabase/functions/_shared/leader-entry-protection.mjs \
+            supabase/functions/_shared/leader-protection-adapter.mjs supabase/functions/_shared/leader-native-protection.mjs \
+            supabase/functions/_shared/leader-entry-settlement.mjs supabase/functions/_shared/leader-exit-settlement.mjs \
+            supabase/functions/_shared/leader-db-only-reconciliation.mjs supabase/functions/_shared/leader-entry-control.mjs \
+            supabase/functions/_shared/leader-ops-isolation.mjs supabase/functions/_shared/leader-fill-evidence.mjs \
+            supabase/functions/_shared/leader-b06133-entry.mjs supabase/functions/_shared/leader-cec0040.mjs \
+            supabase/functions/_shared/leader-pullback-reaccel.mjs \
+            supabase/functions/_shared/boo supabase/functions/v10-lane-executor/entry-evidence.mjs \
+            supabase/functions/v10-lane-executor/boo-entry-adapter.mjs supabase/functions/v10-lane-executor/gpt-final-recheck-adapter.mjs
+          grep -Fq 'targetMarginUsdt: 150,' supabase/functions/_shared/leader-slot-sizing.mjs
+          grep -Fq 'leverage: 3' supabase/functions/_shared/leader-slot-sizing.mjs
+          grep -Fq 'const MAX_SLOTS=10' supabase/functions/v10-lane-executor/index.ts
+          git diff --stat "$PROD_RELEASE" HEAD -- supabase/functions | tee release-evidence/source-diff-stat.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Regression tests
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/pglite && (cd /tmp/pglite && npm init -y >/dev/null && npm i --no-audit --no-fund @electric-sql/pglite@0.3 >/dev/null)
+          export PGLITE_MODULE=/tmp/pglite/node_modules/@electric-sql/pglite/dist/index.js
+          node --test development/gpt-final-review/tests/*.test.mjs development/gpt-final-decision/tests/*.test.mjs \
+            supabase/functions/_shared/*.test.mjs supabase/functions/v10-lane-executor/*.test.mjs tests/*.test.mjs test-support/v17-entry/*.test.mjs | tee release-evidence/tests.tap
+          grep -E '^# (tests|pass|fail)' release-evidence/tests.tap
+          grep -Eq '^# fail 0$' release-evidence/tests.tap
+      - name: Type-check target
+        run: npm exec --yes --package=deno@2.5.6 -- deno check "supabase/functions/${{ steps.t.outputs.target }}/index.ts"
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+      - name: Pin, deploy, prove bundle parity
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          TARGET: ${{ steps.t.outputs.target }}
+          EXPECTED: ${{ steps.t.outputs.expected }}
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-before.json
+          python3 -c "import json,os;x=json.load(open('release-evidence/functions-before.json'));x=x.get('functions',x) if isinstance(x,dict) else x;r=next(r for r in x if r['slug']==os.environ['TARGET']);assert str(r['version'])==os.environ['EXPECTED'] and r.get('verify_jwt') is False,r;print('before',r['slug'],r['version'],r.get('ezbr_sha256'))"
+          supabase functions deploy "$TARGET" --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt --use-api
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-after.json
+          python3 -c "import json,os;x=json.load(open('release-evidence/functions-after.json'));x=x.get('functions',x) if isinstance(x,dict) else x;r=next(r for r in x if r['slug']==os.environ['TARGET']);assert r['status']=='ACTIVE' and r.get('verify_jwt') is False and int(r['version'])==int(os.environ['EXPECTED'])+1,r;print('after',r['slug'],r['version'],r.get('ezbr_sha256'))"
+          mkdir -p release-evidence/download
+          supabase functions download "$TARGET" --project-ref "$SUPABASE_PROJECT_REF" --use-api --workdir "$PWD/release-evidence/download"
+          node ops/gpt-final-review/verify-bundle-parity.mjs release-evidence/download . "$TARGET" | tee release-evidence/bundle-parity.json
+          echo "source_sha=$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fd1-entry-evidence-release
+          path: release-evidence
+          retention-days: 30

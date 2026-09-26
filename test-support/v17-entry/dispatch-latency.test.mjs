@@ -668,7 +668,7 @@ function chaseTape({vol5 = 2, buy = 0.6} = {}) {
   }
   return out;
 }
-test('LIVE chase: CHASE LIVE becomes a GPT trigger in the same cycle; CHASE DEAD stays rejected with its evidence', async () => {
+test('LIVE chase: CHASE LIVE and DEAD-on-real-data both become GPT triggers (DEAD as evidence); data failure stays rejected', async () => {
   const live = setupAdvancer({candles: chaseTape()});
   const now = CLOSE + MIN + 5_000;                  // the chase bar (armed bar) closed 5 s ago
   const out = await live.advanceSignalSetup({}, row(), now);
@@ -682,9 +682,8 @@ test('LIVE chase: CHASE LIVE becomes a GPT trigger in the same cycle; CHASE DEAD
 
   const dead = setupAdvancer({candles: chaseTape({vol5: 0.4, buy: 0.4})});
   const d = await dead.advanceSignalSetup({}, row(), now);
-  assert.equal(d.state.state, SETUP_STATE.CHASE_EXPIRED);
-  assert.match(d.state.terminalReason, /^V17_CHASE_EXPIRED:DEAD:.*VOLUME_FADING/);
-  assert.equal(d.state.chase.state, 'DEAD');
+  assert.equal(d.state.state, SETUP_STATE.TRIGGERED, 'sensors prepare evidence; the AI decides (2026-09-26)');
+  assert.equal(d.state.chase.state, 'DEAD');assert.ok(d.state.chase.reasons.includes('VOLUME_FADING'));
 
   const off = setupAdvancer({candles: chaseTape()});off.LIVE_CHASE_ENABLED = false;
   const k = await off.advanceSignalSetup({}, row(), now);

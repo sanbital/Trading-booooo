@@ -8,6 +8,16 @@ const getenv=n=>globalThis.Deno?.env?.get(n)??'';
 /** Operator switches for the two BUY-recovery paths (2026-09-25). Default on; 'false' restores
  * the previous behaviour exactly: an aged BUY is refused, and a run that entered ends the cycle. */
 export const recoverySwitches=(get=getenv)=>({agedRecheck:get('FD1_AGED_BUY_RECHECK')!=='false',followUp:get('FD1_ENTRY_FOLLOW_UP')!=='false'});
+/** Closed V17 positions of one symbol entered in the 24h before `beforeMs` (the trigger). */
+export async function readSymbolTrades(db,symbol,beforeMs){
+  const before=Number(beforeMs);if(!Number.isSafeInteger(before))return [];
+  const r=await db.from('v11_long_regime_positions').select('entry_at,closed_at,entry_price,exit_price,peak_price,realized_pnl_usdt,exit_reason')
+    .eq('symbol',String(symbol).toUpperCase()).eq('state','CLOSED').gte('entry_at',new Date(before-24*3600_000).toISOString())
+    .lt('closed_at',new Date(before).toISOString()).order('closed_at',{ascending:true}).limit(20);
+  if(r.error)throw Error('HISTORY_READ');
+  return (r.data??[]).map(x=>({entry_at_ms:Date.parse(x.entry_at),exit_at_ms:Date.parse(x.closed_at),entry_price:Number(x.entry_price),
+    exit_price:Number(x.exit_price),peak_price:Number(x.peak_price),pnl_usdt:Number(x.realized_pnl_usdt),exit_reason:x.exit_reason??null}));
+}
 export function coordinatorFor(db){
   // Until the control row is read, the coordinator is OFF: no DB/API work at all.
   if(!contexts.has(db))contexts.set(db,new FinalReviewCoordinator({config:configFromControl({mode:'OFF'},getenv),
@@ -15,7 +25,13 @@ export function coordinatorFor(db){
     // FD1 (2026-09-24): GPT is the final entry decision (BUY/SKIP/ABSTAIN) on the V17
     // triggered candidates the live front admits; model outputs are evidence only.
     // The aged-BUY switch only removes agedRecheck; the binding (prompt, schema, model) is the same.
-    engine:recoverySwitches().agedRecheck?FD1_ENTRY_ENGINE:{...FD1_ENTRY_ENGINE,agedRecheck:false},baseline:baselineAllowedLive,
+    // Same-symbol trade memory (2026-09-26) is read inside the engine's snapshot and stored in
+    // the hashed packet; the decision identity (and so every identity re-check) is unchanged.
+    engine:{...FD1_ENTRY_ENGINE,...(recoverySwitches().agedRecheck?{}:{agedRecheck:false}),history:(symbol,beforeMs)=>readSymbolTrades(db,symbol,beforeMs),
+      // (2026-09-26) GPT + DeepSeek judge every ENTRY independently; GPT arbitrates a split.
+      // FD1_DUAL_AI_ENTRY=false returns to GPT alone; a missing DeepSeek key does the same.
+      deepseekKey:()=>getenv('FD1_DUAL_AI_ENTRY')==='false'?null:(getenv('deepseek api')||null)},
+    baseline:baselineAllowedLive,
     schedule:promise=>{if(globalThis.EdgeRuntime?.waitUntil)EdgeRuntime.waitUntil(promise);else promise.catch(()=>{});}}));
   return contexts.get(db);
 }

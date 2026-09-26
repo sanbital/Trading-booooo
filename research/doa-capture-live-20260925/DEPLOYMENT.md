@@ -1,0 +1,25 @@
+# DOA live capture deployment — 2026-09-25
+
+Capture implementation is deployed independently of the trading runtime. It has no entry/exit/sizing authority and makes no DeepSeek calls. This is the live data upgrade needed for subsequent validated policy work, not a claim that profitability has improved.
+
+- Source release commit: `4f94aa865b2b047e225ec4f8b9e44e728db4b1fe`, branch `release/doa-capture-20260925`.
+- Successful CI/deployment: https://github.com/sanbital/Trading-booooo/actions/runs/36141526028 . Twelve tests, Deno typecheck, Docker build and missing-credential rejection passed.
+- Fly app `sanbital-doa-capture-20260925`, Machine `817409b9999dd8`, Paris, shared1cpu/256MB. Image digest `sha256:44637f42963af9ad25ce7d6964700af7d8614aa4085f124f529dc79723022a20`. No public service or exchange order credentials; no restart; auto-destroy on exit.
+- Supabase Edge `doa-capture-ingest` v1, bundle SHA256 `31ff107db0e624a444119ab55c8de83eb16705134914785219750fe3e74fb859`.
+- Migration `20260925131209_doa_capture_live.sql`, applied through MCP. MCP generated history version20260925132303; only this new history row was aligned to the CLI-created source version20260925131209 to avoid duplicate future application.
+- Frozen protocol SHA256 `0958474cef33d6fae6880ebb29a6daf5f0288bb6c3933245f5f26f1f59c0673f`; cohort UTC2026-09-25T13:23:00 through2026-10-09T13:23:00. Initial worker started about13:25:20; corrected worker about13:32:20. Startup/redeployment gaps remain in coverage; cohort time was not reset.
+- Retention job101, `doa-capture-retention`, daily03:17UTC, research schema only. Deletion is bounded10k rows/day per raw table, so14d/2d are eligibility ages, not a guarantee of immediate erasure. It does not delete trading records.
+- API missing token401 (request59326); authenticated status200 (request59334). Private tables have RLS and no user grants. Security advisor reports INFO `rls_enabled_no_policy` on these private service-only tables: intentional default deny. No public SELECT policy was added to suppress this notice.
+- v10-lane-executor remains v89, SHA256 `ae8742095256da88ceef4f0e337f2df9c4954229a760ae66b76bb2b7ea5dd152` before and after deployment. Existing order gateway and trading crons were not redeployed or changed.
+
+The release is deliberately isolated from main. The existing `main.deploy-supabase.yml` responds to every migration path and writes unrelated trading secrets; simply pushing this migration to main would trigger that legacy deployment. This release's complete source and CI evidence are committed, without `[skip ci]`. Main integration requires narrowing that unrelated deployment trigger before merging.
+
+Operational verification is recorded separately in `verification.json`. Startup intentionally spreads REST depth initialization under100weight/min; unsynced books and startup buffer gaps are excluded via quality flags. No synthetic trade is used to demonstrate collection.
+
+Live verification found that the legacy `/stream` URL delivered books but not market trade/kline streams. DOA-CAPTURE-1 was disabled, and its Machine automatically destroyed. DOA-CAPTURE-1.1 uses separate `/public/stream` and `/market/stream` connections, matching the current Binance API reference. Its initialization buffer retains200 recent depth events rather than disconnecting when an unsynced startup buffer reaches1000. Missing snapshot bridges still fail closed. New regression cases cover route separation and bounded buffering. This is an ingestion defect correction, not tuning against outcomes; no new candidate was admitted before the correction. The exact old image/source remain in CI history.
+
+At13:33UTC the corrected process had observed trade and closed-kline streams for21/21 subscribed symbols; BTC WS-closed candles were persisted. Depth initialization was still in progress. No new V17 candidate or actual fill occurred during that initial acceptance period, so candidate-window persistence and fill linkage cannot yet be claimed as live-demonstrated. Their code/tests are deployed, and the process remains enabled. Existing trading readiness reports no positions/orders/unresolved intents, circuit=false, last_error=null, entry block=NO_FRESH_BULL_SIGNAL. Existing DeepSeek HOLD shadow is enabled with authority=[], unchanged by this deployment.
+
+Rollback SQL is in `ops.sql`: disable this run, then the worker exits and its Machine auto-destroys. Revoke only the dedicated `doa-capture` token and unschedule job101 if retiring the collector. No protective orders or executor code are touched.
+
+Remaining before live model-policy changes: complete forward coverage, actual-fill fee/funding reconciliation, calibrated execution simulation, preregistered full-packet versus split-role comparison, sufficient DOA counts, chronological validation/test with clustered uncertainty, and passing the existing performance/winner-preservation criteria. Current 1m paths do not resolve exact intraminute stop/trailing order; fee schedule, private funding cashflow and sector mapping are explicitly missing.
