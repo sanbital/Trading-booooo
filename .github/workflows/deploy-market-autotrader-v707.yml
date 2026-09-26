@@ -11,6 +11,9 @@ on:
       - "supabase/functions/_shared/**"
       # FD1 research/reviewer modules are released separately; this legacy deploy does not consume them.
       - "!supabase/functions/_shared/gpt-final-decision/**"
+      # Executor-only modules (v10-lane-executor); no legacy function imports them (R181, 2026-09-26).
+      - "!supabase/functions/_shared/gpt-final-review/**"
+      - "!supabase/functions/_shared/leader-live-chase*.mjs"
       - "supabase/migrations/20260802151000_prebreakout_burst_entry_exit_policy.sql"
       - "supabase/migrations/20260810010000_binance_futures_lane_v760.sql"
       - "supabase/migrations/20260810133000_protected_trailing_exit_v761.sql"

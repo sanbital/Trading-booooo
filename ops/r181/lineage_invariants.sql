@@ -154,9 +154,11 @@ select w.label, x.inv, x.n from w cross join lateral (values
   ('INV-09d fill quote_amount != price*quantity',
     (select count(*) from f where f.executed_at >= w.since and abs(f.quote_amount - f.price * f.quantity) > 1e-6 * greatest(1, f.quote_amount))),
   -- INV-10 non-judgment ABSTAIN counted as a GPT judgment by the journal
-  ('INV-10 journal counts provider/contract failure as a GPT judgment',
+  -- The terminal CLASS stays GPT_REJECTED for any failed gate (timeouts always were); the defect is
+  -- the journal REASON calling a provider/contract failure a GPT ABSTAIN judgment.
+  ('INV-10 journal labels a non-valid GPT answer as a GPT ABSTAIN judgment',
     (select count(*) from public.missed_opportunity_journal j join ini i on i.signal_id = j.signal_id::text
        where j.created_at >= w.since and i.decision_source not in ('GPT_VALID','TIMEOUT','PENDING')
-         and j.terminal_class = 'GPT_REJECTED'))
+         and j.reject_reason like 'GPT_ABSTAIN%'))
 ) x(inv, n)
 order by x.inv, case w.label when '24h' then 1 when '48h' then 2 else 3 end;

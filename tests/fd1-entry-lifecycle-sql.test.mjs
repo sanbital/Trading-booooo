@@ -143,3 +143,23 @@ test('journal: ENTRY-only initial decision, BUY orphan relabel, chase re-anchor,
     await pg.exec('reset role');
   }finally{await pg.close();}
 });
+
+test('R181 UNAPPLIED journal patch: provider failures are not GPT ABSTAIN judgments; valid ABSTAIN and timeout unchanged',async()=>{
+  const pg=await setup();
+  const patch=readFileSync(new URL('../ops/r181/missed_opportunity_sync_decision_source.UNAPPLIED.sql',import.meta.url),'utf8');
+  try{
+    await pg.exec(original);await pg.exec(accountingColumns);await pg.exec(lifecycle);await pg.exec(patch);
+    const cases=[[901,{origin:'OPENAI_API',valid:false,error:'HTTP_429'},'STALE:GPT_REVIEW_PENDING','GPT_NO_VALID_API_RESPONSE:PROVIDER_ERROR:HTTP_429'],
+      [902,{origin:'OPENAI_API',valid:false,error:'FD_BUY_WITH_REASON'},'STALE:GPT_REVIEW_PENDING','GPT_NO_VALID_API_RESPONSE:SAFETY_FALLBACK:FD_BUY_WITH_REASON'],
+      [903,{origin:'OPENAI_API',valid:false,error:'HTTP_429'},'GPT_NO_VALID_API_RESPONSE:PROVIDER_ERROR:HTTP_429','GPT_NO_VALID_API_RESPONSE:PROVIDER_ERROR:HTTP_429'],
+      [904,{origin:'OPENAI_API',valid:true,answer:{decision:'ABSTAIN',abstain_reason:'EV_UNDETERMINABLE'}},'STALE:GPT_REVIEW_PENDING','GPT_ABSTAIN'],
+      [905,{origin:'OPENAI_API',valid:false,error:'API_TIMEOUT'},'STALE:GPT_REVIEW_PENDING','GPT_TIMEOUT']];
+    for(const [n,result,reason] of cases){
+      await sig(pg,n,{reason});
+      await pg.query(`insert into public.gpt_final_entry_reviews values($1,'PRODUCTION','ABSTAIN',now()-interval '119 minutes',now()-interval '119 minutes',$2,now()-interval '119 minutes')`,
+        [id(n),{packet:{task:'ENTRY'},result}]);
+    }
+    await pg.query('select public.missed_opportunity_sync(10000)');
+    for(const [n,,,expect] of cases){const r=await row(pg,n);assert.equal(r.reject_reason,expect,String(n));assert.equal(r.terminal_class,'GPT_REJECTED');}
+  }finally{await pg.close();}
+});

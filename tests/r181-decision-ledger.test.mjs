@@ -90,7 +90,7 @@ async function database(){
       account_scope text default 'futures',market text,exchange_trade_id bigint,exchange_order_id text,side text,price numeric,quantity numeric,
       quote_amount numeric,fee_asset text,fee_amount numeric,fee_quote_amount numeric,source text default 'AUTOMATED',
       v17_order_id uuid,v17_position_id uuid,executed_at timestamptz);
-    create table public.missed_opportunity_journal(signal_id uuid primary key,created_at timestamptz default now(),terminal_class text);`);
+    create table public.missed_opportunity_journal(signal_id uuid primary key,created_at timestamptz default now(),terminal_class text,reject_reason text);`);
   return {pg,db:pgRest(pg)};
 }
 function signalRow(s,{status='NEW'}={}){
@@ -328,14 +328,22 @@ test('T15 rolling-window change: new trades, aged-out trades and accounting adju
   assert.equal(r.adjustment.net,-0.05);assert.deepEqual(r.adjustment.trades,[{id:'d',before:.4,after:.35,change:-0.05}]);
   const s=tradeStats(current.filter(x=>x.closedAt>t1-W));assert.equal(s.trades,3);assert.equal(s.maxDrawdown,0.5);
 });
-test('INV-10 journal: a provider failure labelled GPT_REJECTED is flagged; a valid ABSTAIN is not',async()=>{
+test('INV-10 journal: a provider failure labelled GPT_ABSTAIN is flagged; a valid ABSTAIN and a source-labelled failure are not',async()=>{
   const {pg}=await database();
-  for(const [id,valid,error] of [[sid(71),false,'HTTP_429'],[sid(72),true,null]]){
+  for(const [id,valid,error,label] of [[sid(71),false,'HTTP_429','GPT_ABSTAIN'],[sid(72),true,null,'GPT_ABSTAIN'],
+    [sid(73),false,'HTTP_429','GPT_NO_VALID_API_RESPONSE:PROVIDER_ERROR:HTTP_429']]){
     await pg.query(`insert into public.v11_long_regime_signals(id,symbol,status,features) values($1,'ABCUSDT','REJECTED','{}')`,[id]);
     await pg.query(`insert into public.gpt_final_entry_reviews(job_key,state,record,purpose,budget_day,reserved_usd,signal_id,symbol,decision,valid,error,completed_at,created_at)
       values($1,'DONE',$2,'PRODUCTION',current_date,0.1,$3,'ABCUSDT','ABSTAIN',$4,$5,now(),now())`,
       [id.replace(/-/g,'').padEnd(64,'0'),{identity:{signal_id:id},result:{origin:'OPENAI_API',valid,error,decision:'ABSTAIN'}},id,valid,error]);
-    await pg.query(`insert into public.missed_opportunity_journal(signal_id,terminal_class) values($1,'GPT_REJECTED')`,[id]);
+    await pg.query(`insert into public.missed_opportunity_journal(signal_id,terminal_class,reject_reason) values($1,'GPT_REJECTED',$2)`,[id,label]);
   }
   assert.equal((await invariants(pg))['INV-10'],1);
+});
+test('lineage summary query runs and splits provider failures from GPT judgments',async()=>{
+  const {pg,db}=await database(),s=fresh(81),clock=()=>s.trig+1500,row=await seed(db,s);
+  const {c}=worker(db,{openai:()=>new Response('{"error":{}}',{status:429}),clock});await c.consider(row);await drain(c);
+  const rows=(await pg.query(read('../ops/r181/lineage_summary.sql'))).rows;
+  assert.deepEqual(rows.map(r=>r.label),['24h','48h','7d']);
+  const d=rows[2];assert.equal(Number(d.provider_error),1);assert.equal(Number(d.valid_abstain),0);assert.equal(Number(d.gpt_nonbuy_mislabelled),0);
 });
