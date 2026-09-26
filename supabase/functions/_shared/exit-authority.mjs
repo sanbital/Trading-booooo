@@ -12,7 +12,7 @@ export const EXIT_REASONS=Object.freeze({
  V17_PROFIT_LOCK:S,V17_COST_BREAKEVEN:S,V17_MOMENTUM_STALE:S,V17_MAX_HOLD:S,
  QV3_TWO_BEARISH_CLOSED:S,BULL_TRAIL_PROTECTION:S,BULL_T1:S,
  REGIME_BULL_TO_RANGE_REALIZE:S,REGIME_BULL_TO_BEAR_REALIZE:S,AI_PROTECT_LEVEL:S,
- FD1_GPT_EXIT:A,
+ FD1_GPT_EXIT:A,FD1_DEEPSEEK_EXIT:A,
 });
 export function exitClass(reason){if(!Object.hasOwn(EXIT_REASONS,reason))throw Error('UNCLASSIFIED_EXIT_REASON:'+reason);return EXIT_REASONS[reason];}
 const finite=x=>Number.isFinite(Number(x)),ceil=(x,t)=>t>0?Math.ceil(x/t-1e-10)*t:x;
@@ -77,11 +77,27 @@ export function legacySoftOrders(p,hard){
    Number(o.spec?.params?.triggerPrice)>=Number(p.entry_price)&&Number(o.spec?.params?.triggerPrice)>hard.hardFloor).map(o=>o.clientId);
 }
 export function assertExitAuthority(reason,p,approval,now=Date.now()){
- const kind=exitClass(reason);
+ const kind=exitClass(reason),generation=positionGeneration(p);
  if(kind===H)return kind;
- if(kind===S)throw Error('SOFT_DIRECT_CLOSE_FORBIDDEN:'+reason);
+ if(kind===S){
+   if(approval?.authority!=='RESIDENT_PROTECTION'||approval?.valid!==true||
+      approval.positionId!==String(p.id)||approval.generation!==generation||approval.reason!==reason||
+      !finite(approval.level)||approval.level<=0||!Number.isSafeInteger(approval.observedAt)||
+      approval.observedAt>now||now-approval.observedAt>5000)
+     throw Error('SOFT_DIRECT_CLOSE_FORBIDDEN:'+reason);
+   return kind;
+ }
+ if(reason==='FD1_DEEPSEEK_EXIT'){
+   if(approval?.authority!=='DEEPSEEK_EMERGENCY_EXIT_ONLY'||approval?.decision!=='EXIT'||approval.valid!==true||
+      approval.positionId!==String(p.id)||approval.generation!==generation||
+      !/^[a-f0-9]{64}$/.test(String(approval.snapshotHash??''))||
+      !Number.isSafeInteger(approval.completedAt)||approval.completedAt>now||now-approval.completedAt>25000||
+      !Number.isSafeInteger(approval.snapshotAt)||approval.snapshotAt>now||now-approval.snapshotAt>25000)
+     throw Error('FRESH_DEEPSEEK_EMERGENCY_EXIT_REQUIRED');
+   return kind;
+ }
  if(approval?.authority!=='GPT_FINAL_ONLY'||approval?.decision!=='EXIT'||approval.valid!==true||
-   approval.positionId!==String(p.id)||approval.generation!==positionGeneration(p)||!approval.jobKey||
+   approval.positionId!==String(p.id)||approval.generation!==generation||!approval.jobKey||
    !Number.isSafeInteger(approval.completedAt)||approval.completedAt>now||now-approval.completedAt>25000||
    !Number.isSafeInteger(approval.snapshotAt)||approval.snapshotAt>now||now-approval.snapshotAt>25000||
    approval.refreshError)throw Error('FRESH_GPT_FINAL_EXIT_REQUIRED');
