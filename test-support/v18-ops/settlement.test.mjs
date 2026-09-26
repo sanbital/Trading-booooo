@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {harness,position,nativeFill} from './harness.mjs';
+import {positionGeneration} from '../../supabase/functions/_shared/exit-authority.mjs';
 import {SLOT_SIZING_CONTRACT,slotSizingBounds} from '../../supabase/functions/_shared/leader-slot-sizing.mjs';
 function receipt(p,cmd,{exact=true,quantity=cmd.order.quantity}={}){
  const id='software-'+p.id,price=p.entry_price*.99,t=Date.now();
@@ -54,7 +55,12 @@ test('11 EDGE requested 196 / filled 93: protection and full exit use actual 93'
  assert.equal(h.state.tables.v11_long_regime_positions[0].remaining_quantity,0);
 });
 test('12 terminal partial FILLED with no details leaves residual OPEN and protected',async()=>{
- const {h,p}=setup({exact:false,quantity:100});const r=await h.ctx.close(p,.3,'BULL_T1');
+ const {h,p}=setup({exact:false,quantity:100});
+ const finalApproval={authority:'RESIDENT_PROTECTION',valid:true,positionId:p.id,generation:positionGeneration(p),
+   reason:'BULL_T1',level:p.entry_price*1.01,observedAt:h.state.now};
+ await assert.rejects(()=>h.ctx.close(p,.3,'BULL_T1'),/SOFT_DIRECT_CLOSE_FORBIDDEN/);
+ assert.equal(h.state.calls.filter(c=>c.action==='create_order').length,0);
+ const r=await h.ctx.close(p,.3,'BULL_T1',{finalApproval});
  assert.equal(r.closed,false);assert.equal(r.position.remaining_quantity,70);assert.equal(r.position.state,'OPEN');
  assert.equal(r.realizedPnlUsdt,null);assert.equal(h.state.exchange[0].quantity,70);
 });
