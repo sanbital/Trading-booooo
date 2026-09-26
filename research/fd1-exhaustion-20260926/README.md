@@ -150,6 +150,23 @@ under the current exit; single snapshots do not separate the winners from the "s
 losers; CEC's label is a schedule, not evidence. What would move the needle is a signal that is not in
 the entry snapshot (path after entry, regime/breadth), which is a different project than prompt edits.
 
+
+### 7a. Operator decision and release (2026-09-26 05:25 UTC)
+
+The operator clarified that GPT (and DeepSeek) exist to judge the structural problem themselves;
+GPT choosing to skip more when it sees fading propulsion, a negative strategy base rate or a
+no-new-impulse re-entry is the intended function. The GPT judgment layer was therefore released;
+no deterministic logic changed (the signal-generator cooldown fix was NOT deployed).
+
+- Executor v90 → **v91** (ACTIVE), source `7d1330f`, workflow run 36220724426: frozen-policy proof
+  vs `f606f61` (executor `index.ts` and all sizing/stop/protection modules unchanged; 150 USDT × 3,
+  MAX_SLOTS 10), regression tests, Deno check, bundle parity 58 files, digest `21073b96…`.
+- First attempt (run 36220546460) failed closed on a stale 200-USDT guard; nothing deployed.
+- New ENTRY prompt hash `0a97ac66…`, facts `FD1_FACTS_2`, recheck `GPT_FINAL_RECHECK_FD1_RC2`;
+  HOLD prompt/schema unchanged (`f7af874f…` / `472884…`).
+- Rollback: redeploy `f606f61` (executor v90 bundle `486f6192…`).
+- DeepSeek remains an order-free observer; any authority needs its own A/B on these candidates.
+
 ## 8. Metrics to watch
 
 Per-trade net of GPT BUYs vs all candidates (selection skill), low-MFE (<0.5% in 60m) share, BUY rate,
