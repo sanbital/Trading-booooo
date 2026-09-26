@@ -44,12 +44,22 @@ test('no final answer within wait window -> protected retry',async()=>{
   let meta={};let r=await tick(meta,T);meta.fd1Hold=r.state;
   r=await tick(meta,T+HOLD_POLICY.timeAnswerWaitMs+1);assert.equal(r.close,false);assert.ok(r.state.retryAfter);
 });
-test('GPT unavailable / budget exhausted -> protection stays; no strategic close',async()=>{
+test('GPT unavailable / budget exhausted keeps protection when no validated emergency reviewer exists',async()=>{
   harness('HOLD',{config:{...cfg,mode:'SHADOW'}});let r=await tick({},T);assert.equal(r.close,false);assert.ok(r.state.retryAfter);
   const store=new MemoryReviewStore();store.claim=async()=>{throw Error('API_BUDGET_EXHAUSTED');};
   setFd1HoldTestHooks({store,apiKey:'k',config:cfg,schedule:()=>{},review:async()=>({})});
   r=await tick({},T);assert.equal(r.close,false);assert.equal(r.state.last.decision,'BUDGET_EXHAUSTED');
   r=await fd1HoldTick({},pos,{meta:{},state:st(),bid:1.03,now:T,timeCandidate:null});assert.equal(r.close,false);
+});
+test('GPT budget exhaustion promotes only a fresh validated DeepSeek HOLD reviewer for existing positions',async()=>{
+  const store=new MemoryReviewStore();store.claim=async()=>{throw Error('API_BUDGET_EXHAUSTED');};
+  const ds=(decision)=>({result:{arbitration:{deepseek:{valid:true,answer:{decision_preference:decision,recommended_action:decision},
+    completed_at_ms:T,snapshot_at_ms:T,snapshot_hash:'d'.repeat(64)}}}});
+  setFd1HoldTestHooks({store,apiKey:'k',deepseekKey:'ds',config:cfg,schedule:()=>{},review:async()=>ds('EXIT')});
+  let r=await tick({},T);assert.equal(r.close,true);assert.equal(r.reason,'FD1_DEEPSEEK_EXIT');assert.equal(r.fallback,true);
+  assert.equal(r.approval.authority,'DEEPSEEK_EMERGENCY_EXIT_ONLY');
+  setFd1HoldTestHooks({store,apiKey:'k',deepseekKey:'ds',config:cfg,schedule:()=>{},review:async()=>ds('PROTECT')});
+  r=await tick({},T);assert.equal(r.close,false);assert.equal(r.reason,'FD1_DEEPSEEK_PROTECT');assert.ok(r.state.protectLevel>0);
 });
 test('events: deterioration and big moves start a review; GPT EXIT closes only when fresh; spacing respected',async()=>{
   const h=harness('EXIT');let meta={};
