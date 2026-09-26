@@ -1,5 +1,6 @@
 /** Independent production advice. No exchange client or order capability. */
 import {validateShape} from './contract.mjs';
+import {SENSOR_NOTE} from './market-sensor.mjs';
 import {DEEPSEEK_URL,MODEL_CANDIDATES} from './parallel.mjs';
 export const ADVISORY_VERSION='FD1_DEEPSEEK_ADVISORY_1';
 const text=max=>({type:'string',minLength:1,maxLength:max});
@@ -47,7 +48,7 @@ export async function callAdvisory(shared,{apiKey,fetchFn=fetch,now=Date.now,tim
   try{
     if(!apiKey)throw Error('DEEPSEEK_KEY_MISSING');
     const body=JSON.stringify({model,thinking:{type:'disabled'},max_tokens:1400,stream:false,response_format:{type:'json_object'},
-      messages:[{role:'system',content:ADVISORY_PROMPT+'\nJSON schema: '+JSON.stringify(advisorySchema(shared.packet.task))},
+      messages:[{role:'system',content:ADVISORY_PROMPT+'\n'+SENSOR_NOTE+'\nJSON schema: '+JSON.stringify(advisorySchema(shared.packet.task))},
         {role:'user',content:JSON.stringify(shared.market_input)}]});
     if(body.length>90000)throw Error('DEEPSEEK_INPUT_SIZE');
     const request=(async()=>{

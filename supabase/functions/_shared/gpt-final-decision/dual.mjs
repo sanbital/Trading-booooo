@@ -3,6 +3,7 @@ import {callDecision,payloadFor,hash} from './api.mjs';
 import {validateDecision,validateShape} from './contract.mjs';
 import {callAdvisory,evidenceCatalog,validateAdvisory} from './advisory.mjs';
 import {flashCostCeiling} from './hold-shadow.mjs';
+import {validateMarketSensor,SENSOR_NOTE} from './market-sensor.mjs';
 export const DUAL_VERSION='FD1_GPT_FINAL_ARBITRATION_2';
 export const ARBITRATION_PROMPT=`
 DeepSeek is an independent advisory model. It has no trading authority.
@@ -42,6 +43,7 @@ const FINAL_TRAJECTORY_FIELDS=new Set([
 ]);
 export function finalEvidenceKeys(catalog){
   return Object.keys(catalog).filter(k=>{
+    if(/^(initial|current)\.market_sensor\.(btc_return_1m|return_(5|15|30|60|120)s|sensor_freshness_ms|sensor_event_latency_ms|depth_coverage_complete)$/.test(k))return true;
     if(!/^(initial|current)\.(current\.)?(facts|capture_context|change)\./.test(k))return false;
     if(!k.includes('.capture_context.trajectory.'))return true;
     return FINAL_TRAJECTORY_FIELDS.has(k.slice(k.lastIndexOf('.')+1));
@@ -53,7 +55,14 @@ function normalizeArbitration(arbitration){
 function freeze(x){if(x&&typeof x==='object'){Object.values(x).forEach(freeze);Object.freeze(x);}return x;}
 export async function frozenReview(packet,{snapshotAtMs,inputPayload=payloadFor}={}){
   if(!Number.isSafeInteger(snapshotAtMs))throw Error('FD_SNAPSHOT_TIME');
-  const copy=clone(packet),base=inputPayload(copy),market=JSON.parse(base.input.find(x=>x.role==='user').content);
+  const copy=clone(packet);
+  if(copy.facts?.market_sensor)copy.facts.market_sensor=validateMarketSensor(copy.facts.market_sensor,snapshotAtMs);
+  const base=inputPayload(copy),market=JSON.parse(base.input.find(x=>x.role==='user').content);
+  if(copy.facts?.market_sensor){
+    market.market_sensor=copy.facts.market_sensor;
+    market.trajectory_contracts={trade_trajectory:'capture_context / TRADE_CONTEXT_V3',market_sensor_trajectory:'market_sensor.market_sensor_trajectory / MARKET_SENSOR_CONTEXT_V1'};
+    base.input[0].content+='\n'+SENSOR_NOTE;
+  }
   market.deterministic_safety_state={market_flags:market.risk_flags??{},native_stop_stage:copy.position?.stop_stage??null,
     priority:'HARD_SAFETY_OVERRIDES_ALL_MODELS',account_and_exchange_truth:'NOT_IN_MODEL_SNAPSHOT_RECONCILED_BY_EXECUTOR'};
   market.execution_state={phase:copy.task==='RECHECK'?'PRE_DISPATCH':copy.task==='HOLD'?'OPEN_POSITION_REVIEW':'PRE_ADMISSION',
@@ -62,7 +71,7 @@ export async function frozenReview(packet,{snapshotAtMs,inputPayload=payloadFor}
     execution_permission:'NONE_UNTIL_FINAL_AND_EXECUTOR_SAFETY_CHECKS'};
   const capture=copy.facts?.capture_context??{status:'UNAVAILABLE'},trajectoryHash=await hash(capture);
   const identity={symbol:copy.symbol,task:copy.task,candidate_id:copy.candidate_id,snapshot_at_ms:snapshotAtMs,
-    packet_hash:await hash(copy),capture_window:{start_ms:capture.start_ms??null,end_ms:capture.end_ms??null},
+    market_sensor_hash:await hash(copy.facts?.market_sensor??null),packet_hash:await hash(copy),capture_window:{start_ms:capture.start_ms??null,end_ms:capture.end_ms??null},
     capture_trajectory_hash:trajectoryHash,orderbook_reference:copy.current_ref??copy.execution_ref??copy.position?.valuation??null,
     tape_window:copy.pre_dispatch?.tape??null,initial_reference:copy.initial?.execution_ref??null,
     current_reference:copy.current_ref??copy.execution_ref??null,position_state:copy.position??null,

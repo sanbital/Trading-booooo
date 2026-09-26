@@ -1,4 +1,4 @@
-import {Book,Flow,WeightBudget,VERSION,iso,inWindow,streamURLs,normalizeSymbol,transportFresh} from './core.mjs';
+import {Book,Flow,WeightBudget,VERSION,iso,inWindow,streamURLs,normalizeSymbol,transportFresh,closedCandle,btcCandleFields} from './core.mjs';
 import {randomUUID} from 'node:crypto';
 import {summarizeCapture} from './context.mjs';
 const endpoint=process.env.CAPTURE_ENDPOINT;
@@ -42,7 +42,7 @@ function openSocket(s){
     if(e.e==='depthUpdate')s.book.event(e,now);
     if(e.e==='aggTrade'){s.flow.event(e,now);s.lastTradeAt=now;}
     if(e.e==='forceOrder')s.flow.liquidation+=Number(e.o.ap||e.o.p)*Number(e.o.z);
-    if(e.e==='kline' && e.k.x){const k=e.k;s.lastCandle={at:iso(+k.t),return_1m:+k.c/(+k.o)-1};if(s.candles)enqueue({kind:'candle',symbol:s.symbol,at:iso(+k.t),payload:{open:+k.o,high:+k.h,low:+k.l,close:+k.c,quote_volume:+k.q,taker_buy_quote:+k.Q,exchange_at:iso(+e.E),available_at:iso(now),source:'WS_CLOSED',complete:true}});}
+    if(e.e==='kline' && e.k.x){const k=e.k;s.lastCandle=closedCandle(e,now);if(s.candles)enqueue({kind:'candle',symbol:s.symbol,at:iso(+k.t),payload:{open:+k.o,high:+k.h,low:+k.l,close:+k.c,quote_volume:+k.q,taker_buy_quote:+k.Q,exchange_at:iso(+e.E),available_at:iso(now),source:'WS_CLOSED',complete:true}});}
   }catch(e){wsGaps++;retire();log('STREAM_GAP',{symbol:s.symbol,reason:e.message});}};
   for(const socket of [ws,marketWs]){
     socket.addEventListener('message',message);
@@ -69,7 +69,7 @@ async function watch(){
   for(const w of desired.values()){
     if(!normalizeSymbol(w.symbol))continue;
     const s=states.get(w.symbol)||connect(w.symbol,w.candles);
-    if(w.candles && !s.candles)s.needBackfill=true;s.candles=w.candles;
+    if(w.candles && !s.candles)s.needBackfill=true;s.candles=w.candles;s.roles=w.roles??[];
   }
   for(const s of states.values())for(const row of s.ring)if(production||inWindow(Date.parse(row.at),windows,s.symbol))enqueue(row);
 }
@@ -94,7 +94,7 @@ function bucket(now){
     const full=s.started<=s.lastBucket && s.book.syncAt<=s.lastBucket && now-s.lastBucket>=4500 && now-s.lastBucket<=5500;
     const row={kind:'micro',symbol:s.symbol,at:iso(Math.floor(now/5000)*5000),payload:{...m,...flow,available_at:iso(now),interval_start:iso(s.lastBucket),interval_end:iso(now),interval_ms:now-s.lastBucket,
       bucket_complete:full && m.book_complete && flow.trade_sequence_complete && flow.flow_causal,
-      btc_return_1m:btc && now-Date.parse(btc.at)<125000?btc.return_1m:null,btc_candle_at:btc?.at||null,sector_return_1m:null,sector_map_version:null,maker_fee_bps:null,taker_fee_bps:null,funding_cashflow:null,
+      ...btcCandleFields(btc,now),watch_roles:s.roles??[],sector_return_1m:null,sector_map_version:null,maker_fee_bps:null,taker_fee_bps:null,funding_cashflow:null,
       source:'BINANCE_USDM_DIFF_AGGTRADE',version:VERSION}};
     s.lastBucket=now;s.ring.push(row);s.ring=s.ring.filter(x=>Date.parse(x.at)>=now-240000);
     if(production||inWindow(Date.parse(row.at),windows,s.symbol))enqueue(row);
@@ -106,8 +106,9 @@ async function flush(){
   if(!pending){
     const selected=[];let size=0;
     for(const [k,row] of queue){const bytes=Buffer.byteLength(JSON.stringify(row));if(selected.length>=300||size+bytes>350000)break;selected.push([k,row]);size+=bytes;}
-    pending={batch_id:randomUUID(),rows:selected.map(x=>x[1]),metrics:{version:VERSION,watched:states.size,synced:[...states.values()].filter(s=>s.book.ready).length,trade_streams_seen:[...states.values()].filter(s=>s.lastTradeAt>0).length,candle_streams_seen:[...states.values()].filter(s=>s.lastCandle!==null).length,queue:queue.size,ws_gaps:wsGaps,coverage_refreshes:coverageRefreshes,rest_failures:restFailures,rss_bytes:process.memoryUsage().rss,last_bucket_at:iso(Date.now()),order_calls:0,llm_calls:0}};
+    pending={batch_id:randomUUID(),rows:selected.map(x=>x[1]),metrics:{version:VERSION,source_commit:process.env.SOURCE_COMMIT??null,watched:states.size,synced:[...states.values()].filter(s=>s.book.ready).length,trade_streams_seen:[...states.values()].filter(s=>s.lastTradeAt>0).length,candle_streams_seen:[...states.values()].filter(s=>s.lastCandle!==null).length,queue:queue.size,ws_gaps:wsGaps,coverage_refreshes:coverageRefreshes,rest_failures:restFailures,rss_bytes:process.memoryUsage().rss,last_bucket_at:iso(Date.now()),order_calls:0,llm_calls:0}};
     pending.metrics.live_contexts=Object.fromEntries([...states].map(([symbol,s])=>[symbol,summarizeCapture(s.ring,Date.now())]));
+    pending.metrics.watch_roles=Object.fromEntries([...states].map(([symbol,s])=>[symbol,s.roles??[]]));
     pending.metrics.unavailable_symbols=unavailableSymbols;
     pending.metrics.production_continuous=production;
     for(const [k] of selected)queue.delete(k);
