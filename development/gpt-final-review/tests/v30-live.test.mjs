@@ -35,7 +35,7 @@ test('live baseline: CEC0040 action is evidence, not a veto; the stamp must be f
   }
   const s=b06133Rejected();s.features.cec0040=undefined;assert.equal(baselineAllowedLive(s),false);
 });
-test('fresh5over15=false is admitted as negative GPT evidence while volumeTails stays hard',()=>{
+test('fresh5over15 and volumeTails verdicts remain GPT evidence with intact V30 stamps',()=>{
   const s=b06133Rejected();s.features.b06133.factors.fresh5over15=false;stampV30(s);
   assert.equal(s.features.v30Front.admitted,true);
   assert.deepEqual(s.features.v30Front.negativeEvidence,['fresh5over15']);
@@ -44,11 +44,11 @@ test('fresh5over15=false is admitted as negative GPT evidence while volumeTails 
   tails.features.b06133.factors.volumeTails=true;stampV30(tails);
   assert.equal(tails.features.v30Front.admitted,false);
   assert.ok(tails.features.v30Front.failed.includes('volumeTails'));
-  assert.equal(baselineAllowedLive(tails),false);
+  assert.equal(baselineAllowedLive(tails),true);
 });
-test('live baseline refuses a failed V30 gate, the shadow version, and a claimed-rejected status',()=>{
+test('live baseline retains a failed V30 verdict as evidence but refuses shadow stamps and rejected signals',()=>{
   const s=b06133Rejected();s.features.b06133.factors.volumeTails=true;stampV30(s);
-  assert.equal(s.features.v30Front.admitted,false);assert.equal(baselineAllowedLive(s),false);
+  assert.equal(s.features.v30Front.admitted,false);assert.equal(baselineAllowedLive(s),true);
   const t=b06133Rejected();t.features.v30Front=v30FrontDecision(t.features.b06133,V30_FRONT_VERSION);assert.equal(baselineAllowedLive(t),false);
   const u=b06133Rejected();u.status='REJECTED';assert.equal(baselineAllowedLive(u),false);
 });
@@ -60,7 +60,7 @@ test('entry branch: B06133 branch when B06133 also admitted, V30_SCORE otherwise
   assert.deepEqual(Object.keys(P142_STYLE_BY_BRANCH),['R62','BUYER_SHARE_RESCUE','BOTH','V30_SCORE']);
 });
 test('production coordinator: FD1 engine (GPT final entry decision) on the live V30 baseline',()=>{
-  const c=coordinatorFor({});assert.equal(c.engine?.id,'GPT_FINAL_DECISION_FD1:ENTRY');assert.equal(c.baseline,baselineAllowedLive);
+  const c=coordinatorFor({});assert.equal(c.engine?.id,'GPT_FINAL_DECISION_FD1:ENTRY:FD1_GPT_FINAL_ARBITRATION_2');assert.equal(c.baseline,baselineAllowedLive);
   assert.equal(c.allowDecision(),'BUY');
 });
 test('V30 executor hooks change no sizing, slot, leverage, stop or lease control',()=>{

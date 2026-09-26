@@ -133,8 +133,9 @@ test('X1 injected one-second observation reuses R5, persists executable peak, an
       detectedAtMs:at,source:'P10_TOP_OF_BOOK_BATCH',observationId:'x1-o1',fullQuantityExecutable:true,
       observedBidPeak:102.5,observedBidPeakAt:at-1000,executableVwapPeak:102.5}});
   assert.equal(result.action,'HOLD');assert.equal(result.protectionStage,'PROFIT_LOCK');
-  assert.equal(result.stopPrice,101.25);assert.equal(h.gatewayCalls.length,0);
+  assert.equal(result.stopPrice,98.8);assert.equal(result.softStopPrice,101.25);assert.equal(h.gatewayCalls.length,0);
   const saved=h.writes.at(-1);assert.equal(saved.peak_price,102.5);
+  assert.equal(saved.hard_stop_price,98.8);assert.equal(saved.metadata.exitAuthority.softLevel,101.25);
   assert.equal(saved.metadata.x1Observation.executableVwapPeak,102.5);
   assert.equal(saved.metadata.exitObservationPolicyVersion,'X1_FAST_OBSERVATION_OVERRIDE_1');
 });
