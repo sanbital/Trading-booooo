@@ -8,6 +8,7 @@
 import {detectChange,preDispatchSnapshot,runFinalRecheck,recheckAllows,postRecheckSafety,initialContext,
   RECHECK_POLICY,RECHECK_VERSION,AGED_REASON} from '../_shared/gpt-final-decision/recheck.mjs';
 import {computeFacts} from '../_shared/gpt-final-decision/facts.mjs';
+import {recordRecheckShadow,recheckShadowEnabled} from '../_shared/gpt-final-decision/recheck-shadow.mjs';
 import {readSources} from '../_shared/gpt-final-decision/market.mjs';
 import {SupabaseReviewStore,readReviewControl} from '../_shared/gpt-final-review/supabase-store.mjs';
 import {configFromControl} from '../_shared/gpt-final-review/coordinator.mjs';
@@ -63,12 +64,21 @@ export async function finalRecheckStep(db,s,{ticket,e1,rawQuote,now=Date.now,pur
     if(purpose==='PRODUCTION')logRow(db,s,record,'NO_RECHECK_INITIAL_BUY_STANDS');
     return {proceed:true,reason:'GPT_FINAL_RECHECK_NOT_REQUIRED',record};
   }
-  let final;
+  const store=testHooks?.store??new SupabaseReviewStore(db);
+  const reviewConfig=config??testHooks?.config??gptRecheckConfig(db);
+  let shadow=Promise.resolve({state:'NOT_STARTED'}),final;
   try{
     final=await runFinalRecheck({signal:s,ticket,detection,preDispatch:snapshot,purpose,dataMode,asOf,sequence,
-      store:testHooks?.store??new SupabaseReviewStore(db),config:config??testHooks?.config??gptRecheckConfig(db),
-      apiKey:apiKey??testHooks?.apiKey??getenv('OPENAI_API_KEY'),fetchFn:testHooks?.fetchFn??fetch,now,readFresh:testHooks?.readFresh});
+      store,config:reviewConfig,
+      apiKey:apiKey??testHooks?.apiKey??getenv('OPENAI_API_KEY'),fetchFn:testHooks?.fetchFn??fetch,now,readFresh:testHooks?.readFresh,
+      onPacket:(packet,snapshotAt,parentKey,identity)=>{
+        shadow=recordRecheckShadow({packet,snapshotAt,parentKey,identity,store,config:reviewConfig,
+          apiKey:testHooks?.deepseekKey??getenv('deepseek api'),
+          enabled:testHooks?.shadowEnabled??recheckShadowEnabled(getenv('DEEPSEEK_RECHECK_SHADOW_ENABLED')),
+          invoke:testHooks?.counterCall});
+      }});
   }catch(e){final={decision:'ABSTAIN',valid:false,error:'RC_ADAPTER_ERROR',completed_at_ms:now()};}
+  if(purpose==='PRODUCTION')schedule(shadow);
   record.final=final;record.final_gpt_decision=final.valid===true?final.decision:'ABSTAIN';record.final_gpt_at=final.completed_at_ms??null;
   const proceed=recheckAllows(final,now());
   const reason=proceed?'GPT_FINAL_RECHECK_BUY':`GPT_FINAL_RECHECK_${record.final_gpt_decision}${final.error?':'+final.error:''}`;

@@ -99,6 +99,27 @@ test('2+3. INITIAL BUY + meaningful deterioration -> FINAL RECHECK; FINAL BUY ->
   assert.equal(gptFinalCheck(x.db,x.s,{recheck_triggered:false}).allowed,false,'without the recheck the initial answer has expired');
   const t=withOrderTiming(r.record,T+17600);assert.equal(t.decision_to_order_ms,T+17600-x.ticket.initial.completedAt);
 });
+
+test('2+3b. FINAL RECHECK starts DeepSeek shadow on the exact packet without changing GPT authority',async()=>{
+  const x=await initialDecision({final:'BUY'});x.setNow(T+12000);
+  const scheduled=[],seen=[];
+  setRecheckTestHooks({store:x.store,config:ENFORCE,apiKey:'k',deepseekKey:'ds',shadowEnabled:true,
+    fetchFn:x.w.fetchFn,log:x.log,schedule:p=>scheduled.push(p),
+    readFresh:async(symbol,at)=>({src:srcFixture(at),errors:{}}),
+    counterCall:async shared=>{seen.push(shared);return {provider:'deepseek',model:'deepseek-flash',valid:true,error:null,
+      answer:{task:'RECHECK',candidate_id:shared.packet.candidate_id,confidence:.5,evidence:['return_5m'],
+        summary:'shadow',decision:'UNCERTAIN',failure_risk:'MEDIUM',continuation_strength:'NORMAL',chase_risk:'MEDIUM',expected_value:'NEUTRAL'},
+      usage:{prompt_tokens:100,completion_tokens:20},latency_ms:10};}});
+  const r=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:WEAK,rawQuote:calmQuote(T+11900),now:()=>T+12000});
+  assert.equal(r.proceed,true);assert.equal(r.record.final_gpt_decision,'BUY');
+  await Promise.all(scheduled);
+  assert.equal(seen.length,1);assert.equal(seen[0].packet.task,'RECHECK');
+  const parent=x.store.rows.get(r.record.final.job_key).record;
+  const child=[...x.store.rows.values()].map(v=>v.record).find(v=>v.kind==='DS_RECHECK_SHADOW');
+  assert.ok(child);assert.equal(child.parent_key,r.record.final.job_key);assert.deepEqual(child.authority,[]);
+  assert.equal(child.packet.snapshot_hash,parent.packet.snapshot_hash,'DeepSeek sees the exact GPT RECHECK packet');
+  assert.equal(child.result.valid,true);assert.equal(child.result.model_requested,'deepseek-flash');
+});
 for(const [id,final,err] of [['4','SKIP',null],['5','ABSTAIN',null],['6a','TIMEOUT','API_TIMEOUT'],['6b','ERROR','HTTP_500'],['6c','INVALID','RC_SKIP_PRICE_ONLY']])
 test(`${id}. FINAL ${final} -> no order`,async()=>{
   const x=await initialDecision({final});

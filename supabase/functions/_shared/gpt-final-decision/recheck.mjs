@@ -325,7 +325,7 @@ function authorized(c,apiKey){return c?.mode==='ENFORCE'&&c.modeValid!==false&&c
  * @returns {decision,valid,error,answer,latency_ms,api_cost_usd,snapshot_at_ms,completed_at_ms,valid_until_ms,job_key,attempted}
  */
 export async function runFinalRecheck({signal,ticket,detection,preDispatch,store,config,apiKey,fetchFn=fetch,now=Date.now,
-  purpose='PRODUCTION',readFresh=readSources,dataMode='LIVE',asOf=null,sequence=1,policy=RECHECK_POLICY}){
+  purpose='PRODUCTION',readFresh=readSources,dataMode='LIVE',asOf=null,sequence=1,policy=RECHECK_POLICY,onPacket=null}){
   const started=now();
   const out=(o)=>({version:RECHECK_VERSION,decision:'ABSTAIN',valid:false,error:null,answer:null,latency_ms:null,api_cost_usd:null,
     snapshot_at_ms:null,completed_at_ms:now(),valid_until_ms:null,job_key:null,attempted:false,started_at_ms:started,...o});
@@ -360,6 +360,9 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
       currentRef:currentRef?{bid:currentRef.bid,ask:currentRef.ask,mid:currentRef.mid,at:captured}:null,preDispatch});
     record.packet.source_errors=errors;
     record.snapshot_at_ms=asOf===null?captured:now();
+    // Start independent observers on the exact packet before GPT is awaited. The observer
+    // is never awaited here and cannot affect the production decision or execution path.
+    try{if(typeof onPacket==='function')onPacket(record.packet,record.snapshot_at_ms,key,record.identity);}catch{}
     const remaining=deadline-now();
     if(remaining<=0)throw Error('RC_TRIGGER_EXPIRED');
     result=await callDecision(record.packet,{apiKey,fetchFn,now,timeoutMs:Math.max(1,Math.min(policy.requestTimeoutMs,remaining)),
