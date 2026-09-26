@@ -2995,6 +2995,7 @@ async function opsReadiness(db){
       conditionalOrderCount:Array.isArray(oo?.algos)?oo.algos.length:null,ordersObservedAtMs:oo?.observed_at_ms??null},
     db:{openPositionCount:(positions.data??[]).length,openPositions:positions.data??[],unresolvedOrderCount:(orders.data??[]).length,unresolvedOrders:orders.data??[]},
     runtime:rt.data??null,gptControl:control,openaiKeyPresent:(env("OPENAI_API_KEY")||"").length>0,maxSlots:MAX_SLOTS,
+    nativeStopEnabled:NATIVE_STOP_ENABLED,failsafeRelease:"PR193_EMERGENCY_VALIDATION_1",
     holdRelease:HOLD_RELEASE,deepseekShadow:{enabled:holdShadowEnabled(env("DEEPSEEK_HOLD_SHADOW_ENABLED")||""),keyPresent:!!env("deepseek api"),authority:[]},
     sizing:{targetMarginUsdt:MARGIN,leverage:LEV}};
 }
