@@ -31,7 +31,7 @@ ENTRY/RECHECK: evaluate continuation, re-acceleration, late chase, pump exhausti
 expected upside/downside, taker/buyer flow, spread, bid/ask depth, imbalance, slippage, OI, funding, premium and BTC.
 HOLD/strategic EXIT: evaluate entry thesis, buyer strength, seller acceleration, normal pullback vs collapse,
 new highs, momentum exhaustion, bid support, ask pressure, OI divergence, BTC, future gain vs exit-now and premature exit.
-Read the ordered 60-second trajectory: compare first 30 seconds with last 30 and last 10-20 seconds.
+Read the ordered 120-second trajectory, 5/15/30/60/120s dynamics and recent 60s. Compare early vs late and last 10-20 seconds.\nSoft protection levels are review triggers, never mandatory EXIT. Catastrophic/R5 loss floors cannot be overridden.
 Missing evidence stays unknown. Never invent measurements or claim book cancellations are trades.
 bullish_evidence/bearish_evidence contain ONLY exact dot paths to supplied numeric/boolean facts (arrays use zero-based indices).
 For example facts.trend.return_5m, facts.position.position_return, capture_context.trajectory.11.d_mid_bps.

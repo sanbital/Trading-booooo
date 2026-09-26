@@ -4,6 +4,10 @@ on:
     branches: [main]
     paths:
       - 'supabase/functions/_shared/gpt-final-decision/**'
+      - 'supabase/functions/_shared/exit-authority.mjs'
+      - 'supabase/functions/_shared/leader-native-protection.mjs'
+      - 'test-support/exit-authority-v2/**'
+      - 'supabase/migrations/*exit_authority*'
       - 'supabase/functions/v10-lane-executor/**'
       - 'collectors/doa-capture/**'
       - 'supabase/migrations/*capture*'
@@ -17,6 +21,10 @@ on:
   pull_request:
     paths:
       - 'supabase/functions/_shared/gpt-final-decision/**'
+      - 'supabase/functions/_shared/exit-authority.mjs'
+      - 'supabase/functions/_shared/leader-native-protection.mjs'
+      - 'test-support/exit-authority-v2/**'
+      - 'supabase/migrations/*exit_authority*'
       - 'supabase/functions/v10-lane-executor/**'
       - 'collectors/doa-capture/**'
       - 'supabase/migrations/*capture*'

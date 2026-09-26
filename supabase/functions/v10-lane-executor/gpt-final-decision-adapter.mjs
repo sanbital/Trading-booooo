@@ -1,3 +1,6 @@
+import {positionGeneration} from '../_shared/exit-authority.mjs';
+import {readCapture} from '../_shared/gpt-final-decision/capture-context.mjs';
+import {dynamicsEvent} from '../_shared/gpt-final-decision/trajectory.mjs';
 /** Strategic closes require fresh validated GPT FINAL. Existing hard safety executes first. */
 import {holdStep,initialHoldState,runHoldReview,TIME_REASONS,FD1_HOLD_POLICY_VERSION} from '../_shared/gpt-final-decision/hold.mjs';
 import {SupabaseReviewStore,readReviewControl} from '../_shared/gpt-final-review/supabase-store.mjs';
@@ -15,15 +18,27 @@ function authorized(c,apiKey){return c.mode==='ENFORCE'&&c.modeValid!==false&&c.
 /**
  * @returns {close:boolean, reason:string|null, fallback?:boolean, state:object, review?:object}
  */
-export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate}){
+export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTrigger=null,exitContext=null}){
   const store=testHooks?.store??new SupabaseReviewStore(db),apiKey=testHooks?.apiKey??getenv('OPENAI_API_KEY');
-  const prior=meta.fd1Hold&&meta.fd1Hold.version===FD1_HOLD_POLICY_VERSION?meta.fd1Hold:
+  let prior=meta.fd1Hold&&meta.fd1Hold.version===FD1_HOLD_POLICY_VERSION?meta.fd1Hold:
     {...initialHoldState(p.entry_price),...(meta.fd1Hold??{}),version:FD1_HOLD_POLICY_VERSION,pending:null,holdUntil:null};
+  const generation=positionGeneration(p);
+  if(prior.generation&&prior.generation!==generation)prior=initialHoldState(p.entry_price);
+  prior={...prior,generation};
+  let dynamics=null;
+  if(!prior.pending&&now-(prior.dynamicsAt??0)>=10000){
+    const capture=await (testHooks?.capture??readCapture)(p.symbol,now,{positionId:p.id});
+    dynamics=dynamicsEvent(capture,prior.dynamicsObservation,!!prior.protectUntil);
+    prior={...prior,dynamicsAt:now,dynamicsObservation:dynamics.observation};
+  }
   const answerOf=async key=>{const row=await store.get(key);if(!row)return null;const r=row.record?.result??{};
-    let valid=false;try{valid=r.valid===true&&revalidateArbitration(r,row.record.packet).decision===r.decision;}catch{}
-    return {state:row.state,decision:r.decision,valid,completed_at_ms:r.completed_at_ms};};
+    let valid=false;try{valid=r.valid===true&&row.record?.identity?.position_id===String(p.id)&&
+      row.record?.identity?.generation===generation&&row.record?.purpose==='PRODUCTION'&&
+      row.record?.packet?.position?.generation===generation&&
+      revalidateArbitration(r,row.record.packet).decision===r.decision;}catch{}
+    return {state:row.state,decision:r.decision,valid,completed_at_ms:r.completed_at_ms,snapshot_at_ms:r.final_snapshot_at_ms,refresh_error:r.arbitration?.refresh_error??null};};
   let step;
-  try{step=await holdStep(prior,{now,price:bid,peak:state.peakPrice,timeCandidate,positionId:p.id,answerOf});}
+  try{step=await holdStep(prior,{now,price:bid,peak:state.peakPrice,timeCandidate,softTrigger,dynamics,positionId:p.id,generation,answerOf});}
   catch{return {close:false,reason:'FD1_FINAL_UNAVAILABLE',state:prior};}
   if(!step.start)return step;
   // A review is starting: claim it in the shared journal/ledger, then ask in the background.
@@ -34,7 +49,7 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate}){
     if(!authorized(config,apiKey))return fail('NOT_AUTHORIZED');
     const f=meta.entryFeatures??{};
     const record={version:FD1_HOLD_POLICY_VERSION,kind:'FD1_HOLD',purpose:'PRODUCTION',api_approval_ref:config.approvalRef,
-      identity:{signal_id:String(p.signal_id??''),symbol:String(p.symbol).toUpperCase(),position_id:String(p.id),event:step.start.event},
+      identity:{signal_id:String(p.signal_id??''),symbol:String(p.symbol).toUpperCase(),position_id:String(p.id),generation,event:step.start.event},
       reserved_usd:0.10,source_commit:FD1_HOLD_POLICY_VERSION,packet:null,result:null};
     let claimed;
     try{claimed=await store.claim(step.start.key,record,config);}
@@ -43,10 +58,10 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate}){
       const owner=claimed.row.owner;
       const task=(async()=>{
         // Production advice is consumed by GPT FINAL inside runHoldReview, not a detached observer.
-        const out=await (testHooks?.review??runHoldReview)({apiKey,deepseekKey:testHooks?.deepseekKey??getenv('deepseek api'),position:{id:p.id,symbol:p.symbol,entryPrice:Number(p.entry_price),
+        const out=await (testHooks?.review??runHoldReview)({apiKey,deepseekKey:testHooks?.deepseekKey??getenv('deepseek api'),exitContext,position:{id:p.id,capturePositionId:p.id,generation,symbol:p.symbol,entryPrice:Number(p.entry_price),
           peakPrice:state.peakPrice,entryAt:Date.parse(p.entry_at),lastHighAt:state.lastHighAt,stopPrice:state.stopPrice,entryFeatures:f},
           event:step.start.event,timeCandidate,stopStage:state.protectionStage??null});
-        await store.complete(step.start.key,owner,{...record,packet:out.packet,result:out.result,
+        await store.complete(step.start.key,owner,{...record,packet:out.packet,result:{...out.result,final_packet:undefined},
           snapshot_at_ms:out.packet?now:null});
         // Only the completed GPT FINAL result is durable and consumable.
       })().catch(e=>console.error('FD1_HOLD_REVIEW_FAILED',p.id,String(e?.message??e).slice(0,200)));
@@ -62,7 +77,7 @@ export async function fd1ExitProbe(db,{symbol,runId,apiKey,fetchFn=fetch}){
   if(!authorized(config,apiKey))return {ok:false,error:'NOT_AUTHORIZED',orderCalls:0};
   const key=await hash({runId,symbol,v:DUAL_VERSION,kind:'EXIT_PROBE'}),store=new SupabaseReviewStore(db);
   const record={version:HOLD_RELEASE,kind:'FD1_HOLD_PROBE',purpose:'DRYRUN',api_approval_ref:config.approvalRef,
-    identity:{symbol,position_id:'fixture:'+runId,event:'TIME_EXIT_CANDIDATE:V17_MOMENTUM_STALE'},
+    identity:{symbol,position_id:'fixture:'+runId,event:'SOFT_PROTECTION_TRIGGER:P142_LOCK'},
     reserved_usd:.10,source_commit:HOLD_RELEASE,packet:null,result:null};
   const claim=await store.claim(key,record,config);
   if(!claim.created)return {ok:true,duplicate:true,jobKey:key,orderCalls:0};
@@ -75,9 +90,9 @@ export async function fd1ExitProbe(db,{symbol,runId,apiKey,fetchFn=fetch}){
     const t=Date.now();
     out=await runHoldReview({apiKey,deepseekKey:getenv('deepseek api'),fetchFn,position:{id:'fixture:'+runId,symbol,entryPrice:bid*.99,peakPrice:bid,
       entryAt:t-50*60000,lastHighAt:t-46*60000,stopPrice:bid*.975,entryFeatures:{}},
-      event:record.identity.event,timeCandidate:'V17_MOMENTUM_STALE',stopStage:'RISK_CUT'});
+      event:record.identity.event,timeCandidate:null,stopStage:'retestAnchor_LOCK',exitContext:{version:'AI_EXIT_AUTHORITY_2',fixture:true,current_price:bid,entry_price:bid*.99,hard_floor:bid*.975,soft_trigger:{active:true,reason:'P142_LOCK',level:bid*1.001},exposure_increase_allowed:false}});
   }catch{out={packet:null,result:{valid:false,decision:'ABSTAIN',attempted:false,error:'PROBE_PREP_FAILED',api_cost_usd:0}};}
-  await store.complete(key,claim.row.owner,{...record,packet:out.packet,result:out.result,
+  await store.complete(key,claim.row.owner,{...record,packet:out.packet,result:{...out.result,final_packet:undefined},
     snapshot_at_ms:out.packet?.position?.valuation?.snapshot_at_ms??null});
   const a=out.result.arbitration;
   return {ok:out.result.valid===true&&a?.deepseek_valid===true,fixture:true,orderCalls:0,release:DUAL_VERSION,

@@ -74,9 +74,9 @@ for(const failure of ['http','schema','expired'])test('FINAL '+failure+' never f
 test('latest snapshot reaches FINAL while FIRST hash remains frozen',async()=>{
  const p=await packet(),next=structuredClone(p);next.facts.values.return_5m+=.01;next.snapshot_hash=await hash({...next,snapshot_hash:''});
  let seen;const fetchFn=async(url,init)=>{const input=JSON.parse(JSON.parse(init.body).input[1].content);if(input.independent_reviews)seen=input;return gptResponse(input);};
- const r=await dualEntryDecision(p,{apiKey:'fixture',fetchFn,now:()=>T,refreshPacket:async()=>({packet:next,captured:T+1})});
+ const r=await dualEntryDecision(p,{apiKey:'fixture',fetchFn,now:()=>T,refreshPacket:async()=>({packet:next,captured:T})});
  assert.equal(r.valid,true,r.error);assert.notEqual(r.arbitration.snapshot_hash,r.arbitration.final_snapshot_hash);
- assert.ok(seen.snapshot_delta.return_5m>.009);assert.equal(r.final_snapshot_at_ms,T+1);
+ assert.ok(seen.snapshot_delta.return_5m>.009);assert.equal(r.final_snapshot_at_ms,T);
 });
 test('legacy first-only journal is never executable',async()=>{
  assert.throws(()=>revalidateArbitration({valid:true,wire:{}},{}),/FD_FINAL_AUTHORITY/);

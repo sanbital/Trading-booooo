@@ -1,4 +1,4 @@
-export const VERSION = 'DOA-CAPTURE-3-CONTINUOUS';
+export const VERSION = 'DOA-CAPTURE-4-COVERAGE-RECOVERY';
 export const normalizeSymbol=value=>{const s=String(value??'').trim().toUpperCase();return /^[A-Z0-9]{1,24}USDT$/.test(s)?s:null;};
 export const iso = n => new Date(n).toISOString();
 export function streamURLs(symbol){
@@ -9,10 +9,12 @@ export function streamURLs(symbol){
 export class Book {
   constructor() { this.reset(); }
   reset() { this.bids=new Map(); this.asks=new Map(); this.last=null; this.ready=false; this.buffer=[]; this.at=0; this.add=0; this.remove=0; this.bidAdd=0; this.bidRemove=0; this.received=0; this.syncAt=Infinity; }
-  snapshot(s) {
+  snapshot(s,now=Date.now()) {
     this.bids=new Map(s.bids.map(([p,q])=>[+p,+q])); this.asks=new Map(s.asks.map(([p,q])=>[+p,+q]));
     this.last=+s.lastUpdateId; this.ready=false;
     this.bidBoundary=Math.min(...this.bids.keys()); this.askBoundary=Math.max(...this.asks.keys());
+    const mid=(Math.max(...this.bids.keys())+Math.min(...this.asks.keys()))/2;
+    this.snapshotAt=now;this.snapshotCovered25=this.bidBoundary<=mid*.9975&&this.askBoundary>=mid*1.0025;
     const pending=this.buffer; this.buffer=[];
     for (const [e,t] of pending) this.event(e,t);
   }
@@ -30,6 +32,12 @@ export class Book {
     if(this.bids.size+this.asks.size>12000) throw Error('DEPTH_MEMORY_CAP');
     if(!this.ready)this.syncAt=t;
     this.last=+e.u; this.at=+e.E; this.received=t; this.ready=true;
+  }
+  needsCoverageRefresh(now) {
+    // A diff book can be fresh but its finite snapshot boundary may have been left
+    // behind by price movement. Do not loop on intrinsically shallow 1000-level books.
+    if(!this.ready||!this.snapshotCovered25||now-this.snapshotAt<60000)return false;
+    const m=this.metrics(now);return m.book_complete===true&&m.coverage_25===false;
   }
   metrics(now) {
     if(!this.ready || now-this.received>3000) return {book_complete:false,reason:'BOOK_UNSYNCED_OR_STALE'};
@@ -53,16 +61,19 @@ export function vwap(levels,quote) {
 }
 export class Flow {
   constructor(){ this.last=null; this.reset(); }
-  reset(){ this.buy=0;this.sell=0;this.seconds=new Map();this.count=0;this.complete=this.last!==null;this.liquidation=0; }
-  event(e){
+  reset(){ this.buy=0;this.sell=0;this.seconds=new Map();this.count=0;this.eventAt=null;this.receivedAt=null;this.invalidTime=false;this.complete=this.last!==null;this.liquidation=0; }
+  event(e,receivedAt=Date.now()){
     if(this.last!==null && +e.a<=this.last) return;
     if(this.last===null || +e.a!==this.last+1) this.complete=false;
+    const eventAt=Math.max(Number(e.T),Number(e.E??e.T));
+    if(!Number.isSafeInteger(eventAt)||!Number.isSafeInteger(receivedAt))this.invalidTime=true;
+    else{this.eventAt=Math.max(this.eventAt??0,eventAt);this.receivedAt=Math.max(this.receivedAt??0,receivedAt);}
     this.last=+e.a;const n=+e.p*(+e.q); if(e.m) {this.sell+=n;const k=Math.floor(+e.T/1000);this.seconds.set(k,(this.seconds.get(k)||0)+n);} else this.buy+=n;
     this.count++;
     if(this.seconds.size>30) this.complete=false;
     while(this.seconds.size>30) this.seconds.delete(this.seconds.keys().next().value);
   }
-  metrics(){return {buy_quote_5s:this.buy,sell_quote_5s:this.sell,sell_quote_max_1s:Math.max(0,...this.seconds.values()),trade_count:this.count,trade_sequence_complete:this.complete,observed_liquidation_usdt:this.liquidation,liquidation_complete:false};}
+  metrics(cutoff=Date.now()){return {trade_event_at:this.eventAt===null?null:iso(this.eventAt),trade_received_at:this.receivedAt===null?null:iso(this.receivedAt),flow_causal:!this.invalidTime&&(this.eventAt===null||this.eventAt<=cutoff)&&(this.receivedAt===null||this.receivedAt<=cutoff),buy_quote_5s:this.buy,sell_quote_5s:this.sell,sell_quote_max_1s:Math.max(0,...this.seconds.values()),trade_count:this.count,trade_sequence_complete:this.complete,observed_liquidation_usdt:this.liquidation,liquidation_complete:false};}
 }
 export function inWindow(t,windows,symbol){return windows.some(w=>w.symbol===symbol && t>=Date.parse(w.at)-60000 && t<=Date.parse(w.at)+120000);}
 export class WeightBudget {

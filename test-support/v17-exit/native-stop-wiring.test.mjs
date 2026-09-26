@@ -76,7 +76,7 @@ test('disabled by default: no protection is constructed and no stop order is tou
   assert.deepEqual(h.ensured, []);
 });
 
-test('enabled: the exchange stop is aligned only after the ratcheted stop is durable', async () => {
+test('enabled: hard floor is durable before exchange protection; profit lock stays soft', async () => {
   const h = harness({ enabled: true, bid: 102 });
   const r = await h.ctx.manage(h.db, h.position, h.context);
   assert.equal(r.action, 'HOLD');
@@ -88,7 +88,7 @@ test('enabled: the exchange stop is aligned only after the ratcheted stop is dur
   assert.equal(request.exchangeQuantity, 1000);
   assert.equal(request.lastPrice, 102);
   // peak 103.03 => profit lock 101.515, which is above the incoming 101.4846 trail
-  assert.ok(request.stopPrice > 101.4846, `stop ${request.stopPrice} must be the ratcheted level`);
+  assert.equal(request.stopPrice,97.5);assert.ok(r.softStopPrice>101.4846);assert.equal(request.exitClass,'HARD_SAFETY');
 });
 
 test('a protection failure never blocks or alters the software exit', async () => {

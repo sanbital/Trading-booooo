@@ -1,4 +1,5 @@
 // @ts-nocheck
+import {EXIT_AUTHORITY_VERSION,EXIT_CLASS,exitClass,hardSafetyState,softCandidate,exitContext,legacySoftOrders,assertExitAuthority,positionGeneration} from "../_shared/exit-authority.mjs";
 import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode,entryPriceEvidence} from "./entry-evidence.mjs";
 import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,runWithGptReview,gptReviewReadyToResume,gptArmFollowUp} from "./gpt-final-review-adapter.mjs";
 import {dryRunCoordinator,dryRunReviewPhase,liveProbe} from "./gpt-final-review-dryrun.mjs";
@@ -903,6 +904,7 @@ async function closePos(db,p,fraction,reason,ctx={}) {
   // A LEGACY/stale invocation cannot resurrect a closed position or create another exit.
   if(current.data.state!=="OPEN")return {closed:current.data.state==="CLOSED",position:current.data};
   p={...current.data,peak_price:Math.max(N(current.data.peak_price),N(p.peak_price))};
+  assertExitAuthority(reason,p,ctx.finalApproval,Date.now());
   const orders=await readOpsOrders(db,[p]);
   if(!ownedEntry(p,orders))throw Error("EXIT_OWNERSHIP_UNPROVEN");
   const pending=riskOrders(orders).find(o=>o.position_id===p.id&&o.intent!=="OPEN_LONG");
@@ -937,6 +939,15 @@ async function closePos(db,p,fraction,reason,ctx={}) {
   if(oi.error)throw Error(`EXIT_INTENT:${oi.error.message}`);
   try{
     await verifyExecutionLease(db);
+    try{assertExitAuthority(reason,p,ctx.finalApproval,Date.now());}
+    catch(error){
+      // This branch is provably pre-send. Do not invent an ambiguous exchange order
+      // or trip the account circuit because a strategic answer aged during DB IO.
+      const stopped=await db.from("v11_long_regime_orders").update({state:"REJECTED",
+        reject_reason:"FINAL_APPROVAL_EXPIRED_BEFORE_DISPATCH",updated_at:new Date().toISOString()}).eq("id",oi.data.id);
+      if(stopped.error)throw Error("EXIT_PRE_SEND_REJECTION_WRITE");
+      return {closed:false,position:p,strategyDeferred:true,reason:"FD1_FINAL_EXPIRED"};
+    }
     const raw=await gw(rp),z=fill(raw);
     await verifyExecutionLease(db);
     const wr=await db.from("v11_long_regime_orders").update({state:"RECONCILIATION_PENDING",exchange_order_id:z.exchangeOrderId,
@@ -2086,7 +2097,7 @@ async function runX1FastObservation(db,pair,deadlineMs){
   const items=new Map(selected.map(p=>{const meta=rec(p.metadata),x=rec(meta.x1Observation);return[p.id,{p,
     peak:Math.max(N(p.peak_price),N(x.observedBidPeak)),peakAt:Date.parse(meta.leaderLastHighAt||p.entry_at),
     executablePeak:Number.isFinite(Number(x.executableVwapPeak))?Number(x.executableVwapPeak):null,
-    candidateStop:N(p.hard_stop_price),lastPersistAt:Date.parse(p.last_evaluated_at||p.updated_at),
+    candidateStop:Math.max(N(p.hard_stop_price),N(meta.exitAuthority?.softLevel)),lastPersistAt:Date.parse(p.last_evaluated_at||p.updated_at),
     lastStopSyncAt:Date.parse(x.lastStopSyncAt||0),latest:null}]}));
   const gw=opsGateway(db),maxIterations=45;let nextAt=Date.now();
   while(items.size&&summary.iterations<maxIterations&&Date.now()<deadlineMs-3500){
@@ -2110,13 +2121,18 @@ async function runX1FastObservation(db,pair,deadlineMs){
         stopPrice:item.candidateStop,lastHighAt:item.peakAt,priceTick:tick},observation.bid,at,x1LocalPolicy(item.p));
       item.peak=state.peakPrice;item.peakAt=state.lastHighAt;item.candidateStop=Math.max(item.candidateStop,state.stopPrice);
       item.executablePeak=Math.max(N(item.executablePeak),observation.bid);item.latest=observation;
-      const persistedStop=N(item.p.hard_stop_price),persistedPeak=N(item.p.peak_price),
+      const persistedStop=Math.max(N(item.p.hard_stop_price),N(rec(item.p.metadata).exitAuthority?.softLevel)),persistedPeak=N(item.p.peak_price),
         stopDirty=item.candidateStop-persistedStop>=tick-Math.max(1e-12,tick*1e-8),
         peakDirty=item.peak>persistedPeak+Math.max(1e-12,persistedPeak*1e-12)||
           item.executablePeak>N(rec(item.p.metadata).x1Observation?.executableVwapPeak)+Math.max(1e-12,item.executablePeak*1e-12),
         stopDue=stopDirty&&(state.action==="CLOSE"||!Number.isFinite(item.lastStopSyncAt)||at-item.lastStopSyncAt>=5000),
         persistDue=peakDirty&&(!Number.isFinite(item.lastPersistAt)||at-item.lastPersistAt>=10000);
-      if(state.action==="CLOSE"||stopDue||persistDue)proposals.push({item,observation,state,tick,stopDirty});
+      const hardNow=hardSafetyState(item.p,{bid:observation.bid,now:at,peak:item.peak,policy:x1LocalPolicy(item.p),
+        r5:[EXIT_REVIEW_R5.policyVersion,P142_POLICY_VERSION].includes(rec(item.p.metadata).leaderExitPolicyVersion),priceTick:tick});
+      const elapsed=at-item.lastPersistAt,review=rec(rec(item.p.metadata).fd1Hold);
+      const strategicDue=(state.action==="CLOSE"||review.pending||review.protectUntil&&at>=review.protectUntil)&&elapsed>=5000;
+      const evidenceDue=elapsed>=15000; // inspect flow/book even when bid and peak are flat
+      if(hardNow.hardHit||strategicDue||stopDue&&elapsed>=5000||persistDue||evidenceDue)proposals.push({item,observation,state,tick,stopDirty});
     }
     if(proposals.length){
       let check;
@@ -2149,7 +2165,7 @@ async function runX1FastObservation(db,pair,deadlineMs){
           if(result.action==="CLOSE"){items.delete(fresh.id);continue}
           proposal.item.p=result.position??{...fresh,peak_price:result.peakPrice,hard_stop_price:result.stopPrice,
             updated_at:new Date(applyAt).toISOString(),last_evaluated_at:new Date(applyAt).toISOString()};
-          proposal.item.candidateStop=N(result.stopPrice);proposal.item.lastPersistAt=applyAt;
+          proposal.item.candidateStop=Math.max(N(result.stopPrice),N(result.softStopPrice));proposal.item.lastPersistAt=applyAt;
           if(proposal.stopDirty)proposal.item.lastStopSyncAt=applyAt;
         }catch(error){if(classifyFailure(error).fatal)throw error;summary.errors.push({positionId:fresh.id,
           reason:String(error.message??error)});items.delete(fresh.id)}
@@ -2671,6 +2687,18 @@ async function manageLeader(db,p,ctx){
   const meta=rec(p.metadata);
   const p142Active=meta.leaderExitPolicyVersion===P142_POLICY_VERSION&&
     rec(meta.cec0040).version===CEC0040_VERSION&&rec(meta.cec0040).enforcementEnabled===true;
+  const hardPolicy={...POLICY,...([EXIT_REVIEW_R5.policyVersion,P142_POLICY_VERSION].includes(meta.leaderExitPolicyVersion)?EXIT_REVIEW_R5:{}),...rec(meta.leaderExitPolicy)};
+  const earlyQuote=await leaderQuote(p,ctx),hardBefore=hardSafetyState(p,{bid:earlyQuote.bid,now:earlyQuote.detectedAtMs,
+    peak:Math.max(Number(p.peak_price),earlyQuote.observedBidPeak??0,earlyQuote.bid),policy:hardPolicy,
+    r5:[EXIT_REVIEW_R5.policyVersion,P142_POLICY_VERSION].includes(meta.leaderExitPolicyVersion),
+    priceTick:N(rec(meta.entryMarketRules).priceTick)});
+  if(hardBefore.hardHit){
+    const result=await closePos(db,{...p,metadata:{...meta,exitTelemetry:{detectedAtMs:earlyQuote.detectedAtMs},exitAuthority:hardBefore}},1,hardBefore.hardReason,ctx);
+    let nativeStop=null;
+    if(result?.closed&&NATIVE_STOP_ENABLED)try{nativeStop=await createGatewayProtection(db,ctx?.cleanupGateway??gateway,()=>verifyExecutionLease(db)).ensure(p.id,{manualSymbols:ctx?.manualSymbols??[]});}catch(e){if(classifyFailure(e).fatal)throw e;}
+    await audit(db,p,"BULL","BULL","FULL_CLOSE",hardBefore.hardReason,{exitClass:EXIT_CLASS.HARD_SAFETY,bid:earlyQuote.bid,hardFloor:hardBefore.hardFloor}).catch(()=>{});
+    return {action:"CLOSE",reason:hardBefore.hardReason,result,nativeStop};
+  }
   let p142State=Object.keys(rec(meta.p142State)).length?rec(meta.p142State):null,p142Error=null;
   // P142 consumes completed candles before the execution quote is requested. This
   // preserves the quote's existing freshness budget and keeps X1's one-second path
@@ -2695,10 +2723,10 @@ async function manageLeader(db,p,ctx){
       }
     }
   }
-  const {bid,ask,detectedAtMs,timing,observedBidPeak,observedBidPeakAt,executableVwapPeak,observationId,bidSize}=await leaderQuote(p,ctx);
+  const {bid,ask,detectedAtMs,timing,observedBidPeak,observedBidPeakAt,executableVwapPeak,observationId,bidSize}=ctx?.fastObservation?earlyQuote:await leaderQuote(p,ctx);
   // Preserve the existing policy. Today's nine trades do not validate a new default.
   // Cost-breakeven and profit-lock protection from the V17 exit review. These raise the
-  // stop only; they can never lower it. Both are evaluated per tick with no confirmation
+  // stop only; they can never lower it. Both generate soft evidence per tick with no confirmation
   // window, so they work on the current one-minute cadence.
   // costBreakeven() throws on a non-finite entry fee or quantity, which would abort this
   // whole evaluation and leave the position unmanaged. Degrade to the baseline stop
@@ -2714,14 +2742,22 @@ async function manageLeader(db,p,ctx){
     carriedPeak=useObservedPeak?observedBidPeak:Number(p.peak_price),
     carriedHighAt=useObservedPeak&&Number.isSafeInteger(observedBidPeakAt)&&observedBidPeakAt>=Date.parse(p.entry_at)?
       observedBidPeakAt:Date.parse(meta.leaderLastHighAt||p.entry_at);
+  const hard=hardSafetyState(p,{bid,now:detectedAtMs,peak:Math.max(carriedPeak,bid),policy,r5,
+    priceTick:N(rec(meta.entryMarketRules).priceTick)});
   const exitInput={entryPrice:Number(p.entry_price),entryAt:Date.parse(p.entry_at),
     entryFee:Number(p.entry_fee_usdt),quantity:Number(p.original_quantity),
-    peakPrice:carriedPeak,stopPrice:Number(p.hard_stop_price),lastHighAt:carriedHighAt,
+    peakPrice:carriedPeak,stopPrice:hard.hardFloor,lastHighAt:carriedHighAt,
     // Tick rounding belongs to the X1 observation arm only. The normal one-minute
     // manager remains behavior-identical when the override is disabled.
     priceTick:ctx?.fastObservation===true?N(rec(meta.entryMarketRules).priceTick):0};
   const state=p142Active?nextExitP142(exitInput,bid,detectedAtMs,policy,p142State):
     nextExitReviewed(exitInput,bid,detectedAtMs,policy);
+  const soft=softCandidate(state,hard,p,bid),legacySoftOrderIds=legacySoftOrders(p,hard);
+  const rawExit={...state};
+  // Software and exchange protection use ONLY the independently monotonic loss floor.
+  state.stopPrice=hard.hardFloor;state.softStopPrice=soft.level;state.exitClass=hard.hardHit?EXIT_CLASS.HARD_SAFETY:EXIT_CLASS.SOFT_PROTECTION;
+  state.action=hard.hardHit?"CLOSE":"HOLD";state.reason=hard.hardHit?hard.hardReason:null;
+  const aiExitContext=exitContext(p,hard,soft,bid,detectedAtMs);
   const telemetry={detectedAtMs,quoteRequestedAtMs:timing.requested_at_ms,
     quoteReceivedAtMs:timing.received_at_ms,exchangeBookAtMs:timing.book_captured_at_ms??null,
     source:timing.source??null,observationId:observationId??null,bidSize:Number.isFinite(bidSize)?bidSize:null};
@@ -2733,16 +2769,16 @@ async function manageLeader(db,p,ctx){
     quoteAgeMs:detectedAtMs-timing.received_at_ms,source:timing.source??"P10_TOP_OF_BOOK_BATCH",
     fullQuantityExecutable:true,protectedQuantity:Number(p.remaining_quantity),
     lastStopSyncAt:stopImproved?new Date(detectedAtMs).toISOString():priorX1.lastStopSyncAt??null}:priorX1;
-  const nextMeta={...meta,leaderLastHighAt:new Date(state.lastHighAt).toISOString(),
+  const nextMeta={...meta,exitAuthority:{...hard,softLevel:soft.level,softReason:soft.reason,legacySoftOrderIds},strategicExitCandidate:null,leaderLastHighAt:new Date(state.lastHighAt).toISOString(),
     leaderTrailArmed:state.armed,exitTelemetry:telemetry,
     ...(p142Active&&p142State?{p142State}:{}),
     ...(p142Active&&ctx?.fastObservation!==true?{p142Observation:{policyVersion:P142_POLICY_VERSION,
       lastAttemptAt:new Date(detectedAtMs).toISOString(),error:p142Error}}:{}),
     ...(ctx?.fastObservation?{x1Observation}: {})};
-  const details={strategy:STRATEGY,bid,...state,...telemetry,
+  const details={strategy:STRATEGY,bid,...state,...telemetry,exitAuthority:aiExitContext,rawExit,
     exitObservationPolicyVersion:ctx?.fastObservation?X1_POLICY_VERSION:meta.exitObservationPolicyVersion??null,
     executableVwapPeak:ctx?.fastObservation?x1Observation.executableVwapPeak:null,operatorOverride:ctx?.fastObservation?OPERATOR_OVERRIDE:null};
-  // Keep an exchange-resident STOP_MARKET aligned with the software stop. The software
+  // Keep an exchange-resident STOP_MARKET aligned only with the HARD loss floor. The software
   // monitor is unchanged and remains the primary path: this only removes the window
   // between two one-minute polls, which is where the measured loss beyond the stop
   // comes from. Every failure is swallowed — protection is best-effort and must never
@@ -2759,7 +2795,7 @@ async function manageLeader(db,p,ctx){
       const cleanup=reason==="CLOSE"?(ctx?.cleanupGateway??gateway):gateway;
       const info=reason==="CLOSE"?{price_tick:1,quantity_step:1}:await cleanup({action:"symbol_info",market:p.symbol},5000);
       const out=await createGatewayProtection(db,cleanup,()=>verifyExecutionLease(db))
-        .ensure(p.id,{stopPrice:state.stopPrice,priceTick:N(info?.price_tick??info?.tick_size),
+        .ensure(p.id,{exitClass:EXIT_CLASS.HARD_SAFETY,authorityVersion:EXIT_AUTHORITY_VERSION,legacySoftOrderIds,stopPrice:hard.hardFloor,priceTick:N(info?.price_tick??info?.tick_size),
           quantityStep:N(info?.quantity_step??info?.step_size),exchangeQuantity:exchangeQuantity??0,
           positionMode:"ONE_WAY",manualSymbols:ctx?.manualSymbols??[],lastPrice:bid});
       const ackAt=Math.max(0,...(out.state?.protection?.orders??[]).filter(o=>!o.terminal).map(o=>Number(o.lastQueryAt??o.ackAt??0)));
@@ -2788,24 +2824,27 @@ async function manageLeader(db,p,ctx){
       retired=await syncNativeStop(result?.closed===true?"CLOSE":"HOLD",residual);
     return {action:"CLOSE",reason:fillGuard.reason,result,nativeStop:retired,fillGuard};
   }
-  // FD1 (GPT final decision): only a TIME-based close candidate or a HOLD tick is ever
-  // offered to GPT. Every stop-based CLOSE above is executed untouched and never waits.
-  if([FD1_HOLD_POLICY_VERSION,'FD1_HOLD_REVIEW_1'].includes(meta.fd1HoldPolicyVersion)){
+  // Mandatory canonical arbitration for every strategic candidate. Never wait for a
+  // provider here: fd1HoldTick claims/consumes durable background work. Native hard
+  // protection and the next fast observation remain independent of provider latency.
+  if(!hard.hardHit){
     nextMeta.fd1HoldPolicyVersion=FD1_HOLD_POLICY_VERSION;
-    const timeCandidate=state.action==="CLOSE"&&FD1_TIME_REASONS.includes(state.reason)&&bid>state.stopPrice?state.reason:null;
-    if(state.action!=="CLOSE"||timeCandidate){
-      const fd1=await fd1HoldTick(db,p,{meta,state,bid,now:detectedAtMs,timeCandidate});
-      nextMeta.fd1Hold=fd1.state;details.fd1={reason:fd1.reason??null,close:fd1.close===true,fallback:fd1.fallback===true,
-        timeCandidate,last:fd1.state?.last??null,pending:fd1.state?.pending?.event??null};
-      if(timeCandidate&&!fd1.close){state.action="HOLD";state.reason=null;}
-      else if(fd1.close&&fd1.reason==="FD1_GPT_EXIT"){state.action="CLOSE";state.reason="FD1_GPT_EXIT";}
-      details.action=state.action;details.reason=state.reason;
+    const timeCandidate=FD1_TIME_REASONS.includes(rawExit.reason)?rawExit.reason:null;
+    const fd1=await fd1HoldTick(db,p,{meta:nextMeta,state,bid,now:detectedAtMs,timeCandidate,
+      softTrigger:soft,exitContext:aiExitContext});
+    nextMeta.fd1Hold=fd1.state;
+    details.fd1={reason:fd1.reason??null,close:fd1.close===true,timeCandidate,last:fd1.state?.last??null,pending:fd1.state?.pending?.event??null};
+    if(fd1.close&&fd1.reason==="FD1_GPT_EXIT"){
+      assertExitAuthority(fd1.reason,p,fd1.approval,Date.now());
+      state.action="CLOSE";state.reason=fd1.reason;state.exitClass=EXIT_CLASS.AI_STRATEGIC;ctx={...ctx,finalApproval:fd1.approval};
     }
+    details.action=state.action;details.reason=state.reason;
   }
   if(state.action==="CLOSE"){
     // No peak update or audit round trip may delay an already detected stop.
     const result=await closePos(db,{...p,peak_price:state.peakPrice,
       hard_stop_price:state.stopPrice,metadata:nextMeta},1,state.reason,ctx);
+    if(result.strategyDeferred)return {action:"HOLD",reason:result.reason,position:result.position,stopPrice:hard.hardFloor,softStopPrice:soft.level};
     const closeReason=result.nativeReconciled?"V17_NATIVE_STOP":state.reason;
     await audit(db,p,"BULL","BULL","FULL_CLOSE",closeReason,details)
       .catch(e=>console.error("V17_EXIT_AUDIT_FAILED",String(e)));
@@ -2822,9 +2861,9 @@ async function manageLeader(db,p,ctx){
   if(write.error||!write.data)throw new Error("V17_EXIT_STATE_WRITE");
   // Only after the ratcheted stop is durable: the exchange order must never protect a
   // level the database does not already hold.
-  const nativeStop=ctx?.fastObservation&&!stopImproved?{status:"UNCHANGED",softwareMonitorRequired:false}:
+  const nativeStop=ctx?.fastObservation&&!stopImproved&&meta.exitAuthority?.version===EXIT_AUTHORITY_VERSION&&!legacySoftOrderIds.some(id=>(meta.exitProtection?.orders??[]).some(o=>o.clientId===id&&!o.terminal))?{status:"UNCHANGED",softwareMonitorRequired:false}:
     await syncNativeStop("HOLD");
-  // Existing stop/deadline decisions and resident protection run first. QV3 failures
+  // Existing HARD decisions and resident protection run first. QV3 failures
   // leave that protection intact; only an exact post-cutover stamp enters QV3 scope.
   const qv3=ctx?.evaluateQv3===false?null:await qv3AfterProtection(db,write.data,{...rec(ctx),bid});
   if(qv3?.result){
@@ -2900,11 +2939,11 @@ async function qv3AfterProtection(db,p,ctx){
     const auditedAssessment={...assessment,inputEvidence:qv3AuditEvidence(bars,evaluatedAt,assessment.through,at)};
     if(!assessment.available)return auditedAssessment;
     await verifyExecutionLease(db);
-    const saved=await db.from("v11_long_regime_positions").update({metadata:{...rec(p.metadata),qv3State:assessment.state},
+    const saved=await db.from("v11_long_regime_positions").update({metadata:{...rec(p.metadata),qv3State:assessment.state,...(assessment.wouldClose?{strategicExitCandidate:{reason:"QV3_TWO_BEARISH_CLOSED",generation:positionGeneration(p),at:evaluatedAt}}:{})},
       updated_at:new Date(Math.max(Date.now(),Date.parse(p.updated_at)+1)).toISOString()})
       .eq("id",p.id).eq("state","OPEN").eq("updated_at",p.updated_at).select("*").maybeSingle();
     if(saved.error||!saved.data)throw Error("QV3_STATE_CAS_CONFLICT");
-    if(assessment.wouldClose){closeAttempted=true;return {assessment:auditedAssessment,result:await closePos(db,saved.data,1,"QV3_TWO_BEARISH_CLOSED",ctx)};}
+    if(assessment.wouldClose)return {assessment:auditedAssessment,softTrigger:true,executionEnabled:false};
     return auditedAssessment;
   }catch(e){
     if(closeAttempted||classifyFailure(e).fatal)throw e;
