@@ -1,6 +1,8 @@
 # AI EXIT AUTHORITY v2 — release audit
 
-Status: code and local regressions verified; production rollout evidence will be appended after deployment.
+Status: AI EXIT AUTHORITY v2: PRODUCTION DEPLOYED. PRODUCTION FUNCTIONAL, PROFITABILITY UNKNOWN.
+
+Implementation commit: ee80b882f70dbce9ae16b5cac48e7f37acb2e531, PR #190. Machine-readable verification: deployment-evidence/exit-authority-v2-release.json.
 
 ## A. Baseline frozen at 2026-09-26 14:09 UTC
 - main: 69f60c7e55c2ede99cc24abe8f2ef6139d66e327 (PR #189).
@@ -54,7 +56,7 @@ Fixtures include source position IDs, actual exchange one-minute bars and retrie
 These are authority and safety regressions. Scripted counterfactual model decisions do not demonstrate profitability or predict what a future model will decide.
 
 ## H. Tests
-Local: 511 complete regression tests passed, followed by 29 affected capture/arbitration tests including boundary recovery and flow causality; Deno check passed. Full CI now includes 513 tests. CI runs the complete suite on the release tree.
+Local: 511 complete regression tests passed, followed by 29 affected capture/arbitration tests including boundary recovery and flow causality; Deno check passed. Release CI run 36250295073 completed: 513 tests, 513 PASS, 0 FAIL, 0 skipped. Entry evidence, sizing/BOO, workflow lint and stop-parity checks also passed. T01–T28 and INV-EXIT-01–10 PASS.
 
 | Required tests | Validation |
 | --- | --- |
@@ -72,8 +74,21 @@ Local: 511 complete regression tests passed, followed by 29 affected capture/arb
 
 INV-EXIT-01–10 are asserted in the authority, arbitration and existing durable order/native receipt suites. T02 tests the existing close safety interface, not a new liquidation predictor. Corrupt/unproven quantity enters reconciliation safety rather than placing an unowned close.
 
-## I–J. Deployment and production smoke
-Pending exact commit/version/hash, collector image and repeated production smoke evidence. No completion claim until these are verified.
+## I. Deployment
+- Executor v101 ACTIVE, deployed 2026-09-26T15:00:28.419Z.
+- Bundle SHA-256: c26a627220609477e6cdf9c0aeba14a14bd3cd85dd282e02c087c6c89e172642. All 63 downloaded source files exactly matched the validated release source.
+- Signal generator remains v29 with the baseline hash. Sizing remains 150 USDT target margin, 3x leverage, MAX_SLOTS 10 and dynamic admission.
+- Applied migrations: 20260926144820_exit_authority_120s_context and 20260926145639_exit_capture_flow_causality. The prior continuous-capture migration and v2 RPC remain present.
+- Existing Fly machine 185030da006d48 updated in place; resources and secret references preserved. Image registry.fly.io/sanbital-doa-capture-20260925:ee80b882f70dbce9ae16b5cac48e7f37acb2e531, digest sha256:754abe9dc780d588ad797c9200ff638e048a83bd50af74367a30a071fedee8fa. Release workflow 36250293205 succeeded at 15:05:05Z.
+- No OPEN positions immediately before deployment; no forced close or test trade. Existing hard protection was not removed.
+
+## J. Production smoke
+- Independent samples at 15:05, 15:06 and 15:09 UTC confirmed QUSDT, SPELLUSDT and JELLYJELLYUSDT AVAILABLE with 24 ordered points. At 15:09, 19/20 watched symbols were AVAILABLE, including all 10 scanner leaders; BTC retained the documented incomplete-depth rejection.
+- Coverage was 120083 ms (ordinary scheduler jitter), newest point age 7382 ms. SQL and client validation passed contiguous 5-second labels, event/book/flow receipt causality and freshness. Per-symbol SHA-256 hashes are recorded in the release evidence.
+- Worker DOA-CAPTURE-4-COVERAGE-RECOVERY: 20 watched, 20 synced, REST failures 0. capture_enabled, production_enabled and gpt_context_enabled all true. Latest live_micro: 15:08:55Z, heartbeat 15:08:58Z.
+- Actual order-free production JELLY probe: GPT FIRST PROTECT, DeepSeek PROTECT, GPT FINAL PROTECT. Q probe: GPT FIRST HOLD, DeepSeek PROTECT, GPT FINAL PROTECT. Each used three real API calls, identical first snapshot hashes and successful latest refresh, with AVAILABLE 24-point context in both initial and final inputs. DRYRUN journals cannot authorize production orders; orderCalls=0 in both probes.
+- Models: gpt-5.4-mini-2026-03-17 and deepseek-flash. Both advice and final evidence validation succeeded. These probes demonstrate the real arbitration path, not live position execution.
+- Last checked OPEN positions: 0. Runtime live_enabled=true, circuit_open=false, last_error=null, protection_health=FLAT. OPEN-priority-0 and position-generation isolation are verified by deployed SQL and regression; no post-deployment OPEN lifecycle existed to observe them live.
 
 ## K. Remaining unknown
 Actual forward PnL, production HOLD→EXIT outcomes, tail impact and winner capture need new live lifecycle samples. Hard maximum-loss floors are unchanged; soft profit retention changes necessarily require forward research.

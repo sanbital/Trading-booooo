@@ -1,0 +1,508 @@
+{
+  "status": "PRODUCTION FUNCTIONAL, PROFITABILITY UNKNOWN",
+  "implementation_commit": "ee80b882f70dbce9ae16b5cac48e7f37acb2e531",
+  "pr": 190,
+  "baseline": {
+    "main": "69f60c7e55c2ede99cc24abe8f2ef6139d66e327",
+    "executor": 100,
+    "sha256": "2240e56d1479f1b0af8f9da47fe7120766b073d8cd3e5b2db0fb866823292d87"
+  },
+  "deployment": {
+    "executor_version": 101,
+    "sha256": "c26a627220609477e6cdf9c0aeba14a14bd3cd85dd282e02c087c6c89e172642",
+    "deployed_at": "2026-09-26T15:00:28.419Z",
+    "source_files_verified": 63,
+    "signal_generator_version": 29,
+    "signal_generator_sha256": "7663e99429e532cb06fe2c161e74272dbb8568ee08f41c90e4c48a0a60fd1d1d",
+    "migrations": [
+      "20260926144820_exit_authority_120s_context",
+      "20260926145639_exit_capture_flow_causality"
+    ]
+  },
+  "collector": {
+    "machine_id": "185030da006d48",
+    "same_existing_machine": true,
+    "image": "registry.fly.io/sanbital-doa-capture-20260925:ee80b882f70dbce9ae16b5cac48e7f37acb2e531",
+    "image_digest": "sha256:754abe9dc780d588ad797c9200ff638e048a83bd50af74367a30a071fedee8fa",
+    "workflow_run": 36250293205,
+    "conclusion": "success",
+    "validated_at": "2026-09-26T15:05:02.881Z"
+  },
+  "ci": {
+    "run": 36250295073,
+    "tests": 513,
+    "pass": 513,
+    "fail": 0,
+    "skipped": 0,
+    "deno_check": "PASS",
+    "required_tests": "T01–T28 PASS",
+    "invariants": "INV-EXIT-01–10 PASS"
+  },
+  "production": {
+    "open": [],
+    "capture": {
+      "synced": "20",
+      "worker": "DOA-CAPTURE-4-COVERAGE-RECOVERY",
+      "enabled": true,
+      "watched": "20",
+      "heartbeat_at": "2026-09-26T15:08:58.021824+00:00",
+      "rest_failures": "0",
+      "production_enabled": true,
+      "gpt_context_enabled": true
+    },
+    "runtime": {
+      "last_error": null,
+      "circuit_open": false,
+      "live_enabled": true,
+      "protection_health": "FLAT",
+      "last_cycle_completed_at": "2026-09-26T15:08:07.679+00:00"
+    },
+    "coverage": [
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "RAREUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "2607b96c4b3e8b6b87954a3a49abd6f6365fb4cd4cf427b8f45e792807953987"
+      },
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "MUBARAKUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "5311fcd9ab32b4063f97699a0a39f331d47b6847060c7ceaca8043d3799ed217"
+      },
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "TNSRUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "f79128842e5e0e4b18cd2bda446cf9fdd5199635b051fbd39cb46adcd6d0dd8d"
+      },
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "JELLYJELLYUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "0f3fe44a720a6d31d4908918435f8dd34215b55a33f4f1b623b9a0b3f8118585"
+      },
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "SPELLUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "4f8034b4982edb73beaba4991e783b337f3e3ef512e0941f1f1ca56cf8cd6b84"
+      },
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "VELODROMEUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "3a528c8cf3552f387fd059ecaa6d50dbfe4610437bd5c3e9b6cafa874afa248a"
+      },
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "HUMAUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "2c54f6d433aef2e9214eddcb13af27d4178844f4e5d3e8e1aac2fa43d8fdf3c6"
+      },
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "LYNUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "fbcdb9107c6edbf7a971ea1cbb5224bb85bf49b65a03b99012bf3742d49272ed"
+      },
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "MAGMAUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "5aca933e79cd288338008ca01490b059a27fc7d25b9c0af1a824a13bd6e5edf4"
+      },
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "PROMUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "ebc7eb6eadfbaf1803625fde54f82a0ef1709e28406c7989bf551dcda5ee6866"
+      },
+      {
+        "age_ms": null,
+        "points": null,
+        "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+        "status": "UNAVAILABLE",
+        "symbol": "BTCUSDT",
+        "buckets": null,
+        "window_ms": null,
+        "received_causal": null,
+        "trajectory_sha256": null
+      },
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "QNTUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "2a85c18f18fb0a81efe61b9eb659ae2e69e67ddc209c420e3d29f4128d8f730e"
+      },
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "ACEUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "c93483c48af40e70798e067df40d68f7c0be1c63d8e5124d9fc584daa3a7aab9"
+      },
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "BEATUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "371c3bd4122d09b778aa24cdcd6a7b8d85e4e87cd4ef5240c487db554bed072a"
+      },
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "RUNEUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "956270bc862e274e185c184fbf78b67c5b163023345c77f6e4c5ab0c85341b40"
+      },
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "ARKUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "452efb0fc400c5048062f5bea6b47c63dc28983472cc4716bf3b74b77fba8493"
+      },
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "PHAUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "d4e32ba75785edc6f2621d716a8509dd4bf0d87b3d190432a2f432f958e0cedf"
+      },
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "QUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "56bb572cf21e9fe42c88605350624f16937e7555affb6259768022d3f4f5674b"
+      },
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "USUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "9b46534fe410635552792937854cc2241daed4cc45dded7b55e4345eb1b09f07"
+      },
+      {
+        "age_ms": 7382,
+        "points": 24,
+        "reason": null,
+        "status": "AVAILABLE",
+        "symbol": "2ZUSDT",
+        "buckets": 24,
+        "window_ms": 120083,
+        "received_causal": true,
+        "trajectory_sha256": "fd8c16804476ef193c45aa10cb7bff0c0ec0f71a299acb94a42617a5717684d7"
+      }
+    ],
+    "settings": {
+      "mode": "LIVE_LIMITED",
+      "pause": false,
+      "margin": 150,
+      "emergency": false
+    },
+    "checked_at": "2026-09-26T15:09:02.560118+00:00",
+    "scanner_leaders": [
+      {
+        "atr": 0.0009650000000000004,
+        "qv24": 346267462.25055,
+        "rank": 1,
+        "symbol": "RAREUSDT",
+        "dayStart": 1790348400000,
+        "dayReturn": 0.6104360257326662,
+        "return15m": -0.0017722640673459855,
+        "return30m": -0.025519031141868487,
+        "return60m": -0.04412388629613917,
+        "volumeRatio": 0.7833375302778207,
+        "signal15Close": 1790434800000,
+        "reference15Close": 0.02253
+      },
+      {
+        "atr": 0.001994214285714284,
+        "qv24": 82565964.496949,
+        "rank": 2,
+        "symbol": "QUSDT",
+        "dayStart": 1790348400000,
+        "dayReturn": 0.5491012974645877,
+        "return15m": 0.017354596622889407,
+        "return30m": 0.017116060961313018,
+        "return60m": 0.09284814555633303,
+        "volumeRatio": 1.1206206400038072,
+        "signal15Close": 1790434800000,
+        "reference15Close": 0.039042
+      },
+      {
+        "atr": 0.0016514285714285715,
+        "qv24": 109694487.64474,
+        "rank": 3,
+        "symbol": "2ZUSDT",
+        "dayStart": 1790348400000,
+        "dayReturn": 0.2830655129789865,
+        "return15m": -0.00859598853868182,
+        "return30m": -0.010351402887496586,
+        "return60m": -0.00506641106394623,
+        "volumeRatio": 0.7521268305894632,
+        "signal15Close": 1790434800000,
+        "reference15Close": 0.07266
+      },
+      {
+        "atr": 0.0000041857142857142856,
+        "qv24": 24666395.823222097,
+        "rank": 4,
+        "symbol": "SPELLUSDT",
+        "dayStart": 1790348400000,
+        "dayReturn": 0.22645502645502624,
+        "return15m": -0.011935208866155178,
+        "return30m": 0.021145374449339283,
+        "return60m": 0.005203816131829964,
+        "volumeRatio": 2.295401241537503,
+        "signal15Close": 1790434800000,
+        "reference15Close": 0.0001159
+      },
+      {
+        "atr": 0.007364285714285708,
+        "qv24": 155323888.3028,
+        "rank": 5,
+        "symbol": "ARKUSDT",
+        "dayStart": 1790348400000,
+        "dayReturn": 0.2117437722419928,
+        "return15m": -0.0018321729571271206,
+        "return30m": 0.004424778761061843,
+        "return60m": 0.002207505518763808,
+        "volumeRatio": 0.4819040203341874,
+        "signal15Close": 1790434800000,
+        "reference15Close": 0.2724
+      },
+      {
+        "atr": 0.0006425714285714281,
+        "qv24": 20115492.103332005,
+        "rank": 6,
+        "symbol": "USUSDT",
+        "dayStart": 1790348400000,
+        "dayReturn": 0.2105139307228916,
+        "return15m": -0.0025981076469674402,
+        "return30m": 0.005787353849763477,
+        "return60m": 0.04471974004874091,
+        "volumeRatio": 3.7903117680782126,
+        "signal15Close": 1790434800000,
+        "reference15Close": 0.025721
+      },
+      {
+        "atr": 0.0023642857142857116,
+        "qv24": 17294119.197000004,
+        "rank": 7,
+        "symbol": "BEATUSDT",
+        "dayStart": 1790348400000,
+        "dayReturn": 0.20087336244541487,
+        "return15m": -0.01610017889087656,
+        "return30m": -0.012567324955116699,
+        "return60m": 0.03969754253308122,
+        "volumeRatio": 3.0279367128160954,
+        "signal15Close": 1790434800000,
+        "reference15Close": 0.11
+      },
+      {
+        "atr": 0.002059999999999999,
+        "qv24": 216183955.28676,
+        "rank": 8,
+        "symbol": "MUBARAKUSDT",
+        "dayStart": 1790348400000,
+        "dayReturn": 0.17983651226158037,
+        "return15m": -0.0003298153034300144,
+        "return30m": -0.0013179571663920475,
+        "return60m": 0.017114093959731624,
+        "volumeRatio": 0.448564063387569,
+        "signal15Close": 1790434800000,
+        "reference15Close": 0.06062
+      },
+      {
+        "atr": 0.005105714285714283,
+        "qv24": 34040603.429359995,
+        "rank": 9,
+        "symbol": "ACEUSDT",
+        "dayStart": 1790348400000,
+        "dayReturn": 0.17908517023698645,
+        "return15m": 0.03150604318500738,
+        "return30m": 0.07283427495291894,
+        "return60m": 0.07475709838694455,
+        "volumeRatio": 2.1344755839871907,
+        "signal15Close": 1790434800000,
+        "reference15Close": 0.22787
+      },
+      {
+        "atr": 1.5942857142857148,
+        "qv24": 90301011.79500003,
+        "rank": 10,
+        "symbol": "QNTUSDT",
+        "dayStart": 1790348400000,
+        "dayReturn": 0.1644224700189354,
+        "return15m": 0.021408138783796105,
+        "return30m": 0.03856258209795449,
+        "return60m": 0.04483670001887852,
+        "volumeRatio": 3.5105760966141797,
+        "signal15Close": 1790434800000,
+        "reference15Close": 110.69
+      }
+    ],
+    "latest_live_micro": "2026-09-26T15:08:55+00:00"
+  },
+  "probes": [
+    {
+      "symbol": "JELLYJELLYUSDT",
+      "fixture": true,
+      "purpose": "DRYRUN",
+      "order_calls": 0,
+      "ok": true,
+      "job_key": "80cfd3cc3bba820d76a450935ebad620437ce25cfb24ef3d6fa0fbbd550805fc",
+      "identical_first_packet": true,
+      "gpt_model": "gpt-5.4-mini-2026-03-17",
+      "deepseek_model": "deepseek-flash",
+      "gpt_first": "PROTECT",
+      "deepseek_preference": "PROTECT",
+      "deepseek_valid": true,
+      "final": "PROTECT",
+      "valid": true,
+      "error": null,
+      "refresh_error": null,
+      "initial_snapshot_hash": "b6758fe10ce587f56f723ac2bf8f7aa97e8aad0031f6fc5389335687bc18a660",
+      "final_snapshot_hash": "07cf6102250b22cfd3abe02becb30aa335ece1664fb6cfc0522717920ad31e21",
+      "initial_capture": {
+        "status": "AVAILABLE",
+        "points": 24,
+        "trajectory_hash": "aa1c2d1ad1d4ea5b464d93d1735cc321f8aa61d818667c23dca94cb6740d9739",
+        "age_ms": 6886
+      },
+      "final_capture": {
+        "status": "AVAILABLE",
+        "points": 24,
+        "trajectory_hash": "02b69ba1a9a06f69e403b7b274b4c22cb982ceabf4e39f02e27713a0909ef12d",
+        "age_ms": 5389
+      },
+      "api_calls": 3,
+      "completed_at_ms": 1790435238302
+    },
+    {
+      "symbol": "QUSDT",
+      "fixture": true,
+      "purpose": "DRYRUN",
+      "order_calls": 0,
+      "ok": true,
+      "job_key": "c5527a8f3a01384a63ff37d922a44aea90275113c1fdf76283016b7694153599",
+      "identical_first_packet": true,
+      "gpt_model": "gpt-5.4-mini-2026-03-17",
+      "deepseek_model": "deepseek-flash",
+      "gpt_first": "HOLD",
+      "deepseek_preference": "PROTECT",
+      "deepseek_valid": true,
+      "final": "PROTECT",
+      "valid": true,
+      "error": null,
+      "refresh_error": null,
+      "initial_snapshot_hash": "0569cd51619cc9b5f57f425e753a01850fc0021ee7c38f3aa1c77eb3ce0bebca",
+      "final_snapshot_hash": "64b3a70a7cedb84f5d3aa348726c90392754a413d11a2baec1ba0642d3a0e894",
+      "initial_capture": {
+        "status": "AVAILABLE",
+        "points": 24,
+        "trajectory_hash": "b70680b6cd538e8d837e662f707cf0e4ab94f8f3280b7a313e53f22485f87e51",
+        "age_ms": 4606
+      },
+      "final_capture": {
+        "status": "AVAILABLE",
+        "points": 24,
+        "trajectory_hash": "b70680b6cd538e8d837e662f707cf0e4ab94f8f3280b7a313e53f22485f87e51",
+        "age_ms": 7572
+      },
+      "api_calls": 3,
+      "completed_at_ms": 1790435321006
+    }
+  ],
+  "limitations": [
+    "No forward production HOLD-to-EXIT lifecycle has occurred since deployment.",
+    "Historical counterfactual decisions are scripted authority/safety regressions, not profit evidence.",
+    "BTCUSDT full-depth trajectory is unavailable because its current finite 1000-level snapshot does not cover 25 bp; no synthetic data or validation relaxation."
+  ]
+}
