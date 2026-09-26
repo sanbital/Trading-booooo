@@ -6,7 +6,7 @@
  * function builds production packets (live reads) and historical replay packets
  * (Binance history endpoints), so the two cannot drift apart. The order book has no
  * history: in replay those facts are null with reason NOT_POINT_IN_TIME_REPLAY. */
-export const FACTS_VERSION='FD1_FACTS_1';
+export const FACTS_VERSION='FD1_FACTS_2';
 const MIN=60000;
 export const SLOT_ORDER_NOTIONAL_USDT=600; // 200 USDT x 3 (reference only; sizing is unchanged)
 const finite=x=>x!==null&&x!==undefined&&x!==''&&Number.isFinite(Number(x));
@@ -68,11 +68,21 @@ export const FACT_DEFS=Object.freeze({
   position_drawdown_from_peak:['position','fraction','current price / peak since entry - 1'],
   position_minutes_held:['position','minutes','minutes since entry fill'],
   position_minutes_since_new_high:['position','minutes','minutes since the position last made a new high'],
-  position_stop_distance:['position','fraction','current price / protective stop - 1 (distance to the hard/lock stop)']
+  position_stop_distance:['position','fraction','current price / protective stop - 1 (distance to the hard/lock stop)'],
+  // same-symbol trade memory (ENTRY only; the most recent V17 trade of this symbol closed before the snapshot, within 24h)
+  prev_trade_minutes_since_exit:['history','minutes','minutes since the previous same-symbol position closed'],
+  prev_trade_return:['history','fraction','previous same-symbol position exit price / entry price - 1'],
+  prev_trade_mfe:['history','fraction','previous same-symbol position peak / entry price - 1 (its best unrealized gain)'],
+  price_vs_prev_peak:['history','fraction','close / highest price reached during the previous same-symbol position - 1 (>0 = above that peak)'],
+  price_vs_prev_exit:['history','fraction','close / previous same-symbol exit price - 1'],
+  new_high_since_prev_exit:['history','flag','1 if a completed 1m high after the previous exit exceeded that position\'s peak, else 0'],
+  symbol_entries_24h:['history','count','same-symbol V17 entries in the 24h before the snapshot']
 });
 export const FACT_KEYS=Object.freeze(Object.keys(FACT_DEFS));
 export const MICRO_KEYS=Object.freeze(FACT_KEYS.filter(k=>FACT_DEFS[k][0]==='micro'));
 export const POSITION_KEYS=Object.freeze(FACT_KEYS.filter(k=>FACT_DEFS[k][0]==='position'));
+/** ENTRY-only trade memory: never part of HOLD or FINAL RECHECK packets, prompts or schemas. */
+export const HISTORY_KEYS=Object.freeze(FACT_KEYS.filter(k=>FACT_DEFS[k][0]==='history'));
 
 /** Binance kline arrays -> completed bars strictly before `cutoff`, contiguous. */
 export function bars(raw,interval,cutoff){
@@ -103,6 +113,23 @@ export function bookFacts(book){
   return {spread_bps:(ask-bid)/mid*1e4,ask_depth_25bps_usdt:a25,bid_depth_25bps_usdt:b25,
     book_imbalance_25bps:a25+b25>0?(b25-a25)/(a25+b25):null,ask_depth_to_order:a25/O,bid_depth_to_order:b25/O,
     max_ask_wall_to_order:aw/O,max_bid_wall_to_order:bw/O,est_buy_slippage_bps:left>1e-9?null:((cost/qty)/mid-1)*1e4};
+}
+
+/** Same-symbol trade memory from closed trades [{entry_at_ms,exit_at_ms,entry_price,exit_price,peak_price}].
+ * Only trades closed strictly before asOf and entered within 24h count; the latest is "previous".
+ * The previous peak is the higher of the stored peak and any completed 1m high inside the trade. */
+export function tradeMemory(history,{asOf,bars=[],last=null}){
+  if(!Array.isArray(history))return {values:null,reason:'NOT_AN_ENTRY_REVIEW'};
+  const xs=history.map(t=>({in:num(t?.entry_at_ms),out:num(t?.exit_at_ms),ep:num(t?.entry_price),xp:num(t?.exit_price),pk:num(t?.peak_price)}))
+    .filter(t=>t.in!==null&&t.out!==null&&t.ep>0&&t.xp>0&&t.out<asOf&&t.in>=asOf-24*3600000&&t.in<=t.out).sort((a,b)=>a.out-b.out);
+  if(!xs.length)return {values:{symbol_entries_24h:0},reason:'NO_PRIOR_TRADE_24H'};
+  const p=xs.at(-1),inside=bars.filter(b=>b.t>=Math.floor(p.in/MIN)*MIN&&b.end<=p.out),after=bars.filter(b=>b.t>=Math.ceil(p.out/MIN)*MIN);
+  const peak=Math.max(p.pk>0?p.pk:p.ep,p.ep,...inside.map(b=>b.h)),close=last?.c??null;
+  // Unknown (null) when the completed 1m window does not reach back to the exit.
+  const covered=bars.length>0&&bars[0].t<=p.out;
+  return {values:{prev_trade_minutes_since_exit:(asOf-p.out)/MIN,prev_trade_return:p.xp/p.ep-1,prev_trade_mfe:peak/p.ep-1,
+    price_vs_prev_peak:close?close/peak-1:null,price_vs_prev_exit:close?close/p.xp-1:null,
+    new_high_since_prev_exit:covered?(after.some(b=>b.h>peak)?1:0):null,symbol_entries_24h:xs.length},reason:'INSUFFICIENT_DATA'};
 }
 
 /**
@@ -165,6 +192,8 @@ export function computeFacts(src,ctx){
     put('position_minutes_since_new_high',num(p.lastHighAt)!==null?(asOf-Number(p.lastHighAt))/MIN:null);
     put('position_stop_distance',price!==null&&stop>0?price/stop-1:null);
   }else for(const k of POSITION_KEYS)put(k,null,'NOT_A_POSITION_REVIEW');
+  const h=tradeMemory(ctx.history,{asOf,bars:o,last});
+  for(const k of HISTORY_KEYS)put(k,h.values?.[k]??null,h.reason);
   return {version:FACTS_VERSION,values:v,missing:why,...(src.captureContext?{capture_context:src.captureContext}:{}),quality:{candles_complete:candlesComplete,
     micro_complete:MICRO_KEYS.every(k=>v[k]!==null),derivatives_complete:['funding_rate','premium_index','oi_change_5m'].every(k=>v[k]!==null),
     last_close:last?.c??null,last_close_at_ms:last?.end??null}};
@@ -181,7 +210,12 @@ export function modelJudgments(features){
       factors:Object.fromEntries(['absorption','volumeTails','fresh15over30','btcAnyUp','buyerShareRise','fresh5over15','recentHourLead'].map(k=>[k,tri(b.factors?.[k])]))},
     v30:v?{admitted:v.admitted===true,failed:[...(v.failed??[])],negative_evidence:[...(v.negativeEvidence??[])],
       rule:'volumeTails=false is required; fresh5over15=false is negative evidence for GPT, not a veto'}:null,
-    cec0040:{action:c.action??null,effective_allowed:c.effectiveAllowed===true,ready:c.ready===true,prediction_usdt_per_trade:num(c.predictionUsdt),
-      note:'strategy-wide causal edge estimate from recent closed trades (not symbol specific)'}
+    // (2026-09-26) CEC0040 is ONE strategy-wide EWMA of recent closed-trade net, identical for every
+    // candidate; REJECT vs PROBE is its round-robin probe schedule (every 3rd rejected signal
+    // probes), not a judgment of this symbol. Shown as a base rate so it is neither read as a
+    // symbol veto (effective_allowed) nor ignored. Replay 09-20..09-26: REJECT vs PROBE had no
+    // predictive value (7d: REJECT -1.42 vs PROBE -3.02 USDT/trade; corr(prediction, outcome)=-0.005).
+    cec0040:{action:c.action??null,ready:c.ready===true,strategy_base_rate_usdt_per_trade:num(c.predictionUsdt),symbol_specific:false,
+      note:'strategy-wide recent expected net per trade (same value for every candidate). action REJECT/PROBE is only the probe schedule used when it is negative, not a judgment of this symbol'}
   };
 }

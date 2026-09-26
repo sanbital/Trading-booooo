@@ -9,7 +9,8 @@
  *  - HARD bands are deterministic: BUY/HOLD is invalid while one is active. An invalid or
  *    missing answer is ABSTAIN: no entry; for a position the deterministic exit engine rules.
  *  - GPT never sees or controls sizing, leverage, slots, the native stop or order safety. */
-import {FACT_DEFS,FACT_KEYS,MICRO_KEYS,POSITION_KEYS} from './facts.mjs';
+import {FACT_DEFS,FACT_KEYS,MICRO_KEYS,POSITION_KEYS,HISTORY_KEYS} from './facts.mjs';
+import {fatigueAxes,FATIGUE_AXES,FATIGUE_FACTS} from './assessment.mjs';
 export const FD_VERSION='GPT_FINAL_DECISION_FD1';
 export const ENTRY_TASK='ENTRY',HOLD_TASK='HOLD';
 export const DECISIONS=Object.freeze({ENTRY:['BUY','SKIP','ABSTAIN'],HOLD:['HOLD','EXIT','ABSTAIN']});
@@ -64,6 +65,21 @@ export const CATEGORIES=Object.freeze({
   // recheck:false keeps the protected FINAL RECHECK category set unchanged.
   CHASE_EXTENDED:{tasks:['ENTRY'],recheck:false,when:p=>!!p?.chase,facts:['distance_trigger_reference','distance_high_60m','return_5m'],need:['distance_trigger_reference'],
     soft:m=>f(m,'distance_trigger_reference')>CHASE_CEILING,hard:()=>false,text:'distance_trigger_reference>0.01 (above the V17 1% chase ceiling)'},
+  // (2026-09-26) Propulsion fading while the trend still looks strong: two or more of the
+  // independent fatigue axes of assessment.mjs weak at once. SOFT only (a legitimate SKIP
+  // reason GPT may cite, never a block): in replay no axis combination lowered per-trade
+  // expected value by itself, so it must be weighed, not obeyed. Applies to the FINAL
+  // RECHECK too (current facts), where it names propulsion deterioration since the BUY.
+  EXHAUSTION:{tasks:['ENTRY'],facts:FATIGUE_FACTS,need:[],soft:m=>fatigueAxes(m).weak.length>=2,hard:()=>false,
+    text:'2+ fatigue axes weak: '+Object.entries(FATIGUE_AXES).map(([k,a])=>k+'='+a.text).join('; ')},
+  // Same-symbol re-entry within an hour with no new high since the previous exit: the
+  // question is whether a NEW impulse exists, not whether the old one "is still alive".
+  // Only for a packet that carries trade memory; never part of the FINAL RECHECK set.
+  REENTRY_NO_NEW_IMPULSE:{tasks:['ENTRY'],recheck:false,when:p=>has(p?.facts?.values??{},'prev_trade_minutes_since_exit'),
+    facts:['prev_trade_minutes_since_exit','prev_trade_return','prev_trade_mfe','price_vs_prev_peak','new_high_since_prev_exit'],
+    need:['prev_trade_minutes_since_exit','price_vs_prev_peak'],
+    soft:m=>m.prev_trade_minutes_since_exit<=60&&(has(m,'new_high_since_prev_exit')?m.new_high_since_prev_exit===0:m.price_vs_prev_peak<=0),hard:()=>false,
+    text:'prev_trade_minutes_since_exit<=60 AND no new high since that exit (new_high_since_prev_exit=0, or price_vs_prev_peak<=0 when unknown)'},
   DATA_INCOMPLETE:{tasks:['ENTRY','HOLD'],facts:[],need:[],soft:()=>false,hard:()=>false,text:'candles (and, live, the order book) must be complete'}
 });
 export const CATEGORY_IDS=Object.freeze(Object.keys(CATEGORIES));
@@ -77,7 +93,9 @@ const UP=Object.freeze({
   relative_strength_15m:['>',0],relative_strength_60m:['>',0],btc_return_15m:['>=',0],btc_return_60m:['>=',0],
   oi_change_5m:['>',0],oi_change_60m:['>',0],funding_rate:['<',0.0008],
   spread_bps:['<=',10],ask_depth_to_order:['>=',5],bid_depth_to_order:['>=',3],book_imbalance_25bps:['>',0],est_buy_slippage_bps:['<',8],
-  position_return:['>',0],position_drawdown_from_peak:['>',-0.01],position_minutes_since_new_high:['<=',15]
+  position_return:['>',0],position_drawdown_from_peak:['>',-0.01],position_minutes_since_new_high:['<=',15],
+  // ENTRY trade memory: a fresh breakout above the previous same-symbol peak is support.
+  price_vs_prev_peak:['>',0],new_high_since_prev_exit:['>=',1]
 });
 const OPS={'>':(v,t)=>v>t,'>=':(v,t)=>v>=t,'<':(v,t)=>v<t,'<=':(v,t)=>v<=t};
 /** Facts that may be cited as SUPPORT, with the direction that means "uptrend alive". */
@@ -138,7 +156,7 @@ export function wireSchema(task,packet=null){
   const evSkip=entry&&(!m||(bear.length>=2&&bear.some(k=>TREND_SUPPORT.includes(k))));
   const reasonIds=[...cats,...(evSkip?[EV_SKIP]:[])];
   const catFacts=[...new Set([...cats.flatMap(k=>CATEGORIES[k].facts),...(evSkip?bear:[])])].filter(k=>!m||has(m,k));
-  const up=Object.keys(SUPPORT_UP).filter(k=>(task==='HOLD'||!POSITION_KEYS.includes(k))&&(!m||(has(m,k)&&SUPPORT_UP[k](m[k])===true)));
+  const up=Object.keys(SUPPORT_UP).filter(k=>(task==='HOLD'?!HISTORY_KEYS.includes(k):!POSITION_KEYS.includes(k))&&(!m||(has(m,k)&&SUPPORT_UP[k](m[k])===true)));
   const decisions=reasonIds.length?DECISIONS[task]:DECISIONS[task].filter(d=>d!=='SKIP'&&d!=='EXIT');
   const reasonItem=obj({r:{type:'string',enum:reasonIds.length?reasonIds:['DATA_INCOMPLETE']},e:{type:'array',maxItems:4,items:{type:'string',enum:catFacts.length?catFacts:['return_5m']}}});
   const t={type:'string',enum:[task]},c={type:'string',minLength:1,maxLength:80},d={type:'string',enum:decisions},

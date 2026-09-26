@@ -40,8 +40,12 @@ export async function generate(db,{diagnostic=false,scan=scanMarket,now=Date.now
   for(const f of result.candidates){
     if(inserted.length>=capacity)break;
     if(held.has(f.symbol)||entryFresh(f,now(),f.referenceClose))continue;
+    // POLICY.cooldownMs is spacing between same-symbol signal BARS. It used to be measured
+    // from now(), which runs ~5 min past the new bar's open, so a bar only 25 min after the
+    // previous one passed (GRASS 02:10 -> 02:35 KST, 2026-09-26). Anchor it to this bar.
+    // It is not a post-exit cooldown: re-entries get GPT trade-memory context instead.
     const recent=await db.from('v11_long_regime_signals').select('id').eq('symbol',f.symbol)
-      .gte('signal_bar_at',new Date(now()-POLICY.cooldownMs).toISOString())
+      .gt('signal_bar_at',new Date(f.signal5Open-POLICY.cooldownMs).toISOString())
       .in('status',['NEW','CLAIMED','ORDERED','FILLED','CLOSED']).limit(1);
     if(recent.error)throw Error(`COOLDOWN_READ:${recent.error.message}`);
     if(recent.data?.length)continue;

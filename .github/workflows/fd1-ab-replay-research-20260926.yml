@@ -1,0 +1,65 @@
+name: FD1 ENTRY A/B replay research deploy (order-free)
+# Deploys ONLY the two order-free research functions fd1-ab-replay-base / fd1-ab-replay-new.
+# BASE bundles the FD1 modules of the production release commit (f606f61, executor v90);
+# NEW bundles this ref's candidate modules. Neither touches trading controls, the
+# executor, signals, orders, positions or the production GPT ledger.
+on:
+  push:
+    branches: [claude/trading-loss-root-cause-analysis-by0cc7]
+    paths: [.github/workflows/fd1-ab-replay-research-20260926.yml, supabase/functions/fd1-ab-replay/**, research/fd1-exhaustion-20260926/deploy-trigger.txt]
+permissions:
+  contents: read
+concurrency:
+  group: fd1-ab-replay-research
+  cancel-in-progress: false
+env:
+  PROD_RELEASE: f606f61222baeffb448c45a1befcb9c148ef912f
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Assemble both arms and prove the BASE prompt is production's
+        shell: bash
+        run: |
+          set -euo pipefail
+          M=supabase/functions/_shared/gpt-final-decision
+          for arm in base new; do
+            d=supabase/functions/fd1-ab-replay-$arm; mkdir -p $d/gfd; cp supabase/functions/fd1-ab-replay/index.ts $d/index.ts
+          done
+          for f in facts market api contract prompt capture-context; do
+            git show "$PROD_RELEASE:$M/$f.mjs" > supabase/functions/fd1-ab-replay-base/gfd/$f.mjs
+            cp $M/$f.mjs supabase/functions/fd1-ab-replay-new/gfd/$f.mjs
+          done
+          cp $M/assessment.mjs supabase/functions/fd1-ab-replay-new/gfd/assessment.mjs
+          node -e "
+          (async()=>{for(const [arm,want] of [['base','6861e409015254c3fe2c81ec30b1a7e8feb6495557e424e547c8e0cebb926171'],['new',null]]){
+            const p=await import('./supabase/functions/fd1-ab-replay-'+arm+'/gfd/prompt.mjs'),a=await import('./supabase/functions/fd1-ab-replay-'+arm+'/gfd/api.mjs'),f=await import('./supabase/functions/fd1-ab-replay-'+arm+'/gfd/facts.mjs');
+            const h=await a.hash(p.ENTRY_PROMPT);console.log(arm,f.FACTS_VERSION,'ENTRY prompt',h);if(want&&h!==want)process.exit(1);}})()"
+          grep -q "^export const FACTS_VERSION='FD1_FACTS_1'" supabase/functions/fd1-ab-replay-base/gfd/facts.mjs
+          grep -q "^export const FACTS_VERSION='FD1_FACTS_2'" supabase/functions/fd1-ab-replay-new/gfd/facts.mjs
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+      - name: Deploy the two research functions only
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
+          for arm in base new; do
+            supabase functions deploy fd1-ab-replay-$arm --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt --use-api
+          done
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > functions-after.json
+          python3 -c "import json;x=json.load(open('functions-after.json'));x=x.get('functions',x) if isinstance(x,dict) else x;[print(r['slug'],r['version'],r['status'],r.get('ezbr_sha256')) for r in x if r['slug'].startswith('fd1-ab-replay') or r['slug']=='v10-lane-executor']"

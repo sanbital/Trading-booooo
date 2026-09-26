@@ -19,6 +19,18 @@ export function fd1EntryIdentity(s){
     reference_close:num(f.referenceClose),day_return:num(f.dayReturn),rank:num(f.rank),judgments:modelJudgments(f),
     exit_policy:JSON.parse(JSON.stringify(f.exitPolicy??{})),...(chase?{chase}:{})};
 }
+/** Bounded trade-memory read: trades of this symbol closed before the trigger. Never throws. */
+export async function readHistory(reader,identity,timeoutMs=1500){
+  if(typeof reader!=='function')return {trades:null,error:null};
+  let timer;
+  try{
+    const trades=await Promise.race([reader(identity.symbol,identity.trigger_at_ms),
+      new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('HISTORY_TIMEOUT')),timeoutMs);})]);
+    if(!Array.isArray(trades))return {trades:null,error:'HISTORY_INVALID'};
+    return {trades:trades.filter(t=>Number(t?.exit_at_ms)<Number(identity.trigger_at_ms)),error:null};
+  }catch(e){return {trades:null,error:String(e?.message??e).slice(0,40)};}
+  finally{clearTimeout(timer);}
+}
 export const FD1_ENTRY_ENGINE=Object.freeze({
   id:FD_VERSION+':ENTRY',
   allow:'BUY',
@@ -30,10 +42,17 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
   promptText:PROMPTS.ENTRY,
   schema:wireSchema('ENTRY'),
   identity:fd1EntryIdentity,
+  // Same-symbol trade memory reader (symbol, beforeMs) => closed trades; injected by the
+  // executor adapter (DB). Absent or failing => the memory facts are unknown, never a block.
+  history:null,
   async prepare(identity,{fetchFn,now,deadlineMs}){
-    const asOf=now(),{src,errors}=await readSources(identity.symbol,asOf,{mode:'LIVE',fetchFn,ms:Math.max(200,Math.min(2500,deadlineMs-asOf))});
+    const asOf=now(),ms=Math.max(200,Math.min(2500,deadlineMs-asOf));
+    const [{src,errors},history]=await Promise.all([readSources(identity.symbol,asOf,{mode:'LIVE',fetchFn,ms}),
+      readHistory(this.history,identity,Math.min(ms,1500))]);
     const captured=now();
-    const facts=computeFacts(src,{asOf:captured,referenceClose:identity.reference_close,dayReturn:identity.day_return,rank:identity.rank});
+    const facts=computeFacts(src,{asOf:captured,referenceClose:identity.reference_close,dayReturn:identity.day_return,rank:identity.rank,
+      ...(history.trades?{history:history.trades}:{})});
+    if(history.error)errors.history=history.error;
     const chase=identity.chase?chaseContext(identity.chase,facts,{referencePrice:identity.reference_close,stopPct:identity.exit_policy?.stopPct}):null;
     const packet=await buildDecisionPacket({task:'ENTRY',subjectId:identity.signal_id,symbol:identity.symbol,dataMode:'LIVE',facts,judgments:identity.judgments,chase});
     packet.as_of_offset_ms=captured-identity.trigger_at_ms;packet.source_errors=errors;

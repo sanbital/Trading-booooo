@@ -12,7 +12,7 @@ import {computeFacts,modelJudgments} from '../_shared/gpt-final-decision/facts.m
 import {readSources} from '../_shared/gpt-final-decision/market.mjs';
 import {buildDecisionPacket,callDecision} from '../_shared/gpt-final-decision/api.mjs';
 import {detectChange,buildRecheckPacket,recheckPayload,validateRecheck} from '../_shared/gpt-final-decision/recheck.mjs';
-const PATCH='FD1-REPLAY-5-RECHECK',BATCH=20,CONCURRENCY=3,RESERVE_USD=0.02,WALL_MS=110_000;
+const PATCH='FD1-REPLAY-6-HISTORY',BATCH=20,CONCURRENCY=3,RESERVE_USD=0.02,WALL_MS=110_000;
 const reply=(s,b)=>new Response(JSON.stringify(b),{status:s,headers:{'content-type':'application/json','cache-control':'no-store'}});
 function eq(a,b){if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0;}
 const FACTORS=['absorption','volumeTails','fresh15over30','btcAnyUp','buyerShareRise','fresh5over15','recentHourLead'];
@@ -59,7 +59,9 @@ async function one(db,job,apiKey,btcCache){
   }
   try{
     const {src,errors}=await readSources(job.symbol,at,{mode:'REPLAY',btcCache});
-    const facts=computeFacts(src,{asOf:at,referenceClose:c.referenceClose,dayReturn:c.dayReturn,rank:c.rank,position:c.position??null});
+    // history: same-symbol V17 trades closed before as_of (ENTRY only; ignored by builds without it).
+    const facts=computeFacts(src,{asOf:at,referenceClose:c.referenceClose,dayReturn:c.dayReturn,rank:c.rank,position:c.position??null,
+      ...(job.task==='ENTRY'&&Array.isArray(c.history)?{history:c.history}:{})});
     packet=await buildDecisionPacket({task:job.task,subjectId:job.id,symbol:job.symbol,dataMode:'REPLAY',facts,
       judgments:c.judgments??null,position:job.task==='HOLD'?{event:c.event,deterministicExitCandidate:c.deterministicExitCandidate??null,stopStage:c.stopStage??null}:null});
     const budget=await db.rpc('fd1_replay_reserve',{p_reserve:RESERVE_USD});
