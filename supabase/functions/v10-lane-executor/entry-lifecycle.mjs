@@ -52,6 +52,37 @@ export function lifecycleNote({at,stage,reason,gptDecision=null}){
 export function noteChanged(prev,next){
   return !prev||prev.stage!==next.stage||prev.reason!==next.reason||prev.gptDecision!==next.gptDecision;
 }
+/** Signal status machine (R181, 2026-09-26). NEW/CLAIMED/ORDERED are active; REJECTED, FILLED
+ * and CLOSED are terminal, and FILLED -> CLOSED is the only move out of a terminal state. Every
+ * REJECTED write is a compare-and-set on SIGNAL_ACTIVE, so no later worker, retry or settlement
+ * can overwrite a terminal row (a FILLED signal that owns a position can never become REJECTED). */
+export const SIGNAL_ACTIVE=Object.freeze(['NEW','CLAIMED','ORDERED']);
+export const SIGNAL_TERMINAL=Object.freeze(['REJECTED','FILLED','CLOSED']);
+const SIGNAL_MOVES=Object.freeze({NEW:['CLAIMED','REJECTED'],CLAIMED:['NEW','ORDERED','FILLED','CLOSED','REJECTED'],
+  ORDERED:['FILLED','CLOSED','REJECTED'],FILLED:['CLOSED'],CLOSED:[],REJECTED:[]});
+export function signalTransitionAllowed(from,to){return from===to?SIGNAL_ACTIVE.includes(from):(SIGNAL_MOVES[from]??[]).includes(to);}
+/** Where a stored GPT result came from. Only GPT_VALID is a GPT judgment about the market;
+ * every other source is a failure that was mapped to ABSTAIN (no order) and must never be
+ * counted as "GPT looked and abstained" (R181: HTTP_429 quota failures were). */
+export const GPT_DECISION_SOURCE=Object.freeze({GPT_VALID:'GPT_VALID',PROVIDER_ERROR:'PROVIDER_ERROR',TIMEOUT:'TIMEOUT',
+  PARSE_ERROR:'PARSE_ERROR',SAFETY_FALLBACK:'SAFETY_FALLBACK',SYSTEM_ABORT:'SYSTEM_ABORT'});
+const S=GPT_DECISION_SOURCE;
+export function gptDecisionSource(result){
+  if(result?.valid===true&&(result.origin===undefined||result.origin==='OPENAI_API'))return S.GPT_VALID;
+  const e=String(result?.error??'');
+  if(e==='API_TIMEOUT')return S.TIMEOUT;
+  if(result?.origin==='LOCAL_DATA_ERROR'||/^(REVIEW_PREPARATION_FAILED|COUNTER_PREPARATION_FAILED|HISTORY_INVALID)$/.test(e))return S.SYSTEM_ABORT;
+  if(/^HTTP_\d+$/.test(e)||/^FD_(API_KEY_MISSING|API_OR_VALIDATION_ERROR|API_INCOMPLETE|MODEL_MISMATCH)$/.test(e))return S.PROVIDER_ERROR;
+  if(/^FD_(RESPONSE_NOT_JSON|RESPONSE_TOO_LARGE|API_OUTPUT_COUNT|UNEXPECTED_TOOL)$/.test(e)||/^(TYPE|ENUM|STRING|REQUIRED|EXTRA|ARRAY):/.test(e))return S.PARSE_ERROR;
+  return S.SAFETY_FALLBACK;
+}
+/** Terminal reason for an answer that is not a valid GPT judgment. Keeps the GPT_REJECTED terminal
+ * class (public.entry_terminal_class matches ^GPT_TIMEOUT / ^GPT_NO_VALID_API_RESPONSE) while the
+ * reason names the source, so a provider failure never reads as a GPT ABSTAIN. */
+function failedAnswerReason(error){
+  const e=String(error??''),src=gptDecisionSource({valid:false,error:e});
+  return src===S.TIMEOUT?'GPT_TIMEOUT':clip(`GPT_NO_VALID_API_RESPONSE:${src}`+(e?':'+e.slice(0,60):''));
+}
 /** Terminal reason for a GPT review that can never become an entry for this trigger: a
  * valid SKIP or ABSTAIN, or a failed answer (the coordinator never re-asks one identity).
  * Anything transient (pending, not configured, budget, storage, aged) returns null. */
@@ -60,10 +91,26 @@ export function gptTerminalReason(review){
   if(review?.allowed===true)return null;
   if(/^GPT_SKIP(_AGED)?$/.test(reason)&&decision==='SKIP')return clip('GPT_SKIP'+(detail?':'+detail:''));
   if(/^GPT_ABSTAIN(_AGED)?$/.test(reason)&&decision==='ABSTAIN')return clip('GPT_ABSTAIN'+(detail?':'+detail:''));
-  if(reason==='GPT_NO_VALID_API_RESPONSE'){
-    const e=String(review?.error??'');
-    return e==='API_TIMEOUT'?'GPT_TIMEOUT':clip('GPT_ABSTAIN:INVALID_RESPONSE'+(e?':'+e.slice(0,60):''));
-  }
+  if(reason==='GPT_NO_VALID_API_RESPONSE')return failedAnswerReason(review?.error);
+  return null;
+}
+/** The same terminal reason, read straight from a DURABLE initial-entry review record instead of
+ * from a live consider() call. Used where the cycle that asked GPT is no longer the one looking at
+ * the signal: the coordinator's completion hook and the lifecycle sweep (JELLYJELLYUSDT
+ * 2026-09-26 09:06:09: a valid SKIP landed after its cycle, the signal stayed NEW, and the sweep
+ * then retired it as STALE:GPT_REVIEW_PENDING). Returns null for a BUY, an unfinished record, or
+ * a record not bound to exactly this signal and trigger (a stale answer never labels another row).
+ * Label only: nothing here can admit, price or order. */
+export function storedTerminalReason(record,{signalId,triggerAtMs=null}={}){
+  const r=record&&typeof record==='object'?record:null,z=r?.result;
+  if(!r||!z||typeof z!=='object')return null;
+  if(r.purpose!=='PRODUCTION'||r.kind!==undefined&&r.kind!==null)return null;
+  if(String(r.identity?.signal_id??'')!==String(signalId??'')||!signalId)return null;
+  if(triggerAtMs!==null&&Number(r.identity?.trigger_at_ms)!==Number(triggerAtMs))return null;
+  if(gptDecisionSource(z)!==S.GPT_VALID)return failedAnswerReason(z.error);
+  const a=z.answer??{},decision=a.decision??z.decision;
+  if(decision==='SKIP')return gptTerminalReason({reason:'GPT_SKIP',decision,detail:(a.reasons??[]).map(x=>x?.category).filter(Boolean).join(',')});
+  if(decision==='ABSTAIN')return gptTerminalReason({reason:'GPT_ABSTAIN',decision,detail:String(a.abstain_reason??'')});
   return null;
 }
 /** Reason for a TRIGGERED setup whose execution window has closed without an order. The

@@ -70,7 +70,10 @@ export class FinalReviewCoordinator {
   }
   consumeRetry(token){const life=this.retryLifecycles.get(token);if(!life||life.used||this.now()>=life.deadline)return false;life.used=true;return true;}
   constructor({config,store,apiKey=()=>'',fetchFn=fetch,market=collectMarket,now=Date.now,schedule=p=>{p.catch(()=>{});},
-    profile=DEFAULT_PROFILE,purpose='PRODUCTION',baseline=baselineAllowed,expiry=triggerExpiry,engine=null}){
+    profile=DEFAULT_PROFILE,purpose='PRODUCTION',baseline=baselineAllowed,expiry=triggerExpiry,engine=null,onTerminal=null}){
+    // onTerminal(record): called once, after the answer is durably saved, so the caller can record a
+    // final non-BUY answer on its candidate at once (R181). Label only; it never gates admission.
+    this.onTerminal=typeof onTerminal==='function'?onTerminal:null;
     this.config=config;this.store=store;this.apiKey=apiKey;this.fetchFn=fetchFn;this.market=market;this.now=now;this.schedule=schedule;
     this.baseline=baseline;this.expiry=expiry;this.engine=engine;this.identity=engine?.identity??decisionIdentity;
     // An engine (FD1 final decision) replaces the question and answer contract; the durable
@@ -147,6 +150,7 @@ export class FinalReviewCoordinator {
         attempted:false,api_cost_usd:0,completed_at_ms:this.now(),model_requested:MODEL,wire_profile:this.profile};
     }
     await this.store.complete(key,owner,record);
+    if(this.onTerminal)await Promise.resolve().then(()=>this.onTerminal(structuredClone(record))).catch(()=>false);
     // Mark ready only after durable save and complete raw-response validation.
     // This hint can shorten observation waiting, but a new lease cycle still
     // rereads and validates the journal before it creates an entry ticket.

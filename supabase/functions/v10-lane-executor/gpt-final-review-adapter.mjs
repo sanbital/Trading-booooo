@@ -5,6 +5,10 @@ import {FD1_ENTRY_ENGINE} from '../_shared/gpt-final-decision/engine.mjs';
 import {recheckAllows} from '../_shared/gpt-final-decision/recheck.mjs';
 const contexts=new WeakMap();
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
+/** R181: records a final non-BUY answer on its signal as soon as it is durable (see
+ * gpt-terminal-settlement.mjs). Registered once by the executor; label only, never admission. */
+let terminalSettler=null;
+export function setGptTerminalSettler(fn){terminalSettler=typeof fn==='function'?fn:null;}
 /** Operator switches for the two BUY-recovery paths (2026-09-25). Default on; 'false' restores
  * the previous behaviour exactly: an aged BUY is refused, and a run that entered ends the cycle. */
 export const recoverySwitches=(get=getenv)=>({agedRecheck:get('FD1_AGED_BUY_RECHECK')!=='false',followUp:get('FD1_ENTRY_FOLLOW_UP')!=='false'});
@@ -32,6 +36,7 @@ export function coordinatorFor(db){
       // FD1_DUAL_AI_ENTRY=false returns to GPT alone; a missing DeepSeek key does the same.
       deepseekKey:()=>getenv('FD1_DUAL_AI_ENTRY')==='false'?null:(getenv('deepseek api')||null)},
     baseline:baselineAllowedLive,
+    onTerminal:record=>terminalSettler?terminalSettler(db,record):null,
     schedule:promise=>{if(globalThis.EdgeRuntime?.waitUntil)EdgeRuntime.waitUntil(promise);else promise.catch(()=>{});}}));
   return contexts.get(db);
 }

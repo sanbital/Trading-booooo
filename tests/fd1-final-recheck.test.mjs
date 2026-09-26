@@ -228,7 +228,8 @@ async function retryLifecycle({fills=[375],final='BUY',changed=false,expired=fal
   const body=source.slice(source.indexOf('let currentPosition=null,lastProtection='),
     source.indexOf('// Best-effort feed for the decision-only exit shadow.'));
   let position=null;const orders=[],events=[],writes=[];
-  const db=x.db;db.from=()=>({update:patch=>({eq:async()=>{writes.push(patch);return {};}})});
+  const guarded=patch=>{const done=Promise.resolve().then(()=>{writes.push(patch);return {};});return {in:()=>done,then:(a,b)=>done.then(a,b)};};
+  const db=x.db;db.from=()=>({update:patch=>({eq:()=>guarded(patch)})});
   const quote=()=>calmQuote(now);
   const gateway=async cmd=>{if(cmd.action==='quote'){if(orders.length===1)now=expired?T+31000:T+19000;return quote();}
     if(cmd.action==='symbol_info')return {quantityStep:1,priceTick:.0001,minNotionalUsdt:5,minQuantity:1};
@@ -236,7 +237,7 @@ async function retryLifecycle({fills=[375],final='BUY',changed=false,expired=fal
   const c={db,s:x.s,gateway,q:quote(),attempt:{gptFinalReview:x.ticket,finalRecheck:{recheck_triggered:false}},
     sized:{amount:375},iocBps:0,limitPrice:1.2,step:1,filters:{priceTick:.0001,minNotionalUsdt:5,minQuantity:1},baseIntentPayload:{},
     manualRows:[],managementFailures:[],finalDecision:{allowed:true},e1Decision:null,NATIVE_STOP_ENABLED:true,
-    MARGIN:150,LEV:3,ENTRY_CASH_BUFFER_USDT:.1,RELEASE_SCOPE:{SYMBOL:'SYMBOL'},
+    MARGIN:150,LEV:3,ENTRY_CASH_BUFFER_USDT:.1,RELEASE_SCOPE:{SYMBOL:'SYMBOL'},SIGNAL_ACTIVE:['NEW','CLAIMED','ORDERED'],
     // The cycle's lease budget as the executor keeps it; none unless a case sets one.
     budgetCovers,cycleBudgets:new Map(budget?[[db,budget]]:[]),IOC_RETRY_RESERVE:{ms:16000,calls:14},
     IOC_RETRY_POLICY,planAggressiveIocRetry,floorStep,E1_POLICY:{maxQuoteAgeMs:1000},

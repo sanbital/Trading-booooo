@@ -26,7 +26,10 @@ test('a GPT review is terminal only when it can never become an entry for this t
   assert.equal(gptTerminalReason({allowed:false,reason:'GPT_SKIP_AGED',decision:'SKIP'}),'GPT_SKIP');
   assert.equal(gptTerminalReason({allowed:false,reason:'GPT_ABSTAIN',decision:'ABSTAIN',detail:'EXECUTION_UNSAFE'}),'GPT_ABSTAIN:EXECUTION_UNSAFE');
   assert.equal(gptTerminalReason({allowed:false,reason:'GPT_NO_VALID_API_RESPONSE',decision:'ABSTAIN',error:'API_TIMEOUT'}),'GPT_TIMEOUT');
-  assert.equal(gptTerminalReason({allowed:false,reason:'GPT_NO_VALID_API_RESPONSE',decision:'ABSTAIN',error:'HTTP_500'}),'GPT_ABSTAIN:INVALID_RESPONSE:HTTP_500');
+  // R181: a failed answer names its source and never reads as a GPT ABSTAIN (same GPT_REJECTED class).
+  assert.equal(gptTerminalReason({allowed:false,reason:'GPT_NO_VALID_API_RESPONSE',decision:'ABSTAIN',error:'HTTP_500'}),'GPT_NO_VALID_API_RESPONSE:PROVIDER_ERROR:HTTP_500');
+  assert.equal(gptTerminalReason({allowed:false,reason:'GPT_NO_VALID_API_RESPONSE',decision:'ABSTAIN',error:'FD_BUY_WITH_REASON'}),'GPT_NO_VALID_API_RESPONSE:SAFETY_FALLBACK:FD_BUY_WITH_REASON');
+  assert.equal(terminalClassOf('GPT_NO_VALID_API_RESPONSE:PROVIDER_ERROR:HTTP_429'),'GPT_REJECTED');
   for(const reason of ['GPT_REVIEW_PENDING','GPT_TRIGGER_EXPIRED','GPT_STALE_OR_FUTURE_REVIEW','GPT_API_BUDGET_EXHAUSTED',
     'GPT_REVIEW_NOT_CONFIGURED_OR_APPROVED','GPT_REVIEW_STORAGE_OR_VALIDATION_ERROR','BASELINE_REJECT_OR_INVALID'])
     assert.equal(gptTerminalReason({allowed:false,reason,decision:'ABSTAIN'}),null,reason+' is transient');
@@ -76,7 +79,7 @@ test('BUY orphan prevention: every openBull refusal returns its claim, is termin
 });
 
 test('the lifecycle sweep retires only closed triggers and aged-out rows, only NEW -> REJECTED, with a named reason',async()=>{
-  const vm=await import('node:vm'),lifecycle=await import('./entry-lifecycle.mjs');
+  const vm=await import('node:vm'),lifecycle=await import('./entry-lifecycle.mjs'),settlement=await import('./gpt-terminal-settlement.mjs');
   const src=readFileSync(new URL('./index.ts',import.meta.url),'utf8');
   const fn=src.slice(src.indexOf('async function sweepEntryLifecycle('),src.indexOf('/**',src.indexOf('async function sweepEntryLifecycle(')));
   const now=Date.parse('2026-09-25T12:00:00Z'),MIN=60000,writes=[],audits=[];
@@ -86,14 +89,15 @@ test('the lifecycle sweep retires only closed triggers and aged-out rows, only N
     {id:'live',symbol:'ABCUSDT',entry_bar_at:new Date(now-6*MIN).toISOString(),setup_state:'TRIGGERED',trigger_expires_at:String(now+20000),note:null},
     {id:'old-armed',symbol:'OLDUSDT',entry_bar_at:new Date(now-60*MIN).toISOString(),setup_state:'ARMED',trigger_expires_at:null,note:null},
     {id:'old-legacy',symbol:'LEGUSDT',entry_bar_at:new Date(now-9*24*60*MIN).toISOString(),setup_state:null,trigger_expires_at:null,note:null}];
-  const db={from:()=>{const q={filters:[],patch:null};const b={
+  const db={from:table=>{const q={filters:[],patch:null};const b={
     select:()=>b,eq:(k,v)=>{q.filters.push(['eq',k,v]);return b;},lt:(k,v)=>{q.filters.push(['lt',k,v]);return b;},
     gte:(k,v)=>{q.filters.push(['gte',k,v]);return b;},order:()=>b,update:p=>{q.patch=p;return b;},
-    limit:async()=>{const lt=q.filters.find(f=>f[0]==='lt'),gte=q.filters.find(f=>f[0]==='gte'),trig=q.filters.find(f=>f[1]==='features->v17Setup->>state');
+    // No stored GPT answer for these rows: the sweep falls back to the in-cycle note (R181 fallback path).
+    limit:async()=>{if(table==='gpt_final_entry_reviews')return {data:[],error:null};const lt=q.filters.find(f=>f[0]==='lt'),gte=q.filters.find(f=>f[0]==='gte'),trig=q.filters.find(f=>f[1]==='features->v17Setup->>state');
       return {data:rows.filter(r=>(!lt||r.entry_bar_at<lt[2])&&(!gte||r.entry_bar_at>=gte[2])&&(!trig||r.setup_state===trig[2])),error:null};},
     then:(res,rej)=>{writes.push({id:q.filters.find(f=>f[1]==='id')?.[2],patch:q.patch,guard:q.filters.find(f=>f[1]==='status')?.[2]});
       return Promise.resolve({error:null}).then(res,rej);}};return b;}};
-  const ctx={db,Date,Promise,Error,Number,String,console,...lifecycle,N:(v,d=0)=>Number.isFinite(Number(v))&&v!==null?Number(v):d,
+  const ctx={db,Date,Promise,Error,Number,String,console,...lifecycle,lifecycleTerminalReason:settlement.lifecycleTerminalReason,N:(v,d=0)=>Number.isFinite(Number(v))&&v!==null?Number(v):d,
     SIGNAL_MAX:20*MIN,REVISION:'R',STRATEGY:'S',SETUP_STATE:{TRIGGERED:'TRIGGERED'},audit:async(...a)=>{audits.push(a);}};
   vm.createContext(ctx);vm.runInContext(fn+';this.sweep=sweepEntryLifecycle;',ctx);
   const retired=await ctx.sweep(db,now);

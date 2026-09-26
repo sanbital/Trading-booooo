@@ -43,6 +43,7 @@ function harness({ proof, proofThrows = null, fatal = () => ({ fatal: false }) }
       update: (patch) => { st.patch = patch; return b; },
       eq: (k, v) => { st.filters[k] = v; return b; },
       neq: (k, v) => { st.filters['neq:' + k] = v; return b; },
+      in: (k, v) => { st.filters['in:' + k] = [...v]; return b; },
       insert: async (row) => { writes.push({ table: name, insert: row }); return { error: null }; },
       then: (resolve, reject) => {
         writes.push({ table: name, patch: st.patch, filters: { ...st.filters } });
@@ -53,7 +54,7 @@ function harness({ proof, proofThrows = null, fatal = () => ({ fatal: false }) }
   };
   const ctx = {
     Number, Math, Date, String, Object, Error, Promise, JSON, console,
-    retryProofCandidate,
+    retryProofCandidate, SIGNAL_ACTIVE: ['NEW', 'CLAIMED', 'ORDERED'],
     N: (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d),
     rec: (x) => (x && typeof x === 'object' && !Array.isArray(x) ? x : {}),
     classifyFailure: fatal,
@@ -126,6 +127,8 @@ test('the exact production intent settles once the exchange proves it never exis
   const signal = ctx.writes.find(w => w.table === 'v11_long_regime_signals');
   assert.equal(signal.patch.status, 'REJECTED');
   assert.equal(signal.filters.id, 'sig-dydx');
+  // R181: compare-and-set on an active status; a FILLED/CLOSED signal is never overwritten.
+  assert.deepEqual(signal.filters['in:status'], ['NEW', 'CLAIMED', 'ORDERED']);
   assert.equal(ctx.audits.at(-1)[5], 'ORDER_NEVER_PLACED');
 });
 
