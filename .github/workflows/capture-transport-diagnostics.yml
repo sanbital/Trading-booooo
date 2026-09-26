@@ -17,3 +17,6 @@ jobs:
         run: |
           flyctl logs --no-tail --app sanbital-doa-capture-20260925
           flyctl machine status 185030da006d48 --app sanbital-doa-capture-20260925
+          flyctl ssh console --app sanbital-doa-capture-20260925 --command 'cat /proc/stat'
+          sleep 15
+          flyctl ssh console --app sanbital-doa-capture-20260925 --command 'cat /proc/stat'
