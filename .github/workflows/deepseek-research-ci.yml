@@ -17,6 +17,7 @@ on:
       - 'development/gpt-final-decision/tests/**'
       - 'research/deepseek-counter-20260925/**'
       - 'research/deepseek-temporal-20260925/**'
+      - 'research/qv3/**'
       - '.github/workflows/deepseek-research-ci.yml'
   pull_request:
     paths:
@@ -34,6 +35,7 @@ on:
       - 'development/gpt-final-decision/tests/**'
       - 'research/deepseek-counter-20260925/**'
       - 'research/deepseek-temporal-20260925/**'
+      - 'research/qv3/**'
       - '.github/workflows/deepseek-research-ci.yml'
   workflow_dispatch:
 permissions:
@@ -60,4 +62,5 @@ jobs:
           node --test \
             tests/fd1*.test.mjs \
             test-support/v17-entry/*.test.mjs test-support/v17-exit/*.test.mjs \
-            collectors/doa-capture/*.test.mjs development/gpt-final-decision/tests/*.test.mjs
+            collectors/doa-capture/*.test.mjs development/gpt-final-decision/tests/*.test.mjs \
+            research/qv3/*.test.mjs

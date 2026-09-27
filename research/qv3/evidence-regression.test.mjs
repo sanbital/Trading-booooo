@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { harness, position } from '../../test-support/v18-ops/harness.mjs';
 import { qv3Stamp } from '../../supabase/functions/_shared/leader-qv3-runtime.mjs';
 
-const PRODUCTION_V38_COMMIT = 'd5424b54ca25dff364cde96692f7bf9abdc6f77b';
+// Compare with the production authority contract this fix inherits, not pre-GPT v38.
+const PRODUCTION_V116_COMMIT = 'ec2ad11070e724bb3ab2c673979184718d3769ec';
 const base = Date.parse('2026-09-10T16:10:00Z');
 const now = base + 180000;
 const candle = (time, open, close) => [time, open, Math.max(open, close) + 0.1, Math.min(open, close) - 0.1, close, 1, time + 59999];
@@ -71,7 +72,7 @@ async function compareScenario({ bars, quote = 100.3, fill = false, marketFailur
       ? () => { throw new Error('MUST_NOT_CALL'); }
       : async () => new Response(JSON.stringify(bars)),
   };
-  const production = harness({ ...options, sourceRef: PRODUCTION_V38_COMMIT });
+  const production = harness({ ...options, sourceRef: PRODUCTION_V116_COMMIT });
   const candidate = harness(options);
   production.state.quotes.SAGAUSDT = quote;
   candidate.state.quotes.SAGAUSDT = quote;
@@ -86,7 +87,7 @@ async function compareScenario({ bars, quote = 100.3, fill = false, marketFailur
   assert.deepEqual(businessSnapshot(candidate, candidateResult), businessSnapshot(production, productionResult));
 }
 
-test('V20 evidence patch is behavior-identical to production v38 across QV3 hold, close, unavailable, and pre-QV3 stop paths', async () => {
+test('contract fix preserves production v116 QV3 hold, candidate, unavailable and hard-stop behavior', async () => {
   await compareScenario({ bars: [candle(base, 100, 100.5), candle(base + 60000, 100.5, 100.6), candle(base + 120000, 100.6, 100.7)] });
   await compareScenario({ bars: [candle(base, 100, 100.5), candle(base + 60000, 100.5, 100.4), candle(base + 120000, 100.4, 100.3)], fill: true });
   await compareScenario({ bars: [candle(base + 60000, 100.5, 100.4), candle(base + 120000, 100.4, 100.3)] });

@@ -2960,9 +2960,12 @@ async function manageLeader(db,p,ctx){
     const closeReason=result.nativeReconciled?"V17_NATIVE_STOP":state.reason;
     await audit(db,p,"BULL","BULL","FULL_CLOSE",closeReason,details)
       .catch(e=>console.error("V17_EXIT_AUDIT_FAILED",String(e)));
-    // The position is already closed; this only retires any resting exchange stop so it
-    // cannot outlive the position. It runs last so it can never delay the exit.
-    const nativeStop=await syncNativeStop("CLOSE");
+    // A terminal exit can fill only part of the request. applyExitReceipt already
+    // reconciled this durable quantity against the post-fill account observation.
+    // Keep protection on that residual using real symbol rules; only flat positions
+    // use the cleanup-only path. Never reuse the pre-exit portfolio quantity.
+    const residual=result.position?.state==="OPEN"?Number(result.position.remaining_quantity):0;
+    const nativeStop=await syncNativeStop(residual>0?"PARTIAL_CLOSE":"CLOSE",residual);
     await auditProtection(db,protectionDecision,{outcome:"CLOSE",exitReason:closeReason,
       exitClass:state.exitClass??null,resident:residentProtection,execution:nativeStop,
       closed:result?.closed===true,snapshotAtMs:aiExitContext.snapshot_at_ms});

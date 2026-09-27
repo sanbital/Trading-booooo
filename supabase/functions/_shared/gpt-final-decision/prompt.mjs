@@ -1,6 +1,7 @@
 /** FD1 system prompts. Static text (fact dictionary + category bands) so the prefix is cacheable. */
 import {FACT_DEFS,HISTORY_KEYS} from './facts.mjs';
 import {CAPTURE_NOTE} from './capture-context.mjs';
+import {DYNAMIC_POLICY} from './dynamic-flow.mjs';
 import {CATEGORIES,categoriesFor,SUPPORT_TEXT,BEARISH_TEXT,EV_SKIP,JUDGMENT,EXECUTION_SAFETY} from './contract.mjs';
 // ENTRY also documents the same-symbol trade memory; HOLD's text is byte-identical to before.
 const dictFor=task=>Object.entries(FACT_DEFS).filter(([k])=>task==='ENTRY'||!HISTORY_KEYS.includes(k)).map(([k,[s,u,d]])=>`- ${k} [${s}, ${u}]: ${d}`).join('\n');
@@ -51,7 +52,7 @@ CEC0040(model_judgments.cec0040): 전략 전체의 최근 거래당 기대손익
 3) invalidation: 이 진입 논리가 틀렸다고 볼 조건 최대 세 개(fact, BELOW/ABOVE, value; value는 그 사실의 단위). 기록용이며 주문·청산에 쓰이지 않는다.
 4) upside_pct / downside_pct: 이 가격에 진입했을 때 향후 30~60분의 현실적 기대 상승폭과, 판단이 틀렸을 때의 현실적 하락폭(퍼센트, 0 이상). 청산 구조: 진입가 -2.5% 거래소 손절, 진입 10분 뒤 또는 +1% 도달 뒤에는 -1.2%로 손실 제한, +2% 이익 잠금과 +3% 이후 고점 대비 1.5% trailing은 SOFT 재평가 증거이며 자동 청산하지 않는다. 최종 전략 청산은 GPT FINAL이 결정한다. downside를 손절 폭으로 기계적으로 적지 말고, upside는 current_propulsion이 실제로 밀어줄 수 있는 폭으로 적어라.
 5) ev: 근거를 비교한 기대값 방향 POSITIVE / NEUTRAL / NEGATIVE / UNDETERMINED.
-6) confidence: 0~1. 기록용이며 차단 기준이 아니다. 확신이 낮으면 낮게 적되, 그것만으로 결정을 바꾸지 마라.
+6) confidence: 0~1로 정직하게 기록. dynamic에서 advisor_valid=false이면 BUY는 >=${DYNAMIC_POLICY.singleModelBuyConfidence} 및 ACCELERATING/STABLE 필요; 아니면 WAIT/SKIP. 그 외 기록용이다.
 7) d:
 - BUY: 네 판단으로 기대값이 우호적이다. support에 지금 실제로 상승을 가리키는 사실(가능하면 current_propulsion 사실 포함)을 적는다. 감수하는 위험이 있으면 reasons에 적어도 된다(기록용). 주문 안전 HARD(${EXECUTION_SAFETY.join(', ')})가 있으면 BUY 불가.
 - SKIP: 네 판단으로 지금 이 가격의 새 롱이 불리하다. 사유는 (a) 실제로 SOFT/HARD인 카테고리, (b) ${EV_SKIP}(e에는 지금 하락 조건을 만족하는 사실만), 또는 (c) ${JUDGMENT}(임계값을 넘지 않았더라도 네가 종합적으로 판단한 근거 사실). 서버는 임계값 충족을 요구하지 않는다.
@@ -70,6 +71,7 @@ export const HOLD_PROMPT=commonFor('HOLD')+`
 - HOLD: 상승 근거가 살아 있다. support에 현재 상승/매수 우위를 보여주는 사실 1개 이상. 주의할 위험이 있으면 reasons에 적어도 된다(기록용). DATA_INCOMPLETE가 HARD이면 HOLD 불가.
 - EXIT: 네 판단으로 상승 근거가 무너졌다. 사유는 실제로 SOFT/HARD인 카테고리, 또는 임계값을 넘지 않았더라도 네가 종합적으로 판단한 ${JUDGMENT}(근거 사실 포함). 짧은 눌림이나 잡음 하나만으로 EXIT하지 말고, 상승 논리가 실제로 사라졌을 때 청산하라.
 - position.exit_context의 P142/retestAnchor/trailing/profit-lock/손익분기 보호는 청산 명령이 아니라 SOFT 후보다. HARD floor(최대손실·재난 손절)와 구분하라. 하드 안전장치를 제외한 실제 보호선 상향과 전략적 청산의 최종 판단자는 너다.
+- 네 판단 실패 시에만 기존 검증된 DeepSeek 긴급 HOLD/EXIT 예외가 적용될 수 있다. ENTRY·보호선 상향 권한은 없고, 네 유효한 결정을 덮어쓰지 않는다.
 - exit_context.protection을 읽어라. approved_soft_stop은 지금 실제로 거래소에 걸려 있는(또는 승인된) 보호선이고, candidate_soft_stop은 결정론 엔진이 올릴 수 있다고 제안한 후보값이다. candidate는 네 승인 없이는 절대 적용되지 않는다.
 - PROTECT(=RAISE_PROTECTION): candidate_soft_stop을 그 값 그대로 승인해 보호선을 올린다. 서버는 네가 본 candidate만 적용하며, 네가 만든 임의의 가격은 절대 사용하지 않는다. candidate가 없거나 approved보다 높지 않으면 보호선은 그대로 유지된다. 한 번 승인된 보호선은 어떤 경우에도 내려가지 않는다.
 - HOLD: 포지션을 유지하고 candidate를 적용하지 않는다. 기존 approved_soft_stop과 HARD floor는 그대로 남는다.
@@ -84,4 +86,3 @@ EXIT 카테고리:
 ${cats('HOLD')}
 `;
 export const PROMPTS=Object.freeze({ENTRY:ENTRY_PROMPT,HOLD:HOLD_PROMPT});
-
