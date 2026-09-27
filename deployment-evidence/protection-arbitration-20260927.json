@@ -3,7 +3,11 @@
   "status": "DEPLOYED TO PRODUCTION, LIVE EFFECT PENDING NEXT NATURALLY OCCURRING POSITION",
   "implementation_commit": "2965e30700a1ccea73a68d73c54e37c1ea1f38a8",
   "release_commit": "d161c53049243ee1d960b18721dcede31445c11b",
-  "workflow_run": "https://github.com/sanbital/Trading-booooo/actions/runs/36289425508",
+  "workflow_runs": [
+    {"run": 1, "url": "https://github.com/sanbital/Trading-booooo/actions/runs/36289425508", "head": "d161c530", "at": "2026-09-27T02:47:39Z", "executor": "107 -> 108", "worker": "6 -> 7"},
+    {"run": 2, "url": "https://github.com/sanbital/Trading-booooo/actions/runs/36289741732", "head": "f54e2247", "at": "2026-09-27T02:54Z", "executor": "108 -> 109", "worker": "7 -> 8",
+     "cause": "the docs/evidence push re-fired the branch push trigger; the artifact is byte-identical to run 1, so this bumped the version number only. The push trigger has since been removed."}
+  ],
   "project": "etaajwpernzrcdrifdnw",
   "baseline": {
     "main": "d06528b40d0bd637206aae5338e0ed99a4cd7af5",
@@ -15,6 +19,9 @@
   },
   "deployment": {
     "deployed_at": "2026-09-27T02:47:39Z",
+    "current_production_executor_version": 109,
+    "current_production_self_evolution_worker_version": 8,
+    "version_note": "run 1 produced 108/7 and run 2 redeployed the identical artifact as 109/8; the ezbr_sha256 and bundle digests below are the live ones for both",
     "executor_version": 108,
     "executor_ezbr_sha256": "fa86a068927ae1a556b04d8e2f2508e7f28ca252f0c42297f0f62dbdcff06f89",
     "executor_bundle_digest": "a2a0864c17700608ffb8bac1b41bee9669d99323edd814e89e03b283c3d0939e",

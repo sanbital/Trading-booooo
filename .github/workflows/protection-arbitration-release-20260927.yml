@@ -6,9 +6,12 @@ name: Protection arbitration release (AI_PROTECTION_ARBITRATION_1)
 # leverage or slot count, and it places no order. It asserts the money-management contract
 # is byte-identical to the deployed baseline and that production settings are unchanged
 # before and after. The audit migrations are already applied; it verifies them read-only.
+#
+# The push trigger has been removed now that the release is out. It deployed twice — once per
+# push to the development branch (v107->v108 at 02:47:39Z, v108->v109 at 02:54Z) — with a
+# byte-identical artifact both times, which is harmless but not something a docs-only commit
+# should ever do. Redeploy is manual from here.
 on:
-  push:
-    branches: [claude/ai-protection-arbitration-hs2okp]
   workflow_dispatch:
     inputs:
       expected_executor_version_before:
