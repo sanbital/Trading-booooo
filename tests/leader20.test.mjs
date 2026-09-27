@@ -59,7 +59,7 @@ test('legacy reject/missing setup has no authority over a new event; identity bi
 test('first full capture and fair reevaluation need no bullish AND; duplicates coalesce',()=>{
  const c=validCapture(T);for(const h of Object.values(c.dynamics.horizons)){h.return=-.01;h.net_taker_flow=-10;h.buy_share=.1;}
  assert.equal(reviewRequest(null,c,{at:T,member:true}).request,true);
- const w={last_review_at_ms:T-120001,last_capture_end_ms:c.end_ms-5000,capture:c};
+ const w={last_review_at_ms:T-21600001,last_capture_end_ms:c.end_ms-5000,capture:c};
  assert.equal(reviewRequest(w,c,{at:T,member:true}).reason,'FAIR_REEVALUATION');
  assert.equal(reviewRequest({...w,last_capture_end_ms:c.end_ms},c,{at:T,member:true}).request,false);
  assert.equal(reviewRequest({...w,in_flight:true},c,{at:T,member:true}).reason,'SINGLE_FLIGHT');

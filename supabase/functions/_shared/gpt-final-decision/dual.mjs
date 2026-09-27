@@ -58,6 +58,10 @@ const FINAL_TRAJECTORY_FIELDS=new Set([
 export function finalEvidenceKeys(catalog){
   const compact=Object.keys(catalog).some(k=>k.includes('.capture_context.critical_segments.'));
   return Object.keys(catalog).filter(k=>{
+    // Matrix cells and repeated summaries are still supplied in full, but are not
+    // thousands of redundant schema/citation IDs. Cite named facts and horizons.
+    if(k.includes('.ordered_path.')||k.includes('.ordered_path_columns.'))return false;
+    if(k.startsWith('initial.')&&Object.hasOwn(catalog,'current.'+k.slice(8)))return false;
     // These ordered segments are read by both models; cite their aggregate horizons
     // or critical segments to avoid multiplying the output enum by every raw field.
     if(/\.(ordered_path|latest_six_buckets)\./.test(k))return false;

@@ -3,6 +3,7 @@ import {LEADER20_PROMPT,leaderDecision} from '../leader20/decision-contract.mjs'
 import {FACT_DEFS,FACTS_VERSION} from './facts.mjs';
 import {FD_VERSION,DATA_MODES,riskFlags,wireSchema,validateDecision} from './contract.mjs';
 import {PROMPTS} from './prompt.mjs';
+import {economyPrompt} from './economy-prompt.mjs';
 import {contextForModel} from './capture-context.mjs';
 import {entryAssessment} from './assessment.mjs';
 import {compactDynamic} from './dynamic-flow.mjs';
@@ -58,7 +59,7 @@ export function compactWireSchema(schema){
 export function payloadFor(packet){
   return {model:MODEL,store:false,tools:[],truncation:'disabled',service_tier:'default',
     prompt_cache_key:'boo-fd1-'+packet.task.toLowerCase(),reasoning:{effort:'none'},max_output_tokens:dynamicEnabled(packet)?(packet.task==='HOLD'?1000:1800):MAX_OUTPUT_TOKENS[packet.task],
-    input:[{role:'system',content:PROMPTS[packet.task]+(dynamicEnabled(packet)?DYNAMIC_PROMPT:'')+(leaderDecision(packet)?LEADER20_PROMPT:'')},{role:'user',content:JSON.stringify(modelInput(packet))}],
+    input:[{role:'system',content:(dynamicEnabled(packet)?economyPrompt(packet)+DYNAMIC_PROMPT:PROMPTS[packet.task])+(leaderDecision(packet)?LEADER20_PROMPT:'')},{role:'user',content:JSON.stringify(modelInput(packet))}],
     text:{verbosity:'low',format:{type:'json_schema',name:'fd1_'+packet.task.toLowerCase(),strict:true,schema:dynamicEnabled(packet)?compactWireSchema(boundedDynamicTransportSchema(wireSchema(packet.task,packet))):wireSchema(packet.task,packet)}}};
 }
 export function costOf(raw){
@@ -80,7 +81,9 @@ export async function callDecision(packet,{apiKey,fetchFn=fetch,now=Date.now,tim
   if(!apiKey){out.error='FD_API_KEY_MISSING';out.api_cost_usd=0;out.completed_at_ms=now();out.latency_ms=0;return out;}
   const controller=new AbortController();let timer;
   try{
-    const payload=payloadFn(packet),body=JSON.stringify(payload);out.request_bytes=new TextEncoder().encode(body).length;out.schema_bytes=JSON.stringify(payload.text?.format?.schema??{}).length;out.timeout_ms=timeoutMs;out.max_output_tokens=payload.max_output_tokens;out.attempted=true;
+    const payload=payloadFn(packet),body=JSON.stringify(payload);out.request_bytes=new TextEncoder().encode(body).length;out.schema_bytes=JSON.stringify(payload.text?.format?.schema??{}).length;out.timeout_ms=timeoutMs;out.max_output_tokens=payload.max_output_tokens;
+    ensure(out.request_bytes<=130000&&Number.isInteger(payload.max_output_tokens)&&payload.max_output_tokens<=1800,'FD_REQUEST_COST_BOUND');
+    out.attempted=true;
     const req=(async()=>{
       const res=await fetchFn(API_URL,{method:'POST',redirect:'error',signal:controller.signal,body,
         headers:{'content-type':'application/json',authorization:'Bearer '+apiKey}});

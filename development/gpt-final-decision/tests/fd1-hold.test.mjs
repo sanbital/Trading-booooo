@@ -52,8 +52,8 @@ test('GPT unavailable / budget exhausted keeps protection when no validated emer
   r=await tick({},T);assert.equal(r.close,false);assert.equal(r.state.last.decision,'BUDGET_EXHAUSTED');
   r=await fd1HoldTick({},pos,{meta:{},state:st(),bid:1.03,now:T,timeCandidate:null});assert.equal(r.close,false);
 });
-test('GPT budget exhaustion promotes only a fresh validated DeepSeek HOLD reviewer for existing positions',async()=>{
-  const store=new MemoryReviewStore();store.claim=async()=>{throw Error('API_BUDGET_EXHAUSTED');};
+test('a separately budgeted fresh DeepSeek HOLD reviewer retains validated exit-only authority',async()=>{
+  const store=new MemoryReviewStore(),claim=store.claim.bind(store);let calls=0;store.claim=async(...a)=>{if(++calls%2===1)throw Error('API_BUDGET_EXHAUSTED');return claim(...a);};
   const ds=async(decision)=>{const generation=pos.id+':'+pos.entry_at,packet=await buildDecisionPacket({task:'HOLD',subjectId:'emergency',symbol:pos.symbol,dataMode:'LIVE',facts:computeFacts(marketSource(T),{asOf:T}),position:{event:'REVIEW',positionId:pos.id,generation}});
    const shared=await frozenReview(packet,{snapshotAtMs:T}),answer={task:'HOLD',candidate_id:packet.candidate_id,snapshot_hash:shared.snapshot_hash,decision_preference:decision,recommended_action:decision,confidence:.5,thesis_state:'BROKEN',bullish_evidence:[],bearish_evidence:['facts.trend.return_5m'],risk_flags:[],trajectory_interpretation:'Observed evidence',strongest_counterargument:'Recovery possible',reason:'Measured evidence'};
    return {packet,result:{arbitration:{version:DUAL_VERSION,initial_input:shared.market_input,snapshot_hash:shared.snapshot_hash,deepseek_snapshot_hash:shared.snapshot_hash,gpt_first_snapshot_hash:shared.snapshot_hash,deepseek:{valid:true,answer,completed_at_ms:T,snapshot_at_ms:T,snapshot_hash:shared.snapshot_hash}}}};};
@@ -61,8 +61,9 @@ test('GPT budget exhaustion promotes only a fresh validated DeepSeek HOLD review
   let r=await tick({},T);assert.equal(r.close,true);assert.equal(r.reason,'FD1_DEEPSEEK_EXIT');assert.equal(r.fallback,true);
   assert.equal(r.approval.authority,'DEEPSEEK_EMERGENCY_EXIT_ONLY');
   setFd1HoldTestHooks({store,apiKey:'k',deepseekKey:'ds',now:()=>T,config:cfg,schedule:()=>{},review:async()=>ds('PROTECT')});
+  store.rows.clear();calls=0; // independent scenario, not reuse of an already completed emergency job
   // A DeepSeek PROTECT keeps the last approved protection; only GPT may raise it.
-  r=await tick({},T);assert.equal(r.close,false);assert.equal(r.reason,'FD1_DEEPSEEK_PROTECT');
+  r=await tick({},T+1);assert.equal(r.close,false);assert.equal(r.reason,'FD1_DEEPSEEK_PROTECT');
   assert.equal(r.state.protectLevel??null,null);
   assert.equal(r.state.protectDeclined.verdict,'KEEP_LAST_APPROVED_PROTECTION');
 });

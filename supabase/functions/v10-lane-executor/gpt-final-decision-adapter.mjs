@@ -159,8 +159,16 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
         peakPrice:state.peakPrice,entryAt:Date.parse(p.entry_at),lastHighAt:state.lastHighAt,stopPrice:state.stopPrice,entryFeatures:f},
       emergencyReview=async why=>{
         if(!emergencyEligible(config,deepseekKey))return null;
+        // Every paid fallback shares the same atomic daily/monthly ledger.
+        const key=await hash({kind:'FD1_BUDGETED_EMERGENCY',parent:step.start.key});
+        const record={version:FD1_HOLD_POLICY_VERSION,kind:'FD1_HOLD_EMERGENCY',purpose:'PRODUCTION',api_approval_ref:config.approvalRef,
+          identity:{symbol:String(p.symbol).toUpperCase(),position_id:String(p.id),generation,event:step.start.event},
+          reserved_usd:.10,packet:null,result:null};
+        let claim;try{claim=await store.claim(key,record,config);}catch{return null;}
+        if(!claim.created)return null;
         const out=await (testHooks?.review??runHoldReview)({apiKey:'',deepseekKey,exitContext,position,dynamicState:prior.dynamicTracker,
           event:step.start.event,timeCandidate,stopStage:state.protectionStage??null});
+        await store.complete(key,claim.row.owner,{...record,packet:out.packet,result:{...out.result,final_packet:undefined},snapshot_at_ms:now});
         // Provider completion occurs after the observation that started this tick.
         const consumedAt=(testHooks?.now??Date.now)();
         const e=await deepseekEmergency(out.result,{p,packet:out.packet,generation,now:consumedAt});
