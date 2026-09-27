@@ -190,15 +190,15 @@ export async function fd1ExitProbe(db,{symbol,runId,apiKey,fetchFn=fetch}){
   if(!claim.created)return {ok:true,duplicate:true,jobKey:key,orderCalls:0};
   let out;
   try{
-    const res=await fetchFn('https://fapi.binance.com/fapi/v1/ticker/bookTicker?symbol='+encodeURIComponent(symbol),
+    const res=await fetchFn('https://fapi.binance.com/fapi/v1/depth?limit=100&symbol='+encodeURIComponent(symbol),
       {signal:AbortSignal.timeout(2500)});
-    if(!res.ok)throw Error('QUOTE_HTTP');const bid=Number((await res.json()).bidPrice);
+    if(!res.ok)throw Error('QUOTE_HTTP_'+res.status);const bid=Number((await res.json()).bids?.[0]?.[0]);
     if(!(bid>0))throw Error('QUOTE_INVALID');
     const t=Date.now();
     out=await runHoldReview({apiKey,deepseekKey:getenv('deepseek api'),fetchFn,position:{id:'fixture:'+runId,symbol,entryPrice:bid*.99,peakPrice:bid,
       entryAt:t-50*60000,lastHighAt:t-46*60000,stopPrice:bid*.975,entryFeatures:{}},
       event:record.identity.event,timeCandidate:null,stopStage:'retestAnchor_LOCK',exitContext:{version:'AI_EXIT_AUTHORITY_2',fixture:true,current_price:bid,entry_price:bid*.99,hard_floor:bid*.975,soft_trigger:{active:true,reason:'P142_LOCK',level:bid*1.001},exposure_increase_allowed:false}});
-  }catch{out={packet:null,result:{valid:false,decision:'ABSTAIN',attempted:false,error:'PROBE_PREP_FAILED',api_cost_usd:0}};}
+  }catch(e){out={packet:null,result:{valid:false,decision:'ABSTAIN',attempted:false,error:'PROBE_PREP_FAILED:'+String(e?.message??e).slice(0,100),api_cost_usd:0}};}
   await store.complete(key,claim.row.owner,{...record,packet:out.packet,result:{...out.result,final_packet:undefined},
     snapshot_at_ms:out.packet?.position?.valuation?.snapshot_at_ms??null});
   const a=out.result.arbitration;

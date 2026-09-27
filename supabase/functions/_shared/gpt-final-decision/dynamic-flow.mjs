@@ -102,7 +102,7 @@ export function compactDynamic(c) {
 }
 /** Absence of data changes confidence and schedules review, never creates an EXIT. */
 export function positionDynamicState(previous, capture, {at, bid, entry, generation, positionId, emergency = null}) {
-  const prior = previous?.generation === generation ? previous : {};
+  const prior = previous && previous.generation === generation ? previous : {};
   const valid = entryCaptureSafety(capture, at).ok;
   const last = valid ? capture : prior.last_valid_capture ?? null;
   const reference = last?.trajectory?.at(-1)?.mid;
