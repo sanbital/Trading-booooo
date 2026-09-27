@@ -43,6 +43,15 @@ test('per-position generation prevents previous position state from crossing lif
  assert.equal(degraded.last_valid_age_ms,T+15000-c.end_ms);assert.ok(degraded.drift_from_last_valid<0);
  assert.equal(degraded.hard_stop_action,'KEEP');assert.equal(degraded.approved_protection_action,'NEVER_LOWER');assert.equal(degraded.close,undefined);
 });
+
+test('missing initial tracker and generation preserve DATA_DEGRADED without throwing',()=>{
+ for(const previous of [null,undefined]){
+  const state=positionDynamicState(previous,{status:'UNAVAILABLE',reason:'TIMEOUT'},
+   {at:T,bid:1.1,entry:1.1,positionId:'fixture'});
+  assert.equal(state.status,'DATA_DEGRADED');assert.equal(state.last_valid_capture,null);
+  assert.equal(state.hard_stop_action,'KEEP');assert.equal(state.approved_protection_action,'NEVER_LOWER');
+ }
+});
 test('compact evidence preserves horizons and source indices; raw journal is unchanged',()=>{
  const c=validCapture(T),before=JSON.stringify(c),short=compactDynamic(c);
  assert.deepEqual(short.dynamics,c.dynamics);assert.ok(short.critical_segments.length<=8);
