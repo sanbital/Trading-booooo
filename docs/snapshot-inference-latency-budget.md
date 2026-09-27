@@ -1,5 +1,29 @@
 # Snapshot inference latency budget
 
+## Current implementation: acquire a fresh inference window
+
+The v124 six-probe verification showed that rereading could return the same
+bucket, and a 20% preliminary allowance routinely timed out DeepSeek. The
+implementation now waits before model input is frozen:
+
+- A capture at most 1,500 ms old can proceed immediately.
+- Otherwise, wait up to 6,500 ms, bounded by the caller's acquisition deadline,
+  for a strictly newer completed, causal, full 24-bucket capture. Same-bucket
+  rereads never count as progress. Failure becomes `INFERENCE_CAPTURE_NOT_READY`.
+- Read book/BTC sensor again after acquisition, then build facts and hashes.
+- The wait happens before the snapshot's model budget. Trigger/consumer deadlines
+  and the ten-second absolute capture lifetime still cap the resulting decision.
+- Allow up to 3.5 seconds for parallel advice and reserve up to 4.5 seconds for
+  FINAL. Both phases retain identical snapshot binding. No preliminary decision
+  is promoted to execution authority.
+- Encode exact evidence paths as short `P` IDs only in FINAL transport. Restore
+  paths before the original validators; save the provider wire separately when
+  transformed. The 24 buckets, horizons and facts remain in model input.
+
+The following sections record the preceding v123/v124 investigation, not the
+current numerical allocation. External API timeouts remain possible; these
+changes do not claim a provider latency guarantee.
+
 A dynamic capture expires ten seconds after its last completed bucket. Previously,
 the parallel FIRST/advisory phase could wait up to six seconds and leave only
 2.2 seconds for GPT FINAL. A capture that was fresh when collected could expire

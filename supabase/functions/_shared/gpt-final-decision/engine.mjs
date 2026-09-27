@@ -51,7 +51,7 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
   history:null,
   async prepare(identity,{fetchFn,now,deadlineMs}){
     const asOf=now(),ms=Math.max(200,Math.min(2500,deadlineMs-asOf));
-    const [{src,errors},history]=await Promise.all([readSources(identity.symbol,asOf,{mode:'LIVE',fetchFn,ms,now}),
+    const [{src,errors},history]=await Promise.all([readSources(identity.symbol,asOf,{mode:'LIVE',fetchFn,ms,now,deadlineMs:deadlineMs-8000}),
       readHistory(this.history,identity,Math.min(ms,1500))]);
     const captured=now();
     const facts=computeFacts(src,{asOf:captured,referenceClose:identity.reference_close,dayReturn:identity.day_return,rank:identity.rank,

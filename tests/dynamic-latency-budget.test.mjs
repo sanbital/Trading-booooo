@@ -45,13 +45,13 @@ test('slow advisory cannot consume FINAL budget and expire a fresh snapshot',asy
 });
 
 test('short lifetime retains independent opinions within a smaller shared wait',async()=>{
- const {out,firstCalls,advisorCalls,finalCalls}=await run(6000,{finalMs:2500});
+ const {out,firstCalls,advisorCalls,finalCalls}=await run(6000,{finalMs:2000});
  assert.equal(firstCalls,1);assert.equal(advisorCalls,1);assert.equal(finalCalls,1);
  assert.equal(out.valid,true);
  assert.equal(out.arbitration.deepseek_valid,false);
  assert.equal(out.arbitration.deepseek_error,'DEEPSEEK_TIMEOUT');
- assert.ok(out.dynamic_audit.latency_budget.advisory_timeout_ms<=750);
- assert.equal(out.dynamic_audit.latency_budget.final_ms,2500);
+ assert.ok(out.dynamic_audit.latency_budget.advisory_timeout_ms<=1500);
+ assert.equal(out.dynamic_audit.latency_budget.final_ms,2000);
 });
 
 test('overrunning FINAL still fails closed and identifies inference expiry',async()=>{

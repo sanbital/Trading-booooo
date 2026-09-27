@@ -375,7 +375,7 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
   let result;
   try{
     const at=asOf??now();
-    const {src,errors}=await readFresh(String(signal.symbol).toUpperCase(),at,{mode:dataMode,fetchFn,ms:policy.freshReadMs,now});
+    const {src,errors}=await readFresh(String(signal.symbol).toUpperCase(),at,{mode:dataMode,fetchFn,ms:policy.freshReadMs,now,deadlineMs:deadline-8000});
     const captured=asOf??now();
     const facts=computeFacts(src,{asOf:captured,referenceClose:f.referenceClose,dayReturn:f.dayReturn,rank:f.rank});
     const judgments=(()=>{try{return JSON.parse(ticket.identityJson).judgments;}catch{return modelJudgments(f);}})();

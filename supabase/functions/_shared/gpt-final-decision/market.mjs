@@ -1,9 +1,8 @@
 /** FD1 public-market reads (no account, no signature). LIVE reads the current state;
  * REPLAY reads Binance history endpoints with endTime strictly before `asOf`, so a
  * replay packet contains only what was published before the historical decision. */
-import {readCapture,readCaptureWithRecovery} from './capture-context.mjs';
+import {captureForInference,readCaptureWithRecovery} from './capture-context.mjs';
 import {readMarketSensor} from './market-sensor.mjs';
-import {DYNAMIC_POLICY} from './dynamic-flow.mjs';
 const HOST='https://fapi.binance.com',MIN=60000;
 async function get(fetchFn,path,ms){
   const r=await fetchFn(HOST+path,{method:'GET',redirect:'error',signal:AbortSignal.timeout(ms)});
@@ -11,7 +10,8 @@ async function get(fetchFn,path,ms){
 }
 const q=o=>new URLSearchParams(Object.fromEntries(Object.entries(o).map(([k,v])=>[k,String(v)])));
 /** @returns src for computeFacts, plus per-source errors. Never throws for a single source. */
-export async function readSources(symbol,asOf,{mode='LIVE',fetchFn=fetch,ms=3000,btcCache=null,now=Date.now,positionId=null}={}){
+export async function readSources(symbol,asOf,{mode='LIVE',fetchFn=fetch,ms=3000,btcCache=null,now=Date.now,positionId=null,
+  deadlineMs=Infinity,captureSleep}={}){
   if(!/^[\p{L}\p{N}_]{1,60}USDT$/u.test(symbol))throw Error('SYMBOL_INVALID');
   const end=Math.floor(asOf/MIN)*MIN-1,end5=Math.floor(asOf/(5*MIN))*5*MIN-1,errors={};
   const safe=async(name,fn)=>{try{return await fn();}catch(e){errors[name]=String(e?.message??e).slice(0,60);return null;}};
@@ -32,16 +32,14 @@ export async function readSources(symbol,asOf,{mode='LIVE',fetchFn=fetch,ms=3000
     live?readBook():Promise.resolve(null),
     live?readCaptureWithRecovery(symbol,asOf,{fetchFn,positionId,now}):Promise.resolve(null),
     live?readMarketSensor(asOf,{fetchFn,timeoutMs:Math.min(350,ms)}):Promise.resolve(null)]);
-  // Slow candle/OI reads can age the concurrently fetched microstructure before
-  // inference even begins. Refresh the fast sources once, before facts/hashes are
-  // built, so FIRST, DeepSeek and FINAL all receive the same newer evidence.
-  if(live&&captureContext?.status==='AVAILABLE'&&now()-captureContext.end_ms>DYNAMIC_POLICY.normalAgeMs){
-    const refreshAt=now(),previous=captureContext;
-    [book,captureContext,marketSensor]=await Promise.all([
-      readBook(Math.min(350,ms)),readCapture(symbol,refreshAt,{fetchFn,timeoutMs:Math.min(350,ms),positionId}),
-      readMarketSensor(refreshAt,{fetchFn,timeoutMs:Math.min(350,ms)})]);
-    captureContext={...captureContext,pre_inference_refresh:{requested_at_ms:refreshAt,received_at_ms:now(),
-      previous_end_ms:previous.end_ms,previous_age_ms:refreshAt-previous.end_ms}};
+  if(live){
+    captureContext=await captureForInference(symbol,captureContext,{fetchFn,now,positionId,deadlineMs,
+      ...(captureSleep?{sleep:captureSleep}:{})});
+    if(captureContext?.pre_inference_refresh){
+      const refreshAt=now();
+      [book,marketSensor]=await Promise.all([readBook(Math.min(350,ms)),
+        readMarketSensor(refreshAt,{fetchFn,timeoutMs:Math.min(350,ms)})]);
+    }
   }
   return {src:{one,five,btc:b,oiHist,premium,funding,book,...(captureContext?{captureContext}:{}),...(marketSensor?{marketSensor}:{}),bookMissingReason:live?(book?null:'BOOK_UNAVAILABLE'):'NOT_POINT_IN_TIME_REPLAY'},errors};
 }

@@ -55,6 +55,32 @@ export async function readCaptureWithRecovery(symbol,asOf,{now=Date.now,read=rea
  return {...(capture??unavailable('READ_FAILED')),recovery_attempts:attempts};
 }
 
+/** Wait for a genuinely newer completed bucket BEFORE freezing any model input.
+ * Never changes event timestamps and never substitutes a partial trajectory. */
+export async function captureForInference(symbol,capture,{now=Date.now,sleep=ms=>new Promise(r=>setTimeout(r,ms)),
+ read=readCapture,deadlineMs=Infinity,maxWaitMs=6500,targetAgeMs=1500,...options}={}){
+ if(capture?.status!=='AVAILABLE')return capture;
+ const started=now(),initialEnd=capture.end_ms,until=Math.min(deadlineMs,started+maxWaitMs);
+ const ready=c=>entryCaptureSafety(c,now()).ok&&now()-c.end_ms<=targetAgeMs;
+ if(ready(capture))return capture;
+ const attempts=[];let current=capture;
+ for(let i=0;i<32&&now()+350<until;i++){
+  // Most DB buckets arrive about one second after the five-second boundary.
+  // Poll only inside the bounded acquisition budget, not the inference lifetime.
+  const delay=Math.min(1000,Math.max(100,initialEnd+6000-now()),until-now()-350);
+  const before=now();await sleep(delay);
+  if(now()<=before)break; // A frozen replay/test clock must not start a live wait loop.
+  const at=now();current=await read(symbol,at,{...options,timeoutMs:Math.min(350,until-at)});
+  attempts.push({requested_at_ms:at,received_at_ms:now(),status:current?.status,end_ms:current?.end_ms??null});
+  if(now()<=until&&current?.end_ms>initialEnd&&ready(current))return {...current,pre_inference_refresh:{
+    requested_at_ms:started,received_at_ms:now(),previous_end_ms:initialEnd,previous_age_ms:started-initialEnd,
+    advanced:true,wait_ms:now()-started,attempts}};
+ }
+ return {...unavailable('INFERENCE_CAPTURE_NOT_READY'),pre_inference_refresh:{requested_at_ms:started,received_at_ms:now(),
+  previous_end_ms:initialEnd,previous_age_ms:started-initialEnd,advanced:false,wait_ms:now()-started,
+  latest_end_ms:current?.end_ms??null,attempts}};
+}
+
 /** Minimal current evidence for OPEN positions only; explicitly not a full capture. */
 export async function emergencyDynamicPacket(symbol,{fetchFn=fetch,now=Date.now,timeoutMs=800}={}){
  const requested=now();

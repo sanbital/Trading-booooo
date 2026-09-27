@@ -155,7 +155,7 @@ export function refreshExitContext(c,book,at){
 /** Build and ask one HOLD review from live public data. Never throws. */
 export async function runHoldReview({position,event,timeCandidate,stopStage,exitContext=null,apiKey,deepseekKey,fetchFn=fetch,now=Date.now,onPacket,dynamicState=null}){
   try{
-    const asOf=now(),{src,errors}=await readSources(String(position.symbol).toUpperCase(),asOf,{mode:'LIVE',fetchFn,ms:2500,now,positionId:position.capturePositionId??null});
+    const asOf=now(),{src,errors}=await readSources(String(position.symbol).toUpperCase(),asOf,{mode:'LIVE',fetchFn,ms:2500,now,positionId:position.capturePositionId??null,deadlineMs:asOf+8000});
     const f=position.entryFeatures??{},snapshotAt=now();
     const facts=computeFacts(src,{asOf:snapshotAt,referenceClose:f.referenceClose,dayReturn:f.dayReturn,rank:f.rank,
       position:{entryPrice:position.entryPrice,peakPrice:position.peakPrice,entryAt:position.entryAt,lastHighAt:position.lastHighAt,
@@ -181,7 +181,7 @@ export async function runHoldReview({position,event,timeCandidate,stopStage,exit
     if(onPacket)Promise.resolve().then(()=>onPacket(packet,snapshotAt)).catch(()=>{});
     const fast=!['DYNAMIC_PERIODIC_REVIEW','PROTECTION_REASSESSMENT'].includes(event)&&!event.startsWith('TIME_EXIT_CANDIDATE:');
     const result=await dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn,now,reviewTier:fast?'FAST':'FULL',
-      deadlineMs:asOf+(fast?DYNAMIC_POLICY.fastReviewMs:HOLD_POLICY.timeAnswerWaitMs-1000),snapshotAtMs:snapshotAt,
+      deadlineMs:Math.min(asOf+HOLD_POLICY.timeAnswerWaitMs-1000,snapshotAt+(fast?DYNAMIC_POLICY.fastReviewMs:HOLD_POLICY.timeAnswerWaitMs-1000)),snapshotAtMs:snapshotAt,
       refreshPacket:fast?null:async ms=>{
         const at=now(),fresh=await readSources(String(position.symbol).toUpperCase(),at,{mode:'LIVE',fetchFn,ms,now,positionId:position.capturePositionId??null}),captured=now();
         const nextFacts=computeFacts(fresh.src,{asOf:captured,referenceClose:f.referenceClose,dayReturn:f.dayReturn,rank:f.rank,position:{entryPrice:position.entryPrice,peakPrice:position.peakPrice,entryAt:position.entryAt,lastHighAt:position.lastHighAt,stopPrice:position.stopPrice,requireLiveQuote:true}});

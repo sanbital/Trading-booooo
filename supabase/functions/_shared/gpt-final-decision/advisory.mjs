@@ -121,7 +121,7 @@ export async function callAdvisory(shared,{apiKey,fetchFn=fetch,now=Date.now,tim
   try{
     if(!apiKey)throw Error('DEEPSEEK_KEY_MISSING');
     const body=JSON.stringify({model,thinking:{type:'disabled'},max_tokens:1400,stream:false,response_format:{type:'json_object'},
-      messages:[{role:'system',content:ADVISORY_PROMPT+policyPrompt(shared.market_input.decision_policy,'deepseek')+'\n'+SENSOR_NOTE+'\nJSON schema: '+JSON.stringify(advisoryTransportSchema(shared))+'\nevidence_ids (copy ID only):\n'+Object.entries(advisoryEvidenceIds(shared)).map(([id,path])=>id+'='+path).join('\n')},
+      messages:[{role:'system',content:ADVISORY_PROMPT+policyPrompt(shared.market_input.decision_policy,'deepseek')+'\n'+SENSOR_NOTE+'\nJSON schema: '+JSON.stringify(advisoryTransportSchema(shared))+'\nOutput EXACTLY the schema keys. No additional keys, including empty *_note fields. Each prose field: one short clause.\nevidence_ids (copy ID only):\n'+Object.entries(advisoryEvidenceIds(shared)).map(([id,path])=>id+'='+path).join('\n')},
         {role:'user',content:JSON.stringify(shared.market_input)}]});
     if(body.length>90000)throw Error('DEEPSEEK_INPUT_SIZE');
     const request=(async()=>{

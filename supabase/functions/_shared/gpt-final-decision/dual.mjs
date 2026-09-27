@@ -185,6 +185,30 @@ export function arbitrationPayload(current,initial,reviews){
       snapshot_delta:changes,independent_reviews:reviews,
       disagreement:disagreement(reviews.gpt,{valid:reviews.deepseek.valid,answer:reviews.deepseek.answer})})}]};
 }
+/** Lossless wire-only citation compression. Persisted validation still uses exact paths. */
+export function finalEvidenceTransport(payload){
+  const schema=payload.text.format.schema,paths=new Set();
+  const isPath=s=>typeof s==='string'&&/^(initial|current|dynamics|facts|capture_context)\./.test(s);
+  const collect=x=>{if(!x||typeof x!=='object')return;
+    if(Array.isArray(x.enum)&&x.enum.every(isPath))x.enum.forEach(p=>paths.add(p));
+    for(const v of Object.values(x))collect(v);};collect(schema);
+  const ids=Object.fromEntries([...paths].sort().map((p,i)=>['P'+(i+1),p]));
+  const reverse=Object.fromEntries(Object.entries(ids).map(([id,p])=>[p,id]));
+  const convert=x=>{if(!x||typeof x!=='object')return x;if(Array.isArray(x))return x.map(convert);
+    return Object.fromEntries(Object.entries(x).map(([k,v])=>[k,k==='enum'&&v.every(isPath)?v.map(p=>reverse[p]):convert(v)]));};
+  const decodeValue=(value,s)=>{
+    if(s?.$ref)s=s.$ref.split('/').slice(1).reduce((v,k)=>v?.[k],schema);
+    if(s?.anyOf?.every(b=>b.enum?.every(isPath)))return Object.hasOwn(ids,value)?ids[value]:value;
+    if(s?.enum?.every(isPath))return Object.hasOwn(ids,value)?ids[value]:value;
+    if(Array.isArray(value))return value.map(v=>decodeValue(v,s?.items));
+    if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,decodeValue(v,s?.properties?.[k])]));
+    return value;
+  };
+  const copy=clone(payload);copy.text.format.schema=convert(schema);
+  copy.input[0].content+='\nWIRE CITATIONS: In evidence enum fields return the P IDs offered by the schema, never the long paths. evidence_ids maps each ID to its exact path. All original citation scope and support rules still apply.';
+  const user=JSON.parse(copy.input[1].content);user.evidence_ids=ids;copy.input[1].content=JSON.stringify(user);
+  return {payload:copy,decode:wire=>decodeValue(wire,schema),ids};
+}
 /** First calls overlap; FINAL always runs. FIRST/advice never become an executable fallback. */
 export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch,now=Date.now,deadlineMs,
   gptCall=callDecision,counterCall=callAdvisory,snapshotAtMs,inputPayload=payloadFor,validate=validateDecision,refreshPacket,policy:policyOverride=null,reviewTier='FULL'}={}){
@@ -204,12 +228,12 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
   const fast=reviewTier==='FAST'&&packet.task==='HOLD'&&dynamicEnabled(packet);
   const preparedAt=now(),remainingAtStart=deadline-preparedAt;
   const completionReserveMs=dynamicEnabled(packet)?Math.min(250,Math.max(0,Math.floor(remainingAtStart*.1))):0;
-  // On short-lived snapshots keep both independent opinions, but bound their
-  // shared wait to 20% of usable time; FINAL receives up to four seconds.
-  const finalReserveMs=dynamicEnabled(packet)?Math.min(4000,Math.max(0,Math.floor((remainingAtStart-completionReserveMs)*.8))):0;
+  // Fresh-bucket acquisition leaves room for both providers. Preserve up to
+  // 3.5 seconds for independent advice and 4.5 seconds for the final authority.
+  const finalReserveMs=dynamicEnabled(packet)?Math.min(4500,Math.max(0,Math.floor((remainingAtStart-completionReserveMs)*.6))):0;
   const preliminaryMs=dynamicEnabled(packet)?Math.max(0,remainingAtStart-finalReserveMs-completionReserveMs):Infinity;
-  const firstMs=Math.min(preliminaryMs,Math.max(1,Math.min(fast?1500:dynamicEnabled(packet)?4000:6000,remainingAtStart-2500,Math.floor((remainingAtStart-1500)*.65))));
-  const advisoryMs=Math.min(preliminaryMs,Math.max(1,Math.min(fast?3500:6000,remainingAtStart-2200,Math.floor((remainingAtStart-1200)*.75))));
+  const firstMs=Math.min(preliminaryMs,Math.max(1,Math.min(dynamicEnabled(packet)?2500:6000,remainingAtStart-2500,Math.floor((remainingAtStart-1500)*.65))));
+  const advisoryMs=Math.min(preliminaryMs,Math.max(1,Math.min(dynamicEnabled(packet)?3500:6000,remainingAtStart-2200,Math.floor((remainingAtStart-1200)*.75))));
   const safe=async fn=>{try{return await fn();}catch{return invalid('FD_PROVIDER_ERROR');}};
   const [first0,ds0]=await Promise.all([
     firstMs>0?safe(()=>gptCall(initial.packet,{apiKey,fetchFn,now,timeoutMs:firstMs,payloadFn:()=>firstPayload(initial),validate:dynamicEnabled(packet)?wire=>validateFirstWire(wire,initial):validate})):invalid('FD_FINAL_BUDGET_RESERVED'),
@@ -236,11 +260,15 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
     else refreshError='LATEST_SNAPSHOT_UNAVAILABLE';
   }catch{refreshError='LATEST_SNAPSHOT_UNAVAILABLE';}}
   const reviews=reviewsFor(first,ds),catalog={...evidenceCatalog(initial.market_input,'initial'),...evidenceCatalog(current.market_input,'current')};
+  const finalPayload=arbitrationPayload(current,initial,reviews);
+  if(refreshError){const u=JSON.parse(finalPayload.input[1].content);u.latest_snapshot_error=refreshError;finalPayload.input[1].content=JSON.stringify(u);}
+  const transport=dynamicEnabled(packet)?finalEvidenceTransport(finalPayload):{payload:finalPayload,decode:x=>x};
   const finalStartedAt=now(),remaining=deadline-finalStartedAt-completionReserveMs;
   let final=remaining>0?await safe(()=>gptCall(current.packet,{apiKey,fetchFn,now,timeoutMs:Math.min(8000,remaining),
-    payloadFn:()=>{const p=arbitrationPayload(current,initial,reviews);if(refreshError){const u=JSON.parse(p.input[1].content);u.latest_snapshot_error=refreshError;p.input[1].content=JSON.stringify(u);}return p;},
-    validate:(wire,p)=>validateFinalWire(wire,p,{validate,catalog,advisory:ds})})):invalid('FD_ARBITRATION_NO_TIME');
-  if(final.valid===true){try{const answer=validateFinalWire(final.wire,current.packet,{validate,catalog,advisory:ds});final={...final,answer,decision:answer.decision};}
+    payloadFn:()=>transport.payload,
+    validate:(wire,p)=>validateFinalWire(transport.decode(wire),p,{validate,catalog,advisory:ds})})):invalid('FD_ARBITRATION_NO_TIME');
+  if(final.valid===true){try{const wire=transport.decode(final.wire),answer=validateFinalWire(wire,current.packet,{validate,catalog,advisory:ds});
+    final={...final,...(JSON.stringify(wire)!==JSON.stringify(final.wire)?{provider_wire:final.wire,wire_encoding:'EXACT_EVIDENCE_IDS_V1'}:{}),wire,answer,decision:answer.decision};}
     catch(e){final={...final,valid:false,decision:'ABSTAIN',answer:null,error:e.message??'FD_FINAL_INVALID'};}}
   if(dynamicEnabled(packet)){
     const integrity=entryCaptureSafety(current.packet.facts?.capture_context,now());
