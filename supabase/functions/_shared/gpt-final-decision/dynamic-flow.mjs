@@ -4,7 +4,7 @@ export const HORIZONS = Object.freeze([5, 15, 30, 60, 120]);
 export const DYNAMIC_POLICY = Object.freeze({
   version: DYNAMIC_VERSION, bucketMs: 5000, buckets: 24,
   normalAgeMs: 5000, absoluteAgeMs: 10000, positionReadMs: 5000,
-  missingRetryMs: 5000, periodicReviewMs: 120000, fastReviewMs: 6000,
+  missingRetryMs: 5000, periodicReviewMs: 120000, fastReviewMs: 8000,
   singleModelBuyConfidence: 0.8, maxWaitReviews: 3,
 });
 const finite = Number.isFinite;
