@@ -14,7 +14,7 @@ for(const app of [...new Set(['sanbital-doa-capture-20260925',process.env.FLY_BI
  if(app==='sanbital-doa-capture-20260925'&&(machines.length!==1||machines[0].config?.guest?.cpus!==1||machines[0].config?.guest?.memory_mb!==256))throw Error('COLLECTOR_NOT_MINIMUM_SINGLE_INSTANCE');
 }
 evidence.control=(await query("select daily_cap_usd,monthly_cap_usd,max_calls_per_day,approval_ref,budget_effective_day,daily_spend_offset,daily_call_offset from public.gpt_final_review_control where singleton"))[0];
-if(Number(evidence.control.monthly_cap_usd)!==45||Number(evidence.control.daily_cap_usd)!==1.25)throw Error('MONTHLY_LIMIT_NOT_APPLIED');save();
+if(Number(evidence.control.monthly_cap_usd)!==95||Number(evidence.control.daily_cap_usd)!==3||evidence.control.approval_ref!=='USER-APPROVED-2026-09-28-MONTHLY100-AI95-STORAGE5')throw Error('MONTHLY_LIMIT_NOT_APPLIED');save();
 const token=(await query("select token from public.edge_internal_tokens where name='doa-capture'"))[0]?.token;
 if(!token)throw Error('CAPTURE_AUTH_MISSING');
 for(let i=0;i<20;i++){
