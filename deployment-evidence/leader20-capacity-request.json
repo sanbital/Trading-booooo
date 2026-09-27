@@ -1,5 +1,6 @@
 {
   "release": "MONTHLY50_TOP10_20260927",
+  "deployment_attempt": 2,
   "monthly_ai_usd": 40,
   "daily_ai_usd": 1.25,
   "incremental_storage_allowance_usd": 10,
