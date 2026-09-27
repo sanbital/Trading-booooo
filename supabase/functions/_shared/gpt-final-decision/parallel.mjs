@@ -68,7 +68,7 @@ export async function sharedReview(packet,{snapshotAtMs,inputPayload=payloadFor}
   const copy=JSON.parse(JSON.stringify(packet));
   assert(copy.candidate_id&&['ENTRY','HOLD','RECHECK'].includes(copy.task),'COUNTER_PACKET');
   const allowed=['version','task','candidate_id','symbol','data_mode','facts','model_judgments','position','chase',
-    'snapshot_hash','as_of_offset_ms','source_errors','execution_ref','initial','change','current_ref','pre_dispatch','trigger_reasons'];
+    'snapshot_hash','as_of_offset_ms','source_errors','execution_ref','initial','change','dynamic_change','current_ref','pre_dispatch','trigger_reasons'];
   assert(Object.keys(copy).every(k=>allowed.includes(k)),'COUNTER_PACKET_FIELDS');
   const payload=inputPayload(copy);
   const marketInput=JSON.parse(payload.input.find(x=>x.role==='user').content);

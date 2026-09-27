@@ -60,7 +60,7 @@ export function dynamicDelta(initial, current) {
     const keys = ['return','velocity_bps_s','acceleration_bps_s2','buy_share','buy_share_slope',
       'net_taker_flow','flow_acceleration','bid_liquidity_change','ask_liquidity_change',
       'imbalance','imbalance_trend','spread','buy_impact_450_bps','high_renewal_slowdown',
-      'drawdown_from_sampled_peak','recovery_velocity_bps_s'];
+      'drawdown_from_sampled_peak','recovery_velocity_bps_s','recovery_from_sampled_low'];
     changes['s' + s] = Object.fromEntries(keys.map(k => [k, finite(a[k]) && finite(b[k]) ? b[k] - a[k] : null]));
     if (s <= 15 && finite(a.return) && finite(b.return) && a.return >= 0 && b.return < 0)
       reasons.push('DYNAMIC_RETURN_REVERSED_' + s);
@@ -100,6 +100,9 @@ export function compactDynamic(c) {
     'bid_depth_25_usdt','ask_depth_25_usdt','imbalance','trade_count','arrival_rate','ask_book_net_5s','bid_book_net_5s',
     'buy_impact_450_bps','sell_impact_450_bps','drawdown_from_sampled_peak'];
   return {...summary, representation: 'COMPACT_WITH_ORIGINAL_BUCKET_INDEX',
+    ordered_path_columns:['end_ms','d_mid_bps','net_taker_quote_5s','high_renewal','imbalance','d_bid_depth_25_pct','d_ask_depth_25_pct'],
+    ordered_path:p.map(x=>[x.end_ms,x.d_mid_bps,x.net_taker_quote_5s,x.high_renewal,x.imbalance,x.d_bid_depth_25_pct,x.d_ask_depth_25_pct]),
+    latest_six_range:[Math.max(0,p.length-6),p.length-1],
     critical_segments: [...indices].filter(i => i >= 0).sort((a,b) => a-b).map(i => ({index: i, ...Object.fromEntries(fields.filter(k=>Object.hasOwn(p[i],k)).map(k=>[k,p[i][k]]))})),
     raw_bucket_count: p.length};
 }

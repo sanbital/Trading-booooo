@@ -6,10 +6,10 @@ export const CAPTURE_NOTE='capture_context는 판단 직전 약 120초를 5초 x
 const POINT_KEYS=['end_ms','d_mid_bps','d_spread_bps','d_ask_depth_25_pct','d_bid_depth_25_pct','buy_share_5s','d_buy_share','net_taker_quote_5s','d_net_taker_quote','ask_book_net_5s','buy_impact_450_bps','d_buy_impact_bps','sell_impact_450_bps','d_sell_impact_bps'];
 const OPTIONAL_KEYS=['trade_count','arrival_rate','aggressive_notional','bid_book_net_5s','spread_bps','bid_depth_25_usdt','ask_depth_25_usdt','imbalance','btc_return_1m'];
 const finiteOrNull=v=>v===null||Number.isFinite(v);
-function unavailable(reason){return {version:CAPTURE_VERSION,status:'UNAVAILABLE',reason};}
+function unavailable(reason){return {version:CAPTURE_VERSION,status:'UNAVAILABLE',reason,valid:false,causal:false,complete:false,bucket_count:0};}
 export function contextForModel(c,now=Date.now()){
  if(c?.status!=='AVAILABLE')return c;
- if(c.end_ms>now||now-c.end_ms>25000)return unavailable('STALE_AT_MODEL_CALL');
+ if(c.end_ms>now||now-c.end_ms>=10000)return unavailable('STALE_AT_MODEL_CALL');
  return {...c,age_ms:now-c.end_ms};
 }
 export function validateCapture(raw,asOf){
@@ -108,5 +108,6 @@ export function validateCapture120(raw,asOf){
  }
  if(trajectory[0].start_ms!==start||trajectory.at(-1).end_ms!==end)return unavailable('WINDOW_MISMATCH');
  return {version:CAPTURE_VERSION,status:'AVAILABLE',coverage_policy:'ALL_24_REQUIRED',position_id:raw.position_id??null,
+  trajectory_started_at:start,trajectory_ended_at:end,snapshot_at:asOf,bucket_count:24,valid:true,causal:true,complete:true,
   window_ms:end-start,age_ms:asOf-end,start_ms:start,end_ms:end,buckets:24,trajectory:bucketDynamics(trajectory),dynamics:trajectoryDynamics(trajectory)};
 }

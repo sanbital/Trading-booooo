@@ -65,7 +65,8 @@ export function trajectoryDynamics(points){
 export function dynamicsEvent(c,prior,protect=false){
  if(c?.status!=='AVAILABLE'||!c.dynamics)return {event:null,evidenceKey:null,observation:prior??null};
  const d=c.dynamics,short=d.horizons.s15,older=d.horizons.s60,last=c.trajectory.at(-1);
- const observation={at:c.end_ms,acceleration:d.acceleration,net:short.net_taker_flow,bid:short.bid_depth,spread:short.spread};
+ const observation={at:c.end_ms,acceleration:d.acceleration,net:short.net_taker_flow,bid:short.bid_depth,spread:short.spread,
+  renewals:short.sampled_high_renewals,ret60:older.return,mid:last.mid,peak:Math.max(...c.trajectory.map(x=>x.mid)),drawdown:short.drawdown_from_sampled_peak};
  if(!prior)return {event:null,evidenceKey:null,observation};
  const k=protect?.5:1;let event=null;
  if(prior.acceleration>0&&d.acceleration<0)event='MOMENTUM_ACCELERATION_FLIP';
@@ -73,5 +74,12 @@ export function dynamicsEvent(c,prior,protect=false){
  else if(prior.bid>0&&short.bid_depth/prior.bid<1-.30*k)event='BID_DEPTH_COLLAPSE';
  else if(prior.spread>0&&short.spread/prior.spread>1+.75*k)event='SPREAD_BLOWOUT';
  else if(older.return<0&&short.return>0&&short.bid_depth_slope>0&&last.d_buy_share>0)event='DIP_BID_RECOVERY';
+ else if(prior.renewals>0&&short.sampled_high_renewals===0)event='HIGH_RENEWAL_STOPPED';
+ else if(prior.ret60>=0&&older.return<0&&short.net_taker_flow<0)event='TREND_BREAK';
+ else if(d.acceleration<0&&d.acceleration<prior.acceleration&&short.flow_acceleration<0)event='FAST_NEGATIVE_ACCELERATION';
+ else if(last.aggressive_sell>last.aggressive_buy&&last.aggressive_sell>Math.max(...c.trajectory.slice(0,-1).map(x=>x.aggressive_sell)))event='LARGE_SELL_BUCKET';
+ else if(short.drawdown_from_sampled_peak<prior.drawdown&&short.net_taker_flow<0&&short.bid_liquidity_change<0)event='RAPID_MFE_GIVEBACK';
+ else if(prior.mid>=prior.peak&&last.mid<prior.mid&&short.net_taker_flow<0)event='LOCAL_HIGH_REJECTION';
+ else if(last.mid<prior.peak&&c.trajectory.some(x=>x.mid>prior.peak)&&short.recovery_velocity_bps_s<=0)event='FAILED_BREAKOUT';
  return {event,evidenceKey:event?event+':'+Math.floor(c.end_ms/15000):null,observation};
 }

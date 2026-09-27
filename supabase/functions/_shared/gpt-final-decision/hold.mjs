@@ -8,6 +8,7 @@ import {buildDecisionPacket,callDecision,hash,MODEL} from './api.mjs';
 import {FD_VERSION} from './contract.mjs';
 import {dualEntryDecision,DUAL_VERSION} from './dual.mjs';
 import {DYNAMIC_VERSION,DYNAMIC_POLICY,positionDynamicState} from './dynamic-flow.mjs';
+import {emergencyDynamicPacket} from './capture-context.mjs';
 export const FD1_HOLD_POLICY_VERSION='FD1_HOLD_EXIT_AUTHORITY_2';
 export const TIME_REASONS=Object.freeze(['V17_MOMENTUM_STALE','V17_MAX_HOLD']);
 export const HOLD_POLICY=Object.freeze({holdTtlMs:15*60_000,minGapMs:5*60_000,deteriorationMinGapMs:60_000,maxReviews:30,
@@ -26,12 +27,13 @@ export function nextEvent(st,{now,price,peak,timeCandidate,softTrigger,dynamics}
  if(now-s.reviewWindowAt>=P.reviewWindowMs){s.reviews=0;s.reviewWindowAt=now;}
  if(peak>s.lastPeak){s.lastPeak=peak;s.ddArmed=true;}
  if(!softTrigger?.active)s.softArmed=true;
- if(s.pending||s.retryAfter&&now<s.retryAfter)return {state:s,event:null};
- if(s.reviews>=P.maxReviews)return {state:s,event:null,exhausted:true};
- if(dynamics?.event&&['DATA_DEGRADED','ENTRY_FAILURE_MULTI_AXIS','POST_FILL_THESIS_REVIEW'].includes(dynamics.event)&&
-    elapsed>=DYNAMIC_POLICY.missingRetryMs&&dynamics.evidenceKey!==s.lastDynamicsKey){
+ if(s.pending)return {state:s,event:null};
+ if(dynamics?.event&&
+    (elapsed>=DYNAMIC_POLICY.missingRetryMs||dynamics.event==='TRAJECTORY_RECOVERED')&&dynamics.evidenceKey!==s.lastDynamicsKey){
   s.lastDynamicsKey=dynamics.evidenceKey;return {state:s,event:dynamics.event};
  }
+ if(s.retryAfter&&now<s.retryAfter)return {state:s,event:null};
+ if(s.reviews>=P.maxReviews)return {state:s,event:null,exhausted:true};
  if(dynamics?.observation&&elapsed>=DYNAMIC_POLICY.periodicReviewMs)return {state:s,event:'DYNAMIC_PERIODIC_REVIEW'};
  if(s.protectUntil&&now>=s.protectUntil){s.protectUntil=null;return {state:s,event:'PROTECTION_REASSESSMENT'};}
  if(softTrigger?.active){
@@ -104,6 +106,11 @@ export async function holdStep(st0,{now,price,peak,timeCandidate,softTrigger,dyn
     return {close:false,reason:'FD1_GPT_PROTECT',state:st,protectApproval:approval};
    }
    if(decision==='HOLD'){
+    if(st.dynamicTracker?.status==='DATA_DEGRADED'||a?.dynamic_state==='DATA_DEGRADED'){
+      st.holdUntil=null;st.retryAfter=now+DYNAMIC_POLICY.missingRetryMs;st.softArmed=true;
+      return {close:false,reason:'FD1_DATA_DEGRADED_REVIEWED',state:st,
+        protectApproval:{verdict:'KEEP_LAST_APPROVED_PROTECTION',standing:Number(st.protectLevel)||null,at:now}};
+    }
     // HOLD consumes the candidate. Protection is not raised, and never lowered either.
     if(timeCandidate)st.holdUntil=now+P.holdTtlMs;
     return {close:false,reason:'FD1_GPT_HOLD',state:st,
@@ -130,7 +137,7 @@ export async function holdStep(st0,{now,price,peak,timeCandidate,softTrigger,dyn
   st.reviews+=1;st.lastReviewAt=now;st.lastReviewPrice=price;
   return {close:false,reason:'FD1_AWAITING_GPT',state:st,start:{key,event:n.event}};
  }
- return {close:false,reason:timeCandidate&&st.holdUntil&&now<st.holdUntil?'FD1_GPT_HOLD':null,state:st};
+ return {close:false,reason:st.dynamicTracker?.status==='DATA_DEGRADED'?'FD1_DATA_DEGRADED_PENDING_REVIEW':timeCandidate&&st.holdUntil&&now<st.holdUntil?'FD1_GPT_HOLD':null,state:st};
 }
 export function refreshExitContext(c,book,at){
  if(!c)return null;
@@ -159,15 +166,16 @@ export async function runHoldReview({position,event,timeCandidate,stopStage,exit
         valuation:{basis:'EXECUTABLE_BID',snapshot_at_ms:snapshotAt,quote_at_ms:Number(src.book.T??src.book.E),
           candle_close_at_ms:facts.quality.last_close_at_ms}}});
     packet.dynamic_policy=DYNAMIC_VERSION;packet.dynamic_as_of_ms=snapshotAt;
-    const tracker=positionDynamicState(dynamicState,facts.capture_context,{at:snapshotAt,bid:Number(src.book?.bids?.[0]?.[0]),
+    let tracker=positionDynamicState(dynamicState,facts.capture_context,{at:snapshotAt,bid:Number(src.book?.bids?.[0]?.[0]),
       entry:position.entryPrice,generation:position.generation,positionId:position.id,emergency:dynamicState?.emergency_packet});
+    if(tracker.status==='DATA_DEGRADED')tracker={...tracker,emergency_packet:await emergencyDynamicPacket(position.symbol,{fetchFn,now})};
     packet.dynamic_data_state={status:tracker.status,confidence:tracker.confidence,
       last_valid_age_ms:tracker.last_valid_age_ms,drift_from_last_valid:tracker.drift_from_last_valid,
       emergency_packet:tracker.emergency_packet,exposure_increase_allowed:false};
     packet.snapshot_hash=await hash({...packet,snapshot_hash:''});
     // Observers are detached: no observer rejection or latency changes the GPT decision.
     if(onPacket)Promise.resolve().then(()=>onPacket(packet,snapshotAt)).catch(()=>{});
-    const fast=['DATA_DEGRADED','ENTRY_FAILURE_MULTI_AXIS','POST_FILL_THESIS_REVIEW','BID_DEPTH_COLLAPSE','SELL_FLOW_ACCELERATION','SPREAD_BLOWOUT'].includes(event);
+    const fast=!['DYNAMIC_PERIODIC_REVIEW','PROTECTION_REASSESSMENT'].includes(event)&&!event.startsWith('TIME_EXIT_CANDIDATE:');
     const result=await dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn,now,reviewTier:fast?'FAST':'FULL',
       deadlineMs:asOf+(fast?DYNAMIC_POLICY.fastReviewMs:HOLD_POLICY.timeAnswerWaitMs-1000),snapshotAtMs:snapshotAt,
       refreshPacket:fast?null:async ms=>{

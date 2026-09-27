@@ -123,6 +123,9 @@ test('NEAR orchestration '+scenario+': FINAL SKIP retains authority and no retry
    }
    return Response.json({model:MODEL,status:'completed',usage:{input_tokens:100,output_tokens:100},output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(wire)}]}]});
   }});
+ if(['snapshot','candidate'].includes(scenario)){
+  assert.equal(r.valid,false);assert.equal(r.error,'DYNAMIC_PROVIDER_SNAPSHOT_MISMATCH');assert.notEqual(r.decision,'BUY');return;
+ }
  assert.equal(r.valid,true,r.error);assert.equal(r.decision,'SKIP');assert.equal(admission(r.answer).allowed,false);
  assert.equal(gptCalls,2);assert.equal(dsCalls,scenario==='unavailable'?0:1);assert.equal(requests.length,scenario==='unavailable'?2:3);
  assert.equal(r.arbitration.api_calls,requests.length);assert.equal(r.arbitration.final_decision,'SKIP');

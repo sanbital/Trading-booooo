@@ -1,6 +1,6 @@
 import {positionGeneration} from '../_shared/exit-authority.mjs';
 import {readCaptureWithRecovery,emergencyDynamicPacket} from '../_shared/gpt-final-decision/capture-context.mjs';
-import {DYNAMIC_POLICY,positionDynamicState,entryFailureEvidence} from '../_shared/gpt-final-decision/dynamic-flow.mjs';
+import {DYNAMIC_POLICY,positionDynamicState,entryFailureEvidence,entryCaptureSafety} from '../_shared/gpt-final-decision/dynamic-flow.mjs';
 import {dynamicsEvent} from '../_shared/gpt-final-decision/trajectory.mjs';
 /** Strategic closes require fresh validated GPT FINAL. Existing hard safety executes first. */
 import {holdStep,initialHoldState,runHoldReview,TIME_REASONS,FD1_HOLD_POLICY_VERSION,HOLD_POLICY} from '../_shared/gpt-final-decision/hold.mjs';
@@ -20,6 +20,9 @@ function authorized(c,apiKey){return c.mode==='ENFORCE'&&c.modeValid!==false&&c.
 function emergencyEligible(c,deepseekKey){return c?.mode==='ENFORCE'&&c?.modeValid!==false&&c?.enforceApproved===true&&
   typeof c?.approvalRef==='string'&&c.approvalRef.length>0&&!!deepseekKey;}
 async function deepseekEmergency(result,{p,packet,generation,now}){
+  // Current lifecycle has GPT-only strategy authority; historical records retain
+  // their original validator, but advisory output cannot execute a dynamic review.
+  if(packet?.dynamic_policy)return null;
   const ds=result?.arbitration?.deepseek,a=ds?.answer,decision=a?.decision_preference;
   if(ds?.valid!==true||!['HOLD','PROTECT','EXIT'].includes(decision)||a?.recommended_action!==decision)return null;
   const completed=Number(ds.completed_at_ms),snapshot=Number(ds.snapshot_at_ms),snapshotHash=String(ds.snapshot_hash??'');
@@ -89,7 +92,7 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
   prior={...prior,generation};
   const pendingRead=prior.pending?store.get(prior.pending.key).catch(()=>null):null;
   let dynamics=null;
-  if(now-(prior.dynamicsAt??0)>=DYNAMIC_POLICY.positionReadMs){
+  if(now-(prior.dynamicsAt??0)>=DYNAMIC_POLICY.positionReadMs||!prior.dynamicTracker){
     const capture=await (testHooks?.capture??readCaptureWithRecovery)(p.symbol,now,{positionId:p.id,now:testHooks?.now??Date.now});
     dynamics=dynamicsEvent(capture,prior.dynamicsObservation,!!prior.protectUntil);
     const capturedAt=testHooks?.capture?now:Date.now();
@@ -102,12 +105,20 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
         await emergencyDynamicPacket(p.symbol);
       tracker={...tracker,emergency_packet:emergency};
       dynamics={...dynamics,event:'DATA_DEGRADED',evidenceKey:'DATA_DEGRADED:'+Math.floor(now/DYNAMIC_POLICY.missingRetryMs)};
+      prior={...prior,holdUntil:null};
     }else{
       const failure=entryFailureEvidence(capture,{entry:Number(p.entry_price),peak:state.peakPrice,prior:prior.dynamicTracker?.last_valid_capture});
       tracker.entry_failure=failure;
-      if(failure.review)dynamics={...dynamics,event:'ENTRY_FAILURE_MULTI_AXIS',evidenceKey:'ENTRY_FAILURE:'+capture.end_ms};
+      if(prior.dynamicTracker?.status==='DATA_DEGRADED'){
+        dynamics={...dynamics,event:'TRAJECTORY_RECOVERED',evidenceKey:'RECOVERED:'+capture.end_ms};
+        prior={...prior,retryAfter:null,holdUntil:null};
+      }
+      else if(failure.review)dynamics={...dynamics,event:'ENTRY_FAILURE_MULTI_AXIS',evidenceKey:'ENTRY_FAILURE:'+capture.end_ms};
       else if(!prior.dynamicTracker&&now>=Date.parse(p.entry_at)&&now-Date.parse(p.entry_at)<120000)
         dynamics={...dynamics,event:'POST_FILL_THESIS_REVIEW',evidenceKey:'POST_FILL:'+p.id};
+      const btc=capture.trajectory?.at(-1)?.btc_return_1m,hard=Number(exitContext?.hard_floor);
+      if(Number.isFinite(btc)&&btc<=-.005)dynamics={...dynamics,event:'BTC_SHOCK',evidenceKey:'BTC_SHOCK:'+capture.end_ms};
+      if(hard>0&&bid>hard&&bid/hard-1<=.0025)dynamics={...dynamics,event:'NATIVE_HARD_STOP_PROXIMITY',evidenceKey:'HARD_PROXIMITY:'+capture.end_ms};
     }
     prior={...prior,dynamicsAt:capturedAt,dynamicsObservation:dynamics.observation,dynamicTracker:tracker};
   }
@@ -115,7 +126,11 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
       identityOk=row.record?.identity?.position_id===String(p.id)&&row.record?.identity?.generation===generation&&row.record?.purpose==='PRODUCTION'&&
         row.record?.packet?.position?.generation===generation;
     let valid=false;try{valid=r.valid===true&&identityOk&&revalidateArbitration(r,row.record.packet).decision===r.decision;}catch{}
+    const reviewedCapture=row.record?.packet?.facts?.capture_context;
+    if(valid&&row.record?.packet?.dynamic_policy&&reviewedCapture?.status==='AVAILABLE'&&
+      !entryCaptureSafety(reviewedCapture,testHooks?now:Date.now()).ok)valid=false;
     if(valid)return {state:row.state,decision:r.decision,valid:true,authority:'GPT_FINAL_ONLY',
+      dynamic_state:row.record?.packet?.dynamic_data_state?.status??null,
       started_at_ms:r.started_at_ms,completed_at_ms:r.completed_at_ms,snapshot_at_ms:r.final_snapshot_at_ms,snapshot_hash:r.arbitration?.final_snapshot_hash??null,
       refresh_error:r.arbitration?.refresh_error??null};
     if(row.state==='DONE'&&identityOk){

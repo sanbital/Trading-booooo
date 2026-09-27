@@ -13,7 +13,10 @@ dynamic_evidence and dynamic_risks contain ONLY exact numeric dot paths from the
 For these fields use paths relative to capture_context, such as dynamics.horizons.s30.net_taker_flow.
 Put explanations in current_propulsion, structural_strength and uncertainty. If evidence is missing, use empty citation arrays.
 WAIT is a normal decision: a strong symbol with uncertain timing should be observed again without adding exposure.
-Explain current propulsion direction as ACCELERATING, STABLE, DECELERATING or REVERSING.
+Explain current propulsion direction as ACCELERATING, STABLE, HEALTHY_PULLBACK, DECELERATING, EXHAUSTED or REVERSING.
+The latest ten-second tape is auxiliary: a brief rebound must not overwrite exhaustion across the full 120 seconds.
+Negative 5/15s with strong 30/60s structure and recovering flow can be HEALTHY_PULLBACK. Preserve strong winners.
+Stopped high renewal, lower highs, deteriorating net flow, shrinking bids and failed recovery together can indicate EXHAUSTED.
 For each why_buy_now horizon, cite an exact numeric path under dynamics.horizons.s5/s15/s30/s60/s120.
 why_buy_now.flow and .orderbook cite exact numeric paths relative to capture_context (e.g. dynamics.horizons.s30.net_taker_flow).
 The reason must explain why entering now is preferable to waiting; never substitute a long-term trend for missing dynamic evidence.
@@ -30,7 +33,7 @@ volume impulse, buyer participation and OI expansion. Missing history remains un
 Use one short clause per prose field, at most twelve words. Cite one path per horizon and at most three paths in other arrays. Return conclusions, not chain-of-thought. Numeric citations are checked against the frozen capture.`;
 export function dynamicWireProperties(task) {
   const common = {structural_strength:prose,current_propulsion:prose,
-    propulsion_direction:{type:'string',enum:['ACCELERATING','STABLE','DECELERATING','REVERSING']},
+    propulsion_direction:{type:'string',enum:['ACCELERATING','STABLE','HEALTHY_PULLBACK','DECELERATING','EXHAUSTED','REVERSING']},
     dynamic_evidence:citations,dynamic_risks:citations};
   if (task === 'HOLD') return {...common,uncertainty:prose,
     confidence:{type:'number'},dynamic_action:{type:'string',enum:['HOLD','HOLD_AND_RAISE_PROTECTION','HOLD_WITH_TIGHTER_RISK',

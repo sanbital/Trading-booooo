@@ -31,7 +31,8 @@ function logRow(db,s,record,outcome){
     recheck_triggered:record.recheck_triggered,recheck_reasons:record.recheck_reasons,deltas:record.deltas,
     final_gpt_decision:record.final_gpt_decision,final_gpt_at:ms(record.final_gpt_at),final_error:record.final?.error??null,
     final_job_key:record.final?.job_key??null,final_latency_ms:record.final?.latency_ms??null,final_cost_usd:record.final?.api_cost_usd??null,
-    final_answer:record.final?.answer?{...record.final.answer,arbitration:record.final.arbitration??null}:null,outcome,counterfactual_entry_price:record.pre_dispatch_snapshot?.ask??null};
+    final_answer:{...(record.final?.answer??{}),arbitration:record.final?.arbitration??null,dynamic_audit:record.final?.dynamic_audit??null,
+      capture_safety:record.capture_safety??null,decision:record.final_gpt_decision==='BUY'?'BUY_NOW':record.final_gpt_decision},outcome,counterfactual_entry_price:record.pre_dispatch_snapshot?.ask??null};
   if(testHooks?.log){testHooks.log.push(row);return;}
   schedule((async()=>{const r=await db.from('fd1_final_recheck_log').insert(row);if(r.error)throw Error(r.error.message);})());
 }

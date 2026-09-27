@@ -88,13 +88,13 @@ test('WUSDT reaches real ENTRY and FINAL RECHECK; SKIP still forbids dispatch',a
   assert.equal(r.record.final_gpt_decision,'SKIP');assert.equal(gptFinalCheck(x.db,x.s,r.record).allowed,false);
 });
 
-test('1. INITIAL BUY + no meaningful change -> no extra GPT call; the initial BUY stands and the order check passes',async()=>{
+test('1. INITIAL BUY + no meaningful change still requires a fresh FINAL decision',async()=>{
   const x=await initialDecision();assert.equal(x.check.allowed,true);assert.ok(x.ticket.initial?.executionRef?.mid>0,'initial book reference carried');
   x.setNow(T+9000);
   const r=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:CALM,rawQuote:calmQuote(T+8900),now:()=>T+9000});
-  assert.equal(r.record.recheck_triggered,false,JSON.stringify(r.record.recheck_reasons));assert.equal(r.proceed,true);
-  assert.equal(x.w.calls.recheck,0);assert.equal(gptFinalCheck(x.db,x.s,{...r.record,dispatch_capture:validCapture(x.c.now())}).allowed,true);
-  assert.equal(x.log.length,1);assert.equal(x.log[0].outcome,'NO_RECHECK_INITIAL_BUY_STANDS');
+  assert.equal(r.record.recheck_triggered,true,JSON.stringify(r.record.recheck_reasons));assert.equal(r.proceed,true);
+  assert.equal(x.w.calls.recheck,2);assert.equal(gptFinalCheck(x.db,x.s,{...r.record,dispatch_capture:validCapture(x.c.now())}).allowed,true);
+  assert.equal(x.log.length,1);assert.equal(x.log[0].outcome,'FINAL_BUY_TO_ORDER_CHECKS');
 });
 test('2+3. INITIAL BUY + meaningful deterioration -> FINAL RECHECK; FINAL BUY -> safety passes -> order check passes (beyond the initial 15 s age)',async()=>{
   const x=await initialDecision({final:'BUY'});x.setNow(T+12000);
@@ -371,7 +371,7 @@ test('AGED initial BUY: forced FINAL RECHECK (INITIAL_ANSWER_AGED) on an unchang
   assert.equal(gptFinalCheck(x.db,x.s).allowed,false,'the aged answer alone never dispatches');
   const entry=gptFinalCheck(x.db,x.s,null,null,{allowAged:true});assert.equal(entry.allowed,true);
   const r=await finalRecheckStep(x.db,x.s,{ticket:entry.review,e1:CALM,rawQuote:calmQuote(at-100),now:()=>at});
-  assert.equal(r.record.recheck_triggered,true);assert.deepEqual(r.record.recheck_reasons,['INITIAL_ANSWER_AGED','REVIEWED_TRAJECTORY_REQUIRES_REFRESH']);
+  assert.equal(r.record.recheck_triggered,true);assert.deepEqual(r.record.recheck_reasons,['INITIAL_ANSWER_AGED','MANDATORY_PREORDER_DYNAMIC_REVIEW','REVIEWED_TRAJECTORY_REQUIRES_REFRESH']);
   assert.equal(x.w.calls.recheck,2);assert.equal(r.record.final_gpt_decision,'BUY');assert.equal(r.proceed,true);
   assert.equal(gptFinalCheck(x.db,x.s,{...r.record,dispatch_capture:validCapture(x.c.now())}).allowed,true,'the FINAL BUY supersedes the aged answer');
   assert.equal(gptFinalCheck(x.db,x.s,r.record,null,{allowAged:true}).allowed,true);
@@ -387,14 +387,14 @@ test(`AGED initial BUY + FINAL ${final} places no order`,async()=>{
 test('a BUY about to age before dispatch is re-asked now; the IOC retry (sequence 2) is never forced',async()=>{
   const x=await initialDecision({final:'BUY'}),at=x.ticket.validUntil-1000;x.setNow(at);
   const r=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:CALM,rawQuote:calmQuote(at-100),now:()=>at});
-  assert.deepEqual(r.record.recheck_reasons,['INITIAL_ANSWER_AGED','REVIEWED_TRAJECTORY_REQUIRES_REFRESH']);
+  assert.deepEqual(r.record.recheck_reasons,['INITIAL_ANSWER_AGED','MANDATORY_PREORDER_DYNAMIC_REVIEW','REVIEWED_TRAJECTORY_REQUIRES_REFRESH']);
   const y=await initialDecision({final:'BUY'}),late=y.ticket.validUntil+1500;y.setNow(late);
   const r2=await finalRecheckStep(y.db,y.s,{ticket:y.ticket,e1:CALM,rawQuote:calmQuote(late-100),now:()=>late,sequence:2});
   assert.equal(r2.record.recheck_triggered,true,'retry authority never bypasses stale full trajectory evidence');
   assert.ok(r2.record.recheck_reasons.includes('REVIEWED_TRAJECTORY_REQUIRES_REFRESH'));
   const early=await initialDecision({final:'BUY'});early.setNow(T+9000);
   const r3=await finalRecheckStep(early.db,early.s,{ticket:early.ticket,e1:CALM,rawQuote:calmQuote(T+8900),now:()=>T+9000});
-  assert.equal(r3.record.recheck_triggered,false,'a fresh answer with an unchanged market still needs no recheck');
+  assert.equal(r3.record.recheck_triggered,true,'an unchanged market also needs a fresh final judgment');
 });
 test('FINAL RECHECK categories are unchanged; the prompt explains INITIAL_ANSWER_AGED is not a SKIP reason',async()=>{
   const {recheckSchema,AGED_REASON}=await import('../supabase/functions/_shared/gpt-final-decision/recheck.mjs');

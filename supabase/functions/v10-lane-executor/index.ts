@@ -1,4 +1,5 @@
 // @ts-nocheck
+import {storedDynamicReplay} from "../_shared/gpt-final-decision/stored-replay.mjs";
 import {EXIT_AUTHORITY_VERSION,EXIT_CLASS,PROTECTION_ACTIONS,PROTECTION_ARBITRATION_VERSION,exitClass,hardSafetyState,softCandidate,approvedProtection,exitContext,legacySoftOrders,assertExitAuthority,positionGeneration} from "../_shared/exit-authority.mjs";
 import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode,entryPriceEvidence} from "./entry-evidence.mjs";
 import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,runWithGptReview,gptReviewReadyToResume,gptArmFollowUp} from "./gpt-final-review-adapter.mjs";
@@ -3254,6 +3255,9 @@ Deno.serve(async req=>{
           invariants:assertSlotSizingContract()},sizing});
     }
     if(mode==="ops-readiness")return res(200,await opsReadiness(db));
+    if(mode==="fd1-stored-dynamic-replay")return res(200,await storedDynamicReplay(db,{
+      sourceJobKey:String(body.sourceJobKey??""),runId:String(body.runId??"continuity-audit").slice(0,80),
+      apiKey:env("OPENAI_API_KEY")||"",deepseekKey:env("deepseek api")||""}));
     if(mode==="fd1-exit-probe"){
       const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{1,24}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
       return res(200,await fd1ExitProbe(db,{symbol,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID()).slice(0,80)}));

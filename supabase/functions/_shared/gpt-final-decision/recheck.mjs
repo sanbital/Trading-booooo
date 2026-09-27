@@ -32,7 +32,7 @@ import {DYNAMIC_PROMPT,extendDynamicSchema,validateDynamicWire,dynamicEnabled} f
 import {CATEGORIES,categoriesFor,riskFlags,SUPPORT_UP,SUPPORT_TEXT,TREND_SUPPORT,validateShape,JUDGMENT,EXECUTION_SAFETY} from './contract.mjs';
 import {callDecision,hash,MODEL} from './api.mjs';
 import {dualEntryDecision,DUAL_VERSION,ARBITRATION_PROMPT} from './dual.mjs';
-export const RECHECK_VERSION='GPT_FINAL_RECHECK_FD1_RC3';
+export const RECHECK_VERSION='GPT_FINAL_RECHECK_FD1_RC4';
 export const RECHECK_TASK='RECHECK';
 export const RECHECK_POLICY=Object.freeze({
   version:RECHECK_VERSION,
@@ -148,6 +148,7 @@ export function detectChange(initial,current,policy=RECHECK_POLICY,{force=[]}={}
   for(const id of BOOK_CATS){const a=bookLevel(id,I),b=bookLevel(id,B);
     if(b!=='UNKNOWN'&&(a==='UNKNOWN'?RANK[b]>0:RANK[b]>RANK[a]))reasons.push('BOOK_BAND:'+id);}
   if(initial?.dynamic_policy===DYNAMIC_VERSION||current?.capture_context){
+    reasons.push('MANDATORY_PREORDER_DYNAMIC_REVIEW');
     const dynamic=dynamicDelta(initial?.capture_context,current?.capture_context);
     reasons.push(...dynamic.reasons);deltas.dynamic=dynamic;
     const safety=entryCaptureSafety(initial?.capture_context,current.at);
@@ -305,8 +306,10 @@ export function recheckModelInput(packet){
     ...(dynamicEnabled(packet)?{dynamic_policy:packet.dynamic_policy,dynamic_as_of_ms:packet.dynamic_as_of_ms}:{}),
     initial:{decision:packet.initial.decision,summary:packet.initial.summary,support:packet.initial.support,
       facts:Object.fromEntries(Object.entries(packet.initial.facts).filter(([,x])=>x!==null).map(([k,x])=>[k,round(x)])),
-      assessment:entryAssessment(packet.initial.facts??{})},
-    current:{facts:sections,unavailable:FACT_OK.filter(k=>v[k]===null),assessment:entryAssessment(v),...(packet.facts.capture_context?{capture_context:dynamicEnabled(packet)?compactDynamic(packet.facts.capture_context):contextForModel(packet.facts.capture_context)}:{})},
+      assessment:entryAssessment(packet.initial.facts??{}),capture_context:compactDynamic(packet.initial.capture_context)},
+    current:{facts:sections,unavailable:FACT_OK.filter(k=>v[k]===null),assessment:entryAssessment(v),...(packet.facts.capture_context?{capture_context:packet.facts.capture_context}:{})},
+    dynamic_change:packet.dynamic_change??null,
+    fast_recheck:packet.pre_dispatch??null,
     change:Object.fromEntries(Object.entries(packet.change.values).filter(([,x])=>x!==null).map(([k,x])=>[k,round(x)])),
     trigger_reasons:packet.trigger_reasons,
     risk_flags:Object.fromEntries(Object.entries(risk.flags).filter(([,x])=>x.level!=='CLEAR').map(([k,x])=>[k,x.level])),
@@ -332,9 +335,10 @@ export async function buildRecheckPacket({signalId,symbol,dataMode='LIVE',facts,
     symbol:String(symbol).toUpperCase(),data_mode:dataMode,facts,
     change:{values:changeValues(detection)},trigger_reasons:[...detection.reasons],
     initial:{decision:'BUY',summary:initial.summary??null,support:(initial.support??[]).map(k=>({key:k,value:round(initial.facts?.[k]??null)})),
-      facts:{...(initial.facts??{})},snapshot_at_ms:initial.snapshotAt??null,execution_ref:initial.executionRef??null},
+      facts:{...(initial.facts??{})},capture_context:initial.capture_context??null,snapshot_at_ms:initial.snapshotAt??null,execution_ref:initial.executionRef??null},
+    dynamic_change:dynamicDelta(initial.capture_context,facts.capture_context),
     model_judgments:judgments??null,current_ref:currentRef,pre_dispatch:preDispatch,snapshot_hash:'',
-    ...(initial.dynamic_policy===DYNAMIC_VERSION?{dynamic_policy:DYNAMIC_VERSION,dynamic_as_of_ms:currentRef?.at??preDispatch?.at}: {})};
+    ...(facts.capture_context||preDispatch?.capture_context||initial.dynamic_policy===DYNAMIC_VERSION?{dynamic_policy:DYNAMIC_VERSION,dynamic_as_of_ms:currentRef?.at??preDispatch?.at}: {})};
   packet.snapshot_hash=await hash({...packet,snapshot_hash:''});
   return packet;
 }
@@ -406,7 +410,7 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
   const common={job_key:key,attempted:result.attempted===true,api_cost_usd:result.api_cost_usd??null,latency_ms:result.latency_ms??null,
     snapshot_at_ms:snap,completed_at_ms:result.completed_at_ms??now(),valid_until_ms:validUntil,answer:result.answer??null,
     current_ref:record.packet?.current_ref??null,request_id:result.request_id??null,arbitration:result.arbitration??null,
-    capture_context:record.packet?.facts?.capture_context??null,dynamic_policy:record.packet?.dynamic_policy??null};
+    capture_context:record.packet?.facts?.capture_context??null,dynamic_policy:record.packet?.dynamic_policy??null,dynamic_audit:result.dynamic_audit??null};
   if(!result.valid)return out({...common,decision:result.decision==='WAIT'?'WAIT':'ABSTAIN',error:result.error??'RC_INVALID'});
   if(validUntil===null||now()>=validUntil)return out({...common,error:'RC_EXPIRED'});
   return out({...common,decision:result.decision,valid:true});

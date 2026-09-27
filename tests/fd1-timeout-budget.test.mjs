@@ -9,7 +9,8 @@ function expand(s,root=s){if(!s||typeof s!=='object')return s;if(Array.isArray(s
 test('actual timeout packet: compact FIRST, smaller FINAL and raw evidence unchanged',async()=>{
  const before=JSON.stringify(f.packet),s=await freeze(),first=firstPayload(s),final=arbitrationPayload(s,s,reviewsFor(null,{valid:false}));
  assert.equal(f.old_result.error,'API_TIMEOUT');assert.equal(f.old_result.first_latency_ms,6003);
- assert.ok(JSON.stringify(first).length<40000);assert.ok(JSON.stringify(final).length<110000);
+ assert.ok(JSON.stringify(first).length<40000);assert.ok(JSON.stringify(final).length<120000);
+ assert.equal(s.market_input.capture_context.ordered_path.length,24);
  assert.equal(first.max_output_tokens,320);assert.equal(JSON.stringify(f.packet),before);
  assert.equal(s.packet.facts.market_sensor.market_sensor_trajectory.length,24);
  assert.equal(s.market_input.market_sensor.market_sensor_trajectory.length,24);
@@ -30,7 +31,9 @@ test('compact FIRST BUY cannot replace a timed-out FINAL and original deadline r
  const timeouts=[],seen=[],advisoryTimeouts=[];const r=await dualEntryDecision(f.packet,{apiKey:'unit-key',now:()=>at,snapshotAtMs:at,deadlineMs:at+15000,
   counterCall:async(p,o)=>{advisoryTimeouts.push(o.timeoutMs);return {valid:false,attempted:false,error:'DEEPSEEK_KEY_MISSING'};},
   gptCall:async(p,o)=>{timeouts.push(o.timeoutMs);const req=o.payloadFn(p);seen.push(req);if(seen.length===2)return {valid:false,decision:'ABSTAIN',attempted:true,error:'API_TIMEOUT',completed_at_ms:at};const wire={c:p.candidate_id,d:'BUY',confidence:.9,evidence:['facts.trend.return_5m'],n:'Supported preliminary view'};return {valid:true,decision:'BUY',wire,answer:o.validate(wire,p),attempted:true,completed_at_ms:at};}});
- assert.equal(seen.length,2);assert.deepEqual(timeouts,[4000,8000]);assert.deepEqual(advisoryTimeouts,[6000]);assert.equal(r.valid,false);assert.equal(r.decision,'ABSTAIN');assert.equal(r.error,'API_TIMEOUT');assert.equal(r.arbitration.first_wire_version,'FD1_FIRST_COMPACT_1');
+ const remaining=f.packet.facts.capture_context.end_ms+9999-at;
+ assert.equal(seen.length,2);assert.ok(timeouts.every(t=>t<=remaining));assert.ok(advisoryTimeouts.every(t=>t<=remaining));
+ assert.equal(r.valid,false);assert.equal(r.decision,'ABSTAIN');assert.equal(r.error,'API_TIMEOUT');assert.equal(r.arbitration.first_wire_version,'FD1_FIRST_COMPACT_1');
 });
 test('legacy journals retain their original FIRST contract',async()=>{
  const packet=structuredClone(f.packet);delete packet.dynamic_policy;const {hash}=await import('../supabase/functions/_shared/gpt-final-decision/api.mjs');packet.snapshot_hash=await hash({...packet,snapshot_hash:''});

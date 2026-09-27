@@ -79,7 +79,8 @@ test(`${persisted?'persisted':'budget exhausted'} validated ${decision} retains 
     assert.equal(r.state.protectDeclined.provider,'deepseek');
     assert.equal(r.state.protection.sensitivityMultiplier,2);
     assert.equal(r.state.protection.exposureIncrease,false);}
-  if(decision==='HOLD')assert.ok(r.state.holdUntil>T);
+  if(decision==='HOLD'&&persisted){assert.equal(r.state.holdUntil,null);assert.equal(r.reason,'FD1_DATA_DEGRADED_REVIEWED');}
+  else if(decision==='HOLD')assert.ok(r.state.holdUntil>T);
   assert.equal(orders,0);
 });
 

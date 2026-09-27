@@ -12,7 +12,11 @@ export class SupabaseReviewStore {
   async snapshot(key,owner,record){const r=await this.db.from('gpt_final_entry_reviews').update({record}).eq('job_key',key).eq('owner',owner).eq('state','RUNNING').select('job_key').maybeSingle();
     ensure(!r.error&&r.data,'REVIEW_SNAPSHOT_CAS');}
   /** RUNNING -> DONE once, by the claiming owner; settles the reservation to known cost. */
-  async complete(key,owner,record){const r=await this.db.rpc('gpt_final_review_complete',{p_job_key:key,p_owner:owner,p_record:record});
+  async complete(key,owner,record){
+    if(record.result?.dynamic_audit)record={...record,result:{...record.result,dynamic_audit:{...record.result.dynamic_audit,
+      signal_id:record.identity?.signal_id??null,position_id:record.identity?.position_id??record.result.dynamic_audit.position_id,
+      review_job_key:key,execution_result_ref:'fd1_final_recheck_log.final_job_key / v11_protection_decisions.reviewJobKey'}}};
+    const r=await this.db.rpc('gpt_final_review_complete',{p_job_key:key,p_owner:owner,p_record:record});
     ensure(!r.error&&r.data?.done===true,'REVIEW_RESULT_CAS');return true;}
 }
 /** One control read per entry evaluation that has candidates. Never writes. */

@@ -58,6 +58,9 @@ const FINAL_TRAJECTORY_FIELDS=new Set([
 export function finalEvidenceKeys(catalog){
   const compact=Object.keys(catalog).some(k=>k.includes('.capture_context.critical_segments.'));
   return Object.keys(catalog).filter(k=>{
+    // These ordered segments are read by both models; cite their aggregate horizons
+    // or critical segments to avoid multiplying the output enum by every raw field.
+    if(/\.(ordered_path|latest_six_buckets)\./.test(k))return false;
     if(/^(initial|current)\.market_sensor\.(btc_return_1m|return_(5|15|30|60|120)s|sensor_freshness_ms|sensor_event_latency_ms|depth_coverage_complete)$/.test(k))return true;
     if(!/^(initial|current)\.(current\.)?(facts|capture_context|change)\./.test(k))return false;
     if(compact&&k.includes('.capture_context.dynamics.horizons.')&&!DYNAMIC_EVIDENCE_FIELDS.includes(k.slice(k.lastIndexOf('.')+1)))return false;
@@ -93,7 +96,7 @@ export async function frozenReview(packet,{snapshotAtMs,inputPayload=payloadFor,
     book_reference:copy.current_ref??copy.execution_ref??copy.position?.valuation??null,
     pre_dispatch:copy.pre_dispatch??null,deterministic_exit_candidate:copy.position?.deterministic_exit_candidate??null,
     execution_permission:'NONE_UNTIL_FINAL_AND_EXECUTOR_SAFETY_CHECKS'};
-  const capture=copy.facts?.capture_context??{status:'UNAVAILABLE'},trajectoryHash=await hash(capture);
+  const capture=copy.facts?.capture_context??{status:'UNAVAILABLE'},trajectoryHash=await hash(JSON.stringify(capture.trajectory??null));
   const identity={symbol:copy.symbol,task:copy.task,candidate_id:copy.candidate_id,snapshot_at_ms:snapshotAtMs,
     market_sensor_hash:await hash(copy.facts?.market_sensor??null),packet_hash:await hash(copy),capture_window:{start_ms:capture.start_ms??null,end_ms:capture.end_ms??null},
     capture_trajectory_hash:trajectoryHash,orderbook_reference:copy.current_ref??copy.execution_ref??copy.position?.valuation??null,
@@ -182,7 +185,9 @@ export function arbitrationPayload(current,initial,reviews){
 /** First calls overlap; FINAL always runs. FIRST/advice never become an executable fallback. */
 export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch,now=Date.now,deadlineMs,
   gptCall=callDecision,counterCall=callAdvisory,snapshotAtMs,inputPayload=payloadFor,validate=validateDecision,refreshPacket,policy:policyOverride=null,reviewTier='FULL'}={}){
-  const started=now(),deadline=Number.isFinite(deadlineMs)?deadlineMs:started+15000;
+  const started=now(),requestedDeadline=Number.isFinite(deadlineMs)?deadlineMs:started+15000;
+  const deadline=dynamicEnabled(packet)&&packet.facts?.capture_context?.status==='AVAILABLE'?
+    Math.min(requestedDeadline,packet.facts.capture_context.end_ms+DYNAMIC_POLICY.absoluteAgeMs-1):requestedDeadline;
   const invalid=error=>({valid:false,decision:'ABSTAIN',answer:null,wire:null,error,attempted:false,completed_at_ms:now(),api_cost_usd:0});
   if(dynamicEnabled(packet)&&packet.task!=='HOLD'){
     const integrity=entryCaptureSafety(packet.facts?.capture_context,started);
@@ -207,8 +212,12 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
     ds={...ds,...checked,invalid_evidence:rejected,error:checked.error??ds.error??null};
   }catch(e){ds={...ds,valid:false,answer:null,valid_evidence:[],error:e.message==='DEEPSEEK_INPUT_MISMATCH'?e.message:'DEEPSEEK_INVALID_RESPONSE'};}}
   ds.status=advisoryStatus(ds);
-  let current=initial,refreshError=refreshPacket?'LATEST_SNAPSHOT_UNAVAILABLE':null;
-  if(refreshPacket&&deadline-now()>2200){try{
+  // Dynamic reviews freeze the freshly collected trajectory for BOTH providers and FINAL.
+  // Refreshing only GPT between phases makes the advice a different market question.
+  // If it ages out during inference, fail closed and let the caller collect a new review.
+  const refreshBetween=refreshPacket&&!dynamicEnabled(packet);
+  let current=initial,refreshError=refreshBetween?'LATEST_SNAPSHOT_UNAVAILABLE':null;
+  if(refreshBetween&&deadline-now()>2200){try{
     const refreshed=await refreshPacket(Math.min(1200,deadline-now()-1000));
     if(refreshed?.packet&&Number.isSafeInteger(refreshed.captured)&&refreshed.captured>=initial.snapshot_at_ms&&refreshed.captured<=now()){
       current=await frozenReview(refreshed.packet,{snapshotAtMs:refreshed.captured,inputPayload,policy});refreshError=null;
@@ -222,6 +231,13 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
     validate:(wire,p)=>validateFinalWire(wire,p,{validate,catalog,advisory:ds})})):invalid('FD_ARBITRATION_NO_TIME');
   if(final.valid===true){try{const answer=validateFinalWire(final.wire,current.packet,{validate,catalog,advisory:ds});final={...final,answer,decision:answer.decision};}
     catch(e){final={...final,valid:false,decision:'ABSTAIN',answer:null,error:e.message??'FD_FINAL_INVALID'};}}
+  if(dynamicEnabled(packet)){
+    const integrity=entryCaptureSafety(current.packet.facts?.capture_context,now());
+    const mismatch=ds.error==='DEEPSEEK_INPUT_MISMATCH'||ds.valid===true&&ds.snapshot_hash!==current.snapshot_hash;
+    const wasFull=current.packet.facts?.capture_context?.status==='AVAILABLE';
+    if(mismatch||!integrity.ok&&(packet.task!=='HOLD'||wasFull))final={...final,valid:false,
+      decision:packet.task==='HOLD'?'ABSTAIN':'WAIT',answer:null,error:mismatch?'DYNAMIC_PROVIDER_SNAPSHOT_MISMATCH':integrity.reason};
+  }
   const accepted=final.valid===true&&now()<deadline,arb=accepted?final.answer?.arbitration:null;
   const audit={version:DUAL_VERSION,authority:'GPT_FINAL_ONLY',review_tier:fast?'FAST':'FULL',first_wire_version:dynamicEnabled(packet)?FIRST_COMPACT_VERSION:null,policy_version:policy.bundle.policy_version,policy_hash:policy.hash,policy_source:policy.source,policy_generation:policy.generation??null,initial_gpt_decision:first.decision??'ABSTAIN',
     deepseek_preference:ds.valid===true?ds.answer.decision_preference:null,deepseek_valid:ds.valid===true,
@@ -240,12 +256,24 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
     supporting_evidence:arb?.supporting??[],opposing_evidence:arb?.opposing??[],snapshot_hash:initial.snapshot_hash,
     capture_trajectory_hash:initial.capture_trajectory_hash,final_snapshot_hash:current.snapshot_hash,
     final_capture_trajectory_hash:current.capture_trajectory_hash,gpt_first_snapshot_hash:first.snapshot_hash,
-    deepseek_snapshot_hash:ds.snapshot_hash??null,refresh_error:refreshError,
+    deepseek_snapshot_hash:ds.snapshot_hash??null,gpt_snapshot_hash:current.snapshot_hash,
+    trajectory_hash:current.capture_trajectory_hash,snapshot_binding:dynamicEnabled(packet)?'SAME_FROZEN_DYNAMIC_SNAPSHOT':'LEGACY_REFRESH',refresh_error:refreshError,
     first,deepseek:ds,initial_packet:{snapshot_hash:initial.packet.snapshot_hash},initial_input:initial.market_input,final_input:current.market_input,
     api_calls:[first,ds,final].filter(x=>x.attempted).length};
   const knownCost=x=>x?.attempted===false?0:Number.isFinite(x?.api_cost_usd)?x.api_cost_usd:null;
   const costs=[knownCost(first),ds.attempted===false?0:flashCostCeiling(ds),knownCost(final)];
-  return {...final,...(!accepted?{valid:false,decision:'ABSTAIN',answer:null,error:final.error??'FD_ARBITRATION_EXPIRED'}:{}),
+  const capture=current.packet.facts?.capture_context,position=current.packet.position?.exit_context;
+  const dynamicAudit={version:'DYNAMIC_CONTINUITY_2',stage:packet.task==='RECHECK'?'FINAL_RECHECK':packet.task==='HOLD'?
+    final.decision==='EXIT'?'EXIT':final.decision==='PROTECT'?'PROTECTION':'HOLD':'ENTRY',symbol:packet.symbol,
+    position_id:current.packet.position?.position_id??null,snapshot_at:current.snapshot_at_ms,
+    capture_start:capture?.start_ms??null,capture_end:capture?.end_ms??null,capture_age:capture?.end_ms?now()-capture.end_ms:null,
+    bucket_count:capture?.trajectory?.length??0,capture_valid:entryCaptureSafety(capture,now()).ok,
+    trajectory_hash:current.capture_trajectory_hash,gpt_snapshot_hash:current.snapshot_hash,deepseek_snapshot_hash:ds.snapshot_hash??null,
+    dynamics:capture?.dynamics??null,MFE:position?.mfe??null,MAE:position?.mae??null,giveback:position?.mfe_giveback??null,
+    GPT_result:final.decision,DeepSeek_result:ds.answer??null,final_decision:accepted?final.decision:final.decision==='WAIT'?'WAIT':'ABSTAIN',
+    decision_latency_ms:now()-started,data_state:current.packet.dynamic_data_state??null};
+  return {...final,...(!accepted?{valid:false,decision:final.decision==='WAIT'?'WAIT':'ABSTAIN',answer:null,error:final.error??'FD_ARBITRATION_EXPIRED'}:{}),
+    dynamic_audit:dynamicAudit,
     dual:{version:DUAL_VERSION,authority:'GPT_FINAL_ONLY',audit_ref:'arbitration'},arbitration:audit,final_packet:current.packet,final_snapshot_at_ms:current.snapshot_at_ms,
     api_cost_usd:costs.every(x=>x!==null)?costs.reduce((a,b)=>a+b,0):null,
     attempted:[first,ds,final].some(x=>x.attempted),started_at_ms:started,completed_at_ms:now(),latency_ms:now()-started};
@@ -253,5 +281,8 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
 export function revalidateArbitration(result,packet,validate=validateDecision){
   if(result?.arbitration?.version!==DUAL_VERSION||result.arbitration.authority!=='GPT_FINAL_ONLY')throw Error('FD_FINAL_AUTHORITY');
   const a=result.arbitration,catalog={...evidenceCatalog(a.initial_input,'initial'),...evidenceCatalog(a.final_input,'current')};
+  if(dynamicEnabled(packet)&&a.snapshot_binding==='SAME_FROZEN_DYNAMIC_SNAPSHOT'&&
+    (a.gpt_snapshot_hash!==a.final_snapshot_hash||a.final_snapshot_hash!==a.snapshot_hash||
+     a.deepseek_valid&&a.deepseek_snapshot_hash!==a.final_snapshot_hash))throw Error('DYNAMIC_PROVIDER_SNAPSHOT_MISMATCH');
   return validateFinalWire(result.wire,packet,{validate,catalog,advisory:a.deepseek});
 }
