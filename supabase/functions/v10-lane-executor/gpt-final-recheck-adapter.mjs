@@ -15,6 +15,7 @@ import {SupabaseReviewStore,readReviewControl} from '../_shared/gpt-final-review
 import {configFromControl} from '../_shared/gpt-final-review/coordinator.mjs';
 import {gptRecheckConfig} from './gpt-final-review-adapter.mjs';
 import {nilTicket,NIL_E1,NIL_DISPATCH_QUOTE,NIL_SIGNAL,NIL_DISPATCH_AT} from './recheck-nil-fixture.mjs';
+import {resumeReviewTimeouts} from '../_shared/gpt-final-decision/timeout-recovery.mjs';
 export {RECHECK_VERSION,postRecheckSafety};
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
 let testHooks=null;
@@ -50,7 +51,7 @@ export function markRecheckOutcome(db,s,record,outcome){
  *   proceed=false -> FINAL SKIP / ABSTAIN / timeout / error / invalid / expired / limit: no order.
  */
 export async function finalRecheckStep(db,s,{ticket,e1,rawQuote,now=Date.now,purpose='PRODUCTION',config=null,apiKey=null,
-  dataMode='LIVE',asOf=null,sequence=1}){
+  dataMode='LIVE',asOf=null,sequence=1,fetchFn=null}){
   // A historical fixture (asOf) is judged at its own dispatch instant, never at the wall clock.
   // Sequence 1 only: an initial BUY that is aged, or would age before dispatch, is re-asked
   // (INITIAL_ANSWER_AGED) instead of being dispatched on or expiring at the dispatch check.
@@ -78,7 +79,7 @@ export async function finalRecheckStep(db,s,{ticket,e1,rawQuote,now=Date.now,pur
   try{
     final=await runFinalRecheck({signal:s,ticket,detection,preDispatch:snapshot,purpose,dataMode,asOf,sequence,
       store:testHooks?.store??new SupabaseReviewStore(db),config:config??testHooks?.config??gptRecheckConfig(db),
-      apiKey:apiKey??testHooks?.apiKey??getenv('OPENAI_API_KEY'),deepseekKey:testHooks?.deepseekKey??getenv('deepseek api'),fetchFn:testHooks?.fetchFn??fetch,now,readFresh:testHooks?.readFresh});
+      apiKey:apiKey??testHooks?.apiKey??getenv('OPENAI_API_KEY'),deepseekKey:testHooks?.deepseekKey??getenv('deepseek api'),fetchFn:fetchFn??testHooks?.fetchFn??fetch,now,readFresh:testHooks?.readFresh});
   }catch(e){final={decision:'ABSTAIN',valid:false,error:'RC_ADAPTER_ERROR',completed_at_ms:now()};}
   record.final=final;record.final_gpt_decision=final.valid===true||final.decision==='WAIT'?final.decision:'ABSTAIN';record.final_gpt_at=final.completed_at_ms??null;
   const proceed=recheckAllows(final,now());
@@ -101,7 +102,7 @@ export function withOrderTiming(record,at=Date.now()){
  *    fixture tape with sellers dominating is applied as the pre-dispatch state.
  *  fixture='NIL': the stored NILUSDT production records; CURRENT facts are read at NIL's
  *    dispatch instant (REPLAY: history published before it, no historical book). */
-export async function finalRecheckProbe(db,{symbol='BTCUSDT',fixture='LIVE',apiKey,runId,fetchFn=fetch,store=new SupabaseReviewStore(db),config=null}){
+export async function finalRecheckProbe(db,{symbol='BTCUSDT',fixture='LIVE',apiKey,runId,fetchFn=fetch,store=new SupabaseReviewStore(db),config=null,simulateFinalTimeout=false}){
   const cfg0=config??configFromControl(await readReviewControl(db).catch(()=>null),getenv);
   const cfg={...cfg0,approvalRef:'FD1_RECHECK_PROBE:'+String(runId).slice(0,40)};
   const t0=Date.now();
@@ -125,7 +126,32 @@ export async function finalRecheckProbe(db,{symbol='BTCUSDT',fixture='LIVE',apiK
     e1={confirmationState:'BASELINE_ELIGIBLE',reasonCodes:['FIXTURE'],observations:[{startAt:now-10000,endAt:now,return:-0.003,buyShare:0.35,tradeCount:200}]};
     rawQuote={best_bid:bid,best_ask:ask,bids:src.book.bids,asks:src.book.asks,timing:{received_at_ms:now}};
   }
-  const step=await finalRecheckStep(db,s,{ticket,e1,rawQuote,purpose:'DRYRUN',config:cfg,apiKey,dataMode,asOf});
+  const attempts=[];let injected=false;
+  const probeFetch=async(url,init)=>{
+    if(simulateFinalTimeout&&!injected&&String(url).startsWith('https://api.openai.com/')){
+      const input=JSON.parse(JSON.parse(init.body).input[1].content);
+      if(input.independent_reviews){injected=true;throw Error('API_TIMEOUT');}
+    }
+    return fetchFn(url,init);
+  };
+  const probe=await resumeReviewTimeouts(async()=>{
+    if(attempts.length){
+      // Production re-enters through protection/E1/book checks in a fresh lease.
+      // This isolated fixture has no account or lease; refresh its public book
+      // and restamp only the explicitly synthetic adverse tape observation.
+      const r=await fetchFn('https://fapi.binance.com/fapi/v1/depth?limit=100&symbol='+encodeURIComponent(symbol),
+        {signal:AbortSignal.timeout(2500)});if(!r.ok)throw Error('PROBE_RETRY_QUOTE');
+      const book=await r.json(),at=Date.now();rawQuote={best_bid:Number(book.bids?.[0]?.[0]),best_ask:Number(book.asks?.[0]?.[0]),
+        bids:book.bids,asks:book.asks,timing:{received_at_ms:at}};
+      e1={...e1,observations:e1.observations.map(o=>({...o,startAt:at-10000,endAt:at}))};
+    }
+    const step=await finalRecheckStep(db,s,{ticket,e1,rawQuote,purpose:'DRYRUN',config:cfg,apiKey,dataMode,asOf,fetchFn:probeFetch});
+    const f=step.record.final;
+    attempts.push({job_key:f?.job_key??null,valid:f?.valid??false,decision:f?.decision??step.decision,error:f?.error??null,
+      latency_ms:f?.latency_ms??null,retryable:step.reviewRetryPending===true,capture_end:f?.capture_context?.end_ms??null});
+    return {ok:true,entry:{reviewRetryPending:step.reviewRetryPending===true},step};
+  },{enabled:()=>fixture==='LIVE'});
+  const step=probe.step;
   let safety=null;
   if(step.proceed&&step.record.recheck_triggered){
     // Deterministic post-recheck safety on a NEW live book read (as the order path would).
@@ -138,6 +164,6 @@ export async function finalRecheckProbe(db,{symbol='BTCUSDT',fixture='LIVE',apiK
   return {fixture,symbol:s.symbol,triggered:step.record.recheck_triggered,reasons:step.record.recheck_reasons,deltas:step.record.deltas,
     final:f?{decision:f.decision,valid:f.valid,error:f.error,latencyMs:f.latency_ms,costUsd:f.api_cost_usd,jobKey:f.job_key,
       answer:f.answer?{decision:f.answer.decision,reasons:f.answer.reasons?.map(r=>r.category),support:f.answer.support?.map(x=>x.key),summary:f.answer.summary}:null}:null,
-    proceed:step.proceed,reason:step.reason,postSafety:safety,elapsedMs:Date.now()-t0,
+    proceed:step.proceed,reason:step.reason,postSafety:safety,elapsedMs:Date.now()-t0,attempts,timeoutFixture:simulateFinalTimeout,injected,
     wouldOrder:step.proceed&&(safety?.ok!==false)?'NEXT_STEP_IS_EXISTING_ORDER_GUARDS (not executed: probe)':'NO_ORDER',orderCalls:0};
 }

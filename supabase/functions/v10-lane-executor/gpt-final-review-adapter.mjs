@@ -4,7 +4,7 @@ import {baselineAllowedLive,canonical} from '../_shared/gpt-final-review/contrac
 import {FD1_ENTRY_ENGINE} from '../_shared/gpt-final-decision/engine.mjs';
 import {dispatchDynamicSafety,DYNAMIC_VERSION} from '../_shared/gpt-final-decision/dynamic-flow.mjs';
 import {recheckAllows} from '../_shared/gpt-final-decision/recheck.mjs';
-import {TIMEOUT_RECOVERY} from '../_shared/gpt-final-decision/timeout-recovery.mjs';
+import {resumeReviewTimeouts} from '../_shared/gpt-final-decision/timeout-recovery.mjs';
 import {lifecycleNote,mergeLifecycleNote} from './entry-lifecycle.mjs';
 const contexts=new WeakMap();
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
@@ -129,15 +129,10 @@ function wantsFollowUp(result,started,now){
     result?.ok!==false&&!result?.skipped&&now-started<FOLLOW_UP_POLICY.maxElapsedMs;
 }
 export async function runWithGptReview(db,runWithLease,switches=recoverySwitches()){
-  const c=coordinatorFor(db),clock=typeof c.now==='function'?()=>c.now():Date.now,started=clock();
-  let result=await runReviewCycle(db,runWithLease,switches);
+  const c=coordinatorFor(db),clock=typeof c.now==='function'?()=>c.now():Date.now;
   // A pre-dispatch timeout releases the claim and lease before a fresh ordinary
   // cycle: protection/account/quote checks run again, no old order attempt is replayed.
-  for(let i=1;i<TIMEOUT_RECOVERY.maxAttempts&&result?.entry?.reviewRetryPending===true&&
-    result?.ok!==false&&!result?.skipped&&c.config.mode==='ENFORCE'&&clock()-started<TIMEOUT_RECOVERY.waitMs;i++){
-    result=await runReviewCycle(db,runWithLease,switches);
-  }
-  return result;
+  return resumeReviewTimeouts(()=>runReviewCycle(db,runWithLease,switches),{now:clock,enabled:()=>c.config.mode==='ENFORCE'});
 }
 async function runReviewCycle(db,runWithLease,switches){
   const c=coordinatorFor(db),clock=typeof c.now==='function'?()=>c.now():Date.now,started=clock(),first=await runWithLease(db);

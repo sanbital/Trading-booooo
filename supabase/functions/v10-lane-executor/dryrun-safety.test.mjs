@@ -17,6 +17,7 @@ test('modes are routed only behind the executor token check',()=>{
   const serve=src.slice(src.indexOf('Deno.serve('));const authAt=serve.indexOf('if(!(await auth(db,req)))');
   assert.ok(authAt>0&&serve.indexOf('mode==="gpt-dryrun"')>authAt&&serve.indexOf('mode==="ops-readiness"')>authAt);
   assert.ok(serve.indexOf('mode==="fd1-timeout-probe"')>authAt);
+  assert.ok(serve.indexOf('mode==="fd1-recheck-timeout-probe"')>authAt);
 });
 
 test('injected timeout probe remains an isolated order-free DRYRUN',()=>{
@@ -25,6 +26,10 @@ test('injected timeout probe remains an isolated order-free DRYRUN',()=>{
   for(const re of forbidden)assert.ok(!re.test(probe),'FD1 probe contains '+re);
   assert.match(probe,/purpose:'DRYRUN'/);assert.match(probe,/ORDER_FREE_TIMEOUT_FIXTURE/);
   assert.match(probe,/if\(simulateEntryTimeout\)return/);
+  const recheck=readFileSync(new URL('./gpt-final-recheck-adapter.mjs',import.meta.url),'utf8');
+  const retryProbe=recheck.slice(recheck.indexOf('export async function finalRecheckProbe('));
+  for(const re of forbidden)assert.ok(!re.test(retryProbe),'RECHECK probe contains '+re);
+  assert.match(retryProbe,/purpose:'DRYRUN'/);assert.match(retryProbe,/resumeReviewTimeouts/);
 });
 test('recovery lock timeout is retryable and all other recovery errors stay fatal',()=>{
   const fn=body('async function attemptOpsRecovery(','function x1TopObservation(');

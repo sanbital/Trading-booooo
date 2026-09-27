@@ -33,6 +33,11 @@ Existing review limits, generation binding and native protection remain in force
 The authenticated fd1-timeout-probe injects one clearly labeled, unpaid ENTRY timeout
 in an isolated DRYRUN coordinator. Its recovery uses live captures and real provider
 calls. It cannot claim a trading signal, create an order or change a position.
+The fd1-recheck-timeout-probe injects a first FINAL transport timeout and uses the
+same resumeReviewTimeouts scheduler as production. Each attempt, including the
+failure, appears in its response. Public book data and the capture are read again;
+its adverse E1 tape remains an explicitly synthetic fixture. No actual lease or
+order is taken by either probe.
 
 Timeout recovery does not manufacture BUY or extend data freshness. Persistent API
 outage, trigger expiry or exhausted budget can still prevent an entry; a valid fresh

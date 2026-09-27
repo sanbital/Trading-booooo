@@ -3278,13 +3278,14 @@ Deno.serve(async req=>{
         probe:await fd1Probe(db,{symbol,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID()),
           simulateEntryTimeout:mode==="fd1-timeout-probe",engine:{...FD1_ENTRY_ENGINE,deepseekKey:()=>env("deepseek api")}})});
     }
-    if(mode==="fd1-recheck-probe"){
+    if(mode==="fd1-recheck-probe"||mode==="fd1-recheck-timeout-probe"){
       // ORDER-FREE: INITIAL BUY fixture -> deterioration -> change detector -> real GPT FINAL
       // RECHECK (DRYRUN journal) -> post-recheck safety. No lease, no signal/position/order write.
       const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{1,24}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
       const fixture=body.fixture==="NIL"?"NIL":"LIVE";
       return res(200,{ok:true,revision:REVISION,patch:PATCH,orderCalls:0,sizing:{targetMarginUsdt:MARGIN,leverage:Number(LEV),maxSlots:MAX_SLOTS},
-        probe:await finalRecheckProbe(db,{symbol,fixture,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID())})});
+        probe:await finalRecheckProbe(db,{symbol,fixture,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID()),
+          simulateFinalTimeout:mode==="fd1-recheck-timeout-probe"})});
     }
     if(mode==="cec-bootstrap")return res(200,await runWithLease(db,bootstrapCec0040));
     if(mode!=="run")return res(400,{ok:false,revision:REVISION,patch:PATCH,error:"MODE_UNSUPPORTED"});
