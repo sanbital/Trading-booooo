@@ -7,6 +7,7 @@ import {readSources} from './market.mjs';
 import {buildDecisionPacket,callDecision,hash,MODEL} from './api.mjs';
 import {FD_VERSION} from './contract.mjs';
 import {dualEntryDecision,DUAL_VERSION} from './dual.mjs';
+import {DYNAMIC_VERSION,DYNAMIC_POLICY,positionDynamicState} from './dynamic-flow.mjs';
 export const FD1_HOLD_POLICY_VERSION='FD1_HOLD_EXIT_AUTHORITY_2';
 export const TIME_REASONS=Object.freeze(['V17_MOMENTUM_STALE','V17_MAX_HOLD']);
 export const HOLD_POLICY=Object.freeze({holdTtlMs:15*60_000,minGapMs:5*60_000,deteriorationMinGapMs:60_000,maxReviews:30,
@@ -27,6 +28,11 @@ export function nextEvent(st,{now,price,peak,timeCandidate,softTrigger,dynamics}
  if(!softTrigger?.active)s.softArmed=true;
  if(s.pending||s.retryAfter&&now<s.retryAfter)return {state:s,event:null};
  if(s.reviews>=P.maxReviews)return {state:s,event:null,exhausted:true};
+ if(dynamics?.event&&['DATA_DEGRADED','ENTRY_FAILURE_MULTI_AXIS','POST_FILL_THESIS_REVIEW'].includes(dynamics.event)&&
+    elapsed>=DYNAMIC_POLICY.missingRetryMs&&dynamics.evidenceKey!==s.lastDynamicsKey){
+  s.lastDynamicsKey=dynamics.evidenceKey;return {state:s,event:dynamics.event};
+ }
+ if(dynamics?.observation&&elapsed>=DYNAMIC_POLICY.periodicReviewMs)return {state:s,event:'DYNAMIC_PERIODIC_REVIEW'};
  if(s.protectUntil&&now>=s.protectUntil){s.protectUntil=null;return {state:s,event:'PROTECTION_REASSESSMENT'};}
  if(softTrigger?.active){
   const receipt=s.softReceipt,factor=s.protectUntil?0.5:1;
@@ -47,18 +53,23 @@ export function nextEvent(st,{now,price,peak,timeCandidate,softTrigger,dynamics}
   return {state:s,event:'SIGNIFICANT_PRICE_CHANGE'};
  return {state:s,event:null};
 }
-export async function holdStep(st0,{now,price,peak,timeCandidate,softTrigger,dynamics,positionId,generation,answerOf},P=HOLD_POLICY){
+export async function holdStep(st0,{now,price,peak,timeCandidate,softTrigger,dynamics,positionId,generation,answerOf,clock=()=>now},P=HOLD_POLICY){
  let st={...(st0??{})};
  if(st.generation&&generation&&st.generation!==generation)st=initialHoldState(price);
  st.generation=generation??st.generation??String(positionId);
  if(st.pending){
-  const pending=st.pending,a=await answerOf(pending.key).catch(()=>null),age=now-pending.at;
+  const pending=st.pending,a=await answerOf(pending.key).catch(()=>null);now=clock();const age=now-pending.at;
   if(a?.state==='DONE'||age>P.timeAnswerWaitMs){
    const completed=a?.completed_at_ms,snapshot=a?.snapshot_at_ms??completed;
    const fresh=Number.isSafeInteger(completed)&&completed>=pending.at&&completed<=now&&now-completed<=P.exitMaxAgeMs&&
     completed-pending.at<=P.timeAnswerWaitMs&&Number.isSafeInteger(snapshot)&&snapshot>=pending.at&&snapshot<=now&&now-snapshot<=P.exitMaxAgeMs;
    const decision=a?.valid===true&&fresh&&!a.refresh_error?a.decision:'ABSTAIN',authority=a?.authority??'GPT_FINAL_ONLY';
-   st.last={key:pending.key,event:pending.event,decision,authority,at:now};st.pending=null;
+   const unapplied=a?.valid===true&&a?.decision&&(!fresh||a.refresh_error);
+   const ignored=unapplied?(!fresh?'LATE_RESULT_NOT_APPLIED':'SNAPSHOT_REFRESH_FAILED'):decision==='ABSTAIN'?'INVALID_OR_UNAVAILABLE':null;
+   st.last={key:pending.key,event:pending.event,decision:unapplied?a.decision:decision,authority,at:now,
+     requested_at:pending.at,api_started_at:a?.started_at_ms??null,api_completed_at:completed??null,
+     consumer_deadline:pending.at+P.timeAnswerWaitMs,consumer_received:now,applied_at:ignored?null:now,
+     expired:!fresh,ignored_reason:ignored,applied_decision:ignored?null:decision};st.pending=null;
    st.softReceipt={key:pending.softKey??softTrigger?.key,price,peak,evidenceKey:dynamics?.evidenceKey??null,at:now};
    if(decision==='EXIT'){
      const emergency=authority==='DEEPSEEK_EMERGENCY_EXIT_ONLY';
@@ -101,8 +112,8 @@ export async function holdStep(st0,{now,price,peak,timeCandidate,softTrigger,dyn
    }
    // No usable answer (timeout, invalid, ABSTAIN, budget or provider outage): protection is
    // neither raised nor lowered. Hard safety is unaffected and keeps executing on its own.
-   st.retryAfter=now+P.deteriorationMinGapMs;st.softArmed=true;
-   return {close:false,reason:age>P.timeAnswerWaitMs?'FD1_FINAL_TIMEOUT':'FD1_FINAL_UNAVAILABLE',state:st,
+   st.retryAfter=now+(st.dynamicTracker?.status==='DATA_DEGRADED'?DYNAMIC_POLICY.missingRetryMs:P.deteriorationMinGapMs);st.softArmed=true;
+   return {close:false,reason:unapplied?ignored:age>P.timeAnswerWaitMs?'FD1_FINAL_TIMEOUT':'FD1_FINAL_UNAVAILABLE',state:st,
      protectApproval:{verdict:'KEEP_LAST_APPROVED_PROTECTION',standing:Number(st.protectLevel)||null,
        candidate:Number(pending.softLevel)||null,candidateKey:pending.softKey??null,at:now}};
   }
@@ -114,7 +125,7 @@ export async function holdStep(st0,{now,price,peak,timeCandidate,softTrigger,dyn
   const key=await hash({v:FD1_HOLD_POLICY_VERSION,positionId:String(positionId),generation:st.generation,event:n.event,at:Math.floor(now/1000)});
   // The exact candidate offered to this review is bound to the claim, so a later PROTECT can
   // only approve the level that was actually judged.
-  st.pending={key,event:n.event,at:now,softKey:softTrigger?.key??null,
+  st.pending={key,event:n.event,at:now,consumer_deadline:now+P.timeAnswerWaitMs,softKey:softTrigger?.key??null,
     softLevel:Number(softTrigger?.level)>0?Number(softTrigger.level):null,softReason:softTrigger?.reason??null};
   st.reviews+=1;st.lastReviewAt=now;st.lastReviewPrice=price;
   return {close:false,reason:'FD1_AWAITING_GPT',state:st,start:{key,event:n.event}};
@@ -131,7 +142,7 @@ function refreshExitContext(c,book,at){
    distance:c.soft_trigger.level?bid/c.soft_trigger.level-1:null,crossed:c.soft_trigger.level?bid<=c.soft_trigger.level:false}:null};
 }
 /** Build and ask one HOLD review from live public data. Never throws. */
-export async function runHoldReview({position,event,timeCandidate,stopStage,exitContext=null,apiKey,deepseekKey,fetchFn=fetch,now=Date.now,onPacket}){
+export async function runHoldReview({position,event,timeCandidate,stopStage,exitContext=null,apiKey,deepseekKey,fetchFn=fetch,now=Date.now,onPacket,dynamicState=null}){
   try{
     const asOf=now(),{src,errors}=await readSources(String(position.symbol).toUpperCase(),asOf,{mode:'LIVE',fetchFn,ms:2500,now,positionId:position.capturePositionId??null});
     const f=position.entryFeatures??{},snapshotAt=now();
@@ -143,14 +154,23 @@ export async function runHoldReview({position,event,timeCandidate,stopStage,exit
       facts,judgments:modelJudgments(f),position:{event,positionId:position.id,generation:position.generation,exitContext:refreshExitContext(exitContext,src.book,snapshotAt),deterministicExitCandidate:timeCandidate??null,stopStage:stopStage??null,
         valuation:{basis:'EXECUTABLE_BID',snapshot_at_ms:snapshotAt,quote_at_ms:Number(src.book.T??src.book.E),
           candle_close_at_ms:facts.quality.last_close_at_ms}}});
+    packet.dynamic_policy=DYNAMIC_VERSION;packet.dynamic_as_of_ms=snapshotAt;
+    const tracker=positionDynamicState(dynamicState,facts.capture_context,{at:snapshotAt,bid:Number(src.book?.bids?.[0]?.[0]),
+      entry:position.entryPrice,generation:position.generation,positionId:position.id,emergency:dynamicState?.emergency_packet});
+    packet.dynamic_data_state={status:tracker.status,confidence:tracker.confidence,
+      last_valid_age_ms:tracker.last_valid_age_ms,drift_from_last_valid:tracker.drift_from_last_valid,
+      emergency_packet:tracker.emergency_packet,exposure_increase_allowed:false};
+    packet.snapshot_hash=await hash({...packet,snapshot_hash:''});
     // Observers are detached: no observer rejection or latency changes the GPT decision.
     if(onPacket)Promise.resolve().then(()=>onPacket(packet,snapshotAt)).catch(()=>{});
-    const result=await dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn,now,deadlineMs:asOf+HOLD_POLICY.timeAnswerWaitMs-1000,snapshotAtMs:snapshotAt,
-      refreshPacket:async ms=>{
+    const fast=['DATA_DEGRADED','ENTRY_FAILURE_MULTI_AXIS','POST_FILL_THESIS_REVIEW','BID_DEPTH_COLLAPSE','SELL_FLOW_ACCELERATION','SPREAD_BLOWOUT'].includes(event);
+    const result=await dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn,now,reviewTier:fast?'FAST':'FULL',
+      deadlineMs:asOf+(fast?DYNAMIC_POLICY.fastReviewMs:HOLD_POLICY.timeAnswerWaitMs-1000),snapshotAtMs:snapshotAt,
+      refreshPacket:fast?null:async ms=>{
         const at=now(),fresh=await readSources(String(position.symbol).toUpperCase(),at,{mode:'LIVE',fetchFn,ms,now,positionId:position.capturePositionId??null}),captured=now();
         const nextFacts=computeFacts(fresh.src,{asOf:captured,referenceClose:f.referenceClose,dayReturn:f.dayReturn,rank:f.rank,position:{entryPrice:position.entryPrice,peakPrice:position.peakPrice,entryAt:position.entryAt,lastHighAt:position.lastHighAt,stopPrice:position.stopPrice,requireLiveQuote:true}});
         if(!Number.isFinite(nextFacts.values.position_return))throw Error('LATEST_QUOTE_UNAVAILABLE');
-        const next={...packet,facts:nextFacts,position:{...packet.position,exit_context:exitContext?{...refreshExitContext(exitContext,fresh.src.book,captured),latest_refresh:true}:null,valuation:{...packet.position.valuation,snapshot_at_ms:captured,quote_at_ms:Number(fresh.src.book?.T??fresh.src.book?.E)}}};
+        const next={...packet,facts:nextFacts,dynamic_as_of_ms:captured,position:{...packet.position,exit_context:exitContext?{...refreshExitContext(exitContext,fresh.src.book,captured),latest_refresh:true}:null,valuation:{...packet.position.valuation,snapshot_at_ms:captured,quote_at_ms:Number(fresh.src.book?.T??fresh.src.book?.E)}}};
         next.snapshot_hash=await hash({...next,snapshot_hash:''});return {packet:next,captured};
       }});
     return {packet:result.final_packet??packet,result:{...result,source_errors:errors,model:MODEL,contract:FD_VERSION}};

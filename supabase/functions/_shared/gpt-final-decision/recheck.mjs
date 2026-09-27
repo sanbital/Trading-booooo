@@ -27,6 +27,8 @@ import {computeFacts,FACT_DEFS,FACT_KEYS,POSITION_KEYS,HISTORY_KEYS,bookFacts,mo
 import {entryAssessment} from './assessment.mjs';
 import {readSources} from './market.mjs';
 import {CAPTURE_NOTE,contextForModel} from './capture-context.mjs';
+import {DYNAMIC_VERSION,dynamicDelta,entryCaptureSafety,compactDynamic} from './dynamic-flow.mjs';
+import {DYNAMIC_PROMPT,extendDynamicSchema,validateDynamicWire,dynamicEnabled} from './dynamic-contract.mjs';
 import {CATEGORIES,categoriesFor,riskFlags,SUPPORT_UP,SUPPORT_TEXT,TREND_SUPPORT,validateShape,JUDGMENT,EXECUTION_SAFETY} from './contract.mjs';
 import {callDecision,hash,MODEL} from './api.mjs';
 import {dualEntryDecision,DUAL_VERSION,ARBITRATION_PROMPT} from './dual.mjs';
@@ -83,18 +85,19 @@ export function initialContext(record,answer){
   const v=record?.packet?.facts?.values??{};
   return {version:RECHECK_VERSION,snapshotAt:num(record?.snapshot_at_ms),completedAt:num(record?.result?.completed_at_ms),
     facts:Object.fromEntries(INITIAL_KEYS.map(k=>[k,num(v[k])])),lastClose:num(record?.packet?.facts?.quality?.last_close),
-    executionRef:record?.packet?.execution_ref??null,support:(answer?.support??[]).map(e=>e.key),summary:answer?.summary??null};
+    executionRef:record?.packet?.execution_ref??null,support:(answer?.support??[]).map(e=>e.key),summary:answer?.summary??null,
+    capture_context:record?.packet?.facts?.capture_context??null,dynamic_policy:record?.packet?.dynamic_policy??null};
 }
 /** PRE-DISPATCH snapshot from data the executor already holds (no I/O): E1's latest tape
  * observation and the quote E1 decided on. */
-export function preDispatchSnapshot({at,rawQuote,e1=null}){
+export function preDispatchSnapshot({at,rawQuote,e1=null,capture=null}){
   const book=bookReference(rawQuote,at),obs=Array.isArray(e1?.observations)?e1.observations.at(-1):null;
   const tape=obs&&num(obs.return)!==null&&num(obs.buyShare)!==null?{source:'E1',startAt:num(obs.startAt),endAt:num(obs.endAt),
     windowMs:num(obs.endAt)!==null&&num(obs.startAt)!==null?obs.endAt-obs.startAt:null,return:num(obs.return),buyShare:num(obs.buyShare),
     tradeCount:num(obs.tradeCount)}:null;
   return {at,bid:book?.bid??null,ask:book?.ask??null,mid:book?.mid??null,quoteAt:book?.at??null,book:book?.facts??null,tape,
     e1State:e1?.confirmationState??null,e1Reasons:e1?.reasonCodes??null,expectedCostBps:num(e1?.expectedCostBps),
-    expectedEntryVWAP:num(e1?.expectedEntryVWAP)};
+    expectedEntryVWAP:num(e1?.expectedEntryVWAP),...(capture?{capture_context:capture}:{})};
 }
 const BOOK_CATS=['SPREAD_ABNORMAL','THIN_LIQUIDITY','SELL_WALL','FILL_WORSE'];
 function bookLevel(id,m){
@@ -144,6 +147,12 @@ export function detectChange(initial,current,policy=RECHECK_POLICY,{force=[]}={}
   // FD1's own published book bands: a category that got worse since the initial BUY.
   for(const id of BOOK_CATS){const a=bookLevel(id,I),b=bookLevel(id,B);
     if(b!=='UNKNOWN'&&(a==='UNKNOWN'?RANK[b]>0:RANK[b]>RANK[a]))reasons.push('BOOK_BAND:'+id);}
+  if(initial?.dynamic_policy===DYNAMIC_VERSION||current?.capture_context){
+    const dynamic=dynamicDelta(initial?.capture_context,current?.capture_context);
+    reasons.push(...dynamic.reasons);deltas.dynamic=dynamic;
+    const safety=entryCaptureSafety(initial?.capture_context,current.at);
+    if(!safety.ok)reasons.push('REVIEWED_TRAJECTORY_REQUIRES_REFRESH');
+  }
   return {version:RECHECK_VERSION,triggered:reasons.length>0,reasons,deltas};
 }
 
@@ -211,15 +220,16 @@ export function recheckSchema(packet=null){
   const known=k=>{const v=packet?valueOf(packet,k):0;return v!==null&&v!==undefined&&Number.isFinite(v);};
   const catFacts=[...new Set([...cats.filter(k=>k!==JUDGMENT).flatMap(catFactsOf),...FACT_OK,...CHANGE_KEYS])].filter(k=>!packet||known(k));
   const up=allSupport().filter(k=>!packet||(known(k)&&upOf(k)(valueOf(packet,k))===true));
-  const decisions=['BUY','SKIP','ABSTAIN'];
+  const decisions=['BUY','WAIT','SKIP','ABSTAIN'];
   const reasonItem=obj({r:{type:'string',enum:cats.length?cats:['DATA_INCOMPLETE']},e:{type:'array',maxItems:4,items:{type:'string',enum:catFacts.length?catFacts:['return_5m']}}});
-  return obj({t:{type:'string',enum:[RECHECK_TASK]},c:{type:'string',minLength:1,maxLength:80},d:{type:'string',enum:decisions},
+  return extendDynamicSchema(obj({t:{type:'string',enum:[RECHECK_TASK]},c:{type:'string',minLength:1,maxLength:80},d:{type:'string',enum:decisions},
     reasons:{type:'array',maxItems:cats.length?4:0,items:reasonItem},
-    support:{type:'array',maxItems:6,items:{type:'string',enum:up.length?up:['return_5m']}},n:{type:'string',minLength:1,maxLength:200}});
+    support:{type:'array',maxItems:6,items:{type:'string',enum:up.length?up:['return_5m']}},n:{type:'string',minLength:1,maxLength:200}}),RECHECK_TASK,packet);
 }
 /** Server-side validation of a RECHECK answer. Throws RC_* / FD_* reasons (=> ABSTAIN). */
 export function validateRecheck(wire,packet){
-  validateShape(wire,recheckSchema());
+  validateShape(wire,extendDynamicSchema(recheckSchema(),RECHECK_TASK,packet));
+  const dynamic=validateDynamicWire(wire,packet);
   ensure(wire.c===packet.candidate_id,'FD_IDENTITY_MISMATCH');
   ensure(!/[0-9]/.test(wire.n),'FD_NUMERICAL_SUMMARY');
   const risk=recheckFlags(packet);
@@ -246,7 +256,7 @@ export function validateRecheck(wire,packet){
   // GPT decides; a SKIP only has to say why (a band, or its own judgment on cited facts).
   if(d==='SKIP')ensure(reasons.length>0,'FD_SKIP_REQUIRES_CATEGORY');
   return {version:RECHECK_VERSION,task:RECHECK_TASK,decision:d,reasons:d==='BUY'?[]:reasons,...(d==='BUY'&&reasons.length?{noted_risks:reasons}:{}),
-    support,rejected_support,summary:wire.n,risk_hard:risk.hard,risk_soft:risk.soft};
+    support,rejected_support,summary:wire.n,risk_hard:risk.hard,risk_soft:risk.soft,...(dynamic??{})};
 }
 const dict=Object.entries({...Object.fromEntries(FACT_OK.map(k=>[k,FACT_DEFS[k]])),...CHANGE_DEFS}).map(([k,[s,u,d]])=>`- ${k} [${s}, ${u}]: ${d}`).join('\n');
 const catText=[...ENTRY_CATS.map(k=>`- ${k}: ${CATEGORIES[k].text}; cite only: ${CATEGORIES[k].facts.join(', ')||'(none)'}`),
@@ -292,10 +302,11 @@ export function recheckModelInput(packet){
   for(const k of FACT_OK){if(v[k]===null||v[k]===undefined)continue;(sections[FACT_DEFS[k][0]]??={})[k]=round(v[k]);}
   const risk=recheckFlags(packet);
   return {t:RECHECK_TASK,candidate_id:packet.candidate_id,symbol:packet.symbol,data_mode:packet.data_mode,
+    ...(dynamicEnabled(packet)?{dynamic_policy:packet.dynamic_policy,dynamic_as_of_ms:packet.dynamic_as_of_ms}:{}),
     initial:{decision:packet.initial.decision,summary:packet.initial.summary,support:packet.initial.support,
       facts:Object.fromEntries(Object.entries(packet.initial.facts).filter(([,x])=>x!==null).map(([k,x])=>[k,round(x)])),
       assessment:entryAssessment(packet.initial.facts??{})},
-    current:{facts:sections,unavailable:FACT_OK.filter(k=>v[k]===null),assessment:entryAssessment(v),...(packet.facts.capture_context?{capture_context:contextForModel(packet.facts.capture_context)}:{})},
+    current:{facts:sections,unavailable:FACT_OK.filter(k=>v[k]===null),assessment:entryAssessment(v),...(packet.facts.capture_context?{capture_context:dynamicEnabled(packet)?compactDynamic(packet.facts.capture_context):contextForModel(packet.facts.capture_context)}:{})},
     change:Object.fromEntries(Object.entries(packet.change.values).filter(([,x])=>x!==null).map(([k,x])=>[k,round(x)])),
     trigger_reasons:packet.trigger_reasons,
     risk_flags:Object.fromEntries(Object.entries(risk.flags).filter(([,x])=>x.level!=='CLEAR').map(([k,x])=>[k,x.level])),
@@ -303,8 +314,8 @@ export function recheckModelInput(packet){
 }
 export function recheckPayload(packet){
   return {model:MODEL,store:false,tools:[],truncation:'disabled',service_tier:'default',prompt_cache_key:'boo-fd1-recheck',
-    reasoning:{effort:'none'},max_output_tokens:600,
-    input:[{role:'system',content:RECHECK_PROMPT},{role:'user',content:JSON.stringify(recheckModelInput(packet))}],
+    reasoning:{effort:'none'},max_output_tokens:dynamicEnabled(packet)?1800:600,
+    input:[{role:'system',content:RECHECK_PROMPT+(dynamicEnabled(packet)?DYNAMIC_PROMPT:'')},{role:'user',content:JSON.stringify(recheckModelInput(packet))}],
     text:{verbosity:'low',format:{type:'json_schema',name:'fd1_recheck',strict:true,schema:recheckSchema(packet)}}};
 }
 /** Change values carried in the packet (the ones GPT may cite). */
@@ -322,7 +333,8 @@ export async function buildRecheckPacket({signalId,symbol,dataMode='LIVE',facts,
     change:{values:changeValues(detection)},trigger_reasons:[...detection.reasons],
     initial:{decision:'BUY',summary:initial.summary??null,support:(initial.support??[]).map(k=>({key:k,value:round(initial.facts?.[k]??null)})),
       facts:{...(initial.facts??{})},snapshot_at_ms:initial.snapshotAt??null,execution_ref:initial.executionRef??null},
-    model_judgments:judgments??null,current_ref:currentRef,pre_dispatch:preDispatch,snapshot_hash:''};
+    model_judgments:judgments??null,current_ref:currentRef,pre_dispatch:preDispatch,snapshot_hash:'',
+    ...(initial.dynamic_policy===DYNAMIC_VERSION?{dynamic_policy:DYNAMIC_VERSION,dynamic_as_of_ms:currentRef?.at??preDispatch?.at}: {})};
   packet.snapshot_hash=await hash({...packet,snapshot_hash:''});
   return packet;
 }
@@ -359,7 +371,7 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
   let result;
   try{
     const at=asOf??now();
-    const {src,errors}=await readFresh(String(signal.symbol).toUpperCase(),at,{mode:dataMode,fetchFn,ms:policy.freshReadMs});
+    const {src,errors}=await readFresh(String(signal.symbol).toUpperCase(),at,{mode:dataMode,fetchFn,ms:policy.freshReadMs,now});
     const captured=asOf??now();
     const facts=computeFacts(src,{asOf:captured,referenceClose:f.referenceClose,dayReturn:f.dayReturn,rank:f.rank});
     const judgments=(()=>{try{return JSON.parse(ticket.identityJson).judgments;}catch{return modelJudgments(f);}})();
@@ -373,7 +385,7 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
     result=await dualEntryDecision(record.packet,{apiKey,deepseekKey,fetchFn,now,deadlineMs:Math.min(deadline,record.snapshot_at_ms+policy.answerMaxAgeMs),
       snapshotAtMs:record.snapshot_at_ms,inputPayload:recheckPayload,validate:validateRecheck,
       refreshPacket:asOf===null?async ms=>{
-        const next=await readFresh(String(signal.symbol).toUpperCase(),now(),{mode:dataMode,fetchFn,ms}),captured=now();
+        const next=await readFresh(String(signal.symbol).toUpperCase(),now(),{mode:dataMode,fetchFn,ms,now}),captured=now();
         const facts=computeFacts(next.src,{asOf:captured,referenceClose:f.referenceClose,dayReturn:f.dayReturn,rank:f.rank});
         const ref=next.src.book?bookReference(next.src.book,captured):null;
         const packet=await buildRecheckPacket({signalId:signal.id,symbol:signal.symbol,dataMode,facts,initial,detection,judgments,currentRef:ref?{bid:ref.bid,ask:ref.ask,mid:ref.mid,at:captured}:null,preDispatch});
@@ -393,8 +405,9 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
     latency_ms:result.latency_ms??null,snapshot_at_ms:snap});}
   const common={job_key:key,attempted:result.attempted===true,api_cost_usd:result.api_cost_usd??null,latency_ms:result.latency_ms??null,
     snapshot_at_ms:snap,completed_at_ms:result.completed_at_ms??now(),valid_until_ms:validUntil,answer:result.answer??null,
-    current_ref:record.packet?.current_ref??null,request_id:result.request_id??null,arbitration:result.arbitration??null};
-  if(!result.valid)return out({...common,error:result.error??'RC_INVALID'});
+    current_ref:record.packet?.current_ref??null,request_id:result.request_id??null,arbitration:result.arbitration??null,
+    capture_context:record.packet?.facts?.capture_context??null,dynamic_policy:record.packet?.dynamic_policy??null};
+  if(!result.valid)return out({...common,decision:result.decision==='WAIT'?'WAIT':'ABSTAIN',error:result.error??'RC_INVALID'});
   if(validUntil===null||now()>=validUntil)return out({...common,error:'RC_EXPIRED'});
   return out({...common,decision:result.decision,valid:true});
 }

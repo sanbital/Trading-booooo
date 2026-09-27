@@ -11,10 +11,11 @@
  *  - GPT never sees or controls sizing, leverage, slots, the native stop or order safety. */
 import {FACT_DEFS,FACT_KEYS,MICRO_KEYS,POSITION_KEYS,HISTORY_KEYS} from './facts.mjs';
 import {fatigueAxes,FATIGUE_AXES,FATIGUE_FACTS} from './assessment.mjs';
+import {extendDynamicSchema,validateDynamicWire,dynamicEnabled} from './dynamic-contract.mjs';
 export const FD_VERSION='GPT_FINAL_DECISION_FD1';
 export const CONTRACT_VERSION='FD1_CONTRACT_JUDGMENT_1';
 export const ENTRY_TASK='ENTRY',HOLD_TASK='HOLD';
-export const DECISIONS=Object.freeze({ENTRY:['BUY','SKIP','ABSTAIN'],HOLD:['HOLD','PROTECT','EXIT','ABSTAIN']});
+export const DECISIONS=Object.freeze({ENTRY:['BUY','WAIT','SKIP','ABSTAIN'],HOLD:['HOLD','PROTECT','EXIT','ABSTAIN']});
 const f=(m,k)=>m[k];
 const has=(m,...ks)=>ks.every(k=>m[k]!==null&&m[k]!==undefined&&Number.isFinite(m[k]));
 /** SETUP_POLICY.maxChasePct of leader-pullback-reaccel.mjs (pinned equal by a test). */
@@ -159,7 +160,7 @@ const citeable=task=>FACT_KEYS.filter(k=>task==='HOLD'?!HISTORY_KEYS.includes(k)
  * support, and SKIP/EXIT is not offered when no category is breached. The server still
  * re-validates every answer against the same packet. */
 export function wireSchema(task,packet=null){
-  const risk=packet?riskFlags(packet):null,m=packet?.facts?.values,entry=task==='ENTRY';
+  const risk=packet?.facts?riskFlags(packet):null,m=packet?.facts?.values,entry=task==='ENTRY';
   const cats=risk?categoriesFor(task).filter(k=>['SOFT','HARD'].includes(risk.flags[k]?.level)):categoriesFor(task);
   // ENTRY only: the facts that fail their up-direction now, and whether EV_UNFAVORABLE can be cited.
   const bear=entry?Object.keys(BEARISH).filter(k=>!m||(has(m,k)&&BEARISH[k](m[k])===true)):[];
@@ -174,12 +175,12 @@ export function wireSchema(task,packet=null){
   const t={type:'string',enum:[task]},c={type:'string',minLength:1,maxLength:80},d={type:'string',enum:decisions},
     reasons={type:'array',maxItems:reasonIds.length?4:0,items:reasonItem},
     support={type:'array',maxItems:6,items:{type:'string',enum:up.length?up:['return_5m']}},n={type:'string',minLength:1,maxLength:200};
-  if(!entry)return obj({t,c,d,reasons,support,n});
+  if(!entry)return extendDynamicSchema(obj({t,c,d,reasons,support,n}),task,packet);
   // Evidence first, decision after: the property order is the generation order.
-  return obj({t,c,support,bearish:{type:'array',maxItems:6,items:{type:'string',enum:bear.length?bear:['return_5m']}},
+  return extendDynamicSchema(obj({t,c,support,bearish:{type:'array',maxItems:6,items:{type:'string',enum:bear.length?bear:['return_5m']}},
     invalidation:{type:'array',maxItems:3,items:obj({fact:{type:'string',enum:ENTRY_FACTS},op:{type:'string',enum:['BELOW','ABOVE']},value:{type:'number'}})},
     upside_pct:{type:'number'},downside_pct:{type:'number'},ev:{type:'string',enum:EV_BIASES},confidence:{type:'number'},
-    d,abstain_reason:{type:'string',enum:ABSTAIN_REASONS},reasons,n});
+    d,abstain_reason:{type:'string',enum:ABSTAIN_REASONS},reasons,n}),task,packet);
 }
 function ensure(ok,reason){if(!ok)throw Error(reason);}
 export function validateShape(v,s,p='$'){
@@ -192,7 +193,8 @@ export function validateShape(v,s,p='$'){
 }
 /** Server-side validation. Returns the canonical answer or throws FD_* reasons. */
 export function validateDecision(wire,packet){
-  const task=packet.task,entry=task==='ENTRY';validateShape(wire,wireSchema(task));
+  const task=packet.task,entry=task==='ENTRY';validateShape(wire,extendDynamicSchema(wireSchema(task),task,packet));
+  const dynamic=validateDynamicWire(wire,packet);
   ensure(wire.c===packet.candidate_id,'FD_IDENTITY_MISMATCH');
   ensure(!/[0-9]/.test(wire.n),'FD_NUMERICAL_SUMMARY');
   const m=packet.facts.values,risk=riskFlags(packet),cite=k=>{ensure(has(m,k),'FD_CITED_FACT_MISSING:'+k);return {key:k,value:m[k],unit:FACT_DEFS[k][1]};};
@@ -232,7 +234,7 @@ export function validateDecision(wire,packet){
   if(d==='SKIP'||d==='EXIT')ensure(reasons.length>0,'FD_'+d+'_REQUIRES_CATEGORY');
   const buyLike=d==='BUY'||d==='HOLD';
   const out={version:FD_VERSION,task,decision:d,reasons:buyLike?[]:reasons,...(buyLike&&reasons.length?{noted_risks:reasons}:{}),
-    support,rejected_support,summary:wire.n,risk_hard:risk.hard,risk_soft:risk.soft};
+    support,rejected_support,summary:wire.n,risk_hard:risk.hard,risk_soft:risk.soft,...(dynamic??{})};
   if(!entry)return out;
   // EV evidence. Recorded, never a gate: an inconsistency on BUY is flagged, not refused.
   ensure(new Set(wire.bearish).size===wire.bearish.length,'FD_DUPLICATE_BEARISH');

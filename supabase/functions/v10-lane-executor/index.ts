@@ -5,6 +5,8 @@ import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinal
 import {dryRunCoordinator,dryRunReviewPhase,liveProbe} from "./gpt-final-review-dryrun.mjs";
 import {readReviewControl} from "../_shared/gpt-final-review/supabase-store.mjs";
 import {fd1HoldTick,fd1Probe,fd1ExitProbe,HOLD_RELEASE,holdShadowEnabled,FD1_HOLD_POLICY_VERSION,TIME_REASONS as FD1_TIME_REASONS} from "./gpt-final-decision-adapter.mjs";
+import {readCaptureWithRecovery} from "../_shared/gpt-final-decision/capture-context.mjs";
+import {DYNAMIC_VERSION,dispatchDynamicSafety} from "../_shared/gpt-final-decision/dynamic-flow.mjs";
 import {FD1_ENTRY_ENGINE} from "../_shared/gpt-final-decision/engine.mjs";
 import {finalRecheckStep,finalRecheckProbe,postRecheckSafety,markRecheckOutcome,withOrderTiming} from "./gpt-final-recheck-adapter.mjs";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
@@ -1251,6 +1253,10 @@ if(E1_ENABLED){
   const recheck=await finalRecheckStep(db,s,{ticket:attempt.gptFinalReview,e1:E1_ENABLED?e1Decision:null,rawQuote:q});
   attempt.finalRecheck=recheck.record;
   if(!recheck.proceed){
+    if(recheck.decision==="WAIT"){
+      await audit(db,null,"BULL","BULL","ENTRY_DEFER",recheck.reason,{signalId:s.id,symbol:s.symbol,decision:"WAIT",finalRecheck:recheck.record});
+      return{entered:false,decision:"WAIT",reason:recheck.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,finalRecheck:recheck.record};
+    }
     await audit(db,null,"BULL","BULL","ENTRY_REJECT",recheck.reason,{signalId:s.id,symbol:s.symbol,stage:"GPT_FINAL_RECHECK",finalAdmission:false,finalRecheck:recheck.record});
     const terminal=await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:recheck.reason.slice(0,500),
       updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","CLAIMED");
@@ -1277,12 +1283,22 @@ if(E1_ENABLED){
 // hand. Re-introducing an await between the quote read and the dispatch check is
 // exactly the defect this fixes; see booGateInputs for the production evidence.
 await requireLeaderEntryControls(db);
-const[rawFinalCheck,finalOrders,dispatchSnap,booInputs,dispatchQuote]=await Promise.all([
+const[rawFinalCheck,finalOrders,dispatchSnap,booInputs,dispatchQuote,dispatchCapture]=await Promise.all([
   readOpsPair(db,undefined,s.symbol),
   gateway({action:"v18_open_orders"},5000),
   E1_ENABLED?snap(db):Promise.resolve(sn),
   booGateInputs(db,s),
-  E1_ENABLED?gateway({action:"quote",market:s.symbol},3000):Promise.resolve(q)]),finalCheck=rawFinalCheck;
+  E1_ENABLED?gateway({action:"quote",market:s.symbol},3000):Promise.resolve(q),
+  readCaptureWithRecovery(s.symbol,Date.now())]),finalCheck=rawFinalCheck;
+attempt.finalRecheck={...attempt.finalRecheck,dynamic_policy:DYNAMIC_VERSION,dispatch_capture:dispatchCapture};
+const dispatchDynamic=dispatchDynamicSafety({reviewed:attempt.finalRecheck.final?.capture_context??attempt.gptFinalReview?.initial?.capture_context,
+  latest:dispatchCapture,at:Date.now()});
+attempt.finalRecheck.dispatch_dynamic=dispatchDynamic;
+if(!dispatchDynamic.ok){
+  markRecheckOutcome(db,s,attempt.finalRecheck,"NO_ORDER_WAIT:"+dispatchDynamic.reason);
+  await audit(db,null,"BULL","BULL","ENTRY_DEFER",dispatchDynamic.reason,{signalId:s.id,symbol:s.symbol,decision:"WAIT",dynamic:dispatchDynamic});
+  return{entered:false,decision:"WAIT",reason:dispatchDynamic.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL};
+}
 if(E1_ENABLED){
   const dispatchAt=Date.now(),assessment=e1CurrentAssessment(s,dispatchQuote,step,dispatchAt,filters);
   attempt.entryPriceCheck=entryPriceEvidence(s,assessment.limitPrice,dispatchAt,"E1_DISPATCH_PRICE",
@@ -1460,9 +1476,14 @@ if(!retryRecheck.proceed)return await finishPartialOrAbort(retryRecheck.reason,{
 
 // FINAL BUY can take seconds. Re-read every execution-safety input after the answer.
 await requireLeaderEntryControls(db);
-const[retryPair,retryOrders,retrySnap,retryQuote,retryInfo]=await Promise.all([
+const[retryPair,retryOrders,retrySnap,retryQuote,retryInfo,retryCapture]=await Promise.all([
   readOpsPair(db,undefined,s.symbol),gateway({action:"v18_open_orders"},5000),snap(db),gateway({action:"quote",market:s.symbol},3000),
-  gateway({action:"symbol_info",market:s.symbol},3000)]);
+  gateway({action:"symbol_info",market:s.symbol},3000),readCaptureWithRecovery(s.symbol,Date.now())]);
+attempt.finalRecheck={...attempt.finalRecheck,dynamic_policy:DYNAMIC_VERSION,dispatch_capture:retryCapture};
+const retryDynamic=dispatchDynamicSafety({reviewed:attempt.finalRecheck.final?.capture_context??attempt.gptFinalReview?.initial?.capture_context,
+  latest:retryCapture,at:Date.now()});
+attempt.finalRecheck.dispatch_dynamic=retryDynamic;
+if(!retryDynamic.ok)return await finishPartialOrAbort(retryDynamic.reason,{executionAttempts:1,decision:"WAIT",dynamic:retryDynamic});
 await recordMismatch(db,retryPair.match);
 const retryNow=Date.now(),retryBid=N(retryQuote?.best_bid),retryAsk=N(retryQuote?.best_ask);
 if(!(retryBid>0&&retryAsk>=retryBid))return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:INVALID_BOOK",{executionAttempts:1});
@@ -1639,7 +1660,7 @@ async function settleKnownEntry(db,intent,raw,gw=opsGateway(db),opts={}) {
       now=new Date(entryAt),entryPolicy=intent.request_payload?.entry_execution_policy,
       entryTiming=rec(intent.request_payload?.entry_timing_policy),entryController=rec(intent.request_payload?.entry_controller),
       fillGuard=entryPolicy?.version===ENTRY_EXECUTION_POLICY_VERSION?postFillEntryGuard(f,z.avg):null,
-      pos=await db.from("v11_long_regime_positions").insert({signal_id:row.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:row.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{entrySelectionPolicyVersion:intent.request_payload?.entry_selection?.version??null,b06133:intent.request_payload?.entry_selection??null,v30Front:intent.request_payload?.entry_front??null,entryBranch:intent.request_payload?.entry_branch??null,entryControllerPolicyVersion:entryController?.version??null,cec0040:entryController?.version===CEC0040_VERSION?entryController:null,gptEntryDecision:intent.request_payload?.entry_gpt_decision??null,finalRecheck:intent.request_payload?.entry_final_recheck??null,qv3:entryTiming?.version===SETUP_POLICY_VERSION?null:(intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null),entryTimingPolicyVersion:entryTiming?.version??null,entryTimingSetup:entryTiming?.setup??null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,fd1HoldPolicyVersion:FD1_HOLD_POLICY_VERSION,leaderExitPolicyVersion:entryController?.version===CEC0040_VERSION&&entryController.enforcementEnabled===true?P142_POLICY_VERSION:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,entryConfirmationPolicyVersion:intent.request_payload?.e1?.policyVersion??null,entryConfirmation:intent.request_payload?.e1??null,exitObservationPolicyVersion:intent.request_payload?.x1?.policyVersion??null,x1Observation:{observedBidPeak:z.avg,executableVwapPeak:null,lastObservationId:null,lastObservationAt:null,source:"P10_TOP_OF_BOOK_BATCH",maxQuoteAgeMs:1000},entryMarketRules:{priceTick:N(intent.request_payload?.price_tick),quantityStep:N(intent.request_payload?.quantity_step)},operatorOverride:intent.request_payload?.operator_override??null,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,setupMaxConcurrent:SETUP_MAX_CONCURRENT,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFillOrders:[{intentId:intent.id,exchangeOrderId:receipt.id,quantity:receipt.quantity,price:receipt.price,fee:receipt.fee,exact:receipt.exact,filledAt:receipt.lastAt??null}],entryFeatures:f}}).select("*").single();
+      pos=await db.from("v11_long_regime_positions").insert({signal_id:row.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:row.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{entryDynamicSeed:{version:DYNAMIC_VERSION,capture:intent.request_payload?.entry_final_recheck?.dispatch_capture??null,seeded_at_ms:now.getTime()},entrySelectionPolicyVersion:intent.request_payload?.entry_selection?.version??null,b06133:intent.request_payload?.entry_selection??null,v30Front:intent.request_payload?.entry_front??null,entryBranch:intent.request_payload?.entry_branch??null,entryControllerPolicyVersion:entryController?.version??null,cec0040:entryController?.version===CEC0040_VERSION?entryController:null,gptEntryDecision:intent.request_payload?.entry_gpt_decision??null,finalRecheck:intent.request_payload?.entry_final_recheck??null,qv3:entryTiming?.version===SETUP_POLICY_VERSION?null:(intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null),entryTimingPolicyVersion:entryTiming?.version??null,entryTimingSetup:entryTiming?.setup??null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,fd1HoldPolicyVersion:FD1_HOLD_POLICY_VERSION,leaderExitPolicyVersion:entryController?.version===CEC0040_VERSION&&entryController.enforcementEnabled===true?P142_POLICY_VERSION:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,entryConfirmationPolicyVersion:intent.request_payload?.e1?.policyVersion??null,entryConfirmation:intent.request_payload?.e1??null,exitObservationPolicyVersion:intent.request_payload?.x1?.policyVersion??null,x1Observation:{observedBidPeak:z.avg,executableVwapPeak:null,lastObservationId:null,lastObservationAt:null,source:"P10_TOP_OF_BOOK_BATCH",maxQuoteAgeMs:1000},entryMarketRules:{priceTick:N(intent.request_payload?.price_tick),quantityStep:N(intent.request_payload?.quantity_step)},operatorOverride:intent.request_payload?.operator_override??null,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,setupMaxConcurrent:SETUP_MAX_CONCURRENT,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFillOrders:[{intentId:intent.id,exchangeOrderId:receipt.id,quantity:receipt.quantity,price:receipt.price,fee:receipt.fee,exact:receipt.exact,filledAt:receipt.lastAt??null}],entryFeatures:f}}).select("*").single();
     if(pos.error)throw Error(`POSITION:${pos.error.message}`);position=pos.data;
   }
   await verifyExecutionLease(db);
@@ -2148,8 +2169,8 @@ async function runX1FastObservation(db,pair,deadlineMs){
       const hardNow=hardSafetyState(item.p,{bid:observation.bid,now:at,peak:item.peak,policy:x1LocalPolicy(item.p),
         r5:[EXIT_REVIEW_R5.policyVersion,P142_POLICY_VERSION].includes(rec(item.p.metadata).leaderExitPolicyVersion),priceTick:tick});
       const elapsed=at-item.lastPersistAt,review=rec(rec(item.p.metadata).fd1Hold);
-      const strategicDue=(state.action==="CLOSE"||review.pending||review.protectUntil&&at>=review.protectUntil)&&elapsed>=5000;
-      const evidenceDue=elapsed>=15000; // inspect flow/book even when bid and peak are flat
+      const strategicDue=review.pending?elapsed>=1000:(state.action==="CLOSE"||review.protectUntil&&at>=review.protectUntil)&&elapsed>=5000;
+      const evidenceDue=elapsed>=5000; // inspect flow/book even when bid and peak are flat
       if(hardNow.hardHit||strategicDue||stopDue&&elapsed>=5000||persistDue||evidenceDue)proposals.push({item,observation,state,tick,stopDirty});
     }
     if(proposals.length){
@@ -2249,6 +2270,10 @@ async function run(db) {
     // Target maintenance is isolated from position management. Public market-data or
     // shadow-ledger failures are telemetry here; the atomic controller RPC itself is
     // the authority that fails NEW entries closed when causal state is not ready.
+    if(X1_ENABLED&&pair.positions.length){
+      x1Fast=await runX1FastObservation(db,pair,Math.min(Date.parse(cycleStarted)+35000,Date.now()+12000));
+      pair=await readOpsPair(db);
+    }
     cec0040Targets=await refreshCec0040Targets(db);
     const controls=await opsControls(db);
     if(controls.runtime.circuit_open)entry.reason="CIRCUIT_OPEN_MANAGEMENT_ACTIVE";
@@ -2813,7 +2838,7 @@ async function manageLeader(db,p,ctx){
     symbol:p.symbol,at:detectedAtMs,bid,entry:Number(p.entry_price),peak:hard.peak,hardFloor:hard.hardFloor,
     hardReason:hard.hardReason,mfe:hard.mfe,mae:hard.mae,giveback:hard.giveback,drawdown:hard.drawdown,
     candidate:{level:soft.level,reason:soft.reason,crossed:soft.crossed===true,stage:rawExit.protectionStage??null},
-    approved,gptApproval:null,reviewReason:null,reviewFallback:false};
+    approved,approvedBefore:approved,gptApproval:null,reviewReason:null,reviewFallback:false};
   const telemetry={detectedAtMs,quoteRequestedAtMs:timing.requested_at_ms,
     quoteReceivedAtMs:timing.received_at_ms,exchangeBookAtMs:timing.book_captured_at_ms??null,
     source:timing.source??null,observationId:observationId??null,bidSize:Number.isFinite(bidSize)?bidSize:null};
@@ -2907,6 +2932,7 @@ async function manageLeader(db,p,ctx){
     // copied, so there is exactly one authoritative copy of each answer.
     protectionDecision={...protectionDecision,approved,gptApproval:fd1.protectApproval??null,
       reviewReason:fd1.reason??null,reviewFallback:fd1.fallback===true,
+      dynamicTracker:fd1.state?.dynamicTracker??null,decisionTiming:fd1.state?.last??null,
       reviewJobKey:fd1.state?.last?.key??fd1.state?.pending?.key??null,
       reviewEvent:fd1.state?.last?.event??fd1.state?.pending?.event??null,
       reviewDecision:fd1.state?.last?.decision??null,reviewAuthority:fd1.state?.last?.authority??null,
@@ -3083,6 +3109,8 @@ async function opsReadiness(db){
     db:{openPositionCount:(positions.data??[]).length,openPositions:positions.data??[],unresolvedOrderCount:(orders.data??[]).length,unresolvedOrders:orders.data??[]},
     runtime:rt.data??null,gptControl:control,openaiKeyPresent:(env("OPENAI_API_KEY")||"").length>0,maxSlots:MAX_SLOTS,
     nativeStopEnabled:NATIVE_STOP_ENABLED,failsafeRelease:"PR193_EMERGENCY_VALIDATION_1",
+    dynamicLifecycle:{version:DYNAMIC_VERSION,fullTrajectoryRequiredForEntry:true,absoluteTrajectoryAgeMs:10000,
+      positionCaptureIntervalMs:5000,missingDataState:"DATA_DEGRADED",missingDataForcesExit:false},
     protectionArbitration:{version:PROTECTION_ARBITRATION_VERSION,actions:PROTECTION_ACTIONS,
       candidateRaisesProtection:false,approver:"GPT_FINAL_ONLY",lowering:"IMPOSSIBLE",
       onReviewerFailure:"KEEP_LAST_APPROVED_PROTECTION",hardSafetyIndependent:true,

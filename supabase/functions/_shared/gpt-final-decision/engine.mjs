@@ -10,6 +10,8 @@ import {PROMPTS} from './prompt.mjs';
 import {bookReference} from './recheck.mjs';
 import {LIVE_CHASE_MODE,chaseContext} from '../leader-live-chase.mjs';
 import {dualEntryDecision,ARBITRATION_PROMPT,DUAL_VERSION,revalidateArbitration} from './dual.mjs';
+import {DYNAMIC_VERSION,entryCaptureSafety} from './dynamic-flow.mjs';
+import {DYNAMIC_PROMPT} from './dynamic-contract.mjs';
 const num=x=>x!==null&&x!==undefined&&Number.isFinite(Number(x))?Number(x):null;
 /** Immutable decision identity: the trigger and the evidence GPT is shown. A LIVE chase
  * trigger also binds its chase classification; an ordinary trigger's identity is unchanged. */
@@ -33,7 +35,7 @@ export async function readHistory(reader,identity,timeoutMs=1500){
   finally{clearTimeout(timer);}
 }
 export const FD1_ENTRY_ENGINE=Object.freeze({
-  id:FD_VERSION+':ENTRY:'+DUAL_VERSION,
+  id:FD_VERSION+':ENTRY:'+DUAL_VERSION+':'+DYNAMIC_VERSION,
   allow:'BUY',
   // An initial BUY that aged past its answer validity while its trigger is still live is
   // not dropped: it may enter the order path only to be re-decided by a forced GPT FINAL
@@ -41,15 +43,15 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
   agedRecheck:true,
   model:MODEL,
   // The binding covers the ENTRY prompt and the dual-AI arbitration addendum.
-  promptText:PROMPTS.ENTRY+'\n['+DUAL_VERSION+']'+ARBITRATION_PROMPT,
-  schema:wireSchema('ENTRY'),
+  promptText:PROMPTS.ENTRY+'\n['+DUAL_VERSION+']'+ARBITRATION_PROMPT+DYNAMIC_PROMPT,
+  schema:wireSchema('ENTRY',{dynamic_policy:DYNAMIC_VERSION}),
   identity:fd1EntryIdentity,
   // Same-symbol trade memory reader (symbol, beforeMs) => closed trades; injected by the
   // executor adapter (DB). Absent or failing => the memory facts are unknown, never a block.
   history:null,
   async prepare(identity,{fetchFn,now,deadlineMs}){
     const asOf=now(),ms=Math.max(200,Math.min(2500,deadlineMs-asOf));
-    const [{src,errors},history]=await Promise.all([readSources(identity.symbol,asOf,{mode:'LIVE',fetchFn,ms}),
+    const [{src,errors},history]=await Promise.all([readSources(identity.symbol,asOf,{mode:'LIVE',fetchFn,ms,now}),
       readHistory(this.history,identity,Math.min(ms,1500))]);
     const captured=now();
     const facts=computeFacts(src,{asOf:captured,referenceClose:identity.reference_close,dayReturn:identity.day_return,rank:identity.rank,
@@ -62,6 +64,8 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
     // packet (not shown to GPT) so the pre-dispatch change detector compares like with like.
     const ref=src.book?bookReference(src.book,captured):null;
     packet.execution_ref=ref?{bid:ref.bid,ask:ref.ask,mid:ref.mid,at:captured}:null;
+    packet.dynamic_policy=DYNAMIC_VERSION;packet.dynamic_as_of_ms=captured;
+    packet.dynamic_data_state=entryCaptureSafety(facts.capture_context,captured);
     packet.snapshot_hash='';packet.snapshot_hash=await hash({...packet,snapshot_hash:''});
     return {packet,captured};
   },

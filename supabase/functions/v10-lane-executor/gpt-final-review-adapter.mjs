@@ -2,6 +2,7 @@ import {FinalReviewCoordinator,configFromControl} from '../_shared/gpt-final-rev
 import {SupabaseReviewStore,readReviewControl} from '../_shared/gpt-final-review/supabase-store.mjs';
 import {baselineAllowedLive,canonical} from '../_shared/gpt-final-review/contract.mjs';
 import {FD1_ENTRY_ENGINE} from '../_shared/gpt-final-decision/engine.mjs';
+import {dispatchDynamicSafety,DYNAMIC_VERSION} from '../_shared/gpt-final-decision/dynamic-flow.mjs';
 import {recheckAllows} from '../_shared/gpt-final-decision/recheck.mjs';
 import {lifecycleNote,mergeLifecycleNote} from './entry-lifecycle.mjs';
 const contexts=new WeakMap();
@@ -96,6 +97,11 @@ export function gptFinalCheck(db,s,finalRecheck=null,retryAuthority=null,{allowA
   const c=coordinatorFor(db);
   if(c.config.mode!=='ENFORCE')return {allowed:false,reason:'GPT_NOT_ENFORCING_NO_NEW_ENTRY'};
   const triggered=finalRecheck?.recheck_triggered===true;
+  if(finalRecheck?.dynamic_policy===DYNAMIC_VERSION&&!allowAged){
+    const proof=dispatchDynamicSafety({reviewed:finalRecheck.final?.capture_context??finalRecheck.initial_context?.capture_context,
+      latest:finalRecheck.dispatch_capture,at:c.now()});
+    if(!proof.ok)return {allowed:false,decision:'WAIT',reason:proof.reason,dynamic:proof};
+  }
   if(retryAuthority&&(finalRecheck?.recheck_sequence!==2||
     !Number.isFinite(finalRecheck.pre_dispatch_at)||c.now()<finalRecheck.pre_dispatch_at||
     c.now()-finalRecheck.pre_dispatch_at>10000||typeof finalRecheck.recheck_triggered!=='boolean'))

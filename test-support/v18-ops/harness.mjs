@@ -1,3 +1,5 @@
+import {validCapture} from '../dynamic-fixtures.mjs';
+import * as dynamicFlow from '../../supabase/functions/_shared/gpt-final-decision/dynamic-flow.mjs';
 import * as exitAuthority from '../../supabase/functions/_shared/exit-authority.mjs';
 import * as entryEvidence from '../../supabase/functions/v10-lane-executor/entry-evidence.mjs';
 import vm from 'node:vm';
@@ -256,9 +258,9 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
      applyB06133Selection:async(_db,row)=>({allowed:true,row,stamp:row.features.b06133}),
      applyCec0040Selection:async(_db,row)=>({allowed:true,row,stamp:row.features.cec0040}),
      baselineAllowedV30:()=>true,V30_FRONT_LIVE_VERSION:'TEST',entryBranchOf:()=> 'TEST',
-     gptFilterExecutable:async(_db,candidates)=>({candidates}),gptFinalCheck:()=>({allowed:true,review:{decision:'BUY'}}),
+     gptFilterExecutable:async(_db,candidates)=>({candidates}),gptFinalCheck:()=>({allowed:true,review:{decision:'BUY',initial:{capture_context:validCapture(state.now)}}}),
      gptBeginExecution:()=>({}),gptConfirmFirstFinality:()=>true,gptConsumeRetry:()=>true,
-     finalRecheckStep:async()=>({proceed:true,record:{recheck_triggered:false}}),withOrderTiming:x=>x,
+     ...dynamicFlow,readCaptureWithRecovery:async()=>validCapture(state.now),markRecheckOutcome:()=>{},finalRecheckStep:async()=>({proceed:true,record:{recheck_triggered:false,final:{capture_context:validCapture(state.now)},initial_context:{capture_context:validCapture(state.now)}}}),withOrderTiming:x=>x,
      fetchE1AggTrades:e1Tape??(async()=>({available:false,reason:'TEST_NO_TAPE'}))});
  }
  return{state,db,ctx,gateway,advance(ms=60000){state.now+=ms;state.tables.trading_account_snapshots[0].captured_at=new Clock().toISOString();}};

@@ -1,3 +1,4 @@
+import {dynamicMarketFixture,validCapture} from '../../../test-support/dynamic-fixtures.mjs';
 import {finalFields} from '../../../test-support/arbitration-fixtures.mjs';
 // CEC0040 is GPT evidence, GPT is the final entry decision (2026-09-24 operator architecture).
 // Scenarios A-J of the release brief; K-M are tests/entry-continuation-compat.test.mjs.
@@ -31,7 +32,7 @@ function world(answer){
     if(p==='/fapi/v1/depth')return Response.json({bids:[[1.199,2000],[1.198,2000]],asks:[[1.2,2000],[1.201,2000]]});
     return new Response('no',{status:404});
   };
-  return {fetchFn,calls};
+  return {fetchFn:dynamicMarketFixture(fetchFn),calls};
 }
 /** A V30-admitted trigger (B06133 REJECT kept as evidence) with a chosen CEC0040 stamp. */
 function v30Candidate(action,cecPatch={}){

@@ -1,3 +1,5 @@
+import {validCapture} from '../dynamic-fixtures.mjs';
+import * as dynamicFlow from '../../supabase/functions/_shared/gpt-final-decision/dynamic-flow.mjs';
 // The BOO common entry gate runs in front of the legacy admission path. Which of the
 // two decides is a single operator row, boo_entry_gate_control.enforcement, and the
 // production posture on 2026-09-16 was OBSERVE.
@@ -29,9 +31,9 @@ function stampCurrentEntry(h){
     cec0040:{version:CEC0040_VERSION,targetVersion:CEC0040_TARGET_VERSION,ready:true,decisionAt:at,action:'ADMIT'}});
   Object.assign(h.ctx,{B06133_VERSION,CEC0040_VERSION,CEC0040_TARGET_VERSION,V30_FRONT_LIVE_VERSION:'TEST',
     baselineAllowedV30:()=>true,entryBranchOf:()=> 'TEST_BRANCH',
-    gptFinalCheck:()=>({allowed:true,review:{decision:'PASS'}}),
+    gptFinalCheck:()=>({allowed:true,review:{decision:'PASS',initial:{capture_context:validCapture(h.state.now)}}}),
     gptBeginExecution:()=>({}),gptConfirmFirstFinality:()=>true,
-    finalRecheckStep:async()=>({proceed:true,reason:'TEST_PASS',record:{recheck_triggered:false}}),
+    ...dynamicFlow,readCaptureWithRecovery:async()=>validCapture(h.state.now),finalRecheckStep:async()=>({proceed:true,reason:'TEST_PASS',record:{recheck_triggered:false}}),
     withOrderTiming:x=>x,IOC_RETRY_POLICY:{maxAttempts:1}});
   return signal;
 }

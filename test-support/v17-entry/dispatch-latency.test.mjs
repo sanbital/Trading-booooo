@@ -501,7 +501,7 @@ test('NOTHING awaits between the dispatch quote and the quote-age check', () => 
   // in that span is a millisecond charged against E1_POLICY.maxQuoteAgeMs. On the
   // happy path the two calls left below write nothing (recordMismatch returns on an
   // empty issue list; persistDecisionRisk returns as soon as the decision is allowed).
-  const from = OPEN_BULL.indexOf('const[rawFinalCheck,finalOrders,dispatchSnap,booInputs,dispatchQuote]');
+  const from = OPEN_BULL.indexOf('const[rawFinalCheck,finalOrders,dispatchSnap,booInputs,dispatchQuote,dispatchCapture]');
   const to = OPEN_BULL.indexOf('E1_DISPATCH_QUOTE_AGED');
   assert.ok(from > 0 && to > from, 'the dispatch block must be recognisable');
   const span = OPEN_BULL.slice(OPEN_BULL.indexOf('\n', from), to);

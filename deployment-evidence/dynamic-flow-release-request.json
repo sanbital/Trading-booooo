@@ -1,0 +1,11 @@
+{
+  "version": "DYNAMIC_FLOW_LIFECYCLE_1",
+  "project": "etaajwpernzrcdrifdnw",
+  "baseline_main": "6e3e4fd9e971f789508fb5d8fb1c982ae33afb5e",
+  "expected_executor_version_before": 110,
+  "authorization": "User explicitly superseded the historical winner replay deployment gate and instructed main merge and live deployment on 2026-09-27.",
+  "historical_limit": "LTC, ARK and PROM required winner windows lack continuous archived microstructure. Winner preservation is not proven.",
+  "migrations": [],
+  "settings_changes": [],
+  "targets": ["v10-lane-executor", "sanbital-doa-capture-20260925 image only"]
+}

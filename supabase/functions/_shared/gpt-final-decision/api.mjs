@@ -4,6 +4,8 @@ import {FD_VERSION,DATA_MODES,riskFlags,wireSchema,validateDecision} from './con
 import {PROMPTS} from './prompt.mjs';
 import {contextForModel} from './capture-context.mjs';
 import {entryAssessment} from './assessment.mjs';
+import {compactDynamic} from './dynamic-flow.mjs';
+import {DYNAMIC_PROMPT,dynamicEnabled} from './dynamic-contract.mjs';
 export const MODEL='gpt-5.4-mini-2026-03-17';
 export const API_URL='https://api.openai.com/v1/responses';
 export const PRICING=Object.freeze({inputPerMillion:.75,cachedPerMillion:.075,outputPerMillion:4.5});
@@ -43,14 +45,15 @@ export function modelInput(packet){
     // ENTRY: the same facts regrouped into trend strength / current propulsion / fatigue axes.
     ...(packet.task==='ENTRY'?{entry_assessment:entryAssessment(v)}:{}),
     risk_flags:Object.fromEntries(Object.entries(risk.flags).filter(([,x])=>x.level!=='CLEAR').map(([k,x])=>[k,x.level])),
-    model_judgments:packet.model_judgments,...(packet.facts.capture_context?{capture_context:contextForModel(packet.facts.capture_context)}:{}),...(packet.position?{position:packet.position}:{}),...(packet.chase?{chase:packet.chase}:{})};
+    model_judgments:packet.model_judgments,...(packet.facts.capture_context?{capture_context:dynamicEnabled(packet)?compactDynamic(packet.facts.capture_context):contextForModel(packet.facts.capture_context)}:{}),...(packet.position?{position:packet.position}:{}),...(packet.chase?{chase:packet.chase}:{}),
+    ...(dynamicEnabled(packet)?{dynamic_policy:packet.dynamic_policy,dynamic_as_of_ms:packet.dynamic_as_of_ms,dynamic_data_state:packet.dynamic_data_state??null}: {})};
 }
 /** ENTRY now writes its evidence and expected value before the decision, so it gets more room. */
 export const MAX_OUTPUT_TOKENS=Object.freeze({ENTRY:1000,HOLD:600});
 export function payloadFor(packet){
   return {model:MODEL,store:false,tools:[],truncation:'disabled',service_tier:'default',
-    prompt_cache_key:'boo-fd1-'+packet.task.toLowerCase(),reasoning:{effort:'none'},max_output_tokens:MAX_OUTPUT_TOKENS[packet.task],
-    input:[{role:'system',content:PROMPTS[packet.task]},{role:'user',content:JSON.stringify(modelInput(packet))}],
+    prompt_cache_key:'boo-fd1-'+packet.task.toLowerCase(),reasoning:{effort:'none'},max_output_tokens:dynamicEnabled(packet)?(packet.task==='HOLD'?1000:1800):MAX_OUTPUT_TOKENS[packet.task],
+    input:[{role:'system',content:PROMPTS[packet.task]+(dynamicEnabled(packet)?DYNAMIC_PROMPT:'')},{role:'user',content:JSON.stringify(modelInput(packet))}],
     text:{verbosity:'low',format:{type:'json_schema',name:'fd1_'+packet.task.toLowerCase(),strict:true,schema:wireSchema(packet.task,packet)}}};
 }
 export function costOf(raw){

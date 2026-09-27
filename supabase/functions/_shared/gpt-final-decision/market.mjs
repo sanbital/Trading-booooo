@@ -1,7 +1,7 @@
 /** FD1 public-market reads (no account, no signature). LIVE reads the current state;
  * REPLAY reads Binance history endpoints with endTime strictly before `asOf`, so a
  * replay packet contains only what was published before the historical decision. */
-import {readCapture} from './capture-context.mjs';
+import {readCaptureWithRecovery} from './capture-context.mjs';
 import {readMarketSensor} from './market-sensor.mjs';
 const HOST='https://fapi.binance.com',MIN=60000;
 async function get(fetchFn,path,ms){
@@ -28,7 +28,7 @@ export async function readSources(symbol,asOf,{mode='LIVE',fetchFn=fetch,ms=3000
         const r=Array.isArray(x)?x.filter(y=>Number(y.fundingTime)<=asOf).at(-1):null;return r?{rate:Number(r.fundingRate)}:null;}),
     live?safe('book',async()=>{const requestedAt=now();const data=await get(fetchFn,'/fapi/v1/depth?'+q({symbol,limit:100}),ms);
       return {...data,requestedAtMs:requestedAt,receivedAtMs:now()};}):Promise.resolve(null),
-    live?readCapture(symbol,asOf,{fetchFn,timeoutMs:Math.min(350,ms),positionId}):Promise.resolve(null),
+    live?readCaptureWithRecovery(symbol,asOf,{fetchFn,positionId,now}):Promise.resolve(null),
     live?readMarketSensor(asOf,{fetchFn,timeoutMs:Math.min(350,ms)}):Promise.resolve(null)]);
   return {src:{one,five,btc:b,oiHist,premium,funding,book,...(captureContext?{captureContext}:{}),...(marketSensor?{marketSensor}:{}),bookMissingReason:live?(book?null:'BOOK_UNAVAILABLE'):'NOT_POINT_IN_TIME_REPLAY'},errors};
 }
