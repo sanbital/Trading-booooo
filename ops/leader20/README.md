@@ -1,5 +1,11 @@
 # Leader20 dynamic strategy — release candidate
 
+## Current monthly cost profile
+
+The user's later USD 50/month limit supersedes the original Top20 AI cadence and daily budget below. See [MONTHLY_COST_PROFILE.md](MONTHLY_COST_PROFILE.md): numerical Top20 ranking remains, active observation is Top10 plus held/unsettled symbols and BTC, with AI capped at USD 40/month and USD 1.25/day. Private archive limits are 4 GiB hot and 8 GiB compressed cold. PR #215 implements that profile; PR #216 fixes deployment checkout history. Earlier observation-only gates below describe the initial release, not the current authorization.
+
+`leader20_status()` now reports active ownership and current storage/epoch controls separately from performance validation. Its readiness field does not certify per-symbol capture, an order, a fill, a 48-hour replay, or profitability. `observation-status.sql` distinguishes all 20 ranking members from the configured watched subset. Actual activation, source-parity and trade observations must be recorded in the private operating report.
+
 The initial release was deployed and 20/20 fresh capture verified on 2026-09-27 (PR #213, workflow run 36321386431). This is **observation deployment, not a live strategy activation**. The migration starts with `observation_enabled=false`, `active_strategy=LEGACY`, and an unapproved archive budget of zero. It changes no account allocation, leverage, slots, API budget, circuit, position, or native order.
 
 ## Behavior
