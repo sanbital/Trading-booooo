@@ -28,3 +28,11 @@ not a measured production latency or a guarantee that every provider finishes.
 `tests/dynamic-latency-budget.test.mjs` also covers short lifetimes, inference
 overruns, stale input, and a stricter caller deadline. No order is placed by these
 tests. Slow/missing advice still follows the existing degraded-confidence rules.
+
+The first deployed probe exposed another source of delay: capture age was already
+7,311 ms before inference because candle/OI reads had completed later than the
+parallel microstructure read. `readSources` now refreshes capture, book and BTC
+sensor together once if the available capture is older than five seconds when
+the slow reads finish. Each refresh has a 350 ms limit. Facts and snapshot hashes
+are constructed afterwards, before either model starts. Failed refreshes remain
+unavailable, and historical replay never makes this live refresh.
