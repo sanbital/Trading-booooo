@@ -390,7 +390,8 @@ test('a BUY about to age before dispatch is re-asked now; the IOC retry (sequenc
   assert.deepEqual(r.record.recheck_reasons,['INITIAL_ANSWER_AGED','REVIEWED_TRAJECTORY_REQUIRES_REFRESH']);
   const y=await initialDecision({final:'BUY'}),late=y.ticket.validUntil+1500;y.setNow(late);
   const r2=await finalRecheckStep(y.db,y.s,{ticket:y.ticket,e1:CALM,rawQuote:calmQuote(late-100),now:()=>late,sequence:2});
-  assert.equal(r2.record.recheck_triggered,false,'the retry authority, not the answer age, governs attempt 2');
+  assert.equal(r2.record.recheck_triggered,true,'retry authority never bypasses stale full trajectory evidence');
+  assert.ok(r2.record.recheck_reasons.includes('REVIEWED_TRAJECTORY_REQUIRES_REFRESH'));
   const early=await initialDecision({final:'BUY'});early.setNow(T+9000);
   const r3=await finalRecheckStep(early.db,early.s,{ticket:early.ticket,e1:CALM,rawQuote:calmQuote(T+8900),now:()=>T+9000});
   assert.equal(r3.record.recheck_triggered,false,'a fresh answer with an unchanged market still needs no recheck');

@@ -3109,6 +3109,8 @@ async function opsReadiness(db){
     db:{openPositionCount:(positions.data??[]).length,openPositions:positions.data??[],unresolvedOrderCount:(orders.data??[]).length,unresolvedOrders:orders.data??[]},
     runtime:rt.data??null,gptControl:control,openaiKeyPresent:(env("OPENAI_API_KEY")||"").length>0,maxSlots:MAX_SLOTS,
     nativeStopEnabled:NATIVE_STOP_ENABLED,failsafeRelease:"PR193_EMERGENCY_VALIDATION_1",
+    dynamicLifecycle:{version:DYNAMIC_VERSION,fullTrajectoryRequiredForEntry:true,absoluteTrajectoryAgeMs:10000,
+      positionCaptureIntervalMs:5000,missingDataState:"DATA_DEGRADED",missingDataForcesExit:false},
     protectionArbitration:{version:PROTECTION_ARBITRATION_VERSION,actions:PROTECTION_ACTIONS,
       candidateRaisesProtection:false,approver:"GPT_FINAL_ONLY",lowering:"IMPOSSIBLE",
       onReviewerFailure:"KEEP_LAST_APPROVED_PROTECTION",hardSafetyIndependent:true,
