@@ -231,7 +231,7 @@ export async function fd1ExitProbe(db,{symbol,runId,apiKey,fetchFn=fetch}){
 export async function fd1Probe(db,{symbol,apiKey,runId,fetchFn=fetch,engine,store=new SupabaseReviewStore(db),simulateEntryTimeout=false}){
   const liveConfig=configFromControl(await readReviewControl(db),getenv);
   if(!authorized(liveConfig,apiKey))return {error:'NOT_AUTHORIZED',orderCalls:0};
-  const MIN=60000,trigger=Math.floor(Date.now()/MIN)*MIN;
+  const MIN=60000,trigger=simulateEntryTimeout?Date.now():Math.floor(Date.now()/MIN)*MIN;
   const url='https://fapi.binance.com/fapi/v1/klines?'+new URLSearchParams({symbol,interval:'1m',limit:'2',endTime:String(trigger-1)});
   const r=await fetchFn(url,{signal:AbortSignal.timeout(3000)});if(!r.ok)throw Error('LIVE_KLINES_'+r.status);
   const last=Number((await r.json()).filter(x=>Number(x[6])<trigger).at(-1)?.[4]);if(!(last>0))throw Error('LIVE_PRICE');
