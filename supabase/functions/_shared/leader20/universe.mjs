@@ -36,9 +36,14 @@ export async function selectEpoch({exchangeInfo, tickers, requestedAt, observedA
     const t = bySymbol.get(symbol), change = number(t?.priceChangePercent), volume = number(t?.quoteVolume);
     require(t && Number.isFinite(change) && Number.isFinite(volume) && volume >= 0, 'TICKER_COVERAGE');
     require(time(t.openTime) && time(t.closeTime) && t.closeTime > t.openTime &&
-      t.closeTime <= observedAt + 1000 && observedAt - t.closeTime < 30000, 'TICKER_TIME');
-    return {symbol, price_change_percent: change, quote_volume: volume, open_time: t.openTime, close_time: t.closeTime};
+      t.closeTime <= observedAt + 1000, 'TICKER_TIME');
+    return {symbol, price_change_percent: change, quote_volume: volume, open_time: t.openTime, close_time: t.closeTime, ticker_age_ms: observedAt - t.closeTime};
   }).sort((a, b) => b.price_change_percent - a.price_change_percent || b.quote_volume - a.quote_volume || compare(a.symbol, b.symbol));
+  // A quiet contract may report an older closeTime in a fresh all-market response.
+  // Keep its actual rolling statistic and timestamp; never filter the universe by trade activity.
+  // A response whose entire eligible market is stale still cannot publish an epoch.
+  const freshestClose = Math.max(...eligible.map(x => x.close_time));
+  require(observedAt - freshestClose < 30000, 'TICKER_SOURCE_STALE');
   // Restart never moves the regular boundary. A late first installation is explicitly BOOTSTRAP.
   const scheduled = previous ? epochBoundary(requestedAt) : requestedAt;
   require(!previous || requestedAt >= previous.next_refresh_at_ms, 'EPOCH_NOT_DUE');
@@ -47,7 +52,7 @@ export async function selectEpoch({exchangeInfo, tickers, requestedAt, observedA
   return {strategy: LEADER20, selection_version: SELECTION_VERSION, kind: previous ? 'SCHEDULED' : 'BOOTSTRAP',
     scheduled_at_ms: scheduled, requested_at_ms: requestedAt, observed_at_ms: observedAt,
     effective_at_ms: observedAt, next_refresh_at_ms: nextBoundary(observedAt),
-    universe, expected_count: universe.length, covered_count: eligible.length,
+    universe, expected_count: universe.length, covered_count: eligible.length, source_freshest_close_ms: freshestClose,
     members: eligible.slice(0, 20).map((x, i) => ({rank: i + 1, ...x})),
     source: 'BINANCE_FAPI_V1_EXCHANGE_INFO_AND_TICKER_24HR',
     source_hash: await hash(sources), sources};

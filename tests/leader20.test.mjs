@@ -32,7 +32,7 @@ test('non-coin, delivery, spot-like and non-USDT metadata cannot enter the unive
 });
 test('missing/duplicate/stale/false/null tickers fail the whole epoch',async()=>{
  for(const mutate of [x=>x.tickers.pop(),x=>x.tickers.push(x.tickers[0]),x=>x.tickers[0].priceChangePercent=false,
-   x=>x.tickers[0].quoteVolume=null,x=>x.tickers[0].closeTime-=40000]){
+   x=>x.tickers[0].quoteVolume=null,x=>x.tickers.forEach(t=>t.closeTime-=40000),x=>x.tickers[0].closeTime+=2000]){
   const x=sources();mutate(x);await assert.rejects(selectEpoch(x),/LEADER20_/);
  }
 });
@@ -99,4 +99,16 @@ test('positions from the old route also receive the full new HOLD contract when 
  assert.equal(input.capture_context.ordered_path.length,24);
  assert.ok(input.capture_context.ordered_path_columns.includes('aggressive_sell'));
  assert.deepEqual(schema.properties.action.enum,['DEFER','HOLD','PROTECT','EXIT']);
+});
+
+test('quiet contracts with older closeTime do not veto a freshly retrieved market universe',async()=>{
+ const x=sources();
+ // Binance live response 2026-09-27 13:01 UTC: AIOT was 55.586s and JCT 31.718s old.
+ x.tickers[0].closeTime-=55586;x.tickers[0].priceChangePercent='100';
+ x.tickers[1].closeTime-=31718;x.tickers[1].priceChangePercent='99';
+ const e=await selectEpoch(x);
+ assert.equal(e.covered_count,25);assert.equal(e.members.length,20);
+ assert.equal(e.members[0].symbol,'C00USDT');assert.equal(e.members[0].ticker_age_ms,55587);
+ assert.equal(e.members[1].symbol,'C01USDT');
+ assert.equal(e.source_freshest_close_ms,T);
 });

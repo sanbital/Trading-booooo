@@ -4,7 +4,7 @@ This change is prepared for review. It is **not a live activation**. The migrati
 
 ## Behavior
 
-- Binance `/fapi/v1/exchangeInfo` selects trading, USDT-quoted/margined perpetual **COIN** contracts. Complete `/fapi/v1/ticker/24hr` coverage is sorted numerically by `priceChangePercent`, then quote volume, then symbol. Negative returns are eligible. Incomplete or stale source coverage cannot publish an epoch.
+- Binance `/fapi/v1/exchangeInfo` selects trading, USDT-quoted/margined perpetual **COIN** contracts. Complete `/fapi/v1/ticker/24hr` coverage is sorted numerically by `priceChangePercent`, then quote volume, then symbol. Negative returns are eligible. Incomplete coverage or a response with no fresh eligible-market timestamp cannot publish an epoch. Individual quiet contracts retain their actual older closeTime and ticker age; lack of recent trades must not veto the entire market ranking.
 - The first snapshot is timestamped when actually observed. Following boundaries are 00:00, 06:00, 12:00 and 18:00 Asia/Seoul. The existing generator publishes an atomic, compare-and-swap epoch; an old epoch cannot grant an entry after its refresh deadline.
 - The existing collector's watch RPC supplies Top20 plus held/unsettled symbols and the existing BTC sensor. During prewarming it also preserves legacy watches. Collection and AI requests remain separate existing services.
 - `leader20_schedule` can request reviews only. Full 24-bucket capture is required. First complete capture, material evidence changes, and a 120-second fairness interval request review; these are scheduling rules, not BUY rules. A partial unique index coalesces each symbol's in-flight work. Per-symbol data errors remain isolated.
