@@ -69,6 +69,8 @@ test('dynamic FINAL and DeepSeek share exactly one snapshot; inference aging pre
    at=p.facts.capture_context.end_ms+10000;return {valid:true,wire,answer:wire,decision:'BUY',attempted:true};}});
  assert.equal(refreshes,0);assert.equal(out.arbitration.gpt_snapshot_hash,adviceHash);
  assert.equal(out.valid,false);assert.equal(out.decision,'WAIT');assert.match(out.error,/STALE/);
+ assert.equal(out.arbitration.final_decision,out.decision);
+ assert.equal(out.dynamic_audit.final_decision,out.decision);
 });
 test('critical events and recovery bypass old HOLD and routine review caps without granting EXIT',()=>{
  for(const event of ['BID_DEPTH_COLLAPSE','SELL_DOMINANCE','MOMENTUM_ACCELERATION_FLIP','TREND_BREAK','BTC_SHOCK','TRAJECTORY_RECOVERED']){
