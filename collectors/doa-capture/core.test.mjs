@@ -1,11 +1,49 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {Book,Flow,WeightBudget,vwap,inWindow,streamURLs,transportFresh} from './core.mjs';
+import {Book,Flow,WeightBudget,vwap,inWindow,streamURLs,transportFresh,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval} from './core.mjs';
 test('Binance public book and market trade/kline routes are separated',()=>{const u=streamURLs('BTCUSDT');assert.equal(new URL(u.book).pathname,'/public/stream');assert.equal(new URL(u.market).pathname,'/market/stream');assert.equal(new URL(u.market).searchParams.get('streams'),'btcusdt@aggTrade/btcusdt@kline_1m/btcusdt@forceOrder');});
 test('bounded pre-snapshot buffer discards old events without declaring continuity',()=>{const b=new Book();for(let i=1;i<=300;i++)b.event({U:i,u:i,pu:i-1,b:[],a:[],E:i},i);assert.equal(b.buffer.length,200);assert.equal(b.ready,false);assert.throws(()=>b.snapshot(snap),/GAP/);});
 const snap={lastUpdateId:10,bids:[[99,10],[98,10]],asks:[[101,10],[102,10]]};
 const event=(u,pu=10)=>({U:u,u,pu,b:[],a:[],E:1000});
 test('snapshot is unusable until bridging event; loss of sequence rejects',()=>{const b=new Book();b.snapshot(snap);assert.equal(b.metrics(1000).book_complete,false);b.event({...event(11),U:10},1000);assert.equal(b.metrics(1000).book_complete,true);assert.throws(()=>b.event(event(14,12),1100),/GAP/);});
+test('synthetic USD-M snapshot boundary: first diff U=lastUpdateId+1 bridges without resync',()=>{
+ const b=new Book();b.event({U:11,u:12,pu:10,E:1000,b:[],a:[]},1000);
+ b.snapshot(snap,900);
+ assert.equal(b.last,12);assert.equal(b.ready,true);
+ b.event({U:13,u:14,pu:12,E:1100,b:[],a:[]},1100);
+ assert.equal(b.last,14);
+});
+test('synthetic USD-M duplicate and genuine gap stay distinct',()=>{
+ const b=new Book();b.snapshot(snap,900);
+ b.event({U:11,u:12,pu:10,E:1000,b:[],a:[]},1000);
+ b.event({U:11,u:12,pu:10,E:1000,b:[],a:[]},1001);
+ assert.equal(b.last,12);
+ assert.throws(()=>b.event({U:15,u:16,pu:14,E:1100,b:[],a:[]},1100),/DEPTH_GAP/);
+});
+test('synthetic depth-only recovery preserves trade state and bucket clock',()=>{
+ const s={book:new Book(),flow:new Flow(),bookGeneration:1,started:0,lastBucket:5000,marketResetAt:0,marketSequenceVerified:true};
+ s.book.snapshot(snap,0);s.book.event({U:11,u:11,pu:10,E:1000,b:[],a:[]},1000);
+ s.flow.event({a:1,T:1000,E:1000,p:100,q:1,m:false},1000);s.flow.reset();
+ s.flow.event({a:2,T:6000,E:6000,p:100,q:1,m:false},6000);
+ retireBookCapture(s,7000);
+ assert.equal(s.lastBucket,5000);assert.equal(s.flow.last,2);assert.equal(s.flow.count,1);
+ assert.equal(completeCaptureInterval(s,10000,true),false,'broken book stays invalid');
+ s.book.snapshot({lastUpdateId:20,bids:[[99,10]],asks:[[101,10]]},7100);
+ s.book.event({U:21,u:21,pu:20,E:7200,b:[],a:[]},7200);
+ assert.equal(completeCaptureInterval(s,10000,true),false,'bucket spanning book recovery stays invalid');
+ s.lastBucket=10000;
+ assert.equal(completeCaptureInterval(s,15000,true),true,'next uninterrupted interval is eligible');
+ retireMarketCapture(s,12000);
+ assert.equal(completeCaptureInterval(s,15000,true),false,'market interruption fails closed');
+ assert.equal(s.lastBucket,10000);
+});
+test('synthetic delayed snapshot cannot overwrite a newer socket generation',()=>{
+ const oldSocket={},newSocket={},s={book:new Book(),bookGeneration:1,socket:oldSocket};
+ assert.equal(snapshotStillCurrent(s,1,oldSocket),true);
+ retireBookCapture(s,1000);s.socket=newSocket;
+ assert.equal(snapshotStillCurrent(s,1,oldSocket),false);
+ assert.equal(s.book.ready,false);
+});
 test('buffer applies in order and stale snapshot cannot silently skip data',()=>{const b=new Book();b.event({...event(11),U:10},1000);b.snapshot(snap);assert.equal(b.last,11);assert.throws(()=>{const c=new Book();c.event(event(20),1000);c.snapshot(snap);},/GAP/);});
 test('depth bands incomplete stay flagged; stale book rejected',()=>{const b=new Book();b.snapshot({lastUpdateId:10,bids:[[99.99,10]],asks:[[100.01,10]]});b.event({...event(11),U:10},1000);assert.equal(b.metrics(1000).coverage_50,false);assert.equal(b.metrics(5000).book_complete,false);});
 test('displayed additions/removals measure gross updates, not snapshot net',()=>{const b=new Book();b.snapshot(snap);b.event({...event(11),U:10},1000);b.event({...event(12,11),a:[[101,15]]},1100);b.event({...event(13,12),a:[[101,10]]},1200);assert.equal(b.add,505);assert.equal(b.remove,505);});
