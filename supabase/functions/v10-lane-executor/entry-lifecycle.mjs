@@ -1,3 +1,4 @@
+import {isReviewRecoverable} from '../_shared/gpt-final-decision/timeout-recovery.mjs';
 /** Entry lifecycle terminal accounting (2026-09-25). Pure: no DB, exchange, GPT or clock.
  *
  * Every V17 candidate that reaches the entry queue ends in exactly one terminal class. The
@@ -76,7 +77,8 @@ export function isSymbolLocalSelectionError(error){
   return /^(B06133_MARKET_INPUT|CEC0040_INPUT_INVALID|CEC0040_DECISION:CEC0040_DECISION_(INPUT_INVALID|IDEMPOTENCY_CONFLICT))$/.test(String(error?.message??error));
 }
 /** Terminal reason for a GPT review that can never become an entry for this trigger: a
- * valid SKIP or ABSTAIN, or a failed answer (the coordinator never re-asks one identity).
+ * valid SKIP or ABSTAIN, or a substantive invalid answer. Recoverable technical
+ * failures keep their trigger eligible for a fresh separately journaled review.
  * Anything transient (pending, not configured, budget, storage, aged) returns null. */
 export function gptTerminalReason(review){
   const reason=String(review?.reason??''),decision=review?.decision,detail=String(review?.detail??'').slice(0,160);
@@ -85,7 +87,8 @@ export function gptTerminalReason(review){
   if(/^GPT_ABSTAIN(_AGED)?$/.test(reason)&&decision==='ABSTAIN')return clip('GPT_ABSTAIN'+(detail?':'+detail:''));
   if(reason==='GPT_NO_VALID_API_RESPONSE'){
     const e=String(review?.error??'');
-    return e==='API_TIMEOUT'?'GPT_TIMEOUT':clip('GPT_ABSTAIN:INVALID_RESPONSE'+(e?':'+e.slice(0,60):''));
+    if(isReviewRecoverable(review))return null;
+    return clip('GPT_ABSTAIN:INVALID_RESPONSE'+(e?':'+e.slice(0,60):''));
   }
   return null;
 }

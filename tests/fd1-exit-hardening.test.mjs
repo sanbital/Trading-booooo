@@ -31,7 +31,8 @@ test(`invalid HOLD timestamp: ${name} retains hard protection without a strategi
   const r=await holdStep({...initialHoldState(100),pending:{key:'k',event:'TIME_EXIT_CANDIDATE:V17_MAX_HOLD',at}},
     {now:T,price:100,peak:100,timeCandidate:'V17_MAX_HOLD',positionId:'p',
       answerOf:async()=>({state:'DONE',valid:true,decision:'HOLD',completed_at_ms:completed})});
-  assert.equal(r.close,false);assert.equal(r.state.retryAfter,T+60000);assert.equal(r.state.holdUntil,null);
+  assert.equal(r.close,false);assert.equal(r.state.retryAfter,T+(['old','late-completion'].includes(name)?5000:60000));
+  assert.equal(r.state.holdUntil,null);
 });
 test('fresh HOLD still extends and fresh EXIT still closes',async()=>{
   for(const decision of ['HOLD','EXIT']){

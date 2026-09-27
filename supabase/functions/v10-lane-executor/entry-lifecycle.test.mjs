@@ -25,7 +25,7 @@ test('a GPT review is terminal only when it can never become an entry for this t
   assert.equal(gptTerminalReason({allowed:false,reason:'GPT_SKIP',decision:'SKIP',detail:'SELL_DOMINANCE,MOMENTUM_FADED'}),'GPT_SKIP:SELL_DOMINANCE,MOMENTUM_FADED');
   assert.equal(gptTerminalReason({allowed:false,reason:'GPT_SKIP_AGED',decision:'SKIP'}),'GPT_SKIP');
   assert.equal(gptTerminalReason({allowed:false,reason:'GPT_ABSTAIN',decision:'ABSTAIN',detail:'EXECUTION_UNSAFE'}),'GPT_ABSTAIN:EXECUTION_UNSAFE');
-  assert.equal(gptTerminalReason({allowed:false,reason:'GPT_NO_VALID_API_RESPONSE',decision:'ABSTAIN',error:'API_TIMEOUT'}),'GPT_TIMEOUT');
+  assert.equal(gptTerminalReason({allowed:false,reason:'GPT_NO_VALID_API_RESPONSE',decision:'ABSTAIN',error:'API_TIMEOUT'}),null);
   assert.equal(gptTerminalReason({allowed:false,reason:'GPT_NO_VALID_API_RESPONSE',decision:'ABSTAIN',error:'HTTP_500'}),'GPT_ABSTAIN:INVALID_RESPONSE:HTTP_500');
   for(const reason of ['GPT_REVIEW_PENDING','GPT_TRIGGER_EXPIRED','GPT_STALE_OR_FUTURE_REVIEW','GPT_API_BUDGET_EXHAUSTED',
     'GPT_REVIEW_NOT_CONFIGURED_OR_APPROVED','GPT_REVIEW_STORAGE_OR_VALIDATION_ERROR','BASELINE_REJECT_OR_INVALID'])

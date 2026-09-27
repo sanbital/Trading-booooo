@@ -35,8 +35,10 @@ export async function readSources(symbol,asOf,{mode='LIVE',fetchFn=fetch,ms=3000
   if(live){
     captureContext=await captureForInference(symbol,captureContext,{fetchFn,now,positionId,deadlineMs,afterEndMs,
       ...(captureSleep?{sleep:captureSleep}:{})});
-    if(captureContext?.pre_inference_refresh){
-      const refreshAt=now();
+    const refreshAt=now();
+    // The capture reader may have caught up on its own while slower sources were
+    // pending. That also ages the original book/sensor, without acquisition metadata.
+    if(captureContext?.pre_inference_refresh||refreshAt-asOf>1500){
       [book,marketSensor]=await Promise.all([readBook(Math.min(350,ms)),
         readMarketSensor(refreshAt,{fetchFn,timeoutMs:Math.min(350,ms)})]);
     }

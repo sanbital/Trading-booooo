@@ -5,7 +5,7 @@ import {collectMarket,buildPacket,packetHash} from './market.mjs';
 import {callFinalReviewer,DEFAULT_PROFILE,profileOf} from './openai.mjs';
 import {initialContext} from '../gpt-final-decision/recheck.mjs';
 import {DYNAMIC_POLICY} from '../gpt-final-decision/dynamic-flow.mjs';
-import {TIMEOUT_RECOVERY,canRecoverTimeout,isReviewTimeout} from '../gpt-final-decision/timeout-recovery.mjs';
+import {TIMEOUT_RECOVERY,canRecoverTimeout,isReviewRecoverable,reviewedCaptureEnd} from '../gpt-final-decision/timeout-recovery.mjs';
 export const MAX_RESERVED_USD=.10; // Conservative per-call reservation; settled to documented token cost after the call.
 /** (2026-09-25) An engine with agedRecheck lets a stored BUY that outlived its own answer
  * validity reach the order path while at least this long remains before the trigger's
@@ -13,7 +13,7 @@ export const MAX_RESERVED_USD=.10; // Conservative per-call reservation; settled
  * 1.5 s + request <=4 s). The aged answer itself can never dispatch (see check()). */
 export const AGED_RECHECK_MIN_MS=8000;
 /** Human-readable release label stored with every review (source_commit column). */
-export const RELEASE='gpt-final-review-v7-timeout-recovery-20260927';
+export const RELEASE='gpt-final-review-v8-recovery-audit-20260927';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const MODES=['OFF','SHADOW','ENFORCE'];
 /** Legacy env-only configuration (tests and emergency override). */
@@ -107,32 +107,42 @@ export class FinalReviewCoordinator {
       let row=await this.store.get(key);
       // Follow durable child keys across cycles/processes. A timeout has no opinion;
       // retain its evidence and reserve/pay separately for a fresh attempt.
-      let recovery=null,waits=0,timeoutAttempts=1;
+      let recovery=null,waits=0,attempt=1,afterEnd=null;
       while(row?.state==='DONE'){
-        const timedOut=this.engine?.timeoutRecovery===true&&isReviewTimeout(row.record?.result);
+        const timedOut=this.engine?.timeoutRecovery===true&&isReviewRecoverable(row.record?.result);
         if(!timedOut&&row.record?.result?.decision!=='WAIT')break;
         if(row.record.binding!==binding||row.record.identity_json!==identityJson)return deny('GPT_BINDING_MISMATCH');
         const completed=row.record.result.completed_at_ms;
+        const childKey=await hash({binding,identity,...(timedOut?{timeout_after:key}:{wait_after:key})}),child=await this.store.get(childKey);
         if(timedOut){
-          const childKey=await hash({binding,identity,timeout_after:key}),child=await this.store.get(childKey);
-          if(timeoutAttempts>=TIMEOUT_RECOVERY.maxAttempts||!Number.isSafeInteger(completed)||completed>this.now()||
-            !child&&!canRecoverTimeout(row.record.result,{now:this.now(),deadline:expires-LIMITS.executionReserveMs,attempt:timeoutAttempts}))
+          if(!Number.isSafeInteger(completed)||completed>this.now()||
+            !child&&!canRecoverTimeout(row.record.result,{now:this.now(),deadline:expires-LIMITS.executionReserveMs,attempt}))
             return {...deny('GPT_REVIEW_RECOVERY_EXHAUSTED'),jobKey:key,error:row.record.result.error,storedDecision:'WAIT'};
-          recovery={version:TIMEOUT_RECOVERY.version,attempt:++timeoutAttempts,parent_job_key:key,
-            previous_error:row.record.result.error,after_end_ms:row.record.packet?.facts?.capture_context?.end_ms??null};
-        }else if(!Number.isSafeInteger(completed)||completed>now||waits++>=DYNAMIC_POLICY.maxWaitReviews||
-           now-completed<DYNAMIC_POLICY.missingRetryMs)
-          return {allowed:false,decision:'WAIT',storedDecision:'WAIT',reason:'GPT_WAIT_REOBSERVE',scope:'CANDIDATE',jobKey:key};
+        }else{
+          const validTime=Number.isSafeInteger(completed)&&completed<=this.now();
+          const room=waits<DYNAMIC_POLICY.maxWaitReviews&&(!this.engine?.timeoutRecovery||
+            attempt<TIMEOUT_RECOVERY.maxAttempts&&expires-LIMITS.executionReserveMs-this.now()>=TIMEOUT_RECOVERY.minRemainingMs);
+          if(!validTime||!child&&(!room||this.now()-completed<DYNAMIC_POLICY.missingRetryMs))
+            return {allowed:false,decision:'WAIT',storedDecision:'WAIT',reason:'GPT_WAIT_REOBSERVE',scope:'CANDIDATE',jobKey:key,
+              reviewRetryPending:validTime&&room};
+        }
+        if(!timedOut)waits++;
+        attempt++;
+        const end=reviewedCaptureEnd(row.record);
+        if(end!==null)afterEnd=afterEnd===null?end:Math.max(afterEnd,end);
+        recovery=timedOut?{version:TIMEOUT_RECOVERY.version,attempt,parent_job_key:key,
+          previous_error:row.record.result.error,after_end_ms:afterEnd}:null;
         const parent=key;
-        key=await hash({binding,identity,...(timedOut?{timeout_after:key}:{wait_after:key})});
+        key=childKey;
         this.tracked.delete(parent);this.readyHints.delete(parent);
         this.tracked.set(key,{identityJson,s:structuredClone(s),expires});
-        row=await this.store.get(key);
+        row=child;
       }
       if(!row){
         const record={version:VERSION,binding,identity,identity_json:identityJson,expires_at_ms:expires,
           reserved_usd:MAX_RESERVED_USD,api_approval_ref:this.config.approvalRef,purpose:this.purpose,wire_profile:this.profile,
           prompt_hash:await this.promptHash,schema_hash:await this.schemaHash,source_commit:RELEASE,packet:null,result:null,
+          ...(this.engine?.timeoutRecovery?{review_attempt:attempt,after_capture_end_ms:afterEnd}:{}),
           ...(recovery?{timeout_recovery:recovery}:{})};
         let claimed;
         try{claimed=await this.store.claim(key,record,this.config);}
@@ -164,17 +174,20 @@ export class FinalReviewCoordinator {
   async work(key,owner,record){
     try{
       const deadlineMs=record.expires_at_ms-LIMITS.executionReserveMs;
+      ensure(this.now()<deadlineMs,'REVIEW_TRIGGER_EXPIRED');
       let captured;
       if(this.engine){const prep=await this.engine.prepare(record.identity,{fetchFn:this.fetchFn,now:this.now,deadlineMs,
-        afterEndMs:record.timeout_recovery?.after_end_ms??-Infinity});record.packet=prep.packet;captured=prep.captured;}
+        afterEndMs:record.after_capture_end_ms??record.timeout_recovery?.after_end_ms??-Infinity});record.packet=prep.packet;captured=prep.captured;}
       else{const current=await this.market(record.identity,{fetchFn:this.fetchFn,now:this.now,deadlineMs});
         captured=this.now();record.packet=await buildPacket(record.identity,current,captured);}
       record.snapshot_at_ms=captured;
       record.valid_until_ms=Math.min(record.expires_at_ms-LIMITS.executionReserveMs,captured+LIMITS.reviewMaxAgeMs);
-      if(record.timeout_recovery?.after_end_ms!=null)
-        ensure(record.packet?.facts?.capture_context?.end_ms>record.timeout_recovery.after_end_ms,'RETRY_CAPTURE_NOT_ADVANCED');
+      const capture=record.packet?.facts?.capture_context,afterEnd=record.after_capture_end_ms??record.timeout_recovery?.after_end_ms;
+      ensure(capture?.reason!=='INFERENCE_CAPTURE_NOT_READY','DYNAMIC_INFERENCE_CAPTURE_NOT_READY');
+      if(afterEnd!=null)ensure(capture?.end_ms>afterEnd,'RETRY_CAPTURE_NOT_ADVANCED');
       // Snapshot persistence before the paid request; failures cannot lead to an unrecorded PASS.
       if(this.store.snapshot)await this.store.snapshot(key,owner,record);
+      ensure(this.now()<record.valid_until_ms,'REVIEW_TRIGGER_EXPIRED');
       record.result=this.engine?await this.engine.call(record.packet,{apiKey:this.apiKey(),fetchFn:this.fetchFn,now:this.now,deadlineMs:record.valid_until_ms,identity:record.identity}):
         await callFinalReviewer(record.packet,{apiKey:this.apiKey(),fetchFn:this.fetchFn,now:this.now,
         deadlineMs:record.valid_until_ms,profile:this.profile});
@@ -183,13 +196,14 @@ export class FinalReviewCoordinator {
         record.snapshot_at_ms=record.result.final_snapshot_at_ms;
         record.valid_until_ms=Math.min(deadlineMs,record.snapshot_at_ms+LIMITS.reviewMaxAgeMs);
       }
-    }catch{
-      record.result={origin:'LOCAL_DATA_ERROR',valid:false,decision:'ABSTAIN',error:'REVIEW_PREPARATION_FAILED',
+    }catch(e){
+      const error=['RETRY_CAPTURE_NOT_ADVANCED','DYNAMIC_INFERENCE_CAPTURE_NOT_READY','REVIEW_TRIGGER_EXPIRED'].includes(e?.message)?e.message:'REVIEW_PREPARATION_FAILED';
+      record.result={origin:'LOCAL_DATA_ERROR',valid:false,decision:'ABSTAIN',error,
         attempted:false,api_cost_usd:0,completed_at_ms:this.now(),model_requested:MODEL,wire_profile:this.profile};
     }
     await this.store.complete(key,owner,record);
     if(this.engine?.timeoutRecovery===true&&canRecoverTimeout(record.result,{now:this.now(),
-      deadline:record.expires_at_ms-LIMITS.executionReserveMs,attempt:record.timeout_recovery?.attempt??1})){
+      deadline:record.expires_at_ms-LIMITS.executionReserveMs,attempt:record.review_attempt??record.timeout_recovery?.attempt??1})){
       const tracked=this.tracked.get(key);
       if(tracked)await this.consider(tracked.s); // schedules outside the trading lease; durable CAS prevents duplicates
       return false;
@@ -282,13 +296,13 @@ export class FinalReviewCoordinator {
     while(firstRead||this.now()<deadline){
       firstRead=false;let unresolved=false,ready=false;
       for(const [key,t] of [...this.tracked]){
-        this.tickets.delete(String(t.s.id));
         const row=await this.store.get(key).catch(()=>null);
         if(!this.tracked.has(key)){unresolved=true;continue;}
+        this.tickets.delete(String(t.s.id));
         if(!row||row.state!=='DONE'){unresolved=true;continue;}
-        if(this.engine?.timeoutRecovery&&isReviewTimeout(row.record?.result)){
+        if(this.engine?.timeoutRecovery&&(isReviewRecoverable(row.record?.result)||row.record?.result?.decision==='WAIT')){
           const next=await this.consider(t.s);
-          if(next.reason==='GPT_REVIEW_PENDING'||!this.tracked.has(key)){unresolved=true;continue;}
+          if(next.reason==='GPT_REVIEW_PENDING'||next.reviewRetryPending===true||!this.tracked.has(key)){unresolved=true;continue;}
           if(!reported.has(key)){
             const review={signalId:t.s.id,...next};reported.add(key);this.waitOutcomes.push(review);
             await this.onResolved(t.s,review).catch(()=>console.error('GPT_ASYNC_LIFECYCLE_WRITE_FAILED',t.s.id));
@@ -297,6 +311,7 @@ export class FinalReviewCoordinator {
         }
         const checked=await this.validateStored(row,t.identityJson,t.expires,await this.binding)
           .catch(()=>({valid:false,allowed:false,decision:'ABSTAIN',reason:'GPT_REVIEW_STORAGE_OR_VALIDATION_ERROR'}));
+        if(!this.tracked.has(key)){unresolved=true;continue;}
         // The durable row, never a ready hint or pending promise, restores the ticket.
         if(checked.valid)this.tickets.set(String(t.s.id),checked.ticket);
         if(checked.allowed)ready=true;

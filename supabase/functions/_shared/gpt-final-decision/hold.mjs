@@ -121,7 +121,9 @@ export async function holdStep(st0,{now,price,peak,timeCandidate,softTrigger,dyn
    }
    // No usable answer (timeout, invalid, ABSTAIN, budget or provider outage): protection is
    // neither raised nor lowered. Hard safety is unaffected and keeps executing on its own.
-   const timeout=isReviewTimeout(a)||a?.state!=='DONE'&&age>P.timeAnswerWaitMs;
+   const lateCompletion=Number.isSafeInteger(completed)&&completed>=pending.at&&completed<=now&&
+     completed-pending.at>P.timeAnswerWaitMs;
+   const timeout=isReviewTimeout(a)||lateCompletion||a?.state!=='DONE'&&age>P.timeAnswerWaitMs;
    st.timeoutRetryEvent=timeout?pending.event:null;
    st.retryAfter=now+(timeout||st.dynamicTracker?.status==='DATA_DEGRADED'?DYNAMIC_POLICY.missingRetryMs:P.deteriorationMinGapMs);st.softArmed=true;
    return {close:false,reason:unapplied?ignored:age>P.timeAnswerWaitMs?'FD1_FINAL_TIMEOUT':'FD1_FINAL_UNAVAILABLE',state:st,

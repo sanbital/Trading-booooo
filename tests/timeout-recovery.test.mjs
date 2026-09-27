@@ -120,3 +120,92 @@ test('HOLD timeout retains protection and retries same event after five seconds,
  assert.equal(nextEvent(r.state,{now:T+12999,price:1,peak:1}).event,null);
  assert.equal(nextEvent(r.state,{now:T+13000,price:1,peak:1}).event,'MOMENTUM_DETERIORATION');
 });
+test('a temporarily missing retry capture remains recoverable and preserves the last reviewed end',async()=>{
+ const h=harness(['API_TIMEOUT',null]),prepare=h.c.engine.prepare;let firstEnd,preparations=0;
+ h.c.engine.prepare=async(...args)=>{const p=await prepare(...args);preparations++;
+  if(preparations===1)firstEnd=p.packet.facts.capture_context.end_ms;
+  if(preparations===2){p.packet.facts.capture_context={status:'UNAVAILABLE',reason:'INFERENCE_CAPTURE_NOT_READY'};
+   p.packet.snapshot_hash=await hash({...p.packet,snapshot_hash:''});}
+  return p;};
+ await h.c.consider(h.signal);await drain(h.c);
+ assert.equal(h.calls,2);assert.equal((await h.c.consider(h.signal)).allowed,true);
+ const rows=[...h.store.rows.values()];assert.equal(rows.length,3);
+ assert.equal(rows[1].record.result.error,'DYNAMIC_INFERENCE_CAPTURE_NOT_READY');
+ assert.equal(rows[1].record.result.attempted,false);assert.equal(h.prepared[2].afterEndMs,firstEnd);
+ assert.equal(rows[2].record.timeout_recovery.parent_job_key,rows[1].key);
+});
+test('mixed WAIT and timeout chains share the four-attempt cap and require newer captures',async()=>{
+ const h=harness(['API_TIMEOUT',null]),call=h.c.engine.call;let n=0;
+ h.c.engine.call=async p=>{const r=await call(p);n++;if(n>1){r.completed_at_ms+=4000;h.setTime(r.completed_at_ms);}
+  if(n===2)return {...r,decision:'WAIT',raw_response:{model:'test',wire:{decision:'WAIT'}}};
+  return {...r,valid:false,decision:'ABSTAIN',error:'API_TIMEOUT'};};
+ await h.c.consider(h.signal);await drain(h.c);assert.equal(h.calls,2);
+ h.setTime(T+21000);await h.c.consider(h.signal);await drain(h.c);
+ assert.equal(h.calls,4);assert.equal(h.store.rows.size,4);
+ assert.equal((await h.c.consider(h.signal)).reason,'GPT_REVIEW_RECOVERY_EXHAUSTED');
+ const rows=[...h.store.rows.values()];
+ assert.equal(h.prepared[2].afterEndMs,rows[1].record.packet.facts.capture_context.end_ms);
+ assert.equal(rows[3].record.timeout_recovery.parent_job_key,rows[2].key);
+ assert.equal(rows[3].record.timeout_recovery.attempt,4);
+});
+test('future or unproven trajectory errors are not transport timeouts',()=>{
+ for(const result of [{error:'DYNAMIC_TRAJECTORY_STALE_OR_FUTURE'},
+  {error:'DYNAMIC_TRAJECTORY_STALE_OR_FUTURE',dynamic_gate:{trajectory_age_ms:-1}}])assert.equal(isReviewTimeout(result),false);
+ assert.equal(isReviewTimeout({error:'DYNAMIC_TRAJECTORY_STALE_OR_FUTURE',
+  dynamic_audit:{latency_budget:{expired_during_inference:true}}}),true);
+});
+test('a timeout cannot become a terminal market rejection through a lifecycle fallback',()=>{
+ for(const error of ['API_TIMEOUT','FD_ARBITRATION_NO_TIME','DYNAMIC_INFERENCE_CAPTURE_NOT_READY'])
+  assert.equal(gptTerminalReason({allowed:false,reason:'GPT_NO_VALID_API_RESPONSE',decision:'ABSTAIN',error}),null);
+});
+test('slow durable reservation cannot start paid inference after trigger expiry',async()=>{
+ const h=harness([null]),claim=h.store.claim.bind(h.store);
+ h.store.claim=async(...args)=>{const row=await claim(...args);h.setTime(T+58000);return row;};
+ await h.c.consider(h.signal);await drain(h.c);assert.equal(h.calls,0);
+});
+test('HOLD valid but late completion retries promptly without applying the late decision',async()=>{
+ const st={...initialHoldState(1),protectLevel:.99,pending:{key:'late',event:'MOMENTUM_DETERIORATION',at:T}};
+ const r=await holdStep(st,{now:T+28000,price:1,peak:1,positionId:'p',
+  answerOf:async()=>({state:'DONE',valid:true,decision:'EXIT',snapshot_at_ms:T+1000,completed_at_ms:T+27000})});
+ assert.equal(r.close,false);assert.equal(r.state.protectLevel,.99);
+ assert.equal(r.state.retryAfter,T+33000);assert.equal(r.state.timeoutRetryEvent,'MOMENTUM_DETERIORATION');
+});
+test('WAIT after a timeout is reobserved inside waitReady and does not strand the candidate',async()=>{
+ const h=harness(['API_TIMEOUT',null]),call=h.c.engine.call;let calls=0;
+ h.c.engine.call=async p=>{const r=await call(p);if(++calls===2)return {...r,decision:'WAIT',raw_response:{model:'test',wire:{decision:'WAIT'}}};return r;};
+ await h.c.consider(h.signal);await drain(h.c);assert.equal(h.calls,2);
+ const timer=setTimeout(()=>h.setTime(T+18000),20);
+ try{assert.equal(await h.c.waitReady(),true);}finally{clearTimeout(timer);}
+ assert.equal(h.calls,3);assert.equal(h.resolved.at(-1).decision,'BUY');
+});
+test('RECHECK missing capture keeps recovery watermark and reserves a later fresh attempt',async()=>{
+ let at=T+1500,calls=0,reads=0;const store=new MemoryReviewStore(),ends=[];
+ const preDispatch=preDispatchSnapshot({at,rawQuote:{best_bid:1,best_ask:1.001},e1:null});
+ const args={signal:{id:'missing-recheck',symbol:'XVGUSDT',features:{v17Setup:{triggerAt:T},referenceClose:1}},
+  ticket:{expires:T+60000,snapshotHash:'initial',identityJson:'{}',initial:{facts:{},support:[]}},
+  detection:detectChange({facts:{},support:[]},preDispatch),preDispatch,store,config:cfg,apiKey:'test',now:()=>at,
+  readFresh:async(s,t,o)=>{ends.push(o.afterEndMs);return {src:{...src(at),captureContext:++reads===2?
+   {status:'UNAVAILABLE',reason:'INFERENCE_CAPTURE_NOT_READY'}:validCapture(at)},errors:{}};},
+  review:async()=>{at+=++calls===1?8000:2000;return {valid:calls>1,decision:calls>1?'BUY':'ABSTAIN',
+   error:calls>1?null:'API_TIMEOUT',completed_at_ms:at,attempted:true};}};
+ const first=await runFinalRecheck(args);assert.equal(first.error,'API_TIMEOUT',JSON.stringify(first));
+ const missing=await runFinalRecheck(args);
+ assert.equal(missing.error,'DYNAMIC_INFERENCE_CAPTURE_NOT_READY');assert.equal(missing.retryable,true);assert.equal(calls,1);
+ const third=await runFinalRecheck(args);assert.equal(third.valid,true);assert.equal(calls,2);
+ assert.equal(ends[2],first.capture_context.end_ms);assert.equal(store.rows.size,3);
+});
+test('RECHECK blocks an expired reservation and a journal snapshot failure before any model request',async()=>{
+ for(const failure of ['reservation-expired','snapshot-failed']){
+  let at=T+1500,calls=0,reads=0,snapshots=0;const store=new MemoryReviewStore(),claim=store.claim.bind(store);
+  const preDispatch=preDispatchSnapshot({at,rawQuote:{best_bid:1,best_ask:1.001},e1:null});
+  if(failure==='reservation-expired')store.claim=async(...a)=>{const r=await claim(...a);at=T+58000;return r;};
+  else store.snapshot=async()=>{snapshots++;throw Error('journal unreachable');};
+  const r=await runFinalRecheck({signal:{id:failure,symbol:'XVGUSDT',features:{v17Setup:{triggerAt:T}}},
+   ticket:{expires:T+60000,snapshotHash:'initial',identityJson:'{}',initial:{facts:{},support:[]}},
+   detection:detectChange({facts:{},support:[]},preDispatch),preDispatch,store,config:cfg,apiKey:'test',now:()=>at,
+   readFresh:async()=>{reads++;return {src:{...src(at),captureContext:validCapture(at)},errors:{}};},
+   review:async()=>{calls++;return {valid:true,decision:'BUY'};}});
+  assert.equal(calls,0);assert.equal(r.valid,false);if(failure==='reservation-expired')assert.equal(reads,0);
+  else assert.equal(snapshots,1);
+ }
+});

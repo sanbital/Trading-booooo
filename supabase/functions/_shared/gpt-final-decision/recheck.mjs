@@ -32,7 +32,7 @@ import {DYNAMIC_PROMPT,extendDynamicSchema,validateDynamicWire,dynamicEnabled} f
 import {CATEGORIES,categoriesFor,riskFlags,SUPPORT_UP,SUPPORT_TEXT,TREND_SUPPORT,validateShape,JUDGMENT,EXECUTION_SAFETY} from './contract.mjs';
 import {callDecision,hash,MODEL} from './api.mjs';
 import {dualEntryDecision,DUAL_VERSION,ARBITRATION_PROMPT} from './dual.mjs';
-import {TIMEOUT_RECOVERY,canRecoverTimeout,isReviewTimeout} from './timeout-recovery.mjs';
+import {TIMEOUT_RECOVERY,canRecoverTimeout,isReviewRecoverable,reviewedCaptureEnd} from './timeout-recovery.mjs';
 export const RECHECK_VERSION='GPT_FINAL_RECHECK_FD1_RC4';
 export const RECHECK_TASK='RECHECK';
 export const RECHECK_POLICY=Object.freeze({
@@ -374,13 +374,15 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
         claimed=await store.claim(key,record,config);
         if(claimed.created)break;
         const old=claimed.row;
-        if(dataMode!=='LIVE'||asOf!==null||old?.state!=='DONE'||!isReviewTimeout(old.record?.result))break;
+        if(dataMode!=='LIVE'||asOf!==null||old?.state!=='DONE'||!isReviewRecoverable(old.record?.result))break;
         const nextKey=await hash({version:TIMEOUT_RECOVERY.version,timeout_after:key});
         const child=await store.get(nextKey);
-        if(attempt>=TIMEOUT_RECOVERY.maxAttempts||(!child&&!canRecoverTimeout(old.record.result,{now:now(),deadline,attempt})))
+        const completed=old.record.result.completed_at_ms;
+        if(!Number.isSafeInteger(completed)||completed>now()||
+          !child&&!canRecoverTimeout(old.record.result,{now:now(),deadline,attempt}))
           return out({error:'RC_TIMEOUT_RECOVERY_EXHAUSTED',job_key:key});
         record={...record,timeout_recovery:{version:TIMEOUT_RECOVERY.version,attempt:++attempt,parent_job_key:key,
-          previous_error:old.record.result.error,after_end_ms:old.record.packet?.facts?.capture_context?.end_ms??null}};
+          previous_error:old.record.result.error,after_end_ms:reviewedCaptureEnd(old.record)}};
         key=nextKey;
       }
     }
@@ -391,6 +393,7 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
   }catch{return out({error:'RC_CLAIM_FAILED',job_key:key??null});}
   let result;
   try{
+    if(now()>=deadline)throw Error('RC_TRIGGER_EXPIRED');
     const at=asOf??now();
     const {src,errors}=await readFresh(String(signal.symbol).toUpperCase(),at,{mode:dataMode,fetchFn,ms:policy.freshReadMs,now,deadlineMs:deadline-8000,
       afterEndMs:record.timeout_recovery?.after_end_ms??-Infinity});
@@ -401,9 +404,11 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
     record.packet=await buildRecheckPacket({signalId:signal.id,symbol:signal.symbol,dataMode,facts,initial,detection,judgments,
       currentRef:currentRef?{bid:currentRef.bid,ask:currentRef.ask,mid:currentRef.mid,at:captured}:null,preDispatch});
     record.packet.source_errors=errors;record.packet.snapshot_hash=await hash({...record.packet,snapshot_hash:''});
+    record.snapshot_at_ms=asOf===null?captured:now();
+    if(record.packet.facts.capture_context?.reason==='INFERENCE_CAPTURE_NOT_READY')throw Error('DYNAMIC_INFERENCE_CAPTURE_NOT_READY');
     if(record.timeout_recovery?.after_end_ms!=null&&!(record.packet.facts.capture_context?.end_ms>record.timeout_recovery.after_end_ms))
       throw Error('RC_RETRY_CAPTURE_NOT_ADVANCED');
-    record.snapshot_at_ms=asOf===null?captured:now();
+    if(store.snapshot)await store.snapshot(key,owner,record);
     const remaining=deadline-now();
     if(remaining<=0)throw Error('RC_TRIGGER_EXPIRED');
     result=await review(record.packet,{apiKey,deepseekKey,fetchFn,now,deadlineMs:Math.min(deadline,record.snapshot_at_ms+policy.answerMaxAgeMs),
@@ -418,7 +423,7 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
     if(result.final_packet){record.packet=result.final_packet;record.snapshot_at_ms=result.final_snapshot_at_ms;}
     result={...result,model_requested:MODEL,wire_profile:RECHECK_VERSION};
   }catch(e){
-    result={origin:'LOCAL_DATA_ERROR',valid:false,decision:'ABSTAIN',error:/^RC_/.test(e?.message??'')?e.message:'RC_PREPARATION_FAILED',
+    result={origin:'LOCAL_DATA_ERROR',valid:false,decision:'ABSTAIN',error:/^RC_/.test(e?.message??'')||e?.message==='DYNAMIC_INFERENCE_CAPTURE_NOT_READY'?e.message:'RC_PREPARATION_FAILED',
       attempted:false,api_cost_usd:0,completed_at_ms:now(),model_requested:MODEL,wire_profile:RECHECK_VERSION};
   }
   record.result=result;
