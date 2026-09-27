@@ -4,6 +4,12 @@ import {MODELS,STAGES,FEATURES,REGIMES,validatePolicy} from './policy.mjs';
 export const REVIEW_VERSION='DUAL_RETROSPECTIVE_2';
 const str=n=>({type:'string',maxLength:n}),list=(n=8,len=300)=>({type:'array',maxItems:n,items:str(len)});
 const obj=properties=>({type:'object',additionalProperties:false,properties,required:Object.keys(properties)});
+function normalizeResearchStrings(value,schema){
+ if(typeof value==='string'&&Number.isInteger(schema?.maxLength)&&value.length>schema.maxLength)return value.slice(0,schema.maxLength);
+ if(Array.isArray(value)&&schema?.items)return value.map(v=>normalizeResearchStrings(v,schema.items));
+ if(value&&typeof value==='object'&&schema?.properties){const out={...value};for(const [k,s]of Object.entries(schema.properties))if(k in out)out[k]=normalizeResearchStrings(out[k],s);return out;}
+ return value;
+}
 export function validateResearchOutput(output,schema){validateShape(output,schema);
  const bounds=(v,s)=>{if(typeof v==='number'&&(!Number.isFinite(v)||v<(s.minimum??-Infinity)||v>(s.maximum??Infinity)))throw Error('RESEARCH_NUMBER_BOUND');
   if(Array.isArray(v))v.forEach(x=>bounds(x,s.items));else if(v&&typeof v==='object')Object.entries(v).forEach(([k,x])=>bounds(x,s.properties[k]));};
@@ -27,7 +33,7 @@ export async function researchCall(provider,{kind,input,schema,apiKey,fetchFn=fe
   if(!r.ok)throw Error('RESEARCH_HTTP_'+r.status);const text=await r.text();if(text.length>150000)throw Error('RESEARCH_RESPONSE_SIZE');const raw=JSON.parse(text);
   if(raw.model!==model)throw Error('RESEARCH_MODEL_MISMATCH');
   if(provider==='deepseek'&&(raw.choices?.length!==1||raw.choices[0].finish_reason!=='stop'))throw Error('RESEARCH_INCOMPLETE');
-  const output=provider==='gpt'?parseOutput(raw):JSON.parse(raw.choices[0].message.content);validateResearchOutput(output,schema);
+  let output=provider==='gpt'?parseOutput(raw):JSON.parse(raw.choices[0].message.content);output=normalizeResearchStrings(output,schema);validateResearchOutput(output,schema);
   if(output.evidence_ids?.some(id=>!input.evidence_ids?.includes(id)))throw Error('RESEARCH_UNSUPPORTED_EVIDENCE');
   return {provider,model,version:REVIEW_VERSION,kind,valid:true,output,usage:raw.usage??null,cost_usd:provider==='gpt'?costOf(raw):null,latency_ms:now()-started,input_hash:await hash(input),prompt_hash:await hash(system),schema_hash:await hash(schema)};})();
   return await Promise.race([request,new Promise((_,reject)=>{timer=setTimeout(()=>{abort.abort();reject(Error('RESEARCH_TIMEOUT'));},timeoutMs);})]);
