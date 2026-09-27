@@ -1,0 +1,10 @@
+{
+  "release": "TOP10_EXISTING_CAPTURE_RESOURCE_REDUCTION_20260927",
+  "app": "sanbital-doa-capture-20260925",
+  "machine": "185030da006d48",
+  "before": {"cpu_kind":"shared","cpus":4,"memory_mb":1024},
+  "target": {"cpu_kind":"shared","cpus":1,"memory_mb":256},
+  "restore_original_if_health_fails": true,
+  "validation_orders": false,
+  "new_machines": 0
+}
