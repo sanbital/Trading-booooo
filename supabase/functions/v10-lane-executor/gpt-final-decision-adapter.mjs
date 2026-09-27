@@ -265,10 +265,14 @@ export async function fd1Probe(db,{symbol,apiKey,runId,fetchFn=fetch,engine,stor
     timeoutRecovery:row?.record?.timeout_recovery??null,valid:res?.valid===true,
     wouldOrder:second.allowed===true?'NEXT_STEP_IS_EXISTING_ORDER_GUARDS (not executed: probe)':'NO_ORDER'};
   if(simulateEntryTimeout)return {entry,timeoutFixture:true,injected,hold:null};
-  const h0=Date.now(),hold=await runHoldReview({apiKey,deepseekKey:getenv('deepseek api'),fetchFn,position:{id:'fd1-probe-position-'+trigger,symbol,entryPrice:last*.99,peakPrice:last*1.01,
-    entryAt:Date.now()-50*MIN,lastHighAt:Date.now()-46*MIN,stopPrice:last*.99*.99,entryFeatures:{referenceClose:last*.99}},
-    event:'TIME_EXIT_CANDIDATE:V17_MOMENTUM_STALE',timeCandidate:'V17_MOMENTUM_STALE',stopStage:'RISK_CUT'});
-  return {entry,hold:{fixture:true,decision:hold.result.decision,valid:hold.result.valid===true,latencyMs:hold.result.latency_ms??null,
-    arbitration:hold.result.arbitration??null,costUsd:hold.result.api_cost_usd??null,error:hold.result.error??null,answer:hold.result.answer??null,elapsedMs:Date.now()-h0,
-    facts_quality:hold.packet?.facts?.quality??null,consequence:hold.result.decision==='HOLD'&&hold.result.valid?'TIME_EXIT_DEFERRED_15M':hold.result.valid&&hold.result.decision==='EXIT'?'FINAL_STRATEGIC_EXIT':'PROTECTION_RETAINED'}};
+  // Diagnostics use the same ledger-backed HOLD probe as standalone exit verification.
+  // An exhausted budget must not fall through to an unclaimed provider request.
+  const h0=Date.now();let hold;
+  try{hold=await fd1ExitProbe(db,{symbol,apiKey,fetchFn,runId:'entry-hold:'+String(runId)});}
+  catch(e){return {entry,hold:{fixture:true,valid:false,error:String(e?.message??e).slice(0,100),orderCalls:0}};}
+  const hr=hold.gpt??{};
+  return {entry,hold:{fixture:true,decision:hr.decision??null,valid:hr.valid===true,latencyMs:hr.latency_ms??null,
+    arbitration:hr.arbitration??null,costUsd:hr.api_cost_usd??null,error:hr.error??hold.error??null,answer:hr.answer??null,
+    jobKey:hold.jobKey??null,elapsedMs:Date.now()-h0,orderCalls:0,
+    consequence:hr.valid&&hr.decision==='EXIT'?'FINAL_STRATEGIC_EXIT':'PROTECTION_RETAINED'}};
 }
