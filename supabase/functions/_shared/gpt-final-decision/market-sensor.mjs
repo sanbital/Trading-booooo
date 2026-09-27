@@ -53,3 +53,12 @@ export async function readMarketSensor(asOf,{fetchFn=fetch,timeoutMs=350,env=k=>
   return await Promise.race([work,new Promise(resolve=>{timer=setTimeout(()=>{controller.abort();resolve(unavailable('TIMEOUT'));},Math.max(1,Math.min(350,timeoutMs)));})]);
  }catch{return unavailable('READ_FAILED');}finally{clearTimeout(timer);}
 }
+
+/** Model view only. The complete validated sensor remains in the hashed packet/journal. */
+export function compactMarketSensor(sensor){
+ if(sensor?.status!=='AVAILABLE')return sensor;
+ const fields=['end_ms','mid','d_mid_bps','spread_bps','taker_buy_quote_5s','taker_sell_quote_5s','observed_imbalance',
+  'observed_bid_depth_usdt','observed_ask_depth_usdt','depth_bid_coverage_bps','depth_ask_coverage_bps','depth_coverage_complete'];
+ return {...sensor,representation:'VALIDATED_MARKET_SENSOR_METRICS_ONLY',
+  market_sensor_trajectory:sensor.market_sensor_trajectory.map(p=>Object.fromEntries(fields.filter(k=>Object.hasOwn(p,k)).map(k=>[k,p[k]])))};
+}

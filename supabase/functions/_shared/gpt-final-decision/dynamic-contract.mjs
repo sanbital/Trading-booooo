@@ -25,7 +25,7 @@ Use multi-axis weakness for entry failure and loss of thesis. A single negative 
 Time elapsed may schedule a review but never supplies an exit reason. Protection can only rise.
 For same-symbol re-entry, use history.new_high_since_prev_exit, price_vs_prev_peak and price_vs_prev_exit together with NEW acceleration,
 volume impulse, buyer participation and OI expansion. Missing history remains unknown. A previous win or higher price alone is not a reason to BUY.
-Return concise conclusions and evidence, not chain-of-thought. Numeric citations are checked against the frozen capture.`;
+Use one short clause per prose field, at most twelve words. Cite one path per horizon and at most three paths in other arrays. Return conclusions, not chain-of-thought. Numeric citations are checked against the frozen capture.`;
 export function dynamicWireProperties(task) {
   const common = {structural_strength:prose,current_propulsion:prose,
     propulsion_direction:{type:'string',enum:['ACCELERATING','STABLE','DECELERATING','REVERSING']},
@@ -84,4 +84,19 @@ export function validateDynamicWire(wire,packet) {
     if(capture?.status==='AVAILABLE'&&decision!=='ABSTAIN')require(paths.length>0,'POSITION_EVIDENCE_REQUIRED');
   }
   return Object.fromEntries(Object.keys(dynamicWireProperties(packet.task)).map(k=>[k,wire[k]]));
+}
+
+/** Shorter live output only; historical wire validation retains its original limits. */
+export function boundedDynamicTransportSchema(schema){
+  const result=structuredClone(schema),p=result.properties;
+  const short=x=>{if(x?.type==='string'&&!x.enum)x.maxLength=Math.min(x.maxLength??120,120);};
+  const few=(x,max=3)=>{if(x?.type==='array')x.maxItems=Math.min(x.maxItems??max,max);};
+  for(const k of ['structural_strength','current_propulsion','why_not_wait','uncertainty','invalidation'])short(p[k]);
+  for(const k of ['dynamic_evidence','dynamic_risks'])few(p[k]);
+  const why=p.why_buy_now?.properties;
+  if(why){short(why.summary);few(why.flow);few(why.orderbook);
+    for(const horizon of Object.values(why.horizons.properties)){short(horizon.properties.summary);few(horizon.properties.evidence,1);}}
+  const arbitration=p.arbitration?.properties;
+  if(arbitration){short(arbitration.reason);for(const k of ['adopted','rejected','supporting','opposing'])few(arbitration[k]);few(arbitration.considered,6);}
+  return result;
 }

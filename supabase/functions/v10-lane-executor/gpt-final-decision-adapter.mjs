@@ -212,6 +212,8 @@ export async function fd1ExitProbe(db,{symbol,runId,apiKey,fetchFn=fetch}){
  * trigger at the current minute. Hold: a fixture position with a pending TIME exit
  * candidate. Both call the real API once. Journal rows are DRYRUN only. */
 export async function fd1Probe(db,{symbol,apiKey,runId,fetchFn=fetch,engine,store=new SupabaseReviewStore(db)}){
+  const liveConfig=configFromControl(await readReviewControl(db),getenv);
+  if(!authorized(liveConfig,apiKey))return {error:'NOT_AUTHORIZED',orderCalls:0};
   const MIN=60000,trigger=Math.floor(Date.now()/MIN)*MIN;
   const url='https://fapi.binance.com/fapi/v1/klines?'+new URLSearchParams({symbol,interval:'1m',limit:'2',endTime:String(trigger-1)});
   const r=await fetchFn(url,{signal:AbortSignal.timeout(3000)});if(!r.ok)throw Error('LIVE_KLINES_'+r.status);
@@ -219,8 +221,7 @@ export async function fd1Probe(db,{symbol,apiKey,runId,fetchFn=fetch,engine,stor
   const {FinalReviewCoordinator}=await import('../_shared/gpt-final-review/coordinator.mjs');
   const s={id:'fd1-probe-'+symbol+'-'+trigger+'-'+String(runId).slice(0,20),symbol,status:'NEW',features:{strategy:'LEADER_MOMENTUM_V17',
     referenceClose:last,dayReturn:null,rank:null,v17Setup:{state:'TRIGGERED',triggerAt:trigger},exitPolicy:{}}};
-  const c=new FinalReviewCoordinator({config:{mode:'ENFORCE',modeValid:true,approvalRef:'FD1_PROBE:'+String(runId).slice(0,50),apiBudgetUsd:1.5,
-    maxCalls:150,enforceApproved:true,source:'DRYRUN'},store,apiKey:()=>apiKey,fetchFn,purpose:'DRYRUN',engine,baseline:()=>true});
+  const c=new FinalReviewCoordinator({config:{...liveConfig,source:'DRYRUN'},store,apiKey:()=>apiKey,fetchFn,purpose:'DRYRUN',engine,baseline:()=>true});
   const t0=Date.now(),first=await c.consider(s);await Promise.all([...c.pending.values()]);const second=await c.consider(s);
   const row=second.jobKey?await store.get(second.jobKey):null,res=row?.record?.result,pk=row?.record?.packet;
   const entry={fixture:true,triggerAt:trigger,first:first.reason,final:second.reason,decision:second.decision??null,allowed:second.allowed===true,

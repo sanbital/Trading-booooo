@@ -95,9 +95,12 @@ export function compactDynamic(c) {
   for (let i = 1; i < p.length; i++) if (finite(p[i].d_mid_bps) && finite(p[i - 1].d_mid_bps) &&
       Math.sign(p[i].d_mid_bps) !== Math.sign(p[i - 1].d_mid_bps)) inflections.push(i);
   for (const i of inflections.slice(-4)) indices.add(i);
-  const {trajectory, ...summary} = c;
+  const {trajectory, recovery_attempts, ...summary} = c;
+  const fields=['end_ms','mid','d_mid_bps','spread_bps','buy_share_5s','net_taker_quote_5s','aggressive_buy','aggressive_sell',
+    'bid_depth_25_usdt','ask_depth_25_usdt','imbalance','trade_count','arrival_rate','ask_book_net_5s','bid_book_net_5s',
+    'buy_impact_450_bps','sell_impact_450_bps','drawdown_from_sampled_peak'];
   return {...summary, representation: 'COMPACT_WITH_ORIGINAL_BUCKET_INDEX',
-    critical_segments: [...indices].filter(i => i >= 0).sort((a,b) => a-b).map(i => ({index: i, ...p[i]})),
+    critical_segments: [...indices].filter(i => i >= 0).sort((a,b) => a-b).map(i => ({index: i, ...Object.fromEntries(fields.filter(k=>Object.hasOwn(p[i],k)).map(k=>[k,p[i][k]]))})),
     raw_bucket_count: p.length};
 }
 /** Absence of data changes confidence and schedules review, never creates an EXIT. */

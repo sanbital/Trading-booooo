@@ -5,7 +5,7 @@ import {PROMPTS} from './prompt.mjs';
 import {contextForModel} from './capture-context.mjs';
 import {entryAssessment} from './assessment.mjs';
 import {compactDynamic} from './dynamic-flow.mjs';
-import {DYNAMIC_PROMPT,dynamicEnabled} from './dynamic-contract.mjs';
+import {DYNAMIC_PROMPT,dynamicEnabled,boundedDynamicTransportSchema} from './dynamic-contract.mjs';
 export const MODEL='gpt-5.4-mini-2026-03-17';
 export const API_URL='https://api.openai.com/v1/responses';
 export const PRICING=Object.freeze({inputPerMillion:.75,cachedPerMillion:.075,outputPerMillion:4.5});
@@ -50,11 +50,22 @@ export function modelInput(packet){
 }
 /** ENTRY now writes its evidence and expected value before the decision, so it gets more room. */
 export const MAX_OUTPUT_TOKENS=Object.freeze({ENTRY:1000,HOLD:600});
+/** Share repeated exact enums in the transport schema; server validation stays unchanged. */
+export function compactWireSchema(schema){
+ const counts=new Map(),refs=new Map(),definitions={};
+ const eligible=x=>x&&typeof x==='object'&&!Array.isArray(x)&&x.type==='string'&&Array.isArray(x.enum)&&x.enum.length>4;
+ const visit=x=>{if(!x||typeof x!=='object')return;if(eligible(x)){const k=JSON.stringify(x);counts.set(k,(counts.get(k)??0)+1);}for(const [k,v]of Object.entries(x))if(k!=='$defs')visit(v);};
+ visit(schema);
+ const copy=x=>{if(!x||typeof x!=='object')return x;if(Array.isArray(x))return x.map(copy);
+  if(eligible(x)){const k=JSON.stringify(x);if(counts.get(k)>1){if(!refs.has(k)){let n=refs.size,id='shared_wire_enum_'+n;while(Object.hasOwn(schema.$defs??{},id)||Object.hasOwn(definitions,id))id='shared_wire_enum_'+(++n);refs.set(k,id);definitions[id]=x;}return {$ref:'#/$defs/'+refs.get(k)};}}
+  return Object.fromEntries(Object.entries(x).map(([k,v])=>[k,k==='$defs'?v:copy(v)]));};
+ const result=copy(schema);return refs.size?{...result,$defs:{...result.$defs,...definitions}}:result;
+}
 export function payloadFor(packet){
   return {model:MODEL,store:false,tools:[],truncation:'disabled',service_tier:'default',
     prompt_cache_key:'boo-fd1-'+packet.task.toLowerCase(),reasoning:{effort:'none'},max_output_tokens:dynamicEnabled(packet)?(packet.task==='HOLD'?1000:1800):MAX_OUTPUT_TOKENS[packet.task],
     input:[{role:'system',content:PROMPTS[packet.task]+(dynamicEnabled(packet)?DYNAMIC_PROMPT:'')},{role:'user',content:JSON.stringify(modelInput(packet))}],
-    text:{verbosity:'low',format:{type:'json_schema',name:'fd1_'+packet.task.toLowerCase(),strict:true,schema:wireSchema(packet.task,packet)}}};
+    text:{verbosity:'low',format:{type:'json_schema',name:'fd1_'+packet.task.toLowerCase(),strict:true,schema:dynamicEnabled(packet)?compactWireSchema(boundedDynamicTransportSchema(wireSchema(packet.task,packet))):wireSchema(packet.task,packet)}}};
 }
 export function costOf(raw){
   const u=raw?.usage,c=u?.input_tokens_details?.cached_tokens??0;
@@ -75,7 +86,7 @@ export async function callDecision(packet,{apiKey,fetchFn=fetch,now=Date.now,tim
   if(!apiKey){out.error='FD_API_KEY_MISSING';out.api_cost_usd=0;out.completed_at_ms=now();out.latency_ms=0;return out;}
   const controller=new AbortController();let timer;
   try{
-    const body=JSON.stringify(payloadFn(packet));out.attempted=true;
+    const payload=payloadFn(packet),body=JSON.stringify(payload);out.request_bytes=new TextEncoder().encode(body).length;out.schema_bytes=JSON.stringify(payload.text?.format?.schema??{}).length;out.timeout_ms=timeoutMs;out.max_output_tokens=payload.max_output_tokens;out.attempted=true;
     const req=(async()=>{
       const res=await fetchFn(API_URL,{method:'POST',redirect:'error',signal:controller.signal,body,
         headers:{'content-type':'application/json',authorization:'Bearer '+apiKey}});
