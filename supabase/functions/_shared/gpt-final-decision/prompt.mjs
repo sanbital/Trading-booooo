@@ -69,10 +69,17 @@ export const HOLD_PROMPT=commonFor('HOLD')+`
 과제(t=HOLD): 이미 보유 중인 롱 포지션에 대해 하나의 질문에 답하라: "이 포지션을 매수하게 만든 상승 근거가 지금도 살아 있는가?"
 - HOLD: 상승 근거가 살아 있다. support에 현재 상승/매수 우위를 보여주는 사실 1개 이상. 주의할 위험이 있으면 reasons에 적어도 된다(기록용). DATA_INCOMPLETE가 HARD이면 HOLD 불가.
 - EXIT: 네 판단으로 상승 근거가 무너졌다. 사유는 실제로 SOFT/HARD인 카테고리, 또는 임계값을 넘지 않았더라도 네가 종합적으로 판단한 ${JUDGMENT}(근거 사실 포함). 짧은 눌림이나 잡음 하나만으로 EXIT하지 말고, 상승 논리가 실제로 사라졌을 때 청산하라.
-- position.exit_context의 P142/trailing/profit-lock/손익분기 보호는 SOFT trigger다. HARD floor와 구분하라. HOLD는 해당 soft 청산을 막고, PROTECT는 exposure 확대 없이 내부 soft level과 민감도를 강화하고 30초 내 재평가한다.\n- 시간은 청산 사유가 아니다. "오래 보유했다", "45분간 신고가가 없다", "6시간이 지났다"는 그 자체로 EXIT 근거가 아니다. 추세가 살아 있으면 계속 보유하고, 진입 5분 뒤라도 근거가 무너지면 청산한다.
+- position.exit_context의 P142/retestAnchor/trailing/profit-lock/손익분기 보호는 청산 명령이 아니라 SOFT 후보다. HARD floor(최대손실·재난 손절)와 구분하라. 하드 안전장치를 제외한 실제 보호선 상향과 전략적 청산의 최종 판단자는 너다.
+- exit_context.protection을 읽어라. approved_soft_stop은 지금 실제로 거래소에 걸려 있는(또는 승인된) 보호선이고, candidate_soft_stop은 결정론 엔진이 올릴 수 있다고 제안한 후보값이다. candidate는 네 승인 없이는 절대 적용되지 않는다.
+- PROTECT(=RAISE_PROTECTION): candidate_soft_stop을 그 값 그대로 승인해 보호선을 올린다. 서버는 네가 본 candidate만 적용하며, 네가 만든 임의의 가격은 절대 사용하지 않는다. candidate가 없거나 approved보다 높지 않으면 보호선은 그대로 유지된다. 한 번 승인된 보호선은 어떤 경우에도 내려가지 않는다.
+- HOLD: 포지션을 유지하고 candidate를 적용하지 않는다. 기존 approved_soft_stop과 HARD floor는 그대로 남는다.
+- 가격이 많이 올랐다는 이유만으로 보호선을 당기지 마라. 상승 근거가 강하면(신고가 갱신 지속, 고점 상승·저점 상승 유지, 60~120초 net taker flow 양호, 매수 우위 유지, 정상 범위의 peak 대비 drawdown, BTC/시장 급락 없음, spread·호가 정상, 유동성 충분) candidate가 있어도 HOLD가 정답이다. 단기 흔들림 하나만으로 PROTECT하지 마라.
+- 추세 약화 근거가 여러 축에서 동시에 누적될 때 PROTECT하라: 신고가 실패 반복, peak 대비 drawdown 확대, buyer share 지속 감소, net taker flow 음전환, flow acceleration 악화, bid depth 붕괴, ask 압력 증가, OI와 가격의 divergence, 상대강도 약화, BTC/시장 동반 하락, lower high 지속, 모멘텀 소진. 지표 하나만으로 기계적으로 올리지 마라.
+- 상승 thesis 자체가 훼손되면 PROTECT가 아니라 EXIT다.
+- 시간은 청산 사유가 아니다. "오래 보유했다", "45분간 신고가가 없다", "6시간이 지났다"는 그 자체로 EXIT 근거가 아니다. 추세가 살아 있으면 계속 보유하고, 진입 5분 뒤라도 근거가 무너지면 청산한다.
 - position.deterministic_exit_candidate가 있으면(예: V17_MOMENTUM_STALE, V17_MAX_HOLD) 기계 규칙이 시간 기준 청산을 제안한 상태다. GPT FINAL HOLD는 후보를 보류한다. 오직 유효하고 최신인 GPT FINAL EXIT만 전략적 청산을 승인한다. ABSTAIN/무효/오류는 기존 HARD 보호를 유지하며 제한된 재평가를 예약한다.
 - 손실 포지션에 물타기, 손절 이동/취소는 존재하지 않는 선택지다. 손절은 항상 거래소에 독립적으로 걸려 있다.
-- ABSTAIN: 판단 불가. SOFT 후보를 자동 청산으로 바꾸지 않는다. HARD 재난 손절과 최대손실 floor는 항상 우선한다.
+- ABSTAIN: 판단 불가. SOFT 후보를 자동 청산으로 바꾸지 않고, 보호선도 올리지 않는다(마지막으로 승인된 보호선 유지). HARD 재난 손절과 최대손실 floor는 항상 우선하며 네 판단과 무관하게 실행된다.
 EXIT 카테고리:
 ${cats('HOLD')}
 `;

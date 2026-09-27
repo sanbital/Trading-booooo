@@ -72,7 +72,13 @@ test(`${persisted?'persisted':'budget exhausted'} validated ${decision} retains 
   const {result:r,orders}=await consume(out,{persisted});
   assert.equal(r.close,decision==='EXIT');assert.equal(r.state.last.authority,'DEEPSEEK_EMERGENCY_EXIT_ONLY');
   if(decision==='EXIT')assert.equal(r.approval.authority,'DEEPSEEK_EMERGENCY_EXIT_ONLY');
-  if(decision==='PROTECT'){assert.ok(r.state.protectLevel>97.5);assert.equal(r.state.protection.exposureIncrease,false);}
+  // DeepSeek stands in for GPT only to EXIT or HOLD. Its PROTECT buys elevated sensitivity, not a
+  // higher stop: with GPT unavailable the mandated fallback is KEEP_LAST_APPROVED_PROTECTION.
+  if(decision==='PROTECT'){assert.equal(r.state.protectLevel??null,null);
+    assert.equal(r.state.protectDeclined.verdict,'KEEP_LAST_APPROVED_PROTECTION');
+    assert.equal(r.state.protectDeclined.provider,'deepseek');
+    assert.equal(r.state.protection.sensitivityMultiplier,2);
+    assert.equal(r.state.protection.exposureIncrease,false);}
   if(decision==='HOLD')assert.ok(r.state.holdUntil>T);
   assert.equal(orders,0);
 });

@@ -63,9 +63,13 @@ function applyEmergency(step,e,{p,generation,now,bid,state,timeCandidate,softTri
     authority:e.authority,valid:true,decision:'EXIT',positionId:String(p.id),generation,
     snapshotHash:e.snapshot_hash,completedAt:e.completed_at_ms,snapshotAt:e.snapshot_at_ms}};
   if(e.decision==='PROTECT'){
-    s.protectLevel=Math.max(Number(s.protectLevel)||0,Number(softTrigger?.level)||0,bid*(1+HOLD_POLICY.deteriorationDrawdown/2));
+    // GPT is the only approver of a protection raise. DeepSeek stands in for GPT only to
+    // EXIT or HOLD, so its PROTECT keeps exactly the last approved level (the mandated
+    // KEEP_LAST_APPROVED_PROTECTION fallback) and buys sensitivity, not a higher stop.
     s.protectUntil=now+HOLD_POLICY.protectMs;s.holdUntil=timeCandidate?s.protectUntil:s.holdUntil;
     s.protection={mode:'ELEVATED',sensitivityMultiplier:2,intervalMs:HOLD_POLICY.protectMs,exposureIncrease:false};
+    s.protectDeclined={verdict:'KEEP_LAST_APPROVED_PROTECTION',provider:'deepseek',
+      requested:Number(softTrigger?.level)||null,standing:Number(s.protectLevel)||null,at:now};
     return {close:false,reason:'FD1_DEEPSEEK_PROTECT',fallback:true,state:s};
   }
   if(timeCandidate)s.holdUntil=now+HOLD_POLICY.holdTtlMs;

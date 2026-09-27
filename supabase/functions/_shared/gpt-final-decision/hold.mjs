@@ -1,5 +1,7 @@
 /** Event-driven strategic review. Hard safety is checked before this module.
- * Soft protection may be promoted to resident reduce-only protection by the host; strategic exits remain explicitly authorized. */
+ * A deterministic soft candidate is review evidence, never protection: only this reviewer's
+ * RAISE_PROTECTION (wire name PROTECT) promotes the exact candidate it judged to resident
+ * reduce-only protection, and only upward. Strategic exits remain explicitly authorized. */
 import {computeFacts,modelJudgments} from './facts.mjs';
 import {readSources} from './market.mjs';
 import {buildDecisionPacket,callDecision,hash,MODEL} from './api.mjs';
@@ -65,18 +67,44 @@ export async function holdStep(st0,{now,price,peak,timeCandidate,softTrigger,dyn
        snapshotHash:a?.snapshot_hash??null,completedAt:completed,snapshotAt:snapshot,refreshError:null}};
    }
    if(decision==='PROTECT'){
-    // Internal soft floor only. Never becomes a native stop or changes exposure.
-    st.protectLevel=Math.max(st.protectLevel??0,softTrigger?.level??0,price*(1+P.deteriorationDrawdown/2));
+    // RAISE_PROTECTION. The reviewer approves the deterministic candidate it actually judged
+    // and nothing else: no model-supplied price can become protection, and an approved level
+    // can only ever rise. Without a candidate to approve, protection stays exactly as it was.
+    const reviewed=Number(pending.softLevel),prior=Number(st.protectLevel)||0,
+      approvable=Number.isFinite(reviewed)&&reviewed>0?reviewed:null;
+    let approval=null;
+    // Only GPT FINAL approves a raise. DeepSeek's emergency authority covers EXIT and HOLD, so
+    // when it answers PROTECT the mandated fallback applies: keep the last approved protection.
+    if(authority!=='GPT_FINAL_ONLY'){
+     approval={verdict:'KEEP_LAST_APPROVED_PROTECTION',provider:'deepseek',authority,
+       requested:approvable,standing:prior||null,candidateKey:pending.softKey??null,at:now};
+     st.protectDeclined=approval;
+    }else if(approvable!==null&&approvable>prior){
+     st.protectLevel=approvable;st.protectReason=pending.softReason??softTrigger?.reason??null;
+     st.protectApprovedAt=now;st.protectDeclined=null;
+     approval={verdict:'APPROVED',level:approvable,reason:st.protectReason,candidateKey:pending.softKey??null,at:now};
+    }else{
+     approval={verdict:approvable===null?'NO_DETERMINISTIC_CANDIDATE':'NOT_ABOVE_APPROVED',
+       requested:approvable,standing:prior||null,candidateKey:pending.softKey??null,at:now};
+     st.protectDeclined=approval;
+    }
     st.protectUntil=now+P.protectMs;st.holdUntil=timeCandidate?st.protectUntil:st.holdUntil;
     st.protection={mode:'ELEVATED',sensitivityMultiplier:2,intervalMs:P.protectMs,exposureIncrease:false};
-    return {close:false,reason:'FD1_GPT_PROTECT',state:st};
+    return {close:false,reason:'FD1_GPT_PROTECT',state:st,protectApproval:approval};
    }
    if(decision==='HOLD'){
+    // HOLD consumes the candidate. Protection is not raised, and never lowered either.
     if(timeCandidate)st.holdUntil=now+P.holdTtlMs;
-    return {close:false,reason:'FD1_GPT_HOLD',state:st};
+    return {close:false,reason:'FD1_GPT_HOLD',state:st,
+      protectApproval:{verdict:'HELD',standing:Number(st.protectLevel)||null,
+        candidate:Number(pending.softLevel)||null,candidateKey:pending.softKey??null,at:now}};
    }
+   // No usable answer (timeout, invalid, ABSTAIN, budget or provider outage): protection is
+   // neither raised nor lowered. Hard safety is unaffected and keeps executing on its own.
    st.retryAfter=now+P.deteriorationMinGapMs;st.softArmed=true;
-   return {close:false,reason:age>P.timeAnswerWaitMs?'FD1_FINAL_TIMEOUT':'FD1_FINAL_UNAVAILABLE',state:st};
+   return {close:false,reason:age>P.timeAnswerWaitMs?'FD1_FINAL_TIMEOUT':'FD1_FINAL_UNAVAILABLE',state:st,
+     protectApproval:{verdict:'KEEP_LAST_APPROVED_PROTECTION',standing:Number(st.protectLevel)||null,
+       candidate:Number(pending.softLevel)||null,candidateKey:pending.softKey??null,at:now}};
   }
   return {close:false,reason:'FD1_AWAITING_GPT',state:st};
  }
@@ -84,7 +112,11 @@ export async function holdStep(st0,{now,price,peak,timeCandidate,softTrigger,dyn
  if(n.exhausted)return {close:false,reason:'FD1_REVIEW_LIMIT',state:st};
  if(n.event){
   const key=await hash({v:FD1_HOLD_POLICY_VERSION,positionId:String(positionId),generation:st.generation,event:n.event,at:Math.floor(now/1000)});
-  st.pending={key,event:n.event,at:now,softKey:softTrigger?.key??null};st.reviews+=1;st.lastReviewAt=now;st.lastReviewPrice=price;
+  // The exact candidate offered to this review is bound to the claim, so a later PROTECT can
+  // only approve the level that was actually judged.
+  st.pending={key,event:n.event,at:now,softKey:softTrigger?.key??null,
+    softLevel:Number(softTrigger?.level)>0?Number(softTrigger.level):null,softReason:softTrigger?.reason??null};
+  st.reviews+=1;st.lastReviewAt=now;st.lastReviewPrice=price;
   return {close:false,reason:'FD1_AWAITING_GPT',state:st,start:{key,event:n.event}};
  }
  return {close:false,reason:timeCandidate&&st.holdUntil&&now<st.holdUntil?'FD1_GPT_HOLD':null,state:st};

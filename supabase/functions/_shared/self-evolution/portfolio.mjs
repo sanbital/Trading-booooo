@@ -2,7 +2,7 @@
 import {planSlotEntry,SLOT_SIZING_CONTRACT} from '../leader-slot-sizing.mjs';
 import {POLICY} from '../leader-momentum-v17.mjs';
 import {EXIT_REVIEW_R5} from '../leader-exit-review.mjs';
-import {hardSafetyState,softCandidate,exitContext,positionGeneration} from '../exit-authority.mjs';
+import {hardSafetyState,softCandidate,approvedProtection,exitContext,positionGeneration} from '../exit-authority.mjs';
 import {advanceP142Completed,nextExitP142} from '../leader-cec0040.mjs';
 import {initialHoldState,holdStep} from '../gpt-final-decision/hold.mjs';
 import {dynamicsEvent} from '../gpt-final-decision/trajectory.mjs';
@@ -38,13 +38,24 @@ export async function advancePortfolio(input,event,{capital,decide,fillQuote,can
     try{p.metadata.p142State=advanceP142Completed(ei,bars,p.metadata.p142State??null);p.p142_at=event.at_ms;}catch{s.missing.push({id:event.id,reason:'P142_BAR_GAP'});}
    }
    const raw=nextExitP142(ei,bid,event.at_ms,EP,p.metadata.p142State);soft=softCandidate(raw,hard,p,bid);
-   p.metadata.exitAuthority={...hard,softLevel:soft.level,softReason:soft.reason};
-   p.resident_floor=Math.max(p.resident_floor??hard.hardFloor,hard.hardFloor,soft.level??0);
-   if(capital.resident_protection===true&&bid<=p.resident_floor){decision={valid:true,decision:'EXIT',authority:'RESIDENT_PROTECTION',latency_ms:0};eventName=soft.reason??hard.hardReason;}else{
+   // Production parity: the deterministic candidate is a proposal. The resident floor is the hard
+   // floor plus whatever the reviewer has already approved, so replay can never clip a winner at
+   // a level production would not have held. The candidate path is kept alongside it for learning
+   // (what a raise would have cost or saved), with no authority of its own.
+   let approvedFloor=approvedProtection(p,hard,bid,{aiApproved:p.metadata.fd1Hold?.protectLevel,
+     aiReason:p.metadata.fd1Hold?.protectReason??'AI_PROTECT_LEVEL',
+     residentLevel:p.resident_floor??0,candidate:soft.level});
+   p.metadata.exitAuthority={...hard,softLevel:soft.level,softReason:soft.reason,
+     candidateSoftLevel:soft.level,candidateSoftReason:soft.reason,
+     approvedSoftLevel:approvedFloor.level,approvedSoftReason:approvedFloor.reason};
+   p.resident_floor=Math.max(p.resident_floor??hard.hardFloor,hard.hardFloor,approvedFloor.level??0);
+   p.candidate_floor=Math.max(p.candidate_floor??hard.hardFloor,hard.hardFloor,soft.level??0);
+   if(capital.resident_protection===true&&bid<=p.resident_floor){decision={valid:true,decision:'EXIT',authority:'RESIDENT_PROTECTION',latency_ms:0};eventName=approvedFloor.reason??hard.hardReason;}else{
+   if(bid<=p.candidate_floor&&!p.candidate_floor_hit_at)p.candidate_floor_hit_at=event.at_ms;
    let dynamics=null;if(event.at_ms-(p.dynamics_at??0)>=10000){const c=await capture(event.symbol,event.at_ms);dynamics=dynamicsEvent(c,p.dynamics_observation,!!p.metadata.fd1Hold.protectUntil);p.dynamics_observation=dynamics.observation;p.dynamics_at=event.at_ms;}
    const timeCandidate=['V17_MAX_HOLD','V17_MOMENTUM_STALE'].includes(raw.reason)?raw.reason:null;
    const step=await holdStep(p.metadata.fd1Hold,{now:event.at_ms,price:bid,peak:p.peak_price,timeCandidate,softTrigger:soft,dynamics,positionId:p.id,generation:positionGeneration(p),answerOf:async()=>null});p.metadata.fd1Hold=step.state;
-   if(step.start){eventName=step.start.event;decision=await decide({event,position:p,task:'HOLD',exit_context:exitContext(p,hard,soft,bid,event.at_ms),event_name:eventName});s.decisions++;
+   if(step.start){eventName=step.start.event;decision=await decide({event,position:p,task:'HOLD',exit_context:exitContext(p,hard,soft,bid,event.at_ms,approvedFloor),event_name:eventName});s.decisions++;
     // Delay completion to observed model latency. Hard protection remains evaluated on each intervening frame.
     p.pending={decision,ready_at:event.at_ms+Math.max(1,decision.latency_ms??25000),soft,timeCandidate,dynamics,started:event.at_ms};
    }

@@ -60,7 +60,10 @@ test('GPT budget exhaustion promotes only a fresh validated DeepSeek HOLD review
   let r=await tick({},T);assert.equal(r.close,true);assert.equal(r.reason,'FD1_DEEPSEEK_EXIT');assert.equal(r.fallback,true);
   assert.equal(r.approval.authority,'DEEPSEEK_EMERGENCY_EXIT_ONLY');
   setFd1HoldTestHooks({store,apiKey:'k',deepseekKey:'ds',now:()=>T,config:cfg,schedule:()=>{},review:async()=>ds('PROTECT')});
-  r=await tick({},T);assert.equal(r.close,false);assert.equal(r.reason,'FD1_DEEPSEEK_PROTECT');assert.ok(r.state.protectLevel>0);
+  // A DeepSeek PROTECT keeps the last approved protection; only GPT may raise it.
+  r=await tick({},T);assert.equal(r.close,false);assert.equal(r.reason,'FD1_DEEPSEEK_PROTECT');
+  assert.equal(r.state.protectLevel??null,null);
+  assert.equal(r.state.protectDeclined.verdict,'KEEP_LAST_APPROVED_PROTECTION');
 });
 test('events: deterioration and big moves start a review; GPT EXIT closes only when fresh; spacing respected',async()=>{
   const h=harness('EXIT');let meta={};

@@ -45,7 +45,8 @@ test(id+' resident soft protection closes a crossed profit floor without waiting
  assert.equal(h.state.calls.filter(x=>x.action==='create_order').length,1,'software fallback closes if the resident floor is already crossed');
 });
 async function settled(decision,{valid=true,refresh_error=null}={}){
- const p=mk(),initial={...initialHoldState(100),pending:{key:'job',event:'SOFT_PROTECTION_TRIGGER:retestAnchor_LOCK',at:T-2000,softKey:soft.key}};
+ const p=mk(),initial={...initialHoldState(100),pending:{key:'job',event:'SOFT_PROTECTION_TRIGGER:retestAnchor_LOCK',at:T-2000,
+   softKey:soft.key,softLevel:soft.level,softReason:soft.reason}};
  return holdStep(initial,{now:T,price:101,peak:104,softTrigger:soft,positionId:p.id,generation:positionGeneration(p),
   answerOf:async()=>({state:'DONE',valid,decision,completed_at_ms:T-1000,snapshot_at_ms:T-1500,refresh_error})});
 }
@@ -56,11 +57,31 @@ test('T07 INV-EXIT-04 FINAL HOLD consumes a soft crossing; unchanged evidence do
  const changed=nextEvent({...r.state,lastReviewAt:T},{now:T+21000,price:100,peak:104,softTrigger:soft});
  assert.ok(changed.event.startsWith('SOFT_PROTECTION_TRIGGER:'));
 });
-test('T08 INV-EXIT-08/09 PROTECT raises internal soft protection, doubles sensitivity, no exposure or hard-floor change',async()=>{
- const r=await settled('PROTECT');assert.equal(r.close,false);assert.ok(r.state.protectLevel>=102);
+test('T08 INV-EXIT-08/09 PROTECT approves exactly the reviewed candidate, doubles sensitivity, no exposure or hard-floor change',async()=>{
+ const r=await settled('PROTECT');assert.equal(r.close,false);
+ // RAISE_PROTECTION binds to the deterministic candidate that was judged, to the tick. No
+ // model-supplied price and no derived level may ever become protection.
+ assert.equal(r.state.protectLevel,soft.level);assert.equal(r.state.protectReason,soft.reason);
+ assert.equal(r.protectApproval.verdict,'APPROVED');assert.equal(r.protectApproval.level,soft.level);
  assert.equal(r.state.protection.sensitivityMultiplier,2);assert.equal(r.state.protection.exposureIncrease,false);
  assert.equal(r.state.protectUntil,T+30000);
  assert.equal(nextEvent(r.state,{now:T+30001,price:101,peak:104,softTrigger:soft}).event,'PROTECTION_REASSESSMENT');
+});
+test('T08b PROTECT without a deterministic candidate raises nothing',async()=>{
+ const p=mk(),initial={...initialHoldState(100),pending:{key:'job',event:'MOMENTUM_DETERIORATION',at:T-2000,softKey:null,softLevel:null,softReason:null}};
+ const r=await holdStep(initial,{now:T,price:101,peak:104,softTrigger:null,positionId:p.id,generation:positionGeneration(p),
+  answerOf:async()=>({state:'DONE',valid:true,decision:'PROTECT',completed_at_ms:T-1000,snapshot_at_ms:T-1500,refresh_error:null})});
+ assert.equal(r.close,false);assert.equal(r.state.protectLevel??null,null);
+ assert.equal(r.protectApproval.verdict,'NO_DETERMINISTIC_CANDIDATE');
+ assert.equal(r.state.protection.exposureIncrease,false);
+});
+test('T08c an approved protection level is never lowered by a later smaller candidate',async()=>{
+ const p=mk(),lower={active:true,crossed:false,key:'retestAnchor_TRAIL:101',reason:'retestAnchor_TRAIL',level:101};
+ const initial={...initialHoldState(100),protectLevel:102,protectReason:'retestAnchor_LOCK',
+   pending:{key:'job2',event:'SOFT_PROTECTION_TRIGGER:retestAnchor_TRAIL',at:T-2000,softKey:lower.key,softLevel:lower.level,softReason:lower.reason}};
+ const r=await holdStep(initial,{now:T,price:101.5,peak:104,softTrigger:lower,positionId:p.id,generation:positionGeneration(p),
+  answerOf:async()=>({state:'DONE',valid:true,decision:'PROTECT',completed_at_ms:T-1000,snapshot_at_ms:T-1500,refresh_error:null})});
+ assert.equal(r.state.protectLevel,102);assert.equal(r.protectApproval.verdict,'NOT_ABOVE_APPROVED');
 });
 test('T09/T10 INV-EXIT-03/10 fresh FINAL EXIT dispatches one close; closed lifecycle rejects duplicate intent',async()=>{
  const p=mk();p.peak_price=104;const h=production(p,101,'EXIT'),r=await h.manage();assert.equal(r.action,'CLOSE');

@@ -1,5 +1,5 @@
 // @ts-nocheck
-import {EXIT_AUTHORITY_VERSION,EXIT_CLASS,exitClass,hardSafetyState,softCandidate,exitContext,legacySoftOrders,assertExitAuthority,positionGeneration} from "../_shared/exit-authority.mjs";
+import {EXIT_AUTHORITY_VERSION,EXIT_CLASS,PROTECTION_ACTIONS,PROTECTION_ARBITRATION_VERSION,exitClass,hardSafetyState,softCandidate,approvedProtection,exitContext,legacySoftOrders,assertExitAuthority,positionGeneration} from "../_shared/exit-authority.mjs";
 import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode,entryPriceEvidence} from "./entry-evidence.mjs";
 import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,runWithGptReview,gptReviewReadyToResume,gptArmFollowUp} from "./gpt-final-review-adapter.mjs";
 import {dryRunCoordinator,dryRunReviewPhase,liveProbe} from "./gpt-final-review-dryrun.mjs";
@@ -2756,19 +2756,35 @@ async function manageLeader(db,p,ctx){
     activeResidentStop=Math.max(0,...(rec(meta.exitProtection).orders??[]).filter(o=>o&&o.terminal!==true&&["ACTIVE","NEW"].includes(o.status))
       .map(o=>N(o?.spec?.params?.triggerPrice)).filter(x=>x>0));
   const rawExit={...state},softEps=Math.max(1e-12,Number(p.entry_price)*1e-10);
+  // The deterministic soft level is a CANDIDATE. It is evidence for the AI review and it never
+  // becomes resident protection on its own. What actually binds is the approved level: every
+  // level this position ever had approved, every level the exchange already acknowledges, and
+  // the reviewer's standing approval — never a candidate that no reviewer has approved.
+  const priorHold=rec(meta.fd1Hold);
+  let approved=approvedProtection(p,hard,bid,{aiApproved:priorHold.protectLevel,
+    aiReason:priorHold.protectReason??"AI_PROTECT_LEVEL",residentLevel:activeResidentStop,candidate:soft.level});
   let residentProtection={level:hard.hardFloor,reason:hard.hardReason,exitClass:EXIT_CLASS.HARD_SAFETY};
-  if(Number(soft.level)>residentProtection.level+softEps)
-    residentProtection={level:Number(soft.level),reason:soft.reason,exitClass:EXIT_CLASS.SOFT_PROTECTION};
+  if(approved.active)residentProtection={level:approved.level,reason:approved.reason,exitClass:approved.exitClass};
   // The DB hard floor remains loss-safety only. A ratcheted profit/protect floor is separate,
   // but once armed it has real reduce-only resident authority and may never move down.
-  state.stopPrice=hard.hardFloor;state.softStopPrice=soft.level;state.exitClass=hard.hardHit?EXIT_CLASS.HARD_SAFETY:EXIT_CLASS.SOFT_PROTECTION;
+  state.stopPrice=hard.hardFloor;state.softStopPrice=soft.level;state.approvedStopPrice=approved.level;
+  state.exitClass=hard.hardHit?EXIT_CLASS.HARD_SAFETY:EXIT_CLASS.SOFT_PROTECTION;
   state.action=hard.hardHit?"CLOSE":"HOLD";state.reason=hard.hardHit?hard.hardReason:null;
-  if(!hard.hardHit&&soft.active&&soft.crossed&&Number(soft.level)>hard.hardFloor+softEps){
-    state.action="CLOSE";state.reason=soft.reason;state.exitClass=EXIT_CLASS.SOFT_PROTECTION;
+  // Software backstop for the resident reduce-only stop, on the APPROVED level only: a price gap
+  // may arrive before the exchange fills it. An unapproved candidate crossing closes nothing.
+  if(!hard.hardHit&&approved.active&&approved.crossed){
+    state.action="CLOSE";state.reason=approved.reason;state.exitClass=EXIT_CLASS.SOFT_PROTECTION;
     ctx={...ctx,finalApproval:{authority:"RESIDENT_PROTECTION",valid:true,positionId:String(p.id),
-      generation:hard.generation,reason:soft.reason,level:Number(soft.level),observedAt:detectedAtMs}};
+      generation:hard.generation,reason:approved.reason,level:Number(approved.level),observedAt:detectedAtMs}};
   }
-  const aiExitContext=exitContext(p,hard,soft,bid,detectedAtMs);
+  const aiExitContext=exitContext(p,hard,soft,bid,detectedAtMs,approved);
+  // Append-only protection audit. Every tick records what the engine proposed, what was already
+  // approved, what the reviewer decided and what actually became resident.
+  let protectionDecision={version:PROTECTION_ARBITRATION_VERSION,positionId:String(p.id),generation:hard.generation,
+    symbol:p.symbol,at:detectedAtMs,bid,entry:Number(p.entry_price),peak:hard.peak,hardFloor:hard.hardFloor,
+    hardReason:hard.hardReason,mfe:hard.mfe,mae:hard.mae,giveback:hard.giveback,drawdown:hard.drawdown,
+    candidate:{level:soft.level,reason:soft.reason,crossed:soft.crossed===true,stage:rawExit.protectionStage??null},
+    approved,gptApproval:null,reviewReason:null,reviewFallback:false};
   const telemetry={detectedAtMs,quoteRequestedAtMs:timing.requested_at_ms,
     quoteReceivedAtMs:timing.received_at_ms,exchangeBookAtMs:timing.book_captured_at_ms??null,
     source:timing.source??null,observationId:observationId??null,bidSize:Number.isFinite(bidSize)?bidSize:null};
@@ -2780,7 +2796,9 @@ async function manageLeader(db,p,ctx){
     quoteAgeMs:detectedAtMs-timing.received_at_ms,source:timing.source??"P10_TOP_OF_BOOK_BATCH",
     fullQuantityExecutable:true,protectedQuantity:Number(p.remaining_quantity),
     lastStopSyncAt:stopImproved?new Date(detectedAtMs).toISOString():priorX1.lastStopSyncAt??null}:priorX1;
-  let nextMeta={...meta,exitAuthority:{...hard,softLevel:soft.level,softReason:soft.reason,legacySoftOrderIds},strategicExitCandidate:null,leaderLastHighAt:new Date(state.lastHighAt).toISOString(),
+  let nextMeta={...meta,exitAuthority:{...hard,softLevel:soft.level,softReason:soft.reason,legacySoftOrderIds,
+      protectionArbitration:PROTECTION_ARBITRATION_VERSION,candidateSoftLevel:soft.level,candidateSoftReason:soft.reason,
+      approvedSoftLevel:approved.level,approvedSoftReason:approved.reason,approvedSoftSource:approved.source},strategicExitCandidate:null,leaderLastHighAt:new Date(state.lastHighAt).toISOString(),
     leaderTrailArmed:state.armed,exitTelemetry:telemetry,
     ...(p142Active&&p142State?{p142State}:{}),
     ...(p142Active&&ctx?.fastObservation!==true?{p142Observation:{policyVersion:P142_POLICY_VERSION,
@@ -2844,13 +2862,30 @@ async function manageLeader(db,p,ctx){
     const fd1=await fd1HoldTick(db,p,{meta:nextMeta,state,bid,now:detectedAtMs,timeCandidate,
       softTrigger:soft,exitContext:aiExitContext});
     nextMeta.fd1Hold=fd1.state;
-    const aiProtect=N(fd1.state?.protectLevel);
-    if(aiProtect>residentProtection.level+softEps)
-      residentProtection={level:aiProtect,reason:"AI_PROTECT_LEVEL",exitClass:EXIT_CLASS.SOFT_PROTECTION};
+    // RAISE_PROTECTION: the reviewer's approval, bound to the deterministic candidate it judged,
+    // is the only thing that may raise the resident soft stop. HOLD, ABSTAIN, a timeout, an
+    // invalid answer, an exhausted budget or a provider outage all leave it exactly where it is.
+    approved=approvedProtection(p,hard,bid,{aiApproved:fd1.state?.protectLevel,
+      aiReason:fd1.state?.protectReason??"AI_PROTECT_LEVEL",residentLevel:activeResidentStop,candidate:soft.level});
+    if(approved.active&&approved.level>residentProtection.level+softEps)
+      residentProtection={level:approved.level,reason:approved.reason,exitClass:approved.exitClass};
     nextMeta.exitAuthority={...nextMeta.exitAuthority,residentLevel:residentProtection.level,
-      residentReason:residentProtection.reason,residentExitClass:residentProtection.exitClass};
+      residentReason:residentProtection.reason,residentExitClass:residentProtection.exitClass,
+      approvedSoftLevel:approved.level,approvedSoftReason:approved.reason,approvedSoftSource:approved.source};
+    // The review journal row keyed by reviewJobKey holds the full record this decision rests on:
+    // the frozen snapshot hash, DeepSeek's decision/confidence and evidence, GPT's arbitration
+    // reason with supporting/opposing evidence, and both model versions. It is referenced, not
+    // copied, so there is exactly one authoritative copy of each answer.
+    protectionDecision={...protectionDecision,approved,gptApproval:fd1.protectApproval??null,
+      reviewReason:fd1.reason??null,reviewFallback:fd1.fallback===true,
+      reviewJobKey:fd1.state?.last?.key??fd1.state?.pending?.key??null,
+      reviewEvent:fd1.state?.last?.event??fd1.state?.pending?.event??null,
+      reviewDecision:fd1.state?.last?.decision??null,reviewAuthority:fd1.state?.last?.authority??null,
+      aiProtectLevel:N(fd1.state?.protectLevel)||null,aiProtectReason:fd1.state?.protectReason??null,
+      aiProtectDeclined:fd1.state?.protectDeclined??null};
     details.fd1={reason:fd1.reason??null,close:fd1.close===true,fallback:fd1.fallback===true,timeCandidate,
-      last:fd1.state?.last??null,pending:fd1.state?.pending?.event??null,residentProtection};
+      last:fd1.state?.last??null,pending:fd1.state?.pending?.event??null,residentProtection,
+      protectApproval:fd1.protectApproval??null};
     if(fd1.close&&["FD1_GPT_EXIT","FD1_DEEPSEEK_EXIT"].includes(fd1.reason)){
       assertExitAuthority(fd1.reason,p,fd1.approval,Date.now());
       state.action="CLOSE";state.reason=fd1.reason;state.exitClass=EXIT_CLASS.AI_STRATEGIC;ctx={...ctx,finalApproval:fd1.approval};
@@ -2861,6 +2896,7 @@ async function manageLeader(db,p,ctx){
       residentReason:residentProtection.reason,residentExitClass:residentProtection.exitClass};
     details.action=state.action;details.reason=state.reason;details.residentProtection=residentProtection;
   }
+  details.protectionArbitration=protectionDecision;
   if(state.action==="CLOSE"){
     // No peak update or audit round trip may delay an already detected stop.
     const result=await closePos(db,{...p,peak_price:state.peakPrice,
@@ -2872,6 +2908,9 @@ async function manageLeader(db,p,ctx){
     // The position is already closed; this only retires any resting exchange stop so it
     // cannot outlive the position. It runs last so it can never delay the exit.
     const nativeStop=await syncNativeStop("CLOSE");
+    await auditProtection(db,protectionDecision,{outcome:"CLOSE",exitReason:closeReason,
+      exitClass:state.exitClass??null,resident:residentProtection,execution:nativeStop,
+      closed:result?.closed===true,snapshotAtMs:aiExitContext.snapshot_at_ms});
     return {action:"CLOSE",reason:closeReason,result,nativeStop};
   }
   const now=new Date(Math.max(Date.now(),Date.parse(p.updated_at)+1)).toISOString();
@@ -2886,6 +2925,9 @@ async function manageLeader(db,p,ctx){
   const nativeStop=ctx?.fastObservation&&!residentImproved&&!stopImproved&&meta.exitAuthority?.version===EXIT_AUTHORITY_VERSION&&
     !legacySoftOrderIds.some(id=>(meta.exitProtection?.orders??[]).some(o=>o.clientId===id&&!o.terminal))?
     {status:"UNCHANGED",softwareMonitorRequired:false}:await syncNativeStop("HOLD");
+  await auditProtection(db,protectionDecision,{outcome:residentImproved?"PROTECTION_RAISED":"PROTECTION_KEPT",
+    resident:residentProtection,residentBefore:activeResidentStop||null,execution:nativeStop,
+    snapshotAtMs:aiExitContext.snapshot_at_ms});
   // Existing HARD decisions and resident protection run first. QV3 failures
   // leave that protection intact; only an exact post-cutover stamp enters QV3 scope.
   const qv3=ctx?.evaluateQv3===false?null:await qv3AfterProtection(db,write.data,{...rec(ctx),bid});
@@ -2940,6 +2982,22 @@ async function qv3ShadowOnly(db,p,ctx){
       .eq("id",p.id).eq("state","OPEN").eq("updated_at",p.updated_at);
     return {shadow};
   }catch(e){return {shadow:{available:false,reason:String(e?.message??e),executed:false}}}
+}
+/** Append-only protection arbitration audit. Never fatal: an audit write may not be able to
+ *  delay or refuse a protection decision that hard safety and the exchange already hold. */
+async function auditProtection(db,d,extra={}){
+  try{
+    const a=d.approved??{},row={revision:REVISION,position_id:d.positionId,symbol:d.symbol,
+      generation:d.generation,policy_version:d.version,decided_at:new Date(d.at).toISOString(),
+      current_price:d.bid,entry_price:d.entry,peak_price:d.peak,
+      current_profit:d.entry>0?d.bid/d.entry-1:null,
+      current_drawdown:d.drawdown,mfe:d.mfe,mae:d.mae,mfe_giveback:d.giveback,
+      hard_stop:d.hardFloor,hard_reason:d.hardReason,
+      candidate_soft_stop:d.candidate?.level??null,candidate_reason:d.candidate?.reason??null,
+      approved_soft_stop:a.level??null,approved_reason:a.reason??null,approved_source:a.source??null,
+      raised:a.raised===true,details:{...d,...extra,executorPatch:PATCH}};
+    await db.from("v11_protection_decisions").insert(row);
+  }catch(e){console.error("PROTECTION_AUDIT_FAILED",d?.positionId,String(e?.message??e).slice(0,160));}
 }
 async function qv3AfterProtection(db,p,ctx){
   if(QV3_LIVE_CUTOVER===null)return null;
@@ -2996,6 +3054,10 @@ async function opsReadiness(db){
     db:{openPositionCount:(positions.data??[]).length,openPositions:positions.data??[],unresolvedOrderCount:(orders.data??[]).length,unresolvedOrders:orders.data??[]},
     runtime:rt.data??null,gptControl:control,openaiKeyPresent:(env("OPENAI_API_KEY")||"").length>0,maxSlots:MAX_SLOTS,
     nativeStopEnabled:NATIVE_STOP_ENABLED,failsafeRelease:"PR193_EMERGENCY_VALIDATION_1",
+    protectionArbitration:{version:PROTECTION_ARBITRATION_VERSION,actions:PROTECTION_ACTIONS,
+      candidateRaisesProtection:false,approver:"GPT_FINAL_ONLY",lowering:"IMPOSSIBLE",
+      onReviewerFailure:"KEEP_LAST_APPROVED_PROTECTION",hardSafetyIndependent:true,
+      auditTable:"v11_protection_decisions"},
     holdRelease:HOLD_RELEASE,deepseekShadow:{enabled:holdShadowEnabled(env("DEEPSEEK_HOLD_SHADOW_ENABLED")||""),keyPresent:!!env("deepseek api"),authority:[]},
     sizing:{targetMarginUsdt:MARGIN,leverage:LEV}};
 }

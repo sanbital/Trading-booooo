@@ -76,7 +76,7 @@ test('disabled by default: no protection is constructed and no stop order is tou
   assert.deepEqual(h.ensured, []);
 });
 
-test('enabled: earned profit floor is durable before exchange protection and becomes the resident stop', async () => {
+test('enabled: an unapproved candidate never moves the resident stop, and earned protection is kept', async () => {
   const h = harness({ enabled: true, bid: 102 });
   const r = await h.ctx.manage(h.db, h.position, h.context);
   assert.equal(r.action, 'HOLD');
@@ -87,10 +87,25 @@ test('enabled: earned profit floor is durable before exchange protection and bec
   assert.equal(request.positionMode, 'ONE_WAY');
   assert.equal(request.exchangeQuantity, 1000);
   assert.equal(request.lastPrice, 102);
-  // peak 103.03 => profit lock 101.515. The resident reduce-only stop must ratchet to it,
-  // never remain at the 97.5 hard-loss floor.
-  assert.equal(request.stopPrice,101.515);assert.ok(r.softStopPrice>101.4846);
+  // peak 103.03 => the deterministic profit-lock CANDIDATE is 101.515. It is offered as review
+  // evidence and nothing more: with no AI approval the resident reduce-only stop stays at the
+  // 101.4846 protection this position already earned, and never drops to the 97.5 hard floor.
+  assert.equal(r.softStopPrice,101.515);
+  assert.equal(request.stopPrice,101.4846);
+  assert.ok(request.stopPrice>97.5,'already-earned protection is never withdrawn');
+  assert.equal(request.exitClass,'SOFT_PROTECTION');
+});
+
+test('enabled: an AI-approved candidate becomes the resident stop at exactly the approved level', async () => {
+  const h = harness({ enabled: true, bid: 102 });
+  // The reviewer's standing approval of the deterministic candidate, as fd1HoldTick persists it.
+  h.position.metadata = { fd1Hold: { protectLevel: 101.515, protectReason: 'V17_PROFIT_LOCK' } };
+  const r = await h.ctx.manage(h.db, h.position, h.context);
+  assert.equal(r.action, 'HOLD');
+  const { request } = h.ensured[0];
+  assert.equal(request.stopPrice,101.515);
   assert.equal(request.exitClass,'SOFT_PROTECTION');assert.equal(request.protectionReason,'V17_PROFIT_LOCK');
+  assert.ok(h.calls.indexOf('write') < h.calls.indexOf('construct'));
 });
 
 test('a protection failure never blocks or alters the software exit', async () => {
